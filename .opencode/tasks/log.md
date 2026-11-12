@@ -1187,3 +1187,86 @@
   (релизная пара — на бампе версии); (3) статус PROP-139 — по-прежнему «Предложение» (ADR/PROP не
   трогали по условию задачи).
 - **Коммит:** не делался.
+
+## 2026-11-13 — PROP-138 слайс 138a: узкий `ctx.runtime` для inline-плагинных тулов
+
+- **Задача:** слайс **138a** (Ф1) реализации PROP-138: узкий `ctx.runtime` для **inline**-плагинных
+  тулов — `exec`/`fs` через порт исполнения сессии, вместо доступа к ФС control plane. Out-of-process
+  wire v2 — **138b**, не делалось. **Тип:** feat (shared-контракт + core) + docs. **Исполнитель:** @fixer.
+- **Контракт (shared).** `packages/shared/src/types/tools.ts`: `PluginRuntimeExecOptions`
+  (`cwd?`/`timeoutMs?`), `PluginRuntimeExecResult` (`stdout`/`stderr`/`exitCode`), `PluginRuntimeFs`
+  (`readFile`/`writeFile`/`stat`/`readdir`/`realpath`), `PluginRuntime` (`exec` + `fs`) и
+  **аддитивное** поле `ToolContext.runtime?: PluginRuntime`. Экспорт: `packages/shared/src/types/index.ts`
+  (через `export * from './tools.js'`) и явный список в `packages/shared/src/index.ts`. Замечание:
+  `PluginRuntimeFs` оперирует `Buffer` — тип из Node; на UI не влияет (`skipLibCheck` в
+  `tsconfig.base.json`, UI-`typecheck` зелёный), отдельного browser-safe алиаса не заводили.
+- **Реализация (core).** Новый `packages/core/src/execution/plugin-runtime.ts`:
+  `createPluginRuntime(port: ExecutionPort): PluginRuntime` — тонкая обёртка над **портом исполнения
+  сессии** (тот же порт, что у встроенных шелл/git/файловых тулов), без расширения контракта порта:
+  - `exec(argv, opts)` — argv **без shell** (`{kind:'argv', file, args}`), `cwd`/`timeoutMs` пробрасываются;
+    пустой argv → `PluginRuntimeError` (`code: 'invalid_argv'`, типизированный класс + `isPluginRuntimeError`
+    — по образу `ExecutionError`/`FsPathError`); ошибки порта (`ExecutionError`) пробрасываются как есть;
+  - `fs.readFile` — `port.fs.download(path, maxBytes ?? 16 МиБ)` (`PLUGIN_RUNTIME_DEFAULT_MAX_READ_BYTES`);
+  - `fs.writeFile` — `port.fs.upload(path, Buffer, {ifExists:'overwrite'})` (строка → `Buffer` UTF-8);
+  - `fs.stat`/`readdir`/`realpath` — делегирование в `port.fs`;
+  - порт без `fs` → `ExecutionFsUnavailableError` (fail-closed, тихого возврата в control plane нет).
+  Экспорт из `packages/core/src/index.ts` (`createPluginRuntime`, `isPluginRuntimeError`,
+  `PluginRuntimeError`, `PLUGIN_RUNTIME_DEFAULT_MAX_READ_BYTES`, тип `PluginRuntimeErrorCode`).
+- **Точка инжекта.** `narrowToolContext` (`packages/core/src/engine/tools/tool-execution.ts`) — тот же
+  единственный chokepoint, что и сужение ADR-090: для `source:'plugin'` берётся порт из
+  `ctx.extra[EXECUTION_PORT_KEY]`, проверяется структурно (`isExecutionPort`) и, если он валиден,
+  добавляется `runtime: createPluginRuntime(port)`. `extra`/`dataDir` **по-прежнему не передаются** —
+  сужение не ослаблено. Встроенные (`builtin`) и MCP-тулы не меняются (контекст без изменений, поля
+  `runtime` у них нет). Цикла импортов нет: `tool-execution` → `execution/plugin-runtime` → `execution/ports`.
+- **Тесты.** `packages/core/src/execution/plugin-runtime.test.ts` (новый) — **11 тестов**: правильный
+  `ExecRequest` (argv/cwd/timeoutMs), запрос без опций, пустой argv → `invalid_argv` (порт не вызван),
+  проброс `ExecutionError` как есть; `download` с дефолтным и явным потолком, `upload` (Buffer/строка,
+  `ifExists:'overwrite'`), делегирование `stat`/`readdir`/`realpath`, порт без FS → `ExecutionFsUnavailableError`
+  по всем пяти файловым вызовам. `packages/core/src/engine/tools/tool-execution.plugin-context.test.ts` —
+  **5 новых тестов** (было 5, стало 10): runtime у плагинного тула (команда идёт в порт), `extra`/`dataDir`
+  не проходят, без порта runtime нет, «чужой» объект в `extra.executionPort` → runtime нет (fail-closed),
+  builtin/MCP — контекст без изменений и без runtime. Итого по двум файлам — **20 тестов passed**.
+- **Документация.** `docs/PLUGINS.md` §4.3 — строка `runtime` в таблице полей `ToolContext` +
+  блок «**`ctx.runtime` — команды и файлы через порт сессии (PROP-138, Ф1).**»: контракт, таблица
+  «что/как», список capability, требующих runtime (`file_read`/`file_write`/`shell`/`search`/`git_read`/
+  `git_write`), ошибки, пример тула, предупреждение «прямой `node:fs`/`child_process` в inline-плагине —
+  неподдерживаемый путь», границы (inline; wire v2 — 138b) и ограничение текущего слайса (шаги пайплайна
+  собирают контекст без `extra` → runtime там не приходит). В §5.3 — абзац о том, что `ctx.runtime` по
+  проводу не пересекает границу (v1 не знает точки `runtime`). В таблице транспортов (`inline` vs
+  `out-of-process`) добавлена строка «Файлы и команды». `docs/en/PLUGINS.md` — те же правки (EN-пара).
+  `packages/core/AGENTS.md`/`AGENTS.md` корневой, PROP-138 и roadmap — **не трогались** (по условию задачи).
+- **Изменённые файлы:** `packages/shared/src/types/tools.ts`, `packages/shared/src/index.ts`,
+  `packages/core/src/execution/plugin-runtime.ts` (новый), `packages/core/src/execution/plugin-runtime.test.ts`
+  (новый), `packages/core/src/engine/tools/tool-execution.ts`,
+  `packages/core/src/engine/tools/tool-execution.plugin-context.test.ts`, `packages/core/src/index.ts`,
+  `docs/PLUGINS.md`, `docs/en/PLUGINS.md`, `.opencode/tasks/log.md`.
+- **Проверки (фактические).** `pnpm --filter @itphx/synth-shared build` — ок; `pnpm --filter
+  @itphx/synth-shared typecheck` — 0 ошибок; `pnpm --filter @itphx/synth-shared test` — **46 файлов /
+  1076 тестов passed**; `pnpm --filter @itphx/synth-core typecheck` — 0 ошибок; `pnpm --filter
+  @itphx/synth-core exec vitest run src/execution/plugin-runtime.test.ts
+  src/engine/tools/tool-execution.plugin-context.test.ts` — **20 passed**; `pnpm --filter
+  @itphx/synth-core build` — ок; `pnpm --filter @itphx/synth-backend typecheck` — 0 ошибок; `pnpm
+  --filter @itphx/synth-ui typecheck` — 0 ошибок (проверено из-за `Buffer` в shared-типе); `env -u
+  no_proxy -u NO_PROXY pnpm --filter @itphx/synth-core test` — **623 файла passed / 3 skipped (10558
+  passed, 268 skipped)**; `env -u no_proxy -u NO_PROXY pnpm --filter @itphx/synth-backend test` —
+  **68 файлов / 858 тестов passed**; `pnpm --filter @itphx/synth-core lint` — **0 errors** (467 warnings —
+  предсуществующие `no-explicit-any` по пакету); `node scripts/adr-check.mjs` — **0 ошибок** (27
+  предсуществующих предупреждений).
+- **Отклонения/решения:** (1) ошибка пустого argv — **типизированная** (`PluginRuntimeError` с кодом
+  `invalid_argv`), а не `Error`: у порта уже есть такой образец (`ExecutionError`/`FsPathError`), и
+  плагину нужен машинный код; (2) `exec` не принимает `AbortSignal` — сигнал отмены в контракте
+  `PluginRuntimeExecOptions` не заявлен, а порт получает `signal` из `ExecRequest`; привязка отмены
+  хода к runtime — остаток; (3) runtime создаётся на каждый вызов тула (дешёво, без кэша и без
+  состояния); (4) `readFile` отдаёт `Buffer` (не текст) — контракт runtime'а байтовый, как и `download`
+  порта.
+- **Ограничения:** (1) **шаги пайплайна** собирают `ToolContext` **без** `extra`
+  (`engine/pipelines/executors/common.ts` → `buildToolContext`) — там `ctx.runtime` не приходит; это
+  ограничение движка пайплайнов (проброс порта в `StepExecutionContext` — отдельная правка, не в
+  этом слайсе); в сессиях и саб-агентах (`task` — `extra` копируется от родителя) runtime есть;
+  (2) out-of-process плагин runtime по проводу **не получает** (Ф2/138b); (3) capability-гейт
+  «какая capability требует runtime» в коде **не проверяется** — runtime выдаётся любому
+  плагинному тулу, у которого есть порт (проверка capability — Ф3 по PROP-138).
+- **Остаток 138b:** wire-протокол v2 (`POST /runtime/exec`, `POST /runtime/fs/*` через хост, bearer-токен
+  плагина с привязкой к `sessionId` вызова), DTO и клиент на стороне `out-of-process`-загрузчика
+  (`engine/plugins/remote/*`), чтобы `ctx.runtime` появился и у удалённого плагина.
+- **Коммит:** не делался.

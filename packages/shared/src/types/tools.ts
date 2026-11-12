@@ -154,6 +154,87 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   },
 };
 
+/**
+ * PROP-138 (Ф1): узкий runtime плагинного тула — команды и файловые операции
+ * **через порт исполнения сессии**.
+ *
+ * ## Зачем
+ *
+ * Плагинный тул с capability `file_read`/`file_write`/`shell`/`search`/
+ * `git_read`/`git_write` должен работать в контуре исполнителя сессии, а не
+ * в control plane: в split-топологии рабочий каталог живёт на исполнителе
+ * (PROP-135), а прямой доступ к ФС control plane — неподдерживаемый путь.
+ *
+ * ## Что это НЕ
+ *
+ * - Не «второй `ToolContext`» и не замена `extra`: `extra`/`dataDir` плагину
+ *   по-прежнему **не передаются** (ADR-090) — здесь только два явно
+ *   перечисленных метода работы с окружением;
+ * - не обход permission-слоя: runtime — это транспорт, а право на операцию
+ *   решает хост (в capability-гейте — по capability тула).
+ *
+ * ## Контракт
+ *
+ * - `exec` — **argv без shell**: `[file, ...args]`. Значения аргументов не
+ *   проходят через shell, поэтому классическая инъекция невозможна;
+ * - `fs` — файловые операции в том же контуре, что и команды; пути
+ *   **абсолютные** (относительные резолвит вызывающий тул — от
+ *   `ctx.workingDir`).
+ */
+export interface PluginRuntimeExecOptions {
+  /** Рабочий каталог команды (точка исполнения — исполнитель, а не control plane). */
+  cwd?: string;
+  /** Таймаут вызова, мс. Не задан — без таймаута. */
+  timeoutMs?: number;
+}
+
+/** Результат команды плагинного runtime. */
+export interface PluginRuntimeExecResult {
+  /** Стандартный вывод. */
+  stdout: string;
+  /** Стандартный вывод ошибок. */
+  stderr: string;
+  /** Код завершения. */
+  exitCode: number;
+}
+
+/** Файловые операции плагинного runtime (через порт исполнения сессии). */
+export interface PluginRuntimeFs {
+  /**
+   * Прочитать файл.
+   *
+   * @param path — абсолютный путь на точке исполнения.
+   * @param maxBytes — потолок размера; не задан — дефолт runtime.
+   */
+  readFile(path: string, maxBytes?: number): Promise<Buffer>;
+  /** Записать файл (перезапись существующего — штатный режим). */
+  writeFile(path: string, data: Buffer | string): Promise<void>;
+  /** Сведения о файле/каталоге. */
+  stat(path: string): Promise<{ kind: 'file' | 'directory' | 'other'; size: number; mtimeMs: number }>;
+  /** Записи каталога. */
+  readdir(path: string): Promise<Array<{ name: string; kind: 'file' | 'directory' | 'other'; size: number }>>;
+  /** Канонический путь (симлинки разыменовываются). */
+  realpath(path: string): Promise<string>;
+}
+
+/**
+ * Узкий runtime плагинного тула (PROP-138, Ф1).
+ *
+ * Инжектится хостом в `ToolContext.runtime` **только** для тулов с
+ * `source: 'plugin'`. Встроенные и MCP-тулы получают контекст без изменений.
+ */
+export interface PluginRuntime {
+  /**
+   * Выполнить команду в контуре исполнителя сессии.
+   *
+   * @param argv — `[file, ...args]`, **без shell**.
+   * @param opts — рабочий каталог и таймаут (необязательны).
+   */
+  exec(argv: string[], opts?: PluginRuntimeExecOptions): Promise<PluginRuntimeExecResult>;
+  /** Файловые операции в том же контуре. */
+  fs: PluginRuntimeFs;
+}
+
 export interface ToolContext {
   sessionId: string;
   messageId: string;
@@ -192,6 +273,17 @@ export interface ToolContext {
   worktreeRepoPath?: string;
   dataDir?: string;
   extra?: Record<string, unknown>;
+  /**
+   * PROP-138 (Ф1): узкий runtime плагинного тула (команды и файловые операции
+   * через порт исполнения сессии).
+   *
+   * Поле **аддитивное** и заполняется хостом **только** для тулов с
+   * `source: 'plugin'`; встроенные и MCP-тулы его не видят (у них
+   * `ctx.extra` — полный контекст ядра). Плагину runtime даёт ровно то, что
+   * нужно capability-зависимым тулам (`file_read`/`file_write`/`shell`/
+   * `search`/`git_read`/`git_write`), и **не** даёт доступа к internals ядра.
+   */
+  runtime?: PluginRuntime;
 }
 
 /**

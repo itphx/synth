@@ -629,7 +629,8 @@ in `plan`. The instance can disable the tool by name (`plugin_<ns>_<tool>`) or b
 capability.
 
 **What arrives in `execute`.** `(params, ctx)`, where `ctx` is a `ToolContext`, but a **narrowed**
-one: the host gives the plugin only the turn identifiers and the working directory.
+one: the host gives the plugin only the turn identifiers, the working directory and the narrow
+`ctx.runtime` (commands and files through the session port).
 
 | `ToolContext` field | What it is | When it arrives |
 |---|---|---|
@@ -639,6 +640,7 @@ one: the host gives the plugin only the turn identifiers and the working directo
 | `agentRole` | agent role | if set |
 | `projectId` | session project id | if set |
 | `abortSignal` | turn cancellation signal | if set |
+| `runtime` | the narrow session runtime (`exec`/`fs`) — see below | if set (the session port is available) |
 | `extra` | internal core state | **not passed** |
 | `dataDir` | instance data root | **not passed** |
 
@@ -651,6 +653,74 @@ minimum. Over the wire (`out-of-process`) the context is additionally serialized
 The core does the narrowing in **one place** — at the tool call — so the rule applies equally to
 sessions, sub-agents (`task`) and pipeline steps. Built-in (`builtin`) and MCP tools receive the
 context unchanged — the rule covers plugin tools only (`source: 'plugin'`).
+
+**`ctx.runtime` — commands and files through the session port (PROP-138, Ф1).** The runtime is the
+only supported way for a capability-dependent plugin tool to reach the
+environment. This is **not** a relaxation of the narrowing: `ctx.extra`/`ctx.dataDir` are still
+not passed, and `ctx.runtime` is a narrow object with exactly two explicitly listed methods.
+
+```typescript
+interface PluginRuntime {
+  /** argv without shell: [file, ...args]. */
+  exec(argv: string[], opts?: { cwd?: string; timeoutMs?: number }): Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  }>;
+  fs: {
+    readFile(path: string, maxBytes?: number): Promise<Buffer>;
+    writeFile(path: string, data: Buffer | string): Promise<void>;
+    stat(path: string): Promise<{ kind: 'file' | 'directory' | 'other'; size: number; mtimeMs: number }>;
+    readdir(path: string): Promise<Array<{ name: string; kind: 'file' | 'directory' | 'other'; size: number }>>;
+    realpath(path: string): Promise<string>;
+  };
+}
+```
+
+| What | How |
+|---|---|
+| `exec` | argv **without shell** (`[file, ...args]`): the argument values do not pass through the shell, so injection is impossible. The working directory and the timeout are optional options. |
+| `fs` | file operations **in the same contour** as the commands: with `execution.mode=remote` that is the session executor, not the control plane. Paths are **absolute** (the caller resolves relative ones from `ctx.workingDir`). |
+| `fs.writeFile` | an existing file is overwritten (the normal mode); the content is a `Buffer` or a string (UTF-8). |
+| errors | a port failure arrives in the tool as is (`ExecutionError` — with the code and the text; `FsPathError` — with the machine code `not_found`/`permission`/…). The plugin can tell the reasons apart by the code. |
+| FS unavailable | if the executor does not support filesystem operations — `ExecutionFsUnavailableError` (fail-closed, there is no silent fallback to the control plane). |
+
+**Which capabilities need the runtime.** `file_read`, `file_write`, `shell`, `search`,
+`git_read`, `git_write` — they work in the contour of the session executor, and `ctx.runtime`
+is the only way to reach the commands and the files from there. `web`, `memory`, `user` are
+the control plane contour — they do not need the runtime.
+
+```typescript
+const tool: Parameters<PluginFacade['registerTool']>[0] = {
+  name: 'report_stats',
+  description: 'Collects the repository statistics.',
+  parameters: z.object({ repo: z.string() }),
+  capabilities: ['file_read', 'shell'],
+  async execute(params, ctx) {
+    const { repo } = params as { repo: string };
+    const cwd = `${ctx.workingDir}/${repo}`;
+    // The command runs in the session executor contour, not in the control plane.
+    const { stdout } = await ctx.runtime!.exec(['git', 'log', '--oneline'], { cwd });
+    return { content: stdout };
+  },
+};
+```
+
+> **Direct `node:fs`/`child_process` in an inline plugin is an unsupported path.** It bypasses
+> the session port (and therefore the permissions and the audit) and, in the split topology, it
+> reads the control plane FS instead of the executor FS. The extension scanner and the review
+> mark such code explicitly; move it to `ctx.runtime`.
+
+**Boundaries.** This is the **inline** contour: the runtime works with the same port as the
+built-in tools and lives in the core process. The out-of-process plugin (a separate process)
+receives the runtime over the wire protocol v2 (`POST /runtime/exec`, `POST /runtime/fs/*`
+through the host) — that is the **next slice** (PROP-138, Ф2); the current contract has no
+runtime on the wire.
+
+**Limitation of the current slice.** The runtime appears where the context carries the session
+port (`ctx.extra.executionPort`) — that is, in sessions and in sub-agents (`task`). Pipeline
+steps build the context **without** `extra` (they have no session), so `ctx.runtime` does not
+arrive there — a limitation of the pipeline engine, not of the plugin narrowing.
 
 **Why you should set `jsonSchema`.** `parameters` is your zod schema; the host validates the
 arguments with it (`safeParse`). But for the model the schema is converted by the host into JSON
@@ -852,6 +922,7 @@ One extension point contract — two transports. The mode is set by the manifest
 | Isolation | none | process-level: a crash/a memory leak does not bring down the core |
 | Latency | ~0 | a round-trip per point call |
 | Access to internals | the tool context is narrowed (§4.3), but the process is the same — the process Node API is reachable | only serializable DTOs |
+| Files and commands | `ctx.runtime` — through the session port (§4.3) | over wire v2 — **in the next slice** (PROP-138 Ф2) |
 | What the bundle needs | `dist/index.js` | `dist/server.js` |
 | When to choose | `llmFilters` (the hot path), fast blocks, simple tools | heavy filters (ML, antivirus, DLP), blocks with a heavy load, untrusted code |
 
@@ -990,6 +1061,10 @@ The same holds for the other facade services: **`facade.embed` and `facade.getSe
 available in `out-of-process`** — wire protocol v1 covers only the three extension points
 (`promptBlocks`/`llmFilters`/`tools`), and neither embeddings nor settings are part of its DTOs.
 A plugin that needs them runs in the `inline` mode (§4.6, §4.7).
+
+`ctx.runtime` does **not** cross the boundary either: wire protocol v1 does not know the `runtime`
+point, and v2 (`POST /runtime/exec`, `POST /runtime/fs/*` through the host) is the **next slice**
+(PROP-138 Ф2). A plugin that needs files and commands currently has the `inline` mode only (§4.3).
 
 ---
 

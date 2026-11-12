@@ -9,6 +9,9 @@
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
 import { stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
+import { createPluginRuntime } from '../../execution/plugin-runtime.js';
+import { isExecutionPort } from '../../execution/ports/index.js';
+import { EXECUTION_PORT_KEY } from '../../execution/tool-port.js';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { errorText } from './error-text.js';
@@ -93,6 +96,14 @@ export function buildDenyResult(p: BuildDenyResultParams): ToolResult {
  * все вызовы тулов (оркестратор, саб-агент `task`, шаги пайплайна). Встроенные
  * (`builtin`) и MCP-тулы получают контекст **без изменений**.
  *
+ * PROP-138 (Ф1): плагинному тулу добавляется **узкий runtime** (`ctx.runtime`) —
+ * команды и файловые операции **через порт исполнения сессии**
+ * (`ctx.extra.executionPort`). Это не «разжалование» сужения: `extra`/`dataDir`
+ * по-прежнему не передаются, а runtime — единственная точка, через которую
+ * capability-зависимый тул (`file_read`/`file_write`/`shell`/`search`/
+ * `git_read`/`git_write`) работает в контуре исполнителя, а не в control plane.
+ * Порта нет — runtime не добавляется (тул остаётся без доступа к ФС/командам).
+ *
  * @param toolDef — определение тула (источник — `ToolDefinition.source`).
  * @param context — полный контекст вызова (как у встроенных тулов).
  * @returns суженный контекст для плагинного тула; исходный — для остальных.
@@ -102,6 +113,11 @@ export function narrowToolContext(
   context: ToolContext,
 ): ToolContext {
   if ((toolDef.source ?? 'builtin') !== 'plugin') return context;
+  // Порт сессии берётся из того же шва, что и у встроенных тулов; значение
+  // проверяется структурно (`isExecutionPort`) — «чужой» объект в `extra`
+  // портом не считается (fail-closed: runtime не добавляется).
+  const port = context.extra?.[EXECUTION_PORT_KEY];
+  const runtime = isExecutionPort(port) ? createPluginRuntime(port) : undefined;
   return {
     sessionId: context.sessionId,
     messageId: context.messageId,
@@ -111,6 +127,7 @@ export function narrowToolContext(
     // тулу нужны, чтобы ограничить поиск данными своего проекта.
     ...(context.projectId !== undefined ? { projectId: context.projectId } : {}),
     ...(context.abortSignal !== undefined ? { abortSignal: context.abortSignal } : {}),
+    ...(runtime !== undefined ? { runtime } : {}),
   };
 }
 

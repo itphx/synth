@@ -618,7 +618,8 @@ namespace — имя плагина в нижнем регистре, небук
 `PUT /api/v2/settings/tools-disabled` — но это же выключит и встроенные тулы с той же capability.
 
 **Что приходит в `execute`.** `(params, ctx)`, где `ctx` — `ToolContext`, но **суженный**:
-хост отдаёт плагину только идентификаторы хода и рабочий каталог.
+хост отдаёт плагину только идентификаторы хода, рабочий каталог и узкий `ctx.runtime`
+(команды и файлы через порт сессии).
 
 | Поле `ToolContext` | Что это | Когда приходит |
 |---|---|---|
@@ -628,6 +629,7 @@ namespace — имя плагина в нижнем регистре, небук
 | `agentRole` | роль агента | если задана |
 | `projectId` | id проекта сессии | если задан |
 | `abortSignal` | сигнал отмены хода | если задан |
+| `runtime` | узкий runtime сессии (`exec`/`fs`) — см. ниже | если задан (сессионный порт доступен) |
 | `extra` | внутреннее состояние ядра | **не передаётся** |
 | `dataDir` | корень данных инстанса | **не передаётся** |
 
@@ -641,6 +643,74 @@ namespace — имя плагина в нижнем регистре, небук
 для сессий, саб-агентов (`task`) и шагов пайплайна. Встроенные (`builtin`) и MCP-инструменты
 контекст получают без изменений — правило касается только инструментов плагинов
 (`source: 'plugin'`).
+
+**`ctx.runtime` — команды и файлы через порт сессии (PROP-138, Ф1).** Runtime — единственный
+поддерживаемый путь к окружению для capability-зависимого
+плагинного тула. Это **не** разжалование сужения: `ctx.extra`/`ctx.dataDir` по-прежнему не
+передаются, а `ctx.runtime` — узкий объект из двух явно перечисленных методов.
+
+```typescript
+interface PluginRuntime {
+  /** argv без shell: [file, ...args]. */
+  exec(argv: string[], opts?: { cwd?: string; timeoutMs?: number }): Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  }>;
+  fs: {
+    readFile(path: string, maxBytes?: number): Promise<Buffer>;
+    writeFile(path: string, data: Buffer | string): Promise<void>;
+    stat(path: string): Promise<{ kind: 'file' | 'directory' | 'other'; size: number; mtimeMs: number }>;
+    readdir(path: string): Promise<Array<{ name: string; kind: 'file' | 'directory' | 'other'; size: number }>>;
+    realpath(path: string): Promise<string>;
+  };
+}
+```
+
+| Что | Как |
+|---|---|
+| `exec` | argv **без shell** (`[file, ...args]`): значения аргументов не проходят через shell, поэтому инъекция невозможна. Рабочий каталог и таймаут — необязательные опции. |
+| `fs` | файловые операции **в том же контуре**, что и команды: при `execution.mode=remote` это исполнитель сессии, а не control plane. Пути — **абсолютные** (относительные резолвит вызывающий тул от `ctx.workingDir`). |
+| `fs.writeFile` | существующий файл перезаписывается (штатный режим); содержимое — `Buffer` или строка (UTF-8). |
+| ошибки | отказ порта приходит в тул как есть (`ExecutionError` — с кодом и текстом; `FsPathError` — с машинным кодом `not_found`/`permission`/…). Плагин может отличить причины по коду. |
+| FS недоступна | если исполнитель не умеет файловые операции — `ExecutionFsUnavailableError` (fail-closed, тихого возврата в control plane нет). |
+
+**Какие capability требуют runtime.** `file_read`, `file_write`, `shell`, `search`,
+`git_read`, `git_write` — они работают в контуре исполнителя сессии, и `ctx.runtime` —
+единственный способ добраться до команд и файлов оттуда. `web`, `memory`, `user` —
+контур control plane, runtime им не нужен.
+
+```typescript
+const tool: Parameters<PluginFacade['registerTool']>[0] = {
+  name: 'report_stats',
+  description: 'Собирает статистику репозитория.',
+  parameters: z.object({ repo: z.string() }),
+  capabilities: ['file_read', 'shell'],
+  async execute(params, ctx) {
+    const { repo } = params as { repo: string };
+    const cwd = `${ctx.workingDir}/${repo}`;
+    // Команда — в контуре исполнителя сессии, не в control plane.
+    const { stdout } = await ctx.runtime!.exec(['git', 'log', '--oneline'], { cwd });
+    return { content: stdout };
+  },
+};
+```
+
+> **Прямой `node:fs`/`child_process` в inline-плагине — неподдерживаемый путь.** Он идёт
+> мимо порта сессии (а значит — мимо разрешений и аудита) и в split-топологии читает ФС
+> control plane вместо ФС исполнителя. Сканер расширений и ревью помечают такой код явно;
+> переносите его на `ctx.runtime`.
+
+**Границы.** Это **inline**-контур: runtime работает с тем же портом, что и встроенные
+тулы, и живёт в процессе ядра. Out-of-process (плагин в отдельном процессе) получает
+runtime по wire-протоколу v2 (`POST /runtime/exec`, `POST /runtime/fs/*` через хост) —
+это **следующий слайс** (PROP-138, Ф2); в текущем контракте для `out-of-process` runtime
+на проводе нет.
+
+**Ограничение текущего слайса.** Runtime появляется там, где у контекста есть порт
+сессии (`ctx.extra.executionPort`) — то есть в сессиях и в саб-агентах (`task`). Шаги
+пайплайна собирают контекст **без** `extra` (у них нет сессии), поэтому там `ctx.runtime`
+не приходит — это ограничение конвейера пайплайнов, а не сужения плагинов.
 
 **Почему стоит задавать `jsonSchema`.** `parameters` — ваша zod-схема; хост валидирует ею
 аргументы (`safeParse`). Но для модели схема конвертируется хостом в JSON Schema, и конвертер
@@ -844,6 +914,7 @@ const settings = facade.getSettings<{ namespace?: string; limit?: number }>();
 | Изоляция | нет | процессовая: падение/утечка памяти не роняют core |
 | Латентность | ~0 | round-trip на каждый вызов точки |
 | Доступ к internals | контекст тула сужен (§4.3), но процесс тот же — Node API процесса доступен | только сериализуемые DTO |
+| Файлы и команды | `ctx.runtime` — через порт сессии (§4.3) | по wire v2 — **в следующем слайсе** (PROP-138 Ф2) |
 | Что нужно в бандле | `dist/index.js` | `dist/server.js` |
 | Когда выбирать | `llmFilters` (горячий путь), быстрые блоки, простые тулы | тяжёлые фильтры (ML, антивирус, DLP), блоки с тяжёлой загрузкой, недоверенный код |
 
@@ -979,6 +1050,11 @@ process.on('SIGTERM', () => process.exit(0));
 `out-of-process` недоступны** — wire-протокол v1 покрывает только три точки расширения
 (`promptBlocks`/`llmFilters`/`tools`), а эмбеддинги и настройки не сериализуются в его
 DTO. Плагин, которому они нужны, работает в режиме `inline` (§4.6, §4.7).
+
+`ctx.runtime` по проводу тоже **не пересекает границу**: wire-протокол v1 не знает точки
+`runtime`, а v2 (`POST /runtime/exec`, `POST /runtime/fs/*` через хост) — **следующий слайс**
+(PROP-138 Ф2). Плагину, которому нужны файлы и команды, сейчас доступен только режим
+`inline` (§4.3).
 
 ---
 

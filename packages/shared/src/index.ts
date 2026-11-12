@@ -11,6 +11,12 @@ export {
   type ToolExecutor,
   type PendingToolCall,
   type CompletedToolCall,
+  // PROP-138 (Ф1): узкий runtime плагинного тула (команды/ФС через порт
+  // исполнения сессии) — `ctx.runtime` у тулов с `source: 'plugin'`.
+  type PluginRuntime,
+  type PluginRuntimeExecOptions,
+  type PluginRuntimeExecResult,
+  type PluginRuntimeFs,
   ToolCapability,
   TOOL_CAPABILITY_META,
 } from './types/tools.js';

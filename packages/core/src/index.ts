@@ -537,6 +537,15 @@ export {
 export { escapesWorkspace, FS_UNAVAILABLE_TEXT } from './execution/fs-perimeter.js';
 export { InlineExecutionPort } from './execution/inline-execution-port.js';
 export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.js';
+// PROP-138 (Ф1, слайс 138a): узкий runtime плагинного тула — команды и
+// файловые операции через порт исполнения сессии (`ctx.runtime`).
+export {
+  createPluginRuntime,
+  isPluginRuntimeError,
+  PluginRuntimeError,
+  PLUGIN_RUNTIME_DEFAULT_MAX_READ_BYTES,
+} from './execution/plugin-runtime.js';
+export type { PluginRuntimeErrorCode } from './execution/plugin-runtime.js';
 // ADR-077 (шаг 7b): выбор порта по режиму `execution.mode` — фабрика
 // (`inline` → InlineExecutionPort, `remote` → удалённый порт из пакета
 // `@itphx/synth-executor`, динамический `import()`, fail-closed).

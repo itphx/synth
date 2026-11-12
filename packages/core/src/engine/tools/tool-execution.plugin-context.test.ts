@@ -9,11 +9,16 @@
  *
  * Сужение живёт в одном chokepoint'е (`executeToolDef`), поэтому проверяем
  * именно его: встроенные и MCP-тулы получают контекст без изменений.
+ *
+ * PROP-138 (Ф1): плагинному тулу добавляется **узкий runtime** (`ctx.runtime`) —
+ * команды и файловые операции через порт исполнения сессии; `extra`/`dataDir`
+ * при этом по-прежнему не передаются.
  */
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { ToolCapability, type ToolContext, type ToolDefinition } from '@itphx/synth-shared';
+import type { ExecRequest, ExecResult, ExecutionPort } from '../../execution/ports/index.js';
 import { executeToolDef } from './tool-execution.js';
 
 /** Контекст вызова тула, как его собирает оркестратор (ADR-090 §Ф3в). */
@@ -51,6 +56,18 @@ function toolOfSource(source: 'builtin' | 'mcp' | 'plugin', seen: { ctx?: ToolCo
   if (source === 'builtin') return tool;
   if (source === 'mcp') return { ...tool, source: 'mcp', mcpServer: 'srv' };
   return { ...tool, source: 'plugin', pluginName: 'my-plugin' };
+}
+
+/** Порт исполнения сессии с журналом запросов. */
+function fakePort(): { port: ExecutionPort; requests: ExecRequest[] } {
+  const requests: ExecRequest[] = [];
+  const port: ExecutionPort = {
+    async execute(req: ExecRequest): Promise<ExecResult> {
+      requests.push(req);
+      return { stdout: 'out', stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+    },
+  };
+  return { port, requests };
 }
 
 describe('executeToolDef — контекст тула по источнику (ADR-090)', () => {
@@ -129,5 +146,91 @@ describe('executeToolDef — контекст тула по источнику (
 
     expect(Object.keys(seen.ctx!).sort()).toEqual(['messageId', 'sessionId', 'workingDir']);
     expect(seen.ctx!.extra).toBeUndefined();
+  });
+});
+
+describe('executeToolDef — ctx.runtime плагинного тула (PROP-138 Ф1)', () => {
+  it('плагинный тул получает runtime: команды идут через порт сессии', async () => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen);
+    const { port, requests } = fakePort();
+
+    await executeToolDef(
+      tool,
+      { query: 'x' },
+      { ...fullContext(), extra: { executionPort: port } },
+      'tool_plugin',
+    );
+
+    const runtime = seen.ctx!.runtime;
+    expect(runtime).toBeDefined();
+
+    const result = await runtime!.exec(['git', 'status'], { cwd: '/workspace/project' });
+    expect(result).toEqual({ stdout: 'out', stderr: '', exitCode: 0 });
+    expect(requests[0]?.command).toEqual({ kind: 'argv', file: 'git', args: ['status'] });
+    expect(requests[0]?.cwd).toBe('/workspace/project');
+  });
+
+  it('runtime не отменяет сужение: extra и dataDir по-прежнему не передаются', async () => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen);
+    const { port } = fakePort();
+
+    await executeToolDef(
+      tool,
+      { query: 'x' },
+      { ...fullContext(), extra: { executionPort: port } },
+      'tool_plugin',
+    );
+
+    const ctx = seen.ctx!;
+    expect(ctx.extra).toBeUndefined();
+    expect(ctx.dataDir).toBeUndefined();
+    expect(ctx.sessionId).toBe('sess-1');
+    expect(ctx.runtime).toBeDefined();
+  });
+
+  it('без порта исполнения runtime не добавляется', async () => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen);
+
+    await executeToolDef(tool, { query: 'x' }, fullContext(), 'tool_plugin');
+
+    expect(seen.ctx!.runtime).toBeUndefined();
+    expect(Object.keys(seen.ctx!).sort()).toEqual([
+      'abortSignal',
+      'agentRole',
+      'messageId',
+      'sessionId',
+      'workingDir',
+    ]);
+  });
+
+  it('чужой объект в extra.executionPort не считается портом — runtime нет', async () => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen);
+
+    await executeToolDef(
+      tool,
+      { query: 'x' },
+      { ...fullContext(), extra: { executionPort: { notAPort: true } } },
+      'tool_plugin',
+    );
+
+    expect(seen.ctx!.runtime).toBeUndefined();
+  });
+
+  it('встроенный и MCP-тулы runtime не получают (контекст без изменений)', async () => {
+    for (const source of ['builtin', 'mcp'] as const) {
+      const seen: { ctx?: ToolContext } = {};
+      const tool = toolOfSource(source, seen);
+      const { port } = fakePort();
+      const context: ToolContext = { ...fullContext(), extra: { executionPort: port } };
+
+      await executeToolDef(tool, { query: 'x' }, context, `tool_${source}`);
+
+      expect(seen.ctx).toBe(context);
+      expect(seen.ctx!.runtime).toBeUndefined();
+    }
   });
 });
