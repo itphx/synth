@@ -30,6 +30,16 @@ function withExecution(partial: Partial<SynthConfig['execution']>): SynthConfig 
   };
 }
 
+/**
+ * Фикстура `execution.remote`: дефолты секции + точечные переопределения.
+ * Нужна, чтобы новые поля (PROP-135 Ф4a/Ф4b) не дублировались в каждом литерале.
+ */
+function withRemote(
+  partial: Partial<SynthConfig['execution']['remote']>,
+): SynthConfig {
+  return withExecution({ remote: { ...cfg.execution.remote, ...partial } });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -104,14 +114,12 @@ describe('resolveExecutionMode (ADR-077)', () => {
 
 describe('resolveExecutionConfig (ADR-077)', () => {
   it('env переопределяет config.yaml для remote-параметров', () => {
-    const c = withExecution({
-      remote: {
-        url: ['http://cfg-executor:8080'],
-        timeoutMs: 1000,
-        concurrency: 2,
-        failMode: 'fail',
-        tokenSecret: '/cfg/token',
-      },
+    const c = withRemote({
+      url: ['http://cfg-executor:8080'],
+      timeoutMs: 1000,
+      concurrency: 2,
+      failMode: 'fail',
+      tokenSecret: '/cfg/token',
     });
     const resolved = resolveExecutionConfig(c, {
       [EXECUTION_ENV.remoteUrl]: 'http://env-a:8080, http://env-b:8080',
@@ -128,14 +136,12 @@ describe('resolveExecutionConfig (ADR-077)', () => {
   });
 
   it('config.yaml используется, если env не задан', () => {
-    const c = withExecution({
-      remote: {
-        url: ['http://cfg-executor:8080'],
-        timeoutMs: 5000,
-        concurrency: 3,
-        failMode: 'inline-fallback',
-        tokenSecret: '/cfg/token',
-      },
+    const c = withRemote({
+      url: ['http://cfg-executor:8080'],
+      timeoutMs: 5000,
+      concurrency: 3,
+      failMode: 'inline-fallback',
+      tokenSecret: '/cfg/token',
     });
     const resolved = resolveExecutionConfig(c, {});
     expect(resolved.remote.url).toEqual(['http://cfg-executor:8080']);
@@ -161,16 +167,24 @@ describe('resolveExecutionConfig (ADR-077)', () => {
   });
 
   it('fail-closed: невалидный failMode в config → ошибка', () => {
-    const c = withExecution({
-      remote: { url: [], timeoutMs: 30_000, concurrency: 1, failMode: 'fallback' as never, tokenSecret: '' },
+    const c = withRemote({
+      url: [],
+      timeoutMs: 30_000,
+      concurrency: 1,
+      failMode: 'fallback' as never,
+      tokenSecret: '',
     });
     expect(() => resolveExecutionConfig(c, {})).toThrow(/execution\.remote\.failMode="fallback"/);
   });
 
   it('невалидный числовой env → warn и фоллэк на config (fail-soft)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const c = withExecution({
-      remote: { url: [], timeoutMs: 1234, concurrency: 4, failMode: 'fail', tokenSecret: '' },
+    const c = withRemote({
+      url: [],
+      timeoutMs: 1234,
+      concurrency: 4,
+      failMode: 'fail',
+      tokenSecret: '',
     });
     const resolved = resolveExecutionConfig(c, {
       [EXECUTION_ENV.timeoutMs]: '30s',
@@ -290,7 +304,7 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
         concurrency: 5,
         failMode: 'inline-fallback',
         profiles: {
-          inherits: {},
+          inherits: { url: [] },
           own: { url: ['http://own:8080'], timeoutMs: 22_000 },
         },
       },
@@ -318,7 +332,7 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
       remote: {
         ...cfg.execution.remote,
         url: [],
-        profiles: { broken: {} },
+        profiles: { broken: { url: [] } },
       },
     });
     const resolved = resolveExecutionConfig(c, {});
