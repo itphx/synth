@@ -263,10 +263,12 @@ describe('loadConfig — SYNTH_BOOTSTRAP_SERVICE_KEYS (ADR-052/O1)', () => {
 });
 
 /**
- * F4 (аудит S1): профильные дефолты (`baseDefaults`) — выше общего
- * `defaultConfig`, но ниже config.yaml/env/CLI.
+ * F4 (аудит S1) / PROP-139: профильные дефолты (`baseDefaults`) — выше общего
+ * `defaultConfig`, но ниже config.yaml/env/CLI. Механизм один для профилей
+ * managed и hybrid (LLM-шлюз по умолчанию включён — см.
+ * `hybridGatewayBaseDefaults` в core).
  */
-describe('loadConfig — baseDefaults профиля (F4)', () => {
+describe('loadConfig — baseDefaults профиля (F4, PROP-139)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {

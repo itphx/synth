@@ -512,6 +512,15 @@
 
 - Флаги `serve`: `--connect <url>` (адрес backend), `--token <api-key>`,
   `--oidc-issuer`/`--oidc-client-id` (fallback дискавери) — `src/main.ts`.
+- **LLM-шлюз в гибриде — включён по умолчанию (PROP-139):** профильный дефолт
+  `hybridGatewayBaseDefaults()` (`server/app/standalone-options.ts`, публичный
+  экспорт из `src/index.ts`) — `{ llmGateway: { enabled: true } }`. Применяется
+  вторым проходом загрузки конфига (режим известен только после первой загрузки):
+  публичный CLI `@itphx/synth` (`packages/synth/src/cli.ts`) перечитывает конфиг
+  с `baseDefaults`, когда гибрид включён (`remote.enabled` либо OIDC-fallback).
+  Приоритет не меняется (ADR-023): CLI > env (`SYNTH_LLM_GATEWAY_ENABLED`) >
+  `config.yaml` > профиль > дефолт; standalone (без гибрида) вторую загрузку не
+  делает и остаётся с выключенным шлюзом.
 - `RemoteBackendClient` (`remote/client.ts`) — HTTP-клиент к backend;
   `RemoteEventBridge` (`remote/event-bridge.ts`) — мост SSE `/api/v2/events` →
   локальный `EventBus`.

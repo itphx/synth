@@ -6,7 +6,7 @@ import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, egressFetch, setSynthReady, buildStandaloneOptions, resolveExecutionForStartup, configureRestart, resolveRestartMode, RESTART_EXIT_CODE, startUpdateScheduler } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, egressFetch, setSynthReady, buildStandaloneOptions, hybridGatewayBaseDefaults, resolveExecutionForStartup, configureRestart, resolveRestartMode, RESTART_EXIT_CODE, startUpdateScheduler } from '@itphx/synth-core';
 import { createPluginCliContext, createPluginCommand } from '@itphx/synth-core/cli/plugin-commands.js';
 import { createMemoryCommand } from '@itphx/synth-core/cli/memory-commands.js';
 import { createMemoryConnectionResolver } from '@itphx/synth-core/cli/memory-connection.js';
@@ -127,11 +127,40 @@ program
       } as SynthConfig['remote'];
     }
 
-    const synth = await loadConfig({
+    let synth = await loadConfig({
       configPath: options.config,
       home: home ?? undefined,
       overrides,
     });
+
+    // OIDC-fallback (issuer/client_id) передаём и без --connect: сервер стартует
+    // без известного адреса, пользователь вводит адрес в UI (POST /auth/login),
+    // а дискавери при недоступности /auth/oidc-meta падает на эти параметры.
+    // Флаги приоритетнее config.yaml (в секцию remote они не мержатся без --connect).
+    const remoteIssuer = options.oidcIssuer || synth.remote.auth.issuer;
+    const remoteClientId = options.oidcClientId || synth.remote.auth.clientId;
+    const oidcFallbackGiven = !!(remoteIssuer || remoteClientId);
+    // Гибрид «включён»: remote.enabled в config.yaml (с адресом или без) ИЛИ
+    // задан OIDC-fallback (--oidc-issuer/--oidc-client-id). Даже без известного
+    // адреса это гибрид — адрес вводится в UI (поле «Адрес сервера»).
+    const hybridEnabled = synth.remote.enabled || oidcFallbackGiven;
+
+    // PROP-139: в гибридном режиме LLM-шлюз по умолчанию включён (как в
+    // managed): обфускация секретов, аудит каждого запроса и rate limit должны
+    // работать «из коробки». Режим известен только ПОСЛЕ загрузки конфига
+    // (`remote.enabled` в config.yaml или OIDC-fallback), поэтому конфиг
+    // перечитывается с профильными дефолтами `baseDefaults`. Приоритет не
+    // меняется (ADR-023): CLI > env > config.yaml > профиль > дефолт — явное
+    // отключение в config.yaml/env работает как раньше. Standalone (не гибрид)
+    // вторую загрузку не делает — поведение и латентность прежние.
+    if (hybridEnabled) {
+      synth = await loadConfig({
+        configPath: options.config,
+        home: home ?? undefined,
+        overrides,
+        baseDefaults: hybridGatewayBaseDefaults(),
+      });
+    }
 
     // ADR-077: топология исполнения (`execution.mode`/env `SYNTH_EXECUTION_*`) —
     // тот же fail-closed резолвинг, что в core `main.ts` (общий шов): неизвестный
@@ -183,17 +212,9 @@ program
     // Локальные данные процесса — всегда в едином dataDir (не зависят от сервера).
     const remoteEnabled = !!startupBackendUrl || (synth.remote.enabled && !!synth.remote.backendUrl);
     const remoteBackendUrl = startupBackendUrl ?? synth.remote.backendUrl.replace(/\/+$/, '');
-    // OIDC-fallback (issuer/client_id) передаём и без --connect: сервер стартует
-    // без известного адреса, пользователь вводит адрес в UI (POST /auth/login),
-    // а дискавери при недоступности /auth/oidc-meta падает на эти параметры.
-    // Флаги приоритетнее config.yaml (в секцию remote они не мержатся без --connect).
-    const remoteIssuer = options.oidcIssuer || synth.remote.auth.issuer;
-    const remoteClientId = options.oidcClientId || synth.remote.auth.clientId;
-    const oidcFallbackGiven = !!(remoteIssuer || remoteClientId);
-    // Гибрид «включён»: remote.enabled в config.yaml (с адресом или без) ИЛИ
-    // задан OIDC-fallback (--oidc-issuer/--oidc-client-id). Даже без известного
-    // адреса это гибрид — адрес вводится в UI (поле «Адрес сервера»).
-    const hybridEnabled = synth.remote.enabled || oidcFallbackGiven;
+    // `remoteIssuer`/`remoteClientId`/`oidcFallbackGiven`/`hybridEnabled`
+    // вычислены выше (до перезагрузки конфига с профилем гибрида): перезагрузка
+    // меняет только `llmGateway` — секция `remote` остаётся прежней.
 
     // ADR-079: путь credentials — явный --credentials > config (remote.credentialsPath) >
     // home-относительный (<home>/credentials.json); без home — XDG-дефолт.

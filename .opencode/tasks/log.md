@@ -1119,3 +1119,71 @@
   (скрейп `/metrics` при включённых классах); fail-open дефолт класса у динамических пулов (`full`) —
   кандидат на смену в provisioner'е.
 - **Коммит:** не делался.
+
+## 2026-11-12 — PROP-139: LLM-шлюз по умолчанию включён в hybrid (managed — уже было)
+
+- **Задача:** реализация PROP-139 (Ф1–Ф3): `llmGateway.enabled` по умолчанию `true` не только
+  в **managed** (уже было), но и в **hybrid** (локальный core + центральный сервер, ADR-045);
+  **standalone остаётся `false`**. **Тип:** feature (конфиг/CLI) + docs. **Исполнитель:** @fixer.
+  Коммит не делался.
+- **Шов профиля (core).** `hybridGatewayBaseDefaults()` —
+  `packages/core/src/server/app/standalone-options.ts` (публичный экспорт из
+  `packages/core/src/index.ts`): `{ llmGateway: { enabled: true } }`. Хелпер в core, а не в CLI —
+  чтобы был тестируемым; backend managed использует тот же механизм `baseDefaults`
+  (`packages/backend/src/lib/app-config.ts`) — код backend не менялся.
+- **Двухпроходная загрузка (CLI `@itphx/synth`, `packages/synth/src/cli.ts`, команда `serve`).**
+  Первая загрузка `loadConfig` — как раньше (без `baseDefaults`); из неё вычисляется признак
+  гибрида — **та же формула**, что и для прочих вычислений CLI:
+  `hybridEnabled = synth.remote.enabled || oidcFallbackGiven`, где
+  `oidcFallbackGiven = !!(options.oidcIssuer || synth.remote.auth.issuer || options.oidcClientId || synth.remote.auth.clientId)`.
+  Если гибрид — конфиг **перечитывается** с `baseDefaults: hybridGatewayBaseDefaults()`, и уже
+  второй результат используется дальше (execution/TLS/порт/опции приложения). Перезагрузка
+  меняет только `llmGateway` — секция `remote` не трогается, поэтому значения `remoteIssuer`/
+  `remoteClientId`/`hybridEnabled`, вычисленные до перезагрузки, остаются верными (дубликат
+  формулы из CLI убран). **Без гибрида второй загрузки нет** — поведение и латентность прежние.
+  Почему две загрузки: режим известен только **после** чтения конфига (`remote.enabled` в
+  `config.yaml`) или из CLI-флагов (`--connect`, `--oidc-issuer`/`--oidc-client-id`).
+- **Приоритет не изменился (ADR-023):** CLI > env (`SYNTH_LLM_GATEWAY_ENABLED`) > `config.yaml` >
+  профильный дефолт > общий дефолт. Явное отключение в `config.yaml`/env работает как раньше;
+  runtime-тумблер UI («Безопасность → Шлюз») — выше `config.yaml`, как и был.
+- **Тесты.** `packages/core/src/server/app/standalone-options.test.ts` — **9** тестов (3 прежних +
+  **6** новых): профиль возвращает `{llmGateway:{enabled:true}}`; свежий объект на вызов; двухпроходная
+  загрузка (standalone → выключен, гибрид → включён); `config.yaml: enabled:false` выше профиля;
+  env `SYNTH_LLM_GATEWAY_ENABLED=false` выше профиля; остальные настройки шлюза не затрагиваются.
+  `packages/shared/src/config/loader.test.ts` — существующие кейсы `baseDefaults` (**22** теста в
+  файле, зелёные) дополнены ссылкой на PROP-139 (механизм один для managed и hybrid).
+- **Проверки (фактические).** `pnpm --filter @itphx/synth-shared build` — ок;
+  `vitest run src/config/loader.test.ts` (shared) — **22 passed**; `vitest run
+  src/server/app/standalone-options.test.ts` (core) — **9 passed**; `pnpm --filter @itphx/synth-core
+  typecheck` — ок; `pnpm --filter @itphx/synth-core build` — ок; `pnpm --filter @itphx/synth
+  typecheck` — ок; `pnpm --filter @itphx/synth build` — ок (tsup, 75.27 KB); `pnpm --filter
+  @itphx/synth-core lint` — **0 errors** (467 warnings — прежние, по всему пакету); eslint по
+  изменённым файлам core — **0** замечаний; `pnpm --filter @itphx/synth lint` (`--max-warnings 0`) —
+  ок; `node scripts/adr-check.mjs` — ок.
+- **Живая проверка собранного CLI (`/health`, поле `llmGateway`).** standalone (без флагов
+  гибрида) → `llmGateway:"disabled"` + `warnings:["llm-gateway-disabled"]` (поведение прежнее);
+  hybrid через `--oidc-issuer/--oidc-client-id` → `llmGateway:"enabled"`; hybrid через `--connect` →
+  `llmGateway:"enabled"`; hybrid + `config.yaml llmGateway.enabled:false` → `disabled`;
+  hybrid + env `SYNTH_LLM_GATEWAY_ENABLED=false` → `disabled`.
+- **Документация.** `docs/CONFIGURATION.md` + `docs/en/CONFIGURATION.md` — «backend/managed **и
+  hybrid** — `true`, standalone — `false» + абзац про второй проход загрузки в гибриде; корневой
+  `AGENTS.md` инвариант 25 — та же формулировка; `packages/core/AGENTS.md` (раздел «Гибрид») —
+  шов и приоритет; `packages/shared/AGENTS.md` — «backend/managed **и hybrid** включают
+  `llmGateway.enabled`»; `packages/backend/AGENTS.md` — уточнено, что `false` остаётся только у
+  standalone (без гибрида).
+- **Отклонения/решения:** (1) хелпер профиля живёт в `server/app/standalone-options.ts` (файл
+  уже отвечает за маппинг конфига в опции standalone), а не в отдельном `config/hybrid.ts` — чтобы
+  тест лежал рядом с существующим `standalone-options.test.ts`; (2) формула признака гибрида в CLI
+  не менялась (переиспользована существующая) — новый «режим» не заводился; (3) `core`-CLI
+  (`packages/core/src/main.ts`, внутренний инструмент) **не трогали** — там тот же признак гибрида
+  есть, но профиль не применяется; решение по нему — в остатке.
+- **Ограничения:** (1) харнеса тестов у публичного CLI-пакета `@itphx/synth` нет (в пакете нет
+  vitest/скрипта `test`) — CLI-уровень закрыт живой проверкой собранного бинарника (`/health`),
+  а логика профиля — тестами core; (2) вторая загрузка конфига в гибриде читает `config.yaml` и
+  env второй раз (файл — один и тот же; приоритеты не меняются).
+- **Остаток:** (1) `packages/core/src/main.ts` (внутренний core-CLI `serve`) — профиль гибрида не
+  применяется (там `loadConfig` без `baseDefaults`): либо повторить двухпроходную загрузку, либо
+  признать dev-инструмент standalone-по-умолчанию; (2) заметки релиза/CHANGELOG — не трогались
+  (релизная пара — на бампе версии); (3) статус PROP-139 — по-прежнему «Предложение» (ADR/PROP не
+  трогали по условию задачи).
+- **Коммит:** не делался.

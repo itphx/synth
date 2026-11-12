@@ -2670,7 +2670,7 @@ export { PUBLIC_API_V2_PATHS, isPublicApiV2Path } from './server/app/public-rout
 export type { PublicApiRoute } from './server/app/public-routes.js';
 // Единый маппинг `SynthConfig` → опции `createStandaloneApp` (обе точки входа
 // standalone: core-`main.ts` и публичный CLI `@itphx/synth`).
-export { buildStandaloneOptions } from './server/app/standalone-options.js';
+export { buildStandaloneOptions, hybridGatewayBaseDefaults } from './server/app/standalone-options.js';
 export type { StandaloneOptionsInput } from './server/app/standalone-options.js';
 export {
   serializeSession,

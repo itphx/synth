@@ -550,15 +550,18 @@ microFirst:
   microLlmEnabled: false
 
 llmGateway:
-  enabled: true                   # profile default: backend/managed — true, standalone — false
+  enabled: true                   # profile default: backend/managed and hybrid — true, standalone — false
   inputMode: "obfuscate"          # obfuscate | block
   logPayloads: false
   payloadLogPath: ""              # path of the full JSONL log; empty → {dataDir}/audit/llm-payloads.jsonl
   rateLimit: { userPerMinute: 60, providerPerMinute: 120 }
   audit: { enabled: true, logPath: "" }   # empty logPath → {dataDir}/audit/llm-gateway.jsonl
 
-> The default of `llmGateway.enabled` depends on the profile: **backend/managed — `true`** (secret
-> obfuscation, per-request audit, and rate limit work out of the box), **standalone — `false`**.
+> The default of `llmGateway.enabled` depends on the profile: **backend/managed and hybrid —
+> `true`** (secret obfuscation, per-request audit, and rate limit work out of the box),
+> **standalone — `false`**. For hybrid (local core + central server, ADR-045) the profile is
+> applied in a second config-loading pass: the mode is known only after the first load
+> (`remote.enabled` in `config.yaml` or the OIDC fallback `--oidc-issuer`/`--oidc-client-id`).
 > Override — `SYNTH_LLM_GATEWAY_ENABLED` / `config.yaml`; the runtime toggle in the UI
 > ("Security → Security gateway", `settings.json`) is **higher** than `config.yaml`. When the
 > gateway is off, `/health` and `/ready` add `llmGateway: "disabled"` and
