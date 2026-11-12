@@ -89,6 +89,18 @@ describe('PROP-135 Ф4b-1: ключ пула', () => {
       /requires an id/,
     );
   });
+
+  it('workspaceSubPath не входит в ключ (ключ пула остаётся стабильным)', () => {
+    expect(
+      poolKeyString({
+        scope: 'project',
+        id: 'prj_1',
+        class: 'exec',
+        profile: 'default',
+        workspaceSubPath: 'proj-1',
+      }),
+    ).toBe(poolKeyString({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'default' }));
+  });
 });
 
 describe('PROP-135 Ф4b-1: статический провайдер', () => {
@@ -171,6 +183,60 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
       class: 'exec',
       profile: 'devops',
     });
+  });
+
+  it('ensure: workspaceSubPath (subPath PVC для проекта) уходит в тело запроса', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080', token: 'pool-token' });
+      },
+    });
+
+    await provider.ensure({
+      scope: 'project',
+      id: 'prj_1',
+      class: 'exec',
+      profile: 'default',
+      workspaceSubPath: 'proj-slug/.worktrees/feature',
+    });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body.workspaceSubPath).toBe('proj-slug/.worktrees/feature');
+    // Ключ от subPath не зависит (один пул на область).
+    expect(body.key).toBe('project:prj_1:exec:default');
+  });
+
+  it('ensure: без workspaceSubPath поля в теле нет (аддитивность протокола)', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'default' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body).not.toHaveProperty('workspaceSubPath');
   });
 
   it('ensure: ответ без адреса → понятная ошибка', async () => {

@@ -4,7 +4,7 @@ import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionM
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
 import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
 import { autoTitleSession } from '../sessions/auto-title.js';
-import { join, isAbsolute, normalize, resolve } from 'node:path';
+import { join, isAbsolute, normalize, relative, resolve } from 'node:path';
 import { resolvePath } from './tools/path-utils.js';
 import { mkdir, stat } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -408,6 +408,40 @@ function resolveAllowedRoots(workingDir: string, projectRoot: string | null): st
   const root = normalize(projectRoot);
   if (root === normalize(workingDir)) return undefined;
   return [root];
+}
+
+/**
+ * PROP-135 Ф4b-2b-2a: относительный путь рабочего каталога внутри корня
+ * workspace'ов — `workspaceSubPath` для provisioner'а (per-project монтирование
+ * PVC: пул видит **только** каталог проекта, а не весь том).
+ *
+ * Возвращается путь в posix-виде (`proj-slug`, `proj-slug/.worktrees/feature`) —
+ * ровно то, что принимает provisioner (`isValidWorkspaceSubPath`: без
+ * абсолютного пути, `..`, `.`, пустых сегментов и обратных слэшей).
+ *
+ * `undefined` — subPath не задаём, provisioner смонтирует PVC целиком. Это
+ * ограничение standalone: каталог проекта там выбирается вручную и может лежать
+ * вне `workspacesRoot` (managed всегда создаёт проект под корнем, worktree —
+ * `{workspacesRoot}/.worktrees/<id>`). Отдавать наружу абсолютный путь нельзя —
+ * вне корня он означал бы чужой каталог на томе.
+ */
+function resolveWorkspaceSubPath(
+  workspacesRoot: string,
+  workingDir: string,
+): string | undefined {
+  const root = (workspacesRoot ?? '').trim();
+  const dir = (workingDir ?? '').trim();
+  if (root === '' || dir === '') return undefined;
+  const rel = relative(root, dir);
+  // Пусто — рабочий каталог и есть корень; абсолютный путь — разные диски/тома.
+  if (rel === '' || isAbsolute(rel)) return undefined;
+  // Обратный слэш — не разделитель Linux-пути, а подозрительный символ.
+  if (rel.includes('\\')) return undefined;
+  const segments = rel.split('/');
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return undefined;
+  }
+  return rel;
 }
 
 /**
@@ -6499,6 +6533,15 @@ export class ChatOrchestrator {
                     profile: session.settings.executorProfile,
                     projectId: session.projectId,
                     sessionId: session.id,
+                    // PROP-135 Ф4b-2b-2a: per-project монтирование PVC — пул
+                    // получает только каталог проекта (или каталог worktree,
+                    // если сессия к нему привязана). Рабочий каталог вне
+                    // `workspacesRoot` (standalone с ручным выбором) даёт
+                    // `undefined` → provisioner монтирует том целиком.
+                    workspaceSubPath: resolveWorkspaceSubPath(
+                      this._workspacesRoot,
+                      workingDir,
+                    ),
                   }),
                   // ADR-075: гейт `workspace` наследуется саб-агентом —
                   // его permission-слой не даёт обойти отсутствие рабочего каталога.

@@ -23,6 +23,7 @@ import {
   ExecutionProfileUnavailableError,
 } from './router.js';
 import type { ExecutionPoolKey } from './pool-provider.js';
+import { poolKeyString } from './pool-provider.js';
 import type { ExecutionPort } from './ports/index.js';
 
 /** Порт-заглушка: идентифицируется именем, чтобы сравнивать объекты. */
@@ -444,6 +445,53 @@ describe('PROP-135 Ф4b-1: роутер с провайдером пулов htt
 
     expect(router.portFor({ projectId: 'prj_a' })).toBe(instance);
     expect(router.portFor()).toBe(instance);
+  });
+
+  /**
+   * PROP-135 Ф4b-2b-2a: `workspaceSubPath` (per-project subPath PVC) уходит в
+   * `ensure`, но **не** в ключ пула — кэш остаётся «один порт на ключ».
+   */
+  it('workspaceSubPath уходит в ensure, ключ пула от него не зависит', async () => {
+    const keys: ExecutionPoolKey[] = [];
+    const provider = {
+      ensure: async (key: ExecutionPoolKey) => {
+        keys.push(key);
+        return { url: `http://pool/${key.id ?? ''}` };
+      },
+    };
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: provider,
+    });
+
+    const portA = router.portFor({ projectId: 'prj_a', workspaceSubPath: 'proj-a' });
+    // Тот же ключ пула (проект/класс/профиль) — тот же прокси-порт, хотя
+    // subPath другой: ключ пула стабилен.
+    const portB = router.portFor({
+      projectId: 'prj_a',
+      workspaceSubPath: 'proj-a/.worktrees/feature',
+    });
+    expect(portB).toBe(portA);
+    expect(keys).toHaveLength(0);
+
+    // Порт ленивый: `ensure` — на первом обращении. Реальная сборка порта в
+    // тесте не нужна (нет пакета исполнителя) — важен только запрос пула.
+    await portA.execute({ command: { kind: 'shell', command: 'echo hi' } }).catch(() => undefined);
+
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toMatchObject({
+      scope: 'project',
+      id: 'prj_a',
+      class: 'exec',
+      profile: 'default',
+      workspaceSubPath: 'proj-a',
+    });
+    // Ключ пула — без subPath.
+    expect(poolKeyString(keys[0]!)).toBe('project:prj_a:exec:default');
   });
 
   it('provider=static: прежнее поведение (порты профилей на старте, ключ пула не нужен)', async () => {

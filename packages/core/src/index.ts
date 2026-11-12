@@ -573,7 +573,11 @@ export {
   isExecutionRouter,
   ExecutionProfileUnavailableError,
 } from './execution/router.js';
-export type { ExecutionRouter, ExecutionRouterOptions } from './execution/router.js';
+export type {
+  ExecutionPortTarget,
+  ExecutionRouter,
+  ExecutionRouterOptions,
+} from './execution/router.js';
 export {
   createRemoteExecutionPortFromConfig,
   createRemoteExecutionPortForPool,

@@ -41,6 +41,12 @@
  * `pooling: project`) → `fallback: instance` (instance-порт) либо
  * `fallback: fail` (**fail-closed**).
  *
+ * `workspaceSubPath` (PROP-135 Ф4b-2b-2a) — относительный путь рабочего
+ * каталога внутри PVC: он уходит в `ensure` (per-project монтирование), но в
+ * ключ пула не входит — кэш остаётся «один порт на ключ», поэтому смену
+ * subPath у существующего пула порт не подхватывает (пул пересоздаётся на
+ * стороне provisioner'а по своему idle-таймауту).
+ *
  * ## Чего роутер НЕ делает
  *
  * - не provisioner'ит поды (это следующий слайс Ф4 — сам сервис provisioner);
@@ -62,6 +68,28 @@ import { createPooledExecutionPort } from './pooled-port.js';
 import type { ExecutionMetricsSink, ExecutionPort } from './ports/index.js';
 
 /**
+ * Цель порта: профиль исполнения и — при пуле `project`/`session` —
+ * идентификатор области, а также (PROP-135 Ф4b-2b-2a) относительный путь
+ * рабочего каталога внутри PVC workspace.
+ */
+export interface ExecutionPortTarget {
+  /** Профиль исполнения (`session.settings.executorProfile`). */
+  profile?: string;
+  /** Идентификатор проекта — для ключа проектного пула. */
+  projectId?: string;
+  /** Идентификатор сессии — для ключа сессионного пула. */
+  sessionId?: string;
+  /**
+   * Относительный путь внутри PVC workspace (`proj-slug`,
+   * `proj-slug/.worktrees/feature`): provisioner монтирует его в пул как
+   * рабочее дерево (per-project `subPath`). В ключ пула **не** входит — кэш
+   * портов остаётся «один порт на ключ», subPath получает первый `ensure`.
+   * Не задан — монтируется корень тома.
+   */
+  workspaceSubPath?: string;
+}
+
+/**
  * Роутер портов исполнения.
  *
  * `portFor` **синхронен**: порты созданы на старте (инвариант 24), роутер
@@ -73,11 +101,12 @@ export interface ExecutionRouter {
    *
    * @param target профиль цели (`session.settings.executorProfile`) и — при
    *               `provider: http` и пуле `project`/`session` — идентификатор
-   *               области (`projectId`/`sessionId`); не заданы или профиль
-   *               неизвестен — берётся профиль по умолчанию
+   *               области (`projectId`/`sessionId`) и относительный путь
+   *               рабочего каталога внутри PVC (`workspaceSubPath`); не заданы
+   *               или профиль неизвестен — берётся профиль по умолчанию
    *               (`execution.remote.defaultProfile`).
    */
-  portFor(target?: { profile?: string; projectId?: string; sessionId?: string }): ExecutionPort;
+  portFor(target?: ExecutionPortTarget): ExecutionPort;
 }
 
 /** Структурная проверка: переданное значение — роутер исполнения. */
@@ -212,7 +241,7 @@ export async function createExecutionRouter(
   }
 
   return {
-    portFor(target?: { profile?: string; projectId?: string; sessionId?: string }): ExecutionPort {
+    portFor(target?: ExecutionPortTarget): ExecutionPort {
       const requested = (target?.profile ?? '').trim();
       // Неизвестный профиль → профиль по умолчанию (полный binding — Ф6).
       const name = requested !== '' && plans.has(requested) ? requested : defaultName;
@@ -256,7 +285,7 @@ function createHttpProviderRouter(
     });
 
   return {
-    portFor(target?: { profile?: string; projectId?: string; sessionId?: string }): ExecutionPort {
+    portFor(target?: ExecutionPortTarget): ExecutionPort {
       const requested = (target?.profile ?? '').trim();
       // Неизвестный профиль → профиль по умолчанию (как в статическом пути).
       const known =
@@ -278,7 +307,16 @@ function createHttpProviderRouter(
         return instancePort;
       }
 
-      const key: ExecutionPoolKey = { scope, id: id.trim(), class: 'exec', profile };
+      // PROP-135 Ф4b-2b-2a: subPath монтирования PVC — в ключ пула **не**
+      // входит (кэш прокси по ключу: один порт на проект/сессию), его получает
+      // первый `ensure` этого пула.
+      const key: ExecutionPoolKey = {
+        scope,
+        id: id.trim(),
+        class: 'exec',
+        profile,
+        ...(target?.workspaceSubPath ? { workspaceSubPath: target.workspaceSubPath } : {}),
+      };
       const keyString = poolKeyString(key);
       const existing = pooled.get(keyString);
       if (existing) return existing;

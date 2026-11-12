@@ -54,6 +54,17 @@ export interface ExecutionPoolKey {
   class: ExecutionPoolClass;
   /** Имя профиля исполнения. */
   profile: string;
+  /**
+   * Относительный путь внутри PVC workspace (`proj-slug`,
+   * `proj-slug/.worktrees/feature`) — что монтировать в пул как рабочее
+   * дерево (PROP-135 Ф4b-2b-2a).
+   *
+   * В ключ пула (`poolKeyString`) **не** входит: пул остаётся один на
+   * область (проект/сессию), а subPath — свойство монтирования тома, которое
+   * provisioner получает из тела `POST /v1/pools`. Не задан — монтируется
+   * корень тома (поведение для standalone-проектов вне `workspacesRoot`).
+   */
+  workspaceSubPath?: string;
 }
 
 /**
@@ -183,7 +194,8 @@ export interface HttpExecutionPoolProviderOptions {
  *
  * ## Протокол
  *
- * - `POST {url}/v1/pools` — тело `{ key, scope, id, class, profile }`,
+ * - `POST {url}/v1/pools` — тело `{ key, scope, id, class, profile }`
+ *   (+ `workspaceSubPath`, если задан — per-project монтирование PVC),
  *   ответ `{ url, token }`; адрес и токен пула приходят **из ответа**;
  * - `POST {url}/v1/pools/{key}/touch` — продлить жизнь пула (best-effort);
  * - `POST {url}/v1/pools/{key}/drain` — слить пул (best-effort);
@@ -220,6 +232,9 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
       ...(key.id ? { id: key.id } : {}),
       class: key.class,
       profile: key.profile,
+      // PROP-135 Ф4b-2b-2a: per-project монтирование PVC — поле аддитивное
+      // (старый provisioner его проигнорирует и смонтирует корень тома).
+      ...(key.workspaceSubPath ? { workspaceSubPath: key.workspaceSubPath } : {}),
     };
     const response = await this._request('POST', '/v1/pools', body, true);
     const payload = (await response.json().catch(() => null)) as {

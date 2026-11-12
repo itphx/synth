@@ -25,7 +25,7 @@ import type { ContextBuilder } from './context/builder.js';
 import { createToolRegistry } from './tools/index.js';
 import { createAgentRegistry } from './agents/index.js';
 import type { ExecutionPort } from '../execution/ports/index.js';
-import type { ExecutionRouter } from '../execution/router.js';
+import type { ExecutionPortTarget, ExecutionRouter } from '../execution/router.js';
 import {
   generateId,
   MessageRole,
@@ -147,10 +147,22 @@ interface Harness {
   sessionId: string;
 }
 
+/** Один ход сессии: провайдер вызывает тул-зонд, затем отвечает текстом. */
+async function runTurn(harness: Harness): Promise<void> {
+  const fresh = (await harness.sessionManager.getSession(harness.sessionId))!;
+  const userMsg = fresh.messages.find((m) => m.role === MessageRole.USER)!;
+  await harness.orchestrator
+    .createProcessMessage()(fresh, userMsg, new AbortController().signal, () => {});
+}
+
 async function makeHarness(opts: {
   router?: ExecutionRouter;
   executorProfile?: string;
   projectId?: string;
+  /** Корень workspace'ов (PROP-135 Ф4b-2b-2a: от него считается subPath). */
+  workspacesRoot?: string;
+  /** Рабочий каталог сессии (по умолчанию — временный каталог теста). */
+  defaultWorkingDir?: string;
   onToolCall: (ctx: ToolContext) => void;
 }): Promise<Harness> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'synth-exec-router-'));
@@ -171,7 +183,8 @@ async function makeHarness(opts: {
       }) as unknown as import('@itphx/synth-shared').ProviderConfig,
     toolRegistry,
     agentRegistry: createAgentRegistry(toolRegistry),
-    defaultWorkingDir: tmpDir,
+    defaultWorkingDir: opts.defaultWorkingDir ?? tmpDir,
+    ...(opts.workspacesRoot ? { workspacesRoot: opts.workspacesRoot } : {}),
     ...(opts.router ? { executionRouter: opts.router } : {}),
   });
   const session = await sessionManager.createSession({
@@ -301,5 +314,78 @@ describe('PROP-135 Ф4a: порт роутера доходит до тула', 
     const last = targets[targets.length - 1]!;
     expect(last.projectId).toBeUndefined();
     expect(last.sessionId).toBe(harness.sessionId);
+  });
+
+  /**
+   * PROP-135 Ф4b-2b-2a: per-project монтирование PVC — core передаёт
+   * относительный путь рабочего каталога внутри `workspacesRoot`.
+   */
+  it('workspaceSubPath: рабочий каталог внутри workspacesRoot → путь проекта', async () => {
+    const port = sentinelPort('pool-port');
+    const targets: ExecutionPortTarget[] = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        targets.push(target ?? {});
+        return port;
+      },
+    };
+    const root = await mkdtemp(join(tmpdir(), 'synth-exec-subpath-'));
+    const workspacesRoot = join(root, 'workspaces');
+
+    const harness = await makeHarness({
+      router,
+      workspacesRoot,
+      defaultWorkingDir: join(workspacesRoot, 'proj-slug'),
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+
+    expect(targets[targets.length - 1]!.workspaceSubPath).toBe('proj-slug');
+  });
+
+  it('workspaceSubPath: каталог worktree внутри проекта → вложенный путь', async () => {
+    const port = sentinelPort('pool-port');
+    const targets: ExecutionPortTarget[] = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        targets.push(target ?? {});
+        return port;
+      },
+    };
+    const root = await mkdtemp(join(tmpdir(), 'synth-exec-subpath-'));
+    const workspacesRoot = join(root, 'workspaces');
+
+    const harness = await makeHarness({
+      router,
+      workspacesRoot,
+      defaultWorkingDir: join(workspacesRoot, 'proj-slug', '.worktrees', 'feature'),
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+
+    expect(targets[targets.length - 1]!.workspaceSubPath).toBe('proj-slug/.worktrees/feature');
+  });
+
+  it('workspaceSubPath: каталог вне workspacesRoot → не задан (том монтируется целиком)', async () => {
+    const port = sentinelPort('pool-port');
+    const targets: ExecutionPortTarget[] = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        targets.push(target ?? {});
+        return port;
+      },
+    };
+    const root = await mkdtemp(join(tmpdir(), 'synth-exec-subpath-'));
+
+    const harness = await makeHarness({
+      router,
+      workspacesRoot: join(root, 'workspaces'),
+      // standalone: рабочего каталог выбран вручную, вне корня workspace'ов.
+      defaultWorkingDir: join(root, 'elsewhere', 'project'),
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+
+    expect(targets[targets.length - 1]!.workspaceSubPath).toBeUndefined();
   });
 });
