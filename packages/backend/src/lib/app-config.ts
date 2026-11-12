@@ -87,7 +87,14 @@ export async function loadBackendConfig(options?: LoadConfigOptions): Promise<Ba
   // «из коробки». Явные config.yaml/env/CLI и runtime-тумблер из UI это
   // перебивают (приоритет выше профиля). Standalone остаётся выключенным.
   const synth = await loadConfig({
-    baseDefaults: { llmGateway: { enabled: true } },
+    baseDefaults: {
+      llmGateway: { enabled: true },
+      // PROP-136 (слайс 136a): managed-профиль включает аудит исполнений shell
+      // по умолчанию (наблюдаемость произвольного кода обязательна); explicit
+      // config.yaml/env (`SYNTH_COMMAND_AUDIT_ENABLED`) перебивают профиль,
+      // standalone остаётся выключенным.
+      security: { commandAudit: { enabled: true } },
+    },
     ...options,
   });
   const auth = buildAuthConfig(synth.auth);

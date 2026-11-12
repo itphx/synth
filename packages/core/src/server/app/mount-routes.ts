@@ -556,6 +556,8 @@ export function mountStandaloneRoutes(
   app.route('/api/v2/audit', createAuditRoutes(auth, {
     securityAudit,
     egressRequests,
+    // PROP-136 (слайс 136a): журнал исполнений команд (`/audit/commands`).
+    commandAudit: deps.commandAuditLog,
     gatewayAudit: {
       auditLogPath: deps.gatewayAuditLogPath,
       logger: deps.gatewayAuditLogger,

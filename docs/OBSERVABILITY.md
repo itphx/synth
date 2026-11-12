@@ -397,6 +397,24 @@ executor: это третий процесс со своими счётчика�
 посчитано). Доменные действия (из контента пакета, `provides.authority`) поимённо в метрику не
 попадают — иначе кардинальность не ограничена; они сводятся к `other`.
 
+### Аудит исполнений shell (PROP-136a)
+
+Журнал исполнений `execute_shell`/`sandbox_exec` (`{dataDir}/audit/commands.jsonl`,
+`security.commandAudit`). Пишет **оркестратор** — единственная точка исполнения tool-call:
+на каждый запуск две записи (`phase=started` до запуска, `phase=finished` после). Метрики
+пополняются в `CommandAuditLog.append` (и `prune`), ошибка метрик журнал не ломает.
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_command_audit_written_total` | counter | `phase` (`started`/`finished`/`other`), `tool` (`execute_shell`/`sandbox_exec`/`other`) | Записи журнала успешно добавлены: `started` — перед запуском команды, `finished` — после завершения (успех/ошибка/отмена) |
+| `synth_command_audit_failed_total` | counter | `phase`, `tool` | Запись журнала не удалась (нет каталога/прав, диск). При `enabled=true` сбой `phase=started` **блокирует** исполнение команды (модель получает `isError`), сбой `finished` — только warning: команда уже выполнена |
+| `synth_command_audit_dropped_total` | counter | — | Записи, удалённые retention-очисткой (`prune`, `DELETE /api/v2/audit/commands?older_than_days=N`) |
+
+Тексты команд, id сессий и пути в лейблы **не** попадают: значения приведены к конечным
+наборам (неизвестное → `other`). Диагностика «почему не пишется журнал» — сначала
+`synth_command_audit_failed_total` (растёт), затем `enabled`/`path` в `security.commandAudit`
+и права на `{dataDir}/audit`.
+
 ### Служебные (self-metrics)
 
 | Метрика | Тип | Лейблы | Смысл |
@@ -412,7 +430,8 @@ executor: это третий процесс со своими счётчика�
 
 - Лейблы — только `method`, `route`, `status`, `provider`, `model`, `kind`, `outcome`, `source`, `op`,
   `currency`, `backend`, `store`, `metric`, а также `action`/`effect` — только для метрик
-  Authority-слоя (ADR-106 Ф1: `synth_authority_decisions_total`).
+  Authority-слоя (ADR-106 Ф1: `synth_authority_decisions_total`) и `phase`/`tool` — только для
+  метрик журнала исполнений (PROP-136a: `synth_command_audit_*`).
 - **`route` — шаблон маршрута**, не сырой путь. Неизвестный/catch-all маршрут сводится к `other`.
 - **Нет** `session_id`, `user_id`, query-строк, сырых путей, текстов сообщений — это и PII, и
   неограниченная кардинальность.

@@ -867,6 +867,25 @@ export type {
   ProtectedPathsRaw,
 } from './engine/security/index.js';
 
+// PROP-136 (слайс 136a): append-only журнал исполнений команд.
+export {
+  CommandAuditLog,
+  createCommandAuditLog,
+  resolveCommandAuditConfig,
+  redactCommand,
+  prepareCommandForAudit,
+  commandFromToolArgs,
+  isCommandAuditTool,
+  sha256Hex,
+  truncateUtf8Bytes,
+  COMMAND_AUDIT_FILE_NAME,
+} from './engine/security/command-audit.js';
+export type {
+  CommandAuditLogOptions,
+  CommandAuditListOptions,
+  CommandAuditMetricsSink,
+} from './engine/security/command-audit.js';
+
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
@@ -2562,6 +2581,10 @@ export {
   createExecutorMetricsCollector,
   normalizeExecutorOutcome,
   EXECUTOR_WAIT_BUCKETS,
+  // PROP-136 (слайс 136a): метрики журнала исполнений команд.
+  createCommandAuditMetrics,
+  normalizeCommandAuditPhase,
+  normalizeCommandAuditTool,
   DATADIR_KINDS,
   SESSIONS_METRICS_INTERVAL_MS,
   STORAGE_RECORDS_INTERVAL_MS,
@@ -2607,8 +2630,11 @@ export type {
   PipelineTriggerMetricSource,
   LlmCallInfo,
   LlmCallOutcome,
-} from './metrics/index.js';
-export { createHealthRoutes } from './server/routes/health.js';
+  // PROP-136 (слайс 136a): sink метрик журнала исполнений команд.
+  CommandAuditMetricPhase,
+  CommandAuditMetricTool,
+  CommandAuditMetrics,
+} from './metrics/index.js';export { createHealthRoutes } from './server/routes/health.js';
 export type { HealthRoutesOptions, ReadinessState } from './server/routes/health.js';
 // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
 export { createMetaRoutes, instanceCapabilities } from './server/routes/meta.js';

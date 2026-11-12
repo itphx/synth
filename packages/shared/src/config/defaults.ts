@@ -571,6 +571,13 @@ export const defaultConfig: SynthConfig = {
     protectedPaths: {
       enabled: true,
     },
+    // PROP-136: аудит исполнений shell — standalone по умолчанию выключен
+    // (backend/managed включает его через `baseDefaults` `loadBackendConfig`).
+    commandAudit: {
+      enabled: false,
+      retentionDays: 30,
+      path: '',
+    },
     // ADR-099: доверие TLS/CA исходящих соединений. Пусто — системное доверие
     // (поведение не меняется); caFile — корпоративный CA, cert/key — mTLS.
     tls: {},

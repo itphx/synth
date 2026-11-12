@@ -4,9 +4,16 @@ import type { createMiddleware } from 'hono/factory';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import type { EgressRequestLogRepository } from '../../storage/ports/egress-request-log-repository.js';
 import type { EgressRequestScope, EgressRequestStatus, SecurityAuditScope } from '@itphx/synth-shared';
-import { EGRESS_REQUEST_SCOPES, EGRESS_REQUEST_STATUSES, SECURITY_AUDIT_SCOPES } from '@itphx/synth-shared';
+import {
+  COMMAND_AUDIT_DECISIONS,
+  EGRESS_REQUEST_SCOPES,
+  EGRESS_REQUEST_STATUSES,
+  SECURITY_AUDIT_SCOPES,
+} from '@itphx/synth-shared';
+import type { CommandAuditDecision } from '@itphx/synth-shared';
 import { readAuditLog, type AuditLogger } from '../../engine/gateway/audit-logger.js';
 import { PLACEHOLDER_PATTERN } from '../../engine/gateway/obfuscator.js';
+import type { CommandAuditLog } from '../../engine/security/command-audit.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -27,6 +34,12 @@ export interface GatewayAuditDeps {
 export interface AuditRoutesDeps {
   securityAudit: SecurityAuditRepository;
   egressRequests: EgressRequestLogRepository;
+  /**
+   * PROP-136 (слайс 136a): журнал **исполнений** команд
+   * (`GET /api/v2/audit/commands`, `DELETE /api/v2/audit/commands`).
+   * Не задан — маршруты не монтируются.
+   */
+  commandAudit?: CommandAuditLog;
   /**
    * Голый аудит LLM Gateway (ADR-036): `GET /api/v2/audit` и
    * `POST /api/v2/audit/revealed`. Не задан — эти пути не монтируются
@@ -59,6 +72,11 @@ export interface AuditRoutesOptions {
   revealedGuard?: Middleware;
   /** Максимум записей по умолчанию. */
   defaultLimit?: number;
+  /**
+   * Guard на `DELETE /api/v2/audit/commands` (retention-очистка журнала
+   * исполнений). По умолчанию — `readGuard` (managed передаёт ADMIN).
+   */
+  commandsAdminGuard?: Middleware;
   /** Локализуемые сообщения (backend — i18n, core — русские литералы). */
   messages?: Partial<AuditRoutesMessages>;
 }
@@ -132,6 +150,62 @@ export function createAuditRoutes(
     });
     return c.json({ entries, count: entries.length });
   });
+
+  // PROP-136 (слайс 136a): журнал **исполнений** команд (append-only JSONL).
+  // Только при заданном `deps.commandAudit` — иначе пути не монтируются.
+  if (deps.commandAudit) {
+    const commands = deps.commandAudit;
+    const commandsAdminGuard = opts.commandsAdminGuard ?? readGuard;
+
+    app.get('/commands', readGuard, async (c) => {
+      const query = c.req.query();
+      // `limit` — строго целое > 0 (иначе 400), выше потолка — обрезается до 1000.
+      const limitRaw = query['limit'];
+      let limit = Math.min(defaultLimit, 1000);
+      if (limitRaw !== undefined) {
+        const parsed = Number(limitRaw);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
+          return c.json({
+            error: { code: 'VALIDATION_ERROR', message: 'limit: ожидается целое число больше 0' },
+          }, 400);
+        }
+        limit = Math.min(parsed, 1000);
+      }
+      const decisionRaw = query['decision'];
+      if (decisionRaw !== undefined && !(COMMAND_AUDIT_DECISIONS as readonly string[]).includes(decisionRaw)) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `decision: ожидается один из ${COMMAND_AUDIT_DECISIONS.join(' | ')}`,
+          },
+        }, 400);
+      }
+      const entries = await commands.list({
+        limit,
+        ...(query['session_id'] ? { sessionId: query['session_id'] } : {}),
+        ...(query['project_id'] ? { projectId: query['project_id'] } : {}),
+        ...(query['from'] ? { from: query['from'] } : {}),
+        ...(query['to'] ? { to: query['to'] } : {}),
+        ...(decisionRaw ? { decision: decisionRaw as CommandAuditDecision } : {}),
+      });
+      return c.json({ entries, count: entries.length });
+    });
+
+    app.delete('/commands', commandsAdminGuard, async (c) => {
+      const raw = c.req.query('older_than_days');
+      const days = raw === undefined ? Number.NaN : Number(raw);
+      if (!Number.isFinite(days) || days <= 0) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'older_than_days: ожидается положительное целое число дней',
+          },
+        }, 400);
+      }
+      const removed = await commands.prune(Math.floor(days));
+      return c.json({ removed });
+    });
+  }
 
   // Голый аудит LLM Gateway (ADR-036) — только при заданных deps.
   if (deps.gatewayAudit) {

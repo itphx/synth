@@ -133,7 +133,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
   });
 
   async function runSession(
-    securityConfig: Omit<SecurityConfig, 'secretKey'>,
+    securityConfig: Omit<SecurityConfig, 'secretKey' | 'commandAudit'>,
     toolCalls: Record<string, unknown>[],
     setup?: (registry: ReturnType<typeof createToolRegistry>) => void,
   ): Promise<void> {
@@ -153,7 +153,12 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
       // не предмет проверки — external_directory явно разрешён.
       permissionConfig: { rules: { external_directory: { '*': 'allow' } }, askTimeoutMs: 1000 },
       // ADR-076: secretKey в тестах не важен — добавляем пустой.
-      securityConfig: { ...securityConfig, secretKey: '' },
+      // PROP-136: журнал исполнений команд здесь выключен (не предмет теста).
+      securityConfig: {
+        ...securityConfig,
+        secretKey: '',
+        commandAudit: { enabled: false, retentionDays: 30, path: '' },
+      },
       projectStore,
       defaultWorkingDir: tmpDir,
       // H5: dataDir определяет динамические защищённые префиксы
@@ -399,7 +404,13 @@ describe('ChatOrchestrator × защита {dataDir}/secrets (H5)', () => {
       providerLoader: (name: string) => ({ name, type: 'mockipi', baseUrl: '', apiKey: '', defaultModel: 'm' }) as unknown as import('@itphx/synth-shared').ProviderConfig,
       toolRegistry: createToolRegistry(),
       permissionConfig: { rules: { external_directory: { '*': 'allow' } }, askTimeoutMs: 1000 },
-      securityConfig: { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' },
+      securityConfig: {
+        promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+        protectedPaths: { enabled: true },
+        secretKey: '',
+        // PROP-136: журнал исполнений команд в этом тесте не нужен.
+        commandAudit: { enabled: false, retentionDays: 30, path: '' },
+      },
       projectStore,
       defaultWorkingDir: tmpDir,
       dataDir: tmpDir,

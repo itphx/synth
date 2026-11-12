@@ -1,10 +1,11 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, McpNetworkPolicy, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy, ToolContext, ToolDefinition } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, McpNetworkPolicy, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy, ToolContext, ToolDefinition, CommandAuditEntry, CommandAuditTool } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig, SshMode } from '@itphx/synth-shared';
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
 import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
 import { autoTitleSession } from '../sessions/auto-title.js';
 import { join, isAbsolute, normalize, relative, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { resolvePath } from './tools/path-utils.js';
 import { mkdir, stat } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -117,6 +118,15 @@ import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type In
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { shellGrantPlan } from './security/shell-guard.js';
+// PROP-136 (слайс 136a): append-only аудит исполнений shell/песочных команд.
+import {
+  DEFAULT_COMMAND_AUDIT_RETENTION_DAYS,
+  commandFromToolArgs,
+  isCommandAuditTool,
+  prepareCommandForAudit,
+  sha256Hex,
+} from './security/command-audit.js';
+import type { CommandAuditLog } from './security/command-audit.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
@@ -496,6 +506,20 @@ export interface ModelPricing {
   currency?: Currency;
 }
 
+/**
+ * Дефолтная секция `security` (когда `OrchestratorOptions.securityConfig` не
+ * задан). Значения — дефолты схемы `securityConfigSchema`, включая
+ * `commandAudit` (PROP-136: журнал исполнений выключен, если не включён явно).
+ */
+function defaultSecurityConfig(): SecurityConfig {
+  return {
+    promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+    protectedPaths: { enabled: true },
+    secretKey: '',
+    commandAudit: { enabled: false, retentionDays: DEFAULT_COMMAND_AUDIT_RETENTION_DAYS, path: '' },
+  };
+}
+
 export interface OrchestratorOptions {
   sessionManager: SessionManager;
   eventBus: EventBus;
@@ -723,6 +747,18 @@ export interface OrchestratorOptions {
   autoTitle?: AutoTitleConfig;
   /** Секция безопасности (защита от Indirect Prompt Injection). */
   securityConfig?: SecurityConfig;
+  /**
+   * PROP-136 (слайс 136a): append-only журнал **исполнений** команд
+   * (`execute_shell`/`sandbox_exec`).
+   *
+   * Задан — на каждый запуск пишутся две записи (`started` до запуска,
+   * `finished` после) с обезличенной командой. Сбой записи `started`
+   * **блокирует** исполнение команды (журнал включён — наблюдаемость
+   * обязательна); сбой `finished` — только warning (команда уже выполнена).
+   *
+   * Не задан (или журнал выключен в конфиге) — поведение прежнее.
+   */
+  commandAudit?: CommandAuditLog;
   /** LLM Gateway (ADR-036): глобальный тумблер и конфиг. Выключен по умолчанию. */
   gatewayConfig?: LLMGatewayConfig;
   /** Путь к JSONL полного лога запросов/ответов LLM ({dataDir}/audit/llm-payloads.jsonl). */
@@ -1119,6 +1155,11 @@ export class ChatOrchestrator {
   private _permissionConfig: PermissionConfig;
   /** Аудит выдачи shell-грантов (опция оркестратора). */
   private readonly _onPermissionGrant: OrchestratorOptions['onPermissionGrant'] | null;
+  /**
+   * PROP-136 (слайс 136a): append-only журнал исполнений команд. Не задан —
+   * аудита нет (поведение прежнее).
+   */
+  private readonly _commandAudit: OrchestratorOptions['commandAudit'] | null;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
   /**
@@ -1582,6 +1623,59 @@ export class ChatOrchestrator {
     }
   }
 
+  /**
+   * PROP-136 (слайс 136a): общая часть записи журнала исполнений команды.
+   *
+   * Команда **обезличивается** (карта обфускации сессии + редакция значений
+   * секретов) и обрезается до 4 КиБ; `commandHash` — от полной обезличенной
+   * строки. `cwd` — абсолютный (из аргументов, иначе рабочий каталог сессии).
+   *
+   * Возвращает `null`, если аудит выключен, тул не из журналируемых или
+   * команды в аргументах нет (нечего писать).
+   */
+  private async _buildCommandAuditBase(params: {
+    toolName: string;
+    toolArgs: Record<string, unknown>;
+    session: Session;
+    workingDir: string;
+    agentRole?: string | undefined;
+    profile?: string | undefined;
+    decision: PermissionDecision;
+  }): Promise<Omit<CommandAuditEntry, 'ts' | 'phase'> | null> {
+    const log = this._commandAudit;
+    if (!log || !log.enabled || !isCommandAuditTool(params.toolName)) return null;
+    const command = commandFromToolArgs(params.toolName, params.toolArgs);
+    if (!command) return null;
+    const secretsMap = await this._getObfuscationMap(params.session.id);
+    const prepared = prepareCommandForAudit(command, { secretsMap });
+    const rawCwd = typeof params.toolArgs.cwd === 'string' ? params.toolArgs.cwd.trim() : '';
+    let cwd = params.workingDir;
+    if (rawCwd !== '') {
+      try {
+        cwd = resolvePath(rawCwd, params.workingDir);
+      } catch {
+        cwd = params.workingDir;
+      }
+    }
+    const actor = params.session.ownerId ?? params.session.userId;
+    return {
+      id: randomUUID(),
+      sessionId: params.session.id,
+      ...(params.session.projectId ? { projectId: params.session.projectId } : {}),
+      ...(actor ? { actor } : {}),
+      ...(params.agentRole ? { agentRole: params.agentRole } : {}),
+      ...(params.profile ? { profile: params.profile } : {}),
+      tool: params.toolName as CommandAuditTool,
+      command: prepared.command,
+      commandHash: prepared.commandHash,
+      cwd,
+      background: params.toolArgs.background === true,
+      decision: params.decision.action,
+      decidedBy: 'permission',
+      ...(params.decision.matchedRule ? { matchedRule: params.decision.matchedRule } : {}),
+    };
+  }
+
   constructor(options: OrchestratorOptions) {
     this._sessionManager = options.sessionManager;
     this._eventBus = options.eventBus;
@@ -1654,6 +1748,9 @@ export class ChatOrchestrator {
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
     this._onPermissionGrant = options.onPermissionGrant ?? null;
+    // PROP-136 (слайс 136a): журнал исполнений команд — один экземпляр на
+    // инстанс: его же читает `GET /api/v2/audit/commands` (иначе файлы разные).
+    this._commandAudit = options.commandAudit ?? null;
     this._approvalManager = new PermissionApprovalManager(this._eventBus, {
       ...(options.approvalRegistry ? { registry: options.approvalRegistry } : {}),
       // ADR-029: живой реестр ожиданий живёт в памяти процесса — после
@@ -1669,7 +1766,7 @@ export class ChatOrchestrator {
     // Авто-именование сессии: конфиг секции `session.autoTitle` (дефолты схемы).
     this._autoTitle = options.autoTitle ?? autoTitleConfigSchema.parse({});
     this._securityConfig = options.securityConfig
-      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
+      ?? defaultSecurityConfig();
     this._dataDir = options.dataDir || '/var/synth/data';
     // ADR-115/ADR-116: в проде blob-порт приходит инъекцией
     // (`StorageContext.blobs`); фоллбэк для тестов — в `_getAttachmentHydrateDeps`.
@@ -2025,7 +2122,7 @@ export class ChatOrchestrator {
    */
   setSecurityConfig(config: SecurityConfig | null | undefined): void {
     this._securityConfig = config
-      ?? { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' };
+      ?? defaultSecurityConfig();
   }
 
   /**
@@ -6625,9 +6722,73 @@ export class ChatOrchestrator {
               executed: true,
               permissionRef,
               run: async (): Promise<ToolCallExecution> => {
+                // PROP-136 (слайс 136a): append-only аудит исполнений shell.
+                // Единственная точка исполнения tool-call: обезличенная команда
+                // пишется **до** запуска — при включённом журнале сбой записи
+                // блокирует команду (наблюдаемость обязательна), а после
+                // завершения дописывается факт исполнения (размер/hash/код).
+                const auditBase = await this._buildCommandAuditBase({
+                  toolName,
+                  toolArgs,
+                  session,
+                  workingDir,
+                  agentRole: effectiveAgentRole,
+                  profile: executionProfileResolution.profile || undefined,
+                  decision: permissionDecision,
+                });
+                const runStartedMs = Date.now();
+                if (auditBase && this._commandAudit) {
+                  try {
+                    await this._commandAudit.append({
+                      ...auditBase,
+                      ts: new Date().toISOString(),
+                      phase: 'started',
+                    });
+                  } catch (auditErr) {
+                    const reason = auditErr instanceof Error ? auditErr.message : String(auditErr);
+                    warning(
+                      'ORCHESTRATOR',
+                      `Command audit write failed for "${toolName}": ${reason} — command not executed`,
+                    );
+                    return {
+                      result: {
+                        content:
+                          'Command audit is enabled but the entry could not be written '
+                          + `(${reason}); the command was not executed. `
+                          + 'Fix the audit log path/storage or disable security.commandAudit and retry.',
+                        isError: true,
+                        metadata: { command_audit_failed: true },
+                      },
+                      cancelled: false,
+                    };
+                  }
+                }
                 const result = toolContext
                   ? await runTool(() => executeToolDef(callToolDef, toolArgs, toolContext, toolName))
                   : await runTool(async () => { throw contextError; });
+                if (auditBase && this._commandAudit) {
+                  const content = result.content ?? '';
+                  const exitCode = result.metadata?.['exitCode'];
+                  try {
+                    await this._commandAudit.append({
+                      ...auditBase,
+                      ts: new Date().toISOString(),
+                      phase: 'finished',
+                      durationMs: Date.now() - runStartedMs,
+                      ...(typeof exitCode === 'number' ? { exitCode } : {}),
+                      bytesOut: Buffer.byteLength(content, 'utf8'),
+                      truncated: result.metadata?.['truncated'] === true,
+                      outputSha256: sha256Hex(content),
+                    });
+                  } catch (auditErr) {
+                    // Команда уже выполнена — результат не ломаем, только журнал.
+                    const reason = auditErr instanceof Error ? auditErr.message : String(auditErr);
+                    warning(
+                      'ORCHESTRATOR',
+                      `Command audit write failed (finished) for "${toolName}": ${reason}`,
+                    );
+                  }
+                }
                 return {
                   result,
                   cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,

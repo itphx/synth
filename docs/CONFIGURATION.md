@@ -616,6 +616,10 @@ security:
     rejectUnauthorized: true      # проверять сертификат сервера (по умолчанию true)
   secretKey: ""                   # ADR-076: мастер-ключ секретов at-rest (пусто → файл dataDir/secrets/master.key)
   bootstrapServiceKeys: []        # ADR-052/O1: installer service-key'и (label/secret/scopes/roles?) — см. ниже; обычно через env SYNTH_BOOTSTRAP_SERVICE_KEYS
+  commandAudit:                   # PROP-136: append-only аудит исполнений execute_shell/sandbox_exec
+    enabled: false                # мастер-выключатель; managed-профиль — true (env SYNTH_COMMAND_AUDIT_ENABLED)
+    retentionDays: 30             # срок хранения журнала, дней (DELETE ?older_than_days)
+    path: ""                      # пусто → {dataDir}/audit/commands.jsonl
 
 remote:                           # гибридный режим: локальный core + удалённый backend
   enabled: false
@@ -1465,6 +1469,39 @@ security:
 # k8s: значение из Secret → env пода (приоритетнее config.yaml)
 SYNTH_BOOTSTRAP_SERVICE_KEYS='[{"label":"addon-installer","secret":"synth_svc_…","scopes":["addons:install"]}]'
 ```
+
+### Аудит исполнений shell (`security.commandAudit`, PROP-136)
+
+Append-only журнал **фактов исполнения** команд `execute_shell`/`sandbox_exec`:
+одна JSONL-строка на запись в `{dataDir}/audit/commands.jsonl` (или `path`).
+На каждый запуск — две записи (`phase: "started"` до запуска,
+`phase: "finished"` после), связанные одним `id`; тела stdout/stderr **не
+пишутся** — только `bytesOut`, `truncated`, `outputSha256` и `exitCode`.
+
+- **`enabled`** — мастер-выключатель. Профильный дефолт: **managed/backend —
+  `true`** (`loadBackendConfig` → `baseDefaults`), **standalone — `false`**.
+- **`retentionDays`** (дефолт 30) — срок хранения; очистка —
+  `DELETE /api/v2/audit/commands?older_than_days=N` (ADMIN). `<= 0` — без ограничения.
+- **`path`** — путь журнала; пусто → `{dataDir}/audit/commands.jsonl`.
+- Env: `SYNTH_COMMAND_AUDIT_ENABLED` (bool), `SYNTH_COMMAND_AUDIT_RETENTION_DAYS`
+  (целое). Приоритет env > `config.yaml` > профиль-дефолт; невалидное значение
+  env игнорируется (журнал — наблюдаемость, а не права).
+
+**Сбой записи блокирует выполнение**, если журнал включён: запись `started`
+делается **до** запуска команды, и при ошибке записи (нет каталога, права,
+диск) команда **не исполняется**, а модель получает `isError`-результат с
+причиной. Сбой записи `finished` — только warning в лог (команда уже
+выполнена, результат не ломается). Выключенный журнал поведение не меняет.
+
+Команда в журнале **обезличена**: значения карты обфускации сессии (ADR-036)
+заменяются плейсхолдерами, затем редакция шаблонов (`Bearer …`,
+`--password=…`/`--token=…`/`--api-key=…`, URL с userinfo → `***`), и только
+потом обрезка до 4 КиБ (`command`); `commandHash` — sha256 **полной**
+обезличенной строки. У `sandbox_exec` команда — `commands.join(" && ")`.
+
+Чтение — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
+`requireAuth`); метрики — `synth_command_audit_*` (см. `docs/OBSERVABILITY.md`).
+Внешний чекер команд — отдельный слайс (136b, не реализован).
 
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 

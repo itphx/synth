@@ -998,6 +998,9 @@ export function mergeSecurityConfig(
     protectedPaths: {
       enabled: runtime.protectedPaths?.enabled ?? base?.protectedPaths?.enabled ?? true,
     },
+    // PROP-136: журнал исполнений команд — не runtime-настройка, переносим из
+    // config (иначе объект терял бы поле и тип `SecurityConfig` расходился).
+    commandAudit: base?.commandAudit ?? { enabled: false, retentionDays: 30, path: '' },
     // ADR-076: мастер-ключ не относится к runtime-настройкам UI — переносим из config.
     secretKey: base?.secretKey ?? '',
     askTimeoutMs: runtime.askTimeoutMs

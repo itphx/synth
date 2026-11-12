@@ -278,6 +278,9 @@ export {
   type SecurityConfig,
   securityTlsConfigSchema,
   type SecurityTlsConfig,
+  // PROP-136 (слайс 136a): журнал исполнений shell/песочных команд.
+  type CommandAuditConfig,
+  commandAuditConfigSchema,
   type PromptInjectionConfig,
   type ProtectedPathsConfig,
   type LLMGatewayConfig,

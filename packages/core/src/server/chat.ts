@@ -9,6 +9,8 @@ import {
   createToolRegistry, createAgentRegistry,
   detectRuntimeDeps,
   createStorageContextAsync,
+  // PROP-136 (слайс 136a): журнал исполнений команд (standalone по умолчанию выключен).
+  createCommandAuditLog,
 } from '../index.js';
 import type { StorageContext } from '../index.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
@@ -256,6 +258,12 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     // Секция `session.autoTitle` — авто-именование сессии (ранний триггер).
     ...(options.config.session?.autoTitle ? { autoTitle: options.config.session.autoTitle } : {}),
     securityConfig: effectiveSecurityConfig,
+    // PROP-136 (слайс 136a): аудит исполнений shell — конфиг `security.commandAudit`
+    // (`SYNTH_COMMAND_AUDIT_ENABLED`); по умолчанию в standalone выключен.
+    commandAudit: createCommandAuditLog({
+      dataDir,
+      ...(options.config.security?.commandAudit ? { config: options.config.security.commandAudit } : {}),
+    }),
     gatewayConfig: options.config.llmGateway,
     gatewayPatternStore: patternStore,
     // ADR-084: decision-слой микро-каскада (config.decision).

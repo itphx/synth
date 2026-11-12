@@ -18,8 +18,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditRoutes } from '@itphx/synth-core';
 import { createSessionRoutes } from './sessions.js';
-import { SessionManager, EventBus, FileStore, AuditLogger, readAuditLog } from '@itphx/synth-core';
-import type { User } from '@itphx/synth-shared';
+import { SessionManager, EventBus, FileStore, AuditLogger, readAuditLog, createCommandAuditLog, sha256Hex } from '@itphx/synth-core';
+import type { CommandAuditLog } from '@itphx/synth-core';
+import type { CommandAuditEntry, User } from '@itphx/synth-shared';
 
 const adminUser: User = {
   id: 'admin', username: 'admin', roles: ['ADMIN'], preferredLanguage: 'ru',
@@ -114,7 +115,7 @@ describe('routes/audit: managed-обвязка core-фабрики аудита 
     await writeFile(auditLogPath, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', flag: 'a' });
   }
 
-  function createApp(user: User | null, sessionManager?: SessionManager) {
+  function createApp(user: User | null, sessionManager?: SessionManager, commandAuditLog?: CommandAuditLog) {
     const app = new Hono();
     const kit = createMockKit(user);
     const fileStore = new FileStore({ dataDir: tmpDir });
@@ -135,6 +136,7 @@ describe('routes/audit: managed-обвязка core-фабрики аудита 
           prune: async () => 0,
           clear: async () => 0,
         },
+        ...(commandAuditLog ? { commandAudit: commandAuditLog } : {}),
         gatewayAudit: {
           auditLogPath,
           sessionExists: async (sessionId: string) => (await sm.getSession(sessionId)) !== null,
@@ -145,6 +147,8 @@ describe('routes/audit: managed-обвязка core-фабрики аудита 
         readGuard: kit.requirePermission('ADMIN', 'AUDITOR'),
         gatewayReadGuard: kit.requirePermission('ADMIN', 'AUDITOR'),
         revealedGuard: kit.requireAuth,
+        // PROP-136: retention-очистка журнала исполнений — только ADMIN.
+        commandsAdminGuard: kit.requirePermission('ADMIN'),
       },
     ));
     return app;
@@ -202,6 +206,52 @@ describe('routes/audit: managed-обвязка core-фабрики аудита 
       expect(res.status).toBe(404);
       const body: any = await res.json();
       expect(body.error.code).toBe('NOT_FOUND');
+    });
+  });
+  describe('/api/v2/audit/commands', () => {
+    function makeEntry(overrides: Partial<CommandAuditEntry> = {}): CommandAuditEntry {
+      return {
+        id: 'exec-1',
+        ts: '2026-11-12T10:00:00.000Z',
+        sessionId: 'ses-1',
+        tool: 'execute_shell',
+        command: 'ls -la',
+        commandHash: sha256Hex('ls -la'),
+        cwd: '/work',
+        background: false,
+        decision: 'allow',
+        decidedBy: 'permission',
+        phase: 'started',
+        ...overrides,
+      };
+    }
+
+    async function makeLog(): Promise<CommandAuditLog> {
+      const log = createCommandAuditLog({
+        dataDir: tmpDir,
+        config: { enabled: true, path: join(tmpDir, 'commands.jsonl') },
+        env: {},
+      });
+      await log.append(makeEntry());
+      return log;
+    }
+
+    it('GET: ADMIN/AUDITOR → 200, USER → 403, аноним → 401', async () => {
+      const log = await makeLog();
+      expect((await createApp(adminUser, undefined, log).request('/api/v2/audit/commands')).status).toBe(200);
+      expect((await createApp(auditorUser, undefined, log).request('/api/v2/audit/commands')).status).toBe(200);
+      expect((await createApp(userUser, undefined, log).request('/api/v2/audit/commands')).status).toBe(403);
+      expect((await createApp(null, undefined, log).request('/api/v2/audit/commands')).status).toBe(401);
+    });
+
+    it('DELETE: только ADMIN (AUDITOR/USER → 403)', async () => {
+      const log = await makeLog();
+      const del = async (user: User | null) => createApp(user, undefined, log)
+        .request('/api/v2/audit/commands?older_than_days=30', { method: 'DELETE' });
+
+      expect((await del(auditorUser)).status).toBe(403);
+      expect((await del(userUser)).status).toBe(403);
+      expect((await del(adminUser)).status).toBe(200);
     });
   });
 });

@@ -601,6 +601,10 @@ security:
     rejectUnauthorized: true      # verify the server certificate (default true)
   secretKey: ""                   # ADR-076: master key of the at-rest secrets (empty → file dataDir/secrets/master.key)
   bootstrapServiceKeys: []        # ADR-052/O1: installer service keys (label/secret/scopes/roles?) — see below; usually via the env SYNTH_BOOTSTRAP_SERVICE_KEYS
+  commandAudit:                   # PROP-136: append-only audit of execute_shell/sandbox_exec executions
+    enabled: false                # master switch; managed profile — true (env SYNTH_COMMAND_AUDIT_ENABLED)
+    retentionDays: 30             # journal retention, days (DELETE ?older_than_days)
+    path: ""                      # empty → {dataDir}/audit/commands.jsonl
 
 remote:                           # hybrid mode: local core + remote backend
   enabled: false
@@ -1455,6 +1459,40 @@ security:
 # k8s: the value from a Secret → pod env (takes precedence over config.yaml)
 SYNTH_BOOTSTRAP_SERVICE_KEYS='[{"label":"addon-installer","secret":"synth_svc_…","scopes":["addons:install"]}]'
 ```
+
+### Shell execution audit (`security.commandAudit`, PROP-136)
+
+Append-only journal of **actual executions** of `execute_shell`/`sandbox_exec`:
+one JSONL line per record in `{dataDir}/audit/commands.jsonl` (or `path`).
+Every run produces two records (`phase: "started"` before the launch,
+`phase: "finished"` after) linked by one `id`; stdout/stderr bodies are **not**
+written — only `bytesOut`, `truncated`, `outputSha256` and `exitCode`.
+
+- **`enabled`** — master switch. Profile default: **managed/backend — `true`**
+  (`loadBackendConfig` → `baseDefaults`), **standalone — `false`**.
+- **`retentionDays`** (default 30) — retention; cleanup —
+  `DELETE /api/v2/audit/commands?older_than_days=N` (ADMIN). `<= 0` — no limit.
+- **`path`** — journal path; empty → `{dataDir}/audit/commands.jsonl`.
+- Env: `SYNTH_COMMAND_AUDIT_ENABLED` (bool), `SYNTH_COMMAND_AUDIT_RETENTION_DAYS`
+  (integer). Priority env > `config.yaml` > profile default; an invalid env value
+  is ignored (the journal is observability, not an access rule).
+
+**A write failure blocks execution** when the journal is enabled: the `started`
+record is written **before** the command runs, so on a write error (missing
+directory, permissions, disk) the command is **not executed** and the model gets
+an `isError` result with the reason. A `finished` write failure is only a warning
+in the log (the command already ran; the result is not broken). A disabled
+journal changes nothing.
+
+The stored command is **de-identified**: session obfuscation-map values (ADR-036)
+are replaced with placeholders, then value patterns are redacted (`Bearer …`,
+`--password=…`/`--token=…`/`--api-key=…`, URLs with userinfo → `***`), and only
+then truncated to 4 KiB (`command`); `commandHash` is the sha256 of the **full**
+de-identified string. For `sandbox_exec` the command is `commands.join(" && ")`.
+
+Read — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
+`requireAuth`); metrics — `synth_command_audit_*` (see `docs/OBSERVABILITY.md`).
+The external command checker is a separate slice (136b, not implemented).
 
 ### Tool policies (`tools.policy` / `mcp.policy`)
 

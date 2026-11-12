@@ -114,6 +114,9 @@ import {
   // ADR-106 Ф1/Ф2: счётчик решений Authority-слоя (`synth_authority_decisions_total`)
   // и guard-слоя (решение считается; в enforced-режиме — применяется).
   createAuthorityMetrics,
+  // PROP-136 (слайс 136a): журнал исполнений команд + его метрики.
+  createCommandAuditLog,
+  createCommandAuditMetrics,
   AuthorityGuard,
   // ADR-106 Ф3: реестр подтверждений + покрытие (носитель покрывающего гранта).
   ApprovalRegistry,
@@ -821,6 +824,15 @@ export async function createBackendDeps(
   // ADR-106 Ф1: решения Authority-слоя (`synth_authority_decisions_total`) —
   // лейблы только `action`/`effect`/`source`, без id (ADR-094).
   const authorityMetrics = metrics ? createAuthorityMetrics(metrics) : undefined;
+  // PROP-136 (слайс 136a): append-only журнал исполнений `execute_shell`/
+  // `sandbox_exec`. Managed-профиль включает его по умолчанию
+  // (`security.commandAudit.enabled`, `loadBackendConfig`).
+  const commandAuditMetrics = metrics ? createCommandAuditMetrics(metrics) : undefined;
+  const commandAuditLog = createCommandAuditLog({
+    dataDir,
+    ...(config.synth.security?.commandAudit ? { config: config.synth.security.commandAudit } : {}),
+    ...(commandAuditMetrics ? { metrics: commandAuditMetrics } : {}),
+  });
   if (metrics) {
     // ADR-115: сервис вложений собирается внутри фабрики роутов сессий, куда
     // метрики не прокинуть — ставим хуки в sink коллектора (снимается на stop).
@@ -1461,6 +1473,9 @@ export async function createBackendDeps(
     ...(config.synth.session?.autoTitle ? { autoTitle: config.synth.session.autoTitle } : {}),
     securityConfig,
     gatewayConfig,
+    // PROP-136 (слайс 136a): журнал исполнений команд — тот же экземпляр
+    // читает `GET /api/v2/audit/commands`.
+    commandAudit: commandAuditLog,
     gatewayAuditLogger,
     gatewayPayloadLogPath,
     gatewayPatternStore: patternStore,
@@ -2167,6 +2182,9 @@ export async function createBackendDeps(
     egressLogConfig,
     securityAudit,
     egressRequests,
+    // PROP-136 (слайс 136a): журнал исполнений команд — роуты
+    // `/api/v2/audit/commands` читают тот же экземпляр, что пишет оркестратор.
+    commandAuditLog,
     // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
     analyticsRollups,
     // ADR-102: write-path — сборщик роллапов (+ остановка hook-подписки и pruner'а).

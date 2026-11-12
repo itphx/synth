@@ -116,7 +116,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     eventIngress, eventBindingStore, eventJournal, routeRuleStore, eventApiKeyStore,
     schedulerService, scheduleStore, jobStore, webhookStore, webhookDeliveryStore, webhookService,
     webhooksConfig, eventHub, mcpManager, mcpRegistryStore, skillService, settingsStore,
-    egressResolver, securityAudit, egressRequests,
+    egressResolver, securityAudit, egressRequests, commandAuditLog,
     defaultWorkingDir, patternStore, toolRegistry, gatewayAuditLogger, gatewayPayloadLogPath,
     gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
     identityClaimStore, live, maintenanceAudit,
@@ -1272,6 +1272,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.route('/api/v2/audit', createAuditRoutes(auth as unknown as CoreAuthKit, {
     securityAudit,
     egressRequests,
+    // PROP-136 (слайс 136a): журнал исполнений команд (`/audit/commands`).
+    commandAudit: commandAuditLog,
     gatewayAudit: {
       auditLogPath: gatewayAuditLogger.logPath,
       sessionExists: async (sessionId: string) => {
@@ -1284,6 +1286,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     readGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
     gatewayReadGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
     revealedGuard: auth.requireAuth,
+    // Retention-очистка журнала исполнений — только ADMIN (изменяет данные журнала).
+    commandsAdminGuard: auth.requireAdmin,
   }));
 
   // Логи сервисов (core/ui/backend) + полный лог запросов/ответов LLM — чтение, только ADMIN/AUDITOR

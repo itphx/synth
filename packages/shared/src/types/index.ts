@@ -78,6 +78,8 @@ export * from './external-credentials.js';
 export * from './maintenance.js';
 // Egress-политика, журнал внешних запросов и аудит security-политик
 export * from './egress.js';
+// PROP-136: append-only аудит исполнений shell/песочных команд
+export * from './command-audit.js';
 // Аналитика и отчётность инстанса: суточные роллапы (ADR-102)
 export * from './analytics.js';
 // ADR-086/ADR-090: единый манифест расширения `synth.pack` — типы и zod-схемы

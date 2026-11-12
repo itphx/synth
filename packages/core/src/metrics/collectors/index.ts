@@ -115,3 +115,13 @@ export {
   normalizeExecutorOutcome,
   EXECUTOR_WAIT_BUCKETS,
 } from './executor.js';
+export {
+  createCommandAuditMetrics,
+  normalizeCommandAuditPhase,
+  normalizeCommandAuditTool,
+} from './command-audit.js';
+export type {
+  CommandAuditMetricPhase,
+  CommandAuditMetricTool,
+  CommandAuditMetrics,
+} from './command-audit.js';

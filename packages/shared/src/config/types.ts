@@ -1546,9 +1546,33 @@ export const securityTlsConfigSchema = z.object({
   rejectUnauthorized: z.boolean().optional(),
 });
 
+/**
+ * PROP-136: append-only аудит исполнений `execute_shell`/`sandbox_exec`.
+ *
+ * `enabled` — мастер-выключатель: выключен — журнал не пишется и команда не
+ * блокируется; включён — **сбой записи блокирует выполнение** (запись `started`
+ * делается до запуска). Профильный дефолт: backend/managed — включён,
+ * standalone — выключен (как `llmGateway`). Env:
+ * `SYNTH_COMMAND_AUDIT_ENABLED`, `SYNTH_COMMAND_AUDIT_RETENTION_DAYS`
+ * (читаются `resolveCommandAuditConfig` в core — приоритет env > config).
+ *
+ * `path` — путь журнала; пусто → `{dataDir}/audit/commands.jsonl`.
+ */
+export const commandAuditConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** Срок хранения журнала, дней (`prune`); `<= 0` — без ограничения. */
+  retentionDays: z.number().int().default(30),
+  /** Путь журнала (пусто — `{dataDir}/audit/commands.jsonl`). */
+  path: z.string().default(''),
+});
+
+export type CommandAuditConfig = z.infer<typeof commandAuditConfigSchema>;
+
 export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.prefault({}),
   protectedPaths: protectedPathsConfigSchema.prefault({}),
+  /** PROP-136: журнал исполнений shell/песочных команд. */
+  commandAudit: commandAuditConfigSchema.prefault({}),
   /** ADR-099: единый механизм доверия TLS/CA для исходящих соединений. */
   tls: securityTlsConfigSchema.optional(),
   /**

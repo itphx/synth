@@ -6,6 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditRoutes } from './audit.js';
 import { AuditLogger, readAuditLog } from '../../engine/gateway/audit-logger.js';
+import { createCommandAuditLog, sha256Hex } from '../../engine/security/command-audit.js';
+import type { CommandAuditLog } from '../../engine/security/command-audit.js';
+import type { CommandAuditEntry } from '@itphx/synth-shared';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import type { EgressRequestLogRepository } from '../../storage/ports/egress-request-log-repository.js';
 import type { User } from '@itphx/synth-shared';
@@ -131,7 +134,12 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
 
   function createApp(
     user: User | null,
-    opts: { withGatewayAudit?: boolean; sessionExists?: (id: string) => Promise<boolean> } = {},
+    opts: {
+      withGatewayAudit?: boolean;
+      sessionExists?: (id: string) => Promise<boolean>;
+      /** PROP-136: журнал исполнений (`/audit/commands`). */
+      commandAudit?: CommandAuditLog;
+    } = {},
   ) {
     const app = new Hono();
     const kit = createMockKit(user);
@@ -142,6 +150,7 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
       {
         securityAudit: emptySecurityAudit,
         egressRequests: emptyEgressRequests,
+        ...(opts.commandAudit ? { commandAudit: opts.commandAudit } : {}),
         ...(opts.withGatewayAudit === false ? {} : {
           gatewayAudit: {
             auditLogPath,
@@ -155,6 +164,8 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
         readGuard: kit.requirePermission('ADMIN', 'AUDITOR'),
         gatewayReadGuard: kit.requirePermission('ADMIN', 'AUDITOR'),
         revealedGuard: kit.requireAuth,
+        // PROP-136: retention-очистка журнала исполнений — только ADMIN.
+        commandsAdminGuard: kit.requirePermission('ADMIN'),
       },
     ));
     return app;
@@ -300,6 +311,173 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
         body: JSON.stringify({ sessionId: 'ses-1', placeholder: '⟦SYNTH_SECRET_1⟧' }),
       });
       expect(res.status).toBe(200);
+    });
+  });
+  /**
+   * PROP-136 (слайс 136a): журнал исполнений команд.
+   *
+   * Реальный `CommandAuditLog` на временном каталоге: проверяются фильтры,
+   * `limit` (строгий, ≤1000), retention-очистка и guard'ы.
+   */
+  describe('/api/v2/audit/commands', () => {
+    /** Форма ответа `GET /api/v2/audit/commands`. */
+    interface ListResponse {
+      entries: CommandAuditEntry[];
+      count: number;
+    }
+
+    function makeEntry(overrides: Partial<CommandAuditEntry> = {}): CommandAuditEntry {
+      return {
+        id: 'exec-1',
+        ts: '2026-11-12T10:00:00.000Z',
+        sessionId: 'ses-1',
+        projectId: 'prj-1',
+        actor: 'local',
+        tool: 'execute_shell',
+        command: 'ls -la',
+        commandHash: sha256Hex('ls -la'),
+        cwd: '/work',
+        background: false,
+        decision: 'allow',
+        decidedBy: 'permission',
+        phase: 'started',
+        ...overrides,
+      };
+    }
+
+    async function makeLog(entries: CommandAuditEntry[]): Promise<CommandAuditLog> {
+      const log = createCommandAuditLog({
+        dataDir: tmpDir,
+        config: { enabled: true, path: join(tmpDir, 'commands.jsonl') },
+        env: {},
+      });
+      for (const entry of entries) await log.append(entry);
+      return log;
+    }
+
+    async function readList(res: Response): Promise<ListResponse> {
+      return (await res.json()) as ListResponse;
+    }
+
+    async function readIds(res: Response): Promise<string[]> {
+      return (await readList(res)).entries.map((entry) => entry.id);
+    }
+
+    async function readErrorCode(res: Response): Promise<string> {
+      return ((await res.json()) as { error?: { code?: string } }).error?.code ?? '';
+    }
+
+    async function readRemoved(res: Response): Promise<number> {
+      return ((await res.json()) as { removed: number }).removed;
+    }
+
+    it('нет журнала в deps — путь не монтируется (404)', async () => {
+      const res = await createApp(adminUser).request('/api/v2/audit/commands');
+      expect(res.status).toBe(404);
+    });
+
+    it('GET: свежие первыми + count', async () => {
+      const log = await makeLog([
+        makeEntry({ id: 'e1', ts: '2026-11-10T09:00:00.000Z' }),
+        makeEntry({ id: 'e2', ts: '2026-11-11T09:00:00.000Z' }),
+      ]);
+      const res = await createApp(adminUser, { commandAudit: log }).request('/api/v2/audit/commands');
+      expect(res.status).toBe(200);
+      const body = await readList(res);
+      expect(body.count).toBe(2);
+      expect(body.entries.map((entry) => entry.id)).toEqual(['e2', 'e1']);
+    });
+
+    it('GET: фильтры session_id/project_id/decision/from/to', async () => {
+      const log = await makeLog([
+        makeEntry({ id: 'e1', ts: '2026-11-10T09:00:00.000Z', sessionId: 'ses-1' }),
+        makeEntry({
+          id: 'e2',
+          ts: '2026-11-11T09:00:00.000Z',
+          sessionId: 'ses-2',
+          projectId: 'prj-2',
+          decision: 'ask',
+        }),
+      ]);
+      const app = createApp(adminUser, { commandAudit: log });
+
+      expect(await readIds(await app.request('/api/v2/audit/commands?session_id=ses-2'))).toEqual(['e2']);
+      expect(await readIds(await app.request('/api/v2/audit/commands?project_id=prj-1'))).toEqual(['e1']);
+      expect(await readIds(await app.request('/api/v2/audit/commands?decision=ask'))).toEqual(['e2']);
+      expect(await readIds(await app.request(
+        '/api/v2/audit/commands?from=2026-11-11T00:00:00.000Z&to=2026-11-11T23:59:59.000Z',
+      ))).toEqual(['e2']);
+    });
+
+    it('GET: limit обрезает, выше 1000 — клампится', async () => {
+      const log = await makeLog([
+        makeEntry({ id: 'e1', ts: '2026-11-10T09:00:00.000Z' }),
+        makeEntry({ id: 'e2', ts: '2026-11-11T09:00:00.000Z' }),
+      ]);
+      const app = createApp(adminUser, { commandAudit: log });
+
+      expect(await readIds(await app.request('/api/v2/audit/commands?limit=1'))).toEqual(['e2']);
+
+      const clamped = await app.request('/api/v2/audit/commands?limit=5000');
+      expect(clamped.status).toBe(200);
+      expect((await readList(clamped)).count).toBe(2);
+    });
+
+    it('GET: битый limit/decision → 400', async () => {
+      const log = await makeLog([makeEntry()]);
+      const app = createApp(adminUser, { commandAudit: log });
+
+      for (const query of ['limit=abc', 'limit=0', 'limit=-1', 'limit=1.5']) {
+        const res = await app.request(`/api/v2/audit/commands?${query}`);
+        expect(res.status, query).toBe(400);
+        expect(await readErrorCode(res)).toBe('VALIDATION_ERROR');
+      }
+
+      const badDecision = await app.request('/api/v2/audit/commands?decision=maybe');
+      expect(badDecision.status).toBe(400);
+    });
+
+    it('GET: только ADMIN/AUDITOR (USER → 403), аноним → 401', async () => {
+      const log = await makeLog([makeEntry()]);
+      expect((await createApp(userUser, { commandAudit: log }).request('/api/v2/audit/commands')).status).toBe(403);
+      expect((await createApp(auditorUser, { commandAudit: log }).request('/api/v2/audit/commands')).status).toBe(200);
+      expect((await createApp(null, { commandAudit: log }).request('/api/v2/audit/commands')).status).toBe(401);
+    });
+
+    it('DELETE ?older_than_days=N — prune и число удалённых', async () => {
+      const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+      const fresh = new Date().toISOString();
+      const log = await makeLog([
+        makeEntry({ id: 'old', ts: old }),
+        makeEntry({ id: 'fresh', ts: fresh }),
+      ]);
+      const res = await createApp(adminUser, { commandAudit: log })
+        .request('/api/v2/audit/commands?older_than_days=30', { method: 'DELETE' });
+      expect(res.status).toBe(200);
+      expect(await readRemoved(res)).toBe(1);
+      expect((await log.list()).map((entry) => entry.id)).toEqual(['fresh']);
+    });
+
+    it('DELETE: без/с невалидным older_than_days → 400', async () => {
+      const log = await makeLog([makeEntry()]);
+      const app = createApp(adminUser, { commandAudit: log });
+      for (const query of ['', '?older_than_days=0', '?older_than_days=abc', '?older_than_days=-3']) {
+        const res = await app.request(`/api/v2/audit/commands${query}`, { method: 'DELETE' });
+        expect(res.status, query).toBe(400);
+      }
+      // Ничего не удалено.
+      expect(await log.list()).toHaveLength(1);
+    });
+
+    it('DELETE: только ADMIN (AUDITOR/USER → 403)', async () => {
+      const log = await makeLog([makeEntry()]);
+      const del = async (user: User | null) => createApp(user, { commandAudit: log })
+        .request('/api/v2/audit/commands?older_than_days=30', { method: 'DELETE' });
+
+      expect((await del(auditorUser)).status).toBe(403);
+      expect((await del(userUser)).status).toBe(403);
+      expect((await del(null)).status).toBe(401);
+      expect((await del(adminUser)).status).toBe(200);
     });
   });
 });

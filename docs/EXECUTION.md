@@ -238,7 +238,8 @@ session:ses_1:sandbox:default
 пула выдаёт provisioner) — проверка режима на старте этого не требует.
 
 **Остаток PROP-135:** **браузерный класс** пулов и MCP динамического пула (слайс 5b), UI/admin-API
-выбора профиля пулов (6b), аудит/чекер песочного профиля (PROP-136). `sandbox_exec` — сделан
+выбора профиля пулов (6b), внешний чекер команд (PROP-136 Ф2 / слайс 136b; аудит исполнений сделан —
+§9.1). `sandbox_exec` — сделан
 (слайс 5a, см. ниже); binding профиля — Ф6a (см. выше). Матрица «что уезжает в
 исполнитель» (§ ниже) на Ф4b-1 не меняется.
 
@@ -251,8 +252,8 @@ session:ses_1:sandbox:default
 (`idleTimeoutMs`/`sessionIdleTimeoutMs`, drain → release), `touch`/`drain`/`release` из core пока
 best-effort (остаток). Границы: группа прав `shell`, plan-режим блокирует целиком, shell-guard/
 protected-paths `execute_shell` **не применяются** (команда идёт в другой образ/пул), containment
-`cwd` — лексический (реальный — на исполнителе). Аудит и проверка песочного профиля —
-**PROP-136 (ещё не реализован)**.
+`cwd` — лексический (реальный — на исполнителе). Аудит исполнений песочного профиля — PROP-136a
+(§9.1, общий журнал control plane); внешний чекер команд — 136b (**не реализован**).
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
@@ -1170,6 +1171,37 @@ control plane (тот же namespace) на порт исполнителя, egre
   недоступны» — отдельный сигнал (`synth_executor_workers_busy` + счётчик ошибок + алерт). Проба
   backend'а в чарте — `GET /health` для liveness и readiness
   (`charts/synth/values.yaml`) — её **не** меняем: деградация БД — штатный сценарий.
+### 9.1. Аудит исполнений shell (PROP-136a)
+
+Shell считается произвольным кодом: `shell-guard`, path-периметр и permission-слой — guardrail и
+UX, а не граница безопасности. Поэтому вместо мнимой изоляции ядро пишет **наблюдаемый след**
+исполнений: append-only журнал `{dataDir}/audit/commands.jsonl` (или `security.commandAudit.path`).
+
+- **Точка записи — одна.** Оркестратор (`packages/core/src/engine/orchestrator.ts`) в фазе
+  исполнения tool-call (`run`): только для `execute_shell`/`sandbox_exec` и только при
+  `security.commandAudit.enabled`. Свой журнал тулы не пишут — иначе точки разошлись бы и
+  часть запусков (detach/фон) потерялась.
+- **Две записи на запуск**: `phase: "started"` — **до** запуска команды, `phase: "finished"` —
+  после (успех, ошибка, отмена). Обе несут один `id` (`execution_id`); `finished` добавляет
+  `durationMs`, `exitCode`, `bytesOut`, `truncated`, `outputSha256`. Тела stdout/stderr **не
+  пишутся** — только размер и hash.
+- **Сбой записи `started` блокирует выполнение** (журнал включён — наблюдаемость обязательна):
+  команда **не исполняется**, модель получает `isError`-результат с причиной. Сбой записи
+  `finished` — только warning в лог: команда уже выполнена, результат не ломается.
+- **Обезличивание:** значения карты обфускации сессии (ADR-036) → плейсхолдеры, затем редакция
+  шаблонов (`Bearer …`, `--password=`/`--token=`/`--api-key=`, URL с userinfo → `***`), затем
+  обрезка до 4 КиБ; `commandHash` — sha256 полной обезличенной строки. У `sandbox_exec` команда —
+  `commands.join(" && ")`.
+- **API.** `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone — `requireAuth`) с
+  фильтрами `session_id`/`project_id`/`from`/`to`/`decision` и `limit` (строго целое > 0, ≤1000);
+  retention — `DELETE /api/v2/audit/commands?older_than_days=N` (ADMIN). Метрики —
+  `synth_command_audit_written_total`/`_failed_total`/`_dropped_total`
+  ([OBSERVABILITY.md](./OBSERVABILITY.md) §«Аудит исполнений shell»).
+- **Различие топологий нет:** журнал ведёт control plane — и в `inline`, и в `remote` (команда
+  исполняется на исполнителе, факт запуска и результат известны control plane).
+- **Внешний чекер команд (136b) не реализован** — отдельный слайс (PROP-136 Ф2): проверка
+  политики до `spawn` на исполнителе + зеркально в control plane.
+
 
 ---
 

@@ -88,3 +88,51 @@ describe('loadBackendConfig — дефолт llmGateway.enabled (F4)', () => {
     expect(cfg.synth.llmGateway.enabled).toBe(true);
   });
 });
+
+/**
+ * PROP-136 (слайс 136a): managed-профиль включает аудит исполнений команд по
+ * умолчанию (`security.commandAudit.enabled`); standalone остаётся выключенным
+ * (дефолт схемы). Env `SYNTH_COMMAND_AUDIT_ENABLED` применяется позже —
+ * резолвером `resolveCommandAuditConfig` при создании журнала, не `loadConfig`.
+ */
+describe('loadBackendConfig — дефолт security.commandAudit.enabled (PROP-136)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  async function writeConfig(yaml: string): Promise<string> {
+    dir = await mkdtemp(join(tmpdir(), 'synth-backend-command-audit-'));
+    const path = join(dir, 'config.yaml');
+    await writeFile(path, yaml, 'utf-8');
+    return path;
+  }
+
+  it('без config.yaml — журнал исполнений включён (backend-профиль)', async () => {
+    const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
+    expect(cfg.synth.security.commandAudit.enabled).toBe(true);
+    expect(cfg.synth.security.commandAudit.retentionDays).toBe(30);
+    expect(cfg.synth.security.commandAudit.path).toBe('');
+  });
+
+  it('config.yaml с security.commandAudit.enabled: false — профиль перебит', async () => {
+    const cfg = await loadBackendConfig({
+      configPath: await writeConfig('security:\n  commandAudit:\n    enabled: false\n'),
+    });
+    expect(cfg.synth.security.commandAudit.enabled).toBe(false);
+  });
+
+  it('config.yaml задаёт retentionDays и path', async () => {
+    const cfg = await loadBackendConfig({
+      configPath: await writeConfig(
+        'security:\n  commandAudit:\n    retentionDays: 7\n    path: /var/log/synth-commands.jsonl\n',
+      ),
+    });
+    expect(cfg.synth.security.commandAudit.retentionDays).toBe(7);
+    expect(cfg.synth.security.commandAudit.path).toBe('/var/log/synth-commands.jsonl');
+  });
+});
