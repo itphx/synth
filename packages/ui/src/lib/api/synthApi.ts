@@ -56,6 +56,7 @@ import { sessionMemoryApi } from './session-memory'
 import { questionsApi } from './questions'
 import { processesApi } from './processes'
 import { worktreesApi } from './worktrees'
+import { executionApi } from './execution'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -69,6 +70,8 @@ export type {
   PublishProgress,
   PublishProgressPhase,
   ProjectMcpResponse,
+  ProjectExecutorState,
+  ProjectExecutorUpdate,
 } from './projects'
 // PROP-054: точечные операции с планом, журналом и инвариантами проекта.
 export type {
@@ -464,6 +467,15 @@ export type {
   WorktreePruneResult,
   WorktreeListResponse,
 } from './worktrees'
+// PROP-135: профили и пулы исполнения (admin-API, read-only DTO без секретов).
+export type {
+  ExecutionProviderKind,
+  ExecutionPooling,
+  ExecutionPoolState,
+  ExecutionProfilesDto,
+  ExecutionPoolInfo,
+  ExecutionPoolsDto,
+} from './execution'
 
 export const synthApi = {
   fetchJSON,
@@ -523,6 +535,8 @@ export const synthApi = {
   ...questionsApi,
   // ADR-114: worktree — имена домена уникальны (`list`/`get` уже заняты).
   ...worktreesApi,
+  // PROP-135: профили/пулы исполнения — имена с префиксом домена.
+  ...executionApi,
   // PROP-096/097: реестр фоновых прогонов. Короткие имена домена (`list`,
   // `get`) в barrel уже заняты (вопросы, метрики) — домен раскладывается
   // под своими префиксами, чтобы не переопределить чужие методы.

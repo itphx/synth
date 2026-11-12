@@ -33,6 +33,31 @@ export interface UpdateProjectBody {
   confirmOutsideRoot?: boolean
   /** ADR-107: настройки памяти проекта (эффективное значение). */
   memory?: { enabled: boolean } | null
+  /** PROP-135 Ф6a: профиль исполнения проекта (owner/LEAD/ADMIN). */
+  executor?: ProjectExecutorUpdate
+}
+
+/**
+ * PROP-135 Ф6a: эффективные настройки исполнения проекта.
+ *
+ * `profile` — профиль по умолчанию для сессий проекта (нет — профиль инстанса);
+ * `allowedProfiles` — потолок разрешённых профилей (пусто — без ограничения).
+ */
+export interface ProjectExecutorState {
+  profile?: string
+  allowedProfiles?: string[]
+}
+
+/**
+ * Тело изменения `executor` (`PUT /projects/:id`).
+ *
+ * Сброс — `profile: null` / `allowedProfiles: []` (пустой список = «без
+ * ограничения»). Поле `executor` целиком `null` сервер не принимает (схема
+ * ждёт объект): сброс обеих частей делается значениями внутри объекта.
+ */
+export interface ProjectExecutorUpdate {
+  profile?: string | null
+  allowedProfiles?: string[] | null
 }
 
 export interface ProjectData {
@@ -64,6 +89,8 @@ export interface ProjectData {
   plan?: ProjectPlan | null
   /** ADR-071 §2.4: проектный скоуп MCP (owner/lead). */
   mcp?: ProjectMcpSettings | null
+  /** PROP-135 Ф6a: профиль исполнения проекта (`null` — наследует инстанс). */
+  executor?: ProjectExecutorState | null
   created_at: string
   updated_at: string
 }

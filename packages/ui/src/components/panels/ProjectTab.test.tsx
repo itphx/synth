@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   getProjectSkills: vi.fn(),
   updateProjectSkills: vi.fn(),
   updateProject: vi.fn(),
+  getExecutionProfiles: vi.fn(),
   getWorkspaceRoot: vi.fn(),
   notify: vi.fn(),
 }))
@@ -111,6 +112,12 @@ beforeEach(() => {
   mocks.getProjectSkills.mockResolvedValue({ project_id: 'p1', skills: [], enabled: [], defaultOn: [] })
   mocks.updateProjectSkills.mockResolvedValue({ project_id: 'p1', skills: [], enabled: [], defaultOn: [] })
   mocks.updateProject.mockResolvedValue(PROJECT)
+  mocks.getExecutionProfiles.mockResolvedValue({
+    provider: 'http',
+    pooling: 'project',
+    defaultProfile: 'default',
+    profiles: ['default', 'devops'],
+  })
   mocks.getWorkspaceRoot.mockResolvedValue({ root: '/ws', entries: [] })
 
   useUIStore.setState({
@@ -539,5 +546,119 @@ describe('ProjectTab — гибрид и отказы загрузки (MCP)', (
     expect(mocks.notify).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: enDict['projectTab.loadError'] }),
     )
+  })
+})
+
+// PROP-135 Ф6a/6b-2a: профиль исполнения проекта и потолок профилей.
+describe('ProjectTab — профиль исполнения проекта (PROP-135 Ф6a)', () => {
+  function profileSelect(container: HTMLElement): HTMLSelectElement {
+    return container.querySelector('[data-testid="project-executor-profile"]') as HTMLSelectElement
+  }
+
+  function allowedCheckbox(container: HTMLElement, name: string): HTMLInputElement {
+    return container.querySelector(
+      `[data-testid="project-executor-allowed-${name}"]`,
+    ) as HTMLInputElement
+  }
+
+  async function setSelectValue(select: HTMLSelectElement, value: string): Promise<void> {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(select, value)
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+
+  it('опции из каталога профилей + пункт «По умолчанию»', async () => {
+    const container = await renderTab()
+
+    expect(mocks.getExecutionProfiles).toHaveBeenCalled()
+    const select = profileSelect(container)
+    const values = [...select.options].map((option) => option.value)
+    expect(values).toEqual(['', 'default', 'devops'])
+    expect(select.options[0]?.textContent).toContain('Default (default)')
+  })
+
+  it('owner сохраняет профиль и разрешённые профили → PUT /projects/:id', async () => {
+    const saved = {
+      ...PROJECT,
+      executor: { profile: 'devops', allowedProfiles: ['devops'] },
+    }
+    mocks.updateProject.mockResolvedValue(saved)
+
+    const container = await renderTab()
+    await setSelectValue(profileSelect(container), 'devops')
+    await act(async () => {
+      allowedCheckbox(container, 'devops').click()
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="project-executor-save"]') as HTMLButtonElement).click()
+    })
+
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      executor: { profile: 'devops', allowedProfiles: ['devops'] },
+    })
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['projectTab.executor.saved'], type: 'success' }),
+    )
+    // Сохранённые значения приходят в проект (селект и чекбокс отражают ответ).
+    expect(profileSelect(container).value).toBe('devops')
+    expect(allowedCheckbox(container, 'devops').checked).toBe(true)
+  })
+
+  it('сброс очищает профиль и снимает ограничение (profile: null, allowedProfiles: [])', async () => {
+    const withExecutor = {
+      ...PROJECT,
+      executor: { profile: 'devops', allowedProfiles: ['devops'] },
+    }
+    mocks.getProject.mockResolvedValue(withExecutor)
+    useProjectsStore.setState({ projects: [withExecutor] as never })
+    mocks.updateProject.mockResolvedValue(PROJECT)
+
+    const container = await renderTab()
+    expect(profileSelect(container).value).toBe('devops')
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="project-executor-reset"]') as HTMLButtonElement).click()
+    })
+
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      executor: { profile: null, allowedProfiles: [] },
+    })
+    expect(profileSelect(container).value).toBe('')
+  })
+
+  it('EDITOR видит только чтение: контролы недоступны, сохранения нет', async () => {
+    useAuthStore.setState({ user: { id: 'u2', username: 'editor', roles: [] } as never })
+    const editorProject = {
+      ...PROJECT,
+      members: { u1: 'owner', u2: 'editor' },
+      executor: { profile: 'devops', allowedProfiles: ['devops'] },
+    }
+    mocks.getProject.mockResolvedValue(editorProject)
+    useProjectsStore.setState({ projects: [editorProject] as never })
+
+    const container = await renderTab()
+
+    expect(profileSelect(container).disabled).toBe(true)
+    expect(allowedCheckbox(container, 'devops').disabled).toBe(true)
+    expect(container.querySelector('[data-testid="project-executor-save"]')).toBeNull()
+    expect(container.querySelector('[data-testid="project-executor-readonly"]')).not.toBeNull()
+    // Каталог профилей не запрашивается: чтение `/execution/profiles` — ADMIN/LEAD.
+    expect(mocks.getExecutionProfiles).not.toHaveBeenCalled()
+  })
+
+  it('ошибка загрузки профилей не блокирует вкладку: показан текущий выбор', async () => {
+    mocks.getExecutionProfiles.mockRejectedValue(new Error('boom'))
+    const withExecutor = { ...PROJECT, executor: { profile: 'devops' } }
+    mocks.getProject.mockResolvedValue(withExecutor)
+    useProjectsStore.setState({ projects: [withExecutor] as never })
+
+    const container = await renderTab()
+
+    expect(container.querySelector('[data-testid="project-executor"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="project-executor-profiles-error"]')).not.toBeNull()
+    expect(profileSelect(container).value).toBe('devops')
+    expect([...profileSelect(container).options].map((o) => o.value)).toEqual(['', 'devops'])
   })
 })

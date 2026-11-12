@@ -8,7 +8,7 @@ import { useProjectLogStore } from '@/stores/projectLogStore'
 import { useNotification } from '@/hooks/useNotification'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
 import { formatDateTime } from '@/lib/formatDate'
-import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry } from '@/lib/api/synthApi'
+import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry, type ExecutionProfilesDto } from '@/lib/api/synthApi'
 import type { WorktreeSummary } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
@@ -580,6 +580,22 @@ export function ProjectTab() {
         </Section>
       )}
 
+      {/* PROP-135 Ф6a/6b-2a: профиль исполнения проекта и потолок профилей.
+          Право — управление проектом (owner/LEAD/ADMIN), как workspace/MCP. */}
+      {project && (
+        <Section title={t('projectTab.executor.title')}>
+          <ProjectExecutorBlock
+            project={project}
+            canManage={canManageMcp}
+            sessionId={sessionId}
+            onUpdated={(updated) => {
+              setProject(updated)
+              useProjectsStore.getState().updateProjectInList(updated)
+            }}
+          />
+        </Section>
+      )}
+
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={(next) => {
@@ -931,6 +947,231 @@ function WorktreesBlock({ projectId, sessionId }: { projectId: string; sessionId
               }
             />
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** PROP-135 Ф6a: профиль исполнения проекта и потолок разрешённых профилей. */
+function ProjectExecutorBlock({
+  project,
+  canManage,
+  sessionId,
+  onUpdated,
+}: {
+  project: ProjectData
+  canManage: boolean
+  sessionId?: string
+  onUpdated: (updated: ProjectData) => void
+}) {
+  const { t } = useI18n()
+  const { notify } = useNotification()
+
+  const executor = project.executor ?? null
+  const configuredProfile = executor?.profile ?? ''
+  const configuredAllowed = executor?.allowedProfiles ?? []
+
+  const [profiles, setProfiles] = useState<ExecutionProfilesDto | null>(null)
+  const [profilesFailed, setProfilesFailed] = useState(false)
+  const [profileDraft, setProfileDraft] = useState(configuredProfile)
+  const [allowedDraft, setAllowedDraft] = useState<string[]>([...configuredAllowed])
+  const [saving, setSaving] = useState(false)
+
+  // Каталог профилей читается при открытии секции: он нужен и для селекта, и для
+  // списка «разрешённых». Ошибка не блокирует вкладку — показываем текущее
+  // значение (профиль по умолчанию неизвестен → нейтральная подпись).
+  //
+  // Только при праве управления: чтение `/execution/profiles` в managed — ADMIN/LEAD,
+  // иначе редактор проекта получал бы 403 на каждом открытии вкладки.
+  useEffect(() => {
+    if (!canManage) return
+    let cancelled = false
+    Promise.resolve()
+      .then(() => synthApi.getExecutionProfiles())
+      .then((dto) => {
+        if (cancelled) return
+        setProfiles(dto)
+        setProfilesFailed(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setProfiles(null)
+        setProfilesFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canManage])
+
+  // Изменения проекта извне секции (сохранение, другой клиент) синхронизируют черновик.
+  useEffect(() => {
+    setProfileDraft(executor?.profile ?? '')
+    setAllowedDraft([...(executor?.allowedProfiles ?? [])])
+  }, [executor])
+
+  // Опции: каталог инстанса + сохранённые значения проекта (даже если профиль
+  // исчез из каталога — иначе текущий выбор нельзя было бы увидеть).
+  const profileNames: string[] = []
+  const seen = new Set<string>()
+  const pushName = (name: string | undefined) => {
+    const trimmed = (name ?? '').trim()
+    if (!trimmed || seen.has(trimmed)) return
+    seen.add(trimmed)
+    profileNames.push(trimmed)
+  }
+  for (const name of profiles?.profiles ?? []) pushName(name)
+  pushName(configuredProfile)
+  for (const name of configuredAllowed) pushName(name)
+
+  const dirty =
+    profileDraft !== configuredProfile ||
+    allowedDraft.length !== configuredAllowed.length ||
+    allowedDraft.some((name) => !configuredAllowed.includes(name))
+
+  const statusOfError = (err: unknown): number | undefined =>
+    typeof (err as { status?: unknown })?.status === 'number'
+      ? (err as { status: number }).status
+      : undefined
+
+  const notifyFailure = (err: unknown) => {
+    notify({
+      text:
+        statusOfError(err) === 403
+          ? t('projectTab.executor.forbidden')
+          : t('projectTab.executor.saveError', { error: errorText(err) }),
+      type: 'error',
+      category: 'error',
+      sessionId,
+    })
+  }
+
+  const handleSave = async () => {
+    if (!canManage || saving) return
+    setSaving(true)
+    try {
+      const updated = await synthApi.updateProject(project.id, {
+        // null сбрасывает профиль (сервер трактует `''`/`null` одинаково);
+        // пустой список разрешённых = «без ограничения».
+        executor: { profile: profileDraft.trim() ? profileDraft.trim() : null, allowedProfiles: allowedDraft },
+      })
+      onUpdated(updated)
+      notify({ text: t('projectTab.executor.saved'), type: 'success', category: 'system', sessionId })
+    } catch (err) {
+      notifyFailure(err)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleReset = async () => {
+    if (!canManage || saving) return
+    setSaving(true)
+    try {
+      // Поле `executor` целиком `null` сервер не принимает: сброс обеих частей —
+      // значениями внутри объекта (`profile: null`, `allowedProfiles: []`).
+      const updated = await synthApi.updateProject(project.id, {
+        executor: { profile: null, allowedProfiles: [] },
+      })
+      setProfileDraft('')
+      setAllowedDraft([])
+      onUpdated(updated)
+      notify({ text: t('projectTab.executor.resetDone'), type: 'success', category: 'system', sessionId })
+    } catch (err) {
+      notifyFailure(err)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleAllowed = (name: string) => {
+    setAllowedDraft((prev) =>
+      prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name],
+    )
+  }
+
+  const defaultProfileLabel = profiles
+    ? t('projectTab.executor.profileDefault', { profile: profiles.defaultProfile })
+    : t('projectTab.executor.profileDefaultUnknown')
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2" data-testid="project-executor">
+      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        <span>{t('projectTab.executor.profile')}</span>
+        <select
+          value={profileDraft}
+          onChange={(e) => setProfileDraft(e.target.value)}
+          disabled={!canManage || saving}
+          aria-label={t('projectTab.executor.profile')}
+          data-testid="project-executor-profile"
+          className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+        >
+          <option value="">{defaultProfileLabel}</option>
+          {profileNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="flex flex-col gap-1" data-testid="project-executor-allowed">
+        <span className="text-xs text-muted-foreground">{t('projectTab.executor.allowed')}</span>
+        {profileNames.length === 0 ? (
+          <span className="text-[0.625rem] text-muted-foreground/60">
+            {t('projectTab.executor.allowedEmpty')}
+          </span>
+        ) : (
+          <div className="flex flex-wrap gap-x-3 gap-y-1.5" role="group" aria-label={t('projectTab.executor.allowed')}>
+            {profileNames.map((name) => (
+              <label key={name} className="flex items-center gap-1.5 text-xs text-foreground">
+                <input
+                  type="checkbox"
+                  checked={allowedDraft.includes(name)}
+                  onChange={() => toggleAllowed(name)}
+                  disabled={!canManage || saving}
+                  data-testid={`project-executor-allowed-${name}`}
+                />
+                <span className="font-mono">{name}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        <span className="text-[0.625rem] text-muted-foreground/60">
+          {t('projectTab.executor.allowedHint')}
+        </span>
+      </div>
+
+      {profilesFailed && (
+        <div className="text-[0.625rem] text-status-warning" data-testid="project-executor-profiles-error">
+          {t('projectTab.executor.profilesLoadError')}
+        </div>
+      )}
+
+      {canManage ? (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={saving || !dirty}
+            data-testid="project-executor-save"
+            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
+          >
+            {saving ? t('projectTab.executor.saving') : t('projectTab.executor.save')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleReset()}
+            disabled={saving || (!configuredProfile && configuredAllowed.length === 0)}
+            data-testid="project-executor-reset"
+            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+          >
+            {t('projectTab.executor.reset')}
+          </button>
+        </div>
+      ) : (
+        <div className="text-[0.625rem] text-muted-foreground/70" data-testid="project-executor-readonly">
+          {t('projectTab.executor.readOnly')}
         </div>
       )}
     </div>

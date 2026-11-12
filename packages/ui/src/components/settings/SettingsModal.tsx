@@ -22,6 +22,7 @@ import { ChatSettings } from "./ChatSettings"
 import { RoutingSettings } from "./RoutingSettings"
 import { SecuritySettings } from "./SecuritySettings"
 import { NetworkSettings } from "./NetworkSettings"
+import { ExecutionSettings } from "./ExecutionSettings"
 import { McpUserSettings } from "./McpUserSettings"
 import { McpAdminSettings } from "./McpAdminSettings"
 import { ToolsDisabledSettings } from "./ToolsDisabledSettings"
@@ -360,6 +361,7 @@ export const SettingsModal = () => {
             {activePage === "memory" && <MemorySettings />}
             {activePage === "security" && <SecuritySettings />}
             {activePage === "network" && <NetworkSettings />}
+            {activePage === "execution" && <ExecutionSettings />}
             {activePage === "dashboard" && <DashboardPanel />}
             {activePage === "sessions" && <SessionsPanel />}
             {activePage === "projects" && <ProjectsPanel />}

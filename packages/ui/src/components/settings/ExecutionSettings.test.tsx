@@ -1,0 +1,237 @@
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import React from 'react'
+
+// persist (zustand) в useUIStore/useAuthStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
+const mocks = vi.hoisted(() => ({
+  getExecutionProfiles: vi.fn(),
+  getExecutionPools: vi.fn(),
+  drainExecutionPool: vi.fn(),
+  releaseExecutionPool: vi.fn(),
+  notify: vi.fn(),
+  confirm: vi.fn(),
+}))
+
+vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
+vi.mock('@/hooks/useNotification', () => ({
+  useNotification: () => ({ notify: mocks.notify }),
+}))
+vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
+
+import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { dict as enDict } from '@/lib/i18n/messages/en'
+import { useAuthStore } from '@/stores/authStore'
+import { ExecutionSettings } from './ExecutionSettings'
+
+;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const roots: Array<{ root: Root; container: HTMLElement }> = []
+
+const PROFILES_HTTP = {
+  provider: 'http' as const,
+  pooling: 'project' as const,
+  defaultProfile: 'default',
+  profiles: ['default', 'devops'],
+}
+
+const POOLS_HTTP = {
+  provider: 'http' as const,
+  pools: [
+    {
+      key: 'project:p1:exec:devops',
+      profile: 'devops',
+      state: 'ready' as const,
+      createdAt: '2026-11-12T10:00:00.000Z',
+      lastUsedAt: '2026-11-12T10:05:00.000Z',
+    },
+    { key: 'instance:exec:default', profile: 'default', state: 'configured' as const },
+  ],
+}
+
+async function render(roles: string[] = ['ADMIN']): Promise<HTMLElement> {
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  useAuthStore.setState({ user: { id: 'u1', username: 'alice', roles } as never })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push({ root, container })
+  await act(async () => {
+    root.render(
+      <I18nProvider>
+        <ExecutionSettings />
+      </I18nProvider>,
+    )
+  })
+  await act(async () => {})
+  await act(async () => {})
+  return container
+}
+
+const byTestId = (container: HTMLElement, id: string): HTMLElement | null =>
+  container.querySelector(`[data-testid="${id}"]`) as HTMLElement | null
+
+beforeEach(() => {
+  mocks.getExecutionProfiles.mockResolvedValue(PROFILES_HTTP)
+  mocks.getExecutionPools.mockResolvedValue(POOLS_HTTP)
+  mocks.drainExecutionPool.mockResolvedValue(undefined)
+  mocks.releaseExecutionPool.mockResolvedValue(undefined)
+  mocks.confirm.mockResolvedValue(true)
+})
+
+afterEach(async () => {
+  while (roots.length > 0) {
+    const { root, container } = roots.pop()!
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
+  vi.clearAllMocks()
+})
+
+describe('ExecutionSettings — сводка и списки', () => {
+  it('показывает провайдера, пулинг, профиль по умолчанию, профили и пулы', async () => {
+    const container = await render()
+
+    const summary = byTestId(container, 'execution-summary')!
+    expect(summary.textContent).toContain('http (provisioner)')
+    expect(summary.textContent).toContain('per project')
+    expect(summary.textContent).toContain('default')
+
+    expect(byTestId(container, 'execution-profiles')!.textContent).toContain('devops')
+
+    const pools = byTestId(container, 'execution-pools')!
+    expect(pools.textContent).toContain('project:p1:exec:devops')
+    expect(pools.textContent).toContain('devops')
+    expect(pools.textContent).toContain('ready')
+    expect(pools.textContent).toContain('instance:exec:default')
+    // Метки времени — в локали UI (en-US → mm/dd/yyyy).
+    expect(pools.textContent).toContain('11/12/2026')
+  })
+
+  it('пустой список пулов — честное пустое состояние', async () => {
+    mocks.getExecutionPools.mockResolvedValue({ provider: 'http', pools: [] })
+
+    const container = await render()
+
+    expect(byTestId(container, 'execution-pools-empty')).not.toBeNull()
+  })
+})
+
+describe('ExecutionSettings — действия с пулами', () => {
+  it('«Остановить» — confirm, drain с ключом, успех и перечитывание пулов', async () => {
+    const container = await render()
+
+    await act(async () => {
+      byTestId(container, 'execution-pool-0-drain')!.click()
+    })
+
+    expect(mocks.confirm).toHaveBeenCalled()
+    expect(mocks.drainExecutionPool).toHaveBeenCalledWith('project:p1:exec:devops')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['settings.execution.drained'], type: 'success' }),
+    )
+    expect(mocks.getExecutionPools).toHaveBeenCalledTimes(2)
+  })
+
+  it('«Удалить» — release с ключом', async () => {
+    const container = await render()
+
+    await act(async () => {
+      byTestId(container, 'execution-pool-1-release')!.click()
+    })
+
+    expect(mocks.releaseExecutionPool).toHaveBeenCalledWith('instance:exec:default')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['settings.execution.released'], type: 'success' }),
+    )
+  })
+
+  it('отказ в confirm — запрос не уходит', async () => {
+    mocks.confirm.mockResolvedValue(false)
+    const container = await render()
+
+    await act(async () => {
+      byTestId(container, 'execution-pool-0-drain')!.click()
+    })
+
+    expect(mocks.drainExecutionPool).not.toHaveBeenCalled()
+    expect(mocks.releaseExecutionPool).not.toHaveBeenCalled()
+  })
+})
+
+describe('ExecutionSettings — провайдер и права', () => {
+  it('static: действия недоступны с пояснением', async () => {
+    mocks.getExecutionProfiles.mockResolvedValue({
+      provider: 'static',
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: ['default'],
+    })
+    mocks.getExecutionPools.mockResolvedValue({
+      provider: 'static',
+      pools: [{ profile: 'default', state: 'configured' }],
+    })
+
+    const container = await render()
+
+    expect(
+      container.querySelector('[data-settings-section="execution-pools"]')!.textContent,
+    ).toContain('nothing to manage at runtime')
+    expect((byTestId(container, 'execution-pool-0-drain') as HTMLButtonElement).disabled).toBe(true)
+    expect((byTestId(container, 'execution-pool-0-release') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('503 провайдера пулов — понятное сообщение вместо списка', async () => {
+    mocks.getExecutionPools.mockRejectedValue(
+      Object.assign(new Error('provider unavailable'), {
+        status: 503,
+        code: 'EXECUTION_PROVIDER_UNAVAILABLE',
+      }),
+    )
+
+    const container = await render()
+
+    expect(byTestId(container, 'execution-pools-error')!.textContent).toContain(
+      enDict['settings.execution.providerUnavailable'],
+    )
+  })
+
+  it('LEAD читает раздел, но мутации недоступны (только ADMIN)', async () => {
+    const container = await render(['LEAD'])
+
+    expect(mocks.getExecutionPools).toHaveBeenCalled()
+    expect((byTestId(container, 'execution-pool-0-drain') as HTMLButtonElement).disabled).toBe(true)
+    expect(byTestId(container, 'execution-admin-only')!.textContent).toContain('ADMIN only')
+  })
+
+  it('USER не видит раздел и не дёргает API', async () => {
+    const container = await render(['USER'])
+
+    expect(byTestId(container, 'execution-forbidden')).not.toBeNull()
+    expect(byTestId(container, 'execution-summary')).toBeNull()
+    expect(mocks.getExecutionPools).not.toHaveBeenCalled()
+    expect(mocks.getExecutionProfiles).not.toHaveBeenCalled()
+  })
+})

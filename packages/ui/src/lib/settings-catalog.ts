@@ -360,6 +360,27 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     keywords: ['network', 'proxy', 'tls', 'ca', 'сеть', 'прокси', 'сертификаты'],
   },
   {
+    // PROP-135: профили и пулы исполнения (чтение — ADMIN/LEAD, мутации — ADMIN).
+    id: 'execution',
+    group: 'adminOps',
+    labelKey: 'settings.category.execution',
+    icon: 'cpu',
+    roles: ['ADMIN', 'LEAD'],
+    keywords: [
+      'execution',
+      'profiles',
+      'pools',
+      'drain',
+      'inline',
+      'static',
+      'http',
+      'исполнение',
+      'профили',
+      'пулы',
+      'исполнитель',
+    ],
+  },
+  {
     id: 'maintenance',
     group: 'adminOps',
     labelKey: 'settings.category.maintenance',
