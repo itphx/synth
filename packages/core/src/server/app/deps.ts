@@ -160,6 +160,9 @@ import {
   createLiveSshMode,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
+// PROP-137 Ф1: fail-closed проверка записи в каталог данных — до сборки
+// хранилища (иначе EACCES всплывает позже и неясно, где именно).
+import { assertDataDirWritable } from '../../storage/data-dir-check.js';
 import { AuthorityGuard } from '../../engine/authority/guard.js';
 import {
   buildApprovalResponderProfile,
@@ -226,6 +229,14 @@ export async function createStandaloneStorage(config: StandaloneConfig): Promise
   const kind = config.storageBackend ?? 'file';
   if (kind === 'memory') {
     console.warn('storage.backend=memory: данные не сохраняются на диск');
+  }
+  // PROP-137 Ф1: fail-closed проверка записи в каталог данных — **до** сборки
+  // хранилища. Каталог нужен и при 'file' (все JSON-данные), и при
+  // 'postgres' (секреты, мастер-ключ и blob-хранилище — ADR-116/ADR-097).
+  // Без проверки EACCES всплывает позже и неясно (сессии/секреты/блобы),
+  // а UI при этом отвечает 200 — «сайт открыт, данные не сохраняются».
+  if (kind !== 'memory') {
+    await assertDataDirWritable(config.dataDir);
   }
   return createStorageContextAsync(kind, {
     dataDir: config.dataDir,

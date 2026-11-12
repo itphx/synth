@@ -56,6 +56,9 @@ import {
   HookBus,
   startEphemeralSweeper,
   assertInstanceDataNotTooNew,
+  // PROP-137 Ф1: fail-closed проверка записи в каталог данных — до сборки
+  // хранилища (общая реализация в core, ADR-096: хранилище — только порты).
+  assertDataDirWritable,
   applyStartupMigrations,
   applyPendingRestore,
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
@@ -203,6 +206,14 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
   const kind = resolveStorageBackend(config.synth, process.env);
   if (kind === 'memory') {
     console.warn('storage.backend=memory: данные не сохраняются на диск');
+  }
+  // PROP-137 Ф1: fail-closed проверка записи в каталог данных — **до** сборки
+  // хранилища. Каталог нужен и при 'file' (все JSON-данные), и при
+  // 'postgres' (секреты, мастер-ключ и blob-хранилище — ADR-116/ADR-097).
+  // Без проверки EACCES всплывает позже и неясно (сессии/секреты/блобы),
+  // а UI при этом отвечает 200 — «сайт открыт, данные не сохраняются».
+  if (kind !== 'memory') {
+    await assertDataDirWritable(config.dataDir);
   }
   const storage = await createStorageContextAsync(kind, {
     dataDir: config.dataDir,

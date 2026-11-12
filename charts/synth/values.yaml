@@ -153,8 +153,50 @@ backend:
   containerSecurityContext:
     runAsUser: 1000
     runAsNonRoot: true
-    readOnlyRootFilesystem: false
+    readOnlyRootFilesystem: true
     allowPrivilegeEscalation: false
+
+  # Read-only корневая ФС контейнера backend'а (PROP-137 Ф2).
+  #
+  # Верхний переключатель: `false` — корневая ФС доступна на запись (как в
+  # 137a), `true` (по умолчанию) — только на чтение. При `true` чарт добавляет
+  # writable-тома `emptyDir` на `/tmp` и `/home/synth` (кэши pnpm/pip/corepack,
+  # `PYTHONUSERBASE`, временные каталоги) — без них старт падает (EACCES на
+  # `HOME`/`/tmp`).
+  #
+  # Итоговое значение = ЭТОТ флаг И `containerSecurityContext.readOnlyRootFilesystem`
+  # (по умолчанию тоже `true`): выключить read-only rootfs можно любым из них.
+  readOnlyRootFilesystem: true
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Init-контейнер смены владельца томов (PROP-137 Ф2) — по умолчанию ВЫКЛЮЧЕН.
+  #
+  # Нужен там, где `podSecurityContext.fsGroup` не действует: hostPath/NFS
+  # (владельца задаёт хост, kubelet его не меняет). Обычным PVC он не нужен
+  # (`fsGroup: 1000` + `fsGroupChangePolicy: OnRootMismatch` — достаточно).
+  #
+  # ⚠️ Работает от root (`runAsUser: 0`) — это несовместимо с Pod Security
+  # Standards `restricted` (там root-контейнер запрещён). Включайте осознанно.
+  #
+  # Контейнер монтирует те же тома, что и основной, и выполняет
+  # `chown -R 1000:1000 <точка монтирования>`. На NFS-томе workspace это
+  # долго (десятки тысяч файлов), поэтому процесс пода может стартовать
+  # минутами.
+  # ───────────────────────────────────────────────────────────────────────────
+  ownershipInitContainer:
+    enabled: false
+    # Образ init-контейнера. Пусто → образ самого backend'а (в нём есть
+    # `sh` и `chown` busybox). Свой образ нужен, если в вашем образе нет
+    # этих утилит.
+    image: ""
+    imagePullPolicy: ""
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
 
   # Доп. env для backend (попадают в ConfigMap → env pod).
   # Если задан caCert, чарт сам добавляет NODE_EXTRA_CA_CERTS — вручную дублировать не нужно.
@@ -431,10 +473,51 @@ executor:
   containerSecurityContext:
     runAsUser: 1000
     runAsNonRoot: true
-    readOnlyRootFilesystem: false
+    readOnlyRootFilesystem: true
     allowPrivilegeEscalation: false
     capabilities:
       drop: ["ALL"]
+
+  # Read-only корневая ФС контейнера исполнителя (PROP-137 Ф2).
+  #
+  # Верхний переключатель: `false` — корневая ФС доступна на запись (как в
+  # 137a), `true` (по умолчанию) — только на чтение. При `true` чарт добавляет
+  # writable-тома `emptyDir` на `/tmp` и `/home/synth` (кэши pnpm/pip/corepack,
+  # `PYTHONUSERBASE`, временные каталоги SSH-материала и логи фоновых
+  # процессов) — без них старт падает (EACCES на `HOME`/`/tmp`).
+  #
+  # Итоговое значение = ЭТОТ флаг И `containerSecurityContext.readOnlyRootFilesystem`
+  # (по умолчанию тоже `true`): выключить read-only rootfs можно любым из них.
+  readOnlyRootFilesystem: true
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Init-контейнер смены владельца томов (PROP-137 Ф2) — по умолчанию ВЫКЛЮЧЕН.
+  #
+  # Нужен там, где `podSecurityContext.fsGroup` не действует: hostPath/NFS
+  # (владельца задаёт хост, kubelet его не меняет). Обычным PVC он не нужен
+  # (`fsGroup: 1000` + `fsGroupChangePolicy: OnRootMismatch` — достаточно).
+  #
+  # ⚠️ Работает от root (`runAsUser: 0`) — это несовместимо с Pod Security
+  # Standards `restricted` (там root-контейнер запрещён). Включайте осознанно.
+  #
+  # Контейнер монтирует общий том workspace и выполняет
+  # `chown -R 1000:1000 <точка монтирования>`. На NFS это долго (десятки
+  # тысяч файлов), поэтому процесс пода может стартовать минутами.
+  # ───────────────────────────────────────────────────────────────────────────
+  ownershipInitContainer:
+    enabled: false
+    # Образ init-контейнера. Пусто → образ самого исполнителя (в нём есть
+    # `sh` и `chown` busybox). Свой образ нужен, если в вашем образе нет
+    # этих утилит.
+    image: ""
+    imagePullPolicy: ""
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
 
   workspace:
     # Общий том workspace: control plane и все реплики исполнителя должны
@@ -740,6 +823,17 @@ provisioner:
       drop:
         - ALL
 
+  # Read-only корневая ФС контейнера provisioner'а (PROP-137 Ф2).
+  #
+  # Верхний переключатель: `false` — корневая ФС доступна на запись,
+  # `true` (по умолчанию) — только на чтение. При `true` чарт добавляет
+  # writable-том `emptyDir` на `/tmp` (provisioner ничего не пишет на диск, но
+  # `/tmp` остаётся единственным местом для временных файлов рантайма).
+  #
+  # Итоговое значение = ЭТОТ флаг И `containerSecurityContext.readOnlyRootFilesystem`
+  # (по умолчанию тоже `true`): выключить read-only rootfs можно любым из них.
+  readOnlyRootFilesystem: true
+
   probes:
     liveness:
       path: /health
@@ -975,10 +1069,16 @@ ui:
       memory: 64Mi
 
   podSecurityContext:
-    # nginx:alpine требует root для entrypoint (чтение/генерация конфигов).
-    # RunAsUser не задаём — контейнер стартует как root, nginx сам дропает на worker'ы.
+    # UI — образ `nginxinc/nginx-unprivileged:alpine` (PROP-137 Ф3): процесс
+    # уже работает от uid 101 (nginx), root не нужен.
     fsGroup: 101
   containerSecurityContext:
+    # ⚠️ Read-only rootfs у UI НЕ включается: entrypoint официального образа
+    # nginx генерирует конфиг из шаблонов (`/etc/nginx/templates/*.template` →
+    # `/etc/nginx/conf.d/`) и пишет его в `/etc/nginx/conf.d` при старте — на
+    # read-only корневой ФС это невозможно (nginx не поднимется). Поэтому UI
+    # остаётся с записываемой корневой ФС, а изоляция обеспечивается
+    # non-root (uid 101) и `drop: ALL` для capability.
     readOnlyRootFilesystem: false
     allowPrivilegeEscalation: false
 

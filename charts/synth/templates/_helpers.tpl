@@ -150,6 +150,31 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if eq (include "synth.execution.mode" .) "remote" -}}true{{- end -}}
 {{- end }}
 
+{{- /* PROP-137 Ф2: итоговый `readOnlyRootFilesystem` компонента.
+       Возвращает "true"/"false" (строка — как отдаёт `include`).
+
+       Источники (по убыванию приоритета):
+         * `<component>.readOnlyRootFilesystem` — верхний переключатель чарта
+           (по умолчанию `true`): им можно выключить read-only корневую ФС,
+           не трогая `containerSecurityContext`;
+         * `containerSecurityContext.readOnlyRootFilesystem` — узкий переключатель
+           самого контейнера (по умолчанию тоже `true`).
+
+       Итог = И (оба должны быть истинны). Так выключить read-only rootfs
+       можно ЛЮБЫМ из двух ключей, а лишние значения (например, `false` в
+       `containerSecurityContext`) не ломают рендер.
+
+       Аргумент: dict с полями `flag` (bool) и `ctx` (map containerSecurityContext). */ -}}
+{{- define "synth.readOnlyRootFilesystem" -}}
+{{- $flag := .flag | default false -}}
+{{- $ctx := .ctx | default dict -}}
+{{- $ctxValue := true -}}
+{{- if hasKey $ctx "readOnlyRootFilesystem" -}}
+{{- $ctxValue = $ctx.readOnlyRootFilesystem -}}
+{{- end -}}
+{{- if and $flag $ctxValue -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
 {{- /* ADR-077: поведение при недоступном исполнителе (fail-closed по умолчанию). */ -}}
 {{- define "synth.execution.failMode" -}}
 {{- $fm := ((((.Values.execution | default dict).remote | default dict).failMode) | default "fail") | toString -}}

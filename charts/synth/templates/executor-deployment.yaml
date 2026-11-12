@@ -15,6 +15,13 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- /* PROP-137 Ф2: read-only корневая ФС исполнителя. Итог = флаг
+       `executor.readOnlyRootFilesystem` И `containerSecurityContext.readOnlyRootFilesystem`
+       (по умолчанию оба true). При read-only корневой ФС контейнеру нужны
+       writable-каталоги `/tmp` (SSH-материал, логи фоновых процессов) и
+       `/home/synth` (кэши pnpm/pip/corepack, `PYTHONUSERBASE`) — `emptyDir`. */ -}}
+{{- $roRootFs := eq (include "synth.readOnlyRootFilesystem" (dict "flag" (.Values.executor.readOnlyRootFilesystem | default false) "ctx" (.Values.executor.containerSecurityContext | default dict))) "true" -}}
+{{- $ownership := .Values.executor.ownershipInitContainer | default dict -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,6 +55,31 @@ spec:
       {{- with .Values.executor.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* PROP-137 Ф2: init-контейнер смены владельца тома workspace (по
+             умолчанию выключен). Нужен там, где `fsGroup` kubelet'а не
+             действует (hostPath/NFS). Работает от root — несовместимо с PSS
+             `restricted`, поэтому включается осознанно. */}}
+      {{- if $ownership.enabled }}
+      initContainers:
+        - name: ownership
+          image: "{{ $ownership.image | default (printf "%s:%s" .Values.executor.image.repository (.Values.executor.image.tag | default .Chart.AppVersion)) }}"
+          imagePullPolicy: {{ $ownership.imagePullPolicy | default .Values.executor.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - chown -R 1000:1000 "{{ .Values.executor.workspace.mountPath }}"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+          {{- with $ownership.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: workspace
+              mountPath: {{ .Values.executor.workspace.mountPath }}
       {{- end }}
       containers:
         - name: executor
@@ -144,6 +176,16 @@ spec:
             {{- /* Общий том workspace: те же файлы, что у control plane. */}}
             - name: workspace
               mountPath: {{ .Values.executor.workspace.mountPath }}
+            {{- /* PROP-137 Ф2: read-only корневая ФС → writable-каталоги
+                   `/tmp` (SSH-материал, логи фоновых процессов) и `/home/synth`
+                   (кэши pnpm/pip/corepack, `PYTHONUSERBASE`). Без них процесс
+                   падает с EACCES. */}}
+            {{- if $roRootFs }}
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/synth
+            {{- end }}
             {{- /* CA доверия git — только на чтение. */}}
             {{- with .Values.executor.tls }}
             {{- if .caSecret }}
@@ -182,14 +224,27 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- /* PROP-137 Ф2: итоговое `readOnlyRootFilesystem` = флаг
+                 `executor.readOnlyRootFilesystem` И значение из
+                 `containerSecurityContext` (по умолчанию оба true). */}}
           {{- with .Values.executor.containerSecurityContext }}
           securityContext:
-            {{- toYaml . | nindent 12 }}
+            {{- $sc := deepCopy . }}
+            {{- $_ := set $sc "readOnlyRootFilesystem" $roRootFs }}
+            {{- toYaml $sc | nindent 12 }}
           {{- end }}
       volumes:
         - name: workspace
           persistentVolumeClaim:
             claimName: {{ include "synth.executor.workspaceClaim" . }}
+        {{- /* PROP-137 Ф2: writable-каталоги для контейнера с read-only
+               корневой ФС (`/tmp` и `/home/synth`). */}}
+        {{- if $roRootFs }}
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        {{- end }}
         {{- /* CA доверия git — Secret (readonly). Значений в values нет
                (инвариант 13): только ссылка на Secret. Режим считает
                `synth.secretVolumeMode` от executor.podSecurityContext: 0440

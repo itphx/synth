@@ -1364,6 +1364,38 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
   В `docker-compose.yml` uid зафиксирован полем `user: "1000:1000"`.
   **`readOnlyRootFilesystem`, NetworkPolicy и ownership-initContainer — слайс 137b (чарт)**, в
   образах этого слайса их нет; `runAsNonRoot`/`drop: ALL` в чарте — тоже 137b.
+- **Read-only rootfs (PROP-137 Ф2, чарт).** В Kubernetes-развёртывании чарт по умолчанию
+  включает `readOnlyRootFilesystem: true` у **backend'а**, **исполнителя** и **provisioner'а**:
+  изменить образ/контейнер нельзя, писать — только в примонтированные тома. Флагов два
+  (`<component>.readOnlyRootFilesystem` и `<component>.containerSecurityContext.readOnlyRootFilesystem`),
+  итог = И обоих — выключить можно любым из них.
+  - **Writable-`emptyDir` на `/tmp` и `/home/synth`** (backend и исполнитель; у provisioner'а —
+    только `/tmp`): `/tmp` — staging плагинов (`engine/plugins/archive.ts`), SSH-материал
+    (`git/ssh-env.ts`), временные каталоги медиа-раннера, логи фоновых процессов
+    (`os.tmpdir()`); `/home/synth` — `HOME` (кэши `pnpm`/`corepack`/`pip`, `PYTHONUSERBASE`).
+    Оба **эфемерны**: содержимое не переживает перезапуск пода; постоянные данные (сессии,
+    проекты, секреты, блобы) — на PVC, который монтируется отдельно и остаётся writable.
+  - **UI — исключение:** read-only rootfs у UI не включается — образ
+    `nginxinc/nginx-unprivileged` генерирует конфиг из шаблонов при старте
+    (`/etc/nginx/templates/*.template` → `/etc/nginx/conf.d/default.conf`), и на read-only
+    корневой ФС nginx не поднимется. Изоляция UI — non-root (uid 101).
+  - **Ownership-initContainer (`backend.ownershipInitContainer.enabled` /
+    `executor.ownershipInitContainer.enabled`, по умолчанию `false`)** — init-контейнер от root
+    (`runAsUser: 0`), который монтирует те же тома и выполняет `chown -R 1000:1000 <точка
+    монтирования>`. Нужен только там, где `podSecurityContext.fsGroup` не действует
+    (**hostPath**, **NFS**): для обычного PVC достаточно `fsGroup: 1000` +
+    `fsGroupChangePolicy: OnRootMismatch`. Работа от root → **несовместим с Pod Security
+    Standards `restricted`** (admission отклонит под); на NFS-томе workspace рекурсивный `chown`
+    занимает минуты (десятки тысяч файлов) — процесс пода стартует столько же.
+  - **Fail-closed проверка `dataDir`** (`storage/data-dir-check.ts`, вызывается в
+    `server/app/deps.ts` и `backend/app/deps.ts` **до** инициализации хранилища; актуальна и при
+    `storage.backend: postgres` — каталог нужен для секретов и blob-хранилища): создаётся и
+    удаляется временный файл (проверка `access(W_OK)` на NFS недостаточна). При отказе процесс
+    **не стартует**, в логе — точная команда починки:
+    `data directory "<path>" is not writable by uid <uid> (chown -R <uid>:<gid> "<path>")`.
+    Runbook — [MAINTENANCE.md](./MAINTENANCE.md) §«Read-only rootfs и права (PROP-137 Ф2)».
+  - **NetworkPolicy классов профилей** (`none|restricted|full`) — остаток **137b-2**, в этом
+    слайсе не делалось.
 
 #### Что умеет каждый flavor (PROP-082)
 
@@ -1829,3 +1861,15 @@ Split-топология технически возможна и при одн�
   кэш прокси по `poolKeyString`; без идентификатора области → `fallback: instance`
   либо `fail` (`ExecutionProfileUnavailableError`). Оркестратор передаёт
   `projectId`/`sessionId` сессии. **Остаток Ф4b:** сам сервис-provisioner (Ф4b-2).
+- 2026-11-12 — **PROP-137 Ф2, слайс 137b-1: read-only rootfs в чарте, ownership-initContainer и
+  fail-closed проверка `dataDir`.** §10.2 дополнен: `readOnlyRootFilesystem: true` по умолчанию у
+  backend'а, исполнителя и provisioner'а (чарт `charts/synth`), writable-`emptyDir` на `/tmp` и
+  `/home/synth` (у provisioner'а — только `/tmp`), opt-in init-контейнер смены владельца томов
+  (`backend.ownershipInitContainer.enabled` / `executor.ownershipInitContainer.enabled`, по умолчанию
+  `false`; работает от root → несовместим с PSS `restricted`; нужен только для hostPath/NFS — для
+  PVC достаточно `fsGroup: 1000` + `fsGroupChangePolicy: OnRootMismatch`), fail-closed проверка
+  записи в каталог данных (`storage/data-dir-check.ts`, `assertDataDirWritable` — вызывается в
+  `server/app/deps.ts` и `backend/app/deps.ts` **до** инициализации хранилища; текст ошибки:
+  `data directory "<path>" is not writable by uid <uid> (chown -R <uid>:<gid> "<path>")`).
+  UI — исключение (nginx-unprivileged пишет `/etc/nginx/conf.d` при старте). **Остаток 137b-2:**
+  NetworkPolicy классов профилей (`none|restricted|full`).

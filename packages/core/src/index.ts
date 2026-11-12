@@ -1836,6 +1836,10 @@ export {
   runMigrations,
 } from './storage/instance-meta.js';
 export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
+// PROP-137 Ф1: fail-closed проверка записи в каталог данных (проверка прав
+// на том до инициализации хранилища — общая для standalone и managed).
+export { assertDataDirWritable, DataDirNotWritableError } from './storage/data-dir-check.js';
+export type { DataDirCheckOptions } from './storage/data-dir-check.js';
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
 // ADR-097 (волна 5): `synth storage migrate` — идемпотентный перенос данных инстанса между backend'ами (file ↔ postgres).

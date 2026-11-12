@@ -129,6 +129,10 @@ ingress:
 | `backend.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов томов и политика смены владельца: рекурсивный `chown` только при несовпадении корня (см. «NFS-том и смена владельца»). От `fsGroup` же зависит режим Secret-томов: задан → `0440`, `null` → `0444` (см. «Права файлов в Secret-томах») |
 | `backend.progressDeadlineSeconds` | `1200` | Дедлайн прогресса rollout (`Deployment.spec.progressDeadlineSeconds`): медленный первый старт (chown тома, pull) не роняет релиз |
 | `backend.restartMode` | `process` | Restart из UI: `process` \| `supervisor` \| `disabled` (env `SYNTH_RESTART_MODE`, см. «Перезапуск инстанса из UI») |
+| `backend.readOnlyRootFilesystem` | `true` | Read-only корневая ФС контейнера backend'а (PROP-137 Ф2): `true` — только чтение + writable `emptyDir` на `/tmp` и `/home/synth`; `false` — записываемая корневая ФС (как в 137a). Итог = этот флаг **И** `backend.containerSecurityContext.readOnlyRootFilesystem` — выключить можно любым из двух (см. «Read-only rootfs и ownership-initContainer») |
+| `backend.ownershipInitContainer.enabled` | `false` | Init-контейнер смены владельца тома данных (`chown -R 1000:1000`) перед стартом backend'а. Нужен только там, где `fsGroup` kubelet'а не действует (hostPath/NFS); для обычного PVC не нужен. Работает от root → несовместим с PSS `restricted` |
+| `backend.ownershipInitContainer.image` | `""` | Образ init-контейнера; пусто → образ самого backend'а (в нём есть `sh` и `chown` busybox) |
+| `backend.ownershipInitContainer.resources` | limits `100m`/128Mi, requests `10m`/32Mi | Ресурсы init-контейнера (одноразовая операция `chown`) |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
 | `backend.service.sessionAffinity` | `None` | Sticky-сессии Service backend'а: `None` \| `ClientIP`. Нужно при `backend.replicaCount > 1` — шина событий in-process (см. «Sticky-сессии при нескольких репликах backend») |
 | `storage.backend` | `file` | Backend хранения (ADR-097): `file` \| `memory` \| `postgres` |
@@ -154,6 +158,10 @@ ingress:
 | `executor.replicaCount` | `1` | Размер пула исполнителей |
 | `executor.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов общего тома и политика смены владельца: NFS-том workspace — десятки тысяч файлов, рекурсивный `chown` на каждом старте недопустим (см. «NFS-том и смена владельца»). От `fsGroup` зависит режим Secret-тома `executor-tls`: задан → `0440`, `null` → `0444` |
 | `executor.progressDeadlineSeconds` | `1200` | Дедлайн прогресса rollout (`Deployment.spec.progressDeadlineSeconds`): медленный первый старт не роняет релиз |
+| `executor.readOnlyRootFilesystem` | `true` | Read-only корневая ФС контейнера исполнителя (PROP-137 Ф2): `true` — только чтение + writable `emptyDir` на `/tmp` (SSH-материал, логи фоновых процессов) и `/home/synth` (кэши pnpm/pip/corepack); `false` — записываемая корневая ФС. Итог = этот флаг **И** `executor.containerSecurityContext.readOnlyRootFilesystem` |
+| `executor.ownershipInitContainer.enabled` | `false` | Init-контейнер смены владельца общего тома workspace (`chown -R 1000:1000`) перед стартом исполнителя. Нужен только для hostPath/NFS; для обычного PVC достаточно `fsGroup` + `OnRootMismatch`. Работает от root → несовместим с PSS `restricted` |
+| `executor.ownershipInitContainer.image` | `""` | Образ init-контейнера; пусто → образ самого исполнителя (в нём есть `sh` и `chown` busybox) |
+| `executor.ownershipInitContainer.resources` | limits `100m`/128Mi, requests `10m`/32Mi | Ресурсы init-контейнера (одноразовая операция `chown`) |
 | `executor.image.repository` | `git.itphx.ru/itphx/synth-executor` | Образ исполнителя |
 | `executor.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `executor.imagePullSecrets` | `[]` | Секреты для приватного реестра (нужны для `git.itphx.ru`) |
@@ -213,6 +221,7 @@ ingress:
 | `provisioner.networkPolicy.apiServerCidrs` | `[]` | CIDR'ы API Kubernetes для egress (обязательны при `provider: kubernetes` и включённой политике) |
 | `provisioner.resources` | limits `500m`/256Mi, requests `50m`/64Mi | Ресурсы provisioner'а (пулы он не исполняет) |
 | `provisioner.podSecurityContext` / `.containerSecurityContext` | uid 1000, drop ALL, read-only root FS | Изоляция процесса provisioner'а |
+| `provisioner.readOnlyRootFilesystem` | `true` | Read-only корневая ФС контейнера provisioner'а (PROP-137 Ф2): `true` — только чтение + writable `emptyDir` на `/tmp`; `false` — записываемая корневая ФС. Итог = этот флаг **И** `provisioner.containerSecurityContext.readOnlyRootFilesystem` |
 | `security.tls.existingSecret` | `""` | Secret с CA/клиентскими сертификатами → mount в `/etc/synth/tls` (ADR-099) |
 | `security.tls.caKey` / `certKey` / `keyKey` | `""` | Ключи внутри Secret → `security.tls.{caFile,certFile,keyFile}` (путь `/etc/synth/tls/<key>`) |
 | `security.tls.caFile` / `certFile` / `keyFile` | `""` | Явные пути внутри контейнера (когда файлы смонтированы вами) |
@@ -760,6 +769,121 @@ Secret-тома, которые чарт монтирует сам (`tls` — `s
 Смену группы и выдачу её процессу (supplemental groups) делает kubelet при
 монтировании тома — для in-tree Secret-томов это штатное поведение (исключение
 — CSI-тома с `fsGroupPolicy: None`, но секреты чарт так не монтирует).
+
+## Read-only rootfs и ownership-initContainer (PROP-137 Ф2)
+
+Runtime-образы Synth работают **non-root** (uid 1000; UI — uid 101) — см.
+[MAINTENANCE.md](../../../docs/MAINTENANCE.md) §«Переход на non-root (PROP-137)».
+Дополнительно чарт по умолчанию включает **read-only корневую ФС** у backend'а,
+исполнителя и provisioner'а: образ/контейнер не может изменить ничего вне
+явно примонтированных томов.
+
+| Компонент | `readOnlyRootFilesystem` | Writable-тома | Флаг отключения |
+|---|---|---|---|
+| `backend` | `true` | `emptyDir` на `/tmp` и `/home/synth`; PVC данных (+ blobs) | `backend.readOnlyRootFilesystem: false` |
+| `executor` | `true` | `emptyDir` на `/tmp` и `/home/synth`; PVC workspace | `executor.readOnlyRootFilesystem: false` |
+| `provisioner` | `true` | `emptyDir` на `/tmp` | `provisioner.readOnlyRootFilesystem: false` |
+| `ui` | `false` (исключение, см. ниже) | — | — |
+
+### Зачем `emptyDir` на `/tmp` и `/home/synth`
+
+При read-only корневой ФС **запись в образ невозможна**, а процессу Synth
+писать нужно:
+
+- **`/tmp`** — временные каталоги: staging распакованных плагинов
+  (`engine/plugins/archive.ts`), SSH-материал (`git/ssh-env.ts`), временные
+  каталоги медиа-раннера, логи фоновых процессов исполнителя
+  (`os.tmpdir()` → `/tmp`).
+- **`/home/synth`** — `HOME` процесса: кэши `pnpm`/`corepack`
+  (`COREPACK_HOME`, `PNPM_HOME`), кэш `pip` (`PIP_CACHE_DIR`),
+  `PYTHONUSERBASE` (`/home/synth/.local`).
+
+Оба монтируются как `emptyDir` — то есть **эфемерно**: содержимое не переживает
+перезапуск пода. Это осознанно: кэши пакетных менеджеров восстанавливаются, а
+постоянные данные (сессии, проекты, секреты, блобы) лежат на PVC, который
+mount'ится **отдельно** и остаётся writable. Пустоте `emptyDir` при старте
+сбрасываются — поэтому `HOME` в контейнере не переживает idle-остановку пода
+(решение владельца, PROP-137).
+
+> ⚠️ Если отключить read-only rootfs (`*.readOnlyRootFilesystem: false`),
+> `emptyDir`-тома **тоже не монтируются** — процесс пишет в слой контейнера
+> (как в 137a). Этот режим — совместимость, а не рекомендация.
+
+### UI — исключение
+
+У UI read-only rootfs **не включается**. Образ `nginxinc/nginx-unprivileged`
+(PROP-137 Ф3) на старте генерирует конфиг nginx из шаблонов
+(`/etc/nginx/templates/*.template` → `/etc/nginx/conf.d/default.conf`) —
+запись в `/etc/nginx/conf.d` на read-only корневой ФС невозможна, и nginx не
+поднимется. Изоляция UI обеспечивается non-root (uid 101) и
+`allowPrivilegeEscalation: false`.
+
+### Ownership-initContainer (`*.ownershipInitContainer.enabled`)
+
+**По умолчанию выключено** (`false`) у backend'а и исполнителя.
+
+Init-контейнер монтирует те же тома, что и основной, и выполняет
+`chown -R 1000:1000 <точка монтирования>` — разовая смена владельца перед
+стартом процесса.
+
+- **Зачем.** `podSecurityContext.fsGroup: 1000` + `fsGroupChangePolicy:
+  OnRootMismatch` (дефолт чарта) покрывают **обычные PVC**: kubelet сам ставит
+  группу тома. `fsGroup` **не действует** там, где владельца задаёт хост:
+  `hostPath` и NFS-тома (часть CSI-драйверов/конфигураций). Для них нужен
+  явный `chown` — его и делает init-контейнер.
+- **Почему по умолчанию off.** Init-контейнер работает **от root**
+  (`runAsUser: 0`, `runAsNonRoot: false`) — а Pod Security Standards
+  `restricted` root-контейнер **запрещают**. В namespace с политикой
+  `restricted` включение опции приведёт к отказу admission-контроллера.
+  Для обычных PVC он не нужен вовсе.
+- **Цена.** На NFS-томе workspace рекурсивный `chown` идёт по десяткам тысяч
+  файлов (`node_modules`, рабочие каталоги) — процесс пода стартует минутами.
+  Это повторяется при каждом старте пода (init-контейнер не идемпотентен по
+  времени). Для больших томов оставьте `fsGroup` + `OnRootMismatch` и
+  разово выполните `chown` вручную (см. [MAINTENANCE.md](../../../docs/MAINTENANCE.md)).
+- **Образ.** По умолчанию — образ самого компонента (в `node:22-alpine` есть
+  `sh` и `chown` из busybox). Свой образ (`*.ownershipInitContainer.image`)
+  нужен, если в вашем образе этих утилит нет.
+
+Включение:
+
+```yaml
+backend:
+  ownershipInitContainer:
+    enabled: true          # chown -R 1000:1000 на том данных
+    # image: ""            # пусто → образ backend'а
+    resources:
+      limits:
+        cpu: 100m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
+executor:
+  ownershipInitContainer:
+    enabled: true          # chown -R 1000:1000 на общий том workspace
+```
+
+### Как отключить read-only rootfs
+
+Флагов два, и **любой** из них выключает режим (итог = И обоих):
+
+```yaml
+# верхний переключатель чарта
+backend:
+  readOnlyRootFilesystem: false
+  # …или узкий — в самом контейнере:
+  containerSecurityContext:
+    readOnlyRootFilesystem: false
+```
+
+То же для `executor` и `provisioner`. Отключайте, если:
+
+- процесс пишет куда-то ещё в корневой ФС (сторонний MCP-сервер, старая
+  версия образа с `npm -g` вне `HOME`);
+- в вашем кластере read-only rootfs не поддерживается (старые версии
+  containerd/CRI);
+- нужен «как было в 137a» режим при миграции.
 
 ## API-key режим без Keycloak
 

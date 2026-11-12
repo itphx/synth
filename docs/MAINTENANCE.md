@@ -1529,6 +1529,134 @@ root-образ остаются рабочими; обратный `chown -R 0:
 которую нельзя сделать «на горячую» из non-root контейнера (нет `CAP_CHOWN`). `readOnlyRootFilesystem`,
 NetworkPolicy и initContainer для `hostPath`/NFS — слайс **137b** (чарт), в образах их нет.
 
+## Read-only rootfs и права (PROP-137 Ф2)
+
+**Цель:** в Kubernetes-развёртывании (Helm-чарт `charts/synth`) процессы стартуют
+с **read-only корневой ФС**: изменить образ/контейнер нельзя, писать можно только
+в примонтированные тома. Разделы: что это даёт, что делать при `EACCES`, как
+отключить.
+
+**Что включено по умолчанию.**
+
+| Компонент | `readOnlyRootFilesystem` | Writable-тома |
+|---|---|---|
+| backend | `true` | `emptyDir` на `/tmp` и `/home/synth` + PVC данных (и blobs) |
+| исполнитель (`executor`) | `true` | `emptyDir` на `/tmp` и `/home/synth` + PVC workspace |
+| provisioner | `true` | `emptyDir` на `/tmp` |
+| UI | `false` (исключение) | — |
+
+`emptyDir` на `/tmp` и `/home/synth` обязательны при read-only rootfs: `/tmp` —
+временные каталоги (staging плагинов, SSH-материал, логи фоновых процессов),
+`/home/synth` — `HOME` (кэши `pnpm`/`corepack`/`pip`, `PYTHONUSERBASE`). Оба
+**эфемерны**: содержимое не переживает перезапуск пода. Постоянные данные
+(сессии, проекты, секреты, блобы) лежат на PVC — он монтируется отдельно и
+остаётся записываемым.
+
+**UI — исключение.** У UI read-only rootfs не включается: образ
+`nginxinc/nginx-unprivileged` генерирует конфиг nginx из шаблонов при старте
+(`/etc/nginx/templates/*.template` → `/etc/nginx/conf.d/default.conf`) — на
+read-only корневой ФС nginx не поднимется. Изоляция UI — non-root (uid 101) и
+`allowPrivilegeEscalation: false`.
+
+### Проверка записи в `dataDir` — fail-closed на старте
+
+Backend (и managed-вариант) при старте **до** инициализации хранилища проверяет,
+что в каталог данных **можно записать**: создаёт и удаляет временный файл
+(проверка `access(W_OK)` на NFS недостаточна — бит записи может не совпадать с
+фактической возможностью создать файл). При отказе процесс **не стартует**, в
+логе — сообщение с точным владельцем и командой починки:
+
+```
+data directory "/var/synth/data" is not writable by uid 1000 (chown -R 1000:1000 "/var/synth/data")
+```
+
+Проверка касается и `storage.backend: postgres`: каталог данных нужен в любом
+режиме (секреты, мастер-ключ, blob-хранилище — ADR-116).
+
+### Симптом: «сайт открывается, данные не сохраняются»
+
+Если права на том неверны, типичная картина:
+
+- **UI отвечает 200** (nginx данные не трогает) — «сайт открыт»;
+- в логах backend'а — `EACCES` / `permission denied` на `{dataDir}/secrets/master.key`,
+  `{dataDir}/sessions/`, `{dataDir}/blobs/`;
+- под backend'а **уходит в рестарт** (`CrashLoopBackOff` / `restart: unless-stopped`),
+  состояние не меняется;
+- `synth doctor` даёт `fail` по проверке `data-dir`.
+
+С read-only rootfs (137b) тот же дефект проявляется **на старте**: fail-closed
+проверка останавливает процесс с текстом выше — видно сразу, без «сайт открыт,
+данные не пишутся».
+
+### Что делать при `EACCES`
+
+**Шаг 1 — разово сменить владельца (вне кластера, от root).** Для обычных PVC
+это делает kubelet сам (`fsGroup: 1000` + `fsGroupChangePolicy: OnRootMismatch`),
+поэтому ручной `chown` нужен только там, где `fsGroup` не действует —
+`hostPath` и NFS-тома:
+
+```bash
+# Kubernetes: PVC (или hostPath/NFS) с данными инстанса
+kubectl -n synth run chown-once --rm -it --restart=Never --image=alpine \
+  --overrides='{"spec":{"securityContext":{"runAsUser":0},"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"<pvc>"}}],"containers":[{"name":"chown-once","image":"alpine","command":["chown","-R","1000:1000","/data"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}]}}'
+
+# то же для общего тома workspace (исполнители)
+kubectl -n synth run chown-once --rm -it --restart=Never --image=alpine \
+  --overrides='{"spec":{"securityContext":{"runAsUser":0},"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"<workspace-pvc>"}}],"containers":[{"name":"chown-once","image":"alpine","command":["chown","-R","1000:1000","/data"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}]}}'
+```
+
+> В namespace с Pod Security Standards `restricted` root-под запрещён — операция
+> выполняется в отдельном namespace или с ослабленной политикой (это разовая
+> акция).
+
+**Шаг 2 — включить ownership-initContainer** (для hostPath/NFS, где `chown`
+нужен на каждом старте пода). В чарте:
+
+```yaml
+backend:
+  ownershipInitContainer:
+    enabled: true      # chown -R 1000:1000 на том данных
+executor:
+  ownershipInitContainer:
+    enabled: true      # chown -R 1000:1000 на общий том workspace
+```
+
+⚠️ Init-контейнер работает **от root** → несовместим с PSS `restricted`
+(admission-контроллер отклонит под). И он **не идемпотентен по времени**: на
+NFS-томе workspace (десятки тысяч файлов) рекурсивный `chown` занимает минуты,
+и процесс пода стартует столько же. Для больших томов оставьте `fsGroup` +
+`OnRootMismatch` и разово выполните `chown` вручную (шаг 1).
+
+### Как отключить read-only rootfs
+
+Флагов два, и **любой** из них выключает режим (итог = И обоих):
+
+```yaml
+backend:
+  readOnlyRootFilesystem: false              # верхний переключатель чарта
+  containerSecurityContext:
+    readOnlyRootFilesystem: false            # узкий переключатель контейнера
+executor:
+  readOnlyRootFilesystem: false
+provisioner:
+  readOnlyRootFilesystem: false
+```
+
+При `false` writable-`emptyDir`-тома **не монтируются** — процесс пишет в слой
+контейнера (режим 137a). Отключайте, если процесс пишет куда-то ещё в корневой
+ФС (сторонний MCP-сервер, старая версия образа с `npm -g` вне `HOME`), в
+кластере read-only rootfs не поддерживается, либо нужен режим «как было в 137a»
+при миграции.
+
+### Откат
+
+- **Read-only rootfs** — снять флаги (`*.readOnlyRootFilesystem: false`) и
+  передеплоить: это смена pod-шаблона, данные не затрагиваются.
+- **Ownership-initContainer** — выключить `*.ownershipInitContainer.enabled` и
+  передеплоить: чарт просто перестанет добавлять init-контейнер.
+- **Данные** — `chown` их не меняет по содержанию, только по владельцу; откат
+  владельца (`chown -R 0:0`) нужен, только если вы хотите прежние права.
+
 ## Метрики исполнителя и диагностика split-режима
 
 **Цель:** в split-топологии (`execution.mode: remote`, ADR-077) понять, жив ли пул
@@ -2046,6 +2174,12 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 
 ## История
 
+- 2026-11-12 — добавлен раздел «Read-only rootfs и права (PROP-137 Ф2)»: read-only корневая ФС в
+  Kubernetes-развёртывании (backend/исполнитель/provisioner — `true`, UI — исключение), writable-
+  `emptyDir` на `/tmp` и `/home/synth`, fail-closed проверка записи в `{dataDir}` на старте (текст
+  ошибки с uid и командой `chown`), разбор `EACCES` (разовый `chown -R 1000:1000` вручную либо
+  opt-in `*.ownershipInitContainer.enabled` — работает от root, несовместим с PSS `restricted`, нужен
+  только для hostPath/NFS), отключение флагов `*.readOnlyRootFilesystem` и откат.
 - 2026-10-25 — в runbook «Память: индексы и факты (`synth memory`)» добавлена **область индекса**:
   `--scope project|instance` у `index`/`list` (у `list` — фильтр и колонка `SCOPE` в таблице),
   инстансный индекс по фактам создаётся без проекта, а по файлам — `projectId` = источник корпуса;

@@ -18,6 +18,12 @@
 {{- fail "provisioner.executorCommandPolicy.provider: ожидается http или opa" }}
 {{- end }}
 {{- end }}
+{{- /* PROP-137 Ф2: read-only корневая ФС provisioner'а. Итог = флаг
+       `provisioner.readOnlyRootFilesystem` И
+       `containerSecurityContext.readOnlyRootFilesystem` (по умолчанию оба true).
+       При read-only корневой ФС нужен writable `/tmp` (provisioner сам на диск
+       не пишет, но `/tmp` — единственное место для временных файлов рантайма). */ -}}
+{{- $roRootFs := eq (include "synth.readOnlyRootFilesystem" (dict "flag" (.Values.provisioner.readOnlyRootFilesystem | default false) "ctx" (.Values.provisioner.containerSecurityContext | default dict))) "true" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -172,10 +178,26 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- /* PROP-137 Ф2: итоговое `readOnlyRootFilesystem` = флаг
+                 `provisioner.readOnlyRootFilesystem` И значение из
+                 `containerSecurityContext` (по умолчанию оба true). */}}
           {{- with .Values.provisioner.containerSecurityContext }}
           securityContext:
-            {{- toYaml . | nindent 12 }}
+            {{- $sc := deepCopy . }}
+            {{- $_ := set $sc "readOnlyRootFilesystem" $roRootFs }}
+            {{- toYaml $sc | nindent 12 }}
           {{- end }}
+          {{- /* PROP-137 Ф2: writable `/tmp` для контейнера с read-only корневой ФС. */}}
+          {{- if $roRootFs }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if $roRootFs }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- end }}
       {{- with .Values.provisioner.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

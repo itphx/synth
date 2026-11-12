@@ -46,6 +46,14 @@
 {{- $plugins := (.Values.backend.plugins | default dict) -}}
 {{- $pluginsVolume := ($plugins.deployVolume | default dict) -}}
 {{- $needEnv := or .Values.backend.oidc.enabled $authApiKey.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled (include "synth.execution.isRemote" .) $sharedWorkspace (include "synth.plugins.envNeeded" .) $provisionerEnabled -}}
+{{- /* PROP-137 Ф2: read-only корневая ФС backend'а. Итоговое значение = флаг
+       `backend.readOnlyRootFilesystem` И `containerSecurityContext.readOnlyRootFilesystem`
+       (по умолчанию оба true) — выключить можно любым из них.
+       При read-only корневой ФС контейнеру нужны writable-каталоги `/tmp`
+       (временные файлы, staging плагинов, SSH-материал) и `/home/synth`
+       (кэши pnpm/pip/corepack, `PYTHONUSERBASE`) — это `emptyDir`. */ -}}
+{{- $roRootFs := eq (include "synth.readOnlyRootFilesystem" (dict "flag" (.Values.backend.readOnlyRootFilesystem | default false) "ctx" (.Values.backend.containerSecurityContext | default dict))) "true" -}}
+{{- $ownership := .Values.backend.ownershipInitContainer | default dict -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -89,6 +97,35 @@ spec:
       {{- with .Values.backend.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* PROP-137 Ф2: init-контейнер смены владельца томов (по умолчанию
+             выключен). Нужен там, где `fsGroup` kubelet'а не действует
+             (hostPath/NFS). Работает от root — несовместимо с PSS
+             `restricted`, поэтому включается осознанно. */}}
+      {{- if $ownership.enabled }}
+      initContainers:
+        - name: ownership
+          image: "{{ $ownership.image | default (printf "%s:%s" .Values.backend.image.repository (.Values.backend.image.tag | default .Chart.AppVersion)) }}"
+          imagePullPolicy: {{ $ownership.imagePullPolicy | default .Values.backend.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - chown -R 1000:1000 "{{ include "synth.backend.dataMountPath" . }}"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+          {{- with $ownership.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ include "synth.backend.dataMountPath" . }}
+            {{- if $blobs.enabled }}
+            - name: blobs
+              mountPath: {{ include "synth.backend.blobsMountPath" . }}
+            {{- end }}
       {{- end }}
       containers:
         - name: backend
@@ -245,6 +282,16 @@ spec:
             - name: blobs
               mountPath: {{ include "synth.backend.blobsMountPath" . }}
             {{- end }}
+            {{- /* PROP-137 Ф2: read-only корневая ФС → writable-каталоги
+                   `/tmp` (временные файлы, staging плагинов, SSH-материал) и
+                   `/home/synth` (кэши pnpm/pip/corepack, `PYTHONUSERBASE`).
+                   Без них процесс падает с EACCES. */}}
+            {{- if $roRootFs }}
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/synth
+            {{- end }}
             {{- if include "synth.backend.hasConfigMap" . }}
             - name: config
               mountPath: /etc/synth
@@ -312,9 +359,14 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- /* PROP-137 Ф2: итоговое `readOnlyRootFilesystem` = флаг
+                 `backend.readOnlyRootFilesystem` И значение из
+                 `containerSecurityContext` (по умолчанию оба true). */}}
           {{- with .Values.backend.containerSecurityContext }}
           securityContext:
-            {{- toYaml . | nindent 12 }}
+            {{- $sc := deepCopy . }}
+            {{- $_ := set $sc "readOnlyRootFilesystem" $roRootFs }}
+            {{- toYaml $sc | nindent 12 }}
           {{- end }}
       volumes:
         - name: data
@@ -325,6 +377,14 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "synth.backend.fullname" . }}-data
           {{- end }}
+        {{- /* PROP-137 Ф2: writable-каталоги для контейнера с read-only
+               корневой ФС (`/tmp` и `/home/synth`). */}}
+        {{- if $roRootFs }}
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
+        {{- end }}
         {{- /* ADR-116: отдельный PVC блобов (включён опцией backend.blobs.enabled);
                при существующем claim'е чарт его не создаёт — только монтирует. */}}
         {{- if $blobs.enabled }}
