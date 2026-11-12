@@ -305,6 +305,19 @@ Important: the workspace path of the control plane and of the executor must
 **match** (`/var/synth/data/workspaces` in both containers) — otherwise the
 executor containment rejects `cwd` (`EWORKSPACE`).
 
+**non-root (PROP-137).** All runtime images run as **uid 1000** (`USER 1000` in
+`docker/Dockerfile`, `docker/Dockerfile.backend`, `docker/Dockerfile.executor`,
+`docker/Dockerfile.provisioner`); the UI uses `nginxinc/nginx-unprivileged:alpine` (**uid 101**).
+In compose the uid is pinned with `user: "1000:1000"` on `synth`, `synth-backend`,
+`synth-backend-split`, `synth-executor`; the UI sets no `user:` (the image is non-root already).
+The data directory and `HOME` (`/home/synth`) inside the image belong to `1000:1000`, so a **new**
+named volume is writable right away (Docker copies ownership from the image when the volume is
+created). An existing volume created by a root image must be converted once with
+`chown -R 1000:1000` (procedure, checks and rollback: [MAINTENANCE.md](../MAINTENANCE.md)
+§«Переход на non-root (PROP-137)», RU). The UI container listens on **8080** inside
+(unprivileged nginx cannot bind a port < 1024); the published host port is `SYNTH_UI_PUBLISH`
+(`127.0.0.1:5002` by default), the chart Service uses `port/targetPort: 8080`.
+
 ## End-to-end test: control plane ↔ executor
 
 `scripts/e2e-executor.sh` is **not a mock**: real processes in containers, HTTP

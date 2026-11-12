@@ -47,6 +47,16 @@ RUN set -eux; \
     ln -s /usr/local/lib/node_modules/corepack/dist/yarn.js /out/bin/yarn; \
     ln -s /usr/local/lib/node_modules/corepack/dist/yarnpkg.js /out/bin/yarnpkg
 
+# Каталоги runtime-пользователя uid 1000 (PROP-137, non-root): HOME и каталог
+# данных. Готовятся ЗДЕСЬ, в builder, и переносятся `COPY --chown` — в runtime
+# нет ни одного RUN (кросс-сборка arm64 без QEMU), поэтому `mkdir`/`chown` там
+# невозможны. Кэш corepack (от `corepack prepare` выше) кладём в HOME: иначе
+# первый вызов `pnpm` под uid 1000 пытался бы скачать бинарь (нужна сеть).
+RUN set -eux; \
+    mkdir -p /out/home/.cache /out/data; \
+    cp -a /root/.cache/node/corepack /out/home/.cache/node/corepack; \
+    chown -R 1000:1000 /out/home /out/data
+
 # Раскладываем top-level зависимости по чанкам (по первому символу имени; для
 # scope-пакетов — по символу после @). Каждый чанк станет отдельным COPY-слоем.
 RUN set -eux; \
@@ -91,11 +101,26 @@ COPY --from=builder /chunks/5/ /usr/local/lib/node_modules/@itphx/synth/node_mod
 COPY --from=builder /chunks/6/ /usr/local/lib/node_modules/@itphx/synth/node_modules/
 
 # symlink'и CLI и pnpm/yarn — каталогом (одиночный COPY разыменовывает ссылки).
+# `/usr/local/bin` и `/usr/local/lib/node_modules` world-readable/executable, под
+# uid 1000 работают без правки.
 COPY --from=builder /out/bin/ /usr/local/bin/
-COPY --from=builder /root/.cache/node/corepack /root/.cache/node/corepack
+
+# HOME пользователя uid 1000 (PROP-137): кэш corepack/pnpm и `~/.config` должны
+# быть writable — иначе pnpm/агентские утилиты падают с EACCES на /root.
+COPY --from=builder --chown=1000:1000 /out/home /home/synth
+ENV HOME=/home/synth
+
+# Каталог данных: принадлежит 1000:1000. При первом создании named volume Docker
+# копирует ownership/содержимое ИЗ ОБРАЗА, поэтому новый том сразу доступен на
+# запись. Существующий root-том нужно один раз перевести (`chown -R 1000:1000`)
+# — docs/MAINTENANCE.md, раздел «Переход на non-root (PROP-137)».
+COPY --from=builder --chown=1000:1000 /out/data /var/synth/data
 
 EXPOSE 4300
 
 VOLUME ["/var/synth/data"]
+
+# Non-root (PROP-137 Ф1): root допустим только на этапе сборки образа.
+USER 1000
 
 ENTRYPOINT ["synth", "serve", "--port", "4300", "--host", "0.0.0.0"]

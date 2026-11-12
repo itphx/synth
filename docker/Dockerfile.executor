@@ -142,8 +142,9 @@ RUN set -eux; \
 # В `node:22-alpine` uid/gid 1000 уже заняты пользователем `node`, поэтому
 # отдельная учётная запись не создаётся — важен сам uid.
 RUN set -eux; \
-    mkdir -p /home/synth/.cache/pip /home/synth/.local /workspace; \
-    chown -R 1000:1000 /home/synth /workspace
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /workspace \
+             /var/synth/data/workspaces; \
+    chown -R 1000:1000 /home/synth /workspace /var/synth/data
 
 ENV HOME=/home/synth
 ENV PYTHONUSERBASE=/home/synth/.local
@@ -172,12 +173,21 @@ EXPOSE 5100
 # детей; Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
 # (проброс сигналов всей process group и кода выхода). Шапка файла.
 COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+
+# Non-root (PROP-137 Ф1): root — только на этапе сборки. /home/synth и
+# /workspace уже принадлежат 1000:1000 (RUN выше).
+USER 1000
 CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `dev` — core + tier 1 + tier 4 + tier 5 + БД-клиенты + buildah + ffmpeg
 # ------------------------------------------------------------------------------
 FROM core AS dev
+
+# `core` заканчивается `USER 1000` (PROP-137): установка пакетов в flavor-стадии
+# требует root, поэтому здесь явно возвращаем его. В конце стадии — снова
+# `USER 1000`: итоговый образ non-root.
+USER root
 
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
@@ -237,10 +247,16 @@ RUN set -eux; \
     sh /tmp/synth-install/install-tier-4.sh; \
     rm -rf /tmp/synth-install
 
+# Non-root (PROP-137 Ф1): итоговый образ flavor'а `dev` — uid 1000.
+USER 1000
+
 # ------------------------------------------------------------------------------
 # flavor `devops` — dev + tier 2 + диаг + docker CLI
 # ------------------------------------------------------------------------------
 FROM dev AS devops
+
+# см. `dev`: установка пакетов идёт под root, итог — non-root (PROP-137).
+USER root
 
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
@@ -254,6 +270,9 @@ RUN set -eux; \
     sh /tmp/synth-install/install-diag.sh; \
     sh /tmp/synth-install/install-docker-cli.sh; \
     rm -rf /tmp/synth-install
+
+# Non-root (PROP-137 Ф1).
+USER 1000
 
 # ------------------------------------------------------------------------------
 # debian-ветка: flavor'ы `browser`/`full` (PROP-082, шаг 5)
@@ -279,9 +298,13 @@ RUN set -eux; \
     sh /tmp/synth-install/install-tier-0.sh; \
     rm -rf /tmp/synth-install
 
+# Каталоги пользователя uid 1000 (как в alpine-ветке): HOME, `/workspace` и
+# точка монтирования общего тома `synth-workspace` (ownership наследуется томом
+# из образа при первом создании).
 RUN set -eux; \
-    mkdir -p /home/synth/.cache/pip /home/synth/.local /workspace; \
-    chown -R 1000:1000 /home/synth /workspace
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /workspace \
+             /var/synth/data/workspaces; \
+    chown -R 1000:1000 /home/synth /workspace /var/synth/data
 
 ENV HOME=/home/synth
 ENV PYTHONUSERBASE=/home/synth/.local
@@ -343,12 +366,20 @@ EXPOSE 5100
 # детей; Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
 # (проброс сигналов всей process group и кода выхода). Шапка файла.
 COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+
+# Non-root (PROP-137 Ф1): /home/synth и /workspace принадлежат 1000:1000
+# (RUN выше), Playwright — /opt/ms-playwright (a+rX).
+USER 1000
 CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `full` — browser + tier 2 + tier 4 + tier 5 + БД + docker CLI + buildah
 # ------------------------------------------------------------------------------
 FROM browser AS full
+
+# см. `dev`: `browser` заканчивается `USER 1000`, установка пакетов требует
+# root; итоговый образ — снова uid 1000 (PROP-137).
+USER root
 
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
@@ -401,3 +432,6 @@ RUN set -eux; \
 RUN set -eux; \
     sh /tmp/synth-install/install-tier-4.sh; \
     rm -rf /tmp/synth-install
+
+# Non-root (PROP-137 Ф1): итоговый образ flavor'а `full` — uid 1000.
+USER 1000

@@ -136,6 +136,17 @@ RUN set -eux; \
     elif [ -d docker/deploy-plugins ]; then cp -a docker/deploy-plugins/. /out/deploy-plugins/; fi; \
     chmod -R a+rX /out/deploy-plugins
 
+# Каталоги runtime-пользователя uid 1000 для стадии `slim` (PROP-137): HOME и
+# каталог данных (вместе с `workspaces` — точкой монтирования общего тома:
+# Docker копирует ownership ИЗ ОБРАЗА при первом создании тома, поэтому свежий
+# `synth-workspace` сразу принадлежит 1000:1000). Готовятся в build-стадии,
+# потому что в `slim` нет ни одного RUN (кросс-сборка arm64 без QEMU) —
+# `COPY --chown` переносит их с владельцем 1000:1000. Стадии `core`/`browser`
+# создают те же каталоги сами (в них есть RUN, нужный toolchain'у).
+RUN set -eux; \
+    mkdir -p /out/home /out/data/workspaces; \
+    chown -R 1000:1000 /out/home /out/data
+
 # ------------------------------------------------------------------------------
 # flavor `core` — all-in-one: control plane + toolchain (PROP-082)
 # ------------------------------------------------------------------------------
@@ -181,8 +192,12 @@ RUN set -eux; \
 # `node` (busybox adduser не даёт создать второго владельца uid 1000), поэтому
 # отдельная учётная запись не создаётся — важен сам uid: каталоги принадлежат
 # 1000:1000, и процесс под runAsUser: 1000 пишет в них без правки.
+#
+# `/var/synth/data/workspaces` — точка монтирования общего тома `synth-workspace`
+# (split-топология): Docker копирует ownership из образа при ПЕРВОМ создании
+# тома, поэтому свежий том сразу доступен uid 1000.
 RUN set -eux; \
-    mkdir -p /home/synth/.cache/pip /home/synth/.local /var/synth/data; \
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /var/synth/data/workspaces; \
     chown -R 1000:1000 /home/synth /var/synth/data
 
 # Python-окружение и кэши (PROP-082, «Python-окружение и кэши»): HOME,
@@ -213,6 +228,10 @@ WORKDIR /app
 # детей), он запускает `dist/init.js` — Node-обёртку (проброс сигналов всей
 # process group и кода выхода, включая 75). Подробности — шапка файла.
 COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+
+# Non-root (PROP-137 Ф1): root — только на этапе сборки образа. Каталоги
+# /home/synth и /var/synth/data уже принадлежат 1000:1000 (см. RUN выше).
+USER 1000
 CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
@@ -239,6 +258,11 @@ CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 # Стадия наследует `core`, поэтому HOME=/home/synth, PYTHONUSERBASE и
 # PIP_CACHE_DIR (кэши на volume) приходят из неё без повторов.
 FROM core AS dev
+
+# `core` заканчивается `USER 1000` (PROP-137): установка пакетов в flavor-стадии
+# требует root, поэтому здесь явно возвращаем его. В конце стадии — снова
+# `USER 1000`: итоговый образ non-root.
+USER root
 
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
@@ -300,6 +324,9 @@ RUN set -eux; \
     sh /tmp/synth-install/install-tier-4.sh; \
     rm -rf /tmp/synth-install
 
+# Non-root (PROP-137 Ф1): итоговый образ flavor'а `dev` — uid 1000.
+USER 1000
+
 # ------------------------------------------------------------------------------
 # flavor `devops` — dev + tier 2 + диаг + docker CLI (PROP-082)
 # ------------------------------------------------------------------------------
@@ -313,6 +340,9 @@ RUN set -eux; \
 # ни в одном flavor'е (PROP-082, «Две топологии развёртывания»).
 FROM dev AS devops
 
+# см. `dev`: установка пакетов идёт под root, итог — non-root (PROP-137).
+USER root
+
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="Synth Backend (devops)"
@@ -325,6 +355,9 @@ RUN set -eux; \
     sh /tmp/synth-install/install-diag.sh; \
     sh /tmp/synth-install/install-docker-cli.sh; \
     rm -rf /tmp/synth-install
+
+# Non-root (PROP-137 Ф1).
+USER 1000
 
 # ------------------------------------------------------------------------------
 # debian-ветка: flavor'ы `browser`/`full` (PROP-082, шаг 5)
@@ -375,9 +408,11 @@ RUN set -eux; \
 #
 # В `node:22-bookworm-slim` uid/gid 1000 уже заняты пользователем `node`
 # (как и в alpine-образе), поэтому отдельная учётная запись не создаётся —
-# важен сам uid: каталоги принадлежат 1000:1000.
+# важен сам uid: каталоги принадлежат 1000:1000. `/var/synth/data/workspaces` —
+# точка монтирования общего тома `synth-workspace` (ownership наследуется
+# томом из образа при первом создании).
 RUN set -eux; \
-    mkdir -p /home/synth/.cache/pip /home/synth/.local /var/synth/data; \
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /var/synth/data/workspaces; \
     chown -R 1000:1000 /home/synth /var/synth/data
 
 # Python-окружение и кэши (PROP-082, «Python-окружение и кэши»).
@@ -431,6 +466,10 @@ WORKDIR /app
 # PID 1 (аудит 0.13.4 §5.2): sh-скрипт reaping'а → `dist/init.js` (сигналы
 # всей process group + код выхода, включая 75). Подробности — шапка файла.
 COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+
+# Non-root (PROP-137 Ф1): /home/synth и /var/synth/data принадлежат 1000:1000
+# (RUN выше), Playwright — /opt/ms-playwright (a+rX).
+USER 1000
 CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
@@ -442,6 +481,10 @@ CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
 # ansible/opentofu), тир 5 (проверка репозитория: helm/shellcheck/yamllint/
 # hadolint), MCP-серверы SCM-хостингов, клиенты БД, docker CLI, buildah и pnpm.
 FROM browser AS full
+
+# см. `dev`: `browser` заканчивается `USER 1000`, установка пакетов требует
+# root; итоговый образ — снова uid 1000 (PROP-137).
+USER root
 
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
@@ -497,12 +540,15 @@ RUN set -eux; \
     sh /tmp/synth-install/install-tier-4.sh; \
     rm -rf /tmp/synth-install
 
+# Non-root (PROP-137 Ф1): итоговый образ flavor'а `full` — uid 1000.
+USER 1000
+
 # ------------------------------------------------------------------------------
 # slim — control plane без toolchain'а (последняя стадия = цель по умолчанию)
 # ------------------------------------------------------------------------------
 #
 # Содержимое стадии — ровно то, что было до появления flavor'ов: ни одного
-# `RUN`, только COPY/ENV/LABEL/CMD. Поэтому образ `synth-backend:<v>` не
+# `RUN`, только COPY/ENV/LABEL/USER/CMD. Поэтому образ `synth-backend:<v>` не
 # меняется ни байтом по составу и продолжает собираться под arm64 на
 # amd64-раннере без QEMU/binfmt.
 FROM node:22-alpine AS slim
@@ -523,7 +569,18 @@ LABEL org.opencontainers.image.description="Synth backend API hub: OIDC/RBAC, ru
 ENV NODE_ENV=production
 ENV SYNTH_DATA_DIR=/var/synth/data
 ENV SYNTH_PORT=5000
+# HOME пользователя uid 1000 (PROP-137): каталоги приходят из build-стадии
+# готовыми (`COPY --chown`), в slim нет ни одного RUN.
+ENV HOME=/home/synth
 # Ф5в: каталог deploy-плагинов (образ). Пустой каталог → установка — no-op.
+
+# HOME и каталог данных принадлежат 1000:1000: под USER 1000 backend пишет в
+# {dataDir} (сессии, secrets/api-key, workspace'ы) без правки прав. Для named
+# volume Docker копирует ownership ИЗ ОБРАЗА при первом создании тома; уже
+# существующий root-том требует разового `chown -R 1000:1000`
+# (docs/MAINTENANCE.md §«Переход на non-root»).
+COPY --from=build --chown=1000:1000 /out/home /home/synth
+COPY --from=build --chown=1000:1000 /out/data /var/synth/data
 
 COPY --from=build /out/app /app
 
@@ -543,4 +600,7 @@ WORKDIR /app
 # детей), он запускает `dist/init.js` — Node-обёртку (проброс сигналов всей
 # process group и кода выхода, включая 75). Подробности — шапка файла.
 COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+
+# Non-root (PROP-137 Ф1): root — только на этапе сборки образа.
+USER 1000
 CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]

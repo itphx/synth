@@ -1,6 +1,14 @@
 # Образ synth-ui собирается из ИСХОДНИКОВ монорепо (packages/ui) — vite build,
 # чтобы Image содержал актуальный SPA.
 #
+# Non-root (PROP-137 Ф1/Ф3): runtime — `nginxinc/nginx-unprivileged:alpine`
+# (официальный unprivileged-вариант nginx: uid/gid 101, `pid` и все
+# temp-каталоги — в `/tmp`, `/etc/nginx/conf.d` writable для entrypoint-скриптов,
+# порт по умолчанию 8080). Entrypoint/envsubst-шаблоны работают под uid 101 без
+# правки: `docker/ui-entrypoint.d/15-synth-body-size.envsh` source-ится, шаблон
+# рендерится в `/etc/nginx/conf.d/default.conf` (проверено на образе:
+# `client_max_body_size` вычисляется, HTTP-ответ 200).
+#
 # multi-arch (amd64/arm64): build-стадия — на `$BUILDPLATFORM`, runtime — на
 # целевой. В runtime-стадии нет RUN (chmod перенесён в build), поэтому arm64
 # собирается на amd64-раннере без QEMU/binfmt.
@@ -28,7 +36,7 @@ RUN pnpm install --filter @itphx/synth-ui --filter @itphx/synth-shared \
     && pnpm --filter @itphx/synth-ui build \
     && chmod -R a+rX /repo/packages/ui/dist
 
-FROM nginx:alpine
+FROM nginxinc/nginx-unprivileged:alpine
 
 # OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
 # репозиторием-источником (иначе GitHub Packages не показывает связь и
@@ -36,7 +44,7 @@ FROM nginx:alpine
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="Synth UI"
-LABEL org.opencontainers.image.description="Synth web UI: React 19 SPA served by nginx."
+LABEL org.opencontainers.image.description="Synth web UI: React 19 SPA served by unprivileged nginx (non-root, uid 101)."
 
 # Адрес backend'а — из окружения (ADR-077). Дефолт сохраняет прежнее поведение
 # (Service `synth-backend` в том же namespace). В чарте значение — Service
@@ -73,6 +81,12 @@ COPY docker/nginx-ui.conf.template /etc/nginx/templates/default.conf.template
 # сохраняется из git — файл должен быть 100755 (RUN в runtime-стадии нет ради
 # arm64: chmod здесь не делаем).
 COPY docker/ui-entrypoint.d/ /docker-entrypoint.d/
+
+# Non-root (PROP-137): образ `nginx-unprivileged` уже стартует с uid 101
+# (`USER nginx` в его Dockerfile); фиксируем uid явно, чтобы смена апстрима не
+# вернула root. Порт 8080 — `listen 8080` в шаблоне и дефолт unprivileged-образа;
+# наружу (compose/чарт) публикуется именно 8080, порт < 1024 недоступен.
+USER 101
 
 EXPOSE 8080
 

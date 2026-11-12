@@ -1,6 +1,7 @@
 # nginx для synth-ui: статика + reverse-proxy на backend'а.
 #
-# Файл — ШАБЛОН: entrypoint официального образа nginx (nginx:alpine) подставляет
+# Файл — ШАБЛОН: entrypoint образа nginx (nginxinc/nginx-unprivileged:alpine,
+# non-root uid 101 — PROP-137) подставляет
 # env-переменные в /etc/nginx/templates/*.template (envsubst). Адрес backend'а
 # берётся из env SYNTH_BACKEND_URL: в образе по умолчанию http://synth-backend:5000
 # (обратная совместимость), в чарте — Service backend'а ТЕКУЩЕГО релиза

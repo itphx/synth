@@ -1451,6 +1451,84 @@ docker inspect -f '{{.State.ExitCode}}' synth-backend
 `synth-init` (а не старый `CMD ["node","dist/main.js"]`) и что команда контейнера не переопределена
 в обход `synth-init`.
 
+## Переход на non-root (PROP-137)
+
+**Цель:** инстанс после обновления на версию с non-root образами (PROP-137 Ф1) стартует и пишет
+данные; проверка — `docker compose exec synth-backend id` показывает `uid=1000`, а `synth doctor`
+не даёт `fail` по `data-dir`.
+
+**Что изменилось.** Все runtime-образы Synth работают от **uid 1000** (`USER 1000`; в `node:22-*`
+это уже существующий пользователь `node`, отдельная учётная запись не создаётся), UI — образ
+`nginxinc/nginx-unprivileged:alpine` (**uid 101**, `pid`/temp/cache в `/tmp`, порт **8080**).
+`HOME=/home/synth`, каталог данных `/var/synth/data` в образе принадлежат `1000:1000`. Root
+допустим только на этапе сборки образа. В `docker-compose.yml` uid зафиксирован полем
+`user: "1000:1000"` у `synth`, `synth-backend`, `synth-backend-split`, `synth-executor`.
+
+**Кого это касается.** Только **существующие** тома/каталоги данных, созданные образом, который
+работал от root:
+
+- `named volume` (`synth-data`, `synth-workspace`) — Docker копирует ownership **из образа** только
+  при **первом** создании тома, поэтому новый том сразу принадлежит `1000:1000`; старый остаётся
+  root-овым;
+- `bind-mount`/`hostPath`/NFS — владельца задаёт хост, образ на него не влияет;
+- Kubernetes (Helm-чарт) — `podSecurityContext.fsGroup: 1000` уже применяется kubelet'ом, поэтому
+  PVC обычно правится автоматически; ручной `chown` нужен только для `hostPath`/NFS, где `fsGroup`
+  не действует (для них в 137b появится отключаемый initContainer).
+
+**Шаг 1. Остановить инстанс** (обязательно: иначе старый процесс продолжит писать и `chown`
+перезапишется).
+
+```bash
+docker compose down            # или: kubectl -n synth scale deploy/synth-backend --replicas=0
+```
+
+**Шаг 2. Один раз исправить владельца.**
+
+```bash
+# named volume (docker compose)
+docker run --rm -u 0 -v synth-data:/var/synth/data alpine chown -R 1000:1000 /var/synth/data
+docker run --rm -u 0 -v synth-workspace:/var/synth/data/workspaces \
+  alpine chown -R 1000:1000 /var/synth/data/workspaces
+
+# bind-mount / локальный каталог данных (SYNTH_DATA_DIR, --data-dir)
+sudo chown -R 1000:1000 /srv/synth/data
+
+# Kubernetes: только hostPath/NFS (PVC с fsGroup правится сам).
+# В namespace с Pod Security Standards `restricted` root-под запрещён — операция
+# выполняется в отдельном namespace/с ослабленной политикой (это разовая акция).
+kubectl -n synth run chown-once --rm -it --restart=Never --image=alpine \
+  --overrides='{"spec":{"securityContext":{"runAsUser":0},"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"<pvc>"}}],"containers":[{"name":"chown-once","image":"alpine","command":["chown","-R","1000:1000","/data"],"volumeMounts":[{"name":"d","mountPath":"/data"}]}]}}'
+```
+
+**Шаг 3. Поднять и проверить.**
+
+```bash
+docker compose --profile all-in-one up -d --build
+docker compose exec synth-backend id                      # uid=1000(node) gid=1000(node)
+# запись в каталог данных от лица процесса (и альтернатива, если контейнер не стартует)
+docker compose exec synth-backend sh -c 'touch /var/synth/data/.rw && rm /var/synth/data/.rw && echo read-write-ok'
+docker run --rm -u 1000 -v synth-data:/var/synth/data alpine \
+  sh -c 'touch /var/synth/data/.rw && rm /var/synth/data/.rw && echo read-write-ok'
+docker compose logs --tail=50 synth-backend | grep -iE 'eacces|permission denied' || echo 'ошибок прав нет'
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/health
+```
+
+**Что ломается, если пропустить `chown`.** Процесс под uid 1000 не может писать в `{dataDir}`:
+в логах — `EACCES`/`permission denied` на `{dataDir}/secrets/master.key`, `sessions/`, `blobs/`;
+`synth doctor` даёт `fail` проверки `data-dir`; контейнер перезапускается по `restart: unless-stopped`
+без прогресса. UI при этом отвечает 200 (nginx не трогает данные) — то есть «сайт открывается, а
+данные не сохраняются» — это тот же симптом.
+
+**Откат.** Запустить образ **предыдущей** версии (root): он читает данные, принадлежащие
+`1000:1000`, без проблем — root игнорирует права. Данные, созданные под uid 1000, при возврате на
+root-образ остаются рабочими; обратный `chown -R 0:0` нужен только если вы хотите прежние права.
+Пин образа: `SYNTH_IMAGE_BACKEND_TAG=<прежняя-версия>` (и `SYNTH_IMAGE_EXECUTOR_TAG`,
+`SYNTH_IMAGE_UI_TAG`, `SYNTH_IMAGE_UI` для UI).
+
+**Ограничения.** Смена uid не переносит уже существующие файлы: `chown` — единственная операция,
+которую нельзя сделать «на горячую» из non-root контейнера (нет `CAP_CHOWN`). `readOnlyRootFilesystem`,
+NetworkPolicy и initContainer для `hostPath`/NFS — слайс **137b** (чарт), в образах их нет.
+
 ## Метрики исполнителя и диагностика split-режима
 
 **Цель:** в split-топологии (`execution.mode: remote`, ADR-077) понять, жив ли пул

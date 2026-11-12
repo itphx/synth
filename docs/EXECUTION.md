@@ -1354,6 +1354,16 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
   `ca-certificates`).
 - **Один код — два режима:** образ исполнителя содержит тот же рантайм, что и inline-исполнитель в
   backend'е; различается только точка входа (слушает exec-API против вызова in-process).
+- **Non-root (PROP-137 Ф1).** Все runtime-образы работают от **uid 1000** (`USER 1000` в
+  `docker/Dockerfile`, `docker/Dockerfile.backend` — все flavor'ы, `docker/Dockerfile.executor` — все
+  flavor'ы, `docker/Dockerfile.provisioner`); root — только на этапе сборки. `HOME=/home/synth`,
+  каталог данных (и `/workspace` у исполнителя) принадлежат `1000:1000`, поэтому процесс пишет без
+  правки прав; старый root-том переводится разовым `chown -R 1000:1000`
+  ([MAINTENANCE.md](./MAINTENANCE.md) §«Переход на non-root (PROP-137)»). UI — образ
+  `nginxinc/nginx-unprivileged:alpine` (**uid 101**, `pid`/temp/cache в `/tmp`, `listen 8080`).
+  В `docker-compose.yml` uid зафиксирован полем `user: "1000:1000"`.
+  **`readOnlyRootFilesystem`, NetworkPolicy и ownership-initContainer — слайс 137b (чарт)**, в
+  образах этого слайса их нет; `runAsNonRoot`/`drop: ALL` в чарте — тоже 137b.
 
 #### Что умеет каждый flavor (PROP-082)
 
@@ -1460,8 +1470,8 @@ backend'а. Данные не затронуты (workspace — тот же то
 | При деградации хранилища доступны только `skill`/`web_fetch`/`web_search`, прочие — `unavailable(storage)` | `packages/core/src/engine/permission/availability.ts:54`, `:113` |
 | Workspace: provisioning в backend'е — `resolveWorkspaceForLocalProject`, `validateManagedWorkspacePath`, `provisionManagedWorkspace` (атомарный `mkdir` без `recursive`), единая точка `provisionWorkspace` | `packages/core/src/engine/workspace-provision.ts:47`, `:109`, `:179`, `:207`, `:232` |
 | `storage.workspacesRoot` и `defaultWorkspace` по умолчанию пустые | `packages/shared/src/config/defaults.ts:25`, `:26` |
-| Образы: `node:22-alpine`, **ни одного `apk add`** → нет `git`/`rg`/`python`/`ssh`; в runtime-стадии standalone-образа нет ни одного `RUN`; `EXPOSE 4300`, `VOLUME ["/var/synth/data"]`; USER не задан (root) | `docker/Dockerfile:62`, `:91`, `:93`; `docker/Dockerfile.backend:48`; `docker/Dockerfile.ui:25`, `:56` |
-| В образах backend'а/UI нет `EXPOSE`/`VOLUME`/`HEALTHCHECK`/`USER`; UI — nginx, root | `docker/Dockerfile.backend:48`, `:69`; `docker/Dockerfile.ui:25`, `:58` |
+| Образы: `node:22-alpine`, **ни одного `apk add`** → нет `git`/`rg`/`python`/`ssh`; в runtime-стадии standalone-образа нет ни одного `RUN`; `EXPOSE 4300`, `VOLUME ["/var/synth/data"]`; `USER 1000` (PROP-137), `HOME=/home/synth`, `/var/synth/data` принадлежит `1000:1000` | `docker/Dockerfile:62`, `:91`, `:93`; `docker/Dockerfile.backend:48`; `docker/Dockerfile.ui:25`, `:56` |
+| В образах backend'а нет `EXPOSE`/`VOLUME`/`HEALTHCHECK`; все runtime-образы non-root — backend/executor `USER 1000`, UI — `nginxinc/nginx-unprivileged` (uid 101), ранее UI был nginx под root | `docker/Dockerfile.backend:48`, `:69`; `docker/Dockerfile.ui:25`, `:58` |
 | Образ UI: адрес backend'а **из окружения** — nginx-конфиг стал шаблоном (`envsubst` официального образа) с фильтром `NGINX_ENVSUBST_FILTER=SYNTH_BACKEND_URL|SYNTH_NGINX_CLIENT_MAX_BODY_SIZE` (переменные nginx `$host`/`$remote_addr` не подменяются); дефолт образа `http://synth-backend:5000`, в чарте — Service backend'а текущего релиза (`ui.extraEnv.SYNTH_BACKEND_URL`); лимит тела запроса — `client_max_body_size` из `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, значение **вычисляет** `docker/ui-entrypoint.d/15-synth-body-size.envsh` из прикладных лимитов: `max(SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE, SYNTH_MAX_UPLOAD_BYTES, 100 МиБ) + 1 МиБ` (для 100 МиБ — `101m`); явный env (Helm `ui.clientMaxBodySize`) — override | `docker/Dockerfile.ui:54`, `:63`, `:69`; `docker/ui-entrypoint.d/15-synth-body-size.envsh`; `docker/nginx-ui.conf.template:25`; `charts/synth/templates/ui-deployment.yaml:45`; `charts/synth/values.yaml:718` |
 | CI: сборка образов kaniko (`gcr.io/kaniko-project/executor:v1.24.0`), три образа, push в `gitverse.ru` + `ghcr.io`, `--push-retry=3`; **registry-cache не включён**; **smoke-тестов нет** | `.gitverse/workflows/release.yaml:321`, `:378`, `:392`, `:407`, `:389` |
 | Квота реестра: только версионные теги; на 0.9.0 вышло 607,4 МБ из 500 | `.gitverse/workflows/release.yaml:308` |
