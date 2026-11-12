@@ -8,7 +8,10 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { createServer } from 'node:http';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { PackManifest, PluginsConfig } from '@itphx/synth-shared';
 import {
@@ -19,6 +22,8 @@ import {
 } from '@itphx/synth-shared';
 
 import { MemoryPluginAuditRepository } from '../../../storage/memory/plugin-audit.js';
+import { createPluginRuntime } from '../../../execution/plugin-runtime.js';
+import type { ExecutionFs, ExecutionPort } from '../../../execution/ports/index.js';
 import { LlmFilterRegistry } from '../../gateway/llm-filter-registry.js';
 import { PromptBlockRegistry } from '../../context/prompt-block-registry.js';
 import { ToolRegistry } from '../../tools/registry.js';
@@ -31,6 +36,8 @@ import type {
 } from '../activation.js';
 import { RemotePluginUnavailableError } from './client.js';
 import { createRemotePluginLoader } from './loader.js';
+import { PluginProcessManager } from './process.js';
+import type { PluginProcessHandle } from './process.js';
 
 const TOKEN = 'plugin-remote-loader-token-1234567890';
 const NAME = 'demo-plugin';
@@ -51,7 +58,7 @@ const silentLogger: PluginLogger = { warn: () => undefined };
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 
-type InvokeHandler = (point: string, id: string, input: unknown) => unknown;
+type InvokeHandler = (point: string, id: string, input: unknown) => unknown | Promise<unknown>;
 
 /** Поднять заглушку процесса плагина: `/capabilities` + `/invoke`. */
 async function startPluginStub(options: {
@@ -66,26 +73,34 @@ async function startPluginStub(options: {
       body += chunk.toString('utf-8');
     });
     req.on('end', () => {
-      try {
-        if (req.url === '/capabilities') {
-          res.writeHead(options.capabilitiesStatus ?? 200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify(options.capabilitiesBody ?? options.capabilities ?? capabilities()));
-          return;
+      void (async () => {
+        try {
+          if (req.url === '/health') {
+            // Liveness — без токена (менеджер процессов опрашивает health).
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ status: 'ok' }));
+            return;
+          }
+          if (req.url === '/capabilities') {
+            res.writeHead(options.capabilitiesStatus ?? 200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(options.capabilitiesBody ?? options.capabilities ?? capabilities()));
+            return;
+          }
+          if (req.url === '/invoke') {
+            const parsed = JSON.parse(body) as { point: string; id: string; input: unknown };
+            const output = options.onInvoke
+              ? await options.onInvoke(parsed.point, parsed.id, parsed.input)
+              : { content: 'ПАМЯТЬ ИЗ ПРОЦЕССА' };
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, output }));
+            return;
+          }
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { reason: 'unknown_id' } }));
+        } catch {
+          if (!res.writableEnded) res.destroy();
         }
-        if (req.url === '/invoke') {
-          const parsed = JSON.parse(body) as { point: string; id: string; input: unknown };
-          const output = options.onInvoke
-            ? options.onInvoke(parsed.point, parsed.id, parsed.input)
-            : { content: 'ПАМЯТЬ ИЗ ПРОЦЕССА' };
-          res.writeHead(200, { 'content-type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, output }));
-          return;
-        }
-        res.writeHead(404, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: { reason: 'unknown_id' } }));
-      } catch {
-        if (!res.writableEnded) res.destroy();
-      }
+      })();
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -759,6 +774,264 @@ describe('createRemotePluginLoader: сверка provides', () => {
     expect(result.reason).toBe('plugin.provides_mismatch');
     // Отклонённый плагин не оставляет блоков в живом реестре.
     expect(registry.size).toBe(0);
+  });
+});
+
+// ── Runtime-контур (PROP-138, Ф2) ────────────────────────────────────────
+
+describe('createRemotePluginLoader: runtime-контур', () => {
+  /** Порт исполнения для фейкового runtime'а (команда → `stdout`). */
+  function fakePort(stdout: string): ExecutionPort {
+    const fs: ExecutionFs = {
+      realpath: async (path) => path,
+      stat: async () => ({ kind: 'file', size: 0, mtimeMs: 0 }),
+      readdir: async () => [],
+      readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+      sniff: async () => ({ binary: false }),
+      readBytes: async () => ({ dataBase64: '', size: 0 }),
+      writeFile: async () => undefined,
+      mkdir: async () => undefined,
+      remove: async () => undefined,
+      readRawText: async () => ({ text: '', size: 0 }),
+      rename: async () => undefined,
+      download: async () => Buffer.from(''),
+      upload: async () => undefined,
+      hash: async () => '0'.repeat(64),
+    };
+    return {
+      execute: async () => ({
+        stdout,
+        stderr: '',
+        exitCode: 0,
+        truncated: false,
+        durationMs: 1,
+      }),
+      fs,
+    };
+  }
+
+  /**
+   * `spawn`-заглушка: процесс «живой» (готовность + health через stub
+   * сервера), при `kill` — выход.
+   */
+  function fakeSpawn(readyPort: number): PluginProcessHandle {
+    let onExit: ((code: number | null) => void) | undefined;
+    return {
+      stdout: {
+        on: (event: string, cb: (chunk: Buffer | string) => void) => {
+          if (event === 'data') {
+            setTimeout(() => cb(Buffer.from(`SYNTH_PLUGIN_READY port=${readyPort}\n`)), 0);
+          }
+          return undefined;
+        },
+      },
+      stderr: { on: () => undefined },
+      on: (event: string, cb: (code: number | null) => void) => {
+        if (event === 'exit') onExit = cb;
+        return undefined;
+      },
+      kill: () => {
+        onExit?.(0);
+        return undefined;
+      },
+    };
+  }
+
+  /** Хост + менеджер процессов: процесс плагина поднимает сам менеджер. */
+  async function makeRuntimeHost(url: string): Promise<{
+    host: PluginHost;
+    tools: ToolRegistry;
+    manager: PluginProcessManager;
+    rootDir: string;
+    /** Окружение процесса плагина (в нём — адрес/токен runtime'а). */
+    env: Record<string, string>;
+  }> {
+    const secretsDir = await mkdtemp(join(tmpdir(), 'synth-plugin-loader-secrets-'));
+    // Бандл: менеджер проверяет наличие точки входа (`dist/server.js`);
+    // сам процесс не запускается — `spawn` подменён заглушкой.
+    const rootDir = await mkdtemp(join(tmpdir(), 'synth-plugin-loader-bundle-'));
+    await mkdir(join(rootDir, 'dist'), { recursive: true });
+    await writeFile(join(rootDir, 'dist', 'server.js'), '// process stub\n', 'utf-8');
+    const env: Record<string, string> = {};
+    const manager = new PluginProcessManager({
+      secretsDir,
+      readyTimeoutMs: 2_000,
+      healthTimeoutMs: 1_000,
+      stopTimeoutMs: 200,
+      logger: silentLogger,
+      spawn: (_command, _args, options) => {
+        Object.assign(env, options.env);
+        return fakeSpawn(Number(new URL(url).port));
+      },
+    });
+    const tools = new ToolRegistry();
+    const host = new PluginHost({
+      audit: new MemoryPluginAuditRepository(),
+      config: config(),
+      hostVersion: '0.11.4',
+      logger: silentLogger,
+      loaders: {
+        remote: createRemotePluginLoader({ processManager: manager, logger: silentLogger }),
+      },
+      promptBlocks: new PromptBlockRegistry(),
+      llmFilters: new LlmFilterRegistry(),
+      tools,
+    });
+    return { host, tools, manager, rootDir, env };
+  }
+
+  it('плагин v2: id invocation\'а в контексте; runtime отвечает во время вызова', async () => {
+    const contexts: Array<Record<string, unknown>> = [];
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities(),
+      onInvoke: (point, id, input) => {
+        contexts.push((input as { context?: Record<string, unknown> }).context ?? {});
+        return { content: 'ok' };
+      },
+    });
+
+    const { host, tools, manager, rootDir } = await makeRuntimeHost(url);
+    const desc = descriptor(url, { manifest: toolsManifest(), rootDir });
+    delete desc.remote;
+    expect((await host.activate(desc)).outcome).toBe('activated');
+
+    const result = await tools.get(TOOL_FULL_NAME)!.execute(
+      { query: 'x' },
+      {
+        sessionId: 's1',
+        messageId: 'm1',
+        workingDir: '/ws',
+        runtime: createPluginRuntime(fakePort('OK')),
+      },
+    );
+
+    expect(result).toEqual({ content: 'ok' });
+    // В контексте вызова — id invocation'а (привязка runtime к вызову).
+    const context = contexts[0]!;
+    expect(typeof context.invocationId).toBe('string');
+    expect(String(context.invocationId).length).toBeGreaterThan(0);
+
+    await manager.stopAll();
+  });
+
+  it('плагин получает runtime в env и вызывает /runtime/exec → ответ', async () => {
+    // Плагин (в отдельном процессе) ходит в host-side прокси runtime'а:
+    // адрес и токен он берёт из окружения, id invocation'а — из контекста
+    // вызова.
+    let runtimeResponse: Record<string, unknown> | undefined;
+    let runtimeStatus = 0;
+    const env: Record<string, string> = {};
+    const url = await startPluginStub({
+      capabilities: toolsCapabilities(),
+      onInvoke: async (point, id, input) => {
+        const context = (input as { context?: { invocationId?: string } }).context ?? {};
+        const response = await fetch(`${env.SYNTH_RUNTIME_URL ?? ''}/runtime/exec`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${env.SYNTH_RUNTIME_TOKEN ?? ''}`,
+          },
+          body: JSON.stringify({
+            invocation_id: context.invocationId,
+            argv: ['git', 'log'],
+          }),
+        });
+        runtimeStatus = response.status;
+        runtimeResponse = (await response.json()) as Record<string, unknown>;
+        return { content: 'ok' };
+      },
+    });
+
+    const secretsDir = await mkdtemp(join(tmpdir(), 'synth-plugin-loader-secrets-'));
+    const rootDir = await mkdtemp(join(tmpdir(), 'synth-plugin-loader-bundle-'));
+    await mkdir(join(rootDir, 'dist'), { recursive: true });
+    await writeFile(join(rootDir, 'dist', 'server.js'), '// process stub\n', 'utf-8');
+    const manager = new PluginProcessManager({
+      secretsDir,
+      readyTimeoutMs: 2_000,
+      healthTimeoutMs: 1_000,
+      stopTimeoutMs: 200,
+      logger: silentLogger,
+      spawn: (_command, _args, options) => {
+        Object.assign(env, options.env);
+        return fakeSpawn(Number(new URL(url).port));
+      },
+    });
+    const tools = new ToolRegistry();
+    const host = new PluginHost({
+      audit: new MemoryPluginAuditRepository(),
+      config: config(),
+      hostVersion: '0.11.4',
+      logger: silentLogger,
+      loaders: {
+        remote: createRemotePluginLoader({ processManager: manager, logger: silentLogger }),
+      },
+      promptBlocks: new PromptBlockRegistry(),
+      llmFilters: new LlmFilterRegistry(),
+      tools,
+    });
+
+    const desc = descriptor(url, { manifest: toolsManifest(), rootDir });
+    delete desc.remote;
+    expect((await host.activate(desc)).outcome).toBe('activated');
+
+    // Плагин получил адрес и токен runtime'а в окружении.
+    expect(env.SYNTH_RUNTIME_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(env.SYNTH_RUNTIME_TOKEN ?? '').not.toBe(env.SYNTH_PLUGIN_TOKEN);
+
+    await tools.get(TOOL_FULL_NAME)!.execute(
+      { query: 'x' },
+      {
+        sessionId: 's1',
+        messageId: 'm1',
+        workingDir: '/ws',
+        runtime: createPluginRuntime(fakePort('ВЫВОД КОМАНДЫ')),
+      },
+    );
+
+    // Команда ушла в порт сессии, а её вывод вернулся плагину.
+    expect(runtimeStatus).toBe(200);
+    expect(runtimeResponse).toEqual({
+      stdout: 'ВЫВОД КОМАНДЫ',
+      stderr: '',
+      exit_code: 0,
+    });
+
+    await manager.stopAll();
+  });
+
+  it('плагин v1: id invocation\'а не приходит (runtime по проводу нет)', async () => {
+    const contexts: Array<Record<string, unknown>> = [];
+    const url = await startPluginStub({
+      capabilities: capabilities({
+        protocol: 1,
+        points: { tools: [toolCapability()] },
+      }),
+      onInvoke: (point, id, input) => {
+        contexts.push((input as { context?: Record<string, unknown> }).context ?? {});
+        return { content: 'ok' };
+      },
+    });
+
+    const { host, tools, manager, rootDir } = await makeRuntimeHost(url);
+    const desc = descriptor(url, { manifest: toolsManifest(), rootDir });
+    delete desc.remote;
+    expect((await host.activate(desc)).outcome).toBe('activated');
+
+    await tools.get(TOOL_FULL_NAME)!.execute(
+      { query: 'x' },
+      {
+        sessionId: 's1',
+        messageId: 'm1',
+        workingDir: '/ws',
+        runtime: createPluginRuntime(fakePort('OK')),
+      },
+    );
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]!.invocationId).toBeUndefined();
+
+    await manager.stopAll();
   });
 });
 

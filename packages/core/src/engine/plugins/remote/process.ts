@@ -19,6 +19,12 @@
  * секреты хоста. `shell` не используется: команда — `process.execPath` +
  * один аргумент (абсолютный путь точки входа).
  *
+ * **Runtime-контур (PROP-138, Ф2).** На каждый процесс плагина поднимается
+ * **host-side прокси** runtime'а (`remote/runtime-proxy.ts`, loopback, свой
+ * bearer-токен): плагин получает `SYNTH_RUNTIME_URL`/`SYNTH_RUNTIME_TOKEN` и
+ * ходит к прокси за командами и файлами — к исполнителю напрямую не ходит.
+ * Прокси закрывается вместе с процессом.
+ *
  * **Токен инстанса.** Файл `{secretsDir}/plugin-token`: читается, если есть,
  * иначе создаётся (`32` случайных байта hex, `0600`, каталог `0700`). Один
  * токен на инстанс (все удалённые плагины) — как в ADR-090.
@@ -43,6 +49,7 @@ import { PLUGIN_PROTOCOL_PATHS, parsePluginServerReadyLine } from '@itphx/synth-
 
 import { PluginLoadError } from '../activation.js';
 import type { PluginLogger } from '../activation.js';
+import { createRuntimeProxy, type PluginRuntimeEndpoint } from './runtime-proxy.js';
 
 /** Серверная точка входа бандла по умолчанию (относительно `rootDir`). */
 export const DEFAULT_PLUGIN_SERVER_ENTRY = 'dist/server.js';
@@ -78,6 +85,17 @@ export interface RemotePluginProcess {
   url: string;
   /** Bearer-токен инстанса (тот же, что в env процесса). */
   token: string;
+  /**
+   * Runtime-контур плагина (PROP-138, Ф2).
+   *
+   * Адрес и токен **host-side прокси**: плагин ходит к нему за командами и
+   * файлами (вместо прямого доступа к исполнителю). Привязки invocation'ов
+   * живут здесь же: хост регистрирует порт на время вызова точки `tools`.
+   *
+   * Не задан — runtime по проводу недоступен (например, процесс поднят не
+   * нами: `descriptor.remote`).
+   */
+  runtime?: PluginRuntimeEndpoint;
   /** Остановить процесс (идемпотентно). */
   stop(): Promise<void>;
 }
@@ -177,16 +195,25 @@ export class PluginProcessManager {
     // Токен — до spawn: файл секрета создаётся один раз на инстанс.
     const token = await this._ensureToken();
 
+    // PROP-138 (Ф2): runtime-прокси хоста — на каждый процесс плагина свой
+    // (свой bearer-токен, свой порт). Плагин получает адрес и токен в
+    // окружении и ходит к прокси за командами/файлами; к исполнителю напрямую
+    // не ходит. Прокси закрывается вместе с процессом (см.
+    // `ManagedPluginProcess.stop`), поэтому при отказе запуска он гасится тут.
+    const runtime = await createRuntimeProxy({ token: randomBytes(32).toString('hex') });
+
     let command: string;
     try {
       command = resolveServerEntry(rootDir, plugin.entry);
     } catch (err) {
+      await runtime.close();
       throw asLoadError(name, token, err);
     }
     let isFile = false;
     try {
       isFile = (await stat(command)).isFile();
     } catch (err) {
+      await runtime.close();
       const code = (err as NodeJS.ErrnoException).code;
       throw new PluginLoadError(
         `процесс плагина «${name}»: серверная точка входа ` +
@@ -196,6 +223,7 @@ export class PluginProcessManager {
       );
     }
     if (!isFile) {
+      await runtime.close();
       throw new PluginLoadError(
         `процесс плагина «${name}»: серверная точка входа ` +
           `«${relativeEntry(plugin.entry)}» — не файл — запуск отклонён.`,
@@ -206,9 +234,10 @@ export class PluginProcessManager {
     try {
       child = this._spawn(process.execPath, [command], {
         cwd: resolve(rootDir),
-        env: buildPluginEnv(token),
+        env: buildPluginEnv(token, runtime),
       });
     } catch (err) {
+      await runtime.close();
       throw asLoadError(
         name,
         token,
@@ -222,13 +251,14 @@ export class PluginProcessManager {
       child,
       logger: this._logger,
       stopTimeoutMs: this._stopTimeoutMs,
+      runtime,
       onExit: (exited) => this._processes.delete(exited),
     });
     this._processes.add(proc);
 
     let port: number;
     try {
-      port = await this._awaitReady(proc, name, token);
+      port = await this._awaitReady(proc, name, token, runtime.token);
     } catch (err) {
       await proc.stop();
       throw asLoadError(name, token, err);
@@ -275,6 +305,7 @@ export class PluginProcessManager {
     proc: ManagedPluginProcess,
     name: string,
     token: string,
+    runtimeToken: string,
   ): Promise<number> {
     return new Promise<number>((resolvePromise, rejectPromise) => {
       let buffer = '';
@@ -321,7 +352,8 @@ export class PluginProcessManager {
       });
 
       proc.child.stderr.on('data', (chunk: Buffer | string) => {
-        const text = redact(chunk.toString(), token).trim();
+        // Вырезаются оба секрета процесса: инстансный токен и токен runtime'а.
+        const text = redact(redact(chunk.toString(), token), runtimeToken).trim();
         if (text.length === 0) return;
         this._logger.warn(`плагин «${name}» (stderr): ${text}`);
       });
@@ -423,6 +455,7 @@ export class PluginProcessManager {
 class ManagedPluginProcess implements RemotePluginProcess {
   readonly token: string;
   readonly child: PluginProcessHandle;
+  readonly runtime?: PluginRuntimeEndpoint;
   private readonly _name: string;
   private readonly _logger: PluginLogger;
   private readonly _stopTimeoutMs: number;
@@ -435,6 +468,7 @@ class ManagedPluginProcess implements RemotePluginProcess {
   private _ready = false;
   private _stopping = false;
   private _stopPromise: Promise<void> | undefined;
+  private _runtimeClosed = false;
 
   constructor(input: {
     name: string;
@@ -442,6 +476,7 @@ class ManagedPluginProcess implements RemotePluginProcess {
     child: PluginProcessHandle;
     logger: PluginLogger;
     stopTimeoutMs: number;
+    runtime?: PluginRuntimeEndpoint;
     onExit?: (proc: ManagedPluginProcess) => void;
   }) {
     this._name = input.name;
@@ -450,6 +485,7 @@ class ManagedPluginProcess implements RemotePluginProcess {
     this._logger = input.logger;
     this._stopTimeoutMs = input.stopTimeoutMs;
     this._onExit = input.onExit;
+    this.runtime = input.runtime;
     this._exitedPromise = new Promise<void>((resolvePromise) => {
       this._resolveExited = resolvePromise;
     });
@@ -458,6 +494,9 @@ class ManagedPluginProcess implements RemotePluginProcess {
       this._exitCode = code;
       this._resolveExited();
       this._onExit?.(this);
+      // Прокси runtime живёт ровно столько же, сколько процесс плагина:
+      // иначе он остался бы слушать порт без владельца.
+      void this._closeRuntime();
       if (this._ready && !this._stopping) {
         this._logger.warn(
           `процесс плагина «${this._name}» неожиданно завершился (код ${code ?? 'null'}) — ` +
@@ -483,13 +522,35 @@ class ManagedPluginProcess implements RemotePluginProcess {
     return this._stopPromise;
   }
 
+  /** Закрыть runtime-прокси (идемпотентно). */
+  private async _closeRuntime(): Promise<void> {
+    if (this._runtimeClosed) return;
+    this._runtimeClosed = true;
+    try {
+      await this.runtime?.close?.();
+    } catch (err) {
+      this._logger.warn(
+        `не удалось закрыть runtime-прокси плагина «${this._name}»: ${describeError(err)}`,
+      );
+    }
+  }
+
   private async _stop(): Promise<void> {
-    if (this._exited) return;
+    if (this._exited) {
+      await this._closeRuntime();
+      return;
+    }
     this._stopping = true;
     this._signal('SIGTERM');
-    if (await this._waitExit(this._stopTimeoutMs)) return;
+    if (await this._waitExit(this._stopTimeoutMs)) {
+      await this._closeRuntime();
+      return;
+    }
     this._signal('SIGKILL');
     await this._waitExit(FORCE_KILL_GRACE_MS);
+    // Процесс мог не завершиться — прокси всё равно гасим: он не должен
+    // оставаться слушающим порт без процесса-владельца.
+    await this._closeRuntime();
   }
 
   private _signal(signal: NodeJS.Signals): void {
@@ -517,13 +578,23 @@ class ManagedPluginProcess implements RemotePluginProcess {
 
 // ── Вспомогательное ─────────────────────────────────────────────────────
 
-/** Окружение процесса плагина — ровно четыре переменные. */
-function buildPluginEnv(token: string): Record<string, string> {
+/**
+ * Окружение процесса плагина.
+ *
+ * Ровно шесть переменных: `PATH`/`NODE_ENV` (наследуются), `SYNTH_PLUGIN_PORT`
+ * (процесс выбирает свободный порт), `SYNTH_PLUGIN_TOKEN` (bearer инстанса)
+ * и — PROP-138 (Ф2) — `SYNTH_RUNTIME_URL`/`SYNTH_RUNTIME_TOKEN`: адрес и токен
+ * **host-side прокси** runtime'а. Остальные переменные окружения процесса Synth
+ * плагину **не передаются** — иначе вместе с ними утекли бы секреты хоста.
+ */
+function buildPluginEnv(token: string, runtime: PluginRuntimeEndpoint): Record<string, string> {
   return {
     PATH: process.env.PATH ?? '',
     NODE_ENV: process.env.NODE_ENV ?? 'production',
     SYNTH_PLUGIN_PORT: '0',
     SYNTH_PLUGIN_TOKEN: token,
+    SYNTH_RUNTIME_URL: runtime.url,
+    SYNTH_RUNTIME_TOKEN: runtime.token,
   };
 }
 

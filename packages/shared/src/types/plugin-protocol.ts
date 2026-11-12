@@ -37,8 +37,42 @@ import type { PromptManifestStatus } from './prompt.js';
 import { ToolCapability } from './tools.js';
 import type { ToolCapability as ToolCapabilityValue } from './tools.js';
 
-/** Версия wire-протокола плагина (аналог `EXECUTOR_PROTOCOL_VERSION`). */
-export const PLUGIN_PROTOCOL_VERSION = 1;
+/**
+ * Версия wire-протокола плагина (аналог `EXECUTOR_PROTOCOL_VERSION`).
+ *
+ * **v2** (PROP-138, Ф2) — добавлен runtime-контур: плагин, объявивший
+ * `protocol: 2` в `/capabilities`, умеет работать с `ctx.runtime` по проводу
+ * (`POST /runtime/*` через хост). Плагин v1 (runtime по проводу нет)
+ * принимается хостом как раньше — см. {@link PLUGIN_PROTOCOL_SUPPORTED_VERSIONS}.
+ */
+export const PLUGIN_PROTOCOL_VERSION = 2;
+
+/**
+ * Старшая версия протокола, которую хост принимает (v1 — без runtime).
+ *
+ * Совместимость: хост говорит и с плагином v1 (поведение прежнее), и с
+ * плагином v2 (runtime по проводу). Вне перечня — отказ
+ * `protocol_mismatch` (fail-closed).
+ */
+export const PLUGIN_PROTOCOL_MIN_VERSION = 1;
+
+/**
+ * Версии wire-протокола, которые принимает хост.
+ *
+ * Единственный источник истины для проверки ответа `/capabilities`
+ * ({@link checkPluginCapabilities}) — и для выбора поведения: плагин v2
+ * получает runtime-контур, плагин v1 — нет.
+ */
+export const PLUGIN_PROTOCOL_SUPPORTED_VERSIONS = [
+  PLUGIN_PROTOCOL_MIN_VERSION,
+  PLUGIN_PROTOCOL_VERSION,
+] as const;
+
+/**
+ * Минимальная версия протокола, в которой есть runtime-контур
+ * (`ctx.runtime` по проводу, PROP-138 Ф2).
+ */
+export const PLUGIN_PROTOCOL_RUNTIME_MIN_VERSION = 2;
 
 /** Пути эндпоинтов протокола (относительно базового адреса процесса). */
 export const PLUGIN_PROTOCOL_PATHS = {
@@ -49,6 +83,164 @@ export const PLUGIN_PROTOCOL_PATHS = {
   /** `GET` — процесс жив (без токена). */
   health: '/health',
 } as const;
+
+/**
+ * Пути runtime-контура (PROP-138, Ф2).
+ *
+ * Адреса **не** на базовом адресе процесса плагина, а на адресе
+ * host-side прокси (`SYNTH_RUNTIME_URL` в окружении процесса): плагин
+ * **не ходит** к исполнителю напрямую — единственная точка — хост.
+ */
+export const PLUGIN_RUNTIME_PATHS = {
+  /** `POST` — команда (argv без shell) в контуре исполнителя сессии. */
+  exec: '/runtime/exec',
+  /** `POST` — прочитать файл (base64). */
+  fsRead: '/runtime/fs/read',
+  /** `POST` — записать файл (base64). */
+  fsWrite: '/runtime/fs/write',
+  /** `POST` — сведения о файле/каталоге. */
+  fsStat: '/runtime/fs/stat',
+  /** `POST` — записи каталога. */
+  fsReaddir: '/runtime/fs/readdir',
+  /** `POST` — канонический путь. */
+  fsRealpath: '/runtime/fs/realpath',
+} as const;
+
+/**
+ * Контекст вызова тула, который едет по проводу (точка `tools`).
+ *
+ * `invocationId` — **привязка runtime к вызову** (протокол v2): хост
+ * регистрирует порт/поверхность исполнения под этим id на время вызова и
+ * снимает привязку после. Плагин подставляет `invocation_id` в запросы
+ * `POST /runtime/*` — иначе хост отклоняет их (`404`).
+ */
+export interface PluginToolsInvokeContext {
+  /** id сессии (в пайплайне — `pipeline:<runId>`). */
+  sessionId: string;
+  /** id сообщения/вызова. */
+  messageId: string;
+  /** Рабочий каталог (workspace проекта). */
+  workingDir: string;
+  /** id invocation'а (протокол v2); в v1 — не приходит. */
+  invocationId?: string;
+}
+
+/** Вход точки `tools` (протокол v1/v2). */
+export interface PluginToolsInvokeInput {
+  /** Аргументы тула (валидирует удалённая сторона). */
+  parameters: unknown;
+  /** Контекст вызова (см. {@link PluginToolsInvokeContext}). */
+  context: PluginToolsInvokeContext;
+}
+
+/** Запрос `POST /runtime/exec`. */
+export interface PluginRuntimeExecRequest {
+  /** id invocation'а (привязка к вызову). */
+  invocation_id: string;
+  /** argv **без shell**: `[file, ...args]`. */
+  argv: string[];
+  /** Рабочий каталог команды (опционален). */
+  cwd?: string;
+  /** Таймаут вызова, мс (опционален). */
+  timeout_ms?: number;
+}
+
+/** Ответ `POST /runtime/exec`. */
+export interface PluginRuntimeExecResponse {
+  /** Стандартный вывод. */
+  stdout: string;
+  /** Стандартный вывод ошибок. */
+  stderr: string;
+  /** Код завершения. */
+  exit_code: number;
+}
+
+/** Запрос `POST /runtime/fs/read`. */
+export interface PluginRuntimeFsReadRequest {
+  /** id invocation'а (привязка к вызову). */
+  invocation_id: string;
+  /** Абсолютный путь на точке исполнения. */
+  path: string;
+  /** Потолок размера (опционален). */
+  max_bytes?: number;
+}
+
+/** Ответ `POST /runtime/fs/read` (байты — в base64). */
+export interface PluginRuntimeFsReadResponse {
+  /** Содержимое файла в base64 (без `data:`-префикса). */
+  data_base64: string;
+}
+
+/** Запрос `POST /runtime/fs/write`. */
+export interface PluginRuntimeFsWriteRequest {
+  /** id invocation'а (привязка к вызову). */
+  invocation_id: string;
+  /** Абсолютный путь на точке исполнения. */
+  path: string;
+  /** Содержимое в base64 (без `data:`-префикса). */
+  data_base64: string;
+  /**
+   * Что делать, если файл уже существует.
+   *
+   * `overwrite` (по умолчанию) — перезаписать (как в inline-контуре);
+   * `fail` — отказать, если файл есть (в inline-контуре такого режима нет:
+   * runtime перезаписывает всегда).
+   */
+  if_exists?: 'fail' | 'overwrite';
+}
+
+/** Вид объекта ФС на точке исполнения. */
+export type PluginRuntimeFsKind = 'file' | 'directory' | 'other';
+
+/** Ответ `POST /runtime/fs/stat`. */
+export interface PluginRuntimeFsStatResponse {
+  /** Вид объекта. */
+  kind: PluginRuntimeFsKind;
+  /** Размер в байтах (у каталога — `0`). */
+  size: number;
+  /** Время последнего изменения, мс (Unix epoch). */
+  mtime_ms: number;
+}
+
+/** Запись каталога (ответ `POST /runtime/fs/readdir`). */
+export interface PluginRuntimeFsDirEntry {
+  /** Имя записи (без пути). */
+  name: string;
+  /** Вид объекта. */
+  kind: PluginRuntimeFsKind;
+  /** Размер в байтах. */
+  size: number;
+}
+
+/** Ответ `POST /runtime/fs/readdir`. */
+export interface PluginRuntimeFsReaddirResponse {
+  /** Записи каталога (в файловом порядке). */
+  entries: PluginRuntimeFsDirEntry[];
+}
+
+/** Ответ `POST /runtime/fs/realpath`. */
+export interface PluginRuntimeFsRealpathResponse {
+  /** Канонический путь (симлинки разыменованы). */
+  path: string;
+}
+
+/**
+ * Тело ошибки runtime-контура: `{ error: { code, message } }`.
+ *
+ * `code` — машиночитаемый код (`not_found`/`permission`/`too_large`/
+ * `exists`/`invalid`/`unresolvable` — коды FS-порта; `nonzero_exit`/
+ * `timeout`/`spawn_failed`/`policy_denied` — причины исполнения;
+ * `internal_error`/`invalid_request`/`unauthorized`/`unknown_invocation` —
+ * ошибки самого прокси). `message` — текст без секретов.
+ */
+export interface PluginRuntimeErrorBody {
+  error: {
+    /** Машиночитаемый код. */
+    code: string;
+    /** Человекочитаемое сообщение (без секретов). */
+    message: string;
+  };
+}
 
 /**
  * Строка готовности, которую сервер плагина печатает в **stdout** при старте
@@ -173,7 +365,13 @@ export interface PluginCapabilitiesTool {
 
 /** Ответ `GET /capabilities`: версия протокола + поддерживаемые точки. */
 export interface PluginCapabilities {
-  /** Версия wire-протокола (`PLUGIN_PROTOCOL_VERSION`). */
+  /**
+   * Версия wire-протокола, на которой говорит плагин.
+   *
+   * `1` — без runtime-контура (прежнее поведение); `2` — с runtime-контуром
+   * (`ctx.runtime` по проводу, PROP-138 Ф2). Хост принимает обе версии
+   * ({@link PLUGIN_PROTOCOL_SUPPORTED_VERSIONS}).
+   */
   protocol: number;
   /** Имя плагина (сверяется с ожидаемым — процесс обязан быть тем же плагином). */
   name: string;
@@ -189,7 +387,13 @@ export interface PluginCapabilities {
 
 /** Тело запроса `POST /invoke`. */
 export interface PluginInvokeRequest {
-  /** Версия wire-протокола. */
+  /**
+   * Версия wire-протокола, по которой хост говорит с этим плагином.
+   *
+   * Хост **эхом** повторяет версию, объявленную плагином в `/capabilities`:
+   * так плагин v1 получает привычное `protocol: 1` (прежнее поведение), а
+   * плагин v2 — `protocol: 2`.
+   */
   protocol: number;
   /** Точка расширения. */
   point: PluginProtocolPoint;
@@ -268,6 +472,30 @@ export function isPluginProtocolErrorReason(value: unknown): value is PluginProt
   return (PLUGIN_PROTOCOL_ERROR_REASONS as readonly unknown[]).includes(value);
 }
 
+/**
+ * Версия протокола, которую принимает хост (fail-closed вне перечня).
+ *
+ * Единственная точка проверки: и `checkPluginCapabilities`, и выбор
+ * runtime-контура (плагин v2) опираются на неё.
+ */
+export function isSupportedPluginProtocolVersion(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    (PLUGIN_PROTOCOL_SUPPORTED_VERSIONS as readonly number[]).includes(value)
+  );
+}
+
+/**
+ * Понимает ли плагин runtime-контур (PROP-138, Ф2).
+ *
+ * `true` — плагин объявил версию протокола с runtime-контуром: хот может
+ * отдавать `ctx.runtime` по проводу. `false` — плагин v1: поведение прежнее
+ * (runtime по проводу нет).
+ */
+export function pluginProtocolSupportsRuntime(protocol: number): boolean {
+  return protocol >= PLUGIN_PROTOCOL_RUNTIME_MIN_VERSION;
+}
+
 /** Значение — известная точка протокола. */
 export function isPluginProtocolPoint(value: unknown): value is PluginProtocolPoint {
   return (PLUGIN_PROTOCOL_POINTS as readonly unknown[]).includes(value);
@@ -320,10 +548,11 @@ export function checkPluginCapabilities(
   if (typeof protocol !== 'number' || !Number.isFinite(protocol)) {
     return fail('invalid_request', 'в ответе /capabilities нет числового поля protocol');
   }
-  if (protocol !== PLUGIN_PROTOCOL_VERSION) {
+  if (!isSupportedPluginProtocolVersion(protocol)) {
     return fail(
       'protocol_mismatch',
-      `плагин говорит по протоколу ${protocol}, а Synth — по протоколу ${PLUGIN_PROTOCOL_VERSION}`,
+      `плагин говорит по протоколу ${protocol}, а Synth принимает ` +
+        `${PLUGIN_PROTOCOL_SUPPORTED_VERSIONS.join('/')}`,
     );
   }
 

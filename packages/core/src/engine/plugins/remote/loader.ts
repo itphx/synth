@@ -17,6 +17,15 @@
  * (`jsonSchema`) и не выдумываем: локальная zod-схема — «проницаемая»
  * (валидирует удалённая сторона).
  *
+ * **Runtime-контур (PROP-138, Ф2).** Плагин, объявивший протокол **v2**,
+ * получает `ctx.runtime` по проводу: на время вызова точки `tools` хост
+ * регистрирует invocation (поверхность исполнения сессии — `ctx.runtime`,
+ * собранный ядром через `createPluginRuntime`) и передаёт плагину его id в
+ * `context.invocationId`. Плагин ходит с этим id в `POST /runtime/*`
+ * (host-side прокси) и получает команды/файлы **в контуре исполнителя
+ * сессии**. Плагин v1 (протокол v1) runtime по проводу не получает —
+ * поведение прежнее.
+ *
  * **Управление процессом** (Ф4б-2): загрузчик получает опциональный
  * `processManager`. Если `descriptor.remote` (адрес+токен) задан — транспорт
  * работает с уже запущенным процессом (внешний/тестовый сценарий) и процесс
@@ -43,12 +52,14 @@ import {
   PLUGIN_PROTOCOL_MAX_PROMPT_BLOCK_CHARS,
   isLlmFilterVerdictKind,
   isPluginPromptBlockStatus,
+  pluginProtocolSupportsRuntime,
 } from '@itphx/synth-shared';
 import type {
   LlmFilterVerdict,
   PromptBlockContent,
   ToolResult,
 } from '@itphx/synth-shared';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import { PluginLoadError } from '../activation.js';
@@ -60,6 +71,7 @@ import type {
 } from '../activation.js';
 import { RemotePluginClient, type RemotePluginFetch } from './client.js';
 import type { PluginProcessManager, RemotePluginProcess } from './process.js';
+import type { PluginRuntimeEndpoint } from './runtime-proxy.js';
 
 /** Опции загрузчика `out-of-process`. */
 export interface RemotePluginLoaderOptions {
@@ -197,6 +209,15 @@ export function createRemotePluginLoader(
 
     const plugin = descriptor.name;
 
+    // PROP-138 (Ф2): runtime-контур по проводу.
+    //
+    // Runtime есть только у плагина, который **объявил протокол v2**
+    // (плагин v1 — прежнее поведение: runtime по проводу нет) **и** чей
+    // процесс поднял хост (у внешнего процесса `descriptor.remote` нет
+    // адреса прокси — плагин не знает, куда ходить).
+    const runtimeEndpoint: PluginRuntimeEndpoint | undefined =
+      pluginProtocolSupportsRuntime(capabilities.protocol) ? process?.runtime : undefined;
+
     return {
       apply: async (facade) => {
         // Процесс, поднятый загрузчиком, живёт ровно столько, сколько активен
@@ -246,18 +267,36 @@ export function createRemotePluginLoader(
             parameters: PASSTHROUGH_TOOL_PARAMETERS,
             jsonSchema: tool.parameters ?? MINIMAL_TOOL_JSON_SCHEMA,
             capabilities: tool.capabilities,
-            execute: async (args, toolCtx) =>
-              normalizeToolResult(
-                await client.invoke('tools', tool.name, {
-                  parameters: args,
-                  context: {
-                    sessionId: toolCtx.sessionId,
-                    messageId: toolCtx.messageId,
-                    workingDir: toolCtx.workingDir,
-                  },
-                }),
-                ctx,
-              ),
+            execute: async (args, toolCtx) => {
+              // Runtime-контур: на время вызова регистрируем invocation и
+              // отдаём плагину его id — по нему плагин ходит в
+              // `POST /runtime/*`. Привязка снимается сразу после вызова
+              // (`finally`): «зависшая» привязка дала бы плагину команды вне
+              // своего вызова.
+              const runtime = toolCtx.runtime;
+              const invocationId = runtimeEndpoint && runtime ? randomUUID() : undefined;
+              if (invocationId && runtimeEndpoint && runtime) {
+                runtimeEndpoint.registerInvocation(invocationId, runtime);
+              }
+              try {
+                return normalizeToolResult(
+                  await client.invoke('tools', tool.name, {
+                    parameters: args,
+                    context: {
+                      sessionId: toolCtx.sessionId,
+                      messageId: toolCtx.messageId,
+                      workingDir: toolCtx.workingDir,
+                      ...(invocationId ? { invocationId } : {}),
+                    },
+                  }),
+                  ctx,
+                );
+              } finally {
+                if (invocationId && runtimeEndpoint) {
+                  runtimeEndpoint.unregisterInvocation(invocationId);
+                }
+              }
+            },
           });
         }
       },

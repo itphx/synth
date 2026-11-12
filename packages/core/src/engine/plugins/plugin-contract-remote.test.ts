@@ -325,3 +325,118 @@ describe('remote-харнесс: окружение', () => {
     expect(TOKEN.length).toBeGreaterThan(16);
   });
 });
+
+/**
+ * Версия протокола на проводе (PROP-138, Ф2).
+ *
+ * Хост **эхом** повторяет версию, объявленную плагином в `/capabilities`:
+ * плагин v2 получает `protocol: 2` (runtime-контур), плагин v1 — `protocol: 1`
+ * (прежнее поведение). Оба варианта принимаются и активируются.
+ */
+describe('remote-харнесс: версия протокола', () => {
+  /**
+   * Заглушка процесса эталонной фикстуры, которая запоминает тела `/invoke`.
+   *
+   * Точки объявляются **как у фикстуры `reference`** — иначе сверка
+   * `provides` отклонит активацию (`plugin.provides_mismatch`).
+   */
+  async function startProtocolStub(protocol: number): Promise<{
+    url: string;
+    bodies: Array<Record<string, unknown>>;
+  }> {
+    const bodies: Array<Record<string, unknown>> = [];
+    const capabilities = capabilitiesFor('reference');
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf-8');
+      });
+      req.on('end', () => {
+        const send = (status: number, payload: unknown): void => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(payload));
+        };
+        if (req.url === '/health') {
+          send(200, { status: 'ok' });
+          return;
+        }
+        if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+          send(401, { error: { reason: 'unauthorized' } });
+          return;
+        }
+        if (req.url === '/capabilities') {
+          send(200, { ...capabilities, protocol });
+          return;
+        }
+        if (req.url === '/invoke') {
+          bodies.push(JSON.parse(body) as Record<string, unknown>);
+          send(200, { ok: true, output: { content: 'ПАМЯТЬ ИЗ ПРОЦЕССА' } });
+          return;
+        }
+        send(404, { error: { reason: 'unknown_id' } });
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    started.push({
+      close: () =>
+        new Promise<void>((resolve) => {
+          server.closeAllConnections?.();
+          server.close(() => resolve());
+        }),
+    });
+    return { url: `http://127.0.0.1:${port}`, bodies };
+  }
+
+  /** Харнесс на удалённой реализации с заданной версией протокола. */
+  async function makeProtocolHarness(url: string): Promise<PluginContractHarness> {
+    return createContractHarness({
+      transport: 'remote',
+      loaders: { remote: createRemotePluginLoader({ logger: silentLogger }) },
+      descriptorExtra: () => ({
+        manifest: { ...PLUGIN_FIXTURE_SET.reference.manifest, mode: 'remote' },
+        remote: { url, token: TOKEN },
+      }),
+    });
+  }
+
+  it('плагин v2 → активация проходит, тело /invoke с protocol: 2', async () => {
+    const stub = await startProtocolStub(2);
+    const h = await makeProtocolHarness(stub.url);
+    try {
+      const result = await h.activate('reference');
+      expect(result.outcome).toBe('activated');
+      // Tool definition создан — namespace составил хост.
+      expect(h.tools.get(h.reference.fullToolName)?.pluginName).toBe(REFERENCE_PLUGIN);
+
+      await h.tools.get(h.reference.fullToolName)!.execute(
+        { query: 'x' },
+        { sessionId: 's1', messageId: 'm1', workingDir: '/ws' },
+      );
+
+      expect(stub.bodies).toHaveLength(1);
+      expect(stub.bodies[0]?.protocol).toBe(2);
+    } finally {
+      await h.dispose();
+    }
+  });
+
+  it('плагин v1 → активация проходит, тело /invoke с protocol: 1 (прежнее поведение)', async () => {
+    const stub = await startProtocolStub(1);
+    const h = await makeProtocolHarness(stub.url);
+    try {
+      const result = await h.activate('reference');
+      expect(result.outcome).toBe('activated');
+
+      await h.tools.get(h.reference.fullToolName)!.execute(
+        { query: 'x' },
+        { sessionId: 's1', messageId: 'm1', workingDir: '/ws' },
+      );
+
+      expect(stub.bodies).toHaveLength(1);
+      expect(stub.bodies[0]?.protocol).toBe(1);
+    } finally {
+      await h.dispose();
+    }
+  });
+});

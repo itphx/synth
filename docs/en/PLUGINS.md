@@ -640,7 +640,7 @@ one: the host gives the plugin only the turn identifiers, the working directory 
 | `agentRole` | agent role | if set |
 | `projectId` | session project id | if set |
 | `abortSignal` | turn cancellation signal | if set |
-| `runtime` | the narrow session runtime (`exec`/`fs`) — see below | if set (the session port is available) |
+| `runtime` | the narrow session runtime (`exec`/`fs`) — see below | `inline`: if the session port is available; `out-of-process` (v2): instead of an object — the runtime proxy in the env plus `invocationId` in the context (§5.2.1) |
 | `extra` | internal core state | **not passed** |
 | `dataDir` | instance data root | **not passed** |
 
@@ -648,7 +648,8 @@ one: the host gives the plugin only the turn identifiers, the working directory 
 execution port, the security config); `ctx.dataDir` is the instance data root. Neither is handed
 to the plugin: in **both** modes (`inline` and `out-of-process`) a plugin tool sees exactly this
 minimum. Over the wire (`out-of-process`) the context is additionally serialized — only
-`sessionId`/`messageId`/`workingDir` travel in the DTO (§5.3).
+`sessionId`/`messageId`/`workingDir` travel in the DTO (plus `invocationId` in protocol v2,
+§5.3).
 
 The core does the narrowing in **one place** — at the tool call — so the rule applies equally to
 sessions, sub-agents (`task`) and pipeline steps. Built-in (`builtin`) and MCP tools receive the
@@ -711,16 +712,67 @@ const tool: Parameters<PluginFacade['registerTool']>[0] = {
 > reads the control plane FS instead of the executor FS. The extension scanner and the review
 > mark such code explicitly; move it to `ctx.runtime`.
 
-**Boundaries.** This is the **inline** contour: the runtime works with the same port as the
-built-in tools and lives in the core process. The out-of-process plugin (a separate process)
-receives the runtime over the wire protocol v2 (`POST /runtime/exec`, `POST /runtime/fs/*`
-through the host) — that is the **next slice** (PROP-138, Ф2); the current contract has no
-runtime on the wire.
+**Example: the same tool in `out-of-process` (protocol v2).** A live `ctx.runtime` object does
+not cross the wire — the plugin calls the host-side proxy (§5.2.1) with the `invocation_id` it
+receives in the call context:
 
-**Limitation of the current slice.** The runtime appears where the context carries the session
+```typescript
+// src/server.ts  →  dist/server.js
+const RUNTIME_URL = process.env.SYNTH_RUNTIME_URL ?? '';
+const RUNTIME_TOKEN = process.env.SYNTH_RUNTIME_TOKEN ?? '';
+
+/** A command in the session executor contour (through the host). */
+async function exec(invocationId: string, argv: string[], cwd?: string): Promise<string> {
+  const response = await fetch(`${RUNTIME_URL}/runtime/exec`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${RUNTIME_TOKEN}`,
+    },
+    body: JSON.stringify({ invocation_id: invocationId, argv, ...(cwd ? { cwd } : {}) }),
+  });
+  const payload = (await response.json()) as
+    | { stdout: string }
+    | { error: { code: string; message: string } };
+  if ('error' in payload) throw new Error(`${payload.error.code}: ${payload.error.message}`);
+  return payload.stdout;
+}
+
+// POST /invoke, the `tools` point:
+//   input = { parameters, context: { sessionId, messageId, workingDir, invocationId } }
+// → ctx.invocationId is required to reach the runtime.
+```
+
+The right to perform the operation is still decided by the **host** (by the tool's capability)
+— the proxy only carries an already permitted action into the executor contour.
+
+**Boundaries.** The runtime is a **narrow** access point to the environment, and the two
+contours implement it differently:
+
+- **inline**: the runtime is an object in the core process (`ctx.runtime`); it works with the
+  same port as the built-in tools;
+- **out-of-process, protocol v2**: the runtime on the wire is a host-side proxy
+  (`POST /runtime/exec`, `POST /runtime/fs/*`, §5.2.1): the plugin calls the host's proxy, and
+  the host runs the command **in the session port** and returns DTOs. The plugin does not talk
+  to the executor directly;
+- **out-of-process, protocol v1**: the runtime on the wire is unavailable (the previous
+  behaviour, §5.3).
+
+**Runtime contour limitations.** v2 only; loopback only; the runtime token is a secret of its
+own, separate from the plugin token; the invocation binding is mandatory (`404` without it);
+`if_exists: 'fail'` is not supported (always overwrite); the runtime is available only for a
+plugin process **started by the host**.
+
+**Engine limitation.** The runtime appears where the context carries the session
 port (`ctx.extra.executionPort`) — that is, in sessions and in sub-agents (`task`). Pipeline
 steps build the context **without** `extra` (they have no session), so `ctx.runtime` does not
 arrive there — a limitation of the pipeline engine, not of the plugin narrowing.
+
+**The capability gate.** The runtime is a transport, not a permission: the host decides the
+right to perform an operation by the tool's capability (`file_read`/`file_write`/`shell`/
+`search`/`git_read`/`git_write` run in the executor contour; `web`/`memory`/`user` are the
+control plane contour and need no runtime). A plugin tool without the required capability still
+gets a refusal from the permission layer — the runtime does not bypass it.
 
 **Why you should set `jsonSchema`.** `parameters` is your zod schema; the host validates the
 arguments with it (`safeParse`). But for the model the schema is converted by the host into JSON
@@ -922,7 +974,7 @@ One extension point contract — two transports. The mode is set by the manifest
 | Isolation | none | process-level: a crash/a memory leak does not bring down the core |
 | Latency | ~0 | a round-trip per point call |
 | Access to internals | the tool context is narrowed (§4.3), but the process is the same — the process Node API is reachable | only serializable DTOs |
-| Files and commands | `ctx.runtime` — through the session port (§4.3) | over wire v2 — **in the next slice** (PROP-138 Ф2) |
+| Files and commands | `ctx.runtime` — through the session port (§4.3) | over wire **v2** — `POST /runtime/*` through the host-side proxy (§5.2.1); unavailable for v1 |
 | What the bundle needs | `dist/index.js` | `dist/server.js` |
 | When to choose | `llmFilters` (the hot path), fast blocks, simple tools | heavy filters (ML, antivirus, DLP), blocks with a heavy load, untrusted code |
 
@@ -949,16 +1001,24 @@ only `.js`/`.mjs`, the entry file size is ≤ 8 MiB. The `import()` is done with
 
 ```text
 GET  /health        → 200 (no token; the process is alive)
-GET  /capabilities  → { protocol: 1, name, version, points: { promptBlocks?, llmFilters?, tools? } }
-POST /invoke        → { protocol: 1, point, id, input } → { output }
+GET  /capabilities  → { protocol: 2, name, version, points: { promptBlocks?, llmFilters?, tools? } }
+POST /invoke        → { protocol: 2, point, id, input } → { output }
 ```
+
+**Protocol versions.** `protocol: 1` is the base one (three extension points, no runtime on
+the wire); `protocol: 2` adds the **runtime contour** (`POST /runtime/*` through the host,
+PROP-138 Ф2). The host accepts both: a v1 plugin works as before (the `/invoke` body carries
+`protocol: 1`, no runtime on the wire), a v2 plugin gets `protocol: 2` and the runtime contour.
+The version in the `/invoke` body is an **echo** of the version the plugin declared in
+`/capabilities`.
 
 - **Loopback only**: `127.0.0.1`/`::1`/`localhost`, the scheme is `http://`.
 - A **bearer token** on `/capabilities` and `/invoke` (not on `/health`). The token is the
   instance's, from the file `{dataDir}/secrets/plugin-token` (`0600`); the host passes it to the
   process in the environment.
 - The **process environment** is exactly: `PATH`, `NODE_ENV`, `SYNTH_PLUGIN_PORT=0`,
-  `SYNTH_PLUGIN_TOKEN`. No other Synth process variables are passed to the plugin.
+  `SYNTH_PLUGIN_TOKEN`, `SYNTH_RUNTIME_URL`, `SYNTH_RUNTIME_TOKEN` (the runtime contour,
+  §5.2.1). No other Synth process variables are passed to the plugin.
 - **Readiness**: the server prints to **stdout** the line `SYNTH_PLUGIN_READY port=<n>`; the host
   reads it and then polls `/health`. Stdout only: diagnostics go to stderr.
 - **Errors**: `{ error: { reason, message } }` with `reason` from `invalid_request`/`unknown_point`/
@@ -968,6 +1028,49 @@ POST /invoke        → { protocol: 1, point, id, input } → { output }
 - **Tools** are declared in `points.tools[]` (`name` — local, `description`, `parameters?` — a JSON
   Schema, `capabilities` — **mandatory**), and not through `apply()`: there is no code in the host
   process.
+
+#### 5.2.1. The runtime contour (protocol v2, PROP-138 Ф2)
+
+For a plugin that declared `protocol: 2` the host starts **its own** loopback runtime proxy
+and passes its address and token in the process environment:
+
+| Variable | What it is |
+|---|---|
+| `SYNTH_RUNTIME_URL` | the address of the host-side proxy (`http://127.0.0.1:<port>`) |
+| `SYNTH_RUNTIME_TOKEN` | the proxy's bearer token — a secret **separate** from `SYNTH_PLUGIN_TOKEN` |
+
+Runtime requests (JSON body, JSON response):
+
+```text
+POST /runtime/exec        → { invocation_id, argv, cwd?, timeout_ms? } → { stdout, stderr, exit_code }
+POST /runtime/fs/read     → { invocation_id, path, max_bytes? }        → { data_base64 }
+POST /runtime/fs/write    → { invocation_id, path, data_base64, if_exists? } → {}
+POST /runtime/fs/stat     → { invocation_id, path }                    → { kind, size, mtime_ms }
+POST /runtime/fs/readdir  → { invocation_id, path }                    → { entries: [{ name, kind, size }] }
+POST /runtime/fs/realpath → { invocation_id, path }                    → { path }
+```
+
+- **Invocation binding.** The host registers the invocation for the duration of the `tools`
+  call and removes the binding right after the call. The plugin receives the `invocation_id` in
+  `context.invocationId` of the `/invoke` body; a request with an unregistered id → `404`
+  (`unknown_invocation`). A plugin cannot run a command "in someone else's" call and cannot
+  keep a binding after the call ends.
+- **Token** — bearer, compared in constant time; the value is never written to the logs and
+  never returned in responses (the token is cut out of the port error texts).
+- **Errors** — `{ error: { code, message } }`: the FS port codes
+  (`not_found`/`permission`/`too_large`/`exists`/`invalid`/`unresolvable`), the execution reasons
+  (`nonzero_exit`/`timeout`/`spawn_failed`/`policy_denied`) and the proxy codes
+  (`invalid_request`/`unknown_invocation`/`unauthorized`/`unsupported_option`/`internal_error`).
+  The HTTP status follows the code (404/403/409/413/400/504/500).
+- **Limitations.** `if_exists: 'fail'` is **not supported** (`400`, `unsupported_option`): the
+  runtime always overwrites the file, as in the inline contour (diverging semantics between the
+  two contours is forbidden). The request body is up to 32 MiB; `max_bytes` for reads is up to
+  64 MiB (the default is 16 MiB, as in inline). `argv` is **without shell**, as in inline.
+- The plugin does **not** talk to the executor directly: the host is the only point (and it
+  applies the permission layer and the audit).
+- **The runtime is available only for a process started by the host.** If the plugin process is
+  started externally (`descriptor.remote`), the host has no proxy address to hand to the plugin —
+  the runtime on the wire is not provided.
 
 A minimal server (`dist/server.js` is a **script**, the host runs it: `node dist/server.js`):
 
@@ -995,7 +1098,9 @@ const server = createServer((req, res) => {
   }
   if (req.method === 'GET' && req.url === '/capabilities') {
     json(200, {
-      protocol: 1,
+      // Protocol version: 2 — with the runtime contour (§5.2.1), 1 — without it.
+      // The host accepts both.
+      protocol: 2,
       ...PLUGIN,
       points: {
         promptBlocks: [
@@ -1050,7 +1155,7 @@ Only serializable DTOs:
 |---|---|---|
 | `promptBlocks` | `PromptBlockContext` | `{ content, provenance?, status? }` (a string/`null` is also allowed) |
 | `llmFilters` | `LlmFilterInput` | `LlmFilterVerdict` |
-| `tools` | `{ parameters, context: { sessionId, messageId, workingDir } }` | `{ content, isError? }` |
+| `tools` | `{ parameters, context: { sessionId, messageId, workingDir, invocationId? } }` | `{ content, isError? }` |
 
 Storage ports, the core registries, `GatewayProvider`, `ToolContext.extra` and
 `ToolContext.dataDir` are **not** exposed outwards (in `inline` mode either — the core narrows the
@@ -1058,13 +1163,28 @@ tool context for plugins, see §4.3). The memory service `facade.memory` is not 
 wire either — it is available to `inline` plugins only (§4.5).
 
 The same holds for the other facade services: **`facade.embed` and `facade.getSettings` are not
-available in `out-of-process`** — wire protocol v1 covers only the three extension points
+available in `out-of-process`** — the wire protocol covers only the three extension points
 (`promptBlocks`/`llmFilters`/`tools`), and neither embeddings nor settings are part of its DTOs.
 A plugin that needs them runs in the `inline` mode (§4.6, §4.7).
 
-`ctx.runtime` does **not** cross the boundary either: wire protocol v1 does not know the `runtime`
-point, and v2 (`POST /runtime/exec`, `POST /runtime/fs/*` through the host) is the **next slice**
-(PROP-138 Ф2). A plugin that needs files and commands currently has the `inline` mode only (§4.3).
+**`ctx.runtime` does cross the boundary — but only in protocol v2 (PROP-138 Ф2).** A plugin that
+declared `protocol: 2` gets the runtime on the wire: the host starts a loopback proxy (§5.2.1)
+and, for the duration of the `tools` call, registers an invocation bound to the session
+execution surface. Only the runtime DTOs cross the wire (`argv`/`path`/`base64`/error codes) —
+the port itself, `ctx.extra` and `ctx.dataDir` never reach the plugin.
+
+A **v1** plugin (protocol v1) works as before: the runtime on the wire is not provided. The
+`SYNTH_RUNTIME_URL`/`SYNTH_RUNTIME_TOKEN` variables are still present in the process environment
+(the protocol version becomes known only after `GET /capabilities`, while the environment is
+fixed at launch), but the invocation binding is **not registered** for a v1 plugin — every
+`/runtime/*` call is refused with `404` (`unknown_invocation`). In practice the runtime is
+unavailable for v1.
+
+| What | inline | out-of-process (v2) | out-of-process (v1) |
+|---|---|---|---|
+| commands and files | `ctx.runtime` (an object in the process) | `POST /runtime/*` through the host-side proxy | unavailable (`404`) |
+| who executes | the session port | the session port (the host is the intermediary) | — |
+| binding | the call context | `invocation_id` for the duration of the call | — |
 
 ---
 

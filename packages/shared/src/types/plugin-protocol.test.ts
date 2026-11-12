@@ -10,13 +10,19 @@ import { describe, expect, it } from 'vitest';
 import {
   PLUGIN_PROTOCOL_ERROR_REASONS,
   PLUGIN_PROTOCOL_ERROR_STATUS,
+  PLUGIN_PROTOCOL_MIN_VERSION,
   PLUGIN_PROTOCOL_PATHS,
   PLUGIN_PROTOCOL_POINTS,
+  PLUGIN_PROTOCOL_RUNTIME_MIN_VERSION,
+  PLUGIN_PROTOCOL_SUPPORTED_VERSIONS,
   PLUGIN_PROTOCOL_VERSION,
+  PLUGIN_RUNTIME_PATHS,
   checkPluginCapabilities,
   isPluginPromptBlockStatus,
   isPluginProtocolErrorReason,
   isPluginProtocolPoint,
+  isSupportedPluginProtocolVersion,
+  pluginProtocolSupportsRuntime,
 } from './plugin-protocol.js';
 
 const EXPECTED = { name: 'demo-plugin', version: '1.0.0' };
@@ -36,13 +42,35 @@ function validCapabilities(over: Record<string, unknown> = {}): Record<string, u
 }
 
 describe('константы протокола', () => {
-  it('версия 1 и три эндпоинта', () => {
-    expect(PLUGIN_PROTOCOL_VERSION).toBe(1);
+  it('версия 2 (runtime-контур) и три эндпоинта', () => {
+    expect(PLUGIN_PROTOCOL_VERSION).toBe(2);
+    expect(PLUGIN_PROTOCOL_MIN_VERSION).toBe(1);
+    expect(PLUGIN_PROTOCOL_SUPPORTED_VERSIONS).toEqual([1, 2]);
+    expect(PLUGIN_PROTOCOL_RUNTIME_MIN_VERSION).toBe(2);
     expect(PLUGIN_PROTOCOL_PATHS).toEqual({
       invoke: '/invoke',
       capabilities: '/capabilities',
       health: '/health',
     });
+  });
+
+  it('пути runtime-контура объявлены отдельно (PROP-138 Ф2)', () => {
+    expect(PLUGIN_RUNTIME_PATHS).toEqual({
+      exec: '/runtime/exec',
+      fsRead: '/runtime/fs/read',
+      fsWrite: '/runtime/fs/write',
+      fsStat: '/runtime/fs/stat',
+      fsReaddir: '/runtime/fs/readdir',
+      fsRealpath: '/runtime/fs/realpath',
+    });
+  });
+
+  it('runtime-контур — только начиная с протокола v2', () => {
+    expect(pluginProtocolSupportsRuntime(1)).toBe(false);
+    expect(pluginProtocolSupportsRuntime(2)).toBe(true);
+    expect(isSupportedPluginProtocolVersion(1)).toBe(true);
+    expect(isSupportedPluginProtocolVersion(2)).toBe(true);
+    expect(isSupportedPluginProtocolVersion(3)).toBe(false);
   });
 
   it('по протоколу передаются promptBlocks, llmFilters и tools', () => {
@@ -88,7 +116,7 @@ describe('checkPluginCapabilities: успех', () => {
     if (!result.ok) return;
 
     expect(result.capabilities).toEqual({
-      protocol: 1,
+      protocol: PLUGIN_PROTOCOL_VERSION,
       name: 'demo-plugin',
       version: '1.0.0',
       points: {
@@ -103,18 +131,31 @@ describe('checkPluginCapabilities: успех', () => {
 
   it('плагин без точек принимается (пустые points)', () => {
     const result = checkPluginCapabilities(
-      { protocol: 1, name: 'demo-plugin', version: '1.0.0' },
+      { protocol: PLUGIN_PROTOCOL_VERSION, name: 'demo-plugin', version: '1.0.0' },
       EXPECTED,
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.capabilities.points).toEqual({});
   });
+
+  it('плагин по протоколу v1 (без runtime) принимается — совместимость', () => {
+    const result = checkPluginCapabilities(
+      { protocol: 1, name: 'demo-plugin', version: '1.0.0', points: {} },
+      EXPECTED,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.capabilities.protocol).toBe(1);
+  });
 });
 
 describe('checkPluginCapabilities: отказы', () => {
   it('чужая версия протокола → protocol_mismatch', () => {
-    const result = checkPluginCapabilities(validCapabilities({ protocol: 2 }), EXPECTED);
+    const result = checkPluginCapabilities(
+      validCapabilities({ protocol: PLUGIN_PROTOCOL_VERSION + 1 }),
+      EXPECTED,
+    );
     expect(result).toMatchObject({ ok: false, reason: 'protocol_mismatch' });
   });
 

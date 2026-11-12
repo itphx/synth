@@ -93,6 +93,15 @@ export class RemotePluginClient {
   private readonly _fetch: RemotePluginFetch;
   private readonly _name: string;
   private readonly _version: string;
+  /**
+   * Версия протокола, по которой хост говорит с этим плагином.
+   *
+   * До `capabilities()` — текущая версия хоста (`PLUGIN_PROTOCOL_VERSION`).
+   * После — **эхо версии, объявленной плагином**: плагин v1 получает
+   * привычное `protocol: 1` (прежнее поведение), плагин v2 — `protocol: 2`
+   * (runtime-контур, PROP-138 Ф2).
+   */
+  private _protocol: number = PLUGIN_PROTOCOL_VERSION;
 
   constructor(options: RemotePluginClientOptions) {
     this._baseUrl = resolveLoopbackBaseUrl(options.baseUrl);
@@ -160,13 +169,16 @@ export class RemotePluginClient {
         check.reason,
       );
     }
+    // Версия протокола — эхо объявленной плагином: дальше тело `/invoke`
+    // говорит на той же версии (v1 — прежнее поведение, v2 — runtime).
+    this._protocol = check.capabilities.protocol;
     return check.capabilities;
   }
 
   /** `POST /invoke` — результат точки расширения или `RemotePluginUnavailableError`. */
   async invoke(point: PluginProtocolPoint, id: string, input: unknown): Promise<unknown> {
     const body: PluginInvokeRequest = {
-      protocol: PLUGIN_PROTOCOL_VERSION,
+      protocol: this._protocol,
       point,
       id,
       input,

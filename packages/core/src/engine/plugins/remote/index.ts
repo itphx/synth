@@ -4,6 +4,9 @@
  * Ф4б-1 — wire-протокол (контракт — `@itphx/synth-shared`,
  * `types/plugin-protocol.ts`), клиент и загрузчик удалённых плагинов.
  * Ф4б-2 — жизненный цикл процесса (spawn/health/stop) и файл токена инстанса.
+ * PROP-138 (Ф2) — host-side прокси runtime'а (`runtime-proxy.ts`): команды и
+ * файлы для out-of-process плагина идут через хост, в контур исполнителя
+ * сессии.
  */
 export {
   DEFAULT_REMOTE_PLUGIN_TIMEOUT_MS,
@@ -32,3 +35,15 @@ export type {
   PluginProcessManagerOptions,
   RemotePluginProcess,
 } from './process.js';
+export {
+  PLUGIN_RUNTIME_ERROR_CODES,
+  PLUGIN_RUNTIME_MAX_BODY_BYTES,
+  PLUGIN_RUNTIME_MAX_READ_BYTES,
+  createRuntimeProxy,
+} from './runtime-proxy.js';
+export type {
+  PluginRuntimeEndpoint,
+  RuntimeInvocationTarget,
+  RuntimeProxy,
+  RuntimeProxyOptions,
+} from './runtime-proxy.js';

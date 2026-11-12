@@ -255,6 +255,45 @@ describe('RemotePluginClient: invoke', () => {
   });
 });
 
+describe('RemotePluginClient: версия протокола в теле /invoke', () => {
+  it('плагин по протоколу v2 → тело /invoke с protocol: 2', async () => {
+    let received: Record<string, unknown> | undefined;
+    const url = await startStub((req, res, body) => {
+      if (req.url === '/capabilities') {
+        sendJson(res, 200, capabilities());
+        return;
+      }
+      received = JSON.parse(body) as Record<string, unknown>;
+      sendJson(res, 200, { ok: true, output: null });
+    });
+
+    const client = makeClient(url);
+    await client.capabilities();
+    await client.invoke('promptBlocks', 'x', {});
+
+    expect(received?.protocol).toBe(PLUGIN_PROTOCOL_VERSION);
+    expect(received?.protocol).toBe(2);
+  });
+
+  it('плагин по протоколу v1 → тело /invoke с protocol: 1 (прежнее поведение)', async () => {
+    let received: Record<string, unknown> | undefined;
+    const url = await startStub((req, res, body) => {
+      if (req.url === '/capabilities') {
+        sendJson(res, 200, capabilities({ protocol: 1 }));
+        return;
+      }
+      received = JSON.parse(body) as Record<string, unknown>;
+      sendJson(res, 200, { ok: true, output: null });
+    });
+
+    const client = makeClient(url);
+    await client.capabilities();
+    await client.invoke('promptBlocks', 'x', {});
+
+    expect(received?.protocol).toBe(1);
+  });
+});
+
 describe('RemotePluginClient: защита', () => {
   it('внешний хост запрещён (loopback-only)', () => {
     expect(

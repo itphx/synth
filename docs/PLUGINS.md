@@ -629,7 +629,7 @@ namespace — имя плагина в нижнем регистре, небук
 | `agentRole` | роль агента | если задана |
 | `projectId` | id проекта сессии | если задан |
 | `abortSignal` | сигнал отмены хода | если задан |
-| `runtime` | узкий runtime сессии (`exec`/`fs`) — см. ниже | если задан (сессионный порт доступен) |
+| `runtime` | узкий runtime сессии (`exec`/`fs`) — см. ниже | `inline`: если сессионный порт доступен; `out-of-process` (v2): вместо объекта — прокси runtime'а в env + `invocationId` в контексте (§5.2.1) |
 | `extra` | внутреннее состояние ядра | **не передаётся** |
 | `dataDir` | корень данных инстанса | **не передаётся** |
 
@@ -637,7 +637,8 @@ namespace — имя плагина в нижнем регистре, небук
 порт исполнения, конфиг безопасности); `ctx.dataDir` — корень данных инстанса. Ни то,
 ни другое плагину не отдаётся: **в обоих режимах** (`inline` и `out-of-process`) тул плагина
 видит ровно этот минимум. По проводу (`out-of-process`) контекст ещё и сериализуется —
-в DTO уходят только `sessionId`/`messageId`/`workingDir` (§5.3).
+в DTO уходят только `sessionId`/`messageId`/`workingDir` (+ `invocationId` в протоколе v2,
+§5.3).
 
 Сужение делает ядро в **одной точке** — на вызове тула, поэтому правило действует одинаково
 для сессий, саб-агентов (`task`) и шагов пайплайна. Встроенные (`builtin`) и MCP-инструменты
@@ -701,16 +702,67 @@ const tool: Parameters<PluginFacade['registerTool']>[0] = {
 > control plane вместо ФС исполнителя. Сканер расширений и ревью помечают такой код явно;
 > переносите его на `ctx.runtime`.
 
-**Границы.** Это **inline**-контур: runtime работает с тем же портом, что и встроенные
-тулы, и живёт в процессе ядра. Out-of-process (плагин в отдельном процессе) получает
-runtime по wire-протоколу v2 (`POST /runtime/exec`, `POST /runtime/fs/*` через хост) —
-это **следующий слайс** (PROP-138, Ф2); в текущем контракте для `out-of-process` runtime
-на проводе нет.
+**Пример: тот же тул в `out-of-process` (протокол v2).** Живой объект `ctx.runtime`
+по проводу не передаётся — плагин ходит в host-side прокси (§5.2.1) с `invocation_id`,
+который приходит в контексте вызова:
 
-**Ограничение текущего слайса.** Runtime появляется там, где у контекста есть порт
+```typescript
+// src/server.ts  →  dist/server.js
+const RUNTIME_URL = process.env.SYNTH_RUNTIME_URL ?? '';
+const RUNTIME_TOKEN = process.env.SYNTH_RUNTIME_TOKEN ?? '';
+
+/** Команда в контуре исполнителя сессии (через хост). */
+async function exec(invocationId: string, argv: string[], cwd?: string): Promise<string> {
+  const response = await fetch(`${RUNTIME_URL}/runtime/exec`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${RUNTIME_TOKEN}`,
+    },
+    body: JSON.stringify({ invocation_id: invocationId, argv, ...(cwd ? { cwd } : {}) }),
+  });
+  const payload = (await response.json()) as
+    | { stdout: string }
+    | { error: { code: string; message: string } };
+  if ('error' in payload) throw new Error(`${payload.error.code}: ${payload.error.message}`);
+  return payload.stdout;
+}
+
+// POST /invoke, точка `tools`:
+//   input = { parameters, context: { sessionId, messageId, workingDir, invocationId } }
+// → ctx.invocationId обязателен для обращения к runtime.
+```
+
+Права на операцию по-прежнему решает **хост** (по capability тула) — прокси лишь
+переносит уже разрешённое действие в контур исполнителя.
+
+**Границы.** Runtime — **узкая** точка доступа к окружению, и в двух контурах она
+устроена по-разному:
+
+- **inline**: runtime — объект в процессе ядра (`ctx.runtime`), работает с тем же
+  портом, что и встроенные тулы;
+- **out-of-process, протокол v2**: runtime по проводу — host-side прокси
+  (`POST /runtime/exec`, `POST /runtime/fs/*`, §5.2.1): плагин ходит к прокси хоста,
+  хост выполняет команду **в порту сессии** и возвращает DTO. Плагин к исполнителю
+  напрямую не ходит;
+- **out-of-process, протокол v1**: runtime по проводу недоступен (поведение
+  прежнее, §5.3).
+
+**Ограничения runtime-контура.** Только v2; только loopback; токен runtime — отдельный
+секрет от токена плагина; привязка к invocation обязательна (`404` без неё);
+`if_exists: 'fail'` не поддерживается (всегда перезапись); runtime доступен только
+для процесса плагина, **поднятого хостом**.
+
+**Ограничение конвейера.** Runtime появляется там, где у контекста есть порт
 сессии (`ctx.extra.executionPort`) — то есть в сессиях и в саб-агентах (`task`). Шаги
 пайплайна собирают контекст **без** `extra` (у них нет сессии), поэтому там `ctx.runtime`
 не приходит — это ограничение конвейера пайплайнов, а не сужения плагинов.
+
+**Capability-гейт.** Runtime — транспорт, а не разрешение: право на операцию решает
+хост по capability тула (`file_read`/`file_write`/`shell`/`search`/`git_read`/`git_write`
+работают в контуре исполнителя; `web`/`memory`/`user` — в control plane и runtime им
+не нужен). Плагинный тул без нужной capability всё равно получит отказ от
+permission-слоя — runtime этого не обходит.
 
 **Почему стоит задавать `jsonSchema`.** `parameters` — ваша zod-схема; хост валидирует ею
 аргументы (`safeParse`). Но для модели схема конвертируется хостом в JSON Schema, и конвертер
@@ -876,7 +928,7 @@ await facade.embed(['текст'], { provider: 'ollama', model: 'nomic-embed-tex
 это обеспечивает шлюз).
 
 **Только `inline`.** По проводу (`out-of-process`, §5) сервис не экспонируется:
-протокол v1 покрывает только три точки расширения (§5.3).
+wire-протокол покрывает только три точки расширения (§5.3).
 
 ### 4.7. Свои настройки (`facade.getSettings`)
 
@@ -900,7 +952,7 @@ const settings = facade.getSettings<{ namespace?: string; limit?: number }>();
   (нет и API их изменения) — мёртвый API не вводим.
 
 **Только `inline`.** По проводу (`out-of-process`, §5) сервис не экспонируется:
-протокол v1 покрывает только три точки расширения (§5.3).
+wire-протокол покрывает только три точки расширения (§5.3).
 
 ---
 
@@ -914,7 +966,7 @@ const settings = facade.getSettings<{ namespace?: string; limit?: number }>();
 | Изоляция | нет | процессовая: падение/утечка памяти не роняют core |
 | Латентность | ~0 | round-trip на каждый вызов точки |
 | Доступ к internals | контекст тула сужен (§4.3), но процесс тот же — Node API процесса доступен | только сериализуемые DTO |
-| Файлы и команды | `ctx.runtime` — через порт сессии (§4.3) | по wire v2 — **в следующем слайсе** (PROP-138 Ф2) |
+| Файлы и команды | `ctx.runtime` — через порт сессии (§4.3) | по wire **v2** — `POST /runtime/*` через host-side прокси (§5.2.1); для v1 — недоступно |
 | Что нужно в бандле | `dist/index.js` | `dist/server.js` |
 | Когда выбирать | `llmFilters` (горячий путь), быстрые блоки, простые тулы | тяжёлые фильтры (ML, антивирус, DLP), блоки с тяжёлой загрузкой, недоверенный код |
 
@@ -941,14 +993,22 @@ export default function apply(facade) { /* … */ }// 3
 
 ```text
 GET  /health        → 200 (без токена; процесс жив)
-GET  /capabilities  → { protocol: 1, name, version, points: { promptBlocks?, llmFilters?, tools? } }
-POST /invoke        → { protocol: 1, point, id, input } → { output }
+GET  /capabilities  → { protocol: 2, name, version, points: { promptBlocks?, llmFilters?, tools? } }
+POST /invoke        → { protocol: 2, point, id, input } → { output }
 ```
+
+**Версии протокола.** `protocol: 1` — базовый (три точки расширения, runtime по
+проводу нет); `protocol: 2` — добавлен **runtime-контур** (`POST /runtime/*`
+через хост, PROP-138 Ф2). Хост принимает обе версии: плагин v1 работает как
+раньше (в теле `/invoke` — `protocol: 1`, runtime по проводу не выдаётся),
+плагин v2 получает `protocol: 2` и runtime-контур. Версия в теле `/invoke` —
+**эхо** версии, объявленной плагином в `/capabilities`.
 
 - **Только loopback**: `127.0.0.1`/`::1`/`localhost`, схема `http://`.
 - **Bearer-токен** на `/capabilities` и `/invoke` (не на `/health`). Токен — инстансный, из файла
   `{dataDir}/secrets/plugin-token` (`0600`); хост передаёт его процессу в окружении.
-- **Окружение процесса** ровно: `PATH`, `NODE_ENV`, `SYNTH_PLUGIN_PORT=0`, `SYNTH_PLUGIN_TOKEN`.
+- **Окружение процесса** ровно: `PATH`, `NODE_ENV`, `SYNTH_PLUGIN_PORT=0`, `SYNTH_PLUGIN_TOKEN`,
+  `SYNTH_RUNTIME_URL`, `SYNTH_RUNTIME_TOKEN` (runtime-контур, §5.2.1).
   Остальные переменные процесса Synth плагину **не** передаются.
 - **Готовность**: сервер печатает в **stdout** строку `SYNTH_PLUGIN_READY port=<n>`; хост читает
   её и далее опрашивает `/health`. Только stdout: диагностика — в stderr.
@@ -958,6 +1018,48 @@ POST /invoke        → { protocol: 1, point, id, input } → { output }
   `protocol_mismatch` (fail-closed).
 - **Тулы** объявляются в `points.tools[]` (`name` — локальное, `description`, `parameters?` —
   JSON Schema, `capabilities` — **обязательны**), а не через `apply()`: кода в процессе хоста нет.
+
+#### 5.2.1. Runtime-контур (протокол v2, PROP-138 Ф2)
+
+Плагину, объявившему `protocol: 2`, хост поднимает **свой** loopback-прокси runtime'а
+и отдаёт его адрес и токен в окружении процесса:
+
+| Переменная | Что это |
+|---|---|
+| `SYNTH_RUNTIME_URL` | адрес host-side прокси (`http://127.0.0.1:<port>`) |
+| `SYNTH_RUNTIME_TOKEN` | bearer-токен прокси — **отдельный** секрет от `SYNTH_PLUGIN_TOKEN` |
+
+Запросы runtime-контура (тело — JSON, ответ — JSON):
+
+```text
+POST /runtime/exec        → { invocation_id, argv, cwd?, timeout_ms? } → { stdout, stderr, exit_code }
+POST /runtime/fs/read     → { invocation_id, path, max_bytes? }        → { data_base64 }
+POST /runtime/fs/write    → { invocation_id, path, data_base64, if_exists? } → {}
+POST /runtime/fs/stat     → { invocation_id, path }                    → { kind, size, mtime_ms }
+POST /runtime/fs/readdir  → { invocation_id, path }                    → { entries: [{ name, kind, size }] }
+POST /runtime/fs/realpath → { invocation_id, path }                    → { path }
+```
+
+- **Привязка к invocation.** Хост регистрирует invocation на время вызова точки `tools` и снимает
+  привязку сразу после вызова. `invocation_id` приходит плагину в `context.invocationId` тела
+  `/invoke`; запрос с незарегистрированным id → `404` (`unknown_invocation`). Плагин не может
+  выполнить команду «в чужом» вызове и не может остаться с привязкой после конца вызова.
+- **Токен** — bearer, сравнение постоянное по времени; значение не пишется в логи и не
+  возвращается в ответах (из текстов ошибок порта токен вырезается).
+- **Ошибки** — `{ error: { code, message } }`: коды FS-порта
+  (`not_found`/`permission`/`too_large`/`exists`/`invalid`/`unresolvable`), причины исполнения
+  (`nonzero_exit`/`timeout`/`spawn_failed`/`policy_denied`) и коды прокси
+  (`invalid_request`/`unknown_invocation`/`unauthorized`/`unsupported_option`/`internal_error`).
+  HTTP-статус — по коду (404/403/409/413/400/504/500).
+- **Ограничения.** `if_exists: 'fail'` **не поддерживается** (`400`, `unsupported_option`): runtime
+  перезаписывает файл всегда, как в inline-контуре (расхождение семантики двух контуров
+  запрещено). Тело запроса — до 32 МиБ; `max_bytes` чтения — до 64 МиБ (дефолт — 16 МиБ, как в
+  inline). `argv` — **без shell**, как и в inline.
+- Плагин **не ходит** к исполнителю напрямую: единственная точка — хост (он же применяет
+  permission-слой и аудит).
+- **Runtime доступен только для процесса, поднятого хостом.** Если процесс плагина запущен
+  извне (`descriptor.remote`), у хоста нет адреса прокси, который можно отдать плагину, — runtime
+  по проводу не выдаётся.
 
 Минимальный сервер (`dist/server.js` — **скрипт**, его запускает хост: `node dist/server.js`):
 
@@ -985,7 +1087,9 @@ const server = createServer((req, res) => {
   }
   if (req.method === 'GET' && req.url === '/capabilities') {
     json(200, {
-      protocol: 1,
+      // Версия протокола: 2 — с runtime-контуром (§5.2.1), 1 — без него.
+      // Хост принимает обе.
+      protocol: 2,
       ...PLUGIN,
       points: {
         promptBlocks: [
@@ -1039,7 +1143,7 @@ process.on('SIGTERM', () => process.exit(0));
 |---|---|---|
 | `promptBlocks` | `PromptBlockContext` | `{ content, provenance?, status? }` (строка/`null` тоже допустимы) |
 | `llmFilters` | `LlmFilterInput` | `LlmFilterVerdict` |
-| `tools` | `{ parameters, context: { sessionId, messageId, workingDir } }` | `{ content, isError? }` |
+| `tools` | `{ parameters, context: { sessionId, messageId, workingDir, invocationId? } }` | `{ content, isError? }` |
 
 Порты хранилища, реестры ядра, `GatewayProvider`, `ToolContext.extra` и `ToolContext.dataDir`
 наружу **не отдаются** (в `inline`-режиме — тоже: контекст тула плагина сужается ядром,
@@ -1047,14 +1151,29 @@ process.on('SIGTERM', () => process.exit(0));
 `inline`-плагину (§4.5).
 
 То же и для остальных сервисов фасада: **`facade.embed` и `facade.getSettings` в
-`out-of-process` недоступны** — wire-протокол v1 покрывает только три точки расширения
+`out-of-process` недоступны** — wire-протокол покрывает только три точки расширения
 (`promptBlocks`/`llmFilters`/`tools`), а эмбеддинги и настройки не сериализуются в его
 DTO. Плагин, которому они нужны, работает в режиме `inline` (§4.6, §4.7).
 
-`ctx.runtime` по проводу тоже **не пересекает границу**: wire-протокол v1 не знает точки
-`runtime`, а v2 (`POST /runtime/exec`, `POST /runtime/fs/*` через хост) — **следующий слайс**
-(PROP-138 Ф2). Плагину, которому нужны файлы и команды, сейчас доступен только режим
-`inline` (§4.3).
+**`ctx.runtime` пересекает границу — но только в протоколе v2 (PROP-138 Ф2).** Плагин,
+объявивший `protocol: 2`, получает runtime по проводу: хост поднимает loopback-прокси
+(§5.2.1) и на время вызова точки `tools` регистрирует invocation, привязанный к
+поверхности исполнения сессии. По проводу едут только DTO runtime'а
+(`argv`/`path`/`base64`/коды ошибок) — сам порт, `ctx.extra` и `ctx.dataDir` плагину не
+достаются.
+
+Плагин **v1** (протокол v1) работает как раньше: runtime по проводу ему не выдаётся.
+Переменные `SYNTH_RUNTIME_URL`/`SYNTH_RUNTIME_TOKEN` в окружении процесса при этом
+присутствуют (версия протокола становится известна только после `GET /capabilities`, а
+окружение задаётся при запуске), но привязка invocation'ов для v1-плагина **не
+регистрируется** — любой вызов `/runtime/*` отклоняется `404`
+(`unknown_invocation`). Фактически runtime для v1 недоступен.
+
+| Что | inline | out-of-process (v2) | out-of-process (v1) |
+|---|---|---|---|
+| команды и файлы | `ctx.runtime` (объект в процессе) | `POST /runtime/*` через host-side прокси | недоступно (`404`) |
+| кто исполняет | порт сессии | порт сессии (хост — посредник) | — |
+| привязка | контекст вызова | `invocation_id` на время вызова | — |
 
 ---
 

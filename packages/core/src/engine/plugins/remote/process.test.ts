@@ -281,7 +281,7 @@ describe('PluginProcessManager: запуск процесса плагина', (
     await proc.stop();
   });
 
-  it('окружение процесса — ровно четыре переменные; команда без shell', async () => {
+  it('окружение процесса — ровно шесть переменных; команда без shell', async () => {
     const rootDir = await makeBundle();
     const secretsDir = await makeSecretsDir();
     const record = recordingSpawn([]);
@@ -311,12 +311,54 @@ describe('PluginProcessManager: запуск процесса плагина', (
       'PATH',
       'SYNTH_PLUGIN_PORT',
       'SYNTH_PLUGIN_TOKEN',
+      'SYNTH_RUNTIME_TOKEN',
+      'SYNTH_RUNTIME_URL',
     ]);
     expect(captured!.options.env.SYNTH_PLUGIN_PORT).toBe('0');
     expect(captured!.options.env.SYNTH_PLUGIN_TOKEN).toBe(proc.token);
     expect(captured!.options.cwd).toBe(rootDir);
 
     await manager.stopAll();
+  });
+
+  it('runtime-контур: адрес прокси — loopback, токен runtime отдельный от токена плагина', async () => {
+    const rootDir = await makeBundle();
+    const secretsDir = await makeSecretsDir();
+    const record = recordingSpawn([]);
+    let captured: { options: { env: Record<string, string> } } | undefined;
+    const manager = makeManager(secretsDir, {
+      spawn: (command, args, options) => {
+        captured = { options };
+        return record(command, args, options);
+      },
+    });
+
+    const proc = await manager.start({ name: NAME, rootDir });
+
+    const runtimeUrl = captured!.options.env.SYNTH_RUNTIME_URL ?? '';
+    const runtimeToken = captured!.options.env.SYNTH_RUNTIME_TOKEN ?? '';
+    expect(runtimeUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(runtimeToken.length).toBeGreaterThan(16);
+    // Токен runtime — **отдельный** секрет: знание токена плагина не даёт
+    // доступа к runtime-контуру.
+    expect(runtimeToken).not.toBe(proc.token);
+    // Адрес/токен runtime — те же, что у endpoint'а прокси.
+    expect(proc.runtime?.url).toBe(runtimeUrl);
+    expect(proc.runtime?.token).toBe(runtimeToken);
+
+    await manager.stopAll();
+  });
+
+  it('после stop() прокси runtime закрыт (порт не слушается)', async () => {
+    const rootDir = await makeBundle();
+    const secretsDir = await makeSecretsDir();
+    const manager = makeManager(secretsDir);
+
+    const proc = await manager.start({ name: NAME, rootDir });
+    const runtimeUrl = proc.runtime!.url;
+    await proc.stop();
+
+    await expect(fetch(`${runtimeUrl}/runtime/exec`, { method: 'POST' })).rejects.toThrow();
   });
 });
 
