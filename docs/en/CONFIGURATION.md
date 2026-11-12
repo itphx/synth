@@ -423,6 +423,14 @@ execution:                         # ADR-077: execution topology (startup parame
                                   # SYNTH_EXECUTION_FAIL_MODE
     tokenSecret: ""               # path/reference to the executor token (NOT a value — invariant 13);
                                   # SYNTH_EXECUTION_TOKEN
+    provider: "static"            # static (pools from the configuration) | http (pool provisioner);
+                                  # SYNTH_EXECUTION_PROVIDER
+    provisioner:                  # pool provisioner parameters (needed with provider: http)
+      url: ""                     # provisioner address; empty with provider: http — fail-closed at startup;
+                                  # SYNTH_EXECUTION_PROVISIONER_URL
+      tokenSecret: ""             # path/reference to the provisioner token (NOT a value — invariant 13);
+                                  # SYNTH_EXECUTION_PROVISIONER_TOKEN
+      timeoutMs: 10000            # provisioner request timeout; SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS
 
 ssh:                             # PROP-124: instance-wide mode for SSH keys
   mode: "tools"                  # tools (default, fail-closed) | agent (ephemeral ssh-agent);
@@ -691,19 +699,25 @@ setting: switching the mode requires a process restart (invariant 24). The speci
 | `execution.remote.defaultProfile` | string | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Name of the default profile (the profile catalogue is set by ADMIN) |
 | `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Behaviour for an unusable profile (no address in the profile nor in the common `url`): `instance` — fall back to the instance port; `fail` — fail-closed (the startup is aborted) |
+| `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Pool provider (PROP-135 F4b-1): `static` — pools from the configuration (profile addresses, the port is built at startup — the F4a behaviour); `http` — pools are requested from the provisioner (the pool address and token come from the response, the port is built lazily) |
+| `execution.remote.provisioner.url` | string (address) | `''` | `SYNTH_EXECUTION_PROVISIONER_URL` | Address of the pool provisioner (`http://…`); **empty with `provider: http` → fail-closed at startup** ("where to ask" is not set) |
+| `execution.remote.provisioner.tokenSecret` | path/reference | `''` | `SYNTH_EXECUTION_PROVISIONER_TOKEN` | **A path/reference to the provisioner token, NOT the value** (invariant 13). The value is read from the file at request time and never reaches logs/error texts |
+| `execution.remote.provisioner.timeoutMs` | number | `10000` | `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS` | Timeout of a provisioner request (10 s) — separate from the exec-call timeout |
 
 **Priority** ([ADR-023](../arch_decisions/adr-023-configuration.md)): CLI flag `--execution-mode inline|remote` >
 env `SYNTH_EXECUTION_*` > `config.yaml` > default. Resolver — `resolveExecutionConfig`
 (`@itphx/synth-shared/config`).
 
 **Fail-closed** (as for `storage.backend`): an unknown **explicit** `mode` value (a typo such as `inlne`),
-`failMode`, `pooling` or `fallback` — a configuration error, not a silent fallback to the default:
+`failMode`, `pooling`, `fallback` or `provider` — a configuration error, not a silent fallback to the default:
 
 ```text
 [config] невалидное значение SYNTH_EXECUTION_MODE="inlne": ожидается одно из 'inline', 'remote'
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
 [config] невалидное значение SYNTH_EXECUTION_POOLING="projekt": ожидается одно из 'instance', 'project', 'session'
 [config] невалидное значение SYNTH_EXECUTION_FALLBACK="silent": ожидается одно из 'instance', 'fail'
+[config] невалидное значение SYNTH_EXECUTION_PROVIDER="htpp": ожидается одно из 'static', 'http'
+[config] execution.remote.provider="http" требует адрес provisioner'а (execution.remote.provisioner.url / SYNTH_EXECUTION_PROVISIONER_URL)
 ```
 
 **Pools and profiles (PROP-135, F4a).** The pool and the profile decide **which port** a session
@@ -721,7 +735,36 @@ gets:
 
 Profiles are set **only** in `config.yaml` — there is no env override for the profile catalogue.
 The full profile binding (`task.executor_profile` → `agentDefinition.executorProfile` →
-`project.executor.profile`) and the pool provisioner are the next PROP-135 slices.
+`project.executor.profile`) is the next PROP-135 slice.
+
+**Pool provider (PROP-135, F4b-1).** `execution.remote.provider` decides **where** the pool address
+comes from:
+
+- `static` (default) — pools **from the configuration**: the pool address is the first address of
+  the profile, the port is built at startup (the F4a behaviour). There is no pool isolation: the
+  pool key is ignored, so `pooling: project` with `provider: static` gives the same profile port
+  as `instance`;
+- `http` — pools are requested from the **provisioner** (`POST {provisioner.url}/v1/pools`): the
+  pool address and token come from the **response**, so the port is built **lazily** — on the
+  first call (`ensure`), not at startup. The pool key is `instance|project|session` ×
+  `exec|browser` × profile (`project:<id>:exec:<profile>`); it tells the provisioner **which** pool
+  is requested, and one key means one port (the proxy cache in the router).
+
+With `provider: http`:
+
+- the static `execution.remote.url` and `execution.remote.tokenSecret` are **not needed** — the
+  pool address and token are issued by the provisioner (the pool token comes in the
+  `POST /v1/pools` response);
+- `execution.remote.provisioner.url` is **mandatory** — without it the startup is aborted
+  (fail-closed);
+- `execution.remote.provisioner.tokenSecret` — a path/reference to the provisioner token (NOT the
+  value); the value is read from the file at request time and **never** reaches logs or error
+  texts;
+- if the target has no scope identifier (a session without a project under `pooling: project`) →
+  `fallback: instance` (the instance port) or `fallback: fail` (**fail-closed**).
+
+The **provisioner service itself** (pods/charts/pool manager) is the next PROP-135 slice (F4b-2);
+this slice implements only the `/v1/pools` protocol client.
 
 **Current implementation state (steps 3 and 7b of the ADR-077 plan).** The `inline` mode — the
 previous behaviour, nothing changes. The `remote` mode is implemented in **step 7b**: core loads the
@@ -749,12 +792,38 @@ execution:
     pooling: "instance"            # instance (shared port) | project | session; SYNTH_EXECUTION_POOLING
     defaultProfile: "default"      # default profile name; SYNTH_EXECUTION_DEFAULT_PROFILE
     fallback: "instance"           # instance (fall back to the instance port) | fail (fail-closed); SYNTH_EXECUTION_FALLBACK
+    provider: "static"             # static (pools from the configuration) | http (provisioner); SYNTH_EXECUTION_PROVIDER
+    provisioner:                   # pool provisioner parameters (needed with provider: http)
+      url: ""                      # provisioner address; empty with provider: http → fail-closed;
+                                   # SYNTH_EXECUTION_PROVISIONER_URL
+      tokenSecret: ""              # path/reference to the provisioner token (NOT a value!);
+                                   # SYNTH_EXECUTION_PROVISIONER_TOKEN
+      timeoutMs: 10000             # provisioner request timeout; SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS
     profiles:                      # profile catalogue (config.yaml only)
       devops:
         url: ["http://synth-executor-devops:8080"]   # empty → inherits remote.url
         timeoutMs: 60000            # unset → inherits remote.timeoutMs
         concurrency: 4              # unset → inherits remote.concurrency
         failMode: "fail"            # unset → inherits remote.failMode
+```
+
+An example of dynamic pools (the provisioner issues the pool address and token; static executor
+addresses are not needed):
+
+```yaml
+execution:
+  mode: "remote"
+  remote:
+    provider: "http"               # pools are requested from the provisioner
+    pooling: "project"             # a pool per project (project:<id>:exec:<profile>)
+    fallback: "instance"           # without projectId → the instance port
+    provisioner:
+      url: "http://synth-provisioner:8080"
+      tokenSecret: "/etc/synth/secrets/provisioner-token"   # path/reference, NOT a value
+      timeoutMs: 10000
+    profiles:
+      default:
+        timeoutMs: 60000            # profile parameters — on top of the common ones
 ```
 
 ### TLS and mTLS trust for outbound connections (`security.tls`, ADR-099)

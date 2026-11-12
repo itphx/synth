@@ -71,6 +71,8 @@ function execution(overrides: {
   concurrency?: number;
   failMode?: 'fail' | 'inline-fallback';
   tokenSecret?: string;
+  provider?: 'static' | 'http';
+  provisionerUrl?: string;
 }) {
   return resolveExecutionConfig(
     {
@@ -88,6 +90,13 @@ function execution(overrides: {
           defaultProfile: 'default',
           profiles: {},
           fallback: 'instance',
+          // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+          provider: overrides.provider ?? 'static',
+          provisioner: {
+            url: overrides.provisionerUrl ?? '',
+            tokenSecret: '',
+            timeoutMs: 10_000,
+          },
         },
       },
     },
@@ -149,6 +158,51 @@ describe('checkExecutionMode (ADR-077, шаги 3 и 7b)', () => {
     expect(check.message).toBe(
       t('execution.remote_unavailable', { reason: EXECUTOR_PACKAGE_UNAVAILABLE_REASON }),
     );
+  });
+
+  /**
+   * PROP-135 Ф4b-1: при `provider: http` адреса исполнителей приходят от
+   * provisioner'а — статический `remote.url` и `remote.tokenSecret` не
+   * требуются, но пакет исполнителя и адрес provisioner'а — обязательны.
+   */
+  it('provider=http: статический url и токен исполнителя не требуются', async () => {
+    const check = await checkExecutionMode(
+      execution({
+        mode: 'remote',
+        url: [],
+        tokenSecret: '',
+        provider: 'http',
+        provisionerUrl: 'http://provisioner:8080',
+      }),
+      okProbe,
+    );
+    expect(check.ok).toBe(true);
+    expect(check.issue).toBeUndefined();
+  });
+
+  it('provider=http: без пакета исполнителя — fail-closed', async () => {
+    const check = await checkExecutionMode(
+      execution({
+        mode: 'remote',
+        provider: 'http',
+        provisionerUrl: 'http://provisioner:8080',
+      }),
+      noPackageProbe,
+    );
+    expect(check.ok).toBe(false);
+    expect(check.issue).toBe('remote_unavailable');
+  });
+
+  it('provider=http: токен исполнителя не читается (токен пула выдаёт provisioner)', async () => {
+    const check = await checkExecutionMode(
+      execution({
+        mode: 'remote',
+        provider: 'http',
+        provisionerUrl: 'http://provisioner:8080',
+      }),
+      noTokenProbe,
+    );
+    expect(check.ok).toBe(true);
   });
 
   it('remote без читаемого токена — fail-closed с понятной причиной', async () => {

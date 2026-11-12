@@ -7,14 +7,17 @@ import {
   isExecutionFallback,
   isExecutionMode,
   isExecutionPooling,
+  isExecutionPoolProvider,
   parseExecutionUrlList,
   resolveExecutionConfig,
   resolveExecutionMode,
 } from './execution.js';
 import {
+  DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   EXECUTION_FALLBACKS,
   EXECUTION_POOLINGS,
+  EXECUTION_POOL_PROVIDERS,
   type SynthConfig,
 } from './types.js';
 
@@ -344,5 +347,125 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
     expect(isExecutionPooling('projekt')).toBe(false);
     expect(isExecutionFallback('fail')).toBe(true);
     expect(isExecutionFallback('silent')).toBe(false);
+  });
+});
+
+/**
+ * PROP-135 Ф4b-1: провайдер пулов (`static`|`http`) и параметры provisioner'а.
+ */
+describe('провайдер пулов (PROP-135 Ф4b-1)', () => {
+  it('дефолты: provider=static, provisioner пустой, таймаут 10 с', () => {
+    const resolved = resolveExecutionConfig(cfg, {});
+    expect(resolved.remote.provider).toBe('static');
+    expect(resolved.remote.provisioner.url).toBe('');
+    expect(resolved.remote.provisioner.tokenSecret).toBe('');
+    expect(resolved.remote.provisioner.timeoutMs).toBe(DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS);
+    expect(resolved.remote.provisioner.timeoutMs).toBe(10_000);
+  });
+
+  it('provider: env важнее config.yaml', () => {
+    const c = withExecution({
+      remote: { ...cfg.execution.remote, provider: 'static' as const },
+    });
+    expect(resolveExecutionConfig(c, {}).remote.provider).toBe('static');
+    // `http` требует адрес provisioner'а — иначе fail-closed (см. ниже).
+    expect(
+      resolveExecutionConfig(c, {
+        [EXECUTION_ENV.provider]: 'http',
+        [EXECUTION_ENV.provisionerUrl]: 'http://provisioner:8080',
+      }).remote.provider,
+    ).toBe('http');
+  });
+
+  it('provider: fail-closed на неизвестном значении (env и config)', () => {
+    expect(() => resolveExecutionConfig(cfg, { [EXECUTION_ENV.provider]: 'htpp' })).toThrow(
+      /SYNTH_EXECUTION_PROVIDER="htpp"/,
+    );
+    const c = withExecution({ remote: { ...cfg.execution.remote, provider: 'htpp' as never } });
+    expect(() => resolveExecutionConfig(c, {})).toThrow(/execution\.remote\.provider="htpp"/);
+  });
+
+  it('provider=http без адреса provisioner\'а → ошибка конфигурации (fail-closed)', () => {
+    const c = withExecution({ remote: { ...cfg.execution.remote, provider: 'http' as const } });
+    expect(() => resolveExecutionConfig(c, {})).toThrow(
+      /execution\.remote\.provider="http" требует адрес provisioner/,
+    );
+    // Пустой env-адрес — тоже «не задан».
+    expect(() =>
+      resolveExecutionConfig(c, { [EXECUTION_ENV.provisionerUrl]: '' }),
+    ).toThrow(/требует адрес provisioner/);
+  });
+
+  it('provisioner: url/token/timeout — env важнее config.yaml', () => {
+    const c = withExecution({
+      remote: {
+        ...cfg.execution.remote,
+        provider: 'http' as const,
+        provisioner: {
+          url: 'http://cfg-provisioner:8080',
+          tokenSecret: '/cfg/provisioner-token',
+          timeoutMs: 5_000,
+        },
+      },
+    });
+    const fromCfg = resolveExecutionConfig(c, {});
+    expect(fromCfg.remote.provisioner.url).toBe('http://cfg-provisioner:8080');
+    expect(fromCfg.remote.provisioner.tokenSecret).toBe('/cfg/provisioner-token');
+    expect(fromCfg.remote.provisioner.timeoutMs).toBe(5_000);
+
+    const fromEnv = resolveExecutionConfig(c, {
+      [EXECUTION_ENV.provisionerUrl]: 'http://env-provisioner:8080',
+      [EXECUTION_ENV.provisionerToken]: '/env/provisioner-token',
+      [EXECUTION_ENV.provisionerTimeoutMs]: '2500',
+    });
+    expect(fromEnv.remote.provisioner.url).toBe('http://env-provisioner:8080');
+    expect(fromEnv.remote.provisioner.tokenSecret).toBe('/env/provisioner-token');
+    expect(fromEnv.remote.provisioner.timeoutMs).toBe(2_500);
+  });
+
+  it('provisioner.timeoutMs: невалидный env → warn и фоллбэк на config (fail-soft)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c = withExecution({
+      remote: {
+        ...cfg.execution.remote,
+        provider: 'http' as const,
+        provisioner: {
+          url: 'http://cfg-provisioner:8080',
+          tokenSecret: '',
+          timeoutMs: 7_000,
+        },
+      },
+    });
+    const resolved = resolveExecutionConfig(c, {
+      [EXECUTION_ENV.provisionerTimeoutMs]: 'не-число',
+    });
+    expect(resolved.remote.provisioner.timeoutMs).toBe(7_000);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('пустое значение env → тихий фоллбэк на config/дефолт', () => {
+    const c = withExecution({
+      remote: {
+        ...cfg.execution.remote,
+        provider: 'http' as const,
+        provisioner: { url: 'http://cfg-provisioner:8080', tokenSecret: '/cfg/token', timeoutMs: 3_000 },
+      },
+    });
+    const resolved = resolveExecutionConfig(c, {
+      [EXECUTION_ENV.provisionerUrl]: '',
+      [EXECUTION_ENV.provisionerToken]: '',
+      [EXECUTION_ENV.provisionerTimeoutMs]: '',
+    });
+    expect(resolved.remote.provisioner.url).toBe('http://cfg-provisioner:8080');
+    expect(resolved.remote.provisioner.tokenSecret).toBe('/cfg/token');
+    expect(resolved.remote.provisioner.timeoutMs).toBe(3_000);
+  });
+
+  it('предикат провайдера пулов', () => {
+    expect(EXECUTION_POOL_PROVIDERS).toEqual(['static', 'http']);
+    expect(isExecutionPoolProvider('static')).toBe(true);
+    expect(isExecutionPoolProvider('http')).toBe(true);
+    expect(isExecutionPoolProvider('htpp')).toBe(false);
+    expect(isExecutionPoolProvider(undefined)).toBe(false);
   });
 });

@@ -541,6 +541,31 @@ export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.
 // (`inline` → InlineExecutionPort, `remote` → удалённый порт из пакета
 // `@itphx/synth-executor`, динамический `import()`, fail-closed).
 export { createExecutionPortForConfig } from './execution/factory.js';
+// PROP-135 Ф4b-1: instance-порт (при `provider: http` — ленивый порт на
+// instance-пул, адрес которого даёт provisioner) + фабрика порта по пулу.
+export { createInstanceExecutionPort, defaultPooledPortFactory } from './execution/factory.js';
+// PROP-135 Ф4b-1: провайдеры пулов исполнения (`static` — из конфигурации,
+// `http` — provisioner) и ключи пулов.
+export {
+  createExecutionPoolProvider,
+  isExecutionPoolProvider,
+  poolKeyString,
+  ExecutionPoolProviderError,
+  StaticExecutionPoolProvider,
+  HttpExecutionPoolProvider,
+} from './execution/pool-provider.js';
+export type {
+  ExecutionPoolClass,
+  ExecutionPoolKey,
+  ExecutionPoolProvider,
+  ExecutionPoolRef,
+  ExecutionPoolScope,
+  HttpExecutionPoolProviderOptions,
+} from './execution/pool-provider.js';
+// PROP-135 Ф4b-1: ленивый порт на динамический пул (адрес пула — от
+// provisioner'а, порт собирается при первом обращении).
+export { createPooledExecutionPort } from './execution/pooled-port.js';
+export type { PooledExecutionPortOptions } from './execution/pooled-port.js';
 // PROP-135 Ф4a: роутер портов исполнения (пулы/профили) — порт по профилю
 // сессии; порты профилей создаются на старте, роутер синхронен.
 export {
@@ -551,6 +576,7 @@ export {
 export type { ExecutionRouter, ExecutionRouterOptions } from './execution/router.js';
 export {
   createRemoteExecutionPortFromConfig,
+  createRemoteExecutionPortForPool,
   isExecutorPackageAvailable,
   readExecutorToken,
   RemoteExecutionUnavailableError,

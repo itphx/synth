@@ -137,7 +137,7 @@ import {
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
-import { createExecutionPortForConfig } from '../../execution/factory.js';
+import { createInstanceExecutionPort } from '../../execution/factory.js';
 import { createExecutionRouter } from '../../execution/router.js';
 import { attachExecutorMcpSource } from '../../engine/mcp/executor-mcp-source.js';
 import {
@@ -1156,7 +1156,10 @@ export async function createStandaloneDeps(
   // (`synth_executor_*`): очередь, занятость пула, ожидание и исход команд.
   // Реестр метрик в пакет исполнителя не попадает — только узкий интерфейс.
   const executorMetrics = metrics ? createExecutorMetricsCollector(metrics) : undefined;
-  const executionPort = await createExecutionPortForConfig(
+  // PROP-135 Ф4b-1: при `provider: http` адреса исполнителей приходят от
+  // provisioner'а — instance-порт собирается **лениво** (на instance-пул),
+  // статический `execution.remote.url` не требуется.
+  const executionPort = await createInstanceExecutionPort(
     config.executionConfig,
     executorMetrics ? { metricsSink: executorMetrics } : undefined,
   );

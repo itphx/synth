@@ -24,6 +24,9 @@ const EXECUTION: ResolvedExecutionConfig = {
     defaultProfile: 'default',
     profiles: {},
     fallback: 'instance',
+    // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+    provider: 'static',
+    provisioner: { url: '', tokenSecret: '', timeoutMs: 10_000 },
   },
 };
 

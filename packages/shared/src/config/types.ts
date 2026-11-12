@@ -198,6 +198,28 @@ export const EXECUTION_FALLBACKS = ['instance', 'fail'] as const;
 export type ExecutionFallback = (typeof EXECUTION_FALLBACKS)[number];
 
 /**
+ * Провайдер пулов исполнения (PROP-135, Ф4b-1).
+ *
+ * - `static` (дефолт) — пулы **из конфигурации**: адреса профиля известны заранее,
+ *   порт создаётся на старте (поведение Ф4a);
+ * - `http` — пулы запрашиваются у **provisioner'а** по HTTP (`POST /v1/pools`),
+ *   адрес и токен пула приходят ответом; порт создаётся лениво (первый вызов).
+ *
+ * Значение — **fail-closed**: неизвестное явное значение (опечатка `htpp`) валит
+ * старт, а не молча выбирает дефолт (как `mode`/`failMode`/`pooling`).
+ */
+export const EXECUTION_POOL_PROVIDERS = ['static', 'http'] as const;
+export type ExecutionPoolProviderKind = (typeof EXECUTION_POOL_PROVIDERS)[number];
+
+/**
+ * Таймаут обращения к provisioner'у пулов по умолчанию (10 с).
+ *
+ * Отдельный от таймаута exec-вызова: вызов к provisioner'у — это запрос
+ * «дай адрес пула», а не исполнение команды агента.
+ */
+export const DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS = 10_000;
+
+/**
  * Таймаут exec-вызова по умолчанию (30 с — как у нынешних тулов: shell/search/git).
  * Больший лимит для shell (до 120 с) — свойство тула, не конфига.
  */
@@ -252,6 +274,28 @@ export const executionRemoteConfigSchema = z.object({
    * instance-порт; `fail` — fail-closed (старт прерывается).
    */
   fallback: z.enum(EXECUTION_FALLBACKS).default('instance'),
+  /**
+   * Провайдер пулов исполнения (PROP-135 Ф4b-1): `static` — пулы из
+   * конфигурации (адреса профиля, порт на старте); `http` — пулы запрашиваются
+   * у provisioner'а (`execution.remote.provisioner.url`).
+   */
+  provider: z.enum(EXECUTION_POOL_PROVIDERS).default('static'),
+  /**
+   * Параметры provisioner'а пулов (PROP-135 Ф4b-1).
+   *
+   * - `url` — адрес provisioner'а; пусто при `provider: http` → **fail-closed**
+   *   на старте (провайдер задан, но куда обращаться — не указано);
+   * - `tokenSecret` — **путь/ссылка** на токен provisioner'а, НЕ значение
+   *   (инвариант 13);
+   * - `timeoutMs` — таймаут обращения к provisioner'у.
+   */
+  provisioner: z
+    .object({
+      url: z.string().default(''),
+      tokenSecret: z.string().default(''),
+      timeoutMs: z.number().int().min(1).default(DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS),
+    })
+    .prefault({}),
 });
 
 /** ADR-077: секция `execution` — топология исполнения (параметр запуска). */

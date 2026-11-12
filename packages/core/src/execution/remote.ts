@@ -214,6 +214,76 @@ export async function createRemoteExecutionPortFromConfig(
   // ошибках не попадает (см. `readExecutorToken`).
   const token = await readExecutorToken(remote.tokenSecret);
 
+  return createRemoteExecutionPort({
+    urls,
+    token,
+    timeoutMs: remote.timeoutMs,
+    concurrency: remote.concurrency,
+    failMode: remote.failMode,
+    ...(opts?.metricsSink ? { metricsSink: opts.metricsSink } : {}),
+  });
+}
+
+/**
+ * Собрать удалённый порт по **явному** адресу и токену (PROP-135 Ф4b-1).
+ *
+ * Тот же порт, что и `createRemoteExecutionPortFromConfig`, но адрес и токен
+ * приходят **извне** — их выдал provisioner пулов (см.
+ * `execution/pool-provider.ts`). Общая часть (динамический `import()`
+ * пакета исполнителя + обёртка `RemoteExecutionPortWithExecutorMcp`) — одна,
+ * дублирования нет.
+ *
+ * @param opts адрес пула, токен пула и параметры клиента
+ * @returns порт исполнения поверх HTTP-клиента пакета исполнителя
+ */
+export async function createRemoteExecutionPortForPool(opts: {
+  url: string;
+  token: string;
+  timeoutMs?: number;
+  concurrency?: number;
+  failMode?: 'fail' | 'inline-fallback';
+  metricsSink?: ExecutionMetricsSink;
+}): Promise<ExecutionPort> {
+  const url = opts.url.trim();
+  if (url === '') {
+    throw new RemoteExecutionUnavailableError(
+      `remote execution is unavailable: ${EXECUTOR_URL_REQUIRED_REASON}`,
+    );
+  }
+  const token = opts.token.trim();
+  if (token === '') {
+    throw new RemoteExecutionUnavailableError(
+      `remote execution is unavailable: ${EXECUTOR_TOKEN_UNAVAILABLE_REASON} (pool token is empty)`,
+    );
+  }
+  return createRemoteExecutionPort({
+    urls: [url],
+    token,
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
+    ...(opts.failMode !== undefined ? { failMode: opts.failMode } : {}),
+    ...(opts.metricsSink ? { metricsSink: opts.metricsSink } : {}),
+  });
+}
+
+/**
+ * Общая сборка удалённого порта: динамический `import()` пакета исполнителя
+ * + обёртка с дескриптором MCP-пула.
+ *
+ * Вынесена отдельно, чтобы `createRemoteExecutionPortFromConfig` (адреса из
+ * конфигурации) и `createRemoteExecutionPortForPool` (адрес от provisioner'а)
+ * не расходились в деталях загрузки пакета и обёртки.
+ */
+async function createRemoteExecutionPort(opts: {
+  urls: string[];
+  token: string;
+  timeoutMs?: number;
+  concurrency?: number;
+  failMode?: 'fail' | 'inline-fallback';
+  metricsSink?: ExecutionMetricsSink;
+}): Promise<ExecutionPort> {
+  const { urls, token } = opts;
+
   let mod: ExecutorClientModule;
   try {
     mod = (await import(EXECUTOR_CLIENT_PACKAGE)) as ExecutorClientModule;
@@ -235,14 +305,14 @@ export async function createRemoteExecutionPortFromConfig(
     mod.createRemoteExecutionPort({
       urls,
       token,
-      timeoutMs: remote.timeoutMs,
-      concurrency: remote.concurrency,
-      failMode: remote.failMode,
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
+      ...(opts.failMode !== undefined ? { failMode: opts.failMode } : {}),
       // ADR-094: приёмник метрик достаётся до клиента удалённого порта.
       // Обёртка (`RemoteExecutionPortWithExecutorMcp`) делегирует `execute`
       // внутреннему порту — поэтому метрики считает именно он, второй раз
       // обёртка их не дублирует.
-      ...(opts?.metricsSink ? { metricsSink: opts.metricsSink } : {}),
+      ...(opts.metricsSink ? { metricsSink: opts.metricsSink } : {}),
     }),
     urls,
     token,

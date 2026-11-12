@@ -1,9 +1,9 @@
 /**
- * Роутер исполнения: порт по профилю (PROP-135, Ф4a).
+ * Роутер исполнения: порт по профилю (PROP-135, Ф4a) и по пулу (Ф4b-1).
  *
  * ## Зачем
  *
- * До Ф4а порт исполнения был **один на процесс** (`execution/factory.ts`):
+ * До Ф4a порт исполнения был **один на процесс** (`execution/factory.ts`):
  * inline-порт или удалённый порт на общий пул исполнителей. PROP-135 вводит
  * пулы (`instance`|`project`|`session`) и **профили** — именованные наборы
  * параметров исполнения (адреса, таймаут, лимит одновременных вызовов,
@@ -15,7 +15,7 @@
  * ## Что делает роутер
  *
  * - `pooling: instance` — **единственный** instance-порт на процесс: поведение
- *   как до Ф4а (профили игнорируются);
+ *   как до Ф4a (профили игнорируются);
  * - `pooling: project`|`session` — **порт на профиль**: адреса/таймаут/лимит/
  *   failMode профиля, поверх общих параметров секции; порты создаются на
  *   старте, кэш — по имени профиля, поэтому `portFor` **синхронен**;
@@ -23,9 +23,27 @@
  *   `fallback: instance` → instance-порт, `fallback: fail` → **fail-closed**
  *   (старт прерывается с понятной причиной).
  *
+ * ## Провайдер пулов (Ф4b-1)
+ *
+ * `execution.remote.provider`:
+ *
+ * - `static` — пулы из конфигурации (адреса профиля): поведение Ф4a, порты
+ *   создаются на старте;
+ * - `http` — пулы запрашиваются у provisioner'а (`POST /v1/pools`): адрес и
+ *   токен пула приходят **в момент обращения**, поэтому порт собирается
+ *   **лениво** (`execution/pooled-port.ts`), а `portFor` остаётся
+ *   синхронным — он отдаёт «прокси» порта, который разрешается при первом
+ *   вызове. Кэш прокси — **по ключу пула** (`poolKeyString`): один порт на
+ *   ключ (проект/сессия/профиль).
+ *
+ * При `provider: http` и `pooling: project`/`session` ключ пула строится по
+ * `projectId`/`sessionId` цели. Идентификатора нет (сессия без проекта при
+ * `pooling: project`) → `fallback: instance` (instance-порт) либо
+ * `fallback: fail` (**fail-closed**).
+ *
  * ## Чего роутер НЕ делает
  *
- * - не provisioner'ит поды (это следующий слайс Ф4 — provisioner);
+ * - не provisioner'ит поды (это следующий слайс Ф4 — сам сервис provisioner);
  * - не реализует полный binding профиля (`task.executor_profile` →
  *   `agentDefinition.executorProfile` → `project.executor.profile` — Ф6);
  * - не меняет instance-level потребление порта (inline-shell, медиа-раннер,
@@ -33,7 +51,14 @@
  */
 
 import type { ResolvedExecutionConfig, ResolvedExecutionRemoteConfig } from '@itphx/synth-shared';
-import { createExecutionPortForConfig } from './factory.js';
+import { createExecutionPortForConfig, defaultPooledPortFactory } from './factory.js';
+import {
+  createExecutionPoolProvider,
+  poolKeyString,
+  type ExecutionPoolKey,
+  type ExecutionPoolProvider,
+} from './pool-provider.js';
+import { createPooledExecutionPort } from './pooled-port.js';
 import type { ExecutionMetricsSink, ExecutionPort } from './ports/index.js';
 
 /**
@@ -46,11 +71,13 @@ export interface ExecutionRouter {
   /**
    * Порт для цели.
    *
-   * @param target профиль цели (`session.settings.executorProfile`); не задан
-   *               или профиль неизвестен — берётся профиль по умолчанию
+   * @param target профиль цели (`session.settings.executorProfile`) и — при
+   *               `provider: http` и пуле `project`/`session` — идентификатор
+   *               области (`projectId`/`sessionId`); не заданы или профиль
+   *               неизвестен — берётся профиль по умолчанию
    *               (`execution.remote.defaultProfile`).
    */
-  portFor(target?: { profile?: string }): ExecutionPort;
+  portFor(target?: { profile?: string; projectId?: string; sessionId?: string }): ExecutionPort;
 }
 
 /** Структурная проверка: переданное значение — роутер исполнения. */
@@ -98,10 +125,18 @@ export interface ExecutionRouterOptions {
    * удалённого пула).
    */
   instancePort?: ExecutionPort;
+  /**
+   * Провайдер пулов (PROP-135 Ф4b-1).
+   *
+   * Не задан — создаётся из секции `execution.remote` (`provider: static` →
+   * пулы из конфигурации, `provider: http` → provisioner по HTTP). Шов для
+   * тестов: подмена провайдера не требует сети.
+   */
+  poolProvider?: ExecutionPoolProvider;
 }
 
 /**
- * Собрать роутер портов исполнения (PROP-135 Ф4a).
+ * Собрать роутер портов исполнения (PROP-135 Ф4a + Ф4b-1).
  *
  * @param opts эффективная секция `execution` + приёмник метрик (+ швы для тестов)
  * @returns роутер: порт по профилю сессии
@@ -119,12 +154,19 @@ export async function createExecutionRouter(
       ));
 
   // `inline` и instance-пул: единственный порт на процесс. Профили
-  // игнорируются — поведение как до Ф4а.
+  // игнорируются — поведение как до Ф4a.
   if (!config || config.mode === 'inline' || config.remote.pooling === 'instance') {
     const port = opts.instancePort ?? (await createPort(config));
     return { portFor: () => port };
   }
   const remote = config.remote;
+
+  // Провайдер пулов `http`: адрес пула приходит от provisioner'а, порт
+  // собирается лениво. Профильные порты на старте **не** создаются (статических
+  // адресов может не быть вовсе).
+  if (remote.provider === 'http') {
+    return createHttpProviderRouter(config, opts);
+  }
 
   // Проектный/сессионный пул: порт на профиль.
   const defaultName = remote.defaultProfile;
@@ -170,7 +212,7 @@ export async function createExecutionRouter(
   }
 
   return {
-    portFor(target?: { profile?: string }): ExecutionPort {
+    portFor(target?: { profile?: string; projectId?: string; sessionId?: string }): ExecutionPort {
       const requested = (target?.profile ?? '').trim();
       // Неизвестный профиль → профиль по умолчанию (полный binding — Ф6).
       const name = requested !== '' && plans.has(requested) ? requested : defaultName;
@@ -183,6 +225,103 @@ export async function createExecutionRouter(
       }
       return port;
     },
+  };
+}
+
+/**
+ * Роутер для провайдера пулов `http` (PROP-135 Ф4b-1).
+ *
+ * Порты **ленивые**: `portFor` отдаёт прокси порта, который разрешается при
+ * первом обращении (`ensure` у provisioner'а → сборка порта по адресу).
+ * Кэш — по ключу пула (`poolKeyString`): один порт на ключ.
+ */
+function createHttpProviderRouter(
+  config: ResolvedExecutionConfig,
+  opts: ExecutionRouterOptions,
+): ExecutionRouter {
+  const remote = config.remote;
+  const defaultName = remote.defaultProfile;
+  const provider = opts.poolProvider ?? createExecutionPoolProvider(remote);
+
+  /** Кэш ленивых портов по ключу пула. */
+  const pooled = new Map<string, ExecutionPort>();
+
+  /** Instance-порт: готовый (из сборки приложения) либо ленивый на instance-пул. */
+  const instancePort: ExecutionPort =
+    opts.instancePort
+    ?? createPooledExecutionPort({
+      key: { scope: 'instance', class: 'exec', profile: defaultName },
+      provider,
+      createPort: defaultPooledPortFactory(config, opts.metricsSink),
+    });
+
+  return {
+    portFor(target?: { profile?: string; projectId?: string; sessionId?: string }): ExecutionPort {
+      const requested = (target?.profile ?? '').trim();
+      // Неизвестный профиль → профиль по умолчанию (как в статическом пути).
+      const known =
+        requested !== '' && (remote.profiles[requested] !== undefined || requested === defaultName);
+      const profile = known ? requested : defaultName;
+      const scope = remote.pooling;
+      const id = scope === 'project' ? target?.projectId : target?.sessionId;
+
+      if (!id || id.trim() === '') {
+        // Идентификатора области нет — пул не адресуем. `fallback: instance` —
+        // общий порт инстанса; `fallback: fail` — fail-closed.
+        if (remote.fallback === 'fail') {
+          throw new ExecutionProfileUnavailableError(
+            `execution pool scope "${scope}" requires an id ` +
+              `(${scope === 'project' ? 'projectId' : 'sessionId'}) ` +
+              `and execution.remote.fallback=fail`,
+          );
+        }
+        return instancePort;
+      }
+
+      const key: ExecutionPoolKey = { scope, id: id.trim(), class: 'exec', profile };
+      const keyString = poolKeyString(key);
+      const existing = pooled.get(keyString);
+      if (existing) return existing;
+
+      const port = createPooledExecutionPort({
+        key,
+        provider,
+        createPort: defaultPooledPortFactory(
+          profileConfig(config, resolveProfileParams(remote, profile)),
+          opts.metricsSink,
+        ),
+      });
+      pooled.set(keyString, port);
+      return port;
+    },
+  };
+}
+
+/**
+ * Эффективные параметры профиля (PROP-135 Ф4a).
+ *
+ * Профиль из каталога уже «поверх» общих параметров (резолвер конфигурации
+ * проставляет наследование); профиля в каталоге нет — берутся общие
+ * параметры секции.
+ */
+function resolveProfileParams(
+  remote: ResolvedExecutionRemoteConfig,
+  name: string,
+): ResolvedExecutionProfilePlan['profile'] {
+  const profile = remote.profiles[name];
+  if (!profile) {
+    return {
+      url: [...remote.url],
+      timeoutMs: remote.timeoutMs,
+      concurrency: remote.concurrency,
+      failMode: remote.failMode,
+    };
+  }
+  return {
+    url: [...profile.url],
+    timeoutMs: profile.timeoutMs,
+    concurrency: profile.concurrency,
+    failMode: profile.failMode,
   };
 }
 
@@ -221,6 +360,8 @@ function profileConfig(
       defaultProfile: remote.defaultProfile,
       profiles: remote.profiles,
       fallback: remote.fallback,
+      provider: remote.provider,
+      provisioner: remote.provisioner,
     },
   };
 }

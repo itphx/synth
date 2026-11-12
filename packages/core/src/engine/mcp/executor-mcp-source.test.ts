@@ -492,6 +492,9 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
         defaultProfile: 'default',
         profiles: {},
         fallback: 'instance' as const,
+        // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+        provider: 'static' as const,
+        provisioner: { url: '', tokenSecret: '', timeoutMs: 10_000 },
       },
     };
   }
@@ -510,6 +513,9 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
         defaultProfile: 'default',
         profiles: {},
         fallback: 'instance',
+        // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+        provider: 'static',
+        provisioner: { url: '', tokenSecret: '', timeoutMs: 10_000 },
       },
     });
     expect(source).toBeNull();
@@ -538,6 +544,9 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
         defaultProfile: 'default',
         profiles: {},
         fallback: 'instance',
+        // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+        provider: 'static',
+        provisioner: { url: '', tokenSecret: '', timeoutMs: 10_000 },
       },
     });
     expect(source).toBeNull();
@@ -569,6 +578,9 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
             defaultProfile: 'default',
             profiles: {},
             fallback: 'instance',
+            // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+            provider: 'static',
+            provisioner: { url: '', tokenSecret: '', timeoutMs: 10_000 },
           },
         },
         { fetchImpl: () => Promise.resolve(json([{ name: 'playwright-mcp', status: 'up', toolCount: 1 }])) },

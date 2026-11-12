@@ -68,6 +68,11 @@ export interface ExecutionStartupCheck {
  * - `remote` с адресами, но без пакета исполнителя / без читаемого токена —
  *   `remote_unavailable` (fail-closed, с технической причиной в сообщении).
  *
+ * PROP-135 Ф4b-1: при `provider: http` адреса исполнителей приходят от
+ * provisioner'а, поэтому **статический** `remote.url` и `remote.tokenSecret`
+ * не требуются (токен пула выдаёт provisioner). Проверяется наличие пакета
+ * исполнителя (он нужен для HTTP-клиента порта) и адрес provisioner'а.
+ *
  * @param execution эффективная секция `execution`
  * @param probe проба окружения (тесты подменяют)
  */
@@ -77,7 +82,17 @@ export async function checkExecutionMode(
 ): Promise<ExecutionStartupCheck> {
   if (execution.mode !== 'remote') return { ok: true };
 
-  if (execution.remote.url.length === 0) {
+  const poolProvider = execution.remote.provider === 'http';
+
+  if (!poolProvider && execution.remote.url.length === 0) {
+    return {
+      ok: false,
+      issue: 'remote_url_required',
+      message: t('execution.remote_url_required'),
+    };
+  }
+
+  if (poolProvider && execution.remote.provisioner.url.trim() === '') {
     return {
       ok: false,
       issue: 'remote_url_required',
@@ -93,14 +108,18 @@ export async function checkExecutionMode(
     };
   }
 
-  try {
-    await probe.readToken(execution.remote.tokenSecret);
-  } catch {
-    return {
-      ok: false,
-      issue: 'remote_unavailable',
-      message: t('execution.remote_unavailable', { reason: EXECUTOR_TOKEN_UNAVAILABLE_REASON }),
-    };
+  // При `provider: http` токен выдаёт provisioner (секрет пула), а не
+  // статический файл исполнителя — читать нечего.
+  if (!poolProvider) {
+    try {
+      await probe.readToken(execution.remote.tokenSecret);
+    } catch {
+      return {
+        ok: false,
+        issue: 'remote_unavailable',
+        message: t('execution.remote_unavailable', { reason: EXECUTOR_TOKEN_UNAVAILABLE_REASON }),
+      };
+    }
   }
 
   return { ok: true };

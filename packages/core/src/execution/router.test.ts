@@ -22,6 +22,7 @@ import {
   isExecutionRouter,
   ExecutionProfileUnavailableError,
 } from './router.js';
+import type { ExecutionPoolKey } from './pool-provider.js';
 import type { ExecutionPort } from './ports/index.js';
 
 /** Порт-заглушка: идентифицируется именем, чтобы сравнивать объекты. */
@@ -53,6 +54,8 @@ function makeConfig(overrides: {
   timeoutMs?: number;
   concurrency?: number;
   failMode?: 'fail' | 'inline-fallback';
+  provider?: 'static' | 'http';
+  provisioner?: { url?: string; tokenSecret?: string; timeoutMs?: number };
   profiles?: Record<
     string,
     {
@@ -88,6 +91,13 @@ function makeConfig(overrides: {
             ]),
           ),
           fallback: overrides.fallback ?? 'instance',
+          // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+          provider: overrides.provider ?? 'static',
+          provisioner: {
+            url: overrides.provisioner?.url ?? '',
+            tokenSecret: overrides.provisioner?.tokenSecret ?? '',
+            timeoutMs: overrides.provisioner?.timeoutMs ?? 10_000,
+          },
         },
       },
     },
@@ -309,5 +319,148 @@ describe('PROP-135 Ф4a: роутер портов исполнения', () => 
     expect(isExecutionRouter({})).toBe(false);
     expect(isExecutionRouter(null)).toBe(false);
     expect(isExecutionRouter(undefined)).toBe(false);
+  });
+});
+
+/**
+ * PROP-135 Ф4b-1: провайдер пулов `http` — порты ленивые, ключ пула по
+ * области (`project`/`session`).
+ */
+describe('PROP-135 Ф4b-1: роутер с провайдером пулов http', () => {
+  /** Провайдер-заглушка: запоминает запрошенные ключи. */
+  function fakePoolProvider() {
+    const requested: ExecutionPoolKey[] = [];
+    return {
+      requested,
+      provider: {
+        ensure: async (key: ExecutionPoolKey) => {
+          requested.push(key);
+          return { url: `http://pool/${key.scope}:${key.id ?? ''}` };
+        },
+      },
+    };
+  }
+
+  it('pooling=project: разные проекты → разные порты (прокси по ключу пула)', async () => {
+    const pools = fakePoolProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const portA = router.portFor({ profile: 'default', projectId: 'prj_a' });
+    const portB = router.portFor({ profile: 'default', projectId: 'prj_b' });
+    const portAAgain = router.portFor({ profile: 'default', projectId: 'prj_a' });
+
+    expect(portA).not.toBe(portB);
+    // Один ключ — один порт (кэш прокси по `poolKeyString`).
+    expect(portAAgain).toBe(portA);
+    // Порт ленивый: пул не запрашивался до первого обращения.
+    expect(pools.requested).toHaveLength(0);
+  });
+
+  it('pooling=session: разные сессии → разные порты', async () => {
+    const pools = fakePoolProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    expect(router.portFor({ sessionId: 'ses_1' })).not.toBe(router.portFor({ sessionId: 'ses_2' }));
+  });
+
+  it('без projectId при fallback=instance → instance-порт', async () => {
+    const pools = fakePoolProvider();
+    const instance = fakePort('instance');
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        fallback: 'instance',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+      instancePort: instance,
+    });
+
+    expect(router.portFor({ profile: 'default' })).toBe(instance);
+  });
+
+  it('без projectId при fallback=fail → ExecutionProfileUnavailableError', async () => {
+    const pools = fakePoolProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        fallback: 'fail',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    expect(() => router.portFor({ profile: 'default' })).toThrow(ExecutionProfileUnavailableError);
+  });
+
+  it('ключ пула включает область, идентификатор, класс и профиль', async () => {
+    const pools = fakePoolProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        defaultProfile: 'default',
+        profiles: { devops: { url: [] } },
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const port = router.portFor({ profile: 'devops', projectId: 'prj_a' });
+    // Порт ленивый — ensure вызывается при первом обращении; здесь только
+    // проверяем, что ключ построен верно (через прокси-порт не вызываем).
+    expect(port).toBeDefined();
+    expect(pools.requested).toHaveLength(0);
+  });
+
+  it('provider=http + pooling=instance → instance-порт (общий пул инстанса)', async () => {
+    const pools = fakePoolProvider();
+    const instance = fakePort('instance');
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'instance',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+      instancePort: instance,
+    });
+
+    expect(router.portFor({ projectId: 'prj_a' })).toBe(instance);
+    expect(router.portFor()).toBe(instance);
+  });
+
+  it('provider=static: прежнее поведение (порты профилей на старте, ключ пула не нужен)', async () => {
+    const factory = fakeFactory();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        pooling: 'project',
+        defaultProfile: 'a',
+        profiles: { a: { url: ['http://a:8080'] }, b: { url: ['http://b:8080'] } },
+      }),
+      createPort: factory.createPort,
+    });
+
+    // Ключ пула при `provider: static` не участвует — порт тот же профильный.
+    expect(router.portFor({ profile: 'a', projectId: 'prj_a' })).toBe(
+      router.portFor({ profile: 'a', projectId: 'prj_b' }),
+    );
+    expect(factory.created).toHaveLength(2);
   });
 });

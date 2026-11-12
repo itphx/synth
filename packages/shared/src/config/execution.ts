@@ -16,22 +16,31 @@
  * задаётся **только** в `config.yaml` — env-переопределение профилей на этом
  * шаге не заводим.
  *
+ * PROP-135 Ф4b-1 (провайдер пулов) добавляет ещё четыре:
+ * `SYNTH_EXECUTION_PROVIDER`, `SYNTH_EXECUTION_PROVISIONER_URL`,
+ * `SYNTH_EXECUTION_PROVISIONER_TOKEN` (путь/ссылка, НЕ значение),
+ * `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS`.
+ *
  * Fail-closed (как `storage.backend`): неизвестное **явное** значение `mode`
- * (опечатка `inlne`), `failMode`, `pooling` или `fallback` — ошибка, а не
- * тихий выбор дефолта.
+ * (опечатка `inlne`), `failMode`, `pooling`, `fallback` или `provider` —
+ * ошибка, а не тихий выбор дефолта. Тот же принцип и для `provider: http`
+ * без адреса provisioner'а: «куда обращаться» не задано — ошибка конфигурации.
  */
 import { availableParallelism, cpus } from 'node:os';
 import type { SynthConfig } from './types.js';
 import {
+  DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   EXECUTION_FAIL_MODES,
   EXECUTION_FALLBACKS,
   EXECUTION_MODES,
   EXECUTION_POOLINGS,
+  EXECUTION_POOL_PROVIDERS,
   type ExecutionFailMode,
   type ExecutionFallback,
   type ExecutionMode,
   type ExecutionPooling,
+  type ExecutionPoolProviderKind,
 } from './types.js';
 
 /** Env-имена секции `execution` (ADR-077). */
@@ -48,6 +57,14 @@ export const EXECUTION_ENV = {
   defaultProfile: 'SYNTH_EXECUTION_DEFAULT_PROFILE',
   /** PROP-135 Ф4a: поведение при непригодном профиле (`instance`|`fail`). */
   fallback: 'SYNTH_EXECUTION_FALLBACK',
+  /** PROP-135 Ф4b-1: провайдер пулов (`static`|`http`). */
+  provider: 'SYNTH_EXECUTION_PROVIDER',
+  /** PROP-135 Ф4b-1: адрес provisioner'а пулов. */
+  provisionerUrl: 'SYNTH_EXECUTION_PROVISIONER_URL',
+  /** PROP-135 Ф4b-1: путь/ссылка на токен provisioner'а (НЕ значение). */
+  provisionerToken: 'SYNTH_EXECUTION_PROVISIONER_TOKEN',
+  /** PROP-135 Ф4b-1: таймаут обращения к provisioner'у, мс. */
+  provisionerTimeoutMs: 'SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS',
 } as const;
 
 /** Имя CLI-флага переключателя топологии (`synth serve --execution-mode`). */
@@ -103,6 +120,25 @@ export interface ResolvedExecutionRemoteConfig {
   profiles: Record<string, ResolvedExecutionProfile>;
   /** Поведение при непригодном профиле (PROP-135 Ф4a). */
   fallback: ExecutionFallback;
+  /** Провайдер пулов (PROP-135 Ф4b-1): `static` — из конфигурации, `http` — provisioner. */
+  provider: ExecutionPoolProviderKind;
+  /** Параметры provisioner'а пулов (PROP-135 Ф4b-1). */
+  provisioner: ResolvedExecutionProvisioner;
+}
+
+/**
+ * Эффективные параметры provisioner'а пулов (PROP-135 Ф4b-1).
+ *
+ * `tokenSecret` — **путь/ссылка**, НЕ значение (инвариант 13): значение
+ * читается из файла в момент обращения к provisioner'у.
+ */
+export interface ResolvedExecutionProvisioner {
+  /** Адрес provisioner'а (пусто при `provider: http` → fail-closed на старте). */
+  url: string;
+  /** Путь/ссылка на токен provisioner'а (НЕ значение). */
+  tokenSecret: string;
+  /** Таймаут обращения к provisioner'у, мс. */
+  timeoutMs: number;
 }
 
 /** Эффективная секция `execution`. */
@@ -138,6 +174,13 @@ export function isExecutionPooling(value: unknown): value is ExecutionPooling {
 export function isExecutionFallback(value: unknown): value is ExecutionFallback {
   return (
     typeof value === 'string' && (EXECUTION_FALLBACKS as readonly string[]).includes(value)
+  );
+}
+
+/** Предикат провайдера пулов (PROP-135 Ф4b-1). */
+export function isExecutionPoolProvider(value: unknown): value is ExecutionPoolProviderKind {
+  return (
+    typeof value === 'string' && (EXECUTION_POOL_PROVIDERS as readonly string[]).includes(value)
   );
 }
 
@@ -177,6 +220,13 @@ function invalidFallbackMessage(source: string, value: string): string {
   return (
     `[config] невалидное значение ${source}="${value}": ` +
     `ожидается одно из ${EXECUTION_FALLBACKS.map((m) => `'${m}'`).join(', ')}`
+  );
+}
+
+function invalidProviderMessage(source: string, value: string): string {
+  return (
+    `[config] невалидное значение ${source}="${value}": ` +
+    `ожидается одно из ${EXECUTION_POOL_PROVIDERS.map((m) => `'${m}'`).join(', ')}`
   );
 }
 
@@ -276,6 +326,22 @@ export function resolveExecutionConfig(
   });
   const fallback = resolveFallback(remoteCfg.fallback, env);
 
+  // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а. Порядок тот
+  // же (env > config.yaml > дефолт); неизвестное **явное** значение провайдера
+  // — fail-closed (как `mode`/`failMode`/`pooling`).
+  const provider = resolvePoolProvider(remoteCfg.provider, env);
+  const provisioner = resolveProvisioner(remoteCfg.provisioner, env);
+
+  // Fail-closed: провайдер `http` без адреса provisioner'а — «куда обращаться»
+  // не задано. Молчаливый откат на `static` означал бы, что оператор запросил
+  // динамические пулы, а получил статические (изоляция пулов нарушена).
+  if (provider === 'http' && provisioner.url.trim() === '') {
+    throw new Error(
+      `[config] execution.remote.provider="http" требует адрес provisioner'а ` +
+        `(execution.remote.provisioner.url / ${EXECUTION_ENV.provisionerUrl})`,
+    );
+  }
+
   return {
     mode,
     remote: {
@@ -288,8 +354,66 @@ export function resolveExecutionConfig(
       defaultProfile,
       profiles,
       fallback,
+      provider,
+      provisioner,
     },
   };
+}
+
+/**
+ * Провайдер пулов: env > config.yaml > `static`.
+ * Неизвестное явное значение — **fail-closed**.
+ */
+function resolvePoolProvider(
+  cfgValue: ExecutionPoolProviderKind | undefined,
+  env: NodeJS.ProcessEnv,
+): ExecutionPoolProviderKind {
+  const raw = env[EXECUTION_ENV.provider];
+  if (raw !== undefined && raw !== '') {
+    const trimmed = raw.trim();
+    if (isExecutionPoolProvider(trimmed)) return trimmed;
+    throw new Error(invalidProviderMessage(EXECUTION_ENV.provider, raw));
+  }
+  if (cfgValue !== undefined) {
+    if (isExecutionPoolProvider(cfgValue)) return cfgValue;
+    throw new Error(invalidProviderMessage('execution.remote.provider', String(cfgValue)));
+  }
+  return 'static';
+}
+
+/**
+ * Параметры provisioner'а: env > config.yaml > дефолт (пустой адрес, пустой
+ * токен, таймаут 10 с).
+ *
+ * `tokenSecret` — **путь/ссылка**, НЕ значение (инвариант 13): значение
+ * читается из файла в момент обращения к provisioner'у.
+ */
+function resolveProvisioner(
+  cfgValue:
+    | { url?: string; tokenSecret?: string; timeoutMs?: number }
+    | undefined,
+  env: NodeJS.ProcessEnv,
+): ResolvedExecutionProvisioner {
+  const rawUrl = env[EXECUTION_ENV.provisionerUrl];
+  const url =
+    rawUrl !== undefined && rawUrl !== ''
+      ? rawUrl.trim()
+      : (cfgValue?.url ?? '').trim();
+
+  const rawToken = env[EXECUTION_ENV.provisionerToken];
+  const tokenSecret =
+    rawToken !== undefined && rawToken !== ''
+      ? rawToken
+      : (cfgValue?.tokenSecret ?? '');
+
+  const timeoutMs =
+    resolvePositiveInt(
+      env[EXECUTION_ENV.provisionerTimeoutMs],
+      cfgValue?.timeoutMs,
+      EXECUTION_ENV.provisionerTimeoutMs,
+    ) ?? DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS;
+
+  return { url, tokenSecret, timeoutMs };
 }
 
 /**

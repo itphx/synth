@@ -150,6 +150,7 @@ interface Harness {
 async function makeHarness(opts: {
   router?: ExecutionRouter;
   executorProfile?: string;
+  projectId?: string;
   onToolCall: (ctx: ToolContext) => void;
 }): Promise<Harness> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'synth-exec-router-'));
@@ -175,6 +176,7 @@ async function makeHarness(opts: {
   });
   const session = await sessionManager.createSession({
     title: 'Execution router',
+    ...(opts.projectId ? { projectId: opts.projectId } : {}),
     settings: {
       provider: 'routerscript',
       model: 'm',
@@ -241,5 +243,63 @@ describe('PROP-135 Ф4a: порт роутера доходит до тула', 
     expect(seen).toBeDefined();
     // Inline-порт по умолчанию (инстанс без `execution.mode=remote`).
     expect(seen!.isRemote).toBe(false);
+  });
+
+  /**
+   * PROP-135 Ф4b-1: роутер получает **область** цели (`projectId`/`sessionId`)
+   * — по ней строится ключ пула (проектный/сессионный пул).
+   */
+  it('portFor получает projectId и sessionId цели (ключ пула)', async () => {
+    const port = sentinelPort('pool-port');
+    const targets: Array<{ profile?: string; projectId?: string; sessionId?: string }> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        targets.push(target ?? {});
+        return port;
+      },
+    };
+
+    const harness = await makeHarness({
+      router,
+      executorProfile: 'devops',
+      projectId: 'prj_router',
+      onToolCall: () => {},
+    });
+
+    const fresh = (await harness.sessionManager.getSession(harness.sessionId))!;
+    const userMsg = fresh.messages.find((m) => m.role === MessageRole.USER)!;
+    await harness.orchestrator
+      .createProcessMessage()(fresh, userMsg, new AbortController().signal, () => {});
+
+    expect(targets.length).toBeGreaterThan(0);
+    const last = targets[targets.length - 1]!;
+    expect(last.profile).toBe('devops');
+    expect(last.projectId).toBe('prj_router');
+    expect(last.sessionId).toBe(harness.sessionId);
+  });
+
+  it('сессия без проекта → projectId не задан (фоллбэк решает роутер)', async () => {
+    const port = sentinelPort('pool-port');
+    const targets: Array<{ profile?: string; projectId?: string; sessionId?: string }> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        targets.push(target ?? {});
+        return port;
+      },
+    };
+
+    const harness = await makeHarness({
+      router,
+      onToolCall: () => {},
+    });
+
+    const fresh = (await harness.sessionManager.getSession(harness.sessionId))!;
+    const userMsg = fresh.messages.find((m) => m.role === MessageRole.USER)!;
+    await harness.orchestrator
+      .createProcessMessage()(fresh, userMsg, new AbortController().signal, () => {});
+
+    const last = targets[targets.length - 1]!;
+    expect(last.projectId).toBeUndefined();
+    expect(last.sessionId).toBe(harness.sessionId);
   });
 });

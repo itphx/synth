@@ -299,6 +299,8 @@ export {
   // PROP-135 Ф4a: пулы и профили исполнения.
   isExecutionPooling,
   isExecutionFallback,
+  // PROP-135 Ф4b-1: провайдер пулов исполнения.
+  isExecutionPoolProvider,
   EXECUTION_ENV,
   EXECUTION_MODE_CLI_FLAG,
 } from './config/index.js';
@@ -310,9 +312,12 @@ export type {
   // PROP-135 Ф4a: пулы и профили исполнения.
   ExecutionPooling,
   ExecutionFallback,
+  // PROP-135 Ф4b-1: провайдер пулов исполнения.
+  ExecutionPoolProviderKind,
   ResolvedExecutionConfig,
   ResolvedExecutionRemoteConfig,
   ResolvedExecutionProfile,
+  ResolvedExecutionProvisioner,
   ExecutionCliOverride,
 } from './config/index.js';
 // ADR-099: резолверы доверия TLS/CA (`security.tls`).

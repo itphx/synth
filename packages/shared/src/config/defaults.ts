@@ -8,7 +8,7 @@ import {
 } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_MAX_READ_BYTES, DEFAULT_MAX_PREVIEW_BYTES } from '../types/index.js';
 import { DEFAULT_PROMPT_BLOCK_MAX_CHARS, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '../types/index.js';
-import { DEFAULT_EXECUTION_TIMEOUT_MS } from './types.js';
+import { DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS, DEFAULT_EXECUTION_TIMEOUT_MS } from './types.js';
 import { defaultExecutionConcurrency } from './execution.js';
 
 export const defaultConfig: SynthConfig = {
@@ -57,6 +57,17 @@ export const defaultConfig: SynthConfig = {
       profiles: {},
       // Непригодный профиль → откат на instance-порт; `fail` — fail-closed.
       fallback: 'instance',
+      // PROP-135 Ф4b-1: провайдер пулов. `static` — пулы из конфигурации
+      // (адреса профиля, порт на старте); `http` — пулы запрашиваются у
+      // provisioner'а (`provisioner.url` обязателен при `http`).
+      provider: 'static',
+      // Параметры provisioner'а пулов (пусто — провайдер `static`).
+      provisioner: {
+        url: '',
+        // Путь/ссылка на токен provisioner'а (НЕ значение — инвариант 13).
+        tokenSecret: '',
+        timeoutMs: DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
+      },
     },
   },
   auth: {

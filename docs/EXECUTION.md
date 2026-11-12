@@ -118,16 +118,24 @@
 | `execution.remote.defaultProfile` | строка | `default` | Имя профиля по умолчанию (каталог профилей задаёт ADMIN). |
 | `execution.remote.profiles` | карта профилей | `{}` | Каталог профилей (PROP-135 Ф4a): `имя → { url, timeoutMs, concurrency, failMode }`; профиль **поверх** общих параметров секции (пустой `url` наследует `remote.url`). Только `config.yaml`. |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — instance-порт; `fail` — fail-closed на старте. |
+| `execution.remote.provider` | `static` \| `http` | `static` | Провайдер пулов (PROP-135 Ф4b-1): `static` — пулы из конфигурации (адрес профиля, порт на старте); `http` — пулы запрашиваются у provisioner'а (адрес/токен из ответа, порт ленивый). |
+| `execution.remote.provisioner.url` | строка (адрес) | `''` | Адрес provisioner'а пулов; пусто при `provider: http` → fail-closed на старте. |
+| `execution.remote.provisioner.tokenSecret` | путь/ссылка на токен | — | **Путь/ссылка, не значение** (инвариант 13): путь к файлу с токеном provisioner'а. |
+| `execution.remote.provisioner.timeoutMs` | число | 10 000 | Таймаут обращения к provisioner'у (отделен от таймаута exec-вызова). |
 
 Фактические дефолты (как в `packages/shared/src/config/defaults.ts`): `mode: inline`,
 `remote.url: []`, `remote.timeoutMs: 30000`, `remote.concurrency` — число CPU процесса
-(`availableParallelism()`), `remote.failMode: fail`, `remote.tokenSecret: ''` (пусто).
+(`availableParallelism()`), `remote.failMode: fail`, `remote.tokenSecret: ''` (пусто),
+`remote.provider: 'static'`, `remote.provisioner: { url: '', tokenSecret: '', timeoutMs: 10000 }`.
 
 Env-имена (по одному на поле; **зафиксированы и реализованы**): `SYNTH_EXECUTION_MODE`,
 `SYNTH_EXECUTION_REMOTE_URL` (список через запятую), `SYNTH_EXECUTION_TOKEN` (путь/ссылка на
 токен, НЕ значение — инвариант 13), `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`,
 `SYNTH_EXECUTION_FAIL_MODE`, а также (PROP-135 Ф4a) `SYNTH_EXECUTION_POOLING`,
-`SYNTH_EXECUTION_DEFAULT_PROFILE`, `SYNTH_EXECUTION_FALLBACK`. Приоритет — CLI-флаг > env >
+`SYNTH_EXECUTION_DEFAULT_PROFILE`, `SYNTH_EXECUTION_FALLBACK` и (PROP-135 Ф4b-1)
+`SYNTH_EXECUTION_PROVIDER`, `SYNTH_EXECUTION_PROVISIONER_URL`,
+`SYNTH_EXECUTION_PROVISIONER_TOKEN` (путь/ссылка, НЕ значение),
+`SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS`. Приоритет — CLI-флаг > env >
 `config.yaml` > дефолт ([ADR-023](./arch_decisions/adr-023-configuration.md)).
 
 **Пулы и профили — роутер (PROP-135 Ф4a, реализовано).** Роутер портов
@@ -148,10 +156,65 @@ Env-имена (по одному на поле; **зафиксированы и
 медиа-раннер, worktree/process/MCP, детект зависимостей) остаётся на общем порте — это остаток
 следующих слайсов.
 
-**Остаток PROP-135:** provisioner пулов и монтирование (per-project), полный binding профиля
-(`task.executor_profile` → `agentDefinition.executorProfile` → `project.executor.profile`),
-`sandbox_exec` и браузерный класс пулов. Матрица «что уезжает в исполнитель» (§ ниже) на Ф4a не
-меняется.
+### Ф4b-1: провайдер пулов (`static`/`http`) и ленивый порт
+
+> **Ф4b-1 (PROP-135, реализовано):** провайдер пулов исполнения (`static`|`http`), ключи пулов
+> `instance|project|session` × `exec|browser` × профиль и **ленивый порт** на динамический пул.
+> **Сам сервис-provisioner** (поды/чарты/менеджер пулов) — **следующий слайс (Ф4b-2)**; в Ф4b-1
+> реализован только клиент протокола `/v1/pools`.
+
+**Провайдер пулов** (`execution.remote.provider`, по умолчанию `static`) решает, **откуда** берётся
+адрес пула:
+
+| Провайдер | Адрес пула | Порт | Изоляция пулов |
+|---|---|---|---|
+| `static` | первый адрес профиля из конфигурации | создаётся **на старте** (как в Ф4a) | **нет** — ключ пула игнорируется (`pooling: project` даёт тот же профильный порт) |
+| `http` | ответ provisioner'а (`POST /v1/pools`) | **лениво** — при первом обращении (`ensure`) | **да** — ключ пула различает пулы |
+
+**Ключ пула** (`poolKeyString`, `packages/core/src/execution/pool-provider.ts`) — канонический
+идентификатор: область × идентификатор × класс × профиль:
+
+```text
+instance:exec:default
+project:prj_1:exec:default
+session:ses_1:browser:default
+```
+
+У `project`/`session` идентификатор **обязателен**: ключ без него совпал бы с ключом чужого пула
+(ломает изоляцию) — `poolKeyString` в этом случае **ошибку**. Ключ идёт и в provisioner по проводу,
+и в кэш портов роутера (один порт на ключ).
+
+**Ленивый порт** (`packages/core/src/execution/pooled-port.ts`): `portFor` остаётся **синхронным** —
+он отдаёт «прокси» порта, который разрешается при первом вызове: `ensure` у провайдера → адрес
+пула → сборка реального порта (`createRemoteExecutionPortForPool`, если пул выдал токен, иначе —
+порт по конфигурации профиля). Ошибка `ensure` **не кэшируется**: следующий вызов повторяет
+запрос (пул мог появиться позже). Порт удалённый (`isRemote = true`), `executorMcp` не
+выставляется (MCP на динамических пулах — остаток).
+
+**Протокол provisioner'а** (клиент — `HttpExecutionPoolProvider`; сам сервис — Ф4b-2):
+
+| Метод | Путь | Тело / ответ | Смысл |
+|---|---|---|---|
+| `POST` | `/v1/pools` | `{key, scope, id, class, profile}` → `{url, token?}` | Создать/получить пул по ключу; адрес (и токен) пула приходят ответом |
+| `POST` | `/v1/pools/{key}/touch` | — | Продлить жизнь пула (best-effort) |
+| `POST` | `/v1/pools/{key}/drain` | — | Слить пул (best-effort) |
+| `DELETE` | `/v1/pools/{key}` | — | Удалить пул (best-effort) |
+| `GET` | `/v1/capabilities` | → `{provider, profiles}` | Диагностика |
+
+`{key}` — **URL-encoded** канонический ключ пула. Запросы — с `Authorization: Bearer <токен>`;
+токен provisioner'а — **путь/ссылка** (`execution.remote.provisioner.tokenSecret`), значение
+читается из файла в момент обращения, **не** попадает в логи и тексты ошибок (инвариант 13).
+Таймаут — `execution.remote.provisioner.timeoutMs` (по умолчанию 10 с).
+
+**Fail-closed:** `provider: http` без `execution.remote.provisioner.url` — ошибка конфигурации
+на старте; неизвестное значение `provider` — тоже ошибка (как `mode`/`pooling`). При `provider: http`
+статические `execution.remote.url` и `execution.remote.tokenSecret` **не нужны** (адрес и токен
+пула выдаёт provisioner) — проверка режима на старте этого не требует.
+
+**Остаток PROP-135:** **сам сервис-provisioner** (Ф4b-2), монтирование пулов (per-project),
+полный binding профиля (`task.executor_profile` → `agentDefinition.executorProfile` →
+`project.executor.profile`), `sandbox_exec` и браузерный класс пулов. Матрица «что уезжает в
+исполнитель» (§ ниже) на Ф4b-1 не меняется.
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
@@ -1473,3 +1536,24 @@ Split-топология технически возможна и при одн�
   `fs.hash` + размеру. Lint-инвариант «файловые тулы без `node:fs`» — allowlist
   сокращён до **трёх** файлов (`project-context`, `path-utils`, `search`). **Ф3 закрыт:**
   вложения целиком на исполнителе (чтение — Ф3a, выгрузка в workspace — Ф3b).
+- 2026-11-12 — **Ф4b-1 (PROP-135), слайс 4b-1: провайдер пулов и ленивый порт.**
+  Конфиг (`packages/shared`): в `execution.remote` аддитивно `provider`
+  (`static`|`http`, дефолт `static`) и `provisioner: { url, tokenSecret, timeoutMs }`
+  (дефолт `10000`); env — `SYNTH_EXECUTION_PROVIDER`,
+  `SYNTH_EXECUTION_PROVISIONER_URL`, `SYNTH_EXECUTION_PROVISIONER_TOKEN` (путь/ссылка,
+  **НЕ значение**), `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS`. **Fail-closed:**
+  неизвестное значение `provider` — ошибка конфигурации; `provider: http` без
+  `provisioner.url` — ошибка на старте («куда обращаться» не задано).
+  Core: новый `execution/pool-provider.ts` (`ExecutionPoolKey`/`poolKeyString` —
+  `instance|project|session` × `exec|browser` × профиль; `StaticExecutionPoolProvider`;
+  `HttpExecutionPoolProvider` — клиент протокола `/v1/pools`: `POST /v1/pools`,
+  `POST …/touch`, `POST …/drain`, `DELETE …/{key}`, `GET /v1/capabilities`; bearer-токен
+  из файла, кэш на процесс; значение токена не попадает в логи/тексты ошибок;
+  `ExecutionPoolProviderError`) и новый `execution/pooled-port.ts`
+  (`createPooledExecutionPort` — ленивое разрешение пула: `ensure` один раз на ключ,
+  при ошибке кэш сбрасывается; `fs` делегирует, реального порта без `fs` →
+  `ExecutionFsUnavailableError`; `executorMcp` не выставляется). Роутер:
+  `portFor({profile, projectId, sessionId})` — при `provider: http` порты ленивые,
+  кэш прокси по `poolKeyString`; без идентификатора области → `fallback: instance`
+  либо `fail` (`ExecutionProfileUnavailableError`). Оркестратор передаёт
+  `projectId`/`sessionId` сессии. **Остаток Ф4b:** сам сервис-provisioner (Ф4b-2).

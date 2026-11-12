@@ -431,6 +431,14 @@ execution:                         # ADR-077: топология исполне�
                                   # SYNTH_EXECUTION_FAIL_MODE
     tokenSecret: ""               # путь/ссылка на токен исполнителя (НЕ значение — инвариант 13);
                                   # SYNTH_EXECUTION_TOKEN
+    provider: "static"            # static (пулы из конфигурации) | http (provisioner пулов);
+                                  # SYNTH_EXECUTION_PROVIDER
+    provisioner:                  # параметры provisioner'а пулов (нужны при provider: http)
+      url: ""                     # адрес provisioner'а; пусто при provider: http — fail-closed на старте;
+                                  # SYNTH_EXECUTION_PROVISIONER_URL
+      tokenSecret: ""             # путь/ссылка на токен provisioner'а (НЕ значение — инвариант 13);
+                                  # SYNTH_EXECUTION_PROVISIONER_TOKEN
+      timeoutMs: 10000            # таймаут обращения к provisioner'у; SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS
 
 ssh:                             # PROP-124: режим работы инстанса с SSH-ключами
   mode: "tools"                  # tools (по умолчанию, fail-closed) | agent (эфемерный ssh-agent);
@@ -705,19 +713,25 @@ remote:                           # гибридный режим: локаль�
 | `execution.remote.defaultProfile` | строка | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Имя профиля по умолчанию (каталог профилей задаёт ADMIN) |
 | `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — откат на instance-порт; `fail` — fail-closed (старт прерывается) |
+| `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Провайдер пулов (PROP-135 Ф4b-1): `static` — пулы из конфигурации (адреса профиля, порт на старте — поведение Ф4a); `http` — пулы запрашиваются у provisioner'а (адрес и токен пула приходят ответом, порт собирается лениво) |
+| `execution.remote.provisioner.url` | строка (адрес) | `''` | `SYNTH_EXECUTION_PROVISIONER_URL` | Адрес provisioner'а пулов (`http://…`); **пусто при `provider: http` → fail-closed на старте** («куда обращаться» не задано) |
+| `execution.remote.provisioner.tokenSecret` | путь/ссылка | `''` | `SYNTH_EXECUTION_PROVISIONER_TOKEN` | **Путь/ссылка на токен provisioner'а, НЕ значение** (инвариант 13). Значение читается из файла в момент обращения и не попадает в логи/тексты ошибок |
+| `execution.remote.provisioner.timeoutMs` | число | `10000` | `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS` | Таймаут обращения к provisioner'у (10 с) — отдельный от таймаута exec-вызова |
 
 **Приоритет** ([ADR-023](./arch_decisions/adr-023-configuration.md)): CLI-флаг `--execution-mode inline|remote` >
 env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `resolveExecutionConfig`
 (`@itphx/synth-shared/config`).
 
 **Fail-closed** (как `storage.backend`): неизвестное **явное** значение `mode` (опечатка `inlne`),
-`failMode`, `pooling` или `fallback` — ошибка конфигурации, а не тихий выбор дефолта:
+`failMode`, `pooling`, `fallback` или `provider` — ошибка конфигурации, а не тихий выбор дефолта:
 
 ```text
 [config] невалидное значение SYNTH_EXECUTION_MODE="inlne": ожидается одно из 'inline', 'remote'
 [config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
 [config] невалидное значение SYNTH_EXECUTION_POOLING="projekt": ожидается одно из 'instance', 'project', 'session'
 [config] невалидное значение SYNTH_EXECUTION_FALLBACK="silent": ожидается одно из 'instance', 'fail'
+[config] невалидное значение SYNTH_EXECUTION_PROVIDER="htpp": ожидается одно из 'static', 'http'
+[config] execution.remote.provider="http" требует адрес provisioner'а (execution.remote.provisioner.url / SYNTH_EXECUTION_PROVISIONER_URL)
 ```
 
 **Пулы и профили (PROP-135, Ф4a).** Пул и профиль решают, **какой порт** достаётся сессии:
@@ -734,7 +748,32 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
 
 Профили задаются **только** в `config.yaml` — env-переопределение каталога профилей не
 заводится. Полный binding профиля (`task.executor_profile` → `agentDefinition.executorProfile` →
-`project.executor.profile`) и provisioner пулов — следующие слайсы PROP-135.
+`project.executor.profile`) — следующий слайс PROP-135.
+
+**Провайдер пулов (PROP-135, Ф4b-1).** `execution.remote.provider` решает, **откуда** берётся
+адрес пула:
+
+- `static` (дефолт) — пулы **из конфигурации**: адрес пула — первый адрес профиля, порт
+  создаётся на старте (поведение Ф4a). Изоляции пулов нет: ключ пула игнорируется, поэтому
+  `pooling: project` при `provider: static` даёт тот же профильный порт, что и `instance`;
+- `http` — пулы запрашиваются у **provisioner'а** (`POST {provisioner.url}/v1/pools`): адрес и
+  токен пула приходят **ответом**, поэтому порт собирается **лениво** — при первом обращении
+  (`ensure`), а не на старте. Ключ пула — `instance|project|session` × `exec|browser` × профиль
+  (`project:<id>:exec:<profile>`), по нему provisioner'у и роутеру известно, **какой** пул
+  запрашивать; один ключ — один порт (кэш прокси в роутере).
+
+При `provider: http`:
+
+- статические `execution.remote.url` и `execution.remote.tokenSecret` **не нужны** — адрес и
+  токен пула выдаёт provisioner (токен пула — в ответе `POST /v1/pools`);
+- `execution.remote.provisioner.url` **обязателен** — без него старт прерывается (fail-closed);
+- `execution.remote.provisioner.tokenSecret` — путь/ссылка на токен provisioner'а (НЕ значение);
+  значение читается из файла в момент обращения и **не** попадает в логи и тексты ошибок;
+- если у цели нет идентификатора области (сессия без проекта при `pooling: project`) →
+  `fallback: instance` (instance-порт) либо `fallback: fail` (**fail-closed**).
+
+Сам **сервис-provisioner** (поды/чарты/менеджер пулов) — следующий слайс PROP-135 (Ф4b-2);
+в этом слайсе реализован только клиент протокола `/v1/pools`.
 
 **Текущее состояние реализации (шаги 3 и 7b плана ADR-077).** Режим `inline` — прежнее
 поведение, ничего не меняется. Режим `remote` реализован **шагом 7b**: core подключает пакет
@@ -762,12 +801,38 @@ execution:
     pooling: "instance"            # instance (общий порт) | project | session; SYNTH_EXECUTION_POOLING
     defaultProfile: "default"      # имя профиля по умолчанию; SYNTH_EXECUTION_DEFAULT_PROFILE
     fallback: "instance"           # instance (откат на instance-порт) | fail (fail-closed); SYNTH_EXECUTION_FALLBACK
+    provider: "static"             # static (пулы из конфигурации) | http (provisioner); SYNTH_EXECUTION_PROVIDER
+    provisioner:                   # параметры provisioner'а пулов (нужны при provider: http)
+      url: ""                      # адрес provisioner'а; пусто при provider: http → fail-closed;
+                                   # SYNTH_EXECUTION_PROVISIONER_URL
+      tokenSecret: ""              # путь/ссылка на токен provisioner'а (НЕ значение!);
+                                   # SYNTH_EXECUTION_PROVISIONER_TOKEN
+      timeoutMs: 10000             # таймаут обращения к provisioner'у; SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS
     profiles:                      # каталог профилей (только config.yaml)
       devops:
         url: ["http://synth-executor-devops:8080"]   # пусто → наследует remote.url
         timeoutMs: 60000            # не задано → наследует remote.timeoutMs
         concurrency: 4              # не задано → наследует remote.concurrency
         failMode: "fail"            # не задано → наследует remote.failMode
+```
+
+Пример динамических пулов (адрес и токен пула выдаёт provisioner; статические адреса
+исполнителей не нужны):
+
+```yaml
+execution:
+  mode: "remote"
+  remote:
+    provider: "http"               # пулы запрашиваются у provisioner'а
+    pooling: "project"             # пул на проект (project:<id>:exec:<profile>)
+    fallback: "instance"           # без projectId → instance-порт
+    provisioner:
+      url: "http://synth-provisioner:8080"
+      tokenSecret: "/etc/synth/secrets/provisioner-token"   # путь/ссылка, НЕ значение
+      timeoutMs: 10000
+    profiles:
+      default:
+        timeoutMs: 60000            # параметры профиля — «поверх» общих
 ```
 
 ### Доверие TLS и mTLS исходящих соединений (`security.tls`, ADR-099)

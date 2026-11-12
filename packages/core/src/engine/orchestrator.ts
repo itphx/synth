@@ -6492,8 +6492,13 @@ export class ChatOrchestrator {
                   // PROP-135 Ф4a: порт выбирает роутер по профилю сессии
                   // (`session.settings.executorProfile`); без роутера —
                   // instance-порт.
+                  // PROP-135 Ф4b-1: при `provider: http` роутер строит ключ
+                  // пула по области (`projectId`/`sessionId`) — без них пул
+                  // не адресуем (фоллбэк решает роутер).
                   executionPort: this._executionRouter.portFor({
                     profile: session.settings.executorProfile,
+                    projectId: session.projectId,
+                    sessionId: session.id,
                   }),
                   // ADR-075: гейт `workspace` наследуется саб-агентом —
                   // его permission-слой не даёт обойти отсутствие рабочего каталога.

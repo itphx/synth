@@ -43,6 +43,9 @@ function execution(overrides: { mode?: 'inline' | 'remote'; url?: string[]; toke
           defaultProfile: 'default',
           profiles: {},
           fallback: 'instance',
+          // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
+          provider: 'static',
+          provisioner: { url: '', tokenSecret: '', timeoutMs: 10_000 },
         },
       },
     },

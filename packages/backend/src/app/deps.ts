@@ -139,8 +139,8 @@ import {
   resolvePipelineStepProvider,
   toCoreProviderConfig,
   ProviderFactory,
-  // ADR-077: порт исполнения команд (inline/remote).
-  createExecutionPortForConfig,
+  // PROP-135 Ф4b-1: instance-порт (при `provider: http` — ленивый, на пул).
+  createInstanceExecutionPort,
   // PROP-135 Ф4a: роутер портов исполнения (пулы/профили).
   createExecutionRouter,
   // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр
@@ -1090,7 +1090,10 @@ export async function createBackendDeps(
   // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`) — приёмник
   // для клиента удалённого порта (очередь, занятость, ожидание, исход).
   const executorMetrics = metrics ? createExecutorMetricsCollector(metrics) : undefined;
-  const executionPort = await createExecutionPortForConfig(
+  // PROP-135 Ф4b-1: при `provider: http` адреса исполнителей приходят от
+  // provisioner'а — instance-порт собирается **лениво** (на instance-пул),
+  // статический `execution.remote.url` не требуется.
+  const executionPort = await createInstanceExecutionPort(
     execution,
     executorMetrics ? { metricsSink: executorMetrics } : undefined,
   );
