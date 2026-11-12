@@ -629,7 +629,7 @@ namespace — имя плагина в нижнем регистре, небук
 | `agentRole` | роль агента | если задана |
 | `projectId` | id проекта сессии | если задан |
 | `abortSignal` | сигнал отмены хода | если задан |
-| `runtime` | узкий runtime сессии (`exec`/`fs`) — см. ниже | `inline`: если сессионный порт доступен; `out-of-process` (v2): вместо объекта — прокси runtime'а в env + `invocationId` в контексте (§5.2.1) |
+| `runtime` | узкий runtime сессии (`exec`/`fs`) — см. ниже | `inline`: если сессионный порт доступен **и** у тула «файловая» capability; `out-of-process` (v2): вместо объекта — прокси runtime'а в env + `invocationId` в контексте (§5.2.1) |
 | `extra` | внутреннее состояние ядра | **не передаётся** |
 | `dataDir` | корень данных инстанса | **не передаётся** |
 
@@ -680,6 +680,19 @@ interface PluginRuntime {
 `git_read`, `git_write` — они работают в контуре исполнителя сессии, и `ctx.runtime` —
 единственный способ добраться до команд и файлов оттуда. `web`, `memory`, `user` —
 контур control plane, runtime им не нужен.
+
+**Гейт по capability (PROP-138, слайс 138c).** Runtime выдаётся **только** тулу, у которого
+есть хотя бы одна «файловая» capability (`file_read`/`file_write`/`shell`/`search`/`git_read`/
+`git_write`). Тул с capability `memory`/`web`/`user` (или без capability вовсе) `ctx.runtime`
+**не получает** — контур исполнителя ему не нужен, а лишний доступ к ФС и командам — лишняя
+поверхность. Правило одно для обоих транспортов:
+
+- `inline`: в `ctx.runtime` просто нет поля;
+- `out-of-process` (v2): у вызова нет `invocationId` — привязка не регистрируется, поэтому
+  любой запрос `/runtime/*` отклоняется `404` (`unknown_invocation`, §5.2.1).
+
+Гейт решает **хост** по capability тула из реестра (`ToolDefinition.capabilities`) — плагин
+не может его обойти ни сменой имени, ни формулировкой в манифесте.
 
 ```typescript
 const tool: Parameters<PluginFacade['registerTool']>[0] = {
@@ -762,7 +775,8 @@ async function exec(invocationId: string, argv: string[], cwd?: string): Promise
 хост по capability тула (`file_read`/`file_write`/`shell`/`search`/`git_read`/`git_write`
 работают в контуре исполнителя; `web`/`memory`/`user` — в control plane и runtime им
 не нужен). Плагинный тул без нужной capability всё равно получит отказ от
-permission-слоя — runtime этого не обходит.
+permission-слоя — runtime этого не обходит. И наоборот: capability без «файловой»
+не даёт runtime — гейт двухсторонний (см. «Гейт по capability» выше).
 
 **Почему стоит задавать `jsonSchema`.** `parameters` — ваша zod-схема; хост валидирует ею
 аргументы (`safeParse`). Но для модели схема конвертируется хостом в JSON Schema, и конвертер

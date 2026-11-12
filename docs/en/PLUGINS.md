@@ -640,7 +640,7 @@ one: the host gives the plugin only the turn identifiers, the working directory 
 | `agentRole` | agent role | if set |
 | `projectId` | session project id | if set |
 | `abortSignal` | turn cancellation signal | if set |
-| `runtime` | the narrow session runtime (`exec`/`fs`) — see below | `inline`: if the session port is available; `out-of-process` (v2): instead of an object — the runtime proxy in the env plus `invocationId` in the context (§5.2.1) |
+| `runtime` | the narrow session runtime (`exec`/`fs`) — see below | `inline`: if the session port is available **and** the tool has a "file" capability; `out-of-process` (v2): instead of an object — the runtime proxy in the env plus `invocationId` in the context (§5.2.1) |
 | `extra` | internal core state | **not passed** |
 | `dataDir` | instance data root | **not passed** |
 
@@ -690,6 +690,20 @@ interface PluginRuntime {
 `git_read`, `git_write` — they work in the contour of the session executor, and `ctx.runtime`
 is the only way to reach the commands and the files from there. `web`, `memory`, `user` are
 the control plane contour — they do not need the runtime.
+
+**The capability gate (PROP-138, slice 138c).** The runtime is handed out **only** to a tool
+that has at least one "file" capability (`file_read`/`file_write`/`shell`/`search`/`git_read`/
+`git_write`). A tool with the `memory`/`web`/`user` capability (or with no capability at all)
+does **not** get `ctx.runtime` — the executor contour is not needed by it, and extra access to
+files and commands is extra surface. The rule is the same for both transports:
+
+- `inline`: the `ctx.runtime` field is simply absent;
+- `out-of-process` (v2): the call has no `invocationId` — the binding is not registered, so
+  any `/runtime/*` request is refused with `404` (`unknown_invocation`, §5.2.1).
+
+The gate is decided by the **host** from the tool's capability in the registry
+(`ToolDefinition.capabilities`) — a plugin cannot bypass it by renaming the tool or by the
+wording in the manifest.
 
 ```typescript
 const tool: Parameters<PluginFacade['registerTool']>[0] = {
@@ -772,7 +786,9 @@ arrive there — a limitation of the pipeline engine, not of the plugin narrowin
 right to perform an operation by the tool's capability (`file_read`/`file_write`/`shell`/
 `search`/`git_read`/`git_write` run in the executor contour; `web`/`memory`/`user` are the
 control plane contour and need no runtime). A plugin tool without the required capability still
-gets a refusal from the permission layer — the runtime does not bypass it.
+gets a refusal from the permission layer — the runtime does not bypass it. And the other way
+round: a capability without a "file" one does not grant the runtime — the gate is two-sided
+(see "The capability gate" above).
 
 **Why you should set `jsonSchema`.** `parameters` is your zod schema; the host validates the
 arguments with it (`safeParse`). But for the model the schema is converted by the host into JSON

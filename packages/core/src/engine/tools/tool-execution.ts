@@ -7,7 +7,7 @@
  */
 
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
-import { stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
+import { stripNullBytes, stripNullBytesDeep, ToolCapability } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import { createPluginRuntime } from '../../execution/plugin-runtime.js';
 import { isExecutionPort } from '../../execution/ports/index.js';
@@ -82,6 +82,40 @@ export function buildDenyResult(p: BuildDenyResultParams): ToolResult {
 }
 
 /**
+ * Capability, требующие runtime (PROP-138 Ф1, слайс 138c).
+ *
+ * Runtime — узкий доступ к **контуру исполнителя сессии** (ADR-077): он нужен
+ * ровно тем capability, которые работают с файлами/командами/git. Для остальных
+ * (`web`, `memory`, `user`, …) контур исполнителя не нужен — работа идёт в
+ * control plane, и runtime там только лишняя поверхность (fail-closed: контур
+ * не нужен → runtime не выдаётся).
+ *
+ * Набор совпадает с «файловыми» capability (`WORKSPACE_CAPABILITIES` в
+ * `engine/permission/availability.ts`), но суть другая: там — привязка к
+ * рабочему каталогу, здесь — потребность в контуре исполнителя. Общего
+ * источника истины между ними нет: наборы могут разойтись осознанно.
+ */
+export const RUNTIME_CAPABILITIES: ReadonlySet<string> = new Set([
+  ToolCapability.FILE_READ,
+  ToolCapability.FILE_WRITE,
+  ToolCapability.SHELL,
+  ToolCapability.SEARCH,
+  ToolCapability.GIT_READ,
+  ToolCapability.GIT_WRITE,
+]);
+
+/**
+ * Нужен ли тулу runtime (контур исполнителя сессии).
+ *
+ * @param capabilities — capability тула (как в `ToolDefinition`).
+ * @returns `true`, если хотя бы одна capability входит в `RUNTIME_CAPABILITIES`.
+ */
+export function toolNeedsRuntime(capabilities?: readonly string[]): boolean {
+  if (!capabilities || capabilities.length === 0) return false;
+  return capabilities.some((capability) => RUNTIME_CAPABILITIES.has(capability));
+}
+
+/**
  * ADR-090: сужение контекста тула для инструментов плагинов.
  *
  * `inline`-плагин исполняется **в процессе ядра**, поэтому контекст тула нельзя
@@ -104,6 +138,14 @@ export function buildDenyResult(p: BuildDenyResultParams): ToolResult {
  * `git_read`/`git_write`) работает в контуре исполнителя, а не в control plane.
  * Порта нет — runtime не добавляется (тул остаётся без доступа к ФС/командам).
  *
+ * **Capability-гейт (слайс 138c).** Runtime выдаётся **только** тулам с
+ * «файловой» capability (`RUNTIME_CAPABILITIES`). Тул с capability `memory`/
+ * `web`/`user` runtime **не получает**: контур исполнителя ему не нужен, а
+ * лишний доступ к ФС/командам — лишняя поверхность. Гейт один и тот же для
+ * обоих транспортов (inline и out-of-process): в out-of-process случае
+ * отсутствие runtime означает и отсутствие `invocationId` у вызова — прокси
+ * runtime'а отвечает `404` (`unknown_invocation`).
+ *
  * @param toolDef — определение тула (источник — `ToolDefinition.source`).
  * @param context — полный контекст вызова (как у встроенных тулов).
  * @returns суженный контекст для плагинного тула; исходный — для остальных.
@@ -117,7 +159,10 @@ export function narrowToolContext(
   // проверяется структурно (`isExecutionPort`) — «чужой» объект в `extra`
   // портом не считается (fail-closed: runtime не добавляется).
   const port = context.extra?.[EXECUTION_PORT_KEY];
-  const runtime = isExecutionPort(port) ? createPluginRuntime(port) : undefined;
+  const runtime =
+    toolNeedsRuntime(toolDef.capabilities) && isExecutionPort(port)
+      ? createPluginRuntime(port)
+      : undefined;
   return {
     sessionId: context.sessionId,
     messageId: context.messageId,

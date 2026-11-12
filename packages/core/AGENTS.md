@@ -1889,6 +1889,14 @@
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
   MCP-тулы получают контекст без изменений; правило действует и в шагах пайплайна, и в саб-агенте `task`
   (обе точки идут через `executeToolDef`).
+  **Runtime плагинного тула — по capability (PROP-138 Ф1/138c).** `ctx.runtime` (узкий
+  `exec`/`fs` поверх порта сессии) добавляется **только** тулу с «файловой» capability
+  (`RUNTIME_CAPABILITIES`/`toolNeedsRuntime` в `engine/tools/tool-execution.ts`: `file_read`/
+  `file_write`/`shell`/`search`/`git_read`/`git_write`) **и** при валидном порте в
+  `ctx.extra.executionPort` (`isExecutionPort`, fail-closed). Capability `memory`/`web`/`user`
+  (и пустой набор) runtime **не получают** — контур исполнителя им не нужен. Гейт один для
+  обоих транспортов: в `out-of-process` (v2) отсутствие runtime означает отсутствие
+  `invocationId` у вызова — прокси runtime'а отвечает `404` (`unknown_invocation`).
   **Схемы на границе LLM (`json-schema.ts`, `schema-sanitize.ts`).** `zodToJsonSchema` сворачивает
   вырожденный union «одно-или-много» (`T | T[]`, T — один конкретный тип) в `{type:'array', items:T}`
   — модель видит одну форму вместо `anyOf` (массив — надмножество, одиночное значение по-прежнему

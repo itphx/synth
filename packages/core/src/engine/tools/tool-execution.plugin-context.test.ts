@@ -13,6 +13,11 @@
  * PROP-138 (Ф1): плагинному тулу добавляется **узкий runtime** (`ctx.runtime`) —
  * команды и файловые операции через порт исполнения сессии; `extra`/`dataDir`
  * при этом по-прежнему не передаются.
+ *
+ * PROP-138 (слайс 138c): runtime выдаётся **только** тулам с «файловой»
+ * capability (`file_read`/`file_write`/`shell`/`search`/`git_read`/`git_write`) —
+ * capability `memory`/`web`/`user` работают в control plane, контур исполнителя
+ * им не нужен.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -41,13 +46,21 @@ function fullContext(): ToolContext {
   };
 }
 
-/** Тул заданного источника; `execute` запоминает полученный контекст. */
-function toolOfSource(source: 'builtin' | 'mcp' | 'plugin', seen: { ctx?: ToolContext }): ToolDefinition {
+/**
+ * Тул заданного источника; `execute` запоминает полученный контекст.
+ *
+ * @param capabilities — capability тула (по умолчанию — `search`).
+ */
+function toolOfSource(
+  source: 'builtin' | 'mcp' | 'plugin',
+  seen: { ctx?: ToolContext },
+  capabilities: ToolCapability[] = [ToolCapability.SEARCH],
+): ToolDefinition {
   const tool: ToolDefinition = {
     name: `tool_${source}`,
     description: `тул источника ${source}`,
     parameters: z.object({ query: z.string() }),
-    capabilities: [ToolCapability.SEARCH],
+    capabilities,
     execute: async (_params, ctx) => {
       seen.ctx = ctx;
       return { content: 'ok' };
@@ -231,6 +244,117 @@ describe('executeToolDef — ctx.runtime плагинного тула (PROP-138
 
       expect(seen.ctx).toBe(context);
       expect(seen.ctx!.runtime).toBeUndefined();
+    }
+  });
+});
+
+describe('executeToolDef — capability-гейт ctx.runtime (PROP-138, слайс 138c)', () => {
+  /** «Файловые» capability — им контур исполнителя нужен. */
+  const FILE_CAPABILITIES: ToolCapability[] = [
+    ToolCapability.FILE_READ,
+    ToolCapability.FILE_WRITE,
+    ToolCapability.SHELL,
+    ToolCapability.SEARCH,
+    ToolCapability.GIT_READ,
+    ToolCapability.GIT_WRITE,
+  ];
+
+  /** Capability control plane — контур исполнителя им не нужен. */
+  const CONTROL_PLANE_CAPABILITIES: ToolCapability[] = [
+    ToolCapability.MEMORY,
+    ToolCapability.WEB,
+    ToolCapability.USER,
+  ];
+
+  it.each(FILE_CAPABILITIES)('«файловая» capability %s → runtime есть', async (capability) => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen, [capability]);
+    const { port } = fakePort();
+
+    await executeToolDef(
+      tool,
+      { query: 'x' },
+      { ...fullContext(), extra: { executionPort: port } },
+      'tool_plugin',
+    );
+
+    expect(seen.ctx!.runtime).toBeDefined();
+  });
+
+  it.each(CONTROL_PLANE_CAPABILITIES)(
+    'control-plane capability %s → runtime нет (даже при наличии порта)',
+    async (capability) => {
+      const seen: { ctx?: ToolContext } = {};
+      const tool = toolOfSource('plugin', seen, [capability]);
+      const { port } = fakePort();
+
+      await executeToolDef(
+        tool,
+        { query: 'x' },
+        { ...fullContext(), extra: { executionPort: port } },
+        'tool_plugin',
+      );
+
+      expect(seen.ctx!.runtime).toBeUndefined();
+      // Сужение не ослаблено: internals ядра не проходят.
+      expect(seen.ctx!.extra).toBeUndefined();
+      expect(seen.ctx!.dataDir).toBeUndefined();
+    },
+  );
+
+  it('смешанный набор capability: «файловая» есть → runtime есть', async () => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen, [
+      ToolCapability.MEMORY,
+      ToolCapability.SEARCH,
+    ]);
+    const { port } = fakePort();
+
+    await executeToolDef(
+      tool,
+      { query: 'x' },
+      { ...fullContext(), extra: { executionPort: port } },
+      'tool_plugin',
+    );
+
+    expect(seen.ctx!.runtime).toBeDefined();
+  });
+
+  it('без capability runtime нет (даже при наличии порта)', async () => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen, []);
+    const { port } = fakePort();
+
+    await executeToolDef(
+      tool,
+      { query: 'x' },
+      { ...fullContext(), extra: { executionPort: port } },
+      'tool_plugin',
+    );
+
+    expect(seen.ctx!.runtime).toBeUndefined();
+  });
+
+  it('«файловая» capability, но порта нет → runtime нет', async () => {
+    const seen: { ctx?: ToolContext } = {};
+    const tool = toolOfSource('plugin', seen, [ToolCapability.FILE_READ]);
+
+    await executeToolDef(tool, { query: 'x' }, fullContext(), 'tool_plugin');
+
+    expect(seen.ctx!.runtime).toBeUndefined();
+  });
+
+  it('встроенный и MCP-тулы: capability не влияет — контекст полный', async () => {
+    for (const source of ['builtin', 'mcp'] as const) {
+      const seen: { ctx?: ToolContext } = {};
+      const tool = toolOfSource(source, seen, [ToolCapability.MEMORY]);
+      const { port } = fakePort();
+      const context: ToolContext = { ...fullContext(), extra: { executionPort: port } };
+
+      await executeToolDef(tool, { query: 'x' }, context, `tool_${source}`);
+
+      expect(seen.ctx).toBe(context);
+      expect(seen.ctx!.extra).toBe(context.extra);
     }
   });
 });
