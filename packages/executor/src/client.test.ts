@@ -10,6 +10,11 @@ import type {
   ExecutionMetricsSink,
   ExecutionPort,
 } from '@itphx/synth-core';
+import {
+  ExecutionFsUnavailableError,
+  FsPathError,
+  isFsPathError,
+} from '@itphx/synth-core';
 import { createRemoteExecutionPort, RemoteExecutionPort, type ExecutorFetch } from './client.js';
 import { startExecutorServer, type ExecutorHandle } from './server.js';
 
@@ -122,6 +127,89 @@ async function startLegacySecretsSpawnExecutor(): Promise<{
   const { port } = server.address() as AddressInfo;
   legacyServers.push(server);
   return { url: `http://127.0.0.1:${port}`, spawnCalls: () => spawnCalls };
+}
+
+/**
+ * Исполнитель с FS-операциями (`features.fs`, протокол 7, PROP-135).
+ *
+ * Отвечает на `/capabilities` и на FS-роуты; ответ FS-роута задаётся
+ * параметром: либо один общий ответ, либо карта «роут → ответ» (для
+ * разных операций — разные тела).
+ */
+async function startFsExecutor(
+  capabilities: Record<string, unknown>,
+  fsResponse?:
+    | { status: number; body: unknown }
+    | Record<string, { status: number; body: unknown }>,
+): Promise<{
+  url: string;
+  fsCalls: () => string[];
+  fsBodies: () => Array<{ url: string; body: unknown }>;
+}> {
+  const calls: string[] = [];
+  const bodies: Array<{ url: string; body: unknown }> = [];
+  type FsAnswer = { status: number; body: unknown };
+  const single: FsAnswer | undefined =
+    fsResponse && typeof (fsResponse as FsAnswer).status === 'number'
+      ? (fsResponse as FsAnswer)
+      : undefined;
+  const byRoute: Record<string, FsAnswer> | undefined =
+    fsResponse && !single ? (fsResponse as Record<string, FsAnswer>) : undefined;
+  const server = createServer((req, res) => {
+    if (req.url === '/capabilities') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(capabilities));
+      return;
+    }
+    if (req.url?.startsWith('/fs/')) {
+      calls.push(req.url);
+      let raw = '';
+      req.on('data', (chunk: Buffer | string) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        let parsed: unknown;
+        try {
+          parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
+        } catch {
+          parsed = undefined;
+        }
+        bodies.push({ url: req.url as string, body: parsed });
+        const answer: FsAnswer =
+          byRoute?.[req.url as string]
+          ?? single
+          ?? { status: 200, body: { stat: { kind: 'file', size: 42, mtimeMs: 1 } } };
+        res.writeHead(answer.status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(answer.body));
+      });
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  legacyServers.push(server);
+  return { url: `http://127.0.0.1:${port}`, fsCalls: () => calls, fsBodies: () => bodies };
+}
+
+/** Состав capabilities исполнителя с FS-операциями. */
+function fsCapabilities(): Record<string, unknown> {
+  return {
+    protocol: 7,
+    toolchain: { sh: 'sh 5.2' },
+    os: process.platform,
+    arch: process.arch,
+    node: process.version,
+    features: {
+      background: true,
+      secrets: true,
+      mcpAttachments: true,
+      sshAgent: true,
+      secretsSpawn: true,
+      fs: true,
+    },
+  };
 }
 
 describe('клиент удалённого порта', () => {
@@ -1129,5 +1217,407 @@ describe('клиент удалённого порта: фоновый запу�
     expect(exit.exitCode).toBe(0);
     // Запуск ушёл только к адресу с признаком `features.secretsSpawn`.
     expect(spawnHits).toEqual([String(handle.port)]);
+  });
+});
+
+/**
+ * FS-операции клиента удалённого порта (протокол 7, PROP-135 Ф1).
+ *
+ * Адрес выбирается по признаку `features.fs`: старый исполнитель (протокол
+ * ≤ 6) его не объявляет ⇒ файловые тулы в remote-режиме **fail-closed**
+ * (`ExecutionFsUnavailableError`), тихого возврата к чтению ФС в control plane
+ * нет.
+ */
+describe('клиент удалённого порта: FS-операции', () => {
+  it('исполнитель без features.fs — ExecutionFsUnavailableError (fail-closed)', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: { sh: 'sh 5.2' },
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true, secrets: true },
+    });
+    const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
+
+    const err = await port.fs!.stat('/tmp/x').catch((e) => e);
+    expect(err).toBeInstanceOf(ExecutionFsUnavailableError);
+    expect((err as ExecutionFsUnavailableError).message).toContain('features.fs');
+  });
+
+  it('исполнитель без features.fs — тот же отказ на realpath и readdir', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
+
+    await expect(port.fs!.realpath('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+    await expect(port.fs!.readdir('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+  });
+
+  it('исполнитель с features.fs — вызов уходит на его адрес', async () => {
+    const executor = await startFsExecutor(fsCapabilities());
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const stat = await port.fs!.stat('/workspace/a.txt');
+    expect(stat).toEqual({ kind: 'file', size: 42, mtimeMs: 1 });
+    expect(executor.fsCalls()).toEqual(['/fs/stat']);
+  });
+
+  it('адрес без features.fs исключается — вызов уходит к адресу с признаком', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const executor = await startFsExecutor(fsCapabilities());
+    const port = createRemoteExecutionPort({ urls: [legacy, executor.url], token: TOKEN });
+
+    const stat = await port.fs!.stat('/workspace/a.txt');
+    expect(stat.size).toBe(42);
+    expect(executor.fsCalls()).toEqual(['/fs/stat']);
+  });
+
+  it('ошибка исполнителя по reason → FsPathError с машинным кодом', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      status: 404,
+      body: {
+        error: {
+          reason: 'not_found',
+          code: 'ENOENT',
+          message: 'путь не найден: /workspace/a.txt',
+          stdout: '',
+          stderr: '',
+          killed: false,
+          signal: null,
+          truncated: false,
+          durationMs: 0,
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.stat('/workspace/a.txt').catch((e) => e);
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('not_found');
+    expect((err as FsPathError).path).toBe('/workspace/a.txt');
+  });
+
+  it('readdir — записи приходят из ответа исполнителя', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      status: 200,
+      body: {
+        entries: [
+          { name: 'sub', kind: 'directory', size: 4096 },
+          { name: 'a.txt', kind: 'file', size: 5 },
+        ],
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const entries = await port.fs!.readdir('/workspace');
+    expect(entries).toEqual([
+      { name: 'sub', kind: 'directory', size: 4096 },
+      { name: 'a.txt', kind: 'file', size: 5 },
+    ]);
+    expect(executor.fsCalls()).toEqual(['/fs/list']);
+  });
+
+  it('readText — страница приходит из ответа исполнителя, offset/limit уходят в тело', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/read-text': {
+        status: 200,
+        body: { page: { lines: ['1: one', '2: two'], totalLines: 2, truncated: false, bytes: 15 } },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const page = await port.fs!.readText('/workspace/a.txt', { offset: 0, limit: 2 });
+    expect(page).toEqual({ lines: ['1: one', '2: two'], totalLines: 2, truncated: false, bytes: 15 });
+    expect(executor.fsCalls()).toEqual(['/fs/read-text']);
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/a.txt', offset: 0, limit: 2 });
+  });
+
+  it('sniff — признак бинаря и MIME приходят из ответа исполнителя', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/sniff': { status: 200, body: { sniff: { binary: true, mime: 'image/png' } } },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const sniff = await port.fs!.sniff('/workspace/shot.png');
+    expect(sniff).toEqual({ binary: true, mime: 'image/png' });
+    expect(executor.fsCalls()).toEqual(['/fs/sniff']);
+  });
+
+  it('readBytes — байты приходят из ответа исполнителя, лимит уходит в тело', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/read-bytes': {
+        status: 200,
+        body: { bytes: { dataBase64: Buffer.from('hello').toString('base64'), size: 5 } },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const bytes = await port.fs!.readBytes('/workspace/a.txt', 1024);
+    expect(bytes.size).toBe(5);
+    expect(Buffer.from(bytes.dataBase64, 'base64').toString('utf-8')).toBe('hello');
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/a.txt', maxBytes: 1024 });
+  });
+
+  it('readBytes — too_large с провода → FsPathError с кодом too_large', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/read-bytes': {
+        status: 400,
+        body: {
+          error: {
+            reason: 'too_large',
+            code: 'too_large',
+            message: 'файл больше лимита: 20 байт (лимит 10 байт)',
+            stdout: '',
+            stderr: '',
+            killed: false,
+            signal: null,
+            truncated: false,
+            durationMs: 0,
+          },
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.readBytes('/workspace/big.bin', 10).catch((e) => e);
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('too_large');
+    expect((err as FsPathError).message).toContain('10');
+  });
+
+  it('исполнитель без features.fs — отказ и на чтении содержимого', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
+
+    await expect(port.fs!.readText('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+    await expect(port.fs!.sniff('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+    await expect(port.fs!.readBytes('/tmp/x', 10)).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+  });
+
+  it('writeFile — POST уходит на адрес с features.fs, ответ 204 принимается', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), { status: 204, body: null });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    await port.fs!.writeFile('/workspace/a.txt', 'hello\n');
+
+    expect(executor.fsCalls()).toEqual(['/fs/write-file']);
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/a.txt', content: 'hello\n' });
+  });
+
+  it('mkdir — POST уходит на адрес с features.fs, ответ 204 принимается', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), { status: 204, body: null });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    await port.fs!.mkdir('/workspace/sub');
+
+    expect(executor.fsCalls()).toEqual(['/fs/mkdir']);
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/sub' });
+  });
+
+  it('remove — POST уходит на адрес с features.fs, ответ 204 принимается', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), { status: 204, body: null });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    await port.fs!.remove('/workspace/a.txt');
+
+    expect(executor.fsCalls()).toEqual(['/fs/remove']);
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/a.txt' });
+  });
+
+  it('запись: 404 not_found с провода → FsPathError с кодом not_found', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      status: 404,
+      body: {
+        error: {
+          reason: 'not_found',
+          code: 'ENOENT',
+          message: 'путь не найден: /workspace/nope.txt',
+          stdout: '',
+          stderr: '',
+          killed: false,
+          signal: null,
+          truncated: false,
+          durationMs: 0,
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.remove('/workspace/nope.txt').catch((e) => e);
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('not_found');
+    expect((err as FsPathError).path).toBe('/workspace/nope.txt');
+  });
+
+  it('запись: 400 invalid с провода → FsPathError с кодом invalid', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      status: 400,
+      body: {
+        error: {
+          reason: 'invalid_request',
+          code: 'EINVAL',
+          message: 'непустой каталог удалить нельзя',
+          stdout: '',
+          stderr: '',
+          killed: false,
+          signal: null,
+          truncated: false,
+          durationMs: 0,
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.remove('/workspace/full').catch((e) => e);
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('invalid');
+  });
+
+  it('исполнитель без features.fs — тот же отказ на записи', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
+
+    await expect(port.fs!.writeFile('/tmp/x', 'y')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+    await expect(port.fs!.mkdir('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+    await expect(port.fs!.remove('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+  });
+
+  it('адрес без features.fs исключается и для записи — вызов уходит к адресу с признаком', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const executor = await startFsExecutor(fsCapabilities(), { status: 204, body: null });
+    const port = createRemoteExecutionPort({ urls: [legacy, executor.url], token: TOKEN });
+
+    await port.fs!.writeFile('/workspace/a.txt', 'x');
+
+    expect(executor.fsCalls()).toEqual(['/fs/write-file']);
+  });
+
+  it('readRawText — текст приходит из ответа исполнителя, лимит уходит в тело', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/read-raw': {
+        status: 200,
+        body: { raw: { text: 'alpha\nbeta\n', size: 11 } },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const raw = await port.fs!.readRawText('/workspace/a.txt', 4096);
+
+    expect(raw.text).toBe('alpha\nbeta\n');
+    expect(raw.size).toBe(11);
+    expect(executor.fsCalls()).toEqual(['/fs/read-raw']);
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/a.txt', maxBytes: 4096 });
+  });
+
+  it('readRawText — too_large с провода → FsPathError с кодом too_large', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/read-raw': {
+        status: 400,
+        body: {
+          error: {
+            reason: 'too_large',
+            code: 'too_large',
+            message: 'файл больше лимита: 20 байт (лимит 10 байт)',
+            stdout: '',
+            stderr: '',
+            killed: false,
+            signal: null,
+            truncated: false,
+            durationMs: 0,
+          },
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.readRawText('/workspace/big.txt', 10).catch((e) => e);
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('too_large');
+  });
+
+  it('rename — POST уходит на адрес с features.fs, ответ 204 принимается', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), { status: 204, body: null });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    await port.fs!.rename('/workspace/a.txt', '/workspace/b.txt');
+
+    expect(executor.fsCalls()).toEqual(['/fs/rename']);
+    // Источник — `path`, цель — `to` (тот же разбор путей, что у прочих
+    // FS-операций).
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/a.txt', to: '/workspace/b.txt' });
+  });
+
+  it('rename: 404 not_found с провода → FsPathError с кодом not_found', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      status: 404,
+      body: {
+        error: {
+          reason: 'not_found',
+          code: 'ENOENT',
+          message: 'путь не найден: /workspace/nope.txt',
+          stdout: '',
+          stderr: '',
+          killed: false,
+          signal: null,
+          truncated: false,
+          durationMs: 0,
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.rename('/workspace/nope.txt', '/workspace/b.txt').catch((e) => e);
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('not_found');
+  });
+
+  it('исполнитель без features.fs — тот же отказ на чтении сырого текста и переносе', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
+
+    await expect(port.fs!.readRawText('/tmp/x', 10)).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+    await expect(port.fs!.rename('/tmp/x', '/tmp/y')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
   });
 });

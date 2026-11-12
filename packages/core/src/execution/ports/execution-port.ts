@@ -26,6 +26,8 @@
  * (либо получить инъекцию, либо запретить shell-семантику).
  */
 
+import type { ExecutionFs } from './execution-fs.js';
+
 /** Форма команды: shell-строка или argv-массив (без shell). */
 export type ExecCommand =
   /** Shell-семантика: `<shell> -c <command>` (по умолчанию — `bash`). */
@@ -181,6 +183,21 @@ export interface ExecBackgroundProcess {
  */
 export interface ExecutionPort {
   execute(req: ExecRequest): Promise<ExecResult>;
+
+  /**
+   * FS-операции в том же контуре, что и исполнение (PROP-135, Ф1).
+   *
+   * Файловые операции агента уезжают на исполнитель вместе с командами:
+   * в split-топологии рабочий каталог живёт там, а control plane — тонкий.
+   * Контракт — `ExecutionFs` (`ports/execution-fs.ts`): `realpath`/`stat`/
+   * `readdir` над **абсолютными** путями; относительные резолвит вызывающий
+   * тул (от `workingDir`).
+   *
+   * Необязательное аддитивное поле: не задано — FS недоступна, и файловые
+   * тулы в remote-режиме работают **fail-closed** (исполнитель протокола
+   * ≤ 6 не объявляет `features.fs` — тихого возврата в control plane нет).
+   */
+  readonly fs?: ExecutionFs;
 
   /**
    * Порт исполняет команды **вне** процесса control plane (ADR-077).

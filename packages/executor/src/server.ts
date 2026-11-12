@@ -12,6 +12,17 @@
  * | `GET` | `/exec/:processId/logs` | отрезок журнала фонового процесса | bearer-токен |
  * | `POST` | `/exec/:processId/stop` | остановить фоновой процесс | bearer-токен |
  * | `GET` | `/capabilities` | версия протокола, состав toolchain'а и лимиты | bearer-токен |
+ * | `POST` | `/fs/stat` | сведения о файле/каталоге (протокол 7) | bearer-токен |
+ * | `POST` | `/fs/realpath` | канонический путь (протокол 7) | bearer-токен |
+ * | `POST` | `/fs/list` | записи каталога (протокол 7) | bearer-токен |
+ * | `POST` | `/fs/read-text` | страница текста файла (протокол 7) | bearer-токен |
+ * | `POST` | `/fs/sniff` | признак «бинарь» + MIME по сигнатуре (протокол 7) | bearer-токен |
+ * | `POST` | `/fs/read-bytes` | байты файла (base64) (протокол 7) | bearer-токен |
+ * | `POST` | `/fs/write-file` | запись файла (протокол 7, `204`) | bearer-токен |
+ * | `POST` | `/fs/mkdir` | создание каталога (протокол 7, `204`) | bearer-токен |
+ * | `POST` | `/fs/remove` | удаление файла/пустого каталога (протокол 7, `204`) | bearer-токен |
+ * | `POST` | `/fs/read-raw` | текст файла как есть (протокол 7) | bearer-токен |
+ * | `POST` | `/fs/rename` | переименование/перемещение файла (протокол 7, `204`) | bearer-токен |
  * | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя | bearer-токен |
  * | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов | bearer-токен |
  * | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
@@ -39,7 +50,7 @@
 
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { Readable } from 'node:stream';
-import { Hono, type MiddlewareHandler } from 'hono';
+import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import { isAuthorized } from './auth.js';
 import {
   BackgroundExecService,
@@ -49,11 +60,21 @@ import {
   type BackgroundLogsOptions,
 } from './background.js';
 import { ExecService } from './exec-service.js';
+import { ExecutorFsError, ExecutorFsService } from './fs-service.js';
 import type { ExecutorMetrics } from './metrics.js';
 import {
   EXECUTOR_PROTOCOL_VERSION,
   errorResponse,
   parseExecRequestBody,
+  parseFsBytesRequestBody,
+  parseFsMkdirRequestBody,
+  parseFsRawTextRequestBody,
+  parseFsRemoveRequestBody,
+  parseFsRenameRequestBody,
+  parseFsRequestBody,
+  parseFsSniffRequestBody,
+  parseFsTextRequestBody,
+  parseFsWriteRequestBody,
   parseMcpCallRequestBody,
   parseSpawnExecRequestBody,
   parseStopBackgroundRequestBody,
@@ -61,6 +82,14 @@ import {
   type BackgroundStatusResponse,
   type ExecutorCapabilities,
   type ExecutorHealth,
+  type FsBytesResponse,
+  type FsListResponse,
+  type FsRawTextResponse,
+  type FsRealpathResponse,
+  type FsRequestBody,
+  type FsSniffResponse,
+  type FsStatResponse,
+  type FsTextResponse,
   type McpCallResultBody,
   type McpServerStatusBody,
   type McpToolInfoBody,
@@ -194,6 +223,24 @@ function parseLogQuery(query: Record<string, string | undefined>):
 }
 
 /**
+ * Ошибка FS-операции → ошибочный ответ с корректным HTTP-кодом.
+ *
+ * Причина на проводе (`not_found`/`not_directory`/`permission`/`unresolvable`)
+ * едет как есть: control plane различает их без разбора текста.
+ */
+function fsErrorResponse(c: Context, err: unknown): Response {
+  if (err instanceof ExecutorFsError) {
+    const { status, body } = errorResponse(err.reason, err.message, { code: err.code });
+    return c.json(body, status);
+  }
+  const { status, body } = errorResponse(
+    'internal_error',
+    err instanceof Error ? err.message : String(err),
+  );
+  return c.json(body, status);
+}
+
+/**
  * Собрать Hono-приложение исполнителя.
  *
  * Приложение не поднимает сокет — этим занимается `startExecutorServer`
@@ -223,6 +270,10 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     });
   const startedAt = opts.startedAt ?? Date.now();
   const token = opts.token;
+
+  // FS-операции (протокол 7, PROP-135): исполнитель — единственное место,
+  // где в split-топологии лежит рабочий каталог проекта.
+  const fsService = new ExecutorFsService({ workspaceRoot: opts.workspaceRoot });
 
   // Хост MCP-серверов: серверы поднимаются лениво (первое обращение).
   const mcpHost = opts.mcpHost ?? new ExecutorMcpHost(opts.mcpServers ?? []);
@@ -259,6 +310,18 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
   app.use('/mcp/servers', requireToken);
   app.use('/mcp/tools', requireToken);
   app.use('/mcp/call', requireToken);
+  // FS-операции (протокол 7) — тот же bearer-токен, что и у команд.
+  app.use('/fs/stat', requireToken);
+  app.use('/fs/realpath', requireToken);
+  app.use('/fs/list', requireToken);
+  app.use('/fs/read-text', requireToken);
+  app.use('/fs/sniff', requireToken);
+  app.use('/fs/read-bytes', requireToken);
+  app.use('/fs/write-file', requireToken);
+  app.use('/fs/mkdir', requireToken);
+  app.use('/fs/remove', requireToken);
+  app.use('/fs/read-raw', requireToken);
+  app.use('/fs/rename', requireToken);
 
   app.post('/exec', async (c) => {
     let raw: unknown;
@@ -414,6 +477,9 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
         sshAgent: true,
         // Секреты вызова в фоновом запуске (протокол 6, PROP-124 §7).
         secretsSpawn: true,
+        // FS-операции (протокол 7, PROP-135): признак обязательный — без
+        // него control plane файловые тулы в remote-режиме не запускает.
+        fs: true,
       },
       // Аддитивно: эффективные потолки исполнителя (таймаут и буфер вывода).
       // Снимают «тихий» потолок — control plane видит лимит до вызова,
@@ -424,6 +490,253 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       },
     };
     return c.json(body, 200);
+  });
+
+  // --- FS-операции (протокол 7, PROP-135) ----------------------------------
+  //
+  // Контур файлов: в split-топологии рабочий каталог живёт на исполнителе,
+  // поэтому канонические пути и сведения о файлах control plane спрашивает
+  // здесь. `cwd` проходит тот же containment, что и у команд; абсолютный
+  // `path` разрешён (внешние пути отфильтрованы permission-слоем).
+
+  /** Разбор тела FS-запроса → 400 при невалидном теле. */
+  const parseFsBody = async (
+    c: Context,
+  ): Promise<{ ok: true; value: FsRequestBody } | { ok: false; response: Response }> => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return { ok: false, response: c.json(body, status) };
+    }
+    const parsed = parseFsRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return { ok: false, response: c.json(body, status) };
+    }
+    return { ok: true, value: parsed.value };
+  };
+
+  app.post('/fs/stat', async (c) => {
+    const parsed = await parseFsBody(c);
+    if (!parsed.ok) return parsed.response;
+    try {
+      const stat = await fsService.stat(parsed.value);
+      const body: FsStatResponse = { stat };
+      return c.json(body, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/realpath', async (c) => {
+    const parsed = await parseFsBody(c);
+    if (!parsed.ok) return parsed.response;
+    try {
+      const path = await fsService.realpath(parsed.value);
+      const body: FsRealpathResponse = { path };
+      return c.json(body, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/list', async (c) => {
+    const parsed = await parseFsBody(c);
+    if (!parsed.ok) return parsed.response;
+    try {
+      const entries = await fsService.list(parsed.value);
+      const body: FsListResponse = { entries };
+      return c.json(body, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/read-text', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsTextRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      const page = await fsService.readText(parsed.value);
+      const body: FsTextResponse = { page };
+      return c.json(body, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/sniff', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsSniffRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      const sniff = await fsService.sniff(parsed.value);
+      const body: FsSniffResponse = { sniff };
+      return c.json(body, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/read-bytes', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsBytesRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      const bytes = await fsService.readBytes(parsed.value);
+      const body: FsBytesResponse = { bytes };
+      return c.json(body, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  // --- Запись/создание каталога/удаление (PROP-135 Ф2) ----------------------
+  //
+  // Ответ — `204 No Content`: операция либо выполнена, либо ошибка с
+  // типизированной причиной (`not_found`/`permission`/`invalid`/…). Тело
+  // успеха не нужно: вызывающий знает, что записал.
+
+  app.post('/fs/write-file', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsWriteRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      await fsService.writeFile(parsed.value);
+      return c.body(null, 204);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/mkdir', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsMkdirRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      await fsService.mkdir(parsed.value);
+      return c.body(null, 204);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/remove', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsRemoveRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      await fsService.remove(parsed.value);
+      return c.body(null, 204);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  // --- Чтение «сырого» текста и переименование (PROP-135 Ф2) ---------------
+  //
+  // `read-raw` — содержимое файла **как есть** (без нумерации строк): его
+  // сопоставляют тулы правки (`edit_file`/`patch`).
+  // `rename` — перенос файла; обе стороны (источник и цель) резолвятся от
+  // `cwd` и проходят тот же containment, что и прочие FS-операции.
+
+  app.post('/fs/read-raw', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsRawTextRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      const rawText = await fsService.readRawText(parsed.value);
+      const body: FsRawTextResponse = { raw: rawText };
+      return c.json(body, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/rename', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsRenameRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      await fsService.rename(parsed.value);
+      return c.body(null, 204);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
   });
 
   // --- MCP-хостинг (ADR-077, шаг B1) ---------------------------------------

@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { InstructionsConfig, ToolContext } from '@itphx/synth-shared';
@@ -27,6 +27,7 @@ import { probeBinary } from '../engine/tools/runtime-deps.js';
 import { ProjectInstructionsResolver } from '../engine/context/instructions.js';
 import { t as sm } from '../engine/system-messages.js';
 import { ExecutionError, DEFAULT_MAX_OUTPUT_BYTES, type ExecRequest, type ExecResult, type ExecutionPort } from './ports/index.js';
+import { InlineExecutionPort } from './inline-execution-port.js';
 
 /** Порт-заглушка: пишет запросы и отдаёт заданный результат/ошибку. */
 class RecordingPort implements ExecutionPort {
@@ -453,5 +454,41 @@ describe('ADR-077: не-туловые точки исполнения испо�
     expect(req.command).toEqual({ kind: 'argv', file: 'git', args: ['rev-parse', '--show-toplevel'] });
     expect(req.cwd).toBe(tmpDir);
     expect(req.timeoutMs).toBe(30_000);
+  });
+});
+
+/**
+ * PROP-135 (Ф1): файловые операции идут через **тот же** порт, что и команды.
+ *
+ * В inline-режиме это локальная ФС процесса, в remote-режиме — исполнитель
+ * (`features.fs`). Подробный контракт FS проверяется отдельно
+ * (`execution/fs-contract.test.ts`); здесь — короткая проверка того, что порт
+ * **вообще** отдаёт FS-часть: без неё файловые тулы откажутся («FS
+ * недоступна»), а в remote-режиме ещё и не поедут на исполнителя.
+ */
+describe('PROP-135: inline-порт отдаёт FS-часть контракта', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-exec-fs-'));
+    await mkdir(join(tmpDir, 'sub'), { recursive: true });
+    await writeFile(join(tmpDir, 'a.txt'), 'hello');
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('fs присутствует: stat и readdir работают по локальной ФС', async () => {
+    const port = new InlineExecutionPort();
+    expect(port.fs).toBeDefined();
+
+    const stat = await port.fs!.stat(join(tmpDir, 'a.txt'));
+    expect(stat.kind).toBe('file');
+    expect(stat.size).toBe(5);
+
+    const entries = await port.fs!.readdir(tmpDir);
+    expect(entries.map((entry) => entry.name)).toContain('sub');
+    expect(entries.map((entry) => entry.name)).toContain('a.txt');
   });
 });

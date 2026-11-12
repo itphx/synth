@@ -84,9 +84,18 @@ import type {
   ExecRequest,
   ExecResult,
   ExecutionCapabilitySummary,
+  ExecutionFs,
   ExecutionMetricsOutcome,
   ExecutionMetricsSink,
   ExecutionPort,
+  FsBytesResult,
+  FsDirEntry,
+  FsErrorCode,
+  FsRawTextResult,
+  FsSniffResult,
+  FsStat,
+  FsTextOptions,
+  FsTextPage,
 } from '@itphx/synth-core';
 import {
   EXECUTOR_PROTOCOL_VERSION,
@@ -98,9 +107,36 @@ import {
   type ExecRequestBody,
   type ExecSuccessBody,
   type ExecutorLimits,
+  type FsBytesResponse,
+  type FsListResponse,
+  type FsRawTextResponse,
+  type FsRealpathResponse,
+  type FsSniffResponse,
+  type FsStatResponse,
+  type FsTextResponse,
   type SpawnExecRequest,
   type SpawnExecResponse,
 } from './protocol.js';
+
+/**
+ * FS-операция на проводе (роут `/fs/<op>`).
+ *
+ * `read-text`/`sniff`/`read-bytes`/`write-file`/`mkdir`/`remove`/`read-raw`/
+ * `rename` — часть той же фичи `fs` (протокол 7): версия протокола не
+ * повышается, признак `features.fs` прежний.
+ */
+type FsOp =
+  | 'stat'
+  | 'realpath'
+  | 'list'
+  | 'read-text'
+  | 'sniff'
+  | 'read-bytes'
+  | 'write-file'
+  | 'mkdir'
+  | 'remove'
+  | 'read-raw'
+  | 'rename';
 
 /** Тип функции-транспорта (совместим с `egressFetch` и обычным `fetch`). */
 export type ExecutorFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -206,6 +242,14 @@ interface PoolEntry {
    * обязательны**: у старого исполнителя поля нет (тогда `undefined`).
    */
   limits?: ExecutorLimits;
+  /**
+   * Умеет ли исполнитель FS-операции (`features.fs`, протокол 7, PROP-135).
+   *
+   * Признак **явный**: у старого исполнителя протокола 6 его нет — такой
+   * адрес в кандидаты на файловые операции **не попадает** (тихого возврата
+   * в control plane нет: рабочий каталог живёт на исполнителе).
+   */
+  fs: boolean;
 }
 
 /**
@@ -324,6 +368,112 @@ function outcomeFromError(err: unknown): ExecutionMetricsOutcome {
 export class RemoteExecutionPort implements ExecutionPort {
   /** Исполнение — на удалённом исполнителе (ADR-077). */
   readonly isRemote = true;
+
+  /**
+   * FS-операции — на исполнителе (протокол 7, PROP-135).
+   *
+   * Адрес выбирается по признаку `features.fs`: у старого исполнителя его
+   * нет, и такой адрес в кандидаты **не попадает** (тихого возврата к чтению
+   * ФС в control plane нет). Если в пуле нет ни одного такого адреса —
+   * `ExecutionFsUnavailableError` (fail-closed).
+   */
+  readonly fs: ExecutionFs = {
+    realpath: async (path: string): Promise<string> => {
+      const body = await this._fsRequest<FsRealpathResponse>('realpath', path);
+      if (typeof body?.path !== 'string') {
+        throw new Error('исполнитель не вернул канонический путь');
+      }
+      return body.path;
+    },
+    stat: async (path: string): Promise<FsStat> => {
+      const body = await this._fsRequest<FsStatResponse>('stat', path);
+      const stat = body?.stat;
+      if (!stat || typeof stat.kind !== 'string') {
+        throw new Error('исполнитель не вернул сведения о пути');
+      }
+      return { kind: stat.kind, size: stat.size, mtimeMs: stat.mtimeMs };
+    },
+    readdir: async (path: string): Promise<FsDirEntry[]> => {
+      const body = await this._fsRequest<FsListResponse>('list', path);
+      const entries = body?.entries;
+      if (!Array.isArray(entries)) {
+        throw new Error('исполнитель не вернул записи каталога');
+      }
+      return entries.map((entry) => ({
+        name: entry.name,
+        kind: entry.kind,
+        size: entry.size,
+      }));
+    },
+    readText: async (path: string, opts?: FsTextOptions): Promise<FsTextPage> => {
+      const body = await this._fsRequest<FsTextResponse>('read-text', path, {
+        ...(opts?.offset !== undefined ? { offset: opts.offset } : {}),
+        ...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
+        ...(opts?.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
+      });
+      const page = body?.page;
+      if (!page || !Array.isArray(page.lines)) {
+        throw new Error('исполнитель не вернул страницу текста');
+      }
+      return {
+        lines: page.lines,
+        totalLines: typeof page.totalLines === 'number' ? page.totalLines : page.lines.length,
+        truncated: page.truncated === true,
+        bytes: typeof page.bytes === 'number' ? page.bytes : 0,
+      };
+    },
+    sniff: async (path: string, maxBytes?: number): Promise<FsSniffResult> => {
+      const body = await this._fsRequest<FsSniffResponse>('sniff', path, {
+        ...(maxBytes !== undefined ? { maxBytes } : {}),
+      });
+      const sniff = body?.sniff;
+      if (!sniff || typeof sniff.binary !== 'boolean') {
+        throw new Error('исполнитель не вернул признак бинарного файла');
+      }
+      return {
+        binary: sniff.binary,
+        ...(typeof sniff.mime === 'string' ? { mime: sniff.mime } : {}),
+      };
+    },
+    readBytes: async (path: string, maxBytes: number): Promise<FsBytesResult> => {
+      const body = await this._fsRequest<FsBytesResponse>('read-bytes', path, { maxBytes });
+      const bytes = body?.bytes;
+      if (!bytes || typeof bytes.dataBase64 !== 'string') {
+        throw new Error('исполнитель не вернул байты файла');
+      }
+      return {
+        dataBase64: bytes.dataBase64,
+        size: typeof bytes.size === 'number' ? bytes.size : 0,
+      };
+    },
+    // Запись/создание каталога/удаление (PROP-135 Ф2): исполнитель отвечает
+    // `204` — тела нет, поэтому проверять нечего: успех — это и есть «204».
+    writeFile: async (path: string, content: string): Promise<void> => {
+      await this._fsRequest<unknown>('write-file', path, { content });
+    },
+    mkdir: async (path: string): Promise<void> => {
+      await this._fsRequest<unknown>('mkdir', path);
+    },
+    remove: async (path: string): Promise<void> => {
+      await this._fsRequest<unknown>('remove', path);
+    },
+    // Текст файла **как есть** (PROP-135 Ф2): нужен тулам правки
+    // (`edit_file`/`patch`) — они сопоставляют правку с точным содержимым.
+    readRawText: async (path: string, maxBytes: number): Promise<FsRawTextResult> => {
+      const body = await this._fsRequest<FsRawTextResponse>('read-raw', path, { maxBytes });
+      const raw = body?.raw;
+      if (!raw || typeof raw.text !== 'string') {
+        throw new Error('исполнитель не вернул текст файла');
+      }
+      return { text: raw.text, size: typeof raw.size === 'number' ? raw.size : 0 };
+    },
+    // Перенос файла: источник — `path`, цель — `to` (тот же разбор путей, что
+    // у прочих FS-операций: обе стороны резолвятся у исполнителя).
+    rename: async (from: string, to: string): Promise<void> => {
+      await this._fsRequest<unknown>('rename', from, { to });
+    },
+  };
+
   private readonly _urls: string[];
   private readonly _token: string;
   private readonly _timeoutMs: number;
@@ -341,6 +491,8 @@ export class RemoteExecutionPort implements ExecutionPort {
   private _inventoryAt = 0;
   /** Промис текущего обновления инвентаря (дедупликация параллельных запросов). */
   private _inventoryPromise: Promise<Map<string, PoolEntry>> | undefined;
+  /** Адрес, выбранный для FS-операций (PROP-135). */
+  private _fsAddress: string | undefined;
 
   constructor(opts: RemoteExecutionPortOptions) {
     this._urls = (opts.urls ?? [])
@@ -495,6 +647,135 @@ export class RemoteExecutionPort implements ExecutionPort {
   }
 
   // --- внутреннее ---------------------------------------------------------
+
+  /**
+   * FS-запрос к исполнителю (протокол 7, PROP-135).
+   *
+   * Порядок: выбранный адрес → запрос; при **транспортной** ошибке —
+   * обновление инвентаря и **одна** повторная попытка (исполнитель мог
+   * перезапуститься с другим составом пула). Отказ по существу операции
+   * (`not_found`/`not_directory`/`permission`/`unresolvable`/`too_large`)
+   * повтором **не** сопровождается — это ответ исполнителя, а не сбой связи.
+   */
+  private async _fsRequest<T>(
+    op: FsOp,
+    path: string,
+    extra?: Record<string, unknown>,
+  ): Promise<T> {
+    const url = await this._fsTarget();
+    try {
+      return await this._fsCall<T>(url, op, path, extra);
+    } catch (err) {
+      // Отказ по существу операции (`not_found`/`not_directory`/`permission`/
+      // `unresolvable`/`too_large`) и «исполнитель не умеет FS» повтором **не**
+      // сопровождаются — это ответ исполнителя, а не сбой связи.
+      const core = await loadCore();
+      if (core.isFsPathError(err) || core.isExecutionFsUnavailableError(err)) throw err;
+      // Сбой связи/ответа — обновляем инвентарь (состав пула мог измениться)
+      // и делаем одну повторную попытку.
+      this._fsAddress = undefined;
+      this._invalidateInventory();
+      const retryUrl = await this._fsTarget();
+      return await this._fsCall<T>(retryUrl, op, path, extra);
+    }
+  }
+
+  /** Адрес для FS-операции: запомненный либо выбранный по `features.fs`. */
+  private async _fsTarget(): Promise<string> {
+    if (this._fsAddress !== undefined) return this._fsAddress;
+    return this._selectFsAddress();
+  }
+
+  /**
+   * Выбрать адрес пула, умеющий FS-операции.
+   *
+   * Ни одного такого адреса → `ExecutionFsUnavailableError` (fail-closed):
+   * файловые тулы в remote-режиме не читают ФС control plane.
+   */
+  private async _selectFsAddress(): Promise<string> {
+    const inventory = await this._ensureInventory();
+    for (const [url, entry] of inventory) {
+      if (entry.reachable && entry.fs) {
+        this._fsAddress = url;
+        return url;
+      }
+    }
+    this._fsAddress = undefined;
+    const core = await loadCore();
+    throw new core.ExecutionFsUnavailableError();
+  }
+
+  /** Один FS-запрос к конкретному адресу: HTTP + разбор ответа. */
+  private async _fsCall<T>(
+    url: string,
+    op: FsOp,
+    path: string,
+    extra?: Record<string, unknown>,
+  ): Promise<T> {
+    const fetchImpl = await resolveFetch(this._fetchImpl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this._timeoutMs);
+    timer.unref?.();
+
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetchImpl(`${url}/fs/${op}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this._token}`,
+        },
+        // Путь абсолютный (резолвит вызывающий тул от `workingDir`) — «cwd» на
+        // проводе нужен только для относительных путей.
+        body: JSON.stringify({ path, ...(extra ?? {}) }),
+        signal: controller.signal,
+      });
+      text = await response.text();
+    } catch (err) {
+      throw new ConnectionFailure(err);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = text.length > 0 ? JSON.parse(text) : null;
+    } catch {
+      throw new Error('исполнитель вернул невалидный ответ');
+    }
+
+    if (!response.ok) {
+      const errorBody = (parsed as { error?: ExecErrorBody } | null)?.error;
+      throw await this._toFsError(errorBody, response.status, path);
+    }
+    return parsed as T;
+  }
+
+  /** Ошибка FS на проводе → `FsPathError` (по причине, без разбора текста). */
+  private async _toFsError(
+    errorBody: ExecErrorBody | undefined,
+    status: number,
+    path: string,
+  ): Promise<unknown> {
+    const reason = errorBody?.reason;
+    const code = mapFsReasonToCode(reason);
+    if (code) {
+      const core = await loadCore();
+      return new core.FsPathError(code, path, errorBody?.message ?? path);
+    }
+    // Причина не распознана (сбой исполнителя, лимит, таймаут) — это не
+    // «путь не найден»: обычная ошибка, её можно повторить.
+    return new Error(
+      errorBody?.message ?? `исполнитель ответил статусом ${status} на FS-запрос`,
+    );
+  }
+
+  /** Сбросить снимок инвентаря (следующая выборка — свежая). */
+  private _invalidateInventory(): void {
+    this._inventory = undefined;
+    this._inventoryAt = 0;
+  }
 
   private async _execute(req: ExecRequest): Promise<ExecResult> {
     if (this._urls.length === 0) {
@@ -897,6 +1178,7 @@ export class RemoteExecutionPort implements ExecutionPort {
           secrets?: boolean;
           sshAgent?: boolean;
           secretsSpawn?: boolean;
+          fs?: boolean;
         };
         limits?: { timeoutMs?: unknown; maxOutputBytes?: unknown };
       } | null;
@@ -920,6 +1202,10 @@ export class RemoteExecutionPort implements ExecutionPort {
       // нет (иначе старый исполнитель протокола 6 был бы выбран, а секреты в
       // фоне он не понимает).
       const secretsSpawn = body?.features?.secretsSpawn === true;
+      // FS-операции (`features.fs`, протокол 7, PROP-135): признак **явный** —
+      // фоллбэка по версии протокола нет (старый исполнитель протокола 6 FS
+      // не умеет, и выбирать его для файловых тулов нельзя).
+      const fs = body?.features?.fs === true;
       // Лимиты исполнителя (`limits`) — аддитивное поле: у старого
       // исполнителя его нет, тогда разбор терпимый (значение `undefined`).
       const limits = parseExecutorLimits(body?.limits);
@@ -931,6 +1217,7 @@ export class RemoteExecutionPort implements ExecutionPort {
         secrets,
         sshAgent,
         secretsSpawn,
+        fs,
         ...(limits ? { limits } : {}),
       };
     } catch {
@@ -1103,6 +1390,36 @@ function describeCause(cause: unknown): string {
   return 'причина неизвестна';
 }
 
+/**
+ * Причина на проводе → машинный код ошибки FS-операции.
+ *
+ * `null` — причина не FS-ошибка (сбой исполнителя, лимит, таймаут): такие
+ * ответы не превращаются в «путь не найден» — иначе вызывающий получил бы
+ * неверную причину.
+ */
+function mapFsReasonToCode(reason: string | undefined): FsErrorCode | undefined {
+  switch (reason) {
+    case 'not_found':
+      return 'not_found';
+    case 'not_directory':
+      return 'not_directory';
+    case 'permission':
+      return 'permission';
+    case 'unresolvable':
+      return 'unresolvable';
+    case 'too_large':
+      return 'too_large';
+    case 'invalid_request':
+      return 'invalid';
+    case 'unauthorized':
+      return 'permission';
+    case 'cwd_outside_workspace':
+      return 'invalid';
+    default:
+      return undefined;
+  }
+}
+
 /** Запись инвентаря для адреса, не ответившего на `/capabilities`. */
 function unreachableEntry(): PoolEntry {
   return {
@@ -1113,6 +1430,7 @@ function unreachableEntry(): PoolEntry {
     secrets: false,
     sshAgent: false,
     secretsSpawn: false,
+    fs: false,
   };
 }
 

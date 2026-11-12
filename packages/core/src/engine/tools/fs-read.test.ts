@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { readFileTool, listDirectoryTool, globTool } from './fs-read.js';
+import { readFileTool, listDirectoryTool, globTool, MEDIA_TRANSPORT_CAP } from './fs-read.js';
 import {
   attachmentsConfigSchema,
   type AttachmentsConfig,
@@ -11,6 +11,13 @@ import {
 } from '@itphx/synth-shared';
 import { AttachmentError, type AttachmentService } from '../attachments/service.js';
 import { sniffMime } from '../attachments/sniff-mime.js';
+import {
+  FsPathError,
+  type ExecRequest,
+  type ExecResult,
+  type ExecutionFs,
+  type ExecutionPort,
+} from '../../execution/ports/index.js';
 
 describe('fs-read tools — path resolution', () => {
   let tmpDir: string;
@@ -631,5 +638,370 @@ describe('read_file — изображение/PDF как вложение те�
     expect(out.metadata?.type).toBe('file');
     expect(out.attachments).toBeUndefined();
     expect(uploads).toHaveLength(0);
+  });
+});
+
+/**
+ * PROP-135 (Ф1): `list_directory` читает каталог **через порт исполнения**.
+ *
+ * В remote-режиме рабочий каталог лежит на исполнителе, поэтому листинг
+ * уезжает туда; control plane лишь спрашивает канонический путь для проверки
+ * периметра. Здесь порт подменяется — проверяется контракт тула: записи
+ * берутся у порта, ошибки FS различимы, а «FS недоступна» и «симлинк-побег»
+ * отличаются друг от друга.
+ */
+describe('list_directory — работа через порт исполнения (PROP-135 Ф1)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fsread-port-'));
+    await mkdir(join(tmpDir, 'src'), { recursive: true });
+    await writeFile(join(tmpDir, 'src', 'a.ts'), 'export const a = 1;\n');
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Порт с подменённой FS-реализацией (записи и ошибки — из порта). */
+  class FakeFsPort implements ExecutionPort {
+    readonly requests: ExecRequest[] = [];
+    readonly fs?: ExecutionFs;
+
+    constructor(fs?: Partial<ExecutionFs>) {
+      // Методы по умолчанию — «порта нет»: их подменяет конкретный тест.
+      this.fs = fs
+        ? {
+            realpath: async (path) => path,
+            stat: async () => ({ kind: 'file', size: 0, mtimeMs: 0 }),
+            readdir: async () => [],
+            readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+            sniff: async () => ({ binary: false }),
+            readBytes: async () => ({ dataBase64: '', size: 0 }),
+            writeFile: async () => undefined,
+            mkdir: async () => undefined,
+            remove: async () => undefined,
+            readRawText: async () => ({ text: '', size: 0 }),
+            rename: async () => undefined,
+            ...fs,
+          }
+        : undefined;
+    }
+
+    async execute(req: ExecRequest): Promise<ExecResult> {
+      this.requests.push(req);
+      return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+    }
+  }
+
+  function makeCtx(port: ExecutionPort, overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra: { executionPort: port },
+      ...overrides,
+    };
+  }
+
+  it('каталог читается через порт: записи — из FS-реализации порта', async () => {
+    const calls: string[] = [];
+    const port = new FakeFsPort({
+      realpath: async (path) => {
+        calls.push(`realpath:${path}`);
+        return path;
+      },
+      stat: async () => ({ kind: 'directory', size: 0, mtimeMs: 0 }),
+      readdir: async () => [
+        { name: 'remote-dir', kind: 'directory', size: 4096 },
+        { name: 'remote.txt', kind: 'file', size: 7 },
+      ],
+    });
+
+    const result = await listDirectoryTool.execute({ path: '.' }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    // Записи пришли из порта, а не из локальной ФС.
+    expect(result.content).toContain('remote-dir/ (4096 bytes)');
+    expect(result.content).toContain('remote.txt (7 bytes)');
+    expect(result.content).not.toContain('src/');
+    expect(calls.some((call) => call.startsWith('realpath:'))).toBe(true);
+  });
+
+  it('сортировка — каталоги первыми, затем по имени (формат прежний)', async () => {
+    const port = new FakeFsPort({
+      realpath: async (path) => path,
+      stat: async () => ({ kind: 'directory', size: 0, mtimeMs: 0 }),
+      readdir: async () => [
+        { name: 'b.txt', kind: 'file', size: 1 },
+        { name: 'zdir', kind: 'directory', size: 2 },
+        { name: 'a.txt', kind: 'file', size: 3 },
+        { name: 'adir', kind: 'directory', size: 4 },
+      ],
+    });
+
+    const result = await listDirectoryTool.execute({ path: '.' }, makeCtx(port));
+
+    expect(String(result.content).split('\n')).toEqual([
+      'adir/ (4 bytes)',
+      'zdir/ (2 bytes)',
+      'a.txt (3 bytes)',
+      'b.txt (1 bytes)',
+    ]);
+  });
+
+  it('ошибка FS — isError с различимым кодом', async () => {
+    const port = new FakeFsPort({
+      realpath: async (path) => path,
+      stat: async () => ({ kind: 'directory', size: 0, mtimeMs: 0 }),
+      readdir: async () => {
+        throw new FsPathError('not_found', '/nope', 'путь не найден: /nope');
+      },
+    });
+
+    const result = await listDirectoryTool.execute({ path: 'nope' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('путь не найден');
+    expect(result.metadata?.code).toBe('not_found');
+    expect(result.metadata?.path).toBe(join(tmpDir, 'nope'));
+  });
+
+  it('порт без FS (исполнитель не объявил features.fs) — понятная ошибка', async () => {
+    const port = new FakeFsPort(undefined);
+    const result = await listDirectoryTool.execute({ path: '.' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('features.fs');
+  });
+
+  it('симлинк-побег (realpath вне корней) — отказ, каталог не листится', async () => {
+    const port = new FakeFsPort({
+      // Корень — сам по себе, кандидат — «наружу».
+      realpath: async (path) => (path === tmpDir ? path : '/etc/evil'),
+      stat: async () => ({ kind: 'directory', size: 0, mtimeMs: 0 }),
+      readdir: async () => [{ name: 'secret', kind: 'file', size: 1 }],
+    });
+
+    const result = await listDirectoryTool.execute({ path: 'link' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain('secret');
+    expect((result.metadata?.i18n as { key?: string })?.key).toBe('permission.external_directory_default');
+  });
+});
+
+/**
+ * PROP-135 (Ф1, слайс 2): `read_file` читает **содержимое** файла через порт
+ * исполнения.
+ *
+ * В remote-топологии рабочий каталог живёт на исполнителе, поэтому текст,
+ * признак «бинарь» и байты медиа приходят оттуда; control plane лишь
+ * спрашивает канонический путь для проверки периметра. Порт подменяется —
+ * проверяется контракт тула: запросы уходят в порт, ошибки FS различимы,
+ * а «FS недоступна» не путается с «пути нет».
+ */
+describe('read_file — чтение содержимого через порт исполнения (PROP-135 Ф1)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fsread-content-'));
+    await mkdir(join(tmpDir, 'sub'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Порт с подменённой FS-реализацией (содержимое — из порта). */
+  class FakeFsPort implements ExecutionPort {
+    readonly requests: ExecRequest[] = [];
+    readonly fs?: ExecutionFs;
+
+    constructor(fs?: Partial<ExecutionFs>) {
+      this.fs = fs
+        ? {
+            realpath: async (path) => path,
+            stat: async () => ({ kind: 'file', size: 0, mtimeMs: 0 }),
+            readdir: async () => [],
+            readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+            sniff: async () => ({ binary: false }),
+            readBytes: async () => ({ dataBase64: '', size: 0 }),
+            writeFile: async () => undefined,
+            mkdir: async () => undefined,
+            remove: async () => undefined,
+            readRawText: async () => ({ text: '', size: 0 }),
+            rename: async () => undefined,
+            ...fs,
+          }
+        : undefined;
+    }
+
+    async execute(req: ExecRequest): Promise<ExecResult> {
+      this.requests.push(req);
+      return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+    }
+  }
+
+  function makeCtx(port: ExecutionPort, overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra: { executionPort: port },
+      ...overrides,
+    };
+  }
+
+  it('текст читается через порт: строки и метаданные — из FS-реализации', async () => {
+    const calls: string[] = [];
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: 12, mtimeMs: 0 }),
+      sniff: async () => ({ binary: false }),
+      readText: async (_path, opts) => {
+        calls.push(`readText:${JSON.stringify(opts)}`);
+        return {
+          lines: ['1: первая', '2: вторая'],
+          totalLines: 2,
+          truncated: false,
+          bytes: 20,
+        };
+      },
+    });
+
+    const result = await readFileTool.execute({ file_path: 'a.txt', offset: 0, limit: 2 }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('1: первая');
+    expect(result.content).toContain('2: вторая');
+    expect(result.metadata).toMatchObject({ type: 'file', totalLines: 2, truncated: false, bytes: 20 });
+    // Смещение/потолок уходят в порт — он решает, что читать.
+    expect(calls).toEqual(['readText:{"offset":0,"limit":2}']);
+  });
+
+  it('бинарный файл — отказ с подсказкой (признак пришёл из порта)', async () => {
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: 6, mtimeMs: 0 }),
+      sniff: async () => ({ binary: true }),
+    });
+
+    const result = await readFileTool.execute({ file_path: 'blob.bin' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('binary file');
+    expect(result.metadata).toMatchObject({ type: 'binary' });
+  });
+
+  it('медиа: байты берутся из порта (readBytes) и уходят в сервис вложений', async () => {
+    const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    const uploads: Array<{ bytes: Buffer; name?: string }> = [];
+    const service = {
+      upload: vi.fn(async ({ bytes, name }: { bytes: Buffer; name?: string }) => {
+        uploads.push({ bytes, ...(name ? { name } : {}) });
+        const sha256 = createHash('sha256').update(bytes).digest('hex');
+        return {
+          id: `attachments/${sha256}`,
+          blobPath: `attachments/${sha256.slice(0, 2)}/${sha256}`,
+          sha256,
+          mime: 'image/png',
+          size: bytes.length,
+          ...(name ? { name } : {}),
+        };
+      }),
+    } as unknown as AttachmentService;
+
+    let asked: number | undefined;
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: PNG_BYTES.length, mtimeMs: 0 }),
+      sniff: async () => ({ binary: true, mime: 'image/png' }),
+      readBytes: async (_path, maxBytes) => {
+        asked = maxBytes;
+        return { dataBase64: PNG_BYTES.toString('base64'), size: PNG_BYTES.length };
+      },
+    });
+
+    const result = await readFileTool.execute(
+      { file_path: 'shot.png' },
+      makeCtx(port, { extra: { executionPort: port, attachmentService: service } }),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.attachments).toHaveLength(1);
+    expect(result.attachments?.[0]).toMatchObject({ mime: 'image/png' });
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]?.bytes.equals(PNG_BYTES)).toBe(true);
+    // Потолок перевозки медиа — константа тула (временное ограничение Ф1).
+    expect(asked).toBe(MEDIA_TRANSPORT_CAP);
+  });
+
+  it('медиа больше потолка перевозки — too_large (файл не читается)', async () => {
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: MEDIA_TRANSPORT_CAP + 1, mtimeMs: 0 }),
+      sniff: async () => ({ binary: true, mime: 'image/png' }),
+      readBytes: async () => {
+        throw new FsPathError('too_large', '/big.png', 'файл больше лимита');
+      },
+    });
+
+    const result = await readFileTool.execute({ file_path: 'big.png' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata).toMatchObject({ type: 'media', reason: 'too_large', limit: MEDIA_TRANSPORT_CAP });
+    expect(result.content).toContain(String(MEDIA_TRANSPORT_CAP));
+  });
+
+  it('ошибка FS (пути нет) — isError с различимым кодом', async () => {
+    const port = new FakeFsPort({
+      stat: async () => {
+        throw new FsPathError('not_found', '/nope', 'путь не найден: /nope');
+      },
+    });
+
+    const result = await readFileTool.execute({ file_path: 'nope.txt' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('путь не найден');
+    expect(result.metadata?.code).toBe('not_found');
+    expect(result.metadata?.path).toBe(join(tmpDir, 'nope.txt'));
+  });
+
+  it('каталог читается через порт (readdir), а не локально', async () => {
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'directory', size: 0, mtimeMs: 0 }),
+      readdir: async () => [{ name: 'remote.txt', kind: 'file', size: 7 }],
+    });
+
+    const result = await readFileTool.execute({ file_path: '.' }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('remote.txt (7 bytes)');
+    expect(result.metadata).toMatchObject({ type: 'directory', totalEntries: 1 });
+  });
+
+  it('порт без FS (исполнитель не объявил features.fs) — понятная ошибка', async () => {
+    const port = new FakeFsPort(undefined);
+    const result = await readFileTool.execute({ file_path: 'a.txt' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('features.fs');
+  });
+
+  it('симлинк-побег (realpath вне корней) — отказ, файл не читается', async () => {
+    let read = false;
+    const port = new FakeFsPort({
+      realpath: async (path) => (path === tmpDir ? path : '/etc/evil'),
+      stat: async () => ({ kind: 'file', size: 3, mtimeMs: 0 }),
+      sniff: async () => ({ binary: false }),
+      readText: async () => {
+        read = true;
+        return { lines: ['1: secret'], totalLines: 1, truncated: false, bytes: 8 };
+      },
+    });
+
+    const result = await readFileTool.execute({ file_path: 'link' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain('secret');
+    expect(read).toBe(false);
   });
 });

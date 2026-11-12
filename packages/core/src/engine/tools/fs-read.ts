@@ -1,42 +1,64 @@
-import { createReadStream } from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
-import { createInterface } from 'node:readline';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, pathEscapesWorkspaceResult, isIgnoredSearchPath } from './path-utils.js';
+import {
+  resolvePath,
+  validateInputPath,
+  isSymlinkEscapeInRoots,
+  toolRoots,
+  pathEscapesWorkspaceResult,
+  isIgnoredSearchPath,
+} from './path-utils.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
-import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError } from '../../execution/ports/index.js';
+import {
+  DEFAULT_MAX_OUTPUT_BYTES,
+  isExecutionError,
+  isExecutionFsUnavailableError,
+  isFsPathError,
+  type ExecutionError,
+  type FsDirEntry,
+  type FsStat,
+  type FsTextPage,
+} from '../../execution/ports/index.js';
 import { SEARCH_TIMEOUT_MS, classifySearchPath, searchPathErrorResult } from './search.js';
-import { MAX_LINE_LENGTH, clampLine } from './line-limits.js';
-import { sniffMime } from '../attachments/sniff-mime.js';
-import { ingestMediaFile, isIngestibleMediaMime } from './fs-read-media.js';
+import { MAX_LINE_LENGTH } from './line-limits.js';
+import { MAX_READ_BYTES, MAX_READ_LINES } from '../../execution/fs-text.js';
+import { isIngestibleMediaMime, ingestMediaFile } from './fs-read-media.js';
 
 /**
  * Пределы `read_file` — паритет с opencode
  * (`packages/core/src/tool/read-filesystem.ts`: `MAX_READ_LINES`/`MAX_READ_BYTES`/
  * `MAX_LINE_LENGTH`). Каталог читается теми же пределами (строк = записей).
+ *
+ * Значения живут в общем читателе (`execution/fs-text.ts`) — тем же кодом
+ * читает исполнитель, поэтому формат вывода не зависит от топологии.
  */
-export const MAX_READ_LINES = 2_000;
-export const MAX_READ_BYTES = 50 * 1024;
+export { MAX_READ_LINES, MAX_READ_BYTES };
 /**
  * Максимальная длина одной возвращаемой строки — общая константа с поисковыми
  * тулами (`line-limits.ts`; прежде константа жила только здесь).
  */
 export { MAX_LINE_LENGTH };
-/** Сколько первых байт смотрим, чтобы отличить бинарь от текста. */
-const BINARY_SNIFF_BYTES = 8 * 1024;
-/** Доля непечатных байт, при которой файл считается бинарным. */
-const BINARY_NON_PRINTABLE_RATIO = 0.3;
 
 /** `glob`: сколько путей возвращать по умолчанию и максимум. */
 export const DEFAULT_GLOB_LIMIT = 100;
 export const MAX_GLOB_LIMIT = 1_000;
+
+/**
+ * Максимальный объём медиа-файла, который `read_file` везёт через порт
+ * исполнения (Ф1, слайс 2).
+ *
+ * **Временное ограничение Ф1:** байты медиа идут **целиком** в ответе
+ * порта (`readBytes` → base64), поэтому потолок ограничен размером одного
+ * ответа. 16 МиБ — с запасом относительно типовых картинок/документов.
+ * Потоковая передача больших файлов — Ф3 (PROP-135 «вложения и `stream`»);
+ * до неё файл больше потолка честно отклоняется (`too_large`).
+ */
+export const MEDIA_TRANSPORT_CAP = 16 * 1024 * 1024;
 
 interface DirectoryPage {
   lines: string[];
@@ -50,13 +72,15 @@ interface DirectoryPage {
  * по имени; у записей есть размер. `offset` — 0-based, `limit` — записей.
  *
  * Общая точка для `read_file` (путь-каталог) и `list_directory`, чтобы два
- * листинга не расходились по формату и порядку.
+ * листинга не расходились по формату и порядку. Записи приходят **готовыми**
+ * (`FsDirEntry[]`): их набор добывает либо порт исполнения (PROP-135 — в
+ * remote-режиме каталог читает исполнитель), либо локальный `readdir`+`stat`
+ * (путь `read_file` в этом слайсе остаётся локальным).
  */
-async function listDirectoryPage(dirPath: string, offset: number, limit: number): Promise<DirectoryPage> {
-  const entries = await readdir(dirPath, { withFileTypes: true });
+function listDirectoryPage(entries: FsDirEntry[], offset: number, limit: number): DirectoryPage {
   const sorted = [...entries].sort((a, b) => {
-    if (a.isDirectory() && !b.isDirectory()) return -1;
-    if (!a.isDirectory() && b.isDirectory()) return 1;
+    if (a.kind === 'directory' && b.kind !== 'directory') return -1;
+    if (a.kind !== 'directory' && b.kind === 'directory') return 1;
     return a.name.localeCompare(b.name);
   });
 
@@ -68,15 +92,8 @@ async function listDirectoryPage(dirPath: string, offset: number, limit: number)
       truncated = true;
       break;
     }
-    const fullPath = join(dirPath, entry.name);
-    const suffix = entry.isDirectory() ? '/' : '';
-    let text: string;
-    try {
-      const info = await stat(fullPath);
-      text = `${entry.name}${suffix} (${info.size} bytes)`;
-    } catch {
-      text = `${entry.name}${suffix}`;
-    }
+    const suffix = entry.kind === 'directory' ? '/' : '';
+    const text = `${entry.name}${suffix} (${entry.size} bytes)`;
     const size = Buffer.byteLength(text, 'utf-8') + (lines.length > 0 ? 1 : 0);
     if (bytes + size > MAX_READ_BYTES) {
       truncated = true;
@@ -90,106 +107,21 @@ async function listDirectoryPage(dirPath: string, offset: number, limit: number)
 }
 
 /**
- * Похож ли буфер на бинарный: NUL-байт или высокая доля непечатных символов.
- * Байты ≥ 0x80 — это UTF-8 (кириллица и т.п.), они печатные.
+ * Симлинк-побег за периметр сессии и текст отказа «FS недоступна» — общий
+ * модуль `execution/fs-perimeter.ts` (PROP-135): тем же кодом считает
+ * периметр и записывающий тул (`fs-write.ts`), поэтому правила не разойдутся.
  */
-function looksBinary(buf: Buffer): boolean {
-  if (buf.length === 0) return false;
-  let nonPrintable = 0;
-  for (const byte of buf) {
-    if (byte === 0) return true;
-    // \t (9), \n (10), \r (13) — обычный текст
-    if (byte === 9 || byte === 10 || byte === 13) continue;
-    if (byte < 32 || byte === 127) nonPrintable++;
-  }
-  return nonPrintable / buf.length > BINARY_NON_PRINTABLE_RATIO;
-}
-
-/** Первые `BINARY_SNIFF_BYTES` байт файла → признак «это бинарь». */
-export async function sniffBinary(filePath: string): Promise<boolean> {
-  return (await sniffFileHead(filePath)).binary;
-}
+import { escapesWorkspace, FS_UNAVAILABLE_TEXT } from '../../execution/fs-perimeter.js';
 
 /**
- * Первые `BINARY_SNIFF_BYTES` байт файла: признак «бинарь» **и** MIME по
- * сигнатуре (ADR-115).
+ * Признак «это бинарь» — по первым байтам файла.
  *
- * Один проход вместо двух: `read_file` по тем же байтам решает, читать файл
- * как текст, отказать («бинарь») или принять как медиа-вложение (картинка/PDF).
- * MIME — тем же детектором, что у сервиса вложений (`attachments/sniff-mime.ts`),
- * второго определения MIME в ядре нет.
+ * Реэкспорт из общего читателя (`execution/fs-text.ts`): им пользуются тулы
+ * записи (`write_file`/`edit_file`/`patch`) и превью файла. Файл читается
+ * **той же** логикой, что и в `read_file`, — иначе один и тот же файл
+ * выглядел бы по-разному в зависимости от точки чтения.
  */
-async function sniffFileHead(filePath: string): Promise<{ binary: boolean; mime?: string }> {
-  const handle = await open(filePath, 'r');
-  try {
-    const buf = Buffer.alloc(BINARY_SNIFF_BYTES);
-    const { bytesRead } = await handle.read(buf, 0, BINARY_SNIFF_BYTES, 0);
-    const head = buf.subarray(0, bytesRead);
-    return { binary: looksBinary(head), mime: sniffMime(head) };
-  } finally {
-    await handle.close();
-  }
-}
-
-/** Обрезка слишком длинной строки с маркером (в вывод не уходит «простыня»). */
-function clampReadLine(line: string): string {
-  return clampLine(line, sm('fsread.line_truncated'));
-}
-
-interface TextPage {
-  /** Строки вывода с исходной 1-based нумерацией (`N: текст`). */
-  lines: string[];
-  totalLines: number;
-  truncated: boolean;
-  /** Размер вывода в байтах (UTF-8). */
-  bytes: number;
-}
-
-/**
- * Страница текстового файла: читаем потоком через `readline` — в память не
- * поднимается всё содержимое даже большого файла. `offset` — 0-based,
- * нумерация строк в выводе — исходная 1-based (первая строка страницы имеет
- * номер `offset + 1`).
- *
- * `totalLines` считаем тем же проходом до EOF (счётчик, без хранения строк):
- * метаданные честно сообщают размер файла, а память остаётся постоянной.
- */
-async function readTextPage(filePath: string, offset: number, limit: number): Promise<TextPage> {
-  const stream = createReadStream(filePath, { encoding: 'utf-8' });
-  const rl = createInterface({ input: stream, crlfDelay: Infinity });
-
-  const lines: string[] = [];
-  let lineNo = 0;
-  let totalLines = 0;
-  let bytes = 0;
-  let truncated = false;
-
-  try {
-    for await (const raw of rl) {
-      lineNo += 1;
-      totalLines = lineNo;
-      if (lineNo <= offset) continue;
-      if (lines.length >= limit || bytes >= MAX_READ_BYTES) {
-        truncated = true;
-        continue;
-      }
-      const text = clampReadLine(raw);
-      const line = `${lineNo}: ${text}`;
-      const size = Buffer.byteLength(line, 'utf-8') + (lines.length > 0 ? 1 : 0);
-      if (bytes + size > MAX_READ_BYTES) {
-        truncated = true;
-        continue;
-      }
-      lines.push(line);
-      bytes += size;
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-
-  return { lines, totalLines, truncated, bytes };
-}
+export { sniffBinary } from '../../execution/fs-text.js';
 
 export const readFileTool: ToolDefinition = {
   name: 'read_file',
@@ -218,15 +150,43 @@ export const readFileTool: ToolDefinition = {
     const params = parsed.data as { file_path?: string; offset?: number; limit?: number };
     if (params.file_path !== undefined) validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+
+    // PROP-135 (Ф1): чтение файла — в контуре исполнения. В remote-режиме файл
+    // читает исполнитель (там лежит рабочий каталог проекта), а control plane
+    // лишь спрашивает канонический путь для проверки периметра.
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
 
     const offset = params.offset ?? 0;
     const limit = Math.min(params.limit ?? MAX_READ_LINES, MAX_READ_LINES);
-    const info = await stat(resolvedPath);
+
+    let info: FsStat;
+    try {
+      // Симлинк-побег проверяется по реальным путям (у точки исполнения).
+      if (await escapesWorkspace(fs, toolRoots(ctx), resolvedPath)) {
+        return pathEscapesWorkspaceResult(resolvedPath);
+      }
+      info = await fs.stat(resolvedPath);
+    } catch (err) {
+      if (isFsPathError(err)) {
+        return {
+          content: `Error: ${err.message}`,
+          isError: true,
+          metadata: { code: err.code, path: resolvedPath },
+        };
+      }
+      if (isExecutionFsUnavailableError(err)) {
+        return { content: FS_UNAVAILABLE_TEXT, isError: true };
+      }
+      throw err;
+    }
 
     // Каталог: отдаём листинг (те же правила, что у list_directory), а не ошибку чтения.
-    if (info.isDirectory()) {
-      const page = await listDirectoryPage(resolvedPath, offset, limit);
+    if (info.kind === 'directory') {
+      const page = listDirectoryPage(await fs.readdir(resolvedPath), offset, limit);
       const lines = [...page.lines];
       // Следующий offset — продолжение чтения без повторного обхода файла.
       const nextOffset = offset + lines.length;
@@ -256,10 +216,57 @@ export const readFileTool: ToolDefinition = {
     // ADR-115: картинка/PDF — не текст: отдаём файл модели как вложение текущего
     // хода (ссылка в `ToolResult.attachments` → `_injectToolAttachments`).
     // MIME — по сигнатуре (тот же детектор, что у сервиса вложений).
-    const head = await sniffFileHead(resolvedPath);
+    const head = await fs.sniff(resolvedPath);
     const displayPath = params.file_path ?? resolvedPath;
     if (head.mime && isIngestibleMediaMime(head.mime)) {
-      const outcome = await ingestMediaFile({ ctx, resolvedPath, size: info.size });
+      // Байты медиа едут **через порт** (в split-топологии файл лежит на
+      // исполнителе). Потолок перевозки — временное ограничение Ф1: поток
+      // больших файлов — Ф3.
+      let mediaBytes: Buffer;
+      try {
+        const raw = await fs.readBytes(resolvedPath, MEDIA_TRANSPORT_CAP);
+        mediaBytes = Buffer.from(raw.dataBase64, 'base64');
+      } catch (err) {
+        if (isFsPathError(err) && err.code === 'too_large') {
+          return {
+            content: sm('attach.tool.too_large', {
+              path: displayPath,
+              size: String(info.size),
+              limit: String(MEDIA_TRANSPORT_CAP),
+            }),
+            isError: true,
+            metadata: {
+              i18n: i18nMeta('attach.tool.too_large', {
+                path: displayPath,
+                size: String(info.size),
+                limit: String(MEDIA_TRANSPORT_CAP),
+              }),
+              path: resolvedPath,
+              type: 'media',
+              reason: 'too_large',
+              size: info.size,
+              limit: MEDIA_TRANSPORT_CAP,
+            },
+          };
+        }
+        if (isFsPathError(err)) {
+          return {
+            content: `Error: ${err.message}`,
+            isError: true,
+            metadata: { code: err.code, path: resolvedPath },
+          };
+        }
+        if (isExecutionFsUnavailableError(err)) {
+          return { content: FS_UNAVAILABLE_TEXT, isError: true };
+        }
+        throw err;
+      }
+      const outcome = await ingestMediaFile({
+        ctx,
+        resolvedPath,
+        size: info.size,
+        bytes: mediaBytes,
+      });
       if (outcome.kind === 'attached') {
         return {
           content: `${sm('attach.tool.attached', { path: displayPath })} (${outcome.mime}, ${outcome.size} bytes)`,
@@ -325,7 +332,22 @@ export const readFileTool: ToolDefinition = {
       };
     }
 
-    const page = await readTextPage(resolvedPath, offset, limit);
+    let page: FsTextPage;
+    try {
+      page = await fs.readText(resolvedPath, { offset, limit });
+    } catch (err) {
+      if (isFsPathError(err)) {
+        return {
+          content: `Error: ${err.message}`,
+          isError: true,
+          metadata: { code: err.code, path: resolvedPath },
+        };
+      }
+      if (isExecutionFsUnavailableError(err)) {
+        return { content: FS_UNAVAILABLE_TEXT, isError: true };
+      }
+      throw err;
+    }
     const lines = [...page.lines];
     // Следующий offset — продолжение чтения без повторного обхода файла.
     const nextOffset = offset + lines.length;
@@ -384,11 +406,41 @@ export const listDirectoryTool: ToolDefinition = {
     const params = parsed.data as { path?: string; offset?: number; limit?: number };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
-    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+
+    // PROP-135 (Ф1): листинг каталога — в контуре исполнения. В remote-режиме
+    // каталог читает исполнитель (там лежит рабочий каталог проекта), а
+    // control plane лишь спрашивает канонический путь для проверки периметра.
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
 
     const offset = params.offset ?? 0;
     const limit = Math.min(params.limit ?? MAX_READ_LINES, MAX_READ_LINES);
-    const page = await listDirectoryPage(resolvedPath, offset, limit);
+
+    let entries: FsDirEntry[];
+    try {
+      // Симлинк-побег проверяется по реальным путям (у точки исполнения).
+      if (await escapesWorkspace(fs, toolRoots(ctx), resolvedPath)) {
+        return pathEscapesWorkspaceResult(resolvedPath);
+      }
+      entries = await fs.readdir(resolvedPath);
+    } catch (err) {
+      if (isFsPathError(err)) {
+        return {
+          content: `Error: ${err.message}`,
+          isError: true,
+          metadata: { code: err.code, path: resolvedPath },
+        };
+      }
+      if (isExecutionFsUnavailableError(err)) {
+        return { content: FS_UNAVAILABLE_TEXT, isError: true };
+      }
+      throw err;
+    }
+
+    const page = listDirectoryPage(entries, offset, limit);
     const lines = [...page.lines];
     // Следующий offset — продолжение листинга без повторного обхода каталога.
     const nextOffset = offset + lines.length;

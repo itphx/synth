@@ -14,9 +14,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   EXEC_SECRET_LIMITS,
+  EXECUTOR_FS_MAX_READ_RAW_BYTES,
   EXECUTOR_PROTOCOL_VERSION,
   parseExecRequestBody,
   parseExecSecrets,
+  parseFsBytesRequestBody,
+  parseFsRawTextRequestBody,
+  parseFsRenameRequestBody,
+  parseFsSniffRequestBody,
+  parseFsTextRequestBody,
   parseSpawnExecRequestBody,
 } from './protocol.js';
 
@@ -278,7 +284,117 @@ describe('разбор mode секрета вызова (протокол 6)', (
     expect(parsed.ok).toBe(false);
   });
 
-  it('версия протокола — 6 (агентный режим секрета)', () => {
-    expect(EXECUTOR_PROTOCOL_VERSION).toBe(6);
+  it('версия протокола — 7 (FS-операции)', () => {
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe(7);
+  });
+});
+
+/**
+ * Разбор тел FS-роутов чтения содержимого (протокол 7, слайс 2 Ф1).
+ *
+ * Строгость — как у прочих разборов: молчаливый пропуск потолка означал бы,
+ * что читается не та страница (или файл без ограничения размера).
+ */
+describe('разбор тел FS-роутов чтения содержимого (протокол 7)', () => {
+  it('read-text: валидное тело — offset/limit/maxBytes принимаются', () => {
+    const parsed = parseFsTextRequestBody({
+      path: '/workspace/a.txt',
+      cwd: '/workspace',
+      offset: 2,
+      limit: 10,
+      maxBytes: 1024,
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toEqual({
+      path: '/workspace/a.txt',
+      cwd: '/workspace',
+      offset: 2,
+      limit: 10,
+      maxBytes: 1024,
+    });
+  });
+
+  it('read-text: путь обязателен', () => {
+    expect(parseFsTextRequestBody({ cwd: '/workspace' }).ok).toBe(false);
+    expect(parseFsTextRequestBody({ path: '  ' }).ok).toBe(false);
+  });
+
+  it('read-text: отрицательный offset и нецелый limit — отказ', () => {
+    expect(parseFsTextRequestBody({ path: '/a', offset: -1 }).ok).toBe(false);
+    expect(parseFsTextRequestBody({ path: '/a', limit: 1.5 }).ok).toBe(false);
+    expect(parseFsTextRequestBody({ path: '/a', limit: 0 }).ok).toBe(false);
+    expect(parseFsTextRequestBody({ path: '/a', maxBytes: 0 }).ok).toBe(false);
+  });
+
+  it('sniff: необязательный maxBytes принимается, неверный — отказ', () => {
+    const parsed = parseFsSniffRequestBody({ path: '/a.png', maxBytes: 4096 });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.maxBytes).toBe(4096);
+    expect(parseFsSniffRequestBody({ path: '/a.png', maxBytes: -1 }).ok).toBe(false);
+  });
+
+  it('read-bytes: maxBytes обязателен и положителен', () => {
+    const parsed = parseFsBytesRequestBody({ path: '/a.bin', maxBytes: 1024 });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.maxBytes).toBe(1024);
+    expect(parseFsBytesRequestBody({ path: '/a.bin' }).ok).toBe(false);
+    expect(parseFsBytesRequestBody({ path: '/a.bin', maxBytes: 0 }).ok).toBe(false);
+  });
+});
+
+/**
+ * Разбор тел FS-роутов правки (протокол 7, слайс 3b Ф2).
+ *
+ * `read-raw` — потолок размера обязателен (иначе файл любого размера уехал бы
+ * в ответе целиком); `rename` — цель (`to`) обязательна и непуста.
+ */
+describe('разбор тел FS-роутов правки (протокол 7)', () => {
+  it('read-raw: валидное тело — maxBytes принимается', () => {
+    const parsed = parseFsRawTextRequestBody({ path: '/workspace/a.txt', maxBytes: 4096 });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toEqual({ path: '/workspace/a.txt', maxBytes: 4096 });
+  });
+
+  it('read-raw: maxBytes обязателен, положителен и не выше потолка тела', () => {
+    expect(parseFsRawTextRequestBody({ path: '/a.txt' }).ok).toBe(false);
+    expect(parseFsRawTextRequestBody({ path: '/a.txt', maxBytes: 0 }).ok).toBe(false);
+    expect(parseFsRawTextRequestBody({ path: '/a.txt', maxBytes: 1.5 }).ok).toBe(false);
+    expect(
+      parseFsRawTextRequestBody({ path: '/a.txt', maxBytes: EXECUTOR_FS_MAX_READ_RAW_BYTES + 1 }).ok,
+    ).toBe(false);
+  });
+
+  it('read-raw: путь обязателен', () => {
+    expect(parseFsRawTextRequestBody({ maxBytes: 10 }).ok).toBe(false);
+    expect(parseFsRawTextRequestBody({ path: '  ', maxBytes: 10 }).ok).toBe(false);
+  });
+
+  it('rename: валидное тело — источник и цель', () => {
+    const parsed = parseFsRenameRequestBody({
+      path: '/workspace/a.txt',
+      to: '/workspace/b.txt',
+      cwd: '/workspace',
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toEqual({
+      path: '/workspace/a.txt',
+      to: '/workspace/b.txt',
+      cwd: '/workspace',
+    });
+  });
+
+  it('rename: цель обязательна и непуста', () => {
+    expect(parseFsRenameRequestBody({ path: '/a.txt' }).ok).toBe(false);
+    expect(parseFsRenameRequestBody({ path: '/a.txt', to: '  ' }).ok).toBe(false);
+    expect(parseFsRenameRequestBody({ path: '/a.txt', to: 42 }).ok).toBe(false);
+  });
+
+  it('rename: путь-источник обязателен', () => {
+    expect(parseFsRenameRequestBody({ to: '/b.txt' }).ok).toBe(false);
   });
 });

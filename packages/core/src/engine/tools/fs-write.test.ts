@@ -6,6 +6,8 @@ import { writeFileTool, createDirectoryTool, deleteFileTool, editFileTool } from
 import { fileLockRegistrySize } from './file-lock.js';
 import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import type { ToolContext } from '@itphx/synth-shared';
+import type { ExecRequest, ExecResult, ExecutionFs, ExecutionPort } from '../../execution/ports/index.js';
+import { ExecutionFsUnavailableError } from '../../execution/ports/index.js';
 
 describe('fs-write tools — path resolution', () => {
   let tmpDir: string;
@@ -763,5 +765,236 @@ describe('fs-write tools — metadata записи', () => {
     expect(meta.bytes).toBe(0);
     expect(result.content).toContain('0 lines');
     expect(result.content).toContain('0 bytes');
+  });
+});
+
+/**
+ * PROP-135 (Ф2): записывающие тулы идут через **порт исполнения**.
+ *
+ * В split-топологии рабочий каталог лежит на исполнителе, поэтому запись,
+ * создание каталога и удаление уезжают туда же, куда уходят команды. Порт
+ * подменяется — проверяется контракт тула: FS-операция уходит в порт, а не
+ * в локальную ФС процесса.
+ */
+describe('fs-write tools — работа через порт исполнения (PROP-135 Ф2)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fswrite-port-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Порт с подменённой FS-реализацией (операции — из порта). */
+  class FakeFsPort implements ExecutionPort {
+    readonly calls: string[] = [];
+    readonly fs: ExecutionFs;
+
+    constructor(fs?: Partial<ExecutionFs>) {
+      this.fs = {
+        realpath: async (path) => path,
+        stat: async () => ({ kind: 'file', size: 0, mtimeMs: 0 }),
+        readdir: async () => [],
+        readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+        sniff: async () => ({ binary: false }),
+        readBytes: async () => ({ dataBase64: '', size: 0 }),
+        writeFile: async (path, content) => {
+          this.calls.push(`writeFile:${path}:${content}`);
+        },
+        mkdir: async (path) => {
+          this.calls.push(`mkdir:${path}`);
+        },
+        remove: async (path) => {
+          this.calls.push(`remove:${path}`);
+        },
+        readRawText: async (path) => {
+          this.calls.push(`readRawText:${path}`);
+          return { text: '', size: 0 };
+        },
+        rename: async (from, to) => {
+          this.calls.push(`rename:${from}:${to}`);
+        },
+        ...fs,
+      };
+    }
+
+    async execute(req: ExecRequest): Promise<ExecResult> {
+      this.calls.push(`exec:${req.command.kind}`);
+      return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+    }
+  }
+
+  function makeCtx(port: ExecutionPort, overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra: { executionPort: port },
+      ...overrides,
+    };
+  }
+
+  it('write_file: запись уходит в порт (fs.writeFile), локально файл не создан', async () => {
+    const port = new FakeFsPort();
+
+    const result = await writeFileTool.execute({ file_path: 'out.txt', content: 'hi' }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`writeFile:${join(tmpDir, 'out.txt')}:hi`);
+    // Файл на диске не появился — запись была у порта, а не у тула.
+    await expect(access(join(tmpDir, 'out.txt'))).rejects.toThrow();
+  });
+
+  it('create_directory: каталог создаётся портом (fs.mkdir)', async () => {
+    const port = new FakeFsPort();
+
+    const result = await createDirectoryTool.execute({ path: 'deep/nested' }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`mkdir:${join(tmpDir, 'deep/nested')}`);
+    await expect(access(join(tmpDir, 'deep'))).rejects.toThrow();
+  });
+
+  it('delete_file: удаление уходит в порт (fs.remove)', async () => {
+    const port = new FakeFsPort();
+
+    const result = await deleteFileTool.execute({ file_path: 'gone.txt' }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`remove:${join(tmpDir, 'gone.txt')}`);
+  });
+
+  it('write_file: бинарная перезапись по-прежнему отказывает (сниффер порта)', async () => {
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: 7, mtimeMs: 0 }),
+      sniff: async () => ({ binary: true }),
+    });
+
+    const result = await writeFileTool.execute({ file_path: 'bin.dat', content: 'text' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot overwrite binary file');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.write_binary');
+    // Записи не было — отказ до неё.
+    expect(port.calls.filter((call) => call.startsWith('writeFile:'))).toEqual([]);
+  });
+
+  it('write_file: без FS в порте — понятный отказ (features.fs)', async () => {
+    // Порт без FS-части — как удалённый исполнитель без `features.fs`.
+    class PortWithoutFs implements ExecutionPort {
+      async execute(_req: ExecRequest): Promise<ExecResult> {
+        return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+      }
+    }
+
+    const result = await writeFileTool.execute({ file_path: 'x.txt', content: 'hi' }, makeCtx(new PortWithoutFs()));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('features.fs');
+  });
+
+  it('write_file: порт без адреса с features.fs — тот же понятный отказ', async () => {
+    // Удалённый порт: FS-часть есть, но адреса с `features.fs` нет —
+    // отказ приходит из вызова (`ExecutionFsUnavailableError`).
+    const port = new FakeFsPort({
+      realpath: async () => {
+        throw new ExecutionFsUnavailableError();
+      },
+    });
+
+    const result = await writeFileTool.execute({ file_path: 'x.txt', content: 'hi' }, makeCtx(port));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('features.fs');
+  });
+
+  it('edit_file: чтение и запись идут через порт (fs.readRawText/fs.writeFile), локальный файл не тронут', async () => {
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: 6, mtimeMs: 0 }),
+      readRawText: async (path) => {
+        port.calls.push(`readRawText:${path}`);
+        return { text: 'hello\n', size: 6 };
+      },
+    });
+
+    const result = await editFileTool.execute(
+      { file_path: 'edited.txt', old_string: 'hello', new_string: 'bye' },
+      makeCtx(port),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`readRawText:${join(tmpDir, 'edited.txt')}`);
+    expect(port.calls).toContain(`writeFile:${join(tmpDir, 'edited.txt')}:bye\n`);
+    // Локальный файл не появился — правка была у порта.
+    await expect(access(join(tmpDir, 'edited.txt'))).rejects.toThrow();
+  });
+
+  it('edit_file: «файла нет» из порта — прежний отказ fs.file_not_found', async () => {
+    const { FsPathError } = await import('../../execution/ports/index.js');
+    const port = new FakeFsPort({
+      stat: async (path) => {
+        throw new FsPathError('not_found', path, 'путь не найден');
+      },
+    });
+
+    const result = await editFileTool.execute(
+      { file_path: 'missing.txt', old_string: 'a', new_string: 'b' },
+      makeCtx(port),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('file not found');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.file_not_found');
+    expect(port.calls.filter((call) => call.startsWith('writeFile:'))).toEqual([]);
+  });
+
+  it('edit_file: бинарный файл по снифферу порта — прежний отказ fs.edit_binary', async () => {
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: 7, mtimeMs: 0 }),
+      sniff: async () => ({ binary: true }),
+    });
+
+    const result = await editFileTool.execute(
+      { file_path: 'bin.dat', old_string: 'a', new_string: 'b' },
+      makeCtx(port),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('binary');
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.edit_binary');
+    expect(port.calls.filter((call) => call.startsWith('writeFile:'))).toEqual([]);
+  });
+
+  it('edit_file: файл больше предела — прежний отказ fs.file_too_large', async () => {
+    const port = new FakeFsPort({
+      stat: async () => ({ kind: 'file', size: MAX_TOOL_FILE_BYTES + 1, mtimeMs: 0 }),
+    });
+
+    const result = await editFileTool.execute(
+      { file_path: 'big.txt', old_string: 'a', new_string: 'b' },
+      makeCtx(port),
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata as { i18n?: { key: string } }).i18n?.key).toBe('fs.file_too_large');
+    expect(port.calls.filter((call) => call.startsWith('readRawText:'))).toEqual([]);
+  });
+
+  it('edit_file: без FS в порте — понятный отказ (features.fs)', async () => {
+    class PortWithoutFs implements ExecutionPort {
+      async execute(_req: ExecRequest): Promise<ExecResult> {
+        return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+      }
+    }
+
+    const result = await editFileTool.execute(
+      { file_path: 'x.txt', old_string: 'a', new_string: 'b' },
+      makeCtx(new PortWithoutFs()),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('features.fs');
   });
 });

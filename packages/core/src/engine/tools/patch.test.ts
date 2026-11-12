@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile, stat, chmod, lstat, mkdir, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, stat, chmod, lstat, mkdir, symlink, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolCapability } from '@itphx/synth-shared';
@@ -11,6 +11,8 @@ import { fileLockRegistrySize } from './file-lock.js';
 import { ALL_BUILTIN_TOOLS, createToolRegistry } from './index.js';
 import { PermissionEvaluator, extractPaths } from '../permission/evaluator.js';
 import { getToolGroups } from '../permission/groups.js';
+import type { ExecRequest, ExecResult, ExecutionFs, ExecutionPort } from '../../execution/ports/index.js';
+import { FsPathError } from '../../execution/ports/index.js';
 
 const CWD = '/workspace/project';
 
@@ -787,5 +789,161 @@ describe('patch — операции add/delete/rename', () => {
     expect(ops.isError).toBeFalsy();
     await expect(readFile(join(tmpDir, 'b.txt'), 'utf-8')).resolves.toBe('b\n');
     expect(await exists(join(tmpDir, 'a.txt'))).toBe(false);
+  });
+});
+
+/**
+ * Пат — **целиком в контуре исполнения** (PROP-135, Ф2).
+ *
+ * Порт подменяется: проверяется контракт тула — чтение, запись, создание
+ * каталогов, удаление и перенос уходят в порт, а локальная ФС процесса не
+ * затрагивается (в split-топологии рабочий каталог живёт на исполнителе).
+ */
+describe('patch — работа через порт исполнения (PROP-135 Ф2)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-patch-port-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Порт с подменённой FS-реализацией (операции — из порта). */
+  class FakeFsPort implements ExecutionPort {
+    readonly calls: string[] = [];
+    readonly files = new Map<string, string>();
+    readonly fs: ExecutionFs;
+
+    constructor(files: Record<string, string> = {}) {
+      this.files = new Map(Object.entries(files));
+      this.fs = {
+        realpath: async (path) => path,
+        stat: async (path) => {
+          const content = this.files.get(path);
+          if (content === undefined) throw new FsPathError('not_found', path, 'путь не найден');
+          return { kind: 'file', size: Buffer.byteLength(content, 'utf-8'), mtimeMs: 0 };
+        },
+        readdir: async () => [],
+        readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+        sniff: async () => ({ binary: false }),
+        readBytes: async () => ({ dataBase64: '', size: 0 }),
+        writeFile: async (path, content) => {
+          this.calls.push(`writeFile:${path}:${content}`);
+          this.files.set(path, content);
+        },
+        mkdir: async (path) => {
+          this.calls.push(`mkdir:${path}`);
+        },
+        remove: async (path) => {
+          this.calls.push(`remove:${path}`);
+          this.files.delete(path);
+        },
+        readRawText: async (path) => {
+          this.calls.push(`readRawText:${path}`);
+          const content = this.files.get(path);
+          if (content === undefined) throw new FsPathError('not_found', path, 'путь не найден');
+          return { text: content, size: Buffer.byteLength(content, 'utf-8') };
+        },
+        rename: async (from, to) => {
+          this.calls.push(`rename:${from}:${to}`);
+          if (this.files.has(to)) throw new FsPathError('invalid', to, 'цель уже существует');
+          const content = this.files.get(from);
+          if (content === undefined) throw new FsPathError('not_found', from, 'путь не найден');
+          this.files.set(to, content);
+          this.files.delete(from);
+        },
+      };
+    }
+
+    async execute(req: ExecRequest): Promise<ExecResult> {
+      this.calls.push(`exec:${req.command.kind}`);
+      return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+    }
+  }
+
+  function makeCtx(port: ExecutionPort, overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra: { executionPort: port },
+      ...overrides,
+    };
+  }
+
+  it('update: чтение и запись уходят в порт (fs.readRawText/fs.writeFile), локальный файл не тронут', async () => {
+    const target = join(tmpDir, 'a.txt');
+    const port = new FakeFsPort({ [target]: 'alpha\n' });
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'a.txt', old_string: 'alpha', new_string: 'ALPHA' }],
+    }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`readRawText:${target}`);
+    expect(port.calls).toContain(`writeFile:${target}:ALPHA\n`);
+    // Локальный файл не создан — правка была у порта.
+    await expect(access(target)).rejects.toThrow();
+  });
+
+  it('add: каталоги создаются портом (fs.mkdir), запись — fs.writeFile', async () => {
+    const target = join(tmpDir, 'new', 'file.txt');
+    const port = new FakeFsPort();
+
+    const result = await patchTool.execute({
+      edits: [{ op: 'add', file_path: 'new/file.txt', content: 'x\n' }],
+    }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`mkdir:${join(tmpDir, 'new')}`);
+    expect(port.calls).toContain(`writeFile:${target}:x\n`);
+    await expect(access(target)).rejects.toThrow();
+  });
+
+  it('delete: удаление уходит в порт (fs.remove)', async () => {
+    const target = join(tmpDir, 'gone.txt');
+    const port = new FakeFsPort({ [target]: 'x\n' });
+
+    const result = await patchTool.execute({
+      edits: [{ op: 'delete', file_path: 'gone.txt' }],
+    }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`remove:${target}`);
+  });
+
+  it('rename: перенос уходит в порт (fs.rename), содержимое не переписывается', async () => {
+    const from = join(tmpDir, 'a.txt');
+    const to = join(tmpDir, 'b.txt');
+    const port = new FakeFsPort({ [from]: 'alpha\n' });
+
+    const result = await patchTool.execute({
+      edits: [{ op: 'rename', from: 'a.txt', to: 'b.txt' }],
+    }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toContain(`rename:${from}:${to}`);
+    // Чистый перенос: содержимое не переписывается, источник не удаляется
+    // отдельной операцией.
+    expect(port.calls.filter((call) => call.startsWith('writeFile:'))).toEqual([]);
+    expect(port.calls.filter((call) => call.startsWith('remove:'))).toEqual([]);
+    expect(port.files.get(to)).toBe('alpha\n');
+  });
+
+  it('без FS в порте — понятный отказ (features.fs)', async () => {
+    class PortWithoutFs implements ExecutionPort {
+      async execute(_req: ExecRequest): Promise<ExecResult> {
+        return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+      }
+    }
+
+    const result = await patchTool.execute({
+      edits: [{ file_path: 'a.txt', old_string: 'alpha', new_string: 'ALPHA' }],
+    }, makeCtx(new PortWithoutFs()));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('features.fs');
   });
 });

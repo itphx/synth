@@ -467,6 +467,10 @@ export {
   ExecutionError,
   isExecutionError,
   isExecutionPort,
+  FsPathError,
+  isFsPathError,
+  ExecutionFsUnavailableError,
+  isExecutionFsUnavailableError,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
   EXECUTION_BASE_CAPABILITIES,
@@ -489,7 +493,44 @@ export type {
   ExecBackgroundChunk,
   ExecBackgroundExit,
   ExecBackgroundProcess,
+  // PROP-135 (Ф1): FS-часть контракта порта исполнения.
+  ExecutionFs,
+  FsStat,
+  FsDirEntry,
+  FsEntryKind,
+  FsErrorCode,
+  FsRawTextResult,
+  FsTextOptions,
+  FsTextPage,
+  FsSniffResult,
+  FsBytesResult,
 } from './execution/ports/index.js';
+// PROP-135 (Ф1, слайс 2): общий читатель файлов — тем же кодом читает и
+// исполнитель (точечный runtime-импорт), поэтому формат вывода не зависит
+// от топологии.
+export {
+  looksBinary,
+  sniffBinary,
+  sniffFileHeadFromFile,
+  readTextPageFromFile,
+  readBytesFromFile,
+  readRawTextFromFile,
+  MAX_READ_LINES,
+  MAX_READ_BYTES,
+  BINARY_SNIFF_BYTES,
+} from './execution/fs-text.js';
+// PROP-135 (Ф2, слайс 3a): запись/создание каталога/удаление — общая
+// реализация (тем же кодом пишет исполнитель, точечный runtime-импорт).
+export {
+  writeFileAtomic,
+  writeTextFileAtomic,
+  mkdirRecursive,
+  removePath,
+  renamePath,
+} from './execution/fs-atomic.js';
+// PROP-135: периметр файловых операций (проверка симлинк-побега по реальным
+// путям точки исполнения) — общий для читающих и записывающих тулов.
+export { escapesWorkspace, FS_UNAVAILABLE_TEXT } from './execution/fs-perimeter.js';
 export { InlineExecutionPort } from './execution/inline-execution-port.js';
 export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.js';
 // ADR-077 (шаг 7b): выбор порта по режиму `execution.mode` — фабрика

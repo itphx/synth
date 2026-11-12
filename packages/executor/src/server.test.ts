@@ -292,7 +292,7 @@ describe('исполнитель: лимиты и служебные эндпо�
       };
       limits?: { timeoutMs: number; maxOutputBytes: number };
     };
-    expect(body.protocol).toBe(6);
+    expect(body.protocol).toBe(7);
     expect(body.toolchain.git).toBe('git version 2.39.2');
     expect(body.os.length).toBeGreaterThan(0);
     expect(body.arch.length).toBeGreaterThan(0);
@@ -327,7 +327,7 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(body.limits?.timeoutMs).toBe(600_000);
     expect(body.limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
     // Поле аддитивное: версия протокола и признаки не меняются.
-    expect(body.protocol).toBe(6);
+    expect(body.protocol).toBe(7);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
@@ -362,6 +362,6 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; protocol: number };
     expect(body.status).toBe('ok');
-    expect(body.protocol).toBe(6);
+    expect(body.protocol).toBe(7);
   });
 });

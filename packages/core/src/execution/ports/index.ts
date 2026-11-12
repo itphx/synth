@@ -32,3 +32,20 @@ export {
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
   EXECUTION_SECRETS_UNSUPPORTED_CODE,
 } from './execution-port.js';
+// PROP-135 (Ф1): FS-часть контракта порта исполнения (`realpath`/`stat`/
+// `readdir`/`readText`/`sniff`/`readBytes`) — файловые операции агента уезжают
+// в тот же контур, что и команды.
+export { FsPathError, isFsPathError, fsErrorCodeFromErrno } from './execution-fs.js';
+export { ExecutionFsUnavailableError, isExecutionFsUnavailableError } from './execution-fs.js';
+export type {
+  ExecutionFs,
+  FsStat,
+  FsDirEntry,
+  FsEntryKind,
+  FsErrorCode,
+  FsRawTextResult,
+  FsTextOptions,
+  FsTextPage,
+  FsSniffResult,
+  FsBytesResult,
+} from './execution-fs.js';

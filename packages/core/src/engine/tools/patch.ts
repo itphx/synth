@@ -1,19 +1,25 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, isLexicallyInside, toolRoots, pathEscapesWorkspaceResult } from './path-utils.js';
+import { resolvePath, validateInputPath, isLexicallyInside, toolRoots, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
-import { sniffBinary } from './fs-read.js';
 import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import { generateUnifiedDiff } from './fs-write.js';
 import { detectLineEndings, fromLfView, toLfView } from './line-endings.js';
-import { writeFileAtomic } from './atomic-file-write.js';
 import { withFileLocks } from './file-lock.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+// PROP-135 (Ф2): пат — целиком в контуре исполнения (в split-топологии рабочий
+// каталог живёт на исполнителе, а не в control plane).
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { escapesWorkspace, FS_UNAVAILABLE_TEXT } from '../../execution/fs-perimeter.js';
+import { fsCall, statOrNull } from '../../execution/fs-tool-call.js';
+import {
+  isExecutionFsUnavailableError,
+  type ExecutionFs,
+} from '../../execution/ports/index.js';
 
 /** Лимит правок за один вызов (защита от «мегапатча» в один tool_call). */
 export const MAX_PATCH_EDITS = 50;
@@ -112,8 +118,6 @@ interface PlannedFile {
   style: 'lf' | 'crlf';
   /** Содержимое пишется как есть (новый файл со смешанными переводами строк). */
   verbatim: boolean;
-  /** Права файла (undefined — новый файл). */
-  mode: number | undefined;
   /** Счётчик замен (update). */
   replacements: number;
   /** Файла на диске не было (add или цель rename). */
@@ -124,12 +128,30 @@ interface PlannedFile {
   movedFrom?: string;
 }
 
-/** План патча: итоговое состояние файлов + операции удаления. */
+/**
+ * Перенос файла на диске (`op: rename`).
+ *
+ * Перенос — **не** «записать копию и удалить источник», а настоящий
+ * `rename`: файл уезжает целиком (права и содержимое сохраняются), а
+ * содержимое цели переписывается только если в этом же вызове файл правили.
+ */
+interface PatchRename {
+  /** Абсолютный путь источника. */
+  from: string;
+  /** Абсолютный путь цели. */
+  to: string;
+  /** Оригинал источника (сырой) — для отката. */
+  rawOriginal: string | null;
+}
+
+/** План патча: итоговое состояние файлов + операции удаления и переноса. */
 interface PatchPlan {
   /** Файлы по итоговому пути (порядок — по первой правке). */
   files: Map<string, PlannedFile>;
   /** Физические пути к удалению с диска → оригинал для отката. */
-  deletions: Map<string, { rawOriginal: string; mode: number | undefined }>;
+  deletions: Map<string, { rawOriginal: string }>;
+  /** Переносы файлов на диске: путь источника → перенос. */
+  renames: Map<string, PatchRename>;
 }
 
 /** Запись отчёта по операциям (одна на файл/операцию). */
@@ -214,6 +236,16 @@ export const patchTool: ToolDefinition = {
     );
     const roots = toolRoots(ctx);
 
+    // PROP-135 (Ф2): пат уезжает в контур исполнения целиком — в
+    // split-топологии рабочий каталог живёт на исполнителе, а не в control
+    // plane. Нет FS в порте — fail-closed (тот же текст, что у прочих
+    // файловых тулов).
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
+
     // ---------------------------------------------------------------------
     // Фаза 0: резолв путей (без чтения файлов и без проверок).
     //
@@ -235,7 +267,7 @@ export const patchTool: ToolDefinition = {
       // ---------------------------------------------------------------------
       // Фаза 1: валидация и расчёт результата в памяти. Ничего не пишем.
       // ---------------------------------------------------------------------
-      const plan: PatchPlan = { files: new Map(), deletions: new Map() };
+      const plan: PatchPlan = { files: new Map(), deletions: new Map(), renames: new Map() };
       const report: ReportEntry[] = [];
 
       for (let index = 0; index < edits.length; index++) {
@@ -243,21 +275,21 @@ export const patchTool: ToolDefinition = {
         const paths = resolvedPaths[index]!;
 
         if (edit.op === 'update') {
-          const failure = await applyUpdateEdit(edit, index, paths, plan, report, ctx, roots);
+          const failure = await applyUpdateEdit(edit, index, paths, plan, report, ctx, roots, fs);
           if (failure) return failure;
           continue;
         }
         if (edit.op === 'add') {
-          const failure = await applyAddEdit(edit, paths, plan, report, ctx, roots);
+          const failure = await applyAddEdit(edit, paths, plan, report, ctx, roots, fs);
           if (failure) return failure;
           continue;
         }
         if (edit.op === 'delete') {
-          const failure = await applyDeleteEdit(edit, paths, plan, report, roots);
+          const failure = await applyDeleteEdit(edit, paths, plan, report, roots, fs);
           if (failure) return failure;
           continue;
         }
-        const failure = await applyRenameEdit(edit, paths, plan, report, roots);
+        const failure = await applyRenameEdit(edit, paths, plan, report, roots, fs);
         if (failure) return failure;
       }
 
@@ -267,6 +299,16 @@ export const patchTool: ToolDefinition = {
       // ---------------------------------------------------------------------
       let currentPath = '';
       try {
+        // Переносы — первыми: файл уезжает на диске (`fs.rename`), а уже
+        // затем в цель пишется новое содержимое (правка + переименование в
+        // одном вызове).
+        for (const rename of plan.renames.values()) {
+          currentPath = rename.to;
+          // Каталог цели может быть новым (`op: rename` — цель в новом
+          // каталоге): `rename` каталога не создаёт.
+          await fs.mkdir(dirname(rename.to));
+          await fs.rename(rename.from, rename.to);
+        }
         for (const file of plan.files.values()) {
           currentPath = file.resolvedPath;
           // CRLF-файл возвращаем в CRLF — ни один `\r\n` не теряется.
@@ -276,17 +318,23 @@ export const patchTool: ToolDefinition = {
               ? fromLfView(file.content)
               : file.content;
           // Каталоги создаются (op: add/rename — цель может быть в новом каталоге).
-          await mkdir(dirname(file.resolvedPath), { recursive: true });
-          await writeFileAtomic(file.resolvedPath, content, file.mode);
+          await fs.mkdir(dirname(file.resolvedPath));
+          // Запись — через порт: атомарно (tmp → `rename`), права
+          // существующего файла сохраняются, симлинк разыменовывается.
+          await fs.writeFile(file.resolvedPath, content);
         }
-        // Удаление — после записей: переименование реализовано как «записать
-        // в цель + удалить источник», поэтому источник должен уйти последним.
+        // Удаление — после записей: перенос уже унёс источник на диске.
         for (const path of plan.deletions.keys()) {
           currentPath = path;
-          await rm(path, { force: true });
+          await fs.remove(path);
         }
       } catch (err) {
-        await rollbackPatch(plan);
+        // «FS недоступна» — не сбой записи: контура нет вовсе (удалённый
+        // исполнитель без `features.fs`).
+        if (isExecutionFsUnavailableError(err)) {
+          return { content: FS_UNAVAILABLE_TEXT, isError: true };
+        }
+        await rollbackPatch(plan, fs);
         const message = err instanceof Error ? err.message : String(err);
         return {
           content: sm('fs.patch_write_failed', { path: currentPath, error: message }),
@@ -324,22 +372,40 @@ function resolveEditPaths(edit: PatchEdit, workingDir: string): ResolvedEditPath
  * Периметр операции: путь должен лежать внутри корней сессии.
  *
  * Симлинк наружу — отдельный отказ (`pathEscapesWorkspaceResult`, как у
- * остальных файловых тулов). Прочие выходы за периметр (абсолютный путь
- * вне workspace или относительный `..`) — собственный ключ патча.
- *
- * Проверка лексическая: путь должен лежать внутри корня **до** разыменования
- * симлинков (симлинк наружу ловит отдельная проверка выше).
+ * остальных файловых тулов); проверяется он **по реальным путям точки
+ * исполнения** (PROP-135) — лексика control plane симлинк наружу не видит.
+ * Прочие выходы за периметр (абсолютный путь вне workspace или относительный
+ * `..`) — собственный ключ патча.
  */
-function checkPerimeter(
+async function checkPerimeter(
   displayPath: string,
   resolvedPath: string,
   roots: string[],
-): ToolResult | null {
-  if (isSymlinkEscapeInRoots(roots, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+  fs: ExecutionFs,
+): Promise<ToolResult | null> {
+  const escape = await fsCall(() => escapesWorkspace(fs, roots, resolvedPath));
+  if (!escape.ok) return escape.result;
+  if (escape.value) return pathEscapesWorkspaceResult(resolvedPath);
   if (!roots.some((root) => isLexicallyInside(root, resolvedPath))) {
     return patchError('fs.patch_path_escapes', { path: displayPath }, { path: resolvedPath });
   }
   return null;
+}
+
+/**
+ * Есть ли путь на диске (по `stat` порта).
+ *
+ * Ошибка чтения (нет доступа и т. п.) — «пути нет», как и раньше: пат
+ * разберётся с отказом при записи. «FS недоступна» — отдельно (её видно по
+ * `ExecutionFsUnavailableError`).
+ */
+async function pathExists(fs: ExecutionFs, path: string): Promise<boolean> {
+  try {
+    return (await statOrNull(fs, path)) !== null;
+  } catch (err) {
+    if (isExecutionFsUnavailableError(err)) throw err;
+    return false;
+  }
 }
 
 /** `update` — замена точного текста (последовательно, в памяти). */
@@ -351,16 +417,17 @@ async function applyUpdateEdit(
   report: ReportEntry[],
   ctx: ToolContext,
   roots: string[],
+  fs: ExecutionFs,
 ): Promise<ToolResult | null> {
   const displayPath = edit.file_path;
   const resolvedPath = paths.resolved[0]!;
   validateInputPath(displayPath, 'file_path');
-  const guard = checkPerimeter(displayPath, resolvedPath, roots);
+  const guard = await checkPerimeter(displayPath, resolvedPath, roots, fs);
   if (guard) return guard;
 
   let planned = plan.files.get(resolvedPath);
   if (!planned) {
-    const loaded = await loadPatchTarget(resolvedPath, displayPath);
+    const loaded = await loadPatchTarget(fs, resolvedPath, displayPath);
     if ('failure' in loaded) return patchError(loaded.failure.key, loaded.failure.params, loaded.failure.metadata);
     planned = loaded.file;
     plan.files.set(resolvedPath, planned);
@@ -417,18 +484,19 @@ async function applyAddEdit(
   report: ReportEntry[],
   ctx: ToolContext,
   roots: string[],
+  fs: ExecutionFs,
 ): Promise<ToolResult | null> {
   const displayPath = edit.file_path;
   const resolvedPath = paths.resolved[0]!;
   validateInputPath(displayPath, 'file_path');
-  const guard = checkPerimeter(displayPath, resolvedPath, roots);
+  const guard = await checkPerimeter(displayPath, resolvedPath, roots, fs);
   if (guard) return guard;
 
   // Файл уже есть — либо на диске, либо создан/перенесён в этом же вызове.
   if (plan.files.has(resolvedPath) || plan.deletions.has(resolvedPath)) {
     return patchError('fs.patch_add_exists', { path: displayPath }, { path: resolvedPath });
   }
-  const existing = await stat(resolvedPath).catch(() => null);
+  const existing = await pathExists(fs, resolvedPath);
   if (existing) {
     return patchError('fs.patch_add_exists', { path: displayPath }, { path: resolvedPath });
   }
@@ -456,7 +524,6 @@ async function applyAddEdit(
     rawOriginal: null,
     style: verbatim ? 'lf' : style,
     verbatim,
-    mode: undefined,
     replacements: 0,
     isNew: true,
     origin: 'add',
@@ -472,11 +539,12 @@ async function applyDeleteEdit(
   plan: PatchPlan,
   report: ReportEntry[],
   roots: string[],
+  fs: ExecutionFs,
 ): Promise<ToolResult | null> {
   const displayPath = edit.file_path;
   const resolvedPath = paths.resolved[0]!;
   validateInputPath(displayPath, 'file_path');
-  const guard = checkPerimeter(displayPath, resolvedPath, roots);
+  const guard = await checkPerimeter(displayPath, resolvedPath, roots, fs);
   if (guard) return guard;
 
   const planned = plan.files.get(resolvedPath);
@@ -487,7 +555,7 @@ async function applyDeleteEdit(
       return null;
     }
     plan.files.delete(resolvedPath);
-    plan.deletions.set(resolvedPath, { rawOriginal: planned.rawOriginal ?? '', mode: planned.mode });
+    plan.deletions.set(resolvedPath, { rawOriginal: planned.rawOriginal ?? '' });
     report.push({ kind: 'delete', resolvedPath, path: displayPath });
     return null;
   }
@@ -496,7 +564,7 @@ async function applyDeleteEdit(
     return patchError('fs.patch_delete_missing', { path: displayPath }, { path: resolvedPath });
   }
 
-  const loaded = await loadPatchTarget(resolvedPath, displayPath);
+  const loaded = await loadPatchTarget(fs, resolvedPath, displayPath);
   if ('failure' in loaded) {
     // Отсутствующий файл — «нечего удалять»; остальные отказы (не-обычный
     // файл, бинарь, размер) — как есть.
@@ -505,7 +573,7 @@ async function applyDeleteEdit(
     }
     return patchError(loaded.failure.key, loaded.failure.params, loaded.failure.metadata);
   }
-  plan.deletions.set(resolvedPath, { rawOriginal: loaded.file.rawOriginal ?? '', mode: loaded.file.mode });
+  plan.deletions.set(resolvedPath, { rawOriginal: loaded.file.rawOriginal ?? '' });
   report.push({ kind: 'delete', resolvedPath, path: displayPath });
   return null;
 }
@@ -513,10 +581,9 @@ async function applyDeleteEdit(
 /**
  * `rename` — перемещение/переименование файла внутри периметра.
  *
- * Перенос реализован как «записать содержимое в цель + удалить источник»:
- * так перемещение укладывается в общий всё-или-ниothing-план патча (один
- * набор файлов на запись + один набор на удаление) и откат работает так же,
- * как у `add`/`delete`.
+ * Перенос — **настоящий `rename`** (PROP-135, Ф2): файл уезжает на диске
+ * целиком (содержимое и права сохраняются). Если в этом же вызове файл
+ * правили, содержимое цели переписывается уже после переноса.
  */
 async function applyRenameEdit(
   edit: Extract<PatchEdit, { op: 'rename' }>,
@@ -524,6 +591,7 @@ async function applyRenameEdit(
   plan: PatchPlan,
   report: ReportEntry[],
   roots: string[],
+  fs: ExecutionFs,
 ): Promise<ToolResult | null> {
   const fromDisplay = edit.from;
   const toDisplay = edit.to;
@@ -531,16 +599,21 @@ async function applyRenameEdit(
   const toPath = paths.resolved[1]!;
   validateInputPath(fromDisplay, 'from');
   validateInputPath(toDisplay, 'to');
-  const guardFrom = checkPerimeter(fromDisplay, fromPath, roots);
+  const guardFrom = await checkPerimeter(fromDisplay, fromPath, roots, fs);
   if (guardFrom) return guardFrom;
-  const guardTo = checkPerimeter(toDisplay, toPath, roots);
+  const guardTo = await checkPerimeter(toDisplay, toPath, roots, fs);
   if (guardTo) return guardTo;
 
   // Цель должна быть свободна: и на диске, и в плане этого вызова.
-  if (plan.files.has(toPath) || plan.deletions.has(toPath)) {
+  if (plan.files.has(toPath) || plan.deletions.has(toPath) || plan.renames.has(toPath)) {
     return patchError('fs.patch_rename_exists', { to: toDisplay }, { path: toPath });
   }
-  const existingTarget = await stat(toPath).catch(() => null);
+  for (const rename of plan.renames.values()) {
+    if (rename.to === toPath) {
+      return patchError('fs.patch_rename_exists', { to: toDisplay }, { path: toPath });
+    }
+  }
+  const existingTarget = await pathExists(fs, toPath);
   if (existingTarget) {
     return patchError('fs.patch_rename_exists', { to: toDisplay }, { path: toPath });
   }
@@ -559,7 +632,9 @@ async function applyRenameEdit(
       movedFrom: fromDisplay,
     });
     if (!source.isNew) {
-      plan.deletions.set(fromPath, { rawOriginal: source.rawOriginal ?? '', mode: source.mode });
+      // Файл на диске (обновлённый в этом вызове) — переносится на диске же:
+      // сначала `rename`, затем в цель пишется новое содержимое.
+      plan.renames.set(fromPath, { from: fromPath, to: toPath, rawOriginal: source.rawOriginal });
     }
     // Записи отчёта по исходному пути теперь относятся к цели.
     for (const entry of report) {
@@ -573,22 +648,15 @@ async function applyRenameEdit(
     return patchError('fs.patch_rename_missing', { from: fromDisplay }, { path: fromPath });
   }
 
-  const loaded = await loadPatchTarget(fromPath, fromDisplay);
+  const loaded = await loadPatchTarget(fs, fromPath, fromDisplay);
   if ('failure' in loaded) {
     if (loaded.failure.key === 'fs.patch_file_missing') {
       return patchError('fs.patch_rename_missing', { from: fromDisplay }, { path: fromPath });
     }
     return patchError(loaded.failure.key, loaded.failure.params, loaded.failure.metadata);
   }
-  plan.files.set(toPath, {
-    ...loaded.file,
-    displayPath: toDisplay,
-    resolvedPath: toPath,
-    isNew: true,
-    origin: 'rename',
-    movedFrom: fromDisplay,
-  });
-  plan.deletions.set(fromPath, { rawOriginal: loaded.file.rawOriginal ?? '', mode: loaded.file.mode });
+  // Чистый перенос: файл уезжает на цель целиком — содержимое не переписывается.
+  plan.renames.set(fromPath, { from: fromPath, to: toPath, rawOriginal: loaded.file.rawOriginal });
   report.push({ kind: 'rename', from: fromDisplay, to: toDisplay });
   return null;
 }
@@ -597,10 +665,11 @@ async function applyRenameEdit(
  * Прочитать и проверить файл-цель до правок (обычный файл, текст, разумный размер).
  */
 async function loadPatchTarget(
+  fs: ExecutionFs,
   resolvedPath: string,
   displayPath: string,
 ): Promise<{ file: PlannedFile } | { failure: LoadFailure }> {
-  const info = await stat(resolvedPath).catch(() => null);
+  const info = await statOrNull(fs, resolvedPath);
   if (!info) {
     return {
       failure: {
@@ -610,7 +679,7 @@ async function loadPatchTarget(
       },
     };
   }
-  if (!info.isFile()) {
+  if (info.kind !== 'file') {
     return {
       failure: {
         key: 'fs.patch_not_regular',
@@ -632,7 +701,8 @@ async function loadPatchTarget(
       },
     };
   }
-  if (await sniffBinary(resolvedPath)) {
+  const sniff = await fs.sniff(resolvedPath);
+  if (sniff.binary) {
     return {
       failure: {
         key: 'fs.patch_binary',
@@ -641,8 +711,10 @@ async function loadPatchTarget(
       },
     };
   }
-  const raw = await readFile(resolvedPath, 'utf-8');
-  const style = detectLineEndings(raw);
+  // Сырой текст файла (UTF-8, без нумерации строк): правка сопоставляется с
+  // **точным** содержимым.
+  const raw = await fs.readRawText(resolvedPath, MAX_PATCH_FILE_BYTES);
+  const style = detectLineEndings(raw.text);
   // Смешанные переводы строк — отказ: патч всё-или-ничего, стиль файла
   // менять нельзя (иначе часть строк потеряла бы `\r`).
   if (style === 'mixed') {
@@ -654,17 +726,16 @@ async function loadPatchTarget(
       },
     };
   }
-  const view = toLfView(raw);
+  const view = toLfView(raw.text);
   return {
     file: {
       displayPath,
       resolvedPath,
-      rawOriginal: raw,
+      rawOriginal: raw.text,
       original: view,
       content: view,
       style,
       verbatim: false,
-      mode: info.mode & 0o777,
       replacements: 0,
       isNew: false,
       origin: 'update',
@@ -675,20 +746,29 @@ async function loadPatchTarget(
 /**
  * Откат после сбоя записи (best-effort):
  * - созданные файлы — удаляются;
+ * - перенесённые — возвращаются на место (файл уехал на цель);
  * - изменённые существующие — возвращаются к оригиналу;
  * - удалённые/перенесённые — восстанавливаются из памяти.
  */
-async function rollbackPatch(plan: PatchPlan): Promise<void> {
+async function rollbackPatch(plan: PatchPlan, fs: ExecutionFs): Promise<void> {
   for (const file of plan.files.values()) {
     if (!file.isNew) continue;
-    await rm(file.resolvedPath, { force: true }).catch(() => undefined);
+    await fs.remove(file.resolvedPath).catch(() => undefined);
+  }
+  for (const rename of plan.renames.values()) {
+    // Файл уехал на цель — возвращаем его на место (и восстанавливаем
+    // оригинальное содержимое источника).
+    await fs.remove(rename.to).catch(() => undefined);
+    if (rename.rawOriginal !== null) {
+      await fs.writeFile(rename.from, rename.rawOriginal).catch(() => undefined);
+    }
   }
   for (const file of plan.files.values()) {
     if (file.isNew || file.rawOriginal === null) continue;
-    await writeFile(file.resolvedPath, file.rawOriginal, { encoding: 'utf-8', mode: file.mode }).catch(() => undefined);
+    await fs.writeFile(file.resolvedPath, file.rawOriginal).catch(() => undefined);
   }
   for (const [path, saved] of plan.deletions) {
-    await writeFile(path, saved.rawOriginal, { encoding: 'utf-8', mode: saved.mode }).catch(() => undefined);
+    await fs.writeFile(path, saved.rawOriginal).catch(() => undefined);
   }
 }
 

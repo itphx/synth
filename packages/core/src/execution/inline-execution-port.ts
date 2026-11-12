@@ -40,6 +40,13 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import {
+  lstat,
+  readdir as fsReaddir,
+  realpath as fsRealpath,
+  stat as fsStat,
+} from 'node:fs/promises';
+import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { SshEnvError } from '../git/ssh-env.js';
 import { warning } from '../logger.js';
@@ -49,6 +56,8 @@ import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
   ExecutionError,
+  FsPathError,
+  fsErrorCodeFromErrno,
   type ExecBackgroundChunk,
   type ExecBackgroundExit,
   type ExecBackgroundProcess,
@@ -56,8 +65,25 @@ import {
   type ExecFailureReason,
   type ExecRequest,
   type ExecResult,
+  type ExecutionFs,
   type ExecutionPort,
+  type FsBytesResult,
+  type FsDirEntry,
+  type FsErrorCode,
+  type FsRawTextResult,
+  type FsSniffResult,
+  type FsStat,
+  type FsTextOptions,
+  type FsTextPage,
 } from './ports/index.js';
+import {
+  BINARY_SNIFF_BYTES,
+  readBytesFromFile,
+  readRawTextFromFile,
+  readTextPageFromFile,
+  sniffFileHeadFromFile,
+} from './fs-text.js';
+import { mkdirRecursive, removePath, renamePath, writeTextFileAtomic } from './fs-atomic.js';
 
 /** Файл и аргументы запуска для обеих форм команды. */
 function resolveInvocation(command: ExecCommand): { file: string; args: string[] } {
@@ -491,6 +517,240 @@ function createBackgroundOutput(child: ChildProcess): {
 }
 
 /**
+ * Проверка пути FS-операции: пустой путь или NUL — невалидный запрос.
+ *
+ * Относительные пути допускаются (контракт требует абсолютных, но запрет не
+ * нужен — резолвит вызывающий тул).
+ */
+function requireValidFsPath(path: string): string {
+  if (typeof path !== 'string' || path.trim() === '') {
+    throw new FsPathError('invalid', path, 'путь не задан');
+  }
+  if (path.includes('\0')) {
+    throw new FsPathError('invalid', path, 'путь содержит недопустимые символы');
+  }
+  return path;
+}
+
+/**
+ * errno ФС → машинный код ошибки FS-операции.
+ *
+ * `ENOENT` → `not_found`, `ENOTDIR` → `not_directory`, `EACCES`/`EPERM` →
+ * `permission`; остальное (в т.ч. `ELOOP`) → `unresolvable` (fail-closed:
+ * неизвестная причина не должна выглядеть как «путь просто не найден»).
+ */
+function fsErrorCode(code: string | undefined): FsErrorCode {
+  return fsErrorCodeFromErrno(code);
+}
+
+/** Ошибка ФС → `FsPathError` (с сохранением текста системы). */
+function toFsPathError(err: unknown, path: string): FsPathError {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  const message = err instanceof Error ? err.message : String(err);
+  return new FsPathError(fsErrorCode(code), path, message);
+}
+
+/**
+ * Битый симлинк (существует как ссылка, цель — нет).
+ *
+ * Различение нужно для `realpath`: «пути нет» (`not_found`) и «путь есть,
+ * но разрешить его нельзя» (`unresolvable`) — разные причины, и вторая
+ * означает потенциальный обход периметра (fail-closed).
+ */
+async function isDanglingSymlink(target: string): Promise<boolean> {
+  try {
+    const info = await lstat(target);
+    return info.isSymbolicLink();
+  } catch {
+    // Компонент не существует вовсе — это «пути нет», а не «битый симлинк».
+    return false;
+  }
+}
+
+/**
+ * Канонический путь (PROP-135, Ф1).
+ *
+ * Неразрешимый путь (битый симлинк, цикл симлинков, ошибка ФС) →
+ * `unresolvable`: путь нельзя достоверно привести к реальному, а «угадывать»
+ * лексический путь опасно (это и есть потенциальный обход периметра).
+ */
+async function inlineRealpath(path: string): Promise<string> {
+  const target = requireValidFsPath(path);
+  try {
+    return await fsRealpath(target);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    // Отсутствие доступа — отдельная причина.
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new FsPathError('permission', path, err instanceof Error ? err.message : String(err));
+    }
+    if (code === 'ENOENT') {
+      // Ссылка есть, цели нет — путь не разрешается (fail-closed); пути нет
+      // вовсе — обычный `not_found`.
+      const dangling = await isDanglingSymlink(target);
+      throw new FsPathError(
+        dangling ? 'unresolvable' : 'not_found',
+        path,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    throw new FsPathError(
+      'unresolvable',
+      path,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/** Сведения о файле/каталоге (размер каталога — `0`). */
+async function inlineStat(path: string): Promise<FsStat> {
+  const target = requireValidFsPath(path);
+  try {
+    const info = await fsStat(target);
+    const kind = info.isDirectory() ? 'directory' : info.isFile() ? 'file' : 'other';
+    return {
+      kind,
+      size: kind === 'directory' ? 0 : info.size,
+      mtimeMs: info.mtimeMs,
+    };
+  } catch (err) {
+    throw toFsPathError(err, path);
+  }
+}
+
+/**
+ * Записи каталога — в файловом порядке (сортировка — на стороне вызывающего).
+ *
+ * Размер записи — из `stat` (как в прежнем листинге); если `stat` не удался —
+ * `0` (вызывающий не отличит «пустой файл» от «неизвестного размера» — это
+ * осознанное упрощение контракта, размер у каталога в разборе не важен).
+ */
+async function inlineReaddir(path: string): Promise<FsDirEntry[]> {
+  const target = requireValidFsPath(path);
+  let dirents;
+  try {
+    dirents = await fsReaddir(target, { withFileTypes: true });
+  } catch (err) {
+    throw toFsPathError(err, path);
+  }
+  const entries: FsDirEntry[] = [];
+  for (const dirent of dirents) {
+    const kind = dirent.isDirectory() ? 'directory' : dirent.isFile() ? 'file' : 'other';
+    let size = 0;
+    try {
+      size = (await fsStat(join(target, dirent.name))).size;
+    } catch {
+      size = 0;
+    }
+    entries.push({ name: dirent.name, kind, size });
+  }
+  return entries;
+}
+
+/**
+ * Страница текста файла (inline) — локальная ФС процесса.
+ *
+ * Потоковое чтение — общий модуль `execution/fs-text.ts` (тем же кодом
+ * читает исполнитель, поэтому формат вывода не зависит от топологии).
+ * Ошибка чтения — типизированная (`FsPathError`): вызывающий различает
+ * «пути нет» и «нет доступа» без разбора текста.
+ */
+async function inlineReadText(path: string, opts: FsTextOptions = {}): Promise<FsTextPage> {
+  const target = requireValidFsPath(path);
+  try {
+    return await readTextPageFromFile(target, opts);
+  } catch (err) {
+    throw toFsPathError(err, path);
+  }
+}
+
+/**
+ * Признак «бинарь» + MIME по сигнатуре (inline).
+ *
+ * Читается только начало файла (`maxBytes`, по умолчанию — 8 КиБ).
+ */
+async function inlineSniff(path: string, maxBytes?: number): Promise<FsSniffResult> {
+  const target = requireValidFsPath(path);
+  try {
+    return await sniffFileHeadFromFile(target, maxBytes ?? BINARY_SNIFF_BYTES);
+  } catch (err) {
+    throw toFsPathError(err, path);
+  }
+}
+
+/**
+ * Байты файла (inline) — base64, с жёстким лимитом размера.
+ *
+ * Файл больше `maxBytes` → `FsPathError` с кодом `too_large` (файл не
+ * читается вовсе: размер известен из `stat` до чтения).
+ */
+async function inlineReadBytes(path: string, maxBytes: number): Promise<FsBytesResult> {
+  const target = requireValidFsPath(path);
+  try {
+    return await readBytesFromFile(target, maxBytes);
+  } catch (err) {
+    // `too_large` — уже типизированная ошибка порта: переводить её в
+    // «unresolvable» нельзя (вызывающий различает лимит от сбоя чтения).
+    if (err instanceof FsPathError) throw err;
+    throw toFsPathError(err, path);
+  }
+}
+
+/**
+ * Запись текста в файл (inline, PROP-135 Ф2).
+ *
+ * Правила — **общий** модуль `execution/fs-atomic.ts`: тем же кодом пишет
+ * исполнитель, поэтому записанный файл не зависит от топологии (права,
+ * атомарность, симлинки). Ошибки — типизированные (`FsPathError`).
+ */
+async function inlineWriteFile(path: string, content: string): Promise<void> {
+  const target = requireValidFsPath(path);
+  await writeTextFileAtomic(target, content);
+}
+
+/** Создание каталога (inline, PROP-135 Ф2) — общий модуль `execution/fs-atomic.ts`. */
+async function inlineMkdir(path: string): Promise<void> {
+  const target = requireValidFsPath(path);
+  await mkdirRecursive(target);
+}
+
+/** Удаление файла или пустого каталога (inline, PROP-135 Ф2). */
+async function inlineRemove(path: string): Promise<void> {
+  const target = requireValidFsPath(path);
+  await removePath(target);
+}
+
+/**
+ * Текст файла **как есть** (inline, PROP-135 Ф2) — UTF-8, без нумерации.
+ *
+ * Общий модуль core (`execution/fs-text.ts`): тем же кодом читает исполнитель,
+ * поэтому содержимое не зависит от топологии.
+ */
+async function inlineReadRawText(path: string, maxBytes: number): Promise<FsRawTextResult> {
+  const target = requireValidFsPath(path);
+  try {
+    return await readRawTextFromFile(target, maxBytes);
+  } catch (err) {
+    // `too_large` — уже типизированная ошибка порта: переводить её в
+    // «unresolvable» нельзя (вызывающий различает лимит от сбоя чтения).
+    if (err instanceof FsPathError) throw err;
+    throw toFsPathError(err, path);
+  }
+}
+
+/**
+ * Переименование/перемещение файла (inline, PROP-135 Ф2).
+ *
+ * Общий модуль core (`execution/fs-atomic.ts`) — те же правила, что у
+ * исполнителя (цель существует → отказ, источника нет → `not_found`).
+ */
+async function inlineRename(from: string, to: string): Promise<void> {
+  const source = requireValidFsPath(from);
+  const target = requireValidFsPath(to);
+  await renamePath(source, target);
+}
+
+/**
  * Исполнение в процессе backend'а — нынешнее поведение Synth.
  *
  * Экземпляр **без состояния**: его можно создавать на каждый вызов (тулы
@@ -500,6 +760,27 @@ function createBackgroundOutput(child: ChildProcess): {
 export class InlineExecutionPort implements ExecutionPort {
   /** Исполнение — в процессе control plane (ADR-077). */
   readonly isRemote = false;
+
+  /**
+   * FS-операции — локальная файловая система процесса (PROP-135, Ф1).
+   *
+   * Inline-реализация **всегда** умеет FS: файлы лежат рядом с control plane,
+   * отдельного контура нет. То же самое касается удалённого режима: там FS
+   * уезжает на исполнителя (`features.fs`).
+   */
+  readonly fs: ExecutionFs = {
+    realpath: (path: string) => inlineRealpath(path),
+    stat: (path: string) => inlineStat(path),
+    readdir: (path: string) => inlineReaddir(path),
+    readText: (path: string, opts?: FsTextOptions) => inlineReadText(path, opts),
+    sniff: (path: string, maxBytes?: number) => inlineSniff(path, maxBytes),
+    readBytes: (path: string, maxBytes: number) => inlineReadBytes(path, maxBytes),
+    writeFile: (path: string, content: string) => inlineWriteFile(path, content),
+    mkdir: (path: string) => inlineMkdir(path),
+    remove: (path: string) => inlineRemove(path),
+    readRawText: (path: string, maxBytes: number) => inlineReadRawText(path, maxBytes),
+    rename: (from: string, to: string) => inlineRename(from, to),
+  };
 
   /**
    * ADR-077/ADR-078: наличие программы в окружении исполнения.

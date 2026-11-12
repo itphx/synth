@@ -117,6 +117,14 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
 /**
  * Версия wire-протокола исполнителя.
  *
+ * **7** — FS-операции (`/fs/stat`, `/fs/realpath`, `/fs/list`, `/fs/read-text`,
+ * `/fs/sniff`, `/fs/read-bytes`, `/fs/write-file`, `/fs/mkdir`, `/fs/remove`) и
+ * признак `features.fs`; старый исполнитель ≤ 6 признака не объявляет ⇒
+ * файловые тулы в remote fail-closed (PROP-135). Тихого возврата в control
+ * plane нет: рабочий каталог в split-топологии живёт на исполнителе.
+ * Версия **не повышается** при добавлении записи/удаления (Ф2) — это та же
+ * фича `features.fs`, расширенная аддитивными роутами.
+ *
  * **6** — ssh-агент для секрета вызова (PROP-124 §2): у секрета появилось
  * аддитивное поле `mode` (`git` | `agent`), а исполнитель объявляет признак
  * `features.sshAgent: true` — он умеет материализовать ключ в эфемерный
@@ -148,7 +156,7 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
  * потолки таймаута и буфера вывода, чтобы control plane видел «тихий» потолок
  * заранее. Старый исполнитель поля не отдаёт — разбор терпимый.
  */
-export const EXECUTOR_PROTOCOL_VERSION = 6;
+export const EXECUTOR_PROTOCOL_VERSION = 7;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -170,6 +178,31 @@ export type ExecutorErrorReason =
   | 'unauthorized'
   /** Запрошенный ресурс не найден (неизвестный MCP-сервер/инструмент). */
   | 'not_found'
+  /**
+   * Путь существует, но это не каталог (FS-операция, протокол 7).
+   *
+   * Отдельная причина от `not_found`: вызывающий различает «нет такого пути»
+   * и «путь есть, но листинг неприменим» — ответы различаются.
+   */
+  | 'not_directory'
+  /**
+   * Нет доступа к пути (FS-операция, протокол 7) — `EACCES`/`EPERM`.
+   */
+  | 'permission'
+  /**
+   * Путь не разрешается: битый симлинк, цикл симлинков, ошибка ФС
+   * (FS-операция, протокол 7). Fail-closed: «угадывать» лексический путь
+   * нельзя — это потенциальный обход периметра.
+   */
+  | 'unresolvable'
+  /**
+   * Объект больше запрошенного лимита (чтение байтов, протокол 7).
+   *
+   * Отдельная причина от `not_found`: файл **есть**, но он не влезает в
+   * потолок перевозки — вызывающий различает «нет такого пути» и «файл
+   * слишком большой».
+   */
+  | 'too_large'
   /** Превышен лимит одновременных команд. */
   | 'too_many_requests'
   /** Прочие ошибки сервера. */
@@ -304,6 +337,17 @@ export interface ExecutorFeatures {
    * адрес в кандидаты на фоновый запуск с секретами не попадает.
    */
   secretsSpawn?: boolean;
+  /**
+   * FS-операции (`/fs/stat`, `/fs/realpath`, `/fs/list`, протокол 7,
+   * PROP-135): исполнитель умеет отдавать сведения о файлах и каталогах
+   * своего workspace.
+   *
+   * Признак — **явный и обязательный**: старый исполнитель (≤ 6) его не
+   * объявляет, и control plane такой адрес для файловых тулов **не
+   * выбирает** — тихого возврата в control plane нет (рабочий каталог в
+   * split-топологии живёт на исполнителе).
+   */
+  fs?: boolean;
 }
 
 /** Ответ `GET /health`. */
@@ -402,19 +446,26 @@ export function parseMcpCallRequestBody(
 /**
  * HTTP-код ответа по классу ошибки.
  *
- * - `400` — некорректный запрос или `cwd` вне workspace;
+ * - `400` — некорректный запрос, `cwd` вне workspace, путь не каталог или
+ *   не разрешается;
  * - `401` — нет/неверный токен;
- * - `404` — запрошенный ресурс не найден (неизвестный MCP-сервер/инструмент);
+ * - `403` — нет доступа к пути (FS-операция, протокол 7);
+ * - `404` — запрошенный ресурс не найден (неизвестный MCP-сервер/инструмент,
+ *   отсутствующий путь);
  * - `429` — превышен лимит одновременных команд;
  * - `500` — прочие ошибки исполнения (включая ненулевой код выхода).
  */
-export type ExecErrorStatus = 400 | 401 | 404 | 429 | 500;
+export type ExecErrorStatus = 400 | 401 | 403 | 404 | 429 | 500;
 
 export const EXEC_ERROR_STATUS: Record<ExecutorErrorReason, ExecErrorStatus> = {
   invalid_request: 400,
   cwd_outside_workspace: 400,
   unauthorized: 401,
   not_found: 404,
+  not_directory: 400,
+  permission: 403,
+  unresolvable: 400,
+  too_large: 400,
   too_many_requests: 429,
   timeout: 500,
   aborted: 500,
@@ -844,6 +895,433 @@ export function parseSpawnExecRequestBody(
   }
 
   return { ok: true, value };
+}
+
+/**
+ * Тело запроса FS-операции (протокол 7, PROP-135): `/fs/stat`,
+ * `/fs/realpath`, `/fs/list`.
+ */
+export interface FsRequestBody {
+  /**
+   * Путь к объекту.
+   *
+   * Абсолютный — используется как есть (тот же уровень доверия, что у
+   * shell-команд; внешние пути уже отфильтрованы permission-слоем в control
+   * plane). Относительный — резолвится от `cwd` (по умолчанию — корень
+   * workspace исполнителя).
+   */
+  path: string;
+  /**
+   * Базовый каталог для относительного `path`.
+   *
+   * Обязан лежать внутри workspace исполнителя — та же проверка
+   * containment'а, что и у `cwd` команды (`resolveContainedCwd`).
+   */
+  cwd?: string;
+}
+
+/** Вид объекта ФС на проводе. */
+export type FsEntryKindBody = 'file' | 'directory' | 'other';
+
+/** Сведения о файле/каталоге на проводе. */
+export interface FsStatBody {
+  kind: FsEntryKindBody;
+  /** Размер в байтах; у каталога — `0`. */
+  size: number;
+  /** Время последнего изменения, мс. */
+  mtimeMs: number;
+}
+
+/** Запись каталога на проводе. */
+export interface FsDirEntryBody {
+  name: string;
+  kind: FsEntryKindBody;
+  /** Размер в байтах; `0`, если `stat` записи не удался. */
+  size: number;
+}
+
+/** Ответ `POST /fs/stat`. */
+export interface FsStatResponse {
+  stat: FsStatBody;
+}
+
+/** Ответ `POST /fs/realpath`. */
+export interface FsRealpathResponse {
+  /** Канонический путь. */
+  path: string;
+}
+
+/** Ответ `POST /fs/list`. */
+export interface FsListResponse {
+  entries: FsDirEntryBody[];
+}
+
+/**
+ * Тело запроса чтения текста (`POST /fs/read-text`, протокол 7).
+ *
+ * `offset`/`limit`/`maxBytes` — потолки страницы; не заданы — дефолты
+ * исполнителя (те же, что у локального тула чтения).
+ */
+export interface FsTextRequestBody {
+  path: string;
+  cwd?: string;
+  /** Номер первой строки (0-based); нумерация в выводе — исходная (1-based). */
+  offset?: number;
+  /** Максимум строк в странице. */
+  limit?: number;
+  /** Максимум байт вывода (UTF-8). */
+  maxBytes?: number;
+}
+
+/** Тело запроса детекта содержимого (`POST /fs/sniff`). */
+export interface FsSniffRequestBody {
+  path: string;
+  cwd?: string;
+  /** Сколько первых байт смотреть (по умолчанию — 8 КиБ). */
+  maxBytes?: number;
+}
+
+/** Тело запроса чтения байтов (`POST /fs/read-bytes`). */
+export interface FsBytesRequestBody {
+  path: string;
+  cwd?: string;
+  /** Потолок размера файла, байт (обязателен: файл больше — `too_large`). */
+  maxBytes: number;
+}
+
+/** Страница текста на проводе. */
+export interface FsTextPageBody {
+  /** Готовые строки вывода (`N: текст`, нумерация исходная 1-based). */
+  lines: string[];
+  /** Всего строк в файле. */
+  totalLines: number;
+  /** Вывод усечён (по числу строк или по байтам). */
+  truncated: boolean;
+  /** Размер вывода в байтах (UTF-8). */
+  bytes: number;
+}
+
+/** Ответ `POST /fs/read-text`. */
+export interface FsTextResponse {
+  page: FsTextPageBody;
+}
+
+/** Признак «бинарь» и MIME на проводе. */
+export interface FsSniffBody {
+  /** Файл выглядит бинарным (не текст). */
+  binary: boolean;
+  /** MIME по сигнатуре (если распознан). */
+  mime?: string;
+}
+
+/** Ответ `POST /fs/sniff`. */
+export interface FsSniffResponse {
+  sniff: FsSniffBody;
+}
+
+/** Байты файла на проводе. */
+export interface FsBytesBody {
+  /** Содержимое в base64 (без `data:`-префикса). */
+  dataBase64: string;
+  /** Размер в байтах. */
+  size: number;
+}
+
+/** Ответ `POST /fs/read-bytes`. */
+export interface FsBytesResponse {
+  bytes: FsBytesBody;
+}
+
+/**
+ * Разбор тела FS-запроса → валидный запрос или причина отказа.
+ *
+ * Проверки строгие: путь обязателен, непустой и без NUL; `cwd` — необязателен,
+ * но тоже непустой и без NUL. Молчаливый пропуск означал бы, что операция
+ * выполнится над **не тем** путём (пустой путь — это корень процесса, а не
+ * «каталог по умолчанию»).
+ */
+export function parseFsRequestBody(
+  body: unknown,
+): { ok: true; value: FsRequestBody } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.path !== 'string' || raw.path.trim().length === 0) {
+    return { ok: false, message: 'поле path обязательно: непустая строка' };
+  }
+  if (raw.path.includes('\0')) {
+    return { ok: false, message: 'поле path содержит недопустимые символы' };
+  }
+  const value: FsRequestBody = { path: raw.path };
+  if (raw.cwd !== undefined) {
+    if (typeof raw.cwd !== 'string' || raw.cwd.trim().length === 0) {
+      return { ok: false, message: 'поле cwd должно быть непустой строкой' };
+    }
+    if (raw.cwd.includes('\0')) {
+      return { ok: false, message: 'поле cwd содержит недопустимые символы' };
+    }
+    value.cwd = raw.cwd;
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Разбор тела запроса чтения текста (`POST /fs/read-text`).
+ *
+ * База — `parseFsRequestBody` (путь обязателен, `cwd` необязателен); сверху
+ * — потолки страницы: `offset` ≥ 0, `limit`/`maxBytes` — положительные целые.
+ * Молчаливый пропуск означал бы, что читается не та страница, которую
+ * запросили.
+ */
+export function parseFsTextRequestBody(
+  body: unknown,
+): { ok: true; value: FsTextRequestBody } | { ok: false; message: string } {
+  const base = parseFsRequestBody(body);
+  if (!base.ok) return base;
+  const raw = body as Record<string, unknown>;
+  const value: FsTextRequestBody = { ...base.value };
+
+  if (raw.offset !== undefined) {
+    if (typeof raw.offset !== 'number' || !Number.isInteger(raw.offset) || raw.offset < 0) {
+      return { ok: false, message: 'поле offset должно быть целым числом >= 0' };
+    }
+    value.offset = raw.offset;
+  }
+  if (raw.limit !== undefined) {
+    if (typeof raw.limit !== 'number' || !Number.isInteger(raw.limit) || raw.limit <= 0) {
+      return { ok: false, message: 'поле limit должно быть целым числом > 0' };
+    }
+    value.limit = raw.limit;
+  }
+  if (raw.maxBytes !== undefined) {
+    if (typeof raw.maxBytes !== 'number' || !Number.isInteger(raw.maxBytes) || raw.maxBytes <= 0) {
+      return { ok: false, message: 'поле maxBytes должно быть целым числом > 0' };
+    }
+    value.maxBytes = raw.maxBytes;
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Разбор тела запроса детекта содержимого (`POST /fs/sniff`).
+ *
+ * База — `parseFsRequestBody`; сверху — необязательный потолок `maxBytes`.
+ */
+export function parseFsSniffRequestBody(
+  body: unknown,
+): { ok: true; value: FsSniffRequestBody } | { ok: false; message: string } {
+  const base = parseFsRequestBody(body);
+  if (!base.ok) return base;
+  const raw = body as Record<string, unknown>;
+  const value: FsSniffRequestBody = { ...base.value };
+  if (raw.maxBytes !== undefined) {
+    if (typeof raw.maxBytes !== 'number' || !Number.isInteger(raw.maxBytes) || raw.maxBytes <= 0) {
+      return { ok: false, message: 'поле maxBytes должно быть целым числом > 0' };
+    }
+    value.maxBytes = raw.maxBytes;
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Разбор тела запроса чтения байтов (`POST /fs/read-bytes`).
+ *
+ * `maxBytes` **обязателен**: без потолка размер не ограничен, и файл любого
+ * размера уехал бы в ответе целиком.
+ */
+export function parseFsBytesRequestBody(
+  body: unknown,
+): { ok: true; value: FsBytesRequestBody } | { ok: false; message: string } {
+  const base = parseFsRequestBody(body);
+  if (!base.ok) return base;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.maxBytes !== 'number' || !Number.isInteger(raw.maxBytes) || raw.maxBytes <= 0) {
+    return { ok: false, message: 'поле maxBytes обязательно: целое число > 0 (потолок размера файла)' };
+  }
+  return { ok: true, value: { ...base.value, maxBytes: raw.maxBytes } };
+}
+
+/**
+ * Тело запроса записи файла (`POST /fs/write-file`, протокол 7, PROP-135 Ф2).
+ *
+ * `content` — текст файла целиком (запись строковая: бинарные данные через
+ * порт не едут — это Ф3, потоковая передача).
+ */
+export interface FsWriteRequestBody {
+  path: string;
+  cwd?: string;
+  /** Новое содержимое файла. */
+  content: string;
+}
+
+/**
+ * Тело запроса создания каталога (`POST /fs/mkdir`).
+ */
+export interface FsMkdirRequestBody {
+  path: string;
+  cwd?: string;
+}
+
+/**
+ * Тело запроса удаления (`POST /fs/remove`).
+ */
+export interface FsRemoveRequestBody {
+  path: string;
+  cwd?: string;
+}
+
+/**
+ * Тело запроса чтения «сырого» текста (`POST /fs/read-raw`).
+ *
+ * `maxBytes` **обязателен**: без потолка размер не ограничен, и файл любого
+ * размера уехал бы в ответе целиком.
+ */
+export interface FsRawTextRequestBody {
+  path: string;
+  cwd?: string;
+  /** Потолок размера файла, байт (файл больше — `too_large`). */
+  maxBytes: number;
+}
+
+/**
+ * Тело запроса переименования (`POST /fs/rename`).
+ *
+ * `path` — источник, `to` — цель; обе стороны резолвятся от `cwd` (как и
+ * остальные пути FS-операций).
+ */
+export interface FsRenameRequestBody {
+  /** Текущий путь файла (источник). */
+  path: string;
+  /** Новый путь файла (цель). */
+  to: string;
+  cwd?: string;
+}
+
+/** Текст файла на проводе (как есть, без нумерации строк). */
+export interface FsRawTextBody {
+  /** Содержимое файла (UTF-8, без нумерации строк). */
+  text: string;
+  /** Размер файла в байтах. */
+  size: number;
+}
+
+/** Ответ `POST /fs/read-raw`. */
+export interface FsRawTextResponse {
+  raw: FsRawTextBody;
+}
+
+/**
+ * Потолок тела запроса чтения «сырого» текста (`POST /fs/read-raw`), байт.
+ *
+ * Текст едет по проводу **целиком** (строкой), поэтому размер ограничен:
+ * иначе один вызов `edit_file`/`patch` может забить память исполнителя.
+ * Потолок **выше** прикладного лимита тула (`MAX_TOOL_FILE_BYTES` = 5 МиБ в
+ * core) — транспортный запас.
+ */
+export const EXECUTOR_FS_MAX_READ_RAW_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Потолок тела запроса записи (`POST /fs/write-file`), байт (UTF-8).
+ *
+ * Содержимое едет по проводу **целиком** (строкой), поэтому размер должен быть
+ * ограничен: иначе один вызов `write_file` может забить память исполнителя.
+ * Потолок **выше** прикладного лимита тула (`MAX_TOOL_FILE_BYTES` = 5 МиБ в
+ * core) — транспортный запас на разницу кодировок/обёрток не нужен, запас
+ * нужен на «файл крупнее лимита тула»: такой вызов отсекается на стороне
+ * control plane, а исполнитель получает только то, что прошло лимит.
+ */
+export const EXECUTOR_FS_MAX_WRITE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Разбор тела запроса записи файла (`POST /fs/write-file`).
+ *
+ * База — `parseFsRequestBody` (путь обязателен, `cwd` необязателен); сверху —
+ * `content` (обязательная строка) и потолок размера содержимого.
+ */
+export function parseFsWriteRequestBody(
+  body: unknown,
+): { ok: true; value: FsWriteRequestBody } | { ok: false; message: string } {
+  const base = parseFsRequestBody(body);
+  if (!base.ok) return base;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.content !== 'string') {
+    return { ok: false, message: 'поле content обязательно: строка с содержимым файла' };
+  }
+  if (Buffer.byteLength(raw.content, 'utf-8') > EXECUTOR_FS_MAX_WRITE_BYTES) {
+    return {
+      ok: false,
+      message: `поле content: больше ${EXECUTOR_FS_MAX_WRITE_BYTES} байт`,
+    };
+  }
+  return { ok: true, value: { ...base.value, content: raw.content } };
+}
+
+/**
+ * Разбор тела запроса создания каталога (`POST /fs/mkdir`).
+ *
+ * База — `parseFsRequestBody`: путь обязателен, `cwd` необязателен.
+ */
+export function parseFsMkdirRequestBody(
+  body: unknown,
+): { ok: true; value: FsMkdirRequestBody } | { ok: false; message: string } {
+  return parseFsRequestBody(body);
+}
+
+/**
+ * Разбор тела запроса удаления (`POST /fs/remove`).
+ *
+ * База — `parseFsRequestBody`: путь обязателен, `cwd` необязателен.
+ */
+export function parseFsRemoveRequestBody(
+  body: unknown,
+): { ok: true; value: FsRemoveRequestBody } | { ok: false; message: string } {
+  return parseFsRequestBody(body);
+}
+
+/**
+ * Разбор тела запроса чтения «сырого» текста (`POST /fs/read-raw`).
+ *
+ * База — `parseFsRequestBody`; сверху — `maxBytes` (обязателен, положительный
+ * целый, не выше потолка тела).
+ */
+export function parseFsRawTextRequestBody(
+  body: unknown,
+): { ok: true; value: FsRawTextRequestBody } | { ok: false; message: string } {
+  const base = parseFsRequestBody(body);
+  if (!base.ok) return base;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.maxBytes !== 'number' || !Number.isInteger(raw.maxBytes) || raw.maxBytes <= 0) {
+    return { ok: false, message: 'поле maxBytes обязательно: целое число > 0 (потолок размера файла)' };
+  }
+  if (raw.maxBytes > EXECUTOR_FS_MAX_READ_RAW_BYTES) {
+    return {
+      ok: false,
+      message: `поле maxBytes: больше ${EXECUTOR_FS_MAX_READ_RAW_BYTES} байт`,
+    };
+  }
+  return { ok: true, value: { ...base.value, maxBytes: raw.maxBytes } };
+}
+
+/**
+ * Разбор тела запроса переименования (`POST /fs/rename`).
+ *
+ * База — `parseFsRequestBody` (путь-источник обязателен, `cwd` необязателен);
+ * сверху — `to` (цель): непустая строка без NUL.
+ */
+export function parseFsRenameRequestBody(
+  body: unknown,
+): { ok: true; value: FsRenameRequestBody } | { ok: false; message: string } {
+  const base = parseFsRequestBody(body);
+  if (!base.ok) return base;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.to !== 'string' || raw.to.trim().length === 0) {
+    return { ok: false, message: 'поле to обязательно: непустая строка (путь цели)' };
+  }
+  if (raw.to.includes('\0')) {
+    return { ok: false, message: 'поле to содержит недопустимые символы' };
+  }
+  return { ok: true, value: { ...base.value, to: raw.to } };
 }
 
 /** Ошибочный ответ с корректным HTTP-кодом. */

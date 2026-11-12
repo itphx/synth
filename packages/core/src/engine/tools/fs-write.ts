@@ -1,19 +1,20 @@
-import { mkdir, readFile, rm, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition, ToolResult } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath, isSymlinkEscapeInRoots, toolRoots, pathEscapesWorkspaceResult } from './path-utils.js';
+import { resolvePath, validateInputPath, toolRoots, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
-import { sniffBinary } from './fs-read.js';
 import { MAX_TOOL_FILE_BYTES } from './file-limits.js';
 import { detectLineEndings, fromLfView, toLfView } from './line-endings.js';
-import { writeFileAtomic } from './atomic-file-write.js';
 import { matchEdit, type EditMatchStrategy } from './edit-match.js';
 import { withFileLocks } from './file-lock.js';
+// PROP-135 (Ф2): запись/создание каталога/удаление/правка — в контуре исполнения
+// (в split-топологии рабочий каталог живёт на исполнителе).
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { escapesWorkspace, FS_UNAVAILABLE_TEXT } from '../../execution/fs-perimeter.js';
+import { fsCall, statOrNull } from '../../execution/fs-tool-call.js';
 
 /**
  * Оформление unified diff'а.
@@ -143,7 +144,22 @@ export const writeFileTool: ToolDefinition = {
     const params = parsed.data as { file_path: string; content: string };
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+
+    // PROP-135 (Ф2): запись файла — в контуре исполнения. В remote-режиме файл
+    // пишет исполнитель (там лежит рабочий каталог проекта), а control plane
+    // лишь спрашивает канонический путь для проверки периметра.
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
+
+    // Симлинк-побег проверяется по реальным путям (у точки исполнения).
+    const perimeter = await fsCall(() => escapesWorkspace(fs, toolRoots(ctx), resolvedPath));
+    if (!perimeter.ok) return perimeter.result;
+    if (perimeter.value) {
+      return pathEscapesWorkspaceResult(resolvedPath);
+    }
 
     // ADR-036: деобфускация в точке потребления — контент может содержать ⟦SYNTH_SECRET_N⟧
     const content = await deobfuscateText(ctx, params.content);
@@ -164,17 +180,21 @@ export const writeFileTool: ToolDefinition = {
     // параллельная запись того же файла не должна пройти между проверкой и
     // собственно записью (иначе один вызов перетирает другой).
     return withFileLocks([resolvedPath], async (): Promise<ToolResult> => {
-      const existing = await stat(resolvedPath).catch(() => null);
-      if (existing?.isFile() && (await sniffBinary(resolvedPath))) {
-        return fsErrorResult('fs.write_binary', { path: params.file_path }, { path: resolvedPath });
+      const existing = await fsCall(() => statOrNull(fs, resolvedPath));
+      if (!existing.ok) return existing.result;
+      if (existing.value?.kind === 'file') {
+        const sniff = await fsCall(() => fs.sniff(resolvedPath));
+        if (!sniff.ok) return sniff.result;
+        if (sniff.value.binary) {
+          return fsErrorResult('fs.write_binary', { path: params.file_path }, { path: resolvedPath });
+        }
       }
 
-      const dir = dirname(resolvedPath);
-      await mkdir(dir, { recursive: true });
-      // Права существующего файла сохраняются (tmp → rename иначе создал бы
-      // файл с правами по умолчанию).
-      const mode = existing?.isFile() ? existing.mode & 0o777 : undefined;
-      await writeFileAtomic(resolvedPath, content, mode);
+      // Запись — через порт: атомарно (tmp → rename), права существующего
+      // файла сохраняются, родительские каталоги создаются (правила —
+      // общие для control plane и исполнителя, `execution/fs-atomic.ts`).
+      const written = await fsCall(() => fs.writeFile(resolvedPath, content));
+      if (!written.ok) return written.result;
 
       // `bytes` — в UTF-8 (кириллица/эмодзи занимают больше одного байта),
       // `lines` — без пустого элемента после завершающего `\n`: '' → 0,
@@ -225,7 +245,20 @@ export const editFileTool: ToolDefinition = {
     const params = parsed.data as { file_path: string; old_string: string; new_string: string; replace_all?: boolean };
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+
+    // Периметр — по реальным путям **точки исполнения** (PROP-135): тот же
+    // расчёт, что у записывающих тулов. Проверять периметр по лексике
+    // control plane нельзя: симлинк наружу там не виден.
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
+    const perimeter = await fsCall(() => escapesWorkspace(fs, toolRoots(ctx), resolvedPath));
+    if (!perimeter.ok) return perimeter.result;
+    if (perimeter.value) {
+      return pathEscapesWorkspaceResult(resolvedPath);
+    }
 
     // ADR-036: деобфускация в точке потребления — текст патча может содержать ⟦SYNTH_SECRET_N⟧
     const oldString = await deobfuscateText(ctx, params.old_string);
@@ -252,24 +285,35 @@ export const editFileTool: ToolDefinition = {
     // и без сериализации два параллельных вызова одного файла перетирали бы
     // друг друга (оба читали одну версию, оба писали свою).
     return withFileLocks([resolvedPath], async (): Promise<ToolResult> => {
-      const info = await stat(resolvedPath).catch(() => null);
-      // Файла нет — graceful-отказ вместо исключения из `sniffBinary` (ENOENT).
-      if (!info) {
+      // Чтение, сведения и сниффер — **у точки исполнения** (PROP-135, Ф2):
+      // в split-топологии файл лежит на исполнителе, а не в control plane.
+      const info = await fsCall(() => statOrNull(fs, resolvedPath));
+      if (!info.ok) return info.result;
+      // Файла нет — graceful-отказ вместо исключения (ENOENT).
+      if (!info.value) {
         return fsErrorResult('fs.file_not_found', { path: params.file_path }, { path: resolvedPath });
       }
-      if (info.size > MAX_TOOL_FILE_BYTES) {
+      if (info.value.kind !== 'file') {
+        return fsErrorResult('fs.file_not_found', { path: params.file_path }, { path: resolvedPath });
+      }
+      if (info.value.size > MAX_TOOL_FILE_BYTES) {
         return fsErrorResult(
           'fs.file_too_large',
           { limit: String(MAX_TOOL_FILE_BYTES) },
-          { path: resolvedPath, bytes: info.size, limit: MAX_TOOL_FILE_BYTES },
+          { path: resolvedPath, bytes: info.value.size, limit: MAX_TOOL_FILE_BYTES },
         );
       }
-      if (await sniffBinary(resolvedPath)) {
+      const sniff = await fsCall(() => fs.sniff(resolvedPath));
+      if (!sniff.ok) return sniff.result;
+      if (sniff.value.binary) {
         return fsErrorResult('fs.edit_binary', { path: params.file_path }, { path: resolvedPath });
       }
 
-      const raw = await readFile(resolvedPath, 'utf-8');
-      const style = detectLineEndings(raw);
+      // Сырой текст файла (UTF-8, без нумерации строк): правка сопоставляется
+      // с **точным** содержимым, а не с готовыми строками вывода.
+      const raw = await fsCall(() => fs.readRawText(resolvedPath, MAX_TOOL_FILE_BYTES));
+      if (!raw.ok) return raw.result;
+      const style = detectLineEndings(raw.value.text);
       if (style === 'mixed') {
         return fsErrorResult('fs.mixed_line_endings', {}, { path: resolvedPath });
       }
@@ -277,7 +321,7 @@ export const editFileTool: ToolDefinition = {
       // CRLF-файл правим в LF-виде (текст из `read_file` приходит с LF) и
       // возвращаем CRLF — файл не теряет ни одного `\r\n`.
       const crlf = style === 'crlf';
-      const content = crlf ? toLfView(raw) : raw;
+      const content = crlf ? toLfView(raw.value.text) : raw.value.text;
 
       const replaceAll = params.replace_all === true;
       let newContent: string;
@@ -329,8 +373,11 @@ export const editFileTool: ToolDefinition = {
       }
 
       const written = crlf ? fromLfView(newContent) : newContent;
-      const mode = info.mode & 0o777;
-      await writeFileAtomic(resolvedPath, written, mode);
+      // Запись — через порт: атомарно (tmp → `rename`), права существующего
+      // файла сохраняются (`execution/fs-atomic.ts` — тем же кодом пишет
+      // исполнитель), симлинк разыменовывается.
+      const saved = await fsCall(() => fs.writeFile(resolvedPath, written));
+      if (!saved.ok) return saved.result;
 
       const diff = generateUnifiedDiff(content, newContent, params.file_path);
       return {
@@ -364,9 +411,22 @@ export const createDirectoryTool: ToolDefinition = {
     const params = parsed.data as { path: string };
     validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
-    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
-    await mkdir(resolvedPath, { recursive: true });
+    // PROP-135 (Ф2): создание каталога — в контуре исполнения (в remote-режиме
+    // каталог создаёт исполнитель, где лежит рабочий каталог проекта).
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
+    const perimeter = await fsCall(() => escapesWorkspace(fs, toolRoots(ctx), resolvedPath));
+    if (!perimeter.ok) return perimeter.result;
+    if (perimeter.value) {
+      return pathEscapesWorkspaceResult(resolvedPath);
+    }
+
+    const created = await fsCall(() => fs.mkdir(resolvedPath));
+    if (!created.ok) return created.result;
     return {
       content: sm('fs.dir_created', { path: params.path }),
       metadata: { path: resolvedPath, i18n: i18nMeta('fs.dir_created', { path: params.path }) },
@@ -391,9 +451,22 @@ export const deleteFileTool: ToolDefinition = {
     const params = parsed.data as { file_path: string };
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
-    if (isSymlinkEscapeInRoots(toolRoots(ctx), resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
-    await rm(resolvedPath, { force: false });
+    // PROP-135 (Ф2): удаление — в контуре исполнения (в remote-режиме файл
+    // удаляет исполнитель, где лежит рабочий каталог проекта).
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
+    const perimeter = await fsCall(() => escapesWorkspace(fs, toolRoots(ctx), resolvedPath));
+    if (!perimeter.ok) return perimeter.result;
+    if (perimeter.value) {
+      return pathEscapesWorkspaceResult(resolvedPath);
+    }
+
+    const removed = await fsCall(() => fs.remove(resolvedPath));
+    if (!removed.ok) return removed.result;
     return {
       content: sm('fs.file_deleted', { path: params.file_path }),
       metadata: { path: resolvedPath, i18n: i18nMeta('fs.file_deleted', { path: params.file_path }) },

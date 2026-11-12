@@ -25,8 +25,11 @@
  *   `attach.tool.unsupported_mime`).
  * - **Containment — как у `read_file`**: периметр определяет permission-слой
  *   (`external_directory`), сам тул путей не ужесточает.
+ * - **Байты приходят от вызывающего** (порт исполнения, PROP-135): файл может
+ *   лежать на исполнителе, а не в control plane. Поэтому модуль **не читает
+ *   файлы сам** — `node:fs` здесь нет; ридер передаётся вызывающим
+ *   (`readBytes`) или готовые байты (`bytes`).
  */
-import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import {
   attachmentsConfigSchema,
@@ -83,6 +86,9 @@ export type MediaIngestOutcome =
  * чтение байтов → `AttachmentService.upload` (повторно проверяет размер, MIME
  * по сигнатуре, модальности и allowlist). Отказ сервиса — не исключение, а
  * причина (`AttachmentError`).
+ *
+ * Байты берёт **вызывающий** (`bytes` или `readBytes`): файл может лежать на
+ * исполнителе (PROP-135), и сам модуль ФС не читает.
  */
 export async function ingestMediaFile(args: {
   ctx: ToolContext;
@@ -90,6 +96,10 @@ export async function ingestMediaFile(args: {
   resolvedPath: string;
   /** Размер файла по `stat` (байт). */
   size: number;
+  /** Готовые байты файла (если их уже прочитал вызывающий). */
+  bytes?: Buffer;
+  /** Ридер байтов (порт исполнения): бросок ⇒ «файл не прочитался». */
+  readBytes?: () => Promise<Buffer>;
 }): Promise<MediaIngestOutcome> {
   const extra = args.ctx.extra as ReadFileMediaExtra | undefined;
   const service = extra?.attachmentService;
@@ -105,7 +115,14 @@ export async function ingestMediaFile(args: {
   const name = basename(args.resolvedPath);
   let bytes: Buffer;
   try {
-    bytes = await readFile(args.resolvedPath);
+    if (args.bytes !== undefined) {
+      bytes = args.bytes;
+    } else if (args.readBytes !== undefined) {
+      bytes = await args.readBytes();
+    } else {
+      // Байт нет и ридера нет — файл прочитать нечем.
+      return { kind: 'refused', reason: 'unreadable' };
+    }
   } catch {
     // Файл прочитан не удалось (удалили/нет прав) — приём не состоялся.
     return { kind: 'refused', reason: 'unreadable' };
