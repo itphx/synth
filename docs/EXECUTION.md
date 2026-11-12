@@ -16,8 +16,9 @@
 > `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **актуальная версия
 > протокола — 7** (FS-операции исполнителя: `POST /fs/stat`, `POST /fs/realpath`, `POST /fs/list`,
 > `POST /fs/read-text`, `POST /fs/sniff`, `POST /fs/read-bytes`, `POST /fs/read-raw`,
-> `POST /fs/write-file`, `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`
-> + признак `features.fs`, PROP-135 Ф1/Ф2a/Ф2b; ssh-агент для секрета вызова: `mode` в `secrets[]` +
+> `POST /fs/write-file`, `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`,
+> `POST /fs/download`
+> + признак `features.fs`, PROP-135 Ф1/Ф2a/Ф2b/Ф3a; ssh-агент для секрета вызова: `mode` в `secrets[]` +
 > `features.sshAgent`, и
 > секреты вызова в **фоновом** запуске `secrets[]` в `POST /exec/spawn` + `features.secretsSpawn`,
 > PROP-124 §2/§7; вложения MCP-результата `attachments[]` в `POST /mcp/call`,
@@ -366,6 +367,7 @@ interface ExecutionPort {
 | `POST` | `/fs/read-bytes` | тело: `{ path, cwd?, maxBytes }` → `200 { bytes: { dataBase64, size } }` — байты файла (base64 без `data:`-префикса); `size > maxBytes` → `400 too_large` (файл не читается вовсе: размер известен из `stat` **до** чтения) |
 | `POST` | `/fs/read-raw` | тело: `{ path, cwd?, maxBytes }` → `200 { raw: { text, size } }` — **точный** текст файла, UTF-8, **без нумерации строк** (в отличие от `/fs/read-text`): его сопоставляют тулы правки `edit_file`/`patch`; `size > maxBytes` → `400 too_large` (файл не читается вовсе: размер известен **до** чтения); кап тела — `EXECUTOR_FS_MAX_READ_RAW_BYTES` = **16 МиБ** (больше → `400 invalid_request`), прикладной лимит `MAX_TOOL_FILE_BYTES` (5 МиБ) остаётся на туле; правила чтения — общий код core `packages/core/src/execution/fs-text.ts` |
 | `POST` | `/fs/rename` | тело: `{ path, to, cwd? }` → `204` — переименование/перемещение файла (протокол **7**, PROP-135 Ф2): `path` — источник, `to` — цель; **обе стороны** проходят резолв и containment (`cwd` — тот же, что у прочих FS-операций); цель уже существует → `400 invalid_request` (цель не перезаписывается), источника нет → `404 not_found`, нет прав → `403 permission`; правила — общий код core `packages/core/src/execution/fs-atomic.ts` (`renamePath`) |
+| `POST` | `/fs/download` | тело: `{ path, cwd?, maxBytes }` → **бинарный** ответ `application/octet-stream` (протокол **7**, PROP-135 Ф3a): тело — байты файла **без** base64; размер известен **до** чтения и едет в `content-length`/`x-synth-size`, поэтому вызывающий может отклонить файл, не читая тело; `size > maxBytes` → `400 too_large` (файл не читается вовсе); кап исполнителя — `EXECUTOR_FS_MAX_DOWNLOAD_BYTES` = **100 МиБ** (потолок вызывающего **обрезается** до меньшего из двух, а не отвергает запрос); на исполнителе файл отдаётся **потоком** (`createReadStream` + `Readable.toWeb`) — в памяти целиком не поднимается. **Не JSON-обёртка** — осознанное отличие от остальных FS-роутов: вложения идут бинарно (base64 раздувал бы 100 МиБ до 133 МиБ); ошибки — те же JSON-причины, что у соседних роутов |
 | `POST` | `/fs/write-file` | тело: `{ path, cwd?, content }` → `204` — запись файла (протокол **7**, PROP-135 Ф2): **атомарно** (tmp → `rename`), родительские каталоги создаются, `mode` существующего файла сохраняется, симлинк разыменовывается (пишем в цель); правила — общий код core `packages/core/src/execution/fs-atomic.ts`, поэтому записанный файл не зависит от топологии; лимит тела — `EXECUTOR_FS_MAX_WRITE_BYTES` = **8 МиБ** (больше → `400 invalid_request`), прикладной лимит `MAX_TOOL_FILE_BYTES` (5 МиБ) остаётся на туле |
 | `POST` | `/fs/mkdir` | тело: `{ path, cwd? }` → `204` — создание каталога (с родительскими); тот же общий код core, `path` существует и это не каталог → `400 invalid_request` |
 | `POST` | `/fs/remove` | тело: `{ path, cwd? }` → `204` — удаление файла или **пустого** каталога; рекурсивного удаления нет: непустой каталог → `400 invalid_request`, отсутствующий путь → `404 not_found`, нет прав → `403 permission` |
@@ -376,7 +378,7 @@ interface ExecutionPort {
 
 **FS-роуты чтения содержимого и записи — аддитивные; версия протокола не повышается.**
 `/fs/read-text`, `/fs/sniff`, `/fs/read-bytes`, `/fs/read-raw`, `/fs/write-file`, `/fs/mkdir`,
-`/fs/remove`, `/fs/rename` — та же
+`/fs/remove`, `/fs/rename`, `/fs/download` — та же
 фича `features.fs` (протокол **7**): ни новой версии, ни новых признаков в `/capabilities`.
 Требование остаётся прежним — адрес для файловых операций выбирается только по `features.fs`
 (см. §4.3), а исполнитель без этого признака даёт **fail-closed**
@@ -450,10 +452,10 @@ control plane и пул исполнителей обновляются **вме
   **вложения MCP-результата** (v5, ADR-115: `attachments[]` в `POST /mcp/call`,
   признак `features.mcpAttachments`), **ssh-агент + секреты в фоне** (v6, PROP-124 §2/§7:
   поле `mode` у секрета вызова + признаки `features.sshAgent`/`features.secretsSpawn`) и
-  **FS-операции** (v7, PROP-135 Ф1/Ф2a/Ф2b: `POST /fs/stat`, `POST /fs/realpath`, `POST /fs/list`,
+  **FS-операции** (v7, PROP-135 Ф1/Ф2a/Ф2b/Ф3a: `POST /fs/stat`, `POST /fs/realpath`, `POST /fs/list`,
   `POST /fs/read-text`, `POST /fs/sniff`, `POST /fs/read-bytes`, `POST /fs/read-raw`,
   `POST /fs/write-file`,
-  `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`
+  `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`, `POST /fs/download`
   + признак `features.fs`).
   Старый исполнитель их не знает ⇒ **control plane и
   исполнитель обязаны быть одной версии** (см. «Операционные следствия» в
@@ -730,7 +732,8 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   — что принимает `secrets[]` в `POST /exec/spawn` (протокол 6, PROP-124 §7), `fs: true` —
   что умеет FS-операции (`/fs/stat`, `/fs/realpath`, `/fs/list`, `/fs/read-text`, `/fs/sniff`,
   `/fs/read-bytes`, `/fs/read-raw`, `/fs/write-file`, `/fs/mkdir`, `/fs/remove`, `/fs/rename`,
-  протокол 7, PROP-135 Ф1/Ф2a/Ф2b).
+  `/fs/download`,
+  протокол 7, PROP-135 Ф1/Ф2a/Ф2b/Ф3a).
 - **Поле `limits` — тоже аддитивное** (§4.2): эффективные потолки исполнителя
   (таймаут команды и буфер вывода). Старый control plane его не читает; **у старого
   исполнителя поля нет — это норма**, тогда лимиты пула неизвестны. В смешанном пуле
@@ -832,14 +835,15 @@ Workspace проекта (`project.workspace`, [ADR-075](./arch_decisions/adr-07
 | **Ф1 (PROP-135)** | `list_directory` — листинг каталога **на исполнителе** (`POST /fs/list`); `read_file` — чтение **содержимого** файла **на исполнителе** (`POST /fs/read-text` — текст, `POST /fs/sniff` — бинарный сниффер + MIME, `POST /fs/read-bytes` — байты медиа); канонический путь для решения периметра — `POST /fs/realpath`. Признак `features.fs`, протокол 7 | `edit_file`/`patch` (остаток Ф2 — закрыт в Ф2b), вложения (Ф3), HTTP FS-роуты, provisioning | Файловые операции агента уезжают в **тот же** контур, что и команды: в split-топологии рабочий каталог живёт на исполнителе, а control plane — тонкий. Контракт порта расширен необязательным полем `fs` (`realpath`/`stat`/`readdir`/`readText`/`sniff`/`readBytes`); тулы читают каталог и файл через порт. Правила чтения — **общим кодом core** (`packages/core/src/execution/fs-text.ts`): формат вывода (`N: текст`), капы и детект бинаря не зависят от топологии. Исполнитель без `features.fs` → **fail-closed** (`ExecutionFsUnavailableError`): тихого возврата к чтению ФС в control plane нет. **Временное ограничение Ф1:** медиа больше **16 МиБ** (`MEDIA_TRANSPORT_CAP`) не перевозится — байты идут целиком в ответе, потоковая передача — **Ф3** |
 | **Ф2a (PROP-135)** | `write_file` — запись файла **на исполнителе** (`POST /fs/write-file`), `create_directory` — создание каталога (`POST /fs/mkdir`), `delete_file` — удаление файла/пустого каталога (`POST /fs/remove`). Контракт порта: `fs.writeFile`/`fs.mkdir`/`fs.remove`; признак `features.fs` прежний, протокол **7** не повышается | `edit_file`/`patch` (остаток Ф2 — закрыт в Ф2b), вложения (Ф3), HTTP FS-роуты, provisioning | Запись агента уезжает туда же, куда уходят команды: в split-топологии рабочий каталог лежит на исполнителе. Правила записи — **общим кодом core** (`packages/core/src/execution/fs-atomic.ts`): атомарно (tmp → `rename`), `mode` существующего файла сохраняется, симлинк разыменовывается, фоллбэк на прямую запись при отказе по правам; тем же кодом пишет исполнитель, поэтому записанный файл не зависит от топологии. Периметр (симлинк-побег) считается **по реальным путям точки исполнения** — общий модуль `packages/core/src/execution/fs-perimeter.ts`. Ошибки — типизированные (`FsPathError`: `not_found`/`permission`/`invalid`/`unresolvable`) |
 | **Ф2b (PROP-135)** | `edit_file` — правка файла **на исполнителе** (чтение — `POST /fs/read-raw`, запись — `POST /fs/write-file`, сниффер — `POST /fs/sniff`); `patch` — атомарная мультифайловая правка **на исполнителе** (чтение — `/fs/read-raw`, запись — `/fs/write-file`, каталоги — `/fs/mkdir`, удаление — `/fs/remove`, перенос — `/fs/rename`). Контракт порта: `fs.readRawText`/`fs.rename` (аддитивно, протокол **7** не повышается) | вложения (Ф3), HTTP FS-роуты, provisioning | Ф2 **закрыт**: все файловые операции агента (чтение, запись, создание каталога, удаление, переименование) идут через порт — в split-топологии их выполняет исполнитель, где лежит рабочий каталог. Правка сопоставляет **точный** текст файла (`readRawText` — UTF-8 без нумерации строк), поэтому нужен отдельный метод контракта: `readText` отдаёт готовые строки вывода (`N: текст`). Перенос — **настоящий `rename`** (файл уезжает целиком, права сохраняются); цель, которая уже существует, — отказ (`invalid`). Периметр (симлинк-побег) — по реальным путям точки исполнения, для **всех** путей правки (включая `rename` от/куда). Временный мост локального чтения **удалён** |
+| **Ф3a (PROP-135)** | `attach_workspace_file` и `send_attachment` — чтение файла **на исполнителе**: сведения — `POST /fs/stat`, байты — `POST /fs/download` (**бинарно**, без base64). Контракт порта: `fs.download(path, maxBytes)` (аддитивно, протокол **7** не повышается, та же фича `features.fs`) | `save_attachment` (Ф3b — выгрузка в workspace), HTTP FS-роуты, provisioning, хранилище, LLM-вызовы, permission-слой | Ф3 **наполовину закрыт**: «прочитать файл проекта и приложить его к диалогу» больше не требует, чтобы рабочий каталог лежал в control plane — в split-топологии файл читает исполнитель. Байты идут **бинарно**: base64 раздувал бы 100 МиБ вложения до 133 МиБ, поэтому отдельный метод контракта (`download`) и отдельный роут (`/fs/download`) — не `readBytes`. Размер известен **до** чтения (`stat`): файл больше потолка не читается вовсе (`too_large`), а на исполнителе тело отдаётся **потоком** — в памяти целиком не поднимается. Периметр (симлинк-побег) — по реальным путям точки исполнения (общий `escapesWorkspace`); байты в blob по-прежнему пишет **только** control plane (`AttachmentService`) |
 
 **Что не уезжает ни в одной фазе:**
 
 - **ФС-роуты** (`createFsRoutes`) — HTTP-API работы с файлами проекта; это API, а не исполнение
   команды; backend остаётся точкой доступа.
-- **Тулы вложений** (`attach_workspace_file`/`save_attachment`/`send_attachment`) — **Ф3**:
-  байты медиа пока едут в control plane целиком (кап `MEDIA_TRANSPORT_CAP` = 16 МиБ),
-  потоковая передача и перенос вложений на исполнителя — следующий слайс.
+- **Тул `save_attachment`** — **Ф3b**: выгрузка медиа-части **в workspace** (обратное
+  направление) остаётся в control plane: он пишет файл в рабочий каталог
+  проекта, а не читает его.
 - **Provisioning workspace** — владелец путей и политик — backend (ADR-075).
 - **Git-реестр** (`project.repos`) — состояние проекта, а не исполнение.
 - **Хранилище** — сессии/история/проекты ([ADR-096](./arch_decisions/adr-096-storage-layer.md)).
@@ -1117,7 +1121,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 7**: FS-операции `/fs/stat`/`/fs/realpath`/`/fs/list`/`/fs/read-text`/`/fs/sniff`/`/fs/read-bytes`/`/fs/read-raw`/`/fs/write-file`/`/fs/mkdir`/`/fs/remove`/`/fs/rename` + признак `features.fs`, PROP-135 Ф1/Ф2a/Ф2b; ssh-агент для секрета вызова `mode`/`features.sshAgent` и секреты в фоновом запуске `secrets[]`/`features.secretsSpawn`, PROP-124 §2/§7; вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 7**: FS-операции `/fs/stat`/`/fs/realpath`/`/fs/list`/`/fs/read-text`/`/fs/sniff`/`/fs/read-bytes`/`/fs/read-raw`/`/fs/write-file`/`/fs/mkdir`/`/fs/remove`/`/fs/rename`/`/fs/download` + признак `features.fs`, PROP-135 Ф1/Ф2a/Ф2b/Ф3a; ssh-агент для секрета вызова `mode`/`features.sshAgent` и секреты в фоновом запуске `secrets[]`/`features.secretsSpawn`, PROP-124 §2/§7; вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -1405,3 +1409,19 @@ Split-топология технически возможна и при одн�
   (вложения, `project-context`, `path-utils`, `search`). **Ф2 закрыт:** все файловые
   операции агента (чтение, запись, создание каталога, удаление, переименование) идут
   через порт исполнения.
+- 2026-11-12 — **Ф3a (PROP-135), слайс 3c: бинарная передача файла и
+  `attach_workspace_file`/`send_attachment` на исполнителе.** Контракт порта расширен
+  методом `fs.download(path, maxBytes)` (аддитивно, протокол **7** не повышается, та же
+  фича `features.fs`): байты файла едут **бинарно**, без base64 — base64 раздувал бы
+  100 МиБ вложения до 133 МиБ. Исполнитель отдаёт **аддитивный** роут `POST /fs/download`
+  (`{path, cwd?, maxBytes}` → бинарный ответ `application/octet-stream`, размер известен
+  **до** чтения и едет в `content-length`/`x-synth-size`; `size > maxBytes` → `400
+  too_large`; кап исполнителя `EXECUTOR_FS_MAX_DOWNLOAD_BYTES` = 100 МиБ; файл отдаётся
+  **потоком** `createReadStream`, в памяти целиком не поднимается). **Не JSON-обёртка** —
+  осознанное отличие от остальных FS-роутов. Тулы `attach_workspace_file` и
+  `send_attachment` переведены на порт: сведения — `fs.stat`, байты — `fs.download`,
+  периметр (симлинк-побег) — по реальным путям точки исполнения (общий
+  `escapesWorkspace`); `node:fs` убран из обоих файлов. Lint-инвариант «файловые тулы без
+  `node:fs`» — allowlist сокращён до **четырёх** файлов (`save-attachment`,
+  `project-context`, `path-utils`, `search`). **Остаток Ф3:** `save_attachment` (Ф3b) —
+  выгрузка медиа-части в workspace.

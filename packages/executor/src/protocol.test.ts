@@ -14,11 +14,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   EXEC_SECRET_LIMITS,
+  EXECUTOR_FS_MAX_DOWNLOAD_BYTES,
   EXECUTOR_FS_MAX_READ_RAW_BYTES,
   EXECUTOR_PROTOCOL_VERSION,
   parseExecRequestBody,
   parseExecSecrets,
   parseFsBytesRequestBody,
+  parseFsDownloadRequestBody,
   parseFsRawTextRequestBody,
   parseFsRenameRequestBody,
   parseFsSniffRequestBody,
@@ -396,5 +398,32 @@ describe('разбор тел FS-роутов правки (протокол 7)'
 
   it('rename: путь-источник обязателен', () => {
     expect(parseFsRenameRequestBody({ to: '/b.txt' }).ok).toBe(false);
+  });
+
+  it('download: валидное тело — путь и потолок размера', () => {
+    const parsed = parseFsDownloadRequestBody({ path: '/workspace/a.bin', maxBytes: 4096 });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toEqual({ path: '/workspace/a.bin', maxBytes: 4096 });
+  });
+
+  it('download: maxBytes обязателен и положителен', () => {
+    expect(parseFsDownloadRequestBody({ path: '/a.bin' }).ok).toBe(false);
+    expect(parseFsDownloadRequestBody({ path: '/a.bin', maxBytes: 0 }).ok).toBe(false);
+    expect(parseFsDownloadRequestBody({ path: '/a.bin', maxBytes: 1.5 }).ok).toBe(false);
+    expect(parseFsDownloadRequestBody({ path: '/a.bin', maxBytes: '10' }).ok).toBe(false);
+  });
+
+  it('download: путь обязателен', () => {
+    expect(parseFsDownloadRequestBody({ maxBytes: 10 }).ok).toBe(false);
+    expect(parseFsDownloadRequestBody({ path: '  ', maxBytes: 10 }).ok).toBe(false);
+  });
+
+  it('download: потолок выше лимита исполнителя не отвергается (обрезается на стороне исполнителя)', () => {
+    const parsed = parseFsDownloadRequestBody({
+      path: '/a.bin',
+      maxBytes: EXECUTOR_FS_MAX_DOWNLOAD_BYTES + 1,
+    });
+    expect(parsed.ok).toBe(true);
   });
 });

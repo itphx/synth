@@ -18,7 +18,11 @@
  * - **Только внутри рабочего каталога.** Абсолютный путь, `..` за пределы
  *   workspace и побег через симлинк отклоняются (containment как у
  *   `fs-read.ts`, но строже: абсолютные пути не принимаются вовсе — файл
- *   прикладывается из проекта, а не из ФС хоста).
+ *   прикладывается из проекта, а не из ФС хоста). Периметр считается **по
+ *   реальным путям точки исполнения** (PROP-135): симлинк наружу там виден.
+ * - **Файл читается через порт исполнения** (PROP-135, Ф3): в split-топологии
+ *   рабочий каталог живёт на исполнителе, а control plane — тонкий. Байты
+ *   едут **бинарно** (`fs.download`), без base64: вложения идут бинарно.
  * - **Лимиты и allowlist — общие** (`attachments.*`): размер проверяется по
  *   `stat` **до** чтения файла, MIME/модальность/белый список — в
  *   `AttachmentService.upload` (единственная точка записи байтов).
@@ -37,7 +41,6 @@
  * - Чисел метрик не добавляем: `upload`/`buildMediaPart` сами пишут
  *   `synth_attachment_*` (ADR-094).
  */
-import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { z } from 'zod';
 import {
@@ -57,7 +60,6 @@ import { sniffMime } from '../attachments/sniff-mime.js';
 import { isAborted, abortedResult } from './abort.js';
 import {
   isLexicallyInside,
-  isSymlinkEscapeInRoots,
   pathEscapesWorkspaceResult,
   resolvePath,
   toolRoots,
@@ -65,6 +67,12 @@ import {
 } from './path-utils.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+// PROP-135 (Ф3): файл из workspace читается в контуре исполнения — там, где
+// в split-топологии лежит рабочий каталог проекта.
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { escapesWorkspace, FS_UNAVAILABLE_TEXT } from '../../execution/fs-perimeter.js';
+import { fsCall } from '../../execution/fs-tool-call.js';
+import { isFsPathError, type FsStat } from '../../execution/ports/index.js';
 
 /** Имя тула (используется в текстах и в permission-группах). */
 export const ATTACH_WORKSPACE_FILE_TOOL = 'attach_workspace_file';
@@ -145,7 +153,22 @@ export const attachWorkspaceFileTool: ToolDefinition = {
     if (!isLexicallyInsideRoots(roots, resolvedPath)) {
       return pathEscapesWorkspaceResult(resolvedPath);
     }
-    if (isSymlinkEscapeInRoots(roots, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+
+    // PROP-135 (Ф3): файл — в контуре исполнения. В remote-режиме его читает
+    // исполнитель (там лежит рабочий каталог проекта), а control plane лишь
+    // спрашивает сведения и байты.
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
+    // Симлинк-побег проверяется по реальным путям (у точки исполнения):
+    // лексическая проверка в control plane симлинк наружу не видит.
+    const perimeter = await fsCall(() => escapesWorkspace(fs, roots, resolvedPath));
+    if (!perimeter.ok) return perimeter.result;
+    if (perimeter.value) {
+      return pathEscapesWorkspaceResult(resolvedPath);
+    }
 
     const extra = ctx.extra as AttachWorkspaceFileExtra | undefined;
     const service = extra?.attachmentService;
@@ -158,17 +181,26 @@ export const attachWorkspaceFileTool: ToolDefinition = {
     }
 
     // Файл существует и это файл (каталог/устройство приложить нельзя).
-    let info;
+    let info: FsStat;
     try {
-      info = await stat(resolvedPath);
+      info = await fs.stat(resolvedPath);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') {
-        return failureResult('attach.tool.not_found', { path: params.path }, { path: resolvedPath });
+      if (isFsPathError(err)) {
+        // «Пути нет» и «путь есть, но это не каталог» — прежний один отказ.
+        if (err.code === 'not_found' || err.code === 'not_directory') {
+          return failureResult('attach.tool.not_found', { path: params.path }, { path: resolvedPath });
+        }
+        // Прочие причины (нет доступа, путь не разрешается) — не «пути нет»:
+        // отказ с кодом причины, а не падение тула.
+        return {
+          content: `Error: ${err.message}`,
+          isError: true,
+          metadata: { code: err.code, path: resolvedPath },
+        };
       }
       throw err;
     }
-    if (!info.isFile()) {
+    if (info.kind !== 'file') {
       return failureResult('attach.tool.not_a_file', { path: params.path }, { path: resolvedPath });
     }
     // Размер — по `stat`, до чтения: гигабайтный файл в память не тянем.
@@ -183,7 +215,30 @@ export const attachWorkspaceFileTool: ToolDefinition = {
     // ADR-115: заведомо отбрасываемое вложение в очередь не ставим. MIME
     // определяется по сигнатуре (как в `AttachmentService`), поэтому байты
     // читаются один раз — они же уходят в `upload`.
-    const bytes = await readFile(resolvedPath);
+    let bytes: Buffer;
+    try {
+      // Бинарная передача файла (PROP-135, Ф3): байты без base64.
+      bytes = await fs.download(resolvedPath, config.maxBytesPerFile);
+    } catch (err) {
+      if (isFsPathError(err)) {
+        if (err.code === 'too_large') {
+          return failureResult(
+            'attach.tool.too_large',
+            { path: params.path, size: String(info.size), limit: String(config.maxBytesPerFile) },
+            { path: resolvedPath, size: info.size, limit: config.maxBytesPerFile },
+          );
+        }
+        if (err.code === 'not_found' || err.code === 'not_directory') {
+          return failureResult('attach.tool.not_found', { path: params.path }, { path: resolvedPath });
+        }
+        return {
+          content: `Error: ${err.message}`,
+          isError: true,
+          metadata: { code: err.code, path: resolvedPath },
+        };
+      }
+      throw err;
+    }
     const sniffed = sniffMime(bytes);
     const family = sniffed ? attachmentModalityOf(sniffed) : null;
     const modelModalities = extra?.modelModalities;

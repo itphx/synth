@@ -35,6 +35,7 @@ import type {
   FsBytesBody,
   FsBytesRequestBody,
   FsDirEntryBody,
+  FsDownloadRequestBody,
   FsEntryKindBody,
   FsMkdirRequestBody,
   FsRawTextBody,
@@ -49,6 +50,7 @@ import type {
   FsTextRequestBody,
   FsWriteRequestBody,
 } from './protocol.js';
+import { EXECUTOR_FS_MAX_DOWNLOAD_BYTES } from './protocol.js';
 import { resolveContainedCwd } from './workspace.js';
 
 /** Типизированная ошибка FS-операции (причина едет на проводе). */
@@ -339,6 +341,39 @@ export class ExecutorFsService {
     } catch (err) {
       throw this._toError(err, from);
     }
+  }
+
+  /**
+   * Бинарная передача файла (`POST /fs/download`, протокол 7, PROP-135 Ф3).
+   *
+   * Возвращает **путь и размер** — сам файл отдаётся потоком роутом
+   * (`createReadStream`): в памяти исполнителя файл целиком не поднимается.
+   *
+   * Размер известен **до** чтения (`stat`): файл больше потолка →
+   * `too_large` (файл не читается вовсе). Потолок — меньший из двух:
+   * лимита вызывающего (`maxBytes`) и потолка исполнителя
+   * (`EXECUTOR_FS_MAX_DOWNLOAD_BYTES`).
+   */
+  async download(req: FsDownloadRequestBody): Promise<{ target: string; size: number }> {
+    const target = this._resolve(req);
+    const limit = Math.min(req.maxBytes, EXECUTOR_FS_MAX_DOWNLOAD_BYTES);
+    let info;
+    try {
+      info = await stat(target);
+    } catch (err) {
+      throw this._toError(err, target);
+    }
+    if (info.isDirectory()) {
+      throw new ExecutorFsError('invalid_request', `путь не является файлом: ${target}`, 'EISDIR');
+    }
+    if (info.size > limit) {
+      throw new ExecutorFsError(
+        'too_large',
+        `файл больше лимита: ${info.size} байт (лимит ${limit} байт)`,
+        'too_large',
+      );
+    }
+    return { target, size: info.size };
   }
 
   /**

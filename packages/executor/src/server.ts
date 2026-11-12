@@ -23,6 +23,7 @@
  * | `POST` | `/fs/remove` | удаление файла/пустого каталога (протокол 7, `204`) | bearer-токен |
  * | `POST` | `/fs/read-raw` | текст файла как есть (протокол 7) | bearer-токен |
  * | `POST` | `/fs/rename` | переименование/перемещение файла (протокол 7, `204`) | bearer-токен |
+ * | `POST` | `/fs/download` | бинарная передача файла (протокол 7; `application/octet-stream`) | bearer-токен |
  * | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя | bearer-токен |
  * | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов | bearer-токен |
  * | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
@@ -48,6 +49,7 @@
  * `/exec/:processId` — иначе «spawn» попал бы в параметр `:processId`.
  */
 
+import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { Readable } from 'node:stream';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
@@ -67,6 +69,7 @@ import {
   errorResponse,
   parseExecRequestBody,
   parseFsBytesRequestBody,
+  parseFsDownloadRequestBody,
   parseFsMkdirRequestBody,
   parseFsRawTextRequestBody,
   parseFsRemoveRequestBody,
@@ -322,6 +325,7 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
   app.use('/fs/remove', requireToken);
   app.use('/fs/read-raw', requireToken);
   app.use('/fs/rename', requireToken);
+  app.use('/fs/download', requireToken);
 
   app.post('/exec', async (c) => {
     let raw: unknown;
@@ -734,6 +738,44 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     try {
       await fsService.rename(parsed.value);
       return c.body(null, 204);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  // --- Бинарная передача файла (PROP-135 Ф3) ------------------------------
+  //
+  // Ответ — **бинарный** (`application/octet-stream`), не JSON: вложения идут
+  // бинарно (base64 раздувал бы 100 МиБ до 133 МиБ). Размер известен **до**
+  // чтения (`stat`), поэтому он едет в `content-length`/`x-synth-size`, а
+  // вызывающий может отклонить файл, не читая тело. Сам файл отдаётся
+  // **потоком** (`createReadStream`): в памяти исполнителя целиком не
+  // поднимается.
+
+  app.post('/fs/download', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsDownloadRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      const { target, size } = await fsService.download(parsed.value);
+      const fileStream = createReadStream(target);
+      return new Response(Readable.toWeb(fileStream) as ReadableStream, {
+        status: 200,
+        headers: {
+          'content-type': 'application/octet-stream',
+          'content-length': String(size),
+          'x-synth-size': String(size),
+        },
+      });
     } catch (err) {
       return fsErrorResponse(c, err);
     }

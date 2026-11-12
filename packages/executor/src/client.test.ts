@@ -130,6 +130,22 @@ async function startLegacySecretsSpawnExecutor(): Promise<{
 }
 
 /**
+ * Ответ FS-роута в фейковом исполнителе.
+ *
+ * `body` — JSON-ответ (как у прочих FS-роутов); `raw` — **бинарный** ответ
+ * (как у `/fs/download`): тело отдаётся как есть, заголовки — `content-type`
+ * `application/octet-stream`, `content-length` и `x-synth-size` (размер,
+ * известный до чтения тела). `headers` перекрывают их (например, чтобы
+ * объявить размер больше фактического — как «файл не влез»).
+ */
+type FsAnswer = {
+  status: number;
+  body?: unknown;
+  raw?: Buffer;
+  headers?: Record<string, string>;
+};
+
+/**
  * Исполнитель с FS-операциями (`features.fs`, протокол 7, PROP-135).
  *
  * Отвечает на `/capabilities` и на FS-роуты; ответ FS-роута задаётся
@@ -139,8 +155,8 @@ async function startLegacySecretsSpawnExecutor(): Promise<{
 async function startFsExecutor(
   capabilities: Record<string, unknown>,
   fsResponse?:
-    | { status: number; body: unknown }
-    | Record<string, { status: number; body: unknown }>,
+    | FsAnswer
+    | Record<string, FsAnswer>,
 ): Promise<{
   url: string;
   fsCalls: () => string[];
@@ -148,7 +164,6 @@ async function startFsExecutor(
 }> {
   const calls: string[] = [];
   const bodies: Array<{ url: string; body: unknown }> = [];
-  type FsAnswer = { status: number; body: unknown };
   const single: FsAnswer | undefined =
     fsResponse && typeof (fsResponse as FsAnswer).status === 'number'
       ? (fsResponse as FsAnswer)
@@ -179,6 +194,16 @@ async function startFsExecutor(
           byRoute?.[req.url as string]
           ?? single
           ?? { status: 200, body: { stat: { kind: 'file', size: 42, mtimeMs: 1 } } };
+        if (answer.raw !== undefined) {
+          res.writeHead(answer.status, {
+            'content-type': 'application/octet-stream',
+            'content-length': String(answer.raw.length),
+            'x-synth-size': String(answer.raw.length),
+            ...(answer.headers ?? {}),
+          });
+          res.end(answer.raw);
+          return;
+        }
         res.writeHead(answer.status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(answer.body));
       });
@@ -1619,5 +1644,107 @@ describe('клиент удалённого порта: FS-операции', ()
 
     await expect(port.fs!.readRawText('/tmp/x', 10)).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
     await expect(port.fs!.rename('/tmp/x', '/tmp/y')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+  });
+
+  /**
+   * Бинарная передача файла (`/fs/download`, протокол 7, PROP-135 Ф3):
+   * байты едут **без** base64, а размер известен **до** чтения тела
+   * (заголовки `content-length`/`x-synth-size`).
+   */
+  it('download — бинарные байты один в один, лимит уходит в тело', async () => {
+    const payload = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0x7f, 0x80]);
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/download': { status: 200, raw: payload },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const bytes = await port.fs!.download('/workspace/blob.bin', 1024);
+
+    expect(bytes.equals(payload)).toBe(true);
+    expect(executor.fsCalls()).toEqual(['/fs/download']);
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/blob.bin', maxBytes: 1024 });
+  });
+
+  it('download — размер больше лимита виден по заголовку: тело не читается', async () => {
+    // Заголовок объявляет файл больше потолка — клиент отбрасывает его
+    // **до** чтения тела (тело тут меньше объявленного — «файл не влез»).
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/download': { status: 200, raw: Buffer.from('hello'), headers: { 'x-synth-size': '999' } },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.download('/workspace/big.bin', 10).catch((e) => e);
+
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('too_large');
+    expect((err as FsPathError).message).toContain('10');
+  });
+
+  it('download — too_large с провода → FsPathError с кодом too_large', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/download': {
+        status: 400,
+        body: {
+          error: {
+            reason: 'too_large',
+            code: 'too_large',
+            message: 'файл больше лимита: 20 байт (лимит 10 байт)',
+            stdout: '',
+            stderr: '',
+            killed: false,
+            signal: null,
+            truncated: false,
+            durationMs: 0,
+          },
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.download('/workspace/big.bin', 10).catch((e) => e);
+
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('too_large');
+  });
+
+  it('download — 404 not_found с провода → FsPathError с кодом not_found', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/download': {
+        status: 404,
+        body: {
+          error: {
+            reason: 'not_found',
+            code: 'ENOENT',
+            message: 'путь не найден: /workspace/nope',
+            stdout: '',
+            stderr: '',
+            killed: false,
+            signal: null,
+            truncated: false,
+            durationMs: 0,
+          },
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.download('/workspace/nope', 10).catch((e) => e);
+
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('not_found');
+  });
+
+  it('исполнитель без features.fs — тот же отказ на бинарной передаче', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
+
+    await expect(port.fs!.download('/tmp/x', 10)).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
   });
 });

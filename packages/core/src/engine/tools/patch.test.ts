@@ -854,6 +854,7 @@ describe('patch — работа через порт исполнения (PROP-
           this.files.set(to, content);
           this.files.delete(from);
         },
+        download: async () => Buffer.alloc(0),
       };
     }
 

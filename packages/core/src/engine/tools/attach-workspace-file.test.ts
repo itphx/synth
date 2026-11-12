@@ -40,6 +40,8 @@ import { attachWorkspaceFileTool } from './attach-workspace-file.js';
 import { AttachmentError } from '../attachments/service.js';
 import type { AttachmentService } from '../attachments/service.js';
 import { TOOL_PATH_PARAMS, getToolGroups } from '../permission/groups.js';
+import type { ExecRequest, ExecResult, ExecutionFs } from '../../execution/ports/index.js';
+import { FsPathError } from '../../execution/ports/index.js';
 
 /** Мок сервиса вложений: только методы, которые зовёт тул. */
 interface AttachmentServiceMock {
@@ -442,6 +444,90 @@ describe('attach_workspace_file — привязка файла из workspace (
 
     it('capability — `file_read` (доступность как у read-тулов, ADR-075)', () => {
       expect(attachWorkspaceFileTool.capabilities).toContain('file_read');
+    });
+  });
+
+  /**
+   * PROP-135 (Ф3): файл читается **портом исполнения** — в split-топологии
+   * рабочий каталог лежит на исполнителе, а control plane тонкий.
+   */
+  describe('чтение через порт исполнения (PROP-135, Ф3)', () => {
+    /** Порт с подменённой FS: байты отдаёт порт, а не локальный файл. */
+    class FakeFsPort {
+      readonly calls: string[] = [];
+      readonly fs: ExecutionFs;
+
+      constructor(fs?: Partial<ExecutionFs>) {
+        this.fs = {
+          realpath: async (path: string) => path,
+          stat: async () => ({ kind: 'file', size: 9, mtimeMs: 0 }),
+          readdir: async () => [],
+          readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+          sniff: async () => ({ binary: false }),
+          readBytes: async () => ({ dataBase64: '', size: 0 }),
+          writeFile: async () => undefined,
+          mkdir: async () => undefined,
+          remove: async () => undefined,
+          readRawText: async () => ({ text: '', size: 0 }),
+          rename: async () => undefined,
+          download: async (path: string, maxBytes: number) => {
+            this.calls.push(`download:${path}:${maxBytes}`);
+            return Buffer.from('PORTBYTES');
+          },
+          ...fs,
+        };
+      }
+
+      async execute(req: ExecRequest): Promise<ExecResult> {
+        this.calls.push(`exec:${req.command.kind}`);
+        return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+      }
+    }
+
+    it('байты идут из порта (fs.download), локальный файл не нужен', async () => {
+      const port = new FakeFsPort();
+      // Файла на диске нет вовсе — его «читает» порт.
+      const ctx = makeCtx(makeExtra({ executionPort: port }));
+
+      const result = await attachWorkspaceFileTool.execute({ path: 'shot.png' }, ctx);
+
+      expect(result.isError).toBeFalsy();
+      expect(port.calls).toEqual([
+        `download:${join(workspace, 'shot.png')}:${attachmentsConfigSchema.parse({}).maxBytesPerFile}`,
+      ]);
+      const uploadArg = service.upload.mock.calls[0]![0] as { bytes: Buffer };
+      expect(uploadArg.bytes.toString()).toBe('PORTBYTES');
+      expect(result.attachments).toHaveLength(1);
+    });
+
+    it('`too_large` из порта → отказ `attach.tool.too_large`', async () => {
+      const port = new FakeFsPort({
+        download: async () => {
+          throw new FsPathError('too_large', join(workspace, 'shot.png'), 'файл больше лимита');
+        },
+      });
+
+      const result = await attachWorkspaceFileTool.execute(
+        { path: 'shot.png' },
+        makeCtx(makeExtra({ executionPort: port })),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(errorKey(result)).toBe('attach.tool.too_large');
+      expect(service.upload).not.toHaveBeenCalled();
+    });
+
+    it('порта без FS (удалённый исполнитель без features.fs) → отказ про features.fs', async () => {
+      const port = { isRemote: true, execute: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 }) };
+
+      const result = await attachWorkspaceFileTool.execute(
+        { path: 'shot.png' },
+        makeCtx(makeExtra({ executionPort: port })),
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('features.fs');
+      expect(service.upload).not.toHaveBeenCalled();
     });
   });
 });

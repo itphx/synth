@@ -43,6 +43,7 @@ import { randomUUID } from 'node:crypto';
 import {
   lstat,
   readdir as fsReaddir,
+  readFile as fsReadFile,
   realpath as fsRealpath,
   stat as fsStat,
 } from 'node:fs/promises';
@@ -751,6 +752,32 @@ async function inlineRename(from: string, to: string): Promise<void> {
 }
 
 /**
+ * Бинарная передача файла (inline, PROP-135 Ф3).
+ *
+ * Размер известен **до** чтения (`stat`): файл больше `maxBytes` не читается
+ * вовсе — отказ `too_large` с тем же кодом, что у `readBytes`.
+ */
+async function inlineDownload(path: string, maxBytes: number): Promise<Buffer> {
+  const target = requireValidFsPath(path);
+  try {
+    const info = await fsStat(target);
+    if (info.size > maxBytes) {
+      throw new FsPathError(
+        'too_large',
+        path,
+        `файл больше лимита: ${info.size} байт (лимит ${maxBytes} байт)`,
+      );
+    }
+    return await fsReadFile(target);
+  } catch (err) {
+    // `too_large` — уже типизированная ошибка порта: переводить её в
+    // «unresolvable» нельзя (вызывающий различает лимит от сбоя чтения).
+    if (err instanceof FsPathError) throw err;
+    throw toFsPathError(err, path);
+  }
+}
+
+/**
  * Исполнение в процессе backend'а — нынешнее поведение Synth.
  *
  * Экземпляр **без состояния**: его можно создавать на каждый вызов (тулы
@@ -780,6 +807,7 @@ export class InlineExecutionPort implements ExecutionPort {
     remove: (path: string) => inlineRemove(path),
     readRawText: (path: string, maxBytes: number) => inlineReadRawText(path, maxBytes),
     rename: (from: string, to: string) => inlineRename(from, to),
+    download: (path: string, maxBytes: number) => inlineDownload(path, maxBytes),
   };
 
   /**

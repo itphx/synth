@@ -419,8 +419,7 @@ describe('ExecutionFs (inline): readRawText', () => {
 /**
  * Перенос файла (PROP-135, Ф2) — те же правила в обеих топологиях.
  */
-describe('ExecutionFs (inline): rename', () => {
-  it('файл перенесён под новым именем', async () => {
+describe('ExecutionFs (inline): rename', () => {  it('файл перенесён под новым именем', async () => {
     const from = join(root, 'rename-from.txt');
     const to = join(root, 'rename-to.txt');
     await writeFile(from, 'payload\n', 'utf-8');
@@ -458,5 +457,56 @@ describe('ExecutionFs (inline): rename', () => {
 
   it('пустой путь — invalid', async () => {
     expect(await captureCode(port.fs!.rename('', join(root, 'to.txt')))).toBe('invalid');
+  });
+});
+
+/**
+ * Бинарная передача файла (PROP-135, Ф3) — байты **без** base64: вложения
+ * идут бинарно (base64 раздувал бы 100 МиБ до 133 МиБ).
+ */
+describe('ExecutionFs (inline): download', () => {
+  it('текстовый файл — байты один в один', async () => {
+    const bytes = await port.fs!.download(file, 1024);
+
+    expect(bytes).toBeInstanceOf(Buffer);
+    expect(bytes.toString('utf-8')).toBe('hello');
+  });
+
+  it('бинарный файл — байты один в один (без искажений)', async () => {
+    const blob = join(root, 'blob.bin');
+    const payload = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0x7f, 0x80]);
+    await writeFile(blob, payload);
+
+    const bytes = await port.fs!.download(blob, 1024);
+
+    expect(bytes.equals(payload)).toBe(true);
+  });
+
+  it('пустой файл — пустой буфер (без ошибки)', async () => {
+    const empty = join(root, 'empty-dl.txt');
+    await writeFile(empty, '');
+
+    const bytes = await port.fs!.download(empty, 1024);
+
+    expect(bytes.length).toBe(0);
+  });
+
+  it('файл больше лимита — too_large (файл не читается)', async () => {
+    const err = await captureFsError(port.fs!.download(file, 2));
+    expect(err.code).toBe('too_large');
+    expect(err.message).toContain('2');
+  });
+
+  it('файл ровно по лимиту — читается', async () => {
+    const bytes = await port.fs!.download(file, 5);
+    expect(bytes.toString('utf-8')).toBe('hello');
+  });
+
+  it('отсутствующий файл — not_found', async () => {
+    expect(await captureCode(port.fs!.download(join(root, 'nope.txt'), 1024))).toBe('not_found');
+  });
+
+  it('пустой путь — invalid', async () => {
+    expect(await captureCode(port.fs!.download('', 1024))).toBe('invalid');
   });
 });

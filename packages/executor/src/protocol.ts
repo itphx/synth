@@ -1198,6 +1198,20 @@ export interface FsRenameRequestBody {
   cwd?: string;
 }
 
+/**
+ * Тело запроса бинарной передачи файла (`POST /fs/download`).
+ *
+ * `maxBytes` — потолок размера файла **вызывающего**: файл больше — отказ
+ * `too_large` (файл не читается вовсе, размер известен до чтения).
+ */
+export interface FsDownloadRequestBody {
+  /** Путь файла. */
+  path: string;
+  cwd?: string;
+  /** Потолок размера файла, байт (обязателен: файл больше — `too_large`). */
+  maxBytes: number;
+}
+
 /** Текст файла на проводе (как есть, без нумерации строк). */
 export interface FsRawTextBody {
   /** Содержимое файла (UTF-8, без нумерации строк). */
@@ -1232,6 +1246,18 @@ export const EXECUTOR_FS_MAX_READ_RAW_BYTES = 16 * 1024 * 1024;
  * control plane, а исполнитель получает только то, что прошло лимит.
  */
 export const EXECUTOR_FS_MAX_WRITE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Потолок бинарной передачи файла (`POST /fs/download`), байт.
+ *
+ * Файл едет по проводу **бинарно** (без base64) — потолок выше, чем у
+ * base64-роутов: раздувания ×4/3 нет. 100 МиБ — потолок исполнителя;
+ * прикладной лимит (`attachments.maxBytesPerFile`, по умолчанию те же 100 МиБ)
+ * остаётся на туле, а исполнитель **обрезает** свой потолок до меньшего из
+ * двух (`min`), а не отвергает запрос: иначе конфиг инстанса с лимитом выше
+ * потолка исполнителя давал бы невнятный `invalid_request`.
+ */
+export const EXECUTOR_FS_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 
 /**
  * Разбор тела запроса записи файла (`POST /fs/write-file`).
@@ -1322,6 +1348,25 @@ export function parseFsRenameRequestBody(
     return { ok: false, message: 'поле to содержит недопустимые символы' };
   }
   return { ok: true, value: { ...base.value, to: raw.to } };
+}
+
+/**
+ * Разбор тела запроса бинарной передачи файла (`POST /fs/download`).
+ *
+ * База — `parseFsRequestBody`; сверху — `maxBytes` (обязателен, положительный
+ * целый). Верхняя граница **не проверяется**: исполнитель обрезает свой
+ * потолок до меньшего из двух (`min`) — см. `EXECUTOR_FS_MAX_DOWNLOAD_BYTES`.
+ */
+export function parseFsDownloadRequestBody(
+  body: unknown,
+): { ok: true; value: FsDownloadRequestBody } | { ok: false; message: string } {
+  const base = parseFsRequestBody(body);
+  if (!base.ok) return base;
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.maxBytes !== 'number' || !Number.isInteger(raw.maxBytes) || raw.maxBytes <= 0) {
+    return { ok: false, message: 'поле maxBytes обязательно: целое число > 0 (потолок размера файла)' };
+  }
+  return { ok: true, value: { ...base.value, maxBytes: raw.maxBytes } };
 }
 
 /** Ошибочный ответ с корректным HTTP-кодом. */

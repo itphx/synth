@@ -87,6 +87,7 @@ describe('FS-операции исполнителя: аутентификаци
       '/fs/remove',
       '/fs/read-raw',
       '/fs/rename',
+      '/fs/download',
     ]) {
       const res = await postFs(app, route, { path: workspace, maxBytes: 1024, content: 'x', to: 'y' }, null);
       expect(res.status).toBe(401);
@@ -778,6 +779,100 @@ describe('FS-операции исполнителя: rename', () => {
       to: join(workspace, 'b.txt'),
     }, null);
 
+    expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * Бинарная передача файла (`POST /fs/download`, протокол 7, PROP-135 Ф3).
+ *
+ * Ответ — **бинарный** (`application/octet-stream`), не JSON: вложения идут
+ * бинарно (base64 раздувал бы 100 МиБ до 133 МиБ). Размер файла известен
+ * **до** чтения (`stat`) и едет в `content-length`/`x-synth-size` — вызывающий
+ * может отклонить файл, не читая тело.
+ */
+describe('FS-операции исполнителя: download', () => {
+  it('файл — бинарный ответ один в один', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'a.txt'), maxBytes: 1024 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/octet-stream');
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.toString('utf-8')).toBe('hello');
+  });
+
+  it('бинарный файл — байты один в один (без искажений)', async () => {
+    const payload = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0x7f, 0x80]);
+    await writeFile(join(workspace, 'blob.bin'), payload);
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'blob.bin'), maxBytes: 1024 });
+    expect(res.status).toBe(200);
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.equals(payload)).toBe(true);
+  });
+
+  it('размер едет в content-length и x-synth-size (известен до чтения тела)', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'a.txt'), maxBytes: 1024 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-length')).toBe('5');
+    expect(res.headers.get('x-synth-size')).toBe('5');
+  });
+
+  it('пустой файл — пустое тело, размер 0', async () => {
+    await writeFile(join(workspace, 'empty.bin'), '');
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'empty.bin'), maxBytes: 1024 });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-synth-size')).toBe('0');
+    expect((await res.arrayBuffer()).byteLength).toBe(0);
+  });
+
+  it('файл больше лимита — 400 too_large (файл не читается)', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'a.txt'), maxBytes: 2 });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('too_large');
+  });
+
+  it('без maxBytes — 400 invalid_request (потолок обязателен)', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'a.txt') });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('отсутствующий файл — 404 not_found', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'nope'), maxBytes: 10 });
+    expect(res.status).toBe(404);
+    expect((await readError(res)).reason).toBe('not_found');
+  });
+
+  it('каталог вместо файла — 400 invalid_request', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'sub'), maxBytes: 10 });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('относительный path + cwd — файл из cwd', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: 'a.txt', cwd: workspace, maxBytes: 1024 });
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer()).toString('utf-8')).toBe('hello');
+  });
+
+  it('cwd вне workspace — 400 cwd_outside_workspace', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: 'a.txt', cwd: outside, maxBytes: 1024 });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('cwd_outside_workspace');
+  });
+
+  it('без токена — 401', async () => {
+    const app = makeApp();
+    const res = await postFs(app, '/fs/download', { path: join(workspace, 'a.txt'), maxBytes: 10 }, null);
     expect(res.status).toBe(401);
   });
 });

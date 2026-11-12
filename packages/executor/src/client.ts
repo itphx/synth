@@ -122,8 +122,8 @@ import {
  * FS-операция на проводе (роут `/fs/<op>`).
  *
  * `read-text`/`sniff`/`read-bytes`/`write-file`/`mkdir`/`remove`/`read-raw`/
- * `rename` — часть той же фичи `fs` (протокол 7): версия протокола не
- * повышается, признак `features.fs` прежний.
+ * `rename`/`download` — часть той же фичи `fs` (протокол 7): версия протокола
+ * не повышается, признак `features.fs` прежний.
  */
 type FsOp =
   | 'stat'
@@ -136,7 +136,8 @@ type FsOp =
   | 'mkdir'
   | 'remove'
   | 'read-raw'
-  | 'rename';
+  | 'rename'
+  | 'download';
 
 /** Тип функции-транспорта (совместим с `egressFetch` и обычным `fetch`). */
 export type ExecutorFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -472,6 +473,11 @@ export class RemoteExecutionPort implements ExecutionPort {
     rename: async (from: string, to: string): Promise<void> => {
       await this._fsRequest<unknown>('rename', from, { to });
     },
+    // Бинарная передача файла (PROP-135 Ф3): байты едут **без** base64 —
+    // вложения идут бинарно (base64 раздувал бы 100 МиБ до 133 МиБ).
+    download: async (path: string, maxBytes: number): Promise<Buffer> => {
+      return await this._fsDownload(path, maxBytes);
+    },
   };
 
   private readonly _urls: string[];
@@ -686,6 +692,98 @@ export class RemoteExecutionPort implements ExecutionPort {
     return this._selectFsAddress();
   }
 
+  /**
+   * Бинарная передача файла (`POST /fs/download`, протокол 7, PROP-135 Ф3).
+   *
+   * Ответ — **бинарный** (`application/octet-stream`), не JSON: вложения идут
+   * бинарно (base64 раздувал бы 100 МиБ до 133 МиБ). Размер файла известен
+   * **до** чтения тела — он едет в `content-length`/`x-synth-size`, поэтому
+   * файл больше потолка отбрасывается **без** чтения тела.
+   *
+   * Повтор при **транспортной** ошибке — один (как у прочих FS-операций):
+   * исполнитель мог перезапуститься с другим составом пула. Отказ по
+   * существу операции (`too_large`/`not_found`/…) повтором **не**
+   * сопровождается — это ответ исполнителя, а не сбой связи.
+   */
+  private async _fsDownload(path: string, maxBytes: number): Promise<Buffer> {
+    const url = await this._fsTarget();
+    try {
+      return await this._fsDownloadCall(url, path, maxBytes);
+    } catch (err) {
+      const core = await loadCore();
+      if (core.isFsPathError(err) || core.isExecutionFsUnavailableError(err)) throw err;
+      this._fsAddress = undefined;
+      this._invalidateInventory();
+      const retryUrl = await this._fsTarget();
+      return await this._fsDownloadCall(retryUrl, path, maxBytes);
+    }
+  }
+
+  /** Один бинарный FS-запрос к конкретному адресу: HTTP + разбор ответа. */
+  private async _fsDownloadCall(
+    url: string,
+    path: string,
+    maxBytes: number,
+  ): Promise<Buffer> {
+    const fetchImpl = await resolveFetch(this._fetchImpl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this._timeoutMs);
+    timer.unref?.();
+
+    let response: Response;
+    try {
+      response = await fetchImpl(`${url}/fs/download`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this._token}`,
+        },
+        body: JSON.stringify({ path, maxBytes }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new ConnectionFailure(err);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      // Ошибка — JSON, как у прочих FS-роутов: причина разбирается по
+      // `reason`, а не по тексту.
+      let parsed: unknown = null;
+      try {
+        const text = await response.text();
+        parsed = text.length > 0 ? JSON.parse(text) : null;
+      } catch {
+        parsed = null;
+      }
+      const errorBody = (parsed as { error?: ExecErrorBody } | null)?.error;
+      throw await this._toFsError(errorBody, response.status, path);
+    }
+
+    // Размер известен **до** чтения тела: файл больше потолка отбрасываем
+    // сейчас — тело не читаем вовсе.
+    const declared = downloadDeclaredSize(response);
+    if (declared !== null && declared > maxBytes) {
+      const core = await loadCore();
+      throw new core.FsPathError(
+        'too_large',
+        path,
+        `файл больше лимита: ${declared} байт (лимит ${maxBytes} байт)`,
+      );
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) {
+      const core = await loadCore();
+      throw new core.FsPathError(
+        'too_large',
+        path,
+        `файл больше лимита: ${buffer.length} байт (лимит ${maxBytes} байт)`,
+      );
+    }
+    return buffer;
+  }
   /**
    * Выбрать адрес пула, умеющий FS-операции.
    *
@@ -1418,6 +1516,26 @@ function mapFsReasonToCode(reason: string | undefined): FsErrorCode | undefined 
     default:
       return undefined;
   }
+}
+
+/**
+ * Размер бинарного ответа `/fs/download`, объявленный **заголовками**.
+ *
+ * `x-synth-size` — наш собственный заголовок (размер файла, известный до
+ * чтения), `content-length` — стандартный. Берём **больший** из известных:
+ * файл не должен быть прочитан целиком, если он заведомо больше потолка.
+ *
+ * `null` — размер неизвестен (заголовков нет — например, chunked-ответ):
+ * тогда файл читается и проверяется по факту.
+ */
+function downloadDeclaredSize(response: Response): number | null {
+  const candidates: number[] = [];
+  for (const header of [response.headers.get('x-synth-size'), response.headers.get('content-length')]) {
+    if (header === null) continue;
+    const value = Number(header);
+    if (Number.isInteger(value) && value >= 0) candidates.push(value);
+  }
+  return candidates.length > 0 ? Math.max(...candidates) : null;
 }
 
 /** Запись инвентаря для адреса, не ответившего на `/capabilities`. */
