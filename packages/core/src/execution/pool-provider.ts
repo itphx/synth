@@ -100,6 +100,91 @@ export function poolKeyString(key: ExecutionPoolKey): string {
   return `${key.scope}:${id}:${cls}:${profile}`;
 }
 
+/**
+ * Публичное описание пула исполнения (PROP-135 Ф6b-1) — диагностика для
+ * admin-API/UI.
+ *
+ * **Без адреса и токена**: `url` пула и его токен — секреты доступа к
+ * исполнителю (инвариант 13), наружу они не отдаются. Ключ пула — только если
+ * его знает провайдер (у `static` пулы адресуются профилем — ключа нет).
+ */
+export interface PoolInfo {
+  /** Канонический ключ пула (`poolKeyString`); у `static` — отсутствует. */
+  key?: string;
+  /** Имя профиля исполнения пула. */
+  profile: string;
+  /** Состояние: задан профилем (`configured`), готов (`ready`), снимается (`draining`). */
+  state: 'configured' | 'ready' | 'draining';
+  /** Когда пул выдан (ISO-8601). */
+  createdAt?: string;
+  /** Когда пул последний раз использовался (ISO-8601). */
+  lastUsedAt?: string;
+}
+
+/**
+ * Разбор канонического ключа пула (`poolKeyString`) обратно в ключ.
+ *
+ * Нужен admin-API (`POST /pools/:key/drain`, `DELETE /pools/:key`): клиент
+ * присылает **строку** ключа (как в протоколе provisioner'а), а методы
+ * провайдера принимают объект. Формат: `instance:<class>:<profile>` либо
+ * `<scope>:<id>:<class>:<profile>`; профиль — остаток после класса (имя может
+ * содержать `:`).
+ *
+ * @throws Error — пустая строка, неизвестная область/класс, пустой id или профиль.
+ */
+export function parsePoolKey(key: string): ExecutionPoolKey {
+  const raw = (key ?? '').trim();
+  const parts = raw.split(':');
+  const scope = parts[0];
+  let parsed: ExecutionPoolKey | null = null;
+  if (scope === 'instance' && parts.length >= 3) {
+    parsed = {
+      scope: 'instance',
+      class: toPoolClass(parts[1]),
+      profile: parts.slice(2).join(':'),
+    };
+  } else if ((scope === 'project' || scope === 'session') && parts.length >= 4) {
+    const id = parts[1] ?? '';
+    if (id.trim() === '') throw new Error(`execution pool key "${raw}" has no scope id`);
+    parsed = {
+      scope,
+      id,
+      class: toPoolClass(parts[2]),
+      profile: parts.slice(3).join(':'),
+    };
+  }
+  if (!parsed) throw new Error(`invalid execution pool key "${raw}"`);
+  if (parsed.profile.trim() === '') {
+    throw new Error(`execution pool key "${raw}" has no profile`);
+  }
+  return parsed;
+}
+
+/** Класс пула из сегмента ключа; неизвестный — ошибка (fail-closed). */
+function toPoolClass(value: string | undefined): ExecutionPoolClass {
+  if (value === 'exec' || value === 'browser' || value === 'sandbox') return value;
+  throw new Error(`invalid execution pool class "${value ?? ''}"`);
+}
+
+/**
+ * Метка времени provisioner'а (мс epoch либо ISO-строка) → ISO-8601.
+ *
+ * Невалидное/отсутствующее значение — `undefined` (поле не отдаём): пул без
+ * времени жизни всё равно показывается, «битая» дата наружу не пойдёт.
+ */
+function toIsoTime(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return new Date(value).toISOString();
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return undefined;
+    const ms = Date.parse(trimmed);
+    if (!Number.isNaN(ms)) return new Date(ms).toISOString();
+  }
+  return undefined;
+}
+
 /** Адрес (и необязательный токен) пула исполнения. */
 export interface ExecutionPoolRef {
   /** Адрес исполнителя пула (`http://…`). */
@@ -124,6 +209,12 @@ export interface ExecutionPoolProvider {
   drain?(key: ExecutionPoolKey): Promise<void>;
   /** Удалить пул (освободить ресурсы). */
   release?(key: ExecutionPoolKey): Promise<void>;
+  /**
+   * PROP-135 Ф6b-1: список известных пулов для диагностики (без адресов и
+   * токенов). Не задан — провайдер не умеет перечислять пулы (admin-API
+   * ответит `503 EXECUTION_PROVIDER_UNAVAILABLE`).
+   */
+  list?(): Promise<PoolInfo[]>;
   /** Диагностика: имя провайдера и известные профили. */
   capabilities?(): Promise<{ provider: string; profiles: string[] }>;
 }
@@ -183,6 +274,19 @@ export class StaticExecutionPoolProvider implements ExecutionPoolProvider {
   async capabilities(): Promise<{ provider: string; profiles: string[] }> {
     return { provider: 'static', profiles: Object.keys(this._profiles) };
   }
+
+  /**
+   * PROP-135 Ф6b-1: пулы статического провайдера — профили конфигурации.
+   *
+   * Ключа пула нет (адресация по профилю), состояние — `configured`:
+   * физического пула с жизненным циклом у `static` не существует.
+   */
+  async list(): Promise<PoolInfo[]> {
+    return Object.keys(this._profiles).map((profile) => ({
+      profile,
+      state: 'configured' as const,
+    }));
+  }
 }
 
 /** Опции HTTP-провайдера пулов. */
@@ -208,6 +312,7 @@ export interface HttpExecutionPoolProviderOptions {
  * - `POST {url}/v1/pools/{key}/touch` — продлить жизнь пула (best-effort);
  * - `POST {url}/v1/pools/{key}/drain` — слить пул (best-effort);
  * - `DELETE {url}/v1/pools/{key}` — удалить пул (best-effort);
+ * - `GET {url}/v1/pools` — список пулов (диагностика, без адресов и токенов);
  * - `GET {url}/v1/capabilities` — диагностика (`{ provider, profiles }`).
  *
  * `{key}` — **URL-encoded** канонический ключ пула (`poolKeyString`).
@@ -269,6 +374,44 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
 
   async release(key: ExecutionPoolKey): Promise<void> {
     await this._bestEffort('DELETE', `/v1/pools/${encodeURIComponent(poolKeyString(key))}`);
+  }
+
+  /**
+   * PROP-135 Ф6b-1: список пулов у provisioner'а (`GET /v1/pools`).
+   *
+   * Ответ провайдера несёт `url` пула — в DTO он **не попадает** (секрет
+   * доступа к исполнителю): наружу идут только ключ, профиль, состояние и
+   * метки времени. Записи без профиля пропускаются (нечего показать).
+   */
+  async list(): Promise<PoolInfo[]> {
+    const response = await this._request('GET', '/v1/pools', undefined, true);
+    const payload = (await response.json().catch(() => null)) as { pools?: unknown } | null;
+    const raw = Array.isArray(payload?.pools) ? payload.pools : [];
+    const pools: PoolInfo[] = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const record = entry as {
+        key?: unknown;
+        profile?: unknown;
+        state?: unknown;
+        createdAt?: unknown;
+        lastUsedAt?: unknown;
+      };
+      const profile = typeof record.profile === 'string' ? record.profile.trim() : '';
+      if (profile === '') continue;
+      const key = typeof record.key === 'string' ? record.key.trim() : '';
+      const createdAt = toIsoTime(record.createdAt);
+      const lastUsedAt = toIsoTime(record.lastUsedAt);
+      pools.push({
+        ...(key !== '' ? { key } : {}),
+        profile,
+        state:
+          record.state === 'draining' ? 'draining' : record.state === 'ready' ? 'ready' : 'configured',
+        ...(createdAt !== undefined ? { createdAt } : {}),
+        ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
+      });
+    }
+    return pools;
   }
 
   async capabilities(): Promise<{ provider: string; profiles: string[] }> {

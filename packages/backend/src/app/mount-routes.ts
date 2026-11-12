@@ -44,6 +44,8 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
+  // PROP-135 Ф6b-1: профили и пулы исполнения — admin-API (`/api/v2/execution/*`).
+  createExecutionRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
   createMemoryRoutes, MEMORY_PLUGIN_NAME, MemoryProviderUnavailableError, executeToolDef,
   // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`).
@@ -1435,6 +1437,27 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     readGuard: auth.requirePermission('ADMIN'),
     writeGuard: auth.requirePermission('ADMIN'),
   }));
+
+  // PROP-135 Ф6b-1: профили и пулы исполнения (`/api/v2/execution/*`).
+  // Managed RBAC: чтение профилей/пулов — ADMIN|LEAD (обзор инстанса),
+  // `drain`/`release` — только ADMIN (управление ресурсами provisioner'а).
+  // Адреса и токены пулов наружу не отдаются (инвариант 13).
+  app.route('/api/v2/execution', createExecutionRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      ...(deps.executionConfig ? { executionConfig: deps.executionConfig } : {}),
+      executionRouter: deps.executionRouter,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN', 'LEAD'),
+      writeGuard: auth.requirePermission('ADMIN'),
+      messages: {
+        invalidKey: (c) => t('errors.validation.executionPoolKey', undefined, c),
+        providerUnavailable: (c) => t('errors.unavailable.executionProvider', undefined, c),
+        poolNotFound: (c, key) => `${t('errors.notFound.executionPool', undefined, c)} (${key})`,
+      },
+    },
+  ));
 
   // ADR-133: админ-раздел «Обновления» — runtime-тумблер автопроверки.
   // Managed RBAC: чтение и запись — только ADMIN.

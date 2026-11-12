@@ -52,6 +52,11 @@
  * `sandbox_exec` обращается к отдельному пулу своего профиля. При
  * `provider: static` класс игнорируется (адрес — по профилю).
  *
+ * `poolProvider()` (PROP-135 Ф6b-1) отдаёт провайдер пулов для admin-API
+ * (`/api/v2/execution/pools*`): при `provider: http` — тот же экземпляр, что
+ * у ленивых портов (список/`drain`/`release` видят один реестр пулов); при
+ * `static`/`inline` — `undefined` (пулов с жизненным циклом нет).
+ *
  * ## Чего роутер НЕ делает
  *
  * - не provisioner'ит поды (это следующий слайс Ф4 — сам сервис provisioner);
@@ -136,6 +141,15 @@ export interface ExecutionRouter {
    * точка отката binding'а. Не задан — фоллбэк дефолтом роутера при `portFor`.
    */
   defaultProfile?(): string;
+  /**
+   * PROP-135 Ф6b-1: провайдер пулов исполнения — источник диагностики пулов
+   * (`GET /api/v2/execution/pools`) и операций `drain`/`release`.
+   *
+   * Возвращает провайдер при `execution.remote.provider: http` (динамические
+   * пулы у provisioner'а); `undefined` — пулов с жизненным циклом нет
+   * (`static` — адресация по профилю, `inline` — исполнение в процессе).
+   */
+  poolProvider?(): ExecutionPoolProvider | undefined;
 }
 
 /**
@@ -232,6 +246,13 @@ export async function createExecutionRouter(
   // игнорируются — поведение как до Ф4a.
   if (!config || config.mode === 'inline' || config.remote.pooling === 'instance') {
     const port = opts.instancePort ?? (await createPort(config));
+    // PROP-135 Ф6b-1: при `provider: http` провайдер пулов есть и при
+    // instance-пуле (единственный пул инстанса) — admin-API показывает его
+    // пулы. `static`/`inline` пулов с жизненным циклом не имеют.
+    if (config && config.mode !== 'inline' && config.remote.provider === 'http') {
+      const provider = opts.poolProvider ?? createExecutionPoolProvider(config.remote);
+      return { portFor: () => port, poolProvider: () => provider };
+    }
     return { portFor: () => port };
   }
   const remote = config.remote;
@@ -393,6 +414,9 @@ function createHttpProviderRouter(
     // проверяется только имя, без обращения к нему.
     profiles: () => [...knownProfiles(remote)],
     defaultProfile: () => defaultName,
+    // PROP-135 Ф6b-1: админ-диагностика пулов у provisioner'а (`list`) и
+    // операции `drain`/`release` — тот же провайдер, что у ленивых портов.
+    poolProvider: () => provider,
   };
 }
 

@@ -109,6 +109,10 @@ const en: Dictionary = {
   'errors.notFound.memoryProject': 'Project not found',
   'errors.validation.memoryWorkspaceRequired': 'The project has no workspace: a file index cannot be built',
   'errors.unavailable.memoryProvider': 'The memory provider is unavailable: the memory plugin is not active',
+  // PROP-135 (execution profiles/pools admin API)
+  'errors.validation.executionPoolKey': 'Invalid execution pool key (expected instance:<class>:<profile> or <project|session>:<id>:<class>:<profile>)',
+  'errors.unavailable.executionProvider': 'The execution pool provider is unavailable: dynamic pools require execution.remote.provider=http',
+  'errors.notFound.executionPool': 'Execution pool not found',
   'errors.notFound.memoryIndex': 'Memory index not found',
   'errors.failed.memoryIndex': 'Failed to perform the memory index operation',
   'memory.indexCreated': 'Memory index created',
@@ -307,6 +311,12 @@ const ru: Dictionary = {
   'errors.notFound.memoryProject': 'Проект не найден',
   'errors.validation.memoryWorkspaceRequired': 'У проекта нет рабочего каталога: индекс файлов строить негде',
   'errors.unavailable.memoryProvider': 'Провайдер памяти недоступен: плагин памяти не активен',
+  // PROP-135: admin-API профилей и пулов исполнения
+  'errors.validation.executionPoolKey':
+    'Некорректный ключ пула исполнения (ожидается instance:<class>:<profile> или <project|session>:<id>:<class>:<profile>)',
+  'errors.unavailable.executionProvider':
+    'Провайдер пулов исполнения недоступен: динамические пулы требуют execution.remote.provider=http',
+  'errors.notFound.executionPool': 'Пул исполнения не найден',
   'errors.notFound.memoryIndex': 'Индекс памяти не найден',
   'errors.failed.memoryIndex': 'Не удалось выполнить операцию с индексом памяти',
   'memory.indexCreated': 'Индекс памяти создан',

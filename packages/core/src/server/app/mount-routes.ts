@@ -44,6 +44,8 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
+  // PROP-135 Ф6b-1: профили и пулы исполнения — admin-API (`/api/v2/execution/*`).
+  createExecutionRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
   createMemoryRoutes, MEMORY_PLUGIN_NAME,
   createMetaRoutes,
@@ -489,6 +491,18 @@ export function mountStandaloneRoutes(
     updates: config.updatesConfig,
     audit: maintenanceAudit,
   }));
+
+  // PROP-135 Ф6b-1: профили и пулы исполнения (`/api/v2/execution/*`).
+  // Только чтение состояния **этого** процесса + `drain`/`release` пулов
+  // provisioner'а; адреса и токены пулов наружу не отдаются (инвариант 13).
+  // Core — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC.
+  app.route('/api/v2/execution', createExecutionRoutes(
+    auth,
+    {
+      ...(deps.executionConfig ? { executionConfig: deps.executionConfig } : {}),
+      executionRouter: deps.executionRouter,
+    },
+  ));
 
   // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).

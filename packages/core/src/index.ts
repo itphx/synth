@@ -549,6 +549,7 @@ export { createInstanceExecutionPort, defaultPooledPortFactory } from './executi
 export {
   createExecutionPoolProvider,
   isExecutionPoolProvider,
+  parsePoolKey,
   poolKeyString,
   ExecutionPoolProviderError,
   StaticExecutionPoolProvider,
@@ -561,6 +562,7 @@ export type {
   ExecutionPoolRef,
   ExecutionPoolScope,
   HttpExecutionPoolProviderOptions,
+  PoolInfo,
 } from './execution/pool-provider.js';
 // PROP-135 Ф4b-1: ленивый порт на динамический пул (адрес пула — от
 // provisioner'а, порт собирается при первом обращении).
@@ -2270,6 +2272,17 @@ export type {
 // PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
 // деталь, лог, остановка, удаление).
 export { createProcessRoutes } from './server/routes/processes.js';
+// PROP-135 Ф6b-1: admin-API профилей и пулов исполнения
+// (`/api/v2/execution/profiles|pools*`) — диагностика и `drain`/`release`.
+export { createExecutionRoutes } from './server/routes/execution.js';
+export type {
+  ExecutionProfilesDto,
+  ExecutionPoolsDto,
+  ExecutionProviderKind,
+  ExecutionRoutesDeps,
+  ExecutionRoutesMessages,
+  ExecutionRoutesOptions,
+} from './server/routes/execution.js';
 // ADR-115: HTTP-контур вложений (загрузка multipart + раздача байтов с Range).
 export { createAttachmentRoutes } from './server/routes/attachments.js';
 export type {

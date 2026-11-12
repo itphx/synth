@@ -2792,6 +2792,40 @@ the list while the tab is active.
 
 ---
 
+### 5.41 Execution: profiles and pools — `/api/v2/execution` (both, PROP-135 phase 6b-1)
+
+Diagnostics for the agent-command execution subsystem (`execution.*` is a start-up
+parameter, invariant 24) and control of the provisioner's dynamic pools
+(`provider: http`). Factory — `createExecutionRoutes` (core); the backend mounts it and
+passes RBAC/`t()` through `opts`. One implementation for both standalone and managed.
+
+| Method | Path | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/execution/profiles` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Effective configuration → `200 { provider, pooling, defaultProfile, profiles }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — no `execution` section), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — known profile names (the default profile is always included; `inline` → `[]`) |
+| GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` | Pool list → `200 { provider, pools: PoolInfo[] }`. `http` — the provider's `GET /v1/pools`; `static` — configuration profiles as `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**no** pool address and no token) |
+| POST | `/api/v2/execution/pools/:key/drain` | `ADMIN` | Drain a pool → `202 {ok:true}`. `:key` is the canonical pool key (`instance:<class>:<profile>`, `project:<id>:<class>:<profile>`, `session:<id>:<class>:<profile>`), URL-encoded in the path. `drain` is best-effort: `202` acknowledges the request, the actual teardown happens on the provisioner side. A key missing from the provider registry → `404 NOT_FOUND`; an unavailable registry (no `list`) skips the check |
+| DELETE | `/api/v2/execution/pools/:key` | `ADMIN` | Delete a pool → `202 {ok:true}`. **Idempotent**: a repeated `DELETE` (including for a pool already removed by the idle timeout) is `202` again |
+
+**Error codes.** `400 VALIDATION_ERROR` — the pool key does not match the format;
+`404 NOT_FOUND` — the pool is unknown to the provider registry; `503
+EXECUTION_PROVIDER_UNAVAILABLE` — there is no pool provider (`static`/`inline` have no
+pools with a lifecycle), it cannot perform the requested operation, or the provisioner
+is unreachable. Errors use the API v2 shape `{error:{code,message}}`.
+
+**Secrets (invariant 13).** Neither the pool/executor address nor any token (pool,
+executor, provisioner) is ever returned: the DTO carries only the key, profile, state
+and timestamps. The provisioner token is read inside `HttpExecutionPoolProvider` and
+never reaches error texts.
+
+**Pools exist only with `provider: http`.** With `static`, addressing is by profile
+(there is no pool key); with `inline`, execution happens in-process — `drain` and
+`release` answer `503`. With `provider: http` and `pooling: instance`, pools are
+visible (the single instance pool) and there are no per-project/per-session keys.
+
+**Misc.** The state is local to the process (the hybrid mode does not proxy it: this is
+the configuration and the pools of **this** instance); `execution.*` changes only on
+restart (invariant 24), so the contour has no `PUT`.
+
 ## 6. Sources
 
 | Component | File |

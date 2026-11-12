@@ -3250,6 +3250,41 @@ payload — **snake_case** `{ project_id, worktree_id?, action }`, где `actio
 (sweep, ADR-114 §7.4) и `prune` проекта; UI-поведение —
 [docs/WORKTREES.md](./WORKTREES.md) §9.
 
+### 5.41 Исполнение: профили и пулы — `/api/v2/execution` (оба, PROP-135 Ф6b-1)
+
+Диагностика подсистемы исполнения агентских команд (`execution.*` — параметр
+запуска, инвариант 24) и управление динамическими пулами provisioner'а
+(`provider: http`). Фабрика — `createExecutionRoutes` (core), backend монтирует
+её и передаёт RBAC/`t()` через `opts`. Одна реализация на standalone и managed.
+
+| Метод | Путь | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/execution/profiles` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Эффективная конфигурация → `200 { provider, pooling, defaultProfile, profiles }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — секции `execution` нет), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — имена известных профилей (профиль по умолчанию входит всегда; у `inline` — `[]`) |
+| GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` | Список пулов → `200 { provider, pools: PoolInfo[] }`. `http` — `GET /v1/pools` провайдера; `static` — профили конфигурации как `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**без** адреса пула и токена) |
+| POST | `/api/v2/execution/pools/:key/drain` | `ADMIN` | Слить пул → `202 {ok:true}`. `:key` — канонический ключ пула (`instance:<class>:<profile>`, `project:<id>:<class>:<profile>`, `session:<id>:<class>:<profile>`), в URL — URL-encoded. `drain` — best-effort: `202` подтверждает приём, фактическое снятие идёт у provisioner'а. Ключ, которого нет в реестре провайдера → `404 NOT_FOUND`; реестр недоступен (нет `list`) — проверка пропускается |
+| DELETE | `/api/v2/execution/pools/:key` | `ADMIN` | Удалить пул → `202 {ok:true}`. **Идемпотентно**: повторный `DELETE` (в т.ч. по уже удалённому по idle-таймауту пулу) — тоже `202` |
+
+**Коды ошибок.** `400 VALIDATION_ERROR` — ключ пула не соответствует формату;
+`404 NOT_FOUND` — пул неизвестен реестру провайдера; `503
+EXECUTION_PROVIDER_UNAVAILABLE` — провайдера пулов нет (`static`/`inline` — пулов
+с жизненным циклом не существует), он не умеет запрошенную операцию или
+provisioner недоступен. Ошибки — единый формат API v2 `{error:{code,message}}`.
+
+**Секреты (инвариант 13).** Ни адрес пула/исполнителя, ни токен (пула,
+исполнителя, provisioner'а) в ответы не попадают: DTO содержит только ключ,
+профиль, состояние и метки времени. Токен provisioner'а читается внутри
+`HttpExecutionPoolProvider` и в тексты ошибок не идёт.
+
+**Пулы только у `provider: http`.** При `static` адресация идёт по профилю
+(ключа пула нет), при `inline` исполнение происходит в процессе — `drain` и
+`release` в этих режимах отвечают `503`. При `provider: http` и
+`pooling: instance` пулы видны (единственный пул инстанса), а ключи
+проектов/сессий отсутствуют.
+
+**Прочее.** Состояние — локальное для процесса (гибрид не проксирует: это
+конфигурация и пулы **этого** инстанса); `execution.*` меняется только
+рестартом (инвариант 24), поэтому отдельного `PUT` у контура нет.
+
 ## 6. Источники
 
 | Компонент | Файл |

@@ -2127,6 +2127,9 @@ export async function createBackendDeps(
     // PROP-135 Ф6a: роутер портов исполнения — каталог профилей для
     // валидации `project.executor`/`settings.executorProfile` в роутах.
     executionRouter,
+    // PROP-135 Ф6b-1: эффективная секция `execution` — admin-API профилей и
+    // пулов (`/api/v2/execution/*`): `provider`/`pooling`/каталог профилей.
+    executionConfig: execution,
     // ADR-106 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
     approvalRegistry,
     // ADR-096: контекст хранения инстанса — для операций, которым нужен

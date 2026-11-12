@@ -567,3 +567,59 @@ describe('PROP-135 Ф4b-1: роутер с провайдером пулов htt
     );
   });
 });
+
+/**
+ * PROP-135 Ф6b-1: роутер отдаёт провайдер пулов для admin-API
+ * (`/api/v2/execution/pools*`). Провайдер есть только у `provider: http`;
+ * `static`/`inline` пулов с жизненным циклом не имеют.
+ */
+describe('PROP-135 Ф6b-1: poolProvider() роутера', () => {
+  /** Провайдер-заглушка (admin-API нужен только сам факт наличия/`list`). */
+  function stubProvider() {
+    return {
+      ensure: async () => ({ url: 'http://pool-1:8080' }),
+      list: async () => [{ profile: 'default', state: 'ready' as const }],
+    };
+  }
+
+  it('provider=http, pooling=project → тот же провайдер, что у ленивых портов', async () => {
+    const provider = stubProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({ provider: 'http', pooling: 'project', provisioner: { url: 'http://provisioner:8080' } }),
+      poolProvider: provider,
+    });
+    expect(router.poolProvider?.()).toBe(provider);
+    expect(await router.poolProvider?.()?.list?.()).toHaveLength(1);
+  });
+
+  it('provider=http, pooling=instance → провайдер тоже есть (единственный пул инстанса)', async () => {
+    const provider = stubProvider();
+    const router = await createExecutionRouter({
+      config: makeConfig({ provider: 'http', pooling: 'instance', provisioner: { url: 'http://provisioner:8080' } }),
+      poolProvider: provider,
+      instancePort: fakePort('instance'),
+    });
+    expect(router.poolProvider?.()).toBe(provider);
+  });
+
+  it('provider=static → провайдера пулов нет', async () => {
+    const factory = fakeFactory();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        pooling: 'project',
+        defaultProfile: 'a',
+        profiles: { a: { url: ['http://a:8080'] } },
+      }),
+      createPort: factory.createPort,
+    });
+    expect(router.poolProvider).toBeUndefined();
+  });
+
+  it('inline → провайдера пулов нет', async () => {
+    const router = await createExecutionRouter({
+      config: makeConfig({ mode: 'inline' }),
+      instancePort: fakePort('inline'),
+    });
+    expect(router.poolProvider).toBeUndefined();
+  });
+});

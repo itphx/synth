@@ -19,6 +19,7 @@ import {
   ExecutionPoolProviderError,
   HttpExecutionPoolProvider,
   isExecutionPoolProvider,
+  parsePoolKey,
   poolKeyString,
   StaticExecutionPoolProvider,
   type ExecutionPoolKey,
@@ -468,5 +469,123 @@ describe('PROP-135 Ф4b-1: фабрика провайдера', () => {
       profile: 'default',
     });
     expect(ref.url).toBe('http://executor:8080');
+  });
+});
+
+/**
+ * PROP-135 Ф6b-1: диагностика пулов (`list`) и разбор ключа (`parsePoolKey`)
+ * — основа admin-API `/api/v2/execution/pools*`.
+ */
+describe('PROP-135 Ф6b-1: список пулов и разбор ключа', () => {
+  it('static.list: профили конфигурации состоянием configured, без ключа', async () => {
+    const provider = new StaticExecutionPoolProvider({
+      default: { url: ['http://executor:8080'] },
+      devops: { url: ['http://executor-devops:8080'] },
+    });
+    expect(await provider.list()).toEqual([
+      { profile: 'default', state: 'configured' },
+      { profile: 'devops', state: 'configured' },
+    ]);
+  });
+
+  it('http.list: GET /v1/pools, без url и токенов, время — ISO', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+        });
+        return jsonResponse({
+          pools: [
+            {
+              key: 'project:prj_1:exec:default',
+              url: 'http://pool-1:8080',
+              profile: 'default',
+              scope: 'project',
+              id: 'prj_1',
+              state: 'ready',
+              createdAt: 1_761_000_000_000,
+              lastUsedAt: 1_761_000_600_000,
+            },
+            {
+              key: 'session:ses_1:sandbox:devops',
+              url: 'http://pool-2:8080',
+              profile: 'devops',
+              scope: 'session',
+              id: 'ses_1',
+              state: 'draining',
+              createdAt: 1_761_000_000_000,
+              lastUsedAt: 1_761_000_600_000,
+            },
+            // Битая запись без профиля — пропускается.
+            { key: 'instance:exec:' },
+          ],
+        });
+      },
+    });
+
+    const pools = await provider.list();
+    expect(calls[0]?.url).toBe('http://provisioner:8080/v1/pools');
+    expect(calls[0]?.headers.authorization).toBe(`Bearer ${PROVIDER_TOKEN}`);
+    expect(pools).toEqual([
+      {
+        key: 'project:prj_1:exec:default',
+        profile: 'default',
+        state: 'ready',
+        createdAt: new Date(1_761_000_000_000).toISOString(),
+        lastUsedAt: new Date(1_761_000_600_000).toISOString(),
+      },
+      {
+        key: 'session:ses_1:sandbox:devops',
+        profile: 'devops',
+        state: 'draining',
+        createdAt: new Date(1_761_000_000_000).toISOString(),
+        lastUsedAt: new Date(1_761_000_600_000).toISOString(),
+      },
+    ]);
+    // Адрес пула наружу не уходит (секрет доступа к исполнителю).
+    expect(JSON.stringify(pools)).not.toContain('http://pool-');
+  });
+
+  it('parsePoolKey: канонический ключ → объект (и обратно)', () => {
+    expect(parsePoolKey('instance:exec:default')).toEqual({
+      scope: 'instance',
+      class: 'exec',
+      profile: 'default',
+    });
+    expect(parsePoolKey('project:prj_1:exec:devops')).toEqual({
+      scope: 'project',
+      id: 'prj_1',
+      class: 'exec',
+      profile: 'devops',
+    });
+    expect(parsePoolKey('session:ses_1:sandbox:gpu:large')).toEqual({
+      scope: 'session',
+      id: 'ses_1',
+      class: 'sandbox',
+      profile: 'gpu:large',
+    });
+    expect(poolKeyString(parsePoolKey('session:ses_1:browser:default'))).toBe(
+      'session:ses_1:browser:default',
+    );
+  });
+
+  it('parsePoolKey: невалидные ключи → ошибка (fail-closed)', () => {
+    for (const bad of [
+      '',
+      'instance',
+      'instance:exec',
+      'instance:nope:default',
+      'project::exec:default',
+      'project:prj_1:exec:',
+      'tenant:prj_1:exec:default',
+    ]) {
+      expect(() => parsePoolKey(bad)).toThrow();
+    }
   });
 });

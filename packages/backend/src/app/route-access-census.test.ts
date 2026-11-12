@@ -389,6 +389,12 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('POST', '/api/v2/processes/:id/stop', G_PROCESS, [404], { body: {} }),
   r('DELETE', '/api/v2/processes/:id', G_PROCESS, [404]),
 
+  // --- Профили и пулы исполнения (PROP-135 Ф6b-1) ---
+  // Мутации пулов — только ADMIN (управление ресурсами provisioner'а); чужой
+  // USER отсекается ролевым guard'ом до разбора ключа (поэтому 403, а не 400).
+  r('POST', '/api/v2/execution/pools/:key/drain', G_ADMIN, [403]),
+  r('DELETE', '/api/v2/execution/pools/:key', G_ADMIN, [403]),
+
   // --- Настройки: прокси/TLS профилей (ADR-099) — только ADMIN ---
   r('PUT', '/api/v2/settings/proxy/profiles/:name/password', G_ADMIN, [403], { body: {} }),
   r('DELETE', '/api/v2/settings/proxy/profiles/:name/password', G_ADMIN, [403]),
