@@ -578,6 +578,18 @@ export const defaultConfig: SynthConfig = {
       retentionDays: 30,
       path: '',
     },
+    // PROP-136b: зеркальный чекер команд в control plane — по умолчанию
+    // выключен (без него поведение прежнее); backend/managed поднимает
+    // `failMode` до `closed` профильным дефолтом.
+    commandPolicy: {
+      enabled: false,
+      provider: 'http',
+      url: '',
+      tokenSecret: '',
+      failMode: 'open',
+      timeoutMs: 2_000,
+      opaPath: '/v1/data/synth/exec/decision',
+    },
     // ADR-099: доверие TLS/CA исходящих соединений. Пусто — системное доверие
     // (поведение не меняется); caFile — корпоративный CA, cert/key — mTLS.
     tls: {},

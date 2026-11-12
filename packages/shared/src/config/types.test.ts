@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema, commandPolicyConfigSchema, securityConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('storageConfigSchema — лимиты чтения/предпросмотра', () => {
@@ -622,5 +622,54 @@ describe('attachmentsConfigSchema (ADR-115)', () => {
       attachmentsConfigSchema.parse({ modalityModels: { text: { provider: 'openai', model: 'gpt-4o' } } })
         .modalityModels,
     ).toEqual({});
+  });
+});
+
+describe('commandPolicyConfigSchema (PROP-136b)', () => {
+  it('дефолты: выключено, http, failMode open, таймаут 2 с, путь OPA', () => {
+    const parsed = commandPolicyConfigSchema.parse({});
+    expect(parsed).toEqual({
+      enabled: false,
+      provider: 'http',
+      url: '',
+      tokenSecret: '',
+      failMode: 'open',
+      timeoutMs: 2_000,
+      opaPath: '/v1/data/synth/exec/decision',
+    });
+  });
+
+  it('enabled: true без url → ошибка (fail-closed старта)', () => {
+    const result = commandPolicyConfigSchema.safeParse({ enabled: true });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some((i) => i.path.join('.') === 'url')).toBe(true);
+    }
+    expect(commandPolicyConfigSchema.safeParse({ enabled: true, url: '   ' }).success).toBe(false);
+    // С адресом — валидно.
+    expect(
+      commandPolicyConfigSchema.safeParse({ enabled: true, url: 'http://policy.local' }).success,
+    ).toBe(true);
+  });
+
+  it('provider/failMode — только закрытые наборы', () => {
+    expect(commandPolicyConfigSchema.safeParse({ provider: 'off' }).success).toBe(false);
+    expect(commandPolicyConfigSchema.safeParse({ failMode: 'deny' }).success).toBe(false);
+    expect(commandPolicyConfigSchema.parse({ provider: 'opa', failMode: 'closed' })).toMatchObject({
+      provider: 'opa',
+      failMode: 'closed',
+    });
+  });
+
+  it('timeoutMs — целое ≥ 1', () => {
+    expect(commandPolicyConfigSchema.safeParse({ timeoutMs: 0 }).success).toBe(false);
+    expect(commandPolicyConfigSchema.safeParse({ timeoutMs: 1.5 }).success).toBe(false);
+    expect(commandPolicyConfigSchema.parse({ timeoutMs: 5_000 }).timeoutMs).toBe(5_000);
+  });
+
+  it('securityConfigSchema подставляет секцию целиком (prefault)', () => {
+    const parsed = securityConfigSchema.parse({});
+    expect(parsed.commandPolicy.enabled).toBe(false);
+    expect(parsed.commandPolicy.failMode).toBe('open');
   });
 });

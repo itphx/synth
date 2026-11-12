@@ -605,6 +605,14 @@ security:
     enabled: false                # master switch; managed profile — true (env SYNTH_COMMAND_AUDIT_ENABLED)
     retentionDays: 30             # journal retention, days (DELETE ?older_than_days)
     path: ""                      # empty → {dataDir}/audit/commands.jsonl
+  commandPolicy:                  # PROP-136b: mirrored external command checker (optional; disabled — previous behaviour)
+    enabled: false                # env SYNTH_COMMAND_POLICY_ENABLED; enabled without url — startup error
+    provider: "http"              # http | opa                (env SYNTH_COMMAND_POLICY_PROVIDER)
+    url: ""                       # checker address           (env SYNTH_COMMAND_POLICY_URL)
+    tokenSecret: ""               # PATH to the bearer token file, not the value (env SYNTH_COMMAND_POLICY_TOKEN)
+    failMode: "open"              # closed | open; managed profile — closed (env SYNTH_COMMAND_POLICY_FAIL_MODE)
+    timeoutMs: 2000               # request timeout, ms        (env SYNTH_COMMAND_POLICY_TIMEOUT_MS)
+    opaPath: "/v1/data/synth/exec/decision"  # provider: opa (env SYNTH_COMMAND_POLICY_OPA_PATH)
 
 remote:                           # hybrid mode: local core + remote backend
   enabled: false
@@ -1492,7 +1500,57 @@ de-identified string. For `sandbox_exec` the command is `commands.join(" && ")`.
 
 Read — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
 `requireAuth`); metrics — `synth_command_audit_*` (see `docs/OBSERVABILITY.md`).
-Command policy checker is enforced **on the executor** before spawn (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, `http-json`/`opa` contracts, fail modes and cache — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Control-plane mirror and verdict audit — 136b-2.
+Command policy checker is enforced **on the executor** before spawn (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, `http-json`/`opa` contracts, fail modes and cache — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Control-plane mirror and verdict audit — `security.commandPolicy` (below).
+
+### Mirrored command checker (`security.commandPolicy`, PROP-136b)
+
+**Optional**: `enabled: false` (default) — previous behaviour, no provider is
+created, the command policy is never consulted.
+
+Mirrored check **in the control plane**: at the `execute_shell`/`sandbox_exec`
+execution point the command is sent to the external checker **before** the audit
+`started` record and before the launch. `deny` is an early refusal/UX: the model
+gets an `isError` result `Command denied by policy: <reason>`, the command is not
+executed, and the execution journal gets **one** record (`phase: "finished"`,
+`decision: "deny"`, `decidedBy: "policy"`, `durationMs: 0`, `provider`). `allow`
+continues the execution; both journal records carry `decidedBy: "policy"` and
+`provider` (`kind`/`ruleId`/`latencyMs`/`action`).
+
+**The security boundary is the executor** (PROP-136b-1): there the check runs
+before `spawn`. The control-plane mirror does not replace it and guarantees
+nothing in `inline` mode; it provides an early refusal and an audit trail.
+
+| Key | Default | Env | Meaning |
+|---|---|---|---|
+| `enabled` | `false` | `SYNTH_COMMAND_POLICY_ENABLED` | master switch (no provider is created when `false`) |
+| `provider` | `http` | `SYNTH_COMMAND_POLICY_PROVIDER` | `http` (`POST {url}/v1/check`) or `opa` (`POST {url}{opaPath}`) |
+| `url` | `""` | `SYNTH_COMMAND_POLICY_URL` | checker address; **required** when `enabled: true` |
+| `tokenSecret` | `""` | `SYNTH_COMMAND_POLICY_TOKEN` | **path** to the bearer token file (not the value, invariant 13) |
+| `failMode` | `open` | `SYNTH_COMMAND_POLICY_FAIL_MODE` | checker unavailable: `closed` → `deny`, `open` → `allow` + warning |
+| `timeoutMs` | `2000` | `SYNTH_COMMAND_POLICY_TIMEOUT_MS` | request timeout, ms (integer ≥ 1) |
+| `opaPath` | `/v1/data/synth/exec/decision` | `SYNTH_COMMAND_POLICY_OPA_PATH` | OPA decision path (`provider: opa`) |
+
+**Profile defaults.** `failMode`: standalone — `open` (schema), **managed/
+backend — `closed`** (`loadBackendConfig` → `baseDefaults`; an explicit
+`config.yaml`/env overrides it). Priority is the common one (ADR-023): env >
+`config.yaml` > profile default > schema.
+
+**`enabled: true` without `url` is a startup error** (fail-closed: otherwise the
+instance would silently run without the policy). Invalid env values (`provider`,
+`failMode`, `timeoutMs`, `enabled`) also fail configuration loading instead of
+being warn+ignored: this is a security setting.
+
+**Not switchable at runtime.** The provider is built at process startup; a change
+of `security.commandPolicy` (as with the rest of the UI "Security" section) is
+applied **after an instance restart** — there is no live re-initialization
+(invariant 24).
+
+Checker responses: `http` — `{action, reason?, rule_id?, ttl_ms?}`; `opa` —
+`{result: {allow, reason?, rule_id?}}`. Non-2xx, timeout, invalid response and an
+unreadable token file all mean "checker unavailable" (per `failMode`), and
+unavailability is never cached. Verdict cache: key `sha256(command + cwd +
+background)`, TTL — the response `ttl_ms` or 60 s; `deny` is cached like `allow`.
+Metrics — `synth_command_policy_*` (see `docs/OBSERVABILITY.md`).
 
 ### Tool policies (`tools.policy` / `mcp.policy`)
 

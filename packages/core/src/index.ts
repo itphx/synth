@@ -886,6 +886,21 @@ export type {
   CommandAuditMetricsSink,
 } from './engine/security/command-audit.js';
 
+// PROP-136b (слайс 136b-2a): зеркальный внешний чекер команд (control plane).
+export {
+  createCommandPolicyProvider,
+  COMMAND_POLICY_CACHE_MAX_ENTRIES,
+  COMMAND_POLICY_DEFAULT_TTL_MS,
+  COMMAND_POLICY_UNAVAILABLE_REASON,
+  COMMAND_POLICY_UNAVAILABLE_OPEN_REASON,
+} from './engine/security/command-policy.js';
+export type {
+  CommandPolicyInput,
+  CommandPolicyProvider,
+  CommandPolicyProviderDeps,
+  CommandPolicyVerdict,
+} from './engine/security/command-policy.js';
+
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
@@ -2585,6 +2600,10 @@ export {
   createCommandAuditMetrics,
   normalizeCommandAuditPhase,
   normalizeCommandAuditTool,
+  // PROP-136b (слайс 136b-2a): метрики зеркального чекера команд.
+  createCommandPolicyMetrics,
+  normalizeCommandPolicyOutcome,
+  normalizeCommandPolicyProvider,
   DATADIR_KINDS,
   SESSIONS_METRICS_INTERVAL_MS,
   STORAGE_RECORDS_INTERVAL_MS,

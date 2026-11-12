@@ -92,8 +92,10 @@ export async function loadBackendConfig(options?: LoadConfigOptions): Promise<Ba
       // PROP-136 (слайс 136a): managed-профиль включает аудит исполнений shell
       // по умолчанию (наблюдаемость произвольного кода обязательна); explicit
       // config.yaml/env (`SYNTH_COMMAND_AUDIT_ENABLED`) перебивают профиль,
-      // standalone остаётся выключенным.
-      security: { commandAudit: { enabled: true } },
+      // standalone остаётся выключенным. PROP-136b: зеркальный чекер команд в
+      // managed по умолчанию **fail-closed** (недоступность политики = deny);
+      // standalone сохраняет `open` из схемы.
+      security: { commandAudit: { enabled: true }, commandPolicy: { failMode: 'closed' } },
     },
     ...options,
   });

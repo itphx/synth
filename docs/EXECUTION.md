@@ -239,7 +239,7 @@ session:ses_1:sandbox:default
 
 **Остаток PROP-135:** **браузерный класс** пулов и MCP динамического пула (слайс 5b), UI/admin-API
 выбора профиля пулов (6b), зеркальная проверка внешнего чекера в control plane и запись вердикта в
-аудит (PROP-136b-2; проверка на исполнителе — §9.2, аудит исполнений — §9.1). `sandbox_exec` — сделан
+аудит — **сделано** в PROP-136b-2a (§9.2; проверка на исполнителе — §9.2, аудит исполнений — §9.1). `sandbox_exec` — сделан
 (слайс 5a, см. ниже); binding профиля — Ф6a (см. выше). Матрица «что уезжает в
 исполнитель» (§ ниже) на Ф4b-1 не меняется.
 
@@ -254,7 +254,7 @@ best-effort (остаток). Границы: группа прав `shell`, pla
 protected-paths `execute_shell` **не применяются** (команда идёт в другой образ/пул), containment
 `cwd` — лексический (реальный — на исполнителе). Аудит исполнений песочного профиля — PROP-136a
 (§9.1, общий журнал control plane); внешний чекер команд — 136b (проверка на исполнителе — §9.2,
-зеркало в control plane — остаток 136b-2).
+зеркало в control plane — §9.2, сделано в 136b-2a).
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
@@ -1200,8 +1200,8 @@ UX, а не граница безопасности. Поэтому вместо
   ([OBSERVABILITY.md](./OBSERVABILITY.md) §«Аудит исполнений shell»).
 - **Различие топологий нет:** журнал ведёт control plane — и в `inline`, и в `remote` (команда
   исполняется на исполнителе, факт запуска и результат известны control plane).
-- **Внешний чекер команд (136b)** — реализована **проверка на исполнителе** (слайс 136b-1, §9.2);
-  зеркальная проверка в control plane и запись вердикта в аудит — остаток 136b-2.
+- **Внешний чекер команд (136b)** — проверка **на исполнителе** (слайс 136b-1, §9.2) и
+  **зеркальная** проверка в control plane с записью вердикта в аудит (слайс 136b-2a, §9.2).
 
 ### 9.2. Внешний чекер команд (PROP-136b)
 
@@ -1250,8 +1250,34 @@ Shell считается произвольным кодом, поэтому р�
 | `SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS` | `60000` | TTL кэша вердиктов (`0` — без кэша) |
 | `SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH` | `/v1/data/synth/exec/decision` | путь OPA-решения |
 
-**Остаток (136b-2):** зеркальная проверка в control plane (ранний отказ и UX) и запись вердикта
-в аудит исполнений (связь `execution_id` с `decision`/`decidedBy: "policy"`).
+**Зеркальная проверка в control plane (136b-2a, реализовано).** В точке исполнения
+tool-call (`execute_shell`/`sandbox_exec`, та же, где пишется аудит §9.1) команда уходит тому же
+чекеру **до** аудита `started` и до запуска. Это **не** граница безопасности (принуждение — на
+исполнителе, выше): цель — ранний отказ и UX, а также след вердикта в журнале исполнений.
+
+- **Конфиг:** `security.commandPolicy` (`enabled`/`provider`/`url`/`tokenSecret`/`failMode`/
+  `timeoutMs`/`opaPath`), env `SYNTH_COMMAND_POLICY_*`; `enabled: true` без `url` — ошибка старта.
+  Подробности и профильные дефолты — [CONFIGURATION.md](./CONFIGURATION.md) §«Зеркальный чекер
+  команд». Без чекера (`enabled: false`, дефолт) поведение прежнее.
+- **`deny`** → tool-результат `isError: true` с текстом `Command denied by policy: <reason>`;
+  команда **не** исполняется. В журнал исполнений пишется **одна** запись: `phase: "finished"`,
+  `decision: "deny"`, `decidedBy: "policy"`, `durationMs: 0`, `matchedRule` (если чекер дал
+  `rule_id`), `reason` и `provider: {kind, ruleId?, latencyMs, action: "deny"}`. Записи `started`
+  нет намеренно: попытки исполнения не было.
+- **`allow`** → исполнение продолжается; обе записи журнала (`started`/`finished`) несут
+  `decidedBy: "policy"` и `provider` (`action: "allow"`; `reason` — при недоступности чекера в
+  `failMode: open`). Провайдера нет — прежнее `decidedBy: "permission"`.
+- **Отличие от enforcement:** на исполнителе проверка идёт до `spawn` и отказ возвращается как
+  `403 policy_denied`; здесь отказ — обычный `isError`-результат тула. В `inline`-режиме зеркало
+  остаётся единственным «внешним» голосом, но границей безопасности не является.
+- **Метрики control plane:** `synth_command_policy_total{outcome,provider}` и
+  `synth_command_policy_seconds{provider}` (отдельно от `synth_executor_command_policy_*` —
+  суммировать серии нельзя).
+- **Токен:** путь в `security.commandPolicy.tokenSecret` (env `SYNTH_COMMAND_POLICY_TOKEN`), значение
+  читается лениво через `readExecutorToken` и в логи не попадает; нечитаемый файл — «чекер
+  недоступен» (по `failMode`).
+- **Остаток (136b-2b):** UI/CSV-выгрузка журнала, env чекера в Helm-чарте (отдельный шаг),
+  plugin-провайдер политики.
 
 
 ---

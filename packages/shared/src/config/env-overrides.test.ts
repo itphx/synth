@@ -714,3 +714,55 @@ describe('llmGateway.enabled env (F4, аудит S1)', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('security.commandPolicy env (PROP-136b)', () => {
+  it('применяет SYNTH_COMMAND_POLICY_* в security.commandPolicy', () => {
+    const config: Record<string, unknown> = {
+      security: {
+        commandPolicy: { enabled: false, provider: 'http', url: '', failMode: 'open' },
+      },
+    };
+    const result = applyObjectEnvOverrides(config, {
+      SYNTH_COMMAND_POLICY_ENABLED: 'true',
+      SYNTH_COMMAND_POLICY_PROVIDER: 'opa',
+      SYNTH_COMMAND_POLICY_URL: ' http://policy.local ',
+      SYNTH_COMMAND_POLICY_TOKEN: '/etc/synth/policy.token',
+      SYNTH_COMMAND_POLICY_FAIL_MODE: 'closed',
+      SYNTH_COMMAND_POLICY_TIMEOUT_MS: '3500',
+      SYNTH_COMMAND_POLICY_OPA_PATH: '/v1/data/custom/decision',
+    });
+    expect((result['security'] as Record<string, unknown>)['commandPolicy']).toEqual({
+      enabled: true,
+      provider: 'opa',
+      url: 'http://policy.local',
+      failMode: 'closed',
+      tokenSecret: '/etc/synth/policy.token',
+      timeoutMs: 3_500,
+      opaPath: '/v1/data/custom/decision',
+    });
+  });
+
+  it('пустые переменные — «не задано» (дефолты сохраняются)', () => {
+    const config: Record<string, unknown> = { security: {} };
+    applyObjectEnvOverrides(config, { SYNTH_COMMAND_POLICY_URL: '   ' });
+    expect((config['security'] as Record<string, unknown>)['commandPolicy']).toBeUndefined();
+  });
+
+  it('невалидные значения — ошибка загрузки (fail-closed, не warn+игнор)', () => {
+    expect(() =>
+      applyObjectEnvOverrides({ security: {} }, { SYNTH_COMMAND_POLICY_ENABLED: 'maybe' }),
+    ).toThrow(/SYNTH_COMMAND_POLICY_ENABLED/);
+    expect(() =>
+      applyObjectEnvOverrides({ security: {} }, { SYNTH_COMMAND_POLICY_PROVIDER: 'off' }),
+    ).toThrow(/SYNTH_COMMAND_POLICY_PROVIDER/);
+    expect(() =>
+      applyObjectEnvOverrides({ security: {} }, { SYNTH_COMMAND_POLICY_FAIL_MODE: 'deny' }),
+    ).toThrow(/SYNTH_COMMAND_POLICY_FAIL_MODE/);
+    expect(() =>
+      applyObjectEnvOverrides({ security: {} }, { SYNTH_COMMAND_POLICY_TIMEOUT_MS: '0' }),
+    ).toThrow(/SYNTH_COMMAND_POLICY_TIMEOUT_MS/);
+    expect(() =>
+      applyObjectEnvOverrides({ security: {} }, { SYNTH_COMMAND_POLICY_TIMEOUT_MS: '1.5' }),
+    ).toThrow(/SYNTH_COMMAND_POLICY_TIMEOUT_MS/);
+  });
+});

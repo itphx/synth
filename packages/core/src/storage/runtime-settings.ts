@@ -1001,6 +1001,17 @@ export function mergeSecurityConfig(
     // PROP-136: журнал исполнений команд — не runtime-настройка, переносим из
     // config (иначе объект терял бы поле и тип `SecurityConfig` расходился).
     commandAudit: base?.commandAudit ?? { enabled: false, retentionDays: 30, path: '' },
+    // PROP-136b: зеркальный чекер команд — стартовая конфигурация процесса
+    // (провайдер строится при старте), runtime её не меняет.
+    commandPolicy: base?.commandPolicy ?? {
+      enabled: false,
+      provider: 'http',
+      url: '',
+      tokenSecret: '',
+      failMode: 'open',
+      timeoutMs: 2_000,
+      opaPath: '/v1/data/synth/exec/decision',
+    },
     // ADR-076: мастер-ключ не относится к runtime-настройкам UI — переносим из config.
     secretKey: base?.secretKey ?? '',
     askTimeoutMs: runtime.askTimeoutMs

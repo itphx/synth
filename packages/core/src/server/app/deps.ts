@@ -88,6 +88,10 @@ import {
   createCommandAuditMetrics,
   // PROP-136: append-only журнал исполнений `execute_shell`/`sandbox_exec`.
   createCommandAuditLog,
+  // PROP-136b (слайс 136b-2a): метрики зеркального чекера команд
+  // (`synth_command_policy_*`) и сам провайдер.
+  createCommandPolicyMetrics,
+  createCommandPolicyProvider,
   // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`) — приёмник
   // для клиента удалённого порта.
   createExecutorMetricsCollector,
@@ -954,6 +958,17 @@ export async function createStandaloneDeps(
     ...(commandAuditMetrics ? { metrics: commandAuditMetrics } : {}),
   });
 
+  // PROP-136b (слайс 136b-2a): зеркальный чекер команд. Провайдер строится при
+  // старте из `security.commandPolicy` (как у исполнителя: `enabled: true` без
+  // адреса — ошибка старта, fail-closed). `enabled: false` → `null` — поведение
+  // прежнее. Метрики — `synth_command_policy_*`.
+  const commandPolicyMetrics = metrics ? createCommandPolicyMetrics(metrics) : undefined;
+  const commandPolicyProvider = effectiveSecurityConfig?.commandPolicy
+    ? createCommandPolicyProvider(effectiveSecurityConfig.commandPolicy, {
+        ...(commandPolicyMetrics ? { metrics: commandPolicyMetrics } : {}),
+      })
+    : null;
+
   // ADR-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
   // шифруется at-rest мастер-ключом), журнал доставок и движок над EventBus.
   const webhooksConfig: WebhooksConfig = {
@@ -1561,6 +1576,8 @@ export async function createStandaloneDeps(
     // PROP-136 (слайс 136a): журнал исполнений команд — тот же экземпляр
     // читает `GET /api/v2/audit/commands`.
     commandAudit: commandAuditLog,
+    // PROP-136b (слайс 136b-2a): зеркальный чекер команд (нет — прежнее поведение).
+    ...(commandPolicyProvider ? { commandPolicy: commandPolicyProvider } : {}),
     // ADR-036: общий AuditLogger — оркестратор и `GET /api/v2/audit` пишут
     // в один и тот же JSONL.
     gatewayAuditLogger,
@@ -2318,6 +2335,9 @@ export async function createStandaloneDeps(
     // PROP-136 (слайс 136a): журнал исполнений команд — роуты
     // `/api/v2/audit/commands` читают тот же экземпляр, что пишет оркестратор.
     commandAuditLog,
+    // PROP-136b (слайс 136b-2a): зеркальный чекер команд — возвращается для
+    // тестов/UI (провайдер уже передан оркестратору).
+    commandPolicyProvider,
     // ADR-036: порт regex-паттернов детекции секретов (`GET /api/v2/gateway/patterns`).
     gatewayPatternStore: patternStore,
     // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.

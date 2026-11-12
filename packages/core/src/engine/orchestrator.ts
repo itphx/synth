@@ -127,6 +127,13 @@ import {
   sha256Hex,
 } from './security/command-audit.js';
 import type { CommandAuditLog } from './security/command-audit.js';
+// PROP-136b (слайс 136b-2a): зеркальный внешний чекер команд — ранний отказ/UX
+// и запись вердикта в аудит исполнений (принуждение — на исполнителе).
+import type {
+  CommandPolicyInput,
+  CommandPolicyProvider,
+  CommandPolicyVerdict,
+} from './security/command-policy.js';
 import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG, LlmFilterRegistry } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import type { MetricsRegistry } from '../metrics/registry.js';
@@ -517,6 +524,17 @@ function defaultSecurityConfig(): SecurityConfig {
     protectedPaths: { enabled: true },
     secretKey: '',
     commandAudit: { enabled: false, retentionDays: DEFAULT_COMMAND_AUDIT_RETENTION_DAYS, path: '' },
+    // PROP-136b: зеркальный чекер команд — выключен (провайдер не создаётся,
+    // поведение прежнее); приходит через `OrchestratorOptions.commandPolicy`.
+    commandPolicy: {
+      enabled: false,
+      provider: 'http',
+      url: '',
+      tokenSecret: '',
+      failMode: 'open',
+      timeoutMs: 2_000,
+      opaPath: '/v1/data/synth/exec/decision',
+    },
   };
 }
 
@@ -759,6 +777,18 @@ export interface OrchestratorOptions {
    * Не задан (или журнал выключен в конфиге) — поведение прежнее.
    */
   commandAudit?: CommandAuditLog;
+  /**
+   * PROP-136b (слайс 136b-2a): **зеркальный** внешний чекер команд
+   * (`security.commandPolicy`). Задан — в точке исполнения `execute_shell`/
+   * `sandbox_exec` (до аудита `started` и до запуска) спрашивается вердикт:
+   * `deny` → tool-результат с ошибкой, команда **не** исполняется; `allow` →
+   * исполнение продолжается. Вердикт попадает в журнал исполнений
+   * (`decidedBy: 'policy'`, `provider`).
+   *
+   * Не задан — поведение прежнее (`decidedBy: 'permission'`). Принуждение
+   * остаётся на исполнителе (там проверка до `spawn`), здесь — ранний отказ/UX.
+   */
+  commandPolicy?: CommandPolicyProvider;
   /** LLM Gateway (ADR-036): глобальный тумблер и конфиг. Выключен по умолчанию. */
   gatewayConfig?: LLMGatewayConfig;
   /** Путь к JSONL полного лога запросов/ответов LLM ({dataDir}/audit/llm-payloads.jsonl). */
@@ -1160,6 +1190,11 @@ export class ChatOrchestrator {
    * аудита нет (поведение прежнее).
    */
   private readonly _commandAudit: OrchestratorOptions['commandAudit'] | null;
+  /**
+   * PROP-136b (слайс 136b-2a): зеркальный чекер команд. Не задан — проверки нет
+   * (поведение прежнее, `decidedBy: 'permission'`).
+   */
+  private readonly _commandPolicy: CommandPolicyProvider | null;
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
   /**
@@ -1648,15 +1683,7 @@ export class ChatOrchestrator {
     if (!command) return null;
     const secretsMap = await this._getObfuscationMap(params.session.id);
     const prepared = prepareCommandForAudit(command, { secretsMap });
-    const rawCwd = typeof params.toolArgs.cwd === 'string' ? params.toolArgs.cwd.trim() : '';
-    let cwd = params.workingDir;
-    if (rawCwd !== '') {
-      try {
-        cwd = resolvePath(rawCwd, params.workingDir);
-      } catch {
-        cwd = params.workingDir;
-      }
-    }
+    const cwd = this._resolveCommandCwd(params.toolArgs, params.workingDir);
     const actor = params.session.ownerId ?? params.session.userId;
     return {
       id: randomUUID(),
@@ -1673,6 +1700,51 @@ export class ChatOrchestrator {
       decision: params.decision.action,
       decidedBy: 'permission',
       ...(params.decision.matchedRule ? { matchedRule: params.decision.matchedRule } : {}),
+    };
+  }
+
+  /**
+   * Рабочий каталог команды из аргументов тула: `cwd` (если задан и
+   * резолвится) либо рабочий каталог сессии. Общий шов журнала исполнений
+   * (PROP-136a) и зеркального чекера команд (PROP-136b) — вход у них один.
+   */
+  private _resolveCommandCwd(toolArgs: Record<string, unknown>, workingDir: string): string {
+    const rawCwd = typeof toolArgs.cwd === 'string' ? toolArgs.cwd.trim() : '';
+    if (rawCwd === '') return workingDir;
+    try {
+      return resolvePath(rawCwd, workingDir);
+    } catch {
+      return workingDir;
+    }
+  }
+
+  /**
+   * PROP-136b (слайс 136b-2a): вход зеркального чекера команд.
+   *
+   * `null` — тул не из shell-класса (проверяется только `execute_shell`/
+   * `sandbox_exec`: у прочих тулов команды нет) или команда пуста. `cwd` —
+   * тот же, что попадает в журнал; таймаут — подсказка политике (`timeout`
+   * у `execute_shell`, `timeout_ms` у `sandbox_exec`).
+   */
+  private _buildCommandPolicyInput(params: {
+    toolName: string;
+    toolArgs: Record<string, unknown>;
+    workingDir: string;
+  }): CommandPolicyInput | null {
+    if (!isCommandAuditTool(params.toolName)) return null;
+    const command = commandFromToolArgs(params.toolName, params.toolArgs);
+    if (!command) return null;
+    const rawTimeout =
+      params.toolName === 'sandbox_exec' ? params.toolArgs.timeout_ms : params.toolArgs.timeout;
+    const timeoutMs =
+      typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
+        ? rawTimeout
+        : undefined;
+    return {
+      command,
+      cwd: this._resolveCommandCwd(params.toolArgs, params.workingDir),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(params.toolArgs.background === true ? { background: true } : {}),
     };
   }
 
@@ -1751,6 +1823,7 @@ export class ChatOrchestrator {
     // PROP-136 (слайс 136a): журнал исполнений команд — один экземпляр на
     // инстанс: его же читает `GET /api/v2/audit/commands` (иначе файлы разные).
     this._commandAudit = options.commandAudit ?? null;
+    this._commandPolicy = options.commandPolicy ?? null;
     this._approvalManager = new PermissionApprovalManager(this._eventBus, {
       ...(options.approvalRegistry ? { registry: options.approvalRegistry } : {}),
       // ADR-029: живой реестр ожиданий живёт в памяти процесса — после
@@ -6736,11 +6809,102 @@ export class ChatOrchestrator {
                   profile: executionProfileResolution.profile || undefined,
                   decision: permissionDecision,
                 });
+                // PROP-136b (слайс 136b-2a): зеркальная проверка команды внешним
+                // чекером — **до** аудита `started` и до запуска. Это ранний
+                // отказ/UX (принуждение — на исполнителе, до `spawn`): `deny`
+                // не даёт команде уйти в исполнение вовсе.
+                let policyVerdict: CommandPolicyVerdict | undefined;
+                if (this._commandPolicy) {
+                  const policyInput = this._buildCommandPolicyInput({
+                    toolName,
+                    toolArgs,
+                    workingDir,
+                  });
+                  if (policyInput) {
+                    try {
+                      policyVerdict = await this._commandPolicy.check(policyInput);
+                    } catch (policyErr) {
+                      // Провайдер сам обрабатывает ошибки (failMode): исключение
+                      // здесь — дефект реализации; команду не блокируем.
+                      const reason =
+                        policyErr instanceof Error ? policyErr.message : String(policyErr);
+                      warning(
+                        'ORCHESTRATOR',
+                        `Command policy check failed for "${toolName}": ${reason}`,
+                      );
+                    }
+                  }
+                }
+                if (policyVerdict?.action === 'deny') {
+                  const policyReason = policyVerdict.reason ?? 'denied by policy';
+                  // Одна запись аудита: попытки исполнения не было — `finished`
+                  // с `durationMs: 0` и решением чекера.
+                  if (auditBase && this._commandAudit) {
+                    try {
+                      await this._commandAudit.append({
+                        ...auditBase,
+                        ts: new Date().toISOString(),
+                        phase: 'finished',
+                        decision: 'deny',
+                        decidedBy: 'policy',
+                        ...(policyVerdict.ruleId ? { matchedRule: policyVerdict.ruleId } : {}),
+                        durationMs: 0,
+                        reason: policyReason,
+                        provider: {
+                          kind: policyVerdict.kind,
+                          ...(policyVerdict.ruleId ? { ruleId: policyVerdict.ruleId } : {}),
+                          latencyMs: policyVerdict.latencyMs,
+                          action: 'deny',
+                        },
+                      });
+                    } catch (auditErr) {
+                      // Команда и так не исполняется — отказ не превращаем в сбой
+                      // записи аудита, но след в логе обязателен.
+                      const reason =
+                        auditErr instanceof Error ? auditErr.message : String(auditErr);
+                      warning(
+                        'ORCHESTRATOR',
+                        `Command audit write failed (policy deny) for "${toolName}": ${reason}`,
+                      );
+                    }
+                  }
+                  return {
+                    result: {
+                      content: `Command denied by policy: ${policyReason}`,
+                      isError: true,
+                      metadata: {
+                        command_policy: 'deny',
+                        ...(policyVerdict.ruleId
+                          ? { command_policy_rule: policyVerdict.ruleId }
+                          : {}),
+                      },
+                    },
+                    cancelled: false,
+                  };
+                }
+                // Вердикт чекера попал в журнал: решение — `policy`, поля чекера
+                // (`kind`/`ruleId`/`latencyMs`) сохраняются в обеих записях.
+                let auditEntryBase = auditBase;
+                if (auditBase && policyVerdict) {
+                  auditEntryBase = {
+                    ...auditBase,
+                    decidedBy: 'policy',
+                    // Причина чекера (например, `command policy unavailable
+                    // (fail-open)`) — след в журнале, без секретов.
+                    ...(policyVerdict.reason ? { reason: policyVerdict.reason } : {}),
+                    provider: {
+                      kind: policyVerdict.kind,
+                      ...(policyVerdict.ruleId ? { ruleId: policyVerdict.ruleId } : {}),
+                      latencyMs: policyVerdict.latencyMs,
+                      action: policyVerdict.action,
+                    },
+                  };
+                }
                 const runStartedMs = Date.now();
-                if (auditBase && this._commandAudit) {
+                if (auditEntryBase && this._commandAudit) {
                   try {
                     await this._commandAudit.append({
-                      ...auditBase,
+                      ...auditEntryBase,
                       ts: new Date().toISOString(),
                       phase: 'started',
                     });
@@ -6766,12 +6930,12 @@ export class ChatOrchestrator {
                 const result = toolContext
                   ? await runTool(() => executeToolDef(callToolDef, toolArgs, toolContext, toolName))
                   : await runTool(async () => { throw contextError; });
-                if (auditBase && this._commandAudit) {
+                if (auditEntryBase && this._commandAudit) {
                   const content = result.content ?? '';
                   const exitCode = result.metadata?.['exitCode'];
                   try {
                     await this._commandAudit.append({
-                      ...auditBase,
+                      ...auditEntryBase,
                       ts: new Date().toISOString(),
                       phase: 'finished',
                       durationMs: Date.now() - runStartedMs,

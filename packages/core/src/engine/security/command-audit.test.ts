@@ -91,6 +91,43 @@ describe('CommandAuditLog', () => {
     expect(await log.list({ limit: 0 })).toHaveLength(3);
   });
 
+  it('PROP-136b: provider/reason/decidedBy="policy" сериализуются и читаются', async () => {
+    await log.append(
+      makeEntry({
+        id: 'p1',
+        phase: 'finished',
+        decision: 'deny',
+        decidedBy: 'policy',
+        matchedRule: 'no-rm',
+        durationMs: 0,
+        reason: 'blocked by rule',
+        provider: { kind: 'opa', ruleId: 'no-rm', latencyMs: 3, action: 'deny' },
+      }),
+    );
+
+    const entries = await log.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      decision: 'deny',
+      decidedBy: 'policy',
+      matchedRule: 'no-rm',
+      durationMs: 0,
+      reason: 'blocked by rule',
+      provider: { kind: 'opa', ruleId: 'no-rm', latencyMs: 3, action: 'deny' },
+    });
+    // JSONL — одна строка, поля на месте.
+    const raw = await readFile(log.path, 'utf8');
+    const parsed = JSON.parse(raw.trim()) as Record<string, unknown>;
+    expect(parsed['decidedBy']).toBe('policy');
+    expect(parsed['reason']).toBe('blocked by rule');
+    expect(parsed['provider']).toEqual({
+      kind: 'opa',
+      ruleId: 'no-rm',
+      latencyMs: 3,
+      action: 'deny',
+    });
+  });
+
   it('битые строки пропускаются (журнал не ломается)', async () => {
     await log.append(makeEntry({ id: 'ok-1' }));
     await writeFile(log.path, `${await readFile(log.path, 'utf8')}{не json}\n`, 'utf8');

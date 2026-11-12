@@ -133,7 +133,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
   });
 
   async function runSession(
-    securityConfig: Omit<SecurityConfig, 'secretKey' | 'commandAudit'>,
+    securityConfig: Omit<SecurityConfig, 'secretKey' | 'commandAudit' | 'commandPolicy'>,
     toolCalls: Record<string, unknown>[],
     setup?: (registry: ReturnType<typeof createToolRegistry>) => void,
   ): Promise<void> {
@@ -158,6 +158,16 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
         ...securityConfig,
         secretKey: '',
         commandAudit: { enabled: false, retentionDays: 30, path: '' },
+        // PROP-136b: зеркальный чекер команд здесь выключен (не предмет теста).
+        commandPolicy: {
+          enabled: false,
+          provider: 'http',
+          url: '',
+          tokenSecret: '',
+          failMode: 'open',
+          timeoutMs: 2_000,
+          opaPath: '/v1/data/synth/exec/decision',
+        },
       },
       projectStore,
       defaultWorkingDir: tmpDir,
@@ -410,6 +420,16 @@ describe('ChatOrchestrator × защита {dataDir}/secrets (H5)', () => {
         secretKey: '',
         // PROP-136: журнал исполнений команд в этом тесте не нужен.
         commandAudit: { enabled: false, retentionDays: 30, path: '' },
+        // PROP-136b: зеркальный чекер команд здесь не предмет теста.
+        commandPolicy: {
+          enabled: false,
+          provider: 'http',
+          url: '',
+          tokenSecret: '',
+          failMode: 'open',
+          timeoutMs: 2_000,
+          opaPath: '/v1/data/synth/exec/decision',
+        },
       },
       projectStore,
       defaultWorkingDir: tmpDir,

@@ -415,6 +415,24 @@ executor: это третий процесс со своими счётчика�
 `synth_command_audit_failed_total` (растёт), затем `enabled`/`path` в `security.commandAudit`
 и права на `{dataDir}/audit`.
 
+### Зеркальный чекер команд (PROP-136b-2a)
+
+Вердикты внешнего чекера, который спрашивает **control plane** в точке исполнения
+(`execute_shell`/`sandbox_exec`, до аудита `started`; конфиг — `security.commandPolicy`).
+Метрики пополняются в провайдере (`Engine/security/command-policy`); ошибка метрик решение
+не меняет. Кэш-попадания считаются исходом вердикта, но длительность **не** меряется.
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_command_policy_total` | counter | `outcome` (`allow`/`deny`/`unavailable`/`other`), `provider` (`http`/`opa`) | Проверки чекера по исходу. `unavailable` — таймаут/сбой сети/не-2xx/невалидный ответ/нечитаемый токен; итоговое действие (allow/deny) определяется `failMode` |
+| `synth_command_policy_seconds` | histogram | `provider` | Длительность **сетевой** проверки (секунды); кэш-попадания не наблюдают |
+
+Тексты команд, `rule_id`, адреса чекера и id сессий в лейблы не попадают. Диагностика:
+`outcome="unavailable"` растёт → чекер недоступен (`failMode` решает исход), проверить
+`security.commandPolicy.url` и сетевое доверие (`security.tls`/прокси). На исполнителе —
+свои серии `synth_executor_command_policy_*`: это **другая сторона счёта** (там — реальные
+запуски), серии не суммировать.
+
 ### Служебные (self-metrics)
 
 | Метрика | Тип | Лейблы | Смысл |

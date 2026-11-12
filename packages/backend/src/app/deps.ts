@@ -117,6 +117,9 @@ import {
   // PROP-136 (слайс 136a): журнал исполнений команд + его метрики.
   createCommandAuditLog,
   createCommandAuditMetrics,
+  // PROP-136b (слайс 136b-2a): зеркальный чекер команд (провайдер + метрики).
+  createCommandPolicyMetrics,
+  createCommandPolicyProvider,
   AuthorityGuard,
   // ADR-106 Ф3: реестр подтверждений + покрытие (носитель покрывающего гранта).
   ApprovalRegistry,
@@ -997,6 +1000,15 @@ export async function createBackendDeps(
   // приоритетнее config.yaml — мёржим при старте, чтобы защита применялась к оркестратору.
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const securityConfig = mergeSecurityConfig(config.synth.security, runtimeSecurity);
+  // PROP-136b (слайс 136b-2a): зеркальный чекер команд (`security.commandPolicy`).
+  // Managed-профиль поднимает `failMode` до `closed` (`loadBackendConfig`);
+  // `enabled: true` без адреса — ошибка старта (fail-closed).
+  const commandPolicyMetrics = metrics ? createCommandPolicyMetrics(metrics) : undefined;
+  const commandPolicyProvider = securityConfig?.commandPolicy
+    ? createCommandPolicyProvider(securityConfig.commandPolicy, {
+        ...(commandPolicyMetrics ? { metrics: commandPolicyMetrics } : {}),
+      })
+    : null;
   // ADR-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml
   const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
   const toolsPolicy = runtimeToolsPolicy ?? config.synth.tools.policy;
@@ -1476,6 +1488,8 @@ export async function createBackendDeps(
     // PROP-136 (слайс 136a): журнал исполнений команд — тот же экземпляр
     // читает `GET /api/v2/audit/commands`.
     commandAudit: commandAuditLog,
+    // PROP-136b (слайс 136b-2a): зеркальный чекер команд (нет — прежнее поведение).
+    ...(commandPolicyProvider ? { commandPolicy: commandPolicyProvider } : {}),
     gatewayAuditLogger,
     gatewayPayloadLogPath,
     gatewayPatternStore: patternStore,
@@ -2185,6 +2199,8 @@ export async function createBackendDeps(
     // PROP-136 (слайс 136a): журнал исполнений команд — роуты
     // `/api/v2/audit/commands` читают тот же экземпляр, что пишет оркестратор.
     commandAuditLog,
+    // PROP-136b (слайс 136b-2a): зеркальный чекер команд — для тестов/UI.
+    commandPolicyProvider,
     // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
     analyticsRollups,
     // ADR-102: write-path — сборщик роллапов (+ остановка hook-подписки и pruner'а).

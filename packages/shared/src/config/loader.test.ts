@@ -330,3 +330,40 @@ describe('loadConfig — baseDefaults профиля (F4)', () => {
     expect(cfg.llmGateway.enabled).toBe(false);
   });
 });
+
+/**
+ * PROP-136b: зеркальный чекер команд — `enabled: true` без адреса обязан
+ * ломать загрузку конфигурации (fail-closed старта), а не молча выключаться.
+ */
+describe('loadConfig — security.commandPolicy (PROP-136b)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('SYNTH_COMMAND_POLICY_ENABLED=true без URL → ошибка загрузки', async () => {
+    vi.stubEnv('SYNTH_COMMAND_POLICY_ENABLED', 'true');
+    vi.stubEnv('SYNTH_COMMAND_POLICY_URL', '');
+    await expect(loadConfig({ configPath: '/nonexistent/synth-config.yaml' })).rejects.toThrow(
+      /commandPolicy/,
+    );
+  });
+
+  it('SYNTH_COMMAND_POLICY_ENABLED=true + URL → валидная конфигурация', async () => {
+    vi.stubEnv('SYNTH_COMMAND_POLICY_ENABLED', 'true');
+    vi.stubEnv('SYNTH_COMMAND_POLICY_URL', 'http://policy.local');
+    vi.stubEnv('SYNTH_COMMAND_POLICY_FAIL_MODE', 'closed');
+    const cfg = await loadConfig({ configPath: '/nonexistent/synth-config.yaml' });
+    expect(cfg.security.commandPolicy).toMatchObject({
+      enabled: true,
+      url: 'http://policy.local',
+      failMode: 'closed',
+    });
+  });
+
+  it('невалидное значение env → ошибка загрузки (fail-closed)', async () => {
+    vi.stubEnv('SYNTH_COMMAND_POLICY_PROVIDER', 'off');
+    await expect(loadConfig({ configPath: '/nonexistent/synth-config.yaml' })).rejects.toThrow(
+      /SYNTH_COMMAND_POLICY_PROVIDER/,
+    );
+  });
+});

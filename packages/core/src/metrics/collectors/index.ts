@@ -125,3 +125,13 @@ export type {
   CommandAuditMetricTool,
   CommandAuditMetrics,
 } from './command-audit.js';
+export {
+  createCommandPolicyMetrics,
+  normalizeCommandPolicyOutcome,
+  normalizeCommandPolicyProvider,
+} from './command-policy.js';
+export type {
+  CommandPolicyMetricOutcome,
+  CommandPolicyMetricProvider,
+  CommandPolicyMetricsSink,
+} from './command-policy.js';

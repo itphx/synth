@@ -448,6 +448,102 @@ function applyOAuthProvidersEnvOverride<T extends Record<string, unknown>>(
 }
 
 /**
+ * PROP-136b: env-имена **зеркального** чекера команд (`security.commandPolicy`).
+ *
+ * Имена намеренно короткие (`SYNTH_COMMAND_POLICY_*`, без `SECURITY_`) — так
+ * их задают оператор и Helm; `TOKEN` — **путь** к файлу токена (инвариант 13),
+ * не значение. Приоритет — общий (ADR-023): env > config.yaml > дефолт.
+ */
+export const COMMAND_POLICY_ENV = {
+  enabled: 'SYNTH_COMMAND_POLICY_ENABLED',
+  provider: 'SYNTH_COMMAND_POLICY_PROVIDER',
+  url: 'SYNTH_COMMAND_POLICY_URL',
+  tokenSecret: 'SYNTH_COMMAND_POLICY_TOKEN',
+  failMode: 'SYNTH_COMMAND_POLICY_FAIL_MODE',
+  timeoutMs: 'SYNTH_COMMAND_POLICY_TIMEOUT_MS',
+  opaPath: 'SYNTH_COMMAND_POLICY_OPA_PATH',
+} as const;
+
+/**
+ * Применить env-оверрайды чекера команд к секции `security.commandPolicy`.
+ *
+ * **Fail-closed** (в отличие от большинства env-оверрайдов): невалидное
+ * значение — `Error` на загрузке конфигурации, а не warn+игнор. Опечатка в
+ * настройке политики не должна молча оставлять инстанс без неё (или с
+ * противоположным `failMode`). Семантику значений (`enabled` без `url`)
+ * проверяет схема — она тоже бросает ошибку старта.
+ */
+function applyCommandPolicyEnvOverrides<T extends Record<string, unknown>>(
+  config: T,
+  env: NodeJS.ProcessEnv,
+): void {
+  const patch: Record<string, unknown> = {};
+
+  const rawEnabled = env[COMMAND_POLICY_ENV.enabled];
+  if (rawEnabled !== undefined && rawEnabled.trim() !== '') {
+    const parsed = parseEnvValue(rawEnabled.trim(), 'boolean');
+    if (!parsed.ok) {
+      throw new Error(
+        `[config] невалидное значение ${COMMAND_POLICY_ENV.enabled}="${rawEnabled}" — ожидается true/false`,
+      );
+    }
+    patch.enabled = parsed.value;
+  }
+
+  const rawProvider = env[COMMAND_POLICY_ENV.provider]?.trim().toLowerCase();
+  if (rawProvider !== undefined && rawProvider !== '') {
+    if (rawProvider !== 'http' && rawProvider !== 'opa') {
+      throw new Error(
+        `[config] невалидное значение ${COMMAND_POLICY_ENV.provider}="${rawProvider}" — допустимо: http, opa`,
+      );
+    }
+    patch.provider = rawProvider;
+  }
+
+  const rawFailMode = env[COMMAND_POLICY_ENV.failMode]?.trim().toLowerCase();
+  if (rawFailMode !== undefined && rawFailMode !== '') {
+    if (rawFailMode !== 'closed' && rawFailMode !== 'open') {
+      throw new Error(
+        `[config] невалидное значение ${COMMAND_POLICY_ENV.failMode}="${rawFailMode}" — допустимо: closed, open`,
+      );
+    }
+    patch.failMode = rawFailMode;
+  }
+
+  const rawTimeout = env[COMMAND_POLICY_ENV.timeoutMs]?.trim();
+  if (rawTimeout !== undefined && rawTimeout !== '') {
+    const parsed = parseEnvValue(rawTimeout, 'number');
+    if (!parsed.ok || typeof parsed.value !== 'number' || !Number.isInteger(parsed.value) || parsed.value < 1) {
+      throw new Error(
+        `[config] невалидное значение ${COMMAND_POLICY_ENV.timeoutMs}="${rawTimeout}" — ожидается целое ≥ 1`,
+      );
+    }
+    patch.timeoutMs = parsed.value;
+  }
+
+  for (const key of ['url', 'tokenSecret', 'opaPath'] as const) {
+    const raw = env[COMMAND_POLICY_ENV[key]];
+    if (raw === undefined || raw.trim() === '') continue;
+    patch[key] = raw.trim();
+  }
+
+  if (Object.keys(patch).length === 0) return;
+
+  const current = config.security;
+  const security =
+    current !== null && typeof current === 'object' && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : {};
+  const currentPolicy = security.commandPolicy;
+  const policy =
+    currentPolicy !== null && typeof currentPolicy === 'object' && !Array.isArray(currentPolicy)
+      ? { ...(currentPolicy as Record<string, unknown>) }
+      : {};
+  security.commandPolicy = { ...policy, ...patch };
+  (config as Record<string, unknown>).security = security;
+}
+
+/**
  * ADR-052/O1: env-имя JSON-списка installer service-key'ев
  * (`security.bootstrapServiceKeys`). Значение — JSON-массив объектов
  * `{ label, secret, scopes, roles?, description? }`. Приоритет — как у
@@ -491,6 +587,7 @@ export function applyObjectEnvOverrides<T extends Record<string, unknown>>(
   applyApiKeyRolesEnvOverride(config, env);
   applyAttachmentsModalitiesEnvOverride(config, env);
   applyOAuthProvidersEnvOverride(config, env);
+  applyCommandPolicyEnvOverrides(config, env);
 
   const raw = env[BOOTSTRAP_SERVICE_KEYS_ENV];
   if (raw === undefined || raw === '') return config;

@@ -11,6 +11,8 @@ import {
   createStorageContextAsync,
   // PROP-136 (слайс 136a): журнал исполнений команд (standalone по умолчанию выключен).
   createCommandAuditLog,
+  // PROP-136b (слайс 136b-2a): зеркальный чекер команд (standalone по умолчанию выключен).
+  createCommandPolicyProvider,
 } from '../index.js';
 import type { StorageContext } from '../index.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
@@ -264,6 +266,14 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
       dataDir,
       ...(options.config.security?.commandAudit ? { config: options.config.security.commandAudit } : {}),
     }),
+    // PROP-136b (слайс 136b-2a): зеркальный чекер команд — при `enabled`
+    // (standalone по умолчанию выключен; без адреса — ошибка старта).
+    ...(options.config.security?.commandPolicy?.enabled
+      ? {
+          commandPolicy:
+            createCommandPolicyProvider(options.config.security.commandPolicy) ?? undefined,
+        }
+      : {}),
     gatewayConfig: options.config.llmGateway,
     gatewayPatternStore: patternStore,
     // ADR-084: decision-слой микро-каскада (config.decision).

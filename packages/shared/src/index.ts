@@ -281,6 +281,13 @@ export {
   // PROP-136 (слайс 136a): журнал исполнений shell/песочных команд.
   type CommandAuditConfig,
   commandAuditConfigSchema,
+  // PROP-136b (слайс 136b-2a): зеркальный чекер команд в control plane.
+  type CommandPolicyConfig,
+  commandPolicyConfigSchema,
+  type CommandPolicyProviderName,
+  type CommandPolicyFailMode,
+  COMMAND_POLICY_PROVIDERS,
+  COMMAND_POLICY_FAIL_MODES,
   type PromptInjectionConfig,
   type ProtectedPathsConfig,
   type LLMGatewayConfig,

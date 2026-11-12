@@ -136,3 +136,53 @@ describe('loadBackendConfig — дефолт security.commandAudit.enabled (PROP
     expect(cfg.synth.security.commandAudit.path).toBe('/var/log/synth-commands.jsonl');
   });
 });
+
+/**
+ * PROP-136b (слайс 136b-2a): managed-профиль делает зеркальный чекер команд
+ * **fail-closed** по умолчанию (`security.commandPolicy.failMode='closed'`);
+ * standalone сохраняет `open` из схемы. Сам чекер при этом выключен
+ * (`enabled: false`) — без настройки поведение прежнее.
+ */
+describe('loadBackendConfig — дефолт security.commandPolicy.failMode (PROP-136b)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  async function writeConfig(yaml: string): Promise<string> {
+    dir = await mkdtemp(join(tmpdir(), 'synth-backend-command-policy-'));
+    const path = join(dir, 'config.yaml');
+    await writeFile(path, yaml, 'utf-8');
+    return path;
+  }
+
+  it('без config.yaml — failMode closed, чекер выключен, провайдер http', async () => {
+    const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
+    expect(cfg.synth.security.commandPolicy).toMatchObject({
+      enabled: false,
+      provider: 'http',
+      failMode: 'closed',
+      timeoutMs: 2_000,
+      opaPath: '/v1/data/synth/exec/decision',
+    });
+  });
+
+  it('config.yaml с failMode: open — профиль перебит', async () => {
+    const cfg = await loadBackendConfig({
+      configPath: await writeConfig('security:\n  commandPolicy:\n    failMode: open\n'),
+    });
+    expect(cfg.synth.security.commandPolicy.failMode).toBe('open');
+  });
+
+  it('enabled: true без url → ошибка загрузки (fail-closed)', async () => {
+    await expect(
+      loadBackendConfig({
+        configPath: await writeConfig('security:\n  commandPolicy:\n    enabled: true\n'),
+      }),
+    ).rejects.toThrow(/commandPolicy/);
+  });
+});

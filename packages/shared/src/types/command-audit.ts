@@ -25,6 +25,24 @@ export type CommandAuditDecision = (typeof COMMAND_AUDIT_DECISIONS)[number];
 export const COMMAND_AUDIT_PHASES = ['started', 'finished'] as const;
 export type CommandAuditPhase = (typeof COMMAND_AUDIT_PHASES)[number];
 
+/** Кто принял решение об исполнении (PROP-136b: `policy` — внешний чекер). */
+export const COMMAND_AUDIT_DECIDED_BY = ['permission', 'policy'] as const;
+export type CommandAuditDecidedBy = (typeof COMMAND_AUDIT_DECIDED_BY)[number];
+
+/**
+ * Вердикт внешнего чекера команд в записи журнала (PROP-136b, слайс 136b-2a).
+ *
+ * Аддитивное поле: без чекера (`decidedBy: 'permission'`) его нет. `kind` —
+ * провайдер (`http`/`opa`), `ruleId` — сработавшее правило, `latencyMs` —
+ * длительность сетевой проверки (кэш — `0`), `action` — вердикт.
+ */
+export interface CommandAuditProviderVerdict {
+  kind: string;
+  ruleId?: string;
+  latencyMs?: number;
+  action: 'allow' | 'deny';
+}
+
 /** Предел сохраняемой команды, байт (полная обезличенная строка хешируется). */
 export const COMMAND_AUDIT_MAX_COMMAND_BYTES = 4096;
 
@@ -55,8 +73,12 @@ export interface CommandAuditEntry {
   cwd: string;
   background: boolean;
   decision: CommandAuditDecision;
-  decidedBy: 'permission';
+  decidedBy: CommandAuditDecidedBy;
   matchedRule?: string;
+  /** PROP-136b: вердикт внешнего чекера команд (нет — решение permission-слоя). */
+  provider?: CommandAuditProviderVerdict;
+  /** PROP-136b: причина отказа/пропуска чекера (без секретов; EN). */
+  reason?: string;
   durationMs?: number;
   exitCode?: number;
   bytesOut?: number;

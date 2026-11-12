@@ -1568,11 +1568,67 @@ export const commandAuditConfigSchema = z.object({
 
 export type CommandAuditConfig = z.infer<typeof commandAuditConfigSchema>;
 
+/** PROP-136b: провайдер внешнего чекера команд (`off` — проверки нет). */
+export const COMMAND_POLICY_PROVIDERS = ['http', 'opa'] as const;
+export type CommandPolicyProviderName = (typeof COMMAND_POLICY_PROVIDERS)[number];
+
+/** Поведение при недоступном чекере команд (PROP-136b). */
+export const COMMAND_POLICY_FAIL_MODES = ['closed', 'open'] as const;
+export type CommandPolicyFailMode = (typeof COMMAND_POLICY_FAIL_MODES)[number];
+
+/**
+ * PROP-136b (слайс 136b-2a): **зеркальный** внешний чекер команд в control
+ * plane (`security.commandPolicy`).
+ *
+ * Точка принуждения — исполнитель (`command-policy.ts` пакета executor:
+ * проверка до `spawn`). Здесь — ранний отказ/UX и запись вердикта в аудит
+ * исполнений: тот же чекер судит текст команды, но решение **не** является
+ * границей безопасности (её нет у control plane — команда исполняется на
+ * исполнителе). `enabled: false` (дефолт) — поведение прежнее, провайдер не
+ * создаётся.
+ *
+ * `tokenSecret` — **путь** к файлу bearer-токена (инвариант 13), не значение;
+ * читается `readExecutorToken` при первом обращении. `failMode` по умолчанию
+ * `open` (standalone), backend/managed поднимает до `closed` профильным
+ * дефолтом. `enabled: true` без `url` — ошибка старта (fail-closed).
+ *
+ * Env (по общему правилу ADR-023, читаются `applyObjectEnvOverrides`):
+ * `SYNTH_COMMAND_POLICY_ENABLED`, `_PROVIDER`, `_URL`, `_TOKEN`, `_FAIL_MODE`,
+ * `_TIMEOUT_MS`, `_OPA_PATH`.
+ */
+export const commandPolicyConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    provider: z.enum(COMMAND_POLICY_PROVIDERS).default('http'),
+    /** Адрес чекера (обязателен при `enabled: true`). */
+    url: z.string().default(''),
+    /** Путь к файлу bearer-токена чекера (не значение). */
+    tokenSecret: z.string().default(''),
+    failMode: z.enum(COMMAND_POLICY_FAIL_MODES).default('open'),
+    /** Таймаут запроса к чекеру, мс. */
+    timeoutMs: z.number().int().min(1).default(2_000),
+    /** Путь OPA-решения (`provider: opa`). */
+    opaPath: z.string().default('/v1/data/synth/exec/decision'),
+  })
+  .superRefine((cfg, ctx) => {
+    if (cfg.enabled && cfg.url.trim() === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['url'],
+        message: 'security.commandPolicy.url обязателен при enabled: true (fail-closed)',
+      });
+    }
+  });
+
+export type CommandPolicyConfig = z.infer<typeof commandPolicyConfigSchema>;
+
 export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.prefault({}),
   protectedPaths: protectedPathsConfigSchema.prefault({}),
   /** PROP-136: журнал исполнений shell/песочных команд. */
   commandAudit: commandAuditConfigSchema.prefault({}),
+  /** PROP-136b: зеркальный внешний чекер команд (опционален; выключен — прежнее поведение). */
+  commandPolicy: commandPolicyConfigSchema.prefault({}),
   /** ADR-099: единый механизм доверия TLS/CA для исходящих соединений. */
   tls: securityTlsConfigSchema.optional(),
   /**

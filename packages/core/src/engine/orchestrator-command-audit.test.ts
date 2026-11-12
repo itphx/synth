@@ -53,6 +53,16 @@ const TEST_SECURITY: SecurityConfig = {
   protectedPaths: { enabled: true },
   secretKey: '',
   commandAudit: { enabled: false, retentionDays: 30, path: '' },
+  // PROP-136b: зеркальный чекер команд — параметр теста (`commandPolicy`).
+  commandPolicy: {
+    enabled: false,
+    provider: 'http',
+    url: '',
+    tokenSecret: '',
+    failMode: 'open',
+    timeoutMs: 2_000,
+    opaPath: '/v1/data/synth/exec/decision',
+  },
 };
 
 /** Провайдер: шаг 0 — вызов тула, шаг 1 — финальный текст. */

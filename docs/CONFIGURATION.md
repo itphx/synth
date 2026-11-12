@@ -620,6 +620,14 @@ security:
     enabled: false                # мастер-выключатель; managed-профиль — true (env SYNTH_COMMAND_AUDIT_ENABLED)
     retentionDays: 30             # срок хранения журнала, дней (DELETE ?older_than_days)
     path: ""                      # пусто → {dataDir}/audit/commands.jsonl
+  commandPolicy:                  # PROP-136b: зеркальный внешний чекер команд (опционален; выключен — прежнее поведение)
+    enabled: false                # env SYNTH_COMMAND_POLICY_ENABLED; true без url — ошибка старта
+    provider: "http"              # http | opa                (env SYNTH_COMMAND_POLICY_PROVIDER)
+    url: ""                       # адрес чекера              (env SYNTH_COMMAND_POLICY_URL)
+    tokenSecret: ""               # ПУТЬ к файлу bearer-токена, не значение (env SYNTH_COMMAND_POLICY_TOKEN)
+    failMode: "open"              # closed | open; managed-профиль — closed (env SYNTH_COMMAND_POLICY_FAIL_MODE)
+    timeoutMs: 2000               # таймаут запроса, мс        (env SYNTH_COMMAND_POLICY_TIMEOUT_MS)
+    opaPath: "/v1/data/synth/exec/decision"  # provider: opa (env SYNTH_COMMAND_POLICY_OPA_PATH)
 
 remote:                           # гибридный режим: локальный core + удалённый backend
   enabled: false
@@ -1501,7 +1509,56 @@ Append-only журнал **фактов исполнения** команд `exe
 
 Чтение — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
 `requireAuth`); метрики — `synth_command_audit_*` (см. `docs/OBSERVABILITY.md`).
-Внешний чекер команд — проверка **на исполнителе** до `spawn` (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, контракты `http-json`/`opa`, fail modes и кэш — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Зеркальная проверка в control plane и запись вердикта в аудит — 136b-2.
+Внешний чекер команд — проверка **на исполнителе** до `spawn` (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, контракты `http-json`/`opa`, fail modes и кэш — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Зеркальная проверка в control plane и запись вердикта в аудит — `security.commandPolicy` (ниже).
+
+### Зеркальный чекер команд (`security.commandPolicy`, PROP-136b)
+
+**Опционален**: `enabled: false` (дефолт) — поведение прежнее, провайдер не
+создаётся, командная политика не спрашивается.
+
+Зеркальная проверка **в control plane**: в точке исполнения `execute_shell`/
+`sandbox_exec` команда уходит внешнему чекеру **до** аудита `started` и до
+запуска. `deny` — ранний отказ/UX: модель получает `isError`-результат
+`Command denied by policy: <reason>`, команда не исполняется, в журнал
+исполнений пишется **одна** запись (`phase: "finished"`, `decision: "deny"`,
+`decidedBy: "policy"`, `durationMs: 0`, `provider`). `allow` — исполнение
+продолжается, обе записи журнала несут `decidedBy: "policy"` и `provider`
+(`kind`/`ruleId`/`latencyMs`/`action`).
+
+**Граница безопасности — исполнитель** (PROP-136b-1): там проверка идёт до
+`spawn`. Зеркало в control plane её не заменяет и в `inline`-режиме ничего не
+гарантирует; оно даёт ранний отказ и след в аудите.
+
+| Ключ | Дефолт | Env | Смысл |
+|---|---|---|---|
+| `enabled` | `false` | `SYNTH_COMMAND_POLICY_ENABLED` | мастер-выключатель (провайдер не создаётся при `false`) |
+| `provider` | `http` | `SYNTH_COMMAND_POLICY_PROVIDER` | `http` (`POST {url}/v1/check`) или `opa` (`POST {url}{opaPath}`) |
+| `url` | `""` | `SYNTH_COMMAND_POLICY_URL` | адрес чекера; **обязателен** при `enabled: true` |
+| `tokenSecret` | `""` | `SYNTH_COMMAND_POLICY_TOKEN` | **путь** к файлу bearer-токена (не значение, инвариант 13) |
+| `failMode` | `open` | `SYNTH_COMMAND_POLICY_FAIL_MODE` | недоступность чекера: `closed` → `deny`, `open` → `allow` + warning |
+| `timeoutMs` | `2000` | `SYNTH_COMMAND_POLICY_TIMEOUT_MS` | таймаут запроса, мс (целое ≥ 1) |
+| `opaPath` | `/v1/data/synth/exec/decision` | `SYNTH_COMMAND_POLICY_OPA_PATH` | путь OPA-решения (`provider: opa`) |
+
+**Профильные дефолты.** `failMode`: standalone — `open` (схема), **managed/
+backend — `closed`** (`loadBackendConfig` → `baseDefaults`; явный
+`config.yaml`/env перебивает). Приоритет — общий (ADR-023): env > `config.yaml`
+> профиль-дефолт > схема.
+
+**`enabled: true` без `url` — ошибка старта** (fail-closed: иначе инстанс
+молча работал бы без политики). Невалидные значения env (`provider`,
+`failMode`, `timeoutMs`, `enabled`) — тоже ошибка загрузки конфигурации, а не
+warn+игнор: это настройка безопасности.
+
+**Runtime не переключается.** Провайдер строится при старте процесса; смена
+`security.commandPolicy` (как и в разделе «Безопасность» UI) применяется
+**после перезапуска** инстанса — переинициализации на лету нет (инвариант 24).
+
+Ответ чекера: `http` — `{action, reason?, rule_id?, ttl_ms?}`; `opa` —
+`{result: {allow, reason?, rule_id?}}`. Не-2xx, таймаут, невалидный ответ и
+нечитаемый файл токена — «чекер недоступен» (по `failMode`), недоступность не
+кэшируется. Кэш вердиктов: ключ `sha256(command + cwd + background)`, TTL —
+`ttl_ms` ответа либо 60 с; `deny` кэшируется наравне с `allow`. Метрики —
+`synth_command_policy_*` (см. `docs/OBSERVABILITY.md`).
 
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 
