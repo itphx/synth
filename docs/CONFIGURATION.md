@@ -747,8 +747,30 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
   `fallback: fail` (**fail-closed на старте**).
 
 Профили задаются **только** в `config.yaml` — env-переопределение каталога профилей не
-заводится. Полный binding профиля (`task.executor_profile` → `agentDefinition.executorProfile` →
-`project.executor.profile`) — следующий слайс PROP-135.
+заводится.
+
+**Binding профиля (PROP-135 Ф6a).** Эффективный профиль — наследуемая настройка области, приоритет:
+
+```
+session.settings.executorProfile → agentDefinition.executorProfile → project.executor.profile → execution.remote.defaultProfile
+```
+
+- первый непустой **разрешённый** кандидат — профиль порта (`portFor`); вычисляется **один раз на ход**;
+- `project.executor.allowedProfiles` и `agentDefinition.allowedProfiles` — **потолок**: непустой
+  список обязателен для профиля, пустой/отсутствующий — без ограничения (совместимость: старые
+  проекты/агенты поля не имеют);
+- запрещённый потолком или неизвестный каталогу профиль **не выбирается** (fail-closed): откат на
+  `defaultProfile` (или следующий разрешённый кандидат) + предупреждение в журнал (без секретов);
+- `project.executor.profile` задаёт профиль сессий проекта; `project.executor.allowedProfiles`
+  ограничивает и выбор сессии/агента;
+- `task({executor_profile})` — профиль дочерней сессии: проверяется по каталогу и потолкам
+  проекта/агента до создания ребёнка (нарушение — `tool.args_error`);
+- API: `PUT /api/v2/projects/:id { executor: { profile, allowedProfiles } }` — право управления
+  проектом (owner/LEAD/ADMIN, как `workspace`; EDITOR не может); `null`/`''`/`[]` сбрасывают
+  значение, пустой `allowedProfiles` = без ограничения; неизвестный профиль при доступном каталоге →
+  `400 VALIDATION_ERROR`;
+- `PATCH /api/v2/sessions/:id { settings: { executorProfile } }` — существование проверяется при
+  доступном каталоге (иначе `400 VALIDATION_ERROR`), пустая строка — сброс.
 
 **Провайдер пулов (PROP-135, Ф4b-1).** `execution.remote.provider` решает, **откуда** берётся
 адрес пула:

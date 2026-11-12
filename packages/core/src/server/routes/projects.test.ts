@@ -827,3 +827,140 @@ describe('Project API Routes — события изменения проект�
     expect(await store.load(project.id)).toBeNull();
   });
 });
+
+/**
+ * PROP-135 Ф6a: профиль исполнения проекта (`PUT /:id { executor }`).
+ *
+ * Изменение — право управления проектом (owner/LEAD/ADMIN, как `workspace`),
+ * а не редактирования контента (EDITOR не может). При доступном каталоге
+ * профили проверяются на существование (`400 VALIDATION_ERROR`); `null`/`''`/
+ * `[]` сбрасывают значение, пустой allowlist = без ограничения.
+ */
+describe('Project API Routes — executor profile (PROP-135 Ф6a)', () => {
+  let tmpDir: string;
+  let store: ProjectStore;
+  let app: Hono;
+  let currentUserId: string;
+
+  const catalog = { profiles: ['default', 'devops', 'sandbox'], defaultProfile: 'default' };
+
+  function makeApp(optsCatalog?: { profiles: string[]; defaultProfile: string }): Hono {
+    const local = new Hono();
+    local.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store, undefined, {
+      getCurrentUserId: () => currentUserId,
+      // owner проекта/глобальные LEAD/ADMIN — управление; EDITOR — контент.
+      canManage: (_c, project, userId) => project.ownerId === userId || userId === 'lead',
+      canEditContent: (_c, project, userId) =>
+        project.ownerId === userId || userId === 'lead' || project.members[userId] === ProjectRole.EDITOR,
+      ...(optsCatalog ? { executionProfileCatalog: optsCatalog } : {}),
+    }));
+    return local;
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-projects-executor-'));
+    store = new ProjectStore({ dataDir: tmpDir });
+    currentUserId = 'owner';
+    app = makeApp(catalog);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function createProject(): Promise<string> {
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P' }),
+    });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  async function putExecutor(id: string, executor: unknown): Promise<Response> {
+    return app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ executor }),
+    });
+  }
+
+  it('PUT executor сохраняет профиль и потолок; DTO отдаёт executor', async () => {
+    const id = await createProject();
+    const res = await putExecutor(id, { profile: 'devops', allowedProfiles: ['devops', 'sandbox'] });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { executor: { profile?: string; allowedProfiles?: string[] } };
+    expect(body.executor).toEqual({ profile: 'devops', allowedProfiles: ['devops', 'sandbox'] });
+
+    const stored = await store.load(id);
+    expect(stored!.executor).toEqual({ profile: 'devops', allowedProfiles: ['devops', 'sandbox'] });
+  });
+
+  it('PUT executor: null/пустые значения сбрасывают настройку', async () => {
+    const id = await createProject();
+    await putExecutor(id, { profile: 'devops', allowedProfiles: ['devops'] });
+
+    const res = await putExecutor(id, { profile: null, allowedProfiles: [] });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { executor: unknown };
+    expect(body.executor).toBeNull();
+    expect((await store.load(id))!.executor).toBeUndefined();
+  });
+
+  it('PUT executor: пустая строка профиля сбрасывает только профиль', async () => {
+    const id = await createProject();
+    await putExecutor(id, { profile: 'devops', allowedProfiles: ['devops'] });
+    const res = await putExecutor(id, { profile: '' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { executor: { profile?: string; allowedProfiles?: string[] } };
+    expect(body.executor).toEqual({ allowedProfiles: ['devops'] });
+  });
+
+  it('неизвестный профиль → 400 VALIDATION_ERROR (настройка не меняется)', async () => {
+    const id = await createProject();
+    const res = await putExecutor(id, { profile: 'ghost' });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect((await store.load(id))!.executor).toBeUndefined();
+  });
+
+  it('неизвестный профиль в allowedProfiles → 400 VALIDATION_ERROR', async () => {
+    const id = await createProject();
+    const res = await putExecutor(id, { allowedProfiles: ['devops', 'ghost'] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('EDITOR не может менять executor (403), но может контент', async () => {
+    const id = await createProject();
+    const project = (await store.load(id))!;
+    project.members['editor'] = ProjectRole.EDITOR;
+    await store.save(project);
+
+    currentUserId = 'editor';
+    expect((await putExecutor(id, { profile: 'devops' })).status).toBe(403);
+
+    const content = await app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'changed' }),
+    });
+    expect(content.status).toBe(200);
+  });
+
+  it('owner может менять executor', async () => {
+    const id = await createProject();
+    currentUserId = 'owner';
+    expect((await putExecutor(id, { profile: 'devops' })).status).toBe(200);
+  });
+
+  it('без каталога профилей проверка существования пропускается', async () => {
+    app = makeApp(undefined);
+    const id = await createProject();
+    const res = await putExecutor(id, { profile: 'anything' });
+    expect(res.status).toBe(200);
+    expect((await store.load(id))!.executor).toEqual({ profile: 'anything' });
+  });
+});

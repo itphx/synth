@@ -52,8 +52,11 @@ import {
   createProjectPlanRoutes, createProjectLogRoutes,
   resolveProjectWorkspace,
   resolvePluginServerPolicy,
+  // PROP-135 Ф6a: каталог профилей исполнения — валидация проектных/сессионных
+  // настроек профиля.
+  executionProfileCatalog,
 } from '@itphx/synth-core';
-import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
+import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
 import { createBackendProcessAccess } from '../routes/processes.js';
 import { createSessionRoutes } from '../routes/sessions.js';
@@ -149,8 +152,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // (PROP-054), и FS/git-роуты.
   const projectAccess = createProjectAccess(auth);
 
+  // PROP-135 Ф6a: снимок каталога профилей исполнения — валидация
+  // `project.executor` (PUT проекта) и `settings.executorProfile` (PATCH сессии).
+  const executionProfiles: ExecutionProfileCatalog | undefined =
+    executionProfileCatalog(deps.executionRouter);
+
   // Projects routes
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles));
 
   // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
   // core-фабрика, RBAC — те же правила проекта (чтение — право чтения,
@@ -310,6 +318,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // Лимит тяжёлых операций ресурса сессий (`limits.sessionOpsPerMinute`) —
     // live-геттер: резолвится на каждый запрос (0 — без лимита).
     () => deps.sessionOpsPerMinuteSettings.getValue(),
+    // PROP-135 Ф6a: каталог профилей — валидация `settings.executorProfile`.
+    executionProfiles,
   ));
 
   // Messages routes

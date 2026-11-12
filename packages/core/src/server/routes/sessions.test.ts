@@ -1865,3 +1865,72 @@ describe('Session API Routes — context_usage (ADR-119)', () => {
     expect('context_usage' in body.sessions[0]).toBe(false);
   });
 });
+
+/**
+ * PROP-135 Ф6a: профиль исполнения сессии (`PATCH /:id { settings: { executorProfile } }`).
+ *
+ * При доступном каталоге профилей неизвестное имя → `400 VALIDATION_ERROR`;
+ * пустая строка — явный сброс (ключ не сохраняется). Без каталога
+ * (inline/instance-пул) проверка существования пропускается.
+ */
+describe('Session API Routes — executor profile (PROP-135 Ф6a)', () => {
+  let tmpDir: string;
+
+  const catalog = { profiles: ['default', 'devops'], defaultProfile: 'default' };
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-exec-profile-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function patchProfile(sessionId: string, app: Hono, profile: unknown): Promise<Response> {
+    return app.request(`/api/v2/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { executorProfile: profile } }),
+    });
+  }
+
+  it('известный профиль → 200 и сохраняется в settings', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, undefined, undefined, {
+      executionProfileCatalog: catalog,
+    });
+    const session = await sessionManager.createSession({ title: 'S' });
+    const res = await patchProfile(session.id, app, 'devops');
+    expect(res.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBe('devops');
+  });
+
+  it('неизвестный профиль → 400 VALIDATION_ERROR, настройка не меняется', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, undefined, undefined, {
+      executionProfileCatalog: catalog,
+    });
+    const session = await sessionManager.createSession({ title: 'S', settings: { executorProfile: 'default' } });
+    const res = await patchProfile(session.id, app, 'ghost');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBe('default');
+  });
+
+  it('пустая строка → 200 и сброс профиля', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, undefined, undefined, {
+      executionProfileCatalog: catalog,
+    });
+    const session = await sessionManager.createSession({ title: 'S', settings: { executorProfile: 'devops' } });
+    const res = await patchProfile(session.id, app, '');
+    expect(res.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBeUndefined();
+  });
+
+  it('без каталога профилей проверка существования пропускается', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'S' });
+    const res = await patchProfile(session.id, app, 'anything');
+    expect(res.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBe('anything');
+  });
+});

@@ -5,12 +5,15 @@ import type { Project, Session, WorkspaceOutsideRootPolicy, ProjectMcpSettings, 
 import {
   projectMcpUpdateSchema,
   projectMemoryUpdateSchema,
+  projectExecutorUpdateSchema,
   projectPlanSchema,
   PROJECT_ICON_KEYS,
   PROJECT_COLOR_KEYS,
   isProjectIconKey,
   isProjectColorKey,
 } from '@itphx/synth-shared';
+import type { ProjectExecutorSettings } from '@itphx/synth-shared';
+import type { ExecutionProfileCatalog } from '../../execution/profile-binding.js';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import { provisionWorkspace, resolveWorkspaceForLocalProject } from '../../engine/workspace-provision.js';
 import { serializeProject, serializeProjectSummary } from '../serialize.js';
@@ -115,6 +118,16 @@ export interface ProjectRoutesOptions {
    * дефолтов). Не задан — проект создаётся без `mcp`/`skills` (legacy-гейт открыт).
    */
   getProjectSeeds?: () => Promise<{ mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }> | { mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings };
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (`execution.remote`).
+   *
+   * Задан — `PUT /:id { executor: { profile, allowedProfiles } }` проверяет
+   * существование профилей в каталоге (иначе `400 VALIDATION_ERROR`). Не задан
+   * (каталог недоступен/inline) — проверка существования пропускается,
+   * структура тела валидируется всегда. Изменение `executor` — право
+   * управления проектом (`canManage`: owner/LEAD/ADMIN), как у `workspace`.
+   */
+  executionProfileCatalog?: ExecutionProfileCatalog;
   /** Менеджер сессий. Задан — регистрируется `GET /:id/stats`. */
   sessionManager?: ProjectStatsSource;
   /**
@@ -512,6 +525,11 @@ export function createProjectRoutes(
     if (body.workspace !== undefined && !canManage(c, project, userId)) {
       return jsonForbidden(c);
     }
+    // PROP-135 Ф6a: профиль исполнения проекта — операционная настройка
+    // (как `workspace`/MCP-скоуп): owner / LEAD / ADMIN, не EDITOR.
+    if (body.executor !== undefined && !canManage(c, project, userId)) {
+      return jsonForbidden(c);
+    }
     if (
       projectContentFields.some((field) => body[field] !== undefined)
       && !canEditContent(c, project, userId)
@@ -586,6 +604,53 @@ export function createProjectRoutes(
       }
     }
     if (body.repos !== undefined) project.repos = body.repos;
+    // PROP-135 Ф6a: профиль исполнения проекта (owner/LEAD/ADMIN).
+    // `profile: null`/`''` и `allowedProfiles: null`/`[]` сбрасывают значение:
+    // пустой список = «без ограничения» (обратная совместимость).
+    if (body.executor !== undefined) {
+      const parsedExecutor = projectExecutorUpdateSchema.safeParse(body.executor);
+      if (!parsedExecutor.success) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedExecutor.error.message } }, 400);
+      }
+      const catalog = opts.executionProfileCatalog;
+      const knownProfile = (name: string): boolean =>
+        !catalog || catalog.profiles.length === 0 || catalog.profiles.includes(name);
+      const next: ProjectExecutorSettings = { ...(project.executor ?? {}) };
+      const profileValue = parsedExecutor.data.profile;
+      if (profileValue !== undefined) {
+        const profile = (profileValue ?? '').trim();
+        if (profile === '') {
+          delete next.profile;
+        } else if (!knownProfile(profile)) {
+          return c.json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Неизвестный профиль исполнения: "${profile}". Доступные: ${catalog!.profiles.join(', ')}`,
+            },
+          }, 400);
+        } else {
+          next.profile = profile;
+        }
+      }
+      const allowedValue = parsedExecutor.data.allowedProfiles;
+      if (allowedValue !== undefined) {
+        const list = [...new Set((allowedValue ?? []).map((name) => name.trim()).filter(Boolean))];
+        const unknown = list.filter((name) => !knownProfile(name));
+        if (unknown.length > 0) {
+          return c.json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Неизвестные профили исполнения в allowedProfiles: ${unknown.join(', ')}. Доступные: ${catalog!.profiles.join(', ')}`,
+            },
+          }, 400);
+        }
+        if (list.length === 0) delete next.allowedProfiles;
+        else next.allowedProfiles = list;
+      }
+      project.executor = next.profile === undefined && next.allowedProfiles === undefined
+        ? undefined
+        : next;
+    }
     const planResult = planFieldSchema.safeParse(body.plan);
     if (planResult.success && planResult.data !== undefined) {
       project.plan = (planResult.data ?? undefined) as Project['plan'] | undefined;

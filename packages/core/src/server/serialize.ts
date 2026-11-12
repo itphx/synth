@@ -416,6 +416,11 @@ export function serializeProjectSummary(project: Project) {
     mcp: project.mcp ?? null,
     /** ADR-107: политика памяти проекта (`{enabled}`; null — наследует). */
     memory: project.memory ?? null,
+    /**
+     * PROP-135 Ф6a: профиль исполнения проекта и потолок разрешённых профилей
+     * (`null` — наследует профиль инстанса, ограничений нет).
+     */
+    executor: project.executor ?? null,
     status_messages: (project.statusMessages || []).map((sm: StatusMessage) => ({
       id: sm.id,
       text: sm.text,

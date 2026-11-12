@@ -164,11 +164,32 @@ async function makeHarness(opts: {
   /** Рабочий каталог сессии (по умолчанию — временный каталог теста). */
   defaultWorkingDir?: string;
   onToolCall: (ctx: ToolContext) => void;
+  /** Переопределения определений агентов (PROP-135 Ф6a: executorProfile/allowedProfiles). */
+  agentOverrides?: Record<string, Record<string, unknown>>;
+  /** Стор проектов (PROP-135 Ф6a: `project.executor.profile`). */
+  projectStore?: import('../storage/project-store.js').ProjectStore;
 }): Promise<Harness> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'synth-exec-router-'));
   const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
   const toolRegistry = createToolRegistry();
   toolRegistry.register(makeProbeTool(opts.onToolCall));
+  const agentRegistry = createAgentRegistry(toolRegistry);
+  for (const [id, patch] of Object.entries(opts.agentOverrides ?? {})) {
+    const base = agentRegistry.get(id);
+    if (base) {
+      agentRegistry.register({ ...base, ...patch });
+    } else {
+      agentRegistry.register({
+        id,
+        displayName: id,
+        capabilities: [],
+        enabled: true,
+        agentMode: ['primary', 'subagent'],
+        isOverridden: false,
+        ...patch,
+      } as unknown as import('@itphx/synth-shared').AgentDefinition);
+    }
+  }
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus: new EventBus(),
@@ -182,10 +203,11 @@ async function makeHarness(opts: {
         defaultModel: 'm',
       }) as unknown as import('@itphx/synth-shared').ProviderConfig,
     toolRegistry,
-    agentRegistry: createAgentRegistry(toolRegistry),
+    agentRegistry,
     defaultWorkingDir: opts.defaultWorkingDir ?? tmpDir,
     ...(opts.workspacesRoot ? { workspacesRoot: opts.workspacesRoot } : {}),
     ...(opts.router ? { executionRouter: opts.router } : {}),
+    ...(opts.projectStore ? { projectStore: opts.projectStore } : {}),
   });
   const session = await sessionManager.createSession({
     title: 'Execution router',
@@ -387,5 +409,157 @@ describe('PROP-135 Ф4a: порт роутера доходит до тула', 
     await runTurn(harness);
 
     expect(targets[targets.length - 1]!.workspaceSubPath).toBeUndefined();
+  });
+});
+
+/**
+ * PROP-135 Ф6a: binding профиля исполнения на ходе.
+ *
+ * Профиль вычисляется один раз на ход по цепочке
+ * сессия → агент → проект → `execution.remote.defaultProfile`; запрещённый
+ * потолком профиль не выбирается (откат на дефолт), а каталог профилей
+ * доступен тулу `task` через `ctx.extra.executionProfileCatalog`.
+ */
+describe('PROP-135 Ф6a: binding профиля в оркестраторе', () => {
+  beforeEach(() => {
+    ProviderFactory.register('routerscript', RouterScriptProvider);
+    RouterScriptProvider.calls = 0;
+  });
+
+  afterEach(() => {
+    ProviderFactory['_providers'].delete('routerscript');
+  });
+
+  /** Проект с настройками профиля исполнения (`project.executor`). */
+  async function makeProjectStore(executor?: {
+    profile?: string;
+    allowedProfiles?: string[];
+  }): Promise<{ store: import('../storage/project-store.js').ProjectStore; projectId: string }> {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-exec-project-'));
+    const store = new (await import('../storage/project-store.js')).ProjectStore({ dataDir: dir });
+    const project = store.create('P', 'local');
+    if (executor) project.executor = executor;
+    await store.save(project);
+    return { store, projectId: project.id };
+  }
+
+  it('сессия без профиля, у агента есть executorProfile → portFor получает профиль агента', async () => {
+    const port = sentinelPort('agent-profile-port');
+    const requested: Array<string | undefined> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        requested.push(target?.profile);
+        return port;
+      },
+    };
+    const harness = await makeHarness({
+      router,
+      agentOverrides: { fixer: { executorProfile: 'agent-profile' } },
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+    expect(requested[requested.length - 1]).toBe('agent-profile');
+  });
+
+  it('у проекта есть executor.profile, у агента нет → профиль проекта', async () => {
+    const port = sentinelPort('project-profile-port');
+    const requested: Array<string | undefined> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        requested.push(target?.profile);
+        return port;
+      },
+    };
+    const { store, projectId } = await makeProjectStore({ profile: 'project-profile' });
+    const harness = await makeHarness({
+      router,
+      projectId,
+      projectStore: store,
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+    expect(requested[requested.length - 1]).toBe('project-profile');
+  });
+
+  it('профиль сессии приоритетнее профиля агента и проекта', async () => {
+    const port = sentinelPort('session-profile-port');
+    const requested: Array<string | undefined> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        requested.push(target?.profile);
+        return port;
+      },
+    };
+    const { store, projectId } = await makeProjectStore({ profile: 'project-profile' });
+    const harness = await makeHarness({
+      router,
+      projectId,
+      projectStore: store,
+      executorProfile: 'session-profile',
+      agentOverrides: { fixer: { executorProfile: 'agent-profile' } },
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+    expect(requested[requested.length - 1]).toBe('session-profile');
+  });
+
+  it('запрещённый проектом профиль → defaultProfile (fail-closed)', async () => {
+    const port = sentinelPort('denied-port');
+    const requested: Array<string | undefined> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        requested.push(target?.profile);
+        return port;
+      },
+      profiles: () => ['default', 'allowed', 'forbidden'],
+      defaultProfile: () => 'default',
+    };
+    const { store, projectId } = await makeProjectStore({ allowedProfiles: ['allowed'] });
+    const harness = await makeHarness({
+      router,
+      projectId,
+      projectStore: store,
+      executorProfile: 'forbidden',
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+    expect(requested[requested.length - 1]).toBe('default');
+  });
+
+  it('неизвестный каталогу профиль → defaultProfile', async () => {
+    const port = sentinelPort('unknown-port');
+    const requested: Array<string | undefined> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        requested.push(target?.profile);
+        return port;
+      },
+      profiles: () => ['default'],
+      defaultProfile: () => 'default',
+    };
+    const harness = await makeHarness({
+      router,
+      executorProfile: 'ghost',
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+    expect(requested[requested.length - 1]).toBe('default');
+  });
+
+  it('каталог профилей доступен тулу через ctx.extra.executionProfileCatalog', async () => {
+    let catalog: unknown;
+    const router: ExecutionRouter = {
+      portFor: () => sentinelPort('catalog-port'),
+      profiles: () => ['default', 'devops'],
+      defaultProfile: () => 'default',
+    };
+    const harness = await makeHarness({
+      router,
+      onToolCall: (ctx) => {
+        catalog = (ctx.extra as { executionProfileCatalog?: unknown }).executionProfileCatalog;
+      },
+    });
+    await runTurn(harness);
+    expect(catalog).toEqual({ profiles: ['default', 'devops'], defaultProfile: 'default' });
   });
 });

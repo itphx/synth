@@ -110,6 +110,8 @@ import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, isFfm
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
 import type { ExecutionPort } from '../execution/ports/index.js';
 import type { ExecutionRouter } from '../execution/router.js';
+import { executionProfileCatalog } from '../execution/router.js';
+import { resolveExecutionProfile, type ExecutionProfileCatalog } from '../execution/profile-binding.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
@@ -1226,6 +1228,12 @@ export class ChatOrchestrator {
    * профильный порт получают только тулы хода.
    */
   private readonly _executionRouter: ExecutionRouter;
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (снимок `execution.remote` на
+   * старте). `undefined` — роутер не знает каталога (`inline`/instance-пул):
+   * binding работает без проверки существования профиля.
+   */
+  private readonly _executionProfileCatalog: ExecutionProfileCatalog | undefined;
   /** ADR-071 §2.6: загрузчик chars-per-token модели (калибровка). */
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** ADR-071 §2.6: сохранение калибровки chars-per-token после ответа. */
@@ -1623,6 +1631,9 @@ export class ChatOrchestrator {
     // PROP-135 Ф4a: роутер портов — профиль сессии выбирает порт тулов.
     // Без роутера — instance-порт (прежнее поведение).
     this._executionRouter = options.executionRouter ?? { portFor: () => this._executionPort };
+    // PROP-135 Ф6a: снимок каталога профилей — его читают binding профиля и
+    // тул `task` (проверка `executor_profile` до создания дочерней сессии).
+    this._executionProfileCatalog = executionProfileCatalog(this._executionRouter);
     // ADR-075/ADR-076: git-сервис и режим/политика workspace для тулов управления
     // проектом. gitService по умолчанию — над тем же workspacesRoot и портом.
     this._gitService =
@@ -4828,6 +4839,24 @@ export class ChatOrchestrator {
     // Уровень размышлений агента: если агент не задал — берём настройку сессии
     const effectiveReasoningLevel = agentDef?.reasoningLevel ?? session.settings.reasoningLevel;
 
+    // PROP-135 Ф6a: эффективный профиль исполнения хода — один раз на ход
+    // (сессия → агент → проект → `defaultProfile`). Проект уже загружен для
+    // state/промпта, агент — по эффективной роли; лишних чтений на каждый тул
+    // нет. Запрещённый потолком профиль не выбирается: откат на дефолт и
+    // предупреждение в журнал (fail-closed, без секретов).
+    const executionProfileResolution = resolveExecutionProfile({
+      sessionProfile: session.settings.executorProfile,
+      agentProfile: agentDef?.executorProfile,
+      agentAllowed: agentDef?.allowedProfiles,
+      projectProfile: projectForState?.executor?.profile,
+      projectAllowed: projectForState?.executor?.allowedProfiles,
+      defaultProfile: this._executionProfileCatalog?.defaultProfile ?? '',
+      knownProfiles: this._executionProfileCatalog?.profiles,
+    });
+    if (executionProfileResolution.warning) {
+      warning('ORCHESTRATOR', executionProfileResolution.warning);
+    }
+
     // ADR-070 §2.9.1/ADR-077: перечитать доступность внешних программ (git/rg/sh)
     // перед ходом. Снимок на старте устаревает: в split-режиме состав пула
     // появляется не мгновенно (раскатка поднимает control plane раньше
@@ -6530,7 +6559,11 @@ export class ChatOrchestrator {
                   // пула по области (`projectId`/`sessionId`) — без них пул
                   // не адресуем (фоллбэк решает роутер).
                   executionPort: this._executionRouter.portFor({
-                    profile: session.settings.executorProfile,
+                    // PROP-135 Ф6a: профиль вычислен по binding'у хода
+                    // (сессия → агент → проект → дефолт), а не сырой
+                    // `session.settings.executorProfile`; allowlist проверен,
+                    // пустое значение — роутер возьмёт профиль по умолчанию.
+                    profile: executionProfileResolution.profile || undefined,
                     projectId: session.projectId,
                     sessionId: session.id,
                     // PROP-135 Ф4b-2b-2a: per-project монтирование PVC — пул
@@ -6548,6 +6581,12 @@ export class ChatOrchestrator {
                   // (`sandbox_exec` → класс `sandbox`). Без роутера такой тул
                   // отказывает понятной ошибкой, а не уходит в inline.
                   executionRouter: this._executionRouter,
+                  // PROP-135 Ф6a: каталог профилей — тул `task` проверяет явный
+                  // `executor_profile` до создания дочерней сессии (существование
+                  // в `execution.remote.profiles`; allowlist проекта/агента — там же).
+                  ...(this._executionProfileCatalog
+                    ? { executionProfileCatalog: this._executionProfileCatalog }
+                    : {}),
                   // Тот же subPath, что у порта сессии: песочный пул монтируется
                   // в тот же каталог проекта/worktree (класс пула в ключ входит,
                   // subPath — нет).

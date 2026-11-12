@@ -28,6 +28,19 @@ export interface AgentDefinition {
   effort?: EffortLevel;
   agentMode?: AgentMode | AgentMode[];
   maxSteps?: number; // 0 = без ограничений, undefined = default (0 для primary, 15 для subagent)
+  /**
+   * PROP-135 Ф6a: профиль исполнения агента (`execution.remote.profiles`).
+   * Приоритет выбора профиля: сессия → агент → проект → `defaultProfile`.
+   * Не задан — профиль берётся у проекта/инстанса.
+   */
+  executorProfile?: string;
+  /**
+   * PROP-135 Ф6a: **потолок** профилей исполнения агента: если массив задан и
+   * непуст, агент не может исполняться на профиле вне списка (нарушение —
+   * fail-closed с откатом на `defaultProfile`). Пустой массив/`undefined` —
+   * без ограничения (обратная совместимость).
+   */
+  allowedProfiles?: string[];
   isOverridden: boolean;
   icon?: string;
   color?: string;

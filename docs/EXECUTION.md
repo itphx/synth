@@ -156,6 +156,31 @@ Env-имена (по одному на поле; **зафиксированы и
 медиа-раннер, worktree/process/MCP, детект зависимостей) остаётся на общем порте — это остаток
 следующих слайсов.
 
+**Binding профиля (PROP-135, Ф6a — реализовано).** Эффективный профиль хода вычисляется один раз
+на ход (`packages/core/src/execution/profile-binding.ts`):
+
+```
+session.settings.executorProfile
+  → agentDefinition.executorProfile   (по эффективной роли агента)
+  → project.executor.profile
+  → execution.remote.defaultProfile
+```
+
+- первый непустой **разрешённый** кандидат становится профилем порта (`portFor`);
+- потолки `project.executor.allowedProfiles` и `agentDefinition.allowedProfiles` (непустой список)
+  обязательны для кандидата; пустой/отсутствующий список — без ограничения (обратная совместимость);
+- запрещённый или неизвестный каталогу профиль **не выбирается** (fail-closed): откат на
+  `defaultProfile` (или следующий разрешённый кандидат) с предупреждением в журнал — без секретов;
+- `defaultProfile` — точка отката инстанса, потолками области не проверяется;
+- каталог профилей доступен тулу `task` (`extra.executionProfileCatalog`).
+
+Профиль наследуется дочерними сессиями: `task({executor_profile})` проверяет каталог и потолки
+проекта/агента **до** создания ребёнка (нарушение — `tool.args_error`, сессия не создаётся) и пишет
+профиль в `settings.executorProfile` ребёнка. API: `PUT /api/v2/projects/:id { executor: { profile,
+allowedProfiles } }` — право управления проектом (owner/LEAD/ADMIN), `PATCH /api/v2/sessions/:id
+{ settings: { executorProfile } }` — проверка существования при доступном каталоге (иначе
+`400 VALIDATION_ERROR`), пустая строка — сброс. UI и admin-API пулов — остаток 6b.
+
 ### Ф4b-1: провайдер пулов (`static`/`http`) и ленивый порт
 
 > **Ф4b-1 (PROP-135, реализовано):** провайдер пулов исполнения (`static`|`http`), ключи пулов
@@ -212,9 +237,9 @@ session:ses_1:sandbox:default
 статические `execution.remote.url` и `execution.remote.tokenSecret` **не нужны** (адрес и токен
 пула выдаёт provisioner) — проверка режима на старте этого не требует.
 
-**Остаток PROP-135:** полный binding профиля (`task.executor_profile` → `agentDefinition.executorProfile` →
-`project.executor.profile`), **браузерный класс** пулов и MCP динамического пула (слайс 5b), аудит/
-чекер песочного профиля (PROP-136). `sandbox_exec` — сделан (слайс 5a, см. ниже). Матрица «что уезжает в
+**Остаток PROP-135:** **браузерный класс** пулов и MCP динамического пула (слайс 5b), UI/admin-API
+выбора профиля пулов (6b), аудит/чекер песочного профиля (PROP-136). `sandbox_exec` — сделан
+(слайс 5a, см. ниже); binding профиля — Ф6a (см. выше). Матрица «что уезжает в
 исполнитель» (§ ниже) на Ф4b-1 не меняется.
 
 **Песочный запуск (`sandbox_exec`, слайс 5a).** Тул исполняет 1..5 команд последовательно в

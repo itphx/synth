@@ -2214,6 +2214,9 @@ export async function createStandaloneDeps(
 
   return {
     dataDir,
+    // PROP-135 Ф6a: роутер портов исполнения — каталог профилей для
+    // валидации `project.executor`/`settings.executorProfile` в роутах.
+    executionRouter,
     // ADR-106 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
     approvalRegistry,
     // ADR-096: контекст хранения инстанса — для операций, которым нужен

@@ -5,6 +5,7 @@ import type {
   SettingsRepository, McpRegistryRepository, EventBus,
 } from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
+import type { ExecutionProfileCatalog } from '@itphx/synth-core';
 // ADR-114: сервис worktree — контур `/projects/:id/worktrees*`.
 import type { WorktreeService } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
@@ -70,6 +71,12 @@ export function createProjectRoutes(
    * Не задана — публикации нет (поведение прежнее).
    */
   eventBus?: EventBus,
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (`execution.remote`) —
+   * валидация `project.executor.profile`/`allowedProfiles` (PUT /:id).
+   * Не задан — проверка существования профиля пропускается.
+   */
+  executionProfileCatalog?: ExecutionProfileCatalog,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -141,6 +148,9 @@ export function createProjectRoutes(
             },
           }
         : {}),
+      // PROP-135 Ф6a: каталог профилей исполнения — проверка
+      // `project.executor.profile`/`allowedProfiles` в PUT /:id.
+      ...(executionProfileCatalog ? { executionProfileCatalog } : {}),
     },
   );
 }

@@ -12,6 +12,8 @@ import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
   resolveAgentRoleAlias,
   createSessionRoutes, createProjectRoutes,
+  executionProfileCatalog,
+  type ExecutionProfileCatalog,
   createProjectPlanRoutes, createProjectLogRoutes,
   createProviderRoutes, createModelRoutes, createAgentRoutes, createFsRoutes,
   createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
@@ -143,6 +145,11 @@ export function mountStandaloneRoutes(
   const {
     getClient, getActiveRemoteModels, getActiveRemoteProviderNames, isBlockLocalProviders,
   } = ctx.remote;
+  // PROP-135 Ф6a: снимок каталога профилей исполнения — валидация
+  // `settings.executorProfile` (PATCH сессии) и `project.executor` (PUT проекта).
+  // `undefined` (inline/instance-пул) — проверка существования пропускается.
+  const executionProfiles: ExecutionProfileCatalog | undefined =
+    executionProfileCatalog(deps.executionRouter);
   /** ADR-075: эффективная политика workspace вне root — live-изменяется `onWorkspacePolicyChange`. */
   let effectiveWorkspaceOutsideRootPolicy: WorkspaceOutsideRootPolicy = deps.workspaceOutsideRootPolicy;
   /**
@@ -171,6 +178,8 @@ export function mountStandaloneRoutes(
       getRemoteClient: () => getClient(),
       requestSessionService,
       analytics,
+      // PROP-135 Ф6a: каталог профилей — валидация `settings.executorProfile`.
+      ...(executionProfiles ? { executionProfileCatalog: executionProfiles } : {}),
       // Этап 1 roadmap 0.13 (блок 3): вопросы пользователю (`ask_user`).
       ...(deps.questionService ? { questionService: deps.questionService } : {}),
       // ADR-111 §detach: «Стоп» останавливает и живые дочерние прогоны
@@ -246,6 +255,9 @@ export function mountStandaloneRoutes(
 
   // Projects
   app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => getClient(), {
+    // PROP-135 Ф6a: каталог профилей — валидация `project.executor.profile`/
+    // `allowedProfiles` (PUT /:id).
+    ...(executionProfiles ? { executionProfileCatalog: executionProfiles } : {}),
     // ADR-071 §2.4: проектный MCP-скоуп (`GET/PUT /:id/mcp`) — паритет с
     // managed backend: без источника серверов маршрут не регистрируется, и
     // панель «Проект» → «MCP-серверы» получала 404 (в т.ч. для `remote:`).

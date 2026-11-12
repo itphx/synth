@@ -90,6 +90,23 @@ export interface ProjectSkillSettings {
 }
 
 /**
+ * PROP-135 Ф6a: профиль исполнения проекта.
+ *
+ * - `profile` — имя профиля из `execution.remote.profiles` для сессий проекта
+ *   (если сессия и агент свой профиль не задали). Не задан — наследуется
+ *   `execution.remote.defaultProfile`;
+ * - `allowedProfiles` — **потолок**: если массив задан и непуст, сессия проекта
+ *   не может исполняться на профиле вне списка (выбор сессии/агента/проекта
+ *   проверяется при каждом ходе; нарушение — fail-closed с откатом на
+ *   `defaultProfile`). Пустой массив/`undefined` — без ограничения (обратная
+ *   совместимость: старые проекты не имеют поля).
+ */
+export interface ProjectExecutorSettings {
+  profile?: string;
+  allowedProfiles?: string[];
+}
+
+/**
  * ADR-107: память проекта (undefined — наследует политику инстанса/включена).
  */
 export interface ProjectMemorySettings {
@@ -142,6 +159,8 @@ export interface Project {
   skills?: ProjectSkillSettings;
   /** ADR-107: память проекта (undefined — наследует политику инстанса/включена). */
   memory?: ProjectMemorySettings;
+  /** PROP-135 Ф6a: профиль исполнения проекта и потолок разрешённых профилей. */
+  executor?: ProjectExecutorSettings;
   statusMessages: StatusMessage[];
   /** Kanban-план проекта (ADR-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;

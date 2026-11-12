@@ -734,8 +734,30 @@ gets:
   instance port) or `fallback: fail` (**fail-closed at startup**).
 
 Profiles are set **only** in `config.yaml` — there is no env override for the profile catalogue.
-The full profile binding (`task.executor_profile` → `agentDefinition.executorProfile` →
-`project.executor.profile`) is the next PROP-135 slice.
+
+**Profile binding (PROP-135 F6a).** The effective profile is an inherited scope setting, priority:
+
+```
+session.settings.executorProfile → agentDefinition.executorProfile → project.executor.profile → execution.remote.defaultProfile
+```
+
+- the first non-empty **allowed** candidate becomes the port profile (`portFor`); it is resolved
+  **once per turn**;
+- `project.executor.allowedProfiles` and `agentDefinition.allowedProfiles` are a **ceiling**: a
+  non-empty list is mandatory for the profile, an empty/absent list means no restriction
+  (compatibility: old projects/agents have no such field);
+- a profile denied by a ceiling or unknown to the catalogue is **never selected** (fail-closed):
+  fall back to `defaultProfile` (or the next allowed candidate) with a warning in the log (no secrets);
+- `project.executor.profile` sets the profile of the project sessions; `project.executor.allowedProfiles`
+  also constrains the session/agent choice;
+- `task({executor_profile})` — the child session profile: checked against the catalogue and the
+  project/agent ceilings before the child is created (a violation → `tool.args_error`);
+- API: `PUT /api/v2/projects/:id { executor: { profile, allowedProfiles } }` — project management
+  right (owner/LEAD/ADMIN, like `workspace`; EDITOR cannot); `null`/`''`/`[]` reset the value, an
+  empty `allowedProfiles` means no restriction; an unknown profile with an available catalogue →
+  `400 VALIDATION_ERROR`;
+- `PATCH /api/v2/sessions/:id { settings: { executorProfile } }` — existence is checked when the
+  catalogue is available (otherwise `400 VALIDATION_ERROR`), an empty string resets the profile.
 
 **Pool provider (PROP-135, F4b-1).** `execution.remote.provider` decides **where** the pool address
 comes from:

@@ -5,7 +5,7 @@
  * в `run-cycle.ts`, создание дочерней сессии — в `fork.ts`, промпт — в `prompt.ts`.
  */
 import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig, TodoItem } from '@itphx/synth-shared';
+import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig, TodoItem, AgentDefinition } from '@itphx/synth-shared';
 import { DEFAULT_SUBAGENT_DEPTH } from '@itphx/synth-shared/config';
 import { normalizeAgentModes } from '../../agents/normalize.js';
 import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
@@ -13,6 +13,7 @@ import type { ModelRouter } from '../../router/router.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { argErrorResult } from '../arg-error.js';
+import { isProfileAllowed } from '../../../execution/profile-binding.js';
 import { BackgroundLimitExceededError } from '../../background/types.js';
 import { publishMessageAdded, resolveSessionDepth } from './child-session.js';
 import { prepareChildSession, type PreparedChildSession } from './fork.js';
@@ -114,6 +115,17 @@ export const taskTool: ToolDefinition = {
       };
     }
 
+    // ─── PROP-135 Ф6a: профиль исполнения дочерней сессии ─────────────
+    // Явный `executor_profile`: проверяем существование в каталоге и потолки
+    // проекта/агента ДО создания ребёнка (иначе осталась бы «пустая» сессия).
+    // Не задан — ребёнок наследует настройки родителя (binding проверит их
+    // на ходе ребёнка).
+    const requestedExecutorProfile = params.executor_profile?.trim() ?? '';
+    if (requestedExecutorProfile !== '') {
+      const profileError = await validateChildExecutorProfile(requestedExecutorProfile, agentDef, extra);
+      if (profileError) return profileError;
+    }
+
     const contextMode: ContextMode = params.context_mode || 'none';
     const contextCount = params.context_count || DEFAULT_LAST_N;
     const systemPrompt = resolveSubagentPrompt(
@@ -193,6 +205,13 @@ export const taskTool: ToolDefinition = {
     const subagentRoutingCfg = extra.routerConfig?.subagent;
     if (subagentRoutingCfg?.enabled && params.routing_strategy !== 'none') {
       childRoutingOverrides.routingEnabled = true;
+    }
+
+    // PROP-135 Ф6a: явный профиль исполнения ребёнка — в его `settings`
+    // (`createSession` копирует настройки как есть; binding ребёнка увидит его
+    // как профиль сессии).
+    if (requestedExecutorProfile !== '') {
+      childRoutingOverrides.executorProfile = requestedExecutorProfile;
     }
 
     // ─── Создание дочерней сессии с контекстом (ADR-026/029) ────────
@@ -471,6 +490,62 @@ export const taskTool: ToolDefinition = {
     return runDetachableSubagent({ params, runConfig, extra, ctx });
   },
 };
+
+/**
+ * PROP-135 Ф6a: проверка явного `task.executor_profile` до создания ребёнка.
+ *
+ * Порядок проверок:
+ * 1. профиль существует в каталоге инстанса (`execution.remote.profiles` +
+ *    `defaultProfile`) — каталога нет (inline/instance-пул) → проверка
+ *    пропускается;
+ * 2. профиль разрешён агентом (`agentDefinition.allowedProfiles`);
+ * 3. профиль разрешён проектом родительской сессии
+ *    (`project.executor.allowedProfiles`); проект недоступен/нет
+ *    `projectStore` → проверка проекта пропускается.
+ *
+ * Пустой/отсутствующий список разрешённых — без ограничения (обратная
+ * совместимость). Нарушение → `tool.args_error` (дочерняя сессия не
+ * создаётся).
+ */
+async function validateChildExecutorProfile(
+  profile: string,
+  agentDef: AgentDefinition,
+  extra: TaskExtra,
+): Promise<ToolResult | null> {
+  const catalog = extra.executionProfileCatalog;
+  if (catalog && catalog.profiles.length > 0 && !catalog.profiles.includes(profile)) {
+    return argErrorResult(
+      'task',
+      `executor_profile: profile "${profile}" does not exist (available: ${catalog.profiles.join(', ')})`,
+    );
+  }
+  if (!isProfileAllowed(profile, { agentAllowed: agentDef.allowedProfiles })) {
+    return argErrorResult(
+      'task',
+      `executor_profile: profile "${profile}" is not allowed for agent "${agentDef.id}" (agent allowedProfiles)`,
+    );
+  }
+  let projectAllowed: readonly string[] | undefined;
+  if (extra.projectStore && extra.sessionManager && extra.sessionId) {
+    try {
+      const parent = await extra.sessionManager.getSession(extra.sessionId);
+      if (parent?.projectId) {
+        const project = await extra.projectStore.load(parent.projectId);
+        projectAllowed = project?.executor?.allowedProfiles;
+      }
+    } catch {
+      // Проект недоступен — проверка проекта пропускается (fail-open: отказ
+      // по недоступному хранилищу заблокировал бы запуск саб-агента).
+    }
+  }
+  if (!isProfileAllowed(profile, { projectAllowed })) {
+    return argErrorResult(
+      'task',
+      `executor_profile: profile "${profile}" is not allowed by the project (project.executor.allowedProfiles)`,
+    );
+  }
+  return null;
+}
 
 /** Результат резолвинга провайдера/модели саб-агента. */
 interface SubagentProviderResolution {

@@ -283,6 +283,18 @@ export const projectCreateSchema = z.object({
 /** ADR-107: проектная политика памяти (undefined — не менять). */
 export const projectMemoryUpdateSchema = z.object({ enabled: z.boolean().optional() });
 
+/**
+ * PROP-135 Ф6a: профиль исполнения проекта (`PUT /api/v2/projects/:id`).
+ *
+ * `profile`/`allowedProfiles` — `null`/`''`/`[]` сбрасывают значение (пустой
+ * список = «без ограничения», обратная совместимость). Существование профиля
+ * в `execution.remote.profiles` проверяет роут (если каталог ему доступен).
+ */
+export const projectExecutorUpdateSchema = z.object({
+  profile: z.string().nullable().optional(),
+  allowedProfiles: z.array(z.string()).nullable().optional(),
+});
+
 export const projectUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   description: z.string().optional(),
@@ -293,6 +305,7 @@ export const projectUpdateSchema = z.object({
   workspace: z.string().optional(),
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
   memory: projectMemoryUpdateSchema.optional(),
+  executor: projectExecutorUpdateSchema.optional(),
 });
 
 /**

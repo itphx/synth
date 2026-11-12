@@ -571,6 +571,7 @@ export type { PooledExecutionPortOptions } from './execution/pooled-port.js';
 export {
   createExecutionRouter,
   isExecutionRouter,
+  executionProfileCatalog,
   ExecutionProfileUnavailableError,
 } from './execution/router.js';
 export type {
@@ -578,6 +579,18 @@ export type {
   ExecutionRouter,
   ExecutionRouterOptions,
 } from './execution/router.js';
+// PROP-135 Ф6a: binding профиля исполнения (сессия → агент → проект → дефолт).
+export {
+  resolveExecutionProfile,
+  isProfileAllowed,
+} from './execution/profile-binding.js';
+export type {
+  ExecutionProfileBindingInput,
+  ExecutionProfileCatalog,
+  ExecutionProfileCeilings,
+  ExecutionProfileResolution,
+  ExecutionProfileSource,
+} from './execution/profile-binding.js';
 export {
   createRemoteExecutionPortFromConfig,
   createRemoteExecutionPortForPool,

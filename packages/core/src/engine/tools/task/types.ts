@@ -24,6 +24,7 @@ import type { SkillRuntime, SkillScopeOptions } from '../../skills/types.js';
 import type { ProjectStoreLike } from '../../../storage/project-store.js';
 import type { SSHKeyRepository } from '../../../storage/ports/ssh-key-repository.js';
 import type { ExecSecret } from '../../../execution/ports/index.js';
+import type { ExecutionProfileCatalog } from '../../../execution/profile-binding.js';
 import type { GitService } from '../../../git/git-service.js';
 // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю».
 import type { QuestionService } from '../../question/service.js';
@@ -133,6 +134,16 @@ export interface TaskExtra {
   analytics?: AnalyticsRecorder;
   /** ADR-071: калиброванный chars-per-token модели (fallback — дефолт 4). */
   loadTokenRatio?: (model: string | undefined) => Promise<number | undefined> | number | undefined;
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (`execution.remote`).
+   *
+   * Задан — явный `task.executor_profile` проверяется на существование в
+   * каталоге **до** создания дочерней сессии (неизвестный профиль — отказ
+   * `tool.args_error`). Не задан (inline/instance-пул — профилей нет) —
+   * проверка существования пропускается, проверяются только потолки
+   * проекта/агента.
+   */
+  executionProfileCatalog?: ExecutionProfileCatalog;
   /**
    * ADR-069 §7: уже резолвленные оркестратором проектные инструкции
    * (`[PROJECT INSTRUCTIONS] …`) — добавляются в конец базового промпта

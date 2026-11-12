@@ -47,6 +47,7 @@ import type { WorktreeService } from '@itphx/synth-core';
 import type { BackgroundRunService } from '@itphx/synth-core';
 // ADR-106 Ф3: реестр подтверждений — HTTP-ответ на подтверждение.
 import type { ApprovalRegistry } from '@itphx/synth-core';
+import type { ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -167,6 +168,12 @@ export function createSessionRoutes(
    * `0` — без ограничения; значение применяется без рестарта.
    */
   getSessionOpsPerMinute?: () => number,
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (`execution.remote`) —
+   * валидация `settings.executorProfile` в PATCH /:id. Не задан — проверка
+   * существования профиля пропускается (поведение прежнее).
+   */
+  executionProfileCatalog?: ExecutionProfileCatalog,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -780,7 +787,7 @@ export function createSessionRoutes(
   // ADMIN|AUDITOR соответственно) — порядок регистрации оставляет её в силе.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

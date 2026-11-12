@@ -31,6 +31,13 @@ export const taskParametersSchema = z.object({
     .describe('Override model for the subagent'),
   provider: z.string().optional()
     .describe('Override provider for the subagent'),
+  executor_profile: z.string().optional()
+    .describe(
+      'Execution profile for the child session (execution.remote.profiles). '
+      + 'Must exist in the instance catalog and be allowed by project.executor.allowedProfiles '
+      + 'and the subagent\'s allowedProfiles (empty/absent lists mean no restriction). '
+      + 'Omitted — the child inherits the parent session settings.',
+    ),
   routing_strategy: z.enum(['auto', 'content', 'cost', 'none']).optional()
     .describe('Routing strategy for the subagent (default: inherit from parent)'),
   skip_context_files: z.boolean().optional()

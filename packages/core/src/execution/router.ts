@@ -55,13 +55,15 @@
  * ## Чего роутер НЕ делает
  *
  * - не provisioner'ит поды (это следующий слайс Ф4 — сам сервис provisioner);
- * - не реализует полный binding профиля (`task.executor_profile` →
- *   `agentDefinition.executorProfile` → `project.executor.profile` — Ф6);
+ * - не вычисляет binding профиля (`session → agentDefinition → project`):
+ *   это делает `execution/profile-binding.ts` на стороне оркестратора, а
+ *   роутер принимает уже вычисленный профиль (Ф6a);
  * - не меняет instance-level потребление порта (inline-shell, медиа-раннер,
  *   worktree/process/MCP, детект зависимостей) — там порт остаётся общим.
  */
 
 import type { ResolvedExecutionConfig, ResolvedExecutionRemoteConfig } from '@itphx/synth-shared';
+import type { ExecutionProfileCatalog } from './profile-binding.js';
 import { createExecutionPortForConfig, defaultPooledPortFactory } from './factory.js';
 import {
   createExecutionPoolProvider,
@@ -122,6 +124,35 @@ export interface ExecutionRouter {
    *               (`execution.remote.defaultProfile`).
    */
   portFor(target?: ExecutionPortTarget): ExecutionPort;
+  /**
+   * PROP-135 Ф6a: имена известных профилей (`execution.remote.profiles` +
+   * профиль по умолчанию). Не задан у вырожденных роутеров (`inline`/тестовые
+   * заглушки) — каталог неизвестен, проверка существования профиля в роутах и
+   * `task` пропускается.
+   */
+  profiles?(): readonly string[];
+  /**
+   * PROP-135 Ф6a: профиль по умолчанию (`execution.remote.defaultProfile`) —
+   * точка отката binding'а. Не задан — фоллбэк дефолтом роутера при `portFor`.
+   */
+  defaultProfile?(): string;
+}
+
+/**
+ * PROP-135 Ф6a: снимок каталога профилей из роутера.
+ *
+ * `undefined` — роутер не знает каталога (`inline`/instance-пул/тестовая
+ * заглушка): потребители (binding, роуты, `task`) не проверяют существование
+ * профиля, поведение прежнее.
+ */
+export function executionProfileCatalog(
+  router: ExecutionRouter | undefined,
+): ExecutionProfileCatalog | undefined {
+  if (!router?.profiles || !router.defaultProfile) return undefined;
+  return {
+    profiles: router.profiles(),
+    defaultProfile: router.defaultProfile(),
+  };
 }
 
 /** Структурная проверка: переданное значение — роутер исполнения. */
@@ -269,6 +300,10 @@ export async function createExecutionRouter(
       }
       return port;
     },
+    // PROP-135 Ф6a: каталог профилей — для binding'а (`resolveExecutionProfile`)
+    // и проверки `executor.profile`/`executor_profile` в роутах и `task`.
+    profiles: () => [...plans.keys()],
+    defaultProfile: () => defaultName,
   };
 }
 
@@ -321,7 +356,6 @@ function createHttpProviderRouter(
         }
         return instancePort;
       }
-
       // PROP-135 Ф4b-2b-2a: subPath монтирования PVC — в ключ пула **не**
       // входит (кэш прокси по ключу: один порт на проект/сессию), его получает
       // первый `ensure` этого пула.
@@ -354,7 +388,19 @@ function createHttpProviderRouter(
       pooled.set(keyString, port);
       return port;
     },
+    // PROP-135 Ф6a: каталог известных профилей (профиль по умолчанию входит
+    // всегда). `provider: http` адреса профилей получает от provisioner'а —
+    // проверяется только имя, без обращения к нему.
+    profiles: () => [...knownProfiles(remote)],
+    defaultProfile: () => defaultName,
   };
+}
+
+/** Имена известных профилей: каталог конфигурации + профиль по умолчанию. */
+function knownProfiles(remote: ResolvedExecutionRemoteConfig): string[] {
+  const names = new Set(Object.keys(remote.profiles));
+  names.add(remote.defaultProfile);
+  return [...names];
 }
 
 /**

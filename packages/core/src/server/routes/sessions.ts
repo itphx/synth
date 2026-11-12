@@ -13,6 +13,7 @@ import type { SerializeSessionOptions } from '../serialize.js';
 // контракт на все списки с пагинацией (сессии, проекты, пайплайны).
 import { paginate, parseBoundedInt } from '../pagination.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
+import type { ExecutionProfileCatalog } from '../../execution/profile-binding.js';
 import {
   isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp,
   toRemoteSessionMemory,
@@ -225,6 +226,17 @@ export interface SessionRoutesDeps {
   orchestrator: ChatOrchestrator;
   contextOptimizer?: ContextOptimizer;
   projectStore?: ProjectStoreLike;
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (`execution.remote`).
+   *
+   * Задан — `PATCH /:id { settings: { executorProfile } }` проверяет
+   * существование профиля в каталоге (иначе `400 VALIDATION_ERROR`). Не задан
+   * (inline/instance-пул) — проверка существования пропускается, значение
+   * сохраняется как раньше. Потолки (`project.executor.allowedProfiles` /
+   * `agentDefinition.allowedProfiles`) проверяет binding хода: запрещённый
+   * профиль не выбирается (fail-closed, откат на `defaultProfile`).
+   */
+  executionProfileCatalog?: ExecutionProfileCatalog;
   profilesStore?: ProfileStore;
   /**
    * Гибрид. ВАЖНО: если поле НЕ передано (undefined) — все remote/hybrid-ветки
@@ -1220,6 +1232,30 @@ export function createSessionRoutes(
           message: 'Некорректные данные: ' + parsed.error.issues.map(i => i.path.join('.') + ' ' + i.message).join('; '),
         },
       }, 400);
+    }
+
+    // PROP-135 Ф6a: профиль исполнения сессии должен существовать в каталоге
+    // (`execution.remote.profiles`). Каталога нет (inline/instance-пул/тесты) —
+    // проверка пропускается, значение сохраняется как раньше. Пустая строка —
+    // явный сброс (роутер возьмёт профиль агента/проекта/инстанса).
+    const requestedExecutorProfile = parsed.data.settings?.executorProfile;
+    if (requestedExecutorProfile !== undefined) {
+      const profile = requestedExecutorProfile.trim();
+      if (profile === '') {
+        // Явный сброс (`executorProfile: ""`): ключ не сохраняем — binding
+        // возьмёт профиль агента/проекта/инстанса.
+        parsed.data.settings!.executorProfile = undefined;
+      } else {
+        const catalog = deps.executionProfileCatalog;
+        if (catalog && catalog.profiles.length > 0 && !catalog.profiles.includes(profile)) {
+          return c.json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Неизвестный профиль исполнения: "${profile}". Доступные: ${catalog.profiles.join(', ')}`,
+            },
+          }, 400);
+        }
+      }
     }
 
     // ADR-040: перенос сессии между проектами (project_id). Валидируем существование

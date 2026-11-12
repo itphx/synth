@@ -14,6 +14,7 @@ import type { BaseProvider } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
 import { FileStore } from '../../../storage/file-store.js';
+import { ProjectStore } from '../../../storage/project-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
 import { MemoryBackgroundRunRepository } from '../../../storage/memory/background-runs.js';
 import { EventBus } from '../../../events/bus.js';
@@ -2005,5 +2006,129 @@ describe('task/tool.ts — инструкция финализации todo в s
     expect(result.isError).toBeFalsy();
     const [, systemPrompt] = chatAsync.mock.calls[0] as unknown as [unknown, string];
     expect(systemPrompt).toContain(TODO_FINALIZE_MARKER);
+  });
+});
+
+/**
+ * PROP-135 Ф6a: `task.executor_profile` — профиль исполнения дочерней сессии.
+ *
+ * Явный профиль проверяется ДО создания ребёнка (каталог инстанса + потолки
+ * проекта и агента); нарушение — `tool.args_error`, дочерняя сессия не
+ * создаётся. Валидный профиль уходит в `settings.executorProfile` ребёнка.
+ */
+describe('task/tool.ts — профиль исполнения дочерней сессии (PROP-135 Ф6a)', () => {
+  let dir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-task-exec-profile-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+    projectStore = new ProjectStore({ dataDir: dir });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  });
+
+  const catalog = { profiles: ['default', 'devops', 'sandbox'], defaultProfile: 'default' };
+
+  /** Родительская сессия в проекте с заданным потолком профилей. */
+  async function makeParent(projectAllowed?: string[]): Promise<string> {
+    const project = projectStore.create('P', 'local');
+    if (projectAllowed) project.executor = { allowedProfiles: projectAllowed };
+    await projectStore.save(project);
+    const parent = await sessionManager.createSession({ title: 'P', projectId: project.id });
+    return parent.id;
+  }
+
+  /** Число дочерних сессий родителя (сам родитель не считается). */
+  async function childCount(parentId: string): Promise<number> {
+    const sessions = await sessionManager.listSessions();
+    return sessions.filter((s) => s.parentId === parentId).length;
+  }
+
+  async function runTask(opts: {
+    executorProfile?: string;
+    projectAllowed?: string[];
+    agentAllowed?: string[];
+    catalog?: { profiles: string[]; defaultProfile: string } | null;
+  }) {
+    const { provider } = makeProvider('done');
+    const parentId = await makeParent(opts.projectAllowed);
+    const registry = makeAgentRegistry(
+      ['explore'],
+      undefined,
+      opts.agentAllowed ? { allowedProfiles: opts.agentAllowed } : {},
+    );
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        ...(opts.executorProfile !== undefined ? { executor_profile: opts.executorProfile } : {}),
+      },
+      makeCtx({
+        provider,
+        agentRegistry: registry,
+        sessionManager,
+        projectStore,
+        sessionId: parentId,
+        executionProfileCatalog: 'catalog' in opts
+          ? (opts.catalog ?? undefined)
+          : catalog,
+      }, parentId),
+    );
+    return { result, parentId };
+  }
+
+  it('валидный executor_profile → дочерняя сессия с settings.executorProfile', async () => {
+    const { result } = await runTask({ executorProfile: 'devops', projectAllowed: ['devops'] });
+    expect(result.isError).toBeFalsy();
+    const childId = result.metadata!.child_session_id as string;
+    const child = (await sessionManager.getSession(childId))!;
+    expect(child.settings.executorProfile).toBe('devops');
+  });
+
+  it('профиль не существует в каталоге → args_error, сессия не создана', async () => {
+    const { result, parentId } = await runTask({ executorProfile: 'ghost' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('does not exist');
+    expect(result.metadata!.i18n).toBeDefined();
+    expect(await childCount(parentId)).toBe(0);
+  });
+
+  it('профиль не разрешён агентом → args_error, сессия не создана', async () => {
+    const { result, parentId } = await runTask({
+      executorProfile: 'devops',
+      agentAllowed: ['sandbox'],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not allowed for agent');
+    expect(await childCount(parentId)).toBe(0);
+  });
+
+  it('профиль не разрешён проектом → args_error, сессия не создана', async () => {
+    const { result, parentId } = await runTask({
+      executorProfile: 'devops',
+      projectAllowed: ['sandbox'],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('not allowed by the project');
+    expect(await childCount(parentId)).toBe(0);
+  });
+
+  it('без аргумента профиль ребёнку не задаётся (наследование настроек родителя)', async () => {
+    const { result } = await runTask({});
+    expect(result.isError).toBeFalsy();
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.executorProfile).toBeUndefined();
+  });
+
+  it('каталог неизвестен (inline/instance) → существование не проверяется', async () => {
+    const { result } = await runTask({ executorProfile: 'any-profile', catalog: null });
+    expect(result.isError).toBeFalsy();
+    const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
+    expect(child.settings.executorProfile).toBe('any-profile');
   });
 });
