@@ -117,6 +117,11 @@
 | [PROP-131](./arch_decisions/prop-131-external-dependency-mirrors.md) | Зеркала внешних зависимостей сборки | 2026-12-08 | инцидент GitHub 2026-11-08; Gitea Generic + манифест + sha256; базовые образы и npm — отдельными решениями |
 | [PROP-132](./arch_decisions/prop-132-ui-terminal.md) | Встроенный терминал в UI | 2026-12-31 | PTY/WS, панель терминала; `!`-режим — в PROP-126 |
 | [PROP-133](./arch_decisions/prop-133-project-access-sharing.md) | Доступ к проекту: участники, группы, видимость | 2026-11-30 | одна ось доступа (`members`/`groupMembers`/`everyoneRole`), единый резолвер вместо 6 копий предиката, распространение на сессии; Ф1 — пользовательские гранты |
+| [PROP-135](./arch_decisions/prop-135-execution-topology-pools-profiles.md) | Единый контур исполнения: пулы, профили, provisioner | 2026-11-30 | project-пул по умолчанию, session — эксклюзивный; `sandbox_exec`; браузер — отдельный класс |
+| [PROP-136](./arch_decisions/prop-136-shell-trust-audit-command-policy.md) | Модель доверия shell: аудит и внешний чекер | 2026-11-30 | shell = произвольный код; 30 дней; блок при сбое аудита; `http-json`/`opa` |
+| [PROP-137](./arch_decisions/prop-137-executor-isolation-nonroot-network.md) | Изоляция исполнителя: non-root, сеть, rootfs | 2026-11-30 | все образы non-root; `none`/`restricted`/`full`; remote builder |
+| [PROP-138](./arch_decisions/prop-138-plugin-tool-execution-contour.md) | Контур плагинных тулов: capability → пул, `ctx.runtime` | 2026-11-30 | wire v2; шлюзы вне контура |
+| [PROP-139](./arch_decisions/prop-139-llm-gateway-default-managed-hybrid.md) | LLM-шлюз по умолчанию в managed и hybrid | 2026-11-30 | standalone остаётся выключенным |
 
 **Триаж до 2026-11-14:** принять / icebox / отклонить / перенести (перенос — новой датой, а не молчанием).
 Принятое становится ADR, файл PROP удаляется; поглощённое — удаляется с записью «Поглощено»; снятое — в icebox/отклонено.

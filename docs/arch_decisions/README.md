@@ -128,6 +128,11 @@
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-132 | Встроенный терминал в UI | 🧩 Предложение | [prop-132-ui-terminal.md](./prop-132-ui-terminal.md) |
 | PROP-133 | Доступ к проекту — участники, группы и видимость | 🧩 Предложение | [prop-133-project-access-sharing.md](./prop-133-project-access-sharing.md) |
+| PROP-135 | Единый контур исполнения: пулы, профили и жизненный цикл исполнителей | 🧩 Предложение | [prop-135-execution-topology-pools-profiles.md](./prop-135-execution-topology-pools-profiles.md) |
+| PROP-136 | Модель доверия shell: аудит исполнений и внешний чекер команд | 🧩 Предложение | [prop-136-shell-trust-audit-command-policy.md](./prop-136-shell-trust-audit-command-policy.md) |
+| PROP-137 | Изоляция исполнителя: non-root, сеть и файловая система | 🧩 Предложение | [prop-137-executor-isolation-nonroot-network.md](./prop-137-executor-isolation-nonroot-network.md) |
+| PROP-138 | Контур исполнения плагинных инструментов: capability → пул, `ctx.runtime` | 🧩 Предложение | [prop-138-plugin-tool-execution-contour.md](./prop-138-plugin-tool-execution-contour.md) |
+| PROP-139 | LLM-шлюз по умолчанию включён в managed и hybrid | 🧩 Предложение | [prop-139-llm-gateway-default-managed-hybrid.md](./prop-139-llm-gateway-default-managed-hybrid.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -176,5 +181,5 @@
 
 ---
 
-Всего документов: 115 (Решения: 58, Частично: 24, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 1).
+Всего документов: 120 (Решения: 58, Частично: 24, Предложения: 29, Vision: 7, Icebox: 1, Legacy: 1).
 Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
