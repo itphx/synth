@@ -144,6 +144,7 @@ export function createPoolProvisioner(
         }),
       kubernetes,
       profiles: config.profiles,
+      commandPolicy: config.executorCommandPolicy,
       ...(opts.metrics !== undefined ? { metrics: opts.metrics } : {}),
     });
   }

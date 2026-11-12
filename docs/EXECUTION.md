@@ -1250,6 +1250,30 @@ Shell считается произвольным кодом, поэтому р�
 | `SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS` | `60000` | TTL кэша вердиктов (`0` — без кэша) |
 | `SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH` | `/v1/data/synth/exec/decision` | путь OPA-решения |
 
+**Развёртывание (136b-2b, реализовано).**
+
+- **Helm, пул исполнителей:** `executor.commandPolicy.*` (`enabled`/`provider`/`url`/`failMode`/
+  `timeoutMs`/`cacheTtlMs`/`opaPath`, `token.{existingSecret,key,mountPath}`). При `enabled` чарт
+  рендерит env `SYNTH_EXECUTOR_COMMAND_POLICY_*`; при `token.existingSecret` — ещё
+  `..._TOKEN_FILE=<mountPath>`, а Secret монтируется одним файлом read-only (режим `0440` при
+  `executor.podSecurityContext.fsGroup`, иначе `0444`). `enabled: false` — env/томов нет,
+  поведение прежнее. **Без `url` рендер падает** (исполнитель без адреса не стартует).
+- **Helm, динамические пулы:** `provisioner.executorCommandPolicy.*` (те же ключи + токен из
+  `token.existingSecret`/`key`). Действует только при `provisioner.provider: kubernetes`:
+  provisioner добавляет env политики в pod spec пула. `enabled` без `url` — ошибка рендера.
+- **Токен в динамическом пуле.** Env пода несёт только путь
+  (`SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE=/etc/synth/command-policy/token`): provisioner
+  читает значение из своего env (`SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN`, Secret →
+  `secretKeyRef`; альтернатива — файл `..._TOKEN_FILE` на самом provisioner'е), кладёт в
+  **Secret пула** ключом `command-policy-token` и монтирует файлом. Значение не попадает в
+  values, `kubectl describe pod` и логи; `update` прав у provisioner'а нет, поэтому включение
+  политики на уже живущем пуле пересоздаёт под и секрет (аннотация `synth.io/command-policy`).
+- **`static`-провайдер** пулов политику не настраивает: внешний исполнитель конфигурируется
+  владельцем (его env), provisioner лишь выдаёт адрес.
+- **Env provisioner'а:** `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_*` —
+  `ENABLED`, `PROVIDER`, `URL`, `TOKEN`, `TOKEN_FILE`, `FAIL_MODE`, `TIMEOUT_MS`, `CACHE_TTL_MS`,
+  `OPA_PATH` (`enabled` по умолчанию `false`, `failMode: closed`).
+
 **Зеркальная проверка в control plane (136b-2a, реализовано).** В точке исполнения
 tool-call (`execute_shell`/`sandbox_exec`, та же, где пишется аудит §9.1) команда уходит тому же
 чекеру **до** аудита `started` и до запуска. Это **не** граница безопасности (принуждение — на
@@ -1276,8 +1300,8 @@ tool-call (`execute_shell`/`sandbox_exec`, та же, где пишется ау
 - **Токен:** путь в `security.commandPolicy.tokenSecret` (env `SYNTH_COMMAND_POLICY_TOKEN`), значение
   читается лениво через `readExecutorToken` и в логи не попадает; нечитаемый файл — «чекер
   недоступен» (по `failMode`).
-- **Остаток (136b-2b):** UI/CSV-выгрузка журнала, env чекера в Helm-чарте (отдельный шаг),
-  plugin-провайдер политики.
+- **Остаток (136b-2b):** UI/CSV-выгрузка журнала, plugin-провайдер политики, runtime-переключение
+  чекера из UI (сейчас — только рестарт).
 
 
 ---

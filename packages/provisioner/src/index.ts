@@ -49,6 +49,10 @@ export type {
 export {
   PROVISIONER_ENV,
   PROVISIONER_KUBERNETES_ENV,
+  PROVISIONER_COMMAND_POLICY_ENV,
+  EXECUTOR_COMMAND_POLICY_DEFAULTS,
+  EXECUTOR_COMMAND_POLICY_PROVIDERS,
+  EXECUTOR_COMMAND_POLICY_FAIL_MODES,
   PROVISIONER_DEFAULTS,
   PROVISIONER_PROVIDERS,
   KUBERNETES_DEFAULTS,
@@ -57,12 +61,14 @@ export {
   profilesSchema,
   staticPoolsSchema,
   resolveProvisionerConfig,
+  resolveExecutorCommandPolicy,
   parseJsonEnv,
   scrubProvisionerToken,
 } from './config.js';
 export type {
   ConfigFileReader,
   ProvisionerConfig,
+  ProvisionerExecutorCommandPolicyConfig,
   ProvisionerKubernetesConfig,
   ProvisionerProfile,
   ProvisionerProfiles,
@@ -99,6 +105,10 @@ export type {
   KubernetesSecret,
 } from './kubernetes.js';
 export {
+  COMMAND_POLICY_ANNOTATION,
+  COMMAND_POLICY_MOUNT_PATH,
+  COMMAND_POLICY_TOKEN_FILE,
+  COMMAND_POLICY_TOKEN_KEY,
   KUBERNETES_PROVIDER_NAME,
   KubernetesPoolProvisioner,
   POOL_HASH_LABEL,
@@ -106,6 +116,7 @@ export {
   POOL_NETWORK_LABEL,
   POOL_PROFILE_LABEL,
   buildPoolPodManifest,
+  commandPolicyFingerprint,
   isPodReady,
   poolHash,
   poolObjectName,

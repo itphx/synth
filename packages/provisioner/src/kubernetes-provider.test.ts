@@ -11,7 +11,11 @@ import {
   PROVISIONER_KUBERNETES_ENV,
   resolveProvisionerConfig,
 } from './config.js';
-import type { ProvisionerKubernetesConfig, ProvisionerProfiles } from './config.js';
+import type {
+  ProvisionerExecutorCommandPolicyConfig,
+  ProvisionerKubernetesConfig,
+  ProvisionerProfiles,
+} from './config.js';
 import { createProvisionerMetrics } from './metrics.js';
 import { PoolProvisionerError } from './errors.js';
 import type {
@@ -21,6 +25,10 @@ import type {
   KubernetesSecret,
 } from './kubernetes.js';
 import {
+  COMMAND_POLICY_ANNOTATION,
+  COMMAND_POLICY_MOUNT_PATH,
+  COMMAND_POLICY_TOKEN_FILE,
+  COMMAND_POLICY_TOKEN_KEY,
   KUBERNETES_PROVIDER_NAME,
   KubernetesPoolProvisioner,
   POOL_HASH_LABEL,
@@ -28,6 +36,7 @@ import {
   POOL_NETWORK_LABEL,
   POOL_PROFILE_LABEL,
   buildPoolPodManifest,
+  commandPolicyFingerprint,
   poolHash,
   poolObjectName,
   sanitizeLabelValue,
@@ -169,7 +178,12 @@ class FakeKubernetesClient implements KubernetesClient {
 /** Провайдер с фейковым клиентом и управляемыми часами/паузой. */
 function makeProvider(
   client: FakeKubernetesClient,
-  overrides: { now?: () => number; profiles?: ProvisionerProfiles; metrics?: ReturnType<typeof createProvisionerMetrics> } = {},
+  overrides: {
+    now?: () => number;
+    profiles?: ProvisionerProfiles;
+    metrics?: ReturnType<typeof createProvisionerMetrics>;
+    commandPolicy?: ProvisionerExecutorCommandPolicyConfig;
+  } = {},
 ): { provider: KubernetesPoolProvisioner; clock: { value: number } } {
   const clock = { value: 1_000 };
   const provider = new KubernetesPoolProvisioner({
@@ -181,8 +195,25 @@ function makeProvider(
       clock.value += ms;
     },
     ...(overrides.metrics !== undefined ? { metrics: overrides.metrics } : {}),
+    ...(overrides.commandPolicy !== undefined ? { commandPolicy: overrides.commandPolicy } : {}),
   });
   return { provider, clock };
+}
+
+/** Конфигурация чекера команд для тестов (policy-token — не секрет теста). */
+function policy(
+  overrides: Partial<ProvisionerExecutorCommandPolicyConfig> = {},
+): ProvisionerExecutorCommandPolicyConfig {
+  return {
+    enabled: true,
+    provider: 'http',
+    url: 'http://policy:8080',
+    failMode: 'closed',
+    timeoutMs: 2000,
+    cacheTtlMs: 60000,
+    opaPath: '/v1/data/synth/exec/decision',
+    ...overrides,
+  };
 }
 
 describe('provisioner: kubernetes-провайдер', () => {
@@ -553,5 +584,168 @@ describe('provisioner: kubernetes-провайдер', () => {
     });
     const pool = await provider.ensure(request());
     expect(pool.url).toBe('http://10.0.0.5:5100');
+  });
+
+  it('pod spec без чекера: env политики не рендерится, аннотация off', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:default',
+      hash: poolHash('project:p1:exec:default'),
+      profileName: 'default',
+      profile: PROFILES.default!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as {
+      containers: Array<{
+        env: Array<{ name: string }>;
+        volumeMounts: Array<{ name: string }>;
+      }>;
+      volumes: Array<{ name: string }>;
+    };
+    expect(spec.containers[0]?.env.some((item) => item.name.startsWith('SYNTH_EXECUTOR_COMMAND_POLICY'))).toBe(false);
+    expect(spec.containers[0]?.volumeMounts.map((item) => item.name)).not.toContain('command-policy');
+    expect(spec.volumes.map((item) => item.name)).not.toContain('command-policy');
+    expect((manifest.metadata as { annotations: Record<string, string> }).annotations[
+      COMMAND_POLICY_ANNOTATION
+    ]).toBe('off');
+  });
+
+  it('pod spec с чекером: env политики без токена', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:default',
+      hash: poolHash('project:p1:exec:default'),
+      profileName: 'default',
+      profile: PROFILES.default!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+      commandPolicy: policy({ provider: 'opa', failMode: 'open', timeoutMs: 900 }),
+    });
+    const spec = manifest.spec as {
+      containers: Array<{
+        env: Array<{ name: string; value?: string }>;
+        volumeMounts: Array<{ name: string }>;
+      }>;
+    };
+    const env = Object.fromEntries(
+      spec.containers[0]!.env.map((item) => [item.name, item.value]),
+    );
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_PROVIDER).toBe('opa');
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_URL).toBe('http://policy:8080');
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_FAIL_MODE).toBe('open');
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS).toBe('900');
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS).toBe('60000');
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH).toBe('/v1/data/synth/exec/decision');
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE).toBeUndefined();
+    expect(spec.containers[0]?.volumeMounts.map((item) => item.name)).not.toContain('command-policy');
+  });
+
+  it('pod spec с чекером и токеном: файл из Secret пула, режим 0440', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:default',
+      hash: poolHash('project:p1:exec:default'),
+      profileName: 'default',
+      profile: PROFILES.default!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+      commandPolicy: policy({ token: 'policy-token' }),
+    });
+    const spec = manifest.spec as {
+      containers: Array<{
+        env: Array<{ name: string; value?: string }>;
+        volumeMounts: Array<Record<string, unknown>>;
+      }>;
+      volumes: Array<Record<string, unknown>>;
+    };
+    const env = Object.fromEntries(
+      spec.containers[0]!.env.map((item) => [item.name, item.value]),
+    );
+    expect(env.SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE).toBe(
+      `${COMMAND_POLICY_MOUNT_PATH}/${COMMAND_POLICY_TOKEN_FILE}`,
+    );
+    expect(
+      spec.containers[0]?.volumeMounts.find((mount) => mount.name === 'command-policy'),
+    ).toMatchObject({
+      name: 'command-policy',
+      mountPath: COMMAND_POLICY_MOUNT_PATH,
+      readOnly: true,
+    });
+    expect(spec.volumes.find((volume) => volume.name === 'command-policy')).toMatchObject({
+      name: 'command-policy',
+      secret: {
+        secretName: 'synth-pool-abc',
+        defaultMode: 0o440,
+        items: [{ key: COMMAND_POLICY_TOKEN_KEY, path: COMMAND_POLICY_TOKEN_FILE }],
+      },
+    });
+    expect(
+      (manifest.metadata as { annotations: Record<string, string> }).annotations[
+        COMMAND_POLICY_ANNOTATION
+      ],
+    ).toBe(commandPolicyFingerprint(policy({ token: 'policy-token' })));
+  });
+
+  it('ensure с чекером: токен чекера попадает в Secret пула (не в env)', async () => {
+    const client = new FakeKubernetesClient();
+    const { provider } = makeProvider(client, { commandPolicy: policy({ token: 'policy-token' }) });
+
+    const pool = await provider.ensure(request());
+    const name = poolObjectName(poolHash('project:p1:exec:default'));
+    expect(pool.token).not.toBe('');
+    const secret = client.secrets.get(name);
+    expect(secret?.data?.[COMMAND_POLICY_TOKEN_KEY]).toBe(
+      Buffer.from('policy-token', 'utf8').toString('base64'),
+    );
+    const pod = client.createdPods[0]?.spec as {
+      containers: Array<{ env: Array<{ name: string; value?: string; valueFrom?: unknown }> }>;
+    };
+    const env = pod.containers[0]!.env;
+    expect(env.some((item) => item.value === 'policy-token')).toBe(false);
+    expect(env.find((item) => item.name === 'SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE')?.value).toBe(
+      `${COMMAND_POLICY_MOUNT_PATH}/${COMMAND_POLICY_TOKEN_FILE}`,
+    );
+  });
+
+  it('adopt с чекером: повторный ensure не пересоздаёт пару', async () => {
+    const client = new FakeKubernetesClient();
+    const { provider } = makeProvider(client, { commandPolicy: policy({ token: 'policy-token' }) });
+    const first = await provider.ensure(request());
+    const adopted = await provider.ensure(request());
+    expect(adopted).toEqual(first);
+    expect(client.createdPods).toHaveLength(1);
+    expect(client.createdSecrets).toHaveLength(1);
+  });
+
+  it('adopt: включение чекера пересоздаёт под, созданный с прежней конфигурацией', async () => {
+    const client = new FakeKubernetesClient();
+    const { provider: before } = makeProvider(client);
+    await before.ensure(request());
+
+    const { provider: after } = makeProvider(client, {
+      commandPolicy: policy({ token: 'policy-token' }),
+    });
+    const pool = await after.ensure(request());
+    expect(pool.token).not.toBe('');
+    expect(client.createdPods).toHaveLength(2);
+    expect(client.deletedPods.map((item) => item.name)).toContain(
+      poolObjectName(poolHash('project:p1:exec:default')),
+    );
+    const secret = client.secrets.get(poolObjectName(poolHash('project:p1:exec:default')));
+    expect(secret?.data?.[COMMAND_POLICY_TOKEN_KEY]).toBeDefined();
+  });
+
+  it('adopt: старый Secret без ключа чекера пересоздаётся (update прав нет)', async () => {
+    const client = new FakeKubernetesClient();
+    const secretName = poolObjectName(poolHash('project:p1:exec:default'));
+    const { provider } = makeProvider(client, { commandPolicy: policy({ token: 'policy-token' }) });
+    // Секрет прошлого пула: токен есть, ключа чекера нет.
+    client.secrets.set(secretName, {
+      metadata: { name: secretName },
+      data: { token: Buffer.from('old-pool-token', 'utf8').toString('base64') },
+    });
+
+    const pool = await provider.ensure(request());
+    expect(client.deletedSecrets).toContain(secretName);
+    expect(client.secrets.get(secretName)?.data?.[COMMAND_POLICY_TOKEN_KEY]).toBeDefined();
+    expect(secretTokenOf(client.secrets.get(secretName))).toBe(pool.token);
   });
 });

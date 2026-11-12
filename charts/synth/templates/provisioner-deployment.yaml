@@ -9,6 +9,15 @@
 {{- if .Values.provisioner.enabled }}
 {{- $provider := include "synth.provisioner.provider" . }}
 {{- $k8s := .Values.provisioner.kubernetes | default dict }}
+{{- $commandPolicy := .Values.provisioner.executorCommandPolicy | default dict }}
+{{- /* Чекер команд рендерится в env provisioner'а всегда при enabled: в
+       static-режиме он на пулы не влияет (пулы создаёт не provisioner), но
+       конфигурация остаётся валидной и одинаковой для обоих провайдеров. */ -}}
+{{- if $commandPolicy.enabled }}
+{{- if not (has ($commandPolicy.provider | default "http") (list "http" "opa")) }}
+{{- fail "provisioner.executorCommandPolicy.provider: ожидается http или opa" }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -100,6 +109,35 @@ spec:
               value: {{ $k8s.executorPort | default 5100 | int64 | quote }}
             - name: SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS
               value: {{ $k8s.terminationGraceSeconds | default 30 | int64 | quote }}
+            {{- end }}
+            {{- /* Внешний чекер команд пулов (PROP-136b-2b): env добавляется в
+                   pod spec; токен — значение из Secret (не в values),
+                   provisioner кладёт его в Secret пула и монтирует файлом. */}}
+            {{- if $commandPolicy.enabled }}
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_ENABLED
+              value: "true"
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_PROVIDER
+              value: {{ $commandPolicy.provider | default "http" | quote }}
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_URL
+              value: {{ required "provisioner.executorCommandPolicy.url обязателен при enabled: true — без адреса чекера provisioner не стартует (fail-closed)" $commandPolicy.url | quote }}
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_FAIL_MODE
+              value: {{ $commandPolicy.failMode | default "closed" | quote }}
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS
+              value: {{ $commandPolicy.timeoutMs | default 2000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS
+              value: {{ $commandPolicy.cacheTtlMs | default 60000 | int64 | quote }}
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_OPA_PATH
+              value: {{ $commandPolicy.opaPath | default "/v1/data/synth/exec/decision" | quote }}
+            {{- with $commandPolicy.token }}
+            {{- if .existingSecret }}
+            - name: SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .key | default "token" }}
+                  optional: false
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- /* Жизненный цикл пулов. */}}
             - name: SYNTH_PROVISIONER_IDLE_TIMEOUT_MS

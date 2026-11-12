@@ -36,7 +36,12 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { ProvisionerKubernetesConfig, ProvisionerProfile, ProvisionerProfiles } from './config.js';
+import type {
+  ProvisionerExecutorCommandPolicyConfig,
+  ProvisionerKubernetesConfig,
+  ProvisionerProfile,
+  ProvisionerProfiles,
+} from './config.js';
 import { PoolProvisionerError } from './errors.js';
 import type { KubernetesClient, KubernetesManifest, KubernetesPod, KubernetesSecret } from './kubernetes.js';
 import type { ProviderErrorMetricReason, ProvisionerMetrics } from './metrics.js';
@@ -55,6 +60,18 @@ export const POOL_PROFILE_LABEL = 'synth.io/profile';
 export const POOL_NETWORK_LABEL = 'synth.io/network';
 /** Annotation с полным ключом пула (label не вмещает произвольную строку). */
 export const POOL_KEY_ANNOTATION = 'synth.io/pool-key';
+
+/** Annotation с отпечатком конфигурации чекера команд (смена → пересоздание пода). */
+export const COMMAND_POLICY_ANNOTATION = 'synth.io/command-policy';
+
+/** Ключ токена чекера в Secret пула (`data.<key>`). */
+export const COMMAND_POLICY_TOKEN_KEY = 'command-policy-token';
+/** Каталог, куда монтируется файл токена чекера в поде. */
+export const COMMAND_POLICY_MOUNT_PATH = '/etc/synth/command-policy';
+/** Имя файла токена чекера внутри каталога монтирования. */
+export const COMMAND_POLICY_TOKEN_FILE = 'token';
+/** Режим файла токена (как у прочих Secret-томов: чтение владельцем/группой). */
+const COMMAND_POLICY_FILE_MODE = 0o440;
 
 /** Метка «что это за под» (как у чарта исполнителя). */
 const APP_NAME_LABEL = 'app.kubernetes.io/name';
@@ -171,6 +188,33 @@ export interface PoolPodManifestOptions {
   secretName: string;
   /** Относительный путь внутри PVC (уже провалидирован). */
   workspaceSubPath?: string;
+  /** Внешний чекер команд пула (выключен/не задан → прежний pod spec). */
+  commandPolicy?: ProvisionerExecutorCommandPolicyConfig;
+}
+
+/**
+ * Отпечаток конфигурации чекера команд для пода.
+ *
+ * Нужен на adopt: под, созданный с прежней конфигурацией, не получит новых
+ * env/файла без пересоздания (env пода неизменяем). `off` — чекер выключен:
+ * поды, созданные до появления аннотации, совместимы.
+ */
+export function commandPolicyFingerprint(
+  policy: ProvisionerExecutorCommandPolicyConfig | undefined,
+): string {
+  if (policy?.enabled !== true) return 'off';
+  const tokenDigest =
+    policy.token === undefined ? '' : createHash('sha256').update(policy.token).digest('hex');
+  const material = JSON.stringify({
+    provider: policy.provider,
+    url: policy.url ?? '',
+    failMode: policy.failMode,
+    timeoutMs: policy.timeoutMs,
+    cacheTtlMs: policy.cacheTtlMs,
+    opaPath: policy.opaPath,
+    tokenDigest,
+  });
+  return `v1:${createHash('sha256').update(material).digest('hex').slice(0, 16)}`;
 }
 
 /** Ресурсы контейнера без `undefined`-полей. */
@@ -224,6 +268,29 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
     env.push({ name, value: profileEnv[name] ?? '' });
   }
 
+  // Внешний чекер команд (PROP-136b-2b): env — только при включённой политике;
+  // токен — файлом из Secret пула (у исполнителя значение токена в env не
+  // поддерживается, а Secret уже создаётся для токена пула).
+  const policy = opts.commandPolicy;
+  const policyEnabled = policy?.enabled === true;
+  const policyToken = policyEnabled && policy.token !== undefined ? policy.token : undefined;
+  if (policyEnabled) {
+    env.push(
+      { name: 'SYNTH_EXECUTOR_COMMAND_POLICY_PROVIDER', value: policy.provider },
+      { name: 'SYNTH_EXECUTOR_COMMAND_POLICY_URL', value: policy.url ?? '' },
+      { name: 'SYNTH_EXECUTOR_COMMAND_POLICY_FAIL_MODE', value: policy.failMode },
+      { name: 'SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS', value: String(policy.timeoutMs) },
+      { name: 'SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS', value: String(policy.cacheTtlMs) },
+      { name: 'SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH', value: policy.opaPath },
+    );
+    if (policyToken !== undefined) {
+      env.push({
+        name: 'SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE',
+        value: `${COMMAND_POLICY_MOUNT_PATH}/${COMMAND_POLICY_TOKEN_FILE}`,
+      });
+    }
+  }
+
   const volumeMounts: Array<Record<string, unknown>> = [
     {
       name: 'workspace',
@@ -235,6 +302,23 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
   const volumes: Array<Record<string, unknown>> = [
     { name: 'workspace', persistentVolumeClaim: { claimName: kubernetes.workspacePvc } },
   ];
+  if (policyToken !== undefined) {
+    // Файл токена чекера — из того же Secret, что и токен пула. `subPath`
+    // монтирует один файл, остальные ключи секрета в под не попадают.
+    volumeMounts.push({
+      name: 'command-policy',
+      mountPath: COMMAND_POLICY_MOUNT_PATH,
+      readOnly: true,
+    });
+    volumes.push({
+      name: 'command-policy',
+      secret: {
+        secretName: opts.secretName,
+        defaultMode: COMMAND_POLICY_FILE_MODE,
+        items: [{ key: COMMAND_POLICY_TOKEN_KEY, path: COMMAND_POLICY_TOKEN_FILE }],
+      },
+    });
+  }
   if (readOnlyRootFilesystem) {
     // Корневая ФС только для чтения: исполнителю нужны записываемые /tmp
     // (журналы фоновых процессов) и HOME (`/home/synth` — кэши corepack/pnpm,
@@ -263,6 +347,7 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
       },
       annotations: {
         [POOL_KEY_ANNOTATION]: opts.key,
+        [COMMAND_POLICY_ANNOTATION]: commandPolicyFingerprint(policy),
       },
     },
     spec: {
@@ -313,6 +398,8 @@ export interface KubernetesPoolProvisionerOptions {
   kubernetes: ProvisionerKubernetesConfig;
   /** Каталог профилей (`image` обязателен). */
   profiles: ProvisionerProfiles;
+  /** Внешний чекер команд пулов (выключен/не задан → прежний pod spec). */
+  commandPolicy?: ProvisionerExecutorCommandPolicyConfig;
   /** Метрики (необязательны). */
   metrics?: ProvisionerMetrics;
   /** Инъектируемые часы (тесты не ждут реальные 120 с). */
@@ -332,6 +419,7 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
   private readonly _client: KubernetesClient;
   private readonly _config: ProvisionerKubernetesConfig;
   private readonly _profiles: ProvisionerProfiles;
+  private readonly _commandPolicy: ProvisionerExecutorCommandPolicyConfig | undefined;
   private readonly _metrics: ProvisionerMetrics | undefined;
   private readonly _now: () => number;
   private readonly _sleep: (ms: number) => Promise<void>;
@@ -340,6 +428,7 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
     this._client = opts.client;
     this._config = opts.kubernetes;
     this._profiles = opts.profiles;
+    this._commandPolicy = opts.commandPolicy;
     this._metrics = opts.metrics;
     this._now = opts.now ?? Date.now;
     this._sleep =
@@ -419,9 +508,22 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
       const foundName = found.metadata.name;
       const expectedProfile = sanitizeLabelValue(req.profile);
       const foundProfile = found.metadata.labels?.[POOL_PROFILE_LABEL];
-      if (foundProfile !== undefined && foundProfile !== expectedProfile) {
-        // Под этого ключа поднят с другим профилем (переименование профиля или
-        // коллизия хеша): ресурс не тот — снимаем пару и создаём заново.
+      const expectedPolicy = commandPolicyFingerprint(this._commandPolicy);
+      const foundPolicy = found.metadata.annotations?.[COMMAND_POLICY_ANNOTATION];
+      // `off` совместим и с подом без аннотации (resource создан до появления
+      // настройки): включение чекера меняет env пода, поэтому требует
+      // пересоздания только при непустой политике.
+      const policyCompatible =
+        expectedPolicy === 'off'
+          ? foundPolicy === undefined || foundPolicy === 'off'
+          : foundPolicy === expectedPolicy;
+      if (
+        !policyCompatible ||
+        (foundProfile !== undefined && foundProfile !== expectedProfile)
+      ) {
+        // Под этого ключа поднят с другим профилем/политикой (переименование
+        // профиля, смена чекера или коллизия хеша): ресурс не тот — снимаем
+        // пару и создаём заново.
         await this._deletePodQuietly(foundName, 0);
         await this._deleteSecretQuietly(secretName);
         await this._waitForPodGone(foundName);
@@ -432,7 +534,10 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
       } else {
         const secret = await this._call('lookup', () => this._client.getSecret(secretName));
         const token = secretToken(secret);
-        if (token !== null) {
+        // Токен чекера лежит в том же секрете: без ключа том пода не смонтируется.
+        const policyTokenMissing =
+          this._policyToken !== undefined && (secret?.data?.[COMMAND_POLICY_TOKEN_KEY] ?? '') === '';
+        if (token !== null && !policyTokenMissing) {
           const pod = await this._waitForPod(foundName);
           if (pod !== null) return { url: this._executorUrl(pod), token };
           // Под не поднялся за отведённое время — снимаем пару, чтобы следующая
@@ -445,10 +550,11 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
               '(ресурсы удалены)',
           );
         }
-        // Под без секрета — осиротевшая пара: токен потерян, под бесполезен.
-        // Удаляем немедленно (grace 0) и ждём исчезновения, иначе создание
-        // получило бы 409 на том же имени.
+        // Под без секрета (или без токена чекера) — осиротевшая пара: под
+        // бесполезен. Удаляем немедленно (grace 0) и ждём исчезновения, иначе
+        // создание получило бы 409 на том же имени.
         await this._deletePodQuietly(foundName, 0);
+        if (policyTokenMissing) await this._deleteSecretQuietly(secretName);
         await this._waitForPodGone(foundName);
       }
     }
@@ -469,7 +575,25 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
             'удалите его вручную либо вызовите release пула',
         );
       }
-      token = existingToken;
+      // Секрет прошлого пула не содержит токена чекера (политику включили
+      // позже): update прав у provisioner'а нет — пересоздаём секрет.
+      if (
+        this._policyToken !== undefined &&
+        (existing?.data?.[COMMAND_POLICY_TOKEN_KEY] ?? '') === ''
+      ) {
+        await this._deleteSecretQuietly(secretName);
+        const recreated = await this._call('create', () =>
+          this._client.createSecret(this._secretManifest(secretName, hash, req.key, token)),
+        );
+        if (!recreated) {
+          throw this._error(
+            'create',
+            `секрет "${secretName}" не удалось пересоздать с токеном чекера команд`,
+          );
+        }
+      } else {
+        token = existingToken;
+      }
     }
 
     await this._call('create', () =>
@@ -482,6 +606,9 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
           kubernetes: this._config,
           secretName,
           ...(subPath !== undefined ? { workspaceSubPath: subPath } : {}),
+          ...(this._commandPolicy !== undefined
+            ? { commandPolicy: this._commandPolicy }
+            : {}),
         }),
       ),
     );
@@ -499,6 +626,11 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
     return { url: this._executorUrl(pod), token };
   }
 
+  /** Токен чекера команд (только при включённой политике). */
+  private get _policyToken(): string | undefined {
+    return this._commandPolicy?.enabled === true ? this._commandPolicy.token : undefined;
+  }
+
   /** Манифест секрета с токеном пула (`data.token` — base64). */
   private _secretManifest(
     name: string,
@@ -506,6 +638,7 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
     key: string,
     token: string,
   ): KubernetesManifest {
+    const policyToken = this._policyToken;
     return {
       apiVersion: 'v1',
       kind: 'Secret',
@@ -519,7 +652,12 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
         },
         annotations: { [POOL_KEY_ANNOTATION]: key },
       },
-      data: { token: Buffer.from(token, 'utf8').toString('base64') },
+      data: {
+        token: Buffer.from(token, 'utf8').toString('base64'),
+        ...(policyToken !== undefined
+          ? { [COMMAND_POLICY_TOKEN_KEY]: Buffer.from(policyToken, 'utf8').toString('base64') }
+          : {}),
+      },
     };
   }
 

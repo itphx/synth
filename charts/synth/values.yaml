@@ -530,6 +530,38 @@ executor:
     # Ключ внутри caSecret (имя файла CA в Secret).
     caKey: ca.pem
 
+  # Внешний чекер команд (PROP-136b): проверка `allow`/`deny` на исполнителе
+  # **до** `spawn` (docs/EXECUTION.md §9.2). Выключено по умолчанию — env
+  # `SYNTH_EXECUTOR_COMMAND_POLICY_*` не рендерится, поведение прежнее.
+  #
+  # ⚠️ Включённый чекер без `url` — ошибка рендера: исполнитель без адреса
+  # чекера не стартует (fail-closed). `failMode: closed` (managed) — при
+  # недоступности чекера команды запрещаются; `open` — разрешаются с warning.
+  # Токен — только Secret (`token.existingSecret`, инвариант 13), монтируется
+  # файлом readOnly в `token.mountPath`; значение в values не хранится.
+  commandPolicy:
+    enabled: false
+    # http (POST {url}/v1/check) | opa (POST {url}{opaPath}).
+    provider: http
+    # Адрес чекера (обязателен при enabled: true).
+    url: ""
+    # closed | open — поведение при недоступном чекере.
+    failMode: closed
+    # Таймаут запроса к чекеру, мс.
+    timeoutMs: 2000
+    # TTL кэша вердиктов, мс (0 — без кэша).
+    cacheTtlMs: 60000
+    # Путь OPA-решения (provider: opa).
+    opaPath: /v1/data/synth/exec/decision
+    token:
+      # Secret с bearer-токеном чекера. Пусто → авторизация не нужна.
+      existingSecret: ""
+      # Ключ внутри Secret.
+      key: token
+      # Путь файла токена внутри контейнера (env
+      # SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE).
+      mountPath: /etc/synth/command-policy/token
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Provisioner пулов исполнения (PROP-135 Ф4b-2b).
 #
@@ -637,6 +669,31 @@ provisioner:
     executorPort: 5100
     # Grace-период удаления пода пула, с.
     terminationGraceSeconds: 30
+
+  # Внешний чекер команд в подах динамических пулов (PROP-136b-2b): env
+  # `SYNTH_EXECUTOR_COMMAND_POLICY_*` добавляется в pod spec, политика
+  # применяется исполнителем до `spawn` (docs/EXECUTION.md §9.2).
+  # Действует только при `provider: kubernetes` (static-пул provisioner не
+  # создаёт: внешний исполнитель настраивается сам).
+  #
+  # Токен — из Secret: значение попадает в env provisioner'а
+  # (`SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN`) и дальше в Secret пула,
+  # из которого монтируется файлом в под; в values значения нет (инвариант 13).
+  executorCommandPolicy:
+    enabled: false
+    # http | opa.
+    provider: http
+    # Адрес чекера (обязателен при enabled: true — иначе рендер падает).
+    url: ""
+    # closed | open.
+    failMode: closed
+    timeoutMs: 2000
+    cacheTtlMs: 60000
+    opaPath: /v1/data/synth/exec/decision
+    token:
+      # Secret с bearer-токеном чекера (пусто — без авторизации).
+      existingSecret: ""
+      key: token
 
   # Жизненный цикл пулов (env SYNTH_PROVISIONER_*_TIMEOUT_MS/_MAX_POOLS).
   # Idle-таймаут проектного/инстансного пула — 15 мин.

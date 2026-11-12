@@ -1560,6 +1560,13 @@ warn+игнор: это настройка безопасности.
 `ttl_ms` ответа либо 60 с; `deny` кэшируется наравне с `allow`. Метрики —
 `synth_command_policy_*` (см. `docs/OBSERVABILITY.md`).
 
+**Развёртывание в Kubernetes.** Проверка на исполнителе включается значениями
+чарта (env-таблица — [EXECUTION.md](./EXECUTION.md) §9.2): пул —
+`executor.commandPolicy.*` (env `SYNTH_EXECUTOR_COMMAND_POLICY_*`, токен — Secret
+файлом), динамические пулы provisioner'а — `provisioner.executorCommandPolicy.*`
+(только при `provider: kubernetes`). `enabled` без `url` — ошибка рендера чарта;
+токен в values не хранится (только Secret).
+
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 
 Две **независимые** админские политики (ADR-071 §2.3; UI-раздел — ADMIN-категория):

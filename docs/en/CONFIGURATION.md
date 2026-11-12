@@ -1552,6 +1552,13 @@ unavailability is never cached. Verdict cache: key `sha256(command + cwd +
 background)`, TTL — the response `ttl_ms` or 60 s; `deny` is cached like `allow`.
 Metrics — `synth_command_policy_*` (see `docs/OBSERVABILITY.md`).
 
+**Kubernetes deployment.** The executor-side check is enabled by chart values
+(the env table is in [EXECUTION.md](./EXECUTION.md) §9.2): the executor pool uses
+`executor.commandPolicy.*` (env `SYNTH_EXECUTOR_COMMAND_POLICY_*`, token mounted from a Secret
+as a file), and provisioner dynamic pools use `provisioner.executorCommandPolicy.*`
+(only with `provider: kubernetes`). `enabled` without `url` fails chart rendering;
+the token is never stored in values (Secret only).
+
 ### Tool policies (`tools.policy` / `mcp.policy`)
 
 Two **independent** admin policies (ADR-071 §2.3; the UI section is the ADMIN category):

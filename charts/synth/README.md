@@ -178,6 +178,14 @@ ingress:
 | `executor.token.secretKey` | `SYNTH_EXECUTION_TOKEN` | Ключ внутри Secret: backend читает файл, исполнитель — значение из `secretKeyRef` |
 | `executor.tls.caSecret` | `""` | Secret с CA доверия git у исполнителя (пусто — выключено): монтируется в `/etc/synth/tls` (read-only), env `SYNTH_EXECUTOR_TLS_CA_FILE` |
 | `executor.tls.caKey` | `ca.pem` | Ключ (имя файла CA) внутри `executor.tls.caSecret` |
+| `executor.commandPolicy.enabled` | `false` | Внешний чекер команд (PROP-136b): env `SYNTH_EXECUTOR_COMMAND_POLICY_*` и Secret-том токена; выключено — поведение прежнее |
+| `executor.commandPolicy.provider` | `http` | `http` \| `opa` (`http` — `POST {url}/v1/check`, `opa` — `POST {url}{opaPath}`); иное — ошибка рендера |
+| `executor.commandPolicy.url` | `""` | Адрес чекера; **обязателен** при `enabled: true` (без него рендер падает — исполнитель не стартует, fail-closed) |
+| `executor.commandPolicy.failMode` | `closed` | Недоступность чекера: `closed` → `deny`, `open` → `allow` + warning |
+| `executor.commandPolicy.timeoutMs` / `.cacheTtlMs` | `2000` / `60000` | Таймаут запроса и TTL кэша вердиктов (`0` — без кэша) |
+| `executor.commandPolicy.opaPath` | `/v1/data/synth/exec/decision` | Путь OPA-решения (`provider: opa`) |
+| `executor.commandPolicy.token.existingSecret` | `""` | Secret с bearer-токеном чекера (пусто — без авторизации); монтируется файлом read-only, значение в values не хранится |
+| `executor.commandPolicy.token.key` / `.mountPath` | `token` / `/etc/synth/command-policy/token` | Ключ внутри Secret и путь файла в контейнере (env `SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE`) |
 | `provisioner.enabled` | `false` | Включить provisioner пулов (PROP-135 Ф4b-2b): Deployment + Service + RBAC; backend получает `SYNTH_EXECUTION_PROVIDER=http`. Требует `execution.mode: remote` |
 | `provisioner.provider` | `static` | Провайдер пулов: `static` (адреса из конфигурации) \| `kubernetes` (под + Secret на пул) |
 | `provisioner.image.repository` / `.tag` / `.pullPolicy` | `git.itphx.ru/itphx/synth-provisioner` / `""` / `IfNotPresent` | Образ provisioner'а (пусто → `.Chart.AppVersion`) |
@@ -194,6 +202,10 @@ ingress:
 | `provisioner.kubernetes.apiServer` | `https://kubernetes.default.svc` | Адрес API Kubernetes для provisioner'а |
 | `provisioner.kubernetes.startTimeoutMs` / `.pollIntervalMs` | `120000` / `1000` | Ожидание Running/Ready пода пула и период опроса |
 | `provisioner.kubernetes.executorPort` / `.terminationGraceSeconds` | `5100` / `30` | Порт исполнителя в поде пула и grace-период удаления |
+| `provisioner.executorCommandPolicy.enabled` | `false` | Внешний чекер команд в подах динамических пулов (PROP-136b-2b): env в pod spec; только при `provider: kubernetes` |
+| `provisioner.executorCommandPolicy.provider` / `.url` | `http` / `""` | Провайдер (`http`\|`opa`) и адрес чекера; `url` обязателен при `enabled: true` (ошибка рендера) |
+| `provisioner.executorCommandPolicy.failMode` / `.timeoutMs` / `.cacheTtlMs` / `.opaPath` | `closed` / `2000` / `60000` / `/v1/data/synth/exec/decision` | Параметры политики, передаются в env пода пула |
+| `provisioner.executorCommandPolicy.token.existingSecret` / `.key` | `""` / `token` | Secret с bearer-токеном чекера: значение идёт в env provisioner'а, затем в Secret пула (файл в поде); в values не хранится |
 | `provisioner.idleTimeoutMs` / `.sessionIdleTimeoutMs` / `.maxLifetimeMs` | `900000` / `300000` / `43200000` | Idle-таймауты проектного/сессионного пула и предельное время жизни |
 | `provisioner.drainGraceMs` / `.maxPools` / `.reaperIntervalMs` | `30000` / `50` / `30000` | Пауза drain→release, лимит живых пулов (сверх — 429), период уборщика |
 | `provisioner.timeoutMs` | `10000` | Таймаут обращения backend'а к provisioner'у (env `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS`) |
@@ -1097,6 +1109,38 @@ kubectl get secret synth-secrets -n synth -o jsonpath='{.data.SYNTH_EXECUTION_TO
 Если Secret лежит в другом Secret'е/ключе — задайте
 `executor.token.existingSecret` и `executor.token.secretKey`.
 
+### Внешний чекер команд (PROP-136b)
+
+Проверка `allow`/`deny` выполняется **на исполнителе до `spawn`** (контракты
+`http-json`/`opa`, fail modes, кэш — [docs/EXECUTION.md](../../docs/EXECUTION.md)
+§9.2). По умолчанию выключена: env `SYNTH_EXECUTOR_COMMAND_POLICY_*` не
+рендерится, поведение прежнее.
+
+```yaml
+executor:
+  commandPolicy:
+    enabled: true
+    provider: http                 # http | opa
+    url: http://policy.synth.svc:8080
+    failMode: closed               # managed: closed
+    timeoutMs: 2000
+    cacheTtlMs: 60000
+    token:
+      existingSecret: synth-exec-policy-token   # ключ с bearer-токеном
+      key: token
+      mountPath: /etc/synth/command-policy/token
+```
+
+> ⚠️ Включённый чекер **без `url`** — ошибка рендера: без адреса исполнитель не
+> стартует (fail-closed). Без `token.existingSecret` чекер вызывается без
+> авторизации.
+>
+> Токен — **только Secret** (инвариант 13): значение в values не хранится.
+> Secret монтируется одним файлом (`items` → `token`) read-only в
+> `token.mountPath`, режим — `0440` при заданном `fsGroup`, иначе `0444`
+> (как у `executor-token`/`executor-tls`); исполнитель читает его при старте
+> (нечитаемый файл → ошибка старта).
+
 ### Общий том workspace
 
 Один PVC (RWX) монтируется **и в backend, и в исполнитель** по одному пути
@@ -1626,6 +1670,41 @@ kubectl create secret generic synth-provisioner-token -n synth \
 Если Secret называется иначе — `provisioner.token.existingSecret` и
 (при необходимости) `provisioner.token.secretKey`. Ротация — обновить Secret и
 перезапустить оба Deployment'а (`kubectl rollout restart`).
+
+### Внешний чекер команд пулов (PROP-136b-2b)
+
+Provisioner может добавить в pod spec каждого динамического пула env внешнего
+чекера команд — тогда политика применяется исполнителем до `spawn`
+([docs/EXECUTION.md](../../docs/EXECUTION.md) §9.2). Работает только при
+`provider: kubernetes` (static-пул создаётся не provisioner'ом).
+
+```yaml
+provisioner:
+  provider: kubernetes
+  executorCommandPolicy:
+    enabled: true
+    provider: http
+    url: http://policy.synth.svc:8080
+    failMode: closed
+    timeoutMs: 2000
+    cacheTtlMs: 60000
+    token:
+      existingSecret: synth-exec-policy-token   # значение → env provisioner'а
+      key: token
+```
+
+> ⚠️ `enabled: true` без `url` — ошибка рендера (provisioner не стартует,
+> fail-closed). Значение токена в values не хранится: чарт берёт его из Secret
+> через `secretKeyRef` и кладёт в env provisioner'а
+> (`SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN`). Дальше provisioner
+> записывает его в **Secret пула** (`command-policy-token`) и монтирует файлом
+> в под — env пода получает только путь
+> `SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE`. Так значение не видно в
+> `kubectl describe pod` и не попадает в логи.
+
+Включение/смена политики меняет env пода — provisioner пересоздаёт под
+(аннотация `synth.io/command-policy`), секрет пула обновляется пересозданием
+(прав `update` у provisioner'а нет).
 
 ### RBAC и ServiceAccount
 

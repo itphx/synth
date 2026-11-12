@@ -36,6 +36,27 @@
  * | `SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT` | нет | `5100` | порт исполнителя в поде |
  * | `SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS` | нет | `30` | grace-период пода |
  *
+ * Внешний чекер команд пулов (PROP-136b-2b; действует только при
+ * `provider=kubernetes` — static-пул provisioner не создаёт):
+ *
+ * | Переменная | Обязательна | По умолчанию | Назначение |
+ * |---|---|---|---|
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_ENABLED` | нет | `false` | добавить env чекера в под пула |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_PROVIDER` | нет | `http` | `http`\|`opa` |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_URL` | при `enabled` | — | адрес чекера (`http(s)://…`) |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN` | нет | — | значение токена (из Secret в env provisioner'а) |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN_FILE` | нет | — | файл токена provisioner'а (альтернатива `TOKEN`) |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_FAIL_MODE` | нет | `closed` | `closed`\|`open` |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS` | нет | `2000` | таймаут запроса к чекеру, мс |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS` | нет | `60000` | TTL кэша вердиктов, мс (`0` — без кэша) |
+ * | `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_OPA_PATH` | нет | `/v1/data/synth/exec/decision` | путь OPA-решения |
+ *
+ * Токен чекера **не попадает в env пода значением**: provisioner кладёт его
+ * в уже создаваемый для пула `Secret` (ключ `command-policy-token`) и
+ * монтирует файлом, а под получает `SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE`
+ * (у исполнителя токен — только файл). Значение не логируется и в values не
+ * пишется (инвариант 13).
+ *
  * **Fail-closed**: без токена процесс не стартует — provisioner без
  * аутентификации поднимал бы исполнителей по анонимному запросу. Битый JSON,
  * неизвестный `provider`, профиль без `url` (static) или без `image`
@@ -84,6 +105,34 @@ export const PROVISIONER_KUBERNETES_ENV = {
   executorPort: 'SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT',
   terminationGraceSeconds: 'SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS',
 } as const;
+
+/** Env-имена внешнего чекера команд пулов (PROP-136b-2b). */
+export const PROVISIONER_COMMAND_POLICY_ENV = {
+  enabled: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_ENABLED',
+  provider: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_PROVIDER',
+  url: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_URL',
+  token: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN',
+  tokenFile: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN_FILE',
+  failMode: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_FAIL_MODE',
+  timeoutMs: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS',
+  cacheTtlMs: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS',
+  opaPath: 'SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_OPA_PATH',
+} as const;
+
+/** Дефолты внешнего чекера команд пулов. */
+export const EXECUTOR_COMMAND_POLICY_DEFAULTS = {
+  enabled: false,
+  provider: 'http',
+  failMode: 'closed',
+  timeoutMs: 2_000,
+  cacheTtlMs: 60_000,
+  opaPath: '/v1/data/synth/exec/decision',
+} as const;
+
+/** Провайдеры чекера, которые понимает исполнитель. */
+export const EXECUTOR_COMMAND_POLICY_PROVIDERS = ['http', 'opa'] as const;
+/** Режимы недоступности чекера. */
+export const EXECUTOR_COMMAND_POLICY_FAIL_MODES = ['closed', 'open'] as const;
 
 /** Дефолты provisioner'а. */
 export const PROVISIONER_DEFAULTS = {
@@ -225,6 +274,29 @@ export interface ProvisionerKubernetesConfig {
   terminationGraceSeconds: number;
 }
 
+/** Эффективная конфигурация внешнего чекера команд пулов. */
+export interface ProvisionerExecutorCommandPolicyConfig {
+  /** Добавлять env чекера в под пула. */
+  enabled: boolean;
+  /** Провайдер чекера (`http`|`opa`). */
+  provider: 'http' | 'opa';
+  /** Адрес чекера (обязателен при `enabled`). */
+  url?: string;
+  /**
+   * Значение bearer-токена чекера (из env provisioner'а либо из `tokenFile`).
+   * В логи и диагностику не попадает.
+   */
+  token?: string;
+  /** Поведение при недоступном чекере. */
+  failMode: 'closed' | 'open';
+  /** Таймаут запроса к чекеру, мс. */
+  timeoutMs: number;
+  /** TTL кэша вердиктов, мс (`0` — без кэша). */
+  cacheTtlMs: number;
+  /** Путь OPA-решения (`provider: opa`). */
+  opaPath: string;
+}
+
 /** Эффективная конфигурация provisioner'а. */
 export interface ProvisionerConfig {
   /** Bearer-токен control plane (в логи не пишется). */
@@ -241,6 +313,8 @@ export interface ProvisionerConfig {
   staticPools: Record<string, string>;
   /** Kubernetes-провайдер (только при `provider=kubernetes`). */
   kubernetes?: ProvisionerKubernetesConfig;
+  /** Внешний чекер команд в подах пулов (PROP-136b-2b; выключен по умолчанию). */
+  executorCommandPolicy: ProvisionerExecutorCommandPolicyConfig;
   /** Idle-таймаут проектного/инстансного пула, мс. */
   idleTimeoutMs: number;
   /** Idle-таймаут сессионного пула, мс. */
@@ -462,6 +536,145 @@ function resolveKubernetesConfig(
   };
 }
 
+/** Разобрать значение из закрытого набора (неизвестное — ошибка старта). */
+function resolveChoice<T extends string>(
+  raw: string | undefined,
+  envName: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  const value = (raw ?? '').trim();
+  if (value === '') return fallback;
+  const match = allowed.find((item) => item === value);
+  if (match === undefined) {
+    throw new Error(
+      `[provisioner] невалидное значение ${envName}="${value}" — ожидается ${allowed
+        .map((item) => `"${item}"`)
+        .join(' или ')}`,
+    );
+  }
+  return match;
+}
+
+/** Разобрать булево env (`true`/`false`/`1`/`0`; прочее — ошибка старта). */
+function resolveBoolEnv(raw: string | undefined, envName: string, fallback: boolean): boolean {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (value === '') return fallback;
+  if (value === 'true' || value === '1') return true;
+  if (value === 'false' || value === '0') return false;
+  throw new Error(
+    `[provisioner] невалидное значение ${envName}="${raw}" — ожидается true|false`,
+  );
+}
+
+/**
+ * Разобрать конфигурацию внешнего чекера команд пулов (PROP-136b-2b).
+ *
+ * Включённый чекер без `url` — ошибка старта: иначе provisioner поднимал бы
+ * пулы, где политика молча не применяется. Токен берётся значением из
+ * `..._TOKEN` (Secret → env provisioner'а) либо из файла `..._TOKEN_FILE`; в
+ * pod env он **не** передаётся — provisioner кладёт его в Secret пула.
+ */
+export function resolveExecutorCommandPolicy(
+  env: NodeJS.ProcessEnv,
+  readFile: ConfigFileReader,
+): ProvisionerExecutorCommandPolicyConfig {
+  const enabled = resolveBoolEnv(
+    env[PROVISIONER_COMMAND_POLICY_ENV.enabled],
+    PROVISIONER_COMMAND_POLICY_ENV.enabled,
+    EXECUTOR_COMMAND_POLICY_DEFAULTS.enabled,
+  );
+  const provider = resolveChoice(
+    env[PROVISIONER_COMMAND_POLICY_ENV.provider],
+    PROVISIONER_COMMAND_POLICY_ENV.provider,
+    EXECUTOR_COMMAND_POLICY_PROVIDERS,
+    EXECUTOR_COMMAND_POLICY_DEFAULTS.provider,
+  );
+  const failMode = resolveChoice(
+    env[PROVISIONER_COMMAND_POLICY_ENV.failMode],
+    PROVISIONER_COMMAND_POLICY_ENV.failMode,
+    EXECUTOR_COMMAND_POLICY_FAIL_MODES,
+    EXECUTOR_COMMAND_POLICY_DEFAULTS.failMode,
+  );
+  const timeoutMs = resolveInt(
+    env[PROVISIONER_COMMAND_POLICY_ENV.timeoutMs],
+    PROVISIONER_COMMAND_POLICY_ENV.timeoutMs,
+    EXECUTOR_COMMAND_POLICY_DEFAULTS.timeoutMs,
+  );
+  const cacheTtlMs = resolveInt(
+    env[PROVISIONER_COMMAND_POLICY_ENV.cacheTtlMs],
+    PROVISIONER_COMMAND_POLICY_ENV.cacheTtlMs,
+    EXECUTOR_COMMAND_POLICY_DEFAULTS.cacheTtlMs,
+    0,
+  );
+  const rawOpaPath =
+    env[PROVISIONER_COMMAND_POLICY_ENV.opaPath]?.trim() ||
+    EXECUTOR_COMMAND_POLICY_DEFAULTS.opaPath;
+  if (!rawOpaPath.startsWith('/')) {
+    throw new Error(
+      `[provisioner] невалидное значение ${PROVISIONER_COMMAND_POLICY_ENV.opaPath}="${rawOpaPath}" — путь должен начинаться с "/"`,
+    );
+  }
+
+  const config: ProvisionerExecutorCommandPolicyConfig = {
+    enabled,
+    provider,
+    failMode,
+    timeoutMs,
+    cacheTtlMs,
+    opaPath: rawOpaPath,
+  };
+  if (!enabled) return config;
+
+  const rawUrl = env[PROVISIONER_COMMAND_POLICY_ENV.url]?.trim() ?? '';
+  if (rawUrl === '') {
+    throw new Error(
+      `[provisioner] ${PROVISIONER_COMMAND_POLICY_ENV.enabled}="true" требует адрес чекера ` +
+        `(${PROVISIONER_COMMAND_POLICY_ENV.url}) — provisioner не стартует (fail-closed)`,
+    );
+  }
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch {
+    throw new Error(
+      `[provisioner] невалидное значение ${PROVISIONER_COMMAND_POLICY_ENV.url}="${rawUrl}" — ожидается http(s)-адрес`,
+    );
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    throw new Error(
+      `[provisioner] невалидное значение ${PROVISIONER_COMMAND_POLICY_ENV.url}="${rawUrl}" — поддерживаются только http/https`,
+    );
+  }
+  config.url = rawUrl.replace(/\/+$/, '');
+
+  const inlineToken = env[PROVISIONER_COMMAND_POLICY_ENV.token]?.trim() ?? '';
+  if (inlineToken !== '') {
+    config.token = inlineToken;
+  } else {
+    const tokenFile = env[PROVISIONER_COMMAND_POLICY_ENV.tokenFile]?.trim() ?? '';
+    if (tokenFile !== '') {
+      let value: string;
+      try {
+        value = readFile(tokenFile).trim();
+      } catch {
+        throw new Error(
+          `[provisioner] ${PROVISIONER_COMMAND_POLICY_ENV.tokenFile}="${tokenFile}" — ` +
+            'файл токена чекера недоступен для чтения (provisioner не стартует, fail-closed)',
+        );
+      }
+      if (value === '') {
+        throw new Error(
+          `[provisioner] ${PROVISIONER_COMMAND_POLICY_ENV.tokenFile}="${tokenFile}" — файл токена чекера пуст`,
+        );
+      }
+      config.token = value;
+    }
+  }
+
+  return config;
+}
+
 /** Разобрать имя провайдера (неизвестное — ошибка, не молчаливый `static`). */
 function resolveProvider(env: NodeJS.ProcessEnv): ProvisionerProviderName {
   const raw = (env[PROVISIONER_ENV.provider] ?? '').trim() || PROVISIONER_DEFAULTS.provider;
@@ -559,6 +772,7 @@ export function resolveProvisionerConfig(
     profiles,
     staticPools,
     ...(kubernetes !== undefined ? { kubernetes } : {}),
+    executorCommandPolicy: resolveExecutorCommandPolicy(env, readFile),
     idleTimeoutMs: resolveInt(
       env[PROVISIONER_ENV.idleTimeoutMs],
       PROVISIONER_ENV.idleTimeoutMs,

@@ -11,12 +11,15 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  EXECUTOR_COMMAND_POLICY_DEFAULTS,
   KUBERNETES_DEFAULTS,
+  PROVISIONER_COMMAND_POLICY_ENV,
   PROVISIONER_DEFAULTS,
   PROVISIONER_ENV,
   PROVISIONER_KUBERNETES_ENV,
   parseJsonEnv,
   profilesSchema,
+  resolveExecutorCommandPolicy,
   resolveProvisionerConfig,
   scrubProvisionerToken,
 } from './config.js';
@@ -401,5 +404,135 @@ describe('provisioner: конфигурация из env', () => {
   it('parseJsonEnv: пустое значение — fallback', () => {
     expect(parseJsonEnv(undefined, 'X', profilesSchema, {})).toEqual({});
     expect(parseJsonEnv('   ', 'X', profilesSchema, {})).toEqual({});
+  });
+
+  it('чекер команд: по умолчанию выключен с дефолтами', () => {
+    const config = resolveProvisionerConfig(makeEnv());
+    expect(config.executorCommandPolicy).toEqual({
+      enabled: EXECUTOR_COMMAND_POLICY_DEFAULTS.enabled,
+      provider: EXECUTOR_COMMAND_POLICY_DEFAULTS.provider,
+      failMode: EXECUTOR_COMMAND_POLICY_DEFAULTS.failMode,
+      timeoutMs: EXECUTOR_COMMAND_POLICY_DEFAULTS.timeoutMs,
+      cacheTtlMs: EXECUTOR_COMMAND_POLICY_DEFAULTS.cacheTtlMs,
+      opaPath: EXECUTOR_COMMAND_POLICY_DEFAULTS.opaPath,
+    });
+    expect(config.executorCommandPolicy.token).toBeUndefined();
+    expect(config.executorCommandPolicy.url).toBeUndefined();
+  });
+
+  it('чекер команд: enabled без url — ошибка fail-closed', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({ [PROVISIONER_COMMAND_POLICY_ENV.enabled]: 'true' }),
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_URL.*fail-closed/s);
+  });
+
+  it('чекер команд: env применяются, адрес нормализуется, токен — значением', () => {
+    const config = resolveProvisionerConfig(
+      makeEnv({
+        [PROVISIONER_COMMAND_POLICY_ENV.enabled]: 'true',
+        [PROVISIONER_COMMAND_POLICY_ENV.provider]: 'opa',
+        [PROVISIONER_COMMAND_POLICY_ENV.url]: 'https://policy:8181/',
+        [PROVISIONER_COMMAND_POLICY_ENV.token]: 'policy-token',
+        [PROVISIONER_COMMAND_POLICY_ENV.failMode]: 'open',
+        [PROVISIONER_COMMAND_POLICY_ENV.timeoutMs]: '1500',
+        [PROVISIONER_COMMAND_POLICY_ENV.cacheTtlMs]: '0',
+        [PROVISIONER_COMMAND_POLICY_ENV.opaPath]: '/v1/data/x/decision',
+      }),
+    );
+    expect(config.executorCommandPolicy).toEqual({
+      enabled: true,
+      provider: 'opa',
+      url: 'https://policy:8181',
+      token: 'policy-token',
+      failMode: 'open',
+      timeoutMs: 1500,
+      cacheTtlMs: 0,
+      opaPath: '/v1/data/x/decision',
+    });
+  });
+
+  it('чекер команд: токен читается из файла provisioner\'а', () => {
+    const config = resolveProvisionerConfig(
+      makeEnv({
+        [PROVISIONER_COMMAND_POLICY_ENV.enabled]: 'true',
+        [PROVISIONER_COMMAND_POLICY_ENV.url]: 'http://policy:8080',
+        [PROVISIONER_COMMAND_POLICY_ENV.tokenFile]: '/run/secrets/policy-token',
+      }),
+      { readFile: (path) => (path === '/run/secrets/policy-token' ? 'file-token\n' : '') },
+    );
+    expect(config.executorCommandPolicy.token).toBe('file-token');
+  });
+
+  it('чекер команд: нечитаемый/пустой файл токена — ошибка', () => {
+    const base = {
+      [PROVISIONER_COMMAND_POLICY_ENV.enabled]: 'true',
+      [PROVISIONER_COMMAND_POLICY_ENV.url]: 'http://policy:8080',
+      [PROVISIONER_COMMAND_POLICY_ENV.tokenFile]: '/run/secrets/policy-token',
+    };
+    expect(() =>
+      resolveProvisionerConfig(makeEnv(base), {
+        readFile: () => {
+          throw new Error('ENOENT');
+        },
+      }),
+    ).toThrow(/SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN_FILE.*недоступен/s);
+    expect(() =>
+      resolveProvisionerConfig(makeEnv(base), { readFile: () => '   ' }),
+    ).toThrow(/файл токена чекера пуст/);
+  });
+
+  it('чекер команд: невалидные provider/failMode/enabled/timeout/opaPath — ошибка', () => {
+    const enabled = {
+      [PROVISIONER_COMMAND_POLICY_ENV.enabled]: 'true',
+      [PROVISIONER_COMMAND_POLICY_ENV.url]: 'http://policy:8080',
+    };
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({ ...enabled, [PROVISIONER_COMMAND_POLICY_ENV.provider]: 'plugin' }),
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_PROVIDER="plugin"/);
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({ ...enabled, [PROVISIONER_COMMAND_POLICY_ENV.failMode]: 'maybe' }),
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_FAIL_MODE="maybe"/);
+    expect(() =>
+      resolveProvisionerConfig(makeEnv({ [PROVISIONER_COMMAND_POLICY_ENV.enabled]: 'on' })),
+    ).toThrow(/SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_ENABLED="on"/);
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({ ...enabled, [PROVISIONER_COMMAND_POLICY_ENV.timeoutMs]: '0' }),
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS="0"/);
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({ ...enabled, [PROVISIONER_COMMAND_POLICY_ENV.opaPath]: 'v1/data' }),
+      ),
+    ).toThrow(/SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_OPA_PATH/);
+  });
+
+  it('чекер команд: не-http(s) url — ошибка', () => {
+    expect(() =>
+      resolveProvisionerConfig(
+        makeEnv({
+          [PROVISIONER_COMMAND_POLICY_ENV.enabled]: 'true',
+          [PROVISIONER_COMMAND_POLICY_ENV.url]: 'ftp://policy:21',
+        }),
+      ),
+    ).toThrow(/только http\/https/);
+  });
+
+  it('чекер команд: выключенный чекер игнорирует прочие ключи', () => {
+    const policy = resolveExecutorCommandPolicy(
+      {
+        [PROVISIONER_COMMAND_POLICY_ENV.provider]: 'opa',
+        [PROVISIONER_COMMAND_POLICY_ENV.token]: 'ignored',
+      },
+      () => '',
+    );
+    expect(policy.enabled).toBe(false);
+    expect(policy.token).toBeUndefined();
   });
 });

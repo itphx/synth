@@ -7,6 +7,14 @@
 {{- if not (include "synth.executor.workspaceEnabled" .) }}
 {{- fail "executor.enabled: true требует executor.workspace.enabled: true — исполнитель работает в общем томе workspace (ADR-077)" }}
 {{- end }}
+{{- /* Внешний чекер команд (PROP-136b): провайдер — только http|opa. */ -}}
+{{- with .Values.executor.commandPolicy }}
+{{- if .enabled }}
+{{- if not (has (.provider | default "http") (list "http" "opa")) }}
+{{- fail "executor.commandPolicy.provider: ожидается http или opa" }}
+{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -105,6 +113,33 @@ spec:
               value: "/etc/synth/tls/{{ .caKey }}"
             {{- end }}
             {{- end }}
+            {{- /* Внешний чекер команд (PROP-136b): env рендерится только при
+                   `enabled`: выключенный чекер не меняет поведение исполнителя.
+                   Токен — файлом из Secret (readOnly); значение в values не
+                   хранится (инвариант 13). Без `url` рендер падает: исполнитель
+                   без адреса не стартует (fail-closed). */}}
+            {{- with .Values.executor.commandPolicy }}
+            {{- if .enabled }}
+            - name: SYNTH_EXECUTOR_COMMAND_POLICY_PROVIDER
+              value: {{ .provider | default "http" | quote }}
+            - name: SYNTH_EXECUTOR_COMMAND_POLICY_URL
+              value: {{ required "executor.commandPolicy.url обязателен при executor.commandPolicy.enabled: true — без адреса чекера исполнитель не стартует (fail-closed)" .url | quote }}
+            - name: SYNTH_EXECUTOR_COMMAND_POLICY_FAIL_MODE
+              value: {{ .failMode | default "closed" | quote }}
+            - name: SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS
+              value: {{ .timeoutMs | default 2000 | int64 | quote }}
+            - name: SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS
+              value: {{ .cacheTtlMs | default 60000 | int64 | quote }}
+            - name: SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH
+              value: {{ .opaPath | default "/v1/data/synth/exec/decision" | quote }}
+            {{- with .token }}
+            {{- if .existingSecret }}
+            - name: SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE
+              value: {{ .mountPath | default "/etc/synth/command-policy/token" | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           volumeMounts:
             {{- /* Общий том workspace: те же файлы, что у control plane. */}}
             - name: workspace
@@ -114,6 +149,16 @@ spec:
             {{- if .caSecret }}
             - name: executor-tls
               mountPath: /etc/synth/tls
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- /* Токен чекера команд: один файл из Secret по `subPath` — в под
+                   не попадают прочие ключи Secret. */}}
+            {{- with .Values.executor.commandPolicy }}
+            {{- if and .enabled .token.existingSecret }}
+            - name: executor-command-policy
+              mountPath: {{ .token.mountPath | default "/etc/synth/command-policy/token" }}
+              subPath: token
               readOnly: true
             {{- end }}
             {{- end }}
@@ -158,6 +203,19 @@ spec:
           secret:
             secretName: {{ .caSecret }}
             defaultMode: {{ include "synth.secretVolumeMode" $.Values.executor.podSecurityContext }}
+        {{- end }}
+        {{- end }}
+        {{- /* Токен чекера команд — Secret (readonly, инвариант 13). Режим —
+               как у прочих Secret-томов исполнителя (0440 при fsGroup, иначе 0444). */}}
+        {{- with .Values.executor.commandPolicy }}
+        {{- if and .enabled .token.existingSecret }}
+        - name: executor-command-policy
+          secret:
+            secretName: {{ .token.existingSecret }}
+            defaultMode: {{ include "synth.secretVolumeMode" $.Values.executor.podSecurityContext }}
+            items:
+              - key: {{ .token.key | default "token" }}
+                path: token
         {{- end }}
         {{- end }}
 {{- end }}
