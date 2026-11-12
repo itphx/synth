@@ -1,5 +1,5 @@
 /**
- * Исполнение: профили и пулы (PROP-135, слайс 6b-1) — admin-API.
+ * Исполнение: профили и пулы (PROP-135, слайс 6b-1).
  *
  * ## Зачем
  *
@@ -7,13 +7,17 @@
  * исполнителей известны только процессу. Администратору (и UI «Исполнение»)
  * нужно видеть, **что** настроено и **какие** динамические пулы сейчас живы, а
  * также уметь слить/удалить пул. Без HTTP-контура это можно было только
- * чтением `config.yaml` и метрик provisioner'а.
+ * чтением `config.yaml` и метрик provisioner'а. Каталог профилей при этом нужен
+ * и обычному пользователю — владелец проекта выбирает профиль в настройках
+ * проекта (роль у него может быть `USER`).
  *
  * ## Контракт
  *
- * - `GET /api/v2/execution/profiles` — эффективные провайдер/пулинг/профили;
+ * - `GET /api/v2/execution/profiles` — эффективные провайдер/пулинг/профили
+ *   (**любой аутентифицированный**: каталог нужен владельцу проекта, чтобы
+ *   выбрать профиль в настройках проекта);
  * - `GET /api/v2/execution/pools` — пулы: у `http` — `list()` провайдера, у
- *   `static` — профили как `configured`, у `inline` — пусто;
+ *   `static` — профили как `configured`, у `inline` — пусто (ADMIN/LEAD);
  * - `POST /api/v2/execution/pools/:key/drain` — слить пул (`202`);
  * - `DELETE /api/v2/execution/pools/:key` — удалить пул (`202`, идемпотентно).
  *
@@ -94,8 +98,14 @@ export interface ExecutionRoutesMessages {
 }
 
 export interface ExecutionRoutesOptions {
-  /** Guard на чтение профилей/пулов; по умолчанию — `requireAuth`. Managed — ADMIN/LEAD. */
-  readGuard?: Middleware;
+  /**
+   * Guard на чтение каталога профилей; по умолчанию — `requireAuth`.
+   * Managed — любой аутентифицированный: профиль выбирается в настройках
+   * проекта, поэтому роль USER тоже должна видеть каталог.
+   */
+  profilesReadGuard?: Middleware;
+  /** Guard на чтение списка пулов; по умолчанию — `requireAuth`. Managed — ADMIN/LEAD. */
+  poolsReadGuard?: Middleware;
   /** Guard на `drain`/`release`; по умолчанию — `requireAuth`. Managed — ADMIN. */
   writeGuard?: Middleware;
   /** Локализуемые сообщения (backend — i18n, core — русские литералы). */
@@ -123,8 +133,9 @@ function decodeKeyParam(raw: string): string {
 /**
  * Роуты профилей и пулов исполнения (core + managed — одна реализация).
  *
- * Отличаются только guard'ами (managed — ADMIN/LEAD на чтение, ADMIN на
- * мутации; core — `requireAuth`) и текстами (backend — i18n).
+ * Отличаются только guard'ами (managed — любой аутентифицированный на каталог
+ * профилей, ADMIN/LEAD на пулы, ADMIN на мутации; core — `requireAuth`) и
+ * текстами (backend — i18n).
  */
 export function createExecutionRoutes(
   auth: { requireAuth: Middleware },
@@ -132,7 +143,8 @@ export function createExecutionRoutes(
   opts: ExecutionRoutesOptions = {},
 ): Hono {
   const app = new Hono();
-  const readGuard = opts.readGuard ?? auth.requireAuth;
+  const profilesReadGuard = opts.profilesReadGuard ?? auth.requireAuth;
+  const poolsReadGuard = opts.poolsReadGuard ?? auth.requireAuth;
   const writeGuard = opts.writeGuard ?? auth.requireAuth;
   const messages: ExecutionRoutesMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
 
@@ -170,7 +182,9 @@ export function createExecutionRoutes(
     );
 
   // Эффективная конфигурация исполнения (профили/пулинг) — только чтение.
-  app.get('/profiles', readGuard, (c) => {
+  // Каталог профилей — любому аутентифицированному: профиль выбирается в
+  // настройках проекта (владелец проекта может быть с ролью USER).
+  app.get('/profiles', profilesReadGuard, (c) => {
     const dto: ExecutionProfilesDto = {
       provider: providerKind(),
       pooling: deps.executionConfig?.remote.pooling ?? 'instance',
@@ -182,7 +196,7 @@ export function createExecutionRoutes(
 
   // Пулы: http — реестр provisioner'а, static — профили как `configured`,
   // inline — пулов нет (исполнение в процессе).
-  app.get('/pools', readGuard, async (c) => {
+  app.get('/pools', poolsReadGuard, async (c) => {
     const kind = providerKind();
     if (kind === 'static') {
       const dto: ExecutionPoolsDto = {

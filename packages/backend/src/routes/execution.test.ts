@@ -4,8 +4,10 @@
  * Проверяется **RBAC-обвязка** managed-сборки (core-фабрика та же, что в
  * standalone):
  *
- * - чтение профилей/пулов — `ADMIN`|`LEAD`, мутации пулов — только `ADMIN`;
- * - `USER`/`AUDITOR` получают `403` на границе (до разбора ключа и до
+ * - каталог профилей — любой аутентифицированный (`USER`/`AUDITOR` тоже: профиль
+ *   выбирается в настройках проекта, роль владельца может быть `USER`);
+ * - пулы — `ADMIN`|`LEAD`, мутации пулов — только `ADMIN`;
+ * - `USER`/`AUDITOR` получают `403` на пулах и мутациях (до разбора ключа и до
  *   обращения к провайдеру);
  * - аноним — `401` (fail-closed гейт `/api/v2/*`);
  * - `ADMIN` → `200`/`202` (202 — на смонтированной фабрике с фейковым
@@ -73,8 +75,10 @@ describe('PROP-135 Ф6b-1: профили и пулы исполнения — R
     ).toBe(401);
   });
 
-  it('профили: ADMIN|LEAD → 200 (inline — пустой каталог), USER|AUDITOR → 403', async () => {
-    for (const key of [ADMIN_KEY, LEAD_KEY]) {
+  it('профили: любой аутентифицированный → 200 (inline — пустой каталог)', async () => {
+    // Каталог читает и владелец проекта с ролью USER: профиль выбирается в
+    // настройках проекта, поэтому роль на чтение каталога не влияет.
+    for (const key of [ADMIN_KEY, LEAD_KEY, USER_KEY, AUDITOR_KEY]) {
       const res = await req('/api/v2/execution/profiles', {}, key);
       expect(res.status).toBe(200);
       const body = (await res.json()) as { provider: string; pooling: string; profiles: string[] };
@@ -82,9 +86,6 @@ describe('PROP-135 Ф6b-1: профили и пулы исполнения — R
       expect(body.provider).toBe('inline');
       expect(body.pooling).toBe('instance');
       expect(body.profiles).toEqual([]);
-    }
-    for (const key of [USER_KEY, AUDITOR_KEY]) {
-      expect((await req('/api/v2/execution/profiles', {}, key)).status).toBe(403);
     }
   });
 
@@ -166,7 +167,8 @@ describe('PROP-135 Ф6b-1: drain/release с провайдером пулов (R
         { requireAuth: backend.auth.requireAuth },
         { executionRouter: router },
         {
-          readGuard: backend.auth.requirePermission('ADMIN', 'LEAD'),
+          profilesReadGuard: backend.auth.requireAuth,
+          poolsReadGuard: backend.auth.requirePermission('ADMIN', 'LEAD'),
           writeGuard: backend.auth.requirePermission('ADMIN'),
         },
       ),
@@ -213,6 +215,13 @@ describe('PROP-135 Ф6b-1: drain/release с провайдером пулов (R
     const unknown = encodeURIComponent('session:ses_9:exec:default');
     expect((await req(`/api/v2/execution/pools/${unknown}/drain`, { method: 'POST' }, LEAD_KEY)).status).toBe(403);
     expect((await req(`/api/v2/execution/pools/${unknown}`, { method: 'DELETE' }, LEAD_KEY)).status).toBe(403);
+    expect(drained).toEqual(['default']);
+    expect(released).toEqual(['default', 'default']);
+  });
+
+  it('USER: профили читает (200), пулы — 403 без обращения к провайдеру', async () => {
+    expect((await req('/api/v2/execution/profiles', {}, USER_KEY)).status).toBe(200);
+    expect((await req('/api/v2/execution/pools', {}, USER_KEY)).status).toBe(403);
     expect(drained).toEqual(['default']);
     expect(released).toEqual(['default', 'default']);
   });

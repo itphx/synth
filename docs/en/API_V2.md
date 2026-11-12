@@ -2801,8 +2801,8 @@ passes RBAC/`t()` through `opts`. One implementation for both standalone and man
 
 | Method | Path | RBAC (managed) | Purpose / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/execution/profiles` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Effective configuration → `200 { provider, pooling, defaultProfile, profiles }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — no `execution` section), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — known profile names (the default profile is always included; `inline` → `[]`) |
-| GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` | Pool list → `200 { provider, pools: PoolInfo[] }`. `http` — the provider's `GET /v1/pools`; `static` — configuration profiles as `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**no** pool address and no token) |
+| GET | `/api/v2/execution/profiles` | any authenticated (core — `requireAuth`) | Effective configuration → `200 { provider, pooling, defaultProfile, profiles }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — no `execution` section), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — known profile names (the default profile is always included; `inline` → `[]`). The catalogue is needed in project settings — a project owner with the `USER` role reads it too, so the role is not checked |
+| GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Pool list → `200 { provider, pools: PoolInfo[] }`. `http` — the provider's `GET /v1/pools`; `static` — configuration profiles as `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**no** pool address and no token) |
 | POST | `/api/v2/execution/pools/:key/drain` | `ADMIN` | Drain a pool → `202 {ok:true}`. `:key` is the canonical pool key (`instance:<class>:<profile>`, `project:<id>:<class>:<profile>`, `session:<id>:<class>:<profile>`), URL-encoded in the path. `drain` is best-effort: `202` acknowledges the request, the actual teardown happens on the provisioner side. A key missing from the provider registry → `404 NOT_FOUND`; an unavailable registry (no `list`) skips the check |
 | DELETE | `/api/v2/execution/pools/:key` | `ADMIN` | Delete a pool → `202 {ok:true}`. **Idempotent**: a repeated `DELETE` (including for a pool already removed by the idle timeout) is `202` again |
 
@@ -2811,6 +2811,12 @@ passes RBAC/`t()` through `opts`. One implementation for both standalone and man
 EXECUTION_PROVIDER_UNAVAILABLE` — there is no pool provider (`static`/`inline` have no
 pools with a lifecycle), it cannot perform the requested operation, or the provisioner
 is unreachable. Errors use the API v2 shape `{error:{code,message}}`.
+
+**RBAC.** The profile catalogue is readable by **any authenticated** user: the
+profile is chosen in project settings, and a project owner may hold the `USER`
+role. The pool list and mutations are administrative (instance overview and
+control of the provisioner's resources): pools — `ADMIN`|`LEAD`,
+`drain`/`release` — `ADMIN`.
 
 **Secrets (invariant 13).** Neither the pool/executor address nor any token (pool,
 executor, provisioner) is ever returned: the DTO carries only the key, profile, state

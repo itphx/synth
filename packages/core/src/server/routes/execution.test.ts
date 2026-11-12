@@ -1,5 +1,5 @@
 /**
- * PROP-135 слайс 6b-1: admin-API профилей и пулов исполнения
+ * PROP-135 слайс 6b-1: профили и пулы исполнения
  * (`/api/v2/execution/*`).
  *
  * Проверяется контракт HTTP-контура, а не provisioner (его сервис — Ф4b-2):
@@ -10,7 +10,9 @@
  * - `drain`/`release`: `202`, URL-encoded ключ, `404` для неизвестного пула,
  *   `400` для невалидного ключа, `503` без провайдера;
  * - **секреты не отдаются**: ни адрес пула, ни токен provisioner'а;
- * - guard по умолчанию — `requireAuth` (без аутентификации `401`).
+ * - guard'ы по умолчанию — `requireAuth` на всех маршрутах (без
+ *   аутентификации `401`); профили и пулы имеют **разные** guard'ы (managed
+ *   открывает каталог профилей всем аутентифицированным).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -370,5 +372,30 @@ describe('PROP-135 Ф6b-1: guard по умолчанию (requireAuth)', () => {
     expect(
       (await app.request(`/api/v2/execution/pools/${key}`, { method: 'DELETE' })).status,
     ).toBe(401);
+  });
+
+  it('профили, пулы и мутации — независимые guard\'ы', async () => {
+    // Managed-раскладка: каталог профилей открыт аутентифицированному,
+    // пулы и мутации закрыты ролевым guard'ом.
+    const deny = async (c: Context) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'Forbidden' } }, 403);
+    const app = new Hono();
+    app.route(
+      '/api/v2/execution',
+      createExecutionRoutes(
+        authKit(),
+        { executionConfig: remoteConfig(), executionRouter: routerStub({ profiles: ['default'] }) },
+        { profilesReadGuard: authKit().requireAuth, poolsReadGuard: deny, writeGuard: deny },
+      ),
+    );
+    expect((await app.request('/api/v2/execution/profiles')).status).toBe(200);
+    expect((await app.request('/api/v2/execution/pools')).status).toBe(403);
+    const key = encodeURIComponent('instance:exec:default');
+    expect(
+      (await app.request(`/api/v2/execution/pools/${key}/drain`, { method: 'POST' })).status,
+    ).toBe(403);
+    expect(
+      (await app.request(`/api/v2/execution/pools/${key}`, { method: 'DELETE' })).status,
+    ).toBe(403);
   });
 });

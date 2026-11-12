@@ -1439,9 +1439,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // PROP-135 Ф6b-1: профили и пулы исполнения (`/api/v2/execution/*`).
-  // Managed RBAC: чтение профилей/пулов — ADMIN|LEAD (обзор инстанса),
-  // `drain`/`release` — только ADMIN (управление ресурсами provisioner'а).
-  // Адреса и токены пулов наружу не отдаются (инвариант 13).
+  // Managed RBAC: каталог профилей — любой аутентифицированный (владелец проекта
+  // выбирает профиль в настройках, роль у него может быть USER); список пулов —
+  // ADMIN|LEAD (обзор инстанса); `drain`/`release` — только ADMIN (управление
+  // ресурсами provisioner'а). Адреса и токены пулов наружу не отдаются (инвариант 13).
   app.route('/api/v2/execution', createExecutionRoutes(
     { requireAuth: auth.requireAuth },
     {
@@ -1449,7 +1450,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       executionRouter: deps.executionRouter,
     },
     {
-      readGuard: auth.requirePermission('ADMIN', 'LEAD'),
+      profilesReadGuard: auth.requireAuth,
+      poolsReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
       writeGuard: auth.requirePermission('ADMIN'),
       messages: {
         invalidKey: (c) => t('errors.validation.executionPoolKey', undefined, c),

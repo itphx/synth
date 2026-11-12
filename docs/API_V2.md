@@ -3259,8 +3259,8 @@ payload — **snake_case** `{ project_id, worktree_id?, action }`, где `actio
 
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/execution/profiles` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Эффективная конфигурация → `200 { provider, pooling, defaultProfile, profiles }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — секции `execution` нет), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — имена известных профилей (профиль по умолчанию входит всегда; у `inline` — `[]`) |
-| GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` | Список пулов → `200 { provider, pools: PoolInfo[] }`. `http` — `GET /v1/pools` провайдера; `static` — профили конфигурации как `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**без** адреса пула и токена) |
+| GET | `/api/v2/execution/profiles` | любой аутентифицированный (core — `requireAuth`) | Эффективная конфигурация → `200 { provider, pooling, defaultProfile, profiles }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — секции `execution` нет), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — имена известных профилей (профиль по умолчанию входит всегда; у `inline` — `[]`). Каталог нужен в настройках проекта — его читает и владелец проекта с ролью `USER`, поэтому роль не проверяется |
+| GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Список пулов → `200 { provider, pools: PoolInfo[] }`. `http` — `GET /v1/pools` провайдера; `static` — профили конфигурации как `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**без** адреса пула и токена) |
 | POST | `/api/v2/execution/pools/:key/drain` | `ADMIN` | Слить пул → `202 {ok:true}`. `:key` — канонический ключ пула (`instance:<class>:<profile>`, `project:<id>:<class>:<profile>`, `session:<id>:<class>:<profile>`), в URL — URL-encoded. `drain` — best-effort: `202` подтверждает приём, фактическое снятие идёт у provisioner'а. Ключ, которого нет в реестре провайдера → `404 NOT_FOUND`; реестр недоступен (нет `list`) — проверка пропускается |
 | DELETE | `/api/v2/execution/pools/:key` | `ADMIN` | Удалить пул → `202 {ok:true}`. **Идемпотентно**: повторный `DELETE` (в т.ч. по уже удалённому по idle-таймауту пулу) — тоже `202` |
 
@@ -3269,6 +3269,11 @@ payload — **snake_case** `{ project_id, worktree_id?, action }`, где `actio
 EXECUTION_PROVIDER_UNAVAILABLE` — провайдера пулов нет (`static`/`inline` — пулов
 с жизненным циклом не существует), он не умеет запрошенную операцию или
 provisioner недоступен. Ошибки — единый формат API v2 `{error:{code,message}}`.
+
+**RBAC.** Каталог профилей читает **любой аутентифицированный**: профиль
+выбирается в настройках проекта, а владелец проекта может быть с ролью `USER`.
+Список пулов и мутации — административные (обзор инстанса и управление
+ресурсами provisioner'а): пулы — `ADMIN`|`LEAD`, `drain`/`release` — `ADMIN`.
 
 **Секреты (инвариант 13).** Ни адрес пула/исполнителя, ни токен (пула,
 исполнителя, provisioner'а) в ответы не попадают: DTO содержит только ключ,
