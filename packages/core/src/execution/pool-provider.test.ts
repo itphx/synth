@@ -81,6 +81,20 @@ describe('PROP-135 Ф4b-1: ключ пула', () => {
     ).toBe('session:ses_1:browser:default');
   });
 
+  // PROP-135 слайс 5a: `sandbox_exec` работает в своём пуле — класс входит
+  // в ключ, поэтому ключ песочницы не совпадает с ключом обычных команд.
+  it('sandbox-класс — отдельный ключ', () => {
+    expect(
+      poolKeyString({ scope: 'session', id: 'ses_1', class: 'sandbox', profile: 'devops' }),
+    ).toBe('session:ses_1:sandbox:devops');
+    expect(
+      poolKeyString({ scope: 'project', id: 'prj_1', class: 'sandbox', profile: 'default' }),
+    ).toBe('project:prj_1:sandbox:default');
+    expect(
+      poolKeyString({ scope: 'instance', class: 'sandbox', profile: 'default' }),
+    ).toBe('instance:sandbox:default');
+  });
+
   it('project/session без id → ошибка (изоляция пулов не должна ломаться)', () => {
     expect(() => poolKeyString({ scope: 'project', class: 'exec', profile: 'default' })).toThrow(
       /requires an id/,
@@ -181,6 +195,35 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
       scope: 'project',
       id: 'prj_1',
       class: 'exec',
+      profile: 'devops',
+    });
+  });
+
+  it('ensure: класс sandbox уходит в тело и ключ как `sandbox`', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-sandbox:8080', token: 'sandbox-token' });
+      },
+    });
+
+    await provider.ensure({ scope: 'session', id: 'ses_1', class: 'sandbox', profile: 'devops' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body).toMatchObject({
+      key: 'session:ses_1:sandbox:devops',
+      scope: 'session',
+      id: 'ses_1',
+      class: 'sandbox',
       profile: 'devops',
     });
   });

@@ -184,6 +184,34 @@ describe('provisioner: ensure', () => {
     expect(((await res.json()) as { url: string }).url).toBe('http://browser:4200');
   });
 
+  // PROP-135 слайс 5a: класс `sandbox` — аддитивное значение (протокол не
+  // повышен). Пул песочницы адресуется профилем; `exec`/`browser` не сломаны.
+  it('класс sandbox принимается, пул — по профилю', async () => {
+    const { app } = makeHarness();
+    const res = await request(app, 'POST', '/v1/pools', {
+      body: ensureBody({
+        key: 'session:s1:sandbox:default',
+        scope: 'session',
+        id: 's1',
+        class: 'sandbox',
+        profile: 'default',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { url: string; token: string };
+    expect(body.url).toBe('http://executor-default:5100');
+    expect(body.token.length).toBeGreaterThan(0);
+  });
+
+  it('неизвестный класс пула — 400 invalid_request (fail-closed)', async () => {
+    const { app } = makeHarness();
+    const res = await request(app, 'POST', '/v1/pools', {
+      body: { ...ensureBody(), class: 'shell' },
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
   it('неизвестный профиль — 404 pool_not_found', async () => {
     const { app } = makeHarness();
     const res = await request(app, 'POST', '/v1/pools', {

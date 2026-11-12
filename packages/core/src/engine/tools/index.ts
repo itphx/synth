@@ -5,6 +5,8 @@ import { writeFileTool, editFileTool, createDirectoryTool, deleteFileTool } from
 // Атомарная мультифайловая правка в формате JSON-правок (всё-или-ничего).
 import { patchTool } from './patch.js';
 import { executeShellTool } from './shell.js';
+// PROP-135 слайс 5a: разовый запуск команд в отдельном профиле (пул `sandbox`).
+import { sandboxExecTool } from './sandbox-exec.js';
 import { grepFilesTool } from './search.js';
 import { webFetchTool, webSearchTool } from './web.js';
 import {
@@ -134,6 +136,9 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   createDirectoryTool,
   deleteFileTool,
   executeShellTool,
+  // PROP-135 слайс 5a: `sandbox_exec` — отдельный пул класса `sandbox`
+  // (другой профиль/образ), группа прав `shell`.
+  sandboxExecTool,
   grepFilesTool,
   webFetchTool,
   webSearchTool,

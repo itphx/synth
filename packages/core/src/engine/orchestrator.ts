@@ -6543,6 +6543,18 @@ export class ChatOrchestrator {
                       workingDir,
                     ),
                   }),
+                  // PROP-135 слайс 5a: роутер портов — тулам, которые выбирают
+                  // порт **по своему классу пула**, а не по профилю сессии
+                  // (`sandbox_exec` → класс `sandbox`). Без роутера такой тул
+                  // отказывает понятной ошибкой, а не уходит в inline.
+                  executionRouter: this._executionRouter,
+                  // Тот же subPath, что у порта сессии: песочный пул монтируется
+                  // в тот же каталог проекта/worktree (класс пула в ключ входит,
+                  // subPath — нет).
+                  executionWorkspaceSubPath: resolveWorkspaceSubPath(
+                    this._workspacesRoot,
+                    workingDir,
+                  ),
                   // ADR-075: гейт `workspace` наследуется саб-агентом —
                   // его permission-слой не даёт обойти отсутствие рабочего каталога.
                   workspaceReady,

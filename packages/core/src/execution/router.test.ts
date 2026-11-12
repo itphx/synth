@@ -511,4 +511,59 @@ describe('PROP-135 Ф4b-1: роутер с провайдером пулов htt
     );
     expect(factory.created).toHaveLength(2);
   });
+
+  /**
+   * PROP-135 слайс 5a: класс пула входит в ключ (`class:'sandbox'`), поэтому
+   * песочный тул адресует **свой** пул, а не пул обычных команд области.
+   */
+  it('class=sandbox → ключ `session:<id>:sandbox:<profile>` (отдельный пул)', async () => {
+    const keys: ExecutionPoolKey[] = [];
+    const provider = {
+      ensure: async (key: ExecutionPoolKey) => {
+        keys.push(key);
+        return { url: `http://pool/${key.class}` };
+      },
+    };
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: provider,
+    });
+
+    const sandbox = router.portFor({ sessionId: 'ses_1', class: 'sandbox' });
+    const plain = router.portFor({ sessionId: 'ses_1' });
+    // Разные классы — разные прокси-порты (разные ключи пула).
+    expect(sandbox).not.toBe(plain);
+
+    await sandbox
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+    await plain
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    expect(keys.map((key) => poolKeyString(key))).toEqual([
+      'session:ses_1:sandbox:default',
+      'session:ses_1:exec:default',
+    ]);
+  });
+
+  it('class=sandbox при provider=static игнорируется (адрес по профилю)', async () => {
+    const factory = fakeFactory();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        pooling: 'session',
+        defaultProfile: 'a',
+        profiles: { a: { url: ['http://a:8080'] } },
+      }),
+      createPort: factory.createPort,
+    });
+
+    expect(router.portFor({ sessionId: 'ses_1', class: 'sandbox' })).toBe(
+      router.portFor({ sessionId: 'ses_1' }),
+    );
+  });
 });

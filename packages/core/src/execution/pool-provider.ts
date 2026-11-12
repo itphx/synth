@@ -18,7 +18,7 @@
  *
  * Ключ — **то, что различает пулы**: область (`instance`/`project`/`session`),
  * идентификатор области (id проекта/сессии; у `instance` — нет), класс
- * (`exec`/`browser`) и профиль. Строковое представление
+ * (`exec`/`browser`/`sandbox`) и профиль. Строковое представление
  * (`poolKeyString`) — **канонический** идентификатор пула: он идёт в
  * provisioner по проводу и служит ключом кэша портов в роутере.
  *
@@ -36,8 +36,15 @@ import { readExecutorToken } from './remote.js';
 /** Область пула: общий пул инстанса, проектный или сессионный. */
 export type ExecutionPoolScope = 'instance' | 'project' | 'session';
 
-/** Класс пула: обычные команды либо браузерная сессия. */
-export type ExecutionPoolClass = 'exec' | 'browser';
+/**
+ * Класс пула: обычные команды, браузерная сессия либо разовый песочный запуск.
+ *
+ * `sandbox` (PROP-135 слайс 5a) — отдельный профиль исполнения для
+ * `sandbox_exec`: другой образ/набор программ, отдельный пул и собственная
+ * политика провижининга. Ключ пула поэтому различает классы — иначе
+ * песочный запуск занял бы порт обычного пула.
+ */
+export type ExecutionPoolClass = 'exec' | 'browser' | 'sandbox';
 
 /**
  * Ключ пула исполнения.
@@ -69,7 +76,8 @@ export interface ExecutionPoolKey {
 
 /**
  * Каноническая строка ключа пула: `project:<id>:exec:<profile>`,
- * `session:<id>:browser:<profile>`, `instance:exec:<profile>`.
+ * `session:<id>:browser:<profile>`, `session:<id>:sandbox:<profile>`,
+ * `instance:exec:<profile>`.
  *
  * Единое представление нужно в двух местах: провод к provisioner'у (путь
  * `POST /v1/pools/{key}`) и кэш портов роутера (один порт на ключ).

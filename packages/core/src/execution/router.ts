@@ -47,6 +47,11 @@
  * subPath у существующего пула порт не подхватывает (пул пересоздаётся на
  * стороне provisioner'а по своему idle-таймауту).
  *
+ * `class` цели (PROP-135 слайс 5a) — `exec` (по умолчанию), `browser` либо
+ * `sandbox`: при `provider: http` класс входит в ключ пула, поэтому
+ * `sandbox_exec` обращается к отдельному пулу своего профиля. При
+ * `provider: static` класс игнорируется (адрес — по профилю).
+ *
  * ## Чего роутер НЕ делает
  *
  * - не provisioner'ит поды (это следующий слайс Ф4 — сам сервис provisioner);
@@ -79,6 +84,16 @@ export interface ExecutionPortTarget {
   projectId?: string;
   /** Идентификатор сессии — для ключа сессионного пула. */
   sessionId?: string;
+  /**
+   * Класс пула (PROP-135 слайс 5a): `exec` (по умолчанию), `browser` либо
+   * `sandbox`.
+   *
+   * Учитывается только при `provider: http` — класс входит в ключ пула
+   * (`poolKeyString`), поэтому `sandbox_exec` обращается к **своему** пулу, а
+   * не к обычному пулу области. При `provider: static` класс игнорируется:
+   * статический провайдер адресует пул по профилю (isolations пулов нет).
+   */
+  class?: 'exec' | 'browser' | 'sandbox';
   /**
    * Относительный путь внутри PVC workspace (`proj-slug`,
    * `proj-slug/.worktrees/feature`): provisioner монтирует его в пул как
@@ -310,10 +325,17 @@ function createHttpProviderRouter(
       // PROP-135 Ф4b-2b-2a: subPath монтирования PVC — в ключ пула **не**
       // входит (кэш прокси по ключу: один порт на проект/сессию), его получает
       // первый `ensure` этого пула.
+      //
+      // PROP-135 слайс 5a: класс пула входит в ключ — `sandbox_exec` берёт
+      // **отдельный** пул (свой образ/профиль), а не порт обычного пула
+      // области. Неизвестное/пустое значение — `exec` (поведение прежнее).
+      const poolClass = target?.class === 'sandbox' || target?.class === 'browser'
+        ? target.class
+        : 'exec';
       const key: ExecutionPoolKey = {
         scope,
         id: id.trim(),
-        class: 'exec',
+        class: poolClass,
         profile,
         ...(target?.workspaceSubPath ? { workspaceSubPath: target.workspaceSubPath } : {}),
       };

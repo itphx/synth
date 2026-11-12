@@ -194,7 +194,7 @@ export const SCHEDULE_TOOLS = [...SCHEDULE_READ_TOOLS, ...SCHEDULE_WRITE_TOOLS];
 export const PERMISSION_GROUPS: Record<string, string[]> = {
   read: READ_TOOLS,
   edit: WRITE_TOOLS,
-  shell: ['execute_shell'],
+  shell: ['execute_shell', 'sandbox_exec'],
   search: ['grep_files', 'glob'],
   web: ['web_fetch', 'web_search'],
   git: GIT_TOOLS,
@@ -284,6 +284,10 @@ export const TOOL_PATH_PARAMS: Record<string, string[]> = {
   delete_file: ['file_path'],
   create_directory: ['path'],
   execute_shell: ['cwd'],
+  // PROP-135 слайс 5a: `cwd` песочного запуска — путь внутри периметра
+  // сессии: правила `external_directory`/`protected_paths` применяются к нему
+  // так же, как к `execute_shell` (внешний `cwd` — вопрос пользователю).
+  sandbox_exec: ['cwd'],
   grep_files: ['path'],
   // PROP-124 §4b: локальный путь адресного ssh-тула передачи файлов — путь
   // файла проекта: правила `external_directory`/`protected_paths` применяются к

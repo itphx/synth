@@ -159,9 +159,9 @@ Env-имена (по одному на поле; **зафиксированы и
 ### Ф4b-1: провайдер пулов (`static`/`http`) и ленивый порт
 
 > **Ф4b-1 (PROP-135, реализовано):** провайдер пулов исполнения (`static`|`http`), ключи пулов
-> `instance|project|session` × `exec|browser` × профиль и **ленивый порт** на динамический пул.
-> **Сам сервис-provisioner** (поды/чарты/менеджер пулов) — **следующий слайс (Ф4b-2)**; в Ф4b-1
-> реализован только клиент протокола `/v1/pools`.
+> `instance|project|session` × `exec|browser|sandbox` × профиль и **ленивый порт** на динамический
+> пул. **Сам сервис-provisioner** (поды/чарты/менеджер пулов) — **следующий слайс (Ф4b-2)**; в
+> Ф4b-1 реализован только клиент протокола `/v1/pools`.
 
 **Провайдер пулов** (`execution.remote.provider`, по умолчанию `static`) решает, **откуда** берётся
 адрес пула:
@@ -178,6 +178,7 @@ Env-имена (по одному на поле; **зафиксированы и
 instance:exec:default
 project:prj_1:exec:default
 session:ses_1:browser:default
+session:ses_1:sandbox:default
 ```
 
 У `project`/`session` идентификатор **обязателен**: ключ без него совпал бы с ключом чужого пула
@@ -211,10 +212,22 @@ session:ses_1:browser:default
 статические `execution.remote.url` и `execution.remote.tokenSecret` **не нужны** (адрес и токен
 пула выдаёт provisioner) — проверка режима на старте этого не требует.
 
-**Остаток PROP-135:** **сам сервис-provisioner** (Ф4b-2), монтирование пулов (per-project),
-полный binding профиля (`task.executor_profile` → `agentDefinition.executorProfile` →
-`project.executor.profile`), `sandbox_exec` и браузерный класс пулов. Матрица «что уезжает в
+**Остаток PROP-135:** полный binding профиля (`task.executor_profile` → `agentDefinition.executorProfile` →
+`project.executor.profile`), **браузерный класс** пулов и MCP динамического пула (слайс 5b), аудит/
+чекер песочного профиля (PROP-136). `sandbox_exec` — сделан (слайс 5a, см. ниже). Матрица «что уезжает в
 исполнитель» (§ ниже) на Ф4b-1 не меняется.
+
+**Песочный запуск (`sandbox_exec`, слайс 5a).** Тул исполняет 1..5 команд последовательно в
+**отдельном** пуле: `ExecutionPortTarget.class = 'sandbox'` входит в ключ (`session:<id>:sandbox:<profile>`),
+поэтому provisioner выдаёт под другого профиля (свой образ/набор программ). Роутер получает класс из
+`ctx.extra.executionRouter` (`resolveExecutionRouter`, `execution/tool-port.ts`) — тул выбирает порт
+сам, а не берёт порт сессии (`executionPort`), и без роутера отказывает (inline-фолбэк запрещён).
+Жизненный цикл пула — тот же, что у остальных: TTL/idle/`maxLifetimeMs` считает **provisioner**
+(`idleTimeoutMs`/`sessionIdleTimeoutMs`, drain → release), `touch`/`drain`/`release` из core пока
+best-effort (остаток). Границы: группа прав `shell`, plan-режим блокирует целиком, shell-guard/
+protected-paths `execute_shell` **не применяются** (команда идёт в другой образ/пул), containment
+`cwd` — лексический (реальный — на исполнителе). Аудит и проверка песочного профиля —
+**PROP-136 (ещё не реализован)**.
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта

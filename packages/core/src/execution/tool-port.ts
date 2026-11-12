@@ -12,9 +12,13 @@
 import type { ToolContext } from '@itphx/synth-shared';
 import { InlineExecutionPort } from './inline-execution-port.js';
 import { isExecutionPort, type ExecutionPort } from './ports/index.js';
+import { isExecutionRouter, type ExecutionRouter } from './router.js';
 
 /** Ключ порта исполнения в `ToolContext.extra`. */
 export const EXECUTION_PORT_KEY = 'executionPort';
+
+/** Ключ роутера портов в `ToolContext.extra` (PROP-135 слайс 5a). */
+export const EXECUTION_ROUTER_KEY = 'executionRouter';
 
 /**
  * Порт исполнения для тула: внедрённый (`ctx.extra.executionPort`) либо
@@ -24,4 +28,21 @@ export function resolveExecutionPort(ctx: ToolContext): ExecutionPort {
   const extra = ctx.extra as Record<string, unknown> | undefined;
   const port = extra?.[EXECUTION_PORT_KEY];
   return isExecutionPort(port) ? port : new InlineExecutionPort();
+}
+
+/**
+ * Роутер портов исполнения для тула (`ctx.extra.executionRouter`).
+ *
+ * Нужен тулам, которые выбирают порт **не по профилю сессии**, а по
+ * собственному классу пула (`sandbox_exec` → класс `sandbox`). Роутер
+ * кладёт оркестратор; не задан (прямые вызовы тулов в тестах,
+ * standalone-сборка без опции, шаги пайплайнов) — `undefined`: тул, которому
+ * роутер обязателен, отказывает понятной ошибкой, а не тихо уходит в
+ * inline-исполнение (иначе «песочница» исполнилась бы в процессе control
+ * plane).
+ */
+export function resolveExecutionRouter(ctx: ToolContext): ExecutionRouter | undefined {
+  const extra = ctx.extra as Record<string, unknown> | undefined;
+  const router = extra?.[EXECUTION_ROUTER_KEY];
+  return isExecutionRouter(router) ? router : undefined;
 }

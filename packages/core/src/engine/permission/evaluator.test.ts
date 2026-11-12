@@ -97,6 +97,13 @@ describe('PermissionEvaluator — группы', () => {
     expect(evalCheck(cfg, 'execute_shell', { command: 'ls' }).action).toBe('ask');
   });
 
+  // PROP-135 слайс 5a: `sandbox_exec` — выполнение команд, та же группа правил,
+  // что у `execute_shell` (отдельного правила для песочницы не вводим).
+  it('shell применяется к sandbox_exec', () => {
+    const cfg: PermissionConfig = { rules: { shell: 'ask' }, askTimeoutMs: 30_000 };
+    expect(evalCheck(cfg, 'sandbox_exec', { profile: 'devops', commands: ['ls'] }).action).toBe('ask');
+  });
+
   it('capability-имя группы работает (file_write)', () => {
     const cfg: PermissionConfig = { rules: { file_write: 'deny' }, askTimeoutMs: 30_000 };
     expect(evalCheck(cfg, 'write_file', { file_path: 'a.txt', content: 'x' }, ['file_write']).action).toBe('deny');
@@ -297,6 +304,19 @@ describe('PermissionEvaluator — plan mode (ADR-025)', () => {
       expect(d.action, tool).toBe('deny');
       expect(d.matchedRule, tool).toBe('plan.deny');
     }
+  });
+
+  // PROP-135 слайс 5a: план ничего не исполняет — песочный запуск команд
+  // блокируется в plan-режиме целиком (группа `shell` сама его не блокирует:
+  // у `execute_shell` в плане разрешены read-only команды).
+  it('mode=plan блокирует sandbox_exec', () => {
+    const d = planCheck('sandbox_exec', { profile: 'devops', commands: ['ls'] }, { sessionMode: 'plan' });
+    expect(d.action).toBe('deny');
+    expect(d.matchedRule).toBe('plan.deny');
+    expect(d.unavailable?.reason).toBe('mode');
+    expect(planCheck('sandbox_exec', { profile: 'devops', commands: ['ls'] }, { planMode: 'strict', planApproved: false }).action).toBe('deny');
+    // Вне plan-режима тул доступен (правил нет — allow).
+    expect(planCheck('sandbox_exec', { profile: 'devops', commands: ['ls'] }, { sessionMode: 'act' }).action).toBe('allow');
   });
 
   it('mode=plan оставляет read-тулы пайплайнов и расписаний доступными', () => {

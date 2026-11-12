@@ -19,13 +19,13 @@
  *
  * `{key}` — **URL-encoded** канонический ключ пула (`poolKeyString` в core:
  * `project:<id>:exec:<profile>`, `session:<id>:browser:<profile>`,
- * `instance:exec:<profile>`). Hono декодирует параметр пути сам — повторно
- * `decodeURIComponent` не применяется.
+ * `session:<id>:sandbox:<profile>`, `instance:exec:<profile>`). Hono декодирует
+ * параметр пути сам — повторно `decodeURIComponent` не применяется.
  *
  * ## Ключ пула
  *
  * Ключ приходит **строкой** и является ключом реестра пулов: он различает
- * области (instance/project/session), класс (`exec`/`browser`) и профиль.
+ * области (instance/project/session), класс (`exec`/`browser`/`sandbox`) и профиль.
  * Составные поля (`scope`/`id`/`class`/`profile`) передаются рядом — по ним
  * считается idle-таймаут и подбирается ресурс, но идентичность пула — `key`.
  *
@@ -78,8 +78,14 @@ export function isValidWorkspaceSubPath(value: string): boolean {
 /** Область пула: общий пул инстанса, проектный или сессионный. */
 export type PoolScope = 'instance' | 'project' | 'session';
 
-/** Класс пула: обычные команды либо браузерная сессия. */
-export type PoolClass = 'exec' | 'browser';
+/**
+ * Класс пула: обычные команды, браузерная сессия либо разовый песочный запуск.
+ *
+ * `sandbox` (PROP-135 слайс 5a) — пул отдельного профиля для `sandbox_exec`.
+ * Значение аддитивное: протокол provisioner'а **не повышается** (старый
+ * provisioner вернёт `400 invalid_request` на неизвестный класс — fail-closed).
+ */
+export type PoolClass = 'exec' | 'browser' | 'sandbox';
 
 /** Состояние пула в реестре provisioner'а. */
 export type PoolState = 'ready' | 'draining';
@@ -184,7 +190,7 @@ export const ensurePoolRequestSchema = z
     key: z.string().trim().min(1).max(512),
     scope: z.enum(['instance', 'project', 'session']),
     id: z.string().trim().min(1).max(512).optional(),
-    class: z.enum(['exec', 'browser']),
+    class: z.enum(['exec', 'browser', 'sandbox']),
     profile: z.string().trim().min(1).max(128),
     workspaceSubPath: z
       .string()
