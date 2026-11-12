@@ -37,6 +37,7 @@ import type {
   FsDirEntryBody,
   FsDownloadRequestBody,
   FsEntryKindBody,
+  FsHashRequestBody,
   FsMkdirRequestBody,
   FsRawTextBody,
   FsRawTextRequestBody,
@@ -48,6 +49,7 @@ import type {
   FsStatBody,
   FsTextPageBody,
   FsTextRequestBody,
+  FsUploadRequest,
   FsWriteRequestBody,
 } from './protocol.js';
 import { EXECUTOR_FS_MAX_DOWNLOAD_BYTES } from './protocol.js';
@@ -106,7 +108,7 @@ async function isDanglingSymlink(target: string): Promise<boolean> {
  * Машинный код ошибки core (`FsPathError`) → причина на проводе.
  *
  * Коды ядра и причины провода совпадают по смыслу (`not_found`/
- * `not_directory`/`permission`/`unresolvable`/`too_large`); `invalid`
+ * `not_directory`/`permission`/`unresolvable`/`too_large`/`exists`); `invalid`
  * отображается в `invalid_request` (невалидный запрос, а не сбой ФС).
  */
 function fsPathErrorReason(code: string): ExecutorErrorReason | undefined {
@@ -121,6 +123,8 @@ function fsPathErrorReason(code: string): ExecutorErrorReason | undefined {
       return 'unresolvable';
     case 'too_large':
       return 'too_large';
+    case 'exists':
+      return 'exists';
     case 'invalid':
       return 'invalid_request';
     default:
@@ -377,13 +381,46 @@ export class ExecutorFsService {
   }
 
   /**
+   * Публикация байтов в файл (`PUT /fs/upload`, протокол 7, PROP-135 Ф3).
+   *
+   * Правила публикации — **общим кодом core** (`execution/fs-atomic.ts`): тем
+   * же кодом пишет control plane, поэтому опубликованный файл не зависит от
+   * топологии (атомарность, права, симлинки). Занятая цель при
+   * `ifExists: 'fail'` → отказ `exists` (цель не перезаписывается).
+   */
+  async upload(req: FsUploadRequest, bytes: Buffer): Promise<void> {
+    const target = this._resolve(req);
+    try {
+      const core = await import('@itphx/synth-core');
+      await core.uploadBytes(target, bytes, { ifExists: req.ifExists });
+    } catch (err) {
+      throw this._toError(err, target);
+    }
+  }
+
+  /**
+   * SHA-256 файла (`POST /fs/hash`, протокол 7, PROP-135 Ф3).
+   *
+   * Хэш считается **здесь**, на точке исполнения: там, где лежит файл.
+   * Общим кодом core (`execution/fs-text.ts`) — тем же, что и в control plane.
+   */
+  async hash(req: FsHashRequestBody): Promise<string> {
+    const target = this._resolve(req);
+    try {
+      const core = await import('@itphx/synth-core');
+      return await core.hashFileSha256(target);
+    } catch (err) {
+      throw this._toError(err, target);
+    }
+  }
+
+  /**
    * Путь операции: базовый каталог (`cwd`) проходит containment, относительный
    * `path` резолвится от него, абсолютный — используется как есть.
    */
   private _resolve(req: FsRequestBody): string {
     return this._resolvePath(req, req.path);
   }
-
   /**
    * Путь относительно `cwd` запроса (абсолютный — как есть).
    *

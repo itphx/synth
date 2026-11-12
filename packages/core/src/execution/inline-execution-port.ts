@@ -76,15 +76,23 @@ import {
   type FsStat,
   type FsTextOptions,
   type FsTextPage,
+  type FsUploadOptions,
 } from './ports/index.js';
 import {
   BINARY_SNIFF_BYTES,
+  hashFileSha256,
   readBytesFromFile,
   readRawTextFromFile,
   readTextPageFromFile,
   sniffFileHeadFromFile,
 } from './fs-text.js';
-import { mkdirRecursive, removePath, renamePath, writeTextFileAtomic } from './fs-atomic.js';
+import {
+  mkdirRecursive,
+  removePath,
+  renamePath,
+  uploadBytes,
+  writeTextFileAtomic,
+} from './fs-atomic.js';
 
 /** Файл и аргументы запуска для обеих форм команды. */
 function resolveInvocation(command: ExecCommand): { file: string; args: string[] } {
@@ -778,6 +786,38 @@ async function inlineDownload(path: string, maxBytes: number): Promise<Buffer> {
 }
 
 /**
+ * Опубликовать байты в файл (inline, PROP-135 Ф3) — общий модуль
+ * `execution/fs-atomic.ts`.
+ *
+ * Тем же кодом пишет исполнитель, поэтому опубликованный файл не зависит от
+ * топологии (атомарность, права, симлинки). Ошибки — типизированные
+ * (`FsPathError`), в т.ч. `exists` (цель занята при `ifExists: 'fail'`).
+ */
+async function inlineUpload(
+  path: string,
+  bytes: Buffer,
+  opts?: FsUploadOptions,
+): Promise<void> {
+  const target = requireValidFsPath(path);
+  await uploadBytes(target, bytes, opts);
+}
+
+/**
+ * SHA-256 файла (inline, PROP-135 Ф3) — общий модуль `execution/fs-text.ts`.
+ *
+ * Хэш считается **потоком** (файл целиком в память не поднимается); ошибки
+ * чтения — типизированные (`FsPathError`).
+ */
+async function inlineHash(path: string): Promise<string> {
+  const target = requireValidFsPath(path);
+  try {
+    return await hashFileSha256(target);
+  } catch (err) {
+    throw toFsPathError(err, path);
+  }
+}
+
+/**
  * Исполнение в процессе backend'а — нынешнее поведение Synth.
  *
  * Экземпляр **без состояния**: его можно создавать на каждый вызов (тулы
@@ -808,6 +848,9 @@ export class InlineExecutionPort implements ExecutionPort {
     readRawText: (path: string, maxBytes: number) => inlineReadRawText(path, maxBytes),
     rename: (from: string, to: string) => inlineRename(from, to),
     download: (path: string, maxBytes: number) => inlineDownload(path, maxBytes),
+    upload: (path: string, bytes: Buffer, opts?: FsUploadOptions) =>
+      inlineUpload(path, bytes, opts),
+    hash: (path: string) => inlineHash(path),
   };
 
   /**

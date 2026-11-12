@@ -21,6 +21,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -464,8 +465,7 @@ describe('ExecutionFs (inline): rename', () => {  it('файл перенесё�
  * Бинарная передача файла (PROP-135, Ф3) — байты **без** base64: вложения
  * идут бинарно (base64 раздувал бы 100 МиБ до 133 МиБ).
  */
-describe('ExecutionFs (inline): download', () => {
-  it('текстовый файл — байты один в один', async () => {
+describe('ExecutionFs (inline): download', () => {  it('текстовый файл — байты один в один', async () => {
     const bytes = await port.fs!.download(file, 1024);
 
     expect(bytes).toBeInstanceOf(Buffer);
@@ -508,5 +508,112 @@ describe('ExecutionFs (inline): download', () => {
 
   it('пустой путь — invalid', async () => {
     expect(await captureCode(port.fs!.download('', 1024))).toBe('invalid');
+  });
+});
+
+/**
+ * Публикация байтов в файл (PROP-135, Ф3) — обратное направление: файл
+ * публикуется **на точке исполнения**, атомарно и **без перезаписи** по
+ * умолчанию.
+ */
+describe('ExecutionFs (inline): upload', () => {
+  it('новый файл — создан с нужными байтами', async () => {
+    const target = join(root, 'uploaded.bin');
+
+    await port.fs!.upload(target, Buffer.from('payload\n'));
+
+    await expect(readFile(target, 'utf-8')).resolves.toBe('payload\n');
+  });
+
+  it('родительские каталоги создаются', async () => {
+    const target = join(root, 'deep', 'nested', 'file.bin');
+
+    await port.fs!.upload(target, Buffer.from('deep\n'));
+
+    await expect(readFile(target, 'utf-8')).resolves.toBe('deep\n');
+  });
+
+  it('бинарные байты — один в один (без искажений)', async () => {
+    const target = join(root, 'upload-blob.bin');
+    const payload = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0x7f, 0x80]);
+
+    await port.fs!.upload(target, payload);
+
+    const written = await readFile(target);
+    expect(written.equals(payload)).toBe(true);
+  });
+
+  it('занятая цель при ifExists=fail — exists (файл не перезаписан)', async () => {
+    const target = join(root, 'occupied.bin');
+    await writeFile(target, 'old\n');
+
+    const err = await captureFsError(port.fs!.upload(target, Buffer.from('new\n')));
+
+    expect(err.code).toBe('exists');
+    await expect(readFile(target, 'utf-8')).resolves.toBe('old\n');
+  });
+
+  it('ifExists=overwrite — файл перезаписан', async () => {
+    const target = join(root, 'overwritten.bin');
+    await writeFile(target, 'old\n');
+
+    await port.fs!.upload(target, Buffer.from('new\n'), { ifExists: 'overwrite' });
+
+    await expect(readFile(target, 'utf-8')).resolves.toBe('new\n');
+  });
+
+  it('ifExists=overwrite — права существующего файла сохраняются (0640)', async () => {
+    const target = join(root, 'upload-mode.bin');
+    await writeFile(target, 'old');
+    await chmod(target, 0o640);
+
+    await port.fs!.upload(target, Buffer.from('new'), { ifExists: 'overwrite' });
+
+    expect((await stat(target)).mode & 0o777).toBe(0o640);
+  });
+
+  it('временный файл публикации не остаётся в каталоге', async () => {
+    const target = join(root, 'no-tmp.bin');
+
+    await port.fs!.upload(target, Buffer.from('data\n'));
+
+    const names = await (await import('node:fs/promises')).readdir(root);
+    expect(names.filter((name) => name.includes('.synth-tmp-'))).toEqual([]);
+  });
+
+  it('пустой путь — invalid', async () => {
+    expect(await captureCode(port.fs!.upload('', Buffer.from('x')))).toBe('invalid');
+  });
+});
+
+/**
+ * SHA-256 файла (PROP-135, Ф3) — считается **на точке исполнения**, потоком.
+ */
+describe('ExecutionFs (inline): hash', () => {
+  it('текстовый файл — sha256 совпадает с посчитанным', async () => {
+    const target = join(root, 'hash.txt');
+    await writeFile(target, 'hello');
+
+    const digest = await port.fs!.hash(target);
+
+    expect(digest).toBe(createHash('sha256').update('hello').digest('hex'));
+  });
+
+  it('бинарный файл — sha256 совпадает с посчитанным', async () => {
+    const target = join(root, 'hash.bin');
+    const payload = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0x80]);
+    await writeFile(target, payload);
+
+    const digest = await port.fs!.hash(target);
+
+    expect(digest).toBe(createHash('sha256').update(payload).digest('hex'));
+  });
+
+  it('отсутствующий файл — not_found', async () => {
+    expect(await captureCode(port.fs!.hash(join(root, 'nope.txt')))).toBe('not_found');
+  });
+
+  it('пустой путь — invalid', async () => {
+    expect(await captureCode(port.fs!.hash(''))).toBe('invalid');
   });
 });

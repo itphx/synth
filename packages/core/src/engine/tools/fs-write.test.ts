@@ -817,6 +817,8 @@ describe('fs-write tools — работа через порт исполнени
           this.calls.push(`rename:${from}:${to}`);
         },
         download: async () => Buffer.alloc(0),
+        upload: async () => undefined,
+        hash: async () => '',
         ...fs,
       };
     }

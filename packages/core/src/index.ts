@@ -504,6 +504,8 @@ export type {
   FsTextPage,
   FsSniffResult,
   FsBytesResult,
+  FsUploadMode,
+  FsUploadOptions,
 } from './execution/ports/index.js';
 // PROP-135 (Ф1, слайс 2): общий читатель файлов — тем же кодом читает и
 // исполнитель (точечный runtime-импорт), поэтому формат вывода не зависит
@@ -515,6 +517,7 @@ export {
   readTextPageFromFile,
   readBytesFromFile,
   readRawTextFromFile,
+  hashFileSha256,
   MAX_READ_LINES,
   MAX_READ_BYTES,
   BINARY_SNIFF_BYTES,
@@ -527,6 +530,7 @@ export {
   mkdirRecursive,
   removePath,
   renamePath,
+  uploadBytes,
 } from './execution/fs-atomic.js';
 // PROP-135: периметр файловых операций (проверка симлинк-побега по реальным
 // путям точки исполнения) — общий для читающих и записывающих тулов.

@@ -21,7 +21,7 @@
  * Список allowlist:
  *
  * ```
- * save-attachment.ts, project-context.ts, path-utils.ts, search.ts
+ * project-context.ts, path-utils.ts, search.ts
  * ```
  *
  * (`path-utils.ts` и `search.ts` — помощники периметра и поиска: их ещё
@@ -57,12 +57,15 @@ const TOOLS_DIR = resolve(dirname(fileURLToPath(import.meta.url)));
  * `engine/tools/atomic-file-write.ts` удалён вместе с ним.
  *
  * `attach-workspace-file.ts` и `send-attachment.ts` из списка **убраны**
- * (Ф3, слайс 3c): оба тула читают файл через порт (`fs.stat` + `fs.download`
+ * (Ф3, слайз 3c): оба тула читают файл через порт (`fs.stat` + `fs.download`
  * — бинарная передача, без base64), а периметр считается по реальным путям
  * точки исполнения (общий `escapesWorkspace`).
+ *
+ * `save-attachment.ts` из списка **убран** (Ф3, слайз 3d): выгрузка вложения
+ * в workspace уехала на порт (`fs.stat`/`fs.hash`/`fs.mkdir`/`fs.upload` —
+ * публикация атомарная и без перезаписи), периметр — общий `escapesWorkspace`.
  */
 const ALLOWED_NODE_FS_FILES: readonly string[] = [
-  'save-attachment.ts',
   'project-context.ts',
   'path-utils.ts',
   'search.ts',

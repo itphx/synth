@@ -684,6 +684,8 @@ describe('list_directory — работа через порт исполнени
             readRawText: async () => ({ text: '', size: 0 }),
             rename: async () => undefined,
             download: async () => Buffer.alloc(0),
+            upload: async () => undefined,
+            hash: async () => '',
             ...fs,
           }
         : undefined;
@@ -834,6 +836,8 @@ describe('read_file — чтение содержимого через порт 
             readRawText: async () => ({ text: '', size: 0 }),
             rename: async () => undefined,
             download: async () => Buffer.alloc(0),
+            upload: async () => undefined,
+            hash: async () => '',
             ...fs,
           }
         : undefined;

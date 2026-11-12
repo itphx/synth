@@ -203,6 +203,20 @@ export type ExecutorErrorReason =
    * слишком большой».
    */
   | 'too_large'
+  /**
+   * Цель уже существует (публикация байтов, протокол 7).
+   *
+   * Отдельная причина от `not_found`: путь **есть** — и именно из-за этого
+   * публикация отказана (файл не перезаписывается). HTTP-код — `409`.
+   */
+  | 'exists'
+  /**
+   * Тело запроса больше потолка (публикация байтов, протокол 7).
+   *
+   * Транспортная причина (не FS-ошибка): тело не влезает в потолок
+   * исполнителя — HTTP-код `413`.
+   */
+  | 'payload_too_large'
   /** Превышен лимит одновременных команд. */
   | 'too_many_requests'
   /** Прочие ошибки сервера. */
@@ -452,10 +466,12 @@ export function parseMcpCallRequestBody(
  * - `403` — нет доступа к пути (FS-операция, протокол 7);
  * - `404` — запрошенный ресурс не найден (неизвестный MCP-сервер/инструмент,
  *   отсутствующий путь);
+ * - `409` — цель уже существует (публикация байтов, протокол 7);
+ * - `413` — тело запроса больше потолка (публикация байтов, протокол 7);
  * - `429` — превышен лимит одновременных команд;
  * - `500` — прочие ошибки исполнения (включая ненулевой код выхода).
  */
-export type ExecErrorStatus = 400 | 401 | 403 | 404 | 429 | 500;
+export type ExecErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500;
 
 export const EXEC_ERROR_STATUS: Record<ExecutorErrorReason, ExecErrorStatus> = {
   invalid_request: 400,
@@ -466,6 +482,8 @@ export const EXEC_ERROR_STATUS: Record<ExecutorErrorReason, ExecErrorStatus> = {
   permission: 403,
   unresolvable: 400,
   too_large: 400,
+  exists: 409,
+  payload_too_large: 413,
   too_many_requests: 429,
   timeout: 500,
   aborted: 500,
@@ -1212,6 +1230,93 @@ export interface FsDownloadRequestBody {
   maxBytes: number;
 }
 
+/**
+ * Тело запроса вычисления хэша файла (`POST /fs/hash`).
+ *
+ * Путь и `cwd` — как у прочих FS-операций (`parseFsRequestBody`).
+ */
+export interface FsHashRequestBody {
+  path: string;
+  cwd?: string;
+}
+
+/** Ответ `POST /fs/hash` — SHA-256 файла (hex). */
+export interface FsHashResponse {
+  /** SHA-256 файла в hex (строчные буквы). */
+  sha256: string;
+}
+
+/**
+ * Что делать, если цель уже существует (публикация байтов, протокол 7).
+ *
+ * `fail` (по умолчанию) — отказ `exists` (цель не перезаписывается);
+ * `overwrite` — атомарная замена (права существующего файла сохраняются).
+ */
+export type FsUploadMode = 'fail' | 'overwrite';
+
+/**
+ * Разобранные параметры публикации байтов (`PUT /fs/upload`).
+ *
+ * Путь и `cwd` — как у прочих FS-операций; `ifExists` — режим публикации.
+ */
+export interface FsUploadRequest {
+  /** Путь целевого файла. */
+  path: string;
+  /** Базовый каталог для относительного `path`. */
+  cwd?: string;
+  /** Что делать, если цель уже существует. */
+  ifExists: FsUploadMode;
+}
+
+/**
+ * Разбор query-параметров публикации байтов (`PUT /fs/upload`).
+ *
+ * Параметры — **в query**, а не в теле: тело запроса — сырые байты
+ * (`application/octet-stream`), JSON-обёртка раздула бы их и мешала бы
+ * потоковой передаче. Значения — URL-encoded (путь может содержать `/`,
+ * пробелы и не-ASCII).
+ *
+ * Проверки строгие: `path` обязателен (непустая строка без NUL), `cwd` —
+ * необязателен, но тоже непустой и без NUL, `ifExists` — только `fail` или
+ * `overwrite`. Молчаливый пропуск означал бы запись **не туда**.
+ */
+export function parseFsUploadQuery(
+  query: URLSearchParams,
+): { ok: true; value: { path: string; cwd?: string; ifExists: FsUploadMode } } | { ok: false; message: string } {
+  const path = query.get('path');
+  if (path === null || path.trim().length === 0) {
+    return { ok: false, message: 'параметр path обязателен: непустая строка' };
+  }
+  if (path.includes('\0')) {
+    return { ok: false, message: 'параметр path содержит недопустимые символы' };
+  }
+  const cwd = query.get('cwd');
+  if (cwd !== null) {
+    if (cwd.trim().length === 0) {
+      return { ok: false, message: 'параметр cwd должен быть непустой строкой' };
+    }
+    if (cwd.includes('\0')) {
+      return { ok: false, message: 'параметр cwd содержит недопустимые символы' };
+    }
+  }
+  const rawMode = query.get('ifExists');
+  let ifExists: FsUploadMode = 'fail';
+  if (rawMode !== null) {
+    if (rawMode !== 'fail' && rawMode !== 'overwrite') {
+      return { ok: false, message: 'параметр ifExists: поддерживаются только "fail" и "overwrite"' };
+    }
+    ifExists = rawMode;
+  }
+  return {
+    ok: true,
+    value: {
+      path,
+      ...(cwd !== null ? { cwd } : {}),
+      ifExists,
+    },
+  };
+}
+
 /** Текст файла на проводе (как есть, без нумерации строк). */
 export interface FsRawTextBody {
   /** Содержимое файла (UTF-8, без нумерации строк). */
@@ -1258,6 +1363,17 @@ export const EXECUTOR_FS_MAX_WRITE_BYTES = 8 * 1024 * 1024;
  * потолка исполнителя давал бы невнятный `invalid_request`.
  */
 export const EXECUTOR_FS_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Потолок тела публикации байтов (`PUT /fs/upload`), байт.
+ *
+ * Байты едут по проводу **бинарно** (без base64) — потолок тот же, что у
+ * бинарной передачи файла: прикладной лимит (`attachments.maxBytesPerFile`,
+ * по умолчанию те же 100 МиБ) остаётся на туле, а исполнитель **отвергает**
+ * тело больше своего потолка (`413 payload_too_large`): тело уже пришло —
+ * обрезать его нельзя, а принять частично нельзя тем более.
+ */
+export const EXECUTOR_FS_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 /**
  * Разбор тела запроса записи файла (`POST /fs/write-file`).

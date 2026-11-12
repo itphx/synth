@@ -24,6 +24,8 @@
  * | `POST` | `/fs/read-raw` | текст файла как есть (протокол 7) | bearer-токен |
  * | `POST` | `/fs/rename` | переименование/перемещение файла (протокол 7, `204`) | bearer-токен |
  * | `POST` | `/fs/download` | бинарная передача файла (протокол 7; `application/octet-stream`) | bearer-токен |
+ * | `PUT` | `/fs/upload` | публикация байтов в файл (протокол 7, `204`; тело — `application/octet-stream`) | bearer-токен |
+ * | `POST` | `/fs/hash` | SHA-256 файла (протокол 7) | bearer-токен |
  * | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя | bearer-токен |
  * | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов | bearer-токен |
  * | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
@@ -65,6 +67,7 @@ import { ExecService } from './exec-service.js';
 import { ExecutorFsError, ExecutorFsService } from './fs-service.js';
 import type { ExecutorMetrics } from './metrics.js';
 import {
+  EXECUTOR_FS_MAX_UPLOAD_BYTES,
   EXECUTOR_PROTOCOL_VERSION,
   errorResponse,
   parseExecRequestBody,
@@ -77,6 +80,7 @@ import {
   parseFsRequestBody,
   parseFsSniffRequestBody,
   parseFsTextRequestBody,
+  parseFsUploadQuery,
   parseFsWriteRequestBody,
   parseMcpCallRequestBody,
   parseSpawnExecRequestBody,
@@ -86,6 +90,7 @@ import {
   type ExecutorCapabilities,
   type ExecutorHealth,
   type FsBytesResponse,
+  type FsHashResponse,
   type FsListResponse,
   type FsRawTextResponse,
   type FsRealpathResponse,
@@ -244,6 +249,39 @@ function fsErrorResponse(c: Context, err: unknown): Response {
 }
 
 /**
+ * Тело запроса — **с потолком** (публикация байтов, `PUT /fs/upload`).
+ *
+ * Тело приходит **бинарным** (сырые байты вложения), поэтому потолок
+ * проверяется **до** чтения по заголовку `content-length`, а для chunked-тела
+ * (заголовка нет) — **по мере** чтения: поток обрывается на первом же
+ * превышении, лишние байты не дочитываются и не копятся в памяти.
+ *
+ * `null` — тело больше потолка (ответ `413 payload_too_large`).
+ */
+async function readLimitedBody(c: Context, limit: number): Promise<Buffer | null> {
+  const declared = Number(c.req.header('content-length') ?? '');
+  if (Number.isInteger(declared) && declared > limit) return null;
+
+  const stream = c.req.raw.body;
+  if (!stream) return Buffer.alloc(0);
+
+  const reader = stream.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
  * Собрать Hono-приложение исполнителя.
  *
  * Приложение не поднимает сокет — этим занимается `startExecutorServer`
@@ -326,6 +364,8 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
   app.use('/fs/read-raw', requireToken);
   app.use('/fs/rename', requireToken);
   app.use('/fs/download', requireToken);
+  app.use('/fs/upload', requireToken);
+  app.use('/fs/hash', requireToken);
 
   app.post('/exec', async (c) => {
     let raw: unknown;
@@ -776,6 +816,61 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
           'x-synth-size': String(size),
         },
       });
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  // --- Публикация байтов и хэш файла (PROP-135 Ф3) -------------------------
+  //
+  // `PUT /fs/upload` — обратное направление: байты кладутся в файл **на
+  // исполнителе** (в split-топологии там лежит рабочий каталог проекта).
+  // Тело — **сырые байты** (`application/octet-stream`), параметры — в query
+  // (путь может содержать `/` и не-ASCII ⇒ URL-encoded). Публикация атомарна
+  // и без перезаписи (`ifExists=fail`, по умолчанию); занятая цель → `409`.
+  //
+  // `POST /fs/hash` — SHA-256 файла: считается **здесь** (файл целиком в
+  // память не поднимается — хэш идёт потоком).
+
+  app.put('/fs/upload', async (c) => {
+    const parsed = parseFsUploadQuery(new URL(c.req.url).searchParams);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    const body = await readLimitedBody(c, EXECUTOR_FS_MAX_UPLOAD_BYTES);
+    if (body === null) {
+      const { status, body: errBody } = errorResponse(
+        'payload_too_large',
+        `тело запроса больше ${EXECUTOR_FS_MAX_UPLOAD_BYTES} байт`,
+      );
+      return c.json(errBody, status);
+    }
+    try {
+      await fsService.upload(parsed.value, body);
+      return c.body(null, 204);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
+  });
+
+  app.post('/fs/hash', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseFsRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    try {
+      const sha256 = await fsService.hash(parsed.value);
+      const body: FsHashResponse = { sha256 };
+      return c.json(body, 200);
     } catch (err) {
       return fsErrorResponse(c, err);
     }

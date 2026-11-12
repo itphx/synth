@@ -20,22 +20,23 @@
  *   (`AttachmentService.resolve`/`read` и сами отказывают иначе) — произвольные
  *   blob'ы (логи процессов, артефакты) через этот контур не выгружаются.
  * - **Containment как у `attach_workspace_file`**: абсолютный путь, `..` за
- *   пределы workspace и побег через симлинк отклоняются (`path-utils`).
- * - **Существующий файл не перезаписывается.** Публикация атомарная: байты
- *   пишутся во временный файл `.tmp-<uuid>` того же каталога и публикуются
- *   ссылкой (`link`, fallback `copyFile` с `COPYFILE_EXCL`), поэтому занятое имя
- *   остаётся нетронутым, а модель получает подсказку указать другой `path`.
- *   **Повторное сохранение идемпотентно:** если в целевом файле уже лежит ровно
- *   то же содержимое (sha256 совпадает), операция считается успешной
+ *   пределы workspace и побег через симлинк отклоняются. Периметр считается
+ *   **по реальным путям точки исполнения** (PROP-135): симлинк наружу там виден.
+ * - **Запись — на порту исполнения** (PROP-135, Ф3): файл публикуется
+ *   **там, где лежит рабочий каталог** (в split-топологии — на исполнителе),
+ *   а control plane лишь читает blob-объект и отдаёт байты порту. Публикация
+ *   атомарная и **без перезаписи** (`fs.upload` с `ifExists: 'fail'`), занятое
+ *   имя → отказ (`attach.tool.exists`).
+ * - **Существующий файл не перезаписывается.** **Повторное сохранение
+ *   идемпотентно:** если в целевом файле уже лежит ровно то же содержимое
+ *   (sha256 совпадает, размер совпадает), операция считается успешной
  *   (`metadata.existing: true`) — «сохрани ещё раз» не упирается в отказ.
+ *   Гонка (файл появился между проверкой и публикацией) разрешается той же
+ *   сверкой содержимого.
  * - Лимитов размера здесь нет: файл уже принят вложениями (`attachments.*`),
  *   проверяется только непустота объекта.
  */
-import { createHash, randomUUID } from 'node:crypto';
-import { constants as fsConstants, createReadStream, createWriteStream } from 'node:fs';
-import { copyFile, link, mkdir, rm, stat } from 'node:fs/promises';
 import { dirname, isAbsolute } from 'node:path';
-import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
 import {
   ToolCapability,
@@ -52,7 +53,6 @@ import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
 import {
   isLexicallyInside,
-  isSymlinkEscapeInRoots,
   pathEscapesWorkspaceResult,
   resolvePath,
   toolRoots,
@@ -60,6 +60,12 @@ import {
 } from './path-utils.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+// PROP-135 (Ф3): файл публикуется в контуре исполнения — там, где в
+// split-топологии лежит рабочий каталог проекта.
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { escapesWorkspace, FS_UNAVAILABLE_TEXT } from '../../execution/fs-perimeter.js';
+import { fsCall } from '../../execution/fs-tool-call.js';
+import { isFsPathError, type ExecutionFs, type FsStat } from '../../execution/ports/index.js';
 
 /** Имя тула (используется в текстах и в permission-группах). */
 export const SAVE_ATTACHMENT_TOOL = 'save_attachment';
@@ -185,34 +191,80 @@ function dedupeCandidates(candidates: readonly AttachmentCandidate[]): Attachmen
 }
 
 /**
- * SHA-256 содержимого файла **потоком** (`createHash` + `createReadStream`):
- * файл целиком в память не читается — вложения бывают крупными.
- */
-async function hashFileSha256(filePath: string): Promise<string> {
-  const hash = createHash('sha256');
-  await pipeline(createReadStream(filePath), hash);
-  return hash.digest('hex');
-}
-
-/**
  * В существующем целевом файле уже лежит ровно это вложение?
  *
  * Сначала сравнивается размер (дешёвая проверка, файл не читается), затем
- * sha256 потоком. Не-обычный файл, ошибка `stat`/чтения — «не совпадает»:
- * перезаписи чужого содержимого нет (fail-closed).
+ * sha256 — **потоком, на точке исполнения** (`fs.hash`: там, где лежит файл,
+ * файл целиком в память не поднимается). Не-обычный файл, ошибка чтения —
+ * «не совпадает»: перезаписи чужого содержимого нет (fail-closed).
  */
 async function isSameFileContent(
+  fs: ExecutionFs,
   filePath: string,
   expected: { sha256: string; size: number },
 ): Promise<boolean> {
   try {
-    const info = await stat(filePath);
-    if (!info.isFile() || info.size !== expected.size) return false;
-    const actual = await hashFileSha256(filePath);
+    const info: FsStat = await fs.stat(filePath);
+    if (info.kind !== 'file' || info.size !== expected.size) return false;
+    const actual = await fs.hash(filePath);
     return actual.toLowerCase() === expected.sha256.toLowerCase();
   } catch {
     return false;
   }
+}
+
+/**
+ * Прочитать объект вложения в память (поток сервиса → `Buffer`).
+ *
+ * Кап — `meta.size` байт: содержимое больше ожидаемого **не** дочитывается
+ * (файл может быть огромным, а объект уже принят вложениями с лимитом).
+ * Несовпадение размера — ошибка сохранения: значит, sidecar и байты расходятся
+ * (объект повреждён или подменён) — публиковать такое нельзя.
+ */
+async function readAttachmentBytes(
+  service: AttachmentService,
+  blobPath: string,
+  expectedSize: number,
+): Promise<
+  | { ok: true; bytes: Buffer }
+  | { ok: false; kind: 'not_found' | 'save_failed'; error: string }
+> {
+  let stream: Awaited<ReturnType<AttachmentService['read']>>;
+  try {
+    stream = await service.read(blobPath);
+  } catch (err) {
+    return {
+      ok: false,
+      kind: 'save_failed',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (!stream) {
+    return { ok: false, kind: 'not_found', error: `объект вложения не найден: ${blobPath}` };
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+    total += buf.length;
+    if (total > expectedSize) {
+      // Больше, чем в метаданных, — дальше читать нечего.
+      return {
+        ok: false,
+        kind: 'save_failed',
+        error: `размер вложения не совпадает с метаданными (ожидалось ${expectedSize} байт)`,
+      };
+    }
+    chunks.push(buf);
+  }
+  if (total !== expectedSize) {
+    return {
+      ok: false,
+      kind: 'save_failed',
+      error: `размер вложения не совпадает с метаданными (ожидалось ${expectedSize} байт, получено ${total})`,
+    };
+  }
+  return { ok: true, bytes: Buffer.concat(chunks) };
 }
 
 /** Успешный результат сохранения (`existing` — файл уже лежал на месте). */
@@ -423,7 +475,22 @@ export const saveAttachmentTool: ToolDefinition = {
     if (!isLexicallyInsideRoots(roots, resolvedPath)) {
       return pathEscapesWorkspaceResult(resolvedPath);
     }
-    if (isSymlinkEscapeInRoots(roots, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
+
+    // PROP-135 (Ф3): запись идёт в контур исполнения — там, где в
+    // split-топологии лежит рабочий каталог проекта. Без FS в порте — отказ
+    // про `features.fs` (тот же текст, что у прочих файловых тулов).
+    const port = resolveExecutionPort(ctx);
+    const fs = port.fs;
+    if (!fs) {
+      return { content: FS_UNAVAILABLE_TEXT, isError: true };
+    }
+    // Симлинк-побег проверяется по **реальным** путям (у точки исполнения):
+    // лексическая проверка в control plane симлинк наружу не видит.
+    const perimeter = await fsCall(() => escapesWorkspace(fs, roots, resolvedPath));
+    if (!perimeter.ok) return perimeter.result;
+    if (perimeter.value) {
+      return pathEscapesWorkspaceResult(resolvedPath);
+    }
 
     // Существующий файл не перезаписываем. Если в нём уже лежит ровно это
     // вложение — операция идемпотентна (успех, `existing: true`): повторное
@@ -439,73 +506,79 @@ export const saveAttachmentTool: ToolDefinition = {
         size: meta.size,
         existing,
       });
+    let existingInfo: FsStat | null = null;
     try {
-      await stat(resolvedPath);
-      if (await isSameFileContent(resolvedPath, expected)) return saved(true);
-      return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
+      existingInfo = await fs.stat(resolvedPath);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === 'ENOTDIR') {
+      if (!isFsPathError(err)) throw err;
+      if (err.code === 'not_found') {
+        // Пути нет — идём создавать (обычное состояние, а не сбой).
+        existingInfo = null;
+      } else if (err.code === 'not_directory') {
         // Компонент пути занят файлом — целевое имя недоступно.
         return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
-      }
-      if (code !== 'ENOENT') {
+      } else {
+        // Нет доступа / путь не разрешается — не «пути нет»: отказ с причиной.
         return failureResult(
           'attach.tool.save_failed',
-          { error: err instanceof Error ? err.message : String(err) },
+          { error: err.message },
           { path: relPath },
         );
       }
     }
+    if (existingInfo) {
+      if (await isSameFileContent(fs, resolvedPath, expected)) return saved(true);
+      return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
+    }
 
+    // Каталог назначения создаётся до чтения объекта (как прежде): публикация
+    // идёт в него, а ошибка чтения не должна оставлять «половину» операции.
     const targetDir = dirname(resolvedPath);
-    const tmpPath = `${targetDir}/.tmp-${randomUUID()}`;
-    let tmpCreated = false;
     try {
-      await mkdir(targetDir, { recursive: true });
+      await fs.mkdir(targetDir);
+    } catch (err) {
+      if (!isFsPathError(err)) throw err;
+      return failureResult(
+        'attach.tool.save_failed',
+        { error: err.message },
+        { path: relPath, blob_path: data.blobPath },
+      );
+    }
 
-      const stream = await service.read(data.blobPath);
-      if (!stream) {
+    const read = await readAttachmentBytes(service, data.blobPath, meta.size);
+    if (!read.ok) {
+      if (read.kind === 'not_found') {
         return failureResult(
           'attach.tool.not_found',
           { path: data.blobPath },
           { blob_path: data.blobPath, message_id: selected.messageId },
         );
       }
-
-      // Байты сначала во временный файл того же каталога (атомарная публикация).
-      tmpCreated = true;
-      await pipeline(stream, createWriteStream(tmpPath));
-
-      // Публикация: `link` атомарен и не перезаписывает; `copyFile` с
-      // `COPYFILE_EXCL` — фоллбек для ФС без жёстких ссылок. `rename` здесь не
-      // годится: он молча заменил бы существующий файл. Гонка (файл появился
-      // между проверкой и публикацией) разрешается той же сверкой содержимого.
-      try {
-        await link(tmpPath, resolvedPath);
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException)?.code;
-        if (code === 'EEXIST') {
-          if (await isSameFileContent(resolvedPath, expected)) return saved(true);
-          return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
-        }
-        await copyFile(tmpPath, resolvedPath, fsConstants.COPYFILE_EXCL);
-      }
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code;
-      if (code === 'EEXIST') {
-        if (await isSameFileContent(resolvedPath, expected)) return saved(true);
-        return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
-      }
       return failureResult(
         'attach.tool.save_failed',
-        { error: err instanceof Error ? err.message : String(err) },
-        { path: relPath, blob_path: data.blobPath },
+        { error: read.error },
+        { blob_path: data.blobPath, size: meta.size },
       );
-    } finally {
-      // Временный файл не оставляем ни при успехе (жёсткая ссылка уже создана),
-      // ни при ошибке.
-      if (tmpCreated) await rm(tmpPath, { force: true }).catch(() => undefined);
+    }
+
+    // Публикация — на порту: атомарно и **без перезаписи** (`ifExists: 'fail'`).
+    try {
+      await fs.upload(resolvedPath, read.bytes, { ifExists: 'fail' });
+    } catch (err) {
+      if (isFsPathError(err) && err.code === 'exists') {
+        // Гонка: файл появился между проверкой и публикацией. Совпало ли
+        // содержимое — решает та же сверка (идемпотентность сохраняется).
+        if (await isSameFileContent(fs, resolvedPath, expected)) return saved(true);
+        return failureResult('attach.tool.exists', { path: relPath }, { path: relPath });
+      }
+      if (isFsPathError(err)) {
+        return failureResult(
+          'attach.tool.save_failed',
+          { error: err.message },
+          { path: relPath, blob_path: data.blobPath },
+        );
+      }
+      throw err;
     }
 
     return saved(false);

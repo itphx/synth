@@ -48,4 +48,6 @@ export type {
   FsTextPage,
   FsSniffResult,
   FsBytesResult,
+  FsUploadMode,
+  FsUploadOptions,
 } from './execution-fs.js';

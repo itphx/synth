@@ -161,9 +161,11 @@ async function startFsExecutor(
   url: string;
   fsCalls: () => string[];
   fsBodies: () => Array<{ url: string; body: unknown }>;
+  fsRawBodies: () => string[];
 }> {
   const calls: string[] = [];
   const bodies: Array<{ url: string; body: unknown }> = [];
+  const rawBodies: string[] = [];
   const single: FsAnswer | undefined =
     fsResponse && typeof (fsResponse as FsAnswer).status === 'number'
       ? (fsResponse as FsAnswer)
@@ -190,6 +192,7 @@ async function startFsExecutor(
           parsed = undefined;
         }
         bodies.push({ url: req.url as string, body: parsed });
+        rawBodies.push(raw);
         const answer: FsAnswer =
           byRoute?.[req.url as string]
           ?? single
@@ -215,7 +218,12 @@ async function startFsExecutor(
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const { port } = server.address() as AddressInfo;
   legacyServers.push(server);
-  return { url: `http://127.0.0.1:${port}`, fsCalls: () => calls, fsBodies: () => bodies };
+  return {
+    url: `http://127.0.0.1:${port}`,
+    fsCalls: () => calls,
+    fsBodies: () => bodies,
+    fsRawBodies: () => rawBodies,
+  };
 }
 
 /** Состав capabilities исполнителя с FS-операциями. */
@@ -1746,5 +1754,116 @@ describe('клиент удалённого порта: FS-операции', ()
     const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
 
     await expect(port.fs!.download('/tmp/x', 10)).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+  });
+
+  it('upload — байты уходят в тело PUT, путь и режим — в query', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), { status: 204, body: null });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    await port.fs!.upload('/workspace/a.bin', Buffer.from('hello'), { ifExists: 'overwrite' });
+
+    const call = executor.fsCalls()[0]!;
+    expect(call.startsWith('/fs/upload?')).toBe(true);
+    // Путь и режим — URL-encoded в query (путь может содержать `/` и пробелы).
+    const params = new URLSearchParams(call.slice('/fs/upload?'.length));
+    expect(params.get('path')).toBe('/workspace/a.bin');
+    expect(params.get('ifExists')).toBe('overwrite');
+    // Тело — сырые байты, без JSON-обёртки.
+    expect(executor.fsRawBodies()[0]).toBe('hello');
+  });
+
+  it('upload — путь с пробелами и не-ASCII уходит URL-encoded', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), { status: 204, body: null });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    await port.fs!.upload('/workspace/мои файлы/a.bin', Buffer.from('x'));
+
+    const call = executor.fsCalls()[0]!;
+    const params = new URLSearchParams(call.slice('/fs/upload?'.length));
+    expect(params.get('path')).toBe('/workspace/мои файлы/a.bin');
+  });
+
+  it('upload — exists с провода → FsPathError с кодом exists', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      status: 409,
+      body: {
+        error: {
+          reason: 'exists',
+          code: 'exists',
+          message: 'путь уже существует: /workspace/a.bin',
+          stdout: '',
+          stderr: '',
+          killed: false,
+          signal: null,
+          truncated: false,
+          durationMs: 0,
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.upload('/workspace/a.bin', Buffer.from('x')).catch((e) => e);
+
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('exists');
+    expect((err as FsPathError).path).toBe('/workspace/a.bin');
+  });
+
+  it('hash — sha256 приходит из ответа исполнителя', async () => {
+    const digest = 'a'.repeat(64);
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/hash': { status: 200, body: { sha256: digest } },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const sha256 = await port.fs!.hash('/workspace/a.bin');
+
+    expect(sha256).toBe(digest);
+    expect(executor.fsCalls()).toEqual(['/fs/hash']);
+    expect(executor.fsBodies()[0]?.body).toEqual({ path: '/workspace/a.bin' });
+  });
+
+  it('hash — not_found с провода → FsPathError с кодом not_found', async () => {
+    const executor = await startFsExecutor(fsCapabilities(), {
+      '/fs/hash': {
+        status: 404,
+        body: {
+          error: {
+            reason: 'not_found',
+            code: 'ENOENT',
+            message: 'путь не найден: /workspace/nope',
+            stdout: '',
+            stderr: '',
+            killed: false,
+            signal: null,
+            truncated: false,
+            durationMs: 0,
+          },
+        },
+      },
+    });
+    const port = createRemoteExecutionPort({ urls: [executor.url], token: TOKEN });
+
+    const err = await port.fs!.hash('/workspace/nope').catch((e) => e);
+
+    expect(isFsPathError(err)).toBe(true);
+    expect((err as FsPathError).code).toBe('not_found');
+  });
+
+  it('исполнитель без features.fs — тот же отказ на публикации и хэше', async () => {
+    const legacy = await startLegacyExecutor({
+      protocol: 6,
+      toolchain: {},
+      os: process.platform,
+      arch: process.arch,
+      node: process.version,
+      features: { background: true },
+    });
+    const port = createRemoteExecutionPort({ urls: [legacy], token: TOKEN });
+
+    await expect(port.fs!.upload('/tmp/x', Buffer.from('x'))).rejects.toBeInstanceOf(
+      ExecutionFsUnavailableError,
+    );
+    await expect(port.fs!.hash('/tmp/x')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
   });
 });

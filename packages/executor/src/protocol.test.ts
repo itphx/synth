@@ -25,6 +25,7 @@ import {
   parseFsRenameRequestBody,
   parseFsSniffRequestBody,
   parseFsTextRequestBody,
+  parseFsUploadQuery,
   parseSpawnExecRequestBody,
 } from './protocol.js';
 
@@ -425,5 +426,56 @@ describe('разбор тел FS-роутов правки (протокол 7)'
       maxBytes: EXECUTOR_FS_MAX_DOWNLOAD_BYTES + 1,
     });
     expect(parsed.ok).toBe(true);
+  });
+});
+
+/**
+ * Разбор query публикации байтов (`PUT /fs/upload`, протокол 7, PROP-135 Ф3).
+ *
+ * Параметры — в query (тело — сырые байты), значения — URL-encoded.
+ */
+describe('разбор query публикации байтов (протокол 7)', () => {
+  it('валидные параметры — путь, cwd и режим публикации', () => {
+    const parsed = parseFsUploadQuery(
+      new URLSearchParams({ path: '/workspace/a.bin', cwd: '/workspace', ifExists: 'overwrite' }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toEqual({
+      path: '/workspace/a.bin',
+      cwd: '/workspace',
+      ifExists: 'overwrite',
+    });
+  });
+
+  it('без ifExists — режим по умолчанию fail (цель не перезаписывается)', () => {
+    const parsed = parseFsUploadQuery(new URLSearchParams({ path: '/workspace/a.bin' }));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.ifExists).toBe('fail');
+    expect(parsed.value.cwd).toBeUndefined();
+  });
+
+  it('путь обязателен и без NUL', () => {
+    expect(parseFsUploadQuery(new URLSearchParams({})).ok).toBe(false);
+    expect(parseFsUploadQuery(new URLSearchParams({ path: '  ' })).ok).toBe(false);
+    expect(parseFsUploadQuery(new URLSearchParams({ path: '/a\u0000b' })).ok).toBe(false);
+  });
+
+  it('cwd — необязателен, но непустой и без NUL', () => {
+    expect(parseFsUploadQuery(new URLSearchParams({ path: '/a.bin', cwd: '  ' })).ok).toBe(false);
+    expect(parseFsUploadQuery(new URLSearchParams({ path: '/a.bin', cwd: '/a\u0000b' })).ok).toBe(
+      false,
+    );
+  });
+
+  it('ifExists — только fail или overwrite', () => {
+    expect(parseFsUploadQuery(new URLSearchParams({ path: '/a.bin', ifExists: 'fail' })).ok).toBe(true);
+    expect(
+      parseFsUploadQuery(new URLSearchParams({ path: '/a.bin', ifExists: 'overwrite' })).ok,
+    ).toBe(true);
+    expect(parseFsUploadQuery(new URLSearchParams({ path: '/a.bin', ifExists: 'maybe' })).ok).toBe(
+      false,
+    );
   });
 });

@@ -96,6 +96,7 @@ import type {
   FsStat,
   FsTextOptions,
   FsTextPage,
+  FsUploadOptions,
 } from '@itphx/synth-core';
 import {
   EXECUTOR_PROTOCOL_VERSION,
@@ -108,6 +109,7 @@ import {
   type ExecSuccessBody,
   type ExecutorLimits,
   type FsBytesResponse,
+  type FsHashResponse,
   type FsListResponse,
   type FsRawTextResponse,
   type FsRealpathResponse,
@@ -122,8 +124,11 @@ import {
  * FS-операция на проводе (роут `/fs/<op>`).
  *
  * `read-text`/`sniff`/`read-bytes`/`write-file`/`mkdir`/`remove`/`read-raw`/
- * `rename`/`download` — часть той же фичи `fs` (протокол 7): версия протокола
- * не повышается, признак `features.fs` прежний.
+ * `rename`/`download`/`hash` — часть той же фичи `fs` (протокол 7): версия
+ * протокола не повышается, признак `features.fs` прежний.
+ *
+ * `upload` — **вне** набора: это `PUT` с **бинарным** телом (сырые байты),
+ * поэтому у него отдельный вызов (`_fsUpload`), а не общий JSON-шлюз.
  */
 type FsOp =
   | 'stat'
@@ -137,7 +142,8 @@ type FsOp =
   | 'remove'
   | 'read-raw'
   | 'rename'
-  | 'download';
+  | 'download'
+  | 'hash';
 
 /** Тип функции-транспорта (совместим с `egressFetch` и обычным `fetch`). */
 export type ExecutorFetch = (input: string, init?: RequestInit) => Promise<Response>;
@@ -478,6 +484,21 @@ export class RemoteExecutionPort implements ExecutionPort {
     download: async (path: string, maxBytes: number): Promise<Buffer> => {
       return await this._fsDownload(path, maxBytes);
     },
+    // Публикация байтов в файл (PROP-135 Ф3): обратное направление — файл
+    // публикуется **на исполнителе** (в split-топологии там рабочий каталог).
+    upload: async (path: string, bytes: Buffer, opts?: FsUploadOptions): Promise<void> => {
+      await this._fsUpload(path, bytes, opts);
+    },
+    // SHA-256 файла (PROP-135 Ф3): считается на точке исполнения — там, где
+    // файл лежит (в control plane его может не быть вовсе).
+    hash: async (path: string): Promise<string> => {
+      const body = await this._fsRequest<FsHashResponse>('hash', path);
+      const sha256 = body?.sha256;
+      if (typeof sha256 !== 'string' || sha256.length === 0) {
+        throw new Error('исполнитель не вернул хэш файла');
+      }
+      return sha256;
+    },
   };
 
   private readonly _urls: string[];
@@ -719,7 +740,88 @@ export class RemoteExecutionPort implements ExecutionPort {
     }
   }
 
-  /** Один бинарный FS-запрос к конкретному адресу: HTTP + разбор ответа. */
+  /**
+   * Публикация байтов в файл на исполнителе (`PUT /fs/upload`, протокол 7).
+   *
+   * Тело — **сырые байты** (`application/octet-stream`), параметры — в query
+   * (путь может содержать `/` и не-ASCII ⇒ URL-encoded).
+   *
+   * Повтор при **транспортной** ошибке — один (как у прочих FS-операций):
+   * исполнитель мог перезапуститься с другим составом пула. Отказ по
+   * существу операции (`exists`/`permission`/…) повтором **не**
+   * сопровождается — это ответ исполнителя, а не сбой связи.
+   *
+   * Повтор после **обрыва на середине** может прийти на уже опубликованный
+   * файл: при `ifExists: 'fail'` исполнитель ответит `exists` — вызывающий
+   * сверяет содержимое и считает операцию выполненной (идемпотентность).
+   */
+  private async _fsUpload(
+    path: string,
+    bytes: Buffer,
+    opts?: FsUploadOptions,
+  ): Promise<void> {
+    const url = await this._fsTarget();
+    try {
+      await this._fsUploadCall(url, path, bytes, opts);
+    } catch (err) {
+      const core = await loadCore();
+      if (core.isFsPathError(err) || core.isExecutionFsUnavailableError(err)) throw err;
+      this._fsAddress = undefined;
+      this._invalidateInventory();
+      const retryUrl = await this._fsTarget();
+      await this._fsUploadCall(retryUrl, path, bytes, opts);
+    }
+  }
+
+  /** Один запрос публикации байтов к конкретному адресу. */
+  private async _fsUploadCall(
+    url: string,
+    path: string,
+    bytes: Buffer,
+    opts?: FsUploadOptions,
+  ): Promise<void> {
+    const fetchImpl = await resolveFetch(this._fetchImpl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this._timeoutMs);
+    timer.unref?.();
+
+    const params = new URLSearchParams({ path });
+    if (opts?.ifExists) params.set('ifExists', opts.ifExists);
+
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetchImpl(`${url}/fs/upload?${params.toString()}`, {
+        method: 'PUT',
+        headers: {
+          'content-type': 'application/octet-stream',
+          authorization: `Bearer ${this._token}`,
+        },
+        body: bytes,
+        signal: controller.signal,
+      });
+      text = await response.text();
+    } catch (err) {
+      throw new ConnectionFailure(err);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      let parsed: unknown = null;
+      try {
+        parsed = text.length > 0 ? JSON.parse(text) : null;
+      } catch {
+        parsed = null;
+      }
+      const errorBody = (parsed as { error?: ExecErrorBody } | null)?.error;
+      throw await this._toFsError(errorBody, response.status, path);
+    }
+  }
+
+  /**
+   * Один бинарный FS-запрос к конкретному адресу: HTTP + разбор ответа.
+   */
   private async _fsDownloadCall(
     url: string,
     path: string,
@@ -1507,6 +1609,10 @@ function mapFsReasonToCode(reason: string | undefined): FsErrorCode | undefined 
       return 'unresolvable';
     case 'too_large':
       return 'too_large';
+    case 'exists':
+      // Цель занята (публикация байтов) — это не «путь не найден»:
+      // вызывающий различает «занято» и «нет такого пути».
+      return 'exists';
     case 'invalid_request':
       return 'invalid';
     case 'unauthorized':

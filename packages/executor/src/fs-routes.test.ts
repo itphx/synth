@@ -15,12 +15,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { createExecutorApp, type ExecutorAppOptions } from './server.js';
-import { EXECUTOR_FS_MAX_WRITE_BYTES, type ExecErrorBody } from './protocol.js';
+import {
+  EXECUTOR_FS_MAX_UPLOAD_BYTES,
+  EXECUTOR_FS_MAX_WRITE_BYTES,
+  type ExecErrorBody,
+} from './protocol.js';
 
 const TOKEN = 'executor-fs-token-test-1234567890';
 
@@ -72,6 +77,32 @@ async function readError(res: Response): Promise<ExecErrorBody> {
   return body.error;
 }
 
+/**
+ * PUT на FS-роут публикации байтов (`PUT /fs/upload`).
+ *
+ * Тело — **сырые байты** (`application/octet-stream`), параметры — в query
+ * (путь может содержать `/` и не-ASCII ⇒ URL-encoded).
+ */
+function putFsUpload(
+  app: Hono,
+  query: { path: string; cwd?: string; ifExists?: string },
+  bytes: Buffer,
+  token: string | null = TOKEN,
+): Promise<Response> {
+  const params = new URLSearchParams({ path: query.path });
+  if (query.cwd !== undefined) params.set('cwd', query.cwd);
+  if (query.ifExists !== undefined) params.set('ifExists', query.ifExists);
+  const headers: Record<string, string> = { 'content-type': 'application/octet-stream' };
+  if (token !== null) headers.authorization = `Bearer ${token}`;
+  return Promise.resolve(
+    app.request(`/fs/upload?${params.toString()}`, {
+      method: 'PUT',
+      headers,
+      body: bytes,
+    }),
+  );
+}
+
 describe('FS-операции исполнителя: аутентификация', () => {
   it('без токена — 401 на всех FS-роутах', async () => {
     const app = makeApp();
@@ -88,6 +119,8 @@ describe('FS-операции исполнителя: аутентификаци
       '/fs/read-raw',
       '/fs/rename',
       '/fs/download',
+      '/fs/upload',
+      '/fs/hash',
     ]) {
       const res = await postFs(app, route, { path: workspace, maxBytes: 1024, content: 'x', to: 'y' }, null);
       expect(res.status).toBe(401);
@@ -887,5 +920,223 @@ describe('FS-операции исполнителя: признак в /capabil
     const body = (await res.json()) as { protocol: number; features?: { fs?: boolean } };
     expect(body.protocol).toBe(7);
     expect(body.features?.fs).toBe(true);
+  });
+});
+
+/**
+ * Публикация байтов в файл (`PUT /fs/upload`, протокол 7, PROP-135 Ф3).
+ *
+ * Тело — **сырые байты** (`application/octet-stream`), параметры — в query.
+ * Публикация атомарна и без перезаписи (`ifExists=fail` по умолчанию): занятая
+ * цель → `409 exists`.
+ */
+describe('FS-операции исполнителя: upload', () => {
+  it('байты записаны один в один', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(app, { path: join(workspace, 'uploaded.bin') }, Buffer.from('hello\n'));
+
+    expect(res.status).toBe(204);
+    await expect(readFile(join(workspace, 'uploaded.bin'), 'utf-8')).resolves.toBe('hello\n');
+  });
+
+  it('бинарный файл — байты один в один (без искажений)', async () => {
+    const payload = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff, 0x7f, 0x80]);
+    const app = makeApp();
+
+    const res = await putFsUpload(app, { path: join(workspace, 'blob.bin') }, payload);
+
+    expect(res.status).toBe(204);
+    const written = await readFile(join(workspace, 'blob.bin'));
+    expect(written.equals(payload)).toBe(true);
+  });
+
+  it('родительские каталоги создаются', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: join(workspace, 'deep', 'nested', 'file.bin') },
+      Buffer.from('deep\n'),
+    );
+
+    expect(res.status).toBe(204);
+    await expect(readFile(join(workspace, 'deep', 'nested', 'file.bin'), 'utf-8')).resolves.toBe('deep\n');
+  });
+
+  it('занятая цель при ifExists=fail — 409 exists (файл не перезаписан)', async () => {
+    await writeFile(join(workspace, 'occupied.bin'), 'old\n');
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: join(workspace, 'occupied.bin'), ifExists: 'fail' },
+      Buffer.from('new\n'),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await readError(res)).reason).toBe('exists');
+    await expect(readFile(join(workspace, 'occupied.bin'), 'utf-8')).resolves.toBe('old\n');
+  });
+
+  it('ifExists=overwrite — файл перезаписан', async () => {
+    await writeFile(join(workspace, 'overwritten.bin'), 'old\n');
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: join(workspace, 'overwritten.bin'), ifExists: 'overwrite' },
+      Buffer.from('new\n'),
+    );
+
+    expect(res.status).toBe(204);
+    await expect(readFile(join(workspace, 'overwritten.bin'), 'utf-8')).resolves.toBe('new\n');
+  });
+
+  it('ifExists=overwrite — права существующего файла сохраняются (0640)', async () => {
+    const target = join(workspace, 'mode.bin');
+    await writeFile(target, 'old');
+    await chmod(target, 0o640);
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: target, ifExists: 'overwrite' },
+      Buffer.from('new'),
+    );
+
+    expect(res.status).toBe(204);
+    expect((await stat(target)).mode & 0o777).toBe(0o640);
+  });
+
+  it('неизвестный ifExists — 400 invalid_request', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: join(workspace, 'x.bin'), ifExists: 'maybe' },
+      Buffer.from('x'),
+    );
+
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('без path — 400 invalid_request', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(app, { path: '' }, Buffer.from('x'));
+
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('тело больше потолка — 413 payload_too_large', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: join(workspace, 'huge.bin') },
+      Buffer.alloc(EXECUTOR_FS_MAX_UPLOAD_BYTES + 1),
+    );
+
+    expect(res.status).toBe(413);
+    expect((await readError(res)).reason).toBe('payload_too_large');
+    // Файл не создан: тело отвергнуто до записи.
+    await expect(stat(join(workspace, 'huge.bin'))).rejects.toThrow();
+  });
+
+  it('относительный path резолвится от cwd внутри workspace', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: 'rel.bin', cwd: join(workspace, 'sub') },
+      Buffer.from('rel\n'),
+    );
+
+    expect(res.status).toBe(204);
+    await expect(readFile(join(workspace, 'sub', 'rel.bin'), 'utf-8')).resolves.toBe('rel\n');
+  });
+
+  it('cwd вне workspace — 400 cwd_outside_workspace', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: 'evil.bin', cwd: outside },
+      Buffer.from('x'),
+    );
+
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('cwd_outside_workspace');
+    await expect(readFile(join(outside, 'evil.bin'), 'utf-8')).rejects.toThrow();
+  });
+
+  it('без токена — 401', async () => {
+    const app = makeApp();
+
+    const res = await putFsUpload(
+      app,
+      { path: join(workspace, 'x.bin') },
+      Buffer.from('x'),
+      null,
+    );
+
+    expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * SHA-256 файла (`POST /fs/hash`, протокол 7, PROP-135 Ф3) — считается **на
+ * исполнителе** (там, где лежит файл).
+ */
+describe('FS-операции исполнителя: hash', () => {
+  it('sha256 совпадает с посчитанным по файлу', async () => {
+    const app = makeApp();
+
+    const res = await postFs(app, '/fs/hash', { path: join(workspace, 'a.txt') });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sha256: string };
+    expect(body.sha256).toBe(createHash('sha256').update('hello').digest('hex'));
+  });
+
+  it('бинарный файл — sha256 совпадает с посчитанным', async () => {
+    const payload = Buffer.from([0x00, 0x01, 0x02, 0x00, 0xff]);
+    await writeFile(join(workspace, 'blob.bin'), payload);
+    const app = makeApp();
+
+    const res = await postFs(app, '/fs/hash', { path: join(workspace, 'blob.bin') });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { sha256: string };
+    expect(body.sha256).toBe(createHash('sha256').update(payload).digest('hex'));
+  });
+
+  it('отсутствующий файл — 404 not_found', async () => {
+    const app = makeApp();
+
+    const res = await postFs(app, '/fs/hash', { path: join(workspace, 'nope.txt') });
+
+    expect(res.status).toBe(404);
+    expect((await readError(res)).reason).toBe('not_found');
+  });
+
+  it('невалидное тело (без path) — 400 invalid_request', async () => {
+    const app = makeApp();
+
+    const res = await postFs(app, '/fs/hash', { cwd: workspace });
+
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('без токена — 401', async () => {
+    const app = makeApp();
+
+    const res = await postFs(app, '/fs/hash', { path: join(workspace, 'a.txt') }, null);
+
+    expect(res.status).toBe(401);
   });
 });

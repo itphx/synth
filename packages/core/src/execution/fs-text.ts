@@ -34,9 +34,11 @@
  *   их заново.
  */
 
+import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { open, readFile, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
+import { pipeline } from 'node:stream/promises';
 import { t as sm } from '../engine/system-messages.js';
 import { sniffMime } from '../engine/attachments/sniff-mime.js';
 import { MAX_LINE_LENGTH, clampLine } from '../engine/tools/line-limits.js';
@@ -231,4 +233,21 @@ export async function readRawTextFromFile(
   }
   const text = await readFile(filePath, 'utf-8');
   return { text, size: info.size };
+}
+
+/**
+ * SHA-256 файла (hex) — **потоком** (PROP-135, Ф3).
+ *
+ * Файл целиком в память не поднимается: хэш считается по мере чтения
+ * (`createHash` + `createReadStream`) — файлы бывают крупными (вложения).
+ *
+ * Хэш считается **на точке исполнения**: там, где лежит файл (в
+ * split-топологии — на исполнителе). Ошибка чтения — **сырая** ошибка
+ * `node:fs`: приведение к типизированным `FsPathError` делает граница порта
+ * (inline-реализация) и исполнитель (свои причины на проводе).
+ */
+export async function hashFileSha256(filePath: string): Promise<string> {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(filePath), hash);
+  return hash.digest('hex');
 }

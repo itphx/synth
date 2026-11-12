@@ -474,6 +474,8 @@ describe('attach_workspace_file — привязка файла из workspace (
             this.calls.push(`download:${path}:${maxBytes}`);
             return Buffer.from('PORTBYTES');
           },
+          upload: async () => undefined,
+          hash: async () => '',
           ...fs,
         };
       }

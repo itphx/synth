@@ -33,12 +33,42 @@
  *   различает «нет такого пути» (`not_found`), «нет доступа» (`permission`),
  *   «путь невалиден» (`invalid`) и «не разрешается» (`unresolvable`) — иначе
  *   все сбои выглядели бы одинаково.
+ *
+ * ## Публикация байтов (`uploadBytes`)
+ *
+ * Обратное направление (PROP-135, Ф3): байты кладутся в файл **на точке
+ * исполнения**. Правила те же, что у записи текста:
+ *
+ * - **атомарно**: временный файл `.synth-tmp-<uuid>` в том же каталоге →
+ *   публикация; временный файл не остаётся никогда (уборка в `finally`);
+ * - **родительские каталоги создаются**;
+ * - **`ifExists: 'fail'`** (по умолчанию) — цель **не перезаписывается**:
+ *   публикация через `link` (жёсткая ссылка атомарна и не перезаписывает), а на
+ *   ФС без жёстких ссылок — `copyFile` с `COPYFILE_EXCL`; занятая цель →
+ *   отказ с машинным кодом `exists`;
+ * - **`ifExists: 'overwrite'`** — атомарная замена (`rename`), права
+ *   существующего файла сохраняются, симлинк разыменовывается (те же правила,
+ *   что у `writeTextFileAtomic`).
  */
 
 import { randomUUID } from 'node:crypto';
-import { chmod, lstat, mkdir, realpath, rename, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  constants as fsConstants,
+  copyFile,
+  link,
+  lstat,
+  mkdir,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { FsPathError, fsErrorCodeFromErrno, type FsErrorCode } from './ports/execution-fs.js';
+import type { FsUploadMode, FsUploadOptions } from './ports/execution-fs.js';
 
 /**
  * Ошибки, при которых атомарная схема невозможна, а прямая запись в целевой
@@ -282,5 +312,90 @@ export async function renamePath(from: string, to: string): Promise<void> {
   } catch (err) {
     if (err instanceof FsPathError) throw err;
     throw toFsPathError(err, source, { EEXIST: 'invalid', ENOTEMPTY: 'invalid', EISDIR: 'invalid' });
+  }
+}
+
+/**
+ * Опубликовать байты в файл без перезаписи существующего — внутренний шаг
+ * `uploadBytes` (`ifExists: 'fail'`).
+ *
+ * `link` атомарен и **не перезаписывает**: занятая цель → `EEXIST` (отказ
+ * `exists`). На ФС без жёстких ссылок `link` падает с `EPERM`/`ENOSYS` —
+ * тогда публикация идёт через `copyFile` с `COPYFILE_EXCL` (та же гарантия:
+ * занятая цель не перезаписывается).
+ */
+async function publishWithoutOverwrite(tmp: string, target: string, path: string): Promise<void> {
+  try {
+    await link(tmp, target);
+    return;
+  } catch (err) {
+    if (errnoCode(err) === 'EEXIST') {
+      throw new FsPathError('exists', path, `путь уже существует: ${target}`);
+    }
+    // Жёсткие ссылки недоступны — фоллбэк на копирование с `EXCL`.
+  }
+  try {
+    await copyFile(tmp, target, fsConstants.COPYFILE_EXCL);
+  } catch (err) {
+    if (errnoCode(err) === 'EEXIST') {
+      throw new FsPathError('exists', path, `путь уже существует: ${target}`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Опубликовать байты в файл — **правила порта** (PROP-135, Ф3).
+ *
+ * Обратное направление: байты кладутся в файл **на точке исполнения** (в
+ * split-топологии — на исполнителе, где лежит рабочий каталог проекта).
+ * Тем же кодом пишет исполнитель, поэтому опубликованный файл не зависит от
+ * топологии.
+ *
+ * Порядок: `mkdir -p` родительского каталога → запись во временный файл
+ * `.synth-tmp-<uuid>` **того же** каталога → публикация:
+ *
+ * - `ifExists: 'fail'` (по умолчанию) — `link` (фоллбэк — `copyFile` с
+ *   `COPYFILE_EXCL`): занятая цель **не перезаписывается**, отказ — машинный
+ *   код `exists`;
+ * - `ifExists: 'overwrite'` — `rename` (атомарно), права существующего файла
+ *   сохраняются, симлинк разыменовывается (как у `writeTextFileAtomic`).
+ *
+ * Временный файл убирается в `finally` — и при успехе, и при отказе.
+ *
+ * Ошибки — типизированные (`FsPathError`): `exists`/`permission`/`invalid`/
+ * `not_found`/`unresolvable`.
+ */
+export async function uploadBytes(
+  path: string,
+  bytes: Buffer,
+  opts?: FsUploadOptions,
+): Promise<void> {
+  const target = requirePath(path);
+  const mode: FsUploadMode = opts?.ifExists ?? 'fail';
+  const dir = dirname(target);
+  const tmp = join(dir, `.synth-tmp-${randomUUID()}`);
+  try {
+    await mkdir(dir, { recursive: true });
+    await writeFile(tmp, bytes);
+    if (mode === 'overwrite') {
+      // Цель — как у `writeTextFileAtomic`: симлинк разыменовывается, права
+      // существующего файла сохраняются.
+      const dest = await resolveWriteTarget(target);
+      const existing = await stat(dest).catch(() => null);
+      const fileMode = existing?.isFile() ? existing.mode & 0o777 : undefined;
+      if (fileMode !== undefined) {
+        await chmod(tmp, fileMode);
+      }
+      await rename(tmp, dest);
+      return;
+    }
+    await publishWithoutOverwrite(tmp, target, path);
+  } catch (err) {
+    if (err instanceof FsPathError) throw err;
+    throw toFsPathError(err, path, { EEXIST: 'exists' });
+  } finally {
+    // Временный файл не остаётся ни при успехе, ни при отказе.
+    await rm(tmp, { force: true }).catch(() => undefined);
   }
 }

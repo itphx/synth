@@ -438,6 +438,8 @@ describe('send_attachment — файл из workspace в ответе (ADR-115)'
             this.calls.push(`download:${path}:${maxBytes}`);
             return Buffer.from('PORTBYTES');
           },
+          upload: async () => undefined,
+          hash: async () => '',
           ...fs,
         };
       }

@@ -42,6 +42,7 @@ import {
 import { saveAttachmentTool } from './save-attachment.js';
 import type { AttachmentService, ResolvedAttachment } from '../attachments/service.js';
 import type { SessionManager } from '../../sessions/manager.js';
+import { FsPathError, type ExecutionFs, type FsStat } from '../../execution/ports/index.js';
 import { TOOL_PATH_PARAMS, getToolGroups } from '../permission/groups.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 
@@ -555,6 +556,147 @@ describe('save_attachment — сохранение вложения сессии
       const result = await saveAttachmentTool.execute({}, ctx);
       expect(result.isError).toBe(true);
       expect(errorKey(result)).toBe('attach.tool.no_attachment');
+    });
+  });
+
+  /**
+   * PROP-135 (Ф3): запись идёт **через порт исполнения** — в split-топологии
+   * рабочий каталог лежит на исполнителе, а control plane лишь читает blob и
+   * отдаёт байты порту.
+   */
+  describe('публикация через порт исполнения (PROP-135, Ф3)', () => {
+    /** Порт с подменённой FS: операции идут в порт, а не в локальную ФС. */
+    class FakeFsPort {
+      readonly calls: string[] = [];
+      readonly uploaded: Array<{ path: string; bytes: Buffer; ifExists?: string }> = [];
+      readonly fs: ExecutionFs;
+
+      constructor(fs?: Partial<ExecutionFs>) {
+        this.fs = {
+          realpath: async (path: string) => path,
+          stat: async (path: string) => {
+            this.calls.push(`stat:${path}`);
+            throw new FsPathError('not_found', path, 'путь не найден');
+          },
+          readdir: async () => [],
+          readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+          sniff: async () => ({ binary: false }),
+          readBytes: async () => ({ dataBase64: '', size: 0 }),
+          writeFile: async () => undefined,
+          mkdir: async (path: string) => {
+            this.calls.push(`mkdir:${path}`);
+          },
+          remove: async () => undefined,
+          readRawText: async () => ({ text: '', size: 0 }),
+          rename: async () => undefined,
+          download: async () => Buffer.alloc(0),
+          upload: async (path: string, bytes: Buffer, opts?: { ifExists?: 'fail' | 'overwrite' }) => {
+            this.calls.push(`upload:${path}`);
+            this.uploaded.push({ path, bytes, ...(opts?.ifExists ? { ifExists: opts.ifExists } : {}) });
+          },
+          hash: async (path: string) => {
+            this.calls.push(`hash:${path}`);
+            return '0'.repeat(64);
+          },
+          ...fs,
+        };
+      }
+
+      /** Порт исполнения: команда в этом туле не нужна, но порт обязан быть портом. */
+      async execute(): Promise<{ stdout: string; stderr: string; exitCode: number; truncated: boolean; durationMs: number }> {
+        return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+      }
+    }
+
+    it('чтение blob — через сервис, запись — через порт; локальный файл не создаётся', async () => {
+      const port = new FakeFsPort();
+      addAttachment('PORTBYTES', { name: 'shot.png' });
+
+      const result = await saveAttachmentTool.execute({}, makeCtx({ executionPort: port }));
+
+      expect(result.isError).toBeFalsy();
+      // Байты прочитаны из blob-хранилища (сервис) и отданы порту.
+      expect(service.read).toHaveBeenCalledTimes(1);
+      expect(port.uploaded).toHaveLength(1);
+      expect(port.uploaded[0]?.bytes.toString()).toBe('PORTBYTES');
+      expect(port.uploaded[0]?.ifExists).toBe('fail');
+      // Каталог и файл — на точке исполнения: локальная ФС не тронута.
+      expect(port.calls.some((call) => call.startsWith('upload:'))).toBe(true);
+      expect(await readdir(workspace)).toEqual([]);
+    });
+
+    it('гонка: цель занята, но содержимое совпало → успех с `existing: true`', async () => {
+      // Первый `stat` — «пути нет» (тул идёт публиковать), второй — файл уже
+      // появился (гонка): именно его сверяет тул после отказа `exists`.
+      let statCalls = 0;
+      const stat = vi.fn(async (path: string): Promise<FsStat> => {
+        statCalls += 1;
+        if (statCalls === 1) throw new FsPathError('not_found', path, 'путь не найден');
+        return { kind: 'file', size: 4, mtimeMs: 0 };
+      });
+      const upload = vi.fn(async () => {
+        throw new FsPathError('exists', '/workspace/attachments/shot.png', 'путь уже существует');
+      });
+      const hash = vi.fn(async () => createHash('sha256').update('SAME').digest('hex'));
+      const port = new FakeFsPort({ stat, upload, hash });
+      addAttachment('SAME', { name: 'shot.png' });
+
+      const result = await saveAttachmentTool.execute({}, makeCtx({ executionPort: port }));
+
+      expect(result.isError).toBeFalsy();
+      expect(result.metadata?.existing).toBe(true);
+      expect(result.metadata?.path).toBe('attachments/shot.png');
+      expect(upload).toHaveBeenCalledTimes(1);
+      expect(hash).toHaveBeenCalledTimes(1);
+    });
+
+    it('гонка: цель занята, содержимое чужое → `attach.tool.exists`', async () => {
+      let statCalls = 0;
+      const stat = vi.fn(async (path: string): Promise<FsStat> => {
+        statCalls += 1;
+        if (statCalls === 1) throw new FsPathError('not_found', path, 'путь не найден');
+        return { kind: 'file', size: 4, mtimeMs: 0 };
+      });
+      const upload = vi.fn(async () => {
+        throw new FsPathError('exists', '/workspace/attachments/shot.png', 'путь уже существует');
+      });
+      const hash = vi.fn(async () => 'f'.repeat(64));
+      const port = new FakeFsPort({ stat, upload, hash });
+      addAttachment('SAME', { name: 'shot.png' });
+
+      const result = await saveAttachmentTool.execute({}, makeCtx({ executionPort: port }));
+
+      expect(result.isError).toBe(true);
+      expect(errorKey(result)).toBe('attach.tool.exists');
+      expect(upload).toHaveBeenCalledTimes(1);
+    });
+
+    it('существующий на точке исполнения файл — сверка через `fs.hash` (blob не читается)', async () => {
+      const hash = vi.fn(async () => createHash('sha256').update('SAME').digest('hex'));
+      const stat = vi.fn(async (): Promise<FsStat> => ({ kind: 'file', size: 4, mtimeMs: 0 }));
+      const port = new FakeFsPort({ stat, hash });
+      addAttachment('SAME', { name: 'shot.png' });
+
+      const result = await saveAttachmentTool.execute({}, makeCtx({ executionPort: port }));
+
+      expect(result.isError).toBeFalsy();
+      expect(result.metadata?.existing).toBe(true);
+      expect(stat).toHaveBeenCalled();
+      expect(hash).toHaveBeenCalledTimes(1);
+      // Blob не читается: файл уже на месте и совпадает по содержимому.
+      expect(service.read).not.toHaveBeenCalled();
+      // Публикации не было — файл не перезаписывается.
+      expect(port.uploaded).toHaveLength(0);
+    });
+
+    it('порт без FS — отказ про `features.fs`', async () => {
+      const port = { isRemote: true, execute: async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 }) };
+      addAttachment('AAA', { name: 'a.png' });
+
+      const result = await saveAttachmentTool.execute({}, makeCtx({ executionPort: port }));
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('features.fs');
     });
   });
 
