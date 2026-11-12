@@ -40,6 +40,8 @@ const mocks = vi.hoisted(() => ({
   cancelRestore: vi.fn(),
   listAudit: vi.fn(),
   clearAudit: vi.fn(),
+  getCommandAudit: vi.fn(),
+  pruneCommandAudit: vi.fn(),
   getRestartStatus: vi.fn(),
   restartInstance: vi.fn(),
   getHealth: vi.fn(),
@@ -317,6 +319,8 @@ beforeEach(() => {
   mocks.cancelRestore.mockResolvedValue({ cancelled: true })
   mocks.listAudit.mockResolvedValue({ entries: AUDIT_ENTRIES })
   mocks.clearAudit.mockResolvedValue({ cleared: 2 })
+  mocks.getCommandAudit.mockResolvedValue({ entries: [], count: 0 })
+  mocks.pruneCommandAudit.mockResolvedValue({ removed: 0 })
   mocks.getRestartStatus.mockResolvedValue(RESTART_DISABLED)
   mocks.restartInstance.mockResolvedValue(RESTART_RESPONSE)
   mocks.getHealth.mockResolvedValue({

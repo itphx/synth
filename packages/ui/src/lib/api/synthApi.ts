@@ -38,6 +38,7 @@ import { updatesApi } from './updates'
 import { analyticsApi } from './analytics'
 import { logsApi } from './logs'
 import { egressApi } from './egress'
+import { commandAuditApi } from './commandAudit'
 import { proxyApi } from './proxy'
 import { tlsApi } from './tls'
 import { observabilityApi } from './observability'
@@ -170,6 +171,14 @@ export type {
   SecurityAuditListResponse,
   EgressLogListResponse,
 } from './egress'
+// PROP-136 (слайс 136a): журнал исполнений команд shell.
+export type {
+  CommandAuditDecision,
+  CommandAuditEntry,
+  CommandAuditQuery,
+  CommandAuditListResponse,
+  CommandAuditPruneResponse,
+} from './commandAudit'
 export type {
   ProxyAuthConfig,
   ProxyTlsConfig,
@@ -518,6 +527,7 @@ export const synthApi = {
   ...analyticsApi,
   ...logsApi,
   ...egressApi,
+  ...commandAuditApi,
   ...proxyApi,
   ...tlsApi,
   ...observabilityApi,

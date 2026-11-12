@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
 import { FieldTooltip, InfoField, SettingsPanel, SettingsSection, SelectField } from '../ui/settings'
+import { CommandAuditPanel } from './CommandAuditPanel'
 import {
   synthApi,
   type DoctorCheck,
@@ -1284,6 +1285,16 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
             {t('maintenance.audit.clear')}
           </Button>
         </div>
+      </SettingsSection>
+
+      {/* 7. Журнал исполнений команд shell (PROP-136) */}
+      <SettingsSection
+        id="maintenance-command-audit"
+        title={t('maintenance.commandAudit.title')}
+        description={t('maintenance.commandAudit.description')}
+        advanced
+      >
+        <CommandAuditPanel />
       </SettingsSection>
     </SettingsPanel>
   )

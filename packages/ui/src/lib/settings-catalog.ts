@@ -2578,6 +2578,14 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     keywords: ['audit', 'journal', 'журнал', 'аудит'],
   },
   {
+    id: 'maintenance.commandAudit',
+    categoryId: 'maintenance',
+    sectionId: 'maintenance-command-audit',
+    labelKey: 'maintenance.commandAudit.title',
+    keywords: ['shell', 'command', 'команда', 'команды', 'исполнение', 'журнал'],
+    advanced: true,
+  },
+  {
     id: 'metrics.status',
     categoryId: 'metrics',
     sectionId: 'metrics-status',
