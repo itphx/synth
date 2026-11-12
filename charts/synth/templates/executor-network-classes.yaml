@@ -1,0 +1,111 @@
+{{- /* PROP-137b-2: сетевые классы пулов (`none`|`restricted`|`full`).
+
+       Каждый пул исполнителей несёт подпись `synth.io/network=<класс>`:
+         * статический пул (Deployment чарта) — из `executor.networkClass`;
+         * динамические пулы (provisioner, `provider: kubernetes`) — из профиля
+           provisioner'а (`provisioner.profiles[].network`; если профиль класс
+           не задал — `full`).
+
+       Политика класса выбирает поды **только** по этой подписи — поэтому
+       ограничения одинаковы и для статического пула, и для динамических.
+
+       Схема классов:
+         * `none`      — deny all egress (даже DNS); ingress — только от control
+                          plane'а и provisioner'а;
+         * `restricted`— egress: DNS (kube-system, 53/udp+tcp) + allowlist
+                          `executor.networkClasses.restrictedEgress` (пусто →
+                          только DNS); ingress — тот же;
+         * `full`      — egress не ограничивается (`policyTypes: [Ingress]`);
+                          ingress — тот же.
+
+       ВАЖНО: при `executor.networkClasses.enabled: true` старая
+       `executor.networkPolicy` **не рендерится** — правила нескольких
+       NetworkPolicy складываются union'ом, поэтому её egress-правила (DNS +
+       `allowedEgress`) ослабили бы `none`/`restricted`.
+
+       Ограничение: политики живут в namespace чарта; provisioner создаёт поды
+       пулов в том же namespace (`SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` =
+       `.Release.Namespace`), поэтому динамические пулы попадают под них.
+       Класс `none` без egress — в том числе без DNS: разрешение имён внутри
+       кластера не работает.
+
+       Валидация `executor.networkClass` — **всегда** (даже когда классы
+       выключены): опечатка в values не должна проходить молча. */ -}}
+{{- $_ := include "synth.executor.networkClass" . }}
+{{- if ((.Values.executor.networkClasses | default dict).enabled) }}
+{{- $nc := .Values.executor.networkClasses | default dict }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "synth.executor.fullname" . }}-executor-net-none
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+    synth.io/network-class: none
+spec:
+  podSelector:
+    matchLabels:
+      synth.io/network: none
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- include "synth.executor.netClassIngress" . | nindent 4 }}
+  {{- /* `none` — egress запрещён полностью (даже DNS): список правил пуст, но
+         тип `Egress` в `policyTypes` включён, поэтому исходящий трафик (в том
+         числе DNS) не разрешён. */}}
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "synth.executor.fullname" . }}-executor-net-restricted
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+    synth.io/network-class: restricted
+spec:
+  podSelector:
+    matchLabels:
+      synth.io/network: restricted
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- include "synth.executor.netClassIngress" . | nindent 4 }}
+  egress:
+    {{- /* DNS — без него не разрешается ни одно имя (в т.ч. внутри кластера). */}}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- /* Allowlist оператора (реестры, git, прокси) — по правилам
+           networking.k8s.io/v1. Пусто → у `restricted` только DNS. */}}
+    {{- with $nc.restrictedEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "synth.executor.fullname" . }}-executor-net-full
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: executor
+    synth.io/network-class: full
+spec:
+  podSelector:
+    matchLabels:
+      synth.io/network: full
+  {{- /* `full` — egress не ограничивается: тип `Egress` в `policyTypes` НЕ
+         указан, поэтому правил egress у политики нет вовсе. */}}
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- include "synth.executor.netClassIngress" . | nindent 4 }}
+{{- end }}

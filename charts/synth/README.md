@@ -179,7 +179,10 @@ ingress:
 | `executor.workspace.keepOnUninstall` | `false` | Не удалять PVC общего тома при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте релиза); включать, когда общий workspace нельзя терять — иначе PV класса с `reclaimPolicy: Retain` остаётся осиротевшим (вне релизов, без управления) |
 | `executor.workspace.mountPath` | `/var/synth/data/workspaces` | Точка монтирования общего тома (одинаковая в backend и исполнителе) |
 | `executor.workspace.backendWorkspacesRoot` | `""` | `storage.workspacesRoot` backend'а (env `SYNTH_WORKSPACES_ROOT`); пусто → дефолт `{dataDir}/workspaces` |
-| `executor.networkPolicy.enabled` | `false` | NetworkPolicy пула: ingress — только от control plane, egress — по умолчанию только DNS |
+| `executor.networkClass` | `restricted` | Сетевой класс **статического** пула (`none`\|`restricted`\|`full`) — подпись `synth.io/network` пода исполнителя; селектор политики класса. Неизвестное значение — ошибка рендера (fail-closed). Для динамических пулов класс берётся из профиля provisioner'а |
+| `executor.networkClasses.enabled` | `false` | `true` — рендерить NetworkPolicy на каждый класс (`none`/`restricted`/`full`); старая `executor.networkPolicy` при этом **не** рендерится (union правил ослабил бы `none`/`restricted`) |
+| `executor.networkClasses.restrictedEgress` | `[]` | Allowlist egress для класса `restricted` (правила `networking.k8s.io/v1`); пусто → у `restricted` разрешён только DNS |
+| `executor.networkPolicy.enabled` | `false` | NetworkPolicy пула: ingress — только от control plane, egress — по умолчанию только DNS. **Не рендерится**, если включён `executor.networkClasses.enabled` |
 | `executor.networkPolicy.allowedEgress` | `[]` | Доп. egress-правила (формат `networking.k8s.io/v1`) |
 | `executor.networkPolicy.metricsIngress` | `[]` | Доп. ingress-правила (формат `networking.k8s.io/v1`) — например, для скрейпа `/metrics` исполнителя Prometheus'ом из другого namespace. Добавляются **в дополнение** к правилу от control plane |
 | `executor.token.existingSecret` | `""` | Secret с токеном доверия `synth_exec_…` (пусто → `secrets.existingSecret`) |
@@ -201,7 +204,7 @@ ingress:
 | `provisioner.service.port` / `.targetPort` | `5200` / `5200` | Service provisioner'а (адрес → `SYNTH_EXECUTION_PROVISIONER_URL`) |
 | `provisioner.token.existingSecret` / `.secretKey` | `""` / `SYNTH_PROVISIONER_TOKEN` | Secret с токеном (пусто → `secrets.existingSecret`): provisioner — значение в env, backend — файл `/etc/synth/provisioner-token/token` |
 | `provisioner.serviceAccount.create` / `.name` | `true` / `""` | ServiceAccount provisioner'а (пусто → `<fullname>`); ему выдаётся Role на поды/секреты в namespace релиза |
-| `provisioner.profiles` | `{}` | Профили исполнения: `{имя: {image, url, resources, …}}` → env `SYNTH_PROVISIONER_PROFILES` (JSON). `static` — обязателен `url`, `kubernetes` — `image` |
+| `provisioner.profiles` | `{}` | Профили исполнения: `{имя: {image, url, network, resources, …}}` → env `SYNTH_PROVISIONER_PROFILES` (JSON). `static` — обязателен `url`, `kubernetes` — `image`; `network` — класс сети пула (`none`\|`restricted`\|`full`, дефолт `full`), см. §«Сетевые классы пулов» |
 | `provisioner.staticPools` | `{}` | Точные пулы (static): ключ пула → адрес исполнителя → env `SYNTH_PROVISIONER_STATIC_POOLS` |
 | `provisioner.kubernetes.workspacePvc` | `""` | PVC с рабочими каталогами проектов (обязателен при `provider: kubernetes`) |
 | `provisioner.kubernetes.workspaceMount` | `/var/synth/data/workspaces` | Точка монтирования PVC в поде пула (должна совпадать с `executor.workspace.mountPath`) |
@@ -1583,6 +1586,74 @@ executor:
 - В исполнителе **нет** LLM-ключей, OIDC-секретов и чужих workspace: образ
   worker'а собирается отдельно от образа backend'а.
 - `docker.sock` в исполнитель **не монтируется никогда**.
+- Изоляция по **классам профиля** (`none|restricted|full`) — см. §«Сетевые
+  классы пулов» ниже: при `executor.networkClasses.enabled: true` эта
+  `networkPolicy` не рендерится (union правил ослабил бы `none`/`restricted`).
+
+### Сетевые классы пулов (PROP-137b-2)
+
+Изоляция пулов — **по классу профиля**, а не по адресам: каждый пул несёт
+подпись `synth.io/network=<none|restricted|full>`, а чарт рендерит
+NetworkPolicy на каждый класс. Классы одинаковы для **статического** пула
+(Deployment исполнителя) и для **динамических** пулов provisioner'а.
+
+```yaml
+executor:
+  networkClass: restricted          # класс статического пула
+  networkClasses:
+    enabled: true                   # рендерить политики классов
+    restrictedEgress: []            # allowlist egress для `restricted`
+```
+
+| Класс | Ingress | Egress |
+|---|---|---|
+| `none` | от pod'ов backend'а и provisioner'а на порт исполнителя | **запрещён полностью** — в том числе DNS |
+| `restricted` | тот же | DNS (kube-system, 53/udp+tcp) + `networkClasses.restrictedEgress` (пусто → только DNS) |
+| `full` | тот же | не ограничивается (`policyTypes: [Ingress]`) |
+
+Политики: `synth-executor-executor-net-none`,
+`synth-executor-executor-net-restricted`, `synth-executor-executor-net-full`.
+
+**Кто ставит подпись.** Статический пул — чарт (`executor.networkClass`).
+Динамические пулы — **provisioner**: класс берётся из профиля
+(`provisioner.profiles[].network`; если профиль класс не задал — `full`).
+
+```yaml
+provisioner:
+  profiles:
+    default:
+      image: git.itphx.ru/itphx/synth-executor:0.13.8
+      network: restricted           # none | restricted | full
+```
+
+**Ограничения.**
+
+- Политики живут в **namespace чарта**. Поды динамических пулов provisioner'а
+  создаются в том же namespace (`SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` =
+  `.Release.Namespace`), поэтому подпадают под них; provisioner, запущенный
+  вне чарта с другим namespace, под эти политики **не** попадёт.
+- CNI кластера должен **поддерживать NetworkPolicy** — иначе объекты есть, а
+  ограничения не применяются (сеть как есть).
+- Селектор политики — **только** подпись класса: в одном namespace под правила
+  попадают все пулы этого класса (в т.ч. пулы другого релиза Synth, если он
+  развёрнут в том же namespace).
+- При `networkClasses.enabled: true` старая `executor.networkPolicy` **не
+  рендерится**: правила нескольких NetworkPolicy складываются union'ом, и её
+  egress-правила (DNS + `allowedEgress`) ослабили бы `none`/`restricted`.
+- По той же причине **не применяется** `executor.networkPolicy.metricsIngress`:
+  скрейп `/metrics` исполнителя Prometheus'ом из другого namespace при
+  включённых классах требует отдельной политики.
+- `none` — без egress вообще: DNS не разрешается (в том числе имена внутри
+  кластера), поэтому git/npm внутри пула не работают.
+- Правило «класс `full` — только если профиль явно разрешён в
+  `project.executor.allowedProfiles`» (PROP-137) **не обеспечивается этой
+  политикой**: чарт не знает, какой профиль выберет сессия. Потолок профилей —
+  уровень core (`project.executor.allowedProfiles`), а сетевой класс пула
+  определяется профилем provisioner'а (`profiles[].network`); согласовать их
+  должен оператор.
+- Неизвестный `executor.networkClass` — **ошибка рендера** (fail-closed): под
+  с «чужой» подписью не попал бы ни в одну политику, то есть остался бы без
+  ограничений.
 
 ### Метрики исполнителя
 
@@ -1778,6 +1849,10 @@ provisioner:
 |---|---|---|---|
 | `static` | адрес из `profiles[].url` / `staticPools` | нет (ключ пула игнорируется) | нет |
 | `kubernetes` | под с образом профиля + Secret с токеном | да (под на каждый ключ пула) | да (RBAC + ServiceAccount-токен) |
+
+Динамический пул получает подпись `synth.io/network` из **профиля**
+(`profiles[].network`; если профиль класс не задал — `full`) — под неё
+рендерится NetworkPolicy класса, см. §«Сетевые классы пулов».
 
 ### Токен (Secret)
 

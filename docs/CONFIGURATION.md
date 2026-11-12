@@ -869,6 +869,58 @@ execution:
         timeoutMs: 60000            # параметры профиля — «поверх» общих
 ```
 
+### Сетевые классы пулов (values `executor.networkClass` / `executor.networkClasses.*`, PROP-137b-2)
+
+Изоляция пулов исполнителей — **по классу профиля**, а не по адресам: каждый пул
+несёт подпись `synth.io/network=<none|restricted|full>`, а чарт рендерит
+NetworkPolicy на каждый класс. Классы одинаковы для **статического** пула
+(Deployment исполнителя) и для **динамических** пулов provisioner'а.
+
+Это **значения Helm-чарта** (не `config.yaml` и не env): политикиNetworkPolicy —
+объекты кластера, они не переключаются в рантайме (инвариант 24).
+
+| Ключ | По умолчанию | Смысл |
+|---|---|---|
+| `executor.networkClass` | `restricted` | Класс **статического** пула — подпись `synth.io/network` пода исполнителя. Неизвестное значение — **ошибка рендера** (fail-closed) |
+| `executor.networkClasses.enabled` | `false` | `true` — рендерить политики классов (`none`/`restricted`/`full`); старая `executor.networkPolicy` при этом **не** рендерится |
+| `executor.networkClasses.restrictedEgress` | `[]` | Allowlist egress для класса `restricted` (правила `networking.k8s.io/v1`); пусто → у `restricted` разрешён только DNS |
+
+| Класс | Ingress | Egress |
+|---|---|---|
+| `none` | от pod'ов backend'а и provisioner'а на порт исполнителя | **запрещён полностью** — в том числе DNS |
+| `restricted` | тот же | DNS (kube-system, 53/udp+tcp) + `networkClasses.restrictedEgress` |
+| `full` | тот же | не ограничивается (`policyTypes: [Ingress]`) |
+
+**Кто ставит подпись.** Статический пул — чарт (`executor.networkClass`).
+Динамические пулы — **provisioner**: класс берётся из профиля
+(`provisioner.profiles[].network`; если профиль класс не задал — `full`).
+
+**Ограничения.**
+
+- Политики живут в **namespace чарта**. Поды динамических пулов provisioner'а
+  создаются в том же namespace (`SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` =
+  `.Release.Namespace`), поэтому подпадают под них; provisioner с другим
+  namespace под эти политики **не** попадёт.
+- CNI кластера должен **поддерживать NetworkPolicy** — иначе объекты есть, а
+  ограничения не применяются.
+- Селектор политики — **только** подпись класса: в одном namespace под правила
+  попадают все пулы этого класса (в т.ч. пулы другого релиза Synth в том же
+  namespace).
+- При `networkClasses.enabled: true` старая `executor.networkPolicy` **не
+  рендерится** (правила нескольких NetworkPolicy складываются union'ом — её
+  egress-правила ослабили бы `none`/`restricted`), и вместе с ней **не
+  применяется** `executor.networkPolicy.metricsIngress` (скрейп `/metrics`
+  исполнителя Prometheus'ом из другого namespace требует отдельной политики).
+- `none` — без egress вообще: DNS не разрешается (в том числе имена внутри
+  кластера), поэтому git/npm внутри пула не работают.
+- Правило «класс `full` — только если профиль явно разрешён в
+  `project.executor.allowedProfiles`» (PROP-137) **не обеспечивается этой
+  политикой**: чарт не знает, какой профиль выберет сессия (потолок профилей —
+  уровень core, `execution.remote.profiles`), а сетевой класс пула задаёт
+  оператор через профиль provisioner'а.
+
+Подробности и примеры — README чарта, §«Сетевые классы пулов».
+
 ### Provisioner пулов (`SYNTH_PROVISIONER_*`, values `provisioner.*`)
 
 Отдельный процесс `@itphx/synth-provisioner` (PROP-135 Ф4b-2b): выдаёт control

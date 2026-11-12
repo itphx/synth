@@ -10,8 +10,14 @@
        непустой `metricsIngress` (иначе значение было бы молчаливым no-op).
        Egress-ограничения (DNS-only + allowedEgress) появляются только при
        явном `networkPolicy.enabled: true` — само правило для скрейпа не должно
-       молча резать исходящий трафик пула. */ -}}
-{{- if and .Values.executor.enabled (or .Values.executor.networkPolicy.enabled .Values.executor.networkPolicy.metricsIngress) }}
+       молча резать исходящий трафик пула.
+
+       PROP-137b-2: при `executor.networkClasses.enabled: true` эта политика
+       **не рендерится** — правила нескольких NetworkPolicy складываются
+       union'ом, поэтому её egress-правила (DNS + `allowedEgress`) ослабили бы
+       классы `none`/`restricted` (а её ingress — расширил бы `none`). Политики
+       классов — `templates/executor-network-classes.yaml`. */ -}}
+{{- if and .Values.executor.enabled (not ((.Values.executor.networkClasses | default dict).enabled)) (or .Values.executor.networkPolicy.enabled .Values.executor.networkPolicy.metricsIngress) }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

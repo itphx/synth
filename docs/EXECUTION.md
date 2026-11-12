@@ -351,6 +351,16 @@ synth-executor`, `app.kubernetes.io/managed-by: synth-provisioner`,
 `synth.io/pool-hash`, `synth.io/profile`, `synth.io/network`; ключ пула —
 аннотация `synth.io/pool-key`.
 
+**Сетевой класс пула (PROP-137b-2).** Подпись `synth.io/network` ставит
+**provisioner**: значение — из профиля (`profiles[].network`:
+`none`|`restricted`|`full`; если профиль класс не задал — `full`). Политику
+класса рендерит **чарт** (`executor.networkClasses.enabled`) — NetworkPolicy
+выбирает поды по этой подписи, поэтому ограничения одинаковы для динамических
+и статических пулов. Ограничение: политики живут в namespace чарта, а
+provisioner создаёт поды пулов в том же namespace
+(`SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` = `.Release.Namespace`) — подпадают
+под них; provisioner с другим namespace под них не попадёт.
+
 **Развёртывание (чарт).** `provisioner.enabled: true` рендерит
 Deployment (1 реплика), Service (5200), ServiceAccount + Role/RoleBinding,
 опционально NetworkPolicy; backend получает env `SYNTH_EXECUTION_PROVIDER=http`,
@@ -377,6 +387,9 @@ healthcheck `/health`, секретов в образе нет).
 6. **`workspaceOutsideRoot`**: при `deny` (managed) проект вне `workspacesRoot`
    не получит каталога, а без `subPath` под монтирует весь PVC — проект нужно
    держать под корнем workspace.
+7. **Класс сети пула по умолчанию — `full`**: профиль provisioner'а без поля
+   `network` получает подпись `synth.io/network=full` (ограничения egress нет).
+   Для изолированных пулей класс задаётся явно в `profiles[].network`.
 
 ---
 
@@ -1330,8 +1343,11 @@ tool-call (`execute_shell`/`sandbox_exec`, та же, где пишется ау
 | `executor.workspace.enabled` / `.existingClaim` / `.claimName` / `.size` / `.storageClass` / `.accessMode` | Общий том с workspace (PVC, RWX по умолчанию); свой claim — если в кластере нет RWX-класса |
 | `executor.workspace.mountPath` | Точка монтирования общего тома — **одинаковая** в backend и в worker'е (по умолчанию `/var/synth/data/workspaces` — совпадает с дефолтом `storage.workspacesRoot` = `{dataDir}/workspaces`) |
 | `executor.workspace.backendWorkspacesRoot` | `storage.workspacesRoot` backend'а (env `SYNTH_WORKSPACES_ROOT`) — задаётся, если `mountPath` отличается от `{dataDir}/workspaces` |
-| `executor.networkPolicy.enabled` / `.allowedEgress` | NetworkPolicy worker'а: ingress — только от pod'ов control plane, egress — по умолчанию только DNS |
-| `executor.networkPolicy.metricsIngress` | Доп. ingress-правила (формат `networking.k8s.io/v1`) — **в дополнение** к правилу от control plane (например, скрейп `/metrics` исполнителя Prometheus'ом из другого namespace). Непустое значение включает NetworkPolicy пула; egress-ограничения при этом — только при `networkPolicy.enabled: true` |
+| `executor.networkPolicy.enabled` / `.allowedEgress` | NetworkPolicy worker'а: ingress — только от pod'ов control plane, egress — по умолчанию только DNS. **Не рендерится**, если включён `executor.networkClasses.enabled` |
+| `executor.networkPolicy.metricsIngress` | Доп. ingress-правила (формат `networking.k8s.io/v1`) — **в дополнение** к правилу от control plane (например, скрейп `/metrics` исполнителя Prometheus'ом из другого namespace). Непустое значение включает NetworkPolicy пула; egress-ограничения при этом — только при `networkPolicy.enabled: true`. При включённых классах не применяется (старая политика не рендерится) |
+| `executor.networkClass` | Сетевой класс **статического** пула (`none`\|`restricted`\|`full`, дефолт `restricted`) — подпись `synth.io/network` пода исполнителя; неизвестное значение → ошибка рендера (fail-closed) |
+| `executor.networkClasses.enabled` | `true` — рендерить NetworkPolicy на каждый класс (`none`/`restricted`/`full`); старая `executor.networkPolicy` при этом не рендерится |
+| `executor.networkClasses.restrictedEgress` | Allowlist egress для класса `restricted` (правила `networking.k8s.io/v1`); пусто → у `restricted` разрешён только DNS |
 | `executor.metrics.enabled` | Метрики исполнителя (ADR-077 шаг 7d; ADR-094): env `SYNTH_EXECUTOR_METRICS_ENABLED=true` → свой `GET /metrics` (404 при выключенном, 401 без токена, 200 с токеном); выключено по умолчанию |
 | `executor.token.existingSecret` / `.secretKey` | Secret с токеном `synth_exec_…` и ключ внутри него |
 | `executor.mcp.enabled` / `.servers` | MCP-серверы, которые хостит исполнитель (ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется (дефолт образа: у flavor'ов с браузером — Playwright MCP); `enabled: false` → env `""` = серверов нет |
@@ -1394,8 +1410,19 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
     **не стартует**, в логе — точная команда починки:
     `data directory "<path>" is not writable by uid <uid> (chown -R <uid>:<gid> "<path>")`.
     Runbook — [MAINTENANCE.md](./MAINTENANCE.md) §«Read-only rootfs и права (PROP-137 Ф2)».
-  - **NetworkPolicy классов профилей** (`none|restricted|full`) — остаток **137b-2**, в этом
-    слайсе не делалось.
+  - **NetworkPolicy классов профилей** (`none|restricted|full`) — **реализовано** (PROP-137b-2,
+    чарт). Каждый пул несёт подпись `synth.io/network=<класс>`; чарт рендерит
+    NetworkPolicy на каждый класс (`synth-executor-executor-net-{none,restricted,full}`):
+    `none` — deny all egress (даже DNS), `restricted` — DNS + allowlist
+    `executor.networkClasses.restrictedEgress`, `full` — egress не ограничивается; ingress у всех
+    классов — от pod'ов backend'а и provisioner'а на порт исполнителя. Подпись статического пула
+    ставит чарт (`executor.networkClass`, дефолт `restricted`), подпись динамических пулов —
+    **provisioner** (`profiles[].network`; если профиль класс не задал — `full`). При
+    `executor.networkClasses.enabled: true` старая `executor.networkPolicy` **не рендерится**
+    (union правил ослабил бы `none`/`restricted`) — вместе с ней не применяется и
+    `networkPolicy.metricsIngress`. Ограничения: политики в namespace чарта (поды пулов
+    provisioner'а — там же), CNI должен поддерживать NetworkPolicy, селектор — только подпись
+    класса. Подробности — README чарта, §«Сетевые классы пулов».
 
 #### Что умеет каждый flavor (PROP-082)
 
@@ -1873,3 +1900,18 @@ Split-топология технически возможна и при одн�
   `data directory "<path>" is not writable by uid <uid> (chown -R <uid>:<gid> "<path>")`).
   UI — исключение (nginx-unprivileged пишет `/etc/nginx/conf.d` при старте). **Остаток 137b-2:**
   NetworkPolicy классов профилей (`none|restricted|full`).
+- 2026-11-12 — **PROP-137 Ф2, слайс 137b-2: сетевые классы пулов (`none|restricted|full`).**
+  Чарт (`charts/synth`): values `executor.networkClass` (класс **статического** пула, дефолт
+  `restricted`) и `executor.networkClasses.{enabled,restrictedEgress}`; неизвестный класс —
+  **ошибка рендера** (fail-closed). Шаблон `templates/executor-network-classes.yaml` рендерит три
+  NetworkPolicy (`synth-executor-executor-net-{none,restricted,full}`) с селектором **только** по
+  подписи `synth.io/network`: `none` — `policyTypes: [Ingress, Egress]`, egress пуст (deny all, без
+  DNS); `restricted` — DNS (kube-system, 53/udp+tcp) + `restrictedEgress`; `full` —
+  `policyTypes: [Ingress]` (egress не ограничивается). Ingress у всех классов — от pod'ов backend'а
+  и provisioner'а на `executor.service.targetPort`. Статический под исполнителя получил подпись
+  `synth.io/network` (вне `spec.selector` — селектор Deployment'а неизменяем); подписи динамических
+  пулов ставит **provisioner** (`profiles[].network`, дефолт `full`). Старая
+  `executor-networkpolicy.yaml` при `networkClasses.enabled: true` **не рендерится** (union правил
+  ослабил бы `none`/`restricted`; вместе с ней не применяется и `networkPolicy.metricsIngress`).
+  Ограничения: политики в namespace чарта (поды пулов provisioner'а — там же), CNI должен
+  поддерживать NetworkPolicy, селектор — только подпись класса.

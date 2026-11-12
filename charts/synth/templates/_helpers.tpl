@@ -119,6 +119,42 @@ app.kubernetes.io/component: executor
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- /* PROP-137b-2: сетевой класс пула (`none`|`restricted`|`full`) — подпись
+       `synth.io/network` пода исполнителя и селектор NetworkPolicy класса.
+
+       Статический пул (Deployment чарта) берёт класс из `executor.networkClass`;
+       динамические пулы (provisioner, `provider: kubernetes`) — из профиля
+       provisioner'а (`profiles[].network`).
+
+       Неизвестное значение — **ошибка рендера** (fail-closed): под с «чужой»
+       подписью не попал бы ни в одну политику класса, то есть остался бы без
+       ограничений (молчаливый обход изоляции недопустим). */ -}}
+{{- define "synth.executor.networkClass" -}}
+{{- $c := (.Values.executor.networkClass | default "restricted") | toString -}}
+{{- if not (has $c (list "none" "restricted" "full")) -}}
+{{- fail (printf "executor.networkClass: ожидается \"none\", \"restricted\" или \"full\", получено %q" $c) -}}
+{{- end -}}
+{{- $c -}}
+{{- end }}
+
+{{- /* PROP-137b-2: общий ingress-блок политик сетевых классов: control plane
+       (backend) и provisioner — на порт исполнителя. Селекторы подов — в том
+       же namespace, что и политика (`podSelector` без `namespaceSelector`).
+
+       Аргумент — корневой контекст (.Values/.Release), как у прочих хелперов. */ -}}
+{{- define "synth.executor.netClassIngress" -}}
+- from:
+    - podSelector:
+        matchLabels:
+          {{- include "synth.backend.selectorLabels" . | nindent 10 }}
+    - podSelector:
+        matchLabels:
+          {{- include "synth.provisioner.selectorLabels" . | nindent 10 }}
+  ports:
+    - protocol: TCP
+      port: {{ .Values.executor.service.targetPort }}
+{{- end }}
+
 {{- /* ADR-077: адрес Service пула исполнителей (control plane ходит сюда). */ -}}
 {{- define "synth.executor.serviceUrl" -}}
 {{- printf "http://%s:%d" (include "synth.executor.fullname" .) (.Values.executor.service.port | int64) -}}

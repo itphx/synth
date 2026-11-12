@@ -42,6 +42,14 @@ spec:
     metadata:
       labels:
         {{- include "synth.executor.selectorLabels" . | nindent 8 }}
+        {{- /* PROP-137b-2: сетевой класс пула — подпись `synth.io/network`.
+               По ней политику класса выбирают поды (в том числе динамические
+               пулы provisioner'а — у них та же подпись). Значение
+               валидируется (fail-closed): неизвестный класс → ошибка
+               рендера. Подпись НЕ входит в `spec.selector` Deployment'а
+               (селектор неизменяем) — она только расширяет набор подов
+               шаблона. */}}
+        synth.io/network: {{ include "synth.executor.networkClass" . }}
       annotations:
         synth.io/build: {{ .Chart.Version | quote }}
     spec:

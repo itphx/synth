@@ -561,9 +561,53 @@ executor:
     # тома, и исполнитель их не увидит (containment → отказ EWORKSPACE).
     backendWorkspacesRoot: ""
 
+  # Сетевой класс пула (PROP-137b-2) — подпись `synth.io/network` пода и
+  # селектор NetworkPolicy класса.
+  #
+  # Для **статического** пула (Deployment исполнителя в чарте) класс задаётся
+  # здесь. Для **динамических** пулов (provisioner, `provider: kubernetes`)
+  # класс берётся из профиля provisioner'а (`provisioner.profiles[].network`;
+  # если профиль класс не задал — `full`).
+  #
+  # none       — deny all egress (даже DNS), ingress только от control plane
+  #              и provisioner'а;
+  # restricted — egress: DNS (kube-system, 53/udp+tcp) + allowlist
+  #              `networkClasses.restrictedEgress` (пусто → только DNS);
+  # full       — egress не ограничивается.
+  #
+  # Неизвестное значение — **ошибка рендера** (fail-closed): под с «чужой»
+  # подписью не попал бы ни в одну политику класса (то есть остался бы без
+  # ограничений).
+  networkClass: restricted
+
+  # Сетевые классы пулов (PROP-137b-2) — NetworkPolicy на каждый класс.
+  #
+  # enabled: true → чарт рендерит три политики (`none`/`restricted`/`full`),
+  # выбирающие поды по подписи `synth.io/network`. Старая
+  # `executor.networkPolicy` при этом **не рендерится** (union правил ослабил
+  # бы `none`/`restricted`).
+  #
+  # Ограничения: политики живут в namespace чарта (поды динамических пулов
+  # provisioner'а создаются в том же namespace), CNI кластера должен
+  # поддерживать NetworkPolicy.
+  networkClasses:
+    enabled: false
+    # Allowlist egress для класса `restricted` — список правил
+    # networking.k8s.io/v1 (как `networkPolicy.allowedEgress`). Пусто → у
+    # `restricted` разрешён только DNS.
+    # Пример (доступ к внешнему git-репозиторию):
+    #   restrictedEgress:
+    #     - to: [{ipBlock: {cidr: 203.0.113.0/24}}]
+    #       ports: [{protocol: TCP, port: 443}]
+    restrictedEgress: []
+
   networkPolicy:
     # NetworkPolicy для пула (ADR-077 «Изоляция, лимиты и квоты»).
     # false → объект не рендерится (сеть кластера как есть).
+    #
+    # ⚠️ Несовместимо с `networkClasses.enabled: true`: при включённых классах
+    # эта политика НЕ рендерится (правила нескольких политик складываются
+    # union'ом — её egress-правила ослабили бы `none`/`restricted`).
     enabled: false
     # Дополнительные egress-правила (формат networking.k8s.io/v1). По умолчанию
     # разрешён только DNS (namespace kube-system) — открытого egress в интернет

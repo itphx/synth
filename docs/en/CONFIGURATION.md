@@ -860,6 +860,58 @@ execution:
         timeoutMs: 60000            # profile parameters — on top of the common ones
 ```
 
+### Pool network classes (`executor.networkClass` / `executor.networkClasses.*` values, PROP-137b-2)
+
+Executor pool isolation is **by profile class**, not by addresses: every pool
+carries the `synth.io/network=<none|restricted|full>` label, and the chart
+renders a NetworkPolicy per class. The classes are the same for the **static**
+pool (the executor Deployment) and for the **dynamic** provisioner pools.
+
+These are **Helm chart values** (not `config.yaml` and not env): NetworkPolicy
+objects live in the cluster and are not switched at runtime (invariant 24).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `executor.networkClass` | `restricted` | Class of the **static** pool — the `synth.io/network` label of the executor pod. An unknown value is a **render error** (fail-closed) |
+| `executor.networkClasses.enabled` | `false` | `true` — render the class policies (`none`/`restricted`/`full`); the legacy `executor.networkPolicy` is **not** rendered then |
+| `executor.networkClasses.restrictedEgress` | `[]` | Egress allowlist for the `restricted` class (`networking.k8s.io/v1` rules); empty → `restricted` allows DNS only |
+
+| Class | Ingress | Egress |
+|---|---|---|
+| `none` | from the backend and provisioner pods on the executor port | **denied entirely** — DNS included |
+| `restricted` | the same | DNS (kube-system, 53/udp+tcp) + `networkClasses.restrictedEgress` |
+| `full` | the same | unrestricted (`policyTypes: [Ingress]`) |
+
+**Who sets the label.** The static pool — the chart (`executor.networkClass`).
+The dynamic pools — the **provisioner**: the class comes from the profile
+(`provisioner.profiles[].network`; if the profile does not set it — `full`).
+
+**Limitations.**
+
+- The policies live in the **chart namespace**. The provisioner's dynamic pool
+  pods are created in the same namespace (`SYNTH_PROVISIONER_KUBERNETES_NAMESPACE`
+  = `.Release.Namespace`), so they are covered; a provisioner with another
+  namespace is **not** covered by them.
+- The cluster CNI must **support NetworkPolicy** — otherwise the objects exist
+  but the restrictions do not apply.
+- The policy selector is the **class label only**: in one namespace every pool
+  of that class is covered (including pools of another Synth release in the
+  same namespace).
+- With `networkClasses.enabled: true` the legacy `executor.networkPolicy` is
+  **not** rendered (the rules of several NetworkPolicies are unioned — its
+  egress rules would weaken `none`/`restricted`), and neither is
+  `executor.networkPolicy.metricsIngress` (scraping the executor `/metrics`
+  from another namespace needs a separate policy).
+- `none` — no egress at all: DNS does not resolve (including in-cluster names),
+  so git/npm do not work inside the pool.
+- The rule "the `full` class is only available when the profile is explicitly
+  allowed in `project.executor.allowedProfiles`" (PROP-137) is **not enforced by
+  this policy**: the chart does not know which profile a session will pick (the
+  profile ceiling is a core-level concern, `execution.remote.profiles`), while
+  the pool network class is set by the operator via the provisioner profile.
+
+Details and examples — chart README, §«Pool network classes».
+
 ### Pool provisioner (`SYNTH_PROVISIONER_*`, `provisioner.*` values)
 
 A separate `@itphx/synth-provisioner` process (PROP-135 F4b-2b): it issues the

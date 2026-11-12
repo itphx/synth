@@ -1033,3 +1033,89 @@
 - **Ограничения:** UI — read-only rootfs не включается (см. выше). Ownership-initContainer — root в поде, поэтому namespace с PSS `restricted` его не примет; на NFS-томе workspace — минуты на старте пода. `readOnlyRootFilesystem` **не** решает проблему прав на томе с данными: том остаётся PVC и writable, а права на нём задаёт `fsGroup` (+ initContainer для hostPath/NFS).
 - **Остаток 137b-2:** NetworkPolicy классов профилей (`none|restricted|full`) — по label `synth.io/network=…`, allowlist реестров/git/прокси в `restricted`; в 137b-1 не делалось. Также вне объёма: gateway-addons по тому же правилу non-root/read-only.
 - **Коммит:** не делался.
+
+## 2026-11-12 — PROP-137b-2: сетевые классы пулов (`none|restricted|full`) через NetworkPolicy
+
+- **Задача:** слайс **137b-2** реализации PROP-137 (Ф2 «сеть»): сетевые классы пулов
+  `none|restricted|full` — NetworkPolicy по подписи `synth.io/network`. Код provisioner'а **не
+  менялся** (подпись он уже ставит); образы (137a), read-only rootfs (137b-1), core/backend не
+  трогались. **Тип:** infra (Helm-чарт) + docs. **Исполнитель:** @fixer.
+- **Values чарта.** `executor.networkClass` (`none|restricted|full`, дефолт `restricted`) — класс
+  **статического** пула; `executor.networkClasses.enabled` (`false`) — рендерить политики классов;
+  `executor.networkClasses.restrictedEgress` (`[]`) — allowlist egress для `restricted` (правила
+  `networking.k8s.io/v1`). Неизвестный класс — **ошибка рендера** (fail-closed, хелпер
+  `synth.executor.networkClass`): под с «чужой» подписью не попал бы ни в одну политику, то есть
+  остался бы без ограничений.
+- **Шаблон `charts/synth/templates/executor-network-classes.yaml` (новый).** Три NetworkPolicy:
+  `synth-executor-executor-net-{none,restricted,full}`. Селектор — **только**
+  `synth.io/network: <класс>` (поэтому ограничения одинаковы для статического пула и для
+  динамических пулов provisioner'а). `none` — `policyTypes: [Ingress, Egress]`, `egress: []` (deny
+  all, **без DNS**); `restricted` — `policyTypes: [Ingress, Egress]`, egress = DNS (namespace
+  `kube-system`, 53/udp+tcp) + `restrictedEgress` (пусто → только DNS); `full` —
+  `policyTypes: [Ingress]` (egress не ограничивается). Ingress у всех классов одинаковый: от
+  pod'ов **backend'а** и **provisioner'а** (`synth.backend.selectorLabels` /
+  `synth.provisioner.selectorLabels`) на `executor.service.targetPort`.
+- **Статический пул.** `templates/executor-deployment.yaml`: pod-label
+  `synth.io/network: {{ include "synth.executor.networkClass" . }}` — подпись **вне**
+  `spec.selector` Deployment'а (селектор неизменяем); изменение pod-template label вызывает
+  rollout при обновлении релиза.
+- **Старая политика.** `templates/executor-networkpolicy.yaml`: условие дополнено
+  `not .Values.executor.networkClasses.enabled` — при включённых классах старая политика **не
+  рендерится** (правила нескольких NetworkPolicy складываются union'ом: её egress-правила (DNS +
+  `allowedEgress`) ослабили бы `none`/`restricted`).
+- **Кто ставит подпись.** Статический пул — чарт (`executor.networkClass`). Динамические пулы —
+  **provisioner**: `packages/provisioner/src/kubernetes-provider.ts` уже ставит
+  `synth.io/network` = `profile.network ?? 'full'` (значение профиля — `profiles[].network`).
+  Namespace подов пулов = namespace релиза (`SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` =
+  `.Release.Namespace` в `provisioner-deployment.yaml`) → политики чарта их покрывают; provisioner с
+  другим namespace — нет. Код provisioner'а **не менялся**.
+- **Документация.** `charts/synth/README.md` — строки values (`executor.networkClass`,
+  `executor.networkClasses.*`, примечание к `networkPolicy.enabled`, `provisioner.profiles` с
+  полем `network`) + новый раздел «Сетевые классы пулов (PROP-137b-2)» (таблица классов, кто
+  ставит подпись, ограничения) + ссылки из §«Ограничения и NetworkPolicy» и §«Provisioner пулов».
+  `docs/EXECUTION.md` §10.1 — строки values; §10.2 — блок «NetworkPolicy классов профилей» (было
+  «остаток 137b-2»); §Ф4b-2b — подпись `synth.io/network` у динамических пулов + ограничение
+  «класс по умолчанию — `full`»; §История — запись. `docs/CONFIGURATION.md` +
+  `docs/en/CONFIGURATION.md` — новый раздел «Сетевые классы пулов» / «Pool network classes»
+  (значения Helm-чарта, таблица классов, кто ставит подпись, ограничения).
+- **Изменённые файлы:** `charts/synth/values.yaml`, `charts/synth/templates/_helpers.tpl`,
+  `charts/synth/templates/executor-network-classes.yaml` (новый),
+  `charts/synth/templates/executor-networkpolicy.yaml`,
+  `charts/synth/templates/executor-deployment.yaml`, `charts/synth/README.md`,
+  `docs/EXECUTION.md`, `docs/CONFIGURATION.md`, `docs/en/CONFIGURATION.md`,
+  `.opencode/tasks/log.md`.
+- **Проверки:** `helm lint charts/synth` — **0 failed**; `helm template … --set executor.enabled=true
+  --set executor.networkClasses.enabled=true` — exit 0, **3** NetworkPolicy (подпись `synth.io/network`
+  в селекторах всех трёх + подпись пода статического пула); `helm template … --set
+  executor.networkClasses.enabled=false --set executor.networkPolicy.enabled=true` — exit 0, **1**
+  NetworkPolicy (старая); YAML всех политик разобран `yaml.safe_load_all` (`policyTypes`/
+  `podSelector`/`egress` — как задумано); `restrictedEgress` — правило попало в egress `restricted`;
+  `networkClass=bogus` — **ошибка рендера** (fail-closed) в обоих режимах (`executor.enabled: true`
+  и `false`); `networkClasses: null` — рендер без ошибок; классы при `executor.enabled: false` +
+  `provisioner.enabled: true` — 3 политики (динамические пулы покрыты);
+  `networkClasses.enabled: true` + `networkPolicy.enabled: true` + `metricsIngress` — старая
+  политика не рендерится и её правило (`monitoring`) в манифест не попадает.
+- **Отклонения/решения:** (1) **подпись класса — единственный селектор** политики: у подов
+  динамических пулов нет `app.kubernetes.io/instance`/`component`, поэтому сузить выбор до релиза
+  нельзя; следствие — в одном namespace под правила попадают все пулы этого класса (в т.ч. другого
+  релиза Synth) — задокументировано как ограничение; (2) **`metricsIngress` при включённых
+  классах не применяется** (старая политика не рендерится) — отдельного значения
+  `networkClasses.metricsIngress` в этом слайсе нет (вне объёма): скрейп `/metrics` из другого
+  namespace потребует своей NetworkPolicy; (3) **класс по умолчанию у динамических пулов — `full`**
+  (дефолт provisioner'а `profile.network ?? 'full'`) — fail-open: профиль без `network` получает
+  `synth.io/network=full`; код provisioner'а не менялся, поведение задокументировано в
+  README/EXECUTION; (4) валидация класса выполняется **всегда** (даже при выключенных классах) —
+  опечатка в values не проходит молча; (5) `restricted` разрешает только DNS, если
+  `restrictedEgress` пуст — «реестры/git/прокси» оператор задаёт сам (allowlist).
+- **Ограничения:** классы работают в **namespace чарта** (поды пулов provisioner'а — там же;
+  provisioner с другим namespace под политики не попадёт); CNI должен поддерживать NetworkPolicy
+  (иначе объекты есть, а ограничения не применяются); селектор — только подпись класса; `none` —
+  без DNS (имена внутри кластера не разрешаются, git/npm внутри пула не работают); добавление
+  pod-label в шаблон Deployment'а → **rollout** при обновлении релиза; правило PROP-137 «класс
+  `full` — только если профиль явно разрешён в `project.executor.allowedProfiles`» **не
+  обеспечивается** NetworkPolicy (чарт не знает, какой профиль выберет сессия: потолок профилей —
+  уровень core) — задокументировано как ограничение.
+- **Остаток 137b:** gateway-addons по тому же правилу non-root/read-only; `networkClasses.metricsIngress`
+  (скрейп `/metrics` при включённых классах); fail-open дефолт класса у динамических пулов (`full`) —
+  кандидат на смену в provisioner'е.
+- **Коммит:** не делался.
