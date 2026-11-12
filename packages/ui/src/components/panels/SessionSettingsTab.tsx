@@ -13,7 +13,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { getToolDisplayName } from '@/lib/toolIcons'
 import { formatDateTime } from '@/lib/formatDate'
-import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
+import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ExecutionProfilesDto, type ToolsPolicy } from '@/lib/api/synthApi'
 import type { ProjectData, SessionData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
@@ -269,6 +269,11 @@ function buildSettingsBody(
   // наследует глобальный `decision.enabled` (иначе любой автосейв отключал бы
   // decision-уровень для всех сессий).
   delete restSettings.decisionFirst
+  // PROP-135 Ф6b: профиль исполнения сохраняется отдельной секцией (немедленный
+  // автосейв `{ settings: { executorProfile } }`, сервер сливает настройки).
+  // Из тела общего автосейва ключ исключаем: иначе снимок формы, сделанный до
+  // смены профиля, вернул бы старое значение.
+  delete restSettings.executorProfile
 
   // Лимит ответа: невалидный ввод не сохраняется (тело не должно уносить NaN/выход
   // за диапазон) — оставляем серверное значение, чтобы автосейв другого поля не сбросил его.
@@ -903,6 +908,11 @@ export function SessionSettingsTab() {
           <ModelSelector sessionId={sessionId} alwaysShowLabel />
         </Section>
 
+        {/* PROP-135 Ф6b: профиль исполнения сессии (пусто — наследовать). */}
+        <Section title={t('sessionSettings.executor.title')}>
+          <SessionExecutorProfileField session={session} project={project} />
+        </Section>
+
         {/* Таймаут подтверждения (ask) */}
         <Section title={t('sessionSettings.askTimeout')}>
           <label className="flex items-center gap-3 cursor-pointer">
@@ -1468,6 +1478,119 @@ export function SessionSettingsTab() {
         )}
 
     </PanelTab>
+  )
+}
+
+/**
+ * PROP-135 Ф6b: профиль исполнения сессии.
+ *
+ * Пустое значение — наследовать (агент → проект → умолчание инстанса): сервер
+ * трактует `executorProfile: ''` как явный сброс и ключ не сохраняет. Каталог
+ * профилей читается из `GET /execution/profiles`; ошибка загрузки вкладку не
+ * блокирует — остаётся «Наследовать» и предупреждение, а сохранённое значение
+ * видно в списке всегда (профиль мог исчезнуть из каталога).
+ */
+function SessionExecutorProfileField({
+  session,
+  project,
+}: {
+  session: SessionData
+  project: ProjectData | null
+}) {
+  const { t } = useI18n()
+  const { notify } = useNotification()
+  const { run, isPending } = usePanelSettingSave({ sessionId: session.id })
+
+  const [profiles, setProfiles] = useState<ExecutionProfilesDto | null>(null)
+  const [profilesFailed, setProfilesFailed] = useState(false)
+
+  // Каталог нужен только для опций селекта и подписи профиля по умолчанию.
+  useEffect(() => {
+    let cancelled = false
+    Promise.resolve()
+      .then(() => synthApi.getExecutionProfiles())
+      .then((dto) => {
+        if (cancelled) return
+        setProfiles(dto)
+        setProfilesFailed(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setProfiles(null)
+        setProfilesFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const current = (session.settings.executorProfile as string | undefined) ?? ''
+  const projectProfile = (project?.executor?.profile ?? '').trim()
+
+  // Опции: каталог инстанса + текущее значение сессии (даже если профиль исчез
+  // из каталога — иначе выбор нельзя было бы увидеть и сбросить).
+  const profileNames: string[] = []
+  for (const name of profiles?.profiles ?? []) {
+    if (!profileNames.includes(name)) profileNames.push(name)
+  }
+  if (current && !profileNames.includes(current)) profileNames.push(current)
+
+  const inheritLabel = profiles
+    ? t('sessionSettings.executor.inheritDefault', { profile: profiles.defaultProfile })
+    : t('sessionSettings.executor.inheritUnknown')
+  const inheritHint = projectProfile
+    ? t('sessionSettings.executor.inheritHintProject', { profile: projectProfile })
+    : t('sessionSettings.executor.inheritHint')
+
+  const handleChange = async (value: string) => {
+    if (value === current) return
+    await run({
+      key: 'executorProfile',
+      // Пустая строка — явный сброс: сервер не сохраняет ключ, сессия наследует.
+      run: () => synthApi.updateSession(session.id, { settings: { executorProfile: value } }),
+      onSuccess: (updated) => useSessionsStore.getState().upsertSession(updated),
+      // Ошибку показываем сами: в тексте нужен ответ сервера (или пометка о правах).
+      silentError: true,
+      onError: (err) => notify({
+        text: (err as { status?: number } | null)?.status === 403
+          ? t('sessionSettings.executor.forbidden')
+          : t('sessionSettings.executor.saveError', {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+        type: 'error',
+        category: 'error',
+        sessionId: session.id,
+      }),
+    })
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5" data-testid="session-executor">
+      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        <span>{t('sessionSettings.executor.label')}</span>
+        <select
+          value={current}
+          onChange={(e) => void handleChange(e.target.value)}
+          disabled={isPending('executorProfile')}
+          aria-label={t('sessionSettings.executor.label')}
+          data-testid="session-executor-profile"
+          className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+        >
+          <option value="">{inheritLabel}</option>
+          {profileNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-[0.625rem] text-muted-foreground/60">{inheritHint}</p>
+      {profilesFailed && (
+        <div className="text-[0.625rem] text-status-warning" data-testid="session-executor-profiles-error">
+          {t('sessionSettings.executor.loadError')}
+        </div>
+      )}
+    </div>
   )
 }
 

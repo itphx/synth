@@ -1953,6 +1953,16 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Таймаут подтверждения (сек)',
   'sessionSettings.askTimeoutEnabled': 'Включено',
   'sessionSettings.askTimeoutDisabled': 'Выключено',
+  // PROP-135 Ф6b: профиль исполнения сессии (пусто — наследовать)
+  'sessionSettings.executor.title': 'Исполнение',
+  'sessionSettings.executor.label': 'Профиль исполнения',
+  'sessionSettings.executor.inheritDefault': 'Наследовать (по умолчанию: {profile})',
+  'sessionSettings.executor.inheritUnknown': 'Наследовать (по умолчанию)',
+  'sessionSettings.executor.inheritHint': 'Наследуется: агент → проект → по умолчанию',
+  'sessionSettings.executor.inheritHintProject': 'Наследуется: агент → проект ({profile}) → по умолчанию',
+  'sessionSettings.executor.loadError': 'Не удалось загрузить профили исполнения — показано только текущее значение.',
+  'sessionSettings.executor.saveError': 'Не удалось сохранить профиль исполнения: {error}',
+  'sessionSettings.executor.forbidden': 'Недостаточно прав для смены профиля исполнения',
   // Лимит ответа (`max_tokens`, 0 = авто)
   'sessionSettings.maxTokens': 'Лимит ответа',
   'sessionSettings.maxTokensHint': '0 — авто: лимит модели из каталога или инстанса (по умолчанию 8192). Для моделей с обязательным reasoning действует минимум 8192, потому что размышления расходуют тот же бюджет.',

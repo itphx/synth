@@ -1976,6 +1976,16 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Approval timeout (sec)',
   'sessionSettings.askTimeoutEnabled': 'Enabled',
   'sessionSettings.askTimeoutDisabled': 'Disabled',
+  // PROP-135 Ф6b: execution profile of the session (empty — inherit)
+  'sessionSettings.executor.title': 'Execution',
+  'sessionSettings.executor.label': 'Execution profile',
+  'sessionSettings.executor.inheritDefault': 'Inherit (default: {profile})',
+  'sessionSettings.executor.inheritUnknown': 'Inherit (default)',
+  'sessionSettings.executor.inheritHint': 'Inherited: agent → project → default',
+  'sessionSettings.executor.inheritHintProject': 'Inherited: agent → project ({profile}) → default',
+  'sessionSettings.executor.loadError': 'Failed to load execution profiles — only the current value is shown.',
+  'sessionSettings.executor.saveError': 'Failed to save execution profile: {error}',
+  'sessionSettings.executor.forbidden': 'Insufficient permissions to change the execution profile',
   // Response limit (`max_tokens`, 0 = auto)
   'sessionSettings.maxTokens': 'Response limit',
   'sessionSettings.maxTokensHint': '0 — auto: the model limit from the catalog or the instance (8192 by default). Models with mandatory reasoning have a minimum of 8192, because thinking consumes the same budget.',
