@@ -349,6 +349,25 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
 
+  packages/provisioner:
+    dependencies:
+      hono:
+        specifier: ^4.9.0
+        version: 4.13.13
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.19
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.12(@types/node@22.19.19)(@vitest/coverage-v8@4.1.12)(jsdom@29.1.1)(vite@8.3.5(@types/node@22.19.19)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.1))
+
   packages/sdk:
     dependencies:
       '@itphx/synth-shared':
