@@ -924,6 +924,25 @@ NetworkPolicy на каждый класс. Классы одинаковы дл
 
 Подробности и примеры — README чарта, §«Сетевые классы пулов».
 
+### Сборка образов: remote builder (`DOCKER_HOST`/`BUILDKIT_HOST`, PROP-137 Ф5)
+
+Сборка образов (`docker build`) из сессии — **только на удалённом builder'е**: в образах
+`devops`/`full` есть docker CLI, но демона и `docker.sock` нет, `--privileged` и
+hostPath-демон запрещены. Это **не** `config.yaml`: настройка живёт в env пула —
+`DOCKER_HOST`/`BUILDKIT_HOST` (сборка), `DOCKER_TLS_VERIFY`/`DOCKER_CERT_PATH` (TLS,
+только **путь**; сертификаты — Secret/файлы, инвариант 13).
+
+| Где | Как задать env |
+|---|---|
+| Динамический пул (`provider: kubernetes`) | `provisioner.profiles.<name>.env` (values чарта) → env контейнера пода |
+| Статический пул (`executor` Deployment) | `executor.extraEnv` **в чарте нет**; env задаёт владелец развёртывания (патч/свой манифест) |
+
+Сеть: `restricted` требует правила egress к builder'у
+(`executor.networkClasses.restrictedEgress`), `none` — сборка невозможна; при недоступном
+builder'е команда падает в shell ошибкой docker CLI. Пример профиля, Secret с
+сертификатами и предупреждения — [EXECUTION.md](./EXECUTION.md) §10.2.1 и README чарта,
+§«Remote builder для сборок». Сам builder — внешняя инфраструктура, чарт его не разворачивает.
+
 ### Provisioner пулов (`SYNTH_PROVISIONER_*`, values `provisioner.*`)
 
 Отдельный процесс `@itphx/synth-provisioner` (PROP-135 Ф4b-2b): выдаёт control

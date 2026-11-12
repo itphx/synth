@@ -1549,6 +1549,77 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
   `1` CPU / `2Gi`, limits `4` CPU / `8Gi`, таймаут команды 30 мин, буфер вывода
   32 МиБ — лог `vite`/`tsc` большой).
 
+### 10.2.1. Сборка образов: remote builder (PROP-137 Ф5)
+
+Сборка образов из сессии идёт **только на удалённом builder'е**. В поде есть docker
+CLI (flavor'ы `devops`/`full`, §10.2), но демона в поде нет и не будет — сборка
+уезжает наружу по сети:
+
+- **Запрещено:** монтирование `docker.sock` (в т.ч. hostPath `/var/run/docker.sock`),
+  `--privileged`, `hostNetwork`, hostPath-демон, `dockerd`/`containerd` внутри пода — те
+  же правила, что в §8 («Без `docker.sock`») и PROP-137 («Runtime»).
+- **Разрешено:** docker API по сети — `DOCKER_HOST=tcp://<builder>:2376` (docker CLI)
+  либо BuildKit — `BUILDKIT_HOST=tcp://<builder>:1234` (`docker buildx`/`buildctl`).
+  Контекст сборки пакует **клиент в поде** и отправляет builder'у: файлы читаются из
+  workspace, `.dockerignore` действует на клиенте — сокет для этого не нужен.
+- **Аутентификация/TLS — только Secret/файлы** (инвариант 13): в env пода идут **пути**
+  (`DOCKER_CERT_PATH`), материалы (`ca.pem`/`cert.pem`/`key.pem`) — в Secret, том
+  `readOnly`; значения и PEM не попадают в values/`config.yaml`/логи. Per-project доступ
+  к builder'у — внешние доступы ([ADR-105](./arch_decisions/adr-105-external-credentials.md)),
+  а не поля профиля.
+- **Rootless buildah** — отдельный opt-in профиль (subuid/subgid, `/dev/fuse`, userns),
+  **не** дефолт; в этом слайсе не настраивается и не документируется как путь сборки.
+
+Пример профиля `devops` (динамический пул) — в env только пути:
+
+```yaml
+provisioner:
+  provider: kubernetes
+  profiles:
+    devops:
+      image: git.itphx.ru/itphx/synth-executor:<v>-devops   # docker CLI — в образе
+      network: restricted        # к builder'у — отдельным правилом egress (ниже)
+      env:
+        DOCKER_HOST: tcp://builder.example:2376
+        DOCKER_TLS_VERIFY: "1"
+        DOCKER_CERT_PATH: /etc/synth/builder-certs
+```
+
+Сертификаты — Secret (том монтирует **развёртывание**, см. ограничение ниже):
+
+```bash
+kubectl create secret generic synth-builder-certs -n synth \
+  --from-file=ca.pem=./ca.pem --from-file=cert.pem=./cert.pem --from-file=key.pem=./key.pem
+```
+
+**Ограничение по доставке env/томов (важно).**
+
+- **Динамические пулы** — `provisioner.profiles.<name>.env`: только env (строки);
+  тома профиль не задаёт, у пода пула фиксированный набор (workspace PVC, `/tmp`,
+  `/home/synth`, Secret токена пула/политики). То есть каталог сертификатов должен быть
+  примонтирован развёртыванием **до** того, как путь в env начнёт что-то значить;
+  профиль описывает только путь.
+- **`static`-пул** (`executor` Deployment) — `executor.extraEnv` в чарте **нет**
+  (в этом слайсе не добавляется — infra-изменение), `extraVolumes` — тоже. Env
+  статического пула задаёт владелец развёртывания (патч/свой манифест поверх чарта).
+  Provisioner при `provider: static` env в под **не** добавляет — он лишь выдаёт адрес
+  (§2, «Ф4b-2b: provisioner пулов»).
+
+**Сеть и отказ.**
+
+- `restricted` (дефолт статического пула) по умолчанию разрешает только DNS — адрес
+  builder'а нужно внести в `executor.networkClasses.restrictedEgress` (для динамического
+  пула — `network: restricted` в профиле + тот же allowlist, либо `full`);
+- `none` — сборка **невозможна**: egress нет вовсе, не резолвится даже имя builder'а;
+- builder недоступен, сертификаты не читаются, TLS не сходится — команда **падает в
+  shell** обычной ошибкой docker CLI (`Cannot connect to the Docker daemon at tcp://…`,
+  `x509: certificate signed by unknown authority`). Control plane такие сбои не
+  классифицирует — это вывод `execute_shell`, а не состояние пула.
+
+**Границы.** Здесь зафиксирован способ сборки и его конфигурация; builder — **внешняя
+инфраструктура**: чарт его не разворачивает, даёт только профили/env пулов. Примеры
+values и предупреждения — README чарта, §«Remote builder для сборок».
+
 ### 10.3. CI
 
 - Сборка и публикация образов — kaniko в джобе `build-docker`

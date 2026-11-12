@@ -915,6 +915,27 @@ The dynamic pools — the **provisioner**: the class comes from the profile
 
 Details and examples — chart README, §«Pool network classes».
 
+### Image builds: remote builder (`DOCKER_HOST`/`BUILDKIT_HOST`, PROP-137 F5)
+
+Building images (`docker build`) from a session happens **only on a remote builder**: the
+`devops`/`full` images ship the docker CLI, but there is no daemon and no `docker.sock`,
+and `--privileged` plus a hostPath daemon are forbidden. This is **not** `config.yaml`:
+the setting lives in the pool env — `DOCKER_HOST`/`BUILDKIT_HOST` (the build),
+`DOCKER_TLS_VERIFY`/`DOCKER_CERT_PATH` (TLS, a **path** only; certificates are a
+Secret/file, invariant 13).
+
+| Where | How to set the env |
+|---|---|
+| Dynamic pool (`provider: kubernetes`) | `provisioner.profiles.<name>.env` (chart values) → the pool pod container env |
+| Static pool (the `executor` Deployment) | `executor.extraEnv` **does not exist** in the chart; the deployment owner sets the env (patch/own manifest) |
+
+Network: `restricted` needs an egress rule to the builder
+(`executor.networkClasses.restrictedEgress`), `none` makes builds impossible; with an
+unreachable builder the command fails in the shell with a docker CLI error. A profile
+example, the certificate Secret and the warnings — [EXECUTION.md](../EXECUTION.md) §10.2.1
+and the chart README, §«Remote builder для сборок». The builder itself is external
+infrastructure; the chart does not deploy it.
+
 ### Pool provisioner (`SYNTH_PROVISIONER_*`, `provisioner.*` values)
 
 A separate `@itphx/synth-provisioner` process (PROP-135 F4b-2b): it issues the

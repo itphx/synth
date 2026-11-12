@@ -1403,6 +1403,73 @@ Flavor'ы образа исполнителя (`synth-executor:<v>-<flavor>`) р
 контейнера (путь задаёт образ через `npm_config_store_dir`). Тома у
 исполнителя два: общий workspace (`executor.workspace.*`) и данные инстанса.
 
+### Remote builder для сборок (PROP-137)
+
+Образы (`docker build`) собираются **не в поде**, а на удалённом builder'е.
+В образах `devops`/`full` есть docker CLI, но **нет демона**, и чарт не
+монтирует `docker.sock`: сокета, `--privileged` и hostPath-демона в чарте нет
+и не будет. Сборка уходит по сети — `DOCKER_HOST` (docker API) или
+`BUILDKIT_HOST` (BuildKit); контекст пакует CLI в поде, `.dockerignore`
+работает на клиенте ([docs/EXECUTION.md](../../docs/EXECUTION.md) §10.2.1).
+
+```yaml
+# my-values.yaml — профиль пула с remote builder
+provisioner:
+  enabled: true
+  provider: kubernetes
+  token:
+    existingSecret: synth-provisioner-token
+  profiles:
+    devops:
+      image: git.itphx.ru/itphx/synth-executor:0.13.8-devops   # docker CLI в образе
+      network: restricted          # к builder'у — правилом egress, не full «на всякий»
+      resources:
+        requests: {cpu: 1, memory: 2Gi}
+        limits: {cpu: 4, memory: 8Gi}
+      env:
+        DOCKER_HOST: tcp://builder.example:2376
+        DOCKER_TLS_VERIFY: "1"
+        DOCKER_CERT_PATH: /etc/synth/builder-certs   # только ПУТЬ, не PEM
+      mcpServers: []               # необязательно; дефолт образа остаётся
+```
+
+Сертификаты builder'а — **Secret** (значения в values не кладутся,
+инвариант 13):
+
+```bash
+kubectl create secret generic synth-builder-certs -n synth \
+  --from-file=ca.pem=./ca.pem --from-file=cert.pem=./cert.pem --from-file=key.pem=./key.pem
+```
+
+```yaml
+# том readOnly /etc/synth/builder-certs ← Secret synth-builder-certs
+# добавляет развёртывание: параметров монтирования в чарте нет
+```
+
+> ⚠️ **Профиль умеет только `env`.** `provisioner.profiles.<name>` не задаёт
+> тома: у пода пула фиксированный набор (workspace PVC, `/tmp`, `/home/synth`,
+> Secret токена). Поэтому `DOCKER_CERT_PATH` осмыслен только после того, как
+> каталог сертификатов примонтирован развёртыванием; сам профиль несёт лишь
+> путь.
+>
+> ⚠️ **Статический пул** (`executor` Deployment): `executor.extraEnv` и
+> `extraVolumes` в чарте **нет** — env/тома такого пула задаёт владелец
+> развёртывания (патч/свой манифест). Provisioner при `provider: static` env в
+> под не добавляет.
+
+**Сеть.** `restricted` (дефолт статического пула) разрешает только DNS —
+адрес builder'а нужно внести в `executor.networkClasses.restrictedEgress`
+(для динамического пула — класс из профиля + тот же allowlist, либо `full`).
+Класс `none` означает, что сборка **невозможна**: egress нет вовсе, имя
+builder'а не резолвится. Если builder недоступен или TLS не сходится, команда
+падает в shell обычной ошибкой docker CLI (`Cannot connect to the Docker
+daemon…`, `x509: …`) — это вывод `execute_shell`, а не состояние пула.
+
+> **Без `--privileged` и без демона.** Rootless buildah — отдельный
+> opt-in-профиль (subuid/subgid, `/dev/fuse`, userns), не дефолт; чарт его не
+> настраивает. Развёртывание самого builder'а — внешняя инфраструктура, вне
+> чарта.
+
 ### Вложенное монтирование (путь внутри пути)
 
 У backend'а общий том workspace смонтирован **внутрь** тома данных: `data` →
