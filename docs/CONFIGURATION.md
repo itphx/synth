@@ -793,7 +793,15 @@ session.settings.executorProfile → agentDefinition.executorProfile → project
   значение, пустой `allowedProfiles` = без ограничения; неизвестный профиль при доступном каталоге →
   `400 VALIDATION_ERROR`;
 - `PATCH /api/v2/sessions/:id { settings: { executorProfile } }` — существование проверяется при
-  доступном каталоге (иначе `400 VALIDATION_ERROR`), пустая строка — сброс.
+  доступном каталоге (иначе `400 VALIDATION_ERROR`), пустая строка — сброс;
+- `POST /api/v2/agents` (админка «Агенты» → «Профиль исполнения») — поля
+  `executor_profile` и `allowed_profiles` (camelCase `executorProfile`/`allowedProfiles`
+  принимаются тоже): `undefined` (поле не передано) сохраняет прежнее значение записи,
+  `null`/`''` сбрасывают профиль (наследовать проект/инстанс), `[]`/`null` снимают ограничение
+  списка. При доступном каталоге профиль обязан в нём существовать, а список — быть его
+  подмножеством (иначе `400 VALIDATION_ERROR`); без каталога (`inline`/instance-пул) проверка
+  пропускается. DTO списка агентов отдаёт `executor_profile`/`allowed_profiles`
+  (`null` — не задано).
 
 **Провайдер пулов (PROP-135, Ф4b-1).** `execution.remote.provider` решает, **откуда** берётся
 адрес пула:

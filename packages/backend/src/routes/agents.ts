@@ -3,7 +3,7 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { JsonStoreLike } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { createAgentRoutes as createCoreAgentRoutes } from '@itphx/synth-core';
-import type { AgentRegistry, ContextFileRepository } from '@itphx/synth-core';
+import type { AgentRegistry, ContextFileRepository, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { requireAdminRoleOrScope } from '../auth/guards.js';
 import { t } from '../lib/i18n.js';
 
@@ -27,6 +27,7 @@ export function createAgentRoutes(
   agentRegistry?: AgentRegistry,
   getDefaultAgentId?: () => string | Promise<string>,
   contextFiles?: ContextFileRepository,
+  executionProfileCatalog?: ExecutionProfileCatalog,
 ): Hono {
   const app = new Hono();
 
@@ -40,6 +41,8 @@ export function createAgentRoutes(
       allGuard: kit.requireAdmin,
       detailGuard: kit.requireAdmin,
       roleFiles: contextFiles,
+      // PROP-135 Ф6a: каталог профилей — проверка профиля агента при записи.
+      ...(executionProfileCatalog ? { executionProfileCatalog } : {}),
       messages: {
         idRequired: (c) => t('errors.validation.idRequired', undefined, c),
         invalidAgentId: (c) => t('errors.validation.invalidAgentId', undefined, c),

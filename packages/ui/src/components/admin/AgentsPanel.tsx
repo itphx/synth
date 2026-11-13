@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { TOOL_CAPABILITY_META, EFFORT_LEVELS } from '@itphx/synth-shared/types'
-import { synthApi, type AgentInfo, type AgentMode, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
+import { synthApi, type AgentInfo, type AgentMode, type AgentSavePayload, type ExecutionProfilesDto, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
 import { Icon, isIconName } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
 import { ColorPicker } from './ColorPicker'
@@ -15,6 +15,7 @@ import { useAgentsStore } from '@/stores/agentsStore'
 import { SshKeysSettings } from '../settings/SshKeysSettings'
 import {
   NumberField,
+  MultiSelectField,
   SettingsActions,
   SettingsField,
   SettingsItem,
@@ -74,6 +75,10 @@ interface AgentForm {
    * (тир выводится из уровня размышлений, поле в запрос не отправляется).
    */
   effort: string
+  /** PROP-135 Ф6a: профиль исполнения; `''` — наследовать (проект/инстанс). */
+  executor_profile: string
+  /** PROP-135 Ф6a: потолок разрешённых профилей; пусто — без ограничения. */
+  allowed_profiles: string[]
   agent_mode: AgentMode[]
   context_file: string
   capabilities: string[]
@@ -86,6 +91,7 @@ const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
   // undefined = Auto (дефолт модели), а не 0.7 — значение задаёт пользователь
   temperature: undefined, top_p: 0, top_k: 0, reasoning_level: '', effort: '',
+  executor_profile: '', allowed_profiles: [],
   agent_mode: ['primary'], context_file: '',
   capabilities: [], max_steps: 0, icon: '', color: '',
 })
@@ -105,6 +111,10 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     reasoning_level: (a.reasoning_level || (detail?.reasoningLevel as string) || ''),
     // «Авто» = пустая строка: тир выводится из уровня размышлений.
     effort: a.effort || (detail?.effort as string) || '',
+    // PROP-135 Ф6a: профиль исполнения и потолок (camelCase в detail,
+    // snake_case в DTO списка).
+    executor_profile: a.executor_profile || (detail?.executorProfile as string) || '',
+    allowed_profiles: (a.allowed_profiles ?? (detail?.allowedProfiles as string[] | undefined) ?? []).slice(),
     agent_mode: agentMode,
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
@@ -128,6 +138,12 @@ export const AgentsPanel = () => {
   /** Сохранённый в агенте тир усилия ('' — «Авто»): нужен, чтобы сброс ушёл `null`. */
   const [savedEffort, setSavedEffort] = useState('')
   const [contextFiles, setContextFiles] = useState<string[]>([])
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (`GET /execution/profiles`).
+   * `null` — недоступен (ошибка сети/403) или профилей нет (`inline`): поля
+   * профиля скрыты, а сохранение их не трогает (прежние значения остаются).
+   */
+  const [executionProfiles, setExecutionProfiles] = useState<ExecutionProfilesDto | null>(null)
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
   const [defaultAgentInfo, setDefaultAgentInfo] = useState<{
     defaultAgent: string
@@ -214,6 +230,14 @@ export const AgentsPanel = () => {
       const files = [...(roleCtx.files || []), ...(userCtx.files || [])]
       setContextFiles(files.map((f) => f.name))
     } catch { /* ignore */ }
+
+    // PROP-135 Ф6a: каталог профилей исполнения — для селекта профиля агента.
+    // Ошибка/пустой каталог (inline) не ломают панель: поля профиля скрыты.
+    try {
+      setExecutionProfiles(await synthApi.getExecutionProfiles())
+    } catch {
+      setExecutionProfiles(null)
+    }
   }
 
   useEffect(() => { load(); loadMeta(); loadDefaultAgent() }, [])
@@ -255,6 +279,25 @@ export const AgentsPanel = () => {
     setError('')
   }
 
+  // PROP-135 Ф6a: каталог профилей известен и непуст — поля профиля агента
+  // показываются; иначе (ошибка/`inline`) они скрыты и в payload не попадают.
+  const profileCatalog = (executionProfiles?.profiles ?? []).map((n) => n.trim()).filter(Boolean)
+  const profilesAvailable = profileCatalog.length > 0
+
+  /** Имена для селекта/списка: каталог + сохранённые значения (даже вне каталога). */
+  const visibleProfileNames = (): string[] => {
+    const names: string[] = []
+    const push = (name: string | undefined) => {
+      const trimmed = (name ?? '').trim()
+      if (!trimmed || names.includes(trimmed)) return
+      names.push(trimmed)
+    }
+    for (const name of profileCatalog) push(name)
+    push(form.executor_profile)
+    for (const name of form.allowed_profiles) push(name)
+    return names
+  }
+
   const handleSave = async () => {
     if (!form.id.trim()) { setError(t('common.nameRequired')); return }
     setSaving(true)
@@ -275,12 +318,22 @@ export const AgentsPanel = () => {
         // размышлений). Если у агента тир был сохранён, сброс идёт явным
         // `null` — иначе сервер оставил бы прежнее значение (как у temperature).
         ...(form.effort
-          ? { effort: form.effort }
+          ? { effort: form.effort as AgentSavePayload['effort'] }
           : savedEffort
             ? { effort: null }
             : {}),
         // legacy mode, kept for backward compat — always "simple"
         mode: 'simple',
+        // PROP-135 Ф6a: профиль исполнения и потолок разрешённых профилей.
+        // `null`/`''` сбрасывают профиль (наследовать проект/инстанс), пустой
+        // список — снимает ограничение. Каталог недоступен — поля не
+        // отправляются, иначе сохранение затирало бы прежние значения.
+        ...(profilesAvailable
+          ? {
+              executor_profile: form.executor_profile.trim() || null,
+              allowed_profiles: form.allowed_profiles,
+            }
+          : {}),
         agent_mode: form.agent_mode,
         context_file: form.context_file || undefined,
         capabilities: form.capabilities,
@@ -542,6 +595,41 @@ export const AgentsPanel = () => {
               ))}
             </SelectContent>
           </SelectField>
+
+          {/* PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых.
+              Каталог недоступен (`inline`/ошибка) — поля скрыты, сохранение их
+              не трогает. */}
+          {profilesAvailable && (
+            <>
+              <SelectField
+                label={t('admin.agents.executorProfile')}
+                description={t('admin.agents.executorProfileHint')}
+                tooltip={t('settings.help.agents.executorProfile')}
+                value={form.executor_profile}
+                onValueChange={(value) => setForm({ ...form, executor_profile: value })}
+                ariaLabel={t('admin.agents.executorProfile')}
+                triggerTestId="agent-executor-profile"
+              >
+                <SelectContent>
+                  <SelectItem value="">{t('admin.agents.executorProfile.inherit')}</SelectItem>
+                  {visibleProfileNames().map((name) => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+
+              <MultiSelectField
+                label={t('admin.agents.allowedProfiles')}
+                description={t('admin.agents.allowedProfilesHint')}
+                tooltip={t('settings.help.agents.allowedProfiles')}
+                values={form.allowed_profiles}
+                options={visibleProfileNames().map((name) => ({ value: name, label: name }))}
+                onChange={(next) => setForm({ ...form, allowed_profiles: next })}
+                emptyText={t('admin.agents.allowedProfilesEmpty')}
+                testIdPrefix="agent-allowed-profiles"
+              />
+            </>
+          )}
 
           {/* Max steps — для всех режимов, 0 = без ограничений */}
           <NumberField

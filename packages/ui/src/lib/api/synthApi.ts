@@ -117,7 +117,7 @@ export type {
 } from './workspace'
 export type { GitRepoConfigData } from './git'
 export type { SSHKeyMetaData, SSHKeyCreateBody, SSHKeyUpdateBody, SSHKeyUsage } from './ssh-keys'
-export type { AgentMode, AgentInfo, AgentsListResponse } from './agents'
+export type { AgentMode, AgentInfo, AgentSavePayload, AgentsListResponse } from './agents'
 export type { ProviderInfo, ProviderFetchIconResult, ProviderGroupInfo } from './providers'
 export type { ModelInfo, ModelGroup, ModelsPage, ModelsQuery, ModelGroupsPage } from './models'
 export { MODELS_PAGE_LIMIT, mergeModelGroups, groupModelsByProvider } from './models'

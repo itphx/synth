@@ -26,8 +26,48 @@ export interface AgentInfo {
   provider: string | null
   model: string | null
   context_file: string | null
+  /**
+   * PROP-135 Ф6a: профиль исполнения агента (`execution.remote.profiles`).
+   * `null`/отсутствует — наследовать профиль проекта/инстанса.
+   */
+  executor_profile?: string | null
+  /**
+   * PROP-135 Ф6a: потолок разрешённых профилей агента.
+   * `null`/пустой список — без ограничения.
+   */
+  allowed_profiles?: string[] | null
   is_builtin: boolean
   is_overridden: boolean
+}
+
+/**
+ * Тело `POST /agents` (создание/обновление override).
+ *
+ * Поля профиля исполнения: `executor_profile` — строка или `null` (сброс),
+ * `allowed_profiles` — массив имён или `null`/`[]` (снять ограничение);
+ * отсутствие поля сохраняет прежнее значение записи.
+ */
+export interface AgentSavePayload {
+  id: string
+  display_name?: string
+  description?: string
+  provider?: string
+  model?: string
+  temperature?: number | null
+  top_p?: number
+  top_k?: number
+  reasoning_level?: string
+  effort?: EffortLevel | null
+  mode?: 'simple'
+  agent_mode?: AgentMode[]
+  context_file?: string
+  capabilities?: string[]
+  max_steps?: number
+  icon?: string
+  color?: string
+  executor_profile?: string | null
+  allowed_profiles?: string[] | null
+  [key: string]: unknown
 }
 
 export interface AgentsListResponse {
@@ -52,7 +92,7 @@ export const agentsApi = {
     return fetchJSON<Record<string, unknown>>(`${BASE_URL}/agents/${encodeURIComponent(id)}`)
   },
 
-  async saveAgent(data: Record<string, unknown>): Promise<AgentInfo> {
+  async saveAgent(data: AgentSavePayload): Promise<AgentInfo> {
     return fetchJSON<AgentInfo>(`${BASE_URL}/agents`, {
       method: 'POST',
       body: JSON.stringify(data),

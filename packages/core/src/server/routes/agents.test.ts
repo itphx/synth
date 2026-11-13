@@ -511,3 +511,176 @@ describe('Agent API Routes — scope-гейт записи (ADR-052)', () => {
     expect((await store.load('interactive'))?.id).toBe('interactive');
   });
 });
+
+/**
+ * PROP-135 Ф6a: профиль исполнения агента (`executor_profile`) и потолок
+ * разрешённых профилей (`allowed_profiles`) в admin-API агентов.
+ *
+ * Каталог профилей передаётся опцией (`executionProfileCatalog`): при его
+ * наличии профиль обязан существовать, список — быть подмножеством каталога;
+ * без каталога (inline/instance-пул) проверка пропускается.
+ */
+describe('Agent API Routes — профиль исполнения агента (PROP-135 Ф6a)', () => {
+  let tmpDir: string;
+  let store: JsonStore<AgentDefinition>;
+
+  const CATALOG = {
+    profiles: ['default', 'devops', 'sandbox'],
+    defaultProfile: 'default',
+  };
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-agents-executor-'));
+    store = new JsonStore<AgentDefinition>({ dataDir: tmpDir, subdir: 'agents' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function createTestApp(catalog: typeof CATALOG | null = CATALOG) {
+    const app = new Hono();
+    app.route('/api/v2/agents', createAgentRoutes(createMockAuth(), store, undefined, undefined, {
+      ...(catalog ? { executionProfileCatalog: catalog } : {}),
+    }));
+    return app;
+  }
+
+  const postAgent = (app: Hono, body: Record<string, unknown>) =>
+    app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('DTO: без значения поля отдаются как null', async () => {
+    const app = createTestApp();
+    const list: any = await (await app.request('/api/v2/agents/all')).json();
+    const assistant = list.agents.find((a: any) => a.id === 'assistant');
+    expect(assistant.executor_profile).toBeNull();
+    expect(assistant.allowed_profiles).toBeNull();
+  });
+
+  it('POST сохраняет профиль и потолок (snake_case) и отдаёт их в DTO', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'exec-agent',
+      display_name: 'Exec',
+      executor_profile: 'devops',
+      allowed_profiles: ['devops', 'default'],
+    });
+    expect(res.status).toBe(201);
+    // POST отдаёт определение агента (camelCase), DTO списка — snake_case.
+    const body: any = await res.json();
+    expect(body.executorProfile).toBe('devops');
+    expect(body.allowedProfiles).toEqual(['devops', 'default']);
+
+    const stored = await store.load('exec-agent');
+    expect(stored?.executorProfile).toBe('devops');
+    expect(stored?.allowedProfiles).toEqual(['devops', 'default']);
+
+    const list: any = await (await app.request('/api/v2/agents/all')).json();
+    const item = list.agents.find((a: any) => a.id === 'exec-agent');
+    expect(item.executor_profile).toBe('devops');
+    expect(item.allowed_profiles).toEqual(['devops', 'default']);
+  });
+
+  it('POST принимает camelCase (executorProfile/allowedProfiles)', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'exec-camel',
+      executorProfile: 'sandbox',
+      allowedProfiles: ['sandbox'],
+    });
+    expect(res.status).toBe(201);
+    expect((await store.load('exec-camel'))?.executorProfile).toBe('sandbox');
+    expect((await store.load('exec-camel'))?.allowedProfiles).toEqual(['sandbox']);
+  });
+
+  it('POST сбрасывает профиль (null/пустая строка) и список ([])', async () => {
+    const app = createTestApp();
+    await postAgent(app, {
+      id: 'exec-reset',
+      executor_profile: 'devops',
+      allowed_profiles: ['devops'],
+    });
+
+    // `null` — сброс профиля, `[]` — снятие ограничения.
+    const reset = await postAgent(app, {
+      id: 'exec-reset',
+      executor_profile: null,
+      allowed_profiles: [],
+    });
+    expect(reset.status).toBe(200);
+    const resetBody: any = await reset.json();
+    expect(resetBody.executorProfile).toBeUndefined();
+    expect(resetBody.allowedProfiles).toBeUndefined();
+    expect((await store.load('exec-reset'))?.executorProfile).toBeUndefined();
+    expect((await store.load('exec-reset'))?.allowedProfiles).toBeUndefined();
+
+    // Пустая строка — тот же сброс (UI шлёт `''` при выборе «наследовать»).
+    await postAgent(app, { id: 'exec-reset', executor_profile: 'devops' });
+    const empty = await postAgent(app, { id: 'exec-reset', executor_profile: '' });
+    expect(empty.status).toBe(200);
+    expect((await store.load('exec-reset'))?.executorProfile).toBeUndefined();
+  });
+
+  it('POST без полей сохраняет прежние значения', async () => {
+    const app = createTestApp();
+    await postAgent(app, {
+      id: 'exec-keep',
+      executor_profile: 'devops',
+      allowed_profiles: ['devops'],
+    });
+    const res = await postAgent(app, { id: 'exec-keep', display_name: 'Обновлён' });
+    expect(res.status).toBe(200);
+    expect((await store.load('exec-keep'))?.executorProfile).toBe('devops');
+    expect((await store.load('exec-keep'))?.allowedProfiles).toEqual(['devops']);
+  });
+
+  it('неизвестный профиль при каталоге → 400 VALIDATION_ERROR, запись не меняется', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, { id: 'exec-bad', executor_profile: 'ghost' });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('не найден');
+    expect(await store.load('exec-bad')).toBeNull();
+  });
+
+  it('allowed_profiles — только подмножество каталога', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'exec-bad-list',
+      allowed_profiles: ['devops', 'ghost'],
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('ghost');
+    expect(await store.load('exec-bad-list')).toBeNull();
+  });
+
+  it('невалидный тип полей → 400 VALIDATION_ERROR', async () => {
+    const app = createTestApp();
+    const wrongProfile = await postAgent(app, { id: 'exec-type', executor_profile: 42 });
+    expect(wrongProfile.status).toBe(400);
+    expect((await wrongProfile.json() as any).error.code).toBe('VALIDATION_ERROR');
+
+    const wrongList = await postAgent(app, { id: 'exec-type', allowed_profiles: 'devops' });
+    expect(wrongList.status).toBe(400);
+    expect((await wrongList.json() as any).error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('без каталога профилей проверка пропускается', async () => {
+    const app = createTestApp(null);
+    const res = await postAgent(app, {
+      id: 'exec-nocatalog',
+      executor_profile: 'anything',
+      allowed_profiles: ['anything', 'else'],
+    });
+    expect(res.status).toBe(201);
+    expect((await store.load('exec-nocatalog'))?.executorProfile).toBe('anything');
+    expect((await store.load('exec-nocatalog'))?.allowedProfiles).toEqual(['anything', 'else']);
+  });
+});

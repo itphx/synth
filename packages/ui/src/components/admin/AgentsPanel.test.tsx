@@ -11,6 +11,13 @@ const apiMock = vi.hoisted(() => ({
   getContextFiles: vi.fn(async () => ({ files: [] })),
   getAgentDetail: vi.fn(async () => ({})),
   saveAgent: vi.fn(async () => ({})),
+  getExecutionProfiles: vi.fn(async () => ({
+    provider: 'static',
+    pooling: 'instance',
+    defaultProfile: 'default',
+    profiles: ['default'],
+    details: [],
+  })),
   toggleAgent: vi.fn(async () => undefined),
   deleteAgent: vi.fn(async () => undefined),
   getDefaultAgentInfo: vi.fn(async () => ({ defaultAgent: 'assistant', isOverridden: false, defaults: 'assistant' })),
@@ -437,5 +444,127 @@ describe('AgentsPanel — усилие рассуждений (effort, ADR-117)'
     // `null` = «поле не задано» на сервере (как у temperature); без него
     // прежнее значение осталось бы в записи агента.
     expect(payload.effort).toBeNull()
+  })
+})
+
+describe('AgentsPanel — профиль исполнения агента (PROP-135 Ф6a)', () => {
+  const CATALOG = {
+    provider: 'static' as const,
+    pooling: 'instance' as const,
+    defaultProfile: 'default',
+    profiles: ['default', 'devops', 'sandbox'],
+    details: [],
+  }
+
+  async function openEditor(container: HTMLElement): Promise<void> {
+    const editButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Edit',
+    ) as HTMLButtonElement | undefined
+    expect(editButton).toBeDefined()
+    await act(async () => {
+      editButton!.click()
+    })
+    await act(async () => {})
+  }
+
+  const profileTrigger = (container: HTMLElement) =>
+    container.querySelector('[data-testid="agent-executor-profile"]') as HTMLElement
+
+  const allowedChip = (container: HTMLElement, name: string) =>
+    container.querySelector(`[data-testid="agent-allowed-profiles-${name}"]`) as HTMLElement
+
+  const save = async (container: HTMLElement): Promise<Record<string, unknown>> => {
+    const button = container.querySelector('[data-testid="agent-save"]') as HTMLButtonElement
+    await act(async () => {
+      button.click()
+    })
+    await act(async () => {})
+    expect(apiMock.saveAgent).toHaveBeenCalledTimes(1)
+    const call = apiMock.saveAgent.mock.calls[0] as unknown as [Record<string, unknown>]
+    return call[0]
+  }
+
+  beforeEach(() => {
+    apiMock.getAllAgents.mockResolvedValue({ agents: [agent('main', ['primary'])], default_agent: null })
+    apiMock.getExecutionProfiles.mockResolvedValue(CATALOG)
+  })
+
+  it('рендерит select профиля и чекбоксы разрешённых профилей', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    expect(profileTrigger(container)).toBeTruthy()
+    expect(allowedChip(container, 'devops')).toBeTruthy()
+    expect(apiMock.getExecutionProfiles).toHaveBeenCalled()
+  })
+
+  it('выбор профиля и разрешённых уходит в payload (snake_case)', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    await selectOption(profileTrigger(container), 'devops')
+    await act(async () => {
+      allowedChip(container, 'devops').click()
+    })
+
+    const payload = await save(container)
+    expect(payload.executor_profile).toBe('devops')
+    expect(payload.allowed_profiles).toEqual(['devops'])
+  })
+
+  it('round-trip: сохранённые значения видны в форме', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), executor_profile: 'sandbox', allowed_profiles: ['sandbox'] }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    expect(profileTrigger(container).textContent).toContain('sandbox')
+    expect(allowedChip(container, 'sandbox').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('сброс: «наследовать» → null, пустой список → []', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), executor_profile: 'devops', allowed_profiles: ['devops'] }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    await selectOption(profileTrigger(container), 'Default (inherit)')
+    await act(async () => {
+      allowedChip(container, 'devops').click()
+    })
+
+    const payload = await save(container)
+    expect(payload.executor_profile).toBeNull()
+    expect(payload.allowed_profiles).toEqual([])
+  })
+
+  it('каталог недоступен: поля скрыты, панель работает, значения не затираются', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), executor_profile: 'devops', allowed_profiles: ['devops'] }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    apiMock.getExecutionProfiles.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderPanel()
+    // Панель не упала — список агентов на месте.
+    expect(container.textContent).toContain('main')
+
+    await openEditor(container)
+
+    expect(profileTrigger(container)).toBeNull()
+    expect(allowedChip(container, 'devops')).toBeNull()
+
+    const payload = await save(container)
+    // Поля не отправляются вовсе — сервер сохранит прежние значения.
+    expect('executor_profile' in payload).toBe(false)
+    expect('allowed_profiles' in payload).toBe(false)
   })
 })

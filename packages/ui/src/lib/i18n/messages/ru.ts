@@ -2580,6 +2580,14 @@ export const dict = {
   'admin.agents.effort.auto': 'Авто (из уровня размышлений)',
   'admin.agents.effortHint':
     'Тир уходит провайдеру в output_config.effort только при включённом «Режим effort (output_config)» у модели/провайдера (supportsEffortUpdates); иначе параметр игнорируется. xhigh и max задаются только здесь.',
+  'admin.agents.executorProfile': 'Профиль исполнения',
+  'admin.agents.executorProfile.inherit': 'По умолчанию (наследовать)',
+  'admin.agents.executorProfileHint':
+    'Профиль, в котором исполняются команды агента. «По умолчанию» — унаследовать профиль проекта/инстанса (сессия → агент → проект → профиль инстанса).',
+  'admin.agents.allowedProfiles': 'Разрешённые профили',
+  'admin.agents.allowedProfilesHint':
+    'Потолок профилей, в которых агенту разрешено исполняться: непустой список обязателен. Пусто — без ограничения.',
+  'admin.agents.allowedProfilesEmpty': 'Пусто — без ограничения.',
   'admin.agents.capabilities': 'Возможности',
   'admin.agents.icon': 'Иконка',
   'admin.agents.color': 'Цвет',
@@ -5315,6 +5323,8 @@ export const dict = {
   'settings.help.agents.agentMode': 'Классы агента: основной, сабагент и/или системный; можно выбрать несколько.',
   'settings.help.agents.provider': 'Провайдер модели агента; «По умолчанию» — выбор провайдера на уровне сессии.',
   'settings.help.agents.model': 'Модель из выбранного провайдера; «По умолчанию» — модельный выбор сессии.',
+  'settings.help.agents.executorProfile': 'Профиль исполнения агента (PROP-135): первый непустой разрешённый кандидат в цепочке сессия → агент → проект → профиль инстанса становится профилем исполнения команд. «По умолчанию» — наследовать.',
+  'settings.help.agents.allowedProfiles': 'Потолок разрешённых профилей исполнения: непустой список запрещает агенту работать на профиле вне его (fail-closed, откат на профиль по умолчанию). Пусто — без ограничения.',
   'settings.help.agents.contextFile': 'Контекстный файл с инструкциями; «Авто (по ID)» ищет файл по id агента.',
   'settings.help.agents.temperature': 'Случайность ответов от 0 до 2: ниже — стабильнее, выше — креативнее; не задано — дефолт модели.',
   'settings.help.agents.topP': 'Nucleus sampling от 0 до 1; 0 — не задано, используется значение провайдера.',

@@ -781,7 +781,14 @@ session.settings.executorProfile → agentDefinition.executorProfile → project
   empty `allowedProfiles` means no restriction; an unknown profile with an available catalogue →
   `400 VALIDATION_ERROR`;
 - `PATCH /api/v2/sessions/:id { settings: { executorProfile } }` — existence is checked when the
-  catalogue is available (otherwise `400 VALIDATION_ERROR`), an empty string resets the profile.
+  catalogue is available (otherwise `400 VALIDATION_ERROR`), an empty string resets the profile;
+- `POST /api/v2/agents` (admin → “Agents” → “Execution profile”) — the `executor_profile` and
+  `allowed_profiles` fields (`executorProfile`/`allowedProfiles` are accepted too): `undefined`
+  (field omitted) keeps the stored value, `null`/`''` reset the profile (inherit the
+  project/instance), `[]`/`null` lift the list restriction. When the catalogue is available the
+  profile must exist in it and the list must be its subset (otherwise `400 VALIDATION_ERROR`);
+  without a catalogue (`inline`/instance pool) the check is skipped. The agents list DTO returns
+  `executor_profile`/`allowed_profiles` (`null` — not set).
 
 **Pool provider (PROP-135, F4b-1).** `execution.remote.provider` decides **where** the pool address
 comes from:

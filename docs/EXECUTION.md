@@ -179,7 +179,13 @@ session.settings.executorProfile
 профиль в `settings.executorProfile` ребёнка. API: `PUT /api/v2/projects/:id { executor: { profile,
 allowedProfiles } }` — право управления проектом (owner/LEAD/ADMIN), `PATCH /api/v2/sessions/:id
 { settings: { executorProfile } }` — проверка существования при доступном каталоге (иначе
-`400 VALIDATION_ERROR`), пустая строка — сброс. UI и admin-API пулов — остаток 6b.
+`400 VALIDATION_ERROR`), пустая строка — сброс. **Агент-уровень настраивается в админке**
+(Настройки → «Агенты» → форма агента: «Профиль исполнения» — селект каталога с пунктом
+«По умолчанию (наследовать)», «Разрешённые профили» — мульти-выбор, пусто — без ограничения);
+те же поля пишутся API `POST /api/v2/agents` (`executor_profile`/`allowed_profiles`, `null`/`''`/`[]`
+сбрасывают) и отдаются в DTO списка. Каталог берётся из `GET /api/v2/execution/profiles`;
+недоступен (`inline`/ошибка) — поля в форме скрыты, а сохранение их не трогает. UI и admin-API
+пулов — остаток 6b.
 
 ### Ф4b-1: провайдер пулов (`static`/`http`) и ленивый порт
 

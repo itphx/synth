@@ -13,6 +13,7 @@ import {
 import type { AgentRegistry } from '../../engine/agents/index.js';
 import { requireScopeOrAdminRole } from '../service-scope.js';
 import type { ScopeGuardFactory } from '../service-scope.js';
+import type { ExecutionProfileCatalog } from '../../execution/profile-binding.js';
 import { info, warning } from '../../logger.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -77,6 +78,14 @@ export interface AgentRoutesOptions {
    * Не задан — роль по HTTP не пишется, поведение прежнее.
    */
   roleFiles?: AgentRoleFiles;
+  /**
+   * PROP-135 Ф6a: каталог профилей исполнения (снимок `execution.remote`) —
+   * проверка `executor_profile`/`allowed_profiles` при записи агента: профиль
+   * обязан существовать в каталоге, потолок — быть его подмножеством.
+   * Не задан (inline/instance-пул/тесты) — проверка пропускается, значения
+   * сохраняются как есть.
+   */
+  executionProfileCatalog?: ExecutionProfileCatalog;
 }
 
 const DEFAULT_MESSAGES: AgentRouteMessages = {
@@ -111,6 +120,9 @@ const AGENT_FIELDS = (a: AgentDefinition, isBuiltin: boolean) => ({
   context_file: a.contextFile || null,
   // ADR-046 §6.2: группы агента (привязка скиллов по `metadata.synth.groups`).
   groups: a.groups ?? null,
+  // PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых профилей.
+  executor_profile: a.executorProfile ?? null,
+  allowed_profiles: a.allowedProfiles ?? null,
   is_builtin: isBuiltin,
   is_overridden: a.isOverridden,
 });
@@ -149,6 +161,22 @@ function normalizeGroups(value: unknown): string[] | undefined {
     groups.push(name);
   }
   return groups;
+}
+
+/**
+ * PROP-135 Ф6a: список профилей исполнения (`allowed_profiles`) — массив
+ * непустых строк без дублей. Не массив → `undefined` (значение не меняется).
+ */
+function normalizeProfileList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const name = item.trim();
+    if (!name || list.includes(name)) continue;
+    list.push(name);
+  }
+  return list;
 }
 
 /**
@@ -277,6 +305,82 @@ export function createAgentRoutes(
     const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
     const existing = await agentStore.load(id);
 
+    // PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых профилей.
+    // `undefined` (поле не передано) — сохраняем прежнее значение записи;
+    // `null`/`''` — сброс профиля; `[]` — сброс списка (без ограничения).
+    // При заданном каталоге профиль обязан в нём существовать, список — быть
+    // его подмножеством (иначе 400: контракт запроса, а не «тихий» игнор).
+    const catalog = opts?.executionProfileCatalog;
+    const knownProfile = (name: string): boolean =>
+      !catalog || catalog.profiles.length === 0 || catalog.profiles.includes(name);
+
+    const executorProfileInput = body.executor_profile !== undefined
+      ? body.executor_profile
+      : body.executorProfile;
+    let executorProfile: string | undefined;
+    if (executorProfileInput === undefined) {
+      executorProfile = existing?.executorProfile ?? builtin?.executorProfile;
+    } else if (executorProfileInput === null) {
+      executorProfile = undefined;
+    } else if (typeof executorProfileInput !== 'string') {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'executor_profile должен быть строкой или null',
+          },
+        },
+        400,
+      );
+    } else {
+      const profile = executorProfileInput.trim();
+      if (profile === '') {
+        executorProfile = undefined;
+      } else if (!knownProfile(profile)) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профиль исполнения не найден: "${profile}". Доступные: ${catalog!.profiles.join(', ')}`,
+          },
+        }, 400);
+      } else {
+        executorProfile = profile;
+      }
+    }
+
+    const allowedProfilesInput = body.allowed_profiles !== undefined
+      ? body.allowed_profiles
+      : body.allowedProfiles;
+    let allowedProfiles: string[] | undefined;
+    if (allowedProfilesInput === undefined) {
+      allowedProfiles = existing?.allowedProfiles ?? builtin?.allowedProfiles;
+    } else if (allowedProfilesInput === null) {
+      allowedProfiles = undefined;
+    } else {
+      const list = normalizeProfileList(allowedProfilesInput);
+      if (list === undefined) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'allowed_profiles должен быть массивом строк или null',
+            },
+          },
+          400,
+        );
+      }
+      const unknown = list.filter((name) => !knownProfile(name));
+      if (unknown.length > 0) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профили исполнения не найдены: ${unknown.join(', ')}. Доступные: ${catalog!.profiles.join(', ')}`,
+          },
+        }, 400);
+      }
+      allowedProfiles = list.length > 0 ? list : undefined;
+    }
+
     const agent: AgentDefinition = {
       id,
       displayName: body.display_name ?? body.displayName ?? existing?.displayName ?? builtin?.displayName ?? id,
@@ -307,6 +411,9 @@ export function createAgentRoutes(
       maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
       // ADR-046 §6.2: группы агента (привязка скиллов по `metadata.synth.groups`).
       groups: normalizeGroups(body.groups) ?? existing?.groups ?? builtin?.groups,
+      // PROP-135 Ф6a: профиль исполнения и потолок разрешённых профилей.
+      executorProfile,
+      allowedProfiles,
     };
 
     // ADR-046/ADR-089: ролевой промпт агента — содержимое (не путь) в теле

@@ -2600,6 +2600,14 @@ export const dict = {
   'admin.agents.effort.auto': 'Auto (from reasoning level)',
   'admin.agents.effortHint':
     'The tier is sent to the provider in output_config.effort only when the model/provider has “Effort mode (output_config)” enabled (supportsEffortUpdates); otherwise the parameter is ignored. xhigh and max are set here only.',
+  'admin.agents.executorProfile': 'Execution profile',
+  'admin.agents.executorProfile.inherit': 'Default (inherit)',
+  'admin.agents.executorProfileHint':
+    'Profile the agent commands run on. “Default” inherits the project/instance profile (session → agent → project → instance default).',
+  'admin.agents.allowedProfiles': 'Allowed profiles',
+  'admin.agents.allowedProfilesHint':
+    'Ceiling of profiles the agent may run on: a non-empty list is mandatory. Empty means no restriction.',
+  'admin.agents.allowedProfilesEmpty': 'Empty — no restriction.',
   'admin.agents.capabilities': 'Capabilities',
   'admin.agents.icon': 'Icon',
   'admin.agents.color': 'Color',
@@ -4725,6 +4733,8 @@ export const dict = {
   'settings.help.agents.agentMode': 'Agent classes: primary, subagent, and/or system; multiple choices are allowed.',
   'settings.help.agents.provider': 'Provider of the agent model; Default follows the session-level provider choice.',
   'settings.help.agents.model': 'Model from the selected provider; Default follows the session-level model choice.',
+  'settings.help.agents.executorProfile': 'Execution profile of the agent (PROP-135): the first non-empty allowed candidate in the chain session → agent → project → instance default becomes the command execution profile. Default inherits.',
+  'settings.help.agents.allowedProfiles': 'Ceiling of allowed execution profiles: if the list is non-empty, the agent cannot run on a profile outside it (fail-closed fallback to the default profile). Empty means no restriction.',
   'settings.help.agents.contextFile': 'Context file with instructions; Auto (by ID) looks the file up by agent id.',
   'settings.help.agents.temperature': 'Reply randomness from 0 to 2: lower is steadier, higher is more creative; not set — model default.',
   'settings.help.agents.topP': 'Nucleus sampling from 0 to 1; 0 means unset and uses the provider value.',

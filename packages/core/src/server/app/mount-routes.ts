@@ -406,8 +406,10 @@ export function mountStandaloneRoutes(
   // Agents
   // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
   // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
+  // PROP-135 Ф6a: каталог профилей — проверка `executor_profile`/`allowed_profiles`.
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, {
     roleFiles: deps.contextFiles,
+    ...(executionProfiles ? { executionProfileCatalog: executionProfiles } : {}),
   }));
 
   // FS (ADR-075: гарантированный корень workspace + мягкая политика путей вне root)
