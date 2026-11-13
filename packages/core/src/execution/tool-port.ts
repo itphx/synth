@@ -13,6 +13,7 @@ import type { ToolContext } from '@itphx/synth-shared';
 import { InlineExecutionPort } from './inline-execution-port.js';
 import { isExecutionPort, type ExecutionPort } from './ports/index.js';
 import { isExecutionRouter, type ExecutionRouter } from './router.js';
+import { warning } from '../logger.js';
 
 /** Ключ порта исполнения в `ToolContext.extra`. */
 export const EXECUTION_PORT_KEY = 'executionPort';
@@ -27,7 +28,38 @@ export const EXECUTION_ROUTER_KEY = 'executionRouter';
 export function resolveExecutionPort(ctx: ToolContext): ExecutionPort {
   const extra = ctx.extra as Record<string, unknown> | undefined;
   const port = extra?.[EXECUTION_PORT_KEY];
-  return isExecutionPort(port) ? port : new InlineExecutionPort();
+  if (isExecutionPort(port)) return port;
+
+  // Порт не проброшен (старый путь/саб-агент/пайплайн), но роутер есть —
+  // выбираем порт по профилю хода, а не уходим в inline: иначе файловые тулы
+  // получают InlineExecutionPort без FS, а shell исполняется в control plane.
+  const router = extra?.[EXECUTION_ROUTER_KEY];
+  if (isExecutionRouter(router)) {
+    try {
+      const profile = typeof extra?.executionProfile === 'string' ? extra.executionProfile : undefined;
+      const subPath = typeof extra?.executionWorkspaceSubPath === 'string'
+        ? extra.executionWorkspaceSubPath
+        : undefined;
+      const routed = router.portFor({
+        ...(profile ? { profile } : {}),
+        ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
+        ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+        ...(subPath ? { workspaceSubPath: subPath } : {}),
+      });
+      if (isExecutionPort(routed)) return routed;
+    } catch (err) {
+      warning(
+        'EXECUTION',
+        `executionPort missing; router.portFor failed (session=${ctx.sessionId ?? '?'}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  warning(
+    'EXECUTION',
+    `executionPort missing in tool context (session=${ctx.sessionId ?? '?'}); falling back to inline`,
+  );
+  return new InlineExecutionPort();
 }
 
 /**
