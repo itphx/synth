@@ -202,7 +202,9 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
               const summary = await withWarmup(
                 key, () => port.capabilitySummary!('sh'), true, resetPort,
               ).catch(() => null);
-              if (summary && summary.total > 0) return;
+              // `total` включает и недоступные адреса — готовность = хотя бы
+              // один reachable (unreachable < total).
+              if (summary && summary.total > 0 && summary.unreachable < summary.total) return;
             } else if (port.probe) {
               const ok = await withWarmup(key, () => port.probe!('sh'), true, resetPort)
                 .catch(() => false);

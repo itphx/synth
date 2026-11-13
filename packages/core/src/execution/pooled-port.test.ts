@@ -379,3 +379,31 @@ describe('PROP-135: прогрев пула (connect-ошибки повторя
     await expect(port.execute({ command: { kind: 'shell', command: 'echo hi' } })).rejects.toThrow('boom');
   });
 });
+
+describe('PROP-135: readiness — reachable, а не просто total', () => {
+  it('первый browserCall ждёт, пока адрес станет reachable', async () => {
+    vi.useFakeTimers();
+    try {
+      let probes = 0;
+      const inner = fakePort({
+        capabilitySummary: async () => {
+          probes += 1;
+          return { available: false, missing: 0, total: 1, unreachable: probes < 3 ? 1 : 0 };
+        },
+        browserCall: async () => ({ content: 'ok', isError: false }),
+      });
+      const port = createPooledExecutionPort({
+        key: KEY,
+        provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
+        createPort: async () => inner,
+      });
+
+      const call = port.browserCall!({ tool: 'browser_navigate', arguments: {} });
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(call).resolves.toMatchObject({ content: 'ok' });
+      expect(probes).toBeGreaterThanOrEqual(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
