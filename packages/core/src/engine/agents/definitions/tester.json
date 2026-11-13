@@ -27,6 +27,8 @@
   "icon": "bug",
   "color": "--syntax-number",
   "contextFile": "TESTER.md",
+  "executorProfile": "default",
+  "allowedProfiles": ["default", "light"],
   "agentMode": ["primary", "subagent"],
   "temperature": 0.1,
   "maxSteps": 100

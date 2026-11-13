@@ -229,6 +229,7 @@ export const dict = {
   'settings.execution.adminOnly': 'Мутации пулов доступны только ADMIN.',
   'settings.execution.staticDisabled': 'Пулы задаются конфигурацией (static) — управлять в runtime нечем.',
   'settings.execution.inlineDisabled': 'Исполнение идёт в процессе (inline) — пулов для управления нет.',
+  'settings.execution.notApplicable': 'Профили исполнителей не применимы: исполнение в процессе (standalone/hybrid).',
   'settings.category.addons': 'Аддоны',
   'settings.category.plugins': 'Плагины',
   'settings.category.attachments': 'Мультимодальный ввод',
@@ -1107,6 +1108,7 @@ export const dict = {
   'projectTab.executor.forbidden': 'Недостаточно прав: нужен владелец проекта, LEAD или ADMIN',
   'projectTab.executor.readOnly': 'Менять настройки исполнения может только владелец проекта, LEAD или ADMIN.',
   'projectTab.executor.profilesLoadError': 'Не удалось загрузить профили исполнения — показано только текущее значение.',
+  'projectTab.executor.notApplicable': 'Профили исполнителей не применимы: исполнение в процессе (standalone/hybrid).',
   'sessionTab.plan.title': 'План проекта',
   'sessionTab.plan.empty': 'Плана нет',
   'sessionTab.plan.hint': 'План проекта появится здесь после plan_write',
@@ -1973,6 +1975,7 @@ export const dict = {
   'sessionSettings.executor.loadError': 'Не удалось загрузить профили исполнения — показано только текущее значение.',
   'sessionSettings.executor.saveError': 'Не удалось сохранить профиль исполнения: {error}',
   'sessionSettings.executor.forbidden': 'Недостаточно прав для смены профиля исполнения',
+  'sessionSettings.executor.notApplicable': 'Профили исполнителей не применимы: исполнение в процессе (standalone/hybrid).',
   // Лимит ответа (`max_tokens`, 0 = авто)
   'sessionSettings.maxTokens': 'Лимит ответа',
   'sessionSettings.maxTokensHint': '0 — авто: лимит модели из каталога или инстанса (по умолчанию 8192). Для моделей с обязательным reasoning действует минимум 8192, потому что размышления расходуют тот же бюджет.',

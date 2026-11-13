@@ -9,6 +9,8 @@
   "icon": "robot-3",
   "color": "--syntax-variable",
   "contextFile": "",
+  "executorProfile": "default",
+  "allowedProfiles": ["default", "light"],
   "agentMode": ["subagent"],
   "maxSteps": 15
 }

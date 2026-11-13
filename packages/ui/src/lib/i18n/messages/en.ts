@@ -234,6 +234,7 @@ export const dict = {
   'settings.execution.adminOnly': 'Pool mutations are available to ADMIN only.',
   'settings.execution.staticDisabled': 'Pools are defined by configuration (static) — there is nothing to manage at runtime.',
   'settings.execution.inlineDisabled': 'Execution runs in-process (inline) — there are no pools to manage.',
+  'settings.execution.notApplicable': 'Executor profiles are not applicable: execution runs in-process (standalone/hybrid).',
   'settings.category.addons': 'Addons',
   'settings.category.plugins': 'Plugins',
   'settings.category.attachments': 'Multimodal input',
@@ -1131,6 +1132,7 @@ export const dict = {
   'projectTab.executor.forbidden': 'Insufficient permissions: owner, LEAD or ADMIN required',
   'projectTab.executor.readOnly': 'Only the project owner, LEAD or ADMIN can change execution settings.',
   'projectTab.executor.profilesLoadError': 'Failed to load execution profiles — only the current value is shown.',
+  'projectTab.executor.notApplicable': 'Executor profiles are not applicable: execution runs in-process (standalone/hybrid).',
   'sessionTab.plan.title': 'Project plan',
   'sessionTab.plan.empty': 'No plan',
   'sessionTab.plan.hint': 'The project plan will appear here after plan_write',
@@ -1996,6 +1998,7 @@ export const dict = {
   'sessionSettings.executor.loadError': 'Failed to load execution profiles — only the current value is shown.',
   'sessionSettings.executor.saveError': 'Failed to save execution profile: {error}',
   'sessionSettings.executor.forbidden': 'Insufficient permissions to change the execution profile',
+  'sessionSettings.executor.notApplicable': 'Executor profiles are not applicable: execution runs in-process (standalone/hybrid).',
   // Response limit (`max_tokens`, 0 = auto)
   'sessionSettings.maxTokens': 'Response limit',
   'sessionSettings.maxTokensHint': '0 — auto: the model limit from the catalog or the instance (8192 by default). Models with mandatory reasoning have a minimum of 8192, because thinking consumes the same budget.',

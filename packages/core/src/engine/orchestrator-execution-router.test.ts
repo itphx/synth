@@ -248,6 +248,9 @@ describe('PROP-135 Ф4a: порт роутера доходит до тула', 
     const harness = await makeHarness({
       router,
       executorProfile: 'devops',
+      // Встроенный `fixer` ограничен `default|light`: тест про доставку порта,
+      // поэтому потолок агента снят явно (пустой список = без ограничения).
+      agentOverrides: { fixer: { allowedProfiles: [] } },
       onToolCall: (ctx) => {
         seen = (ctx.extra as { executionPort?: ExecutionPort }).executionPort;
       },
@@ -298,6 +301,8 @@ describe('PROP-135 Ф4a: порт роутера доходит до тула', 
       router,
       executorProfile: 'devops',
       projectId: 'prj_router',
+      // Потолок встроенного `fixer` (default|light) снят: проверяется ключ пула.
+      agentOverrides: { fixer: { allowedProfiles: [] } },
       onToolCall: () => {},
     });
 
@@ -454,7 +459,9 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
     };
     const harness = await makeHarness({
       router,
-      agentOverrides: { fixer: { executorProfile: 'agent-profile' } },
+      agentOverrides: {
+        fixer: { executorProfile: 'agent-profile', allowedProfiles: ['agent-profile'] },
+      },
       onToolCall: () => {},
     });
     await runTurn(harness);
@@ -475,6 +482,9 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
       router,
       projectId,
       projectStore: store,
+      // У встроенного `fixer` теперь есть собственный executorProfile —
+      // для проверки наследования проекта профиль агента снят явно.
+      agentOverrides: { fixer: { executorProfile: undefined, allowedProfiles: [] } },
       onToolCall: () => {},
     });
     await runTurn(harness);
@@ -496,7 +506,8 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
       projectId,
       projectStore: store,
       executorProfile: 'session-profile',
-      agentOverrides: { fixer: { executorProfile: 'agent-profile' } },
+      // Потолок/профиль встроенного `fixer` сняты: проверяется приоритет сессии.
+      agentOverrides: { fixer: { executorProfile: 'agent-profile', allowedProfiles: [] } },
       onToolCall: () => {},
     });
     await runTurn(harness);

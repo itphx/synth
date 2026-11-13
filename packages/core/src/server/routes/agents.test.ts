@@ -553,12 +553,17 @@ describe('Agent API Routes — профиль исполнения агента 
       body: JSON.stringify(body),
     });
 
-  it('DTO: без значения поля отдаются как null', async () => {
+  it('DTO: встроенные профили агентов и null у системного агента без профилей', async () => {
     const app = createTestApp();
     const list: any = await (await app.request('/api/v2/agents/all')).json();
+    // PROP-135 Ф6a: у встроенного ассистента есть профиль по умолчанию и потолок.
     const assistant = list.agents.find((a: any) => a.id === 'assistant');
-    expect(assistant.executor_profile).toBeNull();
-    expect(assistant.allowed_profiles).toBeNull();
+    expect(assistant.executor_profile).toBe('default');
+    expect(assistant.allowed_profiles).toEqual(['default', 'light']);
+    // У системного генератора заголовков профилей нет — DTO отдаёт null.
+    const title = list.agents.find((a: any) => a.id === 'title');
+    expect(title.executor_profile).toBeNull();
+    expect(title.allowed_profiles).toBeNull();
   });
 
   it('POST сохраняет профиль и потолок (snake_case) и отдаёт их в DTO', async () => {

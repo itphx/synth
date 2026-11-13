@@ -196,6 +196,9 @@ export function ExecutionSettings() {
     return [...details, ...missing]
   })()
   const actionsDisabled = provider !== 'http'
+  // `inline` (standalone/hybrid) — исполнение в процессе: профилей и пулов нет,
+  // поэтому вместо карточек и пулов показывается одно пояснение.
+  const profilesNotApplicable = provider === 'inline'
   const actionsNote =
     provider === 'static'
       ? t('settings.execution.staticDisabled')
@@ -242,7 +245,11 @@ export function ExecutionSettings() {
       </SettingsSection>
 
       <SettingsSection id="execution-profiles" title={t('settings.execution.profiles.title')}>
-        {profileItems.length > 0 ? (
+        {profilesNotApplicable ? (
+          <div className="text-xs text-muted-foreground" data-testid="execution-not-applicable">
+            {t('settings.execution.notApplicable')}
+          </div>
+        ) : profileItems.length > 0 ? (
           <ul className="flex flex-col gap-2" data-testid="execution-profiles">
             {profileItems.map((info, index) => {
               const resources = formatProfileResources(info.resources)
@@ -314,104 +321,106 @@ export function ExecutionSettings() {
         )}
       </SettingsSection>
 
-      <SettingsSection
-        id="execution-pools"
-        title={t('settings.execution.pools.title')}
-        description={actionsNote ?? undefined}
-        actions={
-          <Button
-            variant="outline-muted"
-            size="sm"
-            onClick={() => void loadPools()}
-            disabled={poolsLoading}
-            data-testid="execution-pools-refresh"
-          >
-            <Icon name="refresh" className="size-3.5" />
-            {t('settings.execution.refresh')}
-          </Button>
-        }
-      >
-        {poolsLoading && !pools && (
-          <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
-        )}
+      {!profilesNotApplicable && (
+        <SettingsSection
+          id="execution-pools"
+          title={t('settings.execution.pools.title')}
+          description={actionsNote ?? undefined}
+          actions={
+            <Button
+              variant="outline-muted"
+              size="sm"
+              onClick={() => void loadPools()}
+              disabled={poolsLoading}
+              data-testid="execution-pools-refresh"
+            >
+              <Icon name="refresh" className="size-3.5" />
+              {t('settings.execution.refresh')}
+            </Button>
+          }
+        >
+          {poolsLoading && !pools && (
+            <div className="text-xs text-muted-foreground">{t('common.loading')}</div>
+          )}
 
-        {poolsError && (
-          <div role="alert" className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive" data-testid="execution-pools-error">
-            {poolsError}
-          </div>
-        )}
+          {poolsError && (
+            <div role="alert" className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive" data-testid="execution-pools-error">
+              {poolsError}
+            </div>
+          )}
 
-        {pools && pools.pools.length === 0 && !poolsError && (
-          <div className="text-xs text-muted-foreground" data-testid="execution-pools-empty">
-            {t('settings.execution.pools.empty')}
-          </div>
-        )}
+          {pools && pools.pools.length === 0 && !poolsError && (
+            <div className="text-xs text-muted-foreground" data-testid="execution-pools-empty">
+              {t('settings.execution.pools.empty')}
+            </div>
+          )}
 
-        {pools && pools.pools.length > 0 && (
-          <div className="flex flex-col gap-2" data-testid="execution-pools">
-            {pools.pools.map((pool, index) => {
-              const key = pool.key ?? ''
-              const actionDisabled = actionsDisabled || !isAdmin || busyKey === key
-              return (
-                <div
-                  key={key || `${pool.profile}-${index}`}
-                  className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface-inset px-3 py-2"
-                  data-testid={`execution-pool-${index}`}
-                >
-                  <div className="flex flex-wrap items-center gap-2 min-w-0">
-                    <span className="min-w-0 break-all font-mono text-[0.6875rem] text-foreground">
-                      {key || t('settings.execution.pools.instanceKey')}
-                    </span>
-                    <span className={`${BADGE} ${STATE_BADGE_CLASS[pool.state]}`}>
-                      {t(`settings.execution.pools.state.${pool.state}`)}
-                    </span>
-                    <span className="text-[0.6875rem] text-muted-foreground">{pool.profile}</span>
-                  </div>
-                  {(pool.createdAt || pool.lastUsedAt) && (
-                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.625rem] text-muted-foreground/70">
-                      {pool.createdAt && (
-                        <span>
-                          {t('settings.execution.pools.createdAt')}: {formatDateTime(pool.createdAt, locale)}
-                        </span>
-                      )}
-                      {pool.lastUsedAt && (
-                        <span>
-                          {t('settings.execution.pools.lastUsedAt')}: {formatDateTime(pool.lastUsedAt, locale)}
+          {pools && pools.pools.length > 0 && (
+            <div className="flex flex-col gap-2" data-testid="execution-pools">
+              {pools.pools.map((pool, index) => {
+                const key = pool.key ?? ''
+                const actionDisabled = actionsDisabled || !isAdmin || busyKey === key
+                return (
+                  <div
+                    key={key || `${pool.profile}-${index}`}
+                    className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface-inset px-3 py-2"
+                    data-testid={`execution-pool-${index}`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                      <span className="min-w-0 break-all font-mono text-[0.6875rem] text-foreground">
+                        {key || t('settings.execution.pools.instanceKey')}
+                      </span>
+                      <span className={`${BADGE} ${STATE_BADGE_CLASS[pool.state]}`}>
+                        {t(`settings.execution.pools.state.${pool.state}`)}
+                      </span>
+                      <span className="text-[0.6875rem] text-muted-foreground">{pool.profile}</span>
+                    </div>
+                    {(pool.createdAt || pool.lastUsedAt) && (
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.625rem] text-muted-foreground/70">
+                        {pool.createdAt && (
+                          <span>
+                            {t('settings.execution.pools.createdAt')}: {formatDateTime(pool.createdAt, locale)}
+                          </span>
+                        )}
+                        {pool.lastUsedAt && (
+                          <span>
+                            {t('settings.execution.pools.lastUsedAt')}: {formatDateTime(pool.lastUsedAt, locale)}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void runAction(pool, 'drain')}
+                        disabled={actionDisabled}
+                        data-testid={`execution-pool-${index}-drain`}
+                      >
+                        {t('settings.execution.pools.drain')}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        onClick={() => void runAction(pool, 'release')}
+                        disabled={actionDisabled}
+                        data-testid={`execution-pool-${index}-release`}
+                      >
+                        {t('settings.execution.pools.release')}
+                      </Button>
+                      {isAdmin ? undefined : (
+                        <span className="text-[0.625rem] text-muted-foreground/70" data-testid="execution-admin-only">
+                          {t('settings.execution.adminOnly')}
                         </span>
                       )}
                     </div>
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => void runAction(pool, 'drain')}
-                      disabled={actionDisabled}
-                      data-testid={`execution-pool-${index}-drain`}
-                    >
-                      {t('settings.execution.pools.drain')}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      onClick={() => void runAction(pool, 'release')}
-                      disabled={actionDisabled}
-                      data-testid={`execution-pool-${index}-release`}
-                    >
-                      {t('settings.execution.pools.release')}
-                    </Button>
-                    {isAdmin ? undefined : (
-                      <span className="text-[0.625rem] text-muted-foreground/70" data-testid="execution-admin-only">
-                        {t('settings.execution.adminOnly')}
-                      </span>
-                    )}
                   </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </SettingsSection>
+                )
+              })}
+            </div>
+          )}
+        </SettingsSection>
+      )}
     </SettingsPanel>
   )
 }

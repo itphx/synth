@@ -648,6 +648,27 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     expect(mocks.getExecutionProfiles).not.toHaveBeenCalled()
   })
 
+  it('inline: профили не применимы — пояснение вместо селекторов, сохранения нет', async () => {
+    mocks.getExecutionProfiles.mockResolvedValue({
+      provider: 'inline',
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: [],
+      details: [],
+    })
+
+    const container = await renderTab()
+
+    expect(
+      container.querySelector('[data-testid="project-executor-not-applicable"]')!.textContent,
+    ).toContain(enDict['projectTab.executor.notApplicable'])
+    expect(container.querySelector('[data-testid="project-executor-profile"]')).toBeNull()
+    expect(container.querySelector('[data-testid="project-executor-allowed"]')).toBeNull()
+    expect(container.querySelector('[data-testid="project-executor-save"]')).toBeNull()
+    expect(container.querySelector('[data-testid="project-executor-reset"]')).toBeNull()
+    expect(mocks.updateProject).not.toHaveBeenCalled()
+  })
+
   it('ошибка загрузки профилей не блокирует вкладку: показан текущий выбор', async () => {
     mocks.getExecutionProfiles.mockRejectedValue(new Error('boom'))
     const withExecutor = { ...PROJECT, executor: { profile: 'devops' } }

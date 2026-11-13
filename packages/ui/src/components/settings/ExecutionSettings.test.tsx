@@ -257,6 +257,29 @@ describe('ExecutionSettings — провайдер и права', () => {
     expect((byTestId(container, 'execution-pool-0-release') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('inline: профили не применимы — пояснение вместо карточек и пулов', async () => {
+    mocks.getExecutionProfiles.mockResolvedValue({
+      provider: 'inline',
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: [],
+      details: [],
+    })
+    mocks.getExecutionPools.mockResolvedValue({ provider: 'inline', pools: [] })
+
+    const container = await render()
+
+    expect(byTestId(container, 'execution-not-applicable')!.textContent).toContain(
+      enDict['settings.execution.notApplicable'],
+    )
+    // Карточек профилей и пулов нет — значит, и действий drain/release тоже.
+    expect(byTestId(container, 'execution-profiles')).toBeNull()
+    expect(byTestId(container, 'execution-pools')).toBeNull()
+    expect(byTestId(container, 'execution-pool-0-drain')).toBeNull()
+    expect(byTestId(container, 'execution-pool-0-release')).toBeNull()
+    expect(byTestId(container, 'execution-pools-refresh')).toBeNull()
+  })
+
   it('503 провайдера пулов — понятное сообщение вместо списка', async () => {
     mocks.getExecutionPools.mockRejectedValue(
       Object.assign(new Error('provider unavailable'), {

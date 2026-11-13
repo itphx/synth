@@ -52,6 +52,59 @@ function findRoleFile(contextFile: string, language: 'ru' | 'en'): string | null
   );
 }
 
+/**
+ * PROP-135 Ф6a: встроенные профили исполнения. До этого у встроенных агентов
+ * полей `executorProfile`/`allowedProfiles` не было вовсе: профиль выбирался
+ * только сессией/проектом, а роли (лёгкие исследователи, devops/admin) не могли
+ * закрепить свой профиль и потолок. Таблица — решение владельца: тяжёлые роли
+ * по умолчанию на `default`, лёгкие — на `light`, инфраструктурные — `devops`.
+ */
+describe('Встроенные агенты: профили исполнения (PROP-135 Ф6a)', () => {
+  const agents = new Map(loadSystemAgentDefinitions().map((agent) => [agent.id, agent]));
+
+  const EXPECTED: Record<string, { executorProfile: string; allowedProfiles: string[] }> = {
+    leader: { executorProfile: 'default', allowedProfiles: ['default', 'light', 'devops'] },
+    fixer: { executorProfile: 'default', allowedProfiles: ['default', 'light'] },
+    tester: { executorProfile: 'default', allowedProfiles: ['default', 'light'] },
+    general: { executorProfile: 'default', allowedProfiles: ['default', 'light'] },
+    assistant: { executorProfile: 'default', allowedProfiles: ['default', 'light'] },
+    researcher: { executorProfile: 'light', allowedProfiles: ['light', 'default'] },
+    explore: { executorProfile: 'light', allowedProfiles: ['light'] },
+    'security-auditor': { executorProfile: 'light', allowedProfiles: ['light', 'default'] },
+    devops: { executorProfile: 'devops', allowedProfiles: ['devops', 'default'] },
+    admin: { executorProfile: 'devops', allowedProfiles: ['devops', 'default'] },
+  };
+
+  it('у каждого агента таблицы — ожидаемые профиль и потолок', () => {
+    for (const [id, expected] of Object.entries(EXPECTED)) {
+      const agent = agents.get(id);
+      expect(agent, `агент «${id}» отсутствует`).toBeDefined();
+      expect(agent!.executorProfile, `executorProfile «${id}»`).toBe(expected.executorProfile);
+      expect(agent!.allowedProfiles, `allowedProfiles «${id}»`).toEqual(expected.allowedProfiles);
+    }
+  });
+
+  it('системный генератор заголовков профилей не имеет', () => {
+    const title = agents.get('title');
+    expect(title).toBeDefined();
+    expect(title!.executorProfile).toBeUndefined();
+    expect(title!.allowedProfiles).toBeUndefined();
+  });
+
+  it('leader может исполняться на devops', () => {
+    expect(agents.get('leader')!.allowedProfiles).toContain('devops');
+  });
+
+  it('профиль по умолчанию агента входит в его потолок разрешённых', () => {
+    for (const [id, expected] of Object.entries(EXPECTED)) {
+      expect(
+        expected.allowedProfiles,
+        `executorProfile «${id}» вне allowedProfiles`,
+      ).toContain(expected.executorProfile);
+    }
+  });
+});
+
 describe('Определения встроенных агентов: ролевые файлы и файлы саб-агентов RU/EN', () => {
   const agents = loadSystemAgentDefinitions();
 

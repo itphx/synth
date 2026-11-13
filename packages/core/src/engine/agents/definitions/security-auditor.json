@@ -20,6 +20,8 @@
   "icon": "shield-check",
   "color": "--status-warning",
   "contextFile": "SECURITY-AUDITOR.md",
+  "executorProfile": "light",
+  "allowedProfiles": ["light", "default"],
   "agentMode": ["primary", "subagent"],
   "temperature": 0.1,
   "maxSteps": 60

@@ -9,6 +9,8 @@
   "icon": "search-eye",
   "color": "--syntax-keyword",
   "contextFile": "",
+  "executorProfile": "light",
+  "allowedProfiles": ["light"],
   "agentMode": ["subagent"],
   "maxSteps": 10
 }

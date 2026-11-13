@@ -235,6 +235,24 @@ describe('SessionSettingsTab — профиль исполнения сесси�
     })
   })
 
+  it('inline: профили не применимы — пояснение вместо селектора, сохранения нет', async () => {
+    mocks.getExecutionProfiles.mockResolvedValue({
+      provider: 'inline',
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: [],
+      details: [],
+    })
+
+    const container = await renderTab()
+
+    expect(
+      container.querySelector('[data-testid="session-executor-not-applicable"]')!.textContent,
+    ).toContain(enDict['sessionSettings.executor.notApplicable'])
+    expect(profileSelect(container)).toBeNull()
+    expect(mocks.updateSession).not.toHaveBeenCalled()
+  })
+
   it('ошибка каталога: только «Наследовать» и предупреждение, вкладка не падает', async () => {
     mocks.getExecutionProfiles.mockRejectedValue(
       Object.assign(new Error('Forbidden'), { status: 403 }),

@@ -28,6 +28,8 @@
   "icon": "code-s-slash",
   "color": "--status-info",
   "contextFile": "FIXER.md",
+  "executorProfile": "default",
+  "allowedProfiles": ["default", "light"],
   "agentMode": ["primary", "subagent"],
   "temperature": 0.2,
   "maxSteps": 100

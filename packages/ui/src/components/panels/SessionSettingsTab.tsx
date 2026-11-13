@@ -1542,6 +1542,18 @@ function SessionExecutorProfileField({
     ? t('sessionSettings.executor.inheritHintProject', { profile: projectProfile })
     : t('sessionSettings.executor.inheritHint')
 
+  // `inline` (standalone/hybrid): исполнение в процессе, профилей нет — вместо
+  // селектора пояснение, менять нечего.
+  if (profiles?.provider === 'inline') {
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5" data-testid="session-executor">
+        <div className="text-xs text-muted-foreground" data-testid="session-executor-not-applicable">
+          {t('sessionSettings.executor.notApplicable')}
+        </div>
+      </div>
+    )
+  }
+
   const handleChange = async (value: string) => {
     if (value === current) return
     await run({

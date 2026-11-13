@@ -35,6 +35,9 @@ interface AgentDefFile {
   icon: string;
   color: string;
   contextFile: string;
+  // PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых профилей.
+  executorProfile?: string;
+  allowedProfiles?: string[];
   agentMode?: string | string[];
   maxSteps?: number;
   reasoningLevel?: ReasoningLevel;
@@ -59,6 +62,8 @@ export function loadSystemAgentDefinitions(): AgentDefinition[] {
       contextFile: def.contextFile,
       enabled: true,
       isOverridden: false,
+      executorProfile: def.executorProfile,
+      allowedProfiles: def.allowedProfiles,
       agentMode: normalizeAgentModes(def.agentMode),
       maxSteps: def.maxSteps,
       reasoningLevel: def.reasoningLevel,

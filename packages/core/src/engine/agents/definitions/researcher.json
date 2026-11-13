@@ -20,6 +20,8 @@
   "icon": "search-eye",
   "color": "--syntax-keyword",
   "contextFile": "RESEARCHER.md",
+  "executorProfile": "light",
+  "allowedProfiles": ["light", "default"],
   "agentMode": ["primary", "subagent"],
   "temperature": 0.2,
   "maxSteps": 25

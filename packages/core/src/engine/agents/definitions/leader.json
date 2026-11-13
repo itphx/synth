@@ -32,6 +32,8 @@
   "icon": "clipboard",
   "color": "--primary",
   "contextFile": "LEADER.md",
+  "executorProfile": "default",
+  "allowedProfiles": ["default", "light", "devops"],
   "agentMode": ["primary"],
   "temperature": 0.15,
   "maxSteps": 200

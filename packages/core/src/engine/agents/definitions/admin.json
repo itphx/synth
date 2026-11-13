@@ -31,6 +31,8 @@
   "icon": "shield-keyhole",
   "color": "--status-error",
   "contextFile": "ADMIN.md",
+  "executorProfile": "devops",
+  "allowedProfiles": ["devops", "default"],
   "agentMode": ["primary", "subagent"],
   "temperature": 0.1,
   "maxSteps": 100

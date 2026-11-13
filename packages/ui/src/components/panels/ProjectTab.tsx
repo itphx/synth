@@ -1094,6 +1094,18 @@ function ProjectExecutorBlock({
     ? t('projectTab.executor.profileDefault', { profile: profiles.defaultProfile })
     : t('projectTab.executor.profileDefaultUnknown')
 
+  // `inline` (standalone/hybrid): исполнение в процессе, профилей нет — селекторы
+  // и сохранение неприменимы, показываем пояснение вместо контролов.
+  if (profiles?.provider === 'inline') {
+    return (
+      <div className="flex min-w-0 flex-col gap-2" data-testid="project-executor">
+        <div className="text-xs text-muted-foreground" data-testid="project-executor-not-applicable">
+          {t('projectTab.executor.notApplicable')}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex min-w-0 flex-col gap-2" data-testid="project-executor">
       <label className="flex flex-col gap-1 text-xs text-muted-foreground">
