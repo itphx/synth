@@ -100,6 +100,7 @@ async function withWarmup<T>(
   key: ExecutionPoolKey,
   operation: () => Promise<T>,
   allowNetwork = false,
+  refresh?: () => void,
 ): Promise<T> {
   let attempt = 0;
   let elapsed = 0;
@@ -128,6 +129,9 @@ async function withWarmup<T>(
           durationMs: elapsed,
         });
       }
+      // Пул мог быть пересоздан (idle/reaper) — адрес в кэше устарел.
+      // Сбрасываем его и на следующей попытке получаем новый `ensure`.
+      refresh?.();
       const delay = WARMUP_DELAYS_MS[attempt]!;
       attempt += 1;
       elapsed += delay;
@@ -148,6 +152,13 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
   /** Кэш промиса сборки порта (`null` — ещё не собирали). */
   let pending: Promise<ExecutionPort> | null = null;
+  let readyPromise: Promise<void> | null = null;
+
+  /** Сбросить кэш порта и readiness (пул мог быть пересоздан). */
+  const resetPool = (): void => {
+    pending = null;
+    readyPromise = null;
+  };
 
   const resolve = (): Promise<ExecutionPort> => {
     if (!pending) {
@@ -173,7 +184,6 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
    * через `withWarmup` с сетевыми повторами; неудача не блокирует вызов —
    * ошибку покажет сама операция.
    */
-  let readyPromise: Promise<void> | null = null;
   const waitReady = (): Promise<void> => {
     if (!readyPromise) {
       readyPromise = (async () => {
@@ -192,7 +202,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     return readyPromise;
   };
 
-  const fs = createPooledFs(resolve, key);
+  const fs = createPooledFs(resolve, key, resetPool);
 
   /**
    * Сообщить провайдеру об активности пула (PROP-135).
@@ -221,7 +231,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
       const port = await resolve();
       await waitReady();
       try {
-        return await withWarmup(key, () => port.execute(req));
+        return await withWarmup(key, () => port.execute(req), false, resetPool);
       } finally {
         // Активность была в любом исходе: успех и ошибка команды одинаково
         // означают, что пул использовался.
@@ -241,7 +251,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
           reason: 'spawn_failed',
         });
       }
-      const process = await withWarmup(key, () => port.spawnBackground!(req));
+      const process = await withWarmup(key, () => port.spawnBackground!(req), false, resetPool);
       // Долгий фоновый процесс — тоже активность пула (пул живёт, пока
       // процесс работает).
       markActive();
@@ -263,7 +273,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
         // Интерактивные действия не повторяем (двойной клик); навигацию,
         // снимок, ожидание и скриншот — можно.
         const readOnly = !['browser_click','browser_type','browser_press_key'].includes(req.tool);
-        return await withWarmup(key, () => port.browserCall!(req), readOnly);
+        return await withWarmup(key, () => port.browserCall!(req), readOnly, resetPool);
       } finally {
         // Обращение к пулу — активность (как у execute): provisioner не должен
         // снять пул по idle между вызовами браузера.
@@ -273,7 +283,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
     async probe(bin: string, args?: string[]): Promise<boolean> {
       const port = await resolve();
-      return port.probe ? withWarmup(key, () => port.probe!(bin, args), true) : true;
+      return port.probe ? withWarmup(key, () => port.probe!(bin, args), true, resetPool) : true;
     },
 
     async capabilitySummary(bin: string): Promise<ExecutionCapabilitySummary> {
@@ -281,7 +291,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
       if (!port.capabilitySummary) {
         throw new Error('capabilitySummary не поддерживается портом');
       }
-      return withWarmup(key, () => port.capabilitySummary!(bin), true);
+      return withWarmup(key, () => port.capabilitySummary!(bin), true, resetPool);
     },
   };
 }
@@ -294,7 +304,11 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
  * (`ExecutionFsUnavailableError`): тихого возврата к чтению ФС в control
  * plane нет (PROP-135 Ф1).
  */
-function createPooledFs(resolve: () => Promise<ExecutionPort>, key: ExecutionPoolKey): ExecutionFs {
+function createPooledFs(
+  resolve: () => Promise<ExecutionPort>,
+  key: ExecutionPoolKey,
+  resetPool: () => void,
+): ExecutionFs {
   const fsOf = async (): Promise<ExecutionFs> => {
     const port = await resolve();
     if (!port.fs) {
@@ -309,8 +323,22 @@ function createPooledFs(resolve: () => Promise<ExecutionPort>, key: ExecutionPoo
   };
 
   /** Вызов FS-операции с прогревом пула (connect-ошибки повторяются). */
-  const call = async <T>(fn: (fs: ExecutionFs) => Promise<T>, allowNetwork = false): Promise<T> =>
-    withWarmup(key, async () => fn(await fsOf()), allowNetwork);
+  const call = async <T>(fn: (fs: ExecutionFs) => Promise<T>, allowNetwork = false): Promise<T> => {
+    try {
+      return await withWarmup(key, async () => fn(await fsOf()), allowNetwork, resetPool);
+    } catch (err) {
+      if (isExecutionFsUnavailableError(err)) {
+        const port = await resolve().catch(() => null);
+        const urls = (port as { executorMcp?: { urls?: string[] } } | null)?.executorMcp?.urls;
+        warning(
+          'EXECUTION',
+          `fs failed after warmup: pool=${poolKeyString(key)} ` +
+          `remote=${String(port?.isRemote)} urls=${urls?.join(',') ?? '-'}`,
+        );
+      }
+      throw err;
+    }
+  };
 
   return {
     realpath: (path: string) => call((fs) => fs.realpath(path), true),
