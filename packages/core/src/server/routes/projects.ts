@@ -613,7 +613,7 @@ export function createProjectRoutes(
     if (body.repos !== undefined) project.repos = body.repos;
     // PROP-135 Ф6a: профиль исполнения проекта (owner/LEAD/ADMIN).
     // `profile: null`/`''` и `allowedProfiles: null`/`[]` сбрасывают значение:
-    // пустой список = «без ограничения» (обратная совместимость).
+    // пустой список = «профилей нет» (ADR-135, аддендум), `null` — потолок не задан.
     if (body.executor !== undefined) {
       const parsedExecutor = projectExecutorUpdateSchema.safeParse(body.executor);
       if (!parsedExecutor.success) {
@@ -651,7 +651,9 @@ export function createProjectRoutes(
             },
           }, 400);
         }
-        if (list.length === 0) delete next.allowedProfiles;
+        // ADR-135 (аддендум): `null` — потолок не задан; `[]` — «профилей нет»
+        // (fail-closed), а не «без ограничения».
+        if (allowedValue === null) delete next.allowedProfiles;
         else next.allowedProfiles = list;
       }
       // PROP-135 (браузерный контур): браузерный профиль проекта и его
@@ -687,8 +689,29 @@ export function createProjectRoutes(
             },
           }, 400);
         }
-        if (list.length === 0) delete next.allowedBrowserProfiles;
+        // ADR-135 (аддендум): `null` — потолок не задан; `[]` — «профилей нет».
+        if (allowedBrowserValue === null) delete next.allowedBrowserProfiles;
         else next.allowedBrowserProfiles = list;
+      }
+      // ADR-135 (аддендум): профиль обязан входить в список разрешённых
+      // (список задан — в том числе пустой: тогда профиль запрещён).
+      if (next.profile !== undefined && next.allowedProfiles !== undefined
+        && !next.allowedProfiles.includes(next.profile)) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профиль исполнения должен входить в список разрешённых: ${next.profile}`,
+          },
+        }, 400);
+      }
+      if (next.browserProfile !== undefined && next.allowedBrowserProfiles !== undefined
+        && !next.allowedBrowserProfiles.includes(next.browserProfile)) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профиль браузера должен входить в список разрешённых: ${next.browserProfile}`,
+          },
+        }, 400);
       }
       project.executor = next.profile === undefined && next.allowedProfiles === undefined
         && next.browserProfile === undefined && next.allowedBrowserProfiles === undefined

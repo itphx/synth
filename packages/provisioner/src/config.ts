@@ -73,7 +73,7 @@
 
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { formatIssues } from './protocol.js';
+import { formatIssues } from './format.js';
 
 /** Env-имена provisioner'а. */
 export const PROVISIONER_ENV = {

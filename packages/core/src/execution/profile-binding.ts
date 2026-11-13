@@ -15,14 +15,19 @@
  * профилем. Если разрешённых кандидатов нет — берётся `defaultProfile`
  * (fail-closed: запрещённый профиль не выбирается никогда).
  *
- * Потолки (`allowedProfiles` проекта и агента):
- * - массив **задан и непуст** — профиль обязан в него входить;
- * - `undefined`/пустой массив — без ограничения (обратная совместимость:
- *   старые проекты/агенты поля не имеют).
+ * Потолки (`allowedProfiles` проекта и агента) — решение владельца
+ * (ADR-135, аддендум «пустой список = ничего не разрешено»):
+ * - список **задан** (в том числе пустой) — это потолок: кандидат допустим
+ *   только если список **непуст** и содержит его; явно пустой список (`[]`)
+ *   означает «профилей нет» (fail-closed);
+ * - список **не задан** (`undefined`) — область потолка не задаёт: ограничения
+ *   от неё нет (обратная совместимость: старые проекты/агенты поля не имеют;
+ *   «не задано» ≠ «разрешено всё» — профиль всё равно должен существовать в
+ *   каталоге инстанса).
  *
- * `defaultProfile` — профиль инстанса (`execution.remote.defaultProfile`); он
- * не проверяется потолком области: это единственная безопасная точка отката
- * (иначе инстанс без разрешённых профилей не смог бы исполнять команды).
+ * `defaultProfile` — профиль инстанса (`execution.remote.defaultProfile`);
+ * **исключением не является**: он тоже обязан пройти потолки, иначе он не
+ * выбирается (профилей нет — результат пуст + предупреждение в журнал).
  *
  * ## Чего модуль НЕ делает
  *
@@ -79,7 +84,10 @@ export interface ExecutionProfileBindingInput {
 
 /** Результат резолвера: эффективный профиль, источник и причина отказа. */
 export interface ExecutionProfileResolution {
-  /** Эффективный профиль (всегда непустой, если `defaultProfile` непуст). */
+  /**
+   * Эффективный профиль. **Пустой** — профилей нет: ни один кандидат не
+   * разрешён потолками (в том числе инстанс-дефолт), выбирать нечего.
+   */
   profile: string;
   /** Кто дал эффективный профиль. */
   source: ExecutionProfileSource;
@@ -101,8 +109,10 @@ export interface ExecutionProfileCeilings {
 /**
  * Профиль разрешён потолками?
  *
- * Пустой/отсутствующий массив = без ограничения (обратная совместимость —
- * `true`). Массив непустой — профиль обязан в него входить.
+ * Потолок, **заданный** областью (в том числе пустой список), — кандидат
+ * допустим только если список непуст и содержит его; пустой список = «профилей
+ * нет» (fail-closed). Потолок **не задан** (`undefined`) — область не
+ * ограничивает выбор.
  */
 export function isProfileAllowed(
   profile: string,
@@ -111,7 +121,7 @@ export function isProfileAllowed(
   const name = profile.trim();
   if (name === '') return false;
   const within = (allowed: readonly string[] | undefined): boolean =>
-    allowed === undefined || allowed.length === 0 || allowed.includes(name);
+    allowed === undefined ? true : allowed.length > 0 && allowed.includes(name);
   return within(projectAllowed) && within(agentAllowed);
 }
 
@@ -119,9 +129,13 @@ export function isProfileAllowed(
 function deniedBy(profile: string, input: ExecutionProfileBindingInput): 'project' | 'agent' | undefined {
   const name = profile.trim();
   const projectAllowed = input.projectAllowed;
-  if (projectAllowed && projectAllowed.length > 0 && !projectAllowed.includes(name)) return 'project';
+  if (projectAllowed !== undefined && !(projectAllowed.length > 0 && projectAllowed.includes(name))) {
+    return 'project';
+  }
   const agentAllowed = input.agentAllowed;
-  if (agentAllowed && agentAllowed.length > 0 && !agentAllowed.includes(name)) return 'agent';
+  if (agentAllowed !== undefined && !(agentAllowed.length > 0 && agentAllowed.includes(name))) {
+    return 'agent';
+  }
   return undefined;
 }
 
@@ -148,6 +162,10 @@ function denialReason(
  * (`projectAllowed`/`agentAllowed`), **не выбирается**: резолвер идёт к
  * следующему кандидату, в конце — `defaultProfile` (fail-closed) с
  * предупреждением.
+ *
+ * Инстанс-дефолт — **не исключение**: он тоже обязан пройти потолки. Если
+ * дефолт вне потолка (или потолок пуст), профиль **не выбирается** вовсе:
+ * результат — пустой профиль + предупреждение (профилей нет).
  */
 export function resolveExecutionProfile(
   input: ExecutionProfileBindingInput,
@@ -165,7 +183,7 @@ export function resolveExecutionProfile(
  * `allowedBrowserProfiles`, `project.executor.browserProfile` /
  * `allowedBrowserProfiles`, дефолт инстанса — `execution.remote.browserProfile`.
  * Каталог (`knownProfiles`) — `execution.remote.browserProfiles`
- * (пусто → `[browserProfile]`); дефолт инстанса потолками **не** проверяется.
+ * (пусто → `[browserProfile]`); инстанс-дефолт потолками **не исключён**.
  */
 export function resolveBrowserProfile(
   input: ExecutionProfileBindingInput,
@@ -205,6 +223,18 @@ function resolveProfileBinding(
     };
   }
   const fallback = (input.defaultProfile ?? '').trim();
+  // Инстанс-дефолт — не исключение: он тоже обязан пройти потолки. Дефолт вне
+  // потолка (или пустой потолок) → профилей нет: выбирать нечего.
+  const fallbackDeniedBy = fallback === '' ? undefined : deniedBy(fallback, input);
+  if (fallbackDeniedBy) {
+    denials.push({ profile: fallback, source: 'default', by: fallbackDeniedBy });
+    return {
+      profile: '',
+      source: 'default',
+      deniedBy: denials[0]!.by,
+      warning: buildDeniedWarning(denials, fallback, label),
+    };
+  }
   if (denials.length === 0) {
     return { profile: fallback, source: 'default' };
   }
@@ -225,6 +255,9 @@ function buildDeniedWarning(
   const list = denials
     .map((entry) => `"${entry.profile}" (source: ${entry.source}, denied by ${entry.by})`)
     .join(', ');
-  return `${label} ${list} is not allowed; falling back to "${fallback}"`;
+  const tail = denials.some((entry) => entry.source === 'default')
+    ? `no execution profile selected (default "${fallback}" is not allowed either)`
+    : `falling back to "${fallback}"`;
+  return `${label} ${list} is not allowed; ${tail}`;
 }
 

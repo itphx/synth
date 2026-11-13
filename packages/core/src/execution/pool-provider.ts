@@ -33,6 +33,7 @@ import type {
   ExecutionProfileNetwork,
   ExecutionProfileResourceList,
   ExecutionProfileResources,
+  ResolvedExecutionProfile,
   ResolvedExecutionRemoteConfig,
 } from '@itphx/synth-shared';
 import { egressFetch, type FetchLike } from '../security/tls.js';
@@ -481,8 +482,135 @@ export interface HttpExecutionPoolProviderOptions {
   tokenSecret: string;
   /** Таймаут обращения к provisioner'у, мс. */
   timeoutMs: number;
+  /**
+   * Эффективный каталог профилей инстанца
+   * (`execution.remote.profiles` — уже с учётом runtime-секции).
+   *
+   * Из него собирается `profileSpec` в теле `POST /v1/pools`: под пула
+   * поднимается по образу/сети/ресурсам/etc. **профиля инстанса**, а не
+   * каталога provisioner'а. Не задан — `profileSpec` не отправляется
+   * (provisioner возьмёт свой каталог — обратная совместимость).
+   */
+  profiles?: Record<string, ResolvedExecutionProfile>;
   /** Транспорт (тесты подменяют `fetch`). */
   fetchImpl?: FetchLike;
+}
+
+/**
+ * MCP-сервер профиля в форме provisioner'а (`name`/`command`/`args`/`env`).
+ *
+ * Формат — как у `SYNTH_EXECUTOR_MCP_SERVERS` (ADR-077 шаг B1): исполнитель
+ * пула запускает сервер у себя, поэтому нужна команда.
+ */
+export interface ExecutionPoolProfileMcpServer {
+  /** Имя MCP-сервера (уникально в профиле). */
+  name: string;
+  /** Команда запуска сервера. */
+  command: string;
+  /** Аргументы команды. */
+  args?: string[];
+  /** Переменные окружения сервера. */
+  env?: Record<string, string>;
+}
+
+/**
+ * Спецификация профиля пула (`profileSpec` в теле `POST /v1/pools`).
+ *
+ * Формат — как у профиля provisioner'а (`SYNTH_PROVISIONER_PROFILES`):
+ * образ, сетевой класс, ресурсы, runtimeClass, read-only корневая ФС, env и
+ * MCP-серверы. `url` **не** переносится: адрес пула — это адрес созданного
+ * пода, а не профиль (`static`).
+ */
+export interface ExecutionPoolProfileSpec {
+  /** Образ пула (обязателен: под не из чего поднять). */
+  image: string;
+  /** Сетевой класс пула. */
+  network?: ExecutionProfileNetwork;
+  /** Ресурсы контейнера пула. */
+  resources?: ExecutionProfileResources;
+  /** `runtimeClassName` пода. */
+  runtimeClass?: string;
+  /** Read-only корневая ФС контейнера пула. */
+  readOnlyRootFilesystem?: boolean;
+  /** Дополнительные переменные окружения пула. */
+  env?: Record<string, string>;
+  /** MCP-серверы пула (полное описание — с командой). */
+  mcpServers?: ExecutionPoolProfileMcpServer[];
+}
+
+/**
+ * MCP-серверы профиля → форма provisioner'а.
+ *
+ * Каталог инстанца (`execution.remote.profiles[].mcpServers`) хранит **имена**
+ * серверов, а provisioner умеет применить только полное описание (команда
+ * нужна, чтобы запустить сервер в поде). Поэтому записи без команды
+ * отбрасываются: под получит дефолт образа, а не сломанный MCP-сервер.
+ */
+function toProfileSpecMcpServers(raw: unknown): ExecutionPoolProfileMcpServer[] {
+  if (!Array.isArray(raw)) return [];
+  const servers: ExecutionPoolProfileMcpServer[] = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string') continue;
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as {
+      name?: unknown;
+      command?: unknown;
+      args?: unknown;
+      env?: unknown;
+    };
+    const name = typeof record.name === 'string' ? record.name.trim() : '';
+    const command = typeof record.command === 'string' ? record.command.trim() : '';
+    if (name === '' || command === '') continue;
+    const args = Array.isArray(record.args)
+      ? record.args.filter((item): item is string => typeof item === 'string')
+      : undefined;
+    let env: Record<string, string> | undefined;
+    if (typeof record.env === 'object' && record.env !== null) {
+      const entries: Array<[string, string]> = [];
+      for (const [key, value] of Object.entries(record.env as Record<string, unknown>)) {
+        if (typeof value === 'string') entries.push([key, value]);
+      }
+      if (entries.length > 0) env = Object.fromEntries(entries);
+    }
+    servers.push({
+      name,
+      command,
+      ...(args !== undefined && args.length > 0 ? { args } : {}),
+      ...(env !== undefined && Object.keys(env).length > 0 ? { env } : {}),
+    });
+  }
+  return servers;
+}
+
+/**
+ * Спецификация профиля пула из эффективного каталога инстанца.
+ *
+ * @param profile профиль каталога (`execution.remote.profiles[<profile>]`)
+ * @returns спецификация либо `undefined` — профиля нет или у него нет
+ *   образа (тогда `profileSpec` не отправляется: provisioner возьмёт свой
+ *   каталог — обратная совместимость).
+ */
+export function executionPoolProfileSpec(
+  profile: ResolvedExecutionProfile | undefined,
+): ExecutionPoolProfileSpec | undefined {
+  if (profile === undefined) return undefined;
+  const image = (profile.image ?? '').trim();
+  if (image === '') return undefined;
+  const spec: ExecutionPoolProfileSpec = { image };
+  if (profile.network !== undefined) spec.network = profile.network;
+  if (profile.resources !== undefined) spec.resources = profile.resources;
+  if (profile.runtimeClass !== undefined && profile.runtimeClass !== '') {
+    spec.runtimeClass = profile.runtimeClass;
+  }
+  if (profile.readOnlyRootFilesystem !== undefined) {
+    spec.readOnlyRootFilesystem = profile.readOnlyRootFilesystem;
+  }
+  if (profile.env !== undefined && Object.keys(profile.env).length > 0) {
+    spec.env = { ...profile.env };
+  }
+  const mcpServers = toProfileSpecMcpServers(profile.mcpServers);
+  if (mcpServers.length > 0) spec.mcpServers = mcpServers;
+  return spec;
 }
 
 /**
@@ -491,7 +619,8 @@ export interface HttpExecutionPoolProviderOptions {
  * ## Протокол
  *
  * - `POST {url}/v1/pools` — тело `{ key, scope, id, class, profile }`
- *   (+ `workspaceSubPath`, если задан — per-project монтирование PVC),
+ *   (+ `workspaceSubPath`, если задан — per-project монтирование PVC,
+ *   + `profileSpec`, если эффективный профиль инстанца задал образ),
  *   ответ `{ url, token }`; адрес и токен пула приходят **из ответа**;
  * - `POST {url}/v1/pools/{key}/touch` — продлить жизнь пула (best-effort);
  * - `POST {url}/v1/pools/{key}/drain` — слить пул (best-effort);
@@ -511,6 +640,8 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
   private readonly _url: string;
   private readonly _tokenSecret: string;
   private readonly _timeoutMs: number;
+  /** Эффективный каталог профилей инстанса (источник `profileSpec`). */
+  private readonly _profiles: Record<string, ResolvedExecutionProfile>;
   private readonly _fetchImpl: FetchLike | undefined;
   /** Кэш значения токена на процесс (`null` — ещё не читали). */
   private _token: Promise<string> | null = null;
@@ -519,10 +650,17 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
     this._url = opts.url.replace(/\/+$/, '');
     this._tokenSecret = opts.tokenSecret;
     this._timeoutMs = opts.timeoutMs;
+    this._profiles = opts.profiles ?? {};
     this._fetchImpl = opts.fetchImpl;
   }
 
   async ensure(key: ExecutionPoolKey): Promise<ExecutionPoolRef> {
+    // Спецификация профиля пула: эффективный профиль инстанса (образ/сеть/
+    // ресурсы/…). Её поднимает provisioner вместо своего каталога — так админ
+    // задаёт профили в UI, не правя Helm values. Профиля нет или у него нет
+    // образа — `profileSpec` не отправляется (provisioner возьмёт свой
+    // каталог; старый provisioner поле просто не знает).
+    const profileSpec = executionPoolProfileSpec(this._profiles[key.profile]);
     const body = {
       key: poolKeyString(key),
       scope: key.scope,
@@ -532,6 +670,7 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
       // PROP-135 Ф4b-2b-2a: per-project монтирование PVC — поле аддитивное
       // (старый provisioner его проигнорирует и смонтирует корень тома).
       ...(key.workspaceSubPath ? { workspaceSubPath: key.workspaceSubPath } : {}),
+      ...(profileSpec !== undefined ? { profileSpec } : {}),
     };
     const response = await this._request('POST', '/v1/pools', body, true);
     const payload = (await response.json().catch(() => null)) as {
@@ -726,6 +865,9 @@ export function createExecutionPoolProvider(
       url: remote.provisioner.url,
       tokenSecret: remote.provisioner.tokenSecret,
       timeoutMs: remote.provisioner.timeoutMs,
+      // Каталог профилей инстанца (с учётом runtime-секции) — источник
+      // `profileSpec` в теле `POST /v1/pools`.
+      profiles: remote.profiles,
       ...(opts?.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
   }

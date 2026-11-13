@@ -71,6 +71,15 @@ describe('provisioner: static-провайдер', () => {
     ).rejects.toMatchObject({ name: 'PoolProvisionerError', reason: 'pool_not_found' });
   });
 
+  it('profileSpec игнорируется: адрес пула — из каталога (static)', async () => {
+    const pool = await provider.ensure(
+      request({
+        profileSpec: { image: 'registry.example/synth-executor:from-spec' },
+      }),
+    );
+    expect(pool.url).toBe('http://executor-p1:5100');
+  });
+
   it('ошибка не содержит токенов и описывает причину', async () => {
     try {
       await provider.ensure(request({ key: 'project:p9:exec:missing', id: 'p9', profile: 'missing' }));

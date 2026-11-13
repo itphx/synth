@@ -59,13 +59,13 @@ describe('resolveExecutionProfile: приоритет источников', () 
 });
 
 describe('resolveExecutionProfile: потолки (allowedProfiles)', () => {
-  it('потолок проекта: профиль вне списка → default + deniedBy=project + warning', () => {
+  it('потолок проекта: профиль вне списка → отказ, дефолт вне списка — профилей нет', () => {
     const resolution = resolveExecutionProfile(input({
       sessionProfile: 'forbidden',
       projectAllowed: ['a', 'b'],
     }));
     expect(resolution).toMatchObject({
-      profile: 'default',
+      profile: '',
       source: 'default',
       deniedBy: 'project',
     });
@@ -74,25 +74,40 @@ describe('resolveExecutionProfile: потолки (allowedProfiles)', () => {
     expect(resolution.warning).not.toMatch(/token|secret|password/i);
   });
 
-  it('потолок агента: профиль вне списка → default + deniedBy=agent', () => {
+  it('потолок проекта: запрещённый кандидат → откат на дефолт, если дефолт в списке', () => {
+    const resolution = resolveExecutionProfile(input({
+      sessionProfile: 'forbidden',
+      projectAllowed: ['a', 'b', 'default'],
+    }));
+    expect(resolution).toMatchObject({
+      profile: 'default',
+      source: 'default',
+      deniedBy: 'project',
+    });
+    expect(resolution.warning).toContain('"forbidden"');
+  });
+
+  it('потолок агента: профиль вне списка → отказ (deniedBy=agent)', () => {
     const resolution = resolveExecutionProfile(input({
       agentProfile: 'forbidden',
       agentAllowed: ['a'],
     }));
     expect(resolution).toMatchObject({
-      profile: 'default',
+      profile: '',
       source: 'default',
       deniedBy: 'agent',
     });
     expect(resolution.warning).toContain('denied by agent');
   });
 
-  it('оба потолка: профиль обязан входить в каждый непустой список', () => {
+  it('оба потолка: профиль обязан входить в каждый заданный список', () => {
+    // Профиль вне потолка агента не выбирается; инстанс-дефолт вне потолка
+    // проекта — тоже (дефолт не исключение) → профилей нет.
     expect(resolveExecutionProfile(input({
       sessionProfile: 'a',
       projectAllowed: ['a', 'b'],
       agentAllowed: ['b'],
-    })).profile).toBe('default');
+    })).profile).toBe('');
 
     expect(resolveExecutionProfile(input({
       sessionProfile: 'b',
@@ -101,15 +116,52 @@ describe('resolveExecutionProfile: потолки (allowedProfiles)', () => {
     })).profile).toBe('b');
   });
 
-  it('пустой/не заданный потолок = без ограничения (обратная совместимость)', () => {
-    expect(resolveExecutionProfile(input({
+  it('пустой потолок = ничего не разрешено (fail-closed)', () => {
+    // Явно пустой список — «профилей нет»: кандидат не выбирается, и
+    // инстанс-дефолт (вне списка) тоже не выбирается.
+    const resolution = resolveExecutionProfile(input({
       sessionProfile: 'x',
       projectAllowed: [],
+      agentAllowed: ['x'],
+    }));
+    expect(resolution.profile).toBe('');
+    expect(resolution.deniedBy).toBe('project');
+    expect(resolution.warning).toContain('"x"');
+
+    // Второй потолок пуст — кандидат отклонён им.
+    expect(resolveExecutionProfile(input({
+      sessionProfile: 'x',
+      projectAllowed: ['x'],
       agentAllowed: [],
+    })).deniedBy).toBe('agent');
+  });
+
+  it('незаданный потолок = область не ограничивает (поля нет у старых записей)', () => {
+    expect(resolveExecutionProfile(input({
+      sessionProfile: 'x',
+      projectAllowed: undefined,
+      agentAllowed: undefined,
     }))).toMatchObject({ profile: 'x', source: 'session' });
 
     expect(resolveExecutionProfile(input({ sessionProfile: 'x' })))
       .toMatchObject({ profile: 'x', source: 'session' });
+  });
+
+  it('инстанс-дефолт — не исключение: вне потолка профиль не выбирается', () => {
+    const resolution = resolveExecutionProfile(input({
+      sessionProfile: 'x',
+      projectAllowed: ['a'],
+    }));
+    expect(resolution.profile).toBe('');
+    expect(resolution.deniedBy).toBe('project');
+    expect(resolution.warning).toContain('no execution profile selected');
+    expect(resolution.warning).toContain('"default"');
+  });
+
+  it('дефолт в потолке — выбирается', () => {
+    expect(resolveExecutionProfile(input({
+      projectAllowed: ['default', 'a'],
+    }))).toMatchObject({ profile: 'default', source: 'default' });
   });
 
   it('запрещённый кандидат пропускается: берётся следующий разрешённый источник', () => {
@@ -161,16 +213,22 @@ describe('resolveExecutionProfile: каталог профилей', () => {
 });
 
 describe('isProfileAllowed', () => {
-  it('пустые/отсутствующие потолки — разрешено', () => {
+  it('незаданные потолки — ограничения нет', () => {
     expect(isProfileAllowed('x', {})).toBe(true);
-    expect(isProfileAllowed('x', { projectAllowed: [], agentAllowed: [] })).toBe(true);
+    expect(isProfileAllowed('x', { projectAllowed: undefined, agentAllowed: undefined })).toBe(true);
   });
 
-  it('непустые потолки проверяются', () => {
+  it('заданные потолки проверяются', () => {
     expect(isProfileAllowed('x', { projectAllowed: ['x'] })).toBe(true);
     expect(isProfileAllowed('x', { projectAllowed: ['y'] })).toBe(false);
     expect(isProfileAllowed('x', { agentAllowed: ['y'] })).toBe(false);
     expect(isProfileAllowed('x', { projectAllowed: ['x'], agentAllowed: ['y'] })).toBe(false);
+  });
+
+  it('пустой заданный потолок = ничего не разрешено', () => {
+    expect(isProfileAllowed('x', { projectAllowed: [] })).toBe(false);
+    expect(isProfileAllowed('x', { agentAllowed: [] })).toBe(false);
+    expect(isProfileAllowed('x', { projectAllowed: [], agentAllowed: [] })).toBe(false);
   });
 
   it('пустое имя профиля не разрешено', () => {
@@ -206,12 +264,12 @@ describe('resolveBrowserProfile: браузерный контур (PROP-135)', 
       .toMatchObject({ profile: 'browser', source: 'default' });
   });
 
-  it('потолки проекта и агента пересекаются: профиль обязан войти в каждый непустой', () => {
+  it('потолки проекта и агента пересекаются: профиль обязан войти в каждый заданный', () => {
     expect(resolveBrowserProfile(browserInput({
       sessionProfile: 'browser-full',
       projectAllowed: ['browser', 'browser-full'],
       agentAllowed: ['browser-mobile'],
-    }))).toMatchObject({ profile: 'browser', source: 'default', deniedBy: 'agent' });
+    }))).toMatchObject({ profile: '', source: 'default', deniedBy: 'agent' });
 
     expect(resolveBrowserProfile(browserInput({
       sessionProfile: 'browser-full',
@@ -219,12 +277,22 @@ describe('resolveBrowserProfile: браузерный контур (PROP-135)', 
       agentAllowed: ['browser-full', 'browser-mobile'],
     }))).toMatchObject({ profile: 'browser-full', source: 'session' });
 
-    // Пустые потолки — без ограничения (обратная совместимость).
+    // Незаданные потолки — ограничения нет.
     expect(resolveBrowserProfile(browserInput({
       sessionProfile: 'browser-full',
-      projectAllowed: [],
-      agentAllowed: [],
+      projectAllowed: undefined,
+      agentAllowed: undefined,
     }))).toMatchObject({ profile: 'browser-full', source: 'session' });
+  });
+
+  it('пустой потолок = профилей нет (дефолт тоже не выбирается)', () => {
+    const resolution = resolveBrowserProfile(browserInput({
+      sessionProfile: 'browser-full',
+      agentAllowed: [],
+    }));
+    expect(resolution.profile).toBe('');
+    expect(resolution.deniedBy).toBe('agent');
+    expect(resolution.warning).toContain('no execution profile selected');
   });
 
   it('запрещённый потолком кандидат не выбирается: берётся следующий/дефолт + warning', () => {

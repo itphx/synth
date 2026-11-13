@@ -15,6 +15,18 @@
 
 import { BASE_URL, fetchJSON } from './base'
 
+import type {
+  ExecutionRuntimeProfile,
+  ExecutionRuntimeSettings,
+} from '@itphx/synth-shared/types'
+
+/**
+ * Runtime-каталог профилей и дефолтов (ADR-135) — та же форма, что в core
+ * (`executionRuntimeSettingsSchema`); типы — из `@itphx/synth-shared/types`
+ * (browser-safe, type-only).
+ */
+export type { ExecutionRuntimeProfile, ExecutionRuntimeSettings }
+
 /** Эффективный провайдер исполнения (`inline` — исполнение в процессе). */
 export type ExecutionProviderKind = 'inline' | 'static' | 'http'
 
@@ -93,6 +105,23 @@ export interface ExecutionPoolsDto {
   pools: ExecutionPoolInfo[]
 }
 
+/**
+ * Ответ `GET/PUT/DELETE /api/v2/settings/execution` (ADR-135, runtime-каталог).
+ *
+ * - `saved` — сохранённая runtime-секция (`null` — каталог из config.yaml);
+ * - `running` — то, что работает сейчас (снимок на старте процесса);
+ * - `effective` — что заработает после перезапуска (config + runtime + env);
+ * - `restartRequired` — `effective` ≠ `running` (каталог — параметр запуска).
+ */
+export interface ExecutionSettingsDto {
+  saved: ExecutionRuntimeSettings | null
+  running: ExecutionRuntimeSettings
+  restartRequired: boolean
+  effective: ExecutionRuntimeSettings
+  defaults: ExecutionRuntimeSettings
+  isOverridden: boolean
+}
+
 export const executionApi = {
   /** GET /execution/profiles — эффективные провайдер/пулинг/профили. */
   async getExecutionProfiles(): Promise<ExecutionProfilesDto> {
@@ -122,6 +151,39 @@ export const executionApi = {
   /** DELETE /execution/pools/:key — удалить пул (`202`, идемпотентно). */
   async releaseExecutionPool(key: string): Promise<void> {
     await fetchJSON<unknown>(`${BASE_URL}/execution/pools/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  /**
+   * GET /settings/execution — runtime-каталог профилей и дефолтов (ADR-135).
+   *
+   * Секция — **параметр запуска**: изменения применяются после резапуска
+   * инстанса (`restartRequired` в ответе).
+   */
+  async getExecutionSettings(): Promise<ExecutionSettingsDto> {
+    return fetchJSON<ExecutionSettingsDto>(`${BASE_URL}/settings/execution`)
+  },
+
+  /**
+   * PUT /settings/execution — сохранить runtime-секцию целиком.
+   *
+   * Тело — сама секция (`{ defaultProfile, browserProfile, browserProfiles,
+   * profiles }`); сервер проверяет ссылочную целостность каталога и отвечает
+   * `400 VALIDATION_ERROR` с коротким текстом.
+   */
+  async saveExecutionSettings(
+    settings: ExecutionRuntimeSettings,
+  ): Promise<ExecutionSettingsDto> {
+    return fetchJSON<ExecutionSettingsDto>(`${BASE_URL}/settings/execution`, {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    })
+  },
+
+  /** DELETE /settings/execution — сброс к каталогу config.yaml. */
+  async resetExecutionSettings(): Promise<ExecutionSettingsDto> {
+    return fetchJSON<ExecutionSettingsDto>(`${BASE_URL}/settings/execution`, {
       method: 'DELETE',
     })
   },

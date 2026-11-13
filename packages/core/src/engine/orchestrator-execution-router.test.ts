@@ -249,8 +249,8 @@ describe('PROP-135 Ф4a: порт роутера доходит до тула', 
       router,
       executorProfile: 'devops',
       // Встроенный `fixer` ограничен `default|light`: тест про доставку порта,
-      // поэтому потолок агента снят явно (пустой список = без ограничения).
-      agentOverrides: { fixer: { allowedProfiles: [] } },
+      // поэтому потолок агента снят явно (потолок не задан).
+      agentOverrides: { fixer: { allowedProfiles: undefined } },
       onToolCall: (ctx) => {
         seen = (ctx.extra as { executionPort?: ExecutionPort }).executionPort;
       },
@@ -302,7 +302,7 @@ describe('PROP-135 Ф4a: порт роутера доходит до тула', 
       executorProfile: 'devops',
       projectId: 'prj_router',
       // Потолок встроенного `fixer` (default|light) снят: проверяется ключ пула.
-      agentOverrides: { fixer: { allowedProfiles: [] } },
+      agentOverrides: { fixer: { allowedProfiles: undefined } },
       onToolCall: () => {},
     });
 
@@ -484,7 +484,7 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
       projectStore: store,
       // У встроенного `fixer` теперь есть собственный executorProfile —
       // для проверки наследования проекта профиль агента снят явно.
-      agentOverrides: { fixer: { executorProfile: undefined, allowedProfiles: [] } },
+      agentOverrides: { fixer: { executorProfile: undefined, allowedProfiles: undefined } },
       onToolCall: () => {},
     });
     await runTurn(harness);
@@ -507,7 +507,7 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
       projectStore: store,
       executorProfile: 'session-profile',
       // Потолок/профиль встроенного `fixer` сняты: проверяется приоритет сессии.
-      agentOverrides: { fixer: { executorProfile: 'agent-profile', allowedProfiles: [] } },
+      agentOverrides: { fixer: { executorProfile: 'agent-profile', allowedProfiles: undefined } },
       onToolCall: () => {},
     });
     await runTurn(harness);
@@ -516,6 +516,31 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
 
   it('запрещённый проектом профиль → defaultProfile (fail-closed)', async () => {
     const port = sentinelPort('denied-port');
+    const requested: Array<string | undefined> = [];
+    const router: ExecutionRouter = {
+      portFor(target) {
+        requested.push(target?.profile);
+        return port;
+      },
+      profiles: () => ['default', 'allowed', 'forbidden'],
+      defaultProfile: () => 'default',
+    };
+    // Профиль инстанса по умолчанию обязан входить в потолок проекта — иначе
+    // выбирать нечего (ADR-135, аддендум: дефолт — не исключение).
+    const { store, projectId } = await makeProjectStore({ allowedProfiles: ['allowed', 'default'] });
+    const harness = await makeHarness({
+      router,
+      projectId,
+      projectStore: store,
+      executorProfile: 'forbidden',
+      onToolCall: () => {},
+    });
+    await runTurn(harness);
+    expect(requested[requested.length - 1]).toBe('default');
+  });
+
+  it('дефолт инстанса вне потолка проекта → профиль не выбирается (профилей нет)', async () => {
+    const port = sentinelPort('no-profile-port');
     const requested: Array<string | undefined> = [];
     const router: ExecutionRouter = {
       portFor(target) {
@@ -534,7 +559,8 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
       onToolCall: () => {},
     });
     await runTurn(harness);
-    expect(requested[requested.length - 1]).toBe('default');
+    // Ни запрещённый кандидат, ни дефолт не выбраны — профиль не передан.
+    expect(requested[requested.length - 1]).toBeUndefined();
   });
 
   it('неизвестный каталогу профиль → defaultProfile', async () => {

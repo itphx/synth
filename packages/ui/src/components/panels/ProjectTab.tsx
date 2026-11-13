@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -953,7 +953,20 @@ function WorktreesBlock({ projectId, sessionId }: { projectId: string; sessionId
   )
 }
 
-/** PROP-135 Ф6a: профиль исполнения проекта и потолок разрешённых профилей. */
+/** Debounce автосохранения настроек исполнения проекта (мс). */
+const PROJECT_EXECUTOR_AUTOSAVE_DEBOUNCE_MS = 500
+
+/**
+ * PROP-135 Ф6a: профиль исполнения проекта и потолок разрешённых профилей.
+ *
+ * Автосохранение (как в `SessionSettingsTab`): селекты — сразу, списки — с
+ * debounce ~500 мс; статус — тосты `panel.saved`/`panel.saveError` через
+ * `usePanelSettingSave`. Кнопки «Сохранить» нет; «Сбросить» возвращает
+ * значения формы к последним сохранённым (данные не чистит).
+ *
+ * ADR-135 (аддендум): пустой список разрешённых = «профилей нет» — селект
+ * профиля заблокирован.
+ */
 function ProjectExecutorBlock({
   project,
   canManage,
@@ -966,7 +979,7 @@ function ProjectExecutorBlock({
   onUpdated: (updated: ProjectData) => void
 }) {
   const { t } = useI18n()
-  const { notify } = useNotification()
+  const { run, isPending } = usePanelSettingSave({ sessionId })
 
   const executor = project.executor ?? null
   const configuredProfile = executor?.profile ?? ''
@@ -981,7 +994,16 @@ function ProjectExecutorBlock({
   const [allowedDraft, setAllowedDraft] = useState<string[]>([...configuredAllowed])
   const [browserProfileDraft, setBrowserProfileDraft] = useState(configuredBrowserProfile)
   const [browserAllowedDraft, setBrowserAllowedDraft] = useState<string[]>([...configuredBrowserAllowed])
-  const [saving, setSaving] = useState(false)
+
+  /** Последние успешно сохранённые значения — «Сбросить» возвращает их. */
+  const savedRef = useRef({
+    profile: configuredProfile,
+    allowed: [...configuredAllowed],
+    browserProfile: configuredBrowserProfile,
+    browserAllowed: [...configuredBrowserAllowed],
+  })
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSaveRef = useRef<(() => void) | null>(null)
 
   // Каталог профилей читается при открытии секции: он нужен и для селекта, и для
   // списка «разрешённых». Ошибка не блокирует вкладку — показываем текущее
@@ -1010,12 +1032,27 @@ function ProjectExecutorBlock({
   }, [canManage])
 
   // Изменения проекта извне секции (сохранение, другой клиент) синхронизируют черновик.
+  // Потолок не задан (`null`/`undefined`) — проект не ограничивает: отмечаем
+  // весь каталог (иначе селект был бы «выключен», хотя профиль разрешён).
   useEffect(() => {
+    const execCatalog = (profiles?.profiles ?? []).map((name) => name.trim()).filter(Boolean)
+    const browserCat = (profiles?.browserProfiles?.length
+      ? profiles.browserProfiles
+      : profiles?.browserDefaultProfile
+        ? [profiles.browserDefaultProfile]
+        : []
+    ).map((name) => name.trim()).filter(Boolean)
     setProfileDraft(executor?.profile ?? '')
-    setAllowedDraft([...(executor?.allowedProfiles ?? [])])
+    setAllowedDraft([...(executor?.allowedProfiles ?? execCatalog)])
     setBrowserProfileDraft(executor?.browserProfile ?? '')
-    setBrowserAllowedDraft([...(executor?.allowedBrowserProfiles ?? [])])
-  }, [executor])
+    setBrowserAllowedDraft([...(executor?.allowedBrowserProfiles ?? browserCat)])
+    savedRef.current = {
+      profile: executor?.profile ?? '',
+      allowed: [...(executor?.allowedProfiles ?? execCatalog)],
+      browserProfile: executor?.browserProfile ?? '',
+      browserAllowed: [...(executor?.allowedBrowserProfiles ?? browserCat)],
+    }
+  }, [executor, profiles])
 
   // Опции: каталог инстанса + сохранённые значения проекта (даже если профиль
   // исчез из каталога — иначе текущий выбор нельзя было бы увидеть).
@@ -1048,80 +1085,109 @@ function ProjectExecutorBlock({
   pushBrowser(configuredBrowserProfile)
   for (const name of configuredBrowserAllowed) pushBrowser(name)
 
+  const saved = savedRef.current
   const dirty =
-    profileDraft !== configuredProfile ||
-    allowedDraft.length !== configuredAllowed.length ||
-    allowedDraft.some((name) => !configuredAllowed.includes(name)) ||
-    browserProfileDraft !== configuredBrowserProfile ||
-    browserAllowedDraft.length !== configuredBrowserAllowed.length ||
-    browserAllowedDraft.some((name) => !configuredBrowserAllowed.includes(name))
+    profileDraft !== saved.profile ||
+    browserProfileDraft !== saved.browserProfile ||
+    allowedDraft.length !== saved.allowed.length ||
+    allowedDraft.some((name) => !saved.allowed.includes(name)) ||
+    browserAllowedDraft.length !== saved.browserAllowed.length ||
+    browserAllowedDraft.some((name) => !saved.browserAllowed.includes(name))
 
-  const statusOfError = (err: unknown): number | undefined =>
-    typeof (err as { status?: unknown })?.status === 'number'
-      ? (err as { status: number }).status
-      : undefined
-
-  const notifyFailure = (err: unknown) => {
-    notify({
-      text:
-        statusOfError(err) === 403
-          ? t('projectTab.executor.forbidden')
-          : t('projectTab.executor.saveError', { error: errorText(err) }),
-      type: 'error',
-      category: 'error',
-      sessionId,
+  /** Сохранение текущих значений блока (общий шаг для immediate/debounce). */
+  const saveExecutor = useCallback(() => {
+    const values = {
+      profile: profileDraft.trim(),
+      allowed: [...allowedDraft],
+      browserProfile: browserProfileDraft.trim(),
+      browserAllowed: [...browserAllowedDraft],
+    }
+    void run({
+      key: 'project-executor',
+      run: async () => {
+        const updated = await synthApi.updateProject(project.id, {
+          executor: {
+            // null сбрасывает профиль (наследование);
+            // пустой список разрешённых = «профилей нет» (ADR-135).
+            profile: values.profile || null,
+            allowedProfiles: values.allowed,
+            browserProfile: values.browserProfile || null,
+            allowedBrowserProfiles: values.browserAllowed,
+          },
+        })
+        return { updated, values }
+      },
+      onSuccess: ({ updated, values: savedValues }) => {
+        savedRef.current = {
+          profile: savedValues.profile,
+          allowed: savedValues.allowed,
+          browserProfile: savedValues.browserProfile,
+          browserAllowed: savedValues.browserAllowed,
+        }
+        onUpdated(updated)
+      },
+      onError: () => {
+        // Откат к сохранённым значениям (никаких «залипших» правок).
+        const current = savedRef.current
+        setProfileDraft(current.profile)
+        setAllowedDraft([...current.allowed])
+        setBrowserProfileDraft(current.browserProfile)
+        setBrowserAllowedDraft([...current.browserAllowed])
+      },
     })
-  }
+  }, [allowedDraft, browserAllowedDraft, browserProfileDraft, onUpdated, profileDraft, project.id, run])
 
-  const handleSave = async () => {
-    if (!canManage || saving) return
-    setSaving(true)
-    try {
-      const updated = await synthApi.updateProject(project.id, {
-        // null сбрасывает профиль (сервер трактует `''`/`null` одинаково);
-        // пустой список разрешённых = «без ограничения».
-        executor: {
-          profile: profileDraft.trim() ? profileDraft.trim() : null,
-          allowedProfiles: allowedDraft,
-          // PROP-135 (браузерный контур): вторые поля — отдельный каталог.
-          browserProfile: browserProfileDraft.trim() ? browserProfileDraft.trim() : null,
-          allowedBrowserProfiles: browserAllowedDraft,
-        },
-      })
-      onUpdated(updated)
-      notify({ text: t('projectTab.executor.saved'), type: 'success', category: 'system', sessionId })
-    } catch (err) {
-      notifyFailure(err)
-    } finally {
-      setSaving(false)
+  // Автосохранение: селекты — сразу, списки — с debounce ~500 мс.
+  useEffect(() => {
+    if (!canManage || !dirty) return
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
     }
-  }
+    pendingSaveRef.current = null
+    const immediate =
+      profileDraft !== savedRef.current.profile ||
+      browserProfileDraft !== savedRef.current.browserProfile
+    const save = () => {
+      void saveExecutor()
+    }
+    if (immediate) {
+      save()
+    } else {
+      pendingSaveRef.current = save
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null
+        pendingSaveRef.current = null
+        save()
+      }, PROJECT_EXECUTOR_AUTOSAVE_DEBOUNCE_MS)
+    }
+  }, [allowedDraft, browserAllowedDraft, browserProfileDraft, canManage, dirty, profileDraft, saveExecutor])
 
-  const handleReset = async () => {
-    if (!canManage || saving) return
-    setSaving(true)
-    try {
-      // Поле `executor` целиком `null` сервер не принимает: сброс обеих частей —
-      // значениями внутри объекта (`profile: null`, `allowedProfiles: []`).
-      const updated = await synthApi.updateProject(project.id, {
-        executor: {
-          profile: null,
-          allowedProfiles: [],
-          browserProfile: null,
-          allowedBrowserProfiles: [],
-        },
-      })
-      setProfileDraft('')
-      setAllowedDraft([])
-      setBrowserProfileDraft('')
-      setBrowserAllowedDraft([])
-      onUpdated(updated)
-      notify({ text: t('projectTab.executor.resetDone'), type: 'success', category: 'system', sessionId })
-    } catch (err) {
-      notifyFailure(err)
-    } finally {
-      setSaving(false)
+  // Best-effort дофлаш отложенного сохранения при размонтировании.
+  useEffect(() => {
+    return () => {
+      const flush = pendingSaveRef.current
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current)
+        debounceTimerRef.current = null
+      }
+      pendingSaveRef.current = null
+      flush?.()
     }
+  }, [])
+
+  /** «Сбросить»: значения формы возвращаются к сохранённым (данные не чистятся). */
+  const handleReset = () => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
+      debounceTimerRef.current = null
+    }
+    pendingSaveRef.current = null
+    const current = savedRef.current
+    setProfileDraft(current.profile)
+    setAllowedDraft([...current.allowed])
+    setBrowserProfileDraft(current.browserProfile)
+    setBrowserAllowedDraft([...current.browserAllowed])
   }
 
   const toggleAllowed = (name: string) => {
@@ -1155,62 +1221,72 @@ function ProjectExecutorBlock({
     )
   }
 
-  return (
-    <div className="flex min-w-0 flex-col gap-2" data-testid="project-executor">
-      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-        <span>{t('projectTab.executor.profile')}</span>
-        <select
-          value={profileDraft}
-          onChange={(e) => setProfileDraft(e.target.value)}
-          disabled={!canManage || saving}
-          aria-label={t('projectTab.executor.profile')}
-          data-testid="project-executor-profile"
-          className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
-        >
-          <option value="">{defaultProfileLabel}</option>
-          {profileNames.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-      </label>
+  const busy = isPending('project-executor')
 
-      <div className="flex flex-col gap-1" data-testid="project-executor-allowed">
-        <span className="text-xs text-muted-foreground">{t('projectTab.executor.allowed')}</span>
-        {profileNames.length === 0 ? (
-          <span className="text-[0.625rem] text-muted-foreground/60">
-            {t('projectTab.executor.allowedEmpty')}
-          </span>
-        ) : (
-          <div className="flex flex-wrap gap-x-3 gap-y-1.5" role="group" aria-label={t('projectTab.executor.allowed')}>
+  return (
+    <div className="flex min-w-0 flex-col gap-3" data-testid="project-executor">
+      {/* Подсекция «Исполнитель». */}
+      <div className="flex min-w-0 flex-col gap-2" data-testid="project-executor-exec">
+        <span className="text-xs font-medium text-foreground">{t('projectTab.executor.execSection')}</span>
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <span>{t('projectTab.executor.profile')}</span>
+          <select
+            value={profileDraft}
+            onChange={(e) => setProfileDraft(e.target.value)}
+            disabled={!canManage || busy || allowedDraft.length === 0}
+            aria-label={t('projectTab.executor.profile')}
+            data-testid="project-executor-profile"
+            className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+          >
+            <option value="">{defaultProfileLabel}</option>
             {profileNames.map((name) => (
-              <label key={name} className="flex items-center gap-1.5 text-xs text-foreground">
-                <input
-                  type="checkbox"
-                  checked={allowedDraft.includes(name)}
-                  onChange={() => toggleAllowed(name)}
-                  disabled={!canManage || saving}
-                  data-testid={`project-executor-allowed-${name}`}
-                />
-                <span className="font-mono">{name}</span>
-              </label>
+              <option key={name} value={name}>
+                {name}
+              </option>
             ))}
-          </div>
-        )}
-        <span className="text-[0.625rem] text-muted-foreground/60">
-          {t('projectTab.executor.allowedHint')}
-        </span>
+          </select>
+        </label>
+
+        <div className="flex flex-col gap-1" data-testid="project-executor-allowed">
+          <span className="text-xs text-muted-foreground">{t('projectTab.executor.allowed')}</span>
+          {profileNames.length === 0 ? (
+            <span className="text-[0.625rem] text-muted-foreground/60">
+              {t('projectTab.executor.allowedEmpty')}
+            </span>
+          ) : (
+            <div className="flex flex-wrap gap-x-3 gap-y-1.5" role="group" aria-label={t('projectTab.executor.allowed')}>
+              {profileNames.map((name) => (
+                <label key={name} className="flex items-center gap-1.5 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={allowedDraft.includes(name)}
+                    onChange={() => toggleAllowed(name)}
+                    disabled={!canManage || busy}
+                    data-testid={`project-executor-allowed-${name}`}
+                  />
+                  <span className="font-mono">{name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <span className="text-[0.625rem] text-muted-foreground/60">
+            {t('projectTab.executor.allowedHint')}
+          </span>
+        </div>
       </div>
 
-      {/* PROP-135 (браузерный контур): второй блок — профиль браузерного пула. */}
-      <div className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2" data-testid="project-browser-profile">
+      {/* Подсекция «Браузер» — те же строки, отдельный каталог. */}
+      <div
+        className="flex min-w-0 flex-col gap-2 border-t border-border/60 pt-3"
+        data-testid="project-browser-profile"
+      >
+        <span className="text-xs font-medium text-foreground">{t('projectTab.executor.browserSection')}</span>
         <label className="flex flex-col gap-1 text-xs text-muted-foreground">
           <span>{t('projectTab.executor.browserProfile')}</span>
           <select
             value={browserProfileDraft}
             onChange={(e) => setBrowserProfileDraft(e.target.value)}
-            disabled={!canManage || saving}
+            disabled={!canManage || busy || browserAllowedDraft.length === 0}
             aria-label={t('projectTab.executor.browserProfile')}
             data-testid="project-browser-profile-select"
             className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
@@ -1242,7 +1318,7 @@ function ProjectExecutorBlock({
                     type="checkbox"
                     checked={browserAllowedDraft.includes(name)}
                     onChange={() => toggleBrowserAllowed(name)}
-                    disabled={!canManage || saving}
+                    disabled={!canManage || busy}
                     data-testid={`project-browser-allowed-${name}`}
                   />
                   <span className="font-mono">{name}</span>
@@ -1266,17 +1342,8 @@ function ProjectExecutorBlock({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => void handleSave()}
-            disabled={saving || !dirty}
-            data-testid="project-executor-save"
-            className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50"
-          >
-            {saving ? t('projectTab.executor.saving') : t('projectTab.executor.save')}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleReset()}
-            disabled={saving || (!configuredProfile && configuredAllowed.length === 0 && !configuredBrowserProfile && configuredBrowserAllowed.length === 0)}
+            onClick={handleReset}
+            disabled={busy || !dirty}
             data-testid="project-executor-reset"
             className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
           >

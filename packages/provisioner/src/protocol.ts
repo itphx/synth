@@ -30,6 +30,27 @@
  * Составные поля (`scope`/`id`/`class`/`profile`) передаются рядом — по ним
  * считается idle-таймаут и подбирается ресурс, но идентичность пула — `key`.
  *
+ * ## Спецификация профиля (`profileSpec`)
+ *
+ * Тело `POST /v1/pools` может нести **спецификацию профиля пула** —
+ * `profileSpec` (та же strict-схема, что у каталога `SYNTH_PROVISIONER_PROFILES`:
+ * `image`/`url`/`network`/`resources`/`runtimeClass`/`readOnlyRootFilesystem`/
+ * `env`/`mcpServers`). Её шлёт control plane (backend) из эффективного
+ * каталога инстанса (`execution.remote.profiles[<profile>]`), чтобы админ
+ * задавал/менял профили в UI, не правя Helm values.
+ *
+ * Приоритет: **`profileSpec` > каталог provisioner'а**. Провайдер `static`
+ * поле игнорирует (адрес пула — из `staticPools`/`profiles[].url`), провайдер
+ * `kubernetes` строит по нему под (`image` обязателен; `url` игнорируется).
+ *
+ * Поле **аддитивное**: запрос без `profileSpec` работает с любой версией
+ * provisioner'а (поведение прежнее — каталог provisioner'а). Обратное
+ * ограничение: у старого provisioner'а тело запроса разбирается **строгой**
+ * схемой, поэтому запрос с `profileSpec` он отвергнет (`400
+ * invalid_request`). Backend шлёт поле только для профилей каталога инстанса,
+ * у которых задан образ; provisioner новой версии при этом нужно обновить
+ * раньше backend'а.
+ *
  * ## Ошибки
  *
  * Единый формат — `{error:{reason, message}}`; `reason` — из закрытого набора,
@@ -38,6 +59,9 @@
  */
 
 import { z } from 'zod';
+import { profileSchema, type ProvisionerProfile } from './config.js';
+
+export { formatIssues } from './format.js';
 
 /** Версия wire-протокола provisioner'а (аддитивные изменения — увеличивают). */
 export const PROVISIONER_PROTOCOL_VERSION = 1;
@@ -120,6 +144,23 @@ export interface EnsurePoolRequest {
    * `invalid_request` (`400`).
    */
   workspaceSubPath?: string;
+  /**
+   * Спецификация профиля пула (ADR-135, аддитивное поле протокола).
+   *
+   * Профиль пула задаётся **в теле запроса**: control plane (backend) шлёт
+   * эффективный профиль инстанса (`execution.remote.profiles[<profile>]`), и
+   * provisioner создаёт пул по нему — админу не нужно править Helm values.
+   * Приоритет: `profileSpec` > каталог provisioner'а
+   * (`SYNTH_PROVISIONER_PROFILES`).
+   *
+   * Провайдер `static` поле **игнорирует** (адрес пула — из `staticPools`/
+   * `profiles[].url`); провайдер `kubernetes` строит по нему спецификацию
+   * пода (`image` обязателен, `url` игнорируется).
+   *
+   * Поле не приходит — provisioner работает как раньше (профиль берётся из
+   * его каталога).
+   */
+  profileSpec?: ProvisionerProfile;
 }
 
 /** Ответ обеспечения пула: адрес и токен доступа к исполнителю. */
@@ -246,6 +287,10 @@ export const ensurePoolRequestSchema = z
           'без «..», «.» и пустых сегментов',
       })
       .optional(),
+    // Спецификация профиля пула из тела запроса (та же strict-схема, что у
+    // каталога профилей provisioner'а): неизвестное поле внутри — ошибка
+    // валидации (`400`), а не молчаливый игнор.
+    profileSpec: profileSchema.optional(),
   })
   .strict()
   .refine((value) => value.scope === 'instance' || value.id !== undefined, {
@@ -297,19 +342,4 @@ export function errorResponse(
   message: string,
 ): { status: ProvisionerErrorStatus; body: ProvisionerErrorResponse } {
   return { status: ERROR_STATUS[reason], body: { error: { reason, message } } };
-}
-
-/**
- * Человекочитаемое описание ошибок zod-валидации.
- *
- * Порядок и формулировки не являются контрактом: сообщение нужно оператору,
- * а не клиенту. Секретов в нём нет — только пути полей.
- */
-export function formatIssues(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => {
-      const path = issue.path.map(String).join('.');
-      return path === '' ? issue.message : `${path}: ${issue.message}`;
-    })
-    .join('; ');
 }

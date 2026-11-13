@@ -9,6 +9,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Hono } from 'hono';
+import type { ProvisionerKubernetesConfig } from './config.js';
+import type {
+  KubernetesClient,
+  KubernetesManifest,
+  KubernetesPod,
+  KubernetesSecret,
+} from './kubernetes.js';
+import { KubernetesPoolProvisioner } from './kubernetes-provider.js';
 import { createProvisionerMetrics, type ProvisionerMetrics } from './metrics.js';
 import { PoolService } from './pool-service.js';
 import { StaticPoolProvisioner } from './provider.js';
@@ -118,6 +126,130 @@ function ensureBody(overrides: Partial<EnsurePoolRequest> = {}): EnsurePoolReque
 async function readError(res: Response): Promise<{ reason: string; message: string }> {
   const body = (await res.json()) as { error: { reason: string; message: string } };
   return body.error;
+}
+
+/* ---------------------------------------------------------------------------
+ * Спецификация профиля (`profileSpec`): пул поднимается по спецификации из
+ * тела запроса, а не по каталогу provisioner'а (ADR-135).
+ * ------------------------------------------------------------------------ */
+
+/** Конфигурация Kubernetes-провайдера для тестов. */
+const KUBERNETES: ProvisionerKubernetesConfig = {
+  namespace: 'synth',
+  workspacePvc: 'synth-workspace',
+  workspaceMount: '/var/synth/data/workspaces',
+  apiServer: 'https://kubernetes.default.svc',
+  tokenFile: '/var/run/secrets/kubernetes.io/serviceaccount/token',
+  caFile: '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt',
+  startTimeoutMs: 1_000,
+  pollIntervalMs: 50,
+  executorPort: 5100,
+  terminationGraceSeconds: 30,
+  imagePullSecrets: [],
+};
+
+/** Каталог профилей provisioner'а (fallback, когда спецификация не пришла). */
+const K8S_PROFILES = {
+  default: { image: 'registry.example/synth-executor:catalog' },
+};
+
+/** In-memory Kubernetes API: поды и секреты в одном namespace. */
+class FakeKubernetesClient implements KubernetesClient {
+  readonly createdPods: KubernetesManifest[] = [];
+  private readonly pods = new Map<string, KubernetesPod>();
+  private readonly secrets = new Map<string, KubernetesSecret>();
+
+  async listPods(): Promise<KubernetesPod[]> {
+    return [];
+  }
+
+  async getPod(name: string): Promise<KubernetesPod | null> {
+    const pod = this.pods.get(name);
+    if (pod === undefined) return null;
+    pod.status = {
+      phase: 'Running',
+      podIP: '10.0.0.5',
+      conditions: [{ type: 'Ready', status: 'True' }],
+    };
+    return pod;
+  }
+
+  async createPod(manifest: KubernetesManifest): Promise<boolean> {
+    this.createdPods.push(manifest);
+    const name = String((manifest.metadata as { name?: string } | undefined)?.name ?? '');
+    if (this.pods.has(name)) return false;
+    this.pods.set(name, {
+      metadata: manifest.metadata as KubernetesPod['metadata'],
+      status: { phase: 'Pending' },
+    });
+    return true;
+  }
+
+  async deletePod(name: string): Promise<void> {
+    this.pods.delete(name);
+  }
+
+  async createSecret(manifest: KubernetesManifest): Promise<boolean> {
+    const name = String((manifest.metadata as { name?: string } | undefined)?.name ?? '');
+    if (this.secrets.has(name)) return false;
+    this.secrets.set(name, manifest as unknown as KubernetesSecret);
+    return true;
+  }
+
+  async getSecret(name: string): Promise<KubernetesSecret | null> {
+    return this.secrets.get(name) ?? null;
+  }
+
+  async deleteSecret(name: string): Promise<void> {
+    this.secrets.delete(name);
+  }
+}
+
+/** Приложение provisioner'а с Kubernetes-провайдером (без кластера и TLS). */
+function makeKubernetesHarness(): { app: Hono; client: FakeKubernetesClient } {
+  const client = new FakeKubernetesClient();
+  const provider = new KubernetesPoolProvisioner({
+    client,
+    kubernetes: KUBERNETES,
+    profiles: K8S_PROFILES,
+  });
+  const metrics = createProvisionerMetrics({ profiles: Object.keys(K8S_PROFILES) });
+  const service = new PoolService({
+    provider,
+    metrics,
+    idleTimeoutMs: 900_000,
+    sessionIdleTimeoutMs: 300_000,
+    maxLifetimeMs: 43_200_000,
+    drainGraceMs: 30_000,
+    maxPools: 50,
+  });
+  metrics.setPoolSource(() => service.list());
+  const app = createProvisionerApp({
+    token: TOKEN,
+    service,
+    metrics,
+    providerName: 'kubernetes',
+    limits: {
+      maxPools: 50,
+      idleTimeoutMs: 900_000,
+      sessionIdleTimeoutMs: 300_000,
+      maxLifetimeMs: 43_200_000,
+      drainGraceMs: 30_000,
+    },
+  });
+  return { app, client };
+}
+
+/** Созданный под в разбираемом виде (манифест — `Record<string, unknown>`). */
+interface PodView {
+  metadata?: { labels?: Record<string, string> };
+  spec?: {
+    containers?: Array<{
+      image?: string;
+      env?: Array<{ name: string; value?: string }>;
+      resources?: unknown;
+    }>;
+  };
 }
 
 describe('provisioner: аутентификация', () => {
@@ -280,6 +412,93 @@ describe('provisioner: ensure', () => {
     });
     expect(res.status).toBe(429);
     expect((await readError(res)).reason).toBe('capacity');
+  });
+});
+
+describe('provisioner: спецификация профиля (profileSpec)', () => {
+  it('spec принят: под создан по спецификации (image/network/resources/mcp)', async () => {
+    const { app, client } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/pools', {
+      body: ensureBody({
+        profileSpec: {
+          image: 'registry.example/synth-executor:ui',
+          network: 'restricted',
+          resources: { limits: { cpu: '2', memory: '4Gi' } },
+          mcpServers: [
+            { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+          ],
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const pod = client.createdPods[0] as PodView;
+    const container = pod.spec?.containers?.[0];
+    // Образ — из спецификации, а не из каталога provisioner'а.
+    expect(container?.image).toBe('registry.example/synth-executor:ui');
+    expect(pod.metadata?.labels?.['synth.io/network']).toBe('restricted');
+    expect(container?.resources).toEqual({ limits: { cpu: '2', memory: '4Gi' } });
+    // MCP-серверы спецификации — в env пода (JSON, как ждёт исполнитель).
+    const mcp = container?.env?.find((entry) => entry.name === 'SYNTH_EXECUTOR_MCP_SERVERS');
+    expect(JSON.parse(mcp?.value ?? '[]')).toEqual([
+      { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'], env: {} },
+    ]);
+  });
+
+  it("без spec под создаётся по каталогу provisioner'а (прежнее поведение)", async () => {
+    const { app, client } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/pools', { body: ensureBody() });
+    expect(res.status).toBe(200);
+
+    const pod = client.createdPods[0] as PodView;
+    expect(pod.spec?.containers?.[0]?.image).toBe('registry.example/synth-executor:catalog');
+  });
+
+  it('невалидный spec — 400 invalid_request (строгая схема)', async () => {
+    const { app } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/pools', {
+      // Лишнее поле внутри spec — ошибка **разбора тела** (не типизации).
+      body: {
+        ...ensureBody(),
+        profileSpec: { image: 'registry.example/synth-executor:ui', unknownField: 1 },
+      } as unknown as EnsurePoolRequest,
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('spec без image — 400 invalid_request (fail-closed: под не из чего поднять)', async () => {
+    const { app } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/pools', {
+      body: ensureBody({ profileSpec: { network: 'restricted' } }),
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('spec важнее каталога: неизвестный в каталоге профиль создаётся по spec', async () => {
+    const { app, client } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/pools', {
+      body: ensureBody({
+        key: 'project:p1:exec:ui-profile',
+        profile: 'ui-profile',
+        profileSpec: { image: 'registry.example/synth-executor:ui' },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const pod = client.createdPods[0] as PodView;
+    expect(pod.spec?.containers?.[0]?.image).toBe('registry.example/synth-executor:ui');
+  });
+
+  it('static: spec игнорируется — адрес пула из каталога', async () => {
+    const { app } = makeHarness();
+    const res = await request(app, 'POST', '/v1/pools', {
+      body: ensureBody({
+        profileSpec: { image: 'registry.example/synth-executor:ui' },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { url: string }).url).toBe('http://executor-p1:5100');
   });
 });
 

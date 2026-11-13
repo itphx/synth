@@ -77,6 +77,7 @@ const PROJECT = {
   repos: null,
   status_messages: [],
   plan: null,
+  executor: { allowedProfiles: [], allowedBrowserProfiles: [] },
   created_at: '',
   updated_at: '',
 }
@@ -582,7 +583,17 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     expect(select.options[0]?.textContent).toContain('Default (default)')
   })
 
-  it('owner сохраняет профиль и разрешённые профили → PUT /projects/:id', async () => {
+  it('потолок не задан — отмечен весь каталог, селект доступен', async () => {
+    const noCeilings = { ...PROJECT, executor: undefined }
+    mocks.getProject.mockResolvedValue(noCeilings)
+    useProjectsStore.setState({ projects: [noCeilings] as never })
+    const container = await renderTab()
+
+    expect(allowedCheckbox(container, 'devops').checked).toBe(true)
+    expect(profileSelect(container).disabled).toBe(false)
+  })
+
+  it('автосохранение: выбор профиля и списка → PUT /projects/:id (без кнопки «Сохранить»)', async () => {
     const saved = {
       ...PROJECT,
       executor: { profile: 'devops', allowedProfiles: ['devops'] },
@@ -590,13 +601,19 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     mocks.updateProject.mockResolvedValue(saved)
 
     const container = await renderTab()
-    await setSelectValue(profileSelect(container), 'devops')
+    // Кнопки «Сохранить» больше нет — настройки сохраняются сами.
+    expect(container.querySelector('[data-testid="project-executor-save"]')).toBeNull()
+
+    // Пустой список = профилей нет → селект профиля заблокирован.
+    expect(profileSelect(container).disabled).toBe(true)
+
+    // Сначала профиль в списке разрешённых — селект разблокирован.
     await act(async () => {
       allowedCheckbox(container, 'devops').click()
     })
-    await act(async () => {
-      ;(container.querySelector('[data-testid="project-executor-save"]') as HTMLButtonElement).click()
-    })
+    expect(profileSelect(container).disabled).toBe(false)
+    await setSelectValue(profileSelect(container), 'devops')
+    await act(async () => {})
 
     expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
       executor: {
@@ -607,38 +624,64 @@ describe('ProjectTab — профиль исполнения проекта (PRO
       },
     })
     expect(mocks.notify).toHaveBeenCalledWith(
-      expect.objectContaining({ text: enDict['projectTab.executor.saved'], type: 'success' }),
+      expect.objectContaining({ text: enDict['panel.saved'], type: 'success' }),
     )
     // Сохранённые значения приходят в проект (селект и чекбокс отражают ответ).
     expect(profileSelect(container).value).toBe('devops')
     expect(allowedCheckbox(container, 'devops').checked).toBe(true)
   })
 
-  it('сброс очищает профиль и снимает ограничение (profile: null, allowedProfiles: [])', async () => {
+  it('список разрешённых сохраняется с задержкой (debounce ~500 мс)', async () => {
+    const saved = {
+      ...PROJECT,
+      executor: { allowedProfiles: ['devops'] },
+    }
+    mocks.updateProject.mockResolvedValue(saved)
+
+    const container = await renderTab()
+    await act(async () => {
+      allowedCheckbox(container, 'devops').click()
+    })
+    // Сразу после правки запрос ещё не ушёл (debounce).
+    expect(mocks.updateProject).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    })
+
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      executor: {
+        profile: null,
+        allowedProfiles: ['devops'],
+        browserProfile: null,
+        allowedBrowserProfiles: [],
+      },
+    })
+  })
+
+  it('«Сбросить» возвращает значения к сохранённым (данные не чистит)', async () => {
     const withExecutor = {
       ...PROJECT,
       executor: { profile: 'devops', allowedProfiles: ['devops'] },
     }
     mocks.getProject.mockResolvedValue(withExecutor)
     useProjectsStore.setState({ projects: [withExecutor] as never })
-    mocks.updateProject.mockResolvedValue(PROJECT)
+    mocks.updateProject.mockResolvedValue(withExecutor)
 
     const container = await renderTab()
     expect(profileSelect(container).value).toBe('devops')
 
+    // Правка списка (отложенное сохранение) → «Сбросить» возвращает старое.
+    await act(async () => {
+      allowedCheckbox(container, 'devops').click()
+    })
+    expect(allowedCheckbox(container, 'devops').checked).toBe(false)
+
     await act(async () => {
       ;(container.querySelector('[data-testid="project-executor-reset"]') as HTMLButtonElement).click()
     })
-
-    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
-      executor: {
-        profile: null,
-        allowedProfiles: [],
-        browserProfile: null,
-        allowedBrowserProfiles: [],
-      },
-    })
-    expect(profileSelect(container).value).toBe('')
+    expect(allowedCheckbox(container, 'devops').checked).toBe(true)
+    expect(profileSelect(container).value).toBe('devops')
   })
 
   it('EDITOR видит только чтение: контролы недоступны, сохранения нет', async () => {
@@ -656,6 +699,7 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     expect(profileSelect(container).disabled).toBe(true)
     expect(allowedCheckbox(container, 'devops').disabled).toBe(true)
     expect(container.querySelector('[data-testid="project-executor-save"]')).toBeNull()
+    expect(container.querySelector('[data-testid="project-executor-reset"]')).toBeNull()
     expect(container.querySelector('[data-testid="project-executor-readonly"]')).not.toBeNull()
     // Каталог профилей не запрашивается: чтение `/execution/profiles` — ADMIN/LEAD.
     expect(mocks.getExecutionProfiles).not.toHaveBeenCalled()
@@ -674,15 +718,14 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     ) as HTMLSelectElement
     expect([...browserSelect.options].map((o) => o.value)).toEqual(['', 'browser', 'browser-full'])
 
-    await setSelectValue(browserSelect, 'browser-full')
+    // Сначала профиль в списке разрешённых (селект заблокирован при пустом).
     await act(async () => {
       ;(container.querySelector(
         '[data-testid="project-browser-allowed-browser-full"]',
       ) as HTMLInputElement).click()
     })
-    await act(async () => {
-      ;(container.querySelector('[data-testid="project-executor-save"]') as HTMLButtonElement).click()
-    })
+    await setSelectValue(browserSelect, 'browser-full')
+    await act(async () => {})
 
     expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
       executor: {
@@ -695,7 +738,7 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     expect(browserSelect.value).toBe('browser-full')
   })
 
-  it('браузерный блок показывает сохранённые значения и сбрасывается', async () => {
+  it('браузерный блок показывает сохранённые значения; «Сбросить» их возвращает', async () => {
     const withBrowser = {
       ...PROJECT,
       executor: { browserProfile: 'browser-full', allowedBrowserProfiles: ['browser-full'] },
@@ -709,12 +752,18 @@ describe('ProjectTab — профиль исполнения проекта (PRO
       (container.querySelector('[data-testid="project-browser-profile-select"]') as HTMLSelectElement).value,
     ).toBe('browser-full')
 
+    // Правка списка → «Сбросить» возвращает сохранённые значения.
+    await act(async () => {
+      ;(container.querySelector(
+        '[data-testid="project-browser-allowed-browser-full"]',
+      ) as HTMLInputElement).click()
+    })
     await act(async () => {
       ;(container.querySelector('[data-testid="project-executor-reset"]') as HTMLButtonElement).click()
     })
     expect(
       (container.querySelector('[data-testid="project-browser-profile-select"]') as HTMLSelectElement).value,
-    ).toBe('')
+    ).toBe('browser-full')
   })
 
   it('inline: профили не применимы — пояснение вместо селекторов, сохранения нет', async () => {

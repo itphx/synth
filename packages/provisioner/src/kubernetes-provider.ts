@@ -528,6 +528,12 @@ export interface KubernetesPoolProvisionerOptions {
  * `ensure` идемпотентен **на уровне кластера**: под ищется по label с хешем
  * ключа, поэтому повторный вызов (и рестарт provisioner'а) усыновляет уже
  * существующий ресурс, а не создаёт второй.
+ *
+ * Профиль пула — **спецификация из тела запроса** (`profileSpec`, её шлёт
+ * control plane), если она есть; иначе — профиль каталога provisioner'а
+ * (`SYNTH_PROVISIONER_PROFILES`). Спецификация важнее каталога: админ задаёт
+ * профили в UI инстанса, не правя Helm values. `url` в спецификации
+ * игнорируется (адрес пула — это адрес пода), `image` обязателен.
  */
 export class KubernetesPoolProvisioner implements PoolProvisioner {
   private readonly _client: KubernetesClient;
@@ -609,9 +615,29 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
       );
     }
 
-    const profile = this._profiles[req.profile];
-    const image = profile?.image?.trim() ?? '';
-    if (profile === undefined || image === '') {
+    // Профиль пула: **спецификация из тела запроса** (backend присылает
+    // эффективный профиль инстанса) важнее каталога provisioner'а — так админ
+    // задаёт профили в UI, не правя Helm values. Каталог — запасной вариант
+    // (provisioner без `profileSpec` работает как раньше).
+    const spec = req.profileSpec;
+    const profile = spec ?? this._profiles[req.profile];
+    if (profile === undefined) {
+      throw new PoolProvisionerError(
+        'pool_not_found',
+        `пул "${req.key}" не найден: профиль "${req.profile}" не описан ` +
+          '(SYNTH_PROVISIONER_PROFILES / profileSpec в теле запроса)',
+      );
+    }
+    const image = profile.image?.trim() ?? '';
+    if (image === '') {
+      if (spec !== undefined) {
+        // Спецификация без образа — некорректный запрос (fail-closed): под не
+        // из чего поднять. Каталог без образа — «профиль не описан» (404).
+        throw new PoolProvisionerError(
+          'invalid_request',
+          `profileSpec пула "${req.key}" без image — образ обязателен (kubernetes)`,
+        );
+      }
       throw new PoolProvisionerError(
         'pool_not_found',
         `пул "${req.key}" не найден: профиль "${req.profile}" не описан или без image ` +

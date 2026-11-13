@@ -112,6 +112,9 @@ export function createProvisionerApp(opts: ProvisionerAppOptions): Hono {
       return fail(c, opts.metrics, 'invalid_request', formatIssues(parsed.error));
     }
     try {
+      // `parsed.data` — разобранное тело целиком (включая `profileSpec`:
+      // спецификацию профиля пула от control plane). Провайдер решает, какой
+      // профиль применить: спецификация важнее каталога provisioner'а.
       const pool: EnsurePoolResponse = await opts.service.ensure(parsed.data);
       return c.json(pool, 200);
     } catch (err) {

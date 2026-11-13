@@ -602,7 +602,7 @@ describe('Agent API Routes — профиль исполнения агента 
     expect((await store.load('exec-camel'))?.allowedProfiles).toEqual(['sandbox']);
   });
 
-  it('POST сбрасывает профиль (null/пустая строка) и список ([])', async () => {
+  it('POST сбрасывает профиль (null/пустая строка); [] — «профилей нет»', async () => {
     const app = createTestApp();
     await postAgent(app, {
       id: 'exec-reset',
@@ -610,7 +610,7 @@ describe('Agent API Routes — профиль исполнения агента 
       allowed_profiles: ['devops'],
     });
 
-    // `null` — сброс профиля, `[]` — снятие ограничения.
+    // `null` — сброс профиля; `[]` — «профилей нет» (ADR-135, аддендум).
     const reset = await postAgent(app, {
       id: 'exec-reset',
       executor_profile: null,
@@ -619,8 +619,13 @@ describe('Agent API Routes — профиль исполнения агента 
     expect(reset.status).toBe(200);
     const resetBody: any = await reset.json();
     expect(resetBody.executorProfile).toBeUndefined();
-    expect(resetBody.allowedProfiles).toBeUndefined();
+    expect(resetBody.allowedProfiles).toEqual([]);
     expect((await store.load('exec-reset'))?.executorProfile).toBeUndefined();
+    expect((await store.load('exec-reset'))?.allowedProfiles).toEqual([]);
+
+    // `null` у списка — сброс (потолок не задан).
+    const cleared = await postAgent(app, { id: 'exec-reset', allowed_profiles: null });
+    expect(cleared.status).toBe(200);
     expect((await store.load('exec-reset'))?.allowedProfiles).toBeUndefined();
 
     // Пустая строка — тот же сброс (UI шлёт `''` при выборе «наследовать»).
@@ -641,6 +646,54 @@ describe('Agent API Routes — профиль исполнения агента 
     expect(res.status).toBe(200);
     expect((await store.load('exec-keep'))?.executorProfile).toBe('devops');
     expect((await store.load('exec-keep'))?.allowedProfiles).toEqual(['devops']);
+  });
+
+  it('профиль вне списка разрешённых → 400 (ADR-135: пустой список = ничего)', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'exec-outside',
+      executor_profile: 'devops',
+      allowed_profiles: ['sandbox'],
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('должен входить в список разрешённых');
+    expect(await store.load('exec-outside')).toBeNull();
+  });
+
+  it('профиль при пустом списке разрешённых → 400 (профилей нет)', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'exec-emptylist',
+      executor_profile: 'devops',
+      allowed_profiles: [],
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error.code).toBe('VALIDATION_ERROR');
+    expect(await store.load('exec-emptylist')).toBeNull();
+  });
+
+  it('инстанс-дефолт обязан входить в список (наследование профиля)', async () => {
+    const app = createTestApp();
+    // Профиль не задан → агент наследует профиль инстанса ('default'):
+    // он обязан быть в списке разрешённых.
+    const res = await postAgent(app, {
+      id: 'exec-nodefault',
+      allowed_profiles: ['devops'],
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('Профиль по умолчанию');
+
+    // Список с дефолтом — принимается.
+    const ok = await postAgent(app, {
+      id: 'exec-withdefault',
+      allowed_profiles: ['devops', 'default'],
+    });
+    expect(ok.status).toBe(201);
+    expect((await store.load('exec-withdefault'))?.allowedProfiles).toEqual(['devops', 'default']);
   });
 
   it('неизвестный профиль при каталоге → 400 VALIDATION_ERROR, запись не меняется', async () => {
@@ -772,7 +825,7 @@ describe('Agent API Routes — браузерный профиль агента 
     expect((await store.load('browser-camel'))?.allowedBrowserProfiles).toEqual(['browser']);
   });
 
-  it('POST сбрасывает browser_profile (null/пустая строка) и список ([])', async () => {
+  it('POST сбрасывает browser_profile (null/пустая строка); [] — «профилей нет»', async () => {
     const app = createBrowserApp();
     await postAgent(app, {
       id: 'browser-reset',
@@ -787,6 +840,16 @@ describe('Agent API Routes — браузерный профиль агента 
     });
     expect(reset.status).toBe(200);
     expect((await store.load('browser-reset'))?.browserProfile).toBeUndefined();
+    // ADR-135 (аддендум): пустой список — «профилей нет» (fail-closed), а не
+    // сброс ограничения: список сохраняется как есть.
+    expect((await store.load('browser-reset'))?.allowedBrowserProfiles).toEqual([]);
+
+    // `null` у списка — сброс (потолок не задан).
+    const cleared = await postAgent(app, {
+      id: 'browser-reset',
+      allowed_browser_profiles: null,
+    });
+    expect(cleared.status).toBe(200);
     expect((await store.load('browser-reset'))?.allowedBrowserProfiles).toBeUndefined();
 
     await postAgent(app, { id: 'browser-reset', browser_profile: 'browser' });
@@ -828,5 +891,26 @@ describe('Agent API Routes — браузерный профиль агента 
     });
     expect(res.status).toBe(201);
     expect((await store.load('browser-nocatalog'))?.browserProfile).toBe('anything');
+  });
+
+  it('профиль вне списка разрешённых → 400; дефолт обязан входить в список', async () => {
+    const app = createBrowserApp();
+    const outside = await postAgent(app, {
+      id: 'browser-outside',
+      browser_profile: 'browser-full',
+      allowed_browser_profiles: ['browser'],
+    });
+    expect(outside.status).toBe(400);
+    expect((await outside.json() as { error: { message: string } }).error.message)
+      .toContain('должен входить в список разрешённых');
+
+    // Наследование: браузерный дефолт ('browser') обязан быть в списке.
+    const noDefault = await postAgent(app, {
+      id: 'browser-nodefault',
+      allowed_browser_profiles: ['browser-full'],
+    });
+    expect(noDefault.status).toBe(400);
+    expect((await noDefault.json() as { error: { message: string } }).error.message)
+      .toContain('по умолчанию');
   });
 });

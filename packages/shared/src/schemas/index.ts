@@ -291,9 +291,10 @@ export const projectMemoryUpdateSchema = z.object({ enabled: z.boolean().optiona
 /**
  * PROP-135 Ф6a: профиль исполнения проекта (`PUT /api/v2/projects/:id`).
  *
- * `profile`/`allowedProfiles` — `null`/`''`/`[]` сбрасывают значение (пустой
- * список = «без ограничения», обратная совместимость). Существование профиля
- * в `execution.remote.profiles` проверяет роут (если каталог ему доступен).
+ * `profile`/`allowedProfiles` — `null`/`''` сбрасывают значение (потолок не
+ * задан), `[]` — «профилей нет» (ADR-135, аддендум: пустой список = ничего не
+ * разрешено). Существование профиля в `execution.remote.profiles` и его
+ * вхождение в список разрешённых проверяет роут (если каталог ему доступен).
  */
 export const projectExecutorUpdateSchema = z.object({
   profile: z.string().nullable().optional(),

@@ -251,6 +251,69 @@ describe('provisioner: kubernetes-провайдер', () => {
     expect(client.createdSecrets).toHaveLength(createdSecrets);
   });
 
+  it('профиль из profileSpec важнее каталога provisioner\'а', async () => {
+    const client = new FakeKubernetesClient();
+    const { provider } = makeProvider(client);
+
+    await provider.ensure(
+      request({
+        profileSpec: {
+          image: 'registry.example/synth-executor:from-spec',
+          network: 'restricted',
+          runtimeClass: 'gvisor',
+          resources: { limits: { cpu: '4', memory: '8Gi' } },
+          mcpServers: [
+            { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+          ],
+        },
+      }),
+    );
+
+    const manifest = client.createdPods[0];
+    const metadata = manifest?.metadata as { labels?: Record<string, string> };
+    const spec = manifest?.spec as {
+      runtimeClassName?: string;
+      containers: Array<{
+        image: string;
+        env?: Array<{ name: string; value?: string }>;
+        resources?: unknown;
+      }>;
+    };
+    const container = spec.containers[0];
+    // Образ/сеть/ресурсы/runtimeClass — из спецификации, а не из каталога.
+    expect(container?.image).toBe('registry.example/synth-executor:from-spec');
+    expect(metadata.labels?.[POOL_NETWORK_LABEL]).toBe('restricted');
+    expect(spec.runtimeClassName).toBe('gvisor');
+    expect(container?.resources).toEqual({ limits: { cpu: '4', memory: '8Gi' } });
+    // MCP-серверы спецификации — в env пода.
+    const mcp = container?.env?.find((entry) => entry.name === 'SYNTH_EXECUTOR_MCP_SERVERS');
+    expect(JSON.parse(mcp?.value ?? '[]')).toEqual([
+      { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'], env: {} },
+    ]);
+  });
+
+  it('profileSpec без image — invalid_request (fail-closed, под не поднять)', async () => {
+    const client = new FakeKubernetesClient();
+    const { provider } = makeProvider(client);
+
+    await expect(
+      provider.ensure(request({ profileSpec: { network: 'restricted' } })),
+    ).rejects.toMatchObject({ reason: 'invalid_request' });
+    expect(client.createdPods).toHaveLength(0);
+    expect(client.createdSecrets).toHaveLength(0);
+  });
+
+  it('профиль каталога используется, когда spec нет (прежнее поведение)', async () => {
+    const client = new FakeKubernetesClient();
+    const { provider } = makeProvider(client);
+
+    await provider.ensure(request({ profile: 'full' }));
+
+    const manifest = client.createdPods[0];
+    const spec = manifest?.spec as { containers: Array<{ image: string }> };
+    expect(spec.containers[0]?.image).toBe(PROFILES.full?.image);
+  });
+
   it('таймаут: под и секрет удаляются, ошибка provider_error', async () => {
     const client = new FakeKubernetesClient();
     // Под остаётся Pending навсегда.

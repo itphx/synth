@@ -2131,4 +2131,24 @@ describe('task/tool.ts — профиль исполнения дочерней 
     const child = (await sessionManager.getSession(result.metadata!.child_session_id as string))!;
     expect(child.settings.executorProfile).toBe('any-profile');
   });
+
+  it('пустой список разрешённых у агента → делегирование с профилем запрещено', async () => {
+    const { result, parentId } = await runTask({
+      executorProfile: 'devops',
+      agentAllowed: [],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('no allowed profiles');
+    expect(await childCount(parentId)).toBe(0);
+  });
+
+  it('пустой список разрешённых у проекта → делегирование с профилем запрещено', async () => {
+    const { result, parentId } = await runTask({
+      executorProfile: 'devops',
+      projectAllowed: [],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('no allowed profiles');
+    expect(await childCount(parentId)).toBe(0);
+  });
 });

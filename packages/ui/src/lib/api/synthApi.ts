@@ -487,6 +487,9 @@ export type {
   ExecutionProfileInfo,
   ExecutionProfileResourceList,
   ExecutionProfileResources,
+  ExecutionRuntimeProfile,
+  ExecutionRuntimeSettings,
+  ExecutionSettingsDto,
 } from './execution'
 
 export const synthApi = {

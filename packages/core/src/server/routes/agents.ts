@@ -317,7 +317,8 @@ export function createAgentRoutes(
 
     // PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых профилей.
     // `undefined` (поле не передано) — сохраняем прежнее значение записи;
-    // `null`/`''` — сброс профиля; `[]` — сброс списка (без ограничения).
+    // `null`/`''` — сброс профиля; `[]` — «профилей нет» (ADR-135, аддендум:
+    // пустой список = ничего не разрешено), `null` у списка — потолок не задан.
     // При заданном каталоге профиль обязан в нём существовать, список — быть
     // его подмножеством (иначе 400: контракт запроса, а не «тихий» игнор).
     const catalog = opts?.executionProfileCatalog;
@@ -388,12 +389,14 @@ export function createAgentRoutes(
           },
         }, 400);
       }
-      allowedProfiles = list.length > 0 ? list : undefined;
+      // ADR-135 (аддендум): пустой список — **«профилей нет»** (fail-closed),
+      // а не «без ограничения»: список сохраняется как есть (`[]`).
+      allowedProfiles = list;
     }
 
     // PROP-135 (браузерный контур): профиль браузерного пула агента и потолок.
     // Правила как у exec: `undefined` — сохраняем прежнее; `null`/`''` — сброс;
-    // `[]` — сброс списка. Валидация — по **браузерному** каталогу (exec-имена
+    // `[]` — «профилей нет». Валидация — по **браузерному** каталогу (exec-имена
     // сюда не попадают и наоборот).
     const browserCatalog = opts?.browserProfileCatalog;
     const knownBrowserProfile = (name: string): boolean =>
@@ -463,7 +466,49 @@ export function createAgentRoutes(
           },
         }, 400);
       }
-      allowedBrowserProfiles = list.length > 0 ? list : undefined;
+      // ADR-135 (аддендум): пустой список — «профилей нет» (fail-closed).
+      allowedBrowserProfiles = list;
+    }
+
+    // ADR-135 (аддендум «пустой список = ничего; дефолт должен быть в списке»):
+    // профиль обязан входить в список разрешённых, а инстанс-дефолт —
+    // **не исключение** (иначе кандидат не выбирается).
+    if (executorProfile !== undefined && allowedProfiles !== undefined
+      && !allowedProfiles.includes(executorProfile)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Профиль исполнения должен входить в список разрешённых: ${executorProfile}`,
+        },
+      }, 400);
+    }
+    if (executorProfile === undefined && allowedProfiles !== undefined && allowedProfiles.length > 0
+      && catalog?.defaultProfile && !allowedProfiles.includes(catalog.defaultProfile)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Профиль по умолчанию должен входить в список разрешённых: ${catalog.defaultProfile}`,
+        },
+      }, 400);
+    }
+    if (browserProfile !== undefined && allowedBrowserProfiles !== undefined
+      && !allowedBrowserProfiles.includes(browserProfile)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Профиль браузера должен входить в список разрешённых: ${browserProfile}`,
+        },
+      }, 400);
+    }
+    if (browserProfile === undefined && allowedBrowserProfiles !== undefined
+      && allowedBrowserProfiles.length > 0 && browserCatalog?.defaultProfile
+      && !allowedBrowserProfiles.includes(browserCatalog.defaultProfile)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Профиль браузера по умолчанию должен входить в список разрешённых: ${browserCatalog.defaultProfile}`,
+        },
+      }, 400);
     }
 
     const agent: AgentDefinition = {

@@ -511,9 +511,10 @@ export const taskTool: ToolDefinition = {
  *    (`project.executor.allowedProfiles`); проект недоступен/нет
  *    `projectStore` → проверка проекта пропускается.
  *
- * Пустой/отсутствующий список разрешённых — без ограничения (обратная
- * совместимость). Нарушение → `tool.args_error` (дочерняя сессия не
- * создаётся).
+ * ADR-135 (аддендум): список, **заданный** областью, — потолок: профиль
+ * обязан в него входить; **пустой** список = «профилей нет» — делегирование с
+ * профилем запрещено. Незаданный список — ограничения нет.
+ * Нарушение → `tool.args_error` (дочерняя сессия не создаётся).
  */
 async function validateChildExecutorProfile(
   profile: string,
@@ -525,6 +526,12 @@ async function validateChildExecutorProfile(
     return argErrorResult(
       'task',
       `executor_profile: profile "${profile}" does not exist (available: ${catalog.profiles.join(', ')})`,
+    );
+  }
+  if (agentDef.allowedProfiles !== undefined && agentDef.allowedProfiles.length === 0) {
+    return argErrorResult(
+      'task',
+      `executor_profile: agent "${agentDef.id}" has no allowed profiles (empty list) — delegation with a profile is not allowed`,
     );
   }
   if (!isProfileAllowed(profile, { agentAllowed: agentDef.allowedProfiles })) {
@@ -545,6 +552,12 @@ async function validateChildExecutorProfile(
       // Проект недоступен — проверка проекта пропускается (fail-open: отказ
       // по недоступному хранилищу заблокировал бы запуск саб-агента).
     }
+  }
+  if (projectAllowed !== undefined && projectAllowed.length === 0) {
+    return argErrorResult(
+      'task',
+      'executor_profile: project has no allowed profiles (empty list) — delegation with a profile is not allowed',
+    );
   }
   if (!isProfileAllowed(profile, { projectAllowed })) {
     return argErrorResult(

@@ -100,8 +100,24 @@ const emptyForm = (): AgentForm => ({
   capabilities: [], max_steps: 0, icon: '', color: '',
 })
 
-function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): AgentForm {
+function buildForm(
+  a: AgentInfo,
+  detail?: Record<string, unknown> | null,
+  executionProfiles?: ExecutionProfilesDto | null,
+): AgentForm {
   const agentMode = toAgentModes(a.agent_mode || (detail?.agentMode as string) || 'primary')
+  // Потолок не задан (`null` в DTO) — агент не ограничивает: отмечаем весь
+  // каталог. Явный пустой список (`[]`) остаётся пустым («профилей нет»).
+  const execCatalog = (executionProfiles?.profiles ?? []).map((name) => name.trim()).filter(Boolean)
+  const browserCatalog = (executionProfiles?.browserProfiles?.length
+    ? executionProfiles.browserProfiles
+    : executionProfiles?.browserDefaultProfile
+      ? [executionProfiles.browserDefaultProfile]
+      : []
+  ).map((name) => name.trim()).filter(Boolean)
+  const allowed = a.allowed_profiles ?? (detail?.allowedProfiles as string[] | undefined)
+  const allowedBrowser =
+    a.allowed_browser_profiles ?? (detail?.allowedBrowserProfiles as string[] | undefined)
   return {
     id: a.id,
     display_name: a.display_name || '',
@@ -118,10 +134,9 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     // PROP-135 Ф6a: профиль исполнения и потолок (camelCase в detail,
     // snake_case в DTO списка).
     executor_profile: a.executor_profile || (detail?.executorProfile as string) || '',
-    allowed_profiles: (a.allowed_profiles ?? (detail?.allowedProfiles as string[] | undefined) ?? []).slice(),
+    allowed_profiles: (allowed ?? execCatalog).slice(),
     browser_profile: a.browser_profile || (detail?.browserProfile as string) || '',
-    allowed_browser_profiles:
-      (a.allowed_browser_profiles ?? (detail?.allowedBrowserProfiles as string[] | undefined) ?? []).slice(),
+    allowed_browser_profiles: (allowedBrowser ?? browserCatalog).slice(),
     agent_mode: agentMode,
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
@@ -144,6 +159,8 @@ export const AgentsPanel = () => {
   const [models, setModels] = useState<{ provider: string; models: { id: string; name: string }[] }[]>([])
   /** Сохранённый в агенте тир усилия ('' — «Авто»): нужен, чтобы сброс ушёл `null`. */
   const [savedEffort, setSavedEffort] = useState('')
+  /** Значения формы на момент открытия — «Сбросить» возвращает их (данные не чистит). */
+  const [savedForm, setSavedForm] = useState<AgentForm>(emptyForm())
   const [contextFiles, setContextFiles] = useState<string[]>([])
   /**
    * PROP-135 Ф6a: каталог профилей исполнения (`GET /execution/profiles`).
@@ -251,6 +268,7 @@ export const AgentsPanel = () => {
 
   const handleCreate = () => {
     setForm(emptyForm())
+    setSavedForm(emptyForm())
     setSavedEffort('')
     setCreating(true)
     setError('')
@@ -261,11 +279,12 @@ export const AgentsPanel = () => {
     let next: AgentForm
     try {
       const detail = await synthApi.getAgentDetail(a.id)
-      next = buildForm(a, detail)
+      next = buildForm(a, detail, executionProfiles)
     } catch {
-      next = buildForm(a)
+      next = buildForm(a, undefined, executionProfiles)
     }
     setForm(next)
+    setSavedForm(next)
     setSavedEffort(next.effort)
     setExpanded(a.id)
     setCreating(false)
@@ -328,8 +347,51 @@ export const AgentsPanel = () => {
     return names
   }
 
+  /** «Сбросить»: форма возвращается к сохранённым значениям (данные не чистятся). */
+  const handleResetForm = () => {
+    setForm(savedForm)
+    setSavedEffort(savedForm.effort)
+    setError('')
+  }
+
+  /** Форма равна сохранённым значениям — «Сбросить» неактивна. */
+  const formMatchesSaved = useMemo(
+    () => JSON.stringify(form) === JSON.stringify(savedForm),
+    [form, savedForm],
+  )
+
   const handleSave = async () => {
     if (!form.id.trim()) { setError(t('common.nameRequired')); return }
+    // ADR-135 (аддендум): профиль обязан входить в список разрешённых, а
+    // инстанс-дефолт — не исключение. Проверка на клиенте (сервер тоже 400).
+    if (profilesAvailable) {
+      const execProfile = form.executor_profile.trim()
+      if (execProfile && !form.allowed_profiles.includes(execProfile)) {
+        setError(t('admin.agents.executorProfileNotAllowed'))
+        return
+      }
+      if (!execProfile && form.allowed_profiles.length > 0) {
+        const fallback = executionProfiles?.defaultProfile ?? ''
+        if (fallback && !form.allowed_profiles.includes(fallback)) {
+          setError(t('admin.agents.defaultProfileNotAllowed', { profile: fallback }))
+          return
+        }
+      }
+    }
+    if (browserProfilesAvailable) {
+      const browserProfile = form.browser_profile.trim()
+      if (browserProfile && !form.allowed_browser_profiles.includes(browserProfile)) {
+        setError(t('admin.agents.browserProfileNotAllowed'))
+        return
+      }
+      if (!browserProfile && form.allowed_browser_profiles.length > 0) {
+        const fallback = executionProfiles?.browserDefaultProfile ?? ''
+        if (fallback && !form.allowed_browser_profiles.includes(fallback)) {
+          setError(t('admin.agents.defaultProfileNotAllowed', { profile: fallback }))
+          return
+        }
+      }
+    }
     setSaving(true)
     setError('')
     try {
@@ -634,73 +696,83 @@ export const AgentsPanel = () => {
             </SelectContent>
           </SelectField>
 
-          {/* PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых.
-              Каталог недоступен (`inline`/ошибка) — поля скрыты, сохранение их
-              не трогает. */}
-          {profilesAvailable && (
-            <>
-              <SelectField
-                label={t('admin.agents.executorProfile')}
-                description={t('admin.agents.executorProfileHint')}
-                tooltip={t('settings.help.agents.executorProfile')}
-                value={form.executor_profile}
-                onValueChange={(value) => setForm({ ...form, executor_profile: value })}
-                ariaLabel={t('admin.agents.executorProfile')}
-                triggerTestId="agent-executor-profile"
-              >
-                <SelectContent>
-                  <SelectItem value="">{t('admin.agents.executorProfile.inherit')}</SelectItem>
-                  {visibleProfileNames().map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </SelectField>
+          {/* PROP-135 Ф6a: секция «Исполнение» — профиль исполнения и потолок
+              разрешённых (exec + браузерный контур). Каталог недоступен
+              (`inline`/ошибка) — поля скрыты, сохранение их не трогает.
+              ADR-135 (аддендум): пустой список разрешённых = «профилей нет» —
+              селект профиля заблокирован. */}
+          {(profilesAvailable || browserProfilesAvailable) && (
+            <div className="sm:col-span-2 flex flex-col gap-3" data-testid="agent-execution-section">
+              <span className="text-xs font-medium text-foreground">{t('admin.agents.executionSection')}</span>
+              {profilesAvailable && (
+                <>
+                  <SelectField
+                    label={t('admin.agents.executorProfile')}
+                    value={form.executor_profile}
+                    onValueChange={(value) => setForm({ ...form, executor_profile: value })}
+                    ariaLabel={t('admin.agents.executorProfile')}
+                    triggerTestId="agent-executor-profile"
+                    disabled={form.allowed_profiles.length === 0}
+                  >
+                    <SelectContent>
+                      <SelectItem value="">{t('admin.agents.executorProfile.inherit')}</SelectItem>
+                      {visibleProfileNames().map((name) => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </SelectField>
 
-              <MultiSelectField
-                label={t('admin.agents.allowedProfiles')}
-                description={t('admin.agents.allowedProfilesHint')}
-                tooltip={t('settings.help.agents.allowedProfiles')}
-                values={form.allowed_profiles}
-                options={visibleProfileNames().map((name) => ({ value: name, label: name }))}
-                onChange={(next) => setForm({ ...form, allowed_profiles: next })}
-                emptyText={t('admin.agents.allowedProfilesEmpty')}
-                testIdPrefix="agent-allowed-profiles"
-              />
-            </>
-          )}
+                  <MultiSelectField
+                    label={t('admin.agents.allowedProfiles')}
+                    values={form.allowed_profiles}
+                    options={visibleProfileNames().map((name) => ({ value: name, label: name }))}
+                    onChange={(next) => setForm({ ...form, allowed_profiles: next })}
+                    emptyText={t('admin.agents.allowedProfilesEmpty')}
+                    testIdPrefix="agent-allowed-profiles"
+                  />
 
-          {/* PROP-135 (браузерный контур): профиль браузерного пула и потолок.
-              Свой каталог (`browserProfiles`); `inline` — поля скрыты. */}
-          {browserProfilesAvailable && (
-            <>
-              <SelectField
-                label={t('admin.agents.browserProfile')}
-                description={t('admin.agents.browserProfileHint')}
-                tooltip={t('settings.help.agents.browserProfile')}
-                value={form.browser_profile}
-                onValueChange={(value) => setForm({ ...form, browser_profile: value })}
-                ariaLabel={t('admin.agents.browserProfile')}
-                triggerTestId="agent-browser-profile"
-              >
-                <SelectContent>
-                  <SelectItem value="">{t('admin.agents.browserProfile.inherit')}</SelectItem>
-                  {visibleBrowserProfileNames().map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </SelectField>
+                  {form.allowed_profiles.length === 0 && (
+                    <span className="text-[0.625rem] text-muted-foreground" data-testid="agent-allowed-profiles-empty">
+                      {t('admin.agents.allowedProfilesNone')}
+                    </span>
+                  )}
+                </>
+              )}
+              {browserProfilesAvailable && (
+                <>
+                  <SelectField
+                    label={t('admin.agents.browserProfile')}
+                    value={form.browser_profile}
+                    onValueChange={(value) => setForm({ ...form, browser_profile: value })}
+                    ariaLabel={t('admin.agents.browserProfile')}
+                    triggerTestId="agent-browser-profile"
+                    disabled={form.allowed_browser_profiles.length === 0}
+                  >
+                    <SelectContent>
+                      <SelectItem value="">{t('admin.agents.browserProfile.inherit')}</SelectItem>
+                      {visibleBrowserProfileNames().map((name) => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </SelectField>
 
-              <MultiSelectField
-                label={t('admin.agents.allowedBrowserProfiles')}
-                description={t('admin.agents.allowedBrowserProfilesHint')}
-                tooltip={t('settings.help.agents.allowedBrowserProfiles')}
-                values={form.allowed_browser_profiles}
-                options={visibleBrowserProfileNames().map((name) => ({ value: name, label: name }))}
-                onChange={(next) => setForm({ ...form, allowed_browser_profiles: next })}
-                emptyText={t('admin.agents.allowedBrowserProfilesEmpty')}
-                testIdPrefix="agent-allowed-browser-profiles"
-              />
-            </>
+                  <MultiSelectField
+                    label={t('admin.agents.allowedBrowserProfiles')}
+                    values={form.allowed_browser_profiles}
+                    options={visibleBrowserProfileNames().map((name) => ({ value: name, label: name }))}
+                    onChange={(next) => setForm({ ...form, allowed_browser_profiles: next })}
+                    emptyText={t('admin.agents.allowedBrowserProfilesEmpty')}
+                    testIdPrefix="agent-allowed-browser-profiles"
+                  />
+
+                  {form.allowed_browser_profiles.length === 0 && (
+                    <span className="text-[0.625rem] text-muted-foreground" data-testid="agent-allowed-browser-profiles-empty">
+                      {t('admin.agents.allowedProfilesNone')}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
           )}
 
           {/* Max steps — для всех режимов, 0 = без ограничений */}
@@ -768,12 +840,16 @@ export const AgentsPanel = () => {
 
         <SettingsActions
           onSave={handleSave}
+          onReset={handleResetForm}
           onCancel={handleCancel}
           saving={saving}
+          isDefault={formMatchesSaved}
           saveLabel={t('admin.agents.save')}
           cancelLabel={t('admin.agents.cancel')}
+          resetLabel={t('admin.agents.reset')}
           saveTestId="agent-save"
           cancelTestId="agent-cancel"
+          resetTestId="agent-reset"
         />
       </SettingsSection>
     </div>

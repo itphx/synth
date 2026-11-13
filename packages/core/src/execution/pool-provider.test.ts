@@ -321,6 +321,215 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
     expect(body).not.toHaveProperty('workspaceSubPath');
   });
 
+  // ADR-135: профиль пула уезжает в provisioner спецификацией (`profileSpec`) —
+  // админ задаёт образ/сеть/ресурсы профиля в UI инстанса, provisioner
+  // поднимает под по спецификации, а не по своему каталогу.
+  it('ensure: profileSpec из каталога инстанца уходит в тело запроса', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      profiles: {
+        devops: {
+          url: ['http://executor-devops:8080'],
+          timeoutMs: 30_000,
+          concurrency: 1,
+          failMode: 'fail',
+          image: 'registry.example/synth-executor:devops',
+          network: 'restricted',
+          resources: { limits: { cpu: '2', memory: '4Gi' } },
+          runtimeClass: 'gvisor',
+          readOnlyRootFilesystem: false,
+          env: { SYNTH_EXECUTOR_MAX_CONCURRENCY: '2' },
+        },
+      },
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'devops' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body.profileSpec).toEqual({
+      image: 'registry.example/synth-executor:devops',
+      network: 'restricted',
+      resources: { limits: { cpu: '2', memory: '4Gi' } },
+      runtimeClass: 'gvisor',
+      readOnlyRootFilesystem: false,
+      env: { SYNTH_EXECUTOR_MAX_CONCURRENCY: '2' },
+    });
+    // Адреса профиля в спецификации нет: адрес пула — это адрес созданного
+    // пода (для `static` — адрес из каталога).
+    expect(body.profileSpec).not.toHaveProperty('url');
+  });
+
+  it('ensure: профиля нет в каталоге → profileSpec не отправляется', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      profiles: {
+        devops: {
+          url: ['http://executor-devops:8080'],
+          timeoutMs: 30_000,
+          concurrency: 1,
+          failMode: 'fail',
+        },
+      },
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'default' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body).not.toHaveProperty('profileSpec');
+  });
+
+  it('ensure: у профиля нет image → profileSpec не отправляется', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      profiles: {
+        devops: {
+          url: ['http://executor-devops:8080'],
+          timeoutMs: 30_000,
+          concurrency: 1,
+          failMode: 'fail',
+          network: 'restricted',
+        },
+      },
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'devops' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body).not.toHaveProperty('profileSpec');
+  });
+
+  it('ensure: каталога профилей нет — profileSpec не отправляется', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'default' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body).not.toHaveProperty('profileSpec');
+  });
+
+  it('ensure: MCP-серверы профиля переносятся в spec только с командой', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      profiles: {
+        devops: {
+          url: ['http://executor-devops:8080'],
+          timeoutMs: 30_000,
+          concurrency: 1,
+          failMode: 'fail',
+          image: 'registry.example/synth-executor:devops',
+          // Каталог хранит только имена серверов — применять их нечем.
+          mcpServers: ['playwright'],
+        },
+      },
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'devops' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body.profileSpec).not.toHaveProperty('mcpServers');
+  });
+
+  it('ensure: полное описание MCP-сервера (с командой) переносится в spec', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      profiles: {
+        devops: {
+          url: ['http://executor-devops:8080'],
+          timeoutMs: 30_000,
+          concurrency: 1,
+          failMode: 'fail',
+          image: 'registry.example/synth-executor:devops',
+          // Каталог с полным описанием сервера (команда нужна, чтобы
+          // исполнитель запустил его у себя).
+          mcpServers: [
+            { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+          ] as unknown as string[],
+        },
+      },
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'devops' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body.profileSpec.mcpServers).toEqual([
+      { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
+    ]);
+  });
+
   it('ensure: ответ без адреса → понятная ошибка', async () => {
     const provider = new HttpExecutionPoolProvider({
       url: 'http://provisioner:8080',
@@ -587,6 +796,46 @@ describe('PROP-135 Ф4b-1: фабрика провайдера', () => {
       provisioner: { url: 'http://provisioner:8080', tokenSecret: '/tmp/p', timeoutMs: 10_000 },
     });
     expect(provider).toBeInstanceOf(HttpExecutionPoolProvider);
+  });
+
+  it('provider=http: каталог профилей инстанца уходит в profileSpec запроса', async () => {
+    const calls: Call[] = [];
+    const provider = createExecutionPoolProvider(
+      {
+        ...remote,
+        provider: 'http',
+        provisioner: { url: 'http://provisioner:8080', tokenSecret: tokenPath, timeoutMs: 10_000 },
+        profiles: {
+          devops: {
+            url: ['http://executor-devops:8080'],
+            timeoutMs: 30_000,
+            concurrency: 2,
+            failMode: 'fail' as const,
+            image: 'registry.example/synth-executor:devops',
+            network: 'restricted' as const,
+          },
+        },
+      },
+      {
+        fetchImpl: async (input, init) => {
+          calls.push({
+            url: String(input),
+            method: init?.method ?? 'GET',
+            headers: (init?.headers ?? {}) as Record<string, string>,
+            body: typeof init?.body === 'string' ? init.body : undefined,
+          });
+          return jsonResponse({ url: 'http://pool-1:8080' });
+        },
+      },
+    );
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'devops' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body.profileSpec).toEqual({
+      image: 'registry.example/synth-executor:devops',
+      network: 'restricted',
+    });
   });
 
   it('provider=static: профиль по умолчанию без адреса в каталоге → общий url секции', async () => {

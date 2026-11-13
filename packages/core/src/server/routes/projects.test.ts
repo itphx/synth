@@ -897,14 +897,20 @@ describe('Project API Routes — executor profile (PROP-135 Ф6a)', () => {
     expect(stored!.executor).toEqual({ profile: 'devops', allowedProfiles: ['devops', 'sandbox'] });
   });
 
-  it('PUT executor: null/пустые значения сбрасывают настройку', async () => {
+  it('PUT executor: null сбрасывает потолок, [] — «профилей нет» (ADR-135)', async () => {
     const id = await createProject();
     await putExecutor(id, { profile: 'devops', allowedProfiles: ['devops'] });
 
     const res = await putExecutor(id, { profile: null, allowedProfiles: [] });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { executor: unknown };
-    expect(body.executor).toBeNull();
+    // Пустой список — «профилей нет» (fail-closed), а не сброс ограничения.
+    expect(body.executor).toEqual({ allowedProfiles: [] });
+    expect((await store.load(id))!.executor).toEqual({ allowedProfiles: [] });
+
+    // `null` — сброс: потолок не задан.
+    const reset = await putExecutor(id, { allowedProfiles: null });
+    expect(reset.status).toBe(200);
     expect((await store.load(id))!.executor).toBeUndefined();
   });
 
@@ -915,6 +921,21 @@ describe('Project API Routes — executor profile (PROP-135 Ф6a)', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { executor: { profile?: string; allowedProfiles?: string[] } };
     expect(body.executor).toEqual({ allowedProfiles: ['devops'] });
+  });
+
+  it('профиль вне списка разрешённых → 400 (ADR-135: пустой список = ничего)', async () => {
+    const id = await createProject();
+    const outside = await putExecutor(id, { profile: 'devops', allowedProfiles: ['sandbox'] });
+    expect(outside.status).toBe(400);
+    const body = (await outside.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('должен входить в список разрешённых');
+    expect((await store.load(id))!.executor).toBeUndefined();
+
+    // Пустой список — профилей нет: профиль задать нельзя.
+    const empty = await putExecutor(id, { profile: 'devops', allowedProfiles: [] });
+    expect(empty.status).toBe(400);
+    expect((await store.load(id))!.executor).toBeUndefined();
   });
 
   it('неизвестный профиль → 400 VALIDATION_ERROR (настройка не меняется)', async () => {
@@ -1038,7 +1059,7 @@ describe('Project API Routes — executor browser profile (PROP-135)', () => {
     });
   });
 
-  it('сброс: null/[] снимают обе части, пустая строка — только профиль', async () => {
+  it('сброс: null снимает части, [] — «профилей нет», пустая строка — только профиль', async () => {
     const id = await createProject();
     await putExecutor(id, {
       browserProfile: 'browser-full',
@@ -1053,7 +1074,11 @@ describe('Project API Routes — executor browser profile (PROP-135)', () => {
 
     const reset = await putExecutor(id, { browserProfile: null, allowedBrowserProfiles: [] });
     expect(reset.status).toBe(200);
-    expect(((await reset.json()) as { executor: unknown }).executor).toBeNull();
+    expect(((await reset.json()) as { executor: unknown }).executor)
+      .toEqual({ allowedBrowserProfiles: [] });
+
+    const cleared = await putExecutor(id, { allowedBrowserProfiles: null });
+    expect(cleared.status).toBe(200);
     expect((await store.load(id))!.executor).toBeUndefined();
   });
 

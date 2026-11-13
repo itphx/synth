@@ -75,6 +75,8 @@ const agent = (id: string, mode: AgentInfo['agent_mode']): AgentInfo => ({
   provider: null,
   model: null,
   context_file: null,
+  allowed_profiles: [],
+  allowed_browser_profiles: [],
   is_builtin: false,
   is_overridden: false,
 })
@@ -504,19 +506,116 @@ describe('AgentsPanel — профиль исполнения агента (PROP
     expect(apiMock.getExecutionProfiles).toHaveBeenCalled()
   })
 
+  it('потолок не задан (null) — отмечен весь каталог, селект доступен', async () => {
+    const noCeilings = { ...agent('main', ['primary']) } as Record<string, unknown>
+    delete noCeilings.allowed_profiles
+    delete noCeilings.allowed_browser_profiles
+    apiMock.getAllAgents.mockResolvedValue({ agents: [noCeilings], default_agent: null })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    expect(allowedChip(container, 'devops').getAttribute('aria-pressed')).toBe('true')
+    expect((profileTrigger(container) as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('выбор профиля и разрешённых уходит в payload (snake_case)', async () => {
     apiMock.getAgentDetail.mockResolvedValue({})
     const container = await renderPanel()
     await openEditor(container)
 
-    await selectOption(profileTrigger(container), 'devops')
+    // Сначала профиль в списке разрешённых — селект заблокирован при пустом
+    // списке (ADR-135: пустой список = профилей нет).
     await act(async () => {
       allowedChip(container, 'devops').click()
     })
+    await selectOption(profileTrigger(container), 'devops')
 
     const payload = await save(container)
     expect(payload.executor_profile).toBe('devops')
     expect(payload.allowed_profiles).toEqual(['devops'])
+  })
+
+  it('пустой список разрешённых: селект профиля заблокирован + «Нет разрешённых профилей»', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    const trigger = profileTrigger(container) as HTMLButtonElement
+    expect(trigger.disabled).toBe(true)
+    expect(
+      container.querySelector('[data-testid="agent-allowed-profiles-empty"]')!.textContent,
+    ).toContain('No allowed profiles')
+
+    // Профиль в списке — селект разблокирован.
+    await act(async () => {
+      allowedChip(container, 'devops').click()
+    })
+    expect((profileTrigger(container) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('дефолт вне списка разрешённых — сохранение заблокировано (короткая ошибка)', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), allowed_profiles: ['devops'] }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    // Профиль не задан → агент наследует профиль инстанса ('default'),
+    // которого нет в списке.
+    await act(async () => {
+      (container.querySelector('[data-testid="agent-save"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(apiMock.saveAgent).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('default')
+    expect(container.textContent).toContain('must be in the allowed list')
+  })
+
+  it('выбранный профиль вне списка — сохранение заблокировано', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), executor_profile: 'devops', allowed_profiles: ['devops'] }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    // Список изменили так, что профиль из него выпал.
+    await act(async () => {
+      allowedChip(container, 'devops').click()
+    })
+    await act(async () => {
+      (container.querySelector('[data-testid="agent-save"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(apiMock.saveAgent).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('must be in the allowed list')
+  })
+
+  it('«Сбросить» возвращает значения формы к сохранённым (данные не чистит)', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{ ...agent('main', ['primary']), executor_profile: 'sandbox', allowed_profiles: ['sandbox'] }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    // Правка формы — значения отличаются от сохранённых.
+    await act(async () => {
+      allowedChip(container, 'sandbox').click()
+    })
+    expect(allowedChip(container, 'sandbox').getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => {
+      (container.querySelector('[data-testid="agent-reset"]') as HTMLButtonElement).click()
+    })
+    expect(allowedChip(container, 'sandbox').getAttribute('aria-pressed')).toBe('true')
   })
 
   it('round-trip: сохранённые значения видны в форме', async () => {
@@ -573,10 +672,11 @@ describe('AgentsPanel — профиль исполнения агента (PROP
     const container = await renderPanel()
     await openEditor(container)
 
-    await selectOption(browserTrigger(container), 'browser-full')
+    // Сначала профиль в списке разрешённых (селект заблокирован при пустом).
     await act(async () => {
       browserChip(container, 'browser-full').click()
     })
+    await selectOption(browserTrigger(container), 'browser-full')
 
     const payload = await save(container)
     expect(payload.browser_profile).toBe('browser-full')

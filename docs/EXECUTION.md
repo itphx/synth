@@ -497,7 +497,7 @@ LLM он не знает; конфигурация — **только env** (к�
 
 | Метод | Путь | Тело / ответ | Смысл |
 |---|---|---|---|
-| `POST` | `/v1/pools` | `{key, scope, id?, class, profile, workspaceSubPath?}` → `{url, token?}` | Создать/получить пул; `workspaceSubPath` — подкаталог PVC для пода пула |
+| `POST` | `/v1/pools` | `{key, scope, id?, class, profile, workspaceSubPath?, profileSpec?}` → `{url, token?}` | Создать/получить пул; `workspaceSubPath` — подкаталог PVC для пода пула; `profileSpec` — спецификация профиля пула (важнее каталога provisioner'а) |
 | `POST` | `/v1/pools/{key}/touch` | — | Продлить жизнь пула (best-effort) |
 | `POST` | `/v1/pools/{key}/drain` | — | Слить пул: удалить под с grace, секрет оставить |
 | `DELETE` | `/v1/pools/{key}` | — | Удалить пул: под (grace 0) и секрет |
@@ -520,6 +520,39 @@ LLM он не знает; конфигурация — **только env** (к�
 клиент в core — `HttpExecutionPoolProvider.profilesInfo`, admin-API отдаёт их
 аддитивным `details` (`docs/API_V2.md` §5.41).
 
+**Спецификация профиля пула (`profileSpec`).** Тело `POST /v1/pools` может нести
+спецификацию профиля — **та же строгая схема**, что у каталога
+`SYNTH_PROVISIONER_PROFILES` (`image`/`url`/`network`/`resources`/`runtimeClass`/
+`readOnlyRootFilesystem`/`env`/`mcpServers`). Спецификацию шлёт control plane из
+**эффективного каталога инстанса** (`execution.remote.profiles[<profile>]` — уже
+с учётом runtime-секции «Исполнение»), поэтому админ создаёт и меняет профили в
+UI, не правя Helm values.
+
+- **Приоритет: `profileSpec` > каталог provisioner'а.** Провайдер `kubernetes`
+  поднимает под по спецификации: `image` обязателен (без образа — `400
+  invalid_request`, fail-closed: под не из чего поднять), `url` **игнорируется**
+  (адрес пула — это адрес созданного пода; `url` в профиле — для `static`).
+  Провайдер `static` поле **игнорирует**: адрес статического пула задают
+  `staticPools`/`profiles[].url` — поведение прежнее.
+- `mcpServers` спецификации уходят в env пода `SYNTH_EXECUTOR_MCP_SERVERS`
+  (JSON, как ждёт исполнитель, ADR-077 шаг B1): `{name, command, args?, env?}`.
+- **Доверие.** Спецификацию присылает control plane — каталог инстанса правит
+  **ADMIN** (`/api/v2/settings/execution`); provisioner принимает её наравне с
+  запросом пула (тот же bearer-токен), поэтому доступ к provisioner'у —
+  администраторская операция.
+- **Живой пул не пересоздаётся сам.** Усыновление (adopt) сверяет имя профиля,
+  политику команд и состав MCP-серверов; смена образа/сети/ресурсов того же
+  профиля видна только для **новых** пулов (у живого пула — прежний pod spec).
+  Чтобы применить новый образ к живому пулу, пул нужно снять
+  (`drain`/`release`) и обеспечить заново.
+- **Совместимость.** Поле аддитивное: запрос **без** `profileSpec` работает с
+  любой версией provisioner'а (поведение прежнее — каталог provisioner'а).
+  Обратное ограничение: у provisioner'а **старой** версии тело разбирается
+  строгой схемой, поэтому запрос с `profileSpec` он отвергнет (`400
+  invalid_request`) — provisioner новой версии нужно обновить раньше backend'а.
+  Backend шлёт поле только для профилей, у которых в каталоге инстанса задан
+  `image` (у остальных — каталог provisioner'а).
+
 **Жизненный цикл** (`packages/provisioner/src/pool-service.ts`):
 
 - `ensure` идемпотентен: ключ → запись пула; повторный запрос возвращает тот же
@@ -533,7 +566,7 @@ LLM он не знает; конфигурация — **только env** (к�
   находит под по label `synth.io/pool-hash` и **усыновляет** его (adopt), секрет
   с токеном переиспользуется; под без секрета или с чужим профилем снимается.
 
-**Провайдеры** (`packages/provisioner/src/provider-static.ts`,
+**Провайдеры** (`packages/provisioner/src/provider.ts`,
 `kubernetes-provider.ts`):
 
 | Провайдер | Пул | Изоляция | Зависимости |

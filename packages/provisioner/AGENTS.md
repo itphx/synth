@@ -10,7 +10,7 @@
 
 | Метод | Путь | Смысл |
 |---|---|---|
-| `POST` | `/v1/pools` | `{key, scope, id?, class, profile, workspaceSubPath?}` → `{url, token?}`; идемпотентно по ключу |
+| `POST` | `/v1/pools` | `{key, scope, id?, class, profile, workspaceSubPath?, profileSpec?}` → `{url, token?}`; идемпотентно по ключу |
 | `POST` | `/v1/pools/{key}/touch` | Продлить жизнь пула (idle-таймер) |
 | `POST` | `/v1/pools/{key}/drain` | Удалить под с grace, секрет оставить |
 | `DELETE` | `/v1/pools/{key}` | Удалить пул и секрет |
@@ -22,6 +22,23 @@
 по времени (`auth.ts`); `{key}` — URL-encoded канонический ключ пула. Клиент —
 `HttpExecutionPoolProvider` в core (`packages/core/src/execution/pool-provider.ts`),
 он же строит ключ (`poolKeyString`).
+
+## Спецификация профиля (`profileSpec`)
+
+Тело `POST /v1/pools` может нести `profileSpec` — **та же strict-схема**, что у
+каталога `SYNTH_PROVISIONER_PROFILES` (`profileSchema` из `config.ts`). Спецификацию
+шлёт control plane из эффективного каталога инстанца
+(`execution.remote.profiles[<profile>]`) — так админ задаёт профили в UI, не
+правя Helm values.
+
+- **Приоритет: `profileSpec` > каталог provisioner'а.** `kubernetes` — под по
+  спецификации (`image` обязателен, без образа — `400 invalid_request`; `url`
+  игнорируется); `static` — поле **игнорирует** (адрес из `staticPools`/
+  `profiles[].url`).
+- `mcpServers` спецификации → env пода `SYNTH_EXECUTOR_MCP_SERVERS` (JSON).
+- Поле аддитивное: запрос без него работает с любой версией provisioner'а; у
+  **старого** provisioner'а тело строгое — запрос с `profileSpec` он отвергнет
+  (`400`), поэтому provisioner новой версии обновляют раньше backend'а.
 
 ## Провайдеры и жизненный цикл
 

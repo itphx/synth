@@ -1933,6 +1933,32 @@ describe('Session API Routes — executor profile (PROP-135 Ф6a)', () => {
     expect(res.status).toBe(200);
     expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBe('anything');
   });
+
+  it('профиль вне списка разрешённых проекта → 400 (ADR-135: пустой список = ничего)', async () => {
+    const { app, sessionManager, projectStore } = createTestApp(tmpDir, undefined, undefined, undefined, {
+      executionProfileCatalog: catalog,
+    });
+    const project = projectStore.create('P', 'local');
+    project.executor = { allowedProfiles: ['devops'] };
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({
+      title: 'S',
+      projectId: project.id,
+      settings: { executorProfile: 'default' },
+    });
+
+    const res = await patchProfile(session.id, app, 'default');
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('должен входить в список разрешённых');
+    expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBe('default');
+
+    // Профиль из списка — принимается.
+    const ok = await patchProfile(session.id, app, 'devops');
+    expect(ok.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBe('devops');
+  });
 });
 
 /**

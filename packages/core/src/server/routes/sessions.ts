@@ -24,6 +24,7 @@ import type { HybridListEntry } from './hybrid-list.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
+import { resolveAgentRoleAlias } from '../../engine/agents/migrations.js';
 import { resolveUserPrincipal } from '../../engine/authority/principal.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
@@ -556,6 +557,67 @@ function sessionAttachmentBytes(session: Session): number {
     for (const media of mediaPartsOf(message.parts)) total += media.size;
   }
   return total;
+}
+
+/**
+ * ADR-135 (аддендум): потолки профилей сессии — агент (по роли) ∩ проект.
+ *
+ * Список, **заданный** областью, — потолок (пустой = «профилей нет»); не
+ * заданный — ограничения от области нет. Эффективный потолок — пересечение
+ * заданных списков; ни один не задан — потолка нет (`undefined`).
+ */
+interface SessionProfileCeilings {
+  execAllowed?: string[];
+  browserAllowed?: string[];
+}
+
+/** Пересечение двух списков потолка (`undefined` — ограничения нет). */
+function intersectCeilings(
+  agent: readonly string[] | undefined,
+  project: readonly string[] | undefined,
+): string[] | undefined {
+  if (agent === undefined && project === undefined) return undefined;
+  const base = agent ?? project ?? [];
+  const other = agent === undefined ? project : agent;
+  if (other === undefined) return [...base];
+  return base.filter((name) => other.includes(name));
+}
+
+/**
+ * Потолки профилей сессии: агент (по `settings.agentRole`, с алиасами прежнего
+ * набора ролей) и проект сессии. Недоступные источники (нет реестра/стора,
+ * ошибка чтения) — ограничения не добавляют (fail-closed на неизвестном
+ * запрете не ломает правку сессии).
+ */
+async function resolveSessionProfileCeilings(
+  session: Session,
+  deps: SessionRoutesDeps,
+): Promise<SessionProfileCeilings> {
+  let agentAllowed: string[] | undefined;
+  let agentBrowserAllowed: string[] | undefined;
+  const registry = deps.orchestrator?.agentRegistry ?? null;
+  const role = session.settings.agentRole;
+  if (registry && role) {
+    const found = registry.get(role)
+      ?? (resolveAgentRoleAlias(role) ? registry.get(resolveAgentRoleAlias(role)!) : undefined);
+    agentAllowed = found?.allowedProfiles;
+    agentBrowserAllowed = found?.allowedBrowserProfiles;
+  }
+  let projectAllowed: string[] | undefined;
+  let projectBrowserAllowed: string[] | undefined;
+  if (deps.projectStore && session.projectId) {
+    try {
+      const project = await deps.projectStore.load(session.projectId);
+      projectAllowed = project?.executor?.allowedProfiles;
+      projectBrowserAllowed = project?.executor?.allowedBrowserProfiles;
+    } catch {
+      // Проект недоступен — ограничения проекта не применяются.
+    }
+  }
+  return {
+    execAllowed: intersectCeilings(agentAllowed, projectAllowed),
+    browserAllowed: intersectCeilings(agentBrowserAllowed, projectBrowserAllowed),
+  };
 }
 
 /**
@@ -1286,6 +1348,38 @@ export function createSessionRoutes(
             },
           }, 400);
         }
+      }
+    }
+
+    // ADR-135 (аддендум): профиль сессии обязан входить в список разрешённых
+    // (потолок агента/проекта). Список задан (в том числе пустой) — это потолок;
+    // пустой список = «профилей нет» (fail-closed).
+    if (
+      requestedExecutorProfile !== undefined
+      && requestedExecutorProfile.trim() !== ''
+      || requestedBrowserProfile !== undefined
+      && requestedBrowserProfile.trim() !== ''
+    ) {
+      const ceilings = await resolveSessionProfileCeilings(session, deps);
+      const execProfile = (requestedExecutorProfile ?? '').trim();
+      const browserProfile = (requestedBrowserProfile ?? '').trim();
+      if (execProfile !== '' && ceilings.execAllowed !== undefined
+        && !ceilings.execAllowed.includes(execProfile)) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профиль исполнения должен входить в список разрешённых: ${execProfile}`,
+          },
+        }, 400);
+      }
+      if (browserProfile !== '' && ceilings.browserAllowed !== undefined
+        && !ceilings.browserAllowed.includes(browserProfile)) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профиль браузера должен входить в список разрешённых: ${browserProfile}`,
+          },
+        }, 400);
       }
     }
 
