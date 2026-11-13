@@ -189,6 +189,7 @@ async function callBrowserScreenshot(
   ctx: ToolContext,
   toolName: string,
   args: Record<string, unknown>,
+  attachmentName?: string,
 ): Promise<ToolResult> {
   const outcome = await invokeBrowserTool(ctx, toolName, 'browser_take_screenshot', args);
   if (outcome.failure) return outcome.failure;
@@ -212,9 +213,9 @@ async function callBrowserScreenshot(
     );
   }
 
-  const name = typeof args.filename === 'string' && args.filename.trim()
-    ? args.filename.trim()
-    : DEFAULT_SCREENSHOT_NAME;
+  const name = attachmentName?.trim()
+    || (typeof args.filename === 'string' && args.filename.trim())
+    || DEFAULT_SCREENSHOT_NAME;
   const refs: ToolAttachmentRef[] = [];
   for (const payload of payloads) {
     try {
@@ -338,7 +339,10 @@ const screenshotSchema = z.object({
   filename: z
     .string()
     .optional()
-    .describe('File name for the saved image (default screenshot.png; .jpg/.jpeg means JPEG)'),
+    .describe(
+      'Attachment name for the image in the dialog (default screenshot.png; .jpg/.jpeg means JPEG). '
+      + 'The image is returned to the dialog, never written to a file.',
+    ),
   fullPage: z
     .boolean()
     .optional()
@@ -472,7 +476,8 @@ export const browserScreenshotTool: ToolDefinition = {
     'Take a screenshot of the current page in the project browser and attach the image to '
     + 'the dialog, so you and the user can see it. By default the viewport is captured; set '
     + '"fullPage" to capture the whole scrollable page. The image format is PNG unless the '
-    + 'file name ends with .jpg or .jpeg.',
+    + 'attachment name ends with .jpg or .jpeg. The image is never written to a file: do not '
+    + 'pass disk paths.',
   parameters: screenshotSchema,
   capabilities: [ToolCapability.WEB],
   async execute(args, ctx): Promise<ToolResult> {
@@ -483,11 +488,18 @@ export const browserScreenshotTool: ToolDefinition = {
     }
     const filename = parsed.data.filename?.trim();
     const type = filename && /\.jpe?g$/i.test(filename) ? 'jpeg' : 'png';
-    return callBrowserScreenshot(ctx, this.name, {
-      type,
-      ...(filename ? { filename } : {}),
-      ...(parsed.data.fullPage !== undefined ? { fullPage: parsed.data.fullPage } : {}),
-    });
+    // `filename` — только имя вложения в диалоге: в MCP его не передаём, иначе
+    // Playwright сохраняет файл внутри контейнера браузера и изображение не
+    // возвращается (байты не попадают в сообщение).
+    return callBrowserScreenshot(
+      ctx,
+      this.name,
+      {
+        type,
+        ...(parsed.data.fullPage !== undefined ? { fullPage: parsed.data.fullPage } : {}),
+      },
+      filename,
+    );
   },
 };
 

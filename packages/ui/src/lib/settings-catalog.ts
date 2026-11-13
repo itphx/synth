@@ -362,7 +362,7 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
   {
     // PROP-135: профили и пулы исполнения (чтение — ADMIN/LEAD, мутации — ADMIN).
     id: 'execution',
-    group: 'adminOps',
+    group: 'adminAi',
     labelKey: 'settings.category.execution',
     icon: 'cpu',
     roles: ['ADMIN', 'LEAD'],

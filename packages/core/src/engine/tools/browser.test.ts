@@ -276,7 +276,7 @@ describe('browser-тулы — имена инструментов и аргум
     ]);
   });
 
-  it('screenshot уходит в `browser_take_screenshot` с filename/fullPage/type', async () => {
+  it('screenshot уходит в `browser_take_screenshot` только с fullPage/type (файл не пишется)', async () => {
     const port = new FakeBrowserPort(() => screenshotResult());
     const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
 
@@ -286,11 +286,8 @@ describe('browser-тулы — имена инструментов и аргум
 
     expect(port.calls).toEqual([
       { tool: 'browser_take_screenshot', arguments: { type: 'png' } },
-      {
-        tool: 'browser_take_screenshot',
-        arguments: { type: 'png', filename: 'page.png', fullPage: true },
-      },
-      { tool: 'browser_take_screenshot', arguments: { type: 'jpeg', filename: 'page.jpg' } },
+      { tool: 'browser_take_screenshot', arguments: { type: 'png', fullPage: true } },
+      { tool: 'browser_take_screenshot', arguments: { type: 'jpeg' } },
     ]);
   });
 
