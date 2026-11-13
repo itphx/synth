@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, normalize, relative, resolve, sep } from
 import { homedir } from 'node:os';
 import type { MessageI18n, ToolContext } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { warning } from '../../logger.js';
 
 const HOME = homedir();
 
@@ -166,7 +167,17 @@ export function isInsideAnyRoot(candidate: string, roots: readonly string[]): bo
  */
 export function isSymlinkEscapeInRoots(roots: readonly string[], candidate: string): boolean {
   if (!roots.some((root) => isLexicallyInside(root, candidate))) return false;
-  return !roots.some((root) => isInsideReal(root, candidate));
+  const escaped = !roots.some((root) => isInsideReal(root, candidate));
+  if (escaped) {
+    // Диагностика: на NFS/симлинках видно, какие корни и realpath получились.
+    warning(
+      'FS',
+      `symlink escape: roots=[${roots.join(',')}] candidate=${candidate} ` +
+      `real=${roots.map((root) => `${root}=>${resolveRealPath(root) ?? 'null'}`).join(';')} ` +
+      `candidateReal=${resolveRealPath(candidate) ?? 'null'}`,
+    );
+  }
+  return escaped;
 }
 
 /**

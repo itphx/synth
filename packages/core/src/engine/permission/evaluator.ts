@@ -31,6 +31,7 @@ import type {
   AuthorityShadowHook,
   AuthorityShadowContext,
 } from '../authority/hook.js';
+import { warning } from '../../logger.js';
 import { checkShellCommand, isMutatingCommand, isShellCommandGranted, isPerimeterExempt, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import { checkPath } from '../security/protected-paths.js';
@@ -592,6 +593,11 @@ export class PermissionEvaluator {
           if (pendingPaths.length > 0) {
             const restricted = isPlanRestricted(sessionMode, planMode, planApproved);
             const action: PermissionAction = restricted ? 'deny' : 'ask';
+            warning(
+              'PERMISSION',
+              `external path=${pendingPaths[0]} action=${action} workingDir=${workingDir} ` +
+              `roots=[${roots.join(',')}] sessionMode=${String(sessionMode)} planMode=${String(planMode)} approved=${String(planApproved)}`,
+            );
             const decision: PermissionDecision = {
               action,
               reason: sm('permission.external_directory_default', { path: pendingPaths[0]!, action }),
@@ -744,6 +750,11 @@ export class PermissionEvaluator {
         if (d) return d;
         const restricted = isPlanRestricted(sessionMode, planMode, planApproved);
         const action: PermissionAction = restricted ? 'deny' : 'ask';
+        warning(
+          'PERMISSION',
+          `external path=${p} action=${action} workingDir=${workingDir} ` +
+          `roots=[${roots.join(',')}] sessionMode=${String(sessionMode)} planMode=${String(planMode)} approved=${String(planApproved)}`,
+        );
         return {
           action,
           reason: sm('permission.external_directory_default', { path: p, action }),
