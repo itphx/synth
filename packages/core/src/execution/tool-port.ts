@@ -28,11 +28,21 @@ export const EXECUTION_ROUTER_KEY = 'executionRouter';
 export function resolveExecutionPort(ctx: ToolContext): ExecutionPort {
   const extra = ctx.extra as Record<string, unknown> | undefined;
   const port = extra?.[EXECUTION_PORT_KEY];
-  if (isExecutionPort(port)) return port;
+  // Порт есть и умеет FS — используем его. Порт без FS (inline-фоллбэк или
+  // старая реализация) при наличии роутера заменяем портом профиля хода:
+  // иначе файловые тулы отвечают «Filesystem operations are unavailable»,
+  // а shell молча исполняется в control plane.
+  if (isExecutionPort(port) && (port.fs || !isExecutionRouter(extra?.[EXECUTION_ROUTER_KEY]))) {
+    return port;
+  }
+  if (isExecutionPort(port)) {
+    warning(
+      'EXECUTION',
+      `executionPort has no fs (isRemote=${String((port as { isRemote?: boolean }).isRemote)}, ` +
+      `session=${ctx.sessionId ?? '?'}); selecting port via router`,
+    );
+  }
 
-  // Порт не проброшен (старый путь/саб-агент/пайплайн), но роутер есть —
-  // выбираем порт по профилю хода, а не уходим в inline: иначе файловые тулы
-  // получают InlineExecutionPort без FS, а shell исполняется в control plane.
   const router = extra?.[EXECUTION_ROUTER_KEY];
   if (isExecutionRouter(router)) {
     try {

@@ -64,11 +64,11 @@ export interface PooledExecutionPortOptions {
   createPort: (ref: ExecutionPoolRef) => Promise<ExecutionPort>;
 }
 
-/** Задержки прогрева пула перед повтором (мс): 6 с суммарно (3 повтора). */
-const WARMUP_DELAYS_MS = [1000, 2000, 3000] as const;
+/** Задержки прогрева пула перед повтором (мс): 10 с суммарно (4 повтора). */
+const WARMUP_DELAYS_MS = [1000, 2000, 3000, 4000] as const;
 
 /** Ошибка означает «пул ещё не отвечает», а не отказ самой операции. */
-function isWarmupRetryable(err: unknown): boolean {
+function isWarmupRetryable(err: unknown, allowNetwork = false): boolean {
   const e = err as { code?: unknown; message?: unknown } | null;
   const code = typeof e?.code === 'string' ? e.code : '';
   if (code === 'EUNREACHABLE' || code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'EHOSTUNREACH') {
@@ -76,9 +76,11 @@ function isWarmupRetryable(err: unknown): boolean {
   }
   const message = typeof e?.message === 'string' ? e.message : String(err);
   // Только «процесс ещё не слушает»: инвентарь не собрался / соединение
-  // отклонено / исполнитель ответил 503. Сетевые таймауты после отправки
-  // запроса не повторяем — команда могла уже выполниться.
-  return /ECONNREFUSED|capabilities|не ответил|503 Service Unavailable|503/i.test(message);
+  // отклонено / исполнитель ответил 503. Для read-only операций сюда же
+  // относятся сетевые сбои (`fetch failed`, reset) — действие можно повторить;
+  // для команд/записи такие ошибки не повторяем (могли уже выполниться).
+  if (/ECONNREFUSED|capabilities|не ответил|503 Service Unavailable|503/i.test(message)) return true;
+  return allowNetwork && /fetch failed|ECONNRESET|socket hang up|network error/i.test(message);
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -90,14 +92,18 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  *
  * После исчерпания попыток — понятная ошибка с профилем и ключом пула.
  */
-async function withWarmup<T>(key: ExecutionPoolKey, operation: () => Promise<T>): Promise<T> {
+async function withWarmup<T>(
+  key: ExecutionPoolKey,
+  operation: () => Promise<T>,
+  allowNetwork = false,
+): Promise<T> {
   let attempt = 0;
   let elapsed = 0;
   for (;;) {
     try {
       return await operation();
     } catch (err) {
-      if (!isWarmupRetryable(err)) throw err;
+      if (!isWarmupRetryable(err, allowNetwork)) throw err;
       if (attempt >= WARMUP_DELAYS_MS.length) {
         const detail = err instanceof Error ? err.message : String(err);
         throw new ExecutionError({
@@ -147,6 +153,34 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     return pending;
   };
 
+  /**
+   * Дождаться готовности исполнителя после выдачи пула.
+   *
+   * Provisioner возвращает адрес, когда под Ready, но процессу нужно ещё
+   * мгновение, чтобы начать отвечать. Первый `execute`/`browserCall` иначе
+   * падает `fetch failed`. Проверка read-only (`capabilities`/`probe`) идёт
+   * через `withWarmup` с сетевыми повторами; неудача не блокирует вызов —
+   * ошибку покажет сама операция.
+   */
+  let readyPromise: Promise<void> | null = null;
+  const waitReady = (): Promise<void> => {
+    if (!readyPromise) {
+      readyPromise = (async () => {
+        const port = await resolve();
+        try {
+          if (port.capabilitySummary) {
+            await withWarmup(key, () => port.capabilitySummary!('sh'), true);
+          } else if (port.probe) {
+            await withWarmup(key, () => port.probe!('sh'), true);
+          }
+        } catch {
+          // Не готов — операция ниже вернёт исходную ошибку.
+        }
+      })();
+    }
+    return readyPromise;
+  };
+
   const fs = createPooledFs(resolve, key);
 
   /**
@@ -174,6 +208,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
     async execute(req: ExecRequest): Promise<ExecResult> {
       const port = await resolve();
+      await waitReady();
       try {
         return await withWarmup(key, () => port.execute(req));
       } finally {
@@ -185,6 +220,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
     async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
       const port = await resolve();
+      await waitReady();
       if (!port.spawnBackground) {
         // Тот же машинный код, что у удалённого порта старой версии
         // (протокол < 3): «фон не поддерживается» — не «есть метод, но падает».
@@ -203,6 +239,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
     async browserCall(req: BrowserCallRequest): Promise<BrowserCallResult> {
       const port = await resolve();
+      await waitReady();
       if (!port.browserCall) {
         // Внутренний порт без browser-вызова (не удалённый клиент либо
         // старая реализация): понятный отказ, а не «тихий» пустой результат.
@@ -212,7 +249,10 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
         };
       }
       try {
-        return await withWarmup(key, () => port.browserCall!(req));
+        // Интерактивные действия не повторяем (двойной клик); навигацию,
+        // снимок, ожидание и скриншот — можно.
+        const readOnly = !['browser_click','browser_type','browser_press_key'].includes(req.tool);
+        return await withWarmup(key, () => port.browserCall!(req), readOnly);
       } finally {
         // Обращение к пулу — активность (как у execute): provisioner не должен
         // снять пул по idle между вызовами браузера.
@@ -222,7 +262,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
     async probe(bin: string, args?: string[]): Promise<boolean> {
       const port = await resolve();
-      return port.probe ? withWarmup(key, () => port.probe!(bin, args)) : true;
+      return port.probe ? withWarmup(key, () => port.probe!(bin, args), true) : true;
     },
 
     async capabilitySummary(bin: string): Promise<ExecutionCapabilitySummary> {
@@ -230,7 +270,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
       if (!port.capabilitySummary) {
         throw new Error('capabilitySummary не поддерживается портом');
       }
-      return withWarmup(key, () => port.capabilitySummary!(bin));
+      return withWarmup(key, () => port.capabilitySummary!(bin), true);
     },
   };
 }
@@ -253,23 +293,23 @@ function createPooledFs(resolve: () => Promise<ExecutionPort>, key: ExecutionPoo
   };
 
   /** Вызов FS-операции с прогревом пула (connect-ошибки повторяются). */
-  const call = async <T>(fn: (fs: ExecutionFs) => Promise<T>): Promise<T> =>
-    withWarmup(key, async () => fn(await fsOf()));
+  const call = async <T>(fn: (fs: ExecutionFs) => Promise<T>, allowNetwork = false): Promise<T> =>
+    withWarmup(key, async () => fn(await fsOf()), allowNetwork);
 
   return {
-    realpath: (path: string) => call((fs) => fs.realpath(path)),
-    stat: (path: string) => call((fs) => fs.stat(path)),
-    readdir: (path: string) => call((fs) => fs.readdir(path)),
-    readText: (path: string, opts) => call((fs) => fs.readText(path, opts)),
-    sniff: (path: string, maxBytes?: number) => call((fs) => fs.sniff(path, maxBytes)),
-    readBytes: (path: string, maxBytes: number) => call((fs) => fs.readBytes(path, maxBytes)),
+    realpath: (path: string) => call((fs) => fs.realpath(path), true),
+    stat: (path: string) => call((fs) => fs.stat(path), true),
+    readdir: (path: string) => call((fs) => fs.readdir(path), true),
+    readText: (path: string, opts) => call((fs) => fs.readText(path, opts), true),
+    sniff: (path: string, maxBytes?: number) => call((fs) => fs.sniff(path, maxBytes), true),
+    readBytes: (path: string, maxBytes: number) => call((fs) => fs.readBytes(path, maxBytes), true),
     writeFile: (path: string, content: string) => call((fs) => fs.writeFile(path, content)),
     mkdir: (path: string) => call((fs) => fs.mkdir(path)),
     remove: (path: string) => call((fs) => fs.remove(path)),
-    readRawText: (path: string, maxBytes: number) => call((fs) => fs.readRawText(path, maxBytes)),
+    readRawText: (path: string, maxBytes: number) => call((fs) => fs.readRawText(path, maxBytes), true),
     rename: (from: string, to: string) => call((fs) => fs.rename(from, to)),
-    download: (path: string, maxBytes: number) => call((fs) => fs.download(path, maxBytes)),
+    download: (path: string, maxBytes: number) => call((fs) => fs.download(path, maxBytes), true),
     upload: (path: string, bytes: Buffer, opts) => call((fs) => fs.upload(path, bytes, opts)),
-    hash: (path: string) => call((fs) => fs.hash(path)),
+    hash: (path: string) => call((fs) => fs.hash(path), true),
   };
 }

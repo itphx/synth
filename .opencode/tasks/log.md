@@ -1529,3 +1529,9 @@
 - **Задача:** при первом обращении к только что созданному пулу тулы падали (`исполнители не ответили на /capabilities`, FS unavailable), хотя provisioner уже вернул адрес. Нужна задержка/повтор и внятная ошибка. **Тип:** bugfix (core). **Исполнитель:** @fixer.
 - **Фикс.** `execution/pooled-port.ts`: connect-ошибки (`EUNREACHABLE`, «не ответили на /capabilities», `ECONNREFUSED`, `503`) повторяются с паузами 1→3 с (3 повтора, всего 6 с) для `execute`/`spawnBackground`/`browserCall`/`probe`/`capabilitySummary` и всех FS-операций; ошибки самой операции не повторяются (команда могла выполниться). После исчерпания — `ExecutionError` с профилем, ключом пула и причиной.
 - **Тесты.** `pooled-port.test.ts` +3 (повтор → успех, исчерпание → текст с профилем/ключом, non-connect без повторов); router/full core — 627 файлов / 10 697 passed.
+
+## 2026-11-13 — Порт тула: fallback по роутеру и ожидание готовности пода
+
+- **Симптом:** в сессии `mu24jikm…` (`Всячина / Тест 1`) `save_attachment`/`read_file`/`list_directory` отвечали «Filesystem operations are unavailable», а `browser_*` работали: в `extra.executionPort` оказывался порт без FS (inline), при этом `executionRouter` был рабочим.
+- **Фикс.** `execution/tool-port.ts`: если порт в extra не умеет FS, а роутер есть — порт выбирается роутером по `executionProfile`/`projectId`/`sessionId` (иначе файловые тулы уходили в inline, а shell исполнялся в control plane); предупреждение в лог. `execution/pooled-port.ts`: readiness-проба (`capabilitySummary`/`probe`) перед `execute`/`spawn`/`browserCall`; сетевые ошибки (`fetch failed`) повторяются для read-only операций (FS-чтение, snapshot/navigate/browser-wait) с паузами 1→4 с (10 с); интерпретатор/запись — без повторов.
+- **Тесты.** `tool-port.test.ts` (+3), `pooled-port.test.ts` (20), полный core — 627 файлов / 10 7xx passed.
