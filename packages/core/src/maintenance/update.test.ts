@@ -2,18 +2,28 @@
 //
 // Сеть и установка инжектируются через `deps` — реальных запросов в npm нет;
 // интерактивное подтверждение заменяется `confirm`.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
-import { buildUpdateInstallArgs, runUpdateCommand } from './update.js';
+import { _resetTlsTrustForTests, initTlsTrust } from '../security/tls.js';
+import {
+  buildUpdateInstallArgs,
+  describeNpmFailure,
+  formatNpmCommand,
+  resolveNpmInstallEnvironment,
+  runUpdateCommand,
+} from './update.js';
 
 /** ADR-133: реестр канала задаётся scoped-ключом, зависимости — из npm по умолчанию. */
 describe('buildUpdateInstallArgs (ADR-133)', () => {
-  it('стабильный реестр по умолчанию — без флага реестра', () => {
+  it('стабильный реестр по умолчанию — без флага реестра, с --prefer-online', () => {
     expect(buildUpdateInstallArgs('1.2.3', 'https://registry.npmjs.org', false)).toEqual([
       'install',
       '-g',
       '@itphx/synth@1.2.3',
+      '--prefer-online',
     ]);
   });
 
@@ -24,6 +34,7 @@ describe('buildUpdateInstallArgs (ADR-133)', () => {
       '-g',
       '@itphx/synth@1.2.3-beta.1',
       '--@itphx:registry=https://git.example/npm',
+      '--prefer-online',
     ]);
     // `--registry` сломал бы установку: публичные зависимости в Gitea отсутствуют.
     expect(args).not.toContain('--registry');
@@ -99,7 +110,9 @@ describe('runUpdateCommand (ADR-092)', () => {
       operation: 'update',
       apply: false,
     });
-    expect(parsed.installCommand).toBe('npm install -g @itphx/synth@1.0.0');
+    expect(parsed.installCommand).toBe(
+      'npm install -g @itphx/synth@1.0.0 --prefer-online',
+    );
   });
 
   it('--to несуществующей версии: exit 1, update.failed с error', async () => {
@@ -542,5 +555,103 @@ describe('runUpdateCommand: каналы и preflight (ADR-133)', () => {
     const list = await audit.list();
     expect(list.map((e) => e.op)).toEqual(['rollback.applied']);
     expect(list[0]!.details).toMatchObject({ channel: 'beta', version: '0.14.0' });
+  });
+});
+
+/**
+ * ADR-099 × ADR-133: дочерний npm не наследует доверие TLS/прокси инстанса.
+ * Env установки собирается из `security.tls` (CA) и маршрута прокси реестра.
+ */
+describe('resolveNpmInstallEnvironment (ADR-099)', () => {
+  /** CA-фикстура (самоподписанный тестовый серт) — валидный PEM. */
+  const CERT_PATH = join(
+    dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'security',
+    '__fixtures__',
+    'tls-test-selfsigned.pem',
+  );
+
+  afterEach(() => {
+    _resetTlsTrustForTests();
+  });
+
+  it('без TLS/прокси — env пустой (поведение прежнее)', async () => {
+    await initTlsTrust(undefined, {});
+    expect(await resolveNpmInstallEnvironment('https://registry.npmjs.org')).toEqual({});
+  });
+
+  it('security.tls.caFile → NODE_EXTRA_CA_CERTS дочернего npm', async () => {
+    await initTlsTrust({ security: { tls: { caFile: CERT_PATH } } }, {});
+    const env = await resolveNpmInstallEnvironment('https://git.itphx.ru/api/packages/itphx/npm');
+    expect(env.NODE_EXTRA_CA_CERTS).toBe(CERT_PATH);
+  });
+
+  it('прокси инстанса → HTTPS_PROXY для хоста реестра', async () => {
+    await initTlsTrust(
+      {
+        security: {},
+        proxy: {
+          mode: 'all',
+          fromEnv: false,
+          profiles: { default: { url: 'http://proxy.corp:3128' } },
+        },
+      },
+      {},
+    );
+    const env = await resolveNpmInstallEnvironment('https://git.itphx.ru/api/packages/itphx/npm');
+    expect(env.HTTPS_PROXY).toBe('http://proxy.corp:3128');
+    expect(env.HTTP_PROXY).toBe('http://proxy.corp:3128');
+  });
+});
+
+/** Диагностика провала `npm install` (инцидент: TLS маскировался под ETARGET). */
+describe('describeNpmFailure (ADR-133)', () => {
+  it('SELF_SIGNED_CERT_IN_CHAIN → понятный текст про CA/прокси', () => {
+    const failure = describeNpmFailure({
+      code: 1,
+      registry: 'https://git.itphx.ru/api/packages/itphx/npm',
+      stderr: 'npm http fetch failed with SELF_SIGNED_CERT_IN_CHAIN',
+    });
+    expect(failure.reason).toBe('tls');
+    expect(failure.message).toContain('SELF_SIGNED_CERT_IN_CHAIN');
+    expect(failure.message).toContain('security.tls / NODE_EXTRA_CA_CERTS');
+    expect(failure.message).toContain('https://git.itphx.ru/api/packages/itphx/npm');
+  });
+
+  it('остальные TLS-коды распознаются так же', () => {
+    for (const code of [
+      'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+      'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+      'CERT_HAS_EXPIRED',
+    ]) {
+      expect(describeNpmFailure({ code: 1, registry: 'r', stderr: code }).reason).toBe('tls');
+    }
+  });
+
+  it('ETARGET — отдельная причина (реестр, а не TLS)', () => {
+    const failure = describeNpmFailure({
+      code: 1,
+      registry: 'https://git.itphx.ru/api/packages/itphx/npm',
+      stderr: 'npm error code ETARGET\nnpm error notarget No matching version found',
+    });
+    expect(failure.reason).toBe('etarget');
+    expect(failure.message).toContain('ETARGET');
+    expect(failure.message).toContain('https://git.itphx.ru/api/packages/itphx/npm');
+  });
+
+  it('прочий провал — прежний текст «npm завершился с кодом N»', () => {
+    expect(describeNpmFailure({ code: 7, registry: 'r' })).toEqual({
+      reason: 'exit',
+      message: 'npm завершился с кодом 7',
+    });
+  });
+});
+
+describe('formatNpmCommand', () => {
+  it('печатает argv без секретов', () => {
+    expect(formatNpmCommand(buildUpdateInstallArgs('1.2.3', 'https://git.example/npm', true))).toBe(
+      'npm install -g @itphx/synth@1.2.3 --@itphx:registry=https://git.example/npm --prefer-online',
+    );
   });
 });

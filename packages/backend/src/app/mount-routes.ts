@@ -58,6 +58,8 @@ import {
   // настроек профиля.
   executionProfileCatalog,
   browserProfileCatalog,
+  // ADR-099: env дочернего npm (CA `security.tls` + прокси-маршрут реестра).
+  resolveNpmInstallEnvironment,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -1445,6 +1447,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir, {
     updates: config.synth.updates,
     audit: maintenanceAudit,
+    // ADR-099: дочерний npm получает доверие CA и прокси-маршрут инстанса.
+    npmEnvironment: resolveNpmInstallEnvironment,
   }, {
     readGuard: auth.requirePermission('ADMIN'),
     writeGuard: auth.requirePermission('ADMIN'),

@@ -59,6 +59,7 @@ import type { MetricsRegistry } from '../../metrics/registry.js';
 import type { MetricsReadiness } from '../routes/metrics-settings.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
+import { resolveNpmInstallEnvironment } from '../../maintenance/update.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
 import { executeToolDef } from '../../engine/tools/tool-execution.js';
 import { MemoryProviderUnavailableError } from '../routes/memory.js';
@@ -503,6 +504,8 @@ export function mountStandaloneRoutes(
   app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir, {
     updates: config.updatesConfig,
     audit: maintenanceAudit,
+    // ADR-099: дочерний npm получает доверие CA и прокси-маршрут инстанса.
+    npmEnvironment: resolveNpmInstallEnvironment,
   }));
 
   // PROP-135 Ф6b-1: профили и пулы исполнения (`/api/v2/execution/*`).

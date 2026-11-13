@@ -16,6 +16,7 @@ import {
   emptyResolvedProxyConfig,
   proxyStatus,
   proxyUrlFor,
+  resolveProxyRoute,
   shouldProxyUrl as shouldProxyUrlFor,
   type EgressProxyStatus,
   type ProxyCredentials,
@@ -303,6 +304,40 @@ export function mcpProxyEnv(): Record<string, string> {
     }
   }
   if (config.noProxy.length > 0) env.NO_PROXY = config.noProxy.join(',');
+  return env;
+}
+
+/**
+ * Env-переменные прокси для **дочернего npm** (`synth update`/`POST /updates/apply`).
+ *
+ * В отличие от git/MCP-сервера, цель известна заранее — URL реестра обновлений,
+ * поэтому маршрут считается **по факту** (`resolveProxyRoute`): `noProxy` →
+ * правило → default. Basic-креды профиля уходят в userinfo URL (env-канал, не
+ * argv — инвариант 13).
+ *
+ * Ограничение то же, что у `gitProxyEnv`/`mcpProxyEnv`: дочерний процесс не умеет
+ * per-host маршрут. В `mode: 'selected'` публичный реестр (`registry.npmjs.org`,
+ * откуда ставятся зависимости пакета) всегда добавляется в `NO_PROXY` — иначе он
+ * пошёл бы через прокси, предназначенный для другого хоста.
+ *
+ * Пусто — прокси выключен (env не меняется).
+ */
+export function npmProxyEnv(targetUrl: string): Record<string, string> {
+  const config = _config;
+  if (!config?.enabled) return {};
+  const env: Record<string, string> = {};
+  const route = resolveProxyRoute(config, targetUrl);
+  if (route.action === 'proxy' && route.proxyUrl !== undefined) {
+    const url = withCredentials(route.proxyUrl, route.credentials);
+    env.HTTPS_PROXY = url;
+    env.HTTP_PROXY = url;
+  }
+  const noProxy = new Set(config.noProxy);
+  if ((config.mode ?? 'all') === 'selected') {
+    // Публичные зависимости пакета — напрямую (per-host маршрут npm не умеет).
+    noProxy.add('registry.npmjs.org');
+  }
+  if (noProxy.size > 0) env.NO_PROXY = [...noProxy].join(',');
   return env;
 }
 

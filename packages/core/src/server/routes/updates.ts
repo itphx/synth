@@ -17,6 +17,13 @@ import { SYNTH_VERSION, type UpdatesConfig } from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../../storage/ports/maintenance-audit-repository.js';
 import { recordMaintenanceAudit } from '../../maintenance/audit.js';
 import { getSelfUpdateSupport, type SelfUpdateSupport } from '../../maintenance/self-update.js';
+import {
+  buildUpdateInstallArgs,
+  describeNpmFailure,
+  formatNpmCommand,
+  resolveNpmInstallEnvironment,
+  resolveNpmVersion,
+} from '../../maintenance/update.js';
 import { getRestartStatus, requestRestart } from '../restart.js';
 import {
   checkForUpdates,
@@ -60,8 +67,23 @@ export interface UpdateRoutesDeps {
   audit?: MaintenanceAuditRepository;
   /** Admission-гейт self-update (тесты). */
   selfUpdateSupport?: () => Promise<SelfUpdateSupport> | SelfUpdateSupport;
-  /** Установка (тесты): код возврата; при задании spawn не используется. */
-  npmInstall?: (version: string, registry: string) => Promise<number>;
+  /**
+   * Установка (тесты): код возврата либо `{code, stderr}` (stderr — для
+   * диагностики TLS/ETARGET); при задании spawn не используется.
+   */
+  npmInstall?: (
+    version: string,
+    registry: string,
+    context: NpmInstallContext,
+  ) => Promise<number | NpmInstallOutcome>;
+  /**
+   * Env дочернего npm (ADR-099): CA инстанса (`security.tls`) и прокси-маршрут
+   * реестра. По умолчанию — `resolveNpmInstallEnvironment`; монтирование
+   * передаёт его явно.
+   */
+  npmEnvironment?: (registryUrl: string) => Promise<Record<string, string>>;
+  /** Версия npm для события `start` (тесты). По умолчанию — `npm --version`. */
+  npmVersion?: () => Promise<string | undefined>;
   /** Запрос рестарта (тесты). */
   requestRestart?: () => Promise<unknown>;
   /** Статус рестарта (тесты). */
@@ -69,6 +91,23 @@ export interface UpdateRoutesDeps {
   /** Env (тесты). */
   env?: NodeJS.ProcessEnv;
 }
+
+/** Что реально уходит дочернему npm (без секретов: креды прокси — только в `env`). */
+export interface NpmInstallContext {
+  /** argv (`npm install -g … --@itphx:registry=… --prefer-online`). */
+  args: string[];
+  /** Дополнительный env: `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`. */
+  env: Record<string, string>;
+}
+
+/** Исход установки (инъекция): код возврата и stderr для диагностики. */
+export interface NpmInstallOutcome {
+  code: number;
+  stderr?: string;
+}
+
+/** Хвост stderr для диагностики (не раздуваем память длинным выводом npm). */
+const STDERR_TAIL_LIMIT = 16_384;
 
 function _parseChannel(raw: string | undefined): UpdateChannelChoice | undefined {
   if (raw === undefined || raw === '') return undefined;
@@ -190,9 +229,22 @@ export function createUpdateRoutes(
     const restartStatus = (deps.getRestartStatus ?? getRestartStatus)();
     const willRestart = body.restart === true && restartStatus.supported;
 
+    // ADR-099: дочерний npm не наследует доверие TLS/прокси процесса — env
+    // собирается из `security.tls` (CA) и маршрута прокси реестра.
+    const resolveNpmEnv = deps.npmEnvironment ?? resolveNpmInstallEnvironment;
+    // Инъекция установки (тесты) — реальный npm не запускается вовсе.
+    const detectNpmVersion = deps.npmVersion ?? (deps.npmInstall ? undefined : resolveNpmVersion);
+    // Scoped-ключ, не `--registry`: публичные зависимости должны ставиться
+    // из реестра по умолчанию (в Gitea их нет — иначе 404).
+    const installArgs = buildUpdateInstallArgs(target, registry, true);
+    const installCommand = formatNpmCommand(installArgs);
+
     const stream = new ReadableStream({
       start(controller) {
         const encoder = new TextEncoder();
+        let closed = false;
+        let child: ReturnType<typeof spawn> | null = null;
+        let stderrTail = '';
 
         const send = (data: Record<string, unknown>) => {
           try {
@@ -202,18 +254,12 @@ export function createUpdateRoutes(
           }
         };
         const close = () => {
+          if (closed) return;
+          closed = true;
           try { controller.close(); } catch { /* already closed */ }
         };
 
-        send({
-          type: 'start',
-          message: `Установка ${PACKAGE_NAME}@${target} (канал ${channel}, реестр ${registry})...`,
-          version: target,
-          channel,
-          registry,
-        });
-
-        const finish = async (code: number): Promise<void> => {
+        const finish = async (code: number, stderr = ''): Promise<void> => {
           if (code === 0) {
             send({
               type: 'done',
@@ -245,62 +291,104 @@ export function createUpdateRoutes(
             }
             return;
           }
-          send({ type: 'error', message: `npm завершился с кодом ${code}` });
+          // Сырое «код 1» бесполезно: TLS-недоверие/ETARGET объясняем по stderr.
+          const failure = describeNpmFailure({ code, stderr, registry });
+          console.warn(`[updates] установка ${PACKAGE_NAME}@${target} не удалась: ${failure.message}`);
+          send({ type: 'error', message: failure.message });
           close();
           await recordMaintenanceAudit(deps.audit, {
             op: 'update.failed',
             status: 'failed',
             actor: 'api',
             details: { from: SYNTH_VERSION, to: target, channel, registry, version: target },
-            error: `npm завершился с кодом ${code}`,
+            error: failure.message,
           });
         };
 
-        // Тесты: инъектированная установка без spawn.
-        if (deps.npmInstall) {
-          const abort = () => { close(); };
-          signal.addEventListener('abort', abort, { once: true });
-          void deps.npmInstall(target, registry)
-            .then((code) => finish(code))
-            .catch((err: unknown) => {
-              send({ type: 'error', message: err instanceof Error ? err.message : String(err) });
-              close();
+        const run = async (): Promise<void> => {
+          let npmVersion: string | undefined;
+          if (detectNpmVersion) {
+            try {
+              npmVersion = (await detectNpmVersion()) || undefined;
+            } catch {
+              npmVersion = undefined;
+            }
+          }
+
+          // Диагностика: фактический argv и версия npm (в `~/.npm/_logs` лезть не нужно).
+          send({
+            type: 'start',
+            message: `Установка ${PACKAGE_NAME}@${target} (канал ${channel}, реестр ${registry})...`,
+            version: target,
+            channel,
+            registry,
+            command: installCommand,
+            ...(npmVersion !== undefined ? { npmVersion } : {}),
+          });
+
+          let extraEnv: Record<string, string> = {};
+          try {
+            extraEnv = await resolveNpmEnv(registry);
+          } catch (err) {
+            // Политика доверия не собралась — установка всё равно пробуется;
+            // причина провала всплывёт диагностикой TLS.
+            console.warn(
+              `[updates] env дочернего npm не собран: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+          if (signal.aborted) {
+            close();
+            return;
+          }
+
+          // Тесты: инъектированная установка без spawn.
+          if (deps.npmInstall) {
+            const outcome = await deps.npmInstall(target, registry, {
+              args: installArgs,
+              env: extraEnv,
             });
-          return;
-        }
+            const code = typeof outcome === 'number' ? outcome : outcome.code;
+            const stderr = typeof outcome === 'number' ? '' : outcome.stderr ?? '';
+            await finish(code, stderr);
+            return;
+          }
 
-        const child = spawn(
-          'npm',
-          // Scoped-ключ, не `--registry`: публичные зависимости должны ставиться
-          // из реестра по умолчанию (в Gitea их нет — иначе 404).
-          ['install', '-g', `${PACKAGE_NAME}@${target}`, `--@itphx:registry=${registry}`],
-          { stdio: ['ignore', 'pipe', 'pipe'], env: { ...env } },
-        );
+          const spawned = spawn('npm', installArgs, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...env, ...extraEnv },
+          });
+          child = spawned;
 
-        if (child.stdout) {
-          child.stdout.on('data', (chunk: Buffer) => {
+          spawned.stdout?.on('data', (chunk: Buffer) => {
             send({ type: 'progress', data: chunk.toString().trim() });
           });
-        }
-        if (child.stderr) {
-          child.stderr.on('data', (chunk: Buffer) => {
-            send({ type: 'stderr', data: chunk.toString().trim() });
+          spawned.stderr?.on('data', (chunk: Buffer) => {
+            const text = chunk.toString();
+            stderrTail = (stderrTail + text).slice(-STDERR_TAIL_LIMIT);
+            send({ type: 'stderr', data: text.trim() });
           });
-        }
 
-        child.on('close', (code) => {
-          void finish(code ?? 1);
-        });
+          spawned.on('close', (code) => {
+            void finish(code ?? 1, stderrTail);
+          });
 
-        child.on('error', (err) => {
-          send({ type: 'error', message: err.message });
-          close();
-        });
+          spawned.on('error', (err) => {
+            send({ type: 'error', message: err.message });
+            close();
+          });
+        };
 
         signal.addEventListener('abort', () => {
-          child.kill('SIGTERM');
+          child?.kill('SIGTERM');
           close();
         }, { once: true });
+
+        void run().catch((err: unknown) => {
+          send({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+          close();
+        });
       },
     });
 

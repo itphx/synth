@@ -1875,8 +1875,24 @@ export type {
   MigrateStorageDataOptions,
 } from './maintenance/storage-migrate.js';
 // ADR-092: `synth update` — проверка/обновление/откат пакета (`--to <version>`), паритет dev-CLI и публичного CLI (PROP-053).
-export { runUpdateCommand, operationOf } from './maintenance/update.js';
-export type { UpdateCommandOptions, UpdateCommandDeps, UpdateOperation } from './maintenance/update.js';
+export {
+  runUpdateCommand,
+  operationOf,
+  // ADR-099 × ADR-133: единый резолвер доверия/прокси для дочернего npm.
+  buildUpdateInstallArgs,
+  formatNpmCommand,
+  resolveNpmInstallEnvironment,
+  resolveNpmVersion,
+  describeNpmFailure,
+  detectNpmTlsError,
+  NPM_TLS_ERROR_CODES,
+} from './maintenance/update.js';
+export type {
+  UpdateCommandOptions,
+  UpdateCommandDeps,
+  UpdateOperation,
+  NpmFailureDescription,
+} from './maintenance/update.js';
 // ADR-133: каналы обновлений, admission-гейт self-update и фоновый планировщик.
 export {
   checkForUpdates,
@@ -1907,7 +1923,13 @@ export { getSelfUpdateSupport, checkUserLevelPrefix, npmGlobalPrefix, isPathInsi
 export type { SelfUpdateSupport, SelfUpdateSupportDeps } from './maintenance/self-update.js';
 // ADR-133: HTTP-контур обновлений (`/api/v2/updates`).
 export { createUpdateRoutes } from './server/routes/updates.js';
-export type { UpdateRoutesDeps, UpdateRoutesOptions, UpdateApplyBody } from './server/routes/updates.js';
+export type {
+  UpdateRoutesDeps,
+  UpdateRoutesOptions,
+  UpdateApplyBody,
+  NpmInstallContext,
+  NpmInstallOutcome,
+} from './server/routes/updates.js';
 // ADR-092: авто-миграции при старте (обязательная страховочная копия, лок).
 export { applyStartupMigrations, applyPendingRestore } from './maintenance/startup.js';
 export type {

@@ -12,6 +12,7 @@ import {
 import {
   gitProxyEnv,
   mcpProxyEnv,
+  npmProxyEnv,
   proxyConfigFingerprint,
   proxyUrlForTarget,
   resetEgressProxyState,
@@ -227,5 +228,62 @@ describe('gitProxyEnv / mcpProxyEnv (дочерние процессы)', () => 
     setEgressProxyConfig(config({ url: 'http://legacy:3128', fromEnv: false, enabled: false }));
     expect(gitProxyEnv()).toEqual({});
     expect(mcpProxyEnv()).toEqual({});
+  });
+});
+
+describe('npmProxyEnv (дочерний npm, ADR-099 × ADR-133)', () => {
+  it('маршрут proxy для реестра: HTTPS_PROXY/HTTP_PROXY + NO_PROXY', () => {
+    setEgressProxyConfig(
+      config(
+        {
+          mode: 'all',
+          fromEnv: false,
+          noProxy: ['127.0.0.1'],
+          profiles: {
+            default: { url: 'http://proxy.corp:3128', auth: { type: 'basic', username: 'user' } },
+          },
+        },
+        { SYNTH_PROXY_PASSWORD: 'pass' },
+      ),
+    );
+    expect(npmProxyEnv('https://git.itphx.ru/api/packages/itphx/npm')).toEqual({
+      HTTPS_PROXY: 'http://user:pass@proxy.corp:3128',
+      HTTP_PROXY: 'http://user:pass@proxy.corp:3128',
+      NO_PROXY: '127.0.0.1',
+    });
+  });
+
+  it('noProxy для реестра → прокси-env не выставляется, NO_PROXY остаётся', () => {
+    setEgressProxyConfig(
+      config({
+        mode: 'all',
+        fromEnv: false,
+        noProxy: ['git.itphx.ru'],
+        profiles: { default: { url: 'http://proxy.corp:3128' } },
+      }),
+    );
+    expect(npmProxyEnv('https://git.itphx.ru/api/packages/itphx/npm')).toEqual({
+      NO_PROXY: 'git.itphx.ru',
+    });
+  });
+
+  it('mode=selected: маршрут по правилу, публичный реестр — в NO_PROXY', () => {
+    setEgressProxyConfig(
+      config({
+        mode: 'selected',
+        fromEnv: false,
+        profiles: { gitea: { url: 'http://gitea-proxy:3128' } },
+        rules: [{ id: 'gitea', hosts: ['git.itphx.ru'], action: 'proxy', profile: 'gitea' }],
+      }),
+    );
+    const env = npmProxyEnv('https://git.itphx.ru/api/packages/itphx/npm');
+    expect(env.HTTPS_PROXY).toBe('http://gitea-proxy:3128');
+    expect(env.NO_PROXY).toContain('registry.npmjs.org');
+  });
+
+  it('прокси выключен/не инициализирован → env пустой (поведение прежнее)', () => {
+    expect(npmProxyEnv('https://registry.npmjs.org/@itphx%2fsynth')).toEqual({});
+    setEgressProxyConfig(config({ url: 'http://legacy:3128', fromEnv: false, enabled: false }));
+    expect(npmProxyEnv('https://git.itphx.ru/api/packages/itphx/npm')).toEqual({});
   });
 });

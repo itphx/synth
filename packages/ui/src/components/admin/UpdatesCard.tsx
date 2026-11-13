@@ -307,6 +307,10 @@ export function UpdatesCard({
       switch (event.type) {
         case 'start':
           if (event.message) pushProgress(event.message)
+          // Диагностика: фактическая команда и версия npm (аддитивные поля).
+          if (event.command) {
+            pushProgress(`$ ${event.command}${event.npmVersion ? ` (npm ${event.npmVersion})` : ''}`)
+          }
           break
         case 'progress':
           if (event.data) pushProgress(event.data)

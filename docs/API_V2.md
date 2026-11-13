@@ -1825,10 +1825,18 @@ Docker/Helm/managed или системный npm-prefix) и доступнос�
 
 | `type` | Содержимое |
 |---|---|
-| `start` | `{message, version, channel, registry}` — начало установки |
+| `start` | `{message, version, channel, registry, command, npmVersion?}` — начало установки; `command` — фактический argv дочернего npm (без секретов), `npmVersion` — версия npm (аддитивно, может отсутствовать) |
 | `progress` / `stderr` | `{data}` — вывод npm (обрезанные строки) |
 | `done` | `{version, channel, registry, restartScheduled, message}` — установка завершена |
 | `error` | `{message}` — npm/установка завершились ошибкой (аудит `update.failed`) |
+
+Установка идёт внешним `npm`, который **не наследует** политику доверия/egress инстанса: дочернему
+процессу передаются `NODE_EXTRA_CA_CERTS` (из `security.tls`, ADR-099) и прокси-переменные
+(`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` — маршрут по хосту реестра); Basic-креды прокси — только в
+env, не в argv (инвариант 13). В argv добавлен `--prefer-online`: иначе после сетевой/TLS-ошибки npm
+отдаёт устаревший кэш и маскирует её под `ETARGET`. Кадр `error` несёт понятную причину: при
+TLS-кодах (`SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, …) — текст про CA/прокси
+инстанса, при `ETARGET` — отдельная причина (тот же текст уходит в аудит `update.failed` и в лог).
 
 `restartScheduled` — рестарт действительно запрошен (`restart:true` **и** `getRestartStatus().supported`);
 запрос рестарта идёт после кадра `done`. Аудит: `update.applied`/`update.failed` с

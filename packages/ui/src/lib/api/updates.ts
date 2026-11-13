@@ -54,7 +54,17 @@ export interface UpdateCheckResult {
 
 /** События SSE-потока `POST /api/v2/updates/apply`. */
 export type UpdateApplyEvent =
-  | { type: 'start'; message?: string }
+  | {
+      type: 'start'
+      message?: string
+      version?: string
+      channel?: string
+      registry?: string
+      /** Фактический argv дочернего npm (без секретов) — аддитивное поле. */
+      command?: string
+      /** Версия npm, которой идёт установка (аддитивное поле, может отсутствовать). */
+      npmVersion?: string
+    }
   | { type: 'progress'; data?: string; message?: string }
   | { type: 'stderr'; data?: string; message?: string }
   | { type: 'done'; version?: string; restartScheduled?: boolean; message?: string }

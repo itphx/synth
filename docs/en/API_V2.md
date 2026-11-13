@@ -1628,10 +1628,19 @@ frames `data: {...}`:
 
 | `type` | Content |
 |---|---|
-| `start` | `{message, version, channel, registry}` — installation started |
+| `start` | `{message, version, channel, registry, command, npmVersion?}` — installation started; `command` is the actual child npm argv (no secrets), `npmVersion` is the npm version (additive, may be absent) |
 | `progress` / `stderr` | `{data}` — npm output (trimmed lines) |
 | `done` | `{version, channel, registry, restartScheduled, message}` — installation finished |
 | `error` | `{message}` — npm/installation failed (audit `update.failed`) |
+
+The installation runs an external `npm`, which does **not** inherit the instance egress/trust policy:
+the child process receives `NODE_EXTRA_CA_CERTS` (from `security.tls`, ADR-099) and proxy variables
+(`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` — route resolved for the registry host); proxy Basic credentials
+travel in env only, never in argv (invariant 13). `--prefer-online` is added to argv: otherwise npm
+serves a stale cache after a network/TLS failure and masks it as `ETARGET`. The `error` frame carries a
+clear reason: for TLS codes (`SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, …) — a
+message about the instance CA/proxy, for `ETARGET` — a separate reason (the same text goes to the
+`update.failed` audit and the log).
 
 `restartScheduled` — a restart was actually requested (`restart:true` **and**
 `getRestartStatus().supported`); the restart request goes out after the `done` frame. Audit:

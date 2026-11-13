@@ -2,6 +2,7 @@
 // рестарт после установки. Сеть/установка/рестарт инжектируются.
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthKit } from '../../auth/local.js';
+import { MemoryMaintenanceAuditRepository } from '../../storage/memory/index.js';
 import { createUpdateRoutes } from './updates.js';
 
 const { checkMock, latestMock, versionsMock } = vi.hoisted(() => ({
@@ -210,5 +211,118 @@ describe('RBAC-граница /api/v2/updates (инвариант 16)', () => {
       body: JSON.stringify({}),
     })).status).toBe(403);
     expect(checkMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ADR-099 × ADR-133: установка идёт через внешний npm, который не наследует
+ * доверие TLS/прокси инстанса. Проверяем env/argv дочернего процесса и
+ * диагностику провала (инцидент: TLS-ошибка маскировалась под `ETARGET`).
+ */
+describe('POST /api/v2/updates/apply: env npm и диагностика', () => {
+  const applyBody = JSON.stringify({});
+
+  it('env дочернего npm содержит NODE_EXTRA_CA_CERTS, argv — --prefer-online', async () => {
+    latestMock.mockResolvedValue('1.2.3');
+    let captured: { args: string[]; env: Record<string, string> } | undefined;
+
+    const app = createUpdateRoutes(auth, '/tmp/unused', {
+      selfUpdateSupport: () => ({ supported: true }),
+      npmEnvironment: async () => ({ NODE_EXTRA_CA_CERTS: '/etc/ssl/certs/corp-ca.pem' }),
+      npmVersion: async () => '10.9.0',
+      npmInstall: async (_version, _registry, context) => {
+        captured = context;
+        return 0;
+      },
+    });
+    const res = await app.request('/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: applyBody,
+    });
+
+    expect(captured?.env.NODE_EXTRA_CA_CERTS).toBe('/etc/ssl/certs/corp-ca.pem');
+    expect(captured?.args).toContain('--prefer-online');
+    // Scoped-ключ реестра сохранён (публичные зависимости — из npm по умолчанию).
+    expect(captured?.args).toContain('--@itphx:registry=https://registry.npmjs.org');
+
+    const start = parseEvents(await res.text()).find((e) => e.type === 'start');
+    expect(start?.command).toBe(
+      'npm install -g @itphx/synth@1.2.3 --@itphx:registry=https://registry.npmjs.org --prefer-online',
+    );
+    expect(start?.npmVersion).toBe('10.9.0');
+  });
+
+  it('без TLS-настроек env пустой, start без npmVersion (поведение прежнее)', async () => {
+    latestMock.mockResolvedValue('1.2.3');
+    let captured: { args: string[]; env: Record<string, string> } | undefined;
+
+    const app = createUpdateRoutes(auth, '/tmp/unused', {
+      selfUpdateSupport: () => ({ supported: true }),
+      npmInstall: async (_version, _registry, context) => {
+        captured = context;
+        return 0;
+      },
+    });
+    const res = await app.request('/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: applyBody,
+    });
+
+    expect(captured?.env).toEqual({});
+    const start = parseEvents(await res.text()).find((e) => e.type === 'start');
+    expect(start?.command).toContain('--prefer-online');
+    expect(start).not.toHaveProperty('npmVersion');
+  });
+
+  it('stderr с SELF_SIGNED_CERT_IN_CHAIN → понятная ошибка и update.failed в аудите', async () => {
+    latestMock.mockResolvedValue('1.2.3');
+    const audit = new MemoryMaintenanceAuditRepository();
+
+    const app = createUpdateRoutes(auth, '/tmp/unused', {
+      selfUpdateSupport: () => ({ supported: true }),
+      audit,
+      npmInstall: async () => ({
+        code: 1,
+        stderr: '22 http fetch GET https://git.itphx.ru -- attempt 1 failed with SELF_SIGNED_CERT_IN_CHAIN',
+      }),
+    });
+    const res = await app.request('/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: applyBody,
+    });
+
+    const error = parseEvents(await res.text()).find((e) => e.type === 'error');
+    expect(error?.message).toContain('SELF_SIGNED_CERT_IN_CHAIN');
+    expect(error?.message).toContain('security.tls / NODE_EXTRA_CA_CERTS');
+    expect(error?.message).toContain('не доверяет сертификату реестра');
+
+    // Аудит пишется после закрытия потока.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['update.failed']);
+    expect(list[0]!.error).toContain('SELF_SIGNED_CERT_IN_CHAIN');
+  });
+
+  it('ETARGET остаётся отдельной причиной (сырое «код 1» не подменяет её)', async () => {
+    latestMock.mockResolvedValue('1.2.3');
+    const app = createUpdateRoutes(auth, '/tmp/unused', {
+      selfUpdateSupport: () => ({ supported: true }),
+      npmInstall: async () => ({
+        code: 1,
+        stderr: 'npm error code ETARGET\nnpm error notarget No matching version found',
+      }),
+    });
+    const res = await app.request('/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: applyBody,
+    });
+
+    const error = parseEvents(await res.text()).find((e) => e.type === 'error');
+    expect(error?.message).toContain('ETARGET');
+    expect(error?.message).not.toContain('security.tls');
   });
 });

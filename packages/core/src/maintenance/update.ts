@@ -23,6 +23,8 @@
 // (`details: {from, to, channel, registry, version}`).
 import { spawn } from 'node:child_process';
 import { SYNTH_VERSION, type UpdatesConfig } from '@itphx/synth-shared';
+import { npmProxyEnv } from '../security/proxy-state.js';
+import { getTlsCaPath } from '../security/tls.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import {
   DEFAULT_STABLE_REGISTRY,
@@ -138,6 +140,10 @@ function _normalizeTarget(raw: string): string | null {
  * Реестр задаётся **scoped-ключом** `--@itphx:registry`, а не `--registry`:
  * иначе npm тянет из беты/зеркала и публичные зависимости (`hono`, `commander`…)
  * и падает с 404 — в реестре Gitea их нет.
+ *
+ * `--prefer-online` — npm перепроверяет метаданные вместо stale-кэша: иначе после
+ * сетевой/TLS-ошибки он отдаёт устаревший кэш и маскирует причину под
+ * `ETARGET` («версии нет»). На установку из Gitea не влияет — только на свежесть.
  */
 export function buildUpdateInstallArgs(
   version: string,
@@ -146,16 +152,125 @@ export function buildUpdateInstallArgs(
 ): string[] {
   const args = ['install', '-g', `${PACKAGE_NAME}@${version}`];
   if (includeRegistry) args.push(`--@itphx:registry=${registry}`);
+  args.push('--prefer-online');
   return args;
 }
 
+/** Человекочитаемая команда установки (для `start`-события SSE и `--dry-run`). */
+export function formatNpmCommand(args: string[]): string {
+  return ['npm', ...args].join(' ');
+}
+
+/** Коды TLS-ошибок Node/npm, означающие «сертификат реестра не доверен». */
+export const NPM_TLS_ERROR_CODES = [
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_HAS_EXPIRED',
+] as const;
+
+/** Первый найденный в выводе npm код TLS-ошибки (`undefined` — TLS-причины нет). */
+export function detectNpmTlsError(output: string): string | undefined {
+  for (const code of NPM_TLS_ERROR_CODES) {
+    if (output.includes(code)) return code;
+  }
+  return undefined;
+}
+
+/** Разобранная причина провала `npm install`. */
+export interface NpmFailureDescription {
+  /** `tls` — сертификат реестра не доверен; `etarget` — версии/тега нет; `exit` — прочее. */
+  reason: 'tls' | 'etarget' | 'exit';
+  /** Текст для SSE `error`, аудита и лога (без секретов). */
+  message: string;
+}
+
+/**
+ * Понятная причина провала установки (ADR-133): сырое «npm завершился с кодом 1»
+ * бесполезно, когда настоящая причина — недоверие TLS или stale-кэш. TLS-ошибки
+ * распознаются по коду из stderr (инвариант 22: CA задаётся `security.tls`/
+ * `NODE_EXTRA_CA_CERTS`), `ETARGET` остаётся отдельной причиной.
+ */
+export function describeNpmFailure(input: {
+  code: number;
+  stderr?: string;
+  registry: string;
+}): NpmFailureDescription {
+  const stderr = input.stderr ?? '';
+  const tlsCode = detectNpmTlsError(stderr);
+  if (tlsCode !== undefined) {
+    return {
+      reason: 'tls',
+      message:
+        `npm не доверяет сертификату реестра ${input.registry}: ${tlsCode}. ` +
+        'Настройте CA (security.tls / NODE_EXTRA_CA_CERTS) или прокси для окружения инстанса',
+    };
+  }
+  if (/\bETARGET\b/.test(stderr)) {
+    return {
+      reason: 'etarget',
+      message:
+        `npm завершился с кодом ${input.code}: ETARGET — в реестре ${input.registry} ` +
+        'нет запрошенной версии/тега',
+    };
+  }
+  return { reason: 'exit', message: `npm завершился с кодом ${input.code}` };
+}
+
+/**
+ * Env для **дочернего npm**: доверие CA и прокси-маршрут инстанса (ADR-099).
+ * Внешний npm не наследует политику процесса (`security.tls`, `proxy`), поэтому
+ * в «пустом» окружении (systemd/cron) он падал на внутреннем CA или шёл напрямую
+ * мимо прокси. Секреты сюда не попадают (креды прокси — только в env, не в argv,
+ * инвариант 13).
+ */
+export async function resolveNpmInstallEnvironment(
+  registry: string,
+): Promise<Record<string, string>> {
+  const env: Record<string, string> = {};
+  const caFile = getTlsCaPath();
+  if (caFile !== undefined && caFile !== '') env.NODE_EXTRA_CA_CERTS = caFile;
+  Object.assign(env, npmProxyEnv(registry));
+  return env;
+}
+
+/** Версия npm для диагностики (`npm --version`; ошибка/таймаут → `undefined`). */
+export function resolveNpmVersion(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolve) => {
+    let settled = false;
+    const done = (value?: string): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      const child = spawn('npm', ['--version'], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env,
+        timeout: 3000,
+      });
+      let out = '';
+      child.stdout?.on('data', (chunk: Buffer) => {
+        if (out.length < 64) out += chunk.toString();
+      });
+      child.on('error', () => done(undefined));
+      child.on('close', (code) => done(code === 0 ? out.trim() || undefined : undefined));
+    } catch {
+      done(undefined);
+    }
+  });
+}
+
 /** Установка целевой версии через npm (`npm install -g … [--registry …]`). */
-function _defaultInstall(version: string, registry: string): Promise<number> {
+async function _defaultInstall(version: string, registry: string): Promise<number> {
   const includeRegistry = registry !== DEFAULT_STABLE_REGISTRY;
+  const egressEnv = await resolveNpmInstallEnvironment(registry);
   return new Promise<number>((resolveCode, reject) => {
     const child = spawn('npm', buildUpdateInstallArgs(version, registry, includeRegistry), {
       stdio: 'inherit',
-      env: { ...process.env },
+      env: { ...process.env, ...egressEnv },
     });
     child.on('error', reject);
     child.on('close', (code) => resolveCode(code ?? 1));
@@ -253,7 +368,9 @@ export async function runUpdateCommand(opts: UpdateCommandOptions): Promise<numb
     current: resolveUpdateChannel(current),
     target: resolveUpdateChannel(target),
   });
-  const installCommand = `npm ${buildUpdateInstallArgs(target, registry, includeRegistry).join(' ')}`;
+  const installCommand = formatNpmCommand(
+    buildUpdateInstallArgs(target, registry, includeRegistry),
+  );
 
   // 4. `--dry-run` — печать плана, установка не запускается, аудита нет.
   if (dryRun) {
