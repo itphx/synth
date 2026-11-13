@@ -115,6 +115,17 @@ spec:
               value: {{ $k8s.executorPort | default 5100 | int64 | quote }}
             - name: SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS
               value: {{ $k8s.terminationGraceSeconds | default 30 | int64 | quote }}
+            {{- /* fsGroup подов пула: null → "none" (не выставлять в pod spec —
+                   NFS, иначе kubelet рекурсивно chown'ит весь том при старте пода).
+                   Helm удаляет ключ со значением null при coalesce, поэтому
+                   отсутствие ключа в отрендеренных values означает то же самое —
+                   "none"; дефолт 1000 задан в values.yaml и уходит числом. */}}
+            {{- $fsGroup := "none" }}
+            {{- if not (kindIs "invalid" $k8s.fsGroup) }}
+            {{- $fsGroup = $k8s.fsGroup | int64 | toString }}
+            {{- end }}
+            - name: SYNTH_PROVISIONER_KUBERNETES_FS_GROUP
+              value: {{ $fsGroup | quote }}
             {{- end }}
             {{- /* Внешний чекер команд пулов (PROP-136b-2b): env добавляется в
                    pod spec; токен — значение из Secret (не в values),

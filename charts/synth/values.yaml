@@ -796,6 +796,17 @@ provisioner:
     executorPort: 5100
     # Grace-период удаления пода пула, с.
     terminationGraceSeconds: 30
+    # fsGroup подов пулов (дополнительная группа; kubelet приводит владельца
+    # смонтированного тома). `null` — **не** выставлять в pod spec: на NFS
+    # (например, общий `nfs-rwx` workspace) kubelet иначе рекурсивно меняет
+    # владельца всех файлов тома при старте пода
+    # (`VolumePermissionChangeInProgress`, 10–20 мин) — под пула не стартует.
+    # `null` безопасен: `runAsUser`/`runAsGroup` 1000 и readOnlyRootFilesystem
+    # сохраняются. На test стоит `null` (так же, как `podSecurityContext.fsGroup`
+    # у backend/executor). Число — своё значение; `null` (и просто отсутствие
+    # ключа — Helm удаляет null-ключи при coalesce) → env
+    # SYNTH_PROVISIONER_KUBERNETES_FS_GROUP="none".
+    fsGroup: 1000
 
   # Внешний чекер команд в подах динамических пулов (PROP-136b-2b): env
   # `SYNTH_EXECUTOR_COMMAND_POLICY_*` добавляется в pod spec, политика

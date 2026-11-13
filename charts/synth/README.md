@@ -213,6 +213,7 @@ ingress:
 | `provisioner.kubernetes.apiServer` | `https://kubernetes.default.svc` | Адрес API Kubernetes для provisioner'а |
 | `provisioner.kubernetes.startTimeoutMs` / `.pollIntervalMs` | `120000` / `1000` | Ожидание Running/Ready пода пула и период опроса |
 | `provisioner.kubernetes.executorPort` / `.terminationGraceSeconds` | `5100` / `30` | Порт исполнителя в поде пула и grace-период удаления |
+| `provisioner.kubernetes.fsGroup` | `1000` | `fsGroup` подов пулов → env `SYNTH_PROVISIONER_KUBERNETES_FS_GROUP`. `null` — не выставлять в pod spec: на NFS (общий `nfs-rwx`) kubelet иначе рекурсивно `chown`'ит весь том при старте пода (`VolumePermissionChangeInProgress`); uid 1000 и read-only root FS сохраняются. Ключ не задан — дефолт приложения `1000` |
 | `provisioner.executorCommandPolicy.enabled` | `false` | Внешний чекер команд в подах динамических пулов (PROP-136b-2b): env в pod spec; только при `provider: kubernetes` |
 | `provisioner.executorCommandPolicy.provider` / `.url` | `http` / `""` | Провайдер (`http`\|`opa`) и адрес чекера; `url` обязателен при `enabled: true` (ошибка рендера) |
 | `provisioner.executorCommandPolicy.failMode` / `.timeoutMs` / `.cacheTtlMs` / `.opaPath` | `closed` / `2000` / `60000` / `/v1/data/synth/exec/decision` | Параметры политики, передаются в env пода пула |
@@ -2098,6 +2099,35 @@ control plane (`workspaceSubPath` в `POST /v1/pools`).
   **весь** PVC — в managed это означает, что такой проект нужно перенести под
   `workspacesRoot`, а не рассчитывать на общий том.
 - PVC должен быть `ReadWriteMany` (общий для backend и подов пулов).
+
+### fsGroup подов пулов и NFS
+
+По умолчанию поды пулов получают `fsGroup: 1000`
+(`provisioner.kubernetes.fsGroup` → env
+`SYNTH_PROVISIONER_KUBERNETES_FS_GROUP`). На **NFS**-томе workspace (общий
+`nfs-rwx`) это значит, что kubelet при старте **каждого** пода пула рекурсивно
+меняет владельца всех файлов тома (`VolumePermissionChangeInProgress`,
+10–20 мин на десятки тысяч файлов) — под не переходит в `Running`, и backend в
+`fail-closed` не получает пул.
+
+Для NFS значение отключается:
+
+```yaml
+provisioner:
+  kubernetes:
+    fsGroup: null      # env SYNTH_PROVISIONER_KUBERNETES_FS_GROUP="none"
+```
+
+- `null` — `fsGroup` в `spec.securityContext` **не** выставляется (тот же
+  приём, что `podSecurityContext.fsGroup: null` у backend/executor на test).
+- Изоляция не слабеет: `runAsNonRoot`, `runAsUser`/`runAsGroup` 1000,
+  `seccompProfile`, `allowPrivilegeEscalation: false`, `drop: [ALL]` и
+  `readOnlyRootFilesystem` остаются.
+- `null` (или отсутствие ключа — Helm удаляет null-ключи при coalesce) → env
+  `SYNTH_PROVISIONER_KUBERNETES_FS_GROUP="none"`, поле в pod spec не
+  выставляется.
+- Число — своё значение; прочее (`staff`, `0`, `-1`) — provisioner не
+  стартует (fail-closed).
 
 ### Ограничения
 

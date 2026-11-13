@@ -1018,6 +1018,7 @@ plane адрес и токен пула (`POST /v1/pools`). Включается
 | `SYNTH_PROVISIONER_KUBERNETES_POLL_INTERVAL_MS` | `1000` | Период опроса пода |
 | `SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT` | `5100` | Порт исполнителя в поде пула |
 | `SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS` | `30` | Grace-период удаления пода |
+| `SYNTH_PROVISIONER_KUBERNETES_FS_GROUP` | `1000` | `fsGroup` подов пула; `none`/`null` — не выставлять в pod spec (NFS: иначе kubelet рекурсивно меняет владельца тома при старте пода) |
 
 **Values чарта** (`provisioner.*`; подробно — README чарта, §«Provisioner пулов»):
 
@@ -1038,6 +1039,7 @@ plane адрес и токен пула (`POST /v1/pools`). Включается
 | `provisioner.kubernetes.apiServer` | `https://kubernetes.default.svc` | `…_API_SERVER` |
 | `provisioner.kubernetes.startTimeoutMs` / `.pollIntervalMs` | `120000` / `1000` | `…_START_TIMEOUT_MS` / `…_POLL_INTERVAL_MS` |
 | `provisioner.kubernetes.executorPort` / `.terminationGraceSeconds` | `5100` / `30` | `…_EXECUTOR_PORT` / `…_TERMINATION_GRACE_SECONDS` |
+| `provisioner.kubernetes.fsGroup` | `1000` | `…_FS_GROUP`; `null` → `none` (не выставлять: NFS) |
 | `provisioner.idleTimeoutMs` / `.sessionIdleTimeoutMs` / `.maxLifetimeMs` | `900000` / `300000` / `43200000` | `SYNTH_PROVISIONER_*_TIMEOUT_MS` |
 | `provisioner.drainGraceMs` / `.maxPools` / `.reaperIntervalMs` | `30000` / `50` / `30000` | `SYNTH_PROVISIONER_*` |
 | `provisioner.timeoutMs` | `10000` | Таймаут backend'а → `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS` |

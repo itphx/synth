@@ -393,6 +393,43 @@ describe('provisioner: kubernetes-провайдер', () => {
   });
 
   /**
+   * fsGroup подов пула: `null` — не выставлять (NFS: kubelet иначе рекурсивно
+   * меняет владельца тома при старте пода). Изоляция не слабеет: uid/gid 1000,
+   * non-root и seccomp остаются.
+   */
+  it('pod spec: fsGroup null — securityContext без fsGroup, uid/gid 1000 на месте', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:default',
+      hash: poolHash('project:p1:exec:default'),
+      profileName: 'default',
+      profile: PROFILES.default!,
+      kubernetes: { ...KUBERNETES, fsGroup: null },
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as { securityContext: Record<string, unknown> };
+    expect(spec.securityContext).not.toHaveProperty('fsGroup');
+    expect(spec.securityContext).toMatchObject({
+      runAsNonRoot: true,
+      runAsUser: 1000,
+      runAsGroup: 1000,
+      seccompProfile: { type: 'RuntimeDefault' },
+    });
+  });
+
+  it('pod spec: fsGroup из конфигурации (число) применяется', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:default',
+      hash: poolHash('project:p1:exec:default'),
+      profileName: 'default',
+      profile: PROFILES.default!,
+      kubernetes: { ...KUBERNETES, fsGroup: 2000 },
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as { securityContext: Record<string, unknown> };
+    expect(spec.securityContext.fsGroup).toBe(2000);
+  });
+
+  /**
    * PROP-135 слайз 5b-1: MCP-серверы профиля → env `SYNTH_EXECUTOR_MCP_SERVERS`
    * (JSON, формат исполнителя). Пустой состав — переменной нет (дефолт образа
    * остаётся в силе).

@@ -29,10 +29,11 @@
  * ## Безопасность
  *
  * Под и контейнер запускаются с жёстким `securityContext` (non-root uid 1000,
- * `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`,
- * `capabilities.drop: [ALL]`, read-only корневая ФС по умолчанию). Токен пула
- * живёт только в секрете и в `secretKeyRef` — provisioner его не логирует и не
- * отдаёт в диагностике (`GET /v1/pools`).
+ * `fsGroup` 1000 — отключается конфигурацией для NFS-томов, — `seccompProfile:
+ * RuntimeDefault`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
+ * read-only корневая ФС по умолчанию). Токен пула живёт только в секрете и в
+ * `secretKeyRef` — provisioner его не логирует и не отдаёт в диагностике
+ * (`GET /v1/pools`).
  */
 
 import { createHash } from 'node:crypto';
@@ -351,6 +352,8 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
   const port = kubernetes.executorPort > 0 ? kubernetes.executorPort : DEFAULT_EXECUTOR_PORT;
   const readOnlyRootFilesystem = profile.readOnlyRootFilesystem ?? true;
   const network = profile.network ?? 'full';
+  // `null` — fsGroup в pod spec не выставляется (NFS, см. конфигурацию).
+  const fsGroup = kubernetes.fsGroup === undefined ? CONTAINER_GID : kubernetes.fsGroup;
 
   const env: ContainerEnv[] = [
     {
@@ -471,7 +474,11 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
         runAsNonRoot: true,
         runAsUser: CONTAINER_UID,
         runAsGroup: CONTAINER_GID,
-        fsGroup: CONTAINER_GID,
+        // `fsGroup: null` (env `..._FS_GROUP=none`) — не выставлять: на NFS
+        // kubelet иначе рекурсивно меняет владельца тома при старте пода
+        // (VolumePermissionChangeInProgress). Изоляция не слабеет —
+        // `runAsUser`/`runAsGroup` 1000 и `readOnlyRootFilesystem` остаются.
+        ...(fsGroup !== null ? { fsGroup } : {}),
         seccompProfile: { type: 'RuntimeDefault' },
       },
       containers: [

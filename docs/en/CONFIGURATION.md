@@ -1012,6 +1012,7 @@ stored in values or `config.yaml` (invariant 13).
 | `SYNTH_PROVISIONER_KUBERNETES_POLL_INTERVAL_MS` | `1000` | Pod polling period |
 | `SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT` | `5100` | Executor port inside a pool pod |
 | `SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS` | `30` | Pod deletion grace period |
+| `SYNTH_PROVISIONER_KUBERNETES_FS_GROUP` | `1000` | `fsGroup` of pool pods; `none`/`null` — do not set it in the pod spec (NFS: otherwise the kubelet recursively changes ownership of the volume when a pod starts) |
 
 **Chart values** (`provisioner.*`; details — chart README, §«Pool provisioner»):
 
@@ -1032,6 +1033,7 @@ stored in values or `config.yaml` (invariant 13).
 | `provisioner.kubernetes.apiServer` | `https://kubernetes.default.svc` | `…_API_SERVER` |
 | `provisioner.kubernetes.startTimeoutMs` / `.pollIntervalMs` | `120000` / `1000` | `…_START_TIMEOUT_MS` / `…_POLL_INTERVAL_MS` |
 | `provisioner.kubernetes.executorPort` / `.terminationGraceSeconds` | `5100` / `30` | `…_EXECUTOR_PORT` / `…_TERMINATION_GRACE_SECONDS` |
+| `provisioner.kubernetes.fsGroup` | `1000` | `…_FS_GROUP`; `null` → `none` (not set: NFS) |
 | `provisioner.idleTimeoutMs` / `.sessionIdleTimeoutMs` / `.maxLifetimeMs` | `900000` / `300000` / `43200000` | `SYNTH_PROVISIONER_*_TIMEOUT_MS` |
 | `provisioner.drainGraceMs` / `.maxPools` / `.reaperIntervalMs` | `30000` / `50` / `30000` | `SYNTH_PROVISIONER_*` |
 | `provisioner.timeoutMs` | `10000` | Backend timeout → `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS` |

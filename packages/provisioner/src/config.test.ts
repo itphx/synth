@@ -176,6 +176,7 @@ describe('provisioner: конфигурация из env', () => {
     expect(kubernetes?.pollIntervalMs).toBe(1_000);
     expect(kubernetes?.executorPort).toBe(5100);
     expect(kubernetes?.terminationGraceSeconds).toBe(30);
+    expect(kubernetes?.fsGroup).toBe(1_000);
     expect(kubernetes?.serviceAccount).toBeUndefined();
     expect(kubernetes?.imagePullSecrets).toEqual([]);
     expect(config.staticPools).toEqual({});
@@ -212,6 +213,7 @@ describe('provisioner: конфигурация из env', () => {
         [PROVISIONER_KUBERNETES_ENV.pollIntervalMs]: '250',
         [PROVISIONER_KUBERNETES_ENV.executorPort]: '5200',
         [PROVISIONER_KUBERNETES_ENV.terminationGraceSeconds]: '5',
+        [PROVISIONER_KUBERNETES_ENV.fsGroup]: '2000',
       }),
       { readFile: () => '' },
     );
@@ -226,7 +228,34 @@ describe('provisioner: конфигурация из env', () => {
       pollIntervalMs: 250,
       executorPort: 5200,
       terminationGraceSeconds: 5,
+      fsGroup: 2000,
     });
+  });
+
+  /**
+   * fsGroup подов пула: `none`/`null` — не выставлять. На NFS-томе workspace
+   * kubelet иначе рекурсивно меняет владельца всех файлов при старте пода
+   * (VolumePermissionChangeInProgress, минуты) — под пула не стартует.
+   */
+  it('kubernetes: fsGroup none/null — не выставлять (NFS)', () => {
+    for (const raw of ['none', 'none ', ' NULL ', 'Null']) {
+      const config = resolveProvisionerConfig(
+        KUBERNETES_ENV({ [PROVISIONER_KUBERNETES_ENV.fsGroup]: raw }),
+        { readFile: () => '' },
+      );
+      expect(config.kubernetes?.fsGroup).toBeNull();
+    }
+  });
+
+  it('kubernetes: невалидный fsGroup — ошибка, а не дефолт', () => {
+    for (const raw of ['staff', '0', '-1', '1.5']) {
+      expect(() =>
+        resolveProvisionerConfig(
+          KUBERNETES_ENV({ [PROVISIONER_KUBERNETES_ENV.fsGroup]: raw }),
+          { readFile: () => '' },
+        ),
+      ).toThrow(/SYNTH_PROVISIONER_KUBERNETES_FS_GROUP/);
+    }
   });
 
   it('kubernetes: невалидное имя PVC — ошибка', () => {

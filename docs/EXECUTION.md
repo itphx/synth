@@ -509,8 +509,8 @@ LLM он не знает; конфигурация — **только env** (к�
 | `static` | адрес из `profiles[].url` (первый) или `staticPools[key]` | нет — ключ пула игнорируется | нет |
 | `kubernetes` | `Pod` с образом профиля + `Secret` (`token`) в namespace | есть — под на ключ пула | PVC workspace (RWX), RBAC, ServiceAccount |
 
-Под пула: `restartPolicy: Never`, `runAsNonRoot`/`uid 1000`/`fsGroup 1000`,
-`seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`,
+Под пула: `restartPolicy: Never`, `runAsNonRoot`/`uid 1000`/`fsGroup 1000`
+(см. ниже), `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`,
 `capabilities.drop: [ALL]`, `readOnlyRootFilesystem` по профилю (по умолчанию
 `true`) с `emptyDir` для `/tmp` и `/home/synth`; монтирование workspace —
 `workspacePvc` + **`subPath`** (`workspaceSubPath`), то есть в под попадает
@@ -518,6 +518,18 @@ LLM он не знает; конфигурация — **только env** (к�
 synth-executor`, `app.kubernetes.io/managed-by: synth-provisioner`,
 `synth.io/pool-hash`, `synth.io/profile`, `synth.io/network`; ключ пула —
 аннотация `synth.io/pool-key`.
+
+**fsGroup подов пулов.** `fsGroup` в pod spec — дефолт `1000`
+(`KUBERNETES_DEFAULTS.fsGroup`), переопределяется
+`SYNTH_PROVISIONER_KUBERNETES_FS_GROUP` (в чарте —
+`provisioner.kubernetes.fsGroup`). На **NFS**-томе workspace kubelet при
+старте пода рекурсивно меняет владельца всех файлов тома
+(`VolumePermissionChangeInProgress`, 10–20 мин) — под пула не стартует, и
+backend в fail-closed не получает пул; там `fsGroup` отключается значением
+`null` (`none` для env): поле в `securityContext` не выставляется. Изоляция не
+слабеет — `runAsNonRoot`, `runAsUser`/`runAsGroup` 1000, `seccompProfile`,
+`capabilities.drop`, `readOnlyRootFilesystem` остаются. Пусто/не задано —
+`1000`; иное (не число) — provisioner не стартует (fail-closed).
 
 **Сетевой класс пула (ADR-137b-2).** Подпись `synth.io/network` ставит
 **provisioner**: значение — из профиля (`profiles[].network`:

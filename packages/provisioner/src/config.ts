@@ -35,6 +35,7 @@
  * | `SYNTH_PROVISIONER_KUBERNETES_POLL_INTERVAL_MS` | нет | `1000` | период опроса пода |
  * | `SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT` | нет | `5100` | порт исполнителя в поде |
  * | `SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS` | нет | `30` | grace-период пода |
+ * | `SYNTH_PROVISIONER_KUBERNETES_FS_GROUP` | нет | `1000` | `fsGroup` подов пула; `none`/`null` — не выставлять (NFS) |
  *
  * Внешний чекер команд пулов (PROP-136b-2b; действует только при
  * `provider=kubernetes` — static-пул provisioner не создаёт):
@@ -104,6 +105,7 @@ export const PROVISIONER_KUBERNETES_ENV = {
   pollIntervalMs: 'SYNTH_PROVISIONER_KUBERNETES_POLL_INTERVAL_MS',
   executorPort: 'SYNTH_PROVISIONER_KUBERNETES_EXECUTOR_PORT',
   terminationGraceSeconds: 'SYNTH_PROVISIONER_KUBERNETES_TERMINATION_GRACE_SECONDS',
+  fsGroup: 'SYNTH_PROVISIONER_KUBERNETES_FS_GROUP',
 } as const;
 
 /** Env-имена внешнего чекера команд пулов (PROP-136b-2b). */
@@ -163,6 +165,8 @@ export const KUBERNETES_DEFAULTS = {
   pollIntervalMs: 1_000,
   executorPort: 5100,
   terminationGraceSeconds: 30,
+  /** `fsGroup` подов пула (non-root uid/gid 1000). */
+  fsGroup: 1000,
 } as const;
 
 /** Провайдеры пулов, которые умеет собирать фабрика. */
@@ -327,6 +331,12 @@ export interface ProvisionerKubernetesConfig {
   executorPort: number;
   /** Grace-период завершения пода, с. */
   terminationGraceSeconds: number;
+  /**
+   * `fsGroup` подов пула: не задано — дефолт `1000`, `null` — не выставлять
+   * в pod spec (например, NFS: kubelet иначе рекурсивно меняет владельца
+   * всего тома при старте пода).
+   */
+  fsGroup?: number | null;
 }
 
 /** Эффективная конфигурация внешнего чекера команд пулов. */
@@ -433,6 +443,32 @@ function resolveInt(
     );
   }
   return value;
+}
+
+/**
+ * Разобрать `fsGroup` подов пула.
+ *
+ * - пусто/не задано → дефолт `1000` (поведение прежних версий);
+ * - `none`/`null` (trim, регистр не важен) → `null` — в pod spec не выставлять
+ *   (NFS: kubelet не делает рекурсивный chown при старте пода);
+ * - число → число; прочее — ошибка старта (fail-closed, как соседние поля).
+ */
+function resolveFsGroup(
+  raw: string | undefined,
+  envName: string,
+  fallback: number,
+): number | null {
+  const value = (raw ?? '').trim();
+  if (value === '') return fallback;
+  const lowered = value.toLowerCase();
+  if (lowered === 'none' || lowered === 'null') return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(
+      `[provisioner] невалидное значение ${envName}="${raw}" — ожидается целое число ≥ 1, "none" или "null"`,
+    );
+  }
+  return parsed;
 }
 
 /** Обязательная непустая строка env. */
@@ -587,6 +623,11 @@ function resolveKubernetesConfig(
       KUBERNETES_DEFAULTS.terminationGraceSeconds,
       0,
       3_600,
+    ),
+    fsGroup: resolveFsGroup(
+      env[PROVISIONER_KUBERNETES_ENV.fsGroup],
+      PROVISIONER_KUBERNETES_ENV.fsGroup,
+      KUBERNETES_DEFAULTS.fsGroup,
     ),
   };
 }
