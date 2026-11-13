@@ -696,7 +696,7 @@ describe('save_attachment — сохранение вложения сессии
       const result = await saveAttachmentTool.execute({}, makeCtx({ executionPort: port }));
 
       expect(result.isError).toBe(true);
-      expect(result.content).toContain('features.fs');
+      expect(result.content).toContain('Filesystem operations are unavailable');
     });
   });
 

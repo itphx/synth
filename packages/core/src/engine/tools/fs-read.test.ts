@@ -775,7 +775,7 @@ describe('list_directory — работа через порт исполнени
     const result = await listDirectoryTool.execute({ path: '.' }, makeCtx(port));
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('features.fs');
+    expect(result.content).toContain('Filesystem operations are unavailable');
   });
 
   it('симлинк-побег (realpath вне корней) — отказ, каталог не листится', async () => {
@@ -989,7 +989,7 @@ describe('read_file — чтение содержимого через порт 
     const result = await readFileTool.execute({ file_path: 'a.txt' }, makeCtx(port));
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('features.fs');
+    expect(result.content).toContain('Filesystem operations are unavailable');
   });
 
   it('симлинк-побег (realpath вне корней) — отказ, файл не читается', async () => {

@@ -1275,7 +1275,7 @@ describe('клиент удалённого порта: FS-операции', ()
 
     const err = await port.fs!.stat('/tmp/x').catch((e) => e);
     expect(err).toBeInstanceOf(ExecutionFsUnavailableError);
-    expect((err as ExecutionFsUnavailableError).message).toContain('features.fs');
+    expect((err as ExecutionFsUnavailableError).message).toContain('filesystem operations are unavailable');
   });
 
   it('исполнитель без features.fs — тот же отказ на realpath и readdir', async () => {

@@ -34,7 +34,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
-import type { ExecutionMetricsSink, ExecutionPort } from './ports/index.js';
+import type { ExecutionFs, ExecutionMetricsSink, ExecutionPort } from './ports/index.js';
 
 /**
  * Пакет исполнителя (клиент удалённого порта). Аннотация `string`
@@ -153,10 +153,17 @@ export async function isExecutorPackageAvailable(): Promise<boolean> {
  * «фон не поддерживается» в «есть метод, но он падает» — иначе вызывающий
  * (реестр фоновых прогонов) не сможет отличить одно от другого.
  */
-class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
+export class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
   readonly executorMcp: { readonly urls: string[]; readonly token: string };
   /** Обёртка всегда удалённая (ADR-077): CA control plane не применяется. */
   readonly isRemote = true;
+  /**
+   * FS-операции (PROP-135): **делегируются** внутреннему порту — в remote-режиме
+   * файловые операции исполняются там же, где команды. Поле не задано, если
+   * внутренний порт его не имеет (исполнитель без поддержки FS): файловые тулы
+   * работают fail-closed, а не молча ищут файлы в control plane.
+   */
+  readonly fs?: ExecutionFs;
   /** Фоновый запуск — есть только если внутренний порт его умеет. */
   readonly spawnBackground?: ExecutionPort['spawnBackground'];
   private readonly _inner: ExecutionPort;
@@ -164,6 +171,7 @@ class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
   constructor(inner: ExecutionPort, urls: string[], token: string) {
     this._inner = inner;
     this.executorMcp = { urls: [...urls], token };
+    this.fs = inner.fs;
     const spawn = inner.spawnBackground;
     if (spawn) {
       this.spawnBackground = (req) => spawn.call(inner, req);

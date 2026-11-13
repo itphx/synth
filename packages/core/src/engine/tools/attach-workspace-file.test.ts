@@ -528,7 +528,7 @@ describe('attach_workspace_file — привязка файла из workspace (
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content).toContain('features.fs');
+      expect(result.content).toContain('Filesystem operations are unavailable');
       expect(service.upload).not.toHaveBeenCalled();
     });
   });

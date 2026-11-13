@@ -126,7 +126,7 @@ const todoWriteItemSchema = z.object({
   content: z.string().describe('Todo item text'),
   status: z.enum(TODO_STATUSES).describe('Current status of the item'),
   priority: z.enum(TODO_PRIORITIES).describe('Priority of the item'),
-  planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
+  planItemId: z.string().optional().describe('Reference to a project plan item'),
 });
 
 // Пункт для todo_add: content обязателен, status/priority — со значениями по умолчанию.
@@ -137,7 +137,7 @@ export const todoAddItemSchema = z.object({
   content: z.string().describe('Todo item text'),
   status: z.enum(TODO_STATUSES).optional().default('pending').describe('Status of the item'),
   priority: z.enum(TODO_PRIORITIES).optional().default(DEFAULT_TODO_PRIORITY).describe('Priority of the item'),
-  planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
+  planItemId: z.string().optional().describe('Reference to a project plan item'),
 });
 
 /**
@@ -471,7 +471,7 @@ export const todoUpdateTool: ToolDefinition = {
     content: z.string().optional().describe('New item text'),
     status: z.enum(TODO_STATUSES).optional().describe('New status'),
     priority: z.enum(TODO_PRIORITIES).optional().describe('New priority'),
-    planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
+    planItemId: z.string().optional().describe('Reference to a project plan item'),
   }),
   capabilities: [ToolCapability.RUNTIME, ToolCapability.TODO],
   async execute(args, ctx) {

@@ -43,7 +43,7 @@ import {
  * текст движка для пользователя.
  */
 export const FS_UNAVAILABLE_TEXT =
-  'Filesystem execution is unavailable: the executor does not support features.fs (PROP-135).';
+  'Filesystem operations are unavailable in the current execution environment.';
 
 /**
  * Симлинк-побег за периметр сессии — по **реальным** путям (PROP-135).

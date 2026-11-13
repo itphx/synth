@@ -895,7 +895,7 @@ describe('fs-write tools — работа через порт исполнени
     const result = await writeFileTool.execute({ file_path: 'x.txt', content: 'hi' }, makeCtx(new PortWithoutFs()));
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('features.fs');
+    expect(result.content).toContain('Filesystem operations are unavailable');
   });
 
   it('write_file: порт без адреса с features.fs — тот же понятный отказ', async () => {
@@ -910,7 +910,7 @@ describe('fs-write tools — работа через порт исполнени
     const result = await writeFileTool.execute({ file_path: 'x.txt', content: 'hi' }, makeCtx(port));
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('features.fs');
+    expect(result.content).toContain('Filesystem operations are unavailable');
   });
 
   it('edit_file: чтение и запись идут через порт (fs.readRawText/fs.writeFile), локальный файл не тронут', async () => {
@@ -998,6 +998,6 @@ describe('fs-write tools — работа через порт исполнени
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('features.fs');
+    expect(result.content).toContain('Filesystem operations are unavailable');
   });
 });

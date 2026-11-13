@@ -947,6 +947,6 @@ describe('patch — работа через порт исполнения (PROP-
     }, makeCtx(new PortWithoutFs()));
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('features.fs');
+    expect(result.content).toContain('Filesystem operations are unavailable');
   });
 });

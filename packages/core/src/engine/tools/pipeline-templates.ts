@@ -34,8 +34,8 @@ const pipelineTemplatesSchema = z.object({});
 export const pipelineTemplatesTool: ToolDefinition = {
   name: 'pipeline_templates',
   description:
-    'List the pipeline templates of the instance: the templates of the new ADR-101 format and '
-    + 'the legacy definitions of extension packs (the format is shown for each of them). '
+    'List the pipeline templates of the instance: current-format templates and '
+    + 'legacy definitions of extension packs (the format is shown for each of them). '
     + 'Templates are instance resources — no project is needed.',
   parameters: pipelineTemplatesSchema,
   capabilities: [ToolCapability.PIPELINE],

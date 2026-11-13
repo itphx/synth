@@ -5510,7 +5510,7 @@ export const dict = {
   'plugins.serverPolicy.denied': 'сервер запрещает',
   'plugins.serverPolicy.unverified': 'не проверен сервером',
   'plugins.serverPolicy.hint':
-    'Сервер не подтвердил политику (сервер недоступен или режим allowlist без списка): локальный плагин работает в режиме cooperative — в гибриде enforcement со стороны клиента не гарантирован (Уровень 1, ADR-090 Ф7).',
+    'Сервер не подтвердил политику (сервер недоступен или режим allowlist без списка): локальный плагин работает в режиме cooperative — в гибриде enforcement со стороны клиента не гарантирован.',
   'plugins.trustLabel': 'Доверие плагина',
   'plugins.scanLabel': 'Вердикт сканера',
   'plugins.trust.builtin': 'встроенный',

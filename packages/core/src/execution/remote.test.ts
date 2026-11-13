@@ -13,15 +13,24 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { defaultConfig, resolveExecutionConfig } from '@itphx/synth-shared';
+import { defaultConfig, resolveExecutionConfig, type ToolContext } from '@itphx/synth-shared';
 import { InlineExecutionPort } from './inline-execution-port.js';
 import { createExecutionPortForConfig } from './factory.js';
 import {
+  RemoteExecutionPortWithExecutorMcp,
   RemoteExecutionUnavailableError,
   createRemoteExecutionPortFromConfig,
   isExecutorPackageAvailable,
   readExecutorToken,
 } from './remote.js';
+import type {
+  ExecutionFs,
+  ExecutionPort,
+  ExecRequest,
+  ExecResult,
+} from './ports/index.js';
+import { listDirectoryTool } from '../engine/tools/fs-read.js';
+import { FS_UNAVAILABLE_TEXT } from './fs-perimeter.js';
 
 const SECRET = 's3cr3t-executor-token-value';
 
@@ -150,6 +159,110 @@ describe.skipIf(!(await isExecutorPackageAvailable()))('ADR-077: фабрика 
       );
       expect(port).not.toBeInstanceOf(InlineExecutionPort);
       expect(port.isRemote).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/** FS-реализация порта с подменой отдельных методов (образец — `fs-read.test.ts`). */
+function makeFs(overrides: Partial<ExecutionFs> = {}): ExecutionFs {
+  return {
+    realpath: async (path) => path,
+    stat: async () => ({ kind: 'file', size: 0, mtimeMs: 0 }),
+    readdir: async () => [],
+    readText: async () => ({ lines: [], totalLines: 0, truncated: false, bytes: 0 }),
+    sniff: async () => ({ binary: false }),
+    readBytes: async () => ({ dataBase64: '', size: 0 }),
+    writeFile: async () => undefined,
+    mkdir: async () => undefined,
+    remove: async () => undefined,
+    readRawText: async () => ({ text: '', size: 0 }),
+    rename: async () => undefined,
+    download: async () => Buffer.alloc(0),
+    upload: async () => undefined,
+    hash: async () => '',
+    ...overrides,
+  };
+}
+
+/** Внутренний порт обёртки: только `execute` (+ необязательная FS-часть). */
+function fakePort(fs?: ExecutionFs): ExecutionPort {
+  return {
+    async execute(_req: ExecRequest): Promise<ExecResult> {
+      return { stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 0 };
+    },
+    ...(fs ? { fs } : {}),
+  };
+}
+
+/**
+ * PROP-135: обёртка `RemoteExecutionPortWithExecutorMcp` не теряет FS-часть
+ * порта. Регресс 0.13.9: без делегирования `fs` файловые тулы в remote-режиме
+ * отвечали «Filesystem operations are unavailable…», хотя исполнитель FS умеет.
+ */
+describe('PROP-135: обёртка удалённого порта делегирует FS-часть', () => {
+  it('fs отдаётся как у внутреннего порта; stat/realpath/readdir делегируются', async () => {
+    const calls: string[] = [];
+    const innerFs = makeFs({
+      realpath: async (path) => {
+        calls.push(`realpath:${path}`);
+        return path;
+      },
+      stat: async (path) => {
+        calls.push(`stat:${path}`);
+        return { kind: 'directory', size: 0, mtimeMs: 0 };
+      },
+      readdir: async (path) => {
+        calls.push(`readdir:${path}`);
+        return [{ name: 'a.txt', kind: 'file', size: 3 }];
+      },
+    });
+    const wrapper = new RemoteExecutionPortWithExecutorMcp(
+      fakePort(innerFs),
+      ['http://127.0.0.1:1'],
+      'token',
+    );
+
+    expect(wrapper.fs).toBe(innerFs);
+    expect(await wrapper.fs!.realpath('/workspace')).toBe('/workspace');
+    expect((await wrapper.fs!.stat('/workspace')).kind).toBe('directory');
+    expect(await wrapper.fs!.readdir('/workspace')).toEqual([
+      { name: 'a.txt', kind: 'file', size: 3 },
+    ]);
+    expect(calls).toEqual(['realpath:/workspace', 'stat:/workspace', 'readdir:/workspace']);
+  });
+
+  it('внутренний порт без FS — fs не определён (fail-closed на уровне тулов)', () => {
+    const wrapper = new RemoteExecutionPortWithExecutorMcp(fakePort(), [], 'token');
+    expect(wrapper.fs).toBeUndefined();
+  });
+
+  it('list_directory через обёртку не отдаёт «FS недоступна» (регресс 0.13.9)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-remote-fs-'));
+    try {
+      const innerFs = makeFs({
+        stat: async () => ({ kind: 'directory', size: 0, mtimeMs: 0 }),
+        readdir: async () => [{ name: 'remote.txt', kind: 'file', size: 7 }],
+      });
+      const wrapper = new RemoteExecutionPortWithExecutorMcp(
+        fakePort(innerFs),
+        ['http://127.0.0.1:1'],
+        'token',
+      );
+      const ctx: ToolContext = {
+        sessionId: 's1',
+        messageId: 'm1',
+        workingDir: dir,
+        extra: { executionPort: wrapper },
+      };
+
+      const result = await listDirectoryTool.execute({ path: '.' }, ctx);
+
+      expect(result.isError).toBeFalsy();
+      expect(result.content).not.toBe(FS_UNAVAILABLE_TEXT);
+      expect(result.content).not.toContain('Filesystem operations are unavailable');
+      expect(result.content).toContain('remote.txt (7 bytes)');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

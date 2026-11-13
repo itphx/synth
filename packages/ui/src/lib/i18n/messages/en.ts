@@ -4920,7 +4920,7 @@ export const dict = {
   'plugins.serverPolicy.denied': 'denied by the server',
   'plugins.serverPolicy.unverified': 'not verified by the server',
   'plugins.serverPolicy.hint':
-    'The server did not confirm the policy (server unreachable or allowlist mode without a list): the local plugin runs in cooperative mode — in hybrid, client-side enforcement is not guaranteed (Level 1, ADR-090 F7).',
+    'The server did not confirm the policy (server unreachable or allowlist mode without a list): the local plugin runs in cooperative mode — in hybrid, client-side enforcement is not guaranteed.',
   'plugins.trustLabel': 'Plugin trust level',
   'plugins.scanLabel': 'Scanner verdict',
   'plugins.trust.builtin': 'built-in',

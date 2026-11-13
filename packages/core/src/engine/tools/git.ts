@@ -372,10 +372,10 @@ async function resolveRegistryRemote(
 ): Promise<string | null> {
   const lookup = await resolveProjectRepoEntry(ctx, cwd);
   if (lookup.kind === 'no_project') {
-    return 'the session has no project — the remote cannot be verified against the project registry (ADR-076)';
+    return 'the session has no project — the remote cannot be verified against the project registry';
   }
   if (lookup.kind === 'not_registered') {
-    return 'the repository is not registered in the project — register it first (ADR-076)';
+    return 'the repository is not registered in the project — register it first';
   }
   const registeredUrl = lookup.url;
   if (!registeredUrl) {
@@ -639,7 +639,7 @@ export const gitPushTool: ToolDefinition = {
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     remote: z.string().optional().default('origin')
-      .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project (ADR-076) — a URL is not allowed'),
+      .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project — a URL is not allowed'),
     branch: z.string().optional().describe('Branch name to push (default: current branch). A plain branch name — a refspec is not allowed'),
     timeout: gitTimeoutSchema,
   }),
@@ -727,7 +727,7 @@ export const gitPullTool: ToolDefinition = {
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     remote: z.string().optional().default('origin')
-      .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project (ADR-076) — a URL is not allowed'),
+      .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project — a URL is not allowed'),
     branch: z.string().optional().describe('Branch name to pull (default: current tracking branch). A plain branch name — a refspec is not allowed'),
     timeout: gitTimeoutSchema,
   }),

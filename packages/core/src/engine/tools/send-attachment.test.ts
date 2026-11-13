@@ -493,7 +493,7 @@ describe('send_attachment — файл из workspace в ответе (ADR-115)'
       );
 
       expect(result.isError).toBe(true);
-      expect(result.content).toContain('features.fs');
+      expect(result.content).toContain('Filesystem operations are unavailable');
       expect(service.upload).not.toHaveBeenCalled();
       expect(collected).toHaveLength(0);
     });

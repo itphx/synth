@@ -171,7 +171,7 @@ export function isFsPathError(value: unknown): value is FsPathError {
  */
 export class ExecutionFsUnavailableError extends Error {
   constructor(
-    message = 'executor does not support filesystem operations (features.fs); upgrade the executor (protocol >= 7)',
+    message = 'filesystem operations are unavailable in the current execution environment',
   ) {
     super(message);
     this.name = 'ExecutionFsUnavailableError';
