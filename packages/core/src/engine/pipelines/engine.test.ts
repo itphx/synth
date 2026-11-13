@@ -821,4 +821,99 @@ describe('PipelineEngine', () => {
     expect(stepContext.workspaceReady).toBe(true);
     expect(stepContext.mode).toBe('act');
   });
+
+  it('контекст шага несёт порт, роутер и subPath рабочего каталога (ADR-077/PROP-135)', async () => {
+    const pipelines = new MemoryProjectPipelineRepository();
+    const runs = new MemoryPipelineRunRepository();
+    const now = new Date().toISOString();
+    const pipelineSpec = spec([{ id: 'a', kind: 'tool', tool: 'noop' }]);
+    await pipelines.savePipeline({
+      id: pipelineSpec.id,
+      scope: 'project',
+      projectId: 'proj-1',
+      name: pipelineSpec.name,
+      draftVersion: 1,
+      publishedVersion: pipelineSpec.version,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await pipelines.saveVersion({
+      pipelineId: pipelineSpec.id,
+      version: pipelineSpec.version,
+      spec: pipelineSpec,
+      publishedAt: now,
+    });
+    const port = { execute: async () => ({ stdout: '', stderr: '', exitCode: 0 }) };
+    const router = { portFor: () => port };
+    let seen: StepExecutionContext | undefined;
+    const engine = new PipelineEngine({
+      pipelines,
+      runs,
+      executors: [
+        executor('tool', (ctx) => {
+          seen = ctx;
+          return { status: 'ok', attempt: ctx.attempt };
+        }),
+      ],
+      projectStore: {
+        load: async (id: string) =>
+          ({ id, name: 'Проект', workspace: '/ws/proj-slug' }) as never,
+      },
+      workspacesRoot: '/ws',
+      executionPort: port as never,
+      executionRouter: router as never,
+    });
+
+    await engine.run({ pipelineId: 'p1', trigger, projectId: 'proj-1' });
+
+    expect(seen?.executionPort).toBe(port);
+    expect(seen?.executionRouter).toBe(router);
+    // Per-project монтирование PVC: путь проекта относительно корня workspace'ов.
+    expect(seen?.executionWorkspaceSubPath).toBe('proj-slug');
+  });
+
+  it('subPath не задаётся, когда рабочий каталог вне корня workspace\'ов', async () => {
+    const pipelines = new MemoryProjectPipelineRepository();
+    const runs = new MemoryPipelineRunRepository();
+    const now = new Date().toISOString();
+    const pipelineSpec = spec([{ id: 'a', kind: 'tool', tool: 'noop' }]);
+    await pipelines.savePipeline({
+      id: pipelineSpec.id,
+      scope: 'project',
+      projectId: 'proj-1',
+      name: pipelineSpec.name,
+      draftVersion: 1,
+      publishedVersion: pipelineSpec.version,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await pipelines.saveVersion({
+      pipelineId: pipelineSpec.id,
+      version: pipelineSpec.version,
+      spec: pipelineSpec,
+      publishedAt: now,
+    });
+    let seen: StepExecutionContext | undefined;
+    const engine = new PipelineEngine({
+      pipelines,
+      runs,
+      executors: [
+        executor('tool', (ctx) => {
+          seen = ctx;
+          return { status: 'ok', attempt: ctx.attempt };
+        }),
+      ],
+      projectStore: {
+        load: async (id: string) =>
+          ({ id, name: 'Проект', workspace: '/elsewhere/proj' }) as never,
+      },
+      workspacesRoot: '/ws',
+    });
+
+    await engine.run({ pipelineId: 'p1', trigger, projectId: 'proj-1' });
+
+    expect(seen?.executionWorkspaceSubPath).toBeUndefined();
+    expect(seen?.executionPort).toBeUndefined();
+    expect(seen?.executionRouter).toBeUndefined();
+  });
 });

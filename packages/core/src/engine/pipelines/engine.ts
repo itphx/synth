@@ -39,6 +39,8 @@
  * `AbortSignal` останавливает прогон: статус `cancelled`, в журнал —
  * `run.failed` с кодом `pipeline.cancelled`.
  */
+import { isAbsolute, relative } from 'node:path';
+
 import { generateId, nowISO } from '@itphx/synth-shared';
 import { pipelineSpecSchema, validatePipelineSpec } from '@itphx/synth-shared';
 import type {
@@ -53,6 +55,7 @@ import type {
 import { error as logError, info as logInfo, warning as logWarning } from '../../logger.js';
 import type { PipelineRunRecord } from '../../storage/ports/index.js';
 import { t } from '../system-messages.js';
+import { stepWorkingDir } from './executors/common.js';
 import {
   gateDecisionResult,
   gateTimeoutResult,
@@ -171,6 +174,12 @@ export class PipelineEngine {
   private readonly _eventBus: PipelineEventPublisher | null;
   /** Метрики прогонов (ADR-094, `synth_pipeline_*`). */
   private readonly _metrics: PipelineEngineDeps['metrics'];
+  /** ADR-077: порт исполнения команд шага (`ToolContext.extra.executionPort`). */
+  private readonly _executionPort: PipelineEngineDeps['executionPort'];
+  /** PROP-135 слайс 5a: роутер портов (`ToolContext.extra.executionRouter`). */
+  private readonly _executionRouter: PipelineEngineDeps['executionRouter'];
+  /** Корень рабочих каталогов — база для `executionWorkspaceSubPath` шага. */
+  private readonly _workspacesRoot: string | undefined;
 
   constructor(deps: PipelineEngineDeps) {
     this._pipelines = deps.pipelines;
@@ -184,6 +193,11 @@ export class PipelineEngine {
     this._stepContextDeps = deps;
     this._eventBus = deps.eventBus ?? null;
     this._metrics = deps.metrics ?? null;
+    // ADR-077/PROP-135: контур исполнения шага — те же объекты, что у сессий;
+    // не заданы — прежнее поведение (inline-фоллбэк порта, роутера нет).
+    this._executionPort = deps.executionPort;
+    this._executionRouter = deps.executionRouter;
+    this._workspacesRoot = deps.workspacesRoot;
     // ADR-101 §4: LLM-контур шага собирается один раз (движок не знает, откуда
     // берётся провайдер — это забота точки сборки). Без композитора agent-шаги
     // падают с `pipeline.agent_unavailable`.
@@ -758,13 +772,56 @@ export class PipelineEngine {
 
     const withLlm = this._llm ? { llm: this._llm } : {};
     const withAttachments = this._stepAttachments ? { attachments: this._stepAttachments } : {};
+    // ADR-077/PROP-135: контур исполнения — порт и роутер уходят в контекст
+    // шага, а оттуда в `ToolContext.extra` (`buildToolContext`).
+    const withExecution = {
+      ...(this._executionPort ? { executionPort: this._executionPort } : {}),
+      ...(this._executionRouter ? { executionRouter: this._executionRouter } : {}),
+    };
+    let step: PipelineStepContext | undefined;
     try {
-      const step = await buildPipelineStepContext(ctx, this._stepContextDeps);
-      return { ...ctx, step, ...withLlm, ...withAttachments };
+      step = await buildPipelineStepContext(ctx, this._stepContextDeps);
     } catch {
       // Контекст шага — вспомогательный: его отсутствие не роняет шаг.
-      return { ...ctx, ...withLlm, ...withAttachments };
     }
+    const executionWorkspaceSubPath = this._resolveWorkspaceSubPath(
+      stepWorkingDir({ ...ctx, ...(step ? { step } : {}) }),
+    );
+    return {
+      ...ctx,
+      ...(step ? { step } : {}),
+      ...withLlm,
+      ...withAttachments,
+      ...withExecution,
+      ...(executionWorkspaceSubPath ? { executionWorkspaceSubPath } : {}),
+    };
+  }
+
+  /**
+   * PROP-135 Ф4b-2b-2a: рабочий каталог шага относительно корня workspace'ов —
+   * `executionWorkspaceSubPath` для роутера портов (per-project монтирование
+   * PVC: пул видит только каталог проекта).
+   *
+   * Правило то же, что у сессий (`resolveWorkspaceSubPath` в `orchestrator.ts`):
+   * posix-путь (`proj-slug`, `proj-slug/.worktrees/feature`). `undefined` —
+   * каталог совпал с корнем, лежит вне его (standalone с ручным выбором),
+   * абсолютный путь/другой том, `..`/`.`/пустые сегменты или обратный слэш:
+   * provisioner монтирует том целиком.
+   */
+  private _resolveWorkspaceSubPath(workingDir: string): string | undefined {
+    const root = (this._workspacesRoot ?? '').trim();
+    const dir = (workingDir ?? '').trim();
+    if (root === '' || dir === '') return undefined;
+    const rel = relative(root, dir);
+    // Пусто — рабочий каталог и есть корень; абсолютный путь — разные диски/тома.
+    if (rel === '' || isAbsolute(rel)) return undefined;
+    // Обратный слэш — не разделитель Linux-пути, а подозрительный символ.
+    if (rel.includes('\\')) return undefined;
+    const segments = rel.split('/');
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      return undefined;
+    }
+    return rel;
   }
 
   /**

@@ -22,6 +22,8 @@ import type {
 import type { AttachmentFamily, AttachmentModality } from '@itphx/synth-shared';
 import type { EventType } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
+import type { ExecutionPort } from '../../execution/ports/index.js';
+import type { ExecutionRouter } from '../../execution/router.js';
 import type { PipelineMetricsHooks } from '../../metrics/collectors/pipelines.js';
 import type { AttachmentService } from '../attachments/service.js';
 import type { PipelineArtifactStore } from './artifacts.js';
@@ -272,6 +274,36 @@ export interface StepExecutionContext {
    * условиям перехода или завершает его.
    */
   onGateTimeout?: (gate: PipelineGate, result: StepResult) => void;
+  /**
+   * ADR-077: порт исполнения команд инстанса — кладётся движком в
+   * `ToolContext.extra.executionPort` (`buildToolContext`), поэтому плагинный
+   * тул шага получает `ctx.runtime` (PROP-138), а `sandbox_exec`/shell-тулы
+   * идут через порт, а не инлайн-фоллбек.
+   *
+   * Задаётся **движком** из `PipelineEngineDeps`; не задан — тул работает как
+   * раньше (inline-фоллбэк `resolveExecutionPort`, runtime у плагина не
+   * появляется — fail-closed).
+   */
+  executionPort?: ExecutionPort;
+  /**
+   * PROP-135 слайс 5a: роутер портов исполнения — `ToolContext.extra.executionRouter`.
+   * Нужен тулам, которые выбирают пул **по своему классу** (`sandbox_exec` →
+   * класс `sandbox`), а не по профилю сессии. Не задан — такой тул отказывает
+   * понятной ошибкой (не тихо уходит в inline).
+   */
+  executionRouter?: ExecutionRouter;
+  /**
+   * Корень рабочих каталогов инстанса (`storage.workspacesRoot`) — база для
+   * `executionWorkspaceSubPath`.
+   */
+  workspacesRoot?: string;
+  /**
+   * PROP-135 Ф4b-2b-2a: рабочий каталог шага **относительно** `workspacesRoot`
+   * (`proj-slug`, `proj-slug/.worktrees/feature`) — per-project монтирование
+   * PVC: пул видит только каталог проекта. `undefined` — каталог вне корня
+   * (provisioner монтирует том целиком).
+   */
+  executionWorkspaceSubPath?: string;
 }
 
 /**
@@ -524,6 +556,25 @@ export interface PipelineEngineDeps extends PipelineStepContextDeps {
    * Не заданы — метрики не пишутся (реестр пуст, `/metrics` → 404).
    */
   metrics?: PipelineMetricsHooks | null;
+  /**
+   * ADR-077: порт исполнения команд инстанса — шаг кладёт его в
+   * `ToolContext.extra.executionPort` (плагинный тул получает `ctx.runtime`,
+   * shell-тулы идут через порт). Не задан — прежнее поведение.
+   */
+  executionPort?: ExecutionPort;
+  /**
+   * PROP-135 слайс 5a: роутер портов исполнения — `ToolContext.extra.executionRouter`
+   * (нужен `sandbox_exec`: он выбирает пул по классу `sandbox`).
+   */
+  executionRouter?: ExecutionRouter;
+  /**
+   * Корень рабочих каталогов (`storage.workspacesRoot`) — база для
+   * `executionWorkspaceSubPath` шага (per-project монтирование PVC).
+   *
+   * Объявлен и в `PipelineStepContextDeps` (нужен контексту шага) — здесь
+   * продублирован намеренно: движок читает его сам для `executionWorkspaceSubPath`.
+   */
+  workspacesRoot?: string;
 }
 
 /** Опции запуска прогона. */

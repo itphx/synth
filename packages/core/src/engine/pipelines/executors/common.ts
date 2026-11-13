@@ -45,12 +45,29 @@ export function findTool(
  *
  * Проект прогона — метаданные хода (ADR-107): плагинный тул (память)
  * ограничивает себя данными проекта, а не всего инстанса.
+ *
+ * Контур исполнения (ADR-077/PROP-135): порт и роутер шага отдаются через
+ * `extra` — тот же шов, что у сессий (`ctx.extra.executionPort`). Без них
+ * плагинный тул шага не получил бы `ctx.runtime` (PROP-138), а `sandbox_exec`
+ * не нашёл бы пул. Поля появляются **только** при заданном значении: пустой
+ * `extra` — прежнее поведение (`executeToolDef` → `narrowToolContext` плагину
+ * `extra` не отдаёт, runtime не создаётся — fail-closed).
+ *
+ * `executionWorkspaceSubPath` — рабочий каталог шага относительно
+ * `workspacesRoot` (per-project монтирование PVC); вычисляет движок.
  */
 export function buildToolContext(
   ctx: StepExecutionContext,
   workingDir: string,
 ): ToolContext {
   const projectId = ctx.projectId ?? ctx.step?.projectId;
+  const extra = {
+    ...(ctx.executionPort ? { executionPort: ctx.executionPort } : {}),
+    ...(ctx.executionRouter ? { executionRouter: ctx.executionRouter } : {}),
+    ...(ctx.executionWorkspaceSubPath
+      ? { executionWorkspaceSubPath: ctx.executionWorkspaceSubPath }
+      : {}),
+  };
   return {
     sessionId: `pipeline:${ctx.runId}`,
     messageId: generateId(),
@@ -58,6 +75,7 @@ export function buildToolContext(
     ...(ctx.step?.agent?.id ? { agentRole: ctx.step.agent.id } : {}),
     ...(projectId ? { projectId } : {}),
     workingDir,
+    ...(Object.keys(extra).length > 0 ? { extra } : {}),
   };
 }
 

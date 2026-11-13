@@ -2192,6 +2192,12 @@ export async function createStandaloneDeps(
     skillsCatalog: skillService,
     runtimeDeps,
     workspacesRoot: pipelineWorkspacesRoot,
+    // ADR-077/PROP-135: контур исполнения шага — те же порт и роутер, что у
+    // сессий: плагинный тул получает `ctx.runtime` (PROP-138), `sandbox_exec`
+    // находит пул по классу `sandbox`, а per-project монтирование PVC —
+    // `executionWorkspaceSubPath` (движок считает его от `workspacesRoot`).
+    executionPort,
+    executionRouter,
   });
 
   // ADR-101/ADR-051: движок пайплайнов появился — отдаём его тулам

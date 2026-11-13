@@ -1576,7 +1576,7 @@ de-identified string. For `sandbox_exec` the command is `commands.join(" && ")`.
 
 Read — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
 `requireAuth`); metrics — `synth_command_audit_*` (see `docs/OBSERVABILITY.md`).
-Command policy checker is enforced **on the executor** before spawn (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, `http-json`/`opa` contracts, fail modes and cache — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Control-plane mirror and verdict audit — `security.commandPolicy` (below).
+Command policy checker is enforced **on the executor** before spawn (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, `http-json`/`opa` contracts, fail modes and cache — [docs/EXECUTION.md](../EXECUTION.md) §9.2. Control-plane mirror and verdict audit — `security.commandPolicy` (below).
 
 ### Mirrored command checker (`security.commandPolicy`, PROP-136b)
 
@@ -1629,7 +1629,7 @@ background)`, TTL — the response `ttl_ms` or 60 s; `deny` is cached like `allo
 Metrics — `synth_command_policy_*` (see `docs/OBSERVABILITY.md`).
 
 **Kubernetes deployment.** The executor-side check is enabled by chart values
-(the env table is in [EXECUTION.md](./EXECUTION.md) §9.2): the executor pool uses
+(the env table is in [EXECUTION.md](../EXECUTION.md) §9.2): the executor pool uses
 `executor.commandPolicy.*` (env `SYNTH_EXECUTOR_COMMAND_POLICY_*`, token mounted from a Secret
 as a file), and provisioner dynamic pools use `provisioner.executorCommandPolicy.*`
 (only with `provider: kubernetes`). `enabled` without `url` fails chart rendering;
