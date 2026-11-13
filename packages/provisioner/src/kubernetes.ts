@@ -75,6 +75,28 @@ export interface KubernetesSecret {
   data?: Record<string, string>;
 }
 
+/**
+ * DaemonSet (прогрев образов) — только используемые поля.
+ *
+ * `numberReady`/`desiredNumberScheduled` — готовность подов на нодах: прогрев
+ * считается успешным, когда `numberReady >= desiredNumberScheduled`.
+ */
+export interface KubernetesDaemonSet {
+  metadata?: {
+    name?: string;
+    namespace?: string;
+    labels?: Record<string, string>;
+    annotations?: Record<string, string>;
+    /** Задан — объект удаляется (terminating). */
+    deletionTimestamp?: string;
+  };
+  status?: {
+    numberReady?: number;
+    desiredNumberScheduled?: number;
+    numberUnavailable?: number;
+  };
+}
+
 /** Манифест Kubernetes-объекта (под/секрет) — как есть, без типизации всех полей. */
 export type KubernetesManifest = Record<string, unknown>;
 
@@ -106,6 +128,16 @@ export interface KubernetesClient {
   getSecret(name: string): Promise<KubernetesSecret | null>;
   /** Удалить секрет; 404 — no-op. */
   deleteSecret(name: string): Promise<void>;
+  /**
+   * Создать DaemonSet (прогрев образа).
+   *
+   * @returns `true` — создан, `false` — уже существует (409)
+   */
+  createDaemonSet(manifest: KubernetesManifest): Promise<boolean>;
+  /** DaemonSet по имени либо `null` (404). */
+  getDaemonSet(name: string): Promise<KubernetesDaemonSet | null>;
+  /** Удалить DaemonSet; 404 — no-op. */
+  deleteDaemonSet(name: string): Promise<void>;
 }
 
 /** Параметры HTTP-клиента Kubernetes API. */
@@ -223,6 +255,34 @@ export class HttpKubernetesClient implements KubernetesClient {
     }
   }
 
+  async createDaemonSet(manifest: KubernetesManifest): Promise<boolean> {
+    const response = await this._request('POST', this._daemonSetsPath(), manifest);
+    return response.status !== 409;
+  }
+
+  async getDaemonSet(name: string): Promise<KubernetesDaemonSet | null> {
+    const response = await this._request(
+      'GET',
+      `${this._daemonSetsPath()}/${encodeURIComponent(name)}`,
+    );
+    if (response.status === 404) return null;
+    return (response.body as KubernetesDaemonSet | null) ?? null;
+  }
+
+  async deleteDaemonSet(name: string): Promise<void> {
+    const response = await this._request(
+      'DELETE',
+      `${this._daemonSetsPath()}/${encodeURIComponent(name)}`,
+    );
+    // 404 — уже удалён: удаление идемпотентно.
+    if (response.status !== 404 && response.status >= 300) {
+      throw new PoolProvisionerError(
+        'provider_error',
+        `Kubernetes API DELETE daemonset "${name}": ${response.status} ${apiErrorMessage(response.body)}`,
+      );
+    }
+  }
+
   /** Путь списка подов (`query` — уже с `?`). */
   private _podsPath(query = ''): string {
     return `/api/v1/namespaces/${encodeURIComponent(this._namespace)}/pods${query}`;
@@ -231,6 +291,11 @@ export class HttpKubernetesClient implements KubernetesClient {
   /** Путь списка секретов. */
   private _secretsPath(): string {
     return `/api/v1/namespaces/${encodeURIComponent(this._namespace)}/secrets`;
+  }
+
+  /** Путь DaemonSet'ов (`apps/v1` — отдельная группа API). */
+  private _daemonSetsPath(): string {
+    return `/apis/apps/v1/namespaces/${encodeURIComponent(this._namespace)}/daemonsets`;
   }
 
   /**

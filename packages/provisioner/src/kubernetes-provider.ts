@@ -48,10 +48,12 @@ import type { KubernetesClient, KubernetesManifest, KubernetesPod, KubernetesSec
 import type { ProviderErrorMetricReason, ProvisionerMetrics } from './metrics.js';
 import {
   isValidWorkspaceSubPath,
+  WARM_IMAGE_TIMEOUT_MS,
   type EnsurePoolRequest,
   type EnsurePoolResponse,
   type ProfileResources,
   type ProvisionerProfileInfo,
+  type WarmImageResult,
 } from './protocol.js';
 import type { PoolProvisioner } from './provider.js';
 import { generatePoolToken } from './token.js';
@@ -79,6 +81,17 @@ export const COMMAND_POLICY_ANNOTATION = 'synth.io/command-policy';
  * состав входит в отпечаток (как политика команд).
  */
 export const MCP_SERVERS_ANNOTATION = 'synth.io/mcp-servers';
+
+/** Метка компонента прогрева образов. */
+export const IMAGE_WARMER_COMPONENT_LABEL = 'synth.io/component';
+/** Значение метки компонента прогрева образов. */
+export const IMAGE_WARMER_COMPONENT = 'image-warmer';
+/** Метка с хешем образа прогрева (уникальна на образ → селектор DaemonSet'а). */
+export const IMAGE_WARMER_IMAGE_LABEL = 'synth.io/warm-image-hash';
+/** Annotation с хешем образа (смена образа → пересоздание DaemonSet'а). */
+export const IMAGE_WARMER_IMAGE_ANNOTATION = 'synth.io/warm-image-hash';
+/** Annotation со ссылкой на образ (диагностика: `kubectl describe`). */
+export const IMAGE_WARMER_IMAGE_REF_ANNOTATION = 'synth.io/warm-image';
 
 /** Ключ токена чекера в Secret пула (`data.<key>`). */
 export const COMMAND_POLICY_TOKEN_KEY = 'command-policy-token';
@@ -123,9 +136,26 @@ export function poolHash(key: string): string {
   return createHash('sha256').update(key).digest('hex').slice(0, POOL_HASH_LENGTH);
 }
 
-/** Имя пода/секрета пула. */
+/**
+ * Имя пода/секрета пула.
+ */
 export function poolObjectName(hash: string): string {
   return `synth-pool-${hash}`;
+}
+
+/**
+ * Хеш ссылки на образ (для имени/меток DaemonSet'а прогрева).
+ *
+ * Тот же алгоритм, что у ключа пула: 16 hex-символов достаточно (имя
+ * `synth-warm-<hash>` — 27 символов, до DNS-лимита 63).
+ */
+export function imageHash(image: string): string {
+  return createHash('sha256').update(image).digest('hex').slice(0, POOL_HASH_LENGTH);
+}
+
+/** Имя DaemonSet'а прогрева образа. */
+export function imageWarmerName(hash: string): string {
+  return `synth-warm-${hash}`;
 }
 
 /**
@@ -150,10 +180,12 @@ function toResourceList(
   list: NonNullable<ProfileResources['requests']> | undefined,
 ): NonNullable<ProfileResources['requests']> | undefined {
   if (list === undefined) return undefined;
+  // Список ресурсов **произвольный** (`nvidia.com/gpu` и пр.) — копируются все
+  // ключи, а не только cpu/memory/ephemeralStorage.
   const out: NonNullable<ProfileResources['requests']> = {};
-  if (list.cpu !== undefined) out.cpu = list.cpu;
-  if (list.memory !== undefined) out.memory = list.memory;
-  if (list.ephemeralStorage !== undefined) out.ephemeralStorage = list.ephemeralStorage;
+  for (const [name, value] of Object.entries(list)) {
+    if (typeof value === 'string' && value !== '') out[name] = value;
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -441,6 +473,12 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
 
   const resources = buildResources(profile);
 
+  // Placement профиля: аннотации/метки пользователя **не перетирают**
+  // служебные (`synth.io/*`, `app.kubernetes.io/*`) — служебные приоритетнее
+  // (иначе под перестал бы усыновляться по label'у хеша ключа).
+  const userLabels = profile.labels ?? {};
+  const userAnnotations = profile.annotations ?? {};
+
   return {
     apiVersion: 'v1',
     kind: 'Pod',
@@ -448,6 +486,7 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
       name: poolObjectName(opts.hash),
       namespace: kubernetes.namespace,
       labels: {
+        ...userLabels,
         [APP_NAME_LABEL]: 'synth-executor',
         [APP_MANAGED_BY_LABEL]: 'synth-provisioner',
         [POOL_HASH_LABEL]: opts.hash,
@@ -455,6 +494,7 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
         [POOL_NETWORK_LABEL]: network,
       },
       annotations: {
+        ...userAnnotations,
         [POOL_KEY_ANNOTATION]: opts.key,
         [COMMAND_POLICY_ANNOTATION]: commandPolicyFingerprint(policy),
         [MCP_SERVERS_ANNOTATION]: mcpServersFingerprint(profile),
@@ -470,6 +510,16 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
         ? { imagePullSecrets: kubernetes.imagePullSecrets.map((name) => ({ name })) }
         : {}),
       ...(profile.runtimeClass !== undefined ? { runtimeClassName: profile.runtimeClass } : {}),
+      // Отбор нод и toleration'ы профиля (размещение пода в кластере).
+      ...(profile.nodeSelector !== undefined && Object.keys(profile.nodeSelector).length > 0
+        ? { nodeSelector: { ...profile.nodeSelector } }
+        : {}),
+      ...(profile.tolerations !== undefined && profile.tolerations.length > 0
+        ? { tolerations: profile.tolerations.map((toleration) => ({ ...toleration })) }
+        : {}),
+      ...(profile.affinity !== undefined && Object.keys(profile.affinity).length > 0
+        ? { affinity: { ...profile.affinity } }
+        : {}),
       securityContext: {
         runAsNonRoot: true,
         runAsUser: CONTAINER_UID,
@@ -500,6 +550,80 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
         },
       ],
       volumes,
+    },
+  };
+}
+
+/**
+ * Собрать манифест DaemonSet'а прогрева образа.
+ *
+ * Чистая функция (тесты проверяют манифест без кластера): DaemonSet поднимает
+ * по поду на каждой ноде, образ тянется (`imagePullPolicy: Always`), контейнер
+ * спит минуту — этого хватает, чтобы образ оказался в реестре ноды. Дальше
+ * DaemonSet удаляется (проба кончилась), образ остаётся в кэше ноды.
+ *
+ * @param image ссылка на образ
+ * @param hash хеш ссылки (имя объекта и метки)
+ * @param kubernetes конфигурация Kubernetes-провайдера (namespace, pull-secrets)
+ */
+export function buildImageWarmerManifest(
+  image: string,
+  hash: string,
+  kubernetes: ProvisionerKubernetesConfig,
+): KubernetesManifest {
+  const selectorLabels = {
+    [IMAGE_WARMER_COMPONENT_LABEL]: IMAGE_WARMER_COMPONENT,
+    [IMAGE_WARMER_IMAGE_LABEL]: hash,
+  };
+  return {
+    apiVersion: 'apps/v1',
+    kind: 'DaemonSet',
+    metadata: {
+      name: imageWarmerName(hash),
+      namespace: kubernetes.namespace,
+      labels: {
+        [APP_NAME_LABEL]: 'synth-image-warmer',
+        [APP_MANAGED_BY_LABEL]: 'synth-provisioner',
+        ...selectorLabels,
+      },
+      annotations: {
+        [IMAGE_WARMER_IMAGE_ANNOTATION]: hash,
+        [IMAGE_WARMER_IMAGE_REF_ANNOTATION]: image,
+      },
+    },
+    spec: {
+      // Селектор DaemonSet'а неизменяем — он задаётся по хешу образа, чтобы
+      // два прогова разных образов не пересекались.
+      selector: { matchLabels: { ...selectorLabels } },
+      template: {
+        metadata: { labels: { ...selectorLabels } },
+        spec: {
+          restartPolicy: 'Always',
+          terminationGracePeriodSeconds: 0,
+          ...(kubernetes.serviceAccount !== undefined
+            ? { serviceAccountName: kubernetes.serviceAccount }
+            : {}),
+          ...(kubernetes.imagePullSecrets.length > 0
+            ? { imagePullSecrets: kubernetes.imagePullSecrets.map((name) => ({ name })) }
+            : {}),
+          containers: [
+            {
+              name: 'warmer',
+              image,
+              // `Always` — прогрев именно этого образа (тег `latest` мог бы
+              // указать на новую версию, а нужен тот, что запрошен).
+              imagePullPolicy: 'Always',
+              command: ['sh', '-c', 'sleep 60'],
+              resources: {},
+              securityContext: {
+                allowPrivilegeEscalation: false,
+                readOnlyRootFilesystem: true,
+                capabilities: { drop: ['ALL'] },
+              },
+            },
+          ],
+        },
+      },
     },
   };
 }
@@ -602,6 +726,106 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
     return Object.entries(this._profiles).map(([name, profile]) =>
       profileInfoFromConfig(name, profile),
     );
+  }
+
+  /**
+   * Прогреть образы на нодах кластера.
+   *
+   * Для каждого образа: создать DaemonSet (под на каждой ноде тянет образ),
+   * дождаться `numberReady >= desiredNumberScheduled` (до `WARM_IMAGE_TIMEOUT_MS`),
+   * удалить DaemonSet. Ошибка одного образа **не** прерывает прогон остальных —
+   * итог по каждому образу отдельной записью.
+   */
+  async warmImages(images: string[]): Promise<WarmImageResult[]> {
+    const results: WarmImageResult[] = [];
+    for (const image of images) {
+      results.push(await this._warmImage(image));
+    }
+    return results;
+  }
+
+  /** Прогрев одного образа (DaemonSet → ожидание → удаление). */
+  private async _warmImage(image: string): Promise<WarmImageResult> {
+    const hash = imageHash(image);
+    const name = imageWarmerName(hash);
+    try {
+      const created = await this._call('create', () =>
+        this._client.createDaemonSet(buildImageWarmerManifest(image, hash, this._config)),
+      );
+      if (!created) {
+        // DaemonSet уже есть (тот же образ прогревали) — дожидаемся его
+        // готовности: образ всё равно нужно дотянуть до всех нод.
+      }
+      const readiness = await this._waitForDaemonSet(name);
+      if (!readiness.ok) {
+        return {
+          image,
+          ok: false,
+          nodes: readiness.nodes,
+          ...(readiness.error !== undefined ? { error: readiness.error } : {}),
+        };
+      }
+      return { image, ok: true, nodes: readiness.nodes };
+    } catch (err) {
+      return {
+        image,
+        ok: false,
+        nodes: 0,
+        error: err instanceof Error ? err.message : 'не удалось прогреть образ',
+      };
+    } finally {
+      await this._deleteDaemonSetQuietly(name);
+    }
+  }
+
+  /**
+   * Дождаться готовности DaemonSet'а прогрева.
+   *
+   * Готов = `numberReady >= desiredNumberScheduled` (все ноды вытянули образ).
+   * `desiredNumberScheduled === 0` — на кластере нет нод под DaemonSet: ждать
+   * бессмысленно, сразу отказ.
+   */
+  private async _waitForDaemonSet(name: string): Promise<{
+    ok: boolean;
+    nodes: number;
+    error?: string;
+  }> {
+    const deadline = this._now() + WARM_IMAGE_TIMEOUT_MS;
+    for (;;) {
+      const daemonSet = await this._call('lookup', () => this._client.getDaemonSet(name));
+      if (daemonSet === null) {
+        return { ok: false, nodes: 0, error: 'DaemonSet прогрева исчез до готовности' };
+      }
+      const status = daemonSet.status;
+      const desired = status?.desiredNumberScheduled ?? 0;
+      const ready = status?.numberReady ?? 0;
+      if (desired === 0) {
+        return {
+          ok: false,
+          nodes: 0,
+          error: 'на кластере нет нод, подходящих под DaemonSet прогрева',
+        };
+      }
+      if (ready >= desired) return { ok: true, nodes: ready };
+      const remaining = deadline - this._now();
+      if (remaining <= 0) {
+        return {
+          ok: false,
+          nodes: ready,
+          error: `образ не прогрет за ${WARM_IMAGE_TIMEOUT_MS} мс (готовых нод ${ready} из ${desired})`,
+        };
+      }
+      await this._sleep(Math.min(this._config.pollIntervalMs, remaining));
+    }
+  }
+
+  /** Удалить DaemonSet прогрева (чистка best-effort). */
+  private async _deleteDaemonSetQuietly(name: string): Promise<void> {
+    try {
+      await this._client.deleteDaemonSet(name);
+    } catch {
+      // Чистка best-effort: основной исход (ошибка/успех) важнее.
+    }
   }
 
   /** Внутренняя часть `ensure` (таймер метрики — снаружи). */

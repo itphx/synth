@@ -30,6 +30,7 @@ import type {
   EnsurePoolRequest,
   EnsurePoolResponse,
   ProvisionerProfileInfo,
+  WarmImageResult,
 } from './protocol.js';
 import { generatePoolToken } from './token.js';
 
@@ -59,6 +60,13 @@ export interface PoolProvisioner {
    * ресурсы, runtimeClass и **имена** MCP-серверов. Без env, URL и токенов.
    */
   profilesInfo?(): Promise<ProvisionerProfileInfo[]>;
+  /**
+   * Прогреть образы на нодах кластера (PROP-135, Ф4b-2b).
+   *
+   * Не задан — провайдер прогрев не умеет (`static`: адреса пулов заданы
+   * извне, подов кластера нет) — HTTP-контур ответит `400 invalid_request`.
+   */
+  warmImages?(images: string[]): Promise<WarmImageResult[]>;
 }
 
 /**

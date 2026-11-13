@@ -20,6 +20,7 @@ import { createProvisionerMetrics } from './metrics.js';
 import { PoolProvisionerError } from './errors.js';
 import type {
   KubernetesClient,
+  KubernetesDaemonSet,
   KubernetesManifest,
   KubernetesPod,
   KubernetesSecret,
@@ -29,6 +30,9 @@ import {
   COMMAND_POLICY_MOUNT_PATH,
   COMMAND_POLICY_TOKEN_FILE,
   COMMAND_POLICY_TOKEN_KEY,
+  IMAGE_WARMER_COMPONENT,
+  IMAGE_WARMER_COMPONENT_LABEL,
+  IMAGE_WARMER_IMAGE_REF_ANNOTATION,
   KUBERNETES_PROVIDER_NAME,
   KubernetesPoolProvisioner,
   POOL_HASH_LABEL,
@@ -37,6 +41,8 @@ import {
   POOL_PROFILE_LABEL,
   buildPoolPodManifest,
   commandPolicyFingerprint,
+  imageHash,
+  imageWarmerName,
   mcpServersFingerprint,
   poolHash,
   poolObjectName,
@@ -95,14 +101,17 @@ function secretTokenOf(secret: KubernetesSecret | undefined): string {
   return Buffer.from(raw, 'base64').toString('utf8');
 }
 
-/** In-memory Kubernetes API: поды и секреты в одном namespace. */
+/** In-memory Kubernetes API: поды, секреты и DaemonSet'ы в одном namespace. */
 class FakeKubernetesClient implements KubernetesClient {
   readonly pods = new Map<string, KubernetesPod>();
   readonly secrets = new Map<string, KubernetesSecret>();
+  readonly daemonSets = new Map<string, KubernetesDaemonSet>();
   readonly createdPods: KubernetesManifest[] = [];
   readonly createdSecrets: KubernetesManifest[] = [];
+  readonly createdDaemonSets: KubernetesManifest[] = [];
   readonly deletedPods: Array<{ name: string; graceSeconds: number }> = [];
   readonly deletedSecrets: string[] = [];
+  readonly deletedDaemonSets: string[] = [];
   readonly selectors: string[] = [];
   readonly getPodCalls: string[] = [];
 
@@ -114,6 +123,17 @@ class FakeKubernetesClient implements KubernetesClient {
   failCreatePod: Error | undefined;
   /** Принудительный сбой `deletePod`. */
   failDeletePod: Error | undefined;
+  /** Принудительный сбой `createDaemonSet`. */
+  failCreateDaemonSet: Error | undefined;
+  /** Имена DaemonSet'ов, создание которых падает (ошибка API). */
+  failDaemonSetNames = new Set<string>();
+  /** Готовность DaemonSet'а (по умолчанию — сразу готова). */
+  daemonSetStatus: { numberReady: number; desiredNumberScheduled: number } = {
+    numberReady: 2,
+    desiredNumberScheduled: 2,
+  };
+  /** Сколько раз `getDaemonSet` вернёт «ещё не готов». */
+  pendingDaemonSetGets = 0;
 
   async listPods(labelSelector: string): Promise<KubernetesPod[]> {
     this.selectors.push(labelSelector);
@@ -173,6 +193,36 @@ class FakeKubernetesClient implements KubernetesClient {
   async deleteSecret(name: string): Promise<void> {
     this.deletedSecrets.push(name);
     this.secrets.delete(name);
+  }
+
+  async createDaemonSet(manifest: KubernetesManifest): Promise<boolean> {
+    this.createdDaemonSets.push(manifest);
+    if (this.failCreateDaemonSet !== undefined) throw this.failCreateDaemonSet;
+    const name = String((manifest.metadata as { name?: string } | undefined)?.name ?? '');
+    if (this.failDaemonSetNames.has(name)) {
+      throw new PoolProvisionerError('provider_error', 'создание DaemonSet отклонено API');
+    }
+    if (this.daemonSets.has(name)) return false;
+    this.daemonSets.set(name, {
+      metadata: manifest.metadata as KubernetesDaemonSet['metadata'],
+      status: { ...this.daemonSetStatus },
+    });
+    return true;
+  }
+
+  async getDaemonSet(name: string): Promise<KubernetesDaemonSet | null> {
+    const daemonSet = this.daemonSets.get(name);
+    if (daemonSet === undefined) return null;
+    if (this.pendingDaemonSetGets > 0) {
+      this.pendingDaemonSetGets -= 1;
+      return { ...daemonSet, status: { numberReady: 0, desiredNumberScheduled: 2 } };
+    }
+    return daemonSet;
+  }
+
+  async deleteDaemonSet(name: string): Promise<void> {
+    this.deletedDaemonSets.push(name);
+    this.daemonSets.delete(name);
   }
 }
 
@@ -986,5 +1036,225 @@ describe('provisioner: kubernetes-провайдер', () => {
     expect(client.deletedSecrets).toContain(secretName);
     expect(client.secrets.get(secretName)?.data?.[COMMAND_POLICY_TOKEN_KEY]).toBeDefined();
     expect(secretTokenOf(client.secrets.get(secretName))).toBe(pool.token);
+  });
+});
+
+/**
+ * Scheduling-поля профиля (PROP-135, Ф4b-2b): аннотации/метки пода,
+ * отбор нод, toleration'ы, affinity и **произвольные** ресурсы (GPU).
+ *
+ * Инвариант: пользовательские метки/аннотации **не перетирают** служебные
+ * (`synth.io/*`, `app.kubernetes.io/*`) — иначе под перестал бы усыновляться
+ * по label'у хеша ключа пула.
+ */
+describe('provisioner: scheduling-поля профиля (pod spec)', () => {
+  /** Профиль с placement-полями и GPU-ресурсами. */
+  const SCHEDULED: ProvisionerProfiles = {
+    gpu: {
+      image: 'registry.example/synth-executor:0.13.8',
+      annotations: {
+        'example.com/owner': 'platform',
+        [POOL_KEY_ANNOTATION]: 'подмена-служебной-аннотации',
+      },
+      labels: {
+        'example.com/tier': 'gpu',
+        [POOL_HASH_LABEL]: 'подмена-служебной-метки',
+      },
+      nodeSelector: { 'kubernetes.io/arch': 'amd64', 'example.com/pool': 'gpu' },
+      tolerations: [
+        { key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' },
+        { key: 'dedicated', operator: 'Equal', value: 'synth', effect: 'NoExecute', tolerationSeconds: 60 },
+      ],
+      affinity: {
+        nodeAffinity: {
+          requiredDuringSchedulingIgnoredDuringExecution: {
+            nodeSelectorTerms: [
+              { matchExpressions: [{ key: 'example.com/pool', operator: 'In', values: ['gpu'] }] },
+            ],
+          },
+        },
+      },
+      resources: {
+        requests: { cpu: '1', memory: '4Gi', 'nvidia.com/gpu': '1' },
+        limits: { cpu: '4', memory: '16Gi', 'nvidia.com/gpu': '1' },
+      },
+    },
+  };
+
+  it('pod spec: аннотации/метки пользователя + служебные (служебные приоритетнее)', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:gpu',
+      hash: poolHash('project:p1:exec:gpu'),
+      profileName: 'gpu',
+      profile: SCHEDULED.gpu!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+    });
+    const metadata = manifest.metadata as {
+      labels: Record<string, string>;
+      annotations: Record<string, string>;
+    };
+    // Пользовательские — на месте.
+    expect(metadata.labels['example.com/tier']).toBe('gpu');
+    expect(metadata.annotations['example.com/owner']).toBe('platform');
+    // Служебные — не перетёрты (под усыновляется по label'у хеша ключа).
+    expect(metadata.labels[POOL_HASH_LABEL]).toBe(poolHash('project:p1:exec:gpu'));
+    expect(metadata.labels[POOL_PROFILE_LABEL]).toBe('gpu');
+    expect(metadata.labels[POOL_NETWORK_LABEL]).toBe('full');
+    expect(metadata.labels['app.kubernetes.io/name']).toBe('synth-executor');
+    expect(metadata.annotations[POOL_KEY_ANNOTATION]).toBe('project:p1:exec:gpu');
+  });
+
+  it('pod spec: nodeSelector, tolerations и affinity попадают в spec', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:gpu',
+      hash: poolHash('project:p1:exec:gpu'),
+      profileName: 'gpu',
+      profile: SCHEDULED.gpu!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as {
+      nodeSelector?: Record<string, string>;
+      tolerations?: Array<Record<string, unknown>>;
+      affinity?: Record<string, unknown>;
+      containers: Array<{ resources?: Record<string, unknown> }>;
+    };
+    expect(spec.nodeSelector).toEqual({
+      'kubernetes.io/arch': 'amd64',
+      'example.com/pool': 'gpu',
+    });
+    expect(spec.tolerations).toHaveLength(2);
+    expect(spec.tolerations?.[0]).toEqual({
+      key: 'nvidia.com/gpu',
+      operator: 'Exists',
+      effect: 'NoSchedule',
+    });
+    expect(spec.tolerations?.[1]).toMatchObject({ operator: 'Equal', tolerationSeconds: 60 });
+    expect(spec.affinity).toEqual(SCHEDULED.gpu!.affinity);
+  });
+
+  it('pod spec: произвольные ресурсы (GPU) доезжают в контейнер', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:gpu',
+      hash: poolHash('project:p1:exec:gpu'),
+      profileName: 'gpu',
+      profile: SCHEDULED.gpu!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as {
+      containers: Array<{ resources?: Record<string, unknown> }>;
+    };
+    expect(spec.containers[0]?.resources).toEqual({
+      requests: { cpu: '1', memory: '4Gi', 'nvidia.com/gpu': '1' },
+      limits: { cpu: '4', memory: '16Gi', 'nvidia.com/gpu': '1' },
+    });
+  });
+
+  it('pod spec: без placement-полей в spec лишних блоков нет', () => {
+    const manifest = buildPoolPodManifest({
+      key: 'project:p1:exec:default',
+      hash: poolHash('project:p1:exec:default'),
+      profileName: 'default',
+      profile: PROFILES.default!,
+      kubernetes: KUBERNETES,
+      secretName: 'synth-pool-abc',
+    });
+    const spec = manifest.spec as Record<string, unknown>;
+    expect(spec).not.toHaveProperty('nodeSelector');
+    expect(spec).not.toHaveProperty('tolerations');
+    expect(spec).not.toHaveProperty('affinity');
+  });
+});
+
+/**
+ * Прогрев образов (PROP-135, Ф4b-2b): DaemonSet на образ → ожидание
+ * готовности на всех нодах → удаление DaemonSet'а.
+ */
+describe('provisioner: прогрев образов', () => {
+  it('создаёт DaemonSet на образ, ждёт готовности и удаляет его', async () => {
+    const client = new FakeKubernetesClient();
+    const { provider } = makeProvider(client);
+    const image = 'registry.example/synth-executor:0.13.8';
+
+    const results = await provider.warmImages([image]);
+
+    expect(results).toEqual([{ image, ok: true, nodes: 2 }]);
+    expect(client.createdDaemonSets).toHaveLength(1);
+    const manifest = client.createdDaemonSets[0]!;
+    expect(manifest.kind).toBe('DaemonSet');
+    const metadata = manifest.metadata as {
+      name: string;
+      labels: Record<string, string>;
+      annotations: Record<string, string>;
+    };
+    expect(metadata.name).toBe(imageWarmerName(imageHash(image)));
+    expect(metadata.labels[IMAGE_WARMER_COMPONENT_LABEL]).toBe(IMAGE_WARMER_COMPONENT);
+    expect(metadata.annotations[IMAGE_WARMER_IMAGE_REF_ANNOTATION]).toBe(image);
+    const spec = manifest.spec as {
+      template: { spec: { containers: Array<Record<string, unknown>> } };
+    };
+    expect(spec.template.spec.containers[0]).toMatchObject({
+      name: 'warmer',
+      image,
+      imagePullPolicy: 'Always',
+      command: ['sh', '-c', 'sleep 60'],
+    });
+    // DaemonSet удалён после пробы — в кластере не остаётся мусора.
+    expect(client.deletedDaemonSets).toEqual([imageWarmerName(imageHash(image))]);
+  });
+
+  it('ждёт готовности: DaemonSet не сразу готов — опрос продолжается', async () => {
+    const client = new FakeKubernetesClient();
+    client.pendingDaemonSetGets = 2;
+    const { provider } = makeProvider(client);
+    const image = 'registry.example/synth-executor:0.13.8';
+
+    const results = await provider.warmImages([image]);
+
+    expect(results).toEqual([{ image, ok: true, nodes: 2 }]);
+  });
+
+  it('таймаут: образ не прогрет — ok:false с причиной, DaemonSet удалён', async () => {
+    const client = new FakeKubernetesClient();
+    // DaemonSet всегда «не готов» (numberReady 0 при desired 2).
+    client.daemonSetStatus = { numberReady: 0, desiredNumberScheduled: 2 };
+    const { provider } = makeProvider(client);
+    const image = 'registry.example/synth-executor:0.13.8';
+
+    const results = await provider.warmImages([image]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.ok).toBe(false);
+    expect(results[0]?.error).toContain('не прогрет');
+    expect(client.deletedDaemonSets).toEqual([imageWarmerName(imageHash(image))]);
+  });
+
+  it('частичный успех: ошибка одного образа не валит остальные', async () => {
+    const client = new FakeKubernetesClient();
+    const bad = 'registry.example/synth-executor:broken';
+    client.failDaemonSetNames.add(imageWarmerName(imageHash(bad)));
+    const { provider } = makeProvider(client);
+    const good = 'registry.example/synth-executor:good';
+
+    const results = await provider.warmImages([bad, good]);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ image: bad, ok: false });
+    expect(results[0]?.error).toBeTruthy();
+    expect(results[1]).toEqual({ image: good, ok: true, nodes: 2 });
+  });
+
+  it('нет нод под DaemonSet — отказ без ожидания таймаута', async () => {
+    const client = new FakeKubernetesClient();
+    client.daemonSetStatus = { numberReady: 0, desiredNumberScheduled: 0 };
+    const { provider } = makeProvider(client);
+    const image = 'registry.example/synth-executor:0.13.8';
+
+    const results = await provider.warmImages([image]);
+
+    expect(results[0]?.ok).toBe(false);
+    expect(results[0]?.error).toContain('нет нод');
   });
 });

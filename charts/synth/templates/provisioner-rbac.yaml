@@ -25,6 +25,11 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "get", "delete"]
+  {{- /* DaemonSet'ы прогрева образов (PROP-135 Ф4b-2b): создать, дождаться
+         готовности (get/list/watch) и удалить после пробы. */}}
+  - apiGroups: ["apps"]
+    resources: ["daemonsets"]
+    verbs: ["create", "get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

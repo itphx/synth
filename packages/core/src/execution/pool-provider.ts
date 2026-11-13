@@ -34,6 +34,7 @@ import type {
   ExecutionProfileNetwork,
   ExecutionProfileResourceList,
   ExecutionProfileResources,
+  ExecutionProfileToleration,
   ResolvedExecutionProfile,
   ResolvedExecutionRemoteConfig,
 } from '@itphx/synth-shared';
@@ -444,6 +445,15 @@ export interface ExecutionPoolProvider {
    * только имена из каталога конфигурации).
    */
   profilesInfo?(): Promise<ExecutionProfileInfo[]>;
+  /**
+   * Прогрев образов на нодах (PROP-135, Ф4b-2b): тянет образы в реестр
+   * нод кластера, чтобы первый пул с этим образом не ждал скачивания.
+   *
+   * Не задан — провайдер прогрев не умеет (`static`: адреса пулов заданы
+   * извне, подов кластера нет) — admin-API ответит
+   * `501 EXECUTION_PROVIDER_UNAVAILABLE`.
+   */
+  warmImages?(images: string[]): Promise<ExecutionImageWarmResult[]>;
 }
 
 /**
@@ -585,7 +595,7 @@ export interface ExecutionPoolProfileSpec {
   image: string;
   /** Сетевой класс пула. */
   network?: ExecutionProfileNetwork;
-  /** Ресурсы контейнера пула. */
+  /** Ресурсы контейнера пула (произвольные ключи — например, `nvidia.com/gpu`). */
   resources?: ExecutionProfileResources;
   /** `runtimeClassName` пода. */
   runtimeClass?: string;
@@ -595,6 +605,71 @@ export interface ExecutionPoolProfileSpec {
   env?: Record<string, string>;
   /** MCP-серверы пула (полное описание — с командой). */
   mcpServers?: ExecutionPoolProfileMcpServer[];
+  /** Произвольные аннотации пода (`metadata.annotations`). */
+  annotations?: Record<string, string>;
+  /** Пользовательские метки пода (`metadata.labels`). */
+  labels?: Record<string, string>;
+  /** `spec.nodeSelector` пода — отбор нод по меткам. */
+  nodeSelector?: Record<string, string>;
+  /** `spec.tolerations` пода — правила размещения на «tainted» нодах. */
+  tolerations?: ExecutionProfileToleration[];
+  /** `spec.affinity` пода — passthrough (JSON, ≤8 КиБ). */
+  affinity?: Record<string, unknown>;
+}
+
+/**
+ * Итог прогрева образа (одна запись на образ).
+ *
+ * `ok: false` — образ не прогрет (таймаут/ошибка API); причина — в `error`
+ * (без секретов).
+ */
+export interface ExecutionImageWarmResult {
+  /** Образ, который прогревали. */
+  image: string;
+  /** Удалось ли прогреть образ. */
+  ok: boolean;
+  /** Число нод, на которых образ прогрет. */
+  nodes: number;
+  /** Причина неудачи (без секретов). */
+  error?: string;
+}
+
+/**
+ * Предел числа образов в одном запросе прогрева.
+ *
+ * Прогрев бьёт по реестру образов на каждой ноде — десяток за раз достаточно,
+ * а больше — уже нагрузка на кластер без нужды.
+ */
+export const EXECUTION_WARM_IMAGES_MAX = 20;
+
+/**
+ * Таймаут ожидания готовности DaemonSet'а прогрева на **один образ**, мс.
+ *
+ * Совпадает с лимитом provisioner'а (`WARM_IMAGE_TIMEOUT_MS`): столько ждёт
+ * он сам, столько закладывает control plane на запрос.
+ */
+export const EXECUTION_WARM_IMAGE_TIMEOUT_MS = 300_000;
+
+/** Запас к таймауту прогона (создание/удаление DaemonSet'а), мс. */
+export const EXECUTION_WARM_IMAGE_TIMEOUT_MARGIN_MS = 30_000;
+
+/**
+ * Предел длины ссылки на образ (docker-ref).
+ */
+export const EXECUTION_IMAGE_REF_MAX_LENGTH = 512;
+
+/**
+ * Проверка ссылки на образ (docker-ref).
+ *
+ * Fail-closed: пустая строка, пробелы и недопустимые символы — отказ.
+ * Значение уходит в provisioner как имя образа DaemonSet'а прогрева, поэтому
+ * мусор отсекаем на границе API.
+ */
+export function isValidImageRef(image: string): boolean {
+  const trimmed = (image ?? '').trim();
+  if (trimmed === '' || trimmed.length > EXECUTION_IMAGE_REF_MAX_LENGTH) return false;
+  if (/\s/.test(trimmed)) return false;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]*$/.test(trimmed);
 }
 
 /**
@@ -666,6 +741,22 @@ export function executionPoolProfileSpec(
   }
   if (profile.env !== undefined && Object.keys(profile.env).length > 0) {
     spec.env = { ...profile.env };
+  }
+  // Placement профиля (аннотации/метки/отбор нод) — уходит в pod spec пула.
+  if (profile.annotations !== undefined && Object.keys(profile.annotations).length > 0) {
+    spec.annotations = { ...profile.annotations };
+  }
+  if (profile.labels !== undefined && Object.keys(profile.labels).length > 0) {
+    spec.labels = { ...profile.labels };
+  }
+  if (profile.nodeSelector !== undefined && Object.keys(profile.nodeSelector).length > 0) {
+    spec.nodeSelector = { ...profile.nodeSelector };
+  }
+  if (profile.tolerations !== undefined && profile.tolerations.length > 0) {
+    spec.tolerations = profile.tolerations.map((toleration) => ({ ...toleration }));
+  }
+  if (profile.affinity !== undefined && Object.keys(profile.affinity).length > 0) {
+    spec.affinity = { ...profile.affinity };
   }
   const mcpServers = toProfileSpecMcpServers(profile.mcpServers);
   if (mcpServers.length > 0) spec.mcpServers = mcpServers;
@@ -831,6 +922,45 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
   }
 
   /**
+   * Прогрев образов у provisioner'а (`POST /v1/images/warm`).
+   *
+   * Запрос **долгий**: provisioner ждёт готовности DaemonSet'а на всех нодах
+   * (до 300 с на образ), поэтому таймаут запроса считается от числа образов,
+   * а не берётся из общего таймаута provisioner'а (10 с по умолчанию).
+   */
+  async warmImages(images: string[]): Promise<ExecutionImageWarmResult[]> {
+    const timeoutMs = Math.max(
+      this._timeoutMs,
+      images.length * EXECUTION_WARM_IMAGE_TIMEOUT_MS + EXECUTION_WARM_IMAGE_TIMEOUT_MARGIN_MS,
+    );
+    const response = await this._request('POST', '/v1/images/warm', { images }, true, timeoutMs);
+    const payload = (await response.json().catch(() => null)) as { results?: unknown } | null;
+    const raw = Array.isArray(payload?.results) ? payload.results : [];
+    const results: ExecutionImageWarmResult[] = [];
+    for (const entry of raw) {
+      if (!entry || typeof entry !== 'object') continue;
+      const record = entry as {
+        image?: unknown;
+        ok?: unknown;
+        nodes?: unknown;
+        error?: unknown;
+      };
+      const image = typeof record.image === 'string' ? record.image.trim() : '';
+      if (image === '') continue;
+      const nodes =
+        typeof record.nodes === 'number' && Number.isFinite(record.nodes) ? record.nodes : 0;
+      const error = typeof record.error === 'string' ? record.error.trim() : '';
+      results.push({
+        image,
+        ok: record.ok === true,
+        nodes,
+        ...(error !== '' ? { error } : {}),
+      });
+    }
+    return results;
+  }
+
+  /**
    * Best-effort вызов: сбой не ломает ход (смысл `touch`/`drain`/`release` —
    * подчистка, а не условие работы).
    */
@@ -847,12 +977,14 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
    *
    * @param requireAuth `true` — заголовок `Authorization` обязателен
    * @param body тело запроса (JSON) либо `undefined`
+   * @param timeoutMs таймаут запроса (по умолчанию — общий таймаут провайдера)
    */
   private async _request(
     method: string,
     path: string,
     body: unknown,
     requireAuth: boolean,
+    timeoutMs: number = this._timeoutMs,
   ): Promise<Response> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (body !== undefined) headers['content-type'] = 'application/json';
@@ -862,7 +994,7 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
     const init: RequestInit = {
       method,
       headers,
-      signal: AbortSignal.timeout(this._timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     };
     if (body !== undefined) init.body = JSON.stringify(body);
 

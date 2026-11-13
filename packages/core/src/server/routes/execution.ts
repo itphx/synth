@@ -21,7 +21,9 @@
  * - `GET /api/v2/execution/pools` — пулы: у `http` — `list()` провайдера, у
  *   `static` — профили как `configured`, у `inline` — пусто (ADMIN/LEAD);
  * - `POST /api/v2/execution/pools/:key/drain` — слить пул (`202`);
- * - `DELETE /api/v2/execution/pools/:key` — удалить пул (`202`, идемпотентно).
+ * - `DELETE /api/v2/execution/pools/:key` — удалить пул (`202`, идемпотентно);
+ * - `POST /api/v2/execution/images/warm` — прогреть образы на нодах кластера
+ *   (`{images}` → `{results}`; `writeGuard` — ADMIN в managed).
  *
  * `:key` — канонический ключ пула (`poolKeyString`: `project:<id>:exec:<p>`,
  * `session:<id>:browser:<p>`, `instance:<class>:<p>`), в URL — URL-encoded.
@@ -43,15 +45,20 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
+import { z } from 'zod';
 import {
   resolveBrowserProfileNames,
   resolveExecutionProfileNames,
   type ResolvedExecutionConfig,
 } from '@itphx/synth-shared';
 import {
+  EXECUTION_IMAGE_REF_MAX_LENGTH,
+  EXECUTION_WARM_IMAGES_MAX,
   executionProfileMetadata,
+  isValidImageRef,
   parsePoolKey,
   toExecutionProfileInfo,
+  type ExecutionImageWarmResult,
   type ExecutionPoolProvider,
   type ExecutionProfileInfo,
   type PoolInfo,
@@ -112,6 +119,40 @@ export interface ExecutionPoolsDto {
   pools: PoolInfo[];
 }
 
+/**
+ * DTO `POST /api/v2/execution/images/warm`.
+ *
+ * Прогрев образов на нодах кластера: тянет образы в реестр нод, чтобы
+ * первый пул с ними не ждал скачивания. Ответ — по образу: удалось ли и на
+ * скольких нодах.
+ */
+export interface ExecutionImagesWarmDto {
+  /** Итог по каждому образу (порядок — как в запросе). */
+  results: ExecutionImageWarmResult[];
+}
+
+/**
+ * Тело `POST /api/v2/execution/images/warm`: список образов.
+ *
+ * Fail-closed: пустой список, больше `EXECUTION_WARM_IMAGES_MAX` образов и
+ * недопустимая ссылка на образ — `400 VALIDATION_ERROR`.
+ */
+const warmImagesBodySchema = z
+  .object({
+    images: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(EXECUTION_IMAGE_REF_MAX_LENGTH)
+          .refine(isValidImageRef, { message: 'ожидается ссылка на образ (docker-ref)' }),
+      )
+      .min(1)
+      .max(EXECUTION_WARM_IMAGES_MAX),
+  })
+  .strict();
+
 export interface ExecutionRoutesDeps {
   /**
    * Эффективная секция `execution` (`resolveExecutionConfig`; инвариант 24).
@@ -129,6 +170,10 @@ export interface ExecutionRoutesMessages {
   providerUnavailable: (c: Context) => string;
   /** Пул с таким ключом провайдеру неизвестен. */
   poolNotFound: (c: Context, key: string) => string;
+  /** Тело запроса прогрева образов невалидно. */
+  invalidImages: (c: Context) => string;
+  /** Провайдер не умеет прогревать образы (нет подов кластера). */
+  warmUnsupported: (c: Context) => string;
 }
 
 export interface ExecutionRoutesOptions {
@@ -152,6 +197,11 @@ const DEFAULT_MESSAGES: ExecutionRoutesMessages = {
   providerUnavailable: () =>
     'провайдер пулов исполнения недоступен: динамические пулы требуют execution.remote.provider=http',
   poolNotFound: (_c, key) => `пул "${key}" не найден`,
+  invalidImages: () =>
+    'тело запроса: ожидается `{images: string[]}` — непустой список ссылок на образы (≤20)',
+  warmUnsupported: () =>
+    'прогрев образов недоступен: провайдер пулов не управляет подами кластера ' +
+    '(нужен execution.remote.provider=http и provisioner с kubernetes-провайдером)',
 };
 
 /** Декодирование ключа из пути: Hono уже декодирует параметр, повтор — безопасен. */
@@ -261,6 +311,16 @@ export function createExecutionRoutes(
       503,
     );
 
+  /**
+   * Прогрев не поддерживается провайдером: `501` (в отличие от `503`
+   * «провайдер недоступен» — здесь провайдер есть, но операции не умеет).
+   */
+  const warmUnsupported = (c: Context): Response =>
+    c.json(
+      { error: { code: 'EXECUTION_PROVIDER_UNAVAILABLE', message: messages.warmUnsupported(c) } },
+      501,
+    );
+
   // Эффективная конфигурация исполнения (профили/пулинг) — только чтение.
   // Каталог профилей — любому аутентифицированному: профиль выбирается в
   // настройках проекта (владелец проекта может быть с ролью USER).
@@ -349,6 +409,33 @@ export function createExecutionRoutes(
       return providerUnavailable(c);
     }
     return c.json({ ok: true }, 202);
+  });
+
+  // Прогрев образов на нодах кластера: тянет образы в реестр нод, чтобы
+  // первый пул с ними не ждал скачивания. Guard — `writeGuard` (managed:
+  // ADMIN). Провайдер без `warmImages` (static/нет провайдера) — `501`.
+  app.post('/images/warm', writeGuard, async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidImages(c) } }, 400);
+    }
+    const parsed = warmImagesBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidImages(c) } }, 400);
+    }
+    const provider = poolProvider();
+    if (!provider || typeof provider.warmImages !== 'function') return warmUnsupported(c);
+    try {
+      const results = await provider.warmImages(parsed.data.images);
+      const dto: ExecutionImagesWarmDto = { results };
+      return c.json(dto, 200);
+    } catch {
+      // Причина в ответ не идёт: текст ошибки провайдера может содержать
+      // технические детали provisioner'а (но не токен — его там нет).
+      return providerUnavailable(c);
+    }
   });
 
   return app;

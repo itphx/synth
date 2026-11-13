@@ -115,7 +115,14 @@ export interface ExecutionMcpServer {
   env?: Record<string, string>;
 }
 
-/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
+/**
+ * Список ресурсов профиля (`requests`/`limits` контейнера пула).
+ *
+ * Известные ключи (`cpu`/`memory`/`ephemeralStorage`) вынесены отдельными
+ * полями, но **список произвольный**: расширенные ресурсы Kubernetes
+ * (`nvidia.com/gpu`, `example.com/fpga`, …) задаются своими ключами — без
+ * них GPU-профиль не выразить.
+ */
 export interface ExecutionProfileResourceList {
   /** CPU (`500m`, `1`). */
   cpu?: string;
@@ -123,6 +130,66 @@ export interface ExecutionProfileResourceList {
   memory?: string;
   /** Эфемерное хранилище (`1Gi`) — приходит от provisioner'а. */
   ephemeralStorage?: string;
+  /**
+   * Произвольные ключи ресурсов (`nvidia.com/gpu: "1"`) — количество
+   * разбирает Kubernetes. Значение — строка в формате quantity.
+   */
+  [key: string]: string | undefined;
+}
+
+/**
+ * Оператор toleration пода (`Exists` | `Equal`).
+ *
+ * `Exists` — переносить на ноду с любым значением ключа; `Equal` — только с
+ * указанным значением (тогда `value` обязателен).
+ */
+export const EXECUTION_TOLERATION_OPERATORS = ['Exists', 'Equal'] as const;
+export type ExecutionTolerationOperator = (typeof EXECUTION_TOLERATION_OPERATORS)[number];
+
+/**
+ * Эффект toleration пода (`NoSchedule` | `PreferNoSchedule` | `NoExecute`).
+ */
+export const EXECUTION_TOLERATION_EFFECTS = ['NoSchedule', 'PreferNoSchedule', 'NoExecute'] as const;
+export type ExecutionTolerationEffect = (typeof EXECUTION_TOLERATION_EFFECTS)[number];
+
+/**
+ * Toleration профиля — правило размещения пода на нодах.
+ *
+ * Passthrough в `spec.tolerations` пода: provisioner не интерпретирует
+ * значения, Kubernetes — да.
+ */
+export interface ExecutionProfileToleration {
+  /** Ключ taint'а ноды. */
+  key?: string;
+  /** Оператор сопоставления (`Exists` | `Equal`). */
+  operator?: ExecutionTolerationOperator;
+  /** Значение taint'а (для `Equal`). */
+  value?: string;
+  /** Эффект toleration. */
+  effect?: ExecutionTolerationEffect;
+  /** Срок жизни toleration для `NoExecute`, с. */
+  tolerationSeconds?: number;
+}
+
+/**
+ * Предел размера блока `affinity` (JSON) — 8 КиБ.
+ *
+ * `affinity` — **passthrough**: provisioner не интерпретирует структуру, но
+ * размер ограничен (иначе в pod spec уедет произвольный объект).
+ */
+export const EXECUTION_AFFINITY_MAX_BYTES = 8 * 1024;
+
+/**
+ * Проверка значения ресурса — формат quantity Kubernetes
+ * (`500m`, `2`, `1.5`, `4Gi`, `512Mi`, `1e3`).
+ *
+ * Fail-closed: мусор в значении ресурса Kubernetes отверг бы под — значит,
+ * отвергаем его раньше (на разборе конфигурации).
+ */
+export function isValidResourceQuantity(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === '') return false;
+  return /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$/.test(trimmed);
 }
 
 /** Ресурсы профиля исполнения (как в PodSpec). */
@@ -201,6 +268,84 @@ const executionRuntimeMcpServersSchema = z.preprocess(
 );
 
 /**
+ * Ключ label/annotation Kubernetes (RFC 1123 с необязательным префиксом).
+ *
+ * Значение приходит из каталога профилей (администратора) — невалидный ключ
+ * API-сервер отверг бы под целиком, поэтому проверяем на разборе.
+ */
+export const executionPodKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(253)
+  .regex(
+    /^([a-z0-9]([-a-z0-9.]*[a-z0-9])?\/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/,
+    { message: 'ожидается ключ label/annotation Kubernetes' },
+  );
+
+/** Значение label Kubernetes (≤63 символов, `[A-Za-z0-9._-]`). */
+export const executionLabelValueSchema = z
+  .string()
+  .trim()
+  .max(63)
+  .regex(/^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$/, {
+    message: 'ожидается значение label Kubernetes (до 63 символов)',
+  });
+
+/** Значение annotation Kubernetes — произвольная строка (длиннее label'а). */
+export const executionAnnotationValueSchema = z.string().max(4096);
+
+/** Значение ресурса — количество в формате Kubernetes. */
+const resourceQuantitySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(isValidResourceQuantity, {
+    message: 'ожидается количество ресурса Kubernetes (например, 500m, 2, 4Gi)',
+  });
+
+/**
+ * Список ресурсов контейнера (`requests`/`limits`).
+ *
+ * Известные ключи объявлены явно, **произвольные — через `catchall`**
+ * (`nvidia.com/gpu`, `example.com/fpga`): без них GPU-профиль не задать.
+ */
+export const executionResourceListSchema = z
+  .object({
+    cpu: resourceQuantitySchema.optional(),
+    memory: resourceQuantitySchema.optional(),
+    ephemeralStorage: resourceQuantitySchema.optional(),
+  })
+  .catchall(resourceQuantitySchema);
+
+/** Toleration профиля (placement пода). */
+export const executionTolerationSchema = z
+  .object({
+    /** Ключ taint'а ноды. */
+    key: z.string().trim().min(1).max(253).optional(),
+    /** Оператор сопоставления. */
+    operator: z.enum(EXECUTION_TOLERATION_OPERATORS).optional(),
+    /** Значение taint'а (для `Equal`). */
+    value: z.string().trim().max(63).optional(),
+    /** Эффект toleration. */
+    effect: z.enum(EXECUTION_TOLERATION_EFFECTS).optional(),
+    /** Срок жизни toleration для `NoExecute`, с. */
+    tolerationSeconds: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+/**
+ * `affinity` профиля — **passthrough** (структуру не интерпретируем), но с
+ * пределом размера: блок уезжает в pod spec как есть.
+ */
+export const executionAffinitySchema = z
+  .record(z.string().trim().min(1).max(253), z.unknown())
+  .refine(
+    (value) => (JSON.stringify(value)?.length ?? 0) <= EXECUTION_AFFINITY_MAX_BYTES,
+    { message: `affinity: предел ${EXECUTION_AFFINITY_MAX_BYTES} байт` },
+  );
+
+/**
  * Профиль исполнения в runtime-каталоге (ADR-135).
  *
  * Модель — как у профиля provisioner'а (`SYNTH_PROVISIONER_PROFILES`): образ
@@ -220,17 +365,34 @@ export const executionRuntimeProfileSchema = z
     url: z.array(z.string().trim().min(1)).optional(),
     /** Сетевой класс профиля. */
     network: z.enum(EXECUTION_PROFILE_NETWORKS).optional(),
-    /** Ресурсы контейнера пула. */
+    /** Ресурсы контейнера пула (произвольные ключи — например, `nvidia.com/gpu`). */
     resources: z
       .object({
-        requests: z
-          .object({ cpu: z.string().optional(), memory: z.string().optional() })
-          .optional(),
-        limits: z
-          .object({ cpu: z.string().optional(), memory: z.string().optional() })
-          .optional(),
+        requests: executionResourceListSchema.optional(),
+        limits: executionResourceListSchema.optional(),
       })
       .optional(),
+    /**
+     * Произвольные аннотации пода (`metadata.annotations`).
+     *
+     * Служебные аннотации provisioner'а (`synth.io/*`) приоритетнее: конфликт
+     * решается в пользу служебных — иначе под перестал бы усыновляться.
+     */
+    annotations: z
+      .record(executionPodKeySchema, executionAnnotationValueSchema)
+      .optional(),
+    /**
+     * Пользовательские метки пода (`metadata.labels`).
+     *
+     * Служебные метки (`synth.io/*`, `app.kubernetes.io/*`) приоритетнее.
+     */
+    labels: z.record(executionPodKeySchema, executionLabelValueSchema).optional(),
+    /** `spec.nodeSelector` пода — отбор нод по меткам. */
+    nodeSelector: z.record(executionPodKeySchema, executionLabelValueSchema).optional(),
+    /** `spec.tolerations` пода — правила размещения на «tainted» нодах. */
+    tolerations: z.array(executionTolerationSchema).optional(),
+    /** `spec.affinity` пода — passthrough (JSON, ≤8 КиБ). */
+    affinity: executionAffinitySchema.optional(),
     /** `runtimeClassName` пода (например, `gvisor`, `kata`). */
     runtimeClass: z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX).optional(),
     /** Read-only корневая ФС контейнера (ADR-137; по умолчанию — у дефолта). */

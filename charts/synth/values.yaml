@@ -342,6 +342,27 @@ execution:
     # fail (дефолт, fail-closed) | inline-fallback (явная настройка: backend
     # исполняет команду сам — обход изоляции, в managed-контуре включать осознанно).
     failMode: fail
+    # Каталог профилей инстанса (backend-каталог; `provisioner.profiles` —
+    # фолбэк provisioner'а). Профиль: {image, url, network, resources,
+    # runtimeClass, readOnlyRootFilesystem, env, annotations, labels,
+    # nodeSelector, tolerations, affinity, mcpServers}.
+    #
+    # Рендерится в `config.yaml` backend'а (не в env) — отсюда работают
+    # scheduling-поля (аннотации/метки/отбор нод/tolerations/affinity) и
+    # произвольные ресурсы (`nvidia.com/gpu`). Пример (профиль на GPU-нодах):
+    #   profiles:
+    #     gpu:
+    #       image: git.itphx.ru/itphx/synth-executor:0.13.8-full
+    #       nodeSelector:
+    #         nvidia.com/gpu.present: "true"
+    #       tolerations:
+    #         - key: nvidia.com/gpu
+    #           operator: Exists
+    #           effect: NoSchedule
+    #       resources:
+    #         requests: {cpu: "1", nvidia.com/gpu: "1"}
+    #         limits: {nvidia.com/gpu: "1"}
+    profiles: {}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Исполнитель (executor/worker) — пул контейнеров с toolchain'ом (ADR-077).
@@ -470,6 +491,24 @@ executor:
     # рекурсивный chown на каждом старте держал под в ContainerCreating
     # 10–20 минут и ронял rollout по progressDeadlineSeconds.
     fsGroupChangePolicy: OnRootMismatch
+
+  # Аннотации и метки пода исполнителя (`metadata.annotations`/`metadata.labels`
+  # шаблона Deployment'а).
+  #
+  # Служебные значения **приоритетнее**: `synth.io/build` (версия чарта) и
+  # `synth.io/network` (сетевой класс пула, ADR-137b-2) перетираются, если
+  # совпадёт ключ. Остальные ключи уходят в под как есть — например, чтобы
+  # внешний агрегатор (Prometheus/VictoriaMetrics/Admission webhook) отбирал
+  # поды по своей метке.
+  #
+  # Пример (подписи для внешнего агрегатора):
+  #   podAnnotations:
+  #     prometheus.io/scrape: "false"
+  #   podLabels:
+  #     team: platform
+  podAnnotations: {}
+  podLabels: {}
+
   containerSecurityContext:
     runAsUser: 1000
     runAsNonRoot: true
@@ -757,17 +796,33 @@ provisioner:
   provider: static
 
   # Каталог профилей исполнения: имя → {image, url, network, resources,
-  # runtimeClass, readOnlyRootFilesystem, env}. JSON уходит в env
+  # runtimeClass, readOnlyRootFilesystem, env, annotations, labels,
+  # nodeSelector, tolerations, affinity, mcpServers}. JSON уходит в env
   # SYNTH_PROVISIONER_PROFILES.
   #   static:     профилю обязателен url (адрес исполнителя);
   #   kubernetes: профилю обязателен image (образ пода пула).
-  # Пример:
+  # Scheduling-поля профиля (аннотации/метки/отбор нод/tolerations/affinity)
+  # уходят в pod spec пула; служебные метки/аннотации provisioner'а
+  # (`synth.io/*`) приоритетнее. `resources` — произвольный список ключей
+  # (например, `nvidia.com/gpu: "1"`).
+  # Пример (профиль на GPU-нодах):
   #   profiles:
   #     default:
   #       image: git.itphx.ru/itphx/synth-executor:0.13.8-core
   #       resources:
   #         requests: {cpu: 500m, memory: 1Gi}
   #         limits: {cpu: 2, memory: 4Gi}
+  #     gpu:
+  #       image: git.itphx.ru/itphx/synth-executor:0.13.8-full
+  #       nodeSelector:
+  #         nvidia.com/gpu.present: "true"
+  #       tolerations:
+  #         - key: nvidia.com/gpu
+  #           operator: Exists
+  #           effect: NoSchedule
+  #       resources:
+  #         requests: {cpu: "1", nvidia.com/gpu: "1"}
+  #         limits: {nvidia.com/gpu: "1"}
   profiles: {}
 
   # Точные пулы (static): канонический ключ пула → адрес исполнителя.

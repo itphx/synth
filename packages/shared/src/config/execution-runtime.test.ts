@@ -192,6 +192,91 @@ describe('applyExecutionRuntimeSettings (ADR-135)', () => {
     expect(applied.remote.profiles.p?.mcpServers).toEqual([{ name: 'playwright-mcp' }]);
   });
 
+  it('placement-поля профиля материализуются (аннотации/метки/селектор/tolerations/affinity)', () => {
+    const applied = applyExecutionRuntimeSettings(
+      resolvedBase(),
+      {
+        profiles: {
+          p: {
+            image: 'img:p',
+            annotations: { 'example.com/owner': 'platform' },
+            labels: { 'example.com/tier': 'gpu' },
+            nodeSelector: { 'example.com/pool': 'gpu' },
+            tolerations: [{ key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' }],
+            affinity: { nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: {} } },
+          },
+        },
+      },
+      {},
+    );
+    const profile = applied.remote.profiles.p;
+    expect(profile?.annotations).toEqual({ 'example.com/owner': 'platform' });
+    expect(profile?.labels).toEqual({ 'example.com/tier': 'gpu' });
+    expect(profile?.nodeSelector).toEqual({ 'example.com/pool': 'gpu' });
+    expect(profile?.tolerations).toEqual([
+      { key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' },
+    ]);
+    expect(profile?.affinity).toEqual({
+      nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: {} },
+    });
+  });
+
+  it('произвольные ресурсы (GPU) сохраняются', () => {
+    const applied = applyExecutionRuntimeSettings(
+      resolvedBase(),
+      {
+        profiles: {
+          p: {
+            image: 'img:p',
+            resources: {
+              requests: { cpu: '1', 'nvidia.com/gpu': '1' },
+              limits: { 'nvidia.com/gpu': '1' },
+            },
+          },
+        },
+      },
+      {},
+    );
+    expect(applied.remote.profiles.p?.resources?.requests?.['nvidia.com/gpu']).toBe('1');
+    expect(applied.remote.profiles.p?.resources?.requests?.cpu).toBe('1');
+    expect(applied.remote.profiles.p?.resources?.limits?.['nvidia.com/gpu']).toBe('1');
+  });
+
+  it('невалидные значения placement-полей → секция невалидна (fail-soft)', () => {
+    // Невалидный ключ label'а.
+    expect(
+      parseExecutionRuntimeSettings({
+        profiles: { p: { image: 'img:p', labels: { 'bad key!': 'v' } } },
+      }),
+    ).toBeUndefined();
+    // Невалидное количество ресурса.
+    expect(
+      parseExecutionRuntimeSettings({
+        profiles: { p: { image: 'img:p', resources: { limits: { cpu: 'много' } } } },
+      }),
+    ).toBeUndefined();
+    // Неизвестный оператор toleration.
+    expect(
+      parseExecutionRuntimeSettings({
+        profiles: { p: { image: 'img:p', tolerations: [{ operator: 'Maybe' }] } },
+      }),
+    ).toBeUndefined();
+    // Неизвестный эффект toleration.
+    expect(
+      parseExecutionRuntimeSettings({
+        profiles: { p: { image: 'img:p', tolerations: [{ effect: 'Whenever' }] } },
+      }),
+    ).toBeUndefined();
+    // affinity больше предела (8 КиБ) — невалидно.
+    expect(
+      parseExecutionRuntimeSettings({
+        profiles: {
+          p: { image: 'img:p', affinity: { blob: 'x'.repeat(9000) } },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it('без runtime-секции секция не меняется', () => {
     const base = resolvedBase();
     expect(applyExecutionRuntimeSettings(base, undefined, {})).toBe(base);

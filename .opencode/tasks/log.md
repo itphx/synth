@@ -1500,3 +1500,12 @@
 - **Валидация.** Проверяются только runtime-overrides (`image` или `url`); default/browser — в эффективном каталоге, browser — класса `browser|both`.
 - **Тесты.** shared `execution-runtime`/`execution` — 69; core settings/execution/router/pool-provider/deps — 248; полный core — 10 675 (предсуществующие флаки proxy/zombie в изоляции зелёные).
 - **Документация.** ADR-135 §11 (merge, disabled, class, MCP, profileOrigins).
+
+## 2026-11-13 — Scheduling-поля профилей, GPU-ресурсы и прогрев образов
+
+- **Задача:** профили должны позволять привязку пулов к узлам (GPU), произвольные аннотации/метки и прогрев образов на нодах; config/Helm-профили — read-only (UI-слайд отдельно). **Тип:** feature (shared/provisioner/core/helm). **Исполнитель:** @fixer.
+- **Профиль.** `annotations`, `labels`, `nodeSelector`, `tolerations`, `affinity` (лимит 8 КиБ), `resources.requests/limits` — произвольные ключи с проверкой quantity (`nvidia.com/gpu`). Поля проходят config → runtime → `profileSpec` → pod spec; служебные `synth.io/*`/`app.kubernetes.io/*` приоритетнее пользовательских.
+- **Warm.** Provisioner `POST /v1/images/warm` (1..20 образов, docker-ref): DaemonSet на образ (`imagePullPolicy: Always`, sleep), ожидание `numberReady` (300 с), удаление; частичный успех. RBAC `apps/daemonsets` (create/get/list/watch/delete). Core `POST /api/v2/execution/images/warm` (ADMIN) → `{results}`; static → 501; `ExecutionPoolProvider.warmImages`.
+- **Helm.** `executor.podAnnotations`/`podLabels`, RBAC daemonsets, комментарии values; примеры GPU/селекторов в README.
+- **Документация.** `docs/EXECUTION.md` §Ф4b-2b, `charts/synth/README.md`, `packages/provisioner/AGENTS.md`; отдельный **PROP-140** (класс `mcp`, discovery через probe-под) — создан, индекс обновлён.
+- **Проверки.** shared 1116; provisioner 98 targeted/весь пакет, lint 0; core targeted 82 + полный 10 692 (флейк `app.proxy.test.ts`, в изоляции зелёный); backend 858; `helm lint` ок; `adr:check` 0; core lint — 0 errors, ratchet 478 → 490 (новые `any` в settings-тестах слайса).

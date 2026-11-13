@@ -564,15 +564,20 @@ export { createInstanceExecutionPort, defaultPooledPortFactory } from './executi
 export {
   createExecutionPoolProvider,
   isExecutionPoolProvider,
+  isValidImageRef,
   parsePoolKey,
   poolKeyString,
   ExecutionPoolProviderError,
   StaticExecutionPoolProvider,
   HttpExecutionPoolProvider,
+  EXECUTION_IMAGE_REF_MAX_LENGTH,
+  EXECUTION_WARM_IMAGES_MAX,
 } from './execution/pool-provider.js';
 export type {
+  ExecutionImageWarmResult,
   ExecutionPoolClass,
   ExecutionPoolKey,
+  ExecutionPoolProfileSpec,
   ExecutionPoolProvider,
   ExecutionPoolRef,
   ExecutionPoolScope,
@@ -2381,6 +2386,7 @@ export { createExecutionRoutes } from './server/routes/execution.js';
 export type {
   ExecutionProfilesDto,
   ExecutionPoolsDto,
+  ExecutionImagesWarmDto,
   ExecutionProviderKind,
   ExecutionRoutesDeps,
   ExecutionRoutesMessages,

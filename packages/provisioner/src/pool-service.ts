@@ -42,9 +42,10 @@ import type {
   PoolScope,
   PoolState,
   ProvisionerProfileInfo,
+  WarmImageResult,
 } from './protocol.js';
 import type { PoolProvisioner } from './provider.js';
-import { generatePoolToken } from './provider.js';
+import { generatePoolToken, PoolProvisionerError } from './provider.js';
 
 /** Запись реестра пулов (токен не покидает provisioner кроме ответа `ensure`). */
 export interface PoolRecord {
@@ -243,6 +244,24 @@ export class PoolService {
   async profilesInfo(): Promise<ProvisionerProfileInfo[]> {
     if (typeof this._provider.profilesInfo !== 'function') return [];
     return this._provider.profilesInfo();
+  }
+
+  /**
+   * Прогреть образы на нодах кластера.
+   *
+   * Провайдер без `warmImages` (static) — `invalid_request`: подов кластера у
+   * provisioner'а нет, прогревать нечего.
+   *
+   * @throws PoolProvisionerError при неподдерживаемом провайдере
+   */
+  async warmImages(images: string[]): Promise<WarmImageResult[]> {
+    if (typeof this._provider.warmImages !== 'function') {
+      throw new PoolProvisionerError(
+        'invalid_request',
+        'прогрев образов поддерживает только провайдер "kubernetes" — у статического пула подов кластера нет',
+      );
+    }
+    return this._provider.warmImages(images);
   }
 
   /**

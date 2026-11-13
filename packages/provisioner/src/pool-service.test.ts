@@ -12,12 +12,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import { PoolService } from './pool-service.js';
-import type { EnsurePoolRequest } from './protocol.js';
+import type { EnsurePoolRequest, WarmImageResult } from './protocol.js';
 import type { PoolProvisioner } from './provider.js';
+import { StaticPoolProvisioner } from './provider.js';
 
 /** Провайдер-наблюдатель: запоминает запросы `ensure`. */
 class RecordingProvider implements PoolProvisioner {
   readonly requests: EnsurePoolRequest[] = [];
+  readonly warmed: string[][] = [];
 
   async ensure(req: EnsurePoolRequest): Promise<{ url: string; token: string }> {
     this.requests.push(req);
@@ -34,6 +36,11 @@ class RecordingProvider implements PoolProvisioner {
 
   async capabilities(): Promise<{ provider: string; profiles: string[] }> {
     return { provider: 'fake', profiles: ['default'] };
+  }
+
+  async warmImages(images: string[]): Promise<WarmImageResult[]> {
+    this.warmed.push(images);
+    return images.map((image) => ({ image, ok: true, nodes: 2 }));
   }
 }
 
@@ -123,5 +130,39 @@ describe('provisioner: спецификация профиля в запросе
       class: 'browser',
       profile: 'browser',
     });
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Прогрев образов: сервис пробрасывает список провайдеру, а провайдер без
+ * `warmImages` (static) — отказ `invalid_request` (подов кластера нет).
+ * ------------------------------------------------------------------------ */
+describe('provisioner: прогрев образов (сервис)', () => {
+  it('список образов пробрасывается провайдеру, итог возвращается как есть', async () => {
+    const { service, provider } = makeService();
+    const images = ['registry.example/synth-executor:0.13.8'];
+    const results = await service.warmImages(images);
+    expect(provider.warmed).toEqual([images]);
+    expect(results).toEqual([
+      { image: images[0]!, ok: true, nodes: 2 },
+    ]);
+  });
+
+  it('провайдер без warmImages (static) — invalid_request', async () => {
+    const { service } = makeService();
+    // Провайдер-наблюдатель умеет прогрев; провайдер без метода — static.
+    const staticService = new PoolService({
+      provider: new StaticPoolProvisioner({}, {}),
+      idleTimeoutMs: 900_000,
+      sessionIdleTimeoutMs: 300_000,
+      maxLifetimeMs: 43_200_000,
+      drainGraceMs: 30_000,
+      maxPools: 50,
+    });
+    await expect(staticService.warmImages(['registry.example/img:1'])).rejects.toThrow(
+      /kubernetes/,
+    );
+    // Сервис с наблюдателем — работает (см. тест выше).
+    expect(service).toBeDefined();
   });
 });

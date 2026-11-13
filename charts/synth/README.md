@@ -158,6 +158,7 @@ ingress:
 | `executor.replicaCount` | `1` | Размер пула исполнителей |
 | `executor.podSecurityContext` | `fsGroup: 1000`, `fsGroupChangePolicy: OnRootMismatch` | Группа файлов общего тома и политика смены владельца: NFS-том workspace — десятки тысяч файлов, рекурсивный `chown` на каждом старте недопустим (см. «NFS-том и смена владельца»). От `fsGroup` зависит режим Secret-тома `executor-tls`: задан → `0440`, `null` → `0444` |
 | `executor.progressDeadlineSeconds` | `1200` | Дедлайн прогресса rollout (`Deployment.spec.progressDeadlineSeconds`): медленный первый старт не роняет релиз |
+| `executor.podAnnotations` / `executor.podLabels` | `{}` | Аннотации/метки пода исполнителя (`metadata.annotations`/`metadata.labels` шаблона Deployment'а) — например, подписи внешнего агрегатора (`prometheus.io/scrape`). Служебные ключи (`synth.io/build`, `synth.io/network`, `app.kubernetes.io/*`) приоритетнее: пользовательский ключ с тем же именем отбрасывается |
 | `executor.readOnlyRootFilesystem` | `true` | Read-only корневая ФС контейнера исполнителя (PROP-137 Ф2): `true` — только чтение + writable `emptyDir` на `/tmp` (SSH-материал, логи фоновых процессов) и `/home/synth` (кэши pnpm/pip/corepack); `false` — записываемая корневая ФС. Итог = этот флаг **И** `executor.containerSecurityContext.readOnlyRootFilesystem` |
 | `executor.ownershipInitContainer.enabled` | `false` | Init-контейнер смены владельца общего тома workspace (`chown -R 1000:1000`) перед стартом исполнителя. Нужен только для hostPath/NFS; для обычного PVC достаточно `fsGroup` + `OnRootMismatch`. Работает от root → несовместим с PSS `restricted` |
 | `executor.ownershipInitContainer.image` | `""` | Образ init-контейнера; пусто → образ самого исполнителя (в нём есть `sh` и `chown` busybox) |
@@ -204,7 +205,7 @@ ingress:
 | `provisioner.service.port` / `.targetPort` | `5200` / `5200` | Service provisioner'а (адрес → `SYNTH_EXECUTION_PROVISIONER_URL`) |
 | `provisioner.token.existingSecret` / `.secretKey` | `""` / `SYNTH_PROVISIONER_TOKEN` | Secret с токеном (пусто → `secrets.existingSecret`): provisioner — значение в env, backend — файл `/etc/synth/provisioner-token/token` |
 | `provisioner.serviceAccount.create` / `.name` | `true` / `""` | ServiceAccount provisioner'а (пусто → `<fullname>`); ему выдаётся Role на поды/секреты в namespace релиза |
-| `provisioner.profiles` | `{}` | Профили исполнения: `{имя: {image, url, network, resources, mcpServers, …}}` → env `SYNTH_PROVISIONER_PROFILES` (JSON). `static` — обязателен `url`, `kubernetes` — `image`; `network` — класс сети пула (`none`\|`restricted`\|`full`, дефолт `full`), см. §«Сетевые классы пулов»; `mcpServers` — MCP-серверы пула (`SYNTH_EXECUTOR_MCP_SERVERS` в поде), см. §«Браузерный профиль с MCP» |
+| `provisioner.profiles` | `{}` | Профили исполнения: `{имя: {image, url, network, resources, annotations, labels, nodeSelector, tolerations, affinity, mcpServers, …}}` → env `SYNTH_PROVISIONER_PROFILES` (JSON). `static` — обязателен `url`, `kubernetes` — `image`; `network` — класс сети пула (`none`\|`restricted`\|`full`, дефолт `full`), см. §«Сетевые классы пулов»; `mcpServers` — MCP-серверы пула (`SYNTH_EXECUTOR_MCP_SERVERS` в поде), см. §«Браузерный профиль с MCP»; scheduling-поля и GPU-ресурсы — §«Scheduling-поля профиля» |
 | `provisioner.staticPools` | `{}` | Точные пулы (static): ключ пула → адрес исполнителя → env `SYNTH_PROVISIONER_STATIC_POOLS` |
 | `provisioner.kubernetes.workspacePvc` | `""` | PVC с рабочими каталогами проектов (обязателен при `provider: kubernetes`) |
 | `provisioner.kubernetes.workspaceMount` | `/var/synth/data/workspaces` | Точка монтирования PVC в поде пула (должна совпадать с `executor.workspace.mountPath`) |
@@ -1972,6 +1973,79 @@ provisioner:
 > используется для профилей, которых нет в каталоге инстанса. Provisioner
 > новой версии нужно обновить раньше backend'а (старый отвергнет тело с
 > `profileSpec` — `400 invalid_request`).
+
+### Scheduling-поля профиля (GPU-ноды, tolerations)
+
+Профиль может задать **размещение** пода пула в кластере: аннотации/метки,
+отбор нод, toleration'ы и affinity. Поля одинаковы в
+`execution.remote.profiles` (каталог инстанса → `config.yaml` backend'а) и в
+`provisioner.profiles` (фолбэк provisioner'а):
+
+```yaml
+execution:
+  remote:
+    profiles:
+      gpu:
+        image: git.itphx.ru/itphx/synth-executor:0.13.9-full
+        # произвольные аннотации/метки пода (служебные synth.io/* приоритетнее)
+        annotations:
+          example.com/owner: platform
+        labels:
+          example.com/tier: gpu
+        # отбор нод
+        nodeSelector:
+          nvidia.com/gpu.present: "true"
+        # toleration'ы (tainted-ноды)
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+        # ресурсы — произвольный список ключей (GPU)
+        resources:
+          requests:
+            cpu: "1"
+            nvidia.com/gpu: "1"
+          limits:
+            nvidia.com/gpu: "1"
+```
+
+Значения ресурсов проверяются как **quantity** Kubernetes (`500m`, `2`, `4Gi`),
+`affinity` — passthrough до 8 КиБ. Подробности —
+[docs/EXECUTION.md](../../docs/EXECUTION.md) §«Ф4b-2b: provisioner пулов».
+
+Аннотации/метки **статического** пула (Deployment исполнителя) задаются
+значениями `executor.podAnnotations`/`executor.podLabels`:
+
+```yaml
+executor:
+  podAnnotations:
+    prometheus.io/scrape: "false"
+  podLabels:
+    team: platform
+```
+
+Служебные ключи приоритетнее (`synth.io/build`, `synth.io/network`,
+`app.kubernetes.io/*`) — пользовательский ключ с тем же именем отбрасывается.
+
+### Прогрев образов
+
+Первый пул с новым образом ждёт, пока образ скачается на ноду. Provisioner
+умеет прогревать образы заранее — `POST /v1/images/warm` (для каждого образа
+создаётся DaemonSet, ждётся готовность на всех нодах, DaemonSet удаляется):
+
+```bash
+curl -sS -X POST http://synth-provisioner:5200/v1/images/warm \
+  -H "Authorization: Bearer $SYNTH_PROVISIONER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"images":["git.itphx.ru/itphx/synth-executor:0.13.9-full"]}'
+# {"results":[{"image":"…","ok":true,"nodes":3}]}
+```
+
+Ограничения: не больше **20** образов за запрос, ожидание — до **300 с** на
+образ (последовательно), ошибка одного образа не прерывает остальные. Нужны
+права `apps/daemonsets` (`create/get/list/watch/delete`) — чарт выдаёт их
+provisioner'у в namespace релиза. На стороне control plane —
+`POST /api/v2/execution/images/warm` (ADMIN).
 
 ### Токен (Secret)
 

@@ -503,6 +503,7 @@ LLM он не знает; конфигурация — **только env** (к�
 | `DELETE` | `/v1/pools/{key}` | — | Удалить пул: под (grace 0) и секрет |
 | `GET` | `/v1/capabilities` | → `{provider, profiles, protocol, limits}` | Диагностика |
 | `GET` | `/v1/profiles` | → `{profiles: [{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}]}` | Метаданные профилей для админ-раздела «Исполнение»: образ/сеть/ресурсы/runtimeClass и **имена** MCP-серверов; env профиля, команды/аргументы/env MCP-серверов, URL и токены не отдаются (инвариант 13) |
+| `POST` | `/v1/images/warm` | `{images: string[]}` → `{results: [{image, ok, nodes, error?}]}` | Прогрев образов на нодах (см. §«Прогрев образов») |
 | `GET` | `/health` | → `{ok, provider}` | Проба (без авторизации) |
 | `GET` | `/metrics` | exposition 0.0.4 | Метрики (серии — [OBSERVABILITY.md](./OBSERVABILITY.md)) |
 
@@ -523,7 +524,8 @@ LLM он не знает; конфигурация — **только env** (к�
 **Спецификация профиля пула (`profileSpec`).** Тело `POST /v1/pools` может нести
 спецификацию профиля — **та же строгая схема**, что у каталога
 `SYNTH_PROVISIONER_PROFILES` (`image`/`url`/`network`/`resources`/`runtimeClass`/
-`readOnlyRootFilesystem`/`env`/`mcpServers`). Спецификацию шлёт control plane из
+`readOnlyRootFilesystem`/`env`/`mcpServers` + scheduling-поля, см. ниже).
+Спецификацию шлёт control plane из
 **эффективного каталога инстанса** (`execution.remote.profiles[<profile>]` — уже
 с учётом runtime-секции «Исполнение»), поэтому админ создаёт и меняет профили в
 UI, не правя Helm values.
@@ -552,6 +554,97 @@ UI, не правя Helm values.
   invalid_request`) — provisioner новой версии нужно обновить раньше backend'а.
   Backend шлёт поле только для профилей, у которых в каталоге инстанса задан
   `image` (у остальных — каталог provisioner'а).
+
+**Scheduling-поля профиля (аннотации/метки/отбор нод/tolerations/affinity).**
+Кроме образа/сети/ресурсов профиль задаёт **размещение** пода пула в кластере.
+Поля живут в трёх местах (одна модель — `shared/types/execution.ts`):
+
+| Поле | Куда в pod spec | Приоритет |
+|---|---|---|
+| `annotations` | `metadata.annotations` | служебные `synth.io/*` **приоритетнее** (иначе под перестал бы усыновляться) |
+| `labels` | `metadata.labels` | служебные `synth.io/*` и `app.kubernetes.io/*` **приоритетнее** |
+| `nodeSelector` | `spec.nodeSelector` | — |
+| `tolerations` | `spec.tolerations` | — |
+| `affinity` | `spec.affinity` | passthrough (структуру не интерпретируем), предел **8 КиБ** |
+
+Три источника задания (приоритет — как у всего профиля): runtime-каталог
+инстанса (`PUT /api/v2/settings/execution`) > `config.yaml`
+(`execution.remote.profiles.<name>`) > каталог provisioner'а
+(`provisioner.profiles.<name>` — фолбэк). В Helm values это
+`execution.remote.profiles` (backend-каталог, рендерится в `config.yaml`
+backend'а) и `provisioner.profiles` (фолбэк provisioner'а, env
+`SYNTH_PROVISIONER_PROFILES`).
+
+Валидация — fail-closed на разборе: ключ label'а/annotation'а — по правилам
+Kubernetes, значение label'а — ≤63 символа, `affinity` — ≤8 КиБ, toleration'ы —
+`operator: Exists|Equal`, `effect: NoSchedule|PreferNoSchedule|NoExecute`.
+
+**Ресурсы — произвольный список ключей.** `resources.requests`/`limits` — не
+только `cpu`/`memory`/`ephemeralStorage`, но и любые расширенные ресурсы
+Kubernetes (например, `nvidia.com/gpu`):
+
+```yaml
+execution:
+  remote:
+    profiles:
+      gpu:
+        image: git.itphx.ru/itphx/synth-executor:0.13.9-full
+        nodeSelector:
+          nvidia.com/gpu.present: "true"
+        tolerations:
+          - key: nvidia.com/gpu
+            operator: Exists
+            effect: NoSchedule
+        resources:
+          requests:
+            cpu: "1"
+            nvidia.com/gpu: "1"
+          limits:
+            nvidia.com/gpu: "1"
+```
+
+Значения проверяются как **quantity** Kubernetes (`500m`, `2`, `4Gi`, `512Mi`) —
+мусор отвергается на разборе конфигурации, а не `422` от API-сервера на каждый
+под.
+
+**Аннотации/метки пода статического пула** (Deployment исполнителя, а не
+динамические пулы provisioner'а) задаются значениями чарта
+`executor.podAnnotations`/`executor.podLabels` (`metadata.annotations`/
+`metadata.labels` шаблона Deployment'а). Служебные ключи приоритетнее:
+`synth.io/build` (версия чарта) и `synth.io/network` (сетевой класс пула,
+ADR-137b-2); пользовательский ключ с тем же именем **отбрасывается** (в YAML
+не было бы дубля ключа, который Kubernetes не принимает).
+
+**Прогрев образов (`POST /v1/images/warm`).** Первый пул с новым образом
+ждёт, пока образ скачается на ноду. Прогрев убирает эту задержку заранее:
+
+```http
+POST /v1/images/warm
+Authorization: Bearer <токен provisioner'а>
+{"images": ["git.itphx.ru/itphx/synth-executor:0.13.9-full"]}
+
+200 OK
+{"results": [{"image": "git.itphx.ru/itphx/synth-executor:0.13.9-full", "ok": true, "nodes": 3}]}
+```
+
+- **Как это работает:** для каждого образа provisioner создаёт `DaemonSet`
+  (`synth.io/component=image-warmer`, метка с хешем образа,
+  `imagePullPolicy: Always`, `command: ["sh","-c","sleep 60"]`), ждёт
+  `numberReady >= desiredNumberScheduled` и **удаляет** DaemonSet: образ остаётся
+  в кэше ноды, а в кластере не остаётся мусора.
+- **Ограничения:** образов в запросе — не больше **20**; ссылка на образ —
+  docker-ref (≤512 символов, без пробелов); ожидание готовности — до **300 с**
+  на образ (образы идут **последовательно**); ошибка одного образа **не**
+  прерывает остальные (итог по каждому образу отдельной записью: `ok`,
+  `nodes`, `error`).
+- **Права:** provisioner'у нужен `apps/daemonsets` — `create`, `get`, `list`,
+  `watch`, `delete` в namespace релиза (`charts/synth/templates/provisioner-rbac.yaml`).
+- **Провайдер:** только `kubernetes` (у `static` подов кластера нет — ответ
+  `400 invalid_request`).
+- **HTTP-контур control plane:** `POST /api/v2/execution/images/warm`
+  (`{images}` → `{results}`), guard — `writeGuard` (managed: **ADMIN**).
+  Провайдер без прогорева (`static`) — `501 EXECUTION_PROVIDER_UNAVAILABLE`,
+  невалидное тело — `400 VALIDATION_ERROR`, сбой провайдера — `503`.
 
 **Жизненный цикл** (`packages/provisioner/src/pool-service.ts`):
 
@@ -621,8 +714,9 @@ healthcheck `/health`, секретов в образе нет).
 
 1. **Один namespace** — поды и секреты только в namespace релиза (Role там же,
    `SYNTH_PROVISIONER_KUBERNETES_NAMESPACE` = `.Release.Namespace`).
-2. **Нет прогрева (`minWarm`)** — пул создаётся по первому запросу; холодный
-   старт ограничен `startTimeoutMs`.
+2. **Нет прогрева пулов (`minWarm`)** — пул создаётся по первому запросу; холодный
+   старт ограничен `startTimeoutMs`. Прогрев **образов** (`/v1/images/warm`) —
+   другое: он ускоряет скачивание образа на нодах, но пул заранее не создаёт.
 3. **`replicaCount: 1`** — распределённой блокировки выдачи пула нет.
 4. **Политика сети — по label, не по DNS**: NetworkPolicy не умеет выбирать API
    по имени, поэтому для `kubernetes` нужны `apiServerCidrs` (иначе рендер

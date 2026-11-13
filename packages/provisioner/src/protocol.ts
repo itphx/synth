@@ -75,6 +75,79 @@ export const PROVISIONER_PROTOCOL_VERSION = 1;
 export const MAX_WORKSPACE_SUB_PATH_LENGTH = 512;
 
 /**
+ * Предел числа образов в одном запросе прогрева.
+ *
+ * Прогрев тянет образ на **каждую** ноду кластера — десяток за раз
+ * достаточно, а больше — нагрузка на кластер без нужды.
+ */
+export const WARM_IMAGES_MAX = 20;
+
+/** Предел длины ссылки на образ (docker-ref). */
+export const IMAGE_REF_MAX_LENGTH = 512;
+
+/**
+ * Таймаут ожидания готовности DaemonSet'а прогрева на **один образ**, мс.
+ *
+ * Образ качается на каждую ноду — 5 минут на образ (максимум для большого
+ * образа на медленной ноде).
+ */
+export const WARM_IMAGE_TIMEOUT_MS = 300_000;
+
+/**
+ * Проверка ссылки на образ (docker-ref).
+ *
+ * Fail-closed: пустая строка, пробелы и недопустимые символы — отказ.
+ * Значение уходит в имя DaemonSet'а прогрева и в pod spec, поэтому мусор
+ * отсекаем на границе API.
+ */
+export function isValidImageRef(image: string): boolean {
+  const trimmed = (image ?? '').trim();
+  if (trimmed === '' || trimmed.length > IMAGE_REF_MAX_LENGTH) return false;
+  if (/\s/.test(trimmed)) return false;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._\-/:@]*$/.test(trimmed);
+}
+
+/** Схема тела `POST /v1/images/warm` (fail-closed: неизвестные поля — ошибка). */
+export const warmImagesRequestSchema = z
+  .object({
+    images: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(IMAGE_REF_MAX_LENGTH)
+          .refine(isValidImageRef, { message: 'ожидается ссылка на образ (docker-ref)' }),
+      )
+      .min(1)
+      .max(WARM_IMAGES_MAX),
+  })
+  .strict();
+
+/**
+ * Итог прогрева одного образа.
+ *
+ * `ok: false` — образ не прогрет (таймаут/ошибка API); причина — в `error`
+ * (без секретов).
+ */
+export interface WarmImageResult {
+  /** Образ, который прогревали. */
+  image: string;
+  /** Удалось ли прогреть образ. */
+  ok: boolean;
+  /** Число нод, на которых образ прогрет. */
+  nodes: number;
+  /** Причина неудачи (без секретов). */
+  error?: string;
+}
+
+/** Ответ `POST /v1/images/warm`. */
+export interface WarmImagesResponse {
+  /** Итог по каждому образу (порядок — как в запросе). */
+  results: WarmImageResult[];
+}
+
+/**
  * Проверить `workspaceSubPath` — путь **внутри** PVC, а не произвольный путь.
  *
  * Разрешено: относительный путь из непустых сегментов (`proj-slug`,
@@ -215,11 +288,18 @@ export interface ProvisionerCapabilities {
   limits: ProvisionerLimits;
 }
 
-/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
+/**
+ * Список ресурсов профиля (`requests`/`limits` контейнера пула).
+ *
+ * Список **произвольный**: кроме `cpu`/`memory`/`ephemeralStorage` можно
+ * задать расширенные ресурсы (`nvidia.com/gpu`, `example.com/fpga`).
+ */
 export interface ProfileResourceList {
   cpu?: string;
   memory?: string;
   ephemeralStorage?: string;
+  /** Произвольные ключи ресурсов (`nvidia.com/gpu: "1"`). */
+  [key: string]: string | undefined;
 }
 
 /** Ресурсы профиля — как в PodSpec (`requests` и/или `limits`). */

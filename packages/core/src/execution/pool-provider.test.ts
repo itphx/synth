@@ -23,6 +23,7 @@ import {
   poolKeyString,
   StaticExecutionPoolProvider,
   type ExecutionPoolKey,
+  type ExecutionPoolProvider,
 } from './pool-provider.js';
 
 /** Запись вызова HTTP-провайдера (для проверок протокола). */
@@ -371,8 +372,59 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
     expect(body.profileSpec).not.toHaveProperty('url');
   });
 
-  it('ensure: профиля нет в каталоге → profileSpec не отправляется', async () => {
+  it('ensure: placement-поля и GPU-ресурсы профиля уходят в profileSpec', async () => {
     const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      profiles: {
+        gpu: {
+          url: ['http://executor-gpu:8080'],
+          timeoutMs: 30_000,
+          concurrency: 1,
+          failMode: 'fail',
+          image: 'registry.example/synth-executor:gpu',
+          resources: {
+            requests: { cpu: '1', 'nvidia.com/gpu': '1' },
+            limits: { 'nvidia.com/gpu': '1' },
+          },
+          annotations: { 'example.com/owner': 'platform' },
+          labels: { 'example.com/tier': 'gpu' },
+          nodeSelector: { 'example.com/pool': 'gpu' },
+          tolerations: [{ key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' }],
+          affinity: { nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: {} } },
+        },
+      },
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({ url: 'http://pool-1:8080' });
+      },
+    });
+
+    await provider.ensure({ scope: 'project', id: 'prj_1', class: 'exec', profile: 'gpu' });
+
+    const body = JSON.parse(calls[0]?.body ?? '{}');
+    expect(body.profileSpec).toEqual({
+      image: 'registry.example/synth-executor:gpu',
+      resources: {
+        requests: { cpu: '1', 'nvidia.com/gpu': '1' },
+        limits: { 'nvidia.com/gpu': '1' },
+      },
+      annotations: { 'example.com/owner': 'platform' },
+      labels: { 'example.com/tier': 'gpu' },
+      nodeSelector: { 'example.com/pool': 'gpu' },
+      tolerations: [{ key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' }],
+      affinity: { nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: {} } },
+    });
+  });
+
+  it('ensure: профиля нет в каталоге → profileSpec не отправляется', async () => {    const calls: Call[] = [];
     const provider = new HttpExecutionPoolProvider({
       url: 'http://provisioner:8080',
       tokenSecret: tokenPath,
@@ -964,5 +1016,77 @@ describe('PROP-135 Ф6b-1: список пулов и разбор ключа', 
     ]) {
       expect(() => parsePoolKey(bad)).toThrow();
     }
+  });
+});
+
+/**
+ * Прогрев образов (PROP-135, Ф4b-2b): HTTP-провайдер проксирует запрос в
+ * provisioner (`POST /v1/images/warm`), статический — прогрева не умеет.
+ */
+describe('PROP-135 Ф4b-2b: прогрев образов', () => {
+  it('http: запрос уходит в provisioner, итог разбирается', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        });
+        return jsonResponse({
+          results: [
+            { image: 'registry.example/synth-executor:gpu', ok: true, nodes: 3 },
+            { image: 'registry.example/synth-executor:bad', ok: false, nodes: 0, error: 'таймаут' },
+          ],
+        });
+      },
+    });
+
+    const results = await provider.warmImages([
+      'registry.example/synth-executor:gpu',
+      'registry.example/synth-executor:bad',
+    ]);
+
+    expect(calls[0]?.url).toBe('http://provisioner:8080/v1/images/warm');
+    expect(calls[0]?.method).toBe('POST');
+    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({
+      images: ['registry.example/synth-executor:gpu', 'registry.example/synth-executor:bad'],
+    });
+    expect(results).toEqual([
+      { image: 'registry.example/synth-executor:gpu', ok: true, nodes: 3 },
+      { image: 'registry.example/synth-executor:bad', ok: false, nodes: 0, error: 'таймаут' },
+    ]);
+  });
+
+  it('http: ответ без результатов → пустой список (без исключения)', async () => {
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async () => jsonResponse({}),
+    });
+    expect(await provider.warmImages(['registry.example/img:1'])).toEqual([]);
+  });
+
+  it('static: провайдер не умеет прогревать (метода нет)', () => {
+    const provider: ExecutionPoolProvider = new StaticExecutionPoolProvider({
+      default: { url: ['http://executor:8080'] },
+    });
+    expect(provider.warmImages).toBeUndefined();
+  });
+
+  it('isValidImageRef: пустое/с пробелами/недопустимые символы → false', async () => {
+    const { isValidImageRef } = await import('./pool-provider.js');
+    expect(isValidImageRef('registry.example/synth-executor:0.13.8')).toBe(true);
+    expect(isValidImageRef('registry.example/img@sha256:abcdef0123456789')).toBe(true);
+    expect(isValidImageRef('')).toBe(false);
+    expect(isValidImageRef('   ')).toBe(false);
+    expect(isValidImageRef('образ с пробелом')).toBe(false);
+    expect(isValidImageRef('образ/под:тег!')).toBe(false);
+    expect(isValidImageRef('x'.repeat(600))).toBe(false);
   });
 });

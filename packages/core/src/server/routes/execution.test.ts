@@ -23,6 +23,7 @@ import { createExecutionRoutes, type ExecutionProfilesDto } from './execution.js
 import type {
   ExecutionPoolKey,
   ExecutionPoolProvider,
+  ExecutionImageWarmResult,
   PoolInfo,
 } from '../../execution/pool-provider.js';
 import { poolKeyString } from '../../execution/pool-provider.js';
@@ -72,6 +73,9 @@ function fakeProvider(opts: {
   drainThrows?: boolean;
   releaseThrows?: boolean;
   withList?: boolean;
+  warmResults?: ExecutionImageWarmResult[];
+  warmThrows?: boolean;
+  withWarm?: boolean;
 } = {}): FakeProvider {
   const drained: string[] = [];
   const released: string[] = [];
@@ -92,6 +96,12 @@ function fakeProvider(opts: {
     provider.list = async () => {
       if (opts.listThrows) throw new Error('provisioner down');
       return opts.pools ?? [];
+    };
+  }
+  if (opts.withWarm !== false) {
+    provider.warmImages = async () => {
+      if (opts.warmThrows) throw new Error('provisioner down');
+      return opts.warmResults ?? [];
     };
   }
   return provider;
@@ -560,5 +570,140 @@ describe('PROP-135 Ф6b-1: guard по умолчанию (requireAuth)', () => {
     expect(
       (await app.request(`/api/v2/execution/pools/${key}`, { method: 'DELETE' })).status,
     ).toBe(403);
+  });
+});
+
+/**
+ * Прогрев образов (`POST /api/v2/execution/images/warm`): тело `{images}`
+ * → `{results}`. Guard — `writeGuard` (managed: ADMIN); провайдер без
+ * прогрева (static) — `501 EXECUTION_PROVIDER_UNAVAILABLE`.
+ */
+describe('PROP-135 Ф4b-2b: POST /api/v2/execution/images/warm', () => {
+  it('200: итог провайдера возвращается как есть', async () => {
+    const provider = fakeProvider({
+      warmResults: [
+        { image: 'registry.example/synth-executor:gpu', ok: true, nodes: 3 },
+        { image: 'registry.example/synth-executor:bad', ok: false, nodes: 0, error: 'таймаут' },
+      ],
+    });
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({ provider }),
+    });
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: ['registry.example/synth-executor:gpu'] }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      results: [
+        { image: 'registry.example/synth-executor:gpu', ok: true, nodes: 3 },
+        { image: 'registry.example/synth-executor:bad', ok: false, nodes: 0, error: 'таймаут' },
+      ],
+    });
+  });
+
+  it('400: пустой список образов', async () => {
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({ provider: fakeProvider() }),
+    });
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: [] }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('400: невалидная ссылка на образ', async () => {
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({ provider: fakeProvider() }),
+    });
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: ['не образ!'] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('400: больше 20 образов', async () => {
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({ provider: fakeProvider() }),
+    });
+    const images = Array.from({ length: 21 }, (_, index) => `registry.example/img:${index}`);
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('501: провайдер без прогрева (static)', async () => {
+    const app = appWith({
+      executionConfig: remoteConfig({ provider: 'static' }),
+      executionRouter: routerStub({ provider: fakeProvider({ withWarm: false }) }),
+    });
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: ['registry.example/synth-executor:gpu'] }),
+    });
+    expect(res.status).toBe(501);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('EXECUTION_PROVIDER_UNAVAILABLE');
+  });
+
+  it('501: провайдера нет (inline)', async () => {
+    const app = appWith({});
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: ['registry.example/synth-executor:gpu'] }),
+    });
+    expect(res.status).toBe(501);
+  });
+
+  it('503: сбой провайдера', async () => {
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({ provider: fakeProvider({ warmThrows: true }) }),
+    });
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: ['registry.example/synth-executor:gpu'] }),
+    });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('EXECUTION_PROVIDER_UNAVAILABLE');
+  });
+
+  it('guard: без аутентификации — 401', async () => {
+    const app = appWith({ executionConfig: remoteConfig() }, false);
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: ['registry.example/synth-executor:gpu'] }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('guard: writeGuard (managed — ADMIN) закрывает прогрев', async () => {
+    const deny = async (c: Context) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'Forbidden' } }, 403);
+    const app = new Hono();
+    app.route(
+      '/api/v2/execution',
+      createExecutionRoutes(
+        authKit(),
+        { executionConfig: remoteConfig(), executionRouter: routerStub({ provider: fakeProvider() }) },
+        { writeGuard: deny },
+      ),
+    );
+    const res = await app.request('/api/v2/execution/images/warm', {
+      method: 'POST',
+      body: JSON.stringify({ images: ['registry.example/synth-executor:gpu'] }),
+    });
+    expect(res.status).toBe(403);
   });
 });

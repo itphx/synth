@@ -22,6 +22,11 @@
        `/home/synth` (кэши pnpm/pip/corepack, `PYTHONUSERBASE`) — `emptyDir`. */ -}}
 {{- $roRootFs := eq (include "synth.readOnlyRootFilesystem" (dict "flag" (.Values.executor.readOnlyRootFilesystem | default false) "ctx" (.Values.executor.containerSecurityContext | default dict))) "true" -}}
 {{- $ownership := .Values.executor.ownershipInitContainer | default dict -}}
+{{- /* Пользовательские метки/аннотации пода. Служебные ключи исключаются:
+       иначе в YAML были бы дубли ключей (Kubernetes такое не принимает), а
+       служебные всё равно приоритетнее. */ -}}
+{{- $podLabels := omit (.Values.executor.podLabels | default dict) "app.kubernetes.io/name" "app.kubernetes.io/component" "app.kubernetes.io/instance" "synth.io/network" -}}
+{{- $podAnnotations := omit (.Values.executor.podAnnotations | default dict) "synth.io/build" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,6 +46,11 @@ spec:
   template:
     metadata:
       labels:
+        {{- /* Пользовательские метки пода (служебные — приоритетнее, дубли
+               ключей исключены выше). */}}
+        {{- with $podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- include "synth.executor.selectorLabels" . | nindent 8 }}
         {{- /* PROP-137b-2: сетевой класс пула — подпись `synth.io/network`.
                По ней политику класса выбирают поды (в том числе динамические
@@ -51,6 +61,10 @@ spec:
                шаблона. */}}
         synth.io/network: {{ include "synth.executor.networkClass" . }}
       annotations:
+        {{- /* Пользовательские аннотации пода (служебные — приоритетнее). */}}
+        {{- with $podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         synth.io/build: {{ .Chart.Version | quote }}
     spec:
       {{- with .Values.executor.imagePullSecrets }}

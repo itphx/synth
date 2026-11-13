@@ -12,6 +12,7 @@ import type { Hono } from 'hono';
 import type { ProvisionerKubernetesConfig } from './config.js';
 import type {
   KubernetesClient,
+  KubernetesDaemonSet,
   KubernetesManifest,
   KubernetesPod,
   KubernetesSecret,
@@ -153,11 +154,14 @@ const K8S_PROFILES = {
   default: { image: 'registry.example/synth-executor:catalog' },
 };
 
-/** In-memory Kubernetes API: поды и секреты в одном namespace. */
+/** In-memory Kubernetes API: поды, секреты и DaemonSet'ы в одном namespace. */
 class FakeKubernetesClient implements KubernetesClient {
   readonly createdPods: KubernetesManifest[] = [];
+  readonly createdDaemonSets: KubernetesManifest[] = [];
+  readonly deletedDaemonSets: string[] = [];
   private readonly pods = new Map<string, KubernetesPod>();
   private readonly secrets = new Map<string, KubernetesSecret>();
+  private readonly daemonSets = new Map<string, KubernetesDaemonSet>();
 
   async listPods(): Promise<KubernetesPod[]> {
     return [];
@@ -202,6 +206,26 @@ class FakeKubernetesClient implements KubernetesClient {
 
   async deleteSecret(name: string): Promise<void> {
     this.secrets.delete(name);
+  }
+
+  async createDaemonSet(manifest: KubernetesManifest): Promise<boolean> {
+    this.createdDaemonSets.push(manifest);
+    const name = String((manifest.metadata as { name?: string } | undefined)?.name ?? '');
+    if (this.daemonSets.has(name)) return false;
+    this.daemonSets.set(name, {
+      metadata: manifest.metadata as KubernetesDaemonSet['metadata'],
+      status: { numberReady: 2, desiredNumberScheduled: 2 },
+    });
+    return true;
+  }
+
+  async getDaemonSet(name: string): Promise<KubernetesDaemonSet | null> {
+    return this.daemonSets.get(name) ?? null;
+  }
+
+  async deleteDaemonSet(name: string): Promise<void> {
+    this.deletedDaemonSets.push(name);
+    this.daemonSets.delete(name);
   }
 }
 
@@ -624,5 +648,79 @@ describe('provisioner: диагностика и метрики', () => {
     expect(text).toContain('# TYPE synth_provisioner_pools gauge');
     expect(text).toContain('synth_provisioner_pools{profile="default",state="ready"} 1');
     expect(text).toContain('synth_provisioner_provision_total{outcome="ok"} 1');
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Прогрев образов (`POST /v1/images/warm`): DaemonSet на образ → ожидание
+ * готовности → удаление. Ошибка одного образа не валит остальные.
+ * ------------------------------------------------------------------------ */
+describe('provisioner: прогрев образов', () => {
+  it('200: итог по каждому образу, DaemonSet создан и удалён', async () => {
+    const { app, client } = makeKubernetesHarness();
+    const image = 'registry.example/synth-executor:0.13.8';
+    const res = await request(app, 'POST', '/v1/images/warm', {
+      body: { images: [image] },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<{ image: string; ok: boolean; nodes: number; error?: string }>;
+    };
+    expect(body.results).toEqual([{ image, ok: true, nodes: 2 }]);
+    expect(client.createdDaemonSets).toHaveLength(1);
+    expect(client.deletedDaemonSets).toHaveLength(1);
+  });
+
+  it('401: без токена прогрев недоступен', async () => {
+    const { app } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/images/warm', {
+      body: { images: ['registry.example/synth-executor:0.13.8'] },
+      token: null,
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('400: пустой список образов', async () => {
+    const { app } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/images/warm', { body: { images: [] } });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('400: невалидная ссылка на образ', async () => {
+    const { app } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/images/warm', {
+      body: { images: ['не образ!'] },
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('400: больше 20 образов', async () => {
+    const { app } = makeKubernetesHarness();
+    const images = Array.from({ length: 21 }, (_, index) => `registry.example/img:${index}`);
+    const res = await request(app, 'POST', '/v1/images/warm', { body: { images } });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('400: неизвестное поле в теле — strict-схема', async () => {
+    const { app } = makeKubernetesHarness();
+    const res = await request(app, 'POST', '/v1/images/warm', {
+      body: { images: ['registry.example/synth-executor:0.13.8'], unknownField: 1 },
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('static: прогрев не поддерживается — invalid_request', async () => {
+    const { app } = makeHarness();
+    const res = await request(app, 'POST', '/v1/images/warm', {
+      body: { images: ['registry.example/synth-executor:0.13.8'] },
+    });
+    expect(res.status).toBe(400);
+    const error = await readError(res);
+    expect(error.reason).toBe('invalid_request');
+    expect(error.message).toContain('kubernetes');
   });
 });

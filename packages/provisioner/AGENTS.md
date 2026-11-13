@@ -14,6 +14,7 @@
 | `POST` | `/v1/pools/{key}/touch` | Продлить жизнь пула (idle-таймер) |
 | `POST` | `/v1/pools/{key}/drain` | Удалить под с grace, секрет оставить |
 | `DELETE` | `/v1/pools/{key}` | Удалить пул и секрет |
+| `POST` | `/v1/images/warm` | Прогреть образы на нодах: `{images: string[]}` → `{results: [{image, ok, nodes, error?}]}` |
 | `GET` | `/v1/capabilities` | Диагностика: провайдер, профили, протокол, лимиты |
 | `GET` | `/health` | Liveness (единственный публичный маршрут) |
 | `GET` | `/metrics` | Метрики (exposition 0.0.4, нужен bearer) |
@@ -40,6 +41,41 @@
   **старого** provisioner'а тело строгое — запрос с `profileSpec` он отвергнет
   (`400`), поэтому provisioner новой версии обновляют раньше backend'а.
 
+## Scheduling-поля профиля и ресурсы
+
+Модель профиля (`profileSchema` в `config.ts`, каталог `SYNTH_PROVISIONER_PROFILES`
+и `profileSpec` в теле `POST /v1/pools` — одна схема):
+
+| Поле | Куда в pod spec | Правило |
+|---|---|---|
+| `annotations` | `metadata.annotations` | служебные `synth.io/*` **приоритетнее** |
+| `labels` | `metadata.labels` | служебные `synth.io/*`, `app.kubernetes.io/*` **приоритетнее** |
+| `nodeSelector` | `spec.nodeSelector` | ключ/значение — как у label'а Kubernetes |
+| `tolerations` | `spec.tolerations` | `operator: Exists\|Equal`, `effect: NoSchedule\|PreferNoSchedule\|NoExecute` |
+| `affinity` | `spec.affinity` | passthrough, предел 8 КиБ |
+| `resources.requests/limits` | `resources` контейнера | **произвольные** ключи (`nvidia.com/gpu: "1"`), значения — quantity Kubernetes |
+
+Валидация — fail-closed на разборе конфигурации (мусорный ключ label'а, не
+quantity, неизвестный оператор toleration → provisioner не стартует).
+
+## Прогрев образов (`POST /v1/images/warm`)
+
+- Тело: `{images: string[]}` — непустой список (≤ **20**) docker-ref'ов
+  (≤512 символов, без пробелов). Ответ: `{results: [{image, ok, nodes, error?}]}`.
+- Провайдер `kubernetes`: для каждого образа создаётся **DaemonSet**
+  (`synth.io/component=image-warmer`, метка с хешем образа,
+  `imagePullPolicy: Always`, `command: ["sh","-c","sleep 60"]`), ждётся
+  `numberReady >= desiredNumberScheduled` (до **300 с**), затем DaemonSet
+  **удаляется** (образ остаётся в кэше ноды). Обработка образов —
+  **последовательная**; ошибка одного образа не прерывает остальные.
+- Провайдер `static` прогрева не умеет → `400 invalid_request`
+  (`PoolService.warmImages`).
+- Права: `apps/daemonsets` — `create`, `get`, `list`, `watch`, `delete`
+  (`charts/synth/templates/provisioner-rbac.yaml`).
+- На стороне control plane — `POST /api/v2/execution/images/warm` (core,
+  `server/routes/execution.ts`): guard — `writeGuard` (managed: ADMIN),
+  `501 EXECUTION_PROVIDER_UNAVAILABLE`, если провайдер не умеет прогрев.
+
 ## Провайдеры и жизненный цикл
 
 - `static` — адрес из `profiles[].url`/`staticPools`; изоляции нет;
@@ -54,8 +90,8 @@
 
 Helm-шаблоны — `charts/synth/templates/provisioner-*.yaml` и values
 `provisioner.*` (RBAC: поды create/get/list/watch/delete, секреты
-create/get/delete в namespace релиза; образ —
-`docker/Dockerfile.provisioner`). Публикация —
+create/get/delete, daemonsets create/get/list/watch/delete в namespace
+релиза; образ — `docker/Dockerfile.provisioner`). Публикация —
 `scripts/publish-images.sh --only provisioner` (отдельный шаг
 `publish-images-gitea`). Документация: `docs/EXECUTION.md` §«Ф4b-2b»,
 `docs/CONFIGURATION.md` §«Provisioner пулов», `docs/OBSERVABILITY.md`
@@ -67,7 +103,8 @@ create/get/delete в namespace релиза; образ —
   labels подов/секретов (adopt) и память процесса (idle-таймеры сбрасываются
   рестартом).
 - Управляет ресурсами только в **одном** namespace (namespace релиза).
-- Прогрева пулов (`minWarm`) нет.
+- Прогрева пулов (`minWarm`) нет; прогрев **образов** (`/v1/images/warm`) —
+  только у kubernetes-провайдера (создаёт DaemonSet, ждёт готовности, удаляет).
 - Политика сети выбирает поды по label; API Kubernetes — по CIDR
   (`provisioner.networkPolicy.apiServerCidrs`), не по DNS.
 - `executorMcp` динамического пула не собирается (это делает core).
@@ -88,4 +125,4 @@ helm template synth charts/synth --set provisioner.enabled=true \
 
 Юнит-тесты кластер не поднимают: Kubernetes-клиент подменяется in-memory
 (`kubernetes.ts`/`kubernetes.test.ts`), под-манифест проверяется чистой
-функцией `buildPoolPodManifest`.
+функцией `buildPoolPodManifest`, манифест прогрева — `buildImageWarmerManifest`.

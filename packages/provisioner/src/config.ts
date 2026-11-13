@@ -188,17 +188,34 @@ const httpUrlSchema = z.string().trim().min(1).refine(
   { message: 'ожидается http(s)-URL' },
 );
 
-/** Значение ресурса (`500m`, `1Gi`, …) — количество разбирает Kubernetes. */
-const quantitySchema = z.string().trim().min(1);
+/**
+ * Значение ресурса (`500m`, `1Gi`, …) — количество разбирает Kubernetes.
+ *
+ * Формат — **quantity** Kubernetes: мусор отвергаем на старте (fail-closed),
+ * иначе под не поднялся бы с `422` от API-сервера.
+ */
+const quantitySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(
+    (value) => /^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$/.test(value),
+    { message: 'ожидается количество ресурса Kubernetes (например, 500m, 2, 4Gi)' },
+  );
 
-/** Ресурсы контейнера (requests/limits) — как в PodSpec. */
+/**
+ * Список ресурсов контейнера (requests/limits).
+ *
+ * Известные ключи объявлены явно, **произвольные — через `catchall`**
+ * (`nvidia.com/gpu`, `example.com/fpga`): без них GPU-профиль не задать.
+ */
 const resourceListSchema = z
   .object({
     cpu: quantitySchema.optional(),
     memory: quantitySchema.optional(),
     ephemeralStorage: quantitySchema.optional(),
   })
-  .strict();
+  .catchall(quantitySchema);
 
 /** Блок `resources` профиля: `requests` и/или `limits`. */
 const resourcesSchema = z
@@ -207,6 +224,68 @@ const resourcesSchema = z
     limits: resourceListSchema.optional(),
   })
   .strict();
+
+/**
+ * Ключ label/annotation Kubernetes (RFC 1123 с необязательным префиксом).
+ *
+ * Значение приходит от оператора — невалидный ключ API-сервер отверг бы под
+ * целиком, поэтому проверяем на разборе конфигурации.
+ */
+const kubernetesKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(253)
+  .regex(
+    /^([a-z0-9]([-a-z0-9.]*[a-z0-9])?\/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/,
+    { message: 'ожидается ключ label/annotation Kubernetes' },
+  );
+
+/** Значение label Kubernetes (≤63 символов, `[A-Za-z0-9._-]`). */
+const kubernetesLabelValueSchema = z
+  .string()
+  .trim()
+  .max(63)
+  .regex(/^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)?$/, {
+    message: 'ожидается значение label Kubernetes (до 63 символов)',
+  });
+
+/** Значение annotation Kubernetes — произвольная строка (длиннее label'а). */
+const kubernetesAnnotationValueSchema = z.string().max(4096);
+
+/** Операторы toleration пода. */
+const TOLERATION_OPERATORS = ['Exists', 'Equal'] as const;
+/** Эффекты toleration пода. */
+const TOLERATION_EFFECTS = ['NoSchedule', 'PreferNoSchedule', 'NoExecute'] as const;
+
+/** Toleration профиля (placement пода). */
+const tolerationSchema = z
+  .object({
+    /** Ключ taint'а ноды. */
+    key: z.string().trim().min(1).max(253).optional(),
+    /** Оператор сопоставления. */
+    operator: z.enum(TOLERATION_OPERATORS).optional(),
+    /** Значение taint'а (для `Equal`). */
+    value: z.string().trim().max(63).optional(),
+    /** Эффект toleration. */
+    effect: z.enum(TOLERATION_EFFECTS).optional(),
+    /** Срок жизни toleration для `NoExecute`, с. */
+    tolerationSeconds: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+/** Предел размера блока `affinity` (JSON) — 8 КиБ. */
+const AFFINITY_MAX_BYTES = 8 * 1024;
+
+/**
+ * `affinity` профиля — **passthrough** (структуру provisioner не
+ * интерпретирует), но с пределом размера: блок уезжает в pod spec как есть.
+ */
+const affinitySchema = z
+  .record(z.string().trim().min(1).max(253), z.unknown())
+  .refine((value) => (JSON.stringify(value)?.length ?? 0) <= AFFINITY_MAX_BYTES, {
+    message: `affinity: предел ${AFFINITY_MAX_BYTES} байт`,
+  });
 
 /** Имя Kubernetes-объекта (DNS-1123 subdomain, урезанное до 253 символов). */
 const kubernetesNameSchema = z
@@ -275,8 +354,23 @@ export const profileSchema = z
     url: httpUrlSchema.optional(),
     /** Сетевой класс профиля (подпись `synth.io/network`; политику задаёт чарт). */
     network: z.enum(['none', 'restricted', 'full']).optional(),
-    /** Ресурсы контейнера пула. */
+    /** Ресурсы контейнера пула (произвольные ключи — например, `nvidia.com/gpu`). */
     resources: resourcesSchema.optional(),
+    /**
+     * Произвольные аннотации пода (`metadata.annotations`).
+     *
+     * Служебные аннотации provisioner'а (`synth.io/*`) приоритетнее: конфликт
+     * решается в пользу служебных — иначе под перестал бы усыновляться.
+     */
+    annotations: z.record(kubernetesKeySchema, kubernetesAnnotationValueSchema).optional(),
+    /** Пользовательские метки пода (`metadata.labels`); служебные приоритетнее. */
+    labels: z.record(kubernetesKeySchema, kubernetesLabelValueSchema).optional(),
+    /** `spec.nodeSelector` пода — отбор нод по меткам. */
+    nodeSelector: z.record(kubernetesKeySchema, kubernetesLabelValueSchema).optional(),
+    /** `spec.tolerations` пода — правила размещения на «tainted» нодах. */
+    tolerations: z.array(tolerationSchema).optional(),
+    /** `spec.affinity` пода — passthrough (JSON, ≤8 КиБ). */
+    affinity: affinitySchema.optional(),
     /** `runtimeClassName` пода (например, `gvisor`, `kata`). */
     runtimeClass: kubernetesNameSchema.optional(),
     /** Read-only корневая ФС контейнера (по умолчанию `true`). */

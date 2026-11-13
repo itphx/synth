@@ -9,6 +9,7 @@
  * | `DELETE` | `/v1/pools/:key` | удалить пул | `202` | bearer |
  * | `GET` | `/v1/pools` | список пулов (без токенов) | `{pools}` | bearer |
  * | `GET` | `/v1/profiles` | метаданные профилей (без секретов) | `{profiles}` | bearer |
+ * | `POST` | `/v1/images/warm` | прогреть образы на нодах | `{results}` | bearer |
  * | `GET` | `/v1/capabilities` | провайдер, профили, лимиты | JSON | bearer |
  * | `GET` | `/health` | liveness | `{ok, provider}` | **без токена** |
  * | `GET` | `/metrics` | метрики (`synth_provisioner_*`) | exposition 0.0.4 | bearer |
@@ -36,6 +37,7 @@ import {
   ensurePoolRequestSchema,
   errorResponse,
   formatIssues,
+  warmImagesRequestSchema,
   type EnsurePoolResponse,
   type PoolsListResponse,
   type ProfilesListResponse,
@@ -44,6 +46,7 @@ import {
   type ProvisionerErrorReason,
   type ProvisionerHealth,
   type ProvisionerLimits,
+  type WarmImagesResponse,
 } from './protocol.js';
 
 /** Параметры Hono-приложения provisioner'а. */
@@ -197,6 +200,32 @@ export function createProvisionerApp(opts: ProvisionerAppOptions): Hono {
       limits: opts.limits,
     };
     return c.json(body, 200);
+  });
+
+  // Прогрев образов на нодах кластера: DaemonSet на каждый образ, ожидание
+  // готовности, удаление. Ошибка одного образа не валит остальные (итог — по
+  // каждому образу отдельной записью).
+  app.post('/v1/images/warm', async (c) => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      return fail(c, opts.metrics, 'invalid_request', 'тело запроса — невалидный JSON');
+    }
+    const parsed = warmImagesRequestSchema.safeParse(raw);
+    if (!parsed.success) {
+      return fail(c, opts.metrics, 'invalid_request', formatIssues(parsed.error));
+    }
+    try {
+      const results = await opts.service.warmImages(parsed.data.images);
+      const body: WarmImagesResponse = { results };
+      return c.json(body, 200);
+    } catch (err) {
+      if (err instanceof PoolProvisionerError) {
+        return fail(c, opts.metrics, providerReason(err.reason), err.message);
+      }
+      return fail(c, opts.metrics, 'internal_error', 'не удалось прогреть образы');
+    }
   });
 
   // Liveness — без токена (единственный публичный маршрут).

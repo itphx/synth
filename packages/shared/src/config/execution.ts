@@ -52,6 +52,7 @@ import {
   type ExecutionProfileNetwork,
   type ExecutionProfileOrigin,
   type ExecutionProfileResources,
+  type ExecutionProfileToleration,
 } from './types.js';
 
 /** Env-имена секции `execution` (ADR-077). */
@@ -124,6 +125,21 @@ export interface ResolvedExecutionProfile {
   network?: ExecutionProfileNetwork;
   resources?: ExecutionProfileResources;
   runtimeClass?: string;
+  /**
+   * Произвольные аннотации пода (`metadata.annotations`).
+   *
+   * Служебные аннотации provisioner'а (`synth.io/*`) приоритетнее: конфликт
+   * решается в пользу служебных (иначе под перестал бы усыновляться).
+   */
+  annotations?: Record<string, string>;
+  /** Пользовательские метки пода (`metadata.labels`). */
+  labels?: Record<string, string>;
+  /** `spec.nodeSelector` пода — отбор нод по меткам. */
+  nodeSelector?: Record<string, string>;
+  /** `spec.tolerations` пода — правила размещения на «tainted» нодах. */
+  tolerations?: ExecutionProfileToleration[];
+  /** `spec.affinity` пода — passthrough (JSON, ≤8 КиБ). */
+  affinity?: Record<string, unknown>;
   /** Read-only корневая ФС контейнера пула (ADR-137). */
   readOnlyRootFilesystem?: boolean;
   /**
@@ -724,6 +740,11 @@ function resolveExecutionProfiles(
       runtimeClass?: string;
       class?: ExecutionProfileClass;
       mcpServers?: string[];
+      annotations?: Record<string, string>;
+      labels?: Record<string, string>;
+      nodeSelector?: Record<string, string>;
+      tolerations?: ExecutionProfileToleration[];
+      affinity?: Record<string, unknown>;
     }
   > | undefined,
   common: {
@@ -752,6 +773,20 @@ function resolveExecutionProfiles(
     if (resources !== undefined) resolved.resources = resources;
     const runtimeClass = profile.runtimeClass?.trim();
     if (runtimeClass !== undefined && runtimeClass !== '') resolved.runtimeClass = runtimeClass;
+    // Placement профиля (аннотации/метки/отбор нод) — уходит в pod spec
+    // пула; пустые блоки не задаём (метаданные не должны шуметь).
+    const annotations = normalizeStringMap(profile.annotations);
+    if (annotations !== undefined) resolved.annotations = annotations;
+    const labels = normalizeStringMap(profile.labels);
+    if (labels !== undefined) resolved.labels = labels;
+    const nodeSelector = normalizeStringMap(profile.nodeSelector);
+    if (nodeSelector !== undefined) resolved.nodeSelector = nodeSelector;
+    if (profile.tolerations !== undefined && profile.tolerations.length > 0) {
+      resolved.tolerations = profile.tolerations.map((toleration) => ({ ...toleration }));
+    }
+    if (profile.affinity !== undefined && Object.keys(profile.affinity).length > 0) {
+      resolved.affinity = { ...profile.affinity };
+    }
     // Объявленный класс профиля (ADR-135, аддендум §11): эффективный класс
     // выводится из него, legacy-списка `browserProfiles` и `browserProfile`.
     if (profile.class !== undefined) resolved.class = profile.class;
@@ -765,6 +800,24 @@ function resolveExecutionProfiles(
     out[name] = resolved;
   }
   return out;
+}
+
+/**
+ * Карта строковых значений профиля (аннотации/метки/селектор): копия без
+ * пустых ключей и значений; пустая карта — `undefined` (поле не задано).
+ */
+function normalizeStringMap(
+  map: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (map === undefined) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(map)) {
+    const trimmedKey = key.trim();
+    const trimmedValue = typeof value === 'string' ? value.trim() : '';
+    if (trimmedKey === '' || trimmedValue === '') continue;
+    out[trimmedKey] = trimmedValue;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /**
@@ -788,14 +841,12 @@ function resolveResourceList(
   list: ExecutionProfileResources['requests'],
 ): ExecutionProfileResources['requests'] {
   if (list === undefined) return undefined;
-  const cpu = list.cpu?.trim();
-  const memory = list.memory?.trim();
-  const ephemeralStorage = list.ephemeralStorage?.trim();
+  // Список **произвольный** (`nvidia.com/gpu` и пр.) — копируются все ключи,
+  // а не только cpu/memory/ephemeralStorage.
   const out: NonNullable<ExecutionProfileResources['requests']> = {};
-  if (cpu !== undefined && cpu !== '') out.cpu = cpu;
-  if (memory !== undefined && memory !== '') out.memory = memory;
-  if (ephemeralStorage !== undefined && ephemeralStorage !== '') {
-    out.ephemeralStorage = ephemeralStorage;
+  for (const [key, value] of Object.entries(list)) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed !== '') out[key] = trimmed;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

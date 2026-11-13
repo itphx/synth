@@ -39,6 +39,12 @@ import {
   EXECUTION_POOL_PROVIDERS,
   EXECUTION_PROFILE_NETWORKS,
   EXECUTION_PROFILE_CLASSES,
+  executionAffinitySchema,
+  executionAnnotationValueSchema,
+  executionLabelValueSchema,
+  executionPodKeySchema,
+  executionResourceListSchema,
+  executionTolerationSchema,
 } from '../types/execution.js';
 // PROP-124: режимы инстанса для SSH-ключей (`ssh.mode`) — канонический список
 // в типах (browser-safe), чтобы UI и ядро читали один источник.
@@ -200,6 +206,9 @@ export type {
   ExecutionProfileResources,
   ExecutionProfileClass,
   ExecutionProfileOrigin,
+  ExecutionProfileToleration,
+  ExecutionTolerationEffect,
+  ExecutionTolerationOperator,
   ExecutionMcpServer,
 } from '../types/execution.js';
 
@@ -274,14 +283,25 @@ export const executionRemoteConfigSchema = z.object({
         network: z.enum(EXECUTION_PROFILE_NETWORKS).optional(),
         resources: z
           .object({
-            requests: z
-              .object({ cpu: z.string().optional(), memory: z.string().optional() })
-              .optional(),
-            limits: z
-              .object({ cpu: z.string().optional(), memory: z.string().optional() })
-              .optional(),
+            requests: executionResourceListSchema.optional(),
+            limits: executionResourceListSchema.optional(),
           })
           .optional(),
+        /**
+         * Произвольные аннотации пода (`metadata.annotations`); служебные
+         * `synth.io/*` приоритетнее.
+         */
+        annotations: z
+          .record(executionPodKeySchema, executionAnnotationValueSchema)
+          .optional(),
+        /** Пользовательские метки пода (`metadata.labels`). */
+        labels: z.record(executionPodKeySchema, executionLabelValueSchema).optional(),
+        /** `spec.nodeSelector` пода — отбор нод по меткам. */
+        nodeSelector: z.record(executionPodKeySchema, executionLabelValueSchema).optional(),
+        /** `spec.tolerations` пода — правила размещения на «tainted» нодах. */
+        tolerations: z.array(executionTolerationSchema).optional(),
+        /** `spec.affinity` пода — passthrough (JSON, ≤8 КиБ). */
+        affinity: executionAffinitySchema.optional(),
         runtimeClass: z.string().optional(),
         /**
          * Класс профиля (ADR-135, аддендум §11): `exec` (дефолт) | `browser` |

@@ -132,6 +132,7 @@
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-132 | Встроенный терминал в UI | 🧩 Предложение | [prop-132-ui-terminal.md](./prop-132-ui-terminal.md) |
 | PROP-133 | Доступ к проекту — участники, группы и видимость | 🧩 Предложение | [prop-133-project-access-sharing.md](./prop-133-project-access-sharing.md) |
+| PROP-140 | Класс исполнителей MCP — пулы, хостящие MCP-серверы | 🧩 Предложение | [prop-140-mcp-executor-class.md](./prop-140-mcp-executor-class.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -186,5 +187,5 @@
 
 ---
 
-Всего документов: 120 (Решения: 59, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 2).
+Всего документов: 121 (Решения: 59, Частично: 27, Предложения: 25, Vision: 7, Icebox: 1, Legacy: 2).
 Удалено: 26 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

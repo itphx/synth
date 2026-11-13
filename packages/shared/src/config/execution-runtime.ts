@@ -97,6 +97,19 @@ function materializeRuntimeProfile(
   if (profile.network !== undefined) resolved.network = profile.network;
   const resources = normalizeRuntimeResources(profile.resources);
   if (resources !== undefined) resolved.resources = resources;
+  // Placement профиля (аннотации/метки/отбор нод) — уходит в pod spec пула.
+  const annotations = normalizeStringMap(profile.annotations);
+  if (annotations !== undefined) resolved.annotations = annotations;
+  const labels = normalizeStringMap(profile.labels);
+  if (labels !== undefined) resolved.labels = labels;
+  const nodeSelector = normalizeStringMap(profile.nodeSelector);
+  if (nodeSelector !== undefined) resolved.nodeSelector = nodeSelector;
+  if (profile.tolerations !== undefined && profile.tolerations.length > 0) {
+    resolved.tolerations = profile.tolerations.map((toleration) => ({ ...toleration }));
+  }
+  if (profile.affinity !== undefined && Object.keys(profile.affinity).length > 0) {
+    resolved.affinity = { ...profile.affinity };
+  }
   const runtimeClass = profile.runtimeClass?.trim();
   if (runtimeClass !== undefined && runtimeClass !== '') resolved.runtimeClass = runtimeClass;
   if (profile.readOnlyRootFilesystem !== undefined) {
@@ -175,14 +188,59 @@ function normalizeResourceList(
   list: ExecutionProfileResources['requests'],
 ): ExecutionProfileResources['requests'] {
   if (list === undefined) return undefined;
+  // Список ресурсов **произвольный** (`nvidia.com/gpu` и пр.) — копируются
+  // все ключи, а не только cpu/memory/ephemeralStorage.
   const out: NonNullable<ExecutionProfileResources['requests']> = {};
-  const cpu = list.cpu?.trim();
-  const memory = list.memory?.trim();
-  const ephemeralStorage = list.ephemeralStorage?.trim();
-  if (cpu !== undefined && cpu !== '') out.cpu = cpu;
-  if (memory !== undefined && memory !== '') out.memory = memory;
-  if (ephemeralStorage !== undefined && ephemeralStorage !== '') {
-    out.ephemeralStorage = ephemeralStorage;
+  for (const [key, value] of Object.entries(list)) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed !== '') out[key] = trimmed;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Карта строковых значений профиля (аннотации/метки/селектор): копия без
+ * пустых ключей и значений; пустая карта — `undefined` (поле не задано).
+ */
+function normalizeStringMap(
+  map: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (map === undefined) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(map)) {
+    const trimmedKey = key.trim();
+    const trimmedValue = typeof value === 'string' ? value.trim() : '';
+    if (trimmedKey === '' || trimmedValue === '') continue;
+    out[trimmedKey] = trimmedValue;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Ресурсы профиля → форма runtime-профиля: только **заданные** значения
+ * (без `undefined`), список ключей произвольный (`nvidia.com/gpu`).
+ */
+function toRuntimeResources(
+  resources: ExecutionProfileResources,
+): NonNullable<ExecutionRuntimeProfile['resources']> {
+  const out: NonNullable<ExecutionRuntimeProfile['resources']> = {};
+  const requests = toRuntimeResourceList(resources.requests);
+  const limits = toRuntimeResourceList(resources.limits);
+  if (requests !== undefined) out.requests = requests;
+  if (limits !== undefined) out.limits = limits;
+  return out;
+}
+
+/** Список ресурсов без пустых значений (`undefined` — блок пуст). */
+function toRuntimeResourceList(
+  list: ExecutionProfileResources['requests'],
+): NonNullable<NonNullable<ExecutionRuntimeProfile['resources']>['requests']> | undefined {
+  if (list === undefined) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(list)) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed !== '') out[key] = trimmed;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -341,7 +399,22 @@ export function executionRuntimeSettingsFromResolved(
     if (profile.image !== undefined && profile.image !== '') entry.image = profile.image;
     if (profile.url.length > 0) entry.url = [...profile.url];
     if (profile.network !== undefined) entry.network = profile.network;
-    if (profile.resources !== undefined) entry.resources = profile.resources;
+    if (profile.resources !== undefined) entry.resources = toRuntimeResources(profile.resources);
+    if (profile.annotations !== undefined && Object.keys(profile.annotations).length > 0) {
+      entry.annotations = { ...profile.annotations };
+    }
+    if (profile.labels !== undefined && Object.keys(profile.labels).length > 0) {
+      entry.labels = { ...profile.labels };
+    }
+    if (profile.nodeSelector !== undefined && Object.keys(profile.nodeSelector).length > 0) {
+      entry.nodeSelector = { ...profile.nodeSelector };
+    }
+    if (profile.tolerations !== undefined && profile.tolerations.length > 0) {
+      entry.tolerations = profile.tolerations.map((toleration) => ({ ...toleration }));
+    }
+    if (profile.affinity !== undefined && Object.keys(profile.affinity).length > 0) {
+      entry.affinity = { ...profile.affinity };
+    }
     if (profile.runtimeClass !== undefined && profile.runtimeClass !== '') {
       entry.runtimeClass = profile.runtimeClass;
     }

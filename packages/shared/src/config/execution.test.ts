@@ -530,8 +530,42 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
     expect('resources' in resolved.remote.profiles.empty!).toBe(false);
   });
 
-  it('профиль без адресов при пустом общем url → непригоден (url пуст)', () => {
-    const c = withExecution({
+  it('placement-поля профиля и произвольные ресурсы (GPU) доезжают в резолв', () => {
+    const c = withRemote({
+      profiles: {
+        gpu: {
+          url: ['http://gpu:8080'],
+          image: 'synth-executor:0.13.9-full',
+          annotations: { 'example.com/owner': 'platform' },
+          labels: { 'example.com/tier': 'gpu' },
+          nodeSelector: { 'example.com/pool': 'gpu' },
+          tolerations: [{ key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' }],
+          affinity: { nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: {} } },
+          resources: {
+            requests: { cpu: '1', 'nvidia.com/gpu': '1' },
+            limits: { 'nvidia.com/gpu': '1' },
+          },
+        },
+      },
+    });
+    const resolved = resolveExecutionConfig(c, {});
+    const profile = resolved.remote.profiles.gpu;
+
+    expect(profile?.annotations).toEqual({ 'example.com/owner': 'platform' });
+    expect(profile?.labels).toEqual({ 'example.com/tier': 'gpu' });
+    expect(profile?.nodeSelector).toEqual({ 'example.com/pool': 'gpu' });
+    expect(profile?.tolerations).toEqual([
+      { key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' },
+    ]);
+    expect(profile?.affinity).toEqual({
+      nodeAffinity: { requiredDuringSchedulingIgnoredDuringExecution: {} },
+    });
+    // Произвольные ресурсы не теряются (GPU).
+    expect(profile?.resources?.requests).toEqual({ cpu: '1', 'nvidia.com/gpu': '1' });
+    expect(profile?.resources?.limits).toEqual({ 'nvidia.com/gpu': '1' });
+  });
+
+  it('профиль без адресов при пустом общем url → непригоден (url пуст)', () => {    const c = withExecution({
       remote: {
         ...cfg.execution.remote,
         url: [],
