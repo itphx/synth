@@ -222,6 +222,42 @@ describe('McpManager', () => {
     expect(names).toEqual(['test-server_tool1', 'test-server_tool2']);
   });
 
+  describe('hiddenServers: инструменты не регистрируются, сервер жив', () => {
+    it('скрытый сервер подключается, но его тулы в реестр не попадают', async () => {
+      mockClientConnected = true;
+      // Нормализация: пробелы/пустые имена и дубли не создают «фантомных» записей.
+      const hidden = new McpManager({ hiddenServers: [' test-server ', '', 'test-server'] });
+      hidden.setConfig({ 'test-server': makeStdioConfig() });
+
+      expect(hidden.isHiddenServer('test-server')).toBe(true);
+      expect(hidden.isHiddenServer('')).toBe(false);
+
+      const names = await hidden.registerTools('test-server', registry);
+
+      expect(names).toEqual([]);
+      expect(registry.list()).toEqual([]);
+      // Сервер остаётся подключённым и вызываемым (как браузерный у исполнителя).
+      expect(mockClientConnect).toHaveBeenCalled();
+      expect(hidden.getServerStatus('test-server')).toBe('connected');
+      expect(hidden.getConfiguredServers().map((s) => s.name)).toEqual(['test-server']);
+      await expect(hidden.callServerTool('test-server', 'tool1', {})).resolves.toEqual({
+        content: 'tool result',
+        isError: false,
+      });
+    });
+
+    it('без hidden — прежнее поведение (тулы регистрируются)', async () => {
+      mockClientConnected = true;
+      const plain = new McpManager();
+      plain.setConfig({ 'test-server': makeStdioConfig() });
+
+      const names = await plain.registerTools('test-server', registry);
+
+      expect(names).toEqual(['test-server_tool1', 'test-server_tool2']);
+      expect(plain.isHiddenServer('test-server')).toBe(false);
+    });
+  });
+
   describe('registerTools: контекст сессии в _meta (synth/session_id)', () => {
     function makeCtx(sessionId: string, extra?: Record<string, unknown>): ToolContext {
       return { sessionId, messageId: 'msg-1', workingDir: '/tmp', extra };

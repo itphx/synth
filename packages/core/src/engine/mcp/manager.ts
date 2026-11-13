@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { McpServerConfig, McpNetworkPolicy, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust, ToolDefinition } from '@itphx/synth-shared';
+import type { McpServerConfig, McpNetworkPolicy, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust, ResolvedExecutionConfig, ToolDefinition } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult, ToolAttachmentRef } from '@itphx/synth-shared';
@@ -11,7 +11,7 @@ import type { RemoteMcpSource } from './remote-mcp-source.js';
 import { evaluateMcpNetworkAccess, hostFromUrl, isHttpMcpConfig } from './network-policy.js';
 import { currentEgressLog } from '../net/egress-runtime.js';
 import { sanitizeEgressTarget } from '../net/egress-guard.js';
-import { info, warning } from '../../logger.js';
+import { debug, info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
 
@@ -26,6 +26,27 @@ export interface McpManagerOptions {
    * вызова и circuit breaker'а.
    */
   createClient?: (name: string, config: McpServerConfig) => McpClientLike;
+  /**
+   * Серверы, инструменты которых **не** регистрируются в реестре, хотя сам
+   * сервер остаётся подключённым (статус/`callServerTool`). Так браузерный
+   * MCP-сервер исполнителя (`execution.remote.browserMcpServer`, дефолт
+   * `playwright`) не дублирует встроенные `browser_*`-тулы: исполнитель
+   * вызывает его прямым HTTP (`POST /mcp/call`), а модели нужны только
+   * встроенные тулы.
+   */
+  hiddenServers?: readonly string[];
+}
+
+/**
+ * Скрытые MCP-серверы по конфигу исполнения: в `remote` — браузерный сервер
+ * (его инструменты дублировали бы встроенные `browser_*`), иначе — пусто.
+ */
+export function hiddenMcpServersForExecution(
+  config?: ResolvedExecutionConfig | null,
+): string[] {
+  if (!config || config.mode !== 'remote') return [];
+  const name = config.remote?.browserMcpServer?.trim();
+  return name ? [name] : [];
 }
 
 interface ServerEntry {
@@ -33,6 +54,16 @@ interface ServerEntry {
   registeredToolNames: string[];
   errorCount: number;
   lastErrorTime: number;
+}
+
+/** Нормализация списка скрытых серверов: trim, без пустых имён, без дублей. */
+function normalizeHiddenServers(names: readonly string[] | undefined): Set<string> {
+  const set = new Set<string>();
+  for (const name of names ?? []) {
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (trimmed) set.add(trimmed);
+  }
+  return set;
 }
 
 export class McpManager {
@@ -62,6 +93,12 @@ export class McpManager {
   /** Фабрика клиента (тесты/расширения; по умолчанию — `McpClient`). */
   private readonly _createClientFactory: McpManagerOptions['createClient'];
   /**
+   * Серверы, чьи инструменты не регистрируются (например, браузерный сервер
+   * исполнителя — его роль играют встроенные `browser_*`-тулы). Сам сервер
+   * остаётся подключённым и вызываемым.
+   */
+  private _hiddenServers: Set<string>;
+  /**
    * Серверы пула исполнителей (ADR-077 шаг B2): **runtime-записи**, не
    * персистятся в реестр и не редактируются пользователем. Живут только в
    * памяти процесса; после рестарта состав перечитывается источником.
@@ -90,6 +127,21 @@ export class McpManager {
 
   constructor(opts: McpManagerOptions = {}) {
     this._createClientFactory = opts.createClient;
+    this._hiddenServers = normalizeHiddenServers(opts.hiddenServers);
+  }
+
+  /**
+   * Серверы, инструменты которых не регистрируются (встроенные тулы вместо
+   * MCP-дублей). Сервер от этого не отключается: статус и `callServerTool`
+   * продолжают работать.
+   */
+  setHiddenServers(names: readonly string[] | undefined): void {
+    this._hiddenServers = normalizeHiddenServers(names);
+  }
+
+  /** Скрыт ли сервер (его инструменты не попадают в реестр)? */
+  isHiddenServer(name: string): boolean {
+    return this._hiddenServers.has(name);
   }
 
   /**
@@ -663,6 +715,15 @@ export class McpManager {
 
     const serverEntry = this._servers.get(serverName);
     if (!serverEntry) return [];
+
+    // Скрытый сервер: подключение состоялось (статус/`callServerTool` работают),
+    // но инструменты в реестр не идут — их роль играют встроенные тулы
+    // (например, `browser_*` вместо инструментов Playwright MCP).
+    if (this._hiddenServers.has(serverName)) {
+      serverEntry.registeredToolNames = [];
+      debug('MCP', `Инструменты сервера "${serverName}" скрыты — регистрация пропущена`);
+      return [];
+    }
 
     const prefixedName = (toolName: string) => `${serverName}_${toolName}`;
     const client = serverEntry.client;

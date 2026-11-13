@@ -26,6 +26,7 @@ import {
   enqueueUserMessage,
   requeueMessages,
   createToolRegistry, createAgentRegistry, McpManager,
+  hiddenMcpServersForExecution,
   DEFAULT_AGENT_ID, registerStoredAgents, migrateLegacyStoredAgents,
   AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
@@ -1125,6 +1126,12 @@ export async function createBackendDeps(
   // Тот же порт получают оркестратор (тулы, inline-shell, детект зависимостей)
   // и резолвер проектных инструкций.
   const execution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
+  // PROP-135 D1/D2: браузерный MCP-сервер исполнителя (дефолт `playwright`)
+  // остаётся подключённым — его вызывает `ExecutionPort.browserCall` напрямую
+  // (`POST /mcp/call`), — но его инструменты не регистрируются: модели нужны
+  // встроенные `browser_*`, а `playwright_*` были дублями в реестре/промпте.
+  // `inline`/пустое имя → скрытых нет (прежнее поведение).
+  mcpManager.setHiddenServers(hiddenMcpServersForExecution(execution));
   // ADR-094/ADR-077: метрики пула исполнителей (`synth_executor_*`) — приёмник
   // для клиента удалённого порта (очередь, занятость, ожидание, исход).
   const executorMetrics = metrics ? createExecutorMetricsCollector(metrics) : undefined;

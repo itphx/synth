@@ -382,6 +382,14 @@ Discovery и вызовы MCP-инструментов исполнителя и
 `browser_wait` → `browser_wait_for`, `browser_screenshot` → `browser_take_screenshot`. `ref`
 элемента берётся из `browser_snapshot`; `time` у `browser_wait` — **секунды** (как у Playwright).
 
+**Дублей `playwright_*` в реестре/промпте нет.** MCP-сервер браузера **остаётся подключённым**
+(его вызывает `ExecutionPort.browserCall` → `POST /mcp/call` напрямую, не через менеджер), но его
+инструменты не регистрируются: `McpManager` скрывает сервер `execution.remote.browserMcpServer`
+(`hiddenServers`; заполняется из deps — core `server/app/deps.ts`, backend `app/deps.ts` через
+`hiddenMcpServersForExecution`). Скрытый сервер виден в списке/статусе, его `callServerTool`
+работает, discovery (`getServerTools`) не подавляется — в реестр тулов просто ничего не попадает.
+В `inline`-режиме, а также при пустом `browserMcpServer` скрытых серверов нет.
+
 Почему так: discovery глобальный (состав MCP-серверов читается с инстанс-пула), а браузерный
 пул — проектный; при per-project пулах тулы «пропадали» бы для проекта, у которого браузерный
 сервер поднят только в его пуле. Статическая схема тула не зависит от discovery.

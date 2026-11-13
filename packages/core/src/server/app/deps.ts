@@ -25,6 +25,7 @@ import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, requeueMessages, createToolRegistry, createAgentRegistry, McpManager,
+  hiddenMcpServersForExecution,
   DEFAULT_AGENT_ID, registerStoredAgents, migrateLegacyStoredAgents,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   isFfmpegAvailable,
@@ -531,7 +532,13 @@ export async function createStandaloneDeps(
       : startAnalyticsRollupPruner(analyticsRollups, {
           getRetentionDays: () => config.analyticsConfig?.retentionDays ?? 400,
         });
-  const mcpManager = new McpManager();
+  const mcpManager = new McpManager({
+    // PROP-135 D1/D2: браузерный MCP-сервер исполнителя остаётся подключённым
+    // (его вызывает `ExecutionPort.browserCall` → `POST /mcp/call`), но его
+    // инструменты не регистрируются — у модели есть встроенные `browser_*`.
+    // `inline` → пусто (`browserMcpServer` там ни при чём).
+    hiddenServers: hiddenMcpServersForExecution(config.executionConfig),
+  });
   // ADR-071 §2.5: единый источник истины для конфигурации MCP-серверов —
   // реестр `McpRegistryStore` (в standalone так же, как в managed). Instance-
   // серверы из `config.mcpServers` сидируются в реестр при старте (идемпотентно

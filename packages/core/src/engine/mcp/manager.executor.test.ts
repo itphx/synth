@@ -7,7 +7,7 @@
  * меняется: фабрика клиента и прежние пути работают как раньше.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { McpManager } from './manager.js';
+import { McpManager, hiddenMcpServersForExecution } from './manager.js';
 import { ExecutorMcpSource, attachExecutorMcpSource } from './executor-mcp-source.js';
 import type { ExecutorFetch } from './executor-mcp-client.js';
 import type { ToolRegistry } from '../tools/registry.js';
@@ -138,6 +138,77 @@ describe('McpManager: серверы исполнителя (ADR-077 шаг B2)'
       tool: 'browser_navigate',
       arguments: { url: 'https://2.example' },
     });
+  });
+
+  it('скрытый сервер исполнителя: тулы не зарегистрированы, сервер подключён и вызывается', async () => {
+    // PROP-135 D1/D2: браузерный MCP-сервер (`playwright`) вызывает
+    // `ExecutionPort.browserCall` напрямую; его инструменты дублировали бы
+    // встроенные `browser_*` — менеджер их не регистрирует.
+    const callBodies: Array<Record<string, unknown>> = [];
+    const manager = new McpManager({ hiddenServers: ['playwright-mcp'] });
+    manager.setExecutorMcpSource(makeSource(playwrightExecutorFetch((body) => callBodies.push(body))));
+    const registry = makeMockToolRegistry();
+
+    await manager.refreshExecutorServers();
+
+    // Сервер остался в составе/списке/статусе.
+    expect(manager.isExecutorServer('playwright-mcp')).toBe(true);
+    expect(manager.getExecutorServerNames()).toEqual(['playwright-mcp']);
+    expect(manager.isHiddenServer('playwright-mcp')).toBe(true);
+
+    await manager.ensureToolsLoaded(['playwright-mcp'], registry);
+
+    expect(manager.getServerStatus('playwright-mcp')).toBe('connected');
+    expect(manager.getConfiguredServers().map((s) => s.name)).toContain('playwright-mcp');
+    // Discovery работает, но в реестр ничего не попало.
+    expect(manager.getServerTools('playwright-mcp')).toHaveLength(1);
+    expect(registry.list()).toEqual([]);
+
+    // Прямой вызов по имени сервера/инструмента не сломан.
+    const direct = await manager.callServerTool('playwright-mcp', 'browser_navigate', {
+      url: 'https://example.com',
+    });
+    expect(direct).toEqual({ content: 'navigated', isError: false });
+    expect(callBodies).toEqual([
+      { server: 'playwright-mcp', tool: 'browser_navigate', arguments: { url: 'https://example.com' } },
+    ]);
+
+    // Повторный refresh (с реестром) не падает и не подмешивает тулы.
+    await expect(manager.refreshExecutorServers(registry)).resolves.toBeUndefined();
+    expect(registry.list()).toEqual([]);
+    expect(manager.isExecutorServer('playwright-mcp')).toBe(true);
+  });
+
+  it('скрыт только указанный сервер: соседний сервер регистрирует тулы штатно', async () => {
+    const fetchImpl: ExecutorFetch = (url) => {
+      if (url.endsWith('/mcp/servers')) {
+        return Promise.resolve(
+          json([
+            { name: 'playwright-mcp', status: 'up', toolCount: 1 },
+            { name: 'other-mcp', status: 'up', toolCount: 1 },
+          ]),
+        );
+      }
+      if (url.endsWith('/mcp/tools')) {
+        return Promise.resolve(
+          json([
+            { server: 'playwright-mcp', name: 'browser_navigate', description: '', inputSchema: {} },
+            { server: 'other-mcp', name: 'other_tool', description: '', inputSchema: {} },
+          ]),
+        );
+      }
+      return Promise.resolve(json({ content: 'ok', isError: false }));
+    };
+    const manager = new McpManager({ hiddenServers: ['playwright-mcp'] });
+    manager.setExecutorMcpSource(makeSource(fetchImpl));
+    const registry = makeMockToolRegistry();
+
+    await manager.refreshExecutorServers();
+    await manager.ensureToolsLoaded(['playwright-mcp', 'other-mcp'], registry);
+
+    expect(registry.list().map((tool) => tool.name)).toEqual(['other-mcp_other_tool']);
+    expect(manager.getServerStatus('playwright-mcp')).toBe('connected');
+    expect(manager.getServerStatus('other-mcp')).toBe('connected');
   });
 
   it('сервер в idle не отбрасывается: он в списке, его тулы доступны, вызов доходит до исполнителя', async () => {
@@ -524,5 +595,27 @@ describe('McpManager: circuit breaker для серверов исполните
     // Circuit open: попыток подключения больше нет.
     await manager.ensureToolsLoaded(['srv'], registry);
     expect(connectCalls).toBe(6);
+  });
+});
+
+describe('hiddenMcpServersForExecution', () => {
+  function execution(mode: 'inline' | 'remote', browserMcpServer?: string) {
+    return { mode, remote: { browserMcpServer } } as unknown as Parameters<
+      typeof hiddenMcpServersForExecution
+    >[0];
+  }
+
+  it('remote → браузерный сервер; inline/undefined/пустое имя → пусто', () => {
+    expect(hiddenMcpServersForExecution(undefined)).toEqual([]);
+    expect(hiddenMcpServersForExecution(null)).toEqual([]);
+    expect(hiddenMcpServersForExecution(execution('inline', 'playwright'))).toEqual([]);
+    expect(hiddenMcpServersForExecution(execution('remote', 'playwright'))).toEqual(['playwright']);
+    expect(hiddenMcpServersForExecution(execution('remote', '  browser-mcp  '))).toEqual([
+      'browser-mcp',
+    ]);
+    // Пустое имя — скрытых серверов нет (не «скрыть всё»).
+    expect(hiddenMcpServersForExecution(execution('remote', ''))).toEqual([]);
+    expect(hiddenMcpServersForExecution(execution('remote', '   '))).toEqual([]);
+    expect(hiddenMcpServersForExecution(execution('remote', undefined))).toEqual([]);
   });
 });
