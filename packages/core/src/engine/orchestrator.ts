@@ -8855,9 +8855,15 @@ export class ChatOrchestrator {
       if (shellDirectories.length > 0) next = this._applyDirectoryAllow(next, shellDirectories);
       return next ?? this._permissionConfig;
     };
-    const next = apply(session.settings.permission);
+    // База правила читается **внутри лока** (`s` — свежая копия документа из
+    // хранилища), а не из `session`: у живого хода и у HTTP-ответа на
+    // восстановленное ожидание это снимок на момент вызова. Грант от снимка
+    // затирал более свежие правила — при нескольких одобрениях подряд в
+    // «Сессионных одобрениях» оставался только последний пункт.
+    let next: PermissionConfig = session.settings.permission ?? this._permissionConfig;
 
     await this._sessionManager.withLock(session.id, async (s) => {
+      next = apply(s.settings.permission);
       s.settings.permission = next;
       await this._sessionManager.saveSession(s);
       this._eventBus.publish(session.id, 'session.updated', {

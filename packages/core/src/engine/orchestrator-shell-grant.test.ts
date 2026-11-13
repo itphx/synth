@@ -24,6 +24,11 @@ const proto = ChatOrchestrator.prototype as unknown as {
     cfg: PermissionConfig | undefined,
     directories: readonly string[],
   ) => PermissionConfig;
+  _applyToolAllow: (
+    cfg: PermissionConfig | undefined,
+    toolName: string,
+    paths: string[],
+  ) => PermissionConfig;
   _grantSessionToolAllow: (
     session: unknown,
     toolName: string,
@@ -474,5 +479,114 @@ describe('shell-грант сессии: каталог вместо патте�
     expect(saveSession).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
     expect(granted).toHaveLength(0);
+  });
+});
+
+/**
+ * Гонка «несколько одобрений подряд»: вызывающий держит **снимок** сессии
+ * (у живого хода это объект хода, у HTTP-ответа — загруженный ранее документ),
+ * а `withLock` отдаёт свежую копию из хранилища. Грант обязан считаться от
+ * свежей базы внутри лока, иначе второй грант затирает первый (в панели
+ * «Сессионные одобрения» виден только последний пункт).
+ */
+describe('грант сессии: последовательные одобрения не затирают друг друга', () => {
+  type GrantSession = {
+    id: string;
+    ownerId?: string;
+    parentId?: string;
+    settings: { permission: PermissionConfig };
+  };
+
+  const baseSession = (): GrantSession => ({
+    id: 's1',
+    ownerId: 'user1',
+    settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
+  });
+
+  /** Фейк менеджера сессий с настоящей семантикой: лок отдаёт копию из стора. */
+  const storeBackedCtx = (initial: GrantSession) => {
+    const store = new Map<string, GrantSession>([[initial.id, structuredClone(initial)]]);
+    const saveSession = vi.fn(async (s: GrantSession) => {
+      store.set(s.id, structuredClone(s));
+    });
+    const publish = vi.fn();
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+      _sessionManager: {
+        withLock: async (id: string, fn: (s: GrantSession) => Promise<void>) =>
+          fn(structuredClone(store.get(id)!)),
+        saveSession,
+      },
+      _eventBus: { publish },
+      _applyShellAllow: proto._applyShellAllow,
+      _applyDirectoryAllow: proto._applyDirectoryAllow,
+      _applyToolAllow: proto._applyToolAllow,
+    };
+    return { ctx, store, saveSession };
+  };
+
+  it('файловый тул: два пути из одного устаревшего снимка — оба правила в сессии', async () => {
+    const session = baseSession();
+    const { ctx, store, saveSession } = storeBackedCtx(session);
+
+    const first = await proto._grantSessionToolAllow.call(
+      ctx,
+      session,
+      'read_file',
+      { file_path: 'a.txt' },
+      '/workspace/project',
+    );
+    // Второй вызов идёт с **тем же** объектом `session` (снимок до первого лока).
+    const second = await proto._grantSessionToolAllow.call(
+      ctx,
+      session,
+      'read_file',
+      { file_path: 'b.txt' },
+      '/workspace/project',
+    );
+
+    const expected = {
+      '/workspace/project/a.txt': 'allow',
+      '/workspace/project/b.txt': 'allow',
+    };
+    expect(first.rules.read_file).toEqual({ '/workspace/project/a.txt': 'allow' });
+    expect(second.rules.read_file).toEqual(expected);
+    // В хранилище — оба пути, второй грант первый не затёр.
+    expect(store.get('s1')!.settings.permission.rules.read_file).toEqual(expected);
+    expect(saveSession).toHaveBeenCalledTimes(2);
+    // Сам снимок вызывающего не мутирован (правило живёт в сторе).
+    expect(session.settings.permission.rules.read_file).toBeUndefined();
+  });
+
+  it('shell: два каталога из одного устаревшего снимка — оба правила в сессии', async () => {
+    const session = baseSession();
+    const { ctx, store } = storeBackedCtx(session);
+
+    const first = await proto._grantSessionToolAllow.call(
+      ctx,
+      session,
+      'execute_shell',
+      { command: 'grep -l x a/*.js' },
+      '/workspace/project',
+      { params: { path: 'a/*.js' }, askKind: 'dynamic' },
+    );
+    const second = await proto._grantSessionToolAllow.call(
+      ctx,
+      session,
+      'execute_shell',
+      { command: 'grep -l x b/*.js' },
+      '/workspace/project',
+      { params: { path: 'b/*.js' }, askKind: 'dynamic' },
+    );
+
+    const expected = {
+      '/workspace/project/a/*': 'allow',
+      '/workspace/project/b/*': 'allow',
+    };
+    expect(first.rules.external_directory).toEqual({ '/workspace/project/a/*': 'allow' });
+    expect(second.rules.external_directory).toEqual(expected);
+    expect(store.get('s1')!.settings.permission.rules.external_directory).toEqual(expected);
+    // Командный паттерн по-прежнему не выдаётся.
+    expect(store.get('s1')!.settings.permission.rules.execute_shell).toBeUndefined();
   });
 });
