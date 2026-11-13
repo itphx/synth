@@ -1,13 +1,18 @@
 /**
- * Встроенные browser-тулы (D1): `browser_navigate`, `browser_snapshot`,
- * `browser_close`.
+ * Встроенные browser-тулы (D1/D2): `browser_navigate`, `browser_snapshot`,
+ * `browser_click`, `browser_type`, `browser_press`, `browser_wait`,
+ * `browser_screenshot`, `browser_close`.
  *
  * Проверяется граница тулов:
  * - цель роутера: класс `browser`, область (projectId/sessionId) и
  *   `workspaceSubPath`;
- * - имя инструмента и аргументы, которые уходят на порт;
+ * - имя инструмента и аргументы, которые уходят на порт (в т.ч. переименование
+ *   `press` → `browser_press_key`, `wait` → `browser_wait_for`);
  * - отказ без `browserCall` (inline/старая реализация) — понятный текст;
  * - ошибка порта — `isError`, без исключения;
+ * - скриншот: публикация вложения через `AttachmentService` (ссылки в
+ *   `ToolResult.attachments`), деградация без сервиса и при ошибке загрузки;
+ * - группа правил `web` и plan-режим;
  * - «Стоп» и невалидные аргументы.
  *
  * Реальный исполнитель/браузер не нужен: роутер и порт подменены.
@@ -20,10 +25,20 @@ import type {
   BrowserCallResult,
   ExecutionPort,
 } from '../../execution/ports/index.js';
+import type { AttachmentService, UploadedAttachmentMeta } from '../attachments/service.js';
+import { AttachmentError } from '../attachments/service.js';
+import { PERMISSION_GROUPS } from '../permission/groups.js';
+import { isPlanBlockedTool } from '../permission/evaluator.js';
 import {
+  browserClickTool,
   browserCloseTool,
   browserNavigateTool,
+  browserPressTool,
+  browserScreenshotTool,
   browserSnapshotTool,
+  browserTools,
+  browserTypeTool,
+  browserWaitTool,
 } from './browser.js';
 
 /** Порт-заглушка: запоминает browser-вызовы, отвечает по сценарию. */
@@ -81,6 +96,48 @@ function makeCtx(extra: Record<string, unknown> = {}): ToolContext {
 /** Успешный результат browser-вызова. */
 function ok(content: string): BrowserCallResult {
   return { content, isError: false };
+}
+
+/** Минимальный валидный PNG (сигнатура + IHDR) — для скриншота. */
+const PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/** Ответ порта со вложением-скриншотом. */
+function screenshotResult(content = ''): BrowserCallResult {
+  return {
+    content,
+    isError: false,
+    attachments: [{ dataBase64: PNG_BYTES.toString('base64'), mime: 'image/png' }],
+  };
+}
+
+/** Заглушка сервиса вложений: запоминает вызовы `upload`. */
+function fakeAttachmentService(
+  upload?: (input: {
+    sessionId?: string;
+    bytes: Buffer;
+    name?: string;
+    declaredMime?: string;
+  }) => Promise<UploadedAttachmentMeta>,
+): { service: AttachmentService; uploads: Parameters<AttachmentService['upload']>[0][] } {
+  const uploads: Parameters<AttachmentService['upload']>[0][] = [];
+  const service = {
+    async upload(input: Parameters<AttachmentService['upload']>[0]) {
+      uploads.push(input);
+      if (upload) return upload(input);
+      return {
+        id: 'attachments/ab/abcdef',
+        blobPath: 'attachments/ab/abcdef',
+        sha256: 'abcdef',
+        mime: 'image/png',
+        size: input.bytes.length,
+        ...(input.name ? { name: input.name } : {}),
+      };
+    },
+  } as unknown as AttachmentService;
+  return { service, uploads };
 }
 
 describe('browser-тулы — цель порта', () => {
@@ -146,6 +203,205 @@ describe('browser-тулы — имена инструментов и аргум
       { tool: 'browser_close', arguments: {} },
     ]);
   });
+
+  it('click передаёт element и ref из snapshot', async () => {
+    const port = new FakeBrowserPort(() => ok('clicked'));
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    const result = await browserClickTool.execute({ element: 'Sign in button', ref: 'e12' }, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(port.calls).toEqual([
+      { tool: 'browser_click', arguments: { element: 'Sign in button', ref: 'e12' } },
+    ]);
+  });
+
+  it('type передаёт текст и submit только когда он задан', async () => {
+    const port = new FakeBrowserPort(() => ok('typed'));
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    await browserTypeTool.execute({ element: 'Email', ref: 'e5', text: 'a@b.c' }, ctx);
+    await browserTypeTool.execute(
+      { element: 'Email', ref: 'e5', text: 'a@b.c', submit: true },
+      ctx,
+    );
+
+    expect(port.calls).toEqual([
+      { tool: 'browser_type', arguments: { element: 'Email', ref: 'e5', text: 'a@b.c' } },
+      {
+        tool: 'browser_type',
+        arguments: { element: 'Email', ref: 'e5', text: 'a@b.c', submit: true },
+      },
+    ]);
+  });
+
+  it('press уходит в `browser_press_key`', async () => {
+    const port = new FakeBrowserPort(() => ok('pressed'));
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    await browserPressTool.execute({ key: 'Enter' }, ctx);
+
+    expect(port.calls).toEqual([{ tool: 'browser_press_key', arguments: { key: 'Enter' } }]);
+  });
+
+  it('wait уходит в `browser_wait_for` (время в секундах)', async () => {
+    const port = new FakeBrowserPort(() => ok('waited'));
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    await browserWaitTool.execute({ time: 2 }, ctx);
+    await browserWaitTool.execute({ text: 'Done' }, ctx);
+    await browserWaitTool.execute({ time: 1, text: 'Done' }, ctx);
+
+    expect(port.calls).toEqual([
+      { tool: 'browser_wait_for', arguments: { time: 2 } },
+      { tool: 'browser_wait_for', arguments: { text: 'Done' } },
+      { tool: 'browser_wait_for', arguments: { time: 1, text: 'Done' } },
+    ]);
+  });
+
+  it('screenshot уходит в `browser_take_screenshot` с filename/fullPage/type', async () => {
+    const port = new FakeBrowserPort(() => screenshotResult());
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    await browserScreenshotTool.execute({}, ctx);
+    await browserScreenshotTool.execute({ filename: 'page.png', fullPage: true }, ctx);
+    await browserScreenshotTool.execute({ filename: 'page.jpg' }, ctx);
+
+    expect(port.calls).toEqual([
+      { tool: 'browser_take_screenshot', arguments: { type: 'png' } },
+      {
+        tool: 'browser_take_screenshot',
+        arguments: { type: 'png', filename: 'page.png', fullPage: true },
+      },
+      { tool: 'browser_take_screenshot', arguments: { type: 'jpeg', filename: 'page.jpg' } },
+    ]);
+  });
+
+  it('wait без time и text → argErrorResult, порт не вызывается', async () => {
+    const port = new FakeBrowserPort(() => ok('ok'));
+    const { router, targets } = fakeRouter(port);
+
+    const result = await browserWaitTool.execute({}, makeCtx({ executionRouter: router }));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata).toMatchObject({ i18n: { key: 'tool.args_error' } });
+    expect(port.calls).toHaveLength(0);
+    expect(targets).toHaveLength(0);
+  });
+});
+
+describe('browser_screenshot — вложение сообщения', () => {
+  it('загружает изображение через сервис и возвращает ссылки', async () => {
+    const port = new FakeBrowserPort(() => screenshotResult('Saved to page.png'));
+    const { service, uploads } = fakeAttachmentService();
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router, attachmentService: service });
+
+    const result = await browserScreenshotTool.execute({ filename: 'page.png' }, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toMatchObject({
+      sessionId: 'ses_1',
+      name: 'page.png',
+      declaredMime: 'image/png',
+    });
+    expect(uploads[0]?.bytes.equals(PNG_BYTES)).toBe(true);
+    expect(String(result.content)).toContain('Screenshot attached');
+    expect(result.attachments).toEqual([
+      {
+        blobPath: 'attachments/ab/abcdef',
+        sha256: 'abcdef',
+        mime: 'image/png',
+        size: PNG_BYTES.length,
+        name: 'page.png',
+      },
+    ]);
+    expect(result.metadata).toMatchObject({
+      tool: 'browser_screenshot',
+      blob_path: 'attachments/ab/abcdef',
+      mime: 'image/png',
+      size: PNG_BYTES.length,
+    });
+  });
+
+  it('без имени файла берётся screenshot.png', async () => {
+    const port = new FakeBrowserPort(() => screenshotResult());
+    const { service, uploads } = fakeAttachmentService();
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router, attachmentService: service });
+
+    await browserScreenshotTool.execute({}, ctx);
+
+    expect(uploads[0]?.name).toBe('screenshot.png');
+  });
+
+  it('нет сервиса вложений → текст-предупреждение, not isError', async () => {
+    const port = new FakeBrowserPort(() => screenshotResult());
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    const result = await browserScreenshotTool.execute({}, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(String(result.content)).toContain('could not be attached');
+    expect(result.attachments).toBeUndefined();
+    expect(result.metadata).toMatchObject({ reason: 'attachment_service_unavailable' });
+  });
+
+  it('ошибка upload (AttachmentError) → предупреждение, тул не падает', async () => {
+    const port = new FakeBrowserPort(() => screenshotResult());
+    const { service } = fakeAttachmentService(async () => {
+      throw new AttachmentError('too_large', 'Размер вложения превышает предел');
+    });
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router, attachmentService: service });
+
+    const result = await browserScreenshotTool.execute({}, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(String(result.content)).toContain('size limit');
+    expect(result.attachments).toBeUndefined();
+    expect(result.metadata).toMatchObject({ reason: 'too_large' });
+  });
+
+  it('произвольная ошибка upload → предупреждение, тул не падает', async () => {
+    const port = new FakeBrowserPort(() => screenshotResult());
+    const { service } = fakeAttachmentService(async () => {
+      throw new Error('disk is full');
+    });
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router, attachmentService: service });
+
+    const result = await browserScreenshotTool.execute({}, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(String(result.content)).toContain('disk is full');
+    expect(result.metadata).toMatchObject({ reason: 'upload_failed' });
+  });
+
+  it('нет вложений в ответе → текст как есть', async () => {
+    const port = new FakeBrowserPort(() => ok('Screenshot not saved'));
+    const { service, uploads } = fakeAttachmentService();
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router, attachmentService: service });
+
+    const result = await browserScreenshotTool.execute({}, ctx);
+
+    expect(String(result.content)).toBe('Screenshot not saved');
+    expect(result.attachments).toBeUndefined();
+    expect(uploads).toHaveLength(0);
+  });
+
+  it('isError инструмента → вложение не публикуется', async () => {
+    const port = new FakeBrowserPort(() => ({
+      content: 'Screenshot failed',
+      isError: true,
+      attachments: [{ dataBase64: PNG_BYTES.toString('base64'), mime: 'image/png' }],
+    }));
+    const { service, uploads } = fakeAttachmentService();
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router, attachmentService: service });
+
+    const result = await browserScreenshotTool.execute({}, ctx);
+
+    expect(result.isError).toBe(true);
+    expect(uploads).toHaveLength(0);
+    expect(result.attachments).toBeUndefined();
+  });
 });
 
 describe('browser-тулы — отказы', () => {
@@ -153,7 +409,7 @@ describe('browser-тулы — отказы', () => {
     const { router, targets } = fakeRouter(plainPort);
     const ctx = makeCtx({ executionRouter: router });
 
-    const result = await browserNavigateTool.execute({ url: 'https://example.com' }, ctx);
+    const result = await browserClickTool.execute({ element: 'Link', ref: 'e1' }, ctx);
 
     expect(result.isError).toBe(true);
     const content = String(result.content);
@@ -169,8 +425,8 @@ describe('browser-тулы — отказы', () => {
     });
     const { router } = fakeRouter(port);
 
-    const result = await browserNavigateTool.execute(
-      { url: 'https://example.com' },
+    const result = await browserTypeTool.execute(
+      { element: 'Email', ref: 'e5', text: 'x' },
       makeCtx({ executionRouter: router }),
     );
 
@@ -194,14 +450,17 @@ describe('browser-тулы — отказы', () => {
     expect(String(result.content)).toContain('ERR_NAME_NOT_RESOLVED');
   });
 
-  it('пустой url → argErrorResult, порт не вызывается', async () => {
+  it('пустой url / пустой ref → argErrorResult, порт не вызывается', async () => {
     const port = new FakeBrowserPort(() => ok('ok'));
     const { router, targets } = fakeRouter(port);
+    const ctx = makeCtx({ executionRouter: router });
 
-    const result = await browserNavigateTool.execute({ url: '' }, makeCtx({ executionRouter: router }));
+    const badUrl = await browserNavigateTool.execute({ url: '' }, ctx);
+    const badRef = await browserClickTool.execute({ element: 'Link', ref: '' }, ctx);
 
-    expect(result.isError).toBe(true);
-    expect(result.metadata).toMatchObject({ i18n: { key: 'tool.args_error' } });
+    expect(badUrl.isError).toBe(true);
+    expect(badRef.isError).toBe(true);
+    expect(badUrl.metadata).toMatchObject({ i18n: { key: 'tool.args_error' } });
     expect(port.calls).toHaveLength(0);
     expect(targets).toHaveLength(0);
   });
@@ -214,8 +473,8 @@ describe('browser-тулы — отказы', () => {
       },
     };
 
-    const result = await browserNavigateTool.execute(
-      { url: 'https://example.com' },
+    const result = await browserPressTool.execute(
+      { key: 'Enter' },
       makeCtx({ executionRouter: router }),
     );
 
@@ -231,13 +490,38 @@ describe('browser-тулы — отказы', () => {
     const controller = new AbortController();
     controller.abort();
 
-    const result = await browserNavigateTool.execute(
-      { url: 'https://example.com' },
+    const result = await browserWaitTool.execute(
+      { time: 1 },
       { ...makeCtx({ executionRouter: router }), abortSignal: controller.signal },
     );
 
     expect(String(result.content)).toContain('<status>stopped_by_user</status>');
     expect(result.metadata).toMatchObject({ interrupted: true, stopped_by: 'user' });
     expect(port.calls).toHaveLength(0);
+  });
+});
+
+describe('browser-тулы — группа правил и plan-режим', () => {
+  it('все тулы зарегистрированы и входят в группу `web`', () => {
+    expect(browserTools.map((tool) => tool.name)).toEqual([
+      'browser_navigate',
+      'browser_snapshot',
+      'browser_click',
+      'browser_type',
+      'browser_press',
+      'browser_wait',
+      'browser_screenshot',
+      'browser_close',
+    ]);
+    for (const tool of browserTools) {
+      expect(tool.capabilities).toContain('web');
+      expect(PERMISSION_GROUPS.web).toContain(tool.name);
+    }
+  });
+
+  it('plan-режим не блокирует browser-тулы', () => {
+    for (const tool of browserTools) {
+      expect(isPlanBlockedTool(tool.name, tool.capabilities)).toBe(false);
+    }
   });
 });

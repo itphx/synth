@@ -1,5 +1,6 @@
 /**
- * Встроенные browser-тулы (D1): навигация, снимок страницы и закрытие браузера.
+ * Встроенные browser-тулы (D1/D2): навигация, снимок страницы, взаимодействие
+ * со страницей, скриншот и закрытие браузера.
  *
  * ## Зачем встроенные тулы, а не MCP-discovery
  *
@@ -10,20 +11,28 @@
  * `ExecutionPort.browserCall` → `POST /mcp/call` в пул класса `browser`
  * (адресат — MCP-сервер браузера, имя задаёт `execution.remote.browserMcpServer`).
  *
- * ## Границы D1
+ * ## Границы слайсов
  *
- * Реализованы `browser_navigate`, `browser_snapshot`, `browser_close`.
- * Взаимодействие со страницей (click/type/press/wait) и скриншоты — следующий
- * слайс: схемы расширяются аддитивно, без смены транспорта.
+ * D1: `browser_navigate`, `browser_snapshot`, `browser_close`.
+ * D2: `browser_click`, `browser_type`, `browser_press`, `browser_wait`,
+ * `browser_screenshot` (изображение публикуется **вложением** сообщения:
+ * байты пишет `AttachmentService`, тул возвращает ссылки).
  *
  * Отказ «браузера нет» — понятный текст, а не исключение: `inline`-режим не
  * имеет браузера вовсе (`InlineExecutionPort` не реализует `browserCall`).
  */
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
-import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
+import type {
+  ToolAttachmentRef,
+  ToolContext,
+  ToolDefinition,
+  ToolResult,
+} from '@itphx/synth-shared';
 import { resolveExecutionPort, resolveExecutionRouter } from '../../execution/tool-port.js';
-import type { ExecutionPort } from '../../execution/ports/index.js';
+import type { BrowserCallResult, ExecutionPort } from '../../execution/ports/index.js';
+import { AttachmentError, type AttachmentService } from '../attachments/service.js';
+import { warning } from '../../logger.js';
 import { abortedResult, isAborted } from './abort.js';
 import { argErrorResult } from './arg-error.js';
 
@@ -31,9 +40,15 @@ import { argErrorResult } from './arg-error.js';
 export const BROWSER_UNAVAILABLE_TEXT =
   'Browser execution is unavailable in the current execution environment.';
 
-/** Имя параметра extra с относительным путём рабочего каталога в PVC. */
+/** Имя файла скриншота по умолчанию (имя видит модель и пользователь). */
+const DEFAULT_SCREENSHOT_NAME = 'screenshot.png';
+
+/** Параметры extra, которые нужны browser-тулам. */
 interface BrowserToolExtra {
+  /** Относительный путь рабочего каталога в PVC (область браузерного пула). */
   executionWorkspaceSubPath?: string;
+  /** Сервис вложений (ADR-115): единственная точка записи байтов скриншота. */
+  attachmentService?: AttachmentService;
 }
 
 /** Порт для browser-вызова: пул класса `browser` либо порт сессии. */
@@ -51,49 +66,203 @@ function browserPort(ctx: ToolContext): ExecutionPort {
 }
 
 /**
- * Один вызов browser-инструмента: порт → `browserCall` → результат тула.
+ * Исход одного вызова browser-инструмента: либо ответ порта, либо готовый
+ * результат-отказ (тул такой исход возвращает как есть).
+ */
+interface BrowserCallOutcome {
+  result?: BrowserCallResult;
+  failure?: ToolResult;
+}
+
+/**
+ * Один вызов browser-инструмента: порт → `browserCall`.
  *
  * Ошибки не бросаются: недоступность браузера и ошибка инструмента — это
- * `isError`-результат, ход продолжается.
+ * `failure`/`isError`-результат, ход продолжается.
  */
-async function callBrowserTool(
+async function invokeBrowserTool(
   ctx: ToolContext,
   toolName: string,
   tool: string,
   args: Record<string, unknown>,
-): Promise<ToolResult> {
+): Promise<BrowserCallOutcome> {
   let port: ExecutionPort;
   try {
     port = browserPort(ctx);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: `Browser execution is unavailable: ${message}`,
-      isError: true,
-      metadata: { tool: toolName },
+      failure: {
+        content: `Browser execution is unavailable: ${message}`,
+        isError: true,
+        metadata: { tool: toolName },
+      },
     };
   }
 
   if (!port.browserCall) {
-    return { content: BROWSER_UNAVAILABLE_TEXT, isError: true, metadata: { tool: toolName } };
+    return {
+      failure: { content: BROWSER_UNAVAILABLE_TEXT, isError: true, metadata: { tool: toolName } },
+    };
   }
 
   try {
-    const result = await port.browserCall({ tool, arguments: args });
-    return {
-      content: result.content,
-      ...(result.isError ? { isError: true } : {}),
-      // D1: байты вложений не публикуются (следующий слайс — скриншоты).
-      metadata: { tool: toolName },
-    };
+    return { result: await port.browserCall({ tool, arguments: args }) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      content: `Browser tool "${toolName}" failed: ${message}`,
-      isError: true,
+      failure: {
+        content: `Browser tool "${toolName}" failed: ${message}`,
+        isError: true,
+        metadata: { tool: toolName },
+      },
+    };
+  }
+}
+
+/** Текстовый результат вызова (тулы без вложений). */
+async function callBrowserTool(
+  ctx: ToolContext,
+  toolName: string,
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const outcome = await invokeBrowserTool(ctx, toolName, tool, args);
+  if (outcome.failure) return outcome.failure;
+  const result = outcome.result as BrowserCallResult;
+  return {
+    content: result.content,
+    ...(result.isError ? { isError: true } : {}),
+    metadata: { tool: toolName },
+  };
+}
+
+/** Понятный текст причины отказа загрузки вложения (по машинному коду). */
+const ATTACHMENT_FAILURE_TEXT: Record<string, string> = {
+  too_large: 'the image exceeds the attachment size limit',
+  unsupported_mime: 'the image type is not allowed by the attachment policy',
+  attachments_disabled: 'attachments are disabled on this instance',
+  empty: 'the image is empty',
+};
+
+/**
+ * Предупреждение вместо вложения: скриншот снят, но приложить его не удалось.
+ *
+ * `isError` **не** ставится — инструмент выполнен, потеряно только вложение
+ * (модель видит причину и может перейти к текстовому результату).
+ */
+function screenshotWarning(
+  toolName: string,
+  content: string,
+  reason: string,
+  detail?: string,
+): ToolResult {
+  const text = detail
+    ? `Screenshot captured, but it could not be attached: ${detail}`
+    : 'Screenshot captured, but it could not be attached to the dialog.';
+  const body = content.trim();
+  return {
+    content: body ? `${text}\n\n${body}` : text,
+    metadata: { tool: toolName, reason, ...(detail ? { detail } : {}) },
+  };
+}
+
+/**
+ * Результат `browser_screenshot`: изображения из ответа публикуются вложением
+ * сообщения (ссылки `ToolResult.attachments`), байты пишет `AttachmentService`.
+ *
+ * Деградация (никогда не роняет шаг):
+ * - нет `attachmentService` — текст-предупреждение (скриншот снят, но не приложен);
+ * - ошибка `upload`/лимит — предупреждение с причиной;
+ * - в ответе нет вложений — текст результата как есть.
+ */
+async function callBrowserScreenshot(
+  ctx: ToolContext,
+  toolName: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const outcome = await invokeBrowserTool(ctx, toolName, 'browser_take_screenshot', args);
+  if (outcome.failure) return outcome.failure;
+  const result = outcome.result as BrowserCallResult;
+  const payloads = result.isError ? [] : (result.attachments ?? []);
+  if (payloads.length === 0) {
+    return {
+      content: result.content,
+      ...(result.isError ? { isError: true } : {}),
       metadata: { tool: toolName },
     };
   }
+
+  const service = (ctx.extra as BrowserToolExtra | undefined)?.attachmentService;
+  if (!service) {
+    return screenshotWarning(
+      toolName,
+      result.content,
+      'attachment_service_unavailable',
+      'attachments are unavailable in this environment',
+    );
+  }
+
+  const name = typeof args.filename === 'string' && args.filename.trim()
+    ? args.filename.trim()
+    : DEFAULT_SCREENSHOT_NAME;
+  const refs: ToolAttachmentRef[] = [];
+  for (const payload of payloads) {
+    try {
+      const bytes = Buffer.from(payload.dataBase64, 'base64');
+      if (bytes.length === 0) {
+        warning('BROWSER', `"${toolName}": пустое вложение ${payload.mime} пропущено`);
+        continue;
+      }
+      // Лимиты/allowlist/MIME — политика сервиса (второй не заводим).
+      const meta = await service.upload({
+        sessionId: ctx.sessionId,
+        bytes,
+        declaredMime: payload.mime,
+        name,
+      });
+      refs.push({
+        blobPath: meta.blobPath,
+        sha256: meta.sha256,
+        mime: meta.mime,
+        size: meta.size,
+        ...(meta.name ? { name: meta.name } : {}),
+      });
+    } catch (err) {
+      if (err instanceof AttachmentError) {
+        return screenshotWarning(
+          toolName,
+          result.content,
+          err.code,
+          ATTACHMENT_FAILURE_TEXT[err.code] ?? err.message,
+        );
+      }
+      const detail = err instanceof Error ? err.message : String(err);
+      warning('BROWSER', `"${toolName}": скриншот не сохранён: ${detail}`);
+      return screenshotWarning(toolName, result.content, 'upload_failed', detail);
+    }
+  }
+
+  const first = refs[0];
+  if (!first) {
+    return screenshotWarning(
+      toolName,
+      result.content,
+      'upload_failed',
+      'the screenshot image was empty',
+    );
+  }
+  const body = result.content.trim();
+  return {
+    content: body ? `Screenshot attached\n\n${body}` : 'Screenshot attached',
+    metadata: {
+      tool: toolName,
+      mime: first.mime,
+      size: first.size,
+      blob_path: first.blobPath,
+    },
+    attachments: refs,
+  };
 }
 
 const navigateSchema = z.object({
@@ -104,6 +273,68 @@ const navigateSchema = z.object({
 });
 
 const emptySchema = z.object({});
+
+const clickSchema = z.object({
+  element: z
+    .string()
+    .min(1)
+    .describe('Human-readable description of the element to click (for example "Sign in button")'),
+  ref: z
+    .string()
+    .min(1)
+    .describe('Element reference from the latest browser_snapshot (for example "e12")'),
+});
+
+const typeSchema = z.object({
+  element: z
+    .string()
+    .min(1)
+    .describe('Human-readable description of the input field (for example "Email field")'),
+  ref: z
+    .string()
+    .min(1)
+    .describe('Element reference from the latest browser_snapshot (for example "e5")'),
+  text: z.string().describe('Text to type into the field'),
+  submit: z
+    .boolean()
+    .optional()
+    .describe('Press Enter after typing (default false)'),
+});
+
+const pressSchema = z.object({
+  key: z
+    .string()
+    .min(1)
+    .describe('Key to press, for example "Enter", "Escape", "Tab" or "Control+A"'),
+});
+
+const waitSchema = z
+  .object({
+    time: z
+      .number()
+      .min(0)
+      .optional()
+      .describe('Seconds to wait (for example 2)'),
+    text: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Wait until this text appears on the page'),
+  })
+  .refine((value) => value.time !== undefined || value.text !== undefined, {
+    message: 'either "time" (seconds) or "text" is required',
+  });
+
+const screenshotSchema = z.object({
+  filename: z
+    .string()
+    .optional()
+    .describe('File name for the saved image (default screenshot.png; .jpg/.jpeg means JPEG)'),
+  fullPage: z
+    .boolean()
+    .optional()
+    .describe('Capture the whole scrollable page instead of the viewport (default false)'),
+});
 
 export const browserNavigateTool: ToolDefinition = {
   name: 'browser_navigate',
@@ -129,13 +360,125 @@ export const browserSnapshotTool: ToolDefinition = {
   description:
     'Return an accessibility snapshot of the current page in the project browser: '
     + 'structured text with element roles, names and visible text. '
-    + 'Use it to inspect the page (links, buttons, fields) before deciding what to do next. '
+    + 'Use it to inspect the page (links, buttons, fields) and to get element references '
+    + 'for browser_click and browser_type before deciding what to do next. '
     + 'The browser keeps its state between calls.',
   parameters: emptySchema,
   capabilities: [ToolCapability.WEB],
   async execute(_args, ctx): Promise<ToolResult> {
     if (isAborted(ctx)) return abortedResult(this.name);
     return callBrowserTool(ctx, this.name, 'browser_snapshot', {});
+  },
+};
+
+export const browserClickTool: ToolDefinition = {
+  name: 'browser_click',
+  description:
+    'Click an element on the current page in the project browser. '
+    + 'Pass the element reference ("ref") from the latest browser_snapshot and a short '
+    + 'human-readable description of the element. Call browser_snapshot again to see '
+    + 'the result of the click.',
+  parameters: clickSchema,
+  capabilities: [ToolCapability.WEB],
+  async execute(args, ctx): Promise<ToolResult> {
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = clickSchema.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    return callBrowserTool(ctx, this.name, 'browser_click', {
+      element: parsed.data.element,
+      ref: parsed.data.ref,
+    });
+  },
+};
+
+export const browserTypeTool: ToolDefinition = {
+  name: 'browser_type',
+  description:
+    'Type text into an input field on the current page in the project browser. '
+    + 'Pass the element reference ("ref") from the latest browser_snapshot and a short '
+    + 'human-readable description of the field. Set "submit" to press Enter after typing. '
+    + 'Call browser_snapshot again to verify the result.',
+  parameters: typeSchema,
+  capabilities: [ToolCapability.WEB],
+  async execute(args, ctx): Promise<ToolResult> {
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = typeSchema.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    return callBrowserTool(ctx, this.name, 'browser_type', {
+      element: parsed.data.element,
+      ref: parsed.data.ref,
+      text: parsed.data.text,
+      ...(parsed.data.submit !== undefined ? { submit: parsed.data.submit } : {}),
+    });
+  },
+};
+
+export const browserPressTool: ToolDefinition = {
+  name: 'browser_press',
+  description:
+    'Press a keyboard key on the current page in the project browser (for example Enter, '
+    + 'Escape, Tab, ArrowDown, Control+A). Use it to submit forms, dismiss dialogs or move '
+    + 'focus. Call browser_snapshot to see the result.',
+  parameters: pressSchema,
+  capabilities: [ToolCapability.WEB],
+  async execute(args, ctx): Promise<ToolResult> {
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = pressSchema.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    return callBrowserTool(ctx, this.name, 'browser_press_key', { key: parsed.data.key });
+  },
+};
+
+export const browserWaitTool: ToolDefinition = {
+  name: 'browser_wait',
+  description:
+    'Wait on the current page in the project browser: either a fixed number of seconds '
+    + '("time") or until the given "text" appears. At least one of them is required. '
+    + 'Use it after actions that trigger network requests or animations. '
+    + 'Call browser_snapshot to see the page after the wait.',
+  parameters: waitSchema,
+  capabilities: [ToolCapability.WEB],
+  async execute(args, ctx): Promise<ToolResult> {
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = waitSchema.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    return callBrowserTool(ctx, this.name, 'browser_wait_for', {
+      ...(parsed.data.time !== undefined ? { time: parsed.data.time } : {}),
+      ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
+    });
+  },
+};
+
+export const browserScreenshotTool: ToolDefinition = {
+  name: 'browser_screenshot',
+  description:
+    'Take a screenshot of the current page in the project browser and attach the image to '
+    + 'the dialog, so you and the user can see it. By default the viewport is captured; set '
+    + '"fullPage" to capture the whole scrollable page. The image format is PNG unless the '
+    + 'file name ends with .jpg or .jpeg.',
+  parameters: screenshotSchema,
+  capabilities: [ToolCapability.WEB],
+  async execute(args, ctx): Promise<ToolResult> {
+    if (isAborted(ctx)) return abortedResult(this.name);
+    const parsed = screenshotSchema.safeParse(args);
+    if (!parsed.success) {
+      return argErrorResult(this.name, parsed.error.issues);
+    }
+    const filename = parsed.data.filename?.trim();
+    const type = filename && /\.jpe?g$/i.test(filename) ? 'jpeg' : 'png';
+    return callBrowserScreenshot(ctx, this.name, {
+      type,
+      ...(filename ? { filename } : {}),
+      ...(parsed.data.fullPage !== undefined ? { fullPage: parsed.data.fullPage } : {}),
+    });
   },
 };
 
@@ -152,9 +495,14 @@ export const browserCloseTool: ToolDefinition = {
   },
 };
 
-/** Все browser-тулы слайса D1. */
+/** Все browser-тулы (D1 + D2). */
 export const browserTools: ToolDefinition[] = [
   browserNavigateTool,
   browserSnapshotTool,
+  browserClickTool,
+  browserTypeTool,
+  browserPressTool,
+  browserWaitTool,
+  browserScreenshotTool,
   browserCloseTool,
 ];

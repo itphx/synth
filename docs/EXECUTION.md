@@ -14,9 +14,10 @@
 > MCP-серверы у себя (**B1**: `SYNTH_EXECUTOR_MCP_SERVERS`, эндпоинты `/mcp/servers`, `/mcp/tools`,
 > `/mcp/call` — появились в протоколе **2**), а control plane к ним подключён (**B2**: `ExecutorMcpSource` +
 > `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **встроенные
-> browser-тулы (D1) — реализовано**: `browser_navigate`/`browser_snapshot`/`browser_close` идут
+> browser-тулы (D1/D2) — реализовано**: `browser_navigate`/`browser_snapshot`/`browser_click`/
+> `browser_type`/`browser_press`/`browser_wait`/`browser_screenshot`/`browser_close` идут
 > портом `ExecutionPort.browserCall` в проектный пул класса `browser` (`browserProfile`/
-> `browserMcpServer`), без MCP-discovery; **актуальная версия
+> `browserMcpServer`), без MCP-discovery; скриншот публикуется вложением сообщения; **актуальная версия
 > протокола — 7** (FS-операции исполнителя: `POST /fs/stat`, `POST /fs/realpath`, `POST /fs/list`,
 > `POST /fs/read-text`, `POST /fs/sniff`, `POST /fs/read-bytes`, `POST /fs/read-raw`,
 > `POST /fs/write-file`, `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`,
@@ -363,19 +364,23 @@ Discovery и вызовы MCP-инструментов исполнителя и
    при `provider: http` источник MCP-серверов поднимается по статическому
    `execution.remote.url`/дескриптору удалённого порта.
 
-### Встроенные browser-тулы (D1)
+### Встроенные browser-тулы (D1/D2)
 
-Браузер отдаётся модели **встроенными тулами** (`browser_navigate`, `browser_snapshot`,
-`browser_close`), а не через MCP-discovery: схемы статические (реестр ядра), а вызов идёт
-портом исполнения в **проектный** пул класса `browser`.
+Браузер отдаётся модели **встроенными тулами** (`browser_*`), а не через MCP-discovery: схемы
+статические (реестр ядра), а вызов идёт портом исполнения в **проектный** пул класса `browser`.
 
 | Что | Значение |
 |---|---|
-| Тулы | `browser_navigate {url}`, `browser_snapshot {}`, `browser_close {}` — capability `web` |
+| Тулы D1 | `browser_navigate {url}`, `browser_snapshot {}`, `browser_close {}` |
+| Тулы D2 | `browser_click {element, ref}`, `browser_type {element, ref, text, submit?}`, `browser_press {key}`, `browser_wait {time?, text?}`, `browser_screenshot {filename?, fullPage?}` — capability `web` |
 | Порт | `ExecutionPort.browserCall({tool, arguments})` → `POST /mcp/call` `{server, tool, arguments}` |
 | Сервер в поде | `execution.remote.browserMcpServer` (дефолт `playwright`; env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`) |
 | Профиль пула | `execution.remote.browserProfile` (дефолт `browser`; env `SYNTH_EXECUTION_BROWSER_PROFILE`) |
 | Область пула | проект сессии (`project:<projectId>:browser:<profile>`), без проекта — `sessionId` |
+
+Имена инструментов на MCP-сервере не совпадают с именами тулов: `browser_press` → `browser_press_key`,
+`browser_wait` → `browser_wait_for`, `browser_screenshot` → `browser_take_screenshot`. `ref`
+элемента берётся из `browser_snapshot`; `time` у `browser_wait` — **секунды** (как у Playwright).
 
 Почему так: discovery глобальный (состав MCP-серверов читается с инстанс-пула), а браузерный
 пул — проектный; при per-project пулах тулы «пропадали» бы для проекта, у которого браузерный
@@ -383,10 +388,18 @@ Discovery и вызовы MCP-инструментов исполнителя и
 
 Ошибки (нет адреса, 404, ошибка инструмента, таймаут) возвращаются модели как `isError`-результат
 тула — шаг хода не падает. `InlineExecutionPort` `browserCall` **не реализует**: в `inline`-режиме
-тул отвечает понятным отказом. Вложения ответа (изображения) пока не публикуются.
+тул отвечает понятным отказом.
 
-**Остаток D2:** `browser_click`, `browser_type`, `browser_press`, `browser_wait`,
-`browser_screenshot` (последний — с публикацией изображения вложением сообщения).
+**Скриншот — вложением сообщения (D2).** `browserCall` отдаёт нетекстовые блоки ответа
+(`attachments: {dataBase64, mime}[]`, исполнитель — протокол 5). Тул `browser_screenshot` пишет
+байты через `AttachmentService.upload` (единственная точка записи, MIME по сигнатуре, лимиты
+`attachments.*`) и возвращает `ToolResult.attachments` — оркестратор (`_injectToolAttachments`)
+вставляет медиа-часть в **текущий** ход. Нет сервиса вложений/ошибка `upload` — текст-предупреждение
+с причиной в `metadata.reason`, `isError` не ставится; `isError` инструмента — вложения не
+публикуются.
+
+**Остаток после D2:** per-project UI выбора браузерного профиля (сейчас профиль — опция
+инстанса `execution.remote.browserProfile`); других остатков по встроенным browser-тулам нет.
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
