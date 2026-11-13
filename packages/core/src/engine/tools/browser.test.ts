@@ -166,6 +166,23 @@ describe('browser-тулы — цель порта', () => {
     ]);
   });
 
+  it('профиль браузерного пула берётся из extra.executionBrowserProfile', async () => {
+    const port = new FakeBrowserPort(() => ok('ok'));
+    const { router, targets } = fakeRouter(port);
+
+    await browserNavigateTool.execute(
+      { url: 'https://example.com' },
+      makeCtx({ executionRouter: router, executionBrowserProfile: 'browser-full' }),
+    );
+
+    expect(targets[0]).toMatchObject({
+      class: 'browser',
+      profile: 'browser-full',
+      projectId: 'prj_1',
+      sessionId: 'ses_1',
+    });
+  });
+
   it('без workspaceSubPath поле не задаётся', async () => {
     const port = new FakeBrowserPort(() => ok('ok'));
     const { router, targets } = fakeRouter(port);

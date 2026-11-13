@@ -274,6 +274,9 @@ function buildSettingsBody(
   // Из тела общего автосейва ключ исключаем: иначе снимок формы, сделанный до
   // смены профиля, вернул бы старое значение.
   delete restSettings.executorProfile
+  // PROP-135 (браузерный контур): браузерный профиль — своя секция и свой
+  // немедленный автосейв; из общего снимка исключаем по той же причине.
+  delete restSettings.browserProfile
 
   // Лимит ответа: невалидный ввод не сохраняется (тело не должно уносить NaN/выход
   // за диапазон) — оставляем серверное значение, чтобы автосейв другого поля не сбросил его.
@@ -911,6 +914,8 @@ export function SessionSettingsTab() {
         {/* PROP-135 Ф6b: профиль исполнения сессии (пусто — наследовать). */}
         <Section title={t('sessionSettings.executor.title')}>
           <SessionExecutorProfileField session={session} project={project} />
+          {/* PROP-135 (браузерный контур): второй блок «Браузер». */}
+          <SessionBrowserProfileField session={session} project={project} />
         </Section>
 
         {/* Таймаут подтверждения (ask) */}
@@ -1600,6 +1605,137 @@ function SessionExecutorProfileField({
       {profilesFailed && (
         <div className="text-[0.625rem] text-status-warning" data-testid="session-executor-profiles-error">
           {t('sessionSettings.executor.loadError')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * PROP-135 (браузерный контур): профиль браузерного пула сессии.
+ *
+ * Пустое значение — наследовать (агент → проект → умолчание инстанса
+ * `execution.remote.browserProfile`); сервер трактует `browserProfile: ''`
+ * как явный сброс. Каталог — только браузерные имена
+ * (`GET /execution/profiles` → `browserProfiles`), exec-профили сюда не
+ * попадают. `inline` — браузера нет, вместо селектора пояснение.
+ */
+function SessionBrowserProfileField({
+  session,
+  project,
+}: {
+  session: SessionData
+  project: ProjectData | null
+}) {
+  const { t } = useI18n()
+  const { notify } = useNotification()
+  const { run, isPending } = usePanelSettingSave({ sessionId: session.id })
+
+  const [profiles, setProfiles] = useState<ExecutionProfilesDto | null>(null)
+  const [profilesFailed, setProfilesFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.resolve()
+      .then(() => synthApi.getExecutionProfiles())
+      .then((dto) => {
+        if (cancelled) return
+        setProfiles(dto)
+        setProfilesFailed(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setProfiles(null)
+        setProfilesFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const current = (session.settings.browserProfile as string | undefined) ?? ''
+  const projectProfile = (project?.executor?.browserProfile ?? '').trim()
+
+  const catalog = (profiles?.browserProfiles?.length
+    ? profiles.browserProfiles
+    : profiles?.browserDefaultProfile
+      ? [profiles.browserDefaultProfile]
+      : []
+  ).map((name) => name.trim()).filter(Boolean)
+  const profileNames: string[] = []
+  for (const name of catalog) {
+    if (!profileNames.includes(name)) profileNames.push(name)
+  }
+  if (current && !profileNames.includes(current)) profileNames.push(current)
+
+  const inheritLabel = profiles?.browserDefaultProfile
+    ? t('sessionSettings.browserProfile.inheritDefault', { profile: profiles.browserDefaultProfile })
+    : t('sessionSettings.browserProfile.inheritUnknown')
+  const inheritHint = projectProfile
+    ? t('sessionSettings.browserProfile.inheritHintProject', { profile: projectProfile })
+    : t('sessionSettings.browserProfile.inheritHint')
+
+  // `inline` — браузера нет: менять нечего, показываем пояснение.
+  if (profiles?.provider === 'inline') {
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5" data-testid="session-browser-profile">
+        <div
+          className="text-xs text-muted-foreground"
+          data-testid="session-browser-profile-not-applicable"
+        >
+          {t('sessionSettings.browserProfile.notApplicable')}
+        </div>
+      </div>
+    )
+  }
+
+  const handleChange = async (value: string) => {
+    if (value === current) return
+    await run({
+      key: 'browserProfile',
+      run: () => synthApi.updateSession(session.id, { settings: { browserProfile: value } }),
+      onSuccess: (updated) => useSessionsStore.getState().upsertSession(updated),
+      silentError: true,
+      onError: (err) => notify({
+        text: (err as { status?: number } | null)?.status === 403
+          ? t('sessionSettings.browserProfile.forbidden')
+          : t('sessionSettings.browserProfile.saveError', {
+              error: err instanceof Error ? err.message : String(err),
+            }),
+        type: 'error',
+        category: 'error',
+        sessionId: session.id,
+      }),
+    })
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5 mt-3" data-testid="session-browser-profile">
+      <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+        <span>{t('sessionSettings.browserProfile.label')}</span>
+        <select
+          value={current}
+          onChange={(e) => void handleChange(e.target.value)}
+          disabled={isPending('browserProfile')}
+          aria-label={t('sessionSettings.browserProfile.label')}
+          data-testid="session-browser-profile-select"
+          className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+        >
+          <option value="">{inheritLabel}</option>
+          {profileNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-[0.625rem] text-muted-foreground/60">{inheritHint}</p>
+      {profilesFailed && (
+        <div
+          className="text-[0.625rem] text-status-warning"
+          data-testid="session-browser-profile-profiles-error"
+        >
+          {t('sessionSettings.browserProfile.loadError')}
         </div>
       )}
     </div>

@@ -1934,3 +1934,79 @@ describe('Session API Routes — executor profile (PROP-135 Ф6a)', () => {
     expect((await sessionManager.getSession(session.id))!.settings.executorProfile).toBe('anything');
   });
 });
+
+/**
+ * PROP-135 (браузерный контур): профиль браузерного пула сессии
+ * (`PATCH /:id { settings: { browserProfile } }`). Каталог — отдельный:
+ * exec-имена не принимаются; пустая строка — сброс (наследование).
+ */
+describe('Session API Routes — browser profile (PROP-135)', () => {
+  let tmpDir: string;
+
+  const browserCatalog = { profiles: ['browser', 'browser-full'], defaultProfile: 'browser' };
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-browser-profile-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function patchProfile(sessionId: string, app: Hono, profile: unknown): Promise<Response> {
+    return app.request(`/api/v2/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { browserProfile: profile } }),
+    });
+  }
+
+  it('известный браузерный профиль → 200 и сохраняется в settings', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, undefined, undefined, {
+      browserProfileCatalog: browserCatalog,
+    });
+    const session = await sessionManager.createSession({ title: 'S' });
+    const res = await patchProfile(session.id, app, 'browser-full');
+    expect(res.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))!.settings.browserProfile).toBe('browser-full');
+  });
+
+  it('неизвестный/exec-профиль → 400 VALIDATION_ERROR, настройка не меняется', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, undefined, undefined, {
+      browserProfileCatalog: browserCatalog,
+    });
+    const session = await sessionManager.createSession({
+      title: 'S',
+      settings: { browserProfile: 'browser' },
+    });
+    for (const profile of ['ghost', 'devops']) {
+      const res = await patchProfile(session.id, app, profile);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toContain('Профиль браузера не найден');
+    }
+    expect((await sessionManager.getSession(session.id))!.settings.browserProfile).toBe('browser');
+  });
+
+  it('пустая строка → 200 и сброс профиля', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, undefined, undefined, {
+      browserProfileCatalog: browserCatalog,
+    });
+    const session = await sessionManager.createSession({
+      title: 'S',
+      settings: { browserProfile: 'browser-full' },
+    });
+    const res = await patchProfile(session.id, app, '');
+    expect(res.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))!.settings.browserProfile).toBeUndefined();
+  });
+
+  it('без каталога браузерных профилей проверка пропускается', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'S' });
+    const res = await patchProfile(session.id, app, 'anything');
+    expect(res.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))!.settings.browserProfile).toBe('anything');
+  });
+});

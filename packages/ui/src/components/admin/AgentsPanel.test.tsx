@@ -16,6 +16,8 @@ const apiMock = vi.hoisted(() => ({
     pooling: 'instance',
     defaultProfile: 'default',
     profiles: ['default'],
+    browserProfiles: ['browser'],
+    browserDefaultProfile: 'browser',
     details: [],
   })),
   toggleAgent: vi.fn(async () => undefined),
@@ -453,6 +455,9 @@ describe('AgentsPanel — профиль исполнения агента (PROP
     pooling: 'instance' as const,
     defaultProfile: 'default',
     profiles: ['default', 'devops', 'sandbox'],
+    // PROP-135 (браузерный контур): отдельный каталог браузерных профилей.
+    browserProfiles: ['browser', 'browser-full'],
+    browserDefaultProfile: 'browser',
     details: [],
   }
 
@@ -544,6 +549,83 @@ describe('AgentsPanel — профиль исполнения агента (PROP
     const payload = await save(container)
     expect(payload.executor_profile).toBeNull()
     expect(payload.allowed_profiles).toEqual([])
+  })
+
+  // PROP-135 (браузерный контур): вторые поля — профиль браузера и потолок.
+  const browserTrigger = (container: HTMLElement) =>
+    container.querySelector('[data-testid="agent-browser-profile"]') as HTMLElement
+  const browserChip = (container: HTMLElement, name: string) =>
+    container.querySelector(
+      `[data-testid="agent-allowed-browser-profiles-${name}"]`,
+    ) as HTMLElement
+
+  it('браузерный контур: поля рендерятся из своего каталога', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    expect(browserTrigger(container)).toBeTruthy()
+    expect(browserChip(container, 'browser-full')).toBeTruthy()
+  })
+
+  it('браузерный контур: выбор уходит в payload отдельными полями', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    await selectOption(browserTrigger(container), 'browser-full')
+    await act(async () => {
+      browserChip(container, 'browser-full').click()
+    })
+
+    const payload = await save(container)
+    expect(payload.browser_profile).toBe('browser-full')
+    expect(payload.allowed_browser_profiles).toEqual(['browser-full'])
+    // exec-поля не подменяются браузерными значениями.
+    expect(payload.executor_profile).toBeNull()
+  })
+
+  it('браузерный контур: round-trip и сброс («наследовать» → null)', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [{
+        ...agent('main', ['primary']),
+        browser_profile: 'browser-full',
+        allowed_browser_profiles: ['browser-full'],
+      }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    const container = await renderPanel()
+    await openEditor(container)
+
+    expect(browserTrigger(container).textContent).toContain('browser-full')
+    expect(browserChip(container, 'browser-full').getAttribute('aria-pressed')).toBe('true')
+
+    await selectOption(browserTrigger(container), 'Default (inherit)')
+    await act(async () => {
+      browserChip(container, 'browser-full').click()
+    })
+    const payload = await save(container)
+    expect(payload.browser_profile).toBeNull()
+    expect(payload.allowed_browser_profiles).toEqual([])
+  })
+
+  it('inline: браузерные поля скрыты', async () => {
+    apiMock.getAgentDetail.mockResolvedValue({})
+    apiMock.getExecutionProfiles.mockResolvedValue({
+      provider: 'inline',
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: [],
+      browserProfiles: [],
+      browserDefaultProfile: '',
+      details: [],
+    })
+    const container = await renderPanel()
+    await openEditor(container)
+
+    expect(browserTrigger(container)).toBeNull()
+    expect(browserChip(container, 'browser-full')).toBeNull()
   })
 
   it('каталог недоступен: поля скрыты, панель работает, значения не затираются', async () => {

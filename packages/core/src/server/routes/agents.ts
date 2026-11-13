@@ -86,6 +86,13 @@ export interface AgentRoutesOptions {
    * сохраняются как есть.
    */
   executionProfileCatalog?: ExecutionProfileCatalog;
+  /**
+   * PROP-135 (браузерный контур): каталог **браузерных** профилей
+   * (`execution.remote.browserProfiles`; пусто → `[browserProfile]`) —
+   * проверка `browser_profile`/`allowed_browser_profiles`. Не задан — проверка
+   * существования пропускается (inline/тесты).
+   */
+  browserProfileCatalog?: ExecutionProfileCatalog;
 }
 
 const DEFAULT_MESSAGES: AgentRouteMessages = {
@@ -123,6 +130,9 @@ const AGENT_FIELDS = (a: AgentDefinition, isBuiltin: boolean) => ({
   // PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых профилей.
   executor_profile: a.executorProfile ?? null,
   allowed_profiles: a.allowedProfiles ?? null,
+  // PROP-135 (браузерный контур): профиль браузерного пула и его потолок.
+  browser_profile: a.browserProfile ?? null,
+  allowed_browser_profiles: a.allowedBrowserProfiles ?? null,
   is_builtin: isBuiltin,
   is_overridden: a.isOverridden,
 });
@@ -381,6 +391,81 @@ export function createAgentRoutes(
       allowedProfiles = list.length > 0 ? list : undefined;
     }
 
+    // PROP-135 (браузерный контур): профиль браузерного пула агента и потолок.
+    // Правила как у exec: `undefined` — сохраняем прежнее; `null`/`''` — сброс;
+    // `[]` — сброс списка. Валидация — по **браузерному** каталогу (exec-имена
+    // сюда не попадают и наоборот).
+    const browserCatalog = opts?.browserProfileCatalog;
+    const knownBrowserProfile = (name: string): boolean =>
+      !browserCatalog || browserCatalog.profiles.length === 0 || browserCatalog.profiles.includes(name);
+
+    const browserProfileInput = body.browser_profile !== undefined
+      ? body.browser_profile
+      : body.browserProfile;
+    let browserProfile: string | undefined;
+    if (browserProfileInput === undefined) {
+      browserProfile = existing?.browserProfile ?? builtin?.browserProfile;
+    } else if (browserProfileInput === null) {
+      browserProfile = undefined;
+    } else if (typeof browserProfileInput !== 'string') {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'browser_profile должен быть строкой или null',
+          },
+        },
+        400,
+      );
+    } else {
+      const profile = browserProfileInput.trim();
+      if (profile === '') {
+        browserProfile = undefined;
+      } else if (!knownBrowserProfile(profile)) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профиль браузера не найден: "${profile}". Доступные: ${browserCatalog!.profiles.join(', ')}`,
+          },
+        }, 400);
+      } else {
+        browserProfile = profile;
+      }
+    }
+
+    const allowedBrowserProfilesInput = body.allowed_browser_profiles !== undefined
+      ? body.allowed_browser_profiles
+      : body.allowedBrowserProfiles;
+    let allowedBrowserProfiles: string[] | undefined;
+    if (allowedBrowserProfilesInput === undefined) {
+      allowedBrowserProfiles = existing?.allowedBrowserProfiles ?? builtin?.allowedBrowserProfiles;
+    } else if (allowedBrowserProfilesInput === null) {
+      allowedBrowserProfiles = undefined;
+    } else {
+      const list = normalizeProfileList(allowedBrowserProfilesInput);
+      if (list === undefined) {
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'allowed_browser_profiles должен быть массивом строк или null',
+            },
+          },
+          400,
+        );
+      }
+      const unknown = list.filter((name) => !knownBrowserProfile(name));
+      if (unknown.length > 0) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Профили браузера не найдены: ${unknown.join(', ')}. Доступные: ${browserCatalog!.profiles.join(', ')}`,
+          },
+        }, 400);
+      }
+      allowedBrowserProfiles = list.length > 0 ? list : undefined;
+    }
+
     const agent: AgentDefinition = {
       id,
       displayName: body.display_name ?? body.displayName ?? existing?.displayName ?? builtin?.displayName ?? id,
@@ -414,6 +499,9 @@ export function createAgentRoutes(
       // PROP-135 Ф6a: профиль исполнения и потолок разрешённых профилей.
       executorProfile,
       allowedProfiles,
+      // PROP-135 (браузерный контур): отдельные поля, отдельный каталог.
+      browserProfile,
+      allowedBrowserProfiles,
     };
 
     // ADR-046/ADR-089: ролевой промпт агента — содержимое (не путь) в теле

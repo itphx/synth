@@ -77,6 +77,9 @@ const CATALOG = {
   pooling: 'instance',
   defaultProfile: 'default',
   profiles: ['default', 'devops', 'staging'],
+  // PROP-135 (браузерный контур): отдельный каталог браузерных профилей.
+  browserProfiles: ['browser', 'browser-full'],
+  browserDefaultProfile: 'browser',
 }
 
 async function renderTab(): Promise<HTMLElement> {
@@ -310,5 +313,99 @@ describe('SessionSettingsTab — профиль исполнения сесси�
     }))
     // Оптимистичной подмены нет: значение остаётся тем, что в сессии.
     expect(profileSelect(container).value).toBe('')
+  })
+})
+
+describe('SessionSettingsTab — профиль браузера сессии (PROP-135)', () => {
+  const browserSelect = (container: HTMLElement): HTMLSelectElement =>
+    container.querySelector('[data-testid="session-browser-profile-select"]') as HTMLSelectElement
+
+  it('каталог браузерных профилей: «Наследовать» + только браузерные имена', async () => {
+    const container = await renderTab()
+
+    const select = browserSelect(container)
+    expect(select).toBeTruthy()
+    expect(select.value).toBe('')
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'browser', 'browser-full'])
+    expect(select.options[0]!.textContent).toBe(
+      enDict['sessionSettings.browserProfile.inheritDefault'].replace('{profile}', 'browser'),
+    )
+  })
+
+  it('выбор сохраняется отдельным полем settings.browserProfile', async () => {
+    const container = await renderTab()
+
+    await selectValue(browserSelect(container), 'browser-full')
+
+    expect(mocks.updateSession).toHaveBeenCalledWith('s1', {
+      settings: { browserProfile: 'browser-full' },
+    })
+  })
+
+  it('«Наследовать» сбрасывает профиль (пустая строка)', async () => {
+    useSessionsStore.setState({
+      sessions: [
+        { id: 's1', name: 'S', project_id: 'p1', settings: { model: 'm', browserProfile: 'browser-full' } },
+      ],
+    } as never)
+
+    const container = await renderTab()
+    const select = browserSelect(container)
+    expect(select.value).toBe('browser-full')
+
+    await selectValue(select, '')
+
+    expect(mocks.updateSession).toHaveBeenCalledWith('s1', {
+      settings: { browserProfile: '' },
+    })
+  })
+
+  it('подсказка о наследовании показывает браузерный профиль проекта', async () => {
+    mocks.getProject.mockResolvedValue({ ...PROJECT, executor: { browserProfile: 'browser-full' } })
+    useProjectsStore.setState({
+      projects: [{ ...PROJECT, executor: { browserProfile: 'browser-full' } }] as never,
+    })
+
+    const container = await renderTab()
+
+    const hint = enDict['sessionSettings.browserProfile.inheritHintProject'].replace(
+      '{profile}',
+      'browser-full',
+    )
+    expect(container.querySelector('[data-testid="session-browser-profile"]')!.textContent).toContain(hint)
+  })
+
+  it('inline: браузерный профиль не применим — пояснение вместо селектора', async () => {
+    mocks.getExecutionProfiles.mockResolvedValue({
+      provider: 'inline',
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: [],
+      browserProfiles: [],
+      browserDefaultProfile: '',
+      details: [],
+    })
+
+    const container = await renderTab()
+
+    expect(
+      container.querySelector('[data-testid="session-browser-profile-not-applicable"]')!.textContent,
+    ).toContain(enDict['sessionSettings.browserProfile.notApplicable'])
+    expect(browserSelect(container)).toBeNull()
+  })
+
+  it('ошибка сохранения (403): тост о правах, значение остаётся серверным', async () => {
+    mocks.updateSession.mockRejectedValue(
+      Object.assign(new Error('Forbidden'), { status: 403 }),
+    )
+
+    const container = await renderTab()
+    await selectValue(browserSelect(container), 'browser-full')
+
+    expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
+      text: enDict['sessionSettings.browserProfile.forbidden'],
+      type: 'error',
+    }))
+    expect(browserSelect(container).value).toBe('')
   })
 })

@@ -26,6 +26,7 @@ const EXECUTION: ResolvedExecutionConfig = {
     pooling: 'instance',
     defaultProfile: 'default',
     browserProfile: 'browser',
+    browserProfiles: [],
     browserMcpServer: 'playwright',
     profiles: {},
     fallback: 'instance',

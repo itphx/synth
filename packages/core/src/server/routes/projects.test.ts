@@ -964,3 +964,120 @@ describe('Project API Routes — executor profile (PROP-135 Ф6a)', () => {
     expect((await store.load(id))!.executor).toEqual({ profile: 'anything' });
   });
 });
+
+/**
+ * PROP-135 (браузерный контур): `executor.browserProfile` проекта и потолок
+ * `allowedBrowserProfiles` — отдельный каталог (exec-имена не принимаются).
+ */
+describe('Project API Routes — executor browser profile (PROP-135)', () => {
+  let tmpDir: string;
+  let store: ProjectStore;
+  let app: Hono;
+  let currentUserId: string;
+
+  const browserCatalog = { profiles: ['browser', 'browser-full'], defaultProfile: 'browser' };
+
+  function makeApp(catalog?: { profiles: string[]; defaultProfile: string }): Hono {
+    const local = new Hono();
+    local.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store, undefined, {
+      getCurrentUserId: () => currentUserId,
+      canManage: (_c, project, userId) => project.ownerId === userId || userId === 'lead',
+      canEditContent: (_c, project, userId) =>
+        project.ownerId === userId || userId === 'lead' || project.members[userId] === ProjectRole.EDITOR,
+      ...(catalog ? { browserProfileCatalog: catalog } : {}),
+    }));
+    return local;
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-projects-browser-'));
+    store = new ProjectStore({ dataDir: tmpDir });
+    currentUserId = 'owner';
+    app = makeApp(browserCatalog);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function createProject(): Promise<string> {
+    const res = await app.request('/api/v2/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'P' }),
+    });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  async function putExecutor(id: string, executor: unknown): Promise<Response> {
+    return app.request(`/api/v2/projects/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ executor }),
+    });
+  }
+
+  it('сохраняет браузерный профиль и потолок; DTO отдаёт их', async () => {
+    const id = await createProject();
+    const res = await putExecutor(id, {
+      browserProfile: 'browser-full',
+      allowedBrowserProfiles: ['browser', 'browser-full'],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      executor: { browserProfile?: string; allowedBrowserProfiles?: string[] };
+    };
+    expect(body.executor).toEqual({
+      browserProfile: 'browser-full',
+      allowedBrowserProfiles: ['browser', 'browser-full'],
+    });
+    expect((await store.load(id))!.executor).toEqual({
+      browserProfile: 'browser-full',
+      allowedBrowserProfiles: ['browser', 'browser-full'],
+    });
+  });
+
+  it('сброс: null/[] снимают обе части, пустая строка — только профиль', async () => {
+    const id = await createProject();
+    await putExecutor(id, {
+      browserProfile: 'browser-full',
+      allowedBrowserProfiles: ['browser-full'],
+    });
+
+    const resetOne = await putExecutor(id, { browserProfile: '' });
+    expect(resetOne.status).toBe(200);
+    expect((await store.load(id))!.executor).toEqual({
+      allowedBrowserProfiles: ['browser-full'],
+    });
+
+    const reset = await putExecutor(id, { browserProfile: null, allowedBrowserProfiles: [] });
+    expect(reset.status).toBe(200);
+    expect(((await reset.json()) as { executor: unknown }).executor).toBeNull();
+    expect((await store.load(id))!.executor).toBeUndefined();
+  });
+
+  it('неизвестный браузерный профиль → 400 «Профиль браузера не найден»', async () => {
+    const id = await createProject();
+    const res = await putExecutor(id, { browserProfile: 'ghost' });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('Профиль браузера не найден');
+    expect((await store.load(id))!.executor).toBeUndefined();
+
+    // exec-имя в браузерном контуре не принимается.
+    expect((await putExecutor(id, { browserProfile: 'devops' })).status).toBe(400);
+    expect(
+      (await putExecutor(id, { allowedBrowserProfiles: ['browser', 'ghost'] })).status,
+    ).toBe(400);
+  });
+
+  it('без каталога проверка пропускается', async () => {
+    app = makeApp(undefined);
+    const id = await createProject();
+    const res = await putExecutor(id, { browserProfile: 'anything' });
+    expect(res.status).toBe(200);
+    expect((await store.load(id))!.executor).toEqual({ browserProfile: 'anything' });
+  });
+});

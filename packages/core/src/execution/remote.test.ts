@@ -51,6 +51,7 @@ function execution(overrides: { mode?: 'inline' | 'remote'; url?: string[]; toke
           pooling: 'instance',
           defaultProfile: 'default',
           browserProfile: 'browser',
+          browserProfiles: [],
           browserMcpServer: 'playwright',
           profiles: {},
           fallback: 'instance',

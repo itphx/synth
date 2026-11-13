@@ -41,6 +41,20 @@ export interface AgentDefinition {
    * без ограничения (обратная совместимость).
    */
   allowedProfiles?: string[];
+  /**
+   * PROP-135 (браузерный контур): профиль браузерного пула агента
+   * (`execution.remote.browserProfiles`). Приоритет выбора: сессия → агент →
+   * проект → инстанс-дефолт (`execution.remote.browserProfile`). Не задан —
+   * наследуется. Отдельный контур: имя проверяется по браузерному каталогу, а
+   * не по exec-каталогу (`allowedProfiles`).
+   */
+  browserProfile?: string;
+  /**
+   * PROP-135 (браузерный контур): **потолок** браузерных профилей агента.
+   * Непустой список — профиль обязан в него входить; пусто/`undefined` — без
+   * ограничения.
+   */
+  allowedBrowserProfiles?: string[];
   isOverridden: boolean;
   icon?: string;
   color?: string;

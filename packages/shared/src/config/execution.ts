@@ -65,6 +65,8 @@ export const EXECUTION_ENV = {
   defaultProfile: 'SYNTH_EXECUTION_DEFAULT_PROFILE',
   /** Профиль пула класса `browser` (браузер — свой образ/профиль). */
   browserProfile: 'SYNTH_EXECUTION_BROWSER_PROFILE',
+  /** Браузерный контур: явный каталог браузерных профилей (csv). */
+  browserProfiles: 'SYNTH_EXECUTION_BROWSER_PROFILES',
   /** Имя MCP-сервера браузера в поде исполнителя. */
   browserMcpServer: 'SYNTH_EXECUTION_BROWSER_MCP_SERVER',
   /** PROP-135 Ф4a: поведение при непригодном профиле (`instance`|`fail`). */
@@ -144,6 +146,12 @@ export interface ResolvedExecutionRemoteConfig {
    * образом, поэтому `class: 'browser'` не наследует `defaultProfile`.
    */
   browserProfile: string;
+  /**
+   * PROP-135 (браузерный контур): явный каталог браузерных профилей.
+   * Пусто — эффективный каталог равен `[browserProfile]` (см.
+   * `resolveBrowserProfileNames`).
+   */
+  browserProfiles: string[];
   /** Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`). */
   browserMcpServer: string;
   /** Эффективные параметры профилей (PROP-135 Ф4a) — по имени профиля. */
@@ -261,6 +269,57 @@ function invalidProviderMessage(source: string, value: string): string {
 }
 
 /**
+ * Нормализация списка имён профилей: trim, пустые отбрасываются, дубликаты
+ * схлопываются (порядок первого вхождения сохраняется).
+ */
+export function normalizeProfileNameList(names: readonly string[] | undefined): string[] {
+  const list: string[] = [];
+  for (const raw of names ?? []) {
+    const name = String(raw ?? '').trim();
+    if (name === '' || list.includes(name)) continue;
+    list.push(name);
+  }
+  return list;
+}
+
+/**
+ * Эффективный каталог **браузерных** профилей (PROP-135, браузерный контур).
+ *
+ * Явный `execution.remote.browserProfiles` важнее; пустой/не заданный список —
+ * каталог равен `[browserProfile]` (обратная совместимость: до появления поля
+ * браузерный пул знал ровно один профиль).
+ */
+export function resolveBrowserProfileNames(
+  remote: { browserProfiles?: readonly string[]; browserProfile?: string } | undefined,
+): string[] {
+  const explicit = normalizeProfileNameList(remote?.browserProfiles);
+  if (explicit.length > 0) return explicit;
+  const fallback = (remote?.browserProfile ?? '').trim();
+  return fallback !== '' ? [fallback] : [];
+}
+
+/**
+ * Каталог профилей **исполнения** (exec) — без имён браузерного каталога.
+ *
+ * `execution.remote.profiles` + `defaultProfile`; имена, закреплённые за
+ * браузером, исключаются (они адресуют браузерный пул, а не exec). Исключение
+ * не применяется к `defaultProfile`: это единственная точка отката exec-контура.
+ */
+export function resolveExecutionProfileNames(
+  remote: Pick<ResolvedExecutionRemoteConfig, 'profiles' | 'defaultProfile'> & {
+    browserProfiles?: readonly string[];
+    browserProfile?: string;
+  },
+): string[] {
+  const browser = new Set(resolveBrowserProfileNames(remote));
+  const names = Object.keys(remote.profiles ?? {});
+  if (!names.includes(remote.defaultProfile) && remote.defaultProfile.trim() !== '') {
+    names.push(remote.defaultProfile);
+  }
+  return names.filter((name) => name === remote.defaultProfile || !browser.has(name));
+}
+
+/**
  * Резолвит режим исполнения. Приоритет: CLI-флаг > env `SYNTH_EXECUTION_MODE` >
  * `config.execution.mode` > `inline`.
  *
@@ -356,6 +415,13 @@ export function resolveExecutionConfig(
     DEFAULT_EXECUTION_BROWSER_PROFILE,
     env,
   );
+  // Браузерный контур: явный каталог браузерных профилей. Приоритет — env
+  // (csv) > config.yaml > [] (эффективный каталог = `[browserProfile]`).
+  const browserProfilesRaw = env[EXECUTION_ENV.browserProfiles];
+  const browserProfiles =
+    browserProfilesRaw !== undefined && browserProfilesRaw.trim() !== ''
+      ? normalizeProfileNameList(browserProfilesRaw.split(','))
+      : normalizeProfileNameList(remoteCfg.browserProfiles);
   const browserMcpServer = resolveConfiguredName(
     EXECUTION_ENV.browserMcpServer,
     remoteCfg.browserMcpServer,
@@ -397,6 +463,7 @@ export function resolveExecutionConfig(
       pooling,
       defaultProfile,
       browserProfile,
+      browserProfiles,
       browserMcpServer,
       profiles,
       fallback,

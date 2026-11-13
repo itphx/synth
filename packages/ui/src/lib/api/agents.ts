@@ -36,6 +36,13 @@ export interface AgentInfo {
    * `null`/пустой список — без ограничения.
    */
   allowed_profiles?: string[] | null
+  /**
+   * PROP-135 (браузерный контур): профиль браузерного пула агента.
+   * `null`/отсутствует — наследовать профиль проекта/инстанса.
+   */
+  browser_profile?: string | null
+  /** PROP-135 (браузерный контур): потолок браузерных профилей агента. */
+  allowed_browser_profiles?: string[] | null
   is_builtin: boolean
   is_overridden: boolean
 }
@@ -67,6 +74,10 @@ export interface AgentSavePayload {
   color?: string
   executor_profile?: string | null
   allowed_profiles?: string[] | null
+  /** PROP-135 (браузерный контур): профиль браузерного пула агента. */
+  browser_profile?: string | null
+  /** PROP-135 (браузерный контур): потолок браузерных профилей агента. */
+  allowed_browser_profiles?: string[] | null
   [key: string]: unknown
 }
 

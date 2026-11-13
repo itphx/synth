@@ -540,6 +540,7 @@ describe('McpManager: inline-режим не изменился', () => {
         pooling: 'instance',
         defaultProfile: 'default',
         browserProfile: 'browser',
+        browserProfiles: [],
         browserMcpServer: 'playwright',
         profiles: {},
         fallback: 'instance',

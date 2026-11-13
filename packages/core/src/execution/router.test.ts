@@ -54,6 +54,7 @@ function makeConfig(overrides: {
   pooling?: 'instance' | 'project' | 'session';
   defaultProfile?: string;
   browserProfile?: string;
+  browserProfiles?: string[];
   browserMcpServer?: string;
   fallback?: 'instance' | 'fail';
   url?: string[];
@@ -95,6 +96,7 @@ function makeConfig(overrides: {
           pooling: overrides.pooling ?? 'instance',
           defaultProfile: overrides.defaultProfile ?? 'default',
           browserProfile: overrides.browserProfile ?? 'browser',
+          browserProfiles: overrides.browserProfiles ?? [],
           browserMcpServer: overrides.browserMcpServer ?? 'playwright',
           profiles: Object.fromEntries(
             Object.entries(overrides.profiles ?? {}).map(([name, profile]) => [
@@ -755,6 +757,9 @@ describe('PROP-135 слайз 5b-1: браузерный пул — project scop
         provider: 'http',
         pooling: 'project',
         browserProfile: 'browser-dev',
+        // Явный браузерный профиль должен быть в браузерном каталоге: exec-
+        // профили (и имена вне каталога) браузерному пулу не адресуются.
+        browserProfiles: ['browser-dev', 'browser-prod'],
         profiles: { 'browser-prod': { url: ['http://browser-prod:8080'] } },
         provisioner: { url: 'http://provisioner:8080' },
       }),
@@ -773,6 +778,54 @@ describe('PROP-135 слайз 5b-1: браузерный пул — project scop
     expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
       'project:prj_a:browser:browser-prod',
     ]);
+  });
+
+  it('браузерный каталог: явный профиль из browserProfiles → свой ключ пула', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'session',
+        browserProfile: 'browser',
+        browserProfiles: ['browser', 'browser-full'],
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const browser = router.portFor({
+      projectId: 'prj_a',
+      profile: 'browser-full',
+      class: 'browser',
+    });
+    await browser
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    // Браузер — всегда проектный пул, даже при `pooling: session`.
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'project:prj_a:browser:browser-full',
+    ]);
+  });
+
+  it('браузерный каталог: browserProfiles()/browserDefaultProfile(), exec-каталог без браузерных имён', async () => {
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        defaultProfile: 'default',
+        browserProfile: 'browser',
+        browserProfiles: ['browser', 'browser-full'],
+        profiles: { devops: { url: ['http://devops:8080'] } },
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: keyCollector().provider,
+    });
+
+    // Exec-каталог: браузерные имена исключены, exec-профили и дефолт — на месте.
+    expect(router.profiles?.()).toEqual(['devops', 'default']);
+    expect(router.browserProfiles?.()).toEqual(['browser', 'browser-full']);
+    expect(router.browserDefaultProfile?.()).toBe('browser');
   });
 
   it('браузер без projectId → идентификатором служит sessionId', async () => {

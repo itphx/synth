@@ -28,6 +28,7 @@ export function createAgentRoutes(
   getDefaultAgentId?: () => string | Promise<string>,
   contextFiles?: ContextFileRepository,
   executionProfileCatalog?: ExecutionProfileCatalog,
+  browserProfileCatalog?: ExecutionProfileCatalog,
 ): Hono {
   const app = new Hono();
 
@@ -43,6 +44,8 @@ export function createAgentRoutes(
       roleFiles: contextFiles,
       // PROP-135 Ф6a: каталог профилей — проверка профиля агента при записи.
       ...(executionProfileCatalog ? { executionProfileCatalog } : {}),
+      // PROP-135 (браузерный контур): каталог браузерных профилей агента.
+      ...(browserProfileCatalog ? { browserProfileCatalog } : {}),
       messages: {
         idRequired: (c) => t('errors.validation.idRequired', undefined, c),
         invalidAgentId: (c) => t('errors.validation.invalidAgentId', undefined, c),

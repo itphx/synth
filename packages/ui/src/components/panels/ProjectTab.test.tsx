@@ -117,6 +117,9 @@ beforeEach(() => {
     pooling: 'project',
     defaultProfile: 'default',
     profiles: ['default', 'devops'],
+    // PROP-135 (браузерный контур): отдельный каталог браузерных профилей.
+    browserProfiles: ['browser', 'browser-full'],
+    browserDefaultProfile: 'browser',
   })
   mocks.getWorkspaceRoot.mockResolvedValue({ root: '/ws', entries: [] })
 
@@ -596,7 +599,12 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     })
 
     expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
-      executor: { profile: 'devops', allowedProfiles: ['devops'] },
+      executor: {
+        profile: 'devops',
+        allowedProfiles: ['devops'],
+        browserProfile: null,
+        allowedBrowserProfiles: [],
+      },
     })
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ text: enDict['projectTab.executor.saved'], type: 'success' }),
@@ -623,7 +631,12 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     })
 
     expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
-      executor: { profile: null, allowedProfiles: [] },
+      executor: {
+        profile: null,
+        allowedProfiles: [],
+        browserProfile: null,
+        allowedBrowserProfiles: [],
+      },
     })
     expect(profileSelect(container).value).toBe('')
   })
@@ -648,6 +661,62 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     expect(mocks.getExecutionProfiles).not.toHaveBeenCalled()
   })
 
+  it('браузерный блок: селект и потолок сохраняются отдельными полями', async () => {
+    const saved = {
+      ...PROJECT,
+      executor: { browserProfile: 'browser-full', allowedBrowserProfiles: ['browser-full'] },
+    }
+    mocks.updateProject.mockResolvedValue(saved)
+
+    const container = await renderTab()
+    const browserSelect = container.querySelector(
+      '[data-testid="project-browser-profile-select"]',
+    ) as HTMLSelectElement
+    expect([...browserSelect.options].map((o) => o.value)).toEqual(['', 'browser', 'browser-full'])
+
+    await setSelectValue(browserSelect, 'browser-full')
+    await act(async () => {
+      ;(container.querySelector(
+        '[data-testid="project-browser-allowed-browser-full"]',
+      ) as HTMLInputElement).click()
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="project-executor-save"]') as HTMLButtonElement).click()
+    })
+
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      executor: {
+        profile: null,
+        allowedProfiles: [],
+        browserProfile: 'browser-full',
+        allowedBrowserProfiles: ['browser-full'],
+      },
+    })
+    expect(browserSelect.value).toBe('browser-full')
+  })
+
+  it('браузерный блок показывает сохранённые значения и сбрасывается', async () => {
+    const withBrowser = {
+      ...PROJECT,
+      executor: { browserProfile: 'browser-full', allowedBrowserProfiles: ['browser-full'] },
+    }
+    mocks.getProject.mockResolvedValue(withBrowser)
+    useProjectsStore.setState({ projects: [withBrowser] as never })
+    mocks.updateProject.mockResolvedValue(PROJECT)
+
+    const container = await renderTab()
+    expect(
+      (container.querySelector('[data-testid="project-browser-profile-select"]') as HTMLSelectElement).value,
+    ).toBe('browser-full')
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="project-executor-reset"]') as HTMLButtonElement).click()
+    })
+    expect(
+      (container.querySelector('[data-testid="project-browser-profile-select"]') as HTMLSelectElement).value,
+    ).toBe('')
+  })
+
   it('inline: профили не применимы — пояснение вместо селекторов, сохранения нет', async () => {
     mocks.getExecutionProfiles.mockResolvedValue({
       provider: 'inline',
@@ -664,6 +733,7 @@ describe('ProjectTab — профиль исполнения проекта (PRO
     ).toContain(enDict['projectTab.executor.notApplicable'])
     expect(container.querySelector('[data-testid="project-executor-profile"]')).toBeNull()
     expect(container.querySelector('[data-testid="project-executor-allowed"]')).toBeNull()
+    expect(container.querySelector('[data-testid="project-browser-profile-select"]')).toBeNull()
     expect(container.querySelector('[data-testid="project-executor-save"]')).toBeNull()
     expect(container.querySelector('[data-testid="project-executor-reset"]')).toBeNull()
     expect(mocks.updateProject).not.toHaveBeenCalled()

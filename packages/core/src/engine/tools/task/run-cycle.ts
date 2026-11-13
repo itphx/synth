@@ -29,7 +29,7 @@ import { ObfuscationMapStore } from '../../gateway/obfuscation-map-store.js';
 import { estimatePromptChars, estimateTokens } from '../../context/token-ratio.js';
 import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-steps.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
-import { debug, info } from '../../../logger.js';
+import { debug, info, warning } from '../../../logger.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
 import {
   publishPartDelta,
@@ -55,6 +55,7 @@ import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
 import type { AssistantMessageStatus } from '../../orchestrator/persistence.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import { renderTodosSection } from '../todo.js';
+import { resolveBrowserProfile } from '../../../execution/profile-binding.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
 /** Retry саб-агента: максимум попыток LLM-вызова (единая политика — LLM_MAX_ATTEMPTS). */
@@ -434,6 +435,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   let childPlanApproved = false;
   let childPlanMode: PlanMode = 'auto';
   let childMcpToolSettings: Record<string, import('@itphx/synth-shared').McpServerToolSettings> | undefined;
+  /** Настройки дочерней сессии (нужны браузерному контуру профилей). */
+  let childSessionSettings: import('@itphx/synth-shared').SessionSettings | undefined;
   /**
    * id первого user-сообщения ребёнка — `messageId` в `turn.started` (это
    * реплика, которой ход ребёнка начат; fallback — id самой сессии).
@@ -447,11 +450,40 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         childPlanApproved = Boolean(child.planApproved);
         childPlanMode = child.settings.planMode ?? 'auto';
         childMcpToolSettings = child.settings.mcpToolSettings;
+        childSessionSettings = child.settings;
         childUserMessageId = child.messages.find((m) => m.role === MessageRole.USER)?.id;
       }
     } catch {
       // не фатально — остаёмся в act/auto
     }
+  }
+
+  // PROP-135 (браузерный контур): браузерный профиль прогона ребёнка —
+  // отдельный контур (сессия ребёнка → его агент → проект → дефолт инстанса).
+  // Каталог известен — считаем по роли ребёнка; неизвестен (inline/instance) —
+  // наследуем вычисленное родителем значение (прежнее поведение).
+  let childBrowserProfile = extra.executionBrowserProfile;
+  const browserCatalog = extra.executionBrowserProfileCatalog;
+  if (browserCatalog) {
+    let browserProject: Awaited<ReturnType<NonNullable<TaskExtra['projectStore']>['load']>> | undefined;
+    if (ctx.projectId && extra.projectStore) {
+      try {
+        browserProject = (await extra.projectStore.load(ctx.projectId)) ?? undefined;
+      } catch {
+        // не фатально: без проекта работает потолок агента и дефолт инстанса
+      }
+    }
+    const resolution = resolveBrowserProfile({
+      sessionProfile: childSessionSettings?.browserProfile,
+      agentProfile: subagentDef?.browserProfile,
+      agentAllowed: subagentDef?.allowedBrowserProfiles,
+      projectProfile: browserProject?.executor?.browserProfile,
+      projectAllowed: browserProject?.executor?.allowedBrowserProfiles,
+      defaultProfile: browserCatalog.defaultProfile,
+      knownProfiles: browserCatalog.profiles,
+    });
+    if (resolution.warning) warning('SUBAGENT', resolution.warning);
+    childBrowserProfile = resolution.profile || undefined;
   }
 
   // ADR-070 §2.9: список тулов саб-агента постоянен (без режимной фильтрации).
@@ -1925,6 +1957,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             // родителя. `sessionId` в extra остаётся родительским (события,
             // permission.ask/replied, проектный/automation-скоуп).
             todoSessionId: childSessionId,
+            // PROP-135 (браузерный контур): профиль ребёнка — его роль/проект.
+            executionBrowserProfile: childBrowserProfile,
             sshSecrets: extra.sshSecretsFor
               ? extra.sshSecretsFor({
                   agentRole: subagentDef?.id ?? subagentType,

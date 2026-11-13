@@ -58,8 +58,15 @@ export interface ExecutionProfilesDto {
   pooling: ExecutionPooling
   /** Профиль по умолчанию (входит в `profiles` всегда). */
   defaultProfile: string
-  /** Известные профили. */
+  /** Известные профили **exec**-контура (браузерные имена не входят). */
   profiles: string[]
+  /**
+   * PROP-135 (браузерный контур): каталог браузерных профилей
+   * (`execution.remote.browserProfiles`; пусто → `[browserDefaultProfile]`).
+   */
+  browserProfiles?: string[]
+  /** PROP-135 (браузерный контур): браузерный профиль по умолчанию. */
+  browserDefaultProfile?: string
   /** Метаданные профилей (может отсутствовать у старого сервера — `[]`). */
   details: ExecutionProfileInfo[]
 }

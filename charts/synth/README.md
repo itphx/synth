@@ -1221,6 +1221,28 @@ execution:
         description: "Инстанс-исполнитель test: backend+executor, полный toolchain (full)"
         image: "synth-executor:0.13.9-full"
         network: restricted           # none | restricted | full
+    # Браузерный контур профилей (ADR-135 п. 10): отдельный каталог браузерных
+    # имён (env SYNTH_EXECUTION_BROWSER_PROFILES у backend, csv). Пусто →
+    # каталог равен [browserProfile]. Имена исключаются из exec-каталога.
+    browserProfiles:
+      - browser-full
+      - browser-mobile
+```
+
+Браузерные имена из `execution.remote.browserProfiles` адресуются только пулу класса
+`browser` (`project:<id>:browser:<profile>`); в `profiles` (exec) и в полях
+`executor_profile` их нет. Метаданные профиля (образ/сеть/`mcpServers`) по-прежнему
+описываются в `execution.remote.profiles` / `provisioner.profiles` под тем же именем.
+
+```yaml
+execution:
+  mode: remote
+  remote:
+    profiles:
+      browser-full:
+        image: "synth-executor:0.13.9-full"
+        network: full
+        mcpServers: ["playwright-mcp"]
 ```
 
 Чарт рендерит `execution.remote.profiles` в `config.yaml` backend'а (адреса исполнителей

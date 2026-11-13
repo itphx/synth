@@ -89,6 +89,7 @@ import type {
   ResolvedExecutionProfile,
   ResolvedExecutionRemoteConfig,
 } from '@itphx/synth-shared';
+import { resolveBrowserProfileNames, resolveExecutionProfileNames } from '@itphx/synth-shared';
 import type { ExecutionProfileCatalog } from './profile-binding.js';
 import { createExecutionPortForConfig, defaultPooledPortFactory } from './factory.js';
 import {
@@ -207,6 +208,14 @@ export interface ExecutionRouter {
    */
   defaultProfile?(): string;
   /**
+   * PROP-135 (браузерный контур): имена **браузерных** профилей
+   * (`execution.remote.browserProfiles`; пусто → `[browserProfile]`). Отдельный
+   * каталог: имена браузерных профилей не входят в exec-каталог `profiles()`.
+   */
+  browserProfiles?(): readonly string[];
+  /** PROP-135 (браузерный контур): браузерный профиль по умолчанию. */
+  browserDefaultProfile?(): string;
+  /**
    * PROP-135 Ф6b-1: провайдер пулов исполнения — источник диагностики пулов
    * (`GET /api/v2/execution/pools`) и операций `drain`/`release`.
    *
@@ -258,6 +267,23 @@ export function executionProfileCatalog(
   return {
     profiles: router.profiles(),
     defaultProfile: router.defaultProfile(),
+  };
+}
+
+/**
+ * PROP-135 (браузерный контур): снимок каталога **браузерных** профилей.
+ *
+ * `undefined` — роутер не знает браузерного каталога (`inline`/instance-пул/
+ * тестовая заглушка): binding не проверяет существование, поведение прежнее
+ * (роутер возьмёт `execution.remote.browserProfile`).
+ */
+export function browserProfileCatalog(
+  router: ExecutionRouter | undefined,
+): ExecutionProfileCatalog | undefined {
+  if (!router?.browserProfiles || !router?.browserDefaultProfile) return undefined;
+  return {
+    profiles: router.browserProfiles(),
+    defaultProfile: router.browserDefaultProfile(),
   };
 }
 
@@ -428,8 +454,12 @@ export async function createExecutionRouter(
     },
     // PROP-135 Ф6a: каталог профилей — для binding'а (`resolveExecutionProfile`)
     // и проверки `executor.profile`/`executor_profile` в роутах и `task`.
-    profiles: () => [...plans.keys()],
+    // Браузерный контур: имена браузерных профилей в exec-каталог не входят.
+    profiles: () => resolveExecutionProfileNames(remote),
     defaultProfile: () => defaultName,
+    // PROP-135 (браузерный контур): отдельный каталог для `class: 'browser'`.
+    browserProfiles: () => resolveBrowserProfileNames(remote),
+    browserDefaultProfile: () => remote.browserProfile,
     // PROP-135: метаданные профилей — из конфигурации (`static`).
     profilesInfo: async () =>
       [...plans.values()].map((plan) =>
@@ -519,9 +549,13 @@ function createHttpProviderRouter(
     },
     // PROP-135 Ф6a: каталог известных профилей (профиль по умолчанию входит
     // всегда). `provider: http` адреса профилей получает от provisioner'а —
-    // проверяется только имя, без обращения к нему.
-    profiles: () => [...knownProfiles(remote)],
+    // проверяется только имя, без обращения к нему. Браузерные профили — в
+    // отдельном каталоге (exec-каталог их не содержит).
+    profiles: () => resolveExecutionProfileNames(remote),
     defaultProfile: () => defaultName,
+    // PROP-135 (браузерный контур): отдельный каталог для `class: 'browser'`.
+    browserProfiles: () => resolveBrowserProfileNames(remote),
+    browserDefaultProfile: () => remote.browserProfile,
     // PROP-135 Ф6b-1: админ-диагностика пулов у provisioner'а (`list`) и
     // операции `drain`/`release` — тот же провайдер, что у ленивых портов.
     poolProvider: () => provider,
@@ -578,11 +612,18 @@ function resolveProfileName(
   poolClass: ExecutionPoolClass = 'exec',
 ): string {
   const name = (requested ?? '').trim();
-  const fallback = poolClass === 'browser' ? remote.browserProfile : remote.defaultProfile;
+  if (poolClass === 'browser') {
+    // PROP-135 (браузерный контур): известны только браузерный профиль по
+    // умолчанию и явный каталог `browserProfiles`. Exec-профили браузеру не
+    // адресуются — иначе `class: 'browser'` уходил бы в образ обычных команд.
+    const fallback = remote.browserProfile;
+    const known = name !== '' && resolveBrowserProfileNames(remote).includes(name);
+    return known ? name : fallback;
+  }
   const known =
     name !== '' &&
-    (remote.profiles[name] !== undefined || name === remote.defaultProfile || name === remote.browserProfile);
-  return known ? name : fallback;
+    (remote.profiles[name] !== undefined || name === remote.defaultProfile);
+  return known ? name : remote.defaultProfile;
 }
 
 /**
@@ -702,6 +743,7 @@ function profileConfig(
       pooling: remote.pooling,
       defaultProfile: remote.defaultProfile,
       browserProfile: remote.browserProfile,
+      browserProfiles: remote.browserProfiles,
       browserMcpServer: remote.browserMcpServer,
       profiles: remote.profiles,
       fallback: remote.fallback,

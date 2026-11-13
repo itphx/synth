@@ -9,7 +9,9 @@ import {
   isExecutionPooling,
   isExecutionPoolProvider,
   parseExecutionUrlList,
+  resolveBrowserProfileNames,
   resolveExecutionConfig,
+  resolveExecutionProfileNames,
   resolveExecutionMode,
 } from './execution.js';
 import {
@@ -274,6 +276,62 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
       remote: { ...cfg.execution.remote, browserProfile: '' },
     });
     expect(resolveExecutionConfig(empty, {}).remote.browserProfile).toBe('browser');
+  });
+
+  it('browserProfiles: дефолт пуст, env (csv) важнее config.yaml, нормализация', () => {
+    // Дефолт — пустой список: эффективный каталог равен `[browserProfile]`.
+    expect(cfg.execution.remote.browserProfiles).toEqual([]);
+    expect(resolveExecutionConfig(cfg, {}).remote.browserProfiles).toEqual([]);
+
+    // config.yaml: trim, пустые и дубли отбрасываются.
+    const c = withRemote({
+      browserProfiles: [' browser-full ', '', 'browser-full', 'browser-mobile'],
+    });
+    expect(resolveExecutionConfig(c, {}).remote.browserProfiles).toEqual([
+      'browser-full',
+      'browser-mobile',
+    ]);
+
+    // env (csv) приоритетнее config.yaml.
+    expect(
+      resolveExecutionConfig(c, {
+        [EXECUTION_ENV.browserProfiles]: 'browser-env, browser-full ,, browser-env',
+      }).remote.browserProfiles,
+    ).toEqual(['browser-env', 'browser-full']);
+
+    // Пустое env-значение — «не задано» → берётся config.
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.browserProfiles]: '' }).remote.browserProfiles,
+    ).toEqual(['browser-full', 'browser-mobile']);
+  });
+
+  it('resolveBrowserProfileNames: пусто → [browserProfile]; resolveExecutionProfileNames исключает браузерные', () => {
+    // Импортируются ниже в этом же файле (см. верхний импорт).
+    expect(resolveBrowserProfileNames({ browserProfiles: [], browserProfile: 'browser' })).toEqual([
+      'browser',
+    ]);
+    expect(resolveBrowserProfileNames({ browserProfile: '' })).toEqual([]);
+
+    const names = resolveExecutionProfileNames({
+      profiles: { default: {}, devops: {}, browser: {}, 'browser-full': {} },
+      defaultProfile: 'default',
+      browserProfiles: ['browser', 'browser-full'],
+      browserProfile: 'browser',
+    });
+    expect(names).toContain('default');
+    expect(names).toContain('devops');
+    expect(names).not.toContain('browser');
+    expect(names).not.toContain('browser-full');
+
+    // defaultProfile не исключается, даже если совпал с браузерным именем.
+    expect(
+      resolveExecutionProfileNames({
+        profiles: {},
+        defaultProfile: 'browser',
+        browserProfiles: ['browser'],
+        browserProfile: 'browser',
+      }),
+    ).toEqual(['browser']);
   });
 
   it('browserMcpServer: env важнее config.yaml; пустое значение → дефолт', () => {

@@ -589,6 +589,7 @@ export {
   createExecutionRouter,
   isExecutionRouter,
   executionProfileCatalog,
+  browserProfileCatalog,
   ExecutionProfileUnavailableError,
   POOL_REF_TTL_MS,
 } from './execution/router.js';
@@ -602,6 +603,7 @@ export type {
 // PROP-135 Ф6a: binding профиля исполнения (сессия → агент → проект → дефолт).
 export {
   resolveExecutionProfile,
+  resolveBrowserProfile,
   isProfileAllowed,
 } from './execution/profile-binding.js';
 export type {

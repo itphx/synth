@@ -57,6 +57,7 @@ import {
   // PROP-135 Ф6a: каталог профилей исполнения — валидация проектных/сессионных
   // настроек профиля.
   executionProfileCatalog,
+  browserProfileCatalog,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -158,9 +159,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // `project.executor` (PUT проекта) и `settings.executorProfile` (PATCH сессии).
   const executionProfiles: ExecutionProfileCatalog | undefined =
     executionProfileCatalog(deps.executionRouter);
+  // PROP-135 (браузерный контур): каталог браузерных профилей — валидация
+  // `browser_profile`/`allowedBrowserProfiles` у агента/проекта/сессии.
+  const browserProfiles: ExecutionProfileCatalog | undefined =
+    browserProfileCatalog(deps.executionRouter);
 
   // Projects routes
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles, browserProfiles));
 
   // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
   // core-фабрика, RBAC — те же правила проекта (чтение — право чтения,
@@ -322,6 +327,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     () => deps.sessionOpsPerMinuteSettings.getValue(),
     // PROP-135 Ф6a: каталог профилей — валидация `settings.executorProfile`.
     executionProfiles,
+    // PROP-135 (браузерный контур): каталог браузерных профилей сессии.
+    browserProfiles,
   ));
 
   // Messages routes
@@ -400,7 +407,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
   // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
   // PROP-135 Ф6a: каталог профилей — проверка `executor_profile`/`allowed_profiles`.
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig, executionProfiles));
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig, executionProfiles, browserProfiles));
 
   // Context routes (файлы контекста/промптов инстанца; админ-мутации) — core-фабрика.
   app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig, {

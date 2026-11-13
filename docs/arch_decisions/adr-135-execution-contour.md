@@ -81,6 +81,27 @@
    `executor.ready` в существующей шине (ADR-024/ADR-118), новых каналов нет; метрики
    `synth_executor_pool_*`/`synth_executor_provision_*` — по контракту ADR-094 (без `session_id`).
 
+10. **Браузерный контур профилей (Ф6a, симметрия с exec).** Браузерные имена — **отдельный
+    каталог**, а не подмножество exec-профилей: `execution.remote.browserProfiles` (env
+    `SYNTH_EXECUTION_BROWSER_PROFILES`, csv); пусто — каталог равен `[browserProfile]`
+    (обратная совместимость). Имена из `browserProfiles` **исключаются** из exec-каталога
+    (`router.profiles()`, проверка `executor_profile`), а metadata-записи в
+    `execution.remote.profiles` для них остаются (описание/сеть/`mcpServers` для `details`).
+    `resolveProfileName` для `class: 'browser'` знает только браузерный каталог (+ текущий
+    `browserProfile`); exec-имя браузерному пулу не адресуется.
+    Эффективный браузерный профиль хода — та же цепочка, что у exec:
+    `session.settings.browserProfile` → `agentDefinition.browserProfile` →
+    `project.executor.browserProfile` → `execution.remote.browserProfile`; потолки —
+    `project.executor.allowedBrowserProfiles` ∩ `agentDefinition.allowedBrowserProfiles`
+    (непустой список обязателен для кандидата, пусто — без ограничения). Запрещённый/неизвестный
+    кандидат не выбирается: откат на следующий/дефолт инстанса + предупреждение в лог (без
+    секретов); дефолт инстанса потолками не проверяется. Binding считается на ход оркестратором
+    (и саб-агентом — по его роли/проекту) и уходит в `ToolContext.extra.executionBrowserProfile`;
+    `browser_*` передают его в `portFor({class:'browser', profile})`. Ключ пула не изменился
+    (`project:<id>:browser:<profile>`). API валидирует имена по каталогу (агент/проект/сессия;
+    400 `VALIDATION_ERROR`, текст «Профиль браузера не найден: …»); `GET /api/v2/execution/profiles`
+    отдаёт аддитивные `browserProfiles`/`browserDefaultProfile`, `profiles` — без браузерных имён.
+
 ## Альтернативы
 
 - **Оставить файловые операции в control plane** — отклонено: split теряет смысл, тонкий control plane
@@ -98,9 +119,12 @@
   control plane без ФС агента; контрактные тесты `inline`/`remote` удерживают семантику.
 - **Минусы:** ещё один сервис (provisioner) и протокол; версии control plane/исполнителя обязаны быть
   совместимы; квоты пулов — операционная настройка; `sandbox_exec` — отдельная среда без shell-guard.
-- **Остаток:** per-project UI выбора browser-профиля; remote builder — внешняя инфраструктура (чарт его
-  не разворачивает); e2e на кластере (поды, RBAC, NetworkPolicy) не прогонялся.
+- **Остаток:** remote builder — внешняя инфраструктура (чарт его не разворачивает); e2e на кластере
+  (поды, RBAC, NetworkPolicy) не прогонялся. Per-project UI выбора browser-профиля **закрыт**
+  (браузерный контур: агент/проект/сессия, см. п. 10).
 
 ## История
 
 - 2026-11-13 — принято из PROP-135 (реализация Ф1–Ф6b); файл предложения удалён.
+- 2026-11-13 — аддендум п. 10: браузерный контур профилей (каталог `browserProfiles`, приоритет
+  session → agent → project → `browserProfile`, потолки, UI агента/проекта/сессии).

@@ -46,6 +46,13 @@ export interface UpdateProjectBody {
 export interface ProjectExecutorState {
   profile?: string
   allowedProfiles?: string[]
+  /**
+   * PROP-135 (браузерный контур): профиль браузерного пула проекта
+   * (отдельный каталог `execution.remote.browserProfiles`).
+   */
+  browserProfile?: string
+  /** PROP-135 (браузерный контур): потолок браузерных профилей проекта. */
+  allowedBrowserProfiles?: string[]
 }
 
 /**
@@ -58,6 +65,10 @@ export interface ProjectExecutorState {
 export interface ProjectExecutorUpdate {
   profile?: string | null
   allowedProfiles?: string[] | null
+  /** PROP-135 (браузерный контур): профиль браузерного пула проекта. */
+  browserProfile?: string | null
+  /** PROP-135 (браузерный контур): потолок браузерных профилей проекта. */
+  allowedBrowserProfiles?: string[] | null
 }
 
 export interface ProjectData {

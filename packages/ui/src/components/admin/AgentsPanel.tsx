@@ -79,6 +79,10 @@ interface AgentForm {
   executor_profile: string
   /** PROP-135 Ф6a: потолок разрешённых профилей; пусто — без ограничения. */
   allowed_profiles: string[]
+  /** PROP-135 (браузерный контур): профиль браузерного пула; `''` — наследовать. */
+  browser_profile: string
+  /** PROP-135 (браузерный контур): потолок браузерных профилей агента. */
+  allowed_browser_profiles: string[]
   agent_mode: AgentMode[]
   context_file: string
   capabilities: string[]
@@ -91,7 +95,7 @@ const emptyForm = (): AgentForm => ({
   id: '', display_name: '', description: '', provider: '', model: '',
   // undefined = Auto (дефолт модели), а не 0.7 — значение задаёт пользователь
   temperature: undefined, top_p: 0, top_k: 0, reasoning_level: '', effort: '',
-  executor_profile: '', allowed_profiles: [],
+  executor_profile: '', allowed_profiles: [], browser_profile: '', allowed_browser_profiles: [],
   agent_mode: ['primary'], context_file: '',
   capabilities: [], max_steps: 0, icon: '', color: '',
 })
@@ -115,6 +119,9 @@ function buildForm(a: AgentInfo, detail?: Record<string, unknown> | null): Agent
     // snake_case в DTO списка).
     executor_profile: a.executor_profile || (detail?.executorProfile as string) || '',
     allowed_profiles: (a.allowed_profiles ?? (detail?.allowedProfiles as string[] | undefined) ?? []).slice(),
+    browser_profile: a.browser_profile || (detail?.browserProfile as string) || '',
+    allowed_browser_profiles:
+      (a.allowed_browser_profiles ?? (detail?.allowedBrowserProfiles as string[] | undefined) ?? []).slice(),
     agent_mode: agentMode,
     context_file: a.context_file || (detail?.contextFile as string) || '',
     capabilities: (detail?.capabilities as string[]) || a.capabilities,
@@ -283,6 +290,15 @@ export const AgentsPanel = () => {
   // показываются; иначе (ошибка/`inline`) они скрыты и в payload не попадают.
   const profileCatalog = (executionProfiles?.profiles ?? []).map((n) => n.trim()).filter(Boolean)
   const profilesAvailable = profileCatalog.length > 0
+  // PROP-135 (браузерный контур): отдельный каталог — браузерные имена
+  // (`inline` их не отдаёт, поля скрыты).
+  const browserProfileCatalog = (executionProfiles?.browserProfiles?.length
+    ? executionProfiles.browserProfiles
+    : executionProfiles?.browserDefaultProfile
+      ? [executionProfiles.browserDefaultProfile]
+      : []
+  ).map((n) => n.trim()).filter(Boolean)
+  const browserProfilesAvailable = browserProfileCatalog.length > 0
 
   /** Имена для селекта/списка: каталог + сохранённые значения (даже вне каталога). */
   const visibleProfileNames = (): string[] => {
@@ -295,6 +311,20 @@ export const AgentsPanel = () => {
     for (const name of profileCatalog) push(name)
     push(form.executor_profile)
     for (const name of form.allowed_profiles) push(name)
+    return names
+  }
+
+  /** Имена для браузерного селекта: браузерный каталог + сохранённые значения. */
+  const visibleBrowserProfileNames = (): string[] => {
+    const names: string[] = []
+    const push = (name: string | undefined) => {
+      const trimmed = (name ?? '').trim()
+      if (!trimmed || names.includes(trimmed)) return
+      names.push(trimmed)
+    }
+    for (const name of browserProfileCatalog) push(name)
+    push(form.browser_profile)
+    for (const name of form.allowed_browser_profiles) push(name)
     return names
   }
 
@@ -332,6 +362,14 @@ export const AgentsPanel = () => {
           ? {
               executor_profile: form.executor_profile.trim() || null,
               allowed_profiles: form.allowed_profiles,
+            }
+          : {}),
+        // PROP-135 (браузерный контур): второй блок полей — отдельный каталог;
+        // недоступен — не отправляем (прежние значения не затираются).
+        ...(browserProfilesAvailable
+          ? {
+              browser_profile: form.browser_profile.trim() || null,
+              allowed_browser_profiles: form.allowed_browser_profiles,
             }
           : {}),
         agent_mode: form.agent_mode,
@@ -627,6 +665,40 @@ export const AgentsPanel = () => {
                 onChange={(next) => setForm({ ...form, allowed_profiles: next })}
                 emptyText={t('admin.agents.allowedProfilesEmpty')}
                 testIdPrefix="agent-allowed-profiles"
+              />
+            </>
+          )}
+
+          {/* PROP-135 (браузерный контур): профиль браузерного пула и потолок.
+              Свой каталог (`browserProfiles`); `inline` — поля скрыты. */}
+          {browserProfilesAvailable && (
+            <>
+              <SelectField
+                label={t('admin.agents.browserProfile')}
+                description={t('admin.agents.browserProfileHint')}
+                tooltip={t('settings.help.agents.browserProfile')}
+                value={form.browser_profile}
+                onValueChange={(value) => setForm({ ...form, browser_profile: value })}
+                ariaLabel={t('admin.agents.browserProfile')}
+                triggerTestId="agent-browser-profile"
+              >
+                <SelectContent>
+                  <SelectItem value="">{t('admin.agents.browserProfile.inherit')}</SelectItem>
+                  {visibleBrowserProfileNames().map((name) => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+
+              <MultiSelectField
+                label={t('admin.agents.allowedBrowserProfiles')}
+                description={t('admin.agents.allowedBrowserProfilesHint')}
+                tooltip={t('settings.help.agents.allowedBrowserProfiles')}
+                values={form.allowed_browser_profiles}
+                options={visibleBrowserProfileNames().map((name) => ({ value: name, label: name }))}
+                onChange={(next) => setForm({ ...form, allowed_browser_profiles: next })}
+                emptyText={t('admin.agents.allowedBrowserProfilesEmpty')}
+                testIdPrefix="agent-allowed-browser-profiles"
               />
             </>
           )}

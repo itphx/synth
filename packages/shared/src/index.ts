@@ -310,6 +310,10 @@ export {
   resolveExecutionMode,
   defaultExecutionConcurrency,
   parseExecutionUrlList,
+  // PROP-135 (браузерный контур): каталоги профилей (exec — без браузерных).
+  normalizeProfileNameList,
+  resolveBrowserProfileNames,
+  resolveExecutionProfileNames,
   isExecutionMode,
   isExecutionFailMode,
   // PROP-135 Ф4a: пулы и профили исполнения.

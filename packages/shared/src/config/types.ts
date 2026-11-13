@@ -306,6 +306,16 @@ export const executionRemoteConfigSchema = z.object({
    */
   browserProfile: z.string().default(DEFAULT_EXECUTION_BROWSER_PROFILE),
   /**
+   * PROP-135 (браузерный контур): явный каталог **браузерных** профилей.
+   *
+   * Имена из этого списка доступны только браузерному пулу (`class: 'browser'`)
+   * и **исключаются** из exec-каталога (`router.profiles()`); metadata-записи в
+   * `execution.remote.profiles` для них остаются (описание/сеть/mcpServers для
+   * details). Пусто — каталог равен `[browserProfile]` (обратная совместимость).
+   * Env — `SYNTH_EXECUTION_BROWSER_PROFILES` (csv).
+   */
+  browserProfiles: z.array(z.string()).default([]),
+  /**
    * Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`-тулы
    * адресуют вызов этому серверу).
    */

@@ -43,7 +43,11 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
+import {
+  resolveBrowserProfileNames,
+  resolveExecutionProfileNames,
+  type ResolvedExecutionConfig,
+} from '@itphx/synth-shared';
 import {
   executionProfileMetadata,
   parsePoolKey,
@@ -72,8 +76,18 @@ export interface ExecutionProfilesDto {
   pooling: 'instance' | 'project' | 'session';
   /** Профиль по умолчанию. */
   defaultProfile: string;
-  /** Известные профили (профиль по умолчанию входит всегда). */
+  /**
+   * Известные профили **exec**-контура (профиль по умолчанию входит всегда).
+   * Имена браузерных профилей сюда **не** попадают — у них свой каталог.
+   */
   profiles: string[];
+  /**
+   * PROP-135 (браузерный контур): каталог браузерных профилей
+   * (`execution.remote.browserProfiles`; пусто → `[browserProfile]`). Аддитивно.
+   */
+  browserProfiles: string[];
+  /** PROP-135 (браузерный контур): браузерный профиль по умолчанию. */
+  browserDefaultProfile: string;
   /**
    * Метаданные профилей (аддитивно): образ/сеть/ресурсы/runtimeClass, имена
    * MCP-серверов и описание. Без env и секретов (инвариант 13).
@@ -176,10 +190,23 @@ export function createExecutionRoutes(
     if (!config || config.mode === 'inline') return [];
     const fromRouter = deps.executionRouter?.profiles?.();
     if (fromRouter && fromRouter.length > 0) return [...fromRouter];
-    const names = new Set(Object.keys(config.remote.profiles));
-    names.add(config.remote.defaultProfile);
-    return [...names];
+    // Fallback без роутера: каталог конфигурации **без** браузерных имён.
+    return resolveExecutionProfileNames(config.remote);
   };
+
+  /** Каталог браузерных профилей (отдельный контур; exec-имена не входят). */
+  const browserProfileNames = (): string[] => {
+    const config = deps.executionConfig;
+    if (!config || config.mode === 'inline') return [];
+    const fromRouter = deps.executionRouter?.browserProfiles?.();
+    if (fromRouter && fromRouter.length > 0) return [...fromRouter];
+    return resolveBrowserProfileNames(config.remote);
+  };
+
+  const browserDefaultProfile = (): string =>
+    deps.executionRouter?.browserDefaultProfile?.()
+    ?? deps.executionConfig?.remote.browserProfile
+    ?? '';
 
   const defaultProfileName = (): string =>
     deps.executionRouter?.defaultProfile?.()
@@ -237,6 +264,9 @@ export function createExecutionRoutes(
       pooling: deps.executionConfig?.remote.pooling ?? 'instance',
       defaultProfile: defaultProfileName(),
       profiles: profileNames(),
+      // PROP-135 (браузерный контур): отдельный каталог браузерных профилей.
+      browserProfiles: browserProfileNames(),
+      browserDefaultProfile: browserDefaultProfile(),
       details: await profileDetails(),
     };
     return c.json(dto);

@@ -253,6 +253,9 @@ export class SessionManager {
         // PROP-135 Ф4a: имя профиля исполнения сессии — порт тулов выбирает
         // роутер по этому имени (`execution/router.ts`).
         executorProfile: data.settings?.executorProfile,
+        // PROP-135 (браузерный контур): браузерный профиль сессии — как и
+        // `executorProfile`, не теряется при создании (`POST /sessions`).
+        browserProfile: data.settings?.browserProfile,
         language: data.settings?.language,
         planMode: data.settings?.planMode,
         // ADR-071 §2.3: per-session override политик встроенных/MCP-инструментов

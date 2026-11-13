@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isProfileAllowed,
+  resolveBrowserProfile,
   resolveExecutionProfile,
   type ExecutionProfileBindingInput,
 } from './profile-binding.js';
@@ -175,5 +176,87 @@ describe('isProfileAllowed', () => {
   it('пустое имя профиля не разрешено', () => {
     expect(isProfileAllowed('', {})).toBe(false);
     expect(isProfileAllowed('   ', { projectAllowed: [''] })).toBe(false);
+  });
+});
+
+describe('resolveBrowserProfile: браузерный контур (PROP-135)', () => {
+  /** Вход браузерного контура: дефолт инстанса — `browser`. */
+  function browserInput(
+    overrides: Partial<ExecutionProfileBindingInput> = {},
+  ): ExecutionProfileBindingInput {
+    return { defaultProfile: 'browser', ...overrides };
+  }
+
+  it('приоритет: session → agent → project → default', () => {
+    expect(resolveBrowserProfile(browserInput({
+      sessionProfile: 's',
+      agentProfile: 'a',
+      projectProfile: 'p',
+    }))).toMatchObject({ profile: 's', source: 'session' });
+
+    expect(resolveBrowserProfile(browserInput({
+      agentProfile: 'a',
+      projectProfile: 'p',
+    }))).toMatchObject({ profile: 'a', source: 'agent' });
+
+    expect(resolveBrowserProfile(browserInput({ projectProfile: 'p' })))
+      .toMatchObject({ profile: 'p', source: 'project' });
+
+    expect(resolveBrowserProfile(browserInput()))
+      .toMatchObject({ profile: 'browser', source: 'default' });
+  });
+
+  it('потолки проекта и агента пересекаются: профиль обязан войти в каждый непустой', () => {
+    expect(resolveBrowserProfile(browserInput({
+      sessionProfile: 'browser-full',
+      projectAllowed: ['browser', 'browser-full'],
+      agentAllowed: ['browser-mobile'],
+    }))).toMatchObject({ profile: 'browser', source: 'default', deniedBy: 'agent' });
+
+    expect(resolveBrowserProfile(browserInput({
+      sessionProfile: 'browser-full',
+      projectAllowed: ['browser-full'],
+      agentAllowed: ['browser-full', 'browser-mobile'],
+    }))).toMatchObject({ profile: 'browser-full', source: 'session' });
+
+    // Пустые потолки — без ограничения (обратная совместимость).
+    expect(resolveBrowserProfile(browserInput({
+      sessionProfile: 'browser-full',
+      projectAllowed: [],
+      agentAllowed: [],
+    }))).toMatchObject({ profile: 'browser-full', source: 'session' });
+  });
+
+  it('запрещённый потолком кандидат не выбирается: берётся следующий/дефолт + warning', () => {
+    const resolution = resolveBrowserProfile(browserInput({
+      sessionProfile: 'forbidden',
+      agentProfile: 'browser-mobile',
+      projectAllowed: ['browser-mobile'],
+    }));
+    expect(resolution).toMatchObject({ profile: 'browser-mobile', source: 'agent' });
+    expect(resolution.warning).toContain('Browser profile');
+    expect(resolution.warning).toContain('"forbidden"');
+    expect(resolution.warning).not.toMatch(/token|secret|password/i);
+  });
+
+  it('неизвестный каталогу профиль → дефолт инстанса (fail-closed)', () => {
+    const resolution = resolveBrowserProfile(browserInput({
+      sessionProfile: 'ghost',
+      knownProfiles: ['browser', 'browser-full'],
+    }));
+    expect(resolution).toMatchObject({
+      profile: 'browser',
+      source: 'default',
+      deniedBy: 'catalog',
+    });
+    expect(resolution.warning).toContain('"ghost"');
+  });
+
+  it('exec-имена не адресуют браузерный пул: неизвестный кандидат отбрасывается', () => {
+    // Каталог браузерного контура не содержит `devops` (exec-профиль).
+    expect(resolveBrowserProfile(browserInput({
+      agentProfile: 'devops',
+      knownProfiles: ['browser', 'browser-full'],
+    }))).toMatchObject({ profile: 'browser', source: 'default', deniedBy: 'catalog' });
   });
 });

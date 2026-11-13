@@ -47,6 +47,11 @@ const DEFAULT_SCREENSHOT_NAME = 'screenshot.png';
 interface BrowserToolExtra {
   /** Относительный путь рабочего каталога в PVC (область браузерного пула). */
   executionWorkspaceSubPath?: string;
+  /**
+   * PROP-135 (браузерный контур): эффективный браузерный профиль хода
+   * (сессия → агент → проект → инстанс-дефолт), вычислен оркестратором.
+   */
+  executionBrowserProfile?: string;
   /** Сервис вложений (ADR-115): единственная точка записи байтов скриншота. */
   attachmentService?: AttachmentService;
 }
@@ -55,13 +60,17 @@ interface BrowserToolExtra {
 function browserPort(ctx: ToolContext): ExecutionPort {
   const router = resolveExecutionRouter(ctx);
   if (!router) return resolveExecutionPort(ctx);
+  const extra = ctx.extra as BrowserToolExtra | undefined;
   return router.portFor({
     // Browser-пул — **проектный** (изоляция cookies), профиль — свой
     // (`execution.remote.browserProfile`), а не профиль обычных команд.
     class: 'browser',
+    // PROP-135 (браузерный контур): профиль вычислил binding хода; не задан —
+    // роутер подставит `execution.remote.browserProfile` (прежнее поведение).
+    ...(extra?.executionBrowserProfile ? { profile: extra.executionBrowserProfile } : {}),
     projectId: ctx.projectId,
     sessionId: ctx.sessionId,
-    workspaceSubPath: (ctx.extra as BrowserToolExtra | undefined)?.executionWorkspaceSubPath,
+    workspaceSubPath: extra?.executionWorkspaceSubPath,
   });
 }
 

@@ -112,8 +112,8 @@ import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, isFfm
 import { InlineExecutionPort } from '../execution/inline-execution-port.js';
 import type { ExecutionPort } from '../execution/ports/index.js';
 import type { ExecutionRouter } from '../execution/router.js';
-import { executionProfileCatalog } from '../execution/router.js';
-import { resolveExecutionProfile, type ExecutionProfileCatalog } from '../execution/profile-binding.js';
+import { browserProfileCatalog, executionProfileCatalog } from '../execution/router.js';
+import { resolveBrowserProfile, resolveExecutionProfile, type ExecutionProfileCatalog } from '../execution/profile-binding.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
@@ -1326,6 +1326,12 @@ export class ChatOrchestrator {
    * binding работает без проверки существования профиля.
    */
   private readonly _executionProfileCatalog: ExecutionProfileCatalog | undefined;
+  /**
+   * PROP-135 (браузерный контур): каталог браузерных профилей (снимок
+   * `execution.remote.browserProfiles`/`browserProfile`). `undefined` — каталог
+   * неизвестен (`inline`/instance-пул): binding не проверяет существование.
+   */
+  private readonly _browserProfileCatalog: ExecutionProfileCatalog | undefined;
   /** ADR-071 §2.6: загрузчик chars-per-token модели (калибровка). */
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** ADR-071 §2.6: сохранение калибровки chars-per-token после ответа. */
@@ -1819,6 +1825,9 @@ export class ChatOrchestrator {
     // PROP-135 Ф6a: снимок каталога профилей — его читают binding профиля и
     // тул `task` (проверка `executor_profile` до создания дочерней сессии).
     this._executionProfileCatalog = executionProfileCatalog(this._executionRouter);
+    // PROP-135 (браузерный контур): отдельный каталог профилей браузера —
+    // имена браузерных профилей не входят в exec-каталог.
+    this._browserProfileCatalog = browserProfileCatalog(this._executionRouter);
     // ADR-075/ADR-076: git-сервис и режим/политика workspace для тулов управления
     // проектом. gitService по умолчанию — над тем же workspacesRoot и портом.
     this._gitService =
@@ -5052,6 +5061,22 @@ export class ChatOrchestrator {
       warning('ORCHESTRATOR', executionProfileResolution.warning);
     }
 
+    // PROP-135 (браузерный контур): эффективный браузерный профиль хода —
+    // отдельный контур (сессия → агент → проект → `browserProfile` инстанса).
+    // Каталог — `execution.remote.browserProfiles`; exec-имена сюда не попадают.
+    const browserProfileResolution = resolveBrowserProfile({
+      sessionProfile: session.settings.browserProfile,
+      agentProfile: agentDef?.browserProfile,
+      agentAllowed: agentDef?.allowedBrowserProfiles,
+      projectProfile: projectForState?.executor?.browserProfile,
+      projectAllowed: projectForState?.executor?.allowedBrowserProfiles,
+      defaultProfile: this._browserProfileCatalog?.defaultProfile ?? '',
+      knownProfiles: this._browserProfileCatalog?.profiles,
+    });
+    if (browserProfileResolution.warning) {
+      warning('ORCHESTRATOR', browserProfileResolution.warning);
+    }
+
     // ADR-070 §2.9.1/ADR-077: перечитать доступность внешних программ (git/rg/sh)
     // перед ходом. Снимок на старте устаревает: в split-режиме состав пула
     // появляется не мгновенно (раскатка поднимает control plane раньше
@@ -6776,6 +6801,16 @@ export class ChatOrchestrator {
                   // (`sandbox_exec` → класс `sandbox`). Без роутера такой тул
                   // отказывает понятной ошибкой, а не уходит в inline.
                   executionRouter: this._executionRouter,
+                  // PROP-135 (браузерный контур): эффективный браузерный
+                  // профиль хода — его прокидывает тул `browser_*` в
+                  // `portFor({class:'browser'})`. Не задан — роутер берёт
+                  // `execution.remote.browserProfile` (прежнее поведение).
+                  executionBrowserProfile: browserProfileResolution.profile || undefined,
+                  // Каталог браузерных профилей — саб-агент проверяет профиль
+                  // по нему до создания дочерней сессии (как `task` для exec).
+                  ...(this._browserProfileCatalog
+                    ? { executionBrowserProfileCatalog: this._browserProfileCatalog }
+                    : {}),
                   // PROP-135 Ф6a: каталог профилей — тул `task` проверяет явный
                   // `executor_profile` до создания дочерней сессии (существование
                   // в `execution.remote.profiles`; allowlist проекта/агента — там же).

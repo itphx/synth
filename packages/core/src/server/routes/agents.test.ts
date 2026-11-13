@@ -689,3 +689,142 @@ describe('Agent API Routes — профиль исполнения агента 
     expect((await store.load('exec-nocatalog'))?.allowedProfiles).toEqual(['anything', 'else']);
   });
 });
+
+/**
+ * PROP-135 (браузерный контур): профиль браузерного пула агента
+ * (`browser_profile`) и его потолок (`allowed_browser_profiles`).
+ *
+ * Каталог — отдельный (`browserProfileCatalog`): exec-имена не принимаются.
+ */
+describe('Agent API Routes — браузерный профиль агента (PROP-135)', () => {
+  let tmpDir: string;
+  let store: JsonStore<AgentDefinition>;
+
+  const BROWSER_CATALOG = {
+    profiles: ['browser', 'browser-full'],
+    defaultProfile: 'browser',
+  };
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-agents-browser-'));
+    store = new JsonStore<AgentDefinition>({ dataDir: tmpDir, subdir: 'agents' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function createBrowserApp(catalog: typeof BROWSER_CATALOG | null = BROWSER_CATALOG) {
+    const app = new Hono();
+    app.route('/api/v2/agents', createAgentRoutes(createMockAuth(), store, undefined, undefined, {
+      ...(catalog ? { browserProfileCatalog: catalog } : {}),
+    }));
+    return app;
+  }
+
+  const postAgent = (app: Hono, body: Record<string, unknown>) =>
+    app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('DTO: browser_profile/allowed_browser_profiles есть у агента, null без профиля', async () => {
+    const app = createBrowserApp();
+    await postAgent(app, {
+      id: 'browser-agent',
+      browser_profile: 'browser-full',
+      allowed_browser_profiles: ['browser-full'],
+    });
+
+    const list: any = await (await app.request('/api/v2/agents/all')).json();
+    const item = list.agents.find((a: any) => a.id === 'browser-agent');
+    expect(item.browser_profile).toBe('browser-full');
+    expect(item.allowed_browser_profiles).toEqual(['browser-full']);
+
+    // У системного агента браузерного профиля нет — DTO отдаёт null.
+    const title = list.agents.find((a: any) => a.id === 'title');
+    expect(title.browser_profile).toBeNull();
+    expect(title.allowed_browser_profiles).toBeNull();
+  });
+
+  it('POST сохраняет browser_profile (snake_case и camelCase)', async () => {
+    const app = createBrowserApp();
+    const snake = await postAgent(app, {
+      id: 'browser-snake',
+      browser_profile: 'browser-full',
+      allowed_browser_profiles: ['browser', 'browser-full'],
+    });
+    expect(snake.status).toBe(201);
+    const body: any = await snake.json();
+    expect(body.browserProfile).toBe('browser-full');
+    expect(body.allowedBrowserProfiles).toEqual(['browser', 'browser-full']);
+
+    const camel = await postAgent(app, {
+      id: 'browser-camel',
+      browserProfile: 'browser',
+      allowedBrowserProfiles: ['browser'],
+    });
+    expect(camel.status).toBe(201);
+    expect((await store.load('browser-camel'))?.browserProfile).toBe('browser');
+    expect((await store.load('browser-camel'))?.allowedBrowserProfiles).toEqual(['browser']);
+  });
+
+  it('POST сбрасывает browser_profile (null/пустая строка) и список ([])', async () => {
+    const app = createBrowserApp();
+    await postAgent(app, {
+      id: 'browser-reset',
+      browser_profile: 'browser-full',
+      allowed_browser_profiles: ['browser-full'],
+    });
+
+    const reset = await postAgent(app, {
+      id: 'browser-reset',
+      browser_profile: null,
+      allowed_browser_profiles: [],
+    });
+    expect(reset.status).toBe(200);
+    expect((await store.load('browser-reset'))?.browserProfile).toBeUndefined();
+    expect((await store.load('browser-reset'))?.allowedBrowserProfiles).toBeUndefined();
+
+    await postAgent(app, { id: 'browser-reset', browser_profile: 'browser' });
+    const empty = await postAgent(app, { id: 'browser-reset', browser_profile: '' });
+    expect(empty.status).toBe(200);
+    expect((await store.load('browser-reset'))?.browserProfile).toBeUndefined();
+  });
+
+  it('неизвестный браузерный профиль → 400 «Профиль браузера не найден»', async () => {
+    const app = createBrowserApp();
+    const res = await postAgent(app, { id: 'browser-bad', browser_profile: 'ghost' });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(body.error.message).toContain('Профиль браузера не найден');
+    expect(await store.load('browser-bad')).toBeNull();
+
+    const list = await postAgent(app, {
+      id: 'browser-bad-list',
+      allowed_browser_profiles: ['browser', 'ghost'],
+    });
+    expect(list.status).toBe(400);
+    expect((await list.json() as any).error.message).toContain('ghost');
+  });
+
+  it('exec-имя в браузерном контуре не принимается (каталоги раздельные)', async () => {
+    const app = createBrowserApp();
+    const res = await postAgent(app, { id: 'browser-mixed', browser_profile: 'devops' });
+    expect(res.status).toBe(400);
+    expect((await res.json() as any).error.message).toContain('Профиль браузера не найден');
+  });
+
+  it('без каталога проверка пропускается', async () => {
+    const app = createBrowserApp(null);
+    const res = await postAgent(app, {
+      id: 'browser-nocatalog',
+      browser_profile: 'anything',
+      allowed_browser_profiles: ['anything'],
+    });
+    expect(res.status).toBe(201);
+    expect((await store.load('browser-nocatalog'))?.browserProfile).toBe('anything');
+  });
+});

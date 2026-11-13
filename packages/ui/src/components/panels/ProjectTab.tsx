@@ -971,11 +971,16 @@ function ProjectExecutorBlock({
   const executor = project.executor ?? null
   const configuredProfile = executor?.profile ?? ''
   const configuredAllowed = executor?.allowedProfiles ?? []
+  // PROP-135 (браузерный контур): отдельные значения браузерного пула.
+  const configuredBrowserProfile = executor?.browserProfile ?? ''
+  const configuredBrowserAllowed = executor?.allowedBrowserProfiles ?? []
 
   const [profiles, setProfiles] = useState<ExecutionProfilesDto | null>(null)
   const [profilesFailed, setProfilesFailed] = useState(false)
   const [profileDraft, setProfileDraft] = useState(configuredProfile)
   const [allowedDraft, setAllowedDraft] = useState<string[]>([...configuredAllowed])
+  const [browserProfileDraft, setBrowserProfileDraft] = useState(configuredBrowserProfile)
+  const [browserAllowedDraft, setBrowserAllowedDraft] = useState<string[]>([...configuredBrowserAllowed])
   const [saving, setSaving] = useState(false)
 
   // Каталог профилей читается при открытии секции: он нужен и для селекта, и для
@@ -1008,6 +1013,8 @@ function ProjectExecutorBlock({
   useEffect(() => {
     setProfileDraft(executor?.profile ?? '')
     setAllowedDraft([...(executor?.allowedProfiles ?? [])])
+    setBrowserProfileDraft(executor?.browserProfile ?? '')
+    setBrowserAllowedDraft([...(executor?.allowedBrowserProfiles ?? [])])
   }, [executor])
 
   // Опции: каталог инстанса + сохранённые значения проекта (даже если профиль
@@ -1024,10 +1031,30 @@ function ProjectExecutorBlock({
   pushName(configuredProfile)
   for (const name of configuredAllowed) pushName(name)
 
+  // Браузерный каталог — отдельный: `browserProfiles` (пусто → дефолт).
+  const browserCatalog = (profiles?.browserProfiles?.length
+    ? profiles.browserProfiles
+    : profiles?.browserDefaultProfile
+      ? [profiles.browserDefaultProfile]
+      : []
+  )
+  const browserNames: string[] = []
+  const pushBrowser = (name: string | undefined) => {
+    const trimmed = (name ?? '').trim()
+    if (!trimmed || browserNames.includes(trimmed)) return
+    browserNames.push(trimmed)
+  }
+  for (const name of browserCatalog) pushBrowser(name)
+  pushBrowser(configuredBrowserProfile)
+  for (const name of configuredBrowserAllowed) pushBrowser(name)
+
   const dirty =
     profileDraft !== configuredProfile ||
     allowedDraft.length !== configuredAllowed.length ||
-    allowedDraft.some((name) => !configuredAllowed.includes(name))
+    allowedDraft.some((name) => !configuredAllowed.includes(name)) ||
+    browserProfileDraft !== configuredBrowserProfile ||
+    browserAllowedDraft.length !== configuredBrowserAllowed.length ||
+    browserAllowedDraft.some((name) => !configuredBrowserAllowed.includes(name))
 
   const statusOfError = (err: unknown): number | undefined =>
     typeof (err as { status?: unknown })?.status === 'number'
@@ -1053,7 +1080,13 @@ function ProjectExecutorBlock({
       const updated = await synthApi.updateProject(project.id, {
         // null сбрасывает профиль (сервер трактует `''`/`null` одинаково);
         // пустой список разрешённых = «без ограничения».
-        executor: { profile: profileDraft.trim() ? profileDraft.trim() : null, allowedProfiles: allowedDraft },
+        executor: {
+          profile: profileDraft.trim() ? profileDraft.trim() : null,
+          allowedProfiles: allowedDraft,
+          // PROP-135 (браузерный контур): вторые поля — отдельный каталог.
+          browserProfile: browserProfileDraft.trim() ? browserProfileDraft.trim() : null,
+          allowedBrowserProfiles: browserAllowedDraft,
+        },
       })
       onUpdated(updated)
       notify({ text: t('projectTab.executor.saved'), type: 'success', category: 'system', sessionId })
@@ -1071,10 +1104,17 @@ function ProjectExecutorBlock({
       // Поле `executor` целиком `null` сервер не принимает: сброс обеих частей —
       // значениями внутри объекта (`profile: null`, `allowedProfiles: []`).
       const updated = await synthApi.updateProject(project.id, {
-        executor: { profile: null, allowedProfiles: [] },
+        executor: {
+          profile: null,
+          allowedProfiles: [],
+          browserProfile: null,
+          allowedBrowserProfiles: [],
+        },
       })
       setProfileDraft('')
       setAllowedDraft([])
+      setBrowserProfileDraft('')
+      setBrowserAllowedDraft([])
       onUpdated(updated)
       notify({ text: t('projectTab.executor.resetDone'), type: 'success', category: 'system', sessionId })
     } catch (err) {
@@ -1090,8 +1130,17 @@ function ProjectExecutorBlock({
     )
   }
 
+  const toggleBrowserAllowed = (name: string) => {
+    setBrowserAllowedDraft((prev) =>
+      prev.includes(name) ? prev.filter((item) => item !== name) : [...prev, name],
+    )
+  }
+
   const defaultProfileLabel = profiles
     ? t('projectTab.executor.profileDefault', { profile: profiles.defaultProfile })
+    : t('projectTab.executor.profileDefaultUnknown')
+  const defaultBrowserProfileLabel = profiles?.browserDefaultProfile
+    ? t('projectTab.executor.browserProfileDefault', { profile: profiles.browserDefaultProfile })
     : t('projectTab.executor.profileDefaultUnknown')
 
   // `inline` (standalone/hybrid): исполнение в процессе, профилей нет — селекторы
@@ -1154,6 +1203,59 @@ function ProjectExecutorBlock({
         </span>
       </div>
 
+      {/* PROP-135 (браузерный контур): второй блок — профиль браузерного пула. */}
+      <div className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2" data-testid="project-browser-profile">
+        <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <span>{t('projectTab.executor.browserProfile')}</span>
+          <select
+            value={browserProfileDraft}
+            onChange={(e) => setBrowserProfileDraft(e.target.value)}
+            disabled={!canManage || saving}
+            aria-label={t('projectTab.executor.browserProfile')}
+            data-testid="project-browser-profile-select"
+            className="w-full rounded-md bg-input border border-border px-2 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+          >
+            <option value="">{defaultBrowserProfileLabel}</option>
+            {browserNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex flex-col gap-1" data-testid="project-browser-allowed">
+          <span className="text-xs text-muted-foreground">{t('projectTab.executor.allowedBrowserProfiles')}</span>
+          {browserNames.length === 0 ? (
+            <span className="text-[0.625rem] text-muted-foreground/60">
+              {t('projectTab.executor.allowedEmpty')}
+            </span>
+          ) : (
+            <div
+              className="flex flex-wrap gap-x-3 gap-y-1.5"
+              role="group"
+              aria-label={t('projectTab.executor.allowedBrowserProfiles')}
+            >
+              {browserNames.map((name) => (
+                <label key={name} className="flex items-center gap-1.5 text-xs text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={browserAllowedDraft.includes(name)}
+                    onChange={() => toggleBrowserAllowed(name)}
+                    disabled={!canManage || saving}
+                    data-testid={`project-browser-allowed-${name}`}
+                  />
+                  <span className="font-mono">{name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <span className="text-[0.625rem] text-muted-foreground/60">
+            {t('projectTab.executor.allowedBrowserProfilesHint')}
+          </span>
+        </div>
+      </div>
+
       {profilesFailed && (
         <div className="text-[0.625rem] text-status-warning" data-testid="project-executor-profiles-error">
           {t('projectTab.executor.profilesLoadError')}
@@ -1174,7 +1276,7 @@ function ProjectExecutorBlock({
           <button
             type="button"
             onClick={() => void handleReset()}
-            disabled={saving || (!configuredProfile && configuredAllowed.length === 0)}
+            disabled={saving || (!configuredProfile && configuredAllowed.length === 0 && !configuredBrowserProfile && configuredBrowserAllowed.length === 0)}
             data-testid="project-executor-reset"
             className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
           >

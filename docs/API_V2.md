@@ -3261,10 +3261,22 @@ payload — **snake_case** `{ project_id, worktree_id?, action }`, где `actio
 
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/execution/profiles` | любой аутентифицированный (core — `requireAuth`) | Эффективная конфигурация → `200 { provider, pooling, defaultProfile, profiles, details }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — секции `execution` нет), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — имена известных профилей (профиль по умолчанию входит всегда; у `inline` — `[]`). `details` (аддитивно) — метаданные профилей: `{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}`; `mcpServers` — только имена, без env/команд; `http` — из `GET /v1/profiles` provisioner'а, `static` — из `execution.remote.profiles` (описание/образ/сеть/ресурсы/runtimeClass/имена MCP; незаданные поля отсутствуют), `inline` — `[]`; недоступность provisioner'а даёт `details: []` и **не** превращает каталог в `503` (имена остаются в `profiles`). Каталог нужен в настройках проекта — его читает и владелец проекта с ролью `USER`, поэтому роль не проверяется |
+| GET | `/api/v2/execution/profiles` | любой аутентифицированный (core — `requireAuth`) | Эффективная конфигурация → `200 { provider, pooling, defaultProfile, profiles, browserProfiles, browserDefaultProfile, details }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — секции `execution` нет), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — имена известных **exec**-профилей (профиль по умолчанию входит всегда; у `inline` — `[]`; имена браузерных профилей **не входят**), `browserProfiles` — каталог **браузерных** профилей (аддитивно; пусто в конфигурации → `[browserDefaultProfile]`, у `inline` — `[]`), `browserDefaultProfile` — браузерный профиль инстанса (`execution.remote.browserProfile`). `details` (аддитивно) — метаданные профилей: `{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}`; `mcpServers` — только имена, без env/команд; `http` — из `GET /v1/profiles` provisioner'а, `static` — из `execution.remote.profiles` (описание/образ/сеть/ресурсы/runtimeClass/имена MCP; незаданные поля отсутствуют), `inline` — `[]`; недоступность provisioner'а даёт `details: []` и **не** превращает каталог в `503` (имена остаются в `profiles`). Каталог нужен в настройках проекта — его читает и владелец проекта с ролью `USER`, поэтому роль не проверяется |
 | GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Список пулов → `200 { provider, pools: PoolInfo[] }`. `http` — `GET /v1/pools` провайдера; `static` — профили конфигурации как `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**без** адреса пула и токена) |
 | POST | `/api/v2/execution/pools/:key/drain` | `ADMIN` | Слить пул → `202 {ok:true}`. `:key` — канонический ключ пула (`instance:<class>:<profile>`, `project:<id>:<class>:<profile>`, `session:<id>:<class>:<profile>`), в URL — URL-encoded. `drain` — best-effort: `202` подтверждает приём, фактическое снятие идёт у provisioner'а. Ключ, которого нет в реестре провайдера → `404 NOT_FOUND`; реестр недоступен (нет `list`) — проверка пропускается |
 | DELETE | `/api/v2/execution/pools/:key` | `ADMIN` | Удалить пул → `202 {ok:true}`. **Идемпотентно**: повторный `DELETE` (в т.ч. по уже удалённому по idle-таймауту пулу) — тоже `202` |
+
+**Браузерный контур профилей (ADR-135 п. 10).** Браузерные имена — отдельный каталог
+(`execution.remote.browserProfiles`; пусто → `[browserProfile]`): они не входят в `profiles`
+(exec) и не принимаются в `executor_profile`/`project.executor.profile`/`settings.executorProfile`,
+а exec-имена — в браузерные поля. Валидация браузерных полей — по `browserProfiles`
+(400 `VALIDATION_ERROR`, текст «Профиль браузера не найден: …»): DTO агента —
+`browser_profile`/`allowed_browser_profiles` (`POST /api/v2/agents`), проекта —
+`executor.browserProfile`/`executor.allowedBrowserProfiles` (`PUT /api/v2/projects/:id`),
+сессии — `settings.browserProfile` (`PATCH /api/v2/sessions/:id`; `''` — сброс). Эффективный
+профиль браузерного пула: сессия → агент → проект → `browserProfile` инстанса; потолки —
+пересечение `allowedBrowserProfiles` проекта и агента (непустой список обязателен для кандидата).
+UI: админка «Агенты», вкладки «Проект»/«Сессия»; при `provider: inline` поля скрыты/не применимы.
 
 **Метаданные профилей (`details`).** Аддитивное поле `GET /api/v2/execution/profiles`
 отвечает на вопрос «что за профиль»: образ, сетевой класс (`none`/`restricted`/`full`),

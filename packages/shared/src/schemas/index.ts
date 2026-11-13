@@ -186,6 +186,11 @@ export const sessionSettingsSchema = z.object({
    * умолчанию (`execution.remote.defaultProfile`).
    */
   executorProfile: z.string().optional(),
+  /**
+   * PROP-135 (браузерный контур): профиль браузерного пула сессии. Пустая
+   * строка — явный сброс (наследование агент→проект→инстанс).
+   */
+  browserProfile: z.string().optional(),
   // ADR-071 §2.4: сессионный скоуп MCP (явно включённые / opt-out).
   mcpServers: z.array(z.string()).optional(),
   mcpDisabledServers: z.array(z.string()).optional(),
@@ -293,6 +298,10 @@ export const projectMemoryUpdateSchema = z.object({ enabled: z.boolean().optiona
 export const projectExecutorUpdateSchema = z.object({
   profile: z.string().nullable().optional(),
   allowedProfiles: z.array(z.string()).nullable().optional(),
+  /** PROP-135 (браузерный контур): профиль браузерного пула проекта. */
+  browserProfile: z.string().nullable().optional(),
+  /** PROP-135 (браузерный контур): потолок браузерных профилей проекта. */
+  allowedBrowserProfiles: z.array(z.string()).nullable().optional(),
 });
 
 export const projectUpdateSchema = z.object({

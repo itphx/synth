@@ -77,6 +77,11 @@ export function createProjectRoutes(
    * Не задан — проверка существования профиля пропускается.
    */
   executionProfileCatalog?: ExecutionProfileCatalog,
+  /**
+   * PROP-135 (браузерный контур): каталог браузерных профилей — валидация
+   * `project.executor.browserProfile`/`allowedBrowserProfiles`.
+   */
+  browserProfileCatalog?: ExecutionProfileCatalog,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -151,6 +156,8 @@ export function createProjectRoutes(
       // PROP-135 Ф6a: каталог профилей исполнения — проверка
       // `project.executor.profile`/`allowedProfiles` в PUT /:id.
       ...(executionProfileCatalog ? { executionProfileCatalog } : {}),
+      // PROP-135 (браузерный контур): каталог браузерных профилей проекта.
+      ...(browserProfileCatalog ? { browserProfileCatalog } : {}),
     },
   );
 }

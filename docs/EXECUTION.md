@@ -283,6 +283,27 @@ protected-paths `execute_shell` **не применяются** (команда 
 Роутер (`packages/core/src/execution/router.ts`) строит ключ одинаково для `portFor` и
 `poolRefFor` — ссылка всегда указывает на **тот же** пул, что и порт.
 
+**Браузерный контур профилей (симметрия с exec, см. ADR-135 п. 10).** Браузерные профили —
+**отдельный каталог**: `execution.remote.browserProfiles` (env `SYNTH_EXECUTION_BROWSER_PROFILES`,
+csv; пусто → `[browserProfile]`). Имена из него исключаются из exec-каталога (`GET
+/api/v2/execution/profiles` → `profiles`), но остаются в metadata `execution.remote.profiles`
+(описание/сеть/`mcpServers` для `details`). Эффективный профиль браузерного пула:
+
+```text
+session.settings.browserProfile
+  → agentDefinition.browserProfile
+  → project.executor.browserProfile
+  → execution.remote.browserProfile            # инстанс-дефолт, точка отката
+```
+
+Потолки — `project.executor.allowedBrowserProfiles` ∩ `agentDefinition.allowedBrowserProfiles`
+(непустой список обязателен для кандидата; пусто — без ограничения). Запрещённый или неизвестный
+каталогу кандидат не выбирается: откат на следующий/дефолт инстанса + предупреждение в лог
+(без секретов). Дефолт инстанса потолками не проверяется. Binding считается на ход (оркестратор;
+саб-агент — по своей роли/проекту) и уходит в `ToolContext.extra.executionBrowserProfile`;
+`browser_*` передают его в `portFor({class:'browser', profile})`. Ключ пула — тот же
+`project:<id>:browser:<profile>`.
+
 **MCP-серверы пула (`mcpServers` профиля, слайс 5b-1).** Профиль provisioner'а может
 объявить MCP-серверы, которые исполнитель пула хостит у себя (например, Playwright MCP в
 flavor'е `browser`):
@@ -362,9 +383,9 @@ Discovery и вызовы MCP-инструментов исполнителя и
 1. **Discovery-остаток:** браузерные тулы появляются, только если их объявляет
    **инстанс-пул**. Динамический пул, у которого MCP-серверы есть только в проектном
    пуле, тулов не даёт — состав берётся с инстанс-пула.
-2. **Профиль браузера:** `poolRefFor` берёт `execution.remote.browserProfile`
-   (дефолт `browser`) — браузер не наследует `defaultProfile`; это закрыто в D1
-   (встроенные browser-тулы, см. ниже).
+2. **Профиль браузера:** `poolRefFor` берёт вычисленный браузерный профиль (сессия → агент →
+   проект → `execution.remote.browserProfile`); браузер не наследует `defaultProfile`. Закрыто
+   в D1 (встроенные browser-тулы) и в браузерном контуре профилей (ADR-135 п. 10).
 3. `executorMcp` у **динамического** порта не выставляется (`execution/pooled-port.ts`):
    при `provider: http` источник MCP-серверов поднимается по статическому
    `execution.remote.url`/дескриптору удалённого порта.

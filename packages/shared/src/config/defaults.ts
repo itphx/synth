@@ -62,6 +62,9 @@ export const defaultConfig: SynthConfig = {
       // Browser-пул — проектный, но со своим профилем (образ с браузером):
       // `class: 'browser'` не наследует `defaultProfile`.
       browserProfile: DEFAULT_EXECUTION_BROWSER_PROFILE,
+      // PROP-135 (браузерный контур): явный каталог браузерных профилей.
+      // Пусто — эффективный каталог равен `[browserProfile]`.
+      browserProfiles: [],
       // Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`).
       browserMcpServer: DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
       profiles: {},

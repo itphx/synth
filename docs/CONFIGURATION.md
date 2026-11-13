@@ -433,6 +433,8 @@ execution:                         # ADR-077: топология исполне�
                                   # SYNTH_EXECUTION_TOKEN
     browserProfile: "browser"     # профиль пула класса browser (свой образ/браузер; не наследует
                                   # defaultProfile); SYNTH_EXECUTION_BROWSER_PROFILE
+    browserProfiles: []           # явный каталог БРАУЗЕРНЫХ профилей (пусто → [browserProfile]);
+                                  # имена исключаются из exec-каталога; SYNTH_EXECUTION_BROWSER_PROFILES
     browserMcpServer: "playwright-mcp"  # имя MCP-сервера браузера в поде (встроенные browser_*;
                                         # совпадает с дефолтом образа исполнителя);
                                         # SYNTH_EXECUTION_BROWSER_MCP_SERVER
@@ -732,6 +734,7 @@ remote:                           # гибридный режим: локаль�
 | `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Режим пула (ADR-135 Ф4a): `instance` — **общий** порт на процесс (прежнее поведение, профили игнорируются); `project`/`session` — порт на профиль сессии |
 | `execution.remote.defaultProfile` | строка | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Имя профиля по умолчанию (каталог профилей задаёт ADMIN) |
 | `execution.remote.browserProfile` | строка | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Профиль **браузерного** пула (`class: 'browser'`): у браузера свой образ/профиль, поэтому `defaultProfile` он **не** наследует. Применяется, когда профиль цели не задан явно |
+| `execution.remote.browserProfiles` | string[] | `[]` | `SYNTH_EXECUTION_BROWSER_PROFILES` (csv) | Явный каталог **браузерных** профилей (отдельный контур, ADR-135 п. 10): пусто — каталог равен `[browserProfile]`. Имена исключаются из exec-каталога (`profiles`), но metadata в `execution.remote.profiles` остаётся для `details` |
 | `execution.remote.browserMcpServer` | строка | `playwright-mcp` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Имя MCP-сервера браузера в поде исполнителя: встроенные `browser_*`-тулы адресуют ему вызов (`POST /mcp/call`), без MCP-discovery |
 | `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции. Метаданные (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **только имена**) отдаются в `GET /api/v2/execution/profiles` → `details` и **не влияют** на маршрутизацию и создание портов |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — откат на instance-порт; `fail` — fail-closed (старт прерывается) |

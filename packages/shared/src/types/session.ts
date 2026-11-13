@@ -155,6 +155,12 @@ export interface SessionSettings {
    * `project.executor.profile`) — Ф6; на этом шаге поле только в типах.
    */
   executorProfile?: string;
+  /**
+   * PROP-135 (браузерный контур): профиль браузерного пула сессии
+   * (`execution.remote.browserProfiles`). Не задан — наследуется профиль
+   * агента/проекта/инстанса (`execution.remote.browserProfile`).
+   */
+  browserProfile?: string;
   /** ADR-071 §2.4: явно включённые в сессии серверы (session level). */
   mcpServers?: string[];
   /**

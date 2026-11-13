@@ -237,6 +237,13 @@ export interface SessionRoutesDeps {
    * профиль не выбирается (fail-closed, откат на `defaultProfile`).
    */
   executionProfileCatalog?: ExecutionProfileCatalog;
+  /**
+   * PROP-135 (браузерный контур): каталог браузерных профилей
+   * (`execution.remote.browserProfiles`; пусто → `[browserProfile]`) —
+   * валидация `settings.browserProfile` (PATCH /:id). Не задан — проверка
+   * существования пропускается.
+   */
+  browserProfileCatalog?: ExecutionProfileCatalog;
   profilesStore?: ProfileStore;
   /**
    * Гибрид. ВАЖНО: если поле НЕ передано (undefined) — все remote/hybrid-ветки
@@ -1252,6 +1259,30 @@ export function createSessionRoutes(
             error: {
               code: 'VALIDATION_ERROR',
               message: `Неизвестный профиль исполнения: "${profile}". Доступные: ${catalog.profiles.join(', ')}`,
+            },
+          }, 400);
+        }
+      }
+    }
+
+    // PROP-135 (браузерный контур): браузерный профиль сессии — отдельный
+    // каталог. Пустая строка — явный сброс (наследование агент→проект→инстанс).
+    const requestedBrowserProfile = parsed.data.settings?.browserProfile;
+    if (requestedBrowserProfile !== undefined) {
+      const profile = requestedBrowserProfile.trim();
+      if (profile === '') {
+        parsed.data.settings!.browserProfile = undefined;
+      } else {
+        const browserCatalog = deps.browserProfileCatalog;
+        if (
+          browserCatalog
+          && browserCatalog.profiles.length > 0
+          && !browserCatalog.profiles.includes(profile)
+        ) {
+          return c.json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Профиль браузера не найден: "${profile}". Доступные: ${browserCatalog.profiles.join(', ')}`,
             },
           }, 400);
         }

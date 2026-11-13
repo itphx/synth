@@ -39,6 +39,10 @@ export type ExecutionProfileSource = 'session' | 'agent' | 'project' | 'default'
 /**
  * Каталог профилей исполнения — снимок `execution.remote` на старте процесса
  * (инвариант 24: `execution.*` — параметр запуска, не runtime-настройка).
+ *
+ * Тот же тип используется для каталога **браузерных** профилей: `profiles` —
+ * `execution.remote.browserProfiles` (пусто → `[browserProfile]`),
+ * `defaultProfile` — `execution.remote.browserProfile`.
  */
 export interface ExecutionProfileCatalog {
   /** Имена известных профилей (включая профиль по умолчанию). */
@@ -148,6 +152,32 @@ function denialReason(
 export function resolveExecutionProfile(
   input: ExecutionProfileBindingInput,
 ): ExecutionProfileResolution {
+  const resolution = resolveProfileBinding(input, 'Execution profile');
+  return resolution;
+}
+
+/**
+ * Резолвер эффективного **браузерного** профиля (PROP-135, браузерный контур).
+ *
+ * Правила те же, что у exec-контура (приоритет `session → agent → project →
+ * default`, потолки проекта/агента, fail-closed откат), но входы — браузерные
+ * поля: `session.settings.browserProfile`, `agentDefinition.browserProfile` /
+ * `allowedBrowserProfiles`, `project.executor.browserProfile` /
+ * `allowedBrowserProfiles`, дефолт инстанса — `execution.remote.browserProfile`.
+ * Каталог (`knownProfiles`) — `execution.remote.browserProfiles`
+ * (пусто → `[browserProfile]`); дефолт инстанса потолками **не** проверяется.
+ */
+export function resolveBrowserProfile(
+  input: ExecutionProfileBindingInput,
+): ExecutionProfileResolution {
+  return resolveProfileBinding(input, 'Browser profile');
+}
+
+/** Общая реализация резолвера профиля (exec и браузерный контур). */
+function resolveProfileBinding(
+  input: ExecutionProfileBindingInput,
+  label: string,
+): ExecutionProfileResolution {
   const candidates: Array<{ value: string | undefined; source: ExecutionProfileSource }> = [
     { value: input.sessionProfile, source: 'session' },
     { value: input.agentProfile, source: 'agent' },
@@ -170,7 +200,7 @@ export function resolveExecutionProfile(
       profile: name,
       source: candidate.source,
       ...(denials.length > 0
-        ? { warning: buildDeniedWarning(denials, input.defaultProfile) }
+        ? { warning: buildDeniedWarning(denials, input.defaultProfile, label) }
         : {}),
     };
   }
@@ -182,7 +212,7 @@ export function resolveExecutionProfile(
     profile: fallback,
     source: 'default',
     deniedBy: denials[0]!.by,
-    warning: buildDeniedWarning(denials, fallback),
+    warning: buildDeniedWarning(denials, fallback, label),
   };
 }
 
@@ -190,9 +220,11 @@ export function resolveExecutionProfile(
 function buildDeniedWarning(
   denials: ReadonlyArray<{ profile: string; source: ExecutionProfileSource; by: DenialReason }>,
   fallback: string,
+  label: string,
 ): string {
   const list = denials
     .map((entry) => `"${entry.profile}" (source: ${entry.source}, denied by ${entry.by})`)
     .join(', ');
-  return `Execution profile ${list} is not allowed; falling back to "${fallback}"`;
+  return `${label} ${list} is not allowed; falling back to "${fallback}"`;
 }
+

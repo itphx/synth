@@ -19,7 +19,7 @@ import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
-import { createExecutionRoutes } from './execution.js';
+import { createExecutionRoutes, type ExecutionProfilesDto } from './execution.js';
 import type {
   ExecutionPoolKey,
   ExecutionPoolProvider,
@@ -45,6 +45,7 @@ function remoteConfig(
       pooling: 'project',
       defaultProfile: 'default',
       browserProfile: 'browser',
+      browserProfiles: ['browser', 'browser-full'],
       browserMcpServer: 'playwright',
       profiles: { default: { ...profile }, devops: { ...profile } },
       fallback: 'instance',
@@ -101,11 +102,17 @@ function routerStub(opts: {
   provider?: ExecutionPoolProvider;
   profiles?: string[];
   defaultProfile?: string;
+  browserProfiles?: string[];
+  browserDefaultProfile?: string;
 } = {}): ExecutionRouter {
   return {
     portFor: () => ({}) as ExecutionPort,
     ...(opts.profiles ? { profiles: () => opts.profiles! } : {}),
     ...(opts.defaultProfile ? { defaultProfile: () => opts.defaultProfile! } : {}),
+    ...(opts.browserProfiles ? { browserProfiles: () => opts.browserProfiles! } : {}),
+    ...(opts.browserDefaultProfile
+      ? { browserDefaultProfile: () => opts.browserDefaultProfile! }
+      : {}),
     ...(opts.provider ? { poolProvider: () => opts.provider } : {}),
   };
 }
@@ -140,6 +147,45 @@ const httpProviderPool: PoolInfo = {
   lastUsedAt: '2026-11-12T09:30:00.000Z',
 };
 
+describe('PROP-135 (браузерный контур): каталог браузерных профилей в DTO', () => {
+  it('роутер знает оба каталога: браузерные имена отдельно от exec', async () => {
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({
+        profiles: ['default', 'devops'],
+        defaultProfile: 'default',
+        browserProfiles: ['browser', 'browser-full'],
+        browserDefaultProfile: 'browser',
+      }),
+    });
+    const res = await app.request('/api/v2/execution/profiles');
+    expect(res.status).toBe(200);
+    const dto = (await res.json()) as ExecutionProfilesDto;
+    expect(dto.profiles).toEqual(['default', 'devops']);
+    expect(dto.profiles).not.toContain('browser');
+    expect(dto.browserProfiles).toEqual(['browser', 'browser-full']);
+    expect(dto.browserDefaultProfile).toBe('browser');
+  });
+
+  it('без роутера fallback из конфигурации: exec-каталог без браузерных имён', async () => {
+    const app = appWith({ executionConfig: remoteConfig() });
+    const dto = (await (await app.request('/api/v2/execution/profiles')).json()) as ExecutionProfilesDto;
+    expect(dto.profiles).toContain('default');
+    expect(dto.profiles).toContain('devops');
+    expect(dto.profiles).not.toContain('browser');
+    expect(dto.profiles).not.toContain('browser-full');
+    expect(dto.browserProfiles).toEqual(['browser', 'browser-full']);
+    expect(dto.browserDefaultProfile).toBe('browser');
+  });
+
+  it('inline: браузерного каталога нет', async () => {
+    const app = appWith({});
+    const dto = (await (await app.request('/api/v2/execution/profiles')).json()) as ExecutionProfilesDto;
+    expect(dto.provider).toBe('inline');
+    expect(dto.browserProfiles).toEqual([]);
+  });
+});
+
 describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
   it('http: провайдер, пулинг и каталог профилей из конфигурации', async () => {
     const app = appWith({
@@ -153,6 +199,9 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
       pooling: 'project',
       defaultProfile: 'default',
       profiles: ['default', 'devops'],
+      // PROP-135 (браузерный контур): отдельный каталог (из конфигурации).
+      browserProfiles: ['browser', 'browser-full'],
+      browserDefaultProfile: 'browser',
       // Роутер без `profilesInfo`/провайдера: детали — только имена каталога.
       details: [{ name: 'default' }, { name: 'devops' }],
     });
@@ -220,6 +269,8 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
       pooling: 'session',
       defaultProfile: 'default',
       profiles: ['default', 'devops'],
+      browserProfiles: ['browser', 'browser-full'],
+      browserDefaultProfile: 'browser',
       // `static`: известны только имена — образа/сети у адреса нет.
       details: [{ name: 'default' }, { name: 'devops' }],
     });
@@ -285,6 +336,8 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
       pooling: 'instance',
       defaultProfile: 'default',
       profiles: [],
+      browserProfiles: [],
+      browserDefaultProfile: '',
       details: [],
     });
   });

@@ -128,6 +128,13 @@ export interface ProjectRoutesOptions {
    * управления проектом (`canManage`: owner/LEAD/ADMIN), как у `workspace`.
    */
   executionProfileCatalog?: ExecutionProfileCatalog;
+  /**
+   * PROP-135 (браузерный контур): каталог браузерных профилей
+   * (`execution.remote.browserProfiles`; пусто → `[browserProfile]`) —
+   * валидация `executor.browserProfile`/`allowedBrowserProfiles`. Не задан —
+   * проверка существования пропускается.
+   */
+  browserProfileCatalog?: ExecutionProfileCatalog;
   /** Менеджер сессий. Задан — регистрируется `GET /:id/stats`. */
   sessionManager?: ProjectStatsSource;
   /**
@@ -647,7 +654,44 @@ export function createProjectRoutes(
         if (list.length === 0) delete next.allowedProfiles;
         else next.allowedProfiles = list;
       }
+      // PROP-135 (браузерный контур): браузерный профиль проекта и его
+      // потолок — отдельный каталог, exec-имена не принимаются (и наоборот).
+      const browserCatalog = opts.browserProfileCatalog;
+      const knownBrowserProfile = (name: string): boolean =>
+        !browserCatalog || browserCatalog.profiles.length === 0 || browserCatalog.profiles.includes(name);
+      const browserProfileValue = parsedExecutor.data.browserProfile;
+      if (browserProfileValue !== undefined) {
+        const profile = (browserProfileValue ?? '').trim();
+        if (profile === '') {
+          delete next.browserProfile;
+        } else if (!knownBrowserProfile(profile)) {
+          return c.json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Профиль браузера не найден: "${profile}". Доступные: ${browserCatalog!.profiles.join(', ')}`,
+            },
+          }, 400);
+        } else {
+          next.browserProfile = profile;
+        }
+      }
+      const allowedBrowserValue = parsedExecutor.data.allowedBrowserProfiles;
+      if (allowedBrowserValue !== undefined) {
+        const list = [...new Set((allowedBrowserValue ?? []).map((name) => name.trim()).filter(Boolean))];
+        const unknown = list.filter((name) => !knownBrowserProfile(name));
+        if (unknown.length > 0) {
+          return c.json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: `Профили браузера не найдены в allowedBrowserProfiles: ${unknown.join(', ')}. Доступные: ${browserCatalog!.profiles.join(', ')}`,
+            },
+          }, 400);
+        }
+        if (list.length === 0) delete next.allowedBrowserProfiles;
+        else next.allowedBrowserProfiles = list;
+      }
       project.executor = next.profile === undefined && next.allowedProfiles === undefined
+        && next.browserProfile === undefined && next.allowedBrowserProfiles === undefined
         ? undefined
         : next;
     }

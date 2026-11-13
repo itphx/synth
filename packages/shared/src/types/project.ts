@@ -104,6 +104,18 @@ export interface ProjectSkillSettings {
 export interface ProjectExecutorSettings {
   profile?: string;
   allowedProfiles?: string[];
+  /**
+   * PROP-135 (браузерный контур): профиль браузерного пула для сессий проекта
+   * (если сессия и агент свой профиль не задали). Отдельный каталог:
+   * проверяется по `execution.remote.browserProfiles`, а не по exec-профилям.
+   */
+  browserProfile?: string;
+  /**
+   * PROP-135 (браузерный контур): **потолок** браузерных профилей проекта.
+   * Непустой список — профиль обязан в него входить; пусто/`undefined` — без
+   * ограничения.
+   */
+  allowedBrowserProfiles?: string[];
 }
 
 /**

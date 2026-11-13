@@ -174,6 +174,11 @@ export function createSessionRoutes(
    * существования профиля пропускается (поведение прежнее).
    */
   executionProfileCatalog?: ExecutionProfileCatalog,
+  /**
+   * PROP-135 (браузерный контур): каталог браузерных профилей — валидация
+   * `settings.browserProfile` в PATCH /:id.
+   */
+  browserProfileCatalog?: ExecutionProfileCatalog,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -787,7 +792,7 @@ export function createSessionRoutes(
   // ADMIN|AUDITOR соответственно) — порядок регистрации оставляет её в силе.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

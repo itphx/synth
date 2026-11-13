@@ -256,6 +256,9 @@ describe('defaultConfig', () => {
     expect(defaultConfig.execution.remote.concurrency).toBe(defaultExecutionConcurrency());
     // Browser-пул: свой профиль (не `defaultProfile`) и имя MCP-сервера браузера.
     expect(defaultConfig.execution.remote.browserProfile).toBe('browser');
+    // PROP-135 (браузерный контур): явного каталога нет — эффективный
+    // каталог равен `[browserProfile]`.
+    expect(defaultConfig.execution.remote.browserProfiles).toEqual([]);
     expect(defaultConfig.execution.remote.browserMcpServer).toBe('playwright-mcp');
   });
 
