@@ -409,6 +409,7 @@ LLM он не знает; конфигурация — **только env** (к�
 | `POST` | `/v1/pools/{key}/drain` | — | Слить пул: удалить под с grace, секрет оставить |
 | `DELETE` | `/v1/pools/{key}` | — | Удалить пул: под (grace 0) и секрет |
 | `GET` | `/v1/capabilities` | → `{provider, profiles, protocol, limits}` | Диагностика |
+| `GET` | `/v1/profiles` | → `{profiles: [{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}]}` | Метаданные профилей для админ-раздела «Исполнение»: образ/сеть/ресурсы/runtimeClass и **имена** MCP-серверов; env профиля, команды/аргументы/env MCP-серверов, URL и токены не отдаются (инвариант 13) |
 | `GET` | `/health` | → `{ok, provider}` | Проба (без авторизации) |
 | `GET` | `/metrics` | exposition 0.0.4 | Метрики (серии — [OBSERVABILITY.md](./OBSERVABILITY.md)) |
 
@@ -416,6 +417,15 @@ LLM он не знает; конфигурация — **только env** (к�
 времени, `packages/provisioner/src/auth.ts`); `{key}` — URL-encoded
 канонический ключ пула (`poolKeyString`). Сверх лимита живых пулов —
 `429` с причиной `capacity`; битый запрос — `400` (`invalid_request`).
+
+**Метаданные профилей (`GET /v1/profiles`).** `description` — человекочитаемое
+описание профиля (≤500 символов, задаётся оператором в
+`SYNTH_PROVISIONER_PROFILES`), остальное выводится из конфигурации профиля
+(`image`/`network`/`resources`/`runtimeClass`). `mcpServers` — **только имена**:
+команды/аргументы/env серверов — конфигурация запуска, а не метаданные, и наружу
+не отдаются (инвариант 13). `GET /v1/capabilities` не меняется (строки имён);
+клиент в core — `HttpExecutionPoolProvider.profilesInfo`, admin-API отдаёт их
+аддитивным `details` (`docs/API_V2.md` §5.41).
 
 **Жизненный цикл** (`packages/provisioner/src/pool-service.ts`):
 

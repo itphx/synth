@@ -41,6 +41,7 @@ import type {
   PoolInfo,
   PoolScope,
   PoolState,
+  ProvisionerProfileInfo,
 } from './protocol.js';
 import type { PoolProvisioner } from './provider.js';
 import { generatePoolToken } from './provider.js';
@@ -227,6 +228,17 @@ export class PoolService {
   /** Диагностика провайдера (имя и профили). */
   capabilities(): Promise<{ provider: string; profiles: string[] }> {
     return this._provider.capabilities();
+  }
+
+  /**
+   * Метаданные профилей (образ/сеть/ресурсы/runtimeClass, имена MCP-серверов).
+   *
+   * Провайдер без `profilesInfo` — пустой список (старый/тестовый провайдер):
+   * диагностика не должна падать из-за необязательной возможности.
+   */
+  async profilesInfo(): Promise<ProvisionerProfileInfo[]> {
+    if (typeof this._provider.profilesInfo !== 'function') return [];
+    return this._provider.profilesInfo();
   }
 
   /**

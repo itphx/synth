@@ -8,6 +8,7 @@
  * | `POST` | `/v1/pools/:key/drain` | слить пул | `202` | bearer |
  * | `DELETE` | `/v1/pools/:key` | удалить пул | `202` | bearer |
  * | `GET` | `/v1/pools` | список пулов (без токенов) | `{pools}` | bearer |
+ * | `GET` | `/v1/profiles` | метаданные профилей (без секретов) | `{profiles}` | bearer |
  * | `GET` | `/v1/capabilities` | провайдер, профили, лимиты | JSON | bearer |
  * | `GET` | `/health` | liveness | `{ok, provider}` | **без токена** |
  * | `GET` | `/metrics` | метрики (`synth_provisioner_*`) | exposition 0.0.4 | bearer |
@@ -37,7 +38,9 @@ import {
   formatIssues,
   type EnsurePoolResponse,
   type PoolsListResponse,
+  type ProfilesListResponse,
   type ProvisionerCapabilities,
+  type ProvisionerProfileInfo,
   type ProvisionerErrorReason,
   type ProvisionerHealth,
   type ProvisionerLimits,
@@ -158,6 +161,21 @@ export function createProvisionerApp(opts: ProvisionerAppOptions): Hono {
   // Диагностика: список пулов без токенов.
   app.get('/v1/pools', (c) => {
     const body: PoolsListResponse = { pools: opts.service.list() };
+    return c.json(body, 200);
+  });
+
+  // Метаданные профилей: образ/сеть/ресурсы/runtimeClass и имена MCP-серверов.
+  // Env профиля, команды/аргументы/env MCP-серверов, URL и токены не отдаются.
+  app.get('/v1/profiles', async (c) => {
+    let profiles: ProvisionerProfileInfo[] = [];
+    try {
+      profiles = await opts.service.profilesInfo();
+    } catch {
+      // Метаданные — диагностика: сбой не должен превращаться в 500 (список
+      // имён уже отдаёт `/v1/capabilities`).
+      profiles = [];
+    }
+    const body: ProfilesListResponse = { profiles };
     return c.json(body, 200);
   });
 

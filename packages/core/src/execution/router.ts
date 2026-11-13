@@ -93,6 +93,7 @@ import {
   type ExecutionPoolClass,
   type ExecutionPoolKey,
   type ExecutionPoolProvider,
+  type ExecutionProfileInfo,
 } from './pool-provider.js';
 import { createPooledExecutionPort } from './pooled-port.js';
 import { readExecutorToken } from './remote.js';
@@ -207,6 +208,15 @@ export interface ExecutionRouter {
    * (`static` — адресация по профилю, `inline` — исполнение в процессе).
    */
   poolProvider?(): ExecutionPoolProvider | undefined;
+  /**
+   * Метаданные профилей (образ/сеть/ресурсы/runtimeClass, имена MCP-серверов)
+   * для admin-API/UI. `http` — `GET /v1/profiles` у provisioner'а; `static` —
+   * только имена каталога конфигурации (образа/сети у адреса нет).
+   *
+   * Ошибка провайдера пробрасывается: вызывающий (роут) решает, показать
+   * пустой список или только имена — список имён уже есть отдельно.
+   */
+  profilesInfo?(): Promise<ExecutionProfileInfo[]>;
   /**
    * PROP-135 слайз 5b-1: **ссылка на пул** для цели — адреса и токен пула,
    * к которому адресует `portFor` с той же целью.
@@ -329,10 +339,19 @@ export async function createExecutionRouter(
       return {
         portFor: () => port,
         poolProvider: () => provider,
+        profilesInfo: () => profilesInfoFromProviderOrNames(provider, config),
         poolRefFor: createPoolRefResolver(config, provider),
       };
     }
-    return { portFor: () => port, poolRefFor: createPoolRefResolver(config, undefined) };
+    return {
+      portFor: () => port,
+      poolRefFor: createPoolRefResolver(config, undefined),
+      // `inline` — профилей нет (исполнение в процессе); иначе — каталог
+      // конфигурации (имена без метаданных: у `static` их нет).
+      ...(config && config.mode !== 'inline'
+        ? { profilesInfo: async () => catalogProfileNames(config).map((name) => ({ name })) }
+        : {}),
+    };
   }
   const remote = config.remote;
 
@@ -404,6 +423,8 @@ export async function createExecutionRouter(
     // и проверки `executor.profile`/`executor_profile` в роутах и `task`.
     profiles: () => [...plans.keys()],
     defaultProfile: () => defaultName,
+    // PROP-135: метаданные профилей — у `static` известны только имена.
+    profilesInfo: async () => [...plans.keys()].map((name) => ({ name })),
     // PROP-135 слайз 5b-1: ссылка на пул (адреса + токен) для MCP-хоста.
     poolRefFor: createPoolRefResolver(config, undefined),
   };
@@ -493,6 +514,9 @@ function createHttpProviderRouter(
     // PROP-135 Ф6b-1: админ-диагностика пулов у provisioner'а (`list`) и
     // операции `drain`/`release` — тот же провайдер, что у ленивых портов.
     poolProvider: () => provider,
+    // Метаданные профилей — у provisioner'а (`GET /v1/profiles`); провайдер
+    // без этой возможности (тестовая заглушка) отдаёт имена каталога.
+    profilesInfo: () => profilesInfoFromProviderOrNames(provider, config),
     // PROP-135 слайз 5b-1: ссылка на пул (адреса + токен) для MCP-хоста.
     poolRefFor: createPoolRefResolver(config, provider),
   };
@@ -503,6 +527,25 @@ function knownProfiles(remote: ResolvedExecutionRemoteConfig): string[] {
   const names = new Set(Object.keys(remote.profiles));
   names.add(remote.defaultProfile);
   return [...names];
+}
+
+/** Имена профилей эффективной секции `execution` (для метаданных по умолчанию). */
+function catalogProfileNames(config: ResolvedExecutionConfig): string[] {
+  return knownProfiles(config.remote);
+}
+
+/**
+ * Метаданные профилей: возможность провайдера, иначе — имена каталога.
+ *
+ * Провайдер без `profilesInfo` (тестовая заглушка/старая реализация) не должен
+ * ломать admin-API — имена профилей известны из конфигурации.
+ */
+function profilesInfoFromProviderOrNames(
+  provider: ExecutionPoolProvider,
+  config: ResolvedExecutionConfig,
+): Promise<ExecutionProfileInfo[]> {
+  if (typeof provider.profilesInfo === 'function') return provider.profilesInfo();
+  return Promise.resolve(catalogProfileNames(config).map((name) => ({ name })));
 }
 
 /**

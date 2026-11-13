@@ -53,6 +53,18 @@ const PROFILES_HTTP = {
   pooling: 'project' as const,
   defaultProfile: 'default',
   profiles: ['default', 'devops'],
+  details: [
+    {
+      name: 'default',
+      description: 'Базовый исполнитель',
+      image: 'registry.example/synth-executor:latest',
+      network: 'restricted' as const,
+      resources: { limits: { cpu: '2', memory: '4Gi' } },
+      runtimeClass: 'gvisor',
+      mcpServers: ['playwright'],
+    },
+    { name: 'devops' },
+  ],
 }
 
 const POOLS_HTTP = {
@@ -128,6 +140,48 @@ describe('ExecutionSettings — сводка и списки', () => {
     expect(pools.textContent).toContain('instance:exec:default')
     // Метки времени — в локали UI (en-US → mm/dd/yyyy).
     expect(pools.textContent).toContain('11/12/2026')
+  })
+
+  it('карточка профиля: описание, образ, сеть, ресурсы, runtime, MCP и метка default', async () => {
+    const container = await render()
+
+    const card = byTestId(container, 'execution-profile-0')!
+    expect(card.textContent).toContain('default')
+    expect(card.textContent).toContain('Базовый исполнитель')
+    expect(card.textContent).toContain('registry.example/synth-executor:latest')
+    // Сеть — локализованная подпись, не сырое значение.
+    expect(card.textContent).toContain(enDict['settings.execution.network.restricted'])
+    expect(card.textContent).toContain('cpu 2 · mem 4Gi')
+    expect(card.textContent).toContain('gvisor')
+    expect(card.textContent).toContain('playwright')
+    expect(byTestId(container, 'execution-profile-0-default')!.textContent).toBe(
+      enDict['settings.execution.profile.defaultBadge'],
+    )
+  })
+
+  it('профиль без метаданных: имя из каталога и «—» во всех полях', async () => {
+    const container = await render()
+
+    const card = byTestId(container, 'execution-profile-1')!
+    expect(card.textContent).toContain('devops')
+    expect(card.textContent).not.toContain('Базовый исполнитель')
+    expect(byTestId(container, 'execution-profile-1-default')).toBeNull()
+    // Шесть полей (описание, образ, сеть, ресурсы, runtime, MCP) — все пустые.
+    expect((card.textContent!.match(/—/g) ?? []).length).toBe(6)
+  })
+
+  it('старый сервер без details: профили показываются именами', async () => {
+    mocks.getExecutionProfiles.mockResolvedValue({
+      provider: 'http',
+      pooling: 'project',
+      defaultProfile: 'default',
+      profiles: ['default', 'devops'],
+    })
+
+    const container = await render()
+
+    expect(byTestId(container, 'execution-profile-0')!.textContent).toContain('default')
+    expect(byTestId(container, 'execution-profile-1')!.textContent).toContain('devops')
   })
 
   it('пустой список пулов — честное пустое состояние', async () => {

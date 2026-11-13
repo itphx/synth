@@ -620,6 +620,47 @@ describe('provisioner: kubernetes-провайдер', () => {
     });
   });
 
+  it('profilesInfo: метаданные профиля, MCP — только именами (без command/args/env)', async () => {
+    const client = new FakeKubernetesClient();
+    const profiles: ProvisionerProfiles = {
+      full: {
+        ...PROFILES.full,
+        description: 'Профиль с gVisor и браузером',
+        mcpServers: [
+          {
+            name: 'playwright',
+            command: 'npx',
+            args: ['-y', '@playwright/mcp@latest'],
+            env: { PLAYWRIGHT_TOKEN: 'mcp-secret-value' },
+          },
+        ],
+      },
+    };
+    const { provider } = makeProvider(client, { profiles });
+
+    const info = await provider.profilesInfo!();
+    expect(info).toEqual([
+      {
+        name: 'full',
+        description: 'Профиль с gVisor и браузером',
+        image: 'registry.example/synth-executor:0.13.8',
+        network: 'restricted',
+        resources: {
+          requests: { cpu: '250m', memory: '512Mi' },
+          limits: { cpu: '2', memory: '4Gi' },
+        },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+    ]);
+    const text = JSON.stringify(info);
+    // Env профиля и запускающая конфигурация MCP-серверов наружу не идут.
+    expect(text).not.toContain('SYNTH_EXECUTOR_MAX_CONCURRENCY');
+    expect(text).not.toContain('mcp-secret-value');
+    expect(text).not.toContain('npx');
+    expect(text).not.toContain('@playwright/mcp');
+  });
+
   it('sanitizeLabelValue: длина ≤ 63 и допустимые символы', () => {
     expect(sanitizeLabelValue('default')).toBe('default');
     expect(sanitizeLabelValue('  Browser GPU ')).toBe('Browser-GPU');

@@ -31,12 +31,23 @@ const initOf = (call: number): RequestInit => (fetchMock.mock.calls[call]?.[1] ?
 const methodOf = (call: number): string => initOf(call).method ?? 'GET'
 
 describe('executionApi — профили исполнения', () => {
-  it('getExecutionProfiles: GET /execution/profiles и DTO', async () => {
+  it('getExecutionProfiles: GET /execution/profiles и DTO с details', async () => {
     const dto = {
       provider: 'http' as const,
       pooling: 'project' as const,
       defaultProfile: 'default',
       profiles: ['default', 'devops'],
+      details: [
+        {
+          name: 'devops',
+          description: 'Сборка в удалённом builder',
+          image: 'registry.example/synth-executor:devops',
+          network: 'restricted' as const,
+          resources: { limits: { cpu: '4', memory: '8Gi' } },
+          runtimeClass: 'gvisor',
+          mcpServers: ['playwright'],
+        },
+      ],
     }
     fetchMock.mockResolvedValue(jsonResponse(dto))
 
@@ -44,6 +55,25 @@ describe('executionApi — профили исполнения', () => {
 
     expect(urlOf(0)).toBe('/api/v2/execution/profiles')
     expect(methodOf(0)).toBe('GET')
+  })
+
+  it('getExecutionProfiles: старый сервер без details — пустой список', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        provider: 'static',
+        pooling: 'instance',
+        defaultProfile: 'default',
+        profiles: ['default'],
+      }),
+    )
+
+    await expect(executionApi.getExecutionProfiles()).resolves.toEqual({
+      provider: 'static',
+      pooling: 'instance',
+      defaultProfile: 'default',
+      profiles: ['default'],
+      details: [],
+    })
   })
 
   it('getExecutionProfiles: inline без профилей', async () => {
@@ -56,6 +86,7 @@ describe('executionApi — профили исполнения', () => {
       pooling: 'instance',
       defaultProfile: 'default',
       profiles: [],
+      details: [],
     })
   })
 })

@@ -1421,6 +1421,7 @@ provisioner:
     existingSecret: synth-provisioner-token
   profiles:
     devops:
+      description: "Профиль для сборок: docker CLI, remote builder, gVisor"  # видно в админке «Исполнение»
       image: git.itphx.ru/itphx/synth-executor:0.13.8-devops   # docker CLI в образе
       network: restricted          # к builder'у — правилом egress, не full «на всякий»
       resources:

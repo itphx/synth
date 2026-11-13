@@ -151,6 +151,14 @@ describe('PROP-135 Ф4b-1: статический провайдер', () => {
     });
   });
 
+  it('profilesInfo: только имена (образа/сети у статического адреса нет)', async () => {
+    const provider = new StaticExecutionPoolProvider({
+      a: { url: ['http://a:8080'] },
+      b: { url: ['http://b:8080'] },
+    });
+    await expect(provider.profilesInfo!()).resolves.toEqual([{ name: 'a' }, { name: 'b' }]);
+  });
+
   it('isExecutionPoolProvider — структурная проверка', () => {
     expect(isExecutionPoolProvider(new StaticExecutionPoolProvider({}))).toBe(true);
     expect(isExecutionPoolProvider({ ensure: () => undefined })).toBe(true);
@@ -358,6 +366,62 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
       profiles: ['default', 'devops'],
     });
     expect(calls[0]?.url).toBe('http://provisioner:8080/v1/capabilities');
+  });
+
+  it('profilesInfo: GET /v1/profiles, разбор метаданных и отбрасывание битых записей', async () => {
+    const calls: Call[] = [];
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async (input, init) => {
+        calls.push({
+          url: String(input),
+          method: init?.method ?? 'GET',
+          headers: (init?.headers ?? {}) as Record<string, string>,
+        });
+        return jsonResponse({
+          profiles: [
+            {
+              name: 'devops',
+              description: 'Сборка в удалённом builder',
+              image: 'registry.example/synth-executor:devops',
+              network: 'restricted',
+              resources: { limits: { cpu: '4', memory: '8Gi' } },
+              runtimeClass: 'gvisor',
+              mcpServers: ['playwright', ''],
+            },
+            { description: 'без имени — пропускается' },
+            null,
+          ],
+        });
+      },
+    });
+
+    await expect(provider.profilesInfo()).resolves.toEqual([
+      {
+        name: 'devops',
+        description: 'Сборка в удалённом builder',
+        image: 'registry.example/synth-executor:devops',
+        network: 'restricted',
+        resources: { limits: { cpu: '4', memory: '8Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+    ]);
+    expect(calls[0]?.url).toBe('http://provisioner:8080/v1/profiles');
+    expect(calls[0]?.method).toBe('GET');
+    expect(calls[0]?.headers.authorization).toBe(`Bearer ${PROVIDER_TOKEN}`);
+  });
+
+  it('profilesInfo: без поля profiles — пустой список', async () => {
+    const provider = new HttpExecutionPoolProvider({
+      url: 'http://provisioner:8080',
+      tokenSecret: tokenPath,
+      timeoutMs: 5_000,
+      fetchImpl: async () => jsonResponse({}),
+    });
+    await expect(provider.profilesInfo()).resolves.toEqual([]);
   });
 
   it('ensure: HTTP-ошибка → ExecutionPoolProviderError со статусом (тело в текст не идёт)', async () => {

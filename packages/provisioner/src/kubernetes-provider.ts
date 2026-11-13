@@ -45,7 +45,13 @@ import type {
 import { PoolProvisionerError } from './errors.js';
 import type { KubernetesClient, KubernetesManifest, KubernetesPod, KubernetesSecret } from './kubernetes.js';
 import type { ProviderErrorMetricReason, ProvisionerMetrics } from './metrics.js';
-import { isValidWorkspaceSubPath, type EnsurePoolRequest, type EnsurePoolResponse } from './protocol.js';
+import {
+  isValidWorkspaceSubPath,
+  type EnsurePoolRequest,
+  type EnsurePoolResponse,
+  type ProfileResources,
+  type ProvisionerProfileInfo,
+} from './protocol.js';
 import type { PoolProvisioner } from './provider.js';
 import { generatePoolToken } from './token.js';
 
@@ -136,6 +142,55 @@ export function sanitizeLabelValue(value: string): string {
     .replace(/[^A-Za-z0-9]+$/, '')
     .slice(0, 63);
   return cleaned === '' ? 'unknown' : cleaned;
+}
+
+/** Список ресурсов (requests/limits) без пустых полей. */
+function toResourceList(
+  list: NonNullable<ProfileResources['requests']> | undefined,
+): NonNullable<ProfileResources['requests']> | undefined {
+  if (list === undefined) return undefined;
+  const out: NonNullable<ProfileResources['requests']> = {};
+  if (list.cpu !== undefined) out.cpu = list.cpu;
+  if (list.memory !== undefined) out.memory = list.memory;
+  if (list.ephemeralStorage !== undefined) out.ephemeralStorage = list.ephemeralStorage;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Ресурсы профиля без пустых блоков (`undefined` — нечего показывать). */
+function toProfileResources(
+  resources: ProvisionerProfile['resources'],
+): ProfileResources | undefined {
+  if (resources === undefined) return undefined;
+  const requests = toResourceList(resources.requests);
+  const limits = toResourceList(resources.limits);
+  if (requests === undefined && limits === undefined) return undefined;
+  return {
+    ...(requests !== undefined ? { requests } : {}),
+    ...(limits !== undefined ? { limits } : {}),
+  };
+}
+
+/**
+ * Метаданные профиля из конфигурации (без секретов и запускающей конфигурации).
+ *
+ * MCP-серверы отдаются **только именами**: command/args/env — конфигурация
+ * запуска (в env могут быть токены хостингов, инвариант 13).
+ */
+function profileInfoFromConfig(
+  name: string,
+  profile: ProvisionerProfile,
+): ProvisionerProfileInfo {
+  const resources = toProfileResources(profile.resources);
+  const mcpServers = (profile.mcpServers ?? []).map((server) => server.name);
+  return {
+    name,
+    ...(profile.description !== undefined ? { description: profile.description } : {}),
+    ...(profile.image !== undefined ? { image: profile.image } : {}),
+    ...(profile.network !== undefined ? { network: profile.network } : {}),
+    ...(resources !== undefined ? { resources } : {}),
+    ...(profile.runtimeClass !== undefined ? { runtimeClass: profile.runtimeClass } : {}),
+    ...(mcpServers.length > 0 ? { mcpServers } : {}),
+  };
 }
 
 /** Готов ли под принимать трафик: Running, есть IP, Ready и не удаляется. */
@@ -523,6 +578,17 @@ export class KubernetesPoolProvisioner implements PoolProvisioner {
   /** Диагностика: провайдер и профили. */
   async capabilities(): Promise<{ provider: string; profiles: string[] }> {
     return { provider: KUBERNETES_PROVIDER_NAME, profiles: Object.keys(this._profiles) };
+  }
+
+  /**
+   * Метаданные профилей: образ/сеть/ресурсы/runtimeClass и **имена**
+   * MCP-серверов. Env профиля и содержимое MCP-серверов (command/args/env) не
+   * отдаются — это не метаданные, а конфигурация запуска (инвариант 13).
+   */
+  async profilesInfo(): Promise<ProvisionerProfileInfo[]> {
+    return Object.entries(this._profiles).map(([name, profile]) =>
+      profileInfoFromConfig(name, profile),
+    );
   }
 
   /** Внутренняя часть `ensure` (таймер метрики — снаружи). */

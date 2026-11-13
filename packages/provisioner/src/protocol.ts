@@ -13,6 +13,7 @@
  * | `POST` | `/v1/pools/{key}/drain` | слить пул | `202` |
  * | `DELETE` | `/v1/pools/{key}` | удалить пул | `202` |
  * | `GET` | `/v1/pools` | диагностика (без токенов) | `{pools}` |
+ * | `GET` | `/v1/profiles` | метаданные профилей (без секретов) | `{profiles}` |
  * | `GET` | `/v1/capabilities` | провайдер, профили, лимиты | JSON |
  * | `GET` | `/health` | liveness (без токена) | `{ok, provider}` |
  * | `GET` | `/metrics` | метрики (`synth_provisioner_*`) | exposition 0.0.4 |
@@ -173,9 +174,51 @@ export interface ProvisionerCapabilities {
   limits: ProvisionerLimits;
 }
 
+/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
+export interface ProfileResourceList {
+  cpu?: string;
+  memory?: string;
+  ephemeralStorage?: string;
+}
+
+/** Ресурсы профиля — как в PodSpec (`requests` и/или `limits`). */
+export interface ProfileResources {
+  requests?: ProfileResourceList;
+  limits?: ProfileResourceList;
+}
+
+/**
+ * Публичное описание профиля исполнения (`GET /v1/profiles`).
+ *
+ * Наружу отдаются только **метаданные** профиля: образ, сеть, ресурсы,
+ * runtimeClass и **имена** MCP-серверов. Команды/аргументы/env MCP-серверов,
+ * env профиля, URL и токены пулов не отдаются (инвариант 13).
+ */
+export interface ProvisionerProfileInfo {
+  /** Имя профиля. */
+  name: string;
+  /** Человекочитаемое описание (если задано оператором). */
+  description?: string;
+  /** Образ пула (`kubernetes`). */
+  image?: string;
+  /** Сетевой класс профиля. */
+  network?: PoolNetworkMode;
+  /** Ресурсы контейнера пула. */
+  resources?: ProfileResources;
+  /** `runtimeClassName` пода. */
+  runtimeClass?: string;
+  /** **Имена** MCP-серверов профиля (без command/args/env). */
+  mcpServers?: string[];
+}
+
 /** Ответ `GET /v1/pools` (диагностика). */
 export interface PoolsListResponse {
   pools: PoolInfo[];
+}
+
+/** Ответ `GET /v1/profiles` (метаданные профилей для admin-API/UI). */
+export interface ProfilesListResponse {
+  profiles: ProvisionerProfileInfo[];
 }
 
 /** Ответ `GET /health` (без токена). */

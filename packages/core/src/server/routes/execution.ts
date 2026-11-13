@@ -15,7 +15,9 @@
  *
  * - `GET /api/v2/execution/profiles` — эффективные провайдер/пулинг/профили
  *   (**любой аутентифицированный**: каталог нужен владельцу проекта, чтобы
- *   выбрать профиль в настройках проекта);
+ *   выбрать профиль в настройках проекта); аддитивное `details` — метаданные
+ *   профилей (образ/сеть/ресурсы/runtimeClass, имена MCP-серверов) из
+ *   provisioner'а либо только имена из конфигурации;
  * - `GET /api/v2/execution/pools` — пулы: у `http` — `list()` провайдера, у
  *   `static` — профили как `configured`, у `inline` — пусто (ADMIN/LEAD);
  * - `POST /api/v2/execution/pools/:key/drain` — слить пул (`202`);
@@ -45,6 +47,7 @@ import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import {
   parsePoolKey,
   type ExecutionPoolProvider,
+  type ExecutionProfileInfo,
   type PoolInfo,
 } from '../../execution/pool-provider.js';
 import type { ExecutionRouter } from '../../execution/router.js';
@@ -69,6 +72,15 @@ export interface ExecutionProfilesDto {
   defaultProfile: string;
   /** Известные профили (профиль по умолчанию входит всегда). */
   profiles: string[];
+  /**
+   * Метаданные профилей (аддитивно): образ/сеть/ресурсы/runtimeClass, имена
+   * MCP-серверов и описание. Без env и секретов (инвариант 13).
+   *
+   * `http` — из `GET /v1/profiles` provisioner'а; `static` — только имена
+   * каталога конфигурации (образа/сети у статического адреса нет); `inline` —
+   * пусто. Provisioner недоступен — `[]` (список имён уже есть в `profiles`).
+   */
+  details: ExecutionProfileInfo[];
 }
 
 /** DTO `GET /api/v2/execution/pools`. */
@@ -175,6 +187,34 @@ export function createExecutionRoutes(
   const poolProvider = (): ExecutionPoolProvider | undefined =>
     deps.executionRouter?.poolProvider?.();
 
+  /**
+   * Метаданные профилей (аддитивное поле `details`).
+   *
+   * Источник — роутер (`profilesInfo`), провайдер пулов либо имена каталога.
+   * Сбой provisioner'а **не** превращает каталог в `503`: имена профилей уже
+   * есть в `profiles`, а детали — необязательная диагностика.
+   */
+  const profileDetails = async (): Promise<ExecutionProfileInfo[]> => {
+    if (providerKind() === 'inline') return [];
+    const fromRouter = deps.executionRouter?.profilesInfo;
+    if (fromRouter) {
+      try {
+        return await fromRouter.call(deps.executionRouter);
+      } catch {
+        return [];
+      }
+    }
+    const provider = poolProvider();
+    if (provider && typeof provider.profilesInfo === 'function') {
+      try {
+        return await provider.profilesInfo();
+      } catch {
+        return [];
+      }
+    }
+    return profileNames().map((name) => ({ name }));
+  };
+
   const providerUnavailable = (c: Context): Response =>
     c.json(
       { error: { code: 'EXECUTION_PROVIDER_UNAVAILABLE', message: messages.providerUnavailable(c) } },
@@ -184,12 +224,13 @@ export function createExecutionRoutes(
   // Эффективная конфигурация исполнения (профили/пулинг) — только чтение.
   // Каталог профилей — любому аутентифицированному: профиль выбирается в
   // настройках проекта (владелец проекта может быть с ролью USER).
-  app.get('/profiles', profilesReadGuard, (c) => {
+  app.get('/profiles', profilesReadGuard, async (c) => {
     const dto: ExecutionProfilesDto = {
       provider: providerKind(),
       pooling: deps.executionConfig?.remote.pooling ?? 'instance',
       defaultProfile: defaultProfileName(),
       profiles: profileNames(),
+      details: await profileDetails(),
     };
     return c.json(dto);
   });

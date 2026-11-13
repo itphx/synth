@@ -26,7 +26,11 @@ import { PoolProvisionerError } from './errors.js';
 import { HttpKubernetesClient, type KubernetesClient } from './kubernetes.js';
 import { KubernetesPoolProvisioner } from './kubernetes-provider.js';
 import type { ProvisionerMetrics } from './metrics.js';
-import type { EnsurePoolRequest, EnsurePoolResponse } from './protocol.js';
+import type {
+  EnsurePoolRequest,
+  EnsurePoolResponse,
+  ProvisionerProfileInfo,
+} from './protocol.js';
 import { generatePoolToken } from './token.js';
 
 export { PoolProvisionerError } from './errors.js';
@@ -50,6 +54,11 @@ export interface PoolProvisioner {
   release(key: string): Promise<void>;
   /** Диагностика: имя провайдера и известные профили. */
   capabilities(): Promise<{ provider: string; profiles: string[] }>;
+  /**
+   * Метаданные профилей (для админ-раздела «Исполнение»): образ, сеть,
+   * ресурсы, runtimeClass и **имена** MCP-серверов. Без env, URL и токенов.
+   */
+  profilesInfo?(): Promise<ProvisionerProfileInfo[]>;
 }
 
 /**
@@ -104,6 +113,17 @@ export class StaticPoolProvisioner implements PoolProvisioner {
 
   async capabilities(): Promise<{ provider: string; profiles: string[] }> {
     return { provider: 'static', profiles: Object.keys(this._profiles) };
+  }
+
+  /**
+   * Метаданные профилей static-провайдера: известны только имя и описание
+   * (образа/сети/ресурсов у статического адреса нет — пул задан извне).
+   */
+  async profilesInfo(): Promise<ProvisionerProfileInfo[]> {
+    return Object.entries(this._profiles).map(([name, profile]) => ({
+      name,
+      ...(profile.description !== undefined ? { description: profile.description } : {}),
+    }));
   }
 }
 

@@ -19,7 +19,20 @@ import type { EnsurePoolRequest } from './protocol.js';
 const TOKEN = ['provisioner-server', 'token', 'test-1234567890'].join('-');
 
 const PROFILES = {
-  default: { url: 'http://executor-default:5100' },
+  default: {
+    url: 'http://executor-default:5100',
+    description: 'Базовый исполнитель',
+    // env профиля и запускающая конфигурация MCP в метаданные не попадают.
+    env: { EXECUTOR_SECRET_ENV: 'env-secret-value' },
+    mcpServers: [
+      {
+        name: 'playwright',
+        command: 'npx',
+        args: ['-y', '@playwright/mcp@latest'],
+        env: { MCP_TOKEN: 'mcp-secret-value' },
+      },
+    ],
+  },
   browser: { url: 'http://browser:4200' },
 };
 
@@ -344,6 +357,35 @@ describe('provisioner: диагностика и метрики', () => {
     expect(body.profiles.sort()).toEqual(['browser', 'default']);
     expect(body.protocol).toBe(1);
     expect(body.limits.maxPools).toBe(50);
+  });
+
+  it('GET /v1/profiles — имена, описание и метаданные без секретов', async () => {
+    const { app } = makeHarness();
+    const res = await request(app, 'GET', '/v1/profiles');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      profiles: Array<{ name: string; description?: string }>;
+    };
+    expect(body.profiles).toEqual([
+      { name: 'default', description: 'Базовый исполнитель' },
+      { name: 'browser' },
+    ]);
+
+    const text = JSON.stringify(body);
+    // Env профиля, команды/аргументы/env MCP-серверов, адреса и токены — не
+    // отдаются (инвариант 13).
+    expect(text).not.toContain('env-secret-value');
+    expect(text).not.toContain('mcp-secret-value');
+    expect(text).not.toContain('npx');
+    expect(text).not.toContain('@playwright/mcp');
+    expect(text).not.toContain('http://executor-default');
+    expect(text).not.toContain(TOKEN);
+  });
+
+  it('GET /v1/profiles без токена — 401', async () => {
+    const { app } = makeHarness();
+    const res = await request(app, 'GET', '/v1/profiles', { token: null });
+    expect(res.status).toBe(401);
   });
 
   it('/metrics без токена — 401', async () => {

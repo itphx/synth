@@ -185,12 +185,122 @@ function toIsoTime(value: unknown): string | undefined {
   return undefined;
 }
 
+/** Непустая строка из неизвестного значения либо `undefined`. */
+function toOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/** Список ресурсов профиля из ответа provisioner'а (только строки, `undefined` — пусто). */
+function toProfileResourceList(raw: unknown): ExecutionProfileResourceList | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const list: ExecutionProfileResourceList = {};
+  const cpu = toOptionalString(record.cpu);
+  const memory = toOptionalString(record.memory);
+  const ephemeralStorage = toOptionalString(record.ephemeralStorage);
+  if (cpu !== undefined) list.cpu = cpu;
+  if (memory !== undefined) list.memory = memory;
+  if (ephemeralStorage !== undefined) list.ephemeralStorage = ephemeralStorage;
+  return Object.keys(list).length > 0 ? list : undefined;
+}
+
+/** Ресурсы профиля (`requests`/`limits`); пустой блок не отдаётся. */
+function toProfileResources(raw: unknown): ExecutionProfileResources | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const requests = toProfileResourceList(record.requests);
+  const limits = toProfileResourceList(record.limits);
+  if (requests === undefined && limits === undefined) return undefined;
+  return {
+    ...(requests !== undefined ? { requests } : {}),
+    ...(limits !== undefined ? { limits } : {}),
+  };
+}
+
+/**
+ * Запись `GET /v1/profiles` → метаданные профиля.
+ *
+ * Неизвестная/битая запись пропускается, если у неё нет имени (нечего
+ * показывать). Значения нормализуются к строкам: чужой/старый provisioner не
+ * должен ломать admin-API.
+ */
+function toProfileInfo(entry: unknown): ExecutionProfileInfo | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const record = entry as Record<string, unknown>;
+  const name = toOptionalString(record.name);
+  if (name === undefined) return null;
+  const description = toOptionalString(record.description);
+  const image = toOptionalString(record.image);
+  const runtimeClass = toOptionalString(record.runtimeClass);
+  const network =
+    record.network === 'none' || record.network === 'restricted' || record.network === 'full'
+      ? record.network
+      : undefined;
+  const resources = toProfileResources(record.resources);
+  const mcpServers = Array.isArray(record.mcpServers)
+    ? record.mcpServers
+        .map((item) => toOptionalString(item))
+        .filter((item): item is string => item !== undefined)
+    : [];
+  return {
+    name,
+    ...(description !== undefined ? { description } : {}),
+    ...(image !== undefined ? { image } : {}),
+    ...(network !== undefined ? { network } : {}),
+    ...(resources !== undefined ? { resources } : {}),
+    ...(runtimeClass !== undefined ? { runtimeClass } : {}),
+    ...(mcpServers.length > 0 ? { mcpServers } : {}),
+  };
+}
+
 /** Адрес (и необязательный токен) пула исполнения. */
 export interface ExecutionPoolRef {
   /** Адрес исполнителя пула (`http://…`). */
   url: string;
   /** Токен доступа к пулу (значение, не путь) — если провайдер его выдал. */
   token?: string;
+}
+
+/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
+export interface ExecutionProfileResourceList {
+  /** CPU (`500m`, `1`). */
+  cpu?: string;
+  /** Память (`2Gi`). */
+  memory?: string;
+  /** Эфемерное хранилище (`1Gi`). */
+  ephemeralStorage?: string;
+}
+
+/** Ресурсы профиля исполнения (как в PodSpec). */
+export interface ExecutionProfileResources {
+  requests?: ExecutionProfileResourceList;
+  limits?: ExecutionProfileResourceList;
+}
+
+/**
+ * Метаданные профиля исполнения для admin-API/UI.
+ *
+ * **Без секретов**: env профиля, команды/аргументы/env MCP-серверов, адреса и
+ * токены пулов не отдаются (инвариант 13). `mcpServers` — только имена.
+ * Незаданное поле — «неизвестно» (у `static` известны лишь имя и описание).
+ */
+export interface ExecutionProfileInfo {
+  /** Имя профиля. */
+  name: string;
+  /** Человекочитаемое описание (если задано). */
+  description?: string;
+  /** Образ пула. */
+  image?: string;
+  /** Сетевой класс профиля. */
+  network?: 'none' | 'restricted' | 'full';
+  /** Ресурсы контейнера пула. */
+  resources?: ExecutionProfileResources;
+  /** `runtimeClassName` пода. */
+  runtimeClass?: string;
+  /** **Имена** MCP-серверов профиля. */
+  mcpServers?: string[];
 }
 
 /**
@@ -217,6 +327,12 @@ export interface ExecutionPoolProvider {
   list?(): Promise<PoolInfo[]>;
   /** Диагностика: имя провайдера и известные профили. */
   capabilities?(): Promise<{ provider: string; profiles: string[] }>;
+  /**
+   * Метаданные профилей (образ/сеть/ресурсы/runtimeClass, имена MCP-серверов)
+   * для admin-API/UI. Не задан — провайдер их не умеет (admin-API покажет
+   * только имена из каталога конфигурации).
+   */
+  profilesInfo?(): Promise<ExecutionProfileInfo[]>;
 }
 
 /**
@@ -273,6 +389,14 @@ export class StaticExecutionPoolProvider implements ExecutionPoolProvider {
 
   async capabilities(): Promise<{ provider: string; profiles: string[] }> {
     return { provider: 'static', profiles: Object.keys(this._profiles) };
+  }
+
+  /**
+   * Метаданные профилей static-провайдера: каталог конфигурации знает только
+   * имена — образа, сети и ресурсов у статического адреса нет.
+   */
+  async profilesInfo(): Promise<ExecutionProfileInfo[]> {
+    return Object.keys(this._profiles).map((name) => ({ name }));
   }
 
   /**
@@ -427,6 +551,25 @@ export class HttpExecutionPoolProvider implements ExecutionPoolProvider {
       provider: typeof payload?.provider === 'string' ? payload.provider : 'http',
       profiles,
     };
+  }
+
+  /**
+   * Метаданные профилей у provisioner'а (`GET /v1/profiles`).
+   *
+   * Ответ — **только метаданные** (образ/сеть/ресурсы/runtimeClass и имена
+   * MCP-серверов); env, команды MCP и токены provisioner не отдаёт. Записи без
+   * имени и неизвестные поля при разборе отбрасываются.
+   */
+  async profilesInfo(): Promise<ExecutionProfileInfo[]> {
+    const response = await this._request('GET', '/v1/profiles', undefined, true);
+    const payload = (await response.json().catch(() => null)) as { profiles?: unknown } | null;
+    const raw = Array.isArray(payload?.profiles) ? payload.profiles : [];
+    const profiles: ExecutionProfileInfo[] = [];
+    for (const entry of raw) {
+      const info = toProfileInfo(entry);
+      if (info !== null) profiles.push(info);
+    }
+    return profiles;
   }
 
   /**

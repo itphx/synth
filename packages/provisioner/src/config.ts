@@ -260,6 +260,11 @@ const mcpServersSchema = z.array(mcpServerSchema).superRefine((servers, ctx) => 
 /** Описание профиля исполнения. */
 export const profileSchema = z
   .object({
+    /**
+     * Человекочитаемое описание профиля (для админ-раздела «Исполнение»):
+     * какой образ/сеть/ресурсы внутри. На поведение пула не влияет.
+     */
+    description: z.string().trim().min(1).max(500).optional(),
     /** Образ пула (обязателен для `kubernetes`). */
     image: z.string().trim().min(1).max(512).optional(),
     /** Адрес исполнителя (обязателен для `static`). */

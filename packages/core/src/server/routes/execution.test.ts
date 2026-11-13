@@ -151,7 +151,61 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
       pooling: 'project',
       defaultProfile: 'default',
       profiles: ['default', 'devops'],
+      // Роутер без `profilesInfo`/провайдера: детали — только имена каталога.
+      details: [{ name: 'default' }, { name: 'devops' }],
     });
+  });
+
+  it('http: детали профилей из провайдера (без env и секретов)', async () => {
+    const provider = fakeProvider();
+    provider.profilesInfo = async () => [
+      {
+        name: 'default',
+        description: 'Базовый исполнитель',
+        image: 'registry.example/synth-executor:latest',
+        network: 'restricted',
+        resources: { limits: { cpu: '2', memory: '4Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+    ];
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({ provider }),
+    });
+    const res = await app.request('/api/v2/execution/profiles');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { details: unknown[] };
+    expect(body.details).toEqual([
+      {
+        name: 'default',
+        description: 'Базовый исполнитель',
+        image: 'registry.example/synth-executor:latest',
+        network: 'restricted',
+        resources: { limits: { cpu: '2', memory: '4Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+    ]);
+    const text = JSON.stringify(body);
+    expect(text).not.toContain('/secrets/');
+    expect(text).not.toContain('pool-token');
+  });
+
+  it('http: сбой метаданных провайдера — 200 и пустые details (имена остаются)', async () => {
+    const provider = fakeProvider();
+    provider.profilesInfo = async () => {
+      throw new Error('provisioner down');
+    };
+    const app = appWith({
+      executionConfig: remoteConfig(),
+      executionRouter: routerStub({ provider }),
+    });
+    const res = await app.request('/api/v2/execution/profiles');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { profiles: string[]; details: unknown[] };
+    expect(body.profiles).toEqual(['default', 'devops']);
+    expect(body.details).toEqual([]);
   });
 
   it('static: провайдер static, каталог без роутера — из конфигурации', async () => {
@@ -164,6 +218,8 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
       pooling: 'session',
       defaultProfile: 'default',
       profiles: ['default', 'devops'],
+      // `static`: известны только имена — образа/сети у адреса нет.
+      details: [{ name: 'default' }, { name: 'devops' }],
     });
   });
 
@@ -176,6 +232,7 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
       pooling: 'instance',
       defaultProfile: 'default',
       profiles: [],
+      details: [],
     });
   });
 

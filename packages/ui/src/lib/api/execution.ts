@@ -1,7 +1,7 @@
 // execution: домен API v2 (PROP-135, слайс 6b-1/6b-2a) — профили и пулы исполнения.
 //
 // Серверный контракт (core, `server/routes/execution.ts`):
-//   GET    /api/v2/execution/profiles          → { provider, pooling, defaultProfile, profiles }
+//   GET    /api/v2/execution/profiles          → { provider, pooling, defaultProfile, profiles, details }
 //   GET    /api/v2/execution/pools             → { provider, pools: PoolInfo[] }
 //   POST   /api/v2/execution/pools/:key/drain  → 202 { ok: true }
 //   DELETE /api/v2/execution/pools/:key        → 202 { ok: true }
@@ -24,6 +24,34 @@ export type ExecutionPooling = 'instance' | 'project' | 'session'
 /** Состояние пула: задан профилем, готов, снимается. */
 export type ExecutionPoolState = 'configured' | 'ready' | 'draining'
 
+/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
+export interface ExecutionProfileResourceList {
+  cpu?: string
+  memory?: string
+  ephemeralStorage?: string
+}
+
+/** Ресурсы профиля исполнения (как в PodSpec). */
+export interface ExecutionProfileResources {
+  requests?: ExecutionProfileResourceList
+  limits?: ExecutionProfileResourceList
+}
+
+/**
+ * Метаданные профиля исполнения (аддитивное поле `details`).
+ *
+ * Без env и секретов: `mcpServers` — только имена; неизвестное поле — «—».
+ */
+export interface ExecutionProfileInfo {
+  name: string
+  description?: string
+  image?: string
+  network?: 'none' | 'restricted' | 'full'
+  resources?: ExecutionProfileResources
+  runtimeClass?: string
+  mcpServers?: string[]
+}
+
 /** Ответ `GET /api/v2/execution/profiles`. */
 export interface ExecutionProfilesDto {
   provider: ExecutionProviderKind
@@ -32,6 +60,8 @@ export interface ExecutionProfilesDto {
   defaultProfile: string
   /** Известные профили. */
   profiles: string[]
+  /** Метаданные профилей (может отсутствовать у старого сервера — `[]`). */
+  details: ExecutionProfileInfo[]
 }
 
 /**
@@ -59,7 +89,9 @@ export interface ExecutionPoolsDto {
 export const executionApi = {
   /** GET /execution/profiles — эффективные провайдер/пулинг/профили. */
   async getExecutionProfiles(): Promise<ExecutionProfilesDto> {
-    return fetchJSON<ExecutionProfilesDto>(`${BASE_URL}/execution/profiles`)
+    const response = await fetchJSON<ExecutionProfilesDto>(`${BASE_URL}/execution/profiles`)
+    // Сервер до этой версии отдавал только имена — детали необязательны.
+    return { ...response, details: response.details ?? [] }
   },
 
   /** GET /execution/pools — живые пулы (у `static` — профили как `configured`). */

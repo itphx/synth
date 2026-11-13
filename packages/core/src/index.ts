@@ -570,6 +570,9 @@ export type {
   ExecutionPoolProvider,
   ExecutionPoolRef,
   ExecutionPoolScope,
+  ExecutionProfileInfo,
+  ExecutionProfileResourceList,
+  ExecutionProfileResources,
   HttpExecutionPoolProviderOptions,
   PoolInfo,
 } from './execution/pool-provider.js';
