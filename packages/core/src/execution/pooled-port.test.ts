@@ -167,13 +167,23 @@ describe('PROP-135 Ф4b-1: ленивый порт на пул', () => {
   });
 
   it('реальный порт без fs → ExecutionFsUnavailableError (fail-closed)', async () => {
-    const port = createPooledExecutionPort({
-      key: KEY,
-      provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
-      createPort: async () => fakePort(),
-    });
-    await expect(port.fs?.realpath('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
-    await expect(port.fs?.readText('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+    vi.useFakeTimers();
+    try {
+      const port = createPooledExecutionPort({
+        key: KEY,
+        provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
+        createPort: async () => fakePort(),
+      });
+      const first = expect(port.fs!.realpath('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+      await vi.advanceTimersByTimeAsync(15000);
+      await first;
+
+      const second = expect(port.fs!.readText('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
+      await vi.advanceTimersByTimeAsync(15000);
+      await second;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

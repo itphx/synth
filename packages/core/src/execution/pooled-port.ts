@@ -30,7 +30,7 @@
  *   `lastUsedAt` — там `touch` не нужен.
  */
 
-import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE } from './ports/index.js';
+import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE, isExecutionFsUnavailableError } from './ports/index.js';
 import { warning } from '../logger.js';
 import type {
   BrowserCallRequest,
@@ -70,6 +70,9 @@ const WARMUP_DELAYS_MS = [1000, 2000, 3000, 4000] as const;
 
 /** Ошибка означает «пул ещё не отвечает», а не отказ самой операции. */
 function isWarmupRetryable(err: unknown, allowNetwork = false): boolean {
+  // Исполнитель ещё не отдал `/capabilities` — клиент считает, что FS-адреса
+  // нет. Это тот же прогрев, а не «FS не поддерживается»: повторяем.
+  if (isExecutionFsUnavailableError(err)) return true;
   const e = err as { code?: unknown; message?: unknown } | null;
   const code = typeof e?.code === 'string' ? e.code : '';
   if (code === 'EUNREACHABLE' || code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'EHOSTUNREACH') {
@@ -107,6 +110,13 @@ async function withWarmup<T>(
       if (!isWarmupRetryable(err, allowNetwork)) throw err;
       if (attempt >= WARMUP_DELAYS_MS.length) {
         const detail = err instanceof Error ? err.message : String(err);
+        if (isExecutionFsUnavailableError(err)) {
+          throw new ExecutionFsUnavailableError(
+            `исполнитель профиля «${key.profile}» не отдал FS за ${Math.round(elapsed / 100) / 10} с ` +
+            `(пул ${poolKeyString(key)}): ${detail}. Повторите запрос; если повторяется — ` +
+            'проверьте provisioner, образ и features.fs исполнителя.',
+          );
+        }
         throw new ExecutionError({
           message:
             `исполнитель профиля «${key.profile}» не ответил за ${Math.round(elapsed / 100) / 10} с ` +
