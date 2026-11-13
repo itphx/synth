@@ -31,6 +31,7 @@
  */
 
 import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE } from './ports/index.js';
+import { warning } from '../logger.js';
 import type {
   BrowserCallRequest,
   BrowserCallResult,
@@ -287,6 +288,11 @@ function createPooledFs(resolve: () => Promise<ExecutionPort>, key: ExecutionPoo
   const fsOf = async (): Promise<ExecutionFs> => {
     const port = await resolve();
     if (!port.fs) {
+      warning(
+        'EXECUTION',
+        `pooled fs unavailable: inner port ${port.constructor?.name ?? 'unknown'} ` +
+        `(isRemote=${String(port.isRemote)}, key=${poolKeyString(key)})`,
+      );
       throw new ExecutionFsUnavailableError();
     }
     return port.fs;
