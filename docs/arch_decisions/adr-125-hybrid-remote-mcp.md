@@ -3,7 +3,7 @@
 > **Статус:** ✅ Реализовано
 > **Источник:** PROP-125
 > **Дата:** 2026-11-07
-> **Связано:** [ADR-042](./adr-042-hybrid-mode.md), [ADR-043](./adr-043-unified-identity-login.md), [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-052](./adr-052-public-api-platform.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-077](./adr-077-runtime-toolchain.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-105](./adr-105-external-credentials.md), [ADR-115](./adr-115-multimodal-input.md)
+> **Связано:** [ADR-042](./adr-042-hybrid-mode.md), [ADR-043](./adr-043-unified-identity-login.md), [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-052](./adr-052-public-api-platform.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-105](./adr-105-external-credentials.md), [ADR-115](./adr-115-multimodal-input.md)
 
 ## Контекст
 

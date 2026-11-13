@@ -1,6 +1,6 @@
 # @itphx/synth-provisioner — provisioner пулов исполнения
 
-Отдельный процесс (PROP-135, Ф4b-2a/4b-2b): по запросу control plane выдаёт
+Отдельный процесс (ADR-135, Ф4b-2a/4b-2b): по запросу control plane выдаёт
 **адрес и токен пула** исполнителей. Ни сессий, ни хранилища Synth, ни LLM он не
 знает; своего каталога данных у него нет — конфигурация **только env**
 (`packages/provisioner/src/config.ts`, fail-closed: без токена/профилей процесс

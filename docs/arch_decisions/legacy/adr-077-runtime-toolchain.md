@@ -1,6 +1,7 @@
 # ADR-077: Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote
 
-> **Статус:** ⚠️ Частично — реализованы порт `ExecutionPort` с реализациями inline/remote, выбор режима через `execution.mode`, динамический `import()` пакета `@itphx/synth-executor/client`, fail-closed проверка на старте, чарт split-развёртывания (значения `execution.*`/`executor.*`, шаблоны `executor-*.yaml`, общий том workspace, `NetworkPolicy` пула), **шаг A** — доступность инструментов в remote-режиме определяется составом пула исполнителей (инвентарь `GET /capabilities`, `ExecRequest.requires`, `probe()` у порта, причина `dependency_missing`), **шаг B1** — исполнитель **хостит MCP-серверы у себя** (stdio) и отдаёт их инструменты и вызовы по HTTP (`GET /mcp/servers`, `GET /mcp/tools`, `POST /mcp/call`; эти эндпоинты появились в протоколе 2) и **шаг B2** — клиентская проводка MCP-stdio в control plane (источник `ExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе). **Актуальная версия протокола — 5** (вложения MCP-результата `attachments[]` в `POST /mcp/call` и `features.mcpAttachments`, ADR-115, «Обновлено 2026-10-27»; секреты вызова `secrets[]` — v4, фоновые процессы — v3, ADR-113); совместимость проверяется полем `protocol` в `GET /capabilities`. Перенос git-операций control plane на `ExecutionPort` выполнен (`GitService` — argv через порт, `simple-git` удалён из core). **Доставка SSH/CA в split-режиме — реализована** (см. «Обновлено 2026-10-26», (б) и (в)). **Шаг 7d — реализован**: метрики `synth_executor_*` (control plane и исполнитель), собственный `/metrics` исполнителя, скрейп пула и алерты — по шагам этого ADR остатка нет; вне его — квоты (шаг 10), workspace-v2 (шаг 11) и runbook переключения топологии (шаг 12), поэтому статус остаётся «⚠️ Частично». Образ worker'а и flavor-матрица — **реализованы**: исходное предложение PROP-082 переведено в этот ADR 2026-10-28.
+> **Статус:** ⛔ Заменено
+> **Заменено:** [ADR-135](./../adr-135-execution-contour.md)
 > **Дата:** 2026-10-21
 > **Источник:** PROP-082 (файл удалён после принятия).
 > **Обновлено:** 2026-10-26 — три решения по остатку исполнителя (детали и порядок — [docs/EXECUTION.md](../EXECUTION.md)):
@@ -28,9 +29,9 @@
 > `resource.blob`), признак поддержки — `features.mcpAttachments: true` в `GET /capabilities`;
 > исполнитель ≤ 4 поля не отдаёт — control plane работает как прежде, только с текстом (деградация
 > без падения); пределы — 25 МиБ на файл и 20 МиБ на вызов, при `isError` вложения не собираются.
-> Детали — п. 9 («Вложения MCP-результата») и [ADR-115](./adr-115-multimodal-input.md)
+> Детали — п. 9 («Вложения MCP-результата») и [ADR-115](../adr-115-multimodal-input.md)
 > §«Медиа из инструментов».
-> **Связано:** [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (образец портов и контрактного suite), [ADR-099](./adr-099-egress-tls-trust.md) (доверенная граница и исходящий транспорт), [ADR-092](./adr-092-instance-lifecycle-maintenance.md) (рестарт, exit 75), [ADR-094](./adr-094-observability-metrics.md) (метрики), [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace), [ADR-076](./adr-076-git-repo-registry-ssh.md) (git-реестр и SSH), [ADR-078](./adr-078-runtime-dependency-availability.md) (детект зависимостей), [ADR-036](./adr-036-llm-gateway.md) (в исполнителе LLM-ключей нет), [ADR-038](./adr-038-npm-packages.md) (поставка пакета); детали и формат — [docs/EXECUTION.md](../EXECUTION.md) (Spec).
+> **Связано:** [ADR-096](../adr-096-storage-layer.md)/[ADR-097](../adr-097-storage-provider-class.md) (образец портов и контрактного suite), [ADR-099](../adr-099-egress-tls-trust.md) (доверенная граница и исходящий транспорт), [ADR-092](../adr-092-instance-lifecycle-maintenance.md) (рестарт, exit 75), [ADR-094](../adr-094-observability-metrics.md) (метрики), [ADR-075](../adr-075-project-workspace-provisioning.md) (workspace), [ADR-076](../adr-076-git-repo-registry-ssh.md) (git-реестр и SSH), [ADR-078](../adr-078-runtime-dependency-availability.md) (детект зависимостей), [ADR-036](../adr-036-llm-gateway.md) (в исполнителе LLM-ключей нет), [ADR-038](../adr-038-npm-packages.md) (поставка пакета); детали и формат — [docs/EXECUTION.md](../EXECUTION.md) (Spec).
 
 ## Контекст
 
@@ -136,7 +137,7 @@
        сбоя в контекст не тащим.
      - **Кто пишет блобы:** исполнитель их **не** пишет (у него нет каталога данных инстанса) —
        он только передаёт base64; запись делает control plane (`McpManager` → `AttachmentService.upload`),
-       см. [ADR-115](./adr-115-multimodal-input.md) §«Медиа из инструментов».
+       см. [ADR-115](../adr-115-multimodal-input.md) §«Медиа из инструментов».
    - **Граница шага:** B1 — **серверная** часть; **B2 (клиентская проводка в control plane) —
      реализована**: источник `ExecutorMcpSource` (`packages/core/src/engine/mcp/executor-mcp-source.ts`)
      и транспорт `executor-mcp-client.ts` подключаются в deps (`attachExecutorMcpSource`), тулы
@@ -240,7 +241,7 @@
     `401 «Требуется аутентификация»` на второй. Сейчас маскируется привязкой клиента (`ClientIP`
     на трёх Service — п. 7 и п. 11), то есть при интерактивной работе незаметно, но всплывает при любом
     сдвиге трафика (рестарт пода, смена IP, второй UI-под, прямой вызов API, сервис-меш). Закрывается
-    [PROP-105](./prop-105-multi-replica-coordination.md) — auth-сессии в общий store.
+    [PROP-105](../prop-105-multi-replica-coordination.md) — auth-сессии в общий store.
   - **Проверено, что работает (не блокеры):** `scheduler.leaderElection: postgres` — на двух репликах
     ровно **один** тикер, вторая пишет `[scheduler] не удалось стать лидером — тикер не запущен`,
     срабатывание ровно **одно** на интервал (job `cron | ok | dedupKey cron:<id>:<минута>`);
@@ -413,17 +414,17 @@
 
 ## Связи
 
-- [ADR-096](./adr-096-storage-layer.md) / [ADR-097](./adr-097-storage-provider-class.md) — образец доменного порта,
+- [ADR-096](../adr-096-storage-layer.md) / [ADR-097](../adr-097-storage-provider-class.md) — образец доменного порта,
   контрактного suite и optional-пакета с динамическим `import()`.
-- [ADR-099](./adr-099-egress-tls-trust.md) — единый egress-слой: доверие TLS/CA, исходящий транспорт, адресная политика.
-- [ADR-092](./adr-092-instance-lifecycle-maintenance.md) — рестарт инстанса (exit 75), параметр запуска, а не runtime.
-- [ADR-094](./adr-094-observability-metrics.md) — контракт имён метрик (`synth_executor_*`) и liveness/readiness.
-- [ADR-075](./adr-075-project-workspace-provisioning.md) — provisioning остаётся в backend'е; общий том workspace в split-режиме.
-- [ADR-076](./adr-076-git-repo-registry-ssh.md) — git-реестр и SSH-материал (доставка в исполнителя — на время
+- [ADR-099](../adr-099-egress-tls-trust.md) — единый egress-слой: доверие TLS/CA, исходящий транспорт, адресная политика.
+- [ADR-092](../adr-092-instance-lifecycle-maintenance.md) — рестарт инстанса (exit 75), параметр запуска, а не runtime.
+- [ADR-094](../adr-094-observability-metrics.md) — контракт имён метрик (`synth_executor_*`) и liveness/readiness.
+- [ADR-075](../adr-075-project-workspace-provisioning.md) — provisioning остаётся в backend'е; общий том workspace в split-режиме.
+- [ADR-076](../adr-076-git-repo-registry-ssh.md) — git-реестр и SSH-материал (доставка в исполнителя — на время
   вызова, см. «Обновлено 2026-10-26», (б)).
-- [ADR-078](./adr-078-runtime-dependency-availability.md) — детект внешних зависимостей: в split-режиме источник — исполнитель.
-- [ADR-036](./adr-036-llm-gateway.md) — в исполнителе LLM-ключей нет; границы обфускации/аудита сохраняются.
-- [ADR-038](./adr-038-npm-packages.md) — поставка пакета `@itphx/synth-executor` в npm.
+- [ADR-078](../adr-078-runtime-dependency-availability.md) — детект внешних зависимостей: в split-режиме источник — исполнитель.
+- [ADR-036](../adr-036-llm-gateway.md) — в исполнителе LLM-ключей нет; границы обфускации/аудита сохраняются.
+- [ADR-038](../adr-038-npm-packages.md) — поставка пакета `@itphx/synth-executor` в npm.
 - [docs/EXECUTION.md](../EXECUTION.md) — Spec: топологии, контракт порта, exec-API, развёртывание, миграция.
 
 ## Обновлено (2026-11-07)

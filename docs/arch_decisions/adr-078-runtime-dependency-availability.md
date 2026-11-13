@@ -71,6 +71,6 @@
 ## Связи
 
 - [ADR-070](./adr-070-system-prompt-composer.md) §2.9.1 — ось доступности тулов (`mode`/`role`), сюда добавлена причина `dependency`.
-- [ADR-077](./adr-077-runtime-toolchain.md) — инструментальное окружение исполнения: доставка `git`/`rg`/`python` (не переписывается; ADR-078 — реакция на их отсутствие).
+- [ADR-077](./legacy/adr-077-runtime-toolchain.md) — инструментальное окружение исполнения: доставка `git`/`rg`/`python` (не переписывается; ADR-078 — реакция на их отсутствие).
 - [ADR-029](./adr-029-granular-permissions.md) — гранулярные permissions (`deny`/`ask`/`allow`), над которыми надстроен `unavailable`.
 - [ADR-041](./adr-041-llm-error-taxonomy.md) — контракт локализации строк движка (`shared/i18n`).

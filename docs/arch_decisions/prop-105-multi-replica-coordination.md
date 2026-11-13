@@ -253,7 +253,7 @@ CREATE TABLE rate_limit_windows (
 - [ADR-089](./adr-089-external-events-automation.md) «Synth как платформа внешних событий и автоматизации» — dedup-claim, live-настройки событий, ключи привязок.
 - [ADR-094](./adr-094-observability-metrics.md) «Наблюдаемость — Prometheus-метрики, liveness/readiness и эксплуатационные алерты» — контракт имён метрик и кардинальности.
 - [ADR-097](./adr-097-storage-provider-class.md) «Класс расширения «хранилище» (storage)» — `StorageContext.locks`, `PgMutex`/`PgLeader`, порты драйвера.
-- [ADR-077](./adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения (toolchain и executor)» — разделение control plane и исполнителей (не заменяет координацию реплик).
+- [ADR-077](./legacy/adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения (toolchain и executor)» — разделение control plane и исполнителей (не заменяет координацию реплик).
 - [ADR-051](./adr-051-scheduler-pipelines.md) «Шедулер и пайплайны» — лидерство тикера, `PgLeader`.
 - [ADR-096](./adr-096-storage-layer.md) «Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами» — порты и контрактный suite.
 - Историческое предложение о PostgreSQL как втором backend хранения (документ удалён, поглощён ADR-096/ADR-097/ADR-098) — его волны дали `PgMutex`/`PgLeader` и дедуп-claim, на которых стоит это предложение.

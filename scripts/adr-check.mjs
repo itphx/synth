@@ -267,7 +267,7 @@ function collectRemoved(docs) {
 /** Ссылка на живой документ каталога из README (`./<файл>`); нет файла — просто id. */
 function docLinkById(docs, id) {
   const doc = docs.find((d) => d.id === id);
-  return doc ? `[${id}](./${doc.fileName})` : id;
+  return doc ? `[${id}](./${doc.legacy ? 'legacy/' : ''}${doc.fileName})` : id;
 }
 
 /** Ячейка статуса: у принятого предложения — с номером ADR. */

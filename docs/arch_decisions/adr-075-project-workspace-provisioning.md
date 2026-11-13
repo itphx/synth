@@ -145,7 +145,7 @@
 
 - [ADR-014](./adr-014-project-container.md) «Проект как контейнер».
 - [ADR-076](./adr-076-git-repo-registry-ssh.md) «Реестр git-репозиториев и доступ (SSH)» — клон выполняется в подкаталог **внутри** `project.workspace`.
-- [ADR-077](./adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — `mkdir`/`git`/`python` должны существовать в целевом окружении.
+- [ADR-077](./legacy/adr-077-runtime-toolchain.md) «Инструментальное окружение исполнения» — `mkdir`/`git`/`python` должны существовать в целевом окружении.
 - [ADR-072](./adr-072-settings-ui-kit.md) — UI-конвенции диалога.
 
 ## Порядок реализации (выполнено 2026-09-24)
@@ -155,3 +155,12 @@
 3. ✅ **Автосоздание**: create/PUT/`project_create`/transfer создают каталог; backend перестаёт отдавать 422 на отсутствующий.
 4. ✅ **UI-диалог** выбора/создания + i18n; передача workspace при создании проекта, в т.ч. remote.
 5. ✅ Тесты: unit (резолвер, guard), сквозной curl create/update, визуальная проверка диалога.
+
+## Обновлено 2026-11-13
+
+- **Per-project subPath для пулов исполнителей.** В под пула монтируется не весь RWX-том, а
+  `workspaceSubPath`: каталог `project.workspace`; для сессии в worktree — `.worktrees/<projectId>`
+  (совместимо с ADR-114). Пути в поде те же, поэтому агентские тулы и worktrees работают без правок.
+- **`workspaceOutsideRoot=deny` в managed.** Проект вне `workspacesRoot` в per-project режим не
+  попадает — том монтируется целиком (изоляция подкаталогов не достигается). Политика та же, что у
+  HTTP-роутов: `confirm` в standalone, `deny` в managed (ADR-135).

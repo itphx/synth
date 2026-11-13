@@ -1517,7 +1517,7 @@ sequenceDiagram
 - [ADR-112: Вопрос пользователю посреди хода](./arch_decisions/adr-112-user-questions-mid-turn.md)
 - [ADR-098: Деградированный режим хранилища](./arch_decisions/adr-098-storage-degraded-recovery.md),
   [PROP-105: Координация в нескольких репликах](./arch_decisions/prop-105-multi-replica-coordination.md)
-- [ADR-077: Исполнитель и split-режим](./arch_decisions/adr-077-runtime-toolchain.md)
+- [ADR-077: Исполнитель и split-режим](./arch_decisions/legacy/adr-077-runtime-toolchain.md)
 - [ADR-096: Слой хранения](./arch_decisions/adr-096-storage-layer.md),
   [ADR-092: Миграции и обслуживание](./arch_decisions/adr-092-instance-lifecycle-maintenance.md),
   [MAINTENANCE.md](./MAINTENANCE.md)

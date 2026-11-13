@@ -306,7 +306,7 @@ docker compose --profile split exec synth-executor wget -qO- \
 (`/var/synth/data/workspaces` в обоих контейнерах) — иначе containment исполнителя
 отклонит `cwd` (`EWORKSPACE`).
 
-**non-root (PROP-137).** Все runtime-образы работают от **uid 1000** (`USER 1000` в
+**non-root (ADR-137).** Все runtime-образы работают от **uid 1000** (`USER 1000` в
 `docker/Dockerfile`, `docker/Dockerfile.backend`, `docker/Dockerfile.executor`,
 `docker/Dockerfile.provisioner`), UI — `nginxinc/nginx-unprivileged:alpine` (**uid 101**).
 В compose uid зафиксирован полем `user: "1000:1000"` у `synth`, `synth-backend`,
@@ -315,7 +315,7 @@ docker compose --profile split exec synth-executor wget -qO- \
 volume сразу доступен на запись (Docker копирует ownership из образа при создании тома).
 Уже существующий том от root-образа нужно один раз перевести — `chown -R 1000:1000`
 (процедура, проверка и откат: [MAINTENANCE.md](./MAINTENANCE.md) §«Переход на non-root
-(PROP-137)»). UI-контейнер слушает **8080** внутри (unprivileged nginx не может слушать
+(ADR-137)»). UI-контейнер слушает **8080** внутри (unprivileged nginx не может слушать
 порт < 1024); наружу публикуется `SYNTH_UI_PUBLISH` (по умолчанию `127.0.0.1:5002`), в чарте
 Service — `port/targetPort: 8080`.
 

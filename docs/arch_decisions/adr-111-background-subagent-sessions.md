@@ -5,7 +5,7 @@
 > **Источник:** PROP-096 (файл удалён после принятия).
 > **Связано:** [ADR-026](./adr-026-subagent-context-modes.md) (режимы контекста саб-агента),
 > [ADR-033](./adr-033-session-branching-merge.md) (дочерняя сессия как ветка),
-> [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — фоновые процессы),
+> [ADR-077](./legacy/adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — фоновые процессы),
 > [ADR-089](./adr-089-external-events-automation.md) (события сессии, владелец, надёжный «Стоп»),
 > [ADR-096](./adr-096-storage-layer.md) (порты слоя хранения),
 > [ADR-104](./adr-104-mid-turn-steering.md) (границы хода; steering дочерней сессии),
@@ -256,7 +256,7 @@ opencode (`background blocking tools`).
 ## Связи
 
 - [ADR-026](./adr-026-subagent-context-modes.md), [ADR-033](./adr-033-session-branching-merge.md),
-  [ADR-077](./adr-077-runtime-toolchain.md), [ADR-089](./adr-089-external-events-automation.md),
+  [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-089](./adr-089-external-events-automation.md),
   [ADR-096](./adr-096-storage-layer.md), [ADR-104](./adr-104-mid-turn-steering.md),
   [ADR-107](./adr-107-plugin-facade-services.md),
   [ADR-113](./adr-113-background-processes.md),

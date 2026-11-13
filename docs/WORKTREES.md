@@ -606,7 +606,7 @@ coarse-указателе.
 - [ADR-005](./arch_decisions/adr-005-json-storage.md), [ADR-014](./arch_decisions/adr-014-project-container.md),
   [ADR-024](./arch_decisions/adr-024-eventhub-transport.md), [ADR-029](./arch_decisions/adr-029-granular-permissions.md),
   [ADR-044](./arch_decisions/adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md),
-  [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md), [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md),
+  [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md), [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md),
   [ADR-096](./arch_decisions/adr-096-storage-layer.md), [ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
   [PROP-037](./arch_decisions/prop-037-commit-security-step.md), [ADR-114](./arch_decisions/adr-114-git-worktrees.md).
 

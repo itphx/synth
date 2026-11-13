@@ -512,7 +512,7 @@
 
 - Флаги `serve`: `--connect <url>` (адрес backend), `--token <api-key>`,
   `--oidc-issuer`/`--oidc-client-id` (fallback дискавери) — `src/main.ts`.
-- **LLM-шлюз в гибриде — включён по умолчанию (PROP-139):** профильный дефолт
+- **LLM-шлюз в гибриде — включён по умолчанию (ADR-139):** профильный дефолт
   `hybridGatewayBaseDefaults()` (`server/app/standalone-options.ts`, публичный
   экспорт из `src/index.ts`) — `{ llmGateway: { enabled: true } }`. Применяется
   вторым проходом загрузки конфига (режим известен только после первой загрузки):
@@ -1889,7 +1889,7 @@
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
   MCP-тулы получают контекст без изменений; правило действует и в шагах пайплайна, и в саб-агенте `task`
   (обе точки идут через `executeToolDef`).
-  **Runtime плагинного тула — по capability (PROP-138 Ф1/138c).** `ctx.runtime` (узкий
+  **Runtime плагинного тула — по capability (ADR-138 Ф1/138c).** `ctx.runtime` (узкий
   `exec`/`fs` поверх порта сессии) добавляется **только** тулу с «файловой» capability
   (`RUNTIME_CAPABILITIES`/`toolNeedsRuntime` в `engine/tools/tool-execution.ts`: `file_read`/
   `file_write`/`shell`/`search`/`git_read`/`git_write`) **и** при валидном порте в

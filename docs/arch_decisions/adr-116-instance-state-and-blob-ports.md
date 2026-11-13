@@ -13,7 +13,7 @@
 > [ADR-046](./adr-046-skills-and-slash-commands.md) (instance-скиллы),
 > [ADR-069](./adr-069-project-instructions-agents-md.md) (промпты/инструкции),
 > [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace проекта — не состояние инстанса),
-> [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель, общий RWX-том workspace — прецедент),
+> [ADR-077](./legacy/adr-077-runtime-toolchain.md) (исполнитель, общий RWX-том workspace — прецедент),
 > [ADR-086](./adr-086-extensibility-plugins-editions.md) / [ADR-100](./adr-100-extension-packs-pipelines.md)
 > (пакеты расширений и legacy-пайплайны),
 > [ADR-091](./adr-091-backup-restore-transfer.md) / [ADR-092](./adr-092-instance-lifecycle-maintenance.md)

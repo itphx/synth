@@ -1451,9 +1451,9 @@ docker inspect -f '{{.State.ExitCode}}' synth-backend
 `synth-init` (а не старый `CMD ["node","dist/main.js"]`) и что команда контейнера не переопределена
 в обход `synth-init`.
 
-## Переход на non-root (PROP-137)
+## Переход на non-root (ADR-137)
 
-**Цель:** инстанс после обновления на версию с non-root образами (PROP-137 Ф1) стартует и пишет
+**Цель:** инстанс после обновления на версию с non-root образами (ADR-137 Ф1) стартует и пишет
 данные; проверка — `docker compose exec synth-backend id` показывает `uid=1000`, а `synth doctor`
 не даёт `fail` по `data-dir`.
 
@@ -1529,7 +1529,7 @@ root-образ остаются рабочими; обратный `chown -R 0:
 которую нельзя сделать «на горячую» из non-root контейнера (нет `CAP_CHOWN`). `readOnlyRootFilesystem`,
 NetworkPolicy и initContainer для `hostPath`/NFS — слайс **137b** (чарт), в образах их нет.
 
-## Read-only rootfs и права (PROP-137 Ф2)
+## Read-only rootfs и права (ADR-137 Ф2)
 
 **Цель:** в Kubernetes-развёртывании (Helm-чарт `charts/synth`) процессы стартуют
 с **read-only корневой ФС**: изменить образ/контейнер нельзя, писать можно только
@@ -2174,7 +2174,7 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 
 ## История
 
-- 2026-11-12 — добавлен раздел «Read-only rootfs и права (PROP-137 Ф2)»: read-only корневая ФС в
+- 2026-11-12 — добавлен раздел «Read-only rootfs и права (ADR-137 Ф2)»: read-only корневая ФС в
   Kubernetes-развёртывании (backend/исполнитель/provisioner — `true`, UI — исключение), writable-
   `emptyDir` на `/tmp` и `/home/synth`, fail-closed проверка записи в `{dataDir}` на старте (текст
   ошибки с uid и командой `chown`), разбор `EACCES` (разовый `chown -R 1000:1000` вручную либо

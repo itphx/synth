@@ -6,7 +6,7 @@
 > плагинов); счётчик портов приведён к факту (37).
 > **Обновлено:** 2026-10-22 — добавлен порт `PluginLockRepository` (PROP-068 §4.4 / ADR-090,
 > lock-файл плагинов); счётчик портов приведён к факту (38).
-> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-095](./adr-095-god-object-decomposition.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-077](./adr-077-runtime-toolchain.md); [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md).
+> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-095](./adr-095-god-object-decomposition.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md); [docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md).
 
 ## Контекст
 

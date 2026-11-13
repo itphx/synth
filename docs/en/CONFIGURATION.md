@@ -604,11 +604,11 @@ security:
     rejectUnauthorized: true      # verify the server certificate (default true)
   secretKey: ""                   # ADR-076: master key of the at-rest secrets (empty → file dataDir/secrets/master.key)
   bootstrapServiceKeys: []        # ADR-052/O1: installer service keys (label/secret/scopes/roles?) — see below; usually via the env SYNTH_BOOTSTRAP_SERVICE_KEYS
-  commandAudit:                   # PROP-136: append-only audit of execute_shell/sandbox_exec executions
+  commandAudit:                   # ADR-136: append-only audit of execute_shell/sandbox_exec executions
     enabled: false                # master switch; managed profile — true (env SYNTH_COMMAND_AUDIT_ENABLED)
     retentionDays: 30             # journal retention, days (DELETE ?older_than_days)
     path: ""                      # empty → {dataDir}/audit/commands.jsonl
-  commandPolicy:                  # PROP-136b: mirrored external command checker (optional; disabled — previous behaviour)
+  commandPolicy:                  # ADR-136b: mirrored external command checker (optional; disabled — previous behaviour)
     enabled: false                # env SYNTH_COMMAND_POLICY_ENABLED; enabled without url — startup error
     provider: "http"              # http | opa                (env SYNTH_COMMAND_POLICY_PROVIDER)
     url: ""                       # checker address           (env SYNTH_COMMAND_POLICY_URL)
@@ -700,7 +700,7 @@ If `postgres` is selected but the DB is unreachable at startup, the behaviour is
 The `execution` section is the **execution topology switch**: where the commands of agent tools
 (`execute_shell`, `grep_files`, git tools) are executed. It is a **startup parameter**, not a runtime
 setting: switching the mode requires a process restart (invariant 24). The specification —
-[ADR-077](../arch_decisions/adr-077-runtime-toolchain.md).
+[ADR-077](../arch_decisions/legacy/adr-077-runtime-toolchain.md).
 
 | Field | Type / values | Default | Env | Meaning |
 |---|---|---|---|---|
@@ -710,13 +710,13 @@ setting: switching the mode requires a process restart (invariant 24). The speci
 | `execution.remote.concurrency` | number | process CPU count | `SYNTH_EXECUTION_CONCURRENCY` | Limit of concurrent exec calls on the backend; exceeding it queues the call |
 | `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | `SYNTH_EXECUTION_FAIL_MODE` | Behaviour when the executor is unavailable: `fail` — fail-closed (the tool is unavailable with an explicit reason); `inline-fallback` — the backend runs the command itself (**only with an explicit setting**) |
 | `execution.remote.tokenSecret` | path/reference | — | `SYNTH_EXECUTION_TOKEN` | **A path/reference to the token, NOT the value** (invariant 13). The token itself is `synth_exec_…` and lives in a Secret/file |
-| `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Pool mode (PROP-135 F4a): `instance` — **one shared** port per process (the previous behaviour, profiles are ignored); `project`/`session` — a port per profile of the session |
+| `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Pool mode (ADR-135 F4a): `instance` — **one shared** port per process (the previous behaviour, profiles are ignored); `project`/`session` — a port per profile of the session |
 | `execution.remote.defaultProfile` | string | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Name of the default profile (the profile catalogue is set by ADMIN) |
 | `execution.remote.browserProfile` | string | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Profile of the **browser** pool (`class: 'browser'`): the browser has its own image/profile, so it does **not** inherit `defaultProfile`. Used when the call target has no explicit profile |
 | `execution.remote.browserMcpServer` | string | `playwright` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Name of the browser MCP server in the executor pod: the built-in `browser_*` tools address their calls to it (`POST /mcp/call`), without MCP discovery |
 | `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values. Metadata (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **names only**) is returned in `GET /api/v2/execution/profiles` → `details` and does **not** affect routing or port creation |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Behaviour for an unusable profile (no address in the profile nor in the common `url`): `instance` — fall back to the instance port; `fail` — fail-closed (the startup is aborted) |
-| `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Pool provider (PROP-135 F4b-1): `static` — pools from the configuration (profile addresses, the port is built at startup — the F4a behaviour); `http` — pools are requested from the provisioner (the pool address and token come from the response, the port is built lazily) |
+| `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Pool provider (ADR-135 F4b-1): `static` — pools from the configuration (profile addresses, the port is built at startup — the F4a behaviour); `http` — pools are requested from the provisioner (the pool address and token come from the response, the port is built lazily) |
 | `execution.remote.provisioner.url` | string (address) | `''` | `SYNTH_EXECUTION_PROVISIONER_URL` | Address of the pool provisioner (`http://…`); **empty with `provider: http` → fail-closed at startup** ("where to ask" is not set) |
 | `execution.remote.provisioner.tokenSecret` | path/reference | `''` | `SYNTH_EXECUTION_PROVISIONER_TOKEN` | **A path/reference to the provisioner token, NOT the value** (invariant 13). The value is read from the file at request time and never reaches logs/error texts |
 | `execution.remote.provisioner.timeoutMs` | number | `10000` | `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS` | Timeout of a provisioner request (10 s) — separate from the exec-call timeout |
@@ -737,7 +737,7 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > default. Resolver — `resolveExecutio
 [config] execution.remote.provider="http" требует адрес provisioner'а (execution.remote.provisioner.url / SYNTH_EXECUTION_PROVISIONER_URL)
 ```
 
-**Pools and profiles (PROP-135, F4a).** The pool and the profile decide **which port** a session
+**Pools and profiles (ADR-135, F4a).** The pool and the profile decide **which port** a session
 gets:
 
 - `pooling: instance` — a single port per process (the shared executor pool); profiles are
@@ -761,7 +761,7 @@ profile. Empty values are treated as unset and are omitted from `details`. With
 `provider: http` metadata comes from the provisioner (`GET /v1/profiles`); with
 `provider: static` — from this catalogue.
 
-**Profile binding (PROP-135 F6a).** The effective profile is an inherited scope setting, priority:
+**Profile binding (ADR-135 F6a).** The effective profile is an inherited scope setting, priority:
 
 ```
 session.settings.executorProfile → agentDefinition.executorProfile → project.executor.profile → execution.remote.defaultProfile
@@ -792,7 +792,7 @@ session.settings.executorProfile → agentDefinition.executorProfile → project
   without a catalogue (`inline`/instance pool) the check is skipped. The agents list DTO returns
   `executor_profile`/`allowed_profiles` (`null` — not set).
 
-**Pool provider (PROP-135, F4b-1).** `execution.remote.provider` decides **where** the pool address
+**Pool provider (ADR-135, F4b-1).** `execution.remote.provider` decides **where** the pool address
 comes from:
 
 - `static` (default) — pools **from the configuration**: the pool address is the first address of
@@ -818,7 +818,7 @@ With `provider: http`:
 - if the target has no scope identifier (a session without a project under `pooling: project`) →
   `fallback: instance` (the instance port) or `fallback: fail` (**fail-closed**).
 
-The **provisioner service itself** (pods/charts/pool manager) is the next PROP-135 slice (F4b-2);
+The **provisioner service itself** (pods/charts/pool manager) is the next ADR-135 slice (F4b-2);
 this slice implements only the `/v1/pools` protocol client.
 
 **Current implementation state (steps 3 and 7b of the ADR-077 plan).** The `inline` mode — the
@@ -894,7 +894,7 @@ execution:
         timeoutMs: 60000            # profile parameters — on top of the common ones
 ```
 
-### Pool network classes (`executor.networkClass` / `executor.networkClasses.*` values, PROP-137b-2)
+### Pool network classes (`executor.networkClass` / `executor.networkClasses.*` values, ADR-137b-2)
 
 Executor pool isolation is **by profile class**, not by addresses: every pool
 carries the `synth.io/network=<none|restricted|full>` label, and the chart
@@ -939,14 +939,14 @@ The dynamic pools — the **provisioner**: the class comes from the profile
 - `none` — no egress at all: DNS does not resolve (including in-cluster names),
   so git/npm do not work inside the pool.
 - The rule "the `full` class is only available when the profile is explicitly
-  allowed in `project.executor.allowedProfiles`" (PROP-137) is **not enforced by
+  allowed in `project.executor.allowedProfiles`" (ADR-137) is **not enforced by
   this policy**: the chart does not know which profile a session will pick (the
   profile ceiling is a core-level concern, `execution.remote.profiles`), while
   the pool network class is set by the operator via the provisioner profile.
 
 Details and examples — chart README, §«Pool network classes».
 
-### Image builds: remote builder (`DOCKER_HOST`/`BUILDKIT_HOST`, PROP-137 F5)
+### Image builds: remote builder (`DOCKER_HOST`/`BUILDKIT_HOST`, ADR-137 F5)
 
 Building images (`docker build`) from a session happens **only on a remote builder**: the
 `devops`/`full` images ship the docker CLI, but there is no daemon and no `docker.sock`,
@@ -969,7 +969,7 @@ infrastructure; the chart does not deploy it.
 
 ### Pool provisioner (`SYNTH_PROVISIONER_*`, `provisioner.*` values)
 
-A separate `@itphx/synth-provisioner` process (PROP-135 F4b-2b): it issues the
+A separate `@itphx/synth-provisioner` process (ADR-135 F4b-2b): it issues the
 pool address and token to the control plane (`POST /v1/pools`). Enabled in the
 chart with `provisioner.enabled: true` **together with**
 `execution.mode: remote` (the backend pool provider is
@@ -1575,7 +1575,7 @@ security:
 SYNTH_BOOTSTRAP_SERVICE_KEYS='[{"label":"addon-installer","secret":"synth_svc_…","scopes":["addons:install"]}]'
 ```
 
-### Shell execution audit (`security.commandAudit`, PROP-136)
+### Shell execution audit (`security.commandAudit`, ADR-136)
 
 Append-only journal of **actual executions** of `execute_shell`/`sandbox_exec`:
 one JSONL line per record in `{dataDir}/audit/commands.jsonl` (or `path`).
@@ -1607,9 +1607,9 @@ de-identified string. For `sandbox_exec` the command is `commands.join(" && ")`.
 
 Read — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
 `requireAuth`); metrics — `synth_command_audit_*` (see `docs/OBSERVABILITY.md`).
-Command policy checker is enforced **on the executor** before spawn (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, `http-json`/`opa` contracts, fail modes and cache — [docs/EXECUTION.md](../EXECUTION.md) §9.2. Control-plane mirror and verdict audit — `security.commandPolicy` (below).
+Command policy checker is enforced **on the executor** before spawn (ADR-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, `http-json`/`opa` contracts, fail modes and cache — [docs/EXECUTION.md](../EXECUTION.md) §9.2. Control-plane mirror and verdict audit — `security.commandPolicy` (below).
 
-### Mirrored command checker (`security.commandPolicy`, PROP-136b)
+### Mirrored command checker (`security.commandPolicy`, ADR-136b)
 
 **Optional**: `enabled: false` (default) — previous behaviour, no provider is
 created, the command policy is never consulted.
@@ -1623,7 +1623,7 @@ executed, and the execution journal gets **one** record (`phase: "finished"`,
 continues the execution; both journal records carry `decidedBy: "policy"` and
 `provider` (`kind`/`ruleId`/`latencyMs`/`action`).
 
-**The security boundary is the executor** (PROP-136b-1): there the check runs
+**The security boundary is the executor** (ADR-136b-1): there the check runs
 before `spawn`. The control-plane mirror does not replace it and guarantees
 nothing in `inline` mode; it provides an early refusal and an audit trail.
 

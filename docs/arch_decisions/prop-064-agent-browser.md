@@ -4,7 +4,7 @@
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D19, «Встроенные в UI браузер и терминал»; идея пользователя 2026-09-16). 2026-11-09 — терминал выделен в [PROP-132](./prop-132-ui-terminal.md), документ сужен до браузера.
-> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-042](./adr-042-hybrid-mode.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./adr-077-runtime-toolchain.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-115](./adr-115-multimodal-input.md), [ADR-116](./adr-116-instance-state-and-blob-ports.md), [PROP-132](./prop-132-ui-terminal.md)
+> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-042](./adr-042-hybrid-mode.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-115](./adr-115-multimodal-input.md), [ADR-116](./adr-116-instance-state-and-blob-ports.md), [PROP-132](./prop-132-ui-terminal.md)
 > **Обновлено:** 2026-11-09 — зафиксировано разделение на два браузера, режимная матрица, headed-окно и постоянный профиль, attach по открытому окну.
 
 ## Решение (предложение)
@@ -31,7 +31,7 @@
 ### Что уже есть
 
 - `web_fetch`/`web_search` (`packages/core/src/engine/tools/web.ts`) — read-only HTTP без JS, cookies и сессии; SPA определяется, но не исполняется.
-- **Серверный браузер уже работает через MCP.** Образ исполнителя flavor `browser`/`full` (`docker/install-tier-3.sh`, `docker/Dockerfile.executor:265–325`), дефолт `SYNTH_EXECUTOR_MCP_SERVERS` с `playwright-mcp --headless --no-sandbox --executable-path /opt/synth/browser/chrome`; по проверке в контейнере — 25 инструментов, `browser_navigate`/`browser_evaluate` работают (`docs/arch_decisions/adr-077-runtime-toolchain.md:145–162`). Скриншоты приходят MCP-вложениями (ADR-115, протокол исполнителя 5).
+- **Серверный браузер уже работает через MCP.** Образ исполнителя flavor `browser`/`full` (`docker/install-tier-3.sh`, `docker/Dockerfile.executor:265–325`), дефолт `SYNTH_EXECUTOR_MCP_SERVERS` с `playwright-mcp --headless --no-sandbox --executable-path /opt/synth/browser/chrome`; по проверке в контейнере — 25 инструментов, `browser_navigate`/`browser_evaluate` работают (`docs/arch_decisions/legacy/adr-077-runtime-toolchain.md:145–162`). Скриншоты приходят MCP-вложениями (ADR-115, протокол исполнителя 5).
 - Ограничения серверного пути: нужен flavor `browser`/`full`; при `replicaCount > 1` обязателен `sessionAffinity: ClientIP` (иначе `navigate` и `evaluate` попадают в разные поды); `NetworkPolicy` по умолчанию разрешает только DNS, для интернета нужен `executor.networkPolicy.allowedEgress`; Chrome в образе нет — только Chromium, поэтому обязателен `--executable-path`.
 - Встроенных browser-тулов в core нет; UI-панели браузера нет; Code Mode нет (`task` — единственная оркестрация).
 
@@ -99,7 +99,7 @@
 - [ADR-042](./adr-042-hybrid-mode.md), [ADR-045](./adr-045-hybrid-server-profiles.md) — гибрид и профили.
 - [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md) — мобильный адаптив и PWA.
 - [ADR-075](./adr-075-project-workspace-provisioning.md) — workspace и containment.
-- [ADR-077](./adr-077-runtime-toolchain.md) — исполнитель и серверный Playwright MCP.
+- [ADR-077](./legacy/adr-077-runtime-toolchain.md) — исполнитель и серверный Playwright MCP.
 - [ADR-099](./adr-099-egress-tls-trust.md) — egress, TLS/CA, прокси.
 - [ADR-115](./adr-115-multimodal-input.md), [ADR-116](./adr-116-instance-state-and-blob-ports.md) — вложения и blob-порты.
 - [PROP-132](./prop-132-ui-terminal.md) — встроенный терминал (выделен из этого документа).

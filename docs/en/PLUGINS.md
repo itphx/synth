@@ -655,7 +655,7 @@ The core does the narrowing in **one place** — at the tool call — so the rul
 sessions, sub-agents (`task`) and pipeline steps. Built-in (`builtin`) and MCP tools receive the
 context unchanged — the rule covers plugin tools only (`source: 'plugin'`).
 
-**`ctx.runtime` — commands and files through the session port (PROP-138, Ф1).** The runtime is the
+**`ctx.runtime` — commands and files through the session port (ADR-138, Ф1).** The runtime is the
 only supported way for a capability-dependent plugin tool to reach the
 environment. This is **not** a relaxation of the narrowing: `ctx.extra`/`ctx.dataDir` are still
 not passed, and `ctx.runtime` is a narrow object with exactly two explicitly listed methods.
@@ -691,7 +691,7 @@ interface PluginRuntime {
 is the only way to reach the commands and the files from there. `web`, `memory`, `user` are
 the control plane contour — they do not need the runtime.
 
-**The capability gate (PROP-138, slice 138c).** The runtime is handed out **only** to a tool
+**The capability gate (ADR-138, slice 138c).** The runtime is handed out **only** to a tool
 that has at least one "file" capability (`file_read`/`file_write`/`shell`/`search`/`git_read`/
 `git_write`). A tool with the `memory`/`web`/`user` capability (or with no capability at all)
 does **not** get `ctx.runtime` — the executor contour is not needed by it, and extra access to
@@ -1023,7 +1023,7 @@ POST /invoke        → { protocol: 2, point, id, input } → { output }
 
 **Protocol versions.** `protocol: 1` is the base one (three extension points, no runtime on
 the wire); `protocol: 2` adds the **runtime contour** (`POST /runtime/*` through the host,
-PROP-138 Ф2). The host accepts both: a v1 plugin works as before (the `/invoke` body carries
+ADR-138 Ф2). The host accepts both: a v1 plugin works as before (the `/invoke` body carries
 `protocol: 1`, no runtime on the wire), a v2 plugin gets `protocol: 2` and the runtime contour.
 The version in the `/invoke` body is an **echo** of the version the plugin declared in
 `/capabilities`.
@@ -1045,7 +1045,7 @@ The version in the `/invoke` body is an **echo** of the version the plugin decla
   Schema, `capabilities` — **mandatory**), and not through `apply()`: there is no code in the host
   process.
 
-#### 5.2.1. The runtime contour (protocol v2, PROP-138 Ф2)
+#### 5.2.1. The runtime contour (protocol v2, ADR-138 Ф2)
 
 For a plugin that declared `protocol: 2` the host starts **its own** loopback runtime proxy
 and passes its address and token in the process environment:
@@ -1183,7 +1183,7 @@ available in `out-of-process`** — the wire protocol covers only the three exte
 (`promptBlocks`/`llmFilters`/`tools`), and neither embeddings nor settings are part of its DTOs.
 A plugin that needs them runs in the `inline` mode (§4.6, §4.7).
 
-**`ctx.runtime` does cross the boundary — but only in protocol v2 (PROP-138 Ф2).** A plugin that
+**`ctx.runtime` does cross the boundary — but only in protocol v2 (ADR-138 Ф2).** A plugin that
 declared `protocol: 2` gets the runtime on the wire: the host starts a loopback proxy (§5.2.1)
 and, for the duration of the `tools` call, registers an invocation bound to the session
 execution surface. Only the runtime DTOs cross the wire (`argv`/`path`/`base64`/error codes) —

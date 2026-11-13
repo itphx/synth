@@ -623,11 +623,11 @@ security:
     rejectUnauthorized: true      # проверять сертификат сервера (по умолчанию true)
   secretKey: ""                   # ADR-076: мастер-ключ секретов at-rest (пусто → файл dataDir/secrets/master.key)
   bootstrapServiceKeys: []        # ADR-052/O1: installer service-key'и (label/secret/scopes/roles?) — см. ниже; обычно через env SYNTH_BOOTSTRAP_SERVICE_KEYS
-  commandAudit:                   # PROP-136: append-only аудит исполнений execute_shell/sandbox_exec
+  commandAudit:                   # ADR-136: append-only аудит исполнений execute_shell/sandbox_exec
     enabled: false                # мастер-выключатель; managed-профиль — true (env SYNTH_COMMAND_AUDIT_ENABLED)
     retentionDays: 30             # срок хранения журнала, дней (DELETE ?older_than_days)
     path: ""                      # пусто → {dataDir}/audit/commands.jsonl
-  commandPolicy:                  # PROP-136b: зеркальный внешний чекер команд (опционален; выключен — прежнее поведение)
+  commandPolicy:                  # ADR-136b: зеркальный внешний чекер команд (опционален; выключен — прежнее поведение)
     enabled: false                # env SYNTH_COMMAND_POLICY_ENABLED; true без url — ошибка старта
     provider: "http"              # http | opa                (env SYNTH_COMMAND_POLICY_PROVIDER)
     url: ""                       # адрес чекера              (env SYNTH_COMMAND_POLICY_URL)
@@ -718,7 +718,7 @@ remote:                           # гибридный режим: локаль�
 
 Секция `execution` — **переключатель топологии исполнения**: где выполняются команды агентских
 тулов (`execute_shell`, `grep_files`, git-тулы). Это **параметр запуска**, а не runtime-настройка:
-смена режима — только рестартом процесса (инвариант 24). Спецификация — [ADR-077](./arch_decisions/adr-077-runtime-toolchain.md).
+смена режима — только рестартом процесса (инвариант 24). Спецификация — [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md).
 
 | Поле | Тип / значения | Дефолт | Env | Смысл |
 |---|---|---|---|---|
@@ -728,13 +728,13 @@ remote:                           # гибридный режим: локаль�
 | `execution.remote.concurrency` | число | число CPU процесса | `SYNTH_EXECUTION_CONCURRENCY` | Лимит одновременных exec-вызовов на backend; превышение → очередь |
 | `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | `SYNTH_EXECUTION_FAIL_MODE` | Поведение при недоступном исполнителе: `fail` — fail-closed (инструмент недоступен с явной причиной); `inline-fallback` — backend исполняет команду сам (**только явной настройкой**) |
 | `execution.remote.tokenSecret` | путь/ссылка | — | `SYNTH_EXECUTION_TOKEN` | **Путь/ссылка на токен, НЕ значение** (инвариант 13). Сам токен — `synth_exec_…`, живёт в Secret/файле |
-| `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Режим пула (PROP-135 Ф4a): `instance` — **общий** порт на процесс (прежнее поведение, профили игнорируются); `project`/`session` — порт на профиль сессии |
+| `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Режим пула (ADR-135 Ф4a): `instance` — **общий** порт на процесс (прежнее поведение, профили игнорируются); `project`/`session` — порт на профиль сессии |
 | `execution.remote.defaultProfile` | строка | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Имя профиля по умолчанию (каталог профилей задаёт ADMIN) |
 | `execution.remote.browserProfile` | строка | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Профиль **браузерного** пула (`class: 'browser'`): у браузера свой образ/профиль, поэтому `defaultProfile` он **не** наследует. Применяется, когда профиль цели не задан явно |
 | `execution.remote.browserMcpServer` | строка | `playwright` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Имя MCP-сервера браузера в поде исполнителя: встроенные `browser_*`-тулы адресуют ему вызов (`POST /mcp/call`), без MCP-discovery |
 | `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции. Метаданные (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **только имена**) отдаются в `GET /api/v2/execution/profiles` → `details` и **не влияют** на маршрутизацию и создание портов |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — откат на instance-порт; `fail` — fail-closed (старт прерывается) |
-| `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Провайдер пулов (PROP-135 Ф4b-1): `static` — пулы из конфигурации (адреса профиля, порт на старте — поведение Ф4a); `http` — пулы запрашиваются у provisioner'а (адрес и токен пула приходят ответом, порт собирается лениво) |
+| `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Провайдер пулов (ADR-135 Ф4b-1): `static` — пулы из конфигурации (адреса профиля, порт на старте — поведение Ф4a); `http` — пулы запрашиваются у provisioner'а (адрес и токен пула приходят ответом, порт собирается лениво) |
 | `execution.remote.provisioner.url` | строка (адрес) | `''` | `SYNTH_EXECUTION_PROVISIONER_URL` | Адрес provisioner'а пулов (`http://…`); **пусто при `provider: http` → fail-closed на старте** («куда обращаться» не задано) |
 | `execution.remote.provisioner.tokenSecret` | путь/ссылка | `''` | `SYNTH_EXECUTION_PROVISIONER_TOKEN` | **Путь/ссылка на токен provisioner'а, НЕ значение** (инвариант 13). Значение читается из файла в момент обращения и не попадает в логи/тексты ошибок |
 | `execution.remote.provisioner.timeoutMs` | число | `10000` | `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS` | Таймаут обращения к provisioner'у (10 с) — отдельный от таймаута exec-вызова |
@@ -755,7 +755,7 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
 [config] execution.remote.provider="http" требует адрес provisioner'а (execution.remote.provisioner.url / SYNTH_EXECUTION_PROVISIONER_URL)
 ```
 
-**Пулы и профили (PROP-135, Ф4a).** Пул и профиль решают, **какой порт** достаётся сессии:
+**Пулы и профили (ADR-135, Ф4a).** Пул и профиль решают, **какой порт** достаётся сессии:
 
 - `pooling: instance` — единственный порт на процесс (общий пул исполнителей); профили
   игнорируются, поведение прежнее;
@@ -778,7 +778,7 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
 значения считаются незаданными и в `details` не попадают. У `provider: http` метаданные
 приходят от provisioner'а (`GET /v1/profiles`), у `provider: static` — из этого каталога.
 
-**Binding профиля (PROP-135 Ф6a).** Эффективный профиль — наследуемая настройка области, приоритет:
+**Binding профиля (ADR-135 Ф6a).** Эффективный профиль — наследуемая настройка области, приоритет:
 
 ```
 session.settings.executorProfile → agentDefinition.executorProfile → project.executor.profile → execution.remote.defaultProfile
@@ -809,7 +809,7 @@ session.settings.executorProfile → agentDefinition.executorProfile → project
   пропускается. DTO списка агентов отдаёт `executor_profile`/`allowed_profiles`
   (`null` — не задано).
 
-**Провайдер пулов (PROP-135, Ф4b-1).** `execution.remote.provider` решает, **откуда** берётся
+**Провайдер пулов (ADR-135, Ф4b-1).** `execution.remote.provider` решает, **откуда** берётся
 адрес пула:
 
 - `static` (дефолт) — пулы **из конфигурации**: адрес пула — первый адрес профиля, порт
@@ -831,7 +831,7 @@ session.settings.executorProfile → agentDefinition.executorProfile → project
 - если у цели нет идентификатора области (сессия без проекта при `pooling: project`) →
   `fallback: instance` (instance-порт) либо `fallback: fail` (**fail-closed**).
 
-Сам **сервис-provisioner** (поды/чарты/менеджер пулов) — следующий слайс PROP-135 (Ф4b-2);
+Сам **сервис-provisioner** (поды/чарты/менеджер пулов) — следующий слайс ADR-135 (Ф4b-2);
 в этом слайсе реализован только клиент протокола `/v1/pools`.
 
 **Текущее состояние реализации (шаги 3 и 7b плана ADR-077).** Режим `inline` — прежнее
@@ -903,7 +903,7 @@ execution:
         timeoutMs: 60000            # параметры профиля — «поверх» общих
 ```
 
-### Сетевые классы пулов (values `executor.networkClass` / `executor.networkClasses.*`, PROP-137b-2)
+### Сетевые классы пулов (values `executor.networkClass` / `executor.networkClasses.*`, ADR-137b-2)
 
 Изоляция пулов исполнителей — **по классу профиля**, а не по адресам: каждый пул
 несёт подпись `synth.io/network=<none|restricted|full>`, а чарт рендерит
@@ -948,14 +948,14 @@ NetworkPolicy на каждый класс. Классы одинаковы дл
 - `none` — без egress вообще: DNS не разрешается (в том числе имена внутри
   кластера), поэтому git/npm внутри пула не работают.
 - Правило «класс `full` — только если профиль явно разрешён в
-  `project.executor.allowedProfiles`» (PROP-137) **не обеспечивается этой
+  `project.executor.allowedProfiles`» (ADR-137) **не обеспечивается этой
   политикой**: чарт не знает, какой профиль выберет сессия (потолок профилей —
   уровень core, `execution.remote.profiles`), а сетевой класс пула задаёт
   оператор через профиль provisioner'а.
 
 Подробности и примеры — README чарта, §«Сетевые классы пулов».
 
-### Сборка образов: remote builder (`DOCKER_HOST`/`BUILDKIT_HOST`, PROP-137 Ф5)
+### Сборка образов: remote builder (`DOCKER_HOST`/`BUILDKIT_HOST`, ADR-137 Ф5)
 
 Сборка образов (`docker build`) из сессии — **только на удалённом builder'е**: в образах
 `devops`/`full` есть docker CLI, но демона и `docker.sock` нет, `--privileged` и
@@ -976,7 +976,7 @@ builder'е команда падает в shell ошибкой docker CLI. Пр�
 
 ### Provisioner пулов (`SYNTH_PROVISIONER_*`, values `provisioner.*`)
 
-Отдельный процесс `@itphx/synth-provisioner` (PROP-135 Ф4b-2b): выдаёт control
+Отдельный процесс `@itphx/synth-provisioner` (ADR-135 Ф4b-2b): выдаёт control
 plane адрес и токен пула (`POST /v1/pools`). Включается в чарте
 `provisioner.enabled: true` **вместе** с `execution.mode: remote` (провайдер
 пулов backend'а — `execution.remote.provider: http`, поля `execution.remote.provisioner.*`
@@ -1583,7 +1583,7 @@ security:
 SYNTH_BOOTSTRAP_SERVICE_KEYS='[{"label":"addon-installer","secret":"synth_svc_…","scopes":["addons:install"]}]'
 ```
 
-### Аудит исполнений shell (`security.commandAudit`, PROP-136)
+### Аудит исполнений shell (`security.commandAudit`, ADR-136)
 
 Append-only журнал **фактов исполнения** команд `execute_shell`/`sandbox_exec`:
 одна JSONL-строка на запись в `{dataDir}/audit/commands.jsonl` (или `path`).
@@ -1614,9 +1614,9 @@ Append-only журнал **фактов исполнения** команд `exe
 
 Чтение — `GET /api/v2/audit/commands` (managed — ADMIN/AUDITOR, standalone —
 `requireAuth`); метрики — `synth_command_audit_*` (см. `docs/OBSERVABILITY.md`).
-Внешний чекер команд — проверка **на исполнителе** до `spawn` (PROP-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, контракты `http-json`/`opa`, fail modes и кэш — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Зеркальная проверка в control plane и запись вердикта в аудит — `security.commandPolicy` (ниже).
+Внешний чекер команд — проверка **на исполнителе** до `spawn` (ADR-136b-1): `SYNTH_EXECUTOR_COMMAND_POLICY_*`, контракты `http-json`/`opa`, fail modes и кэш — [docs/EXECUTION.md](./EXECUTION.md) §9.2. Зеркальная проверка в control plane и запись вердикта в аудит — `security.commandPolicy` (ниже).
 
-### Зеркальный чекер команд (`security.commandPolicy`, PROP-136b)
+### Зеркальный чекер команд (`security.commandPolicy`, ADR-136b)
 
 **Опционален**: `enabled: false` (дефолт) — поведение прежнее, провайдер не
 создаётся, командная политика не спрашивается.
@@ -1630,7 +1630,7 @@ Append-only журнал **фактов исполнения** команд `exe
 продолжается, обе записи журнала несут `decidedBy: "policy"` и `provider`
 (`kind`/`ruleId`/`latencyMs`/`action`).
 
-**Граница безопасности — исполнитель** (PROP-136b-1): там проверка идёт до
+**Граница безопасности — исполнитель** (ADR-136b-1): там проверка идёт до
 `spawn`. Зеркало в control plane её не заменяет и в `inline`-режиме ничего не
 гарантирует; оно даёт ранний отказ и след в аудите.
 

@@ -6,7 +6,7 @@
 > **Обновлено:** 2026-10-24 — п. 9: подтверждение `caution` привязано к content-hash, срок 24 ч, выдаёт ADMIN — **реализовано**
 > **Обновлено:** 2026-10-24 — п. 9: подтверждение установки учитывается и на **активации** (шаг `trust`): вердикт `caution` активируется при действующем подтверждении с тем же content-hash — **реализовано**
 > **Обновлено:** 2026-10-24 — п. 9: схема записи каталога генерируется автоматически из опубликованного `@itphx/synth-shared` в CI каталога (bot-коммит) — **реализовано**. Фактический механизм: репозиторий каталога `synth-registry` (`scripts/gen-schema.mjs` + джоба `schema` в `.gitverse/workflows/registry.yaml`) берёт контракт из опубликованного npm-пакета, пересобирает `schema/` и коммитит результат в `master` ботом; пока версия пакета с контрактом каталога не опубликована, пересборка пропускается с явным сообщением в логе джобы.
-> **Связано:** [ADR-029](./adr-029-granular-permissions.md) (permission-слой), [ADR-030](./adr-030-hooks-agent-events.md) (шина хуков), [ADR-036](./adr-036-llm-gateway.md) (шлюз LLM), [ADR-052](./adr-052-public-api-platform.md) (модель service-key), [ADR-070](./adr-070-system-prompt-composer.md) (сборка промпта), [ADR-076](./adr-076-git-repo-registry-ssh.md) (секреты at-rest), [ADR-077](./adr-077-runtime-toolchain.md) (образец порта), [ADR-086](./adr-086-extensibility-plugins-editions.md) (зонтик классов расширений), [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (порты и драйверы), [ADR-099](./adr-099-egress-tls-trust.md) (egress), [ADR-122](./adr-122-memory-product.md) (память — контрактом плагина), [PROP-068](./prop-068-skills-agents-registry.md) (каталог и модель доверия), [PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md) (гибрид); спецификация — [docs/PLUGINS.md](../PLUGINS.md), HTTP — [docs/API_V2.md](../API_V2.md) §5.36, эксплуатация — [docs/MAINTENANCE.md](../MAINTENANCE.md) §Плагины.
+> **Связано:** [ADR-029](./adr-029-granular-permissions.md) (permission-слой), [ADR-030](./adr-030-hooks-agent-events.md) (шина хуков), [ADR-036](./adr-036-llm-gateway.md) (шлюз LLM), [ADR-052](./adr-052-public-api-platform.md) (модель service-key), [ADR-070](./adr-070-system-prompt-composer.md) (сборка промпта), [ADR-076](./adr-076-git-repo-registry-ssh.md) (секреты at-rest), [ADR-077](./legacy/adr-077-runtime-toolchain.md) (образец порта), [ADR-086](./adr-086-extensibility-plugins-editions.md) (зонтик классов расширений), [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md) (порты и драйверы), [ADR-099](./adr-099-egress-tls-trust.md) (egress), [ADR-122](./adr-122-memory-product.md) (память — контрактом плагина), [PROP-068](./prop-068-skills-agents-registry.md) (каталог и модель доверия), [PROP-080](./prop-080-managed-hybrid-modes.md)/[PROP-081](./prop-081-hybrid-policy-leak-protection.md) (гибрид); спецификация — [docs/PLUGINS.md](../PLUGINS.md), HTTP — [docs/API_V2.md](../API_V2.md) §5.36, эксплуатация — [docs/MAINTENANCE.md](../MAINTENANCE.md) §Плагины.
 
 ## Контекст
 
@@ -18,7 +18,7 @@
 
 1. **Форма слоя — in-process SDK с манифестом.** Манифест `synth.pack` (`kind: "plugin"`), загрузчик `PluginHost` (resolve → integrity → семвер-гейт → trust/scan → политика режима → import → facade → disposers → аудит), bundle-only дистрибуция, модель доверия по [PROP-068](./prop-068-skills-agents-registry.md).
 2. **Три точки расширения в первой волне:** `promptBlocks` (блоки системного промпта; сборка в `SystemPromptComposer`), `llmFilters` (фазы `pre_request`/`post_response`/`embedding`) и `tools`; контракты — в `@itphx/synth-shared`, сверка объявленного (`provides`) и фактического состава вкладов — при активации.
-3. **Два режима исполнения:** `inline` (код в процессе core) и `out-of-process` (отдельный процесс, wire-протокол HTTP/1.1 + JSON по образцу исполнителя [ADR-077](./adr-077-runtime-toolchain.md); контракт протокола — в `@itphx/synth-shared`, отдельный пакет не создаётся).
+3. **Два режима исполнения:** `inline` (код в процессе core) и `out-of-process` (отдельный процесс, wire-протокол HTTP/1.1 + JSON по образцу исполнителя [ADR-077](./legacy/adr-077-runtime-toolchain.md); контракт протокола — в `@itphx/synth-shared`, отдельный пакет не создаётся).
 4. **Право вето — только у доверенных:** вердикт `deny` фильтра действует только при trust ≥ `trusted`, плагины уровня `community` наблюдают, но не блокируют; trust-floor инстанса — `trusted`, установщик **отказывает в установке** плагина ниже порога (`plugin.trust_below_floor`).
 5. **Управление — полный контур:** HTTP API `/api/v2/plugins*` (RBAC-матрица), CLI `synth plugin *`, UI-раздел «Плагины», журнал аудита плагинов (отдельный порт), обновление/откат версии, карантин, контрактный suite (автору — subpath `@itphx/synth-core/engine/plugins/contract.js`).
 6. **Режимы инстанса:** standalone — полный контроль локально; managed — deploy-time установка по умолчанию, runtime-install `deny`, **смена набора расширений — только рестартом** (деплоем); hybrid — серверная политика (allow-list) плюс локальный контур, см. [ADR-086](./adr-086-extensibility-plugins-editions.md).
@@ -69,3 +69,15 @@
 - 2026-10-22 — решение владельца: слой возвращён в работу (был Icebox), форма — in-process SDK + два режима исполнения; фазы Ф0–Ф6 выполнены.
 - 2026-10-23 — Ф7 (гибрид) закрыта; предложение принято как решение (ADR-090); спецификация автора — [docs/PLUGINS.md](../PLUGINS.md).
 - 2026-10-24 — п. 9: подтверждение `caution` привязано к content-hash, срок 24 ч, выдаёт ADMIN — **реализовано** (состояние — `plugin-approvals.json` в раскладке слоя плагинов; причины `plugin.approval_expired`/`plugin.approval_stale`); схема записи каталога генерируется автоматически из опубликованного `@itphx/synth-shared` в CI каталога (bot-коммит) — реализовано.
+
+## Обновлено 2026-11-13
+
+- **Плагинные тулы с файловыми capability исполняются через `ctx.runtime`.** Хост инжектит узкий
+  runtime, привязанный к пулу сессии (`exec` без shell, `fs.read/write/list/stat/realpath`, git-операции);
+  `ctx.dataDir`/`ctx.extra` по-прежнему не передаются. В `inline` runtime — объект в процессе; в
+  out-of-process — **wire v2**: host-side loopback-прокси (`SYNTH_RUNTIME_URL`/`SYNTH_RUNTIME_TOKEN`) и
+  invocation binding (`invocation_id` живёт только на время вызова точки `tools`). Плагин не ходит к
+  исполнителю напрямую — единственная точка — хост.
+- **Capability-гейт.** Runtime выдаётся только тулу с файловой/shell-capability
+  (`file_read`/`file_write`/`shell`/`search`/`git_read`/`git_write`); `node:fs`/`child_process` — не
+  поддерживаемый путь, в managed запрещён. Решение и контур — [ADR-138](./adr-138-plugin-execution-contour.md).

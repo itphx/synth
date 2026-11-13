@@ -3,7 +3,7 @@
 > **Статус:** ✅ Реализовано
 > **Дата:** 2026-11-07
 > **Источник:** PROP-124
-> **Связано:** [ADR-076](./adr-076-git-repo-registry-ssh.md) (реестр SSH-ключей), [ADR-077](./adr-077-runtime-toolchain.md) (порт исполнения, секреты вызова), [ADR-078](./adr-078-runtime-dependency-availability.md) (доступность программ), [ADR-099](./adr-099-egress-tls-trust.md) (egress/TLS), [ADR-105](./adr-105-external-credentials.md) (модель «секрет → транспорт»), [ADR-113](./adr-113-background-processes.md) (фоновые процессы).
+> **Связано:** [ADR-076](./adr-076-git-repo-registry-ssh.md) (реестр SSH-ключей), [ADR-077](./legacy/adr-077-runtime-toolchain.md) (порт исполнения, секреты вызова), [ADR-078](./adr-078-runtime-dependency-availability.md) (доступность программ), [ADR-099](./adr-099-egress-tls-trust.md) (egress/TLS), [ADR-105](./adr-105-external-credentials.md) (модель «секрет → транспорт»), [ADR-113](./adr-113-background-processes.md) (фоновые процессы).
 
 ## Контекст и проблема
 

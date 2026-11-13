@@ -70,6 +70,7 @@
 | ADR-130 | Рабочая панель плана, ToDo, журнала и инвариантов | ✅ Реализовано | [adr-130-plan-journal-work-panel.md](./adr-130-plan-journal-work-panel.md) |
 | ADR-133 | Каналы обновлений и проверка обновлений | ✅ Реализовано | [adr-133-update-channels.md](./adr-133-update-channels.md) |
 | ADR-134 | Сервис инстанса: synth service и systemd --user | ✅ Реализовано | [adr-134-instance-service-systemd-user.md](./adr-134-instance-service-systemd-user.md) |
+| ADR-139 | LLM-шлюз по умолчанию включён в managed и hybrid | ✅ Реализовано | [adr-139-llm-gateway-hybrid.md](./adr-139-llm-gateway-hybrid.md) |
 
 ## Частично
 
@@ -79,7 +80,6 @@
 | ADR-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов — **реализовано** (ADR-090); остаток — эмит `callback` (вне ядра) | ⚠️ Частично | [adr-030-hooks-agent-events.md](./adr-030-hooks-agent-events.md) |
 | ADR-046 | Скиллы и slash-команды: формат `SKILL.md`, discovery, progressive disclosure, core-тул `skill`, команды/bundles, scope-API, UI; Фаза 3 — trust-гейт проектных команд, inline shell, `skills.urls` read-only, внешние каталоги, builtin `skill-creator`; остаток — install/trust/подписи/`lock.json` и backend-админка каталога (PROP-068) | ⚠️ Частично | [adr-046-skills-and-slash-commands.md](./adr-046-skills-and-slash-commands.md) |
 | ADR-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (ADR-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны вынесены в ADR-100/ADR-101 (движок реализован), размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ Частично | [adr-051-scheduler-pipelines.md](./adr-051-scheduler-pipelines.md) |
-| ADR-077 | Инструментальное окружение исполнения (toolchain и executor): thin backend + сервис-executor, общий volume для workspace, S3; реализуется после ADR-097 (PostgreSQL) | ⚠️ Частично | [adr-077-runtime-toolchain.md](./adr-077-runtime-toolchain.md) |
 | ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (ADR-090 — **реализован**), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон Add-on — `synth-media`; остаток — editions/contribution | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |
 | ADR-087 | **Шлюзы (gateways)** — отдельный класс расширений (внешний сервис-транспорт внешний мир ↔ Synth, двусторонний обмен): контракт (приём через `POST /api/v2/events`, доставка наружу через SSE-watcher, MCP-часть, Binding, identity/claim-flow, allowlist, вложения, дедуп, прокси/egress, секреты at-rest); Telegram-шлюз (`addons/synth-gateway-telegram`) реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); публикация в канал — агентом через MCP шлюза (ADR-089); HA через leader election, webhook-транспорт, второй канал — нет | ⚠️ Частично | [adr-087-gateways.md](./adr-087-gateways.md) |
 | ADR-091 | Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor` | ⚠️ Частично | [adr-091-backup-restore-transfer.md](./adr-091-backup-restore-transfer.md) |
@@ -99,6 +99,10 @@
 | ADR-121 | Portable offline-дистрибутивы — pinned Node и ripgrep, SHA256SUMS | ⚠️ Частично | [adr-121-offline-portable-distribution.md](./adr-121-offline-portable-distribution.md) |
 | ADR-122 | Память как продукт — порты, плагин, индексы и recall | ⚠️ Частично | [adr-122-memory-product.md](./adr-122-memory-product.md) |
 | ADR-131 | Self-management инструменты инстанса и MCP | ⚠️ Частично | [adr-131-self-management-tools.md](./adr-131-self-management-tools.md) |
+| ADR-135 | Единый контур исполнения — пулы, профили и provisioner | ⚠️ Частично | [adr-135-execution-contour.md](./adr-135-execution-contour.md) |
+| ADR-136 | Модель доверия shell — аудит исполнений и внешний чекер команд | ⚠️ Частично | [adr-136-shell-trust.md](./adr-136-shell-trust.md) |
+| ADR-137 | Изоляция исполнителя — non-root, сеть и файловая система | ⚠️ Частично | [adr-137-executor-isolation.md](./adr-137-executor-isolation.md) |
+| ADR-138 | Контур исполнения плагинных инструментов — capability → пул, `ctx.runtime` | ⚠️ Частично | [adr-138-plugin-execution-contour.md](./adr-138-plugin-execution-contour.md) |
 
 ## Предложения
 
@@ -128,11 +132,6 @@
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-132 | Встроенный терминал в UI | 🧩 Предложение | [prop-132-ui-terminal.md](./prop-132-ui-terminal.md) |
 | PROP-133 | Доступ к проекту — участники, группы и видимость | 🧩 Предложение | [prop-133-project-access-sharing.md](./prop-133-project-access-sharing.md) |
-| PROP-135 | Единый контур исполнения: пулы, профили и жизненный цикл исполнителей | 🧩 Предложение | [prop-135-execution-topology-pools-profiles.md](./prop-135-execution-topology-pools-profiles.md) |
-| PROP-136 | Модель доверия shell: аудит исполнений и внешний чекер команд | 🧩 Предложение | [prop-136-shell-trust-audit-command-policy.md](./prop-136-shell-trust-audit-command-policy.md) |
-| PROP-137 | Изоляция исполнителя: non-root, сеть и файловая система | 🧩 Предложение | [prop-137-executor-isolation-nonroot-network.md](./prop-137-executor-isolation-nonroot-network.md) |
-| PROP-138 | Контур исполнения плагинных инструментов: capability → пул, `ctx.runtime` | 🧩 Предложение | [prop-138-plugin-tool-execution-contour.md](./prop-138-plugin-tool-execution-contour.md) |
-| PROP-139 | LLM-шлюз по умолчанию включён в managed и hybrid | 🧩 Предложение | [prop-139-llm-gateway-default-managed-hybrid.md](./prop-139-llm-gateway-default-managed-hybrid.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -155,7 +154,7 @@
 | PROP-047 | [ADR-122](./adr-122-memory-product.md) | реализованное ядро; vision — docs/MEMORY.md |
 | PROP-049 | [ADR-114](./adr-114-git-worktrees.md) | принято |
 | PROP-054 | [ADR-130](./adr-130-plan-journal-work-panel.md) | принят 2026-11-08 |
-| PROP-082 | [ADR-077](./adr-077-runtime-toolchain.md) | принято |
+| PROP-082 | [ADR-077](./legacy/adr-077-runtime-toolchain.md) | принято |
 | PROP-085 | [ADR-115](./adr-115-multimodal-input.md) | принято |
 | PROP-090 | [ADR-090](./adr-090-extension-api.md) | принято |
 | PROP-091 | [ADR-091](./adr-091-backup-restore-transfer.md) | принято |
@@ -172,14 +171,20 @@
 | PROP-124 | [ADR-124](./adr-124-remote-ssh-access.md) | принято |
 | PROP-125 | [ADR-125](./adr-125-hybrid-remote-mcp.md) | принято |
 | PROP-127 | [ADR-127](./adr-127-parallel-tool-execution.md) | принято |
+| PROP-135 | [ADR-135](./adr-135-execution-contour.md) | принято |
+| PROP-136 | [ADR-136](./adr-136-shell-trust.md) | принято |
+| PROP-137 | [ADR-137](./adr-137-executor-isolation.md) | принято |
+| PROP-138 | [ADR-138](./adr-138-plugin-execution-contour.md) | принято |
+| PROP-139 | [ADR-139](./adr-139-llm-gateway-hybrid.md) | принято |
 
 ## Legacy
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
 | ADR-027 | Двойная передача плана (диск + system prompt) | ⛔ Заменено | [legacy/adr-027-double-plan-passing.md](./legacy/adr-027-double-plan-passing.md) |
+| ADR-077 | Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote | ⛔ Заменено | [legacy/adr-077-runtime-toolchain.md](./legacy/adr-077-runtime-toolchain.md) |
 
 ---
 
-Всего документов: 120 (Решения: 58, Частично: 24, Предложения: 29, Vision: 7, Icebox: 1, Legacy: 1).
-Удалено: 21 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
+Всего документов: 120 (Решения: 59, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 2).
+Удалено: 26 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

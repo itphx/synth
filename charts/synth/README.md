@@ -1404,7 +1404,7 @@ executor:
 ### Какой flavor умеет собирать Synth
 
 Flavor'ы образа исполнителя (`synth-executor:<v>-<flavor>`) различаются
-составом toolchain'а ([ADR-077](../../docs/arch_decisions/adr-077-runtime-toolchain.md)):
+составом toolchain'а ([ADR-077](../../docs/arch_decisions/legacy/adr-077-runtime-toolchain.md)):
 
 | Flavor | `pnpm install`/`build`/`typecheck` | `helm lint` | `ffmpeg` |
 |---|---|---|---|

@@ -2,7 +2,7 @@
 
 > Точечные правила пакета. Общие инварианты, команды и стиль — в корневом
 > [AGENTS.md](../../AGENTS.md); порт исполнения и топология — ADR-077
-> ([ADR-077](../../docs/arch_decisions/adr-077-runtime-toolchain.md)); образец
+> ([ADR-077](../../docs/arch_decisions/legacy/adr-077-runtime-toolchain.md)); образец
 > упаковки — слой хранения (ADR-096/ADR-097).
 
 ## Роль и границы

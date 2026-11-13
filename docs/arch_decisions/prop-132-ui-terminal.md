@@ -4,7 +4,7 @@
 > **Решение до:** 2026-12-31
 > **Дата:** 2026-11-09
 > **Источник:** выделено из [PROP-064](./prop-064-agent-browser.md) (2026-11-09); исходная идея — D19/`Фичи.md` (Terminal), 2026-09-16.
-> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./adr-077-runtime-toolchain.md), [ADR-113](./adr-113-background-processes.md), [PROP-126](./prop-126-input-surface-mentions-snippets.md)
+> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-113](./adr-113-background-processes.md), [PROP-126](./prop-126-input-surface-mentions-snippets.md)
 
 ## Решение (предложение)
 
@@ -91,7 +91,7 @@
 - [ADR-029](./adr-029-granular-permissions.md) — permissions и plan-режим.
 - [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md) — мобильный адаптив.
 - [ADR-075](./adr-075-project-workspace-provisioning.md) — workspace и containment.
-- [ADR-077](./adr-077-runtime-toolchain.md) — `ExecutionPort` и исполнитель.
+- [ADR-077](./legacy/adr-077-runtime-toolchain.md) — `ExecutionPort` и исполнитель.
 - [ADR-113](./adr-113-background-processes.md) — фоновые процессы (не PTY, но общий реестр).
 - [PROP-126](./prop-126-input-surface-mentions-snippets.md) — `!`-shell-режим композера.
 - [PROP-064](./prop-064-agent-browser.md) — браузер (выделен из общего документа).

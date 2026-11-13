@@ -279,7 +279,7 @@ Use, а не на следующем ходу.
 `ToolResult.attachments` ссылками (дедуп по `blobPath`). Дальше действует **штатный шов**
 `ChatOrchestrator._injectToolAttachments` — тот же, что у `web_fetch`: блобы пишет только control
 plane, исполнитель их не знает. Исполнитель протокола ≤ 4 поля `attachments` не отдаёт — результат
-остаётся текстовым, вызов не падает ([ADR-077](./adr-077-runtime-toolchain.md) п. 9).
+остаётся текстовым, вызов не падает ([ADR-077](./legacy/adr-077-runtime-toolchain.md) п. 9).
 
 - **Шов и проверка ссылок.** Тул отдаёт **ссылку**, не байты. Оркестратор валидирует каждую
   ссылку (`isToolAttachmentRefValid`): `blobPath` строго под `attachments/` (`isAttachmentPath`,

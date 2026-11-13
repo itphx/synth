@@ -3,7 +3,7 @@
 > **Статус:** 🧩 Предложение
 > **Дата:** 2026-11-08
 > **Решение до:** 2026-12-08
-> **Связано:** [ADR-038](./adr-038-npm-packages.md), [ADR-077](./adr-077-runtime-toolchain.md), [ADR-078](./adr-078-runtime-dependency-availability.md), [ADR-121](./adr-121-offline-portable-distribution.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-036](./adr-036-llm-gateway.md), [docs/PUBLISHING.md](../PUBLISHING.md)
+> **Связано:** [ADR-038](./adr-038-npm-packages.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-078](./adr-078-runtime-dependency-availability.md), [ADR-121](./adr-121-offline-portable-distribution.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-036](./adr-036-llm-gateway.md), [docs/PUBLISHING.md](../PUBLISHING.md)
 
 ## Контекст
 

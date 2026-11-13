@@ -11,7 +11,7 @@
 | Файлы (запись) | `write_file`, `edit_file`, `create_directory`, `delete_file`, `patch` (`patch` — атомарная мультифайловая правка: JSON-массив `edits[]` с `file_path`/`old_string`/`new_string`/`replace_all`, 1..50 правок, всё-или-ничего — при любой ошибке ни один файл не меняется; запись атомарна по файлу tmp→rename с откатом) |
 | Вложения (ADR-115) | `attach_workspace_file` — файл из workspace → **вложение диалога** (capability `file_read`, группа `read`, plan разрешён): containment (`path-utils`), `stat` до чтения, общие лимиты/allowlist `attachments.*`; тул возвращает `ToolResult.attachments`, а оркестратор (`_injectToolAttachments`) вставляет медиа-часть в **текущий** ход — сообщение служебное (`metadata.source='tool-attachment'`, `author='Tool'`, `metadata.agent_role`), в UI это системный блок «Агент · <имя> · вложение», а не user-пузырь; `blob_refs` пишет инъекция. `save_attachment` — вложение **текущей** сессии → файл в workspace (capability `file_write`, группа `write`, plan запрещён): выбор по сообщению (`message_id`/`message_seq`), затем `sha256`/`name`/последнее (неоднозначное имя → ошибка `attach.tool.ambiguous`), только объекты `attachments/`, публикация **без перезаписи** (`link`/`COPYFILE_EXCL`, занято → `attach.tool.exists`), `fs.changed`. `send_attachment` — файл workspace → вложение **ответа** (capability `file_read`, группа `read`): медиа-часть в коллектор хода → `parts` финального assistant-сообщения → `step.finished.attachments`; ошибка/отмена хода ничего не отправляет |
 | Поиск | `grep_files` (`literal`, `caseSensitive` — default true, `hidden`, `limit` 100/макс 1000 по строкам совпадений; строка совпадения ≤ 2000 символов — длинная строка обрезается маркером `search.line_truncated`, общий счётчик совпадений при этом реальный; **мусорные пути исключены по умолчанию** — см. «Исключения поиска» ниже), `glob` (перечисление — без исключений) |
-| Shell | `execute_shell`, `sandbox_exec` (PROP-135: разовый запуск 1..5 команд в отдельном профиле исполнения — пул класса `sandbox`; см. «Песочный запуск» ниже) |
+| Shell | `execute_shell`, `sandbox_exec` (ADR-135: разовый запуск 1..5 команд в отдельном профиле исполнения — пул класса `sandbox`; см. «Песочный запуск» ниже) |
 | Git | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_checkout`, `git_branch_list`, `git_show`, `git_blame`, `git_stash` |
 | SSH-ключи (ADR-076) | `ssh_keys_list` — метаданные ключей инстанса (`id`, `name`, `type`, `agentIds`, `createdAt`; приватный ключ и passphrase — **никогда**), фильтр `agent_id`; capability `git_read`, группа `git_read` (plan разрешён), **без привязки к workspace**. Нужен, чтобы взять `sshKeyId` для `project_repo_clone`/`project_repo_fetch`: у этих тулов текст отказа для SSH-URL перечисляет доступные ключи (`git.ssh_key_required_hint`, `id → name`, до 10) и отсылает к `ssh_keys_list`; нет стора ключей — прежний текст без списка |
 | Git worktrees (ADR-114) | `git_worktree_list`, `git_worktree_create`, `git_worktree_remove`, `git_worktree_prune` — проект **только из сессии**; `git_worktree_list` — только чтение (группа `git_read`), мутации (`create`/`remove`/`prune`) — группа `git_write`, в plan-режиме запрещены; `create` не привязывает сессию — привязку делает `PATCH /api/v2/sessions/:id { worktreeId }` |
@@ -179,12 +179,12 @@ core получает доступ через серверный контрак�
 
 **Deny не останавливает ход** (ADR-070 §2.9.1, обновлено 2026-10-29): решение permission-слоя `deny` — ролевое (`matchedRule: 'role.unavailable'`), отказ пользователя (ask→deny) или запрет политики — возвращается модели обычным `tool_result` с причиной; следующая LLM-итерация запускается, и модель может выбрать другой инструмент или ответить текстом. Защита от зацикливания — doom-loop (одинаковые легальные вызовы), лимит шагов/итераций (`AgentDefinition.maxSteps`; `session.max_iterations` — только шаги пайплайнов) и счётчик одинаковых deny-вызовов (5 подряд → ход завершается). `session.role_tool_blocked` — только фоллбек-текст, если модель так и не дала содержательного ответа (статус `stopped`).
 
-## Песочный запуск (`sandbox_exec`, PROP-135)
+## Песочный запуск (`sandbox_exec`, ADR-135)
 
 `sandbox_exec` — **разовый** запуск команд в отдельном профиле исполнения: адрес пула выдаёт
 provisioner по ключу с классом `sandbox` (`session:<id>:sandbox:<profile>`), то есть это **другой
 пул** — свой образ и свой набор программ, а не рабочий каталог сессии. Постоянной браузерной/
-песочной сессии у тула нет (браузерный класс и MCP — следующий слайс PROP-135).
+песочной сессии у тула нет (браузерный класс и MCP — следующий слайс ADR-135).
 
 | Параметр | Описание |
 |---|---|
@@ -218,5 +218,5 @@ ask/deny пользователя и режимы работают как обы
 команду), таймаут — на команду. Отчёт по каждой команде: заголовок `[sandbox:<profile>] $ <cmd>`,
 stdout, при наличии — `[stderr]`, строка `(exit <code>)`; при ошибке — `Error: <message>` и
 `isError: true`. Метаданные: `{profile, commands, cwd, exit_codes}` (коды в порядке выполненных
-команд; `-1` — ошибка без кода выхода). Аудит и отдельная проверка песочного профиля — PROP-136
+команд; `-1` — ошибка без кода выхода). Аудит и отдельная проверка песочного профиля — ADR-136
 (ещё не реализован).

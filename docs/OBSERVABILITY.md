@@ -345,7 +345,7 @@ ADR-094 п. 4); без bearer-токена исполнителя — `401`. И�
 (адресов, id команд, имён MCP-серверов) в лейблах нет: число MCP-серверов —
 это **счётчик по состоянию**, а не список имён.
 
-### Provisioner пулов (PROP-135 Ф4b-2b)
+### Provisioner пулов (ADR-135 Ф4b-2b)
 
 Собственный `/metrics` процесса `synth-provisioner`
 (`packages/provisioner/src/metrics.ts`, свой мини-реестр — процесс не зависит
@@ -397,7 +397,7 @@ executor: это третий процесс со своими счётчика�
 посчитано). Доменные действия (из контента пакета, `provides.authority`) поимённо в метрику не
 попадают — иначе кардинальность не ограничена; они сводятся к `other`.
 
-### Аудит исполнений shell (PROP-136a)
+### Аудит исполнений shell (ADR-136a)
 
 Журнал исполнений `execute_shell`/`sandbox_exec` (`{dataDir}/audit/commands.jsonl`,
 `security.commandAudit`). Пишет **оркестратор** — единственная точка исполнения tool-call:
@@ -415,7 +415,7 @@ executor: это третий процесс со своими счётчика�
 `synth_command_audit_failed_total` (растёт), затем `enabled`/`path` в `security.commandAudit`
 и права на `{dataDir}/audit`.
 
-### Зеркальный чекер команд (PROP-136b-2a)
+### Зеркальный чекер команд (ADR-136b-2a)
 
 Вердикты внешнего чекера, который спрашивает **control plane** в точке исполнения
 (`execute_shell`/`sandbox_exec`, до аудита `started`; конфиг — `security.commandPolicy`).
@@ -449,7 +449,7 @@ executor: это третий процесс со своими счётчика�
 - Лейблы — только `method`, `route`, `status`, `provider`, `model`, `kind`, `outcome`, `source`, `op`,
   `currency`, `backend`, `store`, `metric`, а также `action`/`effect` — только для метрик
   Authority-слоя (ADR-106 Ф1: `synth_authority_decisions_total`) и `phase`/`tool` — только для
-  метрик журнала исполнений (PROP-136a: `synth_command_audit_*`).
+  метрик журнала исполнений (ADR-136a: `synth_command_audit_*`).
 - **`route` — шаблон маршрута**, не сырой путь. Неизвестный/catch-all маршрут сводится к `other`.
 - **Нет** `session_id`, `user_id`, query-строк, сырых путей, текстов сообщений — это и PII, и
   неограниченная кардинальность.

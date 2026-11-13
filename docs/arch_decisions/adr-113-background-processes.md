@@ -9,7 +9,7 @@
 > команду, оставлял потомка живым: он держал унаследованные пайпы, `close` не приходил, и запись
 > висела в `running` до естественного выхода команды (`packages/executor/src/background.ts`,
 > `_signal`).
-> **Связано:** [ADR-077](./adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — фоновые процессы),
+> **Связано:** [ADR-077](./legacy/adr-077-runtime-toolchain.md) (исполнитель; шаг 7c — фоновые процессы),
 > [ADR-111](./adr-111-background-subagent-sessions.md) (единый реестр фоновых прогонов, фоновые саб-агенты),
 > [ADR-096](./adr-096-storage-layer.md) (порты слоя хранения),
 > [ADR-094](./adr-094-observability-metrics.md) (наблюдаемость: события и метрики),
@@ -169,7 +169,7 @@ remote, протокол исполнителя ≥ 3). Поэтому `execute(
 ## Связи
 
 - [ADR-005](./adr-005-json-storage.md), [ADR-024](./adr-024-eventhub-transport.md),
-  [ADR-077](./adr-077-runtime-toolchain.md), [ADR-094](./adr-094-observability-metrics.md),
+  [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-094](./adr-094-observability-metrics.md),
   [ADR-096](./adr-096-storage-layer.md), [ADR-111](./adr-111-background-subagent-sessions.md),
   PROP-097.
 
