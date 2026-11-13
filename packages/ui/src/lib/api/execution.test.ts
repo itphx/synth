@@ -51,7 +51,11 @@ describe('executionApi — профили исполнения', () => {
     }
     fetchMock.mockResolvedValue(jsonResponse(dto))
 
-    await expect(executionApi.getExecutionProfiles()).resolves.toEqual(dto)
+    // Клиент нормализует legacy-строки MCP в объекты `{name}`.
+    await expect(executionApi.getExecutionProfiles()).resolves.toEqual({
+      ...dto,
+      details: [{ ...dto.details[0], mcpServers: [{ name: 'playwright' }] }],
+    })
 
     expect(urlOf(0)).toBe('/api/v2/execution/profiles')
     expect(methodOf(0)).toBe('GET')

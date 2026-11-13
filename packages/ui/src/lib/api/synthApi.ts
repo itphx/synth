@@ -484,12 +484,20 @@ export type {
   ExecutionProfilesDto,
   ExecutionPoolInfo,
   ExecutionPoolsDto,
+  ExecutionProfileClass,
   ExecutionProfileInfo,
+  ExecutionProfileMcpServer,
+  ExecutionProfileOrigin,
   ExecutionProfileResourceList,
   ExecutionProfileResources,
+  ExecutionProfileToleration,
+  ExecutionTolerationEffect,
+  ExecutionTolerationOperator,
   ExecutionRuntimeProfile,
   ExecutionRuntimeSettings,
   ExecutionSettingsDto,
+  ExecutionImagesWarmDto,
+  ExecutionImageWarmResult,
 } from './execution'
 
 export const synthApi = {

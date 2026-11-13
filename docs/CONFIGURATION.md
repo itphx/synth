@@ -917,33 +917,42 @@ runtime-секция** `execution` (`{dataDir}/settings.json` или PG-табл
 | Поле runtime-секции | Тип / значения | Смысл |
 |---|---|---|
 | `defaultProfile` | строка | Профиль по умолчанию (должен быть в эффективном каталоге) |
-| `browserProfile` | строка | Профиль браузерного пула (входит в `browserProfiles`, если список задан) |
-| `browserProfiles` | string[] | Каталог **браузерных** профилей (каждый — из каталога профилей) |
-| `pooling` | `instance` \| `project` \| `session` | Режим пула ( ADR-135 Ф4a) |
+| `browserProfile` | строка | Профиль браузерного пула (класс `browser`/`both`) |
+| `pooling` | `instance` \| `project` \| `session` | Режим пула (ADR-135 Ф4a) |
 | `fallback` | `instance` \| `fail` | Поведение роутера при непригодном профиле |
-| `profiles` | карта профилей | Каталог профилей: `имя → { description?, image?, url?, network?, resources?, runtimeClass?, readOnlyRootFilesystem?, env?, mcpServers? }` |
+| `profiles` | карта профилей | **Только переопределения/новые** профили: `имя → { description?, class?, image?, url?, network?, resources?, runtimeClass?, annotations?, labels?, nodeSelector?, tolerations?, affinity?, readOnlyRootFilesystem?, env?, mcpServers? }` |
+| `disabledProfiles` | string[] | Имена **config-профилей**, которые нужно отключить (удалять их нельзя) |
 
 **Приоритет эффективного значения** ([ADR-023](./arch_decisions/adr-023-configuration.md)):
-**env/CLI > runtime > `config.yaml`**. Env/CLI разрешаются внутри `resolveExecutionConfig`,
-runtime-override применяется поверх config-уровня, но **под env** — переменная окружения
-(например, `SYNTH_EXECUTION_DEFAULT_PROFILE`) runtime-каталогом не перекрывается.
+**env/CLI > runtime > `config.yaml`**.
 
-**Runtime-каталог заменяет каталог `config.yaml` целиком** (как `profiles`/`rules` прокси,
-[ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)): администратор может и добавить профиль,
-и удалить профиль из конфига (не задав его в runtime-каталоге). Пока runtime-секция не задана,
-действует каталог `config.yaml`.
+**Runtime-каталог — merge, а не замена.** Эффективный каталог =
+`config.profiles + runtime.profiles (override целиком) − disabledProfiles`. Профили из config/Helm
+**не удаляются** — только отключаются; runtime-профили удаляются удалением из `profiles`.
+`browserProfiles` в runtime-секции — legacy; каталоги строятся из `class`: исполнитель —
+`exec|both`, браузер — `browser|both` (+ `browserProfile`).
 
-**Валидация записи** (`400 VALIDATION_ERROR`): `defaultProfile` есть в эффективном каталоге;
-`browserProfiles` ⊆ каталога; `browserProfile` ∈ `browserProfiles` (если список задан) либо в
-каталоге; у каждого профиля каталога задан `image` или `url`; неизвестное поле секции — 400.
-Секция **не содержит секретов**: `env` — переменные окружения пула, не пароли (инвариант 13).
+**MCP-серверы** — объекты `{name, command?, args?, env?}` (legacy-строки нормализуются в `{name}`);
+для браузерного профиля предзаполняется Playwright (`playwright-mcp`, `--headless --no-sandbox
+--executable-path /opt/synth/browser/chrome`). `mcpServers` уходят в `profileSpec` и env пода.
 
-**Применение — при старте процесса.** `execution` — параметр запуска (инвариант 24): порты пулов
-и роутер создаются на старте, поэтому API честно отдаёт `restartRequired` (сравнение отпечатков
-«сохранено» vs «работает»); `/api/v2/execution/profiles` до рестарта отдаёт **работающий**
-каталог. Общий адрес секции (`execution.remote.url`) и режим (`execution.mode`) остаются
-config/env-уровня — instance-пул берёт адрес оттуда; runtime-каталог описывает **профильные**
-пулы (`pooling: project|session`) и служит источником каталога для provisioner'а.
+**Scheduling-поля профиля**: `annotations`/`labels` (служебные `synth.io/*` не перетираются),
+`nodeSelector`, `tolerations`, `affinity` (≤ 8 КиБ JSON), `runtimeClass` (Kubernetes RuntimeClass,
+должен быть установлен в кластере). `resources.requests/limits` — произвольные ключи с проверкой
+quantity, например `nvidia.com/gpu: "1"`.
+
+**Валидация записи** (`400 VALIDATION_ERROR`): проверяются только runtime-overrides
+(`image` или `url`); `disabledProfiles` — только имена config-базы, не дефолты; `defaultProfile` /
+`browserProfile` есть в эффективном каталоге (`browserProfile` — класса `browser|both`); неизвестное
+поле — 400. Секция **без секретов**: `env` — переменные окружения пула, не пароли (инвариант 13).
+
+**Применение — при старте процесса.** `execution` — параметр запуска (инвариант 24): API отдаёт
+`restartRequired` (отпечаток «сохранено» ≠ «работает»); `/api/v2/execution/profiles` до рестарта
+отдаёт **работающий** каталог. `profileOrigins` (`config|runtime`) — аддитивно в ответах.
+
+**Прогрев образов** — `POST /api/v2/execution/images/warm` (ADMIN): provisioner поднимает
+DaemonSet на выбранные образы, ждёт готовности и удаляет его; только `provider: kubernetes`,
+`static` → `501`.
 
 Пример runtime-секции (тело `PUT /api/v2/settings/execution`):
 
@@ -952,16 +961,19 @@ config/env-уровня — instance-пул берёт адрес оттуда; 
   "execution": {
     "defaultProfile": "devops",
     "pooling": "project",
+    "disabledProfiles": ["legacy"],
     "profiles": {
       "devops": {
         "description": "DevOps-исполнитель: полный toolchain",
+        "class": "exec",
         "image": "synth-executor:0.13.9-full",
         "network": "restricted",
-        "resources": { "requests": { "cpu": "500m", "memory": "1Gi" } },
+        "resources": { "requests": { "cpu": "500m", "memory": "1Gi" },
+                       "limits": { "nvidia.com/gpu": "1" } },
         "runtimeClass": "gvisor",
-        "readOnlyRootFilesystem": true,
-        "env": { "EXTRA_TOOLCHAIN": "full" },
-        "mcpServers": ["playwright-mcp"]
+        "nodeSelector": { "nvidia.com/gpu.present": "true" },
+        "annotations": { "example.com/pool": "gpu" },
+        "mcpServers": [{ "name": "playwright-mcp", "command": "playwright-mcp" }]
       }
     }
   }

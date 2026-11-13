@@ -83,11 +83,12 @@ const EXPECTED_API_METHODS = [
   'updateSkill', 'updateSkillBundle', 'updateSkillsSettings', 'updateSshKey', 'updateStickyNote', 'updateTls',
   'updateTlsMapping', 'updateUser', 'updateWebhookSubscription', 'uploadCa', 'uploadFile', 'uploadProfileCa',
   'uploadProfileClient', 'upsertEventBinding', 'validateRestoreByRef', 'validateRestoreUpload', 'validateTls',
+  'warmExecutionImages',
   'writeFile',
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (402)', () => {
+  it('набор методов совпадает с зафиксированным (403)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

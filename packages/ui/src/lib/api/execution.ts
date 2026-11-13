@@ -5,6 +5,7 @@
 //   GET    /api/v2/execution/pools             → { provider, pools: PoolInfo[] }
 //   POST   /api/v2/execution/pools/:key/drain  → 202 { ok: true }
 //   DELETE /api/v2/execution/pools/:key        → 202 { ok: true }
+//   POST   /api/v2/execution/images/warm       → 200 { results: ImageWarmResult[] }
 //
 // Наружу не отдаются ни адрес пула/исполнителя, ни его токен (инвариант 13):
 // DTO содержит только ключ, профиль, состояние и метки времени.
@@ -36,11 +37,55 @@ export type ExecutionPooling = 'instance' | 'project' | 'session'
 /** Состояние пула: задан профилем, готов, снимается. */
 export type ExecutionPoolState = 'configured' | 'ready' | 'draining'
 
-/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
+/**
+ * Класс профиля (ADR-135, аддендум §11): `exec` — исполнитель команд,
+ * `browser` — браузерный контур, `both` — оба контура одним профилем.
+ */
+export type ExecutionProfileClass = 'exec' | 'browser' | 'both'
+
+/**
+ * Происхождение профиля: `config` — из `config.yaml` (не редактируется, его
+ * можно отключить или продублировать), `runtime` — создан в runtime-каталоге.
+ */
+export type ExecutionProfileOrigin = 'config' | 'runtime'
+
+/**
+ * MCP-сервер профиля: имя + команда + аргументы + env.
+ *
+ * Строка (`'playwright-mcp'`) — legacy-форма: нормализуется в `{ name }`.
+ */
+export interface ExecutionProfileMcpServer {
+  name: string
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+}
+
+/** Оператор toleration'а пода (Kubernetes). */
+export type ExecutionTolerationOperator = 'Equal' | 'Exists'
+
+/** Эффект toleration'а пода (Kubernetes). */
+export type ExecutionTolerationEffect = 'NoSchedule' | 'PreferNoSchedule' | 'NoExecute'
+
+/** Toleration профиля (размещение пода на «tainted» нодах). */
+export interface ExecutionProfileToleration {
+  key?: string
+  operator?: ExecutionTolerationOperator
+  value?: string
+  effect?: ExecutionTolerationEffect
+}
+
+/**
+ * Список ресурсов профиля (`requests`/`limits` контейнера пула).
+ *
+ * Известные ключи объявлены явно, произвольные — через индекс-сигнатуру
+ * (`nvidia.com/gpu`, `example.com/fpka`): без них GPU-профиль не задать.
+ */
 export interface ExecutionProfileResourceList {
   cpu?: string
   memory?: string
   ephemeralStorage?: string
+  [key: string]: string | undefined
 }
 
 /** Ресурсы профиля исполнения (как в PodSpec). */
@@ -52,16 +97,21 @@ export interface ExecutionProfileResources {
 /**
  * Метаданные профиля исполнения (аддитивное поле `details`).
  *
- * Без env и секретов: `mcpServers` — только имена; неизвестное поле — «—».
+ * Без env и секретов: у `mcpServers` — имя/команда/аргументы, но не env
+ * (инвариант 13); неизвестное поле — «—».
  */
 export interface ExecutionProfileInfo {
   name: string
   description?: string
   image?: string
+  url?: string[]
   network?: 'none' | 'restricted' | 'full'
   resources?: ExecutionProfileResources
   runtimeClass?: string
-  mcpServers?: string[]
+  /** Класс профиля (`exec`/`browser`/`both`). */
+  class?: ExecutionProfileClass
+  /** MCP-серверы профиля (имя + команда + аргументы). */
+  mcpServers?: ExecutionProfileMcpServer[]
 }
 
 /** Ответ `GET /api/v2/execution/profiles`. */
@@ -81,6 +131,11 @@ export interface ExecutionProfilesDto {
   browserDefaultProfile?: string
   /** Метаданные профилей (может отсутствовать у старого сервера — `[]`). */
   details: ExecutionProfileInfo[]
+  /**
+   * Происхождение профилей (аддитивно): `config` — из `config.yaml`,
+   * `runtime` — создан в runtime-каталоге. Старый сервер — `undefined`.
+   */
+  profileOrigins?: Record<string, ExecutionProfileOrigin>
 }
 
 /**
@@ -120,6 +175,59 @@ export interface ExecutionSettingsDto {
   effective: ExecutionRuntimeSettings
   defaults: ExecutionRuntimeSettings
   isOverridden: boolean
+  /**
+   * Происхождение профилей (аддитивно): `config` — из `config.yaml`
+   * (не редактируется), `runtime` — создан в runtime-каталоге.
+   */
+  profileOrigins?: Record<string, ExecutionProfileOrigin>
+}
+
+/**
+ * Итог прогрева одного образа (`POST /api/v2/execution/images/warm`).
+ *
+ * `ok` — образ прогрет; `nodes` — на скольких нодах; `error` — причина
+ * неудачи (без секретов).
+ */
+export interface ExecutionImageWarmResult {
+  image: string
+  ok: boolean
+  nodes: number
+  error?: string
+}
+
+/** Ответ `POST /api/v2/execution/images/warm`. */
+export interface ExecutionImagesWarmDto {
+  results: ExecutionImageWarmResult[]
+}
+
+/**
+ * Нормализация MCP-серверов профиля: legacy-строка (`'playwright-mcp'`) →
+ * объект `{ name }`; неизвестное — отбрасывается.
+ */
+function normalizeMcpServers(raw: unknown): ExecutionProfileMcpServer[] {
+  if (!Array.isArray(raw)) return []
+  const out: ExecutionProfileMcpServer[] = []
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      const name = entry.trim()
+      if (name) out.push({ name })
+      continue
+    }
+    if (!entry || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    const name = typeof record.name === 'string' ? record.name.trim() : ''
+    if (!name) continue
+    const server: ExecutionProfileMcpServer = { name }
+    if (typeof record.command === 'string' && record.command.trim() !== '') {
+      server.command = record.command.trim()
+    }
+    if (Array.isArray(record.args)) {
+      const args = record.args.filter((arg): arg is string => typeof arg === 'string')
+      if (args.length > 0) server.args = args
+    }
+    out.push(server)
+  }
+  return out
 }
 
 export const executionApi = {
@@ -127,7 +235,13 @@ export const executionApi = {
   async getExecutionProfiles(): Promise<ExecutionProfilesDto> {
     const response = await fetchJSON<ExecutionProfilesDto>(`${BASE_URL}/execution/profiles`)
     // Сервер до этой версии отдавал только имена — детали необязательны.
-    return { ...response, details: response.details ?? [] }
+    return {
+      ...response,
+      details: (response.details ?? []).map((detail) => ({
+        ...detail,
+        mcpServers: normalizeMcpServers(detail.mcpServers),
+      })),
+    }
   },
 
   /** GET /execution/pools — живые пулы (у `static` — профили как `configured`). */
@@ -153,6 +267,20 @@ export const executionApi = {
     await fetchJSON<unknown>(`${BASE_URL}/execution/pools/${encodeURIComponent(key)}`, {
       method: 'DELETE',
     })
+  },
+
+  /**
+   * POST /execution/images/warm — прогреть образы на нодах кластера.
+   *
+   * Провайдер без управления подами (`static`) отвечает `501` — UI показывает
+   * это понятным сообщением.
+   */
+  async warmExecutionImages(images: string[]): Promise<ExecutionImagesWarmDto> {
+    const response = await fetchJSON<ExecutionImagesWarmDto>(
+      `${BASE_URL}/execution/images/warm`,
+      { method: 'POST', body: JSON.stringify({ images }) },
+    )
+    return { results: response.results ?? [] }
   },
 
   /**

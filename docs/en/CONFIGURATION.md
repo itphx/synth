@@ -908,34 +908,42 @@ table), managed by **ADMIN only** through `GET/PUT/DELETE /api/v2/settings/execu
 | Runtime field | Type / values | Meaning |
 |---|---|---|
 | `defaultProfile` | string | Default profile (must exist in the effective catalogue) |
-| `browserProfile` | string | Browser pool profile (must be in `browserProfiles` when the list is set) |
-| `browserProfiles` | string[] | Catalogue of **browser** profiles (each one — from the profile catalogue) |
+| `browserProfile` | string | Browser pool profile (class `browser`/`both`) |
 | `pooling` | `instance` \| `project` \| `session` | Pool mode (ADR-135 F4a) |
 | `fallback` | `instance` \| `fail` | Router behaviour when a profile is unusable |
-| `profiles` | map of profiles | Profile catalogue: `name → { description?, image?, url?, network?, resources?, runtimeClass?, readOnlyRootFilesystem?, env?, mcpServers? }` |
+| `profiles` | map of profiles | **Overrides/new profiles only**: `name → { description?, class?, image?, url?, network?, resources?, runtimeClass?, annotations?, labels?, nodeSelector?, tolerations?, affinity?, readOnlyRootFilesystem?, env?, mcpServers? }` |
+| `disabledProfiles` | string[] | Names of **config profiles** to disable (they cannot be deleted) |
 
 **Effective value priority** ([ADR-023](../arch_decisions/adr-023-configuration.md)):
-**env/CLI > runtime > `config.yaml`**. Env/CLI are resolved inside `resolveExecutionConfig`; the
-runtime override is applied on top of the config level but **below env** — an environment variable
-(e.g. `SYNTH_EXECUTION_DEFAULT_PROFILE`) is not overridden by the runtime catalogue.
+**env/CLI > runtime > `config.yaml`**.
 
-**The runtime catalogue replaces the `config.yaml` catalogue entirely** (like the proxy
-`profiles`/`rules`, [ADR-099](../arch_decisions/adr-099-egress-tls-trust.md)): an admin can add a
-profile and also remove a profile configured in `config.yaml` (by not listing it in the runtime
-catalogue). While the runtime section is unset, the `config.yaml` catalogue applies.
+**The runtime catalogue is a merge, not a replacement.** Effective catalogue =
+`config.profiles + runtime.profiles (full override) − disabledProfiles`. Config/Helm profiles are
+**not deleted** — only disabled; runtime profiles are deleted by removing them from `profiles`.
+`browserProfiles` in the runtime section is legacy; catalogues derive from `class`: executor —
+`exec|both`, browser — `browser|both` (+ `browserProfile`).
 
-**Write validation** (`400 VALIDATION_ERROR`): `defaultProfile` exists in the effective catalogue;
-`browserProfiles` ⊆ catalogue; `browserProfile` ∈ `browserProfiles` (when the list is set) or in the
-catalogue; every catalogue profile has `image` or `url`; an unknown section field → 400. The
-section holds **no secrets**: `env` are pool environment variables, not passwords (invariant 13).
+**MCP servers** are objects `{name, command?, args?, env?}` (legacy strings normalise to `{name}`);
+a browser profile is prefilled with Playwright. They are passed into `profileSpec` and the pod env.
 
-**Applied at process start.** `execution` is a startup parameter (invariant 24): pool ports and the
-router are created on start, so the API honestly reports `restartRequired` (fingerprint comparison of
-"saved" vs "running"); `/api/v2/execution/profiles` returns the **running** catalogue until a
-restart. The section-wide address (`execution.remote.url`) and the mode (`execution.mode`) stay at
-the config/env level — the instance pool takes its address from there; the runtime catalogue
-describes **profile** pools (`pooling: project|session`) and is the source of the catalogue for the
-provisioner.
+**Profile scheduling fields**: `annotations`/`labels` (service `synth.io/*` keys take precedence),
+`nodeSelector`, `tolerations`, `affinity` (≤ 8 KiB JSON), `runtimeClass` (Kubernetes RuntimeClass,
+must exist in the cluster). `resources.requests/limits` accept arbitrary quantity keys, e.g.
+`nvidia.com/gpu: "1"`.
+
+**Write validation** (`400 VALIDATION_ERROR`): only runtime overrides are validated
+(`image` or `url`); `disabledProfiles` may contain config-base names only, not defaults;
+`defaultProfile`/`browserProfile` exist in the effective catalogue (`browserProfile` — class
+`browser|both`); an unknown field → 400. The section holds **no secrets**: `env` are pool
+environment variables, not passwords (invariant 13).
+
+**Applied at process start.** `execution` is a startup parameter (invariant 24): the API reports
+`restartRequired` (fingerprint "saved" vs "running"); `/api/v2/execution/profiles` returns the
+**running** catalogue until a restart. `profileOrigins` (`config|runtime`) is additive in responses.
+
+**Image warm-up** — `POST /api/v2/execution/images/warm` (ADMIN): the provisioner creates a
+DaemonSet for the selected images, waits for readiness and deletes it; `provider: kubernetes` only,
+`static` → `501`.
 
 Example runtime section (`PUT /api/v2/settings/execution` body):
 
@@ -944,16 +952,19 @@ Example runtime section (`PUT /api/v2/settings/execution` body):
   "execution": {
     "defaultProfile": "devops",
     "pooling": "project",
+    "disabledProfiles": ["legacy"],
     "profiles": {
       "devops": {
         "description": "DevOps executor: full toolchain",
+        "class": "exec",
         "image": "synth-executor:0.13.9-full",
         "network": "restricted",
-        "resources": { "requests": { "cpu": "500m", "memory": "1Gi" } },
+        "resources": { "requests": { "cpu": "500m", "memory": "1Gi" },
+                       "limits": { "nvidia.com/gpu": "1" } },
         "runtimeClass": "gvisor",
-        "readOnlyRootFilesystem": true,
-        "env": { "EXTRA_TOOLCHAIN": "full" },
-        "mcpServers": ["playwright-mcp"]
+        "nodeSelector": { "nvidia.com/gpu.present": "true" },
+        "annotations": { "example.com/pool": "gpu" },
+        "mcpServers": [{ "name": "playwright-mcp", "command": "playwright-mcp" }]
       }
     }
   }

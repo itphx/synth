@@ -1509,3 +1509,11 @@
 - **Helm.** `executor.podAnnotations`/`podLabels`, RBAC daemonsets, комментарии values; примеры GPU/селекторов в README.
 - **Документация.** `docs/EXECUTION.md` §Ф4b-2b, `charts/synth/README.md`, `packages/provisioner/AGENTS.md`; отдельный **PROP-140** (класс `mcp`, discovery через probe-под) — создан, индекс обновлён.
 - **Проверки.** shared 1116; provisioner 98 targeted/весь пакет, lint 0; core targeted 82 + полный 10 692 (флейк `app.proxy.test.ts`, в изоляции зелёный); backend 858; `helm lint` ок; `adr:check` 0; core lint — 0 errors, ratchet 478 → 490 (новые `any` в settings-тестах слайса).
+
+## 2026-11-13 — UI профилей: форма над списком, классы, read-only config, MCP, warm
+
+- **Задача:** довести админ-раздел «Исполнение» под новый каталог (merge/class/disabled/placement) и запросы владельца: форма над списком со скроллом, бейджи классов, read-only config-профили с «Включён»/«Дублировать», редактор MCP, «Дополнительно», прогрев образов. **Тип:** feature (UI). **Исполнитель:** @fixer.
+- **UI.** `ExecutionSettings.tsx`: форма рендерится над карточками и скроллит к себе; бейджи `Исполнитель`/`Браузер`/`Из конфигурации`/`Отключён`; config-профили read-only (toggle `disabledProfiles`, «Дублировать» → runtime-копия `<name>-copy`), runtime — edit/delete (дефолт удалить нельзя); MCP-редактор `{name,command,args,env}` с предзаполнением Playwright; «Дополнительно» — runtimeClass (подсказка), annotations/labels/nodeSelector/tolerations/affinity, env, read-only rootfs; ресурсы key/value (GPU); кнопка «Прогреть образы» — выборочные чекбоксы → `POST /execution/images/warm` с результатами по образам; PUT отправляет только runtime-часть (`profiles` overrides + `disabledProfiles`), повторный GET после сохранения.
+- **API-клиент.** `profileOrigins`, `class`, placement, MCP-объекты, `warmExecutionImages`; нормализация legacy-строк MCP.
+- **Тесты.** `ExecutionSettings.test.tsx` — 33 (порядок формы, бейджи, read-only/duplicate, MCP, advanced, PUT payload, warm, restart); `execution.test.ts` — нормализация DTO; полный UI — 381 файл / 4 036 passed (+1 todo), lint 0 errors, build ок.
+- **Документация.** `docs/CONFIGURATION.md` (+EN) — merge/disabled/class/MCP/scheduling/warm; `docs/API_V2.md` (+EN) — PUT-семантика, `profileOrigins`, warm-эндпоинт; `packages/ui/AGENTS.md`.
