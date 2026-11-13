@@ -309,3 +309,63 @@ describe('PROP-135: touch — сообщение provisioner\'у об актив
     expect(result.stdout).toBe('ok');
   });
 });
+
+describe('PROP-135: прогрев пула (connect-ошибки повторяются)', () => {
+  const connectError = (): Error => Object.assign(new Error('исполнители не ответили на /capabilities'), { code: 'EUNREACHABLE' });
+  const okResult = { stdout: 'ok', stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+
+  it('повторяет connect-ошибку и затем выполняет команду', async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const inner = fakePort({
+        execute: async () => {
+          attempts += 1;
+          if (attempts < 3) throw connectError();
+          return okResult;
+        },
+      });
+      const port = createPooledExecutionPort({
+        key: KEY,
+        provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
+        createPort: async () => inner,
+      });
+
+      const promise = port.execute({ command: { kind: 'shell', command: 'echo hi' } });
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(promise).resolves.toMatchObject({ stdout: 'ok' });
+      expect(attempts).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('не смог — понятная ошибка с профилем и ключом пула', async () => {
+    vi.useFakeTimers();
+    try {
+      const inner = fakePort({ execute: async () => { throw connectError(); } });
+      const port = createPooledExecutionPort({
+        key: KEY,
+        provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
+        createPort: async () => inner,
+      });
+
+      const promise = port.execute({ command: { kind: 'shell', command: 'echo hi' } });
+      const assertion = expect(promise).rejects.toThrow(/не ответил за .*с \(пул project:prj_1:exec:default\)/);
+      await vi.advanceTimersByTimeAsync(20000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('не-connect ошибка не повторяется', async () => {
+    const inner = fakePort({ execute: async () => { throw new Error('boom'); } });
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
+      createPort: async () => inner,
+    });
+    await expect(port.execute({ command: { kind: 'shell', command: 'echo hi' } })).rejects.toThrow('boom');
+  });
+});

@@ -42,6 +42,7 @@ import type {
   ExecRequest,
   ExecResult,
 } from './ports/index.js';
+import { poolKeyString } from './pool-provider.js';
 import type { ExecutionPoolKey, ExecutionPoolRef } from './pool-provider.js';
 
 /** Опции ленивого порта на пул. */
@@ -61,6 +62,61 @@ export interface PooledExecutionPortOptions {
   metricsSink?: ExecutionMetricsSink;
   /** Шов: собрать реальный порт по адресу пула. */
   createPort: (ref: ExecutionPoolRef) => Promise<ExecutionPort>;
+}
+
+/** Задержки прогрева пула перед повтором (мс): 6 с суммарно (3 повтора). */
+const WARMUP_DELAYS_MS = [1000, 2000, 3000] as const;
+
+/** Ошибка означает «пул ещё не отвечает», а не отказ самой операции. */
+function isWarmupRetryable(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null;
+  const code = typeof e?.code === 'string' ? e.code : '';
+  if (code === 'EUNREACHABLE' || code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'EHOSTUNREACH') {
+    return true;
+  }
+  const message = typeof e?.message === 'string' ? e.message : String(err);
+  // Только «процесс ещё не слушает»: инвентарь не собрался / соединение
+  // отклонено / исполнитель ответил 503. Сетевые таймауты после отправки
+  // запроса не повторяем — команда могла уже выполниться.
+  return /ECONNREFUSED|capabilities|не ответил|503 Service Unavailable|503/i.test(message);
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Повторить операцию, пока пул прогревается (под создан, процесс ещё не
+ * слушает). Повторяются только connect-ошибки — ошибки самой операции
+ * возвращаются как есть (иначе можно выполнить команду дважды).
+ *
+ * После исчерпания попыток — понятная ошибка с профилем и ключом пула.
+ */
+async function withWarmup<T>(key: ExecutionPoolKey, operation: () => Promise<T>): Promise<T> {
+  let attempt = 0;
+  let elapsed = 0;
+  for (;;) {
+    try {
+      return await operation();
+    } catch (err) {
+      if (!isWarmupRetryable(err)) throw err;
+      if (attempt >= WARMUP_DELAYS_MS.length) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new ExecutionError({
+          message:
+            `исполнитель профиля «${key.profile}» не ответил за ${Math.round(elapsed / 100) / 10} с ` +
+            `(пул ${poolKeyString(key)}): ${detail}. ` +
+            'Пул мог не успеть запуститься — повторите запрос через несколько секунд; ' +
+            'если повторяется — проверьте provisioner и образ профиля.',
+          code: 'EUNREACHABLE',
+          reason: 'spawn_failed',
+          durationMs: elapsed,
+        });
+      }
+      const delay = WARMUP_DELAYS_MS[attempt]!;
+      attempt += 1;
+      elapsed += delay;
+      await sleep(delay);
+    }
+  }
 }
 
 /**
@@ -91,7 +147,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     return pending;
   };
 
-  const fs = createPooledFs(resolve);
+  const fs = createPooledFs(resolve, key);
 
   /**
    * Сообщить провайдеру об активности пула (PROP-135).
@@ -119,7 +175,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     async execute(req: ExecRequest): Promise<ExecResult> {
       const port = await resolve();
       try {
-        return await port.execute(req);
+        return await withWarmup(key, () => port.execute(req));
       } finally {
         // Активность была в любом исходе: успех и ошибка команды одинаково
         // означают, что пул использовался.
@@ -138,7 +194,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
           reason: 'spawn_failed',
         });
       }
-      const process = await port.spawnBackground(req);
+      const process = await withWarmup(key, () => port.spawnBackground!(req));
       // Долгий фоновый процесс — тоже активность пула (пул живёт, пока
       // процесс работает).
       markActive();
@@ -156,7 +212,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
         };
       }
       try {
-        return await port.browserCall(req);
+        return await withWarmup(key, () => port.browserCall!(req));
       } finally {
         // Обращение к пулу — активность (как у execute): provisioner не должен
         // снять пул по idle между вызовами браузера.
@@ -166,7 +222,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
 
     async probe(bin: string, args?: string[]): Promise<boolean> {
       const port = await resolve();
-      return port.probe ? port.probe(bin, args) : true;
+      return port.probe ? withWarmup(key, () => port.probe!(bin, args)) : true;
     },
 
     async capabilitySummary(bin: string): Promise<ExecutionCapabilitySummary> {
@@ -174,7 +230,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
       if (!port.capabilitySummary) {
         throw new Error('capabilitySummary не поддерживается портом');
       }
-      return port.capabilitySummary(bin);
+      return withWarmup(key, () => port.capabilitySummary!(bin));
     },
   };
 }
@@ -187,7 +243,7 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
  * (`ExecutionFsUnavailableError`): тихого возврата к чтению ФС в control
  * plane нет (PROP-135 Ф1).
  */
-function createPooledFs(resolve: () => Promise<ExecutionPort>): ExecutionFs {
+function createPooledFs(resolve: () => Promise<ExecutionPort>, key: ExecutionPoolKey): ExecutionFs {
   const fsOf = async (): Promise<ExecutionFs> => {
     const port = await resolve();
     if (!port.fs) {
@@ -196,48 +252,24 @@ function createPooledFs(resolve: () => Promise<ExecutionPort>): ExecutionFs {
     return port.fs;
   };
 
+  /** Вызов FS-операции с прогревом пула (connect-ошибки повторяются). */
+  const call = async <T>(fn: (fs: ExecutionFs) => Promise<T>): Promise<T> =>
+    withWarmup(key, async () => fn(await fsOf()));
+
   return {
-    async realpath(path: string): Promise<string> {
-      return (await fsOf()).realpath(path);
-    },
-    async stat(path: string) {
-      return (await fsOf()).stat(path);
-    },
-    async readdir(path: string) {
-      return (await fsOf()).readdir(path);
-    },
-    async readText(path: string, opts) {
-      return (await fsOf()).readText(path, opts);
-    },
-    async sniff(path: string, maxBytes?: number) {
-      return (await fsOf()).sniff(path, maxBytes);
-    },
-    async readBytes(path: string, maxBytes: number) {
-      return (await fsOf()).readBytes(path, maxBytes);
-    },
-    async writeFile(path: string, content: string): Promise<void> {
-      await (await fsOf()).writeFile(path, content);
-    },
-    async mkdir(path: string): Promise<void> {
-      await (await fsOf()).mkdir(path);
-    },
-    async remove(path: string): Promise<void> {
-      await (await fsOf()).remove(path);
-    },
-    async readRawText(path: string, maxBytes: number) {
-      return (await fsOf()).readRawText(path, maxBytes);
-    },
-    async rename(from: string, to: string): Promise<void> {
-      await (await fsOf()).rename(from, to);
-    },
-    async download(path: string, maxBytes: number): Promise<Buffer> {
-      return (await fsOf()).download(path, maxBytes);
-    },
-    async upload(path: string, bytes: Buffer, opts) {
-      await (await fsOf()).upload(path, bytes, opts);
-    },
-    async hash(path: string): Promise<string> {
-      return (await fsOf()).hash(path);
-    },
+    realpath: (path: string) => call((fs) => fs.realpath(path)),
+    stat: (path: string) => call((fs) => fs.stat(path)),
+    readdir: (path: string) => call((fs) => fs.readdir(path)),
+    readText: (path: string, opts) => call((fs) => fs.readText(path, opts)),
+    sniff: (path: string, maxBytes?: number) => call((fs) => fs.sniff(path, maxBytes)),
+    readBytes: (path: string, maxBytes: number) => call((fs) => fs.readBytes(path, maxBytes)),
+    writeFile: (path: string, content: string) => call((fs) => fs.writeFile(path, content)),
+    mkdir: (path: string) => call((fs) => fs.mkdir(path)),
+    remove: (path: string) => call((fs) => fs.remove(path)),
+    readRawText: (path: string, maxBytes: number) => call((fs) => fs.readRawText(path, maxBytes)),
+    rename: (from: string, to: string) => call((fs) => fs.rename(from, to)),
+    download: (path: string, maxBytes: number) => call((fs) => fs.download(path, maxBytes)),
+    upload: (path: string, bytes: Buffer, opts) => call((fs) => fs.upload(path, bytes, opts)),
+    hash: (path: string) => call((fs) => fs.hash(path)),
   };
 }

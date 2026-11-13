@@ -1523,3 +1523,9 @@
 - **Задача:** агент на test не мог получить скриншот: Playwright MCP этой версии всегда пишет файл в `/tmp/.playwright-mcp` и возвращает текстовую ссылку (image-блок не отдаёт), поэтому `browser_screenshot` возвращал текст без вложения; `save_attachment`/`execute_shell` падали в момент рестарта пулов (сейчас пулы ready, FS проверен). **Тип:** bugfix (core). **Исполнитель:** @fixer.
 - **Фикс.** `invokeBrowserTool` возвращает порт; `callBrowserScreenshot` при пустых `attachments` парсит путь `…/tmp/.playwright-mcp/*.png` из ответа, читает файл через `ExecutionFs` того же пула (`readBytes`, лимит 20 МиБ) и публикует байты вложением; нет FS/ошибка чтения — прежний текст-результат.
 - **Тесты.** `browser.test.ts` +1 (путь → `fs.readBytes` → upload); core typecheck/полный прогон зелёные.
+
+## 2026-11-13 — Прогрев пулов: повтор connect-ошибок и понятная ошибка
+
+- **Задача:** при первом обращении к только что созданному пулу тулы падали (`исполнители не ответили на /capabilities`, FS unavailable), хотя provisioner уже вернул адрес. Нужна задержка/повтор и внятная ошибка. **Тип:** bugfix (core). **Исполнитель:** @fixer.
+- **Фикс.** `execution/pooled-port.ts`: connect-ошибки (`EUNREACHABLE`, «не ответили на /capabilities», `ECONNREFUSED`, `503`) повторяются с паузами 1→3 с (3 повтора, всего 6 с) для `execute`/`spawnBackground`/`browserCall`/`probe`/`capabilitySummary` и всех FS-операций; ошибки самой операции не повторяются (команда могла выполниться). После исчерпания — `ExecutionError` с профилем, ключом пула и причиной.
+- **Тесты.** `pooled-port.test.ts` +3 (повтор → успех, исчерпание → текст с профилем/ключом, non-connect без повторов); router/full core — 627 файлов / 10 697 passed.
