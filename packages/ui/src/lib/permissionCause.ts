@@ -26,7 +26,6 @@ export function describePermissionCause(trigger: PermissionTrigger | undefined):
   const params = trigger.params ?? {}
   const path = params.path ?? ''
   const code = params.code ?? ''
-  const command = params.command ?? ''
 
   switch (trigger.messageId) {
     case 'ask-external-directory':
@@ -35,8 +34,8 @@ export function describePermissionCause(trigger: PermissionTrigger | undefined):
       // (дефолт — вопрос, в plan/strict — запрет), грант выдаётся каталогом.
       return { key: 'permission.bar.cause.external', params: { path }, token: path }
     case 'ask-protected-path': {
-      // Вид ask'а: protected (путь из approvalPaths) / dynamic (нерезолвимый
-      // токен) / mutation (мутация вне периметра) / cwd (неразрешённый cd).
+      // Вид ask'а: protected (путь из approvalPaths) / dynamic (glob не удалось
+      // раскрыть) / mutation (мутация вне периметра) / cwd (неразрешённый cd).
       if (trigger.askKind === 'dynamic') {
         return { key: 'permission.bar.cause.dynamicPath', params: { path }, token: path }
       }
@@ -48,14 +47,6 @@ export function describePermissionCause(trigger: PermissionTrigger | undefined):
       }
       return { key: 'permission.bar.cause.protected', params: { path }, token: path }
     }
-    case 'ask-dynamic-code':
-      return { key: 'permission.bar.cause.code', params: { code }, token: code }
-    case 'ask-dynamic-command':
-      return { key: 'permission.bar.cause.command', params: { command }, token: command }
-    case 'ask-stdin-code':
-      // Код передан интерпретатору через stdin (heredoc/herestring): токена-пути
-      // нет, показываем отдельную формулировку вместо «Не удалось проверить путь».
-      return { key: 'permission.bar.cause.stdinCode', params: {} }
     default:
       break
   }

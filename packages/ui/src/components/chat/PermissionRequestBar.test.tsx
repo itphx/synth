@@ -365,35 +365,6 @@ describe('PermissionRequestBar — человеческая причина (trig
     expect(cause.textContent).toContain('/var/tmp')
   })
 
-  it('динамический код: подсвечивается код', async () => {
-    addTriggerRequest({
-      messageId: 'ask-dynamic-code',
-      params: { code: '$(cat payload.sh)' },
-      askKind: 'dynamic',
-    })
-    const container = await renderBar()
-
-    const cause = container.querySelector('[data-testid="permission-cause"]')!
-    expect(cause.textContent).toContain('Код передаётся из переменной')
-    expect(cause.textContent).toContain('$(cat payload.sh)')
-
-    const hl = [...cause.querySelectorAll('[data-testid="permission-highlight"]')]
-    expect(hl.map((s) => s.textContent)).toContain('$(cat payload.sh)')
-  })
-
-  it('динамическая команда: подсвечивается имя команды', async () => {
-    addTriggerRequest({
-      messageId: 'ask-dynamic-command',
-      params: { command: '$CMD' },
-      askKind: 'dynamic',
-    })
-    const container = await renderBar()
-
-    const cause = container.querySelector('[data-testid="permission-cause"]')!
-    expect(cause.textContent).toContain('Имя команды вычисляется динамически')
-    expect(cause.textContent).toContain('$CMD')
-  })
-
   it('сработавшее правило: называем правило', async () => {
     addTriggerRequest({
       matchedRule: 'shell-policy.approve',
@@ -813,19 +784,4 @@ describe('PermissionRequestBar — раскладка шапки и блока �
     expect(pre.className).toContain('break-all')
   })
 
-  it('причина для кода на stdin — без слова «путь» и без токена', async () => {
-    addTriggerRequest(
-      { messageId: 'ask-stdin-code', params: {}, matchedRule: 'shell-policy.approve', askKind: 'dynamic' },
-      { params: { command: "python3 - <<'EOF'", cwd: '/x' } },
-    )
-    const container = await renderBar()
-
-    const cause = container.querySelector('[data-testid="permission-cause"]')!
-    expect(cause.textContent).toContain('Код передаётся в интерпретатор через stdin')
-    expect(cause.textContent).not.toContain('путь')
-    expect(cause.textContent).not.toContain('<<')
-    // Подсветки нет — токена-виновника не существует.
-    expect(cause.querySelectorAll('[data-testid="permission-highlight"]').length).toBe(0)
-    expect(container.querySelector('[data-testid="permission-suspicious"]')).toBeNull()
-  })
 })
