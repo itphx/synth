@@ -254,6 +254,9 @@ describe('defaultConfig', () => {
     expect(defaultConfig.execution.remote.failMode).toBe('fail');
     expect(defaultConfig.execution.remote.tokenSecret).toBe('');
     expect(defaultConfig.execution.remote.concurrency).toBe(defaultExecutionConcurrency());
+    // Browser-пул: свой профиль (не `defaultProfile`) и имя MCP-сервера браузера.
+    expect(defaultConfig.execution.remote.browserProfile).toBe('browser');
+    expect(defaultConfig.execution.remote.browserMcpServer).toBe('playwright');
   });
 
   it('summarization.promptFile == SUMMARIZER', () => {

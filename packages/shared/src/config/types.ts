@@ -253,6 +253,23 @@ export const DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS = 10_000;
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000;
 
 /**
+ * Имя профиля исполнения для пула класса `browser` по умолчанию.
+ *
+ * Браузер — **проектный** пул (изоляция cookies между проектами), но профиль
+ * у него свой: образ с браузером и MCP-сервером, а не образ обычных команд.
+ * Поэтому `class: 'browser'` не наследует `defaultProfile`.
+ */
+export const DEFAULT_EXECUTION_BROWSER_PROFILE = 'browser';
+
+/**
+ * Имя MCP-сервера браузера в поде исполнителя по умолчанию.
+ *
+ * Исполнитель поднимает MCP-серверы у себя (`SYNTH_EXECUTOR_MCP_SERVERS`);
+ * встроенные browser-тулы адресуют вызов именно этому серверу по имени.
+ */
+export const DEFAULT_EXECUTION_BROWSER_MCP_SERVER = 'playwright';
+
+/**
  * Параметры удалённого исполнителя (`execution.remote`).
  *
  * - `url` — **список** адресов исполнителей (K8s Service `synth-executor`,
@@ -279,6 +296,17 @@ export const executionRemoteConfigSchema = z.object({
   pooling: z.enum(EXECUTION_POOLINGS).default('instance'),
   /** Имя профиля по умолчанию (каталог профилей задаёт ADMIN). */
   defaultProfile: z.string().default('default'),
+  /**
+   * Имя профиля для пула класса `browser` (браузер — проектный пул со своим
+   * образом). Используется, когда цель вызова класс `browser` и профиль не
+   * задан явно; `defaultProfile` для браузера **не** применяется.
+   */
+  browserProfile: z.string().default(DEFAULT_EXECUTION_BROWSER_PROFILE),
+  /**
+   * Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`-тулы
+   * адресуют вызов этому серверу).
+   */
+  browserMcpServer: z.string().default(DEFAULT_EXECUTION_BROWSER_MCP_SERVER),
   /**
    * Каталог профилей исполнения (PROP-135 Ф4a): имя → параметры профиля.
    * Профиль **поверх** общих параметров: пустой `url` наследует

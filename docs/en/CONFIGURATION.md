@@ -712,6 +712,8 @@ setting: switching the mode requires a process restart (invariant 24). The speci
 | `execution.remote.tokenSecret` | path/reference | — | `SYNTH_EXECUTION_TOKEN` | **A path/reference to the token, NOT the value** (invariant 13). The token itself is `synth_exec_…` and lives in a Secret/file |
 | `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Pool mode (PROP-135 F4a): `instance` — **one shared** port per process (the previous behaviour, profiles are ignored); `project`/`session` — a port per profile of the session |
 | `execution.remote.defaultProfile` | string | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Name of the default profile (the profile catalogue is set by ADMIN) |
+| `execution.remote.browserProfile` | string | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Profile of the **browser** pool (`class: 'browser'`): the browser has its own image/profile, so it does **not** inherit `defaultProfile`. Used when the call target has no explicit profile |
+| `execution.remote.browserMcpServer` | string | `playwright` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Name of the browser MCP server in the executor pod: the built-in `browser_*` tools address their calls to it (`POST /mcp/call`), without MCP discovery |
 | `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values. Metadata (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **names only**) is returned in `GET /api/v2/execution/profiles` → `details` and does **not** affect routing or port creation |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Behaviour for an unusable profile (no address in the profile nor in the common `url`): `instance` — fall back to the instance port; `fail` — fail-closed (the startup is aborted) |
 | `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Pool provider (PROP-135 F4b-1): `static` — pools from the configuration (profile addresses, the port is built at startup — the F4a behaviour); `http` — pools are requested from the provisioner (the pool address and token come from the response, the port is built lazily) |
@@ -844,6 +846,10 @@ execution:
     tokenSecret: ""                # path/reference to the executor token (NOT a value!); SYNTH_EXECUTION_TOKEN
     pooling: "instance"            # instance (shared port) | project | session; SYNTH_EXECUTION_POOLING
     defaultProfile: "default"      # default profile name; SYNTH_EXECUTION_DEFAULT_PROFILE
+    browserProfile: "browser"      # profile of the `browser` pool (own browser image; does not
+                                   # inherit defaultProfile); SYNTH_EXECUTION_BROWSER_PROFILE
+    browserMcpServer: "playwright" # browser MCP server name in the pod (built-in browser_* tools);
+                                   # SYNTH_EXECUTION_BROWSER_MCP_SERVER
     fallback: "instance"           # instance (fall back to the instance port) | fail (fail-closed); SYNTH_EXECUTION_FALLBACK
     provider: "static"             # static (pools from the configuration) | http (provisioner); SYNTH_EXECUTION_PROVIDER
     provisioner:                   # pool provisioner parameters (needed with provider: http)

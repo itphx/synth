@@ -247,6 +247,53 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
     expect(resolved.remote.fallback).toBe('instance');
   });
 
+  it('дефолты browser-пула: приходят из схемы и резолвера', () => {
+    expect(cfg.execution.remote.browserProfile).toBe('browser');
+    expect(cfg.execution.remote.browserMcpServer).toBe('playwright');
+    // Резолвер не подменяет дефолты: браузер не наследует `defaultProfile`.
+    const resolved = resolveExecutionConfig(cfg, {});
+    expect(resolved.remote.browserProfile).toBe('browser');
+    expect(resolved.remote.browserMcpServer).toBe('playwright');
+  });
+
+  it('browserProfile: env важнее config.yaml; пустое значение → дефолт', () => {
+    const c = withExecution({
+      remote: { ...cfg.execution.remote, browserProfile: 'browser-dev' },
+    });
+    expect(resolveExecutionConfig(c, {}).remote.browserProfile).toBe('browser-dev');
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.browserProfile]: 'browser-env' }).remote
+        .browserProfile,
+    ).toBe('browser-env');
+    // Пустое env-значение — «не задано» → берётся config.
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.browserProfile]: '' }).remote.browserProfile,
+    ).toBe('browser-dev');
+    // Пустое в config — тоже «не задано» → дефолт.
+    const empty = withExecution({
+      remote: { ...cfg.execution.remote, browserProfile: '' },
+    });
+    expect(resolveExecutionConfig(empty, {}).remote.browserProfile).toBe('browser');
+  });
+
+  it('browserMcpServer: env важнее config.yaml; пустое значение → дефолт', () => {
+    const c = withExecution({
+      remote: { ...cfg.execution.remote, browserMcpServer: 'browser-mcp' },
+    });
+    expect(resolveExecutionConfig(c, {}).remote.browserMcpServer).toBe('browser-mcp');
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.browserMcpServer]: 'playwright-env' }).remote
+        .browserMcpServer,
+    ).toBe('playwright-env');
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.browserMcpServer]: '' }).remote.browserMcpServer,
+    ).toBe('browser-mcp');
+    const empty = withExecution({
+      remote: { ...cfg.execution.remote, browserMcpServer: '' },
+    });
+    expect(resolveExecutionConfig(empty, {}).remote.browserMcpServer).toBe('playwright');
+  });
+
   it('pooling: env важнее config.yaml', () => {
     const c = withExecution({ remote: { ...cfg.execution.remote, pooling: 'project' } });
     expect(resolveExecutionConfig(c, {}).remote.pooling).toBe('project');

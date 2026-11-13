@@ -21,6 +21,10 @@
  * `SYNTH_EXECUTION_PROVISIONER_TOKEN` (путь/ссылка, НЕ значение),
  * `SYNTH_EXECUTION_PROVISIONER_TIMEOUT_MS`.
  *
+ * Browser-тулы добавляют два: `SYNTH_EXECUTION_BROWSER_PROFILE` (профиль пула
+ * класса `browser`; дефолт `browser` — браузер не наследует `defaultProfile`)
+ * и `SYNTH_EXECUTION_BROWSER_MCP_SERVER` (имя MCP-сервера браузера в поде).
+ *
  * Fail-closed (как `storage.backend`): неизвестное **явное** значение `mode`
  * (опечатка `inlne`), `failMode`, `pooling`, `fallback` или `provider` —
  * ошибка, а не тихий выбор дефолта. Тот же принцип и для `provider: http`
@@ -29,6 +33,8 @@
 import { availableParallelism, cpus } from 'node:os';
 import type { SynthConfig } from './types.js';
 import {
+  DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
+  DEFAULT_EXECUTION_BROWSER_PROFILE,
   DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   EXECUTION_FAIL_MODES,
@@ -57,6 +63,10 @@ export const EXECUTION_ENV = {
   pooling: 'SYNTH_EXECUTION_POOLING',
   /** PROP-135 Ф4a: имя профиля по умолчанию. */
   defaultProfile: 'SYNTH_EXECUTION_DEFAULT_PROFILE',
+  /** Профиль пула класса `browser` (браузер — свой образ/профиль). */
+  browserProfile: 'SYNTH_EXECUTION_BROWSER_PROFILE',
+  /** Имя MCP-сервера браузера в поде исполнителя. */
+  browserMcpServer: 'SYNTH_EXECUTION_BROWSER_MCP_SERVER',
   /** PROP-135 Ф4a: поведение при непригодном профиле (`instance`|`fail`). */
   fallback: 'SYNTH_EXECUTION_FALLBACK',
   /** PROP-135 Ф4b-1: провайдер пулов (`static`|`http`). */
@@ -129,6 +139,13 @@ export interface ResolvedExecutionRemoteConfig {
   pooling: ExecutionPooling;
   /** Имя профиля по умолчанию (PROP-135 Ф4a). */
   defaultProfile: string;
+  /**
+   * Имя профиля для пула класса `browser`: браузер — проектный пул со своим
+   * образом, поэтому `class: 'browser'` не наследует `defaultProfile`.
+   */
+  browserProfile: string;
+  /** Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`). */
+  browserMcpServer: string;
   /** Эффективные параметры профилей (PROP-135 Ф4a) — по имени профиля. */
   profiles: Record<string, ResolvedExecutionProfile>;
   /** Поведение при непригодном профиле (PROP-135 Ф4a). */
@@ -331,6 +348,20 @@ export function resolveExecutionConfig(
   // значение — fail-closed (как `mode`/`failMode`).
   const pooling = resolvePooling(remoteCfg.pooling, env);
   const defaultProfile = resolveDefaultProfile(remoteCfg.defaultProfile, env);
+  // Browser-профиль: тот же приоритет (env > config.yaml > дефолт). Пустое
+  // значение — «не задано»: берётся следующий источник, иначе `browser`.
+  const browserProfile = resolveConfiguredName(
+    EXECUTION_ENV.browserProfile,
+    remoteCfg.browserProfile,
+    DEFAULT_EXECUTION_BROWSER_PROFILE,
+    env,
+  );
+  const browserMcpServer = resolveConfiguredName(
+    EXECUTION_ENV.browserMcpServer,
+    remoteCfg.browserMcpServer,
+    DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
+    env,
+  );
   const profiles = resolveExecutionProfiles(remoteCfg.profiles, {
     url,
     timeoutMs,
@@ -365,6 +396,8 @@ export function resolveExecutionConfig(
       tokenSecret,
       pooling,
       defaultProfile,
+      browserProfile,
+      browserMcpServer,
       profiles,
       fallback,
       provider,
@@ -483,11 +516,27 @@ function resolveDefaultProfile(
   cfgValue: string | undefined,
   env: NodeJS.ProcessEnv,
 ): string {
-  const raw = env[EXECUTION_ENV.defaultProfile];
+  return resolveConfiguredName(EXECUTION_ENV.defaultProfile, cfgValue, 'default', env);
+}
+
+/**
+ * Непустое имя из конфигурации: env > config.yaml > `fallback`.
+ *
+ * Пустое значение (env или config) — «не задано»: берётся следующий источник.
+ * Имя профиля/сервера — обычная строка (каталог задаёт ADMIN), поэтому
+ * проверяется только непустота.
+ */
+function resolveConfiguredName(
+  envName: string,
+  cfgValue: string | undefined,
+  fallback: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  const raw = env[envName];
   if (raw !== undefined && raw.trim() !== '') return raw.trim();
   const cfgTrimmed = (cfgValue ?? '').trim();
   if (cfgTrimmed !== '') return cfgTrimmed;
-  return 'default';
+  return fallback;
 }
 
 /**

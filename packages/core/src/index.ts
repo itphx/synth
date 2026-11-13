@@ -487,6 +487,9 @@ export type {
   ExecutionErrorInit,
   ExecutionCapabilitySummary,
   ExecutionBaseCapability,
+  // D1: встроенные browser-тулы (порт `browserCall` + форма результата).
+  BrowserCallRequest,
+  BrowserCallResult,
   // ADR-094: приёмник метрик исполнения (узкий интерфейс — без реестра).
   ExecutionMetricsOutcome,
   ExecutionMetricsSink,

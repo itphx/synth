@@ -491,6 +491,8 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
         // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
         pooling: 'instance' as const,
         defaultProfile: 'default',
+        browserProfile: 'browser',
+        browserMcpServer: 'playwright',
         profiles: {},
         fallback: 'instance' as const,
         // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
@@ -512,6 +514,8 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
         // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
         pooling: 'instance',
         defaultProfile: 'default',
+        browserProfile: 'browser',
+        browserMcpServer: 'playwright',
         profiles: {},
         fallback: 'instance',
         // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
@@ -543,6 +547,8 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
         // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
         pooling: 'instance',
         defaultProfile: 'default',
+        browserProfile: 'browser',
+        browserMcpServer: 'playwright',
         profiles: {},
         fallback: 'instance',
         // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.
@@ -577,6 +583,8 @@ describe('ExecutorMcpSource: подключение по execution-конфиг�
             // PROP-135 Ф4a: пулы/профили (в этом тесте — дефолтные).
             pooling: 'instance',
             defaultProfile: 'default',
+            browserProfile: 'browser',
+            browserMcpServer: 'playwright',
             profiles: {},
             fallback: 'instance',
             // PROP-135 Ф4b-1: провайдер пулов и параметры provisioner'а.

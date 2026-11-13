@@ -78,6 +78,8 @@
  */
 
 import type {
+  BrowserCallRequest,
+  BrowserCallResult,
   ExecBackgroundChunk,
   ExecBackgroundExit,
   ExecBackgroundProcess,
@@ -176,6 +178,12 @@ export interface RemoteExecutionPortOptions {
    * Не задан — метрики пула не собираются (поведение прежнее).
    */
   metricsSink?: ExecutionMetricsSink;
+  /**
+   * Имя MCP-сервера браузера в поде исполнителя (`execution.remote.browserMcpServer`,
+   * дефолт `playwright`): встроенные `browser_*`-тулы вызывают его по имени
+   * (`POST /mcp/call`), без MCP-discovery.
+   */
+  browserMcpServer?: string;
 }
 
 /** Таймаут HTTP-запроса по умолчанию, мс (как `execution.remote.timeoutMs`). */
@@ -214,6 +222,17 @@ export const REMOTE_BACKGROUND_STATUS_POLL_MS = 500;
 
 /** Таймаут запроса остановки фонового процесса, мс (best-effort). */
 export const REMOTE_BACKGROUND_STOP_TIMEOUT_MS = 5_000;
+
+/** Имя MCP-сервера браузера по умолчанию (`execution.remote.browserMcpServer`). */
+export const DEFAULT_BROWSER_MCP_SERVER = 'playwright';
+
+/**
+ * Таймаут вызова browser-инструмента, мс.
+ *
+ * Как у MCP-вызова в core (120 с): навигация и снимок страницы бывают
+ * медленными, но зависший вызов не должен держать ход бесконечно.
+ */
+export const BROWSER_MCP_CALL_TIMEOUT_MS = 120_000;
 
 /**
  * Снимок состава одного адреса пула (ADR-077).
@@ -513,6 +532,8 @@ export class RemoteExecutionPort implements ExecutionPort {
   private readonly _fetchImpl: ExecutorFetch | undefined;
   /** ADR-094: приёмник метрик исполнения (не задан — метрики не собираются). */
   private readonly _metricsSink: ExecutionMetricsSink | undefined;
+  /** Имя MCP-сервера браузера в поде (`POST /mcp/call`). */
+  private readonly _browserMcpServer: string;
   private _cursor = 0;
   private _active = 0;
   private readonly _waiting: Array<() => void> = [];
@@ -535,6 +556,8 @@ export class RemoteExecutionPort implements ExecutionPort {
     this._failMode = opts.failMode ?? 'fail';
     this._fetchImpl = opts.fetchImpl;
     this._metricsSink = opts.metricsSink;
+    this._browserMcpServer =
+      (opts.browserMcpServer ?? '').trim() || DEFAULT_BROWSER_MCP_SERVER;
   }
 
   /** Адреса исполнителей (нормализованные). */
@@ -624,6 +647,128 @@ export class RemoteExecutionPort implements ExecutionPort {
     } finally {
       this._release();
     }
+  }
+
+  /**
+   * Вызов встроенного browser-инструмента на исполнителе (D1).
+   *
+   * Идёт в адрес пула, где поднят браузерный MCP-сервер (`POST /mcp/call` с
+   * `{server: browserMcpServer, tool, arguments}`). Адреса перебираются
+   * round-robin; ошибка **соединения** — повод взять следующий адрес, ответ
+   * исполнителя (404/500/текст ошибки) — нет: браузерный вызов мог уже
+   * изменить состояние страницы, повтор его задублировал бы.
+   *
+   * Любая ошибка возвращается полем `isError` — метод **не бросает**:
+   * браузерный вызов не роняет шаг хода.
+   */
+  async browserCall(req: BrowserCallRequest): Promise<BrowserCallResult> {
+    if (this._urls.length === 0) {
+      return {
+        content: 'browser execution is unavailable: no executor address is configured',
+        isError: true,
+      };
+    }
+
+    const start = this._cursor;
+    this._cursor = (this._cursor + 1) % this._urls.length;
+
+    let lastCause: unknown;
+    for (let i = 0; i < this._urls.length; i += 1) {
+      const url = this._urls[(start + i) % this._urls.length] as string;
+      try {
+        return await this._browserCallAt(url, req);
+      } catch (err) {
+        if (err instanceof ConnectionFailure) {
+          // Адрес не отвечает — вызов не выполнялся, пробуем следующий.
+          lastCause = err.cause;
+          continue;
+        }
+        return {
+          content: `browser tool "${req.tool}" failed: ${describeCause(err)}`,
+          isError: true,
+        };
+      }
+    }
+    return {
+      content: `browser execution is unavailable: ${describeCause(lastCause)}`,
+      isError: true,
+    };
+  }
+
+  /** Один вызов `/mcp/call` на конкретном адресе (без failover). */
+  private async _browserCallAt(
+    url: string,
+    req: BrowserCallRequest,
+  ): Promise<BrowserCallResult> {
+    const fetchImpl = await resolveFetch(this._fetchImpl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), BROWSER_MCP_CALL_TIMEOUT_MS);
+    timer.unref?.();
+
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetchImpl(`${url}/mcp/call`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this._token}`,
+        },
+        body: JSON.stringify({
+          server: this._browserMcpServer,
+          tool: req.tool,
+          arguments: req.arguments,
+        }),
+        signal: controller.signal,
+      });
+      text = await response.text();
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return {
+          content:
+            `browser tool "${req.tool}" timed out after ${BROWSER_MCP_CALL_TIMEOUT_MS} ms`,
+          isError: true,
+        };
+      }
+      // Ошибка соединения — единственный повод для failover (см. browserCall).
+      throw new ConnectionFailure(err);
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      // 404 (нет сервера/инструмента), 500 (ошибка MCP) — результат вызова,
+      // а не сбой транспорта: повтор не поможет.
+      return {
+        content:
+          `browser tool "${req.tool}" failed: executor responded ${response.status}` +
+          browserServerMessage(text),
+        isError: true,
+      };
+    }
+
+    let parsed: BrowserCallResponse | null;
+    try {
+      parsed = (text.length > 0 ? JSON.parse(text) : null) as BrowserCallResponse | null;
+    } catch {
+      return {
+        content: `browser tool "${req.tool}" failed: executor returned a non-JSON response`,
+        isError: true,
+      };
+    }
+
+    const isError = parsed?.isError === true;
+    const raw = typeof parsed?.content === 'string' ? parsed.content : '';
+    // При `isError` вложения не считаются доставленными (как у MCP-результата).
+    const attachments = isError ? undefined : parseBrowserAttachments(parsed?.attachments);
+    const content =
+      raw ||
+      (isError
+        ? 'Browser tool returned an error'
+        : attachments
+          ? `Browser tool returned ${attachments.length} attachment(s) without text`
+          : 'Browser tool completed (empty result)');
+    return { content, isError, ...(attachments ? { attachments } : {}) };
   }
 
   /**
@@ -1592,6 +1737,49 @@ function describeCause(cause: unknown): string {
   }
   if (typeof cause === 'string') return cause;
   return 'причина неизвестна';
+}
+
+/** Ответ исполнителя на `POST /mcp/call` (поля аддитивные). */
+interface BrowserCallResponse {
+  content?: unknown;
+  isError?: unknown;
+  attachments?: unknown;
+}
+
+/**
+ * Разбор `attachments` ответа browser-вызова.
+ *
+ * Валидация структурная: `mime`/`base64` — непустые строки. Байты заново не
+ * декодируются (кап объёма уже применил исполнитель), некорректные записи
+ * пропускаются — результат вызова важнее.
+ */
+function parseBrowserAttachments(
+  raw: unknown,
+): { dataBase64: string; mime: string }[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const attachments: { dataBase64: string; mime: string }[] = [];
+  for (const item of raw as Array<Record<string, unknown>>) {
+    if (!item || typeof item !== 'object') continue;
+    const mime = typeof item.mime === 'string' && item.mime.length > 0 ? item.mime : undefined;
+    const base64 =
+      typeof item.base64 === 'string' && item.base64.length > 0 ? item.base64 : undefined;
+    if (!mime || !base64) continue;
+    attachments.push({ mime, dataBase64: base64 });
+  }
+  return attachments.length > 0 ? attachments : undefined;
+}
+
+/** Текст ошибки исполнителя (`{error:{message}}`) — без разбора всего тела. */
+function browserServerMessage(text: string): string {
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text) as { error?: { message?: unknown } };
+    const message = parsed?.error?.message;
+    if (typeof message === 'string' && message.length > 0) return `: ${message}`;
+  } catch {
+    // не JSON — детали не добавляем
+  }
+  return '';
 }
 
 /**

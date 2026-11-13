@@ -62,7 +62,8 @@
  * изоляция cookies между проектами (между сессиями одного проекта браузер
  * общий). Идентификатор области — `projectId`, при его отсутствии `sessionId`
  * (сессия без проекта); дальше — фоллбэк `fallback` (`instance`/`fail`), как
- * у остальных классов.
+ * у остальных классов. Профиль браузера — свой (`execution.remote.browserProfile`,
+ * дефолт `browser`): образ с браузером/MCP-сервером, а не `defaultProfile`.
  *
  * ## Ссылка на пул (`poolRefFor`, PROP-135 слайз 5b-1)
  *
@@ -468,7 +469,8 @@ function createHttpProviderRouter(
 
   return {
     portFor(target?: ExecutionPortTarget): ExecutionPort {
-      const profile = resolveProfileName(remote, target?.profile);
+      const poolClass = resolvePoolClass(target);
+      const profile = resolveProfileName(remote, target?.profile, poolClass);
       const resolved = resolvePoolTarget(remote, target);
 
       if (resolved === null) {
@@ -564,15 +566,23 @@ function profilesInfoFromProviderOrNames(
 
 /**
  * Имя профиля цели: неизвестный профиль → профиль по умолчанию (как в Ф4a).
+ *
+ * Для класса `browser` профиль по умолчанию — свой (`browserProfile`): браузер
+ * живёт в образе с браузером/MCP-сервером, а не в образе обычных команд,
+ * поэтому наследовать `defaultProfile` нельзя (PROP-135 слайс 5b-1).
+ * Явно заданный профиль приоритетнее для любого класса.
  */
 function resolveProfileName(
   remote: ResolvedExecutionRemoteConfig,
   requested: string | undefined,
+  poolClass: ExecutionPoolClass = 'exec',
 ): string {
   const name = (requested ?? '').trim();
+  const fallback = poolClass === 'browser' ? remote.browserProfile : remote.defaultProfile;
   const known =
-    name !== '' && (remote.profiles[name] !== undefined || name === remote.defaultProfile);
-  return known ? name : remote.defaultProfile;
+    name !== '' &&
+    (remote.profiles[name] !== undefined || name === remote.defaultProfile || name === remote.browserProfile);
+  return known ? name : fallback;
 }
 
 /**
@@ -691,6 +701,8 @@ function profileConfig(
       tokenSecret: remote.tokenSecret,
       pooling: remote.pooling,
       defaultProfile: remote.defaultProfile,
+      browserProfile: remote.browserProfile,
+      browserMcpServer: remote.browserMcpServer,
       profiles: remote.profiles,
       fallback: remote.fallback,
       provider: remote.provider,
@@ -759,7 +771,8 @@ function createPoolRefResolver(
   };
 
   return async (target: ExecutionPoolRefTarget): Promise<ExecutionPoolRefInfo | undefined> => {
-    const profile = resolveProfileName(remote, target.profile);
+    const poolClass = resolvePoolClass(target);
+    const profile = resolveProfileName(remote, target.profile, poolClass);
     const resolved = resolvePoolTarget(remote, target);
     if (resolved === null) {
       // Идентификатора области нет — как в `portFor`: `fallback: fail` —

@@ -7,6 +7,8 @@
  */
 
 export type {
+  BrowserCallRequest,
+  BrowserCallResult,
   ExecCommand,
   ExecRequest,
   ExecResult,

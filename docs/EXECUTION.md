@@ -13,7 +13,10 @@
 > workspace, `NetworkPolicy` пула) — **реализованы**; **MCP-stdio — реализовано**: исполнитель хостит
 > MCP-серверы у себя (**B1**: `SYNTH_EXECUTOR_MCP_SERVERS`, эндпоинты `/mcp/servers`, `/mcp/tools`,
 > `/mcp/call` — появились в протоколе **2**), а control plane к ним подключён (**B2**: `ExecutorMcpSource` +
-> `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **актуальная версия
+> `attachExecutorMcpSource`, тулы `{server}_{tool}`, e2e на живом исполнителе); **встроенные
+> browser-тулы (D1) — реализовано**: `browser_navigate`/`browser_snapshot`/`browser_close` идут
+> портом `ExecutionPort.browserCall` в проектный пул класса `browser` (`browserProfile`/
+> `browserMcpServer`), без MCP-discovery; **актуальная версия
 > протокола — 7** (FS-операции исполнителя: `POST /fs/stat`, `POST /fs/realpath`, `POST /fs/list`,
 > `POST /fs/read-text`, `POST /fs/sniff`, `POST /fs/read-bytes`, `POST /fs/read-raw`,
 > `POST /fs/write-file`, `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`,
@@ -208,7 +211,7 @@ allowedProfiles } }` — право управления проектом (owner
 ```text
 instance:exec:default
 project:prj_1:exec:default
-session:ses_1:browser:default
+project:prj_1:browser:browser
 session:ses_1:sandbox:default
 ```
 
@@ -329,7 +332,8 @@ Discovery и вызовы MCP-инструментов исполнителя и
 | Вызов инструмента (`POST /mcp/call`) | **проектный пул** проекта сессии | браузерный пул — на проект (`project:<id>:browser:<profile>`): cookies не текут между проектами |
 
 Резолв адресов и токена проектного пула — `ExecutionRouter.poolRefFor` (слайс 5b-1) с
-классом `browser`: `poolRefFor({ projectId, class: 'browser' })`. Сборка приложения
+классом `browser`: `poolRefFor({ projectId, class: 'browser' })`; профиль браузерного пула —
+`execution.remote.browserProfile` (дефолт `browser`), а не `defaultProfile`. Сборка приложения
 (`packages/core/src/server/app/deps.ts`, `packages/backend/src/app/deps.ts`) строит
 резолвер один раз — `createExecutorMcpPoolResolver(executionRouter)`; роутер без
 `poolRefFor` (`inline`/вырожденный) → резолвера нет, вызовы идут с инстанс-пула
@@ -352,12 +356,37 @@ Discovery и вызовы MCP-инструментов исполнителя и
 1. **Discovery-остаток:** браузерные тулы появляются, только если их объявляет
    **инстанс-пул**. Динамический пул, у которого MCP-серверы есть только в проектном
    пуле, тулов не даёт — состав берётся с инстанс-пула.
-2. **Профиль браузера:** `poolRefFor` берёт профиль по умолчанию
-   (`execution.remote.defaultProfile`); собственный browser-профиль проекта — отдельный
-   остаток (в этом слайсе профиль не различается).
+2. **Профиль браузера:** `poolRefFor` берёт `execution.remote.browserProfile`
+   (дефолт `browser`) — браузер не наследует `defaultProfile`; это закрыто в D1
+   (встроенные browser-тулы, см. ниже).
 3. `executorMcp` у **динамического** порта не выставляется (`execution/pooled-port.ts`):
    при `provider: http` источник MCP-серверов поднимается по статическому
    `execution.remote.url`/дескриптору удалённого порта.
+
+### Встроенные browser-тулы (D1)
+
+Браузер отдаётся модели **встроенными тулами** (`browser_navigate`, `browser_snapshot`,
+`browser_close`), а не через MCP-discovery: схемы статические (реестр ядра), а вызов идёт
+портом исполнения в **проектный** пул класса `browser`.
+
+| Что | Значение |
+|---|---|
+| Тулы | `browser_navigate {url}`, `browser_snapshot {}`, `browser_close {}` — capability `web` |
+| Порт | `ExecutionPort.browserCall({tool, arguments})` → `POST /mcp/call` `{server, tool, arguments}` |
+| Сервер в поде | `execution.remote.browserMcpServer` (дефолт `playwright`; env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`) |
+| Профиль пула | `execution.remote.browserProfile` (дефолт `browser`; env `SYNTH_EXECUTION_BROWSER_PROFILE`) |
+| Область пула | проект сессии (`project:<projectId>:browser:<profile>`), без проекта — `sessionId` |
+
+Почему так: discovery глобальный (состав MCP-серверов читается с инстанс-пула), а браузерный
+пул — проектный; при per-project пулах тулы «пропадали» бы для проекта, у которого браузерный
+сервер поднят только в его пуле. Статическая схема тула не зависит от discovery.
+
+Ошибки (нет адреса, 404, ошибка инструмента, таймаут) возвращаются модели как `isError`-результат
+тула — шаг хода не падает. `InlineExecutionPort` `browserCall` **не реализует**: в `inline`-режиме
+тул отвечает понятным отказом. Вложения ответа (изображения) пока не публикуются.
+
+**Остаток D2:** `browser_click`, `browser_type`, `browser_press`, `browser_wait`,
+`browser_screenshot` (последний — с публикацией изображения вложением сообщения).
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
 `packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта

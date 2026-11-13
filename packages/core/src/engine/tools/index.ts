@@ -9,6 +9,9 @@ import { executeShellTool } from './shell.js';
 import { sandboxExecTool } from './sandbox-exec.js';
 import { grepFilesTool } from './search.js';
 import { webFetchTool, webSearchTool } from './web.js';
+// Встроенные browser-тулы (D1): навигация/снимок/закрытие — через порт
+// исполнения в проектный пул класса `browser` (без MCP-discovery).
+import { browserTools } from './browser.js';
 import {
   gitStatusTool,
   gitDiffTool,
@@ -142,6 +145,8 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   grepFilesTool,
   webFetchTool,
   webSearchTool,
+  // Browser-тулы D1: проектный пул класса `browser` (свой профиль/образ).
+  ...browserTools,
   gitStatusTool,
   gitDiffTool,
   gitLogTool,

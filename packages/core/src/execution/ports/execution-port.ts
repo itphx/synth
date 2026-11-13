@@ -140,6 +140,38 @@ export interface ExecResult {
   durationMs: number;
 }
 
+/**
+ * Запрос вызова browser-инструмента (встроенные `browser_*`-тулы).
+ *
+ * Порт не знает схем инструментов: он передаёт имя инструмента и его
+ * аргументы на точку исполнения, где поднят браузерный MCP-сервер. Форма
+ * запроса статическая — модель видит схемы тулов из реестра ядра, а не из
+ * discovery MCP.
+ */
+export interface BrowserCallRequest {
+  /** Имя инструмента на браузерном MCP-сервере (`browser_navigate`, …). */
+  tool: string;
+  /** Аргументы инструмента (уже провалидированные схемой тула). */
+  arguments: Record<string, unknown>;
+}
+
+/**
+ * Результат вызова browser-инструмента.
+ *
+ * `isError` — ошибка инструмента/транспорта, а **не** исключение: браузерный
+ * вызов не должен ронять шаг хода. `attachments` (изображения/файлы ответа)
+ * несут байты в base64; в D1 они не публикуются вложениями сообщения —
+ * тул отдаёт текст, вложения — следующий слайс.
+ */
+export interface BrowserCallResult {
+  /** Текст результата (для модели). */
+  content: string;
+  /** Ошибка инструмента или транспорта (без исключения). */
+  isError: boolean;
+  /** Нетекстовые блоки результата (base64 без `data:`-префикса). */
+  attachments?: { dataBase64: string; mime: string }[];
+}
+
 /** Кусок вывода фонового процесса. */
 export interface ExecBackgroundChunk {
   /** Поток, из которого пришёл кусок. */
@@ -183,6 +215,21 @@ export interface ExecBackgroundProcess {
  */
 export interface ExecutionPort {
   execute(req: ExecRequest): Promise<ExecResult>;
+
+  /**
+   * Вызов встроенного browser-инструмента (D1: `navigate`/`snapshot`/`close`).
+   *
+   * Транспорт тот же, что у команд: в remote-режиме вызов уходит исполнителю
+   * (`POST /mcp/call`) в адрес пула, где поднят браузерный MCP-сервер, так что
+   * браузер живёт у исполнителя (там Chromium), а не в процессе control plane.
+   *
+   * Ошибки инструмента и транспорта возвращаются полем `isError`, а не
+   * исключением: браузерный вызов не роняет шаг хода.
+   *
+   * Необязательный метод: `InlineExecutionPort` его не реализует (браузера в
+   * процессе control plane нет) — тул в этом случае даёт понятный отказ.
+   */
+  browserCall?(req: BrowserCallRequest): Promise<BrowserCallResult>;
 
   /**
    * FS-операции в том же контуре, что и исполнение (PROP-135, Ф1).

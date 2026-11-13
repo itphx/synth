@@ -44,6 +44,8 @@ function remoteConfig(
       tokenSecret: '/secrets/executor-token',
       pooling: 'project',
       defaultProfile: 'default',
+      browserProfile: 'browser',
+      browserMcpServer: 'playwright',
       profiles: { default: { ...profile }, devops: { ...profile } },
       fallback: 'instance',
       provider: 'http',

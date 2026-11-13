@@ -1899,3 +1899,165 @@ describe('клиент удалённого порта: отказ внешне�
     expect((err as ExecutionError).message).toBe('blocked by policy');
   });
 });
+
+/**
+ * D1: встроенные browser-тулы идут через клиент удалённого порта —
+ * `POST /mcp/call` `{server: browserMcpServer, tool, arguments}`.
+ *
+ * Проверяется провод (адрес, тело, bearer-токен), разбор вложений и то, что
+ * ошибки инструмента/транспорта **не бросаются**, а возвращаются `isError`.
+ */
+describe('клиент удалённого порта: browserCall (D1)', () => {
+  type RecordedCall = { url: string; init?: RequestInit };
+
+  /** Транспорт-запись: фиксирует запросы и отдаёт подготовленный ответ. */
+  function recordingFetch(
+    calls: RecordedCall[],
+    respond: (call: RecordedCall) => Response | Promise<Response>,
+  ): ExecutorFetch {
+    return async (input, init) => {
+      const call = { url: input, init };
+      calls.push(call);
+      return respond(call);
+    };
+  }
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
+  it('POST /mcp/call: сервер `playwright`, инструмент и аргументы + bearer', async () => {
+    const calls: RecordedCall[] = [];
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      fetchImpl: recordingFetch(calls, () => jsonResponse({ content: 'Navigated', isError: false })),
+    });
+
+    const result = await port.browserCall!({
+      tool: 'browser_navigate',
+      arguments: { url: 'https://example.com' },
+    });
+
+    expect(result).toEqual({ content: 'Navigated', isError: false });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('http://exec-a:5100/mcp/call');
+    expect(calls[0]!.init?.method).toBe('POST');
+    const headers = calls[0]!.init?.headers as Record<string, string>;
+    expect(headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({
+      server: 'playwright',
+      tool: 'browser_navigate',
+      arguments: { url: 'https://example.com' },
+    });
+  });
+
+  it('кастомный browserMcpServer уходит в теле вызова', async () => {
+    const calls: RecordedCall[] = [];
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      browserMcpServer: 'browser-mcp',
+      fetchImpl: recordingFetch(calls, () => jsonResponse({ content: 'ok' })),
+    });
+
+    await port.browserCall!({ tool: 'browser_snapshot', arguments: {} });
+
+    expect(JSON.parse(String(calls[0]!.init?.body))).toMatchObject({
+      server: 'browser-mcp',
+      tool: 'browser_snapshot',
+      arguments: {},
+    });
+  });
+
+  it('attachments ответа → base64/mime (без `data:`-префикса)', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      fetchImpl: recordingFetch([], () =>
+        jsonResponse({
+          content: '',
+          isError: false,
+          attachments: [
+            { mime: 'image/png', base64: 'aGk=', name: 'shot.png' },
+            { mime: 'image/jpeg', base64: '' },
+            { base64: 'aGk=' },
+          ],
+        }),
+      ),
+    });
+
+    const result = await port.browserCall!({ tool: 'browser_snapshot', arguments: {} });
+
+    // Некорректные записи (пустой base64, нет mime) пропускаются.
+    expect(result.attachments).toEqual([{ mime: 'image/png', dataBase64: 'aGk=' }]);
+    expect(result.isError).toBe(false);
+    expect(result.content).toContain('1 attachment');
+  });
+
+  it('404 → isError:true без исключения (повтор не помогает)', async () => {
+    const calls: RecordedCall[] = [];
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      fetchImpl: recordingFetch(calls, () =>
+        jsonResponse({ error: { message: 'unknown tool' } }, 404),
+      ),
+    });
+
+    const result = await port.browserCall!({ tool: 'browser_nope', arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('404');
+    expect(result.content).toContain('unknown tool');
+    expect(result.attachments).toBeUndefined();
+    // Ответ исполнителя — не повод для failover: попытка одна.
+    expect(calls).toHaveLength(1);
+  });
+
+  it('isError инструмента → isError, вложения не собираются', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      fetchImpl: recordingFetch([], () =>
+        jsonResponse({
+          content: 'Navigation failed',
+          isError: true,
+          attachments: [{ mime: 'image/png', base64: 'aGk=' }],
+        }),
+      ),
+    });
+
+    const result = await port.browserCall!({ tool: 'browser_navigate', arguments: { url: 'x' } });
+
+    expect(result).toEqual({ content: 'Navigation failed', isError: true });
+  });
+
+  it('ошибка соединения по всем адресам → isError (без исключения)', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100', 'http://exec-b:5100'],
+      token: TOKEN,
+      fetchImpl: async () => {
+        throw new Error('ECONNREFUSED');
+      },
+    });
+
+    const result = await port.browserCall!({ tool: 'browser_snapshot', arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('unavailable');
+    expect(result.content).toContain('ECONNREFUSED');
+  });
+
+  it('нет адресов → isError (браузер недоступен)', async () => {
+    const port = createRemoteExecutionPort({ urls: [], token: TOKEN });
+
+    const result = await port.browserCall!({ tool: 'browser_close', arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('unavailable');
+  });
+});

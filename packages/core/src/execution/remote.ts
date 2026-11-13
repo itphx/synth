@@ -57,6 +57,8 @@ interface ExecutorClientModule {
      * интерфейс (ADR-077, инвариант «клиент не знает про наблюдаемость»).
      */
     metricsSink?: ExecutionMetricsSink;
+    /** Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`). */
+    browserMcpServer?: string;
   }): ExecutionPort;
 }
 
@@ -166,6 +168,8 @@ export class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
   readonly fs?: ExecutionFs;
   /** Фоновый запуск — есть только если внутренний порт его умеет. */
   readonly spawnBackground?: ExecutionPort['spawnBackground'];
+  /** Browser-вызов — есть только если внутренний порт его умеет. */
+  readonly browserCall?: ExecutionPort['browserCall'];
   private readonly _inner: ExecutionPort;
 
   constructor(inner: ExecutionPort, urls: string[], token: string) {
@@ -175,6 +179,10 @@ export class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
     const spawn = inner.spawnBackground;
     if (spawn) {
       this.spawnBackground = (req) => spawn.call(inner, req);
+    }
+    const browserCall = inner.browserCall;
+    if (browserCall) {
+      this.browserCall = (req) => browserCall.call(inner, req);
     }
   }
 
@@ -228,6 +236,7 @@ export async function createRemoteExecutionPortFromConfig(
     timeoutMs: remote.timeoutMs,
     concurrency: remote.concurrency,
     failMode: remote.failMode,
+    browserMcpServer: remote.browserMcpServer,
     ...(opts?.metricsSink ? { metricsSink: opts.metricsSink } : {}),
   });
 }
@@ -251,6 +260,8 @@ export async function createRemoteExecutionPortForPool(opts: {
   concurrency?: number;
   failMode?: 'fail' | 'inline-fallback';
   metricsSink?: ExecutionMetricsSink;
+  /** Имя MCP-сервера браузера в поде (`execution.remote.browserMcpServer`). */
+  browserMcpServer?: string;
 }): Promise<ExecutionPort> {
   const url = opts.url.trim();
   if (url === '') {
@@ -270,6 +281,7 @@ export async function createRemoteExecutionPortForPool(opts: {
     ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
     ...(opts.failMode !== undefined ? { failMode: opts.failMode } : {}),
+    ...(opts.browserMcpServer !== undefined ? { browserMcpServer: opts.browserMcpServer } : {}),
     ...(opts.metricsSink ? { metricsSink: opts.metricsSink } : {}),
   });
 }
@@ -289,6 +301,7 @@ async function createRemoteExecutionPort(opts: {
   concurrency?: number;
   failMode?: 'fail' | 'inline-fallback';
   metricsSink?: ExecutionMetricsSink;
+  browserMcpServer?: string;
 }): Promise<ExecutionPort> {
   const { urls, token } = opts;
 
@@ -316,6 +329,9 @@ async function createRemoteExecutionPort(opts: {
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
       ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
       ...(opts.failMode !== undefined ? { failMode: opts.failMode } : {}),
+      ...(opts.browserMcpServer !== undefined
+        ? { browserMcpServer: opts.browserMcpServer }
+        : {}),
       // ADR-094: приёмник метрик достаётся до клиента удалённого порта.
       // Обёртка (`RemoteExecutionPortWithExecutorMcp`) делегирует `execute`
       // внутреннему порту — поэтому метрики считает именно он, второй раз

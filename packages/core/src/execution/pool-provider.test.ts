@@ -528,6 +528,8 @@ describe('PROP-135 Ф4b-1: фабрика провайдера', () => {
     tokenSecret: '/tmp/token',
     pooling: 'project' as const,
     defaultProfile: 'default',
+    browserProfile: 'browser',
+    browserMcpServer: 'playwright',
     profiles: { devops: { url: ['http://executor-devops:8080'], timeoutMs: 30_000, concurrency: 2, failMode: 'fail' as const } },
     fallback: 'instance' as const,
     provider: 'static' as const,

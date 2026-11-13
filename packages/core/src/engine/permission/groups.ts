@@ -196,7 +196,7 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   edit: WRITE_TOOLS,
   shell: ['execute_shell', 'sandbox_exec'],
   search: ['grep_files', 'glob'],
-  web: ['web_fetch', 'web_search'],
+  web: ['web_fetch', 'web_search', 'browser_navigate', 'browser_snapshot', 'browser_close'],
   git: GIT_TOOLS,
   task: ['task'],
   mcp: [],

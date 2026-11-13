@@ -8,7 +8,12 @@ import {
 } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_MAX_READ_BYTES, DEFAULT_MAX_PREVIEW_BYTES } from '../types/index.js';
 import { DEFAULT_PROMPT_BLOCK_MAX_CHARS, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '../types/index.js';
-import { DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS, DEFAULT_EXECUTION_TIMEOUT_MS } from './types.js';
+import {
+  DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
+  DEFAULT_EXECUTION_BROWSER_PROFILE,
+  DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+} from './types.js';
 import { defaultExecutionConcurrency } from './execution.js';
 
 export const defaultConfig: SynthConfig = {
@@ -54,6 +59,11 @@ export const defaultConfig: SynthConfig = {
       // (прежнее поведение); `project`/`session` — порт на профиль.
       pooling: 'instance',
       defaultProfile: 'default',
+      // Browser-пул — проектный, но со своим профилем (образ с браузером):
+      // `class: 'browser'` не наследует `defaultProfile`.
+      browserProfile: DEFAULT_EXECUTION_BROWSER_PROFILE,
+      // Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`).
+      browserMcpServer: DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
       profiles: {},
       // Непригодный профиль → откат на instance-порт; `fail` — fail-closed.
       fallback: 'instance',

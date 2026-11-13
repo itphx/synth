@@ -53,6 +53,8 @@ function makeConfig(overrides: {
   mode?: 'inline' | 'remote';
   pooling?: 'instance' | 'project' | 'session';
   defaultProfile?: string;
+  browserProfile?: string;
+  browserMcpServer?: string;
   fallback?: 'instance' | 'fail';
   url?: string[];
   timeoutMs?: number;
@@ -92,6 +94,8 @@ function makeConfig(overrides: {
           tokenSecret: '/tmp/token',
           pooling: overrides.pooling ?? 'instance',
           defaultProfile: overrides.defaultProfile ?? 'default',
+          browserProfile: overrides.browserProfile ?? 'browser',
+          browserMcpServer: overrides.browserMcpServer ?? 'playwright',
           profiles: Object.fromEntries(
             Object.entries(overrides.profiles ?? {}).map(([name, profile]) => [
               name,
@@ -675,7 +679,7 @@ describe('PROP-135 слайз 5b-1: браузерный пул — project scop
       .catch(() => undefined);
 
     expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
-      'project:prj_a:browser:default',
+      'project:prj_a:browser:browser',
     ]);
   });
 
@@ -717,7 +721,57 @@ describe('PROP-135 слайз 5b-1: браузерный пул — project scop
       .catch(() => undefined);
 
     expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
-      'project:prj_a:browser:default',
+      'project:prj_a:browser:browser',
+    ]);
+  });
+
+  it('browserProfile из конфигурации задаёт профиль браузерного пула', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        browserProfile: 'browser-dev',
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const browser = router.portFor({ projectId: 'prj_a', class: 'browser' });
+    await browser
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    // Профиль пула — `browserProfile`, а не `defaultProfile`.
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'project:prj_a:browser:browser-dev',
+    ]);
+  });
+
+  it('явный профиль цели приоритетнее browserProfile', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        browserProfile: 'browser-dev',
+        profiles: { 'browser-prod': { url: ['http://browser-prod:8080'] } },
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const browser = router.portFor({
+      projectId: 'prj_a',
+      profile: 'browser-prod',
+      class: 'browser',
+    });
+    await browser
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'project:prj_a:browser:browser-prod',
     ]);
   });
 
@@ -738,7 +792,7 @@ describe('PROP-135 слайз 5b-1: браузерный пул — project scop
       .catch(() => undefined);
 
     expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
-      'project:ses_1:browser:default',
+      'project:ses_1:browser:browser',
     ]);
   });
 
@@ -829,7 +883,7 @@ describe('PROP-135 слайз 5b-1: poolRefFor() роутера', () => {
     const ref = await router.poolRefFor?.({ projectId: 'prj_a', class: 'browser' });
     expect(ref).toEqual({ urls: ['http://pool:5100'], token: 'pool-token' });
     expect(pools.calls.map((key) => poolKeyString(key))).toEqual([
-      'project:prj_a:browser:default',
+      'project:prj_a:browser:browser',
     ]);
   });
 
@@ -849,8 +903,8 @@ describe('PROP-135 слайз 5b-1: poolRefFor() роутера', () => {
     await router.poolRefFor?.({ projectId: 'prj_a', class: 'browser' });
 
     const keys = pools.calls.map((key) => poolKeyString(key));
-    expect(keys[0]).toBe('project:prj_a:browser:default');
-    expect(keys[1]).toBe('project:prj_a:browser:default');
+    expect(keys[0]).toBe('project:prj_a:browser:browser');
+    expect(keys[1]).toBe('project:prj_a:browser:browser');
   });
 
   it('кэш: повторный вызов не ходит в провайдер (TTL 60 с)', async () => {

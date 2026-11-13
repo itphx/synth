@@ -108,6 +108,9 @@ export function defaultPooledPortFactory(
         ...(remote?.timeoutMs !== undefined ? { timeoutMs: remote.timeoutMs } : {}),
         ...(remote?.concurrency !== undefined ? { concurrency: remote.concurrency } : {}),
         ...(remote?.failMode !== undefined ? { failMode: remote.failMode } : {}),
+        ...(remote?.browserMcpServer !== undefined
+          ? { browserMcpServer: remote.browserMcpServer }
+          : {}),
         ...(metricsSink ? { metricsSink } : {}),
       });
     }

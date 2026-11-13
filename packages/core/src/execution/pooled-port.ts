@@ -32,6 +32,8 @@
 
 import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE } from './ports/index.js';
 import type {
+  BrowserCallRequest,
+  BrowserCallResult,
   ExecutionCapabilitySummary,
   ExecutionFs,
   ExecutionMetricsSink,
@@ -141,6 +143,25 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
       // процесс работает).
       markActive();
       return process;
+    },
+
+    async browserCall(req: BrowserCallRequest): Promise<BrowserCallResult> {
+      const port = await resolve();
+      if (!port.browserCall) {
+        // Внутренний порт без browser-вызова (не удалённый клиент либо
+        // старая реализация): понятный отказ, а не «тихий» пустой результат.
+        return {
+          content: 'browser execution is unavailable in the current execution environment',
+          isError: true,
+        };
+      }
+      try {
+        return await port.browserCall(req);
+      } finally {
+        // Обращение к пулу — активность (как у execute): provisioner не должен
+        // снять пул по idle между вызовами браузера.
+        markActive();
+      }
     },
 
     async probe(bin: string, args?: string[]): Promise<boolean> {
