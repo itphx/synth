@@ -1,6 +1,6 @@
 {
   "name": "@itphx/synth-provisioner",
-  "version": "0.13.8",
+  "version": "0.13.9",
   "description": "Provisioner пулов исполнения Synth (PROP-135): HTTP-контракт, static-провайдер, жизненный цикл пулов и метрики",
   "license": "MIT",
   "private": true,
