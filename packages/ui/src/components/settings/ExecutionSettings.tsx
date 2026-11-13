@@ -1290,7 +1290,7 @@ export function ExecutionSettings() {
                     )}
                     {(profileClass === 'browser' || profileClass === 'both') && (
                       <span
-                        className={`${BADGE} bg-secondary/15 text-secondary-foreground`}
+                        className={`${BADGE} bg-status-info/15 text-status-info`}
                         data-testid={`execution-catalog-profile-${index}-class-browser`}
                       >
                         {t('settings.execution.catalog.classBrowser')}
@@ -1306,7 +1306,7 @@ export function ExecutionSettings() {
                     )}
                     {name === browserProfile && (
                       <span
-                        className={`${BADGE} bg-secondary/15 text-secondary-foreground`}
+                        className={`${BADGE} bg-status-info/10 text-status-info`}
                         data-testid={`execution-catalog-profile-${index}-browser-badge`}
                       >
                         {t('settings.execution.catalog.browserBadge')}

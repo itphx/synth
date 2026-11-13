@@ -1241,6 +1241,7 @@ execution:
   remote:
     profiles:
       browser-full:
+        class: browser              # exec | browser | both (иначе — из browserProfiles/browserProfile)
         image: "synth-executor:0.13.9-full"
         network: full
         mcpServers: ["playwright-mcp"]
