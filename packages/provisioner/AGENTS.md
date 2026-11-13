@@ -80,7 +80,7 @@ quantity, неизвестный оператор toleration → provisioner н�
 
 - `static` — адрес из `profiles[].url`/`staticPools`; изоляции нет;
 - `kubernetes` — `Pod` с образом профиля + `Secret` (`token`) в **одном**
-  namespace; под монтирует PVC workspace с `subPath` (`workspaceSubPath`),
+  namespace; под монтирует PVC workspace с `subPath` (`workspaceSubPath` (монтируется в `/var/synth/data/workspaces/<subPath>` — тот же абсолютный путь, что у control plane),
   находится по label `synth.io/pool-hash` и **усыновляется** после рестарта;
 - уборщик снимает пулы по `idleTimeoutMs`/`sessionIdleTimeoutMs`/
   `maxLifetimeMs`, между `drain` и `release` — `drainGraceMs`; сверх

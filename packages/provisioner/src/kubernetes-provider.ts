@@ -387,6 +387,13 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
   // `null` — fsGroup в pod spec не выставляется (NFS, см. конфигурацию).
   const fsGroup = kubernetes.fsGroup === undefined ? CONTAINER_GID : kubernetes.fsGroup;
 
+  // Mount path: подкаталог проекта монтируется **по тому же абсолютному
+  // пути**, что видит control plane (`/var/synth/data/workspaces/<subPath>`),
+  // иначе пути тулов (`…/workspaces/<project>`) в поде не существуют.
+  const workspaceMountPath = opts.workspaceSubPath !== undefined
+    ? `${kubernetes.workspaceMount.replace(/\/+$/, '')}/${opts.workspaceSubPath}`
+    : kubernetes.workspaceMount;
+
   const env: ContainerEnv[] = [
     {
       name: 'SYNTH_EXECUTOR_TOKEN',
@@ -394,7 +401,7 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
     },
     { name: 'SYNTH_EXECUTOR_HOST', value: '0.0.0.0' },
     { name: 'SYNTH_EXECUTOR_PORT', value: String(port) },
-    { name: 'SYNTH_EXECUTOR_WORKSPACE', value: kubernetes.workspaceMount },
+    { name: 'SYNTH_EXECUTOR_WORKSPACE', value: workspaceMountPath },
   ];
   const profileEnv = profile.env ?? {};
   for (const name of Object.keys(profileEnv).sort()) {
@@ -435,7 +442,7 @@ export function buildPoolPodManifest(opts: PoolPodManifestOptions): KubernetesMa
   const volumeMounts: Array<Record<string, unknown>> = [
     {
       name: 'workspace',
-      mountPath: kubernetes.workspaceMount,
+      mountPath: workspaceMountPath,
       // `subPath` монтирует подкаталог тома: рабочее дерево проекта, не весь PVC.
       ...(opts.workspaceSubPath !== undefined ? { subPath: opts.workspaceSubPath } : {}),
     },

@@ -408,7 +408,7 @@ describe('provisioner: kubernetes-провайдер', () => {
     const workspace = spec.containers[0]?.volumeMounts.find((mount) => mount.name === 'workspace');
     expect(workspace).toMatchObject({
       name: 'workspace',
-      mountPath: KUBERNETES.workspaceMount,
+      mountPath: `${KUBERNETES.workspaceMount}/proj/.worktrees/x`,
       subPath: 'proj/.worktrees/x',
     });
   });
@@ -487,7 +487,7 @@ describe('provisioner: kubernetes-провайдер', () => {
       expect.arrayContaining([
         { name: 'SYNTH_EXECUTOR_HOST', value: '0.0.0.0' },
         { name: 'SYNTH_EXECUTOR_PORT', value: '5100' },
-        { name: 'SYNTH_EXECUTOR_WORKSPACE', value: '/var/synth/data/workspaces' },
+        { name: 'SYNTH_EXECUTOR_WORKSPACE', value: '/var/synth/data/workspaces/proj-slug' },
         { name: 'SYNTH_EXECUTOR_MAX_CONCURRENCY', value: '2' },
       ]),
     );
