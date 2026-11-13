@@ -154,9 +154,13 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
   let pending: Promise<ExecutionPort> | null = null;
   let readyPromise: Promise<void> | null = null;
 
-  /** Сбросить кэш порта и readiness (пул мог быть пересоздан). */
-  const resetPool = (): void => {
+  /** Сбросить кэш порта (пул мог быть пересоздан). */
+  const resetPort = (): void => {
     pending = null;
+  };
+  /** Сбросить кэш порта и readiness. */
+  const resetPool = (): void => {
+    resetPort();
     readyPromise = null;
   };
 
@@ -187,15 +191,30 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
   const waitReady = (): Promise<void> => {
     if (!readyPromise) {
       readyPromise = (async () => {
-        const port = await resolve();
-        try {
-          if (port.capabilitySummary) {
-            await withWarmup(key, () => port.capabilitySummary!('sh'), true);
-          } else if (port.probe) {
-            await withWarmup(key, () => port.probe!('sh'), true);
+        // `probe` при недоступном адресе возвращает `true`, а
+        // `capabilitySummary` — `total: 0`: ждём именно непустой инвентарь.
+        // До 10 с, затем операция покажет исходную ошибку.
+        const deadline = Date.now() + 10_000;
+        for (;;) {
+          const port = await resolve().catch(() => null);
+          if (port) {
+            if (port.capabilitySummary) {
+              const summary = await withWarmup(
+                key, () => port.capabilitySummary!('sh'), true, resetPort,
+              ).catch(() => null);
+              if (summary && summary.total > 0) return;
+            } else if (port.probe) {
+              const ok = await withWarmup(key, () => port.probe!('sh'), true, resetPort)
+                .catch(() => false);
+              if (ok) return;
+            } else {
+              return;
+            }
           }
-        } catch {
-          // Не готов — операция ниже вернёт исходную ошибку.
+          if (Date.now() >= deadline) return;
+          // Адрес мог устареть (под пересоздан) — берём новый через ensure.
+          resetPort();
+          await new Promise((r) => setTimeout(r, 500));
         }
       })();
     }
