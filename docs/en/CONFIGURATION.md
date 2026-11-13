@@ -595,7 +595,8 @@ security:
     wrapContent: true
     mode: "flag"                  # flag | sanitize | block
   protectedPaths:
-    enabled: true
+    enabled: true                 # one protected-paths layer for file tools AND execute_shell
+                                  # (definitions/protected-paths.json; there is no separate shell-policy.json)
   tls:                            # ADR-099: TLS/CA trust for outbound connections (env SYNTH_TLS_*)
     caFile: ""                    # path to a PEM file with the trusted CA (corporate CA); mutually exclusive with caPem
     # caPem: ""                   # PEM of the trusted CA (e.g. from a Secret); mutually exclusive with caFile

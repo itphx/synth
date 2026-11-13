@@ -737,13 +737,15 @@ describe('Agent API Routes — браузерный профиль агента 
       allowed_browser_profiles: ['browser-full'],
     });
 
-    const list: any = await (await app.request('/api/v2/agents/all')).json();
-    const item = list.agents.find((a: any) => a.id === 'browser-agent');
+    const list = (await (await app.request('/api/v2/agents/all')).json()) as {
+      agents: Array<{ id: string; browser_profile: string | null; allowed_browser_profiles: string[] | null }>;
+    };
+    const item = list.agents.find((a) => a.id === 'browser-agent')!;
     expect(item.browser_profile).toBe('browser-full');
     expect(item.allowed_browser_profiles).toEqual(['browser-full']);
 
     // У системного агента браузерного профиля нет — DTO отдаёт null.
-    const title = list.agents.find((a: any) => a.id === 'title');
+    const title = list.agents.find((a) => a.id === 'title')!;
     expect(title.browser_profile).toBeNull();
     expect(title.allowed_browser_profiles).toBeNull();
   });
@@ -756,7 +758,7 @@ describe('Agent API Routes — браузерный профиль агента 
       allowed_browser_profiles: ['browser', 'browser-full'],
     });
     expect(snake.status).toBe(201);
-    const body: any = await snake.json();
+    const body = (await snake.json()) as { browserProfile: string; allowedBrowserProfiles: string[] };
     expect(body.browserProfile).toBe('browser-full');
     expect(body.allowedBrowserProfiles).toEqual(['browser', 'browser-full']);
 
@@ -797,7 +799,7 @@ describe('Agent API Routes — браузерный профиль агента 
     const app = createBrowserApp();
     const res = await postAgent(app, { id: 'browser-bad', browser_profile: 'ghost' });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(body.error.message).toContain('Профиль браузера не найден');
     expect(await store.load('browser-bad')).toBeNull();
@@ -807,14 +809,14 @@ describe('Agent API Routes — браузерный профиль агента 
       allowed_browser_profiles: ['browser', 'ghost'],
     });
     expect(list.status).toBe(400);
-    expect((await list.json() as any).error.message).toContain('ghost');
+    expect((await list.json() as { error: { message: string } }).error.message).toContain('ghost');
   });
 
   it('exec-имя в браузерном контуре не принимается (каталоги раздельные)', async () => {
     const app = createBrowserApp();
     const res = await postAgent(app, { id: 'browser-mixed', browser_profile: 'devops' });
     expect(res.status).toBe(400);
-    expect((await res.json() as any).error.message).toContain('Профиль браузера не найден');
+    expect((await res.json() as { error: { message: string } }).error.message).toContain('Профиль браузера не найден');
   });
 
   it('без каталога проверка пропускается', async () => {

@@ -618,9 +618,9 @@ describe('PermissionEvaluator — shell-безопасность (execute_shell)
     expect(d.matchedRule).toBe('shell-policy.deny');
   });
 
-  it('B4: sh -c/eval/sudo/find — deny поверх политики в act', () => {
-    expect(shellCheck("sh -c 'rm -rf /'", { policy: SHELL_POLICY }).action).toBe('deny');
-    expect(shellCheck("eval 'rm -rf /'", { policy: SHELL_POLICY }).action).toBe('deny');
+  it('B4: обёртки не разбираются (принятый риск); префиксы видны и под sudo', () => {
+    expect(shellCheck("sh -c 'rm -rf /'", { policy: SHELL_POLICY }).action).toBe('allow');
+    expect(shellCheck("eval 'rm -rf /'", { policy: SHELL_POLICY }).action).toBe('allow');
     expect(shellCheck('sudo rm -rf /', { policy: SHELL_POLICY }).action).toBe('deny');
     expect(shellCheck('find / -delete', { policy: SHELL_POLICY }).action).toBe('deny');
   });
@@ -965,23 +965,24 @@ describe('PermissionEvaluator — сессионный shell-грант патт
     });
   }
 
-  it('строковый allow (совместимость) снимает динамический ask', () => {
+  it('строковый allow (совместимость): динамика не проверяется, protected остаётся', () => {
     const cfg: PermissionConfig = { rules: { execute_shell: 'allow' }, askTimeoutMs: 30_000 };
+    // `$VAR` не анализируется (принятый риск, ADR-029): вопроса нет.
     expect(shellCheck('cat $X', cfg).action).toBe('allow');
+    // approvalPaths — жёсткий слой: строковый allow его не снимает.
+    expect(shellCheck('cat ~/.ssh/config', cfg).action).toBe('ask');
   });
 
-  it('объект allow-паттернов снимает только динамический ask', () => {
+  it('объект allow-паттернов не снимает protected/external', () => {
     const cfg: PermissionConfig = {
       rules: { execute_shell: { 'cat *': 'allow' } },
       askTimeoutMs: 30_000,
     };
-    expect(shellCheck('cat $X', cfg).action).toBe('allow');
     // approvalPaths — protected, грант не снимает
     expect(shellCheck('cat ~/.ssh/config', cfg).action).toBe('ask');
-    // find -delete вне периметра — mutation
+    // реальный доступ вне периметра — external, решает external_directory
+    expect(shellCheck('cat /etc/hostname', cfg).action).toBe('ask');
     expect(shellCheck('find /etc -delete', cfg).action).toBe('ask');
-    // нерезолвимый cd — cwd
-    expect(shellCheck('cd $(pwd)', cfg).action).toBe('ask');
     // deny не ослабляется
     expect(shellCheck('cat /etc/shadow', cfg).action).toBe('deny');
   });
@@ -991,7 +992,7 @@ describe('PermissionEvaluator — сессионный shell-грант патт
       rules: { execute_shell: { 'git status *': 'allow' } },
       askTimeoutMs: 30_000,
     };
-    expect(shellCheck('cat $X', cfg).action).toBe('ask');
+    expect(shellCheck('cat /etc/hostname', cfg).action).toBe('ask');
   });
 
   it('грант в execute_shell резолвится по команде, а не по пути cwd', () => {
@@ -1059,12 +1060,12 @@ describe('PermissionEvaluator — структурная причина ask\'а'
     });
   }
 
-  it('shell-ask с askKind \'cwd\' доходит до PermissionDecision.askKind', () => {
-    const d = shellAsk('cd $(pwd)', SHELL_POLICY);
+  it('shell-ask внешнего доступа несёт askKind \'external\' и askPaths', () => {
+    const d = shellAsk('cat /etc/hostname', SHELL_POLICY);
     expect(d.action).toBe('ask');
-    expect(d.askKind).toBe('cwd');
-    expect(d.messageId).toBe('ask-protected-path');
-    expect(d.params?.path).toBe('$(pwd)');
+    expect(d.askKind).toBe('external');
+    expect(d.messageId).toBe('ask-external-directory');
+    expect(d.askPaths).toEqual(['/etc/hostname']);
   });
 
   it('shell-ask по защищённому пути несёт askKind \'protected\' и params.path', () => {

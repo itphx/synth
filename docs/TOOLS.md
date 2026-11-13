@@ -39,6 +39,31 @@
 отменяет — отключить его тул не может (см.
 [`docs/CONFIGURATION.md`](./CONFIGURATION.md) §«Предел вывода инструментов»).
 
+### Проверки `execute_shell`
+
+Shell — произвольный код: проверки ниже — **guardrail** (UX/defense-in-depth), а не граница
+безопасности (ADR-136; изоляция — ADR-137). Guard работает **только с явными правилами**
+(ADR-029, аддендум 2026-11-13), без эвристик разбора команд:
+
+| Правило | Что даёт |
+|---|---|
+| `protected-paths.json` (тот же файл, что у файловых тулов) | защищённый путь → `deny` (`deny-protected-path`), `approvalPaths` → `ask` (`ask-protected-path`); проверяются лексический путь и `realpath` (симлинк не обходит денлист) |
+| `external_directory` | путь вне периметра (`workingDir` + `allowedRoots`) → `ask` с `askKind: 'external'` и `askPaths`; решение принимает правило `permission.rules.external_directory` (дефолт `ask`, `plan`/`strict` — `deny`, явный `allow` снимает). Исключения — `/dev/null`, `/dev/stdin|stdout|stderr|tty`, `/dev/fd/N`, `/proc/self/fd/N` |
+| `deniedCommandPrefixes` | явный список опасных команд (`rm -rf /`, `find / -delete`, …) → `deny`; матч по токенам в любом сегменте |
+| plan-режим | мутирующая команда (`isMutatingCommand`) → `deny` |
+
+Кандидат-путь — токен, который: после резолва `~`/`$HOME`/`${HOME}`/`$PWD`/`$SYNTH_DATA_DIR`
+**существует** на ФС или попадает в защищённый путь; является целью редиректа (`>`, `>>`, `2>`,
+`&>` — всегда путь); является не-флаговым операндом команды-писателя (`cp mv ln install mkdir
+rmdir touch rm chmod chown tee truncate shred dd`); содержит glob-символы, и его литеральный
+каталог существует (совпадения раскрываются и проверяются, лимит 2000); является целью
+`cd`/`pushd` (проверяется и меняет cwd для следующих сегментов).
+
+**Не проверяется** (принятые риски): `$VAR` (кроме известных), `$(...)`, backticks,
+awk/sed/find-программы, heredoc, обёртки `sh -c`/`sudo`/`env`/`nohup`, интерпретаторы,
+`for`/присваивания, `xargs`, `git -c`, `tar --to-command`, `rsync -e`. Наблюдаемость и внешнее
+решение — аудит исполнений и `CommandPolicyProvider` (§9.1–9.2 [EXECUTION](./EXECUTION.md)).
+
 ### Исключения поиска (`grep_files`)
 
 По умолчанию `grep_files` **не показывает** совпадения из служебных и

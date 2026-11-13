@@ -452,8 +452,10 @@ describe('ChatOrchestrator × защита {dataDir}/secrets (H5)', () => {
     return tool;
   }
 
-  it('execute_shell: sh -c cat $SYNTH_DATA_DIR/secrets/master.key → deny, секрет не читается', async () => {
-    const tool = await run('execute_shell', { command: "sh -c 'cat $SYNTH_DATA_DIR/secrets/master.key'" });
+  it('execute_shell: cat $SYNTH_DATA_DIR/secrets/master.key → deny, секрет не читается', async () => {
+    // Обёртки (`sh -c …`) не разбираются (принятый риск, ADR-029 аддендум
+    // 2026-11-13); прямой путь-токен проверяется как защищённый префикс.
+    const tool = await run('execute_shell', { command: 'cat $SYNTH_DATA_DIR/secrets/master.key' });
     expect(tool).toContain('Permission denied');
     // Сообщение security-промпта (deny-protected-path), а не вывод shell-утилиты.
     expect(tool).toContain('protected');

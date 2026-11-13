@@ -617,7 +617,8 @@ security:
     wrapContent: true
     mode: "flag"                  # flag | sanitize | block
   protectedPaths:
-    enabled: true
+    enabled: true                 # единый слой protected-paths для файловых тулов И execute_shell
+                                  # (definitions/protected-paths.json; отдельного shell-policy.json нет)
   tls:                            # ADR-099: доверие TLS/CA исходящих соединений (env SYNTH_TLS_*)
     caFile: ""                    # путь к PEM-файлу доверенного CA (корпоративный CA); взаимоисключающ с caPem
     # caPem: ""                   # PEM доверенного CA (например из Secret); взаимоисключающ с caFile

@@ -1392,6 +1392,16 @@ Shell считается произвольным кодом: `shell-guard`, pat
 UX, а не граница безопасности. Поэтому вместо мнимой изоляции ядро пишет **наблюдаемый след**
 исполнений: append-only журнал `{dataDir}/audit/commands.jsonl` (или `security.commandAudit.path`).
 
+- **Что именно проверяет guardrail (ADR-029, аддендум 2026-11-13).** Только явные правила:
+  protected-paths (тот же `definitions/protected-paths.json`, что у файловых тулов; симлинк
+  проверяется по `realpath`), `external_directory` (путь вне периметра → `ask` с `askKind:
+  'external'`), `deniedCommandPrefixes` и кандидаты-пути — существующие после резолва `~`/
+  `$HOME`/`$PWD`/`$SYNTH_DATA_DIR`, цели редиректов, операнды команд-писателей (`cp mv ln install
+  mkdir rmdir touch rm chmod chown tee truncate shred dd`), совпадения glob'ов с существующим
+  литеральным каталогом, цели `cd`/`pushd`. Эвристики разбора команд (обёртки `sh -c`/`sudo`,
+  переменные, awk/sed/find-программы, heredoc, интерпретаторы, `git -c` и т.п.) **удалены** —
+  они давали ложные срабатывания и обходились; отдельного `shell-policy.json` больше нет.
+
 - **Точка записи — одна.** Оркестратор (`packages/core/src/engine/orchestrator.ts`) в фазе
   исполнения tool-call (`run`): только для `execute_shell`/`sandbox_exec` и только при
   `security.commandAudit.enabled`. Свой журнал тулы не пишут — иначе точки разошлись бы и

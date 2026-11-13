@@ -173,7 +173,7 @@ interface StepResult {
 |---|---|---|
 | `agent` | свой Tool-Use-цикл внутри движка; LLM — **только** через `GatewayProvider` (ADR-036) | промпт — через `SystemPromptComposer`/`ContextBuilder` (ADR-070, контракт сужен до минимального «session-like» интерфейса — §2.5.1); проектные инструкции — резолвер ADR-069; MCP-скоуп — по проекту (ADR-071) |
 | `tool` | через `ToolRegistry` + `executeToolDef` (`engine/tools/tool-execution.ts`) | тот же permission-слой, что у сессий (§2.7) |
-| `script` | только через shell-policy (не голой `child_process`) | protected paths и правила `definitions/*.json` действуют |
+| `script` | только через `execute_shell` (не голой `child_process`) | shell-проверки: protected paths и `permission.rules` действуют |
 | `human` | HITL-гейт: прогон **ставится на паузу**, ждёт действия человека; есть таймаут | наблюдателя-сессии нет → действия берутся из ролей проекта/владельца |
 
 > **Реализовано (Э4.2):** исполнители видов `tool`, `script` и `human` —
@@ -766,7 +766,7 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 
 `GatewayProvider` (ADR-036) · `PermissionEvaluator` (ADR-025/028/029) · `ToolRegistry` +
 `executeToolDef` · `SystemPromptComposer`/`ContextBuilder` (ADR-070) · MCP-скоуп по проекту (ADR-071) ·
-резолвер проектных инструкций (ADR-069) · shell-policy/protected paths · i18n-ключи `shared/i18n` ·
+резолвер проектных инструкций (ADR-069) · shell-проверки/protected paths · i18n-ключи `shared/i18n` ·
 реестр метрик (ADR-094) · порты слоя хранилища (ADR-096) · egress/TLS-контур (ADR-099) · шина событий.
 
 ### 2.15. API и права пайплайнов (Э6)

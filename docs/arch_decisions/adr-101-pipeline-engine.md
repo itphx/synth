@@ -48,7 +48,7 @@
    `StepResult` (`status` = `ok|failed|skipped|awaiting_human`, `output`, `artifacts`, `error`, тайминги,
    `attempt`). **Опциональная** `io`-схема (JSON Schema) объявляется конкретным пайплайном — тогда границы
    валидируются строго.
-4. **Виды шага:** `agent` (свой Tool-Use-цикл внутри движка), `script` (только через shell-policy — не голый
+4. **Виды шага:** `agent` (свой Tool-Use-цикл внутри движка), `script` (только через `execute_shell` — не голый
    `child_process`), `tool` (через `ToolRegistry`), `human` (HITL-гейт: пауза прогона, ожидание действия
    человека + таймаут).
 5. **Условные переходы** — структурированный DSL `{path, op, value}`: пути `prev.output.x`,
@@ -68,7 +68,7 @@
     `PermissionEvaluator` (ADR-025/028/029), `ToolRegistry` + `executeToolDef`
     (`engine/tools/tool-execution.ts`), `SystemPromptComposer`/`ContextBuilder` (ADR-070 — контракт сужается
     до минимального «session-like» интерфейса, обычная `Session` остаётся структурно совместимой), MCP-скоуп
-    по проекту (ADR-071), резолвер проектных инструкций (ADR-069), shell-policy/protected paths, i18n-ключи
+    по проекту (ADR-071), резолвер проектных инструкций (ADR-069), shell-проверки/protected paths, i18n-ключи
     `shared/i18n`, реестр метрик (ADR-094), шина событий — новые **типы** событий `pipeline.run.*` в
     существующей шине (новых каналов не заводим).
 11. **Границы.** Loop Engine ([PROP-057](./prop-057-loop-engine.md)) не трогаем; rollback/exit-стратегия,

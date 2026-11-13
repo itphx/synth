@@ -145,8 +145,7 @@
   (`engine/security/shell-guard.ts`) — единственный расчёт гранта: `commands` (все исполняемые
   сегменты — то же разбиение `splitShellSegments`, trim; для показа человеку), `patterns`
   (**всегда `[]`** — командные паттерны правила `execute_shell: { "<cmd> *": "allow" }` оркестратор
-  не выдаёт ни в одном виде ask'а; поле оставлено в контракте, legacy-путь `shellSavePatterns`
-  удалён) и `directories` (каталоги для `external_directory: "<dir>/*"`). Семантика:
+  не выдаёт ни в одном виде ask'а; поле оставлено в контракте) и `directories` (каталоги для `external_directory: "<dir>/*"`). Семантика:
   `askKind: 'dynamic'` (непроверяемый glob/динамика) — грант идёт каталогом виновника
   (`grantDirectoryForToken`: каталог-часть токена; bare-glob → `cwd` сегмента; `$VAR`/`$(...)` —
   каталога нет); `protected`/`mutation`/`cwd` — ни паттернов, ни каталогов (жёсткий слой выше
@@ -161,26 +160,25 @@
   каталогом) и `saveDirectories` (в payload — camelCase); выдача
   пишется в аудит (`scope:'permission'`, `action:'grant'`) через шов
   `OrchestratorOptions.onPermissionGrant`. **Без `trigger` грант для `execute_shell` не
-  выдаётся** (fail-closed): виновник неизвестен, а паттерн «на всю команду» (legacy
-  `shellSavePatterns`, путь удалён) шире одобренного — так восстановленное после рестарта ожидание без снимка
+  выдаётся** (fail-closed): виновник неизвестен, а паттерн «на всю команду» шире
+  одобренного — так восстановленное после рестарта ожидание без снимка
   trigger'а (`PendingApprovalRecord.trigger`) снимает вопрос, но не пишет правило в сессию; для
   не-shell тулов поведение прежнее (грант по путям). Восстановленная ветка HTTP-роута
   (`POST /:id/permissions/:approvalId`) передаёт `resolution.record.trigger` (только
   `params`/`askKind`) — тот же план `shellGrantPlan`, что и в живой ветке.
-- **Периметр shell — по реальным путям (ADR-029).** shell-guard классифицирует
-  литералы/`~`/`..`/редиректы/`cd`-цели и **совпадения глобов** не по строке, а по файловой
-  системе (`realpath`; лимит 2000 совпадений на токен): защищённое совпадение → `deny`
-  (`messageId: 'deny-protected-path'`, `params.path` — конкретный файл, а не маска), внутри
-  периметра (`workingDir` + `project.workspace`) → `allow`, снаружи → `ask` с
-  `askKind: 'external'`, `messageId: 'ask-external-directory'` и `askPaths` (абсолютные пути
-  **всех** внешних совпадений; наружу не публикуется — в `permission.asked`/DTO идут
-  `commands`/`save`/`saveDirectories`). Решение по внешнему доступу принимает **правило**
-  `permission.rules.external_directory` (дефолт `ask`, в `plan`/`strict` — `deny`), а не сам
-  shell-guard; грант «Разрешить в сессии» — каталогом `<dir>/*` (каталоги из `askPaths`).
-  Исключения периметра: `/dev/null`, `/dev/stdin|stdout|stderr|tty`, `/dev/fd/N`,
-  `/proc/self/fd/N`. `shell-policy` при этом остаётся **deny-списком** опасных префиксов/путей
-  и fail-closed на неразрешимой динамике (`ask-dynamic-*`, `ask-stdin-code`) — это не вторая
-  граница доступа: что считать «снаружи», решают реальные пути и `external_directory`.
+- **Shell — только явные правила (ADR-029 аддендум 2026-11-13).** `checkShellCommand` не
+  разбирает команды: проверяются `protected-paths` (deny/ask, тот же файл), `external_directory`
+  и `deniedCommandPrefixes`; кандидат-путь — токен, который после резолва `~`/`$HOME`/`$PWD`/
+  `$SYNTH_DATA_DIR` существует на ФС или попадает в защищённый путь; цель редиректа; операнд
+  команды-писателя (`cp mv ln install mkdir rmdir touch rm chmod chown tee truncate shred dd`);
+  glob с существующим литеральным каталогом (совпадения проверяются, лимит 2000); цель
+  `cd`/`pushd` (меняет cwd для следующих сегментов). Deny > protected ask > external ask.
+  Пути проверяются по `realpath` (симлинк не обходит денлист). Решение по внешнему доступу —
+  **правило** `permission.rules.external_directory` (дефолт `ask`, в `plan`/`strict` — `deny`);
+  исключения периметра — `/dev/null`, `/dev/stdin|stdout|stderr|tty`, `/dev/fd/N`,
+  `/proc/self/fd/N`. Принятые риски: `$VAR` (кроме известных), `$(...)`, backticks,
+  awk/sed/find-программы, heredoc, обёртки `sh -c`/`sudo`/`env`, интерпретаторы, `for`/
+  присваивания не анализируются — shell-guard остаётся guardrail'ом, не границей безопасности.
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
@@ -1314,41 +1312,11 @@
   восстановленному id нет (реестр Authority живёт в памяти процесса), доступ к
   сессии решает граничный prefix-guard (`server/session-access-guard.ts`, вид `write`
   по HTTP-методу); `engine/security/*` — injection/shell/protected paths
-  (`shell-guard.ts`: `\` в POSIX-shell — экранирование/регэксп, а не разделитель пути, поэтому
-  regex-аргументы (`grep -v '\.sample$'`) путями не считаются, а Windows-пути распознаются явно —
-  `C:\…`, `\\server\share`; аргументы-паттерны (`sed`-скрипт, regexp `grep`, программа `awk`,
-  набор `tr`, разделитель `cut`, фильтр `jq`) шаг 6 не спрашивает; значения `find` (включая
-  `-path/-ipath/-wholename/-name/-iname/-regex/-iregex`) проверяются как пути — шаблон без `/`
-  (`*.ts`) путём не считается; слитные перенаправления (`>&`, `>|`, `<>`, `&>`, `2>`) дают цель
-  как операнд (fd `2>&1`/`>&-` пропускаются), а `tokenizeCommand` выделяет оператор отдельным
-  токеном вне кавычек/`$(...)`;
-  однокомпонентный и bare-glob (`dir/*.srl`, `*`, периметр передаёт `permission/evaluator.ts`) проверяется по
-  фактическим совпадениям (`opendir` с лимитом 2000 + `globMatch`, realpath каждого): безопасные — `allow`,
-  deny/approval среди совпадений — deny/ask; многокомпонентный glob, путь вне периметра, симлинк
-  наружу, отсутствие совпадений и превышение лимита записей — `ask`. Deny приоритетнее ask (внутри сегмента и по сегментам),
-  раскрытое значение-команда (`eval $C`, `sh -c "$C"`) — `ask`; динамическое имя команды
-  раскрывается из биндингов (`for NAME in …`, `NAME=value`): простые значения переписывают сегмент
-  и проверяются рекурсивно (deny/ask/allow), нерезолвимое или значение с пробелами/метасимволами — `ask`;
-  префиксные обёртки (`sudo/env/timeout/command/builtin/exec/nohup/setsid/nice/stdbuf/ionice/watch/flock/xargs`)
-  снимаются послойно и проверяется вложенная команда; shell-префиксы `!/time/{/(/if/while/until/for/case`
-  снимаются до определения команды; плюс общий скан `EMBEDDED_EXECUTORS`
-  (`su/runuser/doas/script/ssh/chroot/unshare/nsenter/systemd-run`, контейнеры `docker/podman/nerdctl/kubectl/oc`,
-  интерпретаторы с версиями): аргументы-команды и код (`-c/--command/-e/-r/-p/-S`, `--eval=`/`--split-string=`,
-  слитные кластеры `-qec…`/`-E…`, `-oKey=code`) проверяются рекурсивно (глубина ≤ 3), маркер → deny;
-  код в опциях инструментов (`git -c`, `tar --to-command`, `rsync -e/--rsh`) — рекурсивно; `awk system(...)`,
-  `find -exec/-execdir`, код `python/node/perl/ruby/php -c|-e` проверяются рекурсивно;
-  `find` с `-delete/-exec` при стартовом пути вне периметра или с динамикой → ask, защищённый старт → deny;
-  `cd/pushd`, `env -C`, `chroot`, `sudo -D` меняют cwd для последующих сегментов/рекурсии
-  (нерезолвимая цель `cd` — fail-closed `ask`);
-  код на stdin (`<<`, `<<-`, `<<<`) для shell/интерпретаторов/awk — fail-closed `ask`
-  (тело heredoc не анализируется; `cat <<EOF`, `grep <<< "$x"` не трогаются);
-  простой brace-expansion `{a,b}` раскрывается до проверки, неподдерживаемый (`{1..3}`) → ask
-  (форматы `{{…}}`/jsonpath — литерал); `$VAR` в `[ ]`/`[[ ]]`/`test`/`(( ))` — значение, не путь;
-  `/proc/<pid|self>/{root,cwd}/<path>` проверяется как `<path>`, `$1/${1}/$@/$*` — неизвестная динамика → ask;
-  `shell-variables.ts` собирает `NAME=value`/`NAME+=value`/`for NAME in …`/`read` и раскрывает `$VAR`/
-  `${VAR%pat}`/`${VAR#pat}`: если все значения — одиночные литеральные пути (без пробелов и
-  шелл-метасимволов), проверяются как пути (deny/approval), неизвестная динамика (`$(...)`,
-  `while read`, `$X`) по-прежнему `ask`); `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075; исключения — `WORKSPACE_FREE_TOOLS`: `ssh_keys_list`, ресурс инстанса, ADR-076); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
+  (`shell-guard.ts` — минимальные явные правила: protected paths/external/префиксы
+  команд; кандидат-путь = существующий путь, цель редиректа, операнд команды-писателя,
+  совпадение glob'а с существующим каталогом, цель `cd`; динамика/обёртки/программы
+  не анализируются — ADR-029 аддендум 2026-11-13);
+  `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075; исключения — `WORKSPACE_FREE_TOOLS`: `ssh_keys_list`, ресурс инстанса, ADR-076); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer` (два режима сжатия — суммаризация и компактизация, ADR-119), `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   `ContextConfig.getMaxStepsPrompt(language)` — требование «только текст» для
   финального шага-отчёта по лимиту шагов — у **саб-агента** (`run-cycle.ts`) и **основного** агента
@@ -2875,7 +2843,7 @@
   не отправляется); `tool_choice` не отправляется при `supportsToolChoice: false` (`providers/ollama.ts`).
 - `profiles.ts` — реестр серверных профилей гибрида.
 - `prompts/` (system, roles, subagents, security), `definitions/`
-  (`protected-paths.json`, `shell-policy.json`), `dictionaries/` — ассеты движка.
+  (`protected-paths.json`), `dictionaries/` — ассеты движка.
   `prompts/system/MAX_STEPS.{ru,en}.md` — требование «только текст» для
   финального шага-отчёта по лимиту шагов (саб-агент и основной агент;
   механика opencode; загрузчик — `ContextConfig.getMaxStepsPrompt`,

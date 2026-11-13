@@ -19,10 +19,8 @@ export {
   tokenizeCommand,
   extractCommandPaths,
   isMutatingCommand,
-  loadShellPolicy,
   checkShellCommand,
   matchShellCommandPattern,
-  clearShellPolicyCache,
   expandHome,
   tryResolvePath,
   resolveSystemDefinitionsDir,
@@ -31,7 +29,6 @@ export {
 } from './shell-guard.js';
 export type {
   ShellPolicy,
-  ShellPolicyOptions,
   ExtractedPath,
   ShellCheckResult,
 } from './shell-guard.js';
