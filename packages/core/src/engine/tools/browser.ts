@@ -81,6 +81,8 @@ function browserPort(ctx: ToolContext): ExecutionPort {
 interface BrowserCallOutcome {
   result?: BrowserCallResult;
   failure?: ToolResult;
+  /** Порт, которым выполнен вызов (нужен скриншоту: файл лежит в контейнере браузера). */
+  port?: ExecutionPort;
 }
 
 /**
@@ -116,7 +118,7 @@ async function invokeBrowserTool(
   }
 
   try {
-    return { result: await port.browserCall({ tool, arguments: args }) };
+    return { result: await port.browserCall({ tool, arguments: args }), port };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -185,6 +187,34 @@ function screenshotWarning(
  * - ошибка `upload`/лимит — предупреждение с причиной;
  * - в ответе нет вложений — текст результата как есть.
  */
+/** Лимит чтения файла скриншота из контейнера браузера (20 МиБ). */
+const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Достать изображение, которое Playwright MCP сохранил в контейнере браузера.
+ *
+ * MCP возвращает текстовую ссылку (`../tmp/.playwright-mcp/page-….png`);
+ * файл читается через `ExecutionFs` того же пула (тот же контейнер).
+ */
+async function readScreenshotFile(
+  port: ExecutionPort,
+  content: string,
+): Promise<{ dataBase64: string; mime: string }[]> {
+  const match = /(?:\.\.\/)?tmp\/\.playwright-mcp\/[^\s)"'`]+\.(?:png|jpe?g|webp)/i.exec(content);
+  if (!match) return [];
+  const raw = match[0]!;
+  const abs = raw.startsWith('/') ? raw : `/${raw.replace(/^\.\.\//, '')}`;
+  const mime = /\.jpe?g$/i.test(abs) ? 'image/jpeg' : /\.webp$/i.test(abs) ? 'image/webp' : 'image/png';
+  try {
+    const bytes = await port.fs!.readBytes(abs, MAX_SCREENSHOT_BYTES);
+    return bytes.dataBase64 ? [{ dataBase64: bytes.dataBase64, mime }] : [];
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    warning('BROWSER', `"browser_screenshot": не удалось прочитать ${abs}: ${detail}`);
+    return [];
+  }
+}
+
 async function callBrowserScreenshot(
   ctx: ToolContext,
   toolName: string,
@@ -194,7 +224,13 @@ async function callBrowserScreenshot(
   const outcome = await invokeBrowserTool(ctx, toolName, 'browser_take_screenshot', args);
   if (outcome.failure) return outcome.failure;
   const result = outcome.result as BrowserCallResult;
-  const payloads = result.isError ? [] : (result.attachments ?? []);
+  let payloads = result.isError ? [] : (result.attachments ?? []);
+  // Playwright MCP этой версии всегда пишет файл в `/tmp/.playwright-mcp` и
+  // возвращает текстовую ссылку (image-блок не отдаёт). Читаем файл через FS
+  // того же пула — байты попадут вложение, а не останутся в контейнере.
+  if (payloads.length === 0 && !result.isError && outcome.port?.fs) {
+    payloads = await readScreenshotFile(outcome.port, result.content);
+  }
   if (payloads.length === 0) {
     return {
       content: result.content,

@@ -17,12 +17,13 @@
  *
  * Реальный исполнитель/браузер не нужен: роутер и порт подменены.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { ToolContext } from '@itphx/synth-shared';
 import type { ExecutionRouter, ExecutionPortTarget } from '../../execution/router.js';
 import type {
   BrowserCallRequest,
   BrowserCallResult,
+  ExecutionFs,
   ExecutionPort,
 } from '../../execution/ports/index.js';
 import type { AttachmentService, UploadedAttachmentMeta } from '../attachments/service.js';
@@ -44,6 +45,8 @@ import {
 /** Порт-заглушка: запоминает browser-вызовы, отвечает по сценарию. */
 class FakeBrowserPort implements ExecutionPort {
   readonly calls: BrowserCallRequest[] = [];
+  /** Подмена FS пула (файл скриншота читается из контейнера браузера). */
+  fs?: ExecutionFs;
 
   constructor(private readonly script: (req: BrowserCallRequest) => BrowserCallResult) {}
 
@@ -305,6 +308,26 @@ describe('browser-тулы — имена инструментов и аргум
 });
 
 describe('browser_screenshot — вложение сообщения', () => {
+  it('MCP вернул путь к файлу — читаем его через FS пула и прикрепляем', async () => {
+    const port = new FakeBrowserPort(() => ({
+      content: '- [Screenshot of viewport](../tmp/.playwright-mcp/page-1.png)',
+      isError: false,
+    }))
+    const readBytes = vi.fn(async () => ({
+      dataBase64: PNG_BYTES.toString('base64'),
+      size: PNG_BYTES.length,
+    }))
+    port.fs = { readBytes } as unknown as ExecutionFs
+    const { service, uploads } = fakeAttachmentService()
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router, attachmentService: service })
+
+    const result = await browserScreenshotTool.execute({}, ctx)
+
+    expect(readBytes).toHaveBeenCalledWith('/tmp/.playwright-mcp/page-1.png', expect.any(Number))
+    expect(uploads).toHaveLength(1)
+    expect(result.attachments).toHaveLength(1)
+  })
+
   it('загружает изображение через сервис и возвращает ссылки', async () => {
     const port = new FakeBrowserPort(() => screenshotResult('Saved to page.png'));
     const { service, uploads } = fakeAttachmentService();

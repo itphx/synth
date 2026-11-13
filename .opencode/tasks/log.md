@@ -1517,3 +1517,9 @@
 - **API-клиент.** `profileOrigins`, `class`, placement, MCP-объекты, `warmExecutionImages`; нормализация legacy-строк MCP.
 - **Тесты.** `ExecutionSettings.test.tsx` — 33 (порядок формы, бейджи, read-only/duplicate, MCP, advanced, PUT payload, warm, restart); `execution.test.ts` — нормализация DTO; полный UI — 381 файл / 4 036 passed (+1 todo), lint 0 errors, build ок.
 - **Документация.** `docs/CONFIGURATION.md` (+EN) — merge/disabled/class/MCP/scheduling/warm; `docs/API_V2.md` (+EN) — PUT-семантика, `profileOrigins`, warm-эндпоинт; `packages/ui/AGENTS.md`.
+
+## 2026-11-13 — Скриншот браузера: файл MCP читается через FS пула
+
+- **Задача:** агент на test не мог получить скриншот: Playwright MCP этой версии всегда пишет файл в `/tmp/.playwright-mcp` и возвращает текстовую ссылку (image-блок не отдаёт), поэтому `browser_screenshot` возвращал текст без вложения; `save_attachment`/`execute_shell` падали в момент рестарта пулов (сейчас пулы ready, FS проверен). **Тип:** bugfix (core). **Исполнитель:** @fixer.
+- **Фикс.** `invokeBrowserTool` возвращает порт; `callBrowserScreenshot` при пустых `attachments` парсит путь `…/tmp/.playwright-mcp/*.png` из ответа, читает файл через `ExecutionFs` того же пула (`readBytes`, лимит 20 МиБ) и публикует байты вложением; нет FS/ошибка чтения — прежний текст-результат.
+- **Тесты.** `browser.test.ts` +1 (путь → `fs.readBytes` → upload); core typecheck/полный прогон зелёные.
