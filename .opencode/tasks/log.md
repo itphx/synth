@@ -1491,3 +1491,12 @@
 - **UI.** «Исполнение»: runtime-каталог (`GET/PUT/DELETE /settings/execution`), CRUD профилей (image/url, сеть, ресурсы, runtimeClass, env), «сделать по умолчанию» для exec/browser, `browserProfiles`, баннер `restartRequired` + перезапуск (ADMIN), удаление дефолтного запрещено. Форма агента: одна секция «Исполнение», короткие подписи, селект `disabled` при пустом списке, проверка «дефолт ∈ список», явная «Сохранить», «Сбросить» — к сохранённым. Панель проекта: автосейв (селекты сразу, списки debounce 500 мс), «Сохранить» убрана, «Сбросить» осталась.
 - **Документация.** ADR-135 §11–12 (runtime-каталог; пустой список; незаданный потолок), `docs/EXECUTION.md` §Ф4b-2b, `charts/synth/README.md`, `packages/provisioner/AGENTS.md`, `packages/ui/AGENTS.md`.
 - **Проверки.** core 627 файлов / 10 669 passed; backend 68/858; shared 47/1104; ui 381/4 025 (+1 todo); ui lint 0 errors (28 прежних warnings), build ок; provisioner 156; `adr:check` — 0 ошибок.
+
+## 2026-11-13 — Каталог профилей: merge, классы, MCP-объекты, disabled вместо remove
+
+- **Задача:** сохранение без изменений падало `execution.profiles.browser: у профиля должен быть задан image или url` (UI отправлял эффективный каталог, валидация требовала image/url у всех). Нужны классы профилей (exec/browser/both), MCP-серверы с командами, а config/Helm-профили — не удаляемые, только отключаемые. **Тип:** feature/fix (shared/core). **Исполнитель:** @fixer. **Коммит:** не делался на момент записи.
+- **Merge.** `profiles` runtime теперь **сливается** с config: `config.profiles + runtime.profiles (override целиком) − disabledProfiles`; `disabledProfiles` принимает только имена config-базы (runtime-имя/дефолт → 400); runtime-профили удаляются удалением из `profiles`. `profileOrigins` (`config`/`runtime`) — аддитивно в `GET /settings/execution` и `GET /execution/profiles`, на PUT игнорируется.
+- **Классы/MCP.** Профиль += `class: exec|browser|both` (legacy `browserProfiles` → класс browser); MCP-серверы — объекты `{name, command?, args?, env?}` (legacy-строки нормализуются). Каталоги роутера: exec = `exec|both`, browser = `browser|both` + `browserProfile`.
+- **Валидация.** Проверяются только runtime-overrides (`image` или `url`); default/browser — в эффективном каталоге, browser — класса `browser|both`.
+- **Тесты.** shared `execution-runtime`/`execution` — 69; core settings/execution/router/pool-provider/deps — 248; полный core — 10 675 (предсуществующие флаки proxy/zombie в изоляции зелёные).
+- **Документация.** ADR-135 §11 (merge, disabled, class, MCP, profileOrigins).

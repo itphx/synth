@@ -168,7 +168,7 @@ describe('PROP-135 Ф4b-1: статический провайдер', () => {
         network: 'restricted',
         resources: { limits: { cpu: '2', memory: '4Gi' } },
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
       bare: { url: ['http://bare:8080'] },
     });
@@ -181,7 +181,7 @@ describe('PROP-135 Ф4b-1: статический провайдер', () => {
         network: 'restricted',
         resources: { limits: { cpu: '2', memory: '4Gi' } },
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
       { name: 'bare' },
     ]);
@@ -471,7 +471,7 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
           failMode: 'fail',
           image: 'registry.example/synth-executor:devops',
           // Каталог хранит только имена серверов — применять их нечем.
-          mcpServers: ['playwright'],
+          mcpServers: [{ name: 'playwright' }],
         },
       },
       fetchImpl: async (input, init) => {
@@ -508,7 +508,7 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
           // исполнитель запустил его у себя).
           mcpServers: [
             { name: 'playwright', command: 'npx', args: ['-y', '@playwright/mcp@latest'] },
-          ] as unknown as string[],
+          ],
         },
       },
       fetchImpl: async (input, init) => {
@@ -645,7 +645,7 @@ describe('PROP-135 Ф4b-1: HTTP-провайдер', () => {
         network: 'restricted',
         resources: { limits: { cpu: '4', memory: '8Gi' } },
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
     ]);
     expect(calls[0]?.url).toBe('http://provisioner:8080/v1/profiles');
@@ -771,7 +771,7 @@ describe('PROP-135 Ф4b-1: фабрика провайдера', () => {
           image: 'synth-executor:0.13.9-full',
           network: 'restricted' as const,
           runtimeClass: 'gvisor',
-          mcpServers: ['playwright'],
+          mcpServers: [{ name: 'playwright' }],
         },
       },
     });
@@ -782,7 +782,7 @@ describe('PROP-135 Ф4b-1: фабрика провайдера', () => {
         image: 'synth-executor:0.13.9-full',
         network: 'restricted',
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
       // Синтетический профиль по умолчанию: адрес секции, метаданных нет.
       { name: 'default' },

@@ -44,10 +44,13 @@ import {
   EXECUTION_POOL_PROVIDERS,
   type ExecutionFailMode,
   type ExecutionFallback,
+  type ExecutionMcpServer,
   type ExecutionMode,
   type ExecutionPooling,
   type ExecutionPoolProviderKind,
+  type ExecutionProfileClass,
   type ExecutionProfileNetwork,
+  type ExecutionProfileOrigin,
   type ExecutionProfileResources,
 } from './types.js';
 
@@ -129,8 +132,21 @@ export interface ResolvedExecutionProfile {
    * (`GET /api/v2/execution/profiles` отдаёт только метаданные профиля).
    */
   env?: Record<string, string>;
-  /** **Имена** MCP-серверов профиля (без команд/env). */
-  mcpServers?: string[];
+  /**
+   * **Объявленный** класс профиля (ADR-135, аддендум §11): `exec` | `browser` |
+   * `both`. Не задан — класс выводится (legacy-список `browserProfiles` и
+   * профиль по умолчанию `browserProfile` → `browser`, иначе `exec`); см.
+   * `effectiveProfileClass`.
+   */
+  class?: ExecutionProfileClass;
+  /**
+   * MCP-серверы профиля (имя + команда, если известна).
+   *
+   * Config-уровень хранит только **имена** (`{ name }`); runtime-каталог —
+   * полное описание (команда нужна provisioner'у, чтобы запустить сервер в
+   * поде).
+   */
+  mcpServers?: ExecutionMcpServer[];
 }
 
 /** Эффективные параметры удалённого исполнителя. */
@@ -160,6 +176,19 @@ export interface ResolvedExecutionRemoteConfig {
    * `resolveBrowserProfileNames`).
    */
   browserProfiles: string[];
+  /**
+   * Отключённые профили config-базы (ADR-135, аддендум §11): имена,
+   * скрытые из эффективного каталога. Пусто — отключённых нет.
+   */
+  disabledProfiles?: string[];
+  /**
+   * Происхождение профилей эффективного каталога (ADR-135, аддендум §11):
+   * `config` — профиль из `config.yaml` (его можно отключить), `runtime` —
+   * создан в runtime-каталоге (удаляется удалением из `profiles`).
+   *
+   * Аддитивное поле для UI; в схему runtime-секции **не** входит.
+   */
+  profileOrigins?: Record<string, ExecutionProfileOrigin>;
   /** Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`). */
   browserMcpServer: string;
   /** Эффективные параметры профилей (PROP-135 Ф4a) — по имени профиля. */
@@ -291,27 +320,70 @@ export function normalizeProfileNameList(names: readonly string[] | undefined): 
 }
 
 /**
+ * Эффективный класс профиля (ADR-135, аддендум §11).
+ *
+ * Порядок:
+ * 1. **объявленный** класс профиля (`class`) — важнее всего;
+ * 2. legacy-список `browserProfiles` — профиль из списка браузерный;
+ * 3. профиль по умолчанию `browserProfile` — браузерный (у браузера свой
+ *    образ/MCP-сервер);
+ * 4. иначе — `exec`.
+ *
+ * Класс определяет каталоги: exec — `exec|both`, браузерный — `browser|both`.
+ */
+export function effectiveProfileClass(
+  profile: { class?: ExecutionProfileClass } | undefined,
+  name: string,
+  browserProfiles: readonly string[] | undefined,
+  browserProfile: string | undefined,
+): ExecutionProfileClass {
+  const declared = profile?.class;
+  if (declared === 'exec' || declared === 'browser' || declared === 'both') return declared;
+  const trimmed = name.trim();
+  if (trimmed !== '' && (browserProfiles ?? []).includes(trimmed)) return 'browser';
+  if (trimmed !== '' && (browserProfile ?? '').trim() === trimmed) return 'browser';
+  return 'exec';
+}
+
+/**
  * Эффективный каталог **браузерных** профилей (PROP-135, браузерный контур).
  *
- * Явный `execution.remote.browserProfiles` важнее; пустой/не заданный список —
- * каталог равен `[browserProfile]` (обратная совместимость: до появления поля
- * браузерный пул знал ровно один профиль).
+ * Состав:
+ * - профили с классом `browser`/`both`;
+ * - legacy-список `execution.remote.browserProfiles` (подсказка класса);
+ * - профиль по умолчанию `browserProfile`.
+ *
+ * Пустой каталог — когда не задано ни одного имени (браузер не настроен).
  */
 export function resolveBrowserProfileNames(
-  remote: { browserProfiles?: readonly string[]; browserProfile?: string } | undefined,
+  remote: {
+    browserProfiles?: readonly string[];
+    browserProfile?: string;
+    profiles?: Record<string, { class?: ExecutionProfileClass }>;
+  } | undefined,
 ): string[] {
-  const explicit = normalizeProfileNameList(remote?.browserProfiles);
-  if (explicit.length > 0) return explicit;
-  const fallback = (remote?.browserProfile ?? '').trim();
-  return fallback !== '' ? [fallback] : [];
+  const list: string[] = [];
+  const push = (name: string | undefined): void => {
+    const trimmed = (name ?? '').trim();
+    if (trimmed === '' || list.includes(trimmed)) return;
+    list.push(trimmed);
+  };
+  for (const name of normalizeProfileNameList(remote?.browserProfiles)) push(name);
+  for (const [name, profile] of Object.entries(remote?.profiles ?? {})) {
+    const cls = effectiveProfileClass(profile, name, remote?.browserProfiles, remote?.browserProfile);
+    if (cls === 'browser' || cls === 'both') push(name);
+  }
+  push(remote?.browserProfile);
+  return list;
 }
 
 /**
  * Каталог профилей **исполнения** (exec) — без имён браузерного каталога.
  *
- * `execution.remote.profiles` + `defaultProfile`; имена, закреплённые за
- * браузером, исключаются (они адресуют браузерный пул, а не exec). Исключение
- * не применяется к `defaultProfile`: это единственная точка отката exec-контура.
+ * В каталог входят профили с классом `exec`/`both` плюс профиль по умолчанию
+ * (`defaultProfile` — единственная точка отката exec-контура, даже если он
+ * браузерный). Имена из legacy-списка `browserProfiles` и браузерный профиль
+ * по умолчанию в exec-каталог **не** входят.
  */
 export function resolveExecutionProfileNames(
   remote: Pick<ResolvedExecutionRemoteConfig, 'profiles' | 'defaultProfile'> & {
@@ -319,12 +391,20 @@ export function resolveExecutionProfileNames(
     browserProfile?: string;
   },
 ): string[] {
-  const browser = new Set(resolveBrowserProfileNames(remote));
   const names = Object.keys(remote.profiles ?? {});
   if (!names.includes(remote.defaultProfile) && remote.defaultProfile.trim() !== '') {
     names.push(remote.defaultProfile);
   }
-  return names.filter((name) => name === remote.defaultProfile || !browser.has(name));
+  return names.filter((name) => {
+    if (name === remote.defaultProfile) return true;
+    const cls = effectiveProfileClass(
+      remote.profiles?.[name],
+      name,
+      remote.browserProfiles,
+      remote.browserProfile,
+    );
+    return cls !== 'browser';
+  });
 }
 
 /**
@@ -474,6 +554,11 @@ export function resolveExecutionConfig(
       browserProfiles,
       browserMcpServer,
       profiles,
+      // ADR-135 (аддендум §11): происхождение профилей config-уровня — все
+      // они из `config.yaml` (их можно отключить через `disabledProfiles`).
+      profileOrigins: Object.fromEntries(
+        Object.keys(profiles).map((name) => [name, 'config' as ExecutionProfileOrigin]),
+      ),
       fallback,
       provider,
       provisioner,
@@ -637,6 +722,7 @@ function resolveExecutionProfiles(
       network?: ExecutionProfileNetwork;
       resources?: ExecutionProfileResources;
       runtimeClass?: string;
+      class?: ExecutionProfileClass;
       mcpServers?: string[];
     }
   > | undefined,
@@ -666,7 +752,15 @@ function resolveExecutionProfiles(
     if (resources !== undefined) resolved.resources = resources;
     const runtimeClass = profile.runtimeClass?.trim();
     if (runtimeClass !== undefined && runtimeClass !== '') resolved.runtimeClass = runtimeClass;
-    const mcpServers = (profile.mcpServers ?? []).map((s) => s.trim()).filter((s) => s.length > 0);
+    // Объявленный класс профиля (ADR-135, аддендум §11): эффективный класс
+    // выводится из него, legacy-списка `browserProfiles` и `browserProfile`.
+    if (profile.class !== undefined) resolved.class = profile.class;
+    // Config-уровень хранит только **имена** MCP-серверов (команда — в
+    // runtime-каталоге): нормализуем в `{ name }`.
+    const mcpServers = (profile.mcpServers ?? [])
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+      .map((name) => ({ name }));
     if (mcpServers.length > 0) resolved.mcpServers = mcpServers;
     out[name] = resolved;
   }

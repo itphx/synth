@@ -89,14 +89,20 @@ export interface ExecutionProfilesDto {
   /** PROP-135 (браузерный контур): браузерный профиль по умолчанию. */
   browserDefaultProfile: string;
   /**
-   * Метаданные профилей (аддитивно): образ/сеть/ресурсы/runtimeClass, имена
-   * MCP-серверов и описание. Без env и секретов (инвариант 13).
+   * Метаданные профилей (аддитивно): образ/сеть/ресурсы/runtimeClass, класс
+   * профиля, MCP-серверы (имя/команда/аргументы) и описание. Без env и
+   * секретов (инвариант 13).
    *
    * `http` — из `GET /v1/profiles` provisioner'а; `static` — только имена
    * каталога конфигурации (образа/сети у статического адреса нет); `inline` —
    * пусто. Provisioner недоступен — `[]` (список имён уже есть в `profiles`).
    */
   details: ExecutionProfileInfo[];
+  /**
+   * Происхождение профилей (аддитивно, ADR-135 §11): `config` — профиль из
+   * `config.yaml` (его можно отключить), `runtime` — создан в runtime-каталоге.
+   */
+  profileOrigins?: Record<string, 'config' | 'runtime'>;
 }
 
 /** DTO `GET /api/v2/execution/pools`. */
@@ -268,6 +274,10 @@ export function createExecutionRoutes(
       browserProfiles: browserProfileNames(),
       browserDefaultProfile: browserDefaultProfile(),
       details: await profileDetails(),
+      // ADR-135 §11: происхождение профилей (config/runtime) — для UI.
+      ...(deps.executionConfig?.remote.profileOrigins
+        ? { profileOrigins: { ...deps.executionConfig.remote.profileOrigins } }
+        : {}),
     };
     return c.json(dto);
   });

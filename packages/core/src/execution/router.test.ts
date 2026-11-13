@@ -78,6 +78,7 @@ function makeConfig(overrides: {
         limits?: { cpu?: string; memory?: string };
       };
       runtimeClass?: string;
+      class?: 'exec' | 'browser' | 'both';
       mcpServers?: string[];
     }
   >;
@@ -115,6 +116,7 @@ function makeConfig(overrides: {
                 ...(profile.runtimeClass !== undefined
                   ? { runtimeClass: profile.runtimeClass }
                   : {}),
+                ...(profile.class !== undefined ? { class: profile.class } : {}),
                 ...(profile.mcpServers !== undefined ? { mcpServers: profile.mcpServers } : {}),
               },
             ]),
@@ -181,7 +183,7 @@ describe('PROP-135 Ф4a: роутер портов исполнения', () => 
         network: 'restricted',
         resources: { limits: { cpu: '2', memory: '4Gi' } },
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
     ];
     const profiles = {
@@ -826,6 +828,60 @@ describe('PROP-135 слайз 5b-1: браузерный пул — project scop
     expect(router.profiles?.()).toEqual(['devops', 'default']);
     expect(router.browserProfiles?.()).toEqual(['browser', 'browser-full']);
     expect(router.browserDefaultProfile?.()).toBe('browser');
+  });
+
+  it('класс профиля определяет каталоги (ADR-135 §11): exec|both — exec, browser|both — браузер', async () => {
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        defaultProfile: 'default',
+        browserProfile: 'browser',
+        profiles: {
+          execOne: { url: ['http://exec:8080'] },
+          browserOne: { url: ['http://browser:8080'], class: 'browser' },
+          bothOne: { url: ['http://both:8080'], class: 'both' },
+        },
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: keyCollector().provider,
+    });
+
+    // Exec-каталог: класс exec/both (+ профиль по умолчанию).
+    expect(router.profiles?.()).toEqual(['execOne', 'bothOne', 'default']);
+    // Браузерный каталог: класс browser/both + браузерный профиль по умолчанию.
+    expect(router.browserProfiles?.()).toEqual(['browserOne', 'bothOne', 'browser']);
+  });
+
+  it('браузерный portFor адресует профиль класса browser (ADR-135 §11)', async () => {
+    const pools = keyCollector();
+    const router = await createExecutionRouter({
+      config: makeConfig({
+        provider: 'http',
+        pooling: 'project',
+        defaultProfile: 'default',
+        browserProfile: 'browser',
+        profiles: {
+          browserOne: { url: ['http://browser:8080'], class: 'browser' },
+          execOne: { url: ['http://exec:8080'] },
+        },
+        provisioner: { url: 'http://provisioner:8080' },
+      }),
+      poolProvider: pools.provider,
+    });
+
+    const browser = router.portFor({
+      projectId: 'prj_a',
+      profile: 'browserOne',
+      class: 'browser',
+    });
+    await browser
+      .execute({ command: { kind: 'shell', command: 'echo hi' } })
+      .catch(() => undefined);
+
+    expect(pools.keys.map((key) => poolKeyString(key))).toEqual([
+      'project:prj_a:browser:browserOne',
+    ]);
   });
 
   it('браузер без projectId → идентификатором служит sessionId', async () => {

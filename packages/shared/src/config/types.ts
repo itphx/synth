@@ -38,6 +38,7 @@ import {
   EXECUTION_POOLINGS,
   EXECUTION_POOL_PROVIDERS,
   EXECUTION_PROFILE_NETWORKS,
+  EXECUTION_PROFILE_CLASSES,
 } from '../types/execution.js';
 // PROP-124: режимы инстанса для SSH-ключей (`ssh.mode`) — канонический список
 // в типах (browser-safe), чтобы UI и ядро читали один источник.
@@ -182,6 +183,7 @@ export {
   EXECUTION_FALLBACKS,
   EXECUTION_POOL_PROVIDERS,
   EXECUTION_PROFILE_NETWORKS,
+  EXECUTION_PROFILE_CLASSES,
   DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   DEFAULT_EXECUTION_BROWSER_PROFILE,
@@ -196,6 +198,9 @@ export type {
   ExecutionProfileNetwork,
   ExecutionProfileResourceList,
   ExecutionProfileResources,
+  ExecutionProfileClass,
+  ExecutionProfileOrigin,
+  ExecutionMcpServer,
 } from '../types/execution.js';
 
 /**
@@ -278,6 +283,12 @@ export const executionRemoteConfigSchema = z.object({
           })
           .optional(),
         runtimeClass: z.string().optional(),
+        /**
+         * Класс профиля (ADR-135, аддендум §11): `exec` (дефолт) | `browser` |
+         * `both`. Профиль из legacy-списка `browserProfiles` получает
+         * эффективный класс `browser`, если класс не задан явно.
+         */
+        class: z.enum(EXECUTION_PROFILE_CLASSES).optional(),
         /** **Только имена** MCP-серверов профиля (без команд/env). */
         mcpServers: z.array(z.string()).optional(),
       }),

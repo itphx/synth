@@ -15,12 +15,18 @@
  * config-уровня, но под env**: поле, заданное переменной окружения, runtime
  * не перекрывает.
  *
- * ## Каталог профилей
+ * ## Каталог профилей — merge, а не замена
  *
- * `profiles` в runtime-секции — **полная замена** каталога config.yaml (как
- * `profiles`/`rules` прокси, ADR-099): администратор может и добавить профиль,
- * и удалить профиль из конфига (не задав его в runtime-каталоге). Пока
- * runtime-каталог не задан, действует каталог config.yaml.
+ * Эффективный каталог = **config-профили + runtime-профили − отключённые**
+ * (аддендум §11):
+ *
+ * - runtime-запись **переопределяет** одноимённую config-запись целиком
+ *   (не дополняет её);
+ * - config-записи, которых нет в runtime, **сохраняются** — поэтому
+ *   администратор может отредактировать один профиль, не переписывая каталог;
+ * - профили из `config.yaml` **не удаляются** — их можно **отключить**
+ *   (`disabledProfiles`); профиль, созданный в runtime, удаляется удалением
+ *   из `profiles`.
  *
  * ## Когда применяется
  *
@@ -32,6 +38,7 @@ import { executionRuntimeSettingsSchema } from '../types/execution.js';
 import type {
   ExecutionRuntimeProfile,
   ExecutionRuntimeSettings,
+  ExecutionProfileOrigin,
   ExecutionProfileResources,
 } from '../types/execution.js';
 import { EXECUTION_ENV } from './execution.js';
@@ -39,6 +46,7 @@ import type {
   ResolvedExecutionConfig,
   ResolvedExecutionProfile,
 } from './execution.js';
+import { effectiveProfileClass } from './execution.js';
 
 /**
  * Разобрать сохранённую runtime-секцию исполнения.
@@ -97,11 +105,56 @@ function materializeRuntimeProfile(
   if (profile.env !== undefined && Object.keys(profile.env).length > 0) {
     resolved.env = { ...profile.env };
   }
-  const mcpServers = (profile.mcpServers ?? [])
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  // Объявленный класс профиля (ADR-135, аддендум §11).
+  if (profile.class !== undefined) resolved.class = profile.class;
+  // MCP-серверы runtime-каталога — полное описание (имя + команда): команда
+  // нужна provisioner'у, чтобы запустить сервер в поде. Строковая форма
+  // (legacy-запись) нормализуется в `{ name }`.
+  const mcpServers = normalizeMcpServers(profile.mcpServers);
   if (mcpServers.length > 0) resolved.mcpServers = mcpServers;
   return resolved;
+}
+
+/**
+ * Нормализация MCP-серверов профиля: строки (legacy) → `{ name }`, объекты —
+ * как есть (имя/команда/аргументы/env). Пустые имена отбрасываются.
+ */
+function normalizeMcpServers(raw: unknown): NonNullable<ResolvedExecutionProfile['mcpServers']> {
+  if (!Array.isArray(raw)) return [];
+  const out: NonNullable<ResolvedExecutionProfile['mcpServers']> = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      const name = entry.trim();
+      if (name !== '') out.push({ name });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    const server = entry as {
+      name?: unknown;
+      command?: unknown;
+      args?: unknown;
+      env?: unknown;
+    };
+    const name = typeof server.name === 'string' ? server.name.trim() : '';
+    if (name === '') continue;
+    const command = typeof server.command === 'string' ? server.command.trim() : '';
+    const args = Array.isArray(server.args)
+      ? server.args.filter((item): item is string => typeof item === 'string')
+      : [];
+    const env: Record<string, string> = {};
+    if (server.env !== null && typeof server.env === 'object') {
+      for (const [key, value] of Object.entries(server.env as Record<string, unknown>)) {
+        if (typeof value === 'string') env[key] = value;
+      }
+    }
+    out.push({
+      name,
+      ...(command !== '' ? { command } : {}),
+      ...(args.length > 0 ? { args } : {}),
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    });
+  }
+  return out;
 }
 
 /** Ресурсы профиля: копируются только заданные непустые строки. */
@@ -135,6 +188,89 @@ function normalizeResourceList(
 }
 
 /**
+ * Эффективный каталог профилей: **config + runtime (override) − отключённые**.
+ *
+ * Возвращает профили, их происхождение (`config`/`runtime`) и дефолты —
+ * единый источник истины для роутера, API и валидации.
+ */
+export interface EffectiveExecutionCatalog {
+  /** Профили эффективного каталога (общие параметры секции уже подставлены). */
+  profiles: Record<string, ResolvedExecutionProfile>;
+  /** Происхождение профиля: `config` — из `config.yaml`, `runtime` — из UI. */
+  origins: Record<string, ExecutionProfileOrigin>;
+  /** Профиль по умолчанию (env > runtime > config). */
+  defaultProfile: string;
+  /** Браузерный профиль по умолчанию (env > runtime > config). */
+  browserProfile: string;
+  /** Legacy-список браузерных имён (env > runtime > config). */
+  browserProfiles: string[];
+  /** Отключённые профили config-базы (скрыты из каталога). */
+  disabledProfiles: string[];
+}
+
+/**
+ * Собрать эффективный каталог профилей (ADR-135, аддендум §11).
+ *
+ * Порядок: env > runtime > config.yaml (ADR-023). Runtime-запись профиля
+ * **переопределяет** одноимённую config-запись целиком; config-записи без
+ * runtime-пары сохраняются; `disabledProfiles` (только имена из config-базы)
+ * убирают профиль из каталога.
+ */
+export function effectiveExecutionCatalog(
+  base: ResolvedExecutionConfig,
+  runtime: ExecutionRuntimeSettings | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): EffectiveExecutionCatalog {
+  const remote = base.remote;
+  const defaultProfile = envSet(env, EXECUTION_ENV.defaultProfile)
+    ? remote.defaultProfile
+    : (runtime?.defaultProfile ?? remote.defaultProfile);
+  const browserProfile = envSet(env, EXECUTION_ENV.browserProfile)
+    ? remote.browserProfile
+    : (runtime?.browserProfile ?? remote.browserProfile);
+  const browserProfiles = envSet(env, EXECUTION_ENV.browserProfiles)
+    ? remote.browserProfiles
+    : (runtime?.browserProfiles ?? remote.browserProfiles);
+  const common = {
+    url: remote.url,
+    timeoutMs: remote.timeoutMs,
+    concurrency: remote.concurrency,
+    failMode: remote.failMode,
+  };
+
+  const profiles: Record<string, ResolvedExecutionProfile> = {};
+  const origins: Record<string, ExecutionProfileOrigin> = {};
+  for (const [name, profile] of Object.entries(remote.profiles ?? {})) {
+    profiles[name] = { ...profile };
+    origins[name] = 'config';
+  }
+  for (const [name, profile] of Object.entries(runtime?.profiles ?? {})) {
+    profiles[name] = materializeRuntimeProfile(profile, common);
+    if (origins[name] === undefined) origins[name] = 'runtime';
+  }
+
+  // Отключение — только профили **config-базы** (профиль, созданный в
+  // runtime, удаляется удалением из `profiles`).
+  const disabledProfiles: string[] = [];
+  for (const name of runtime?.disabledProfiles ?? []) {
+    const trimmed = name.trim();
+    if (trimmed === '' || origins[trimmed] !== 'config') continue;
+    delete profiles[trimmed];
+    delete origins[trimmed];
+    disabledProfiles.push(trimmed);
+  }
+
+  return {
+    profiles,
+    origins,
+    defaultProfile,
+    browserProfile,
+    browserProfiles: [...browserProfiles],
+    disabledProfiles,
+  };
+}
+
+/**
  * Применить runtime-каталог к эффективной секции `execution`.
  *
  * Вход — **уже разрешённая** секция (config.yaml + env, ADR-023); выход —
@@ -144,7 +280,9 @@ function normalizeResourceList(
  * перекрывается (иначе оператор не смог бы зафиксировать значение из
  * `SYNTH_EXECUTION_*`).
  *
- * Каталог `profiles` runtime-секции **заменяет** каталог config.yaml целиком.
+ * Каталог `profiles` runtime-секции **сливается** с каталогом config.yaml
+ * (runtime-запись переопределяет одноимённую config-запись целиком), а
+ * `disabledProfiles` убирают профили config-базы из эффективного каталога.
  */
 export function applyExecutionRuntimeSettings(
   resolved: ResolvedExecutionConfig,
@@ -154,15 +292,7 @@ export function applyExecutionRuntimeSettings(
   if (!runtime) return resolved;
   const remote = resolved.remote;
 
-  const defaultProfile = envSet(env, EXECUTION_ENV.defaultProfile)
-    ? remote.defaultProfile
-    : (runtime.defaultProfile ?? remote.defaultProfile);
-  const browserProfile = envSet(env, EXECUTION_ENV.browserProfile)
-    ? remote.browserProfile
-    : (runtime.browserProfile ?? remote.browserProfile);
-  const browserProfiles = envSet(env, EXECUTION_ENV.browserProfiles)
-    ? remote.browserProfiles
-    : (runtime.browserProfiles ?? remote.browserProfiles);
+  const catalog = effectiveExecutionCatalog(resolved, runtime, env);
   const pooling = envSet(env, EXECUTION_ENV.pooling)
     ? remote.pooling
     : (runtime.pooling ?? remote.pooling);
@@ -170,27 +300,20 @@ export function applyExecutionRuntimeSettings(
     ? remote.fallback
     : (runtime.fallback ?? remote.fallback);
 
-  const common = {
-    url: remote.url,
-    timeoutMs: remote.timeoutMs,
-    concurrency: remote.concurrency,
-    failMode: remote.failMode,
-  };
-  const profiles: Record<string, ResolvedExecutionProfile> = {};
-  for (const [name, profile] of Object.entries(runtime.profiles ?? {})) {
-    profiles[name] = materializeRuntimeProfile(profile, common);
-  }
-
   return {
     ...resolved,
     remote: {
       ...remote,
-      defaultProfile,
-      browserProfile,
-      browserProfiles: [...browserProfiles],
+      defaultProfile: catalog.defaultProfile,
+      browserProfile: catalog.browserProfile,
+      browserProfiles: [...catalog.browserProfiles],
       pooling,
       fallback,
-      profiles,
+      profiles: catalog.profiles,
+      ...(catalog.disabledProfiles.length > 0
+        ? { disabledProfiles: [...catalog.disabledProfiles] }
+        : {}),
+      profileOrigins: { ...catalog.origins },
     },
   };
 }
@@ -201,7 +324,8 @@ export function applyExecutionRuntimeSettings(
  * Нужен админ-API: «что сейчас работает» (`running`) и «что сохранено»
  * (`saved`) сравниваются одним отпечатком. Профили приводятся к runtime-форме
  * (только поля runtime-модели; `url` — фактический адрес профиля, включая
- * унаследованный).
+ * унаследованный; `class` — **эффективный** класс профиля; `mcpServers` —
+ * имя + команда, если она известна).
  */
 export function executionRuntimeSettingsFromResolved(
   resolved: ResolvedExecutionConfig | undefined | null,
@@ -227,25 +351,52 @@ export function executionRuntimeSettingsFromResolved(
     if (profile.env !== undefined && Object.keys(profile.env).length > 0) {
       entry.env = { ...profile.env };
     }
+    // Эффективный класс профиля (ADR-135, аддендум §11): объявленный класс,
+    // иначе — выведенный из legacy-списка браузерных имён/`browserProfile`.
+    entry.class = effectiveProfileClass(
+      profile,
+      name,
+      remote.browserProfiles,
+      remote.browserProfile,
+    );
     if (profile.mcpServers !== undefined && profile.mcpServers.length > 0) {
-      entry.mcpServers = [...profile.mcpServers];
+      entry.mcpServers = profile.mcpServers.map((server) => ({
+        name: server.name,
+        ...(server.command !== undefined && server.command !== ''
+          ? { command: server.command }
+          : {}),
+        ...(server.args !== undefined && server.args.length > 0
+          ? { args: [...server.args] }
+          : {}),
+        ...(server.env !== undefined && Object.keys(server.env).length > 0
+          ? { env: { ...server.env } }
+          : {}),
+      }));
     }
     profiles[name] = entry;
   }
-  return {
+  const snapshot: ExecutionRuntimeSettings = {
     defaultProfile: remote.defaultProfile,
     browserProfile: remote.browserProfile,
+    // Legacy-подсказка класса (не эффективный каталог): эффективный класс
+    // каждого профиля уже записан в `profiles[name].class`.
     browserProfiles: [...remote.browserProfiles],
     pooling: remote.pooling,
     fallback: remote.fallback,
     profiles,
   };
+  if (remote.disabledProfiles !== undefined && remote.disabledProfiles.length > 0) {
+    snapshot.disabledProfiles = [...remote.disabledProfiles];
+  }
+  return snapshot;
 }
 
 /**
  * Слить config-уровень и runtime-секцию (runtime > config).
  *
- * `profiles` runtime-секции **заменяет** каталог целиком (см. ADR-135).
+ * `profiles` runtime-секции **сливается** с каталогом base: одноимённая
+ * запись runtime переопределяет base целиком, остальные base-записи
+ * сохраняются (ADR-135, аддендум §11).
  */
 export function mergeExecutionRuntimeSettings(
   base: ExecutionRuntimeSettings | undefined | null,
@@ -255,24 +406,31 @@ export function mergeExecutionRuntimeSettings(
     ...(base ?? {}),
     ...(runtime ?? {}),
   };
-  if (runtime?.profiles !== undefined) {
-    merged.profiles = { ...runtime.profiles };
-  }
+  merged.profiles = { ...(base?.profiles ?? {}), ...(runtime?.profiles ?? {}) };
+  const disabled = [
+    ...(base?.disabledProfiles ?? []),
+    ...(runtime?.disabledProfiles ?? []),
+  ].filter((name, index, list) => list.indexOf(name) === index);
+  if (disabled.length > 0) merged.disabledProfiles = disabled;
+  else delete merged.disabledProfiles;
   return merged;
 }
 
 /**
  * Имена профилей **эффективного** каталога (после применения runtime-секции).
  *
- * Runtime-каталог заменяет config-каталог целиком; если runtime-каталога нет —
- * действует каталог config-уровня.
+ * Каталог = config-профили + runtime-профили (override) − отключённые.
  */
 export function effectiveExecutionProfileNames(
   base: ExecutionRuntimeSettings | undefined | null,
   runtime: ExecutionRuntimeSettings | undefined | null,
 ): string[] {
-  const catalogue = runtime?.profiles ?? base?.profiles ?? {};
-  return Object.keys(catalogue);
+  const merged = { ...(base?.profiles ?? {}), ...(runtime?.profiles ?? {}) };
+  const disabled = new Set([
+    ...(base?.disabledProfiles ?? []),
+    ...(runtime?.disabledProfiles ?? []),
+  ]);
+  return Object.keys(merged).filter((name) => !disabled.has(name));
 }
 
 /**
@@ -280,7 +438,8 @@ export function effectiveExecutionProfileNames(
  * (`restartRequired`).
  *
  * Нормализация: имена профилей — по алфавиту, ключи профиля — по алфавиту,
- * списки `url`/`mcpServers` — по алфавиту. Пустая секция и `null` — один
+ * списки (`url`, `mcpServers`, `disabledProfiles`) — по алфавиту (порядок
+ * элементов и ключей не влияет на отпечаток). Пустая секция и `null` — один
  * отпечаток («ничего не задано»).
  */
 export function executionRuntimeFingerprint(
@@ -295,18 +454,7 @@ export function executionRuntimeFingerprint(
       for (const key of Object.keys(profile ?? {}).sort()) {
         const value = (profile as Record<string, unknown>)[key];
         if (value === undefined) continue;
-        if (Array.isArray(value)) {
-          entry[key] = [...value].map((item) => String(item)).sort();
-        } else if (value !== null && typeof value === 'object') {
-          entry[key] = Object.keys(value as Record<string, unknown>)
-            .sort()
-            .reduce<Record<string, unknown>>((acc, k) => {
-              acc[k] = (value as Record<string, unknown>)[k];
-              return acc;
-            }, {});
-        } else {
-          entry[key] = value;
-        }
+        entry[key] = normalizeFingerprintValue(value);
       }
       return { name, profile: entry };
     });
@@ -314,8 +462,31 @@ export function executionRuntimeFingerprint(
     defaultProfile: settings.defaultProfile ?? null,
     browserProfile: settings.browserProfile ?? null,
     browserProfiles: [...(settings.browserProfiles ?? [])].sort(),
+    disabledProfiles: [...(settings.disabledProfiles ?? [])].sort(),
     pooling: settings.pooling ?? null,
     fallback: settings.fallback ?? null,
     profiles,
   });
+}
+
+/**
+ * Нормализация значения для отпечатка: объекты — по алфавиту ключей, списки —
+ * по алфавиту (строковое представление). Порядок не влияет на сравнение
+ * «сохранено» vs «работает».
+ */
+function normalizeFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeFingerprintValue(item))
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, key) => {
+        acc[key] = normalizeFingerprintValue((value as Record<string, unknown>)[key]);
+        return acc;
+      }, {});
+  }
+  return value;
 }

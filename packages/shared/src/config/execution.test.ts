@@ -13,6 +13,7 @@ import {
   resolveExecutionConfig,
   resolveExecutionProfileNames,
   resolveExecutionMode,
+  type ResolvedExecutionProfile,
 } from './execution.js';
 import {
   DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
@@ -40,6 +41,19 @@ function withRemote(
   partial: Partial<SynthConfig['execution']['remote']>,
 ): SynthConfig {
   return withExecution({ remote: { ...cfg.execution.remote, ...partial } });
+}
+
+/** Профиль каталога для проверок имён (значения не важны). */
+function profileStub(
+  overrides: Partial<ResolvedExecutionProfile> = {},
+): ResolvedExecutionProfile {
+  return {
+    url: [],
+    timeoutMs: DEFAULT_EXECUTION_TIMEOUT_MS,
+    concurrency: 1,
+    failMode: 'fail',
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -313,7 +327,12 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
     expect(resolveBrowserProfileNames({ browserProfile: '' })).toEqual([]);
 
     const names = resolveExecutionProfileNames({
-      profiles: { default: {}, devops: {}, browser: {}, 'browser-full': {} },
+      profiles: {
+        default: profileStub(),
+        devops: profileStub(),
+        browser: profileStub(),
+        'browser-full': profileStub(),
+      },
       defaultProfile: 'default',
       browserProfiles: ['browser', 'browser-full'],
       browserProfile: 'browser',
@@ -332,6 +351,34 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
         browserProfile: 'browser',
       }),
     ).toEqual(['browser']);
+  });
+
+  it('класс профиля (ADR-135 §11): объявленный → по browserProfiles → browserProfile → exec', () => {
+    const remote = {
+      profiles: {
+        execOne: profileStub(),
+        browserOne: profileStub({ class: 'browser' as const }),
+        bothOne: profileStub({ class: 'both' as const }),
+        legacyBrowser: profileStub(),
+        defaultBrowser: profileStub(),
+      },
+      defaultProfile: 'execOne',
+      browserProfiles: ['legacyBrowser'],
+      browserProfile: 'defaultBrowser',
+    };
+
+    // Браузерный каталог: класс browser/both + legacy-список + browserProfile.
+    expect(resolveBrowserProfileNames(remote)).toEqual([
+      'legacyBrowser',
+      'browserOne',
+      'bothOne',
+      'defaultBrowser',
+    ]);
+    // Exec-каталог: класс exec/both + профиль по умолчанию.
+    expect(resolveExecutionProfileNames(remote)).toEqual([
+      'execOne',
+      'bothOne',
+    ]);
   });
 
   it('browserMcpServer: env важнее config.yaml; пустое значение → дефолт', () => {
@@ -470,7 +517,7 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
       network: 'restricted',
       resources: { requests: { cpu: '500m' }, limits: { memory: '2Gi' } },
       runtimeClass: 'gvisor',
-      mcpServers: ['playwright'],
+      mcpServers: [{ name: 'playwright' }],
     });
     // Пустые значения «не заданы»: метаданных в резолве нет вовсе.
     expect(resolved.remote.profiles.empty).toEqual({

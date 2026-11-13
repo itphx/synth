@@ -217,7 +217,7 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
         network: 'restricted',
         resources: { limits: { cpu: '2', memory: '4Gi' } },
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
     ];
     const app = appWith({
@@ -235,7 +235,7 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
         network: 'restricted',
         resources: { limits: { cpu: '2', memory: '4Gi' } },
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
     ]);
     const text = JSON.stringify(body);
@@ -291,7 +291,7 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
           network: 'restricted',
           resources: { limits: { cpu: '2', memory: '4Gi' } },
           runtimeClass: 'gvisor',
-          mcpServers: ['playwright'],
+          mcpServers: [{ name: 'playwright' }],
         },
         devops: {
           url: ['http://executor-devops:8080'],
@@ -317,7 +317,7 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
         network: 'restricted',
         resources: { limits: { cpu: '2', memory: '4Gi' } },
         runtimeClass: 'gvisor',
-        mcpServers: ['playwright'],
+        mcpServers: [{ name: 'playwright' }],
       },
       { name: 'devops' },
     ]);

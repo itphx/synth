@@ -314,6 +314,8 @@ export {
   normalizeProfileNameList,
   resolveBrowserProfileNames,
   resolveExecutionProfileNames,
+  // ADR-135 (аддендум §11): эффективный класс профиля (exec|browser|both).
+  effectiveProfileClass,
   isExecutionMode,
   isExecutionFailMode,
   // PROP-135 Ф4a: пулы и профили исполнения.
@@ -353,6 +355,7 @@ export {
   executionRuntimeSettingsFromResolved,
   mergeExecutionRuntimeSettings,
   effectiveExecutionProfileNames,
+  effectiveExecutionCatalog,
   executionRuntimeFingerprint,
 } from './config/index.js';
 // ADR-099: резолверы доверия TLS/CA (`security.tls`).

@@ -7,7 +7,7 @@ import type { ProtectedPathsRepository } from '../../storage/ports/protected-pat
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
 import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ProxyPasswordStatus, ProxyStatusProfile, ResolvedProxyConfig, ResolvedProxyProfile, ResolvedProxyRoute, SecurityTlsConfig, ExecutionRuntimeSettings, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, PROXY_PROFILE_NAME_RE, ProxyConfigError, mergeProxyConfig, proxyProfilePasswordEnv, proxyStatus, readTlsRuntimeSettings, redactProxyUrl, resolveProxyConfig, resolveProxyRoute, validateCaPem, validateClientPem, validateProxyConfig, executionRuntimeSettingsSchema } from '@itphx/synth-shared';
-import { applyExecutionRuntimeSettings, effectiveExecutionProfileNames, executionRuntimeFingerprint, executionRuntimeSettingsFromResolved, parseExecutionRuntimeSettings } from '@itphx/synth-shared/config';
+import { applyExecutionRuntimeSettings, effectiveExecutionCatalog, effectiveProfileClass, executionRuntimeFingerprint, executionRuntimeSettingsFromResolved, parseExecutionRuntimeSettings } from '@itphx/synth-shared/config';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
 import { checkEgressUrl } from '../../engine/net/egress-guard.js';
@@ -416,51 +416,25 @@ export interface SettingsRoutesOptions {
 /**
  * ADR-135: валидация runtime-секции исполнения (ссылочная целостность).
  *
- * Проверяется против **эффективного каталога** (runtime-каталог заменяет
- * каталог config.yaml целиком):
+ * Проверяется против **эффективного каталога** (config-каталог + runtime-merge
+ * − отключённые профили; ADR-135, аддендум §11):
  *
- * - `defaultProfile` — есть в каталоге;
- * - `browserProfiles` — каждый профиль есть в каталоге;
- * - `browserProfile` — в списке браузерных профилей (если список задан) либо
- *   в каталоге;
- * - у каждого профиля каталога задан `image` или `url` (иначе профилю нечего
- *   запускать).
+ * - каждый **runtime-override** (`value.profiles`) задаёт `image` или `url`
+ *   (иначе профилю нечего запускать); config-профили не проверяются — ими
+ *   управляет `config.yaml`;
+ * - `disabledProfiles` — только имена из **config-базы** (профиль, созданный в
+ *   runtime, удаляется удалением из `profiles`);
+ * - `defaultProfile`/`browserProfile` — в эффективном каталоге, а
+ *   `browserProfile` — ещё и с классом `browser|both`;
+ * - отключить нельзя профиль по умолчанию и браузерный профиль (сначала
+ *   назначьте другой).
  */
 function validateExecutionRuntimeSettings(
   value: ExecutionRuntimeSettings,
-  catalogue: string[],
+  base: ResolvedExecutionConfig | undefined,
+  env: NodeJS.ProcessEnv,
 ): { ok: true } | { ok: false; message: string } {
-  const names = new Set(catalogue);
-  if (value.defaultProfile !== undefined && !names.has(value.defaultProfile)) {
-    return {
-      ok: false,
-      message: `execution.defaultProfile: профиль "${value.defaultProfile}" отсутствует в каталоге профилей`,
-    };
-  }
-  const browserProfiles = value.browserProfiles ?? [];
-  for (const name of browserProfiles) {
-    if (!names.has(name)) {
-      return {
-        ok: false,
-        message: `execution.browserProfiles: профиль "${name}" отсутствует в каталоге профилей`,
-      };
-    }
-  }
-  if (value.browserProfile !== undefined) {
-    if (browserProfiles.length > 0) {
-      if (!browserProfiles.includes(value.browserProfile)) {
-        return {
-          ok: false,
-          message: `execution.browserProfile: профиль "${value.browserProfile}" не входит в execution.browserProfiles`,
-        };
-      }
-    } else if (!names.has(value.browserProfile)) {
-      return {
-        ok: false,
-        message: `execution.browserProfile: профиль "${value.browserProfile}" отсутствует в каталоге профилей`,
-      };
-    }
-  }
+  // Runtime-override: у каждой записи должен быть image или url.
   for (const [name, profile] of Object.entries(value.profiles ?? {})) {
     const hasImage = typeof profile.image === 'string' && profile.image.trim() !== '';
     const hasUrl = Array.isArray(profile.url) && profile.url.some((u) => u.trim() !== '');
@@ -468,6 +442,72 @@ function validateExecutionRuntimeSettings(
       return {
         ok: false,
         message: `execution.profiles.${name}: у профиля должен быть задан image или url`,
+      };
+    }
+  }
+
+  const catalog = base ? effectiveExecutionCatalog(base, value, env) : undefined;
+  const configNames = new Set(Object.keys(base?.remote.profiles ?? {}));
+  const effectiveDefault = catalog?.defaultProfile ?? base?.remote.defaultProfile ?? '';
+  const effectiveBrowser = catalog?.browserProfile ?? base?.remote.browserProfile ?? '';
+
+  for (const raw of value.disabledProfiles ?? []) {
+    const name = raw.trim();
+    if (name === '') continue;
+    if (!configNames.has(name)) {
+      const runtimeOnly = Object.prototype.hasOwnProperty.call(value.profiles ?? {}, name);
+      return {
+        ok: false,
+        message: runtimeOnly
+          ? `execution.disabledProfiles: профиль "${name}" создан в runtime-каталоге — ` +
+            'удалите его из execution.profiles'
+          : `execution.disabledProfiles: профиль "${name}" отсутствует в каталоге config`,
+      };
+    }
+    if (name === effectiveDefault) {
+      return {
+        ok: false,
+        message:
+          `execution.disabledProfiles: нельзя отключить профиль по умолчанию "${name}" — ` +
+          'сначала назначьте другой',
+      };
+    }
+    if (name === effectiveBrowser) {
+      return {
+        ok: false,
+        message:
+          `execution.disabledProfiles: нельзя отключить браузерный профиль "${name}" — ` +
+          'сначала назначьте другой',
+      };
+    }
+  }
+
+  const names = new Set(Object.keys(catalog?.profiles ?? {}));
+  if (value.defaultProfile !== undefined && !names.has(value.defaultProfile)) {
+    return {
+      ok: false,
+      message: `execution.defaultProfile: профиль "${value.defaultProfile}" отсутствует в каталоге профилей`,
+    };
+  }
+  if (value.browserProfile !== undefined) {
+    if (!names.has(value.browserProfile)) {
+      return {
+        ok: false,
+        message: `execution.browserProfile: профиль "${value.browserProfile}" отсутствует в каталоге профилей`,
+      };
+    }
+    const profileClass = effectiveProfileClass(
+      catalog?.profiles?.[value.browserProfile],
+      value.browserProfile,
+      catalog?.browserProfiles ?? base?.remote.browserProfiles,
+      effectiveBrowser,
+    );
+    if (profileClass !== 'browser' && profileClass !== 'both') {
+      return {
+        ok: false,
+        message:
+          `execution.browserProfile: профиль "${value.browserProfile}" должен иметь класс ` +
+          'browser или both',
       };
     }
   }
@@ -792,8 +832,21 @@ function proxyValidationError(err: unknown): { code: 'VALIDATION_ERROR'; message
  *
  * Принимается и обёртка `{execution: {…}}` (как у соседних разделов), и сама
  * секция. Неизвестные поля секции → 400 (валидация Zod, `:strict()`).
+ *
+ * `profileOrigins` — аддитивное поле ответа (происхождение профилей); в
+ * сохраняемую схему оно **не** входит, поэтому на PUT оно **игнорируется**
+ * (а не отвергается как неизвестное поле).
  */
 function executionSectionFromBody(body: unknown): unknown {
+  const section = unwrapExecutionSection(body);
+  if (!section || typeof section !== 'object' || Array.isArray(section)) return section;
+  const record = { ...(section as Record<string, unknown>) };
+  delete record.profileOrigins;
+  return record;
+}
+
+/** Секция `execution` из тела: обёртка `{execution: {…}}` или сама секция. */
+function unwrapExecutionSection(body: unknown): unknown {
   if (body && typeof body === 'object' && !Array.isArray(body)) {
     const record = body as Record<string, unknown>;
     if (Object.keys(record).length === 1 && record.execution !== undefined) {
@@ -816,6 +869,19 @@ function effectiveExecutionSettings(
   return executionRuntimeSettingsFromResolved(
     applyExecutionRuntimeSettings(base, runtime ?? undefined, env),
   );
+}
+
+/**
+ * ADR-135: происхождение профилей эффективного каталога
+ * (`config` — из `config.yaml`, `runtime` — создан в UI).
+ */
+function effectiveExecutionProfileOrigins(
+  base: ResolvedExecutionConfig | undefined,
+  runtime: ExecutionRuntimeSettings | null,
+  env: NodeJS.ProcessEnv,
+): Record<string, 'config' | 'runtime'> {
+  if (!base) return {};
+  return effectiveExecutionCatalog(base, runtime ?? undefined, env).origins;
 }
 
 export function createSettingsRoutes(
@@ -2174,6 +2240,9 @@ export function createSettingsRoutes(
       // Аддитивно: эффективная секция «после сохранения» и config-уровень.
       effective,
       defaults,
+      // Аддитивно: происхождение профилей (`config` — из config.yaml,
+      // `runtime` — создан в UI). В сохраняемую схему не входит.
+      profileOrigins: effectiveExecutionProfileOrigins(base, saved, executionEnv),
       isOverridden: saved !== null,
     });
   });
@@ -2193,8 +2262,7 @@ export function createSettingsRoutes(
     const next = parsed.data;
     const base = deps.fallbackExecution;
     const defaults = executionRuntimeSettingsFromResolved(base);
-    const catalogue = effectiveExecutionProfileNames(defaults, next);
-    const validation = validateExecutionRuntimeSettings(next, catalogue);
+    const validation = validateExecutionRuntimeSettings(next, base, executionEnv);
     if (!validation.ok) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: validation.message } }, 400);
     }
@@ -2210,6 +2278,7 @@ export function createSettingsRoutes(
         !== executionRuntimeFingerprint(runningSnapshot),
       effective,
       defaults,
+      profileOrigins: effectiveExecutionProfileOrigins(base, next, executionEnv),
       isOverridden: true,
     });
   });
@@ -2227,6 +2296,7 @@ export function createSettingsRoutes(
         !== executionRuntimeFingerprint(runningSnapshot),
       effective,
       defaults: executionRuntimeSettingsFromResolved(base),
+      profileOrigins: effectiveExecutionProfileOrigins(base, null, executionEnv),
       isOverridden: false,
     });
   });

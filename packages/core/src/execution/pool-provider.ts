@@ -30,6 +30,7 @@
  */
 
 import type {
+  ExecutionProfileClass,
   ExecutionProfileNetwork,
   ExecutionProfileResourceList,
   ExecutionProfileResources,
@@ -245,11 +246,11 @@ function toProfileInfo(entry: unknown): ExecutionProfileInfo | null {
       ? record.network
       : undefined;
   const resources = toProfileResources(record.resources);
-  const mcpServers = Array.isArray(record.mcpServers)
-    ? record.mcpServers
-        .map((item) => toOptionalString(item))
-        .filter((item): item is string => item !== undefined)
-    : [];
+  const profileClass =
+    record.class === 'exec' || record.class === 'browser' || record.class === 'both'
+      ? record.class
+      : undefined;
+  const mcpServers = toProfileMcpServers(record.mcpServers);
   return {
     name,
     ...(description !== undefined ? { description } : {}),
@@ -257,8 +258,41 @@ function toProfileInfo(entry: unknown): ExecutionProfileInfo | null {
     ...(network !== undefined ? { network } : {}),
     ...(resources !== undefined ? { resources } : {}),
     ...(runtimeClass !== undefined ? { runtimeClass } : {}),
+    ...(profileClass !== undefined ? { class: profileClass } : {}),
     ...(mcpServers.length > 0 ? { mcpServers } : {}),
   };
+}
+
+/**
+ * MCP-серверы из ответа provisioner'а: имя (+ команда/аргументы, если есть).
+ *
+ * Старая форма — только имена (`'playwright'`); новая — объекты. Env сервера
+ * наружу не отдаётся (инвариант 13).
+ */
+function toProfileMcpServers(raw: unknown): ExecutionProfileMcpServerInfo[] {
+  if (!Array.isArray(raw)) return [];
+  const servers: ExecutionProfileMcpServerInfo[] = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      const name = entry.trim();
+      if (name !== '') servers.push({ name });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    const record = entry as { name?: unknown; command?: unknown; args?: unknown };
+    const name = toOptionalString(record.name);
+    if (name === undefined) continue;
+    const command = toOptionalString(record.command);
+    const args = Array.isArray(record.args)
+      ? record.args.filter((item): item is string => typeof item === 'string')
+      : [];
+    servers.push({
+      name,
+      ...(command !== undefined ? { command } : {}),
+      ...(args.length > 0 ? { args } : {}),
+    });
+  }
+  return servers;
 }
 
 /** Адрес (и необязательный токен) пула исполнения. */
@@ -281,7 +315,8 @@ export type {
  * Метаданные профиля исполнения для admin-API/UI.
  *
  * **Без секретов**: env профиля, команды/аргументы/env MCP-серверов, адреса и
- * токены пулов не отдаются (инвариант 13). `mcpServers` — только имена.
+ * токены пулов не отдаются (инвариант 13). У MCP-серверов отдаются **имя,
+ * команда и аргументы** — env сервера наружу не уходит.
  * Незаданное поле — «неизвестно»: у `static` метаданные берутся из
  * `execution.remote.profiles`, у `http` — от provisioner'а.
  */
@@ -298,14 +333,26 @@ export interface ExecutionProfileInfo {
   resources?: ExecutionProfileResources;
   /** `runtimeClassName` пода. */
   runtimeClass?: string;
-  /** **Имена** MCP-серверов профиля. */
-  mcpServers?: string[];
+  /** Класс профиля (ADR-135, аддендум §11): `exec` | `browser` | `both`. */
+  class?: ExecutionProfileClass;
+  /** MCP-серверы профиля: имя + команда + аргументы (без env). */
+  mcpServers?: ExecutionProfileMcpServerInfo[];
+}
+
+/** MCP-сервер профиля в DTO метаданных (без env — инвариант 13). */
+export interface ExecutionProfileMcpServerInfo {
+  /** Имя MCP-сервера. */
+  name: string;
+  /** Команда запуска сервера (если известна). */
+  command?: string;
+  /** Аргументы команды. */
+  args?: string[];
 }
 
 /** Метаданные профиля (без имени и адресов) — то, что отдаёт admin-API. */
 export type ExecutionProfileMetadata = Pick<
   ExecutionProfileInfo,
-  'description' | 'image' | 'network' | 'resources' | 'runtimeClass' | 'mcpServers'
+  'description' | 'image' | 'network' | 'resources' | 'runtimeClass' | 'class' | 'mcpServers'
 >;
 
 /**
@@ -325,8 +372,13 @@ export function toExecutionProfileInfo(
   if (meta.runtimeClass !== undefined && meta.runtimeClass !== '') {
     info.runtimeClass = meta.runtimeClass;
   }
+  if (meta.class !== undefined) info.class = meta.class;
   if (meta.mcpServers !== undefined && meta.mcpServers.length > 0) {
-    info.mcpServers = [...meta.mcpServers];
+    info.mcpServers = meta.mcpServers.map((server) => ({
+      name: server.name,
+      ...(server.command !== undefined && server.command !== '' ? { command: server.command } : {}),
+      ...(server.args !== undefined && server.args.length > 0 ? { args: [...server.args] } : {}),
+    }));
   }
   return info;
 }
@@ -334,6 +386,8 @@ export function toExecutionProfileInfo(
 /**
  * Метаданные из эффективного профиля конфигурации (`execution.remote.profiles`).
  * Только заданные поля: пустой профиль даёт `undefined`.
+ *
+ * MCP-серверы отдаются **без env** (инвариант 13): имя, команда, аргументы.
  */
 export function executionProfileMetadata(
   profile: Partial<ExecutionProfileMetadata> | undefined,
@@ -349,8 +403,13 @@ export function executionProfileMetadata(
   if (profile.runtimeClass !== undefined && profile.runtimeClass !== '') {
     meta.runtimeClass = profile.runtimeClass;
   }
+  if (profile.class !== undefined) meta.class = profile.class;
   if (profile.mcpServers !== undefined && profile.mcpServers.length > 0) {
-    meta.mcpServers = [...profile.mcpServers];
+    meta.mcpServers = profile.mcpServers.map((server) => ({
+      name: server.name,
+      ...(server.command !== undefined && server.command !== '' ? { command: server.command } : {}),
+      ...(server.args !== undefined && server.args.length > 0 ? { args: [...server.args] } : {}),
+    }));
   }
   return Object.keys(meta).length > 0 ? meta : undefined;
 }
@@ -541,10 +600,10 @@ export interface ExecutionPoolProfileSpec {
 /**
  * MCP-серверы профиля → форма provisioner'а.
  *
- * Каталог инстанца (`execution.remote.profiles[].mcpServers`) хранит **имена**
- * серверов, а provisioner умеет применить только полное описание (команда
- * нужна, чтобы запустить сервер в поде). Поэтому записи без команды
- * отбрасываются: под получит дефолт образа, а не сломанный MCP-сервер.
+ * Каталог инстанца (`execution.remote.profiles[].mcpServers`) в runtime-секции
+ * хранит **полное описание** (команда нужна, чтобы запустить сервер в поде);
+ * config-уровень — только имена, и записи без команды отбрасываются: под
+ * получит дефолт образа, а не сломанный MCP-сервер.
  */
 function toProfileSpecMcpServers(raw: unknown): ExecutionPoolProfileMcpServer[] {
   if (!Array.isArray(raw)) return [];

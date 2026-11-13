@@ -109,13 +109,25 @@
     `GET/PUT/DELETE /api/v2/settings/execution` (ADR-023: приоритет **env/CLI > runtime > config.yaml**;
     env/CLI разрешаются внутри `resolveExecutionConfig`, runtime-override применяется поверх
     config-уровня, но **под env**).
-    - **Runtime-каталог заменяет каталог config.yaml целиком** (`profiles` — как `profiles`/`rules`
-      прокси, ADR-099): администратор может и добавить профиль, и удалить профиль из конфига (не задав
-      его в runtime-каталоге). Пока runtime-секция не задана, действует каталог config.yaml.
-    - **Валидация записи (400 `VALIDATION_ERROR`):** `defaultProfile` есть в эффективном каталоге;
-      `browserProfiles` ⊆ каталога; `browserProfile` ∈ `browserProfiles` (если список задан) либо в
-      каталоге; у каждого профиля каталога задан `image` или `url`; неизвестное поле секции — 400.
-      Секция **не** содержит секретов: `env` — переменные окружения пула, не пароли (инвариант 13).
+    - **Runtime-каталог — merge, а не замена.** Эффективный каталог =
+      `config.profiles + runtime.profiles (override целиком) − disabledProfiles`. Профили из
+      config/Helm **не удаляются** (их источник — Helm): администратор может их только **отключить**
+      (`disabledProfiles`), включить обратно или **дублировать** в runtime под новым именем.
+      Runtime-профили, созданные в UI, удаляются обычным удалением из `profiles`.
+    - **Класс профиля.** `class: exec | browser | both` (по умолчанию `exec`); legacy-список
+      `browserProfiles` задаёт эффективный класс `browser`, если поле не задано. Каталог исполнителя —
+      `exec|both`, браузерный — `browser|both` (+ `browserProfile`). `browserProfiles` в UI больше не
+      отдельный список, а производное от классов.
+    - **MCP-серверы профиля** — объекты `{name, command?, args?, env?}` (строки legacy нормализуются
+      в `{name}`); для браузерного профиля предзаполняется Playwright. В API metadata отдаются
+      `name/command/args` (env серверов наружу не публикуется).
+    - **Валидация записи (400 `VALIDATION_ERROR`):** проверяются **только runtime-overrides**
+      (`image` или `url` у каждой записи); `disabledProfiles` — только имена config-базы, не дефолты;
+      `defaultProfile`/`browserProfile` есть в эффективном каталоге, `browserProfile` имеет класс
+      `browser|both`; неизвестное поле секции — 400. Секция **не** содержит секретов: `env` —
+      переменные окружения пула, не пароли (инвариант 13).
+    - **Происхождение профиля** — аддитивное `profileOrigins: {name: config|runtime}` в ответах
+      `GET /settings/execution` и `GET /execution/profiles`; на PUT игнорируется.
     - **Применение — при старте процесса** (`execution` — параметр запуска, инвариант 24): порты пулов и
       роутер создаются на старте, поэтому API честно отдаёт `restartRequired` (сравнение отпечатков
       «сохранено» vs «работает»). Каталог, заданный только в runtime, действует после рестарта;

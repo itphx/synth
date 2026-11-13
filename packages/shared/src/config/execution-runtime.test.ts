@@ -63,6 +63,23 @@ describe('parseExecutionRuntimeSettings (ADR-135)', () => {
   it('неверный enum → невалидно', () => {
     expect(parseExecutionRuntimeSettings({ pooling: 'projekt' })).toBeUndefined();
     expect(parseExecutionRuntimeSettings({ fallback: 'nope' })).toBeUndefined();
+    expect(parseExecutionRuntimeSettings({ profiles: { p: { class: 'sandbox' } } })).toBeUndefined();
+  });
+
+  it('legacy-строки MCP-серверов нормализуются в объекты (ADR-135 §11)', () => {
+    const parsed = parseExecutionRuntimeSettings({
+      profiles: { p: { image: 'img:p', mcpServers: ['playwright-mcp'] } },
+    });
+    expect(parsed?.profiles?.p?.mcpServers).toEqual([{ name: 'playwright-mcp' }]);
+  });
+
+  it('класс профиля и отключённые профили принимаются', () => {
+    const parsed = parseExecutionRuntimeSettings({
+      disabledProfiles: ['legacy'],
+      profiles: { p: { image: 'img:p', class: 'browser' } },
+    });
+    expect(parsed?.disabledProfiles).toEqual(['legacy']);
+    expect(parsed?.profiles?.p?.class).toBe('browser');
   });
 });
 
@@ -90,13 +107,34 @@ describe('applyExecutionRuntimeSettings (ADR-135)', () => {
     expect(applied.remote.pooling).toBe('session');
   });
 
-  it('каталог профилей runtime заменяет каталог config целиком', () => {
+  it('каталог профилей runtime сливается с каталогом config (override по имени)', () => {
     const applied = applyExecutionRuntimeSettings(
       resolvedBase(),
       { profiles: { only: { url: ['http://only:8080'] } } },
       {},
     );
-    expect(Object.keys(applied.remote.profiles)).toEqual(['only']);
+    // Config-профили сохраняются, runtime-запись добавляется.
+    expect(Object.keys(applied.remote.profiles).sort()).toEqual(['base', 'legacy', 'only']);
+    // Одноимённая runtime-запись переопределяет config-запись целиком.
+    const applied2 = applyExecutionRuntimeSettings(
+      resolvedBase(),
+      { profiles: { base: { image: 'img:override' } } },
+      {},
+    );
+    expect(applied2.remote.profiles.base?.image).toBe('img:override');
+    expect(applied2.remote.profiles.base?.url).toEqual(['http://executor:8080']);
+    expect(Object.keys(applied2.remote.profiles).sort()).toEqual(['base', 'legacy']);
+  });
+
+  it('отключение config-профиля убирает его из каталога (disabledProfiles)', () => {
+    const applied = applyExecutionRuntimeSettings(
+      resolvedBase(),
+      { disabledProfiles: ['legacy'] },
+      {},
+    );
+    expect(Object.keys(applied.remote.profiles).sort()).toEqual(['base']);
+    expect(applied.remote.disabledProfiles).toEqual(['legacy']);
+    expect(applied.remote.profileOrigins?.legacy).toBeUndefined();
   });
 
   it('профиль без url наследует общий адрес секции', () => {
@@ -110,7 +148,7 @@ describe('applyExecutionRuntimeSettings (ADR-135)', () => {
     expect(applied.remote.profiles.p?.timeoutMs).toBe(resolvedBase().remote.timeoutMs);
   });
 
-  it('метаданные профиля материализуются (сеть/ресурсы/rootfs/env/mcp)', () => {
+  it('метаданные профиля материализуются (сеть/ресурсы/rootfs/env/mcp/класс)', () => {
     const applied = applyExecutionRuntimeSettings(
       resolvedBase(),
       {
@@ -123,7 +161,10 @@ describe('applyExecutionRuntimeSettings (ADR-135)', () => {
             runtimeClass: 'gvisor',
             readOnlyRootFilesystem: true,
             env: { FOO: 'bar' },
-            mcpServers: ['playwright-mcp'],
+            class: 'browser',
+            mcpServers: [
+              { name: 'playwright-mcp', command: 'npx', args: ['-y', 'playwright-mcp'] },
+            ],
           },
         },
       },
@@ -136,7 +177,19 @@ describe('applyExecutionRuntimeSettings (ADR-135)', () => {
     expect(profile?.runtimeClass).toBe('gvisor');
     expect(profile?.readOnlyRootFilesystem).toBe(true);
     expect(profile?.env).toEqual({ FOO: 'bar' });
-    expect(profile?.mcpServers).toEqual(['playwright-mcp']);
+    expect(profile?.class).toBe('browser');
+    expect(profile?.mcpServers).toEqual([
+      { name: 'playwright-mcp', command: 'npx', args: ['-y', 'playwright-mcp'] },
+    ]);
+  });
+
+  it('legacy-строки MCP-серверов нормализуются в объекты (обратная совместимость)', () => {
+    const applied = applyExecutionRuntimeSettings(
+      resolvedBase(),
+      { profiles: { p: { image: 'img:p', mcpServers: ['playwright-mcp' as never] } } },
+      {},
+    );
+    expect(applied.remote.profiles.p?.mcpServers).toEqual([{ name: 'playwright-mcp' }]);
   });
 
   it('без runtime-секции секция не меняется', () => {
@@ -158,9 +211,17 @@ describe('mergeExecutionRuntimeSettings (ADR-135)', () => {
     expect(merged.pooling).toBe('instance');
   });
 
-  it('каталог runtime заменяет каталог base целиком (удаление профиля)', () => {
+  it('каталог runtime сливается с каталогом base (одноимённая запись перекрывает)', () => {
     const merged = mergeExecutionRuntimeSettings(base, { profiles: { other: { image: 'i' } } });
-    expect(Object.keys(merged.profiles ?? {})).toEqual(['other']);
+    expect(Object.keys(merged.profiles ?? {}).sort()).toEqual(['base', 'other']);
+  });
+
+  it('отключённые профили объединяются с базовыми', () => {
+    const merged = mergeExecutionRuntimeSettings(
+      { ...base, disabledProfiles: ['x'] },
+      { disabledProfiles: ['y'] },
+    );
+    expect(merged.disabledProfiles).toEqual(['x', 'y']);
   });
 
   it('без runtime-секции остаётся base', () => {
@@ -171,12 +232,20 @@ describe('mergeExecutionRuntimeSettings (ADR-135)', () => {
 });
 
 describe('effectiveExecutionProfileNames (ADR-135)', () => {
-  it('каталог runtime заменяет каталог base', () => {
+  it('каталог runtime сливается с каталогом base', () => {
     const names = effectiveExecutionProfileNames(
       { profiles: { base: {}, legacy: {} } },
       { profiles: { only: {} } },
     );
-    expect(names).toEqual(['only']);
+    expect(names.sort()).toEqual(['base', 'legacy', 'only']);
+  });
+
+  it('отключённые профили не входят в эффективный каталог', () => {
+    const names = effectiveExecutionProfileNames(
+      { profiles: { base: {}, legacy: {} } },
+      { disabledProfiles: ['legacy'] },
+    );
+    expect(names).toEqual(['base']);
   });
 
   it('без runtime-каталога — имена base', () => {
@@ -190,6 +259,8 @@ describe('executionRuntimeSettingsFromResolved / fingerprint (ADR-135)', () => {
     expect(snapshot?.defaultProfile).toBe('base');
     expect(snapshot?.profiles?.base?.url).toEqual(['http://base:8080']);
     expect(snapshot?.profiles?.legacy?.image).toBe('img:legacy');
+    // Эффективный класс профиля — в снимке (exec по умолчанию).
+    expect(snapshot?.profiles?.base?.class).toBe('exec');
   });
 
   it('снимок без секции — null', () => {
@@ -198,12 +269,20 @@ describe('executionRuntimeSettingsFromResolved / fingerprint (ADR-135)', () => {
 
   it('отпечаток устойчив к порядку профилей и списков', () => {
     const a = executionRuntimeFingerprint({
-      profiles: { b: { mcpServers: ['z', 'a'] }, a: { image: 'i' } },
+      profiles: { b: { mcpServers: [{ name: 'z' }, { name: 'a' }] }, a: { image: 'i' } },
     });
     const b = executionRuntimeFingerprint({
-      profiles: { a: { image: 'i' }, b: { mcpServers: ['a', 'z'] } },
+      profiles: { a: { image: 'i' }, b: { mcpServers: [{ name: 'a' }, { name: 'z' }] } },
     });
     expect(a).toBe(b);
+  });
+
+  it('отпечаток учитывает отключённые профили и класс', () => {
+    const base = executionRuntimeFingerprint({ profiles: { a: { image: 'i' } } });
+    expect(executionRuntimeFingerprint({ profiles: { a: { image: 'i' } }, disabledProfiles: ['b'] }))
+      .not.toBe(base);
+    expect(executionRuntimeFingerprint({ profiles: { a: { image: 'i', class: 'browser' } } }))
+      .not.toBe(base);
   });
 
   it('разные каталоги — разные отпечатки; пусто и null — одинаковые', () => {

@@ -2065,7 +2065,13 @@ describe('Settings API Routes — каталог профилей исполне
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** Config-уровень секции `execution` (база runtime-каталога). */
+  /**
+   * Config-уровень секции `execution` (база runtime-каталога).
+   *
+   * Профили `browser`/`browser-full` — **metadata без image/url** (браузерные
+   * образы задаёт Helm, а не runtime-секция): именно они раньше ломали PUT
+   * эффективного каталога с 400.
+   */
   function baseExecution(): ResolvedExecutionConfig {
     return resolveExecutionConfig(
       {
@@ -2076,9 +2082,13 @@ describe('Settings API Routes — каталог профилей исполне
             ...defaultConfig.execution.remote,
             url: ['http://executor:8080'],
             defaultProfile: 'base',
+            browserProfile: 'browser',
+            browserProfiles: ['browser', 'browser-full'],
             profiles: {
               base: { url: ['http://base:8080'] },
               legacy: { url: ['http://legacy:8080'] },
+              browser: { url: [], description: 'браузер' },
+              'browser-full': { url: [], description: 'браузер (полный)' },
             },
           },
         },
@@ -2116,9 +2126,30 @@ describe('Settings API Routes — каталог профилей исполне
     const body: any = await res.json();
     expect(body.saved).toBeNull();
     expect(body.running.defaultProfile).toBe('base');
-    expect(Object.keys(body.running.profiles).sort()).toEqual(['base', 'legacy']);
+    expect(Object.keys(body.running.profiles).sort()).toEqual([
+      'base',
+      'browser',
+      'browser-full',
+      'legacy',
+    ]);
     expect(body.restartRequired).toBe(false);
     expect(body.isOverridden).toBe(false);
+    // Происхождение профилей: config-база (все — из config.yaml).
+    expect(body.profileOrigins).toEqual({
+      base: 'config',
+      legacy: 'config',
+      browser: 'config',
+      'browser-full': 'config',
+    });
+  });
+
+  it('GET: эффективный каталог несёт классы профилей (exec/browser)', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution');
+    const body: any = await res.json();
+    expect(body.effective.profiles.base.class).toBe('exec');
+    expect(body.effective.profiles.browser.class).toBe('browser');
+    expect(body.effective.profiles['browser-full'].class).toBe('browser');
   });
 
   it('PUT сохраняет runtime-каталог и требует рестарта (restartRequired true)', async () => {
@@ -2172,27 +2203,26 @@ describe('Settings API Routes — каталог профилей исполне
     expect(await settingsStore.getExecution()).toBeUndefined();
   });
 
-  it('PUT: browserProfile вне browserProfiles → 400', async () => {
+  it('PUT: browserProfile отсутствует в каталоге → 400', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/settings/execution', json('PUT', {
-      browserProfile: 'b2',
-      browserProfiles: ['b1'],
-      profiles: { b1: { image: 'img:b1' }, b2: { image: 'img:b2' } },
+      browserProfile: 'ghost',
+      profiles: { p1: { image: 'img:p1' } },
     }));
     expect(res.status).toBe(400);
     const parsed = await res.json() as { error: { message: string } };
     expect(parsed.error.message).toContain('browserProfile');
   });
 
-  it('PUT: browserProfiles ⊄ каталога → 400', async () => {
+  it('PUT: browserProfile с классом exec → 400', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/settings/execution', json('PUT', {
-      browserProfiles: ['ghost'],
-      profiles: { p1: { image: 'img:p1' } },
+      browserProfile: 'b1',
+      profiles: { b1: { image: 'img:b1', class: 'exec' } },
     }));
     expect(res.status).toBe(400);
     const parsed = await res.json() as { error: { message: string } };
-    expect(parsed.error.message).toContain('browserProfiles');
+    expect(parsed.error.message).toContain('browserProfile');
   });
 
   it('PUT: профиль без image и url → 400', async () => {
@@ -2205,15 +2235,100 @@ describe('Settings API Routes — каталог профилей исполне
     expect(parsed.error.message).toContain('image');
   });
 
-  it('PUT: runtime-каталог заменяет каталог config целиком (config-профиль удаляется)', async () => {
+  it('PUT: только один изменённый профиль (config-метаданные без image/url) → 200', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      profiles: { base: { url: ['http://base2:8080'] } },
+    }));
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.saved.profiles.base.url).toEqual(['http://base2:8080']);
+    // Config-профили сохранены (merge), metadata-профили — на месте.
+    expect(Object.keys(body.effective.profiles).sort()).toEqual([
+      'base',
+      'browser',
+      'browser-full',
+      'legacy',
+    ]);
+    expect(body.profileOrigins.base).toBe('config');
+  });
+
+  it('PUT: runtime-профиль помечается как runtime (происхождение)', async () => {
     const { app } = makeApp();
     await app.request('/api/v2/settings/execution', json('PUT', {
       profiles: { p1: { image: 'img:p1' } },
     }));
     const res = await app.request('/api/v2/settings/execution');
     const body: any = await res.json();
-    expect(Object.keys(body.effective.profiles)).toEqual(['p1']);
-    expect(body.defaults.profiles.legacy).toBeDefined();
+    expect(body.profileOrigins.p1).toBe('runtime');
+    expect(body.profileOrigins.legacy).toBe('config');
+  });
+
+  it('PUT: отключение config-профиля (disabledProfiles) и обратное включение', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      disabledProfiles: ['legacy'],
+    }));
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(Object.keys(body.effective.profiles)).not.toContain('legacy');
+    expect(body.effective.disabledProfiles).toEqual(['legacy']);
+    expect(body.profileOrigins.legacy).toBeUndefined();
+
+    // Обратное включение: имя убирается из disabledProfiles.
+    await app.request('/api/v2/settings/execution', json('PUT', { disabledProfiles: [] }));
+    const back = await app.request('/api/v2/settings/execution');
+    const backBody: any = await back.json();
+    expect(Object.keys(backBody.effective.profiles)).toContain('legacy');
+  });
+
+  it('PUT: disabledProfiles с несуществующим именем → 400', async () => {
+    const { app, settingsStore } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      disabledProfiles: ['ghost'],
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { message: string } };
+    expect(parsed.error.message).toContain('ghost');
+    expect(await settingsStore.getExecution()).toBeUndefined();
+  });
+
+  it('PUT: disabledProfiles с runtime-именем → 400 (его удаляют из profiles)', async () => {
+    const { app, settingsStore } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      profiles: { p1: { image: 'img:p1' } },
+      disabledProfiles: ['p1'],
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { message: string } };
+    expect(parsed.error.message).toContain('p1');
+    expect(await settingsStore.getExecution()).toBeUndefined();
+  });
+
+  it('PUT: отключение профиля по умолчанию / браузерного → 400', async () => {
+    const { app } = makeApp();
+    const def = await app.request('/api/v2/settings/execution', json('PUT', {
+      disabledProfiles: ['base'],
+    }));
+    expect(def.status).toBe(400);
+    const defBody = await def.json() as { error: { message: string } };
+    expect(defBody.error.message).toContain('base');
+
+    const browser = await app.request('/api/v2/settings/execution', json('PUT', {
+      disabledProfiles: ['browser'],
+    }));
+    expect(browser.status).toBe(400);
+    const browserBody = await browser.json() as { error: { message: string } };
+    expect(browserBody.error.message).toContain('browser');
+  });
+
+  it('PUT: profileOrigins в теле игнорируется (не в схеме секции)', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      profiles: { p1: { image: 'img:p1' } },
+      profileOrigins: { p1: 'runtime' },
+    }));
+    expect(res.status).toBe(200);
   });
 
   it('DELETE сбрасывает runtime-слой (возврат к config-уровню)', async () => {

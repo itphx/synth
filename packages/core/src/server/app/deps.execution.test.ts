@@ -1,7 +1,9 @@
 /**
  * ADR-135: runtime-каталог профилей исполнения применяется при сборке deps —
  * **runtime > config** (env/CLI выше — их разрешает `resolveExecutionConfig`,
- * ADR-023), каталог runtime **заменяет** каталог config.yaml целиком.
+ * ADR-023), каталог runtime **сливается** с каталогом config.yaml (одноимённая
+ * запись переопределяет config-запись целиком, остальные config-профили
+ * сохраняются; отключение — через `disabledProfiles`).
  *
  * Проверяем на уровне deps: `deps.executionConfig` — секция, с которой
  * работает процесс (порты пулов/роутер), `deps.fallbackExecutionConfig` —
@@ -64,7 +66,7 @@ function baseExecutionConfig() {
 }
 
 describe('createStandaloneDeps: runtime-каталог профилей исполнения (ADR-135)', () => {
-  it('runtime-каталог заменяет каталог config; config-уровень остаётся базой', async () => {
+  it('runtime-каталог сливается с каталогом config; config-уровень остаётся базой', async () => {
     const dataDir = await makeDir();
     const config: StandaloneConfig = {
       port: 0,
@@ -82,13 +84,42 @@ describe('createStandaloneDeps: runtime-каталог профилей испо
 
     const deps = await createStandaloneDeps(config, ACCESSORS, storage);
     try {
-      // Эффективная секция — runtime-каталог (config-профили заменены).
-      expect(Object.keys(deps.executionConfig?.remote.profiles ?? {})).toEqual(['runtime']);
+      // Эффективная секция — merge: config-профили сохранены, runtime добавлен.
+      expect(Object.keys(deps.executionConfig?.remote.profiles ?? {}).sort())
+        .toEqual(['base', 'legacy', 'runtime']);
       expect(deps.executionConfig?.remote.defaultProfile).toBe('runtime');
       expect(deps.executionConfig?.remote.profiles.runtime?.image).toBe('img:runtime');
+      // Происхождение профилей: config-база против runtime-слоя.
+      expect(deps.executionConfig?.remote.profileOrigins?.base).toBe('config');
+      expect(deps.executionConfig?.remote.profileOrigins?.runtime).toBe('runtime');
       // Config-уровень (без runtime) — база для `/api/v2/settings/execution`.
       expect(Object.keys(deps.fallbackExecutionConfig?.remote.profiles ?? {}).sort())
         .toEqual(['base', 'legacy']);
+    } finally {
+      deps.stopEphemeralSweeper();
+      deps.stopEventJournalPruner();
+      deps.stopWebhookDeliveryPruner();
+    }
+  });
+
+  it('отключённый config-профиль уходит из эффективного каталога', async () => {
+    const dataDir = await makeDir();
+    const config: StandaloneConfig = {
+      port: 0,
+      dataDir,
+      apiKey: 'test-key',
+      storageBackend: 'memory',
+      executionConfig: baseExecutionConfig(),
+    };
+
+    const storage = await createStandaloneStorage(config);
+    await storage.settings.setExecution({ disabledProfiles: ['legacy'] });
+
+    const deps = await createStandaloneDeps(config, ACCESSORS, storage);
+    try {
+      expect(Object.keys(deps.executionConfig?.remote.profiles ?? {}).sort())
+        .toEqual(['base']);
+      expect(deps.executionConfig?.remote.disabledProfiles).toEqual(['legacy']);
     } finally {
       deps.stopEphemeralSweeper();
       deps.stopEventJournalPruner();

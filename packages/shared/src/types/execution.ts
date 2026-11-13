@@ -67,6 +67,54 @@ export type ExecutionPoolProviderKind = (typeof EXECUTION_POOL_PROVIDERS)[number
 export const EXECUTION_PROFILE_NETWORKS = ['none', 'restricted', 'full'] as const;
 export type ExecutionProfileNetwork = (typeof EXECUTION_PROFILE_NETWORKS)[number];
 
+/**
+ * Класс профиля исполнения (ADR-135, аддендум §11).
+ *
+ * - `exec` (дефолт) — обычные команды: профиль адресуется exec-контуром;
+ * - `browser` — браузерный профиль (свой образ/MCP-сервер): адресуется только
+ *   браузерным пулом (`class: 'browser'`);
+ * - `both` — профиль годится и туда, и туда (общий образ пулов).
+ *
+ * Класс определяет, в какой каталог попадает профиль: exec-каталог —
+ * `exec|both`, браузерный — `browser|both` (см. `resolveBrowserProfileNames`/
+ * `resolveExecutionProfileNames` в `@itphx/synth-shared/config`).
+ */
+export const EXECUTION_PROFILE_CLASSES = ['exec', 'browser', 'both'] as const;
+export type ExecutionProfileClass = (typeof EXECUTION_PROFILE_CLASSES)[number];
+
+/**
+ * Происхождение профиля эффективного каталога (ADR-135, аддендум §11).
+ *
+ * - `config` — профиль задан в `config.yaml` (его можно **отключить**);
+ * - `runtime` — профиль создан в runtime-каталоге (удаляется удалением из
+ *   `profiles`).
+ */
+export type ExecutionProfileOrigin = 'config' | 'runtime';
+
+/**
+ * MCP-сервер профиля исполнения (ADR-135, аддендум §11).
+ *
+ * В **config-уровне** (`execution.remote.profiles.<name>.mcpServers`) — только
+ * **имена** серверов (метаданные): команда там не нужна. В **runtime-каталоге**
+ * (`/api/v2/settings/execution`) — полное описание: имя + команда (+ аргументы
+ * и env), потому что provisioner запускает сервер у себя и команду знать
+ * обязан.
+ *
+ * `command` необязателен: записи, сохранённые старой версией runtime-секции
+ * (только имена), нормализуются в `{ name }` — такие записи в `profileSpec`
+ * provisioner'а **не** уходят (под получит дефолт образа).
+ */
+export interface ExecutionMcpServer {
+  /** Имя MCP-сервера (уникально в профиле). */
+  name: string;
+  /** Команда запуска сервера (в runtime-каталоге — обязательна для spec). */
+  command?: string;
+  /** Аргументы команды. */
+  args?: string[];
+  /** Переменные окружения сервера (без секретов — инвариант 13). */
+  env?: Record<string, string>;
+}
+
 /** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
 export interface ExecutionProfileResourceList {
   /** CPU (`500m`, `1`). */
@@ -111,6 +159,47 @@ export const EXECUTION_RUNTIME_DESCRIPTION_MAX = 200;
 /** Предел длины значения переменной окружения профиля. */
 export const EXECUTION_RUNTIME_ENV_VALUE_MAX = 4096;
 
+/** Предел длины команды MCP-сервера профиля. */
+export const EXECUTION_RUNTIME_COMMAND_MAX = 512;
+
+/**
+ * MCP-сервер профиля в runtime-форме (ADR-135, аддендум §11).
+ *
+ * Схема принимает **строковую** форму (legacy: старые runtime-записи хранили
+ * только имена) и нормализует её в объект `{ name }`.
+ */
+export const executionRuntimeMcpServerSchema = z
+  .object({
+    /** Имя MCP-сервера (уникально в профиле). */
+    name: z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX),
+    /** Команда запуска сервера (legacy-запись — без команды). */
+    command: z.string().trim().min(1).max(EXECUTION_RUNTIME_COMMAND_MAX).optional(),
+    /** Аргументы команды. */
+    args: z.array(z.string().max(EXECUTION_RUNTIME_COMMAND_MAX)).optional(),
+    /** Переменные окружения сервера (без секретов — инвариант 13). */
+    env: z
+      .record(
+        z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX),
+        z.string().max(EXECUTION_RUNTIME_ENV_VALUE_MAX),
+      )
+      .optional(),
+  })
+  .strict();
+
+/**
+ * MCP-серверы профиля: строки (legacy) → объекты `{ name }`.
+ *
+ * Нормализация нужна для обратной совместимости: runtime-записи, сохранённые
+ * до аддендума §11, хранят только имена серверов.
+ */
+const executionRuntimeMcpServersSchema = z.preprocess(
+  (raw: unknown) =>
+    Array.isArray(raw)
+      ? raw.map((entry) => (typeof entry === 'string' ? { name: entry.trim() } : entry))
+      : raw,
+  z.array(executionRuntimeMcpServerSchema),
+);
+
 /**
  * Профиль исполнения в runtime-каталоге (ADR-135).
  *
@@ -153,8 +242,20 @@ export const executionRuntimeProfileSchema = z
         z.string().max(EXECUTION_RUNTIME_ENV_VALUE_MAX),
       )
       .optional(),
-    /** **Только имена** MCP-серверов профиля (без команд/env). */
-    mcpServers: z.array(z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX)).optional(),
+    /**
+     * Класс профиля (ADR-135, аддендум §11): `exec` (дефолт) | `browser` |
+     * `both`. Не задан — `exec`, кроме профилей из legacy-списка
+     * `browserProfiles` и профиля по умолчанию `browserProfile` (для них
+     * эффективный класс — `browser`).
+     */
+    class: z.enum(EXECUTION_PROFILE_CLASSES).optional(),
+    /**
+     * MCP-серверы профиля: имя + команда (+ аргументы/env).
+     *
+     * Строковая форма (`['playwright-mcp']`) — legacy-записи: нормализуется
+     * в `{ name }` (см. `executionRuntimeMcpServersSchema`).
+     */
+    mcpServers: executionRuntimeMcpServersSchema.optional(),
   })
   .strict();
 
@@ -171,10 +272,11 @@ export type ExecutionRuntimeProfile = z.infer<typeof executionRuntimeProfileSche
  * Приоритет эффективного значения: **env/CLI > runtime > config.yaml**
  * (env/CLI разрешаются внутри `resolveExecutionConfig`, ADR-023).
  *
- * `profiles` — **полная замена** каталога config.yaml (как `profiles`/`rules`
- * в прокси, ADR-099): так администратор может и добавить профиль, и удалить
- * профиль из конфига. Пока runtime-каталог не задан, действует каталог
- * config.yaml.
+ * `profiles` — **merge** поверх каталога config.yaml (аддендум §11): запись
+ * runtime-слоя **переопределяет** одноимённую запись config целиком, а
+ * config-записи, которых нет в runtime, **сохраняются**. Профили из config
+ * **не удаляются** — их можно **отключить** (`disabledProfiles`); профиль,
+ * созданный в runtime (нет в config), удаляется удалением из `profiles`.
  */
 export const executionRuntimeSettingsSchema = z
   .object({
@@ -182,15 +284,30 @@ export const executionRuntimeSettingsSchema = z
     defaultProfile: z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX).optional(),
     /** Профиль пула класса `browser` (браузер — свой образ/профиль). */
     browserProfile: z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX).optional(),
-    /** Явный каталог браузерных профилей (каждый — из каталога профилей). */
+    /**
+     * Legacy-подсказка класса: имена браузерных профилей (как `browserProfiles`
+     * в config.yaml). Профили из списка получают эффективный класс `browser`,
+     * если класс не задан явно. Новые записи его не используют — класс
+     * задаётся полем `class` профиля.
+     */
     browserProfiles: z
+      .array(z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX))
+      .optional(),
+    /**
+     * Отключённые профили **config-базы** (ADR-135, аддендум §11).
+     *
+     * Имена только из config-каталога: профиль, созданный в runtime, удаляется
+     * удалением из `profiles`. Профиль по умолчанию и браузерный профиль
+     * отключить нельзя (400) — сначала назначьте другой.
+     */
+    disabledProfiles: z
       .array(z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX))
       .optional(),
     /** Режим пула исполнителей. */
     pooling: z.enum(EXECUTION_POOLINGS).optional(),
     /** Поведение роутера при непригодном профиле. */
     fallback: z.enum(EXECUTION_FALLBACKS).optional(),
-    /** Каталог профилей исполнения (заменяет каталог config.yaml целиком). */
+    /** Каталог профилей исполнения (merge поверх каталога config.yaml). */
     profiles: z
       .record(
         z.string().trim().min(1).max(EXECUTION_RUNTIME_NAME_MAX),
