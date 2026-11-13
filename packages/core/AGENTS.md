@@ -634,7 +634,11 @@
   `factory.ts` (`createExecutionPortForConfig` — выбор порта по режиму: `inline` →
   `InlineExecutionPort`, `remote` → удалённый порт; экземпляр на каждый вызов, без
   process-глобальных синглтонов), `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт
-  порт из `ctx.extra.executionPort`, иначе inline-фоллбэк), `startup.ts`
+  порт из `ctx.extra.executionPort`, иначе inline-фоллбэк), `router.ts`
+  (PROP-135: `ExecutionRouter` — выбор порта по профилю/пулу; `mode()`/`pooling()` —
+  **топология исполнения инстанса** (`inline`/`remote` и `instance`/`project`/`session`/
+  `null`; в `inline` пулов нет) — источник истины для сводки `get_session_info`;
+  `poolProvider()` — список пулов для диагностики), `startup.ts`
   (`checkExecutionMode`/`assertExecutionModeSupported` — **async**, fail-closed при старте:
   `mode: remote` без адресов → «требуется хотя бы один адрес исполнителя»; с адресами, но
   без пакета исполнителя или без читаемого токена → «удалённый режим недоступен» с
@@ -1508,7 +1512,15 @@
   `ssh_keys_list`). **Self-help (ADR-131):** `instance.ts` — `synth_info`/`synth_mcp_list|test`
   (read, capability `instance`), `instance-mcp.ts` — `synth_mcp_add|update|remove|enable|reconnect`
   (write, plan блокирует), `project-query.ts`/`session-manage.ts`/`project-resolve.ts` —
-  `list_projects`/`get_project`/`list_sessions`/`get_session_info`/`session_rename`; `project_attach`
+  `list_projects`/`get_project`/`list_sessions`/`get_session_info`/`session_rename`;
+  `get_session_info` дополнительно отдаёт блок **`execution`** (ADR-135/PROP-135): режим
+  и режим пула (`mode`/`pooling`), эффективные профили сессии (`session_profile` —
+  из `ctx.extra.executionProfile`/`executionBrowserProfile`) и каталог профилей инстанса
+  (`profiles`: `class`/`default`/`browser_default`/`running`/`state`; ≤ 30 записей,
+  лишнее — `truncated`) с состоянием пулов **текущей области** (ключ `poolKeyString`:
+  `project:<id>:`/`session:<id>:`/`instance:`; чужие области не учитываются) — без адресов
+  и токенов пулов; сбой провайдера пулов → `pools_error`, тул не падает;
+  `project_attach`
   принимает `projectId` **или** `project` (id/точное имя; при неоднозначности — кандидаты).
   Атомарная мультифайловая правка — `patch` (`patch.ts`):
   JSON-массив `edits[]`, 1..50 правок за вызов, **всё-или-ничего** — все правки

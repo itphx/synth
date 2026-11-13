@@ -6842,6 +6842,11 @@ export class ChatOrchestrator {
                   // (`sandbox_exec` → класс `sandbox`). Без роутера такой тул
                   // отказывает понятной ошибкой, а не уходит в inline.
                   executionRouter: this._executionRouter,
+                  // PROP-135 Ф6a: эффективный профиль исполнения хода (exec) —
+                  // его показывают тулы, читающие среду исполнения сессии
+                  // (`get_session_info`). Пусто — профилей нет (потолки
+                  // отклонили всех кандидатов).
+                  executionProfile: executionProfileResolution.profile || undefined,
                   // PROP-135 (браузерный контур): эффективный браузерный
                   // профиль хода — его прокидывает тул `browser_*` в
                   // `portFor({class:'browser'})`. Не задан — роутер берёт

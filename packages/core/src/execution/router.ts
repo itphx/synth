@@ -196,6 +196,22 @@ export interface ExecutionRouter {
    */
   portFor(target?: ExecutionPortTarget): ExecutionPort;
   /**
+   * PROP-135: режим исполнения инстанса — `inline` (исполнение в процессе)
+   * или `remote` (на исполнителе).
+   *
+   * Источник — эффективная секция `execution` (параметр запуска, инвариант
+   * 24). Не задан у вырожденных роутеров (тестовая заглушка) — потребитель
+   * считает режим `inline` (профилей и пулов нет).
+   */
+  mode?(): 'inline' | 'remote';
+  /**
+   * PROP-135: режим пула (`execution.remote.pooling`) — `instance` (общий пул
+   * инстанса), `project` (пул на проект) или `session` (пул на сессию).
+   *
+   * `null` — пулов с жизненным циклом нет (режим `inline`).
+   */
+  pooling?(): 'instance' | 'project' | 'session' | null;
+  /**
    * PROP-135 Ф6a: имена известных профилей (`execution.remote.profiles` +
    * профиль по умолчанию). Не задан у вырожденных роутеров (`inline`/тестовые
    * заглушки) — каталог неизвестен, проверка существования профиля в роутах и
@@ -343,6 +359,20 @@ export interface ExecutionRouterOptions {
 }
 
 /**
+ * Топология исполнения инстанса: режим (`inline`/`remote`) и режим пула.
+ *
+ * Источник — эффективная секция `execution` (параметр запуска, инвариант 24).
+ * В режиме `inline` пулов нет: `pooling` — `null`.
+ */
+function executionTopology(config: ResolvedExecutionConfig | undefined): {
+  mode: 'inline' | 'remote';
+  pooling: 'instance' | 'project' | 'session' | null;
+} {
+  if (!config || config.mode === 'inline') return { mode: 'inline', pooling: null };
+  return { mode: 'remote', pooling: config.remote.pooling };
+}
+
+/**
  * Собрать роутер портов исполнения (PROP-135 Ф4a + Ф4b-1).
  *
  * @param opts эффективная секция `execution` + приёмник метрик (+ швы для тестов)
@@ -352,6 +382,7 @@ export async function createExecutionRouter(
   opts: ExecutionRouterOptions,
 ): Promise<ExecutionRouter> {
   const config = opts.config;
+  const topology = executionTopology(config);
   const createPort =
     opts.createPort
     ?? ((cfg: ResolvedExecutionConfig | undefined): Promise<ExecutionPort> =>
@@ -371,6 +402,8 @@ export async function createExecutionRouter(
       const provider = opts.poolProvider ?? createExecutionPoolProvider(config.remote);
       return {
         portFor: () => port,
+        mode: () => topology.mode,
+        pooling: () => topology.pooling,
         poolProvider: () => provider,
         profilesInfo: () => profilesInfoFromProviderOrNames(provider, config),
         poolRefFor: createPoolRefResolver(config, provider),
@@ -378,6 +411,8 @@ export async function createExecutionRouter(
     }
     return {
       portFor: () => port,
+      mode: () => topology.mode,
+      pooling: () => topology.pooling,
       poolRefFor: createPoolRefResolver(config, undefined),
       // `inline` — профилей нет (исполнение в процессе); иначе — каталог
       // конфигурации с метаданными профилей (`execution.remote.profiles`).
@@ -452,6 +487,9 @@ export async function createExecutionRouter(
       }
       return port;
     },
+    // PROP-135: топология исполнения инстанса (режим + режим пула).
+    mode: () => topology.mode,
+    pooling: () => topology.pooling,
     // PROP-135 Ф6a: каталог профилей — для binding'а (`resolveExecutionProfile`)
     // и проверки `executor.profile`/`executor_profile` в роутах и `task`.
     // Браузерный контур: имена браузерных профилей в exec-каталог не входят.
@@ -484,6 +522,7 @@ function createHttpProviderRouter(
   const remote = config.remote;
   const defaultName = remote.defaultProfile;
   const provider = opts.poolProvider ?? createExecutionPoolProvider(remote);
+  const topology = executionTopology(config);
 
   /** Кэш ленивых портов по ключу пула. */
   const pooled = new Map<string, ExecutionPort>();
@@ -547,6 +586,9 @@ function createHttpProviderRouter(
       pooled.set(keyString, port);
       return port;
     },
+    // PROP-135: топология исполнения инстанса (режим + режим пула).
+    mode: () => topology.mode,
+    pooling: () => topology.pooling,
     // PROP-135 Ф6a: каталог известных профилей (профиль по умолчанию входит
     // всегда). `provider: http` адреса профилей получает от provisioner'а —
     // проверяется только имя, без обращения к нему. Браузерные профили — в

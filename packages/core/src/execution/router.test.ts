@@ -174,6 +174,38 @@ describe('PROP-135 Ф4a: роутер портов исполнения', () => 
     expect(factory.created).toHaveLength(1);
   });
 
+  it('mode/pooling: топология исполнения видна по роутеру', async () => {
+    const factory = fakeFactory();
+
+    const inline = await createExecutionRouter({
+      config: makeConfig({ mode: 'inline' }),
+      createPort: factory.createPort,
+    });
+    expect(inline.mode?.()).toBe('inline');
+    expect(inline.pooling?.()).toBeNull();
+
+    const instance = await createExecutionRouter({
+      config: makeConfig({ pooling: 'instance' }),
+      createPort: factory.createPort,
+    });
+    expect(instance.mode?.()).toBe('remote');
+    expect(instance.pooling?.()).toBe('instance');
+
+    const project = await createExecutionRouter({
+      config: makeConfig({ pooling: 'project' }),
+      createPort: factory.createPort,
+    });
+    expect(project.mode?.()).toBe('remote');
+    expect(project.pooling?.()).toBe('project');
+
+    const session = await createExecutionRouter({
+      config: makeConfig({ pooling: 'session' }),
+      createPort: factory.createPort,
+    });
+    expect(session.mode?.()).toBe('remote');
+    expect(session.pooling?.()).toBe('session');
+  });
+
   it('profilesInfo: static отдаёт метаданные каталога (instance и project)', async () => {
     const expected = [
       {

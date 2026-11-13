@@ -23,6 +23,8 @@ import type { RemoteBackendClient } from '../../remote/client.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import type { ExecutionRouter } from '../../execution/router.js';
+import type { PoolInfo } from '../../execution/pool-provider.js';
 import {
   type PrincipalExtra,
   type ProjectViewer,
@@ -41,6 +43,17 @@ export interface SessionManageExtra extends PrincipalExtra {
   sessionId?: string;
   /** Workstream A1: клиент удалённого backend (гибрид) для read-only merge. */
   getRemoteClient?: () => RemoteBackendClient | null;
+  /**
+   * Роутер портов исполнения (PROP-135) — источник каталога профилей и
+   * состояния пулов для сводки `get_session_info`.
+   *
+   * Не задан — исполнение в процессе (`inline`): профилей и пулов нет.
+   */
+  executionRouter?: ExecutionRouter;
+  /** Эффективный профиль исполнения сессии (exec-контур). */
+  executionProfile?: string | null;
+  /** Эффективный браузерный профиль сессии (браузерный контур). */
+  executionBrowserProfile?: string | null;
 }
 
 const DEFAULT_LIMIT = 20;
@@ -372,12 +385,255 @@ export const listSessionsTool: ToolDefinition = {
   },
 };
 
+/** Класс профиля исполнения в сводке `get_session_info`. */
+export type SessionExecutionProfileClass = 'exec' | 'browser' | 'both';
+
+/**
+ * Профиль исполнения в сводке `get_session_info`.
+ *
+ * Только имена/класс/состояние: адреса и токены пулов наружу не отдаются
+ * (инвариант 13 — секреты доступа к исполнителю).
+ */
+export interface SessionExecutionProfile {
+  /** Имя профиля. */
+  name: string;
+  /** Класс профиля: обычные команды / браузер / оба. */
+  class: SessionExecutionProfileClass;
+  /** Профиль по умолчанию exec-контура (`execution.remote.defaultProfile`). */
+  default: boolean;
+  /** Профиль по умолчанию браузерного контура (`execution.remote.browserProfile`). */
+  browser_default: boolean;
+  /**
+   * Пул профиля в текущей области запущен: `true` — `ready`, `false` —
+   * `draining`, `null` — пул не поднят/состояние неизвестно.
+   */
+  running: boolean | null;
+  /**
+   * Состояние пула профиля в текущей области: `ready` (поднят), `draining`
+   * (снимается), `configured` (профиль задан, но пул не поднят — либо список
+   * пулов недоступен), `null` — состояние неизвестно (резерв).
+   */
+  state: 'ready' | 'configured' | 'draining' | null;
+}
+
+/** Сведения об исполнении сессии (ADR-135/PROP-135) — без секретов. */
+export interface SessionExecutionInfo {
+  /** Режим исполнения инстанса: `inline` — в процессе, `remote` — на исполнителе. */
+  mode: 'inline' | 'remote';
+  /** Режим пула; `null` — в режиме `inline` (пулов нет). */
+  pooling: 'instance' | 'project' | 'session' | null;
+  /** Эффективные профили сессии: exec-контур и браузерный контур. */
+  session_profile: { name: string | null; browser: string | null };
+  /** Каталог профилей инстанса (не более 30 записей). */
+  profiles: SessionExecutionProfile[];
+  /**
+   * Причина, по которой состояние пулов неизвестно (провайдер пулов
+   * недоступен или не умеет перечислять пулы). Короткий код без секретов.
+   */
+  pools_error?: string;
+  /** Каталог профилей обрезан (лимит 30 записей). */
+  truncated?: boolean;
+}
+
+/** Предел числа профилей в сводке `get_session_info`. */
+const MAX_EXECUTION_PROFILES = 30;
+
+/**
+ * Топология исполнения инстанса — из роутера (источник истины).
+ *
+ * Роутер без `mode()`/`pooling()` (тестовая заглушка) — режим выводится по
+ * наличию каталога профилей/провайдера пулов; без них — `inline`.
+ */
+function resolveExecutionTopology(router: ExecutionRouter | undefined): {
+  mode: 'inline' | 'remote';
+  pooling: 'instance' | 'project' | 'session' | null;
+} {
+  if (!router) return { mode: 'inline', pooling: null };
+  const mode = router.mode?.();
+  if (mode) {
+    // В режиме `inline` пулов нет — режим пула не показываем.
+    return { mode, pooling: mode === 'inline' ? null : router.pooling?.() ?? null };
+  }
+  const remote = Boolean(router.profiles?.().length || router.profilesInfo || router.poolProvider);
+  return { mode: remote ? 'remote' : 'inline', pooling: remote ? 'instance' : null };
+}
+
+/** Уникальные имена профилей (exec-каталог + браузерный, без повторов). */
+function uniqueProfileNames(...lists: Array<readonly string[] | undefined>): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const list of lists) {
+    for (const raw of list ?? []) {
+      const name = (raw ?? '').trim();
+      if (name === '' || seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Префикс ключа пула **текущей области** (`poolKeyString`).
+ *
+ * `null` — область не адресуема (пул на проект, а у сессии проекта нет):
+ * чужие пулы в сводку не попадают (изоляция пулов).
+ */
+function poolScopePrefix(
+  pooling: 'instance' | 'project' | 'session' | null,
+  session: Session,
+): string | null {
+  if (pooling === 'instance') return 'instance:';
+  if (pooling === 'project') {
+    const projectId = (session.projectId ?? '').trim();
+    return projectId === '' ? null : `project:${projectId}:`;
+  }
+  if (pooling === 'session') return `session:${session.id}:`;
+  return null;
+}
+
+/**
+ * Пулы текущей области + короткая причина сбоя (без секретов).
+ *
+ * Провайдера нет — пулов с жизненным циклом нет (не ошибка). Провайдер есть,
+ * но перечислять пулы не умеет/не смог — причина в `error`, тул не падает.
+ */
+async function listScopePools(
+  router: ExecutionRouter | undefined,
+  scopePrefix: string | null,
+): Promise<{ pools: PoolInfo[]; error?: string }> {
+  const provider = router?.poolProvider?.();
+  if (!provider) return { pools: [] };
+  if (typeof provider.list !== 'function') {
+    return { pools: [], error: 'pool_list_unavailable' };
+  }
+  try {
+    const pools = await provider.list();
+    if (!scopePrefix) return { pools: [] };
+    return {
+      pools: pools.filter(
+        (pool) => typeof pool.key === 'string' && pool.key.startsWith(scopePrefix),
+      ),
+    };
+  } catch {
+    // Причина ошибки наружу не идёт: текст провайдера может содержать
+    // технические детали (адреса/токены).
+    return { pools: [], error: 'pool_list_failed' };
+  }
+}
+
+/** Значимость состояния пула: `ready` важнее `draining`, `configured` — слабее обоих. */
+function poolStateRank(state: PoolInfo['state']): number {
+  if (state === 'ready') return 2;
+  if (state === 'draining') return 1;
+  return 0;
+}
+
+/** Класс профиля по составу каталогов (когда метаданные провайдера недоступны). */
+function fallbackProfileClass(
+  name: string,
+  execNames: readonly string[],
+  browserNames: readonly string[],
+): SessionExecutionProfileClass {
+  const inExec = execNames.includes(name);
+  const inBrowser = browserNames.includes(name);
+  if (inExec && inBrowser) return 'both';
+  return inBrowser ? 'browser' : 'exec';
+}
+
+/**
+ * Сведения об исполнении сессии: режим, режим пула, эффективные профили и
+ * каталог профилей инстанса с состоянием пулов **текущей области**.
+ *
+ * Без секретов: только имена профилей, класс и состояние (инвариант 13).
+ * Сбой провайдера пулов/метаданных не ломает тул — причина в `pools_error`.
+ */
+async function buildSessionExecutionInfo(
+  extra: SessionManageExtra,
+  session: Session,
+): Promise<SessionExecutionInfo> {
+  const router = extra.executionRouter;
+  const { mode, pooling } = resolveExecutionTopology(router);
+  if (mode === 'inline') {
+    return {
+      mode: 'inline',
+      pooling: null,
+      session_profile: { name: null, browser: null },
+      profiles: [],
+    };
+  }
+
+  const execNames = uniqueProfileNames(router?.profiles?.());
+  const browserNames = uniqueProfileNames(router?.browserProfiles?.());
+  const names = uniqueProfileNames(execNames, browserNames);
+  const defaultProfile = (router?.defaultProfile?.() ?? '').trim();
+  const browserDefaultProfile = (router?.browserDefaultProfile?.() ?? '').trim();
+
+  // Класс профиля: метаданные провайдера (`profilesInfo`), иначе — по составу
+  // каталогов имён. Сбой провайдера — не падение тула.
+  const classByName = new Map<string, SessionExecutionProfileClass>();
+  try {
+    const infos = router?.profilesInfo ? await router.profilesInfo() : [];
+    for (const info of infos) {
+      if (info.class) classByName.set(info.name, info.class);
+    }
+  } catch {
+    // Метаданные недоступны — класс выводится по каталогам имён.
+  }
+
+  const scopePrefix = poolScopePrefix(pooling, session);
+  const { pools, error: poolsError } = await listScopePools(router, scopePrefix);
+  const poolByProfile = new Map<string, PoolInfo>();
+  for (const pool of pools) {
+    const known = poolByProfile.get(pool.profile);
+    if (!known || poolStateRank(pool.state) > poolStateRank(known.state)) {
+      poolByProfile.set(pool.profile, pool);
+    }
+  }
+
+  const truncated = names.length > MAX_EXECUTION_PROFILES;
+  const profiles: SessionExecutionProfile[] = names
+    .slice(0, MAX_EXECUTION_PROFILES)
+    .map((name) => {
+      const pool = poolByProfile.get(name);
+      const running = pool
+        ? pool.state === 'ready'
+          ? true
+          : pool.state === 'draining'
+            ? false
+            : null
+        : null;
+      return {
+        name,
+        class: classByName.get(name) ?? fallbackProfileClass(name, execNames, browserNames),
+        default: defaultProfile !== '' && name === defaultProfile,
+        browser_default: browserDefaultProfile !== '' && name === browserDefaultProfile,
+        running,
+        state: pool?.state ?? 'configured',
+      };
+    });
+
+  return {
+    mode,
+    pooling,
+    session_profile: {
+      name: (extra.executionProfile ?? '').trim() || null,
+      browser: (extra.executionBrowserProfile ?? '').trim() || null,
+    },
+    profiles,
+    ...(poolsError ? { pools_error: poolsError } : {}),
+    ...(truncated ? { truncated: true } : {}),
+  };
+}
+
 export const getSessionInfoTool: ToolDefinition = {
   name: 'get_session_info',
   description:
     'Get compact information about the current session: title, project, workspace, mode, agent, '
-    + 'provider/model, status/activity, pending count, current stream ids, todo counts and worktree '
-    + 'binding. No message history is returned.',
+    + 'provider/model, status/activity, pending count, current stream ids, todo counts, worktree '
+    + 'binding and the execution environment (mode, pool scope, effective profiles, profile catalog '
+    + 'with pool states — names and states only, no addresses or tokens). No message history is '
+    + 'returned.',
   parameters: z.object({}),
   capabilities: [ToolCapability.RUNTIME],
   async execute(_args, ctx) {
@@ -406,6 +662,7 @@ export const getSessionInfoTool: ToolDefinition = {
     }
 
     const todos = session.todos ?? [];
+    const execution = await buildSessionExecutionInfo(extra, session);
     const details = {
       id: session.id,
       title: session.title || null,
@@ -425,6 +682,8 @@ export const getSessionInfoTool: ToolDefinition = {
       worktree: session.worktree
         ? { worktreeId: session.worktree.worktreeId, repoPath: session.worktree.repoPath ?? null }
         : null,
+      // ADR-135/PROP-135: среда исполнения и пулы (только имена/состояния).
+      execution,
       created_at: session.createdAt,
       updated_at: session.updatedAt,
     };

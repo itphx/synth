@@ -599,4 +599,39 @@ describe('PROP-135 Ф6a: binding профиля в оркестраторе', ()
     await runTurn(harness);
     expect(catalog).toEqual({ profiles: ['default', 'devops'], defaultProfile: 'default' });
   });
+
+  /**
+   * Эффективные профили хода (exec/браузерный) — в extra сессии: их читает
+   * `get_session_info` (сводка среды исполнения).
+   */
+  it('эффективные профили сессии доступны тулу через ctx.extra', async () => {
+    let seen: { executionProfile?: unknown; executionBrowserProfile?: unknown } = {};
+    const router: ExecutionRouter = {
+      portFor: () => sentinelPort('profile-port'),
+      profiles: () => ['default', 'devops'],
+      defaultProfile: () => 'default',
+      browserProfiles: () => ['browser'],
+      browserDefaultProfile: () => 'browser',
+    };
+    const harness = await makeHarness({
+      router,
+      executorProfile: 'devops',
+      // Потолок встроенного `fixer` (`default|light`) снят: выбирается профиль
+      // сессии, а не профиль агента.
+      agentOverrides: { fixer: { allowedProfiles: undefined } },
+      onToolCall: (ctx) => {
+        const extra = ctx.extra as {
+          executionProfile?: unknown;
+          executionBrowserProfile?: unknown;
+        };
+        seen = {
+          executionProfile: extra.executionProfile,
+          executionBrowserProfile: extra.executionBrowserProfile,
+        };
+      },
+    });
+    await runTurn(harness);
+    expect(seen.executionProfile).toBe('devops');
+    expect(seen.executionBrowserProfile).toBe('browser');
+  });
 });

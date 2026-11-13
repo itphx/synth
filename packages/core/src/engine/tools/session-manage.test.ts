@@ -11,11 +11,15 @@ import {
   type ToolContext,
 } from '@itphx/synth-shared';
 import { listSessionsTool, getSessionInfoTool, sessionRenameTool } from './session-manage.js';
+import type { SessionExecutionInfo } from './session-manage.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
 import { RemoteError } from '../../remote/types.js';
+import type { ExecutionPort } from '../../execution/ports/index.js';
+import type { ExecutionRouter } from '../../execution/router.js';
+import type { PoolInfo } from '../../execution/pool-provider.js';
 
 interface Viewer {
   userId: string;
@@ -97,7 +101,11 @@ describe('list_sessions / get_session_info / session_rename (Workstream B)', () 
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  function makeCtx(viewer: Viewer = { userId: 'u1', roles: ['USER'] }, sessionId = current.id): ToolContext {
+  function makeCtx(
+    viewer: Viewer = { userId: 'u1', roles: ['USER'] },
+    sessionId = current.id,
+    extra: Record<string, unknown> = {},
+  ): ToolContext {
     return {
       sessionId,
       messageId: generateId(),
@@ -110,6 +118,7 @@ describe('list_sessions / get_session_info / session_rename (Workstream B)', () 
         sessionId,
         principal: viewer,
         isElevatedPrincipal: viewer.roles.some((role) => role === 'ADMIN' || role === 'LEAD'),
+        ...extra,
       },
     };
   }
@@ -260,6 +269,200 @@ describe('list_sessions / get_session_info / session_rename (Workstream B)', () 
     expect(serialized).not.toContain('DO-NOT-LEAK-MESSAGE');
     expect(serialized).not.toContain('in progress text');
     expect(result.metadata).not.toHaveProperty('messages');
+  });
+
+  /**
+   * ADR-135/PROP-135: сводка исполнения — режим, режим пула, эффективные
+   * профили сессии и каталог профилей инстанса с состоянием пулов **текущей
+   * области**. Без адресов/токенов пулов (инвариант 13).
+   */
+  describe('get_session_info: сведения об исполнении', () => {
+    function executionOf(result: { metadata?: Record<string, unknown> }): SessionExecutionInfo {
+      return result.metadata?.execution as SessionExecutionInfo;
+    }
+
+    function routerWith(opts: {
+      pooling?: 'instance' | 'project' | 'session';
+      profiles?: string[];
+      browserProfiles?: string[];
+      defaultProfile?: string;
+      browserDefaultProfile?: string;
+      profilesInfo?: Array<{ name: string; class?: 'exec' | 'browser' | 'both' }>;
+      pools?: PoolInfo[];
+      listError?: boolean;
+      withoutList?: boolean;
+    }): ExecutionRouter {
+      const provider = {
+        ensure: async () => ({ url: 'http://pool.internal:8080' }),
+        ...(opts.withoutList ? {} : { list: async () => {
+          if (opts.listError) throw new Error('provisioner is down');
+          return opts.pools ?? [];
+        } }),
+      };
+      return {
+        portFor: () => ({}) as ExecutionPort,
+        mode: () => 'remote',
+        pooling: () => opts.pooling ?? 'instance',
+        profiles: () => opts.profiles ?? ['default'],
+        defaultProfile: () => opts.defaultProfile ?? 'default',
+        browserProfiles: () => opts.browserProfiles ?? [],
+        browserDefaultProfile: () => opts.browserDefaultProfile ?? 'browser',
+        profilesInfo: async () => opts.profilesInfo ?? [],
+        poolProvider: () => provider,
+      };
+    }
+
+    it('inline: режим, пустой каталог, профили сессии не показываются', async () => {
+      const result = await getSessionInfoTool.execute({}, makeCtx());
+      expect(executionOf(result)).toEqual({
+        mode: 'inline',
+        pooling: null,
+        session_profile: { name: null, browser: null },
+        profiles: [],
+      });
+    });
+
+    it('remote: каталог профилей с классами и дефолтами; пул своей области — running', async () => {
+      const router = routerWith({
+        pooling: 'project',
+        profiles: ['default', 'heavy', 'foreign-only'],
+        browserProfiles: ['browser'],
+        defaultProfile: 'default',
+        browserDefaultProfile: 'browser',
+        profilesInfo: [
+          { name: 'default', class: 'exec' },
+          { name: 'heavy', class: 'exec' },
+          { name: 'foreign-only', class: 'exec' },
+          { name: 'browser', class: 'browser' },
+        ],
+        pools: [
+          { key: `project:${ownProjectId}:exec:default`, profile: 'default', state: 'ready' },
+          { key: `project:${ownProjectId}:exec:heavy`, profile: 'heavy', state: 'draining' },
+          // Пул чужого проекта: в сводку не попадает.
+          { key: `project:${foreignProjectId}:exec:foreign-only`, profile: 'foreign-only', state: 'ready' },
+        ],
+      });
+
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+        executionProfile: 'heavy',
+        executionBrowserProfile: 'browser',
+      }));
+      expect(result.isError).toBeUndefined();
+
+      const execution = executionOf(result);
+      expect(execution.mode).toBe('remote');
+      expect(execution.pooling).toBe('project');
+      expect(execution.session_profile).toEqual({ name: 'heavy', browser: 'browser' });
+      expect(execution.profiles.map((profile) => profile.name)).toEqual([
+        'default',
+        'heavy',
+        'foreign-only',
+        'browser',
+      ]);
+
+      const [def, heavy, foreign, browser] = execution.profiles;
+      expect(def).toMatchObject({ class: 'exec', default: true, browser_default: false, running: true, state: 'ready' });
+      expect(heavy).toMatchObject({ class: 'exec', default: false, running: false, state: 'draining' });
+      // Пул чужого проекта не учитывается: профиль остаётся «не запущен».
+      expect(foreign).toMatchObject({ running: null, state: 'configured' });
+      expect(browser).toMatchObject({ class: 'browser', browser_default: true, running: null, state: 'configured' });
+    });
+
+    it('static (провайдер без list): running неизвестен, состояние — configured', async () => {
+      const router = routerWith({ pooling: 'instance', withoutList: true });
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+      }));
+      const execution = executionOf(result);
+      expect(execution.mode).toBe('remote');
+      expect(execution.pooling).toBe('instance');
+      expect(execution.profiles[0]).toMatchObject({ name: 'default', running: null, state: 'configured' });
+      expect(execution.pools_error).toBe('pool_list_unavailable');
+    });
+
+    it('без провайдера пулов (статические адреса): пулов нет, ошибки нет', async () => {
+      const router: ExecutionRouter = {
+        portFor: () => ({}) as ExecutionPort,
+        mode: () => 'remote',
+        pooling: () => 'instance',
+        profiles: () => ['default'],
+        defaultProfile: () => 'default',
+      };
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+      }));
+      const execution = executionOf(result);
+      expect(execution.profiles[0]).toMatchObject({ running: null, state: 'configured' });
+      expect(execution.pools_error).toBeUndefined();
+    });
+
+    it('ошибка list: pools_error, тул не падает', async () => {
+      const router = routerWith({ pooling: 'session', listError: true });
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+      }));
+      expect(result.isError).toBeUndefined();
+      const execution = executionOf(result);
+      expect(execution.pools_error).toBe('pool_list_failed');
+      expect(execution.profiles[0]).toMatchObject({ running: null, state: 'configured' });
+    });
+
+    it('пулы сессионной области: чужая сессия не учитывается', async () => {
+      const router = routerWith({
+        pooling: 'session',
+        pools: [
+          { key: `session:${current.id}:exec:default`, profile: 'default', state: 'ready' },
+          { key: 'session:ses_other:exec:default', profile: 'default', state: 'ready' },
+        ],
+      });
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+      }));
+      expect(executionOf(result).profiles[0]).toMatchObject({ running: true, state: 'ready' });
+    });
+
+    it('эффективные профили сессии берутся из extra', async () => {
+      const router = routerWith({ pooling: 'instance' });
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+        executionProfile: 'heavy',
+        executionBrowserProfile: 'browser',
+      }));
+      expect(executionOf(result).session_profile).toEqual({ name: 'heavy', browser: 'browser' });
+    });
+
+    it('каталог профилей ограничен 30 записями, лишнее — truncated', async () => {
+      const names = Array.from({ length: 40 }, (_, index) => `profile-${index}`);
+      const router = routerWith({ pooling: 'instance', profiles: names });
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+      }));
+      const execution = executionOf(result);
+      expect(execution.profiles).toHaveLength(30);
+      expect(execution.profiles[0]!.name).toBe('profile-0');
+      expect(execution.truncated).toBe(true);
+    });
+
+    it('адреса и токены пулов в сводку не попадают', async () => {
+      const router = routerWith({
+        pooling: 'project',
+        pools: [
+          {
+            key: `project:${ownProjectId}:exec:default`,
+            profile: 'default',
+            state: 'ready',
+            url: 'http://secret-pool:8080',
+          } as unknown as PoolInfo,
+        ],
+      });
+      const result = await getSessionInfoTool.execute({}, makeCtx(undefined, undefined, {
+        executionRouter: router,
+      }));
+      const serialized = JSON.stringify(result.metadata);
+      expect(serialized).not.toContain('secret-pool');
+      expect(serialized).not.toContain('pool.internal');
+    });
   });
 });
 
