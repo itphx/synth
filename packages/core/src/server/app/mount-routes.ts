@@ -623,6 +623,10 @@ export function mountStandaloneRoutes(
     fallbackWorkspace: defaultWorkingDir,
     // ADR-075: дефолт политики workspace вне root (config/env) для GET/DELETE-сброса.
     fallbackWorkspaceOutsideRootPolicy: config.workspaceOutsideRootPolicy ?? 'confirm',
+    // ADR-135: runtime-каталог профилей исполнения — config-уровень (база) и
+    // секция, с которой работает процесс (`restartRequired`).
+    fallbackExecution: deps.fallbackExecutionConfig,
+    getRunningExecution: () => deps.executionConfig,
     /** ADR-075: live-применение политики без рестарта (роуты проектов читают её на каждом запросе). */
     onWorkspacePolicyChange: (policy) => { effectiveWorkspaceOutsideRootPolicy = policy; },
     // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).

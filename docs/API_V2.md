@@ -1645,8 +1645,10 @@ Runtime-настройка инстанса: как SSH-ключи реестр�
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
-| GET | `/api/v2/settings/workspace` | auth | Рабочий каталог по умолчанию: `{workspace, isOverridden, defaults}` (`defaults` — env/config) |
-| PUT | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | `{workspace}` |
+| GET | `/api/v2/settings/execution` | ADMIN (managed) / auth (core) | Runtime-каталог профилей исполнения и дефолты (ADR-135 п. 11): `{saved, running, restartRequired, effective, defaults, isOverridden}`. `saved` — сохранённая runtime-секция (`null` — не задана); `running` — секция, с которой **работает процесс** (config + runtime на старте); `restartRequired` — вычисленный (отпечаток «сохранено» ≠ «работает»): секция `execution` — параметр запуска (инвариант 24), поэтому изменение требует рестарта; `effective`/`defaults` — аддитивно: эффективная секция «после сохранения» и config-уровень (без runtime) |
+| PUT | `/api/v2/settings/execution` | ADMIN (managed) / auth (core) | Сохранить runtime-секцию `{execution:{defaultProfile?,browserProfile?,browserProfiles?,pooling?,fallback?,profiles?}}` (принимается и сама секция без обёртки). Валидация: `defaultProfile` есть в эффективном каталоге; `browserProfiles` ⊆ каталога; `browserProfile` ∈ `browserProfiles` (если список задан) либо в каталоге; у каждого профиля каталога задан `image` или `url`; неизвестное поле → `400 VALIDATION_ERROR`. **Runtime-каталог заменяет каталог `config.yaml` целиком** (как `profiles`/`rules` прокси) — так удаляется профиль из конфига. Приоритет: env/CLI > runtime > `config.yaml`. Секция **без секретов** (`env` — переменные пула, не пароли). **Live не применяет** (нужен рестарт) → `{saved, running, restartRequired, effective, defaults, isOverridden:true}` |
+| DELETE | `/api/v2/settings/execution` | ADMIN (managed) / auth (core) | Сбросить runtime-секцию (вернуться к каталогу `config.yaml`/env) → `{saved:null, running, restartRequired, effective, defaults, isOverridden:false}` |
+| GET | `/api/v2/settings/workspace` | auth | Рабочий каталог по умолчанию: `{workspace, isOverridden, defaults}` (`defaults` — env/config) || PUT | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | `{workspace}` |
 | DELETE | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | Сброс runtime-override к дефолту; `{status:"restored", workspace, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/workspace-policy` | auth | Политика абсолютного workspace вне `workspacesRoot` (ADR-075): `{outsideRoot:"confirm"\|"deny", isOverridden, defaults, readOnly?}` (managed — `readOnly:true`, эффективно `deny`) |
 | PUT | `/api/v2/settings/workspace-policy` | ADMIN (managed) / auth (core) | `{outsideRoot}` (live-применение, persist); невалидное значение → `400`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
@@ -3322,6 +3324,32 @@ provisioner недоступен. Ошибки — единый формат API
 **Прочее.** Состояние — локальное для процесса (гибрид не проксирует: это
 конфигурация и пулы **этого** инстанса); `execution.*` меняется только
 рестартом (инвариант 24), поэтому отдельного `PUT` у контура нет.
+
+### 5.42 Каталог профилей исполнения — `/api/v2/settings/execution` (оба, ADR-135 п. 11)
+
+Каталог профилей исполнения и дефолты — **backend-owned runtime-секция**
+(управляет только ADMIN): `GET/PUT/DELETE /api/v2/settings/execution`. В отличие от
+конфиг-секции `execution.*`, её пишет админка, но секция по-прежнему **параметр
+запуска** (инвариант 24) — изменение требует рестарта.
+
+| Метод | Путь | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/settings/execution` | ADMIN (core — `requireAuth`) | `{saved, running, restartRequired, effective, defaults, isOverridden}`. `saved` — сохранённая runtime-секция (`null` — не задана); `running` — секция, с которой **работает процесс** (config + runtime на старте); `restartRequired` — вычисленный (отпечаток «сохранено» ≠ «работает»); `effective`/`defaults` — аддитивно: эффективная секция «после сохранения» и config-уровень (без runtime) |
+| PUT | `/api/v2/settings/execution` | ADMIN (core — `requireAuth`) | Сохранить runtime-секцию `{execution:{defaultProfile?,browserProfile?,browserProfiles?,pooling?,fallback?,profiles?}}` (принимается и сама секция без обёртки). Валидация: `defaultProfile` есть в эффективном каталоге; `browserProfiles` ⊆ каталога; `browserProfile` ∈ `browserProfiles` (если список задан) либо в каталоге; у каждого профиля каталога задан `image` или `url`; неизвестное поле → `400 VALIDATION_ERROR`. **Runtime-каталог заменяет каталог `config.yaml` целиком** (как `profiles`/`rules` прокси) — так удаляется профиль из конфига. Приоритет: env/CLI > runtime > `config.yaml`. Секция **без секретов** (`env` — переменные пула, не пароли). **Live не применяет** (нужен рестарт) → `{saved, running, restartRequired, effective, defaults, isOverridden:true}` |
+| DELETE | `/api/v2/settings/execution` | ADMIN (core — `requireAuth`) | Сбросить runtime-секцию (вернуться к каталогу `config.yaml`/env) → `{saved:null, running, restartRequired, effective, defaults, isOverridden:false}` |
+
+**Схема секции.** `defaultProfile` (строка), `browserProfile` (строка),
+`browserProfiles` (string[]), `pooling` (`instance`|`project`|`session`), `fallback`
+(`instance`|`fail`), `profiles` — карта `имя → { description? (≤200), image?, url?,
+network? (`none`|`restricted`|`full`), resources? ({requests,limits}.{cpu,memory}),
+runtimeClass?, readOnlyRootFilesystem?, env?, mcpServers? (только имена) }`. Неизвестные
+поля отвергаются.
+
+**Применение.** Runtime-секция применяется на старте процесса (порты пулов и роутер
+создаются на старте), поэтому API честно отдаёт `restartRequired`; до рестарта
+`GET /api/v2/execution/profiles` отдаёт **работающий** каталог. Общий адрес секции
+(`execution.remote.url`) и режим (`execution.mode`) остаются config/env-уровня —
+instance-пул берёт адрес оттуда.
 
 ## 6. Источники
 

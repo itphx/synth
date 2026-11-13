@@ -241,6 +241,9 @@ export { PromptBlockRegistrationError, PromptBlockRegistry } from './engine/cont
 export type { PromptBlockRegistrationOptions, RegisteredPromptBlock } from './engine/context/index.js';
 // ADR-101 §10: суженный «session-like» контракт Composer'а (шаг пайплайна — не сессия).
 export type { ComposerSessionLike } from './engine/context/index.js';
+// ADR-135/PROP-135: среда исполнения инструментов — вид блока `[СРЕДА ИСПОЛНЕНИЯ]`.
+export { EXECUTION_ENVIRONMENT_KINDS, resolveExecutionEnvironmentKind } from './engine/context/index.js';
+export type { ExecutionEnvironmentKind } from './engine/context/index.js';
 
 export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult, ModelPricing, PermissionGrantTrigger } from './engine/orchestrator.js';
@@ -632,6 +635,23 @@ export type {
   ExecutionEnvironmentProbe,
   ExecutionStartupResolution,
 } from './execution/startup.js';
+// ADR-135: runtime-каталог профилей исполнения (admin-owned runtime-секция
+// `/api/v2/settings/execution`; секция — параметр запуска, инвариант 24).
+export { readExecutionRuntimeSettings } from './storage/runtime-settings.js';
+export {
+  applyExecutionRuntimeSettings,
+  parseExecutionRuntimeSettings,
+  executionRuntimeSettingsFromResolved,
+  mergeExecutionRuntimeSettings,
+  effectiveExecutionProfileNames,
+  executionRuntimeFingerprint,
+  executionRuntimeSettingsSchema,
+  executionRuntimeProfileSchema,
+} from '@itphx/synth-shared';
+export type {
+  ExecutionRuntimeSettings,
+  ExecutionRuntimeProfile,
+} from '@itphx/synth-shared';
 export {
   detectRuntimeDeps,
   refreshRuntimeDeps,

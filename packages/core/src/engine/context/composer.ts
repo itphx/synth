@@ -30,6 +30,7 @@ import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-b
 import { PromptBlockRegistry } from './prompt-block-registry.js';
 import { formatSkillsCatalogBlock, type ComposerSkillsCatalog } from '../skills/catalog.js';
 import { agentKeyOf } from './prompt-state.js';
+import type { ExecutionEnvironmentKind } from './environment.js';
 import { RUNTIME_DEP_BINARY, type RuntimeDeps } from '../tools/runtime-deps.js';
 import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
@@ -88,6 +89,8 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'plan.guide': 'Plan guide',
   'mode.policy': 'Mode policy',
   classification: 'Classification instruction',
+  // ADR-135/PROP-135: среда исполнения инструментов.
+  environment: 'Execution environment',
   profile: 'User profile',
   'project.info': 'Project info',
   'memory.guide': 'Memory guide',
@@ -344,6 +347,14 @@ export interface ComposerContext {
    * окружения (даже в режиме `consistency`).
    */
   envDeps?: RuntimeDeps;
+  /**
+   * ADR-135/PROP-135: среда исполнения инструментов — вид системного блока
+   * `[СРЕДА ИСПОЛНЕНИЯ]` (`prompts/system/ENVIRONMENT.<kind>.{lang}.md`).
+   *
+   * Не задана — блока нет (поведение прежнее); вычисляет оркестратор из
+   * эффективной конфигурации исполнения (режим + режим пула).
+   */
+  environmentKind?: ExecutionEnvironmentKind;
   /**
    * ADR-071 §2.6: chars-per-token для оценки `estTokens` (калибровка по usage).
    * Не задан — дефолт 4.
@@ -666,6 +677,31 @@ export class SystemPromptComposer {
       content: this._contextConfig?.getModePolicy(lang) ?? '',
       provenance: 'prompts/system/MODE_POLICY',
     });
+
+    // ADR-135/PROP-135: среда исполнения инструментов — где физически
+    // исполняются команды и файловые операции (inline / контейнер исполнителя
+    // на инстанс / на проект). Среда — константа процесса (топология задаётся
+    // при старте, инвариант 24), поэтому блок **stable** и стоит сразу после
+    // политики режимов с её блоком границ (`mode.policy`). Тир `stable` всегда
+    // идёт раньше тира `context` (ADR-070 §2.1), поэтому перед `session.info`.
+    //
+    // Блок добавляется **всегда** (если текст непустой): ограничения среды —
+    // факт инстанса, а не содержимое роли. Override пользователя
+    // (`session.settings.systemPrompt`) его не отменяет — как и `gateway`/
+    // `mode.policy`.
+    const environmentKind = ctx.environmentKind;
+    if (environmentKind) {
+      const environment = this._contextConfig?.getEnvironment(environmentKind, lang) ?? '';
+      if (environment) {
+        extraBlocks.push({
+          key: 'environment',
+          tier: 'stable',
+          order: 46,
+          content: environment,
+          provenance: `prompts/system/ENVIRONMENT.${environmentKind}`,
+        });
+      }
+    }
 
     // ADR-046 §5: каталог скиллов — только name + краткое description
     // (progressive disclosure). `stable` — system/project-скиллы (константа

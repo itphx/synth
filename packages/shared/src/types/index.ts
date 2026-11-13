@@ -23,6 +23,9 @@ export * from './mcp.js';
 export * from './project.js';
 // Git-репозитории и SSH-ключи (ADR-076, PROP-124)
 export * from './git.js';
+// ADR-135: канонические перечисления секции `execution` + runtime-каталог
+// профилей исполнения (browser-safe — читают и ядро, и UI).
+export * from './execution.js';
 // Единая семантика правил хоста (ADR-099 — TLS/egress; PROP-124 — SSH-политика):
 // browser-safe, поэтому читается и ядром, и UI.
 export * from './host-pattern.js';

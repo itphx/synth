@@ -101,6 +101,15 @@
 | **MCP stdio-серверы** | в процессе backend'а (spawn через `StdioClientTransport`) | **в исполнителе** (B1: `SYNTH_EXECUTOR_MCP_SERVERS` + `/mcp/*`, протокол 2; B2: клиентская проводка в control plane — `ExecutorMcpSource`) |
 | **Наблюдаемость** | `/metrics` backend'а | `/metrics` backend'а (очередь/занятость пула/ожидание) **+** `/metrics` исполнителя (исполненные команды/длительность/inflight/MCP) — шаг 7d |
 
+### 1.4. Среда исполнения в системном промпте
+
+Агент всегда получает блок `[СРЕДА ИСПОЛНЕНИЯ]` — файл `prompts/system/ENVIRONMENT.<kind>.{ru,en}.md`:
+`inline` (standalone/hybrid, инструменты в процессе), `remote-instance` (`remote` + `pooling: instance`:
+общий пул на инстанс, смонтирован весь workspace) или `remote-project` (`pooling: project|session`:
+пул на проект, смонтирован только его каталог; браузер — отдельный контейнер). Вид вычисляет
+оркестратор (`resolveExecutionEnvironmentKind`), блок добавляет Composer; пользовательский override —
+`{dataDir}/user/system/ENVIRONMENT.<kind>.{ru,en}.md`.
+
 ---
 
 ## 2. Режим исполнения в конфигурации

@@ -33,6 +33,7 @@ import type {
   ProjectPipelineRepository,
 } from '../../storage/ports/index.js';
 import type { SystemPromptComposer } from '../context/composer.js';
+import type { ExecutionEnvironmentKind } from '../context/environment.js';
 import type { PipelineStepContext, PipelineStepContextDeps } from './step-context.js';
 
 /**
@@ -138,6 +139,11 @@ export interface PipelineLlmDefaults {
 export interface PipelineStepLlmRuntime {
   /** Сборщик системного промпта (ADR-070) — единственная точка сборки. */
   composer: SystemPromptComposer;
+  /**
+   * ADR-135/PROP-135: вид среды исполнения — блок `[СРЕДА ИСПОЛНЕНИЯ]` в
+   * промпте шага (тот же, что у сессий). Не задан — блока нет.
+   */
+  environmentKind?: ExecutionEnvironmentKind;
   /**
    * Провайдер шага (обёрнут в `GatewayProvider`, ADR-036).
    *
@@ -500,6 +506,11 @@ export interface PipelineEngineDeps extends PipelineStepContextDeps {
    * `agent`. Не задан — agent-шаги падают с `pipeline.agent_unavailable`.
    */
   composer?: SystemPromptComposer | null;
+  /**
+   * ADR-135/PROP-135: вид среды исполнения — блок `[СРЕДА ИСПОЛНЕНИЯ]` в
+   * системном промпте agent-шага (тот же, что у сессий). Не задан — блока нет.
+   */
+  environmentKind?: ExecutionEnvironmentKind;
   /**
    * Провайдер LLM-вызова шага (ADR-036) — **обёрнутый в `GatewayProvider`**.
    *

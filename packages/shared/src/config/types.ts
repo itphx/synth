@@ -25,6 +25,20 @@ import {
 import { catalogTrustLevelSchema } from '../types/trust.js';
 import { PLUGIN_HYBRID_MODES } from '../types/plugin-hybrid.js';
 import { GlobalRole } from '../types/user.js';
+// ADR-135: канонические перечисления секции `execution` — browser-safe
+// (`types/execution.ts`), здесь импортируются для схемы конфигурации.
+import {
+  DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
+  DEFAULT_EXECUTION_BROWSER_PROFILE,
+  DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+  EXECUTION_FAIL_MODES,
+  EXECUTION_FALLBACKS,
+  EXECUTION_MODES,
+  EXECUTION_POOLINGS,
+  EXECUTION_POOL_PROVIDERS,
+  EXECUTION_PROFILE_NETWORKS,
+} from '../types/execution.js';
 // PROP-124: режимы инстанса для SSH-ключей (`ssh.mode`) — канонический список
 // в типах (browser-safe), чтобы UI и ядро читали один источник.
 import { SSH_MODES } from '../types/git.js';
@@ -149,128 +163,40 @@ export const storageConfigSchema = z.object({
 // --- Исполнение (ADR-077) ---
 
 /**
- * ADR-077: топология исполнения — переключатель запуска (`execution.mode`).
+ * ADR-077/ADR-135: канонические перечисления и константы секции `execution`
+ * живут в **browser-safe** модуле `types/execution.ts` — их читает и ядро, и
+ * UI (админка «Исполнение»). Здесь — реэкспорт (обратная совместимость
+ * импортов `@itphx/synth-shared/config`).
  *
- * - `inline` (дефолт) — исполнение в процессе backend'а (прежнее поведение,
- *   all-in-one образ);
- * - `remote` — отдельные исполнители (`RemoteExecutionPort` + сервис-исполнитель,
- *   шаг 7 плана ADR-077).
- *
- * Секция — **параметр запуска**, а не runtime-настройка: смена режима — только
- * рестартом процесса (инвариант 24 — process-глобальные решения не
- * переинициализируются на лету). Значение `mode` — **fail-closed**: неизвестное
- * явное значение (опечатка `inlne`) валит старт, а не молча выбирает дефолт
- * (как `storage.backend`).
+ * Топология исполнения — переключатель запуска (`execution.mode`):
+ * `inline` (дефолт) — исполнение в процессе control plane; `remote` —
+ * отдельные исполнители (ADR-077). Секция — **параметр запуска**, а не
+ * runtime-настройка: смена режима — только рестартом процесса (инвариант 24).
+ * Значение `mode` — **fail-closed**: неизвестное явное значение (опечатка
+ * `inlne`) валит старт, а не молча выбирает дефолт (как `storage.backend`).
  */
-export const EXECUTION_MODES = ['inline', 'remote'] as const;
-export type ExecutionMode = (typeof EXECUTION_MODES)[number];
-
-/**
- * Поведение при недоступном исполнителе:
- * - `fail` (дефолт) — fail-closed: инструмент недоступен с явной причиной;
- * - `inline-fallback` — backend исполняет команду сам; **только явной настройкой**
- *   (в managed-контуре это обход изоляции).
- */
-export const EXECUTION_FAIL_MODES = ['fail', 'inline-fallback'] as const;
-export type ExecutionFailMode = (typeof EXECUTION_FAIL_MODES)[number];
-
-/**
- * Режим пула исполнителей (PROP-135, Ф4a).
- *
- * - `instance` (дефолт) — **общий** пул инстанса: один порт на процесс,
- *   поведение как сейчас (ADR-077);
- * - `project` — порт на профиль для проекта (проектный пул);
- * - `session` — порт на профиль для сессии (эксклюзивный под).
- *
- * Значение — **fail-closed**: неизвестное явное значение (опечатка `projekt`)
- * валит старт, а не молча выбирает дефолт (как `mode`/`failMode`).
- */
-export const EXECUTION_POOLINGS = ['instance', 'project', 'session'] as const;
-export type ExecutionPooling = (typeof EXECUTION_POOLINGS)[number];
-
-/**
- * Поведение роутера исполнения, когда профиль непригоден (PROP-135, Ф4a):
- *
- * - `instance` (дефолт) — откат на **instance-порт** (общий пул инстанса);
- * - `fail` — fail-closed: старт прерывается с понятной причиной.
- */
-export const EXECUTION_FALLBACKS = ['instance', 'fail'] as const;
-export type ExecutionFallback = (typeof EXECUTION_FALLBACKS)[number];
-
-/**
- * Провайдер пулов исполнения (PROP-135, Ф4b-1).
- *
- * - `static` (дефолт) — пулы **из конфигурации**: адреса профиля известны заранее,
- *   порт создаётся на старте (поведение Ф4a);
- * - `http` — пулы запрашиваются у **provisioner'а** по HTTP (`POST /v1/pools`),
- *   адрес и токен пула приходят ответом; порт создаётся лениво (первый вызов).
- *
- * Значение — **fail-closed**: неизвестное явное значение (опечатка `htpp`) валит
- * старт, а не молча выбирает дефолт (как `mode`/`failMode`/`pooling`).
- */
-export const EXECUTION_POOL_PROVIDERS = ['static', 'http'] as const;
-export type ExecutionPoolProviderKind = (typeof EXECUTION_POOL_PROVIDERS)[number];
-
-/**
- * Сетевой класс профиля исполнения (PROP-135).
- *
- * **Метаданные**: описывают, какой сетевой класс у пула профиля (`none` —
- * egress запрещён, `restricted` — allowlist, `full` — без ограничений).
- * Маршрутизацию и создание портов значение **не** меняет — сетевой класс
- * применяется развёртыванием (Helm/provisioner).
- */
-export const EXECUTION_PROFILE_NETWORKS = ['none', 'restricted', 'full'] as const;
-export type ExecutionProfileNetwork = (typeof EXECUTION_PROFILE_NETWORKS)[number];
-
-/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
-export interface ExecutionProfileResourceList {
-  /** CPU (`500m`, `1`). */
-  cpu?: string;
-  /** Память (`2Gi`). */
-  memory?: string;
-  /** Эфемерное хранилище (`1Gi`) — приходит от provisioner'а. */
-  ephemeralStorage?: string;
-}
-
-/** Ресурсы профиля исполнения (как в PodSpec). */
-export interface ExecutionProfileResources {
-  requests?: ExecutionProfileResourceList;
-  limits?: ExecutionProfileResourceList;
-}
-
-/**
- * Таймаут обращения к provisioner'у пулов по умолчанию (10 с).
- *
- * Отдельный от таймаута exec-вызова: вызов к provisioner'у — это запрос
- * «дай адрес пула», а не исполнение команды агента.
- */
-export const DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS = 10_000;
-
-/**
- * Таймаут exec-вызова по умолчанию (30 с — как у нынешних тулов: shell/search/git).
- * Больший лимит для shell (до 120 с) — свойство тула, не конфига.
- */
-export const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000;
-
-/**
- * Имя профиля исполнения для пула класса `browser` по умолчанию.
- *
- * Браузер — **проектный** пул (изоляция cookies между проектами), но профиль
- * у него свой: образ с браузером и MCP-сервером, а не образ обычных команд.
- * Поэтому `class: 'browser'` не наследует `defaultProfile`.
- */
-export const DEFAULT_EXECUTION_BROWSER_PROFILE = 'browser';
-
-/**
- * Имя MCP-сервера браузера в поде исполнителя по умолчанию.
- *
- * Исполнитель поднимает MCP-серверы у себя (`SYNTH_EXECUTOR_MCP_SERVERS`);
- * встроенные browser-тулы адресуют вызов именно этому серверу по имени.
- * Значение совпадает с дефолтом образа исполнителя (`docker/Dockerfile.executor`,
- * `SYNTH_EXECUTOR_MCP_SERVERS[].name = "playwright-mcp"`); переопределяется
- * `execution.remote.browserMcpServer` / env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`.
- */
-export const DEFAULT_EXECUTION_BROWSER_MCP_SERVER = 'playwright-mcp';
+export {
+  EXECUTION_MODES,
+  EXECUTION_FAIL_MODES,
+  EXECUTION_POOLINGS,
+  EXECUTION_FALLBACKS,
+  EXECUTION_POOL_PROVIDERS,
+  EXECUTION_PROFILE_NETWORKS,
+  DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+  DEFAULT_EXECUTION_BROWSER_PROFILE,
+  DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
+} from '../types/execution.js';
+export type {
+  ExecutionMode,
+  ExecutionFailMode,
+  ExecutionPooling,
+  ExecutionFallback,
+  ExecutionPoolProviderKind,
+  ExecutionProfileNetwork,
+  ExecutionProfileResourceList,
+  ExecutionProfileResources,
+} from '../types/execution.js';
 
 /**
  * Параметры удалённого исполнителя (`execution.remote`).

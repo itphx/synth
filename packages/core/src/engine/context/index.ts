@@ -34,6 +34,13 @@ export {
   type ComposedPrompt,
   type SystemPromptComposerDeps,
 } from './composer.js';
+// Среда исполнения инструментов (ADR-135/PROP-135) — вид системного блока
+// `[СРЕДА ИСПОЛНЕНИЯ]`.
+export {
+  EXECUTION_ENVIRONMENT_KINDS,
+  resolveExecutionEnvironmentKind,
+  type ExecutionEnvironmentKind,
+} from './environment.js';
 export {
   type StateMessageType,
   type UnavailableTool,

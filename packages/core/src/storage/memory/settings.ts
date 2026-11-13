@@ -33,6 +33,7 @@ import type {
   ContextDefaults,
   StickyNotesLimits,
   SshMode,
+  ExecutionRuntimeSettings,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -455,6 +456,19 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearSshMode(): Promise<void> {
     this._clear('sshMode');
+  }
+
+  /** ADR-135: runtime-каталог профилей исполнения (`execution`). */
+  async getExecution(): Promise<ExecutionRuntimeSettings | undefined> {
+    return this._settings.execution ? structuredClone(this._settings.execution) : undefined;
+  }
+
+  async setExecution(execution: ExecutionRuntimeSettings): Promise<void> {
+    this._patch({ execution });
+  }
+
+  async clearExecution(): Promise<void> {
+    this._clear('execution');
   }
 }
 

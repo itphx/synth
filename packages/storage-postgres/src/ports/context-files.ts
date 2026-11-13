@@ -34,6 +34,7 @@
 
 import type { ContextCategory, ContextFileContent, ContextFileInfo } from '@itphx/synth-shared';
 import type { ContextFileRepository, StorageContext } from '@itphx/synth-core';
+import type { ExecutionEnvironmentKind } from '@itphx/synth-core';
 import type { PortDeps } from './deps.js';
 import { toIso, toIsoRequired } from './events-core.js';
 
@@ -193,6 +194,10 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
 
   getSummarizerPrompt(language?: string): string {
     return this._config.getSummarizerPrompt(language);
+  }
+
+  getEnvironment(kind: ExecutionEnvironmentKind, language?: string): string {
+    return this._config.getEnvironment(kind, language);
   }
 
   getCompactorPrompt(language?: string): string {

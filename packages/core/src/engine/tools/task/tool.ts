@@ -259,6 +259,12 @@ export const taskTool: ToolDefinition = {
     // `params.prompt` передаётся как есть — он же уходит в routing/QA.
     const subagentLang = extra.parentSessionSettings?.language || 'ru';
     const subagentNotice = extra.contextConfig?.getSubagentNotice(subagentLang) ?? '';
+    // ADR-135/PROP-135: блок `[СРЕДА ИСПОЛНЕНИЯ]` — тот же текст, что в
+    // системном промпте основной сессии (его композер собирает сам; здесь
+    // промпт саб-агента собирается напрямую). Файл отсутствует — блока нет.
+    const environmentNotice = extra.environmentKind
+      ? extra.contextConfig?.getEnvironment(extra.environmentKind, subagentLang) ?? ''
+      : '';
 
     // ─── Сборка LLM-сообщений ────────────────────────────────────────
     let llmSystemPrompt = (() => {
@@ -271,7 +277,9 @@ export const taskTool: ToolDefinition = {
         contextConfig: extra.contextConfig,
         language: subagentLang,
       });
-      let prompt = [subagentNotice, todoFinalize, systemPrompt].filter(Boolean).join('\n\n');
+      let prompt = [subagentNotice, environmentNotice, todoFinalize, systemPrompt]
+        .filter(Boolean)
+        .join('\n\n');
 
       // Заметки родительской сессии — передаём во всех режимах с контекстом
       // (inherit, summary, last_n), но НЕ в none (чистый лист)
@@ -964,6 +972,13 @@ async function continueChildSession(opts: {
         child.settings.language,
         extra.contextConfig?.systemPromptsDir,
       ),
+      // ADR-135/PROP-135: среда исполнения — тот же блок, что у нового прогона.
+      extra.environmentKind
+        ? extra.contextConfig?.getEnvironment(
+            extra.environmentKind,
+            child.settings.language || 'ru',
+          ) ?? ''
+        : '',
       todoFinalize,
     ].filter(Boolean).join('\n\n'),
     initialMessages: resumeInitialMessages(freshChild),

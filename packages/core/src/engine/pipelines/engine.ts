@@ -204,6 +204,8 @@ export class PipelineEngine {
     this._llm = deps.composer
       ? {
           composer: deps.composer,
+          // ADR-135/PROP-135: среда исполнения шага — та же, что у сессий.
+          ...(deps.environmentKind ? { environmentKind: deps.environmentKind } : {}),
           resolveProvider: deps.resolveProvider ?? (() => null),
           ...(deps.resolveLlmDefaults ? { resolveLlmDefaults: deps.resolveLlmDefaults } : {}),
         }

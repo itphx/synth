@@ -908,6 +908,66 @@ execution:
         timeoutMs: 60000            # параметры профиля — «поверх» общих
 ```
 
+### Каталог профилей исполнения — runtime-настройка (`/api/v2/settings/execution`, ADR-135 п. 11)
+
+Каталог профилей и дефолты исполнения — **не только** `config.yaml`: это **backend-owned
+runtime-секция** `execution` (`{dataDir}/settings.json` или PG-таблица `settings`), которой
+управляет **только ADMIN** через `GET/PUT/DELETE /api/v2/settings/execution`.
+
+| Поле runtime-секции | Тип / значения | Смысл |
+|---|---|---|
+| `defaultProfile` | строка | Профиль по умолчанию (должен быть в эффективном каталоге) |
+| `browserProfile` | строка | Профиль браузерного пула (входит в `browserProfiles`, если список задан) |
+| `browserProfiles` | string[] | Каталог **браузерных** профилей (каждый — из каталога профилей) |
+| `pooling` | `instance` \| `project` \| `session` | Режим пула ( ADR-135 Ф4a) |
+| `fallback` | `instance` \| `fail` | Поведение роутера при непригодном профиле |
+| `profiles` | карта профилей | Каталог профилей: `имя → { description?, image?, url?, network?, resources?, runtimeClass?, readOnlyRootFilesystem?, env?, mcpServers? }` |
+
+**Приоритет эффективного значения** ([ADR-023](./arch_decisions/adr-023-configuration.md)):
+**env/CLI > runtime > `config.yaml`**. Env/CLI разрешаются внутри `resolveExecutionConfig`,
+runtime-override применяется поверх config-уровня, но **под env** — переменная окружения
+(например, `SYNTH_EXECUTION_DEFAULT_PROFILE`) runtime-каталогом не перекрывается.
+
+**Runtime-каталог заменяет каталог `config.yaml` целиком** (как `profiles`/`rules` прокси,
+[ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)): администратор может и добавить профиль,
+и удалить профиль из конфига (не задав его в runtime-каталоге). Пока runtime-секция не задана,
+действует каталог `config.yaml`.
+
+**Валидация записи** (`400 VALIDATION_ERROR`): `defaultProfile` есть в эффективном каталоге;
+`browserProfiles` ⊆ каталога; `browserProfile` ∈ `browserProfiles` (если список задан) либо в
+каталоге; у каждого профиля каталога задан `image` или `url`; неизвестное поле секции — 400.
+Секция **не содержит секретов**: `env` — переменные окружения пула, не пароли (инвариант 13).
+
+**Применение — при старте процесса.** `execution` — параметр запуска (инвариант 24): порты пулов
+и роутер создаются на старте, поэтому API честно отдаёт `restartRequired` (сравнение отпечатков
+«сохранено» vs «работает»); `/api/v2/execution/profiles` до рестарта отдаёт **работающий**
+каталог. Общий адрес секции (`execution.remote.url`) и режим (`execution.mode`) остаются
+config/env-уровня — instance-пул берёт адрес оттуда; runtime-каталог описывает **профильные**
+пулы (`pooling: project|session`) и служит источником каталога для provisioner'а.
+
+Пример runtime-секции (тело `PUT /api/v2/settings/execution`):
+
+```json
+{
+  "execution": {
+    "defaultProfile": "devops",
+    "pooling": "project",
+    "profiles": {
+      "devops": {
+        "description": "DevOps-исполнитель: полный toolchain",
+        "image": "synth-executor:0.13.9-full",
+        "network": "restricted",
+        "resources": { "requests": { "cpu": "500m", "memory": "1Gi" } },
+        "runtimeClass": "gvisor",
+        "readOnlyRootFilesystem": true,
+        "env": { "EXTRA_TOOLCHAIN": "full" },
+        "mcpServers": ["playwright-mcp"]
+      }
+    }
+  }
+}
+```
+
 ### Сетевые классы пулов (values `executor.networkClass` / `executor.networkClasses.*`, ADR-137b-2)
 
 Изоляция пулов исполнителей — **по классу профиля**, а не по адресам: каждый пул

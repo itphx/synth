@@ -736,3 +736,77 @@ describe('ContextConfig.getInterviewTemplate (онбординг)', () => {
     expect(config.getInterviewTemplate('fr')).toBe('');
   });
 });
+
+describe('ContextConfig.getEnvironment (ADR-135/PROP-135)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-environment-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('каждый вид среды загружает свой файл (ru)', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const inline = config.getEnvironment('inline', 'ru');
+    expect(inline).toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+    expect(inline).toContain('в процессе Synth');
+
+    const remoteInstance = config.getEnvironment('remote-instance', 'ru');
+    expect(remoteInstance).toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+    expect(remoteInstance).toContain('общем контейнере-исполнителе на весь инстанс');
+
+    const remoteProject = config.getEnvironment('remote-project', 'ru');
+    expect(remoteProject).toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+    expect(remoteProject).toContain('отдельном контейнере-исполнителе на проект');
+  });
+
+  it('en → английский контент, неизвестный язык → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const en = config.getEnvironment('inline', 'en');
+    expect(en).toContain('[EXECUTION ENVIRONMENT]');
+    expect(en).not.toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+
+    expect(config.getEnvironment('inline', 'fr')).toBe('');
+  });
+
+  it('inline: подсказка про MCP-браузер; remote-project: браузер отдельным контейнером', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    expect(config.getEnvironment('inline', 'ru')).toContain('Playwright MCP');
+
+    const remoteProject = config.getEnvironment('remote-project', 'ru');
+    expect(remoteProject).toContain('browser_screenshot');
+    expect(remoteProject).toContain('отдельный контейнер на проект');
+  });
+
+  it('override из system-категории приоритетнее встроенного (локализованный и базовый)', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(
+      join(userDataDir, 'user', 'system', 'ENVIRONMENT.inline.md'),
+      'БАЗОВЫЙ OVERRIDE',
+      'utf-8',
+    );
+    await writeFile(
+      join(userDataDir, 'user', 'system', 'ENVIRONMENT.inline.ru.md'),
+      'ПОЛЬЗОВАТЕЛЬСКАЯ СРЕДА',
+      'utf-8',
+    );
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getEnvironment('inline', 'ru')).toBe('ПОЛЬЗОВАТЕЛЬСКАЯ СРЕДА');
+    // Локализованного override для `en` нет — берётся базовый.
+    expect(config.getEnvironment('inline', 'en')).toBe('БАЗОВЫЙ OVERRIDE');
+    // Другой вид среды override не затрагивает.
+    expect(config.getEnvironment('remote-instance', 'ru')).toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+  });
+
+  it('файла нет → пустая строка (fail-soft, промпт не ломается)', async () => {
+    const config = new ContextConfig({ userDataDir, systemPromptsDir: join(userDataDir, 'empty') });
+    expect(config.getEnvironment('inline', 'ru')).toBe('');
+  });
+});

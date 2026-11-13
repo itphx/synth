@@ -6,6 +6,7 @@ import type { ContextFileInfo, ContextFileContent, ContextCategory } from '@itph
 import { atomicWrite } from '@itphx/synth-shared';
 import { info, warning } from '../../logger.js';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
+import type { ExecutionEnvironmentKind } from './environment.js';
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -586,6 +587,28 @@ export class ContextConfig implements ContextFileRepository {
     if (override) return override;
 
     // 2. Встроенный prompts/system/TODO_FINALIZE.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
+  /**
+   * Системный блок `[СРЕДА ИСПОЛНЕНИЯ]` — где физически исполняются
+   * инструменты сессии (ADR-135/PROP-135).
+   *
+   * Файлы: prompts/system/ENVIRONMENT.<kind>.{lang}.md — только локализованные
+   * (базовых ENVIRONMENT.<kind>.md нет). Override через {userDataDir}/user/system/
+   * ENVIRONMENT.<kind>.md и ENVIRONMENT.<kind>.{lang}.md — стандартный механизм
+   * system-категории, проверяется первым.
+   *
+   * Пустая строка, если файла нет (fail-soft: отсутствие блока не ломает промпт).
+   */
+  getEnvironment(kind: ExecutionEnvironmentKind, language = 'ru'): string {
+    const stem = `ENVIRONMENT.${kind}`;
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/ENVIRONMENT.<kind>.{lang}.md
     return this._readPrompt(stem, 'system', language) ?? '';
   }
 

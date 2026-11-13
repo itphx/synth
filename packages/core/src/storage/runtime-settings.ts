@@ -1,9 +1,9 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode, ExecutionRuntimeSettings } from '@itphx/synth-shared';
 import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS, SSH_MODES } from '@itphx/synth-shared';
-import { defaultConfig, parseAttachmentsModalities, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
+import { defaultConfig, parseAttachmentsModalities, parseExecutionRuntimeSettings, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
 
@@ -940,6 +940,16 @@ export interface RuntimeSettings {
    * Runtime-override секции `ssh` (админка «SSH-ключи»); применяется сразу.
    */
   sshMode?: SshMode;
+  /**
+   * ADR-135: runtime-каталог профилей исполнения и дефолты (`execution`).
+   *
+   * Секция **admin-owned**: администратор управляет каталогом профилей и
+   * дефолтами через `GET/PUT/DELETE /api/v2/settings/execution`. Приоритет
+   * эффективного значения — **env/CLI > runtime > config.yaml**; применяется
+   * при старте процесса (`execution` — параметр запуска, инвариант 24 →
+   * `restartRequired`).
+   */
+  execution?: ExecutionRuntimeSettings;
 }
 
 /**
@@ -2050,6 +2060,27 @@ export class RuntimeSettingsStore implements SettingsRepository {
     });
   }
 
+  /**
+   * ADR-135: runtime-каталог профилей исполнения (`execution`), `undefined` —
+   * не задан (действует каталог config.yaml).
+   */
+  async getExecution(): Promise<ExecutionRuntimeSettings | undefined> {
+    const settings = await this.load();
+    return settings.execution;
+  }
+
+  async setExecution(execution: ExecutionRuntimeSettings): Promise<void> {
+    await this._update((current) => ({ ...current, execution }));
+  }
+
+  async clearExecution(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.execution;
+      return next;
+    });
+  }
+
   private async _update(mutate: (current: RuntimeSettings) => RuntimeSettings): Promise<void> {
     const path = this._filePath();
     const lock = this._getLock('settings');
@@ -2069,5 +2100,22 @@ export class RuntimeSettingsStore implements SettingsRepository {
     } finally {
       lock.release();
     }
+  }
+}
+
+/**
+ * ADR-135: прочитать runtime-каталог профилей исполнения из порта настроек.
+ *
+ * **Fail-soft**: недоступное хранилище (деградация, ADR-098) или невалидная
+ * секция → `undefined` (действует каталог config.yaml, как раньше). Старт
+ * процесса не должен падать из-за испорченной runtime-настройки.
+ */
+export async function readExecutionRuntimeSettings(
+  store: SettingsRepository,
+): Promise<ExecutionRuntimeSettings | undefined> {
+  try {
+    return parseExecutionRuntimeSettings(await store.getExecution());
+  } catch {
+    return undefined;
   }
 }

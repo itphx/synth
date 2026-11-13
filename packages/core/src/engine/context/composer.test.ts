@@ -1306,3 +1306,125 @@ describe('session.info — периметр сессии (write-up: worktree + �
     expect(system).toContain('Каталог данных инстанса');
   });
 });
+
+describe('SystemPromptComposer: блок environment (ADR-135/PROP-135)', () => {
+  let userDataDir: string;
+  let builder: ContextBuilder;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-composer-env-'));
+    await mkdir(join(userDataDir, 'user'), { recursive: true });
+    await mkdir(join(userDataDir, 'roles'), { recursive: true });
+    await writeFile(join(userDataDir, 'roles', 'ASSISTANT.md'), 'ROLE-MARKER', 'utf-8');
+    builder = new ContextBuilder(new ContextConfig({ userDataDir }));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  /** Композер с настоящим `ContextConfig` — читает встроенные промпты образа. */
+  function makeRealComposer(): SystemPromptComposer {
+    return new SystemPromptComposer({
+      contextBuilder: builder,
+      contextConfig: new ContextConfig({ userDataDir }),
+    });
+  }
+
+  function makeCtx(session: ComposerSessionLike, extra: Partial<ComposerContext> = {}): ComposerContext {
+    return {
+      session,
+      workingDir: '/ws',
+      language: 'ru',
+      routingEnabled: false,
+      gatewayEnabled: true,
+      ...extra,
+    };
+  }
+
+  it('без environmentKind блока нет (поведение прежнее)', async () => {
+    const composer = makeRealComposer();
+    const { system, blocks } = await composer.compose(makeCtx(makeSession()));
+
+    expect(blocks.find((block) => block.key === 'environment')).toBeUndefined();
+    expect(system).not.toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+  });
+
+  it('environmentKind → stable-блок в промпте и в stablePrefix', async () => {
+    const composer = makeRealComposer();
+    const { system, stablePrefix, blocks } = await composer.compose(
+      makeCtx(makeSession(), { environmentKind: 'inline' }),
+    );
+
+    const block = blocks.find((b) => b.key === 'environment');
+    expect(block).toBeDefined();
+    expect(block!.tier).toBe('stable');
+    expect(block!.provenance).toBe('prompts/system/ENVIRONMENT.inline');
+    expect(system).toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+    expect(stablePrefix).toContain('[СРЕДА ИСПОЛНЕНИЯ]');
+  });
+
+  it('вид среды выбирает нужный файл', async () => {
+    const composer = makeRealComposer();
+
+    const inline = await composer.compose(makeCtx(makeSession(), { environmentKind: 'inline' }));
+    expect(inline.system).toContain('в процессе Synth');
+    expect(inline.system).not.toContain('контейнере-исполнителе');
+
+    const remoteInstance = await composer.compose(
+      makeCtx(makeSession(), { environmentKind: 'remote-instance' }),
+    );
+    expect(remoteInstance.system).toContain('общем контейнере-исполнителе на весь инстанс');
+
+    const remoteProject = await composer.compose(
+      makeCtx(makeSession(), { environmentKind: 'remote-project' }),
+    );
+    expect(remoteProject.system).toContain('отдельном контейнере-исполнителе на проект');
+  });
+
+  it('inline: подсказка про MCP-браузер; remote-project: браузер отдельным контейнером', async () => {
+    const composer = makeRealComposer();
+
+    const inline = await composer.compose(makeCtx(makeSession(), { environmentKind: 'inline' }));
+    expect(inline.system).toContain('Playwright MCP');
+
+    const remoteProject = await composer.compose(
+      makeCtx(makeSession(), { environmentKind: 'remote-project' }),
+    );
+    expect(remoteProject.system).toContain('browser_screenshot');
+    expect(remoteProject.system).toContain('отдельный контейнер на проект');
+  });
+
+  it('override из {dataDir}/user/system приоритетнее встроенного файла', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(
+      join(userDataDir, 'user', 'system', 'ENVIRONMENT.inline.ru.md'),
+      '[СРЕДА ИСПОЛНЕНИЯ]\nПОЛЬЗОВАТЕЛЬСКАЯ СРЕДА',
+      'utf-8',
+    );
+
+    const composer = makeRealComposer();
+    const { system, blocks } = await composer.compose(
+      makeCtx(makeSession(), { environmentKind: 'inline' }),
+    );
+
+    expect(system).toContain('ПОЛЬЗОВАТЕЛЬСКАЯ СРЕДА');
+    expect(system).not.toContain('Playwright MCP');
+    expect(blocks.find((b) => b.key === 'environment')?.provenance)
+      .toBe('prompts/system/ENVIRONMENT.inline');
+  });
+
+  it('файла нет → блок пуст, промпт собирается (fail-soft)', async () => {
+    const composer = new SystemPromptComposer({
+      contextBuilder: builder,
+      contextConfig: makeContextConfig({ getEnvironment: () => '' }),
+    });
+
+    const { system, blocks } = await composer.compose(
+      makeCtx(makeSession(), { environmentKind: 'inline' }),
+    );
+
+    expect(blocks.find((b) => b.key === 'environment')).toBeUndefined();
+    expect(system).toContain('ROLE-MARKER');
+  });
+});

@@ -1462,6 +1462,9 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 
 | Method | Path | RBAC | Purpose |
 |---|---|---|---|
+| GET | `/api/v2/settings/execution` | ADMIN (managed) / auth (core) | Runtime catalogue of execution profiles and defaults (ADR-135 §11): `{saved, running, restartRequired, effective, defaults, isOverridden}`. `saved` — the stored runtime section (`null` — unset); `running` — the section the **process actually runs** with (config + runtime as of start); `restartRequired` — computed (fingerprint "saved" ≠ "running"): the `execution` section is a startup parameter (invariant 24), so a change needs a restart; `effective`/`defaults` — additive: the effective section after the save and the config level (without runtime) |
+| PUT | `/api/v2/settings/execution` | ADMIN (managed) / auth (core) | Store the runtime section `{execution:{defaultProfile?,browserProfile?,browserProfiles?,pooling?,fallback?,profiles?}}` (the bare section without the wrapper is accepted too). Validation: `defaultProfile` exists in the effective catalogue; `browserProfiles` ⊆ catalogue; `browserProfile` ∈ `browserProfiles` (when the list is set) or in the catalogue; every catalogue profile has `image` or `url`; an unknown field → `400 VALIDATION_ERROR`. The **runtime catalogue replaces the `config.yaml` catalogue entirely** (like the proxy `profiles`/`rules`) — that is how a profile configured in `config.yaml` is removed. Priority: env/CLI > runtime > `config.yaml`. The section holds **no secrets** (`env` are pool environment variables, not passwords). **Not applied live** (a restart is needed) → `{saved, running, restartRequired, effective, defaults, isOverridden:true}` |
+| DELETE | `/api/v2/settings/execution` | ADMIN (managed) / auth (core) | Drop the runtime section (fall back to the `config.yaml`/env catalogue) → `{saved:null, running, restartRequired, effective, defaults, isOverridden:false}` |
 | GET | `/api/v2/settings/workspace` | auth | Default working directory: `{workspace, isOverridden, defaults}` (`defaults` — env/config) |
 | PUT | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | `{workspace}` |
 | DELETE | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | Reset the runtime override to the default; `{status:"restored", workspace, isOverridden:false, defaults}` |
@@ -2853,6 +2856,32 @@ visible (the single instance pool) and there are no per-project/per-session keys
 **Misc.** The state is local to the process (the hybrid mode does not proxy it: this is
 the configuration and the pools of **this** instance); `execution.*` changes only on
 restart (invariant 24), so the contour has no `PUT`.
+
+### 5.42 Execution profile catalogue — `/api/v2/settings/execution` (both, ADR-135 §11)
+
+The profile catalogue and the execution defaults are a **backend-owned runtime
+section** (ADMIN only): `GET/PUT/DELETE /api/v2/settings/execution`. Unlike the
+`execution.*` config section, this one is written by the admin UI — but it is still a
+**startup parameter** (invariant 24), so a change needs a restart.
+
+| Method | Path | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/settings/execution` | ADMIN (core — `requireAuth`) | `{saved, running, restartRequired, effective, defaults, isOverridden}`. `saved` — the stored runtime section (`null` — unset); `running` — the section the **process actually runs** with (config + runtime as of start); `restartRequired` — computed (fingerprint "saved" ≠ "running"); `effective`/`defaults` — additive: the effective section after the save and the config level (without runtime) |
+| PUT | `/api/v2/settings/execution` | ADMIN (core — `requireAuth`) | Store the runtime section `{execution:{defaultProfile?,browserProfile?,browserProfiles?,pooling?,fallback?,profiles?}}` (the bare section without the wrapper is accepted too). Validation: `defaultProfile` exists in the effective catalogue; `browserProfiles` ⊆ catalogue; `browserProfile` ∈ `browserProfiles` (when the list is set) or in the catalogue; every catalogue profile has `image` or `url`; an unknown field → `400 VALIDATION_ERROR`. The **runtime catalogue replaces the `config.yaml` catalogue entirely** (like the proxy `profiles`/`rules`) — that is how a profile configured in `config.yaml` is removed. Priority: env/CLI > runtime > `config.yaml`. The section holds **no secrets** (`env` are pool environment variables, not passwords). **Not applied live** (a restart is needed) → `{saved, running, restartRequired, effective, defaults, isOverridden:true}` |
+| DELETE | `/api/v2/settings/execution` | ADMIN (core — `requireAuth`) | Drop the runtime section (fall back to the `config.yaml`/env catalogue) → `{saved:null, running, restartRequired, effective, defaults, isOverridden:false}` |
+
+**Section schema.** `defaultProfile` (string), `browserProfile` (string),
+`browserProfiles` (string[]), `pooling` (`instance`|`project`|`session`), `fallback`
+(`instance`|`fail`), `profiles` — map `name → { description? (≤200), image?, url?,
+network? (`none`|`restricted`|`full`), resources? ({requests,limits}.{cpu,memory}),
+runtimeClass?, readOnlyRootFilesystem?, env?, mcpServers? (names only) }`. Unknown
+fields are rejected.
+
+**Application.** The runtime section is applied on process start (pool ports and the
+router are created on start), so the API honestly reports `restartRequired`; until a
+restart, `GET /api/v2/execution/profiles` returns the **running** catalogue. The
+section-wide address (`execution.remote.url`) and the mode (`execution.mode`) stay at
+the config/env level — the instance pool takes its address from there.
 
 ## 6. Sources
 

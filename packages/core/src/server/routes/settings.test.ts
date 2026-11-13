@@ -10,6 +10,8 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../s
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { LLMGatewayConfig } from '@itphx/synth-shared';
+import { defaultConfig, resolveExecutionConfig } from '@itphx/synth-shared/config';
+import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { MemorySecurityAuditRepository } from '../../storage/memory/index.js';
 
 function createMockAuth(): AuthKit {
@@ -2049,5 +2051,182 @@ describe('Settings API Routes — default-model (явная пара provider+mo
 
     await app.request('/api/v2/settings/default-model', { method: 'DELETE' });
     expect(changes).toEqual([{ provider: 'openai', model: 'gpt-4o' }, null]);
+  });
+});
+
+describe('Settings API Routes — каталог профилей исполнения (ADR-135)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-execution-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Config-уровень секции `execution` (база runtime-каталога). */
+  function baseExecution(): ResolvedExecutionConfig {
+    return resolveExecutionConfig(
+      {
+        ...defaultConfig,
+        execution: {
+          mode: 'remote',
+          remote: {
+            ...defaultConfig.execution.remote,
+            url: ['http://executor:8080'],
+            defaultProfile: 'base',
+            profiles: {
+              base: { url: ['http://base:8080'] },
+              legacy: { url: ['http://legacy:8080'] },
+            },
+          },
+        },
+      },
+      {},
+    );
+  }
+
+  function makeApp(opts?: { running?: ResolvedExecutionConfig }) {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const base = baseExecution();
+    const running = opts?.running ?? base;
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: '/default/workspace',
+      fallbackExecution: base,
+      getRunningExecution: () => running,
+    }));
+    return { app, settingsStore, base, running };
+  }
+
+  function json(method: string, body?: unknown): RequestInit {
+    return {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    };
+  }
+
+  it('GET без runtime → saved null, running = config-уровень, restartRequired false', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.saved).toBeNull();
+    expect(body.running.defaultProfile).toBe('base');
+    expect(Object.keys(body.running.profiles).sort()).toEqual(['base', 'legacy']);
+    expect(body.restartRequired).toBe(false);
+    expect(body.isOverridden).toBe(false);
+  });
+
+  it('PUT сохраняет runtime-каталог и требует рестарта (restartRequired true)', async () => {
+    const { app, settingsStore } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      defaultProfile: 'p1',
+      profiles: { p1: { image: 'img:p1' } },
+    }));
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.saved.defaultProfile).toBe('p1');
+    expect(body.restartRequired).toBe(true);
+    expect(await settingsStore.getExecution()).toEqual({
+      defaultProfile: 'p1',
+      profiles: { p1: { image: 'img:p1' } },
+    });
+  });
+
+  it('PUT принимает обёртку { execution: {...} }', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      execution: { profiles: { p1: { url: ['http://p1:8080'] } } },
+    }));
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.saved.profiles.p1.url).toEqual(['http://p1:8080']);
+  });
+
+  it('PUT: неизвестное поле → 400, каталог не сохранён', async () => {
+    const { app, settingsStore } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      profiles: { p1: { image: 'img:p1' } },
+      unknownField: true,
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { code: string } };
+    expect(parsed.error.code).toBe('VALIDATION_ERROR');
+    expect(await settingsStore.getExecution()).toBeUndefined();
+  });
+
+  it('PUT: defaultProfile не в каталоге → 400', async () => {
+    const { app, settingsStore } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      defaultProfile: 'ghost',
+      profiles: { p1: { image: 'img:p1' } },
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { code: string; message: string } };
+    expect(parsed.error.code).toBe('VALIDATION_ERROR');
+    expect(parsed.error.message).toContain('ghost');
+    expect(await settingsStore.getExecution()).toBeUndefined();
+  });
+
+  it('PUT: browserProfile вне browserProfiles → 400', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      browserProfile: 'b2',
+      browserProfiles: ['b1'],
+      profiles: { b1: { image: 'img:b1' }, b2: { image: 'img:b2' } },
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { message: string } };
+    expect(parsed.error.message).toContain('browserProfile');
+  });
+
+  it('PUT: browserProfiles ⊄ каталога → 400', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      browserProfiles: ['ghost'],
+      profiles: { p1: { image: 'img:p1' } },
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { message: string } };
+    expect(parsed.error.message).toContain('browserProfiles');
+  });
+
+  it('PUT: профиль без image и url → 400', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/execution', json('PUT', {
+      profiles: { p1: { description: 'без адреса' } },
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { message: string } };
+    expect(parsed.error.message).toContain('image');
+  });
+
+  it('PUT: runtime-каталог заменяет каталог config целиком (config-профиль удаляется)', async () => {
+    const { app } = makeApp();
+    await app.request('/api/v2/settings/execution', json('PUT', {
+      profiles: { p1: { image: 'img:p1' } },
+    }));
+    const res = await app.request('/api/v2/settings/execution');
+    const body: any = await res.json();
+    expect(Object.keys(body.effective.profiles)).toEqual(['p1']);
+    expect(body.defaults.profiles.legacy).toBeDefined();
+  });
+
+  it('DELETE сбрасывает runtime-слой (возврат к config-уровню)', async () => {
+    const { app, settingsStore } = makeApp();
+    await app.request('/api/v2/settings/execution', json('PUT', {
+      profiles: { p1: { image: 'img:p1' } },
+    }));
+    const res = await app.request('/api/v2/settings/execution', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.saved).toBeNull();
+    expect(body.isOverridden).toBe(false);
+    expect(body.restartRequired).toBe(false);
+    expect(await settingsStore.getExecution()).toBeUndefined();
   });
 });

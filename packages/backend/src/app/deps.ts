@@ -17,6 +17,9 @@ import {
   SYNTH_VERSION,
   generateId, makeTextPart, nowISO, MessageRole,
 } from '@itphx/synth-shared';
+// ADR-135: применение runtime-каталога профилей исполнения (runtime > config;
+// env/CLI выше — их разрешает `resolveExecutionConfig`, ADR-023).
+import { applyExecutionRuntimeSettings } from '@itphx/synth-shared/config';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import type { InstanceRuntimeMeta } from '@itphx/synth-core';
@@ -27,6 +30,9 @@ import {
   requeueMessages,
   createToolRegistry, createAgentRegistry, McpManager,
   hiddenMcpServersForExecution,
+  // ADR-077: fail-closed проверка режима исполнения при старте (единственное
+  // место в backend — `app.ts` секцию не разрешает повторно).
+  checkExecutionMode,
   DEFAULT_AGENT_ID, registerStoredAgents, migrateLegacyStoredAgents,
   AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig,
@@ -44,6 +50,8 @@ import {
   createLiveStickyNotesLimits,
   // PROP-124: режим инстанса для SSH-ключей (`/settings/ssh`).
   createLiveSshMode,
+  // ADR-135: чтение runtime-каталога профилей исполнения (`/settings/execution`).
+  readExecutionRuntimeSettings,
   createEgressPolicyResolver, createEgressLogSink,
   configureEgressRuntime, startEgressLogPruner,
   // ADR-105 (Ф3): источник access-токена для MCP-коннекторов + OAuth-сервис.
@@ -1125,7 +1133,28 @@ export async function createBackendDeps(
   // запуска процесса (инвариант 24), поэтому порт собирается здесь, при старте.
   // Тот же порт получают оркестратор (тулы, inline-shell, детект зависимостей)
   // и резолвер проектных инструкций.
-  const execution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
+  //
+  // ADR-135: поверх config-уровня применяется **runtime-каталог профилей
+  // исполнения** (`settings.json`/PG). Приоритет — **env/CLI > runtime >
+  // config.yaml** (env/CLI разрешаются внутри `resolveExecutionConfig`,
+  // ADR-023); каталог `profiles` runtime-секции **заменяет** каталог
+  // config.yaml целиком. Секция `execution` — параметр запуска: порты пулов и
+  // роутер создаются на старте, поэтому изменение требует рестарта
+  // (`restartRequired` в `/api/v2/settings/execution`). Хранилище может быть
+  // недоступно (деградация, ADR-098) — тогда действует config-уровень.
+  const baseExecution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
+  const runtimeExecution = await readExecutionRuntimeSettings(settingsStore);
+  const execution = applyExecutionRuntimeSettings(baseExecution, runtimeExecution);
+  // ADR-077: fail-closed проверка режима исполнения — **единственное** место
+  // (backend `app.ts` разрешение секции не дублирует): неверный
+  // `mode`/`failMode` — ошибка; `remote` без адресов/пакета исполнителя/
+  // читаемого токена — старт прерывается, а не «молча уходит в inline».
+  // Runtime-каталог профилей проверку не меняет (общий адрес секции и режим
+  // остаются config/env-уровня).
+  const executionCheck = await checkExecutionMode(execution);
+  if (!executionCheck.ok) {
+    throw new Error(executionCheck.message);
+  }
   // PROP-135 D1/D2: браузерный MCP-сервер исполнителя (дефолт `playwright`)
   // остаётся подключённым — его вызывает `ExecutionPort.browserCall` напрямую
   // (`POST /mcp/call`), — но его инструменты не регистрируются: модели нужны
@@ -1405,6 +1434,9 @@ export async function createBackendDeps(
     // PROP-135 Ф4a: роутер портов — порт тулов выбирается по профилю
     // сессии (`session.settings.executorProfile`).
     executionRouter,
+    // ADR-135/PROP-135: эффективная секция `execution` — из неё выводится вид
+    // среды исполнения (блок `[СРЕДА ИСПОЛНЕНИЯ]` в системном промпте).
+    executionConfig: execution,
     // PROP-135 слайс 5b-2: резолвер **проектного** (браузерного) пула для
     // вызовов MCP-инструментов исполнителя: по `projectId` цели — адреса и
     // токен пула `project:<id>:browser:<profile>`. Роутер не умеет отдавать
@@ -2025,6 +2057,8 @@ export async function createBackendDeps(
     metrics: metrics ? createPipelineMetrics(metrics) : undefined,
     // ADR-101 §4/ADR-070: промпт шага — тем же сборщиком, что у сессий.
     composer: orchestrator.getComposer(),
+    // ADR-135/PROP-135: среда исполнения шага — та же, что у сессий.
+    environmentKind: orchestrator.getEnvironmentKind(),
     resolveProvider: resolvePipelineProvider,
     resolveLlmDefaults,
     // ADR-115 × ADR-101: вложения прогона — тот же сервис вложений, что у
@@ -2198,6 +2232,9 @@ export async function createBackendDeps(
     // PROP-135 Ф6b-1: эффективная секция `execution` — admin-API профилей и
     // пулов (`/api/v2/execution/*`): `provider`/`pooling`/каталог профилей.
     executionConfig: execution,
+    // ADR-135: секция `execution` **config-уровня** (без runtime) — база для
+    // runtime-каталога профилей в `/api/v2/settings/execution` («дефолты»).
+    fallbackExecutionConfig: baseExecution,
     // ADR-106 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
     approvalRegistry,
     // ADR-096: контекст хранения инстанса — для операций, которым нужен

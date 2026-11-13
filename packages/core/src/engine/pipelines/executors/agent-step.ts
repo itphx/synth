@@ -655,6 +655,9 @@ async function prepareAgentStep(
     // Онбординг-интервью — механизм сессии (ADR-089); шагу не нужен.
     showInterview: false,
     interviewEligible: false,
+    // ADR-135/PROP-135: среда исполнения — тот же блок `[СРЕДА ИСПОЛНЕНИЯ]`,
+    // что у сессий (шаг собирает промпт тем же композером).
+    ...(llm.environmentKind ? { environmentKind: llm.environmentKind } : {}),
   });
 
   const system: SystemPromptPayload = {

@@ -1333,7 +1333,14 @@
   (`agentKeyOf`/`DEFAULT_AGENT_KEY`, `buildPromptState`/`computeExpected`/`validateExpected`, запись
   `session.promptStates[agentKey]` только при смене generation); `state-messages.ts` — chronological
   state-сообщения (`mode_change`/`plan_updated`/`todos_updated`/`agent_switch`, `syncStateMessages`,
-  обёртка `<system-state type="…">`, `UnavailableTool`). Блок `memory.guide` (`prompts/system/MEMORY.{ru,en}.md`, тир context, order 25) подключается только при доступной памяти — резолвер `context/memory-availability.ts` (проект не выключил память, capability `memory`, есть включённый тул плагина). Специализированные промпты debug-эха и
+  обёртка `<system-state type="…">`, `UnavailableTool`). Блок `memory.guide` (`prompts/system/MEMORY.{ru,en}.md`, тир context, order 25) подключается только при доступной памяти — резолвер `context/memory-availability.ts` (проект не выключил память, capability `memory`, есть включённый тул плагина). Блок `environment` (`prompts/system/ENVIRONMENT.<kind>.{ru,en}.md`, stable) добавляется **всегда**
+  и описывает среду исполнения: `inline` (standalone/hybrid), `remote-instance` (общий пул на
+  инстанс, смонтирован весь workspace) или `remote-project` (пул на проект/сессию, только его
+  каталог; браузер — отдельный контейнер). Вид вычисляет оркестратор (`resolveExecutionEnvironmentKind`:
+  mode + pooling) и передаёт через `ComposerContext.environmentKind`; override —
+  `{dataDir}/user/system/ENVIRONMENT.<kind>.{ru,en}.md`.
+
+  Специализированные промпты debug-эха и
   `SUMMARIZER.{lang}.md` идут мимо Composer (inline). Манифест: system-блоки в реальном порядке +
   запись `tools` (`source: 'tools'`, в конце тира `stable`), слой плагинных тулов
   `plugin.tools` (ADR-090: `volatile`, сразу после `tools`, **вне** кэшируемого stable-префикса —

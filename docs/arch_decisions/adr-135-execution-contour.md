@@ -102,8 +102,29 @@
     400 `VALIDATION_ERROR`, текст «Профиль браузера не найден: …»); `GET /api/v2/execution/profiles`
     отдаёт аддитивные `browserProfiles`/`browserDefaultProfile`, `profiles` — без браузерных имён.
 
-## Альтернативы
+11. **Каталог профилей — runtime-настройка инстанса (аддендум).** Каталог профилей и дефолты
+    (`defaultProfile`, `browserProfile`, `browserProfiles`, `pooling`, `fallback`) — **не только**
+    `config.yaml`: это **backend-owned runtime-секция** `execution`
+    (`RuntimeSettings.execution`, `settings.json`/PG), которой управляет **только ADMIN** через
+    `GET/PUT/DELETE /api/v2/settings/execution` (ADR-023: приоритет **env/CLI > runtime > config.yaml**;
+    env/CLI разрешаются внутри `resolveExecutionConfig`, runtime-override применяется поверх
+    config-уровня, но **под env**).
+    - **Runtime-каталог заменяет каталог config.yaml целиком** (`profiles` — как `profiles`/`rules`
+      прокси, ADR-099): администратор может и добавить профиль, и удалить профиль из конфига (не задав
+      его в runtime-каталоге). Пока runtime-секция не задана, действует каталог config.yaml.
+    - **Валидация записи (400 `VALIDATION_ERROR`):** `defaultProfile` есть в эффективном каталоге;
+      `browserProfiles` ⊆ каталога; `browserProfile` ∈ `browserProfiles` (если список задан) либо в
+      каталоге; у каждого профиля каталога задан `image` или `url`; неизвестное поле секции — 400.
+      Секция **не** содержит секретов: `env` — переменные окружения пула, не пароли (инвариант 13).
+    - **Применение — при старте процесса** (`execution` — параметр запуска, инвариант 24): порты пулов и
+      роутер создаются на старте, поэтому API честно отдаёт `restartRequired` (сравнение отпечатков
+      «сохранено» vs «работает»). Каталог, заданный только в runtime, действует после рестарта;
+      `/api/v2/execution/profiles` до рестарта отдаёт **работающий** (running) каталог.
+    - **Граница:** общий адрес секции (`execution.remote.url`) и режим (`execution.mode`) остаются
+      config/env-уровня — instance-пул берёт адрес оттуда; runtime-каталог описывает **профильные**
+      пулы (`pooling: project|session`) и служит источником каталога для provisioner'а.
 
+## Альтернативы
 - **Оставить файловые операции в control plane** — отклонено: split теряет смысл, тонкий control plane
   читает ФС агента.
 - **Браузер через MCP-discovery** — отклонено: discovery берётся с инстанс-пула, а браузерный пул
@@ -128,3 +149,6 @@
 - 2026-11-13 — принято из PROP-135 (реализация Ф1–Ф6b); файл предложения удалён.
 - 2026-11-13 — аддендум п. 10: браузерный контур профилей (каталог `browserProfiles`, приоритет
   session → agent → project → `browserProfile`, потолки, UI агента/проекта/сессии).
+- 2026-11-13 — аддендум п. 11: каталог профилей и дефолты исполнения — **runtime-настройка**
+  (`/api/v2/settings/execution`, ADMIN; runtime заменяет каталог config целиком; применение при
+  старте, `restartRequired`).

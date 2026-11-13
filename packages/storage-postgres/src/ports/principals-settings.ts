@@ -51,6 +51,8 @@ const SECTION_KEYS = [
   'plugins',
   'attachments',
   'sessionOpsPerMinute',
+  // ADR-135: runtime-каталог профилей исполнения (`execution`).
+  'execution',
 ] as const satisfies readonly (keyof RuntimeSettings)[];
 
 const SECTION_KEY_SET: ReadonlySet<string> = new Set<string>(SECTION_KEYS);
@@ -434,6 +436,17 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearSshMode(): Promise<void> {
       await deleteSetting(conn, 'sshMode');
+    },
+
+    // ADR-135: runtime-каталог профилей исполнения (`execution`).
+    async getExecution(): Promise<RuntimeSettingsValue<'execution'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'execution'>>(conn, 'execution');
+    },
+    async setExecution(execution: RuntimeSettingsValue<'execution'>): Promise<void> {
+      await writeSetting(conn, 'execution', execution);
+    },
+    async clearExecution(): Promise<void> {
+      await deleteSetting(conn, 'execution');
     },
   };
 }

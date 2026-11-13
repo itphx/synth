@@ -691,5 +691,24 @@ export function describeSettingsRepository(
       await repo.clearProxySettings();
       expect(await repo.getProxySettings()).toBeUndefined();
     });
+
+    it('execution: set/get/clear runtime-каталога профилей (ADR-135)', async () => {
+      const { repo } = await make();
+      expect(await repo.getExecution()).toBeUndefined();
+
+      await repo.setExecution({
+        defaultProfile: 'p1',
+        pooling: 'project',
+        profiles: { p1: { image: 'img:1' } },
+      });
+      expect(await repo.getExecution()).toEqual({
+        defaultProfile: 'p1',
+        pooling: 'project',
+        profiles: { p1: { image: 'img:1' } },
+      });
+
+      await repo.clearExecution();
+      expect(await repo.getExecution()).toBeUndefined();
+    });
   });
 }

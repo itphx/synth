@@ -48,6 +48,7 @@ export function stubContextFiles(
     getMaxStepsPrompt: (): string => '',
     getTodoFinalizePrompt: (): string => '',
     getSummarizerPrompt: (): string => '',
+    getEnvironment: (): string => '',
     getCompactorPrompt: (): string => '',
     getUserContextTemplate: (): string => '',
     getCompressedDialogTemplate: (): string => '',

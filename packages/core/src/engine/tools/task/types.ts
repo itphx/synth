@@ -14,6 +14,7 @@ import type { RequestSessionService } from '../../events/request-session.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ForceCompressionDeps } from '../../orchestrator/compression.js';
 import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
+import type { ExecutionEnvironmentKind } from '../../context/environment.js';
 import type { ModelRouter } from '../../router/router.js';
 import type { UsagePricing } from '../../../providers/usage.js';
 import type { AnalyticsRecorder } from '../../../analytics/recorder.js';
@@ -82,6 +83,13 @@ export interface TaskExtra {
    */
   listModels?: () => Promise<ModelConfig[]>;
   contextConfig?: ContextFileRepository;
+  /**
+   * ADR-135/PROP-135: вид среды исполнения (`inline` / `remote-instance` /
+   * `remote-project`). Саб-агент получает тот же системный блок
+   * `[СРЕДА ИСПОЛНЕНИЯ]`, что и основная сессия (его промпт собирается не
+   * композером, а напрямую). Не задан — блока нет.
+   */
+  environmentKind?: ExecutionEnvironmentKind;
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
   sessionId?: string;

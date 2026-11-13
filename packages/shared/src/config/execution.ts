@@ -121,6 +121,14 @@ export interface ResolvedExecutionProfile {
   network?: ExecutionProfileNetwork;
   resources?: ExecutionProfileResources;
   runtimeClass?: string;
+  /** Read-only корневая ФС контейнера пула (ADR-137). */
+  readOnlyRootFilesystem?: boolean;
+  /**
+   * Дополнительные переменные окружения пула (ADR-135, runtime-каталог).
+   * **Секретов здесь быть не должно** (инвариант 13) — наружу не отдаются
+   * (`GET /api/v2/execution/profiles` отдаёт только метаданные профиля).
+   */
+  env?: Record<string, string>;
   /** **Имена** MCP-серверов профиля (без команд/env). */
   mcpServers?: string[];
 }

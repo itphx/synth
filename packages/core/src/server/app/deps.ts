@@ -12,6 +12,9 @@ import type {
 } from '@itphx/synth-shared';
 import { ensureDataDir, mergeModelCompatibility, parsePrincipalId, readTlsRuntimeSettings, SYNTH_VERSION, generateId, makeTextPart, nowISO, MessageRole } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
+// ADR-135: применение runtime-каталога профилей исполнения (runtime > config,
+// env/CLI выше — их разрешает `resolveExecutionConfig`, ADR-023).
+import { applyExecutionRuntimeSettings } from '@itphx/synth-shared/config';
 import { serializeMessage } from '../serialize.js';
 import type { InstanceRuntimeMeta } from '../../engine/instance/meta.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
@@ -162,6 +165,7 @@ import {
   createLiveContextDefaults,
   createLiveStickyNotesLimits,
   createLiveSshMode,
+  readExecutionRuntimeSettings,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 // PROP-137 Ф1: fail-closed проверка записи в каталог данных — до сборки
@@ -482,6 +486,24 @@ export async function createStandaloneDeps(
   const effectiveWorkspaceOutsideRootPolicy: WorkspaceOutsideRootPolicy =
     (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm';
 
+  // ADR-135: runtime-каталог профилей исполнения (`settings.json`/PG).
+  //
+  // Приоритет эффективного значения — **env/CLI > runtime > config.yaml**
+  // (env/CLI разрешаются внутри `resolveExecutionConfig`, ADR-023): поэтому
+  // runtime-override применяется поверх уже разрешённой секции, но под env.
+  // Каталог `profiles` runtime-секции **заменяет** каталог config.yaml целиком
+  // (администратор может и добавить, и удалить профиль из конфига).
+  //
+  // Секция `execution` — **параметр запуска** (инвариант 24): порты пулов и
+  // роутер создаются на старте процесса, поэтому изменение каталога требует
+  // рестарта (`restartRequired` в API). Хранилище может быть недоступно
+  // (деградация, ADR-098) — тогда действует config-уровень, как раньше.
+  const runtimeExecution = await readExecutionRuntimeSettings(settingsStore);
+  const baseExecutionConfig = config.executionConfig;
+  const effectiveExecutionConfig = baseExecutionConfig
+    ? applyExecutionRuntimeSettings(baseExecutionConfig, runtimeExecution)
+    : baseExecutionConfig;
+
   // ADR-084: runtime/эффективный конфиг decision-слоя (админка) приоритетнее
   // config.yaml `decision`. Live-применяется ко всем трём потребителям
   // (микро-каскад, роутер, события ADR-089) через `onDecisionChange`.
@@ -537,7 +559,7 @@ export async function createStandaloneDeps(
     // (его вызывает `ExecutionPort.browserCall` → `POST /mcp/call`), но его
     // инструменты не регистрируются — у модели есть встроенные `browser_*`.
     // `inline` → пусто (`browserMcpServer` там ни при чём).
-    hiddenServers: hiddenMcpServersForExecution(config.executionConfig),
+    hiddenServers: hiddenMcpServersForExecution(effectiveExecutionConfig),
   });
   // ADR-071 §2.5: единый источник истины для конфигурации MCP-серверов —
   // реестр `McpRegistryStore` (в standalone так же, как в managed). Instance-
@@ -1211,7 +1233,7 @@ export async function createStandaloneDeps(
   // provisioner'а — instance-порт собирается **лениво** (на instance-пул),
   // статический `execution.remote.url` не требуется.
   const executionPort = await createInstanceExecutionPort(
-    config.executionConfig,
+    effectiveExecutionConfig,
     executorMetrics ? { metricsSink: executorMetrics } : undefined,
   );
 
@@ -1220,7 +1242,7 @@ export async function createStandaloneDeps(
   // поэтому роутер синхронен: `portFor(profile)` отдаёт порт профиля.
   // Instance-порт переиспользуется (второй клиент удалённого пула не нужен).
   const executionRouter = await createExecutionRouter({
-    config: config.executionConfig,
+    config: effectiveExecutionConfig,
     ...(executorMetrics ? { metricsSink: executorMetrics } : {}),
     instancePort: executionPort,
   });
@@ -1293,7 +1315,7 @@ export async function createStandaloneDeps(
   // PROP-135 слайс 5b-2: состав читается с **инстанс-пула**, а вызовы
   // инструментов уходят в **проектный** (браузерный) пул — резолвер
   // `executorMcpResolvePool` (см. выше).
-  const executorMcpSource = await attachExecutorMcpSource(mcpManager, config.executionConfig, {
+  const executorMcpSource = await attachExecutorMcpSource(mcpManager, effectiveExecutionConfig, {
     ...(executorMcpResolvePool ? { resolvePool: executorMcpResolvePool } : {}),
   });
 
@@ -1503,6 +1525,9 @@ export async function createStandaloneDeps(
     // PROP-135 Ф4a: роутер портов — порт тулов выбирается по профилю
     // сессии (`session.settings.executorProfile`).
     executionRouter,
+    // ADR-135/PROP-135: эффективная секция `execution` — из неё выводится вид
+    // среды исполнения (блок `[СРЕДА ИСПОЛНЕНИЯ]` в системном промпте).
+    ...(effectiveExecutionConfig ? { executionConfig: effectiveExecutionConfig } : {}),
     // PROP-135 слайс 5b-2: резолвер проектного (браузерного) пула для вызовов
     // MCP-инструментов исполнителя (в этом слайсе MCP-источник поднимается
     // выше по `attachExecutorMcpSource`; оркестратор поднимет свой, если
@@ -2154,6 +2179,8 @@ export async function createStandaloneDeps(
     metrics: metrics ? createPipelineMetrics(metrics) : undefined,
     // ADR-101 §4/ADR-070: промпт шага — тем же сборщиком, что у сессий.
     composer: orchestrator.getComposer(),
+    // ADR-135/PROP-135: среда исполнения шага — та же, что у сессий.
+    environmentKind: orchestrator.getEnvironmentKind(),
     resolveProvider: resolvePipelineProvider,
     resolveLlmDefaults,
     // ADR-115 × ADR-101: вложения прогона — тот же сервис вложений, что у
@@ -2300,7 +2327,10 @@ export async function createStandaloneDeps(
     // PROP-135 Ф6b-1: эффективная секция `execution` — admin-API профилей и
     // пулов (`/api/v2/execution/*`) отдаёт `provider`/`pooling`/каталог без
     // повторного резолва конфигурации.
-    executionConfig: config.executionConfig,
+    executionConfig: effectiveExecutionConfig,
+    // ADR-135: секция `execution` **config-уровня** (без runtime) — база для
+    // runtime-каталога профилей в `/api/v2/settings/execution` («дефолты»).
+    fallbackExecutionConfig: baseExecutionConfig,
     // ADR-106 Ф3: реестр подтверждений (enforced-режим Authority-слоя).
     approvalRegistry,
     // ADR-096: контекст хранения инстанса — для операций, которым нужен

@@ -2,6 +2,7 @@ import type { Message, Project, Session, ProviderConfig as SharedProviderConfig,
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig, SshMode } from '@itphx/synth-shared';
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
+import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
 import { autoTitleSession } from '../sessions/auto-title.js';
 import { join, isAbsolute, normalize, relative, resolve } from 'node:path';
@@ -34,6 +35,10 @@ import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from 
 import { checkContextWindowWindow } from './context/window-guard.js';
 import { DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SUBAGENT_DEPTH } from '@itphx/synth-shared/config';
 import { agentKeyOf } from './context/prompt-state.js';
+import {
+  resolveExecutionEnvironmentKind,
+  type ExecutionEnvironmentKind,
+} from './context/environment.js';
 import { createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
 import { toLlmReasoningBlocks, makeReasoningParts, type ReasoningBlockLike } from './reasoning-blocks.js';
 import type { ToolRegistry } from './tools/registry.js';
@@ -937,6 +942,14 @@ export interface OrchestratorOptions {
    */
   executionRouter?: ExecutionRouter;
   /**
+   * ADR-135/PROP-135: эффективная секция `execution` (режим + режим пула).
+   *
+   * Из неё выводится вид среды исполнения (`inline` / `remote-instance` /
+   * `remote-project`) — системный блок `[СРЕДА ИСПОЛНЕНИЯ]` в промпте. Не задана
+   * — среда `inline` (безопасный дефолт для standalone).
+   */
+  executionConfig?: ResolvedExecutionConfig;
+  /**
    * PROP-135 слайс 5b-2: резолвер **проектного** (браузерного) пула для
    * вызовов MCP-инструментов исполнителя.
    *
@@ -1315,6 +1328,12 @@ export class ChatOrchestrator {
    * профильный порт получают только тулы хода.
    */
   private readonly _executionRouter: ExecutionRouter;
+  /**
+   * ADR-135/PROP-135: вид среды исполнения (`inline` / `remote-instance` /
+   * `remote-project`) — выведен из эффективной секции `execution` при сборке
+   * оркестратора. Константа процесса (топология — параметр запуска).
+   */
+  private readonly _environmentKind: ExecutionEnvironmentKind;
   /**
    * PROP-135 слайс 5b-2: резолвер проектного (браузерного) пула для вызовов
    * MCP-инструментов исполнителя. `undefined` — вызовы идут с инстанс-пула.
@@ -1819,6 +1838,14 @@ export class ChatOrchestrator {
     // PROP-135 Ф4a: роутер портов — профиль сессии выбирает порт тулов.
     // Без роутера — instance-порт (прежнее поведение).
     this._executionRouter = options.executionRouter ?? { portFor: () => this._executionPort };
+    // ADR-135/PROP-135: вид среды исполнения — из эффективной секции `execution`
+    // (режим + режим пула). Секция не задана — среда `inline` (safe default).
+    this._environmentKind = options.executionConfig
+      ? resolveExecutionEnvironmentKind(
+          options.executionConfig.mode,
+          options.executionConfig.remote.pooling,
+        )
+      : 'inline';
     // PROP-135 слайс 5b-2: резоллер проектного (браузерного) пула для вызовов
     // MCP-инструментов исполнителя (задаётся сборкой приложения).
     this._executorMcpResolvePool = options.executorMcpResolvePool;
@@ -2445,6 +2472,15 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-135/PROP-135: вид среды исполнения инструментов — тот же, что в блоке
+   * `[СРЕДА ИСПОЛНЕНИЯ]` основного промпта. Нужен контурам вне сессии
+   * (агентский шаг пайплайна, саб-агент), чтобы они описывали ту же среду.
+   */
+  getEnvironmentKind(): ExecutionEnvironmentKind {
+    return this._environmentKind;
+  }
+
+  /**
    * ADR-101/ADR-069: резолвер проектных инструкций — тот же инстанс, что у
    * сессий (политика trust/dedup/лимиты — общие). `null` — инструкции
    * инстанса выключены.
@@ -2688,6 +2724,8 @@ export class ChatOrchestrator {
         : {}),
       adminDisabled: this._toolsDisabled,
       envDeps: this._runtimeDeps,
+      // ADR-135/PROP-135: среда исполнения — блок `[СРЕДА ИСПОЛНЕНИЯ]`.
+      environmentKind: this._environmentKind,
       tokenRatio,
       mcpServers,
       project,
@@ -6750,6 +6788,9 @@ export class ChatOrchestrator {
                   modelRouter: this._router ?? undefined,
                   routerConfig: this._routerConfig ?? undefined,
                   contextConfig: this._contextConfig ?? undefined,
+                  // ADR-135/PROP-135: среда исполнения — саб-агент получает тот же
+                  // блок `[СРЕДА ИСПОЛНЕНИЯ]`, что и основная сессия.
+                  environmentKind: this._environmentKind,
                   securityConfig: this._securityConfig,
                   language: session.settings.language || 'ru',
                   publish: (type: string, data: Record<string, unknown>) =>

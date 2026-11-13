@@ -22,7 +22,6 @@ import { logger } from 'hono/logger';
 import { createMiddleware } from 'hono/factory';
 import {
   applyBootstrapServiceKeys,
-  checkExecutionMode,
   createHealthRoutes,
   createHttpMetricsMiddleware,
   createMetricsRoutes,
@@ -35,7 +34,6 @@ import {
   resolvePluginServerPolicy,
   setSynthReady,
 } from '@itphx/synth-core';
-import { resolveExecutionConfig } from '@itphx/synth-shared';
 import type {
   EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
   SettingsRepository, EventRouter, RequestSessionService, EventBindingRepository,
@@ -181,14 +179,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Конфигурация
     const backendConfig = await loadBackendConfig({ configPath: opts.configPath });
 
-    // ADR-077: топология исполнения — параметр запуска (инвариант 24). Fail-closed:
-    // неверный `mode`/`failMode` — ошибка; `remote` без адресов/пакета исполнителя/
-    // читаемого токена — старт прерывается, а не «молча уходит в inline».
-    const execution = resolveExecutionConfig(backendConfig.synth, process.env);
-    const executionCheck = await checkExecutionMode(execution);
-    if (!executionCheck.ok) {
-      throw new Error(executionCheck.message);
-    }
+    // ADR-077/ADR-135: топология исполнения — параметр запуска (инвариант 24).
+    // Разрешение секции `execution` и fail-closed проверка режима — **в одном
+    // месте** (`app/deps.ts`: `resolveExecutionConfig` + runtime-каталог
+    // профилей + `checkExecutionMode`). Здесь только конфиг: дублирующего
+    // разрешения не остаётся, а ошибка режима по-прежнему прерывает старт
+    // (fail-closed: неверный `mode`/`failMode` — ошибка; `remote` без
+    // адресов/пакета исполнителя/читаемого токена — старт прерывается, а не
+    // «молча уходит в inline»).
 
     const app = new Hono();
 
@@ -324,7 +322,6 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       backendConfig,
       storage,
       metricsEnabled ? metrics : undefined,
-      execution,
     );
     // F4 (аудит S1): health-геттер состояния LLM-шлюза читает эффективный конфиг
     // (`deps.gatewayConfig` — config + runtime-тумблер), который готов только здесь.

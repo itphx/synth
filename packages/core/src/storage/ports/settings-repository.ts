@@ -13,6 +13,7 @@ import type {
   ContextDefaults,
   StickyNotesLimits,
   SshMode,
+  ExecutionRuntimeSettings,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -210,4 +211,14 @@ export interface SettingsRepository {
   getSshMode(): Promise<SshMode | undefined>;
   setSshMode(mode: SshMode): Promise<void>;
   clearSshMode(): Promise<void>;
+
+  /**
+   * ADR-135: runtime-каталог профилей исполнения и дефолты (`execution`).
+   * Admin-owned секция (`/api/v2/settings/execution`); применяется при старте
+   * процесса (`execution` — параметр запуска, инвариант 24 →
+   * `restartRequired`).
+   */
+  getExecution(): Promise<ExecutionRuntimeSettings | undefined>;
+  setExecution(execution: ExecutionRuntimeSettings): Promise<void>;
+  clearExecution(): Promise<void>;
 }

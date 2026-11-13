@@ -1,4 +1,5 @@
 import type { ContextCategory, ContextFileContent, ContextFileInfo } from '@itphx/synth-shared';
+import type { ExecutionEnvironmentKind } from '../../engine/context/environment.js';
 
 /**
  * Порт файлов контекста/промптов (ADR-069/ADR-070, реализация — `ContextConfig`).
@@ -44,6 +45,12 @@ export interface ContextFileRepository {
    */
   getTodoFinalizePrompt(language?: string): string;
   getSummarizerPrompt(language?: string): string;
+  /**
+   * Системный блок `[СРЕДА ИСПОЛНЕНИЯ]` (prompts/system/ENVIRONMENT.<kind>.{lang}.md):
+   * где физически исполняются инструменты сессии (ADR-135/PROP-135).
+   * Пустая строка — файла нет (блок в промпт не попадает).
+   */
+  getEnvironment(kind: ExecutionEnvironmentKind, language?: string): string;
   /** Профиль `compaction`: рабочее состояние по коду/проекту (prompts/system/COMPACTOR.{lang}.md). */
   getCompactorPrompt(language?: string): string;
   getUserContextTemplate(language?: string): string;

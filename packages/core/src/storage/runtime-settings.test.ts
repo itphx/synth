@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, readExecutionRuntimeSettings } from './runtime-settings.js';
 import { resolveExecutionMode, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
 import type { SynthConfig } from '@itphx/synth-shared/config';
 
@@ -1333,5 +1333,52 @@ describe('RuntimeSettingsStore: project-trust скиллов (ADR-046/ADR-069)',
 
     expect(await store.getSkillsPolicy()).toBe('available');
     expect((await store.load()).skillsTrustedProjectDirs).toBeUndefined();
+  });
+});
+
+describe('RuntimeSettingsStore: каталог профилей исполнения (ADR-135)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-execution-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('set/get/clear (undefined — runtime-каталог не задан)', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getExecution()).toBeUndefined();
+
+    await store.setExecution({
+      defaultProfile: 'p1',
+      pooling: 'project',
+      profiles: { p1: { image: 'img:1' } },
+    });
+    expect(await store.getExecution()).toEqual({
+      defaultProfile: 'p1',
+      pooling: 'project',
+      profiles: { p1: { image: 'img:1' } },
+    });
+
+    await store.clearExecution();
+    expect(await store.getExecution()).toBeUndefined();
+  });
+
+  it('clear не трогает соседние секции', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setSshMode('agent');
+    await store.setExecution({ profiles: { p1: { url: ['http://p1:8080'] } } });
+    await store.clearExecution();
+
+    expect(await store.getSshMode()).toBe('agent');
+    expect((await store.load()).execution).toBeUndefined();
+  });
+
+  it('readExecutionRuntimeSettings: невалидная секция игнорируется (fail-soft)', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setExecution({ unknownField: 1 } as never);
+    expect(await readExecutionRuntimeSettings(store)).toBeUndefined();
   });
 });

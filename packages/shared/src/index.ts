@@ -345,6 +345,16 @@ export type {
   ResolvedExecutionProvisioner,
   ExecutionCliOverride,
 } from './config/index.js';
+// ADR-135: runtime-каталог профилей исполнения (admin-owned runtime-секция:
+// `/api/v2/settings/execution`). Приоритет env/CLI > runtime > config.yaml.
+export {
+  applyExecutionRuntimeSettings,
+  parseExecutionRuntimeSettings,
+  executionRuntimeSettingsFromResolved,
+  mergeExecutionRuntimeSettings,
+  effectiveExecutionProfileNames,
+  executionRuntimeFingerprint,
+} from './config/index.js';
 // ADR-099: резолверы доверия TLS/CA (`security.tls`).
 export {
   resolveTlsConfig,

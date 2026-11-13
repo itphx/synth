@@ -5,8 +5,9 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeS
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ProxyPasswordStatus, ProxyStatusProfile, ResolvedProxyConfig, ResolvedProxyProfile, ResolvedProxyRoute, SecurityTlsConfig } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, PROXY_PROFILE_NAME_RE, ProxyConfigError, mergeProxyConfig, proxyProfilePasswordEnv, proxyStatus, readTlsRuntimeSettings, redactProxyUrl, resolveProxyConfig, resolveProxyRoute, validateCaPem, validateClientPem, validateProxyConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ProxyPasswordStatus, ProxyStatusProfile, ResolvedProxyConfig, ResolvedProxyProfile, ResolvedProxyRoute, SecurityTlsConfig, ExecutionRuntimeSettings, ResolvedExecutionConfig } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, PROXY_PROFILE_NAME_RE, ProxyConfigError, mergeProxyConfig, proxyProfilePasswordEnv, proxyStatus, readTlsRuntimeSettings, redactProxyUrl, resolveProxyConfig, resolveProxyRoute, validateCaPem, validateClientPem, validateProxyConfig, executionRuntimeSettingsSchema } from '@itphx/synth-shared';
+import { applyExecutionRuntimeSettings, effectiveExecutionProfileNames, executionRuntimeFingerprint, executionRuntimeSettingsFromResolved, parseExecutionRuntimeSettings } from '@itphx/synth-shared/config';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
 import { checkEgressUrl } from '../../engine/net/egress-guard.js';
@@ -373,6 +374,18 @@ export interface SettingsRoutesDeps {
   checkProxy?: (request: { url?: string; config?: ResolvedProxyConfig | null }) => Promise<ProxyCheckResult>;
   /** Инъекция DNS-резолвера для `/egress/check` (тесты; по умолчанию — системный). */
   resolveHost?: HostResolver;
+  /**
+   * ADR-135: эффективная секция `execution` **config-уровня** (config.yaml +
+   * env, без runtime) — база для runtime-каталога профилей и «дефолты» в
+   * ответе `/settings/execution`.
+   */
+  fallbackExecution?: ResolvedExecutionConfig;
+  /**
+   * ADR-135: секция `execution`, с которой **работает процесс** (config +
+   * runtime, применённые на старте). Не задана — раздел «Исполнение» не
+   * сконфигурирован (`inline` без секции).
+   */
+  getRunningExecution?: () => ResolvedExecutionConfig | undefined;
 }
 
 /** Опции фабрики настроек (guard'ы). */
@@ -398,6 +411,67 @@ export interface SettingsRoutesOptions {
    * `requirePermission('ADMIN')` (в т.ч. через `settingsWriteGuard`).
    */
   decisionWriteGuard?: Middleware;
+}
+
+/**
+ * ADR-135: валидация runtime-секции исполнения (ссылочная целостность).
+ *
+ * Проверяется против **эффективного каталога** (runtime-каталог заменяет
+ * каталог config.yaml целиком):
+ *
+ * - `defaultProfile` — есть в каталоге;
+ * - `browserProfiles` — каждый профиль есть в каталоге;
+ * - `browserProfile` — в списке браузерных профилей (если список задан) либо
+ *   в каталоге;
+ * - у каждого профиля каталога задан `image` или `url` (иначе профилю нечего
+ *   запускать).
+ */
+function validateExecutionRuntimeSettings(
+  value: ExecutionRuntimeSettings,
+  catalogue: string[],
+): { ok: true } | { ok: false; message: string } {
+  const names = new Set(catalogue);
+  if (value.defaultProfile !== undefined && !names.has(value.defaultProfile)) {
+    return {
+      ok: false,
+      message: `execution.defaultProfile: профиль "${value.defaultProfile}" отсутствует в каталоге профилей`,
+    };
+  }
+  const browserProfiles = value.browserProfiles ?? [];
+  for (const name of browserProfiles) {
+    if (!names.has(name)) {
+      return {
+        ok: false,
+        message: `execution.browserProfiles: профиль "${name}" отсутствует в каталоге профилей`,
+      };
+    }
+  }
+  if (value.browserProfile !== undefined) {
+    if (browserProfiles.length > 0) {
+      if (!browserProfiles.includes(value.browserProfile)) {
+        return {
+          ok: false,
+          message: `execution.browserProfile: профиль "${value.browserProfile}" не входит в execution.browserProfiles`,
+        };
+      }
+    } else if (!names.has(value.browserProfile)) {
+      return {
+        ok: false,
+        message: `execution.browserProfile: профиль "${value.browserProfile}" отсутствует в каталоге профилей`,
+      };
+    }
+  }
+  for (const [name, profile] of Object.entries(value.profiles ?? {})) {
+    const hasImage = typeof profile.image === 'string' && profile.image.trim() !== '';
+    const hasUrl = Array.isArray(profile.url) && profile.url.some((u) => u.trim() !== '');
+    if (!hasImage && !hasUrl) {
+      return {
+        ok: false,
+        message: `execution.profiles.${name}: у профиля должен быть задан image или url`,
+      };
+    }
+  }
+  return { ok: true };
 }
 
 /** ADR-071 §2.3: валидна ли политика включения инструментов. */
@@ -713,6 +787,37 @@ function proxyValidationError(err: unknown): { code: 'VALIDATION_ERROR'; message
   return { code: 'VALIDATION_ERROR', message: err instanceof Error ? err.message : String(err) };
 }
 
+/**
+ * ADR-135: тело запроса — секция `execution`.
+ *
+ * Принимается и обёртка `{execution: {…}}` (как у соседних разделов), и сама
+ * секция. Неизвестные поля секции → 400 (валидация Zod, `:strict()`).
+ */
+function executionSectionFromBody(body: unknown): unknown {
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    const record = body as Record<string, unknown>;
+    if (Object.keys(record).length === 1 && record.execution !== undefined) {
+      return record.execution;
+    }
+  }
+  return body;
+}
+
+/**
+ * ADR-135: эффективная секция исполнения (config-уровень + runtime) в
+ * runtime-форме — то, что заработает после рестарта.
+ */
+function effectiveExecutionSettings(
+  base: ResolvedExecutionConfig | undefined,
+  runtime: ExecutionRuntimeSettings | null,
+  env: NodeJS.ProcessEnv,
+): ExecutionRuntimeSettings | null {
+  if (!base) return runtime;
+  return executionRuntimeSettingsFromResolved(
+    applyExecutionRuntimeSettings(base, runtime ?? undefined, env),
+  );
+}
+
 export function createSettingsRoutes(
   auth: AuthKit,
   deps: SettingsRoutesDeps,
@@ -723,6 +828,8 @@ export function createSettingsRoutes(
   const eventsWriteGuard: Middleware = opts.eventsWriteGuard ?? settingsWriteGuard;
   const decisionWriteGuard: Middleware = opts.decisionWriteGuard ?? settingsWriteGuard;
   const proxyEnv = deps.env ?? process.env;
+  // ADR-135: env-слой резолверов исполнения (env выше runtime, ADR-023).
+  const executionEnv = proxyEnv;
 
   /** Running-конфигурация прокси (модульное состояние dispatcher'а). */
   const runningProxyConfig = (): ResolvedProxyConfig | null =>
@@ -2035,6 +2142,93 @@ export function createSettingsRoutes(
   app.delete('/decision/metrics', decisionWriteGuard, (c) => {
     decisionMetrics.reset();
     return c.json({ metrics: decisionMetrics.snapshot() });
+  });
+
+  /**
+   * ADR-135: GET/PUT/DELETE /api/v2/settings/execution — runtime-каталог
+   * профилей исполнения и дефолты (admin-owned).
+   *
+   * Секция — **параметр запуска** (инвариант 24): порты пулов и роутер
+   * создаются на старте процесса, поэтому изменение каталога требует
+   * рестарта — API честно отдаёт `restartRequired` (сравнение отпечатков
+   * «сохранено» vs «работает»).
+   *
+   * Приоритет эффективного значения — **env/CLI > runtime > config.yaml**
+   * (ADR-023); runtime-каталог профилей **заменяет** каталог config.yaml
+   * целиком (так администратор может удалить профиль из конфига).
+   *
+   * Guard — `settingsWriteGuard` (managed — ADMIN, standalone — `requireAuth`).
+   */
+  app.get('/execution', settingsWriteGuard, async (c) => {
+    const base = deps.fallbackExecution;
+    const running = deps.getRunningExecution?.();
+    const defaults = executionRuntimeSettingsFromResolved(base);
+    const runningSnapshot = executionRuntimeSettingsFromResolved(running);
+    const saved = parseExecutionRuntimeSettings(await deps.settingsStore.getExecution()) ?? null;
+    const effective = effectiveExecutionSettings(base, saved, executionEnv);
+    return c.json({
+      saved,
+      running: runningSnapshot,
+      restartRequired: executionRuntimeFingerprint(effective)
+        !== executionRuntimeFingerprint(runningSnapshot),
+      // Аддитивно: эффективная секция «после сохранения» и config-уровень.
+      effective,
+      defaults,
+      isOverridden: saved !== null,
+    });
+  });
+
+  app.put('/execution', settingsWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const raw = executionSectionFromBody(body);
+    const parsed = executionRuntimeSettingsSchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `execution: невалидная секция настроек (${parsed.error.issues[0]?.message ?? 'неизвестная ошибка'})`,
+        },
+      }, 400);
+    }
+    const next = parsed.data;
+    const base = deps.fallbackExecution;
+    const defaults = executionRuntimeSettingsFromResolved(base);
+    const catalogue = effectiveExecutionProfileNames(defaults, next);
+    const validation = validateExecutionRuntimeSettings(next, catalogue);
+    if (!validation.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: validation.message } }, 400);
+    }
+
+    await deps.settingsStore.setExecution(next);
+    const running = deps.getRunningExecution?.();
+    const runningSnapshot = executionRuntimeSettingsFromResolved(running);
+    const effective = effectiveExecutionSettings(base, next, executionEnv);
+    return c.json({
+      saved: next,
+      running: runningSnapshot,
+      restartRequired: executionRuntimeFingerprint(effective)
+        !== executionRuntimeFingerprint(runningSnapshot),
+      effective,
+      defaults,
+      isOverridden: true,
+    });
+  });
+
+  app.delete('/execution', settingsWriteGuard, async (c) => {
+    await deps.settingsStore.clearExecution();
+    const base = deps.fallbackExecution;
+    const running = deps.getRunningExecution?.();
+    const runningSnapshot = executionRuntimeSettingsFromResolved(running);
+    const effective = effectiveExecutionSettings(base, null, executionEnv);
+    return c.json({
+      saved: null,
+      running: runningSnapshot,
+      restartRequired: executionRuntimeFingerprint(effective)
+        !== executionRuntimeFingerprint(runningSnapshot),
+      effective,
+      defaults: executionRuntimeSettingsFromResolved(base),
+      isOverridden: false,
+    });
   });
 
   // ADR-099: настройки доверия TLS/CA (bootstrap, применяются при старте).
