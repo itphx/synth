@@ -1276,10 +1276,12 @@ export function ExecutionSettings() {
                   className="rounded-lg border border-border bg-surface-inset px-3 py-2"
                   data-testid={`execution-catalog-profile-${index}`}
                 >
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <span className="min-w-0 break-all font-mono text-[0.75rem] text-foreground">
-                      {name}
-                    </span>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="min-w-0 break-all font-mono text-[0.75rem] text-foreground">
+                        {name}
+                      </span>
+                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
                     {(profileClass === 'exec' || profileClass === 'both') && (
                       <span
                         className={`${BADGE} bg-primary/15 text-primary`}
@@ -1290,7 +1292,7 @@ export function ExecutionSettings() {
                     )}
                     {(profileClass === 'browser' || profileClass === 'both') && (
                       <span
-                        className={`${BADGE} bg-status-info/15 text-status-info`}
+                        className={`${BADGE} bg-purple-500/15 text-purple-400`}
                         data-testid={`execution-catalog-profile-${index}-class-browser`}
                       >
                         {t('settings.execution.catalog.classBrowser')}
@@ -1306,7 +1308,7 @@ export function ExecutionSettings() {
                     )}
                     {name === browserProfile && (
                       <span
-                        className={`${BADGE} bg-status-info/10 text-status-info`}
+                        className={`${BADGE} bg-purple-500/20 text-purple-300`}
                         data-testid={`execution-catalog-profile-${index}-browser-badge`}
                       >
                         {t('settings.execution.catalog.browserBadge')}
@@ -1327,6 +1329,23 @@ export function ExecutionSettings() {
                       >
                         {t('settings.execution.catalog.disabledBadge')}
                       </span>
+                    )}
+                      </div>
+                    </div>
+                    {isConfig && isAdmin && (
+                      <div
+                        className="flex shrink-0 items-center gap-1.5"
+                        data-testid={`execution-catalog-profile-${index}-enabled`}
+                      >
+                        <span className="text-[0.6875rem] text-muted-foreground">
+                          {t('settings.execution.catalog.enabled')}
+                        </span>
+                        <Toggle
+                          enabled={!entry.disabled}
+                          onToggle={() => toggleProfileEnabled(name, entry.disabled)}
+                          ariaLabel={t('settings.execution.catalog.enabled')}
+                        />
+                      </div>
                     )}
                   </div>
                   <dl className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
@@ -1363,19 +1382,6 @@ export function ExecutionSettings() {
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       {isConfig ? (
                         <>
-                          <div
-                            className="flex items-center gap-2"
-                            data-testid={`execution-catalog-profile-${index}-enabled`}
-                          >
-                            <span className="text-[0.6875rem] text-muted-foreground">
-                              {t('settings.execution.catalog.enabled')}
-                            </span>
-                            <Toggle
-                              enabled={!entry.disabled}
-                              onToggle={() => toggleProfileEnabled(name, entry.disabled)}
-                              ariaLabel={t('settings.execution.catalog.enabled')}
-                            />
-                          </div>
                           <Button
                             variant="outline"
                             size="sm"

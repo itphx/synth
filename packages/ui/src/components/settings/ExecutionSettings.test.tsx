@@ -192,7 +192,7 @@ const byTestId = (container: HTMLElement, id: string): HTMLElement | null =>
 function profileCard(container: HTMLElement, name: string): HTMLElement | null {
   const cards = [...container.querySelectorAll('[data-testid^="execution-catalog-profile-"]')] as HTMLElement[]
   return cards.find((card) => {
-    const title = card.firstElementChild?.firstElementChild?.textContent?.trim()
+    const title = card.querySelector('.font-mono')?.textContent?.trim()
     return title === name
   }) ?? null
 }
