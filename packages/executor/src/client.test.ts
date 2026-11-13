@@ -6,16 +6,24 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { egressFetch, ExecutionError } from '@itphx/synth-core';
 import type {
+  BrowserCallRequest,
   ExecBackgroundProcess,
   ExecutionMetricsSink,
   ExecutionPort,
 } from '@itphx/synth-core';
+import { MAX_EXECUTION_BROWSER_TIMEOUT_MS } from '@itphx/synth-shared';
 import {
   ExecutionFsUnavailableError,
   FsPathError,
   isFsPathError,
 } from '@itphx/synth-core';
-import { createRemoteExecutionPort, RemoteExecutionPort, type ExecutorFetch } from './client.js';
+import {
+  BROWSER_MCP_CALL_TIMEOUT_MS,
+  createRemoteExecutionPort,
+  REMOTE_TIMEOUT_GRACE_MS,
+  RemoteExecutionPort,
+  type ExecutorFetch,
+} from './client.js';
 import { startExecutorServer, type ExecutorHandle } from './server.js';
 
 const TOKEN = 'executor-client-token-test-1234567890';
@@ -2059,5 +2067,157 @@ describe('клиент удалённого порта: browserCall (D1)', () =>
 
     expect(result.isError).toBe(true);
     expect(result.content).toContain('unavailable');
+  });
+});
+
+/**
+ * Таймаут одного browser-вызова: дефолт инстанса, параметр тула `timeout`
+ * (с запасом `REMOTE_TIMEOUT_GRACE_MS`) и потолок
+ * `MAX_EXECUTION_BROWSER_TIMEOUT_MS`.
+ *
+ * Задержка таймера читается напрямую (перехват `setTimeout`): ждать 5 минут
+ * ради проверки нельзя.
+ */
+describe('клиент удалённого порта: таймаут browser-вызова', () => {
+  /** Перехват задержек таймеров на время вызова. */
+  function captureTimerDelays(): { delays: number[]; restore: () => void } {
+    const delays: number[] = [];
+    type TimerCallback = Parameters<typeof setTimeout>[0];
+    const original = globalThis.setTimeout as unknown as (
+      handler: TimerCallback,
+      timeout?: number,
+      ...args: unknown[]
+    ) => NodeJS.Timeout;
+    globalThis.setTimeout = ((
+      handler: TimerCallback,
+      timeout?: number,
+      ...args: unknown[]
+    ): NodeJS.Timeout => {
+      delays.push(Number(timeout ?? 0));
+      return original(handler, timeout, ...args);
+    }) as unknown as typeof globalThis.setTimeout;
+    return {
+      delays,
+      restore: () => {
+        globalThis.setTimeout = original as unknown as typeof globalThis.setTimeout;
+      },
+    };
+  }
+
+  /** Задержка таймера browser-вызова, мс (-1 — таймер не ставился). */
+  async function browserCallTimerMs(
+    port: ExecutionPort,
+    req: BrowserCallRequest,
+  ): Promise<number> {
+    const capture = captureTimerDelays();
+    try {
+      await port.browserCall!(req);
+      return capture.delays[0] ?? -1;
+    } finally {
+      capture.restore();
+    }
+  }
+
+  /** Транспорт-заглушка: успешный ответ исполнителя. */
+  function okFetch(): ExecutorFetch {
+    return async () =>
+      new Response(JSON.stringify({ content: 'ok', isError: false }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+  }
+
+  /** Транспорт-заглушка: вызов «зависает» до отмены по сигналу. */
+  function hangingFetch(): ExecutorFetch {
+    return async (_input, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        const onAbort = (): void => reject(new Error('The operation was aborted'));
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      });
+  }
+
+  it('без timeoutMs — таймер равен BROWSER_MCP_CALL_TIMEOUT_MS', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      fetchImpl: okFetch(),
+    });
+
+    const delay = await browserCallTimerMs(port, {
+      tool: 'browser_navigate',
+      arguments: {},
+    });
+
+    expect(delay).toBe(BROWSER_MCP_CALL_TIMEOUT_MS);
+  });
+
+  it('browserTimeoutMs в опциях клиента — таймер инстанса', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      browserTimeoutMs: 45_000,
+      fetchImpl: okFetch(),
+    });
+
+    const delay = await browserCallTimerMs(port, {
+      tool: 'browser_navigate',
+      arguments: {},
+    });
+
+    expect(delay).toBe(45_000);
+  });
+
+  it('timeoutMs 300 000 — с запасом REMOTE_TIMEOUT_GRACE_MS (305 000)', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      fetchImpl: okFetch(),
+    });
+
+    const delay = await browserCallTimerMs(port, {
+      tool: 'browser_navigate',
+      arguments: {},
+      timeoutMs: 300_000,
+    });
+
+    expect(delay).toBe(300_000 + REMOTE_TIMEOUT_GRACE_MS);
+    expect(delay).toBe(305_000);
+  });
+
+  it('timeoutMs выше потолка — обрезается до MAX (+ запас)', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      fetchImpl: okFetch(),
+    });
+
+    const delay = await browserCallTimerMs(port, {
+      tool: 'browser_navigate',
+      arguments: {},
+      timeoutMs: 10_000_000,
+    });
+
+    expect(delay).toBe(MAX_EXECUTION_BROWSER_TIMEOUT_MS + REMOTE_TIMEOUT_GRACE_MS);
+    expect(delay).toBe(605_000);
+  });
+
+  it('текст ошибки по таймауту содержит фактическое число мс', async () => {
+    const port = createRemoteExecutionPort({
+      urls: ['http://exec-a:5100'],
+      token: TOKEN,
+      browserTimeoutMs: 60,
+      fetchImpl: hangingFetch(),
+    });
+
+    const result = await port.browserCall!({
+      tool: 'browser_navigate',
+      arguments: { url: 'https://example.com' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('timed out after 60 ms');
   });
 });

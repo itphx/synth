@@ -111,6 +111,9 @@ export function defaultPooledPortFactory(
         ...(remote?.browserMcpServer !== undefined
           ? { browserMcpServer: remote.browserMcpServer }
           : {}),
+        ...(remote?.browserTimeoutMs !== undefined
+          ? { browserTimeoutMs: remote.browserTimeoutMs }
+          : {}),
         ...(metricsSink ? { metricsSink } : {}),
       });
     }

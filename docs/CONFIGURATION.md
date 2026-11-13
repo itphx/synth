@@ -438,6 +438,10 @@ execution:                         # ADR-077: топология исполне�
     browserMcpServer: "playwright-mcp"  # имя MCP-сервера браузера в поде (встроенные browser_*;
                                         # совпадает с дефолтом образа исполнителя);
                                         # SYNTH_EXECUTION_BROWSER_MCP_SERVER
+    browserTimeoutMs: 120000           # таймаут одного вызова браузерного MCP-инструмента, мс;
+                                        # у тулов переопределяется параметром `timeout`;
+                                        # потолок 600000 — выше значение = ошибка конфигурации;
+                                        # SYNTH_EXECUTION_BROWSER_TIMEOUT_MS
     provider: "static"            # static (пулы из конфигурации) | http (provisioner пулов);
                                   # SYNTH_EXECUTION_PROVIDER
     provisioner:                  # параметры provisioner'а пулов (нужны при provider: http)
@@ -737,6 +741,7 @@ remote:                           # гибридный режим: локаль�
 | `execution.remote.browserProfile` | строка | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Профиль **браузерного** пула (`class: 'browser'`): у браузера свой образ/профиль, поэтому `defaultProfile` он **не** наследует. Применяется, когда профиль цели не задан явно |
 | `execution.remote.browserProfiles` | string[] | `[]` | `SYNTH_EXECUTION_BROWSER_PROFILES` (csv) | Явный каталог **браузерных** профилей (отдельный контур, ADR-135 п. 10): пусто — каталог равен `[browserProfile]`. Имена исключаются из exec-каталога (`profiles`), но metadata в `execution.remote.profiles` остаётся для `details` |
 | `execution.remote.browserMcpServer` | строка | `playwright-mcp` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Имя MCP-сервера браузера в поде исполнителя: встроенные `browser_*`-тулы адресуют ему вызов (`POST /mcp/call`), без MCP-discovery |
+| `execution.remote.browserTimeoutMs` | число | `120000` | `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS` | Таймаут **одного** вызова браузерного MCP-инструмента (2 мин). У тулов `browser_navigate`/`browser_wait`/`browser_screenshot` переопределяется параметром `timeout` (1…600 000 мс). Потолок — 600 000 мс: значение выше — **ошибка конфигурации** (fail-closed). Настройка общая для секции — профили её не переопределяют |
 | `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции. Метаданные (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **только имена**) отдаются в `GET /api/v2/execution/profiles` → `details` и **не влияют** на маршрутизацию и создание портов |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — откат на instance-порт; `fail` — fail-closed (старт прерывается) |
 | `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Провайдер пулов (ADR-135 Ф4b-1): `static` — пулы из конфигурации (адреса профиля, порт на старте — поведение Ф4a); `http` — пулы запрашиваются у provisioner'а (адрес и токен пула приходят ответом, порт собирается лениво) |

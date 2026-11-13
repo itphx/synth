@@ -39,6 +39,7 @@ import {
   EXECUTION_POOL_PROVIDERS,
   EXECUTION_PROFILE_NETWORKS,
   EXECUTION_PROFILE_CLASSES,
+  MAX_EXECUTION_BROWSER_TIMEOUT_MS,
   executionAffinitySchema,
   executionAnnotationValueSchema,
   executionLabelValueSchema,
@@ -194,6 +195,8 @@ export {
   DEFAULT_EXECUTION_TIMEOUT_MS,
   DEFAULT_EXECUTION_BROWSER_PROFILE,
   DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
+  DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS,
+  MAX_EXECUTION_BROWSER_TIMEOUT_MS,
 } from '../types/execution.js';
 export type {
   ExecutionMode,
@@ -260,6 +263,19 @@ export const executionRemoteConfigSchema = z.object({
    * адресуют вызов этому серверу).
    */
   browserMcpServer: z.string().default(DEFAULT_EXECUTION_BROWSER_MCP_SERVER),
+  /**
+   * Таймаут одного вызова браузерного MCP-инструмента, мс.
+   *
+   * У тулов `browser_*` переопределяется параметром `timeout`; потолок —
+   * 600 000 мс (`MAX_EXECUTION_BROWSER_TIMEOUT_MS`). Не задан — дефолт
+   * 120 000 мс (`DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS`).
+   */
+  browserTimeoutMs: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_EXECUTION_BROWSER_TIMEOUT_MS)
+    .optional(),
   /**
    * Каталог профилей исполнения (PROP-135 Ф4a): имя → параметры профиля.
    * Профиль **поверх** общих параметров: пустой `url` наследует

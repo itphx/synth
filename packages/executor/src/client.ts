@@ -77,6 +77,7 @@
  * нельзя, поэтому адрес не выбирается, а отказ — `ESECRETS`.
  */
 
+import { MAX_EXECUTION_BROWSER_TIMEOUT_MS } from '@itphx/synth-shared';
 import type {
   BrowserCallRequest,
   BrowserCallResult,
@@ -184,6 +185,14 @@ export interface RemoteExecutionPortOptions {
    * (`POST /mcp/call`), без MCP-discovery.
    */
   browserMcpServer?: string;
+  /**
+   * Таймаут одного вызова браузерного MCP-инструмента, мс
+   * (`execution.remote.browserTimeoutMs`).
+   *
+   * Не задан — `BROWSER_MCP_CALL_TIMEOUT_MS` (2 мин). Потолок —
+   * `MAX_EXECUTION_BROWSER_TIMEOUT_MS` (10 мин).
+   */
+  browserTimeoutMs?: number;
 }
 
 /** Таймаут HTTP-запроса по умолчанию, мс (как `execution.remote.timeoutMs`). */
@@ -227,10 +236,14 @@ export const REMOTE_BACKGROUND_STOP_TIMEOUT_MS = 5_000;
 export const DEFAULT_BROWSER_MCP_SERVER = 'playwright';
 
 /**
- * Таймаут вызова browser-инструмента, мс.
+ * Таймаут вызова browser-инструмента по умолчанию, мс.
  *
  * Как у MCP-вызова в core (120 с): навигация и снимок страницы бывают
  * медленными, но зависший вызов не должен держать ход бесконечно.
+ *
+ * Значение инстанса — `execution.remote.browserTimeoutMs`
+ * (`SYNTH_EXECUTION_BROWSER_TIMEOUT_MS`); дефолт применяется, если оно не
+ * задано. Потолок — `MAX_EXECUTION_BROWSER_TIMEOUT_MS`.
  */
 export const BROWSER_MCP_CALL_TIMEOUT_MS = 120_000;
 
@@ -534,6 +547,8 @@ export class RemoteExecutionPort implements ExecutionPort {
   private readonly _metricsSink: ExecutionMetricsSink | undefined;
   /** Имя MCP-сервера браузера в поде (`POST /mcp/call`). */
   private readonly _browserMcpServer: string;
+  /** Таймаут одного browser-вызова, мс (`execution.remote.browserTimeoutMs`). */
+  private readonly _browserTimeoutMs: number;
   private _cursor = 0;
   private _active = 0;
   private readonly _waiting: Array<() => void> = [];
@@ -558,6 +573,10 @@ export class RemoteExecutionPort implements ExecutionPort {
     this._metricsSink = opts.metricsSink;
     this._browserMcpServer =
       (opts.browserMcpServer ?? '').trim() || DEFAULT_BROWSER_MCP_SERVER;
+    this._browserTimeoutMs = Math.min(
+      Math.max(1, opts.browserTimeoutMs ?? BROWSER_MCP_CALL_TIMEOUT_MS),
+      MAX_EXECUTION_BROWSER_TIMEOUT_MS,
+    );
   }
 
   /** Адреса исполнителей (нормализованные). */
@@ -695,6 +714,26 @@ export class RemoteExecutionPort implements ExecutionPort {
     };
   }
 
+  /**
+   * Лимит таймаута одного browser-вызова, мс.
+   *
+   * Явный `req.timeoutMs` (параметр `timeout` у тулов) — с запасом
+   * `REMOTE_TIMEOUT_GRACE_MS` (иначе клиент обрывал бы вызов раньше, чем
+   * исполнитель ответит) и с потолком `MAX_EXECUTION_BROWSER_TIMEOUT_MS`.
+   *
+   * Не задан — таймаут инстанса (`execution.remote.browserTimeoutMs`, дефолт
+   * `BROWSER_MCP_CALL_TIMEOUT_MS`): это **общий** лимит вызова, а не лимит
+   * конкретной команды, поэтому запас к нему не добавляется.
+   */
+  private _browserCallTimeoutMs(req: BrowserCallRequest): number {
+    const requested = req.timeoutMs;
+    if (requested === undefined) return this._browserTimeoutMs;
+    return (
+      Math.min(Math.max(1, requested), MAX_EXECUTION_BROWSER_TIMEOUT_MS) +
+      REMOTE_TIMEOUT_GRACE_MS
+    );
+  }
+
   /** Один вызов `/mcp/call` на конкретном адресе (без failover). */
   private async _browserCallAt(
     url: string,
@@ -702,7 +741,8 @@ export class RemoteExecutionPort implements ExecutionPort {
   ): Promise<BrowserCallResult> {
     const fetchImpl = await resolveFetch(this._fetchImpl);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), BROWSER_MCP_CALL_TIMEOUT_MS);
+    const timeoutMs = this._browserCallTimeoutMs(req);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     timer.unref?.();
 
     let response: Response;
@@ -725,8 +765,7 @@ export class RemoteExecutionPort implements ExecutionPort {
     } catch (err) {
       if (controller.signal.aborted) {
         return {
-          content:
-            `browser tool "${req.tool}" timed out after ${BROWSER_MCP_CALL_TIMEOUT_MS} ms`,
+          content: `browser tool "${req.tool}" timed out after ${timeoutMs} ms`,
           isError: true,
         };
       }

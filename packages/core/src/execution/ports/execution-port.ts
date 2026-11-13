@@ -153,6 +153,13 @@ export interface BrowserCallRequest {
   tool: string;
   /** Аргументы инструмента (уже провалидированные схемой тула). */
   arguments: Record<string, unknown>;
+  /**
+   * Таймаут одного вызова, мс.
+   *
+   * Не задан — `execution.remote.browserTimeoutMs` (дефолт клиента удалённого
+   * порта). Значение берёт **тул** (параметр `timeout` у `browser_*`).
+   */
+  timeoutMs?: number;
 }
 
 /**

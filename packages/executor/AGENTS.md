@@ -339,7 +339,11 @@ MCP-вызова на текст и нетекстовые блоки и отд�
 интерфейса, что `InlineExecutionPort`; домен не различает физических
 исполнителей.
 
-- `opts`: `{ urls, token, timeoutMs?, concurrency?, failMode?, fetchImpl? }`.
+- `opts`: `{ urls, token, timeoutMs?, concurrency?, failMode?, fetchImpl?, browserMcpServer?, browserTimeoutMs?, metricsSink? }`.
+- Таймаут одного browser-вызова: `browserTimeoutMs` (инстанс) либо `BrowserCallRequest.timeoutMs`
+  (параметр `timeout` у тула) + `REMOTE_TIMEOUT_GRACE_MS`; потолок — `MAX_EXECUTION_BROWSER_TIMEOUT_MS`
+  (600 000 мс), дефолт — `BROWSER_MCP_CALL_TIMEOUT_MS` (120 000 мс). Таймер только на клиенте:
+  у исполнителя `POST /mcp/call` своего таймаута нет.
 - Адреса перебираются **по кругу**; при **ошибке соединения** — следующий
   адрес. Ответ исполнителя (в т.ч. ошибка исполнения) поводом для failover
   **не** является: команда уже выполнена, повтор изменит её семантику.

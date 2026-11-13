@@ -716,6 +716,7 @@ setting: switching the mode requires a process restart (invariant 24). The speci
 | `execution.remote.browserProfile` | string | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Profile of the **browser** pool (`class: 'browser'`): the browser has its own image/profile, so it does **not** inherit `defaultProfile`. Used when the call target has no explicit profile |
 | `execution.remote.browserProfiles` | string[] | `[]` | `SYNTH_EXECUTION_BROWSER_PROFILES` (csv) | Explicit catalog of **browser** profiles (separate contour, ADR-135 §10): empty means `[browserProfile]`. Names are excluded from the exec catalog (`profiles`), while metadata in `execution.remote.profiles` is kept for `details` |
 | `execution.remote.browserMcpServer` | string | `playwright-mcp` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Name of the browser MCP server in the executor pod: the built-in `browser_*` tools address their calls to it (`POST /mcp/call`), without MCP discovery |
+| `execution.remote.browserTimeoutMs` | number | `120000` | `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS` | Timeout of **one** browser MCP tool call (2 min). The `browser_navigate`/`browser_wait`/`browser_screenshot` tools override it with the `timeout` parameter (1…600 000 ms). The ceiling is 600 000 ms: a value above it is a **configuration error** (fail-closed). The setting is common for the section — profiles do not override it |
 | `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values. Metadata (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **names only**) is returned in `GET /api/v2/execution/profiles` → `details` and does **not** affect routing or port creation |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Behaviour for an unusable profile (no address in the profile nor in the common `url`): `instance` — fall back to the instance port; `fail` — fail-closed (the startup is aborted) |
 | `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Pool provider (ADR-135 F4b-1): `static` — pools from the configuration (profile addresses, the port is built at startup — the F4a behaviour); `http` — pools are requested from the provisioner (the pool address and token come from the response, the port is built lazily) |
@@ -855,6 +856,10 @@ execution:
     browserMcpServer: "playwright-mcp"  # browser MCP server name in the pod (built-in browser_* tools;
                                         # matches the executor image default);
                                         # SYNTH_EXECUTION_BROWSER_MCP_SERVER
+    browserTimeoutMs: 120000          # timeout of one browser MCP tool call, ms; overridden by the
+                                        # `timeout` tool parameter; ceiling 600000 (a higher value is
+                                        # a configuration error);
+                                        # SYNTH_EXECUTION_BROWSER_TIMEOUT_MS
     fallback: "instance"           # instance (fall back to the instance port) | fail (fail-closed); SYNTH_EXECUTION_FALLBACK
     provider: "static"             # static (pools from the configuration) | http (provisioner); SYNTH_EXECUTION_PROVIDER
     provisioner:                   # pool provisioner parameters (needed with provider: http)

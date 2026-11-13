@@ -406,16 +406,33 @@ Discovery и вызовы MCP-инструментов исполнителя и
 
 | Что | Значение |
 |---|---|
-| Тулы D1 | `browser_navigate {url}`, `browser_snapshot {}`, `browser_close {}` |
-| Тулы D2 | `browser_click {element, ref}`, `browser_type {element, ref, text, submit?}`, `browser_press {key}`, `browser_wait {time?, text?}`, `browser_screenshot {filename?, fullPage?}` — capability `web` |
-| Порт | `ExecutionPort.browserCall({tool, arguments})` → `POST /mcp/call` `{server, tool, arguments}` |
+| Тулы D1 | `browser_navigate {url, timeout?}`, `browser_snapshot {}`, `browser_close {}` |
+| Тулы D2 | `browser_click {element, ref}`, `browser_type {element, ref, text, submit?}`, `browser_press {key}`, `browser_wait {time?, text?, timeout?}`, `browser_screenshot {filename?, fullPage?, timeout?}` — capability `web` |
+| Порт | `ExecutionPort.browserCall({tool, arguments, timeoutMs?})` → `POST /mcp/call` `{server, tool, arguments}` |
 | Сервер в поде | `execution.remote.browserMcpServer` (дефолт `playwright-mcp` — совпадает с дефолтом образа; env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`) |
 | Профиль пула | `execution.remote.browserProfile` (дефолт `browser`; env `SYNTH_EXECUTION_BROWSER_PROFILE`) |
 | Область пула | проект сессии (`project:<projectId>:browser:<profile>`), без проекта — `sessionId` |
+| Таймаут вызова | `execution.remote.browserTimeoutMs` (дефолт `120000`; env `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS`; потолок `600000`) |
 
 Имена инструментов на MCP-сервере не совпадают с именами тулов: `browser_press` → `browser_press_key`,
 `browser_wait` → `browser_wait_for`, `browser_screenshot` → `browser_take_screenshot`. `ref`
 элемента берётся из `browser_snapshot`; `time` у `browser_wait` — **секунды** (как у Playwright).
+
+**Таймаут browser-вызова.** Таймаут настраивается **двумя** способами (паритет с
+`execute_shell.timeout`):
+
+- `execution.remote.browserTimeoutMs` — **таймаут инстанса** для всех browser-вызовов
+  (env `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS`, дефолт 120 000 мс, потолок 600 000 мс; значение вне
+  потолка — **ошибка конфигурации**, а не тихая обрезка). Настройка общая для секции: профили
+  (`execution.remote.profiles`) её не переопределяют;
+- параметр `timeout` у тулов `browser_navigate`/`browser_wait`/`browser_screenshot` — таймаут
+  **одного** вызова, мс (1…600 000). В порт уходит полем `BrowserCallRequest.timeoutMs`; в аргументы
+  MCP-инструмента он **не** попадает.
+
+Клиент удалённого порта (`packages/executor/src/client.ts`) считает лимит так: без `timeoutMs` —
+таймаут инстанса; с `timeoutMs` — `min(timeoutMs, 600000) + 5000` (запас `REMOTE_TIMEOUT_GRACE_MS`,
+как у exec-вызова: иначе клиент обрывал бы вызов раньше, чем ответит исполнитель). По истечении
+модель получает `browser tool "…" timed out after N ms` — с **фактическим** числом миллисекунд.
 
 **Дублей `<browserMcpServer>_*` в реестре/промпте нет.** MCP-сервер браузера **остаётся подключённым**
 (его вызывает `ExecutionPort.browserCall` → `POST /mcp/call` напрямую, не через менеджер), но его

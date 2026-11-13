@@ -25,6 +25,10 @@
  * класса `browser`; дефолт `browser` — браузер не наследует `defaultProfile`)
  * и `SYNTH_EXECUTION_BROWSER_MCP_SERVER` (имя MCP-сервера браузера в поде).
  *
+ * Таймаут одного вызова браузерного MCP-инструмента — ещё одна переменная
+ * browser-контура: `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS`
+ * (`execution.remote.browserTimeoutMs`).
+ *
  * Fail-closed (как `storage.backend`): неизвестное **явное** значение `mode`
  * (опечатка `inlne`), `failMode`, `pooling`, `fallback` или `provider` —
  * ошибка, а не тихий выбор дефолта. Тот же принцип и для `provider: http`
@@ -35,6 +39,7 @@ import type { SynthConfig } from './types.js';
 import {
   DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
   DEFAULT_EXECUTION_BROWSER_PROFILE,
+  DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS,
   DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   EXECUTION_FAIL_MODES,
@@ -42,6 +47,7 @@ import {
   EXECUTION_MODES,
   EXECUTION_POOLINGS,
   EXECUTION_POOL_PROVIDERS,
+  MAX_EXECUTION_BROWSER_TIMEOUT_MS,
   type ExecutionFailMode,
   type ExecutionFallback,
   type ExecutionMcpServer,
@@ -73,6 +79,8 @@ export const EXECUTION_ENV = {
   browserProfiles: 'SYNTH_EXECUTION_BROWSER_PROFILES',
   /** Имя MCP-сервера браузера в поде исполнителя. */
   browserMcpServer: 'SYNTH_EXECUTION_BROWSER_MCP_SERVER',
+  /** Таймаут одного вызова браузерного MCP-инструмента, мс. */
+  browserTimeoutMs: 'SYNTH_EXECUTION_BROWSER_TIMEOUT_MS',
   /** PROP-135 Ф4a: поведение при непригодном профиле (`instance`|`fail`). */
   fallback: 'SYNTH_EXECUTION_FALLBACK',
   /** PROP-135 Ф4b-1: провайдер пулов (`static`|`http`). */
@@ -207,6 +215,13 @@ export interface ResolvedExecutionRemoteConfig {
   profileOrigins?: Record<string, ExecutionProfileOrigin>;
   /** Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`). */
   browserMcpServer: string;
+  /**
+   * Таймаут одного вызова браузерного MCP-инструмента, мс.
+   *
+   * Общая настройка секции (профили её не переопределяют). Не задана —
+   * дефолт клиента удалённого порта (`BROWSER_MCP_CALL_TIMEOUT_MS`).
+   */
+  browserTimeoutMs?: number;
   /** Эффективные параметры профилей (PROP-135 Ф4a) — по имени профиля. */
   profiles: Record<string, ResolvedExecutionProfile>;
   /** Поведение при непригодном профиле (PROP-135 Ф4a). */
@@ -532,6 +547,10 @@ export function resolveExecutionConfig(
     DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
     env,
   );
+  // Таймаут одного вызова браузерного MCP-инструмента: env > config.yaml >
+  // дефолт (2 мин). Явное значение вне потолка (600 000 мс) — **fail-closed**:
+  // молча обрезанный таймаут выглядел бы как «применилось», а не как ошибка.
+  const browserTimeoutMs = resolveBrowserTimeoutMs(remoteCfg.browserTimeoutMs, env);
   const profiles = resolveExecutionProfiles(remoteCfg.profiles, {
     url,
     timeoutMs,
@@ -569,6 +588,7 @@ export function resolveExecutionConfig(
       browserProfile,
       browserProfiles,
       browserMcpServer,
+      browserTimeoutMs,
       profiles,
       // ADR-135 (аддендум §11): происхождение профилей config-уровня — все
       // они из `config.yaml` (их можно отключить через `disabledProfiles`).
@@ -713,6 +733,45 @@ function resolveConfiguredName(
   const cfgTrimmed = (cfgValue ?? '').trim();
   if (cfgTrimmed !== '') return cfgTrimmed;
   return fallback;
+}
+
+/**
+ * Таймаут одного вызова браузерного MCP-инструмента, мс.
+ *
+ * env > config.yaml > дефолт (120 с). Явное значение проверяется
+ * **fail-closed**: не целое/не положительное/выше потолка (600 000 мс) —
+ * ошибка конфигурации, а не тихий откат на дефолт (явная настройка
+ * оператора не должна молча превращаться в другую).
+ */
+function resolveBrowserTimeoutMs(
+  cfgValue: number | undefined,
+  env: NodeJS.ProcessEnv,
+): number {
+  const raw = env[EXECUTION_ENV.browserTimeoutMs];
+  if (raw !== undefined && raw.trim() !== '') {
+    const value = Number(raw.trim());
+    if (!Number.isInteger(value) || value < 1 || value > MAX_EXECUTION_BROWSER_TIMEOUT_MS) {
+      throw new Error(
+        `[config] невалидное значение ${EXECUTION_ENV.browserTimeoutMs}="${raw}": ` +
+          `ожидается целое от 1 до ${MAX_EXECUTION_BROWSER_TIMEOUT_MS}`,
+      );
+    }
+    return value;
+  }
+  if (cfgValue !== undefined) {
+    if (
+      !Number.isInteger(cfgValue) ||
+      cfgValue < 1 ||
+      cfgValue > MAX_EXECUTION_BROWSER_TIMEOUT_MS
+    ) {
+      throw new Error(
+        `[config] невалидное значение execution.remote.browserTimeoutMs="${cfgValue}": ` +
+          `ожидается целое от 1 до ${MAX_EXECUTION_BROWSER_TIMEOUT_MS}`,
+      );
+    }
+    return cfgValue;
+  }
+  return DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS;
 }
 
 /**

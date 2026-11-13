@@ -11,6 +11,7 @@ import { DEFAULT_PROMPT_BLOCK_MAX_CHARS, DEFAULT_LLM_FILTER_TIMEOUT_MS } from '.
 import {
   DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
   DEFAULT_EXECUTION_BROWSER_PROFILE,
+  DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS,
   DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
   DEFAULT_EXECUTION_TIMEOUT_MS,
 } from './types.js';
@@ -67,6 +68,8 @@ export const defaultConfig: SynthConfig = {
       browserProfiles: [],
       // Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`).
       browserMcpServer: DEFAULT_EXECUTION_BROWSER_MCP_SERVER,
+      // Таймаут одного вызова браузерного MCP-инструмента (2 мин).
+      browserTimeoutMs: DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS,
       profiles: {},
       // Непригодный профиль → откат на instance-порт; `fail` — fail-closed.
       fallback: 'instance',

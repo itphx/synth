@@ -787,6 +787,7 @@ function profileConfig(
       browserProfile: remote.browserProfile,
       browserProfiles: remote.browserProfiles,
       browserMcpServer: remote.browserMcpServer,
+      browserTimeoutMs: remote.browserTimeoutMs,
       profiles: remote.profiles,
       fallback: remote.fallback,
       provider: remote.provider,

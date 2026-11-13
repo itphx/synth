@@ -260,6 +260,8 @@ describe('defaultConfig', () => {
     // каталог равен `[browserProfile]`.
     expect(defaultConfig.execution.remote.browserProfiles).toEqual([]);
     expect(defaultConfig.execution.remote.browserMcpServer).toBe('playwright-mcp');
+    // Таймаут одного вызова браузерного MCP-инструмента (2 мин).
+    expect(defaultConfig.execution.remote.browserTimeoutMs).toBe(120_000);
   });
 
   it('summarization.promptFile == SUMMARIZER', () => {

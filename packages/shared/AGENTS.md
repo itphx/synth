@@ -175,6 +175,11 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL` (список через запятую),
   `SYNTH_EXECUTION_TOKEN` (путь/ссылка на токен, НЕ значение — инвариант 13),
   `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`, `SYNTH_EXECUTION_FAIL_MODE`;
+  PROP-135 добавляет пулы/профили (`SYNTH_EXECUTION_POOLING`, `..._DEFAULT_PROFILE`,
+  `..._FALLBACK`, `..._PROVIDER`, `..._PROVISIONER_URL`/`_TOKEN`/`_TIMEOUT_MS`) и браузерный
+  контур (`..._BROWSER_PROFILE`, `..._BROWSER_PROFILES`, `..._BROWSER_MCP_SERVER`,
+  `..._BROWSER_TIMEOUT_MS` — таймаут одного browser-вызова, дефолт 120 000 мс, потолок
+  600 000 мс, явное значение вне диапазона — fail-closed);
   CLI `--execution-mode` (core `main.ts`). Приоритет — CLI > env > config.yaml > дефолт
   (ADR-023); **fail-closed** на неизвестном `mode`/`failMode` (как `storage.backend`);
   `remote.concurrency` по умолчанию — число CPU процесса. Секция — **параметр запуска**

@@ -305,6 +305,52 @@ describe('browser-тулы — имена инструментов и аргум
     expect(port.calls).toHaveLength(0);
     expect(targets).toHaveLength(0);
   });
+
+  it('timeout из аргументов уходит в browserCall как timeoutMs', async () => {
+    const port = new FakeBrowserPort(() => ok('ok'));
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    await browserNavigateTool.execute(
+      { url: 'https://example.com', timeout: 45_000 },
+      ctx,
+    );
+    await browserWaitTool.execute({ time: 2, timeout: 30_000 }, ctx);
+    await browserScreenshotTool.execute({ timeout: 15_000 }, ctx);
+
+    expect(port.calls).toEqual([
+      {
+        tool: 'browser_navigate',
+        arguments: { url: 'https://example.com' },
+        timeoutMs: 45_000,
+      },
+      { tool: 'browser_wait_for', arguments: { time: 2 }, timeoutMs: 30_000 },
+      { tool: 'browser_take_screenshot', arguments: { type: 'png' }, timeoutMs: 15_000 },
+    ]);
+  });
+
+  it('timeout без параметра — таймаут инстанса (поле не задаётся)', async () => {
+    const port = new FakeBrowserPort(() => ok('ok'));
+    const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
+
+    await browserNavigateTool.execute({ url: 'https://example.com' }, ctx);
+
+    expect(port.calls[0]?.timeoutMs).toBeUndefined();
+  });
+
+  it('timeout вне потолка (600 000) → argErrorResult, порт не вызывается', async () => {
+    const port = new FakeBrowserPort(() => ok('ok'));
+    const { router, targets } = fakeRouter(port);
+
+    const result = await browserNavigateTool.execute(
+      { url: 'https://example.com', timeout: 600_001 },
+      makeCtx({ executionRouter: router }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata).toMatchObject({ i18n: { key: 'tool.args_error' } });
+    expect(port.calls).toHaveLength(0);
+    expect(targets).toHaveLength(0);
+  });
 });
 
 describe('browser_screenshot — вложение сообщения', () => {

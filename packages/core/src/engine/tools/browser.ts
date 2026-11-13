@@ -90,12 +90,16 @@ interface BrowserCallOutcome {
  *
  * Ошибки не бросаются: недоступность браузера и ошибка инструмента — это
  * `failure`/`isError`-результат, ход продолжается.
+ *
+ * @param timeoutMs таймаут одного вызова, мс (параметр `timeout` тула);
+ *                  не задан — таймаут инстанса (`execution.remote.browserTimeoutMs`)
  */
 async function invokeBrowserTool(
   ctx: ToolContext,
   toolName: string,
   tool: string,
   args: Record<string, unknown>,
+  timeoutMs?: number,
 ): Promise<BrowserCallOutcome> {
   let port: ExecutionPort;
   try {
@@ -118,7 +122,14 @@ async function invokeBrowserTool(
   }
 
   try {
-    return { result: await port.browserCall({ tool, arguments: args }), port };
+    return {
+      result: await port.browserCall({
+        tool,
+        arguments: args,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      }),
+      port,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -137,8 +148,9 @@ async function callBrowserTool(
   toolName: string,
   tool: string,
   args: Record<string, unknown>,
+  timeoutMs?: number,
 ): Promise<ToolResult> {
-  const outcome = await invokeBrowserTool(ctx, toolName, tool, args);
+  const outcome = await invokeBrowserTool(ctx, toolName, tool, args, timeoutMs);
   if (outcome.failure) return outcome.failure;
   const result = outcome.result as BrowserCallResult;
   return {
@@ -220,8 +232,9 @@ async function callBrowserScreenshot(
   toolName: string,
   args: Record<string, unknown>,
   attachmentName?: string,
+  timeoutMs?: number,
 ): Promise<ToolResult> {
-  const outcome = await invokeBrowserTool(ctx, toolName, 'browser_take_screenshot', args);
+  const outcome = await invokeBrowserTool(ctx, toolName, 'browser_take_screenshot', args, timeoutMs);
   if (outcome.failure) return outcome.failure;
   const result = outcome.result as BrowserCallResult;
   let payloads = result.isError ? [] : (result.attachments ?? []);
@@ -311,11 +324,28 @@ async function callBrowserScreenshot(
   };
 }
 
+/**
+ * Параметр `timeout` — таймаут одного вызова браузерного инструмента, мс.
+ *
+ * Перекрывает таймаут инстанса (`execution.remote.browserTimeoutMs`); потолок —
+ * 600 000 мс (`MAX_EXECUTION_BROWSER_TIMEOUT_MS` в `@itphx/synth-shared`).
+ */
+const timeoutParam = z
+  .number()
+  .int()
+  .min(1)
+  .max(600_000)
+  .optional()
+  .describe(
+    'Timeout in milliseconds for this call (default from instance settings; max 600000)',
+  );
+
 const navigateSchema = z.object({
   url: z
     .string()
     .min(1)
     .describe('Absolute URL to open (for example https://example.com)'),
+  timeout: timeoutParam,
 });
 
 const emptySchema = z.object({});
@@ -366,6 +396,7 @@ const waitSchema = z
       .min(1)
       .optional()
       .describe('Wait until this text appears on the page'),
+    timeout: timeoutParam,
   })
   .refine((value) => value.time !== undefined || value.text !== undefined, {
     message: 'either "time" (seconds) or "text" is required',
@@ -383,6 +414,7 @@ const screenshotSchema = z.object({
     .boolean()
     .optional()
     .describe('Capture the whole scrollable page instead of the viewport (default false)'),
+  timeout: timeoutParam,
 });
 
 export const browserNavigateTool: ToolDefinition = {
@@ -400,7 +432,13 @@ export const browserNavigateTool: ToolDefinition = {
     if (!parsed.success) {
       return argErrorResult(this.name, parsed.error.issues);
     }
-    return callBrowserTool(ctx, this.name, 'browser_navigate', { url: parsed.data.url });
+    return callBrowserTool(
+      ctx,
+      this.name,
+      'browser_navigate',
+      { url: parsed.data.url },
+      parsed.data.timeout,
+    );
   },
 };
 
@@ -499,10 +537,16 @@ export const browserWaitTool: ToolDefinition = {
     if (!parsed.success) {
       return argErrorResult(this.name, parsed.error.issues);
     }
-    return callBrowserTool(ctx, this.name, 'browser_wait_for', {
-      ...(parsed.data.time !== undefined ? { time: parsed.data.time } : {}),
-      ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
-    });
+    return callBrowserTool(
+      ctx,
+      this.name,
+      'browser_wait_for',
+      {
+        ...(parsed.data.time !== undefined ? { time: parsed.data.time } : {}),
+        ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
+      },
+      parsed.data.timeout,
+    );
   },
 };
 
@@ -535,6 +579,7 @@ export const browserScreenshotTool: ToolDefinition = {
         ...(parsed.data.fullPage !== undefined ? { fullPage: parsed.data.fullPage } : {}),
       },
       filename,
+      parsed.data.timeout,
     );
   },
 };

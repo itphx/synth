@@ -59,6 +59,8 @@ interface ExecutorClientModule {
     metricsSink?: ExecutionMetricsSink;
     /** Имя MCP-сервера браузера в поде исполнителя (встроенные `browser_*`). */
     browserMcpServer?: string;
+    /** Таймаут одного вызова браузерного MCP-инструмента, мс. */
+    browserTimeoutMs?: number;
   }): ExecutionPort;
 }
 
@@ -237,6 +239,7 @@ export async function createRemoteExecutionPortFromConfig(
     concurrency: remote.concurrency,
     failMode: remote.failMode,
     browserMcpServer: remote.browserMcpServer,
+    browserTimeoutMs: remote.browserTimeoutMs,
     ...(opts?.metricsSink ? { metricsSink: opts.metricsSink } : {}),
   });
 }
@@ -262,6 +265,8 @@ export async function createRemoteExecutionPortForPool(opts: {
   metricsSink?: ExecutionMetricsSink;
   /** Имя MCP-сервера браузера в поде (`execution.remote.browserMcpServer`). */
   browserMcpServer?: string;
+  /** Таймаут одного вызова браузерного MCP-инструмента, мс. */
+  browserTimeoutMs?: number;
 }): Promise<ExecutionPort> {
   const url = opts.url.trim();
   if (url === '') {
@@ -282,6 +287,9 @@ export async function createRemoteExecutionPortForPool(opts: {
     ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
     ...(opts.failMode !== undefined ? { failMode: opts.failMode } : {}),
     ...(opts.browserMcpServer !== undefined ? { browserMcpServer: opts.browserMcpServer } : {}),
+    ...(opts.browserTimeoutMs !== undefined
+      ? { browserTimeoutMs: opts.browserTimeoutMs }
+      : {}),
     ...(opts.metricsSink ? { metricsSink: opts.metricsSink } : {}),
   });
 }
@@ -302,6 +310,7 @@ async function createRemoteExecutionPort(opts: {
   failMode?: 'fail' | 'inline-fallback';
   metricsSink?: ExecutionMetricsSink;
   browserMcpServer?: string;
+  browserTimeoutMs?: number;
 }): Promise<ExecutionPort> {
   const { urls, token } = opts;
 
@@ -331,6 +340,9 @@ async function createRemoteExecutionPort(opts: {
       ...(opts.failMode !== undefined ? { failMode: opts.failMode } : {}),
       ...(opts.browserMcpServer !== undefined
         ? { browserMcpServer: opts.browserMcpServer }
+        : {}),
+      ...(opts.browserTimeoutMs !== undefined
+        ? { browserTimeoutMs: opts.browserTimeoutMs }
         : {}),
       // ADR-094: приёмник метрик достаётся до клиента удалённого порта.
       // Обёртка (`RemoteExecutionPortWithExecutorMcp`) делегирует `execute`

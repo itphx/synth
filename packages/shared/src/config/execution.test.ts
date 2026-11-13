@@ -16,6 +16,7 @@ import {
   type ResolvedExecutionProfile,
 } from './execution.js';
 import {
+  DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS,
   DEFAULT_EXECUTION_PROVISIONER_TIMEOUT_MS,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   EXECUTION_FALLBACKS,
@@ -397,6 +398,35 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
       remote: { ...cfg.execution.remote, browserMcpServer: '' },
     });
     expect(resolveExecutionConfig(empty, {}).remote.browserMcpServer).toBe('playwright-mcp');
+  });
+
+  it('browserTimeoutMs: env важнее config.yaml; не задан → дефолт 120 с', () => {
+    expect(cfg.execution.remote.browserTimeoutMs).toBe(DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS);
+    const c = withRemote({ browserTimeoutMs: 45_000 });
+    expect(resolveExecutionConfig(c, {}).remote.browserTimeoutMs).toBe(45_000);
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.browserTimeoutMs]: '60000' }).remote
+        .browserTimeoutMs,
+    ).toBe(60_000);
+    // Пустое env-значение — «не задано» → берётся config.
+    expect(
+      resolveExecutionConfig(c, { [EXECUTION_ENV.browserTimeoutMs]: '' }).remote.browserTimeoutMs,
+    ).toBe(45_000);
+    // Не задан нигде — дефолт.
+    const empty = withRemote({ browserTimeoutMs: undefined });
+    expect(resolveExecutionConfig(empty, {}).remote.browserTimeoutMs).toBe(
+      DEFAULT_EXECUTION_BROWSER_TIMEOUT_MS,
+    );
+  });
+
+  it('browserTimeoutMs: значение выше потолка — ошибка конфигурации (fail-closed)', () => {
+    expect(() =>
+      resolveExecutionConfig(cfg, { [EXECUTION_ENV.browserTimeoutMs]: '900000' }),
+    ).toThrow(/SYNTH_EXECUTION_BROWSER_TIMEOUT_MS="900000"/);
+    const c = withRemote({ browserTimeoutMs: 900_000 });
+    expect(() => resolveExecutionConfig(c, {})).toThrow(
+      /execution\.remote\.browserTimeoutMs="900000"/,
+    );
   });
 
   it('pooling: env важнее config.yaml', () => {
