@@ -266,8 +266,11 @@ export const DEFAULT_EXECUTION_BROWSER_PROFILE = 'browser';
  *
  * Исполнитель поднимает MCP-серверы у себя (`SYNTH_EXECUTOR_MCP_SERVERS`);
  * встроенные browser-тулы адресуют вызов именно этому серверу по имени.
+ * Значение совпадает с дефолтом образа исполнителя (`docker/Dockerfile.executor`,
+ * `SYNTH_EXECUTOR_MCP_SERVERS[].name = "playwright-mcp"`); переопределяется
+ * `execution.remote.browserMcpServer` / env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`.
  */
-export const DEFAULT_EXECUTION_BROWSER_MCP_SERVER = 'playwright';
+export const DEFAULT_EXECUTION_BROWSER_MCP_SERVER = 'playwright-mcp';
 
 /**
  * Параметры удалённого исполнителя (`execution.remote`).

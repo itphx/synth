@@ -293,10 +293,15 @@ provisioner:
     browser:
       image: git.itphx.ru/itphx/synth-executor:0.13.8-browser
       mcpServers:
-        - name: playwright
+        - name: playwright-mcp
           command: playwright-mcp
           args: ["--headless", "--no-sandbox", "--executable-path", "/opt/synth/browser/chrome"]
 ```
+
+Имя сервера в профиле provisioner'а должно **совпадать** с `execution.remote.browserMcpServer`
+(дефолт `playwright-mcp` — тот же, что в образе исполнителя, `docker/Dockerfile.executor`):
+по этому имени встроенные `browser_*`-тулы адресуют вызов `POST /mcp/call`, а `McpManager`
+скрывает сервер из реестра тулов. Расхождение имён — вызовы `browser_*` не находят сервер.
 
 Состав уходит в env пода `SYNTH_EXECUTOR_MCP_SERVERS` (JSON, формат исполнителя —
 ADR-077 шаг B1). Разбор профиля **строгий** (fail-closed на старте provisioner'а): `name`/`command`
@@ -374,7 +379,7 @@ Discovery и вызовы MCP-инструментов исполнителя и
 | Тулы D1 | `browser_navigate {url}`, `browser_snapshot {}`, `browser_close {}` |
 | Тулы D2 | `browser_click {element, ref}`, `browser_type {element, ref, text, submit?}`, `browser_press {key}`, `browser_wait {time?, text?}`, `browser_screenshot {filename?, fullPage?}` — capability `web` |
 | Порт | `ExecutionPort.browserCall({tool, arguments})` → `POST /mcp/call` `{server, tool, arguments}` |
-| Сервер в поде | `execution.remote.browserMcpServer` (дефолт `playwright`; env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`) |
+| Сервер в поде | `execution.remote.browserMcpServer` (дефолт `playwright-mcp` — совпадает с дефолтом образа; env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`) |
 | Профиль пула | `execution.remote.browserProfile` (дефолт `browser`; env `SYNTH_EXECUTION_BROWSER_PROFILE`) |
 | Область пула | проект сессии (`project:<projectId>:browser:<profile>`), без проекта — `sessionId` |
 
@@ -382,7 +387,7 @@ Discovery и вызовы MCP-инструментов исполнителя и
 `browser_wait` → `browser_wait_for`, `browser_screenshot` → `browser_take_screenshot`. `ref`
 элемента берётся из `browser_snapshot`; `time` у `browser_wait` — **секунды** (как у Playwright).
 
-**Дублей `playwright_*` в реестре/промпте нет.** MCP-сервер браузера **остаётся подключённым**
+**Дублей `<browserMcpServer>_*` в реестре/промпте нет.** MCP-сервер браузера **остаётся подключённым**
 (его вызывает `ExecutionPort.browserCall` → `POST /mcp/call` напрямую, не через менеджер), но его
 инструменты не регистрируются: `McpManager` скрывает сервер `execution.remote.browserMcpServer`
 (`hiddenServers`; заполняется из deps — core `server/app/deps.ts`, backend `app/deps.ts` через

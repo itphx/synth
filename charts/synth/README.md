@@ -2063,7 +2063,7 @@ provisioner:
       # MCP-серверы, которые исполнитель пула хостит у себя
       # (PROP-135 слайз 5b-1) → env пода SYNTH_EXECUTOR_MCP_SERVERS (JSON).
       mcpServers:
-        - name: playwright
+        - name: playwright-mcp            # должно совпадать с execution.remote.browserMcpServer
           command: playwright-mcp
           args:
             - --headless

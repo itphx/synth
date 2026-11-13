@@ -249,11 +249,11 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
 
   it('дефолты browser-пула: приходят из схемы и резолвера', () => {
     expect(cfg.execution.remote.browserProfile).toBe('browser');
-    expect(cfg.execution.remote.browserMcpServer).toBe('playwright');
+    expect(cfg.execution.remote.browserMcpServer).toBe('playwright-mcp');
     // Резолвер не подменяет дефолты: браузер не наследует `defaultProfile`.
     const resolved = resolveExecutionConfig(cfg, {});
     expect(resolved.remote.browserProfile).toBe('browser');
-    expect(resolved.remote.browserMcpServer).toBe('playwright');
+    expect(resolved.remote.browserMcpServer).toBe('playwright-mcp');
   });
 
   it('browserProfile: env важнее config.yaml; пустое значение → дефолт', () => {
@@ -291,7 +291,7 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
     const empty = withExecution({
       remote: { ...cfg.execution.remote, browserMcpServer: '' },
     });
-    expect(resolveExecutionConfig(empty, {}).remote.browserMcpServer).toBe('playwright');
+    expect(resolveExecutionConfig(empty, {}).remote.browserMcpServer).toBe('playwright-mcp');
   });
 
   it('pooling: env важнее config.yaml', () => {
