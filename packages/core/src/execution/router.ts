@@ -83,13 +83,19 @@
  *   worktree/process/MCP, детект зависимостей) — там порт остаётся общим.
  */
 
-import type { ResolvedExecutionConfig, ResolvedExecutionRemoteConfig } from '@itphx/synth-shared';
+import type {
+  ResolvedExecutionConfig,
+  ResolvedExecutionProfile,
+  ResolvedExecutionRemoteConfig,
+} from '@itphx/synth-shared';
 import type { ExecutionProfileCatalog } from './profile-binding.js';
 import { createExecutionPortForConfig, defaultPooledPortFactory } from './factory.js';
 import {
   createExecutionPoolProvider,
+  executionProfileMetadata,
   ExecutionPoolProviderError,
   poolKeyString,
+  toExecutionProfileInfo,
   type ExecutionPoolClass,
   type ExecutionPoolKey,
   type ExecutionPoolProvider,
@@ -347,9 +353,9 @@ export async function createExecutionRouter(
       portFor: () => port,
       poolRefFor: createPoolRefResolver(config, undefined),
       // `inline` — профилей нет (исполнение в процессе); иначе — каталог
-      // конфигурации (имена без метаданных: у `static` их нет).
+      // конфигурации с метаданными профилей (`execution.remote.profiles`).
       ...(config && config.mode !== 'inline'
-        ? { profilesInfo: async () => catalogProfileNames(config).map((name) => ({ name })) }
+        ? { profilesInfo: async () => profilesInfoFromConfig(config) }
         : {}),
     };
   }
@@ -423,8 +429,11 @@ export async function createExecutionRouter(
     // и проверки `executor.profile`/`executor_profile` в роутах и `task`.
     profiles: () => [...plans.keys()],
     defaultProfile: () => defaultName,
-    // PROP-135: метаданные профилей — у `static` известны только имена.
-    profilesInfo: async () => [...plans.keys()].map((name) => ({ name })),
+    // PROP-135: метаданные профилей — из конфигурации (`static`).
+    profilesInfo: async () =>
+      [...plans.values()].map((plan) =>
+        toExecutionProfileInfo(plan.name, executionProfileMetadata(plan.profile)),
+      ),
     // PROP-135 слайз 5b-1: ссылка на пул (адреса + токен) для MCP-хоста.
     poolRefFor: createPoolRefResolver(config, undefined),
   };
@@ -529,23 +538,28 @@ function knownProfiles(remote: ResolvedExecutionRemoteConfig): string[] {
   return [...names];
 }
 
-/** Имена профилей эффективной секции `execution` (для метаданных по умолчанию). */
-function catalogProfileNames(config: ResolvedExecutionConfig): string[] {
-  return knownProfiles(config.remote);
+/**
+ * Метаданные профилей эффективной секции `execution` (для `static`/`inline`-
+ * роутера): имя + заданные поля `execution.remote.profiles`.
+ */
+function profilesInfoFromConfig(config: ResolvedExecutionConfig): ExecutionProfileInfo[] {
+  return knownProfiles(config.remote).map((name) =>
+    toExecutionProfileInfo(name, executionProfileMetadata(config.remote.profiles[name])),
+  );
 }
 
 /**
- * Метаданные профилей: возможность провайдера, иначе — имена каталога.
+ * Метаданные профилей: возможность провайдера, иначе — каталог конфигурации.
  *
  * Провайдер без `profilesInfo` (тестовая заглушка/старая реализация) не должен
- * ломать admin-API — имена профилей известны из конфигурации.
+ * ломать admin-API — профили (с метаданными) известны из конфигурации.
  */
 function profilesInfoFromProviderOrNames(
   provider: ExecutionPoolProvider,
   config: ResolvedExecutionConfig,
 ): Promise<ExecutionProfileInfo[]> {
   if (typeof provider.profilesInfo === 'function') return provider.profilesInfo();
-  return Promise.resolve(catalogProfileNames(config).map((name) => ({ name })));
+  return Promise.resolve(profilesInfoFromConfig(config));
 }
 
 /**
@@ -652,12 +666,7 @@ function resolveProfileParams(
 /** План профиля: имя + эффективные параметры. */
 interface ResolvedExecutionProfilePlan {
   name: string;
-  profile: {
-    url: string[];
-    timeoutMs: number;
-    concurrency: number;
-    failMode: ResolvedExecutionRemoteConfig['failMode'];
-  };
+  profile: ResolvedExecutionProfile;
 }
 
 /**

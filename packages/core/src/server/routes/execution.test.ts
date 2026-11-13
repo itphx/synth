@@ -223,6 +223,57 @@ describe('PROP-135 Ф6b-1: GET /api/v2/execution/profiles', () => {
     });
   });
 
+  it('static: details — метаданные профилей из config.profiles', async () => {
+    const config = remoteConfig({
+      provider: 'static',
+      pooling: 'session',
+      profiles: {
+        default: {
+          url: ['http://executor:8080'],
+          timeoutMs: 30_000,
+          concurrency: 2,
+          failMode: 'fail',
+          description: 'Инстанс-исполнитель test',
+          image: 'synth-executor:0.13.9-full',
+          network: 'restricted',
+          resources: { limits: { cpu: '2', memory: '4Gi' } },
+          runtimeClass: 'gvisor',
+          mcpServers: ['playwright'],
+        },
+        devops: {
+          url: ['http://executor-devops:8080'],
+          timeoutMs: 30_000,
+          concurrency: 2,
+          failMode: 'fail',
+        },
+      },
+    });
+    const app = appWith({ executionConfig: config });
+    const res = await app.request('/api/v2/execution/profiles');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      profiles: string[];
+      details: unknown[];
+    };
+    expect(body.profiles).toEqual(['default', 'devops']);
+    expect(body.details).toEqual([
+      {
+        name: 'default',
+        description: 'Инстанс-исполнитель test',
+        image: 'synth-executor:0.13.9-full',
+        network: 'restricted',
+        resources: { limits: { cpu: '2', memory: '4Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+      { name: 'devops' },
+    ]);
+    const text = JSON.stringify(body);
+    // Секреты и адреса пулов в details не попадают.
+    expect(text).not.toContain('http://');
+    expect(text).not.toContain('/secrets/');
+  });
+
   it('inline: секции нет — пустой каталог, пулинг instance', async () => {
     const app = appWith({});
     const res = await app.request('/api/v2/execution/profiles');

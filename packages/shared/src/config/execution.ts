@@ -41,6 +41,8 @@ import {
   type ExecutionMode,
   type ExecutionPooling,
   type ExecutionPoolProviderKind,
+  type ExecutionProfileNetwork,
+  type ExecutionProfileResources,
 } from './types.js';
 
 /** Env-имена секции `execution` (ADR-077). */
@@ -98,6 +100,17 @@ export interface ResolvedExecutionProfile {
   concurrency: number;
   /** Поведение при недоступном исполнителе. */
   failMode: ExecutionFailMode;
+  /**
+   * Метаданные профиля (PROP-135, для admin-API/UI). На маршрутизацию и
+   * создание портов не влияют; незаданное поле отсутствует.
+   */
+  description?: string;
+  image?: string;
+  network?: ExecutionProfileNetwork;
+  resources?: ExecutionProfileResources;
+  runtimeClass?: string;
+  /** **Имена** MCP-серверов профиля (без команд/env). */
+  mcpServers?: string[];
 }
 
 /** Эффективные параметры удалённого исполнителя. */
@@ -495,6 +508,12 @@ function resolveExecutionProfiles(
       timeoutMs?: number;
       concurrency?: number;
       failMode?: ExecutionFailMode;
+      description?: string;
+      image?: string;
+      network?: ExecutionProfileNetwork;
+      resources?: ExecutionProfileResources;
+      runtimeClass?: string;
+      mcpServers?: string[];
     }
   > | undefined,
   common: {
@@ -507,14 +526,60 @@ function resolveExecutionProfiles(
   const out: Record<string, ResolvedExecutionProfile> = {};
   for (const [name, profile] of Object.entries(cfgProfiles ?? {})) {
     const profileUrl = (profile.url ?? []).map((u) => u.trim()).filter((u) => u.length > 0);
-    out[name] = {
+    const resolved: ResolvedExecutionProfile = {
       url: profileUrl.length > 0 ? profileUrl : [...common.url],
       timeoutMs: profile.timeoutMs ?? common.timeoutMs,
       concurrency: profile.concurrency ?? common.concurrency,
       failMode: profile.failMode ?? common.failMode,
     };
+    // Метаданные (не участвуют в маршрутизации): пустые/undefined не задаём.
+    const description = profile.description?.trim();
+    if (description !== undefined && description !== '') resolved.description = description;
+    const image = profile.image?.trim();
+    if (image !== undefined && image !== '') resolved.image = image;
+    if (profile.network !== undefined) resolved.network = profile.network;
+    const resources = resolveProfileResources(profile.resources);
+    if (resources !== undefined) resolved.resources = resources;
+    const runtimeClass = profile.runtimeClass?.trim();
+    if (runtimeClass !== undefined && runtimeClass !== '') resolved.runtimeClass = runtimeClass;
+    const mcpServers = (profile.mcpServers ?? []).map((s) => s.trim()).filter((s) => s.length > 0);
+    if (mcpServers.length > 0) resolved.mcpServers = mcpServers;
+    out[name] = resolved;
   }
   return out;
+}
+
+/**
+ * Ресурсы профиля: копируются только заданные непустые строки; пустой объект
+ * (ни одного значения) → `undefined`, чтобы метаданные не шумели в ответе.
+ */
+function resolveProfileResources(
+  resources: ExecutionProfileResources | undefined,
+): ExecutionProfileResources | undefined {
+  if (resources === undefined) return undefined;
+  const requests = resolveResourceList(resources.requests);
+  const limits = resolveResourceList(resources.limits);
+  if (requests === undefined && limits === undefined) return undefined;
+  return {
+    ...(requests !== undefined ? { requests } : {}),
+    ...(limits !== undefined ? { limits } : {}),
+  };
+}
+
+function resolveResourceList(
+  list: ExecutionProfileResources['requests'],
+): ExecutionProfileResources['requests'] {
+  if (list === undefined) return undefined;
+  const cpu = list.cpu?.trim();
+  const memory = list.memory?.trim();
+  const ephemeralStorage = list.ephemeralStorage?.trim();
+  const out: NonNullable<ExecutionProfileResources['requests']> = {};
+  if (cpu !== undefined && cpu !== '') out.cpu = cpu;
+  if (memory !== undefined && memory !== '') out.memory = memory;
+  if (ephemeralStorage !== undefined && ephemeralStorage !== '') {
+    out.ephemeralStorage = ephemeralStorage;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function resolveFailMode(

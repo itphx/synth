@@ -327,6 +327,57 @@ describe('пулы и профили (PROP-135 Ф4a)', () => {
     });
   });
 
+  it('метаданные профиля (description/image/network/resources/runtimeClass/mcpServers)', () => {
+    const c = withExecution({
+      remote: {
+        ...cfg.execution.remote,
+        profiles: {
+          described: {
+            url: ['http://a:8080'],
+            description: '  Инстанс-исполнитель test  ',
+            image: ' synth-executor:0.13.9-full ',
+            network: 'restricted',
+            resources: {
+              requests: { cpu: '500m', memory: '  ' },
+              limits: { memory: '2Gi' },
+            },
+            runtimeClass: ' gvisor ',
+            mcpServers: [' playwright ', ''],
+          },
+          empty: {
+            url: ['http://b:8080'],
+            description: '   ',
+            image: '',
+            mcpServers: [],
+          },
+        },
+      },
+    });
+    const resolved = resolveExecutionConfig(c, {});
+
+    expect(resolved.remote.profiles.described).toEqual({
+      url: ['http://a:8080'],
+      timeoutMs: cfg.execution.remote.timeoutMs,
+      concurrency: cfg.execution.remote.concurrency,
+      failMode: 'fail',
+      description: 'Инстанс-исполнитель test',
+      image: 'synth-executor:0.13.9-full',
+      network: 'restricted',
+      resources: { requests: { cpu: '500m' }, limits: { memory: '2Gi' } },
+      runtimeClass: 'gvisor',
+      mcpServers: ['playwright'],
+    });
+    // Пустые значения «не заданы»: метаданных в резолве нет вовсе.
+    expect(resolved.remote.profiles.empty).toEqual({
+      url: ['http://b:8080'],
+      timeoutMs: cfg.execution.remote.timeoutMs,
+      concurrency: cfg.execution.remote.concurrency,
+      failMode: 'fail',
+    });
+    expect('description' in resolved.remote.profiles.empty!).toBe(false);
+    expect('resources' in resolved.remote.profiles.empty!).toBe(false);
+  });
+
   it('профиль без адресов при пустом общем url → непригоден (url пуст)', () => {
     const c = withExecution({
       remote: {

@@ -317,6 +317,8 @@ export {
   isExecutionFallback,
   // PROP-135 Ф4b-1: провайдер пулов исполнения.
   isExecutionPoolProvider,
+  // PROP-135: метаданные профилей исполнения (description/image/network/…).
+  EXECUTION_PROFILE_NETWORKS,
   EXECUTION_ENV,
   EXECUTION_MODE_CLI_FLAG,
 } from './config/index.js';
@@ -330,6 +332,9 @@ export type {
   ExecutionFallback,
   // PROP-135 Ф4b-1: провайдер пулов исполнения.
   ExecutionPoolProviderKind,
+  ExecutionProfileNetwork,
+  ExecutionProfileResourceList,
+  ExecutionProfileResources,
   ResolvedExecutionConfig,
   ResolvedExecutionRemoteConfig,
   ResolvedExecutionProfile,

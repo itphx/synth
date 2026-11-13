@@ -2803,7 +2803,7 @@ passes RBAC/`t()` through `opts`. One implementation for both standalone and man
 
 | Method | Path | RBAC (managed) | Purpose / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/execution/profiles` | any authenticated (core — `requireAuth`) | Effective configuration → `200 { provider, pooling, defaultProfile, profiles, details }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — no `execution` section), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — known profile names (the default profile is always included; `inline` → `[]`). `details` (additive) — profile metadata: `{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}`; `mcpServers` are names only, no env/commands; `http` — from the provisioner's `GET /v1/profiles`, `static` — configuration names only (a static address has no image/network), `inline` — `[]`; an unreachable provisioner yields `details: []` and does **not** turn the catalogue into `503` (names stay in `profiles`). The catalogue is needed in project settings — a project owner with the `USER` role reads it too, so the role is not checked |
+| GET | `/api/v2/execution/profiles` | any authenticated (core — `requireAuth`) | Effective configuration → `200 { provider, pooling, defaultProfile, profiles, details }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — no `execution` section), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — known profile names (the default profile is always included; `inline` → `[]`). `details` (additive) — profile metadata: `{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}`; `mcpServers` are names only, no env/commands; `http` — from the provisioner's `GET /v1/profiles`, `static` — from `execution.remote.profiles` (description/image/network/resources/runtimeClass/MCP names; unset fields are omitted), `inline` — `[]`; an unreachable provisioner yields `details: []` and does **not** turn the catalogue into `503` (names stay in `profiles`). The catalogue is needed in project settings — a project owner with the `USER` role reads it too, so the role is not checked |
 | GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Pool list → `200 { provider, pools: PoolInfo[] }`. `http` — the provider's `GET /v1/pools`; `static` — configuration profiles as `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**no** pool address and no token) |
 | POST | `/api/v2/execution/pools/:key/drain` | `ADMIN` | Drain a pool → `202 {ok:true}`. `:key` is the canonical pool key (`instance:<class>:<profile>`, `project:<id>:<class>:<profile>`, `session:<id>:<class>:<profile>`), URL-encoded in the path. `drain` is best-effort: `202` acknowledges the request, the actual teardown happens on the provisioner side. A key missing from the provider registry → `404 NOT_FOUND`; an unavailable registry (no `list`) skips the check |
 | DELETE | `/api/v2/execution/pools/:key` | `ADMIN` | Delete a pool → `202 {ok:true}`. **Idempotent**: a repeated `DELETE` (including for a pool already removed by the idle timeout) is `202` again |
@@ -2813,9 +2813,10 @@ passes RBAC/`t()` through `opts`. One implementation for both standalone and man
 class (`none`/`restricted`/`full`), resources (`requests`/`limits`), `runtimeClass`,
 description and MCP server **names**. Profile env, MCP commands/args/env, pool
 addresses and tokens are never returned (invariant 13). The source is the
-provisioner's `GET /v1/profiles` (`http`); with `static` only names are known; an
-unreachable provisioner yields `details: []` while `profiles` stays complete (no
-error). The admin "Execution" UI renders cards from `details`, unknown fields as
+provisioner's `GET /v1/profiles` (`http`) or the `execution.remote.profiles`
+catalogue (`static`: `description`, `image`, `network`, `resources`,
+`runtimeClass`, `mcpServers` names); an unreachable provisioner yields
+`details: []` while `profiles` stays complete (no error). The admin "Execution" UI renders cards from `details`, unknown fields as
 "—", and profiles without details by name.
 
 **Error codes.** `400 VALIDATION_ERROR` — the pool key does not match the format;

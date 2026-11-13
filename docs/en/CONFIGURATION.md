@@ -712,7 +712,7 @@ setting: switching the mode requires a process restart (invariant 24). The speci
 | `execution.remote.tokenSecret` | path/reference | — | `SYNTH_EXECUTION_TOKEN` | **A path/reference to the token, NOT the value** (invariant 13). The token itself is `synth_exec_…` and lives in a Secret/file |
 | `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Pool mode (PROP-135 F4a): `instance` — **one shared** port per process (the previous behaviour, profiles are ignored); `project`/`session` — a port per profile of the session |
 | `execution.remote.defaultProfile` | string | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Name of the default profile (the profile catalogue is set by ADMIN) |
-| `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values |
+| `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values. Metadata (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **names only**) is returned in `GET /api/v2/execution/profiles` → `details` and does **not** affect routing or port creation |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Behaviour for an unusable profile (no address in the profile nor in the common `url`): `instance` — fall back to the instance port; `fail` — fail-closed (the startup is aborted) |
 | `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Pool provider (PROP-135 F4b-1): `static` — pools from the configuration (profile addresses, the port is built at startup — the F4a behaviour); `http` — pools are requested from the provisioner (the pool address and token come from the response, the port is built lazily) |
 | `execution.remote.provisioner.url` | string (address) | `''` | `SYNTH_EXECUTION_PROVISIONER_URL` | Address of the pool provisioner (`http://…`); **empty with `provider: http` → fail-closed at startup** ("where to ask" is not set) |
@@ -749,6 +749,15 @@ gets:
   instance port) or `fallback: fail` (**fail-closed at startup**).
 
 Profiles are set **only** in `config.yaml` — there is no env override for the profile catalogue.
+
+**Profile metadata (static).** The `description`, `image`, `network`, `resources`,
+`runtimeClass`, `mcpServers` fields are **descriptive**: they appear in the `details` of
+`GET /api/v2/execution/profiles` (and in the "Execution" UI section), but they do not select
+the port, address or network class of a pool. The network class of a static pool is set by the
+deployment (`executor.networkClass` in the chart), and of a dynamic pool by the provisioner
+profile. Empty values are treated as unset and are omitted from `details`. With
+`provider: http` metadata comes from the provisioner (`GET /v1/profiles`); with
+`provider: static` — from this catalogue.
 
 **Profile binding (PROP-135 F6a).** The effective profile is an inherited scope setting, priority:
 
@@ -842,6 +851,15 @@ execution:
         timeoutMs: 60000            # unset → inherits remote.timeoutMs
         concurrency: 4              # unset → inherits remote.concurrency
         failMode: "fail"            # unset → inherits remote.failMode
+        # --- metadata (details/UI only, does not affect routing) ---
+        description: "DevOps executor: full toolchain"
+        image: "synth-executor:0.13.9-full"
+        network: "restricted"       # none | restricted | full
+        resources:
+          requests: { cpu: "500m", memory: "1Gi" }
+          limits: { cpu: "2", memory: "4Gi" }
+        runtimeClass: "gvisor"
+        mcpServers: ["playwright"]  # names only (no commands/env)
 ```
 
 An example of dynamic pools (the provisioner issues the pool address and token; static executor

@@ -3261,7 +3261,7 @@ payload — **snake_case** `{ project_id, worktree_id?, action }`, где `actio
 
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/execution/profiles` | любой аутентифицированный (core — `requireAuth`) | Эффективная конфигурация → `200 { provider, pooling, defaultProfile, profiles, details }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — секции `execution` нет), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — имена известных профилей (профиль по умолчанию входит всегда; у `inline` — `[]`). `details` (аддитивно) — метаданные профилей: `{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}`; `mcpServers` — только имена, без env/команд; `http` — из `GET /v1/profiles` provisioner'а, `static` — только имена каталога (образа/сети у статического адреса нет), `inline` — `[]`; недоступность provisioner'а даёт `details: []` и **не** превращает каталог в `503` (имена остаются в `profiles`). Каталог нужен в настройках проекта — его читает и владелец проекта с ролью `USER`, поэтому роль не проверяется |
+| GET | `/api/v2/execution/profiles` | любой аутентифицированный (core — `requireAuth`) | Эффективная конфигурация → `200 { provider, pooling, defaultProfile, profiles, details }`. `provider` ∈ `inline`\|`static`\|`http` (`inline` — секции `execution` нет), `pooling` ∈ `instance`\|`project`\|`session`, `profiles` — имена известных профилей (профиль по умолчанию входит всегда; у `inline` — `[]`). `details` (аддитивно) — метаданные профилей: `{name, description?, image?, network?, resources?, runtimeClass?, mcpServers?}`; `mcpServers` — только имена, без env/команд; `http` — из `GET /v1/profiles` provisioner'а, `static` — из `execution.remote.profiles` (описание/образ/сеть/ресурсы/runtimeClass/имена MCP; незаданные поля отсутствуют), `inline` — `[]`; недоступность provisioner'а даёт `details: []` и **не** превращает каталог в `503` (имена остаются в `profiles`). Каталог нужен в настройках проекта — его читает и владелец проекта с ролью `USER`, поэтому роль не проверяется |
 | GET | `/api/v2/execution/pools` | `ADMIN`\|`LEAD` (core — `requireAuth`) | Список пулов → `200 { provider, pools: PoolInfo[] }`. `http` — `GET /v1/pools` провайдера; `static` — профили конфигурации как `{profile, state:'configured'}`; `inline` — `pools: []`. `PoolInfo` = `{key?, profile, state, createdAt?, lastUsedAt?}`, `state` ∈ `configured`\|`ready`\|`draining` (**без** адреса пула и токена) |
 | POST | `/api/v2/execution/pools/:key/drain` | `ADMIN` | Слить пул → `202 {ok:true}`. `:key` — канонический ключ пула (`instance:<class>:<profile>`, `project:<id>:<class>:<profile>`, `session:<id>:<class>:<profile>`), в URL — URL-encoded. `drain` — best-effort: `202` подтверждает приём, фактическое снятие идёт у provisioner'а. Ключ, которого нет в реестре провайдера → `404 NOT_FOUND`; реестр недоступен (нет `list`) — проверка пропускается |
 | DELETE | `/api/v2/execution/pools/:key` | `ADMIN` | Удалить пул → `202 {ok:true}`. **Идемпотентно**: повторный `DELETE` (в т.ч. по уже удалённому по idle-таймауту пулу) — тоже `202` |
@@ -3270,9 +3270,10 @@ payload — **snake_case** `{ project_id, worktree_id?, action }`, где `actio
 отвечает на вопрос «что за профиль»: образ, сетевой класс (`none`/`restricted`/`full`),
 ресурсы (`requests`/`limits`), `runtimeClass`, описание и **имена** MCP-серверов.
 Env профиля, команды/аргументы/env MCP-серверов, адреса и токены пулов в ответ не
-попадают (инвариант 13). Источник — `GET /v1/profiles` provisioner'а (`http`);
-при `static` известны только имена; при недоступном provisioner'е `details: []`,
-а `profiles` остаётся полным (ошибки нет). UI админ-раздела «Исполнение» рисует по
+попадают (инвариант 13). Источник — `GET /v1/profiles` provisioner'а (`http`)
+либо каталог `execution.remote.profiles` (`static`: `description`, `image`,
+`network`, `resources`, `runtimeClass`, имена `mcpServers`); при недоступном
+provisioner'е `details: []`, а `profiles` остаётся полным (ошибки нет). UI админ-раздела «Исполнение» рисует по
 `details` карточки, неизвестные поля — «—»; профили без деталей показываются
 именами.
 

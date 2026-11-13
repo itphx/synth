@@ -212,6 +212,33 @@ export const EXECUTION_POOL_PROVIDERS = ['static', 'http'] as const;
 export type ExecutionPoolProviderKind = (typeof EXECUTION_POOL_PROVIDERS)[number];
 
 /**
+ * Сетевой класс профиля исполнения (PROP-135).
+ *
+ * **Метаданные**: описывают, какой сетевой класс у пула профиля (`none` —
+ * egress запрещён, `restricted` — allowlist, `full` — без ограничений).
+ * Маршрутизацию и создание портов значение **не** меняет — сетевой класс
+ * применяется развёртыванием (Helm/provisioner).
+ */
+export const EXECUTION_PROFILE_NETWORKS = ['none', 'restricted', 'full'] as const;
+export type ExecutionProfileNetwork = (typeof EXECUTION_PROFILE_NETWORKS)[number];
+
+/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
+export interface ExecutionProfileResourceList {
+  /** CPU (`500m`, `1`). */
+  cpu?: string;
+  /** Память (`2Gi`). */
+  memory?: string;
+  /** Эфемерное хранилище (`1Gi`) — приходит от provisioner'а. */
+  ephemeralStorage?: string;
+}
+
+/** Ресурсы профиля исполнения (как в PodSpec). */
+export interface ExecutionProfileResources {
+  requests?: ExecutionProfileResourceList;
+  limits?: ExecutionProfileResourceList;
+}
+
+/**
  * Таймаут обращения к provisioner'у пулов по умолчанию (10 с).
  *
  * Отдельный от таймаута exec-вызова: вызов к provisioner'у — это запрос
@@ -266,6 +293,26 @@ export const executionRemoteConfigSchema = z.object({
         timeoutMs: z.number().int().min(1).optional(),
         concurrency: z.number().int().min(1).optional(),
         failMode: z.enum(EXECUTION_FAIL_MODES).optional(),
+        /**
+         * Метаданные профиля (для admin-API/UI): аддитивные поля, на
+         * маршрутизацию и создание портов **не** влияют.
+         */
+        description: z.string().max(500).optional(),
+        image: z.string().optional(),
+        network: z.enum(EXECUTION_PROFILE_NETWORKS).optional(),
+        resources: z
+          .object({
+            requests: z
+              .object({ cpu: z.string().optional(), memory: z.string().optional() })
+              .optional(),
+            limits: z
+              .object({ cpu: z.string().optional(), memory: z.string().optional() })
+              .optional(),
+          })
+          .optional(),
+        runtimeClass: z.string().optional(),
+        /** **Только имена** MCP-серверов профиля (без команд/env). */
+        mcpServers: z.array(z.string()).optional(),
       }),
     )
     .default({}),

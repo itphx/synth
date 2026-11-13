@@ -151,12 +151,42 @@ describe('PROP-135 Ф4b-1: статический провайдер', () => {
     });
   });
 
-  it('profilesInfo: только имена (образа/сети у статического адреса нет)', async () => {
+  it('profilesInfo: профиль без метаданных — только имя', async () => {
     const provider = new StaticExecutionPoolProvider({
       a: { url: ['http://a:8080'] },
       b: { url: ['http://b:8080'] },
     });
     await expect(provider.profilesInfo!()).resolves.toEqual([{ name: 'a' }, { name: 'b' }]);
+  });
+
+  it('profilesInfo: метаданные профиля из конфигурации (без адресов)', async () => {
+    const provider = new StaticExecutionPoolProvider({
+      default: {
+        url: ['http://executor:8080'],
+        description: 'Инстанс-исполнитель test',
+        image: 'synth-executor:0.13.9-full',
+        network: 'restricted',
+        resources: { limits: { cpu: '2', memory: '4Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+      bare: { url: ['http://bare:8080'] },
+    });
+    const infos = await provider.profilesInfo!();
+    expect(infos).toEqual([
+      {
+        name: 'default',
+        description: 'Инстанс-исполнитель test',
+        image: 'synth-executor:0.13.9-full',
+        network: 'restricted',
+        resources: { limits: { cpu: '2', memory: '4Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+      { name: 'bare' },
+    ]);
+    // Адреса пулов наружу не отдаются.
+    expect(JSON.stringify(infos)).not.toContain('http://');
   });
 
   it('isExecutionPoolProvider — структурная проверка', () => {
@@ -514,6 +544,37 @@ describe('PROP-135 Ф4b-1: фабрика провайдера', () => {
       profile: 'devops',
     });
     expect(ref.url).toBe('http://executor-devops:8080');
+  });
+
+  it('provider=static: метаданные профилей переносятся из config.profiles', async () => {
+    const provider = createExecutionPoolProvider({
+      ...remote,
+      profiles: {
+        devops: {
+          url: ['http://executor-devops:8080'],
+          timeoutMs: 30_000,
+          concurrency: 2,
+          failMode: 'fail' as const,
+          description: 'DevOps-исполнитель',
+          image: 'synth-executor:0.13.9-full',
+          network: 'restricted' as const,
+          runtimeClass: 'gvisor',
+          mcpServers: ['playwright'],
+        },
+      },
+    });
+    await expect(provider.profilesInfo!()).resolves.toEqual([
+      {
+        name: 'devops',
+        description: 'DevOps-исполнитель',
+        image: 'synth-executor:0.13.9-full',
+        network: 'restricted',
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+      // Синтетический профиль по умолчанию: адрес секции, метаданных нет.
+      { name: 'default' },
+    ]);
   });
 
   it('provider=http → HTTP-провайдер', () => {

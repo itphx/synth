@@ -45,7 +45,9 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import {
+  executionProfileMetadata,
   parsePoolKey,
+  toExecutionProfileInfo,
   type ExecutionPoolProvider,
   type ExecutionProfileInfo,
   type PoolInfo,
@@ -212,7 +214,12 @@ export function createExecutionRoutes(
         return [];
       }
     }
-    return profileNames().map((name) => ({ name }));
+    // Фоллбек без роутера/провайдера: имена каталога + метаданные
+    // `execution.remote.profiles` (если заданы).
+    const config = deps.executionConfig;
+    return profileNames().map((name) =>
+      toExecutionProfileInfo(name, executionProfileMetadata(config?.remote.profiles[name])),
+    );
   };
 
   const providerUnavailable = (c: Context): Response =>

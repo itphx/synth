@@ -67,6 +67,15 @@ function makeConfig(overrides: {
       timeoutMs?: number;
       concurrency?: number;
       failMode?: 'fail' | 'inline-fallback';
+      description?: string;
+      image?: string;
+      network?: 'none' | 'restricted' | 'full';
+      resources?: {
+        requests?: { cpu?: string; memory?: string };
+        limits?: { cpu?: string; memory?: string };
+      };
+      runtimeClass?: string;
+      mcpServers?: string[];
     }
   >;
 }): ResolvedExecutionConfig {
@@ -91,6 +100,16 @@ function makeConfig(overrides: {
                 ...(profile.timeoutMs !== undefined ? { timeoutMs: profile.timeoutMs } : {}),
                 ...(profile.concurrency !== undefined ? { concurrency: profile.concurrency } : {}),
                 ...(profile.failMode !== undefined ? { failMode: profile.failMode } : {}),
+                ...(profile.description !== undefined
+                  ? { description: profile.description }
+                  : {}),
+                ...(profile.image !== undefined ? { image: profile.image } : {}),
+                ...(profile.network !== undefined ? { network: profile.network } : {}),
+                ...(profile.resources !== undefined ? { resources: profile.resources } : {}),
+                ...(profile.runtimeClass !== undefined
+                  ? { runtimeClass: profile.runtimeClass }
+                  : {}),
+                ...(profile.mcpServers !== undefined ? { mcpServers: profile.mcpServers } : {}),
               },
             ]),
           ),
@@ -145,6 +164,50 @@ describe('PROP-135 Ф4a: роутер портов исполнения', () => 
     expect(portA).toBe(portNone);
     // Instance-пул — порт один, профильные адреса не создают портов.
     expect(factory.created).toHaveLength(1);
+  });
+
+  it('profilesInfo: static отдаёт метаданные каталога (instance и project)', async () => {
+    const expected = [
+      {
+        name: 'default',
+        description: 'Инстанс-исполнитель test',
+        image: 'synth-executor:0.13.9-full',
+        network: 'restricted',
+        resources: { limits: { cpu: '2', memory: '4Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+    ];
+    const profiles = {
+      default: {
+        url: ['http://default:8080'],
+        description: 'Инстанс-исполнитель test',
+        image: 'synth-executor:0.13.9-full',
+        network: 'restricted' as const,
+        resources: { limits: { cpu: '2', memory: '4Gi' } },
+        runtimeClass: 'gvisor',
+        mcpServers: ['playwright'],
+      },
+    };
+
+    // pooling: instance — ветка instance-порта, один порт на процесс.
+    const instanceFactory = fakeFactory();
+    const instanceRouter = await createExecutionRouter({
+      config: makeConfig({ pooling: 'instance', profiles }),
+      createPort: instanceFactory.createPort,
+    });
+    await expect(instanceRouter.profilesInfo?.()).resolves.toEqual(expected);
+
+    // pooling: project — ветка порта на профиль.
+    const projectFactory = fakeFactory();
+    const projectRouter = await createExecutionRouter({
+      config: makeConfig({ pooling: 'project', profiles }),
+      createPort: projectFactory.createPort,
+    });
+    const infos = await projectRouter.profilesInfo?.();
+    expect(infos).toEqual(expected);
+    // Адреса исполнителей в метаданные не попадают.
+    expect(JSON.stringify(infos)).not.toContain('http://');
   });
 
   it('inline: всегда inline-порт, профили не создаются', async () => {

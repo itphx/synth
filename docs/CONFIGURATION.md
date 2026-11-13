@@ -726,7 +726,7 @@ remote:                           # гибридный режим: локаль�
 | `execution.remote.tokenSecret` | путь/ссылка | — | `SYNTH_EXECUTION_TOKEN` | **Путь/ссылка на токен, НЕ значение** (инвариант 13). Сам токен — `synth_exec_…`, живёт в Secret/файле |
 | `execution.remote.pooling` | `instance` \| `project` \| `session` | `instance` | `SYNTH_EXECUTION_POOLING` | Режим пула (PROP-135 Ф4a): `instance` — **общий** порт на процесс (прежнее поведение, профили игнорируются); `project`/`session` — порт на профиль сессии |
 | `execution.remote.defaultProfile` | строка | `default` | `SYNTH_EXECUTION_DEFAULT_PROFILE` | Имя профиля по умолчанию (каталог профилей задаёт ADMIN) |
-| `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции |
+| `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции. Метаданные (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **только имена**) отдаются в `GET /api/v2/execution/profiles` → `details` и **не влияют** на маршрутизацию и создание портов |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — откат на instance-порт; `fail` — fail-closed (старт прерывается) |
 | `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Провайдер пулов (PROP-135 Ф4b-1): `static` — пулы из конфигурации (адреса профиля, порт на старте — поведение Ф4a); `http` — пулы запрашиваются у provisioner'а (адрес и токен пула приходят ответом, порт собирается лениво) |
 | `execution.remote.provisioner.url` | строка (адрес) | `''` | `SYNTH_EXECUTION_PROVISIONER_URL` | Адрес provisioner'а пулов (`http://…`); **пусто при `provider: http` → fail-closed на старте** («куда обращаться» не задано) |
@@ -763,6 +763,14 @@ env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `re
 
 Профили задаются **только** в `config.yaml` — env-переопределение каталога профилей не
 заводится.
+
+**Метаданные профиля (static).** Поля `description`, `image`, `network`, `resources`,
+`runtimeClass`, `mcpServers` — **описательные**: они попадают в `details`
+`GET /api/v2/execution/profiles` (и в UI «Исполнение»), но порт, адрес и сетевой класс пула
+ими не выбираются. Сетевой класс статического пула задаётся развёртыванием
+(`executor.networkClass` в чарте), у динамического — профилем provisioner'а. Пустые
+значения считаются незаданными и в `details` не попадают. У `provider: http` метаданные
+приходят от provisioner'а (`GET /v1/profiles`), у `provider: static` — из этого каталога.
 
 **Binding профиля (PROP-135 Ф6a).** Эффективный профиль — наследуемая настройка области, приоритет:
 
@@ -851,6 +859,15 @@ execution:
         timeoutMs: 60000            # не задано → наследует remote.timeoutMs
         concurrency: 4              # не задано → наследует remote.concurrency
         failMode: "fail"            # не задано → наследует remote.failMode
+        # --- метаданные (только для details/UI, на маршрутизацию не влияют) ---
+        description: "DevOps-исполнитель: полный toolchain"
+        image: "synth-executor:0.13.9-full"
+        network: "restricted"       # none | restricted | full
+        resources:
+          requests: { cpu: "500m", memory: "1Gi" }
+          limits: { cpu: "2", memory: "4Gi" }
+        runtimeClass: "gvisor"
+        mcpServers: ["playwright"]  # только имена (без команд/env)
 ```
 
 Пример динамических пулов (адрес и токен пула выдаёт provisioner; статические адреса

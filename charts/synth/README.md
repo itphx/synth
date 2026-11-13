@@ -1206,6 +1206,26 @@ executor:
     secretKey: SYNTH_EXECUTION_TOKEN
 ```
 
+Профиль исполнения можно **описать** (метаданные видны в админке «Исполнение» →
+`GET /api/v2/execution/profiles` → `details`; на маршрутизацию и создание портов они
+**не** влияют):
+
+```yaml
+execution:
+  mode: remote
+  remote:
+    url: []
+    profiles:
+      default:
+        description: "Инстанс-исполнитель test: backend+executor, полный toolchain (full)"
+        image: "synth-executor:0.13.9-full"
+        network: restricted           # none | restricted | full
+```
+
+Чарт рендерит `execution.remote.profiles` в `config.yaml` backend'а (адреса исполнителей
+по-прежнему идут через env `SYNTH_EXECUTION_*`); явный `backend.config.execution.remote.profiles`
+приоритетнее по полям.
+
 ```bash
 helm upgrade --install synth ./charts/synth -f my-values.yaml \
   --namespace synth --create-namespace

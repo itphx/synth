@@ -29,7 +29,12 @@
  * **никогда** не попадает в текст ошибок, логи и ключи пулов.
  */
 
-import type { ResolvedExecutionRemoteConfig } from '@itphx/synth-shared';
+import type {
+  ExecutionProfileNetwork,
+  ExecutionProfileResourceList,
+  ExecutionProfileResources,
+  ResolvedExecutionRemoteConfig,
+} from '@itphx/synth-shared';
 import { egressFetch, type FetchLike } from '../security/tls.js';
 import { readExecutorToken } from './remote.js';
 
@@ -263,28 +268,21 @@ export interface ExecutionPoolRef {
   token?: string;
 }
 
-/** Список ресурсов профиля (`requests`/`limits` контейнера пула). */
-export interface ExecutionProfileResourceList {
-  /** CPU (`500m`, `1`). */
-  cpu?: string;
-  /** Память (`2Gi`). */
-  memory?: string;
-  /** Эфемерное хранилище (`1Gi`). */
-  ephemeralStorage?: string;
-}
-
-/** Ресурсы профиля исполнения (как в PodSpec). */
-export interface ExecutionProfileResources {
-  requests?: ExecutionProfileResourceList;
-  limits?: ExecutionProfileResourceList;
-}
+// Типы ресурсов/сетевого класса — общие с конфигурацией (`@itphx/synth-shared`);
+// реэкспорт сохраняет публичную поверхность core.
+export type {
+  ExecutionProfileNetwork,
+  ExecutionProfileResourceList,
+  ExecutionProfileResources,
+} from '@itphx/synth-shared';
 
 /**
  * Метаданные профиля исполнения для admin-API/UI.
  *
  * **Без секретов**: env профиля, команды/аргументы/env MCP-серверов, адреса и
  * токены пулов не отдаются (инвариант 13). `mcpServers` — только имена.
- * Незаданное поле — «неизвестно» (у `static` известны лишь имя и описание).
+ * Незаданное поле — «неизвестно»: у `static` метаданные берутся из
+ * `execution.remote.profiles`, у `http` — от provisioner'а.
  */
 export interface ExecutionProfileInfo {
   /** Имя профиля. */
@@ -294,13 +292,66 @@ export interface ExecutionProfileInfo {
   /** Образ пула. */
   image?: string;
   /** Сетевой класс профиля. */
-  network?: 'none' | 'restricted' | 'full';
+  network?: ExecutionProfileNetwork;
   /** Ресурсы контейнера пула. */
   resources?: ExecutionProfileResources;
   /** `runtimeClassName` пода. */
   runtimeClass?: string;
   /** **Имена** MCP-серверов профиля. */
   mcpServers?: string[];
+}
+
+/** Метаданные профиля (без имени и адресов) — то, что отдаёт admin-API. */
+export type ExecutionProfileMetadata = Pick<
+  ExecutionProfileInfo,
+  'description' | 'image' | 'network' | 'resources' | 'runtimeClass' | 'mcpServers'
+>;
+
+/**
+ * Собрать `ExecutionProfileInfo` из имени и метаданных: незаданные поля
+ * **отсутствуют** (не `undefined`-ключи) — DTO остаётся компактным.
+ */
+export function toExecutionProfileInfo(
+  name: string,
+  meta: ExecutionProfileMetadata | undefined,
+): ExecutionProfileInfo {
+  const info: ExecutionProfileInfo = { name };
+  if (!meta) return info;
+  if (meta.description !== undefined && meta.description !== '') info.description = meta.description;
+  if (meta.image !== undefined && meta.image !== '') info.image = meta.image;
+  if (meta.network !== undefined) info.network = meta.network;
+  if (meta.resources !== undefined) info.resources = meta.resources;
+  if (meta.runtimeClass !== undefined && meta.runtimeClass !== '') {
+    info.runtimeClass = meta.runtimeClass;
+  }
+  if (meta.mcpServers !== undefined && meta.mcpServers.length > 0) {
+    info.mcpServers = [...meta.mcpServers];
+  }
+  return info;
+}
+
+/**
+ * Метаданные из эффективного профиля конфигурации (`execution.remote.profiles`).
+ * Только заданные поля: пустой профиль даёт `undefined`.
+ */
+export function executionProfileMetadata(
+  profile: Partial<ExecutionProfileMetadata> | undefined,
+): ExecutionProfileMetadata | undefined {
+  if (!profile) return undefined;
+  const meta: ExecutionProfileMetadata = {};
+  if (profile.description !== undefined && profile.description !== '') {
+    meta.description = profile.description;
+  }
+  if (profile.image !== undefined && profile.image !== '') meta.image = profile.image;
+  if (profile.network !== undefined) meta.network = profile.network;
+  if (profile.resources !== undefined) meta.resources = profile.resources;
+  if (profile.runtimeClass !== undefined && profile.runtimeClass !== '') {
+    meta.runtimeClass = profile.runtimeClass;
+  }
+  if (profile.mcpServers !== undefined && profile.mcpServers.length > 0) {
+    meta.mcpServers = [...profile.mcpServers];
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
 /**
@@ -359,6 +410,12 @@ export class ExecutionPoolProviderError extends Error {
 }
 
 /**
+ * Запись статического профиля: адрес пула + метаданные из
+ * `execution.remote.profiles` (описания образа/сети/ресурсов).
+ */
+export type StaticExecutionProfile = { url: string[] } & ExecutionProfileMetadata;
+
+/**
  * Провайдер пулов из конфигурации (PROP-135 Ф4b-1, `provider: static`).
  *
  * Адрес пула известен заранее: это первый адрес профиля. **Изоляции пулов
@@ -367,9 +424,9 @@ export class ExecutionPoolProviderError extends Error {
  * динамические пулы — только при `provider: http`).
  */
 export class StaticExecutionPoolProvider implements ExecutionPoolProvider {
-  private readonly _profiles: Record<string, { url: string[] }>;
+  private readonly _profiles: Record<string, StaticExecutionProfile>;
 
-  constructor(profiles: Record<string, { url: string[] }>) {
+  constructor(profiles: Record<string, StaticExecutionProfile>) {
     this._profiles = profiles;
   }
 
@@ -392,11 +449,14 @@ export class StaticExecutionPoolProvider implements ExecutionPoolProvider {
   }
 
   /**
-   * Метаданные профилей static-провайдера: каталог конфигурации знает только
-   * имена — образа, сети и ресурсов у статического адреса нет.
+   * Метаданные профилей static-провайдера — из каталога конфигурации
+   * (`execution.remote.profiles`): имя + заданные поля. Адреса пулов и токены
+   * наружу не отдаются.
    */
   async profilesInfo(): Promise<ExecutionProfileInfo[]> {
-    return Object.keys(this._profiles).map((name) => ({ name }));
+    return Object.entries(this._profiles).map(([name, profile]) =>
+      toExecutionProfileInfo(name, profile),
+    );
   }
 
   /**
@@ -669,9 +729,9 @@ export function createExecutionPoolProvider(
       ...(opts?.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
   }
-  const profiles: Record<string, { url: string[] }> = {};
+  const profiles: Record<string, StaticExecutionProfile> = {};
   for (const [name, profile] of Object.entries(remote.profiles)) {
-    profiles[name] = { url: [...profile.url] };
+    profiles[name] = { url: [...profile.url], ...(executionProfileMetadata(profile) ?? {}) };
   }
   // Профиль по умолчанию существует всегда: из каталога либо «общие
   // параметры секции» (адреса секции — как «профиль по умолчанию»).

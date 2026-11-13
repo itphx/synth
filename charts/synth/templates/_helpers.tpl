@@ -355,7 +355,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- /* ADR-096/ADR-099: ConfigMap <release>-config нужен, если задан backend.config
        ИЛИ домерживаются security.tls (ADR-099) / storage.* (ADR-096). */ -}}
 {{- define "synth.backend.hasConfigMap" -}}
-{{- if or .Values.backend.config (include "synth.storage.inConfig" .) (include "synth.tls.inConfig" .) -}}true{{- end -}}
+{{- $execProfiles := (((.Values.execution | default dict).remote | default dict).profiles) | default dict -}}
+{{- if or .Values.backend.config (include "synth.storage.inConfig" .) (include "synth.tls.inConfig" .) (gt (len $execProfiles) 0) -}}true{{- end -}}
 {{- end -}}
 
 {{- /* ADR-097: активен ли postgres-backend (нужен ли env с паролем БД). */ -}}
@@ -432,15 +433,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
        домерживается секция storage (chart-значения storage.* приоритетнее
        backend.config.storage.*). Пароль БД сюда НЕ попадает (инвариант 13) —
        он идёт только в env SYNTH_POSTGRES_PASSWORD из Secret.
-       ADR-099: так же домерживается security.tls (только пути). */ -}}
+       ADR-099: так же домерживается security.tls (только пути).
+       PROP-135: метаданные профилей execution.remote.profiles (description/
+       image/network/resources/runtimeClass/mcpServers) рендерятся в
+       config.yaml — env их не передаёт; адреса исполнителей по-прежнему идут
+       через SYNTH_EXECUTION_* (инвариант 13). */ -}}
 {{- define "synth.backend.configYaml" -}}
-{{- /* Без chart-значений storage + security.tls итоговый config.yaml =
-       backend.config как есть (поведение чарта не меняется, включая строковую
-       форму от --set-file). */ -}}
+{{- /* Без chart-значений storage + security.tls + execution.remote.profiles
+       итоговый config.yaml = backend.config как есть (поведение чарта не
+       меняется, включая строковую форму от --set-file). */ -}}
 {{- $cfg := .Values.backend.config | default dict -}}
 {{- $storageMerge := include "synth.storage.inConfig" . -}}
 {{- $tlsMerge := include "synth.tls.inConfig" . -}}
-{{- if or $storageMerge $tlsMerge -}}
+{{- $execProfiles := (((.Values.execution | default dict).remote | default dict).profiles) | default dict -}}
+{{- $execProfilesMerge := gt (len $execProfiles) 0 -}}
+{{- if or $storageMerge $tlsMerge $execProfilesMerge -}}
 {{- /* Перед домержем нужен объект: от --set-file backend.config приходит
        строкой YAML — парсим; модифицировать .Values нельзя (deepCopy). */ -}}
 {{- if kindIs "string" $cfg -}}
@@ -479,6 +486,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if $tlsMerge -}}
 {{- $securityCfg := mergeOverwrite ($cfg.security | default dict) (dict "tls" (include "synth.security.tlsYaml" . | fromYaml)) -}}
 {{- $_ := set $cfg "security" $securityCfg -}}
+{{- end -}}
+{{- if $execProfilesMerge -}}
+{{- /* Профили: chart-значения — база, явный backend.config.execution.remote.profiles
+       приоритетнее (по полям; порядок профилей сохраняется). */ -}}
+{{- $execCfg := $cfg.execution | default dict -}}
+{{- $remoteCfg := $execCfg.remote | default dict -}}
+{{- $profiles := mergeOverwrite (deepCopy $execProfiles) ($remoteCfg.profiles | default dict) -}}
+{{- $_ := set $remoteCfg "profiles" $profiles -}}
+{{- $_ := set $execCfg "remote" $remoteCfg -}}
+{{- $_ := set $cfg "execution" $execCfg -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $cfg -}}
