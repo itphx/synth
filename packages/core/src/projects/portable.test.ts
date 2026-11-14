@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MessageRole } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole, deriveProjectVisibility } from '@itphx/synth-shared';
 import { defaultConfig } from '@itphx/synth-shared';
 import type { AttachmentsConfig, Message, Part } from '@itphx/synth-shared';
 import { SessionManager } from '../sessions/manager.js';
@@ -1114,5 +1114,148 @@ describe('portable: вложения сообщений (ADR-115)', () => {
     expect((media?.data as Record<string, unknown>).blobPath).toBe(
       `attachments/${sha.slice(0, 2)}/${sha}`,
     );
+  });
+});
+
+/**
+ * ADR-140 Ф3 (переносы): состояние доступа проекта **не переносится** между
+ * инстансами.
+ *
+ * Ось доступа (`members` кроме владельца, `groupMembers`, `everyoneRole`)
+ * описывает права **людей и групп конкретного инстанса**: на другой инстанс
+ * эти id не переносятся (у другого инстанса и людей/групп может не быть).
+ * Поэтому импорт портативного архива создаёт проект в состоянии «только
+ * автор» (`deriveProjectVisibility` → `author`), а `--merge-into` не меняет
+ * состояние доступа целевого проекта.
+ */
+describe('portable: состояние доступа не переносится (ADR-140 Ф3)', () => {
+  let tmpDir: string;
+  let src: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-portable-access-'));
+    src = join(tmpDir, 'src');
+    await mkdir(src, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Проект-источник с непустым состоянием доступа (участники, группа, публикация). */
+  async function makeSharedProject(name = 'Общий проект'): Promise<string> {
+    const storage = createFileStorage({ dataDir: src });
+    const project = storage.projects.create(name, 'local', {
+      description: 'описание проекта',
+      members: { 'user-2': ProjectRole.EDITOR, 'user-3': ProjectRole.VIEWER },
+      groupMembers: { 'team-a': ProjectRole.VIEWER },
+      everyoneRole: ProjectRole.VIEWER,
+    });
+    await storage.projects.save(project);
+    return project.id;
+  }
+
+  it('импорт в новый проект: у проекта только автор (visibility=author)', async () => {
+    const projectId = await makeSharedProject();
+    const exported = await exportProject({ dataDir: src, projectId, out: tmpDir });
+
+    const dst = join(tmpDir, 'dst');
+    await mkdir(dst, { recursive: true });
+    const result = await importProject({
+      dataDir: dst,
+      archive: exported.path,
+      yes: true,
+      ownerId: 'importer',
+    });
+
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const imported = await dstStorage.projects.load(result.projectId);
+    expect(imported).toBeTruthy();
+    // Владелец нового проекта — импортирующий, а не автор исходного.
+    expect(imported!.ownerId).toBe('importer');
+    // Участники — только владелец: чужие гранты не перенесены.
+    expect(imported!.members).toEqual({ importer: ProjectRole.OWNER });
+    expect(Object.keys(imported!.members)).toEqual(['importer']);
+    // Грантов группам и публикации «всем пользователям» нет.
+    expect(imported!.groupMembers).toBeUndefined();
+    expect(imported!.everyoneRole).toBeUndefined();
+    // Производная видимость — «только автор».
+    expect(deriveProjectVisibility(imported!)).toBe('author');
+  });
+
+  it('импорт без явного ownerId: владелец — локальный пользователь, грантов нет', async () => {
+    const projectId = await makeSharedProject();
+    const exported = await exportProject({ dataDir: src, projectId, out: tmpDir });
+
+    const dst = join(tmpDir, 'dst-default-owner');
+    await mkdir(dst, { recursive: true });
+    const result = await importProject({ dataDir: dst, archive: exported.path, yes: true });
+
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const imported = await dstStorage.projects.load(result.projectId);
+    expect(imported!.ownerId).toBe('local');
+    expect(imported!.members).toEqual({ local: ProjectRole.OWNER });
+    expect(imported!.groupMembers).toBeUndefined();
+    expect(imported!.everyoneRole).toBeUndefined();
+    expect(deriveProjectVisibility(imported!)).toBe('author');
+  });
+
+  it('--merge-into: состояние доступа целевого проекта не меняется', async () => {
+    const projectId = await makeSharedProject();
+    const exported = await exportProject({ dataDir: src, projectId, out: tmpDir });
+
+    const dst = join(tmpDir, 'merge-dst');
+    await mkdir(dst, { recursive: true });
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const target = dstStorage.projects.create('Цель', 'target-owner', {
+      members: { 'target-member': ProjectRole.VIEWER },
+      groupMembers: { 'team-b': ProjectRole.EDITOR },
+    });
+    await dstStorage.projects.save(target);
+
+    const result = await importProject({
+      dataDir: dst,
+      archive: exported.path,
+      mergeInto: target.id,
+      yes: true,
+    });
+
+    expect(result.projectId).toBe(target.id);
+    const after = await dstStorage.projects.load(target.id);
+    // Владелец и состояние доступа цели — прежние.
+    expect(after!.ownerId).toBe('target-owner');
+    expect(after!.members).toEqual({
+      'target-owner': ProjectRole.OWNER,
+      'target-member': ProjectRole.VIEWER,
+    });
+    expect(after!.groupMembers).toEqual({ 'team-b': ProjectRole.EDITOR });
+    expect(after!.everyoneRole).toBeUndefined();
+    // Гранты источника не просочились в цель.
+    expect(after!.members).not.toHaveProperty('user-2');
+    expect(after!.members).not.toHaveProperty('user-3');
+    expect(after!.groupMembers).not.toHaveProperty('team-a');
+    // Видимость цели — от её собственного состояния доступа.
+    expect(deriveProjectVisibility(after!)).toBe('selected');
+  });
+
+  /**
+   * ADR-140 Ф3: состояние доступа в портативный архив **не попадает** —
+   * импорт его и так игнорирует, а id пользователей/групп чужого инстанса в
+   * переносимом архиве бессмысленны. Решение принято (ADR-140 Ф3): в
+   * `project.json` нет `members`/`group_members`/`everyone_role`.
+   */
+  it('экспорт: в архиве нет состояния доступа (ADR-140 Ф3)', async () => {
+    const projectId = await makeSharedProject();
+    const exported = await exportProject({ dataDir: src, projectId, out: tmpDir });
+
+    const projectJson = await readFileFromTarGz(exported.path, 'project.json');
+    const dto = JSON.parse(projectJson?.toString('utf-8') ?? '{}') as Record<string, unknown>;
+    expect(dto).not.toHaveProperty('members');
+    expect(dto).not.toHaveProperty('group_members');
+    expect(dto).not.toHaveProperty('everyone_role');
+    expect(dto).not.toHaveProperty('visibility');
+    // Содержимое проекта в архиве остаётся.
+    expect(dto.name).toBe('Общий проект');
+    expect(dto.description).toBe('описание проекта');
   });
 });

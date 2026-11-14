@@ -496,10 +496,21 @@ export function serializeProject(project: Project) {
  * DTO проекта для **портативного архива** (ADR-091 §6): сводка + `plan` +
  * `log`. Отличается от `serializeProject` (детали API) только журналом —
  * экспорт/импорт проекта переносит журнал целиком.
+ *
+ * ADR-140 Ф3: состояние доступа (`members`/`group_members`/`everyone_role`/
+ * `visibility`) в архив **не попадает** — импорт его и так игнорирует, а id
+ * пользователей/групп чужого инстанса в переносимом архиве бессмысленны.
  */
 export function serializeProjectArchive(project: Project) {
+  const {
+    members: _members,
+    group_members: _groupMembers,
+    everyone_role: _everyoneRole,
+    visibility: _visibility,
+    ...base
+  } = serializeProject(project);
   return {
-    ...serializeProject(project),
+    ...base,
     log: (project.log || []).map((e) => ({
       id: e.id,
       text: e.text,

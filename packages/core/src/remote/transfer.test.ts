@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MessageRole } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole, deriveProjectVisibility } from '@itphx/synth-shared';
 import { FileStore } from '../storage/file-store.js';
 import { SessionManager } from '../sessions/manager.js';
 import { ProjectStore } from '../storage/project-store.js';
@@ -665,6 +665,74 @@ describe('transfer helpers', () => {
         localSessions: [],
       })).rejects.toThrow(/не найден/);
     });
+
+    /**
+     * ADR-140 Ф3 (переносы): состояние доступа проекта **не переносится**
+     * между мирами. Ось доступа (`members`/`groupMembers`/`everyoneRole`)
+     * описывает права людей и групп **конкретного инстанса** — на сервере эти
+     * id не переносятся. Publish шлёт фиксированный набор полей (имя,
+     * описание, иконка, цвет, repos, план) — состояния доступа в теле быть
+     * не должно.
+     */
+    it('publish: состояние доступа в createProject не передаётся (ADR-140 Ф3)', async () => {
+      const client = makeFakeRemoteClient();
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('Shared', 'local', {
+        description: 'd',
+        members: { 'user-2': ProjectRole.EDITOR, 'user-3': ProjectRole.VIEWER },
+        groupMembers: { 'team-a': ProjectRole.VIEWER },
+        everyoneRole: ProjectRole.VIEWER,
+      });
+      await projectStore.save(project);
+
+      await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        includeFiles: false,
+        includeSessions: false,
+        localProjectDir: join(tmpDir, 'ws'),
+        localSessions: [],
+      });
+
+      expect(client.createProject).toHaveBeenCalledTimes(1);
+      const body = (client.createProject as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Record<string, unknown>;
+      // Тело непустое (проверка не вакуумная): контентные поля на месте.
+      expect(body).toMatchObject({ name: 'Shared', description: 'd' });
+      // Ни пользовательских грантов, ни групповых, ни публикации «всем».
+      for (const key of ['members', 'group_members', 'groupMembers', 'everyone_role', 'everyoneRole', 'visibility']) {
+        expect(body).not.toHaveProperty(key);
+      }
+    });
+
+    it('publish: состояние доступа в updateProject не передаётся (ADR-140 Ф3)', async () => {
+      const client = makeFakeRemoteClient();
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const project = projectStore.create('Shared', 'local', {
+        description: 'd',
+        members: { 'user-2': ProjectRole.EDITOR },
+        groupMembers: { 'team-a': ProjectRole.VIEWER },
+        everyoneRole: ProjectRole.VIEWER,
+      });
+      await projectStore.save(project);
+
+      await syncProjectToRemote({
+        localProject: project,
+        remoteClient: client,
+        remoteProjectId: 'remote-1',
+        includeFiles: false,
+        includeSessions: false,
+        localProjectDir: join(tmpDir, 'ws'),
+        localSessions: [],
+      });
+
+      expect(client.updateProject).toHaveBeenCalledTimes(1);
+      const body = (client.updateProject as ReturnType<typeof vi.fn>).mock.calls[0]![1] as Record<string, unknown>;
+      // Тело непустое (проверка не вакуумная): контентные поля на месте.
+      expect(body).toMatchObject({ name: 'Shared', description: 'd' });
+      for (const key of ['members', 'group_members', 'groupMembers', 'everyone_role', 'everyoneRole', 'visibility']) {
+        expect(body).not.toHaveProperty(key);
+      }
+    });
   });
 
   describe('forkProjectToLocal', () => {
@@ -916,6 +984,57 @@ describe('transfer helpers', () => {
       expect(child.references[0]!.sessionId).toBe(parent.id);
       expect(child.references[1]!.sessionId).toBeNull();
       expect(parent.parentId).toBeUndefined();
+    });
+
+    /**
+     * ADR-140 Ф3 (переносы): состояние доступа **не переносится** из мира в
+     * мир. Fork удалённого проекта создаёт локальный проект в состоянии
+     * «только автор»: владелец — локальный пользователь, чужие гранты
+     * (участники, группы, публикация «всем») не переносятся, даже если на
+     * сервере они были.
+     */
+    it('fork: состояние доступа удалённого проекта не переносится (локальный проект — author)', async () => {
+      const client = makeFakeRemoteClient({
+        getProject: vi.fn(async () => ({
+          id: 'remote-1',
+          name: 'Remote Shared',
+          description: 'desc',
+          icon: null,
+          color: null,
+          repos: null,
+          workspace: 'remote-project',
+          owner_id: 'remote-owner',
+          members: { 'remote-owner': 'owner', 'u-2': 'editor', 'u-3': 'viewer' },
+          group_members: { 'team-a': 'viewer' },
+          everyone_role: 'viewer',
+          visibility: 'all',
+        })),
+      });
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+
+      const stats = await forkProjectToLocal({
+        remoteProjectId: 'remote-1',
+        remoteClient: client,
+        localProjectStore: projectStore,
+        localSessionManager: sessionManager,
+        includeFiles: false,
+        includeSessions: false,
+        localWorkspacesRoot: workspacesRoot,
+      });
+
+      const localProject = await projectStore.load(stats.projectId);
+      expect(localProject).toBeTruthy();
+      // Владелец — локальный пользователь.
+      expect(localProject!.ownerId).toBe('local');
+      // Участники — только владелец.
+      expect(localProject!.members).toEqual({ local: ProjectRole.OWNER });
+      expect(Object.keys(localProject!.members)).toEqual(['local']);
+      // Групп и публикации «всем» нет.
+      expect(localProject!.groupMembers).toBeUndefined();
+      expect(localProject!.everyoneRole).toBeUndefined();
+      // Производная видимость — «только автор».
+      expect(deriveProjectVisibility(localProject!)).toBe('author');
     });
   });
 });
