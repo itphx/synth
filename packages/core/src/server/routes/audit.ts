@@ -122,7 +122,9 @@ export function createAuditRoutes(
     const limit = parseLimit(c.req.query('limit'), defaultLimit);
     const scopeRaw = c.req.query('scope');
     if (scopeRaw !== undefined && !(SECURITY_AUDIT_SCOPES as readonly string[]).includes(scopeRaw)) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'scope: ожидается "tools" | "webhooks" | "mcp"' } }, 400);
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: `scope: ожидается один из ${SECURITY_AUDIT_SCOPES.join(' | ')}` },
+      }, 400);
     }
     const entries = await deps.securityAudit.list({
       limit,
