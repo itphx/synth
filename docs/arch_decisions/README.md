@@ -71,6 +71,7 @@
 | ADR-133 | Каналы обновлений и проверка обновлений | ✅ Реализовано | [adr-133-update-channels.md](./adr-133-update-channels.md) |
 | ADR-134 | Сервис инстанса: synth service и systemd --user | ✅ Реализовано | [adr-134-instance-service-systemd-user.md](./adr-134-instance-service-systemd-user.md) |
 | ADR-139 | LLM-шлюз по умолчанию включён в managed и hybrid | ✅ Реализовано | [adr-139-llm-gateway-hybrid.md](./adr-139-llm-gateway-hybrid.md) |
+| ADR-140 | Доступ к проекту — участники, группы и видимость | ✅ Реализовано | [adr-140-project-access-sharing.md](./adr-140-project-access-sharing.md) |
 
 ## Частично
 
@@ -103,7 +104,6 @@
 | ADR-136 | Модель доверия shell — аудит исполнений и внешний чекер команд | ⚠️ Частично | [adr-136-shell-trust.md](./adr-136-shell-trust.md) |
 | ADR-137 | Изоляция исполнителя — non-root, сеть и файловая система | ⚠️ Частично | [adr-137-executor-isolation.md](./adr-137-executor-isolation.md) |
 | ADR-138 | Контур исполнения плагинных инструментов — capability → пул, `ctx.runtime` | ⚠️ Частично | [adr-138-plugin-execution-contour.md](./adr-138-plugin-execution-contour.md) |
-| ADR-140 | Доступ к проекту — участники, группы и видимость | ⚠️ Частично | [adr-140-project-access-sharing.md](./adr-140-project-access-sharing.md) |
 
 ## Предложения
 
@@ -172,7 +172,7 @@
 | PROP-124 | [ADR-124](./adr-124-remote-ssh-access.md) | принято |
 | PROP-125 | [ADR-125](./adr-125-hybrid-remote-mcp.md) | принято |
 | PROP-127 | [ADR-127](./adr-127-parallel-tool-execution.md) | принято |
-| PROP-133 | [ADR-140](./adr-140-project-access-sharing.md) | реализованы Ф1 и Ф2; Ф3 — нет |
+| PROP-133 | [ADR-140](./adr-140-project-access-sharing.md) | реализованы Ф1–Ф3 |
 | PROP-135 | [ADR-135](./adr-135-execution-contour.md) | принято |
 | PROP-136 | [ADR-136](./adr-136-shell-trust.md) | принято |
 | PROP-137 | [ADR-137](./adr-137-executor-isolation.md) | принято |
@@ -188,5 +188,5 @@
 
 ---
 
-Всего документов: 121 (Решения: 59, Частично: 28, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 2).
+Всего документов: 121 (Решения: 60, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 2).
 Удалено: 27 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

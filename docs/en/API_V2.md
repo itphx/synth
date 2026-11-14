@@ -2,6 +2,21 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-11-14 (**ADR-140 Ф3**, передача владения и переносы) —
+> **переведено**:
+> **§5.8** — новый `POST /api/v2/projects/:id/transfer` (тело `{user_id}`, строгая схема;
+> право — текущий владелец или `ADMIN`, `LEAD`/участник-`owner`/`EDITOR` → 403; новый
+> владелец — `owner`, прежний — `editor`; правка атомарна; событие `project.updated
+> {kind:'access'}`, аудит `scope:'projects'` с `owner_id` в before/after) и блок «Гибрид:
+> гранты не переносятся» (publish/fork-local);
+> **§5.8.1** — состояние доступа в портативный архив **не попадает**, импорт создаёт
+> проект «только автор», `--merge-into` состояние доступа цели не меняет;
+> **§5.14** — `id` в `GET /api/v2/users/directory` — **ACL-id** (пространство `User.id`),
+> а не `profile.id`: привязанная identity `provider: 'auth'` (`externalId` = `User.id`)
+> либо `profile.id` для legacy-профилей; привязка создаётся автоматически при логине
+> (идемпотентно, best-effort); `POST /projects/:id/transfer` ищет получателя по ACL-id;
+> `GET /api/v2/users` (админский) не меняется — там по-прежнему `profile.id`.
+
 > ⚠️ RU-версия обновлена 2026-11-14 (**ADR-140 Ф2**, источник групп) — **переведено**:
 > **§5.3** — `/auth/status`/`/auth/session`/`/auth/me` отдают `groups` (снимок claim'а IdP)
 > только при непустом списке; `PUT /auth/profile` группы не принимает;
@@ -444,7 +459,7 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | `session.messages.merged` | session channel | `messages` (added messages; may be absent) — `POST /sessions/:id/messages/merge` |
 | `plan.updated` | channel of **every session of the project** | `project_id`, `version` — the project plan changed (the `plan_write` tool or an HTTP plan operation); the client refetches the project **detail** |
 | `todos.updated` | session channel | `todos` — the current task list of the session (`TodoItem[]`: `id`/`content`/`status`/`priority`/`planItemId?`), `session_id` — the session that owns the list; published after every ToDo mutation (a `todo_*` tool or an HTTP `/sessions/:id/todos*` operation); the client refetches the list (a subagent's list belongs to **its own** session) |
-| `project.updated` / `project.deleted` | channel of every project session | `project_id` — `PUT`/`DELETE /projects/:id` (deletion is published before removal, while sessions are still enumerable); `project.updated` also carries `kind` (`log`\|`invariants`) — the project journal or the invariants changed |
+| `project.updated` / `project.deleted` | channel of every project session | `project_id` — `PUT`/`DELETE /projects/:id` (deletion is published before removal, while sessions are still enumerable); `project.updated` also carries `kind` (`updated`\|`access`\|`log`\|`invariants`) — the project, the access state, the project journal or the invariants changed |
 | `turn.started` / `turn.finished` | session channel | `turnId`, terminal status |
 | `step.started` / `step.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `usage`, `timings`, `attachments` |
 | `step.tools.started` / `step.tools.finished` | session channel | `turnId`, `stepIndex`, `messageId`, `callIds` (`string[]`) — additive: `step.finished` means “the LLM call is done”, these events mark the **tool execution** of that step (published once per step with tool calls, before execution and after `metadata.tool_results` is written) |
@@ -808,6 +823,7 @@ replica can continue an upload — the `blobs` volume must be shared.
 | POST | `/api/v2/projects` | both | auth | Create `{name, workspace?, repos?, plan?, members?, group_members?, everyone_role?}` → 201 (the access state — see the "Project access" block) |
 | GET | `/api/v2/projects/:id` | both | auth / by access role (owner·member·"everyone")·LEAD·ADMIN | Project (read; VIEWER reads, does not edit). The DTO carries `group_members`/`everyone_role`/`visibility` — see the "Project access" block. ⚠️ **Breaking change (PROP-054):** the detail has **no** `log` field — the project journal moved to the paged endpoint `GET /api/v2/projects/:id/log`. The `plan` and `invariants` fields stay |
 | PUT | `/api/v2/projects/:id` | both | auth / owner·EDITOR·LEAD·ADMIN | Update fields (name, description, current_task, invariants, icon, color, repos, plan, memory); the access state (`members`/`group_members`/`everyone_role`) — **`canManage` only** (author·OWNER member·LEAD·ADMIN), EDITOR → 403 FORBIDDEN; changing `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — project memory policy (ADR-107): `false` removes memory prompt blocks and `plugin_synth_plugin_memory_*` tools for the project while keeping the data; omitted — inherits the instance policy (enabled) |
+| POST | `/api/v2/projects/:id/transfer` | both | auth / author·ADMIN | Transfer the project ownership: the body `{user_id}` (a strict schema) → 200 (the project DTO). The right — the **current owner** or `ADMIN`; `LEAD`, a member with the `owner` role, `EDITOR`/`VIEWER` → `403 FORBIDDEN`. The new owner — `owner` in `members`, the previous owner — `editor`. The details — the "Ownership transfer (ADR-140 F3)" block below |
 | DELETE | `/api/v2/projects/:id` | both | auth / owner·LEAD·ADMIN | Delete → 204 |
 | GET | `/api/v2/projects/:id/stats` | both | auth | The token aggregates over the sessions of the project (`total_sessions`, `total_input_tokens`, `total_output_tokens`, `total_tokens`, `total_cache_read_tokens`, `total_cache_write_tokens`, `total_reasoning_tokens`). ⚠️ The `total_messages` field was **removed**: the session list is always light (without history), so there would be nothing to count the messages from; the number of messages of a single session — in `GET /api/v2/sessions/:id/stats` |
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Project MCP scope (ADR-071 §2.4): `{enabled, defaultOn, knownServers, sources?}`; `enabled[]` — hard gate (unavailable even in old sessions, including for system servers), `defaultOn[]` — the seed for new sessions. `sources` (ADR-125) — the source of every known server: `Record<name, 'local'\|'server'>` (the "server" badge in the UI); the field is additive, without it the source is unknown |
@@ -846,7 +862,8 @@ replica can continue an upload — the `blobs` volume must be shared.
 > - `everyone_role: null` — withdraw the publication; `everyone_role: 'owner'` → `400 VALIDATION_ERROR`
 >   (the `owner` role is never granted to everyone);
 > - the author's role in `members` cannot be lowered → `400 VALIDATION_ERROR` (the ownership transfer is
->   a separate operation, stage 3);
+>   a separate operation `POST /api/v2/projects/:id/transfer`, see the "Ownership transfer
+>   (ADR-140 F3)" block below);
 > - the author is always present in `members` with the `owner` role — the server appends it on any
 >   access-state write (the client does not need to send it, it cannot be lowered);
 > - an unknown role or a non-object in place of a grant map → `400 VALIDATION_ERROR`;
@@ -889,9 +906,50 @@ replica can continue an upload — the `blobs` volume must be shared.
 > The catalog of the groups that can be granted — `GET /api/v2/users/groups` (§5.14): the
 > source is the same allowlist.
 
+> **Ownership transfer (ADR-140 F3).** `POST /api/v2/projects/:id/transfer` — a separate
+> operation of changing the project owner: in `POST`/`PUT` the access state is written, but
+> the author's role cannot be lowered, so the owner change is a separate call.
+>
+> - **Body:** `{user_id}` — the id of the new owner; the schema is **strict** (`.strict()`):
+>   no `user_id`/an empty string or an **extra field** → `400 VALIDATION_ERROR` (otherwise
+>   a typo in the body would "transfer the ownership to the wrong place").
+> - **Right:** the current owner (`owner_id`) **or** `ADMIN`. `LEAD`, a member with the
+>   `owner` role, `EDITOR`/`VIEWER`, a stranger → `403 FORBIDDEN` (an ownership transfer is
+>   not "content management"; the `LEAD` overview does not grant the right).
+> - **Result:** the new owner becomes the `owner_id` **and** gets the `owner` role in
+>   `members`; the previous owner (if it is a different user) → the `editor` role — the
+>   content access is kept, the management right is not. The change is **atomic**
+>   (`store.mutate` — the read and the write are under the storage lock).
+> - **Response:** `200` — the project DTO (`owner_id`, `members`, `group_members`,
+>   `everyone_role`, `visibility`).
+> - **Errors:** `404 NOT_FOUND` (no project); `403 FORBIDDEN` (no right);
+>   `400 VALIDATION_ERROR` — no `user_id`/an empty string, extra fields, a transfer to
+>   oneself, a service identity (`service:*` — a person does not become the owner), an
+>   unknown or disabled recipient (looked up **by the ACL-id** — as in the
+>   `GET /api/v2/users/directory` catalog, §5.14), a `remote:` project (the ownership of a remote project
+>   is transferred on the project server, the local copy has no access rights).
+> - **Event:** `project.updated { kind:'access' }` to the channels of the project sessions —
+>   the hub recomputes the WS/SSE subscriptions (the new owner receives the project events,
+>   the previous one loses the management right).
+> - **Audit:** `scope:'projects'` (`action:'update'`) — a "before/after" snapshot, including
+>   `owner_id`; the journal — `GET /api/v2/audit/security?scope=projects` (`ADMIN`/`AUDITOR`).
+
 > **Hybrid and the project journal (PROP-054).** The journal was moved out of the project detail, so the transfer between worlds goes through the paged endpoint:
 > - **fork-local** (server → local): the journal is loaded **page by page** from `GET /api/v2/projects/:id/log` (`remote/client.ts#getProjectLog`); the number of pages is capped — when the cap is exceeded the journal is transferred partially (with a warning in the transfer log): losing the tail is better than failing the transfer;
 > - **publish** (local → server): the journal is **not transferred** — `PUT`/`POST` of a project do not accept a `log` field (the detail DTO does not have one). Transferring the journal in this direction is not implemented; while it is needed — transfer the project as a portable archive (§5.8.1) or append the journal on the server with the point operations of §5.8.2.
+
+> **Hybrid: the grants are not transferred (ADR-140 F3).** The access axis (`members`/
+> `group_members`/`everyone_role`) describes the rights of the **people and groups of a
+> particular instance** — those ids do not travel to the other side (there may be no such
+> people/groups there). Therefore no transfer between the worlds transfers the access state:
+> - **publish** (local → server) sends only the content fields (name, description, icon,
+>   color, repositories, plan) — there are no grants in the body;
+> - **fork-local** (server → local) creates a **local** project in the **"author only"**
+>   state (`owner_id: 'local'`, `visibility: 'author'`), even if on the server the project
+>   was available to a group or to all users.
+>
+> Moving the grants after the transfer — only manually (`PUT /api/v2/projects/:id`,
+> `POST /api/v2/projects/:id/transfer`).
 
 > **Sessions on publish — dependency levels, in chunks (dedup by marker).** `syncProjectToRemote`
 > (`remote/transfer.ts`) transfers sessions **level by level**: dependencies first, `parent_id` and
@@ -1037,12 +1095,21 @@ domain form (camelCase: `createdAt`/`sessionId`/`author`/`updatedAt`/`updatedBy`
 export → import round trip **does not lose** the entries (the regression test —
 `packages/core/src/projects/portable.test.ts`).
 
-**The access state is not transferred (PROP-133).** The export puts `members`/
-`group_members`/`everyone_role` into `project.json` (it is the usual project DTO), but the
-**import does not apply them**: the user ids and the group names are different on the target
-instance. Therefore on import the project is created in the **"author only"** state
-(`visibility: 'author'`), and the new owner is the importing user. The grants can only be
-moved manually after the import (`PUT /api/v2/projects/:id`).
+**The access state is not transferred (PROP-133, ADR-140 F3).** The access state does **not**
+get into the portable archive (`project.json`): there is no `members`/`group_members`/
+`everyone_role` (nor the derived `visibility`) — the user ids and the group names of a
+foreign instance are meaningless in a transferable archive. **The import does not apply
+them either** (otherwise foreign grants would "come alive" on a foreign instance): on
+import the project is created in the **"author only"** state (`visibility: 'author'`), and
+the new owner is the importing user (in core — the local user). `--merge-into` (and
+`mergeInto`) does **not** change the access state of the **target** project — the grants of
+the source do not leak in, and the target project stays visible to exactly the same
+audience as before. The grants can only be moved manually after the import
+(`PUT /api/v2/projects/:id`).
+
+The same rule — for the transfers **between the worlds in hybrid mode** (ADR-140 F3):
+`publish` (local → server) does not transfer the grants, `fork-local` (server → local)
+creates a local project in the "author only" state — the details in §5.8.
 
 | Method | Path | Build | RBAC (managed / core) | Purpose |
 |---|---|---|---|---|
@@ -1280,7 +1347,7 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v2/users` | Profile list (without `identities`) |
-| GET | `/api/v2/users/directory` | The user directory for picking project participants (PROP-133): `{users:[{id, username, display_name}], total, offset, limit, next_offset}`; `?limit=` (default 50, maximum 200), `?offset=` (default 0), `?q=` — a search over `username`/`display_name`, case-insensitive. **Available to any authenticated user** (not only `ADMIN`) |
+| GET | `/api/v2/users/directory` | The user directory for picking project participants (PROP-133): `{users:[{id, username, display_name}], total, offset, limit, next_offset}`; `?limit=` (default 50, maximum 200), `?offset=` (default 0), `?q=` — a search over `username`/`display_name`, case-insensitive. **Available to any authenticated user** (not only `ADMIN`). ⚠️ `id` is the **ACL-id** (the `User.id` space), not `profile.id` — see the "The id in the directory is the ACL-id" block below |
 | GET | `/api/v2/users/groups` | The group catalog for picking project participants by group (ADR-140 F2): `{groups:[{name}], total, offset, limit, next_offset}`; `?limit=` (default 50, maximum 200), `?offset=` (default 0), `?q=` — a search over the group name, case-insensitive. **Available to any authenticated user** (not only `ADMIN`) |
 | GET | `/api/v2/users/:id` | Profile (+ `identities`) |
 | POST | `/api/v2/users` | Create (ADMIN) |
@@ -1298,6 +1365,28 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 > In **standalone** there is no users section at all (`features.users=false`, §5.4) — the
 > endpoint does not exist; in **hybrid** mode core proxies `/api/v2/users` to the remote
 > backend, so the directory is available wherever a backend is connected.
+>
+> **The id in the directory is the ACL-id (ADR-140 F3).** The project ACL (`owner_id`,
+> `members`) lives in the **`User.id`** space (the OIDC `sub`; in debug — the user name),
+> while `ProfileData.id` is the profile UUID — different namespaces. Therefore the `id`
+> in the directory is the **ACL-id**, not `profile.id`:
+> - if the profile has a bound identity with `provider: 'auth'` (its `externalId` =
+>   `User.id`) — that `externalId` is returned;
+> - otherwise (a legacy profile without a binding) — `profile.id`.
+>
+> The `auth` identity is bound **automatically on login** — idempotently and
+> best-effort: a conflict of the pair (the identity is already bound to another
+> profile) is logged, **the login is not broken**. Until the first login a legacy
+> profile keeps `profile.id` in the directory.
+>
+> `POST /api/v2/projects/:id/transfer` looks the recipient up **by the ACL-id**:
+> first the identity with `provider: 'auth'` and `externalId` equal to the passed id,
+> then a profile with the same `profile.id` (the legacy path). So the id from the
+> directory is a working recipient for an ownership transfer "as is", without any
+> conversion.
+>
+> ⚠️ `GET /api/v2/users` (the admin list and the details) **does not change**: it is
+> still `profile.id` there — the profile id, not the ACL-id.
 >
 > **The group catalog — `GET /api/v2/users/groups` (ADR-140 F2).** A light projection for
 > picking a group participant of a project: only the group name — no members, no
