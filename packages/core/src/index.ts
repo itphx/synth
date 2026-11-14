@@ -2871,6 +2871,13 @@ export { createMetaRoutes, instanceCapabilities } from './server/routes/meta.js'
 export type { MetaRoutesDeps } from './server/routes/meta.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
+// Node HTTP-адаптер: `IncomingMessage` → web `Request` (с сигналом отключения
+// клиента) и прокачка тела ответа с отменой читателя. Один контракт на
+// standalone (`createStandaloneHttpServer`) и managed backend
+// (`packages/backend/src/app/listen.ts`) — иначе отмена стримов/подписок
+// расходится между сборками (утечка `attached_clients` терминалов, SSE).
+export { createStandaloneHttpServer, toWebRequest, pumpBody } from './server/app/http-server.js';
+export type { StandaloneHttpServerOptions } from './server/app/http-server.js';
 // F6 (аудит §6.1): allowlist публичных путей `/api/v2/*` — общий для core
 // (standalone) и managed backend (ADR-017/ADR-018: общая логика HTTP — в core).
 export { PUBLIC_API_V2_PATHS, isPublicApiV2Path } from './server/app/public-routes.js';

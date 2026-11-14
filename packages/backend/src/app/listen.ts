@@ -2,9 +2,13 @@
 // (включая SSE/долгоживущие стримы) и WebSocket `/ws/events` (ADR-008/009/024/089).
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
 import { createServer, IncomingMessage } from 'node:http';
-import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
+// Node-адаптер core — **общий** контракт standalone и managed (ADR-017/ADR-018:
+// общая логика HTTP живёт в core): `toWebRequest` с сигналом отключения клиента
+// и `pumpBody` с отменой читателя. Своей копии здесь быть не должно — иначе
+// отмена стримов/подписок снова разойдётся (утечка `attached_clients`).
+import { pumpBody, toWebRequest } from '@itphx/synth-core';
 import { enqueueUserMessage, enqueueSteerMessage, isSessionVisible, parsePermissionPrincipal, resolveUserPrincipal } from '@itphx/synth-core';
 import {
   MESSAGE_MODEL_QUERY_PARAM,
@@ -20,27 +24,6 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
 import { t } from '../lib/i18n.js';
 import { groupsOf } from '../lib/project-principal.js';
-
-/**
- * Вспомогательная функция для конвертации Node Request в Web Request.
- */
-function toWebRequest(req: IncomingMessage): Request {
-  const protocol = 'http';
-  const host = req.headers.host || 'localhost';
-  const url = `${protocol}://${host}${req.url || '/'}`;
-  const headers = new Headers();
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (v) headers.set(k, Array.isArray(v) ? v.join(', ') : v);
-  }
-  const method = req.method || 'GET';
-  const noBody = ['GET', 'HEAD'].includes(method) || !req.headers['content-length'];
-  return new Request(url, {
-    method,
-    headers,
-    body: noBody ? undefined : (Readable.toWeb(req) as ReadableStream),
-    duplex: 'half',
-  } as RequestInit);
-}
 
 /**
  * Адаптер для auth.getCurrentUser из сырого IncomingMessage (WS upgrade).
@@ -100,7 +83,17 @@ export function createBackendListen(deps: BackendListenDeps) {
     // Создаем HTTP сервер с WebSocket
     const server = createServer(async (req, res) => {
       try {
-        const webReq = toWebRequest(req);
+        // Сигнал отключения клиента для `c.req.raw.signal`: Node сообщает о
+        // закрытии соединения событием `close` ответа (в т.ч. по таймауту
+        // клиента). Без него хендлеры долгоживущих потоков (терминал, SSE) не
+        // узнают об уходе клиента и не снимают подписки — `attached_clients`
+        // растёт, idle-reaper не срабатывает. Контракт — core
+        // `server/app/http-server.ts` (та же логика в standalone).
+        const abort = new AbortController();
+        res.on('close', () => {
+          if (!res.writableFinished) abort.abort();
+        });
+        const webReq = toWebRequest(req, abort.signal);
         const response = await app.fetch(webReq, {});
         if (!response) {
           res.writeHead(500);
@@ -115,21 +108,17 @@ export function createBackendListen(deps: BackendListenDeps) {
         // вовсе — сбрасываем head принудительно.
         res.flushHeaders();
         if (response.body) {
-          const reader = response.body.getReader();
-          const pump = async () => {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              res.write(value);
-            }
-            res.end();
-          };
-          pump().catch(() => res.end());
+          // Прокачка — общая с standalone: при обрыве клиента читатель
+          // **отменяется** (`reader.cancel()`), иначе цикл `read()` висит вечно
+          // и подписка хендлера остаётся живой.
+          pumpBody(response.body.getReader(), res);
         } else {
           res.end();
         }
       } catch {
-        res.writeHead(500);
+        // После аборта клиента ответ уже может быть частично отправлен —
+        // повторный `writeHead` дал бы `ERR_HEADERS_SENT` в обработчике.
+        if (!res.headersSent) res.writeHead(500);
         res.end();
       }
     });

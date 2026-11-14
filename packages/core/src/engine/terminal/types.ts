@@ -22,8 +22,15 @@ import type { EventBus } from '../../events/bus.js';
 import type { TerminalAuditSink } from './audit.js';
 import type { TerminalMetricsHooks } from './metrics.js';
 
-/** Статус терминала. */
-export type TerminalStatus = 'starting' | 'running' | 'exited';
+/**
+ * Статус терминала.
+ *
+ * `closing` — терминал снимается (мастер-выключатель инстанса, «Закрыть»,
+ * idle-reaper): запись помечается **синхронно** до ответа, а PTY гаснет
+ * асинхронно (`SIGTERM` → `SIGKILL`). Без этого статуса закрываемый терминал
+ * ещё мгновение отдавался как `running` («гонка disable→enable»).
+ */
+export type TerminalStatus = 'starting' | 'running' | 'closing' | 'exited';
 
 /**
  * Типы событий терминала в шине.

@@ -3590,7 +3590,7 @@ instance-пул берёт адрес оттуда.
 | `owner_id` | string | Создатель (на доступ не влияет) |
 | `cwd` | string | Рабочий каталог (вычислен сервером) |
 | `shell` | string | Оболочка |
-| `status` | `starting`\|`running`\|`exited` | Статус |
+| `status` | `starting`\|`running`\|`closing`\|`exited` | Статус (`closing` — терминал снимается: мастер-выключатель/закрытие/idle-reaper; PTY гаснет асинхронно) |
 | `cols`, `rows` | number | Размер (символы) |
 | `title` | string? | Заголовок вкладки |
 | `created_at`, `last_activity_at` | number | Время создания / последней активности (мс epoch) |

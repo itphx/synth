@@ -64,6 +64,12 @@ class FakePtyHandle implements PtyHandle {
   /** Сколько раз закрывали. */
   closeCalls = 0;
 
+  /**
+   * Если задан — `close()` ждёт его разрешения (эмуляция `SIGTERM` → `SIGKILL`:
+   * PTY гаснет не мгновенно).
+   */
+  holdClose: (() => Promise<void>) | null = null;
+
   private _dataCbs = new Set<(chunk: string) => void>();
   private _exitCbs = new Set<(e: PtyExitInfo) => void>();
   private _exited = false;
@@ -101,6 +107,12 @@ class FakePtyHandle implements PtyHandle {
 
   close(): Promise<void> {
     this.closeCalls += 1;
+    const hold = this.holdClose;
+    if (hold) {
+      return hold().then(() => {
+        this.emitExit({ exitCode: 0, signal: 'SIGTERM' });
+      });
+    }
     this.emitExit({ exitCode: 0, signal: 'SIGTERM' });
     return Promise.resolve();
   }
@@ -565,6 +577,33 @@ describe('Терминальный сервис', () => {
 
     service.setEnabled(true);
     await expect(service.create(createInput())).resolves.toBeDefined();
+
+    service.dispose();
+  });
+
+  it('помечает терминал `closing` синхронно (гонка disable → enable)', async () => {
+    const service = createService();
+    const record = await service.create(createInput());
+
+    // PTY гаснет не мгновенно (`SIGTERM` → `SIGKILL`) — держим закрытие.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    port.lastHandle.holdClose = () => held;
+
+    service.setEnabled(false);
+
+    // Ответ `PUT /settings/terminal {enabled:false}` уходит сразу: до выхода
+    // оболочки запись уже не `running` — UI не покажет «живой» терминал и не
+    // получит его в списке как рабочий.
+    expect(service.get(record.id)?.status).toBe('closing');
+    expect(service.list().map((t) => t.status)).toEqual(['closing']);
+    await expect(service.create(createInput())).rejects.toBeInstanceOf(TerminalDisabledError);
+
+    release();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(service.get(record.id)).toBeNull();
 
     service.dispose();
   });

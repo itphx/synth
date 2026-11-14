@@ -122,8 +122,12 @@ export function createStandaloneHttpServer(opts: StandaloneHttpServerOptions): S
  * При закрытии соединения клиентом читатель **отменяется**: иначе цикл
  * `reader.read()` висит вечно, `ReadableStream.cancel()` исходного потока не
  * вызывается, и подписка на стороне хендлера (терминал, SSE) остаётся живой.
+ *
+ * Экспортируется как часть общего контракта Node-адаптера: managed backend
+ * (`packages/backend/src/app/listen.ts`) использует **эту же** функцию — второй
+ * копии прокачки в проекте быть не должно (иначе отмена снова разойдётся).
  */
-function pumpBody(
+export function pumpBody(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   res: ServerResponse,
 ): void {

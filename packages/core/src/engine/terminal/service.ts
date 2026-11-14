@@ -764,6 +764,14 @@ export class TerminalService {
     if (!runtime.finished) {
       runtime.closeReason = options.reason;
       if (options.actorId !== undefined) runtime.closeActor = options.actorId;
+      // Статус — **синхронно**, до `await`: закрытие PTY занимает время
+      // (`SIGTERM` → `SIGKILL`), и до выхода оболочки запись иначе отдавалась
+      // бы как `running` (гонка «disable → list → enable»). `_finish` поставит
+      // терминальный `exited`.
+      runtime.record.status = 'closing';
+      runtime.record.lastActivityAt = this._now();
+      this._publish(runtime, 'terminal.updated', { status: 'closing' });
+      this._syncMetrics();
       try {
         await runtime.handle.close({ signal: 'SIGTERM' });
       } catch (err) {
