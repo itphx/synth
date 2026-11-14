@@ -4,6 +4,10 @@
  * Проверяется **выбор порта**, а не реализация порта: фабрика подменена
  * (`createPort`), поэтому тест не требует ни пакета исполнителя, ни сети.
  *
+ * Исключение — сценарии с `provider: http` и **токеном** пула: там собирается
+ * настоящий удалённый порт (`@itphx/synth-executor/client`), поэтому транспорт
+ * подменён заглушкой `fetch` (см. ниже) — тест не ходит в сеть.
+ *
  * Что зафиксировано:
  * - `pooling: instance` — один порт на процесс (профили игнорируются);
  * - `pooling: project|session` — порт на профиль (профили из каталога дают
@@ -14,7 +18,7 @@
  * - кэш по имени профиля: два вызова с одним профилем → один и тот же порт.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,6 +32,83 @@ import {
 import type { ExecutionPoolKey } from './pool-provider.js';
 import { ExecutionPoolProviderError, poolKeyString } from './pool-provider.js';
 import type { ExecutionPort } from './ports/index.js';
+import { isExecutorPackageAvailable } from './remote.js';
+
+/**
+ * Ядро подменяется для клиента удалённого порта (`@itphx/synth-executor/client`).
+ *
+ * Клиент берёт из ядра транспорт (`egressFetch`) и классы ошибок. Без подмены
+ * он грузит **баррель** пакета (`src/index.ts` — весь движок, сервер, CLI),
+ * что в vitest стоит ~20 с трансформации. Здесь отдаются те же исходники
+ * (контрактные классы и настоящий `egressFetch`), поэтому `instanceof` и путь
+ * транспорта в тесте не меняются — меняется только то, откуда взялся модуль.
+ */
+vi.mock('@itphx/synth-core', async () => {
+  const ports = await import('./ports/index.js');
+  const inline = await import('./inline-execution-port.js');
+  const tls = await import('../security/tls.js');
+  return {
+    ...ports,
+    InlineExecutionPort: inline.InlineExecutionPort,
+    egressFetch: tls.egressFetch,
+  };
+});
+
+/** Адреса, которые клиент исполнителя запросил за тест (для проверок). */
+const executorRequests: string[] = [];
+
+/**
+ * Пакет исполнителя опционален (ADR-077): без собранного пакета удалённый
+ * порт не собирается, и сценарии с `provider: http` проверяют только ключ
+ * пула (без прогона клиента).
+ */
+const EXECUTOR_AVAILABLE = await isExecutorPackageAvailable();
+
+/**
+ * Заглушка транспорта исполнителя: сеть в тестах запрещена.
+ *
+ * - `GET /capabilities` — «пул готов»: один доступный адрес с `sh`
+ *   (`total > 0`, `unreachable < total`) — прогрев пула (`waitReady`) проходит
+ *   с первого раза, без сетевых повторов;
+ * - `POST /exec` — безвредный успешный ответ;
+ * - прочее — отказ: тест не должен ходить в сеть.
+ */
+function executorFetchStub(input: Parameters<typeof fetch>[0]): Promise<Response> {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  executorRequests.push(url);
+  if (url.endsWith('/capabilities')) {
+    return Promise.resolve(
+      new Response(JSON.stringify({ protocol: 7, toolchain: { sh: '/bin/sh' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+  }
+  if (url.endsWith('/exec')) {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          stdout: 'hi\n',
+          stderr: '',
+          exitCode: 0,
+          truncated: false,
+          durationMs: 1,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+  }
+  return Promise.reject(new Error(`тест не должен ходить в сеть: ${url}`));
+}
+
+beforeEach(() => {
+  executorRequests.length = 0;
+  vi.stubGlobal('fetch', executorFetchStub);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 /** Порт-заглушка: идентифицируется именем, чтобы сравнивать объекты. */
 function fakePort(name: string): ExecutionPort {
@@ -1040,12 +1121,18 @@ describe('PROP-135 слайз 5b-1: poolRefFor() роутера', () => {
     });
 
     const port = router.portFor({ projectId: 'prj_a', class: 'browser' });
+    // Вызов резолвит пул (ключ уходит в `ensure`); транспорт исполнителя —
+    // заглушка, поэтому ни сети, ни долгого прогрева пула.
     await port.execute({ command: { kind: 'shell', command: 'echo hi' } }).catch(() => undefined);
     await router.poolRefFor?.({ projectId: 'prj_a', class: 'browser' });
 
     const keys = pools.calls.map((key) => poolKeyString(key));
     expect(keys[0]).toBe('project:prj_a:browser:browser');
     expect(keys[1]).toBe('project:prj_a:browser:browser');
+    if (EXECUTOR_AVAILABLE) {
+      // Пул прогрет через заглушку транспорта (`/capabilities`), в сеть не ходили.
+      expect(executorRequests).toContain('http://pool:5100/capabilities');
+    }
   });
 
   it('кэш: повторный вызов не ходит в провайдер (TTL 60 с)', async () => {
