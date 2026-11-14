@@ -722,4 +722,83 @@ describe('RemoteSession.loginWithPassword (ROPC, Часть 10)', () => {
     expect(saved?.accessToken).toBe('at-ropc');
     expect(saved?.user).toBeUndefined();
   });
+
+  // ADR-140 Ф2: группы пользователя с сервера доезжают в локальный core.
+  it('ADR-140 Ф2: группы из /auth/status попадают в RemoteUser и в credentials', async () => {
+    vi.stubGlobal('fetch', ropcFetchMock({
+      statusBody: {
+        authenticated: true,
+        oidc_enabled: true,
+        user: { id: 'u-1', username: 'lucky', roles: ['ADMIN'], groups: ['team-a', 'team-b'] },
+      },
+    }));
+
+    const session = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'secret');
+
+    expect(session.user?.groups).toEqual(['team-a', 'team-b']);
+    const saved = await loadCredentials('https://backend.test', credsPath());
+    expect(saved?.user?.groups).toEqual(['team-a', 'team-b']);
+  });
+
+  it('ADR-140 Ф2: сервер без групп → groups отсутствуют (fail-closed)', async () => {
+    vi.stubGlobal('fetch', ropcFetchMock());
+
+    const session = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'secret');
+
+    expect(session.user?.groups).toBeUndefined();
+    const saved = await loadCredentials('https://backend.test', credsPath());
+    expect(saved?.user?.groups).toBeUndefined();
+  });
+
+  it('ADR-140 Ф2: пустой список групп на сервере → нормализуется в «групп нет»', async () => {
+    vi.stubGlobal('fetch', ropcFetchMock({
+      statusBody: {
+        authenticated: true,
+        oidc_enabled: true,
+        user: { id: 'u-1', username: 'lucky', roles: ['ADMIN'], groups: [] },
+      },
+    }));
+
+    const session = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'secret');
+
+    expect(session.user?.groups).toBeUndefined();
+  });
+
+  it('ADR-140 Ф2: мусор в поле groups (не массив) → «групп нет» (fail-closed)', async () => {
+    vi.stubGlobal('fetch', ropcFetchMock({
+      statusBody: {
+        authenticated: true,
+        oidc_enabled: true,
+        user: { id: 'u-1', username: 'lucky', roles: ['ADMIN'], groups: 'team-a' },
+      },
+    }));
+
+    const session = await RemoteSession.loginWithPassword(loginOpts(), 'lucky', 'secret');
+
+    expect(session.user?.groups).toBeUndefined();
+  });
+
+  it('ADR-140 Ф2: refresh сохраняет снимок групп (группы живут до повторного входа)', async () => {
+    await saveCredentials({
+      backendUrl: 'https://backend.test',
+      accessToken: 'at-old',
+      refreshToken: 'rt-old',
+      expiresAt: '2020-01-01T00:00:00.000Z',
+      user: { id: 'u-1', username: 'admin', roles: ['ADMIN'], groups: ['team-a'] },
+    }, credsPath());
+
+    vi.stubGlobal('fetch', deviceFlowFetchMock());
+
+    const session = await RemoteSession.ensureAuthenticated({
+      backendUrl: 'https://backend.test',
+      authType: 'device',
+      issuer: 'https://issuer.test',
+      clientId: 'client-1',
+      credentialsPath: credsPath(),
+    });
+
+    expect(session.user?.groups).toEqual(['team-a']);
+    const saved = await loadCredentials('https://backend.test', credsPath());
+    expect(saved?.user?.groups).toEqual(['team-a']);
+  });
 });

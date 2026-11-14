@@ -38,8 +38,12 @@ function transportFailure(code: string): TypeError {
  * fetch-мок успешного ROPC-входа: дискавери OIDC-меты на backend, token-грант
  * (grant_type=password) на Keycloak, /auth/status с серверным пользователем.
  */
-function passwordFlowFetchMock(overrides: { tokenStatus?: number; tokenBody?: Record<string, unknown> } = {}) {
-  const { tokenStatus = 200, tokenBody } = overrides;
+function passwordFlowFetchMock(overrides: {
+  tokenStatus?: number;
+  tokenBody?: Record<string, unknown>;
+  statusUser?: Record<string, unknown>;
+} = {}) {
+  const { tokenStatus = 200, tokenBody, statusUser } = overrides;
   return vi.fn((url: string | URL | Request) => {
     const u = String(url);
     if (u.includes('/auth/oidc-meta')) {
@@ -56,7 +60,11 @@ function passwordFlowFetchMock(overrides: { tokenStatus?: number; tokenBody?: Re
       }));
     }
     if (u.includes('/auth/status')) {
-      return Promise.resolve(jsonResponse({ authenticated: true, oidc_enabled: true, user: SERVER_USER }));
+      return Promise.resolve(jsonResponse({
+        authenticated: true,
+        oidc_enabled: true,
+        user: statusUser ?? SERVER_USER,
+      }));
     }
     return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
   });
@@ -242,6 +250,28 @@ describe('RemoteConnection.connectByPassword', () => {
     // credentials не сохраняются при ошибке
     expect(await loadCredentials(BACKEND, credsPath())).toBeNull();
   });
+
+  // ADR-140 Ф2: снимок групп с сервера доезжает до локального core.
+  it('ADR-140 Ф2: группы из /auth/status попадают в RemoteUser', async () => {
+    vi.stubGlobal('fetch', passwordFlowFetchMock({
+      statusUser: { ...SERVER_USER, groups: ['team-a', 'team-b'] },
+    }));
+
+    const conn = new RemoteConnection({ credentialsPath: credsPath() });
+    const user = await conn.connectByPassword(BACKEND, 'lucky', 'secret');
+
+    expect(user.groups).toEqual(['team-a', 'team-b']);
+    expect(conn.user?.groups).toEqual(['team-a', 'team-b']);
+  });
+
+  it('ADR-140 Ф2: сервер без групп → groups отсутствуют (fail-closed)', async () => {
+    vi.stubGlobal('fetch', passwordFlowFetchMock());
+
+    const conn = new RemoteConnection({ credentialsPath: credsPath() });
+    const user = await conn.connectByPassword(BACKEND, 'lucky', 'secret');
+
+    expect(user.groups).toBeUndefined();
+  });
 });
 
 describe('RemoteConnection.connectWithApiKey', () => {
@@ -360,6 +390,20 @@ describe('RemoteConnection.connectFromSaved', () => {
     // токен не обновлялся — в файле остался исходный
     const saved = await loadCredentials(BACKEND, credsPath());
     expect(saved?.accessToken).toBe('at-valid');
+  });
+
+  // ADR-140 Ф2: авто-логин по сохранённым credentials обновляет и снимок групп.
+  it('ADR-140 Ф2: connectFromSaved обновляет снимок групп с /auth/status', async () => {
+    await saveCredentials(validCreds(), credsPath());
+    vi.stubGlobal('fetch', passwordFlowFetchMock({
+      statusUser: { ...SERVER_USER, groups: ['team-a'] },
+    }));
+
+    const conn = new RemoteConnection({ credentialsPath: credsPath() });
+    const user = await conn.connectFromSaved(BACKEND);
+
+    expect(user?.groups).toEqual(['team-a']);
+    expect(conn.user?.groups).toEqual(['team-a']);
   });
 
   it('протухший accessToken + refreshToken → дискавери + refresh, connected, credentials обновлены', async () => {

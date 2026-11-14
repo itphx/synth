@@ -39,7 +39,11 @@ export interface RemoteClientOptions {
 export interface RemoteAuthStatus {
   oidc_enabled: boolean;
   authenticated: boolean;
-  user?: { id: string; username: string; roles: string[] } | null;
+  /**
+   * Серверный пользователь. ADR-140 Ф2: `groups` — снимок групп IdP
+   * (аддитивно: старый сервер без поля → групп нет, fail-closed).
+   */
+  user?: { id: string; username: string; roles: string[]; groups?: string[] } | null;
 }
 
 /**

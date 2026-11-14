@@ -42,8 +42,12 @@ function extractCookieValue(setCookie: string | null | undefined): string | null
 }
 
 /** fetch-мок ROPC: oidc-meta → token_endpoint → backend /auth/status. */
-function ropcFetchMock(opts: { tokenStatus?: number; tokenBody?: Record<string, unknown> } = {}) {
-  const { tokenStatus = 200, tokenBody } = opts;
+function ropcFetchMock(opts: {
+  tokenStatus?: number;
+  tokenBody?: Record<string, unknown>;
+  statusUser?: Record<string, unknown>;
+} = {}) {
+  const { tokenStatus = 200, tokenBody, statusUser } = opts;
   return vi.fn((url: string | URL | Request) => {
     const u = String(url);
     if (u.includes('/auth/oidc-meta')) {
@@ -63,7 +67,7 @@ function ropcFetchMock(opts: { tokenStatus?: number; tokenBody?: Record<string, 
       return Promise.resolve(jsonResponse({
         authenticated: true,
         oidc_enabled: true,
-        user: SERVER_USER,
+        user: statusUser ?? SERVER_USER,
       }));
     }
     return Promise.resolve(jsonResponse({ error: 'not_found' }, 404));
@@ -220,6 +224,54 @@ describe('auth routes (гибридная runtime-личность, RemoteConnec
       expect(res.status).toBe(502);
       const body = (await res.json()) as { error: { code: string } };
       expect(body.error.code).toBe('OFFLINE');
+    });
+
+    // ADR-140 Ф2: группы с сервера доезжают до локального core и в cookie.
+    it('ADR-140 Ф2: группы с сервера попадают в ответ логина и в cookie (/auth/me)', async () => {
+      vi.stubGlobal('fetch', ropcFetchMock({
+        statusUser: { ...SERVER_USER, groups: ['team-a', 'team-b'] },
+      }));
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'lucky', password: 'secret' }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { user: { username: string; groups?: string[] } };
+      expect(body.user.username).toBe('lucky');
+      expect(body.user.groups).toEqual(['team-a', 'team-b']);
+
+      // cookie v2 несёт тот же снимок — /auth/me отдаёт группы
+      const setCookie = res.headers.get('Set-Cookie');
+      const me = await app.request('/auth/me', {
+        headers: { Cookie: `${COOKIE_NAME}=${extractCookieValue(setCookie)!}` },
+      });
+      expect(me.status).toBe(200);
+      const meBody = (await me.json()) as { username: string; groups?: string[] };
+      expect(meBody.groups).toEqual(['team-a', 'team-b']);
+    });
+
+    it('ADR-140 Ф2: пользователь без групп → поле groups в ответе отсутствует', async () => {
+      vi.stubGlobal('fetch', ropcFetchMock());
+      const app = makeApp(makeDeps({ defaultBackendUrl: BACKEND }, { tmpDir }));
+
+      const res = await app.request('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'lucky', password: 'secret' }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { user: Record<string, unknown> };
+      expect(body.user).not.toHaveProperty('groups');
+
+      const setCookie = res.headers.get('Set-Cookie');
+      const me = await app.request('/auth/me', {
+        headers: { Cookie: `${COOKIE_NAME}=${extractCookieValue(setCookie)!}` },
+      });
+      const meBody = (await me.json()) as Record<string, unknown>;
+      expect(meBody).not.toHaveProperty('groups');
     });
   });
 

@@ -86,6 +86,11 @@ export interface ServerUserPayload {
   username: string;
   email?: string;
   roles: string[];
+  /**
+   * ADR-140 Ф2: снимок групп пользователя (из `GET /auth/status` удалённого
+   * backend). Непустой список → группы; пусто/нет поля → групп нет (fail-closed).
+   */
+  groups?: string[];
 }
 
 /** Формат cookie v2: JSON-объект с kind и данными пользователя. */
@@ -102,6 +107,9 @@ export function serverUserToUser(u: ServerUserPayload): User {
     username: u.username,
     email: u.email,
     roles: u.roles,
+    // ADR-140 Ф2: группы — пассивный снимок на момент логина (на права влияет
+    // только `resolveProjectAccess`); пустой список = групп нет (fail-closed).
+    groups: u.groups && u.groups.length > 0 ? u.groups : undefined,
     preferredLanguage: 'ru',
     createdAt: new Date().toISOString(),
     teamRole: u.roles[0] || 'USER',

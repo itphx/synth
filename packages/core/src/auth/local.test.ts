@@ -102,6 +102,41 @@ describe('createLocalAuth (server-личность, cookie v2)', () => {
     auth.clearSessionCookie(c);
     expect(headers.get('Set-Cookie')).toContain('Max-Age=0');
   });
+
+  // ADR-140 Ф2: снимок групп переживает cookie v2 (payload подписан целиком).
+  it('ADR-140 Ф2: server-cookie с группами → группы читаются обратно', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+    const { c, headers } = makeContext();
+    auth.setServerUserCookie(c, { ...SERVER_USER, groups: ['team-a', 'team-b'] });
+
+    const cookieValue = extractCookieValue(headers.get('Set-Cookie'))!;
+    const user = auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${cookieValue}`).c);
+
+    expect(user?.groups).toEqual(['team-a', 'team-b']);
+  });
+
+  it('ADR-140 Ф2: server-cookie без групп → поле groups отсутствует', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+    const { c, headers } = makeContext();
+    auth.setServerUserCookie(c, SERVER_USER);
+
+    const cookieValue = extractCookieValue(headers.get('Set-Cookie'))!;
+    const user = auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${cookieValue}`).c);
+
+    expect(user).not.toBeNull();
+    expect(user?.groups).toBeUndefined();
+  });
+
+  it('ADR-140 Ф2: пустой список групп в cookie → «групп нет» (fail-closed)', () => {
+    const auth = createLocalAuth({ apiKey: API_KEY });
+    const { c, headers } = makeContext();
+    auth.setServerUserCookie(c, { ...SERVER_USER, groups: [] });
+
+    const cookieValue = extractCookieValue(headers.get('Set-Cookie'))!;
+    const user = auth.getCurrentUser(makeContext(`${COOKIE_NAME}=${cookieValue}`).c);
+
+    expect(user?.groups).toBeUndefined();
+  });
 });
 
 describe('createLocalAuth (cookie-сессия)', () => {

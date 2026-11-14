@@ -12,7 +12,7 @@ import { RemoteBackendClient } from './client.js';
 import type { RemoteCredentials, RemoteUser } from './types.js';
 // ADR-099: дискавери OIDC — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
-import { RemoteError } from './types.js';
+import { RemoteError, normalizeRemoteGroups } from './types.js';
 import { describeTransportError } from './transport-error.js';
 import { loadCredentials, saveCredentials, listCredentials } from './credentials.js';
 import { refreshAccessToken } from './device-flow.js';
@@ -461,7 +461,13 @@ export class RemoteConnection {
     try {
       const status = await session.getAuthStatus();
       if (status.connected && status.user) {
-        user = { id: status.user.id, username: status.user.username, roles: status.user.roles };
+        // ADR-140 Ф2: снимок групп с сервера едет вместе с профилем.
+        user = {
+          id: status.user.id,
+          username: status.user.username,
+          roles: status.user.roles,
+          groups: normalizeRemoteGroups(status.user.groups),
+        };
       }
     } catch {
       // оставляем user из credentials
@@ -479,7 +485,13 @@ export class RemoteConnection {
     try {
       const status = await session.getClient().getAuthStatus();
       if (status.user) {
-        return { id: status.user.id, username: status.user.username, roles: status.user.roles };
+        // ADR-140 Ф2: снимок групп с сервера едет вместе с профилем.
+        return {
+          id: status.user.id,
+          username: status.user.username,
+          roles: status.user.roles,
+          groups: normalizeRemoteGroups(status.user.groups),
+        };
       }
     } catch {
       // best-effort

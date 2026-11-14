@@ -11,6 +11,22 @@ export interface RemoteUser {
   id: string;
   username: string;
   roles: string[];
+  /**
+   * ADR-140 Ф2: снимок групп пользователя с удалённого backend
+   * (`GET /auth/status.user.groups`). Аддитивно: старый сервер поля не отдаёт →
+   * групп нет (fail-closed). Пустой список нормализуется в `undefined`.
+   */
+  groups?: string[];
+}
+
+/**
+ * ADR-140 Ф2: нормализация групп из ответа сервера — не массив, пустой список
+ * или не-строки = групп нет (`undefined`, fail-closed).
+ */
+export function normalizeRemoteGroups(groups: unknown): string[] | undefined {
+  if (!Array.isArray(groups)) return undefined;
+  const list = groups.filter((g): g is string => typeof g === 'string' && g.length > 0);
+  return list.length > 0 ? list : undefined;
 }
 
 /**

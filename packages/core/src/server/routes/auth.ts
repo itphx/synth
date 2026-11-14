@@ -99,12 +99,31 @@ function normalizeUrl(url: string): string {
   return url.replace(/\/+$/, '');
 }
 
+/**
+ * ADR-140 Ф2: группы пользователя в payload — **только при непустом списке**:
+ * у пользователя без групп поле отсутствует (аддитивно, старый клиент не ломается).
+ */
+function groupsField(groups?: string[]): { groups?: string[] } {
+  return groups && groups.length > 0 ? { groups } : {};
+}
+
 function toPayload(user: User): ServerUserPayload {
-  return { id: user.id, username: user.username, email: user.email, roles: user.roles };
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    roles: user.roles,
+    ...groupsField(user.groups),
+  };
 }
 
 function remoteUserToPayload(user: RemoteUser): ServerUserPayload {
-  return { id: user.id, username: user.username, roles: user.roles };
+  return {
+    id: user.id,
+    username: user.username,
+    roles: user.roles,
+    ...groupsField(user.groups),
+  };
 }
 
 /**

@@ -7,7 +7,7 @@
 import { RemoteBackendClient } from './client.js';
 import { loadCredentials, saveCredentials, clearCredentials } from './credentials.js';
 import { startDeviceFlow, pollDeviceToken, refreshAccessToken, passwordGrant } from './device-flow.js';
-import { RemoteError } from './types.js';
+import { RemoteError, normalizeRemoteGroups } from './types.js';
 import type { RemoteAuthType, RemoteCredentials, RemoteUser } from './types.js';
 import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
 
@@ -184,6 +184,8 @@ export class RemoteSession {
           expiresAt: refreshed.expiresIn
             ? new Date(Date.now() + refreshed.expiresIn * 1000).toISOString()
             : undefined,
+          // ADR-140 Ф2: refresh сохраняет прежнего пользователя (в т.ч. снимок
+          // групп) — группы живут до повторного входа, это ожидаемо.
           user: existing.user,
           issuer,
           clientId,
@@ -301,7 +303,13 @@ export class RemoteSession {
       });
       const status = await statusClient.getAuthStatus();
       if (status.user) {
-        user = { id: status.user.id, username: status.user.username, roles: status.user.roles };
+        // ADR-140 Ф2: снимок групп едет из /auth/status вместе с профилем.
+        user = {
+          id: status.user.id,
+          username: status.user.username,
+          roles: status.user.roles,
+          groups: normalizeRemoteGroups(status.user.groups),
+        };
         await saveCredentials({ ...creds, user }, opts.credentialsPath);
       }
     } catch {
