@@ -99,12 +99,12 @@
 | ADR-120 | Бюджет памяти инстанса — лёгкие листинги, bounded-кэши и капы чтения | ⚠️ Частично | [adr-120-memory-budget.md](./adr-120-memory-budget.md) |
 | ADR-121 | Portable offline-дистрибутивы — pinned Node и ripgrep, SHA256SUMS | ⚠️ Частично | [adr-121-offline-portable-distribution.md](./adr-121-offline-portable-distribution.md) |
 | ADR-122 | Память как продукт — порты, плагин, индексы и recall | ⚠️ Частично | [adr-122-memory-product.md](./adr-122-memory-product.md) |
+| ADR-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | ⚠️ Частично | [adr-126-input-surface-commands-mentions-snippets.md](./adr-126-input-surface-commands-mentions-snippets.md) |
 | ADR-131 | Self-management инструменты инстанса и MCP | ⚠️ Частично | [adr-131-self-management-tools.md](./adr-131-self-management-tools.md) |
 | ADR-135 | Единый контур исполнения — пулы, профили и provisioner | ⚠️ Частично | [adr-135-execution-contour.md](./adr-135-execution-contour.md) |
 | ADR-136 | Модель доверия shell — аудит исполнений и внешний чекер команд | ⚠️ Частично | [adr-136-shell-trust.md](./adr-136-shell-trust.md) |
 | ADR-137 | Изоляция исполнителя — non-root, сеть и файловая система | ⚠️ Частично | [adr-137-executor-isolation.md](./adr-137-executor-isolation.md) |
 | ADR-138 | Контур исполнения плагинных инструментов — capability → пул, `ctx.runtime` | ⚠️ Частично | [adr-138-plugin-execution-contour.md](./adr-138-plugin-execution-contour.md) |
-| ADR-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | ⚠️ Частично | [adr-126-input-surface-commands-mentions-snippets.md](./adr-126-input-surface-commands-mentions-snippets.md) |
 
 ## Предложения
 
