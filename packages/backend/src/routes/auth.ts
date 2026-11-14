@@ -13,6 +13,7 @@ import type { DefaultsRepository } from '@itphx/synth-core';
 import { resolveAppearanceDefaults } from '@itphx/synth-core';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
+import { ensurePrincipalIdentity } from '../lib/principal-identity.js';
 
 const OIDC_STATE_COOKIE = 'oidc_state';
 
@@ -87,6 +88,23 @@ export function createAuthRoutes(
     resolveAppearanceDefaults(defaultsStore, getDefaultLang());
   const getOidcClient = createLazyOidcClient(config.oidc);
 
+  /**
+   * ADR-140: привязать auth-идентичность пользователя (id из токена) к его
+   * профилю при входе — чтобы ACL-id (каталог, передача владения) совпадал с
+   * принципалом. Best-effort: ошибка привязки логируется, вход не ломается.
+   */
+  const linkPrincipalIdentity = async (user: User): Promise<void> => {
+    if (!profiles) return;
+    try {
+      await ensurePrincipalIdentity(profiles, user);
+    } catch (err) {
+      console.warn(
+        '[auth] привязка auth-идентичности не удалась:',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  };
+
   // GET /auth/login — редирект на Keycloak authorize endpoint
   app.get('/login', async (c) => {
     const client = getOidcClient();
@@ -122,6 +140,7 @@ export function createAuthRoutes(
       const user: User = oidcUserToUser(oidcUser);
       const sessionId = kit.createSession(user);
       kit.setSessionCookie(c, sessionId);
+      await linkPrincipalIdentity(user);
       return c.json({ deployment: 'managed', user: { id: user.id, username: user.username, email: user.email, roles: user.roles } });
     } catch (err) {
       console.error('[auth/login] ROPC error:', err);
@@ -150,6 +169,7 @@ export function createAuthRoutes(
       const user: User = oidcUserToUser(oidcUser);
       const sessionId = kit.createSession(user);
       kit.setSessionCookie(c, sessionId);
+      await linkPrincipalIdentity(user);
       return c.redirect('/');
     } catch (err) {
       console.error('[auth/callback] OIDC callback error:', err);
@@ -278,6 +298,7 @@ export function createAuthRoutes(
 
     const sessionId = kit.createSession(user);
     kit.setSessionCookie(c, sessionId);
+    await linkPrincipalIdentity(user);
 
     return c.json({
       deployment: 'managed',

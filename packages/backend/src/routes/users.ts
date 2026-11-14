@@ -5,6 +5,7 @@ import { nowISO } from '@itphx/synth-shared';
 import { randomUUID } from 'node:crypto';
 import { t } from '../lib/i18n.js';
 import { requireAdminOrScope } from '../auth/guards.js';
+import { principalIdOf } from '../lib/principal-identity.js';
 import { parseBoundedInt, paginate } from '@itphx/synth-core';
 
 /**
@@ -61,10 +62,22 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore, options?:
       })
       .sort((a, b) => (a.username < b.username ? -1 : a.username > b.username ? 1 : 0));
 
-    const { page, total, next_offset } = paginate(filtered, offset, limit);
+    // ADR-140: в каталоге — ACL-id принципала (auth-идентичность: OIDC
+    // `sub`/debug-id), а не внутренний `profile.id`: по этому id UI выдаёт
+    // гранты (`members`) и передаёт владение (`owner_id`). Профили без
+    // auth-идентичности (legacy) отдаются по `profile.id`.
+    // Дедуп по этому id: два профиля с одним принципалом — один элемент.
+    const byPrincipal = new Map<string, ProfileData>();
+    for (const profile of filtered) {
+      const principalId = principalIdOf(profile);
+      if (!byPrincipal.has(principalId)) byPrincipal.set(principalId, profile);
+    }
+    const deduped = [...byPrincipal.values()];
+
+    const { page, total, next_offset } = paginate(deduped, offset, limit);
     return c.json({
       users: page.map((profile) => ({
-        id: profile.id,
+        id: principalIdOf(profile),
         username: profile.username,
         display_name: profile.displayName || null,
       })),
