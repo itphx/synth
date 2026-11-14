@@ -1528,6 +1528,7 @@ export const dict = {
   'processes.filter.all': 'All',
   'processes.filter.process': 'Processes',
   'processes.filter.subagent': 'Sub-agents',
+  'processes.filter.terminal': 'Terminals',
   'processes.filter.onlyCurrent': 'Current session only',
   'processes.status.running': 'running',
   'processes.status.completed': 'completed',

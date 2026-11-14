@@ -624,15 +624,18 @@ export function TerminalView({ tab }: TerminalViewProps) {
             </span>
           </div>
         )}
-        {dock && terminal && (
-          <TerminalAskDock
-            terminal={terminal}
-            lines={dock.lines}
-            mode={dock.mode}
-            onClose={() => setDock(null)}
-          />
-        )}
       </div>
+
+      {/* Док «Спросить агента» занимает место в колонке, а не перекрывает
+          нижние строки терминала: контейнер уменьшается и xterm делает fit. */}
+      {dock && terminal && (
+        <TerminalAskDock
+          terminal={terminal}
+          lines={dock.lines}
+          mode={dock.mode}
+          onClose={() => setDock(null)}
+        />
+      )}
 
       <TerminalQuickKeys
         onKey={(sequence) => {

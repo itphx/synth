@@ -1504,6 +1504,7 @@ export const dict = {
   'processes.filter.all': 'Все',
   'processes.filter.process': 'Процессы',
   'processes.filter.subagent': 'Саб-агенты',
+  'processes.filter.terminal': 'Терминалы',
   'processes.filter.onlyCurrent': 'Только текущая сессия',
   'processes.status.running': 'выполняется',
   'processes.status.completed': 'завершён',
