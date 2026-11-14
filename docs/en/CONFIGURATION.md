@@ -2,6 +2,11 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-11-14 (**секция «Группы OIDC» (`auth.oidc.groups`,
+> `SYNTH_OIDC_GROUPS_CLAIM`/`SYNTH_OIDC_GROUPS_ALLOW`, ADR-140)** — claim'а с группами и
+> allowlist имён (env — csv, приоритет env > config), пустой allowlist → групп нет
+> (fail-closed), сверка точная и регистрозависимая — **переведено**).
+
 > ⚠️ RU-версия обновлена 2026-11-08 (**секция «Лимиты запросов» (`limits.*`)** — `sessionOpsPerMinute`
 > (тяжёлые операции с сессиями: `import`/`import-batch`/`export`/`fork`/`merge`, запросов в минуту на
 > креденту, `0` — без лимита, дефолт `10`), runtime-настройка `/api/v2/settings/limits`, env
@@ -129,6 +134,44 @@ auth:
   apiKey: ""                       # SYNTH_API_KEY; pass via env/secret only
   apiKeyRoles: ["USER"]            # SYNTH_API_KEY_ROLES; ADMIN only explicitly
 ```
+
+### OIDC groups (`auth.oidc.groups`, `SYNTH_OIDC_GROUPS_*`, ADR-140)
+
+Groups are a **separate axis from roles**. Roles (`ADMIN`/`USER`/`LEAD`/`AUDITOR`) are the
+global instance rights, they come from `realm_access.roles` and are filtered by the list
+of known ones (`KNOWN_ROLES`, upper case). Groups are the source of grants **for a
+project** (`group_members`): they come from the IdP claim and are **filtered by a name
+allowlist**.
+
+| Field / env | Purpose | Default |
+|-----------|------------|--------------|
+| `auth.oidc.groups.claim` | The claim name with the groups (top level) | `groups` |
+| `auth.oidc.groups.allow` | The allowlist of group names: an array of strings | `[]` (no groups) |
+| `SYNTH_OIDC_GROUPS_CLAIM` | The same via env — the claim name; takes precedence over `config.yaml` (ADR-023) | `groups` |
+| `SYNTH_OIDC_GROUPS_ALLOW` | The same via env — csv (`synth-devs,synth-admins`): spaces are trimmed, empty items are dropped; takes precedence over `config.yaml` | `[]` (no groups) |
+
+```yaml
+auth:
+  oidc:
+    groups:
+      claim: "groups"              # SYNTH_OIDC_GROUPS_CLAIM
+      allow:                       # SYNTH_OIDC_GROUPS_ALLOW (csv)
+        - "synth-devs"
+        - "synth-admins"
+```
+
+**An empty allowlist — no groups (fail-closed).** "Accept everything" is impossible: a
+claim from the IdP is not a trusted input, and the list of allowed names is set by the
+operator. An explicitly set env (including an empty one) overrides `config.yaml` —
+otherwise the operator could not "turn off" the groups.
+
+Parsing rules: the claim is at the **top level** (nested paths are not parsed), the values
+are strings only (trim, deduplication, the claim order is preserved); a missing claim or a
+non-array → no groups; the fallback is `id_token` → `access_token`. The match against the
+allowlist is **exact and case-sensitive** (`Synth-Devs` ≠ `synth-devs`).
+
+Parsing and application — in [KEYCLOAK.md](./KEYCLOAK.md) §2.5 (the Keycloak setup) and
+[API_V2.md](./API_V2.md) §5.14 (the group catalog).
 
 ### Env overrides of nested sections (ADR-023)
 
@@ -441,6 +484,7 @@ auth:
   apiKeyRoles: ["USER"]           # SYNTH_API_KEY_ROLES: roles of the single API key (default USER, not ADMIN)
   sessionMaxAgeMinutes: 1440
   # oidc: { enabled: false, issuer: "", clientId: "", clientSecret: "", redirectUri: "http://localhost:5002/auth/callback", cliClientId: "synth-cli" }
+  # oidc.groups: { claim: "groups", allow: [] }   # ADR-140: groups (claim + allowlist); an empty allowlist — no groups
 
 llm:
   defaultProvider: ""             # fallback: empty — the admin configures it themselves; the runtime provider + model pair

@@ -172,7 +172,7 @@
 | PROP-124 | [ADR-124](./adr-124-remote-ssh-access.md) | принято |
 | PROP-125 | [ADR-125](./adr-125-hybrid-remote-mcp.md) | принято |
 | PROP-127 | [ADR-127](./adr-127-parallel-tool-execution.md) | принято |
-| PROP-133 | [ADR-140](./adr-140-project-access-sharing.md) | реализована Ф1 — пользовательские гранты; Ф2/Ф3 — нет |
+| PROP-133 | [ADR-140](./adr-140-project-access-sharing.md) | реализованы Ф1 и Ф2; Ф3 — нет |
 | PROP-135 | [ADR-135](./adr-135-execution-contour.md) | принято |
 | PROP-136 | [ADR-136](./adr-136-shell-trust.md) | принято |
 | PROP-137 | [ADR-137](./adr-137-executor-isolation.md) | принято |

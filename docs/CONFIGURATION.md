@@ -111,6 +111,42 @@ auth:
   apiKeyRoles: ["USER"]            # SYNTH_API_KEY_ROLES; ADMIN — только явно
 ```
 
+### Группы OIDC (`auth.oidc.groups`, `SYNTH_OIDC_GROUPS_*`, ADR-140)
+
+Группы — **отдельная ось от ролей**. Роли (`ADMIN`/`USER`/`LEAD`/`AUDITOR`) — глобальные
+права инстанса, приходят из `realm_access.roles` и фильтруются списком известных
+(`KNOWN_ROLES`, верхний регистр). Группы — источник грантов **на проект**
+(`group_members`): они приходят из claim'а IdP и **фильтруются allowlist'ом имён**.
+
+| Поле / env | Назначение | По умолчанию |
+|-----------|------------|--------------|
+| `auth.oidc.groups.claim` | Имя claim'а с группами (верхнего уровня) | `groups` |
+| `auth.oidc.groups.allow` | Allowlist имён групп: массив строк | `[]` (групп нет) |
+| `SYNTH_OIDC_GROUPS_CLAIM` | То же через env — имя claim'а; приоритетнее `config.yaml` (ADR-023) | `groups` |
+| `SYNTH_OIDC_GROUPS_ALLOW` | То же через env — csv (`synth-devs,synth-admins`): пробелы обрезаются, пустые элементы отброшены; приоритетнее `config.yaml` | `[]` (групп нет) |
+
+```yaml
+auth:
+  oidc:
+    groups:
+      claim: "groups"              # SYNTH_OIDC_GROUPS_CLAIM
+      allow:                       # SYNTH_OIDC_GROUPS_ALLOW (csv)
+        - "synth-devs"
+        - "synth-admins"
+```
+
+**Пустой allowlist — групп нет (fail-closed).** «Принять все» невозможно: claim из IdP не
+является доверенным входом, а список допустимых имён задаёт оператор. Явно заданная env
+(в т.ч. пустая) перекрывает `config.yaml` — иначе оператор не смог бы «выключить» группы.
+
+Правила разбора: claim **верхнего уровня** (вложенные пути не разбираются), значения —
+только строки (trim, дедуп, порядок claim'а сохраняется); claim отсутствует или это не
+массив → групп нет; fallback `id_token` → `access_token`. Сверка с allowlist'ом —
+**точная и регистрозависимая** (`Synth-Devs` ≠ `synth-devs`).
+
+Разбор и применение — в [KEYCLOAK.md](KEYCLOAK.md) §2.5 (настройка Keycloak) и
+[API_V2.md](API_V2.md) §5.14 (каталог групп).
+
 ### Env-оверрайды вложенных секций (ADR-023)
 
 Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
@@ -460,6 +496,7 @@ auth:
   apiKeyRoles: ["USER"]           # SYNTH_API_KEY_ROLES: роли единого API-ключа (по умолчанию USER, не ADMIN)
   sessionMaxAgeMinutes: 1440
   # oidc: { enabled: false, issuer: "", clientId: "", clientSecret: "", redirectUri: "http://localhost:5002/auth/callback", cliClientId: "synth-cli" }
+  # oidc.groups: { claim: "groups", allow: [] }   # ADR-140: группы (claim + allowlist); пустой allowlist — групп нет
 
 llm:
   defaultProvider: ""             # fallback: пусто — админ настраивает сам; runtime-пара «провайдер + модель»

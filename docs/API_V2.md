@@ -584,10 +584,10 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/auth/login` | backend | — | Редирект на OIDC authorize |
 | POST | `/auth/login` | backend | — | ROPC-вход (OIDC), ставит cookie |
 | GET | `/auth/callback` | backend | — | OIDC callback, cookie |
-| GET | `/auth/status` | оба | — | `{authenticated, debug_mode, oidc_enabled, deployment, user}` |
+| GET | `/auth/status` | оба | — | `{authenticated, debug_mode, oidc_enabled, deployment, user}`; `user.groups` — снимок групп IdP, **только при непустом списке** (ADR-140) |
 | GET | `/auth/oidc-meta` | backend | — | Публичные OIDC issuer/clientId (без секрета) + сигнал `plugins: {enabled, mode}` (серверная политика плагинов в гибриде, ADR-090 Ф7; **без списка имён** — полный allow-list отдаёт `GET /api/v2/settings/plugins`); старый сервер без поля → клиент трактует политику как неизвестную |
-| GET | `/auth/session` | оба | — | Проверка cookie-сессии |
-| GET | `/auth/me` | оба | — | Текущий пользователь |
+| GET | `/auth/session` | оба | — | Проверка cookie-сессии; `user.groups` — снимок групп IdP, **только при непустом списке** (ADR-140) |
+| GET | `/auth/me` | оба | — | Текущий пользователь; `groups` — снимок групп IdP, **только при непустом списке** (ADR-140) |
 | POST | `/auth/spa-login` | оба | — | JSON `{api_key}` → cookie-сессия |
 | POST | `/auth/login` | core | — | ROPC-вход в гибриде `{server?, username, password}` |
 | POST | `/auth/device-start` | core | — | OIDC device flow: `verification_uri`, `user_code` |
@@ -1003,12 +1003,33 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 > best-effort — её ошибка не ломает мутацию). Журнал — `GET /api/v2/audit/security?scope=projects`
 > (`ADMIN`/`AUDITOR`).
 >
-> **Группы — механизм есть, источника нет (Ф2).** Гранты по группам применяются **везде,
-> где принципал несёт `groups`**: в managed HTTP — роуты, список сессий и подписки хаба
-> (это покрыто матрицей тестов). Но **источника групп нет**: claim `groups` из IdP не
-> разбирается, поля `User.groups` в контракте нет, поэтому в проде список групп пуст
-> (fail-closed) — запись `group_members` хранится, но доступа не даёт. В core и в тулах
-> агента группы не передаются вовсе.
+> **Группы — источник есть (ADR-140 Ф2).** Источник групп — claim `groups` из токена
+> IdP (имя claim'а настраивается: `auth.oidc.groups.claim` / `SYNTH_OIDC_GROUPS_CLAIM`),
+> отфильтрованный **allowlist'ом имён** (`auth.oidc.groups.allow` /
+> `SYNTH_OIDC_GROUPS_ALLOW`): сверка точная и регистрозависимая, пустой allowlist →
+> групп нет (fail-closed, «принять все» невозможно). Настройка Keycloak и разбор
+> claim'а — [KEYCLOAK.md](KEYCLOAK.md) §2.5, конфиг — [CONFIGURATION.md](CONFIGURATION.md).
+>
+> Группы — **снимок на момент логина**: `User.groups` кладётся в cookie-сессию и
+> обновляется только при повторном входе. Изменение состава групп в IdP само по себе
+> не действует — нужен повторный вход.
+>
+> Гранты по группам применяются **везде, где принципал несёт `groups`**: в managed HTTP —
+> роуты, список сессий и подписки хаба; в **ядре** — принципал хода (`AuthorityPrincipal.groups`,
+> ADR-106 Ф4): группы фиксируются **при приёме ввода** (`POST /api/v2/sessions/:id/prompt`,
+> постановка в очередь) и дальше не пересчитываются; из принципала они попадают в
+> **тулы** агента (`extra.principal.groups`) и в **потолок хода** — роль участника
+> считается тем же единым резолвером доступа (`resolveProjectAccess`), поэтому группа с
+> ролью `viewer` даёт read-only ход, а `editor`/`owner` — обычный. В **гибриде** группы
+> едут с удалённого backend: `RemoteUser.groups` → cookie v2 → локальный `User.groups`
+> (обновление — при повторном входе).
+>
+> `/auth/status`, `/auth/session` и `/auth/me` отдают `groups` **только при непустом
+> списке** (у пользователя без групп поле отсутствует — аддитивно). `PUT /auth/profile`
+> группы **не принимает**: свой ACL пользователь не правит.
+>
+> Каталог групп, которые можно выдать, — `GET /api/v2/users/groups` (§5.14): источник —
+> тот же allowlist.
 
 > **Гибрид и журнал проекта (PROP-054).** Журнал вынесен из детали проекта, поэтому
 > перенос между мирами идёт через постраничную страницу:
@@ -1418,6 +1439,7 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 |---|---|---|
 | GET | `/api/v2/users` | Список профилей (без `identities`) |
 | GET | `/api/v2/users/directory` | Каталог пользователей для выбора участников проекта (PROP-133): `{users:[{id, username, display_name}], total, offset, limit, next_offset}`; `?limit=` (дефолт 50, максимум 200), `?offset=` (дефолт 0), `?q=` — поиск по `username`/`display_name` без учёта регистра. **Доступ — любой аутентифицированный** (не только `ADMIN`) |
+| GET | `/api/v2/users/groups` | Каталог групп для выбора участников проекта по группам (ADR-140 Ф2): `{groups:[{name}], total, offset, limit, next_offset}`; `?limit=` (дефолт 50, максимум 200), `?offset=` (дефолт 0), `?q=` — поиск по имени группы без учёта регистра. **Доступ — любой аутентифицированный** (не только `ADMIN`) |
 | GET | `/api/v2/users/:id` | Профиль (+ `identities`) |
 | POST | `/api/v2/users` | Создать (ADMIN) |
 | PUT | `/api/v2/users/:id` | Обновить (ADMIN) |
@@ -1435,6 +1457,20 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 > В **standalone** раздела пользователей нет (`features.users=false`, §5.4) —
 > эндпоинта вовсе; в **гибриде** core проксирует `/api/v2/users` на удалённый
 > backend, поэтому каталог доступен там, где подключён backend.
+>
+> **Каталог групп — `GET /api/v2/users/groups` (ADR-140 Ф2).** Лёгкая проекция для
+> выбора группы-участника проекта: только имя группы — ни участников, ни описаний,
+> ни счётчиков. **Источник — allowlist имён групп** `auth.oidc.groups.allow`
+> (env `SYNTH_OIDC_GROUPS_ALLOW` перекрывает `config.yaml`): отдаются только те
+> группы, которые вообще можно выдать, — «принять всё» невозможно. **Пустой
+> allowlist → пустой список** (fail-closed), а не ошибка. Имена дедуплицируются,
+> обрезаются от пробелов и сортируются по алфавиту; `?q=` фильтрует по имени без
+> учёта регистра. Доступ — **любой аутентифицированный** пользователь (как
+> `/directory`): группы нужны владельцу проекта для выбора участников. Нечисловой/
+> дробный/отрицательный `limit`/`offset` → `400 VALIDATION_ERROR`; `limit` выше 200
+> обрезается до 200; постраничный ответ — по общему контракту ADR-118 §4.
+> В **standalone** раздела пользователей нет (§5.4); в **гибриде** core проксирует
+> `/api/v2/users` на удалённый backend — каталог там отдаёт сервер.
 
 ### 5.14.1 Идентичности текущего пользователя — `/api/v2/me/identities` (оба, ADR-089)
 

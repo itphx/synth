@@ -2,6 +2,11 @@
 
 > 🌐 **English** · [Russian](../KEYCLOAK.md)
 
+> ⚠️ RU-версия обновлена 2026-11-14 (**§2.5 «Группы → доступ к проектам (ADR-140)»** —
+> маппер членства в группах (claim `groups`), allowlist имён в Synth, типовые проблемы;
+> §3.1/§3.2 — `auth.oidc.groups` и env `SYNTH_OIDC_GROUPS_CLAIM`/`SYNTH_OIDC_GROUPS_ALLOW`;
+> §4 — проверка групп в `id_token` и симптомы — **переведено**).
+
 Operator guide: how to configure Keycloak and which parameters to set in Synth to deploy a
 "Synth + Keycloak" combination with correct role issuance. The material is based on a real setup
 (realm `synth`, client `synth`, FreeIPA as the user store).
@@ -93,6 +98,81 @@ To check: decode `id_token` (for example at https://jwt.io) — the payload must
 }
 ```
 
+### 2.5 Groups → project access (ADR-140)
+
+Groups are a **separate axis** from roles. A role (`ADMIN`/`USER`/`LEAD`/`AUDITOR`) is a
+global instance right; a group (`synth-devs`, `synth-admins`) is the source of grants
+**for a project** ("participants via groups", `group_members`). Roles are filtered by the
+list of known ones and upper-cased; groups are **case-sensitive**, the names are matched
+exactly.
+
+#### In Keycloak: the group membership mapper
+
+Groups arrive in a separate `groups` claim — it is put there by the **group membership
+mapper** (not the role mapper from 2.4). The order: **Realm → Groups** — create the
+groups and assign the users; then in the client scope of the `synth` client add a
+**Group membership** mapper with these options:
+
+| Mapper option | Value | Effect |
+|---------------|----------|--------|
+| `Claim name` | `groups` | The claim name (Keycloak's default is `groups`) |
+| `id.token.claim` | `true` | Groups get into `id_token` |
+| `access.token.claim` | `true` | Groups get into `access_token` |
+| `multivalued` | `true` | Groups as an array |
+| `Full group path` | `false` | Only the group name (`synth-devs`), not the path (`/synth-devs`) |
+
+> **Mind `Full group path`.** The claim values are exactly what Synth matches against the
+> allowlist. With `Full group path: true` the claim will contain `/synth-devs`, and the
+> allowlist must contain exactly `/synth-devs`; with `false` — `synth-devs`. A difference
+> of one slash means the group does not match.
+
+To check: decode `id_token` — the payload must contain a block:
+
+```json
+{
+  "groups": ["synth-devs", "synth-admins"]
+}
+```
+
+#### In Synth: the group name allowlist
+
+Not **all** groups from the claim are accepted — only the ones listed in the allowlist:
+
+```yaml
+auth:
+  oidc:
+    groups:
+      claim: groups          # the claim name with the groups (default groups)
+      allow:                 # allowlist of group names; empty — no groups
+        - synth-devs
+        - synth-admins
+```
+
+or via env (csv, takes precedence over `config.yaml`):
+
+```bash
+SYNTH_OIDC_GROUPS_CLAIM=groups
+SYNTH_OIDC_GROUPS_ALLOW=synth-devs,synth-admins
+```
+
+**Without an allowlist there are no groups** (fail-closed): "accept everything" is
+impossible — a claim from the IdP is not a trusted input, and the list of allowed names is
+set by the operator. An empty allowlist → the user has no groups at all → group grants
+give no access.
+
+Claim parsing: the name is at the **top level** (nested paths are not parsed), the values
+are strings only (whitespace trimmed, deduplicated, the claim order preserved); a missing
+claim or a non-array → no groups. Fallback: if `id_token` has no groups, they are taken
+from `access_token`.
+
+#### Typical problems
+
+| Symptom | Cause | Solution |
+|---------|---------|---------|
+| No groups, a group grant gives no access | The group membership mapper is disabled — the `groups` claim is absent from the token | Enable the mapper (see above) and **log in again**: the groups are a snapshot taken at login |
+| The group is in the allowlist but does not match | The match is **exact and case-sensitive**: `Synth-Devs` ≠ `synth-devs`; the path `/synth-devs` ≠ `synth-devs` | Bring the allowlist in line with what is actually in the claim (look at `id_token`) |
+| Changed the group membership in the IdP — nothing changes | The groups are a **snapshot taken at login** (cookie session), updated only on a repeated login | Log out and log in again; or wait for the cookie session to expire (`auth.sessionMaxAgeMinutes`, default 1440 min = 24 h) |
+
 ## 3. Synth parameters
 
 ### 3.1 config.yaml
@@ -106,9 +186,16 @@ auth:
     clientSecret: "<client-secret>"
     redirectUri: "https://synth.example.com/auth/callback"
     cliClientId: "synth-cli"      # public client for the local CLI/core (ROPC/device flow), not a secret
+    groups:                        # ADR-140: the source of groups for project access
+      claim: "groups"              # the claim name with the groups (default groups)
+      allow:                       # allowlist of group names; empty — no groups (fail-closed)
+        - "synth-devs"
+        - "synth-admins"
 ```
 
 `cliClientId` (default `synth-cli`) — the public client_id that the backend hands to local clients via `GET /auth/oidc-meta` (`cliClientId || 'synth-cli'`, `packages/backend/src/routes/auth.ts`). The local core uses it for the ROPC/device flow in a hybrid connection (see [HYBRID.md](./HYBRID.md)); in Keycloak this is a separate public client with Direct Access Grants enabled (no secret).
+
+The `groups` section is **optional** (old configs without it are valid). Details — in section [2.5](#25-groups--project-access-adr-140) and in [CONFIGURATION.md](./CONFIGURATION.md).
 
 ### 3.2 Environment variables
 
@@ -120,6 +207,8 @@ auth:
 | `SYNTH_OIDC_CLIENT_SECRET` | Client secret (keep it in secrets, not in the config) |
 | `SYNTH_OIDC_REDIRECT_URI` | Redirect URI: `https://<synth-host>/auth/callback` |
 | `SYNTH_OIDC_CLI_CLIENT_ID` | Public client_id for the local CLI/core (ROPC/device flow), default `synth-cli` (`packages/backend/src/lib/app-config.ts`) |
+| `SYNTH_OIDC_GROUPS_CLAIM` | The claim name with the groups (ADR-140), default `groups` |
+| `SYNTH_OIDC_GROUPS_ALLOW` | The group name allowlist (ADR-140) — csv (`synth-devs,synth-admins`), spaces are trimmed, empty items are dropped; takes precedence over `config.yaml`; **an empty value — no groups** (fail-closed) |
 
 Priority: env vars > config.yaml (see [CONFIGURATION.md](./CONFIGURATION.md)).
 
@@ -173,6 +262,19 @@ curl -s -X POST "https://<keycloak-host>/realms/synth/protocol/openid-connect/to
 
 The decoded `id_token` must contain `realm_access.roles` with the expected role (`admin`, etc.).
 
+### Check that groups get into id_token
+
+The same command, but look for the `groups` block in the payload:
+
+```json
+{
+  "groups": ["synth-devs", "synth-admins"]
+}
+```
+
+The values are matched against the allowlist **exactly and case-sensitively** — compare
+them literally (see [2.5](#25-groups--project-access-adr-140)).
+
 ### Symptoms and causes
 
 | Symptom | Cause | Solution |
@@ -180,6 +282,8 @@ The decoded `id_token` must contain `realm_access.roles` with the expected role 
 | All users get `USER`, no admin UI | The role mapper does not include roles in `id_token`/`access_token` | Enable `id.token.claim` and `access.token.claim` on the realm roles / client roles mappers (see 2.4) |
 | The role exists in Keycloak, but not in the UI | The role is not named from the known list (`ADMIN/USER/LEAD/AUDITOR`) | Rename the role or add it to `KNOWN_ROLES` |
 | The role is assigned, but as a client role to another client | `resource_access.<clientId>` does not match the Synth `clientId` | Assign the role to the `synth` client or assign a realm role |
+| No groups, a group grant gives no access | The allowlist is not set (`auth.oidc.groups.allow` / `SYNTH_OIDC_GROUPS_ALLOW`) or the group membership mapper is disabled | Set the allowlist, enable the mapper and log in again (see 2.5) |
+| The group is in the allowlist, but did not match | The match is exact and case-sensitive; the path `/synth-devs` ≠ `synth-devs` | Bring the allowlist in line with the values in `id_token` |
 | The backend cannot verify the JWT / 401 on sign-in | The backend does not trust the Keycloak CA | Configure `security.tls.caFile`/`caPem` (env `SYNTH_TLS_CA_FILE`, see 3.3) |
 
 ## 5. Test environment accounts

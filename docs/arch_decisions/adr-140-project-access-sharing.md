@@ -1,8 +1,8 @@
 # ADR-140: Доступ к проекту — участники, группы и видимость
 
-> **Статус:** ⚠️ Частично — Ф1 (пользовательские гранты, единый резолвер, API/DTO/каталог/аудит, UI) реализована; Ф2 (источник групп) и Ф3 (передача владения и переносы) — нет.
+> **Статус:** ⚠️ Частично — Ф1 (пользовательские гранты, единый резолвер, API/DTO/каталог/аудит, UI) и Ф2 (источник групп: claim IdP → снимок в принципале хода, каталог групп, UI-мультиселект групп) реализованы; Ф3 (передача владения и переносы) — нет.
 > **Дата:** 2026-11-14
-> **Источник:** PROP-133 (реализована Ф1 — пользовательские гранты; Ф2/Ф3 — нет; файл удалён после принятия).
+> **Источник:** PROP-133 (реализованы Ф1 и Ф2; Ф3 — нет; файл удалён после принятия).
 > **Связано:** [ADR-014](./adr-014-project-container.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-096](./adr-096-storage-layer.md)/[ADR-097](./adr-097-storage-provider-class.md), [ADR-106](./adr-106-authority-layer.md), [ADR-118](./adr-118-message-stream-v2.md).
 
 ## Контекст
@@ -66,6 +66,9 @@ workspace/FS, git, план, журнал, инварианты, память, �
 - **Каталог пользователей** — `GET /api/v2/users/directory`: лёгкая проекция
   `{id, username, display_name}`, постранично (ADR-118 §4), доступ **любому аутентифицированному**
   (иначе владелец не может выбрать участников).
+- **Каталог групп** — `GET /api/v2/users/groups`: имена групп из allowlist'а
+  `auth.oidc.groups.allow`, постранично, фильтр `?q=`; доступ **любому аутентифицированному**
+  (Ф2).
 - **Аудит** изменений доступа — `scope:'projects'` (кто, что, было/стало), журнал
   `GET /api/v2/audit/security?scope=projects` (`ADMIN`/`AUDITOR`); запись best-effort — её
   ошибка не ломает мутацию.
@@ -98,27 +101,71 @@ workspace/FS, git, план, журнал, инварианты, память, �
   `session-idor-matrix` 82/82 (+ мир shared-проекта), `session-visibility` 18/18, `hub` 16/16,
   `route-access-census` 11/11; контракт портов на живой PostgreSQL — **262/262**.
 
+## Статус реализации (Ф2)
+
+- **Конфиг.** `auth.oidc.groups { claim?, allow[] }` (`shared/config/types.ts`), env
+  `SYNTH_OIDC_GROUPS_CLAIM` / `SYNTH_OIDC_GROUPS_ALLOW` (csv) перекрывают конфиг (ADR-023).
+  Пустой allowlist — **групп нет** (fail-closed): «принять все» невозможно.
+- **Разбор claim.** `backend/src/auth/oidc.ts` `extractGroups`: claim **верхнего уровня**,
+  значения — строки, trim + дедуп, фильтр по allowlist **регистрозависимо**; fallback
+  `id_token → access_token` (`extractUserFromTokens`); нет claim / не массив → `[]`.
+- **Контракт пользователя.** `User.groups?: string[]` (`shared/types/user.ts`) — **снимок на момент
+  логина**, пассивный: на права влияет только `resolveProjectAccess`. В ответах
+  `/auth/status|session|me` поле есть **только при непустом списке** (аддитивно — старый клиент
+  не ломается); `PUT /auth/profile` группы **не принимает** — снимок меняется повторным входом.
+- **Гибрид.** `RemoteUser.groups` (`core/remote/types.ts`) → cookie v2 (`core/auth/local.ts`
+  `serverUserToUser`) → `User.groups`; refresh токена снимок **сохраняет** (группы живут до
+  повторного входа — так и задумано).
+- **Ядро.** `AuthorityPrincipal.groups?` (`shared/types/authority.ts`) — аддитивно и необязательно:
+  старое сохранённое сообщение парсится, отсутствие поля = «групп нет», потребители нормализуют
+  `?? []`. `resolveUserPrincipal(id, roles, groups)`; группы фиксируются **при постановке сообщения
+  в очередь** (`createSessionRoutes` → опция `resolveUserGroups`; backend — `groupsOf(user)`;
+  standalone — опция не задана ⇒ групп нет). `_resolveToolPrincipal` берёт группы **принципала
+  хода**; `createAuthorityTurnContext({groups})` — потолок хода по групповому гранту;
+  `canEditProject(session, project, groups?)` — грант по группе даёт роль, индивидуальный грант
+  **приоритетнее** группового.
+- **Каталог групп.** `GET /api/v2/users/groups` (backend, `routes/users.ts`): источник — allowlist
+  `auth.oidc.groups.allow`, постранично, фильтр `?q=`, доступ **любому аутентифицированному**;
+  маршрут объявлен **до** `/:id`.
+- **Синхронизация доступа.** Изменение доступа публикует `project.updated { kind:'access' }`;
+  `EventHub.resyncAllClients()` пересчитывает подписки WS/SSE (новый участник получает события
+  проекта, отозванный — перестаёт); UI на `kind:'access'` перечитывает **списки** проектов и сессий.
+- **UI.** `useGroupsCatalog` / `getGroupsDirectory` (`GET /api/v2/users/groups`); блок групп в
+  `ProjectTab` и `CreateProjectPopover` (`group_members` в теле); **мерж грантов вне каталога** —
+  грант группе, которой нет в allowlist, не теряется; бейдж режима — **по составу** (только группы /
+  группы и пользователи / пользователи); `User.groups` в зеркале `resolveProjectRole`.
+- **Тесты.** shared `types/authority` +7; core `engine/authority/principal` 9 (новый файл),
+  `engine/authority/turn` 12 (из них 5 — блок Ф2), `engine/tools/project-access` +8 (блок Ф2),
+  `server/routes/sessions` +3 (группы в очереди); backend `routes/projects-access-matrix` +4 (20
+  всего), `routes/users-groups` 7, `routes/auth` +5, `lib/app-config` +8, `events/hub` +2,
+  `routes/projects` +2, `routes/projects-access` +1; core `auth/local` +3, `remote/session` +5,
+  `server/routes/auth` +2. Полный прогон backend — **950** (73 файла), ошибок нет.
+
 ## Осталось
 
-- **Ф2 — группы.** Схема грантов по группам в контракте есть (`group_members`), но **источника
-  групп нет**: claim `groups` из IdP не разбирается, `User.groups`/`RemoteUser.groups` в
-  контракте нет ⇒ группы читаются defensively и всегда пусты, гранты по группам нигде не
-  применяются (fail-closed): запись `group_members` хранится, но доступа не даёт. Нужно:
-  claim `groups` + allowlist, поля в контракте, UI-мультиселект групп.
 - **Ф3 — передача владения и переносы.** `POST /api/v2/projects/:id/transfer` (автор или
   `ADMIN`; `LEAD` права не получает, прежний владелец остаётся `editor`) — не сделана.
   Политика переноса грантов при импорте/экспорте и в гибриде (`forkProjectToLocal` → состояние
   `author`) — не решена.
+- **Живая проверка UI групп.** Каталог и мультиселект групп проверены в dev без IdP (каталог
+  пуст ⇒ блок пустой). Сценарий «пользователь с группой видит проект» требует окружения с
+  Keycloak (группы в claim'е) — проверка в `test`/`preprod` не выполнена.
 
 ## Открытые вопросы
 
-1. Уведомление добавленным участникам — будущая фича (в Ф1 не делаем): in-app `project.updated`,
+1. Уведомление добавленным участникам — будущая фича (в Ф1/Ф2 не делаем): in-app `project.updated`,
    письмо или ничего?
 2. Сопоставление групп IdP → отображаемые `teamRoles` — отдельное решение позже; нужно ли оно
-   вообще и в какую сторону (только отображение или производное заполнение профиля)?
+   вообще и в какую сторону (только отображение или производное заполнение профиля)? Источник групп
+   в Ф2 появился, но автоматически `teamRoles` не заполняются: гранты по группам и профиль —
+   разные оси.
 
 ## История
 
 - 2026-11-14 — принято из PROP-133 (реализована Ф1 — пользовательские гранты, единый резолвер,
   API/DTO/каталог/аудит, UI); Ф2 (источник групп) и Ф3 (передача владения и переносы) — остаток;
   файл предложения удалён.
+- 2026-11-14 — реализована **Ф2** (источник групп): claim IdP + allowlist, `User.groups`/
+  `RemoteUser.groups`, группы в принципале хода, каталог `GET /api/v2/users/groups`, UI-мультиселект
+  групп, пересчёт подписок хаба при `kind:'access'`. Остаток — Ф3 и живая проверка UI групп в
+  окружении с Keycloak.

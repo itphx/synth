@@ -93,6 +93,79 @@ Backend по fallback возьмёт их из `access_token`, но до это�
 }
 ```
 
+### 2.5 Группы → доступ к проектам (ADR-140)
+
+Группы — **отдельная ось** от ролей. Роль (`ADMIN`/`USER`/`LEAD`/`AUDITOR`) — глобальные
+права инстанса; группа (`synth-devs`, `synth-admins`) — источник грантов **на проект**
+(«участники через группы», `group_members`). Роли фильтруются списком известных и
+приводятся к верхнему регистру; группы — **регистрозависимые**, имена сверяются точно.
+
+#### В Keycloak: маппер членства в группах
+
+Группы приезжают отдельным claim'ом `groups` — его кладёт **маппер членства в группах**
+(не маппер ролей из 2.4). Порядок: **Realm → Groups** — создайте группы и назначьте
+пользователям; затем в client scope клиента `synth` добавьте маппер **Group membership**
+с такими опциями:
+
+| Опция маппера | Значение | Эффект |
+|---------------|----------|--------|
+| `Claim name` | `groups` | Имя claim'а (по умолчанию у Keycloak — `groups`) |
+| `id.token.claim` | `true` | Группы попадают в `id_token` |
+| `access.token.claim` | `true` | Группы попадают в `access_token` |
+| `multivalued` | `true` | Группы как массив |
+| `Full group path` | `false` | Только имя группы (`synth-devs`), а не путь (`/synth-devs`) |
+
+> **Внимание на `Full group path`.** Значения claim'а — это ровно то, что Synth сверяет
+> с allowlist'ом. При `Full group path: true` в claim'е будет `/synth-devs`, и в allowlist
+> надо писать именно `/synth-devs`; при `false` — `synth-devs`. Разница в одном слеше
+> означает, что группа не совпадёт.
+
+Проверка: в декодированном `id_token` должен быть блок:
+
+```json
+{
+  "groups": ["synth-devs", "synth-admins"]
+}
+```
+
+#### В Synth: allowlist имён групп
+
+Из claim'а принимаются **не все** группы, а только перечисленные в allowlist'е:
+
+```yaml
+auth:
+  oidc:
+    groups:
+      claim: groups          # имя claim'а с группами (по умолчанию groups)
+      allow:                 # allowlist имён групп; пусто — групп нет
+        - synth-devs
+        - synth-admins
+```
+
+или через env (csv, приоритетнее `config.yaml`):
+
+```bash
+SYNTH_OIDC_GROUPS_CLAIM=groups
+SYNTH_OIDC_GROUPS_ALLOW=synth-devs,synth-admins
+```
+
+**Без allowlist групп нет** (fail-closed): «принять все» невозможно — claim из IdP не
+является доверенным входом, а список имён групп задаёт оператор. Пустой allowlist →
+у пользователя нет ни одной группы → гранты по группам не дают доступа.
+
+Разбор claim'а: имя — **верхнего уровня** (вложенные пути не разбираются), значения —
+только строки (обрезка пробелов, дедуп, порядок claim'а сохраняется); claim отсутствует
+или это не массив → групп нет. Fallback: если в `id_token` групп нет, берутся из
+`access_token`.
+
+#### Типовые проблемы
+
+| Симптом | Причина | Решение |
+|---------|---------|---------|
+| Групп нет, грант по группе не даёт доступа | Маппер членства в группах выключен — claim `groups` в токене отсутствует | Включить маппер (см. выше) и **перезайти**: группы — снимок на момент логина |
+| Группа в allowlist есть, но не сматчилась | Сверка **точная и регистрозависимая**: `Synth-Devs` ≠ `synth-devs`; путь `/synth-devs` ≠ `synth-devs` | Привести allowlist к тому, что реально в claim'е (посмотреть `id_token`) |
+| Изменил состав групп в IdP — изменения не видны | Группы — **снимок на момент логина** (cookie-сессия), обновляются только при повторном входе | Выйти и войти заново; либо дождаться истечения cookie-сессии (`auth.sessionMaxAgeMinutes`, по умолчанию 1440 мин = 24 ч) |
+
 ## 3. Параметры Synth
 
 ### 3.1 config.yaml
@@ -106,9 +179,16 @@ auth:
     clientSecret: "<client-secret>"
     redirectUri: "https://synth.example.com/auth/callback"
     cliClientId: "synth-cli"      # public client для локального CLI/core (ROPC/device flow), не секрет
+    groups:                        # ADR-140: источник групп для доступа к проектам
+      claim: "groups"              # имя claim'а с группами (по умолчанию groups)
+      allow:                       # allowlist имён групп; пусто — групп нет (fail-closed)
+        - "synth-devs"
+        - "synth-admins"
 ```
 
 `cliClientId` (default `synth-cli`) — public client_id, который backend отдаёт локальным клиентам через `GET /auth/oidc-meta` (`cliClientId || 'synth-cli'`, `packages/backend/src/routes/auth.ts`). Локальный core использует его для ROPC/device flow при гибридном подключении (см. [HYBRID.md](HYBRID.md)); в Keycloak это отдельный public-клиент с включённым Direct Access Grants (секрета нет).
+
+Секция `groups` — **необязательная** (старые конфиги без неё валидны). Подробности — в разделе [2.5](#25-группы--доступ-к-проектам-adr-140) и в [CONFIGURATION.md](CONFIGURATION.md).
 
 ### 3.1.1 Offline-токен для гибрида (длинные сессии)
 
@@ -138,6 +218,8 @@ Realm-настройки, задающие срок жизни:
 | `SYNTH_OIDC_CLIENT_SECRET` | Секрет клиента (хранить в секретах, не в конфиге) |
 | `SYNTH_OIDC_REDIRECT_URI` | Redirect URI: `https://<synth-host>/auth/callback` |
 | `SYNTH_OIDC_CLI_CLIENT_ID` | Public client_id для локального CLI/core (ROPC/device flow), default `synth-cli` (`packages/backend/src/lib/app-config.ts`) |
+| `SYNTH_OIDC_GROUPS_CLAIM` | Имя claim'а с группами (ADR-140), default `groups` |
+| `SYNTH_OIDC_GROUPS_ALLOW` | Allowlist имён групп (ADR-140) — csv (`synth-devs,synth-admins`), пробелы обрезаются, пустые элементы отброшены; приоритетнее `config.yaml`; **пустое значение — групп нет** (fail-closed) |
 
 Приоритет: env vars > config.yaml (см. [CONFIGURATION.md](CONFIGURATION.md)).
 
@@ -190,6 +272,19 @@ curl -s -X POST "https://<keycloak-host>/realms/synth/protocol/openid-connect/to
 
 В декодированном `id_token` должны быть `realm_access.roles` с ожидаемой ролью (`admin` и т.п.).
 
+### Проверить, что группы попадают в id_token
+
+Та же команда, но в payload ищем блок `groups`:
+
+```json
+{
+  "groups": ["synth-devs", "synth-admins"]
+}
+```
+
+Значения сверяются с allowlist'ом **точно и регистрозависимо** — сверьте их буквально
+(см. [2.5](#25-группы--доступ-к-проектам-adr-140)).
+
 ### Симптомы и причины
 
 | Симптом | Причина | Решение |
@@ -197,6 +292,8 @@ curl -s -X POST "https://<keycloak-host>/realms/synth/protocol/openid-connect/to
 | Все пользователи получают `USER`, админки нет | Маппер ролей не включает роли в `id_token`/`access_token` | Включить `id.token.claim` и `access.token.claim` у мапперов realm roles / client roles (см. 2.4) |
 | Роль есть в Keycloak, но в UI её нет | Роль называется не из списка известных (`ADMIN/USER/LEAD/AUDITOR`) | Переименовать роль или добавить её в `KNOWN_ROLES` |
 | Роль выдана, но как client-роль другому клиенту | `resource_access.<clientId>` не совпадает с `clientId` Synth | Выдавать роль клиенту `synth` или назначить realm-роль |
+| Групп нет, грант по группе не даёт доступа | Не задан allowlist (`auth.oidc.groups.allow` / `SYNTH_OIDC_GROUPS_ALLOW`) либо выключен маппер членства в группах | Задать allowlist, включить маппер и перезайти (см. 2.5) |
+| Группа в allowlist есть, но не совпала | Сверка точная и регистрозависимая; путь `/synth-devs` ≠ `synth-devs` | Привести allowlist к значениям из `id_token` |
 | Backend не может проверить JWT / 401 при входе | Backend не доверяет CA Keycloak | Настроить `security.tls.caFile`/`caPem` (env `SYNTH_TLS_CA_FILE`, см. 3.3) |
 
 ## 5. Учётные записи тестового окружения

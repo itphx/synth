@@ -2,6 +2,16 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-11-14 (**ADR-140 Ф2**, источник групп) — **переведено**:
+> **§5.3** — `/auth/status`/`/auth/session`/`/auth/me` отдают `groups` (снимок claim'а IdP)
+> только при непустом списке; `PUT /auth/profile` группы не принимает;
+> **§5.8** — блок «Доступ к проекту»: источник групп — claim `groups` +
+> allowlist (`auth.oidc.groups.allow`/`SYNTH_OIDC_GROUPS_ALLOW`, пустой allowlist →
+> групп нет, fail-closed), снимок на момент логина, гранты применяются в HTTP/сессиях/
+> подписках/тулах/потолке хода, core-тулы получают группы из принципала хода;
+> **§5.14** — новый `GET /api/v2/users/groups` (любой аутентифицированный, `limit`/
+> `offset`/`q`, постранично, источник — allowlist).
+
 > ⚠️ RU-версия обновлена 2026-11-14 (**PROP-133**, доступ к проекту) — **переведено**:
 > **§5.8** — DTO проекта несёт `group_members`/`everyone_role`/производную `visibility`;
 > блок «Доступ к проекту» (порядок резолва роли, таблица «состояние → кто видит → кто
@@ -571,10 +581,10 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | GET | `/auth/login` | backend | — | Redirect to OIDC authorize |
 | POST | `/auth/login` | backend | — | ROPC login (OIDC), sets a cookie |
 | GET | `/auth/callback` | backend | — | OIDC callback, cookie |
-| GET | `/auth/status` | both | — | `{authenticated, debug_mode, oidc_enabled, deployment, user}` |
+| GET | `/auth/status` | both | — | `{authenticated, debug_mode, oidc_enabled, deployment, user}`; `user.groups` — the IdP group snapshot, **only for a non-empty list** (ADR-140) |
 | GET | `/auth/oidc-meta` | backend | — | Public OIDC issuer/clientId (without the secret) |
-| GET | `/auth/session` | both | — | Cookie session check |
-| GET | `/auth/me` | both | — | Current user |
+| GET | `/auth/session` | both | — | Cookie session check; `user.groups` — the IdP group snapshot, **only for a non-empty list** (ADR-140) |
+| GET | `/auth/me` | both | — | Current user; `groups` — the IdP group snapshot, **only for a non-empty list** (ADR-140) |
 | POST | `/auth/spa-login` | both | — | JSON `{api_key}` → cookie session |
 | POST | `/auth/login` | core | — | ROPC login in hybrid mode `{server?, username, password}` |
 | POST | `/auth/device-start` | core | — | OIDC device flow: `verification_uri`, `user_code` |
@@ -849,13 +859,35 @@ replica can continue an upload — the `blobs` volume must be shared.
 > over the access fields; the write is best-effort — its failure does not break the
 > mutation). The journal — `GET /api/v2/audit/security?scope=projects` (`ADMIN`/`AUDITOR`).
 >
-> **Groups — the mechanism exists, the source does not (stage 2).** Group grants are applied
-> **everywhere the principal carries `groups`**: in the managed HTTP — the routes, the session
-> list and the hub subscriptions (this is covered by the test matrix). But there is **no
-> source of groups**: the `groups` claim from the IdP is not parsed and the contract has no
-> `User.groups` field, so in production the group list is empty (fail-closed) — the
-> `group_members` record is stored but grants nothing. In core and in the agent's tools the
-> groups are not passed at all.
+> **Groups — the source exists (ADR-140 F2).** The source of groups is the `groups` claim
+> from the IdP token (the claim name is configurable: `auth.oidc.groups.claim` /
+> `SYNTH_OIDC_GROUPS_CLAIM`), filtered by a **name allowlist** (`auth.oidc.groups.allow` /
+> `SYNTH_OIDC_GROUPS_ALLOW`): the match is exact and case-sensitive, an empty allowlist →
+> no groups (fail-closed, "accept everything" is impossible). The Keycloak setup and the
+> claim parsing — [KEYCLOAK.md](./KEYCLOAK.md) §2.5, the config —
+> [CONFIGURATION.md](./CONFIGURATION.md).
+>
+> Groups are a **snapshot taken at login**: `User.groups` is put into the cookie session
+> and is updated only on a repeated login. Changing the group membership in the IdP does
+> not take effect by itself — a repeated login is needed.
+>
+> Group grants are applied **everywhere the principal carries `groups`**: in the managed
+> HTTP — the routes, the session list and the hub subscriptions; in **core** — the turn
+> principal (`AuthorityPrincipal.groups`, ADR-106 F4): the groups are fixed **at input
+> acceptance** (`POST /api/v2/sessions/:id/prompt`, enqueueing) and are not recomputed
+> afterwards; from the principal they reach the agent's **tools**
+> (`extra.principal.groups`) and the **turn ceiling** — the participant role is computed
+> by the same unified access resolver (`resolveProjectAccess`), so a group with the
+> `viewer` role gives a read-only turn, and `editor`/`owner` — a regular one. In
+> **hybrid** mode the groups come from the remote backend: `RemoteUser.groups` → cookie
+> v2 → the local `User.groups` (updated on a repeated login).
+>
+> `/auth/status`, `/auth/session` and `/auth/me` return `groups` **only for a non-empty
+> list** (for a user without groups the field is absent — additive). `PUT /auth/profile`
+> does **not** accept groups: a user does not edit their own ACL.
+>
+> The catalog of the groups that can be granted — `GET /api/v2/users/groups` (§5.14): the
+> source is the same allowlist.
 
 > **Hybrid and the project journal (PROP-054).** The journal was moved out of the project detail, so the transfer between worlds goes through the paged endpoint:
 > - **fork-local** (server → local): the journal is loaded **page by page** from `GET /api/v2/projects/:id/log` (`remote/client.ts#getProjectLog`); the number of pages is capped — when the cap is exceeded the journal is transferred partially (with a warning in the transfer log): losing the tail is better than failing the transfer;
@@ -1249,6 +1281,7 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 |---|---|---|
 | GET | `/api/v2/users` | Profile list (without `identities`) |
 | GET | `/api/v2/users/directory` | The user directory for picking project participants (PROP-133): `{users:[{id, username, display_name}], total, offset, limit, next_offset}`; `?limit=` (default 50, maximum 200), `?offset=` (default 0), `?q=` — a search over `username`/`display_name`, case-insensitive. **Available to any authenticated user** (not only `ADMIN`) |
+| GET | `/api/v2/users/groups` | The group catalog for picking project participants by group (ADR-140 F2): `{groups:[{name}], total, offset, limit, next_offset}`; `?limit=` (default 50, maximum 200), `?offset=` (default 0), `?q=` — a search over the group name, case-insensitive. **Available to any authenticated user** (not only `ADMIN`) |
 | GET | `/api/v2/users/:id` | Profile (+ `identities`) |
 | POST | `/api/v2/users` | Create (ADMIN) |
 | PUT | `/api/v2/users/:id` | Update (ADMIN) |
@@ -1265,6 +1298,21 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 > In **standalone** there is no users section at all (`features.users=false`, §5.4) — the
 > endpoint does not exist; in **hybrid** mode core proxies `/api/v2/users` to the remote
 > backend, so the directory is available wherever a backend is connected.
+>
+> **The group catalog — `GET /api/v2/users/groups` (ADR-140 F2).** A light projection for
+> picking a group participant of a project: only the group name — no members, no
+> descriptions, no counters. **The source is the group name allowlist**
+> `auth.oidc.groups.allow` (the env `SYNTH_OIDC_GROUPS_ALLOW` overrides `config.yaml`):
+> only the groups that can be granted at all are returned — "accept everything" is
+> impossible. **An empty allowlist → an empty list** (fail-closed), not an error. Names
+> are deduplicated, trimmed and sorted alphabetically; `?q=` filters over the name,
+> case-insensitive. Access — **any authenticated** user (as `/directory`): groups are
+> needed by the project owner to pick participants. A non-numeric/fractional/negative
+> `limit`/`offset` → `400 VALIDATION_ERROR`; `limit` above 200 is trimmed to 200; the
+> paged response follows the common contract of ADR-118 §4.
+> In **standalone** there is no users section at all (§5.4); in **hybrid** mode core
+> proxies `/api/v2/users` to the remote backend — the catalog there is served by the
+> server.
 
 ### 5.14.1 Current user's identities — `/api/v2/me/identities` (both, ADR-089)
 
