@@ -4,16 +4,30 @@
  * Эталон семантики — `ProjectStore`/`MemoryProjectRepository`:
  *   - `create()` — синхронная чистая фабрика (id, `members`, 4 дефолтные колонки
  *     плана, пустые `statusMessages`/`log`, `version: 1`, таймстемпы);
- *   - `list(userId)` — владелец **или** участник, сортировка `updated_at DESC`;
+ *   - `list(viewer)` — владелец, участник, грант по группе или режим «всем
+ *     пользователям» (PROP-133); без `viewer` — все проекты, сортировка
+ *     `updated_at DESC`;
  *   - `delete` отсутствующего — не ошибка; `load` отсутствующего — `null`.
  *
  * `members` — child-таблица `project_members` (PK `(project_id,user_id)`,
  * индекс `(user_id)`): `save` заменяет набор участий в той же транзакции, что и
  * строку проекта. `plan`/`log`/`status_messages`/`repos`/`mcp`/`skills` — `jsonb`.
+ * PROP-133: `group_members` (`jsonb`) и `everyone_role` (`text`) — состояние
+ * списка доступа; `list` сначала сужает выборку SQL'ем (оптимизация), затем
+ * **обязательно** проверяет каждую строку резолвером `resolveProjectAccess`
+ * (истина — резолвер, не SQL).
  */
 
 import { randomUUID } from 'node:crypto';
-import { normalizeColorKey, normalizeIconKey } from '@itphx/synth-shared';
+import {
+  ProjectRole,
+  normalizeColorKey,
+  normalizeIconKey,
+  normalizeProjectEveryoneRole,
+  normalizeProjectMemberRoles,
+  resolveProjectAccess,
+} from '@itphx/synth-shared';
+import type { ProjectViewer } from '@itphx/synth-shared';
 import type { StorageContext } from '@itphx/synth-core';
 import type { PostgresConnection, PostgresExecutor } from '../pool.js';
 import { jsonbParam, requiredIso, type ProjectEntity } from './principals-shared.js';
@@ -39,6 +53,9 @@ type ProjectRow = {
   skills: unknown;
   memory: unknown;
   members: Record<string, string> | null;
+  // PROP-133: состояние списка доступа (гранты группам, режим «всем»).
+  group_members: Record<string, string> | null;
+  everyone_role: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -54,11 +71,27 @@ const SELECT_PROJECT = `
   ) m ON true`;
 
 function rowToProject(row: ProjectRow): ProjectEntity {
+  // PROP-133: нормализация состояния доступа при чтении (битые роли →
+  // `viewer`, `everyone_role` — только `owner|editor|viewer`/`null`).
+  //
+  // Паритет с `ProjectStore`/`MemoryProjectRepository`: «нет грантов» — это
+  // **отсутствие поля**, а не пустой объект/`null`:
+  //   - `group_members` в БД — `jsonb`, «нет грантов» записан как `{}`
+  //     (нормальное представление в БД) → наружу поле не отдаём;
+  //   - `everyone_role` в БД — `text`, «не опубликован» записан как `NULL` →
+  //     `null` → `undefined` (поле отсутствует), потому что в БД `NULL` и
+  //     «явный `null`» неразличимы, а эталон (file/memory) при создании
+  //     оставляет поле **отсутствующим**;
+  //   - DTO всё равно отдаёт `?? null`, поэтому наружу контракт не меняется.
+  const groupMembers = normalizeProjectMemberRoles(row.group_members);
+  const everyoneRole = normalizeProjectEveryoneRole(row.everyone_role ?? undefined);
   return {
     id: row.id,
     name: row.name,
     ownerId: row.owner_id,
-    members: (row.members ?? {}) as ProjectEntity['members'],
+    members: normalizeProjectMemberRoles(row.members),
+    ...(Object.keys(groupMembers).length > 0 ? { groupMembers } : {}),
+    ...(everyoneRole !== undefined && everyoneRole !== null ? { everyoneRole } : {}),
     description: row.description ?? '',
     currentTask: row.current_task ?? '',
     invariants: row.invariants ?? '',
@@ -88,10 +121,12 @@ async function writeProject(tx: PostgresExecutor, project: ProjectEntity): Promi
   await tx.query(
     `INSERT INTO projects (
        id, name, owner_id, description, current_task, invariants, icon, color,
-       workspace, plan, log, status_messages, repos, mcp, skills, memory, created_at, updated_at
+       workspace, plan, log, status_messages, repos, mcp, skills, memory,
+       group_members, everyone_role, created_at, updated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8,
-       $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18
+       $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb,
+       $17::jsonb, $18, $19, $20
      )
      ON CONFLICT (id) DO UPDATE SET
        name = EXCLUDED.name,
@@ -109,6 +144,8 @@ async function writeProject(tx: PostgresExecutor, project: ProjectEntity): Promi
        mcp = EXCLUDED.mcp,
        skills = EXCLUDED.skills,
        memory = EXCLUDED.memory,
+       group_members = EXCLUDED.group_members,
+       everyone_role = EXCLUDED.everyone_role,
        updated_at = EXCLUDED.updated_at`,
     [
       project.id,
@@ -127,6 +164,9 @@ async function writeProject(tx: PostgresExecutor, project: ProjectEntity): Promi
       jsonbParam(project.mcp ?? null),
       jsonbParam(project.skills ?? null),
       jsonbParam(project.memory ?? null),
+      // PROP-133: состояние списка доступа (гранты группам, режим «всем»).
+      jsonbParam(project.groupMembers ?? {}),
+      project.everyoneRole ?? null,
       project.createdAt,
       project.updatedAt,
     ],
@@ -188,8 +228,17 @@ export function createPrincipalProjectsPort(conn: PostgresConnection): ProjectsP
       await conn.query('DELETE FROM projects WHERE id = $1', [id]);
     },
 
-    async list(userId?: string): Promise<ProjectEntity[]> {
-      const rows = userId
+    /**
+     * Список проектов (PROP-133).
+     *
+     * Без `viewer` — все проекты (ADMIN/LEAD и внутренние задачи). С
+     * `viewer` — SQL сужает выборку (владелец/участник/«всем»/грант по
+     * группе) — это **оптимизация**; истина — резолвер `resolveProjectAccess`,
+     * поэтому каждая загруженная строка проверяется им (битая роль в данных не
+     * выдаёт лишний доступ).
+     */
+    async list(viewer?: ProjectViewer): Promise<ProjectEntity[]> {
+      const rows = viewer
         ? await conn.query<ProjectRow>(
             `${SELECT_PROJECT}
              WHERE p.owner_id = $1
@@ -197,20 +246,36 @@ export function createPrincipalProjectsPort(conn: PostgresConnection): ProjectsP
                   SELECT 1 FROM project_members pm2
                   WHERE pm2.project_id = p.id AND pm2.user_id = $1
                 )
+                OR p.everyone_role IS NOT NULL
+                OR (
+                  jsonb_typeof(p.group_members) = 'object'
+                  AND p.group_members ?| $2::text[]
+                )
              ORDER BY p.updated_at DESC`,
-            [userId],
+            [viewer.userId, viewer.groups ?? []],
           )
         : await conn.query<ProjectRow>(`${SELECT_PROJECT} ORDER BY p.updated_at DESC`);
-      return rows.map(rowToProject);
+      const projects = rows.map(rowToProject);
+      if (!viewer) return projects;
+      return projects.filter((project) => resolveProjectAccess(project, viewer).read);
     },
 
     create(name, ownerId, data): ProjectEntity {
       const now = new Date().toISOString();
+      // PROP-133: роль владельца всегда `owner` (понизить её нельзя).
+      const members = normalizeProjectMemberRoles(data?.members);
+      members[ownerId] = ProjectRole.OWNER;
+      const groupMembers = data?.groupMembers
+        ? normalizeProjectMemberRoles(data.groupMembers)
+        : undefined;
+      const everyoneRole = normalizeProjectEveryoneRole(data?.everyoneRole);
       return {
         id: randomUUID(),
         name,
         ownerId,
-        members: { [ownerId]: 'owner' as ProjectEntity['members'][string] },
+        members,
+        ...(groupMembers ? { groupMembers } : {}),
+        ...(everyoneRole !== undefined ? { everyoneRole } : {}),
         description: data?.description || '',
         currentTask: '',
         invariants: '',

@@ -43,6 +43,7 @@ import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
 import { MIGRATION_032_MCP_REMOTE_MODE } from './032-mcp-remote-mode.js';
 import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
 import { MIGRATION_034_PENDING_APPROVALS } from './034-pending-approvals.js';
+import { MIGRATION_035_PROJECT_ACCESS } from './035-project-access.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -90,6 +91,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 32, id: '032_mcp_remote_mode', sql: MIGRATION_032_MCP_REMOTE_MODE },
   { version: 33, id: '033_session_source_id', sql: MIGRATION_033_SESSION_SOURCE_ID },
   { version: 34, id: '034_pending_approvals', sql: MIGRATION_034_PENDING_APPROVALS },
+  { version: 35, id: '035_project_access', sql: MIGRATION_035_PROJECT_ACCESS },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

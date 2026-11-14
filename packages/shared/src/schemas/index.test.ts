@@ -363,6 +363,30 @@ describe('иконки/цвета проектов и сессий', () => {
     expect(sessionUpdateSchema.safeParse({ color: 'red' }).success).toBe(false);
     expect(sessionUpdateSchema.safeParse({ icon: null, color: null }).success).toBe(true);
   });
+
+  it('PROP-133: состояние доступа в projectCreate/UpdateSchema', () => {
+    const state = {
+      members: { u1: 'viewer', u2: 'editor' },
+      group_members: { team: 'viewer' },
+      everyone_role: null,
+    };
+    expect(projectCreateSchema.safeParse({ name: 'p', ...state }).success).toBe(true);
+    expect(projectUpdateSchema.safeParse(state).success).toBe(true);
+    // Неизвестная роль — отказ (fail-closed, без «умного» понижения).
+    expect(projectCreateSchema.safeParse({ name: 'p', members: { u1: 'superadmin' } }).success).toBe(false);
+    expect(projectUpdateSchema.safeParse({ group_members: { team: 'root' } }).success).toBe(false);
+    expect(projectUpdateSchema.safeParse({ everyone_role: 'superadmin' }).success).toBe(false);
+    // Пустой ключ гранта — отказ.
+    expect(projectUpdateSchema.safeParse({ members: { '': 'viewer' } }).success).toBe(false);
+    // `everyone_role: 'editor'` — валидно (явное разрешение редактирования).
+    expect(projectUpdateSchema.safeParse({ everyone_role: 'editor' }).success).toBe(true);
+    expect(projectCreateSchema.safeParse({ name: 'p', everyone_role: 'viewer' }).success).toBe(true);
+    // `everyone_role: 'owner'` — отказ: роль `owner` всем пользователям не
+    // выдаётся (эскалация прав); роут режет такое значение `400` — схема
+    // и роут отдают один контракт.
+    expect(projectCreateSchema.safeParse({ name: 'p', everyone_role: 'owner' }).success).toBe(false);
+    expect(projectUpdateSchema.safeParse({ everyone_role: 'owner' }).success).toBe(false);
+  });
 });
 
 describe('synthEventSchema (ADR-089)', () => {

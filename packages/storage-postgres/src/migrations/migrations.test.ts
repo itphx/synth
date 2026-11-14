@@ -22,6 +22,7 @@ import { MIGRATION_031_SSH_KEY_POLICY } from './031-ssh-key-policy.js';
 import { MIGRATION_032_MCP_REMOTE_MODE } from './032-mcp-remote-mode.js';
 import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
 import { MIGRATION_034_PENDING_APPROVALS } from './034-pending-approvals.js';
+import { MIGRATION_035_PROJECT_ACCESS } from './035-project-access.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -283,12 +284,11 @@ describe('миграция 033_session_source_id (маркер источник�
 });
 
 describe('миграция 034_pending_approvals (ожидания подтверждений, ADR-029)', () => {
-  it('зарегистрирована в реестре под версией 34 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 34', () => {
     const migration = MIGRATIONS.find((m) => m.version === 34);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('034_pending_approvals');
     expect(migration!.sql).toBe(MIGRATION_034_PENDING_APPROVALS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(34);
   });
 
   it('создаёт таблицу ожиданий и индекс по сессии идемпотентно', () => {
@@ -304,5 +304,39 @@ describe('миграция 034_pending_approvals (ожидания подтве�
     // Ожидания лежат в отдельной таблице, а не в документе сессии: полная
     // запись сессии затирала бы точечные записи результатов параллельных тулов.
     expect(MIGRATION_034_PENDING_APPROVALS).not.toContain('ALTER TABLE sessions');
+  });
+});
+
+describe('миграция 035_project_access (список доступа к проекту, PROP-133)', () => {
+  it('зарегистрирована в реестре под версией 35 и последняя по версии', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 35);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('035_project_access');
+    expect(migration!.sql).toBe(MIGRATION_035_PROJECT_ACCESS);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(35);
+  });
+
+  it('добавляет колонки group_members и everyone_role идемпотентно', () => {
+    expect(MIGRATION_035_PROJECT_ACCESS).toContain(
+      'ALTER TABLE projects ADD COLUMN IF NOT EXISTS group_members jsonb',
+    );
+    expect(MIGRATION_035_PROJECT_ACCESS).toContain(
+      'ALTER TABLE projects ADD COLUMN IF NOT EXISTS everyone_role text',
+    );
+    expect(MIGRATION_035_PROJECT_ACCESS).toContain(
+      'COMMENT ON COLUMN projects.group_members',
+    );
+    expect(MIGRATION_035_PROJECT_ACCESS).not.toMatch(
+      /ALTER TABLE(?! projects ADD COLUMN IF NOT EXISTS)/,
+    );
+  });
+
+  it('аддитивна: состояние доступа по умолчанию — «только автор»', () => {
+    // Пустые группы и NULL в «всем» — поведение до PROP-133 не меняется.
+    expect(MIGRATION_035_PROJECT_ACCESS).toContain(
+      "group_members jsonb NOT NULL DEFAULT '{}'::jsonb",
+    );
+    expect(MIGRATION_035_PROJECT_ACCESS).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
+    expect(MIGRATION_035_PROJECT_ACCESS).not.toMatch(/ALTER TABLE projects\s+ADD COLUMN(?! IF NOT EXISTS)/);
   });
 });

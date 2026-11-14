@@ -80,6 +80,25 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
     expect(await readSchemaVersion(conn, schema)).toBe(latestSchemaVersion(MIGRATIONS));
   });
 
+  it('PROP-133: миграция 035 добавляет колонки состояния доступа в projects', async () => {
+    await runMigrations(conn, { schema });
+    const rows = await conn.query<{ column_name: string; data_type: string; is_nullable: string; column_default: string | null }>(
+      'SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2',
+      [schema, 'projects'],
+    );
+    const groupMembers = rows.find((r) => r.column_name === 'group_members');
+    expect(groupMembers).toBeDefined();
+    expect(groupMembers?.data_type).toBe('jsonb');
+    expect(groupMembers?.is_nullable).toBe('NO');
+    expect(groupMembers?.column_default).toContain('jsonb');
+
+    const everyoneRole = rows.find((r) => r.column_name === 'everyone_role');
+    expect(everyoneRole).toBeDefined();
+    expect(everyoneRole?.data_type).toBe('text');
+    // NULL — проект не опубликован (совместимость с существующими проектами).
+    expect(everyoneRole?.is_nullable).toBe('YES');
+  });
+
   it('fail-closed: версия схемы в БД новее ожидаемой', async () => {
     await runMigrations(conn, { schema });
     await conn.query('INSERT INTO synth_schema_migrations (version, id) VALUES ($1, $2)', [

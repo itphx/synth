@@ -127,8 +127,13 @@ export interface EgressRequestLogEntry {
   actor?: string;
 }
 
-/** Скоупы изменений egress-политик/прокси в security-аудите. */
-export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'limits', 'permission', 'ssh'] as const;
+/**
+ * Скоупы изменений egress-политик/прокси в security-аудите.
+ *
+ * `projects` (PROP-133 §3.1) — изменение состояния доступа к проекту
+ * (`members`/`group_members`/`everyone_role`).
+ */
+export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'projects', 'limits', 'permission', 'ssh'] as const;
 export type SecurityAuditScope = (typeof SECURITY_AUDIT_SCOPES)[number];
 
 export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke'] as const;

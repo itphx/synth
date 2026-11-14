@@ -2,7 +2,9 @@ import type {
   Project,
   GitRepoConfig,
   ProjectMcpSettings,
+  ProjectRole,
   ProjectSkillSettings,
+  ProjectViewer,
 } from '@itphx/synth-shared';
 
 /** Опциональные данные создания проекта (сигнатура `ProjectStore.create`). */
@@ -14,6 +16,20 @@ export interface CreateProjectData {
   repos?: GitRepoConfig[];
   mcp?: ProjectMcpSettings;
   skills?: ProjectSkillSettings;
+  /**
+   * PROP-133: пользовательские гранты (userId → роль). Роль владельца всегда
+   * `owner` — понизить её нельзя (понижение автора — только передача владения).
+   */
+  members?: Record<string, ProjectRole>;
+  /**
+   * PROP-133: гранты группам (имя группы → роль).
+   */
+  groupMembers?: Record<string, ProjectRole>;
+  /**
+   * PROP-133: роль для всех пользователей инстанса; `null`/`undefined` — проект
+   * не опубликован.
+   */
+  everyoneRole?: ProjectRole | null;
 }
 
 /**
@@ -42,9 +58,14 @@ export interface ProjectRepository {
   mutate(id: string, mutator: (project: Project) => void): Promise<Project | null>;
   delete(id: string): Promise<void>;
   /**
-   * Проекты, доступные пользователю (владелец или участник); без `userId` — все.
-   * @future-backend — фильтр owner/member в SQL; файловая реализация сканирует.
+   * Проекты, доступные пользователю; без `viewer` — **все** проекты (для
+   * `ADMIN`/`LEAD` и внутренних задач).
+   *
+   * С `viewer` — только те, где `resolveProjectAccess(project, viewer).read ===
+   * true` (владелец, участник, грант по группе, режим «всем пользователям»).
+   * Ролей инстанса у `viewer` нет: сквозной обзор (`ADMIN`/`LEAD`) реализуется
+   * вызовом без аргумента.
    */
-  list(userId?: string): Promise<Project[]>;
+  list(viewer?: ProjectViewer): Promise<Project[]>;
   create(name: string, ownerId: string, data?: CreateProjectData): Project;
 }

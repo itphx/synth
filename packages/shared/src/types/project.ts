@@ -154,6 +154,15 @@ export interface Project {
   name: string;
   ownerId: string;
   members: Record<string, ProjectRole>;
+  /**
+   * PROP-133: гранты группам (имя группы → роль). Отсутствует — групп нет.
+   */
+  groupMembers?: Record<string, ProjectRole>;
+  /**
+   * PROP-133: роль для всех пользователей инстанса; null/undefined — проект
+   * не опубликован.
+   */
+  everyoneRole?: ProjectRole | null;
   description: string;
   currentTask: string;
   invariants: string;
@@ -181,6 +190,35 @@ export interface Project {
   log?: ProjectLogEntry[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * PROP-133: производное состояние доступа (не хранится в проекте).
+ *
+ * - `author` — проект видит только автор (плюс `ADMIN`/`LEAD` — сквозной обзор);
+ * - `selected` — есть пользовательский и/или групповой грант;
+ * - `all` — проект опубликован для всех (`everyoneRole` задан).
+ */
+export type ProjectVisibility = 'author' | 'selected' | 'all';
+
+/**
+ * PROP-133: состояние доступа по состоянию списка доступа.
+ *
+ * Порядок: `everyoneRole` задан → `all`; иначе есть грант пользователю (кроме
+ * владельца) или группе → `selected`; иначе → `author`. Значения ролей не
+ * проверяются: битая роль не должна ронять вывод (fail-closed — на резолвере
+ * доступа, `resolveProjectAccess`).
+ */
+export function deriveProjectVisibility(
+  project: Pick<Project, 'ownerId' | 'members' | 'groupMembers' | 'everyoneRole'>,
+): ProjectVisibility {
+  if (project.everyoneRole !== undefined && project.everyoneRole !== null) return 'all';
+  const members = project.members ?? {};
+  const hasUserGrant = Object.keys(members).some((userId) => userId !== project.ownerId);
+  if (hasUserGrant) return 'selected';
+  const groupMembers = project.groupMembers ?? {};
+  if (Object.keys(groupMembers).length > 0) return 'selected';
+  return 'author';
 }
 
 /**

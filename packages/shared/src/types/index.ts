@@ -21,6 +21,8 @@ export * from './plugin-protocol.js';
 export * from './mcp.js';
 // Проекты, workspace-политика, иконки/цвета, план (ADR-039/075)
 export * from './project.js';
+// PROP-133 §1: единая точка истины по доступу к проекту (резолвер + нормализация)
+export * from './project-access.js';
 // Git-репозитории и SSH-ключи (ADR-076, PROP-124)
 export * from './git.js';
 // ADR-135: канонические перечисления секции `execution` + runtime-каталог

@@ -13,9 +13,19 @@
  * случайной мутации по ссылке.
  */
 
-import type { Message, ProfileData, Project, Session, SessionReference } from '@itphx/synth-shared';
+import type { Message, ProfileData, Project, ProjectViewer, Session, SessionReference } from '@itphx/synth-shared';
 import type { CreateProfileParams, ExternalIdentity } from '@itphx/synth-shared';
-import { ProjectRole, generateId, normalizeColorKey, normalizeIconKey, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
+import {
+  ProjectRole,
+  generateId,
+  normalizeColorKey,
+  normalizeIconKey,
+  normalizeProjectEveryoneRole,
+  normalizeProjectMemberRoles,
+  nowISO,
+  resolveProjectAccess,
+  stripNullBytesDeep,
+} from '@itphx/synth-shared';
 import type {
   CreateProjectData,
   ProfileRepository,
@@ -197,6 +207,21 @@ export class MemorySessionRepository implements SessionRepository {
 export class MemoryProjectRepository implements ProjectRepository {
   private readonly _projects = new Map<string, Project>();
 
+  /**
+   * PROP-133: нормализация состояния доступа (битые роли → `viewer`,
+   * `everyoneRole` — только `owner|editor|viewer`/`null`, `groupMembers` —
+   * объект). Паритет с файловой реализацией.
+   */
+  private _normalizeAccessState(project: Project): void {
+    project.members = normalizeProjectMemberRoles(project.members);
+    if (project.groupMembers !== undefined) {
+      project.groupMembers = normalizeProjectMemberRoles(project.groupMembers);
+    }
+    const everyoneRole = normalizeProjectEveryoneRole(project.everyoneRole);
+    if (everyoneRole === undefined) delete project.everyoneRole;
+    else project.everyoneRole = everyoneRole;
+  }
+
   async load(id: string): Promise<Project | null> {
     const project = this._projects.get(id);
     if (!project) return null;
@@ -204,6 +229,7 @@ export class MemoryProjectRepository implements ProjectRepository {
     // Нормализация метаданных при чтении (как в `ProjectStore.load`).
     clone.icon = normalizeIconKey(clone.icon);
     clone.color = normalizeColorKey(clone.color);
+    this._normalizeAccessState(clone);
     return clone;
   }
 
@@ -226,6 +252,7 @@ export class MemoryProjectRepository implements ProjectRepository {
     mutator(project);
     project.icon = normalizeIconKey(project.icon);
     project.color = normalizeColorKey(project.color);
+    this._normalizeAccessState(project);
     this._projects.set(id, structuredClone(project));
     return project;
   }
@@ -234,10 +261,11 @@ export class MemoryProjectRepository implements ProjectRepository {
     this._projects.delete(id);
   }
 
-  async list(userId?: string): Promise<Project[]> {
+  async list(viewer?: ProjectViewer): Promise<Project[]> {
     let projects = [...this._projects.values()];
-    if (userId) {
-      projects = projects.filter((p) => p.ownerId === userId || userId in (p.members ?? {}));
+    // PROP-133: единый предикат доступа (резолвер — источник истины).
+    if (viewer) {
+      projects = projects.filter((p) => resolveProjectAccess(p, viewer).read);
     }
     const loaded = await Promise.all(projects.map((p) => this.load(p.id)));
     return loaded
@@ -246,11 +274,20 @@ export class MemoryProjectRepository implements ProjectRepository {
   }
 
   create(name: string, ownerId: string, data?: CreateProjectData): Project {
+    // PROP-133: роль владельца всегда `owner` (понизить её нельзя).
+    const members = normalizeProjectMemberRoles(data?.members);
+    members[ownerId] = ProjectRole.OWNER;
+    const groupMembers = data?.groupMembers
+      ? normalizeProjectMemberRoles(data.groupMembers)
+      : undefined;
+    const everyoneRole = normalizeProjectEveryoneRole(data?.everyoneRole);
     return {
       id: generateId(),
       name,
       ownerId,
-      members: { [ownerId]: 'owner' as ProjectRole },
+      members,
+      ...(groupMembers ? { groupMembers } : {}),
+      ...(everyoneRole !== undefined ? { everyoneRole } : {}),
       description: data?.description || '',
       currentTask: '',
       invariants: '',

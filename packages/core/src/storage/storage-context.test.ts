@@ -166,7 +166,7 @@ describe('StorageContext (ADR-096, W2.3)', () => {
     await ctx.sessions.save(session);
 
     // Проект читается списком у владельца.
-    const projects = await ctx.projects.list('owner-1');
+    const projects = await ctx.projects.list({ userId: 'owner-1' });
     expect(projects.map((p) => p.id)).toContain(project.id);
 
     // Сессия проекта видна участнику проекта (через проектную область видимости).

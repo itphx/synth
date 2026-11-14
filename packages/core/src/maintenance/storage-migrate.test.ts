@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { McpServerConfig, SkillBundle, SynthConfig } from '@itphx/synth-shared';
-import { defaultConfig } from '@itphx/synth-shared';
+import { defaultConfig, ProjectRole } from '@itphx/synth-shared';
 import {
   createMemoryStorage,
   createStorageContextAsync,
@@ -73,7 +73,9 @@ async function seed(ctx: StorageContext): Promise<void> {
     }),
   );
   await ctx.projects.save(
-    makeProject('project-1', { members: { 'owner-1': 'OWNER', 'u-2': 'EDITOR' } as never }),
+    // PROP-133: роли — канонические значения `ProjectRole` (битые значения
+    // нормализуются в `viewer` при чтении, fail-closed).
+    makeProject('project-1', { members: { 'owner-1': ProjectRole.OWNER, 'u-2': ProjectRole.EDITOR } }),
   );
   await ctx.profiles.saveProfile(makeProfile('local'));
 
@@ -246,7 +248,7 @@ describe('migrateStorageData — перенос данных через порт
 
     // Проект с участниками; профиль.
     const project = await target!.projects.load('project-1');
-    expect(project?.members).toMatchObject({ 'owner-1': 'OWNER', 'u-2': 'EDITOR' });
+    expect(project?.members).toMatchObject({ 'owner-1': ProjectRole.OWNER, 'u-2': ProjectRole.EDITOR });
     expect(await target!.profiles.loadProfile('local')).not.toBeNull();
 
     // Настройки (мапинг `load()` → сеттеры порта) и умолчания оформления.

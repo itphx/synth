@@ -1,7 +1,18 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Project } from '@itphx/synth-shared';
-import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
+import type { Project, ProjectViewer } from '@itphx/synth-shared';
+import {
+  ProjectRole,
+  generateId,
+  nowISO,
+  AsyncLock,
+  atomicWrite,
+  normalizeIconKey,
+  normalizeColorKey,
+  normalizeProjectMemberRoles,
+  normalizeProjectEveryoneRole,
+  resolveProjectAccess,
+} from '@itphx/synth-shared';
 import type { CreateProjectData, ProjectRepository } from './ports/project-repository.js';
 
 export interface ProjectStoreConfig {
@@ -43,6 +54,16 @@ export class ProjectStore implements ProjectRepository {
       // чтобы в памяти всегда были канонические значения (AD-иконки/цвета проектов).
       project.icon = normalizeIconKey(project.icon);
       project.color = normalizeColorKey(project.color);
+      // PROP-133: нормализация состояния доступа — битые роли → `viewer`,
+      // `everyoneRole` — только `owner|editor|viewer`/`null`, `groupMembers` —
+      // объект. В памяти всегда канонические значения.
+      project.members = normalizeProjectMemberRoles(project.members);
+      if (project.groupMembers !== undefined) {
+        project.groupMembers = normalizeProjectMemberRoles(project.groupMembers);
+      }
+      const everyoneRole = normalizeProjectEveryoneRole(project.everyoneRole);
+      if (everyoneRole === undefined) delete project.everyoneRole;
+      else project.everyoneRole = everyoneRole;
       return project;
     } catch {
       return null;
@@ -103,7 +124,7 @@ export class ProjectStore implements ProjectRepository {
     }
   }
 
-  async list(userId?: string): Promise<Project[]> {
+  async list(viewer?: ProjectViewer): Promise<Project[]> {
     const dir = this._projectsDir();
     let files: string[];
     try {
@@ -117,11 +138,8 @@ export class ProjectStore implements ProjectRepository {
       if (!file.endsWith('.json')) continue;
       const project = await this.load(file.replace('.json', ''));
       if (!project) continue;
-      if (userId) {
-        const isOwner = project.ownerId === userId;
-        const isMember = userId in (project.members || {});
-        if (!isOwner && !isMember) continue;
-      }
+      // PROP-133: единый предикат доступа (резолвер — источник истины).
+      if (viewer && !resolveProjectAccess(project, viewer).read) continue;
       projects.push(project);
     }
     return projects.sort(
@@ -130,11 +148,22 @@ export class ProjectStore implements ProjectRepository {
   }
 
   create(name: string, ownerId: string, data?: CreateProjectData): Project {
+    // PROP-133: роль владельца всегда `owner` (понизить её нельзя — понижение
+    // автора возможно только передачей владения).
+    const members = normalizeProjectMemberRoles(data?.members);
+    members[ownerId] = ProjectRole.OWNER;
+    const groupMembers = data?.groupMembers
+      ? normalizeProjectMemberRoles(data.groupMembers)
+      : undefined;
+    const everyoneRole = normalizeProjectEveryoneRole(data?.everyoneRole);
+
     const project: Project = {
       id: generateId(),
       name,
       ownerId,
-      members: { [ownerId]: 'owner' as ProjectRole },
+      members,
+      ...(groupMembers ? { groupMembers } : {}),
+      ...(everyoneRole !== undefined ? { everyoneRole } : {}),
       description: data?.description || '',
       currentTask: '',
       invariants: '',

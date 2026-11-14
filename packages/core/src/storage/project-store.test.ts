@@ -45,6 +45,69 @@ describe('ProjectStore', () => {
     expect(project.workspace).toBe('/ws');
   });
 
+  it('PROP-133: create — состояние доступа по умолчанию (владелец, без групп и «всем»)', () => {
+    const project = store.create('Test', 'u1');
+    expect(project.members).toEqual({ 'u1': ProjectRole.OWNER });
+    expect(project.groupMembers).toBeUndefined();
+    expect(project.everyoneRole).toBeUndefined();
+  });
+
+  it('PROP-133: create — роль владельца всегда owner (понизить нельзя)', () => {
+    const project = store.create('Test', 'u1', {
+      members: { u1: ProjectRole.VIEWER, u2: ProjectRole.EDITOR },
+    });
+    expect(project.members).toEqual({ u1: ProjectRole.OWNER, u2: ProjectRole.EDITOR });
+  });
+
+  it('PROP-133: create — группам и «всем» из данных создания', () => {
+    const project = store.create('Test', 'u1', {
+      groupMembers: { team: ProjectRole.EDITOR },
+      everyoneRole: ProjectRole.VIEWER,
+    });
+    expect(project.groupMembers).toEqual({ team: ProjectRole.EDITOR });
+    expect(project.everyoneRole).toBe(ProjectRole.VIEWER);
+  });
+
+  it('PROP-133: load нормализует битое состояние доступа (битые роли → viewer)', async () => {
+    const project = store.create('Broken', 'u1');
+    // Пишем в обход нормализации — как будто данные пришли извне.
+    (project.members as Record<string, unknown>)['u2'] = 'superadmin';
+    project.groupMembers = { team: 'root' as unknown as ProjectRole };
+    project.everyoneRole = 'nope' as unknown as ProjectRole;
+    await store.save(project);
+
+    const loaded = await store.load(project.id);
+    expect(loaded!.members['u1']).toBe(ProjectRole.OWNER);
+    expect(loaded!.members['u2']).toBe(ProjectRole.VIEWER);
+    expect(loaded!.groupMembers).toEqual({ team: ProjectRole.VIEWER });
+    // Битая роль «всем» — проект НЕ опубликован (fail-closed).
+    expect(loaded!.everyoneRole).toBeUndefined();
+  });
+
+  it('PROP-133: list(viewer) учитывает гранты, группы и режим «всем»', async () => {
+    const author = store.create('Author', 'u1');
+    await store.save(author);
+    const selected = store.create('Selected', 'u1', { members: { u2: ProjectRole.VIEWER } });
+    await store.save(selected);
+    const grouped = store.create('Grouped', 'u1', { groupMembers: { team: ProjectRole.EDITOR } });
+    await store.save(grouped);
+    const published = store.create('Published', 'u1', { everyoneRole: ProjectRole.VIEWER });
+    await store.save(published);
+
+    const visible = await store.list({ userId: 'u2' });
+    expect(visible.map((p) => p.id).sort()).toEqual([published.id, selected.id].sort());
+    // Грант по группе добавляет групповой проект (свой грант и «всем» — тоже видны).
+    const withGroup = await store.list({ userId: 'u2', groups: ['team'] });
+    expect(withGroup.map((p) => p.id).sort()).toEqual(
+      [grouped.id, published.id, selected.id].sort(),
+    );
+    // Чужой пользователь без грантов видит только опубликованный проект.
+    const stranger = await store.list({ userId: 'u3' });
+    expect(stranger.map((p) => p.id)).toEqual([published.id]);
+    // Без аргумента — все проекты.
+    expect(await store.list()).toHaveLength(4);
+  });
+
   it('load нормализует невалидные/legacy icon/color → undefined', async () => {
     const project = store.create('Legacy', 'u1', { icon: '🚀', color: 'blue' });
     await store.save(project);
@@ -125,7 +188,7 @@ describe('ProjectStore', () => {
     const p3 = store.create('Member', 'u3');
     p3.members['u1'] = ProjectRole.EDITOR;
     await store.save(p3);
-    const forU1 = await store.list('u1');
+    const forU1 = await store.list({ userId: 'u1' });
     expect(forU1).toHaveLength(2);
     const ids = forU1.map((p) => p.id);
     expect(ids).toContain(p1.id);

@@ -529,10 +529,66 @@ export function describeProjectRepository(
       await repo.save(makeProject('p-member', { ownerId: 'u9', members: { u9: ProjectRole.OWNER, u1: ProjectRole.EDITOR }, updatedAt: '2024-03-01T00:00:00.000Z' }));
       await repo.save(makeProject('p-foreign', { ownerId: 'u2', members: { u2: ProjectRole.OWNER }, updatedAt: '2024-02-01T00:00:00.000Z' }));
 
-      const mine = await repo.list('u1');
+      const mine = await repo.list({ userId: 'u1' });
       expect(mine.map((p) => p.id)).toEqual(['p-member', 'p-owner']);
       const all = await repo.list();
       expect(all.map((p) => p.id)).toEqual(['p-member', 'p-foreign', 'p-owner']);
+    });
+
+    it('list(viewer) учитывает состояние доступа: author/selected/all (PROP-133)', async () => {
+      const { repo } = await make();
+      // Состояние «только автор».
+      await repo.save(makeProject('p-author', {
+        ownerId: 'owner-1',
+        members: { 'owner-1': ProjectRole.OWNER },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      }));
+      // Состояние «только выбранным» — пользовательский грант.
+      await repo.save(makeProject('p-selected', {
+        ownerId: 'owner-1',
+        members: { 'owner-1': ProjectRole.OWNER, u1: ProjectRole.VIEWER },
+        updatedAt: '2024-02-01T00:00:00.000Z',
+      }));
+      // Состояние «всем пользователям».
+      await repo.save(makeProject('p-all', {
+        ownerId: 'owner-1',
+        members: { 'owner-1': ProjectRole.OWNER },
+        everyoneRole: ProjectRole.VIEWER,
+        updatedAt: '2024-03-01T00:00:00.000Z',
+      }));
+
+      const visible = await repo.list({ userId: 'u1' });
+      expect(visible.map((p) => p.id)).toEqual(['p-all', 'p-selected']);
+      // Без аргумента — все проекты (ADMIN/LEAD и внутренние задачи).
+      expect((await repo.list()).map((p) => p.id)).toEqual(['p-all', 'p-selected', 'p-author']);
+    });
+
+    it('list(viewer) учитывает грант по группе (PROP-133)', async () => {
+      const { repo } = await make();
+      await repo.save(makeProject('p-group', {
+        ownerId: 'owner-1',
+        members: { 'owner-1': ProjectRole.OWNER },
+        groupMembers: { team: ProjectRole.EDITOR },
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      }));
+
+      expect((await repo.list({ userId: 'u1', groups: ['team'] })).map((p) => p.id)).toEqual(['p-group']);
+      // Чужая группа — доступа нет.
+      expect(await repo.list({ userId: 'u1', groups: ['other'] })).toEqual([]);
+      expect(await repo.list({ userId: 'u1' })).toEqual([]);
+    });
+
+    it('create: состояние доступа по умолчанию — владелец, без групп и «всем» (PROP-133)', async () => {
+      const { repo } = await make();
+      const project = repo.create('Демо', 'u1');
+      expect(project.members).toEqual({ u1: ProjectRole.OWNER });
+      expect(project.groupMembers).toBeUndefined();
+      expect(project.everyoneRole).toBeUndefined();
+      await repo.save(project);
+      const stored = await repo.load(project.id);
+      expect(stored?.members).toEqual({ u1: ProjectRole.OWNER });
+      expect(stored?.groupMembers).toBeUndefined();
+      expect(stored?.everyoneRole).toBeUndefined();
     });
 
     it('mutate: правка применяется и сохраняется, возвращается сохранённый проект', async () => {

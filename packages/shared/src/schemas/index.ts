@@ -24,6 +24,7 @@ import {
   TODO_PRIORITIES,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey, SessionParticipantRole } from '../types/index.js';
+import { normalizeProjectAccessRole } from '../types/project-access.js';
 import { ToolCapability } from '../types/tools.js';
 
 /**
@@ -44,6 +45,30 @@ export const statusMessageTypeSchema = z.nativeEnum(StatusMessageType);
 /** Zod-схемы канонических ключей иконок/цветов (единые для project и session). */
 export const projectIconKeySchema = z.enum(PROJECT_ICON_KEYS);
 export const projectColorKeySchema = z.enum(PROJECT_COLOR_KEYS);
+
+/**
+ * PROP-133: роль доступа к проекту (входной контракт записи состояния
+ * доступа). Неизвестная роль → `400 VALIDATION_ERROR` (fail-closed).
+ */
+export const projectAccessRoleSchema = z.enum(['owner', 'editor', 'viewer']);
+
+/**
+ * PROP-133 §3.1: роль режима «всем пользователям» (`everyone_role`).
+ *
+ * Только `viewer`/`editor`: роль `owner` всем пользователям не выдаётся
+ * (эскалация прав) — роут режет такое значение `400 VALIDATION_ERROR`,
+ * значит и схема его не принимает (контракт схемы и роута совпадает).
+ */
+export const projectEveryoneRoleSchema = z.enum(['viewer', 'editor']);
+
+/**
+ * PROP-133: производное состояние видимости проекта — **только чтение/DTO**
+ * (во входные схемы не входит: значение выводится из состояния списка доступа).
+ */
+export const projectVisibilitySchema = z.enum(['author', 'selected', 'all']);
+
+/** PROP-133: карта грантов (субъект → роль). */
+export const projectMembersSchema = z.record(z.string().min(1), projectAccessRoleSchema);
 
 /** true, если значение — канонический ключ иконки (для записи и чтения). */
 export function isProjectIconKey(value: unknown): value is ProjectIconKey {
@@ -74,10 +99,12 @@ export function normalizeColorKey(value: unknown): ProjectColorKey | undefined {
 /**
  * ADR-106 Ф4: нормализация роли участника сессии. Каноническая роль → как
  * есть; всё прочее — **fail-closed** (`viewer`, только чтение).
+ *
+ * Канонический нормализатор — `normalizeProjectAccessRole` (PROP-133 §1): один
+ * источник истины для ролей проекта и участников сессии.
  */
 export function normalizeSessionParticipantRole(value: unknown): SessionParticipantRole {
-  if (value === 'owner' || value === 'editor' || value === 'viewer') return value;
-  return 'viewer';
+  return normalizeProjectAccessRole(value);
 }
 
 export const tokenUsageSchema = z.object({
@@ -283,6 +310,11 @@ export const projectCreateSchema = z.object({
   color: projectColorKeySchema.optional().nullable(),
   workspace: z.string().optional(),
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
+  // PROP-133 §3.1: состояние списка доступа. `everyone_role: null` — проект
+  // не опубликован; `visibility` во вход не принимается (производная величина).
+  members: projectMembersSchema.optional(),
+  group_members: projectMembersSchema.optional(),
+  everyone_role: z.union([projectEveryoneRoleSchema, z.null()]).optional(),
 });
 
 /** ADR-107: проектная политика памяти (undefined — не менять). */
@@ -316,6 +348,10 @@ export const projectUpdateSchema = z.object({
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
   memory: projectMemoryUpdateSchema.optional(),
   executor: projectExecutorUpdateSchema.optional(),
+  // PROP-133 §3.1: состояние списка доступа (см. `projectCreateSchema`).
+  members: projectMembersSchema.optional(),
+  group_members: projectMembersSchema.optional(),
+  everyone_role: z.union([projectEveryoneRoleSchema, z.null()]).optional(),
 });
 
 /**
