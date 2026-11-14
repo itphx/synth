@@ -14,6 +14,7 @@ import { useInstructionsStore } from './instructionsStore'
 import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
+import { useTerminalsStore } from './terminalsStore'
 import { useProjectLogStore } from './projectLogStore'
 import { useInstanceCapabilitiesStore } from './instanceCapabilitiesStore'
 import type { TransportMode } from './useUIStore'
@@ -1736,6 +1737,27 @@ export function createDispatcher(): EventDispatcher {
     if (type.startsWith('process.') || type.startsWith('child.')) {
       useProcessesStore.getState().applyEvent(type, payload)
       notifyBackgroundRun(type, payload)
+      return
+    }
+
+    // PROP-132: события терминалов (`terminal.created|updated|exited|deleted`).
+    // Терминал принадлежит проекту, а не сессии, поэтому разбираем ДО
+    // проверки `sid`: id терминала лежит в payload. Потока вывода по шине
+    // нет (сервер его не публикует) — вывод приходит отдельным HTTP-потоком
+    // NDJSON (`GET /api/v2/terminals/:id/stream`).
+    if (type.startsWith('terminal.')) {
+      // События терминала идут в канал **сессии** (у терминала без привязки их
+      // нет вовсе), а сам payload привязку не несёт — session_id берём из
+      // канала: без него запись в реестре осталась бы «без сессии», и живой
+      // привязанный терминал не нашёлся бы (плавающая кнопка, шапка сессии).
+      useTerminalsStore
+        .getState()
+        .applyEvent(
+          type,
+          sid && sid !== INSTANCE_CHANNEL_ID
+            ? { ...payload, session_id: payload.session_id ?? sid }
+            : payload,
+        )
       return
     }
 

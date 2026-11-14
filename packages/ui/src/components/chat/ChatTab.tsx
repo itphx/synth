@@ -32,6 +32,7 @@ import {
   useContextWindowWarning,
 } from '@/hooks/useContextWindowUsage'
 import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
+import { TerminalFloatingButton } from './TerminalFloatingButton'
 import { useBackgroundHotkey } from './useBackgroundHotkey'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -133,6 +134,8 @@ export function ChatTab({ tab }: ChatTabProps) {
   const setStreamRetry = useChatStore(s => s.setStreamRetry)
 
   const sessionId = tab.data.sessionId || tab.id
+  // Проект сессии — для плавающей кнопки «Терминал» (терминал живёт в проекте).
+  const activeProjectId = useSessionsStore((s) => s.sessions.find((x) => x.id === sessionId)?.project_id ?? null)
   // Пагинация истории: есть ли сообщения старше загруженной страницы
   // (кнопка «Загрузить старые» над лентой).
   const historyPage = useChatStore(s => s.historyPageBySession[sessionId])
@@ -994,7 +997,7 @@ export function ChatTab({ tab }: ChatTabProps) {
   }, [sessionId, setStickyNotes, notify, t])
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden bg-background w-full">
+    <div className="relative flex flex-1 flex-col overflow-hidden bg-background w-full">
       {summarizationPending && !isSubagent && (
         <div className="flex items-center gap-2 px-4 py-2 bg-status-warning/10 border-b border-status-warning/20">
           <span className="text-xs text-status-warning flex-1">
@@ -1146,6 +1149,14 @@ export function ChatTab({ tab }: ChatTabProps) {
         <DebugModal
           debug={debugMessage.debug_data as import('@/stores/chatStore').DebugData}
           onClose={closeDebugModal}
+        />
+      )}
+
+      {/* Плавающая кнопка «Терминал» — если у сессии есть живой терминал. */}
+      {!isSubagent && (
+        <TerminalFloatingButton
+          sessionId={sessionId}
+          projectId={activeProjectId ?? undefined}
         />
       )}
     </div>

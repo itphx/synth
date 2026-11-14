@@ -13,6 +13,7 @@ import {
 import { SettingsActions, SettingsItem, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
 import { UiScaleControl } from './UiScaleControl'
 import { ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
+import { TerminalSettings } from './TerminalSettings'
 
 interface AppearanceDraft {
   themeMode: ThemeMode
@@ -190,6 +191,10 @@ export const AppearanceSettings = () => {
         cancelTestId="appearance-cancel"
         resetTestId="appearance-reset"
       />
+
+      {/* PROP-132: настройки терминала — свой раздел со своим сохранением
+          (профиль `preferences.terminal` + локальный кэш). */}
+      <TerminalSettings />
     </SettingsPanel>
   )
 }

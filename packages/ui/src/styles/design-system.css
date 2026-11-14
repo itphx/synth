@@ -416,6 +416,11 @@
   --font-mono: "IBM Plex Mono", "JetBrains Mono", "Fira Code", "SFMono-Regular", "Menlo", monospace;
   --font-family-sans: var(--font-sans);
   --font-family-mono: var(--font-mono);
+  /* Терминальный стек: моноширинная основа интерфейса + встроенный символьный
+     шрифт (Nerd Fonts) для powerline/PUA-глифов. Глобальная типографика не
+     меняется — переменную использует только терминал (`lib/terminalFonts.ts`).
+     Fallback-шрифт объявлен в `styles/index.css` (@font-face). */
+  --font-terminal: var(--font-mono), "Synth Nerd Symbols", monospace;
 }
 
 /* Канон высоты контролов (ADR-072): текстовые/числовые поля, селекты и кнопки

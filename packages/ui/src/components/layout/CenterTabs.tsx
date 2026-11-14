@@ -33,6 +33,8 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
   // ADR-101 (Э7): пайплайн и прогон пайплайна.
   pipeline: 'links-line',
   'pipeline-run': 'time',
+  // PROP-132: терминал.
+  terminal: 'terminal-box',
 }
 
 /**
@@ -87,6 +89,11 @@ function TabTooltipLabel({ tab }: { tab: CenterTab }) {
     return projectName
       ? t('center.tabTooltip.pipelineRun', { title: tab.title, project: projectName })
       : t('center.tabTooltip.noProject.pipelineRun', { title: tab.title })
+  }
+  if (tab.type === 'terminal') {
+    return projectName
+      ? t('center.tabTooltip.terminal', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.terminal', { title: tab.title })
   }
   return projectName
     ? t('center.tabTooltip.fileEditor', { title: tab.title, project: projectName })

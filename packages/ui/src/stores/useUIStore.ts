@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ThemeMode } from '../lib/theme/themes'
+import {
+  DEFAULT_TERMINAL_PREFERENCES,
+  normalizeTerminalPreferences,
+  type TerminalPreferences,
+} from '@/lib/terminalPreferences'
 import { profileService } from '@/lib/api/profileService'
 import { useFilesStore } from './filesStore'
 import {
@@ -66,7 +71,15 @@ interface RightPanelState {
 /** Ключ-обёртка сворачивания блока «Другие проекты» в левой панели (Files/Git). */
 export const OTHER_PROJECTS_COLLAPSE_KEY = '__others__'
 
-export type CenterTabType = 'chat' | 'file-viewer' | 'file-editor' | 'commit-detail' | 'pipeline' | 'pipeline-run'
+export type CenterTabType =
+  | 'chat'
+  | 'file-viewer'
+  | 'file-editor'
+  | 'commit-detail'
+  | 'pipeline'
+  | 'pipeline-run'
+  // PROP-132: вкладка терминала (интерактивная shell-сессия).
+  | 'terminal'
 
 export interface CenterTab {
   id: string
@@ -82,6 +95,8 @@ export interface CenterTab {
     pipelineId?: string
     /** ADR-101: id прогона пайплайна (вкладка «Прогон»). */
     runId?: string
+    /** PROP-132: id терминала (вкладка «Терминал»). */
+    terminalId?: string
   }
   editingState?: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 }
@@ -279,6 +294,16 @@ interface UIStore {
   /** Вид ленты чата (персистится; см. `ChatViewMode`). */
   chatViewMode: ChatViewMode
   setChatViewMode: (mode: ChatViewMode) => void
+
+  /**
+   * Настройки внешнего вида терминала (PROP-132).
+   *
+   * Локальный кэш: терминал должен стартовать сразу, до ответа профиля.
+   * Источник истины — профиль (`preferences.terminal`), сюда пишется
+   * отсортированная копия.
+   */
+  terminalPreferences: TerminalPreferences
+  setTerminalPreferences: (prefs: TerminalPreferences) => void
 
   /**
    * Ключ развёрнутой панели ответа (`MessageGroup.key`, `null` — свёрнуто).
@@ -644,6 +669,10 @@ export const useUIStore = create<UIStore>()(
         set({ chatViewMode: mode })
       },
 
+      terminalPreferences: DEFAULT_TERMINAL_PREFERENCES,
+      setTerminalPreferences: (prefs) =>
+        set({ terminalPreferences: normalizeTerminalPreferences(prefs) }),
+
       expandedChatGroup: null,
       toggleChatExpanded: (key) =>
         set((state) => ({
@@ -733,6 +762,7 @@ export const useUIStore = create<UIStore>()(
         chatViewMode: state.chatViewMode,
         expandedChatGroup: state.expandedChatGroup,
         revealedServiceGroups: state.revealedServiceGroups,
+        terminalPreferences: state.terminalPreferences,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -771,6 +801,8 @@ export const useUIStore = create<UIStore>()(
                 .filter((key): key is string => typeof key === 'string' && key !== '')
                 .slice(-MAX_REVEALED_SERVICE_GROUPS)
             : [],
+          // Настройки терминала: битое значение → дефолты (нормализация).
+          terminalPreferences: normalizeTerminalPreferences(p?.terminalPreferences),
         }
       },
     }

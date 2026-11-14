@@ -22,6 +22,11 @@ const TOOL_ICON_MAP: Record<string, IconName> = {
   task: 'brain',
   question: 'question',
   profile_update: 'user-3',
+  terminal_list: 'terminal-box',
+  terminal_open: 'terminal-box',
+  terminal_read: 'terminal-box',
+  terminal_write: 'terminal-box',
+  terminal_close: 'terminal-box',
 }
 
 export function getToolIcon(toolName: string): IconName {
@@ -50,6 +55,11 @@ export function getToolDisplayName(toolName: string): string {
     git_checkout: 'Checkout',
     task: 'Task',
     question: 'Question',
+    terminal_list: 'Terminals',
+    terminal_open: 'Terminal',
+    terminal_read: 'Term read',
+    terminal_write: 'Term write',
+    terminal_close: 'Term close',
   }
   return names[toolName] || toolName
 }

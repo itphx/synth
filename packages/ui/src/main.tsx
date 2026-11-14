@@ -7,6 +7,8 @@ import { initDeviceClasses } from "./lib/device"
 import { applyChatScale, readChatScale } from "./lib/uiScale"
 import "react-toastify/dist/ReactToastify.css"
 import "@xyflow/react/dist/style.css"
+// PROP-132: стили эмулятора терминала (xterm.js).
+import "@xterm/xterm/css/xterm.css"
 import "./styles/index.css"
 
 initializeLocale()

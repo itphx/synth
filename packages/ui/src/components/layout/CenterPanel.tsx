@@ -8,6 +8,7 @@ import { FileEditorTab } from '../chat/FileEditorTab'
 import { CommitDetailTab } from '../chat/CommitDetailTab'
 import { PipelineTab } from '../pipelines/PipelineTab'
 import { PipelineRunTab } from '../pipelines/PipelineRunTab'
+import { TerminalView } from '../terminal/TerminalView'
 
 function EmptyState() {
   const { t } = useI18n()
@@ -55,6 +56,9 @@ export function CenterPanel() {
         return <PipelineTab tab={activeTab} />
       case 'pipeline-run':
         return <PipelineRunTab tab={activeTab} />
+      // PROP-132: вкладка терминала.
+      case 'terminal':
+        return <TerminalView tab={activeTab} />
       default:
         return <EmptyState />
     }

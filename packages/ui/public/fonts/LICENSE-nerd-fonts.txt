@@ -1,0 +1,77 @@
+Symbols Nerd Font Mono (Symbols Only) — v3.5.1
+================================================
+
+Источник:  https://github.com/ryanoasis/nerd-fonts
+Релиз:     v3.5.1 (NerdFontsSymbolsOnly.tar.xz)
+Файл:      SymbolsNerdFontMono-Regular.ttf
+Лицензия:  MIT (текст ниже) + лицензии сторонних наборов иконок (см. раздел
+           «Атрибуция upstream-наборов»).
+
+В каталоге лежит ПРОИЗВОДНОЕ произведение: подмножество глифов (сабсет)
+Symbols Nerd Font Mono, переведённое в woff2. Начертания глифов не менялись;
+сокращено только множество кодпоинтов, а ширина advance приведена к 0.6 em
+(нормализация под ячейку моноширинного терминала — см. README.md рядом).
+
+
+--------------------------------------------------------------------
+MIT License (MIT)
+--------------------------------------------------------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2014 Ryan L McIntyre
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+--------------------------------------------------------------------
+Атрибуция upstream-наборов иконок
+--------------------------------------------------------------------
+
+Symbols Nerd Font — агрегат: в один шрифт собраны глифы сторонних наборов,
+и у каждого набора своя лицензия. Таблица ниже взята из README.md архива
+NerdFontsSymbolsOnly.tar.xz (v3.5.1); колонка «В сабсете» — фактический
+состав поставки в packages/ui/public/fonts/symbols-nerd-mono.woff2.
+
+| Набор                | Upstream                                              | Версия         | Лицензия     | В сабсете                              |
+|----------------------|-------------------------------------------------------|----------------|--------------|----------------------------------------|
+| Codicons             | https://github.com/microsoft/vscode-codicons          | 0.0.45         | CC BY 4.0    | да (EA60–EC84, 540 глифов)             |
+| Devicons             | https://github.com/devicons/devicon                   | 2.17.0         | MIT          | да (E700–E958, 601)                    |
+| extraglyphs          | https://github.com/source-foundry/Hack                | -               | MIT          | да (EE00–EE0B, 12)                     |
+| Font Awesome         | https://github.com/FortAwesome/Font-Awesome           | 6.5.1          | CC BY 4.0    | да (ED00–EFCF, F000–F1FF, 1232)        |
+| Font Awesome Extension | https://github.com/AndreLZGava/font-awesome-extension | 0.0.3        | MIT          | да (E200–E2A9, 170)                    |
+| Font Logos           | https://github.com/lukas-w/font-logos                 | 1.3.0          | unlicensed   | нет                                   |
+| MaterialDesign       | https://github.com/Templarian/MaterialDesign-Font     | Oct 6, 2022     | Apache 2.0  | нет (plane 15 исключена из сабсета)    |
+| Octicons             | https://github.com/primer/octicons                    | 18.3.0         | MIT          | да (F400–F533, 310)                    |
+| Seti and original    | https://github.com/jesseweed/seti-ui                  | 0.8.1          | MIT          | да (E600–E6BB, 160)                    |
+| Pomicons             | https://github.com/gabrielelana/pomicons              | 1.001          | OFL 1.1 RFN  | да (E000–E00A, 11)                     |
+| Powerline Extra      | https://github.com/ryanoasis/powerline-extra-symbols  | 1.200          | MIT          | да (E0A3, E0B4–E0D7, 33)              |
+| Powerline Symbols    | https://github.com/powerline/powerline                | 1.000 (ca 2013) | MIT         | да (E0A0–E0A2, E0B0–E0B3, 7)          |
+| Power Symbols IEC    | https://github.com/jloughry/Unicode                   | Feb 2015        | MIT          | да (23FB–23FE, 2B58, 5)               |
+| Weather Icons        | https://github.com/erikflowers/weather-icons          | 2.0.10 (1.100)  | OFL 1.1     | да (E300–E3E3, 228)                    |
+| Nerd Fonts «custom»  | https://github.com/ryanoasis/nerd-fonts (папка custom) | v3.5.1         | MIT          | да (E5FA–E6BB, 33)                     |
+
+Прочие кодпоинты сабсета — знаки Unicode (U+2665, U+26A1, U+276C–U+2771,
+U+2630), наследующие лицензию шрифта-агрегата (MIT).
+
+Полные тексты лицензий сторонних наборов (CC BY 4.0, OFL 1.1, Apache 2.0)
+публикуются их авторами по указанным выше ссылкам; MIT-текст для
+MIT-наборов совпадает с приведённым выше.
+
+[SIL-RFN]: http://scripts.sil.org/cms/scripts/page.php?item_id=OFL_web_fonts_and_RFNs#14cbfd4a

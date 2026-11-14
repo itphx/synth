@@ -59,6 +59,7 @@ import { questionsApi } from './questions'
 import { processesApi } from './processes'
 import { worktreesApi } from './worktrees'
 import { executionApi } from './execution'
+import { terminalsApi } from './terminals'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -518,6 +519,16 @@ export type {
   ExecutionImagesWarmDto,
   ExecutionImageWarmResult,
 } from './execution'
+// PROP-132: терминалы (интерактивная shell-сессия, вкладка центральной области).
+export type {
+  TerminalStatus,
+  TerminalDto,
+  TerminalListOptions,
+  TerminalListPage,
+  CreateTerminalInput,
+  TerminalPatch,
+  TerminalOutputSnapshot,
+} from './terminals'
 
 export const synthApi = {
   fetchJSON,
@@ -594,5 +605,17 @@ export const synthApi = {
     getProcessLogs: processesApi.logs,
     stopProcess: processesApi.stop,
     removeProcess: processesApi.remove,
+  },
+  // PROP-132: терминалы — имена с префиксом домена (`list`/`get`/`close`
+  // в barrel уже заняты соседними доменами).
+  ...{
+    listTerminals: terminalsApi.list,
+    getTerminal: terminalsApi.get,
+    createTerminal: terminalsApi.create,
+    sendTerminalInput: terminalsApi.input,
+    resizeTerminal: terminalsApi.resize,
+    updateTerminal: terminalsApi.update,
+    closeTerminal: terminalsApi.close,
+    getTerminalOutput: terminalsApi.outputSince,
   },
 }

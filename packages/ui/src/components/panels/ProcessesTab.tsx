@@ -14,12 +14,19 @@ import { Toggle } from '@/components/ui/Toggle'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProcessesStore, bySession, runningCount } from '@/stores/processesStore'
+import { useActiveProject } from '@/hooks/useActiveProject'
 import { PanelTab } from './PanelTab'
+import { TerminalsSection } from './TerminalsSection'
 
 /**
  * PROP-096/097: вкладка «Процессы» правой панели — единый реестр фоновой
  * работы: шелл-процессов (`kind: 'process'`) и фоновых дочерних сессий
  * саб-агентов (`kind: 'subagent'`).
+ *
+ * PROP-132 (Ф4б): четвёртый срез — **терминалы** (`TerminalsSection`):
+ * интерактивные PTY-сессии проекта. Список терминалов — серверный
+ * (`GET /terminals?project_id=…`), живое обновление — события `terminal.*`
+ * плюс перечитывание раз в 5 с, пока секция открыта.
  *
  * Источник истины — серверный реестр (`GET /api/v2/processes`), live-обновление
  * — события `process.*`/`child.*` (диспетчер `stores/transportStore.ts`).
@@ -35,10 +42,10 @@ const LOG_POLL_MS = 2000
 const ELAPSED_TICK_MS = 1000
 
 /** Фильтр вида фоновой работы. */
-type KindFilter = 'all' | 'process' | 'subagent'
+type KindFilter = 'all' | 'process' | 'subagent' | 'terminal'
 
 /** Фильтры вида (для кнопок-переключателей). */
-const KIND_FILTERS: KindFilter[] = ['all', 'process', 'subagent']
+const KIND_FILTERS: KindFilter[] = ['all', 'process', 'subagent', 'terminal']
 
 /** Общий стиль бейджа (как в «Памяти»). */
 const BADGE = 'shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium'
@@ -75,6 +82,9 @@ export const ProcessesTab: React.FC = () => {
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeTab = centerTabs.find((tab) => tab.id === activeTabId)
   const currentSessionId = activeTab?.data?.sessionId
+
+  // Активный проект — для списка терминалов (`GET /terminals?project_id=…`).
+  const { projectId: activeProjectId } = useActiveProject()
 
   const sessions = useSessionsStore((s) => s.sessions)
   const sessionNames = useMemo(() => {
@@ -258,9 +268,11 @@ export const ProcessesTab: React.FC = () => {
           <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {t('processes.title')}
           </h3>
-          <span className="text-xs text-muted-foreground" data-testid="processes-count">
-            {t('processes.count', { count: runs.length })}
-          </span>
+          {kindFilter !== 'terminal' && (
+            <span className="text-xs text-muted-foreground" data-testid="processes-count">
+              {t('processes.count', { count: runs.length })}
+            </span>
+          )}
         </div>
 
         <div
@@ -297,7 +309,16 @@ export const ProcessesTab: React.FC = () => {
         </div>
       </div>
 
-      {loadError && (
+      {/* Секция терминалов — свой срез (серверный список проекта). */}
+      {kindFilter === 'terminal' && (
+        <TerminalsSection
+          projectId={activeProjectId}
+          currentSessionId={currentSessionId ?? null}
+          onlyCurrent={onlyCurrent}
+        />
+      )}
+
+      {kindFilter !== 'terminal' && loadError && (
         <div
           role="alert"
           className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
@@ -307,7 +328,7 @@ export const ProcessesTab: React.FC = () => {
         </div>
       )}
 
-      {loading && runs.length === 0 && (
+      {kindFilter !== 'terminal' && loading && runs.length === 0 && (
         <div
           role="status"
           className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground"
@@ -318,7 +339,7 @@ export const ProcessesTab: React.FC = () => {
         </div>
       )}
 
-      {!loading && runs.length === 0 && (
+      {kindFilter !== 'terminal' && !loading && runs.length === 0 && (
         <div
           className="py-6 text-center text-muted-foreground"
           data-testid="processes-empty"
@@ -329,7 +350,7 @@ export const ProcessesTab: React.FC = () => {
         </div>
       )}
 
-      {runs.length > 0 && (
+      {kindFilter !== 'terminal' && runs.length > 0 && (
         <ul className="space-y-2 min-w-0" data-testid="processes-list">
           {runs.map((run) => {
             const isRunning = run.status === 'running'
@@ -463,7 +484,7 @@ export const ProcessesTab: React.FC = () => {
       )}
 
       {/* Лог фонового процесса — под списком. */}
-      {logId && logRun && (
+      {kindFilter !== 'terminal' && logId && logRun && (
         <div
           className="min-w-0 space-y-2 rounded-lg border border-border bg-card p-3"
           data-testid="processes-log"
