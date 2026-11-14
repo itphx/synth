@@ -85,6 +85,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DECISION_MODEL` | ADR-084: decision-layer model (e.g. `clef-flash`) | `decision.model` |
 | `SYNTH_METRICS_ENABLED` | ADR-094: enable `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer token for `/metrics` (takes precedence over the file `{dataDir}/secrets/metrics-token`); the value is never logged | — |
+| `SYNTH_TERMINAL_ENABLED` | PROP-132: master switch of the interactive-terminal contour (`false` — the whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED`, live terminals are closed, new ones are not created) | `terminal.enabled` (`true`) |
 | `SYNTH_EXECUTION_MODE` | ADR-077: execution topology — `inline` (default) \| `remote` (remote executor, ADR-077 step 7b; fail-closed at startup) | `inline` |
 | `SYNTH_EXECUTION_REMOTE_URL` | ADR-077: executor address list (comma-separated) | — |
 | `SYNTH_EXECUTION_TOKEN` | ADR-077: path/reference to the executor token (NOT a value, invariant 13) | — |
@@ -2945,6 +2946,45 @@ metrics:
   annotations or `ServiceMonitor`, dashboards `grafana.dashboards`, rules `alerts`
   ([charts/synth/README.md](../../charts/synth/README.md) §"Наблюдаемость"). Dev stand —
   `docker-compose.observability.yml` ([deploy/observability/README.md](../../deploy/observability/README.md)).
+
+### Terminals (`terminal.*`, PROP-132)
+
+Interactive terminals (PTY sessions, [PROP-132](../arch_decisions/prop-132-ui-terminal.md)):
+list, create, output stream, input, resize. A terminal belongs to a project; binding it to a session
+is optional. The terminal registry lives **in process memory**: a terminal does not survive an
+instance restart (a property, not a defect).
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `terminal.enabled` | Master switch of the terminal contour. `false` — the whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED`, live terminals are closed, new ones are not created. Env — `SYNTH_TERMINAL_ENABLED` | `true` |
+
+**Runtime override.** `terminal.enabled` can be toggled in the UI (runtime in `settings.json`/PG,
+API — `GET/PUT/DELETE /api/v2/settings/terminal`). Priority: `SYNTH_TERMINAL_ENABLED` > runtime (UI) >
+`config.yaml` > default `true`; with an env value the toggle is locked (source `env`, the UI answers
+`409 CONFLICT`).
+
+**Applied immediately** (`restartRequired: false`): toggling the switch closes live terminals
+(events `terminal.exited` + `terminal.deleted` with reason `disabled`) and forbids creating new ones —
+an instance restart is not required.
+
+```yaml
+terminal:
+  enabled: false
+```
+
+- The section is `terminalConfigSchema` (`packages/shared/src/config/types.ts`); the flag in
+  `config.yaml` is optional: “not set” differs from “explicitly set to `true`” — that is how the API
+  distinguishes the `config` and `default` sources.
+- The priority rule is `resolveTerminalEnabled`
+  (`packages/core/src/engine/terminal/config.ts`): it is read both by the process start-up (service
+  composition in `deps.ts`) and by the `/api/v2/settings/terminal` route.
+- The terminal service is **one per process** (`engine/terminal/service.ts`), composed in
+  `server/app/deps.ts` (managed — `backend/app/deps.ts`); it is stopped on graceful shutdown
+  (`stopTerminalService` → `dispose()`).
+- Metrics — `synth_terminal_sessions{status}` / `synth_terminal_bytes_total{op}`
+  ([OBSERVABILITY.md](../OBSERVABILITY.md) (RU)); terminal actions are audited as
+  `terminal.open`/`terminal.input`/`terminal.close` in the command-execution log (ADR-136, metadata
+  only).
 
 ### Authority (`authority.*`, ADR-106)
 

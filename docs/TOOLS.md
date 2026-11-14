@@ -31,6 +31,7 @@
 | Модели (ADR-115) | `list_models` — каталог моделей инстанса (capability `models`, группа `read`, plan разрешён, рабочий каталог не нужен): `provider/model` + `modalities`, **текущая** модель сессии и `defaultFor` (семейства, где модель назначена в `attachments.modalityModels`); без аргументов — компактный ответ (текущая + aux, без дампа каталога: у больших каталогов — сотни моделей), фильтры `modality`/`provider` и `limit` 1..50 (по умолчанию 20); модели без известных модальностей пропускаются и считаются отдельно |
 | Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (ADR-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
+| Терминалы (PROP-132) | `terminal_list`, `terminal_open`, `terminal_read` (чтение; plan разрешён), `terminal_write`, `terminal_close` (мутации; plan запрещён) — capability `terminal`, группа правил `terminal`; параметры, лимиты и правило «нет `cwd` — нет открытия» — в разделе «Терминалы» ниже |
 
 **Общий предел вывода** (`tools.outputMaxLines`/`tools.outputMaxBytes`, по умолчанию
 2000 строк / 51 200 байт) применяется в единой точке вызова (`executeToolDef`)
@@ -203,6 +204,63 @@ core получает доступ через серверный контрак�
 | `ssh_tunnel` | `host`, `user` (**обязателен** — как у `ssh_exec`), `port` (порт подключения к ssh-хосту; по умолчанию 22), `key_id` — как у `ssh_exec`; `direction` (обязателен: `local` — слушать здесь и пробрасывать через ssh-хост (`-L`), `remote` — просить ssh-хост слушать и пробрасывать обратно (`-R`)), `listen_port` (обязателен, 1…65535), `target_host` (обязателен для `local`; для `remote` — по умолчанию `127.0.0.1`), `target_port` (обязателен, 1…65535), `timeout_ms` (необязателен, 0…600000; `0`/не задан — без таймаута) | `ssh` (клиент) | Слушающий сокет — **всегда `127.0.0.1`** (жёстко, без параметра: `0.0.0.0` открыл бы проброс наружу); политикой портов проверяется **целевой** порт (`target_port`), а не порт подключения к ssh; **SOCKS-проброс (`-D`) не поддерживается** — у него нет целевого порта, то есть нечего проверять политикой; туннель **всегда фоновый**: возвращает `process_id` + путь журнала и живёт до `process_stop` |
 
 **Deny не останавливает ход** (ADR-070 §2.9.1, обновлено 2026-10-29): решение permission-слоя `deny` — ролевое (`matchedRule: 'role.unavailable'`), отказ пользователя (ask→deny) или запрет политики — возвращается модели обычным `tool_result` с причиной; следующая LLM-итерация запускается, и модель может выбрать другой инструмент или ответить текстом. Защита от зацикливания — doom-loop (одинаковые легальные вызовы), лимит шагов/итераций (`AgentDefinition.maxSteps`; `session.max_iterations` — только шаги пайплайнов) и счётчик одинаковых deny-вызовов (5 подряд → ход завершается). `session.role_tool_blocked` — только фоллбек-текст, если модель так и не дала содержательного ответа (статус `stopped`).
+
+## Терминалы (PROP-132)
+
+Тулы `terminal_*` дают агенту доступ к **интерактивным терминалам** (PTY) того же
+контура, что и HTTP-роуты `/api/v2/terminals*`: тот же сервис на процесс
+(`engine/terminal/service.ts`), тот же реестр живых терминалов, тот же аудит
+(`terminal.open`/`terminal.input`/`terminal.close` — только метаданные, ADR-136).
+
+- **Capability `terminal`** — отдельная от `shell`: терминал — доменный ресурс
+  инстанса (реестр в памяти процесса + PTY на точке исполнения), а не
+  примитив ядра. Группа правил — `terminal` (ключ совпадает со значением
+  capability, поэтому правило `permission.rules.terminal` работает и по именам
+  встроенных тулов, и по capability плагинного тула); группа отключаема
+  админом через `tools.disabled`.
+- **Plan-режим:** чтение (`terminal_list`, `terminal_read`) **разрешено**,
+  мутации (`terminal_open`, `terminal_write`, `terminal_close`) — **заблокированы**
+  (`isPlanBlockedTool`): план ничего не исполняет.
+- **Доступность — по мастер-выключателю инстанса** `terminal.enabled`
+  (env `SYNTH_TERMINAL_ENABLED` > runtime-«Терминалы» > `config.yaml` >
+  default `true`). Выключено → тулы недоступны модели с причиной `policy`
+  (`computeToolAvailability`, seam `getTerminalEnabled`), а не «deny в момент
+  вызова». Отдельно: терминалу нужен **PTY** у точки исполнения — нет PTY →
+  причина `dependency` (`RuntimeDeps.pty`), как у отсутствующей программы.
+- **Скоуп — проект сессии.** Видны только терминалы проекта текущей сессии;
+  чужой терминал выглядит как отсутствующий (`terminal.tool.not_found`).
+
+| Тул | Параметры | Capability | Plan | Ограничения |
+|---|---|---|---|---|
+| `terminal_list` | `session_id?` (только терминалы этой сессии), `include_exited?` (по умолчанию — только живые) | `terminal` (read) | разрешён | Вывод — строки `key=value`: `id`, `cwd`, `shell`, `status`, `can_write`, `session_id`, `size` |
+| `terminal_open` | `cols?` (по умолчанию 80, 1…1000), `rows?` (по умолчанию 24, 1…1000), `session_id?` (привязка; по умолчанию — текущая сессия), `title?` | `terminal` (write) | **запрещён** | Каталог вычисляет сервер; **параметра `cwd` нет** (см. правило ниже); повторное открытие в том же каталоге возвращает тот же живой терминал |
+| `terminal_read` | `terminal_id`, `since?` (только фрагменты с `seq > since`), `tail?` (последние N строк, 1…5000), `strip_ansi?` (по умолчанию `false`) | `terminal` (read) | разрешён | Кап **32 КиБ** текста (хвост обрезается, `metadata.truncated`); **ANSI по умолчанию сохраняется** (цвета/позиционирование значимы), `strip_ansi: true` вырезает escape-последовательности; `tail` отбрасывает завершающий пустой элемент (`'a\nb\nc\nd\n'` + `tail: 2` → `'c\nd'`) |
+| `terminal_write` | `terminal_id`, `data` (нажатые клавиши), `enter?` (по умолчанию `false` — без перевода строки) | `terminal` (write) | **запрещён** | С `enter: true` строка проходит **тот же чекер, что у `execute_shell`** (`checkShellCommand`): запрещённая политикой команда в терминал не уходит; требующая подтверждения (`ask`) — тоже (тул не умеет спрашивать пользователя: для таких команд — `execute_shell`) |
+| `terminal_close` | `terminal_id` | `terminal` (write) | **запрещён** | Оболочка завершается, запись удаляется из реестра |
+
+**Правило «нет `cwd` — нет открытия».** Рабочий каталог терминала вычисляет
+сервер: `session.worktree.directory` (ADR-114) → `project.workspace` (ADR-075).
+Параметра `cwd` у тулов **нет** — иначе терминал уехал бы за периметр проекта.
+У сессии без проекта терминалы недоступны вовсе (`terminal.tool.project_required`):
+терминал — ресурс проекта.
+
+**Примеры вызовов.**
+
+```text
+terminal_list {}                                  → список терминалов проекта
+terminal_open { cols: 120, rows: 40 }             → открыть терминал (id в ответе)
+terminal_write { terminal_id: "term_…", data: "npm test", enter: true }
+terminal_read  { terminal_id: "term_…", tail: 20 } → последние 20 строк вывода
+terminal_read  { terminal_id: "term_…", since: 42, strip_ansi: true }
+terminal_close { terminal_id: "term_…" }
+```
+
+**Ввод с `enter` — под тем же shell-guard'ом, что `execute_shell`**
+(`protected-paths.json`, `external_directory`, `deniedCommandPrefixes`; ADR-029/ADR-136).
+Отказ понятен модели: запрещённая команда не отправляется в терминал, а ответ
+(`terminal.tool.command_denied` / `terminal.tool.command_requires_approval`)
+объясняет причину и предлагает `execute_shell` для команд, требующих
+подтверждения пользователем.
 
 ## Песочный запуск (`sandbox_exec`, ADR-135)
 

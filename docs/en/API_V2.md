@@ -1790,6 +1790,9 @@ instance without ADMIN), `404 NOT_FOUND`, `409 CONFLICT` (name taken). Name — 
 | GET | `/api/v2/settings/metrics/status` | ADMIN (managed) / auth (core) | Live snapshot: `{enabled, running, source, restartRequired, ready, storage:"ok"\|"degraded", storageBackend, version, uptimeSec, exposition:{series,bytes,droppedSeries}, token, endpoints}` |
 | PUT | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Bearer token for `/metrics` (write-only): `{token}` (trimmed length ≥16) → `{dataDir}/secrets/metrics-token` (`0600`, atomic), applied **immediately**; short/empty → 400 `VALIDATION_ERROR`; token from env → 409 `CONFLICT`; the value is never returned |
 | DELETE | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Delete the token file (idempotent) → `{token:{configured,source}}`; token from env → 409 `CONFLICT` |
+| GET | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Master switch of the terminals (`terminal.enabled`, PROP-132): `{enabled:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean}, envLocked:boolean, restartRequired:false}`; priority `SYNTH_TERMINAL_ENABLED` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled` > `true` |
+| PUT | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | `{enabled:boolean}` — runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`: live terminals are closed and creating new ones is forbidden); a non-boolean → 400 `VALIDATION_ERROR`; a value fixed by env → 409 `CONFLICT`; the response is the same as for `GET` |
+| DELETE | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Reset the runtime value to env/config/default with the same live application (the response is the same as for `GET`); a value fixed by env → 409 `CONFLICT` |
 | GET | `/api/v2/settings/limits` | ADMIN (managed) / auth (core) | Limit of heavy session operations (`limits.sessionOpsPerMinute`): `{sessionOpsPerMinute:number (0 — no limit), saved:number\|null, defaults:number, source:"env"\|"runtime"\|"config"\|"default", envLocked:boolean, restartRequired:false}`; priority `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` > runtime (`settings.json`/PG) > `config.yaml` `limits.sessionOpsPerMinute` > `10`. Limits `POST /sessions/import`, `POST /sessions/import-batch`, `GET /sessions/:id/export`, `POST /sessions/:id/fork`, `POST /sessions/:id/merge` (see §5.5) |
 | PUT | `/api/v2/settings/limits` | ADMIN (managed) / auth (core) | `{sessionOpsPerMinute:number}` — an integer ≥ 0 (`0` — no limit; `-1`/fractional → 400 `VALIDATION_ERROR`), a runtime override, **applied immediately** (`restartRequired:false`: the limiters resolve the value on every request); the value comes from env and another one is requested → 409 `CONFLICT`; the response is the same as `GET`; audit `scope:"limits"` |
 | DELETE | `/api/v2/settings/limits` | ADMIN (managed) / auth (core) | Reset the runtime value to env/config/default (same response as `GET`); audit `scope:"limits"` |
@@ -3129,6 +3132,77 @@ restart, `GET /api/v2/execution/profiles` returns the **running** catalogue. The
 section-wide address (`execution.remote.url`) and the mode (`execution.mode`) stay at
 the config/env level — the instance pool takes its address from there.
 
+### 5.43 Terminals — `/api/v2/terminals` (both, PROP-132)
+
+Interactive terminals (PTY sessions, [PROP-132](../arch_decisions/prop-132-ui-terminal.md)).
+A terminal **belongs to a project**; binding it to a session is optional. The PTY
+is raised on the execution point (the execution port, ADR-077) — the same place
+commands run. The terminal registry lives **in the process memory**: a terminal
+does not survive an instance restart (a property, not a defect).
+
+The `createTerminalRoutes` factory is shared by core and backend; managed passes
+the project access rule (`resolveProjectAccess`, PROP-133).
+
+| Method | Path | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/terminals` | auth | Terminal list `{terminals, total, offset, limit, next_offset}` (ADR-118); filters `project_id`/`session_id`, `limit` (default 50, max 200)/`offset`; a non-integer `limit`/`offset` → 400 `VALIDATION_ERROR`. Terminals of projects the user cannot read never appear in the output |
+| POST | `/api/v2/terminals` | auth (**write**) | Open a terminal → 201 `{terminal}`; body `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` is required). `cwd` from the body is **ignored** — the server computes the working directory (`session.worktree.directory` → `project.workspace`). The session must belong to the project. No `project_id` → 400 `VALIDATION_ERROR`, unknown project → 404 `NOT_FOUND`, no rights → 403 `FORBIDDEN` |
+| GET | `/api/v2/terminals/:id` | auth | Terminal snapshot `{terminal}` (the record + `can_write` + `attached_clients`); unknown terminal → 404 `TERMINAL_NOT_FOUND` |
+| PATCH | `/api/v2/terminals/:id` | auth (**write**) | Point patch `{title?, session_id?}` → `{terminal}`; `null` clears the field; the session must belong to the terminal's project |
+| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Close the terminal → **204** (the PTY is killed, `terminal.exited` + `terminal.deleted` are published) |
+| GET | `/api/v2/terminals/:id/output?since=N` | auth | Output snapshot from the ring buffer: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` is the cursor (only chunks with `seq > since`). `truncated` — part of the output was evicted from the buffer, the client must re-read the output |
+| GET | `/api/v2/terminals/:id/stream?since=N` | auth | Output stream `application/x-ndjson`: frames `{"seq":n,"data":"..."}` — first the replay from the buffer (`seq > since`), then the live output; the exit frame is `{"seq":n,"data":"","exit_code":…,"signal":…}`. The stream closes when the client disconnects (abort) |
+| POST | `/api/v2/terminals/:id/input` | auth (**write**) | Write to the terminal `{data}` → **204**; a frame larger than 16 KiB → 413 `TERMINAL_LIMIT`, too frequent (>20 frames/s) → 429 `TERMINAL_LIMIT` |
+| POST | `/api/v2/terminals/:id/resize` | auth (**write**) | New size `{cols, rows}` → **204** |
+
+**Access boundary (invariants 16/21).** The right to a terminal is the right to
+its **project**, and it is checked **at the boundary**: the guard resolves the
+terminal and its project **once** and puts them into the Hono context; the
+handlers contain no access checks. The access kind follows the HTTP method
+(`read`/`write`): a project member with the viewer role (`VIEWER`) reads the
+terminal but **cannot** write to it (invariant 21). Managed role rules: the
+project owner; `ADMIN`/`LEAD` — cross-cutting access; a member — `read` with any
+role, `write` with `OWNER`/`EDITOR`. In standalone (core) the rule of the single
+instance owner applies.
+
+**Error codes.** Machine codes of the terminal service: `TERMINALS_DISABLED`
+(403 — the instance switch `terminal.enabled`; the whole `/api/v2/terminals*`
+contour answers with this code), `TERMINAL_NOT_FOUND` (404), `TERMINAL_LIMIT`
+(409 — the per-project/per-instance terminal limit, 429 — the input rate, 413 —
+the input frame size), `TERMINAL_UNAVAILABLE` (503 — the PTY is unavailable in
+this environment), `TERMINAL_INVALID_REQUEST` (400).
+
+**Events.** Terminal metadata arrives in the **terminal's session channel**
+(`terminal.created`/`terminal.updated`/`terminal.exited`/`terminal.deleted`; no
+new transport channels). **The output stream does not go through the bus** — it
+is a volatile class: a separate NDJSON stream `GET /terminals/:id/stream` and
+catch-up via `GET /terminals/:id/output?since=`.
+
+### 5.44 Terminal settings — `/api/v2/settings/terminal` (both, PROP-132)
+
+The master switch of the interactive terminals (`terminal.enabled`,
+[PROP-132](../arch_decisions/prop-132-ui-terminal.md)). The factory
+`createTerminalSettingsRoutes` is shared by core and backend; managed passes the
+ADMIN guards, core — `requireAuth`.
+
+| Method | Path | RBAC (managed) | Purpose / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean}, envLocked:boolean, restartRequired:false}`; priority `SYNTH_TERMINAL_ENABLED` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled` > `true` |
+| PUT | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean}` — runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`: `TerminalService.setEnabled` closes the live terminals and forbids creating new ones — no restart needed); a non-boolean → 400 `VALIDATION_ERROR`; a value fixed by env → 409 `CONFLICT`; the response is the same as for `GET` |
+| DELETE | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Reset the runtime value to env/config/default with the same live application (the response is the same as for `GET`); a value fixed by env → 409 `CONFLICT` |
+
+**Value sources.** `env` — the `SYNTH_TERMINAL_ENABLED` variable (`true`/`1`/`false`/`0`);
+`runtime` — the override from the UI; `config` — `terminal.enabled` in `config.yaml`;
+`default` — `true` (the contour is enabled). An env value **fixes** the switch: the runtime
+value from the UI does not override it (409 `CONFLICT`), and the flag in the config is
+optional — “not set” differs from “explicitly set to `true`”, that is how the API
+distinguishes `config` and `default`.
+
+**Behaviour when disabled.** The live terminals are closed (events `terminal.exited` +
+`terminal.deleted` with reason `disabled`), creating new ones is forbidden, and the
+whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED` (the contour
+boundary, invariant 16).
+
 ## 6. Sources
 
 | Component | File |
@@ -3146,6 +3220,7 @@ the config/env level — the instance pool takes its address from there.
 | Memory: the portal and the metrics (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
 | External credentials (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (client, service, registry, audit), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | Background runs: the registry, the services, the HTTP contour (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
+| Terminals: the service, the ring buffer, the audit, the metrics, the HTTP contour (PROP-132) | `packages/core/src/engine/terminal/*`, `packages/core/src/server/routes/terminals.ts`, `packages/core/src/server/app/terminal-service.ts`, `packages/shared/src/types/bus-events.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

@@ -18,7 +18,11 @@
 > `browser_type`/`browser_press`/`browser_wait`/`browser_screenshot`/`browser_close` идут
 > портом `ExecutionPort.browserCall` в проектный пул класса `browser` (`browserProfile`/
 > `browserMcpServer`), без MCP-discovery; скриншот публикуется вложением сообщения; **актуальная версия
-> протокола — 7** (FS-операции исполнителя: `POST /fs/stat`, `POST /fs/realpath`, `POST /fs/list`,
+> протокола — 8** (PTY-сессии исполнителя: `POST /pty/open`, `POST /pty/:id/input`,
+> `POST /pty/:id/resize`, `POST /pty/:id/close`, `GET /pty/:id/status`,
+> `GET /pty/:id/stream`
+> + признак `features.pty`, план терминалов Ф2a; FS-операции исполнителя: `POST /fs/stat`,
+> `POST /fs/realpath`, `POST /fs/list`,
 > `POST /fs/read-text`, `POST /fs/sniff`, `POST /fs/read-bytes`, `POST /fs/read-raw`,
 > `POST /fs/write-file`, `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`,
 > `POST /fs/download`, `PUT /fs/upload`, `POST /fs/hash`
@@ -960,7 +964,7 @@ interface ExecutionPort {
 | `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
 | `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
 | `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; сигнал уходит **группе процессов** (потомки shell-формы гаснут вместе с ней), идемпотентно; `404` — процесс не найден |
-| `GET` | `/capabilities` | `{ protocol: 7, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments, sshAgent, secretsSpawn, fs }, limits?: { timeoutMs, maxOutputBytes } }` — рукопожатие версии протокола и состава toolchain'а; `limits` — **аддитивное** поле (эффективные потолки исполнителя: таймаут команды и буфер вывода): старый control plane его просто не читает, а у старого исполнителя поля нет — это норма |
+| `GET` | `/capabilities` | `{ protocol: 8, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments, sshAgent, secretsSpawn, fs, pty }, limits?: { timeoutMs, maxOutputBytes } }` — рукопожатие версии протокола и состава toolchain'а; `limits` — **аддитивное** поле (эффективные потолки исполнителя: таймаут команды и буфер вывода): старый control plane его просто не читает, а у старого исполнителя поля нет — это норма |
 | `POST` | `/fs/stat` | тело: `{ path, cwd? }` → `200 { stat: { kind, size, mtimeMs } }`; протокол **7**, ADR-135 Ф1: сведения о файле/каталоге **у исполнителя** (в split-топологии рабочий каталог живёт там) |
 | `POST` | `/fs/realpath` | тело: `{ path, cwd? }` → `200 { path }` — канонический путь (симлинки разыменовываются); решение permission-слоя принимается в control plane по этому пути |
 | `POST` | `/fs/list` | тело: `{ path, cwd? }` → `200 { entries: [{ name, kind, size }] }` — записи каталога (в файловом порядке; сортировку делает вызывающий) |
@@ -978,6 +982,12 @@ interface ExecutionPort {
 | `GET` | `/mcp/servers` | `[{ name, status, toolCount, error? }]` — состояние MCP-серверов исполнителя (`idle`/`up`/`down`); значения `env` не отдаются |
 | `GET` | `/mcp/tools` | `[{ server, name, description, inputSchema }]` — инструменты всех **поднятых** MCP-серверов |
 | `POST` | `/mcp/call` | тело: `{ server, tool, arguments? }` → `200 { content, isError, attachments? }`; `attachments[]` — аддитивное поле протокола **5** (ADR-115): нетекстовые блоки результата (`image`/`audio`/`resource.blob`) в base64 без `data:`-префикса, `{mime, base64, name?}`, до 25 МиБ на файл и 20 МиБ на вызов, при `isError` не собираются; неизвестный сервер/инструмент → `404`, ошибка MCP → `500` с текстом ошибки (без секретов) |
+| `POST` | `/pty/open` | тело: `{ id?, cwd, shell?, args?, cols, rows, env? }` → `201 { id, pid?, cols, rows }` (протокол **8**, план терминалов Ф2a): открыть псевдотерминал **на исполнителе**; `id` — ключ идемпотентности (повтор с тем же `id` → `200` с тем же `id`, терминал второй раз не заводится); `cwd` вне workspace → `400 cwd_outside_workspace`; превышен лимит живых сессий → `429 pty_limit`; контур выключен → `501 pty_unsupported` |
+| `POST` | `/pty/:id/input` | тело: `{ data }` → `200 { id, bytes }` — запись во вход терминала; ввод больше потолка `SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES` (16 КиБ) → `413 payload_too_large`; сессии нет → `404 pty_not_found` |
+| `POST` | `/pty/:id/resize` | тело: `{ cols, rows }` → `200 { cols, rows }` — изменение размера терминала; размер вне диапазона → `400 invalid_request`; сессии нет → `404 pty_not_found` |
+| `POST` | `/pty/:id/close` | → `200 { id, closed: true }` — закрытие сессии: `SIGTERM` **группе** процессов терминала → через 1 с `SIGKILL`; идемпотентно; сессии нет → `404 pty_not_found` |
+| `GET` | `/pty/:id/status` | → `200 { id, pid?, cols, rows, exited, exitCode?, signal?, seq }` — состояние PTY-сессии и номер последнего кадра вывода; сессии нет → `404 pty_not_found` |
+| `GET` | `/pty/:id/stream?since=` | → **NDJSON** (`application/x-ndjson`): кадры `{"seq":n,"data":"…"}` — сначала буфер повтора (256 КиБ), затем живые кадры; `since` — номер последнего кадра, который видел клиент (по умолчанию `0` — весь буфер); нецелое/отрицательное → `400 invalid_request`; поток закрывается с выходом терминала |
 | `GET` | `/health` | живость исполнителя |
 
 **FS-роуты чтения содержимого и записи — аддитивные; версия протокола не повышается.**
@@ -997,7 +1007,7 @@ control plane и пул исполнителей обновляются **вме
 
 ```json
 {
-  "protocol": 7,
+  "protocol": 8,
   "toolchain": {
     "git": "git version 2.39.2",
     "rg": "ripgrep 14.1.0",
@@ -1014,7 +1024,8 @@ control plane и пул исполнителей обновляются **вме
     "mcpAttachments": true,
     "sshAgent": true,
     "secretsSpawn": true,
-    "fs": true
+    "fs": true,
+    "pty": true
   },
   "limits": { "timeoutMs": 1800000, "maxOutputBytes": 33554432 }
 }
@@ -1051,20 +1062,30 @@ control plane и пул исполнителей обновляются **вме
   процессов** команды (через 5 с — `SIGKILL`), потомков не остаётся.
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
-- **Версия протокола — 7** (было 1 → 2 → 3 → 4 → 5 → 6 → 7): добавлены MCP-эндпоинты (v2),
+- **Версия протокола — 8** (было 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8): добавлены MCP-эндпоинты (v2),
   фоновые процессы (v3), **секреты вызова** (v4, ADR-077 «Обновлено 2026-10-26», (б)),
   **вложения MCP-результата** (v5, ADR-115: `attachments[]` в `POST /mcp/call`,
   признак `features.mcpAttachments`), **ssh-агент + секреты в фоне** (v6, PROP-124 §2/§7:
-  поле `mode` у секрета вызова + признаки `features.sshAgent`/`features.secretsSpawn`) и
+  поле `mode` у секрета вызова + признаки `features.sshAgent`/`features.secretsSpawn`),
   **FS-операции** (v7, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b: `POST /fs/stat`, `POST /fs/realpath`, `POST /fs/list`,
   `POST /fs/read-text`, `POST /fs/sniff`, `POST /fs/read-bytes`, `POST /fs/read-raw`,
   `POST /fs/write-file`,
   `POST /fs/mkdir`, `POST /fs/remove`, `POST /fs/rename`, `POST /fs/download`,
   `PUT /fs/upload`, `POST /fs/hash`
-  + признак `features.fs`).
+  + признак `features.fs`) и **PTY-сессии** (v8, план терминалов Ф2a: `POST /pty/open`,
+  `POST /pty/:id/input`, `POST /pty/:id/resize`, `POST /pty/:id/close`,
+  `GET /pty/:id/status`, `GET /pty/:id/stream` + признак `features.pty`).
   Старый исполнитель их не знает ⇒ **control plane и
   исполнитель обязаны быть одной версии** (см. «Операционные следствия» в
   [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md)).
+- **PTY-сессии — только с протоколом 8 (требование, а не деградация).**
+  Исполнитель объявляет `features.pty: true`; control plane **не выбирает** адрес без
+  этого признака для терминала, а пул без такого адреса даёт отказ ⇒ **fail-closed**:
+  тихого возврата к терминалу в control plane нет (терминал живёт там же, где
+  toolchain и рабочий каталог). Старый исполнитель (≤ 7) продолжает работать для
+  команд и FS-операций — требование касается только терминала.
+  Сам контур выключается оператором (`SYNTH_EXECUTOR_PTY=0`) — тогда все PTY-роуты
+  отвечают `501 pty_unsupported`, а `features.pty` не объявляется.
 - **FS-операции — только с протоколом 7 (требование, а не деградация).**
   Исполнитель объявляет `features.fs: true`; control plane **не выбирает** адрес без
   этого признака для файловых тулов, а пул без такого адреса даёт отказ
@@ -1227,6 +1248,60 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
   поднимается **лениво** — тем же кодом, который материализует секреты
   (`ensureSshSweepStarted`, `execution/secret-env.ts`).
 
+### 4.2.3. PTY-сессии исполнителя (протокол 8, план терминалов Ф2a)
+
+Псевдотерминал живёт **на исполнителе**: там, где есть toolchain и рабочий
+каталог проекта. В split-топологии control plane тонкий, поэтому терминал
+управляется по проводу: control plane открывает сессию, пишет ввод, читает
+вывод.
+
+- **Сервис — `PtyService`** (`packages/executor/src/pty-service.ts`): реестр
+  сессий **в памяти** процесса исполнителя (у исполнителя нет каталога данных
+  инстанса — после рестарта терминалы не переживают, это ожидаемо).
+- **Запуск — общий код core**: исполнитель подключается к core точечным
+  динамическим `import()` и открывает сессию через `InlineExecutionPort.openPty`
+  → `getPtyProvider()` → нативный модуль. Собственного `spawn` у исполнителя
+  **нет** (иначе remote и inline разошлись бы по семантике терминала); тем же
+  кодом core сделаны окружение сессии (`TERM`/`COLORTERM`, очистка ambient) и
+  закрытие (`SIGTERM` группе → 1 с → `SIGKILL`).
+- **Containment `cwd`** — тот же `resolveContainedCwd`, что у команд: терминал
+  вне workspace не заводится (`400 cwd_outside_workspace`).
+- **Идемпотентность открытия** — по `id`: повторный `POST /pty/open` с тем же
+  `id` возвращает ту же сессию (`200`, `created: false`) — терминал второй раз
+  не заводится. Умершая сессия с тем же `id` **заменяется** новой.
+- **Вывод — кадрами с номерами**: у каждого кадра свой `seq` (монотонный),
+  склейка окном **10–15 мс** (иначе поток терминала упирается в тысячи мелких
+  HTTP-кадров в секунду). Буфер повтора — **256 КиБ**: клиент, переподключившийся
+  к потоку, дочитывает вывод с места обрыва (`GET /pty/:id/stream?since=`).
+- **Лимит живых сессий** — `SYNTH_EXECUTOR_PTY_MAX` (по умолчанию **4**):
+  превышение → `429 pty_limit`. Закрытые сессии слот не занимают.
+- **Idle-reaper** — сессия, которая давно не использовалась, закрывается:
+  таймер `unref`, порог `SYNTH_EXECUTOR_PTY_IDLE_MS` (по умолчанию **2 дня**).
+  Таймер не держит процесс исполнителя.
+- **Потолок ввода** — `SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES` (по умолчанию
+  **16 КиБ**): ввод больше потолка → `413 payload_too_large` (тело уже пришло —
+  обрезать keystroke'и нельзя).
+- **Остановка исполнителя** закрывает все терминалы (`dispose()`) — зомби-процессов
+  не остаётся.
+
+| Env | По умолчанию | Назначение |
+|---|---|---|
+| `SYNTH_EXECUTOR_PTY` | `1` | контур PTY включён (`0` → все PTY-роуты отвечают `501 pty_unsupported`) |
+| `SYNTH_EXECUTOR_PTY_MAX` | `4` | лимит **живых** PTY-сессий |
+| `SYNTH_EXECUTOR_PTY_IDLE_MS` | `172800000` | порог простоя сессии, мс (2 дня) — idle-reaper |
+| `SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES` | `16384` | потолок тела ввода терминала, байт |
+
+**Коды причин PTY** (в теле ошибки — `reason` + `code`):
+
+| `reason` | HTTP | `code` | Когда |
+|---|---|---|---|
+| `pty_unsupported` | `501` | `EPTY` | контур выключен или нативный модуль терминала не загрузился |
+| `pty_not_found` | `404` | `ENOPTY` | сессии нет (или она завершена) |
+| `pty_limit` | `429` | `ELIMIT` | превышен лимит живых сессий |
+| `cwd_outside_workspace` | `400` | `EWORKSPACE` | `cwd` вне workspace исполнителя |
+| `payload_too_large` | `413` | — | ввод больше потолка |
+| `invalid_request` | `400` | — | невалидное тело / размер терминала вне диапазона |
+
 ### 4.3. Пул адресов, отказ и параллелизм
 
 - **Адреса — список** (`execution.remote.url`): клиент выбирает адрес **по кругу**;
@@ -1321,13 +1396,13 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
-- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 7`) и
+- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 8`) и
   состав toolchain'а (`git`/`rg`/`sh`/`bash`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
   `git`/`rg`/`bash` доступными там, где их нет. Версия протокола — **контракт совместимости**:
   исполнитель версии 1 не знает MCP-эндпоинтов, версии 2 — фоновых процессов, версии 3 —
   секретов вызова, версии 4 — вложений MCP-результата, версии 5 — режима `agent` у секрета
-  и секретов в фоновом запуске (§4.2), версии 6 — FS-операций, поэтому control
+  и секретов в фоновом запуске (§4.2), версии 6 — FS-операций, версии 7 — PTY-сессий, поэтому control
   plane и пул исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
   Поле `features` — **аддитивное**: `background: true` означает, что исполнитель умеет
   `/exec/spawn` (фоновые процессы, ADR-077 шаг 7c), `secrets: true` — что принимает
@@ -1338,7 +1413,9 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   что умеет FS-операции (`/fs/stat`, `/fs/realpath`, `/fs/list`, `/fs/read-text`, `/fs/sniff`,
   `/fs/read-bytes`, `/fs/read-raw`, `/fs/write-file`, `/fs/mkdir`, `/fs/remove`, `/fs/rename`,
   `/fs/download`, `/fs/upload`, `/fs/hash`,
-  протокол 7, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b).
+  протокол 7, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b), `pty: true` — что умеет PTY-сессии
+  (`/pty/open`, `/pty/:id/input`, `/pty/:id/resize`, `/pty/:id/close`, `/pty/:id/status`,
+  `/pty/:id/stream`, протокол 8, план терминалов Ф2a).
 - **Поле `limits` — тоже аддитивное** (§4.2): эффективные потолки исполнителя
   (таймаут команды и буфер вывода). Старый control plane его не читает; **у старого
   исполнителя поля нет — это норма**, тогда лимиты пула неизвестны. В смешанном пуле
@@ -1475,6 +1552,10 @@ Workspace проекта (`project.workspace`, [ADR-075](./arch_decisions/adr-07
 | Timeout вызова | `execution.remote.timeoutMs` (дефолт 30 с) + лимит тула | порт + исполнитель |
 | Idle-timeout / max-lifetime | для динамических pod'ов (варианты (б)/(в)) | исполнитель / оператор |
 | Лимит одновременных команд | `execution.remote.concurrency` (backend) + лимит на worker'а | backend + worker |
+| Лимит PTY-сессий | `SYNTH_EXECUTOR_PTY_MAX` (4) — превышение → `429 pty_limit` | исполнитель |
+| Простой PTY-сессии | `SYNTH_EXECUTOR_PTY_IDLE_MS` (2 дня) — idle-reaper закрывает терминал | исполнитель |
+| Ввод в терминал | `SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES` (16 КиБ) — больше → `413` | исполнитель |
+| Буфер повтора вывода терминала | 256 КиБ (внутри исполнителя) | исполнитель |
 | Лимит вывода | 100 КБ (shell), 20 КБ (git), 200 строк (rg), `maxBuffer` 10 МБ | порт/исполнитель |
 | `runAsNonRoot`, `allowPrivilegeEscalation: false` | как у backend'а (`charts/synth/values.yaml`) | pod worker'а |
 | seccomp / capabilities | дефолтный seccomp-профиль K8s, `capabilities.drop: [ALL]` | pod worker'а |
@@ -1809,11 +1890,41 @@ worker — **значением** в env (`SYNTH_EXECUTOR_TOKEN`, `secretKeyRef`
 | Flavor | `pnpm install`/`build`/`typecheck` | `helm lint` | `ffmpeg` | Прочее |
 |---|---|---|---|---|
 | `slim` | нет | нет | нет | control plane **без** toolchain'а |
-| `core` | **нет** (лёгкий образ: без pnpm/corepack) | нет | нет | hard deps + tier 0 |
-| `dev` | **да** (pnpm 12.14.0 + corepack) | **да** (tier 5) | **да** (media-тир) | tier 1 + tier 4 + БД + buildah |
+| `core` | **нет** (лёгкий образ: без pnpm/corepack) | нет | нет | hard deps + tier 0 + tier 6 (терминальный) |
+| `dev` | **да** (pnpm 12.14.0 + corepack) | **да** (tier 5) | **да** (media-тир) | tier 1 + tier 4 + БД + buildah + tier 6 |
 | `devops` | **да** | **да** | **да** | dev + tier 2 (`kubectl`/`kustomize`/`tofu`/`ansible`) + диаг + docker CLI |
-| `browser` | нет | нет | **да** | tier 3 (Playwright + Chromium) — браузерные сценарии |
+| `browser` | нет | нет | **да** | tier 3 (Playwright + Chromium) — браузерные сценарии + tier 6 |
 | `full` | **да** | **да** | **да** | всё вышеперечисленное |
+
+- **Терминальный тир (tier 6) — только в образе исполнителя** (`docker/install-tier-6.sh`):
+  `zsh`, `tmux` (≥ 3.3), `ncurses-term`/`ncurses-base`, `procps`, `vim-tiny` и
+  Oh My Zsh в `/opt/oh-my-zsh`. Образы all-in-one/backend не меняются: базовый
+  состав других образов не трогаем. `tree` и `less` в тире не повторяются — они
+  уже в tier 0.
+  - **Пин Oh My Zsh — коммит, а не тег:** репозиторий `ohmyzsh/ohmyzsh` git-тегов
+    не публикует (`git ls-remote --tags` — пусто), поэтому версия закреплена
+    коммитом в `ARG OMZ_REF` (`docker/Dockerfile.executor`) и ставится
+    shallow-фетчем по SHA с проверкой HEAD (fail-closed). В репозиторий OMZ не
+    вендорится (9.7 МБ) — качается на этапе сборки.
+  - **Конфиги — в образе:** `/etc/synth/zshrc` и `/etc/synth/tmux.conf`
+    (`docker/executor/zshrc`, `docker/executor/tmux.conf`). В `$HOME` пользователя
+    они попадают симлинками (`~/.zshrc`, `~/.tmux.conf`), которые заводит
+    `docker/executor-init.sh` при старте контейнера: при `readOnlyRootFilesystem`
+    `$HOME` — `emptyDir`, и симлинки из сборки том скрывает. Если файл у
+    пользователя уже есть — не перезаписывается (переопределение пользователя
+    важнее).
+  - **Окружение образа:** `TERM=xterm-256color`, `COLORTERM=truecolor`,
+    `LANG=C.UTF-8`, `EDITOR=vim`, `SHELL=/bin/zsh`, `TMUX_TMPDIR=/tmp`,
+    `ZSH_CACHE_DIR=$HOME/.cache/oh-my-zsh`. `execute_shell` от `$SHELL` не
+    зависит — он зовёт `bash` явно.
+  - **Writable-каталоги:** `/tmp` (сокет tmux) и `/home/synth` (`$HOME`: кэш OMZ,
+    compdump zsh, кэши npm/pnpm/pip) — оба уже примонтированы `emptyDir` при
+    `readOnlyRootFilesystem: true` (ADR-137 Ф2), отдельно ничего настраивать не
+    нужно.
+  - **Ограничения:** PTY требует `/dev/pts` — под gVisor PTY может не работать
+    (проверяется на живом кластере, ADR-137 «Runtime»). tmux внутри терминала —
+    только привычный workflow для человека, **продуктовой живучести он не даёт**:
+    backend'а у tmux нет, а сессия tmux не переживает перезапуск пода.
 
 - **Собирать монорепо умеют `dev`, `devops` и `full`** — в них есть pnpm (12.14.0,
   совпадает с `packageManager` корня) и corepack. `pnpm install` в поде идёт
@@ -1992,7 +2103,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 7**: FS-операции `/fs/stat`/`/fs/realpath`/`/fs/list`/`/fs/read-text`/`/fs/sniff`/`/fs/read-bytes`/`/fs/read-raw`/`/fs/write-file`/`/fs/mkdir`/`/fs/remove`/`/fs/rename`/`/fs/download`/`/fs/upload`/`/fs/hash` + признак `features.fs`, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b; ssh-агент для секрета вызова `mode`/`features.sshAgent` и секреты в фоновом запуске `secrets[]`/`features.secretsSpawn`, PROP-124 §2/§7; вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 8**: PTY-сессии `/pty/open`/`/pty/:id/input`/`/pty/:id/resize`/`/pty/:id/close`/`/pty/:id/status`/`/pty/:id/stream` + признак `features.pty` (план терминалов Ф2a); FS-операции `/fs/stat`/`/fs/realpath`/`/fs/list`/`/fs/read-text`/`/fs/sniff`/`/fs/read-bytes`/`/fs/read-raw`/`/fs/write-file`/`/fs/mkdir`/`/fs/remove`/`/fs/rename`/`/fs/download`/`/fs/upload`/`/fs/hash` + признак `features.fs`, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b; ssh-агент для секрета вызова `mode`/`features.sshAgent` и секреты в фоновом запуске `secrets[]`/`features.secretsSpawn`, PROP-124 §2/§7; вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -2363,3 +2474,18 @@ Split-топология технически возможна и при одн�
   ослабил бы `none`/`restricted`; вместе с ней не применяется и `networkPolicy.metricsIngress`).
   Ограничения: политики в namespace чарта (поды пулов provisioner'а — там же), CNI должен
   поддерживать NetworkPolicy, селектор — только подпись класса.
+- 2026-11-14 — **протокол 8: PTY-сессии исполнителя** (план терминалов, Ф2a). Исполнитель
+  открывает псевдотерминал **у себя** (там, где toolchain и рабочий каталог): `POST /pty/open`
+  (`{id?, cwd, shell?, args?, cols, rows, env?}` → `201 {id, pid?, cols, rows}`; `id` — ключ
+  идемпотентности, повтор → `200` с тем же `id`), `POST /pty/:id/input` (`{data}`),
+  `POST /pty/:id/resize` (`{cols, rows}`), `POST /pty/:id/close`, `GET /pty/:id/status`,
+  `GET /pty/:id/stream?since=` (NDJSON `{"seq":n,"data":"…"}`; буфер повтора 256 КиБ, склейка
+  кадров окном 10–15 мс). Сервис — `PtyService` (`packages/executor/src/pty-service.ts`): реестр
+  сессий в памяти, containment `cwd` тем же `resolveContainedCwd`, лимит живых сессий, idle-reaper
+  (таймер `unref`), закрытие всех сессий при остановке исполнителя. **Запуск — общий код core**
+  (`InlineExecutionPort.openPty` → `getPtyProvider()`): собственного `spawn` у исполнителя нет.
+  Признак — `features.pty`; контур выключается env `SYNTH_EXECUTOR_PTY=0` (тогда `501
+  pty_unsupported`). Новые причины на проводе: `pty_unsupported` (501), `pty_not_found` (404),
+  `pty_limit` (429). Env: `SYNTH_EXECUTOR_PTY`, `SYNTH_EXECUTOR_PTY_MAX` (4),
+  `SYNTH_EXECUTOR_PTY_IDLE_MS` (2 дня), `SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES` (16 КиБ). Клиентская
+  проводка в control plane — **Ф2b** (следующая фаза).

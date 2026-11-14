@@ -150,7 +150,7 @@ auth:
 ### Env-оверрайды вложенных секций (ADR-023)
 
 Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics`, `git`, `metrics`,
-`questions`, `background`, `context`, `session`, `agents`, `tools`, `authority` можно задавать
+`terminal`, `questions`, `background`, `context`, `session`, `agents`, `tools`, `authority` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -232,6 +232,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (общий предел вывода инструментов, строк; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (общий предел вывода инструментов, байт; ≥ 1) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
+| `SYNTH_TERMINAL_ENABLED` | boolean | `terminal.enabled` (PROP-132; мастер-выключатель интерактивных терминалов) |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
 | `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` | string (секрет) | `client_secret` OAuth-провайдера: `google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET` (в config не хранится; альтернатива — файл `{dataDir}/secrets/oauth/<provider>.client_secret`, см. ниже) |
@@ -3092,6 +3093,51 @@ openssl rand -hex 32 > "$SYNTH_DATA_DIR/secrets/metrics-token"
 - `/metrics` не публикуется через UI-nginx; в Helm — `metrics.enabled`, аннотации `prometheus.io/*`
   или `ServiceMonitor`, дашборды `grafana.dashboards`, правила `alerts` ([charts/synth/README.md](../charts/synth/README.md)
   §«Наблюдаемость»). Dev-стенд — `docker-compose.observability.yml` ([deploy/observability/README.md](../deploy/observability/README.md)).
+
+### Терминалы (`terminal.*`, PROP-132)
+
+Интерактивные терминалы (PTY-сессии, [PROP-132](./arch_decisions/prop-132-ui-terminal.md)):
+список, создание, поток вывода, ввод, изменение размера. Терминал принадлежит
+проекту; привязка к сессии — необязательная. Реестр терминалов — **в памяти
+процесса**: терминал не переживает рестарт инстанса (свойство, а не дефект).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `terminal.enabled` | Мастер-выключатель терминального контура. `false` — весь контур `/api/v2/terminals*` отвечает `403 TERMINALS_DISABLED`, живые терминалы закрываются, новые не создаются. Env — `SYNTH_TERMINAL_ENABLED` | `true` |
+
+**Runtime-override.** `terminal.enabled` можно переключить в UI (runtime в
+`settings.json`/PG, API — `GET/PUT/DELETE /api/v2/settings/terminal`).
+Приоритет: `SYNTH_TERMINAL_ENABLED` > runtime (UI) > `config.yaml` > default
+`true`; при env-значении тумблер заблокирован (источник `env`, в UI — `409
+CONFLICT`).
+
+**Применяется сразу** (`restartRequired: false`): переключение выключателя
+закрывает живые терминалы (события `terminal.exited` + `terminal.deleted` с
+причиной `disabled`) и запрещает создание новых — рестарт инстанса не нужен.
+
+```yaml
+terminal:
+  enabled: false
+```
+
+```bash
+# выключить терминальный контур инстанса
+SYNTH_TERMINAL_ENABLED=false
+```
+
+- Секция — `terminalConfigSchema` (`packages/shared/src/config/types.ts`); флаг
+  в `config.yaml` необязателен: «не задано» отличается от «явно задано `true`» —
+  по этому API различает источники `config` и `default`.
+- Правило приоритета — `resolveTerminalEnabled`
+  (`packages/core/src/engine/terminal/config.ts`): его читают и старт процесса
+  (композиция сервиса в `deps.ts`), и роут `/api/v2/settings/terminal`.
+- Сервис терминалов — **один на процесс** (`engine/terminal/service.ts`),
+  собирается в `server/app/deps.ts` (managed — `backend/app/deps.ts`); на
+  graceful shutdown гасится (`stopTerminalService` → `dispose()`).
+- Метрики — `synth_terminal_sessions{status}` / `synth_terminal_bytes_total{op}`
+  ([OBSERVABILITY.md](./OBSERVABILITY.md)); аудит действий терминала —
+  `terminal.open`/`terminal.input`/`terminal.close` в журнале исполнений
+  команд (ADR-136, только метаданные).
 
 ### Полномочия (authority) (`authority.*`, ADR-106)
 
