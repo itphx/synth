@@ -5,7 +5,7 @@
 > **Дата:** 2026-11-09
 > **Источник:** выделено из [PROP-064](./prop-064-agent-browser.md) (2026-11-09); исходная идея — D19/`Фичи.md` (Terminal), 2026-09-16.
 > **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-113](./adr-113-background-processes.md), [ADR-114](./adr-114-git-worktrees.md), [ADR-135](./adr-135-execution-contour.md), [ADR-136](./adr-136-shell-trust.md), [ADR-137](./adr-137-executor-isolation.md), [ADR-140](./adr-140-project-access-sharing.md), [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)
-> **Обновлено:** 2026-11-14 — решения по месту, живучести, правам, агенту, внешнему виду и PTY-провайдеру.
+> **Обновлено:** 2026-11-15 — отмечена фактическая реализация (см. «Статус в коде»); до этого 2026-11-14 — решения по месту, живучести, правам, агенту, внешнему виду и PTY-провайдеру.
 
 ## Решение (предложение)
 
@@ -100,15 +100,16 @@ PTY поднимается на точке исполнения — там же,
 
 ## Статус в коде
 
-**Не реализовано.** Проверено по репозиторию (`packages/**`, без `dist/`/`node_modules/`):
+**Реализовано** (проверено по репозиторию `packages/**`, без `dist/`/`node_modules/`); ADR ещё не принят — статус остаётся предложением.
 
-- `execute_shell` есть, PTY/stdin в порту нет (`docs/EXECUTION.md`); протокол исполнителя — 7, PTY-маршрутов и `features.pty` нет.
-- xterm.js, `node-pty` и `@homebridge/node-pty-prebuilt-multiarch` не используются; вида вкладки `terminal` нет.
-- Событий `terminal.*`, волатильного класса событий и HTTP-роутов `/terminals*` нет; настройки `terminal.enabled` и `/api/v2/settings/terminal` нет.
-- Capability `terminal` и тулов `terminal_*` нет; в `ToolCapability` её нет.
-- `preferences.terminal`, карточек терминалов в «Фоновых процессах» и «Спросить агента» нет; ассета шрифта, `terminalFonts.ts` и `@font-face` нет.
-- zsh/Oh My Zsh/tmux/`ncurses-term` в образе исполнителя нет; `/etc/synth/tmux.conf` нет.
-- `!`-shell-режим композера отсутствует (ADR-126) — он ждёт терминал.
+- **Порт/провайдер:** `ExecutionPort.openPty` + `PtyHandle`/`PtyOpenRequest` + признак `pty` (`execution/ports/execution-port.ts`), провайдер `execution/pty/*` на `@homebridge/node-pty-prebuilt-multiarch@0.15.0` (ленивый `import()`, нет модуля → `EPTY`); реализации — inline, pooled, remote.
+- **Исполнитель:** протокол **8**, `features.pty`, маршруты `/pty/{open,:id/input,:id/resize,:id/close,:id/status,:id/stream}` (поток — NDJSON), `PtyService`, `SYNTH_EXECUTOR_PTY*`; клиент — `packages/executor/src/pty-client.ts` (NDJSON, `EPTY`/`ENOPTY`/`ELIMIT`, `stream_lost`, без реконнекта).
+- **Ядро:** `engine/terminal/*` (`TerminalService`, кольцевой буфер 512 КиБ, `synth_terminal_*`, аудит `terminal.open|input|close`), роуты `createTerminalRoutes` (`CRUD`, `/output`, `/stream`), `/api/v2/settings/terminal` и мастер-выключатель `terminal.enabled` (env > runtime > config > `true`, live).
+- **Агент:** тулы `terminal_list|open|read|write|close` (`engine/tools/terminals.ts`), capability `terminal`, plan — только чтение, `terminal_write {enter:true}` через `checkShellCommand`.
+- **UI:** вкладка `terminal` (xterm.js), вывод — **HTTP-поток NDJSON** (событий `terminal.data` в шине нет; метаданные — `terminal.created|updated|exited|deleted`), темы и шрифт (`lib/theme/terminal.ts`, `terminalFonts.ts` + `public/fonts`), карточки в «Фоновых процессах», плавающая кнопка, `preferences.terminal`.
+- **Образ исполнителя:** tier 6 — zsh + Oh My Zsh (пин-коммит), tmux ≥ 3.3, `ncurses-term`, `/etc/synth/zshrc` + `/etc/synth/tmux.conf`.
+
+**Осталось:** сквозная проверка в браузере и в split-режиме (control plane ↔ исполнитель по проводу); кластерная проверка PTY (`readOnlyRootFilesystem`, gVisor); решение по терминальному тиру во flavor `core` (сейчас tier 6 ставится в `core` и `browser`); обновление тестовых сценариев.
 
 ## Связи
 
@@ -129,3 +130,4 @@ PTY поднимается на точке исполнения — там же,
 
 - 2026-11-09 — предложение создано выделением терминальной части из PROP-064; зафиксировано, что PTY живёт на точке исполнения, а поток идёт через существующую шину.
 - 2026-11-14 — решения по месту, живучести, правам, агенту, внешнему виду и PTY-провайдеру (исследование refs/openchamber, refs/pi-agent-hub, refs/dots).
+- 2026-11-15 — зафиксирована фактическая реализация (порт/провайдер, протокол 8, сервис и роуты, тулы, UI-вкладка, тир образа) и остаток работ; статус — по-прежнему предложение.

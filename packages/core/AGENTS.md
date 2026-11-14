@@ -659,7 +659,8 @@
   окружение = `process.env` минус `NODE_CHANNEL_FD`/`ARGV0`/`BASH_ENV`/`ENV`/`BASH_XTRACEFD`/
   `ELECTRON_RUN_AS_NODE` + `TERM=xterm-256color`/`COLORTERM=truecolor` + `env` запроса, `cwd` —
   абсолютный путь к существующему каталогу (fail-closed); периметр сессии проверяет вызывающий
-  (как shell-тул). Исполнитель (протокол 8, `features.pty`) — следующая фаза.
+  (как shell-тул). Исполнитель — протокол **8** + `features.pty` + `/pty/*`
+  (серверная часть и клиент `pty-client.ts` — `packages/executor/AGENTS.md`).
 - `metrics/` — ADR-094: `registry.ts` (counter/gauge/histogram, лимит серий 2000,
   `synth_metrics_series_dropped_total`, `addCollector`), `renderer.ts` (text exposition 0.0.4,
   golden-тесты), `http.ts` (Hono-middleware: `method`/шаблон `route`/`status`, `in_flight`,
@@ -2540,7 +2541,11 @@
   `resolveTerminalEnabled` — приоритет **env `SYNTH_TERMINAL_ENABLED` > runtime
   (`settings.json`/PG) > `config.yaml` `terminal.enabled` > default `true`**; флаг
   в конфиге **необязателен**, чтобы «не задано» отличалось от «явно задано `true`»
-  — по этому API различает источники `config`/`default`). HTTP-контур —
+  — по этому API различает источники `config`/`default`).
+  **Терминал не дублирует spawn:** своего запуска процесса у сервиса нет —
+  только core PTY-провайдер через `ExecutionPort.openPty` (`execution/pty/*`,
+  `getPtyProvider`); в remote-режиме PTY живёт на исполнителе, control plane
+  его не поднимает (ADR-135/137). HTTP-контур —
   `server/routes/terminals.ts` (`createTerminalRoutes`), сборка сервиса для
   инстанса — `server/app/terminal-service.ts` (`createTerminalService`).
   **Сервис собирается в `server/app/deps.ts` (managed — `backend/app/deps.ts`):
