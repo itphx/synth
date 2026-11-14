@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "build": "tsup && chmod +x dist/cli.js",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "lint": "eslint src/ --max-warnings 0"
