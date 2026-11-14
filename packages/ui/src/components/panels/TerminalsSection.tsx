@@ -135,7 +135,7 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
     [closeTerminal, notify, t],
   )
 
-  /** Создание терминала проекта (пустое состояние). */
+  /** Создание терминала проекта (шапка секции и пустое состояние). */
   const handleCreate = useCallback(async () => {
     if (!projectId) return
     setCreating(true)
@@ -176,9 +176,28 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {t('terminals.title')}
         </span>
-        <span className="text-xs text-muted-foreground" data-testid="terminals-count">
-          {t('terminals.count', { count: terminals.length })}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <span className="text-xs text-muted-foreground" data-testid="terminals-count">
+            {t('terminals.count', { count: terminals.length })}
+          </span>
+          {/* Создание доступно всегда (не только в пустом состоянии): у проекта
+              уже могут быть терминалы, а нужен ещё один. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 shrink-0"
+            onClick={() => void handleCreate()}
+            disabled={creating || !projectId}
+            title={t('terminals.create')}
+            aria-label={t('terminals.create')}
+            data-testid="terminals-create-header"
+          >
+            <Icon
+              name={creating ? 'loader-2' : 'add'}
+              className={cn('size-3.5', creating && 'animate-spin')}
+            />
+          </Button>
+        </div>
       </div>
 
       {loadError && (

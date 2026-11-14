@@ -24,6 +24,7 @@ import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
 import { PwaInstallButton } from './PwaInstallButton'
 import { ChatViewControls } from './ChatViewControls'
+import { TerminalHeaderButton } from '@/components/chat/TerminalHeaderButton'
 import { WorkModal } from '../panels/work/WorkModal'
 import { canEditProjectContent } from '@/lib/projectAccess'
 import { canEditSessionContent } from '@/lib/sessionAccess'
@@ -103,6 +104,8 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const sessionId = activeTab?.data?.sessionId
   const sessions = useSessionsStore((s) => s.sessions)
   const activeSession = sessionId ? sessions.find((s) => s.id === sessionId) : undefined
+  // Терминал сессии живёт в проекте: без проекта создать его негде.
+  const chatProjectId = activeSession?.project_id ?? undefined
 
   // PROP-054 / ADR-130: рабочая область из шапки — доступна для чат-вкладки.
   const [workOpen, setWorkOpen] = useState(false)
@@ -436,6 +439,14 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               <Icon name="layout-masonry" className="h-5 w-5" />
             </button>
           )}
+          {/* PROP-132: терминал сессии — открыть живой или создать новый. */}
+          {isChatTab && (
+            <TerminalHeaderButton
+              sessionId={sessionId}
+              projectId={chatProjectId}
+              mobile
+            />
+          )}
           {isChatTab && <ChatViewControls variant="mobile" />}
           <QuickSettingsPopup
             onSettingsClick={onSettingsClick}
@@ -563,6 +574,9 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
               >
                 <Icon name="layout-masonry" className="size-3.5" />
               </button>
+
+              {/* PROP-132: терминал сессии — открыть живой или создать новый */}
+              <TerminalHeaderButton sessionId={sessionId} projectId={chatProjectId} />
 
               {/* Быстрый доступ к виду и плотности ленты */}
               <ChatViewControls />
