@@ -49,6 +49,8 @@ const G_RUN =
   'run-project-role (прогон → его проект): core src/server/routes/pipeline-project-routes.ts (runGuard)';
 const G_PROCESS =
   'process-access (право на сессию-владельца прогона): backend src/routes/processes.ts';
+const G_TERMINAL =
+  'terminal-project-role (read=canReadProject, write=canEditProjectContent): core src/server/routes/terminals.ts (terminalGuard)';
 const G_MCP_SESSION =
   'session-owner|ADMIN: core src/server/routes/mcp-registry.ts (sessionOwnerGuard)';
 const G_OWNER = 'owner-only (только свои записи): core src/server/routes/{identities,oauth}.ts';
@@ -74,6 +76,7 @@ const OWNERSHIP_GUARDS = new Set<string>([
   G_PROJECT,
   G_RUN,
   G_PROCESS,
+  G_TERMINAL,
   G_MCP_SESSION,
   G_OWNER,
 ]);
@@ -402,6 +405,18 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/processes/:id/logs', G_PROCESS, [404]),
   r('POST', '/api/v2/processes/:id/stop', G_PROCESS, [404], { body: {} }),
   r('DELETE', '/api/v2/processes/:id', G_PROCESS, [404]),
+
+  // --- Терминалы (PROP-132): право — по правилам проекта терминала ---
+  // Терминал принадлежит проекту: чтение — `canReadProject`, мутация —
+  // `canEditProjectContent` (`VIEWER` читает, но не мутирует — инвариант 21).
+  // Несуществующий терминал → 404 (граница разрешает ресурс до проверки роли).
+  r('GET', '/api/v2/terminals/:id', G_TERMINAL, [404]),
+  r('GET', '/api/v2/terminals/:id/output', G_TERMINAL, [404]),
+  r('GET', '/api/v2/terminals/:id/stream', G_TERMINAL, [404]),
+  r('PATCH', '/api/v2/terminals/:id', G_TERMINAL, [404], { body: { title: 'x' } }),
+  r('DELETE', '/api/v2/terminals/:id', G_TERMINAL, [404]),
+  r('POST', '/api/v2/terminals/:id/input', G_TERMINAL, [404], { body: { data: 'x' } }),
+  r('POST', '/api/v2/terminals/:id/resize', G_TERMINAL, [404], { body: { cols: 80, rows: 24 } }),
 
   // --- Профили и пулы исполнения (PROP-135 Ф6b-1) ---
   // Мутации пулов — только ADMIN (управление ресурсами provisioner'а); чужой

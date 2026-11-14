@@ -13,8 +13,21 @@
  * политик (before/after), а здесь — факт исполнения.
  */
 
-/** Тулы, исполнение которых попадает в журнал (PROP-136). */
-export const COMMAND_AUDIT_TOOLS = ['execute_shell', 'sandbox_exec'] as const;
+/**
+ * Тулы, исполнение которых попадает в журнал (PROP-136).
+ *
+ * Кроме шелл-тулов — терминальные действия (PROP-132): `terminal.open`
+ * (открытие PTY), `terminal.input` (кадр ввода), `terminal.close` (закрытие).
+ * Их пишет терминальный сервис через тот же журнал (адаптер
+ * `createCommandAuditTerminalSink`) — те же метаданные, без содержимого.
+ */
+export const COMMAND_AUDIT_TOOLS = [
+  'execute_shell',
+  'sandbox_exec',
+  'terminal.open',
+  'terminal.input',
+  'terminal.close',
+] as const;
 export type CommandAuditTool = (typeof COMMAND_AUDIT_TOOLS)[number];
 
 /** Решение permission-слоя, при котором команда исполнялась. */

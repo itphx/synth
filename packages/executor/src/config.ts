@@ -28,6 +28,10 @@
  * | `SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS` | нет | `2000` | таймаут запроса к чекеру, мс (обязателен) |
  * | `SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS` | нет | `60000` | TTL кэша вердиктов, мс (`0` — без кэша) |
  * | `SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH` | нет | `/v1/data/synth/exec/decision` | путь OPA-решения при `provider: opa` |
+ * | `SYNTH_EXECUTOR_PTY` | нет | `1` | включён ли контур PTY-сессий (протокол 8) |
+ * | `SYNTH_EXECUTOR_PTY_MAX` | нет | `4` | лимит живых PTY-сессий исполнителя |
+ * | `SYNTH_EXECUTOR_PTY_IDLE_MS` | нет | `172800000` | таймаут простоя PTY-сессии, мс (2 дня) — idle-reaper закрывает зависшие терминалы |
+ * | `SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES` | нет | `16384` | потолок тела ввода PTY, байт |
  *
  * **Fail-closed**: без токена или без корня workspace процесс не стартует —
  * исполнитель без аутентификации или без границы рабочего каталога опаснее,
@@ -84,6 +88,10 @@ export const EXECUTOR_ENV = {
   commandPolicyTimeoutMs: 'SYNTH_EXECUTOR_COMMAND_POLICY_TIMEOUT_MS',
   commandPolicyCacheTtlMs: 'SYNTH_EXECUTOR_COMMAND_POLICY_CACHE_TTL_MS',
   commandPolicyOpaPath: 'SYNTH_EXECUTOR_COMMAND_POLICY_OPA_PATH',
+  pty: 'SYNTH_EXECUTOR_PTY',
+  ptyMax: 'SYNTH_EXECUTOR_PTY_MAX',
+  ptyIdleMs: 'SYNTH_EXECUTOR_PTY_IDLE_MS',
+  ptyInputMaxBytes: 'SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES',
 } as const;
 
 /** Дефолты исполнителя. */
@@ -104,6 +112,14 @@ export const EXECUTOR_DEFAULTS = {
   commandPolicyTimeoutMs: 2_000,
   commandPolicyCacheTtlMs: 60_000,
   commandPolicyOpaPath: '/v1/data/synth/exec/decision',
+  /** Протокол 8: PTY-контур включён по умолчанию. */
+  ptyEnabled: true,
+  /** Протокол 8: лимит живых PTY-сессий. */
+  ptyMax: 4,
+  /** Протокол 8: таймаут простоя PTY-сессии, мс (2 дня). */
+  ptyIdleMs: 172_800_000,
+  /** Протокол 8: потолок тела ввода PTY, байт. */
+  ptyInputMaxBytes: 16 * 1024,
 } as const;
 
 /** Провайдер внешнего чекера команд (PROP-136b). */
@@ -133,6 +149,23 @@ export interface CommandPolicyConfig {
   cacheTtlMs: number;
   /** Путь OPA-решения (`provider: opa`). */
   opaPath: string;
+}
+
+/**
+ * Конфигурация контура PTY-сессий (протокол 8).
+ *
+ * Отдельный объект — параметры связаны (лимит сессий, их простой и потолок
+ * ввода), и держать их в плоских полях `ExecutorConfig` было бы шумом.
+ */
+export interface PtyConfig {
+  /** Включён ли контур PTY (`false` → `501 pty_unsupported` на всех роутах). */
+  enabled: boolean;
+  /** Лимит **живых** PTY-сессий (превышение → `429 pty_limit`). */
+  maxSessions: number;
+  /** Таймаут простоя сессии, мс (idle-reaper закрывает зависший терминал). */
+  idleTimeoutMs: number;
+  /** Потолок тела ввода терминала, байт (превышение → `413`). */
+  inputMaxBytes: number;
 }
 
 /** Эффективная конфигурация исполнителя. */
@@ -174,6 +207,8 @@ export interface ExecutorConfig {
    * `provider: 'off'` — проверка выключена.
    */
   commandPolicy: CommandPolicyConfig;
+  /** Контур PTY-сессий (протокол 8). */
+  pty: PtyConfig;
 }
 
 function requireEnvString(env: NodeJS.ProcessEnv, name: string): string {
@@ -442,6 +477,29 @@ export function resolveExecutorConfig(env: NodeJS.ProcessEnv = process.env): Exe
     tlsCaFile: resolveTlsCaFile(env[EXECUTOR_ENV.tlsCaFile], EXECUTOR_ENV.tlsCaFile),
     // PROP-136b: внешний чекер команд (до spawn). `off` — проверки нет.
     commandPolicy: resolveCommandPolicyConfig(env),
+    // Протокол 8: контур PTY-сессий.
+    pty: resolvePtyConfig(env),
+  };
+}
+
+/**
+ * Разбор конфигурации контура PTY (протокол 8).
+ *
+ * `SYNTH_EXECUTOR_PTY` — строгий булев: `true`/`false`/`1`/`0`. Невалидное
+ * значение — **ошибка старта** (fail-closed): молчаливый выключенный PTY
+ * выглядел бы как «исполнитель не умеет терминал», а на деле это опечатка
+ * оператора.
+ */
+export function resolvePtyConfig(env: NodeJS.ProcessEnv = process.env): PtyConfig {
+  return {
+    enabled: resolveBooleanEnv(env[EXECUTOR_ENV.pty], EXECUTOR_ENV.pty, EXECUTOR_DEFAULTS.ptyEnabled),
+    maxSessions: requirePositiveInt(env, EXECUTOR_ENV.ptyMax, EXECUTOR_DEFAULTS.ptyMax),
+    idleTimeoutMs: requirePositiveInt(env, EXECUTOR_ENV.ptyIdleMs, EXECUTOR_DEFAULTS.ptyIdleMs),
+    inputMaxBytes: requirePositiveInt(
+      env,
+      EXECUTOR_ENV.ptyInputMaxBytes,
+      EXECUTOR_DEFAULTS.ptyInputMaxBytes,
+    ),
   };
 }
 

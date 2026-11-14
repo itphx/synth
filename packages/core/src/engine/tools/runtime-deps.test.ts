@@ -14,7 +14,7 @@ import {
   toolRuntimeRequires,
 } from './runtime-deps.js';
 import type { RuntimeDeps } from './runtime-deps.js';
-import type { ExecRequest, ExecResult, ExecutionPort } from '../../execution/ports/index.js';
+import type { ExecRequest, ExecResult, ExecutionPort, PtyHandle, PtyOpenRequest } from '../../execution/ports/index.js';
 
 /** Порт-заглушка: отвечает о своих возможностях, команды не выполняет. */
 class CapabilityPort implements ExecutionPort {
@@ -42,6 +42,18 @@ class CapabilityPort implements ExecutionPort {
   }> {
     const summary = this.summary ?? { missing: 1, total: 1, unreachable: 0 };
     return { available: false, ...summary };
+  }
+}
+
+/**
+ * Порт с PTY (PROP-132 §Ф5): терминалы доступны.
+ *
+ * Само открытие PTY не вызывается — детект смотрит только на наличие метода
+ * `openPty` и признак `pty` порта.
+ */
+class PtyCapabilityPort extends CapabilityPort {
+  async openPty(_req: PtyOpenRequest): Promise<PtyHandle> {
+    throw new Error('порт-заглушка не открывает PTY');
   }
 }
 
@@ -79,6 +91,8 @@ describe('runtime-deps (ADR-070 §2.9.1)', () => {
       // PROP-124 §4b: клиент SFTP — зависимость адресного ssh-тула передачи
       // файлов.
       sftp: expect.any(Boolean),
+      // PROP-132 §Ф5: PTY у точки исполнения — доступность терминалов.
+      pty: expect.any(Boolean),
     });
   });
 
@@ -195,6 +209,16 @@ describe('runtime-deps: детект через порт (ADR-077)', () => {
     } else {
       expect(runtimeDepUnavailableDetail(deps, 'rg')).toBeUndefined();
     }
+  });
+
+  it('PROP-132 §Ф5: PTY — порт с openPty → доступно, без → недоступно + деталь', async () => {
+    const withPty = await detectRuntimeDeps(new PtyCapabilityPort({ git: true, rg: true, sh: true }));
+    expect(withPty.pty).toBe(true);
+    expect(withPty.ptyDetail).toBeUndefined();
+
+    const withoutPty = await detectRuntimeDeps(new CapabilityPort({ git: true, rg: true, sh: true }));
+    expect(withoutPty.pty).toBe(false);
+    expect(withoutPty.ptyDetail).toContain('PTY');
   });
 });
 

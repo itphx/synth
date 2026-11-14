@@ -821,6 +821,30 @@ export const SYSTEM_MESSAGES = {
   'instance.mcp.network_denied': 'Error: MCP network policy denied {url}: {reason}. Add a local service as origin "instance" (ADMIN) or add an exception in settings.',
   'instance.mcp.invalid_config': 'Error: invalid MCP config: {error}',
   'instance.mcp.exists': 'Error: MCP server "{name}" already exists',
+
+  // --- Интерактивные терминалы (PROP-132, Ф5) ---
+  'terminal.tool.deps_unavailable':
+    'Error: the terminal service is not available in this session',
+  'terminal.tool.disabled':
+    'Error: interactive terminals are disabled on this instance (terminal.enabled = false)',
+  'terminal.tool.project_required':
+    'Error: the current session has no project — interactive terminals are project resources',
+  'terminal.tool.empty': 'No terminals',
+  'terminal.tool.header': 'Terminals ({count}):',
+  'terminal.tool.not_found': 'Error: terminal {id} not found',
+  'terminal.tool.no_output': 'The terminal has not produced any output yet',
+  'terminal.tool.opened': 'Terminal {id} is open (use terminal_write to send input, terminal_read to read the output)',
+  'terminal.tool.written': 'Input sent to terminal {id}',
+  'terminal.tool.closed': 'Terminal {id} is closed',
+  'terminal.tool.command_denied':
+    'Error: the command is forbidden by the shell policy and was not sent to the terminal: {reason}',
+  'terminal.tool.command_requires_approval':
+    'Error: the command requires user approval and was not sent to the terminal: {reason}. '
+    + 'Use execute_shell for such commands — it asks the user for confirmation.',
+  'terminal.tool.limit':
+    'Error: the terminal limit is exhausted ({limit}) — close an unused terminal and try again',
+  'terminal.tool.unavailable':
+    'Error: interactive terminals are unavailable in this environment: {reason}',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

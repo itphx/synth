@@ -646,6 +646,20 @@
   core и подключается **динамическим `import()`** (fail-closed: нет пакета/токена/адресов →
   старт прерывается, а не «молча уходит в inline» — тихий возврат означал бы, что оператор
   запросил удалённое исполнение, а получил локальное).
+  **PTY (план терминалов, Ф1)** — `ports/execution-port.ts`: `PtyHandle`/`PtyOpenRequest`,
+  `ExecutionPort.openPty?(req)` + признак `pty?: boolean`, код `EXECUTION_PTY_UNSUPPORTED_CODE`
+  (`'EPTY'`, причина `dependency_missing` → `unavailable(dependency)`);
+  `execution/pty/provider.ts` (`PtyProvider`/`PtySession`/`PtySpawnRequest`,
+  `getPtyProvider`/`isPtyAvailable`, ленивый `import()` нативного
+  `@homebridge/node-pty-prebuilt-multiarch` — точная версия `0.15.0`, prebuild'ы в тарболе;
+  отсутствие модуля → `null`/`PtyUnavailableError`, не падение процесса),
+  `execution/pty/handle.ts` (`createPtyHandle` — `id` `pty_<uuid>`, «`onExit` — один раз»,
+  идемпотентный `close()`: `SIGTERM` группе (`kill(-pid)`) → 1 с → `SIGKILL`, fallback
+  `handle.kill()`); `InlineExecutionPort.openPty` — оболочка `shell` → `$SHELL` → `/bin/bash`,
+  окружение = `process.env` минус `NODE_CHANNEL_FD`/`ARGV0`/`BASH_ENV`/`ENV`/`BASH_XTRACEFD`/
+  `ELECTRON_RUN_AS_NODE` + `TERM=xterm-256color`/`COLORTERM=truecolor` + `env` запроса, `cwd` —
+  абсолютный путь к существующему каталогу (fail-closed); периметр сессии проверяет вызывающий
+  (как shell-тул). Исполнитель (протокол 8, `features.pty`) — следующая фаза.
 - `metrics/` — ADR-094: `registry.ts` (counter/gauge/histogram, лимит серий 2000,
   `synth_metrics_series_dropped_total`, `addCollector`), `renderer.ts` (text exposition 0.0.4,
   golden-тесты), `http.ts` (Hono-middleware: `method`/шаблон `route`/`status`, `in_flight`,
@@ -1903,6 +1917,34 @@
   в `read_session_reference`). Capability `process` выдана агентам, которые ведут работу в
   проекте (`assistant`/`leader`/`devops`/`admin`/`fixer`/`tester`); у `researcher`/
   `security-auditor`/`explore`/`general`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
+  **Тулы интерактивных терминалов (PROP-132, Ф5).** `terminal_list`/`terminal_open`/
+  `terminal_read`/`terminal_write`/`terminal_close` (`engine/tools/terminals.ts`) — тот же
+  контур, что у HTTP-роутов `/api/v2/terminals*`: **тот же** экземпляр
+  `TerminalService` приходит в тул через `ctx.extra.terminalService` (упаковка —
+  оркестратор; в `server/app/deps.ts` и `backend/app/deps.ts` сервис уже
+  создаётся для роутов). Capability `terminal` — отдельная от `shell` (терминал —
+  доменный ресурс инстанса: реестр в памяти процесса + PTY на точке исполнения);
+  группа правил `terminal` (ключ совпадает со значением capability — правило
+  `permission.rules.terminal` работает и по именам встроенных тулов, и по
+  capability плагинного тула), отключаема админом. **Plan-режим:** чтение
+  (`terminal_list`/`terminal_read`) разрешено, мутации (`terminal_open`/
+  `terminal_write`/`terminal_close`) заблокированы (`PLAN_BLOCKED_TERMINAL_TOOLS`,
+  `permission/evaluator.ts`). **Гейт доступности** — мастер-выключатель инстанса
+  `terminal.enabled`: seam `getTerminalEnabled` в `computeToolAvailability`
+  (`engine/permission/availability.ts`) → при `false` тулы недоступны модели с
+  причиной `policy` (не «deny в момент вызова»); отдельно — PTY у точки
+  исполнения (`RuntimeDeps.pty` в `engine/tools/runtime-deps.ts`, детект по порту:
+  `openPty` + признак `pty`) → причина `dependency`. Скоуп — **проект сессии**
+  (`ctx.projectId`): чужой терминал выглядит как отсутствующий
+  (`terminal.tool.not_found`); параметра `cwd` у тулов **нет** — каталог
+  вычисляет сервер (`session.worktree.directory` → `project.workspace`).
+  `terminal_read`: кап 32 КиБ, ANSI по умолчанию **сохраняется** (флаг
+  `strip_ansi`), `tail` отбрасывает завершающий пустой элемент. `terminal_write` с
+  `enter: true` проверяет строку **тем же** чекером, что `execute_shell`
+  (`checkShellCommand`, `engine/security/shell-guard.ts`): запрет — понятный отказ
+  модели, команда в терминал не уходит. Аудит — внутри `TerminalService`
+  (`terminal.open`/`terminal.input`/`terminal.close`, только метаданные) — не
+  дублируется. Тесты — `engine/tools/terminals.test.ts`.
   **Контекст плагинного тула сужается.** Для `source: 'plugin'` `executeToolDef` отдаёт только
   `sessionId`/`messageId`/`workingDir`/`agentRole?`/`projectId?`/`abortSignal?` (`narrowToolContext`): `extra` и `dataDir`
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
@@ -2484,6 +2526,31 @@
   (ADR-096); привязка сессии — `Session.worktree` (в форме хранения — snake_case, PostgreSQL —
   миграция `023_session_worktree`); резолв cwd — `engine/orchestrator.ts` (fail-closed при
   исчезнувшем каталоге). Спецификация — `docs/WORKTREES.md`.
+- `engine/terminal/*` — PROP-132 (интерактивные терминалы): `service.ts`
+  (`TerminalService` — реестр живых терминалов **в памяти процесса**, поток
+  вывода с батчингом, ввод с капом 16 КиБ и token bucket, лимиты 8/проект и
+  32/инстанс, мастер-выключатель `setEnabled`, idle-reaper; **права не решает**
+  — это делает роут на границе, инвариант 16), `types.ts` (контракты: запись,
+  DTO с `can_write`, лимиты, типизированные ошибки с машинными кодами
+  `TERMINAL_*`), `ring-buffer.ts` (кольцевой буфер вывода 512 КиБ, сегменты
+  8 КиБ, границы по кодовым точкам UTF-8), `audit.ts` (аудит **только
+  метаданных**: `terminal.open`/`terminal.input`/`terminal.close` — в журнал
+  исполнений команд, ADR-136), `metrics.ts` (`synth_terminal_sessions{status}`/
+  `synth_terminal_bytes_total{op}`, ADR-094), `config.ts` (мастер-выключатель:
+  `resolveTerminalEnabled` — приоритет **env `SYNTH_TERMINAL_ENABLED` > runtime
+  (`settings.json`/PG) > `config.yaml` `terminal.enabled` > default `true`**; флаг
+  в конфиге **необязателен**, чтобы «не задано» отличалось от «явно задано `true`»
+  — по этому API различает источники `config`/`default`). HTTP-контур —
+  `server/routes/terminals.ts` (`createTerminalRoutes`), сборка сервиса для
+  инстанса — `server/app/terminal-service.ts` (`createTerminalService`).
+  **Сервис собирается в `server/app/deps.ts` (managed — `backend/app/deps.ts`):
+  один экземпляр на процесс** (тот же, что у роутов `/api/v2/terminals*` и
+  `/api/v2/settings/terminal`), стартовое значение выключателя применяется на
+  старте, остановка — на graceful shutdown (`stopTerminalService` → `dispose()`).
+  Runtime-настройка — `server/routes/settings-terminal.ts`
+  (`createTerminalSettingsRoutes`: `GET/PUT/DELETE /api/v2/settings/terminal`,
+  env-фиксация → 409 `CONFLICT`, изменение применяется **live** через
+  `terminalService.setEnabled`, `restartRequired: false`).
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); **мультифайловая правка `patch`** — пути из `metadata.files[]` (`resolvePatchChange`): все пути внутри workspace → `scope:'file'` + `op:'write'`, любой путь вне workspace или неизвестный состав → `{scope:'all'}` (дерево Files, открытые редакторы и Git-вкладка обновляются после правки); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log; публичный API не меняется,
   исполнение — через `ExecutionPort`; **клон атомарный**: git получает соседний временный
@@ -2991,6 +3058,23 @@
   21). Список прогонов фильтруется по доступу к сессии-владельцу (сессии кэшируются
   на один запрос). Core-дефолт `isAllowed` — `createSessionAccessPredicate()`;
   backend передаёт правило проекта (`routes/processes.ts`).
+  `createTerminalRoutes` (PROP-132, Ф3б) — HTTP-контур интерактивных
+  терминалов (`GET /` — список постранично с фильтрами `project_id`/`session_id`,
+  `POST /` — открыть терминал, `GET /:id` — снимок, `PATCH /:id` — заголовок и
+  привязка к сессии, `DELETE /:id` — закрыть, `GET /:id/output?since=` — снимок
+  вывода, `GET /:id/stream?since=` — поток `application/x-ndjson`,
+  `POST /:id/input`, `POST /:id/resize`). Доступ — **на границе**
+  (инвариант 16): guard `terminalGuard` резолвит терминал и его проект **один
+  раз** (`guardedTerminal`), обработчики проверок доступа не содержат; вид
+  доступа — по HTTP-методу (`read`/`write`), правило — проектное
+  (`canReadProject` / `canEditProjectContent`, `VIEWER` читает, но не пишет —
+  инвариант 21). Мастер-выключатель инстанса (`terminal.enabled`) — граница
+  `enabledGuard`: `403 TERMINALS_DISABLED` на всех маршрутах. `cwd` в теле
+  игнорируется — каталог вычисляет сервер (`session.worktree.directory` →
+  `project.workspace`). Сервис терминалов — `engine/terminal/*`
+  (`TerminalService`): реестр в памяти процесса, кольцевой буфер вывода,
+  аудит (`terminal.open`/`terminal.input`/`terminal.close` — только
+  метаданные), метрики `synth_terminal_*`.
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и

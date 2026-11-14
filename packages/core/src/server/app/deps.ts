@@ -122,6 +122,10 @@ import {
   createAgentStepExecutor,
   createPipelineExitHandler,
   createPipelineMetrics,
+  // PROP-132 (Ф3в): сервис терминалов инстанса + мастер-выключатель
+  // `terminal.enabled` (приоритет env > runtime > config > default).
+  createTerminalService,
+  resolveTerminalEnabled,
   // ADR-115 × ADR-101: вложения прогона — derive для text-only модели шага.
   createPipelineAttachmentDerive,
   // ADR-101 §9 / ADR-116: артефакты прогонов — blob-порт + `blob_refs`.
@@ -1263,6 +1267,36 @@ export async function createStandaloneDeps(
   // вызовы идут с инстанс-пула (прежнее поведение).
   const executorMcpResolvePool = createExecutorMcpPoolResolver(executionRouter);
 
+  // PROP-132 (Ф3в): сервис терминалов инстанса — **один экземпляр на процесс**
+  // (реестр живых терминалов, поток вывода, ввод, лимиты, аудит, метрики).
+  //
+  // Жизненный цикл — здесь, а не в `mount-routes.ts`: сервис гасится на
+  // graceful shutdown (`stopTerminalService`), а мастер-выключатель
+  // `terminal.enabled` применяется **live** (`setEnabled`): живые терминалы
+  // закрываются, создание новых запрещается — рестарт не нужен.
+  //
+  // Зависимости: порт исполнения (PTY открывается на точке исполнения,
+  // ADR-077), шина сессий (метаданные терминала), журнал исполнений команд
+  // (ADR-136 — только метаданные), реестр метрик (ADR-094) и менеджер
+  // сессий (правило idle: живой терминал не убиваем, пока в сессии идёт ход).
+  const terminalService = createTerminalService({
+    port: executionPort,
+    eventBus,
+    commandAuditLog,
+    ...(metrics ? { metrics } : {}),
+    sessions: { getSession: (id: string) => sessionManager.getSession(id) },
+  });
+  // Стартовое значение мастер-выключателя: env > runtime > config > default.
+  // Runtime-override читается из `settings.json`/PG (живёт инстанса).
+  const terminalRuntime = await settingsStore.getTerminal();
+  terminalService.setEnabled(
+    resolveTerminalEnabled({
+      configEnabled: config.terminalConfig?.enabled,
+      runtimeEnabled: typeof terminalRuntime.enabled === 'boolean' ? terminalRuntime.enabled : undefined,
+      env: process.env,
+    }).enabled,
+  );
+
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
   //
   // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
@@ -1722,6 +1756,9 @@ export async function createStandaloneDeps(
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),
+    // PROP-132 (Ф5): сервис интерактивных терминалов — тот же экземпляр, что у
+    // HTTP-роутов `/api/v2/terminals*` (через `ctx.extra.terminalService`).
+    terminalService,
     // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`) — live-геттер:
     // runtime-настройка (`/api/v2/settings/ssh`) применяется без рестарта.
     // `tools` (дефолт) — ключ в окружение команд не попадает; `agent` — ключи
@@ -2419,6 +2456,10 @@ export async function createStandaloneDeps(
     // PROP-136 (слайс 136a): журнал исполнений команд — роуты
     // `/api/v2/audit/commands` читают тот же экземпляр, что пишет оркестратор.
     commandAuditLog,
+    // PROP-132 (Ф3в): сервис терминалов инстанса (один на процесс) + его
+    // остановка на graceful shutdown (`dispose()` закрывает живые терминалы).
+    terminalService,
+    stopTerminalService: () => terminalService.dispose(),
     // PROP-136b (слайс 136b-2a): зеркальный чекер команд — возвращается для
     // тестов/UI (провайдер уже передан оркестратору).
     commandPolicyProvider,

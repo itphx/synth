@@ -102,6 +102,24 @@ export const ToolCapability = {
    * Write-тулы (`synth_mcp_add`/…) — следующий шаг.
    */
   INSTANCE: 'instance',
+  /**
+   * Интерактивные терминалы (PROP-132, Ф5): тулы `terminal_list`/
+   * `terminal_open`/`terminal_read`/`terminal_write`/`terminal_close`.
+   *
+   * Отдельная capability, а не `shell`: терминал — **доменный ресурс
+   * инстанса** (реестр живых терминалов в памяти процесса + PTY на точке
+   * исполнения), а не примитив ядра. Capability **не** привязана к рабочему
+   * каталогу проекта (`WORKSPACE_CAPABILITIES`) — терминал открывается в
+   * каталоге, который вычисляет сервер (`session.worktree.directory` →
+   * `project.workspace`).
+   *
+   * Доступность — по **мастер-выключателю инстанса** `terminal.enabled`:
+   * выключен → тулы недоступны модели (`unavailable(policy)`), а не «deny в
+   * момент вызова». В plan-режиме разрешены только чтение (`terminal_list`/
+   * `terminal_read`); `terminal_open`/`terminal_write`/`terminal_close`
+   * заблокированы (план ничего не исполняет).
+   */
+  TERMINAL: 'terminal',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -151,6 +169,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.INSTANCE]: {
     label: 'Инстанс и MCP',
     description: 'synth_info, synth_mcp_list, synth_mcp_test',
+  },
+  [ToolCapability.TERMINAL]: {
+    label: 'Терминалы',
+    description: 'terminal_list, terminal_open, terminal_read, terminal_write, terminal_close',
   },
 };
 

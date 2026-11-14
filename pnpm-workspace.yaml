@@ -3,9 +3,14 @@ packages:
 
 allowBuilds:
   esbuild: true
+  '@homebridge/node-pty-prebuilt-multiarch': true
 
 onlyBuiltDependencies:
   - esbuild
+  # План терминалов (Ф1): упаковочный форк node-pty с prebuild'ами в тарболе.
+  # Разрешён install-скрипт: он проверяет prebuild для текущей платформы
+  # (и компилирует из исходников только если prebuild'а нет/не грузится).
+  - '@homebridge/node-pty-prebuilt-multiarch'
 
 # Циклы core ↔ @itphx/synth-storage-postgres и core ↔ @itphx/synth-executor
 # намеренные (core: optionalDependencies на драйвер и динамический import()

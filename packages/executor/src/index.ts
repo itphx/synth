@@ -62,6 +62,41 @@ export type {
   StopBackgroundResponse,
 } from './protocol.js';
 export { parseMcpCallRequestBody } from './protocol.js';
+export {
+  parsePtyOpenBody,
+  parsePtyInputBody,
+  parsePtyResizeBody,
+  EXECUTOR_PTY_MIN_COLS,
+  EXECUTOR_PTY_MAX_COLS,
+  EXECUTOR_PTY_MIN_ROWS,
+  EXECUTOR_PTY_MAX_ROWS,
+  EXECUTOR_PTY_DEFAULT_INPUT_MAX_BYTES,
+} from './protocol.js';
+export type {
+  PtyOpenBody,
+  PtyOpenResponse,
+  PtyInputBody,
+  PtyInputResponse,
+  PtyResizeBody,
+  PtyCloseResponse,
+  PtyStatusBody,
+  PtyStreamFrame,
+} from './protocol.js';
+
+// PTY-сервис исполнителя (протокол 8, план терминалов Ф2a).
+export {
+  PtyService,
+  DEFAULT_PTY_REPLAY_BUFFER_BYTES,
+  DEFAULT_PTY_BATCH_MS,
+  DEFAULT_PTY_CLOSE_GRACE_MS,
+} from './pty-service.js';
+export type {
+  PtyServiceOptions,
+  PtyServiceFailure,
+  PtyServiceFailureReason,
+  PtyOpenOutcome,
+  PtyWriteOutcome,
+} from './pty-service.js';
 
 // Конфигурация (env).
 export {
@@ -69,6 +104,7 @@ export {
   EXECUTOR_DEFAULTS,
   resolveExecutorConfig,
   resolveCommandPolicyConfig,
+  resolvePtyConfig,
   resolveTlsCaFile,
   parseMcpServerSpecs,
   scrubExecutorToken,
@@ -79,6 +115,7 @@ export type {
   CommandPolicyFailMode,
   CommandPolicyProviderName,
   ExecutorConfig,
+  PtyConfig,
 } from './config.js';
 
 // Внешний чекер команд (PROP-136b).

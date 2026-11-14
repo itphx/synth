@@ -13,6 +13,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  EXEC_ERROR_STATUS,
   EXEC_SECRET_LIMITS,
   EXECUTOR_FS_MAX_DOWNLOAD_BYTES,
   EXECUTOR_FS_MAX_READ_RAW_BYTES,
@@ -26,6 +27,9 @@ import {
   parseFsSniffRequestBody,
   parseFsTextRequestBody,
   parseFsUploadQuery,
+  parsePtyInputBody,
+  parsePtyOpenBody,
+  parsePtyResizeBody,
   parseSpawnExecRequestBody,
 } from './protocol.js';
 
@@ -287,8 +291,79 @@ describe('разбор mode секрета вызова (протокол 6)', (
     expect(parsed.ok).toBe(false);
   });
 
-  it('версия протокола — 7 (FS-операции)', () => {
-    expect(EXECUTOR_PROTOCOL_VERSION).toBe(7);
+  it('версия протокола — 8 (PTY-сессии)', () => {
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe(8);
+  });
+});
+
+/**
+ * Разбор тел PTY-роутов (протокол 8).
+ *
+ * Строгость — как у прочих разборов: молчаливый пропуск потолка или размера
+ * означал бы запуск терминала **не с теми** параметрами, которые запросили.
+ */
+describe('разбор тел PTY-роутов (протокол 8)', () => {
+  it('open: валидное тело принимается', () => {
+    const parsed = parsePtyOpenBody({
+      id: 'pty_fixed',
+      cwd: '/workspace',
+      shell: '/bin/bash',
+      args: ['-i'],
+      cols: 80,
+      rows: 24,
+      env: { TERM: 'xterm-256color' },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.cwd).toBe('/workspace');
+    expect(parsed.value.cols).toBe(80);
+    expect(parsed.value.rows).toBe(24);
+    expect(parsed.value.id).toBe('pty_fixed');
+    expect(parsed.value.args).toEqual(['-i']);
+  });
+
+  it('open: без cwd — отказ', () => {
+    const parsed = parsePtyOpenBody({ cols: 80, rows: 24 });
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('open: размеры вне диапазона — отказ', () => {
+    expect(parsePtyOpenBody({ cwd: '/workspace', cols: 0, rows: 24 }).ok).toBe(false);
+    expect(parsePtyOpenBody({ cwd: '/workspace', cols: 80, rows: 5000 }).ok).toBe(false);
+    expect(parsePtyOpenBody({ cwd: '/workspace', cols: 80.5, rows: 24 }).ok).toBe(false);
+  });
+
+  it('open: env не со строковыми значениями — отказ', () => {
+    const parsed = parsePtyOpenBody({
+      cwd: '/workspace',
+      cols: 80,
+      rows: 24,
+      env: { A: 1 },
+    });
+    expect(parsed.ok).toBe(false);
+  });
+
+  it('input: валидное тело и превышение потолка', () => {
+    const parsed = parsePtyInputBody({ data: 'ls\n' });
+    expect(parsed.ok).toBe(true);
+    const tooLarge = parsePtyInputBody({ data: 'x'.repeat(32) }, 16);
+    expect(tooLarge.ok).toBe(false);
+    if (tooLarge.ok) return;
+    expect(tooLarge.tooLarge).toBe(true);
+  });
+
+  it('resize: валидное тело и неверный размер', () => {
+    const parsed = parsePtyResizeBody({ cols: 120, rows: 40 });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value).toEqual({ cols: 120, rows: 40 });
+    expect(parsePtyResizeBody({ cols: 0, rows: 40 }).ok).toBe(false);
+  });
+
+  it('коды ошибок PTY — по HTTP-классам', () => {
+    expect(EXEC_ERROR_STATUS.pty_unsupported).toBe(501);
+    expect(EXEC_ERROR_STATUS.pty_not_found).toBe(404);
+    expect(EXEC_ERROR_STATUS.pty_limit).toBe(429);
   });
 });
 

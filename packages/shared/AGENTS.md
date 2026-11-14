@@ -440,6 +440,16 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   **не** `question.*` — `question.asked` уже занят смыслом «очередь зависла»),
   `process.started`/`process.exited`/`process.stopped` и `child.completed`/`child.failed`/
   `child.cancelled`; все публикуются в **канале сессии** (ADR-009/ADR-024, новых каналов нет).
+- PROP-132 (план терминалов): **метаданные терминала** в `EventType`
+  (`types/bus-events.ts`) — `terminal.created`/`terminal.updated`/`terminal.exited`/
+  `terminal.deleted` (канал — сессия терминала; **поток вывода по шине не идёт** —
+  волатильный класс, отдельный NDJSON-поток). Payload-типы
+  `TerminalCreatedEventData`/`TerminalUpdatedEventData`/`TerminalExitedEventData`/
+  `TerminalDeletedEventData` (`terminal_id`/`project_id`/`session_id?`/`status`/`cols`/
+  `rows`/`title?`/`exit_code?`/`reason?`). Журнал исполнений команд
+  (`types/command-audit.ts`): `COMMAND_AUDIT_TOOLS` включает терминальные действия
+  `terminal.open`/`terminal.input`/`terminal.close` (аудит терминалов — только
+  метаданные, ADR-136).
 - ADR-118 (поток сообщений v2): `src/types/message-stream.ts` — контрактная часть модели
   хода (`Turn` → `Step` → `Part`): `MessageStatus` (`streaming`/`completed`/`cancelled`/`error`),
   `TurnStatus` (`completed`/`cancelled`/`error`/`stopped`), `PromptMode`, `PromptAcceptedResponse`

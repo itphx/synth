@@ -47,15 +47,25 @@ import {
   realpath as fsRealpath,
   stat as fsStat,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { SshEnvError } from '../git/ssh-env.js';
 import { warning } from '../logger.js';
 import { probeBinaryThroughPort } from './probe.js';
 import { materializeSecretEnv } from './secret-env.js';
+import { createPtyHandle } from './pty/handle.js';
+import {
+  getPtyProvider,
+  PTY_COLORTERM,
+  PTY_TERM,
+  PtyUnavailableError,
+  type PtyProvider,
+  type PtySession,
+} from './pty/provider.js';
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_SHELL_BINARY,
+  EXECUTION_PTY_UNSUPPORTED_CODE,
   ExecutionError,
   FsPathError,
   fsErrorCodeFromErrno,
@@ -77,6 +87,8 @@ import {
   type FsTextOptions,
   type FsTextPage,
   type FsUploadOptions,
+  type PtyHandle,
+  type PtyOpenRequest,
 } from './ports/index.js';
 import {
   BINARY_SNIFF_BYTES,
@@ -818,15 +830,127 @@ async function inlineHash(path: string): Promise<string> {
 }
 
 /**
+ * Оболочка PTY-сессии по умолчанию.
+ *
+ * Порядок: явный `shell` запроса → `$SHELL` окружения → `/bin/bash`. В отличие
+ * от шелл-вызовов ядра (`bash` обязателен, ADR-078) здесь выбор свободен:
+ * терминал запускает **интерактивную** оболочку пользователя, и `bash` — лишь
+ * последний фоллбэк.
+ */
+const DEFAULT_PTY_SHELL = '/bin/bash';
+
+/**
+ * Переменные окружения, которые **не наследуются** PTY-сессией.
+ *
+ * - `NODE_CHANNEL_FD` — дескриптор канала Node IPC: в дочернем процессе он
+ *   бессмысленен (и ломает `child_process`-наследование);
+ * - `ARGV0` — переопределение `argv[0]`: оболочке не нужно;
+ * - `BASH_ENV`/`ENV`/`BASH_XTRACEFD` — файлы, которые оболочка читает при
+ *   старте (в т.ч. непечатаемый вывод `xtrace`): наследование сделало бы
+ *   поведение терминала зависимым от окружения control plane;
+ * - `ELECTRON_RUN_AS_NODE` — превращает Electron-приложение в Node-процесс.
+ */
+const PTY_ENV_BLOCKLIST: readonly string[] = [
+  'NODE_CHANNEL_FD',
+  'ARGV0',
+  'BASH_ENV',
+  'ENV',
+  'BASH_XTRACEFD',
+  'ELECTRON_RUN_AS_NODE',
+];
+
+/**
+ * Окружение PTY-сессии: очищенное ambient + признаки терминала + `env`
+ * запроса.
+ *
+ * `TERM`/`COLORTERM` объявляются всегда: без `TERM=xterm-256color` оболочка
+ * не включает цвета, а `COLORTERM=truecolor` включает 24-битный цвет.
+ */
+function buildPtyEnv(extra?: Record<string, string>): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (PTY_ENV_BLOCKLIST.includes(key)) continue;
+    env[key] = value;
+  }
+  env.TERM = PTY_TERM;
+  env.COLORTERM = PTY_COLORTERM;
+  return { ...env, ...(extra ?? {}) };
+}
+
+/**
+ * Рабочий каталог PTY-сессии — абсолютный путь к существующему каталогу.
+ *
+ * Fail-closed: каталога нет или это не каталог → отказ порта (`spawn_failed`),
+ * а не запуск оболочки «где получится» (как у `execute` — тот же класс ошибки
+ * `ENOENT`, что видит shell-тул).
+ *
+ * Периметр сессии (рабочий каталог/`allowedRoots`) проверяет **вызывающий** —
+ * так же, как shell-тул (`isSymlinkEscapeInRoots`); порт о периметре не знает.
+ */
+async function resolvePtyCwd(cwd: string): Promise<string> {
+  const target = resolve(cwd ?? '');
+  let info;
+  try {
+    info = await fsStat(target);
+  } catch {
+    throw new ExecutionError({
+      message: `PTY: рабочий каталог недоступен: ${target}`,
+      code: 'ENOENT',
+      reason: 'spawn_failed',
+    });
+  }
+  if (!info.isDirectory()) {
+    throw new ExecutionError({
+      message: `PTY: рабочий каталог не является каталогом: ${target}`,
+      code: 'ENOTDIR',
+      reason: 'spawn_failed',
+    });
+  }
+  return target;
+}
+
+/**
+ * Опции inline-порта.
+ *
+ * `ptyProvider` — фабрика провайдера PTY: тесты подставляют подделку, а
+ * рабочий код берёт ленивую загрузку нативного модуля (`getPtyProvider`).
+ */
+export interface InlineExecutionPortOptions {
+  /** Фабрика провайдера PTY; не задана — ленивая загрузка нативного модуля. */
+  ptyProvider?: () => Promise<PtyProvider>;
+}
+
+/**
  * Исполнение в процессе backend'а — нынешнее поведение Synth.
  *
  * Экземпляр **без состояния**: его можно создавать на каждый вызов (тулы
  * создают fallback-экземпляр, когда порт не внедрён) — процесс-глобальных
- * синглтонов не появляется (инвариант 24).
+ * синглтонов не появляется (инвариант 24). Единственное состояние — кэш
+ * провайдера PTY (ленивая загрузка нативного модуля), он не влияет на
+ * `execute`/`spawnBackground`.
  */
 export class InlineExecutionPort implements ExecutionPort {
   /** Исполнение — в процессе control plane (ADR-077). */
   readonly isRemote = false;
+
+  /**
+   * Порт умеет открывать PTY-сессии (план терминалов, Ф1).
+   *
+   * Признак означает «реализация PTY есть»; фактическая доступность нативного
+   * модуля проверяется при вызове (`openPty` → `EPTY`).
+   */
+  readonly pty = true;
+
+  /** Фабрика провайдера PTY (тесты подставляют подделку). */
+  private readonly _ptyProviderFactory: () => Promise<PtyProvider>;
+
+  /** Кэш провайдера PTY — модуль грузится лениво, один раз. */
+  private _ptyProvider: PtyProvider | undefined;
+
+  constructor(opts?: InlineExecutionPortOptions) {
+    this._ptyProviderFactory = opts?.ptyProvider ?? getPtyProvider;
+  }
 
   /**
    * FS-операции — локальная файловая система процесса (PROP-135, Ф1).
@@ -884,6 +1008,78 @@ export class InlineExecutionPort implements ExecutionPort {
       return await runCommand(file, args, req, env, startedAt);
     } finally {
       await materialized?.cleanup().catch(() => {});
+    }
+  }
+
+  /**
+   * Открытие PTY-сессии в процессе control plane (план терминалов, Ф1).
+   *
+   * Отличия от `execute`:
+   *
+   * - оболочка запускается **интерактивно** (`shell` → `$SHELL` → `/bin/bash`),
+   *   ввод идёт через `PtyHandle.write`, вывод — через `onData`;
+   * - окружение — очищенное ambient (см. `PTY_ENV_BLOCKLIST`) + `TERM`/
+   *   `COLORTERM` + `env` запроса;
+   * - `cwd` — абсолютный путь к существующему каталогу (fail-closed);
+   * - недоступность нативного модуля — **понятная ошибка порта**
+   *   (`code: 'EPTY'`, `reason: 'dependency_missing'`), а не падение процесса.
+   *
+   * `execute`/`spawnBackground` этим методом **не затронуты**.
+   */
+  async openPty(req: PtyOpenRequest): Promise<PtyHandle> {
+    const startedAt = Date.now();
+    const provider = await this._resolvePtyProvider(startedAt);
+    const shell = req.shell?.trim() || process.env.SHELL?.trim() || DEFAULT_PTY_SHELL;
+    const cwd = await resolvePtyCwd(req.cwd);
+    const env = buildPtyEnv(req.env);
+
+    let session: PtySession;
+    try {
+      session = provider.spawn({
+        shell,
+        args: req.args ?? [],
+        cwd,
+        cols: req.cols,
+        rows: req.rows,
+        env,
+      });
+    } catch (err) {
+      // Неудача запуска (нет бинаря оболочки, неверный `cwd`) — тот же класс
+      // ошибки, что у `execute` (`spawn_failed`), чтобы вызывающий различал
+      // «не запустилось» и «упало с кодом».
+      throw new ExecutionError({
+        message: err instanceof Error ? err.message : String(err),
+        code: (err as NodeJS.ErrnoException | undefined)?.code ?? null,
+        reason: 'spawn_failed',
+        durationMs: Date.now() - startedAt,
+      });
+    }
+
+    return createPtyHandle(session, `pty_${randomUUID()}`);
+  }
+
+  /**
+   * Провайдер PTY (ленивая загрузка нативного модуля, кэш на экземпляр).
+   *
+   * Отсутствие модуля — `ExecutionError` с `code: 'EPTY'` и
+   * `reason: 'dependency_missing'` (слой доступности превращает его в
+   * `unavailable(dependency)`).
+   */
+  private async _resolvePtyProvider(startedAt: number): Promise<PtyProvider> {
+    try {
+      this._ptyProvider ??= await this._ptyProviderFactory();
+      return this._ptyProvider;
+    } catch (err) {
+      const message =
+        err instanceof PtyUnavailableError
+          ? err.message
+          : `PTY недоступен: ${err instanceof Error ? err.message : String(err)}`;
+      throw new ExecutionError({
+        message,
+        code: EXECUTION_PTY_UNSUPPORTED_CODE,
+        reason: 'dependency_missing',
+        durationMs: Date.now() - startedAt,
+      });
     }
   }
 

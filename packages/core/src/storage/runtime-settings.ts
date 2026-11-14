@@ -82,6 +82,18 @@ export interface MetricsRuntimeSettings {
 }
 
 /**
+ * PROP-132: runtime-настройки мастер-выключателя терминалов.
+ *
+ * Приоритет эффективного значения: env `SYNTH_TERMINAL_ENABLED` > runtime >
+ * config.yaml `terminal.enabled` > default `true`. Применяется **сразу**
+ * (`TerminalService.setEnabled`): переключение закрывает живые терминалы и
+ * запрещает создание новых — рестарт не требуется.
+ */
+export interface TerminalRuntimeSettings {
+  enabled?: boolean;
+}
+
+/**
  * ADR-133: runtime-настройки проверки обновлений (админка).
  *
  * Приоритет эффективного значения: env `SYNTH_UPDATES_CHECK` > runtime
@@ -887,6 +899,11 @@ export interface RuntimeSettings {
   decision?: DecisionRuntimeSettings;
   /** ADR-094: runtime-настройки наблюдаемости (`metrics.enabled`). */
   metrics?: MetricsRuntimeSettings;
+  /**
+   * PROP-132: runtime-настройка мастер-выключателя терминалов
+   * (`terminal.enabled`). Применяется сразу (`TerminalService.setEnabled`).
+   */
+  terminal?: TerminalRuntimeSettings;
   /** ADR-133: runtime-настройки проверки обновлений (`updates.check`). */
   updates?: UpdatesRuntimeSettings;
   /** ADR-090: runtime-настройки секции `plugins` (админка, слой плагинов). */
@@ -1876,6 +1893,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.metrics;
+      return next;
+    });
+  }
+
+  /** PROP-132: runtime-настройки терминалов, {} — не заданы. */
+  async getTerminal(): Promise<Partial<TerminalRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.terminal ?? {};
+  }
+
+  async setTerminal(config: Partial<TerminalRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, terminal: config }));
+  }
+
+  async clearTerminal(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.terminal;
       return next;
     });
   }

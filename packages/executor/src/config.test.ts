@@ -290,3 +290,52 @@ describe('конфигурация исполнителя: внешний чек
     ).toThrow(/SYNTH_EXECUTOR_COMMAND_POLICY_TOKEN_FILE/);
   });
 });
+
+/**
+ * Контур PTY-сессий (протокол 8): env-разбор — строгий, как у прочих
+ * параметров исполнителя (невалидное значение — ошибка старта, а не тихий
+ * дефолт).
+ */
+describe('конфигурация контура PTY (протокол 8)', () => {
+  const base = {
+    [EXECUTOR_ENV.token]: 'secret',
+    [EXECUTOR_ENV.workspace]: '/workspace',
+  } as NodeJS.ProcessEnv;
+
+  it('дефолты: контур включён, 4 сессии, простой 2 дня, ввод 16 КиБ', () => {
+    const config = resolveExecutorConfig(base);
+    expect(config.pty.enabled).toBe(true);
+    expect(config.pty.maxSessions).toBe(4);
+    expect(config.pty.idleTimeoutMs).toBe(172_800_000);
+    expect(config.pty.inputMaxBytes).toBe(16 * 1024);
+  });
+
+  it('явные значения — как задано', () => {
+    const config = resolveExecutorConfig({
+      ...base,
+      [EXECUTOR_ENV.pty]: '0',
+      [EXECUTOR_ENV.ptyMax]: '8',
+      [EXECUTOR_ENV.ptyIdleMs]: '60000',
+      [EXECUTOR_ENV.ptyInputMaxBytes]: '1024',
+    });
+    expect(config.pty.enabled).toBe(false);
+    expect(config.pty.maxSessions).toBe(8);
+    expect(config.pty.idleTimeoutMs).toBe(60_000);
+    expect(config.pty.inputMaxBytes).toBe(1024);
+  });
+
+  it('невалидные значения — ошибка (fail-closed)', () => {
+    expect(() => resolveExecutorConfig({ ...base, [EXECUTOR_ENV.pty]: 'yes' })).toThrow(
+      /SYNTH_EXECUTOR_PTY/,
+    );
+    expect(() => resolveExecutorConfig({ ...base, [EXECUTOR_ENV.ptyMax]: '0' })).toThrow(
+      /SYNTH_EXECUTOR_PTY_MAX/,
+    );
+    expect(() => resolveExecutorConfig({ ...base, [EXECUTOR_ENV.ptyIdleMs]: '-1' })).toThrow(
+      /SYNTH_EXECUTOR_PTY_IDLE_MS/,
+    );
+    expect(() =>
+      resolveExecutorConfig({ ...base, [EXECUTOR_ENV.ptyInputMaxBytes]: 'x' }),
+    ).toThrow(/SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES/);
+  });
+});

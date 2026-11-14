@@ -25,6 +25,7 @@ import type {
   RuntimeSettings,
   SecurityRuntimeSettings,
   AttachmentsRuntimeSettings,
+  TerminalRuntimeSettings,
   UpdatesRuntimeSettings,
 } from '../runtime-settings.js';
 
@@ -129,6 +130,15 @@ export interface SettingsRepository {
   getMetrics(): Promise<Partial<MetricsRuntimeSettings>>;
   setMetrics(config: Partial<MetricsRuntimeSettings>): Promise<void>;
   clearMetrics(): Promise<void>;
+
+  /**
+   * PROP-132: runtime-настройка мастер-выключателя терминалов
+   * (`terminal.enabled`). Применяется сразу (`TerminalService.setEnabled`) —
+   * `restartRequired: false` в API.
+   */
+  getTerminal(): Promise<Partial<TerminalRuntimeSettings>>;
+  setTerminal(config: Partial<TerminalRuntimeSettings>): Promise<void>;
+  clearTerminal(): Promise<void>;
 
   /**
    * ADR-133: runtime-настройка автопроверки обновлений (`updates.check`).

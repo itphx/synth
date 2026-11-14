@@ -133,6 +133,8 @@ export interface BackendAppHandle {
   stopAttachmentPruner: () => void;
   /** ADR-115 × ADR-077: остановка уборки временных каталогов медиа-раннера. */
   stopMediaTempPruner: () => void;
+  /** PROP-132 (Ф3в): остановка сервиса терминалов (закрытие живых PTY). */
+  stopTerminalService: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookRepository;
   /** ADR-052 (этап II): движок исходящих webhooks. */
@@ -501,6 +503,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       stopAttachmentPruner: () => deps.stopAttachmentPruner(),
       // ADR-115 × ADR-077: уборка временных каталогов медиа-раннера.
       stopMediaTempPruner: () => deps.stopMediaTempPruner(),
+      // PROP-132 (Ф3в): остановка сервиса терминалов (закрытие живых PTY).
+      stopTerminalService: () => deps.stopTerminalService(),
       // ADR-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
       webhookStore: deps.webhookStore,
       webhookService: deps.webhookService,

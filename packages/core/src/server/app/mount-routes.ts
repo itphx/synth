@@ -39,6 +39,7 @@ import {
   createAgentsLimitsSettingsRoutes,
   createRequestLimitsSettingsRoutes,
   createUpdatesSettingsRoutes,
+  createTerminalSettingsRoutes,
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
@@ -46,6 +47,8 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
+  // PROP-132 (Ф3б): HTTP-контур интерактивных терминалов + сборка сервиса терминалов.
+  createTerminalRoutes,
   // PROP-135 Ф6b-1: профили и пулы исполнения — admin-API (`/api/v2/execution/*`).
   createExecutionRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
@@ -71,6 +74,7 @@ import { mergeMcpSeedDefaults } from './remote-mcp-seed.js';
 import { mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig } from '../../storage/runtime-settings.js';
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { resolveProjectWorkspace } from '../fs-workspace.js';
+import { LOCAL_USER_ID } from '../local-owner.js';
 import type { StandaloneConfig } from '../app.js';
 import type { StandaloneDeps } from './deps.js';
 import type { LocalAuthKit } from '../../auth/local.js';
@@ -781,6 +785,20 @@ export function mountStandaloneRoutes(
     { settingsStore, config: config.updatesConfig, env: process.env },
   ));
 
+  // PROP-132 (Ф3в): админ-раздел «Терминалы» — мастер-выключатель
+  // `terminal.enabled`. Применяется **сразу** (`terminalService.setEnabled`:
+  // живые терминалы закрываются, новые не создаются — рестарт не нужен).
+  // Core: чтение/мутации — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createTerminalSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      configEnabled: config.terminalConfig?.enabled,
+      terminalService: deps.terminalService,
+      env: process.env,
+    },
+  ));
+
   // ADR-115: админ-раздел «Вложения» — runtime-настройки мультимодального
   // ввода (`/api/v2/settings/attachments`). Применяются **сразу** (сервис
   // вложений, промпт и GC читают резолвер на каждый вызов). Core —
@@ -1073,6 +1091,32 @@ export function mountStandaloneRoutes(
       },
     ));
   }
+
+  // PROP-132 (Ф3б): HTTP-контур интерактивных терминалов
+  // (`/api/v2/terminals*`): список, создание, снимок, правка, закрытие,
+  // вывод (снимок + NDJSON-поток), ввод и размер. Права — по правилам
+  // проекта; в standalone пользователь один (ADR-079), поэтому проектная
+  // роль не сужается — так же, как у FS/git-роутов выше.
+  //
+  // Сервис терминалов собирается в `deps.ts` (Ф3в): один экземпляр на
+  // процесс, мастер-выключатель `terminal.enabled` (`/api/v2/settings/terminal`)
+  // и остановка на graceful shutdown — там.
+  app.route('/api/v2/terminals', createTerminalRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      terminal: deps.terminalService,
+      projects: projectStore,
+      sessions: { getSession: (id: string) => sessionManager.getSession(id) },
+    },
+    {
+      getCurrentUserId: () => LOCAL_USER_ID,
+      // Standalone — единственный пользователь инстанса (ADR-079): владелец
+      // всех локальных сущностей, проектная проекция не разграничивается.
+      canReadProject: async () => true,
+      canEditProjectContent: async () => true,
+      workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+    },
+  ));
 
   // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
   // реестр установок. Standalone — `requireAuth` (single-user) + scope-гейт

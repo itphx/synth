@@ -100,6 +100,8 @@ import type {
   FsTextOptions,
   FsTextPage,
   FsUploadOptions,
+  PtyHandle,
+  PtyOpenRequest,
 } from '@itphx/synth-core';
 import {
   EXECUTOR_PROTOCOL_VERSION,
@@ -122,6 +124,7 @@ import {
   type SpawnExecRequest,
   type SpawnExecResponse,
 } from './protocol.js';
+import { PtyConnectionError, RemotePtyClient } from './pty-client.js';
 
 /**
  * FS-операция на проводе (роут `/fs/<op>`).
@@ -289,6 +292,15 @@ interface PoolEntry {
    * в control plane нет: рабочий каталог живёт на исполнителе).
    */
   fs: boolean;
+  /**
+   * Умеет ли исполнитель PTY-сессии (`features.pty`, протокол 8, Ф2a/Ф2b).
+   *
+   * Признак **явный** и **совместимость версии**: и `features.pty === true`,
+   * и протокол ≥ 8. Исполнитель протокола ≤ 7 PTY не знает — такой адрес в
+   * кандидаты на терминал **не попадает** (тихого возврата к неинтерактивной
+   * команде нет: пользователь получил бы не терминал).
+   */
+  pty: boolean;
 }
 
 /**
@@ -306,6 +318,14 @@ const EXECUTOR_PROTOCOL_SECRETS = 4;
  * (`mode: 'agent'`, PROP-124 §2): эфемерный `ssh-agent` (`SSH_AUTH_SOCK`).
  */
 const EXECUTOR_PROTOCOL_SSH_AGENT = 6;
+
+/**
+ * Минимальная версия протокола с PTY-сессиями (`/pty/*`, протокол 8).
+ *
+ * Исполнитель протокола ≤ 7 псевдотерминалы не знает: адрес с таким
+ * протоколом в кандидаты на терминал не попадает (fail-closed).
+ */
+const EXECUTOR_PROTOCOL_PTY = 8;
 
 /** Ошибка соединения — повод переключиться на следующий адрес. */
 class ConnectionFailure extends Error {
@@ -560,6 +580,15 @@ export class RemoteExecutionPort implements ExecutionPort {
   private _inventoryPromise: Promise<Map<string, PoolEntry>> | undefined;
   /** Адрес, выбранный для FS-операций (PROP-135). */
   private _fsAddress: string | undefined;
+  /**
+   * Умеет ли пул PTY-сессии (протокол 8) — по последнему снимку инвентаря.
+   *
+   * `undefined` — **состав пула ещё неизвестен** (снимка не было): это не
+   * «не умеет» (вызывающий решит по вызову `openPty`, где отказ приходит как
+   * `EPTY`/`dependency_missing`), а «неизвестно». `false` — известно, что
+   * терминалов в пуле нет.
+   */
+  private _ptySupported: boolean | undefined;
 
   constructor(opts: RemoteExecutionPortOptions) {
     this._urls = (opts.urls ?? [])
@@ -582,6 +611,22 @@ export class RemoteExecutionPort implements ExecutionPort {
   /** Адреса исполнителей (нормализованные). */
   get urls(): string[] {
     return [...this._urls];
+  }
+
+  /**
+   * Признак «порт умеет PTY» (протокол 8, план терминалов Ф1/Ф2b).
+   *
+   * Зеркалит `features.pty` удалённого исполнителя **вместе** с совместимостью
+   * версии протокола (≥ 8): старый исполнитель PTY не знает, поэтому такой
+   * адрес в кандидаты на терминал не попадает.
+   *
+   * Значение — по последнему снимку инвентаря; **до первого снимка**
+   * `undefined` («состав пула неизвестен» — это не «не умеет»: неизвестное не
+   * значит «нет»). **Авторитетная** проверка — при вызове `openPty`: там
+   * отказ приходит как `EPTY`/`dependency_missing`.
+   */
+  get pty(): boolean | undefined {
+    return this._ptySupported;
   }
 
   /**
@@ -859,6 +904,73 @@ export class RemoteExecutionPort implements ExecutionPort {
       }
     }
     return this._unreachableBackground(lastCause, req);
+  }
+
+  /**
+   * Открытие PTY-сессии на удалённом исполнителе (протокол 8, Ф2b).
+   *
+   * Псевдотерминал живёт **на исполнителе** (там, где toolchain и рабочий
+   * каталог проекта), поэтому control plane управляет им по проводу:
+   * открытие (`POST /pty/open`), поток вывода (`GET /pty/:id/stream`, NDJSON),
+   * ввод (`POST /pty/:id/input`), размер (`POST /pty/:id/resize`), закрытие
+   * (`POST /pty/:id/close`).
+   *
+   * ## Выбор адреса
+   *
+   * Только адрес, который **ответил** на `/capabilities` и объявил
+   * `features.pty` при протоколе ≥ 8: старый исполнитель терминалы не умеет,
+   * а тихого возврата к неинтерактивной команде нет (пользователь получил бы
+   * не терминал). Нет такого адреса — **fail-closed**: `ExecutionError` с
+   * кодом `EPTY` и причиной `dependency_missing` (слой доступности превращает
+   * её в `unavailable(dependency)`).
+   *
+   * ## Слот одновременных вызовов
+   *
+   * **Не занимается**: терминал живёт дольше запроса — держать слот до его
+   * конца значило бы заблокировать пул (как у фоновых процессов).
+   */
+  async openPty(req: PtyOpenRequest): Promise<PtyHandle> {
+    const core = await loadCore();
+    const inventory = await this._ensureInventory();
+    const candidates: string[] = [];
+    for (const [url, entry] of inventory) {
+      if (entry.reachable && entry.pty) candidates.push(url);
+    }
+    if (candidates.length === 0) {
+      throw new core.ExecutionError({
+        message:
+          'исполнитель не поддерживает PTY-сессии (нужен features.pty и протокол 8): ' +
+          'терминал недоступен в этом пуле',
+        code: core.EXECUTION_PTY_UNSUPPORTED_CODE,
+        reason: 'dependency_missing',
+      });
+    }
+
+    const fetchImpl = await resolveFetch(this._fetchImpl);
+    let lastCause: unknown;
+    for (const url of candidates) {
+      const client = new RemotePtyClient({
+        url,
+        token: this._token,
+        fetchImpl,
+        timeoutMs: this._timeoutMs,
+      });
+      try {
+        return await client.open(req);
+      } catch (err) {
+        if (err instanceof PtyConnectionError) {
+          // Адрес не ответил — сессия не открыта, пробуем следующий.
+          lastCause = err.cause;
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new core.ExecutionError({
+      message: `исполнитель недоступен: ${describeCause(lastCause)}`,
+      code: 'EUNREACHABLE',
+      reason: 'spawn_failed',
+    });
   }
 
   // --- внутреннее ---------------------------------------------------------
@@ -1542,6 +1654,9 @@ export class RemoteExecutionPort implements ExecutionPort {
     });
     this._inventory = inventory;
     this._inventoryAt = Date.now();
+    // Признак «пул умеет PTY» — по этому снимку: хотя бы один ответивший
+    // адрес объявил `features.pty` при протоколе ≥ 8.
+    this._ptySupported = [...inventory.values()].some((entry) => entry.reachable && entry.pty);
     return inventory;
   }
 
@@ -1567,6 +1682,7 @@ export class RemoteExecutionPort implements ExecutionPort {
           sshAgent?: boolean;
           secretsSpawn?: boolean;
           fs?: boolean;
+          pty?: boolean;
         };
         limits?: { timeoutMs?: unknown; maxOutputBytes?: unknown };
       } | null;
@@ -1594,6 +1710,10 @@ export class RemoteExecutionPort implements ExecutionPort {
       // фоллбэка по версии протокола нет (старый исполнитель протокола 6 FS
       // не умеет, и выбирать его для файловых тулов нельзя).
       const fs = body?.features?.fs === true;
+      // PTY-сессии (протокол 8, Ф2a): признак **явный** (`features.pty`) и
+      // версия протокола ≥ 8. Исполнитель протокола ≤ 7 терминалы не умеет —
+      // такой адрес в кандидаты на терминал не попадает (fail-closed).
+      const pty = body?.features?.pty === true && protocol >= EXECUTOR_PROTOCOL_PTY;
       // Лимиты исполнителя (`limits`) — аддитивное поле: у старого
       // исполнителя его нет, тогда разбор терпимый (значение `undefined`).
       const limits = parseExecutorLimits(body?.limits);
@@ -1606,6 +1726,7 @@ export class RemoteExecutionPort implements ExecutionPort {
         sshAgent,
         secretsSpawn,
         fs,
+        pty,
         ...(limits ? { limits } : {}),
       };
     } catch {
@@ -1886,6 +2007,7 @@ function unreachableEntry(): PoolEntry {
     sshAgent: false,
     secretsSpawn: false,
     fs: false,
+    pty: false,
   };
 }
 

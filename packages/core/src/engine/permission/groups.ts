@@ -186,6 +186,28 @@ export const INSTANCE_TOOLS = [...INSTANCE_READ_TOOLS, ...INSTANCE_WRITE_TOOLS];
  */
 export const TODO_TOOLS = ['todo_write', 'todo_list', 'todo_add', 'todo_update', 'todo_delete'];
 
+/**
+ * PROP-132 (Ф5): тулы интерактивных терминалов.
+ *
+ * Отдельная группа, как `pipeline`/`schedule`/`process`/`ssh`: терминал —
+ * доменный ресурс инстанса (реестр живых терминалов в памяти процесса + PTY
+ * на точке исполнения), а не примитив ядра. Ключ группы совпадает со
+ * значением capability `terminal`, поэтому правило
+ * `permission.rules.terminal` работает и по именам встроенных тулов, и по
+ * capability плагинного тула.
+ *
+ * Чтение (`terminal_list`/`terminal_read`) в plan-режиме **разрешено**,
+ * мутации (`terminal_open`/`terminal_write`/`terminal_close`) — заблокированы
+ * (`isPlanBlockedTool`, `evaluator.ts`): план ничего не исполняет.
+ */
+export const TERMINAL_TOOLS = [
+  'terminal_list',
+  'terminal_open',
+  'terminal_read',
+  'terminal_write',
+  'terminal_close',
+];
+
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
 /** Все тулы расписаний (read + write). */
@@ -237,6 +259,8 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   // ADR-039: список задач сессии (ключ совпадает с capability `todo`).
   // Имена дублируются в `runtime` намеренно: тул принадлежит обеим группам.
   todo: TODO_TOOLS,
+  // PROP-132 (Ф5): интерактивные терминалы (ключ совпадает с capability `terminal`).
+  terminal: TERMINAL_TOOLS,
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
@@ -274,6 +298,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'ssh',
   'todo',
   'instance',
+  'terminal',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

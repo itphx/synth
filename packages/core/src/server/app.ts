@@ -208,6 +208,12 @@ export interface StandaloneConfig {
   attachmentsConfig?: SynthConfig['attachments'];
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
+  /**
+   * PROP-132: секция `terminal` — мастер-выключатель терминалов
+   * (`terminal.enabled`). Поле **необязательное**: отсутствие = «не задано в
+   * config.yaml» (дефолт `enabled: true` — в резолвере ядра).
+   */
+  terminalConfig?: SynthConfig['terminal'];
   /** ADR-133: конфигурация обновлений (`updates.*`) из config.yaml/env. */
   updatesConfig?: SynthConfig['updates'];
   /**
@@ -748,6 +754,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopAttachmentPruner: () => deps.stopAttachmentPruner(),
     // ADR-115 × ADR-077: остановка уборки временных каталогов медиа-раннера.
     stopMediaTempPruner: () => deps.stopMediaTempPruner(),
+    // PROP-132 (Ф3в): остановка сервиса терминалов (закрытие живых PTY).
+    stopTerminalService: () => deps.stopTerminalService(),
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
     stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),

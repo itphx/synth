@@ -123,6 +123,20 @@ export interface ToolAvailabilityOptions {
    * (доступность адресных ssh-тулов не проверяется).
    */
   getSshMode?: () => SshMode;
+  /**
+   * PROP-132 (Ф5): мастер-выключатель терминалов (`terminal.enabled`) —
+   * **резолвер**.
+   *
+   * Передаётся геттер (по образцу `getSshMode`): значение меняется на
+   * инстансе **live** (runtime-настройка «Терминалы»), поэтому читается в
+   * момент расчёта, а не копируется в снимок. Не задан — fail-open
+   * (доступность терминальных тулов не проверяется).
+   *
+   * `false` — тулы терминалов недоступны модели с причиной `policy` (тул
+   * остаётся в реестре, но модель видит его как недоступный — как гейт
+   * `workspace`, а не «deny в момент вызова»).
+   */
+  getTerminalEnabled?: () => boolean;
 }
 
 /**
@@ -137,8 +151,10 @@ export interface ToolAvailabilityOptions {
  *  2. mode — plan-рестрикция write/edit/git-write (ADR-025) либо MCP-тул,
  *     выключенный в текущем режиме настройками сессии.
  *  3. policy — политика инстанса запрещает тул в текущем режиме работы
- *     (PROP-124 §0: `ssh.mode = 'agent'` → адресные ssh-тулы недоступны).
- *  4. dependency — в окружении нет внешней программы тула (`TOOL_RUNTIME_DEP`).
+ *     (PROP-124 §0: `ssh.mode = 'agent'` → адресные ssh-тулы недоступны;
+ *     PROP-132 §Ф5: `terminal.enabled = false` → терминальные тулы недоступны).
+ *  4. dependency — в окружении нет внешней программы тула (`TOOL_RUNTIME_DEP`)
+ *     или нет PTY у точки исполнения (PROP-132 §Ф5).
  *  5. workspace — не задан рабочий каталог проекта, а тул зависит от него.
  *  6. иначе — доступен.
  */
@@ -190,10 +206,36 @@ export function computeToolAvailability(
     return { available: false, reason: 'policy' };
   }
 
+  // 3a. PROP-132 (Ф5): терминальный контур выключен на инстансе
+  //     (`terminal.enabled = false`) — тулы терминалов недоступны модели с
+  //     причиной `policy`. Доступ открывается включением контура
+  //     (runtime-настройка «Терминалы»), а не переключением режима хода.
+  if (
+    capabilities?.includes(ToolCapability.TERMINAL)
+    && opts.getTerminalEnabled?.() === false
+  ) {
+    return { available: false, reason: 'policy' };
+  }
+
   // 4. Зависимость окружения: нет внешней программы тула (git/rg/sh).
   const dep = TOOL_RUNTIME_DEP[toolName];
   if (dep && !isRuntimeDepAvailable(opts.runtimeDeps, dep)) {
     const detail = runtimeDepUnavailableDetail(opts.runtimeDeps, dep);
+    return {
+      available: false,
+      reason: 'dependency',
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  // 4a. PROP-132 (Ф5): терминалу нужен PTY у точки исполнения (ADR-077).
+  //     Нет PTY — терминалов не будет вовсе: контур недоступен по той же
+  //     причине `dependency`, что и отсутствующая программа.
+  if (
+    capabilities?.includes(ToolCapability.TERMINAL)
+    && opts.runtimeDeps?.pty === false
+  ) {
+    const detail = opts.runtimeDeps.ptyDetail;
     return {
       available: false,
       reason: 'dependency',

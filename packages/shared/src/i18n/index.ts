@@ -605,6 +605,21 @@ export const ENGINE_MESSAGE_KEYS = [
   'instance.mcp.network_denied',
   'instance.mcp.invalid_config',
   'instance.mcp.exists',
+  // --- Интерактивные терминалы (PROP-132, Ф5) ---
+  'terminal.tool.deps_unavailable',
+  'terminal.tool.disabled',
+  'terminal.tool.project_required',
+  'terminal.tool.empty',
+  'terminal.tool.header',
+  'terminal.tool.not_found',
+  'terminal.tool.no_output',
+  'terminal.tool.opened',
+  'terminal.tool.written',
+  'terminal.tool.closed',
+  'terminal.tool.command_denied',
+  'terminal.tool.command_requires_approval',
+  'terminal.tool.limit',
+  'terminal.tool.unavailable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -1178,6 +1193,21 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'instance.mcp.network_denied': ["url","reason"],
   'instance.mcp.invalid_config': ["error"],
   'instance.mcp.exists': ["name"],
+  // --- Интерактивные терминалы (PROP-132, Ф5) ---
+  'terminal.tool.deps_unavailable': [],
+  'terminal.tool.disabled': [],
+  'terminal.tool.project_required': [],
+  'terminal.tool.empty': [],
+  'terminal.tool.header': ["count"],
+  'terminal.tool.not_found': ["id"],
+  'terminal.tool.no_output': [],
+  'terminal.tool.opened': ["id"],
+  'terminal.tool.written': ["id"],
+  'terminal.tool.closed': ["id"],
+  'terminal.tool.command_denied': ["reason"],
+  'terminal.tool.command_requires_approval': ["reason"],
+  'terminal.tool.limit': ["limit"],
+  'terminal.tool.unavailable': ["reason"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

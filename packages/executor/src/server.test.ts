@@ -3,7 +3,9 @@ import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
+import type { PtyProvider, PtySession } from '@itphx/synth-core';
 import { createExecutorApp, type ExecutorAppOptions } from './server.js';
+import { PtyService } from './pty-service.js';
 import type { ExecErrorBody, ExecSuccessBody } from './protocol.js';
 
 const TOKEN = 'executor-token-test-1234567890';
@@ -50,6 +52,77 @@ function postExec(
 async function readError(res: Response): Promise<ExecErrorBody> {
   const body = (await res.json()) as { error: ExecErrorBody };
   return body.error;
+}
+
+/**
+ * Поддельный провайдер PTY: эхо ввода, без нативного модуля.
+ *
+ * `pid` не задан намеренно: закрытие в core шлёт сигнал **группе** процессов
+ * (`kill(-pid)`) — в тестах это не должно задевать реальные процессы.
+ */
+function createFakePtyProvider(): PtyProvider {
+  return {
+    spawn: () => {
+      const dataListeners = new Set<(chunk: string) => void>();
+      const exitListeners = new Set<(e: { exitCode?: number; signal?: string }) => void>();
+      let exited = false;
+      const session: PtySession = {
+        write: (data: string) => {
+          for (const cb of dataListeners) cb(data);
+        },
+        resize: () => {},
+        onData: (cb) => {
+          dataListeners.add(cb);
+          return () => {
+            dataListeners.delete(cb);
+          };
+        },
+        onExit: (cb) => {
+          exitListeners.add(cb);
+          return () => {
+            exitListeners.delete(cb);
+          };
+        },
+        kill: () => {
+          if (exited) return;
+          exited = true;
+          for (const cb of exitListeners) cb({ exitCode: 0 });
+        },
+      };
+      return session;
+    },
+  };
+}
+
+/** PTY-сервис с поддельным провайдером (нативный модуль не нужен). */
+function makePtyService(opts: { maxSessions?: number } = {}): PtyService {
+  return new PtyService({
+    workspaceRoot: workspace,
+    maxSessions: opts.maxSessions ?? 4,
+    idleTimeoutMs: 60_000,
+    inputMaxBytes: 16 * 1024,
+    providerFactory: async () => createFakePtyProvider(),
+  });
+}
+
+/** Первый NDJSON-кадр потока вывода терминала. */
+async function readFirstFrame(res: Response, timeoutMs = 5_000): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('у ответа нет тела');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('кадр вывода не получен')), timeoutMs);
+      timer.unref?.();
+    });
+    const { value, done } = await Promise.race([reader.read(), timeout]);
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const newline = buffer.indexOf('\n');
+    if (newline >= 0) return buffer.slice(0, newline);
+  }
+  throw new Error('поток вывода закрылся без кадра');
 }
 
 describe('исполнитель: аутентификация', () => {
@@ -292,7 +365,7 @@ describe('исполнитель: лимиты и служебные эндпо�
       };
       limits?: { timeoutMs: number; maxOutputBytes: number };
     };
-    expect(body.protocol).toBe(7);
+    expect(body.protocol).toBe(8);
     expect(body.toolchain.git).toBe('git version 2.39.2');
     expect(body.os.length).toBeGreaterThan(0);
     expect(body.arch.length).toBeGreaterThan(0);
@@ -327,7 +400,7 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(body.limits?.timeoutMs).toBe(600_000);
     expect(body.limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
     // Поле аддитивное: версия протокола и признаки не меняются.
-    expect(body.protocol).toBe(7);
+    expect(body.protocol).toBe(8);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
@@ -362,6 +435,151 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; protocol: number };
     expect(body.status).toBe('ok');
-    expect(body.protocol).toBe(7);
+    expect(body.protocol).toBe(8);
+  });
+});
+
+describe('исполнитель: PTY-сессии (протокол 8)', () => {
+  /** POST /pty/open с токеном. */
+  function postPty(
+    app: Hono,
+    path: string,
+    body: unknown,
+    token: string | null = TOKEN,
+  ): Promise<Response> {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (token !== null) headers.authorization = `Bearer ${token}`;
+    return Promise.resolve(
+      app.request(path, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+
+  it('открытие, ввод и поток вывода: кадр с данными', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const dir = join(workspace, 'term');
+    await mkdir(dir, { recursive: true });
+
+    const opened = await postPty(app, '/pty/open', { cwd: dir, cols: 80, rows: 24 });
+    expect(opened.status).toBe(201);
+    const session = (await opened.json()) as { id: string; cols: number; rows: number };
+    expect(session.id.startsWith('pty_')).toBe(true);
+    expect(session.cols).toBe(80);
+    expect(session.rows).toBe(24);
+
+    const input = await postPty(app, `/pty/${session.id}/input`, { data: 'hello' });
+    expect(input.status).toBe(200);
+    expect((await input.json()) as { bytes: number }).toMatchObject({ bytes: 5 });
+
+    const stream = await app.request(`/pty/${session.id}/stream?since=0`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(stream.status).toBe(200);
+    const frame = JSON.parse(await readFirstFrame(stream)) as { seq: number; data: string };
+    expect(frame.seq).toBeGreaterThanOrEqual(1);
+    expect(frame.data).toContain('hello');
+
+    // Состояние сессии и её закрытие.
+    const status = await app.request(`/pty/${session.id}/status`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(status.status).toBe(200);
+    expect((await status.json()) as { exited: boolean }).toMatchObject({ exited: false });
+
+    const closed = await postPty(app, `/pty/${session.id}/close`, {});
+    expect(closed.status).toBe(200);
+    await pty.dispose();
+  });
+
+  it('повторное открытие с тем же id — идемпотентно (200, тот же id)', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+
+    const first = await postPty(app, '/pty/open', { id: 'pty_fixed', cwd: workspace, cols: 80, rows: 24 });
+    expect(first.status).toBe(201);
+    const second = await postPty(app, '/pty/open', { id: 'pty_fixed', cwd: workspace, cols: 80, rows: 24 });
+    expect(second.status).toBe(200);
+    expect((await second.json()) as { id: string }).toMatchObject({ id: 'pty_fixed' });
+    await pty.dispose();
+  });
+
+  it('контур выключен — 501 pty_unsupported', async () => {
+    const app = makeApp({ ptyEnabled: false });
+    const res = await postPty(app, '/pty/open', { cwd: workspace, cols: 80, rows: 24 });
+    expect(res.status).toBe(501);
+    const error = await readError(res);
+    expect(error.reason).toBe('pty_unsupported');
+    expect(error.code).toBe('EPTY');
+  });
+
+  it('размеры терминала вне диапазона — 400 invalid_request', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const tooSmall = await postPty(app, '/pty/open', { cwd: workspace, cols: 0, rows: 24 });
+    expect(tooSmall.status).toBe(400);
+    expect((await readError(tooSmall)).reason).toBe('invalid_request');
+    const tooBig = await postPty(app, '/pty/open', { cwd: workspace, cols: 80, rows: 5000 });
+    expect(tooBig.status).toBe(400);
+    expect((await readError(tooBig)).reason).toBe('invalid_request');
+    await pty.dispose();
+  });
+
+  it('cwd вне workspace — 400 cwd_outside_workspace', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const res = await postPty(app, '/pty/open', { cwd: outside, cols: 80, rows: 24 });
+    expect(res.status).toBe(400);
+    const error = await readError(res);
+    expect(error.reason).toBe('cwd_outside_workspace');
+    expect(error.code).toBe('EWORKSPACE');
+    await pty.dispose();
+  });
+
+  it('превышение лимита живых сессий — 429 pty_limit', async () => {
+    const pty = makePtyService({ maxSessions: 1 });
+    const app = makeApp({ ptyService: pty });
+    const first = await postPty(app, '/pty/open', { cwd: workspace, cols: 80, rows: 24 });
+    expect(first.status).toBe(201);
+    const second = await postPty(app, '/pty/open', { cwd: workspace, cols: 80, rows: 24 });
+    expect(second.status).toBe(429);
+    const error = await readError(second);
+    expect(error.reason).toBe('pty_limit');
+    expect(error.code).toBe('ELIMIT');
+    await pty.dispose();
+  });
+
+  it('несуществующая сессия — 404 pty_not_found', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const res = await app.request('/pty/pty_missing/status', {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(404);
+    expect((await readError(res)).reason).toBe('pty_not_found');
+    await pty.dispose();
+  });
+
+  it('ввод без токена — 401', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const res = await postPty(app, '/pty/pty_any/input', { data: 'x' }, null);
+    expect(res.status).toBe(401);
+    expect((await readError(res)).reason).toBe('unauthorized');
+    await pty.dispose();
+  });
+
+  it('capabilities — признак features.pty', async () => {
+    const app = makeApp();
+    const res = await app.request('/capabilities', {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { protocol: number; features?: { pty?: boolean } };
+    expect(body.protocol).toBe(8);
+    expect(body.features?.pty).toBe(true);
   });
 });

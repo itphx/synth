@@ -314,6 +314,9 @@ program
       // ADR-115 × ADR-077: остановить уборку временных каталогов медиа-раннера.
       appHandle.stopMediaTempPruner?.();
 
+      // PROP-132 (Ф3в): остановить сервис терминалов (живые PTY гасятся).
+      appHandle.stopTerminalService?.();
+
       // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
       // shutdown видит `synth_ready 0`.
       setSynthReady(appHandle.metrics, 0);

@@ -30,7 +30,7 @@
  *   `lastUsedAt` — там `touch` не нужен.
  */
 
-import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE, isExecutionFsUnavailableError } from './ports/index.js';
+import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE, EXECUTION_PTY_UNSUPPORTED_CODE, isExecutionFsUnavailableError } from './ports/index.js';
 import { warning } from '../logger.js';
 import type {
   BrowserCallRequest,
@@ -42,6 +42,8 @@ import type {
   ExecBackgroundProcess,
   ExecRequest,
   ExecResult,
+  PtyHandle,
+  PtyOpenRequest,
 } from './ports/index.js';
 import { poolKeyString } from './pool-provider.js';
 import type { ExecutionPoolKey, ExecutionPoolRef } from './pool-provider.js';
@@ -307,6 +309,29 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
       return port.probe ? withWarmup(key, () => port.probe!(bin, args), true, resetPool) : true;
     },
 
+    /**
+     * Открытие PTY-сессии на исполнителе пула (план терминалов, Ф2b).
+     *
+     * Пул собирается лениво, поэтому признак «умеет PTY» у порта **не
+     * объявляется** (`pty` — `false` до первого разрешения пула): вызывающий
+     * ориентируется на сам вызов — отказ приходит как `ExecutionError` с
+     * кодом `EPTY` и причиной `dependency_missing` (fail-closed, тихого
+     * возврата к неинтерактивной команде нет).
+     */
+    async openPty(req: PtyOpenRequest): Promise<PtyHandle> {
+      const port = await resolve();
+      await waitReady();
+      if (!port.openPty) {
+        throw new ExecutionError({
+          message: 'executor does not support PTY sessions (features.pty)',
+          code: EXECUTION_PTY_UNSUPPORTED_CODE,
+          reason: 'dependency_missing',
+        });
+      }
+      const handle = await withWarmup(key, () => port.openPty!(req), false, resetPool);
+      markActive();
+      return handle;
+    },
     async capabilitySummary(bin: string): Promise<ExecutionCapabilitySummary> {
       const port = await resolve();
       if (!port.capabilitySummary) {

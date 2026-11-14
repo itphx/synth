@@ -513,7 +513,7 @@ describe('исполнитель: протокол и прежние маршр�
         secretsSpawn?: boolean;
       };
     };
-    expect(body.protocol).toBe(7);
+    expect(body.protocol).toBe(8);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
@@ -531,7 +531,7 @@ describe('исполнитель: протокол и прежние маршр�
       protocol: number;
       background?: { limit: number; active: number };
     };
-    expect(body.protocol).toBe(7);
+    expect(body.protocol).toBe(8);
     expect(body.background?.limit).toBeGreaterThan(0);
     expect(body.background?.active).toBe(0);
   });

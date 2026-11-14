@@ -157,6 +157,15 @@ export type EventType =
   | 'child.completed'
   | 'child.failed'
   | 'child.cancelled'
+  // PROP-132 (план терминалов): **метаданные** терминала. Поток вывода
+  // терминала по шине НЕ идёт (волатильный класс, отдельный NDJSON-поток
+  // `GET /api/v2/terminals/:id/stream`), здесь — только состояние записи.
+  // Канал — сессия терминала (у терминала без привязки событий нет: в шине
+  // нет канала проекта, а инстансный канал — broadcast всем).
+  | 'terminal.created'
+  | 'terminal.updated'
+  | 'terminal.exited'
+  | 'terminal.deleted'
   | 'error';
 
 export interface BusEvent {
@@ -282,3 +291,58 @@ export type SessionMessagesClearedEventData = {
 export type ProjectChangedEventData = {
   project_id: string;
 };
+
+// --- PROP-132: метаданные терминала ---------------------------------------
+//
+// События терминала несут **только метаданные**: поток вывода по шине не
+// идёт (волатильный класс — отдельный NDJSON-поток), а содержимое терминала
+// в LLM не попадает без явного действия человека.
+
+/**
+ * Payload события `terminal.created` — терминал открыт.
+ *
+ * Идентификаторы — snake_case (как у остальных payload'ов шины).
+ */
+export interface TerminalCreatedEventData {
+  /** Идентификатор терминала (`term_<uuid>`). */
+  terminal_id: string;
+  /** Проект-владелец терминала. */
+  project_id: string;
+  /** Привязанная сессия (необязательно). */
+  session_id?: string;
+  /** Статус терминала (`starting`/`running`). */
+  status: string;
+  /** Ширина (колонки). */
+  cols: number;
+  /** Высота (строки). */
+  rows: number;
+  /** Заголовок вкладки (необязательно). */
+  title?: string;
+}
+
+/**
+ * Payload события `terminal.updated` — изменились метаданные терминала
+ * (размер, заголовок, привязка к сессии).
+ */
+export interface TerminalUpdatedEventData extends TerminalCreatedEventData {
+  /** Код выхода (только после выхода). */
+  exit_code?: number;
+  /** Сигнал завершения (только после выхода). */
+  signal?: string;
+}
+
+/**
+ * Payload события `terminal.exited` — процесс терминала завершился.
+ */
+export interface TerminalExitedEventData extends TerminalUpdatedEventData {
+  /** Причина закрытия (`user`/`idle`/`disabled`/`exited`). */
+  reason?: string;
+}
+
+/**
+ * Payload события `terminal.deleted` — запись терминала удалена из реестра.
+ */
+export interface TerminalDeletedEventData extends TerminalUpdatedEventData {
+  /** Причина удаления (`user`/`idle`/`disabled`). */
+  reason?: string;
+}

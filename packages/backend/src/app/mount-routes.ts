@@ -45,6 +45,10 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
+  // PROP-132 (Ф3б): HTTP-контур терминалов (сервис собирается в `deps.ts`).
+  createTerminalRoutes,
+  // PROP-132 (Ф3в): мастер-выключатель терминалов (`/api/v2/settings/terminal`).
+  createTerminalSettingsRoutes,
   // PROP-135 Ф6b-1: профили и пулы исполнения — admin-API (`/api/v2/execution/*`).
   createExecutionRoutes,
   createPluginsRoutes, createPluginSettingsRoutes,
@@ -649,6 +653,33 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       },
     ));
   }
+
+  // PROP-132 (Ф3б): HTTP-контур интерактивных терминалов
+  // (`/api/v2/terminals*`): список, создание, снимок, правка, закрытие,
+  // вывод (снимок + NDJSON-поток), ввод и размер. Права — **по правилам
+  // проекта** (ADR-089 §5.5/§5.8): чтение — `canReadProject`, мутации —
+  // `canEditProjectContent` (`VIEWER` читает, но не мутирует — инвариант 21);
+  // проверка — граничные guard'ы фабрики (инвариант 16), в обработчиках её нет.
+  //
+  // Сервис терминалов собирается в `deps.ts` (Ф3в): один экземпляр на
+  // процесс, мастер-выключатель `terminal.enabled` (`/api/v2/settings/terminal`)
+  // и остановка на graceful shutdown — там.
+  app.route('/api/v2/terminals', createTerminalRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      terminal: deps.terminalService,
+      projects: { load: (id: string) => projectStore.load(id) },
+      sessions: { getSession: (id: string) => sessionManager.getSession(id) },
+    },
+    {
+      getCurrentUserId: async (c) => (await auth.getCurrentUser(c))?.id ?? '',
+      canReadProject: async (c, project, userId) =>
+        projectAccess.canReadProject(c as never, project, userId),
+      canEditProjectContent: async (c, project, userId) =>
+        projectAccess.canEditProjectContent(c as never, project, userId),
+      workspacesRoot: config.workspacesRoot,
+    },
+  ));
 
   // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
   // реестр установок. Managed RBAC: установка — ADMIN или service-key со
@@ -1545,6 +1576,24 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       getStorageBackend: () => ctx.metrics.storageBackend,
       getUptimeSec: ctx.metrics.getUptimeSec,
       version: SYNTH_VERSION,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // PROP-132 (Ф3в): админ-раздел «Терминалы» — мастер-выключатель
+  // `terminal.enabled`. Применяется **сразу** (`terminalService.setEnabled`:
+  // живые терминалы закрываются, новые не создаются — рестарт не нужен).
+  // Managed RBAC: чтение и мутации — только ADMIN.
+  app.route('/api/v2/settings', createTerminalSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      configEnabled: config.synth.terminal?.enabled,
+      terminalService: deps.terminalService,
+      env: process.env,
     },
     {
       readGuard: auth.requirePermission('ADMIN'),

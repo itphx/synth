@@ -19,6 +19,7 @@ import {
   SCHEDULE_WRITE_TOOLS,
   SSH_TOOLS,
   INSTANCE_WRITE_TOOLS,
+  TERMINAL_TOOLS,
 } from './groups.js';
 
 // Реэкспорт: историческое место `extractPathParams` — этот модуль (его
@@ -167,9 +168,27 @@ const PLAN_BLOCKED_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
  */
 const PLAN_BLOCKED_SSH_TOOLS: ReadonlySet<string> = new Set(SSH_TOOLS);
 
+/**
+ * PROP-132 (Ф5): мутирующие тулы интерактивных терминалов в plan-режиме —
+ * **отказ целиком**.
+ *
+ * Явный список имён, как у `PLAN_BLOCKED_AUTOMATION_TOOLS`: capability у них
+ * своя (`terminal`), а не `edit`/`git_write`, поэтому без явного списка
+ * plan-режим разрешил бы открыть терминал и писать в него. Отказ — **существующим
+ * эффектом** permission-слоя (`plan.deny`, `unavailable(mode)`), а не проверкой
+ * внутри тула: проверки прав в тулах не заводят (ADR-025/ADR-029).
+ *
+ * Чтение (`terminal_list`/`terminal_read`) в plan-режиме разрешено — планирование
+ * часто требует увидеть состояние терминала.
+ */
+const PLAN_BLOCKED_TERMINAL_TOOLS: ReadonlySet<string> = new Set(
+  TERMINAL_TOOLS.filter((name) => name !== 'terminal_list' && name !== 'terminal_read'),
+);
+
 export function isPlanBlockedTool(toolName: string, capabilities?: readonly string[]): boolean {
   if (PLAN_BLOCKED_AUTOMATION_TOOLS.has(toolName)) return true;
   if (PLAN_BLOCKED_SSH_TOOLS.has(toolName)) return true;
+  if (PLAN_BLOCKED_TERMINAL_TOOLS.has(toolName)) return true;
   // Workstream A1: write-тулы инстанса/MCP (пока список пуст) — блокируются в
   // plan-режиме, read-тулы (`synth_info`/`synth_mcp_list`/`synth_mcp_test`) — нет.
   if (INSTANCE_WRITE_TOOLS.includes(toolName)) return true;

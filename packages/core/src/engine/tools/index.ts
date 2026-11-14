@@ -92,6 +92,14 @@ import {
   processStopTool,
   processDeleteTool,
 } from './processes.js';
+// PROP-132 (Ф5): тулы агента для интерактивных терминалов.
+import {
+  terminalListTool,
+  terminalOpenTool,
+  terminalReadTool,
+  terminalWriteTool,
+  terminalCloseTool,
+} from './terminals.js';
 // ADR-114: инвентарь git-worktree проекта (per-session рабочий каталог).
 import {
   gitWorktreeListTool,
@@ -249,6 +257,12 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   gitWorktreeCreateTool,
   gitWorktreeRemoveTool,
   gitWorktreePruneTool,
+  // PROP-132 (Ф5): интерактивные терминалы
+  terminalListTool,
+  terminalOpenTool,
+  terminalReadTool,
+  terminalWriteTool,
+  terminalCloseTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

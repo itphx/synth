@@ -104,6 +104,21 @@ export interface RuntimeDeps {
    */
   sftp?: boolean;
   /**
+   * PROP-132 (Ф5): поддержка **PTY** точкой исполнения (ADR-077).
+   *
+   * Терминал без PTY невозможен (fail-closed, дизайн §2), поэтому тулы
+   * терминалов помечаются недоступными с причиной `dependency`.
+   *
+   * Поле необязательное: снимок может быть собран до появления PTY в порте
+   * (старые переданные значения) — тогда доступность считается fail-open
+   * (как для любой неизвестной зависимости, ADR-078).
+   */
+  pty?: boolean;
+  /**
+   * Деталь недоступности PTY (технический текст, не переводится).
+   */
+  ptyDetail?: string;
+  /**
    * Детали недоступности — по зависимости (ADR-077).
    *
    * Технический текст (не переводится): в remote-режиме — «в пуле: 2 из 3
@@ -174,6 +189,12 @@ export const TOOL_RUNTIME_DEP: Record<string, ToolRuntimeDependency> = {
   ssh_copy: 'sftp',
   // PROP-124 §4c: адресный ssh-тул проброса порта — клиент SSH.
   ssh_tunnel: 'ssh',
+  // PROP-132 (Ф5): открытие терминала — оболочка `bash` (как у
+  // `execute_shell`: в образах `sh` — это dash/busybox ash, где
+  // bash-синтаксис не работает). Остальные терминальные тулы работают с
+  // уже открытым терминалом и отдельной программы не требуют; PTY —
+  // не программа, а возможность порта (`RuntimeDeps.pty`).
+  terminal_open: 'bash',
 };
 
 /** Fail-open дефолт: все зависимости считаются доступными. */
@@ -184,6 +205,7 @@ export const ALL_RUNTIME_DEPS_AVAILABLE: RuntimeDeps = {
   bash: true,
   ssh: true,
   sftp: true,
+  pty: true,
 };
 
 /** Доступна ли зависимость. `undefined` (детекция не выполнена) → доступна (fail-open). */
@@ -293,6 +315,12 @@ async function detectDeps(port: ExecutionPort): Promise<RuntimeDeps> {
     }
   }
   if (Object.keys(details).length > 0) deps.details = details;
+  // PROP-132 (Ф5): PTY у точки исполнения — не программа, а возможность
+  // порта (`openPty` + признак `features.pty` у удалённого исполнителя).
+  // Терминал без PTY невозможен → тулы терминалов недоступны (dependency).
+  const ptyAvailable = typeof port.openPty === 'function' && port.pty !== false;
+  deps.pty = ptyAvailable;
+  if (!ptyAvailable) deps.ptyDetail = 'PTY is not supported by the execution environment';
   return deps;
 }
 
@@ -456,6 +484,8 @@ export async function refreshRuntimeDeps(
   target.bash = fresh.bash;
   target.ssh = fresh.ssh;
   target.sftp = fresh.sftp;
+  target.pty = fresh.pty;
+  target.ptyDetail = fresh.ptyDetail;
   target.details = fresh.details;
   return target;
 }

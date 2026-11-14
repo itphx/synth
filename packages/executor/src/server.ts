@@ -29,6 +29,12 @@
  * | `GET` | `/mcp/servers` | состояние MCP-серверов исполнителя | bearer-токен |
  * | `GET` | `/mcp/tools` | инструменты поднятых MCP-серверов | bearer-токен |
  * | `POST` | `/mcp/call` | вызов инструмента MCP-сервера | bearer-токен |
+ * | `POST` | `/pty/open` | открыть PTY-сессию (протокол 8) | bearer-токен |
+ * | `POST` | `/pty/:id/input` | запись во вход терминала (протокол 8) | bearer-токен |
+ * | `POST` | `/pty/:id/resize` | изменение размера терминала (протокол 8) | bearer-токен |
+ * | `POST` | `/pty/:id/close` | закрытие PTY-сессии (протокол 8) | bearer-токен |
+ * | `GET` | `/pty/:id/status` | состояние PTY-сессии (протокол 8) | bearer-токен |
+ * | `GET` | `/pty/:id/stream` | поток вывода терминала, NDJSON (протокол 8) | bearer-токен |
  * | `GET` | `/health` | liveness исполнителя | без токена |
  * | `GET` | `/metrics` | метрики исполнителя (`synth_executor_*`) | bearer-токен |
  *
@@ -84,11 +90,15 @@ import {
   parseFsUploadQuery,
   parseFsWriteRequestBody,
   parseMcpCallRequestBody,
+  parsePtyInputBody,
+  parsePtyOpenBody,
+  parsePtyResizeBody,
   parseSpawnExecRequestBody,
   parseStopBackgroundRequestBody,
   type BackgroundLogsResponse,
   type BackgroundStatusResponse,
   type ExecutorCapabilities,
+  type ExecutorErrorReason,
   type ExecutorHealth,
   type FsBytesResponse,
   type FsHashResponse,
@@ -102,9 +112,21 @@ import {
   type McpCallResultBody,
   type McpServerStatusBody,
   type McpToolInfoBody,
+  type PtyCloseResponse,
+  type PtyInputResponse,
+  type PtyOpenResponse,
+  type PtyResizeBody,
+  type PtyStatusBody,
+  type PtyStreamFrame,
   type SpawnExecResponse,
   type StopBackgroundResponse,
 } from './protocol.js';
+import {
+  DEFAULT_PTY_BATCH_MS,
+  DEFAULT_PTY_REPLAY_BUFFER_BYTES,
+  PtyService,
+  type PtyServiceFailureReason,
+} from './pty-service.js';
 import { detectToolchain, type ToolchainInfo } from './toolchain.js';
 import { ExecutorMcpError, ExecutorMcpHost, type McpServerSpec } from './mcp.js';
 
@@ -159,12 +181,43 @@ export interface ExecutorAppOptions {
    * Создаётся в `main.ts` из `commandPolicy` конфигурации; `off` → не создан.
    */
   policyGuard?: CommandPolicyGuard;
+  /**
+   * Протокол 8: включён ли контур PTY-сессий (`false` → `501 pty_unsupported`
+   * на всех PTY-роутах, признак `features.pty` не объявляется).
+   */
+  ptyEnabled?: boolean;
+  /** Протокол 8: лимит живых PTY-сессий (по умолчанию — 4). */
+  ptyMaxSessions?: number;
+  /** Протокол 8: таймаут простоя PTY-сессии, мс (по умолчанию — 2 дня). */
+  ptyIdleTimeoutMs?: number;
+  /** Протокол 8: потолок тела ввода PTY, байт (по умолчанию — 16 КиБ). */
+  ptyInputMaxBytes?: number;
+  /** Готовый PTY-сервис (иначе создаётся из опций выше). */
+  ptyService?: PtyService;
 }
 
 /** Дефолты лимитов исполнителя (совпадают с `EXECUTOR_DEFAULTS`). */
 const DEFAULT_MAX_CONCURRENCY = 4;
 const DEFAULT_MAX_TIMEOUT_MS = 600_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+/** Протокол 8: дефолты контура PTY. */
+const DEFAULT_PTY_MAX_SESSIONS = 4;
+const DEFAULT_PTY_IDLE_TIMEOUT_MS = 172_800_000;
+const DEFAULT_PTY_INPUT_MAX_BYTES = 16 * 1024;
+
+/**
+ * Машинный код отказа PTY-контура (по причине).
+ *
+ * Код едет в теле ошибки (`error.code`) — клиенту не нужно разбирать текст.
+ */
+const PTY_FAILURE_CODES: Record<PtyServiceFailureReason, string> = {
+  pty_unsupported: 'EPTY',
+  pty_not_found: 'ENOPTY',
+  pty_limit: 'ELIMIT',
+  cwd_outside_workspace: 'EWORKSPACE',
+  spawn_failed: 'ESPAWN',
+  payload_too_large: 'EINPUT',
+};
 
 /**
  * Связать отмену с разрывом соединения клиентом.
@@ -327,6 +380,21 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
   // Хост MCP-серверов: серверы поднимаются лениво (первое обращение).
   const mcpHost = opts.mcpHost ?? new ExecutorMcpHost(opts.mcpServers ?? []);
 
+  // PTY-контур (протокол 8): реестр терминалов исполнителя. Готовый сервис
+  // передаётся из `startExecutorServer` — иначе он не смог бы закрыть
+  // терминалы при остановке исполнителя.
+  const pty =
+    opts.ptyService ??
+    new PtyService({
+      workspaceRoot: opts.workspaceRoot,
+      maxSessions: opts.ptyMaxSessions ?? DEFAULT_PTY_MAX_SESSIONS,
+      idleTimeoutMs: opts.ptyIdleTimeoutMs ?? DEFAULT_PTY_IDLE_TIMEOUT_MS,
+      inputMaxBytes: opts.ptyInputMaxBytes ?? DEFAULT_PTY_INPUT_MAX_BYTES,
+      batchMs: DEFAULT_PTY_BATCH_MS,
+      replayBufferBytes: DEFAULT_PTY_REPLAY_BUFFER_BYTES,
+    });
+  const ptyEnabled = opts.ptyEnabled ?? true;
+
   // ADR-094: состояние MCP-серверов — источник gauge `synth_executor_mcp_servers`
   // (лейбл `status`: `idle`/`up`/`down`). Пересчёт — перед рендером.
   opts.metrics?.setMcpSource(() => mcpHost.listServers().map((server) => ({ status: server.status })));
@@ -374,6 +442,9 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
   app.use('/fs/download', requireToken);
   app.use('/fs/upload', requireToken);
   app.use('/fs/hash', requireToken);
+  // PTY-контур (протокол 8) — тот же bearer-токен, что и у команд.
+  app.use('/pty/open', requireToken);
+  app.use('/pty/*', requireToken);
 
   app.post('/exec', async (c) => {
     let raw: unknown;
@@ -532,6 +603,10 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
         // FS-операции (протокол 7, PROP-135): признак обязательный — без
         // него control plane файловые тулы в remote-режиме не запускает.
         fs: true,
+        // PTY-сессии (протокол 8): признак явный — старый исполнитель его
+        // не объявляет, значит control plane такой адрес для терминала не
+        // выбирает (тихого возврата в inline нет).
+        pty: ptyEnabled,
       },
       // Аддитивно: эффективные потолки исполнителя (таймаут и буфер вывода).
       // Снимают «тихий» потолок — control plane видит лимит до вызова,
@@ -944,6 +1019,202 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     }
   });
 
+  // --- PTY-сессии (протокол 8, план терминалов Ф2а) -----------------------
+  //
+  // Псевдотерминал живёт на исполнителе: там, где есть toolchain и рабочий
+  // каталог проекта. Контур выключен (`SYNTH_EXECUTOR_PTY=0`) — все PTY-роуты
+  // отвечают `501 pty_unsupported`: клиент знает, что терминала здесь не
+  // будет (признак `features.pty` тогда не объявляется).
+
+  /** Единый ответ «PTY недоступен» (контур выключен). */
+  const ptyUnsupported = (c: Context): Response => {
+    const { status, body } = errorResponse(
+      'pty_unsupported',
+      'PTY-контур исполнителя выключен',
+      { code: PTY_FAILURE_CODES.pty_unsupported },
+    );
+    return c.json(body, status);
+  };
+
+  /** Отказ сервиса PTY → ошибочный ответ с корректным кодом. */
+  const ptyFailure = (
+    c: Context,
+    reason: PtyServiceFailureReason,
+    message: string,
+  ): Response => {
+    const { status, body } = errorResponse(reason, message, {
+      code: PTY_FAILURE_CODES[reason],
+    });
+    return c.json(body, status);
+  };
+
+  /** Разбор JSON-тела PTY-запроса (400 при невалидном JSON). */
+  const readPtyBody = async (
+    c: Context,
+  ): Promise<{ ok: true; value: unknown } | { ok: false; response: Response }> => {
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return { ok: false, response: c.json(body, status) };
+    }
+    return { ok: true, value: raw };
+  };
+
+  app.post('/pty/open', async (c) => {
+    if (!ptyEnabled) return ptyUnsupported(c);
+    const parsedBody = await readPtyBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+
+    const parsed = parsePtyOpenBody(parsedBody.value);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+
+    const outcome = await pty.open(parsed.value);
+    if (!outcome.ok) {
+      return ptyFailure(c, outcome.reason, outcome.message);
+    }
+    const body: PtyOpenResponse = outcome.response;
+    // `201` — сессия заведена; `200` — идемпотентный повтор (сессия уже была).
+    return c.json(body, outcome.created ? 201 : 200);
+  });
+
+  app.post('/pty/:id/input', async (c) => {
+    if (!ptyEnabled) return ptyUnsupported(c);
+    const id = c.req.param('id');
+    const parsedBody = await readPtyBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+
+    const parsed = parsePtyInputBody(parsedBody.value, pty.inputMaxBytes);
+    if (!parsed.ok) {
+      const reason: ExecutorErrorReason = parsed.tooLarge ? 'payload_too_large' : 'invalid_request';
+      const { status, body } = errorResponse(reason, parsed.message);
+      return c.json(body, status);
+    }
+
+    const result = pty.write(id, parsed.value.data);
+    if (!result.ok) {
+      return ptyFailure(c, result.reason, result.message);
+    }
+    const body: PtyInputResponse = { id, bytes: result.bytes };
+    return c.json(body, 200);
+  });
+
+  app.post('/pty/:id/resize', async (c) => {
+    if (!ptyEnabled) return ptyUnsupported(c);
+    const id = c.req.param('id');
+    const parsedBody = await readPtyBody(c);
+    if (!parsedBody.ok) return parsedBody.response;
+
+    const parsed = parsePtyResizeBody(parsedBody.value);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+
+    const result = pty.resize(id, parsed.value.cols, parsed.value.rows);
+    if (!result.ok) {
+      return ptyFailure(c, result.reason, result.message);
+    }
+    const body: PtyResizeBody = { cols: parsed.value.cols, rows: parsed.value.rows };
+    return c.json(body, 200);
+  });
+
+  app.post('/pty/:id/close', (c) => {
+    if (!ptyEnabled) return ptyUnsupported(c);
+    const id = c.req.param('id');
+    const result = pty.close(id);
+    if (!result.ok) {
+      return ptyFailure(c, result.reason, result.message);
+    }
+    const body: PtyCloseResponse = { id, closed: true };
+    return c.json(body, 200);
+  });
+
+  app.get('/pty/:id/status', (c) => {
+    if (!ptyEnabled) return ptyUnsupported(c);
+    const id = c.req.param('id');
+    const status = pty.status(id);
+    if (!status) {
+      return ptyFailure(c, 'pty_not_found', 'PTY-сессия не найдена');
+    }
+    const body: PtyStatusBody = status;
+    return c.json(body, 200);
+  });
+
+  app.get('/pty/:id/stream', (c) => {
+    if (!ptyEnabled) return ptyUnsupported(c);
+    const id = c.req.param('id');
+    const rawSince = c.req.query('since');
+    let since = 0;
+    if (rawSince !== undefined && rawSince.trim().length > 0) {
+      const num = Number(rawSince);
+      if (!Number.isInteger(num) || num < 0) {
+        const { status, body } = errorResponse(
+          'invalid_request',
+          'параметр since должен быть неотрицательным целым числом',
+        );
+        return c.json(body, status);
+      }
+      since = num;
+    }
+    if (!pty.status(id)) {
+      return ptyFailure(c, 'pty_not_found', 'PTY-сессия не найдена');
+    }
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        let closed = false;
+        let lastSeq = since;
+        const close = (): void => {
+          if (closed) return;
+          closed = true;
+          try {
+            controller.close();
+          } catch {
+            // Поток уже закрыт (клиент отключился) — не ошибка.
+          }
+        };
+        const enqueue = (frame: PtyStreamFrame): void => {
+          if (closed) return;
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
+          } catch {
+            close();
+          }
+        };
+        // Подписка **до** снимка буфера повтора: кадр, выданный между
+        // снимком и подпиской, иначе потерялся бы.
+        const unsubscribe = pty.subscribe(id, (frame) => {
+          if (frame.seq <= lastSeq) return;
+          enqueue(frame);
+        });
+        const unsubscribeExit = pty.onExit(id, () => {
+          unsubscribe?.();
+          close();
+        });
+        for (const frame of pty.framesSince(id, since) ?? []) {
+          lastSeq = frame.seq;
+          enqueue(frame);
+        }
+        c.req.raw.signal?.addEventListener('abort', () => {
+          unsubscribe?.();
+          unsubscribeExit?.();
+          close();
+        });
+      },
+    });
+
+    return new Response(stream, {
+      status: 200,
+      headers: { 'content-type': 'application/x-ndjson; charset=utf-8' },
+    });
+  });
+
   app.get('/health', (c) => {
     const body: ExecutorHealth = {
       status: 'ok',
@@ -951,6 +1222,8 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       uptimeSec: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
       concurrency: { limit: service.concurrencyLimit, active: service.activeCount },
       background: { limit: background.maxProcesses, active: background.runningCount },
+      // Протокол 8: состояние контура PTY (живые терминалы).
+      pty: { limit: pty.maxSessions, active: pty.liveCount },
     };
     return c.json(body, 200);
   });
@@ -1092,8 +1365,27 @@ export async function startExecutorServer(opts: ExecutorServerOptions): Promise<
       logDir: opts.backgroundLogDir ?? DEFAULT_BACKGROUND_LOG_DIR,
       ...(opts.policyGuard ? { policyGuard: opts.policyGuard } : {}),
     });
-  const app = createExecutorApp({ ...opts, toolchain, mcpHost, backgroundService: background, ...(metrics ? { metrics } : {}) });
-  const server = createExecutorHttpServer(app);
+  // PTY-сервис создаётся здесь: приложение получает готовый инстанс, а
+  // остановка исполнителя — доступ к нему (терминалы не должны пережить
+  // исполнитель).
+  const pty =
+    opts.ptyService ??
+    new PtyService({
+      workspaceRoot: opts.workspaceRoot,
+      maxSessions: opts.ptyMaxSessions ?? DEFAULT_PTY_MAX_SESSIONS,
+      idleTimeoutMs: opts.ptyIdleTimeoutMs ?? DEFAULT_PTY_IDLE_TIMEOUT_MS,
+      inputMaxBytes: opts.ptyInputMaxBytes ?? DEFAULT_PTY_INPUT_MAX_BYTES,
+      batchMs: DEFAULT_PTY_BATCH_MS,
+      replayBufferBytes: DEFAULT_PTY_REPLAY_BUFFER_BYTES,
+    });
+  const app = createExecutorApp({
+    ...opts,
+    toolchain,
+    mcpHost,
+    backgroundService: background,
+    ptyService: pty,
+    ...(metrics ? { metrics } : {}),
+  });  const server = createExecutorHttpServer(app);
 
   await new Promise<void>((resolve, reject) => {
     const onError = (err: Error): void => reject(err);
@@ -1118,6 +1410,9 @@ export async function startExecutorServer(opts: ExecutorServerOptions): Promise<
       // Фоновые процессы — ребёнки исполнителя: без явной остановки они
       // остались бы зомби-процессами.
       await background.dispose();
+      // PTY-сессии — тоже ребёнки исполнителя: терминалы закрываются
+      // (`SIGTERM` → `SIGKILL`), иначе они пережили бы исполнитель.
+      await pty.dispose();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });

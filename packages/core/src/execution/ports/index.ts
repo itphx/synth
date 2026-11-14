@@ -23,6 +23,9 @@ export type {
   ExecBackgroundChunk,
   ExecBackgroundExit,
   ExecBackgroundProcess,
+  // План терминалов (Ф1): контракт PTY-сессии.
+  PtyHandle,
+  PtyOpenRequest,
 } from './execution-port.js';
 export {
   ExecutionError,
@@ -33,6 +36,7 @@ export {
   EXECUTION_BASE_CAPABILITIES,
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
   EXECUTION_SECRETS_UNSUPPORTED_CODE,
+  EXECUTION_PTY_UNSUPPORTED_CODE,
 } from './execution-port.js';
 // PROP-135 (Ф1): FS-часть контракта порта исполнения (`realpath`/`stat`/
 // `readdir`/`readText`/`sniff`/`readBytes`) — файловые операции агента уезжают

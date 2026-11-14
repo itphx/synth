@@ -479,6 +479,7 @@ export {
   EXECUTION_BASE_CAPABILITIES,
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
   EXECUTION_SECRETS_UNSUPPORTED_CODE,
+  EXECUTION_PTY_UNSUPPORTED_CODE,
 } from './execution/ports/index.js';
 export type {
   ExecutionPort,
@@ -512,7 +513,77 @@ export type {
   FsBytesResult,
   FsUploadMode,
   FsUploadOptions,
+  // План терминалов (Ф1): контракт PTY-сессии.
+  PtyHandle,
+  PtyOpenRequest,
 } from './execution/ports/index.js';
+// План терминалов (Ф1): провайдер PTY (нативный модуль node-pty) — общий
+// шов для control plane и исполнителя (следующая фаза).
+export {
+  getPtyProvider,
+  isPtyAvailable,
+  PtyUnavailableError,
+} from './execution/pty/provider.js';
+export type {
+  PtyProvider,
+  PtySession,
+  PtySpawnRequest,
+} from './execution/pty/provider.js';
+// План терминалов (PROP-132, Ф3а/Ф3б): сервис терминалов, его контракты и
+// HTTP-фабрика. Реестр терминалов — в памяти процесса (ADR-096/ADR-116: порта
+// хранения у терминалов нет — свойство, а не дефект).
+export { TerminalService } from './engine/terminal/service.js';
+export {
+  createTerminalMetrics,
+  normalizeTerminalMetricStatus,
+  normalizeTerminalMetricOp,
+} from './engine/terminal/metrics.js';
+export type { TerminalMetricsHooks } from './engine/terminal/metrics.js';
+export {
+  createCommandAuditTerminalSink,
+  createNoopTerminalAuditSink,
+} from './engine/terminal/audit.js';
+export type {
+  TerminalAuditAction,
+  TerminalAuditEntry,
+  TerminalAuditSink,
+  TerminalCloseReason,
+} from './engine/terminal/audit.js';
+export { TerminalRingBuffer, splitByUtf8Bytes, utf8AlignedSuffix } from './engine/terminal/ring-buffer.js';
+export {
+  DEFAULT_TERMINAL_LIMITS,
+  TERMINAL_EVENT_TYPES,
+  TerminalDisabledError,
+  TerminalError,
+  TerminalInvalidRequestError,
+  TerminalLimitError,
+  TerminalNotFoundError,
+  TerminalUnavailableError,
+  isTerminalError,
+  toTerminalDto,
+  toTerminalDtoList,
+} from './engine/terminal/types.js';
+export type {
+  TerminalCreateInput,
+  TerminalDto,
+  TerminalDtoOptions,
+  TerminalErrorCode,
+  TerminalEventType,
+  TerminalLimits,
+  TerminalListFilter,
+  TerminalLogger,
+  TerminalOutputChunk,
+  TerminalOutputSnapshot,
+  TerminalRecord,
+  TerminalServiceOptions,
+  TerminalStatus,
+  TerminalSubscribeOptions,
+  TerminalSubscription,
+  TerminalSubscriptionHandlers,
+  TerminalTarget,
+  TerminalTimerHandle,
+  TerminalTimers,
+} from './engine/terminal/types.js';
 // PROP-135 (Ф1, слайс 2): общий читатель файлов — тем же кодом читает и
 // исполнитель (точечный runtime-импорт), поэтому формат вывода не зависит
 // от топологии.
@@ -2413,6 +2484,38 @@ export type {
 // PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
 // деталь, лог, остановка, удаление).
 export { createProcessRoutes } from './server/routes/processes.js';
+// PROP-132 (Ф3б): HTTP-контур интерактивных терминалов (список, создание,
+// снимок, правка, закрытие, вывод, NDJSON-поток, ввод, размер).
+export { createTerminalRoutes } from './server/routes/terminals.js';
+export type {
+  TerminalRouteMessages,
+  TerminalRoutesAuth,
+  TerminalRoutesDeps,
+  TerminalRoutesOptions,
+} from './server/routes/terminals.js';
+// PROP-132 (Ф3б): сборка терминального сервиса для инстанса (общая для
+// standalone-core и managed backend).
+export { createTerminalService } from './server/app/terminal-service.js';
+export type { TerminalServiceWiring } from './server/app/terminal-service.js';
+// PROP-132 (Ф3в): мастер-выключатель терминалов — приоритет источников
+// (env > runtime > config > default) и HTTP-контур runtime-настройки.
+export {
+  DEFAULT_TERMINAL_ENABLED,
+  TERMINAL_ENABLED_ENV,
+  parseTerminalEnvEnabled,
+  resolveTerminalEnabled,
+} from './engine/terminal/config.js';
+export type {
+  ResolvedTerminalEnabled,
+  TerminalEnabledSource,
+} from './engine/terminal/config.js';
+export { createTerminalSettingsRoutes } from './server/routes/settings-terminal.js';
+export type {
+  TerminalSettingsDeps,
+  TerminalSettingsMessages,
+  TerminalSettingsOptions,
+  TerminalSettingsView,
+} from './server/routes/settings-terminal.js';
 // PROP-135 Ф6b-1: admin-API профилей и пулов исполнения
 // (`/api/v2/execution/profiles|pools*`) — диагностика и `drain`/`release`.
 export { createExecutionRoutes } from './server/routes/execution.js';

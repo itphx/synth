@@ -21,6 +21,7 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('scheduler');
     expect(defaultConfig).toHaveProperty('decision');
     expect(defaultConfig).toHaveProperty('metrics');
+    expect(defaultConfig).toHaveProperty('terminal');
     expect(defaultConfig).toHaveProperty('questions');
     expect(defaultConfig).toHaveProperty('agents');
     expect(defaultConfig).toHaveProperty('attachments');
@@ -343,6 +344,12 @@ describe('defaultConfig', () => {
 
   it('metrics по умолчанию выключены (ADR-094: /metrics → 404)', () => {
     expect(defaultConfig.metrics).toEqual({ enabled: false });
+  });
+
+  it('terminal: секция есть, флаг не задан — дефолт `enabled: true` живёт в резолвере ядра (PROP-132)', () => {
+    // «Не задано в config.yaml» отличается от «явно задано» — по этому
+    // различаются источники значения в API (`config` против `default`).
+    expect(defaultConfig.terminal).toEqual({});
   });
 
   it('plugins по умолчанию: включены, runtime-install deny, trust-floor trusted, исполнение кода выключено (ADR-090 Ф0/Ф1)', () => {

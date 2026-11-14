@@ -53,6 +53,8 @@ const SECTION_KEYS = [
   'sessionOpsPerMinute',
   // ADR-135: runtime-каталог профилей исполнения (`execution`).
   'execution',
+  // PROP-132: runtime-выключатель терминалов (`terminal.enabled`).
+  'terminal',
 ] as const satisfies readonly (keyof RuntimeSettings)[];
 
 const SECTION_KEY_SET: ReadonlySet<string> = new Set<string>(SECTION_KEYS);
@@ -447,6 +449,17 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearExecution(): Promise<void> {
       await deleteSetting(conn, 'execution');
+    },
+
+    // PROP-132: runtime-выключатель терминалов (`terminal.enabled`).
+    async getTerminal(): Promise<Partial<RuntimeSettingsValue<'terminal'>>> {
+      return (await readSetting<RuntimeSettingsValue<'terminal'>>(conn, 'terminal')) ?? {};
+    },
+    async setTerminal(terminal: RuntimeSettingsValue<'terminal'>): Promise<void> {
+      await writeSetting(conn, 'terminal', terminal);
+    },
+    async clearTerminal(): Promise<void> {
+      await deleteSetting(conn, 'terminal');
     },
   };
 }

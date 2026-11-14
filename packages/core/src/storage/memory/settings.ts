@@ -45,6 +45,7 @@ import type {
   RuntimeSettings,
   SecurityRuntimeSettings,
   AttachmentsRuntimeSettings,
+  TerminalRuntimeSettings,
   UpdatesRuntimeSettings,
 } from '../runtime-settings.js';
 import type { AppearanceDefaults, DefaultsRepository, DictionaryRepository, ProtectedPathsRepository, SecretPatternRepository, SettingsRepository } from '../ports/index.js';
@@ -326,6 +327,18 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearMetrics(): Promise<void> {
     this._clear('metrics');
+  }
+
+  async getTerminal(): Promise<Partial<TerminalRuntimeSettings>> {
+    return structuredClone(this._settings.terminal ?? {});
+  }
+
+  async setTerminal(config: Partial<TerminalRuntimeSettings>): Promise<void> {
+    this._patch({ terminal: config });
+  }
+
+  async clearTerminal(): Promise<void> {
+    this._clear('terminal');
   }
 
   async getUpdates(): Promise<Partial<UpdatesRuntimeSettings>> {

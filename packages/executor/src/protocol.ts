@@ -110,12 +110,44 @@
  * - признак поддержки синхронной доставки — `features.secrets: true` в
  *   `GET /capabilities` (и версия протокола ≥ 4); агентный режим —
  *   `features.sshAgent: true` (протокол ≥ 6).
+ *
+ * ## PTY-сессии (протокол 8)
+ *
+ * Псевдотерминал на исполнителе (план терминалов, Ф2a): оболочка живёт там,
+ * где есть toolchain и рабочий каталог, а control plane общается с ней по
+ * проводу.
+ *
+ * - `POST /pty/open` — тело `{ id?, cwd, shell?, args?, cols, rows, env? }` →
+ *   `201 { id, pid?, cols, rows }`; `id` — **идемпотентность открытия**
+ *   (повторный `open` с тем же `id` возвращает ту же сессию, `200`);
+ * - `POST /pty/:id/input` — тело `{ data }` → запись во вход терминала;
+ * - `POST /pty/:id/resize` — тело `{ cols, rows }` → изменение размера;
+ * - `POST /pty/:id/close` → закрытие сессии (`SIGTERM` группе → 1 с →
+ *   `SIGKILL`);
+ * - `GET /pty/:id/status` → `200 { id, pid?, cols, rows, exited, exitCode?,
+ *   signal?, seq }`;
+ * - `GET /pty/:id/stream?since=` → **NDJSON** поток кадров
+ *   `{"seq":n,"data":"…"}`: сначала буфер повтора (256 КиБ), затем живые
+ *   кадры; `since` — номер последнего кадра, который видел клиент.
+ *
+ * Отказы: `501 pty_unsupported` (контур выключен — `SYNTH_EXECUTOR_PTY=0`, или
+ * нативный модуль не загрузился), `404 pty_not_found` (сессии нет),
+ * `429 pty_limit` (превышен лимит живых сессий), `400 cwd_outside_workspace`
+ * (`cwd` вне workspace), `400 invalid_request` (невалидное тело/размеры).
  */
 
 import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
 
 /**
  * Версия wire-протокола исполнителя.
+ *
+ * **8** — PTY-сессии (`/pty/open`, `/pty/:id/input`, `/pty/:id/resize`,
+ * `/pty/:id/close`, `/pty/:id/status`, `/pty/:id/stream`) и признак
+ * `features.pty` (план терминалов, Ф2a). Старый исполнитель (≤ 7) признака
+ * не объявляет ⇒ control plane **не выбирает** такой адрес для терминала
+ * (тихого фоллбека в inline нет: терминал должен жить там же, где
+ * toolchain). Версия **повышается** — в отличие от FS-роутов: это новая
+ * фича, а не расширение существующей.
  *
  * **7** — FS-операции (`/fs/stat`, `/fs/realpath`, `/fs/list`, `/fs/read-text`,
  * `/fs/sniff`, `/fs/read-bytes`, `/fs/write-file`, `/fs/mkdir`, `/fs/remove`) и
@@ -156,7 +188,7 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
  * потолки таймаута и буфера вывода, чтобы control plane видел «тихий» потолок
  * заранее. Старый исполнитель поля не отдаёт — разбор терпимый.
  */
-export const EXECUTOR_PROTOCOL_VERSION = 7;
+export const EXECUTOR_PROTOCOL_VERSION = 8;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -226,6 +258,25 @@ export type ExecutorErrorReason =
    * вызывающий должен отличать это от неудачи исполнения. HTTP-код — `403`.
    */
   | 'policy_denied'
+  /**
+   * PTY недоступен на исполнителе (протокол 8): контур выключен
+   * (`SYNTH_EXECUTOR_PTY=0`) либо нативный модуль терминала не загрузился.
+   *
+   * Отдельная причина от `internal_error`: вызывающий знает, что PTY здесь
+   * **не будет** (адрес не выбирается), а не «сломалось». HTTP-код — `501`.
+   */
+  | 'pty_unsupported'
+  /**
+   * PTY-сессия не найдена (протокол 8) — неизвестный `id` или уже закрытая
+   * и вычищенная сессия. HTTP-код — `404`.
+   */
+  | 'pty_not_found'
+  /**
+   * Превышен лимит живых PTY-сессий исполнителя (протокол 8).
+   *
+   * HTTP-код — `429`: лимит ресурса, а не конфликт состояния.
+   */
+  | 'pty_limit'
   /** Прочие ошибки сервера. */
   | 'internal_error';
 
@@ -369,6 +420,15 @@ export interface ExecutorFeatures {
    * split-топологии живёт на исполнителе).
    */
   fs?: boolean;
+  /**
+   * PTY-сессии (протокол 8): исполнитель умеет открывать псевдотерминал
+   * (`POST /pty/open`).
+   *
+   * Признак — **явный**: старый исполнитель (≤ 7) его не объявляет, и
+   * control plane такой адрес для терминала **не выбирает** — тихого
+   * возврата в inline нет (терминал должен жить там же, где toolchain).
+   */
+  pty?: boolean;
 }
 
 /** Ответ `GET /health`. */
@@ -379,6 +439,8 @@ export interface ExecutorHealth {
   concurrency: { limit: number; active: number };
   /** Фоновые процессы (ADR-077, шаг 7c). */
   background?: { limit: number; active: number };
+  /** PTY-сессии (протокол 8). */
+  pty?: { limit: number; active: number };
 }
 
 /**
@@ -476,10 +538,11 @@ export function parseMcpCallRequestBody(
  *   отсутствующий путь);
  * - `409` — цель уже существует (публикация байтов, протокол 7);
  * - `413` — тело запроса больше потолка (публикация байтов, протокол 7);
- * - `429` — превышен лимит одновременных команд;
- * - `500` — прочие ошибки исполнения (включая ненулевой код выхода).
+ * - `429` — превышен лимит одновременных команд или живых PTY-сессий;
+ * - `500` — прочие ошибки исполнения (включая ненулевой код выхода);
+ * - `501` — PTY недоступен на исполнителе (протокол 8).
  */
-export type ExecErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500;
+export type ExecErrorStatus = 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 501;
 
 export const EXEC_ERROR_STATUS: Record<ExecutorErrorReason, ExecErrorStatus> = {
   invalid_request: 400,
@@ -495,6 +558,10 @@ export const EXEC_ERROR_STATUS: Record<ExecutorErrorReason, ExecErrorStatus> = {
   too_many_requests: 429,
   // PROP-136b: отказ внешнего чекера команд — команда не запускается.
   policy_denied: 403,
+  // Протокол 8: PTY-контур.
+  pty_unsupported: 501,
+  pty_not_found: 404,
+  pty_limit: 429,
   timeout: 500,
   aborted: 500,
   spawn_failed: 500,
@@ -1496,6 +1563,258 @@ export function parseFsDownloadRequestBody(
     return { ok: false, message: 'поле maxBytes обязательно: целое число > 0 (потолок размера файла)' };
   }
   return { ok: true, value: { ...base.value, maxBytes: raw.maxBytes } };
+}
+
+/**
+ * Границы размера терминала (протокол 8).
+ *
+ * Слишком маленький терминал бессмысленен (оболочка не рисует промпт), а
+ * огромный — это способ занять память исполнителя. Значение **на проводе**
+ * проверяется строго: молчаливый clamp означал бы, что клиент думает о
+ * терминале 200×50, а получил 80×24.
+ */
+export const EXECUTOR_PTY_MIN_COLS = 1;
+export const EXECUTOR_PTY_MAX_COLS = 1_000;
+export const EXECUTOR_PTY_MIN_ROWS = 1;
+export const EXECUTOR_PTY_MAX_ROWS = 1_000;
+
+/**
+ * Потолок тела ввода PTY по умолчанию, байт (протокол 8).
+ *
+ * Переопределяется оператором (`SYNTH_EXECUTOR_PTY_INPUT_MAX_BYTES`): ввод
+ * терминала — это keystroke'ы, поток не должен превращаться в способ забить
+ * память исполнителя.
+ */
+export const EXECUTOR_PTY_DEFAULT_INPUT_MAX_BYTES = 16 * 1024;
+
+/**
+ * Тело запроса открытия PTY-сессии (`POST /pty/open`, протокол 8).
+ *
+ * Форма повторяет `PtyOpenRequest` порта core: те же `cwd`/`env`/`shell`,
+ * но **без команды** — запускается оболочка, а ввод идёт через
+ * `POST /pty/:id/input`.
+ */
+export interface PtyOpenBody {
+  /**
+   * Идентификатор сессии (необязателен).
+   *
+   * Клиентский `id` — **ключ идемпотентности**: повторный `open` с тем же
+   * `id` возвращает уже открытую сессию (новый терминал не заводится).
+   * Не задан — исполнитель выдаёт свой (`pty_<uuid>`).
+   */
+  id?: string;
+  /** Рабочий каталог сессии (внутри workspace исполнителя). */
+  cwd: string;
+  /** Оболочка; не задана — `$SHELL` окружения, иначе `/bin/bash`. */
+  shell?: string;
+  /** Аргументы оболочки. */
+  args?: string[];
+  /** Ширина терминала (колонки). */
+  cols: number;
+  /** Высота терминала (строки). */
+  rows: number;
+  /** Дополнительное окружение — мержится поверх очищенного базового. */
+  env?: Record<string, string>;
+}
+
+/** Ответ `POST /pty/open` (протокол 8). */
+export interface PtyOpenResponse {
+  /** Идентификатор PTY-сессии (`pty_<uuid>` или клиентский). */
+  id: string;
+  /** pid процесса ОС (лидер PTY-сессии). */
+  pid?: number;
+  /** Ширина терминала (колонки). */
+  cols: number;
+  /** Высота терминала (строки). */
+  rows: number;
+}
+
+/** Тело запроса записи во вход терминала (`POST /pty/:id/input`). */
+export interface PtyInputBody {
+  /** Данные для ввода (keystroke'ы). */
+  data: string;
+}
+
+/** Ответ `POST /pty/:id/input` (протокол 8). */
+export interface PtyInputResponse {
+  /** Идентификатор PTY-сессии. */
+  id: string;
+  /** Сколько байт записано во вход терминала. */
+  bytes: number;
+}
+
+/** Тело запроса изменения размера терминала (`POST /pty/:id/resize`). */
+export interface PtyResizeBody {
+  /** Ширина терминала (колонки). */
+  cols: number;
+  /** Высота терминала (строки). */
+  rows: number;
+}
+
+/** Ответ `POST /pty/:id/close` (протокол 8). */
+export interface PtyCloseResponse {
+  /** Идентификатор PTY-сессии. */
+  id: string;
+  /** Сессия закрыта (или уже была закрыта — идемпотентно). */
+  closed: true;
+}
+
+/** Состояние PTY-сессии (`GET /pty/:id/status`, протокол 8). */
+export interface PtyStatusBody {
+  /** Идентификатор PTY-сессии. */
+  id: string;
+  /** pid процесса ОС (лидер PTY-сессии). */
+  pid?: number;
+  /** Ширина терминала (колонки). */
+  cols: number;
+  /** Высота терминала (строки). */
+  rows: number;
+  /** Терминал завершился. */
+  exited: boolean;
+  /** Код завершения (не задан, пока терминал жив). */
+  exitCode?: number;
+  /** Сигнал завершения (не задан, пока терминал жив). */
+  signal?: string;
+  /** Номер последнего выданного кадра вывода (монотонный). */
+  seq: number;
+}
+
+/** Кадр вывода терминала (`GET /pty/:id/stream`, протокол 8). */
+export interface PtyStreamFrame {
+  /** Номер кадра (монотонный, начиная с 1). */
+  seq: number;
+  /** Данные кадра (текст терминала). */
+  data: string;
+}
+
+/**
+ * Разбор тела `POST /pty/open` (протокол 8).
+ *
+ * Проверки строгие: `cwd` обязателен, размеры терминала — в границах,
+ * `env` — объект со строковыми значениями. Молчаливый пропуск означал бы
+ * запуск терминала **не с теми** параметрами, которые запросили.
+ */
+export function parsePtyOpenBody(
+  body: unknown,
+): { ok: true; value: PtyOpenBody } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+
+  if (typeof raw.cwd !== 'string' || raw.cwd.trim().length === 0) {
+    return { ok: false, message: 'поле cwd обязательно: непустая строка' };
+  }
+  if (raw.cwd.includes('\0')) {
+    return { ok: false, message: 'поле cwd содержит недопустимые символы' };
+  }
+
+  const size = parsePtySize(raw.cols, raw.rows);
+  if (!size.ok) return size;
+
+  const value: PtyOpenBody = { cwd: raw.cwd, cols: size.cols, rows: size.rows };
+
+  if (raw.id !== undefined) {
+    if (typeof raw.id !== 'string' || raw.id.trim().length === 0) {
+      return { ok: false, message: 'поле id должно быть непустой строкой' };
+    }
+    if (raw.id.includes('\0')) {
+      return { ok: false, message: 'поле id содержит недопустимые символы' };
+    }
+    value.id = raw.id.trim();
+  }
+
+  if (raw.shell !== undefined) {
+    if (typeof raw.shell !== 'string' || raw.shell.trim().length === 0) {
+      return { ok: false, message: 'поле shell должно быть непустой строкой' };
+    }
+    value.shell = raw.shell.trim();
+  }
+
+  if (raw.args !== undefined) {
+    if (!Array.isArray(raw.args) || !raw.args.every((arg) => typeof arg === 'string')) {
+      return { ok: false, message: 'поле args должно быть массивом строк' };
+    }
+    value.args = [...(raw.args as string[])];
+  }
+
+  if (raw.env !== undefined) {
+    if (typeof raw.env !== 'object' || raw.env === null || Array.isArray(raw.env)) {
+      return { ok: false, message: 'поле env должно быть объектом со строковыми значениями' };
+    }
+    const env: Record<string, string> = {};
+    for (const [key, val] of Object.entries(raw.env as Record<string, unknown>)) {
+      if (typeof val !== 'string') {
+        return { ok: false, message: `поле env.${key} должно быть строкой` };
+      }
+      env[key] = val;
+    }
+    value.env = env;
+  }
+
+  return { ok: true, value };
+}
+
+/**
+ * Разбор тела `POST /pty/:id/input` (протокол 8).
+ *
+ * Потолок `maxBytes` — размер входа терминала; превышение → отказ
+ * (`payload_too_large`, 413): тело уже пришло, обрезать keystroke'и нельзя.
+ */
+export function parsePtyInputBody(
+  body: unknown,
+  maxBytes: number = EXECUTOR_PTY_DEFAULT_INPUT_MAX_BYTES,
+): { ok: true; value: PtyInputBody } | { ok: false; message: string; tooLarge?: boolean } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  if (typeof raw.data !== 'string') {
+    return { ok: false, message: 'поле data обязательно: строка с вводом терминала' };
+  }
+  if (Buffer.byteLength(raw.data, 'utf-8') > maxBytes) {
+    return {
+      ok: false,
+      tooLarge: true,
+      message: `поле data: больше ${maxBytes} байт`,
+    };
+  }
+  return { ok: true, value: { data: raw.data } };
+}
+
+/** Разбор тела `POST /pty/:id/resize` (протокол 8). */
+export function parsePtyResizeBody(
+  body: unknown,
+): { ok: true; value: PtyResizeBody } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  const size = parsePtySize(raw.cols, raw.rows);
+  if (!size.ok) return size;
+  return { ok: true, value: { cols: size.cols, rows: size.rows } };
+}
+
+/**
+ * Разбор размера терминала (`cols`/`rows`) — общий для `open` и `resize`.
+ */
+function parsePtySize(
+  cols: unknown,
+  rows: unknown,
+): { ok: true; cols: number; rows: number } | { ok: false; message: string } {
+  if (typeof cols !== 'number' || !Number.isInteger(cols) || cols < EXECUTOR_PTY_MIN_COLS || cols > EXECUTOR_PTY_MAX_COLS) {
+    return {
+      ok: false,
+      message: `поле cols должно быть целым числом ${EXECUTOR_PTY_MIN_COLS}..${EXECUTOR_PTY_MAX_COLS}`,
+    };
+  }
+  if (typeof rows !== 'number' || !Number.isInteger(rows) || rows < EXECUTOR_PTY_MIN_ROWS || rows > EXECUTOR_PTY_MAX_ROWS) {
+    return {
+      ok: false,
+      message: `поле rows должно быть целым числом ${EXECUTOR_PTY_MIN_ROWS}..${EXECUTOR_PTY_MAX_ROWS}`,
+    };
+  }
+  return { ok: true, cols, rows };
 }
 
 /** Ошибочный ответ с корректным HTTP-кодом. */

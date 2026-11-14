@@ -172,6 +172,15 @@ export class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
   readonly spawnBackground?: ExecutionPort['spawnBackground'];
   /** Browser-вызов — есть только если внутренний порт его умеет. */
   readonly browserCall?: ExecutionPort['browserCall'];
+  /**
+   * Открытие PTY-сессии — есть только если внутренний порт его умеет.
+   *
+   * Как и `spawnBackground`: обёртка не превращает «PTY не поддерживается» в
+   * «есть метод, но падает» — иначе вызывающий не отличит одно от другого.
+   * Сам отказ (исполнитель без `features.pty`) приходит из внутреннего порта
+   * как `ExecutionError` с кодом `EPTY` и причиной `dependency_missing`.
+   */
+  readonly openPty?: ExecutionPort['openPty'];
   private readonly _inner: ExecutionPort;
 
   constructor(inner: ExecutionPort, urls: string[], token: string) {
@@ -186,6 +195,24 @@ export class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
     if (browserCall) {
       this.browserCall = (req) => browserCall.call(inner, req);
     }
+    const openPty = inner.openPty;
+    if (openPty) {
+      this.openPty = (req) => openPty.call(inner, req);
+    }
+  }
+
+  /**
+   * Признак «порт умеет PTY» (план терминалов, Ф1/Ф2b).
+   *
+   * Зеркалит признак внутреннего порта: у удалённого исполнителя — это
+   * `features.pty` вместе с совместимостью версии протокола (≥ 8).
+   *
+   * `undefined` — «состав пула неизвестен» (не «не умеет»): неизвестное не
+   * значит «нет». Авторитетная проверка — при вызове `openPty` (отказ
+   * приходит как `ExecutionError` с кодом `EPTY`).
+   */
+  get pty(): boolean | undefined {
+    return this._inner.pty;
   }
 
   execute(req: Parameters<ExecutionPort['execute']>[0]): ReturnType<ExecutionPort['execute']> {

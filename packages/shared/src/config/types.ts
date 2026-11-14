@@ -1309,6 +1309,29 @@ export const metricsConfigSchema = z.object({
   enabled: z.boolean().default(false),
 });
 
+// --- Терминалы (PROP-132) ---
+
+/**
+ * PROP-132: конфигурация интерактивных терминалов.
+ *
+ * - `enabled` — мастер-выключатель терминального контура: `false` — весь
+ *   контур `/api/v2/terminals*` отвечает `403 TERMINALS_DISABLED`, живые
+ *   терминалы закрываются, новые не создаются.
+ *
+ * Флаг **необязателен** в схеме намеренно: «не задано в config.yaml» должно
+ * отличаться от «явно задано `true`» — по этому различаются источники
+ * значения в API (`config` против `default`). Само значение по умолчанию
+ * (`enabled: true`) живёт в резолвере ядра (`DEFAULT_TERMINAL_ENABLED`).
+ *
+ * Env-оверрайд — `SYNTH_TERMINAL_ENABLED` (общее правило секций, ADR-023).
+ */
+export const terminalConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+});
+
+/** PROP-132: секция `terminal` (`enabled`). */
+export type TerminalConfig = z.infer<typeof terminalConfigSchema>;
+
 // --- Webhooks (ADR-052, этап II) ---
 
 /**
@@ -1988,6 +2011,10 @@ export const synthConfigSchema = z.object({
   limits: limitsConfigSchema.prefault({}),
   attachments: attachmentsConfigSchema.prefault({}),
   metrics: metricsConfigSchema.prefault({}),
+  // PROP-132: секция `terminal` — мастер-выключатель терминалов. Секция
+  // необязательна: отсутствие = «не задано в config.yaml» (дефолт `enabled:
+  // true` живёт в резолвере ядра).
+  terminal: terminalConfigSchema.optional(),
   updates: updatesConfigSchema.prefault({}),
   authority: authorityConfigSchema.prefault({}),
   plugins: pluginsConfigSchema.prefault({}),

@@ -83,6 +83,11 @@ export async function main(): Promise<void> {
     backgroundLogMaxBytes: config.backgroundLogMaxBytes,
     ...(config.backgroundLogDir ? { backgroundLogDir: config.backgroundLogDir } : {}),
     ...(config.tlsCaFile ? { tlsCaFile: config.tlsCaFile } : {}),
+    // Протокол 8: контур PTY-сессий (терминалы живут на исполнителе).
+    ptyEnabled: config.pty.enabled,
+    ptyMaxSessions: config.pty.maxSessions,
+    ptyIdleTimeoutMs: config.pty.idleTimeoutMs,
+    ptyInputMaxBytes: config.pty.inputMaxBytes,
     ...(policyGuard ? { policyGuard } : {}),
     ...(metrics ? { metrics } : {}),
     mcpServers: config.mcpServers,
@@ -104,6 +109,11 @@ export async function main(): Promise<void> {
         config.commandPolicy.provider === 'off'
           ? 'выключен'
           : `${config.commandPolicy.provider} (failMode: ${config.commandPolicy.failMode})`
+      }; ` +
+      `PTY: ${
+        config.pty.enabled
+          ? `включён (лимит сессий: ${config.pty.maxSessions}; простой: ${config.pty.idleTimeoutMs} мс)`
+          : 'выключен'
       }; ` +
       `удалено старых каталогов SSH: ${swept})`,
   );

@@ -165,6 +165,10 @@ import {
   // PROP-135 слайс 5b-2: резолвер проектного (браузерного) пула для вызовов
   // MCP-инструментов исполнителя.
   createExecutorMcpPoolResolver,
+  // PROP-132 (Ф3в): сервис терминалов инстанса + мастер-выключатель
+  // `terminal.enabled` (приоритет env > runtime > config > default).
+  createTerminalService,
+  resolveTerminalEnabled,
   // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр
   // блоков промпта (композер + фасад плагинов) и рантайм плагинов.
   PromptBlockRegistry,
@@ -1196,6 +1200,30 @@ export async function createBackendDeps(
   // роутер) → резолвера нет: вызовы идут с инстанс-пула (прежнее поведение).
   const executorMcpResolvePool = createExecutorMcpPoolResolver(executionRouter);
 
+  // PROP-132 (Ф3в): сервис терминалов инстанса — **один экземпляр на процесс**
+  // (реестр живых терминалов, поток вывода, ввод, лимиты, аудит, метрики).
+  //
+  // Жизненный цикл — здесь, а не в `mount-routes.ts`: сервис гасится на
+  // graceful shutdown (`stopTerminalService`), а мастер-выключатель
+  // `terminal.enabled` применяется **live** (`setEnabled`): живые терминалы
+  // закрываются, создание новых запрещается — рестарт не нужен.
+  const terminalService = createTerminalService({
+    port: executionPort,
+    eventBus,
+    commandAuditLog,
+    ...(metrics ? { metrics } : {}),
+    sessions: { getSession: (id: string) => sessionManager.getSession(id) },
+  });
+  // Стартовое значение мастер-выключателя: env > runtime > config > default.
+  const terminalRuntime = await settingsStore.getTerminal();
+  terminalService.setEnabled(
+    resolveTerminalEnabled({
+      configEnabled: config.synth.terminal?.enabled,
+      runtimeEnabled: typeof terminalRuntime.enabled === 'boolean' ? terminalRuntime.enabled : undefined,
+      env: process.env,
+    }).enabled,
+  );
+
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов (паритет с standalone).
   //
   // Тот же порт исполнения, что у тулов (ADR-077): фон — это лишь способ
@@ -1622,6 +1650,9 @@ export async function createBackendDeps(
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),
+    // PROP-132 (Ф5): сервис интерактивных терминалов — тот же экземпляр, что у
+    // HTTP-роутов `/api/v2/terminals*` (через `ctx.extra.terminalService`).
+    terminalService,
     // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`) — live-геттер:
     // runtime-настройка (`/api/v2/settings/ssh`) применяется без рестарта.
     // `tools` (дефолт) — ключ в окружение команд не попадает; `agent` — ключи
@@ -2285,6 +2316,10 @@ export async function createBackendDeps(
     // PROP-136 (слайс 136a): журнал исполнений команд — роуты
     // `/api/v2/audit/commands` читают тот же экземпляр, что пишет оркестратор.
     commandAuditLog,
+    // PROP-132 (Ф3в): сервис терминалов инстанса (один на процесс) + его
+    // остановка на graceful shutdown (`dispose()` закрывает живые терминалы).
+    terminalService,
+    stopTerminalService: () => terminalService.dispose(),
     // PROP-136b (слайс 136b-2a): зеркальный чекер команд — для тестов/UI.
     commandPolicyProvider,
     // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.

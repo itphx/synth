@@ -108,6 +108,7 @@ import type { RequestSessionService } from './events/request-session.js';
 import type { QuestionService } from './question/service.js';
 // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
 import type { BackgroundRunService } from './background/service.js';
+import type { TerminalService } from './terminal/service.js';
 // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
 import { ActiveRunRegistry } from './background/active-runs.js';
 import type { ProcessService } from './processes/service.js';
@@ -1036,6 +1037,14 @@ export interface OrchestratorOptions {
    */
   backgroundService?: BackgroundRunService;
   /**
+   * PROP-132 (Ф5): сервис интерактивных терминалов инстанса.
+   *
+   * Тот же экземпляр, что у HTTP-роутов `/api/v2/terminals*` (один на
+   * процесс). Не задан — тулы `terminal_*` недоступны
+   * (`terminal.tool.deps_unavailable`).
+   */
+  terminalService?: TerminalService;
+  /**
    * ADR-104 × ADR-111/ADR-113: вернуть в очередь **все** сообщения, оставшиеся
    * в steer-очереди к концу хода (ни пользовательский ввод, ни уведомления
    * фоновых прогонов теряться не должны). `opts.autostart` — поднять ли ход:
@@ -1384,6 +1393,11 @@ export class ChatOrchestrator {
    * фоновый запуск саб-агента недоступен).
    */
   private readonly _backgroundService: BackgroundRunService | null;
+  /**
+   * PROP-132 (Ф5): сервис интерактивных терминалов (null — не задан: тулы
+   * `terminal_*` недоступны, `terminal.tool.deps_unavailable`).
+   */
+  private readonly _terminalService: TerminalService | null;
   /**
    * ADR-104 × ADR-111/ADR-113: возврат остатка steer-очереди в обычную очередь
    * (ни ввод пользователя, ни уведомления фоновых прогонов не теряются).
@@ -1962,6 +1976,8 @@ export class ChatOrchestrator {
     this._questionService = options.questionService ?? null;
     // Этап 1 roadmap 0.13 (блок 4): реестр фоновых прогонов + тумблер инстанса.
     this._backgroundService = options.backgroundService ?? null;
+    // PROP-132 (Ф5): сервис интерактивных терминалов.
+    this._terminalService = options.terminalService ?? null;
     this._requeueSteerMessages = options.requeueSteerMessages ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
@@ -4448,6 +4464,9 @@ export class ChatOrchestrator {
       // PROP-124 §0: режим инстанса для SSH-ключей — в слое доступности
       // (адресные ssh-тулы недоступны в режиме `agent`).
       getSshMode: () => this._getSshMode?.() ?? 'tools',
+      // PROP-132 (Ф5): мастер-выключатель терминалов (`terminal.enabled`) —
+      // live (runtime-настройка), поэтому геттер, а не снимок.
+      getTerminalEnabled: () => this._terminalService?.isEnabled() ?? true,
     };
     return (tool) => computeToolAvailability(tool.name, tool.capabilities, opts).available;
   }
@@ -4648,6 +4667,8 @@ export class ChatOrchestrator {
         workspaceReady,
         // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`).
         getSshMode: () => this._getSshMode?.() ?? 'tools',
+        // PROP-132 (Ф5): мастер-выключатель терминалов (`terminal.enabled`).
+        getTerminalEnabled: () => this._terminalService?.isEnabled() ?? true,
       });
       if (!availability.available && availability.reason) {
         const dep = availability.reason === 'dependency' ? TOOL_RUNTIME_DEP[tool.name] : undefined;
@@ -4992,6 +5013,8 @@ export class ChatOrchestrator {
         workspaceReady,
         // PROP-124 §0: режим инстанса для SSH-ключей (`ssh.mode`).
         getSshMode: () => this._getSshMode?.() ?? 'tools',
+        // PROP-132 (Ф5): мастер-выключатель терминалов (`terminal.enabled`).
+        getTerminalEnabled: () => this._terminalService?.isEnabled() ?? true,
       });
       const adminDisabled = this._isAdminDisabled(tool);
       // chars = JSON.stringify LLM-определения (тот же расчёт, что слой `tools`).
@@ -6842,6 +6865,10 @@ export class ChatOrchestrator {
                   // тул `execute_shell` с `background: true` запускает команду
                   // в фоне и возвращает управление сразу.
                   processService: this._processService ?? undefined,
+                  // PROP-132 (Ф5): сервис интерактивных терминалов — тулы
+                  // `terminal_list`/`terminal_open`/`terminal_read`/
+                  // `terminal_write`/`terminal_close`.
+                  terminalService: this._terminalService ?? undefined,
                   // ADR-115: привязка файла из workspace к диалогу — сервис
                   // вложений, live-конфиг (ранние проверки), доставка
                   // user-сообщения (очередь + автоход) и учёт ссылок на blob.

@@ -40,6 +40,10 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'metrics', key: 'enabled', type: 'boolean' })).toBe(
       'SYNTH_METRICS_ENABLED',
     );
+    // PROP-132: мастер-выключатель терминалов.
+    expect(envOverrideName({ section: 'terminal', key: 'enabled', type: 'boolean' })).toBe(
+      'SYNTH_TERMINAL_ENABLED',
+    );
     // ADR-115: лимиты вложений.
     expect(envOverrideName({ section: 'attachments', key: 'maxBytesPerFile', type: 'number' })).toBe(
       'SYNTH_ATTACHMENTS_MAX_BYTES_PER_FILE',
@@ -225,6 +229,31 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.metrics).toEqual({ enabled: true });
     // Общий предел вывода инструментов.
     expect(cfg.tools).toEqual({ outputMaxLines: 500, outputMaxBytes: 4096 });
+  });
+
+  it('PROP-132: SYNTH_TERMINAL_ENABLED применяется к секции terminal', () => {
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_TERMINAL_ENABLED: 'false' });
+    expect(cfg.terminal).toEqual({ enabled: false });
+
+    const cfgOn = applyEnvOverrides(makeConfig(), { SYNTH_TERMINAL_ENABLED: 'true' });
+    expect(cfgOn.terminal).toEqual({ enabled: true });
+  });
+
+  it('PROP-132: невалидное значение SYNTH_TERMINAL_ENABLED → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_TERMINAL_ENABLED: 'maybe' });
+
+    expect(cfg.terminal).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_TERMINAL_ENABLED');
+  });
+
+  it('PROP-132: пустое значение SYNTH_TERMINAL_ENABLED → тихий игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_TERMINAL_ENABLED: '' });
+
+    expect(cfg.terminal).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('невалидное значение → warn + игнор, значение не меняется', () => {
