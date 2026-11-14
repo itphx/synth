@@ -619,7 +619,7 @@ export function TerminalView({ tab }: TerminalViewProps) {
         />
         {finished && (
           <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-2">
-            <span className="rounded-full bg-surface-elevated px-3 py-1 text-xs text-foreground">
+            <span className="rounded-full bg-surface-card px-3 py-1 text-xs text-foreground">
               {t('terminal.finished')}
             </span>
           </div>

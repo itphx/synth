@@ -39,7 +39,7 @@
 import { BASE_URL, fetchJSON } from './base'
 
 /** Статус терминала (сервер: `starting`/`running`/`exited`). */
-export type TerminalStatus = 'starting' | 'running' | 'exited'
+export type TerminalStatus = 'starting' | 'running' | 'closing' | 'exited'
 
 /** Снимок терминала (DTO сервера). */
 export interface TerminalDto {
@@ -244,7 +244,7 @@ function readTimestamp(source: RawRecord, names: string[]): number | undefined {
   return undefined
 }
 
-const TERMINAL_STATUSES: TerminalStatus[] = ['starting', 'running', 'exited']
+const TERMINAL_STATUSES: TerminalStatus[] = ['starting', 'running', 'closing', 'exited']
 
 function readStatus(source: RawRecord): TerminalStatus | undefined {
   const value = source['status']

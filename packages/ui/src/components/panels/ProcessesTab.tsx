@@ -309,8 +309,9 @@ export const ProcessesTab: React.FC = () => {
         </div>
       </div>
 
-      {/* Секция терминалов — свой срез (серверный список проекта). */}
-      {kindFilter === 'terminal' && (
+      {/* Секция терминалов — свой срез (серверный список проекта).
+          В режиме «все» показываем её вместе с фоновыми прогонами. */}
+      {(kindFilter === 'terminal' || kindFilter === 'all') && (
         <TerminalsSection
           projectId={activeProjectId}
           currentSessionId={currentSessionId ?? null}
