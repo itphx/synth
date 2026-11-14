@@ -1,8 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Hono } from 'hono';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { GlobalRole } from '@itphx/synth-shared';
 import type { AuthConfig, User } from '@itphx/synth-shared';
 import { isSessionCookieSecure, createAuthMiddleware } from './middleware.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 
 // Cookie сессии: `Secure` по умолчанию; отключается только явным opt-out
 // `SYNTH_COOKIE_INSECURE=true` (локальная http-разработка).
@@ -180,5 +184,107 @@ describe('API Key mode (аудит F5)', () => {
     const user = (await res.json()) as User;
     expect(user.roles).toEqual(['ADMIN']);
     expect(user.isTestUser).toBe(true);
+  });
+});
+
+/**
+ * ADR-140 Ф2: OIDC-bearer ветка middleware собирает `User` с группами
+ * (снимок claim'а IdP, allowlist). Проверяется на живом OIDC-провайдере
+ * (discovery + JWKS) — цепочка jose целиком.
+ */
+describe('OIDC bearer — группы пользователя (ADR-140)', () => {
+  let server: Server;
+  let issuer: string;
+  let privateKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey'];
+  const CLIENT_ID = 'synth-web';
+
+  beforeAll(async () => {
+    const pair = await generateKeyPair('RS256');
+    privateKey = pair.privateKey;
+    const publicJwk = await exportJWK(pair.publicKey);
+    const jwks = { keys: [{ ...publicJwk, kid: 'test-key', alg: 'RS256', use: 'sig' }] };
+
+    server = createServer((req, res) => {
+      if (req.url?.startsWith('/.well-known/openid-configuration')) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({
+          authorization_endpoint: `${issuer}/authorize`,
+          token_endpoint: `${issuer}/token`,
+          jwks_uri: `${issuer}/jwks`,
+        }));
+        return;
+      }
+      if (req.url === '/jwks') {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify(jwks));
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    issuer = `http://127.0.0.1:${port}`;
+  });
+
+  afterAll(async () => {
+    await closeTestServer(server);
+  });
+
+  const mint = (claims: Record<string, unknown>): Promise<string> =>
+    new SignJWT({ preferred_username: 'ivan', realm_access: { roles: ['user'] }, ...claims })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+      .setIssuer(issuer)
+      .setAudience(CLIENT_ID)
+      .setSubject('user-1')
+      .setIssuedAt()
+      .setExpirationTime('5m')
+      .sign(privateKey);
+
+  const makeApp = (allow: string[]): Hono => {
+    const auth = createAuthMiddleware({
+      debugMode: false,
+      sessionMaxAgeMinutes: 60,
+      oidc: {
+        enabled: true,
+        issuer,
+        clientId: CLIENT_ID,
+        clientSecret: 'secret',
+        redirectUri: 'http://localhost:5002/auth/callback',
+        groups: { claim: 'groups', allow },
+      },
+    });
+    const app = new Hono();
+    app.use('*', auth.attachUser);
+    app.get('/me', auth.requireAuth, (c) => c.json(c.get('user' as never) as User));
+    return app;
+  };
+
+  it('группы из claim попадают в User', async () => {
+    const token = await mint({ groups: ['team-a', 'team-c'] });
+    const res = await makeApp(['team-a']).request('/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    const user = (await res.json()) as User;
+    expect(user.groups).toEqual(['team-a']);
+  });
+
+  it('группы вне allowlist отбрасываются', async () => {
+    const token = await mint({ groups: ['team-c'] });
+    const res = await makeApp(['team-a']).request('/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const user = (await res.json()) as User;
+    expect(user.groups).toBeUndefined();
+  });
+
+  it('пустой allowlist → групп нет (fail-closed)', async () => {
+    const token = await mint({ groups: ['team-a'] });
+    const res = await makeApp([]).request('/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const user = (await res.json()) as User;
+    expect(user.groups).toBeUndefined();
   });
 });

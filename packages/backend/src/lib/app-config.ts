@@ -11,6 +11,19 @@ const envInt = (key: string, fallback: number): number => {
   return v ? parseInt(v, 10) : fallback;
 };
 
+/**
+ * ADR-140: разобрать CSV-список имён групп (`SYNTH_OIDC_GROUPS_ALLOW`).
+ * По образцу соседних CSV-полей (`SYNTH_API_KEY_ROLES`,
+ * `SYNTH_ATTACHMENTS_MODALITIES`): trim, пустые элементы отбрасываются.
+ * Пустая строка → пустой список (групп нет — fail-closed).
+ */
+function parseCsvList(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
 export interface BackendConfig {
   synth: SynthConfig;
   dataDir: string;
@@ -60,6 +73,17 @@ function buildAuthConfig(defaults: SynthConfig['auth']): AuthConfig {
 
   const oidcEnabled = envBool('SYNTH_OIDC_ENABLED', defaults.oidc?.enabled ?? false);
 
+  // ADR-140: источник групп — claim IdP + allowlist имён групп.
+  // Приоритет: env > config.yaml > дефолт (пустой allowlist → групп нет,
+  // fail-closed; «принять все» невозможно). Явно заданная (в т.ч. пустая)
+  // env-переменная перекрывает config.yaml — иначе «выключил» группы оператор
+  // не смог бы.
+  const groupsClaim = envStr('SYNTH_OIDC_GROUPS_CLAIM', defaults.oidc?.groups?.claim ?? 'groups');
+  const groupsAllowEnv = process.env.SYNTH_OIDC_GROUPS_ALLOW;
+  const groupsAllow = groupsAllowEnv !== undefined
+    ? parseCsvList(groupsAllowEnv)
+    : (defaults.oidc?.groups?.allow ?? []);
+
   return {
     debugMode,
     apiKey: envStr('SYNTH_API_KEY', defaults.apiKey ?? ''),
@@ -76,6 +100,10 @@ function buildAuthConfig(defaults: SynthConfig['auth']): AuthConfig {
           clientSecret: envStr('SYNTH_OIDC_CLIENT_SECRET', defaults.oidc?.clientSecret ?? ''),
           redirectUri: envStr('SYNTH_OIDC_REDIRECT_URI', defaults.oidc?.redirectUri ?? 'http://localhost:5002/auth/callback'),
           cliClientId: envStr('SYNTH_OIDC_CLI_CLIENT_ID', defaults.oidc?.cliClientId ?? 'synth-cli'),
+          groups: {
+            claim: groupsClaim,
+            allow: groupsAllow,
+          },
         }
       : undefined,
   };

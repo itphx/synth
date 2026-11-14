@@ -16,6 +16,16 @@ import { join, resolve, sep } from 'node:path';
 
 const OIDC_STATE_COOKIE = 'oidc_state';
 
+/**
+ * ADR-140: группы пользователя в ответах `/auth/*`.
+ *
+ * Поле добавляется **только при непустом списке** — у пользователя без групп
+ * `groups` в ответе отсутствует (аддитивно, старый клиент не ломается).
+ */
+function groupsField(user: User): { groups?: string[] } {
+  return user.groups && user.groups.length > 0 ? { groups: user.groups } : {};
+}
+
 // Встроенные умолчания оформления (совпадают с тем, что использует UI
 // по умолчанию: packages/ui/src/lib/defaults.ts + uiScale.ts) живут в core —
 // один источник для standalone (`GET /auth/defaults`) и managed (здесь),
@@ -162,6 +172,7 @@ export function createAuthRoutes(
         username: user.username,
         email: user.email,
         roles: user.roles,
+        ...groupsField(user),
       } : null,
     });
   });
@@ -198,6 +209,7 @@ export function createAuthRoutes(
         username: user.username,
         email: user.email,
         roles: user.roles,
+        ...groupsField(user),
       },
     });
   });
@@ -213,6 +225,7 @@ export function createAuthRoutes(
       username: user.username,
       email: user.email,
       roles: user.roles,
+      ...groupsField(user),
     });
   });
 

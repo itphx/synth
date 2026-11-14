@@ -6,30 +6,19 @@
  * `routes/sessions.ts`, `events/hub.ts`): иначе «кто запрашивает» собирался бы
  * в трёх местах по-разному, а правила доступа разошлись бы (PROP-133 §1).
  *
- * Группы: в Ф1 поля `User.groups` в контракте нет (claim `groups` из IdP —
- * Ф2), поэтому группы читаются **defensively**: поле отсутствует → групп нет
- * (fail-closed). Поле в `User` не добавляется — это задел Ф2.
+ * Группы (ADR-140 Ф2): источник — claim `groups` из IdP, доставленный в
+ * `User.groups` (снимок на момент логина). Поле читается напрямую; нет поля /
+ * не массив / пусто → групп нет (fail-closed).
  */
 import type { ProjectPrincipal, User } from '@itphx/synth-shared';
 
 /**
- * Пользователь с группами.
- *
- * Отдельный интерфейс (не изменение `User`): группа — аддитивное поле Ф2,
- * которого в контракте Ф1 ещё нет.
- */
-export interface UserWithGroups extends User {
-  /** Группы пользователя (Ф2): субъект грантов по группам. */
-  groups?: readonly string[];
-}
-
-/**
- * PROP-133: группы пользователя.
+ * ADR-140: группы пользователя.
  *
  * Нет поля / не массив / пусто → `undefined` (групп нет — fail-closed).
  */
 export function groupsOf(user: User | null | undefined): readonly string[] | undefined {
-  const groups = (user as UserWithGroups | null | undefined)?.groups;
+  const groups = user?.groups;
   if (!Array.isArray(groups)) return undefined;
   const named = groups.filter(
     (group): group is string => typeof group === 'string' && group.length > 0,
@@ -42,7 +31,7 @@ export function groupsOf(user: User | null | undefined): readonly string[] | und
  *
  * `userId` — идентификатор пользователя запроса (владелец сессии/проекта);
  * `roles` — глобальные роли инстанса (`ADMIN`/`LEAD` — сквозной обзор);
- * `groups` — группы пользователя (Ф2; нет — `undefined`).
+ * `groups` — группы пользователя (ADR-140; нет — `undefined`).
  */
 export function projectPrincipalOf(
   user: User | null | undefined,

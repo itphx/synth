@@ -182,3 +182,78 @@ describe('routes/auth: GET/POST /auth/profile/avatar — санитайз userna
     expect(get.status).toBe(200);
   });
 });
+
+/**
+ * ADR-140 Ф2: группы пользователя (снимок claim'а IdP) доставляются в ответах
+ * `/auth/status` (его читает гибридный core), `/auth/session` и `/auth/me`.
+ * Пустой список — поле в ответе отсутствует (аддитивно).
+ */
+describe('routes/auth: группы пользователя (ADR-140)', () => {
+  const USER_WITH_GROUPS = {
+    id: 'u1',
+    username: 'ivan',
+    email: 'ivan@test',
+    roles: ['USER'],
+    groups: ['team-a'],
+    preferredLanguage: 'ru',
+    createdAt: '',
+    teamRole: 'USER',
+    notes: '',
+    interviewCompleted: false,
+  };
+
+  const makeApp = (user: unknown): Hono => {
+    const kit = { getCurrentUser: async () => user };
+    const app = new Hono();
+    app.route('/auth', createAuthRoutes(kit as never, BASE_CONFIG));
+    return app;
+  };
+
+  it('GET /auth/status → группы пользователя', async () => {
+    const res = await makeApp(USER_WITH_GROUPS).request('/auth/status');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: { groups?: string[] } };
+    expect(body.user.groups).toEqual(['team-a']);
+  });
+
+  it('GET /auth/session → группы пользователя', async () => {
+    const res = await makeApp(USER_WITH_GROUPS).request('/auth/session');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { user: { groups?: string[] } };
+    expect(body.user.groups).toEqual(['team-a']);
+  });
+
+  it('GET /auth/me → группы пользователя', async () => {
+    const res = await makeApp(USER_WITH_GROUPS).request('/auth/me');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { groups?: string[] };
+    expect(body.groups).toEqual(['team-a']);
+  });
+
+  it('без групп поле groups в ответе отсутствует', async () => {
+    const { groups: _groups, ...withoutGroups } = USER_WITH_GROUPS;
+    const app = makeApp(withoutGroups);
+    const status = (await (await app.request('/auth/status')).json()) as { user: Record<string, unknown> };
+    expect(status.user).not.toHaveProperty('groups');
+    const me = (await (await app.request('/auth/me')).json()) as Record<string, unknown>;
+    expect(me).not.toHaveProperty('groups');
+  });
+
+  /**
+   * Группы — снимок IdP, не пользовательское поле: `PUT /auth/profile` их
+   * **не** принимает (белый список полей профиля не расширен).
+   */
+  it('PUT /auth/profile не принимает groups', async () => {
+    const user = { ...USER_WITH_GROUPS };
+    const app = makeApp(user);
+    const res = await app.request('/auth/profile', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ groups: ['evil-group'], notes: 'ok' }),
+    });
+    expect(res.status).toBe(200);
+    expect(user.groups).toEqual(['team-a']);
+    const body = (await res.json()) as { user?: Record<string, unknown> };
+    expect(body.user).not.toHaveProperty('groups');
+  });
+});

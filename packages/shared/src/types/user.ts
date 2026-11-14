@@ -13,6 +13,13 @@ export interface User {
   username: string;
   email?: string;
   roles: string[];
+  /**
+   * ADR-140: снимок групп IdP на момент логина (claim `groups`, отфильтрованный
+   * allowlist'ом `auth.oidc.groups.allow`). На права влияет **только** через
+   * `resolveProjectAccess` (гранты по группам); само поле — пассивный снимок,
+   * не источник прав. Пустое/отсутствующее поле — групп нет (fail-closed).
+   */
+  groups?: string[];
   preferredLanguage: string;
   createdAt: string;
   teamRole: string;
@@ -49,6 +56,16 @@ export interface AuthConfig {
     redirectUri: string;
     /** Public client_id для локального CLI/core (ROPC/device flow). Не секрет. */
     cliClientId?: string;
+    /**
+     * ADR-140: источник групп пользователя — claim IdP и allowlist имён.
+     * Пустой allowlist — групп нет (fail-closed): «принять все» невозможно.
+     */
+    groups?: {
+      /** Имя claim'а с группами (Keycloak — `groups`). */
+      claim?: string;
+      /** Allowlist имён групп; пусто — ни одна группа не принимается. */
+      allow?: string[];
+    };
   };
 }
 

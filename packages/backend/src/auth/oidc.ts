@@ -20,10 +20,23 @@ export interface OidcConfig {
    * Issuer проверяется всегда.
    */
   audience?: string[];
+  /**
+   * ADR-140: источник групп пользователя — claim IdP и allowlist имён.
+   * Пустой allowlist — групп нет (fail-closed): «принять все» невозможно.
+   */
+  groups?: {
+    /** Имя claim'а с группами (Keycloak — `groups`). */
+    claim?: string;
+    /** Allowlist имён групп; пусто — ни одна группа не принимается. */
+    allow?: string[];
+  };
 }
 
 /** Audience access_token по умолчанию (Keycloak): клиент либо `account`. */
 const DEFAULT_ACCESS_TOKEN_AUDIENCE = 'account';
+
+/** Имя claim'а с группами по умолчанию (Keycloak кладёт плоский массив `groups`). */
+const DEFAULT_GROUPS_CLAIM = 'groups';
 
 /** Подмножество документа discovery OpenID Connect. */
 export interface OidcDiscovery {
@@ -160,12 +173,13 @@ export class OidcClient {
       issuer: this.config.issuer,
       audience: this._anyTokenAudience(),
     });
-    return extractUser(payload, this.config.clientId);
+    return extractUser(payload, this.config.clientId, this.config.groups);
   }
 
   /**
    * Проверка пары id_token + access_token через JWKS провайдера.
    * Роли: из id_token, если пусто — из access_token (client roles учитываются).
+   * Группы: тот же fallback (id_token → access_token).
    */
   async verifyTokens(idToken: string, accessToken: string): Promise<OidcUser> {
     const discovery = await this.getDiscovery();
@@ -183,7 +197,7 @@ export class OidcClient {
       // напр. `synth-cli`, отвергались бы) — issuer и подпись проверяются всегда.
       audience: this._accessTokenAudience(),
     });
-    return extractUserFromTokens(idPayload, accessPayload, this.config.clientId);
+    return extractUserFromTokens(idPayload, accessPayload, this.config.clientId, this.config.groups);
   }
 
   /**
@@ -232,6 +246,11 @@ export interface OidcUser {
   username: string;
   email?: string;
   roles: string[];
+  /**
+   * ADR-140: группы пользователя — снимок claim'а IdP на момент логина,
+   * отфильтрованный allowlist'ом. Пусто/нет — групп нет (fail-closed).
+   */
+  groups?: string[];
 }
 
 /**
@@ -261,12 +280,53 @@ function extractKnownRoles(payload: Record<string, unknown>, clientId?: string):
 }
 
 /**
+ * ADR-140: извлечь группы пользователя из payload токена.
+ *
+ * Claim — **верхнего уровня** (Keycloak кладёт плоский массив `groups`);
+ * вложенные пути не разбираются. Нормализация: trim, только `string`-элементы,
+ * дедуп, порядок claim'а сохраняется.
+ *
+ * Фильтр — по `allow` (allowlist) **точным** совпадением: имена групп Keycloak
+ * регистрозависимы, в верхний регистр не приводим. Пустой allowlist → `[]`
+ * (fail-closed: «принять все» невозможно). Claim отсутствует или это не
+ * массив → `[]` (без throw — кривой токен не ломает аутентификацию).
+ */
+export function extractGroups(
+  payload: Record<string, unknown>,
+  cfg?: { claim?: string; allow?: string[] } | null,
+): string[] {
+  const allow = (cfg?.allow ?? [])
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+  if (allow.length === 0) return [];
+  const allowSet = new Set(allow);
+
+  const claim = cfg?.claim?.trim() || DEFAULT_GROUPS_CLAIM;
+  const raw = payload[claim];
+  if (!Array.isArray(raw)) return [];
+
+  const groups: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const name = item.trim();
+    if (!name || !allowSet.has(name)) continue;
+    if (!groups.includes(name)) groups.push(name);
+  }
+  return groups;
+}
+
+/**
  * Извлечь пользователя из payload id_token Keycloak:
  * - username = preferred_username (fallback email, sub)
  * - roles = realm_access.roles + resource_access.<clientId>.roles → ВЕРХНИЙ РЕГИСТР + фильтр известных (ADMIN/USER/LEAD/AUDITOR)
+ * - groups = claim'а групп (ADR-140) — по allowlist'у; пусто → `[]`
  * - если ролей нет — дефолт ['USER']
  */
-export function extractUser(payload: Record<string, unknown>, clientId?: string): OidcUser {
+export function extractUser(
+  payload: Record<string, unknown>,
+  clientId?: string,
+  groups?: { claim?: string; allow?: string[] } | null,
+): OidcUser {
   const sub = typeof payload.sub === 'string' ? payload.sub : '';
   const email = typeof payload.email === 'string' ? payload.email : undefined;
   const preferredUsername = typeof payload.preferred_username === 'string'
@@ -281,27 +341,35 @@ export function extractUser(payload: Record<string, unknown>, clientId?: string)
     username: username || 'oidc-user',
     email,
     roles: roles.length > 0 ? roles : ['USER'],
+    groups: extractGroups(payload, groups),
   };
 }
 
 /**
- * Объединить роли из id_token и access_token: роли из id_token, если пусто — из access_token.
- * Поля id/username/email берутся из id_token.
+ * Объединить роли и группы из id_token и access_token: из id_token, если пусто —
+ * из access_token. Поля id/username/email берутся из id_token.
  */
 export function extractUserFromTokens(
   idPayload: Record<string, unknown>,
   accessPayload: Record<string, unknown>,
   clientId?: string,
+  groups?: { claim?: string; allow?: string[] } | null,
 ): OidcUser {
   const idRoles = extractKnownRoles(idPayload, clientId);
   const accessRoles = extractKnownRoles(accessPayload, clientId);
   const roles = idRoles.length > 0 ? idRoles : accessRoles;
-  const user = extractUser(idPayload, clientId);
-  return { ...user, roles: roles.length > 0 ? roles : ['USER'] };
+  const idGroups = extractGroups(idPayload, groups);
+  const accessGroups = extractGroups(accessPayload, groups);
+  const resolvedGroups = idGroups.length > 0 ? idGroups : accessGroups;
+  const user = extractUser(idPayload, clientId, groups);
+  return { ...user, roles: roles.length > 0 ? roles : ['USER'], groups: resolvedGroups };
 }
 
 /**
  * Собрать полноценный User из OIDC-пользователя (объект User требует служебные поля).
+ *
+ * ADR-140: группы переносятся **только если список непуст** — иначе поле не
+ * добавляется вовсе (у пользователя без групп `groups` отсутствует).
  */
 export function oidcUserToUser(o: OidcUser): User {
   return {
@@ -309,6 +377,7 @@ export function oidcUserToUser(o: OidcUser): User {
     username: o.username,
     email: o.email,
     roles: o.roles,
+    ...(o.groups && o.groups.length > 0 ? { groups: [...o.groups] } : {}),
     preferredLanguage: 'ru',
     createdAt: new Date().toISOString(),
     teamRole: o.roles[0] || 'USER',

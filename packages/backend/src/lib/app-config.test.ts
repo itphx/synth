@@ -90,6 +90,90 @@ describe('loadBackendConfig — дефолт llmGateway.enabled (F4)', () => {
 });
 
 /**
+ * ADR-140 Ф2: источник групп пользователя — claim IdP (`SYNTH_OIDC_GROUPS_CLAIM`)
+ * и allowlist имён (`SYNTH_OIDC_GROUPS_ALLOW`, csv). Пустой allowlist — групп
+ * нет (fail-closed), «принять все» невозможно.
+ */
+describe('buildAuthConfig — auth.oidc.groups (ADR-140)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  async function writeConfig(yaml: string): Promise<string> {
+    dir = await mkdtemp(join(tmpdir(), 'synth-backend-oidc-groups-'));
+    const path = join(dir, 'config.yaml');
+    await writeFile(path, yaml, 'utf-8');
+    return path;
+  }
+
+  it('без настройки — claim=groups, allow=[] (групп нет)', async () => {
+    vi.stubEnv('SYNTH_OIDC_ENABLED', 'true');
+    const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
+    expect(cfg.auth.oidc?.groups).toEqual({ claim: 'groups', allow: [] });
+  });
+
+  it('SYNTH_OIDC_GROUPS_CLAIM → имя claim', async () => {
+    vi.stubEnv('SYNTH_OIDC_ENABLED', 'true');
+    vi.stubEnv('SYNTH_OIDC_GROUPS_CLAIM', 'roles_groups');
+    const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
+    expect(cfg.auth.oidc?.groups?.claim).toBe('roles_groups');
+  });
+
+  it('SYNTH_OIDC_GROUPS_ALLOW (csv) → allowlist', async () => {
+    vi.stubEnv('SYNTH_OIDC_ENABLED', 'true');
+    vi.stubEnv('SYNTH_OIDC_GROUPS_ALLOW', 'team-a,team-b');
+    const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
+    expect(cfg.auth.oidc?.groups?.allow).toEqual(['team-a', 'team-b']);
+  });
+
+  it('SYNTH_OIDC_GROUPS_ALLOW: пробелы обрезаются, пустые элементы отброшены', async () => {
+    vi.stubEnv('SYNTH_OIDC_ENABLED', 'true');
+    vi.stubEnv('SYNTH_OIDC_GROUPS_ALLOW', ' team-a , , team-b ,');
+    const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
+    expect(cfg.auth.oidc?.groups?.allow).toEqual(['team-a', 'team-b']);
+  });
+
+  it('config.yaml: auth.oidc.groups используется, когда env не задан', async () => {
+    const cfg = await loadBackendConfig({
+      configPath: await writeConfig(
+        'auth:\n  oidc:\n    enabled: true\n    groups:\n      claim: groups\n      allow:\n        - team-a\n',
+      ),
+    });
+    expect(cfg.auth.oidc?.groups).toEqual({ claim: 'groups', allow: ['team-a'] });
+  });
+
+  it('env перебивает config.yaml', async () => {
+    vi.stubEnv('SYNTH_OIDC_GROUPS_ALLOW', 'team-b');
+    const cfg = await loadBackendConfig({
+      configPath: await writeConfig(
+        'auth:\n  oidc:\n    enabled: true\n    groups:\n      allow:\n        - team-a\n',
+      ),
+    });
+    expect(cfg.auth.oidc?.groups?.allow).toEqual(['team-b']);
+  });
+
+  it('явно пустой env → пустой allowlist (групп нет, fail-closed)', async () => {
+    vi.stubEnv('SYNTH_OIDC_GROUPS_ALLOW', '');
+    const cfg = await loadBackendConfig({
+      configPath: await writeConfig(
+        'auth:\n  oidc:\n    enabled: true\n    groups:\n      allow:\n        - team-a\n',
+      ),
+    });
+    expect(cfg.auth.oidc?.groups?.allow).toEqual([]);
+  });
+
+  it('oidc выключен — секции oidc нет (групп нет)', async () => {
+    const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
+    expect(cfg.auth.oidc).toBeUndefined();
+  });
+});
+
+/**
  * PROP-136 (слайс 136a): managed-профиль включает аудит исполнений команд по
  * умолчанию (`security.commandAudit.enabled`); standalone остаётся выключенным
  * (дефолт схемы). Env `SYNTH_COMMAND_AUDIT_ENABLED` применяется позже —

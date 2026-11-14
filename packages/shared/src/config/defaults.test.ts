@@ -27,6 +27,11 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('session');
   });
 
+  it('auth.oidc по умолчанию НЕ задан — секции групп (ADR-140) нет, пока нет oidc', () => {
+    expect(defaultConfig.auth.oidc).toBeUndefined();
+    expect(defaultConfig.auth.oidc?.groups).toBeUndefined();
+  });
+
   it('session.autoTitle по умолчанию: включён, приветствие откладывает имя, 2 попытки, порог 30 символов', () => {
     expect(defaultConfig.session.autoTitle).toEqual({
       enabled: true,

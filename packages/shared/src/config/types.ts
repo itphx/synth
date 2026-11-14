@@ -394,6 +394,17 @@ export const authConfigSchema = z.object({
       redirectUri: z.string().default('http://localhost:5002/auth/callback'),
       /** Public client_id для локального CLI/core (ROPC/device flow). Не секрет. */
       cliClientId: z.string().default('synth-cli'),
+      /**
+       * ADR-140: источник групп пользователя — claim IdP + allowlist имён.
+       * Секция опциональна (старые конфиги без неё валидны); пустой allowlist —
+       * групп нет (fail-closed).
+       */
+      groups: z
+        .object({
+          claim: z.string().min(1).default('groups'),
+          allow: z.array(z.string().min(1)).default([]),
+        })
+        .optional(),
     })
     .optional(),
 });

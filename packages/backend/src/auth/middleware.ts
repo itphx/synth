@@ -5,7 +5,7 @@ import { createMiddleware } from 'hono/factory';
 import type { Context } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
-import { createLazyOidcClient } from './oidc.js';
+import { createLazyOidcClient, oidcUserToUser } from './oidc.js';
 import { apiKeyEquals, resolveApiKeyRoles } from './api-key.js';
 
 const SESSION_COOKIE = 'user_session';
@@ -123,17 +123,9 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
         if (client) {
           try {
             const oidcUser = await client.verifyToken(token);
-            return {
-              id: oidcUser.id,
-              username: oidcUser.username,
-              email: oidcUser.email,
-              roles: oidcUser.roles,
-              preferredLanguage: 'ru',
-              createdAt: new Date().toISOString(),
-              teamRole: oidcUser.roles[0] || 'USER',
-              notes: '',
-              interviewCompleted: false,
-            };
+            // ADR-140: группы пользователя — снимок claim'а IdP (allowlist);
+            // `oidcUserToUser` переносит их в `User` только при непустом списке.
+            return oidcUserToUser(oidcUser);
           } catch {
             // Некорректный/истёкший JWT — пользователь не аутентифицирован
             return null;

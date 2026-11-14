@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema, commandPolicyConfigSchema, securityConfigSchema } from './types.js';
+import { authConfigSchema, mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema, commandPolicyConfigSchema, securityConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('storageConfigSchema — лимиты чтения/предпросмотра', () => {
@@ -671,5 +671,40 @@ describe('commandPolicyConfigSchema (PROP-136b)', () => {
     const parsed = securityConfigSchema.parse({});
     expect(parsed.commandPolicy.enabled).toBe(false);
     expect(parsed.commandPolicy.failMode).toBe('open');
+  });
+});
+
+/**
+ * ADR-140: секция `auth.oidc.groups` — источник групп пользователя
+ * (claim IdP + allowlist имён). Секция опциональна: старые конфиги без неё
+ * валидны; пустой allowlist — групп нет (fail-closed).
+ */
+describe('authConfigSchema — auth.oidc.groups (ADR-140)', () => {
+  it('без oidc секции групп нет', () => {
+    const parsed = authConfigSchema.parse({});
+    expect(parsed.oidc).toBeUndefined();
+  });
+
+  it('oidc без groups → секции нет (старый конфиг валиден)', () => {
+    const parsed = authConfigSchema.parse({ oidc: { enabled: true } });
+    expect(parsed.oidc?.enabled).toBe(true);
+    expect(parsed.oidc?.groups).toBeUndefined();
+  });
+
+  it('groups: дефолты claim=groups, allow=[]', () => {
+    const parsed = authConfigSchema.parse({ oidc: { enabled: true, groups: {} } });
+    expect(parsed.oidc?.groups).toEqual({ claim: 'groups', allow: [] });
+  });
+
+  it('groups: явные claim/allow сохраняются', () => {
+    const parsed = authConfigSchema.parse({
+      oidc: { enabled: true, groups: { claim: 'roles_groups', allow: ['team-a', 'team-b'] } },
+    });
+    expect(parsed.oidc?.groups).toEqual({ claim: 'roles_groups', allow: ['team-a', 'team-b'] });
+  });
+
+  it('пустой claim и пустое имя группы — ошибка', () => {
+    expect(authConfigSchema.safeParse({ oidc: { groups: { claim: '' } } }).success).toBe(false);
+    expect(authConfigSchema.safeParse({ oidc: { groups: { allow: [''] } } }).success).toBe(false);
   });
 });
