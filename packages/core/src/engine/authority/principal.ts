@@ -9,6 +9,10 @@
  * Модуль — единственное место, где принципал хода выводится из данных
  * (сообщение/сессия). Проверки прав — в резолвере (`resolve.ts`) и guard'е
  * (`guard.ts`); здесь только идентификация.
+ *
+ * ADR-140 Ф2: принципал несёт **снимок групп** пользователя (`groups`) —
+ * он фиксируется при приёме ввода вместе с принципалом и дальше не
+ * пересчитывается (иначе грант по группе мог бы «поехать» между ходами).
  */
 import type { AuthorityPrincipal, Message, Session } from '@itphx/synth-shared';
 
@@ -35,7 +39,7 @@ export function parsePrincipalRef(ref: string): AuthorityPrincipal | undefined {
   if (kind !== 'user' && kind !== 'agent' && kind !== 'service' && kind !== 'scheduler' && kind !== 'event') {
     return undefined;
   }
-  return { kind, id, roles: [] };
+  return { kind, id, roles: [], groups: [] };
 }
 
 /** Один и тот же ли принципал (вид + id; роли не сравниваются). */
@@ -53,30 +57,43 @@ export function samePrincipal(
  * прежнем коде permission-слоя), даже если владелец — машинный (`service:*`).
  */
 export function sessionOwnerPrincipal(session: Session): AuthorityPrincipal {
-  return { kind: 'user', id: session.ownerId ?? session.userId ?? LOCAL_USER_ID, roles: [] };
+  return { kind: 'user', id: session.ownerId ?? session.userId ?? LOCAL_USER_ID, roles: [], groups: [] };
 }
 
 /**
  * Принципал хода: из сообщения (зафиксирован при приёме ввода) → иначе владелец
  * сессии (совместимость). **Не пересчитывается** по текущему владельцу сессии,
  * если принципал уже зафиксирован.
+ *
+ * ADR-140 Ф2: старые сохранённые сообщения без поля `groups` нормализуются в
+ * «групп нет» (fail-closed) — иначе снимок групп из приёма ввода был бы
+ * потерян, а гранты по группам — не применились бы.
  */
 export function resolveTurnPrincipal(
   session: Session,
   message?: Message | null,
 ): AuthorityPrincipal {
-  return message?.principal ?? sessionOwnerPrincipal(session);
+  const principal = message?.principal ?? sessionOwnerPrincipal(session);
+  if (principal.groups) return principal;
+  return { ...principal, groups: [] };
 }
 
 /**
  * Принципал пользователя по его id. Машинный доступ (service-key, ADR-052) —
  * отдельный вид `service`; id — ключ без префикса `service:`.
+ *
+ * ADR-140 Ф2: `groups` — снимок групп пользователя (claim IdP), зафиксированный
+ * при приёме ввода; пусто — групп нет (fail-closed).
  */
-export function userPrincipal(userId: string, roles: readonly string[] = []): AuthorityPrincipal {
+export function userPrincipal(
+  userId: string,
+  roles: readonly string[] = [],
+  groups: readonly string[] = [],
+): AuthorityPrincipal {
   if (userId.startsWith('service:')) {
-    return { kind: 'service', id: userId.slice('service:'.length), roles: [...roles] };
+    return { kind: 'service', id: userId.slice('service:'.length), roles: [...roles], groups: [...groups] };
   }
-  return { kind: 'user', id: userId, roles: [...roles] };
+  return { kind: 'user', id: userId, roles: [...roles], groups: [...groups] };
 }
 
 /**
@@ -87,22 +104,23 @@ export function userPrincipal(userId: string, roles: readonly string[] = []): Au
 export function resolveUserPrincipal(
   userId: string | undefined | null,
   roles: readonly string[] = [],
+  groups: readonly string[] = [],
 ): AuthorityPrincipal | undefined {
   if (!userId) return undefined;
-  return userPrincipal(userId, roles);
+  return userPrincipal(userId, roles, groups);
 }
 
 /** Принципал агента (`agent:<id>`) — исполнитель хода от имени агента. */
 export function agentPrincipal(agentId: string, roles: readonly string[] = []): AuthorityPrincipal {
-  return { kind: 'agent', id: agentId, roles: [...roles] };
+  return { kind: 'agent', id: agentId, roles: [...roles], groups: [] };
 }
 
 /** Принципал внешнего источника события (`event:<source>`). */
 export function eventPrincipal(source: string, roles: readonly string[] = []): AuthorityPrincipal {
-  return { kind: 'event', id: source, roles: [...roles] };
+  return { kind: 'event', id: source, roles: [...roles], groups: [] };
 }
 
 /** Принципал шедулера (`scheduler`). */
 export function schedulerPrincipal(id = 'cron', roles: readonly string[] = []): AuthorityPrincipal {
-  return { kind: 'scheduler', id, roles: [...roles] };
+  return { kind: 'scheduler', id, roles: [...roles], groups: [] };
 }

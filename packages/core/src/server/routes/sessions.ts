@@ -383,6 +383,16 @@ export interface SessionRouteMessages {
 export interface SessionRoutesOptions {
   /** userId запроса. Core — 'local'; backend — user.id. */
   resolveUserId?: (c: Context) => string | Promise<string>;
+  /**
+   * ADR-140 Ф2: **группы** пользователя запроса (снимок claim'а IdP).
+   *
+   * Группы кладутся в принципал хода **при приёме ввода** (ADR-106 Ф4) —
+   * снимок: пересчёт в середине хода недопустим. Отдаёт `undefined`/пусто —
+   * групп нет (fail-closed, гранты по группам не применяются).
+   *
+   * Core standalone — опция не задана (групп нет). Backend — `groupsOf(user)`.
+   */
+  resolveUserGroups?: (c: Context) => readonly string[] | undefined;
   /** Владелец при создании сессии. По умолчанию — resolveUserId(). */
   resolveOwner?: (c: Context) => string | Promise<string>;
   /** Передавать владельца в forkSession. Core — false; backend — true. */
@@ -758,6 +768,12 @@ export function createSessionRoutes(
   };
 
   const resolveUserId = opts.resolveUserId ?? (() => LOCAL_USER_ID);
+  /**
+   * ADR-140 Ф2: группы пользователя запроса (снимок claim'а IdP). Фабрика
+   * кладёт их в принципал хода **при приёме ввода** — дальше группы не
+   * пересчитываются (снимок, ADR-106 Ф4). Не задана — групп нет (fail-closed).
+   */
+  const resolveUserGroups = opts.resolveUserGroups ?? (() => [] as readonly string[]);
   const resolveOwner = opts.resolveOwner ?? resolveUserId;
   const forkWithOwner = opts.forkWithOwner ?? false;
   const resolveAuthor = opts.resolveAuthor ?? (() => LOCAL_USER_ID);
@@ -780,6 +796,7 @@ export function createSessionRoutes(
     kind: 'user',
     id: (await resolveUserId(c)) || LOCAL_USER_ID,
     roles: ['ADMIN'],
+    groups: [...(resolveUserGroups(c) ?? [])],
   });
   // ADR-052 (этап I): scope-гейты service-key и проектная проекция сессии.
   const scoped = opts.scopeGuard ?? requireScope;
@@ -2597,7 +2614,9 @@ export function createSessionRoutes(
     // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода** (здесь —
     // на постановке в очередь). Не аутентифицирован → не задан → fallback
     // на владельца сессии (совместимость).
-    const turnPrincipal = resolveUserPrincipal(await resolveUserId(c));
+    // ADR-140 Ф2: вместе с принципалом фиксируется снимок групп пользователя
+    // (гранты по группам применяются к этому снимку).
+    const turnPrincipal = resolveUserPrincipal(await resolveUserId(c), [], resolveUserGroups(c));
 
     const message: Message = {
       // ADR-118 §3: id сохранённого сообщения = id принятого (`streamId`:
@@ -3310,7 +3329,8 @@ export function createSessionRoutes(
 
     // ADR-106 Ф4: принципал инициатора (ручная суммаризация — ввод от
     // пользователя, а не системный ход).
-    const summarizerPrincipal = resolveUserPrincipal(await resolveUserId(c));
+    // ADR-140 Ф2: снимок групп пользователя — вместе с принципалом.
+    const summarizerPrincipal = resolveUserPrincipal(await resolveUserId(c), [], resolveUserGroups(c));
     const result = await enqueueUserMessage(
       sessionManager, eventBus, session.id, sysMsg, queueManager, processMessage,
       undefined,

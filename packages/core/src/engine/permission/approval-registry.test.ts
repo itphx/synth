@@ -31,8 +31,8 @@ import { ApprovalRegistry } from './approval.js';
 const TARGET: AuthorityTarget = { kind: 'path', ref: 'src/app.ts' };
 const TURN_ID = 'turn_1';
 
-const OWNER: AuthorityPrincipal = { kind: 'user', id: 'owner', roles: ['USER'] };
-const STRANGER: AuthorityPrincipal = { kind: 'user', id: 'stranger', roles: ['USER'] };
+const OWNER: AuthorityPrincipal = { kind: 'user', id: 'owner', roles: ['USER'], groups: [] };
+const STRANGER: AuthorityPrincipal = { kind: 'user', id: 'stranger', roles: ['USER'], groups: [] };
 
 /** Резолвер покрытия: покрывает только владелец сессии. */
 const coverage = (sessionId: string, responder: AuthorityPrincipal): boolean =>

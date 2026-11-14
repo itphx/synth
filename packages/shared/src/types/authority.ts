@@ -179,12 +179,20 @@ export type AuthorityGrantConstraints = z.infer<typeof authorityGrantConstraints
  * Принципал — тот, от чьего имени исполняется ход (ADR-106 §«Модель»).
  * `roles[]` — роли, которые носитель принципала предъявляет (содержательные
  * роли приезжают контентом; глобальные роли инстанса — отдельная ось).
+ *
+ * ADR-140 Ф2: `groups[]` — группы пользователя (снимок claim'а IdP на момент
+ * приёма ввода, ADR-106 Ф4). Поле **аддитивное и необязательное**: старое
+ * сохранённое сообщение без него парсится (`undefined`), отсутствие поля =
+ * «групп нет» (fail-closed); потребители нормализуют `?? []`. На права влияет
+ * только через единый резолвер доступа (`resolveProjectAccess`,
+ * ADR-140/PROP-133).
  */
 export const authorityPrincipalSchema = z
   .object({
     kind: authorityPrincipalKindSchema,
     id: z.string().min(1).max(256),
     roles: z.array(z.string().min(1).max(128)).default([]),
+    groups: z.array(z.string().min(1).max(128)).optional(),
   })
   .strict();
 export type AuthorityPrincipal = z.infer<typeof authorityPrincipalSchema>;

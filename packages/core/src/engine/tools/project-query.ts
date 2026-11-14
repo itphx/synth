@@ -494,7 +494,7 @@ export const getProjectTool: ToolDefinition = {
       origin: 'local' as const,
       can_attach: true,
       cross_instance: false,
-      can_edit: canEditProject(session, project),
+      can_edit: canEditProject(session, project, extra.principal?.groups),
     };
     const json = JSON.stringify(details);
     const text = sm('project.details', { name: project.name, id: project.id, json });

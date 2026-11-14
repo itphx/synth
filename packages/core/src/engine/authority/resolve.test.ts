@@ -29,7 +29,7 @@ function grant(over: Partial<AuthorityGrant> = {}): AuthorityGrant {
 }
 
 function principal(over: Partial<AuthorityPrincipal> = {}): AuthorityPrincipal {
-  return { kind: 'user', id: 'user:local', roles: [], ...over };
+  return { kind: 'user', id: 'user:local', roles: [], groups: [], ...over };
 }
 
 function turn(over: Partial<AuthorityTurn> = {}): AuthorityTurn {

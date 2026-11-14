@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, McpNetworkPolicy, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy, ToolContext, ToolDefinition, CommandAuditEntry, CommandAuditTool } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, McpNetworkPolicy, SkillsDisabledRequest, ProfileStore, MessageReceivedKind, SessionWorktree, AttachmentModality, AttachmentFamily, AttachmentsConfig, ModelConfig, MediaPartData, Part, ToolAttachmentRef, ModelCompatibility, LLMReasoningBlock, LlmFinishReason, ReasoningBlock, ContextWindowPolicy, ToolContext, ToolDefinition, CommandAuditEntry, CommandAuditTool, AuthorityPrincipal } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeMediaPart, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep, STEER_INTERRUPTED_METADATA_KEY, appendReasoningBlock, attachmentsConfigSchema, appendMediaPlaceholders, mediaTypeOfMime, effortForReasoningLevel, nativeAudioFormatForMime } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, PermissionPreview, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig, SshMode } from '@itphx/synth-shared';
 import type { AutoTitleConfig } from '@itphx/synth-shared/config';
@@ -1483,22 +1483,28 @@ export class ChatOrchestrator {
 
   /**
    * Принципал хода для тулов проектов/сессий (`list_projects`, `get_project`,
-   * `list_sessions`, …): id пользователя и роли профиля.
+   * `list_sessions`, …): id пользователя, роли профиля и группы.
    *
    * Владелец сессии — человек: `ownerId` → `userId` → `local` (standalone).
    * Роли читаются из профиля (`loadProfile`); нет стора/профиля/ошибка чтения —
    * пустой набор (fail-closed: elevated-права не выдаются «по умолчанию»).
+   *
+   * ADR-140 Ф2: **группы** берутся из принципала хода (`turnPrincipal`) —
+   * это снимок, зафиксированный при приёме ввода (ADR-106 Ф4); из профиля
+   * они не читаются (в core источника групп нет).
    */
   private async _resolveToolPrincipal(
     session: Session,
-  ): Promise<{ userId: string; roles: string[] }> {
+    turnPrincipal?: AuthorityPrincipal,
+  ): Promise<{ userId: string; roles: string[]; groups: string[] }> {
     const userId = session.ownerId || session.userId || 'local';
-    if (!this._profilesStore) return { userId, roles: [] };
+    const groups = [...(turnPrincipal?.groups ?? [])];
+    if (!this._profilesStore) return { userId, roles: [], groups };
     try {
       const profile = await this._profilesStore.loadProfile(userId);
-      return { userId, roles: profile?.roles ?? [] };
+      return { userId, roles: profile?.roles ?? [], groups };
     } catch {
-      return { userId, roles: [] };
+      return { userId, roles: [], groups };
     }
   }
 
@@ -4959,9 +4965,10 @@ export class ChatOrchestrator {
     // сообщений без принципала — совместимый fallback (владелец сессии).
     const turnPrincipal = resolveTurnPrincipal(session, message);
     // Идентичность для тулов проектов/сессий (list_projects/get_project/
-    // list_sessions): владелец сессии и роли профиля. Elevated (ADMIN/LEAD)
-    // расширяет видимость; нет профиля — пустые роли (fail-closed).
-    const toolPrincipal = await this._resolveToolPrincipal(session);
+    // list_sessions): владелец сессии, роли профиля и группы принципала хода.
+    // Elevated (ADMIN/LEAD) расширяет видимость; нет профиля — пустые роли
+    // (fail-closed). ADR-140 Ф2: группы — снимок из принципала хода.
+    const toolPrincipal = await this._resolveToolPrincipal(session, turnPrincipal);
     // ADR-071 §2.4: проект сессии — носитель project-скоупа MCP; загружаем один
     // раз: нужен рабочему каталогу, state-сообщениям, резолвингу MCP и Composer.
     let projectForState: Project | null = null;
@@ -4985,6 +4992,9 @@ export class ChatOrchestrator {
       ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
       participants: deriveSessionParticipants(session, projectForState),
       project: projectForState,
+      // ADR-140 Ф2: группы пользователя — снимок из принципала хода
+      // (у старых принципалов поля нет — «групп нет», fail-closed).
+      groups: turnPrincipal.groups ?? [],
     });
     // ADR-070 §2.6: старт прогона — для per-message duration_ms (полная
     // длительность у финального сообщения потока, включая tool-chain).

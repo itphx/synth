@@ -75,9 +75,9 @@ const INSTANCE_ROLES: Record<string, string[]> = {
 
 /** Принципал актора (то, что предъявляет носитель). */
 function principalOf(actor: Actor): AuthorityPrincipal {
-  if (actor === 'serviceWriter') return { kind: 'service', id: 'service:key-writer', roles: ['svc-writer'] };
-  if (actor === 'serviceReader') return { kind: 'service', id: 'service:key-reader', roles: ['svc-reader'] };
-  return { kind: 'user', id: actor, roles: INSTANCE_ROLES[actor] ?? ['USER'] };
+  if (actor === 'serviceWriter') return { kind: 'service', id: 'service:key-writer', roles: ['svc-writer'], groups: [] };
+  if (actor === 'serviceReader') return { kind: 'service', id: 'service:key-reader', roles: ['svc-reader'], groups: [] };
+  return { kind: 'user', id: actor, roles: INSTANCE_ROLES[actor] ?? ['USER'], groups: [] };
 }
 
 /**
@@ -214,7 +214,7 @@ async function tryClaim(
   const target = action === 'write' ? WRITE_TARGET : READ_TARGET;
   const digest = computeAuthorityApprovalDigest({ turnId, action, target });
   world.registry.open(approvalId, {
-    principal: { kind: 'user', id: 'owner', roles: [] },
+    principal: { kind: 'user', id: 'owner', roles: [], groups: [] },
     turnId,
     action,
     target,

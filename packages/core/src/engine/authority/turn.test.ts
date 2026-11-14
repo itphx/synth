@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import type { PermissionConfig, SessionParticipant } from '@itphx/synth-shared';
+import { ProjectRole, type PermissionConfig, type SessionParticipant } from '@itphx/synth-shared';
 
 import { MemoryAuthorityDecisionJournal } from '../../storage/memory/authority-decision-journal.js';
 import { PermissionEvaluator } from '../permission/evaluator.js';
@@ -56,7 +56,7 @@ function turnContext(
 ): AuthorityTurnContext {
   return createAuthorityTurnContext({
     sessionId: 's1',
-    principal: { kind: 'user', id: userId, roles: [] },
+    principal: { kind: 'user', id: userId, roles: [], groups: [] },
     turnId: overrides.turnId ?? 'turn-1',
     ...(overrides.agentId ? { agentId: overrides.agentId } : {}),
     participants: overrides.participants ?? PARTICIPANTS,
@@ -159,7 +159,7 @@ describe('Authority — потолок хода (Ф4, шаг B2)', () => {
 
     const context = createAuthorityTurnContext({
       sessionId: 's1',
-      principal: { kind: 'user', id: 'local', roles: [] },
+      principal: { kind: 'user', id: 'local', roles: [], groups: [] },
       turnId: 'turn-1',
       participants: [{ userId: 'local', role: 'owner' }],
     });
@@ -198,5 +198,135 @@ describe('Authority — потолок хода (Ф4, шаг B2)', () => {
 
     expect(context.ceiling).toBe(ceiling);
     expect(context.effective).toBe(effective);
+  });
+});
+
+/**
+ * ADR-140 Ф2: потолок хода по **групповому гранту**.
+ *
+ * Роль принципала в проекте считает единый резолвер доступа
+ * (`resolveProjectAccess`): грант по группе (`project.groupMembers`) даёт роль
+ * пользователю, чей снимок групп (`principal.groups` → `groups` контекста
+ * хода) содержит эту группу. Без групп — fail-closed: роль `viewer` и ход
+ * только на чтение (инвариант 21: право чтения не расширяет права на
+ * изменение).
+ */
+describe('ADR-140 Ф2: потолок хода по групповому гранту', () => {
+  /** Проект: грант группе `team` на роль `editor`. */
+  const PROJECT = {
+    ownerId: 'owner',
+    members: { owner: ProjectRole.OWNER },
+    groupMembers: { team: ProjectRole.EDITOR },
+  };
+
+  /** Участники сессии: `u1` в список не входит — доступ у него по группе. */
+  const PARTICIPANTS: SessionParticipant[] = [{ userId: 'owner', role: 'owner' }];
+
+  /** Контекст хода пользователя `u1` с указанным снимком групп. */
+  function groupTurnContext(groups: readonly string[]): AuthorityTurnContext {
+    return createAuthorityTurnContext({
+      sessionId: 's1',
+      principal: { kind: 'user', id: 'u1', roles: [], groups: [...groups] },
+      turnId: 'turn-1',
+      participants: PARTICIPANTS,
+      project: PROJECT,
+      groups,
+    });
+  }
+
+  /** Проверка права чтения в контексте хода. */
+  function checkRead(context: AuthorityTurnContext, evaluator: PermissionEvaluator) {
+    return evaluator.check({
+      toolName: 'read_file',
+      params: { file_path: 'src/a.ts' },
+      workingDir: CWD,
+      sessionMode: 'act',
+      authorityContext: {
+        sessionId: context.sessionId,
+        principal: context.principal,
+        agentId: context.agentId,
+        turnId: context.id,
+        turnContext: context,
+      },
+    });
+  }
+
+  it('группа с ролью `editor` → роль `editor`, ход (запись) разрешён', async () => {
+    const { guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const context = groupTurnContext(['team']);
+    expect(context.participantRole).toBe('editor');
+
+    expect(checkWrite(context, evaluator).action).toBe('allow');
+    await guard.flush();
+  });
+
+  it('без групп → роль `viewer` (fail-closed), ход только на чтение', async () => {
+    const { guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const context = groupTurnContext([]);
+    expect(context.participantRole).toBe('viewer');
+
+    expect(checkWrite(context, evaluator).action).toBe('deny');
+    expect(checkRead(context, evaluator).action).toBe('allow');
+    await guard.flush();
+  });
+
+  it('группа не выдана проекту → роль `viewer` (fail-closed)', async () => {
+    const { guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const context = groupTurnContext(['other-team']);
+    expect(context.participantRole).toBe('viewer');
+
+    expect(checkWrite(context, evaluator).action).toBe('deny');
+    await guard.flush();
+  });
+
+  it('групповой грант `viewer` → роль `viewer`, запись запрещена', async () => {
+    const { guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const context = createAuthorityTurnContext({
+      sessionId: 's1',
+      principal: { kind: 'user', id: 'u1', roles: [], groups: ['readers'] },
+      turnId: 'turn-1',
+      participants: PARTICIPANTS,
+      project: {
+        ownerId: 'owner',
+        members: { owner: ProjectRole.OWNER },
+        groupMembers: { readers: ProjectRole.VIEWER },
+      },
+      groups: ['readers'],
+    });
+    expect(context.participantRole).toBe('viewer');
+
+    expect(checkWrite(context, evaluator).action).toBe('deny');
+    expect(checkRead(context, evaluator).action).toBe('allow');
+    await guard.flush();
+  });
+
+  it('индивидуальный грант приоритетнее группового (роль `viewer`)', async () => {
+    const { guard } = makeGuard();
+    const evaluator = new PermissionEvaluator(ALLOW_ALL, { authorityGate: guard.gate });
+
+    const context = createAuthorityTurnContext({
+      sessionId: 's1',
+      principal: { kind: 'user', id: 'u1', roles: [], groups: ['team'] },
+      turnId: 'turn-1',
+      participants: PARTICIPANTS,
+      project: {
+        ownerId: 'owner',
+        members: { owner: ProjectRole.OWNER, u1: ProjectRole.VIEWER },
+        groupMembers: { team: ProjectRole.EDITOR },
+      },
+      groups: ['team'],
+    });
+    expect(context.participantRole).toBe('viewer');
+
+    expect(checkWrite(context, evaluator).action).toBe('deny');
+    await guard.flush();
   });
 });

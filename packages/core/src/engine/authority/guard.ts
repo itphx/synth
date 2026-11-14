@@ -219,6 +219,7 @@ export class AuthorityGuard {
         kind: 'user',
         id: 'local',
         roles: [],
+        groups: [],
       };
       const turn: AuthorityTurn = {
         id: input.turnId ?? `turn:${input.sessionId ?? 'session'}`,

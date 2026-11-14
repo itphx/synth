@@ -538,7 +538,7 @@ export const synthMcpEnableTool: ToolDefinition = {
         project = null;
       }
       if (!project) return fail('instance.mcp_enable.no_project');
-      if (!canEditProject(session, project)) return fail('instance.mcp.project_forbidden');
+      if (!canEditProject(session, project, extra.principal?.groups)) return fail('instance.mcp.project_forbidden');
 
       await projectStore.mutate(project.id, (target) => {
         const current = target.mcp ?? { enabled: [], defaultOn: [] };

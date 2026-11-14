@@ -23,6 +23,7 @@ import { isAborted, abortedResult } from './abort.js';
 import { errorText } from './error-text.js';
 import { loadSessionProject } from './project-manage.js';
 import { canEditProject } from './project-access.js';
+import type { PrincipalExtra } from './project-resolve.js';
 import { resolveSshEnvById } from './git-ssh.js';
 import { buildSshKeyRequiredResult } from './ssh-keys.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
@@ -34,7 +35,7 @@ import { argErrorResult } from './arg-error.js';
  * принимаются; регистрация записи идёт в `project.repos` (ProjectStore.save).
  */
 
-interface ProjectReposExtra {
+interface ProjectReposExtra extends PrincipalExtra {
   sessionManager?: SessionManager;
   projectStore?: ProjectStoreContract;
   sessionId?: string;
@@ -87,7 +88,7 @@ async function loadProjectContext(ctx: ToolContext, toolName: string): Promise<L
 
   const { session, project } = await loadSessionProject(ctx);
   if (!project) return { ok: false, error: i18nError('project.no_project') };
-  if (!canEditProject(session, project)) return { ok: false, error: i18nError('project.write_forbidden') };
+  if (!canEditProject(session, project, extra.principal?.groups)) return { ok: false, error: i18nError('project.write_forbidden') };
   if (!project.workspace) return { ok: false, error: i18nError('project.workspace_missing') };
 
   const wsAbs = isAbsolute(project.workspace)

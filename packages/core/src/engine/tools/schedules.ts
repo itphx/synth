@@ -195,7 +195,7 @@ async function validateTarget(
     if (target.project !== project.id) {
       return targetForbidden('the target project is another project');
     }
-    if (!canEditProject(scope.session, project)) return scheduleForbidden();
+    if (!canEditProject(scope.session, project, scope.groups)) return scheduleForbidden();
     return null;
   }
 
@@ -211,7 +211,7 @@ async function validateTarget(
     return notPublished(target.pipelineId);
   }
   if (record.publishedVersion === undefined) return notPublished(target.pipelineId);
-  if (!canEditProject(scope.session, project)) return scheduleForbidden();
+  if (!canEditProject(scope.session, project, scope.groups)) return scheduleForbidden();
   return null;
 }
 

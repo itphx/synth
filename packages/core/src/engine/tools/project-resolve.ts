@@ -44,6 +44,19 @@ export interface ProjectViewer {
 }
 
 /**
+ * Группы принципала хода из `ctx.extra` (ADR-140 Ф2).
+ *
+ * Источник — снимок в `extra.principal.groups` (оркестратор кладёт его из
+ * принципала хода, зафиксированного при приёме ввода). Нет/пусто →
+ * `undefined` (групп нет, fail-closed).
+ */
+export function principalGroups(ctx: ToolContext): readonly string[] | undefined {
+  const extra = ctx.extra as PrincipalExtra | undefined;
+  const groups = extra?.principal?.groups;
+  return groups && groups.length > 0 ? groups : undefined;
+}
+
+/**
  * Идентичность из `ctx.extra`. Если оркестратор не передал принципала
  * (старые тесты/встраивание), берётся `local` — тот же дефолт, что у владельца
  * сессии в standalone; elevated не выводится (fail-closed).

@@ -15,7 +15,7 @@ import {
   normalizeIconKey,
   normalizeColorKey,
 } from '@itphx/synth-shared';
-import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings, User } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { scopeGuard, serviceProjectProjection } from '../auth/service-scope.js';
@@ -798,6 +798,9 @@ export function createSessionRoutes(
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,
+      // ADR-140 Ф2: группы пользователя запроса (снимок claim'а IdP) — кладутся
+      // в принципал хода при приёме ввода; нет — групп нет (fail-closed).
+      resolveUserGroups: (c) => groupsOf(c.get('user') as User | undefined),
       forkWithOwner: true,
       // Доступ к сессии обеспечивает единый prefix-guard ресурса (см. выше):
       // `registerAccessGuard: false` отключает собственный guard core-фабрики,
@@ -826,7 +829,7 @@ export function createSessionRoutes(
       // пользователь запроса (клиенту не доверяем) и его роли инстанса.
       resolvePermissionResponder: async (c) => {
         const user = await kit.getCurrentUser(c);
-        return { kind: 'user', id: user?.id ?? '', roles: user?.roles ?? [] };
+        return { kind: 'user', id: user?.id ?? '', roles: user?.roles ?? [], groups: user?.groups ?? [] };
       },
       publishRenamed: false,
       publishDeletedBefore: false,

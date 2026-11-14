@@ -10,6 +10,7 @@ import type { ProjectStoreContract } from '../../storage/project-store.js';
 import { isAborted, abortedResult } from './abort.js';
 import { canEditProject } from './project-access.js';
 import { loadSessionProject } from './project-manage.js';
+import type { PrincipalExtra } from './project-resolve.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import { embedMultiline } from '../markdown.js';
@@ -23,7 +24,7 @@ import {
 } from '../plan/service.js';
 import { publishPlanUpdated } from '../plan/events.js';
 
-export interface PlanToolExtra {
+export interface PlanToolExtra extends PrincipalExtra {
   sessionManager?: SessionManager;
   eventBus?: EventBus;
   sessionId?: string;
@@ -375,7 +376,7 @@ export const planWriteTool: ToolDefinition = {
       return { content: sm('plan.no_project'), isError: true, metadata: { i18n: i18nMeta('plan.no_project') } };
     }
     // ADR-075/D5: менять план вправе только владелец/редактор (до мутации).
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra?.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,

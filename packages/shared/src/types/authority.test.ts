@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { validateAuthorityContent } from './authority.js';
+import { authorityPrincipalSchema, validateAuthorityContent } from './authority.js';
 import { validatePackManifest, packManifestSchema } from './pack.js';
 
 /** Манифест пакета с контентом полномочий (`kind: 'pack'`, `packType: 'policies'`). */
@@ -247,6 +247,91 @@ describe('provides.authority — отказ на неизвестном', () => 
         unexpected: true,
       }),
     );
+
+    expect(parsed.success).toBe(false);
+  });
+});
+
+/**
+ * ADR-140 Ф2: принципал хода несёт **снимок групп** пользователя (`groups`).
+ *
+ * Поле аддитивное и необязательное: старое сохранённое сообщение без него
+ * парсится (поле отсутствует = «групп нет», fail-closed), а мусор в поле —
+ * ошибка разбора (строгая схема), а не «проскочивший» passthrough.
+ */
+describe('authorityPrincipalSchema — снимок групп пользователя (ADR-140 Ф2)', () => {
+  it('старый принципал без `groups` парсится, поле отсутствует', () => {
+    const parsed = authorityPrincipalSchema.safeParse({
+      kind: 'user',
+      id: 'u1',
+      roles: ['USER'],
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.groups).toBeUndefined();
+  });
+
+  it('старый принципал без `roles` парсится (дефолт `[]`), группы нет', () => {
+    const parsed = authorityPrincipalSchema.safeParse({ kind: 'user', id: 'u1' });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.roles).toEqual([]);
+    expect(parsed.success && parsed.data.groups).toBeUndefined();
+  });
+
+  it('с `groups` — группы сохраняются', () => {
+    const parsed = authorityPrincipalSchema.safeParse({
+      kind: 'user',
+      id: 'u1',
+      roles: ['USER'],
+      groups: ['team-a', 'sre'],
+    });
+
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.groups).toEqual(['team-a', 'sre']);
+  });
+
+  it('`groups: null` → отклоняется (нет «групп = null»)', () => {
+    const parsed = authorityPrincipalSchema.safeParse({
+      kind: 'user',
+      id: 'u1',
+      roles: [],
+      groups: null,
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it('`groups: [123]` → отклоняется (группы — строки)', () => {
+    const parsed = authorityPrincipalSchema.safeParse({
+      kind: 'user',
+      id: 'u1',
+      roles: [],
+      groups: [123],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it('пустое имя группы → отклоняется', () => {
+    const parsed = authorityPrincipalSchema.safeParse({
+      kind: 'user',
+      id: 'u1',
+      roles: [],
+      groups: [''],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
+  it('лишнее поле → отклоняется (строгая схема)', () => {
+    const parsed = authorityPrincipalSchema.safeParse({
+      kind: 'user',
+      id: 'u1',
+      roles: [],
+      groups: ['team'],
+      unexpected: true,
+    });
 
     expect(parsed.success).toBe(false);
   });

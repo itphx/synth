@@ -477,7 +477,7 @@ export const projectAttachTool: ToolDefinition = {
         metadata: { i18n: i18nMeta('project.session_read_error') },
       };
     }
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,
@@ -594,7 +594,7 @@ export const projectUpdateTool: ToolDefinition = {
       return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
     // ADR-075/D5: менять проект вправе только владелец/редактор (до мутации).
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,
@@ -671,7 +671,7 @@ export const projectWorkspaceSetTool: ToolDefinition = {
       return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
     // ADR-075/D5: смена workspace вправе только владелец/редактор (до мутации).
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,
@@ -774,7 +774,7 @@ export const projectLogWriteTool: ToolDefinition = {
       return { content: NO_PROJECT_LOG_ERROR, isError: true };
     }
     // ADR-075/D5: писать лог проекта вправе только владелец/редактор (до мутации).
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,
@@ -852,7 +852,7 @@ export const projectLogUpdateTool: ToolDefinition = {
     if (!project) {
       return { content: NO_PROJECT_LOG_ERROR, isError: true };
     }
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,
@@ -926,7 +926,7 @@ export const projectLogDeleteTool: ToolDefinition = {
     if (!project) {
       return { content: NO_PROJECT_LOG_ERROR, isError: true };
     }
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,
@@ -1066,7 +1066,7 @@ export const projectInvariantsWriteTool: ToolDefinition = {
       return { content: NO_PROJECT_INVARIANTS_ERROR, isError: true };
     }
     // ADR-075/D5: менять инварианты вправе только владелец/редактор (до мутации).
-    if (!canEditProject(session, project)) {
+    if (!canEditProject(session, project, extra.principal?.groups)) {
       return {
         content: sm('project.write_forbidden'),
         isError: true,

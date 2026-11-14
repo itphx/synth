@@ -75,7 +75,7 @@ describe('PROP-133: canEditProject — единый резолвер досту�
     expect(canEditProject(session({ userId: 'stranger' }), p)).toBe(false);
   });
 
-  it('грант по группе без групп пользователя не действует (в core групп нет)', () => {
+  it('грант по группе без групп пользователя не действует (снимка групп нет)', () => {
     const p = project({ groupMembers: { team: ProjectRole.EDITOR } });
     expect(canEditProject(session({ userId: 'u2' }), p)).toBe(false);
   });
@@ -94,5 +94,77 @@ describe('PROP-133: canEditProject — единый резолвер досту�
     expect(resolveSessionUserId(session({ ownerId: 'u2' }))).toBe('u2');
     expect(resolveSessionUserId(session())).toBeUndefined();
     expect(resolveSessionUserId(null)).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-140 Ф2: гранты по группам в core.
+ *
+ * `groups` — снимок групп пользователя (принципал хода, ADR-106 Ф4). Грант по
+ * группе даёт роль из `groupMembers`; порядок резолва — единый
+ * (`resolveProjectAccess`: владелец → `ADMIN`/`LEAD` → участник → группа →
+ * «всем пользователям»), т.е. **индивидуальный грант приоритетнее группового**.
+ *
+ * Без групп (`undefined`/пусто) гранты по группам не применяются (fail-closed).
+ */
+describe('ADR-140 Ф2: canEditProject — гранты по группам', () => {
+  it('группа с ролью `editor` — запись разрешена', () => {
+    const p = project({ groupMembers: { team: ProjectRole.EDITOR } });
+    expect(canEditProject(session({ userId: 'u2' }), p, ['team'])).toBe(true);
+  });
+
+  it('та же группа с ролью `viewer` — запись запрещена (инвариант 21)', () => {
+    const p = project({ groupMembers: { team: ProjectRole.VIEWER } });
+    expect(canEditProject(session({ userId: 'u2' }), p, ['team'])).toBe(false);
+  });
+
+  it('без групп (`undefined` и пустой список) — грант по группе не действует', () => {
+    const p = project({ groupMembers: { team: ProjectRole.EDITOR } });
+    expect(canEditProject(session({ userId: 'u2' }), p)).toBe(false);
+    expect(canEditProject(session({ userId: 'u2' }), p, undefined)).toBe(false);
+    expect(canEditProject(session({ userId: 'u2' }), p, [])).toBe(false);
+  });
+
+  it('чужая группа — грант не действует', () => {
+    const p = project({ groupMembers: { team: ProjectRole.EDITOR } });
+    expect(canEditProject(session({ userId: 'u2' }), p, ['other'])).toBe(false);
+  });
+
+  it('back-compat: без `userId` сессии прежнее поведение сохраняется независимо от групп', () => {
+    const owned = project(); // владелец есть
+    const orphan = project({ ownerId: '' }); // владельца нет (синтетический контекст)
+
+    // Группы не отменяют прежнее поведение: владельцу писать нельзя.
+    expect(canEditProject(session(), owned, ['team'])).toBe(false);
+    expect(canEditProject(null, owned, ['team'])).toBe(false);
+    expect(canEditProject(session({ ownerId: '' }), owned, ['team'])).toBe(false);
+
+    // Владельца нет — запись разрешена (даже если у группы роль `viewer`).
+    expect(canEditProject(session(), orphan, ['team'])).toBe(true);
+    expect(canEditProject(null, orphan, ['team'])).toBe(true);
+    expect(
+      canEditProject(session(), project({ ownerId: '', groupMembers: { team: ProjectRole.VIEWER } }), ['team']),
+    ).toBe(true);
+  });
+
+  it('индивидуальный грант приоритетнее группового (`viewer` против `editor`)', () => {
+    const p = project({
+      members: { owner: ProjectRole.OWNER, u2: ProjectRole.VIEWER },
+      groupMembers: { team: ProjectRole.EDITOR },
+    });
+    expect(canEditProject(session({ userId: 'u2' }), p, ['team'])).toBe(false);
+  });
+
+  it('«всем пользователям» (`everyoneRole: editor`) без групп — запись разрешена', () => {
+    const p = project({ everyoneRole: ProjectRole.EDITOR });
+    expect(canEditProject(session({ userId: 'stranger' }), p)).toBe(true);
+    expect(canEditProject(session({ userId: 'stranger' }), p, undefined)).toBe(true);
+    expect(canEditProject(session({ userId: 'stranger' }), p, [])).toBe(true);
+  });
+
+  it('«всем пользователям» (`everyoneRole: viewer`) без групп — только чтение', () => {
+    const p = project({ everyoneRole: ProjectRole.VIEWER });
+    expect(canEditProject(session({ userId: 'stranger' }), p)).toBe(false);
+    expect(canEditProject(session({ userId: 'stranger' }), p, [])).toBe(false);
   });
 });

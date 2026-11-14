@@ -31,6 +31,7 @@ import type { Project, Schedule, Session, ToolContext, ToolResult } from '@itphx
 import type { AutomationRuntime } from './automation-runtime.js';
 import { getSessionExtra, loadSessionProject } from './project-manage.js';
 import { canEditProject, resolveSessionUserId } from './project-access.js';
+import { principalGroups } from './project-resolve.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 /**
@@ -83,11 +84,16 @@ export interface AutomationScope {
   session: Session;
   /** Проект сессии — единственный источник `projectId` для тулов. */
   project: Project;
+  /**
+   * ADR-140 Ф2: группы пользователя (снимок принципала хода) — для грантов
+   * по группам (`canEditProject`). Нет — групп нет (fail-closed).
+   */
+  groups?: readonly string[];
 }
 
 /** Результат `loadAutomationScope`: готовый scope либо готовый отказ. */
 export type AutomationScopeResult =
-  | { ok: true; automation: AutomationRuntime; session: Session; project: Project }
+  | { ok: true; automation: AutomationRuntime; session: Session; project: Project; groups?: readonly string[] }
   | { ok: false; result: ToolResult };
 
 /**
@@ -107,7 +113,8 @@ export async function loadAutomationScope(
   const { session, project } = await loadSessionProject(ctx);
   if (!session || !project) return { ok: false, result: noProject() };
 
-  return { ok: true, automation, session, project };
+  const groups = principalGroups(ctx);
+  return { ok: true, automation, session, project, ...(groups ? { groups } : {}) };
 }
 
 /**
@@ -119,10 +126,10 @@ export async function loadAutomationScope(
  * (и для будущих различающихся текстов): текст отказа от тула не зависит.
  */
 export function ensureCanEdit(
-  scope: { session: Session; project: Project },
+  scope: { session: Session; project: Project; groups?: readonly string[] },
   _toolName: string,
 ): ToolResult | null {
-  if (canEditProject(scope.session, scope.project)) return null;
+  if (canEditProject(scope.session, scope.project, scope.groups)) return null;
   return forbidden();
 }
 
@@ -144,6 +151,11 @@ export interface ScheduleScope {
   project: Project | null;
   /** Пользователь сессии (`userId`/`ownerId`); пустая строка — атрибуции нет. */
   userId: string;
+  /**
+   * ADR-140 Ф2: группы пользователя (снимок принципала хода) — для грантов
+   * по группам. Нет — групп нет (fail-closed).
+   */
+  groups?: readonly string[];
 }
 
 /** Результат `loadScheduleScope`: готовый scope либо готовый отказ. */
@@ -200,8 +212,9 @@ export async function loadScheduleScope(
   // Проект может отсутствовать (сессия без проекта — ADR-040).
   const project = session.projectId ? await projectStore.load(session.projectId) : null;
   const userId = resolveSessionUserId(session) ?? '';
+  const groups = principalGroups(ctx);
 
-  return { ok: true, scope: { automation, session, project, userId } };
+  return { ok: true, scope: { automation, session, project, userId, ...(groups ? { groups } : {}) } };
 }
 
 /**
@@ -258,6 +271,6 @@ export async function ensureScheduleMutable(
   if (!(await isScheduleInScope(schedule, scope, ctx))) return scheduleForbidden();
   const project = scope.project;
   if (!project) return scheduleForbidden();
-  if (!canEditProject(scope.session, project)) return scheduleForbidden();
+  if (!canEditProject(scope.session, project, scope.groups)) return scheduleForbidden();
   return null;
 }

@@ -155,7 +155,7 @@ describe('PermissionApprovalManager — параллельные подтвер�
 
     // Прод-путь ответа: сначала `registry.claim()` (списывает привязку),
     // затем публикация `permission.replied` (`server/routes/sessions.ts`).
-    const responder = { kind: 'user', id: 'u1', roles: [] } as AuthorityPrincipal;
+    const responder = { kind: 'user', id: 'u1', roles: [], groups: [] } as AuthorityPrincipal;
     const claim = await registry.claim('approval_call_a', 's1', responder);
     expect(claim.ok).toBe(true);
     bus.publish('s1', 'permission.replied', {
@@ -186,7 +186,7 @@ describe('PermissionApprovalManager — параллельные подтвер�
     bound.publishWaiters(waiters);
 
     // Отказ по первому — каскад гасит второй (второй привязку списывает).
-    const responder = { kind: 'user', id: 'u1', roles: [] } as AuthorityPrincipal;
+    const responder = { kind: 'user', id: 'u1', roles: [], groups: [] } as AuthorityPrincipal;
     await registry.claim('approval_call_a', 's1', responder);
     bus.publish('s1', 'permission.replied', {
       approval_id: 'approval_call_a',

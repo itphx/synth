@@ -479,7 +479,10 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
 
                 // ADR-106 Ф4: принципал ввода фиксируется **при приёме ввода**
                 // (постановка в очередь) — не пересчитывается при исполнении.
-                const turnPrincipal = resolveUserPrincipal(user.id);
+                // ADR-140 Ф2: вместе с принципалом — снимок групп пользователя
+                // (локальная cookie-сессия; claim'а IdP в standalone нет, но
+                // контракт группы единый).
+                const turnPrincipal = resolveUserPrincipal(user.id, user.roles ?? [], user.groups ?? []);
 
                 // ADR-104: `steer` — вмешательство в активный ход, `interrupt` —
                 // прерывание текущей генерации (ход НЕ завершается). Если хода
@@ -641,6 +644,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                   kind: 'user',
                   id: user.id,
                   roles: user.roles ?? [],
+                  groups: user.groups ?? [],
                 };
                 const claim = await registry.claim(approvalId, sid, responder, {
                   ...(turnId ? { turnId } : {}),

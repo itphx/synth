@@ -26,19 +26,30 @@ export function resolveSessionUserId(session: Session | null | undefined): strin
  * прежнее поведение: доверяем синтетическому контексту без владельца
  * проекта; владелец есть — писать ему нельзя.
  *
+ * ADR-140 Ф2: `groups` — снимок групп пользователя (принципал хода). Грант по
+ * группе даёт роль из `groupMembers`; без групп — только владелец/участник/
+ * «всем пользователям». Не задан — групп нет (fail-closed).
+ *
  * Ограничение core: глобальные роли LEAD/ADMIN здесь недоступны — их носители
  * не проходят гейт в чате, но могут менять проект через UI/API (backend RBAC).
- * Группы пользователя core тоже не знает (Ф2: claim `groups` из IdP) — список
- * групп пустой, гранты по группам в core не применяются (fail-closed); в
- * managed их применяет backend-резолвер (`projectPrincipalOf`).
+ * Источник групп в core — принципал хода (backend передаёт его при приёме
+ * ввода); из профиля группы не читаются.
  */
-export function canEditProject(session: Session | null, project: Project): boolean {
+export function canEditProject(
+  session: Session | null,
+  project: Project,
+  groups?: readonly string[],
+): boolean {
   const userId = resolveSessionUserId(session);
   if (!userId) {
     // Нет атрибуции пользователя — доверяем только синтетическому контексту
     // без владельца проекта. Если владелец есть, писать ему нельзя.
     return !project.ownerId;
   }
-  const role = resolveProjectAccess(project, { userId, roles: [], groups: [] }).role;
+  const role = resolveProjectAccess(project, {
+    userId,
+    roles: [],
+    ...(groups && groups.length > 0 ? { groups } : {}),
+  }).role;
   return canWriteWithProjectRole(role);
 }

@@ -201,7 +201,7 @@ describe('Authority-guard (Ф2) — пересечение осей', () => {
       authorityContext: {
         sessionId: 's1',
         turnId: 't1',
-        principal: { kind: 'user', id: 'u1', roles: ['editor'] },
+        principal: { kind: 'user', id: 'u1', roles: ['editor'], groups: [] },
       },
     });
     await guard.flush();

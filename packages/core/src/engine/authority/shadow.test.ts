@@ -355,7 +355,7 @@ describe('Authority-shadow — метрики', () => {
       sessionMode: 'act',
       authorityContext: {
         sessionId: 'sess-42',
-        principal: { kind: 'user', id: 'user:alice', roles: [] },
+        principal: { kind: 'user', id: 'user:alice', roles: [], groups: [] },
         turnId: 'turn-7',
       },
     });

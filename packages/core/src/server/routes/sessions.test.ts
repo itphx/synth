@@ -21,7 +21,7 @@ import { WorktreeService } from '../../engine/worktree/service.js';
 import { MemoryWorktreeRepository } from '../../storage/memory/worktrees.js';
 import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO, ProjectRole } from '@itphx/synth-shared';
-import type { ProfileStore, Project } from '@itphx/synth-shared';
+import type { ProfileStore, Project, Session } from '@itphx/synth-shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -83,6 +83,9 @@ function createMockOrchestrator() {
   return {
     createProcessMessage: () => processMessage,
     cancel: vi.fn(),
+    // ADR-036: обфускация user-сообщения перед записью в историю. Без неё
+    // `POST /:id/prompt` падает `TypeError` (роут зовёт метод у оркестратора).
+    obfuscateUserMessageForHistory: vi.fn(async (_sessionId: string, message: unknown) => message),
     getPromptInfo: vi.fn().mockResolvedValue({
       manifest: { totalChars: 10, estTokens: 3, staticPrefixChars: 5, entries: [] },
       history: {
@@ -102,7 +105,22 @@ function createMockOrchestrator() {
 function createTestApp(
   tmpDir: string,
   profilesStore?: ProfileStore,
-  opts?: { resolveDefaultAgent?: () => string | Promise<string> },
+  opts?: {
+    resolveDefaultAgent?: () => string | Promise<string>;
+    /** userId запроса (core — 'local'; backend — id пользователя). */
+    resolveUserId?: (c: Context) => string | Promise<string>;
+    /**
+     * ADR-140 Ф2: снимок групп пользователя запроса (claim IdP) — кладётся в
+     * принципал хода при приёме ввода. Не задан/`undefined` — групп нет
+     * (fail-closed).
+     */
+    resolveUserGroups?: (c: Context) => readonly string[] | undefined;
+    /**
+     * Правило доступа к сессии по id (prefix-guard). Как в managed backend:
+     * владелец сессии или `ADMIN`.
+     */
+    canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
+  },
   requestSessionService?: unknown,
   extraDeps?: Partial<SessionRoutesDeps>,
 ) {
@@ -2034,5 +2052,81 @@ describe('Session API Routes — browser profile (PROP-135)', () => {
     const res = await patchProfile(session.id, app, 'anything');
     expect(res.status).toBe(200);
     expect((await sessionManager.getSession(session.id))!.settings.browserProfile).toBe('anything');
+  });
+});
+
+/**
+ * ADR-140 Ф2: снимок групп пользователя фиксируется в принципале хода **при
+ * приёме ввода** (`POST /:id/prompt`) — гранты по группам применяются к этому
+ * снимку (ADR-106 Ф4: принципал не пересчитывается в середине хода).
+ */
+describe('POST /api/v2/sessions/:id/prompt — принципал хода несёт группы (ADR-140 Ф2)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-principal-groups-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function postPrompt(sessionId: string, app: Hono, content: string): Promise<Response> {
+    return app.request(`/api/v2/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  /** Доступ к сессии — как в managed backend: владелец сессии (prefix-guard). */
+  const ownerAccess = (session: Session, _c: Context, userId: string): boolean =>
+    (session.ownerId ?? session.userId) === userId;
+
+  it('сообщение в очереди сохраняет принципал с группами пользователя', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, {
+      resolveUserId: () => 'u1',
+      resolveUserGroups: () => ['team'],
+      canAccess: ownerAccess,
+    });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'u1' });
+
+    const res = await postPrompt(session.id, app, 'Привет');
+    expect(res.status).toBe(202);
+
+    const updated = await sessionManager.getSession(session.id);
+    const principal = updated?.pendingMessages[0]?.principal;
+    expect(principal).toEqual({ kind: 'user', id: 'u1', roles: [], groups: ['team'] });
+  });
+
+  it('без `resolveUserGroups` — группы пустые (fail-closed)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, {
+      resolveUserId: () => 'u1',
+      canAccess: ownerAccess,
+    });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'u1' });
+
+    const res = await postPrompt(session.id, app, 'Привет');
+    expect(res.status).toBe(202);
+
+    const updated = await sessionManager.getSession(session.id);
+    const principal = updated?.pendingMessages[0]?.principal;
+    expect(principal).toEqual({ kind: 'user', id: 'u1', roles: [], groups: [] });
+  });
+
+  it('`resolveUserGroups` → `undefined` — группы пустые (fail-closed)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, {
+      resolveUserId: () => 'u1',
+      resolveUserGroups: () => undefined,
+      canAccess: ownerAccess,
+    });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'u1' });
+
+    const res = await postPrompt(session.id, app, 'Привет');
+    expect(res.status).toBe(202);
+
+    const updated = await sessionManager.getSession(session.id);
+    const principal = updated?.pendingMessages[0]?.principal;
+    expect(principal).toEqual({ kind: 'user', id: 'u1', roles: [], groups: [] });
   });
 });

@@ -447,6 +447,9 @@ export function createBackendListen(deps: BackendListenDeps) {
                     kind: 'user',
                     id: user.id,
                     roles: user.roles ?? [],
+                    // ADR-140 Ф2: группы аутентифицированного пользователя
+                    // (снимок claim'а IdP); нет — групп нет (fail-closed).
+                    groups: user.groups ?? [],
                   };
                   const claim = await registry.claim(approvalId, sid, responder, {
                     ...(turnId ? { turnId } : {}),

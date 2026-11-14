@@ -888,7 +888,7 @@ export class PermissionApprovalManager {
     const { action: boundAction, target: boundTarget, turnId: boundTurnId } = request;
     if (boundAction === undefined || boundTarget === undefined || boundTurnId === undefined) return;
     this._options.registry?.open(request.approvalId, {
-      principal: request.principal ?? { kind: 'user', id: 'local', roles: [] },
+      principal: request.principal ?? { kind: 'user', id: 'local', roles: [], groups: [] },
       turnId: boundTurnId,
       action: boundAction,
       target: boundTarget,
