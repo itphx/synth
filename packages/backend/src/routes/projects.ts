@@ -3,19 +3,21 @@ import type { AuthKit } from '../auth/middleware.js';
 import type {
   ProjectRepository, SessionManager, McpManager, SkillService,
   SettingsRepository, McpRegistryRepository, EventBus, SecurityAuditRepository,
+  ProjectChangeKind,
 } from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
 import type { ExecutionProfileCatalog } from '@itphx/synth-core';
 // ADR-114: сервис worktree — контур `/projects/:id/worktrees*`.
 import type { WorktreeService } from '@itphx/synth-core';
-import type { Project } from '@itphx/synth-shared';
+import type { EventHub } from '../events/hub.js';
+import type { Project, User } from '@itphx/synth-shared';
 import {
   canManageWithProjectRole,
   canWriteWithProjectRole,
   resolveProjectAccess,
 } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
-import { projectPrincipalOf, groupsOf, type UserWithGroups } from '../lib/project-principal.js';
+import { projectPrincipalOf, groupsOf } from '../lib/project-principal.js';
 
 /**
  * ADR-076 §T4: RBAC-хелперы проекта (owner/EDITOR/LEAD/ADMIN). Вынесены фабрикой,
@@ -40,7 +42,7 @@ export function createProjectAccess(kit: AuthKit) {
    * (`opts.canManage`/`canEditContent`/`canRead`) — sync.
    */
   const principalOf = (c: Ctx, userId: string) => {
-    const user = c.get('user') as UserWithGroups | undefined;
+    const user = c.get('user') as User | undefined;
     const roles = user?.roles ? [...user.roles] : [];
     if (roles.length === 0) {
       if (typeof kit.isAdmin === 'function' && kit.isAdmin(c)) roles.push('ADMIN');
@@ -127,6 +129,13 @@ export function createProjectRoutes(
    * Не задан — аудит не пишется (фича работает).
    */
   securityAudit?: SecurityAuditRepository,
+  /**
+   * ADR-140 Ф2: хаб подписок WS/SSE — при смене состояния доступа к проекту
+   * подписки уже подключённых клиентов пересчитываются (доступ применяется
+   * к тем, кто подключён **до** изменения).
+   * Не задан — пересчёта нет (подписки остаются прежними).
+   */
+  eventHub?: EventHub,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -145,7 +154,7 @@ export function createProjectRoutes(
       // PROP-133 §1/§6: группы принципала — грант по группе должен попадать и
       // в список проектов (иначе проект читается по `GET /:id`, но в списке
       // отсутствует). Нет поля/не массив/пусто — групп нет (fail-closed).
-      resolveViewerGroups: (c) => groupsOf(c.get('user') as UserWithGroups),
+      resolveViewerGroups: (c) => groupsOf(c.get('user') as User),
       getCurrentUserId: async (c) => (await kit.getCurrentUser(c))?.id ?? '',
       messages: {
         nameRequired: (c) => t('errors.validation.nameRequired', undefined, c),
@@ -192,12 +201,22 @@ export function createProjectRoutes(
       ...(eventBus
         ? {
             sessionManager,
-            onProjectChanged: async (projectId: string, kind: 'updated' | 'deleted') => {
+            onProjectChanged: async (projectId: string, kind: ProjectChangeKind) => {
               const sessions = await sessionManager.listSessions({ projectId });
               for (const s of sessions) {
                 eventBus.publish(s.id, kind === 'deleted' ? 'project.deleted' : 'project.updated', {
                   project_id: projectId,
+                  // ADR-140 Ф2: вид изменения — UI/подписки видят, что именно
+                  // изменилось (в т.ч. состояние доступа — `access`).
+                  kind,
                 });
+              }
+              // ADR-140 Ф2: изменилось состояние доступа — пересчитать
+              // подписки уже подключённых клиентов (иначе новый участник не
+              // получит события сессий проекта, а потерявший — продолжит
+              // получать).
+              if (kind === 'access') {
+                await eventHub?.resyncAllClients();
               }
             },
           }

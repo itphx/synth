@@ -183,6 +183,10 @@ export interface ProjectRoutesOptions {
    * `project.updated`/`project.deleted` в канал каждой сессии проекта
    * (инвентарь/контейнер — ресурс проекта, ADR-014). Для `deleted` колбэк
    * вызывается **до** удаления, пока сессии ещё перечисляются.
+   *
+   * ADR-140 Ф2: вид изменения `access` — изменилось состояние доступа
+   * (`members`/`group_members`/`everyone_role`); подписки клиентов на
+   * сессии проекта надо пересчитать (доступ применяется к уже подключённым).
    */
   onProjectChanged?: (projectId: string, kind: ProjectChangeKind) => void | Promise<void>;
   /**
@@ -199,8 +203,16 @@ export interface ProjectRoutesOptions {
   securityAudit?: SecurityAuditRepository;
 }
 
-/** Вид изменения проекта для `ProjectRoutesOptions.onProjectChanged`. */
-export type ProjectChangeKind = 'updated' | 'deleted';
+/**
+ * Вид изменения проекта для `ProjectRoutesOptions.onProjectChanged`.
+ *
+ * - `updated` — обычная правка (контент/workspace/план/…);
+ * - `deleted` — проект удалён (колбэк вызывается **до** удаления);
+ * - `access` — изменилось **состояние доступа** (`members`/`group_members`/
+ *   `everyone_role`): подписки клиентов на сессии проекта надо пересчитать
+ *   (ADR-140 Ф2 — доступ применяется к уже подключённым клиентам).
+ */
+export type ProjectChangeKind = 'updated' | 'deleted' | 'access';
 
 /**
  * План проекта (ADR-039): структурированный объект `ProjectPlan`.
@@ -998,7 +1010,11 @@ export function createProjectRoutes(
     }
     // ADR-118 §4: проект изменён — сессии проекта получают `project.updated`
     // (другие клиенты перечитывают проект/план/настройки).
-    await opts.onProjectChanged?.(project.id, 'updated');
+    // ADR-140 Ф2: если в этом запросе менялось **состояние доступа** — вид
+    // изменения `access` (одно событие, не два): подписки клиентов на сессии
+    // проекта надо пересчитать, иначе доступ применяется только к новым
+    // подключениям.
+    await opts.onProjectChanged?.(project.id, accessChange ? 'access' : 'updated');
     return c.json(serializeProject(project));
   });
 

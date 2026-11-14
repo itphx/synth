@@ -26,6 +26,7 @@ import {
   buildProjectAccessBody,
   canEditProjectContent,
   canManageProject,
+  draftGroupMembersOf,
   draftMembersOf,
   everyoneRoleOf,
   projectAccessDraftAfterProjection,
@@ -34,6 +35,7 @@ import {
 } from '@/lib/projectAccess'
 import { canEditSessionContent } from '@/lib/sessionAccess'
 import { useUsersDirectory } from '@/hooks/useUsersDirectory'
+import { useGroupsCatalog } from '@/hooks/useGroupsCatalog'
 import { selectHasFeature, useInstanceCapabilitiesStore } from '@/stores/instanceCapabilitiesStore'
 import { MarkdownText } from './work/MarkdownText'
 import { PlanSummary } from './work/PlanSummary'
@@ -1582,11 +1584,11 @@ function ProjectSkillsBlock({
  * Проекции — **не отдельный флаг**, а три состояния одного списка (PROP-133):
  * «Только автору» / «Только выбранным» / «Всем пользователям». Текущая
  * проекция берётся из DTO (`visibility`, производное сервером), сохранение
- * уходит **одним** `PUT /projects/:id` с полной заменой `members` и
- * `everyone_role` (PROP-133 §3.1).
+ * уходит **одним** `PUT /projects/:id` с полной заменой `members`,
+ * `group_members` и `everyone_role` (PROP-133 §3.1).
  *
- * Групп (Ф2) здесь нет — источника групп в продукте нет; выбор пользователей
- * доступен только там, где сервер объявил фичу `features.users`
+ * Гранты группам (ADR-140 Ф2) — в том же списке доступа: выбор доступен
+ * только там, где сервер объявил фичу `features.users`
  * (`GET /api/v2/meta`): в standalone раздела пользователей нет, поэтому
  * предлагается только «Только автору» (read-only).
  */
@@ -1609,6 +1611,7 @@ function ProjectAccessBlock({
     void useInstanceCapabilitiesStore.getState().load()
   }, [])
   const directory = useUsersDirectory(hasUsers)
+  const groupsCatalog = useGroupsCatalog(hasUsers)
 
   const [projection, setProjection] = useState<ProjectAccessProjection>(() =>
     accessProjectionOf(project),
@@ -1619,6 +1622,11 @@ function ProjectAccessBlock({
   const [everyoneRole, setEveryoneRole] = useState<ProjectGrantRole>(() =>
     everyoneRoleOf(project),
   )
+  // ADR-140 Ф2: гранты группам (`имя группы → роль`). Черновик сеется из
+  // DTO, а не из каталога: грант вне каталога не должен потеряться.
+  const [groupMembers, setGroupMembers] = useState<Record<string, ProjectGrantRole>>(() =>
+    draftGroupMembersOf(project),
+  )
 
   // Синхронизация с сервером: доступ мог поменять другой клиент
   // (`project.updated`) — черновик возвращается к актуальному состоянию.
@@ -1626,6 +1634,7 @@ function ProjectAccessBlock({
     setProjection(accessProjectionOf(project))
     setMembers(draftMembersOf(project))
     setEveryoneRole(everyoneRoleOf(project))
+    setGroupMembers(draftGroupMembersOf(project))
   }, [project])
 
   const userLabel = (id: string): string => {
@@ -1634,14 +1643,31 @@ function ProjectAccessBlock({
     return id
   }
 
+  /** Имена групп, известные загруженному каталогу. */
+  const catalogGroupNames = groupsCatalog.groups.map((g) => g.name)
+
+  /** Выбранные группы: из каталога и «вне каталога» (грант сохранён, а группы в каталоге нет). */
+  const selectedGroupNames = Object.keys(groupMembers)
+  const groupsInCatalog = selectedGroupNames.filter((name) => catalogGroupNames.includes(name))
+  const groupsOutsideCatalog = selectedGroupNames.filter(
+    (name) => !catalogGroupNames.includes(name),
+  )
+
   /** Смена проекции — переход между состояниями одного списка доступа. */
   const handleProjectionChange = (next: ProjectAccessProjection) => {
     if (next === projection) return
     // Правило перехода — в `lib/projectAccess` (единственный источник правды).
-    const draft = projectAccessDraftAfterProjection(next, projection, members, everyoneRole)
+    const draft = projectAccessDraftAfterProjection(
+      next,
+      projection,
+      members,
+      everyoneRole,
+      groupMembers,
+    )
     setProjection(draft.projection)
     setMembers(draft.members)
     setEveryoneRole(draft.everyoneRole)
+    setGroupMembers(draft.groupMembers)
   }
 
   const handleMembersChange = (next: string[]) => {
@@ -1656,8 +1682,46 @@ function ProjectAccessBlock({
     setMembers((prev) => ({ ...prev, [id]: role }))
   }
 
+  /**
+   * ADR-140 Ф2: смена набора групп из мультиселекта.
+   *
+   * `MultiSelectField` отдаёт только те значения, что есть в `options`
+   * (известный баг `toggle` — значения вне каталога выпадают из результата).
+   * Поэтому гранты вне каталога **мержим обратно**: иначе полная замена
+   * `group_members` тихо удалила бы их. Снять такой грант можно явной
+   * кнопкой «снять» в строке «не в каталоге».
+   */
+  const handleGroupMembersChange = (next: string[]) => {
+    setGroupMembers((prev) => {
+      const out: Record<string, ProjectGrantRole> = {}
+      for (const [name, role] of Object.entries(prev)) {
+        if (!catalogGroupNames.includes(name)) out[name] = role
+      }
+      for (const rawName of next) {
+        const name = rawName.trim()
+        if (!name) continue
+        out[name] = prev[name] ?? 'viewer'
+      }
+      return out
+    })
+  }
+
+  const handleGroupRoleChange = (name: string, role: ProjectGrantRole) => {
+    setGroupMembers((prev) => ({ ...prev, [name]: role }))
+  }
+
+  /** Явное снятие гранта группе (единственный способ снять грант вне каталога). */
+  const handleRemoveGroup = (name: string) => {
+    setGroupMembers((prev) => {
+      if (!(name in prev)) return prev
+      const out = { ...prev }
+      delete out[name]
+      return out
+    })
+  }
+
   const handleSave = async () => {
-    const body = buildProjectAccessBody(projection, members, everyoneRole)
+    const body = buildProjectAccessBody(projection, members, everyoneRole, groupMembers)
     await run({
       key: 'project-access',
       run: () => synthApi.updateProject(project.id, body),
@@ -1755,6 +1819,92 @@ function ProjectAccessBlock({
               ))}
             </div>
           )}
+
+          {/* ADR-140 Ф2: гранты группам — вторая ось того же списка доступа. */}
+          <div className="flex min-w-0 flex-col gap-2" data-testid="project-access-groups">
+            <input
+              type="search"
+              value={groupsCatalog.query}
+              onChange={(e) => groupsCatalog.setQuery(e.target.value)}
+              placeholder={t('project.access.groups.search')}
+              aria-label={t('project.access.groups.search')}
+              className="w-full min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              data-testid="project-access-group-search"
+            />
+            <MultiSelectField
+              label={t('project.access.groups.title')}
+              values={selectedGroupNames}
+              options={groupsCatalog.groups.map((g) => ({ value: g.name, label: g.name }))}
+              onChange={handleGroupMembersChange}
+              testIdPrefix="project-access-group"
+              emptyText={
+                groupsCatalog.loading ? t('common.loading') : t('project.access.groups.empty')
+              }
+            />
+            {groupsCatalog.failed && (
+              <div
+                className="text-[0.625rem] text-destructive"
+                data-testid="project-access-groups-error"
+              >
+                {t('project.access.groups.loadError')}
+              </div>
+            )}
+            {selectedGroupNames.length > 0 && (
+              <div className="flex flex-col gap-1" data-testid="project-access-group-roles">
+                {groupsInCatalog.map((name) => (
+                  <div key={name} className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate text-xs text-foreground">{name}</span>
+                    <select
+                      value={groupMembers[name]}
+                      onChange={(e) =>
+                        handleGroupRoleChange(name, e.target.value as ProjectGrantRole)
+                      }
+                      aria-label={t('project.access.groups.roleOf', { name })}
+                      data-testid={`project-access-group-role-${name}`}
+                      className="shrink-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    >
+                      <option value="viewer">{t('project.access.role.viewer')}</option>
+                      <option value="editor">{t('project.access.role.editor')}</option>
+                    </select>
+                  </div>
+                ))}
+                {/* Грант вне каталога: сохраняем и даём снять явно. */}
+                {groupsOutsideCatalog.map((name) => (
+                  <div
+                    key={name}
+                    className="flex items-center justify-between gap-2"
+                    data-testid={`project-access-group-outside-${name}`}
+                  >
+                    <span className="min-w-0 truncate text-xs text-muted-foreground">
+                      {t('project.access.groups.notInCatalog', { name })}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      <select
+                        value={groupMembers[name]}
+                        onChange={(e) =>
+                          handleGroupRoleChange(name, e.target.value as ProjectGrantRole)
+                        }
+                        aria-label={t('project.access.groups.roleOf', { name })}
+                        data-testid={`project-access-group-role-${name}`}
+                        className="rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                      >
+                        <option value="viewer">{t('project.access.role.viewer')}</option>
+                        <option value="editor">{t('project.access.role.editor')}</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveGroup(name)}
+                        className="rounded border border-border px-2 py-1 text-[0.625rem] text-muted-foreground hover:text-foreground"
+                        data-testid={`project-access-group-remove-${name}`}
+                      >
+                        {t('project.access.groups.remove')}
+                      </button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

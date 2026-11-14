@@ -6,7 +6,7 @@
  * сводки без `plan`, он затирал бы открытую панель «Проект». Журнал
  * обновляется отдельно — своей страницей (`GET /projects/:id/log`).
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest'
 
 // persist (zustand) в filesStore/gitStore пишет в localStorage — заглушка.
 vi.hoisted(() => {
@@ -116,5 +116,51 @@ describe('transportStore: project.updated (PROP-054)', () => {
     dispatch(makeEvent('project.updated', 's1', {}))
 
     expect(mocks.getProject).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * ADR-140 Ф2: состав доступа проекта меняется — список проектов (проект мог
+ * появиться/исчезнуть из выдачи) и список сессий (сессии проекта появляются и
+ * исчезают вместе с доступом) должны перечитываться. Остальные `kind`
+ * (`log`, `invariants`, без kind) поведение списков не меняют.
+ */
+describe('transportStore: project.updated kind=access (ADR-140 Ф2)', () => {
+  let loadProjectsSpy: MockInstance<() => Promise<void>>
+  let loadSessionsSpy: MockInstance<() => Promise<void>>
+
+  beforeEach(() => {
+    loadProjectsSpy = vi
+      .spyOn(useProjectsStore.getState(), 'loadProjects')
+      .mockImplementation(async () => {})
+    loadSessionsSpy = vi
+      .spyOn(useSessionsStore.getState(), 'loadSessions')
+      .mockImplementation(async () => {})
+  })
+
+  afterEach(() => {
+    loadProjectsSpy.mockRestore()
+    loadSessionsSpy.mockRestore()
+  })
+
+  it('kind=access перечитывает список проектов и список сессий', () => {
+    dispatch(makeEvent('project.updated', 's1', { project_id: 'p1', kind: 'access' }))
+
+    expect(loadProjectsSpy).toHaveBeenCalled()
+    expect(loadSessionsSpy).toHaveBeenCalled()
+  })
+
+  it('без kind списки не перечитываются', () => {
+    dispatch(makeEvent('project.updated', 's1', { project_id: 'p1' }))
+
+    expect(loadProjectsSpy).not.toHaveBeenCalled()
+    expect(loadSessionsSpy).not.toHaveBeenCalled()
+  })
+
+  it('kind=log списки не перечитываются', () => {
+    dispatch(makeEvent('project.updated', 's1', { project_id: 'p1', kind: 'log' }))
+
+    expect(loadProjectsSpy).not.toHaveBeenCalled()
+    expect(loadSessionsSpy).not.toHaveBeenCalled()
   })
 })

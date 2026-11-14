@@ -45,6 +45,14 @@ const USERS: Record<string, MatrixUser> = {
   grantee: { id: 'grantee', username: 'grantee', roles: ['USER'], groups: ['team-a'] } as MatrixUser,
   // Тот же пользователь без группы — гранта нет.
   noGroup: { id: 'noGroup', username: 'noGroup', roles: ['USER'] } as MatrixUser,
+  // ADR-140 Ф2: индивидуальный грант + грант по той же группе (конфликт
+  // приоритетов: индивидуальный грант важнее группового).
+  u2: { id: 'u2', username: 'u2', roles: ['USER'], groups: ['team-a'] } as MatrixUser,
+  // ADR-140 Ф2: принципал сразу в нескольких группах (берётся максимум роли).
+  dualGroup: { id: 'dualGroup', username: 'dualGroup', roles: ['USER'], groups: ['team-a', 'sre'] } as MatrixUser,
+  // ADR-140 Ф2: группа снята в IdP — у принципала осталась другая группа,
+  // грант по прежней группе больше не действует.
+  movedGroup: { id: 'movedGroup', username: 'movedGroup', roles: ['USER'], groups: ['other'] } as MatrixUser,
 };
 
 function userFromHeader(header: string | undefined): MatrixUser | null {
@@ -364,5 +372,76 @@ describe('PROP-133: грант по группе', () => {
     });
     const list = await listProjects('grantee');
     expect(list.projects.map((p) => p.id)).toContain(project.id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. ADR-140 Ф2: гранты по группам — роли, конфликт приоритетов, несколько
+//    групп, снятие группы в IdP
+// ---------------------------------------------------------------------------
+
+describe('ADR-140 Ф2: гранты по группам (роль, конфликт, несколько групп, снятие группы)', () => {
+  it('группа с ролью editor: контент пишет (200), состояние доступа — нет (403)', async () => {
+    const project = await seedProject('Group-editor', {
+      groupMembers: { 'team-a': ProjectRole.EDITOR },
+    });
+
+    // Роль `editor` по группе даёт запись контента (инвариант 21).
+    const content = await putProject(project.id, 'grantee', { name: 'Правка участника группы' });
+    expect(content.status).toBe(200);
+    expect((await store.load(project.id))!.name).toBe('Правка участника группы');
+
+    // Но менять доступ (`group_members`/`everyone_role`) может только owner.
+    for (const body of [
+      { group_members: { 'team-b': 'viewer' } },
+      { everyone_role: 'viewer' },
+    ]) {
+      const res = await putProject(project.id, 'grantee', body);
+      expect(res.status, JSON.stringify(body)).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+    }
+
+    const stored = (await store.load(project.id))!;
+    expect(stored.groupMembers?.['team-a']).toBe(ProjectRole.EDITOR);
+    expect(stored.groupMembers?.['team-b']).toBeUndefined();
+    expect(stored.everyoneRole ?? null).toBeNull();
+  });
+
+  it('индивидуальный грант приоритетнее гранта по группе: viewer + editor по группе → 403', async () => {
+    const project = await seedProject('Group-conflict', {
+      // `u2` — и в `members` (viewer), и в группе `team-a` (editor).
+      members: { u2: ProjectRole.VIEWER },
+      groupMembers: { 'team-a': ProjectRole.EDITOR },
+    });
+
+    const res = await putProject(project.id, 'u2', { name: 'Не должен пройти' });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+    expect((await store.load(project.id))!.name).toBe('Group-conflict');
+  });
+
+  it('две группы: берётся максимум роли (editor) — контент пишется (200)', async () => {
+    const project = await seedProject('Group-two', {
+      groupMembers: { 'team-a': ProjectRole.VIEWER, sre: ProjectRole.EDITOR },
+    });
+
+    const res = await putProject(project.id, 'dualGroup', { description: 'Правка по максимуму роли' });
+    expect(res.status).toBe(200);
+    expect((await store.load(project.id))!.description).toBe('Правка по максимуму роли');
+  });
+
+  it('группа снята в IdP: проект не читается (403) и не виден в списке', async () => {
+    const project = await seedProject('Group-dropped', {
+      groupMembers: { 'team-a': ProjectRole.VIEWER },
+    });
+
+    // У принципала группы `team-a` больше нет (осталась `other`).
+    const res = await getProject(project.id, 'movedGroup');
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+    const list = await listProjects('movedGroup');
+    expect(list.projects.map((p) => p.id)).not.toContain(project.id);
+    expect(list.total).toBe(0);
   });
 });

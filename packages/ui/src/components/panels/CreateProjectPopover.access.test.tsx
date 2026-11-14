@@ -27,6 +27,7 @@ vi.hoisted(() => {
 const mocks = vi.hoisted(() => ({
   createProject: vi.fn(),
   getDirectory: vi.fn(),
+  getGroupsDirectory: vi.fn(),
   getInstanceCapabilities: vi.fn(),
 }))
 
@@ -69,6 +70,15 @@ const DIRECTORY = {
   total: 1,
   offset: 0,
   limit: 50,
+  next_offset: null,
+}
+
+/** ADR-140 Ф2: каталог групп инстанса. */
+const GROUPS = {
+  groups: [{ name: 'platform' }, { name: 'team-a' }],
+  total: 2,
+  offset: 0,
+  limit: 100,
   next_offset: null,
 }
 
@@ -116,6 +126,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.createProject.mockResolvedValue(PROJECT)
   mocks.getDirectory.mockResolvedValue(DIRECTORY)
+  mocks.getGroupsDirectory.mockResolvedValue(GROUPS)
   mocks.getInstanceCapabilities.mockResolvedValue({
     messageModel: 2,
     eventSeq: true,
@@ -172,6 +183,7 @@ describe('CreateProjectPopover — проекция доступа (PROP-133 §4
       name: 'Shared project',
       origin: 'local',
       members: {},
+      group_members: {},
       everyone_role: 'viewer',
     })
 
@@ -195,6 +207,7 @@ describe('CreateProjectPopover — проекция доступа (PROP-133 §4
       name: 'Editable project',
       origin: 'local',
       members: {},
+      group_members: {},
       everyone_role: 'editor',
     })
   })
@@ -216,6 +229,58 @@ describe('CreateProjectPopover — проекция доступа (PROP-133 §4
       name: 'Team project',
       origin: 'local',
       members: { u2: 'viewer' },
+      group_members: {},
+      everyone_role: null,
+    })
+  })
+
+  it('«Только выбранным»: выбранная группа уходит в `group_members`', async () => {
+    await renderPopover()
+
+    await click(byTestId('create-project-access-selected'))
+    await act(async () => {})
+
+    await click(byTestId('create-project-access-group-platform'))
+    await act(async () => {})
+
+    const roleSelect = byTestId('create-project-access-group-role-platform') as HTMLSelectElement
+    expect(roleSelect).toBeTruthy()
+    expect(roleSelect.value).toBe('viewer')
+
+    const nameInput = document.body.querySelector('input[placeholder="Project name"]') as HTMLInputElement
+    await setInputValue(nameInput, 'Group project')
+    await click(byTestId('create-project-submit'))
+    await act(async () => {})
+
+    expect(mocks.createProject).toHaveBeenCalledWith({
+      name: 'Group project',
+      origin: 'local',
+      members: {},
+      group_members: { platform: 'viewer' },
+      everyone_role: null,
+    })
+  })
+
+  it('«Только выбранным»: пользователь и группа одновременно (обе оси в одном теле)', async () => {
+    await renderPopover()
+
+    await click(byTestId('create-project-access-selected'))
+    await act(async () => {})
+    await click(byTestId('create-project-access-user-u2'))
+    await act(async () => {})
+    await click(byTestId('create-project-access-group-platform'))
+    await act(async () => {})
+
+    const nameInput = document.body.querySelector('input[placeholder="Project name"]') as HTMLInputElement
+    await setInputValue(nameInput, 'Mixed project')
+    await click(byTestId('create-project-submit'))
+    await act(async () => {})
+
+    expect(mocks.createProject).toHaveBeenCalledWith({
+      name: 'Mixed project',
+      origin: 'local',
+      members: { u2: 'viewer' },
+      group_members: { platform: 'viewer' },
       everyone_role: null,
     })
   })
@@ -233,5 +298,7 @@ describe('CreateProjectPopover — проекция доступа (PROP-133 §4
 
     expect(byTestId('create-project-access')).toBeNull()
     expect(mocks.getDirectory).not.toHaveBeenCalled()
+    // ADR-140 Ф2: каталог групп тоже не грузится.
+    expect(mocks.getGroupsDirectory).not.toHaveBeenCalled()
   })
 })

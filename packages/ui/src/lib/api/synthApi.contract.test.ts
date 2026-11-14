@@ -33,7 +33,7 @@ const EXPECTED_API_METHODS = [
   'getCommitDetail', 'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig', 'getDecisionMetrics',
   'getDecisionSettings', 'getDefaultAgentInfo', 'getDefaultModel', 'getDictionaries', 'getDictionary', 'getDirectory',
   'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
-  'getEventsSettings', 'getExecutionPools', 'getExecutionProfiles', 'getExecutionSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus', 'getInstanceCapabilities',
+  'getEventsSettings', 'getExecutionPools', 'getExecutionProfiles', 'getExecutionSettings', 'getGatewayPatterns', 'getGroupsDirectory', 'getHealth', 'getHybridStatus', 'getInstanceCapabilities',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo', 'getMcpPolicyInfo',
   'getMcpRegistry', 'getMcpToolSettings', 'getMemoryFact', 'getMemoryGraph', 'getMemoryStatus', 'getMessageDebug',
   'getMigrations', 'getModelGroups', 'getModels', 'getModelsPage', 'getMyIdentities', 'getOAuthCredential',

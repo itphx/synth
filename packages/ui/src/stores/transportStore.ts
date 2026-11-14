@@ -3013,6 +3013,12 @@ export function createDispatcher(): EventDispatcher {
           if (!project) return
           void useGitStore.getState().loadRepos(projectId, project.repos ?? null)
         }).catch(() => {})
+        if (kind === 'access') {
+          // ADR-140 Ф2: состав доступа изменился — списки проектов и сессий
+          // зависят от него (сессии проекта появляются/исчезают), перечитываем.
+          void useProjectsStore.getState().loadProjects()
+          void useSessionsStore.getState().loadSessions()
+        }
         break
       }
 

@@ -285,14 +285,16 @@ describe('PROP-133: состояние доступа к проекту (core-ф
     expect(res.status).toBe(400);
   });
 
-  it('изменение доступа публикует `project.updated` и пишет аудит', async () => {
+  it('изменение доступа публикует `project.updated` с видом `access` и пишет аудит', async () => {
     const id = await createOwned();
     projectChanges.length = 0;
     await audit.clear();
 
     const res = await put(id, { members: { [VIEWER]: 'viewer' } });
     expect(res.status).toBe(200);
-    expect(projectChanges).toContain(`${id}:updated`);
+    // ADR-140 Ф2: изменение состояния доступа — вид `access` (одно событие),
+    // чтобы подписки клиентов пересчитывались.
+    expect(projectChanges).toContain(`${id}:access`);
     const records = await auditRecords();
     expect(records).toHaveLength(1);
     const entry = records[0];
@@ -302,12 +304,26 @@ describe('PROP-133: состояние доступа к проекту (core-ф
     expect(after.members[VIEWER]).toBe('viewer');
   });
 
+  it('снятие публикации (`everyone_role: null`) — тоже вид `access`', async () => {
+    const id = await createOwned();
+    await put(id, { everyone_role: 'viewer' });
+    projectChanges.length = 0;
+
+    const res = await put(id, { everyone_role: null });
+    expect(res.status).toBe(200);
+    // Снятие публикации меняет состояние доступа → вид `access`.
+    expect(projectChanges).toContain(`${id}:access`);
+  });
+
   it('правка контента без изменения доступа аудит не пишет', async () => {
     const id = await createOwned();
     await audit.clear();
     const res = await put(id, { description: 'текст' });
     expect(res.status).toBe(200);
     expect(await auditRecords()).toHaveLength(0);
+    // ADR-140 Ф2: правка контента — обычный вид `updated` (не `access`).
+    expect(projectChanges).toContain(`${id}:updated`);
+    expect(projectChanges).not.toContain(`${id}:access`);
   });
 
   it('состояние доступа переживает запись в хранилище', async () => {

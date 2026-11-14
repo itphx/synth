@@ -411,3 +411,119 @@ describe('EventHub — подписка на сессии проекта с об
     expect(received.some((e) => e.sessionId === 'private-session')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADR-140 Ф2: изменение доступа к проекту применяется к **уже подключённым**
+// клиентам — подписки WS/SSE пересчитываются (`resyncAllClients`).
+// ---------------------------------------------------------------------------
+
+describe('EventHub — пересчёт подписок при смене доступа (ADR-140 Ф2)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-hub-resync-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Хаб + проект `shared` (владелец — `owner`) и две сессии: `own-session`
+   * (своя, без проекта) и `foreign-session` (чужая, в проекте `shared`).
+   * Пока проект закрыт («author»), чужая сессия клиенту не видна.
+   */
+  async function makeResyncHub() {
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const project = projectStore.create('Shared', 'owner');
+    await projectStore.save(project);
+
+    const sessions = [
+      { id: 'own-session', userId: 'stranger', ownerId: 'stranger', projectId: undefined },
+      { id: 'foreign-session', userId: 'owner', ownerId: 'owner', projectId: project.id },
+    ];
+    const sessionManager = {
+      listSessions: async (filter?: { userId?: string; projectIds?: string[] }) => {
+        if (!filter) return sessions;
+        return sessions.filter((s) =>
+          filter.projectIds?.includes(s.projectId as string)
+          || s.userId === filter.userId
+          || s.ownerId === filter.userId,
+        );
+      },
+    } as unknown as SessionManagerType;
+
+    const eventBus = new EventBus();
+    const hub = new EventHub(eventBus, sessionManager, projectStore);
+    return { eventBus, hub, projectStore, project };
+  }
+
+  it('после открытия проекта «всем пользователям» клиент получает события сессии проекта', async () => {
+    const { eventBus, hub, projectStore, project } = await makeResyncHub();
+    const received: BusEvent[] = [];
+    const client: EventClient = {
+      userId: 'stranger',
+      username: 'stranger',
+      send: (event: BusEvent) => received.push(event),
+    };
+    await hub.registerClient(client);
+
+    // Проект закрыт — чужая сессия недоступна.
+    eventBus.publish('foreign-session', 'step.finished', {
+      turnId: 'turn-before',
+      stepIndex: 0,
+      messageId: 'msg-before',
+      status: 'completed',
+    });
+    expect(received.some((e) => e.sessionId === 'foreign-session')).toBe(false);
+
+    // Доступ изменён → пересчёт подписок уже подключённого клиента.
+    project.everyoneRole = ProjectRole.VIEWER;
+    await projectStore.save(project);
+    await hub.resyncAllClients();
+
+    eventBus.publish('foreign-session', 'step.finished', {
+      turnId: 'turn-after',
+      stepIndex: 0,
+      messageId: 'msg-after',
+      status: 'completed',
+    });
+    expect(received.some((e) => e.sessionId === 'foreign-session')).toBe(true);
+  });
+
+  it('после снятия публикации клиент больше не получает события сессии проекта', async () => {
+    const { eventBus, hub, projectStore, project } = await makeResyncHub();
+    project.everyoneRole = ProjectRole.VIEWER;
+    await projectStore.save(project);
+
+    const received: BusEvent[] = [];
+    const client: EventClient = {
+      userId: 'stranger',
+      username: 'stranger',
+      send: (event: BusEvent) => received.push(event),
+    };
+    await hub.registerClient(client);
+
+    eventBus.publish('foreign-session', 'step.finished', {
+      turnId: 'turn-visible',
+      stepIndex: 0,
+      messageId: 'msg-visible',
+      status: 'completed',
+    });
+    expect(received.some((e) => e.sessionId === 'foreign-session')).toBe(true);
+
+    // Доступ снят → пересчёт: подписка на чужую сессию снимается.
+    project.everyoneRole = null;
+    await projectStore.save(project);
+    await hub.resyncAllClients();
+
+    received.length = 0;
+    eventBus.publish('foreign-session', 'step.finished', {
+      turnId: 'turn-hidden',
+      stepIndex: 0,
+      messageId: 'msg-hidden',
+      status: 'completed',
+    });
+    expect(received.some((e) => e.sessionId === 'foreign-session')).toBe(false);
+  });
+});

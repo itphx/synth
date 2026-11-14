@@ -167,7 +167,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     browserProfileCatalog(deps.executionRouter);
 
   // Projects routes
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles, browserProfiles, securityAudit));
+  // ADR-140 Ф2: хаб подписок — при смене состояния доступа к проекту
+  // пересчитываются подписки уже подключённых клиентов (WS/SSE).
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles, browserProfiles, securityAudit, eventHub));
 
   // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
   // core-фабрика, RBAC — те же правила проекта (чтение — право чтения,
@@ -421,7 +423,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // User admin routes
-  app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
+  // ADR-140 Ф2: `GET /api/v2/users/groups` — каталог групп из allowlist
+  // `auth.oidc.groups.allow` (env `SYNTH_OIDC_GROUPS_ALLOW` перекрывает конфиг;
+  // пустой allowlist → групп нет, fail-closed).
+  app.route('/api/v2/users', createUserRoutes(auth, profilesStore, { groups: config.auth.oidc?.groups?.allow ?? [] }));
 
   // Git routes (ADR-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
   // (init/clone/register/remove/fetch) требуют прав на изменение контента

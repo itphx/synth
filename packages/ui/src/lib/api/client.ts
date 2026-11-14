@@ -5,6 +5,15 @@ export interface User {
   username: string
   email: string | null
   roles: string[]
+  /**
+   * ADR-140 Ф2: снимок групп IdP на момент логина (claim `groups`,
+   * отфильтрованный allowlist'ом `auth.oidc.groups.allow`).
+   *
+   * На права влияет **только** через `resolveProjectAccess` (гранты по
+   * группам); само поле — пассивный снимок, не источник прав. Отсутствие
+   * поля — групп нет (fail-closed).
+   */
+  groups?: string[]
   preferred_language?: string
   team_role?: string
   notes?: string

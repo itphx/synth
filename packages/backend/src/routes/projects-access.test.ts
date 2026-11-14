@@ -107,4 +107,25 @@ describe('PROP-133: аудит доступа к проекту (managed)', () =
     expect(res.status).toBe(200);
     expect(await audit.list()).toHaveLength(0);
   });
+
+  it('изменение group_members пишет запись аудита со снимком «после»', async () => {
+    const project = store.create('P', OWNER_ID);
+    await store.save(project);
+
+    const res = await put(project.id, { group_members: { 'team-a': 'editor' } });
+    expect(res.status).toBe(200);
+
+    const entries = await audit.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.scope).toBe('projects');
+    expect(entries[0]?.action).toBe('update');
+    expect(entries[0]?.actor).toBe(OWNER_ID);
+
+    const before = entries[0]?.before as { group_members: Record<string, string> | null } | undefined;
+    expect(before?.group_members ?? null).toBeNull();
+
+    // ADR-140 Ф2: снимок `accessSnapshot` — роль группы как `ProjectRole` ('editor').
+    const after = entries[0]?.after as { group_members: Record<string, string> | null } | undefined;
+    expect(after?.group_members?.['team-a']).toBe('editor');
+  });
 });

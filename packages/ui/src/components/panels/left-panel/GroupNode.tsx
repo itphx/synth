@@ -3,6 +3,7 @@ import { TreeNode, TreeChildren } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
 import { ProjectAccessBadge } from '@/components/ui/ProjectAccessBadge'
+import { useProjectsStore } from '@/stores/projectsStore'
 import type { EntityOrigin, ProjectVisibility } from '@/lib/api/synthApi'
 import { MAX_VISIBLE_SESSIONS } from './constants'
 import { SessionTreeItem } from './SessionTreeItem'
@@ -42,6 +43,12 @@ export function GroupNode({
   const remaining = rootSessions.length - visibleSessions.length
   const totalCount = sessions.length
 
+  // ADR-140 Ф2: состав грантов для бейджа доступа — из проекта в сторе
+  // (по группам и по пользователям: подпись бейджа зависит от обеих осей).
+  const accessProject = useProjectsStore((s) =>
+    projectId ? s.projects.find((p) => p.id === projectId) : undefined,
+  )
+
   const actions = projectActions ?? [
     { id: 'new-session', icon: 'add' as const, title: t('leftPanel.newSession'), onClick: onCreateSession },
   ]
@@ -74,7 +81,11 @@ export function GroupNode({
     badge: (
       <>
         <OriginBadge origin={origin} />
-        <ProjectAccessBadge visibility={visibility} />
+        <ProjectAccessBadge
+          visibility={visibility}
+          groupMembers={accessProject?.group_members}
+          members={accessProject?.members}
+        />
       </>
     ),
     actions,

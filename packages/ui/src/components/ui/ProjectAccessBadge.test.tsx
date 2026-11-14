@@ -13,6 +13,7 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 
 async function renderBadge(
   visibility?: 'author' | 'selected' | 'all',
+  access?: { groupMembers?: Record<string, string> | null; members?: Record<string, string> | null },
 ): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -22,7 +23,11 @@ async function renderBadge(
   await act(async () => {
     root.render(
       <I18nProvider>
-        <ProjectAccessBadge visibility={visibility} />
+        <ProjectAccessBadge
+          visibility={visibility}
+          groupMembers={access?.groupMembers}
+          members={access?.members}
+        />
       </I18nProvider>,
     )
   })
@@ -71,5 +76,52 @@ describe('ProjectAccessBadge (PROP-133 §4)', () => {
 
     expect(container.querySelector('[data-testid^="project-access-badge-"]')).toBeNull()
     expect(container.innerHTML).toBe('')
+  })
+})
+
+/**
+ * ADR-140 Ф2: подпись бейджа «Только выбранным» зависит от состава грантов —
+ * только группам, группам и пользователям или пользователям.
+ */
+describe('ProjectAccessBadge — состав доступа (ADR-140 Ф2)', () => {
+  it('только группы: «выбранным группам»', async () => {
+    const container = await renderBadge('selected', {
+      groupMembers: { platform: 'viewer' },
+      members: { u0: 'owner' },
+    })
+
+    const badge = container.querySelector('[data-testid="project-access-badge-selected"]')
+    expect(badge?.getAttribute('aria-label')).toBe(enDict['project.access.badge.selectedGroups'])
+    expect(badge?.getAttribute('title')).toBe(enDict['project.access.badge.selectedGroups'])
+  })
+
+  it('группы и пользователи: «группам и пользователям»', async () => {
+    const container = await renderBadge('selected', {
+      groupMembers: { platform: 'viewer' },
+      members: { u0: 'owner', u2: 'editor' },
+    })
+
+    const badge = container.querySelector('[data-testid="project-access-badge-selected"]')
+    expect(badge?.getAttribute('aria-label')).toBe(enDict['project.access.badge.groupsAndUsers'])
+  })
+
+  it('без групп: прежняя подпись «выбранным пользователям»', async () => {
+    const container = await renderBadge('selected', {
+      groupMembers: {},
+      members: { u0: 'owner', u2: 'viewer' },
+    })
+
+    const badge = container.querySelector('[data-testid="project-access-badge-selected"]')
+    expect(badge?.getAttribute('aria-label')).toBe(enDict['project.access.badge.selected'])
+  })
+
+  it('«Всем пользователям»: состав не влияет на подпись', async () => {
+    const container = await renderBadge('all', {
+      groupMembers: { platform: 'viewer' },
+      members: { u0: 'owner' },
+    })
+
+    const badge = container.querySelector('[data-testid="project-access-badge-all"]')
+    expect(badge?.getAttribute('aria-label')).toBe(enDict['project.access.badge.all'])
   })
 })

@@ -14,7 +14,21 @@ import { parseBoundedInt, paginate } from '@itphx/synth-core';
 const DEFAULT_DIRECTORY_LIMIT = 50;
 const MAX_DIRECTORY_LIMIT = 200;
 
-export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
+/**
+ * ADR-140 Ф2: список групп, которые вообще можно выдать пользователю.
+ *
+ * Источник — allowlist имён групп из `auth.oidc.groups.allow` (конфиг/env
+ * `SYNTH_OIDC_GROUPS_ALLOW`): показываются только те группы, которые есть в
+ * allowlist, — «принять всё» невозможно (пустой allowlist → пустой список,
+ * fail-closed). Доступ — **любой аутентифицированный** пользователь (как
+ * `/directory`): группы нужны владельцу проекта для выбора участников.
+ */
+export interface UserRoutesOptions {
+  /** Allowlist имён групп (ADR-140 Ф2); пусто — групп нет. */
+  groups?: readonly string[];
+}
+
+export function createUserRoutes(kit: AuthKit, profiles: ProfileStore, options?: UserRoutesOptions): Hono {
   const app = new Hono();
 
   // GET /api/v2/users/directory — лёгкий каталог для выбора участников
@@ -54,6 +68,37 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
         username: profile.username,
         display_name: profile.displayName || null,
       })),
+      total,
+      offset,
+      limit,
+      next_offset,
+    });
+  });
+
+  // GET /api/v2/users/groups — каталог групп, которые можно выдать (ADR-140 Ф2).
+  // Источник — allowlist `auth.oidc.groups.allow`: показываем только те группы,
+  // которые вообще можно выдать (пустой allowlist → пустой список, fail-closed).
+  // Доступ — любой аутентифицированный пользователь (как `/directory`): группы
+  // нужны владельцу проекта для выбора участников. Маршрут объявлен **до**
+  // `/:id`, чтобы не перехватывался параметрическим.
+  app.get('/groups', kit.requireAuth, async (c) => {
+    const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_DIRECTORY_LIMIT, MAX_DIRECTORY_LIMIT);
+    if (limit === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidDirectoryLimit', undefined, c) } }, 400);
+    }
+    const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
+    if (offset === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidDirectoryOffset', undefined, c) } }, 400);
+    }
+    const query = (c.req.query('q') ?? '').trim().toLowerCase();
+
+    const all = [...new Set((options?.groups ?? []).map((g) => g.trim()).filter(Boolean))]
+      .filter((name) => !query || name.toLowerCase().includes(query))
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+    const { page, total, next_offset } = paginate(all, offset, limit);
+    return c.json({
+      groups: page.map((name) => ({ name })),
       total,
       offset,
       limit,

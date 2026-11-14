@@ -300,6 +300,9 @@ export function mountStandaloneRoutes(
       for (const s of sessions) {
         eventBus.publish(s.id, kind === 'deleted' ? 'project.deleted' : 'project.updated', {
           project_id: projectId,
+          // ADR-140 Ф2: вид изменения — UI/подписки видят, что именно изменилось
+          // (в т.ч. состояние доступа — `access`).
+          kind,
         });
       }
     },

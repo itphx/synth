@@ -57,6 +57,58 @@ export interface UsersDirectoryParams {
   q?: string
 }
 
+/**
+ * ADR-140 Ф2: запись каталога групп (`GET /api/v2/users/groups`).
+ *
+ * Лёгкая проекция: только имя группы — участников и описаний в каталоге нет.
+ */
+export interface GroupEntry {
+  name: string
+}
+
+/**
+ * Страница каталога групп (ADR-118 §4 — постранично, как прочие списки).
+ *
+ * `next_offset` — курсор следующей страницы, `null` — страница последняя.
+ */
+export interface GroupsDirectoryPage {
+  groups: GroupEntry[]
+  /** Всего групп в каталоге (больше, чем в загруженной странице). */
+  total: number
+  offset: number
+  limit: number
+  next_offset: number | null
+}
+
+/** Параметры страницы каталога групп. */
+export interface GroupsDirectoryParams {
+  /** Размер страницы (сервер: по умолчанию 50, максимум 200). */
+  limit?: number
+  /** Смещение страницы (номер первого элемента). */
+  offset?: number
+  /** Поиск по имени группы (без учёта регистра). */
+  q?: string
+}
+
+/**
+ * ADR-140 Ф2: каталог групп инстанса — для грантов доступа по группам.
+ *
+ * Доступ — любому аутентифицированному пользователю (иначе владелец
+ * проекта физически не может выбрать группу). В standalone раздела
+ * пользователей нет (`features.users === false`) — вызывающий не должен
+ * дёргать эндпоинт.
+ */
+export async function getGroupsDirectory(
+  params?: GroupsDirectoryParams,
+): Promise<GroupsDirectoryPage> {
+  const query = new URLSearchParams()
+  if (params?.limit !== undefined) query.set('limit', String(params.limit))
+  if (params?.offset !== undefined) query.set('offset', String(params.offset))
+  if (params?.q) query.set('q', params.q)
+  const qs = query.toString()
+  return fetchJSON<GroupsDirectoryPage>(`${BASE_URL}/users/groups${qs ? `?${qs}` : ''}`)
+}
+
 export const usersApi = {
   // Пользователи (admin)
   async getUsers(): Promise<UsersListResponse> {

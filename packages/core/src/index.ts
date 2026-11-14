@@ -1392,6 +1392,7 @@ export type {
   ProjectRoutesOptions,
   ProjectRouteMessages,
   ProjectStatsSource,
+  ProjectChangeKind,
 } from './server/routes/projects.js';
 // PROP-054: точечные HTTP-операции плана/журнала/инвариантов (единая
 // реализация для core и backend; RBAC — через opts).

@@ -112,7 +112,13 @@ export function resolveProjectRole(
           ? undefined
           : toProjectRole(project.everyone_role),
     },
-    { userId: user.id, roles: user.roles ?? [] },
+    {
+      userId: user.id,
+      roles: user.roles ?? [],
+      // ADR-140 Ф2: группы пользователя — субъект грантов по группам
+      // (`group_members`). Без снимка групп резолвер не находит грант (fail-closed).
+      groups: user.groups ?? [],
+    },
   )
   return access.role
 }
@@ -213,6 +219,35 @@ export function draftMembersOf(
 }
 
 /**
+ * Сырая карта грантов из DTO (`субъект → строка роли`).
+ *
+ * Роль приходит строкой: битое значение (`'WRONG'`) отбрасывается, а не
+ * приводится молча к `viewer` (fail-closed, как в `toProjectRole`).
+ */
+type RawGrantMap = Record<string, string> | null | undefined
+
+/**
+ * Черновик грантов группам из DTO: `имя группы → 'viewer'|'editor'`
+ * (ADR-140 Ф2).
+ *
+ * По образцу `draftMembersOf`: неизвестные роли отбрасываются, имена
+ * trim-ятся, пустые отбрасываются (имя группы — свободная строка).
+ */
+export function draftGroupMembersOf(
+  project: { group_members?: RawGrantMap } | undefined | null,
+): Record<string, ProjectGrantRole> {
+  const out: Record<string, ProjectGrantRole> = {}
+  if (!project) return out
+  for (const [rawName, role] of Object.entries(project.group_members ?? {})) {
+    const name = rawName.trim()
+    if (!name) continue
+    if (role === 'editor') out[name] = 'editor'
+    else if (role === 'viewer') out[name] = 'viewer'
+  }
+  return out
+}
+
+/**
  * Роль режима «всем пользователям» из DTO (`everyone_role`).
  *
  * `editor` — только явное значение сервера; всё прочее (в т.ч. `owner` и
@@ -224,39 +259,96 @@ export function everyoneRoleOf(
   return project?.everyone_role === 'editor' ? 'editor' : 'viewer'
 }
 
+/** Состав списка доступа — по каким осям выданы гранты (ADR-140 Ф2). */
+export interface ProjectAccessComposition {
+  /** Есть ли гранты отдельным пользователям (владелец в счёт не идёт). */
+  hasUserGrants: boolean
+  /** Есть ли гранты группам. */
+  hasGroupGrants: boolean
+}
+
 /**
- * Состояние списка доступа после смены проекции (PROP-133 §4).
+ * Состав списка доступа проекта: есть ли гранты пользователям и группам.
+ *
+ * Владелец (роль `owner` в `members`) — не грант: он и так имеет полный
+ * доступ. Битые роли в данных не считаются грантом (fail-closed, как в
+ * `draftMembersOf`).
+ */
+export function accessCompositionOf(
+  project:
+    | {
+        owner_id?: string
+        members?: RawGrantMap
+        group_members?: RawGrantMap
+      }
+    | undefined
+    | null,
+): ProjectAccessComposition {
+  if (!project) return { hasUserGrants: false, hasGroupGrants: false }
+  let hasUserGrants = false
+  for (const [id, role] of Object.entries(project.members ?? {})) {
+    if (!id || id === project.owner_id) continue
+    if (role === 'owner' || role === 'editor' || role === 'viewer') {
+      hasUserGrants = true
+      break
+    }
+  }
+  let hasGroupGrants = false
+  for (const name of Object.keys(project.group_members ?? {})) {
+    if (name.trim()) {
+      hasGroupGrants = true
+      break
+    }
+  }
+  return { hasUserGrants, hasGroupGrants }
+}
+
+/**
+ * Состояние списка доступа после смены проекции (PROP-133 §4, ADR-140 Ф2).
  *
  * Проекции — **состояния одного списка**, поэтому переход между ними имеет
- * правило: «Только автору» снимает список участников, «Всем пользователям»
- * возвращает роль `viewer` (повышение до `editor` — только явный выбор
- * автора). Правило живёт здесь, а не в компонентах — иначе у каждого
- * экрана своя копия правды.
+ * правило: «Только автору» снимает список участников и гранты группам,
+ * «Всем пользователям» возвращает роль `viewer` (повышение до `editor` —
+ * только явный выбор автора). Правило живёт здесь, а не в компонентах —
+ * иначе у каждого экрана своя копия правды.
+ *
+ * `groupMembers` — необязательный последний параметр (обратная совместимость:
+ * вызовы без групп работают как раньше).
  */
 export function projectAccessDraftAfterProjection(
   next: ProjectAccessProjection,
   current: ProjectAccessProjection,
   members: Record<string, ProjectGrantRole>,
   everyoneRole: ProjectGrantRole,
+  groupMembers?: Record<string, ProjectGrantRole>,
 ): {
   projection: ProjectAccessProjection
   members: Record<string, ProjectGrantRole>
   everyoneRole: ProjectGrantRole
+  groupMembers: Record<string, ProjectGrantRole>
 } {
   return {
     projection: next,
     members: next === 'author' ? {} : members,
     everyoneRole: next === 'all' && current !== 'all' ? 'viewer' : everyoneRole,
+    // Группы — как пользователи: «только автору» снимает список, остальные
+    // проекции держат черновик (в «всем» его очистит сборка тела).
+    groupMembers: next === 'author' ? {} : { ...(groupMembers ?? {}) },
   }
 }
 
 /**
  * Тело состояния доступа для сохранения — **полная замена** (PROP-133 §3.1).
  *
- * - «Только автору» — список участников пуст, публикация снята;
- * - «Только выбранным» — публикация снята, список участников целиком;
+ * - «Только автору» — список участников и гранты группам пусты, публикация
+ *   снята;
+ * - «Только выбранным» — публикация снята, списки участников и групп целиком;
  * - «Всем пользователям» — одна роль для всех; индивидуальные гранты не
  *   уходят (иначе они бы «сужали» роль для отдельных людей).
+ *
+ * `group_members` присутствует **во всех** ветках: сервер трактует набор
+ * как полную замену, поэтому отсутствие поля означало бы «оставить как
+ * есть», а пустой объект — «снять все гранты группам».
  *
  * `everyone_role` для режима «всем» по умолчанию `viewer`; `editor` — только
  * явным выбором автора (никогда не включается автоматически).
@@ -265,6 +357,7 @@ export function buildProjectAccessBody(
   projection: ProjectAccessProjection,
   members: Record<string, ProjectGrantRole>,
   everyoneRole: ProjectGrantRole = 'viewer',
+  groupMembers?: Record<string, ProjectGrantRole>,
 ): ProjectAccessBody {
   if (projection === 'selected') {
     const list: Record<string, ProjectAccessRole> = {}
@@ -272,10 +365,16 @@ export function buildProjectAccessBody(
       if (!id) continue
       list[id] = role
     }
-    return { members: list, everyone_role: null }
+    const groups: Record<string, ProjectAccessRole> = {}
+    for (const [rawName, role] of Object.entries(groupMembers ?? {})) {
+      const name = rawName.trim()
+      if (!name) continue
+      groups[name] = role
+    }
+    return { members: list, group_members: groups, everyone_role: null }
   }
   if (projection === 'all') {
-    return { members: {}, everyone_role: everyoneRole }
+    return { members: {}, group_members: {}, everyone_role: everyoneRole }
   }
-  return { members: {}, everyone_role: null }
+  return { members: {}, group_members: {}, everyone_role: null }
 }

@@ -18,7 +18,7 @@ import { providersApi } from './providers'
 import { modelsApi } from './models'
 import { contextApi } from './context'
 import { debugApi } from './debug'
-import { usersApi } from './users'
+import { usersApi, getGroupsDirectory } from './users'
 import { mcpApi } from './mcp'
 import { securityApi } from './security'
 import { settingsApi } from './settings'
@@ -130,6 +130,8 @@ export type { DebugConfigData } from './debug'
 export type { UserInfo, UsersListResponse } from './users'
 // PROP-133 §3.3: каталог пользователей для выбора участников проекта.
 export type { DirectoryUser, UsersDirectoryPage, UsersDirectoryParams } from './users'
+// ADR-140 Ф2: каталог групп инстанса — для грантов доступа по группам.
+export type { GroupEntry, GroupsDirectoryPage, GroupsDirectoryParams } from './users'
 export type {
   SessionMcpEffectiveResponse,
   McpProbedTool,
@@ -524,6 +526,10 @@ export const synthApi = {
   ...contextApi,
   ...debugApi,
   ...usersApi,
+  // ADR-140 Ф2: каталог групп (`GET /api/v2/users/groups`) — отдельная
+  // функция домена, в баррель попадает под своим именем (короткое `getGroups`
+  // занято плагинами).
+  getGroupsDirectory,
   ...mcpApi,
   ...securityApi,
   ...settingsApi,

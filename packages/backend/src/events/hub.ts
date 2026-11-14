@@ -85,6 +85,51 @@ export class EventHub {
     console.log(`[EventHub] Unregister client: user=${client.username} remaining=${remaining}`);
   }
 
+  /**
+   * PROP-133 Ф2 / ADR-140 Ф2: пересчитать подписки клиента — доступ к
+   * проектам мог измениться (появился/снят участник, изменился режим
+   * «всем пользователям»).
+   *
+   * Список подписок = список **видимых** сессий (`listVisibleSessions` — тот
+   * же шов, что у списка сессий), поэтому пересчёт совпадает с видимостью
+   * проектов и не расходится с ней.
+   *
+   * Watch-all клиент (`allSessions`) не пересчитывается: его подписка
+   * глобальная и от проектов не зависит.
+   */
+  async resyncClient(client: EventClient): Promise<void> {
+    if (client.allSessions) return;
+    const subs = this.clientSubs.get(client);
+    if (!subs) return;
+
+    // Снимаем прежние per-session подписки (глобальная — не трогаем).
+    for (const [key, unsub] of [...subs]) {
+      if (key === ALL_SESSIONS_KEY) continue;
+      unsub();
+      subs.delete(key);
+    }
+
+    const sessions = await listVisibleSessions(this.sessionManager, this.projectStore, {
+      userId: client.userId,
+      ...(client.groups ? { groups: client.groups } : {}),
+    });
+    for (const s of sessions) {
+      this._subscribeClientToSession(client, s.id);
+    }
+  }
+
+  /**
+   * PROP-133 Ф2 / ADR-140 Ф2: пересчитать подписки **всем** подключённым
+   * клиентам (редкое admin-действие — смена состояния доступа к проекту).
+   */
+  async resyncAllClients(): Promise<void> {
+    const clients: EventClient[] = [];
+    for (const arr of this.clients.values()) clients.push(...arr);
+    await Promise.all(clients.map((c) => this.resyncClient(c)));
+    // Сводка без спама по каждой сессии.
+    console.log(`[EventHub] Resync clients: ${clients.length}`);
+  }
+
   shutdown(): void {
     console.log(`[EventHub] Shutting down: ${this.clients.size} users...`);
     for (const clients of this.clients.values()) {

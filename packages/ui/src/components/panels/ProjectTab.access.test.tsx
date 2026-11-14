@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   updateProjectSkills: vi.fn(),
   getExecutionProfiles: vi.fn(),
   getDirectory: vi.fn(),
+  getGroupsDirectory: vi.fn(),
   getInstanceCapabilities: vi.fn(),
   notify: vi.fn(),
 }))
@@ -79,6 +80,15 @@ const DIRECTORY = {
     { id: 'u2', username: 'ivan', display_name: 'Иван' },
     { id: 'u3', username: 'petr', display_name: null },
   ],
+  total: 2,
+  offset: 0,
+  limit: 100,
+  next_offset: null,
+}
+
+/** ADR-140 Ф2: каталог групп инстанса. */
+const GROUPS = {
+  groups: [{ name: 'platform' }, { name: 'team-a' }],
   total: 2,
   offset: 0,
   limit: 100,
@@ -144,6 +154,7 @@ beforeEach(() => {
   mocks.getProjectSkills.mockResolvedValue({ project_id: 'p1', skills: [], enabled: [], defaultOn: [] })
   mocks.getExecutionProfiles.mockResolvedValue({ provider: 'remote', profiles: [], defaultProfile: '' })
   mocks.getDirectory.mockResolvedValue(DIRECTORY)
+  mocks.getGroupsDirectory.mockResolvedValue(GROUPS)
   mocks.getInstanceCapabilities.mockResolvedValue({
     messageModel: 2,
     eventSeq: true,
@@ -212,6 +223,7 @@ describe('ProjectTab — блок «Доступ» (PROP-133 §4)', () => {
     expect(mocks.updateProject).toHaveBeenCalledTimes(1)
     expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
       members: { u2: 'viewer' },
+      group_members: {},
       everyone_role: null,
     })
   })
@@ -236,6 +248,7 @@ describe('ProjectTab — блок «Доступ» (PROP-133 §4)', () => {
 
     expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
       members: { u2: 'editor' },
+      group_members: {},
       everyone_role: null,
     })
   })
@@ -255,6 +268,7 @@ describe('ProjectTab — блок «Доступ» (PROP-133 §4)', () => {
     await act(async () => {})
     expect(mocks.updateProject).toHaveBeenLastCalledWith('p1', {
       members: {},
+      group_members: {},
       everyone_role: 'viewer',
     })
 
@@ -264,6 +278,7 @@ describe('ProjectTab — блок «Доступ» (PROP-133 §4)', () => {
     await act(async () => {})
     expect(mocks.updateProject).toHaveBeenLastCalledWith('p1', {
       members: {},
+      group_members: {},
       everyone_role: 'editor',
     })
   })
@@ -282,6 +297,7 @@ describe('ProjectTab — блок «Доступ» (PROP-133 §4)', () => {
 
     expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
       members: {},
+      group_members: {},
       everyone_role: null,
     })
   })
@@ -347,5 +363,161 @@ describe('ProjectTab — блок «Доступ» (PROP-133 §4)', () => {
     expect(byTestId('project-access-save')).toBeNull()
     expect(byTestId('project-access-single-user')).not.toBeNull()
     expect(mocks.getDirectory).not.toHaveBeenCalled()
+    // ADR-140 Ф2: без фичи users нет и каталога групп — запросов не идёт.
+    expect(mocks.getGroupsDirectory).not.toHaveBeenCalled()
+    expect(byTestId('project-access-groups')).toBeNull()
+  })
+})
+
+/**
+ * ADR-140 Ф2: гранты группам — вторая ось того же списка доступа.
+ * Сервер трактует `group_members` как полную замену, поэтому UI обязан
+ * сохранить гранты, которых нет в каталоге (иначе они бы тихо исчезли).
+ */
+describe('ProjectTab — блок «Доступ»: группы (ADR-140 Ф2)', () => {
+  it('«Только выбранным»: выбор группы уходит одним запросом с `group_members`', async () => {
+    await renderTab()
+
+    await click(projectionRadio('selected'))
+    await act(async () => {})
+
+    await click(byTestId('project-access-group-platform'))
+    await act(async () => {})
+
+    const roleSelect = byTestId('project-access-group-role-platform') as HTMLSelectElement
+    expect(roleSelect).toBeTruthy()
+    expect(roleSelect.value).toBe('viewer')
+
+    await click(byTestId('project-access-save'))
+    await act(async () => {})
+
+    expect(mocks.updateProject).toHaveBeenCalledTimes(1)
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      members: {},
+      group_members: { platform: 'viewer' },
+      everyone_role: null,
+    })
+  })
+
+  it('роль группы меняется на editor', async () => {
+    await renderTab()
+
+    await click(projectionRadio('selected'))
+    await act(async () => {})
+    await click(byTestId('project-access-group-platform'))
+    await act(async () => {})
+
+    const roleSelect = byTestId('project-access-group-role-platform') as HTMLSelectElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(roleSelect, 'editor')
+      roleSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    await click(byTestId('project-access-save'))
+    await act(async () => {})
+
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      members: {},
+      group_members: { platform: 'editor' },
+      everyone_role: null,
+    })
+  })
+
+  it('пользователь и группа выбираются одновременно (обе оси в одном теле)', async () => {
+    await renderTab()
+
+    await click(projectionRadio('selected'))
+    await act(async () => {})
+    await click(byTestId('project-access-user-u2'))
+    await act(async () => {})
+    await click(byTestId('project-access-group-platform'))
+    await act(async () => {})
+
+    await click(byTestId('project-access-save'))
+    await act(async () => {})
+
+    expect(mocks.updateProject).toHaveBeenCalledTimes(1)
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      members: { u2: 'viewer' },
+      group_members: { platform: 'viewer' },
+      everyone_role: null,
+    })
+  })
+
+  it('смена проекции на «Только автору» сбрасывает и группы', async () => {
+    await renderTab()
+
+    await click(projectionRadio('selected'))
+    await act(async () => {})
+    await click(byTestId('project-access-group-platform'))
+    await act(async () => {})
+    await click(projectionRadio('author'))
+    await act(async () => {})
+    await click(byTestId('project-access-save'))
+    await act(async () => {})
+
+    expect(mocks.updateProject).toHaveBeenCalledWith('p1', {
+      members: {},
+      group_members: {},
+      everyone_role: null,
+    })
+  })
+
+  it('грант группе вне каталога не теряется и снимается явной кнопкой', async () => {
+    const projectWithGroup = {
+      ...PROJECT,
+      visibility: 'selected' as const,
+      group_members: { legacy: 'viewer' },
+    }
+    mocks.getProject.mockResolvedValue(projectWithGroup)
+    // Ответ сервера эхом тела — иначе проект «откатился» бы к пустым грантам.
+    mocks.updateProject.mockImplementation(async (_id: string, body: Record<string, unknown>) => ({
+      ...projectWithGroup,
+      members: (body.members as Record<string, string>) ?? {},
+      group_members: (body.group_members as Record<string, string>) ?? null,
+    }))
+
+    await renderTab()
+
+    // Строка «не в каталоге» — грант виден и не потерян.
+    const outside = byTestId('project-access-group-outside-legacy')
+    expect(outside).not.toBeNull()
+    expect(outside?.textContent).toContain('legacy')
+
+    // Выбор группы из каталога не стирает грант вне каталога (мерж).
+    await click(byTestId('project-access-group-platform'))
+    await act(async () => {})
+    await click(byTestId('project-access-save'))
+    await act(async () => {})
+
+    expect(mocks.updateProject).toHaveBeenLastCalledWith('p1', {
+      members: {},
+      group_members: { legacy: 'viewer', platform: 'viewer' },
+      everyone_role: null,
+    })
+
+    // Явное снятие — грант уходит, а не «теряется» молча.
+    await click(byTestId('project-access-group-remove-legacy'))
+    await act(async () => {})
+    await click(byTestId('project-access-save'))
+    await act(async () => {})
+
+    expect(mocks.updateProject).toHaveBeenLastCalledWith('p1', {
+      members: {},
+      group_members: { platform: 'viewer' },
+      everyone_role: null,
+    })
+  })
+
+  it('ошибка каталога групп — понятный текст, выбор групп не ломается', async () => {
+    mocks.getGroupsDirectory.mockRejectedValue(new Error('boom'))
+
+    await renderTab()
+
+    await click(projectionRadio('selected'))
+    await act(async () => {})
+
+    expect(byTestId('project-access-groups-error')).not.toBeNull()
   })
 })

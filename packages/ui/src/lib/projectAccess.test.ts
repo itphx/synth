@@ -3,12 +3,16 @@ import { describe, it, expect } from 'vitest'
 import type { ProjectData } from '@/lib/api/synthApi'
 import type { User } from '@/lib/api/client'
 import {
+  accessCompositionOf,
   accessProjectionOf,
   buildProjectAccessBody,
   canEditProjectContent,
   canManageProject,
   canReadProject,
+  draftGroupMembersOf,
   draftMembersOf,
+  projectAccessDraftAfterProjection,
+  resolveProjectRole,
 } from './projectAccess'
 
 const user = (id: string, roles: string[] = []): User => ({
@@ -183,6 +187,30 @@ describe('canReadProject — зеркало чтения (PROP-133 §1)', () => 
   })
 })
 
+describe('resolveProjectRole — гранты по группам (ADR-140 Ф2)', () => {
+  it('пользователь с группой получает роль по group_members', () => {
+    const p = accessProject({ group_members: { platform: 'viewer' } })
+    const member: User = { ...user('u2'), groups: ['platform'] }
+    expect(resolveProjectRole(p, member)).toBe('viewer')
+    expect(canReadProject(p, member)).toBe(true)
+    expect(canEditProjectContent(p, member)).toBe(false)
+  })
+
+  it('без группы (или с чужой) — доступа нет', () => {
+    const p = accessProject({ group_members: { platform: 'viewer' } })
+    expect(resolveProjectRole(p, user('u2'))).toBeNull()
+    expect(resolveProjectRole(p, { ...user('u2'), groups: ['other'] })).toBeNull()
+    expect(canReadProject(p, user('u2'))).toBe(false)
+  })
+
+  it('группа с ролью editor даёт запись', () => {
+    const p = accessProject({ group_members: { platform: 'editor' } })
+    const member: User = { ...user('u2'), groups: ['platform'] }
+    expect(resolveProjectRole(p, member)).toBe('editor')
+    expect(canEditProjectContent(p, member)).toBe(true)
+  })
+})
+
 describe('проекции доступа (PROP-133 §4)', () => {
   it('проекция берётся из DTO `visibility`, без него — «только автору»', () => {
     expect(accessProjectionOf({ visibility: 'author' })).toBe('author')
@@ -201,19 +229,127 @@ describe('проекции доступа (PROP-133 §4)', () => {
   it('тело доступа — полная замена: лишние поля сбрасываются', () => {
     expect(buildProjectAccessBody('author', { u2: 'editor' })).toEqual({
       members: {},
+      group_members: {},
       everyone_role: null,
     })
     expect(buildProjectAccessBody('selected', { u2: 'editor', u3: 'viewer' })).toEqual({
       members: { u2: 'editor', u3: 'viewer' },
+      group_members: {},
       everyone_role: null,
     })
     expect(buildProjectAccessBody('all', { u2: 'editor' })).toEqual({
       members: {},
+      group_members: {},
       everyone_role: 'viewer',
     })
     expect(buildProjectAccessBody('all', {}, 'editor')).toEqual({
       members: {},
+      group_members: {},
       everyone_role: 'editor',
+    })
+  })
+
+  it('тело доступа с группами: `group_members` уходит вместе с пользователями', () => {
+    expect(
+      buildProjectAccessBody('selected', { u2: 'editor' }, 'viewer', { platform: 'viewer' }),
+    ).toEqual({
+      members: { u2: 'editor' },
+      group_members: { platform: 'viewer' },
+      everyone_role: null,
+    })
+    // «Всем пользователям» индивидуальные гранты не уходят (иначе сужали бы роль).
+    expect(buildProjectAccessBody('all', { u2: 'editor' }, 'editor', { platform: 'editor' })).toEqual({
+      members: {},
+      group_members: {},
+      everyone_role: 'editor',
+    })
+    // «Только автору» — гранты группам тоже снимаются.
+    expect(buildProjectAccessBody('author', {}, 'viewer', { platform: 'editor' })).toEqual({
+      members: {},
+      group_members: {},
+      everyone_role: null,
+    })
+  })
+
+  it('тело доступа: имя группы trim-ится, пустые отбрасываются', () => {
+    expect(
+      buildProjectAccessBody('selected', {}, 'viewer', { ' platform ': 'editor', '  ': 'viewer' }),
+    ).toEqual({
+      members: {},
+      group_members: { platform: 'editor' },
+      everyone_role: null,
+    })
+  })
+
+  it('смена проекции: «только автору» сбрасывает и пользователей, и группы', () => {
+    const draft = projectAccessDraftAfterProjection(
+      'author',
+      'selected',
+      { u2: 'editor' },
+      'viewer',
+      { platform: 'editor' },
+    )
+    expect(draft.projection).toBe('author')
+    expect(draft.members).toEqual({})
+    expect(draft.groupMembers).toEqual({})
+    expect(draft.everyoneRole).toBe('viewer')
+  })
+
+  it('смена проекции: «всем пользователям» сохраняет черновик групп (тело его очистит)', () => {
+    const draft = projectAccessDraftAfterProjection(
+      'all',
+      'selected',
+      { u2: 'editor' },
+      'viewer',
+      { platform: 'editor' },
+    )
+    expect(draft.projection).toBe('all')
+    expect(draft.members).toEqual({ u2: 'editor' })
+    expect(draft.groupMembers).toEqual({ platform: 'editor' })
+    // Роль «всем» — только явный выбор автора.
+    expect(draft.everyoneRole).toBe('viewer')
+  })
+
+  it('смена проекции без групп (обратная совместимость сигнатуры)', () => {
+    const draft = projectAccessDraftAfterProjection('selected', 'author', { u2: 'editor' }, 'viewer')
+    expect(draft.members).toEqual({ u2: 'editor' })
+    expect(draft.groupMembers).toEqual({})
+  })
+
+  it('черновик грантов группам: неизвестные роли и пустые имена отбрасываются', () => {
+    expect(
+      draftGroupMembersOf({
+        group_members: { platform: 'editor', team: 'viewer', legacy: 'owner', broken: 'WRONG' },
+      }),
+    ).toEqual({ platform: 'editor', team: 'viewer' })
+    expect(draftGroupMembersOf({ group_members: null })).toEqual({})
+    expect(draftGroupMembersOf(undefined)).toEqual({})
+  })
+
+  it('состав доступа: гранты по пользователям и группам (владелец — не грант)', () => {
+    expect(accessCompositionOf(accessProject({ members: { u0: 'owner' } }))).toEqual({
+      hasUserGrants: false,
+      hasGroupGrants: false,
+    })
+    expect(
+      accessCompositionOf(accessProject({ members: { u0: 'owner', u2: 'viewer' } })),
+    ).toEqual({ hasUserGrants: true, hasGroupGrants: false })
+    expect(
+      accessCompositionOf(
+        accessProject({ members: { u0: 'owner' }, group_members: { platform: 'viewer' } }),
+      ),
+    ).toEqual({ hasUserGrants: false, hasGroupGrants: true })
+    expect(
+      accessCompositionOf(
+        accessProject({
+          members: { u0: 'owner', u2: 'editor' },
+          group_members: { platform: 'editor' },
+        }),
+      ),
+    ).toEqual({ hasUserGrants: true, hasGroupGrants: true })
+    expect(accessCompositionOf(null)).toEqual({
+      hasUserGrants: false,
+      hasGroupGrants: false,
     })
   })
 })

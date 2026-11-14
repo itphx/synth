@@ -692,3 +692,101 @@ describe('Project visibility (ADR-089, backend RBAC)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADR-140 Ф2: изменение доступа к проекту — вид изменения в событии
+// (`kind: 'access'`) и пересчёт подписок уже подключённых клиентов (WS/SSE).
+// ---------------------------------------------------------------------------
+
+describe('Project access change event (ADR-140 Ф2, managed backend)', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-proj-access-ev-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Приложение с шиной событий и хабом подписок: `project.updated`
+   * публикуется в канал сессии проекта, а при `kind: 'access'` хаб
+   * пересчитывает подписки клиентов.
+   */
+  function makeAccessEventApp() {
+    const app = new Hono();
+    const kit = {
+      requireAuth: async (c: Context, next: Next) => {
+        const user = wsUserFromHeader(c.req.header('Authorization'));
+        if (!user) return c.json({ error: { code: 'UNAUTHORIZED', message: 'no' } }, 401);
+        c.set('user', user);
+        await next();
+      },
+      getCurrentUser: async (c: Context) => wsUserFromHeader(c.req.header('Authorization')),
+      isAdmin: () => false,
+      hasRole: () => false,
+    };
+    const store = new ProjectStore({ dataDir: tmpDir });
+    const publish = vi.fn();
+    const resyncAllClients = vi.fn().mockResolvedValue(undefined);
+    const sessionManager = {
+      listSessions: vi.fn(async (filter?: { projectId?: string }) =>
+        filter?.projectId ? [{ id: 'sess-1', projectId: filter.projectId }] : []),
+    };
+    const routes = createProjectRoutes(
+      kit as never,
+      store,
+      sessionManager as never,
+      tmpDir,
+      undefined, // mcpManager
+      undefined, // skillService
+      undefined, // settingsStore
+      undefined, // mcpRegistryStore
+      undefined, // worktreeService
+      { publish } as never, // eventBus
+      undefined, // executionProfileCatalog
+      undefined, // browserProfileCatalog
+      undefined, // securityAudit
+      { resyncAllClients } as never, // eventHub
+    );
+    app.route('/api/v2/projects', routes);
+    return { app, store, publish, resyncAllClients };
+  }
+
+  it('изменение доступа → kind=access и пересчёт подписок хаба', async () => {
+    const { app, store, publish, resyncAllClients } = makeAccessEventApp();
+    const project = store.create('P', 'owner');
+    await store.save(project);
+
+    const res = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ members: { editor: 'editor' } }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(publish).toHaveBeenCalledWith('sess-1', 'project.updated', {
+      project_id: project.id,
+      kind: 'access',
+    });
+    expect(resyncAllClients).toHaveBeenCalledTimes(1);
+  });
+
+  it('правка контента → kind=updated, подписки не пересчитываются', async () => {
+    const { app, store, publish, resyncAllClients } = makeAccessEventApp();
+    const project = store.create('P', 'owner');
+    await store.save(project);
+
+    const res = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT',
+      headers: wsAuth('owner'),
+      body: JSON.stringify({ name: 'Renamed' }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(publish).toHaveBeenCalledWith('sess-1', 'project.updated', {
+      project_id: project.id,
+      kind: 'updated',
+    });
+    expect(resyncAllClients).not.toHaveBeenCalled();
+  });
+});
