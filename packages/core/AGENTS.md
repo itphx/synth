@@ -2987,6 +2987,7 @@
   - `createProjectRoutes` — опции `canRead` (чтение по id: owner/любой участник/LEAD/ADMIN; **не**
     расширяет `canManage`/`canEditContent`) и `resolveElevated` (`GET /` — все проекты).
   Правила по ролям — `docs/API_V2.md` §5.5/§5.8, контекст — ADR-089.
+- **Доступ к проекту — единый резолвер (PROP-133).** Предикат доступа (`owner`/`members`/`groupMembers`/`everyoneRole`) считает **один** резолвер `@itphx/synth-shared` (`resolveProjectAccess`) — порядок: владелец → `ADMIN`/`LEAD` → участник → группа → «всем»; неизвестная роль — fail-closed в `viewer`. Своих копий предиката в core нет (`server/session-visibility.ts`, `engine/tools/project-access.ts`, `engine/tools/project-resolve.ts`); `ProjectRepository.list(viewer)` фильтрует список проектов тем же резолвером. **Группы в core не применяются** (Ф2): источника групп нет — fail-closed.
 
 ## Вложения (ADR-115)
 

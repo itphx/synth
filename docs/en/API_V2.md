@@ -2,6 +2,20 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-11-14 (**PROP-133**, доступ к проекту) — **переведено**:
+> **§5.8** — DTO проекта несёт `group_members`/`everyone_role`/производную `visibility`;
+> блок «Доступ к проекту» (порядок резолва роли, таблица «состояние → кто видит → кто
+> меняет», правила записи `members`/`group_members`/`everyone_role` — полная замена,
+> `everyone_role: null` снимает публикацию, `owner` в `everyone_role` → 400, автор всегда
+> в `members` с ролью `owner` (понизить нельзя), `visibility` в теле → 400, менять доступ
+> может только `canManage`, `EDITOR` → 403, аудит `scope:'projects'`, группы применяются
+> везде, где принципал несёт `groups`, но источника групп нет — fail-closed);
+> **§5.5** — видимость сессий = видимость проекта (роль доступа), запись по роли
+> (`viewer` — read-only);
+> **§5.14** — новый `GET /api/v2/users/directory` (любой аутентифицированный, `limit`/
+> `offset`/`q`, постранично, неактивные исключены);
+> **§5.8.1** — состояние доступа при экспорте/импорте не переносится.
+
 > ⚠️ RU-версия обновлена 2026-11-08 (**§5.5** — `POST /sessions/import`: дедупликация по маркеру
 > `import.source_session_id` (200 при обновлении, `updated:true`; 201 при создании), область дедупа;
 > новый `POST /sessions/import-batch` (1..200 сессий, один хит лимита, `details` при ошибке элемента);
@@ -644,8 +658,8 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **The session list and the history — paged (owner decision, a breaking change).** `GET /api/v2/sessions` **always** returns a summary of the sessions **without the message history**: there is no `messages` key in the DTO at all (not an empty array), and no `prompt_states` in the list either. Previously the list for `ADMIN`/`LEAD` loaded all sessions **with their whole history** — on instances with hundreds of sessions that meant a heap peak and OOM on the entry path. Therefore: the list is a **page** `{sessions, total, offset, limit, next_offset}` (an array is no longer returned), and the full history of a session is available only paged in `GET /api/v2/sessions/:id/messages` (`limit` — default 200, maximum 500; `before` — an opaque exclusive cursor from `next_before`, not necessarily `seq`). The summary of `GET /api/v2/sessions/:id` and the single-item responses (`POST /`, `PATCH /:id`, `POST /:id/clear`, `POST /:id/fork`) are also without `messages`. The queue (`pending_messages`/`pending_count`), `current_stream`, the status, the settings and the token counters are kept in the summary. Backward compatibility is not supported — the client switches to the object form and to paged reading of the history.
 > **List pagination.** `total` — the number of visible sessions (after the visibility filter and `project_id`); `next_offset` — the cursor of the next page (`offset + page.length`), `null` — the last page. A non-numeric/negative `limit`/`offset` → `400 VALIDATION_ERROR`; a `limit` above 500 is clamped to 500.
 > **Hybrid: pagination across the world boundary is impossible.** A remote list arrives **without** paged output (an old server returns an array), so the end-to-end `next_offset` with remote sessions present — `null`, and `total` — the sum of the local page and the remote sessions. The `limit`/`before` parameters of `GET /:id/messages` are passed through to the remote server; an old server ignores them and returns the **whole** history (a hybrid limitation).
-> **Visibility of `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **all** sessions; otherwise — own personal ones **plus** sessions of projects the user is a member of (the project `owner` or any `members`, any role). A session **without an owner** is visible (parity with access by id). Personal sessions of other users are not visible. `?project_id=` filters on top of this visibility.
-> **Access by id — all `:id` routes of the resource (ADR-089).** A single prefix-guard `server/session-access-guard.ts` (mounted on `/:id` and `/:id/*` together with `requireAuth`; the access kind `read`/`write` is derived from the HTTP method), rule: `ADMIN`/`LEAD` — reading **and** mutating someone else's session are allowed (a deliberate product decision; pinned by the matrix `routes/session-idor-matrix.test.ts`); the session owner / a session without an owner — everything; a member of the session's project: **read** (`GET`/`HEAD`) — any role, including `VIEWER`, **mutation** — `OWNER`/`EDITOR` (`canEditProjectContent`); a foreign user → `403 FORBIDDEN`; a missing session → `404 NOT_FOUND`. Codes are consistent across the whole resource (for a foreign user any `:id` route returns `403`); explicit **managed backend** exceptions: `GET /:id/mcp` — owner|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR` (the core versions of these routes, used by standalone/hybrid, live under the common prefix guard, and the obfuscation map is released by the reveal right — the session owner), `GET /:id/export` — the route is **under** the guard (it decides access to the session), while the obfuscation map is a separate privilege of the route-level guard: owner|`ADMIN`|`AUDITOR` (other readers get 200 with a cleaned body; ADR-091 §6). List helper — `server/session-visibility.ts` (`isSessionVisible`), scan — `FileStore.listForUserScope`.
+> **Visibility of `GET /api/v2/sessions` (ADR-089 × PROP-133).** `ADMIN`/`LEAD` — **all** sessions; otherwise — own personal ones **plus** the sessions of **all projects where the user has an access role** (the project owner, a `members` member of any role, a group grant, the "everyone" mode). A session **without an owner** is visible (parity with access by id). Personal sessions of other users are not visible. `?project_id=` filters on top of this visibility. The list of member projects is computed by the same access resolver as in `GET /api/v2/projects` (`ProjectRepository.list(viewer)`), so the visibility of sessions and projects does not diverge; the seam is shared with the hub subscriptions — `packages/backend/src/events/visible-session-ids.ts`. **Session visibility = project visibility:** a project session is visible to everyone who sees the project, and the write right is determined by the role (`viewer` — read only, `editor`/`owner` — a regular turn, invariant 21).
+> **Access by id — all `:id` routes of the resource (ADR-089).** A single prefix-guard `server/session-access-guard.ts` (mounted on `/:id` and `/:id/*` together with `requireAuth`; the access kind `read`/`write` is derived from the HTTP method), rule: `ADMIN`/`LEAD` — reading **and** mutating someone else's session are allowed (a deliberate product decision; pinned by the matrix `routes/session-idor-matrix.test.ts`); the session owner / a session without an owner — everything; a member of the session's project: **read** (`GET`/`HEAD`) — any role, including `VIEWER`, **mutation** — `OWNER`/`EDITOR` (`canEditProjectContent`); the role is taken from the single project access resolver (PROP-133), so `viewer` is read only (a turn does not start) while `editor`/`owner` get a regular turn; a foreign user → `403 FORBIDDEN`; a missing session → `404 NOT_FOUND`. Codes are consistent across the whole resource (for a foreign user any `:id` route returns `403`); explicit **managed backend** exceptions: `GET /:id/mcp` — owner|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR` (the core versions of these routes, used by standalone/hybrid, live under the common prefix guard, and the obfuscation map is released by the reveal right — the session owner), `GET /:id/export` — the route is **under** the guard (it decides access to the session), while the obfuscation map is a separate privilege of the route-level guard: owner|`ADMIN`|`AUDITOR` (other readers get 200 with a cleaned body; ADR-091 §6). List helper — `server/session-visibility.ts` (`isSessionVisible`), scan — `FileStore.listForUserScope`.
 > **Service-key scope (ADR-052):** `GET /` and `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages|permissions` — `sessions:read`. With a non-empty `allowedProjects`, the project projection is checked against the session's `project_id`, otherwise `403 PROJECT_FORBIDDEN`.
 > **The instance storage context.** The project export/import (`GET /api/v2/projects/:id/export`, `POST /api/v2/projects/import`) go through the instance storage context (`StorageContext`, ADR-096), not through their own file context — on `storage.backend=postgres` the database projects are visible (the spec — §5.8.1).
 > **Session auto-title (`session.autoTitle`).** The name of a new session is generated **right after the first user message** — at the start of the turn, before the assistant answer (the trigger is the request preparation, the provider has already been chosen by the router; the title LLM call is fire-and-forget — the turn does not wait for it, and its spend is recorded as an aux call `agent: 'title'`). The attempt rule (N — the number of dialogue replies of the user; service replies — steer injections, background-run notifications, scheduler messages — are not counted): N=1 and the reply is “chatter” (a greeting/small talk: “hello”, “how are you”, “ok”, etc.; no attachments and shorter than `minSignalChars`) → generation is **deferred**, the LLM is not called at all, the title stays `New session`; N=1 and there is a task signal → the title is built from the first message; N=2..`maxAttempts` and the title is still the default one → the title is built from the conversation (`Original request` + `Recent conversation`, a budget of 8000 characters, trimmed from the tail); N > `maxAttempts` → auto-naming stops trying (manual regeneration is available). The attempt counter is derived from the history — **the state is not persisted**, the rule is idempotent and survives a restart. The fallback on an LLM error/empty/too-long answer is a title from the **first reply with a task signal** (its first non-empty line, ≤ 60 characters, markdown stripped); for a greeting/small talk there is no fallback — the title does not change. A **user-set title is never overwritten** (auto-naming renames only the default one); child sessions (subagents) are not auto-named. The settings are the `session.autoTitle` section (`docs/CONFIGURATION.md`): `enabled`/`deferOnChatter`/`maxAttempts`/`minSignalChars`, env `SYNTH_SESSION_AUTO_TITLE_*`.
@@ -780,10 +794,10 @@ replica can continue an upload — the `blobs` volume must be shared.
 
 | Method | Path | Build | RBAC | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v2/projects` | both | auth (owner/member; LEAD/ADMIN — all) | **Page** of the project list: `{projects, total, offset, limit, next_offset}`; `?limit=` (default 100, maximum 500), `?offset=` (default 0). The project DTO is a **summary**: the heavy fields `log` (the project log) and `plan` (ADR-039) are not in the list; the other detail fields are kept. ⚠️ **Breaking change:** an array used to be returned |
-| POST | `/api/v2/projects` | both | auth | Create `{name, workspace?, repos?, plan?}` → 201 |
-| GET | `/api/v2/projects/:id` | both | auth / owner·member·LEAD·ADMIN | Project (read; VIEWER reads, does not edit). ⚠️ **Breaking change (PROP-054):** the detail has **no** `log` field — the project journal moved to the paged endpoint `GET /api/v2/projects/:id/log`. The `plan` and `invariants` fields stay |
-| PUT | `/api/v2/projects/:id` | both | auth / owner·EDITOR·LEAD·ADMIN | Update fields (name, description, current_task, invariants, icon, color, repos, plan, memory); changing `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — project memory policy (ADR-107): `false` removes memory prompt blocks and `plugin_synth_plugin_memory_*` tools for the project while keeping the data; omitted — inherits the instance policy (enabled) |
+| GET | `/api/v2/projects` | both | auth (access role: owner·member·"everyone"; LEAD/ADMIN — all) | **Page** of the project list: `{projects, total, offset, limit, next_offset}`; `?limit=` (default 100, maximum 500), `?offset=` (default 0). The project DTO is a **summary**: the heavy fields `log` (the project log) and `plan` (ADR-039) are not in the list; the other detail fields are kept. ⚠️ **Breaking change:** an array used to be returned |
+| POST | `/api/v2/projects` | both | auth | Create `{name, workspace?, repos?, plan?, members?, group_members?, everyone_role?}` → 201 (the access state — see the "Project access" block) |
+| GET | `/api/v2/projects/:id` | both | auth / by access role (owner·member·"everyone")·LEAD·ADMIN | Project (read; VIEWER reads, does not edit). The DTO carries `group_members`/`everyone_role`/`visibility` — see the "Project access" block. ⚠️ **Breaking change (PROP-054):** the detail has **no** `log` field — the project journal moved to the paged endpoint `GET /api/v2/projects/:id/log`. The `plan` and `invariants` fields stay |
+| PUT | `/api/v2/projects/:id` | both | auth / owner·EDITOR·LEAD·ADMIN | Update fields (name, description, current_task, invariants, icon, color, repos, plan, memory); the access state (`members`/`group_members`/`everyone_role`) — **`canManage` only** (author·OWNER member·LEAD·ADMIN), EDITOR → 403 FORBIDDEN; changing `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — project memory policy (ADR-107): `false` removes memory prompt blocks and `plugin_synth_plugin_memory_*` tools for the project while keeping the data; omitted — inherits the instance policy (enabled) |
 | DELETE | `/api/v2/projects/:id` | both | auth / owner·LEAD·ADMIN | Delete → 204 |
 | GET | `/api/v2/projects/:id/stats` | both | auth | The token aggregates over the sessions of the project (`total_sessions`, `total_input_tokens`, `total_output_tokens`, `total_tokens`, `total_cache_read_tokens`, `total_cache_write_tokens`, `total_reasoning_tokens`). ⚠️ The `total_messages` field was **removed**: the session list is always light (without history), so there would be nothing to count the messages from; the number of messages of a single session — in `GET /api/v2/sessions/:id/stats` |
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Project MCP scope (ADR-071 §2.4): `{enabled, defaultOn, knownServers, sources?}`; `enabled[]` — hard gate (unavailable even in old sessions, including for system servers), `defaultOn[]` — the seed for new sessions. `sources` (ADR-125) — the source of every known server: `Record<name, 'local'\|'server'>` (the "server" badge in the UI); the field is additive, without it the source is unknown |
@@ -791,6 +805,57 @@ replica can continue an upload — the `blobs` volume must be shared.
 | POST | `/api/v2/projects/:id/publish` | core | auth | Local project → server (hybrid) |
 | GET | `/api/v2/projects/:id/publish/progress` | core | auth | Publish progress for UI polling: `{active, phase, percent, sessions, files, startedAt, updatedAt, error}` (see the block below) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Server project → the local world (hybrid) |
+
+> **Project access — a single axis (PROP-133).** The project visibility is a **derived**
+> value of the access list state; in the DTO it sits next to that state:
+>
+> | DTO field | Type | Meaning |
+> |---|---|---|
+> | `members` | `Record<string, 'owner'\|'editor'\|'viewer'>` | the member list (the author's role is always `owner`) |
+> | `group_members` | `Record<string, 'owner'\|'editor'\|'viewer'> \| null` | group grants; `null` — no groups |
+> | `everyone_role` | `'viewer'\|'editor'\|null` | the role for all users of the instance; `null` — the project is not published |
+> | `visibility` | `'author'\|'selected'\|'all'` | **derived** visibility: `author` — the author only, `selected` — the selected users/groups, `all` — all users; **read only** |
+>
+> Role resolution order (the first match wins; the single resolver
+> `resolveProjectAccess`, `@itphx/synth-shared`): the project owner → the global
+> `ADMIN`/`LEAD` (overview across everything) → `members[userId]` → the highest role
+> among `group_members` for the groups of the user (`owner` > `editor` > `viewer`) →
+> `everyone_role` → no access. An unknown role in the data is **fail-closed** to
+> `viewer` (read only).
+>
+> | State (`visibility`) | Who sees the project | Who may change the access |
+> |---|---|---|
+> | `author` | the author (plus `ADMIN`/`LEAD`) | the author, a member with the `owner` role, `LEAD`, `ADMIN` |
+> | `selected` | the author, the members from `members`, the members via groups (plus `ADMIN`/`LEAD`) | the same |
+> | `all` | all users of the instance with the `everyone_role` role (plus `ADMIN`/`LEAD`) | the same |
+>
+> **Writing the access state.** `POST /api/v2/projects` and `PUT /api/v2/projects/:id`
+> accept `members`, `group_members`, `everyone_role` (role values are the strings
+> `owner`/`editor`/`viewer`):
+> - `members` and `group_members` — a **full replacement** of the set (not a merge with the current one);
+> - `everyone_role: null` — withdraw the publication; `everyone_role: 'owner'` → `400 VALIDATION_ERROR`
+>   (the `owner` role is never granted to everyone);
+> - the author's role in `members` cannot be lowered → `400 VALIDATION_ERROR` (the ownership transfer is
+>   a separate operation, stage 3);
+> - the author is always present in `members` with the `owner` role — the server appends it on any
+>   access-state write (the client does not need to send it, it cannot be lowered);
+> - an unknown role or a non-object in place of a grant map → `400 VALIDATION_ERROR`;
+> - `visibility` in the request body → `400 VALIDATION_ERROR` (the value is derived, it cannot be written);
+> - only `canManage` may change the access (the author, a member with the `owner` role, `LEAD`, `ADMIN`);
+>   `EDITOR`/`viewer` → `403 FORBIDDEN`.
+>
+> An access change publishes `project.updated` to the channels of the project sessions
+> and writes an audit record with `scope:'projects'` (`action:'update'`, "before/after"
+> over the access fields; the write is best-effort — its failure does not break the
+> mutation). The journal — `GET /api/v2/audit/security?scope=projects` (`ADMIN`/`AUDITOR`).
+>
+> **Groups — the mechanism exists, the source does not (stage 2).** Group grants are applied
+> **everywhere the principal carries `groups`**: in the managed HTTP — the routes, the session
+> list and the hub subscriptions (this is covered by the test matrix). But there is **no
+> source of groups**: the `groups` claim from the IdP is not parsed and the contract has no
+> `User.groups` field, so in production the group list is empty (fail-closed) — the
+> `group_members` record is stored but grants nothing. In core and in the agent's tools the
+> groups are not passed at all.
 
 > **Hybrid and the project journal (PROP-054).** The journal was moved out of the project detail, so the transfer between worlds goes through the paged endpoint:
 > - **fork-local** (server → local): the journal is loaded **page by page** from `GET /api/v2/projects/:id/log` (`remote/client.ts#getProjectLog`); the number of pages is capped — when the cap is exceeded the journal is transferred partially (with a warning in the transfer log): losing the tail is better than failing the transfer;
@@ -842,8 +907,8 @@ replica can continue an upload — the `blobs` volume must be shared.
 > `workspace` (ADR-075): on `POST`/`PUT` the directory is created (`mkdir -p`). Managed: an empty `workspace` → the auto name
 > `slugify(name)` + a suffix under `workspacesRoot`; an absolute path inside root is normalized to a relative one; outside root →
 > `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; changing `workspace` — owner/LEAD/ADMIN, otherwise `403 FORBIDDEN`.
-> RBAC (backend, D5): `PUT` content (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; otherwise `403 FORBIDDEN`.
-> **Visibility of `GET /api/v2/projects` and `GET /api/v2/projects/:id` (ADR-089).** In the list, `ADMIN`/`LEAD` see **all** projects, the rest — only their own (`owner` or `members`). Reading a project by id — `owner`, **any member** (`members`, any role, including `VIEWER`), as well as `ADMIN`/`LEAD`; otherwise `403 FORBIDDEN`. This is a **read level**: it does **not** extend the modification rights — `manage` (`workspace`/`DELETE`/MCP scope) and content `edit` remain owner/EDITOR/LEAD/ADMIN, `VIEWER` reads but does not edit (see `canRead` vs `canManage`/`canEditContent`).
+> RBAC (backend, D5): `PUT` content (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; otherwise `403 FORBIDDEN`. Changing the **access state** (`members`/`group_members`/`everyone_role`) — `canManage` only (author·OWNER member·LEAD·ADMIN); `EDITOR`/`viewer` → `403 FORBIDDEN`.
+> **Visibility of `GET /api/v2/projects` and `GET /api/v2/projects/:id` (ADR-089 × PROP-133).** In the list, `ADMIN`/`LEAD` see **all** projects, the rest — those where they have an **access role** (owner, `members` member, group grant, the "everyone" mode) — the same resolver as in the DTO (see the "Project access" block above). Reading a project by id — by the same role (including `VIEWER`), as well as `ADMIN`/`LEAD`; otherwise `403 FORBIDDEN`. This is a **read level**: it does **not** extend the modification rights — `manage` (`workspace`/`DELETE`/MCP scope) and content `edit` remain owner/EDITOR/LEAD/ADMIN, `VIEWER` reads but does not edit (see `canRead` vs `canManage`/`canEditContent`).
 > Tool-level RBAC (core chat tools, ADR-075/D5): `plan_write`/`project_log_write`/`project_log_update`/`project_log_delete`/`project_invariants_write` write only for owner/EDITOR (otherwise `project.write_forbidden`) — the same domain services as the HTTP routes.
 > In core there are no role checks (any authenticated user). Core/standalone:
 > an absolute path outside root — `deny` → `403`, `confirm` without `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
@@ -939,6 +1004,13 @@ archive — that is `serializeProjectArchive` (summary + `plan` + `log`), not `s
 domain form (camelCase: `createdAt`/`sessionId`/`author`/`updatedAt`/`updatedBy`), so the
 export → import round trip **does not lose** the entries (the regression test —
 `packages/core/src/projects/portable.test.ts`).
+
+**The access state is not transferred (PROP-133).** The export puts `members`/
+`group_members`/`everyone_role` into `project.json` (it is the usual project DTO), but the
+**import does not apply them**: the user ids and the group names are different on the target
+instance. Therefore on import the project is created in the **"author only"** state
+(`visibility: 'author'`), and the new owner is the importing user. The grants can only be
+moved manually after the import (`PUT /api/v2/projects/:id`).
 
 | Method | Path | Build | RBAC (managed / core) | Purpose |
 |---|---|---|---|---|
@@ -1157,7 +1229,7 @@ Read-only transparency into the loaded project instructions (`AGENTS.md` and com
 Response: `{ session_id?\|project_id?, enabled, cap: { chars, source: 'dynamic'\|'override', contextWindow }, files: [{ path, kind, label?, url?, chars, truncated, status, scan? }], diagnostics: [{ level, code, message, path?, kind? }] }` — the shape from the
 ADR-069 Phase 2a resolver (`engine/context/instructions.ts`); `status` — `loaded`/`truncated`/`blocked`/`dedup`/`skipped`/`untrusted`/`skipped-install-tree`/`excluded`/`fetch-error`. Without `session_id`/`project_id` → 400; an unknown id → 404; someone else's access → 403. Nothing is written to storage.
 
-### 5.14 Users — `/api/v2/users` (backend, ADMIN or scope `users:read`)
+### 5.14 Users — `/api/v2/users` (backend; the list/details — ADMIN or scope `users:read`, the directory — any authenticated user)
 
 > **The feature marker** — `features.users` in `GET /api/v2/meta` (§5.4): the instance itself
 > declares whether it serves `/api/v2/users*`. The managed backend is always `true` (the route is
@@ -1176,10 +1248,23 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/v2/users` | Profile list (without `identities`) |
+| GET | `/api/v2/users/directory` | The user directory for picking project participants (PROP-133): `{users:[{id, username, display_name}], total, offset, limit, next_offset}`; `?limit=` (default 50, maximum 200), `?offset=` (default 0), `?q=` — a search over `username`/`display_name`, case-insensitive. **Available to any authenticated user** (not only `ADMIN`) |
 | GET | `/api/v2/users/:id` | Profile (+ `identities`) |
 | POST | `/api/v2/users` | Create (ADMIN) |
 | PUT | `/api/v2/users/:id` | Update (ADMIN) |
 | DELETE | `/api/v2/users/:id` | Delete (ADMIN) |
+
+> **The user directory — `GET /api/v2/users/directory` (PROP-133).** A light projection for
+> picking project participants: only `id`, `username`, `display_name` — no roles, no email,
+> no identities, no notes. **Inactive users are excluded** (`is_active` is not exposed).
+> Access — **any authenticated** user: otherwise the project owner physically cannot pick
+> participants (`/users` is `ADMIN` only). A non-numeric/fractional/negative `limit`/`offset` →
+> `400 VALIDATION_ERROR`; `limit` above 200 is trimmed to 200. The paged response follows
+> the common contract of ADR-118 §4 (`next_offset` — the cursor of the next page, `null` —
+> the last page).
+> In **standalone** there is no users section at all (`features.users=false`, §5.4) — the
+> endpoint does not exist; in **hybrid** mode core proxies `/api/v2/users` to the remote
+> backend, so the directory is available wherever a backend is connected.
 
 ### 5.14.1 Current user's identities — `/api/v2/me/identities` (both, ADR-089)
 

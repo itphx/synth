@@ -675,8 +675,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > **Список сессий и история — постранично (решение владельца, ломающее изменение).** `GET /api/v2/sessions` **всегда** отдаёт сводку сессий **без истории сообщений**: ключа `messages` в DTO нет вовсе (не пустой массив), `prompt_states` в списке тоже нет. Раньше список для `ADMIN`/`LEAD` грузил все сессии **со всей историей** — на инстансах с сотнями сессий это давало пик heap и OOM на входе. Поэтому: список — **страница** `{sessions, total, offset, limit, next_offset}` (массив больше не возвращается), а полная история сессии доступна только постранично в `GET /api/v2/sessions/:id/messages` (`limit` — дефолт 200, максимум 500; `before` — непрозрачный исключающий курсор из `next_before`, не обязательно `seq`). Сводка `GET /api/v2/sessions/:id` и точечные ответы (`POST /`, `PATCH /:id`, `POST /:id/clear`, `POST /:id/fork`) — тоже без `messages`. Очередь (`pending_messages`/`pending_count`), `current_stream`, статус, настройки и счётчики токенов в сводке сохраняются. Обратная совместимость не поддерживается — клиент переходит на форму-объект и постраничное чтение истории.
 > **Пагинация списка.** `total` — число видимых сессий (после фильтра видимости и `project_id`); `next_offset` — курсор следующей страницы (`offset + page.length`), `null` — страница последняя. Нечисловой/отрицательный `limit`/`offset` → `400 VALIDATION_ERROR`; `limit` выше 500 обрезается до 500.
 > **Гибрид: пагинация через границу миров невозможна.** Удалённый список приходит **без** постраничной выдачи (старый сервер отдаёт массив), поэтому сквозной `next_offset` при наличии удалённых сессий — `null`, а `total` — сумма локальной страницы и удалённых сессий. Параметры `limit`/`before` в `GET /:id/messages` пробрасываются удалённому серверу; старый сервер их игнорирует и отдаёт **всю** историю (ограничение гибрида).
-> **Видимость `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости.
-> **Доступ по id — все `:id`-маршруты ресурса (ADR-089).** Единый prefix-guard `server/session-access-guard.ts` (вешается на `/:id` и `/:id/*` вместе с `requireAuth`; вид доступа `read`/`write` выводится из HTTP-метода), правило: `ADMIN`/`LEAD` — чтение **и** мутация чужой сессии разрешены (осознанное решение продукта; зафиксировано матрицей `routes/session-idor-matrix.test.ts`); владелец сессии / сессия без владельца — всё; участник проекта сессии: **чтение** (`GET`/`HEAD`) — любая роль, включая `VIEWER`, **мутация** — `OWNER`/`EDITOR` (`canEditProjectContent`); чужой пользователь → `403 FORBIDDEN`; несуществующая сессия → `404 NOT_FOUND`. Коды согласованы по всему ресурсу (для чужого на любом `:id`-маршруте — `403`); явные исключения **managed backend**: `GET /:id/mcp` — владелец|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR` (core-версии этих маршрутов для standalone/гибрида живут под общим prefix-guard'ом, а карту обфускации отдаёт право раскрытия — владелец сессии), `GET /:id/export` — маршрут **под** guard'ом (доступ к сессии решает он), а карта обфускации — отдельная привилегия route-level guard'а: владелец|`ADMIN`|`AUDITOR` (остальным читателям — 200 с очищенным телом; ADR-091 §6). Хелпер списка — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
+> **Видимость `GET /api/v2/sessions` (ADR-089 × PROP-133).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии **всех проектов, где у пользователя есть роль доступа** (владелец проекта, участник `members` любой роли, грант по группе, режим «всем пользователям»). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости. Список проектов-участий считает тот же резолвер доступа, что и `GET /api/v2/projects` (`ProjectRepository.list(viewer)`), поэтому видимость сессий и проектов не расходится; шов общий с подписками хаба — `packages/backend/src/events/visible-session-ids.ts`. **Видимость сессии = видимость проекта:** сессия проекта видна всем, кому виден проект, а право записи определяется ролью (`viewer` — read-only, `editor`/`owner` — обычный ход, инвариант 21).
+> **Доступ по id — все `:id`-маршруты ресурса (ADR-089).** Единый prefix-guard `server/session-access-guard.ts` (вешается на `/:id` и `/:id/*` вместе с `requireAuth`; вид доступа `read`/`write` выводится из HTTP-метода), правило: `ADMIN`/`LEAD` — чтение **и** мутация чужой сессии разрешены (осознанное решение продукта; зафиксировано матрицей `routes/session-idor-matrix.test.ts`); владелец сессии / сессия без владельца — всё; участник проекта сессии: **чтение** (`GET`/`HEAD`) — любая роль, включая `VIEWER`, **мутация** — `OWNER`/`EDITOR` (`canEditProjectContent`); роль берётся из единого резолвера доступа к проекту (PROP-133), поэтому `viewer` — read-only (ход не запускается), а `editor`/`owner` — обычный ход; чужой пользователь → `403 FORBIDDEN`; несуществующая сессия → `404 NOT_FOUND`. Коды согласованы по всему ресурсу (для чужого на любом `:id`-маршруте — `403`); явные исключения **managed backend**: `GET /:id/mcp` — владелец|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR` (core-версии этих маршрутов для standalone/гибрида живут под общим prefix-guard'ом, а карту обфускации отдаёт право раскрытия — владелец сессии), `GET /:id/export` — маршрут **под** guard'ом (доступ к сессии решает он), а карта обфускации — отдельная привилегия route-level guard'а: владелец|`ADMIN`|`AUDITOR` (остальным читателям — 200 с очищенным телом; ADR-091 §6). Хелпер списка — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
 > **Scope service-key (ADR-052):** `GET /` и `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt`, `POST /:id/background` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages|permissions` — `sessions:read`. При непустом `allowedProjects` проектная проекция проверяется по `project_id` сессии, иначе `403 PROJECT_FORBIDDEN`.
 > **Авто-заголовок сессии (`session.autoTitle`).** Имя новой сессии генерируется **сразу после первого сообщения пользователя** — в начале хода, до ответа ассистента (триггер — подготовка запроса, провайдер уже выбран роутером; LLM-вызов заголовка fire-and-forget — ход не ждёт его, расход учитывается как aux-вызов `agent: 'title'`). Правило попыток (N — число диалоговых реплик пользователя; служебные реплики — steer-инъекции, уведомления фоновых прогонов, сообщения шедулера — не считаются): N=1 и реплика — «chatter» (приветствие/смолток: «привет», «как дела», «ok» и т.п.; без вложений и короче `minSignalChars`) → генерация **откладывается**, LLM не вызывается вовсе, заголовок остаётся `New session`; N=1 и есть сигнал задачи → заголовок по первому сообщению; N=2..`maxAttempts` и заголовок всё ещё дефолтный → заголовок по диалогу (`Original request` + `Recent conversation`, бюджет 8000 символов, обрезка с хвоста); N > `maxAttempts` → авто-имя больше не пытается (доступна ручная регенерация). Счётчик попыток выводится из истории — **состояние не персистится**, правило идемпотентно и переживает рестарт. Фоллбек при ошибке/пустом/слишком длинном ответе LLM — заголовок из **первой реплики с сигналом задачи** (первая непустая строка, ≤ 60 символов, markdown-разметка снята); для chatter-реплики фоллбек не строится — заголовок не меняется. **Пользовательский заголовок не перетирается** (авто-именование переименовывает только дефолтный); дочерние сессии (саб-агенты) не авто-именуются. Настройки — секция `session.autoTitle` (`docs/CONFIGURATION.md`): `enabled`/`deferOnChatter`/`maxAttempts`/`minSignalChars`, env `SYNTH_SESSION_AUTO_TITLE_*`.
 > **Ручная регенерация имени — `PATCH /api/v2/sessions/:id {"title": ""}`.** Пустая строка в `title` — не переименование, а запрос пересборки имени **по диалогу**: сервер синхронно генерирует заголовок (LLM-вызов) и перетирает текущий — в том числе заданный пользователем; ответ — DTO сессии (как у обычного PATCH). Пересборка выполняется **вне лока сессии** (LLM-вызов под локом запрещён), остальные поля PATCH применяются как обычно. Собрать имя не удалось (ошибка провайдера, пустой ответ, нет диалога) — **заголовок не меняется**, ответ `200` с прежним именем, событие `session.renamed` не публикуется. При успехе публикуются `session.renamed` (если имя изменилось) и `session.updated`. Непустой `title` — обычное переименование (`session.renamed` + `session.updated`). В UI — пункт контекстного меню сессии «Обновить название». В гибриде тело PATCH проксируется удалённому серверу — регенерацию выполняет он.
@@ -948,10 +948,10 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/projects` | оба | auth (owner/член; LEAD/ADMIN — все) | **Страница** списка проектов: `{projects, total, offset, limit, next_offset}`; `?limit=` (дефолт 100, максимум 500), `?offset=` (дефолт 0). DTO проекта — **сводка**: тяжёлых полей `log` (журнал проекта) и `plan` (ADR-039) в списке нет; остальные поля детали сохраняются. ⚠️ **Ломающее изменение:** раньше возвращался массив |
-| POST | `/api/v2/projects` | оба | auth | Создать `{name, workspace?, repos?, plan?}` → 201 |
-| GET | `/api/v2/projects/:id` | оба | auth / owner·член·LEAD·ADMIN | Проект (read; VIEWER читает, не редактирует). ⚠️ **Ломающее изменение (PROP-054):** в детали **нет** поля `log` — журнал проекта вынесен в отдельную постраничную страницу `GET /api/v2/projects/:id/log`. Поле `plan` и `invariants` остаются |
-| PUT | `/api/v2/projects/:id` | оба | auth / owner·EDITOR·LEAD·ADMIN | Обновить поля (name, description, current_task, invariants, icon, color, repos, plan, memory); смена `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — политика памяти проекта (ADR-107): `false` убирает блоки памяти и тулы `plugin_synth_plugin_memory_*`, данные сохраняются; не задано — наследует политику инстанса (включено) |
+| GET | `/api/v2/projects` | оба | auth (роль доступа: владелец·участник·«всем»; LEAD/ADMIN — все) | **Страница** списка проектов: `{projects, total, offset, limit, next_offset}`; `?limit=` (дефолт 100, максимум 500), `?offset=` (дефолт 0). DTO проекта — **сводка**: тяжёлых полей `log` (журнал проекта) и `plan` (ADR-039) в списке нет; остальные поля детали сохраняются. ⚠️ **Ломающее изменение:** раньше возвращался массив |
+| POST | `/api/v2/projects` | оба | auth | Создать `{name, workspace?, repos?, plan?, members?, group_members?, everyone_role?}` → 201 (состояние доступа — см. блок «Доступ к проекту») |
+| GET | `/api/v2/projects/:id` | оба | auth / по роли доступа (owner·участник·«всем»)·LEAD·ADMIN | Проект (read; VIEWER читает, не редактирует). DTO несёт `group_members`/`everyone_role`/`visibility` — см. блок «Доступ к проекту». ⚠️ **Ломающее изменение (PROP-054):** в детали **нет** поля `log` — журнал проекта вынесен в отдельную постраничную страницу `GET /api/v2/projects/:id/log`. Поле `plan` и `invariants` остаются |
+| PUT | `/api/v2/projects/:id` | оба | auth / owner·EDITOR·LEAD·ADMIN | Обновить поля (name, description, current_task, invariants, icon, color, repos, plan, memory); состояние доступа (`members`/`group_members`/`everyone_role`) — **только `canManage`** (автор·OWNER-участник·LEAD·ADMIN), `EDITOR` → `403 FORBIDDEN`; смена `workspace` — owner/LEAD/ADMIN. `memory: {enabled?: boolean}` — политика памяти проекта (ADR-107): `false` убирает блоки памяти и тулы `plugin_synth_plugin_memory_*`, данные сохраняются; не задано — наследует политику инстанса (включено) |
 | DELETE | `/api/v2/projects/:id` | оба | auth / owner·LEAD·ADMIN | Удалить → 204 |
 | GET | `/api/v2/projects/:id/stats` | оба | auth | Агрегаты токенов по сессиям проекта (`total_sessions`, `total_input_tokens`, `total_output_tokens`, `total_tokens`, `total_cache_read_tokens`, `total_cache_write_tokens`, `total_reasoning_tokens`). ⚠️ Поле `total_messages` **удалено**: список сессий всегда лёгкий (без истории), считать сообщения было бы нечем; число сообщений одной сессии — в `GET /api/v2/sessions/:id/stats` |
 | GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Проектный MCP-скоуп (ADR-071 §2.4): `{enabled, defaultOn, knownServers, sources?}`; `enabled[]` — hard-gate (недоступно и в старых сессиях, в т.ч. для системных серверов), `defaultOn[]` — сид новых сессий. `sources` (ADR-125) — источник каждого известного сервера: `Record<name, 'local'\|'server'>` (бейдж «серверный» в UI); поле аддитивное, при отсутствии источник неизвестен |
@@ -959,6 +959,56 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 | POST | `/api/v2/projects/:id/publish` | core | auth | Локальный проект → сервер (гибрид) |
 | GET | `/api/v2/projects/:id/publish/progress` | core | auth | Прогресс публикации для опроса UI: `{active, phase, percent, sessions, files, startedAt, updatedAt, error}` (см. блок ниже) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Серверный проект → локальный мир (гибрид) |
+
+> **Доступ к проекту — одна ось (PROP-133).** Видимость проекта — **производная**
+> величина от состояния списка доступа; в DTO она лежит рядом с этим состоянием:
+>
+> | Поле DTO | Тип | Значение |
+> |---|---|---|
+> | `members` | `Record<string, 'owner'\|'editor'\|'viewer'>` | список участников (роль автора — всегда `owner`) |
+> | `group_members` | `Record<string, 'owner'\|'editor'\|'viewer'> \| null` | гранты группам; `null` — групп нет |
+> | `everyone_role` | `'viewer'\|'editor'\|null` | роль для всех пользователей инстанса; `null` — проект не опубликован |
+> | `visibility` | `'author'\|'selected'\|'all'` | **производная** видимость: `author` — только автор, `selected` — выбранным пользователям/группам, `all` — всем пользователям; **только чтение** |
+>
+> Порядок резолва роли (первое совпадение выигрывает; единый резолвер
+> `resolveProjectAccess`, `@itphx/synth-shared`): владелец проекта → глобальные
+> `ADMIN`/`LEAD` (сквозной обзор) → `members[userId]` → максимальная роль по
+> `group_members` среди групп пользователя (`owner` > `editor` > `viewer`) →
+> `everyone_role` → доступа нет. Неизвестная роль в данных — **fail-closed** в
+> `viewer` (только чтение).
+>
+> | Состояние (`visibility`) | Кто видит проект | Кто может изменить доступ |
+> |---|---|---|
+> | `author` | автор (плюс `ADMIN`/`LEAD`) | автор, участник с ролью `owner`, `LEAD`, `ADMIN` |
+> | `selected` | автор, участники из `members`, участники через группы (плюс `ADMIN`/`LEAD`) | то же |
+> | `all` | все пользователи инстанса с ролью `everyone_role` (плюс `ADMIN`/`LEAD`) | то же |
+>
+> **Запись состояния доступа.** `POST /api/v2/projects` и `PUT /api/v2/projects/:id`
+> принимают `members`, `group_members`, `everyone_role` (значения ролей — строки
+> `owner`/`editor`/`viewer`):
+> - `members` и `group_members` — **полная замена** набора (не слияние с текущим);
+> - `everyone_role: null` — снять публикацию; `everyone_role: 'owner'` → `400 VALIDATION_ERROR`
+>   (всем пользователям роль `owner` не выдаётся);
+> - роль автора в `members` понизить нельзя → `400 VALIDATION_ERROR` (передача владения —
+>   отдельная операция, Ф3);
+> - автор всегда присутствует в `members` с ролью `owner` — сервер дописывает его при любой
+>   записи состояния доступа (клиенту присылать не нужно, понизить нельзя);
+> - неизвестная роль или не-объект на месте карты грантов → `400 VALIDATION_ERROR`;
+> - `visibility` в теле запроса → `400 VALIDATION_ERROR` (величина производная, записывать нельзя);
+> - менять доступ может только `canManage` (автор, участник с ролью `owner`, `LEAD`, `ADMIN`);
+>   `EDITOR`/`viewer` → `403 FORBIDDEN`.
+>
+> Изменение доступа публикует `project.updated` в каналы сессий проекта и пишет
+> аудит `scope:'projects'` (`action:'update'`, «было/стало» по полям доступа; запись
+> best-effort — её ошибка не ломает мутацию). Журнал — `GET /api/v2/audit/security?scope=projects`
+> (`ADMIN`/`AUDITOR`).
+>
+> **Группы — механизм есть, источника нет (Ф2).** Гранты по группам применяются **везде,
+> где принципал несёт `groups`**: в managed HTTP — роуты, список сессий и подписки хаба
+> (это покрыто матрицей тестов). Но **источника групп нет**: claim `groups` из IdP не
+> разбирается, поля `User.groups` в контракте нет, поэтому в проде список групп пуст
+> (fail-closed) — запись `group_members` хранится, но доступа не даёт. В core и в тулах
+> агента группы не передаются вовсе.
 
 > **Гибрид и журнал проекта (PROP-054).** Журнал вынесен из детали проекта, поэтому
 > перенос между мирами идёт через постраничную страницу:
@@ -1075,8 +1125,8 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 > `workspace` (ADR-075): при `POST`/`PUT` каталог создаётся (`mkdir -p`). Managed: пустой `workspace` → авто-имя
 > `slugify(name)` + суффикс под `workspacesRoot`; абсолютный внутри root нормализуется в относительный; вне root →
 > `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; смена `workspace` — владелец/LEAD/ADMIN, иначе `403 FORBIDDEN`.
-> RBAC (backend, D5): `PUT` контент (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; иначе `403 FORBIDDEN`.
-> **Видимость `GET /api/v2/projects` и `GET /api/v2/projects/:id` (ADR-089).** В списке `ADMIN`/`LEAD` видят **все** проекты, остальные — только свои (`owner` или `members`). Чтение проекта по id — `owner`, **любой участник** (`members`, любая роль, включая `VIEWER`), а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Это **read-уровень**: он **не расширяет** права на изменение — `manage` (`workspace`/`DELETE`/MCP-скоуп) и `edit` контента остаются owner/EDITOR/LEAD/ADMIN, `VIEWER` читает, но не редактирует (см. `canRead` vs `canManage`/`canEditContent`).
+> RBAC (backend, D5): `PUT` контент (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; иначе `403 FORBIDDEN`. Изменение **состояния доступа** (`members`/`group_members`/`everyone_role`) — только `canManage` (автор·OWNER-участник·LEAD·ADMIN); `EDITOR`/`viewer` → `403 FORBIDDEN`.
+> **Видимость `GET /api/v2/projects` и `GET /api/v2/projects/:id` (ADR-089 × PROP-133).** В списке `ADMIN`/`LEAD` видят **все** проекты, остальные — те, где у них есть **роль доступа** (владелец, участник `members`, грант по группе, режим «всем пользователям») — резолвер тот же, что и в DTO (см. блок «Доступ к проекту» выше). Чтение проекта по id — по той же роли (включая `VIEWER`), а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Это **read-уровень**: он **не расширяет** права на изменение — `manage` (`workspace`/`DELETE`/MCP-скоуп) и `edit` контента остаются owner/EDITOR/LEAD/ADMIN, `VIEWER` читает, но не редактирует (см. `canRead` vs `canManage`/`canEditContent`).
 > Tool-level RBAC (core-тулы чата, ADR-075/D5): `plan_write`/`project_log_write`/`project_log_update`/`project_log_delete`/`project_invariants_write` пишут только при owner/EDITOR (иначе `project.write_forbidden`) — те же доменные сервисы, что у HTTP-роутов.
 > В core ролевых проверок нет (любой аутентифицированный). Core/standalone:
 > абсолютный вне root — `deny` → `403`, `confirm` без `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
@@ -1116,6 +1166,13 @@ sidecar-метаданными). Метрики — `synth_attachment_*`
 (camelCase: `createdAt`/`sessionId`/`author`/`updatedAt`/`updatedBy`), поэтому
 round-trip экспорт → импорт журнала **не теряет** записи (регресс-тест —
 `packages/core/src/projects/portable.test.ts`).
+
+**Состояние доступа не переносится (PROP-133).** Экспорт кладёт в `project.json`
+`members`/`group_members`/`everyone_role` (это обычный DTO проекта), но **импорт их
+не применяет**: id пользователей и имена групп на целевом инстансе другие. Поэтому
+при импорте проект создаётся в состоянии **«только автор»** (`visibility: 'author'`),
+новый владелец — импортирующий. Перенести гранты можно только вручную после импорта
+(`PUT /api/v2/projects/:id`).
 
 | Метод | Путь | Сборка | RBAC (managed / core) | Назначение |
 |---|---|---|---|---|
@@ -1340,7 +1397,7 @@ Read-only прозрачность загруженных проектных и�
 Ответ: `{ session_id?\|project_id?, enabled, cap: { chars, source: 'dynamic'\|'override', contextWindow }, files: [{ path, kind, label?, url?, chars, truncated, status, scan? }], diagnostics: [{ level, code, message, path?, kind? }] }` — структура из резолвера
 ADR-069 Ф2a (`engine/context/instructions.ts`); `status` — `loaded`/`truncated`/`blocked`/`dedup`/`skipped`/`untrusted`/`skipped-install-tree`/`excluded`/`fetch-error`. Без `session_id`/`project_id` → 400; неизвестный id → 404; чужой доступ → 403. Запись в хранилище не выполняется.
 
-### 5.14 Users — `/api/v2/users` (backend, ADMIN или scope `users:read`)
+### 5.14 Users — `/api/v2/users` (backend; список/детали — ADMIN или scope `users:read`, каталог — любой аутентифицированный)
 
 > **Признак фичи** — `features.users` в `GET /api/v2/meta` (§5.4): инстанс сам
 > объявляет, обслуживает ли он `/api/v2/users*`. Managed backend — всегда `true`
@@ -1360,10 +1417,24 @@ snake_case: `provider`, `external_id`, `username?`, `display_name?`,
 | Метод | Путь | Назначение |
 |---|---|---|
 | GET | `/api/v2/users` | Список профилей (без `identities`) |
+| GET | `/api/v2/users/directory` | Каталог пользователей для выбора участников проекта (PROP-133): `{users:[{id, username, display_name}], total, offset, limit, next_offset}`; `?limit=` (дефолт 50, максимум 200), `?offset=` (дефолт 0), `?q=` — поиск по `username`/`display_name` без учёта регистра. **Доступ — любой аутентифицированный** (не только `ADMIN`) |
 | GET | `/api/v2/users/:id` | Профиль (+ `identities`) |
 | POST | `/api/v2/users` | Создать (ADMIN) |
 | PUT | `/api/v2/users/:id` | Обновить (ADMIN) |
 | DELETE | `/api/v2/users/:id` | Удалить (ADMIN) |
+
+> **Каталог пользователей — `GET /api/v2/users/directory` (PROP-133).** Лёгкая проекция
+> для выбора участников проекта: только `id`, `username`, `display_name` — ролей,
+> почты, идентичностей и заметок в ней нет. **Неактивные пользователи исключены**
+> (`is_active` наружу не отдаётся). Доступ — **любой аутентифицированный**
+> пользователь: иначе владелец проекта физически не может выбрать участников
+> (`/users` — только `ADMIN`). Нечисловой/дробный/отрицательный `limit`/`offset` →
+> `400 VALIDATION_ERROR`; `limit` выше 200 обрезается до 200. Постраничный ответ —
+> по общему контракту ADR-118 §4 (`next_offset` — курсор следующей страницы, `null`
+> — последняя).
+> В **standalone** раздела пользователей нет (`features.users=false`, §5.4) —
+> эндпоинта вовсе; в **гибриде** core проксирует `/api/v2/users` на удалённый
+> backend, поэтому каталог доступен там, где подключён backend.
 
 ### 5.14.1 Идентичности текущего пользователя — `/api/v2/me/identities` (оба, ADR-089)
 

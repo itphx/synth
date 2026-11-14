@@ -150,6 +150,8 @@ Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг
 
 `/api/v2/{providers,models,sessions,projects,messages,queue,agents}` — тонкие обёртки над core-фабриками; `/api/v2/{fs,git,ssh-keys,settings,dictionaries,audit,logs,gateway,admin/debug}` — прямое монтирование core-фабрик с RBAC/спецификой в `opts`: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`/`authorizeProject`, rate limiter и backend-only роуты (например, `models/fetch` — rate limit, `providers/fetch-icon`). Дублировать хендлеры core нельзя; локальных копий `logs`/`audit`/`gateway-patterns`/`context`/`debug`/`mcp-registry` в `src/routes/*` больше нет.
 
+- **Доступ к проекту — RBAC на резолвере (PROP-133).** `createProjectAccess` не держит своей копии правил: роль берётся из `resolveProjectAccess` по принципалу запроса (`lib/project-principal.ts` — пользователь + роли инстанса + группы). `canManage` = роль `owner`, `canEditContent` = `owner|editor`, `canRead` = любая роль; `EDITOR` меняет контент, но не доступ (`members`/`group_members`/`everyone_role` — только `canManage`, иначе 403). Каталог выбора участников — `GET /api/v2/users/directory` (любой аутентифицированный, постранично); список сессий и подписки хаба считают **один** список видимых проектов (`events/visible-session-ids.ts`).
+
 ## Вложения и мультимодальный ввод (ADR-115)
 
 - **Staging без сессии.** `POST /api/v2/attachments` + `GET`/`HEAD /:sha256` — объект **не привязан к сессии** (шлюзы, внешние события, пайплайны), адресация content-addressed. Managed: `requireAuth` + `scopeGuard('events:ingest')`, core: `requireAuth`; лимиты и разбор multipart — те же, что у загрузки в сессию (`readAttachmentUploadForm`), контур ограничен `attachments/`.

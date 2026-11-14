@@ -1,6 +1,6 @@
 # PROP-133: Доступ к проекту — участники, группы и видимость
 
-> **Статус:** 🧩 Предложение — единая ось доступа к проекту (автор / выбранные пользователи и группы / все пользователи) с распространением на всё содержимое, включая сессии
+> **Статус:** 🧩 Предложение — единая ось доступа к проекту (автор / выбранные пользователи и группы / все пользователи) с распространением на всё содержимое, включая сессии; Ф1 реализована, Ф2/Ф3 — нет (см. «Статус реализации»)
 > **Решение до:** 2026-11-30
 > **Дата:** 2026-11-11
 > **Согласовано:** 2026-11-11 — роль «всем» `viewer` по умолчанию (+`editor` явно), `LEAD`/`ADMIN` — сквозной обзор, передача владения автор+`ADMIN`.
@@ -38,6 +38,9 @@ everyoneRole?: ProjectRole | null;                // новое; null/undefined 
 ## Контекст
 
 ### Что уже есть
+
+> Описание ниже — состояние **до** реализации Ф1 (описание проблемы). Что
+> реализовано сейчас — в разделе «Статус реализации».
 
 «Кто видит проект» сегодня размазано по **шести независимым реализациям предиката**, и они уже расходятся в деталях:
 
@@ -243,13 +246,57 @@ export function resolveProjectAccess(
 1. Уведомление добавленным участникам — будущая фича (в Ф1 не делаем): in-app `project.updated`, письмо или ничего?
 2. Сопоставление групп IdP → отображаемые `teamRoles` — отдельное решение позже; нужно ли оно вообще и в какую сторону (только отображение или производное заполнение профиля)?
 
-## Статус в коде
+## Статус реализации
 
-**Не реализовано.** Проверено по репозиторию (`packages/**`, без `dist/`/`node_modules/`):
+**Ф1 (пользовательские гранты) — реализована.** Проверено по рабочему дереву
+репозитория (`packages/**`, без `dist/`/`node_modules/`); изменения не закоммичены.
 
-- `resolveProjectAccess`/`project-access-policy.ts` — отсутствуют;
-- `groupMembers`/`everyoneRole` в `Project` (`packages/shared/src/types/project.ts:122-126`) — отсутствуют;
-- запись `members` через API — отсутствует (`projectContentFields`, `core/src/server/routes/projects.ts:163-166`);
-- `GET /api/v2/users/directory` — отсутствует (`packages/backend/src/routes/users.ts:12-33` — только `/` и `/:id`, ADMIN);
-- разбор claim `groups` — отсутствует (`packages/backend/src/auth/oidc.ts:242-285`);
-- UI-блок доступа и i18n `project.access.*` — отсутствуют.
+Реализовано:
+
+- **Единый резолвер** — `packages/shared/src/types/project-access.ts`:
+  `resolveProjectAccess` (порядок: владелец → `ADMIN`/`LEAD` → `members` → группы →
+  `everyoneRole`), нормализация (`normalizeProjectAccessRole`/
+  `normalizeProjectMemberRoles`/`normalizeProjectEveryoneRole`), предикаты
+  `canWriteWithProjectRole`/`canManageWithProjectRole`. На резолвер переведены все
+  шесть копий предиката: backend `createProjectAccess`, `isSessionVisible`,
+  `isProjectVisible`/`projectRoleLabel`, `project-store.list`, PG `list`, UI
+  `projectAccess.ts`.
+- **Контракт** — `Project.groupMembers`/`Project.everyoneRole`
+  (`packages/shared/src/types/project.ts`), `deriveProjectVisibility`, схемы
+  `projectAccessRoleSchema`/`projectEveryoneRoleSchema`/`projectMembersSchema` в
+  `projectCreateSchema`/`projectUpdateSchema`; аудит-скоуп `projects` в
+  `SECURITY_AUDIT_SCOPES`.
+- **Хранилища** — `ProjectRepository.list(viewer)` (file/memory/PG), нормализация
+  состояния доступа при чтении, миграция PostgreSQL `035-project-access.ts`
+  (`group_members jsonb`, `everyone_role text`; только `ADD COLUMN`, идемпотентно).
+- **API** — `POST`/`PUT /api/v2/projects` принимают `members`/`group_members`/
+  `everyone_role` (полная замена набора), `visibility` — производная и только на чтение;
+  DTO несёт `group_members`/`everyone_role`/`visibility`; аудит `scope:'projects'`;
+  `GET /api/v2/users/directory` (любой аутентифицированный, постранично).
+- **Сессии и подписки** — `resolveVisibleProjectIds`/`listVisibleSessions`
+  (`packages/backend/src/events/visible-session-ids.ts`): список сессий и подписки хаба
+  считают один и тот же список видимых проектов.
+- **UI** — блок «Доступ» в панели проекта и при создании (`ProjectAccessProjectionField`,
+  `ProjectAccessBadge`), `useUsersDirectory`, зеркало предиката в `lib/projectAccess.ts`,
+  i18n `project.access.*` (RU/EN).
+
+**Ф2 (группы) — не реализована.** Схема грантов по группам в контракте есть
+(`group_members`), но источника групп нет: claim `groups` из IdP не разбирается, поля
+`User.groups` в контракте нет. Группы читаются **defensively** (`groupsOf`) и всегда
+пусты ⇒ гранты по группам **не применяются нигде** (core, тулы, подписки) — fail-closed.
+Запись `group_members` хранится, но доступа не даёт.
+
+**Ф3 (передача владения и переносы) — не реализована.**
+`POST /api/v2/projects/:id/transfer` не сделан. Импорт портативного архива создаёт
+проект в состоянии «только автор»: гранты не переносятся (id пользователей и имена
+групп на целевом инстансе другие), экспорт кладёт поля в `project.json`, но импорт их
+не применяет.
+
+### Что осталось за Ф1
+
+- Разбор claim `groups` из IdP и allowlist групп (Ф2) — тогда `group_members`
+  начнёт действовать; до этого он — только схема хранения.
+- `POST /api/v2/projects/:id/transfer` (автор или `ADMIN`) и политика переносов
+  грантов между инстансами (Ф3).
+- Политика `syncProjectToRemote` для гибрида (перенос грантов на удалённый backend) —
+  отдельным решением; сейчас `forkProjectToLocal` даёт состояние «только автор».

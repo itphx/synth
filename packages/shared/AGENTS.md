@@ -484,6 +484,7 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   `findProfileByExternalId(provider, externalId)`, `linkIdentity(userId, identity)` (идемпотентно;
   конфликт с другим профилем → `null`) и `unlinkIdentity(userId, provider, externalId)`.
 - Канонические ключи иконок/цветов проекта и сессии: `PROJECT_ICON_KEYS` (37) / `PROJECT_COLOR_KEYS` (16, палитра темы `a1..a16`) + типы `ProjectIconKey`/`ProjectColorKey` (`types`) (включая дефолтные `folder`/`chat`/`cpu`); схемы `projectIconKeySchema`/`projectColorKeySchema` и хелперы `isProjectIconKey`/`isProjectColorKey` (strict) и `normalizeIconKey`/`normalizeColorKey` (только канонические ключи: невалидные значения, в т.ч. старые цветовые алиасы, → `undefined`) (`schemas`). `null`/`undefined` — сброс значения.
+- PROP-133: **единый резолвер доступа к проекту** — `src/types/project-access.ts` (browser-safe, только типы и чистые функции, без `zod`): `resolveProjectAccess` (порядок: владелец → `ADMIN`/`LEAD` → `members` → группы → `everyoneRole`), нормализация (`normalizeProjectAccessRole`/`normalizeProjectMemberRoles`/`normalizeProjectEveryoneRole`), предикаты `canWriteWithProjectRole`/`canManageWithProjectRole`; типы `ProjectAccessRole`/`ProjectPrincipal`/`ProjectViewer`. Контракт проекта — `Project.groupMembers`/`Project.everyoneRole` (`types/project.ts`), `deriveProjectVisibility`, схемы `projectAccessRoleSchema`/`projectEveryoneRoleSchema`/`projectMembersSchema` (в `projectCreateSchema`/`projectUpdateSchema`).
 
 ## i18n-контракт
 

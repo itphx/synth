@@ -940,12 +940,19 @@ sequenceDiagram
 
 1. История и `activity` доступны любому, кто видит сессию (владелец, участник проекта любой роли,
    `LEAD`/`ADMIN`) — `GET`/`HEAD` это уровень `read`.
-2. Live-события получает **подписанный** клиент: подписка строится при подключении по
-   `listSessions({ userId })` (свои сессии; в standalone пользователь один — все локальные) плюс
-   дочерние и созданные через роуты (`session.created`, `child.*`). Фильтра по роли на шине нет:
-   подписанный `VIEWER` видит поток так же, как `EDITOR`. Для сессии **чужого** владельца в
-   shared-проекте live-события могут не прийти до перезагрузки — это ограничение подписки «по
-   владельцу» (инвариант 18), а не правовое.
+2. Live-события получает **подписанный** клиент: подписка строится при подключении по списку
+   **видимых** сессий — свои сессии **плюс** сессии всех проектов, где у пользователя есть
+   роль доступа (владелец, участник, грант по группе, режим «всем пользователям»), плюс
+   дочерние и созданные через роуты (`session.created`, `child.*`). Шов —
+   `packages/backend/src/events/visible-session-ids.ts` (`resolveVisibleProjectIds`/
+   `listVisibleSessions`): **тот же** список считает и список сессий
+   (`routes/sessions.ts` → `resolveMemberProjectIds`), и подписки хаба (`events/hub.ts` →
+   `registerClient`), поэтому видимость сессий и проектов не расходится. **Цена** — один
+   `projectStore.list(viewer)` на подключение (WS/SSE); выборка лёгкая, без истории сообщений.
+   Фильтра по роли на шине нет: подписанный `VIEWER` видит поток так же, как `EDITOR`.
+   В managed backend ограничение подписки «только по владельцу» снято (PROP-133 §6): сессия
+   **чужого** владельца в shared-проекте, видимом пользователю, live-событиями приходит.
+   Standalone-core подписка остаётся по владельцу (пользователь один).
 3. Права разводит граница: `accessKindOf` (`GET`/`HEAD` → `read`, остальное → `write`). `VIEWER`
    читает, но «Стоп», steer, правки сообщений и очереди получают `403 FORBIDDEN`; `EDITOR`/`OWNER`
    (а также `LEAD`/`ADMIN`) — разрешены.
@@ -953,7 +960,8 @@ sequenceDiagram
    (в отличие от «Пайплайнов», где `canEditProjectContent` гасит действия). Сервер при этом
    корректен.
 
-Код: `packages/core/src/server/session-access-guard.ts`, `packages/backend/src/events/hub.ts`.
+Код: `packages/core/src/server/session-access-guard.ts`, `packages/backend/src/events/hub.ts`,
+`packages/backend/src/events/visible-session-ids.ts`.
 
 ### 8.12 Открытие дочерней сессии во время работы (blocking и detached)
 
