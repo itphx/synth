@@ -10,7 +10,7 @@ import type { ExecutionProfileCatalog } from '@itphx/synth-core';
 // ADR-114: сервис worktree — контур `/projects/:id/worktrees*`.
 import type { WorktreeService } from '@itphx/synth-core';
 import type { EventHub } from '../events/hub.js';
-import type { Project, User } from '@itphx/synth-shared';
+import type { ProfileStore, Project, User } from '@itphx/synth-shared';
 import {
   canManageWithProjectRole,
   canWriteWithProjectRole,
@@ -18,6 +18,7 @@ import {
 } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 import { projectPrincipalOf, groupsOf } from '../lib/project-principal.js';
+import { AUTH_IDENTITY_PROVIDER } from '../lib/principal-identity.js';
 
 /**
  * ADR-076 §T4: RBAC-хелперы проекта (owner/EDITOR/LEAD/ADMIN). Вынесены фабрикой,
@@ -136,6 +137,12 @@ export function createProjectRoutes(
    * Не задан — пересчёта нет (подписки остаются прежними).
    */
   eventHub?: EventHub,
+  /**
+   * ADR-140 Ф3: профили пользователей — проверка получателя при передаче
+   * владения (`POST /:id/transfer`): цель должна существовать и быть активна.
+   * Не задан — передача владения невозможна (цель не проверяется).
+   */
+  profilesStore?: ProfileStore,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -147,6 +154,23 @@ export function createProjectRoutes(
       canManage: canManageProject,
       canEditContent: canEditProjectContent,
       canRead: canReadProject,
+      // ADR-140 Ф3: передача владения — текущий владелец или `ADMIN`.
+      // `LEAD`/участники/`EDITOR` — нет (передача владения ≠ управление
+      // содержимым).
+      canTransfer: (c, project, userId) =>
+        (typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]))
+        || project.ownerId === userId,
+      // ADR-140 Ф3: получатель должен существовать и быть активным.
+      // Каталог отдаёт **ACL-id** (auth-идентичность = OIDC `sub`/debug-id,
+      // ADR-140), поэтому сначала ищем профиль по идентичности, затем — по
+      // `profile.id` (legacy-профиль без привязки, ещё не логинившийся).
+      resolveTransferTarget: async (id) => {
+        if (!profilesStore) return null;
+        const profile =
+          (await profilesStore.findProfileByExternalId(AUTH_IDENTITY_PROVIDER, id))
+          ?? (await profilesStore.loadProfile(id));
+        return profile ? { id, active: profile.isActive !== false } : null;
+      },
       // ADR-089: ADMIN/LEAD — сквозная видимость всех проектов (защита от мок-AuthKit).
       resolveElevated: (c) =>
         (typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]))

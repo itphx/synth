@@ -215,6 +215,10 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('POST', '/api/v2/projects/:id/plan/columns', G_PROJECT, [404], { body: { name: 'c' } }),
   r('POST', '/api/v2/projects/:id/worktrees', G_PROJECT, [404], { body: {} }),
   r('POST', '/api/v2/projects/:id/worktrees/prune', G_PROJECT, [404], { body: {} }),
+  // ADR-140 Ф3: передача владения — право строже, чем у `PUT /:id`
+  // (владелец или `ADMIN`; `LEAD`/участники — нет), но ресурс — проектный,
+  // поэтому правило реестра — то же (`G_PROJECT`).
+  r('POST', '/api/v2/projects/:id/transfer', G_PROJECT, [404], { body: { user_id: 'someone' } }),
   r('PATCH', '/api/v2/projects/:id/log/:entryId', G_PROJECT, [404], { body: { text: 'entry' } }),
   r('PATCH', '/api/v2/projects/:id/plan/items/:itemId', G_PROJECT, [404], { body: { title: 'x' } }),
   r('PATCH', '/api/v2/projects/:id/plan/items/:itemId/move', G_PROJECT, [404], { body: { columnId: 'c' } }),

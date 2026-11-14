@@ -8,6 +8,7 @@ import {
   projectExecutorUpdateSchema,
   projectPlanSchema,
   projectAccessRoleSchema,
+  projectTransferSchema,
   PROJECT_ICON_KEYS,
   PROJECT_COLOR_KEYS,
   isProjectIconKey,
@@ -98,6 +99,24 @@ export interface ProjectRoutesOptions {
    * расширяются этим предикатом — VIEWER не получает прав на редактирование.
    */
   canRead?: (c: Context, project: Project, userId: string) => boolean;
+  /**
+   * ADR-140 Ф3: право **передачи владения** проектом (`POST /:id/transfer`).
+   *
+   * Не задан — передать владение может только текущий владелец
+   * (`project.ownerId === userId`). `LEAD`, участник с ролью `owner` и
+   * `EDITOR` — не могут (передача владения — не «управление содержимым»).
+   */
+  canTransfer?: (c: Context, project: Project, userId: string) => boolean;
+  /**
+   * ADR-140 Ф3: проверка цели передачи — пользователь существует и активен.
+   *
+   * `null` — цели нет (неизвестный пользователь), `{active:false}` — профиль
+   * отключён. Оба случая — `400 VALIDATION_ERROR`.
+   *
+   * Не задан — цель считается валидной только если совпадает с текущим
+   * пользователем (standalone: пользователь один, передавать некому).
+   */
+  resolveTransferTarget?: (userId: string) => Promise<{ id: string; active: boolean } | null>;
   /**
    * ADR-089: сквозной обзор (ADMIN/LEAD) — `GET /` возвращает все проекты.
    * `undefined`/`false` — прежнее поведение (проекты пользователя).
@@ -359,13 +378,20 @@ function parseProjectAccessBody(
   return { ok: true, value: access };
 }
 
-/** PROP-133: снимок состояния доступа проекта (аудит «было/стало»). */
+/**
+ * PROP-133: снимок состояния доступа проекта (аудит «было/стало»).
+ *
+ * `owner_id` — владелец: смена владения (ADR-140 Ф3) — тоже изменение
+ * доступа, поэтому она видна в том же снимке.
+ */
 function accessSnapshot(project: Project): {
+  owner_id: string;
   members: AccessRoleMap;
   group_members: AccessRoleMap | null;
   everyone_role: ProjectRole | null;
 } {
   return {
+    owner_id: project.ownerId,
     members: project.members ?? {},
     group_members: project.groupMembers ?? null,
     everyone_role: project.everyoneRole ?? null,
@@ -415,6 +441,12 @@ export function createProjectRoutes(
     opts.canEditContent ? opts.canEditContent(c, project, userId) : true;
   const canRead = (c: Context, project: Project, userId: string): boolean =>
     opts.canRead ? opts.canRead(c, project, userId) : true;
+  /**
+   * ADR-140 Ф3: право передачи владения. Дефолт — только текущий владелец
+   * (standalone: пользователь один).
+   */
+  const canTransfer = (c: Context, project: Project, userId: string): boolean =>
+    opts.canTransfer ? opts.canTransfer(c, project, userId) : project.ownerId === userId;
 
   const messages: ProjectRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
 
@@ -1016,6 +1048,101 @@ export function createProjectRoutes(
     // подключениям.
     await opts.onProjectChanged?.(project.id, accessChange ? 'access' : 'updated');
     return c.json(serializeProject(project));
+  });
+
+  /**
+   * ADR-140 Ф3: передача владения проектом (`POST /:id/transfer`).
+   *
+   * Право — текущий владелец или `ADMIN` (`canTransfer`); `LEAD`, участники
+   * с ролью `owner` и `EDITOR` — нет. Новый владелец становится `owner`
+   * (`ownerId` + `members`), прежний владелец (если это другой пользователь) —
+   * `editor` (доступ к содержимому не теряется, право управления — да).
+   *
+   * Ошибки: `404 NOT_FOUND` (нет проекта), `403 FORBIDDEN` (нет права),
+   * `400 VALIDATION_ERROR` (нет `user_id`, лишние поля, передача самому себе,
+   * сервисная идентичность, неизвестный/неактивный получатель).
+   */
+  app.post('/:id/transfer', auth.requireAuth, async (c) => {
+    const id = c.req.param('id');
+    // Гибрид: удалённый проект (`remote:`) — владение передаётся на сервере
+    // проекта; локальная копия прав доступа не имеет.
+    if (isRemoteRef(id)) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Передача владения удалённым проектом не поддерживается',
+        },
+      }, 400);
+    }
+    const project = await store.load(id);
+    if (!project) {
+      return jsonNotFound(c);
+    }
+    const userId = await currentUserId(c);
+    if (!canTransfer(c, project, userId)) {
+      return jsonForbidden(c);
+    }
+
+    const rawBody = await c.req.json().catch(() => ({}));
+    const parsed = projectTransferSchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
+    }
+    const targetId = parsed.data.user_id;
+    // Передача самому себе — владелец не меняется (опечатка, а не намерение).
+    if (targetId === userId) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Передача владения самому себе не поддерживается',
+        },
+      }, 400);
+    }
+    // Сервисные идентичности (`service:<keyId>`) — не люди: владельцем
+    // проекта пользователь не становится.
+    if (targetId.startsWith('service:')) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Передача владения сервисной идентичности не поддерживается',
+        },
+      }, 400);
+    }
+    // Получатель должен существовать и быть активным.
+    const target = opts.resolveTransferTarget
+      ? await opts.resolveTransferTarget(targetId)
+      : (targetId === userId ? { id: targetId, active: true } : null);
+    if (!target || !target.active) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Пользователь-получатель не найден или неактивен',
+        },
+      }, 400);
+    }
+
+    // Правка — атомарно (`store.mutate`): чтение и запись под локом хранилища
+    // (parallelная правка другого контура не теряется).
+    let accessBefore: unknown = null;
+    const updated = await store.mutate(id, (p) => {
+      accessBefore = accessSnapshot(p);
+      const previousOwnerId = p.ownerId;
+      p.ownerId = targetId;
+      p.members = { ...(p.members ?? {}), [targetId]: ProjectRole.OWNER };
+      // Прежний владелец не теряет доступ к содержимому проекта.
+      if (previousOwnerId && previousOwnerId !== targetId) {
+        p.members[previousOwnerId] = ProjectRole.EDITOR;
+      }
+      p.updatedAt = new Date().toISOString();
+    });
+    if (!updated) {
+      return jsonNotFound(c);
+    }
+    await auditAccessChange(userId, accessBefore, accessSnapshot(updated));
+    // ADR-140 Ф2: смена состояния доступа — вид `access` (подписки клиентов
+    // на сессии проекта пересчитываются).
+    await opts.onProjectChanged?.(updated.id, 'access');
+    return c.json(serializeProject(updated));
   });
 
   app.delete('/:id', auth.requireAuth, async (c) => {

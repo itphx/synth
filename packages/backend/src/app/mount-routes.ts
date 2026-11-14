@@ -169,7 +169,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // Projects routes
   // ADR-140 Ф2: хаб подписок — при смене состояния доступа к проекту
   // пересчитываются подписки уже подключённых клиентов (WS/SSE).
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles, browserProfiles, securityAudit, eventHub));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles, browserProfiles, securityAudit, eventHub, profilesStore));
 
   // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
   // core-фабрика, RBAC — те же правила проекта (чтение — право чтения,

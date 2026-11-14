@@ -355,6 +355,16 @@ export const projectUpdateSchema = z.object({
 });
 
 /**
+ * ADR-140 Ф3: тело передачи владения проектом
+ * (`POST /api/v2/projects/:id/transfer`).
+ *
+ * `user_id` — id нового владельца (обязателен, непустая строка). Тело
+ * **strict**: лишнее поле — ошибка валидации, а не молчаливое игнорирование
+ * (опечатка в теле иначе «передала бы владение не туда»).
+ */
+export const projectTransferSchema = z.object({ user_id: z.string().min(1) }).strict();
+
+/**
  * PROP-124: правило хоста в политике SSH-ключа.
  *
  * Семантика — общая с ADR-099 (`matchTlsHostPattern`/`isValidHostRule`):

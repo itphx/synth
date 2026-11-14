@@ -29,6 +29,10 @@ const OWNER = 'owner-user';
 const EDITOR = 'editor-user';
 const VIEWER = 'viewer-user';
 const STRANGER = 'stranger-user';
+const ADMIN = 'admin-user';
+
+/** ADR-140 Ф3: пользователи, которым можно передать владение (существуют и активны). */
+const TRANSFER_TARGETS = new Set(['target-user', 'inactive-user']);
 
 interface AuditEntry {
   scope: string;
@@ -38,75 +42,92 @@ interface AuditEntry {
   after: unknown;
 }
 
+let tmpDir: string;
+let store: ProjectStore;
+let app: Hono;
+let audit: MemorySecurityAuditRepository;
+let projectChanges: string[];
+
+beforeEach(async () => {
+  tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-access-'));
+  store = new ProjectStore({ dataDir: tmpDir });
+  audit = new MemorySecurityAuditRepository();
+  projectChanges = [];
+  app = new Hono();
+  app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store, undefined, {
+    getCurrentUserId: (c) => c.req.header('x-user-id') ?? OWNER,
+    // `canManage` — автор / LEAD (управление доступом).
+    canManage: (_c, project, userId) =>
+      project.ownerId === userId || userId === 'lead-user',
+    // `canEditContent` — дополнительно `EDITOR` (контент, но не доступ).
+    canEditContent: (_c, project, userId) =>
+      project.ownerId === userId
+      || userId === 'lead-user'
+      || project.members?.[userId] === ProjectRole.EDITOR,
+    canRead: (_c, project, userId) =>
+      project.ownerId === userId
+      || userId === 'lead-user'
+      || userId in (project.members ?? {}),
+    // ADR-140 Ф3: передача владения — только текущий владелец или `ADMIN`
+    // (`LEAD` — нет: сквозной обзор ≠ право передачи).
+    canTransfer: (_c, project, userId) =>
+      project.ownerId === userId || userId === ADMIN,
+    // ADR-140 Ф3: получатель должен существовать и быть активен.
+    resolveTransferTarget: async (userId) => {
+      if (!TRANSFER_TARGETS.has(userId)) return null;
+      return { id: userId, active: userId !== 'inactive-user' };
+    },
+    onProjectChanged: (projectId, kind) => {
+      projectChanges.push(`${projectId}:${kind}`);
+    },
+    securityAudit: audit,
+  }));
+});
+
+afterEach(async () => {
+  await rm(tmpDir, { recursive: true, force: true });
+});
+
+/** Записи журнала аудита (порт `SecurityAuditRepository`) — плоская проекция. */
+const auditRecords = async (): Promise<AuditEntry[]> =>
+  (await audit.list()).map((entry) => ({
+    scope: entry.scope,
+    action: entry.action,
+    actor: entry.actor,
+    before: entry.before,
+    after: entry.after,
+  }));
+
+const post = (body: unknown, userId = OWNER): Promise<Response> =>
+  Promise.resolve(app.request('/api/v2/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+    body: JSON.stringify(body),
+  }));
+
+const put = (id: string, body: unknown, userId = OWNER): Promise<Response> =>
+  Promise.resolve(app.request(`/api/v2/projects/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+    body: JSON.stringify(body),
+  }));
+
+/** ADR-140 Ф3: передача владения (`POST /:id/transfer`). */
+const transfer = (id: string, body: unknown, userId = OWNER): Promise<Response> =>
+  Promise.resolve(app.request(`/api/v2/projects/${id}/transfer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+    body: JSON.stringify(body),
+  }));
+
+async function createOwned(): Promise<string> {
+  const res = await post({ name: 'P' });
+  expect(res.status).toBe(201);
+  const body = (await res.json()) as { id: string };
+  return body.id;
+}
+
 describe('PROP-133: состояние доступа к проекту (core-фабрика)', () => {
-  let tmpDir: string;
-  let store: ProjectStore;
-  let app: Hono;
-  let audit: MemorySecurityAuditRepository;
-  let projectChanges: string[];
-
-  beforeEach(async () => {
-    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-access-'));
-    store = new ProjectStore({ dataDir: tmpDir });
-    audit = new MemorySecurityAuditRepository();
-    projectChanges = [];
-    app = new Hono();
-    app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store, undefined, {
-      getCurrentUserId: (c) => c.req.header('x-user-id') ?? OWNER,
-      // `canManage` — автор / LEAD (управление доступом).
-      canManage: (_c, project, userId) =>
-        project.ownerId === userId || userId === 'lead-user',
-      // `canEditContent` — дополнительно `EDITOR` (контент, но не доступ).
-      canEditContent: (_c, project, userId) =>
-        project.ownerId === userId
-        || userId === 'lead-user'
-        || project.members?.[userId] === ProjectRole.EDITOR,
-      canRead: (_c, project, userId) =>
-        project.ownerId === userId
-        || userId === 'lead-user'
-        || userId in (project.members ?? {}),
-      onProjectChanged: (projectId, kind) => {
-        projectChanges.push(`${projectId}:${kind}`);
-      },
-      securityAudit: audit,
-    }));
-  });
-
-  afterEach(async () => {
-    await rm(tmpDir, { recursive: true, force: true });
-  });
-
-  /** Записи журнала аудита (порт `SecurityAuditRepository`) — плоская проекция. */
-  const auditRecords = async (): Promise<AuditEntry[]> =>
-    (await audit.list()).map((entry) => ({
-      scope: entry.scope,
-      action: entry.action,
-      actor: entry.actor,
-      before: entry.before,
-      after: entry.after,
-    }));
-
-  const post = (body: unknown, userId = OWNER): Promise<Response> =>
-    Promise.resolve(app.request('/api/v2/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-      body: JSON.stringify(body),
-    }));
-
-  const put = (id: string, body: unknown, userId = OWNER): Promise<Response> =>
-    Promise.resolve(app.request(`/api/v2/projects/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-      body: JSON.stringify(body),
-    }));
-
-  async function createOwned(): Promise<string> {
-    const res = await post({ name: 'P' });
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as { id: string };
-    return body.id;
-  }
-
   it('POST: состояние доступа принимается и попадает в DTO', async () => {
     const res = await post({
       name: 'P',
@@ -338,5 +359,104 @@ describe('PROP-133: состояние доступа к проекту (core-ф
     expect(stored?.members[VIEWER]).toBe('viewer');
     expect(stored?.groupMembers?.['team-a']).toBe('editor');
     expect(stored?.everyoneRole).toBe('editor');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR-140 Ф3: передача владения проектом
+// ---------------------------------------------------------------------------
+
+describe('ADR-140 Ф3: передача владения проектом (core-фабрика)', () => {
+  it('владелец передаёт владение (200): owner_id, members, событие `access`, аудит', async () => {
+    const id = await createOwned();
+    projectChanges.length = 0;
+    await audit.clear();
+
+    const res = await transfer(id, { user_id: 'target-user' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      owner_id: string;
+      members: Record<string, string>;
+    };
+    expect(body.owner_id).toBe('target-user');
+    expect(body.members['target-user']).toBe('owner');
+    // Прежний владелец не теряет доступ к содержимому.
+    expect(body.members[OWNER]).toBe('editor');
+
+    const stored = await store.load(id);
+    expect(stored?.ownerId).toBe('target-user');
+    expect(stored?.members[OWNER]).toBe(ProjectRole.EDITOR);
+
+    // ADR-140 Ф2: смена доступа — вид `access` (подписки пересчитываются).
+    expect(projectChanges).toContain(`${id}:access`);
+
+    // Аудит: `owner_id` в before/after.
+    const records = await auditRecords();
+    expect(records).toHaveLength(1);
+    const entry = records[0]!;
+    expect(entry.scope).toBe('projects');
+    expect(entry.actor).toBe(OWNER);
+    const before = entry.before as { owner_id: string };
+    const after = entry.after as { owner_id: string; members: Record<string, string> };
+    expect(before.owner_id).toBe(OWNER);
+    expect(after.owner_id).toBe('target-user');
+    expect(after.members['target-user']).toBe('owner');
+    expect(after.members[OWNER]).toBe('editor');
+  });
+
+  it('ADMIN передаёт чужой проект (200)', async () => {
+    const id = await createOwned();
+    const res = await transfer(id, { user_id: 'target-user' }, ADMIN);
+    expect(res.status).toBe(200);
+    expect((await store.load(id))?.ownerId).toBe('target-user');
+  });
+
+  it('чужой пользователь и LEAD — 403', async () => {
+    const id = await createOwned();
+    for (const actor of [STRANGER, 'lead-user']) {
+      const res = await transfer(id, { user_id: 'target-user' }, actor);
+      expect(res.status, actor).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code, actor).toBe('FORBIDDEN');
+    }
+    expect((await store.load(id))?.ownerId).toBe(OWNER);
+  });
+
+  it('передача самому себе — 400', async () => {
+    const id = await createOwned();
+    const res = await transfer(id, { user_id: OWNER });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    expect((await store.load(id))?.ownerId).toBe(OWNER);
+  });
+
+  it('сервисная идентичность (`service:*`) — 400', async () => {
+    const id = await createOwned();
+    const res = await transfer(id, { user_id: 'service:abc' });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    expect((await store.load(id))?.ownerId).toBe(OWNER);
+  });
+
+  it('неизвестный и неактивный получатель — 400', async () => {
+    const id = await createOwned();
+    for (const userId of ['ghost-user', 'inactive-user']) {
+      const res = await transfer(id, { user_id: userId });
+      expect(res.status, userId).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code, userId).toBe('VALIDATION_ERROR');
+    }
+    expect((await store.load(id))?.ownerId).toBe(OWNER);
+  });
+
+  it('тело без `user_id` — 400', async () => {
+    const id = await createOwned();
+    const res = await transfer(id, {});
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('несуществующий проект — 404', async () => {
+    const res = await transfer('00000000-0000-4000-8000-000000000000', { user_id: 'target-user' });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
   });
 });
