@@ -5,7 +5,7 @@ import type { SnippetDiagnostic } from './types.js';
 import type { SnippetIndex } from './registry.js';
 
 /**
- * PROP-126 §4: раскрытие `#`-сниппетов в пользовательском тексте.
+ * ADR-141 §4: раскрытие `#`-сниппетов в пользовательском тексте.
  *
  * Правила:
  *

@@ -153,7 +153,7 @@ import { createAuthorityTurnContext, type AuthorityTurnContext } from './authori
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
-// PROP-126 §3: пользовательский вызов скиллов через `$name` (в тексте
+// ADR-141 §3: пользовательский вызов скиллов через `$name` (в тексте
 // сообщения; резолв — тем же путём, что у `/skill-name`).
 import { resolveDollarSkills } from './commands/dollar-skills.js';
 import { parseInput } from './input-surface/parser.js';
@@ -3104,7 +3104,7 @@ export class ChatOrchestrator {
 
     // `/summary` и `/compact` — ручной запуск сжатия контекста (ADR-119).
     // Профиль задан командой (`compressionMode`): `summarization` — итоги
-    // беседы, `compaction` — рабочее состояние по коду/проекту (PROP-126 §1).
+    // беседы, `compaction` — рабочее состояние по коду/проекту (ADR-141 §1).
     if (result.status === 'summarization') {
       const mode: CompressionMode = result.compressionMode === 'compaction' ? 'compaction' : 'summarization';
       if (!this._canRunManualCompression(session, mode)) {
@@ -3166,7 +3166,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * PROP-126 §3: пользовательский вызов скиллов через `$name`.
+   * ADR-141 §3: пользовательский вызов скиллов через `$name`.
    *
    * Тело скилла (`<skill_content>`) добавляется к user-сообщению; исходный
    * текст пользователя сохраняется. Гейты — те же, что у `/skill-name`
@@ -3175,7 +3175,7 @@ export class ChatOrchestrator {
    * (имя — в `unavailable`).
    *
    * Вызывается только для обычного сообщения пользователя: в `/`-шаблонах
-   * `$ARGUMENTS`/`$1` — не токен скилла (PROP-126 §3).
+   * `$ARGUMENTS`/`$1` — не токен скилла (ADR-141 §3).
    */
   private async _handleDollarSkills(args: ProcessCommandArgs): Promise<ProcessMessageResult | null> {
     if (!this._skillRuntime) return null;
@@ -3207,7 +3207,7 @@ export class ChatOrchestrator {
         .join(', ');
       warning(
         'ORCHESTRATOR',
-        `PROP-126: скиллы по $ недоступны — ${details || result.unavailable.join(', ')}`,
+        `ADR-141: скиллы по $ недоступны — ${details || result.unavailable.join(', ')}`,
       );
     }
     if (!result.prompt || result.skills.length === 0) return null;
@@ -3239,7 +3239,7 @@ export class ChatOrchestrator {
    * ADR-119: доступен ли ручной запуск сжатия контекста в указанном профиле.
    *
    * Профиль задан явно (`/summary` — `summarization`, `/compact` —
-   * `compaction`, PROP-126 §1), поэтому проверка **не зависит** от
+   * `compaction`, ADR-141 §1), поэтому проверка **не зависит** от
    * авто-стратегии сессии (`contextOptimization`): явная команда пользователя
    * работает всегда, когда есть что покрывать, и не меняет настройки сессии.
    * Провайдер/модель нужны для вызова сжатия — без них сжимать нечем.
@@ -9103,7 +9103,7 @@ export class ChatOrchestrator {
 /**
  * Заменяет текстовую часть сообщения, сохраняя медиа-части (ADR-115):
  * вложение — отдельная часть, её нельзя терять при подстановке блока
- * скилла в текст сообщения (PROP-126 §3).
+ * скилла в текст сообщения (ADR-141 §3).
  */
 function replaceTextPart(parts: Part[] | undefined, content: string): Part[] {
   const list = parts ?? [];

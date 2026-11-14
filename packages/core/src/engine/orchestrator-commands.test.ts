@@ -202,7 +202,7 @@ describe('ChatOrchestrator — slash-команды (ADR-046 §7)', () => {
     expect(summarizationRequests[0]?.metadata?.mode).toBe('summarization');
   });
 
-  it('/compact → summarization_request с mode=compaction (PROP-126 §1, ADR-119)', async () => {
+  it('/compact → summarization_request с mode=compaction (ADR-141 §1, ADR-119)', async () => {
     const { summarizationRequests, events } = await run('/compact', {
       contextOptimizer: makeOptimizer(true),
       commandRuntime: {

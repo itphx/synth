@@ -1112,7 +1112,7 @@ export async function createBackendDeps(
     toolsets: config.synth.skills.toolsets,
   });
 
-  // PROP-126 §4: сервис сниппетов (`#`) — три уровня (`instance`/`project`/`user`),
+  // ADR-141 §4: сервис сниппетов (`#`) — три уровня (`instance`/`project`/`user`),
   // discovery + запись файлов + раскрытие (mirror core).
   const snippetService = new SnippetService({
     dataDir,
@@ -2367,7 +2367,7 @@ export async function createBackendDeps(
     skillService,
     bundleStore,
     commandService,
-    // PROP-126 §4: сервис сниппетов (`#`) — HTTP-контур `/api/v2/snippets`.
+    // ADR-141 §4: сервис сниппетов (`#`) — HTTP-контур `/api/v2/snippets`.
     snippetService,
     orchestrator,
     // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного

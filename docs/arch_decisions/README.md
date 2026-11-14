@@ -104,6 +104,7 @@
 | ADR-136 | Модель доверия shell — аудит исполнений и внешний чекер команд | ⚠️ Частично | [adr-136-shell-trust.md](./adr-136-shell-trust.md) |
 | ADR-137 | Изоляция исполнителя — non-root, сеть и файловая система | ⚠️ Частично | [adr-137-executor-isolation.md](./adr-137-executor-isolation.md) |
 | ADR-138 | Контур исполнения плагинных инструментов — capability → пул, `ctx.runtime` | ⚠️ Частично | [adr-138-plugin-execution-contour.md](./adr-138-plugin-execution-contour.md) |
+| ADR-141 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | ⚠️ Частично | [adr-141-input-surface-commands-mentions-snippets.md](./adr-141-input-surface-commands-mentions-snippets.md) |
 
 ## Предложения
 
@@ -129,7 +130,6 @@
 | PROP-105 | Координация в нескольких репликах: сессии, очередь, общее состояние | 🧩 Предложение | [prop-105-multi-replica-coordination.md](./prop-105-multi-replica-coordination.md) |
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
-| PROP-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | 🧩 Предложение | [prop-126-input-surface-mentions-snippets.md](./prop-126-input-surface-mentions-snippets.md) |
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-132 | Встроенный терминал в UI | 🧩 Предложение | [prop-132-ui-terminal.md](./prop-132-ui-terminal.md) |
 | PROP-140 | Класс исполнителей MCP — пулы, хостящие MCP-серверы | 🧩 Предложение | [prop-140-mcp-executor-class.md](./prop-140-mcp-executor-class.md) |
@@ -171,6 +171,7 @@
 | PROP-108 | [ADR-106](./adr-106-authority-layer.md) | принято |
 | PROP-124 | [ADR-124](./adr-124-remote-ssh-access.md) | принято |
 | PROP-125 | [ADR-125](./adr-125-hybrid-remote-mcp.md) | принято |
+| PROP-126 | [ADR-141](./adr-141-input-surface-commands-mentions-snippets.md) | принято |
 | PROP-127 | [ADR-127](./adr-127-parallel-tool-execution.md) | принято |
 | PROP-133 | [ADR-140](./adr-140-project-access-sharing.md) | реализованы Ф1–Ф3 |
 | PROP-135 | [ADR-135](./adr-135-execution-contour.md) | принято |
@@ -188,5 +189,5 @@
 
 ---
 
-Всего документов: 121 (Решения: 60, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 2).
-Удалено: 27 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
+Всего документов: 121 (Решения: 60, Частично: 28, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 2).
+Удалено: 28 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

@@ -262,7 +262,7 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
   })
 })
 
-describe('ChatInput — `$`-пикер скиллов (PROP-126 §3)', () => {
+describe('ChatInput — `$`-пикер скиллов (ADR-141 §3)', () => {
   it('открывается на `$`, а выбор подставляет `$name ` без отправки', async () => {
     const container = await renderInput()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
@@ -390,7 +390,7 @@ describe('ChatInput — `$`-пикер скиллов (PROP-126 §3)', () => {
   })
 
   it('скилл-команда из реестра команд (`kind: skill`) тоже попадает в пикер', async () => {
-    // Реестр команд — второй источник `$`-пикера (PROP-126 §3): команда вида
+    // Реестр команд — второй источник `$`-пикера (ADR-141 §3): команда вида
     // `skill` предлагается, даже если её нет в реестре скиллов.
     useSkillsStore.setState({
       skills: [],
@@ -421,7 +421,7 @@ describe('ChatInput — `$`-пикер скиллов (PROP-126 §3)', () => {
   })
 })
 
-describe('ChatInput — `#`-пикер сниппетов (PROP-126 §4)', () => {
+describe('ChatInput — `#`-пикер сниппетов (ADR-141 §4)', () => {
   it('открывается на `#`, а выбор подставляет `#name ` без отправки', async () => {
     const container = await renderInput()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
@@ -569,7 +569,7 @@ describe('ChatInput — `#`-пикер сниппетов (PROP-126 §4)', () =>
   })
 })
 
-describe('ChatInput — `@`-пикер: агенты, пользователи, файлы (PROP-126 §2)', () => {
+describe('ChatInput — `@`-пикер: агенты, пользователи, файлы (ADR-141 §2)', () => {
   it('`@` показывает секции «Агенты», «Пользователи», «Файлы»', async () => {
     const container = await renderInput({ agents: [makeAgent('leader')] })
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement

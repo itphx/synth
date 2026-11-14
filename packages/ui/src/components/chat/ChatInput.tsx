@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react'
 import type { ClipboardEvent as ReactClipboardEvent } from 'react'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
@@ -15,6 +15,7 @@ import { MentionPopup, type MentionFileEntry, type MentionSelection, type Mentio
 import { CommandAutocomplete } from './CommandAutocomplete'
 import { SkillAutocomplete } from './SkillAutocomplete'
 import { SnippetAutocomplete } from './SnippetAutocomplete'
+import { composerTokenClass, highlightComposer } from './composerHighlight'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
@@ -71,12 +72,12 @@ const TAG_REGEX = /@(\w+)/g
 const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 /**
- * PROP-126 §2: предел файлов в `@`-пикере — список файлов workspace проекта
+ * ADR-141 §2: предел файлов в `@`-пикере — список файлов workspace проекта
  * показывается целиком только до этого числа (дальше — по фильтру запроса).
  */
 const MENTION_FILES_LIMIT = 50
 /**
- * PROP-126 §3: триггер `$`-пикера — `$` в начале слова (начало текста или
+ * ADR-141 §3: триггер `$`-пикера — `$` в начале слова (начало текста или
  * после пробела) и тело токена до курсора. Ядро резолвит `$`-токен по тем же
  * правилам (`engine/input-surface/parser.ts`), поэтому `$` внутри слова
  * (`a$b`) токеном не считается.
@@ -89,7 +90,7 @@ const SKILL_TRIGGER_REGEX = /(^|\s)\$([^\s$]*)$/u
 const SYMBOL_TOKEN_BODY_REGEX = /^[\p{L}][\p{L}\p{N}._-]*$/u
 
 /**
- * PROP-126 §4: триггер `#`-пикера — `#` в начале слова (начало текста или
+ * ADR-141 §4: триггер `#`-пикера — `#` в начале слова (начало текста или
  * после пробела) и тело токена до курсора. Прогон `#` (`##`, `###`) и пробел
  * после `#` — markdown-заголовок, а не сниппет (те же правила, что в
  * core-лекере `engine/input-surface/parser.ts`).
@@ -97,7 +98,7 @@ const SYMBOL_TOKEN_BODY_REGEX = /^[\p{L}][\p{L}\p{N}._-]*$/u
 const SNIPPET_TRIGGER_REGEX = /(^|\s)#([^\s#]*)$/u
 
 /**
- * PROP-126 §3: ищет `$`-токен в тексте до курсора.
+ * ADR-141 §3: ищет `$`-токен в тексте до курсора.
  *
  * Возвращает `null`, если триггера нет: `$` не в начале слова, тело токена
  * не имя (`$5` — цена) или после `$` пробел.
@@ -114,7 +115,7 @@ function findSkillTrigger(
 }
 
 /**
- * PROP-126 §4: ищет `#`-токен в тексте до курсора.
+ * ADR-141 §4: ищет `#`-токен в тексте до курсора.
  *
  * Возвращает `null`, если триггера нет: `#` не в начале слова, после `#`
  * пробел (markdown-заголовок) или прогон `#` (`##`), тело токена — не имя
@@ -334,7 +335,7 @@ export function ChatInput({
     position: { left: number }
   } | null>(null)
   /**
-   * PROP-126 §2: `@`-пикер — агенты, участники сессии (`@user`) и файлы
+   * ADR-141 §2: `@`-пикер — агенты, участники сессии (`@user`) и файлы
    * workspace проекта (`@file`). Пользователи приходят из `participants`
    * снимка сессии, файлы — из листинга workspace; список файлов кэшируется
    * по `projectId` на время сессии.
@@ -345,8 +346,9 @@ export function ChatInput({
   const [mentionMatches, setMentionMatches] = useState(0)
   /** Сессия, для которой данные `@`-пикера уже загружены (защита от повторных запросов). */
   const mentionLoadedRef = useRef<string | null>(null)
-  /** Проект текущей сессии — workspace для списка файлов `@`-пикера. */
+  /** Проект текущей сессии — workspace для списка файлов `@`-пикера и project-сниппетов. */
   const mentionProjectRef = useRef<string | null>(null)
+  const [mentionProjectId, setMentionProjectId] = useState<string | null>(null)
   /** Кэш списка файлов по `projectId` (workspace проекта не меняется на время сессии). */
   const mentionFilesCacheRef = useRef<Map<string, MentionFileEntry[]>>(new Map())
   // ADR-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
@@ -355,7 +357,7 @@ export function ChatInput({
     position: { left: number }
   } | null>(null)
   const [commandMatches, setCommandMatches] = useState(0)
-  // PROP-126 §3: `$`-пикер скиллов (триггер — `$` в начале слова).
+  // ADR-141 §3: `$`-пикер скиллов (триггер — `$` в начале слова).
   const [skillState, setSkillState] = useState<{
     query: string
     start: number
@@ -363,7 +365,7 @@ export function ChatInput({
     position: { left: number }
   } | null>(null)
   const [skillMatches, setSkillMatches] = useState(0)
-  // PROP-126 §4: `#`-пикер сниппетов (триггер — `#` в начале слова).
+  // ADR-141 §4: `#`-пикер сниппетов (триггер — `#` в начале слова).
   const [snippetState, setSnippetState] = useState<{
     query: string
     start: number
@@ -374,6 +376,11 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
+  // Подсветка ввода: overlay-слой под textarea повторяет текст с цветными
+  // токенами `/`, `$`, `#`, `@`; сам textarea прозрачный (каретка/выделение
+  // остаются браузерными).
+  const [inputScrollTop, setInputScrollTop] = useState(0)
+  const composerParts = useMemo(() => highlightComposer(value), [value])
   // ADR-115: позиция каретки после программной вставки маркеров. Применяется в
   // layout-эффекте уже после коммита React: синхронная установка и `setTimeout`
   // гонялись с перерисовкой, и браузер сбрасывал каретку в конец текста.
@@ -450,7 +457,7 @@ export function ChatInput({
   }, [retryText, sessionId, setValue])
 
   /**
-   * PROP-126 §2: данные `@`-пикера — участники сессии (`@user`) и файлы
+   * ADR-141 §2: данные `@`-пикера — участники сессии (`@user`) и файлы
    * workspace проекта (`@file`).
    *
    * Снимок сессии (`GET /api/v2/sessions/:id`) несёт `participants` и
@@ -463,6 +470,10 @@ export function ChatInput({
     if (!sessionId) return
     if (mentionLoadedRef.current !== sessionId) {
       mentionLoadedRef.current = sessionId
+      mentionProjectRef.current = null
+      setMentionProjectId(null)
+      setMentionUsers([])
+      setMentionFiles([])
       try {
         const session = await synthApi.getSession(sessionId)
         setMentionUsers(
@@ -471,6 +482,7 @@ export function ChatInput({
             .filter((user) => user.id.length > 0),
         )
         mentionProjectRef.current = session.project_id
+        setMentionProjectId(session.project_id)
       } catch {
         // Снимок сессии недоступен — пользователей нет; повтор при новом открытии.
         mentionLoadedRef.current = null
@@ -540,7 +552,7 @@ export function ChatInput({
       setCommandState(null)
     }
 
-    // PROP-126 §3: `$`-скилл — `$` в начале слова; внутри кода токен ядром не
+    // ADR-141 §3: `$`-скилл — `$` в начале слова; внутри кода токен ядром не
     // распознаётся, поэтому пикер там не открывается.
     const skillTrigger = isInsideCode(textBeforeCursor)
       ? null
@@ -556,7 +568,7 @@ export function ChatInput({
       setSkillState(null)
     }
 
-    // PROP-126 §4: `#`-сниппет — `#` в начале слова; внутри кода токен ядром
+    // ADR-141 §4: `#`-сниппет — `#` в начале слова; внутри кода токен ядром
     // не распознаётся, поэтому пикер там не открывается.
     const snippetTrigger = isInsideCode(textBeforeCursor)
       ? null
@@ -589,7 +601,7 @@ export function ChatInput({
   }, [])
 
   /**
-   * PROP-126 §3: подстановка выбранного скилла — `$<имя> ` (с пробелом,
+   * ADR-141 §3: подстановка выбранного скилла — `$<имя> ` (с пробелом,
    * чтобы токен не слипся со следующим словом). Каретка встаёт за вставку.
    */
   const handleSelectSkill = useCallback((name: string) => {
@@ -612,7 +624,7 @@ export function ChatInput({
   }, [])
 
   /**
-   * PROP-126 §4: подстановка выбранного сниппета — `#<имя> ` (с пробелом,
+   * ADR-141 §4: подстановка выбранного сниппета — `#<имя> ` (с пробелом,
    * чтобы токен не слипся со следующим словом). Каретка встаёт за вставку.
    */
   const handleSelectSnippet = useCallback((name: string) => {
@@ -635,7 +647,7 @@ export function ChatInput({
   }, [])
 
   /**
-   * PROP-126 §2: подстановка выбранного упоминания — `@<id> ` (для файла id —
+   * ADR-141 §2: подстановка выбранного упоминания — `@<id> ` (для файла id —
    * путь относительно корня workspace). Пробел в конце, чтобы токен не
    * слипся со следующим словом.
    */
@@ -1004,7 +1016,7 @@ export function ChatInput({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (mentionState) {
-      // PROP-126 §2: пока список `@`-пикера непуст — выбор у MentionPopup,
+      // ADR-141 §2: пока список `@`-пикера непуст — выбор у MentionPopup,
       // сообщение не отправляется. Пустой список (нет совпадений) — Enter
       // отправляет сообщение, как у `$`/`#`-пикеров.
       if (e.key === 'Enter' && !e.shiftKey && mentionMatches > 0) {
@@ -1018,7 +1030,7 @@ export function ChatInput({
       if (mentionMatches > 0) return
     }
 
-    // PROP-126 §3: пока открыт непустой список скиллов — навигация/выбор у
+    // ADR-141 §3: пока открыт непустой список скиллов — навигация/выбор у
     // SkillAutocomplete, сообщение не отправляется.
     if (skillState) {
       if (e.key === 'Escape') {
@@ -1035,7 +1047,7 @@ export function ChatInput({
       }
     }
 
-    // PROP-126 §4: пока открыт непустой список сниппетов — навигация/выбор у
+    // ADR-141 §4: пока открыт непустой список сниппетов — навигация/выбор у
     // SnippetAutocomplete, сообщение не отправляется.
     if (snippetState) {
       if (e.key === 'Escape') {
@@ -1121,11 +1133,32 @@ export function ChatInput({
         )}
 
         <div className={`pt-1 pl-2 pr-2 relative ${expanded ? 'flex-1 min-h-0' : ''}`}>
+          {/*
+            ADR-141: подсветка токенов `/`, `$`, `#`, `@`. Слой лежит под
+            textarea и повторяет текст; сам textarea прозрачный, поэтому
+            каретка/выделение остаются нативными.
+          */}
+          <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div
+              className="whitespace-pre-wrap break-words pl-2 pr-2 pt-1 text-sm leading-5 text-foreground"
+              style={{ transform: `translateY(-${inputScrollTop}px)` }}
+            >
+              {composerParts.map((part, index) =>
+                part.kind ? (
+                  <span key={index} className={composerTokenClass(part.kind)}>{part.text}</span>
+                ) : (
+                  <span key={index}>{part.text}</span>
+                ),
+              )}
+              {value.endsWith('\n') && <span>{'\u200b'}</span>}
+            </div>
+          </div>
           <textarea
             ref={textareaRef}
-            className={`overlay-scrollbar-target block w-full resize-none border-0 bg-transparent px-0 py-0 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-0 min-h-[1.25rem] ${
+            className={`overlay-scrollbar-target relative block w-full resize-none border-0 bg-transparent px-0 py-0 text-sm leading-5 text-transparent placeholder:text-muted-foreground/50 focus:outline-none focus:ring-0 min-h-[1.25rem] ${
               expanded ? 'h-full' : ''
             }`}
+            style={{ caretColor: 'var(--foreground)' }}
             placeholder={t('chat.input.placeholder')}
             rows={1}
             value={value}
@@ -1133,6 +1166,7 @@ export function ChatInput({
             onKeyDown={handleKeyDown}
             onMouseUp={handleMouseUp}
             onPaste={handlePaste}
+            onScroll={(event) => setInputScrollTop(event.currentTarget.scrollTop)}
           />
 
           <OverlayScrollbar
@@ -1181,6 +1215,7 @@ export function ChatInput({
               onSelect={handleSelectSnippet}
               onClose={() => setSnippetState(null)}
               onMatchesChange={handleSnippetMatches}
+              projectId={mentionProjectId}
             />
           )}
         </div>

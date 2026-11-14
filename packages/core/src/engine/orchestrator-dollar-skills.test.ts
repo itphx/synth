@@ -1,5 +1,5 @@
 /**
- * PROP-126 §3: пользовательский вызов скиллов через `$name` в оркестраторе —
+ * ADR-141 §3: пользовательский вызов скиллов через `$name` в оркестраторе —
  * тело скилла добавляется к user-сообщению, публикуется `skill.invoked`.
  *
  * Отдельно проверяется, что `$` **не** разбирается в `/`-командах: в шаблонах
@@ -121,7 +121,7 @@ afterEach(async () => {
   if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('ChatOrchestrator — $ скиллы (PROP-126 §3)', () => {
+describe('ChatOrchestrator — $ скиллы (ADR-141 §3)', () => {
   it('$skill → <skill_content> в user-сообщении + skill.invoked(source=user)', async () => {
     const { after, events, msg } = await run('сделай ревью $api-review', {
       skillRuntime: makeRuntime([discovered('api-review')]),
@@ -167,7 +167,7 @@ describe('ChatOrchestrator — $ скиллы (PROP-126 §3)', () => {
     expect(events.some((e) => e.type === 'skill.invoked')).toBe(false);
   });
 
-  it('/-команда: $ARGUMENTS не считается скиллом (PROP-126 §3)', async () => {
+  it('/-команда: $ARGUMENTS не считается скиллом (ADR-141 §3)', async () => {
     const { after, events, msg } = await run('/plan $ARGUMENTS', {
       skillRuntime: makeRuntime([discovered('ARGUMENTS'), discovered('api-review')]),
       commandRuntime: {

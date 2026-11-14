@@ -335,7 +335,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     executionProfiles,
     // PROP-135 (браузерный контур): каталог браузерных профилей сессии.
     browserProfiles,
-    // PROP-126 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
+    // ADR-141 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
     snippetService,
     // Рабочий каталог проекта — project-уровень сниппетов. Резолв тот же,
     // что у snippet-routes (относительный workspace — от `workspacesRoot`).
@@ -1173,7 +1173,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   }, { writeGuard: requireAdminOrScope('addons:install') }));
 
-  // PROP-126 §4: сниппеты (`#`) — core-фабрика. Права: инстанс-уровень —
+  // ADR-141 §4: сниппеты (`#`) — core-фабрика. Права: инстанс-уровень —
   // ADMIN (`writeGuard`), user-уровень — только свой, проектный — право
   // изменения содержимого проекта (`OWNER`/`EDITOR`, инвариант 21).
   app.route('/api/v2/snippets', createSnippetRoutes(auth as unknown as CoreAuthKit, {

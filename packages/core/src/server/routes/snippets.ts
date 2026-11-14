@@ -1,5 +1,5 @@
 /**
- * PROP-126 §4: HTTP-контур сниппетов (`#`).
+ * ADR-141 §4: HTTP-контур сниппетов (`#`).
  *
  * Одна реализация для standalone (core) и managed (backend): различаются
  * только guard'ы, резолвер пользователя и тексты (`opts`) — как у
@@ -13,7 +13,7 @@
  * | `DELETE /api/v2/snippets/:name` | удаление |
  * | `POST /api/v2/snippets/expand` | предпросмотр раскрытия (без записи) |
  *
- * Права (PROP-126 §4 «Кто пишет»):
+ * Права (ADR-141 §4 «Кто пишет»):
  * - `instance` — администратор (guard `opts.writeGuard`; standalone — пользователь один);
  * - `user` — только сам пользователь (каталог изолирован по `userId`);
  * - `project` — право изменения содержимого проекта (`OWNER`/`EDITOR`, инвариант 21).
@@ -40,7 +40,7 @@ export interface SnippetProjectStore {
 }
 
 export interface SnippetRoutesDeps {
-  /** Доменный сервис сниппетов (PROP-126 §4). */
+  /** Доменный сервис сниппетов (ADR-141 §4). */
   snippetService: SnippetService;
   /** Порт хранилища проектов (ADR-096): доступ к проекту и его workspace. */
   projectStore?: SnippetProjectStore;
@@ -87,7 +87,7 @@ export interface SnippetRoutesOptions {
   messages?: (c: Context) => SnippetRoutesMessages;
 }
 
-/** Доменный код ошибки → HTTP-код и код API (PROP-126 §4, общий формат `{error:{code,message}}`). */
+/** Доменный код ошибки → HTTP-код и код API (ADR-141 §4, общий формат `{error:{code,message}}`). */
 const SNIPPET_ERROR_HTTP: Record<SnippetErrorCode, { status: 400 | 404 | 409; code: string }> = {
   'invalid-name': { status: 400, code: 'VALIDATION_ERROR' },
   'invalid-alias': { status: 400, code: 'VALIDATION_ERROR' },
@@ -148,7 +148,7 @@ interface ResolvedSnippet {
 }
 
 /**
- * PROP-126 §4: HTTP-контур сниппетов.
+ * ADR-141 §4: HTTP-контур сниппетов.
  */
 export function createSnippetRoutes(
   auth: AuthKit,
@@ -197,7 +197,7 @@ export function createSnippetRoutes(
     }
   };
 
-  /** Имя сниппета: `[a-z][a-z0-9_-]{0,79}` (PROP-126 §4 «Формат»). */
+  /** Имя сниппета: `[a-z][a-z0-9_-]{0,79}` (ADR-141 §4 «Формат»). */
   const validateName = (c: Context, raw: string): Response | undefined => {
     const name = raw.trim();
     if (!SNIPPET_NAME_REGEX.test(name)) {

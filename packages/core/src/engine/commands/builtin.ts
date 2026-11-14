@@ -2,10 +2,10 @@ import type { CommandSummary } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
 
 /**
- * ADR-046 §7.2: встроенные продуктовые команды Фазы 2. `/compact` (PROP-126 §1)
+ * ADR-046 §7.2: встроенные продуктовые команды Фазы 2. `/compact` (ADR-141 §1)
  * — ручной запуск компактизации контекста (ADR-119).
  * `/init` (ADR-069 §8.1) генерирует prompt для LLM (`status: 'prompt'`), а не
- * локальный ответ; `/review` (PROP-126 §1) — тоже prompt-команда (ревью
+ * локальный ответ; `/review` (ADR-141 §1) — тоже prompt-команда (ревью
  * изменений кода в git-репозитории).
  */
 export const BUILTIN_COMMAND_NAMES = ['help', 'skills', 'commands', 'summary', 'compact', 'init', 'review'] as const;
@@ -154,14 +154,14 @@ and reconcile it with the current state of the codebase.`;
 }
 
 /**
- * PROP-126 §1: prompt встроенной команды `/review` — ревью **изменений кода**
+ * ADR-141 §1: prompt встроенной команды `/review` — ревью **изменений кода**
  * в git-репозитории (адаптация opencode `review.txt`). Model-facing текст на
  * английском — единый язык с `/init` и LLM-каналом `system-messages` (ADR-041).
  *
  * Аргумент (`commit|branch|pr`) — цель ревью; без аргумента — незакоммиченные
  * изменения рабочего дерева. Промпт требует от модели **сказать**, что ревью
  * изменений недоступно (нет git-репозитория/рабочего каталога/самого diff), а
- * не выдумывать изменения: `/review` — не универсальное ревью (PROP-126 §1),
+ * не выдумывать изменения: `/review` — не универсальное ревью (ADR-141 §1),
  * в объём работ входят только изменения кода.
  */
 export function renderReviewPrompt(args: string): string {

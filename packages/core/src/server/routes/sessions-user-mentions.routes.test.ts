@@ -1,5 +1,5 @@
 /**
- * PROP-126 §2.1: `@user` — граница «агенту / пользователю».
+ * ADR-141 §2.1: `@user` — граница «агенту / пользователю».
  *
  * - текст до первого `@user` уходит в очередь;
  * - хвост от `@user` сохраняется сразу как user-directed, публикует
@@ -50,7 +50,7 @@ function createMockOrchestrator() {
   };
 }
 
-describe('POST /api/v2/sessions/:id/prompt — @user (PROP-126 §2.1)', () => {
+describe('POST /api/v2/sessions/:id/prompt — @user (ADR-141 §2.1)', () => {
   let tmpDir: string;
   let events: BusEvent[];
 

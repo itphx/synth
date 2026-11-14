@@ -1,12 +1,12 @@
 /**
- * PROP-126 §3: пользовательский вызов скилла через `$name`.
+ * ADR-141 §3: пользовательский вызов скилла через `$name`.
  *
- * Зачем: `/skill-name` — устаревший алиас (PROP-126 §1), основной триггер
+ * Зачем: `/skill-name` — устаревший алиас (ADR-141 §1), основной триггер
  * скилла — `$name` **в тексте сообщения**. Резолв тот же, что у `/`-команды
  * (`CommandService`, case `skill`), но токен ищется в тексте, а не в начале
  * сообщения.
  *
- * Правила (PROP-126 §3):
+ * Правила (ADR-141 §3):
  *
  * - в контекст попадает **тело скилла** (`<skill_content>` + base dir +
  *   supporting-файлы), а не вызов инструмента: модель дальше сама вызывает
@@ -90,11 +90,11 @@ export interface DollarSkillsResult {
   reasons?: Record<string, DollarSkillUnavailableReason>;
 }
 
-/** Заголовок блока скилла в промпте (PROP-126 §3). */
+/** Заголовок блока скилла в промпте (ADR-141 §3). */
 const SKILL_BLOCK_HEADER = '[skills requested by user:';
 
 /**
- * PROP-126 §3: резолвит `$`-скиллы в тексте сообщения.
+ * ADR-141 §3: резолвит `$`-скиллы в тексте сообщения.
  *
  * Возвращает `prompt` (тела доступных скиллов) и списки загруженных/
  * недоступных скиллов. Текст сообщения не меняется — вызывающий сам решает,
@@ -107,7 +107,7 @@ export async function resolveDollarSkills(
   const mentions = parseInput(text).skills;
   if (mentions.length === 0) return { skills: [], unavailable: [] };
 
-  // Дедуп по id, порядок появления сохраняется (PROP-126 §3).
+  // Дедуп по id, порядок появления сохраняется (ADR-141 §3).
   const names: string[] = [];
   const seen = new Set<string>();
   for (const mention of mentions) {

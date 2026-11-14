@@ -20,6 +20,7 @@ import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import { ExpandableListRow, RowBadge } from '@/components/panels/ExpandableListRow'
+import { SnippetScopeEditor } from '@/components/snippets/SnippetScopeEditor'
 import { ProjectAccessProjectionField } from '@/components/ui/ProjectAccessProjectionField'
 import {
   accessProjectionOf,
@@ -678,6 +679,17 @@ export function ProjectTab() {
             failed={skillsFailed}
             isPending={(name) => isPending(`skill:${name}`)}
             onToggle={handleToggleProjectSkill}
+          />
+        </Section>
+      )}
+
+      {/* ADR-141 §4: проектные сниппеты — `#name` в workspace проекта. */}
+      {project && (
+        <Section title={t('projectTab.snippets.title')}>
+          <SnippetScopeEditor
+            scope="project"
+            projectId={project.id}
+            canEdit={canEditProject}
           />
         </Section>
       )}

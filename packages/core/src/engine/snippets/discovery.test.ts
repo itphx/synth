@@ -1,5 +1,5 @@
 /**
- * PROP-126 §4: discovery сниппетов — три уровня (`instance` / `project` / `user`),
+ * ADR-141 §4: discovery сниппетов — три уровня (`instance` / `project` / `user`),
  * приоритет `user > project > instance`, project-trust гейт и разбор frontmatter.
  */
 
@@ -42,7 +42,7 @@ async function writeSnippet(
   return file;
 }
 
-describe('buildSnippetSources — уровни и приоритет (PROP-126 §4)', () => {
+describe('buildSnippetSources — уровни и приоритет (ADR-141 §4)', () => {
   it('порядок источников: user > project > instance', () => {
     const sources = buildSnippetSources({
       dataDir,
@@ -118,7 +118,7 @@ describe('scanSnippetSource — чтение файлов', () => {
   });
 });
 
-describe('parseSnippetFile — frontmatter (PROP-126 §4 «Формат»)', () => {
+describe('parseSnippetFile — frontmatter (ADR-141 §4 «Формат»)', () => {
   const source: SnippetSource = { scope: 'instance', dir: '/tmp/x', trusted: true };
 
   it('имя берётся из frontmatter, алиасы — списком', () => {

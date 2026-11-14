@@ -89,7 +89,7 @@ export type CommandResolveStatus =
  * ADR-119: профиль сжатия контекста для ручного запуска.
  *
  * - `summarization` — итоги беседы (`/summary`);
- * - `compaction` — рабочее состояние по коду/проекту (`/compact`, PROP-126 §1).
+ * - `compaction` — рабочее состояние по коду/проекту (`/compact`, ADR-141 §1).
  */
 export type CommandCompressionMode = 'summarization' | 'compaction';
 
@@ -123,7 +123,7 @@ export interface CommandResolveResult {
   /**
    * ADR-119: профиль сжатия для ручного запуска (`status: 'summarization'`).
    *
-   * `/summary` — `summarization`, `/compact` — `compaction` (PROP-126 §1).
+   * `/summary` — `summarization`, `/compact` — `compaction` (ADR-141 §1).
    * Поле аддитивное: не задано — режим определяет эффективный режим сессии.
    */
   compressionMode?: CommandCompressionMode;

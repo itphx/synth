@@ -5,7 +5,7 @@ import { useI18n } from '@/lib/i18n'
 import { cn, resolveColor } from '@/lib/utils'
 import type { AgentInfo } from '@/lib/api/synthApi'
 
-/** Участник сессии, доступный для упоминания (`@user`, PROP-126 §2.1). */
+/** Участник сессии, доступный для упоминания (`@user`, ADR-141 §2.1). */
 export interface MentionUserEntry {
   /** id пользователя — именно он подставляется в текст (`@<id>`). */
   id: string
@@ -13,7 +13,7 @@ export interface MentionUserEntry {
   label: string
 }
 
-/** Файл рабочего каталога (`@file`, PROP-126 §2). */
+/** Файл рабочего каталога (`@file`, ADR-141 §2). */
 export interface MentionFileEntry {
   /** Путь относительно корня workspace — именно он подставляется. */
   path: string
@@ -59,7 +59,7 @@ type MentionRow =
   | { kind: 'file'; id: string; label: string }
 
 /**
- * PROP-126 §2: `@`-пикер над композером — агенты, участники сессии и файлы
+ * ADR-141 §2: `@`-пикер над композером — агенты, участники сессии и файлы
  * рабочего каталога.
  *
  * Источники данных приходят от родителя (`ChatInput`): агенты — из реестра

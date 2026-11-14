@@ -1,5 +1,5 @@
 /**
- * PROP-126 §4: раскрытие `#`-сниппетов в приёме промпта (`POST
+ * ADR-141 §4: раскрытие `#`-сниппетов в приёме промпта (`POST
  * /api/v2/sessions/:id/prompt`) — до очереди и до LLM.
  *
  * Проверяется:
@@ -70,7 +70,7 @@ function createMockOrchestrator() {
   };
 }
 
-describe('POST /api/v2/sessions/:id/prompt — раскрытие сниппетов (PROP-126 §4)', () => {
+describe('POST /api/v2/sessions/:id/prompt — раскрытие сниппетов (ADR-141 §4)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -244,6 +244,45 @@ describe('POST /api/v2/sessions/:id/prompt — раскрытие сниппет
       expect(result.metadata?.snippetExpansions).toEqual(['proj']);
     } finally {
       await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('project-уровень берётся из project.workspace, а не из worktree сессии', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'synth-session-snippets-project-'));
+    const worktree = await mkdtemp(join(tmpdir(), 'synth-session-snippets-worktree-'));
+    try {
+      const { app, sessionManager, projectStore, snippetService } = createTestApp({
+        trustedProjectDirs: [workspace],
+      });
+      const project = projectStore.create('P', 'local', { workspace });
+      await projectStore.save(project);
+      await snippetService.create({
+        name: 'proj',
+        body: 'ИЗ КОРНЯ ПРОЕКТА',
+        scope: 'project',
+        projectWorkspace: workspace,
+      });
+      const session = await sessionManager.createSession({
+        title: 'P',
+        userId: 'local',
+        projectId: project.id,
+      });
+      // Сессия в worktree: если бы раскрытие шло по worktree, сниппета там нет
+      // и (тем более) каталог не доверен.
+      session.worktree = {
+        worktreeId: 'w1',
+        projectId: project.id,
+        branch: 'main',
+        directory: worktree,
+      };
+      await sessionManager.saveSession(session);
+
+      const result = await prompt(app, sessionManager, session.id, 'сделай #proj');
+      expect(result.status).toBe(202);
+      expect(result.text).toBe('сделай ИЗ КОРНЯ ПРОЕКТА');
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+      await rm(worktree, { recursive: true, force: true });
     }
   });
 });

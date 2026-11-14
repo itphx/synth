@@ -122,6 +122,13 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     keywords: ['skills', 'скиллы'],
   },
   {
+    id: 'snippets',
+    group: 'personal',
+    labelKey: 'settings.category.snippets',
+    icon: 'file-text',
+    keywords: ['snippets', 'сниппеты', 'шаблоны текста', 'text snippets'],
+  },
+  {
     id: 'eventsAdmin',
     group: 'personal',
     labelKey: 'settings.category.events',
@@ -289,6 +296,14 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     icon: 'terminal-box',
     roles: ['ADMIN'],
     keywords: ['commands', 'bundles', 'команды', 'бандлы'],
+  },
+  {
+    id: 'snippetsAdmin',
+    group: 'adminIntegrations',
+    labelKey: 'settings.category.snippetsAdmin',
+    icon: 'file-text',
+    roles: ['ADMIN'],
+    keywords: ['snippets', 'text snippets', 'сниппеты', 'шаблоны текста'],
   },
   {
     id: 'eventsConfig',

@@ -50,7 +50,7 @@ export interface CurrentModelPair {
  */
 export interface LlmHistoryOptions {
   /**
-   * PROP-126 §2.1: сообщение-триггер хода. User-directed сообщения (адресованные
+   * ADR-141 §2.1: сообщение-триггер хода. User-directed сообщения (адресованные
    * человеку, а не агенту), **новее** триггера, из текущего хода исключаются:
    * в следующем ходе они уже старше триггера и в контекст попадают.
    */
@@ -77,7 +77,7 @@ function compareMessageOrder(a: Message, b: Message): number {
 }
 
 /**
- * User-directed сообщение (PROP-126 §2.1) — адресовано человеку.
+ * User-directed сообщение (ADR-141 §2.1) — адресовано человеку.
  *
  * Признак — `metadata.userDirected === true` (см.
  * `engine/input-surface/user-mentions.ts`).
@@ -128,7 +128,7 @@ export function sessionMessagesToLlm(
 
   const emittedToolCallIds = new Set<string>();
 
-  // PROP-126 §2.1: user-directed сообщение (адресовано человеку) не должно
+  // ADR-141 §2.1: user-directed сообщение (адресовано человеку) не должно
   // попадать в контекст текущего хода, если оно новее триггера. В следующем
   // ходе триггер новее — и сообщение в контекст попадает.
   const trigger = options?.trigger;
@@ -143,7 +143,7 @@ export function sessionMessagesToLlm(
   for (const msg of messages) {
     if (msg.disabled || msg.hidden) continue;
 
-    // PROP-126 §2.1: user-directed хвост («@alice проверь») — это сообщение
+    // ADR-141 §2.1: user-directed хвост («@alice проверь») — это сообщение
     // человеку, а не агенту. В текущем ходе (триггер — агентская часть) оно
     // новее триггера → в контекст не идёт; в следующем ходе — уже старше и
     // попадает.
@@ -298,7 +298,7 @@ function userQueryText(message: Message): string | undefined {
  * реальную отправку через тот же `sessionMessagesToLlm`, что и
  * `_processMessage`, чтобы статистика не расходилась с запросом.
  *
- * PROP-126 §2.1: тот же фильтр user-directed сообщений, что и при отправке.
+ * ADR-141 §2.1: тот же фильтр user-directed сообщений, что и при отправке.
  * Триггер хода по умолчанию — последняя пользовательская реплика, адресованная
  * **агенту** (user-directed реплики триггером не являются).
  */
@@ -390,7 +390,7 @@ export function buildPromptHistoryInfo(
 }
 
 /**
- * Триггер хода по умолчанию (PROP-126 §2.1): последняя пользовательская
+ * Триггер хода по умолчанию (ADR-141 §2.1): последняя пользовательская
  * реплика, адресованная **агенту**.
  *
  * User-directed реплики («@alice проверь») триггером не являются — ход

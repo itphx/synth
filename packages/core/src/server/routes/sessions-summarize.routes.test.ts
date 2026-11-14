@@ -1,5 +1,5 @@
 /**
- * ADR-119 + PROP-126 §1: `POST /api/v2/sessions/:id/summarize` — ручной запуск
+ * ADR-119 + ADR-141 §1: `POST /api/v2/sessions/:id/summarize` — ручной запуск
  * сжатия контекста с явно заданным профилем.
  *
  * - без `mode` — `summarization` (значение по умолчанию);
@@ -70,7 +70,7 @@ function userOf(c: Context): string {
   return raw || 'owner';
 }
 
-describe('POST /:id/summarize — профиль сжатия (ADR-119, PROP-126 §1)', () => {
+describe('POST /:id/summarize — профиль сжатия (ADR-119, ADR-141 §1)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let eventBus: EventBus;

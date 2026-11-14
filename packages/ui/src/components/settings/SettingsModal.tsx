@@ -28,6 +28,8 @@ import { McpAdminSettings } from "./McpAdminSettings"
 import { ToolsDisabledSettings } from "./ToolsDisabledSettings"
 import { SkillsUserSettings } from "./SkillsUserSettings"
 import { SkillsAdminSettings } from "./SkillsAdminSettings"
+import { SnippetsSettings } from "./SnippetsSettings"
+import { SnippetsAdminSettings } from "./SnippetsAdminSettings"
 import { CommandsSettings } from "./CommandsSettings"
 import { EventsAdminSettings } from "./EventsAdminSettings"
 import { EventsSettings } from "./EventsSettings"
@@ -343,6 +345,8 @@ export const SettingsModal = () => {
             {activePage === "builtinTools" && <ToolsDisabledSettings />}
             {activePage === "skills" && <SkillsUserSettings />}
             {activePage === "skillsAdmin" && <SkillsAdminSettings />}
+            {activePage === "snippets" && <SnippetsSettings />}
+            {activePage === "snippetsAdmin" && <SnippetsAdminSettings />}
             {activePage === "commands" && <CommandsSettings />}
             {activePage === "eventsAdmin" && <EventsAdminSettings />}
             {activePage === "authority" && <AuthoritySettings />}

@@ -1870,7 +1870,7 @@ export type {
   SkillOrigin,
 } from './engine/skills/types.js';
 export { resolveProjectSkillSeed, resolveProjectMcpSeed } from './engine/skills/seed.js';
-// PROP-126 §4: сниппеты (`#`) — домен (три уровня) + HTTP-контур.
+// ADR-141 §4: сниппеты (`#`) — домен (три уровня) + HTTP-контур.
 export { SnippetService, SnippetError } from './engine/snippets/service.js';
 export type {
   SnippetServiceOptions,

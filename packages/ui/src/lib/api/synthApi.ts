@@ -153,7 +153,7 @@ export type {
   SkillsTrustedProjectDirsSource,
 } from './skills'
 export type { CommandsListResponse } from './commands'
-// PROP-126 §4: сниппеты `#name` — уровни instance/project/user, раскрытие
+// ADR-141 §4: сниппеты `#name` — уровни instance/project/user, раскрытие
 // `#`-токенов в сообщении.
 export type {
   Snippet,

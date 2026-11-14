@@ -14,6 +14,8 @@ export interface SnippetAutocompleteProps {
   onClose: () => void
   /** Число совпавших сниппетов — родителю, чтобы не перехватывать Enter при пустом списке. */
   onMatchesChange?: (count: number) => void
+  /** Проект сессии: включает project-уровень в списке (`GET /snippets?projectId=`). */
+  projectId?: string | null
 }
 
 /**
@@ -23,7 +25,7 @@ export interface SnippetAutocompleteProps {
  */
 const POPUP_LIFT = 'calc(100% + 17px)'
 
-/** Бейдж уровня сниппета (PROP-126 §4 «Три уровня»). */
+/** Бейдж уровня сниппета (ADR-141 §4 «Три уровня»). */
 const SCOPE_BADGE: Record<string, string> = {
   instance: 'bg-primary/15 text-primary',
   project: 'bg-status-success/15 text-status-success',
@@ -31,11 +33,11 @@ const SCOPE_BADGE: Record<string, string> = {
 }
 
 /**
- * PROP-126 §4: `#`-пикер сниппетов над композером.
+ * ADR-141 §4: `#`-пикер сниппетов над композером.
  *
  * Источник данных — реестр сниппетов (`GET /api/v2/snippets`): instance-,
- * user- и project-уровни (project подтягивается позже, когда пикер будет
- * знать проект сессии). Ядро раскрывает `#name` в сообщении **до отправки**,
+ * user- и project-уровни (project — по `projectId` сессии). Ядро раскрывает
+ * `#name` в сообщении **до отправки**,
  * поэтому пикер подставляет сам токен — тело сниппета пользователю не видно.
  *
  * Клавиатура, позиционирование и `data-testid` — как у `SkillAutocomplete`.
@@ -46,6 +48,7 @@ export function SnippetAutocomplete({
   onSelect,
   onClose,
   onMatchesChange,
+  projectId,
 }: SnippetAutocompleteProps) {
   const { t } = useI18n()
 
@@ -60,7 +63,7 @@ export function SnippetAutocomplete({
     let cancelled = false
     setLoading(true)
     void synthApi
-      .listSnippets()
+      .listSnippets(projectId ? { projectId } : undefined)
       .then((res) => {
         if (cancelled) return
         setSnippets(res.snippets ?? [])
@@ -75,7 +78,7 @@ export function SnippetAutocomplete({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [projectId])
 
   const entries = useMemo<Snippet[]>(() => {
     const list = snippets ?? []
@@ -154,8 +157,9 @@ export function SnippetAutocomplete({
     return () => document.removeEventListener('keydown', handler)
   }, [navigate, filtered, highlightedIdx, onSelect, onClose])
 
-  // Пустой список — ничего не рисуем (пикер не мешает вводу).
-  if (!loading && filtered.length === 0) return null
+  // Пока реестр грузится или совпадений нет — ничего не рисуем. Иначе при
+  // вводе `#` поповер успевал мигнуть пустым и исчезнуть.
+  if (loading || filtered.length === 0) return null
 
   return (
     <div

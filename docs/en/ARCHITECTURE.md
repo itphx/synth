@@ -329,7 +329,7 @@ skills are **instructions**, they do not register new tools, and the only core t
   (`` !`cmd` ``) — opt-in through `execute_shell`. `/summary` and `/compact` trigger manual context
   compression (ADR-119; profile in `compressionMode`). The events `skill.invoked`/`command.invoked`;
   the `skill-creator` builtin is a skill instruction in code.
-- **Snippets** (`engine/snippets/*`, PROP-126 §4): `#name` — three levels (`instance`/`project`/`user`),
+- **Snippets** (`engine/snippets/*`, ADR-141 §4): `#name` — three levels (`instance`/`project`/`user`),
   precedence `user > project > instance`; file discovery `*.md` + project trust, expansion on prompt
   ingress before the queue (limits 15/64 KB, code blocks untouched). HTTP — `server/routes/snippets.ts`.
 

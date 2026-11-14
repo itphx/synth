@@ -110,7 +110,7 @@ describe('ADR-089 (P0): авторизация WebSocket /ws/events (backend)', 
     const { ws, client } = await connect(USER_KEY);
 
     const busTypes: string[] = [];
-    const unsub = backend.eventBus.subscribe(adminSession, (e) => busTypes.push(e.type));
+    const unsub = backend.eventBus.subscribe(adminSession, (e: { type: string }) => busTypes.push(e.type));
 
     ws.send(JSON.stringify({ type: 'send_message', session_id: adminSession, content: 'pwn' }));
 
@@ -138,7 +138,7 @@ describe('ADR-089 (P0): авторизация WebSocket /ws/events (backend)', 
     const { ws } = await connect(USER_KEY);
 
     const busTypes: string[] = [];
-    const unsub = backend.eventBus.subscribe(adminSession, (e) => busTypes.push(e.type));
+    const unsub = backend.eventBus.subscribe(adminSession, (e: { type: string }) => busTypes.push(e.type));
 
     ws.send(JSON.stringify({
       type: 'permission_reply',
@@ -169,7 +169,7 @@ describe('ADR-089 (P0): авторизация WebSocket /ws/events (backend)', 
     expect(ack).toBeTruthy();
 
     const busTypes: string[] = [];
-    const unsub = backend.eventBus.subscribe(adminSession, (e) => busTypes.push(e.type));
+    const unsub = backend.eventBus.subscribe(adminSession, (e: { type: string }) => busTypes.push(e.type));
     ws.send(JSON.stringify({
       type: 'permission_reply',
       session_id: adminSession,

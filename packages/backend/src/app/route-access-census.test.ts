@@ -282,7 +282,7 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/skill-bundles/:name', G_AUTH, [404]),
   r('PATCH', '/api/v2/skill-bundles/:name', G_ADMIN, [403], { body: {} }),
   r('DELETE', '/api/v2/skill-bundles/:name', G_ADMIN, [403]),
-  // PROP-126 §4: сниппеты — mixed RBAC by scope (instance — ADMIN, user — self,
+  // ADR-141 §4: сниппеты — mixed RBAC by scope (instance — ADMIN, user — self,
   // project — OWNER/EDITOR). Unknown name is 404 before the scope check; the
   // foreign USER never gets 2xx.
   r('PATCH', '/api/v2/snippets/:name', G_AUTH, [400, 404], {

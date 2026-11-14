@@ -177,7 +177,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `assertSchemaCurrent` без применения: схема отстаёт/отсутствует →
   `STORAGE_POSTGRES_SCHEMA_OUTDATED`. `readSchemaVersion` — текущая версия.
 - PROP-133: **состояние доступа к проекту** — миграция `035_project_access` (`group_members jsonb NOT NULL DEFAULT '{}'`, `everyone_role text`; только `ADD COLUMN`, идемпотентно). Порт `projects` (`ports/principals-projects.ts`) читает/пишет оба поля и нормализует роли при чтении; `list(viewer)` сужает выборку SQL'ем (владелец/участник/«всем»/грант по группе), но истина — резолвер `resolveProjectAccess` из `@itphx/synth-shared`: каждая строка проверяется им. При чтении «нет грантов» отдаётся **отсутствием поля** (`{}` в jsonb / `NULL` в text → `undefined`), как в file/memory.
-- PROP-126 §2.1: **`@`-упоминания сообщения** — миграция `036_message_mentions` (`messages.mentions jsonb`; только `ADD COLUMN IF NOT EXISTS`). Поле — в `MESSAGE_FIELDS`/`MESSAGE_JSON_FIELDS`, `serializeMessage`/`deserializeMessage` (`legacy` → `undefined`); без миграции данных, аддитивно.
+- ADR-141 §2.1: **`@`-упоминания сообщения** — миграция `036_message_mentions` (`messages.mentions jsonb`; только `ADD COLUMN IF NOT EXISTS`). Поле — в `MESSAGE_FIELDS`/`MESSAGE_JSON_FIELDS`, `serializeMessage`/`deserializeMessage` (`legacy` → `undefined`); без миграции данных, аддитивно.
 - **Координация (`locks.ts`, ADR-097 волна 4).** `PgMutex implements Mutex` и
   `PgLeader implements SchedulerLeader` (типы — `@itphx/synth-core`, только
   `import type`) поверх session-level advisory-локов на выделенном соединении;
