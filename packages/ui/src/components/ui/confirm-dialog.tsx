@@ -15,6 +15,8 @@ export interface ConfirmDialogProps {
   children?: React.ReactNode
   confirmLabel?: string
   cancelLabel?: string
+  /** `data-testid` кнопки подтверждения (для точечных тестов сценария). */
+  confirmTestId?: string
   variant?: ConfirmVariant
   icon?: IconName
   onConfirm: () => void
@@ -34,6 +36,7 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   cancelLabel,
+  confirmTestId,
   variant = 'default',
   icon,
   onConfirm,
@@ -65,6 +68,7 @@ export function ConfirmDialog({
             </button>
             <button
               onClick={() => { onConfirm(); onOpenChange(false) }}
+              data-testid={confirmTestId}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 ${config.buttonClass}`}
             >
               {confirmLabel ?? t('common.confirm')}

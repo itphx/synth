@@ -587,6 +587,20 @@ export function ProjectTab() {
         <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.workspace.hint')}</div>
       </Section>
 
+      {/* ADR-140 Ф3: владение проектом — передача другому пользователю. */}
+      {project && (
+        <Section title={t('project.access.transfer.title')}>
+          <ProjectOwnershipBlock
+            project={project}
+            sessionId={sessionId}
+            onUpdated={(updated) => {
+              setProject(updated)
+              useProjectsStore.getState().updateProjectInList(updated)
+            }}
+          />
+        </Section>
+      )}
+
       {/* PROP-133 §4: блок «Доступ» — три проекции состояния списка доступа. */}
       {canManageAccess && project && (
         <Section title={t('project.access.title')}>
@@ -1939,6 +1953,190 @@ function ProjectAccessBlock({
           </Button>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * ADR-140 Ф3: блок «Владение» — передача владения проектом.
+ *
+ * Право передачи — **не** «управление содержимым»: текущий владелец или
+ * `ADMIN` (`LEAD`, участники с ролью `owner` и `EDITOR` — нет; серверный
+ * `canTransfer`). UI лишь прячет недоступное действие, enforcement — на сервере.
+ *
+ * Каталог пользователей грузится только тем, кто может передавать владение:
+ * остальным выбирать некому, а каталог — лишний запрос. Владелец показывается
+ * по `owner_id`, а имя (`display_name`) — когда каталог загружен.
+ */
+function ProjectOwnershipBlock({
+  project,
+  sessionId,
+  onUpdated,
+}: {
+  project: ProjectData
+  sessionId?: string
+  onUpdated: (updated: ProjectData) => void
+}) {
+  const { t } = useI18n()
+  const { notify } = useNotification()
+  const user = useAuthStore((s) => s.user)
+
+  // Признак «инстанс обслуживает /users*» (PROP-125): без него выбирать
+  // получателя нечем (и эндпоинта может не быть вовсе).
+  const hasUsers = useInstanceCapabilitiesStore(selectHasFeature('users'))
+  useEffect(() => {
+    void useInstanceCapabilitiesStore.getState().load()
+  }, [])
+
+  const isOwner = Boolean(user) && project.owner_id === user?.id
+  const isAdmin = (user?.roles ?? []).includes('ADMIN')
+  const canTransfer = hasUsers && Boolean(user) && (isOwner || isAdmin)
+  const directory = useUsersDirectory(canTransfer)
+
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pendingUserId, setPendingUserId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  // Защита от двойной отправки: `busy` в состоянии обновляется не сразу,
+  // а два клика подряд успевают пройти до ререндера (защита — на ref).
+  const busyRef = useRef(false)
+
+  const owner = directory.users.find((u) => u.id === project.owner_id)
+  const ownerLabel = owner ? owner.display_name || owner.username : project.owner_id
+
+  /**
+   * Получатели: текущий владелец не предлагается (передача самому себе —
+   * ошибка сервера), как и сам пользователь (то же ограничение сервера).
+   * Сервисные идентичности (`service:<keyId>`) — не люди.
+   */
+  const candidates = directory.users.filter(
+    (u) => u.id !== project.owner_id && u.id !== user?.id && !u.id.startsWith('service:'),
+  )
+  const pendingUser = pendingUserId
+    ? (directory.users.find((u) => u.id === pendingUserId) ?? null)
+    : null
+
+  const performTransfer = async (targetId: string) => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    try {
+      const updated = await useProjectsStore.getState().transferProject(project.id, targetId)
+      if (!updated) return
+      onUpdated(updated)
+      setPickerOpen(false)
+      notify({
+        text: t('project.access.transfer.success'),
+        type: 'success',
+        category: 'system',
+        sessionId: sessionId || undefined,
+      })
+    } catch (err) {
+      // 403 — нет права передавать; 400 — недопустимый получатель
+      // (неизвестный/неактивный, передача самому себе, сервисная личность).
+      const status = (err as { status?: number })?.status
+      const text =
+        status === 403
+          ? t('project.access.transfer.forbidden')
+          : status === 400
+            ? t('project.access.transfer.invalid')
+            : `${t('project.access.transfer.error')}: ${err instanceof Error ? err.message : String(err)}`
+      notify({
+        text,
+        type: 'error',
+        category: 'error',
+        sessionId: sessionId || undefined,
+      })
+    } finally {
+      busyRef.current = false
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2" data-testid="project-transfer">
+      <div className="flex items-center justify-between gap-2">
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {t('project.access.transfer.owner')}
+        </span>
+        <span
+          className="min-w-0 truncate text-xs text-foreground"
+          data-testid="project-transfer-owner"
+        >
+          {ownerLabel}
+        </span>
+      </div>
+
+      {canTransfer && (
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPickerOpen((v) => !v)}
+            disabled={busy}
+            data-testid="project-transfer-open"
+          >
+            {t('project.access.transfer.action')}
+          </Button>
+        </div>
+      )}
+
+      {canTransfer && pickerOpen && (
+        <div className="flex min-w-0 flex-col gap-1.5" data-testid="project-transfer-picker">
+          <input
+            type="search"
+            value={directory.query}
+            onChange={(e) => directory.setQuery(e.target.value)}
+            placeholder={t('project.access.usersSearch')}
+            aria-label={t('project.access.usersSearch')}
+            className="w-full min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            data-testid="project-transfer-search"
+          />
+          {directory.loading && (
+            <div className="text-[0.625rem] text-muted-foreground/60">{t('common.loading')}</div>
+          )}
+          {!directory.loading && candidates.length === 0 && (
+            <div
+              className="text-[0.625rem] text-muted-foreground/60"
+              data-testid="project-transfer-empty"
+            >
+              {t('project.access.usersEmpty')}
+            </div>
+          )}
+          <div className="flex min-w-0 flex-col gap-1">
+            {candidates.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => setPendingUserId(u.id)}
+                className="min-h-6 min-w-0 truncate rounded border border-border px-2 py-1 text-left text-xs text-foreground transition-colors hover:bg-interactive-hover"
+                data-testid={`project-transfer-user-${u.id}`}
+              >
+                {u.display_name || u.username}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={pendingUser !== null}
+        onOpenChange={(next) => {
+          if (!next) setPendingUserId(null)
+        }}
+        title={t('project.access.transfer.confirmTitle')}
+        message={
+          pendingUser
+            ? t('project.access.transfer.confirmText', {
+                name: pendingUser.display_name || pendingUser.username,
+              })
+            : undefined
+        }
+        variant="warning"
+        confirmTestId="project-transfer-confirm"
+        onConfirm={() => {
+          if (pendingUser) void performTransfer(pendingUser.id)
+        }}
+      />
     </div>
   )
 }

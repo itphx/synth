@@ -542,6 +542,20 @@ export const projectsApi = {
     })
   },
 
+  /**
+   * ADR-140 Ф3: передача владения проектом другому пользователю.
+   *
+   * `POST /projects/:id/transfer`, тело — `{ user_id }`. Право на сервере:
+   * автор проекта или `ADMIN` (`LEAD` права не получает). Ответ — DTO проекта
+   * с новым владельцем (прежний владелец остаётся участником с ролью `editor`).
+   */
+  async transferProject(id: string, userId: string): Promise<ProjectData> {
+    return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}/transfer`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId }),
+    })
+  },
+
   /** ADR-071 §2.4: проектный MCP-скоуп (owner/lead/admin). */
   async getProjectMcp(projectId: string): Promise<ProjectMcpResponse> {
     return fetchJSON<ProjectMcpResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/mcp`)

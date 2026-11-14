@@ -74,7 +74,7 @@ const EXPECTED_API_METHODS = [
   'setDefaultClient', 'setDefaultModel', 'setEnabled', 'setMemoryIndexEnabled', 'setProfilePassword',
   'setProxyPassword', 'setRequestLimits', 'setSshMode', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting', 'startPipelineRun',
   'status', 'steerQueue', 'stopGeneration', 'stopProcess', 'summarizeSession', 'testProvider', 'testProxyRoute',
-  'testWebhookSubscription', 'toggleAgent', 'toggleContextFile', 'toggleMessage', 'uninstallPack',
+  'testWebhookSubscription', 'toggleAgent', 'toggleContextFile', 'toggleMessage', 'transferProject', 'uninstallPack',
   'unlinkAgentSshKey', 'updateAttachmentsSettings', 'updateDecisionSettings', 'updateEventBindingKey',
   'updateEventsSettings', 'updateMcpRegistryEntry', 'updateOptimization', 'updatePlugin', 'updatePluginsSettings',
   'updateProject', 'updateProjectLogEntry', 'updateProjectMcp', 'updateProjectPipeline',

@@ -68,6 +68,13 @@ interface ProjectsStore {
   deleteProject: (id: string) => Promise<boolean>
   /** Заменяет проект в списке сохранённым объектом (после PATCH /projects/:id). */
   updateProjectInList: (project: ProjectData) => void
+  /**
+   * ADR-140 Ф3: передача владения проектом другому пользователю.
+   *
+   * Ошибки **пробрасываются** (как `publishProject`): вызывающий различает
+   * `403` (нет права) и `400` (недопустимый получатель) и показывает текст.
+   */
+  transferProject: (id: string, userId: string) => Promise<ProjectData | null>
   // Перенос проектов между мирами (гибрид, UI publish/fork). Бросают ошибку при
   // неудаче — вызывающий код решает, что показать (паттерн setSessionMode).
   publishProject: (id: string, opts?: { remote_project_id?: string }) => Promise<PublishProjectResult>
@@ -272,6 +279,26 @@ export const useProjectsStore = create<ProjectsStore>((set, get) => ({
 
   updateProjectInList: (project) => {
     set((s) => ({ projects: s.projects.map((p) => (p.id === project.id ? project : p)) }))
+  },
+
+  /**
+   * ADR-140 Ф3: передача владения (`POST /projects/:id/transfer`).
+   *
+   * Ответ — деталь проекта с новым владельцем; запись в списке обновляется
+   * слиянием (`mergeProjectSummary`), чтобы уже загруженный план не затирался
+   * сводкой. Ошибка — пробрасывается вызывающему (он показывает текст).
+   */
+  transferProject: async (id, userId) => {
+    try {
+      const updated = await synthApi.transferProject(id, userId)
+      set((s) => ({
+        projects: s.projects.map((p) => (p.id === id ? mergeProjectSummary(p, updated) : p)),
+      }))
+      return updated
+    } catch (e) {
+      set({ error: (e as Error).message })
+      throw e
+    }
   },
 
   // Гибрид: локальный проект → сервер (проект + сессии + файлы). После успеха
