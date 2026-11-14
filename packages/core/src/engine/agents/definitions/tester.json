@@ -13,6 +13,7 @@
     "file_write",
     "search",
     "shell",
+    "terminal",
     "git_read",
     "git_write",
     "task",
