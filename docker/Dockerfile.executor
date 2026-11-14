@@ -61,6 +61,18 @@
 
 ARG BUILDPLATFORM
 
+# Версия Oh My Zsh — терминальный тир образа исполнителя (`docker/install-tier-6.sh`).
+#
+# Пин — КОММИТ, а не тег: репозиторий `ohmyzsh/ohmyzsh` git-тегов НЕ
+# публикует (проверено: `git ls-remote --tags https://github.com/ohmyzsh/ohmyzsh`
+# — пусто; `codeload` по тегу — 404), поэтому `git clone --depth 1 --branch <тег>`
+# невозможен, и ставится shallow-фетч по SHA с проверкой HEAD (fail-closed).
+#
+# Значение ниже — коммит `master` от 2026-11-09 (`fix(mvn): complete with
+# compsys instead of compctl (#14241)`). При обновлении меняется ТОЛЬКО это
+# значение (и проверяется, что образ собирается и zsh стартует).
+ARG OMZ_REF=6010fb6260f359e71d99ba25f05f9215809b3ed2
+
 FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
 
 # corepack скачивает бинарь pnpm при ПЕРВОМ вызове `pnpm` — то есть уже в
@@ -109,7 +121,7 @@ RUN mkdir -p /out \
 # `synth-init` копируется в runtime-стадии из build (`COPY` переносит режим как
 # есть) — при umask/ACL контекста он может стать 0711, и uid 1000 не прочитает
 # его (`sh: can't open …: Permission denied`). Поэтому чиним и его.
-RUN chmod -R a+rX /out/app /out/core /repo/docker/init.sh
+RUN chmod -R a+rX /out/app /out/core /repo/docker/init.sh /repo/docker/executor-init.sh
 
 # ------------------------------------------------------------------------------
 # flavor `core` — рантайм исполнителя + hard deps + tier 0
@@ -150,6 +162,50 @@ ENV HOME=/home/synth
 ENV PYTHONUSERBASE=/home/synth/.local
 ENV PIP_CACHE_DIR=/home/synth/.cache/pip
 
+# Терминальный тир (tier 6): zsh + tmux + Oh My Zsh — рабочее место человека
+# в терминале исполнителя (ADR терминалов). Ставится ТОЛЬКО в образ
+# исполнителя: базовый состав образов all-in-one/backend не меняется.
+#
+# Oh My Zsh качается на этапе сборки по закреплённому коммиту (`OMZ_REF`) и
+# НЕ вендорится в репозиторий (9.7 МБ).
+ARG OMZ_REF
+COPY docker/install-lib.sh docker/install-tier-6.sh /tmp/synth-install/
+RUN set -eux; \
+    OMZ_REF="$OMZ_REF" sh /tmp/synth-install/install-tier-6.sh; \
+    rm -rf /tmp/synth-install
+
+# Продуктовые конфиги терминала: zsh (Oh My Zsh) и tmux. В `$HOME`
+# пользователя они попадают симлинками (`~/.zshrc`, `~/.tmux.conf`) — их
+# заводит `synth-executor-init` при старте (при `readOnlyRootFilesystem`
+# `$HOME` — `emptyDir`, и симлинки из сборки том скрывает).
+COPY docker/executor/zshrc /etc/synth/zshrc
+COPY docker/executor/tmux.conf /etc/synth/tmux.conf
+
+# Режим конфигов — 0644 явно: права файла в контексте сборки зависят от umask
+# машины сборки, а читать их должен uid 1000 (non-root, ADR-137 Ф1).
+RUN set -eux; \
+    chmod 0644 /etc/synth/zshrc /etc/synth/tmux.conf
+
+# Окружение терминала (ADR терминалов):
+#   TERM/COLORTERM — как у клиента терминала (xterm.js);
+#   LANG           — UTF-8 (`C.UTF-8` есть и в musl, и в glibc);
+#   EDITOR         — `vim` (в образе `vim-tiny`; в debian-ветке бинарь
+#                    называется `vim.tiny`, совместимый симлинк `vim` заводит
+#                    `docker/install-tier-6.sh`);
+#   SHELL          — zsh: в managed-контуре терминал по умолчанию zsh
+#                    (`bash` доступен; `execute_shell` зовёт `bash` явно и от
+#                    `$SHELL` не зависит);
+#   TMUX_TMPDIR    — `/tmp` (writable `emptyDir` при readOnlyRootFilesystem):
+#                    сокет tmux не должен лежать в `$HOME`;
+#   ZSH_CACHE_DIR  — в `$HOME` (то же writable-`emptyDir`): кэш OMZ.
+ENV TERM=xterm-256color \
+    COLORTERM=truecolor \
+    LANG=C.UTF-8 \
+    EDITOR=vim \
+    SHELL=/bin/zsh \
+    TMUX_TMPDIR=/tmp \
+    ZSH_CACHE_DIR=/home/synth/.cache/oh-my-zsh
+
 # Рантайм исполнителя: пакет исполнителя + core (импортируется в рантайме).
 COPY --from=build /out/app /app
 COPY --from=build /out/core /opt/synth-core
@@ -169,15 +225,23 @@ RUN set -eux; \
     node -e "import('@itphx/synth-core').then((m) => { if (!m.InlineExecutionPort) { throw new Error('core без InlineExecutionPort'); } console.log('core runtime OK'); }).catch((e) => { console.error(e); process.exit(1); })"
 
 EXPOSE 5100
-# PID 1 (аудит 0.13.4 §5.2): `synth-init` — sh-скрипт (reaping осиротевших
-# детей; Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
+# PID 1 (аудит 0.13.4 §5.2): `synth-executor-init` — sh-обёртка (готовит точки
+# конфигурации пользователя `~/.zshrc`/`~/.tmux.conf` и передаёт управление
+# `synth-init`), `synth-init` — sh-скрипт (reaping осиротевших детей;
+# Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
 # (проброс сигналов всей process group и кода выхода). Шапка файла.
 COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+COPY --from=build /repo/docker/executor-init.sh /usr/local/bin/synth-executor-init
+# Режим 0755 явно: права в контексте сборки зависят от umask машины сборки,
+# а `synth-executor-init` вызывает `synth-init` через `exec` — нужен бит
+# исполнения.
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/synth-init /usr/local/bin/synth-executor-init
 
 # Non-root (PROP-137 Ф1): root — только на этапе сборки. /home/synth и
 # /workspace уже принадлежат 1000:1000 (RUN выше).
 USER 1000
-CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
+CMD ["/bin/sh", "/usr/local/bin/synth-executor-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `dev` — core + tier 1 + tier 4 + tier 5 + БД-клиенты + buildah + ffmpeg
@@ -310,6 +374,41 @@ ENV HOME=/home/synth
 ENV PYTHONUSERBASE=/home/synth/.local
 ENV PIP_CACHE_DIR=/home/synth/.cache/pip
 
+# Терминальный тир (tier 6): zsh + tmux + Oh My Zsh — рабочее место человека
+# в терминале исполнителя (ADR терминалов). Ставится ТОЛЬКО в образ
+# исполнителя: базовый состав образов all-in-one/backend не меняется.
+#
+# В debian-ветке имена пакетов отличаются (ncurses-term/ncurses-base,
+# procps, vim-tiny) — сопоставление живёт в `docker/install-tier-6.sh`.
+# Oh My Zsh качается по закреплённому коммиту (`OMZ_REF`) и НЕ вендорится
+# в репозиторий (9.7 МБ).
+ARG OMZ_REF
+COPY docker/install-lib.sh docker/install-tier-6.sh /tmp/synth-install/
+RUN set -eux; \
+    OMZ_REF="$OMZ_REF" sh /tmp/synth-install/install-tier-6.sh; \
+    rm -rf /tmp/synth-install
+
+# Продуктовые конфиги терминала: zsh (Oh My Zsh) и tmux. В `$HOME`
+# пользователя они попадают симлинками (`~/.zshrc`, `~/.tmux.conf`) — их
+# заводит `synth-executor-init` при старте (при `readOnlyRootFilesystem`
+# `$HOME` — `emptyDir`, и симлинки из сборки том скрывает).
+COPY docker/executor/zshrc /etc/synth/zshrc
+COPY docker/executor/tmux.conf /etc/synth/tmux.conf
+
+# Режим конфигов — 0644 явно: права файла в контексте сборки зависят от umask
+# машины сборки, а читать их должен uid 1000 (non-root, ADR-137 Ф1).
+RUN set -eux; \
+    chmod 0644 /etc/synth/zshrc /etc/synth/tmux.conf
+
+# Окружение терминала (ADR терминалов) — см. пояснения в стадии `core`.
+ENV TERM=xterm-256color \
+    COLORTERM=truecolor \
+    LANG=C.UTF-8 \
+    EDITOR=vim \
+    SHELL=/bin/zsh \
+    TMUX_TMPDIR=/tmp \
+    ZSH_CACHE_DIR=/home/synth/.cache/oh-my-zsh
+
 # Каталог браузеров Playwright: общий для всех пользователей образа.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
@@ -362,15 +461,23 @@ RUN set -eux; \
     node -e "import('@itphx/synth-core').then((m) => { if (!m.InlineExecutionPort) { throw new Error('core без InlineExecutionPort'); } console.log('core runtime OK'); }).catch((e) => { console.error(e); process.exit(1); })"
 
 EXPOSE 5100
-# PID 1 (аудит 0.13.4 §5.2): `synth-init` — sh-скрипт (reaping осиротевших
-# детей; Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
+# PID 1 (аудит 0.13.4 §5.2): `synth-executor-init` — sh-обёртка (готовит точки
+# конфигурации пользователя `~/.zshrc`/`~/.tmux.conf` и передаёт управление
+# `synth-init`), `synth-init` — sh-скрипт (reaping осиротевших детей;
+# Node/libuv этого не умеет), он запускает `dist/init.js` — Node-обёртку
 # (проброс сигналов всей process group и кода выхода). Шапка файла.
 COPY --from=build /repo/docker/init.sh /usr/local/bin/synth-init
+COPY --from=build /repo/docker/executor-init.sh /usr/local/bin/synth-executor-init
+# Режим 0755 явно: права в контексте сборки зависят от umask машины сборки,
+# а `synth-executor-init` вызывает `synth-init` через `exec` — нужен бит
+# исполнения.
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/synth-init /usr/local/bin/synth-executor-init
 
 # Non-root (PROP-137 Ф1): /home/synth и /workspace принадлежат 1000:1000
 # (RUN выше), Playwright — /opt/ms-playwright (a+rX).
 USER 1000
-CMD ["/bin/sh", "/usr/local/bin/synth-init", "node", "dist/init.js"]
+CMD ["/bin/sh", "/usr/local/bin/synth-executor-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `full` — browser + tier 2 + tier 4 + tier 5 + БД + docker CLI + buildah

@@ -529,6 +529,17 @@ executor:
   # (по умолчанию тоже `true`): выключить read-only rootfs можно любым из них.
   readOnlyRootFilesystem: true
 
+  # Терминальный тир образа исполнителя (zsh + tmux + Oh My Zsh, ADR
+  # терминалов) тоже требует writable-каталогов — и они уже есть:
+  #   * `/tmp` — сокет tmux (в образе `TMUX_TMPDIR=/tmp`);
+  #   * `/home/synth` — `$HOME`: кэш OMZ (`ZSH_CACHE_DIR=$HOME/.cache/oh-my-zsh`),
+  #     compdump zsh, кэши npm/pnpm/pip.
+  # Значения менять не нужно: при `readOnlyRootFilesystem: true` оба каталога
+  # примонтированы `emptyDir` (см. `templates/executor-deployment.yaml`).
+  #
+  # ⚠️ PTY (терминал) требует `/dev/pts` — это проверяется на живом поде:
+  # под gVisor PTY может не работать (ADR-137, «Runtime»).
+
   # ───────────────────────────────────────────────────────────────────────────
   # Init-контейнер смены владельца томов (PROP-137 Ф2) — по умолчанию ВЫКЛЮЧЕН.
   #

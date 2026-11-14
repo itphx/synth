@@ -1,0 +1,51 @@
+# Продуктовый zshrc образа исполнителя Synth (zsh + Oh My Zsh).
+#
+# Где лежит: `/etc/synth/zshrc` — часть образа (`docker/Dockerfile.executor`,
+# копируется из `docker/executor/zshrc`). В `$HOME` пользователя он попадает
+# симлинком (`~/.zshrc` → `/etc/synth/zshrc`); симлинк заводит
+# `docker/executor-init.sh` при старте контейнера — потому что при
+# `readOnlyRootFilesystem` `$HOME` (`/home/synth`) — это `emptyDir`, и
+# симлинк, созданный на этапе сборки образа, примонтированный том скрывает.
+# Если `~/.zshrc` уже есть (пользователь заменил симлинк своим файлом) —
+# ничего не трогаем: переопределение пользователя важнее.
+#
+# Назначение — рабочее место человека в терминале исполнителя (ADR
+# терминалов). Никаких личных путей и никакого автостарта tmux.
+
+# Oh My Zsh установлен в образе (`/opt/oh-my-zsh`, `docker/install-tier-6.sh`).
+export ZSH=/opt/oh-my-zsh
+
+# Тема — пустая: продуктовая конфигурация не должна зависеть от git-статуса
+# (в рабочем каталоге сессии репозитория может не быть).
+ZSH_THEME=""
+
+# Обновления OMZ в рантайме выключены: образ неизменяем
+# (`readOnlyRootFilesystem`), а сети в рантайме может не быть. Без этого
+# OMZ пытался бы обновиться при старте оболочки.
+zstyle ':omz:update' mode disabled
+DISABLE_AUTO_UPDATE=true
+
+# Кэш OMZ (compdump, completions) — в writable-каталоге `$HOME`:
+# `ZSH_CACHE_DIR=$HOME/.cache/oh-my-zsh` (при `readOnlyRootFilesystem` это
+# `/home/synth/.cache/oh-my-zsh` внутри `emptyDir`).
+export ZSH_CACHE_DIR="${ZSH_CACHE_DIR:-$HOME/.cache/oh-my-zsh}"
+
+# Плагины OMZ. Плагины, чей бинарь в образе отсутствует, выходят молча
+# (`kubectl`/`tmux` проверяют наличие команды; `docker` — фоновой пробой
+# `docker --version`, в flavor'ах без docker CLI она даёт одну строку
+# предупреждения в фоне).
+plugins=(git tmux docker docker-compose kubectl terraform)
+
+source $ZSH/oh-my-zsh.sh
+
+# Редактор по умолчанию: `vim` (в образе — `vim-tiny`; в debian-ветке
+# бинарь называется `vim.tiny`, совместимый симлинк `vim` заводит
+# `docker/install-tier-6.sh`).
+export EDITOR=vim
+export VISUAL="$EDITOR"
+
+# tmux НЕ запускается автоматически. Автостарт (`tmux attach -d || tmux new`)
+# недопустим для веб-терминала: `-d` отцепляет других клиентов сессии, а у
+# веб-терминала клиентов может быть несколько. tmux запускает человек
+# вручную — это привычный workflow, а не продуктовая живучесть: сессия tmux
+# не переживает перезапуск пода.
