@@ -617,6 +617,17 @@ export function TerminalView({ tab }: TerminalViewProps) {
           data-testid="terminal-container"
           className="h-full w-full min-w-0 overflow-hidden p-2"
         />
+        {/* Затенение как в чате: верх/низ гаснут в фон терминала. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 h-6"
+          style={{ background: `linear-gradient(to bottom, ${palette.background}, transparent)` }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-6"
+          style={{ background: `linear-gradient(to top, ${palette.background}, transparent)` }}
+        />
         {finished && (
           <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-2">
             <span className="rounded-full bg-surface-card px-3 py-1 text-xs text-foreground">

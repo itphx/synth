@@ -30,7 +30,7 @@ export const TerminalFloatingButton: React.FC<TerminalFloatingButtonProps> = ({
     <button
       type="button"
       data-testid="terminal-fab"
-      className="pointer-events-auto absolute bottom-24 right-3 z-20 flex size-10 items-center justify-center rounded-full border border-border bg-surface-card text-foreground shadow-lg transition-colors hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:size-11"
+      className="pointer-events-auto absolute bottom-16 right-6 z-20 rounded-full border border-border bg-card p-2 text-muted-foreground shadow-md transition-colors hover:bg-interactive-hover hover:text-foreground animate-in fade-in slide-in-from-bottom-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:p-2.5"
       onClick={() => void open()}
       title={t('terminal.open')}
       aria-label={t('terminal.open')}

@@ -1240,3 +1240,24 @@ html.pointer-coarse .markdown-content .md-code-download {
   unicode-range: U+E000-E8FF, U+F000-F1FF, U+F400-F533, U+23FB-23FE, U+2B58,
     U+276C-2771;
 }
+
+/* --- Терминал (PROP-132): скроллбар как у остального интерфейса ----------- */
+/* xterm 6 рисует собственный скроллбар (14px по умолчанию) — приводим к
+   глобальному виду: 6px, pill-форма, без видимой колеи. */
+.xterm .xterm-scrollable-element > .scrollbar.vertical {
+  width: 6px !important;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  border-radius: 9999px;
+  background: var(--synth-scrollbar-thumb) !important;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider:hover,
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider.active {
+  background: var(--synth-scrollbar-thumb-hover) !important;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar.vertical > .scra {
+  display: none;
+}

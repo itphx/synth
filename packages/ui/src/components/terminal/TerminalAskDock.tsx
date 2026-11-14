@@ -190,7 +190,7 @@ export const TerminalAskDock: React.FC<TerminalAskDockProps> = ({
     <div
       data-testid="terminal-ask-dock"
       data-mode={mode}
-      className="terminal-ask-dock mx-2 mb-2 shrink-0 max-h-[45%] overflow-y-auto rounded-xl border border-border bg-surface-card p-3 shadow-lg"
+      className="terminal-ask-dock mx-2 mt-3 mb-2 shrink-0 max-h-[45%] overflow-y-auto rounded-xl border border-border bg-surface-card p-3 shadow-lg"
     >
       <div className="flex items-center gap-2">
         <Icon name="robot-2" className="size-4 shrink-0 text-muted-foreground" />
