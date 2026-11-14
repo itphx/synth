@@ -683,7 +683,7 @@ export function ProjectTab() {
         </Section>
       )}
 
-      {/* ADR-141 §4: проектные сниппеты — `#name` в workspace проекта. */}
+      {/* ADR-126 §4: проектные сниппеты — `#name` в workspace проекта. */}
       {project && (
         <Section title={t('projectTab.snippets.title')}>
           <SnippetScopeEditor

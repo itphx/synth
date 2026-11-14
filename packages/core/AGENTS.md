@@ -1505,14 +1505,14 @@
   до LLM, событие `command.invoked`; per-command права `permission.rules.command`;
   локальные builtin-ответы — `Message.ephemeral` (вне LLM-контекста); inline shell
   (`` !`cmd` ``) — opt-in через `execute_shell`; `/summary` и `/compact` — ручное сжатие
-  контекста (ADR-119, ADR-141 §1), профиль передаётся `compressionMode`; встроенная `/init`
+  контекста (ADR-119, ADR-126 §1), профиль передаётся `compressionMode`; встроенная `/init`
   (ADR-069) — prompt-команда генерации/обновления `AGENTS.md` (`INIT_INSTRUCTION_PATH`);
-  встроенная `/review` (ADR-141 §1) — prompt-команда ревью **изменений кода** в
+  встроенная `/review` (ADR-126 §1) — prompt-команда ревью **изменений кода** в
   git-репозитории (`renderReviewPrompt`): без аргумента — незакоммиченные изменения,
   аргумент — commit/branch/PR; гейта в ядре нет — если git/workspace/diff нет, модель
   сообщает, что ревью недоступно, и не выдумывает изменения (в отличие от `/init`,
   `/review` не притворяется универсальным ревью).
-  **`dollar-skills.ts` — `$`-вызов скилла в тексте сообщения (ADR-141 §3):**
+  **`dollar-skills.ts` — `$`-вызов скилла в тексте сообщения (ADR-126 §3):**
   `resolveDollarSkills` (`{prompt, skills, unavailable}`) — общий лексер
   `engine/input-surface/parser.ts` (`$name`, code-блоки игнорируются), дедуп по id с сохранением
   порядка; гейты те же, что у `/skill-name` (ADR-046 §4.4 trust, §4.5 scope, §6.1
@@ -1523,7 +1523,7 @@
   добавляется к сообщению (исходный текст сохраняется, медиа-части — нет), событие
   `skill.invoked` (`source:'user'`). Тесты — `engine/commands/dollar-skills.test.ts`,
   `engine/orchestrator-dollar-skills.test.ts`; общий прогон — `engine/commands/*.test.ts`.
-- `engine/snippets/*` — ADR-141 §4: сниппеты `#name` (3 уровня `instance`/`project`/`user`,
+- `engine/snippets/*` — ADR-126 §4: сниппеты `#name` (3 уровня `instance`/`project`/`user`,
   приоритет `user > project > instance`, канон важнее алиаса). `discovery`/`registry` — файловый
   discovery `*.md` + trust проекта (как у команд/скиллов), `expand` — один проход без рекурсии,
   лимиты 15/64 КБ, code-блоки не трогаются; `service` — list/get/expand/create/update/delete,
@@ -1531,7 +1531,7 @@
   ADMIN, user — self, project — OWNER/EDITOR); раскрытие — в `POST /sessions/:id/prompt` до очереди.
   Тесты — `engine/snippets/*.test.ts`, `server/routes/snippets.test.ts`,
   `server/routes/sessions-snippets.routes.test.ts`.
-- `engine/input-surface/*` — ADR-141 §0/§2.1: общий лексер `@`/`$`/`#` (`parser.ts`, code-блоки,
+- `engine/input-surface/*` — ADR-126 §0/§2.1: общий лексер `@`/`$`/`#` (`parser.ts`, code-блоки,
   экранирование, span'ы) и `@user`-разбор (`user-mentions.ts`: участники сессии/проекта →
   `resolveMentionableUsers` → `validateExplicitMentions` → `resolveUserMentionSplit`; первое `@user`
   делит текст на агентскую часть и user-directed хвост). Приём — `POST /sessions/:id/prompt`

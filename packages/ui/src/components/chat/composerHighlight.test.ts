@@ -5,7 +5,7 @@ function kinds(text: string) {
   return Object.fromEntries(highlightComposer(text).filter((part) => part.kind).map((part) => [part.text, part.kind]))
 }
 
-describe('highlightComposer — токены композера (ADR-141)', () => {
+describe('highlightComposer — токены композера (ADR-126)', () => {
   it('подсвечивает команду, skill, snippet и mention', () => {
     expect(kinds('/review @alice #sig $brainstorming')).toEqual({
       '/review': 'command',

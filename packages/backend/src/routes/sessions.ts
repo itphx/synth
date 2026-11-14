@@ -50,7 +50,7 @@ import type { BackgroundRunService } from '@itphx/synth-core';
 // ADR-106 Ф3: реестр подтверждений — HTTP-ответ на подтверждение.
 import type { ApprovalRegistry } from '@itphx/synth-core';
 import type { ExecutionProfileCatalog } from '@itphx/synth-core';
-// ADR-141 §4: сервис сниппетов (`#`) — раскрытие в приёме промпта.
+// ADR-126 §4: сервис сниппетов (`#`) — раскрытие в приёме промпта.
 import type { SnippetService } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
@@ -184,12 +184,12 @@ export function createSessionRoutes(
    */
   browserProfileCatalog?: ExecutionProfileCatalog,
   /**
-   * ADR-141 §4: сервис сниппетов (`#`) — раскрытие `#токен` в пользовательском
+   * ADR-126 §4: сервис сниппетов (`#`) — раскрытие `#токен` в пользовательском
    * тексте на входе промпта (до очереди). Не задан — раскрытия нет.
    */
   snippetService?: SnippetService,
   /**
-   * ADR-141 §4: абсолютный рабочий каталог проекта по id — для project-уровня
+   * ADR-126 §4: абсолютный рабочий каталог проекта по id — для project-уровня
    * сниппетов. Не задан — workspace берётся из карточки проекта как есть.
    */
   resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>,

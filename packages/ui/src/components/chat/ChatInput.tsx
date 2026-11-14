@@ -72,12 +72,12 @@ const TAG_REGEX = /@(\w+)/g
 const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
 /**
- * ADR-141 §2: предел файлов в `@`-пикере — список файлов workspace проекта
+ * ADR-126 §2: предел файлов в `@`-пикере — список файлов workspace проекта
  * показывается целиком только до этого числа (дальше — по фильтру запроса).
  */
 const MENTION_FILES_LIMIT = 50
 /**
- * ADR-141 §3: триггер `$`-пикера — `$` в начале слова (начало текста или
+ * ADR-126 §3: триггер `$`-пикера — `$` в начале слова (начало текста или
  * после пробела) и тело токена до курсора. Ядро резолвит `$`-токен по тем же
  * правилам (`engine/input-surface/parser.ts`), поэтому `$` внутри слова
  * (`a$b`) токеном не считается.
@@ -90,7 +90,7 @@ const SKILL_TRIGGER_REGEX = /(^|\s)\$([^\s$]*)$/u
 const SYMBOL_TOKEN_BODY_REGEX = /^[\p{L}][\p{L}\p{N}._-]*$/u
 
 /**
- * ADR-141 §4: триггер `#`-пикера — `#` в начале слова (начало текста или
+ * ADR-126 §4: триггер `#`-пикера — `#` в начале слова (начало текста или
  * после пробела) и тело токена до курсора. Прогон `#` (`##`, `###`) и пробел
  * после `#` — markdown-заголовок, а не сниппет (те же правила, что в
  * core-лекере `engine/input-surface/parser.ts`).
@@ -98,7 +98,7 @@ const SYMBOL_TOKEN_BODY_REGEX = /^[\p{L}][\p{L}\p{N}._-]*$/u
 const SNIPPET_TRIGGER_REGEX = /(^|\s)#([^\s#]*)$/u
 
 /**
- * ADR-141 §3: ищет `$`-токен в тексте до курсора.
+ * ADR-126 §3: ищет `$`-токен в тексте до курсора.
  *
  * Возвращает `null`, если триггера нет: `$` не в начале слова, тело токена
  * не имя (`$5` — цена) или после `$` пробел.
@@ -115,7 +115,7 @@ function findSkillTrigger(
 }
 
 /**
- * ADR-141 §4: ищет `#`-токен в тексте до курсора.
+ * ADR-126 §4: ищет `#`-токен в тексте до курсора.
  *
  * Возвращает `null`, если триггера нет: `#` не в начале слова, после `#`
  * пробел (markdown-заголовок) или прогон `#` (`##`), тело токена — не имя
@@ -335,7 +335,7 @@ export function ChatInput({
     position: { left: number }
   } | null>(null)
   /**
-   * ADR-141 §2: `@`-пикер — агенты, участники сессии (`@user`) и файлы
+   * ADR-126 §2: `@`-пикер — агенты, участники сессии (`@user`) и файлы
    * workspace проекта (`@file`). Пользователи приходят из `participants`
    * снимка сессии, файлы — из листинга workspace; список файлов кэшируется
    * по `projectId` на время сессии.
@@ -357,7 +357,7 @@ export function ChatInput({
     position: { left: number }
   } | null>(null)
   const [commandMatches, setCommandMatches] = useState(0)
-  // ADR-141 §3: `$`-пикер скиллов (триггер — `$` в начале слова).
+  // ADR-126 §3: `$`-пикер скиллов (триггер — `$` в начале слова).
   const [skillState, setSkillState] = useState<{
     query: string
     start: number
@@ -365,7 +365,7 @@ export function ChatInput({
     position: { left: number }
   } | null>(null)
   const [skillMatches, setSkillMatches] = useState(0)
-  // ADR-141 §4: `#`-пикер сниппетов (триггер — `#` в начале слова).
+  // ADR-126 §4: `#`-пикер сниппетов (триггер — `#` в начале слова).
   const [snippetState, setSnippetState] = useState<{
     query: string
     start: number
@@ -457,7 +457,7 @@ export function ChatInput({
   }, [retryText, sessionId, setValue])
 
   /**
-   * ADR-141 §2: данные `@`-пикера — участники сессии (`@user`) и файлы
+   * ADR-126 §2: данные `@`-пикера — участники сессии (`@user`) и файлы
    * workspace проекта (`@file`).
    *
    * Снимок сессии (`GET /api/v2/sessions/:id`) несёт `participants` и
@@ -552,7 +552,7 @@ export function ChatInput({
       setCommandState(null)
     }
 
-    // ADR-141 §3: `$`-скилл — `$` в начале слова; внутри кода токен ядром не
+    // ADR-126 §3: `$`-скилл — `$` в начале слова; внутри кода токен ядром не
     // распознаётся, поэтому пикер там не открывается.
     const skillTrigger = isInsideCode(textBeforeCursor)
       ? null
@@ -568,7 +568,7 @@ export function ChatInput({
       setSkillState(null)
     }
 
-    // ADR-141 §4: `#`-сниппет — `#` в начале слова; внутри кода токен ядром
+    // ADR-126 §4: `#`-сниппет — `#` в начале слова; внутри кода токен ядром
     // не распознаётся, поэтому пикер там не открывается.
     const snippetTrigger = isInsideCode(textBeforeCursor)
       ? null
@@ -601,7 +601,7 @@ export function ChatInput({
   }, [])
 
   /**
-   * ADR-141 §3: подстановка выбранного скилла — `$<имя> ` (с пробелом,
+   * ADR-126 §3: подстановка выбранного скилла — `$<имя> ` (с пробелом,
    * чтобы токен не слипся со следующим словом). Каретка встаёт за вставку.
    */
   const handleSelectSkill = useCallback((name: string) => {
@@ -624,7 +624,7 @@ export function ChatInput({
   }, [])
 
   /**
-   * ADR-141 §4: подстановка выбранного сниппета — `#<имя> ` (с пробелом,
+   * ADR-126 §4: подстановка выбранного сниппета — `#<имя> ` (с пробелом,
    * чтобы токен не слипся со следующим словом). Каретка встаёт за вставку.
    */
   const handleSelectSnippet = useCallback((name: string) => {
@@ -647,7 +647,7 @@ export function ChatInput({
   }, [])
 
   /**
-   * ADR-141 §2: подстановка выбранного упоминания — `@<id> ` (для файла id —
+   * ADR-126 §2: подстановка выбранного упоминания — `@<id> ` (для файла id —
    * путь относительно корня workspace). Пробел в конце, чтобы токен не
    * слипся со следующим словом.
    */
@@ -1016,7 +1016,7 @@ export function ChatInput({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (mentionState) {
-      // ADR-141 §2: пока список `@`-пикера непуст — выбор у MentionPopup,
+      // ADR-126 §2: пока список `@`-пикера непуст — выбор у MentionPopup,
       // сообщение не отправляется. Пустой список (нет совпадений) — Enter
       // отправляет сообщение, как у `$`/`#`-пикеров.
       if (e.key === 'Enter' && !e.shiftKey && mentionMatches > 0) {
@@ -1030,7 +1030,7 @@ export function ChatInput({
       if (mentionMatches > 0) return
     }
 
-    // ADR-141 §3: пока открыт непустой список скиллов — навигация/выбор у
+    // ADR-126 §3: пока открыт непустой список скиллов — навигация/выбор у
     // SkillAutocomplete, сообщение не отправляется.
     if (skillState) {
       if (e.key === 'Escape') {
@@ -1047,7 +1047,7 @@ export function ChatInput({
       }
     }
 
-    // ADR-141 §4: пока открыт непустой список сниппетов — навигация/выбор у
+    // ADR-126 §4: пока открыт непустой список сниппетов — навигация/выбор у
     // SnippetAutocomplete, сообщение не отправляется.
     if (snippetState) {
       if (e.key === 'Escape') {
@@ -1134,7 +1134,7 @@ export function ChatInput({
 
         <div className={`pt-1 pl-2 pr-2 relative ${expanded ? 'flex-1 min-h-0' : ''}`}>
           {/*
-            ADR-141: подсветка токенов `/`, `$`, `#`, `@`. Слой лежит под
+            ADR-126: подсветка токенов `/`, `$`, `#`, `@`. Слой лежит под
             textarea и повторяет текст; сам textarea прозрачный, поэтому
             каретка/выделение остаются нативными.
           */}

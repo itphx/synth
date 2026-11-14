@@ -511,7 +511,7 @@ export const dict = {
   'skills.title': 'Скиллы',
   'skills.description': 'Просмотр доступных скиллов, тела SKILL.md и supporting-файлов. Создание и правка скиллов — действие администратора.',
 
-  // Сниппеты (ADR-141 §4)
+  // Сниппеты (ADR-126 §4)
   'snippets.title': 'Сниппеты',
   'snippets.description': 'Личные текстовые фрагменты, которые раскрываются по #имени в сообщении.',
   'snippets.adminTitle': 'Сниппеты инстанса',
@@ -1656,7 +1656,7 @@ export const dict = {
   'chat.notes.limitHint': 'Достигнут лимит заметок: {maxCount}',
   'chat.input.stop': 'Стоп',
   'chat.input.mentionHint': 'Упомяните агента, пользователя или файл через @',
-  // Секции `@`-пикера (ADR-141 §2).
+  // Секции `@`-пикера (ADR-126 §2).
   'chat.mention.sectionAgents': 'Агенты',
   'chat.mention.sectionUsers': 'Пользователи',
   'chat.mention.sectionFiles': 'Файлы',

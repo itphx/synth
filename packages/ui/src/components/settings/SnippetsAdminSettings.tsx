@@ -3,7 +3,7 @@ import { SettingsPanel } from '../ui/settings'
 import { SnippetScopeEditor } from '../snippets/SnippetScopeEditor'
 
 /**
- * ADR-141 §4: инстансные сниппеты — админ-раздел «Сниппеты» (ADMIN).
+ * ADR-126 §4: инстансные сниппеты — админ-раздел «Сниппеты» (ADMIN).
  */
 export function SnippetsAdminSettings() {
   const { t } = useI18n()

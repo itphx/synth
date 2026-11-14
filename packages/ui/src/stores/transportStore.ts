@@ -2379,7 +2379,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // ADR-141 §2.1: сообщение адресовано пользователю (`@user`) — тост и
+      // ADR-126 §2.1: сообщение адресовано пользователю (`@user`) — тост и
       // непрочитанный бейдж сессии. Только получателю; self-mention сервер уже
       // исключил из `user_ids`. Событие хода не создаёт.
       case 'message.mentioned': {

@@ -86,7 +86,7 @@ export interface ProcessEarlyDeps {
   ) => Promise<ProcessEarlyResult>;
   handleCommand: (args: ProcessCommandArgs) => Promise<ProcessEarlyResult | null>;
   /**
-   * ADR-141 §3: пользовательский вызов скиллов через `$name` — резолвится
+   * ADR-126 §3: пользовательский вызов скиллов через `$name` — резолвится
    * в тексте обычного сообщения (не `/`-команды: в шаблонах `$ARGUMENTS` —
    * не токен скилла). `null` — продолжаем обычный путь (LLM).
    */
@@ -169,7 +169,7 @@ export async function runProcessEarly(
   // --- ADR-046 §7: резолвинг `/`-команд в core, до LLM ---
   // Флаг считается **до** разбора команды: prompt-команда (template/skill/
   // bundle) подменяет содержимое сообщения, а `$`-скиллы в `/`-сообщении
-  // не разбираются (ADR-141 §3: `$ARGUMENTS` в шаблоне — не скилл).
+  // не разбираются (ADR-126 §3: `$ARGUMENTS` в шаблоне — не скилл).
   const isSlashCommand = message.role === MessageRole.USER
     && (message.content ?? '').trimStart().startsWith('/');
   if (isSlashCommand) {
@@ -184,7 +184,7 @@ export async function runProcessEarly(
     // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.
   }
 
-  // --- ADR-141 §3: `$`-скиллы в тексте сообщения (только не `/`-команда) ---
+  // --- ADR-126 §3: `$`-скиллы в тексте сообщения (только не `/`-команда) ---
   if (!isSlashCommand && message.role === MessageRole.USER && deps.handleDollarSkills) {
     const dollarResult = await deps.handleDollarSkills({
       session, message, signal, publishChunk, debugCollector, streamId,

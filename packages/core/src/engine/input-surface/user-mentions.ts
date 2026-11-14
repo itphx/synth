@@ -1,5 +1,5 @@
 /**
- * ADR-141 §2.1: `@user` — граница «агенту / пользователю».
+ * ADR-126 §2.1: `@user` — граница «агенту / пользователю».
  *
  * Первое упоминание пользователя (вне code-блоков) делит сообщение на две
  * части:
@@ -14,7 +14,7 @@
  *   историю как user-directed сообщение (`metadata.userDirected = true`),
  *   публикует `message.mentioned` и **не** запускает ход.
  *
- * Правила (ADR-141 §2.1):
+ * Правила (ADR-126 §2.1):
  *
  * 1. Упоминать можно только пользователей с доступом к сессии — участников
  *    сессии/проекта (`deriveSessionParticipants`). Недоступный/неизвестный
@@ -39,14 +39,14 @@ import type {
 
 import { parseInput } from './parser.js';
 
-/** Виды упоминаний, допустимые в явном payload `mentions` (ADR-141 §2). */
+/** Виды упоминаний, допустимые в явном payload `mentions` (ADR-126 §2). */
 const MENTION_KINDS: readonly MentionKind[] = ['file', 'agent', 'user'];
 
 /**
  * Пользователь, доступного для упоминания (участник сессии/проекта).
  *
  * Набор **выводится** из участников (`deriveSessionParticipants`) — общий
- * список пользователей инстанса не раскрывается (ADR-141 §2).
+ * список пользователей инстанса не раскрывается (ADR-126 §2).
  */
 export interface MentionableUser {
   /** id пользователя (тот же id, что у владельца сессии/участника проекта). */
@@ -57,7 +57,7 @@ export interface MentionableUser {
   displayName?: string;
 }
 
-/** Результат валидации явного payload `mentions` (ADR-141 §2). */
+/** Результат валидации явного payload `mentions` (ADR-126 §2). */
 export interface ExplicitMentionsResult {
   /** Упоминания пользователей из payload (id уже разрешён в пользователя). */
   userMentions: InputMention[];
@@ -161,7 +161,7 @@ function matchUser(index: { exact: Map<string, MentionableUser>; loose: Map<stri
 }
 
 /**
- * Валидация явного payload `mentions` (ADR-141 §2 «Payload»).
+ * Валидация явного payload `mentions` (ADR-126 §2 «Payload»).
  *
  * `kind: 'user'` → id обязан соответствовать доступному участнику, иначе
  * пользователь попадает в `invalidUserIds` (роут отвечает `400
@@ -298,7 +298,7 @@ export function resolveUserMentionSplit(input: {
 }
 
 /**
- * Признак user-directed сообщения (ADR-141 §2.1).
+ * Признак user-directed сообщения (ADR-126 §2.1).
  *
  * Сообщение адресовано человеку, а не агенту: оно **не** гасит ход (у него
  * нет флага `disabled`) и исключается из LLM-контекста текущего хода, если

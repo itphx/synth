@@ -78,7 +78,7 @@ function makeSession(messages: Message[], extra: Partial<Session> = {}): Session
 }
 
 describe('sessionMessagesToLlm — фильтрация и инвариант tool-chain', () => {
-  it('ADR-141: user-directed новее триггера не уходит в текущий ход, старше — уходит', () => {
+  it('ADR-126: user-directed новее триггера не уходит в текущий ход, старше — уходит', () => {
     const older = msg({
       role: MessageRole.USER,
       content: '@bob ранее',

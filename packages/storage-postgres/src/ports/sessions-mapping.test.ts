@@ -162,7 +162,7 @@ describe('PG-маппинг сообщения: модель хода и шаг�
     expect(loaded.status).toBe('streaming');
   });
 
-  it('ADR-141: mentions переживают запись/чтение (jsonb)', () => {
+  it('ADR-126: mentions переживают запись/чтение (jsonb)', () => {
     const mentions = [{ kind: 'user' as const, id: 'alice', label: 'alice', span: { start: 0, end: 6 } }];
     const message = makeMessage({ mentions });
     const row = messageRow(message, 'sess-1');

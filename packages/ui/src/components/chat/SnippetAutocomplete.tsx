@@ -25,7 +25,7 @@ export interface SnippetAutocompleteProps {
  */
 const POPUP_LIFT = 'calc(100% + 17px)'
 
-/** Бейдж уровня сниппета (ADR-141 §4 «Три уровня»). */
+/** Бейдж уровня сниппета (ADR-126 §4 «Три уровня»). */
 const SCOPE_BADGE: Record<string, string> = {
   instance: 'bg-primary/15 text-primary',
   project: 'bg-status-success/15 text-status-success',
@@ -33,7 +33,7 @@ const SCOPE_BADGE: Record<string, string> = {
 }
 
 /**
- * ADR-141 §4: `#`-пикер сниппетов над композером.
+ * ADR-126 §4: `#`-пикер сниппетов над композером.
  *
  * Источник данных — реестр сниппетов (`GET /api/v2/snippets`): instance-,
  * user- и project-уровни (project — по `projectId` сессии). Ядро раскрывает

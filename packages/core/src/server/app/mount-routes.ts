@@ -188,7 +188,7 @@ export function mountStandaloneRoutes(
       getRemoteClient: () => getClient(),
       requestSessionService,
       analytics,
-      // ADR-141 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
+      // ADR-126 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
       ...(snippetService ? { snippetService } : {}),
       // Рабочий каталог проекта — project-уровень сниппетов. Резолв тот же,
       // что у snippet-routes (относительный workspace — от `workspacesRoot`).
@@ -1206,7 +1206,7 @@ export function mountStandaloneRoutes(
     },
   }));
 
-  // ADR-141 §4: сниппеты (`#`) — список/CRUD/раскрытие. Standalone —
+  // ADR-126 §4: сниппеты (`#`) — список/CRUD/раскрытие. Standalone —
   // пользователь один (инстанс-уровень доступен всем, user-уровень — своему).
   app.route('/api/v2/snippets', createSnippetRoutes(auth, {
     snippetService,

@@ -362,7 +362,7 @@ synth/
   (`` !`cmd` ``) — opt-in через `execute_shell`. `/summary` и `/compact` — ручное сжатие контекста
   (ADR-119; профиль — `compressionMode`). События `skill.invoked`/`command.invoked`;
   builtin `skill-creator` — скилл-инструкция в коде.
-- **Сниппеты** (`engine/snippets/*`, ADR-141 §4): `#name` — три уровня (`instance`/`project`/`user`),
+- **Сниппеты** (`engine/snippets/*`, ADR-126 §4): `#name` — три уровня (`instance`/`project`/`user`),
   приоритет `user > project > instance`; файловый discovery `*.md` + project-trust, раскрытие в приёме
   промпта до очереди (лимиты 15/64 КБ, code-блоки не трогаются). HTTP — `server/routes/snippets.ts`.
 

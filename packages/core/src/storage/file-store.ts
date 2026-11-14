@@ -85,8 +85,8 @@ interface SerializedMessage {
   /** ADR-118 §5: статус сообщения-хода («финал» — смена статуса). */
   status?: MessageStatus;
   /**
-   * ADR-141 §2.1: упоминания сообщения (`@`). Аддитивное поле: в записях до
-   * ADR-126/ADR-141 его нет вовсе (чтение → `undefined`).
+   * ADR-126 §2.1: упоминания сообщения (`@`). Аддитивное поле: в записях до
+   * ADR-126/ADR-126 его нет вовсе (чтение → `undefined`).
    */
   mentions?: InputMention[];
 }
@@ -267,7 +267,7 @@ function serializeMessage(msg: Message): SerializedMessage {
     turn_id: msg.turnId,
     step_index: msg.stepIndex,
     status: msg.status,
-    // ADR-141 §2.1: упоминания сообщения (`@`) — аддитивное поле.
+    // ADR-126 §2.1: упоминания сообщения (`@`) — аддитивное поле.
     mentions: msg.mentions,
   };
 }
@@ -362,7 +362,7 @@ function deserializeMessage(data: SerializedMessage): Message {
     turnId: data.turn_id,
     stepIndex: data.step_index,
     status: data.status,
-    // ADR-141 §2.1: упоминания сообщения (`@`) — аддитивное поле (legacy →
+    // ADR-126 §2.1: упоминания сообщения (`@`) — аддитивное поле (legacy →
     // undefined).
     mentions: data.mentions,
   };

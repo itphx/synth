@@ -221,7 +221,7 @@ describe('runProcessEarly', () => {
     expect(d.handleCommand).not.toHaveBeenCalled();
   });
 
-  it('ADR-141 §3: $ скиллы резолвятся для обычного user-сообщения', async () => {
+  it('ADR-126 §3: $ скиллы резолвятся для обычного user-сообщения', async () => {
     const { session } = await sessionWithUserMessage();
     const message = makeMessage({ role: MessageRole.USER, content: 'сделай ревью $api-review' });
     const d = deps({ handleDollarSkills: vi.fn(async () => null) as never });
@@ -234,7 +234,7 @@ describe('runProcessEarly', () => {
     }));
   });
 
-  it('ADR-141 §3: $ скиллы НЕ резолвятся для /-команды ($ARGUMENTS — не скилл)', async () => {
+  it('ADR-126 §3: $ скиллы НЕ резолвятся для /-команды ($ARGUMENTS — не скилл)', async () => {
     const { session } = await sessionWithUserMessage();
     const message = makeMessage({ role: MessageRole.USER, content: '/plan $ARGUMENTS' });
     const d = deps({
@@ -249,7 +249,7 @@ describe('runProcessEarly', () => {
     expect(d.handleDollarSkills).not.toHaveBeenCalled();
   });
 
-  it('ADR-141 §3: непустой результат handleDollarSkills прерывает путь', async () => {
+  it('ADR-126 §3: непустой результат handleDollarSkills прерывает путь', async () => {
     const { session } = await sessionWithUserMessage();
     const d = deps({ handleDollarSkills: vi.fn(async () => ({ error: 'x' })) as never });
 

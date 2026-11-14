@@ -1,5 +1,5 @@
 /**
- * ADR-141 §2: `@file` — чтение файла внутри workspace сессии.
+ * ADR-126 §2: `@file` — чтение файла внутри workspace сессии.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
@@ -39,7 +39,7 @@ function orchestrator() {
   };
 }
 
-describe('POST /prompt — @file (ADR-141 §2)', () => {
+describe('POST /prompt — @file (ADR-126 §2)', () => {
   let tmpDir: string;
 
   beforeEach(async () => { tmpDir = await mkdtemp(join(tmpdir(), 'synth-file-mention-')); });

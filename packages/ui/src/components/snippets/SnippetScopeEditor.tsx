@@ -6,7 +6,7 @@ import { Button } from '../ui/button'
 import { TextArea, TextField } from '../ui/settings'
 
 /**
- * ADR-141 §4: редактор сниппетов одного уровня.
+ * ADR-126 §4: редактор сниппетов одного уровня.
  *
  * Используется тремя точками:
  * - Настройки → «Сниппеты» — `scope:'user'`;

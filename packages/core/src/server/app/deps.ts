@@ -1175,7 +1175,7 @@ export async function createStandaloneDeps(
   // ADR-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
   void skillService.refreshRemote().catch(() => {});
 
-  // ADR-141 §4: сервис сниппетов (`#`) — три уровня (`instance`/`project`/`user`),
+  // ADR-126 §4: сервис сниппетов (`#`) — три уровня (`instance`/`project`/`user`),
   // discovery + запись файлов + раскрытие. Project-trust — тот же гейт, что у
   // скиллов и команд (`skills.trustedProjectDirs`).
   const snippetService = new SnippetService({
@@ -2451,7 +2451,7 @@ export async function createStandaloneDeps(
     skillService,
     bundleStore,
     commandService,
-    // ADR-141 §4: сервис сниппетов (`#`) — HTTP-контур `/api/v2/snippets`.
+    // ADR-126 §4: сервис сниппетов (`#`) — HTTP-контур `/api/v2/snippets`.
     snippetService,
     // ADR-051/ADR-100: порт реестра пайплайнов (определения + экземпляры).
     pipelines: pipelineStore,

@@ -1,5 +1,5 @@
 /**
- * ADR-141 §3: резолв `$`-скиллов (пользовательский вызов скилла в тексте
+ * ADR-126 §3: резолв `$`-скиллов (пользовательский вызов скилла в тексте
  * сообщения) — дедуп, порядок, гейты trust/scope/capabilities, code-блоки.
  */
 import { describe, it, expect } from 'vitest';
@@ -56,7 +56,7 @@ function makeRuntime(skills: DiscoveredSkill[]): SkillRuntime {
   };
 }
 
-describe('ADR-141 §3: resolveDollarSkills ($name)', () => {
+describe('ADR-126 §3: resolveDollarSkills ($name)', () => {
   it('нет $ — пустой результат, prompt не собирается', async () => {
     const res = await resolveDollarSkills({
       text: 'просто текст без скиллов',

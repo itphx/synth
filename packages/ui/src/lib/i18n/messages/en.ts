@@ -516,7 +516,7 @@ export const dict = {
   'skills.title': 'Skills',
   'skills.description': 'Browse available skills and inspect their SKILL.md body and supporting files. Creating and editing skills is an administrator action.',
 
-  // Snippets (ADR-141 §4)
+  // Snippets (ADR-126 §4)
   'snippets.title': 'Snippets',
   'snippets.description': 'Personal text fragments expanded by #name in a message.',
   'snippets.adminTitle': 'Instance snippets',
@@ -1680,7 +1680,7 @@ export const dict = {
   'chat.notes.limitHint': 'Note limit reached: {maxCount}',
   'chat.input.stop': 'Stop',
   'chat.input.mentionHint': 'Mention an agent, user or file with @',
-  // Секции `@`-пикера (ADR-141 §2).
+  // Секции `@`-пикера (ADR-126 §2).
   'chat.mention.sectionAgents': 'Agents',
   'chat.mention.sectionUsers': 'Users',
   'chat.mention.sectionFiles': 'Files',

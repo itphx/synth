@@ -213,7 +213,7 @@ export class CommandService implements CommandRuntime {
       return { status: 'prompt', name, args, kind: 'builtin', prompt: renderInitPrompt(args) };
     }
     if (name === 'review') {
-      // ADR-141 §1: `/review` — prompt-команда ревью изменений кода в
+      // ADR-126 §1: `/review` — prompt-команда ревью изменений кода в
       // git-репозитории. Аргумент (commit/branch/PR) уходит в промпт; без
       // workspace/git модель сообщает, что ревью недоступно (в ядре гейта нет —
       // решение владельца: гейт делает модель, глядя на фактический diff).
@@ -224,7 +224,7 @@ export class CommandService implements CommandRuntime {
       return { status: 'summarization', name, args, kind: 'builtin', compressionMode: 'summarization' };
     }
     if (name === 'compact') {
-      // ADR-141 §1: `/compact` — ручной запуск компактизации (ADR-119):
+      // ADR-126 §1: `/compact` — ручной запуск компактизации (ADR-119):
       // рабочее состояние по коду/проекту. Тот же статус `summarization`,
       // профиль — в `compressionMode`.
       return { status: 'summarization', name, args, kind: 'builtin', compressionMode: 'compaction' };

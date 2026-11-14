@@ -4,7 +4,7 @@
 > **Решение до:** 2026-12-31
 > **Дата:** 2026-11-09
 > **Источник:** выделено из [PROP-064](./prop-064-agent-browser.md) (2026-11-09); исходная идея — D19/`Фичи.md` (Terminal), 2026-09-16.
-> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-113](./adr-113-background-processes.md), [ADR-141](./adr-141-input-surface-commands-mentions-snippets.md)
+> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-113](./adr-113-background-processes.md), [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)
 
 ## Решение (предложение)
 
@@ -19,7 +19,7 @@
 - `execute_shell` (`packages/core/src/engine/tools/shell.ts`) — bash, `cwd` внутри рабочего каталога, таймаут по умолчанию 120 с, вывод усекается; исполнение через `ExecutionPort` (`packages/core/src/execution/ports/execution-port.ts`, ADR-077), в remote-режиме команда уходит исполнителю.
 - Фоновые процессы (`spawnBackground`, ADR-113): реестр, лог в blob, stop; это **не** интерактивный терминал.
 - Контейнер правой панели UI (`packages/ui/src/components/panels/RightPanel.tsx`) — место для вкладки терминала.
-- `!`-shell-режим композера — только предложение ([ADR-141](./adr-141-input-surface-commands-mentions-snippets.md) §5), в коде его нет; он использует тот же путь исполнения, что `execute_shell`, и панель терминала как место вывода.
+- `!`-shell-режим композера — только предложение ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) §5), в коде его нет; он использует тот же путь исполнения, что `execute_shell`, и панель терминала как место вывода.
 - PTY/attach в порту исполнения **не реализованы**: `stdin` в контракте отсутствует осознанно (`docs/EXECUTION.md`).
 
 ### Чего нет
@@ -57,7 +57,7 @@
 
 ### 5. Связь с `!`-режимом
 
-- `!` в композере ([ADR-141](./adr-141-input-surface-commands-mentions-snippets.md) §5) исполняет команду неинтерактивно тем же путём и показывает вывод в панели терминала. Синтаксис и UX кнопки — в ADR-141; PTY, транспорт и панель — здесь.
+- `!` в композере ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) §5) исполняет команду неинтерактивно тем же путём и показывает вывод в панели терминала. Синтаксис и UX кнопки — в ADR-126; PTY, транспорт и панель — здесь.
 
 ## Не цели
 
@@ -82,7 +82,7 @@
 - `execute_shell` есть, PTY/stdin нет (`docs/EXECUTION.md`).
 - Терминального эмулятора и вкладки терминала нет; `xterm`/`node-pty` не используются.
 - Потоковых событий терминала нет.
-- `!`-shell-режим отсутствует (ADR-141).
+- `!`-shell-режим отсутствует (ADR-126).
 
 ## Связи
 
@@ -93,7 +93,7 @@
 - [ADR-075](./adr-075-project-workspace-provisioning.md) — workspace и containment.
 - [ADR-077](./legacy/adr-077-runtime-toolchain.md) — `ExecutionPort` и исполнитель.
 - [ADR-113](./adr-113-background-processes.md) — фоновые процессы (не PTY, но общий реестр).
-- [ADR-141](./adr-141-input-surface-commands-mentions-snippets.md) — `!`-shell-режим композера.
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) — `!`-shell-режим композера.
 - [PROP-064](./prop-064-agent-browser.md) — браузер (выделен из общего документа).
 
 ## История

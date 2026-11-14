@@ -110,7 +110,7 @@ describe('CommandService — builtins (ADR-046 §7.2)', () => {
     expect(r?.compressionMode).toBe('summarization');
   });
 
-  it('/compact — триггер компактизации (ADR-141 §1, ADR-119)', async () => {
+  it('/compact — триггер компактизации (ADR-126 §1, ADR-119)', async () => {
     const { service } = makeService();
     const r = await service.resolve('/compact', CTX);
     expect(r?.status).toBe('summarization');

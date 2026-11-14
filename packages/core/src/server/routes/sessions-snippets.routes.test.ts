@@ -1,5 +1,5 @@
 /**
- * ADR-141 §4: раскрытие `#`-сниппетов в приёме промпта (`POST
+ * ADR-126 §4: раскрытие `#`-сниппетов в приёме промпта (`POST
  * /api/v2/sessions/:id/prompt`) — до очереди и до LLM.
  *
  * Проверяется:
@@ -70,7 +70,7 @@ function createMockOrchestrator() {
   };
 }
 
-describe('POST /api/v2/sessions/:id/prompt — раскрытие сниппетов (ADR-141 §4)', () => {
+describe('POST /api/v2/sessions/:id/prompt — раскрытие сниппетов (ADR-126 §4)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

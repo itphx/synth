@@ -51,7 +51,7 @@ export * from './fs.js';
 // Классификация файла по расширению (kind/MIME, allow-list inline-предпросмотра)
 // — browser-safe контракт для UI и ядра.
 export * from './file-kind.js';
-// ADR-141 §0/§2: контракты «поверхности ввода» — упоминания (`@`), скиллы (`$`)
+// ADR-126 §0/§2: контракты «поверхности ввода» — упоминания (`@`), скиллы (`$`)
 // и сниппеты (`#`): span'ы, виды токенов и результат разбора (browser-safe —
 // читают и ядро, и UI; сам разбор — в core, `engine/input-surface/parser.ts`).
 export * from './mentions.js';
