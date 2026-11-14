@@ -1590,3 +1590,10 @@
 - **Тесты:** shared 1153, core 10 823 (632 файла, `env -u no_proxy`), backend 973 (75 файлов), ui 4114; адресно: transfer 20, identity 8, directory/transfer с ACL-id, portable/transfer 241; мутационная проверка матрицы групп ранее — 5/5.
 - **Коммиты:** `6e2431fe` (передача владения), `4ee2467a` (переносы), `cd627a0c` (ACL-id), `a0edb838` (UI), `de62dac6` (доки).
 - **Осталось:** сборка `0.13.9` (build 27), деплой test, бета-публикация; живая проверка UI групп/передачи на инстансе с Keycloak.
+
+## 2026-11-14 — релиз-подготовка 0.13.9: test build 25 и бета
+
+- **Сборка:** `./scripts/build.sh` → 0.13.9 без ошибок; `SYNTH_BUILD_ID` = `986d5f29`.
+- **Деплой test:** `synth-deploy/scripts/build-and-publish.sh --test-only --app-version 0.13.9` → образы `git.itphx.ru/itphx/synth-{backend,ui}:0.13.9`, `synth-executor:0.13.9-full`, чарт `synth 0.13.9-25` (пины `test/fleet.yaml`, `test/values.yaml`); коммит `1b43bae` в `synth-deploy/main`, Fleet применил. Проверки: бандл `synth-test 1/1`, `rollout status` успешен, `/health` → `{version:"0.13.9", build:"986d5f29"}`, новые маршруты `/api/v2/users/groups` и `POST /api/v2/projects/:id/transfer` отвечают 401 без креды.
+- **Бета:** `publish-beta.sh --base 0.13.9 --restore-dist` → `0.13.9-beta.20261114080934.986d5f29`, dist-tag `beta` в Gitea, `@itphx/synth@beta` резолвится в неё; дерево восстановлено (чисто).
+- **Замечание:** полный прогон `build-and-publish.sh` без `--test-only` падает на образе `synth-gateway-email` (в его `package.json` остался `link:../synth-gateway-core` — локальная ссылка, в контейнере не разрешается); для test достаточно `--test-only` (email-бандл в `paths` закомментирован).
