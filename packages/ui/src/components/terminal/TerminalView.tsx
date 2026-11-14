@@ -89,6 +89,9 @@ export function TerminalView({ tab }: TerminalViewProps) {
   )
   /** Док «Спросить агента» / «Прикрепить вывод» (null — док закрыт). */
   const [dock, setDock] = useState<{ mode: TerminalAskDockMode; lines: string[] } | null>(null)
+  // Положение скролла — для затенения сверху/снизу как в чате: верх гаснет,
+  // когда прокручено вниз, низ — когда не в конце вывода.
+  const [scrollPos, setScrollPos] = useState<'top' | 'middle' | 'bottom'>('bottom')
 
   const terminal = useTerminalsStore((s) => (terminalId ? s.terminalsById[terminalId] : undefined))
   const loadTerminals = useTerminalsStore((s) => s.load)
@@ -351,8 +354,19 @@ export function TerminalView({ tab }: TerminalViewProps) {
       })
     })()
 
+    // Затенение краёв: зависит от положения скролла (как data-scroll-shadow в чате).
+    const updateScrollPos = () => {
+      const buffer = term.buffer.active
+      const atBottom = buffer.viewportY >= buffer.baseY
+      const atTop = buffer.viewportY <= 0
+      setScrollPos(atBottom ? 'bottom' : atTop ? 'top' : 'middle')
+    }
+    const scrollSub = term.onScroll(updateScrollPos)
+    updateScrollPos()
+
     return () => {
       disposed = true
+      scrollSub.dispose()
       controller.abort()
       observer?.disconnect()
       if (fitTimer) clearTimeout(fitTimer)
@@ -617,17 +631,23 @@ export function TerminalView({ tab }: TerminalViewProps) {
           data-testid="terminal-container"
           className="h-full w-full min-w-0 overflow-hidden p-2"
         />
-        {/* Затенение как в чате: верх/низ гаснут в фон терминала. */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-6"
-          style={{ background: `linear-gradient(to bottom, ${palette.background}, transparent)` }}
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-0 h-6"
-          style={{ background: `linear-gradient(to top, ${palette.background}, transparent)` }}
-        />
+        {/* Затенение как в чате: край гаснет только когда за ним есть контент. */}
+        {scrollPos !== 'top' && (
+          <div
+            aria-hidden
+            data-testid="terminal-fade-top"
+            className="pointer-events-none absolute inset-x-0 top-0 h-6"
+            style={{ background: `linear-gradient(to bottom, ${palette.background}, transparent)` }}
+          />
+        )}
+        {scrollPos !== 'bottom' && (
+          <div
+            aria-hidden
+            data-testid="terminal-fade-bottom"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-6"
+            style={{ background: `linear-gradient(to top, ${palette.background}, transparent)` }}
+          />
+        )}
         {finished && (
           <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-2">
             <span className="rounded-full bg-surface-card px-3 py-1 text-xs text-foreground">

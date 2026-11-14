@@ -2,6 +2,7 @@ import { Fragment, useRef, useCallback, useState, useEffect, useLayoutEffect, us
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ChatMessage, type PendingStreamStatus } from './ChatMessage'
 import { ScrollToBottomButton } from './ScrollToBottomButton'
+import { TerminalFloatingButton } from './TerminalFloatingButton'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
 import { cn } from '@/lib/utils'
 import { isLlmFailureMessage, isVisibleMessage } from './messageVisibility'
@@ -87,6 +88,8 @@ interface MessageListProps {
   turn?: ActiveTurn | null
   /** Сессия — для URL вложений сообщений (ADR-115). */
   sessionId?: string
+  /** Проект сессии — для плавающей кнопки «Терминал» (PROP-132). */
+  projectId?: string
   onCopy: (msg: MessageData) => void
   onToggle: (msg: MessageData) => void
   onPin: (msg: MessageData) => void
@@ -225,6 +228,7 @@ export function MessageList({
   onCancelRetry,
   hasOlder,
   onLoadOlder,
+  projectId,
 }: MessageListProps) {
   const { t } = useI18n()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -959,6 +963,10 @@ export function MessageList({
 
       {!expandedGroup && (
         <ScrollToBottomButton visible={showScrollBtn} onClick={() => scrollToBottom()} left={btnLeft ?? undefined} />
+      )}
+
+      {!expandedGroup && (
+        <TerminalFloatingButton sessionId={sessionId} projectId={projectId} left={btnLeft ?? undefined} />
       )}
     </div>
   )

@@ -32,7 +32,6 @@ import {
   useContextWindowWarning,
 } from '@/hooks/useContextWindowUsage'
 import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBar'
-import { TerminalFloatingButton } from './TerminalFloatingButton'
 import { useBackgroundHotkey } from './useBackgroundHotkey'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -1050,6 +1049,7 @@ export function ChatTab({ tab }: ChatTabProps) {
               messages={messages}
               turn={activeTurn}
               sessionId={sessionId}
+              projectId={activeProjectId ?? undefined}
               onCopy={handleCopy}
               onToggle={handleToggle}
               onPin={handlePin}
@@ -1152,13 +1152,6 @@ export function ChatTab({ tab }: ChatTabProps) {
         />
       )}
 
-      {/* Плавающая кнопка «Терминал» — если у сессии есть живой терминал. */}
-      {!isSubagent && (
-        <TerminalFloatingButton
-          sessionId={sessionId}
-          projectId={activeProjectId ?? undefined}
-        />
-      )}
     </div>
   )
 }

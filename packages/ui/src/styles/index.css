@@ -1249,6 +1249,7 @@ html.pointer-coarse .markdown-content .md-code-download {
 }
 
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  width: 6px !important;
   border-radius: 9999px;
   background: var(--synth-scrollbar-thumb) !important;
 }
