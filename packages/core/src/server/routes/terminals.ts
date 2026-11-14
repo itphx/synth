@@ -155,6 +155,38 @@ const MAX_LIST_LIMIT = 200;
 /** Размер страницы списка по умолчанию. */
 const DEFAULT_LIST_LIMIT = 50;
 
+/** Размер терминала по умолчанию (если поле не задано). */
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
+
+/**
+ * Границы размера терминала — **валидация на границе** (как у остальных роутов).
+ *
+ * Сервис по-прежнему клампит значения (`clampDimension`) — это защита от
+ * абсурдных значений для внутренних вызовов (тулы), но клиент получает честный
+ * `400 VALIDATION_ERROR`, а не молча изменённый размер.
+ */
+const MIN_COLS = 1;
+const MAX_COLS = 1000;
+const MIN_ROWS = 1;
+const MAX_ROWS = 500;
+
+/**
+ * Период heartbeat-кадра потока вывода, мс.
+ *
+ * Нужен, чтобы соединение не выглядело простаивающим для прокси/балансировщика
+ * и чтобы запись в мёртвый поток обнаруживалась (ошибка записи → снятие
+ * подписки). Кадр пустой: `{"seq":<последний>,"data":""}`.
+ */
+const STREAM_HEARTBEAT_MS = 15_000;
+
+/** Целое в границах (иначе `null` — клиент получит `400`). */
+function parseDimension(value: unknown, min: number, max: number): number | null {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return null;
+  if (value < min || value > max) return null;
+  return value;
+}
+
 /** Вид доступа к терминалу (выводится из HTTP-метода). */
 type TerminalAccess = 'read' | 'write';
 
@@ -433,10 +465,10 @@ export function createTerminalRoutes(
       }
     }
 
-    const cols = raw['cols'] === undefined ? 80 : raw['cols'];
-    const rows = raw['rows'] === undefined ? 24 : raw['rows'];
-    if (typeof cols !== 'number' || !Number.isFinite(cols)) return invalidBody(c);
-    if (typeof rows !== 'number' || !Number.isFinite(rows)) return invalidBody(c);
+    const cols = parseDimension(raw['cols'] ?? DEFAULT_COLS, MIN_COLS, MAX_COLS);
+    const rows = parseDimension(raw['rows'] ?? DEFAULT_ROWS, MIN_ROWS, MAX_ROWS);
+    if (cols === null) return invalidBody(c);
+    if (rows === null) return invalidBody(c);
     const shell = typeof raw['shell'] === 'string' ? raw['shell'].trim() : '';
     const title = typeof raw['title'] === 'string' ? raw['title'].trim() : '';
     const id = typeof raw['id'] === 'string' ? raw['id'].trim() : '';
@@ -495,6 +527,10 @@ export function createTerminalRoutes(
   app.get('/:id/stream', auth.requireAuth, enabledGuard, terminalGuard('read'), async (c) => {
     const record = guardedTerminal(c);
     const since = parseSinceParam(c.req.query('since')) ?? 0;
+    // Сигнал запроса: transport абортит его при отключении клиента
+    // (`@hono/node-server` — по `close` ответа; standalone-адаптер
+    // `server/app/http-server.ts` — тем же событием). Это ОСНОВНОЙ путь
+    // снятия подписки — `cancel()` потока вызывается не всеми транспортами.
     const signal = c.req.raw.signal;
     const encoder = new TextEncoder();
 
@@ -502,23 +538,30 @@ export function createTerminalRoutes(
     let subscription: TerminalSubscription | null = null;
     let closed = false;
     let lastSeq = since;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
 
-    /** Записать кадр потока (`{"seq":n,"data":"..."}` — NDJSON, строка на кадр). */
-    function write(frame: unknown): void {
-      if (closed || !controllerRef) return;
-      try {
-        controllerRef.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
-      } catch {
-        cleanup();
-      }
+    /** Остановить heartbeat-таймер (идемпотентно). */
+    function stopHeartbeat(): void {
+      if (heartbeat === null) return;
+      clearInterval(heartbeat);
+      heartbeat = null;
     }
 
-    /** Снять подписку и закрыть поток (идемпотентно). */
+    /**
+     * Снять подписку и закрыть поток (идемпотентно).
+     *
+     * Единственная точка выхода: abort запроса, `cancel()` потока, выход
+     * терминала, ошибка записи. Во всех случаях подписчик удаляется из
+     * реестра — иначе `attached_clients` растёт и idle-reaper не срабатывает.
+     */
     function cleanup(): void {
       if (closed) return;
       closed = true;
+      stopHeartbeat();
+      const active = subscription;
+      subscription = null;
       try {
-        subscription?.unsubscribe();
+        active?.unsubscribe();
       } catch {
         // ignore
       }
@@ -539,9 +582,30 @@ export function createTerminalRoutes(
       cleanup();
     }
 
+    /**
+     * Записать кадр потока (`{"seq":n,"data":"..."}` — NDJSON, строка на кадр).
+     *
+     * Ошибка записи означает, что поток больше никто не читает: снимаем
+     * подписку и завершаем поток (`cleanup`).
+     */
+    function write(frame: unknown): void {
+      if (closed || !controllerRef) return;
+      try {
+        controllerRef.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
+      } catch {
+        cleanup();
+      }
+    }
+
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controllerRef = controller;
+        // Слушатель ставим ДО подписки: клиент может уйти во время replay.
+        signal.addEventListener('abort', onAbort);
+        if (signal.aborted) {
+          cleanup();
+          return;
+        }
         try {
           subscription = deps.terminal.subscribe(record.id, { since }, {
             onData: (chunk) => {
@@ -564,18 +628,22 @@ export function createTerminalRoutes(
           return;
         }
         if (closed) {
+          // Клиент ушёл во время replay — подписку уже сняли (или снимем).
           try {
-            subscription.unsubscribe();
+            subscription?.unsubscribe();
           } catch {
             // ignore
           }
+          subscription = null;
           return;
         }
-        if (signal.aborted) {
-          cleanup();
-          return;
-        }
-        signal.addEventListener('abort', onAbort);
+        // Heartbeat: пустой кадр раз в 15 с. Держит соединение живым и
+        // обнаруживает мёртвый поток (ошибка записи → `cleanup`).
+        heartbeat = setInterval(() => {
+          if (closed) return;
+          write({ seq: lastSeq, data: '' });
+        }, STREAM_HEARTBEAT_MS);
+        (heartbeat as unknown as { unref?: () => void }).unref?.();
       },
       cancel() {
         cleanup();
@@ -691,9 +759,9 @@ export function createTerminalRoutes(
     const body = await c.req.json().catch(() => null);
     if (!body || typeof body !== 'object' || Array.isArray(body)) return invalidBody(c);
     const raw = body as Record<string, unknown>;
-    const cols = raw['cols'];
-    const rows = raw['rows'];
-    if (typeof cols !== 'number' || typeof rows !== 'number') return invalidBody(c);
+    const cols = parseDimension(raw['cols'], MIN_COLS, MAX_COLS);
+    const rows = parseDimension(raw['rows'], MIN_ROWS, MAX_ROWS);
+    if (cols === null || rows === null) return invalidBody(c);
     try {
       deps.terminal.resize(record.id, cols, rows);
       return c.body(null, 204);

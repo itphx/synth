@@ -3571,14 +3571,34 @@ instance-пул берёт адрес оттуда.
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
 | GET | `/api/v2/terminals` | auth | Список терминалов `{terminals, total, offset, limit, next_offset}` (ADR-118); фильтры `project_id`/`session_id`, `limit` (по умолчанию 50, максимум 200)/`offset`; нецелый `limit`/`offset` → 400 `VALIDATION_ERROR`. Терминалы проектов, которые пользователь не читает, в выдаче не появляются |
-| POST | `/api/v2/terminals` | auth (**write**) | Открыть терминал → 201 `{terminal}`; тело `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` обязателен). `cwd` из тела **игнорируется** — рабочий каталог вычисляет сервер (`session.worktree.directory` → `project.workspace`). Сессия должна принадлежать проекту. Нет `project_id` → 400 `VALIDATION_ERROR`, нет проекта → 404 `NOT_FOUND`, нет прав → 403 `FORBIDDEN` |
-| GET | `/api/v2/terminals/:id` | auth | Снимок терминала `{terminal}` (запись + `can_write` + `attached_clients`); терминала нет → 404 `TERMINAL_NOT_FOUND` |
+| POST | `/api/v2/terminals` | auth (**write**) | Открыть терминал → 201 `{terminal}`; тело `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` обязателен). `cols`/`rows` — целые (`cols` 1…1000, `rows` 1…500; по умолчанию 80×24), иначе 400 `VALIDATION_ERROR` (клампа нет). `cwd` из тела **игнорируется** — рабочий каталог вычисляет сервер (`session.worktree.directory` → `project.workspace`). Сессия должна принадлежать проекту. Нет `project_id` → 400 `VALIDATION_ERROR`, нет проекта → 404 `NOT_FOUND`, нет прав → 403 `FORBIDDEN` |
+| GET | `/api/v2/terminals/:id` | auth | Снимок терминала `{terminal}` — DTO в snake_case (см. таблицу DTO ниже); терминала нет → 404 `TERMINAL_NOT_FOUND` |
 | PATCH | `/api/v2/terminals/:id` | auth (**write**) | Точечная правка `{title?, session_id?}` → `{terminal}`; `null` — сброс поля; сессия должна принадлежать проекту терминала |
-| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Закрыть терминал → **204** (PTY гасится, публикуются `terminal.exited` + `terminal.deleted`) |
+| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Закрыть терминал → **204** (PTY гасится, публикуются `terminal.exited` + `terminal.deleted`); повторный `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
 | GET | `/api/v2/terminals/:id/output?since=N` | auth | Снимок вывода из кольцевого буфера: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` — курсор (только фрагменты с `seq > since`). `truncated` — часть вывода вытеснена из буфера, клиенту нужно перечитать вывод |
-| GET | `/api/v2/terminals/:id/stream?since=N` | auth | Поток вывода `application/x-ndjson`: кадры `{"seq":n,"data":"..."}` — сначала replay из буфера (`seq > since`), затем живой вывод; кадр выхода — `{"seq":n,"data":"","exit_code":…,"signal":…}`. Поток закрывается, когда клиент отключился (abort) |
+| GET | `/api/v2/terminals/:id/stream?since=N` | auth | Поток вывода `application/x-ndjson`: кадры `{"seq":n,"data":"..."}` — сначала replay из буфера (`seq > since`), затем живой вывод; кадр выхода — `{"seq":n,"data":"","exit_code":…,"signal":…}`; heartbeat — пустой кадр `{"seq":n,"data":""}` раз в 15 с. При отключении клиента (abort/закрытие соединения) поток закрывается, а подписка **снимается** (`attached_clients` уменьшается при любом исходе: abort, ошибка записи, выход терминала) |
 | POST | `/api/v2/terminals/:id/input` | auth (**write**) | Ввод в терминал `{data}` → **204**; кадр больше 16 КиБ → 413 `TERMINAL_LIMIT`, слишком часто (>20 кадров/с) → 429 `TERMINAL_LIMIT` |
-| POST | `/api/v2/terminals/:id/resize` | auth (**write**) | Новый размер `{cols, rows}` → **204** |
+| POST | `/api/v2/terminals/:id/resize` | auth (**write**) | Новый размер `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (целые), иначе 400 `VALIDATION_ERROR` |
+
+**DTO терминала — snake_case** (`toTerminalDto`, `engine/terminal/types.ts`):
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `id` | string | Идентификатор (`term_<uuid>`) |
+| `project_id` | string | Проект-владелец |
+| `session_id` | string? | Привязанная сессия (нет — поле отсутствует) |
+| `owner_id` | string | Создатель (на доступ не влияет) |
+| `cwd` | string | Рабочий каталог (вычислен сервером) |
+| `shell` | string | Оболочка |
+| `status` | `starting`\|`running`\|`exited` | Статус |
+| `cols`, `rows` | number | Размер (символы) |
+| `title` | string? | Заголовок вкладки |
+| `created_at`, `last_activity_at` | number | Время создания / последней активности (мс epoch) |
+| `exit_code`, `signal` | number?, string? | Причина выхода (после `exited`) |
+| `target` | `inline`\|`executor` | Точка исполнения |
+| `executor_id` | string? | Адрес исполнителя (`target: executor`) |
+| `can_write` | boolean | Право текущего пользователя на запись (инвариант 21) |
+| `attached_clients` | number | Сколько клиентов подписано на поток вывода |
 
 **Граница доступа (инварианты 16/21).** Право на терминал — право на его
 **проект**, и проверяется оно **на границе**: guard резолвит терминал и проект

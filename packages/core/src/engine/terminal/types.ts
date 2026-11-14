@@ -228,10 +228,43 @@ export interface TerminalListFilter {
 /**
  * DTO терминала для клиента.
  *
- * Имена полей — как в дизайне §1 (`can_write`/`attached_clients` — snake_case,
- * как указано в дизайне; остальные — camelCase, как у `TerminalRecord`).
+ * Имена полей — **snake_case** (HTTP-контракт, `docs/API_V2.md` §5.43):
+ * запись реестра (`TerminalRecord`) живёт в camelCase, а наружу все её поля
+ * отдаются в snake_case — один стиль на весь DTO, без смешения.
  */
-export interface TerminalDto extends TerminalRecord {
+export interface TerminalDto {
+  /** Идентификатор терминала. */
+  id: string;
+  /** Проект-владелец. */
+  project_id: string;
+  /** Привязанная сессия (необязательно). */
+  session_id?: string;
+  /** Создатель терминала. */
+  owner_id: string;
+  /** Рабочий каталог. */
+  cwd: string;
+  /** Оболочка. */
+  shell: string;
+  /** Статус. */
+  status: TerminalStatus;
+  /** Ширина (колонки). */
+  cols: number;
+  /** Высота (строки). */
+  rows: number;
+  /** Заголовок вкладки (необязательно). */
+  title?: string;
+  /** Момент создания (мс epoch). */
+  created_at: number;
+  /** Момент последней активности (мс epoch). */
+  last_activity_at: number;
+  /** Код завершения (после выхода). */
+  exit_code?: number;
+  /** Сигнал завершения (после выхода). */
+  signal?: string;
+  /** Точка исполнения. */
+  target: TerminalTarget;
+  /** Адрес исполнителя (для `executor`). */
+  executor_id?: string;
   /** Может ли текущий пользователь писать в терминал (право на изменение). */
   can_write: boolean;
   /** Сколько клиентов сейчас подписано на вывод. */
@@ -246,10 +279,25 @@ export interface TerminalDtoOptions {
   attachedClients: number;
 }
 
-/** DTO терминала (сериализация записи реестра). */
+/** DTO терминала (сериализация записи реестра в snake_case). */
 export function toTerminalDto(record: TerminalRecord, options: TerminalDtoOptions): TerminalDto {
   return {
-    ...record,
+    id: record.id,
+    project_id: record.projectId,
+    ...(record.sessionId !== undefined ? { session_id: record.sessionId } : {}),
+    owner_id: record.ownerId,
+    cwd: record.cwd,
+    shell: record.shell,
+    status: record.status,
+    cols: record.cols,
+    rows: record.rows,
+    ...(record.title !== undefined ? { title: record.title } : {}),
+    created_at: record.createdAt,
+    last_activity_at: record.lastActivityAt,
+    ...(record.exitCode !== undefined ? { exit_code: record.exitCode } : {}),
+    ...(record.signal !== undefined ? { signal: record.signal } : {}),
+    target: record.target,
+    ...(record.executorId !== undefined ? { executor_id: record.executorId } : {}),
     can_write: options.canWrite,
     attached_clients: options.attachedClients,
   };

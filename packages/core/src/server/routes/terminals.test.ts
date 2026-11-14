@@ -15,7 +15,7 @@
  * Изолированно: fake-порт исполнения (никакого реального PTY), без сети и
  * без записи на диск.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { EventBus } from '../../events/bus.js';
@@ -28,6 +28,7 @@ import type {
 } from '../../execution/ports/index.js';
 import { TerminalService } from '../../engine/terminal/service.js';
 import { createTerminalRoutes } from './terminals.js';
+import { createStandaloneHttpServer } from '../app/http-server.js';
 import { ProjectRole, resolveProjectAccess } from '@itphx/synth-shared';
 import type { Project, Session } from '@itphx/synth-shared';
 
@@ -295,12 +296,18 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     expect(res.status).toBe(201);
     const body = (await res.json()) as { terminal: Record<string, unknown> };
     expect(body.terminal['id']).toMatch(/^term_/);
-    expect(body.terminal['projectId']).toBe('proj-1');
-    expect(body.terminal['sessionId']).toBe('sess-1');
+    expect(body.terminal['project_id']).toBe('proj-1');
+    expect(body.terminal['session_id']).toBe('sess-1');
     expect(body.terminal['cols']).toBe(100);
     expect(body.terminal['rows']).toBe(30);
     expect(body.terminal['title']).toBe('Сборка');
     expect(body.terminal['can_write']).toBe(true);
+    expect(body.terminal['attached_clients']).toBe(0);
+    // DTO — целиком snake_case: camelCase-полей записи в ответе нет.
+    expect(body.terminal['projectId']).toBeUndefined();
+    expect(body.terminal['createdAt']).toBeUndefined();
+    expect(body.terminal['lastActivityAt']).toBeUndefined();
+    expect(typeof body.terminal['created_at']).toBe('number');
     // Событие `terminal.created` ушло в шину (общий `EventType`); канал —
     // сессия терминала (у терминала без привязки событий нет).
     expect(harness.events.some((event) => event.type === 'terminal.created')).toBe(true);
@@ -361,6 +368,30 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
       body: JSON.stringify({ project_id: 'proj-1', cols: 'wide', rows: 24 }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it('валидирует размеры при создании (400 VALIDATION_ERROR, без клампа)', async () => {
+    for (const body of [
+      { cols: 0, rows: 24 },
+      { cols: 80, rows: -1 },
+      { cols: 100000, rows: 24 },
+      { cols: 80, rows: 100000 },
+      { cols: '80', rows: 24 },
+      { cols: 80.5, rows: 24 },
+    ]) {
+      const res = await req(harness.app, '/api/v2/terminals', {
+        method: 'POST',
+        user: 'owner',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: 'proj-1', ...body }),
+      });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        'VALIDATION_ERROR',
+      );
+    }
+    // Ни один терминал не открылся: размер не «подправлен» молча.
+    expect(harness.port.handles).toHaveLength(0);
   });
 
   it('отдаёт список постранично (ADR-118)', async () => {
@@ -457,7 +488,7 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     expect(tailBody.chunks).toHaveLength(0);
   });
 
-  it('отдаёт поток NDJSON и закрывает его по abort', async () => {
+  it('отдаёт поток NDJSON и снимает подписку по abort', async () => {
     const id = await harness.openTerminal();
     harness.port.lastHandle.emitData('кадр');
     await new Promise((r) => setTimeout(r, 30));
@@ -474,11 +505,103 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     const first = await reader.read();
     const line = decoder.decode(first.value ?? new Uint8Array());
     expect(line.trim().split('\n')[0]).toBe('{"seq":1,"data":"кадр"}');
+    expect(harness.service.attachedClients(id)).toBe(1);
 
-    // Клиент отключился — поток закрывается.
+    // Клиент отключился — поток закрывается, подписка снята.
     controller.abort();
     const closed = await reader.read();
     expect(closed.done).toBe(true);
+    await vi.waitFor(() => expect(harness.service.attachedClients(id)).toBe(0));
+    // DTO подтверждает то же число: терминал снова без клиентов.
+    const snapshot = await req(harness.app, `/api/v2/terminals/${id}`, { user: 'owner' });
+    const body = (await snapshot.json()) as { terminal: { attached_clients: number } };
+    expect(body.terminal.attached_clients).toBe(0);
+  });
+
+  it('снимает подписку по cancel() читателя (клиент закрыл поток)', async () => {
+    const id = await harness.openTerminal();
+    const res = await harness.app.request(`/api/v2/terminals/${id}/stream?since=0`, {});
+    expect(harness.service.attachedClients(id)).toBe(1);
+
+    await res.body!.cancel();
+    await vi.waitFor(() => expect(harness.service.attachedClients(id)).toBe(0));
+
+    // Вывод после отмены не держит подписку и не бросает наружу.
+    harness.port.lastHandle.emitData('после отмены');
+    await new Promise((r) => setTimeout(r, 40));
+    expect(harness.service.attachedClients(id)).toBe(0);
+  });
+
+  it('шлёт heartbeat раз в 15 с (пустой кадр)', async () => {
+    const id = await harness.openTerminal();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const res = await harness.app.request(`/api/v2/terminals/${id}/stream?since=0`, {});
+      const reader = res.body!.getReader();
+      await vi.advanceTimersByTimeAsync(15_000);
+      const frame = await reader.read();
+      const line = new TextDecoder().decode(frame.value ?? new Uint8Array()).trim();
+      expect(line).toBe('{"seq":0,"data":""}');
+      expect(harness.service.attachedClients(id)).toBe(1);
+      await reader.cancel();
+      await vi.waitFor(() => expect(harness.service.attachedClients(id)).toBe(0));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('подписка снимается и по реальному обрыву соединения (standalone-адаптер)', async () => {
+    // Регресс D1: адаптер `server/app/http-server.ts` не отменял читателя и не
+    // абортил сигнал запроса — подписка оставалась в реестре навсегда.
+    const server = createStandaloneHttpServer({ app: harness.app });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as { port: number };
+    const base = `http://127.0.0.1:${address.port}`;
+    try {
+      const created = await fetch(`${base}/api/v2/terminals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: 'proj-1', cols: 80, rows: 24 }),
+      });
+      const { terminal } = (await created.json()) as { terminal: { id: string } };
+      harness.port.lastHandle.emitData('обрыв');
+      await new Promise((r) => setTimeout(r, 30));
+
+      const controller = new AbortController();
+      const stream = await fetch(`${base}/api/v2/terminals/${terminal.id}/stream?since=0`, {
+        signal: controller.signal,
+      });
+      const reader = stream.body!.getReader();
+      await reader.read();
+      expect(harness.service.attachedClients(terminal.id)).toBe(1);
+
+      controller.abort();
+      await vi.waitFor(() => expect(harness.service.attachedClients(terminal.id)).toBe(0), {
+        timeout: 2000,
+      });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('снимает подписку по abort — терминал снова простаивает и убирается reaper-ом', async () => {
+    const limited = createHarness({ limits: { idleMs: 0, reaperIntervalMs: 300 } });
+    try {
+      const id = await limited.openTerminal();
+      const controller = new AbortController();
+      const res = await limited.app.request(`/api/v2/terminals/${id}/stream?since=0`, {
+        signal: controller.signal,
+      });
+      const reader = res.body!.getReader();
+      expect(limited.service.attachedClients(id)).toBe(1);
+
+      controller.abort();
+      await reader.read().catch(() => ({ done: true }));
+      // Подписчик снят → терминал простаивает → idle-reaper его закрывает.
+      await vi.waitFor(() => expect(limited.service.get(id)).toBeNull(), { timeout: 3000 });
+    } finally {
+      limited.service.dispose();
+    }
   });
 
   it('переименовывает терминал и меняет привязку к сессии', async () => {
@@ -492,7 +615,7 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { terminal: Record<string, unknown> };
     expect(body.terminal['title']).toBe('Логи');
-    expect(body.terminal['sessionId']).toBe('sess-1');
+    expect(body.terminal['session_id']).toBe('sess-1');
   });
 
   it('закрывает терминал (DELETE → 204)', async () => {
@@ -549,20 +672,81 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     expect(harness.port.lastHandle.writes).toHaveLength(0);
   });
 
+  it('отвергает кадр ввода 20 КиБ (413 TERMINAL_LIMIT, scope input)', async () => {
+    const id = await harness.openTerminal();
+    const res = await req(harness.app, `/api/v2/terminals/${id}/input`, {
+      method: 'POST',
+      user: 'owner',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data: 'x'.repeat(20 * 1024) }),
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as {
+      error: { code: string; details?: { scope?: string; limit?: number } };
+    };
+    expect(body.error.code).toBe('TERMINAL_LIMIT');
+    expect(body.error.details?.scope).toBe('input');
+    expect(body.error.details?.limit).toBe(16 * 1024);
+    expect(harness.port.lastHandle.writes).toHaveLength(0);
+  });
+
+  it('валидирует размер в resize (400 VALIDATION_ERROR)', async () => {
+    const id = await harness.openTerminal();
+    for (const body of [
+      { cols: 0, rows: 24 },
+      { cols: 80, rows: -1 },
+      { cols: 100000, rows: 24 },
+      { cols: '80', rows: 24 },
+    ]) {
+      const res = await req(harness.app, `/api/v2/terminals/${id}/resize`, {
+        method: 'POST',
+        user: 'owner',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        'VALIDATION_ERROR',
+      );
+    }
+    // Размер терминала не менялся (сервис не вызывался).
+    expect(harness.port.lastHandle.resizes).toHaveLength(0);
+  });
+
+  it('DELETE закрывает терминал: повторный GET — 404', async () => {
+    const id = await harness.openTerminal();
+    const removed = await req(harness.app, `/api/v2/terminals/${id}`, {
+      method: 'DELETE',
+      user: 'owner',
+    });
+    expect(removed.status).toBe(204);
+    expect(await removed.text()).toBe('');
+
+    const after = await req(harness.app, `/api/v2/terminals/${id}`, { user: 'owner' });
+    expect(after.status).toBe(404);
+    expect(((await after.json()) as { error: { code: string } }).error.code).toBe(
+      'TERMINAL_NOT_FOUND',
+    );
+  });
+
   it('выключатель инстанса закрывает контур (403 TERMINALS_DISABLED)', async () => {
     const id = await harness.openTerminal();
     harness.service.setEnabled(false);
 
-    for (const [method, path] of [
-      ['GET', '/api/v2/terminals'],
-      ['GET', `/api/v2/terminals/${id}`],
-      ['POST', `/api/v2/terminals/${id}/input`],
+    for (const [method, path, body] of [
+      ['GET', '/api/v2/terminals', undefined],
+      ['POST', '/api/v2/terminals', JSON.stringify({ project_id: 'proj-1', cols: 80, rows: 24 })],
+      ['GET', `/api/v2/terminals/${id}`, undefined],
+      ['GET', `/api/v2/terminals/${id}/stream`, undefined],
+      ['POST', `/api/v2/terminals/${id}/input`, JSON.stringify({ data: 'x' })],
+      ['POST', `/api/v2/terminals/${id}/resize`, JSON.stringify({ cols: 80, rows: 24 })],
+      ['DELETE', `/api/v2/terminals/${id}`, undefined],
     ] as const) {
       const res = await req(harness.app, path, {
         method,
         user: 'owner',
-        ...(method === 'POST'
-          ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: 'x' }) }
+        ...(body !== undefined
+          ? { headers: { 'Content-Type': 'application/json' }, body }
           : {}),
       });
       expect(res.status, `${method} ${path}`).toBe(403);

@@ -2,7 +2,7 @@
 // прокачка ответа Hono в Node-ответ (включая SSE/долгоживущие стримы).
 // Вынесено из `server/app.ts` (ADR-095, шаг 4a) — «вынос по швам», без изменения поведения.
 import { createServer, IncomingMessage } from 'node:http';
-import type { Server } from 'node:http';
+import type { Server, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { existsSync } from 'node:fs';
 import type { Hono } from 'hono';
@@ -15,8 +15,14 @@ export interface StandaloneHttpServerOptions {
   uiDistPath?: string;
 }
 
-/** Node `IncomingMessage` → web `Request` (для `app.fetch`). */
-export function toWebRequest(req: IncomingMessage): Request {
+/**
+ * Node `IncomingMessage` → web `Request` (для `app.fetch`).
+ *
+ * `signal` — сигнал отключения клиента: transport абортит его, когда
+ * соединение закрывается, и хендлеры долгоживущих потоков (терминал, SSE) по
+ * нему снимают подписки. Без сигнала `c.req.raw.signal` не абортится никогда.
+ */
+export function toWebRequest(req: IncomingMessage, signal?: AbortSignal): Request {
   const protocol = 'http';
   const host = req.headers.host || 'localhost';
   const url = `${protocol}://${host}${req.url || '/'}`;
@@ -31,6 +37,7 @@ export function toWebRequest(req: IncomingMessage): Request {
     headers,
     body: noBody ? undefined : (Readable.toWeb(req) as ReadableStream),
     duplex: 'half',
+    ...(signal ? { signal } : {}),
   } as RequestInit);
 }
 
@@ -47,7 +54,15 @@ export function createStandaloneHttpServer(opts: StandaloneHttpServerOptions): S
 
   return createServer(async (req, res) => {
     try {
-      const webReq = toWebRequest(req);
+      // Сигнал отключения клиента для `c.req.raw.signal`: Node сообщает о
+      // закрытии соединения событием `close` ответа (в т.ч. по таймауту
+      // `curl -m`). Без этого хендлеры долгоживущих потоков (терминал, SSE)
+      // не узнают об уходе клиента и не снимают подписки.
+      const abort = new AbortController();
+      res.on('close', () => {
+        if (!res.writableFinished) abort.abort();
+      });
+      const webReq = toWebRequest(req, abort.signal);
       const url = new URL(webReq.url);
 
       // Статика UI для GET-запросов без префиксов API
@@ -66,15 +81,7 @@ export function createStandaloneHttpServer(opts: StandaloneHttpServerOptions): S
           res.writeHead(staticResp.status, headers);
           if (staticResp.body) {
             const reader = staticResp.body.getReader();
-            const pump = async () => {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                res.write(value);
-              }
-              res.end();
-            };
-            pump().catch(() => res.end());
+            pumpBody(reader, res);
           } else {
             res.end();
           }
@@ -96,22 +103,47 @@ export function createStandaloneHttpServer(opts: StandaloneHttpServerOptions): S
       // вовсе — сбрасываем head принудительно.
       res.flushHeaders();
       if (response.body) {
-        const reader = response.body.getReader();
-        const pump = async () => {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-          }
-          res.end();
-        };
-        pump().catch(() => res.end());
+        pumpBody(response.body.getReader(), res);
       } else {
         res.end();
       }
     } catch {
-      res.writeHead(500);
+      // После аборта клиента ответ уже может быть частично отправлен —
+      // повторный `writeHead` дал бы `ERR_HEADERS_SENT` в обработчике.
+      if (!res.headersSent) res.writeHead(500);
       res.end();
     }
   });
+}
+
+/**
+ * Прокачать web-поток в Node-ответ.
+ *
+ * При закрытии соединения клиентом читатель **отменяется**: иначе цикл
+ * `reader.read()` висит вечно, `ReadableStream.cancel()` исходного потока не
+ * вызывается, и подписка на стороне хендлера (терминал, SSE) остаётся живой.
+ */
+function pumpBody(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  res: ServerResponse,
+): void {
+  const cancel = (): void => {
+    void reader.cancel().catch(() => undefined);
+  };
+  res.on('close', cancel);
+  const pump = async (): Promise<void> => {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done || res.destroyed) break;
+        res.write(value);
+      }
+      res.end();
+    } catch {
+      res.end();
+    } finally {
+      res.off('close', cancel);
+    }
+  };
+  void pump();
 }

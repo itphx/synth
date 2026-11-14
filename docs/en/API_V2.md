@@ -3146,14 +3146,34 @@ the project access rule (`resolveProjectAccess`, PROP-133).
 | Method | Path | RBAC (managed) | Purpose / req-resp |
 |---|---|---|---|
 | GET | `/api/v2/terminals` | auth | Terminal list `{terminals, total, offset, limit, next_offset}` (ADR-118); filters `project_id`/`session_id`, `limit` (default 50, max 200)/`offset`; a non-integer `limit`/`offset` → 400 `VALIDATION_ERROR`. Terminals of projects the user cannot read never appear in the output |
-| POST | `/api/v2/terminals` | auth (**write**) | Open a terminal → 201 `{terminal}`; body `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` is required). `cwd` from the body is **ignored** — the server computes the working directory (`session.worktree.directory` → `project.workspace`). The session must belong to the project. No `project_id` → 400 `VALIDATION_ERROR`, unknown project → 404 `NOT_FOUND`, no rights → 403 `FORBIDDEN` |
-| GET | `/api/v2/terminals/:id` | auth | Terminal snapshot `{terminal}` (the record + `can_write` + `attached_clients`); unknown terminal → 404 `TERMINAL_NOT_FOUND` |
+| POST | `/api/v2/terminals` | auth (**write**) | Open a terminal → 201 `{terminal}`; body `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` is required). `cols`/`rows` are integers (`cols` 1…1000, `rows` 1…500; default 80×24), otherwise 400 `VALIDATION_ERROR` (no clamping). `cwd` from the body is **ignored** — the server computes the working directory (`session.worktree.directory` → `project.workspace`). The session must belong to the project. No `project_id` → 400 `VALIDATION_ERROR`, unknown project → 404 `NOT_FOUND`, no rights → 403 `FORBIDDEN` |
+| GET | `/api/v2/terminals/:id` | auth | Terminal snapshot `{terminal}` — a snake_case DTO (see the DTO table below); unknown terminal → 404 `TERMINAL_NOT_FOUND` |
 | PATCH | `/api/v2/terminals/:id` | auth (**write**) | Point patch `{title?, session_id?}` → `{terminal}`; `null` clears the field; the session must belong to the terminal's project |
-| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Close the terminal → **204** (the PTY is killed, `terminal.exited` + `terminal.deleted` are published) |
+| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Close the terminal → **204** (the PTY is killed, `terminal.exited` + `terminal.deleted` are published); a repeated `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
 | GET | `/api/v2/terminals/:id/output?since=N` | auth | Output snapshot from the ring buffer: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` is the cursor (only chunks with `seq > since`). `truncated` — part of the output was evicted from the buffer, the client must re-read the output |
-| GET | `/api/v2/terminals/:id/stream?since=N` | auth | Output stream `application/x-ndjson`: frames `{"seq":n,"data":"..."}` — first the replay from the buffer (`seq > since`), then the live output; the exit frame is `{"seq":n,"data":"","exit_code":…,"signal":…}`. The stream closes when the client disconnects (abort) |
+| GET | `/api/v2/terminals/:id/stream?since=N` | auth | Output stream `application/x-ndjson`: frames `{"seq":n,"data":"..."}` — first the replay from the buffer (`seq > since`), then the live output; the exit frame is `{"seq":n,"data":"","exit_code":…,"signal":…}`; a heartbeat empty frame `{"seq":n,"data":""}` every 15 s. When the client disconnects (abort/connection close), the stream is closed and the subscription is **removed** (`attached_clients` drops on every outcome: abort, write error, terminal exit) |
 | POST | `/api/v2/terminals/:id/input` | auth (**write**) | Write to the terminal `{data}` → **204**; a frame larger than 16 KiB → 413 `TERMINAL_LIMIT`, too frequent (>20 frames/s) → 429 `TERMINAL_LIMIT` |
-| POST | `/api/v2/terminals/:id/resize` | auth (**write**) | New size `{cols, rows}` → **204** |
+| POST | `/api/v2/terminals/:id/resize` | auth (**write**) | New size `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (integers), otherwise 400 `VALIDATION_ERROR` |
+
+**Terminal DTO is snake_case** (`toTerminalDto`, `engine/terminal/types.ts`):
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Identifier (`term_<uuid>`) |
+| `project_id` | string | Owning project |
+| `session_id` | string? | Bound session (absent when not bound) |
+| `owner_id` | string | Creator (does not affect access) |
+| `cwd` | string | Working directory (computed by the server) |
+| `shell` | string | Shell |
+| `status` | `starting`\|`running`\|`exited` | Status |
+| `cols`, `rows` | number | Size (characters) |
+| `title` | string? | Tab title |
+| `created_at`, `last_activity_at` | number | Creation / last activity time (ms epoch) |
+| `exit_code`, `signal` | number?, string? | Exit reason (after `exited`) |
+| `target` | `inline`\|`executor` | Execution point |
+| `executor_id` | string? | Executor address (`target: executor`) |
+| `can_write` | boolean | Whether the current user may write (invariant 21) |
+| `attached_clients` | number | Number of clients subscribed to the output stream |
 
 **Access boundary (invariants 16/21).** The right to a terminal is the right to
 its **project**, and it is checked **at the boundary**: the guard resolves the
