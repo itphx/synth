@@ -581,6 +581,7 @@ export function ProjectsTab() {
             toggleSessionExpand={toggleSessionExpand}
             projectId={project.id}
             origin={project.origin}
+            visibility={project.visibility}
             offline={isOffline}
             onCreateSession={() => void handleCreateSession(project.id, project.origin, project.origin ?? 'local')}
             projectActions={projectActions}

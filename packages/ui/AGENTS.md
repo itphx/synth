@@ -388,6 +388,7 @@
 
 ### Роли и доступ
 - Роль — из `useAuthStore(s => s.user)?.roles`; UI лишь прячет недоступное, защита — на сервере. Примеры: `secrets` (ADMIN/AUDITOR, `RightPanel.tsx:31`), админ-разделы настроек (`roles[]`, `SettingsModal.tsx:32`).
+- PROP-133: **доступ к проекту** — зеркало серверного резолвера в `lib/projectAccess.ts` (`resolveProjectRole`/`canReadProject`/`canManageProject`/`canEditProjectContent`, проекции `author`/`selected`/`all`, сборка тела `buildProjectAccessBody`); блок «Доступ» в панели проекта и при создании (`ProjectAccessProjectionField`, `ProjectAccessBadge`), каталог — `useUsersDirectory` (`GET /api/v2/users/directory`, только при `features.users`). Ключи i18n — `project.access.*` (RU/EN).
 
 ### Уведомления и масштаб
 - Toast + история + счётчики — `notifyMessage` (`hooks/useNotification.tsx`, standalone, вызывается и из сторов); не звать `toast` из react-toastify напрямую.

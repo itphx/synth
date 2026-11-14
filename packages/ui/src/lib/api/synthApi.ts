@@ -73,6 +73,10 @@ export type {
   ProjectMcpResponse,
   ProjectExecutorState,
   ProjectExecutorUpdate,
+  // PROP-133: состояние доступа к проекту (роли/видимость).
+  ProjectAccessRole,
+  ProjectAccessBody,
+  ProjectVisibility,
 } from './projects'
 // PROP-054: точечные операции с планом, журналом и инвариантами проекта.
 export type {
@@ -124,6 +128,8 @@ export { MODELS_PAGE_LIMIT, mergeModelGroups, groupModelsByProvider } from './mo
 export type { ContextFileEntry } from './context'
 export type { DebugConfigData } from './debug'
 export type { UserInfo, UsersListResponse } from './users'
+// PROP-133 §3.3: каталог пользователей для выбора участников проекта.
+export type { DirectoryUser, UsersDirectoryPage, UsersDirectoryParams } from './users'
 export type {
   SessionMcpEffectiveResponse,
   McpProbedTool,

@@ -2,7 +2,8 @@ import React, { useCallback } from 'react'
 import { TreeNode, TreeChildren } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
-import type { EntityOrigin } from '@/lib/api/synthApi'
+import { ProjectAccessBadge } from '@/components/ui/ProjectAccessBadge'
+import type { EntityOrigin, ProjectVisibility } from '@/lib/api/synthApi'
 import { MAX_VISIBLE_SESSIONS } from './constants'
 import { SessionTreeItem } from './SessionTreeItem'
 
@@ -12,7 +13,7 @@ export function GroupNode({
   expandedSessions, toggleSessionExpand,
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
-  origin, offline, isTouch,
+  origin, visibility, offline, isTouch,
   isRenaming, renameValue, onRenameChange, onRenameCommit, onRenameCancel,
 }: {
   id: string; label: string; icon: string; iconColor?: string
@@ -24,6 +25,8 @@ export function GroupNode({
   projectId: string | null; onCreateSession: () => void; onDropSession: (sid: string) => void
   projectActions?: TreeAction[]; projectContextItems?: any[]
   origin?: EntityOrigin
+  /** PROP-133: режим доступа к проекту (бейдж в строке дерева). */
+  visibility?: ProjectVisibility
   offline?: boolean
   isTouch?: boolean
   t: any
@@ -68,7 +71,12 @@ export function GroupNode({
     hasChildren: true,
     onToggle,
     count: totalCount,
-    badge: <OriginBadge origin={origin} />,
+    badge: (
+      <>
+        <OriginBadge origin={origin} />
+        <ProjectAccessBadge visibility={visibility} />
+      </>
+    ),
     actions,
     contextItems: projectContextItems,
     isRenaming,

@@ -8,8 +8,40 @@ import type { EntityOrigin } from './common'
 import type { GitRepoConfigData } from './git'
 import { BASE_URL, fetchJSON } from './base'
 
+/**
+ * PROP-133: роль доступа к проекту (значения — как на проводе).
+ *
+ * `owner` в `members` — роль владельца проекта; в `everyone_role` она
+ * запрещена (сервер отвечает `400 VALIDATION_ERROR`).
+ */
+export type ProjectAccessRole = 'owner' | 'editor' | 'viewer'
+
+/**
+ * PROP-133 §3.2: производное состояние видимости проекта.
+ *
+ * `author` — только автор, `selected` — выбранные пользователи/группы,
+ * `all` — всем пользователям инстанса. Значение **вычисляется сервером**:
+ * в теле `POST`/`PUT` его нет (запись → `400 VALIDATION_ERROR`).
+ */
+export type ProjectVisibility = 'author' | 'selected' | 'all'
+
+/**
+ * PROP-133 §3.1: тело состояния доступа проекта.
+ *
+ * `members`/`group_members` — **полная замена** набора (не merge);
+ * `everyone_role: null` — снять публикацию («всем пользователям» выключена).
+ */
+export interface ProjectAccessBody {
+  /** Список участников (пользователь → роль); полная замена. */
+  members?: Record<string, ProjectAccessRole>
+  /** Гранты группам (группа → роль); полная замена. Ф2 — источника групп пока нет. */
+  group_members?: Record<string, ProjectAccessRole>
+  /** Роль для всех пользователей инстанса; `null` — проект не опубликован. */
+  everyone_role?: 'viewer' | 'editor' | null
+}
+
 /** ADR-075: тело создания проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
-export interface CreateProjectBody {
+export interface CreateProjectBody extends ProjectAccessBody {
   name: string
   description?: string
   icon?: string | null
@@ -21,7 +53,7 @@ export interface CreateProjectBody {
 }
 
 /** ADR-075: тело обновления проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
-export interface UpdateProjectBody {
+export interface UpdateProjectBody extends ProjectAccessBody {
   name?: string
   description?: string
   current_task?: string
@@ -78,6 +110,25 @@ export interface ProjectData {
   name: string
   owner_id: string
   members: Record<string, string>
+  /**
+   * PROP-133 §3.2: гранты группам (`null` — групп нет).
+   *
+   * Ф2 — источника групп в продукте нет; поле приезжает с сервера, но UI
+   * его не предлагает (нет справочника групп).
+   */
+  group_members?: Record<string, ProjectAccessRole> | null
+  /**
+   * PROP-133 §3.2: роль для всех пользователей инстанса (`null` — проект
+   * не опубликован).
+   */
+  everyone_role?: 'owner' | 'editor' | 'viewer' | null
+  /**
+   * PROP-133 §3.2: **производное** состояние видимости (только чтение).
+   *
+   * Сервер считает его из состояния списка доступа; в теле запроса его нет
+   * (запись → `400 VALIDATION_ERROR`).
+   */
+  visibility?: ProjectVisibility
   description: string
   current_task: string
   invariants: string
@@ -459,6 +510,11 @@ export const projectsApi = {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}`)
   },
 
+  /**
+   * POST /projects — тело уходит **целиком** (`JSON.stringify(data)`), без
+   * фильтрации полей: так добавление состояния доступа (PROP-133 §3.1:
+   * `members`/`group_members`/`everyone_role`) не требует правки клиента.
+   */
   async createProject(data: CreateProjectBody): Promise<ProjectData> {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects`, {
       method: 'POST',
@@ -466,6 +522,13 @@ export const projectsApi = {
     })
   },
 
+  /**
+   * PUT /projects/:id — тело уходит **целиком** (см. `createProject`).
+   *
+   * `members`/`group_members` — полная замена набора; `everyone_role: null` —
+   * снять публикацию. Поле `visibility` в теле запрещено (сервер считает его
+   * сам) — в типе его нет намеренно.
+   */
   async updateProject(id: string, data: UpdateProjectBody): Promise<ProjectData> {
     return fetchJSON<ProjectData>(`${BASE_URL}/projects/${encodeURIComponent(id)}`, {
       method: 'PUT',

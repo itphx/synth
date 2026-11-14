@@ -21,10 +21,63 @@ export interface UsersListResponse {
   users: UserInfo[]
 }
 
+/**
+ * PROP-133 §3.3: запись каталога пользователей (`GET /api/v2/users/directory`).
+ *
+ * Лёгкая проекция для выбора участников проекта: только `id`, `username` и
+ * `display_name` — ролей, почты, идентичностей и заметок в каталоге нет.
+ */
+export interface DirectoryUser {
+  id: string
+  username: string
+  display_name: string | null
+}
+
+/**
+ * Страница каталога пользователей (ADR-118 §4 — постранично, как прочие списки).
+ *
+ * `next_offset` — курсор следующей страницы, `null` — страница последняя.
+ */
+export interface UsersDirectoryPage {
+  users: DirectoryUser[]
+  /** Всего пользователей (больше, чем в загруженной странице). */
+  total: number
+  offset: number
+  limit: number
+  next_offset: number | null
+}
+
+/** Параметры страницы каталога пользователей. */
+export interface UsersDirectoryParams {
+  /** Размер страницы (сервер: по умолчанию 50, максимум 200). */
+  limit?: number
+  /** Смещение страницы (номер первого элемента). */
+  offset?: number
+  /** Поиск по `username`/`display_name` (без учёта регистра). */
+  q?: string
+}
+
 export const usersApi = {
   // Пользователи (admin)
   async getUsers(): Promise<UsersListResponse> {
     return fetchJSON<UsersListResponse>(`${BASE_URL}/users`)
+  },
+
+  /**
+   * PROP-133 §3.3: каталог пользователей для выбора участников проекта.
+   *
+   * Доступ — любому аутентифицированному пользователю (иначе владелец
+   * проекта физически не может выбрать участников: `/users` — только ADMIN).
+   * В standalone раздела пользователей нет (`features.users === false`) —
+   * вызывающий не должен дёргать эндпоинт.
+   */
+  async getDirectory(params?: UsersDirectoryParams): Promise<UsersDirectoryPage> {
+    const query = new URLSearchParams()
+    if (params?.limit !== undefined) query.set('limit', String(params.limit))
+    if (params?.offset !== undefined) query.set('offset', String(params.offset))
+    if (params?.q) query.set('q', params.q)
+    const qs = query.toString()
+    return fetchJSON<UsersDirectoryPage>(`${BASE_URL}/users/directory${qs ? `?${qs}` : ''}`)
   },
 
   async getUser(id: string): Promise<UserInfo> {

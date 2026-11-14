@@ -1,18 +1,29 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { OriginSelector } from '@/components/ui/OriginSelector'
 import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { MultiSelectField } from '@/components/ui/settings'
+import { Toggle } from '@/components/ui/Toggle'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useAuthStore } from '@/stores/authStore'
+import { selectHasFeature, useInstanceCapabilitiesStore } from '@/stores/instanceCapabilitiesStore'
 import { useI18n } from '@/lib/i18n'
+import { useUsersDirectory } from '@/hooks/useUsersDirectory'
+import {
+  buildProjectAccessBody,
+  projectAccessDraftAfterProjection,
+  type ProjectAccessProjection,
+  type ProjectGrantRole,
+} from '@/lib/projectAccess'
+import { ProjectAccessProjectionField } from '@/components/ui/ProjectAccessProjectionField'
 import type { ProjectData, EntityOrigin } from '@/lib/api/synthApi'
 
 /**
  * Переиспользуемый поповер создания проекта: имя + (ADR-075) рабочий каталог +
- * (в гибриде) выбор «где создать». Используется и в левой панели
- * (ProjectsTabToolbar), и в правой (ProjectTab).
+ * (в гибриде) выбор «где создать» + (PROP-133 §4) проекция доступа.
+ * Используется и в левой панели (ProjectsTabToolbar), и в правой (ProjectTab).
  */
 export function CreateProjectPopover({
   trigger,
@@ -40,6 +51,20 @@ export function CreateProjectPopover({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // PROP-133 §4: проекция доступа при создании. По умолчанию «Только автору» —
+  // состояние, одинаковое у всех существующих проектов (совместимость).
+  const [projection, setProjection] = useState<ProjectAccessProjection>('author')
+  const [members, setMembers] = useState<Record<string, ProjectGrantRole>>({})
+  const [everyoneRole, setEveryoneRole] = useState<ProjectGrantRole>('viewer')
+
+  // Признак «инстанс обслуживает /users*» (PROP-125): без него выбирать
+  // участников нечем — предлагается только «Только автору».
+  const hasUsers = useInstanceCapabilitiesStore(selectHasFeature('users'))
+  useEffect(() => {
+    void useInstanceCapabilitiesStore.getState().load()
+  }, [])
+  const directory = useUsersDirectory(hasUsers, { limit: 50 })
+
   // Пикер каталога и подтверждение рендерятся порталом: фокус уходит из поповера,
   // и Radix (non-modal Popover) шлёт onOpenChange(false). Пока вложенный диалог
   // открыт, закрытие поповера игнорируем — иначе диалог закрывается вместе с ним.
@@ -57,6 +82,9 @@ export function CreateProjectPopover({
       setOrigin('local')
       setWorkspace('')
       setError(null)
+      setProjection('author')
+      setMembers({})
+      setEveryoneRole('viewer')
     } else {
       setPickerOpen(false)
       setConfirmOpen(false)
@@ -66,6 +94,24 @@ export function CreateProjectPopover({
 
   const preventNestedDismiss = (event: Event) => {
     if (nestedDialogOpenRef.current) event.preventDefault()
+  }
+
+  /** Смена проекции — переход между состояниями одного списка доступа. */
+  const handleProjectionChange = (next: ProjectAccessProjection) => {
+    if (next === projection) return
+    // Правило перехода — в `lib/projectAccess` (единственный источник правды).
+    const draft = projectAccessDraftAfterProjection(next, projection, members, everyoneRole)
+    setProjection(draft.projection)
+    setMembers(draft.members)
+    setEveryoneRole(draft.everyoneRole)
+  }
+
+  const handleMembersChange = (next: string[]) => {
+    setMembers((prev) => {
+      const out: Record<string, ProjectGrantRole> = {}
+      for (const id of next) out[id] = prev[id] ?? 'viewer'
+      return out
+    })
   }
 
   /**
@@ -79,11 +125,17 @@ export function CreateProjectPopover({
     setSubmitting(true)
     setError(null)
     try {
+      // PROP-133: состояние доступа уходит только когда проекция выбрана явно
+      // («выбранным»/«всем»); «только автору» — обычное создание, поля не
+      // нужны (совместимость с прежним поведением).
+      const accessBody =
+        projection === 'author' ? {} : buildProjectAccessBody(projection, members, everyoneRole)
       const created = await createProject({
         name: trimmed,
         origin,
         ...(!workspaceReadOnly && workspace.trim() ? { workspace: workspace.trim() } : {}),
         ...(confirmOutsideRoot ? { confirmOutsideRoot: true } : {}),
+        ...accessBody,
       })
       setError(null)
       setOpen(false)
@@ -162,6 +214,75 @@ export function CreateProjectPopover({
                     {t('workspace.select')}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* PROP-133 §4: проекция доступа при создании. */}
+            {hasUsers && (
+              <div className="flex flex-col gap-1" data-testid="create-project-access">
+                <span className="text-[0.65rem] text-muted-foreground">
+                  {t('project.access.createTitle')}
+                </span>
+                <ProjectAccessProjectionField
+                  value={projection}
+                  options={[
+                    { value: 'author', label: t('project.access.author') },
+                    { value: 'selected', label: t('project.access.selected') },
+                    { value: 'all', label: t('project.access.all') },
+                  ]}
+                  onChange={handleProjectionChange}
+                  ariaLabel={t('project.access.createTitle')}
+                  testIdPrefix="create-project-access"
+                />
+
+                {projection === 'selected' && (
+                  <div className="flex flex-col gap-1" data-testid="create-project-access-selected-users">
+                    <input
+                      type="search"
+                      value={directory.query}
+                      onChange={(e) => directory.setQuery(e.target.value)}
+                      placeholder={t('project.access.usersSearch')}
+                      aria-label={t('project.access.usersSearch')}
+                      className="w-full min-w-0 rounded bg-interactive px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground outline-none"
+                      data-testid="create-project-access-user-search"
+                    />
+                    <MultiSelectField
+                      label={t('project.access.users')}
+                      values={Object.keys(members)}
+                      options={directory.users.map((u) => ({
+                        value: u.id,
+                        label: u.display_name || u.username,
+                      }))}
+                      onChange={handleMembersChange}
+                      testIdPrefix="create-project-access-user"
+                      emptyText={directory.loading ? t('common.loading') : t('project.access.usersEmpty')}
+                    />
+                    {directory.failed && (
+                      <div
+                        className="text-[0.65rem] text-destructive break-words"
+                        data-testid="create-project-access-users-error"
+                      >
+                        {t('project.access.usersLoadError')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {projection === 'all' && (
+                  <label
+                    className="flex items-center justify-between gap-2 text-[0.65rem] text-foreground"
+                    data-testid="create-project-access-all-editor"
+                  >
+                    <span className="min-w-0">{t('project.access.allowEdit')}</span>
+                    <Toggle
+                      enabled={everyoneRole === 'editor'}
+                      onToggle={() =>
+                        setEveryoneRole(everyoneRole === 'editor' ? 'viewer' : 'editor')
+                      }
+                      ariaLabel={t('project.access.allowEdit')}
+                    />
+                  </label>
+                )}
               </div>
             )}
 

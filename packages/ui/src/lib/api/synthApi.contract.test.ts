@@ -31,7 +31,7 @@ const EXPECTED_API_METHODS = [
   'getAnalyticsActivity', 'getAnalyticsDecision', 'getAnalyticsExport', 'getAnalyticsPrompt',
   'getAnalyticsSummary', 'getAnalyticsUsage', 'getAttachmentsSettings', 'getAudit', 'getCommandAudit', 'getCommands',
   'getCommitDetail', 'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig', 'getDecisionMetrics',
-  'getDecisionSettings', 'getDefaultAgentInfo', 'getDefaultModel', 'getDictionaries', 'getDictionary',
+  'getDecisionSettings', 'getDefaultAgentInfo', 'getDefaultModel', 'getDictionaries', 'getDictionary', 'getDirectory',
   'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
   'getEventsSettings', 'getExecutionPools', 'getExecutionProfiles', 'getExecutionSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus', 'getInstanceCapabilities',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo', 'getMcpPolicyInfo',

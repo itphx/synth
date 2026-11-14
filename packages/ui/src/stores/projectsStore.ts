@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ProjectData, GitRepoConfigData, EntityOrigin, PublishProjectResult } from '@/lib/api/synthApi'
+import type { ProjectData, GitRepoConfigData, EntityOrigin, PublishProjectResult, ProjectAccessRole } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 import { useSessionsStore } from './sessionsStore'
 import { useHybridStore } from './hybridStore'
@@ -44,6 +44,12 @@ interface ProjectsStore {
     origin?: EntityOrigin
     /** ADR-075: согласие на workspace вне `workspacesRoot` (повтор после 409). */
     confirmOutsideRoot?: boolean
+    /** PROP-133 §3.1: состояние доступа при создании (полная замена `members`). */
+    members?: Record<string, ProjectAccessRole>
+    /** PROP-133 §3.1: гранты группам (Ф2 — источника групп нет). */
+    group_members?: Record<string, ProjectAccessRole>
+    /** PROP-133 §3.1: роль для всех пользователей (`null` — не опубликован). */
+    everyone_role?: 'viewer' | 'editor' | null
   }) => Promise<ProjectData>
   updateProject: (id: string, data: {
     name?: string
@@ -52,6 +58,12 @@ interface ProjectsStore {
     color?: string | null
     workspace?: string | null
     repos?: GitRepoConfigData[]
+    /** PROP-133 §3.1: список участников — **полная замена**. */
+    members?: Record<string, ProjectAccessRole>
+    /** PROP-133 §3.1: гранты группам — **полная замена**. */
+    group_members?: Record<string, ProjectAccessRole>
+    /** PROP-133 §3.1: роль для всех пользователей (`null` — снять публикацию). */
+    everyone_role?: 'viewer' | 'editor' | null
   }) => Promise<ProjectData | null>
   deleteProject: (id: string) => Promise<boolean>
   /** Заменяет проект в списке сохранённым объектом (после PATCH /projects/:id). */
@@ -79,11 +91,25 @@ export const PROJECTS_PAGE_LIMIT = 100
  * бы план открытого проекта (панель «Проект» показывала бы пустой план).
  *
  * Если сводка пришла **с** планом (деталь) — она авторитетна.
+ *
+ * PROP-133: состояние доступа (`group_members`/`everyone_role`/`visibility`)
+ * — **производное от списка доступа**, и сводка списка его несёт наравне с
+ * деталью. Старый сервер (поля нет) не должен затирать уже загруженное
+ * состояние — иначе бейдж режима в дереве «мигал» бы. Поэтому каждое поле
+ * переносится по отдельности: `undefined` в сводке — «сервер не знает»,
+ * значение (включая `null`) — авторитетно.
  */
 function mergeProjectSummary(existing: ProjectData | undefined, incoming: ProjectData): ProjectData {
   if (!existing) return incoming
   if (incoming.plan !== undefined && incoming.plan !== null) return incoming
-  return { ...existing, ...incoming, plan: existing.plan ?? null }
+  return {
+    ...existing,
+    ...incoming,
+    plan: existing.plan ?? null,
+    group_members: incoming.group_members !== undefined ? incoming.group_members : existing.group_members ?? null,
+    everyone_role: incoming.everyone_role !== undefined ? incoming.everyone_role : existing.everyone_role ?? null,
+    visibility: incoming.visibility !== undefined ? incoming.visibility : existing.visibility,
+  }
 }
 
 export const useProjectsStore = create<ProjectsStore>((set, get) => ({

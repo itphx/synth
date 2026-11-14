@@ -1,19 +1,19 @@
-// Права изменения содержимого сессии в UI (PROP-054, инвариант 21).
+// Права доступа к сессии в UI (PROP-054, инвариант 21, PROP-133 §1).
 //
 // Зеркалит серверный prefix-guard сессий
 // (`packages/core/src/server/session-access-guard.ts`): вид доступа выводится
-// из HTTP-метода (read/write), а write-доступ к сессии даёт:
+// из HTTP-метода (read/write), а доступ к сессии даёт:
 //
 //   - владелец сессии (`owner_id ?? user_id`);
 //   - глобальные роли `ADMIN`/`LEAD`;
-//   - участник проекта с правом изменения содержимого (OWNER/EDITOR).
+//   - участие в проекте (для чтения — любая роль, для записи — OWNER/EDITOR).
 //
 // VIEWER читает, но не мутирует (инвариант 21). Enforcement остаётся на
 // сервере — UI лишь прячет недоступные действия (как `canEditProjectContent`).
 
-import type { ProjectData, SessionData } from '@/lib/api/synthApi'
+import type { SessionData } from '@/lib/api/synthApi'
 import type { User } from '@/lib/api/client'
-import { canEditProjectContent } from './projectAccess'
+import { canEditProjectContent, canReadProject, type ProjectAccessSubject } from './projectAccess'
 
 /** Контекст развёртывания, в котором UI показывает права. */
 export interface SessionAccessOptions {
@@ -39,7 +39,7 @@ export type SessionAccessSubject = Pick<
 export function canEditSessionContent(
   session: SessionAccessSubject | undefined | null,
   user: User | null | undefined,
-  project?: Pick<ProjectData, 'owner_id' | 'members' | 'origin'> | undefined | null,
+  project?: ProjectAccessSubject | undefined | null,
   options?: SessionAccessOptions,
 ): boolean {
   if (!session || !user) return false
@@ -56,4 +56,30 @@ export function canEditSessionContent(
 
   if (!session.project_id) return false
   return canEditProjectContent(project ?? null, user, options)
+}
+
+/**
+ * Есть ли право **читать** содержимое сессии (PROP-133 §1).
+ *
+ * Зеркалит серверный prefix-guard сессий в режиме чтения: владелец →
+ * глобальные роли → участие в проекте (любая роль, включая `viewer`).
+ * Роль `viewer` читает, но не мутирует (инвариант 21).
+ */
+export function canReadSessionContent(
+  session: SessionAccessSubject | undefined | null,
+  user: User | null | undefined,
+  project?: ProjectAccessSubject | undefined | null,
+  options?: SessionAccessOptions,
+): boolean {
+  if (!session || !user) return false
+  const roles = user.roles ?? []
+  if (roles.includes('ADMIN') || roles.includes('LEAD')) return true
+
+  const owner = session.owner_id ?? session.user_id
+  if (owner && owner === user.id) return true
+
+  if (options?.standalone === true && session.origin !== 'remote') return true
+
+  if (!session.project_id) return false
+  return canReadProject(project ?? null, user, options)
 }

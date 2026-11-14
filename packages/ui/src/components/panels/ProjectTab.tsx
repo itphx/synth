@@ -15,13 +15,26 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Button } from '@/components/ui/button'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { useEntityEditStore } from '@/stores/entityEditStore'
-import { InfoField as Field, InfoSection as Section } from '@/components/ui/settings'
+import { InfoField as Field, InfoSection as Section, MultiSelectField } from '@/components/ui/settings'
 import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
 import { ExpandableListRow, RowBadge } from '@/components/panels/ExpandableListRow'
-import { canEditProjectContent, canManageProject } from '@/lib/projectAccess'
+import { ProjectAccessProjectionField } from '@/components/ui/ProjectAccessProjectionField'
+import {
+  accessProjectionOf,
+  buildProjectAccessBody,
+  canEditProjectContent,
+  canManageProject,
+  draftMembersOf,
+  everyoneRoleOf,
+  projectAccessDraftAfterProjection,
+  type ProjectAccessProjection,
+  type ProjectGrantRole,
+} from '@/lib/projectAccess'
 import { canEditSessionContent } from '@/lib/sessionAccess'
+import { useUsersDirectory } from '@/hooks/useUsersDirectory'
+import { selectHasFeature, useInstanceCapabilitiesStore } from '@/stores/instanceCapabilitiesStore'
 import { MarkdownText } from './work/MarkdownText'
 import { PlanSummary } from './work/PlanSummary'
 import { WorkModal, type WorkTab } from './work/WorkModal'
@@ -96,6 +109,12 @@ export function ProjectTab() {
   // PROP-054: право изменять содержимое проекта (план/журнал/инварианты).
   // VIEWER читает, но кнопок правки не видит (инвариант 21).
   const canEditProject = canEditProjectContent(project ?? storeProject, user, {
+    standalone: deployment === 'standalone',
+  })
+
+  // PROP-133 §4: право менять доступ к проекту — то же, что и управление
+  // проектом (автор/OWNER/LEAD/ADMIN). EDITOR доступ не меняет.
+  const canManageAccess = canManageProject(project ?? storeProject, user, {
     standalone: deployment === 'standalone',
   })
 
@@ -565,6 +584,20 @@ export function ProjectTab() {
         )}
         <div className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.workspace.hint')}</div>
       </Section>
+
+      {/* PROP-133 §4: блок «Доступ» — три проекции состояния списка доступа. */}
+      {canManageAccess && project && (
+        <Section title={t('project.access.title')}>
+          <ProjectAccessBlock
+            project={project}
+            sessionId={sessionId}
+            onUpdated={(updated) => {
+              setProject(updated)
+              useProjectsStore.getState().updateProjectInList(updated)
+            }}
+          />
+        </Section>
+      )}
 
       <DirectoryPickerDialog
         open={pickerOpen}
@@ -1539,6 +1572,223 @@ function ProjectSkillsBlock({
         )
       })}
       <p className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.skills.hint')}</p>
+    </div>
+  )
+}
+
+/**
+ * PROP-133 §4: блок «Доступ» — три проекции состояния списка доступа.
+ *
+ * Проекции — **не отдельный флаг**, а три состояния одного списка (PROP-133):
+ * «Только автору» / «Только выбранным» / «Всем пользователям». Текущая
+ * проекция берётся из DTO (`visibility`, производное сервером), сохранение
+ * уходит **одним** `PUT /projects/:id` с полной заменой `members` и
+ * `everyone_role` (PROP-133 §3.1).
+ *
+ * Групп (Ф2) здесь нет — источника групп в продукте нет; выбор пользователей
+ * доступен только там, где сервер объявил фичу `features.users`
+ * (`GET /api/v2/meta`): в standalone раздела пользователей нет, поэтому
+ * предлагается только «Только автору» (read-only).
+ */
+function ProjectAccessBlock({
+  project,
+  sessionId,
+  onUpdated,
+}: {
+  project: ProjectData
+  sessionId?: string
+  onUpdated: (updated: ProjectData) => void
+}) {
+  const { t } = useI18n()
+  const { run, isPending } = usePanelSettingSave({ sessionId })
+
+  // Признак «инстанс обслуживает /users*» (PROP-125): без него выбирать
+  // участников нечем (и эндпоинта может не быть вовсе).
+  const hasUsers = useInstanceCapabilitiesStore(selectHasFeature('users'))
+  useEffect(() => {
+    void useInstanceCapabilitiesStore.getState().load()
+  }, [])
+  const directory = useUsersDirectory(hasUsers)
+
+  const [projection, setProjection] = useState<ProjectAccessProjection>(() =>
+    accessProjectionOf(project),
+  )
+  const [members, setMembers] = useState<Record<string, ProjectGrantRole>>(() =>
+    draftMembersOf(project),
+  )
+  const [everyoneRole, setEveryoneRole] = useState<ProjectGrantRole>(() =>
+    everyoneRoleOf(project),
+  )
+
+  // Синхронизация с сервером: доступ мог поменять другой клиент
+  // (`project.updated`) — черновик возвращается к актуальному состоянию.
+  useEffect(() => {
+    setProjection(accessProjectionOf(project))
+    setMembers(draftMembersOf(project))
+    setEveryoneRole(everyoneRoleOf(project))
+  }, [project])
+
+  const userLabel = (id: string): string => {
+    const found = directory.users.find((u) => u.id === id)
+    if (found) return found.display_name || found.username
+    return id
+  }
+
+  /** Смена проекции — переход между состояниями одного списка доступа. */
+  const handleProjectionChange = (next: ProjectAccessProjection) => {
+    if (next === projection) return
+    // Правило перехода — в `lib/projectAccess` (единственный источник правды).
+    const draft = projectAccessDraftAfterProjection(next, projection, members, everyoneRole)
+    setProjection(draft.projection)
+    setMembers(draft.members)
+    setEveryoneRole(draft.everyoneRole)
+  }
+
+  const handleMembersChange = (next: string[]) => {
+    setMembers((prev) => {
+      const out: Record<string, ProjectGrantRole> = {}
+      for (const id of next) out[id] = prev[id] ?? 'viewer'
+      return out
+    })
+  }
+
+  const handleRoleChange = (id: string, role: ProjectGrantRole) => {
+    setMembers((prev) => ({ ...prev, [id]: role }))
+  }
+
+  const handleSave = async () => {
+    const body = buildProjectAccessBody(projection, members, everyoneRole)
+    await run({
+      key: 'project-access',
+      run: () => synthApi.updateProject(project.id, body),
+      onSuccess: (updated) => onUpdated(updated),
+      // 403 — нет права управлять доступом; 400 — недопустимое состояние
+      // (например, роль владельца понижена). Остальное — общий текст панели.
+      errorKey: (err) => {
+        const status = (err as { status?: number })?.status
+        if (status === 403) return 'project.access.forbidden'
+        if (status === 400) return 'project.access.invalid'
+        return 'panel.saveError'
+      },
+    })
+  }
+
+  const projectionOptions: { value: ProjectAccessProjection; label: string }[] = hasUsers
+    ? [
+        { value: 'author', label: t('project.access.author') },
+        { value: 'selected', label: t('project.access.selected') },
+        { value: 'all', label: t('project.access.all') },
+      ]
+    : [{ value: 'author', label: t('project.access.author') }]
+
+  const busy = isPending('project-access')
+  const selectedIds = Object.keys(members)
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2" data-testid="project-access">
+      <ProjectAccessProjectionField
+        value={projection}
+        options={projectionOptions}
+        onChange={handleProjectionChange}
+        ariaLabel={t('project.access.title')}
+        disabled={!hasUsers}
+        testIdPrefix="project-access"
+      />
+
+      {!hasUsers && (
+        <div
+          className="text-[0.625rem] text-muted-foreground/60"
+          data-testid="project-access-single-user"
+        >
+          {t('project.access.singleUser')}
+        </div>
+      )}
+
+      {hasUsers && projection === 'selected' && (
+        <div className="flex min-w-0 flex-col gap-2" data-testid="project-access-selected-users">
+          <input
+            type="search"
+            value={directory.query}
+            onChange={(e) => directory.setQuery(e.target.value)}
+            placeholder={t('project.access.usersSearch')}
+            aria-label={t('project.access.usersSearch')}
+            className="w-full min-w-0 rounded-md bg-input border border-border px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            data-testid="project-access-user-search"
+          />
+          <MultiSelectField
+            label={t('project.access.users')}
+            values={selectedIds}
+            options={directory.users.map((u) => ({
+              value: u.id,
+              label: u.display_name || u.username,
+            }))}
+            onChange={handleMembersChange}
+            testIdPrefix="project-access-user"
+            emptyText={directory.loading ? t('common.loading') : t('project.access.usersEmpty')}
+          />
+          {directory.failed && (
+            <div
+              className="text-[0.625rem] text-destructive"
+              data-testid="project-access-users-error"
+            >
+              {t('project.access.usersLoadError')}
+            </div>
+          )}
+          {selectedIds.length > 0 && (
+            <div className="flex flex-col gap-1" data-testid="project-access-roles">
+              {selectedIds.map((id) => (
+                <div key={id} className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-xs text-foreground">{userLabel(id)}</span>
+                  <select
+                    value={members[id]}
+                    onChange={(e) =>
+                      handleRoleChange(id, e.target.value as ProjectGrantRole)
+                    }
+                    aria-label={t('project.access.roleOf', { name: userLabel(id) })}
+                    data-testid={`project-access-role-${id}`}
+                    className="shrink-0 rounded-md bg-input border border-border px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                  >
+                    <option value="viewer">{t('project.access.role.viewer')}</option>
+                    <option value="editor">{t('project.access.role.editor')}</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {hasUsers && projection === 'all' && (
+        <label
+          className="flex items-center justify-between gap-2 text-xs text-foreground"
+          data-testid="project-access-all-editor"
+        >
+          <span className="min-w-0">{t('project.access.allowEdit')}</span>
+          <Toggle
+            enabled={everyoneRole === 'editor'}
+            onToggle={() => setEveryoneRole(everyoneRole === 'editor' ? 'viewer' : 'editor')}
+            ariaLabel={t('project.access.allowEdit')}
+          />
+        </label>
+      )}
+
+      {hasUsers && (
+        <div className="text-[0.625rem] text-muted-foreground/60">{t('project.access.hint')}</div>
+      )}
+
+      {hasUsers && (
+        <div className="flex items-center justify-end">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => void handleSave()}
+            disabled={busy}
+            data-testid="project-access-save"
+          >
+            {busy ? t('project.access.saving') : t('project.access.save')}
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
