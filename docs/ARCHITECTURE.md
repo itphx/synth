@@ -357,12 +357,16 @@ synth/
   (мастер `disabled`, `project.enabled`) — live; дефолты/снапшот (`skillsDefaultOn`) — snapshot;
   дефолт opt-in. Единый резолвер — `resolveSkillAvailability`.
 - **Slash-команды** (`engine/commands/*`): резолвинг в core до LLM (UI/CLI/гибрид); встроенные
-  (`/help`, `/skills`, `/commands`, `/summary`, `/init`), шаблонные `.md` (`$ARGUMENTS`/`@file`),
+  (`/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init`, `/review`), шаблонные `.md` (`$ARGUMENTS`/`@file`),
   скиллы-как-команды и bundles (`/bundle-name`); права `permission.rules.command`; inline shell
-  (`` !`cmd` ``) — opt-in через `execute_shell`. События `skill.invoked`/`command.invoked`;
+  (`` !`cmd` ``) — opt-in через `execute_shell`. `/summary` и `/compact` — ручное сжатие контекста
+  (ADR-119; профиль — `compressionMode`). События `skill.invoked`/`command.invoked`;
   builtin `skill-creator` — скилл-инструкция в коде.
+- **Сниппеты** (`engine/snippets/*`, PROP-126 §4): `#name` — три уровня (`instance`/`project`/`user`),
+  приоритет `user > project > instance`; файловый discovery `*.md` + project-trust, раскрытие в приёме
+  промпта до очереди (лимиты 15/64 КБ, code-блоки не трогаются). HTTP — `server/routes/snippets.ts`.
 
-Эндпоинты/RBAC — `docs/API_V2.md` §5.17–§5.17.2; конфиг — `docs/CONFIGURATION.md`
+Эндпоинты/RBAC — `docs/API_V2.md` §5.17–§5.17.3; конфиг — `docs/CONFIGURATION.md`
 (секции `skills`/`commands`); формат `SKILL.md` — `packages/core/AGENTS.md`.
 
 ## Проектные инструкции (AGENTS.md)

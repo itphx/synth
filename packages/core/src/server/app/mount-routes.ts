@@ -23,6 +23,7 @@ import {
   createOAuthRoutes, bindCredentialToConnector,
   createAuditRoutes,
   createServiceKeyRoutes, createWebhookRoutes, createSkillRoutes, createCommandRoutes,
+  createSnippetRoutes,
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
   createSkillSettingsRoutes, createIdentityRoutes, createContextRoutes,
   // ADR-036/ADR-095: логи сервисов, аудит LLM Gateway, regex-паттерны,
@@ -142,6 +143,7 @@ export function mountStandaloneRoutes(
     eventApiKeyStore, resolveAgentTemplate, schedulerService, scheduleStore, jobStore,
     identityClaimStore, modelWindowLoader, eventRouter, dataDir, defaultWorkingDir,
     commandService, bundleStore, dictionaries, maintenanceAudit,
+    snippetService,
     egressResolver, securityAudit, egressRequests, analyticsRollups,
     analytics, pipelines, packs,
   } = deps;
@@ -186,6 +188,16 @@ export function mountStandaloneRoutes(
       getRemoteClient: () => getClient(),
       requestSessionService,
       analytics,
+      // PROP-126 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
+      ...(snippetService ? { snippetService } : {}),
+      // Рабочий каталог проекта — project-уровень сниппетов. Резолв тот же,
+      // что у snippet-routes (относительный workspace — от `workspacesRoot`).
+      resolveProjectWorkspace: async (projectId) => {
+        const project = await projectStore.load(projectId);
+        if (!project?.workspace) return undefined;
+        const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+        return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+      },
       // PROP-135 Ф6a: каталог профилей — валидация `settings.executorProfile`.
       ...(executionProfiles ? { executionProfileCatalog: executionProfiles } : {}),
       // PROP-135 (браузерный контур): каталог браузерных профилей сессии.
@@ -1186,6 +1198,19 @@ export function mountStandaloneRoutes(
   // ADR-046 §9.1: список команд (встроенные + шаблонные + скиллы + bundles).
   app.route('/api/v2/commands', createCommandRoutes(auth, {
     commandService,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
+      return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
+    },
+  }));
+
+  // PROP-126 §4: сниппеты (`#`) — список/CRUD/раскрытие. Standalone —
+  // пользователь один (инстанс-уровень доступен всем, user-уровень — своему).
+  app.route('/api/v2/snippets', createSnippetRoutes(auth, {
+    snippetService,
+    projectStore,
     resolveProjectWorkspace: async (projectId) => {
       const project = await projectStore.load(projectId);
       if (!project?.workspace) return undefined;

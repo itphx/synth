@@ -1230,3 +1230,87 @@ describe('ContextOptimizer — отмена сжатия', () => {
     }
   });
 });
+
+/**
+ * ADR-119 + PROP-126 §1: ручной запуск сжатия с явно заданным профилем.
+ *
+ * Явный режим (`/summary`, `/compact`) не зависит от авто-стратегии сессии:
+ * команда пользователя работает всегда, когда есть что покрывать, и не
+ * меняет настройки сессии.
+ */
+describe('ContextOptimizer — явный профиль сжатия (ADR-119, PROP-126 §1)', () => {
+  let tmpDir: string;
+  let optimizer: ContextOptimizer;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-opt-explicit-mode-'));
+    optimizer = new ContextOptimizer(
+      new ContextConfig({ userDataDir: tmpDir }),
+      () => null,
+      { provider: 'mock', model: 'mock-compressor', temperature: 0.1, promptFile: 'COMPACTOR' },
+      () => 200_000,
+    );
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Ход, который есть что покрыть: user + assistant. */
+  function compressibleSession(patch: Partial<Session['settings']> = {}): Session {
+    return session([
+      msg('u1', MessageRole.USER, 'u1', { usage: tok(100) }),
+      msg('a1', MessageRole.ASSISTANT, 'a1', { usage: tok(100) }),
+      msg('u2', MessageRole.USER, 'u2', { usage: tok(100) }),
+      msg('a2', MessageRole.ASSISTANT, 'a2', { usage: tok(100) }),
+    ], { compactionKeepTokens: 250, summarizationKeepTokens: 250, ...patch });
+  }
+
+  it('canCompress без явного режима — по эффективному режиму сессии (прежнее поведение)', () => {
+    const s = compressibleSession({ contextOptimization: 'compaction' });
+    expect(optimizer.effectiveMode(s)).toBe('compaction');
+    expect(optimizer.canCompress(s)).toBe(true);
+  });
+
+  it('сессия без режима сжатия: canCompress без режима → false, но явный режим → true', () => {
+    const s = compressibleSession({ contextOptimization: 'none', summarizationEnabled: false });
+    expect(optimizer.effectiveMode(s)).toBeNull();
+    // Без явного режима сжимать нечем (режим не настроен).
+    expect(optimizer.canCompress(s)).toBe(false);
+    expect(optimizer.canSummarize(s)).toBe(false);
+    // Явный профиль — команда пользователя работает (настройки сессии не меняются).
+    expect(optimizer.canCompress(s, 'compaction')).toBe(true);
+    expect(optimizer.canCompress(s, 'summarization')).toBe(true);
+    expect(optimizer.canCompact(s)).toBe(true);
+    // Настройки сессии не тронуты.
+    expect(s.settings.contextOptimization).toBe('none');
+    expect(optimizer.effectiveMode(s)).toBeNull();
+  });
+
+  it('canCompact — явная компактизация доступна и в режиме суммаризации', () => {
+    const s = compressibleSession({ contextOptimization: 'summarization' });
+    expect(optimizer.effectiveMode(s)).toBe('summarization');
+    expect(optimizer.canCompact(s)).toBe(true);
+  });
+
+  it('canSummarize с явным режимом — по этому режиму; без режима — по эффективному', () => {
+    const s = compressibleSession({ contextOptimization: 'none', summarizationEnabled: false });
+    // Явный режим — суммаризация доступна (провайдер/модель есть).
+    expect(optimizer.canSummarize(s, 'summarization')).toBe(true);
+    // Без явного режима — по эффективному (его нет) → false.
+    expect(optimizer.canSummarize(s)).toBe(false);
+  });
+
+  it('без провайдера/модели сжимать нечем даже при явном режиме', () => {
+    const s = compressibleSession({ provider: '', model: '' });
+    expect(optimizer.canCompact(s)).toBe(false);
+    expect(optimizer.canSummarize(s, 'summarization')).toBe(false);
+  });
+
+  it('покрывать нечего (только user-реплика) — даже явный режим не разрешает', () => {
+    const s = session([msg('u1', MessageRole.USER, 'u1', { usage: tok(100) })]);
+    expect(optimizer.canCompact(s)).toBe(false);
+    expect(optimizer.canCompress(s, 'compaction')).toBe(false);
+  });
+});

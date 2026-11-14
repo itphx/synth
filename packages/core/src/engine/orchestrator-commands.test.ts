@@ -2,7 +2,7 @@
  * ADR-046 §7/§8.2: ранний резолвинг `/`-команд в оркестраторе — локальный ответ
  * без LLM, событие `command.invoked`, эфемерные сообщения.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +12,8 @@ import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import type { BusEvent, CommandRuntime, CommandResolveResult, PermissionConfig } from '@itphx/synth-shared';
 import type { ContextBuilder } from './context/builder.js';
-import { generateId, MessageRole, nowISO, makeTextPart, type Message } from '@itphx/synth-shared';
+import type { ContextOptimizer } from './context/optimizer.js';
+import { generateId, MessageRole, nowISO, makeTextPart, type Message, type Session } from '@itphx/synth-shared';
 import { stubContextFiles } from '../test-helpers/storage-stubs.js';
 
 function makeCtxBuilder(): ContextBuilder {
@@ -37,7 +38,28 @@ const resolveResult: CommandResolveResult = {
 
 let tmpDir: string;
 
-async function run(content: string, opts?: { commandRuntime?: CommandRuntime; permissionConfig?: PermissionConfig }) {
+/**
+ * Минимальный оптимизатор контекста: проверка доступности сжатия + план.
+ * Реальное сжатие не запускается — `_handleSummarization` подменён (см. `run`).
+ */
+function makeOptimizer(can: boolean): ContextOptimizer {
+  return {
+    setGatewayHooks: vi.fn(),
+    canCompress: vi.fn(() => can),
+    canSummarize: vi.fn(() => can),
+    effectiveMode: vi.fn(() => 'compaction'),
+    prepareCompression: vi.fn(),
+  } as unknown as ContextOptimizer;
+}
+
+async function run(
+  content: string,
+  opts?: {
+    commandRuntime?: CommandRuntime;
+    permissionConfig?: PermissionConfig;
+    contextOptimizer?: ContextOptimizer;
+  },
+) {
   tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-command-'));
   const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
   const eventBus = new EventBus();
@@ -58,9 +80,24 @@ async function run(content: string, opts?: { commandRuntime?: CommandRuntime; pe
     defaultWorkingDir: tmpDir,
     commandRuntime,
     permissionConfig: opts?.permissionConfig,
+    ...(opts?.contextOptimizer ? { contextOptimizer: opts.contextOptimizer } : {}),
   });
 
-  const session = await sessionManager.createSession({});
+  // Сжатие не запускаем — перехватываем служебное сообщение `summarization_request`.
+  const summarizationRequests: Message[] = [];
+  (
+    orchestrator as unknown as {
+      _handleSummarization: (session: Session, message: Message) => Promise<unknown>;
+    }
+  )._handleSummarization = async (_session: Session, message: Message) => {
+    summarizationRequests.push(message);
+    return {};
+  };
+
+  const session = await sessionManager.createSession({
+    // Провайдер/модель нужны для ручного сжатия (ADR-119): без них сжимать нечем.
+    settings: { provider: 'mock', model: 'mock-model' } as never,
+  });
   const msg = makeUserMessage(content);
   await sessionManager.addMessage(session.id, msg);
   const fresh = (await sessionManager.getSession(session.id))!;
@@ -70,7 +107,7 @@ async function run(content: string, opts?: { commandRuntime?: CommandRuntime; pe
     (event, data) => chunks.push({ event, data }),
   );
   const after = (await sessionManager.getSession(session.id))!;
-  return { result, chunks, after, events, msg };
+  return { result, chunks, after, events, msg, summarizationRequests };
 }
 
 afterEach(async () => {
@@ -146,6 +183,59 @@ describe('ChatOrchestrator — slash-команды (ADR-046 §7)', () => {
     expect(assistant?.provider).toBe('command');
     const storedUser = after.messages.find((m) => m.role === MessageRole.USER);
     expect(storedUser?.metadata?.commandPrompt).toBe(true);
+  });
+
+  it('/summary → summarization_request с mode=summarization (ADR-119)', async () => {
+    const { summarizationRequests } = await run('/summary', {
+      contextOptimizer: makeOptimizer(true),
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input) =>
+          input.startsWith('/summary')
+            ? { status: 'summarization', name: 'summary', args: '', kind: 'builtin', compressionMode: 'summarization' }
+            : undefined,
+      },
+    });
+    expect(summarizationRequests).toHaveLength(1);
+    expect(summarizationRequests[0]?.metadata?.type).toBe('summarization_request');
+    expect(summarizationRequests[0]?.metadata?.reason).toBe('manual');
+    expect(summarizationRequests[0]?.metadata?.mode).toBe('summarization');
+  });
+
+  it('/compact → summarization_request с mode=compaction (PROP-126 §1, ADR-119)', async () => {
+    const { summarizationRequests, events } = await run('/compact', {
+      contextOptimizer: makeOptimizer(true),
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input) =>
+          input.startsWith('/compact')
+            ? { status: 'summarization', name: 'compact', args: '', kind: 'builtin', compressionMode: 'compaction' }
+            : undefined,
+      },
+    });
+    expect(summarizationRequests).toHaveLength(1);
+    expect(summarizationRequests[0]?.metadata?.type).toBe('summarization_request');
+    expect(summarizationRequests[0]?.metadata?.reason).toBe('manual');
+    // Профиль сжатия — компактизация (не суммаризация).
+    expect(summarizationRequests[0]?.metadata?.mode).toBe('compaction');
+    expect(events.some((e) => e.type === 'command.invoked' && e.data.command === 'compact')).toBe(true);
+  });
+
+  it('/compact (сжимать нечего) → нотис в стиле команды', async () => {
+    const { after, summarizationRequests } = await run('/compact', {
+      contextOptimizer: makeOptimizer(false),
+      commandRuntime: {
+        list: async () => ({ commands: [], diagnostics: [] }),
+        resolve: async (input) =>
+          input.startsWith('/compact')
+            ? { status: 'summarization', name: 'compact', args: '', kind: 'builtin', compressionMode: 'compaction' }
+            : undefined,
+      },
+    });
+    expect(summarizationRequests).toHaveLength(0);
+    const assistant = after.messages.find((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistant?.metadata?.commandName).toBe('compact');
+    expect(assistant?.metadata?.i18n).toEqual({ key: 'command.compact_unavailable' });
   });
 
   it('template/skill/bundle → metadata.command = {name,kind,args} (LLM-путь, без commandPrompt)', async () => {

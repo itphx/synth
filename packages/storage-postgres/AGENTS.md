@@ -132,7 +132,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
 - **Схема и миграции (`migrations/*`, `migrate.ts`).** Свой контур версионирования
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
-  (`src/migrations/001-init.ts` … `031-ssh-key-policy.ts`; **31 миграция**, реестр —
+  (`src/migrations/001-init.ts` … `036-message-mentions.ts`; **36 миграций**, реестр —
   `src/migrations/index.ts`, версии строго возрастают) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя
@@ -177,6 +177,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
   `assertSchemaCurrent` без применения: схема отстаёт/отсутствует →
   `STORAGE_POSTGRES_SCHEMA_OUTDATED`. `readSchemaVersion` — текущая версия.
 - PROP-133: **состояние доступа к проекту** — миграция `035_project_access` (`group_members jsonb NOT NULL DEFAULT '{}'`, `everyone_role text`; только `ADD COLUMN`, идемпотентно). Порт `projects` (`ports/principals-projects.ts`) читает/пишет оба поля и нормализует роли при чтении; `list(viewer)` сужает выборку SQL'ем (владелец/участник/«всем»/грант по группе), но истина — резолвер `resolveProjectAccess` из `@itphx/synth-shared`: каждая строка проверяется им. При чтении «нет грантов» отдаётся **отсутствием поля** (`{}` в jsonb / `NULL` в text → `undefined`), как в file/memory.
+- PROP-126 §2.1: **`@`-упоминания сообщения** — миграция `036_message_mentions` (`messages.mentions jsonb`; только `ADD COLUMN IF NOT EXISTS`). Поле — в `MESSAGE_FIELDS`/`MESSAGE_JSON_FIELDS`, `serializeMessage`/`deserializeMessage` (`legacy` → `undefined`); без миграции данных, аддитивно.
 - **Координация (`locks.ts`, ADR-097 волна 4).** `PgMutex implements Mutex` и
   `PgLeader implements SchedulerLeader` (типы — `@itphx/synth-core`, только
   `import type`) поверх session-level advisory-локов на выделенном соединении;

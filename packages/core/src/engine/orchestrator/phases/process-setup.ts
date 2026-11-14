@@ -709,10 +709,13 @@ export async function runProcessSetup(
   const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
   // ADR-117: пара текущего запроса — thinking чужих provider/model в историю не
   // идёт (модель у агента могли сменить в этой же сессии).
+  // PROP-126 §2.1: триггер хода — сообщение, с которого ход начат. User-directed
+  // сообщения (адресованные человеку), новые относительно триггера, в контекст
+  // текущего хода не идут.
   let baseLlmMessages = sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author, {
     provider: providerName,
     model: provider.model || modelName || session.settings.model || '',
-  });
+  }, { trigger: args.message });
 
   // ADR-115: вложения — гидратация ссылок blob → base64 и фильтр модальностей
   // модели непосредственно перед отправкой. Ошибка чтения отдельного объекта

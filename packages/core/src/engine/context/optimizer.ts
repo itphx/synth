@@ -1647,22 +1647,24 @@ export class ContextOptimizer {
   }
 
   /**
-   * Можно ли сжимать сессию: есть что покрывать — минимум один полный ход до
-   * хвоста (user-реплика + её продолжение) для обоих профилей.
-   */
-  /**
    * Есть ли что покрывать (без вызова LLM). Строит границу хвоста для
    * эффективного режима; ошибки/отсутствие режима → `false`.
    *
    * Покрываемый префикс должен содержать **шаг** (assistant/tool), а не одну
    * user-реплику: хвост срезом по шагу может начинаться с assistant, и
    * покрытие одной реплики контекст не уменьшает («капать нечего»).
+   *
+   * `mode` — **явный** профиль сжатия (ADR-119): он используется вместо
+   * эффективного режима сессии. Так работает ручной запуск (`/summary`,
+   * `/compact`, PROP-126 §1): команда пользователя сжимает в нужном профиле,
+   * не меняя настройки сессии. Без `mode` — поведение прежнее (эффективный
+   * режим сессии).
    */
-  canCompress(session: Session): boolean {
+  canCompress(session: Session, mode?: CompressionMode): boolean {
     try {
-      const mode = this.effectiveMode(session);
-      if (!mode) return false;
-      const boundary = this._buildCompressionBoundary(session, mode);
+      const effective = mode ?? this.effectiveMode(session);
+      if (!effective) return false;
+      const boundary = this._buildCompressionBoundary(session, effective);
       if (boundary.messages.length === 0) return false;
       return boundary.messages.some(
         (m) => m.role === MessageRole.ASSISTANT || m.role === MessageRole.TOOL,
@@ -1675,9 +1677,23 @@ export class ContextOptimizer {
   /**
    * Можно ли сжимать сессию: есть что покрывать — минимум один полный ход до
    * хвоста (user-реплика + её продолжение) для обоих профилей.
+   *
+   * Без `mode` — проверка по эффективному режиму сессии (прежнее поведение:
+   * так считается флаг `session.canSummarize`).
    */
-  canSummarize(session: Session): boolean {
+  canSummarize(session: Session, mode?: CompressionMode): boolean {
     if (!session.settings.provider || !session.settings.model) return false;
-    return this.canCompress(session);
+    return this.canCompress(session, mode);
+  }
+
+  /**
+   * ADR-119: ручная компактизация (`/compact`, PROP-126 §1) — профиль задан
+   * явно, поэтому проверка не зависит от авто-стратегии сессии: команда
+   * пользователя работает всегда, когда есть что покрывать. Настройки сессии
+   * (`contextOptimization`) при этом не меняются.
+   */
+  canCompact(session: Session): boolean {
+    if (!session.settings.provider || !session.settings.model) return false;
+    return this.canCompress(session, 'compaction');
   }
 }

@@ -18,15 +18,15 @@ const EXPECTED_API_METHODS = [
   'createDirectory', 'createEventBindingKey', 'createEventRoute', 'createMemoryIndex', 'createOAuthCredential',
   'createProject', 'createProjectLogEntry', 'createProjectPipeline', 'createProjectPlanColumn',
   'createProjectPlanItem', 'createProvider', 'createSchedule', 'createServiceKey', 'createSession',
-  'createSessionTodo', 'createSkill', 'createSkillBundle', 'createSshKey', 'createTlsMapping', 'createUser',
+  'createSessionTodo', 'createSkill', 'createSkillBundle', 'createSnippet', 'createSshKey', 'createTlsMapping', 'createUser',
   'createWebhookSubscription', 'createWorktree', 'deleteAgent', 'deleteBackup', 'deleteContextFile',
   'deleteEntry', 'deleteEventBinding', 'deleteEventBindingKey', 'deleteEventRoute', 'deleteMcpRegistryEntry',
   'deleteMemoryIndex', 'deleteMessage', 'deleteModel', 'deleteMyIdentity', 'deleteOAuthCredential',
   'deleteProject', 'deleteProjectLogEntry', 'deleteProjectPipeline', 'deleteProjectPlanColumn',
   'deleteProjectPlanItem', 'deleteProvider', 'deleteSchedule', 'deleteServiceKey', 'deleteSession',
-  'deleteSessionTodo', 'deleteSkill', 'deleteSkillBundle', 'deleteSkillFile', 'deleteSshKey', 'deleteStickyNote',
+  'deleteSessionTodo', 'deleteSkill', 'deleteSkillBundle', 'deleteSkillFile', 'deleteSnippet', 'deleteSshKey', 'deleteStickyNote',
   'deleteTlsMapping', 'deleteToken', 'deleteUser', 'deleteWebhookSubscription', 'disablePlugin', 'downloadFile',
-  'drainExecutionPool', 'enablePlugin', 'enqueueMessage', 'fetchGitRepo', 'fetchJSON', 'fetchModels', 'fetchProviderIcon',
+  'drainExecutionPool', 'enablePlugin', 'enqueueMessage', 'expandSnippets', 'fetchGitRepo', 'fetchJSON', 'fetchModels', 'fetchProviderIcon',
   'forkRemoteProject', 'forkSession', 'get', 'getAgentDetail', 'getAgents', 'getAgentsLimits', 'getAllAgents',
   'getAnalyticsActivity', 'getAnalyticsDecision', 'getAnalyticsExport', 'getAnalyticsPrompt',
   'getAnalyticsSummary', 'getAnalyticsUsage', 'getAttachmentsSettings', 'getAudit', 'getCommandAudit', 'getCommands',
@@ -53,7 +53,7 @@ const EXPECTED_API_METHODS = [
   'getWorkspaceRoot', 'getWorkspaceSetting', 'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate',
   'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings', 'listMemoryFacts',
   'listMemoryIndexes', 'listPendingPermissions', 'listPipelineRuns', 'listPipelineRunsPage', 'listPluginAudit', 'listPlugins',
-  'listProcesses', 'listSshKeys', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'listProcesses', 'listSnippets', 'listSshKeys', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'moveProjectPlanItem', 'patchSessionMode', 'permissionReply', 'pinMessage', 'probeMcpServer', 'probeRawFile',
   'pruneCommandAudit', 'pruneWorktrees', 'publishProject', 'publishProjectPipeline', 'putProjectInvariants', 'putSkillFile', 'putUpdatesSettings',
   'rawFileUrl', 'readFile', 'rebuildMemoryIndex', 'refreshOAuthCredential', 'regenerateWebhookSecret',
@@ -80,7 +80,7 @@ const EXPECTED_API_METHODS = [
   'updateProject', 'updateProjectLogEntry', 'updateProjectMcp', 'updateProjectPipeline',
   'updateProjectPlanColumn', 'updateProjectPlanItem', 'updateProjectSkills', 'updateProvider', 'updateSchedule',
   'updateServiceKey', 'updateSession', 'updateSessionMcp', 'updateSessionSkills', 'updateSessionTodo',
-  'updateSkill', 'updateSkillBundle', 'updateSkillsSettings', 'updateSshKey', 'updateStickyNote', 'updateTls',
+  'updateSkill', 'updateSkillBundle', 'updateSkillsSettings', 'updateSnippet', 'updateSshKey', 'updateStickyNote', 'updateTls',
   'updateTlsMapping', 'updateUser', 'updateWebhookSubscription', 'uploadCa', 'uploadFile', 'uploadProfileCa',
   'uploadProfileClient', 'upsertEventBinding', 'validateRestoreByRef', 'validateRestoreUpload', 'validateTls',
   'warmExecutionImages',
@@ -88,7 +88,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (403)', () => {
+  it('набор методов совпадает с зафиксированным (420)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

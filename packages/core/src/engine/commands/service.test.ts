@@ -104,7 +104,61 @@ describe('CommandService — builtins (ADR-046 §7.2)', () => {
 
   it('/summary — триггер суммаризации', async () => {
     const { service } = makeService();
-    expect((await service.resolve('/summary', CTX))?.status).toBe('summarization');
+    const r = await service.resolve('/summary', CTX);
+    expect(r?.status).toBe('summarization');
+    // ADR-119: профиль сжатия задан явно — итоги беседы.
+    expect(r?.compressionMode).toBe('summarization');
+  });
+
+  it('/compact — триггер компактизации (PROP-126 §1, ADR-119)', async () => {
+    const { service } = makeService();
+    const r = await service.resolve('/compact', CTX);
+    expect(r?.status).toBe('summarization');
+    // Тот же статус, но профиль — рабочее состояние по коду/проекту.
+    expect(r?.compressionMode).toBe('compaction');
+    expect(r?.kind).toBe('builtin');
+  });
+
+  it('/compact виден в списке команд (автокомплит UI)', async () => {
+    const { service } = makeService();
+    const list = await service.list(CTX);
+    const cmd = list.commands.find((c) => c.name === 'compact');
+    expect(cmd?.kind).toBe('builtin');
+    expect(cmd?.available).toBe(true);
+  });
+
+  it('/review — status prompt (не локальный) с целью ревью из аргумента', async () => {
+    const { service } = makeService();
+    const r = await service.resolve('/review feature/my-branch', CTX);
+    expect(r?.status).toBe('prompt');
+    expect(r?.kind).toBe('builtin');
+    expect(isLocalCommandStatus(r!.status)).toBe(false);
+    // Аргумент (commit/branch/PR) уходит в промпт как есть.
+    expect(r?.prompt).toContain('feature/my-branch');
+    // Промпт требует сказать «ревью недоступно», а не выдумывать изменения.
+    expect(r?.prompt).toContain('When the Review Is Not Possible');
+    expect(r?.prompt).toContain('Never invent a diff');
+  });
+
+  it('/review без аргументов — дефолт «незакоммиченные изменения»', async () => {
+    const { service } = makeService();
+    const r = await service.resolve('/review', CTX);
+    expect(r?.status).toBe('prompt');
+    expect(r?.prompt).toContain('uncommitted changes');
+  });
+
+  it('/review виден в списке команд (автокомплит UI)', async () => {
+    const { service } = makeService();
+    const list = await service.list(CTX);
+    const cmd = list.commands.find((c) => c.name === 'review');
+    expect(cmd?.kind).toBe('builtin');
+    expect(cmd?.available).toBe(true);
+  });
+
+  it('/help и /commands содержат builtin review', async () => {
+    const { service } = makeService();
+    expect((await service.resolve('/help', CTX))?.output).toContain('/review');
+    expect((await service.resolve('/commands', CTX))?.output).toContain('/review');
   });
 
   it('/init — status prompt (не локальный) с подставленным $ARGUMENTS', async () => {

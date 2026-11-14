@@ -162,6 +162,21 @@ describe('PG-маппинг сообщения: модель хода и шаг�
     expect(loaded.status).toBe('streaming');
   });
 
+  it('PROP-126: mentions переживают запись/чтение (jsonb)', () => {
+    const mentions = [{ kind: 'user' as const, id: 'alice', label: 'alice', span: { start: 0, end: 6 } }];
+    const message = makeMessage({ mentions });
+    const row = messageRow(message, 'sess-1');
+    const loaded = deserializeMessage({
+      ...(row as unknown as MessageRow),
+      parts: serializeMessage(message).parts,
+    });
+
+    expect(serializeMessage(message).mentions).toEqual(mentions);
+    expect(loaded.mentions).toEqual(mentions);
+    expect(MESSAGE_FIELDS).toContain('mentions');
+    expect(MESSAGE_JSON_FIELDS.has('mentions')).toBe(true);
+  });
+
   it('legacy-строка без колонок читается как undefined (без дефолтов)', () => {
     const loaded = deserializeMessage({
       id: 'msg-legacy',

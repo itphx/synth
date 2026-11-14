@@ -23,6 +23,7 @@ import { mcpApi } from './mcp'
 import { securityApi } from './security'
 import { settingsApi } from './settings'
 import { skillsApi } from './skills'
+import { snippetsApi } from './snippets'
 import { commandsApi } from './commands'
 import { skillBundlesApi } from './skill-bundles'
 import { dictionariesApi } from './dictionaries'
@@ -152,6 +153,16 @@ export type {
   SkillsTrustedProjectDirsSource,
 } from './skills'
 export type { CommandsListResponse } from './commands'
+// PROP-126 §4: сниппеты `#name` — уровни instance/project/user, раскрытие
+// `#`-токенов в сообщении.
+export type {
+  Snippet,
+  SnippetScope,
+  SnippetDiagnostic,
+  SnippetsListResponse,
+  SnippetExpandResponse,
+  SnippetListParams,
+} from './snippets'
 export type { SkillBundlesResponse } from './skill-bundles'
 export type {
   LlmGatewaySettings,
@@ -534,6 +545,7 @@ export const synthApi = {
   ...securityApi,
   ...settingsApi,
   ...skillsApi,
+  ...snippetsApi,
   ...commandsApi,
   ...skillBundlesApi,
   ...dictionariesApi,

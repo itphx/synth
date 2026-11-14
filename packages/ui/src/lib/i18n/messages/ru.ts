@@ -1621,7 +1621,11 @@ export const dict = {
   'chat.notes.limitBadge': 'лимит',
   'chat.notes.limitHint': 'Достигнут лимит заметок: {maxCount}',
   'chat.input.stop': 'Стоп',
-  'chat.input.mentionHint': 'Упомяните агента через @',
+  'chat.input.mentionHint': 'Упомяните агента, пользователя или файл через @',
+  // Секции `@`-пикера (PROP-126 §2).
+  'chat.mention.sectionAgents': 'Агенты',
+  'chat.mention.sectionUsers': 'Пользователи',
+  'chat.mention.sectionFiles': 'Файлы',
   'chat.input.enqueue': 'Добавить в очередь',
 
   // --- Steering: прерывание активного хода (ADR-104) ---
@@ -1694,6 +1698,7 @@ export const dict = {
   'notify.background.moveFailed': 'Не удалось перевести в фон',
   // ADR-112: уведомление о вопросе пользователю (сессия не открыта).
   'notify.question.asked': 'Агент ждёт ответа: {name}',
+  'notify.message.mentioned': 'Вас упомянули в сессии',
   'notify.steer.dropped.limit': 'Лимит вмешательств на ход: не применено сообщений — {count}',
   'notify.steer.dropped.aborted': 'Ход остановлен — не применено вмешательств: {count}',
   'notify.steer.dropped.turn_ended': 'Ход закончился — не применено вмешательств: {count}',
@@ -2294,6 +2299,14 @@ export const dict = {
   'chat.commandAutocomplete.empty': 'Команды не найдены',
   'chat.commandAutocomplete.keyboardHint': '↑↓ навигация • Enter выбор • Esc закрыть',
   'chat.commandAutocomplete.unavailable': 'недоступна',
+  'chat.skillAutocomplete.title': 'Скиллы',
+  'chat.skillAutocomplete.keyboardHint': '↑↓ навигация • Enter выбор • Esc закрыть',
+  'chat.snippetAutocomplete.title': 'Сниппеты',
+  'chat.snippetAutocomplete.keyboardHint': '↑↓ навигация • Enter выбор • Esc закрыть',
+  'chat.snippetAutocomplete.scope.instance': 'инстанс',
+  'chat.snippetAutocomplete.scope.project': 'проект',
+  'chat.snippetAutocomplete.scope.user': 'пользователь',
+  'chat.snippetAutocomplete.untrusted': 'недоверенный',
 
   // Chat settings
   'chatSettings.description': 'Как показывать сообщения и служебные шаги в ленте чата.',
@@ -3823,11 +3836,13 @@ export const dict = {
   'command.unknown': 'Неизвестная команда: /{name}',
   'command.denied': 'Команда /{name} запрещена правилами прав',
   'command.unavailable': 'Команда /{name} недоступна: не хватает capabilities {capabilities}',
-  'command.help': 'Доступные команды: /help, /skills, /commands, /summary, /init. Введите /<скилл-или-bundle>, чтобы загрузить его. Любой другой текст уходит модели.',
+  'command.help': 'Доступные команды: /help, /skills, /commands, /summary, /compact, /init, /review. Введите $<скилл>, чтобы загрузить скилл, или /<bundle> — чтобы загрузить bundle. Любой другой текст уходит модели.',
   'command.list_empty': 'Нет доступных команд',
   'command.skills_empty': 'Нет доступных скиллов',
   'command.summary_enqueued': 'Суммаризация запущена',
   'command.summary_unavailable': 'Недостаточно активных сообщений для суммаризации',
+  'command.compact_enqueued': 'Компактизация запущена',
+  'command.compact_unavailable': 'Недостаточно активных сообщений для компактизации',
 
   // --- Сжатие контекста (summarization / compaction) ---
   'context.compression_empty': 'Нет сообщений для сжатия',

@@ -187,6 +187,7 @@ export const MESSAGE_FIELDS = [
   'source',
   'author',
   'agent_role',
+  'mentions',
   'qa_pass',
   'qa_reason',
   'disabled',
@@ -208,6 +209,7 @@ export const MESSAGE_JSON_FIELDS: ReadonlySet<string> = new Set([
   'debug_data',
   'summary_of',
   'reasoning_redacted',
+  'mentions',
 ]);
 
 /**

@@ -85,6 +85,12 @@ export interface ProcessEarlyDeps {
     attempt: number | undefined,
   ) => Promise<ProcessEarlyResult>;
   handleCommand: (args: ProcessCommandArgs) => Promise<ProcessEarlyResult | null>;
+  /**
+   * PROP-126 §3: пользовательский вызов скиллов через `$name` — резолвится
+   * в тексте обычного сообщения (не `/`-команды: в шаблонах `$ARGUMENTS` —
+   * не токен скилла). `null` — продолжаем обычный путь (LLM).
+   */
+  handleDollarSkills?: (args: ProcessCommandArgs) => Promise<ProcessEarlyResult | null>;
   microPipeline: MicroPipeline | null;
   decisionConfig: DecisionConfig | null;
   publishLocalCompletion: (
@@ -161,7 +167,12 @@ export async function runProcessEarly(
   }
 
   // --- ADR-046 §7: резолвинг `/`-команд в core, до LLM ---
-  if (message.role === MessageRole.USER && (message.content ?? '').trimStart().startsWith('/')) {
+  // Флаг считается **до** разбора команды: prompt-команда (template/skill/
+  // bundle) подменяет содержимое сообщения, а `$`-скиллы в `/`-сообщении
+  // не разбираются (PROP-126 §3: `$ARGUMENTS` в шаблоне — не скилл).
+  const isSlashCommand = message.role === MessageRole.USER
+    && (message.content ?? '').trimStart().startsWith('/');
+  if (isSlashCommand) {
     const commandResult = await deps.handleCommand({
       session, message, signal, publishChunk, debugCollector, streamId,
       effectiveAgentRole, workingDir, attempt,
@@ -171,6 +182,19 @@ export async function runProcessEarly(
     });
     if (commandResult) return commandResult;
     // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.
+  }
+
+  // --- PROP-126 §3: `$`-скиллы в тексте сообщения (только не `/`-команда) ---
+  if (!isSlashCommand && message.role === MessageRole.USER && deps.handleDollarSkills) {
+    const dollarResult = await deps.handleDollarSkills({
+      session, message, signal, publishChunk, debugCollector, streamId,
+      effectiveAgentRole, workingDir, attempt,
+      ...(allowedRoots ? { allowedRoots } : {}),
+      permissionEvaluator, sessionMode, planMode, planApproved,
+      authorityTurn,
+    });
+    if (dollarResult) return dollarResult;
+    // Тело скилла подставлено в сообщение — идём в LLM.
   }
 
   // --- ADR-035: Micro-first — пробуем ответить без LLM ---

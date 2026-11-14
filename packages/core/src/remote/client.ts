@@ -638,8 +638,18 @@ export class RemoteBackendClient {
     );
   }
 
-  summarizeSession(id: string): Promise<unknown> {
-    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/summarize`);
+  /**
+   * Ручной запуск сжатия контекста на удалённой сессии (ADR-119).
+   *
+   * `mode` — профиль сжатия (`summarization` | `compaction`); старый сервер
+   * тело игнорирует и использует свой профиль по умолчанию.
+   */
+  summarizeSession(id: string, mode?: 'summarization' | 'compaction'): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/sessions/${encodeURIComponent(id)}/summarize`,
+      mode ? { mode } : undefined,
+    );
   }
 
   /**

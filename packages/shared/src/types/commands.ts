@@ -86,6 +86,14 @@ export type CommandResolveStatus =
   | 'unavailable';
 
 /**
+ * ADR-119: профиль сжатия контекста для ручного запуска.
+ *
+ * - `summarization` — итоги беседы (`/summary`);
+ * - `compaction` — рабочее состояние по коду/проекту (`/compact`, PROP-126 §1).
+ */
+export type CommandCompressionMode = 'summarization' | 'compaction';
+
+/**
  * Результат резолвинга `/`-команды (ADR-046 §7.1).
  *
  * - `builtin` — локальный ответ (`output`), LLM не вызывается; user+assistant
@@ -95,7 +103,8 @@ export type CommandResolveStatus =
  *   ответа нет и CLI не короткозамыкает;
  * - `template`/`skill`/`bundle` — текст в `prompt` уходит в LLM как явный
  *   пользовательский контекст;
- * - `summarization` — триггер ручной суммаризации (`/summary`);
+ * - `summarization` — триггер ручного сжатия контекста (`/summary` —
+ *   суммаризация, `/compact` — компактизация; профиль — в `compressionMode`);
  * - `unknown`/`denied`/`unavailable` — ответ-объяснение, LLM не вызывается.
  */
 export interface CommandResolveResult {
@@ -111,6 +120,13 @@ export interface CommandResolveResult {
   output?: string;
   /** Загруженные тела скиллов (для событий `skill.invoked`). */
   skills?: string[];
+  /**
+   * ADR-119: профиль сжатия для ручного запуска (`status: 'summarization'`).
+   *
+   * `/summary` — `summarization`, `/compact` — `compaction` (PROP-126 §1).
+   * Поле аддитивное: не задано — режим определяет эффективный режим сессии.
+   */
+  compressionMode?: CommandCompressionMode;
   /** Причина denied/unavailable. */
   message?: string;
 }

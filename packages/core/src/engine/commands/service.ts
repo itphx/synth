@@ -15,7 +15,7 @@ import { resolveCommandRule } from '../permission/evaluator.js';
 import { t as sm } from '../system-messages.js';
 import { CommandRegistry } from './registry.js';
 import { buildCommandSources } from './discovery.js';
-import { isBuiltinCommand, renderCommandsList, renderHelp, renderInitPrompt, renderSkillsList } from './builtin.js';
+import { isBuiltinCommand, renderCommandsList, renderHelp, renderInitPrompt, renderReviewPrompt, renderSkillsList } from './builtin.js';
 import { loadBundle, parseBundleFile } from './bundles.js';
 import { renderTemplate } from './template.js';
 import { parseCommandInput, resolveCatalog } from './resolver.js';
@@ -212,8 +212,24 @@ export class CommandService implements CommandRuntime {
       // короткозамыкает, оркестратор инжектит prompt в user-сообщение.
       return { status: 'prompt', name, args, kind: 'builtin', prompt: renderInitPrompt(args) };
     }
-    // summary
-    return { status: 'summarization', name, args, kind: 'builtin' };
+    if (name === 'review') {
+      // PROP-126 §1: `/review` — prompt-команда ревью изменений кода в
+      // git-репозитории. Аргумент (commit/branch/PR) уходит в промпт; без
+      // workspace/git модель сообщает, что ревью недоступно (в ядре гейта нет —
+      // решение владельца: гейт делает модель, глядя на фактический diff).
+      return { status: 'prompt', name, args, kind: 'builtin', prompt: renderReviewPrompt(args) };
+    }
+    if (name === 'summary') {
+      // Ручная суммаризация (ADR-119): итоги беседы.
+      return { status: 'summarization', name, args, kind: 'builtin', compressionMode: 'summarization' };
+    }
+    if (name === 'compact') {
+      // PROP-126 §1: `/compact` — ручной запуск компактизации (ADR-119):
+      // рабочее состояние по коду/проекту. Тот же статус `summarization`,
+      // профиль — в `compressionMode`.
+      return { status: 'summarization', name, args, kind: 'builtin', compressionMode: 'compaction' };
+    }
+    return { status: 'unknown', name, args, output: sm('command.unknown', { name }) };
   }
 
   private async _resolveBundle(
@@ -319,9 +335,10 @@ export { parseBundleFile };
 
 /**
  * ADR-046 §7.1: статусы, которые завершаются локальным ответом без LLM.
- * `summarization` сюда НЕ входит — `/summary` должен пройти через оркестратор
- * и запустить реальную суммаризацию (единое поведение CLI/SSE). `prompt`
- * (ADR-069 §8.1, `/init`) тоже НЕ локальный: prompt уходит в LLM.
+ * `summarization` сюда НЕ входит — `/summary`/`/compact` должны пройти через
+ * оркестратор и запустить реальное сжатие контекста (ADR-119; единое
+ * поведение CLI/SSE). `prompt` (ADR-069 §8.1, `/init`) тоже НЕ локальный:
+ * prompt уходит в LLM.
  */
 export function isLocalCommandStatus(status: CommandResolveStatus): boolean {
   return status === 'builtin' || status === 'unknown' || status === 'denied' || status === 'unavailable';

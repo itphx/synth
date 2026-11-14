@@ -59,6 +59,7 @@ import {
   createRepositoryCredentialSource,
   SkillService, resolveProjectSkillSeed,
   CommandService,
+  SnippetService,
   detectRuntimeDeps, syncProvidersFromEnv,
   // ADR-115 × ADR-101: доступность `ffmpeg` — обработчик вложения aux-моделью шага.
   isFfmpegAvailable,
@@ -1109,6 +1110,13 @@ export async function createBackendDeps(
     urls: config.synth.skills.urls,
     trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
     toolsets: config.synth.skills.toolsets,
+  });
+
+  // PROP-126 §4: сервис сниппетов (`#`) — три уровня (`instance`/`project`/`user`),
+  // discovery + запись файлов + раскрытие (mirror core).
+  const snippetService = new SnippetService({
+    dataDir,
+    trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
   });
 
   // ADR-046 §7: slash-команды и bundles (mirror core).
@@ -2359,6 +2367,8 @@ export async function createBackendDeps(
     skillService,
     bundleStore,
     commandService,
+    // PROP-126 §4: сервис сниппетов (`#`) — HTTP-контур `/api/v2/snippets`.
+    snippetService,
     orchestrator,
     // ADR-090 (Ф5б-1): рантайм плагинов — старт-активация установленного
     // (`app.ts`/`main.ts`) и точки для HTTP API/CLI (Ф5б-2/3). `host`+`installer` внутри.

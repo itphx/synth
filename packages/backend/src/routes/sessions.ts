@@ -50,6 +50,8 @@ import type { BackgroundRunService } from '@itphx/synth-core';
 // ADR-106 Ф3: реестр подтверждений — HTTP-ответ на подтверждение.
 import type { ApprovalRegistry } from '@itphx/synth-core';
 import type { ExecutionProfileCatalog } from '@itphx/synth-core';
+// PROP-126 §4: сервис сниппетов (`#`) — раскрытие в приёме промпта.
+import type { SnippetService } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -181,6 +183,16 @@ export function createSessionRoutes(
    * `settings.browserProfile` в PATCH /:id.
    */
   browserProfileCatalog?: ExecutionProfileCatalog,
+  /**
+   * PROP-126 §4: сервис сниппетов (`#`) — раскрытие `#токен` в пользовательском
+   * тексте на входе промпта (до очереди). Не задан — раскрытия нет.
+   */
+  snippetService?: SnippetService,
+  /**
+   * PROP-126 §4: абсолютный рабочий каталог проекта по id — для project-уровня
+   * сниппетов. Не задан — workspace берётся из карточки проекта как есть.
+   */
+  resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -794,7 +806,7 @@ export function createSessionRoutes(
   // ADMIN|AUDITOR соответственно) — порядок регистрации оставляет её в силе.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}), ...(snippetService ? { snippetService } : {}), ...(resolveProjectWorkspace ? { resolveProjectWorkspace } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

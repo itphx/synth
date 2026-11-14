@@ -8,6 +8,7 @@ import { useFilesStore } from './filesStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS, parsePermissionPreview, parsePermissionTrigger } from './permissionStore'
 import { useQuestionStore } from './questionStore'
+import { useAuthStore } from './authStore'
 import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
 import { usePipelinesStore } from './pipelinesStore'
@@ -2375,6 +2376,24 @@ export function createDispatcher(): EventDispatcher {
         if (typeof payload.disabled === 'boolean') patch.disabled = payload.disabled
         if (Object.keys(patch).length === 0) break
         updateMessageById(sid, messageId, patch)
+        break
+      }
+
+      // PROP-126 §2.1: сообщение адресовано пользователю (`@user`) — тост и
+      // непрочитанный бейдж сессии. Только получателю; self-mention сервер уже
+      // исключил из `user_ids`. Событие хода не создаёт.
+      case 'message.mentioned': {
+        const userIds = Array.isArray(payload.user_ids) ? payload.user_ids : []
+        const me = useAuthStore.getState().user?.id
+        if (!me || !userIds.includes(me)) break
+        if (!isSessionActive(sid)) {
+          notifyMessage({
+            text: i18nText('notify.message.mentioned'),
+            type: 'info',
+            category: 'system',
+            sessionId: sid,
+          })
+        }
         break
       }
 

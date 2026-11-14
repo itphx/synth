@@ -144,6 +144,11 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,
+    /** PROP-126 §2: явные участники сессии — источник `@user`-пикера. */
+    participants: (session.participants ?? []).map((participant) => ({
+      user_id: participant.userId,
+      role: participant.role,
+    })),
     /**
      * ADR-114: привязка сессии к git-worktree (рабочий каталог сессии).
      * Поле аддитивное — у сессий без привязки `null`.
@@ -330,6 +335,8 @@ export function serializeMessage(msg: Message, index: number, opts?: SerializeMe
     /** ADR-046 §7.1: локальный ответ `/`-команды — вне LLM-контекста. */
     ephemeral: msg.ephemeral ?? false,
     agent_role: msg.agentRole || null,
+    /** PROP-126 §2.1: `@`-упоминания сообщения (аддитивно; `null` — нет). */
+    mentions: msg.mentions ?? null,
     model: msg.model || null,
     provider: msg.provider || null,
     provider_type: msg.providerType || null,

@@ -39,6 +39,8 @@ export interface SessionData {
   user_id: string | null
   owner_id: string | null
   project_id: string | null
+  /** PROP-126 §2: явные участники сессии (источник `@user`-пикера). */
+  participants?: Array<{ user_id: string; role: string }>
   /**
    * ADR-114: привязка к worktree (рабочий каталог сессии) — null/undefined,
    * если привязки нет.

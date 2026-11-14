@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, MessageStatus, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal } from '@itphx/synth-shared';
+import type { Session, Message, MessageStatus, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal, InputMention } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, normalizeSessionParticipantRole, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
 import { findMessageIndex, isStaleDraftWrite, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
@@ -84,6 +84,11 @@ interface SerializedMessage {
   step_index?: number;
   /** ADR-118 §5: статус сообщения-хода («финал» — смена статуса). */
   status?: MessageStatus;
+  /**
+   * PROP-126 §2.1: упоминания сообщения (`@`). Аддитивное поле: в записях до
+   * ADR-126/PROP-126 его нет вовсе (чтение → `undefined`).
+   */
+  mentions?: InputMention[];
 }
 
 interface SerializedSessionReference {
@@ -262,6 +267,8 @@ function serializeMessage(msg: Message): SerializedMessage {
     turn_id: msg.turnId,
     step_index: msg.stepIndex,
     status: msg.status,
+    // PROP-126 §2.1: упоминания сообщения (`@`) — аддитивное поле.
+    mentions: msg.mentions,
   };
 }
 
@@ -355,6 +362,9 @@ function deserializeMessage(data: SerializedMessage): Message {
     turnId: data.turn_id,
     stepIndex: data.step_index,
     status: data.status,
+    // PROP-126 §2.1: упоминания сообщения (`@`) — аддитивное поле (legacy →
+    // undefined).
+    mentions: data.mentions,
   };
 }
 

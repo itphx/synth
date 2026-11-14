@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
+import type { CompressionMode } from '../../engine/context/optimizer.js';
 import type { SessionTree } from '../../sessions/manager.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, sessionMcpUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey, isSteerMode, DEFAULT_STEER_MODE, MAX_STEER_INJECTIONS_PER_TURN, STEERING_ERROR_CODES } from '@itphx/synth-shared';
 import type { Message, Session, QuestionStatus, SessionWorktree, AttachmentsConfig, StickyNotesLimits } from '@itphx/synth-shared';
@@ -50,6 +51,19 @@ import {
 } from '../../engine/question/types.js';
 import type { WorktreeService } from '../../engine/worktree/service.js';
 import { publishWorktreeUpdated, type WorktreeUpdatedInput } from '../../engine/worktree/events.js';
+// PROP-126 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
+import type { SnippetService } from '../../engine/snippets/service.js';
+// PROP-126 §2.1: `@user` — граница «агенту / пользователю» (разбор упоминаний).
+import {
+  resolveMentionableUsers,
+  resolveUserMentionSplit,
+  validateExplicitMentions,
+  type UserMentionSplit,
+} from '../../engine/input-surface/user-mentions.js';
+import { resolveFileMentions } from '../../engine/input-surface/file-mentions.js';
+// ADR-118 §2: монотонный `ord` — счётчик порядка записи в историю.
+import { nextOrd } from '../../storage/message-write.js';
+import { warning } from '../../logger.js';
 // ADR-115: вложения сообщений — сервис (blob-хранилище + лимиты) и роуты загрузки/раздачи.
 import {
   AttachmentService,
@@ -334,6 +348,19 @@ export interface SessionRoutesDeps {
     isProviderEnabled?: (name: string) => boolean | undefined;
     isModelEnabled?: (provider: string, model: string) => boolean | undefined;
   };
+  /**
+   * PROP-126 §4: сервис сниппетов (`#`) — раскрытие `#токен` в **пользовательском**
+   * тексте на входе промпта (до очереди и до LLM).
+   *
+   * Не задан — раскрытия нет (текст уходит как есть).
+   */
+  snippetService?: SnippetService;
+  /**
+   * PROP-126 §4: абсолютный рабочий каталог проекта по id — для project-уровня
+   * сниппетов. Резолв — тот же, что в snippet-routes (относительный workspace
+   * — от `workspacesRoot`, абсолютный — как есть).
+   */
+  resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -378,6 +405,15 @@ export interface SessionRouteMessages {
   providerDisabled: (c: Context, provider: string) => string;
   /** Модель отключена администратором (400 `MODEL_DISABLED`). */
   modelDisabled: (c: Context, provider: string, model: string) => string;
+  /**
+   * PROP-126 §2.1: `@user` недоступен/неизвестен (400 `VALIDATION_ERROR`).
+   * Перечень проблемных id — в `details.user_ids`.
+   */
+  unknownMentionUsers?: (c: Context, userIds: string[]) => string;
+  /** PROP-126 §2: поле `mentions` в теле промпта невалидно по форме. */
+  invalidMentions?: (c: Context) => string;
+  /** PROP-126 §2: `@file` не разрешён/не прочитан (400 `VALIDATION_ERROR`). */
+  invalidFileMentions?: (c: Context, paths: string[], reasons: string[]) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -525,6 +561,11 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
     `Провайдер «${provider}» отключён — выберите другую модель`,
   modelDisabled: (_c: Context, provider: string, model: string) =>
     `Модель ${provider}/${model} отключена — выберите другую модель`,
+  unknownMentionUsers: (_c: Context, userIds: string[]) =>
+    `Упомянутые пользователи недоступны: ${userIds.join(', ')}`,
+  invalidMentions: () => 'Поле mentions должно быть массивом упоминаний корректной формы',
+  invalidFileMentions: (_c: Context, paths: string[], reasons: string[]) =>
+    `Не удалось прочитать файлы: ${paths.map((path, index) => `${path} (${reasons[index] ?? 'error'})`).join(', ')}`,
 };
 
 /**
@@ -720,6 +761,32 @@ function mapRemoteError(c: Context, err: unknown): Response | undefined {
  * через getRemoteClient), backend параметризует RBAC, owner/author, EventHub-хуки
  * и отключает remote-ветки (getRemoteClient не передаётся).
  */
+/**
+ * PROP-126 §2.1: собрать доступных для `@user` участников и разбить текст на
+ * агентскую часть и пользовательский хвост.
+ *
+ * Участники выводятся из сессии/проекта (`deriveSessionParticipants`), профиль
+ * добавляет username/displayName; общий список пользователей не раскрывается.
+ */
+async function resolveSessionUserMentions(
+  session: Session,
+  text: string,
+  body: unknown,
+  deps: SessionRoutesDeps,
+): Promise<UserMentionSplit & { malformed: boolean }> {
+  const project = session.projectId && deps.projectStore
+    ? await deps.projectStore.load(session.projectId).catch(() => null)
+    : null;
+  const participants = deriveSessionParticipants(session, project);
+  const users = await resolveMentionableUsers(participants, deps.profilesStore);
+  const explicit = validateExplicitMentions(
+    (body as { mentions?: unknown } | null | undefined)?.mentions,
+    users,
+  );
+  const split = resolveUserMentionSplit({ text, users, explicit });
+  return { ...split, malformed: explicit.malformed };
+}
+
 export function createSessionRoutes(
   auth: SessionRoutesAuth,
   deps: SessionRoutesDeps,
@@ -801,6 +868,27 @@ export function createSessionRoutes(
   // ADR-052 (этап I): scope-гейты service-key и проектная проекция сессии.
   const scoped = opts.scopeGuard ?? requireScope;
   const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
+
+  /**
+   * PROP-126 §4: рабочий каталог сессии для project-уровня сниппетов.
+   *
+   * Порядок — как у рабочего каталога сессии (ADR-075/ADR-114): привязанный
+   * git-worktree → workspace проекта. Путь проекта резолвится тем же правилом,
+   * что и в snippet-routes (`resolveProjectWorkspace` из сборки), иначе
+   * относительный workspace смотрелся бы относительно cwd процесса.
+   */
+  const resolveSessionWorkspace = async (session: Session): Promise<string | undefined> => {
+    const worktreeDir = session.worktree?.directory?.trim();
+    if (worktreeDir) return worktreeDir;
+    const projectId = session.projectId;
+    if (!projectId) return undefined;
+    if (deps.resolveProjectWorkspace) {
+      const resolved = await deps.resolveProjectWorkspace(projectId).catch(() => undefined);
+      if (resolved) return resolved;
+    }
+    const project = await deps.projectStore?.load(projectId).catch(() => null);
+    return project?.workspace;
+  };
 
   /**
    * ADR-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
@@ -2459,9 +2547,9 @@ export function createSessionRoutes(
     }
 
     const body = await c.req.json().catch(() => ({}));
-    const content = body.content?.trim();
+    const rawContent = body.content?.trim();
 
-    if (!content) {
+    if (!rawContent) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.contentRequired(c) } }, 400);
     }
 
@@ -2508,6 +2596,106 @@ export function createSessionRoutes(
     // участника проекта и сквозной обзор ADMIN/LEAD. Здесь остаётся только
     // специфика тела запроса (проверка контента выше).
 
+    // PROP-126 §2.1: `@user` — граница «агенту / пользователю». Первое
+    // упоминание пользователя (среди доступных участников сессии/проекта) делит
+    // сообщение: часть **до** него — агенту (обычная очередь, ход), часть
+    // **от** него — пользователю (сообщение в историю + уведомление, ход **не**
+    // запускается).
+    const mentionSplit = await resolveSessionUserMentions(session, rawContent, body, deps);
+    if (mentionSplit.malformed) {
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: messages.invalidMentions?.(c) ?? 'Некорректное поле mentions',
+          },
+        },
+        400,
+      );
+    }
+    if (mentionSplit.invalidUserIds.length > 0) {
+      // Недоступный/неизвестный пользователь — 400 **до** отправки, без
+      // частичной доставки (PROP-126 §2.1 п. 4).
+      return c.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: messages.unknownMentionUsers?.(c, mentionSplit.invalidUserIds)
+              ?? `Недоступные пользователи: ${mentionSplit.invalidUserIds.join(', ')}`,
+            details: { user_ids: mentionSplit.invalidUserIds },
+          },
+        },
+        400,
+      );
+    }
+    // Агентская часть сообщения (до первого `@user`); пусто — агент не
+    // запускается вовсе (PROP-126 §2.1 п. 1).
+    let content = mentionSplit.agentText;
+    // Пользовательский хвост (от первого `@user` до конца) — `undefined`, если
+    // упоминания пользователя в сообщении нет.
+    const userDirectedText = mentionSplit.userText;
+
+    // PROP-126 §2: `@file` — только в агентской части. Файл читается внутри
+    // workspace сессии; бинарь/вне периметра/слишком большой — 400, без
+    // частичной доставки. Блок добавляется **после** сниппетов, чтобы тело
+    // файла не было повторно разобрано как `#`-сниппет.
+    const originalAgentText = content;
+    let fileMentions: string[] | undefined;
+    let fileBlocks = '';
+    if (content && !content.trimStart().startsWith('/')) {
+      const fileWorkspace = await resolveSessionWorkspace(session);
+      const fileResult = await resolveFileMentions(content, fileWorkspace);
+      if (fileResult.invalid.length > 0) {
+        const paths = fileResult.invalid.map((item) => item.path);
+        const reasons = fileResult.invalid.map((item) => item.reason);
+        return c.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: messages.invalidFileMentions?.(c, paths, reasons)
+                ?? `Не удалось прочитать файлы: ${paths.join(', ')}`,
+              details: { files: fileResult.invalid },
+            },
+          },
+          400,
+        );
+      }
+      fileMentions = fileResult.files.length > 0 ? fileResult.files : undefined;
+      fileBlocks = fileResult.text.slice(originalAgentText.length);
+    }
+
+    // PROP-126 §4: раскрытие `#`-сниппетов — на входе промпта, до очереди и до
+    // LLM (один и тот же путь для CLI/гибрида/шлюзов). Раскрывается **только
+    // пользовательский текст**: `/`-команда не разворачивается (иначе сниппет
+    // стал бы скрытым каналом инъекции в шаблоны команд). Исходный текст в
+    // историю не уходит — в `content`/`parts` идёт уже раскрытый (обфускация
+    // ADR-036 применится к нему в `enqueueUserMessage`).
+    //
+    // PROP-126 §2.1: сниппеты раскрываются **только в агентской части**: в
+    // user-directed хвосте `#`/`$` — обычный текст (хвост не должен случайно
+    // раскрыть сниппет или вызвать скилл).
+    let snippetExpansions: string[] | undefined;
+    if (deps.snippetService && content && !content.trimStart().startsWith('/')) {
+      const snippetUserId = (await resolveUserId(c)) || undefined;
+      const projectWorkspace = await resolveSessionWorkspace(session);
+      const expanded = await deps.snippetService.expandText(content, {
+        ...(snippetUserId ? { userId: snippetUserId } : {}),
+        ...(projectWorkspace ? { projectWorkspace } : {}),
+      });
+      if (expanded.text !== content && expanded.text.trim()) {
+        content = expanded.text;
+        snippetExpansions = expanded.applied;
+      }
+      // Диагностика — в лог, не клиенту: только код и имя сниппета (без
+      // содержимого и без путей — PROP-126 §4 «Содержимое не логируется»).
+      for (const diagnostic of expanded.diagnostics) {
+        warning('ROUTES', `SNIPPET ${diagnostic.code}: ${diagnostic.snippet ?? '-'}`);
+      }
+    }
+    if (fileBlocks) {
+      content = `${content}${fileBlocks}`;
+    }
+
     // ADR-115: вложения — пути объектов blob-хранилища (`attachments/<sha2>/<sha256>`),
     // полученные из `POST /sessions/:id/attachments`. Порядок частей: текст,
     // затем вложения. Неизвестный/невалидный путь — 400 с перечнем проблемных
@@ -2547,7 +2735,14 @@ export function createSessionRoutes(
       }
     }
 
-    const messageParts: Part[] = [{ id: generateStreamId(), type: 'text', data: content }];
+    // Текст сообщения: агентская часть и пользовательский хвост — **разные**
+    // сообщения (PROP-126 §2.1). Вложения принадлежат агентской части, если она
+    // есть; сообщение, начинающееся с `@user`, получает вложения само.
+    const agentParts: Part[] = content ? [{ id: generateStreamId(), type: 'text', data: content }] : [];
+    const userDirectedParts: Part[] = userDirectedText
+      ? [{ id: generateStreamId(), type: 'text', data: userDirectedText }]
+      : [];
+    const attachmentParts = content ? agentParts : userDirectedParts;
     if (attachmentPaths && attachmentPaths.length > 0 && attachmentService) {
       const broken: string[] = [];
       let addedBytes = 0;
@@ -2571,7 +2766,7 @@ export function createSessionRoutes(
             415,
           );
         }
-        messageParts.push(makeMediaPart(media.type, media.data));
+        attachmentParts.push(makeMediaPart(media.type, media.data));
         addedBytes += media.data.size;
       }
       if (broken.length > 0) {
@@ -2600,7 +2795,13 @@ export function createSessionRoutes(
     // (`[image: name.png]`), иначе факт вложения теряется в строковых производных.
     // Маркер может прийти уже из композера (он вставляет его при прикреплении) —
     // тогда второй раз он не добавляется (appendMediaPlaceholders).
-    const messageContent = appendMediaPlaceholders(content, messageParts);
+    const messageParts = agentParts;
+    const messageContent = content
+      ? appendMediaPlaceholders(content, agentParts)
+      : '';
+    const userDirectedContent = userDirectedText
+      ? appendMediaPlaceholders(userDirectedText, userDirectedParts)
+      : '';
 
     // ADR-118 §3: клиентский id нормализуется общей точкой (`normalizeClientMessageId`):
     // не строка, пустая строка или одни пробелы → серверный id (иначе сообщение
@@ -2618,6 +2819,13 @@ export function createSessionRoutes(
     // (гранты по группам применяются к этому снимку).
     const turnPrincipal = resolveUserPrincipal(await resolveUserId(c), [], resolveUserGroups(c));
 
+    // ADR-118 §2: `ord` — монотонный порядок записи в историю. Резервируем его
+    // для агентской части **до** постановки в очередь: user-directed хвост
+    // записывается в историю сразу и должен быть **новее** триггера — тогда он
+    // исключается из LLM-контекста текущего хода и попадает в следующий
+    // (PROP-126 §2.1 п. 6).
+    const baseOrd = nextOrd(session.messages);
+
     const message: Message = {
       // ADR-118 §3: id сохранённого сообщения = id принятого (`streamId`:
       // клиентский `body.messageId` либо выданный сервером) — иначе `202`/события
@@ -2625,6 +2833,8 @@ export function createSessionRoutes(
       id: streamId,
       role: MessageRole.USER,
       seq: session.messages.length + 1,
+      // ADR-118 §2: монотонный порядок записи (резервируется заранее — см. выше).
+      ord: baseOrd,
       origin: 'local',
       parts: messageParts,
       content: messageContent,
@@ -2636,7 +2846,14 @@ export function createSessionRoutes(
       agentRole: body.agent || session.settings.agentRole,
       provider: body.provider || session.settings.provider,
       model: body.model || session.settings.model,
-      metadata: { ...(body.metadata || {}), stream_id: streamId },
+      metadata: {
+        ...(body.metadata || {}),
+        stream_id: streamId,
+        // PROP-126 §4: какие сниппеты раскрылись (аддитивно, для диагностики).
+        ...(snippetExpansions ? { snippetExpansions } : {}),
+        // PROP-126 §2: какие `@file` прочитаны (аддитивно).
+        ...(fileMentions ? { fileMentions } : {}),
+      },
     };
 
     // ADR-118 §3: идентификатор принятого сообщения — единый источник истины
@@ -2644,11 +2861,71 @@ export function createSessionRoutes(
     // `message.accepted`/`message.enqueued` и в историю.
     const acceptedMessageId = message.id;
 
+    // PROP-126 §2.1: user-directed хвост («@alice проверь») — сообщение
+    // **человеку**, а не агенту. Оно попадает в историю сразу, публикует
+    // `message.delivered` (ADR-118) и `message.mentioned` (PROP-126 §2.1 п. 7),
+    // но **не** ставится в очередь, **не** попадает в `steerInbox` и **не**
+    // запускает ход (PROP-126 §2.1 п. 5).
+    const userMessageId = content ? generateStreamId() : acceptedMessageId;
+
+    const persistUserDirected = async (): Promise<void> => {
+      if (!userDirectedText) return;
+      const userMessage: Message = {
+        id: userMessageId,
+        role: MessageRole.USER,
+        // Порядковый номер — следующий за агентской частью (в истории сообщение
+        // одно на запрос; seq у agent-части уже занят).
+        seq: session.messages.length + 2,
+        // PROP-126 §2.1 п. 6: хвост **новее** триггера (агентской части).
+        ord: baseOrd + 1,
+        origin: 'local',
+        parts: userDirectedParts,
+        content: userDirectedContent,
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        author,
+        ...(turnPrincipal ? { principal: turnPrincipal } : {}),
+        agentRole: body.agent || session.settings.agentRole,
+        provider: body.provider || session.settings.provider,
+        model: body.model || session.settings.model,
+        // PROP-126 §2.1: упоминания пользователей (span'ы — в тексте хвоста).
+        mentions: mentionSplit.mentions,
+        metadata: {
+          ...(body.metadata || {}),
+          stream_id: userMessageId,
+          // PROP-126 §2.1: признак user-directed сообщения (аддитивно).
+          userDirected: true,
+        },
+      };
+      await sessionManager.addMessage(sessionId, userMessage);
+      // ADR-118 §4: сообщение материализовано в истории — `message.delivered`
+      // (канал сессии): id, `ord`, роль, автор и принципал.
+      eventBus.publish(sessionId, 'message.delivered', {
+        messageId: userMessage.id,
+        ord: userMessage.ord ?? 0,
+        role: userMessage.role,
+        ...(userMessage.author ? { author: userMessage.author } : {}),
+        ...(userMessage.principal ? { principal: userMessage.principal } : {}),
+      });
+      // PROP-126 §2.1 п. 7: уведомление и бейдж. Self-mention допускается,
+      // но уведомление себе не отправляется (п. 4).
+      const notifiedUserIds = mentionSplit.mentions
+        .map((mention) => mention.id)
+        .filter((userId) => userId !== senderUserId);
+      eventBus.publish(sessionId, 'message.mentioned', {
+        message_id: userMessage.id,
+        user_ids: [...new Set(notifiedUserIds)],
+        session_id: sessionId,
+      });
+    };
+
     // ADR-104: `steer` — вмешательство в активный ход (без прерывания
     // генерации), `interrupt` — прерывание текущей генерации с продолжением
     // хода. Если активного хода нет — ведём себя как обычная очередь
     // (сообщение начнёт новый ход).
-    if (mode !== 'queue' && isTurnActive(session, queueManager)) {
+    if (content && mode !== 'queue' && isTurnActive(session, queueManager)) {
       const interruptMode = mode === 'interrupt';
       const steerResult = await enqueueSteerMessage(
         sessionManager, eventBus, sessionId, message, MAX_STEER_INJECTIONS_PER_TURN,
@@ -2671,6 +2948,8 @@ export function createSessionRoutes(
       // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений
       // (по ним работает дедуп и GC; снимаются при удалении сообщения).
       await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
+      // PROP-126 §2.1: user-directed хвост не участвует во вмешательстве.
+      await persistUserDirected();
       if (interruptMode) {
         // Прерываем текущую генерацию: ход НЕ завершается («Стоп» — отдельный
         // механизм, ADR-005) — обрывается только стрим, а сообщение
@@ -2689,33 +2968,49 @@ export function createSessionRoutes(
       }, 202);
     }
 
-    const result = await enqueueUserMessage(
-      sessionManager, eventBus, sessionId, message, queueManager, processMessage,
-      (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
-      {
-        ...(turnPrincipal ? { principal: turnPrincipal } : {}),
-        messageId: acceptedMessageId,
-        ...(senderUserId ? { recipient: senderUserId } : {}),
-      },
-    );
+    if (content) {
+      const result = await enqueueUserMessage(
+        sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+        (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+        {
+          ...(turnPrincipal ? { principal: turnPrincipal } : {}),
+          messageId: acceptedMessageId,
+          ...(senderUserId ? { recipient: senderUserId } : {}),
+        },
+      );
 
-    if (!result) {
+      if (!result) {
+        return c.json({
+          error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
+        }, 429);
+      }
+
+      // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений.
+      await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
+
+      // PROP-126 §2.1: user-directed хвост — в историю сразу (ход не ждёт его).
+      await persistUserDirected();
+
+      // ADR-118 §3: контракт приёма — **всегда** `202 {messageId, mode, position}`.
+      // `text/event-stream` больше не возвращается: контракт приёма и контракт
+      // наблюдения разведены (наблюдение за ходом — по шине событий, ADR-024).
+      // Отмена соединения клиентом больше не рвёт наблюдение за ходом.
       return c.json({
-        error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
-      }, 429);
+        messageId: acceptedMessageId,
+        mode: 'queue',
+        position: result.pendingMessages.length,
+      }, 202);
     }
 
-    // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений.
-    await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
-
-    // ADR-118 §3: контракт приёма — **всегда** `202 {messageId, mode, position}`.
-    // `text/event-stream` больше не возвращается: контракт приёма и контракт
-    // наблюдения разведены (наблюдение за ходом — по шине событий, ADR-024).
-    // Отмена соединения клиентом больше не рвёт наблюдение за ходом.
+    // PROP-126 §2.1 п. 1: сообщение начинается с `@user` — агент не запускается
+    // вовсе, создаётся только пользовательское сообщение. Ответ — тот же
+    // контракт приёма (`202`), но без позиции в очереди.
+    await registerAttachmentRefs(deps.attachments?.blobRefs, userMessageId, userDirectedParts);
+    await persistUserDirected();
     return c.json({
       messageId: acceptedMessageId,
       mode: 'queue',
-      position: result.pendingMessages.length,
+      position: null,
     }, 202);
   });
 
@@ -3283,13 +3578,27 @@ export function createSessionRoutes(
 
   app.post('/:id/summarize', auth.requireAuth, async (c) => {
     const id = c.req.param('id');
+    // ADR-119: профиль сжатия (`summarization` — итоги беседы, `compaction` —
+    // рабочее состояние по коду/проекту). Тело или query; по умолчанию —
+    // `summarization` (значение по умолчанию).
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const rawMode = typeof body.mode === 'string' && body.mode !== ''
+      ? body.mode
+      : (c.req.query('mode') ?? '');
+    let mode: CompressionMode = 'summarization';
+    if (rawMode !== '') {
+      if (rawMode !== 'summarization' && rawMode !== 'compaction') {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'mode должен быть "summarization" или "compaction"' } }, 400);
+      }
+      mode = rawMode;
+    }
     if (hasRemoteGetter && isRemoteRef(id)) {
       const remoteClient = resolveClient();
       if (!remoteClient) {
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
       try {
-        const result = await remoteClient.summarizeSession(toLocalId(id));
+        const result = await remoteClient.summarizeSession(toLocalId(id), mode);
         return c.json(result);
       } catch (err) {
         const mapped = mapRemoteError(c, err);
@@ -3307,7 +3616,12 @@ export function createSessionRoutes(
     if (!session.settings.provider || !session.settings.model) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'No provider/model configured for session' } }, 400);
     }
-    if (!deps.contextOptimizer.canSummarize(session)) {
+    // Профиль задан явно — проверка по нему, а не по эффективному режиму
+    // сессии: ручной запуск работает независимо от авто-стратегии (ADR-119).
+    const canCompress = typeof deps.contextOptimizer.canCompress === 'function'
+      ? deps.contextOptimizer.canCompress(session, mode)
+      : deps.contextOptimizer.canSummarize(session);
+    if (!canCompress) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'No messages to compress (need at least one full turn before the tail)' } }, 400);
     }
 
@@ -3324,7 +3638,7 @@ export function createSessionRoutes(
       pinned: false,
       hidden: false,
       author: await resolveAuthor(c),
-      metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
+      metadata: { type: 'summarization_request', reason: 'manual', mode, stream_id: streamId },
     };
 
     // ADR-106 Ф4: принципал инициатора (ручная суммаризация — ввод от

@@ -23,6 +23,7 @@ import { MIGRATION_032_MCP_REMOTE_MODE } from './032-mcp-remote-mode.js';
 import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
 import { MIGRATION_034_PENDING_APPROVALS } from './034-pending-approvals.js';
 import { MIGRATION_035_PROJECT_ACCESS } from './035-project-access.js';
+import { MIGRATION_036_MESSAGE_MENTIONS } from './036-message-mentions.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -313,7 +314,7 @@ describe('миграция 035_project_access (список доступа к п
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('035_project_access');
     expect(migration!.sql).toBe(MIGRATION_035_PROJECT_ACCESS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(35);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(36);
   });
 
   it('добавляет колонки group_members и everyone_role идемпотентно', () => {
@@ -338,5 +339,22 @@ describe('миграция 035_project_access (список доступа к п
     );
     expect(MIGRATION_035_PROJECT_ACCESS).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
     expect(MIGRATION_035_PROJECT_ACCESS).not.toMatch(/ALTER TABLE projects\s+ADD COLUMN(?! IF NOT EXISTS)/);
+  });
+});
+
+describe('миграция 036_message_mentions (@-упоминания, PROP-126 §2.1)', () => {
+  it('зарегистрирована под версией 36 и последняя', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 36);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('036_message_mentions');
+    expect(migration!.sql).toBe(MIGRATION_036_MESSAGE_MENTIONS);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(36);
+  });
+
+  it('добавляет messages.mentions jsonb идемпотентно', () => {
+    expect(MIGRATION_036_MESSAGE_MENTIONS).toContain(
+      'ALTER TABLE messages ADD COLUMN IF NOT EXISTS mentions jsonb',
+    );
+    expect(MIGRATION_036_MESSAGE_MENTIONS).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
   });
 });

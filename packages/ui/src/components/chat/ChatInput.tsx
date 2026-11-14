@@ -11,8 +11,10 @@ import { notifyMessage } from '@/hooks/useNotification'
 import { prepareAttachmentFiles, type PreparedAttachment } from '@/lib/attachments/prepare'
 import { useAttachmentsStore } from '@/stores/attachmentsStore'
 import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
-import { MentionPopup } from './MentionPopup'
+import { MentionPopup, type MentionFileEntry, type MentionSelection, type MentionUserEntry } from './MentionPopup'
 import { CommandAutocomplete } from './CommandAutocomplete'
+import { SkillAutocomplete } from './SkillAutocomplete'
+import { SnippetAutocomplete } from './SnippetAutocomplete'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
 import { PlanActModeToggle } from './PlanActModeToggle'
@@ -23,6 +25,7 @@ import { AttachmentGallery } from './attachments/AttachmentGallery'
 import { useAttachmentDrop } from './attachments/useAttachmentDrop'
 import { useAttachmentPaste } from './attachments/useAttachmentPaste'
 import type { AgentInfo, StickyNoteData } from '@/lib/api/synthApi'
+import { synthApi } from '@/lib/api/synthApi'
 import { useStickyNotesLimitsState } from '@/lib/api/stickyNotesLimits'
 import type { CommandSummary } from '@itphx/synth-shared'
 import type { SteerMode } from '@itphx/synth-shared/types'
@@ -67,6 +70,79 @@ export interface TagPart {
 const TAG_REGEX = /@(\w+)/g
 const MAX_TAGS = 3
 const CHAT_INPUT_RADIUS = 'var(--radius-xl)'
+/**
+ * PROP-126 §2: предел файлов в `@`-пикере — список файлов workspace проекта
+ * показывается целиком только до этого числа (дальше — по фильтру запроса).
+ */
+const MENTION_FILES_LIMIT = 50
+/**
+ * PROP-126 §3: триггер `$`-пикера — `$` в начале слова (начало текста или
+ * после пробела) и тело токена до курсора. Ядро резолвит `$`-токен по тем же
+ * правилам (`engine/input-surface/parser.ts`), поэтому `$` внутри слова
+ * (`a$b`) токеном не считается.
+ */
+const SKILL_TRIGGER_REGEX = /(^|\s)\$([^\s$]*)$/u
+/**
+ * Тело `$`/`#`-токена: буквы/цифры/`.`/`_`/`-`, имя начинается с буквы — иначе
+ * `$5` (цена) / `#123` (номер) токеном не является (как в core-лексере).
+ */
+const SYMBOL_TOKEN_BODY_REGEX = /^[\p{L}][\p{L}\p{N}._-]*$/u
+
+/**
+ * PROP-126 §4: триггер `#`-пикера — `#` в начале слова (начало текста или
+ * после пробела) и тело токена до курсора. Прогон `#` (`##`, `###`) и пробел
+ * после `#` — markdown-заголовок, а не сниппет (те же правила, что в
+ * core-лекере `engine/input-surface/parser.ts`).
+ */
+const SNIPPET_TRIGGER_REGEX = /(^|\s)#([^\s#]*)$/u
+
+/**
+ * PROP-126 §3: ищет `$`-токен в тексте до курсора.
+ *
+ * Возвращает `null`, если триггера нет: `$` не в начале слова, тело токена
+ * не имя (`$5` — цена) или после `$` пробел.
+ */
+function findSkillTrigger(
+  textBeforeCursor: string,
+): { query: string; start: number; end: number } | null {
+  const match = SKILL_TRIGGER_REGEX.exec(textBeforeCursor)
+  if (!match) return null
+  const query = match[2] ?? ''
+  if (query && !SYMBOL_TOKEN_BODY_REGEX.test(query)) return null
+  const start = match.index + match[1].length
+  return { query, start, end: textBeforeCursor.length }
+}
+
+/**
+ * PROP-126 §4: ищет `#`-токен в тексте до курсора.
+ *
+ * Возвращает `null`, если триггера нет: `#` не в начале слова, после `#`
+ * пробел (markdown-заголовок) или прогон `#` (`##`), тело токена — не имя
+ * (`#123` — номер).
+ */
+function findSnippetTrigger(
+  textBeforeCursor: string,
+): { query: string; start: number; end: number } | null {
+  const match = SNIPPET_TRIGGER_REGEX.exec(textBeforeCursor)
+  if (!match) return null
+  const query = match[2] ?? ''
+  if (query && !SYMBOL_TOKEN_BODY_REGEX.test(query)) return null
+  const start = match.index + match[1].length
+  return { query, start, end: textBeforeCursor.length }
+}
+
+/**
+ * Простая эвристика «мы внутри кода»: нечётное число ``` — незакрытый
+ * fenced-блок, нечётное число одинарных backtick'ов — незакрытый inline-код.
+ * Внутри кода `$`-токен ядром не распознаётся — пикер там не открывается.
+ */
+function isInsideCode(text: string): boolean {
+  const fences = text.match(/```/g)?.length ?? 0
+  if (fences % 2 === 1) return true
+  const ticks = text.replace(/```/g, '').match(/`/g)?.length ?? 0
+  return ticks % 2 === 1
+}
+
 /** ADR-115: все типы маркеров вложения — точный тип мог быть нормализован сервером. */
 const MEDIA_PLACEHOLDER_TYPES = ['image', 'audio', 'video', 'file'] as const
 /** Стабильная пустая ссылка для селектора заметок (zustand сравнивает по идентичности). */
@@ -257,12 +333,44 @@ export function ChatInput({
     end: number
     position: { left: number }
   } | null>(null)
+  /**
+   * PROP-126 §2: `@`-пикер — агенты, участники сессии (`@user`) и файлы
+   * workspace проекта (`@file`). Пользователи приходят из `participants`
+   * снимка сессии, файлы — из листинга workspace; список файлов кэшируется
+   * по `projectId` на время сессии.
+   */
+  const [mentionUsers, setMentionUsers] = useState<MentionUserEntry[]>([])
+  const [mentionFiles, setMentionFiles] = useState<MentionFileEntry[]>([])
+  /** Число совпавших элементов `@`-пикера — нужно, чтобы пустой список не блокировал Enter. */
+  const [mentionMatches, setMentionMatches] = useState(0)
+  /** Сессия, для которой данные `@`-пикера уже загружены (защита от повторных запросов). */
+  const mentionLoadedRef = useRef<string | null>(null)
+  /** Проект текущей сессии — workspace для списка файлов `@`-пикера. */
+  const mentionProjectRef = useRef<string | null>(null)
+  /** Кэш списка файлов по `projectId` (workspace проекта не меняется на время сессии). */
+  const mentionFilesCacheRef = useRef<Map<string, MentionFileEntry[]>>(new Map())
   // ADR-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
   const [commandState, setCommandState] = useState<{
     query: string
     position: { left: number }
   } | null>(null)
   const [commandMatches, setCommandMatches] = useState(0)
+  // PROP-126 §3: `$`-пикер скиллов (триггер — `$` в начале слова).
+  const [skillState, setSkillState] = useState<{
+    query: string
+    start: number
+    end: number
+    position: { left: number }
+  } | null>(null)
+  const [skillMatches, setSkillMatches] = useState(0)
+  // PROP-126 §4: `#`-пикер сниппетов (триггер — `#` в начале слова).
+  const [snippetState, setSnippetState] = useState<{
+    query: string
+    start: number
+    end: number
+    position: { left: number }
+  } | null>(null)
+  const [snippetMatches, setSnippetMatches] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
@@ -341,6 +449,65 @@ export function ChatInput({
     }
   }, [retryText, sessionId, setValue])
 
+  /**
+   * PROP-126 §2: данные `@`-пикера — участники сессии (`@user`) и файлы
+   * workspace проекта (`@file`).
+   *
+   * Снимок сессии (`GET /api/v2/sessions/:id`) несёт `participants` и
+   * `project_id`; список файлов — листинг workspace (`GET /api/v2/fs`).
+   * Ошибка загрузки не ломает композер: список пуст, `@agent` продолжает
+   * работать. Файлы кэшируются по `projectId` — workspace проекта в рамках
+   * сессии не меняется.
+   */
+  const loadMentionData = useCallback(async () => {
+    if (!sessionId) return
+    if (mentionLoadedRef.current !== sessionId) {
+      mentionLoadedRef.current = sessionId
+      try {
+        const session = await synthApi.getSession(sessionId)
+        setMentionUsers(
+          (session.participants ?? [])
+            .map((participant) => ({ id: participant.user_id, label: participant.user_id }))
+            .filter((user) => user.id.length > 0),
+        )
+        mentionProjectRef.current = session.project_id
+      } catch {
+        // Снимок сессии недоступен — пользователей нет; повтор при новом открытии.
+        mentionLoadedRef.current = null
+        setMentionUsers([])
+        return
+      }
+    }
+    const projectId = mentionProjectRef.current
+    if (!projectId) {
+      setMentionFiles([])
+      return
+    }
+    const cached = mentionFilesCacheRef.current.get(projectId)
+    if (cached) {
+      setMentionFiles(cached)
+      return
+    }
+    try {
+      const listing = await synthApi.listDirectory(projectId, '', false, 2)
+      const files = (listing.entries ?? [])
+        .filter((entry) => !entry.isDirectory)
+        .slice(0, MENTION_FILES_LIMIT)
+        .map((entry) => ({ path: entry.path, label: entry.path }))
+      mentionFilesCacheRef.current.set(projectId, files)
+      setMentionFiles(files)
+    } catch {
+      // Ошибка листинга — список файлов пуст, пикер продолжает работать;
+      // повтор — при следующем открытии (кэш не заполняется).
+      setMentionFiles([])
+    }
+  }, [sessionId])
+
+  // Данные `@`-пикера грузятся один раз на сессию (при монтировании композера).
+  useEffect(() => {
+    void loadMentionData()
+  }, [loadMentionData])
+
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value
     setValue(newValue)
@@ -350,6 +517,8 @@ export function ChatInput({
     const mentionMatch = textBeforeCursor.match(/@(\S*)$/)
 
     if (mentionMatch && mentionMatch.index !== undefined) {
+      // Данные могли не загрузиться при монтировании — добираем при открытии.
+      void loadMentionData()
       setMentionState({
         query: mentionMatch[1],
         start: mentionMatch.index,
@@ -370,12 +539,48 @@ export function ChatInput({
     } else {
       setCommandState(null)
     }
+
+    // PROP-126 §3: `$`-скилл — `$` в начале слова; внутри кода токен ядром не
+    // распознаётся, поэтому пикер там не открывается.
+    const skillTrigger = isInsideCode(textBeforeCursor)
+      ? null
+      : findSkillTrigger(textBeforeCursor)
+    if (skillTrigger) {
+      setSkillState({
+        query: skillTrigger.query,
+        start: skillTrigger.start,
+        end: skillTrigger.end,
+        position: { left: 0 },
+      })
+    } else {
+      setSkillState(null)
+    }
+
+    // PROP-126 §4: `#`-сниппет — `#` в начале слова; внутри кода токен ядром
+    // не распознаётся, поэтому пикер там не открывается.
+    const snippetTrigger = isInsideCode(textBeforeCursor)
+      ? null
+      : findSnippetTrigger(textBeforeCursor)
+    if (snippetTrigger) {
+      setSnippetState({
+        query: snippetTrigger.query,
+        start: snippetTrigger.start,
+        end: snippetTrigger.end,
+        position: { left: 0 },
+      })
+    } else {
+      setSnippetState(null)
+    }
   }
 
   const handleSelectCommand = useCallback((command: CommandSummary) => {
     setValue(`/${command.name} `)
     setCommandState(null)
     setCommandMatches(0)
+    setSkillState(null)
+    setSkillMatches(0)
+    setSnippetState(null)
+    setSnippetMatches(0)
     textareaRef.current?.focus()
   }, [setValue])
 
@@ -383,13 +588,65 @@ export function ChatInput({
     setCommandMatches(count)
   }, [])
 
-  const handleSelectMention = (agentId: string) => {
+  /**
+   * PROP-126 §3: подстановка выбранного скилла — `$<имя> ` (с пробелом,
+   * чтобы токен не слипся со следующим словом). Каретка встаёт за вставку.
+   */
+  const handleSelectSkill = useCallback((name: string) => {
+    if (!skillState) return
+    const current = valueRef.current
+    const before = current.slice(0, skillState.start)
+    const after = current.slice(skillState.end)
+    const inserted = `$${name} `
+    const nextValue = `${before}${inserted}${after}`
+    valueRef.current = nextValue
+    pendingCaretRef.current = skillState.start + inserted.length
+    setValue(nextValue)
+    setSkillState(null)
+    setSkillMatches(0)
+    textareaRef.current?.focus()
+  }, [skillState, setValue])
+
+  const handleSkillMatches = useCallback((count: number) => {
+    setSkillMatches(count)
+  }, [])
+
+  /**
+   * PROP-126 §4: подстановка выбранного сниппета — `#<имя> ` (с пробелом,
+   * чтобы токен не слипся со следующим словом). Каретка встаёт за вставку.
+   */
+  const handleSelectSnippet = useCallback((name: string) => {
+    if (!snippetState) return
+    const current = valueRef.current
+    const before = current.slice(0, snippetState.start)
+    const after = current.slice(snippetState.end)
+    const inserted = `#${name} `
+    const nextValue = `${before}${inserted}${after}`
+    valueRef.current = nextValue
+    pendingCaretRef.current = snippetState.start + inserted.length
+    setValue(nextValue)
+    setSnippetState(null)
+    setSnippetMatches(0)
+    textareaRef.current?.focus()
+  }, [snippetState, setValue])
+
+  const handleSnippetMatches = useCallback((count: number) => {
+    setSnippetMatches(count)
+  }, [])
+
+  /**
+   * PROP-126 §2: подстановка выбранного упоминания — `@<id> ` (для файла id —
+   * путь относительно корня workspace). Пробел в конце, чтобы токен не
+   * слипся со следующим словом.
+   */
+  const handleSelectMention = (item: MentionSelection) => {
     if (!mentionState || !textareaRef.current) return
     const before = value.slice(0, mentionState.start)
     const after = value.slice(mentionState.end)
-    const newValue = `${before}@${agentId} ${after}`
+    const newValue = `${before}@${item.id} ${after}`
     setValue(newValue)
     setMentionState(null)
+    setMentionMatches(0)
     textareaRef.current.focus()
   }
 
@@ -661,8 +918,14 @@ export function ChatInput({
 
     // Очистка — только после успешной отправки: при ошибке черновик не теряем.
     setValue('')
+    setMentionState(null)
+    setMentionMatches(0)
     setCommandState(null)
     setCommandMatches(0)
+    setSkillState(null)
+    setSkillMatches(0)
+    setSnippetState(null)
+    setSnippetMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -697,8 +960,14 @@ export function ChatInput({
 
     // Очистка — только после успешной постановки в очередь/отправки.
     setValue('')
+    setMentionState(null)
+    setMentionMatches(0)
     setCommandState(null)
     setCommandMatches(0)
+    setSkillState(null)
+    setSkillMatches(0)
+    setSnippetState(null)
+    setSnippetMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -720,8 +989,14 @@ export function ChatInput({
     }
     onCreateNote(text)
     setValue('')
+    setMentionState(null)
+    setMentionMatches(0)
     setCommandState(null)
     setCommandMatches(0)
+    setSkillState(null)
+    setSkillMatches(0)
+    setSnippetState(null)
+    setSnippetMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -729,7 +1004,10 @@ export function ChatInput({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (mentionState) {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // PROP-126 §2: пока список `@`-пикера непуст — выбор у MentionPopup,
+      // сообщение не отправляется. Пустой список (нет совпадений) — Enter
+      // отправляет сообщение, как у `$`/`#`-пикеров.
+      if (e.key === 'Enter' && !e.shiftKey && mentionMatches > 0) {
         e.preventDefault()
         return
       }
@@ -737,7 +1015,41 @@ export function ChatInput({
         setMentionState(null)
         return
       }
-      return
+      if (mentionMatches > 0) return
+    }
+
+    // PROP-126 §3: пока открыт непустой список скиллов — навигация/выбор у
+    // SkillAutocomplete, сообщение не отправляется.
+    if (skillState) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSkillState(null)
+        return
+      }
+      if (
+        skillMatches > 0
+        && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab')
+      ) {
+        e.preventDefault()
+        return
+      }
+    }
+
+    // PROP-126 §4: пока открыт непустой список сниппетов — навигация/выбор у
+    // SnippetAutocomplete, сообщение не отправляется.
+    if (snippetState) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSnippetState(null)
+        return
+      }
+      if (
+        snippetMatches > 0
+        && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab')
+      ) {
+        e.preventDefault()
+        return
+      }
     }
 
     // ADR-046 §9.3: пока открыт непустой список команд — навигация/выбор у
@@ -833,9 +1145,12 @@ export function ChatInput({
             <MentionPopup
               query={mentionState.query}
               agents={agents}
+              users={mentionUsers}
+              files={mentionFiles}
               position={mentionState.position}
               onSelect={handleSelectMention}
               onClose={() => setMentionState(null)}
+              onMatchesChange={setMentionMatches}
             />
           )}
 
@@ -846,6 +1161,26 @@ export function ChatInput({
               onSelect={handleSelectCommand}
               onClose={() => setCommandState(null)}
               onMatchesChange={handleCommandMatches}
+            />
+          )}
+
+          {skillState && (
+            <SkillAutocomplete
+              query={skillState.query}
+              position={skillState.position}
+              onSelect={handleSelectSkill}
+              onClose={() => setSkillState(null)}
+              onMatchesChange={handleSkillMatches}
+            />
+          )}
+
+          {snippetState && (
+            <SnippetAutocomplete
+              query={snippetState.query}
+              position={snippetState.position}
+              onSelect={handleSelectSnippet}
+              onClose={() => setSnippetState(null)}
+              onMatchesChange={handleSnippetMatches}
             />
           )}
         </div>

@@ -376,6 +376,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'command.skills_empty',
   'command.summary_enqueued',
   'command.summary_unavailable',
+  'command.compact_enqueued',
+  'command.compact_unavailable',
   // --- Сжатие контекста (summarization / compaction) ---
   'context.compression_empty',
   'context.compression_failed',
@@ -956,6 +958,8 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'command.skills_empty': [],
   'command.summary_enqueued': [],
   'command.summary_unavailable': [],
+  'command.compact_enqueued': [],
+  'command.compact_unavailable': [],
   // --- Сжатие контекста (summarization / compaction) ---
   'context.compression_empty': [],
   'context.compression_failed': ["mode","reason"],

@@ -137,6 +137,8 @@ export interface MessageRow {
   source?: string | null;
   author?: string | null;
   agent_role?: string | null;
+  /** PROP-126 §2.1: `@`-упоминания сообщения (jsonb, миграция `036`). */
+  mentions?: unknown;
   qa_pass?: boolean | null;
   qa_reason?: string | null;
   disabled?: boolean | null;
@@ -249,6 +251,8 @@ export interface SerializedMessage {
   source?: string;
   author?: string;
   agent_role?: string;
+  /** PROP-126 §2.1: `@`-упоминания (jsonb, миграция `036`). */
+  mentions?: unknown;
   metadata?: Record<string, unknown>;
   prompt_meta?: unknown;
   summary_of?: number[];
@@ -366,6 +370,8 @@ export function serializeMessage(msg: Message): SerializedMessage {
     source: msg.source,
     author: msg.author,
     agent_role: msg.agentRole,
+    // PROP-126 §2.1: `@`-упоминания (jsonb, миграция `036`).
+    mentions: msg.mentions,
     metadata: msg.metadata,
     prompt_meta: msg.promptMeta,
     summary_of: msg.summaryOf,
@@ -496,6 +502,10 @@ export function deserializeMessage(row: MessageRow): Message {
     source: (row.source ?? undefined) as Message['source'],
     author: row.author ?? undefined,
     agentRole: row.agent_role ?? undefined,
+    // PROP-126 §2.1: legacy-строки без колонки → `undefined`.
+    mentions: Array.isArray(row.mentions)
+      ? (row.mentions as Message['mentions'])
+      : undefined,
     metadata: (row.metadata ?? undefined) as Message['metadata'],
     promptMeta: (row.prompt_meta ?? undefined) as Message['promptMeta'],
     summaryOf: (row.summary_of ?? undefined) as Message['summaryOf'],

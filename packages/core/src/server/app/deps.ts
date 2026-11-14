@@ -179,6 +179,7 @@ import {
 import { ApprovalRegistry } from '../../engine/permission/approval.js';
 import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
+import { SnippetService } from '../../engine/snippets/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { CommandService } from '../../engine/commands/service.js';
 import { createLocalOwnerResolver, LOCAL_USER_ID } from '../local-owner.js';
@@ -1173,6 +1174,14 @@ export async function createStandaloneDeps(
 
   // ADR-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
   void skillService.refreshRemote().catch(() => {});
+
+  // PROP-126 §4: сервис сниппетов (`#`) — три уровня (`instance`/`project`/`user`),
+  // discovery + запись файлов + раскрытие. Project-trust — тот же гейт, что у
+  // скиллов и команд (`skills.trustedProjectDirs`).
+  const snippetService = new SnippetService({
+    dataDir,
+    trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
+  });
 
   // ADR-092: авто-миграции схемы данных при старте — с обязательной страховочной
   // копией и под межпроцессным локом. Миграция снапшотов скоупа — зарегистрированная
@@ -2442,6 +2451,8 @@ export async function createStandaloneDeps(
     skillService,
     bundleStore,
     commandService,
+    // PROP-126 §4: сервис сниппетов (`#`) — HTTP-контур `/api/v2/snippets`.
+    snippetService,
     // ADR-051/ADR-100: порт реестра пайплайнов (определения + экземпляры).
     pipelines: pipelineStore,
     // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).

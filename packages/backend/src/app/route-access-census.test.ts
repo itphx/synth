@@ -282,6 +282,16 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/skill-bundles/:name', G_AUTH, [404]),
   r('PATCH', '/api/v2/skill-bundles/:name', G_ADMIN, [403], { body: {} }),
   r('DELETE', '/api/v2/skill-bundles/:name', G_ADMIN, [403]),
+  // PROP-126 §4: сниппеты — mixed RBAC by scope (instance — ADMIN, user — self,
+  // project — OWNER/EDITOR). Unknown name is 404 before the scope check; the
+  // foreign USER never gets 2xx.
+  r('PATCH', '/api/v2/snippets/:name', G_AUTH, [400, 404], {
+    body: {},
+    note: 'scope-level RBAC в createSnippetRoutes: instance ADMIN, user self, project OWNER/EDITOR',
+  }),
+  r('DELETE', '/api/v2/snippets/:name', G_AUTH, [400, 404], {
+    note: 'scope-level RBAC в createSnippetRoutes: instance ADMIN, user self, project OWNER/EDITOR',
+  }),
   // Чтение словаря — requireAuth (ресурс инстанса). Неизвестная категория
   // валидируется до чтения → 400; существующая, но не созданная — 404.
   r('GET', '/api/v2/dictionaries/:category/:lang', G_AUTH, [400, 404], {

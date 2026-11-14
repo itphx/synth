@@ -1870,6 +1870,38 @@ export type {
   SkillOrigin,
 } from './engine/skills/types.js';
 export { resolveProjectSkillSeed, resolveProjectMcpSeed } from './engine/skills/seed.js';
+// PROP-126 §4: сниппеты (`#`) — домен (три уровня) + HTTP-контур.
+export { SnippetService, SnippetError } from './engine/snippets/service.js';
+export type {
+  SnippetServiceOptions,
+  SnippetScopeContext,
+  SnippetWriteInput,
+  SnippetErrorCode,
+} from './engine/snippets/service.js';
+export {
+  SNIPPET_SCOPES,
+  SNIPPET_NAME_REGEX,
+  MAX_SNIPPET_EXPANSIONS,
+  MAX_SNIPPET_BYTES,
+} from './engine/snippets/types.js';
+export type {
+  Snippet,
+  SnippetScope,
+  SnippetDiagnostic,
+  SnippetDiagnosticCode,
+  SnippetDiagnosticLevel,
+  SnippetSource,
+  SnippetScanResult,
+} from './engine/snippets/types.js';
+export { expandSnippetMentions } from './engine/snippets/expand.js';
+export type { ExpandSnippetsOptions, ExpandSnippetsResult } from './engine/snippets/expand.js';
+export { createSnippetRoutes } from './server/routes/snippets.js';
+export type {
+  SnippetRoutesDeps,
+  SnippetRoutesOptions,
+  SnippetRoutesMessages,
+  SnippetProjectStore,
+} from './server/routes/snippets.js';
 export { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './storage/migrations.js';
 export type { SessionScopeMigrationDeps } from './storage/migrations.js';
 // ADR-092: версионирование схемы данных инстанса, реестр миграций, guard совместимости.

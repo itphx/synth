@@ -1945,7 +1945,9 @@ Resolving `/` commands is done in core. The `commands` section:
 | `commands.maxArgumentsLength` | Limit of `$ARGUMENTS` | `10000` |
 | `commands.maxRenderedBytes` | Limit of rendering a template/bundle aggregate | `200000` |
 
-Sources of template commands (priority): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Built-in commands — `/help`, `/skills`, `/commands`, `/summary`, `/init` (ADR-069; `/compact`, `/review` are deferred). Skill commands — `/skill-creator`, `/agents-md` (builtin skills). `allowed-tools` in the frontmatter — advisory (not translated into permissions).
+Sources of template commands (priority): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Built-in commands — `/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init` (ADR-069), `/review` (PROP-126 §1). `/summary` and `/compact` trigger manual context compression (ADR-119; profile `summarization`/`compaction`); session settings are unchanged. `/init` and `/review` are prompt commands (status `prompt`): `/init` generates/updates `AGENTS.md`, `/review` reviews **code changes** in a git repository (no argument — uncommitted changes, argument — commit/branch/PR; when there is no git repository or no diff, the model states that reviewing the changes is not available instead of inventing changes). Skill commands — `/skill-creator`, `/agents-md` (builtin skills). `allowed-tools` in the frontmatter — advisory (not translated into permissions).
+
+Snippets (`#name`, PROP-126 §4) are markdown content files: `instance` — `{dataDir}/snippets`, `project` — `{project.workspace}/.synth/snippets`, `user` — `{dataDir}/snippets/users/<userId>`; precedence `user > project > instance`, canonical name beats an alias. Expansion happens on prompt ingress before the queue; limits 15 expansions / 64 KB; code blocks are untouched; snippets of an untrusted project are visible but not expanded. Name — `[a-z][a-z0-9_-]{0,79}`.
 
 ### Tool groups for skills (`skills.toolsets`)
 

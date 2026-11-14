@@ -221,6 +221,43 @@ describe('runProcessEarly', () => {
     expect(d.handleCommand).not.toHaveBeenCalled();
   });
 
+  it('PROP-126 §3: $ скиллы резолвятся для обычного user-сообщения', async () => {
+    const { session } = await sessionWithUserMessage();
+    const message = makeMessage({ role: MessageRole.USER, content: 'сделай ревью $api-review' });
+    const d = deps({ handleDollarSkills: vi.fn(async () => null) as never });
+
+    const result = await runProcessEarly(args(session, message), d);
+
+    expect(result).toBeNull();
+    expect(d.handleDollarSkills).toHaveBeenCalledWith(expect.objectContaining({
+      session, message, streamId: 'stream1', workingDir: tmpDir,
+    }));
+  });
+
+  it('PROP-126 §3: $ скиллы НЕ резолвятся для /-команды ($ARGUMENTS — не скилл)', async () => {
+    const { session } = await sessionWithUserMessage();
+    const message = makeMessage({ role: MessageRole.USER, content: '/plan $ARGUMENTS' });
+    const d = deps({
+      handleCommand: vi.fn(async () => null) as never,
+      handleDollarSkills: vi.fn(async () => null) as never,
+    });
+
+    const result = await runProcessEarly(args(session, message), d);
+
+    expect(result).toBeNull();
+    expect(d.handleCommand).toHaveBeenCalled();
+    expect(d.handleDollarSkills).not.toHaveBeenCalled();
+  });
+
+  it('PROP-126 §3: непустой результат handleDollarSkills прерывает путь', async () => {
+    const { session } = await sessionWithUserMessage();
+    const d = deps({ handleDollarSkills: vi.fn(async () => ({ error: 'x' })) as never });
+
+    const result = await runProcessEarly(args(session, makeMessage({ role: MessageRole.USER })), d);
+
+    expect(result).toEqual({ error: 'x' });
+  });
+
   it('micro-first: события стрима, ответ и токены сохраняются, авто-тайтл проставлен', async () => {
     const { session } = await sessionWithUserMessage({ microFirst: true });
     const message = makeMessage({ role: MessageRole.USER });

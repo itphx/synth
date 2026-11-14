@@ -15,6 +15,7 @@ import {
   createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes,
   mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig,
   createSkillRoutes, createCommandRoutes, createSkillBundleRoutes,
+  createSnippetRoutes,
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
   createIdentityRoutes,
   createMaintenanceRoutes,
@@ -116,6 +117,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     profilesStore, getDefaultAgentId, requestSessionService, contextOptimizer, protectedPathsStore,
     providerStore, providerCache, modelStore, modelCache, agentStore, agentRegistry, contextConfig,
     sshKeyStore, commandService, bundleStore, dictionaries, serviceApiKeyStore,
+    snippetService,
     eventIngress, eventBindingStore, eventJournal, routeRuleStore, eventApiKeyStore,
     schedulerService, scheduleStore, jobStore, webhookStore, webhookDeliveryStore, webhookService,
     webhooksConfig, eventHub, mcpManager, mcpRegistryStore, skillService, settingsStore,
@@ -333,6 +335,17 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     executionProfiles,
     // PROP-135 (браузерный контур): каталог браузерных профилей сессии.
     browserProfiles,
+    // PROP-126 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
+    snippetService,
+    // Рабочий каталог проекта — project-уровень сниппетов. Резолв тот же,
+    // что у snippet-routes (относительный workspace — от `workspacesRoot`).
+    async (projectId: string): Promise<string | undefined> => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      return isAbsolute(project.workspace)
+        ? normalize(project.workspace)
+        : resolve(config.workspacesRoot, project.workspace);
+    },
   ));
 
   // Messages routes
@@ -1159,6 +1172,26 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         : resolve(config.workspacesRoot, project.workspace);
     },
   }, { writeGuard: requireAdminOrScope('addons:install') }));
+
+  // PROP-126 §4: сниппеты (`#`) — core-фабрика. Права: инстанс-уровень —
+  // ADMIN (`writeGuard`), user-уровень — только свой, проектный — право
+  // изменения содержимого проекта (`OWNER`/`EDITOR`, инвариант 21).
+  app.route('/api/v2/snippets', createSnippetRoutes(auth as unknown as CoreAuthKit, {
+    snippetService,
+    projectStore,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      return isAbsolute(project.workspace)
+        ? normalize(project.workspace)
+        : resolve(config.workspacesRoot, project.workspace);
+    },
+  }, {
+    writeGuard: auth.requireAdmin,
+    resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+    canReadProject: (c, project, userId) => projectAccess.canReadProject(c as never, project, userId),
+    canEditProject: (c, project, userId) => projectAccess.canEditProjectContent(c as never, project, userId),
+  }));
 
   // ADR-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
   app.route('/api/v2/commands', createCommandRoutes(auth as unknown as CoreAuthKit, {

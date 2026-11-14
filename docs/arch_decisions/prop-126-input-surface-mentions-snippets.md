@@ -212,12 +212,14 @@ disclosure), а инструменты скилла — обычные тулы 
 | `project` | `{project.workspace}/.synth/snippets/<name>.md` | OWNER/EDITOR проекта | участники проекта |
 | `user` | `{dataDir}/snippets/users/<userId>/<name>.md` | сам пользователь | только он |
 
-Хранение — через слой хранения/порт (`SnippetRepository`), не прямая запись в обход портов
-([ADR-096](./adr-096-storage-layer.md)); проект — через workspace-провайдер.
+Хранение — **контент-файлы** (markdown), как у команд/скиллов: instance/user — под `{dataDir}`,
+project — под `project.workspace`; запись атомарная (tmp → rename, ADR-005). Отдельный порт
+хранения/PostgreSQL не заводится: это не записи БД, а содержимое, которое читают discovery-реестры.
 
-**Формат.** Markdown с frontmatter: `description`, `aliases`. Имя — `[a-z0-9][a-z0-9_-]{0,79}`.
-Тело — обычный текст. Рекурсия не поддерживается (решение владельца): `#` внутри тела сниппета
-остаётся текстом. `<prepend>/<append>` — возможное расширение позже, в текущий объём не входит.
+**Формат.** Markdown с frontmatter: `description`, `aliases`. Имя — `[a-z][a-z0-9_-]{0,79}`
+(начинается с буквы, чтобы `#123` и `$5` оставались обычным текстом). Тело — обычный текст.
+Рекурсия не поддерживается (решение владельца): `#` внутри тела сниппета остаётся текстом.
+`<prepend>/<append>` — возможное расширение позже, в текущий объём не входит.
 
 **Приоритет.** `user > project > instance`. Каноническое имя важнее алиаса. Коллизии — диагностика
 `shadowed` (видно в настройках), проигравший не исчезает молча.
@@ -273,18 +275,21 @@ Goal — не ещё один префикс и не ещё одна коман�
 
 ## Статус в коде
 
-**Не реализовано.** Проверено по репозиторию (`packages/**`, без `dist/`/`node_modules/`):
+**Частично реализовано (2026-11-14).** `/compact`, `/review`, общий лексер префиксов, `$`-вызов
+скиллов (core + UI), сниппеты (домен/HTTP/раскрытие/UI) и все три вида `@`-упоминаний
+(файл/агент/пользователь, backend + UI-пикер) готовы; `!`-shell остаётся за PROP-064.
 
 | Элемент | Состояние |
 |---|---|
-| `/compact` | Нет; есть `/summary` и авто-компактизация ADR-119 |
+| `/compact` | **Есть**: builtin-команда, `compressionMode`, ручной `POST /sessions/:id/summarize` с `mode`; UI-кнопка — позже |
+| `/summary` | Есть; явный профиль `summarization` (`compressionMode`) |
 | `/init` | Есть (`engine/commands/builtin.ts`) |
-| `/review` | Нет |
-| `@agent` | Есть, но парсер `@(\w+)` агентский (`ChatInput.tsx:67`) |
-| `@file` | Нет в композере; есть `@path` в шаблонных командах (`template.ts:131`) |
-| `@user` | Нет |
-| `$` скиллы | Нет; скиллы вызываются через `/skill-name` |
-| `#` сниппеты | Нет |
+| `/review` | **Есть**: builtin-команда, статус `prompt` (`renderReviewPrompt`, `engine/commands/builtin.ts`); без аргумента — незакоммиченные изменения, аргумент — commit/branch/PR; гейт «git/diff есть» — на стороне модели (в каталоге команда всегда `available: true`, в отличие от §1: ядро не зондирует репозиторий). UI-кнопки нет |
+| `@agent` | **Есть**: backend — `agentRole`-сегментация; UI — `MentionPopup` с секцией «Агенты» (общий лексер `engine/input-surface/parser.ts`, замена `TAG_REGEX` — в UI-пикере) |
+| `@file` | **Есть**: `engine/input-surface/file-mentions.ts` (чтение внутри workspace, ≤5 МиБ, текст; бинарь/вне периметра → 400), блок `<file path>` в агентом сообщении; UI — секция «Файлы» в `MentionPopup` (`listDirectory`, до 50 файлов) |
+| `@user` | **Есть**: `engine/input-surface/user-mentions.ts` (участники сессии/проекта, валидация explicit `mentions`), `POST /sessions/:id/prompt` (граница «агенту/пользователю», `metadata.userDirected`, `message.mentioned`, без хода), контекстный фильтр `prompt-info.ts`; UI — секция «Пользователи» в `MentionPopup` + тост/бейдж получателю |
+| `$` скиллы | **Есть**: core `engine/commands/dollar-skills.ts` (`resolveDollarSkills`) + ранний путь `phases/process-early.ts` (`handleDollarSkills`) → тело скилла в user-сообщении + `skill.invoked(source:'user')`; UI-пикер `SkillAutocomplete` (`$` в начале слова, имя скилла из `GET /api/v2/skills`). `$` в `/`-шаблонах не разбирается |
+| `#` сниппеты | **Есть**: `engine/snippets/*` (3 уровня, discovery/registry/expand/service), `server/routes/snippets.ts` (CRUD + expand), раскрытие в `POST /sessions/:id/prompt` до очереди, UI-пикер `SnippetAutocomplete` (`#` в начале слова, `##`/`# ` не триггерят) |
 | `!` shell-режим | Нет |
 | Goal | Нет; см. [PROP-057](./prop-057-loop-engine.md) |
 
@@ -304,5 +309,12 @@ Goal — не ещё один префикс и не ещё одна коман�
 
 ## История
 
-- 2026-11-06 — предложение создано по итогам разбора opencode/openchamber и обсуждения поверхности ввода.
-- 2026-11-06 — зафиксированы решения: `@user`-граница без запуска хода, сниппеты без рекурсии, `!`-вывод по кнопке.
+- 2026-11-14 — `/compact` и общий лексер префиксов реализованы; остальное — в работе.
+- 2026-11-14 — этап 2: `$`-вызов скиллов в core (`engine/commands/dollar-skills.ts`): резолв по
+  токену `$name` в тексте обычного сообщения (не `/`-команды), тело скилла — в user-сообщение,
+  `skill.invoked(source:'user')`; UI и сниппеты — следующие этапы.
+- 2026-11-14 — этапы 3–8: сниппеты (домен/HTTP/раскрытие/UI), UI-пикеры `$`/`#`/`@`, backend
+  `@user`/`@file`, `/review`; `!`-shell — за PROP-064.
+- 2026-11-14 — встроенная `/review` (§1): prompt-команда ревью изменений кода в git-репозитории
+  (цель — commit/branch/PR, без аргумента — незакоммиченные изменения); при отсутствии
+  git/workspace/diff модель сообщает, что ревью недоступно. UI-кнопки нет.

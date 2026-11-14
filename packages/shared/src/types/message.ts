@@ -2,6 +2,7 @@ import type { TokenUsage } from './llm.js';
 import type { PromptMeta } from './prompt.js';
 import type { AuthorityPrincipal } from './authority.js';
 import type { MessageStatus } from './message-stream.js';
+import type { InputMention } from './mentions.js';
 
 // --- Message role ---
 
@@ -176,4 +177,13 @@ export interface Message {
    * объекта сообщения.
    */
   status?: MessageStatus;
+  /**
+   * PROP-126 §2.1: упоминания сообщения (`@`-упоминания).
+   *
+   * Аддитивное поле: у сообщений без упоминаний его нет. Для
+   * **user-directed** сообщения (`metadata.userDirected === true`) содержит
+   * упоминания пользователей (`kind: 'user'`); span'ы — индексы в тексте
+   * **этого** сообщения.
+   */
+  mentions?: InputMention[];
 }

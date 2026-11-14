@@ -60,6 +60,10 @@ export type EventType =
   // и batch `action: 'delete'`). Событие — в канале сессии, адресация по `id`
   // (мутации адресуются по id, §7); клиенты убирают сообщение из ленты.
   | 'message.deleted'
+  // PROP-126 §2.1: сообщение адресовано пользователю (`@user`) — уведомление
+  // и бейдж. Событие **не** создаёт ход; payload — id сообщения, список
+  // упомянутых пользователей и id сессии.
+  | 'message.mentioned'
   | 'turn.started'
   | 'turn.finished'
   | 'step.started'
@@ -251,6 +255,22 @@ export type MessageUpdatedEventData = {
   pinned?: boolean;
   /** Новое значение `disabled` (toggle/batch toggle/retry). */
   disabled?: boolean;
+};
+
+/**
+ * Payload события `message.mentioned` (PROP-126 §2.1) — сообщение адресовано
+ * пользователю.
+ *
+ * `user_ids` — участники, которых нужно уведомить: отправитель исключён
+ * (self-mention допускается, но уведомление себе не отправляется).
+ */
+export type MessageMentionedEventData = {
+  /** id сообщения, в котором упомянут пользователь. */
+  message_id: string;
+  /** id упомянутых пользователей (получателей уведомления). */
+  user_ids: string[];
+  /** id сессии (канал события). */
+  session_id: string;
 };
 
 /** Payload события `session.messages.cleared` — история очищена, кроме закреплённых. */

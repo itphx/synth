@@ -20,7 +20,7 @@ import type { LLMMessage, LLMAttachment, CancellationToken, BaseProvider, System
 import { ProviderFactory, resolveProviderCompatibility, buildChatOptions } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
-import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
+import type { ContextOptimizerGatewayHooks, CompressionMode } from './context/optimizer.js';
 import type { ContextFileRepository } from '../storage/ports/context-file-repository.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
 import type { PromptBlockRegistry } from './context/prompt-block-registry.js';
@@ -153,6 +153,10 @@ import { createAuthorityTurnContext, type AuthorityTurnContext } from './authori
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
+// PROP-126 §3: пользовательский вызов скиллов через `$name` (в тексте
+// сообщения; резолв — тем же путём, что у `/skill-name`).
+import { resolveDollarSkills } from './commands/dollar-skills.js';
+import { parseInput } from './input-surface/parser.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
 import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, aggregateSubagentStats, addTokenUsage } from './orchestrator/usage.js';
 import { recordAuxUsage, type AuxUsageInput } from './usage-accounting.js';
@@ -193,12 +197,12 @@ import { classifyLlmError } from './llm-error.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type ProviderOverrides, type RouteProviderDeps } from './orchestrator/routing.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens } from './orchestrator/max-output.js';
 import { ContextLengthExceededError } from '../providers/exceptions.js';
-import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair } from './orchestrator/prompt-info.js';
+import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair, type LlmHistoryOptions } from './orchestrator/prompt-info.js';
 import { resolveHistoryNormalization } from './orchestrator/history-normalize.js';
 import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
-import { runProcessEarly, type ProcessEarlyDeps } from './orchestrator/phases/process-early.js';
+import { runProcessEarly, type ProcessEarlyDeps, type ProcessCommandArgs } from './orchestrator/phases/process-early.js';
 import { runProcessFinalize, type ProcessFinalizeDeps } from './orchestrator/phases/process-finalize.js';
 import { runProcessSetup, withoutMemoryPluginTools, type ProcessSetupDeps, type MemoryContextEntry } from './orchestrator/phases/process-setup.js';
 import type { AnalyticsRecorder } from '../analytics/recorder.js';
@@ -3098,16 +3102,22 @@ export class ChatOrchestrator {
       actor: message.source === 'cli' ? 'cli' : 'user',
     });
 
-    // `/summary` — ручная суммаризация (как routes/sessions.ts).
+    // `/summary` и `/compact` — ручной запуск сжатия контекста (ADR-119).
+    // Профиль задан командой (`compressionMode`): `summarization` — итоги
+    // беседы, `compaction` — рабочее состояние по коду/проекту (PROP-126 §1).
     if (result.status === 'summarization') {
-      if (!this._optimizer || !this._optimizer.canSummarize(session)) {
+      const mode: CompressionMode = result.compressionMode === 'compaction' ? 'compaction' : 'summarization';
+      if (!this._canRunManualCompression(session, mode)) {
+        const unavailableKey = mode === 'compaction'
+          ? 'command.compact_unavailable' as const
+          : 'command.summary_unavailable' as const;
         return this._finishLocalCommand(
           session,
           message,
           publishChunk,
-          sm('command.summary_unavailable'),
+          sm(unavailableKey),
           streamId,
-          { name: result.name, args: result.args, i18nKey: 'command.summary_unavailable' },
+          { name: result.name, args: result.args, i18nKey: unavailableKey },
         );
       }
       const sysMsg: Message = {
@@ -3121,7 +3131,7 @@ export class ChatOrchestrator {
         disabled: false,
         pinned: false,
         hidden: false,
-        metadata: { type: 'summarization_request', reason: 'manual', stream_id: streamId },
+        metadata: { type: 'summarization_request', reason: 'manual', mode, stream_id: streamId },
       };
       return this._handleSummarization(session, sysMsg, signal, publishChunk, debugCollector, streamId, attempt);
     }
@@ -3153,6 +3163,96 @@ export class ChatOrchestrator {
       name: result.name,
       args: result.args,
     });
+  }
+
+  /**
+   * PROP-126 §3: пользовательский вызов скиллов через `$name`.
+   *
+   * Тело скилла (`<skill_content>`) добавляется к user-сообщению; исходный
+   * текст пользователя сохраняется. Гейты — те же, что у `/skill-name`
+   * (ADR-046 §4.4/§4.5/§6.2/§6.3/§8.1): недоверенный, отключённый scope'ом,
+   * не привязанный к агенту или не покрытый capabilities скилл не грузится
+   * (имя — в `unavailable`).
+   *
+   * Вызывается только для обычного сообщения пользователя: в `/`-шаблонах
+   * `$ARGUMENTS`/`$1` — не токен скилла (PROP-126 §3).
+   */
+  private async _handleDollarSkills(args: ProcessCommandArgs): Promise<ProcessMessageResult | null> {
+    if (!this._skillRuntime) return null;
+    const { session, message, effectiveAgentRole, workingDir } = args;
+    const text = message.content ?? '';
+    if (!text) return null;
+    // `$`-токенов нет — резолвер не зовём (обычный текст — обычный путь).
+    if (parseInput(text).skills.length === 0) return null;
+
+    const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
+    const permissionConfig = session.settings.permission ?? this._permissionConfig;
+    const project = await this._loadProject(session);
+
+    const result = await resolveDollarSkills({
+      text,
+      projectWorkspace: workingDir,
+      capabilities: agentDef?.capabilities,
+      agent: { id: effectiveAgentRole, groups: agentDef?.groups },
+      sessionEnabled: session.settings.skills,
+      sessionDisabled: session.settings.skillsDisabled,
+      permissionConfig,
+      skillRuntime: this._skillRuntime,
+      scope: this._skillScopeFor(session, project),
+    });
+
+    if (result.unavailable.length > 0) {
+      const details = Object.entries(result.reasons ?? {})
+        .map(([name, reason]) => `${name}:${reason}`)
+        .join(', ');
+      warning(
+        'ORCHESTRATOR',
+        `PROP-126: скиллы по $ недоступны — ${details || result.unavailable.join(', ')}`,
+      );
+    }
+    if (!result.prompt || result.skills.length === 0) return null;
+
+    // Блок скилла — перед исходным текстом; текст пользователя не меняется.
+    const content = `${result.prompt}\n\n${text}`;
+    message.content = content;
+    message.parts = replaceTextPart(message.parts, content);
+    message.metadata = {
+      ...(message.metadata ?? {}),
+      dollarSkills: { names: result.skills },
+    };
+    const idx = session.messages.findIndex((m) => m.id === message.id);
+    if (idx >= 0) session.messages[idx] = { ...session.messages[idx]!, ...message };
+    await this._sessionManager.updateSession(session).catch(() => {});
+
+    for (const skillName of result.skills) {
+      this._eventBus.publish(session.id, 'skill.invoked', {
+        session_id: session.id,
+        name: skillName,
+        source: 'user',
+        ...(effectiveAgentRole ? { agent: effectiveAgentRole } : {}),
+      });
+    }
+    return null;
+  }
+
+  /**
+   * ADR-119: доступен ли ручной запуск сжатия контекста в указанном профиле.
+   *
+   * Профиль задан явно (`/summary` — `summarization`, `/compact` —
+   * `compaction`, PROP-126 §1), поэтому проверка **не зависит** от
+   * авто-стратегии сессии (`contextOptimization`): явная команда пользователя
+   * работает всегда, когда есть что покрывать, и не меняет настройки сессии.
+   * Провайдер/модель нужны для вызова сжатия — без них сжимать нечем.
+   */
+  private _canRunManualCompression(session: Session, mode: CompressionMode): boolean {
+    const optimizer = this._optimizer;
+    if (!optimizer) return false;
+    if (!session.settings.provider || !session.settings.model) return false;
+    if (typeof optimizer.canCompress === 'function') {
+      return optimizer.canCompress(session, mode);
+    }
+    // Старый оптимизатор без mode-aware проверки — прежний гейт.
+    return optimizer.canSummarize(session);
   }
 
   /**
@@ -3195,6 +3295,7 @@ export class ChatOrchestrator {
       handleDebugSystemMessage: (session, message, signal, publishChunk, debugCollector, streamId, reasoningLevel, attempt) =>
         this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, reasoningLevel, attempt),
       handleCommand: (args) => this._handleCommand(args),
+      handleDollarSkills: (args) => this._handleDollarSkills(args),
       microPipeline: this._microPipeline,
       decisionConfig: this._decisionConfig,
       publishLocalCompletion: (publishChunk, streamId, content, opts) =>
@@ -8312,8 +8413,9 @@ export class ChatOrchestrator {
     currentAgentRole?: string,
     currentAuthor?: string,
     currentPair?: CurrentModelPair,
+    options?: LlmHistoryOptions,
   ): LLMMessage[] {
-    return sessionMessagesToLlmFn(messages, currentAgentRole, currentAuthor, currentPair);
+    return sessionMessagesToLlmFn(messages, currentAgentRole, currentAuthor, currentPair, options);
   }
 
   /**
@@ -8996,4 +9098,18 @@ export class ChatOrchestrator {
 
     return next;
   }
+}
+
+/**
+ * Заменяет текстовую часть сообщения, сохраняя медиа-части (ADR-115):
+ * вложение — отдельная часть, её нельзя терять при подстановке блока
+ * скилла в текст сообщения (PROP-126 §3).
+ */
+function replaceTextPart(parts: Part[] | undefined, content: string): Part[] {
+  const list = parts ?? [];
+  const index = list.findIndex((p) => p.type === 'text');
+  if (index === -1) return [makeTextPart(content), ...list];
+  const next = [...list];
+  next[index] = { ...next[index]!, data: content };
+  return next;
 }

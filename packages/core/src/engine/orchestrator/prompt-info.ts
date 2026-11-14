@@ -46,6 +46,47 @@ export interface CurrentModelPair {
 }
 
 /**
+ * Опции отправки истории в LLM.
+ */
+export interface LlmHistoryOptions {
+  /**
+   * PROP-126 §2.1: сообщение-триггер хода. User-directed сообщения (адресованные
+   * человеку, а не агенту), **новее** триггера, из текущего хода исключаются:
+   * в следующем ходе они уже старше триггера и в контекст попадают.
+   */
+  trigger?: Message;
+}
+
+/**
+ * Порядок сообщения: монотонный `ord` (ADR-118) → позиционный `seq` →
+   * время создания.
+ *
+ * Сравнение попарное: если у обоих сообщений есть `ord` — сравниваются `ord`
+ * (разные шкалы `ord`/`seq` смешивать нельзя), иначе `seq`, иначе `createdAt`.
+ */
+function compareMessageOrder(a: Message, b: Message): number {
+  const aOrd = Number.isFinite(a.ord) ? (a.ord as number) : undefined;
+  const bOrd = Number.isFinite(b.ord) ? (b.ord as number) : undefined;
+  if (aOrd !== undefined && bOrd !== undefined) return aOrd - bOrd;
+  const aSeq = Number.isFinite(a.seq) ? a.seq : undefined;
+  const bSeq = Number.isFinite(b.seq) ? b.seq : undefined;
+  if (aSeq !== undefined && bSeq !== undefined) return aSeq - bSeq;
+  if (a.createdAt < b.createdAt) return -1;
+  if (a.createdAt > b.createdAt) return 1;
+  return 0;
+}
+
+/**
+ * User-directed сообщение (PROP-126 §2.1) — адресовано человеку.
+ *
+ * Признак — `metadata.userDirected === true` (см.
+ * `engine/input-surface/user-mentions.ts`).
+ */
+function isUserDirected(message: Message): boolean {
+  return message.metadata?.userDirected === true;
+}
+
+/**
  * Reasoning сообщения принадлежит другой модели, чем текущий запрос.
  *
  * Фильтр срабатывает только когда **обе** половины пары известны и у сообщения
@@ -81,10 +122,16 @@ export function sessionMessagesToLlm(
   currentAgentRole?: string,
   currentAuthor?: string,
   currentPair?: CurrentModelPair,
+  options?: LlmHistoryOptions,
 ): LLMMessage[] {
   const result: LLMMessage[] = [];
 
   const emittedToolCallIds = new Set<string>();
+
+  // PROP-126 §2.1: user-directed сообщение (адресовано человеку) не должно
+  // попадать в контекст текущего хода, если оно новее триггера. В следующем
+  // ходе триггер новее — и сообщение в контекст попадает.
+  const trigger = options?.trigger;
 
   // Атрибуция чужого сообщения: `[agent]: ` / `{author}: ` / `[anonymous]: `.
   const withAttribution = (m: Message): string => {
@@ -95,6 +142,12 @@ export function sessionMessagesToLlm(
 
   for (const msg of messages) {
     if (msg.disabled || msg.hidden) continue;
+
+    // PROP-126 §2.1: user-directed хвост («@alice проверь») — это сообщение
+    // человеку, а не агенту. В текущем ходе (триггер — агентская часть) оно
+    // новее триггера → в контекст не идёт; в следующем ходе — уже старше и
+    // попадает.
+    if (trigger && isUserDirected(msg) && compareMessageOrder(msg, trigger) > 0) continue;
 
     const role = msg.role;
     if (role === MessageRole.INFO) continue;
@@ -244,16 +297,22 @@ function userQueryText(message: Message): string | undefined {
  * ADR-070 §2.5: состав слоя истории (`messages`) — read-only. Зеркалит
  * реальную отправку через тот же `sessionMessagesToLlm`, что и
  * `_processMessage`, чтобы статистика не расходилась с запросом.
+ *
+ * PROP-126 §2.1: тот же фильтр user-directed сообщений, что и при отправке.
+ * Триггер хода по умолчанию — последняя пользовательская реплика, адресованная
+ * **агенту** (user-directed реплики триггером не являются).
  */
 export function buildPromptHistoryInfo(
   session: Session,
   agentRole?: string,
   tokenRatio: number = DEFAULT_CHARS_PER_TOKEN,
+  options?: LlmHistoryOptions,
 ): PromptHistoryInfo {
   // Отключённая пользовательская реплика выключает весь свой ход — зеркалим
   // то же подавление, что и в реальном ходе (`process-setup`).
   const contextMessages = suppressDisabledTurns(session.messages);
-  const sent = sessionMessagesToLlm(contextMessages, agentRole, session.userId);
+  const trigger = options?.trigger ?? defaultTurnTrigger(contextMessages);
+  const sent = sessionMessagesToLlm(contextMessages, agentRole, session.userId, undefined, { trigger });
 
   // Сообщения: chars = content + JSON(toolUse) + reasoning, estTokens — по
   // калиброванному chars-per-token (как в манифесте промпта).
@@ -328,6 +387,23 @@ export function buildPromptHistoryInfo(
     attachments: { count: attachmentCount, chars: attachmentChars },
     secretPlaceholders,
   };
+}
+
+/**
+ * Триггер хода по умолчанию (PROP-126 §2.1): последняя пользовательская
+ * реплика, адресованная **агенту**.
+ *
+ * User-directed реплики («@alice проверь») триггером не являются — ход
+ * запускает агентская часть сообщения.
+ */
+function defaultTurnTrigger(messages: readonly Message[]): Message | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]!;
+    if (msg.role !== MessageRole.USER) continue;
+    if (isUserDirected(msg)) continue;
+    return msg;
+  }
+  return undefined;
 }
 
 /** `promptMeta` последнего assistant-сообщения активного агента. */

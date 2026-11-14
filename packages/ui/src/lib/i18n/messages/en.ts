@@ -1645,7 +1645,11 @@ export const dict = {
   'chat.notes.limitBadge': 'limit',
   'chat.notes.limitHint': 'Note limit reached: {maxCount}',
   'chat.input.stop': 'Stop',
-  'chat.input.mentionHint': 'Mention an agent with @',
+  'chat.input.mentionHint': 'Mention an agent, user or file with @',
+  // Секции `@`-пикера (PROP-126 §2).
+  'chat.mention.sectionAgents': 'Agents',
+  'chat.mention.sectionUsers': 'Users',
+  'chat.mention.sectionFiles': 'Files',
   'chat.input.enqueue': 'Enqueue',
 
   // --- Steering: interrupting the running turn (ADR-104) ---
@@ -1718,6 +1722,7 @@ export const dict = {
   'notify.background.moveFailed': 'Failed to move to background',
   // ADR-112: notification about a user question (the session is not open).
   'notify.question.asked': 'Agent is waiting for an answer: {name}',
+  'notify.message.mentioned': 'You were mentioned in this session',
   'notify.steer.dropped.limit': 'Per-turn intervention limit: messages not applied — {count}',
   'notify.steer.dropped.aborted': 'Turn stopped — interventions not applied: {count}',
   'notify.steer.dropped.turn_ended': 'Turn already finished — interventions not applied: {count}',
@@ -2315,6 +2320,14 @@ export const dict = {
   'chat.commandAutocomplete.empty': 'No commands found',
   'chat.commandAutocomplete.keyboardHint': '↑↓ navigate • Enter select • Esc close',
   'chat.commandAutocomplete.unavailable': 'unavailable',
+  'chat.skillAutocomplete.title': 'Skills',
+  'chat.skillAutocomplete.keyboardHint': '↑↓ navigate • Enter select • Esc close',
+  'chat.snippetAutocomplete.title': 'Snippets',
+  'chat.snippetAutocomplete.keyboardHint': '↑↓ navigate • Enter select • Esc close',
+  'chat.snippetAutocomplete.scope.instance': 'instance',
+  'chat.snippetAutocomplete.scope.project': 'project',
+  'chat.snippetAutocomplete.scope.user': 'user',
+  'chat.snippetAutocomplete.untrusted': 'untrusted',
 
   // Chat settings
   'chatSettings.description': 'How messages and service steps are shown in the chat feed.',

@@ -324,12 +324,16 @@ skills are **instructions**, they do not register new tools, and the only core t
   (the master `disabled`, `project.enabled`) is live; defaults/snapshot (`skillsDefaultOn`) are snapshot-based;
   the default is opt-in. A single resolver — `resolveSkillAvailability`.
 - **Slash commands** (`engine/commands/*`): resolved in the core before the LLM (UI/CLI/hybrid); built-in
-  (`/help`, `/skills`, `/commands`, `/summary`, `/init`), template `.md` ones (`$ARGUMENTS`/`@file`),
+  (`/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init`, `/review`), template `.md` ones (`$ARGUMENTS`/`@file`),
   skills-as-commands and bundles (`/bundle-name`); permissions via `permission.rules.command`; inline shell
-  (`` !`cmd` ``) — opt-in through `execute_shell`. The events `skill.invoked`/`command.invoked`;
+  (`` !`cmd` ``) — opt-in through `execute_shell`. `/summary` and `/compact` trigger manual context
+  compression (ADR-119; profile in `compressionMode`). The events `skill.invoked`/`command.invoked`;
   the `skill-creator` builtin is a skill instruction in code.
+- **Snippets** (`engine/snippets/*`, PROP-126 §4): `#name` — three levels (`instance`/`project`/`user`),
+  precedence `user > project > instance`; file discovery `*.md` + project trust, expansion on prompt
+  ingress before the queue (limits 15/64 KB, code blocks untouched). HTTP — `server/routes/snippets.ts`.
 
-Endpoints/RBAC — `docs/API_V2.md` §5.17–§5.17.2; configuration — `docs/CONFIGURATION.md`
+Endpoints/RBAC — `docs/API_V2.md` §5.17–§5.17.3; configuration — `docs/CONFIGURATION.md`
 (the `skills`/`commands` sections); the `SKILL.md` format — `packages/core/AGENTS.md`.
 
 ## Project instructions (AGENTS.md)

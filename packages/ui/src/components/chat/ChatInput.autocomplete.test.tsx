@@ -5,12 +5,24 @@ import React from 'react'
 
 const mocks = vi.hoisted(() => ({
   getCommands: vi.fn(),
+  getSkills: vi.fn(),
+  listSnippets: vi.fn(),
+  getSession: vi.fn(),
+  listDirectory: vi.fn(),
   onSend: vi.fn(),
   onStop: vi.fn(),
   onCreateNote: vi.fn(),
 }))
 
-vi.mock('@/lib/api/synthApi', () => ({ synthApi: { getCommands: mocks.getCommands } }))
+vi.mock('@/lib/api/synthApi', () => ({
+  synthApi: {
+    getCommands: mocks.getCommands,
+    getSkills: mocks.getSkills,
+    listSnippets: mocks.listSnippets,
+    getSession: mocks.getSession,
+    listDirectory: mocks.listDirectory,
+  },
+}))
 vi.mock('@/hooks/useDevice', () => ({ useDevice: () => ({ isTouch: false, deviceType: 'desktop' }) }))
 vi.mock('../ui/OverlayScrollbar', () => ({ OverlayScrollbar: () => null }))
 vi.mock('./ModelSelector', () => ({ ModelSelector: () => null }))
@@ -22,17 +34,49 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ChatInput, splitMessageWithTags } from './ChatInput'
 import type { AgentInfo } from '@/lib/api/synthApi'
-import type { SteerMode } from '@itphx/synth-shared/types'
+import type { Snippet } from '@/lib/api/synthApi'
+import type { SkillSummary, SteerMode } from '@itphx/synth-shared/types'
 import { useChatStore } from '@/stores/chatStore'
+import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { useSkillsStore } from '@/stores/skillsStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
+/** Скилл реестра (`GET /api/v2/skills`) — источник `$`-пикера. */
+const SKILL: SkillSummary = {
+  name: 'api-review',
+  description: 'Review API changes',
+  scope: 'instance',
+  level: 'system',
+  dir: '/skills/api-review',
+  invocation: 'both',
+  userInvocable: true,
+  modelInvocable: true,
+  tags: [],
+  agents: [],
+  groups: [],
+  requiresCapabilities: [],
+  trusted: true,
+  available: true,
+}
+
+/** Сниппет реестра (`GET /api/v2/snippets`) — источник `#`-пикера. */
+const SNIPPET: Snippet = {
+  name: 'api-review',
+  description: 'Review API changes',
+  aliases: [],
+  body: 'Проверь дифф',
+  scope: 'instance',
+  file: '/snippets/api-review.md',
+  trusted: true,
+}
+
 async function renderInput(props?: {
   sendMode?: SteerMode
   isStreaming?: boolean
+  agents?: AgentInfo[]
 }): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -44,7 +88,7 @@ async function renderInput(props?: {
       <I18nProvider>
         <ChatInput
           sessionId="s1"
-          agents={[]}
+          agents={props?.agents ?? []}
           isStreaming={props?.isStreaming ?? false}
           onSend={mocks.onSend}
           sendMode={props?.sendMode}
@@ -70,8 +114,35 @@ beforeEach(() => {
     commands: [{ name: 'help', kind: 'builtin', description: 'Show help', available: true }],
     diagnostics: [],
   })
+  mocks.getSkills.mockResolvedValue({ skills: [SKILL], diagnostics: [] })
+  mocks.listSnippets.mockResolvedValue({ snippets: [SNIPPET], diagnostics: [] })
+  // Снимок сессии — источник участников (`@user`) и проекта (`@file`).
+  mocks.getSession.mockResolvedValue({
+    id: 's1',
+    name: 'Session',
+    user_id: 'u1',
+    owner_id: 'u1',
+    project_id: 'p1',
+    participants: [{ user_id: 'alice', role: 'owner' }],
+  })
+  mocks.listDirectory.mockResolvedValue({
+    path: '',
+    entries: [
+      { name: 'readme.md', path: 'readme.md', isDirectory: false },
+      { name: 'src', path: 'src', isDirectory: true },
+      { name: 'index.ts', path: 'src/index.ts', isDirectory: false },
+    ],
+  })
   useChatStore.setState({ retryInputBySession: {} })
-  useSkillsStore.setState({ commands: null, commandsLoading: false, commandsError: null })
+  useComposerDraftsStore.setState({ textBySession: {} })
+  useSkillsStore.setState({
+    commands: null,
+    commandsLoading: false,
+    commandsError: null,
+    skills: [SKILL],
+    skillsLoading: false,
+    skillsError: null,
+  })
 })
 
 afterEach(async () => {
@@ -188,6 +259,467 @@ describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
     expect(popup).not.toBeNull()
     // CSS-позиционирование от якоря: 9px до рамки композера + 8px зазора.
     expect(popup.style.bottom).toBe('calc(100% + 17px)')
+  })
+})
+
+describe('ChatInput — `$`-пикер скиллов (PROP-126 §3)', () => {
+  it('открывается на `$`, а выбор подставляет `$name ` без отправки', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '$')
+    })
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).not.toBeNull()
+    const item = container.querySelector(
+      '[data-testid="skill-autocomplete-item-api-review"]',
+    ) as HTMLButtonElement
+    expect(item).not.toBeNull()
+
+    await act(async () => {
+      item.click()
+    })
+
+    expect(textarea.value).toBe('$api-review ')
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('поиск идёт по имени и описанию скилла', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '$review')
+    })
+    await act(async () => {})
+
+    expect(
+      container.querySelector('[data-testid="skill-autocomplete-item-api-review"]'),
+    ).not.toBeNull()
+
+    await act(async () => {
+      setTextareaValue(textarea, '$нет-такого')
+    })
+    await act(async () => {})
+
+    // Пустой список — пикер не рисуется.
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
+  })
+
+  it('Enter при открытом непустом списке не отправляет сообщение', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '$')
+    })
+    await act(async () => {})
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('после подстановки обычный Enter отправляет сообщение со скиллом', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '$')
+    })
+    await act(async () => {})
+    await act(async () => {
+      (container.querySelector(
+        '[data-testid="skill-autocomplete-item-api-review"]',
+      ) as HTMLButtonElement).click()
+    })
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    // Отправляется обрезанный текст (как у `/`-команды: `/help ` → `/help`).
+    expect(mocks.onSend).toHaveBeenCalledWith('$api-review', undefined, undefined, undefined)
+  })
+
+  it('`$5` (цена) не открывает пикер', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, 'цена $5')
+    })
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
+    expect(textarea.value).toBe('цена $5')
+  })
+
+  it('`$` внутри код-блока не открывает пикер', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '```bash\necho $')
+    })
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
+  })
+
+  it('`@` и `/` не открывают `$`-пикер (нет регрессии)', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@lead')
+    })
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
+
+    await act(async () => {
+      setTextareaValue(textarea, '/he')
+    })
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="command-autocomplete"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
+  })
+
+  it('скилл-команда из реестра команд (`kind: skill`) тоже попадает в пикер', async () => {
+    // Реестр команд — второй источник `$`-пикера (PROP-126 §3): команда вида
+    // `skill` предлагается, даже если её нет в реестре скиллов.
+    useSkillsStore.setState({
+      skills: [],
+      commands: [
+        { name: 'help', kind: 'builtin', description: 'Show help', available: true },
+        { name: 'docs-helper', kind: 'skill', description: 'Docs helper', available: true },
+      ],
+    })
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '$')
+    })
+    await act(async () => {})
+
+    const item = container.querySelector(
+      '[data-testid="skill-autocomplete-item-docs-helper"]',
+    ) as HTMLButtonElement
+    expect(item).not.toBeNull()
+
+    await act(async () => {
+      item.click()
+    })
+
+    expect(textarea.value).toBe('$docs-helper ')
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+})
+
+describe('ChatInput — `#`-пикер сниппетов (PROP-126 §4)', () => {
+  it('открывается на `#`, а выбор подставляет `#name ` без отправки', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '#')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).not.toBeNull()
+    const item = container.querySelector(
+      '[data-testid="snippet-autocomplete-item-api-review"]',
+    ) as HTMLButtonElement
+    expect(item).not.toBeNull()
+
+    await act(async () => {
+      item.click()
+    })
+
+    expect(textarea.value).toBe('#api-review ')
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('поиск идёт по имени и описанию сниппета', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '#review')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(
+      container.querySelector('[data-testid="snippet-autocomplete-item-api-review"]'),
+    ).not.toBeNull()
+
+    await act(async () => {
+      setTextareaValue(textarea, '#нет-такого')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    // Пустой список — пикер не рисуется.
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+  })
+
+  it('`##` (заголовок) и `# ` (пробел после `#`) не открывают пикер', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '##')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+
+    await act(async () => {
+      setTextareaValue(textarea, '# Заголовок')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+  })
+
+  it('`#` внутри код-блока не открывает пикер', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '```bash\necho #')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+  })
+
+  it('Enter при открытом непустом списке не отправляет сообщение', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '#')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('недоверенный сниппет помечен бейджем и не выбирается как доверенный', async () => {
+    mocks.listSnippets.mockResolvedValue({
+      snippets: [{ ...SNIPPET, name: 'project-note', scope: 'project', trusted: false }],
+      diagnostics: [],
+    })
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '#')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(
+      container.querySelector('[data-testid="snippet-autocomplete-untrusted-project-note"]'),
+    ).not.toBeNull()
+  })
+
+  it('`$`, `@` и `/` не открывают `#`-пикер (нет регрессии)', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '$')
+    })
+    await act(async () => {})
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+
+    await act(async () => {
+      setTextareaValue(textarea, '@lead')
+    })
+    await act(async () => {})
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+
+    await act(async () => {
+      setTextareaValue(textarea, '/he')
+    })
+    await act(async () => {})
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="command-autocomplete"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+  })
+})
+
+describe('ChatInput — `@`-пикер: агенты, пользователи, файлы (PROP-126 §2)', () => {
+  it('`@` показывает секции «Агенты», «Пользователи», «Файлы»', async () => {
+    const container = await renderInput({ agents: [makeAgent('leader')] })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@')
+    })
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="mention-popup"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mention-section-agents"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mention-section-users"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="mention-section-files"]')).not.toBeNull()
+    expect(
+      container.querySelector('[data-mention-kind="agent"][data-mention-id="leader"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-mention-kind="user"][data-mention-id="alice"]'),
+    ).not.toBeNull()
+    // Каталоги в список файлов не попадают.
+    expect(
+      container.querySelector('[data-mention-kind="file"][data-mention-id="src"]'),
+    ).toBeNull()
+    expect(
+      container.querySelector('[data-mention-kind="file"][data-mention-id="src/index.ts"]'),
+    ).not.toBeNull()
+  })
+
+  it('выбор агента подставляет `@<id> ` без отправки', async () => {
+    const container = await renderInput({ agents: [makeAgent('leader')] })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@')
+    })
+    await act(async () => {})
+
+    const item = container.querySelector(
+      '[data-mention-kind="agent"][data-mention-id="leader"]',
+    ) as HTMLButtonElement
+    expect(item).not.toBeNull()
+
+    await act(async () => {
+      item.click()
+    })
+
+    expect(textarea.value).toBe('@leader ')
+    expect(container.querySelector('[data-testid="mention-popup"]')).toBeNull()
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('выбор пользователя подставляет `@<user_id> `', async () => {
+    const container = await renderInput({ agents: [makeAgent('leader')] })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@')
+    })
+    await act(async () => {})
+
+    const item = container.querySelector(
+      '[data-mention-kind="user"][data-mention-id="alice"]',
+    ) as HTMLButtonElement
+    expect(item).not.toBeNull()
+
+    await act(async () => {
+      item.click()
+    })
+
+    expect(textarea.value).toBe('@alice ')
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('выбор файла подставляет `@<path> `', async () => {
+    const container = await renderInput({ agents: [makeAgent('leader')] })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@')
+    })
+    await act(async () => {})
+
+    const item = container.querySelector(
+      '[data-mention-kind="file"][data-mention-id="src/index.ts"]',
+    ) as HTMLButtonElement
+    expect(item).not.toBeNull()
+
+    await act(async () => {
+      item.click()
+    })
+
+    expect(textarea.value).toBe('@src/index.ts ')
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('фильтр по запросу оставляет только совпадения', async () => {
+    const container = await renderInput({ agents: [makeAgent('leader')] })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@ind')
+    })
+    await act(async () => {})
+
+    expect(
+      container.querySelector('[data-mention-kind="file"][data-mention-id="src/index.ts"]'),
+    ).not.toBeNull()
+    expect(container.querySelector('[data-mention-kind="agent"]')).toBeNull()
+    expect(container.querySelector('[data-mention-kind="user"]')).toBeNull()
+    expect(container.querySelector('[data-testid="mention-section-agents"]')).toBeNull()
+  })
+
+  it('Enter выбирает подсвеченный элемент общего списка', async () => {
+    const container = await renderInput({ agents: [makeAgent('leader')] })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@')
+    })
+    await act(async () => {})
+
+    // Подсвечен первый элемент — агент; ArrowDown смещает на пользователя.
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    })
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+
+    expect(textarea.value).toBe('@alice ')
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('ошибка листинга файлов не ломает пикер — агенты и пользователи на месте', async () => {
+    mocks.listDirectory.mockRejectedValue(new Error('fs unavailable'))
+    const container = await renderInput({ agents: [makeAgent('leader')] })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '@')
+    })
+    await act(async () => {})
+
+    expect(
+      container.querySelector('[data-mention-kind="agent"][data-mention-id="leader"]'),
+    ).not.toBeNull()
+    expect(
+      container.querySelector('[data-mention-kind="user"][data-mention-id="alice"]'),
+    ).not.toBeNull()
+    expect(container.querySelector('[data-mention-kind="file"]')).toBeNull()
   })
 })
 

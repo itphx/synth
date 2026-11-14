@@ -51,6 +51,10 @@ export * from './fs.js';
 // Классификация файла по расширению (kind/MIME, allow-list inline-предпросмотра)
 // — browser-safe контракт для UI и ядра.
 export * from './file-kind.js';
+// PROP-126 §0/§2: контракты «поверхности ввода» — упоминания (`@`), скиллы (`$`)
+// и сниппеты (`#`): span'ы, виды токенов и результат разбора (browser-safe —
+// читают и ядро, и UI; сам разбор — в core, `engine/input-surface/parser.ts`).
+export * from './mentions.js';
 // Оценка контекстного окна при неизвестном окне модели — общая константа ядра
 // и UI (browser-safe: без node:*; значение — см. `model-metadata.ts`).
 export { DEFAULT_CONTEXT_WINDOW } from '../model-metadata.js';

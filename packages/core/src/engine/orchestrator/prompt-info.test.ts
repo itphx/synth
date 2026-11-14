@@ -78,6 +78,30 @@ function makeSession(messages: Message[], extra: Partial<Session> = {}): Session
 }
 
 describe('sessionMessagesToLlm — фильтрация и инвариант tool-chain', () => {
+  it('PROP-126: user-directed новее триггера не уходит в текущий ход, старше — уходит', () => {
+    const older = msg({
+      role: MessageRole.USER,
+      content: '@bob ранее',
+      ord: 1,
+      metadata: { userDirected: true },
+    });
+    const trigger = msg({ role: MessageRole.USER, content: 'сделай X', ord: 2 });
+    const newer = msg({
+      role: MessageRole.USER,
+      content: '@alice проверь',
+      ord: 3,
+      metadata: { userDirected: true },
+    });
+
+    const llm = sessionMessagesToLlm([older, trigger, newer], undefined, 'user', undefined, {
+      trigger,
+    });
+    const text = llm.map((message) => message.content).join('\n');
+    expect(text).toContain('@bob ранее');
+    expect(text).toContain('сделай X');
+    expect(text).not.toContain('@alice проверь');
+  });
+
   it('disabled/hidden/INFO не уходят в LLM', () => {
     const messages = [
       msg({ role: MessageRole.USER, content: 'видно', author: 'user' }),

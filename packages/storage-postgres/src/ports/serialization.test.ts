@@ -21,6 +21,7 @@ const MESSAGE_JSON_FIELDS = new Set([
   'prompt_meta',
   'debug_data',
   'summary_of',
+  'mentions',
 ]);
 
 describe('jsonbParam/jsonbLiteral', () => {
