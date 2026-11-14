@@ -2751,6 +2751,10 @@ export {
   deserializeLogEntry,
   serializeProjectSummary,
 } from './server/serialize.js';
+// Общий контракт постраничной выдачи (ADR-118 §4) — переиспользуется в
+// managed backend (каталог пользователей, PROP-133 §3.3).
+export { parseBoundedInt, paginate } from './server/pagination.js';
+export type { Page } from './server/pagination.js';
 
 export {
   GatewayProvider,

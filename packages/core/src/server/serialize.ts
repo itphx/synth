@@ -1,5 +1,6 @@
 import type { Session, Message, Project, StatusMessage } from '@itphx/synth-shared';
 import type { EnqueuedMessageSnapshot } from '@itphx/synth-shared/types';
+import { deriveProjectVisibility } from '@itphx/synth-shared';
 import { isModeApplicable } from '../engine/agents/mode.js';
 import { getLiveStreamSnapshot } from '../engine/live-stream-snapshot.js';
 import {
@@ -405,6 +406,22 @@ export function serializeProjectSummary(project: Project) {
     name: project.name,
     owner_id: project.ownerId,
     members: project.members,
+    /**
+     * PROP-133 §3.2: гранты группам (`null` — групп нет).
+     */
+    group_members: project.groupMembers ?? null,
+    /**
+     * PROP-133 §3.2: роль для всех пользователей инстанса (`null` — проект
+     * не опубликован).
+     */
+    everyone_role: project.everyoneRole ?? null,
+    /**
+     * PROP-133 §3.2: **производное** состояние видимости (`author` —
+     * только автор, `selected` — выбранные пользователи/группы, `all` —
+     * всем пользователям). Не хранится в проекте — считается из состояния
+     * списка доступа.
+     */
+    visibility: deriveProjectVisibility(project),
     description: project.description,
     current_task: project.currentTask,
     invariants: project.invariants,

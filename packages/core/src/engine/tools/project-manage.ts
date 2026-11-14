@@ -486,7 +486,8 @@ export const projectAttachTool: ToolDefinition = {
     }
 
     const userId = resolveSessionUserId(session) ?? 'local';
-    const myRole = projectRoleLabel(project, userId);
+    // PROP-133 §1: роль — из единого резолвера (группы принципала — Ф2).
+    const myRole = projectRoleLabel(project, userId, extra.principal?.groups);
     // Идемпотентность: сессия уже в этом проекте — ничего не меняем и
     // `session.moved` не публикуем (иначе клиенты/хабы получат ложный перенос).
     if (session?.projectId === project.id) {

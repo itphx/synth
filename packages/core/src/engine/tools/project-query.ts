@@ -89,7 +89,7 @@ function projectSummary(project: Project, viewer: ProjectViewer) {
     icon: project.icon ?? null,
     color: project.color ?? null,
     owner_id: project.ownerId || null,
-    my_role: projectRoleLabel(project, viewer.userId),
+    my_role: projectRoleLabel(project, viewer.userId, viewer.groups),
     members_count: countMembers(project),
     workspace: project.workspace ?? null,
     current_task: project.currentTask || '',
@@ -128,7 +128,7 @@ function projectDetails(project: Project, viewer: ProjectViewer, sessionsCount: 
     mcp_enabled: project.mcp?.enabled ?? [],
     mcp_enabled_count: project.mcp?.enabled?.length ?? 0,
     memory_enabled: project.memory?.enabled !== false,
-    my_role: projectRoleLabel(project, viewer.userId),
+    my_role: projectRoleLabel(project, viewer.userId, viewer.groups),
     sessions_count: sessionsCount,
     created_at: project.createdAt,
     updated_at: project.updatedAt,
@@ -136,7 +136,7 @@ function projectDetails(project: Project, viewer: ProjectViewer, sessionsCount: 
 }
 
 function projectListLine(project: Project, viewer: ProjectViewer): string {
-  const role = projectRoleLabel(project, viewer.userId) ?? '—';
+  const role = projectRoleLabel(project, viewer.userId, viewer.groups) ?? '—';
   const workspace = project.workspace ? `, workspace: ${project.workspace}` : '';
   return `- ${project.name} (${project.id}, role: ${role}${workspace})`;
 }

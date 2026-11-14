@@ -4976,12 +4976,15 @@ export class ChatOrchestrator {
     // принципалом (шаг A) он несёт участников сессии и роль принципала среди
     // них: потолок сессии зависит от роли, а считается один раз на ход —
     // сообщение другого участника потолок начатого хода не меняет.
+    // PROP-133 §1: проект сессии — по нему роль принципала считает единый
+    // резолвер доступа (гранты по группе, режим «всем пользователям»).
     const authorityTurn: AuthorityTurnContext = createAuthorityTurnContext({
       sessionId: session.id,
       principal: turnPrincipal,
       turnId: streamId,
       ...(effectiveAgentRole ? { agentId: effectiveAgentRole } : {}),
       participants: deriveSessionParticipants(session, projectForState),
+      project: projectForState,
     });
     // ADR-070 §2.6: старт прогона — для per-message duration_ms (полная
     // длительность у финального сообщения потока, включая tool-chain).

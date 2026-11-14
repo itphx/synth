@@ -36,6 +36,10 @@ const en: Dictionary = {
   'errors.validation.claimCodeRequired': 'Confirmation code is required',
   'errors.validation.invalidUsername': 'Invalid username',
 
+  // PROP-133: каталог пользователей (`GET /api/v2/users/directory`)
+  'errors.validation.invalidDirectoryLimit': 'Invalid limit value (an integer 0..200)',
+  'errors.validation.invalidDirectoryOffset': 'Invalid offset value (an integer >= 0)',
+
   // PROP-054: точечные операции плана/журнала/инвариантов проекта
   'errors.validation.invalidPlanBody': 'Invalid plan request payload',
   'errors.validation.invalidLogBody': 'Invalid project log request payload',
@@ -236,6 +240,10 @@ const ru: Dictionary = {
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
   'errors.validation.claimCodeRequired': 'Укажите код подтверждения',
   'errors.validation.invalidUsername': 'Некорректное имя пользователя',
+
+  // PROP-133: каталог пользователей (`GET /api/v2/users/directory`)
+  'errors.validation.invalidDirectoryLimit': 'Некорректное значение limit (целое 0..200)',
+  'errors.validation.invalidDirectoryOffset': 'Некорректное значение offset (целое ≥ 0)',
 
   // PROP-054: точечные операции плана/журнала/инвариантов проекта
   'errors.validation.invalidPlanBody': 'Некорректное тело запроса плана',

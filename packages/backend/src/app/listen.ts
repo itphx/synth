@@ -19,6 +19,7 @@ import type { AuthorityPrincipal, BusEvent } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
 import { t } from '../lib/i18n.js';
+import { groupsOf } from '../lib/project-principal.js';
 
 /**
  * Вспомогательная функция для конвертации Node Request в Web Request.
@@ -217,6 +218,7 @@ export function createBackendListen(deps: BackendListenDeps) {
             userId: user.id,
             username: user.username,
             allSessions,
+            ...(groupsOf(user) ? { groups: groupsOf(user) } : {}),
             send(event) {
               if (replaying) {
                 pending.push(event);

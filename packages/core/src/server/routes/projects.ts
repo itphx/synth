@@ -7,14 +7,20 @@ import {
   projectMemoryUpdateSchema,
   projectExecutorUpdateSchema,
   projectPlanSchema,
+  projectAccessRoleSchema,
   PROJECT_ICON_KEYS,
   PROJECT_COLOR_KEYS,
   isProjectIconKey,
   isProjectColorKey,
+  generateId,
+  nowISO,
+  ProjectRole,
 } from '@itphx/synth-shared';
+import type { SecurityAuditEntry } from '@itphx/synth-shared';
 import type { ProjectExecutorSettings } from '@itphx/synth-shared';
 import type { ExecutionProfileCatalog } from '../../execution/profile-binding.js';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
+import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { provisionWorkspace, resolveWorkspaceForLocalProject } from '../../engine/workspace-provision.js';
 import { serializeProject, serializeProjectSummary } from '../serialize.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
@@ -97,6 +103,19 @@ export interface ProjectRoutesOptions {
    * `undefined`/`false` — прежнее поведение (проекты пользователя).
    */
   resolveElevated?: (c: Context) => boolean | Promise<boolean>;
+  /**
+   * PROP-133 §1/§6: группы принципала — для фильтрации списка проектов
+   * (гранты по группам, Ф2).
+   *
+   * Группы нужны **только** не-elevated пользователю: список фильтруется
+   * единым резолвером доступа (`ProjectRepository.list(viewer)` →
+   * `resolveProjectAccess`), который без групп не находит грантованный проект
+   * — он был бы виден по `GET /:id`, но отсутствовал бы в списке.
+   *
+   * Не задан или вернул `undefined`/пусто — групп нет (fail-closed): список
+   * фильтруется по владельцу/участнику/«всем пользователям».
+   */
+  resolveViewerGroups?: (c: Context) => readonly string[] | undefined;
   /** Сообщения (backend — i18n). */
   messages?: Partial<ProjectRouteMessages>;
   /**
@@ -166,6 +185,18 @@ export interface ProjectRoutesOptions {
    * вызывается **до** удаления, пока сессии ещё перечисляются.
    */
   onProjectChanged?: (projectId: string, kind: ProjectChangeKind) => void | Promise<void>;
+  /**
+   * PROP-133 §3.1: аудит изменения состояния доступа (`members`/
+   * `group_members`/`everyone_role`) — запись «кто, что, было/стало».
+   *
+   * Порт `SecurityAuditRepository` (слой хранения, ADR-096) — та же запись
+   * `SecurityAuditEntry`, что у журнала изменений security-политик; скоуп
+   * `projects` — в перечне `SECURITY_AUDIT_SCOPES` (`@itphx/synth-shared`).
+   *
+   * Не задан — аудит не пишется (сама фича работает). Ошибка записи не ломает
+   * мутацию (best-effort, как в `settings-tls`).
+   */
+  securityAudit?: SecurityAuditRepository;
 }
 
 /** Вид изменения проекта для `ProjectRoutesOptions.onProjectChanged`. */
@@ -188,6 +219,145 @@ const projectContentFields = [
 /** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
 function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: readonly string[]): string {
   return `Недопустимое значение ${label}: "${String(value)}". Допустимые: ${allowed.join(', ')}`;
+}
+
+// --- PROP-133 §3.1/§3.2: состояние доступа к проекту -------------------------
+
+/** PROP-133: карта грантов «субъект → роль». */
+type AccessRoleMap = Record<string, ProjectRole>;
+
+/** PROP-133: разобранное состояние доступа проекта (из тела запроса). */
+interface ParsedProjectAccess {
+  /** `members` — полная замена набора (`undefined` — поле не задано). */
+  members?: AccessRoleMap;
+  /** `group_members` — полная замена набора (`undefined` — поле не задано). */
+  groupMembers?: AccessRoleMap;
+  /** `everyone_role` — `null` (проект не опубликован) или роль. */
+  everyoneRole: ProjectRole | null;
+  /**
+   * Признак наличия `everyone_role` в теле: `null` (снять публикацию) и
+   * «поле не задано» — разные вещи.
+   */
+  hasEveryoneRole: boolean;
+}
+
+/** PROP-133: результат разбора тела — значение или текст ошибки валидации. */
+type Parsed<T> = { ok: true; value: T } | { ok: false; message: string };
+
+/** PROP-133: строки роли доступа → enum `ProjectRole`. */
+const ACCESS_ROLE_TO_PROJECT_ROLE: Record<'owner' | 'editor' | 'viewer', ProjectRole> = {
+  owner: ProjectRole.OWNER,
+  editor: ProjectRole.EDITOR,
+  viewer: ProjectRole.VIEWER,
+};
+
+/**
+ * PROP-133 §3.2: `visibility` — **производная** величина (считается из
+ * состояния списка доступа), записывать её нельзя.
+ */
+const VISIBILITY_READ_ONLY_MESSAGE =
+  'Поле "visibility" вычисляется сервером — записывать его нельзя';
+
+/**
+ * PROP-133 §3.1: разбор карты грантов (`members`/`group_members`).
+ *
+ * - значение — объект «субъект → роль» (не массив/не `null`);
+ * - роль — по `projectAccessRoleSchema`: неизвестная роль → ошибка
+ *   валидации (fail-closed, без «умного» понижения);
+ * - пустой ключ отбрасывается, ключи дедуплицируются (последний выигрывает).
+ */
+function parseAccessRoleMap(value: unknown, field: 'members' | 'group_members'): Parsed<AccessRoleMap> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, message: `Поле "${field}" должно быть объектом «субъект → роль»` };
+  }
+  const out: AccessRoleMap = {};
+  for (const [key, role] of Object.entries(value as Record<string, unknown>)) {
+    if (key.trim() === '') continue;
+    const parsedRole = projectAccessRoleSchema.safeParse(role);
+    if (!parsedRole.success) {
+      return {
+        ok: false,
+        message: `Недопустимая роль доступа "${String(role)}" в поле "${field}". Допустимы: owner, editor, viewer`,
+      };
+    }
+    out[key] = ACCESS_ROLE_TO_PROJECT_ROLE[parsedRole.data];
+  }
+  return { ok: true, value: out };
+}
+
+/**
+ * PROP-133 §3.1: разбор состояния доступа из тела запроса.
+ *
+ * `members`/`group_members` — **полная замена** набора (не merge, как у
+ * остальных проектных полей); `everyone_role: null` — снять публикацию.
+ * Роль владельца в `members` понизить нельзя (передача владения — отдельная
+ * операция, в этом слое её нет) → `400 VALIDATION_ERROR`.
+ */
+function parseProjectAccessBody(
+  body: Record<string, unknown>,
+  ownerId: string,
+): Parsed<ParsedProjectAccess> {
+  const access: ParsedProjectAccess = { everyoneRole: null, hasEveryoneRole: false };
+
+  if (body.members !== undefined) {
+    const parsed = parseAccessRoleMap(body.members, 'members');
+    if (!parsed.ok) return parsed;
+    const ownerRole = parsed.value[ownerId];
+    if (ownerRole !== undefined && ownerRole !== ProjectRole.OWNER) {
+      return {
+        ok: false,
+        message: 'Роль владельца проекта нельзя понизить — передача владения отдельная операция',
+      };
+    }
+    // Владелец остаётся `owner` в списке участников (инвариант хранилища).
+    access.members = { ...parsed.value, [ownerId]: ProjectRole.OWNER };
+  }
+
+  if (body.group_members !== undefined) {
+    const parsed = parseAccessRoleMap(body.group_members, 'group_members');
+    if (!parsed.ok) return parsed;
+    access.groupMembers = parsed.value;
+  }
+
+  if (body.everyone_role !== undefined) {
+    if (body.everyone_role === null) {
+      access.everyoneRole = null;
+      access.hasEveryoneRole = true;
+    } else {
+      const parsedRole = projectAccessRoleSchema.safeParse(body.everyone_role);
+      if (!parsedRole.success) {
+        return {
+          ok: false,
+          message: `Недопустимая роль "everyone_role": "${String(body.everyone_role)}". Допустимы: owner, editor, viewer`,
+        };
+      }
+      // PROP-133 §3.1: режим «всем пользователям» — только `viewer`/`editor`
+      // (роль `owner` всем пользователям не выдаётся — это эскалация прав).
+      if (parsedRole.data === 'owner') {
+        return {
+          ok: false,
+          message: 'Роль "everyone_role" не может быть "owner" — режим «всем пользователям» даёт только viewer или editor',
+        };
+      }
+      access.everyoneRole = ACCESS_ROLE_TO_PROJECT_ROLE[parsedRole.data];
+      access.hasEveryoneRole = true;
+    }
+  }
+
+  return { ok: true, value: access };
+}
+
+/** PROP-133: снимок состояния доступа проекта (аудит «было/стало»). */
+function accessSnapshot(project: Project): {
+  members: AccessRoleMap;
+  group_members: AccessRoleMap | null;
+  everyone_role: ProjectRole | null;
+} {
+  return {
+    members: project.members ?? {},
+    group_members: project.groupMembers ?? null,
+    everyone_role: project.everyoneRole ?? null,
+  };
 }
 
 /**
@@ -242,6 +412,38 @@ export function createProjectRoutes(
     c.json({ error: { code: 'NOT_FOUND', message: messages.notFound(c) } }, 404);
 
   /**
+   * PROP-133 §3.1: аудит изменения состояния доступа (best-effort).
+   *
+   * Запись в журнал не ломает мутацию: ошибка записи — предупреждение в лог.
+   */
+  const auditAccessChange = async (
+    actor: string,
+    before: unknown,
+    after: unknown,
+  ): Promise<void> => {
+    const sink = opts.securityAudit;
+    if (!sink) return;
+    try {
+      const entry: SecurityAuditEntry = {
+        id: `sa_${generateId()}`,
+        ts: nowISO(),
+        actor,
+        scope: 'projects',
+        action: 'update',
+        source: 'runtime',
+        before,
+        after,
+        version: 1,
+      };
+      await sink.append(entry);
+    } catch (err) {
+      console.warn(
+        `[projects] аудит изменения доступа не записан: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  /**
    * GET /api/v2/projects — **страница** списка проектов.
    *
    * Ответ — объект `{projects, total, offset, limit, next_offset}` (массив
@@ -265,7 +467,13 @@ export function createProjectRoutes(
     // ADR-089: elevated (ADMIN/LEAD) — все проекты; иначе — проекты пользователя.
     const elevated = (await opts.resolveElevated?.(c)) ?? false;
     const userId = await currentUserId(c);
-    const projects = elevated ? await store.list() : await store.list(userId);
+    // PROP-133 §1/§6: группы принципала — без них грант по группе не виден в
+    // списке (проект читается по `GET /:id`, но в список не попадает).
+    const groups = elevated ? undefined : opts.resolveViewerGroups?.(c);
+    // PROP-133: список не-elevated фильтруется единым резолвером доступа.
+    const projects = elevated
+      ? await store.list()
+      : await store.list({ userId, ...(groups ? { groups } : {}) });
     if (!remoteClient) {
       const { page, total, next_offset } = paginate(projects, offset, limit);
       const localDto = page.map(serializeProjectSummary);
@@ -309,6 +517,11 @@ export function createProjectRoutes(
     const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => ({}));
 
+    // PROP-133 §3.2: `visibility` — производная величина, записывать нельзя.
+    if (body.visibility !== undefined) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: VISIBILITY_READ_ONLY_MESSAGE } }, 400);
+    }
+
     // Гибрид: создание удалённого проекта на backend.
     if (body.origin === 'remote') {
       if (!remoteClient) {
@@ -330,6 +543,15 @@ export function createProjectRoutes(
     if (!name) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.nameRequired(c) } }, 400);
     }
+
+    // PROP-133 §3.1: состояние доступа при создании (`members`/
+    // `group_members`/`everyone_role`). Роль автора понизить нельзя.
+    const ownerId = await currentUserId(c);
+    const parsedAccess = parseProjectAccessBody(body as Record<string, unknown>, ownerId);
+    if (!parsedAccess.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedAccess.message } }, 400);
+    }
+    const access = parsedAccess.value;
 
     // Метаданные (icon/color): только канонические ключи; null/undefined — сброс.
     if (body.icon !== undefined && body.icon !== null && !isProjectIconKey(body.icon)) {
@@ -360,12 +582,18 @@ export function createProjectRoutes(
     // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа проекта из системных дефолтов.
     const seeds = await Promise.resolve(opts.getProjectSeeds?.()).catch(() => undefined);
 
-    const project = store.create(name, await currentUserId(c), {
+    const project = store.create(name, ownerId, {
       description: body.description,
       icon: body.icon ?? undefined,
       color: body.color ?? undefined,
       workspace: resolved.workspace,
       repos: body.repos || undefined,
+      // PROP-133 §3.1: состояние доступа при создании.
+      ...(access.members ? { members: access.members } : {}),
+      ...(access.groupMembers && Object.keys(access.groupMembers).length > 0
+        ? { groupMembers: access.groupMembers }
+        : {}),
+      ...(access.hasEveryoneRole ? { everyoneRole: access.everyoneRole } : {}),
       ...(seeds ? { mcp: seeds.mcp, skills: seeds.skills } : {}),
     });
     const planResult = planFieldSchema.safeParse(body.plan);
@@ -525,6 +753,11 @@ export function createProjectRoutes(
     const body = await c.req.json().catch(() => ({}));
     const userId = await currentUserId(c);
 
+    // PROP-133 §3.2: `visibility` — производная величина, записывать нельзя.
+    if (body.visibility !== undefined) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: VISIBILITY_READ_ONLY_MESSAGE } }, 400);
+    }
+
     // D5: горизонтальная авторизация. Проверки до любых мутаций — при отказе
     // проект не меняется вовсе.
     // - смена workspace — только владелец / LEAD / ADMIN (ADR-075);
@@ -542,6 +775,24 @@ export function createProjectRoutes(
       && !canEditContent(c, project, userId)
     ) {
       return jsonForbidden(c);
+    }
+    // PROP-133 §3.1: состояние доступа (`members`/`group_members`/
+    // `everyone_role`) меняет только `canManage` (автор / OWNER / LEAD /
+    // ADMIN). EDITOR меняет контент, но не доступ (инвариант 21).
+    const accessChangeRequested =
+      body.members !== undefined
+      || body.group_members !== undefined
+      || body.everyone_role !== undefined;
+    if (accessChangeRequested && !canManage(c, project, userId)) {
+      return jsonForbidden(c);
+    }
+    let accessChange: ParsedProjectAccess | null = null;
+    if (accessChangeRequested) {
+      const parsedAccess = parseProjectAccessBody(body as Record<string, unknown>, project.ownerId);
+      if (!parsedAccess.ok) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: parsedAccess.message } }, 400);
+      }
+      accessChange = parsedAccess.value;
     }
 
     // Метаданные (icon/color): только канонические ключи; null/undefined — сброс.
@@ -722,8 +973,29 @@ export function createProjectRoutes(
     if (planResult.success && planResult.data !== undefined) {
       project.plan = (planResult.data ?? undefined) as Project['plan'] | undefined;
     }
+    // PROP-133 §3.1: состояние доступа — полная замена набора (не merge),
+    // как у остальных проектных полей; `everyone_role: null` снимает
+    // публикацию. Аудит — «было/стало» по полям доступа (после записи).
+    let accessBefore: unknown = null;
+    if (accessChange) {
+      accessBefore = accessSnapshot(project);
+      if (accessChange.members !== undefined) {
+        project.members = accessChange.members;
+      }
+      if (accessChange.groupMembers !== undefined) {
+        project.groupMembers = Object.keys(accessChange.groupMembers).length > 0
+          ? accessChange.groupMembers
+          : undefined;
+      }
+      if (accessChange.hasEveryoneRole) {
+        project.everyoneRole = accessChange.everyoneRole;
+      }
+    }
     project.updatedAt = new Date().toISOString();
     await store.save(project);
+    if (accessChange) {
+      await auditAccessChange(userId, accessBefore, accessSnapshot(project));
+    }
     // ADR-118 §4: проект изменён — сессии проекта получают `project.updated`
     // (другие клиенты перечитывают проект/план/настройки).
     await opts.onProjectChanged?.(project.id, 'updated');

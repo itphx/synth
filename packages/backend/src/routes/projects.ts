@@ -2,43 +2,81 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type {
   ProjectRepository, SessionManager, McpManager, SkillService,
-  SettingsRepository, McpRegistryRepository, EventBus,
+  SettingsRepository, McpRegistryRepository, EventBus, SecurityAuditRepository,
 } from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
 import type { ExecutionProfileCatalog } from '@itphx/synth-core';
 // ADR-114: сервис worktree — контур `/projects/:id/worktrees*`.
 import type { WorktreeService } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
-import { ProjectRole } from '@itphx/synth-shared';
+import {
+  canManageWithProjectRole,
+  canWriteWithProjectRole,
+  resolveProjectAccess,
+} from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
+import { projectPrincipalOf, groupsOf, type UserWithGroups } from '../lib/project-principal.js';
 
 /**
  * ADR-076 §T4: RBAC-хелперы проекта (owner/EDITOR/LEAD/ADMIN). Вынесены фабрикой,
  * чтобы их переиспользовали git-роуты core-фабрики (`authorizeProject`), а логика
  * ролей не дублировалась.
+ *
+ * PROP-133 §1: предикат — **единственный** резолвер доступа
+ * (`resolveProjectAccess`); здесь только сборка принципала запроса. Своей копии
+ * правил (owner/`members`/`ADMIN`/`LEAD`) больше нет.
  */
 export function createProjectAccess(kit: AuthKit) {
   type Ctx = Parameters<typeof kit.isAdmin>[0];
 
-  /** ADR-071 §2.4: owner проекта или глобальные LEAD/ADMIN (через AuthKit). */
-  const canManageProject = (c: Ctx, project: Project, userId: string): boolean =>
-    (typeof kit.isAdmin === 'function' && kit.isAdmin(c))
-    || (typeof kit.hasRole === 'function' && kit.hasRole(c, 'LEAD'))
-    || project.ownerId === userId
-    || project.members?.[userId] === ProjectRole.OWNER;
+  /**
+   * PROP-133 §1: принципал запроса — пользователь + роли инстанса (+ группы, Ф2).
+   *
+   * Пользователь берётся из контекста (`c.get('user')` — тот же `User`, что
+   * кладёт `attachUser`/`requireAuth` и что отдаёт `kit.getCurrentUser`); если
+   * пользователя в контексте нет (мок-AuthKit в тестах) — роли инстанса
+   * определяются через AuthKit (`isAdmin`/`hasRole` — те же проверки, что и
+   * прежде). Проверка остаётся **синхронной**: контракт core-фабрики
+   * (`opts.canManage`/`canEditContent`/`canRead`) — sync.
+   */
+  const principalOf = (c: Ctx, userId: string) => {
+    const user = c.get('user') as UserWithGroups | undefined;
+    const roles = user?.roles ? [...user.roles] : [];
+    if (roles.length === 0) {
+      if (typeof kit.isAdmin === 'function' && kit.isAdmin(c)) roles.push('ADMIN');
+      else if (typeof kit.hasRole === 'function' && kit.hasRole(c, 'LEAD')) roles.push('LEAD');
+    }
+    return projectPrincipalOf(user, userId, roles);
+  };
 
-  /** D5: owner / EDITOR / глобальные LEAD/ADMIN — редактирование контента проекта. */
-  const canEditProjectContent = (c: Ctx, project: Project, userId: string): boolean =>
-    canManageProject(c, project, userId)
-    || project.members?.[userId] === ProjectRole.EDITOR;
+  /** PROP-133 §1: решение по доступу к проекту для принципала запроса. */
+  const accessOf = (c: Ctx, project: Project, userId: string) =>
+    resolveProjectAccess(project, principalOf(c, userId));
 
   /**
-   * ADR-089: чтение проекта по id — owner / любой участник (любая роль, в т.ч.
-   * VIEWER) / глобальные LEAD/ADMIN. Не расширяет права на редактирование.
+   * ADR-076 §T4 / PROP-133 §1: управление доступом к проекту — автор проекта,
+   * участник с ролью `owner`, а также глобальные `LEAD`/`ADMIN` (сквозной
+   * обзор). Гранты по группе и режим «всем пользователям» роль `owner` **не**
+   * дают (см. `canManageWithProjectRole`).
+   */
+  const canManageProject = (c: Ctx, project: Project, userId: string): boolean =>
+    canManageWithProjectRole(accessOf(c, project, userId).role);
+
+  /**
+   * D5 / PROP-133 §1: редактирование контента проекта — `owner`/`editor`
+   * (в т.ч. грант по группе и режим «всем пользователям» с ролью `editor`).
+   * `viewer` записи не даёт (инвариант 21).
+   */
+  const canEditProjectContent = (c: Ctx, project: Project, userId: string): boolean =>
+    canWriteWithProjectRole(accessOf(c, project, userId).role);
+
+  /**
+   * ADR-089 / PROP-133 §1: чтение проекта по id — по роли доступа (владелец,
+   * участник, грант по группе, режим «всем пользователям»; `LEAD`/`ADMIN` —
+   * сквозной обзор). Не расширяет права на редактирование.
    */
   const canReadProject = (c: Ctx, project: Project, userId: string): boolean =>
-    canManageProject(c, project, userId)
-    || userId in (project.members ?? {});
+    accessOf(c, project, userId).read;
 
   return { canManageProject, canEditProjectContent, canReadProject };
 }
@@ -82,6 +120,13 @@ export function createProjectRoutes(
    * `project.executor.browserProfile`/`allowedBrowserProfiles`.
    */
   browserProfileCatalog?: ExecutionProfileCatalog,
+  /**
+   * PROP-133 §3.1: журнал изменений состояния доступа к проекту
+   * (`members`/`group_members`/`everyone_role`) — тот же порт
+   * `SecurityAuditRepository`, что у security-аудита (скоуп `projects`).
+   * Не задан — аудит не пишется (фича работает).
+   */
+  securityAudit?: SecurityAuditRepository,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -97,6 +142,10 @@ export function createProjectRoutes(
       resolveElevated: (c) =>
         (typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]))
         || (typeof kit.hasRole === 'function' && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD')),
+      // PROP-133 §1/§6: группы принципала — грант по группе должен попадать и
+      // в список проектов (иначе проект читается по `GET /:id`, но в списке
+      // отсутствует). Нет поля/не массив/пусто — групп нет (fail-closed).
+      resolveViewerGroups: (c) => groupsOf(c.get('user') as UserWithGroups),
       getCurrentUserId: async (c) => (await kit.getCurrentUser(c))?.id ?? '',
       messages: {
         nameRequired: (c) => t('errors.validation.nameRequired', undefined, c),
@@ -158,6 +207,8 @@ export function createProjectRoutes(
       ...(executionProfileCatalog ? { executionProfileCatalog } : {}),
       // PROP-135 (браузерный контур): каталог браузерных профилей проекта.
       ...(browserProfileCatalog ? { browserProfileCatalog } : {}),
+      // PROP-133 §3.1: аудит изменения состояния доступа к проекту.
+      ...(securityAudit ? { securityAudit } : {}),
     },
   );
 }

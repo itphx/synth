@@ -121,7 +121,8 @@ describe('synth_info (Workstream A1)', () => {
     expect((result.metadata?.counts as Record<string, unknown>).projects).toBe(2);
     expect((result.metadata?.counts as Record<string, unknown>).sessions).toBe(1);
     // Не-elevated: проекты — свои/участия, сессии — свои + сессии этих проектов.
-    expect(projectList).toHaveBeenCalledWith('u1');
+    // PROP-133: список проектов — по резолверу доступа (`viewer` с userId).
+    expect(projectList).toHaveBeenCalledWith({ userId: 'u1' });
     expect(sessionList).toHaveBeenCalledWith({ userId: 'u1', projectIds: ['p1', 'p2'] });
   });
 

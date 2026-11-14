@@ -1133,7 +1133,7 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
       {
         resolveUserId: () => opts.userId,
         resolveElevated: () => opts.elevated ?? false,
-        resolveMemberProjectIds: async () => (await projectStore.list(opts.userId)).map((p) => p.id),
+        resolveMemberProjectIds: async () => (await projectStore.list({ userId: opts.userId })).map((p) => p.id),
         resolveCanAccessExtra: async (session) => {
           if (!session.projectId) return false;
           const project = await projectStore.load(session.projectId);

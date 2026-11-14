@@ -7,12 +7,13 @@
  * одним правилом — иначе тулы разойдутся в трактовке неоднозначности.
  *
  * Видимость — та же, что у HTTP-списка проектов: elevated (ADMIN/LEAD) видит
- * всё, остальные — только свои проекты и проекты участия (владелец или запись
- * в `members`). Невидимый проект для не-elevated выглядит как отсутствующий:
- * существование чужого ресурса не раскрывается.
+ * всё, остальные — только те проекты, где у них есть роль (PROP-133 §1:
+ * владелец, участник, грант по группе, режим «всем пользователям»). Невидимый
+ * проект для не-elevated выглядит как отсутствующий: существование чужого
+ * ресурса не раскрывается.
  */
 import type { Project } from '@itphx/synth-shared';
-import { ProjectRole } from '@itphx/synth-shared';
+import { resolveProjectAccess } from '@itphx/synth-shared';
 import type { ToolContext } from '@itphx/synth-shared';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -21,6 +22,11 @@ import type { SessionManager } from '../../sessions/manager.js';
 export interface ToolPrincipal {
   userId: string;
   roles: string[];
+  /**
+   * PROP-133: группы пользователя (субъект грантов по группам). Поле появляется
+   * в Ф2 (claim `groups` из IdP); нет — групп нет (fail-closed).
+   */
+  groups?: readonly string[];
 }
 
 /** Поля `extra`, общие для новых тулов проектов/сессий. */
@@ -33,6 +39,8 @@ export interface PrincipalExtra {
 export interface ProjectViewer {
   userId: string;
   elevated: boolean;
+  /** PROP-133: группы пользователя (гранты по группам). */
+  groups?: readonly string[];
 }
 
 /**
@@ -45,7 +53,8 @@ export function viewerFromExtra(extra: PrincipalExtra | undefined): ProjectViewe
   const roles = extra?.principal?.roles ?? [];
   const elevated = extra?.isElevatedPrincipal
     ?? roles.some((role) => role.toUpperCase() === 'ADMIN' || role.toUpperCase() === 'LEAD');
-  return { userId, elevated };
+  const groups = extra?.principal?.groups;
+  return { userId, elevated, ...(groups && groups.length > 0 ? { groups } : {}) };
 }
 
 /**
@@ -74,46 +83,61 @@ export async function resolveViewer(
   }
 }
 
-/** Виден ли проект пользователю (elevated — всё, иначе владелец/участник). */export function isProjectVisible(
+/**
+ * Виден ли проект пользователю (PROP-133 §1: единый резолвер доступа).
+ *
+ * Elevated (ADMIN/LEAD) — всё; иначе — по роли доступа: владелец, участник,
+ * грант по группе, режим «всем пользователям».
+ */
+export function isProjectVisible(
   project: Project,
   viewer: ProjectViewer,
 ): boolean {
   if (viewer.elevated) return true;
-  if (project.ownerId && project.ownerId === viewer.userId) return true;
-  return Object.prototype.hasOwnProperty.call(project.members ?? {}, viewer.userId);
+  return resolveProjectAccess(project, {
+    userId: viewer.userId,
+    ...(viewer.groups ? { groups: viewer.groups } : {}),
+  }).read;
 }
+
+/** Метка роли доступа (`OWNER|EDITOR|VIEWER`) для DTO тулов. */
+const ROLE_LABEL = {
+  owner: 'OWNER',
+  editor: 'EDITOR',
+  viewer: 'VIEWER',
+} as const;
 
 /**
  * Роль пользователя в проекте в верхнем регистре (`OWNER|EDITOR|VIEWER`) или
- * `null`. Владелец проекта — всегда `OWNER`, даже если запись в `members`
- * отсутствует (legacy/частичные записи).
+ * `null`. PROP-133 §1: роль — из единого резолвера (владелец проекта — всегда
+ * `OWNER`, даже если запись в `members` отсутствует; грант по группе и режим
+ * «всем пользователям» — тоже учитываются).
  */
 export function projectRoleLabel(
   project: Project,
   userId: string,
+  groups?: readonly string[],
 ): 'OWNER' | 'EDITOR' | 'VIEWER' | null {
-  if (project.ownerId && project.ownerId === userId) return 'OWNER';
-  const role = project.members?.[userId];
-  if (!role) return null;
-  switch (role) {
-    case ProjectRole.OWNER:
-      return 'OWNER';
-    case ProjectRole.EDITOR:
-      return 'EDITOR';
-    case ProjectRole.VIEWER:
-      return 'VIEWER';
-    default:
-      return null;
-  }
+  const role = resolveProjectAccess(project, {
+    userId,
+    ...(groups ? { groups } : {}),
+  }).role;
+  return role ? ROLE_LABEL[role] : null;
 }
 
-/** Проекты, видимые пользователю (для не-elevated — свои и проекты участия). */
+/**
+ * Проекты, видимые пользователю (PROP-133 §1: список фильтруется единым
+ * резолвером — владелец, участник, грант по группе, режим «всем пользователям»).
+ */
 export async function listVisibleProjects(
   store: ProjectStoreContract,
   viewer: ProjectViewer,
 ): Promise<Project[]> {
   if (viewer.elevated) return store.list();
-  return store.list(viewer.userId);
+  return store.list({
+    userId: viewer.userId,
+    ...(viewer.groups ? { groups: viewer.groups } : {}),
+  });
 }
 
 /** Результат резолвинга: найден / не найден / неоднозначное имя. */
@@ -129,6 +153,9 @@ export type ProjectResolution =
  * - имя сравнивается без учёта регистра, пробелы по краям срезаются;
  * - два и более совпадений — `ambiguous` со списком кандидатов (первый **не**
  *   выбирается: молчаливый выбор чужого/не того проекта недопустим).
+ *
+ * PROP-133 §1: и по id, и по имени видимость считает **единый** резолвер
+ * доступа (`resolveProjectAccess` через `isProjectVisible`/`listVisibleProjects`).
  */
 export async function resolveProjectRef(
   store: ProjectStoreContract,

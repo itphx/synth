@@ -1,4 +1,5 @@
 import type { Project, Session } from '@itphx/synth-shared';
+import { resolveProjectAccess } from '@itphx/synth-shared';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import type { LocalOwnerResolver } from './local-owner.js';
 
@@ -46,9 +47,13 @@ async function loadProject(
  * 3. нет владельца — видно (паритет с `canAccessSession`, чтобы legacy-сессии
  *    без владельца не пропадали);
  * 4. иначе — если у сессии есть `projectId` и проект (`projectStore.load`)
- *    принадлежит пользователю (`ownerId`) или пользователь числится в `members`
- *    (любая роль) — видно (командная/проектная сессия);
+ *    доступен пользователю (`resolveProjectAccess(...).read` — владелец,
+ *    участник, грант по группе, режим «всем пользователям») — видно
+ *    (командная/проектная сессия);
  * 5. иначе — не видно.
+ *
+ * PROP-133 §1/§6: проектная ветка берёт роль из **единого** резолвера доступа
+ * (`resolveProjectAccess`) — своей копии предиката здесь больше нет.
  */
 export async function isSessionVisible(
   session: Session,
@@ -68,5 +73,7 @@ export async function isSessionVisible(
   if (!session.projectId || !projectStore) return false;
   const project = await loadProject(projectStore, session.projectId, projectCache);
   if (!project) return false;
-  return project.ownerId === ctx.userId || ctx.userId in (project.members ?? {});
+  // PROP-133 §1: роль доступа к проекту — из единого резолвера (владелец,
+  // участник, грант по группе, режим «всем пользователям»).
+  return resolveProjectAccess(project, { userId: ctx.userId }).read;
 }

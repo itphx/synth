@@ -13,6 +13,7 @@ import type { ScopeGuardFactory } from '@itphx/synth-core';
 import type { BusEvent } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
+import { groupsOf } from '../lib/project-principal.js';
 
 export interface EventsSseDeps {
   auth: AuthKit;
@@ -93,6 +94,7 @@ export function registerEventsSse(app: Hono, deps: EventsSseDeps): void {
             userId: user.id,
             username: user.username,
             allSessions,
+            ...(groupsOf(user) ? { groups: groupsOf(user) } : {}),
             send(event: BusEvent) {
               if (replaying) {
                 pending.push(event);

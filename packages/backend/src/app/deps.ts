@@ -1821,7 +1821,9 @@ export async function createBackendDeps(
   // EventHub — центральный диспетчер подписок. Создаётся до funnel: колбэк
   // `onSessionMaterialized` подписывает клиентов владельца на сессии,
   // созданные после их подключения (`subscribeToSession`, ADR-089).
-  const eventHub = new EventHub(eventBus, sessionManager);
+  // PROP-133 §6: проекты — чтобы подписка покрывала сессии всех видимых
+  // проектов (не только свои).
+  const eventHub = new EventHub(eventBus, sessionManager, projectStore);
   // ADR-089: резолвер внешнего отправителя (профиль `identities`, principalId) в
   // пользователя инстанса; override `identityMap` — приоритетнее профиля.
   // `getIdentityMap` читает актуальное значение — `onEventsChange` обновляет

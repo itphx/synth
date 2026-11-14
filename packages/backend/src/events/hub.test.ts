@@ -8,11 +8,13 @@ import {
   EventJournalStore,
   EventRouter,
   FileStore,
+  ProjectStore,
   RequestSessionService,
   SessionManager,
 } from '@itphx/synth-core';
 import type { SessionManager as SessionManagerType } from '@itphx/synth-core';
 import type { BusEvent, SynthEvent } from '@itphx/synth-shared';
+import { ProjectRole } from '@itphx/synth-shared';
 import { EventHub, type EventClient } from './hub.js';
 
 function makeHub(existingSessions: string[] = []) {
@@ -317,5 +319,95 @@ describe('EventHub — watch-all клиенты (ADR-052/ADR-089)', () => {
 
     expect(eventBus.hasApprovalListeners('mine')).toBe(true);
     expect(eventBus.hasApprovalListeners('foreign')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PROP-133 §6: подписки хаба — тот же шов, что и список сессий
+// (`resolveMemberProjectIds`): клиент подписывается на сессии всех проектов,
+// где у него есть роль (в т.ч. режим «всем пользователям»).
+// ---------------------------------------------------------------------------
+
+describe('EventHub — подписка на сессии проекта с общим доступом (PROP-133 §6)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-hub-shared-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Хаб + два проекта: `shared` (режим «всем пользователям») и `private`
+   * (режим «только автору»), по сессии в каждом. Владелец — `owner`.
+   */
+  async function makeSharedHub() {
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const shared = projectStore.create('Shared', 'owner');
+    shared.everyoneRole = ProjectRole.VIEWER;
+    await projectStore.save(shared);
+    const privateProject = projectStore.create('Private', 'owner');
+    await projectStore.save(privateProject);
+
+    const sessions = [
+      { id: 'shared-session', userId: 'owner', ownerId: 'owner', projectId: shared.id },
+      { id: 'private-session', userId: 'owner', ownerId: 'owner', projectId: privateProject.id },
+    ];
+    const sessionManager = {
+      listSessions: async (filter?: { userId?: string; projectIds?: string[] }) => {
+        if (!filter) return sessions;
+        return sessions.filter((s) =>
+          filter.projectIds?.includes(s.projectId)
+          || s.userId === filter.userId
+          || s.ownerId === filter.userId,
+        );
+      },
+    } as unknown as SessionManagerType;
+
+    const eventBus = new EventBus();
+    const hub = new EventHub(eventBus, sessionManager, projectStore);
+    return { eventBus, hub };
+  }
+
+  it('клиент без allSessions получает события сессии shared-проекта', async () => {
+    const { eventBus, hub } = await makeSharedHub();
+    const received: BusEvent[] = [];
+    const client: EventClient = {
+      userId: 'stranger',
+      username: 'stranger',
+      send: (event: BusEvent) => received.push(event),
+    };
+    await hub.registerClient(client);
+
+    eventBus.publish('shared-session', 'step.finished', {
+      turnId: 'turn-shared',
+      stepIndex: 0,
+      messageId: 'msg-shared',
+      status: 'completed',
+    });
+
+    expect(received.some((e) => e.type === 'step.finished' && e.sessionId === 'shared-session')).toBe(true);
+  });
+
+  it('клиент не получает события сессии author-проекта', async () => {
+    const { eventBus, hub } = await makeSharedHub();
+    const received: BusEvent[] = [];
+    const client: EventClient = {
+      userId: 'stranger',
+      username: 'stranger',
+      send: (event: BusEvent) => received.push(event),
+    };
+    await hub.registerClient(client);
+
+    eventBus.publish('private-session', 'step.finished', {
+      turnId: 'turn-private',
+      stepIndex: 0,
+      messageId: 'msg-private',
+      status: 'completed',
+    });
+
+    expect(received.some((e) => e.sessionId === 'private-session')).toBe(false);
   });
 });

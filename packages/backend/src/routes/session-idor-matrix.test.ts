@@ -17,6 +17,13 @@
  *    `владелец сессии | VIEWER-участник | EDITOR-участник | OWNER проекта |
  *     ADMIN | LEAD | AUDITOR | чужой USER`.
  *
+ * 4) **Матрица shared-проекта** (PROP-133, отдельный мини-мир) — проект в
+ *    режиме «всем пользователям» (`everyone_role='viewer'`): сессия чужого
+ *    пользователя ЧИТАЕТСЯ посторонним (`GET /:id` → 200), но НЕ пишется
+ *    (`POST /:id/prompt`, `PATCH /:id` → 403) — read-уровень доступа не
+ *    расширяет права на изменение (инвариант 21). Контрольная строка — та же
+ *    матрица для проекта в режиме «только автору» (чужому → 403 везде).
+ *
  *    Правило доступа (в ЕДИНОЙ точке — prefix-guard, метод-зависимо):
  *    - чтение (`GET`/`HEAD`): владелец сессии, ADMIN/LEAD (сквозной обзор) либо
  *      проектное чтение (`canReadProject`: owner проекта или любой участник);
@@ -530,6 +537,145 @@ async function buildWorld(tmpDir: string): Promise<World> {
 }
 
 // ---------------------------------------------------------------------------
+// Мини-мир «проект, открытый всем» (PROP-133)
+// ---------------------------------------------------------------------------
+
+/**
+ * Цель строки матрицы shared-проекта: проект в режиме «всем пользователям»
+ * (`everyone_role='viewer'`) либо контрольный проект в режиме «только автору».
+ */
+type SharedTarget = 'shared' | 'authorOnly';
+
+interface SharedRow {
+  method: string;
+  path: string;
+  target: SharedTarget;
+  /**
+   * Ожидаемый код: `owner` — владелец сессии (автор проекта), `stranger` —
+   * посторонний USER (не участник проекта).
+   */
+  expected: Record<'owner' | 'stranger', number>;
+}
+
+/**
+ * Матрица shared-проекта (PROP-133 §1/§6): видимость проекта распространяется
+ * на его сессии, но **роль** остаётся read-only для постороннего:
+ * - `everyone_role='viewer'` → `GET /:id` 200, `POST /:id/prompt` 403,
+ *   `PATCH /:id` 403;
+ * - контрольный проект «только автору» → постороннему 403 на всех строках.
+ *
+ * Основная `MATRIX` живёт в проекте с грантами по `members` (режимы
+ * `author`/`selected`) — режим `all` проверяется отдельным мини-миром, чтобы
+ * правила двух режимов не смешивались.
+ */
+const SHARED_MATRIX: SharedRow[] = [
+  // Проект в режиме «всем пользователям» (`everyone_role='viewer'`).
+  { method: 'GET', path: '/:id', target: 'shared', expected: { owner: 200, stranger: 200 } },
+  { method: 'POST', path: '/:id/prompt', target: 'shared', expected: { owner: 400, stranger: 403 } },
+  { method: 'PATCH', path: '/:id', target: 'shared', expected: { owner: 200, stranger: 403 } },
+  // Контроль: проект в режиме «только автору» — постороннему 403 везде.
+  { method: 'GET', path: '/:id', target: 'authorOnly', expected: { owner: 200, stranger: 403 } },
+  { method: 'POST', path: '/:id/prompt', target: 'authorOnly', expected: { owner: 400, stranger: 403 } },
+  { method: 'PATCH', path: '/:id', target: 'authorOnly', expected: { owner: 200, stranger: 403 } },
+];
+
+interface SharedWorld {
+  app: Hono;
+  sessionManager: SessionManager;
+  sharedSessionId: string;
+  authorOnlySessionId: string;
+}
+
+/**
+ * Мини-мир shared-проекта: два проекта автора `owner` — опубликованный для
+ * всех (`everyone_role='viewer'`) и закрытый («только автору»), в каждом — своя
+ * сессия. Монтируется **тот же** backend-роутер сессий, что и в основной
+ * песочнице: правило доступа — единый prefix-guard + `resolveProjectAccess`.
+ */
+async function buildSharedWorld(tmpDir: string): Promise<SharedWorld> {
+  const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+  const projectStore = new ProjectStore({ dataDir: tmpDir });
+  const eventBus = new EventBus();
+  const queueManager = createMockQueueManager();
+  const orchestrator = createMockOrchestrator();
+  const contextOptimizer = createMockContextOptimizer();
+  const eventHub = {
+    subscribeToSession: vi.fn().mockResolvedValue(undefined),
+    unsubscribeFromSession: vi.fn(),
+  };
+
+  // Режим `all`: роль для всех пользователей по умолчанию — `viewer`.
+  const shared = projectStore.create('SharedAll', 'owner', { everyoneRole: ProjectRole.VIEWER });
+  await projectStore.save(shared);
+  // Режим `author`: список доступа пуст (грантов нет).
+  const authorOnly = projectStore.create('AuthorOnly', 'owner');
+  await projectStore.save(authorOnly);
+
+  const app = new Hono();
+  const kit = createMockKit();
+  app.use('*', async (c, next) => {
+    const user = userFromHeader(c.req.header('Authorization'));
+    if (user) c.set('user' as never, user as never);
+    await next();
+  });
+  app.route('/api/v2/sessions', createBackendSessionRoutes(
+    kit as never,
+    sessionManager,
+    eventBus,
+    queueManager as never,
+    orchestrator.createProcessMessage(),
+    orchestrator as unknown as ChatOrchestrator,
+    eventHub as never,
+    contextOptimizer as never,
+    projectStore,
+  ));
+
+  const sharedSession = await sessionManager.createSession({
+    title: 'Shared session',
+    userId: 'owner',
+    ownerId: 'owner',
+    projectId: shared.id,
+  });
+  const authorOnlySession = await sessionManager.createSession({
+    title: 'Author-only session',
+    userId: 'owner',
+    ownerId: 'owner',
+    projectId: authorOnly.id,
+  });
+
+  return {
+    app,
+    sessionManager,
+    sharedSessionId: sharedSession.id,
+    authorOnlySessionId: authorOnlySession.id,
+  };
+}
+
+/** Тело запроса по строке shared-матрицы (тот же принцип, что у `bodyFor`). */
+function sharedBodyFor(row: SharedRow): string | undefined {
+  if (row.method === 'GET') return undefined;
+  if (row.path === '/:id') return JSON.stringify({ name: 'переименовано' });
+  return JSON.stringify({});
+}
+
+async function callShared(
+  world: SharedWorld,
+  row: SharedRow,
+  actor: 'owner' | 'stranger',
+): Promise<Response> {
+  const sessionId = row.target === 'shared' ? world.sharedSessionId : world.authorOnlySessionId;
+  const body = sharedBodyFor(row);
+  return world.app.request(urlFor('sessions', row.path, sessionId), {
+    method: row.method,
+    headers: {
+      Authorization: `Bearer ${actor}`,
+      'Content-Type': 'application/json',
+    },
+    ...(body !== undefined ? { body } : {}),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Матрица — единый прогон по всем клеткам
 // ---------------------------------------------------------------------------
 
@@ -750,5 +896,90 @@ describe('F1: LEAD не заблокирован на status/prompt/stats/prompt
       const session = await world.sessionManager.getSession(sessionId);
       expect(session?.title, actor).toBe('renamed-by-elevated');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. PROP-133: shared-проект (`everyone_role='viewer'`) — чтение есть, записи нет
+// ---------------------------------------------------------------------------
+
+describe('IDOR: shared-проект (`everyone_role=viewer`) — чтение постороннему, запись запрещена', () => {
+  let sharedTmpDir: string;
+  let sharedWorld: SharedWorld;
+
+  beforeEach(async () => {
+    sharedTmpDir = await mkdtemp(join(tmpdir(), 'synth-idor-shared-'));
+    sharedWorld = await buildSharedWorld(sharedTmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(sharedTmpDir, { recursive: true, force: true });
+  });
+
+  it('матрица shared-проекта: ожидаемый код по каждой строке', async () => {
+    for (const r of SHARED_MATRIX) {
+      for (const actor of ['owner', 'stranger'] as const) {
+        const res = await callShared(sharedWorld, r, actor);
+        expect(
+          res.status,
+          `${actor} → ${r.method} ${PREFIX.sessions}${r.path} (${r.target})`,
+        ).toBe(r.expected[actor]);
+      }
+    }
+  });
+
+  it('сессия shared-проекта читается посторонним (GET → 200)', async () => {
+    const res = await sharedWorld.app.request(`/api/v2/sessions/${sharedWorld.sharedSessionId}`, {
+      headers: { Authorization: 'Bearer stranger' },
+    });
+    expect(res.status).toBe(200);
+    const dto = (await res.json()) as { id: string };
+    expect(dto.id).toBe(sharedWorld.sharedSessionId);
+  });
+
+  it('посторонний не пишет в сессию shared-проекта (POST /:id/prompt → 403 FORBIDDEN)', async () => {
+    const res = await sharedWorld.app.request(`/api/v2/sessions/${sharedWorld.sharedSessionId}/prompt`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer stranger', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'привет' }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+  });
+
+  it('посторонний не мутирует сессию shared-проекта (PATCH /:id → 403, содержимое не изменилось)', async () => {
+    const res = await sharedWorld.app.request(`/api/v2/sessions/${sharedWorld.sharedSessionId}`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer stranger', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'переименовано посторонним' }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+    const session = await sharedWorld.sessionManager.getSession(sharedWorld.sharedSessionId);
+    expect(session?.title).toBe('Shared session');
+  });
+
+  it('сессия проекта «только автору» постороннему не видна (GET /:id → 403)', async () => {
+    const res = await sharedWorld.app.request(`/api/v2/sessions/${sharedWorld.authorOnlySessionId}`, {
+      headers: { Authorization: 'Bearer stranger' },
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+  });
+
+  it('владелец сессии shared-проекта сохраняет полный доступ (GET 200, PATCH 200)', async () => {
+    const read = await sharedWorld.app.request(`/api/v2/sessions/${sharedWorld.sharedSessionId}`, {
+      headers: { Authorization: 'Bearer owner' },
+    });
+    expect(read.status).toBe(200);
+
+    const patch = await sharedWorld.app.request(`/api/v2/sessions/${sharedWorld.sharedSessionId}`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'переименовано владельцем' }),
+    });
+    expect(patch.status).toBe(200);
+    const session = await sharedWorld.sessionManager.getSession(sharedWorld.sharedSessionId);
+    expect(session?.title).toBe('переименовано владельцем');
   });
 });

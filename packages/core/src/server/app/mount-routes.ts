@@ -286,6 +286,9 @@ export function mountStandaloneRoutes(
     // ADR-075: автосоздание/нормализация workspace локальных проектов.
     getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
     getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+    // PROP-133 §3.1: аудит изменения состояния доступа к проекту
+    // (`members`/`group_members`/`everyone_role`) — запись «кто, что, было/стало».
+    ...(securityAudit ? { securityAudit } : {}),
     // ADR-114: контур worktree проекта (список/создание/удаление/prune).
     ...(deps.worktreeService ? { worktrees: deps.worktreeService } : {}),
     // ADR-118 §4: изменение/удаление проекта — событие в канал каждой сессии

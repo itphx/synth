@@ -29,7 +29,7 @@ import type {
   SessionParticipantRole,
 } from '@itphx/synth-shared';
 
-import { resolveParticipantRole } from './participants.js';
+import { resolveParticipantRole, type ProjectAccessSubject } from './participants.js';
 import type { AuthorityEffective } from './resolve.js';
 
 /**
@@ -69,6 +69,9 @@ export interface AuthorityTurnContext {
  *
  * Участники — снимок на начало хода: участник, добавленный или удалённый
  * позже, на потолок **начатого** хода не влияет.
+ *
+ * PROP-133 §1: `project` — проект сессии; по нему роль принципала считает
+ * единый резолвер доступа (гранты по группе, режим «всем пользователям»).
  */
 export function createAuthorityTurnContext(input: {
   sessionId: string;
@@ -76,10 +79,21 @@ export function createAuthorityTurnContext(input: {
   turnId: string;
   agentId?: string;
   participants?: readonly SessionParticipant[];
+  project?: ProjectAccessSubject | null;
+  /**
+   * PROP-133: группы пользователя (гранты по группам). Источник групп — Ф2
+   * (`User.groups`); нет — групп нет (fail-closed).
+   */
+  groups?: readonly string[];
   startedAt?: string;
 }): AuthorityTurnContext {
   const participants = input.participants ?? [];
-  const participantRole = resolveParticipantRole(participants, input.principal);
+  const participantRole = resolveParticipantRole(
+    participants,
+    input.principal,
+    input.project,
+    input.groups,
+  );
   return {
     id: input.turnId,
     sessionId: input.sessionId,

@@ -13,6 +13,12 @@
  * read-only потолок, `editor`/`owner` — обычный. Неизвестная роль или
  * неучастник — **fail-closed** (только чтение).
  *
+ * PROP-133 §1: роль **действующего пользователя** в проекте считает единый
+ * резолвер доступа (`resolveProjectAccess`) — гранты по группе и режим «всем
+ * пользователям» учтены, а перечислять участников по группам не нужно.
+ * Список участников (`deriveSessionParticipants`) остаётся прежним — он про
+ * отображение.
+ *
  * Модуль — единственное место, где участники выводятся и где роль
  * принципала сопоставляется с ролью участника. Проверка прав — в guard'е
  * (`engine/authority/guard.ts`).
@@ -25,10 +31,20 @@ import type {
   SessionParticipantRole,
 } from '@itphx/synth-shared';
 
-import { normalizeSessionParticipantRole } from '@itphx/synth-shared';
+import { normalizeSessionParticipantRole, resolveProjectAccess } from '@itphx/synth-shared';
 
 /** Глобальные роли инстанса со сквозным доступом (как в `approval.ts`). */
 const ELEVATED_INSTANCE_ROLES = ['ADMIN', 'LEAD'] as const;
+
+/**
+ * Проект, по которому считается роль принципала (PROP-133 §1).
+ *
+ * Отдельный тип от `Project`: нужны только поля состояния доступа.
+ */
+export type ProjectAccessSubject = Pick<
+  Project,
+  'ownerId' | 'members' | 'groupMembers' | 'everyoneRole'
+>;
 
 /**
  * Нормализация роли участника: неизвестное значение — **fail-closed**
@@ -77,10 +93,18 @@ export function deriveSessionParticipants(
  *   неизвестны (пустой список) или принципал не человек (service/event/
  *   scheduler/agent — их права идут от других осей);
  * - `owner`/`editor`/`viewer` — роль участника.
+ *
+ * PROP-133 §1: если задан проект сессии, роль принципала считает **единый
+ * резолвер доступа** (`resolveProjectAccess`) — гранты по группе и режим
+ * «всем пользователям» учитываются здесь, а не перечислением участников.
+ * Если по проекту доступа нет (пользователь не участник проекта) — прежнее
+ * поведение по списку участников сессии.
  */
 export function resolveParticipantRole(
   participants: readonly SessionParticipant[] | undefined,
   principal: AuthorityPrincipal | undefined,
+  project?: ProjectAccessSubject | null,
+  groups?: readonly string[],
 ): SessionParticipantRole | undefined {
   if (!principal) return undefined;
   // Принципал-человек с глобальной ролью инстанса — сквозной доступ.
@@ -91,6 +115,15 @@ export function resolveParticipantRole(
   // их права определяются scope'ами/ролями политики, а не ролью в сессии.
   if (principal.kind !== 'user') return undefined;
   if (!participants || participants.length === 0) return undefined;
+  // PROP-133 §1: роль действующего пользователя в проекте — из резолвера.
+  const projectRole = project
+    ? resolveProjectAccess(project, {
+      userId: principal.id,
+      roles: principal.roles,
+      ...(groups ? { groups } : {}),
+    }).role
+    : null;
+  if (projectRole) return projectRole;
   const found = participants.find((participant) => participant.userId === principal.id);
   if (!found) {
     // Fail-closed: участник есть, принципал — нет → только чтение.

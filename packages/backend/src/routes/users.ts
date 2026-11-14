@@ -5,9 +5,61 @@ import { nowISO } from '@itphx/synth-shared';
 import { randomUUID } from 'node:crypto';
 import { t } from '../lib/i18n.js';
 import { requireAdminOrScope } from '../auth/guards.js';
+import { parseBoundedInt, paginate } from '@itphx/synth-core';
+
+/**
+ * PROP-133 §3.3: страница каталога пользователей — постранично, как прочие
+ * списки (ADR-118 §4): дефолт 50, потолок 200.
+ */
+const DEFAULT_DIRECTORY_LIMIT = 50;
+const MAX_DIRECTORY_LIMIT = 200;
 
 export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
   const app = new Hono();
+
+  // GET /api/v2/users/directory — лёгкий каталог для выбора участников
+  // (PROP-133 §3.3): доступ **любому аутентифицированному** пользователю
+  // (иначе владелец проекта физически не может выбрать участников: `/users`
+  // — только ADMIN). Ответ — только `{id, username, display_name}`: ролей,
+  // почты, идентичностей и заметок в каталоге нет.
+  // Маршрут объявлен **до** `/:id`, чтобы не перехватывался параметрическим.
+  app.get('/directory', kit.requireAuth, async (c) => {
+    const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_DIRECTORY_LIMIT, MAX_DIRECTORY_LIMIT);
+    if (limit === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidDirectoryLimit', undefined, c) } }, 400);
+    }
+    const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
+    if (offset === null) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidDirectoryOffset', undefined, c) } }, 400);
+    }
+    const query = (c.req.query('q') ?? '').trim().toLowerCase();
+
+    const all = await profiles.listProfiles();
+    // Неактивные пользователи в каталог не попадают (деактивированного
+    // участника выбрать нельзя) — и `is_active` наружу не отдаётся.
+    const filtered = all
+      .filter((profile) => profile.isActive !== false)
+      .filter((profile) => {
+        if (!query) return true;
+        const username = profile.username.toLowerCase();
+        const displayName = (profile.displayName ?? '').toLowerCase();
+        return username.includes(query) || displayName.includes(query);
+      })
+      .sort((a, b) => (a.username < b.username ? -1 : a.username > b.username ? 1 : 0));
+
+    const { page, total, next_offset } = paginate(filtered, offset, limit);
+    return c.json({
+      users: page.map((profile) => ({
+        id: profile.id,
+        username: profile.username,
+        display_name: profile.displayName || null,
+      })),
+      total,
+      offset,
+      limit,
+      next_offset,
+    });
+  });
 
   // GET /api/v2/users — список всех пользователей (ADMIN или scope `users:read`).
   // Идентичности сознательно не включаются: список не раздувается (детали — в /:id).

@@ -1,7 +1,8 @@
 import { extractChildSessionId } from '@itphx/synth-core';
-import type { EventBus } from '@itphx/synth-core';
+import type { EventBus, ProjectRepository } from '@itphx/synth-core';
 import type { BusEvent } from '@itphx/synth-shared';
 import type { SessionManager } from '@itphx/synth-core';
+import { listVisibleSessions } from './visible-session-ids.js';
 
 export interface EventClient {
   userId: string
@@ -13,6 +14,10 @@ export interface EventClient {
    * сквозного обзора ADMIN/LEAD (ADR-089) — паритет со standalone-core SSE.
    */
   allSessions?: boolean
+  /**
+   * PROP-133: группы пользователя (гранты по группам; Ф2). Нет — групп нет.
+   */
+  groups?: readonly string[]
   send(event: BusEvent): void
 }
 
@@ -31,6 +36,12 @@ export class EventHub {
   constructor(
     private eventBus: EventBus,
     private sessionManager: SessionManager,
+    /**
+     * PROP-133 §6: проекты пользователя — чтобы подписка клиента покрывала
+     * сессии **всех видимых** проектов (не только свои). Не задан — подписка
+     * остаётся «только свои сессии» (прежнее поведение).
+     */
+    private projectStore?: ProjectRepository,
   ) {}
 
   async registerClient(client: EventClient): Promise<void> {
@@ -48,8 +59,13 @@ export class EventHub {
       return;
     }
 
-    // Нужны только id сессий владельца — лёгкая выборка (без истории сообщений).
-    const sessions = await this.sessionManager.listSessions({ userId: client.userId });
+    // Нужны id сессий, видимых пользователю: свои + сессии всех проектов, где
+    // у него есть роль (PROP-133 §6, инвариант 18). Лёгкая выборка (без истории
+    // сообщений). Тот же шов, что у списка сессий (`resolveMemberProjectIds`).
+    const sessions = await listVisibleSessions(this.sessionManager, this.projectStore, {
+      userId: client.userId,
+      ...(client.groups ? { groups: client.groups } : {}),
+    });
     console.log(`[EventHub] Register client: user=${client.username} clients=${arr.length} sessions=${sessions.length}`);
 
     for (const s of sessions) {

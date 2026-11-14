@@ -285,6 +285,12 @@ export interface SerializedProject {
   name: string;
   owner_id: string;
   members: Record<string, string>;
+  /** PROP-133 §3.2: гранты группам (`null` — групп нет). */
+  group_members?: Record<string, string> | null;
+  /** PROP-133 §3.2: роль для всех пользователей инстанса (`null` — не опубликован). */
+  everyone_role?: string | null;
+  /** PROP-133 §3.2: производная видимость проекта (`author`/`selected`/`all`). */
+  visibility?: 'author' | 'selected' | 'all';
   description: string;
   current_task: string;
   invariants: string;

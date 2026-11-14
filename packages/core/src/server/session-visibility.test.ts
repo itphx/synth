@@ -32,12 +32,18 @@ function session(overrides: Partial<Session> = {}): Session {
   } as Session;
 }
 
-function project(id: string, ownerId: string, members: Record<string, ProjectRole> = {}): Project {
+function project(
+  id: string,
+  ownerId: string,
+  members: Record<string, ProjectRole> = {},
+  access: Partial<Pick<Project, 'everyoneRole' | 'groupMembers'>> = {},
+): Project {
   return {
     id,
     name: id,
     ownerId,
     members,
+    ...access,
     description: '',
     currentTask: '',
     invariants: '',
@@ -141,5 +147,47 @@ describe('isSessionVisible (ADR-089)', () => {
     expect(await isSessionVisible(s1, store, ctx(), cache)).toBe(true);
     expect(await isSessionVisible(s2, store, ctx(), cache)).toBe(true);
     expect(store.load).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * PROP-133 §1/§6: видимость сессии определяется **единым** резолвером доступа
+ * к проекту (`resolveProjectAccess`), поэтому состояние списка доступа проекта
+ * (`author`/`selected`/`all`) меняет видимость сессии так же, как и видимость
+ * самого проекта.
+ *
+ * Проверяются три режима:
+ * - `all` — `everyoneRole` задан: сессия проекта видна постороннему;
+ * - `author` — список доступа пуст: сессия постороннему не видна;
+ * - `selected` — грант по `members` (роль `viewer`): сессия видна.
+ */
+describe('isSessionVisible (PROP-133: режимы доступа к проекту)', () => {
+  it('проект в режиме «всем пользователям» (`everyoneRole`) — сессия видна постороннему', async () => {
+    const store = storeOf({ p1: project('p1', 'u9', {}, { everyoneRole: ProjectRole.VIEWER }) });
+    expect(await isSessionVisible(session({ ownerId: 'u9', projectId: 'p1' }), store, ctx())).toBe(true);
+  });
+
+  it('проект в режиме «всем пользователям» с ролью `editor` — тоже виден постороннему (видимость ≠ запись)', async () => {
+    const store = storeOf({ p1: project('p1', 'u9', {}, { everyoneRole: ProjectRole.EDITOR }) });
+    expect(await isSessionVisible(session({ ownerId: 'u9', projectId: 'p1' }), store, ctx())).toBe(true);
+  });
+
+  it('проект в режиме «только автору» (пустой список доступа) — сессия постороннему не видна', async () => {
+    const store = storeOf({ p1: project('p1', 'u9', {}) });
+    expect(await isSessionVisible(session({ ownerId: 'u9', projectId: 'p1' }), store, ctx())).toBe(false);
+  });
+
+  it('участник с ролью `viewer` — сессию проекта видит', async () => {
+    const store = storeOf({ p1: project('p1', 'u9', { u1: ProjectRole.VIEWER }) });
+    expect(await isSessionVisible(session({ ownerId: 'u9', projectId: 'p1' }), store, ctx())).toBe(true);
+  });
+
+  it('явный `everyoneRole: null` — проект не опубликован, но грант участнику работает', async () => {
+    const store = storeOf({
+      p1: project('p1', 'u9', { u1: ProjectRole.VIEWER }, { everyoneRole: null }),
+    });
+    expect(await isSessionVisible(session({ ownerId: 'u9', projectId: 'p1' }), store, ctx())).toBe(true);
+    const privateStore = storeOf({ p2: project('p2', 'u9', {}, { everyoneRole: null }) });
+    expect(await isSessionVisible(session({ ownerId: 'u9', projectId: 'p2' }), privateStore, ctx())).toBe(false);
   });
 });

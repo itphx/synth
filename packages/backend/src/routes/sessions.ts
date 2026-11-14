@@ -32,6 +32,8 @@ import {
   resolveUserPrincipal,
 } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
+import { groupsOf } from '../lib/project-principal.js';
+import { resolveVisibleProjectIds } from '../events/visible-session-ids.js';
 import type { EventHub } from '../events/hub.js';
 import type { ProjectRepository } from '@itphx/synth-core';
 import type { MemoryFactRepository, MemoryIndexRepository } from '@itphx/synth-core';
@@ -810,10 +812,14 @@ export function createSessionRoutes(
         return isAdmin || isLead;
       },
       // ADR-089: проекты-участия пользователя — проектные сессии видны участникам.
-      resolveMemberProjectIds: async (_c, userId) => {
+      // PROP-133 §6: список — **все** проекты, где у пользователя есть роль
+      // (владелец/участник/грант по группе/«всем пользователям»), а не только
+      // записи в `members`. Тот же шов использует хаб подписок.
+      resolveMemberProjectIds: async (c, userId) => {
         if (!projectStore) return [];
-        const projects = await projectStore.list(userId);
-        return projects.map((p) => p.id);
+        const user = await kit.getCurrentUser(c);
+        const groups = groupsOf(user);
+        return resolveVisibleProjectIds(projectStore, { userId, ...(groups ? { groups } : {}) });
       },
       resolveAuthor: async (c) => (await kit.getCurrentUser(c))!.username,
       // ADR-106 Ф3: принципал ответа на подтверждение — аутентифицированный
