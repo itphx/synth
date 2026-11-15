@@ -197,8 +197,9 @@ export const TODO_TOOLS = ['todo_write', 'todo_list', 'todo_add', 'todo_update',
  * capability плагинного тула.
  *
  * Чтение (`terminal_list`/`terminal_read`/`terminal_snapshot`) в plan-режиме
- * **разрешено**, мутации (`terminal_open`/`terminal_write`/`terminal_close`) —
- * заблокированы (`isPlanBlockedTool`, `evaluator.ts`): план ничего не исполняет.
+ * **разрешено**, мутации (`terminal_open`/`terminal_write`/`terminal_signal`/
+ * `terminal_close`) — заблокированы (`isPlanBlockedTool`, `evaluator.ts`): план
+ * ничего не исполняет.
  */
 export const TERMINAL_TOOLS = [
   'terminal_list',
@@ -206,6 +207,7 @@ export const TERMINAL_TOOLS = [
   'terminal_read',
   'terminal_snapshot',
   'terminal_write',
+  'terminal_signal',
   'terminal_close',
   'terminal_run',
 ];

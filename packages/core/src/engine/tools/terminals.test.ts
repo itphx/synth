@@ -18,9 +18,11 @@
  *   (метаданные чтения — атрибутами в открывающем маркере), `since`, `tail`,
  *   `history`, `strip_ansi`, кап 32 КиБ, обрезка хвостовых пустых строк,
  *   нормализация CRLF, единый отказ «не найден» (неизвестный и чужой терминал);
- * - `terminal_write` — ввод без Enter и с Enter (перевод строки), запрет
+ * - `terminal_write` — ввод без Enter и с Enter (**CR**, `\r`), запрет
  *   команды политикой (тот же чекер, что у `execute_shell`), требование
  *   подтверждения (внешний/защищённый путь);
+ * - `terminal_signal` — управляющие сигналы (`^C`/`^\`/`^Z`): байт в PTY +
+ *   завершение активного запуска сервисом (`interruptRun`, код `128+signum`);
  * - `terminal_run` — запуск с ожиданием: обрамление вывода, код возврата,
  *   занятость терминала (`run_busy`), запрет команды политикой;
  * - `terminal_run` с `background: true` — запуск без ожидания: `run_id` +
@@ -31,7 +33,7 @@
  *   доступность при выключенном контуре и при отсутствии PTY.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@itphx/synth-shared';
@@ -42,6 +44,7 @@ import {
   terminalReadTool,
   terminalSnapshotTool,
   terminalWriteTool,
+  terminalSignalTool,
   terminalCloseTool,
   terminalRunTool,
 } from './terminals.js';
@@ -50,7 +53,12 @@ import {
   TerminalDisabledError,
   TerminalLimitError,
 } from '../terminal/types.js';
-import { formatTerminalContentAttributes, frameTerminalOutput } from '../terminal/output.js';
+import {
+  formatTerminalContentAttributes,
+  frameTerminalOutput,
+  normalizeTerminalOutput,
+  stripTerminalAnsi,
+} from '../terminal/output.js';
 import { TerminalRunBusyError, buildTerminalRunNotification, type TerminalRunRecord } from '../terminal/runs.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { getToolGroups, TERMINAL_TOOLS } from '../permission/groups.js';
@@ -109,10 +117,18 @@ class FakeTerminalService {
   failWith: unknown = null;
   /** Запуски (`startRun`/`waitRun`). */
   runs = new Map<string, FakeRun>();
-  /** Аргументы запусков (терминал/команда/срок) — проверка режимов. */
-  started: Array<{ terminalId: string; command: string; timeoutMs: number }> = [];
+  /** Аргументы запусков (терминал/команда/срок/режимы) — проверка режимов. */
+  started: Array<{
+    terminalId: string;
+    command: string;
+    timeoutMs: number;
+    background?: boolean;
+    killOnTimeout?: boolean;
+  }> = [];
   /** Завершённые запуски — как колбэк завершения (`onRunFinished`) у сервиса. */
   settled: TerminalRunRecord[] = [];
+  /** Вызовы `interruptRun` (сигнал терминала). */
+  interrupts: Array<{ terminalId: string; exitCode: number }> = [];
   /** Терминал занят активным запуском (`run_busy`). */
   busy = false;
 
@@ -178,7 +194,13 @@ class FakeTerminalService {
   }
 
   /** Запуск команды (регистрация; ожидание — за тестом). */
-  startRun(input: { terminalId: string; command: string; timeoutMs: number }): TerminalRunRecord {
+  startRun(input: {
+    terminalId: string;
+    command: string;
+    timeoutMs: number;
+    background?: boolean;
+    killOnTimeout?: boolean;
+  }): TerminalRunRecord {
     if (this.busy) throw new TerminalRunBusyError(input.terminalId, 'run_busy_existing');
     const runId = `run_${this.runs.size + 1}`;
     const record: TerminalRunRecord = {
@@ -187,6 +209,8 @@ class FakeTerminalService {
       nonce: `nonce-${runId}`,
       command: input.command,
       status: 'running',
+      ...(input.background === true ? { background: true } : {}),
+      stillRunning: true,
       output: '',
       startedAt: 1_000,
       timeoutMs: input.timeoutMs,
@@ -197,6 +221,8 @@ class FakeTerminalService {
       terminalId: input.terminalId,
       command: input.command,
       timeoutMs: input.timeoutMs,
+      ...(input.background !== undefined ? { background: input.background } : {}),
+      ...(input.killOnTimeout !== undefined ? { killOnTimeout: input.killOnTimeout } : {}),
     });
     this.busy = true;
     return { ...record };
@@ -216,14 +242,25 @@ class FakeTerminalService {
     const run = this.runs.get(runId);
     if (!run) return null;
     Object.assign(run.record, patch);
-    // Таймаут не убивает команду: терминал остаётся занятым (как в реестре
-    // запусков — `timeout` не освобождает терминал).
-    this.busy = patch.status === 'timeout';
+    // Как в реестре запусков: `stillRunning` вычисляется из статуса (`timeout`
+    // без убийства терминал не освобождает); явное значение в патче важнее.
+    if (patch.stillRunning === undefined && patch.status !== undefined) {
+      run.record.stillRunning = patch.status === 'timeout';
+    }
+    this.busy = run.record.stillRunning === true;
     // Сервис терминалов после завершения зовёт колбэк (`onSettled` →
     // `onRunFinished`) — уведомление о завершении уходит из сервиса.
     this.settled.push({ ...run.record });
     run.resolve?.({ ...run.record });
     return { ...run.record };
+  }
+
+  /** Прервать активный запуск — как `TerminalService.interruptRun`. */
+  interruptRun(terminalId: string, exitCode = 130): boolean {
+    this.interrupts.push({ terminalId, exitCode });
+    if (!this.busy) return false;
+    this.busy = false;
+    return true;
   }
 }
 
@@ -730,9 +767,10 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.metadata?.enter).toBe(false);
     });
 
-    it('enter добавляет перевод строки', async () => {
+    it('enter добавляет CR (\\r) — Enter в терминале', async () => {
       await terminalWriteTool.execute({ terminal_id: 'term_1', data: 'ls -la', enter: true }, makeCtx());
-      expect(service.writes[0]?.data).toBe('ls -la\n');
+      // Терминал ждёт CR, а не LF (raw-режим, tmux-промпт, less, REPL).
+      expect(service.writes[0]?.data).toBe('ls -la\r');
     });
 
     it('команда, запрещённая политикой, не отправляется', async () => {
@@ -780,7 +818,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
         makeCtx({ shellPolicy: policy }),
       );
       expect(result.isError).toBeUndefined();
-      expect(service.writes[0]?.data).toBe('echo hi\n');
+      expect(service.writes[0]?.data).toBe('echo hi\r');
     });
 
     it('неизвестный терминал → «не найден»', async () => {
@@ -802,7 +840,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
       );
       expect(result.isError).toBeUndefined();
       expect(service.writes).toHaveLength(1);
-      expect(service.writes[0]?.data).toBe('\n');
+      expect(service.writes[0]?.data).toBe('\r');
       expect(result.metadata?.enter).toBe(true);
     });
 
@@ -945,6 +983,44 @@ describe('Тулы интерактивных терминалов (terminals.ts
       );
       expect(next.isError).toBe(true);
       expect(next.metadata?.reason).toBe('run_busy');
+    });
+
+    it('timeout + stillRunning: признак «продолжает выполняться» — из записи запуска', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'timeout', stillRunning: true, output: 'partial\n' });
+
+      const result = await promise;
+      expect(result.metadata?.still_running).toBe(true);
+      expect(result.content).toContain('still running');
+      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000 still_running=true]');
+    });
+
+    it('kill_on_timeout: по таймауту Ctrl+C, терминал свободен (без «продолжает выполняться»)', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000, kill_on_timeout: true },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      // Режим убийства команды передан сервису.
+      expect(service.started[0]?.killOnTimeout).toBe(true);
+      const runId = [...service.runs.keys()][0]!;
+      // Реестр уже освободил терминал: `timeout`, но `stillRunning: false`.
+      service.finishRun(runId, { status: 'timeout', stillRunning: false, output: 'partial\n' });
+
+      const result = await promise;
+      expect(result.metadata?.status).toBe('timeout');
+      expect(result.metadata?.still_running).toBeUndefined();
+      expect(result.content).not.toContain('still running');
+      expect(result.content).not.toContain('run_busy');
+      // Отказ по сроку с частичным выводом.
+      expect(result.content).toContain('did not finish');
+      expect(result.content).toContain('partial');
+      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000]');
     });
 
     it('вышедший терминал — своя строка статуса (без «Exit code: -»)', async () => {
@@ -1091,6 +1167,16 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.content).not.toContain('ok');
     });
 
+    it('background пробрасывается в сервис запусков', async () => {
+      await terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'npm test', background: true },
+        makeCtx(),
+      );
+      expect(service.started[0]?.background).toBe(true);
+      // По умолчанию команда по таймауту не убивается.
+      expect(service.started[0]?.killOnTimeout).toBe(false);
+    });
+
     it('timeout_ms — необязательный watchdog: без него лимита нет', async () => {
       const result = await terminalRunTool.execute(
         { terminal_id: 'term_1', command: 'npm test', background: true },
@@ -1164,6 +1250,132 @@ describe('Тулы интерактивных терминалов (terminals.ts
     });
   });
 
+  describe('terminal_signal', () => {
+    beforeEach(() => {
+      service.records.set('term_1', makeRecord({ id: 'term_1' }));
+    });
+
+    it('INT → ETX (^C), активный запуск завершается кодом 130', async () => {
+      service.busy = true;
+      const result = await terminalSignalTool.execute(
+        { terminal_id: 'term_1', signal: 'INT' },
+        makeCtx(),
+      );
+      expect(result.isError).toBeUndefined();
+      expect(service.writes).toHaveLength(1);
+      expect(service.writes[0]?.data).toBe('\u0003');
+      expect(service.interrupts).toEqual([{ terminalId: 'term_1', exitCode: 130 }]);
+      expect(result.metadata?.signal).toBe('INT');
+      expect(result.metadata?.interrupt).toBe(130);
+      expect(result.content).toContain('INT');
+      expect(result.content).toContain('term_1');
+    });
+
+    it('QUIT → FS (^\\), код 131', async () => {
+      service.busy = true;
+      const result = await terminalSignalTool.execute(
+        { terminal_id: 'term_1', signal: 'QUIT' },
+        makeCtx(),
+      );
+      expect(result.isError).toBeUndefined();
+      expect(service.writes[0]?.data).toBe('\u001c');
+      expect(service.interrupts).toEqual([{ terminalId: 'term_1', exitCode: 131 }]);
+      expect(result.metadata?.interrupt).toBe(131);
+    });
+
+    it('TSTP → SUB (^Z), код 147', async () => {
+      service.busy = true;
+      const result = await terminalSignalTool.execute(
+        { terminal_id: 'term_1', signal: 'TSTP' },
+        makeCtx(),
+      );
+      expect(result.isError).toBeUndefined();
+      expect(service.writes[0]?.data).toBe('\u001a');
+      expect(service.interrupts).toEqual([{ terminalId: 'term_1', exitCode: 147 }]);
+      expect(result.metadata?.interrupt).toBe(147);
+    });
+
+    it('нет активного запуска → interrupt: null (прерывать нечего)', async () => {
+      const result = await terminalSignalTool.execute(
+        { terminal_id: 'term_1', signal: 'INT' },
+        makeCtx(),
+      );
+      expect(result.isError).toBeUndefined();
+      expect(service.interrupts).toEqual([{ terminalId: 'term_1', exitCode: 130 }]);
+      expect(result.metadata?.interrupt).toBeNull();
+    });
+
+    it('неизвестный и чужой терминал → единый отказ, байт не отправляется', async () => {
+      service.records.set('foreign', makeRecord({ id: 'foreign', projectId: 'proj_other' }));
+
+      const unknown = await terminalSignalTool.execute(
+        { terminal_id: 'term_missing', signal: 'INT' },
+        makeCtx(),
+      );
+      expect(unknown.isError).toBe(true);
+      expect(unknown.metadata?.i18n).toMatchObject({ key: 'terminal.tool.not_found' });
+
+      const foreign = await terminalSignalTool.execute(
+        { terminal_id: 'foreign', signal: 'INT' },
+        makeCtx(),
+      );
+      expect(foreign.isError).toBe(true);
+      expect(foreign.metadata?.i18n).toMatchObject({ key: 'terminal.tool.not_found' });
+      expect(service.writes).toHaveLength(0);
+      expect(service.interrupts).toHaveLength(0);
+    });
+
+    it('неизвестный сигнал → отказ валидации', async () => {
+      const result = await terminalSignalTool.execute(
+        { terminal_id: 'term_1', signal: 'TERM' },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('argument error');
+      expect(service.writes).toHaveLength(0);
+    });
+
+    it('без сервиса и при выключенном контуре → отказ', async () => {
+      const noService = await terminalSignalTool.execute(
+        { terminal_id: 'term_1', signal: 'INT' },
+        makeCtx({ terminalService: undefined }),
+      );
+      expect(noService.isError).toBe(true);
+
+      service.enabled = false;
+      const disabled = await terminalSignalTool.execute(
+        { terminal_id: 'term_1', signal: 'INT' },
+        makeCtx(),
+      );
+      expect(disabled.isError).toBe(true);
+      expect(disabled.content).toContain('disabled');
+    });
+  });
+
+  describe('общий слой вывода (output.ts)', () => {
+    it('terminal_read применяет stripTerminalAnsi из output.ts', async () => {
+      service.records.set('term_1', makeRecord({ id: 'term_1' }));
+      const raw = 'before\u001B]7770;synth-run;abc;0\u0007red\u001B[31m!\u001B[0m\b \r\nend\n';
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: raw }]));
+
+      const result = await terminalReadTool.execute(
+        { terminal_id: 'term_1', strip_ansi: true },
+        makeCtx(),
+      );
+      const body = normalizeTerminalOutput(stripTerminalAnsi(raw));
+      expect(result.content).toContain(body);
+      expect(result.content).not.toContain('\u001B');
+    });
+
+    it('в terminals.ts нет своей копии stripAnsi — только импорт из output.ts', async () => {
+      const source = await readFile(new URL('./terminals.ts', import.meta.url), 'utf8');
+      expect(source).not.toMatch(/function stripAnsi\b/);
+      expect(source).not.toMatch(/function stripEscapeSequences\b/);
+      expect(source).toContain('stripTerminalAnsi');
+      expect(source).toContain("from '../terminal/output.js'");
+    });
+  });
+
   describe('Формат маркера [CONTENT …]', () => {
     it('без атрибутов — прежний маркер [CONTENT]', () => {
       expect(frameTerminalOutput('hello')).toBe('[CONTENT]\nhello\n[CONTENT END]');
@@ -1198,6 +1410,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
     it('мутирующие тулы заблокированы в plan-режиме, чтение — разрешено', () => {
       expect(isPlanBlockedTool('terminal_open')).toBe(true);
       expect(isPlanBlockedTool('terminal_write')).toBe(true);
+      expect(isPlanBlockedTool('terminal_signal')).toBe(true);
       expect(isPlanBlockedTool('terminal_close')).toBe(true);
       // Запуск команды — исполнение: в plan-режиме заблокирован (ADR-025)
       // в обоих режимах (`background: false` и `background: true`).
@@ -1210,6 +1423,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
 
     it('группа `terminal` матчится по capability', () => {
       expect(getToolGroups('terminal_write', [ToolCapability.TERMINAL])).toContain('terminal');
+      expect(getToolGroups('terminal_signal', [ToolCapability.TERMINAL])).toContain('terminal');
       expect(getToolGroups('terminal_list', [ToolCapability.TERMINAL])).toContain('terminal');
       expect(getToolGroups('terminal_snapshot', [ToolCapability.TERMINAL])).toContain('terminal');
       expect(getToolGroups('terminal_run', [ToolCapability.TERMINAL])).toContain('terminal');
@@ -1256,6 +1470,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
         'terminal_read',
         'terminal_snapshot',
         'terminal_write',
+        'terminal_signal',
         'terminal_close',
         'terminal_run',
       ]) {
@@ -1269,6 +1484,12 @@ describe('Тулы интерактивных терминалов (terminals.ts
       // И в группе правил `terminal` его нет: оба режима — один тул.
       expect(TERMINAL_TOOLS).not.toContain('terminal_run_background');
       expect(TERMINAL_TOOLS).toContain('terminal_run');
+    });
+
+    it('terminal_signal в реестре и в группе правил `terminal`', () => {
+      const registry = createToolRegistry();
+      expect(registry.get('terminal_signal')).toBeDefined();
+      expect(TERMINAL_TOOLS).toContain('terminal_signal');
     });
   });
 });

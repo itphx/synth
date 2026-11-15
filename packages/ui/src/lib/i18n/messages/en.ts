@@ -5541,6 +5541,7 @@ export const dict = {
   'terminal.tool.opened':
     'Terminal "{id}" opened (input — terminal_write, output — terminal_read)',
   'terminal.tool.written': 'Input sent to terminal "{id}"',
+  'terminal.tool.signalled': 'Sent signal {signal} to terminal "{terminal_id}"',
   'terminal.tool.closed': 'Terminal "{id}" closed',
   'terminal.tool.command_denied':
     'Error: the command is denied by shell policy and was not sent to the terminal: {reason}',

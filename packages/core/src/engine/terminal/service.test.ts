@@ -50,10 +50,12 @@ import {
   type TerminalRecord,
 } from './types.js';
 import {
+  buildRunMarkerCommand,
   TERMINAL_RUN_MARKER_PREFIX,
   TerminalRunBusyError,
   type TerminalRunRecord,
 } from './runs.js';
+import { cleanRunOutput } from './output.js';
 
 // ---------------------------------------------------------------------------
 // Эмулятор PTY и порта
@@ -856,10 +858,13 @@ describe('Терминальный сервис', () => {
       });
 
       const handle = port.lastHandle;
-      expect(handle.writes[0]).toBe('ls -la\n');
+      // Enter в raw-режиме терминала — это CR (`\r`), а не LF: tmux/less/REPL
+      // ждут именно `\r`.
+      expect(handle.writes[0]).toBe('ls -la\r');
       expect(handle.writes[1]).toContain('printf');
       expect(handle.writes[1]).toContain(run.nonce);
       expect(handle.writes[1]).toContain('"$?"');
+      expect(handle.writes[1]?.endsWith('\r')).toBe(true);
       expect(service.getRun(run.runId)?.status).toBe('running');
 
       service.dispose();
@@ -933,6 +938,36 @@ describe('Терминальный сервис', () => {
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(service.getRun(run.runId)?.status).toBe('timeout');
+      // Команду не убивали — терминал остаётся занятым.
+      expect(service.getRun(run.runId)?.stillRunning).toBe(true);
+
+      service.dispose();
+    });
+
+    it('killOnTimeout: таймаут пишет Ctrl+C в PTY и освобождает терминал', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'sleep 100',
+        timeoutMs: 1_000,
+        killOnTimeout: true,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const finished = service.getRun(run.runId);
+      expect(finished?.status).toBe('timeout');
+      expect(finished?.stillRunning).toBe(false);
+      // Ctrl+C ушёл прямо в PTY (после команды и строки-маркера).
+      expect(port.lastHandle.writes).toContain('\u0003');
+      // Терминал свободен — следующий запуск проходит.
+      const next = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+      expect(next.status).toBe('running');
 
       service.dispose();
     });
@@ -949,6 +984,7 @@ describe('Терминальный сервис', () => {
         terminalId: record.id,
         command: 'sleep 100',
         timeoutMs: 30_000,
+        background: true,
       });
 
       await service.close(record.id);
@@ -973,6 +1009,7 @@ describe('Терминальный сервис', () => {
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
+        background: true,
       });
 
       port.lastHandle.emitData('out\n');
@@ -986,6 +1023,101 @@ describe('Терминальный сервис', () => {
       expect(settled[0]?.output).toBe('out\n');
 
       service.dispose();
+    });
+
+    it('запуск с ожиданием не порождает уведомление (ответ уже инлайн)', async () => {
+      const settled: TerminalRunRecord[] = [];
+      const service = createService({
+        onRunFinished: (run) => {
+          settled.push(run);
+        },
+      });
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+
+      port.lastHandle.emitData('out\n');
+      port.lastHandle.emitData(marker(run.nonce, '0'));
+
+      expect(service.getRun(run.runId)?.status).toBe('done');
+      expect(settled).toHaveLength(0);
+
+      service.dispose();
+    });
+
+    it('Ctrl+C (ETX) завершает активный запуск и освобождает терминал', async () => {
+      const settled: TerminalRunRecord[] = [];
+      const service = createService({
+        onRunFinished: (run) => {
+          settled.push(run);
+        },
+      });
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'sleep 100',
+        timeoutMs: 0,
+        background: true,
+      });
+
+      // Маркер после Ctrl+C не придёт: прерывание снимает строку целиком.
+      service.write(record.id, '\u0003');
+
+      const finished = service.getRun(run.runId);
+      expect(finished?.status).toBe('done');
+      expect(finished?.exitCode).toBe(130);
+      expect(finished?.stillRunning).toBe(false);
+      // Уведомление ушло (запуск фоновый) — ровно одно.
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.status).toBe('done');
+      expect(settled[0]?.exitCode).toBe(130);
+
+      // Терминал снова свободен: следующий запуск проходит.
+      const next = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+      expect(next.status).toBe('running');
+
+      service.dispose();
+    });
+
+    it('обычный ввод без ETX запуск не трогает', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'sleep 100',
+        timeoutMs: 0,
+      });
+
+      service.write(record.id, 'abc');
+
+      expect(service.getRun(run.runId)?.status).toBe('running');
+      service.dispose();
+    });
+
+    it('cleanRunOutput: реальный вывод с эхом обёртки и ANSI', () => {
+      const wrapper = buildRunMarkerCommand('a1b2c3d4e5f60718');
+      // Как это выглядит в потоке PTY: эхо введённой строки-обёртки, цвета,
+      // служебный OSC-маркер (он вырезается сканером, но остаётся в примере
+      // для полноты) и CRLF от ONLCR.
+      const raw = [
+        '\u001B[1m$ npm test\u001B[0m',
+        `user@host:~/proj$ ${wrapper}`,
+        '\u001B[32m✓\u001B[0m 12 passed',
+        '\u001B]3008;title\u0007',
+        '',
+      ].join('\r\n');
+
+      const cleaned = cleanRunOutput(raw, wrapper);
+      expect(cleaned).toBe('$ npm test\n✓ 12 passed');
+      expect(cleaned).not.toContain('synth-run');
+      expect(cleaned).not.toContain('\u001B');
     });
 
     it('терминал без привязки к сессии: запуск всё равно работает', async () => {

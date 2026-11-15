@@ -1643,3 +1643,15 @@
 - **Решение по замечанию 2** (кнопки Сбросить/Сохранить вне блока): отложено отдельной задачей — в разделах разная разметка, менять глобально сейчас не стали.
 - **Проверки:** `pnpm typecheck` (10 пакетов), `pnpm lint` (0 ошибок); core target 558, ui target 1758; полный `pnpm test` — 11 303 passed, 2 падения (`execution/startup` — пересборка dist под работающим dev, `server/app.proxy` — env `no_proxy`), в изоляции 37/37. Браузер: перезапуск с историей, переименование, второй терминал, «Процессы», «Параметры выполнения» (2880/8/32, PUT 200, 400 на 5 мин и `/bin/my shell`, DELETE → default), порядок настроек.
 - **Коммиты:** `6d0f94c6`, `51812699`.
+
+## 2026-11-15 — терминалы: третий заход по отчёту тестировщика
+
+- **A (залипание `run_busy`)**: Ctrl+C прерывает весь список команд, поэтому строка-маркер не выполнялась и запуск оставался активным навсегда. Теперь ETX (0x03) в `terminal_write`/`terminal_signal` завершает активный запуск (`done`, exit 130) и освобождает терминал; `TerminalService.interruptRun` выставлен наружу.
+- **B (Enter)**: `terminal_write(enter)` и команды `terminal_run` уходят с **CR** (`\r`), а не LF — tmux command-prompt, less и REPL в raw-режиме теперь принимают Enter.
+- **D (loop breaker)**: `terminal_write` исключён из doom-loop (повтор нажатий — норма); `terminal_run`/`execute_shell` под защитой.
+- **E (дубль)**: уведомление о завершении уходит только для `background: true`; foreground отдаёт результат инлайн.
+- **G (`kill_on_timeout`)**: параметр `terminal_run`; по таймауту шлём INT (0x03) и освобождаем терминал. Настоящие SIGTERM/SIGKILL одной команды через PTY невыразимы (нет pid foreground-группы) — жёсткий обрыв это `terminal_close`.
+- **H (грязный вывод)**: `output.ts` получил `stripTerminalAnsi`/`removeRunWrapper`/`cleanRunOutput`; уведомление и инлайн-ответ чистятся одинаково, эхо служебной обёртки `printf … synth-run …` вырезается по nonce.
+- **Новый тул `terminal_signal`** (`INT`/`QUIT`/`TSTP` → 0x03/0x1c/0x1a, код 128+signum, plan-режим запрещён).
+- **F/I/C** — документация: shell-политика `terminal_run` по локальной строке (guardrail, ADR-136); `cols/rows` в `terminal_snapshot` = эмуляция другого экрана; DA-ответы генерирует терминал (не наш баг, совет — Ctrl+U перед вводом в промпт tmux).
+- **Проверки:** `pnpm typecheck`, `pnpm lint`, **полный `pnpm test` — EXIT=0 без падений**; целевые — 609 тестов (терминалы, тулы, права, роуты).

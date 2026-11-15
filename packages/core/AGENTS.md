@@ -1919,7 +1919,8 @@
   проекте (`assistant`/`leader`/`devops`/`admin`/`fixer`/`tester`); у `researcher`/
   `security-auditor`/`explore`/`general`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
   **Тулы интерактивных терминалов (PROP-132, Ф5).** `terminal_list`/`terminal_open`/
-  `terminal_read`/`terminal_snapshot`/`terminal_write`/`terminal_close`/`terminal_run`
+  `terminal_read`/`terminal_snapshot`/`terminal_write`/`terminal_signal`/`terminal_close`/
+  `terminal_run`
   (`engine/tools/terminals.ts`) — тот же
   контур, что у HTTP-роутов `/api/v2/terminals*`: **тот же** экземпляр
   `TerminalService` приходит в тул через `ctx.extra.terminalService` (упаковка —
@@ -1930,7 +1931,7 @@
   `permission.rules.terminal` работает и по именам встроенных тулов, и по
   capability плагинного тула), отключаема админом. **Plan-режим:** чтение
   (`terminal_list`/`terminal_read`) разрешено, мутации (`terminal_open`/
-  `terminal_write`/`terminal_close`) заблокированы (`PLAN_BLOCKED_TERMINAL_TOOLS`,
+  `terminal_write`/`terminal_signal`/`terminal_close`) заблокированы (`PLAN_BLOCKED_TERMINAL_TOOLS`,
   `permission/evaluator.ts`). **Гейт доступности** — мастер-выключатель инстанса
   `terminal.enabled`: seam `getTerminalEnabled` в `computeToolAvailability`
   (`engine/permission/availability.ts`) → при `false` тулы недоступны модели с
@@ -1954,12 +1955,24 @@
   `terminal_write` с
   `enter: true` проверяет строку **тем же** чекером, что `execute_shell`
   (`checkShellCommand`, `engine/security/shell-guard.ts`): запрет — понятный отказ
-  модели, команда в терминал не уходит. **`terminal_run` — один тул, два
+  модели, команда в терминал не уходит. **Enter уходит как CR (`\r`)**, а не LF:
+  raw-режим и line discipline (`tmux`-промпт, `less`, REPL) подтверждают ввод
+  именно по CR. **`terminal_signal`** (`terminal_id`, `signal`:
+  `INT`/`QUIT`/`TSTP`) пишет управляющий байт (`^C` `0x03`/`^\` `0x1c`/`^Z`
+  `0x1a`) в PTY **и** завершает активный запуск через
+  `TerminalService.interruptRun(terminalId, 128+signum)` (130/131/147):
+  после сигнала строка-маркер не выполняется, без этого терминал залип бы в
+  `run_busy`. `SIGTERM`/`SIGKILL` одной команды через PTY не выражаются —
+  жёсткий обрыв только `terminal_close`. **`terminal_run` — один тул, два
   режима** (параметр `background`, как у `execute_shell`/`task`):
   `background: false` (дефолт) — **с ожиданием завершения**: тул ждёт команды
   и возвращает вывод в обрамлении `[CONTENT]`…`[CONTENT END]` + код возврата
   (`metadata.exit_code`); по таймауту (`timeout_ms`, дефолт 30 с, потолок
-  600000) — понятный отказ с частичным выводом. `background: true` —
+  600000) — понятный отказ с частичным выводом. `kill_on_timeout: true` —
+  по таймауту сервис шлёт Ctrl+C и освобождает терминал (`timeout`,
+  `stillRunning: false`); без него команда продолжает работу, а ответ несёт
+  `metadata.still_running` (признак берётся из `run.stillRunning`, не из
+  статуса). `background: true` —
   **без ожидания**: тул возвращает `run_id` сразу, а результат приходит
   **сообщением в чат** — доставляет его сервис терминалов
   (`TerminalService.onRunFinished` → `notifyBackgroundParent`, точка сборки в

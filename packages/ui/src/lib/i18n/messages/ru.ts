@@ -4250,6 +4250,7 @@ export const dict = {
   'terminal.tool.opened':
     'Терминал «{id}» открыт (ввод — terminal_write, вывод — terminal_read)',
   'terminal.tool.written': 'Ввод отправлен в терминал «{id}»',
+  'terminal.tool.signalled': 'Сигнал {signal} отправлен в терминал «{terminal_id}»',
   'terminal.tool.closed': 'Терминал «{id}» закрыт',
   'terminal.tool.command_denied':
     'Ошибка: команда запрещена политикой shell и не отправлена в терминал: {reason}',

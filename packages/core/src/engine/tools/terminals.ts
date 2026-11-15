@@ -2,7 +2,7 @@
  * PROP-132 (Ф5): тулы агента для интерактивных терминалов.
  *
  * Тулы: `terminal_list`, `terminal_open`, `terminal_read`, `terminal_snapshot`,
- * `terminal_write`, `terminal_close`, `terminal_run`, `terminal_run_result` — тот же контур, что
+ * `terminal_write`, `terminal_signal`, `terminal_close`, `terminal_run`, `terminal_run_result` — тот же контур, что
  * у HTTP-роутов `/api/v2/terminals*` (`server/routes/terminals.ts`), только
  * вызывает его агент.
  *
@@ -53,7 +53,12 @@ import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-share
 import type { SessionManager } from '../../sessions/manager.js';
 import type { TerminalService } from '../terminal/service.js';
 import type { TerminalRecord } from '../terminal/types.js';
-import { frameTerminalOutput, normalizeTerminalLineEndings, normalizeTerminalOutput } from '../terminal/output.js';
+import {
+  frameTerminalOutput,
+  normalizeTerminalLineEndings,
+  normalizeTerminalOutput,
+  stripTerminalAnsi,
+} from '../terminal/output.js';
 import { renderTerminalScreen } from '../terminal/screen.js';
 import { isTerminalRunBusyError, type TerminalRunRecord } from '../terminal/runs.js';
 import {
@@ -109,139 +114,6 @@ const MAX_SNAPSHOT_ROWS = 100;
 
 /** Потолок буфера прокрутки рендера (`terminal_snapshot`), строки. */
 const MAX_SNAPSHOT_SCROLLBACK = 500;
-
-/**
- * ANSI-последовательности (CSI/OSC и прочие escape-последовательности).
- *
- * По умолчанию вывод терминала отдаётся **как есть** (цвета и позиционирование
- * значимы для агента, читающего вывод команды); `strip_ansi: true` — для
- * случаев, когда модель не должна видеть управляющие последовательности.
- */
-const ESC = '\u001B';
-/** BEL — завершает OSC-строку. */
-const BEL = '\u0007';
-/** CSI в 8-битном виде. */
-const CSI_8BIT = '\u009B';
-/** ST в 8-битном виде — второй вариант завершения OSC. */
-const ST_8BIT = '\u009C';
-
-/**
- * «Широкая» вставка пробелов (рамки powerline и т.п.).
- *
- * Подряд **больше 40** пробелов внутри строки схлопываются в один пробел:
- * такие вставки не несут смысла, а только раздувают вывод.
- */
-const WIDE_SPACE_RUN_PATTERN = / {41,}/g;
-
-/**
- * Конец OSC-строки (после `ESC ]`): BEL или ST (`ESC \`).
- *
- * Незавершённая OSC-строка съедает остаток потока — как в терминале: иначе в
- * вывод попал бы мусор служебной строки.
- */
-function skipOsc(text: string, from: number): number {
-  for (let i = from; i < text.length; i += 1) {
-    const ch = text[i]!;
-    if (ch === BEL) return i + 1;
-    if (ch === ST_8BIT) return i + 1;
-    if (ch === ESC && text[i + 1] === '\\') return i + 2;
-  }
-  return text.length;
-}
-
-/**
- * Конец CSI-последовательности (после `ESC [`): финальный байт 0x40…0x7E.
- */
-function skipCsi(text: string, from: number): number {
-  for (let i = from; i < text.length; i += 1) {
-    const code = text.charCodeAt(i);
-    if (code >= 0x40 && code <= 0x7e) return i + 1;
-  }
-  return text.length;
-}
-
-/**
- * Вырезать escape-последовательности из текста.
- *
- * - **OSC** (`ESC ] …`) вырезается **целиком** — до BEL или ST: в потоке
- *   терминала это служебные строки (в т.ч. маркер запуска
- *   `ESC]7770;synth-run;…` и `ESC]3008;…`), которые модели видеть не нужно;
- * - **CSI** (`ESC [ …`) вырезается целиком (цвета/позиционирование);
- * - прочие escape-последовательности (`ESC` + символ) вырезаются целиком.
- */
-function stripEscapeSequences(text: string): string {
-  let out = '';
-  let i = 0;
-  while (i < text.length) {
-    const ch = text[i]!;
-    if (ch === ESC) {
-      const next = text[i + 1];
-      if (next === ']') {
-        i = skipOsc(text, i + 2);
-        continue;
-      }
-      if (next === '[') {
-        i = skipCsi(text, i + 2);
-        continue;
-      }
-      // Прочие escape-последовательности: `ESC` + финальный символ.
-      i += next === undefined ? 1 : 2;
-      continue;
-    }
-    if (ch === CSI_8BIT) {
-      i = skipCsi(text, i + 1);
-      continue;
-    }
-    if (ch === ST_8BIT) {
-      i += 1;
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
-
-/**
- * Нормализовать управляющие символы: backspace и «возврат каретки».
- *
- * - `X\b` — backspace удаляет предыдущий символ; `\b` в начале — ничего
- *   (удалять нечего);
- * - одиночный `\r` (не часть `\r\n`) вырезается: в плоском тексте «возврат
- *   каретки» ничего не значит, а в потоке терминала он приходит от
- *   прогресс-вывода и портит читаемость.
- */
-function normalizeControlChars(text: string): string {
-  const chars = Array.from(text);
-  const out: string[] = [];
-  for (let i = 0; i < chars.length; i += 1) {
-    const ch = chars[i]!;
-    if (ch === '\b') {
-      if (out.length > 0) out.pop();
-      continue;
-    }
-    if (ch === '\r') {
-      // `\r\n` — обычный перевод строки (сохраняем), одиночный `\r` — нет.
-      if (chars[i + 1] === '\n') out.push('\r');
-      continue;
-    }
-    out.push(ch);
-  }
-  return out.join('');
-}
-
-/**
- * Убрать управляющие последовательности и привести вывод к читаемому виду.
- *
- * Вырезаются: escape-последовательности (CSI/OSC — **целиком**), действие
- * backspace (`X\b` → удалить символ), одиночный `\r`; «широкие» вставки
- * пробелов (подряд больше 40) схлопываются в один пробел.
- */
-function stripAnsi(text: string): string {
-  const withoutSequences = stripEscapeSequences(text);
-  const normalized = normalizeControlChars(withoutSequences);
-  return normalized.replace(WIDE_SPACE_RUN_PATTERN, ' ');
-}
 
 /** Единый отказ «сервис терминалов не подключён». */
 function depsUnavailable(): ToolResult {
@@ -727,7 +599,7 @@ export const terminalReadTool: ToolDefinition = {
         ? snapshot.chunks.filter((chunk) => chunk.seq > params.since!)
         : snapshot.chunks;
     let text = chunks.map((chunk) => chunk.data).join('');
-    if (params.strip_ansi === true) text = stripAnsi(text);
+    if (params.strip_ansi === true) text = stripTerminalAnsi(text);
     // Переводы строк нормализуются **до** отбора хвоста: `tail` считает
     // строки по `\n`, а в сыром потоке терминала это `\r\n`.
     text = normalizeTerminalLineEndings(text);
@@ -946,16 +818,22 @@ const terminalWriteSchema = z
     enter: z
       .boolean()
       .optional()
-      .describe('Append a newline (submit the line). The line is checked by the shell policy before sending (default: false)'),
+      .describe(
+        'Submit the line: Enter is sent as CR (\\r), which is what the terminal line discipline and '
+          + 'raw-mode programs (tmux command prompt, less, REPLs) expect. '
+          + 'The line is checked by the shell policy before sending (default: false)',
+      ),
   })
   .strict();
 
 export const terminalWriteTool: ToolDefinition = {
   name: 'terminal_write',
   description:
-    'Send input to an interactive terminal by its id (keystrokes, no newline by default). '
-    + 'With enter=true a newline is appended and the line is checked by the same shell policy as execute_shell: '
-    + 'a command that the policy forbids is not sent to the terminal. '
+    'Send input to an interactive terminal by its id (keystrokes, no Enter by default). '
+    + 'With enter=true a CR (\\r) is appended and the line is checked by the same shell policy as '
+    + 'execute_shell: a command that the policy forbids is not sent to the terminal. '
+    + 'Enter is sent as CR (\\r), which is what the terminal line discipline and raw-mode programs '
+    + '(tmux command prompt, less, REPLs) expect — LF does not confirm the line there. '
     + 'An empty data with enter=true sends a bare Enter (submit an empty command line — it is not checked '
     + 'by the shell policy, because there is no command); an empty data without enter=true is rejected. '
     + 'The terminal output becomes visible via terminal_read.',
@@ -985,7 +863,7 @@ export const terminalWriteTool: ToolDefinition = {
         const denial = checkCommandPolicy(command, record.cwd, ctx, params.terminal_id);
         if (denial) return denial;
       }
-      payload = `${params.data.replace(/[\r\n]+$/, '')}\n`;
+      payload = `${params.data.replace(/[\r\n]+$/, '')}\r`;
     } else if (params.data === '') {
       // Пустой ввод без Enter — отправлять нечего: понятный отказ валидации.
       return argErrorResult(
@@ -1059,6 +937,96 @@ export const terminalCloseTool: ToolDefinition = {
   },
 };
 
+// ──────────────────────────── terminal_signal ────────────────────────────
+
+/**
+ * Управляющие сигналы терминала: имя → байт PTY и код возврата `128+signum`.
+ *
+ * `INT` — ETX (`^C`), `QUIT` — FS (`^\`), `TSTP` — SUB (`^Z`). Это **не**
+ * `kill(2)`: байт уходит в поток терминала, и решение принимает
+ * line discipline (или сама программа в raw-режиме).
+ */
+const TERMINAL_SIGNALS = {
+  INT: { payload: '\u0003', exitCode: 130 },
+  QUIT: { payload: '\u001c', exitCode: 131 },
+  TSTP: { payload: '\u001a', exitCode: 147 },
+} as const;
+
+const terminalSignalSchema = z
+  .object({
+    terminal_id: z.string().min(1).describe('Terminal id (term_...) from terminal_list/terminal_open'),
+    signal: z
+      .enum(['INT', 'QUIT', 'TSTP'])
+      .describe(
+        'Signal to send: INT — ^C (SIGINT), QUIT — ^\\ (SIGQUIT), TSTP — ^Z (SIGTSTP). '
+        + 'SIGTERM/SIGKILL of a single command are not expressible through a terminal.',
+      ),
+  })
+  .strict();
+
+/**
+ * `terminal_signal` — управляющий сигнал терминала (`^C`/`^\`/`^Z`).
+ *
+ * Байт уходит в PTY, как нажатие клавиши, а активный запуск терминала
+ * завершается сервисом (`interruptRun`, код `128+signum`): после сигнала
+ * строка-маркер запуска уже не выполняется, и без этого терминал «залип» бы
+ * в `run_busy`.
+ */
+export const terminalSignalTool: ToolDefinition = {
+  name: 'terminal_signal',
+  description:
+    'Send a terminal control signal (^C/^\\/^Z) to an interactive terminal by its id: '
+    + 'INT — SIGINT (^C), QUIT — SIGQUIT (^\\), TSTP — SIGTSTP (^Z). '
+    + 'The byte is written into the PTY like a keypress, and the active run of the terminal is '
+    + 'finished as done with the conventional exit code (128+signal: 130/131/147) — otherwise the '
+    + 'run marker never arrives and the terminal stays busy with run_busy. '
+    + 'To hard-kill the whole PTY use terminal_close; SIGTERM/SIGKILL of a single command are not '
+    + 'expressible through a terminal.',
+  parameters: terminalSignalSchema,
+  capabilities: [ToolCapability.TERMINAL],
+  async execute(args, ctx) {
+    if (isAborted(ctx)) return abortedResult(this.name);
+
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
+    const params = parsed.data as { terminal_id: string; signal: 'INT' | 'QUIT' | 'TSTP' };
+
+    const service = serviceOf(ctx);
+    if (!service) return depsUnavailable();
+    if (!service.isEnabled()) return disabledResult();
+
+    const record = terminalInScope(ctx, service, params.terminal_id);
+    if (!record) return notFound(params.terminal_id);
+
+    const spec = TERMINAL_SIGNALS[params.signal];
+    const actorId = await resolveActorId(ctx);
+    try {
+      service.write(params.terminal_id, spec.payload, { actorId });
+    } catch (err) {
+      return serviceErrorResult(err);
+    }
+    // Маркер завершения запуска после сигнала не придёт: запуск завершаем сами
+    // (`done`, код `128+signum`), иначе терминал остался бы занятым навсегда.
+    const interrupted = service.interruptRun(params.terminal_id, spec.exitCode);
+
+    return {
+      content: sm('terminal.tool.signalled', {
+        terminal_id: params.terminal_id,
+        signal: params.signal,
+      }),
+      metadata: {
+        terminal_id: params.terminal_id,
+        signal: params.signal,
+        interrupt: interrupted ? spec.exitCode : null,
+        i18n: i18nMeta('terminal.tool.signalled', {
+          terminal_id: params.terminal_id,
+          signal: params.signal,
+        }),
+      },
+    };
+  },
+};
+
 // ─────────────────────────────── terminal_run ───────────────────────────────
 
 /** Дефолтный срок ожидания запуска команды (режим с ожиданием), мс. */
@@ -1103,6 +1071,14 @@ const terminalRunSchema = z
       .describe(
         `How long to wait for the command, ms (default: ${DEFAULT_RUN_TIMEOUT_MS}, max: ${MAX_RUN_TIMEOUT_MS}). `
         + 'With background=true it is an optional watchdog — without it the background run has no time limit.',
+      ),
+    kill_on_timeout: z
+      .boolean()
+      .optional()
+      .describe(
+        'On timeout send Ctrl+C (SIGINT) to the command and free the terminal (default: false). '
+        + 'Without it a timeout does NOT kill the command: it keeps running in the PTY and the terminal '
+        + 'stays busy (the next terminal_run fails with run_busy).',
       ),
     strip_ansi: z
       .boolean()
@@ -1158,40 +1134,38 @@ function formatRunResult(
     run_id: run.runId,
     status: run.status,
   });
-  const detail =
-    run.status === 'timeout'
-      ? sm('terminal.tool.run_timeout', {
-          terminal_id: run.terminalId,
-          timeout_ms: String(run.timeoutMs),
-        })
-      : run.status === 'exited'
-        ? sm('terminal.tool.run_exited', { terminal_id: run.terminalId })
+  // «Команда продолжает выполняться» — признак записи запуска (`stillRunning`),
+  // а не статус: `timeout` после убийства команды (`kill_on_timeout`)
+  // терминал уже освободил, и говорить «занят» было бы неправдой.
+  const stillRunning = run.stillRunning === true;
+  const detail = stillRunning
+    ? sm('terminal.tool.run_still_running', {
+        run_id: run.runId,
+        terminal_id: run.terminalId,
+      })
+    : run.status === 'exited'
+      ? sm('terminal.tool.run_exited', { terminal_id: run.terminalId })
+      : run.status === 'timeout'
+        ? sm('terminal.tool.run_timeout', {
+            terminal_id: run.terminalId,
+            timeout_ms: String(run.timeoutMs),
+          })
         : sm('terminal.tool.exit_code', {
             exit_code: run.exitCode !== undefined ? String(run.exitCode) : '-',
           });
-  // Таймаут **не убивает** команду: она продолжает выполняться в PTY, а
-  // терминал остаётся занятым. Об этом сказано прямо — иначе модель решит,
-  // что команда снята, и запустит вторую в занятый терминал.
-  const stillRunning =
-    run.status === 'timeout'
-      ? sm('terminal.tool.run_still_running', {
-          run_id: run.runId,
-          terminal_id: run.terminalId,
-        })
-      : '';
-  const raw = stripAnsiOutput ? stripAnsi(run.output) : run.output;
+  const raw = stripAnsiOutput ? stripTerminalAnsi(run.output) : run.output;
   const body = frameTerminalOutput(raw, {
     terminal: run.terminalId,
     run: run.runId,
     status: run.status,
     ...(run.exitCode !== undefined ? { exit: run.exitCode } : {}),
     ...(run.status === 'timeout' ? { timeout_ms: run.timeoutMs } : {}),
-    ...(run.status === 'timeout' ? { still_running: true } : {}),
+    ...(stillRunning ? { still_running: true } : {}),
   });
   return {
-    content: [header, detail, stillRunning, body].filter((part) => part !== '').join('\n'),
+    content: [header, detail, body].filter((part) => part !== '').join('\n'),
     bytes: Buffer.byteLength(body, 'utf8'),
-    stillRunning: run.status === 'timeout',
+    stillRunning,
   };
 }
 
@@ -1216,9 +1190,10 @@ export const terminalRunTool: ToolDefinition = {
     'Run a command in an interactive terminal. '
     + 'By default (background=false) the tool waits until the command finishes and returns its output '
     + 'wrapped in [CONTENT] ... [CONTENT END] plus the exit code. '
-    + 'On timeout the command is NOT killed: it keeps running in the PTY, the tool reports '
+    + 'On timeout the command is NOT killed by default: it keeps running in the PTY, the tool reports '
     + 'still_running=true with the run id and says that the terminal is busy (the next terminal_run in it '
-    + 'fails with run_busy) — to stop the command, send Ctrl+C via terminal_write. '
+    + 'fails with run_busy) — to stop the command, send Ctrl+C via terminal_write, or pass '
+    + 'kill_on_timeout=true so the timeout itself sends Ctrl+C (SIGINT) and frees the terminal. '
     + 'With background=true the command starts without waiting: the tool returns the run id immediately, '
     + 'and the result (output + exit code) is delivered to the chat as a separate message when the command '
     + 'finishes; timeout_ms is then an optional watchdog (without it the background run has no time limit). '
@@ -1240,6 +1215,7 @@ export const terminalRunTool: ToolDefinition = {
       command: string;
       background?: boolean;
       timeout_ms?: number;
+      kill_on_timeout?: boolean;
       strip_ansi?: boolean;
     };
 
@@ -1267,6 +1243,8 @@ export const terminalRunTool: ToolDefinition = {
         terminalId: params.terminal_id,
         command: params.command,
         timeoutMs,
+        background,
+        killOnTimeout: params.kill_on_timeout === true,
         actorId,
       });
     } catch (err) {
@@ -1286,6 +1264,7 @@ export const terminalRunTool: ToolDefinition = {
           background: true,
           // `timeout_ms` — watchdog: задан → срок, не задан → без лимита.
           ...(params.timeout_ms !== undefined ? { timeout_ms: params.timeout_ms } : {}),
+          ...(params.kill_on_timeout === true ? { kill_on_timeout: true } : {}),
           i18n: i18nMeta('terminal.tool.run_background_started', { run_id: run.runId }),
         },
       };

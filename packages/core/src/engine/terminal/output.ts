@@ -18,6 +18,16 @@
  *   `\r\n` (режим терминала ONLCR), а модель не должна различать «CRLF» и
  *   «LF».
  *
+ * ## Очистка вывода запуска
+ *
+ * Вывод команды, ушедшей в интерактивную оболочку, содержит служебный шум:
+ * ANSI-последовательности, эхо введённой строки-обёртки (маркер `OSC 7770`
+ * печатается `printf`-ом, но **сама строка** эхом PTY попадает в поток),
+ * прогресс-вывод с `\r`. Для модели это мусор, поэтому `cleanRunOutput`
+ * прогоняет текст через `stripTerminalAnsi` → `removeRunWrapper` →
+ * `normalizeTerminalOutput` — **тот же** вид, что у инлайн-ответа
+ * `terminal_run` и у уведомления о завершении фонового запуска.
+ *
  * ## Границы
  *
  * - **Нормализация — только для возвращаемого текста.** Кольцевой буфер
@@ -25,6 +35,11 @@
  *   разбирает `\r\n`), и переписывать его значило бы ломать отображение.
  * - **Одиночный `\r` не трогаем** — это «возврат каретки» прогрес-вывода
  *   (`\r` перезаписывает строку), а не перевод строки.
+ * - **Эхо обёртки снимается сравнением строки, а не подстроки.** У маркера
+ *   уникальный nonce, поэтому «похожие» строки (например, вывод `cat`
+ *   исходника) не трогаются: удаляется строка, `trim()` которой равен
+ *   команде-обёртке, — или заканчивается ею (промпт оболочки печатается в той
+ *   же строке, что и эхо ввода).
  */
 
 /** Маркер начала обрамления вывода терминала. */
@@ -127,6 +142,181 @@ export function normalizeTerminalOutput(text: string): string {
   if (text === '') return '';
   const normalized = normalizeTerminalLineEndings(text);
   return normalized.replace(/(?:\n[ \t]*)+$/, '');
+}
+
+/** ESC — начало escape-последовательности. */
+const ESC = '\u001B';
+
+/** BEL — завершает OSC-строку. */
+const BEL = '\u0007';
+
+/** CSI в 8-битном виде. */
+const CSI_8BIT = '\u009B';
+
+/** ST в 8-битном виде — второй вариант завершения OSC. */
+const ST_8BIT = '\u009C';
+
+/**
+ * «Широкая» вставка пробелов (рамки powerline и т.п.).
+ *
+ * Подряд **больше 40** пробелов внутри строки схлопываются в один пробел:
+ * такие вставки не несут смысла, а только раздувают вывод.
+ */
+const WIDE_SPACE_RUN_PATTERN = / {41,}/g;
+
+/**
+ * Конец OSC-строки (после `ESC ]`): BEL или ST (`ESC \`).
+ *
+ * Незавершённая OSC-строка съедает остаток потока — как в терминале: иначе в
+ * вывод попал бы мусор служебной строки.
+ */
+function skipOsc(text: string, from: number): number {
+  for (let i = from; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (ch === BEL) return i + 1;
+    if (ch === ST_8BIT) return i + 1;
+    if (ch === ESC && text[i + 1] === '\\') return i + 2;
+  }
+  return text.length;
+}
+
+/** Конец CSI-последовательности (после `ESC [`): финальный байт 0x40…0x7E. */
+function skipCsi(text: string, from: number): number {
+  for (let i = from; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0x40 && code <= 0x7e) return i + 1;
+  }
+  return text.length;
+}
+
+/**
+ * Вырезать escape-последовательности из текста.
+ *
+ * - **OSC** (`ESC ] …`) вырезается **целиком** — до BEL или ST: в потоке
+ *   терминала это служебные строки (в т.ч. маркер запуска
+ *   `ESC ] 7770 ; synth-run ; …` и `ESC ] 3008 ; …`), которые модели видеть
+ *   не нужно;
+ * - **CSI** (`ESC [ …`) вырезается целиком (цвета/позиционирование);
+ * - прочие escape-последовательности (`ESC` + символ) вырезаются целиком.
+ */
+function stripEscapeSequences(text: string): string {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === ESC) {
+      const next = text[i + 1];
+      if (next === ']') {
+        i = skipOsc(text, i + 2);
+        continue;
+      }
+      if (next === '[') {
+        i = skipCsi(text, i + 2);
+        continue;
+      }
+      // Прочие escape-последовательности: `ESC` + финальный символ.
+      i += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (ch === CSI_8BIT) {
+      i = skipCsi(text, i + 1);
+      continue;
+    }
+    if (ch === ST_8BIT) {
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Нормализовать управляющие символы: backspace и «возврат каретки».
+ *
+ * - `X\b` — backspace удаляет предыдущий символ; `\b` в начале — ничего
+ *   (удалять нечего);
+ * - одиночный `\r` (не часть `\r\n`) вырезается: в плоском тексте «возврат
+ *   каретки» ничего не значит, а в потоке терминала он приходит от
+ *   прогресс-вывода и портит читаемость.
+ */
+function normalizeControlChars(text: string): string {
+  const chars = Array.from(text);
+  const out: string[] = [];
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i]!;
+    if (ch === '\b') {
+      if (out.length > 0) out.pop();
+      continue;
+    }
+    if (ch === '\r') {
+      // `\r\n` — обычный перевод строки (сохраняем), одиночный `\r` — нет.
+      if (chars[i + 1] === '\n') out.push('\r');
+      continue;
+    }
+    out.push(ch);
+  }
+  return out.join('');
+}
+
+/**
+ * Убрать из вывода терминала управляющие последовательности и привести его к
+ * читаемому виду.
+ *
+ * Вырезаются: escape-последовательности (CSI/OSC — **целиком**, OSC до BEL/ST),
+ * действие backspace (`X\b` → удалить символ), одиночный `\r`; «широкие»
+ * вставки пробелов (подряд больше 40) схлопываются в один пробел.
+ */
+export function stripTerminalAnsi(text: string): string {
+  if (text === '') return '';
+  const withoutSequences = stripEscapeSequences(text);
+  const normalized = normalizeControlChars(withoutSequences);
+  return normalized.replace(WIDE_SPACE_RUN_PATTERN, ' ');
+}
+
+/**
+ * Убрать из вывода **точное** эхо служебной строки-обёртки запуска.
+ *
+ * `wrapperCommand` — строка, которую сервис отправил после команды (маркер
+ * `OSC 7770`). PTY эхом возвращает её в поток, и без очистки она видна модели.
+ *
+ * Сравнение — построчно, по `trim()` строки: удаляется строка, которая либо
+ * **целиком** равна команде-обёртке, либо **заканчивается** ею (оболочка
+ * печатает промпт в той же строке, что и эхо ввода: `user@host:~$ printf '…'`).
+ * У маркера уникальный nonce, поэтому «похожие» строки (вывод `cat`, примеры
+ * в тексте) не трогаются: совпасть с обёрткой может только её собственное эхо.
+ * Пустая команда-обёртка — очистка не выполняется.
+ */
+export function removeRunWrapper(text: string, wrapperCommand: string): string {
+  const needle = wrapperCommand.trim();
+  if (text === '' || needle === '') return text;
+  if (!text.includes(needle)) return text;
+  return text
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (trimmed === needle) return false;
+      return !trimmed.endsWith(needle);
+    })
+    .join('\n');
+}
+
+/**
+ * Полная очистка вывода запуска для модели.
+ *
+ * Порядок: `stripTerminalAnsi` (ANSI/OSC/backspace/`\r`/широкие пробелы) →
+ * `removeRunWrapper` (точное эхо обёртки, если она известна) →
+ * `normalizeTerminalOutput` (`\r\n` → `\n`, хвостовые пустые строки). Тот же
+ * вид, что у инлайн-ответа и уведомления о завершении фонового запуска.
+ */
+export function cleanRunOutput(text: string, wrapperCommand?: string): string {
+  const stripped = stripTerminalAnsi(text);
+  const withoutWrapper =
+    wrapperCommand !== undefined && wrapperCommand !== ''
+      ? removeRunWrapper(stripped, wrapperCommand)
+      : stripped;
+  return normalizeTerminalOutput(withoutWrapper);
 }
 
 /**

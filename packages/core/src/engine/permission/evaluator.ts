@@ -183,6 +183,9 @@ const PLAN_BLOCKED_SSH_TOOLS: ReadonlySet<string> = new Set(SSH_TOOLS);
  * эффектом** permission-слоя (`plan.deny`, `unavailable(mode)`), а не проверкой
  * внутри тула: проверки прав в тулах не заводят (ADR-025/ADR-029).
  *
+ * Сигнал терминала (`terminal_signal`) блокируется тем же списком: отправка
+ * `^C`/`^\`/`^Z` — исполнение, а не наблюдение.
+ *
  * Чтение (`terminal_list`/`terminal_read`/`terminal_snapshot`) в plan-режиме
  * разрешено — планирование часто требует увидеть состояние терминала.
  */

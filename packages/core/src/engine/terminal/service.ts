@@ -93,6 +93,15 @@ import {
  */
 const TERMINAL_SNAPSHOT_INTERVAL_MS = 60_000;
 
+/**
+ * `ETX` (Ctrl+C) — прерывание текущей строки/команды в интерактивной оболочке.
+ *
+ * Кадр ввода с этим байтом означает «пользователь прервал команду»: маркер
+ * завершения запуска (отдельная строка после команды) уже не выполнится,
+ * поэтому активный запуск завершается сервисом (`interrupt`).
+ */
+const ETX = '\u0003';
+
 /** Живой терминал: запись реестра + хэндл PTY + буфер и подписчики. */
 interface TerminalRuntime {
   /** Запись реестра (единственный источник правды по метаданным). */
@@ -297,6 +306,7 @@ export class TerminalService {
       timers: this._timers,
       logger: this._logger,
       onSettled: (run) => this._handleRunSettled(run),
+      onKillTimeout: (terminalId) => this._killRunOnTimeout(terminalId),
     });
     this._startReaper();
     this._startSnapshotTimer();
@@ -494,6 +504,16 @@ export class TerminalService {
    * кадр (в том числе при выключенном аудите ввода: объём виден, содержимого
    * нет).
    *
+   * **Ctrl+C (`ETX`, `0x03`) — «пользователь прервал команду».** В
+   * интерактивной оболочке Ctrl+C прерывает **строку**: строка-маркер,
+   * которую сервис отправил после команды отдельной строкой, уже не
+   * выполняется, её `printf` в поток не придёт. Поэтому сразу после записи
+   * ETX активный запуск терминала завершается через
+   * `TerminalRunRegistry.interrupt()` — статус `done`, `exitCode: 130`,
+   * `stillRunning: false`: терминал свободен, уведомление уходит как обычно
+   * (для фонового запуска). Иначе запуск остался бы активным навсегда и
+   * любой следующий `startRun` получал бы `run_busy`.
+   *
    * @throws TerminalNotFoundError — терминала нет.
    * @throws TerminalExitedError — терминал завершён (ввод невозможен).
    */
@@ -515,6 +535,9 @@ export class TerminalService {
     handle.write(data);
     runtime.record.lastActivityAt = this._now();
     this._metrics?.addBytes('input', bytes);
+    // Ctrl+C: команда прервана пользователем — маркер не придёт, запуск
+    // завершаем сами (`done`/130), иначе терминал «залипнет» занятым.
+    if (data.includes(ETX)) this._runs.interrupt(runtime.record.id);
     // Команда — кадр с `Enter`; только он попадает в журнал исполнений,
     // и только если аудит ввода включён на инстансе.
     const enter = data.includes('\n') || data.includes('\r');
@@ -833,6 +856,10 @@ export class TerminalService {
    * забирает код возврата. Маркер вырезается из потока (и из буфера), в
    * вывод модели не попадает.
    *
+   * **Строки уходят с `\r`, а не с `\n`:** терминал работает в raw-режиме, и
+   * `Enter` там — это CR (`tmux`/`less`/REPL ждут именно `\r`; LF не
+   * подтверждает ввод).
+   *
    * Ожидания завершения здесь нет — вызывающий ждёт сам (`waitRun`) или
    * забирает результат позже (`getRun`).
    *
@@ -844,6 +871,10 @@ export class TerminalService {
     terminalId: string;
     command: string;
     timeoutMs: number;
+    /** Фоновый запуск: завершение доставляется уведомлением в сессию. */
+    background?: boolean;
+    /** По истечении watchdog'а убить команду (Ctrl+C) и освободить терминал. */
+    killOnTimeout?: boolean;
     actorId?: string;
   }): TerminalRunRecord {
     this._assertUsable();
@@ -854,12 +885,18 @@ export class TerminalService {
       ...(runtime.record.sessionId !== undefined ? { sessionId: runtime.record.sessionId } : {}),
       command,
       timeoutMs: input.timeoutMs,
+      ...(input.background !== undefined ? { background: input.background } : {}),
+      ...(input.killOnTimeout !== undefined ? { killOnTimeout: input.killOnTimeout } : {}),
     });
+    // Строка-обёртка: реестр строит её из своего nonce и хранит в записи
+    // запуска — по ней из вывода снимается эхо служебной строки.
+    const markerCommand = run.wrapperCommand ?? buildRunMarkerCommand(run.nonce);
     try {
-      this.write(runtime.record.id, `${command}\n`, {
+      // Enter в raw-режиме терминала — это CR, а не LF.
+      this.write(runtime.record.id, `${command}\r`, {
         ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
       });
-      this.write(runtime.record.id, `${buildRunMarkerCommand(run.nonce)}\n`, {
+      this.write(runtime.record.id, `${markerCommand}\r`, {
         ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
       });
     } catch (err) {
@@ -886,7 +923,7 @@ export class TerminalService {
   }
 
   /**
-   * Отменить запуск (статус `closed`).
+   * Отменить запуск (статус `exited` — запуск больше не отслеживается).
    *
    * @returns `true`, если запуск был активен.
    */
@@ -895,12 +932,32 @@ export class TerminalService {
   }
 
   /**
+   * Прервать активный запуск терминала сигналом из `terminal_signal`.
+   *
+   * Байт сигнала пишет вызывающий (`write`), а запуск завершается здесь:
+   * после `^C`/`^\`/`^Z` строка-маркер запуска уже не выполняется, и без
+   * этого метода терминал остался бы занятым навсегда (`run_busy`).
+   * Запуск получает статус `done` и код `exitCode` (по умолчанию `130` —
+   * `128+SIGINT`), `stillRunning: false`: терминал свободен.
+   *
+   * @returns `true`, если активный запуск был и завершён.
+   */
+  interruptRun(terminalId: string, exitCode = 130): boolean {
+    return this._runs.interrupt(terminalId, exitCode);
+  }
+
+  /**
    * Запуск завершён — зовём колбэк точки сборки (уведомление сессии).
    *
+   * **Только для фоновых запусков** (`run.background === true`): у режима с
+   * ожиданием ответ модели уже ушёл инлайн (`terminal_run`), и уведомление
+   * было бы дублем одного и того же результата в контексте.
+   *
    * Ошибка колбэка не ломает терминал: результат уже в реестре, а уведомление
-   * —best-effort (как уведомление о фоновом процессе).
+   * — best-effort (как уведомление о фоновом процессе).
    */
   private _handleRunSettled(run: TerminalRunRecord): void {
+    if (run.background !== true) return;
     const handler = this._onRunFinished;
     if (!handler) return;
     const runtime = this._terminals.get(run.terminalId);
@@ -919,6 +976,39 @@ export class TerminalService {
     } catch (err) {
       this._logger.warn(
         `[TerminalService] уведомление о завершении запуска ${run.runId} не удалось: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Watchdog запуска с убийством команды (`killOnTimeout`): пишем `ETX` (Ctrl+C).
+   *
+   * Пишем **напрямую в хэндл**, без повторного прохода через `write()`:
+   * служебный байт не должен зависеть от политики ввода (кап кадра, token
+   * bucket), а аудит `terminal.input` не должен фиксировать не-пользовательский
+   * кадр. Запуск завершит реестр (`timeout` + `stillRunning: false`).
+   */
+  private _killRunOnTimeout(terminalId: string): void {
+    const runtime = this._terminals.get(terminalId);
+    const handle = runtime?.handle;
+    if (!runtime || !handle) {
+      this._logger.warn(
+        `[TerminalService] таймаут запуска: PTY терминала ${terminalId} уже закрыт — прерывать нечего`,
+      );
+      return;
+    }
+    try {
+      handle.write(ETX);
+      runtime.record.lastActivityAt = this._now();
+      this._metrics?.addBytes('input', Buffer.byteLength(ETX, 'utf8'));
+      this._logger.warn(
+        `[TerminalService] таймаут запуска в терминале ${terminalId}: команда прервана (Ctrl+C)`,
+      );
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalService] не удалось прервать команду в терминале ${terminalId}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

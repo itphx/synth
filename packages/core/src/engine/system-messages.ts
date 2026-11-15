@@ -835,6 +835,7 @@ export const SYSTEM_MESSAGES = {
   'terminal.tool.no_output': 'The terminal has not produced any output yet',
   'terminal.tool.opened': 'Terminal {id} is open (use terminal_write to send input, terminal_read to read the output)',
   'terminal.tool.written': 'Input sent to terminal {id}',
+  'terminal.tool.signalled': 'Sent signal {signal} to terminal {terminal_id}',
   'terminal.tool.closed': 'Terminal {id} is closed',
   'terminal.tool.command_denied':
     'Error: the command is forbidden by the shell policy and was not sent to the terminal: {reason}',

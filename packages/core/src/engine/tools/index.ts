@@ -99,6 +99,7 @@ import {
   terminalReadTool,
   terminalSnapshotTool,
   terminalWriteTool,
+  terminalSignalTool,
   terminalCloseTool,
   terminalRunTool,
 } from './terminals.js';
@@ -265,6 +266,7 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   terminalReadTool,
   terminalSnapshotTool,
   terminalWriteTool,
+  terminalSignalTool,
   terminalCloseTool,
   terminalRunTool,
 ];

@@ -31,7 +31,7 @@
 | Модели (ADR-115) | `list_models` — каталог моделей инстанса (capability `models`, группа `read`, plan разрешён, рабочий каталог не нужен): `provider/model` + `modalities`, **текущая** модель сессии и `defaultFor` (семейства, где модель назначена в `attachments.modalityModels`); без аргументов — компактный ответ (текущая + aux, без дампа каталога: у больших каталогов — сотни моделей), фильтры `modality`/`provider` и `limit` 1..50 (по умолчанию 20); модели без известных модальностей пропускаются и считаются отдельно |
 | Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (ADR-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
-| Терминалы (PROP-132) | `terminal_list`, `terminal_read`, `terminal_snapshot` (чтение; plan разрешён), `terminal_open`, `terminal_write`, `terminal_close`, `terminal_run` (мутации/исполнение; plan запрещён) — capability `terminal`, группа правил `terminal`; параметры, лимиты, обрамление `[CONTENT …]`, режимы запуска (`background`), «экран вместо потока» (`terminal_snapshot`) и правило «нет `cwd` — нет открытия» — в разделе «Терминалы» ниже |
+| Терминалы (PROP-132) | `terminal_list`, `terminal_read`, `terminal_snapshot` (чтение; plan разрешён), `terminal_open`, `terminal_write`, `terminal_signal`, `terminal_close`, `terminal_run` (мутации/исполнение; plan запрещён) — capability `terminal`, группа правил `terminal`; параметры, лимиты, обрамление `[CONTENT …]`, режимы запуска (`background`, `kill_on_timeout`), «экран вместо потока» (`terminal_snapshot`), сигналы (`terminal_signal`) и правило «нет `cwd` — нет открытия» — в разделе «Терминалы» ниже |
 
 **Общий предел вывода** (`tools.outputMaxLines`/`tools.outputMaxBytes`, по умолчанию
 2000 строк / 51 200 байт) применяется в единой точке вызова (`executeToolDef`)
@@ -220,9 +220,9 @@ core получает доступ через серверный контрак�
   админом через `tools.disabled`.
 - **Plan-режим:** чтение (`terminal_list`, `terminal_read`,
   `terminal_snapshot`) **разрешено**,
-  мутации (`terminal_open`, `terminal_write`, `terminal_close`) и **запуск
-  команд** (`terminal_run` — оба режима) — **заблокированы**
-  (`isPlanBlockedTool`): план ничего не исполняет.
+  мутации (`terminal_open`, `terminal_write`, `terminal_signal`,
+  `terminal_close`) и **запуск команд** (`terminal_run` — оба режима) —
+  **заблокированы** (`isPlanBlockedTool`): план ничего не исполняет.
 - **Доступность — по мастер-выключателю инстанса** `terminal.enabled`
   (env `SYNTH_TERMINAL_ENABLED` > runtime-«Терминалы» > `config.yaml` >
   default `true`). Выключено → тулы недоступны модели с причиной `policy`
@@ -243,10 +243,10 @@ core получает доступ через серверный контрак�
   закрывающий маркер **не меняется** (`[CONTENT END]`). Значения атрибутов
   санитизируются: без переводов строк, пробелов и `]`, кап 120 символов;
   атрибут без значения не выводится. Таблица атрибутов — ниже.
-- **У тулов без вывода (`terminal_open`, `terminal_write`, `terminal_list`,
-  `terminal_close`) маркера нет:** метаданные — в `metadata` ответа тула
-  (`terminal_id`, `status`, `bytes`, `count`, `terminals[]` и т.д.), текст
-  ответа — обычный (без `[CONTENT …]`).
+- **У тулов без вывода (`terminal_open`, `terminal_write`, `terminal_signal`,
+  `terminal_list`, `terminal_close`) маркера нет:** метаданные — в `metadata`
+  ответа тула (`terminal_id`, `status`, `bytes`, `count`, `terminals[]`,
+  `signal`, `interrupt` и т.д.), текст ответа — обычный (без `[CONTENT …]`).
 - **`terminal_open` не идемпотентен.** Каждый вызов открывает **новый** терминал
   (новый PTY, свой буфер вывода): два открытия одного каталога дают два
   независимых терминала. Размеры по умолчанию — **80×24**, если `cols`/`rows`
@@ -257,13 +257,16 @@ core получает доступ через серверный контрак�
   символ; `\b` в начале — ничего), **одиночный `\r`** (не часть `\r\n`);
   «широкие» вставки пробелов (подряд **больше 40**) схлопываются в один
   пробел. Цель — читаемый вывод.
-- **Таймаут `terminal_run` (режим с ожиданием) не убивает команду.** Команда
-  продолжает выполняться в PTY; терминал остаётся **занятым** этим запуском
-  (следующий `terminal_run` в нём — отказ `terminal.tool.run_busy`). Ответ тула
-  это говорит прямо: `metadata.still_running = true`, `metadata.run_id` и
-  подсказка «команда продолжает выполняться; терминал занят; чтобы остановить —
-  пошлите Ctrl+C через `terminal_write`». Когда команда доиграет, терминал
-  освободится сам (уведомление о завершении при этом одно).
+- **Таймаут `terminal_run` (режим с ожиданием) по умолчанию не убивает
+  команду.** Команда продолжает выполняться в PTY; терминал остаётся
+  **занятым** этим запуском (следующий `terminal_run` в нём — отказ
+  `terminal.tool.run_busy`). Ответ тула это говорит прямо: `metadata.still_running
+  = true`, `metadata.run_id` и подсказка «команда продолжает выполняться;
+  терминал занят; чтобы остановить — пошлите Ctrl+C через `terminal_write`».
+  С `kill_on_timeout: true` по таймауту сервис сам шлёт Ctrl+C (SIGINT) и
+  **освобождает** терминал: статус остаётся `timeout`, но `still_running` нет и
+  следующий запуск проходит. Когда команда доиграет сама, терминал
+  освободится (уведомление о завершении при этом одно).
 - **Реестр терминалов после рестарта ядра восстанавливается из снимков** —
   **не живые терминалы**: PTY умер вместе с процессом, поэтому запись
   поднимается со статусом `exited` и признаком `restored: true` (хвост вывода
@@ -277,8 +280,9 @@ core получает доступ через серверный контрак�
 | `terminal_open` | `cols?` (по умолчанию 80, 1…1000), `rows?` (по умолчанию 24, 1…1000), `session_id?` (привязка; по умолчанию — текущая сессия), `title?` | `terminal` (write) | **запрещён** | Каталог вычисляет сервер; **параметра `cwd` нет** (см. правило ниже). **Каждый вызов открывает новый терминал — идемпотентности нет:** два открытия одного каталога дают два независимых PTY со своим выводом (совпадающие `cwd`/`shell` схлопываются только у **одновременных** незавершённых открытий). Размеры по умолчанию — **80×24**, если `cols`/`rows` не заданы |
 | `terminal_read` | `terminal_id`, `since?` (только фрагменты с `seq > since`), `tail?` (последние N строк, 1…5000), `history?` (по умолчанию `false`), `strip_ansi?` (по умолчанию `false`) | `terminal` (read) | разрешён | Кап **32 КиБ** текста (хвост обрезается, `metadata.truncated`); **ANSI по умолчанию сохраняется** (цвета/позиционирование значимы), `strip_ansi: true` вырезает escape-последовательности (CSI/OSC целиком, backspace, одиночный `\r`) и схлопывает «широкие» вставки пробелов (>40 подряд → один пробел); `tail` отбрасывает завершающий пустой элемент (`'a\nb\nc\nd\n'` + `tail: 2` → `'c\nd'`); `history: true` — **весь доступный ring buffer** (кап тот же, `metadata.truncated`/`metadata.dropped_bytes`), `since`/`tail` при этом игнорируются; пустой буфер → `terminal.tool.history_empty` |
 | `terminal_snapshot` | `terminal_id`, `cols?` (20…300; по умолчанию — ширина терминала), `rows?` (5…100; по умолчанию — высота терминала), `scrollback?` (0…500, по умолчанию `0`) | `terminal` (read) | разрешён | **Видимый экран**, а не поток: буфер прогоняется через headless-эмулятор xterm (`@xterm/headless`) и возвращается сетка `cols × rows` — как `tmux capture-pane -p`. Нужен для TUI (`htop`, `top`, `nvtop`, `tmux`, редакторы): перерисовка управляющими последовательностями в потоке нечитаема. ANSI-цвета **отбрасываются** (только содержимое ячеек), хвостовые пробелы обрезаны по правому краю; хвостовые пустые строки обрезаются, полностью пустой экран → `terminal.tool.snapshot_empty`. `scrollback` — ёмкость буфера эмулятора (история), в снимок всё равно попадает **видимый** экран. Работает и для `exited` (экран последнего вывода). `metadata`: `terminal_id`, `status`, `cols`, `rows`, `cursor {x,y}`, `lines`, `has_content` |
-| `terminal_write` | `terminal_id`, `data` (нажатые клавиши; **может быть пустой**), `enter?` (по умолчанию `false` — без перевода строки) | `terminal` (write) | **запрещён** | С `enter: true` строка проходит **тот же чекер, что у `execute_shell`** (`checkShellCommand`): запрещённая политикой команда в терминал не уходит; требующая подтверждения (`ask`) — тоже (тул не умеет спрашивать пользователя: для таких команд — `execute_shell`). **Пустой `data`:** с `enter: true` — отправляется чистый Enter (`\n`), команда пустая и shell-guard её **не** проверяет; без `enter` — отказ валидации (отправлять нечего). **Поведение по умолчанию не меняется:** ввод уходит сразу, результата команда не ждёт и автоматически не возвращает |
-| `terminal_run` | `terminal_id`, `command`, `background?` (по умолчанию `false`), `timeout_ms?` (по умолчанию 30000, 1…600000), `strip_ansi?` | `terminal` (write) | **запрещён** | **Один тул — два режима** (как `execute_shell`/`task`). `background: false` — **с ожиданием завершения**: команда проходит тот же shell-guard, что и `terminal_write` с `enter: true`; по завершении возвращает вывод в обрамлении `[CONTENT …]`…`[CONTENT END]` + код возврата (`metadata.exit_code`). **По таймауту команда НЕ убивается:** она продолжает выполняться в PTY, терминал остаётся занятым (следующий запуск — `terminal.tool.run_busy`), а ответ говорит об этом прямо — `metadata.still_running = true`, `metadata.run_id` и подсказка «остановить — Ctrl+C через `terminal_write`». `background: true` — **без ожидания**: тул возвращает `run_id` сразу, а результат приходит **сообщением в чат** (как у фоновых шелл-процессов, ADR-113) — `role: USER`, автор `Process`, `metadata.type='background_run_result'`, `terminal_id`/`run_id`/`state`/`exit_code`/`command`/`started_at`/`finished_at`/`duration_ms`; текст — заголовок + вывод в обрамлении `[CONTENT …]`…`[CONTENT END]` (хвост ≤ 32 КиБ). Таймаут → `state: 'timeout'` (+ `still_running: true`), выход терминала → `state: 'exited'` (частичный вывод). Терминал без привязки к сессии — уведомления нет (только лог). **Один активный запуск на терминал:** если запуск уже идёт — отказ `terminal.tool.run_busy` (в обоих режимах) |
+| `terminal_write` | `terminal_id`, `data` (нажатые клавиши; **может быть пустой**), `enter?` (по умолчанию `false` — без Enter) | `terminal` (write) | **запрещён** | С `enter: true` строка проходит **тот же чекер, что у `execute_shell`** (`checkShellCommand`): запрещённая политикой команда в терминал не уходит; требующая подтверждения (`ask`) — тоже (тул не умеет спрашивать пользователя: для таких команд — `execute_shell`). **Enter — CR (`\r`), а не LF:** терминальная line discipline и raw-режим (tmux-промпт, `less`, REPL) подтверждают ввод именно по CR; хвостовые `\r`/`\n` из `data` срезаются перед добавлением одного CR. **Пустой `data`:** с `enter: true` — отправляется чистый Enter (`\r`), команда пустая и shell-guard её **не** проверяет; без `enter` — отказ валидации (отправлять нечего). **Поведение по умолчанию не меняется:** ввод уходит сразу, результата команда не ждёт и автоматически не возвращает |
+| `terminal_signal` | `terminal_id`, `signal` (`INT`/`QUIT`/`TSTP`) | `terminal` (write) | **запрещён** | Управляющий сигнал терминала: `INT` → `^C` (`0x03`, SIGINT), `QUIT` → `^\` (`0x1c`, SIGQUIT), `TSTP` → `^Z` (`0x1a`, SIGTSTP). Байт пишется в PTY как нажатие клавиши, затем **активный запуск терминала завершается** сервисом (`interruptRun`) как `done` с кодом `128+signum` (130/131/147) — иначе маркер запуска не придёт и терминал залип бы в `run_busy`. `metadata`: `terminal_id`, `signal`, `interrupt` (код завершения либо `null`, если активного запуска не было). `SIGTERM`/`SIGKILL` отдельной команды через PTY не выражаются (жёстко — `terminal_close`) |
+| `terminal_run` | `terminal_id`, `command`, `background?` (по умолчанию `false`), `timeout_ms?` (по умолчанию 30000, 1…600000), `kill_on_timeout?` (по умолчанию `false`), `strip_ansi?` | `terminal` (write) | **запрещён** | **Один тул — два режима** (как `execute_shell`/`task`). `background: false` — **с ожиданием завершения**: команда проходит тот же shell-guard, что и `terminal_write` с `enter: true`; по завершении возвращает вывод в обрамлении `[CONTENT …]`…`[CONTENT END]` + код возврата (`metadata.exit_code`). **По таймауту команда по умолчанию НЕ убивается:** она продолжает выполняться в PTY, терминал остаётся занятым (следующий запуск — `terminal.tool.run_busy`), а ответ говорит об этом прямо — `metadata.still_running = true`, `metadata.run_id` и подсказка «остановить — Ctrl+C через `terminal_write`». `kill_on_timeout: true` — по таймауту сервис шлёт Ctrl+C и освобождает терминал (статус `timeout`, `still_running` нет). `background: true` — **без ожидания**: тул возвращает `run_id` сразу, а результат приходит **сообщением в чат** (как у фоновых шелл-процессов, ADR-113) — `role: USER`, автор `Process`, `metadata.type='background_run_result'`, `terminal_id`/`run_id`/`state`/`exit_code`/`command`/`started_at`/`finished_at`/`duration_ms`; текст — заголовок + вывод в обрамлении `[CONTENT …]`…`[CONTENT END]` (хвост ≤ 32 КиБ). Таймаут → `state: 'timeout'` (+ `still_running: true` без `kill_on_timeout`), выход терминала → `state: 'exited'` (частичный вывод). Терминал без привязки к сессии — уведомления нет (только лог). **Один активный запуск на терминал:** если запуск уже идёт — отказ `terminal.tool.run_busy` (в обоих режимах) |
 | `terminal_close` | `terminal_id` | `terminal` (write) | **запрещён** | Оболочка завершается, запись удаляется из реестра; активный запуск команды при этом завершается статусом `exited` |
 
 ### Формат маркера `[CONTENT …]`
@@ -380,9 +384,9 @@ terminal_snapshot { terminal_id: "term_1", rows: 10 }
 Пустой экран (программа ещё ничего не нарисовала или экран очищен) — отдельный
 текст `terminal.tool.snapshot_empty`, а не обрамление с пустым телом.
 
-У `terminal_open`, `terminal_write`, `terminal_list`, `terminal_close` вывода
-нет — **маркера тоже нет**: их метаданные лежат в `metadata` ответа тула
-(текст ответа — обычный, без `[CONTENT …]`).
+У `terminal_open`, `terminal_write`, `terminal_signal`, `terminal_list`,
+`terminal_close` вывода нет — **маркера тоже нет**: их метаданные лежат в
+`metadata` ответа тула (текст ответа — обычный, без `[CONTENT …]`).
 
 **Правило «нет `cwd` — нет открытия».** Рабочий каталог терминала вычисляет
 сервер: `session.worktree.directory` (ADR-114) → `project.workspace` (ADR-075).
@@ -398,7 +402,8 @@ terminal_snapshot { terminal_id: "term_1", rows: 10 }
 | Что делает тул | запускает команду и **ждёт** завершения | запускает команду и **возвращает управление сразу** |
 | Что возвращает тул | вывод в обрамлении `[CONTENT …]`…`[CONTENT END]` + код возврата (`metadata.exit_code`, `metadata.status`) | `run_id` терминального запуска + подсказка (`metadata.run_id`, `metadata.status: 'running'`, `metadata.background: true`) |
 | Где приходит результат | в ответе тула | **сообщением в чат** (`metadata.type='background_run_result'`, автор `Process`) — доставляет сервис терминалов (`onRunFinished`), а не тул |
-| `timeout_ms` | срок ожидания (по умолчанию 30000, 1…600000); по истечении — **команда не убивается**: она продолжает выполняться в PTY, терминал остаётся занятым (следующий запуск — `run_busy`), ответ несёт `metadata.still_running: true` + `metadata.run_id` и подсказку «остановить — Ctrl+C через `terminal_write`» | необязательный **watchdog**; не задан — таймер не ставится вовсе (лимита нет). Сработавший watchdog — тот же статус `timeout` (команда не убита) |
+| `timeout_ms` | срок ожидания (по умолчанию 30000, 1…600000); по истечении — **команда не убивается**: она продолжает выполняться в PTY, терминал остаётся занятым (следующий запуск — `run_busy`), ответ несёт `metadata.still_running: true` + `metadata.run_id` и подсказку «остановить — Ctrl+C через `terminal_write`» (если не задан `kill_on_timeout`) | необязательный **watchdog**; не задан — таймер не ставится вовсе (лимита нет). Сработавший watchdog — тот же статус `timeout` (без `kill_on_timeout` команда не убита) |
+| `kill_on_timeout` | `true` — по таймауту сервис шлёт Ctrl+C (SIGINT) и **освобождает** терминал: статус `timeout`, `still_running` нет; `false`/не задан — прежнее поведение (команда остаётся работать, терминал занят) | то же (watchdog фонового запуска тоже может погасить команду) |
 | `strip_ansi` | вырезает ANSI из вывода в ответе | не влияет: вывод доставляет сервис терминалов |
 | План-режим | **запрещён** | **запрещён** |
 | Занятый терминал | отказ `terminal.tool.run_busy` | отказ `terminal.tool.run_busy` |
@@ -415,14 +420,49 @@ terminal_list {}                                  → список термин�
 terminal_open { cols: 120, rows: 40 }             → открыть терминал (id в ответе; каждый вызов — новый)
 terminal_write { terminal_id: "term_…", data: "npm test", enter: true }
 terminal_write { terminal_id: "term_…", data: "", enter: true } → чистый Enter (пустая команда)
+terminal_signal { terminal_id: "term_…", signal: "INT" }  → ^C: прервать команду, освободить терминал
+terminal_signal { terminal_id: "term_…", signal: "TSTP" } → ^Z: приостановить (SIGTSTP)
 terminal_read  { terminal_id: "term_…", tail: 20 } → последние 20 строк вывода
 terminal_read  { terminal_id: "term_…", since: 42, strip_ansi: true }
 terminal_read  { terminal_id: "term_…", history: true } → вся история вывода
 terminal_run   { terminal_id: "term_…", command: "npm test", timeout_ms: 60000 }
+terminal_run   { terminal_id: "term_…", command: "npm test", timeout_ms: 60000, kill_on_timeout: true }
 terminal_run   { terminal_id: "term_…", command: "npm test", background: true }
 terminal_run   { terminal_id: "term_…", command: "npm test", background: true, timeout_ms: 600000 }
 terminal_close { terminal_id: "term_…" }
 ```
+
+### Сигналы и остановка команды
+
+Терминал — не `kill(2)`: сигнал уходит **байтом в поток PTY**, и решение
+принимает line discipline (или сама программа в raw-режиме). Поэтому
+выразимы ровно три управляющих байта:
+
+| `signal` | Байт | Смысл | Код завершения запуска |
+|---|---|---|---|
+| `INT` | `^C` (`0x03`, ETX) | SIGINT — прервать текущую команду/строку | 130 (`128+2`) |
+| `QUIT` | `^\` (`0x1c`, FS) | SIGQUIT — прервать и снять дамп (где включён) | 131 (`128+3`) |
+| `TSTP` | `^Z` (`0x1a`, SUB) | SIGTSTP — приостановить (job control) | 147 (`128+19`) |
+
+**Почему `SIGTERM`/`SIGKILL` не выразить.** У байта в PTY нет pid: это
+нажатие клавиши, а не сигнал процессу. `kill -TERM <pid>` — это уже команда
+внутри оболочки (и pid надо знать), а `kill -9`/группа процессов вообще не
+прокидываются: PTY не даёт адресовать конкретный процесс. Нужен **жёсткий**
+обрыв — `terminal_close` (закрывает PTY: `SIGTERM` группе → `SIGKILL`).
+
+**Зачем тул завершает запуск сам.** После `^C` (`^Z`, `^\`) строка-маркер
+запуска (`printf … OSC 7770`) уже не выполняется — маркер не придёт, и
+запуск остался бы активным навсегда (`run_busy` на любой следующий
+`terminal_run`). Поэтому `terminal_signal` сразу после записи байта зовёт
+`TerminalService.interruptRun(terminalId, 128+signum)`: запуск получает
+`done`/код и `stillRunning: false`, терминал свободен. Если активного запуска
+не было, `metadata.interrupt = null`.
+
+**Остановка команды — три способа.** `terminal_signal {signal:"INT"}` —
+явный Ctrl+C; `terminal_write {data:"\u0003"}` — тот же ETX через ввод (сервис
+распознаёт его сам); `terminal_run {kill_on_timeout:true}` — автоматический
+Ctrl+C по истечении `timeout_ms`. «Стоп» хода агента команду в PTY **не**
+гасит — это делает только один из этих путей.
 
 **Ввод с `enter` — под тем же shell-guard'ом, что `execute_shell`**
 (`protected-paths.json`, `external_directory`, `deniedCommandPrefixes`; ADR-029/ADR-136).
@@ -462,7 +502,29 @@ printf '\033]7770;synth-run;<nonce>;%s\007' "$?"
 собирает **точка сборки** (`server/app/deps.ts`, `backend/app/deps.ts`) — тем же
 нотификатором, что у фоновых шелл-процессов
 (`createBackgroundParentNotifier`): ровно одна копия (steer при активном ходе,
-иначе очередь + автоход).
+иначе очередь + автоход). Вывод уведомления — **тот же очищенный вид**, что у
+инлайн-ответа: `cleanRunOutput` (`stripTerminalAnsi` → `removeRunWrapper` →
+`normalizeTerminalOutput`) — без ANSI, без эха служебной строки-обёртки
+(маркер `OSC 7770`) и без хвостовых пустых строк; читать `terminal_read` после
+фонового запуска не нужно.
+
+### Примечания по отчёту тестировщика
+
+- **(F) Shell-политика `terminal_run` — guardrail, а не граница (ADR-136).**
+  Команда проверяется **по локальной строке** тем же чекером, что
+  `execute_shell`, — до отправки в PTY. Команда, набранная **внутри** ssh-сессии
+  (или иного удалённого шелла), локально не проверяется: политика видит только
+  строку, уходящую в терминал. Это осознанно — shell есть произвольный код.
+- **(I) `cols`/`rows` в `terminal_snapshot` — эмуляция другого экрана.**
+  Размеры меняют **рендер** (как ресайз окна в эмуляторе), а не сам PTY: для
+  чтения TUI лучше **не** задавать их и брать экран в реальном размере
+  терминала — иначе переносы строк в эмуляции не совпадут с тем, что видит
+  пользователь.
+- **(C) Ответы на DA-запросы (Device Attributes) генерирует терминал.**
+  Последовательности вида `\u001b[?1;2c` приходят от терминала (в UI —
+  xterm.js), а не от человека. В `tmux`-промпте они могут появляться из-за
+  тайминга (tmux печатает ответ в момент ввода). Перед вводом в промпт нажмите
+  Ctrl+U (`\u0015`) — очистить строку.
 
 ## Песочный запуск (`sandbox_exec`, ADR-135)
 

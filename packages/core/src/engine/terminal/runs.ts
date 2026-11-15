@@ -37,21 +37,34 @@
  *   терминала), срок `> 0` — по истечении запуск завершается статусом
  *   `timeout`.
  *
- * ## Таймаут не убивает команду
+ * ## Таймаут: убивать команду или оставить терминал занятым
  *
- * Истечение watchdog'а **не гасит команду**: она продолжает выполняться в
- * PTY. Статус `timeout` означает «срок ожидания истёк, а команда ещё
- * работает», поэтому терминал остаётся **занятым** этим запуском:
+ * Истечение watchdog'а само по себе **не гасит команду**: она продолжает
+ * выполняться в PTY. Что происходит дальше, задаёт `killOnTimeout`:
  *
- * - следующий запуск в этом терминале — отказ `run_busy` (в терминал не
- *   уходит вторая команда поверх ещё не доигравшей);
- * - когда команда доиграет, её маркер придёт и запуск станет `done`
- *   (терминал освободится) — **повторного уведомления при этом нет**:
- *   уведомление о завершении уходит один раз (на первом переходе);
- * - закрытие терминала освобождает терминал в любом случае (`exited`).
+ * - `killOnTimeout: true` — перед фиксацией `timeout` реестр зовёт
+ *   `onKillTimeout(terminalId)` (сервис пишет `0x03`, ETX = Ctrl+C) и
+ *   завершает запуск с `stillRunning: false` — терминал **свободен**;
+ * - `killOnTimeout: false` (дефолт) — статус `timeout`, `stillRunning: true`:
+ *   срок ожидания истёк, а команда ещё работает, поэтому следующий запуск в
+ *   этом терминале получает отказ `terminal.tool.run_busy`. Когда команда
+ *   доиграет, её маркер придёт и запуск станет `done` (терминал освободится) —
+ *   **повторного уведомления при этом нет**: уведомление о завершении уходит
+ *   один раз (на первом переходе);
+ * - закрытие терминала освобождает его в любом случае (`exited`).
  *
  * Статус `exited` (вместо прежнего `closed`) — тот же смысл, что и у
  * терминала: оболочка/PTY больше нет, команда не доиграла.
+ *
+ * ## Ctrl+C — пользователь прервал команду
+ *
+ * Ctrl+C (`0x03`, ETX) в интерактивной оболочке прерывает **текущую строку**,
+ * а не только команду: строка-маркер, отправленная сервисом отдельной строкой,
+ * после прерывания уже не выполняется — её `printf` в поток не придёт. Поэтому
+ * сервис при виде ETX во вводе сам завершает активный запуск через
+ * `interrupt()`: статус `done`, `exitCode: 130` (как у оболочки), `stillRunning:
+ * false`. Без этого запуск остался бы активным навсегда (`run_busy` на любой
+ * следующий запуск).
  *
  * ## Границы
  *
@@ -62,7 +75,7 @@ import { randomUUID } from 'node:crypto';
 import { MessageRole, generateId as generateMessageId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
-import { frameTerminalOutput } from './output.js';
+import { cleanRunOutput, frameTerminalOutput } from './output.js';
 import type { TerminalLogger, TerminalRecord, TerminalTimers } from './types.js';
 
 /** Префикс невидимого маркера завершения запуска (OSC 7770). */
@@ -91,20 +104,11 @@ export const MAX_STORED_RUNS = 32;
 export type TerminalRunStatus = 'running' | 'done' | 'timeout' | 'exited';
 
 /**
- * Занимает ли запуск терминал прямо сейчас.
- *
- * `running` — команда выполняется; `timeout` — срок ожидания истёк, но
- * команда продолжает выполняться (её не убили) — терминал тоже занят.
- * Финальные статусы (`done`/`exited`) терминал освобождают.
- */
-function occupiesTerminal(status: TerminalRunStatus): boolean {
-  return status === 'running' || status === 'timeout';
-}
-
-/**
  * Колбэк завершения запуска команды в терминале.
  *
- * Вызывается **один раз** на запуск (любой статус: `done`/`timeout`/`exited`).
+ * Вызывается **один раз** на запуск (любой статус: `done`/`timeout`/`exited`)
+ * и **только для фоновых** запусков (`background: true`): у режима с
+ * ожиданием результат уже вернулся инлайн-ответом.
  * Точка сборки уведомления — наверху (composition root): сервис терминалов не
  * знает, как доставлять результат в сессию.
  */
@@ -127,6 +131,28 @@ export interface TerminalRunRecord {
   command: string;
   /** Статус запуска. */
   status: TerminalRunStatus;
+  /**
+   * Запуск фоновый: результат доставляется **уведомлением** в сессию.
+   *
+   * `false`/нет — режим с ожиданием (`terminal_run` без `background`): ответ
+   * уже ушёл инлайн, второе сообщение было бы дублем.
+   */
+  background?: boolean;
+  /**
+   * Занимает ли запуск терминал **прямо сейчас**.
+   *
+   * `true` — `running` или `timeout` без убийства команды (она продолжает
+   * работать в PTY); `false` — `done`/`exited` либо `timeout` с убийством
+   * (`killOnTimeout`): терминал свободен, следующий запуск пройдёт.
+   */
+  stillRunning?: boolean;
+  /**
+   * Строка-обёртка (команда маркера), отправленная после команды.
+   *
+   * Служебная деталь очистки: по ней из вывода уведомления снимается эхо
+   * служебной строки. В текст уведомления и в метаданные не попадает.
+   */
+  wrapperCommand?: string;
   /** Вывод, накопленный к моменту чтения. */
   output: string;
   /** Код возврата команды (известен после завершения). */
@@ -255,6 +281,26 @@ export interface TerminalRunStartInput {
    * лимита).
    */
   timeoutMs: number;
+  /**
+   * Запуск фоновый: завершение доставляется уведомлением в сессию.
+   *
+   * `false`/нет — режим с ожиданием: вызывающий получает результат сам
+   * (инлайн-ответ), уведомление не отправляется.
+   */
+  background?: boolean;
+  /**
+   * По истечении watchdog'а убить команду (Ctrl+C в PTY) и освободить терминал.
+   *
+   * `false`/нет — прежнее поведение: статус `timeout`, терминал остаётся
+   * занятым до фактического завершения команды.
+   */
+  killOnTimeout?: boolean;
+  /**
+   * Точная строка-обёртка, отправленная после команды (см. `buildRunMarkerCommand`).
+   *
+   * Не задана — реестр выводит её из собственного nonce (обычный случай).
+   */
+  wrapperCommand?: string;
 }
 
 /** Внутренняя запись реестра: снимок + промис завершения. */
@@ -291,12 +337,22 @@ export interface TerminalRunRegistryOptions {
   /** Логгер. */
   logger?: TerminalLogger;
   /**
-   * Колбэк завершения запуска (любой статус: `done`/`timeout`/`closed`).
+   * Колбэк завершения запуска (любой статус: `done`/`timeout`/`exited`).
    *
    * Точка сборки уведомления — наверху (composition root): сам сервис
-   * терминалов не знает, как доставлять результат в сессию.
+   * терминалов не знает, как доставлять результат в сессию. Зовётся только
+   * для фоновых запусков (`background: true`) — инлайн-ответ уже ушёл.
    */
   onSettled?: (run: TerminalRunRecord) => void;
+  /**
+   * Колбэк «watchdog истёк, команду надо убить» (`killOnTimeout: true`).
+   *
+   * Зовётся **до** фиксации статуса `timeout` и **один раз** на запуск.
+   * Точка входа: сервис терминалов пишет `0x03` (ETX, Ctrl+C) в PTY
+   * напрямую в хэндл (без повторного прохода политики ввода). Ошибка
+   * колбэка не мешает завершить запуск — терминал всё равно освобождается.
+   */
+  onKillTimeout?: (terminalId: string) => void;
 }
 
 /**
@@ -316,6 +372,7 @@ export class TerminalRunRegistry {
   private readonly _maxOutputBytes: number;
   private readonly _logger: TerminalLogger;
   private readonly _onSettled?: (run: TerminalRunRecord) => void;
+  private readonly _onKillTimeout?: (terminalId: string) => void;
 
   constructor(options: TerminalRunRegistryOptions = {}) {
     this._now = options.now ?? (() => Date.now());
@@ -333,21 +390,23 @@ export class TerminalRunRegistry {
       error: (message: string) => console.error(message),
     };
     if (options.onSettled) this._onSettled = options.onSettled;
+    if (options.onKillTimeout) this._onKillTimeout = options.onKillTimeout;
   }
 
   /**
    * Зарегистрировать запуск.
    *
    * Активный запуск на терминале уже есть → `TerminalRunBusyError`: две
-   * команды в одной оболочке смешали бы вывод. Занятым терминал считается и
-   * запуск, у которого истёк watchdog (`timeout`): команда ещё выполняется,
-   * терминал занят до её фактического завершения.
+   * команды в одной оболочке смешали бы вывод. Занятым терминал считается,
+   * пока `stillRunning` записи `true`: это `running` и `timeout` **без**
+   * убийства команды (она ещё выполняется); `timeout` с убийством терминал
+   * освобождает.
    */
   start(input: TerminalRunStartInput): TerminalRunRecord {
     const activeId = this._activeByTerminal.get(input.terminalId);
     if (activeId !== undefined) {
       const active = this._runs.get(activeId);
-      if (active && occupiesTerminal(active.record.status)) {
+      if (active && active.record.stillRunning === true) {
         throw new TerminalRunBusyError(input.terminalId, activeId);
       }
     }
@@ -361,6 +420,9 @@ export class TerminalRunRegistry {
       nonce,
       command: input.command,
       status: 'running',
+      background: input.background === true,
+      stillRunning: true,
+      wrapperCommand: input.wrapperCommand ?? buildRunMarkerCommand(nonce),
       output: '',
       startedAt: this._now(),
       timeoutMs: input.timeoutMs,
@@ -380,6 +442,12 @@ export class TerminalRunRegistry {
     const timer =
       input.timeoutMs > 0
         ? this._timers.setTimeout(() => {
+            if (input.killOnTimeout === true) {
+              // Команду убиваем (Ctrl+C в PTY) — терминал свободен сразу.
+              this._killOnTimeout(input.terminalId);
+              this.settle(runId, 'timeout', { stillRunning: false });
+              return;
+            }
             this.settle(runId, 'timeout');
           }, input.timeoutMs)
         : null;
@@ -439,7 +507,7 @@ export class TerminalRunRegistry {
     if (runId === undefined) return;
     const entry = this._runs.get(runId);
     if (!entry) return;
-    if (!occupiesTerminal(entry.record.status)) return;
+    if (entry.record.stillRunning !== true) return;
 
     for (const part of parts) {
       if (part.kind === 'text') {
@@ -474,8 +542,30 @@ export class TerminalRunRegistry {
    */
   cancel(runId: string): boolean {
     const entry = this._runs.get(runId);
-    if (!entry || !occupiesTerminal(entry.record.status)) return false;
+    if (!entry || entry.record.stillRunning !== true) return false;
     this.settle(runId, 'exited');
+    return true;
+  }
+
+  /**
+   * Прервать активный запуск терминала — «пользователь нажал Ctrl+C».
+   *
+   * В интерактивной оболочке Ctrl+C прерывает **строку**, поэтому строка-маркер
+   * после прерывания не выполняется: маркер никогда не придёт, и запуск без
+   * этого метода остался бы активным навсегда (`run_busy` на следующий запуск).
+   *
+   * Запуск завершается статусом `done` с кодом `exitCode` (по умолчанию `130` —
+   * код прерывания оболочки) и `stillRunning: false`: терминал свободен.
+   *
+   * @returns `true`, если активный запуск был и завершён.
+   */
+  interrupt(terminalId: string, exitCode = 130): boolean {
+    const runId = this._activeByTerminal.get(terminalId);
+    if (runId === undefined) return false;
+    const entry = this._runs.get(runId);
+    if (!entry || entry.record.stillRunning !== true) return false;
+    entry.record.exitCode = exitCode;
+    this.settle(runId, 'done', { stillRunning: false });
     return true;
   }
 
@@ -494,8 +584,16 @@ export class TerminalRunRegistry {
    * Переходы: `running` → любой финальный; `timeout` → `done`/`exited`
    * (команда доиграла после истечения срока ожидания — терминал освобождается).
    * Финальные статусы (`done`/`exited`) не меняются.
+   *
+   * `stillRunning` записи вычисляется из статуса (`timeout` — команда ещё
+   * работает), но вызывающий может переопределить его: `timeout` после
+   * убийства команды (`killOnTimeout`) и `interrupt()` терминал освобождают.
    */
-  private settle(runId: string, status: TerminalRunStatus): void {
+  private settle(
+    runId: string,
+    status: TerminalRunStatus,
+    options: { stillRunning?: boolean } = {},
+  ): void {
     const entry = this._runs.get(runId);
     if (!entry) return;
     const current = entry.record.status;
@@ -503,14 +601,15 @@ export class TerminalRunRegistry {
     if (current === 'timeout' && status === 'timeout') return;
     const firstSettle = current === 'running';
     entry.record.status = status;
+    entry.record.stillRunning = options.stillRunning ?? status === 'timeout';
     entry.record.finishedAt = this._now();
     if (entry.timer) {
       this._timers.clearTimeout(entry.timer as never);
       entry.timer = null;
     }
-    // Терминал остаётся занятым, пока команда реально выполняется: статус
-    // `timeout` — это «срок ожидания истёк, команда продолжает работать».
-    if (!occupiesTerminal(status)) {
+    // Терминал остаётся занятым, пока команда реально выполняется: `timeout`
+    // без убийства — это «срок ожидания истёк, команда продолжает работать».
+    if (entry.record.stillRunning !== true) {
       if (this._activeByTerminal.get(entry.record.terminalId) === runId) {
         this._activeByTerminal.delete(entry.record.terminalId);
       }
@@ -527,7 +626,9 @@ export class TerminalRunRegistry {
     // Уведомление о завершении — **после** фиксации состояния (уведомление
     // видит уже финальный статус и код возврата) и **один раз** на запуск:
     // позднее доигрывание команды второго уведомления не порождает.
-    if (this._onSettled && firstSettle && !entry.notified) {
+    // Только фоновые запуски: у режима с ожиданием результат уже ушёл
+    // инлайн-ответом, сообщение в сессию было бы дублем.
+    if (this._onSettled && firstSettle && !entry.notified && entry.record.background === true) {
       entry.notified = true;
       try {
         this._onSettled({ ...entry.record });
@@ -538,6 +639,25 @@ export class TerminalRunRegistry {
           }`,
         );
       }
+    }
+  }
+
+  /**
+   * Позвать «убить команду по таймауту» (best-effort).
+   *
+   * Ошибка колбэка не мешает завершить запуск: терминал всё равно должен
+   * освободиться, иначе следующий запуск получил бы вечный `run_busy`.
+   */
+  private _killOnTimeout(terminalId: string): void {
+    if (!this._onKillTimeout) return;
+    try {
+      this._onKillTimeout(terminalId);
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalRunRegistry] не удалось прервать команду в терминале ${terminalId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
   }
 
@@ -561,8 +681,8 @@ export class TerminalRunRegistry {
       let removed = false;
       for (const [runId, entry] of this._runs) {
         // Занятые терминалом запуски вытеснять нельзя: команда ещё выполняется
-        // (в т.ч. после таймаута) — терминал должен остаться занятым.
-        if (occupiesTerminal(entry.record.status)) continue;
+        // (в т.ч. после таймаута без убийства) — терминал должен остаться занятым.
+        if (entry.record.stillRunning === true) continue;
         this._runs.delete(runId);
         if (this._activeByTerminal.get(entry.record.terminalId) === runId) {
           this._activeByTerminal.delete(entry.record.terminalId);
@@ -618,6 +738,9 @@ export const MAX_RUN_NOTIFICATION_BYTES = 32 * 1024;
 export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
   const terminalId = run.terminalId;
   const exitCode = run.exitCode !== undefined ? String(run.exitCode) : '-';
+  // Терминал занят только пока команда реально выполняется: `timeout` после
+  // убийства (`killOnTimeout`) и `interrupt()` — уже свободен.
+  const stillRunning = run.stillRunning === true;
   const header =
     run.status === 'timeout'
       ? sm('terminal.tool.run_timeout', {
@@ -627,25 +750,26 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
       : run.status === 'exited'
         ? sm('terminal.tool.run_exited', { terminal_id: terminalId })
         : sm('terminal.tool.run_finished', { terminal_id: terminalId, exit_code: exitCode });
-  // Таймаут **не убивает** команду: она продолжает выполняться в PTY, а
+  // Таймаут **без** убийства команды: она продолжает выполняться в PTY, а
   // терминал остаётся занятым — об этом сказано прямо (иначе модель решит,
   // что команда снята, и запустит вторую в занятый терминал).
-  const stillRunning =
-    run.status === 'timeout'
-      ? sm('terminal.tool.run_still_running', {
-          run_id: run.runId,
-          terminal_id: terminalId,
-        })
-      : '';
-  const body = frameTerminalOutput(tailByBytes(run.output, MAX_RUN_NOTIFICATION_BYTES), {
+  const stillRunningNote = stillRunning
+    ? sm('terminal.tool.run_still_running', {
+        run_id: run.runId,
+        terminal_id: terminalId,
+      })
+    : '';
+  // Тот же вид вывода, что у инлайн-ответа: без ANSI и без эха обёртки.
+  const cleaned = cleanRunOutput(run.output, run.wrapperCommand);
+  const body = frameTerminalOutput(tailByBytes(cleaned, MAX_RUN_NOTIFICATION_BYTES), {
     terminal: terminalId,
     run: run.runId,
     status: run.status,
     ...(run.exitCode !== undefined ? { exit: run.exitCode } : {}),
     ...(run.status === 'timeout' ? { timeout_ms: run.timeoutMs } : {}),
-    ...(run.status === 'timeout' ? { still_running: true } : {}),
+    ...(stillRunning ? { still_running: true } : {}),
   });
-  const content = [header, stillRunning, body].filter((part) => part !== '').join('\n');
+  const content = [header, stillRunningNote, body].filter((part) => part !== '').join('\n');
   const durationMs =
     run.finishedAt !== undefined ? Math.max(0, run.finishedAt - run.startedAt) : undefined;
   return {
@@ -667,7 +791,7 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
       terminal_id: terminalId,
       run_id: run.runId,
       state: run.status,
-      ...(run.status === 'timeout' ? { still_running: true } : {}),
+      ...(stillRunning ? { still_running: true } : {}),
       ...(run.command ? { command: run.command } : {}),
       ...(run.exitCode !== undefined ? { exit_code: run.exitCode } : {}),
       started_at: run.startedAt,

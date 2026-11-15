@@ -239,7 +239,12 @@ describe('Реестр запусков', () => {
       logger: { warn: () => {}, error: () => {} },
       onSettled: (run) => settled.push(run),
     });
-    const run = registry.start({ terminalId: 'term_1', command: 'sleep 100', timeoutMs: 1_000 });
+    const run = registry.start({
+      terminalId: 'term_1',
+      command: 'sleep 100',
+      timeoutMs: 1_000,
+      background: true,
+    });
     vi.advanceTimersByTime(1_000);
     expect(registry.get(run.runId)?.status).toBe('timeout');
 
@@ -320,12 +325,177 @@ describe('Реестр запусков', () => {
       logger: { warn: () => {}, error: () => {} },
       onSettled: (run) => settled.push(run),
     });
-    const run = registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 });
+    const run = registry.start({
+      terminalId: 'term_1',
+      command: 'ls',
+      timeoutMs: 30_000,
+      background: true,
+    });
     registry.handleData('term_1', [{ kind: 'marker', nonce: run.nonce, code: '0' }]);
     registry.handleData('term_1', [{ kind: 'marker', nonce: run.nonce, code: '0' }]);
     registry.closeTerminal('term_1');
     expect(settled).toHaveLength(1);
     expect(settled[0]?.status).toBe('done');
+    registry.dispose();
+  });
+
+  it('уведомление не зовётся для запуска с ожиданием (background: false)', () => {
+    const settled: TerminalRunRecord[] = [];
+    let counter = 0;
+    const registry = new TerminalRunRegistry({
+      now: () => 1_000,
+      generateId: () => `uuid-${++counter}`,
+      timers: {
+        setTimeout: (handler, ms) => globalThis.setTimeout(handler, ms),
+        clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
+        setInterval: (handler, ms) => globalThis.setInterval(handler, ms),
+        clearInterval: (handle) => globalThis.clearInterval(handle as never),
+      },
+      logger: { warn: () => {}, error: () => {} },
+      onSettled: (run) => settled.push(run),
+    });
+    const run = registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 });
+    registry.handleData('term_1', [{ kind: 'marker', nonce: run.nonce, code: '0' }]);
+    // Результат ушёл инлайн-ответом — сообщения в сессию нет.
+    expect(registry.get(run.runId)?.status).toBe('done');
+    expect(settled).toHaveLength(0);
+    registry.dispose();
+  });
+
+  it('уведомление зовётся для фонового запуска (background: true)', () => {
+    const settled: TerminalRunRecord[] = [];
+    let counter = 0;
+    const registry = new TerminalRunRegistry({
+      now: () => 1_000,
+      generateId: () => `uuid-${++counter}`,
+      timers: {
+        setTimeout: (handler, ms) => globalThis.setTimeout(handler, ms),
+        clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
+        setInterval: (handler, ms) => globalThis.setInterval(handler, ms),
+        clearInterval: (handle) => globalThis.clearInterval(handle as never),
+      },
+      logger: { warn: () => {}, error: () => {} },
+      onSettled: (run) => settled.push(run),
+    });
+    const run = registry.start({
+      terminalId: 'term_1',
+      command: 'npm test',
+      timeoutMs: 0,
+      background: true,
+    });
+    registry.handleData('term_1', [{ kind: 'marker', nonce: run.nonce, code: '0' }]);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.background).toBe(true);
+    registry.dispose();
+  });
+
+  it('interrupt: запуск завершается done/130 и терминал свободен', () => {
+    const registry = createRegistry();
+    const run = registry.start({ terminalId: 'term_1', command: 'sleep 100', timeoutMs: 0 });
+
+    expect(registry.interrupt('term_1')).toBe(true);
+
+    const finished = registry.get(run.runId);
+    expect(finished?.status).toBe('done');
+    expect(finished?.exitCode).toBe(130);
+    expect(finished?.stillRunning).toBe(false);
+    // Следующий запуск проходит: терминал освобождён (маркера после Ctrl+C нет).
+    expect(() =>
+      registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 }),
+    ).not.toThrow();
+    registry.dispose();
+  });
+
+  it('interrupt без активного запуска — false', () => {
+    const registry = createRegistry();
+    expect(registry.interrupt('term_1')).toBe(false);
+
+    const run = registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 });
+    registry.handleData('term_1', [{ kind: 'marker', nonce: run.nonce, code: '0' }]);
+    expect(registry.interrupt('term_1')).toBe(false);
+    registry.dispose();
+  });
+
+  it('interrupt принимает свой код возврата', () => {
+    const registry = createRegistry();
+    const run = registry.start({ terminalId: 'term_1', command: 'sleep 100', timeoutMs: 0 });
+    expect(registry.interrupt('term_1', 137)).toBe(true);
+    expect(registry.get(run.runId)?.exitCode).toBe(137);
+    registry.dispose();
+  });
+
+  it('killOnTimeout: таймаут убивает команду (onKillTimeout) и освобождает терминал', () => {
+    const killed: string[] = [];
+    let counter = 0;
+    const registry = new TerminalRunRegistry({
+      now: () => 1_000,
+      generateId: () => `uuid-${++counter}`,
+      timers: {
+        setTimeout: (handler, ms) => globalThis.setTimeout(handler, ms),
+        clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
+        setInterval: (handler, ms) => globalThis.setInterval(handler, ms),
+        clearInterval: (handle) => globalThis.clearInterval(handle as never),
+      },
+      logger: { warn: () => {}, error: () => {} },
+      onKillTimeout: (terminalId) => killed.push(terminalId),
+    });
+    const run = registry.start({
+      terminalId: 'term_1',
+      command: 'sleep 100',
+      timeoutMs: 1_000,
+      killOnTimeout: true,
+    });
+
+    vi.advanceTimersByTime(1_000);
+
+    const finished = registry.get(run.runId);
+    expect(finished?.status).toBe('timeout');
+    expect(finished?.stillRunning).toBe(false);
+    expect(killed).toEqual(['term_1']);
+    // Терминал свободен: команда снята (Ctrl+C), маркера не будет.
+    expect(() =>
+      registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 }),
+    ).not.toThrow();
+    registry.dispose();
+  });
+
+  it('killOnTimeout: false — таймаут оставляет терминал занятым', () => {
+    const killed: string[] = [];
+    let counter = 0;
+    const registry = new TerminalRunRegistry({
+      now: () => 1_000,
+      generateId: () => `uuid-${++counter}`,
+      timers: {
+        setTimeout: (handler, ms) => globalThis.setTimeout(handler, ms),
+        clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
+        setInterval: (handler, ms) => globalThis.setInterval(handler, ms),
+        clearInterval: (handle) => globalThis.clearInterval(handle as never),
+      },
+      logger: { warn: () => {}, error: () => {} },
+      onKillTimeout: (terminalId) => killed.push(terminalId),
+    });
+    const run = registry.start({
+      terminalId: 'term_1',
+      command: 'sleep 100',
+      timeoutMs: 1_000,
+      killOnTimeout: false,
+    });
+
+    vi.advanceTimersByTime(1_000);
+
+    expect(registry.get(run.runId)?.status).toBe('timeout');
+    expect(registry.get(run.runId)?.stillRunning).toBe(true);
+    expect(killed).toEqual([]);
+    expect(() =>
+      registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 }),
+    ).toThrow(TerminalRunBusyError);
+    registry.dispose();
+  });
+
+  it('запись запуска хранит точную строку-обёртку (маркер)', () => {
+    const registry = createRegistry();
+    const run = registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 });
+    expect(run.wrapperCommand).toBe(buildRunMarkerCommand(run.nonce));
     registry.dispose();
   });
 });
@@ -339,6 +509,8 @@ describe('Уведомление сессии о завершении запус
       nonce: 'n1',
       command: 'npm test',
       status: 'done',
+      background: true,
+      stillRunning: false,
       output: 'ok\n',
       exitCode: 0,
       startedAt: 1_000,
@@ -383,6 +555,8 @@ describe('Уведомление сессии о завершении запус
       nonce: 'n1',
       command: 'sleep 100',
       status: 'timeout',
+      background: true,
+      stillRunning: true,
       output: 'partial\n',
       startedAt: 1_000,
       finishedAt: 2_000,
@@ -403,7 +577,7 @@ describe('Уведомление сессии о завершении запус
       '[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=30000 still_running=true]\npartial\n[CONTENT END]',
     );
 
-    const exited = buildTerminalRunNotification({ ...base, status: 'exited' });
+    const exited = buildTerminalRunNotification({ ...base, status: 'exited', stillRunning: false });
     expect(exited.metadata?.state).toBe('exited');
     expect(exited.content).toContain('exited');
     // Вышедший терминал — команда не доиграла, «всё ещё работает» — нет.
@@ -411,5 +585,60 @@ describe('Уведомление сессии о завершении запус
     expect(exited.content).toContain(
       '[CONTENT terminal=term_1 run=run_1 status=exited]\npartial\n[CONTENT END]',
     );
+  });
+
+  it('вывод очищен: нет ANSI и нет эха служебной обёртки', () => {
+    const wrapper = buildRunMarkerCommand('deadbeefdeadbeef');
+    const run: TerminalRunRecord = {
+      runId: 'run_1',
+      terminalId: 'term_1',
+      sessionId: 'ses_1',
+      nonce: 'deadbeefdeadbeef',
+      command: 'npm test',
+      status: 'done',
+      background: true,
+      stillRunning: false,
+      wrapperCommand: wrapper,
+      output: [
+        '\u001B[32mPASS\u001B[0m src/a.test.ts',
+        wrapper,
+        'wide:\u0020' + ' '.repeat(80) + 'end',
+        '',
+      ].join('\r\n'),
+      exitCode: 0,
+      startedAt: 1_000,
+      finishedAt: 2_000,
+      timeoutMs: 0,
+      truncated: false,
+    };
+
+    const message = buildTerminalRunNotification(run);
+    expect(message.content).not.toContain('\u001B');
+    expect(message.content).not.toContain('synth-run');
+    expect(message.content).not.toContain('printf');
+    expect(message.content).toContain('PASS src/a.test.ts');
+    // «Широкие» вставки пробелов схлопнуты, CRLF нормализован.
+    expect(message.content).toContain('wide: end');
+  });
+
+  it('таймаут с убийством команды: терминал уже свободен', () => {
+    const run: TerminalRunRecord = {
+      runId: 'run_1',
+      terminalId: 'term_1',
+      nonce: 'n1',
+      command: 'sleep 100',
+      status: 'timeout',
+      background: true,
+      stillRunning: false,
+      output: 'partial\n',
+      startedAt: 1_000,
+      finishedAt: 2_000,
+      timeoutMs: 1_000,
+      truncated: false,
+    };
+    const message = buildTerminalRunNotification(run);
+    // Команда снята Ctrl+C — «всё ещё работает» больше не пишется.
+    expect(message.metadata?.still_running).toBeUndefined();
+    expect(message.content).not.toContain('still_running=true');
   });
 });
