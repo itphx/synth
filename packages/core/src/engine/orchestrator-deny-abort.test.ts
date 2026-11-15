@@ -257,6 +257,103 @@ class MockDoomProvider extends BaseProvider {
 }
 
 /**
+ * Провайдер: 3 одинаковых вызова **наблюдающего** тула `terminal_list`,
+ * затем текст. Повторный «посмотреть список» — это мониторинг, а не
+ * зацикливание: doom-loop для таких тулов не срабатывает.
+ */
+class MockTerminalListLoopProvider extends BaseProvider {
+  static calls = 0;
+
+  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
+    if (MockTerminalListLoopProvider.calls < 3) {
+      const n = MockTerminalListLoopProvider.calls;
+      return {
+        content: '',
+        toolCalls: [{
+          id: `call_t${n}`,
+          function: { name: 'terminal_list', arguments: JSON.stringify({}) },
+        }],
+      };
+    }
+    return { content: 'Готово' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    const next = this._next();
+    MockTerminalListLoopProvider.calls++;
+    return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const next = this._next();
+    MockTerminalListLoopProvider.calls++;
+    yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockterminalloop';
+  }
+}
+
+/**
+ * Провайдер: 3 одинаковых вызова `execute_shell` (команда разрешена политикой),
+ * затем текст — исполняющий тул, для него doom-loop остаётся защитой.
+ */
+class MockShellLoopProvider extends BaseProvider {
+  static calls = 0;
+
+  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
+    if (MockShellLoopProvider.calls < 3) {
+      const n = MockShellLoopProvider.calls;
+      return {
+        content: '',
+        toolCalls: [{
+          id: `call_s${n}`,
+          function: { name: 'execute_shell', arguments: JSON.stringify({ command: 'echo hi' }) },
+        }],
+      };
+    }
+    return { content: 'Готово' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    const next = this._next();
+    MockShellLoopProvider.calls++;
+    return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const next = this._next();
+    MockShellLoopProvider.calls++;
+    yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockshellloop';
+  }
+}
+
+/**
  * Провайдер для регресса шага 2а: 1-я итерация — текст + tool call (deny-команда,
  * реальные команды не выполняются), 2-я — падение LLM. Пошаговая запись обязана
  * оставить assistant(tool_calls) и tool-результат в истории до финала.
@@ -490,6 +587,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory.register('mockabortnomodel', MockAbortNoModelProvider);
     ProviderFactory.register('mockabortbefore', MockAbortBeforeFirstTokenProvider);
     ProviderFactory.register('mockdoom', MockDoomProvider);
+    ProviderFactory.register('mockterminalloop', MockTerminalListLoopProvider);
+    ProviderFactory.register('mockshellloop', MockShellLoopProvider);
     ProviderFactory.register('mockempty', MockEmptyProvider);
     ProviderFactory.register('mockfailaftertool', MockFailAfterToolProvider);
     ProviderFactory.register('mockonetool', MockOneToolThenTextProvider);
@@ -499,6 +598,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     MockAbortNoModelProvider.calls = 0;
     MockAbortBeforeFirstTokenProvider.calls = 0;
     MockDoomProvider.calls = 0;
+    MockTerminalListLoopProvider.calls = 0;
+    MockShellLoopProvider.calls = 0;
     MockFailAfterToolProvider.calls = 0;
     MockOneToolThenTextProvider.calls = 0;
     MockScriptProvider.calls = 0;
@@ -511,6 +612,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory['_providers'].delete('mockabortnomodel');
     ProviderFactory['_providers'].delete('mockabortbefore');
     ProviderFactory['_providers'].delete('mockdoom');
+    ProviderFactory['_providers'].delete('mockterminalloop');
+    ProviderFactory['_providers'].delete('mockshellloop');
     ProviderFactory['_providers'].delete('mockempty');
     ProviderFactory['_providers'].delete('mockfailaftertool');
     ProviderFactory['_providers'].delete('mockonetool');
@@ -940,6 +1043,43 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(assistant).toBeDefined();
     expect(assistant!.content).toBe('Could not complete the request: the model response was empty');
     expect(assistant!.metadata?.status).toBe('error');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('doom-loop: три одинаковых terminal_list НЕ прерывают ход (наблюдающий тул)', async () => {
+    const h = await makeHarness('mockterminalloop');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    // Все три вызова выполнены (в т.ч. третий) — цикл не прерван.
+    const toolResults = chunks.filter((c) => c.event === 'tool_call.result');
+    expect(toolResults).toHaveLength(3);
+    for (const toolResult of toolResults) {
+      const content = String((toolResult.data.result as { content?: string }).content ?? '');
+      expect(content).not.toContain('Loop broken');
+    }
+
+    // Провайдер вызван 4 раза: 3 tool-итерации + финальный текст.
+    expect(MockTerminalListLoopProvider.calls).toBe(4);
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const finalAssistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(finalAssistant!.content).toBe('Готово');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('doom-loop: три одинаковых execute_shell по-прежнему прерывают цикл', async () => {
+    const h = await makeHarness('mockshellloop');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    const toolResults = chunks.filter((c) => c.event === 'tool_call.result');
+    expect(toolResults).toHaveLength(3);
+    const third = String((toolResults[2]!.data.result as { content?: string }).content ?? '');
+    expect(third).toContain('Loop broken');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 

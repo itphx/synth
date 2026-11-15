@@ -186,7 +186,7 @@ describe('Реестр запусков', () => {
     const registry = createRegistry();
     const run = registry.start({ terminalId: 'term_1', command: 'npm test', timeoutMs: 0 });
     registry.closeTerminal('term_1');
-    expect(registry.get(run.runId)?.status).toBe('closed');
+    expect(registry.get(run.runId)?.status).toBe('exited');
     registry.dispose();
   });
 
@@ -203,11 +203,72 @@ describe('Реестр запусков', () => {
     registry.dispose();
   });
 
-  it('закрытие терминала завершает его запуск статусом closed', () => {
+  it('закрытие терминала завершает его запуск статусом exited', () => {
     const registry = createRegistry();
     const run = registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 });
     registry.closeTerminal('term_1');
-    expect(registry.get(run.runId)?.status).toBe('closed');
+    expect(registry.get(run.runId)?.status).toBe('exited');
+    registry.dispose();
+  });
+
+  it('после таймаута терминал остаётся занятым (команда не убита)', () => {
+    const registry = createRegistry();
+    const run = registry.start({ terminalId: 'term_1', command: 'sleep 100', timeoutMs: 1_000 });
+    vi.advanceTimersByTime(1_000);
+    expect(registry.get(run.runId)?.status).toBe('timeout');
+    // Команда продолжает выполняться в PTY — вторая команда в тот же терминал
+    // не уходит (иначе выводы смешались бы).
+    expect(() =>
+      registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 }),
+    ).toThrow(TerminalRunBusyError);
+    registry.dispose();
+  });
+
+  it('маркер после таймаута доигрывает запуск: статус done, терминал освобождён', () => {
+    const settled: TerminalRunRecord[] = [];
+    let counter = 0;
+    const registry = new TerminalRunRegistry({
+      now: () => 1_000,
+      generateId: () => `uuid-${++counter}`,
+      timers: {
+        setTimeout: (handler, ms) => globalThis.setTimeout(handler, ms),
+        clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
+        setInterval: (handler, ms) => globalThis.setInterval(handler, ms),
+        clearInterval: (handle) => globalThis.clearInterval(handle as never),
+      },
+      logger: { warn: () => {}, error: () => {} },
+      onSettled: (run) => settled.push(run),
+    });
+    const run = registry.start({ terminalId: 'term_1', command: 'sleep 100', timeoutMs: 1_000 });
+    vi.advanceTimersByTime(1_000);
+    expect(registry.get(run.runId)?.status).toBe('timeout');
+
+    // Команда доиграла — маркер пришёл.
+    registry.handleData('term_1', [{ kind: 'marker', nonce: run.nonce, code: '0' }]);
+    const finished = registry.get(run.runId);
+    expect(finished?.status).toBe('done');
+    expect(finished?.exitCode).toBe(0);
+    // Терминал освободился.
+    expect(() =>
+      registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 }),
+    ).not.toThrow();
+    // Уведомление о запуске — одно (позднее доигрывание второго не даёт).
+    expect(settled).toHaveLength(1);
+    expect(settled[0]?.status).toBe('timeout');
+    registry.dispose();
+  });
+
+  it('закрытие терминала после таймаута освобождает терминал', () => {
+    const registry = createRegistry();
+    const run = registry.start({ terminalId: 'term_1', command: 'sleep 100', timeoutMs: 1_000 });
+    vi.advanceTimersByTime(1_000);
+    expect(registry.get(run.runId)?.status).toBe('timeout');
+
+    registry.closeTerminal('term_1');
+    expect(registry.get(run.runId)?.status).toBe('exited');
+    expect(() =>
+      registry.start({ terminalId: 'term_1', command: 'ls', timeoutMs: 30_000 }),
+    ).not.toThrow();
     registry.dispose();
   });
 
@@ -291,9 +352,14 @@ describe('Уведомление сессии о завершении запус
     expect(message.author).toBe('Process');
     expect(message.hidden).toBe(false);
     expect(message.ephemeral).toBe(false);
-    expect(message.content).toContain('[CONTENT]');
+    expect(message.content).toContain('[CONTENT terminal=term_1 run=run_1 status=done exit=0]');
     expect(message.content).toContain('ok');
     expect(message.content).toContain('[CONTENT END]');
+    // Точный вид маркера: метаданные запуска — в открывающем маркере,
+    // закрывающий маркер не меняется.
+    expect(message.content).toContain(
+      '[CONTENT terminal=term_1 run=run_1 status=done exit=0]\nok\n[CONTENT END]',
+    );
     expect(message.content).toContain('term_1');
     expect(message.content).toContain('exit 0');
     expect(message.metadata).toMatchObject({
@@ -310,7 +376,7 @@ describe('Уведомление сессии о завершении запус
     });
   });
 
-  it('таймаут и закрытие — свой заголовок и статус', () => {
+  it('таймаут и выход терминала — свой заголовок и статус', () => {
     const base: TerminalRunRecord = {
       runId: 'run_1',
       terminalId: 'term_1',
@@ -327,9 +393,23 @@ describe('Уведомление сессии о завершении запус
     expect(timeout.metadata?.state).toBe('timeout');
     expect(timeout.content).toContain('timeout');
     expect(timeout.content).toContain('partial');
+    // Таймаут не убивает команду — об этом сказано прямо.
+    expect(timeout.metadata?.still_running).toBe(true);
+    expect(timeout.content).toContain('still running');
+    expect(timeout.content).toContain('run_1');
+    expect(timeout.content).toContain('Ctrl+C');
+    // Маркер таймаута: срок ожидания и «команда ещё жива», кода возврата нет.
+    expect(timeout.content).toContain(
+      '[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=30000 still_running=true]\npartial\n[CONTENT END]',
+    );
 
-    const closed = buildTerminalRunNotification({ ...base, status: 'closed' });
-    expect(closed.metadata?.state).toBe('closed');
-    expect(closed.content).toContain('closed');
+    const exited = buildTerminalRunNotification({ ...base, status: 'exited' });
+    expect(exited.metadata?.state).toBe('exited');
+    expect(exited.content).toContain('exited');
+    // Вышедший терминал — команда не доиграла, «всё ещё работает» — нет.
+    expect(exited.metadata?.still_running).toBeUndefined();
+    expect(exited.content).toContain(
+      '[CONTENT terminal=term_1 run=run_1 status=exited]\npartial\n[CONTENT END]',
+    );
   });
 });

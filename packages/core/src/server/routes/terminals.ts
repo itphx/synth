@@ -48,6 +48,7 @@
  * | `TERMINAL_INVALID_REQUEST` | 400 | некорректные аргументы терминала              |
  * | `TERMINAL_LIMIT`        | 409/429/413 | лимит терминалов (409), скорость ввода (429), кадр ввода (413) |
  * | `TERMINAL_ALREADY_RUNNING` | 409 | перезапуск живого терминала                   |
+ * | `TERMINAL_EXITED`       | 409    | терминал завершён (ввод/размер невозможны)    |
  * | `TERMINAL_UNAVAILABLE`  | 503    | PTY недоступен в этой среде                   |
  *
  * ## Рабочий каталог
@@ -66,6 +67,7 @@ import type { TerminalService } from '../../engine/terminal/service.js';
 import {
   TerminalAlreadyRunningError,
   TerminalDisabledError,
+  TerminalExitedError,
   TerminalInvalidRequestError,
   TerminalLimitError,
   TerminalNotFoundError,
@@ -107,10 +109,13 @@ export interface TerminalRouteMessages {
   terminalLimit: (c: Context) => string;
   /** Терминал ещё работает — перезапуск невозможен (409). */
   terminalAlreadyRunning: (c: Context) => string;
+  /** Терминал завершён — ввод/размер невозможны (409). */
+  terminalExited: (c: Context) => string;
   /** Сессия не принадлежит проекту терминала (400). */
   sessionNotInProject: (c: Context) => string;
   /** У проекта нет рабочего каталога (400). */
-  workspaceMissing: (c: Context) => string;}
+  workspaceMissing: (c: Context) => string;
+}
 
 /** Сообщения по умолчанию (core — русские литералы). */
 const DEFAULT_MESSAGES: TerminalRouteMessages = {
@@ -124,6 +129,7 @@ const DEFAULT_MESSAGES: TerminalRouteMessages = {
   terminalUnavailable: () => 'Терминалы недоступны в этой среде',
   terminalLimit: () => 'Исчерпан лимит терминалов',
   terminalAlreadyRunning: () => 'Терминал ещё работает — перезапуск невозможен',
+  terminalExited: () => 'Терминал завершён — перезапустите его',
   sessionNotInProject: () => 'Сессия не принадлежит проекту',
   workspaceMissing: () => 'Не удалось вычислить рабочий каталог терминала',
 };
@@ -342,6 +348,14 @@ export function createTerminalRoutes(
       );
     }
     if (err instanceof TerminalNotFoundError) return terminalNotFound(c);
+    if (err instanceof TerminalExitedError) {
+      // Терминал завершён: запись есть, но процесс уже вышел — ввод/размер
+      // невозможны, его надо перезапустить (`POST /:id/restart`).
+      return c.json(
+        { error: { code: 'TERMINAL_EXITED', message: messages.terminalExited(c) } },
+        409,
+      );
+    }
     if (err instanceof TerminalAlreadyRunningError) {
       // Перезапуск живого терминала — конфликт состояния: вторая оболочка
       // в том же каталоге рассинхронила бы вывод (PROP-132).

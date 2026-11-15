@@ -86,8 +86,19 @@ describe('createTerminalService (композиция)', () => {
     ).rejects.toBeInstanceOf(TerminalUnavailableError);
   });
 
-  it('setEnabled(false) закрывает живые терминалы и запрещает новые', async () => {
-    const { port, state } = createFakePort();
+  it('параметры выполнения из wiring применяются к сервису', async () => {
+    const { port } = createFakePort();
+    const service = createTerminalService({
+      port,
+      defaultShell: '/bin/zsh',
+      auditInput: false,
+    });
+    expect(service.getDefaultShell()).toBe('/bin/zsh');
+    expect(service.isAuditInput()).toBe(false);
+    service.dispose();
+  });
+
+  it('setEnabled(false) закрывает живые терминалы и запрещает новые', async () => {    const { port, state } = createFakePort();
     const service = createTerminalService({ port });
     expect(service.isEnabled()).toBe(true);
 

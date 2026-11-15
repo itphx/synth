@@ -102,9 +102,11 @@ export interface TerminalRecord {
   /**
    * Терминал восстановлен из снимка после рестарта ядра (PROP-132).
    *
-   * `true` — запись поднята из `terminals/<id>/meta.json`: PTY не запущен,
-   * в буфере — сохранённый хвост вывода. Перезапуск (`restart`) такой
-   * записи поднимает **новый** PTY с теми же `cwd`/`shell`/`cols`/`rows`.
+   * `true` — запись поднята из `terminals/<id>/meta.json`: поднимается **новый
+   * PTY** (те же `cwd`/`shell`/`cols`/`rows`), а в буфере — сохранённый хвост
+   * вывода (история). Если PTY подняться не удалось (точка исполнения
+   * недоступна, каталог пропал) — терминал остаётся `exited`, но всё равно с
+   * `restored: true` и сохранённым выводом: его можно перезапустить вручную.
    */
   restored?: boolean;
 }
@@ -290,7 +292,8 @@ export interface TerminalDto {
    * Терминал восстановлен из снимка после рестарта ядра (PROP-132).
    *
    * Отсутствует — терминал обычный (создан в этом процессе). `true` — запись
-   * поднята из снимка: PTY не запущен, в буфере — сохранённый хвост вывода.
+   * поднята из снимка: поднят **новый PTY**, а в буфере — сохранённый хвост
+   * вывода (история).
    */
   restored?: boolean;
 }
@@ -375,6 +378,7 @@ export type TerminalErrorCode =
   | 'TERMINAL_LIMIT'
   | 'TERMINAL_DISABLED'
   | 'TERMINAL_NOT_FOUND'
+  | 'TERMINAL_EXITED'
   | 'TERMINAL_UNAVAILABLE'
   | 'TERMINAL_INVALID_REQUEST'
   | 'TERMINAL_ALREADY_RUNNING';
@@ -492,6 +496,27 @@ export class TerminalAlreadyRunningError extends TerminalError {
   }
 }
 
+/**
+ * Терминал завершён — ввод/размер/запуск в него невозможны (PROP-132).
+ *
+ * Отличается от `TerminalNotFoundError`: запись **есть** (её видно в списке
+ * с `include_exited`, её можно переименовать и перезапустить) — просто
+ * процесс уже вышел. Раньше такой ввод отдавал «не найден» (404), и клиент
+ * не понимал, что терминал нужно **перезапустить**, а не открыть заново.
+ *
+ * Роуут мапит его в `409 TERMINAL_EXITED`.
+ */
+export class TerminalExitedError extends TerminalError {
+  /** Идентификатор терминала. */
+  readonly terminalId: string;
+
+  constructor(terminalId: string, message?: string) {
+    super('TERMINAL_EXITED', message ?? `Терминал ${terminalId} завершён`);
+    this.name = 'TerminalExitedError';
+    this.terminalId = terminalId;
+  }
+}
+
 /** Структурная проверка ошибки терминального сервиса (устойчива к копиям класса). */
 export function isTerminalError(value: unknown): value is TerminalError {
   if (value instanceof TerminalError) return true;
@@ -563,6 +588,22 @@ export interface TerminalServiceOptions {
    * `false` — снимки не поднимаются, их убирает reaper. По умолчанию `true`.
    */
   autoRestore?: boolean;
+  /**
+   * Оболочка по умолчанию для **новых** терминалов (`terminal.shell`).
+   *
+   * `null`/не задано — платформенный дефолт (`$SHELL` → `/bin/bash`).
+   * Существующие терминалы не перезапускаются; live-изменение —
+   * `TerminalService.setDefaultShell`.
+   */
+  defaultShell?: string | null;
+  /**
+   * Писать ли ввод в терминал в журнал исполнений (`terminal.auditInput`).
+   *
+   * `false` — записи `terminal.input` не пишутся (метрика `op="input"`
+   * считается всегда). По умолчанию `true`. Live-изменение —
+   * `TerminalService.setAuditInput`.
+   */
+  auditInput?: boolean;
   /** Шина событий (опционально): метаданные терминала публикуются в канал сессии. */
   eventBus?: EventBus;
   /** Журнал аудита (опционально): `terminal.open`/`terminal.input`/`terminal.close`. */

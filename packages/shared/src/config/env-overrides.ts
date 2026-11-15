@@ -137,6 +137,18 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'terminal', key: 'enabled', type: 'boolean' },
   // terminal (PROP-132): восстановление терминалов из снимков после рестарта.
   { section: 'terminal', key: 'autoRestore', type: 'boolean' },
+  // terminal (PROP-132): параметры выполнения (редактируются из админки).
+  // Имя переменной собирается тем же правилом секций (см. `envOverrideName`):
+  // camelCase → SNAKE_CASE, префикс `SYNTH_<SECTION>_` — то есть
+  // `SYNTH_TERMINAL_IDLE_MINUTES`, `SYNTH_TERMINAL_MAX_PER_PROJECT`,
+  // `SYNTH_TERMINAL_MAX_PER_INSTANCE`, `SYNTH_TERMINAL_SHELL`,
+  // `SYNTH_TERMINAL_AUDIT_INPUT`. Невалидное значение (не число/не булево,
+  // пустая строка) — warn + игнор (fail-soft, как у остальных секций).
+  { section: 'terminal', key: 'idleMinutes', type: 'number' },
+  { section: 'terminal', key: 'maxPerProject', type: 'number' },
+  { section: 'terminal', key: 'maxPerInstance', type: 'number' },
+  { section: 'terminal', key: 'shell', type: 'string' },
+  { section: 'terminal', key: 'auditInput', type: 'boolean' },
   // updates (ADR-133): каналы обновлений. `check` — автопроверка в фоне;
   // `channel` — `auto`|`stable`|`beta`; интервал и реестры каналов.
   { section: 'updates', key: 'check', type: 'boolean' },

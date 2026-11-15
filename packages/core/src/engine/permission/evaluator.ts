@@ -183,11 +183,13 @@ const PLAN_BLOCKED_SSH_TOOLS: ReadonlySet<string> = new Set(SSH_TOOLS);
  * эффектом** permission-слоя (`plan.deny`, `unavailable(mode)`), а не проверкой
  * внутри тула: проверки прав в тулах не заводят (ADR-025/ADR-029).
  *
- * Чтение (`terminal_list`/`terminal_read`) в plan-режиме разрешено — планирование
- * часто требует увидеть состояние терминала.
+ * Чтение (`terminal_list`/`terminal_read`/`terminal_snapshot`) в plan-режиме
+ * разрешено — планирование часто требует увидеть состояние терминала.
  */
 const PLAN_BLOCKED_TERMINAL_TOOLS: ReadonlySet<string> = new Set(
-  TERMINAL_TOOLS.filter((name) => name !== 'terminal_list' && name !== 'terminal_read'),
+  TERMINAL_TOOLS.filter(
+    (name) => name !== 'terminal_list' && name !== 'terminal_read' && name !== 'terminal_snapshot',
+  ),
 );
 
 export function isPlanBlockedTool(toolName: string, capabilities?: readonly string[]): boolean {

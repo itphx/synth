@@ -1919,7 +1919,8 @@
   проекте (`assistant`/`leader`/`devops`/`admin`/`fixer`/`tester`); у `researcher`/
   `security-auditor`/`explore`/`general`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
   **Тулы интерактивных терминалов (PROP-132, Ф5).** `terminal_list`/`terminal_open`/
-  `terminal_read`/`terminal_write`/`terminal_close`/`terminal_run` (`engine/tools/terminals.ts`) — тот же
+  `terminal_read`/`terminal_snapshot`/`terminal_write`/`terminal_close`/`terminal_run`
+  (`engine/tools/terminals.ts`) — тот же
   контур, что у HTTP-роутов `/api/v2/terminals*`: **тот же** экземпляр
   `TerminalService` приходит в тул через `ctx.extra.terminalService` (упаковка —
   оркестратор; в `server/app/deps.ts` и `backend/app/deps.ts` сервис уже
@@ -1940,7 +1941,17 @@
   (`terminal.tool.not_found`); параметра `cwd` у тулов **нет** — каталог
   вычисляет сервер (`session.worktree.directory` → `project.workspace`).
   `terminal_read`: кап 32 КиБ, ANSI по умолчанию **сохраняется** (флаг
-  `strip_ansi`), `tail` отбрасывает завершающий пустой элемент. `terminal_write` с
+  `strip_ansi`), `tail` отбрасывает завершающий пустой элемент.
+  **`terminal_snapshot` — видимый экран, а не поток:** буфер прогоняется через
+  headless-эмулятор xterm (`@xterm/headless`, зависимость core) в
+  `engine/terminal/screen.ts` (`renderTerminalScreen` — чистый рендер без I/O,
+  `allowProposedApi` нужен для `term.buffer`), и возвращается сетка `cols × rows`
+  (как `tmux capture-pane -p`) — для TUI (`htop`/`nvtop`/`tmux`/редакторы), где
+  поток перерисовок нечитаем. ANSI-цвета отбрасываются (читается только
+  содержимое ячеек), `scrollback` — ёмкость буфера эмулятора (в снимок всё равно
+  попадает видимая часть — `buffer.baseY`), размеры по умолчанию — из записи
+  терминала, работает и для `exited`. Пустой экран → `terminal.tool.snapshot_empty`.
+  `terminal_write` с
   `enter: true` проверяет строку **тем же** чекером, что `execute_shell`
   (`checkShellCommand`, `engine/security/shell-guard.ts`): запрет — понятный отказ
   модели, команда в терминал не уходит. **`terminal_run` — один тул, два
@@ -2555,13 +2566,17 @@
   8 КиБ, границы по кодовым точкам UTF-8), `audit.ts` (аудит **только
   метаданных**: `terminal.open`/`terminal.input`/`terminal.close` — в журнал
   исполнений команд, ADR-136; **`terminal.input` пишется только для кадров с
-  `Enter`** — выполненная команда; остальные кадры учитывает только метрика
-  `synth_terminal_bytes_total{op="input"}`), `metrics.ts` (`synth_terminal_sessions{status}`/
-  `synth_terminal_bytes_total{op}`, ADR-094), `config.ts` (мастер-выключатель и
-  восстановление: `resolveTerminalEnabled` / `resolveTerminalAutoRestore` /
-  `resolveTerminalSettings` — приоритет **env `SYNTH_TERMINAL_ENABLED` /
-  `SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml`
-  `terminal.enabled`/`terminal.autoRestore` > default `true`**; флаги в конфиге
+  `Enter`** — выполненная команда, **и только при `terminal.auditInput`**
+  (`setAuditInput(false)` выключает записи; остальные кадры и выключенный аудит
+  учитывает только метрика `synth_terminal_bytes_total{op="input"}`,
+  `open`/`close` пишутся всегда), `metrics.ts` (`synth_terminal_sessions{status}`/
+  `synth_terminal_bytes_total{op}`, ADR-094), `config.ts` (секция `terminal`
+  целиком: `resolveTerminalEnabled` / `resolveTerminalAutoRestore` /
+  `resolveTerminalSettings` — приоритет **env (`SYNTH_TERMINAL_ENABLED`/
+  `SYNTH_TERMINAL_AUTO_RESTORE`/`SYNTH_TERMINAL_IDLE_MINUTES`/
+  `SYNTH_TERMINAL_MAX_PER_PROJECT`/`SYNTH_TERMINAL_MAX_PER_INSTANCE`/
+  `SYNTH_TERMINAL_SHELL`/`SYNTH_TERMINAL_AUDIT_INPUT`) > runtime
+  (`settings.json`/PG) > `config.yaml` `terminal.*` > default**; поля в конфиге
   **необязательны**, чтобы «не задано» отличалось от «явно задано `true`»
   — по этому API различает источники `config`/`default`; env-фиксация
   проверяется **по полю** — фиксация `enabled` не блокирует правку `autoRestore`).
@@ -2583,10 +2598,27 @@
   старте, остановка — на graceful shutdown (`stopTerminalService` → `dispose()`).
   Runtime-настройка — `server/routes/settings-terminal.ts`
   (`createTerminalSettingsRoutes`: `GET/PUT/DELETE /api/v2/settings/terminal`,
-  контракт `{enabled, autoRestore, source, defaults:{enabled, autoRestore},
-  envLocked, restartRequired:false}`; `PUT` — частичное обновление; env-фиксация
-  → 409 `CONFLICT`; изменение применяется **live** через
-  `terminalService.setEnabled`/`setAutoRestore`, `restartRequired: false`).
+  контракт `{enabled, autoRestore, idleMinutes, maxPerProject, maxPerInstance,
+  shell, auditInput, source, sources, defaults, envLocked, envLockedFields,
+  restartRequired:false}`; `PUT` — частичное обновление **только этих 7 полей**
+  (неизвестный ключ/тип/границы/паттерн оболочки → 400 `VALIDATION_ERROR`),
+  env-фиксация — **по полю** → 409 `ENV_LOCKED` с `fields` (ни одно поле
+  запроса не применяется); `DELETE` сбрасывает runtime всех полей; изменение
+  применяется **live** (`setEnabled`/`setAutoRestore`/`setLimits`/
+  `setDefaultShell`/`setAuditInput`), `restartRequired: false`).
+  **Параметры выполнения** живут в секции `terminal` (`config.yaml` / env
+  `SYNTH_TERMINAL_*` / runtime в `settings.json`/PG, приоритет env > runtime >
+  config > default **по каждому полю**; резолвер — `engine/terminal/config.ts`,
+  границы `TERMINAL_*_RANGE`, паттерн `TERMINAL_SHELL_PATTERN`). На лету
+  меняются только они: `idleMinutes` (он же TTL снимков; reaper и уборка
+  снимков читают `idleMs` на каждом тике), `maxPerProject`/`maxPerInstance`
+  (проверяются на каждой попытке создания; уже открытые терминалы новый,
+  меньший лимит не закрывает), `shell` (**только новые** терминалы —
+  существующие не перезапускаются, оболочка зафиксирована в записи и снимке) и
+  `auditInput` (`false` — `terminal.input` в журнал не пишется, метрика
+  `op="input"` и аудит open/close остаются). «Протокольные» лимиты
+  (`maxInputBytes`/`inputRatePerSecond`/буфер/батчинг/период reaper) настройками
+  не управляются — только конфигом при сборке сервиса.
   **Снимки терминалов** (`snapshot.ts`, ADR-096/ADR-116) — порт `BlobStore`:
   `terminals/<id>/meta.json` (запись реестра + `savedAt`) и
   `terminals/<id>/output.txt` (хвост буфера ≤ 512 КиБ). Пишутся при выходе

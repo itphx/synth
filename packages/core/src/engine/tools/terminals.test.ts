@@ -14,10 +14,10 @@
  *   сессия без проекта;
  * - `terminal_open` — дефолты 80×24, каталог = рабочий каталог сессии,
  *   привязка к сессии, маппинг типизированных ошибок сервиса;
- * - `terminal_read` — вывод **в обрамлении** `[CONTENT]`…`[CONTENT END]`,
- *   `since`, `tail`, `history`, `strip_ansi`, кап 32 КиБ, обрезка хвостовых
- *   пустых строк, нормализация CRLF, единый отказ «не найден» (неизвестный и
- *   чужой терминал);
+ * - `terminal_read` — вывод **в обрамлении** `[CONTENT …]`…`[CONTENT END]`
+ *   (метаданные чтения — атрибутами в открывающем маркере), `since`, `tail`,
+ *   `history`, `strip_ansi`, кап 32 КиБ, обрезка хвостовых пустых строк,
+ *   нормализация CRLF, единый отказ «не найден» (неизвестный и чужой терминал);
  * - `terminal_write` — ввод без Enter и с Enter (перевод строки), запрет
  *   команды политикой (тот же чекер, что у `execute_shell`), требование
  *   подтверждения (внешний/защищённый путь);
@@ -40,6 +40,7 @@ import {
   terminalListTool,
   terminalOpenTool,
   terminalReadTool,
+  terminalSnapshotTool,
   terminalWriteTool,
   terminalCloseTool,
   terminalRunTool,
@@ -49,6 +50,7 @@ import {
   TerminalDisabledError,
   TerminalLimitError,
 } from '../terminal/types.js';
+import { formatTerminalContentAttributes, frameTerminalOutput } from '../terminal/output.js';
 import { TerminalRunBusyError, buildTerminalRunNotification, type TerminalRunRecord } from '../terminal/runs.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { getToolGroups, TERMINAL_TOOLS } from '../permission/groups.js';
@@ -214,7 +216,9 @@ class FakeTerminalService {
     const run = this.runs.get(runId);
     if (!run) return null;
     Object.assign(run.record, patch);
-    this.busy = false;
+    // Таймаут не убивает команду: терминал остаётся занятым (как в реестре
+    // запусков — `timeout` не освобождает терминал).
+    this.busy = patch.status === 'timeout';
     // Сервис терминалов после завершения зовёт колбэк (`onSettled` →
     // `onRunFinished`) — уведомление о завершении уходит из сервиса.
     this.settled.push({ ...run.record });
@@ -293,6 +297,25 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.metadata?.count).toBe(1);
     });
 
+    it('помечает принадлежность текущей сессии (own)', async () => {
+      service.records.set('term_own', makeRecord({ id: 'term_own', projectId: 'proj_1', sessionId: 'ses_1' }));
+      service.records.set('term_other', makeRecord({ id: 'term_other', projectId: 'proj_1', sessionId: 'ses_2' }));
+      service.records.set('term_none', makeRecord({ id: 'term_none', projectId: 'proj_1' }));
+
+      const result = await terminalListTool.execute({}, makeCtx());
+      expect(result.isError).toBeUndefined();
+      // Свой терминал — own=true, чужие (в т.ч. без сессии) — own=false.
+      expect(result.content).toContain('term_own | ');
+      expect(result.content).toMatch(/term_own[^\n]*own=true/);
+      expect(result.content).toMatch(/term_other[^\n]*own=false/);
+      expect(result.content).toMatch(/term_none[^\n]*own=false/);
+
+      const terminals = result.metadata?.terminals as Array<{ id: string; own: boolean }>;
+      expect(terminals.find((t) => t.id === 'term_own')?.own).toBe(true);
+      expect(terminals.find((t) => t.id === 'term_other')?.own).toBe(false);
+      expect(terminals.find((t) => t.id === 'term_none')?.own).toBe(false);
+    });
+
     it('фильтр по сессии и include_exited', async () => {
       service.records.set('term_1', makeRecord({ id: 'term_1', sessionId: 'ses_1' }));
       service.records.set('term_2', makeRecord({ id: 'term_2', sessionId: 'ses_2' }));
@@ -358,23 +381,23 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.metadata?.bytes).toBe(0);
     });
 
-    it('читает вывод терминала в обрамлении [CONTENT]…[CONTENT END]', async () => {
+    it('читает вывод терминала в обрамлении [CONTENT …]…[CONTENT END] (метаданные — в маркере)', async () => {
       service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'hello\n' }]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1' }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\nhello\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=5]\nhello\n[CONTENT END]');
       expect(result.metadata?.bytes).toBe(5);
     });
 
     it('обрезает хвостовые пустые строки вывода', async () => {
       service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'a\nb\n\n\n' }]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1' }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\na\nb\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3]\na\nb\n[CONTENT END]');
     });
 
     it('нормализует CRLF в LF (только возвращаемый текст)', async () => {
       service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'a\r\nb\r\n' }]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1' }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\na\nb\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3]\na\nb\n[CONTENT END]');
       // Буфер терминала не меняется — CRLF остаётся в нём.
       expect(service.outputs.get('term_1')?.chunks[0]?.data).toBe('a\r\nb\r\n');
     });
@@ -385,34 +408,34 @@ describe('Тулы интерактивных терминалов (terminals.ts
         { seq: 2, data: 'new\n' },
       ]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1', since: 1 }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\nnew\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=2..2 bytes=3]\nnew\n[CONTENT END]');
     });
 
     it('tail оставляет последние N строк (завершающий пустой элемент отброшен)', async () => {
       service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'a\nb\nc\nd\n' }]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1', tail: 2 }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\nc\nd\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3 tail=2]\nc\nd\n[CONTENT END]');
       expect(result.metadata?.truncated).toBe(true);
     });
 
     it('tail без завершающего перевода строки', async () => {
       service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'a\nb\nc' }]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1', tail: 2 }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\nb\nc\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3 tail=2]\nb\nc\n[CONTENT END]');
       expect(result.metadata?.truncated).toBe(true);
     });
 
     it('tail с переводами строк CRLF нормализуется', async () => {
       service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'a\r\nb\r\nc\r\nd\r\n' }]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1', tail: 2 }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\nc\nd\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3 tail=2]\nc\nd\n[CONTENT END]');
       expect(result.metadata?.truncated).toBe(true);
     });
 
     it('tail больше, чем строк, — весь текст как есть', async () => {
       service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'a\nb\n' }]));
       const result = await terminalReadTool.execute({ terminal_id: 'term_1', tail: 5 }, makeCtx());
-      expect(result.content).toBe('[CONTENT]\na\nb\n[CONTENT END]');
+      expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3 tail=5]\na\nb\n[CONTENT END]');
       expect(result.metadata?.truncated).toBe(false);
     });
 
@@ -423,7 +446,60 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(raw.content).toContain('\u001B[31m');
 
       const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
-      expect(stripped.content).toBe('[CONTENT]\nred\n[CONTENT END]');
+      expect(stripped.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3 stripped=true]\nred\n[CONTENT END]');
+    });
+
+    it('strip_ansi вырезает OSC-строки целиком (маркер запуска, 3008)', async () => {
+      service.outputs.set(
+        'term_1',
+        makeSnapshot([
+          {
+            seq: 1,
+            data: 'before\u001B]7770;synth-run;abc123;0\u0007after\u001B]3008;report=1\u0007end\n',
+          },
+        ]),
+      );
+      const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
+      expect(stripped.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=14 stripped=true]\nbeforeafterend\n[CONTENT END]');
+    });
+
+    it('strip_ansi вырезает OSC, завершённую ST (ESC \\)', async () => {
+      service.outputs.set(
+        'term_1',
+        makeSnapshot([{ seq: 1, data: 'a\u001B]0;window title\u001B\\b\n' }]),
+      );
+      const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
+      expect(stripped.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=2 stripped=true]\nab\n[CONTENT END]');
+    });
+
+    it('strip_ansi применяет backspace (X\\b — удалить символ)', async () => {
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'abc\b\bZ\n' }]));
+      const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
+      expect(stripped.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=2 stripped=true]\naZ\n[CONTENT END]');
+    });
+
+    it('strip_ansi: backspace в начале строки ничего не удаляет', async () => {
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: '\b\btext\n' }]));
+      const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
+      expect(stripped.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=4 stripped=true]\ntext\n[CONTENT END]');
+    });
+
+    it('strip_ansi вырезает одиночный \\r (\\r\\n остаётся переводом строки)', async () => {
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'progress 10%\rprogress 20%\r\ndone\n' }]));
+      const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
+      expect(stripped.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=29 stripped=true]\nprogress 10%progress 20%\ndone\n[CONTENT END]');
+    });
+
+    it('strip_ansi схлопывает «широкие» вставки пробелов (>40 подряд → один)', async () => {
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: `a${' '.repeat(60)}b\n` }]));
+      const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
+      expect(stripped.content).toBe('[CONTENT terminal=term_1 status=running seq=1..1 bytes=3 stripped=true]\na b\n[CONTENT END]');
+    });
+
+    it('strip_ansi сохраняет обычные отступы (≤40 подряд)', async () => {
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: `a${' '.repeat(40)}b\n` }]));
+      const stripped = await terminalReadTool.execute({ terminal_id: 'term_1', strip_ansi: true }, makeCtx());
+      expect(stripped.content).toBe(`[CONTENT terminal=term_1 status=running seq=1..1 bytes=42 stripped=true]\na${' '.repeat(40)}b\n[CONTENT END]`);
     });
 
     it('кап вывода — 32 КиБ (хвост обрезается, truncated)', async () => {
@@ -473,7 +549,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
           { terminal_id: 'term_1', history: true },
           makeCtx(),
         );
-        expect(result.content).toBe('[CONTENT]\nfirst\nsecond\n[CONTENT END]');
+        expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..2 bytes=12 history=true total_bytes=13 dropped_bytes=0]\nfirst\nsecond\n[CONTENT END]');
         expect(result.metadata?.history).toBe(true);
         expect(result.metadata?.dropped_bytes).toBe(0);
       });
@@ -487,7 +563,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
           { terminal_id: 'term_1', history: true, since: 1, tail: 1 },
           makeCtx(),
         );
-        expect(result.content).toBe('[CONTENT]\nfirst\nsecond\n[CONTENT END]');
+        expect(result.content).toBe('[CONTENT terminal=term_1 status=running seq=1..2 bytes=12 history=true total_bytes=13 dropped_bytes=0]\nfirst\nsecond\n[CONTENT END]');
       });
 
       it('сообщает о потерянных байтах буфера (dropped_bytes)', async () => {
@@ -500,6 +576,144 @@ describe('Тулы интерактивных терминалов (terminals.ts
         );
         expect(result.metadata?.dropped_bytes).toBe(512);
       });
+    });
+  });
+
+  describe('terminal_snapshot', () => {
+    beforeEach(() => {
+      service.records.set('term_1', makeRecord({ id: 'term_1', cols: 20, rows: 5 }));
+    });
+
+    it('отдаёт видимый экран: последняя строка видна, старые за пределами rows не попадают', async () => {
+      const output = `${Array.from({ length: 10 }, (_, i) => `line${i + 1}`).join('\r\n')}\r\n`;
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: output }]));
+
+      const result = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      // Экран — последние 5 строк терминала, а не весь поток.
+      expect(result.content).toBe(
+        '[CONTENT terminal=term_1 status=running size=20x5 cursor=4,0]\nline7\nline8\nline9\nline10\n[CONTENT END]',
+      );
+      expect(result.content.split('\n')).not.toContain('line1');
+      expect(result.metadata?.lines).toBe(4);
+      expect(result.metadata?.has_content).toBe(true);
+      expect(result.metadata?.cols).toBe(20);
+      expect(result.metadata?.rows).toBe(5);
+    });
+
+    it('размеры по умолчанию берутся из записи терминала', async () => {
+      service.records.set('term_1', makeRecord({ id: 'term_1', cols: 30, rows: 8 }));
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'hello\r\n' }]));
+
+      const result = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      expect(result.content).toContain('size=30x8');
+      expect(result.metadata?.cols).toBe(30);
+      expect(result.metadata?.rows).toBe(8);
+    });
+
+    it('cols/rows перекрывают окно рендера', async () => {
+      // Строка в 30 колонок при окне 40 не переносится.
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: `${'x'.repeat(30)}\r\n` }]));
+
+      const narrow = await terminalSnapshotTool.execute(
+        { terminal_id: 'term_1', cols: 20, rows: 5 },
+        makeCtx(),
+      );
+      expect(narrow.content).toContain('size=20x5');
+      // При 20 колонках 30 символов переносятся на вторую строку.
+      expect(narrow.metadata?.lines).toBe(2);
+
+      const wide = await terminalSnapshotTool.execute(
+        { terminal_id: 'term_1', cols: 40, rows: 5 },
+        makeCtx(),
+      );
+      expect(wide.content).toContain('size=40x5');
+      expect(wide.metadata?.lines).toBe(1);
+    });
+
+    it('TUI-перерисовка: виден последний кадр (экран ≠ поток)', async () => {
+      service.outputs.set('term_1', makeSnapshot([
+        { seq: 1, data: '\u001B[2J\u001B[HCPU: 10%' },
+        { seq: 2, data: '\u001B[HCPU: 90%' },
+      ]));
+
+      const result = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      expect(result.content).toContain('CPU: 90%');
+      expect(result.content).not.toContain('CPU: 10%');
+    });
+
+    it('exited: экран последнего вывода', async () => {
+      service.records.set('term_1', makeRecord({ id: 'term_1', cols: 20, rows: 5, status: 'exited' }));
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'bye\r\n' }]));
+
+      const result = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      expect(result.content).toBe(
+        '[CONTENT terminal=term_1 status=exited size=20x5 cursor=1,0]\nbye\n[CONTENT END]',
+      );
+      expect(result.metadata?.status).toBe('exited');
+    });
+
+    it('пустой экран → текст terminal.tool.snapshot_empty (без обрамления)', async () => {
+      const noOutput = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      expect(noOutput.content).toBe(
+        'The terminal screen is empty — no visible content (the program has not drawn anything yet)',
+      );
+      expect(noOutput.metadata?.has_content).toBe(false);
+      expect(noOutput.metadata?.empty).toBe(true);
+
+      // Очистка экрана тоже даёт пустой экран.
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'old\u001B[2J\u001B[H' }]));
+      const cleared = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      expect(cleared.metadata?.has_content).toBe(false);
+    });
+
+    it('атрибуты маркера: терминал, статус, размер, курсор', async () => {
+      service.outputs.set('term_1', makeSnapshot([{ seq: 1, data: 'abc' }]));
+
+      const result = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      expect(result.content.split('\n')[0]).toBe(
+        '[CONTENT terminal=term_1 status=running size=20x5 cursor=0,3]',
+      );
+      expect(result.content.endsWith('[CONTENT END]')).toBe(true);
+      expect(result.metadata?.cursor).toEqual({ x: 3, y: 0 });
+    });
+
+    it('чужой и неизвестный терминал → единый отказ not_found', async () => {
+      service.records.set('foreign', makeRecord({ id: 'foreign', projectId: 'proj_other' }));
+
+      const unknown = await terminalSnapshotTool.execute({ terminal_id: 'nope' }, makeCtx());
+      expect(unknown.isError).toBe(true);
+      expect(unknown.content).toContain('not found');
+
+      const foreign = await terminalSnapshotTool.execute({ terminal_id: 'foreign' }, makeCtx());
+      expect(foreign.isError).toBe(true);
+      expect(foreign.content).toContain('not found');
+    });
+
+    it('без сервиса и при выключенном контуре → отказ', async () => {
+      const noService = await terminalSnapshotTool.execute(
+        { terminal_id: 'term_1' },
+        makeCtx({ terminalService: undefined }),
+      );
+      expect(noService.isError).toBe(true);
+
+      service.enabled = false;
+      const disabled = await terminalSnapshotTool.execute({ terminal_id: 'term_1' }, makeCtx());
+      expect(disabled.isError).toBe(true);
+      expect(disabled.content).toContain('disabled');
+    });
+
+    it('невалидные размеры окна → отказ валидации', async () => {
+      const tiny = await terminalSnapshotTool.execute(
+        { terminal_id: 'term_1', cols: 5 },
+        makeCtx(),
+      );
+      expect(tiny.isError).toBe(true);
+
+      const huge = await terminalSnapshotTool.execute(
+        { terminal_id: 'term_1', rows: 500 },
+        makeCtx(),
+      );
+      expect(huge.isError).toBe(true);
     });
   });
 
@@ -574,6 +788,31 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.isError).toBe(true);
       expect(result.content).toContain('not found');
     });
+
+    it('пустой data с enter=true — отправляется чистый Enter (без проверки shell-guard)', async () => {
+      const policy = {
+        deniedPaths: ['/etc/secret'],
+        deniedPrefixes: [],
+        approvalPaths: [],
+        deniedCommandPrefixes: [],
+      };
+      const result = await terminalWriteTool.execute(
+        { terminal_id: 'term_1', data: '', enter: true },
+        makeCtx({ shellPolicy: policy }),
+      );
+      expect(result.isError).toBeUndefined();
+      expect(service.writes).toHaveLength(1);
+      expect(service.writes[0]?.data).toBe('\n');
+      expect(result.metadata?.enter).toBe(true);
+    });
+
+    it('пустой data без enter — отказ валидации (отправлять нечего)', async () => {
+      const result = await terminalWriteTool.execute({ terminal_id: 'term_1', data: '' }, makeCtx());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('argument error');
+      expect(result.content).toContain('enter=true');
+      expect(service.writes).toHaveLength(0);
+    });
   });
 
   describe('terminal_run', () => {
@@ -592,7 +831,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
 
       const result = await promise;
       expect(result.isError).toBeUndefined();
-      expect(result.content).toContain('[CONTENT]');
+      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=done exit=0]');
       expect(result.content).toContain('file1');
       expect(result.content).toContain('[CONTENT END]');
       expect(result.content).toContain('Exit code: 0');
@@ -615,6 +854,53 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.metadata?.exit_code).toBe(2);
     });
 
+    it('маркер запуска (done): terminal/run/status/exit + вывод между маркерами', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls -la' },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'done', exitCode: 0, output: 'file1\nfile2\n' });
+
+      const result = await promise;
+      expect(result.content).toContain(
+        '[CONTENT terminal=term_1 run=run_1 status=done exit=0]\nfile1\nfile2\n[CONTENT END]',
+      );
+    });
+
+    it('маркер запуска (timeout): timeout_ms и still_running, без exit', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'timeout', output: 'partial\n' });
+
+      const result = await promise;
+      expect(result.content).toContain(
+        '[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000 still_running=true]\npartial\n[CONTENT END]',
+      );
+      // Кода возврата нет — атрибута `exit` тоже нет.
+      expect(result.content).not.toContain('exit=');
+    });
+
+    it('маркер запуска (exited): без exit и без still_running', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls' },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'exited', output: 'partial\n' });
+
+      const result = await promise;
+      expect(result.content).toContain(
+        '[CONTENT terminal=term_1 run=run_1 status=exited]\npartial\n[CONTENT END]',
+      );
+    });
+
     it('таймаут запуска — понятный статус и частичный вывод', async () => {
       const promise = terminalRunTool.execute(
         { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
@@ -627,8 +913,55 @@ describe('Тулы интерактивных терминалов (terminals.ts
       const result = await promise;
       expect(result.metadata?.status).toBe('timeout');
       expect(result.content).toContain('timeout');
-      expect(result.content).toContain('[CONTENT]');
+      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000 still_running=true]');
       expect(result.content).toContain('partial');
+    });
+
+    it('таймаут не убивает команду: в ответе still_running, run_id и подсказка', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'timeout', output: 'partial\n' });
+
+      const result = await promise;
+      expect(result.metadata?.status).toBe('timeout');
+      expect(result.metadata?.still_running).toBe(true);
+      expect(result.metadata?.run_id).toBe(runId);
+      // Подсказка: команда продолжает выполняться, терминал занят (run_busy),
+      // остановить — Ctrl+C через terminal_write.
+      expect(result.content).toContain('still running');
+      expect(result.content).toContain(runId);
+      expect(result.content).toContain('run_busy');
+      expect(result.content).toContain('Ctrl+C');
+      expect(result.content).toContain('terminal_write');
+
+      // Терминал после таймаута занят: следующий запуск — run_busy.
+      const next = await terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls' },
+        makeCtx(),
+      );
+      expect(next.isError).toBe(true);
+      expect(next.metadata?.reason).toBe('run_busy');
+    });
+
+    it('вышедший терминал — своя строка статуса (без «Exit code: -»)', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls' },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'exited', output: 'partial\n' });
+
+      const result = await promise;
+      expect(result.metadata?.status).toBe('exited');
+      expect(result.content).toContain('exited');
+      expect(result.content).not.toContain('Exit code: -');
+      // Вышедший терминал — команда не «ещё работает».
+      expect(result.metadata?.still_running).toBeUndefined();
     });
 
     it('дефолтный срок ожидания — 30 с', async () => {
@@ -752,7 +1085,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
       const notification = buildTerminalRunNotification(service.settled[0]!);
       expect(notification.metadata?.type).toBe('background_run_result');
       expect(notification.metadata?.run_id).toBe(runId);
-      expect(notification.content).toContain('[CONTENT]');
+      expect(notification.content).toContain('[CONTENT terminal=term_1 run=run_1 status=done exit=0]');
       expect(notification.content).toContain('ok');
       // В ответе тула вывода запуска нет — он придёт отдельным сообщением.
       expect(result.content).not.toContain('ok');
@@ -831,6 +1164,36 @@ describe('Тулы интерактивных терминалов (terminals.ts
     });
   });
 
+  describe('Формат маркера [CONTENT …]', () => {
+    it('без атрибутов — прежний маркер [CONTENT]', () => {
+      expect(frameTerminalOutput('hello')).toBe('[CONTENT]\nhello\n[CONTENT END]');
+    });
+
+    it('атрибуты — в открывающем маркере, закрывающий не меняется', () => {
+      expect(frameTerminalOutput('hello', { terminal: 'term_1', status: 'running' })).toBe(
+        '[CONTENT terminal=term_1 status=running]\nhello\n[CONTENT END]',
+      );
+    });
+
+    it('значения санитизируются: без переводов строк, пробелов и «]», кап 120 символов', () => {
+      const attrs = formatTerminalContentAttributes({
+        bad: 'a\nb c]',
+        long: 'x'.repeat(200),
+        empty: '',
+        missing: undefined,
+      });
+      expect(attrs).toBe(`bad=abc long=${'x'.repeat(120)}`);
+    });
+
+    it('числа и булевы значения выводятся как есть, порядок — порядок ключей', () => {
+      expect(formatTerminalContentAttributes({ bytes: 12, history: true })).toBe(
+        'bytes=12 history=true',
+      );
+      expect(formatTerminalContentAttributes({})).toBe('');
+      expect(formatTerminalContentAttributes(undefined)).toBe('');
+    });
+  });
+
   describe('permission-слой', () => {
     it('мутирующие тулы заблокированы в plan-режиме, чтение — разрешено', () => {
       expect(isPlanBlockedTool('terminal_open')).toBe(true);
@@ -841,11 +1204,14 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(isPlanBlockedTool('terminal_run')).toBe(true);
       expect(isPlanBlockedTool('terminal_list')).toBe(false);
       expect(isPlanBlockedTool('terminal_read')).toBe(false);
+      // Снимок экрана — только чтение (рендер в памяти), в плане разрешён.
+      expect(isPlanBlockedTool('terminal_snapshot')).toBe(false);
     });
 
     it('группа `terminal` матчится по capability', () => {
       expect(getToolGroups('terminal_write', [ToolCapability.TERMINAL])).toContain('terminal');
       expect(getToolGroups('terminal_list', [ToolCapability.TERMINAL])).toContain('terminal');
+      expect(getToolGroups('terminal_snapshot', [ToolCapability.TERMINAL])).toContain('terminal');
       expect(getToolGroups('terminal_run', [ToolCapability.TERMINAL])).toContain('terminal');
     });
 
@@ -888,6 +1254,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
         'terminal_list',
         'terminal_open',
         'terminal_read',
+        'terminal_snapshot',
         'terminal_write',
         'terminal_close',
         'terminal_run',

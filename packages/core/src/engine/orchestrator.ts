@@ -242,6 +242,21 @@ const TOOL_BATCH_BARRIER_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Тулы, для которых doom-loop **не** срабатывает.
+ *
+ * Это чисто **наблюдающие** тулы: повторный «посмотреть список» — нормальная
+ * практика мониторинга (агент смотрит, появился ли терминал/процесс/сессия), а
+ * не признак зацикливания. Прерывать такой ход нельзя: агент теряет
+ * возможность дождаться результата. Мутирующие тулы в список **не** входят —
+ * для них doom-loop остаётся защитой от повторов.
+ */
+const DOOM_LOOP_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
+  'terminal_list',
+  'process_list',
+  'list_sessions',
+]);
+
+/**
  * PROP-127 (этап T2): результат вызова инструмента в том виде, в котором его
  * видит цикл шага.
  *
@@ -6506,7 +6521,13 @@ export class ChatOrchestrator {
           // политикой. Deny-вызовы исключены: каждая попытка должна получать
           // понятный feedback с объяснением причины запрета, а не «Цикл
           // прерван». Механика для повторяющихся легальных вызовов сохраняется.
-          if (!hookBlocked && permissionDecision.action !== 'deny') {
+          // Чисто наблюдающие тулы (`terminal_list`/`process_list`/`list_sessions`)
+          // исключены: их повтор — это мониторинг, а не зацикливание.
+          if (
+            !hookBlocked
+            && permissionDecision.action !== 'deny'
+            && !DOOM_LOOP_EXEMPT_TOOLS.has(toolName)
+          ) {
             const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
             const doomCount = (doomLoopTracker.get(doomKey) || 0) + 1;
             doomLoopTracker.set(doomKey, doomCount);

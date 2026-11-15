@@ -556,6 +556,7 @@ export {
   TerminalAlreadyRunningError,
   TerminalDisabledError,
   TerminalError,
+  TerminalExitedError,
   TerminalInvalidRequestError,
   TerminalLimitError,
   TerminalNotFoundError,
@@ -628,6 +629,13 @@ export {
   TERMINAL_CONTENT_CLOSE,
   TERMINAL_CONTENT_OPEN,
 } from './engine/terminal/output.js';
+// PROP-132: рендер **видимого экрана** терминала (тул `terminal_snapshot`) —
+// чистый рендер потока в сетку `cols × rows`, без I/O (headless-эмулятор xterm).
+export { renderTerminalScreen } from './engine/terminal/screen.js';
+export type {
+  RenderTerminalScreenOptions,
+  TerminalScreenSnapshot,
+} from './engine/terminal/screen.js';
 // PROP-135 (Ф1, слайс 2): общий читатель файлов — тем же кодом читает и
 // исполнитель (точечный runtime-импорт), поэтому формат вывода не зависит
 // от топологии.
@@ -2541,13 +2549,27 @@ export type {
 // standalone-core и managed backend).
 export { createTerminalService } from './server/app/terminal-service.js';
 export type { TerminalServiceWiring } from './server/app/terminal-service.js';
-// PROP-132 (Ф3в): мастер-выключатель терминалов — приоритет источников
-// (env > runtime > config > default) и HTTP-контур runtime-настройки.
+// PROP-132 (Ф3в): настройки терминалов — приоритет источников
+// (env > runtime > config > default, по каждому полю), границы и
+// HTTP-контур runtime-настройки.
 export {
+  DEFAULT_TERMINAL_AUDIT_INPUT,
   DEFAULT_TERMINAL_AUTO_RESTORE,
   DEFAULT_TERMINAL_ENABLED,
+  DEFAULT_TERMINAL_IDLE_MINUTES,
+  DEFAULT_TERMINAL_MAX_PER_INSTANCE,
+  DEFAULT_TERMINAL_MAX_PER_PROJECT,
+  TERMINAL_AUDIT_INPUT_ENV,
   TERMINAL_AUTO_RESTORE_ENV,
   TERMINAL_ENABLED_ENV,
+  TERMINAL_IDLE_MINUTES_ENV,
+  TERMINAL_IDLE_MINUTES_RANGE,
+  TERMINAL_MAX_PER_INSTANCE_ENV,
+  TERMINAL_MAX_PER_INSTANCE_RANGE,
+  TERMINAL_MAX_PER_PROJECT_ENV,
+  TERMINAL_MAX_PER_PROJECT_RANGE,
+  TERMINAL_SHELL_ENV,
+  TERMINAL_SHELL_PATTERN,
   parseTerminalEnvAutoRestore,
   parseTerminalEnvEnabled,
   resolveTerminalAutoRestore,
@@ -2560,6 +2582,10 @@ export type {
   ResolvedTerminalSettings,
   TerminalEnabledSource,
   TerminalEnvLock,
+  TerminalNumericBounds,
+  TerminalSettingsDefaults,
+  TerminalSettingsField,
+  TerminalSettingsSources,
 } from './engine/terminal/config.js';
 // PROP-135: порт терминала — тот же роутер, что у тулов (профиль/пул).
 export { createTerminalPortResolver, resolveTerminalWorkspaceSubPath } from './server/app/terminal-port.js';

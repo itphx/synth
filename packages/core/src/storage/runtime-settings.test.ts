@@ -1382,3 +1382,57 @@ describe('RuntimeSettingsStore: каталог профилей исполнен
     expect(await readExecutionRuntimeSettings(store)).toBeUndefined();
   });
 });
+
+describe('RuntimeSettingsStore: терминалы (PROP-132)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-terminal-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('setTerminal сохраняет мастер-флаги и параметры выполнения', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setTerminal({
+      enabled: false,
+      autoRestore: false,
+      idleMinutes: 720,
+      maxPerProject: 4,
+      maxPerInstance: 16,
+      shell: '/bin/zsh',
+      auditInput: false,
+    });
+
+    expect(await store.getTerminal()).toEqual({
+      enabled: false,
+      autoRestore: false,
+      idleMinutes: 720,
+      maxPerProject: 4,
+      maxPerInstance: 16,
+      shell: '/bin/zsh',
+      auditInput: false,
+    });
+  });
+
+  it('shell: null (платформенный дефолт) — валидное runtime-значение, не «не задано»', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setTerminal({ shell: null });
+
+    const runtime = await store.getTerminal();
+    expect('shell' in runtime).toBe(true);
+    expect(runtime.shell).toBeNull();
+  });
+
+  it('clearTerminal сбрасывает всю секцию, соседние не трогает', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setSshMode('agent');
+    await store.setTerminal({ idleMinutes: 60 });
+    await store.clearTerminal();
+
+    expect(await store.getTerminal()).toEqual({});
+    expect(await store.getSshMode()).toBe('agent');
+  });
+});

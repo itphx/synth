@@ -122,12 +122,10 @@ import {
   createAgentStepExecutor,
   createPipelineExitHandler,
   createPipelineMetrics,
-  // PROP-132 (Ф3в): сервис терминалов инстанса + мастер-выключатель
-  // `terminal.enabled` (приоритет env > runtime > config > default).
+  // PROP-132 (Ф3в): сервис терминалов инстанса + настройки секции `terminal`
+  // (env > runtime > config > default, по каждому полю).
   createTerminalService,
-  resolveTerminalEnabled,
-  // PROP-132: восстановление терминалов из снимков (`terminal.autoRestore`).
-  resolveTerminalAutoRestore,
+  resolveTerminalSettings,
   // PROP-135: порт терминала — тем же роутером, что и порт тулов.
   createTerminalPortResolver,
   // PROP-132 (Ф5): сообщение-уведомление о завершении запуска команды в
@@ -1297,6 +1295,17 @@ export async function createStandaloneDeps(
     agents: { get: (role: string) => agentRegistry.get(role) },
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
   });
+  // Эффективные настройки секции `terminal` (env > runtime > config > default,
+  // по каждому полю): читаются **до** сборки сервиса — параметры выполнения
+  // (`idleMinutes`/`maxPerProject`/`maxPerInstance`), оболочка новых терминалов
+  // и журналирование ввода приезжают стартовыми значениями, а дальше меняются
+  // live из `/api/v2/settings/terminal`.
+  const terminalRuntime = await settingsStore.getTerminal();
+  const terminalSettings = resolveTerminalSettings({
+    ...(config.terminalConfig ? { config: config.terminalConfig } : {}),
+    runtime: terminalRuntime,
+    env: process.env,
+  });
   const terminalService = createTerminalService({
     port: executionPort,
     resolvePort: terminalPortResolver,
@@ -1305,6 +1314,13 @@ export async function createStandaloneDeps(
     commandAuditLog,
     ...(metrics ? { metrics } : {}),
     sessions: { getSession: (id: string) => sessionManager.getSession(id) },
+    limits: {
+      idleMs: terminalSettings.idleMinutes * 60_000,
+      maxPerProject: terminalSettings.maxPerProject,
+      maxPerInstance: terminalSettings.maxPerInstance,
+    },
+    defaultShell: terminalSettings.shell,
+    auditInput: terminalSettings.auditInput,
     // PROP-132 (Ф5): результат запуска команды в терминале приходит в сессию
     // **сообщением** — тем же нотификатором, что у фоновых шелл-процессов
     // (ADR-113): ровно одна копия (steer при активном ходе, иначе очередь).
@@ -1320,33 +1336,20 @@ export async function createStandaloneDeps(
       await notifyBackgroundParent(sessionId, buildTerminalRunNotification(run));
     },
   });
-  // Стартовое значение мастер-выключателя: env > runtime > config > default.
-  // Runtime-override читается из `settings.json`/PG (живёт инстанса).
-  const terminalRuntime = await settingsStore.getTerminal();
   // PROP-132: восстановление терминалов из снимков — тот же порядок
   // приоритета. Значение применяется **до** восстановления: выключенное
   // восстановление → снимки не поднимаются (их уберёт reaper).
-  terminalService.setAutoRestore(
-    resolveTerminalAutoRestore({
-      configAutoRestore: config.terminalConfig?.autoRestore,
-      runtimeAutoRestore:
-        typeof terminalRuntime.autoRestore === 'boolean' ? terminalRuntime.autoRestore : undefined,
-      env: process.env,
-    }).autoRestore,
-  );
+  terminalService.setAutoRestore(terminalSettings.autoRestore);
   // Снимки терминалов поднимаются **до** применения мастер-выключателя:
-  // восстановленная запись — это история вывода, а не живой терминал.
+  // восстановление поднимает **процесс** (новый PTY) для терминалов, живых на
+  // момент остановки, — при выключенном контуре они сразу закрываются
+  // (`setEnabled(false)`), при включённом возвращаются с сохранённой историей
+  // вывода.
   const restoredTerminals = await terminalService.restoreFromSnapshots();
   if (restoredTerminals > 0) {
     console.log(`[terminal] восстановлено терминалов из снимков: ${restoredTerminals}`);
   }
-  terminalService.setEnabled(
-    resolveTerminalEnabled({
-      configEnabled: config.terminalConfig?.enabled,
-      runtimeEnabled: typeof terminalRuntime.enabled === 'boolean' ? terminalRuntime.enabled : undefined,
-      env: process.env,
-    }).enabled,
-  );
+  terminalService.setEnabled(terminalSettings.enabled);
 
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
   //

@@ -101,6 +101,52 @@ export interface TerminalRuntimeSettings {
    * либо их убирает reaper.
    */
   autoRestore?: boolean;
+  /**
+   * PROP-132: простой терминала (минуты) до автоматического закрытия; он же
+   * TTL снимков (`terminals/<id>/*`).
+   *
+   * Приоритет: env `SYNTH_TERMINAL_IDLE_MINUTES` > runtime > config.yaml
+   * `terminal.idleMinutes` > default `2880` (2 дня). Вне диапазона 30…10080
+   * значение игнорируется резолвером (остаётся следующий по приоритету слой).
+   * Применяется **сразу**: idle-reaper читает значение на каждом тике.
+   */
+  idleMinutes?: number;
+  /**
+   * PROP-132: предел **живых** терминалов на проект.
+   *
+   * Приоритет: env `SYNTH_TERMINAL_MAX_PER_PROJECT` > runtime > config.yaml
+   * `terminal.maxPerProject` > default `8`. Границы 1…64 (вне диапазона
+   * значение отбрасывается резолвером); нарушение лимита при открытии —
+   * `TERMINAL_LIMIT` (409).
+   */
+  maxPerProject?: number;
+  /**
+   * PROP-132: предел **живых** терминалов на инстанс.
+   *
+   * Приоритет: env `SYNTH_TERMINAL_MAX_PER_INSTANCE` > runtime > config.yaml
+   * `terminal.maxPerInstance` > default `32`. Границы 1…256 (вне диапазона
+   * значение отбрасывается резолвером); нарушение — `TERMINAL_LIMIT` (409).
+   */
+  maxPerInstance?: number;
+  /**
+   * PROP-132: оболочка терминала — имя программы или абсолютный путь
+   * (`^[A-Za-z0-9._/+-]{1,200}$`, без пробелов).
+   *
+   * Приоритет: env `SYNTH_TERMINAL_SHELL` > runtime > config.yaml
+   * `terminal.shell` > default `null` (платформенный дефолт: `$SHELL` →
+   * `/bin/bash`). `null`/пустая строка явно означают «платформенный дефолт»
+   * (сброс настройки), невалидный паттерн игнорируется резолвером.
+   */
+  shell?: string | null;
+  /**
+   * PROP-132: писать ли `terminal.input` в журнал исполнений команд
+   * (ADR-136, только метаданные).
+   *
+   * Приоритет: env `SYNTH_TERMINAL_AUDIT_INPUT` > runtime > config.yaml
+   * `terminal.auditInput` > default `true`. `false` — ввод не журналируется
+   * (метрика `synth_terminal_bytes_total{op="input"}` считается всегда).
+   */
+  auditInput?: boolean;
 }
 
 /**

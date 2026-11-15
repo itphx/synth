@@ -1,8 +1,8 @@
 /**
  * PROP-132 (Ф5): тулы агента для интерактивных терминалов.
  *
- * Тулы: `terminal_list`, `terminal_open`, `terminal_read`, `terminal_write`,
- * `terminal_close`, `terminal_run`, `terminal_run_result` — тот же контур, что
+ * Тулы: `terminal_list`, `terminal_open`, `terminal_read`, `terminal_snapshot`,
+ * `terminal_write`, `terminal_close`, `terminal_run`, `terminal_run_result` — тот же контур, что
  * у HTTP-роутов `/api/v2/terminals*` (`server/routes/terminals.ts`), только
  * вызывает его агент.
  *
@@ -54,6 +54,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { TerminalService } from '../terminal/service.js';
 import type { TerminalRecord } from '../terminal/types.js';
 import { frameTerminalOutput, normalizeTerminalLineEndings, normalizeTerminalOutput } from '../terminal/output.js';
+import { renderTerminalScreen } from '../terminal/screen.js';
 import { isTerminalRunBusyError, type TerminalRunRecord } from '../terminal/runs.js';
 import {
   TerminalDisabledError,
@@ -98,6 +99,17 @@ const MAX_OUTPUT_BYTES = 32 * 1024;
 /** Потолок числа строк в параметре `tail`. */
 const MAX_TAIL_LINES = 5000;
 
+/** Границы окна рендера экрана (`terminal_snapshot`): ширина, колонки. */
+const MIN_SNAPSHOT_COLS = 20;
+const MAX_SNAPSHOT_COLS = 300;
+
+/** Границы окна рендера экрана (`terminal_snapshot`): высота, строки. */
+const MIN_SNAPSHOT_ROWS = 5;
+const MAX_SNAPSHOT_ROWS = 100;
+
+/** Потолок буфера прокрутки рендера (`terminal_snapshot`), строки. */
+const MAX_SNAPSHOT_SCROLLBACK = 500;
+
 /**
  * ANSI-последовательности (CSI/OSC и прочие escape-последовательности).
  *
@@ -105,12 +117,130 @@ const MAX_TAIL_LINES = 5000;
  * значимы для агента, читающего вывод команды); `strip_ansi: true` — для
  * случаев, когда модель не должна видеть управляющие последовательности.
  */
-// eslint-disable-next-line no-control-regex
-const ANSI_PATTERN = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+const ESC = '\u001B';
+/** BEL — завершает OSC-строку. */
+const BEL = '\u0007';
+/** CSI в 8-битном виде. */
+const CSI_8BIT = '\u009B';
+/** ST в 8-битном виде — второй вариант завершения OSC. */
+const ST_8BIT = '\u009C';
 
-/** Убрать ANSI-последовательности из текста. */
+/**
+ * «Широкая» вставка пробелов (рамки powerline и т.п.).
+ *
+ * Подряд **больше 40** пробелов внутри строки схлопываются в один пробел:
+ * такие вставки не несут смысла, а только раздувают вывод.
+ */
+const WIDE_SPACE_RUN_PATTERN = / {41,}/g;
+
+/**
+ * Конец OSC-строки (после `ESC ]`): BEL или ST (`ESC \`).
+ *
+ * Незавершённая OSC-строка съедает остаток потока — как в терминале: иначе в
+ * вывод попал бы мусор служебной строки.
+ */
+function skipOsc(text: string, from: number): number {
+  for (let i = from; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (ch === BEL) return i + 1;
+    if (ch === ST_8BIT) return i + 1;
+    if (ch === ESC && text[i + 1] === '\\') return i + 2;
+  }
+  return text.length;
+}
+
+/**
+ * Конец CSI-последовательности (после `ESC [`): финальный байт 0x40…0x7E.
+ */
+function skipCsi(text: string, from: number): number {
+  for (let i = from; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code >= 0x40 && code <= 0x7e) return i + 1;
+  }
+  return text.length;
+}
+
+/**
+ * Вырезать escape-последовательности из текста.
+ *
+ * - **OSC** (`ESC ] …`) вырезается **целиком** — до BEL или ST: в потоке
+ *   терминала это служебные строки (в т.ч. маркер запуска
+ *   `ESC]7770;synth-run;…` и `ESC]3008;…`), которые модели видеть не нужно;
+ * - **CSI** (`ESC [ …`) вырезается целиком (цвета/позиционирование);
+ * - прочие escape-последовательности (`ESC` + символ) вырезаются целиком.
+ */
+function stripEscapeSequences(text: string): string {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === ESC) {
+      const next = text[i + 1];
+      if (next === ']') {
+        i = skipOsc(text, i + 2);
+        continue;
+      }
+      if (next === '[') {
+        i = skipCsi(text, i + 2);
+        continue;
+      }
+      // Прочие escape-последовательности: `ESC` + финальный символ.
+      i += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (ch === CSI_8BIT) {
+      i = skipCsi(text, i + 1);
+      continue;
+    }
+    if (ch === ST_8BIT) {
+      i += 1;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Нормализовать управляющие символы: backspace и «возврат каретки».
+ *
+ * - `X\b` — backspace удаляет предыдущий символ; `\b` в начале — ничего
+ *   (удалять нечего);
+ * - одиночный `\r` (не часть `\r\n`) вырезается: в плоском тексте «возврат
+ *   каретки» ничего не значит, а в потоке терминала он приходит от
+ *   прогресс-вывода и портит читаемость.
+ */
+function normalizeControlChars(text: string): string {
+  const chars = Array.from(text);
+  const out: string[] = [];
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i]!;
+    if (ch === '\b') {
+      if (out.length > 0) out.pop();
+      continue;
+    }
+    if (ch === '\r') {
+      // `\r\n` — обычный перевод строки (сохраняем), одиночный `\r` — нет.
+      if (chars[i + 1] === '\n') out.push('\r');
+      continue;
+    }
+    out.push(ch);
+  }
+  return out.join('');
+}
+
+/**
+ * Убрать управляющие последовательности и привести вывод к читаемому виду.
+ *
+ * Вырезаются: escape-последовательности (CSI/OSC — **целиком**), действие
+ * backspace (`X\b` → удалить символ), одиночный `\r`; «широкие» вставки
+ * пробелов (подряд больше 40) схлопываются в один пробел.
+ */
 function stripAnsi(text: string): string {
-  return text.replace(ANSI_PATTERN, '');
+  const withoutSequences = stripEscapeSequences(text);
+  const normalized = normalizeControlChars(withoutSequences);
+  return normalized.replace(WIDE_SPACE_RUN_PATTERN, ' ');
 }
 
 /** Единый отказ «сервис терминалов не подключён». */
@@ -300,8 +430,13 @@ function checkCommandPolicy(
   return null;
 }
 
-/** Строка терминала для списка — машиночитаемые `key=value`. */
-function formatTerminalLine(record: TerminalRecord, writable: boolean): string {
+/**
+ * Строка терминала для списка — машиночитаемые `key=value`.
+ *
+ * `own` — привязан ли терминал к текущей сессии (`record.sessionId` совпадает
+ * с id сессии вызова). Терминал без сессии — `own=false`.
+ */
+function formatTerminalLine(record: TerminalRecord, writable: boolean, own: boolean): string {
   return [
     `- ${record.id}`,
     `cwd=${record.cwd}`,
@@ -309,8 +444,20 @@ function formatTerminalLine(record: TerminalRecord, writable: boolean): string {
     `status=${record.status}`,
     `can_write=${writable ? 'true' : 'false'}`,
     `session=${record.sessionId ?? '-'}`,
+    `own=${own ? 'true' : 'false'}`,
     `size=${record.cols}x${record.rows}`,
   ].join(' | ');
+}
+
+/**
+ * Привязан ли терминал к текущей сессии.
+ *
+ * Терминал без привязки к сессии (`sessionId` не задан) — `false`: он виден в
+ * проекте, но текущей сессии не принадлежит.
+ */
+function isOwnTerminal(record: TerminalRecord, sessionId: string | undefined): boolean {
+  if (!record.sessionId || !sessionId) return false;
+  return record.sessionId === sessionId;
 }
 
 // ─────────────────────────────── terminal_list ───────────────────────────────
@@ -333,9 +480,11 @@ export const terminalListTool: ToolDefinition = {
   name: 'terminal_list',
   description:
     'List the interactive terminals of the current project: id, working directory, shell, status, '
-    + 'whether the agent can write to it, and the session it is bound to. '
+    + 'whether the agent can write to it, the session it is bound to, and own=true|false '
+    + '(own=true — the terminal is bound to the current session). '
     + 'Use it to find the terminal id for terminal_read/terminal_write/terminal_close. '
-    + 'Only terminals of the current project are visible.',
+    + 'Only terminals of the current project are visible — the terminals of the project are all visible, '
+    + 'own only marks the ones bound to the current session.',
   parameters: terminalListSchema,
   capabilities: [ToolCapability.TERMINAL],
   async execute(args, ctx) {
@@ -366,7 +515,9 @@ export const terminalListTool: ToolDefinition = {
 
     const lines = [
       sm('terminal.tool.header', { count: String(records.length) }),
-      ...records.map((record) => formatTerminalLine(record, canWrite(service, record))),
+      ...records.map((record) =>
+        formatTerminalLine(record, canWrite(service, record), isOwnTerminal(record, ctx.sessionId)),
+      ),
     ];
     return {
       content: lines.join('\n'),
@@ -379,6 +530,7 @@ export const terminalListTool: ToolDefinition = {
           shell: record.shell,
           can_write: canWrite(service, record),
           session_id: record.sessionId ?? null,
+          own: isOwnTerminal(record, ctx.sessionId),
         })),
       },
     };
@@ -417,7 +569,9 @@ export const terminalOpenTool: ToolDefinition = {
   description:
     'Open an interactive terminal (PTY) in the working directory of the current session '
     + '(the session worktree directory, or the project workspace) and return its id, shell, size and status. '
-    + 'Simultaneous openings of the same directory share one live terminal; a later opening creates a new one. '
+    + 'Every call opens a NEW terminal — there is no idempotency: opening the same directory twice gives '
+    + 'two independent terminals with separate PTYs and separate output. '
+    + 'The default size is 80x24 if cols/rows are not given. '
     + 'Use terminal_write to send input and terminal_read to read the output.',
   parameters: terminalOpenSchema,
   capabilities: [ToolCapability.TERMINAL],
@@ -600,19 +754,178 @@ export const terminalReadTool: ToolDefinition = {
     // Возвращаемый текст нормализуется (CRLF → LF, без хвостовых пустых
     // строк) и обрамляется; буфер терминала при этом не меняется.
     const body = normalizeTerminalOutput(text);
+    const bytes = Buffer.byteLength(body, 'utf8');
+    const firstSeq = chunks.length > 0 ? chunks[0]!.seq : snapshot.firstSeq;
+    const lastSeq = snapshot.lastSeq;
+
+    // Метаданные чтения — в открывающем маркере (`[CONTENT …]`): модель видит
+    // id терминала, статус, диапазон последовательностей и объём вывода без
+    // разбора тела ответа. Закрывающий маркер не меняется.
+    const content = frameTerminalOutput(body, {
+      terminal: params.terminal_id,
+      status: record.status,
+      seq: `${firstSeq}..${lastSeq}`,
+      bytes,
+      ...(history ? { history: true, total_bytes: snapshot.totalBytes, dropped_bytes: snapshot.droppedBytes } : {}),
+      ...(params.strip_ansi === true ? { stripped: true } : {}),
+      // `tail` в режиме `history` игнорируется — атрибут показываем только
+      // когда хвост реально применён.
+      ...(!history && params.tail !== undefined ? { tail: params.tail } : {}),
+    });
 
     return {
-      content: frameTerminalOutput(body),
+      content,
       metadata: {
         terminal_id: params.terminal_id,
         status: record.status,
-        bytes: Buffer.byteLength(body, 'utf8'),
-        first_seq: chunks.length > 0 ? chunks[0]!.seq : snapshot.firstSeq,
-        last_seq: snapshot.lastSeq,
+        bytes,
+        first_seq: firstSeq,
+        last_seq: lastSeq,
         total_bytes: snapshot.totalBytes,
         dropped_bytes: snapshot.droppedBytes,
         truncated,
         ...(history ? { history: true } : {}),
+      },
+    };
+  },
+};
+
+// ──────────────────────────── terminal_snapshot ────────────────────────────
+
+const terminalSnapshotSchema = z
+  .object({
+    terminal_id: z.string().min(1).describe('Terminal id (term_...) from terminal_list/terminal_open'),
+    cols: z
+      .number()
+      .int()
+      .min(MIN_SNAPSHOT_COLS)
+      .max(MAX_SNAPSHOT_COLS)
+      .optional()
+      .describe(
+        `Screen width in columns, ${MIN_SNAPSHOT_COLS}…${MAX_SNAPSHOT_COLS} `
+        + '(default: the terminal width, capped at the maximum)',
+      ),
+    rows: z
+      .number()
+      .int()
+      .min(MIN_SNAPSHOT_ROWS)
+      .max(MAX_SNAPSHOT_ROWS)
+      .optional()
+      .describe(
+        `Screen height in rows, ${MIN_SNAPSHOT_ROWS}…${MAX_SNAPSHOT_ROWS} `
+        + '(default: the terminal height, capped at the maximum)',
+      ),
+    scrollback: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_SNAPSHOT_SCROLLBACK)
+      .optional()
+      .describe(
+        'Scrollback capacity for the emulator, lines (default: 0 — no history). '
+        + 'The snapshot still contains the visible screen only.',
+      ),
+  })
+  .strict();
+
+/**
+ * `terminal_snapshot` — **видимый экран** вместо потока (PROP-132).
+ *
+ * `terminal_read` отдаёт поток вывода: для TUI-программ (`htop`, `nvtop`,
+ * `tmux`, редакторы) он бесполезен — программа перерисовывает экран
+ * управляющими последовательностями, и склеенный поток не показывает текущую
+ * картинку. Этот тул прогоняет буфер через headless-эмулятор xterm
+ * (`engine/terminal/screen.ts`) и возвращает сетку `cols × rows` — как
+ * `tmux capture-pane -p`.
+ *
+ * Только чтение: права/скоуп — как у `terminal_read` (`terminalInScope`), в
+ * plan-режиме тул разрешён (ничего не меняет, экран эмулируется в памяти).
+ * Работает и для `exited` — экран последнего вывода.
+ */
+export const terminalSnapshotTool: ToolDefinition = {
+  name: 'terminal_snapshot',
+  description:
+    'Renders the **visible screen** (cols×rows) of an interactive terminal as plain text — '
+    + 'use it for TUI programs (htop, top, nvtop, tmux, editors) where the raw stream is unreadable; '
+    + 'use terminal_read for the raw stream. '
+    + 'The output buffer is replayed through a terminal emulator and only the screen grid is returned '
+    + '(ANSI colors are dropped, lines are trimmed at the right edge), wrapped in [CONTENT ...] [CONTENT END] '
+    + 'with the terminal id, status, size and cursor in the opening marker. '
+    + 'Size defaults to the terminal size; cols/rows override the emulated window. Works for exited terminals too '
+    + '(the last screen is shown).',
+  parameters: terminalSnapshotSchema,
+  capabilities: [ToolCapability.TERMINAL],
+  async execute(args, ctx) {
+    if (isAborted(ctx)) return abortedResult(this.name);
+
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
+    const params = parsed.data as {
+      terminal_id: string;
+      cols?: number;
+      rows?: number;
+      scrollback?: number;
+    };
+
+    const service = serviceOf(ctx);
+    if (!service) return depsUnavailable();
+    if (!service.isEnabled()) return disabledResult();
+
+    const record = terminalInScope(ctx, service, params.terminal_id);
+    if (!record) return notFound(params.terminal_id);
+
+    // Размер окна — как у терминала, если не задан явно: экран должен совпадать
+    // с тем, что видит человек во вкладке терминала. Потолок схемы применяется и
+    // к дефолту: терминал можно открыть шире (до 1000), но рендер экрана такого
+    // размера — лишняя память на ответ, который всё равно прочтут глазами.
+    const cols = params.cols ?? Math.min(record.cols, MAX_SNAPSHOT_COLS);
+    const rows = params.rows ?? Math.min(record.rows, MAX_SNAPSHOT_ROWS);
+
+    // Вход рендера — весь доступный буфер (поток как есть: эмулятор сам
+    // применяет escape-последовательности). Пустой буфер — пустой экран.
+    const snapshot = service.output(params.terminal_id);
+    const text = snapshot ? snapshot.chunks.map((chunk) => chunk.data).join('') : '';
+
+    const screen = await renderTerminalScreen(text, {
+      cols,
+      rows,
+      ...(params.scrollback !== undefined ? { scrollback: params.scrollback } : {}),
+    });
+
+    // Хвостовые пустые строки — не содержание экрана: «пусто в конце» читалось
+    // бы как «экрана нет». Обрезка — здесь, а не в рендере (рендер обязан
+    // вернуть ровно `rows` строк).
+    const lines = screen.lines.slice();
+    while (lines.length > 0 && (lines[lines.length - 1] ?? '').trim() === '') lines.pop();
+
+    const cursorAttr = `${screen.cursor.y},${screen.cursor.x}`;
+    const sizeAttr = `${screen.cols}x${screen.rows}`;
+
+    // Полностью пустой экран — отдельный текст (как «вывода ещё нет» у
+    // `terminal_read`): обрамление с пустым телом читалось бы как пустая строка.
+    const body = lines.join('\n');
+    const content = body === ''
+      ? sm('terminal.tool.snapshot_empty')
+      : frameTerminalOutput(body, {
+          terminal: params.terminal_id,
+          status: record.status,
+          size: sizeAttr,
+          cursor: cursorAttr,
+        });
+
+    return {
+      content,
+      metadata: {
+        terminal_id: params.terminal_id,
+        status: record.status,
+        cols: screen.cols,
+        rows: screen.rows,
+        cursor: { x: screen.cursor.x, y: screen.cursor.y },
+        lines: lines.length,
+        has_content: screen.hasContent,
+        ...(body === '' ? { empty: true } : {}),
+        ...(params.scrollback !== undefined ? { scrollback: params.scrollback } : {}),
+        ...(body === '' ? { i18n: i18nMeta('terminal.tool.snapshot_empty') } : {}),
       },
     };
   },
@@ -625,8 +938,11 @@ const terminalWriteSchema = z
     terminal_id: z.string().min(1).describe('Terminal id (term_...) from terminal_list/terminal_open'),
     data: z
       .string()
-      .min(1)
-      .describe('Text to send to the terminal (keystrokes)'),
+      .min(0)
+      .describe(
+        'Text to send to the terminal (keystrokes). May be empty: with enter=true it sends a bare Enter '
+          + '(an empty command line); without enter=true an empty value is rejected — there is nothing to send.',
+      ),
     enter: z
       .boolean()
       .optional()
@@ -640,6 +956,8 @@ export const terminalWriteTool: ToolDefinition = {
     'Send input to an interactive terminal by its id (keystrokes, no newline by default). '
     + 'With enter=true a newline is appended and the line is checked by the same shell policy as execute_shell: '
     + 'a command that the policy forbids is not sent to the terminal. '
+    + 'An empty data with enter=true sends a bare Enter (submit an empty command line — it is not checked '
+    + 'by the shell policy, because there is no command); an empty data without enter=true is rejected. '
     + 'The terminal output becomes visible via terminal_read.',
   parameters: terminalWriteSchema,
   capabilities: [ToolCapability.TERMINAL],
@@ -660,13 +978,20 @@ export const terminalWriteTool: ToolDefinition = {
     let payload = params.data;
     if (params.enter === true) {
       // Строка, уходящая в терминал с Enter, — это команда: её проверяет тот
-      // же shell-guard, что и `execute_shell` (ADR-029/ADR-136).
+      // же shell-guard, что и `execute_shell` (ADR-029/ADR-136). Пустая строка
+      // — не команда: её не проверяем (иначе чистый Enter был бы невозможен).
       const command = params.data.replace(/[\r\n]+$/, '');
       if (command.trim() !== '') {
         const denial = checkCommandPolicy(command, record.cwd, ctx, params.terminal_id);
         if (denial) return denial;
       }
       payload = `${params.data.replace(/[\r\n]+$/, '')}\n`;
+    } else if (params.data === '') {
+      // Пустой ввод без Enter — отправлять нечего: понятный отказ валидации.
+      return argErrorResult(
+        this.name,
+        'data: the value is empty and enter is not set — there is nothing to send; pass data or set enter=true',
+      );
     }
 
     const actorId = await resolveActorId(ctx);
@@ -821,12 +1146,14 @@ async function waitRunWithAbort(
 /**
  * Текст результата запуска: заголовок, код возврата/причина и обрамлённый вывод.
  *
- * Обрамление — `[CONTENT]` … `[CONTENT END]` (общее правило вывода терминала).
+ * Обрамление — `[CONTENT …]` … `[CONTENT END]` (общее правило вывода
+ * терминала): метаданные запуска (терминал, id запуска, статус, код
+ * возврата) — в **открывающем** маркере, закрывающий маркер не меняется.
  */
 function formatRunResult(
   run: TerminalRunRecord,
   stripAnsiOutput: boolean,
-): { content: string; bytes: number } {
+): { content: string; bytes: number; stillRunning: boolean } {
   const header = sm('terminal.tool.run_result_header', {
     run_id: run.runId,
     status: run.status,
@@ -837,16 +1164,34 @@ function formatRunResult(
           terminal_id: run.terminalId,
           timeout_ms: String(run.timeoutMs),
         })
-      : run.status === 'closed'
-        ? sm('terminal.tool.run_closed', { terminal_id: run.terminalId })
+      : run.status === 'exited'
+        ? sm('terminal.tool.run_exited', { terminal_id: run.terminalId })
         : sm('terminal.tool.exit_code', {
             exit_code: run.exitCode !== undefined ? String(run.exitCode) : '-',
           });
+  // Таймаут **не убивает** команду: она продолжает выполняться в PTY, а
+  // терминал остаётся занятым. Об этом сказано прямо — иначе модель решит,
+  // что команда снята, и запустит вторую в занятый терминал.
+  const stillRunning =
+    run.status === 'timeout'
+      ? sm('terminal.tool.run_still_running', {
+          run_id: run.runId,
+          terminal_id: run.terminalId,
+        })
+      : '';
   const raw = stripAnsiOutput ? stripAnsi(run.output) : run.output;
-  const body = frameTerminalOutput(raw);
+  const body = frameTerminalOutput(raw, {
+    terminal: run.terminalId,
+    run: run.runId,
+    status: run.status,
+    ...(run.exitCode !== undefined ? { exit: run.exitCode } : {}),
+    ...(run.status === 'timeout' ? { timeout_ms: run.timeoutMs } : {}),
+    ...(run.status === 'timeout' ? { still_running: true } : {}),
+  });
   return {
-    content: [header, detail, body].join('\n'),
+    content: [header, detail, stillRunning, body].filter((part) => part !== '').join('\n'),
     bytes: Buffer.byteLength(body, 'utf8'),
+    stillRunning: run.status === 'timeout',
   };
 }
 
@@ -870,8 +1215,10 @@ export const terminalRunTool: ToolDefinition = {
   description:
     'Run a command in an interactive terminal. '
     + 'By default (background=false) the tool waits until the command finishes and returns its output '
-    + 'wrapped in [CONTENT] ... [CONTENT END] plus the exit code (on timeout — a clear failure with the '
-    + 'partial output). '
+    + 'wrapped in [CONTENT] ... [CONTENT END] plus the exit code. '
+    + 'On timeout the command is NOT killed: it keeps running in the PTY, the tool reports '
+    + 'still_running=true with the run id and says that the terminal is busy (the next terminal_run in it '
+    + 'fails with run_busy) — to stop the command, send Ctrl+C via terminal_write. '
     + 'With background=true the command starts without waiting: the tool returns the run id immediately, '
     + 'and the result (output + exit code) is delivered to the chat as a separate message when the command '
     + 'finishes; timeout_ms is then an optional watchdog (without it the background run has no time limit). '
@@ -946,7 +1293,7 @@ export const terminalRunTool: ToolDefinition = {
 
     const finished = await waitRunWithAbort(service, run.runId, timeoutMs, ctx);
     if (!finished) return notFound(params.terminal_id);
-    const { content, bytes } = formatRunResult(finished, params.strip_ansi === true);
+    const { content, bytes, stillRunning } = formatRunResult(finished, params.strip_ansi === true);
     const durationMs =
       finished.finishedAt !== undefined ? finished.finishedAt - finished.startedAt : undefined;
 
@@ -956,6 +1303,8 @@ export const terminalRunTool: ToolDefinition = {
         run_id: finished.runId,
         terminal_id: finished.terminalId,
         status: finished.status,
+        // Таймаут не убивает команду — это сказано прямо (текст + метаданные).
+        ...(stillRunning ? { still_running: true } : {}),
         ...(finished.exitCode !== undefined ? { exit_code: finished.exitCode } : {}),
         timeout_ms: timeoutMs,
         ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),

@@ -196,14 +196,15 @@ export const TODO_TOOLS = ['todo_write', 'todo_list', 'todo_add', 'todo_update',
  * `permission.rules.terminal` работает и по именам встроенных тулов, и по
  * capability плагинного тула.
  *
- * Чтение (`terminal_list`/`terminal_read`) в plan-режиме **разрешено**,
- * мутации (`terminal_open`/`terminal_write`/`terminal_close`) — заблокированы
- * (`isPlanBlockedTool`, `evaluator.ts`): план ничего не исполняет.
+ * Чтение (`terminal_list`/`terminal_read`/`terminal_snapshot`) в plan-режиме
+ * **разрешено**, мутации (`terminal_open`/`terminal_write`/`terminal_close`) —
+ * заблокированы (`isPlanBlockedTool`, `evaluator.ts`): план ничего не исполняет.
  */
 export const TERMINAL_TOOLS = [
   'terminal_list',
   'terminal_open',
   'terminal_read',
+  'terminal_snapshot',
   'terminal_write',
   'terminal_close',
   'terminal_run',

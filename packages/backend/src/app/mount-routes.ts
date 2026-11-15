@@ -1583,17 +1583,17 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   ));
 
-  // PROP-132 (Ф3в): админ-раздел «Терминалы» — мастер-выключатель
-  // `terminal.enabled` и флаг восстановления из снимков `terminal.autoRestore`.
-  // Применяются **сразу** (`terminalService.setEnabled`/`setAutoRestore`:
-  // живые терминалы закрываются, новые не создаются — рестарт не нужен).
+  // PROP-132 (Ф3в): настройки терминалов — мастер-выключатель, восстановление
+  // из снимков и параметры выполнения (`idleMinutes`/`maxPerProject`/
+  // `maxPerInstance`/`shell`/`auditInput`). Применяются **сразу**
+  // (`setEnabled`/`setAutoRestore`/`setLimits`/`setDefaultShell`/
+  // `setAuditInput` — рестарт не нужен).
   // Managed RBAC: чтение и мутации — только ADMIN.
   app.route('/api/v2/settings', createTerminalSettingsRoutes(
     { requireAuth: auth.requireAuth },
     {
       settingsStore,
-      configEnabled: config.synth.terminal?.enabled,
-      configAutoRestore: config.synth.terminal?.autoRestore,
+      ...(config.synth.terminal ? { config: config.synth.terminal } : {}),
       terminalService: deps.terminalService,
       env: process.env,
     },

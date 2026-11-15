@@ -31,11 +31,27 @@
  *   запуска в одной оболочке смешали бы вывод (`terminal.tool.run_busy`);
  * - вывод запуска ограничен **1 МиБ** (хвост сохраняется, `truncated`);
  * - в реестре не больше **32** записей (старые завершённые вытесняются);
- * - закрытие терминала завершает его активный запуск статусом `closed`;
+ * - закрытие терминала завершает его активный запуск статусом `exited`;
  * - **watchdog** запуска (таймаут): срок `<= 0` — таймер **не ставится**
  *   (запуск без лимита: завершает только маркер команды или закрытие
  *   терминала), срок `> 0` — по истечении запуск завершается статусом
  *   `timeout`.
+ *
+ * ## Таймаут не убивает команду
+ *
+ * Истечение watchdog'а **не гасит команду**: она продолжает выполняться в
+ * PTY. Статус `timeout` означает «срок ожидания истёк, а команда ещё
+ * работает», поэтому терминал остаётся **занятым** этим запуском:
+ *
+ * - следующий запуск в этом терминале — отказ `run_busy` (в терминал не
+ *   уходит вторая команда поверх ещё не доигравшей);
+ * - когда команда доиграет, её маркер придёт и запуск станет `done`
+ *   (терминал освободится) — **повторного уведомления при этом нет**:
+ *   уведомление о завершении уходит один раз (на первом переходе);
+ * - закрытие терминала освобождает терминал в любом случае (`exited`).
+ *
+ * Статус `exited` (вместо прежнего `closed`) — тот же смысл, что и у
+ * терминала: оболочка/PTY больше нет, команда не доиграла.
  *
  * ## Границы
  *
@@ -72,12 +88,23 @@ export const MAX_RUN_OUTPUT_BYTES = 1024 * 1024;
 export const MAX_STORED_RUNS = 32;
 
 /** Статус запуска. */
-export type TerminalRunStatus = 'running' | 'done' | 'timeout' | 'closed';
+export type TerminalRunStatus = 'running' | 'done' | 'timeout' | 'exited';
+
+/**
+ * Занимает ли запуск терминал прямо сейчас.
+ *
+ * `running` — команда выполняется; `timeout` — срок ожидания истёк, но
+ * команда продолжает выполняться (её не убили) — терминал тоже занят.
+ * Финальные статусы (`done`/`exited`) терминал освобождают.
+ */
+function occupiesTerminal(status: TerminalRunStatus): boolean {
+  return status === 'running' || status === 'timeout';
+}
 
 /**
  * Колбэк завершения запуска команды в терминале.
  *
- * Вызывается **один раз** на запуск (любой статус: `done`/`timeout`/`closed`).
+ * Вызывается **один раз** на запуск (любой статус: `done`/`timeout`/`exited`).
  * Точка сборки уведомления — наверху (composition root): сервис терминалов не
  * знает, как доставлять результат в сессию.
  */
@@ -240,6 +267,13 @@ interface TerminalRunEntry {
   done: Promise<void>;
   /** Таймер таймаута запуска. */
   timer: { unref?: () => void } | null;
+  /**
+   * Уведомление о завершении уже отправлено.
+   *
+   * Позднее доигрывание команды (маркер после таймаута) **не** порождает
+   * второго уведомления: на запуск оно одно.
+   */
+  notified: boolean;
 }
 
 /** Опции реестра запусков. */
@@ -305,13 +339,15 @@ export class TerminalRunRegistry {
    * Зарегистрировать запуск.
    *
    * Активный запуск на терминале уже есть → `TerminalRunBusyError`: две
-   * команды в одной оболочке смешали бы вывод.
+   * команды в одной оболочке смешали бы вывод. Занятым терминал считается и
+   * запуск, у которого истёк watchdog (`timeout`): команда ещё выполняется,
+   * терминал занят до её фактического завершения.
    */
   start(input: TerminalRunStartInput): TerminalRunRecord {
     const activeId = this._activeByTerminal.get(input.terminalId);
     if (activeId !== undefined) {
       const active = this._runs.get(activeId);
-      if (active && active.record.status === 'running') {
+      if (active && occupiesTerminal(active.record.status)) {
         throw new TerminalRunBusyError(input.terminalId, activeId);
       }
     }
@@ -335,7 +371,7 @@ export class TerminalRunRegistry {
     const done = new Promise<void>((res) => {
       resolve = res;
     });
-    const entry: TerminalRunEntry = { record, resolve, done, timer: null };
+    const entry: TerminalRunEntry = { record, resolve, done, timer: null, notified: false };
     this._runs.set(runId, entry);
     this._activeByTerminal.set(input.terminalId, runId);
 
@@ -394,13 +430,16 @@ export class TerminalRunRegistry {
    * Обработать порцию вывода терминала.
    *
    * Текст до маркера — в вывод запуска; маркер с совпавшим nonce завершает
-   * запуск (код возврата — из маркера).
+   * запуск (код возврата — из маркера). Маркер, пришедший **после** таймаута,
+   * тоже завершает запуск (команда доиграла) — терминал освобождается, но
+   * второго уведомления не будет.
    */
   handleData(terminalId: string, parts: TerminalRunMarkerPart[]): void {
     const runId = this._activeByTerminal.get(terminalId);
     if (runId === undefined) return;
     const entry = this._runs.get(runId);
-    if (!entry || entry.record.status !== 'running') return;
+    if (!entry) return;
+    if (!occupiesTerminal(entry.record.status)) return;
 
     for (const part of parts) {
       if (part.kind === 'text') {
@@ -419,49 +458,62 @@ export class TerminalRunRegistry {
   /**
    * Завершить активный запуск терминала (терминал закрылся/умер).
    *
-   * Статус `closed` — команда не завершилась, потому что терминала больше
+   * Статус `exited` — команда не завершилась, потому что терминала больше
    * нет; вывод, накопленный к этому моменту, остаётся в записи.
    */
   closeTerminal(terminalId: string): void {
     const runId = this._activeByTerminal.get(terminalId);
     if (runId === undefined) return;
-    this.settle(runId, 'closed');
+    this.settle(runId, 'exited');
   }
 
   /**
-   * Отменить запуск (статус `closed` — запуск больше не отслеживается).
+   * Отменить запуск (статус `exited` — запуск больше не отслеживается).
    *
    * @returns `true`, если запуск был активен.
    */
   cancel(runId: string): boolean {
     const entry = this._runs.get(runId);
-    if (!entry || entry.record.status !== 'running') return false;
-    this.settle(runId, 'closed');
+    if (!entry || !occupiesTerminal(entry.record.status)) return false;
+    this.settle(runId, 'exited');
     return true;
   }
 
-  /** Остановить реестр (запуски завершаются статусом `closed`). */
+  /** Остановить реестр (запуски завершаются статусом `exited`). */
   dispose(): void {
     for (const runId of [...this._runs.keys()]) {
-      this.settle(runId, 'closed');
+      this.settle(runId, 'exited');
     }
     this._runs.clear();
     this._activeByTerminal.clear();
   }
 
-  /** Завершить запуск статусом (идемпотентно). */
+  /**
+   * Завершить запуск статусом (идемпотентно).
+   *
+   * Переходы: `running` → любой финальный; `timeout` → `done`/`exited`
+   * (команда доиграла после истечения срока ожидания — терминал освобождается).
+   * Финальные статусы (`done`/`exited`) не меняются.
+   */
   private settle(runId: string, status: TerminalRunStatus): void {
     const entry = this._runs.get(runId);
     if (!entry) return;
-    if (entry.record.status !== 'running') return;
+    const current = entry.record.status;
+    if (current === 'done' || current === 'exited') return;
+    if (current === 'timeout' && status === 'timeout') return;
+    const firstSettle = current === 'running';
     entry.record.status = status;
     entry.record.finishedAt = this._now();
     if (entry.timer) {
       this._timers.clearTimeout(entry.timer as never);
       entry.timer = null;
     }
-    if (this._activeByTerminal.get(entry.record.terminalId) === runId) {
-      this._activeByTerminal.delete(entry.record.terminalId);
+    // Терминал остаётся занятым, пока команда реально выполняется: статус
+    // `timeout` — это «срок ожидания истёк, команда продолжает работать».
+    if (!occupiesTerminal(status)) {
+      if (this._activeByTerminal.get(entry.record.terminalId) === runId) {
+        this._activeByTerminal.delete(entry.record.terminalId);
+      }
     }
     try {
       entry.resolve();
@@ -473,8 +525,10 @@ export class TerminalRunRegistry {
       );
     }
     // Уведомление о завершении — **после** фиксации состояния (уведомление
-    // видит уже финальный статус и код возврата).
-    if (this._onSettled) {
+    // видит уже финальный статус и код возврата) и **один раз** на запуск:
+    // позднее доигрывание команды второго уведомления не порождает.
+    if (this._onSettled && firstSettle && !entry.notified) {
+      entry.notified = true;
       try {
         this._onSettled({ ...entry.record });
       } catch (err) {
@@ -506,8 +560,13 @@ export class TerminalRunRegistry {
       // запуск — самый старый.
       let removed = false;
       for (const [runId, entry] of this._runs) {
-        if (entry.record.status === 'running') continue;
+        // Занятые терминалом запуски вытеснять нельзя: команда ещё выполняется
+        // (в т.ч. после таймаута) — терминал должен остаться занятым.
+        if (occupiesTerminal(entry.record.status)) continue;
         this._runs.delete(runId);
+        if (this._activeByTerminal.get(entry.record.terminalId) === runId) {
+          this._activeByTerminal.delete(entry.record.terminalId);
+        }
         removed = true;
         break;
       }
@@ -538,14 +597,17 @@ export const MAX_RUN_NOTIFICATION_BYTES = 32 * 1024;
  * Сообщение-уведомление сессии о завершении запуска команды в терминале.
  *
  * Формат — **без XML-конверта** (у фоновых процессов конверт `<process …>`,
- * здесь вывод терминала идёт в обрамлении `[CONTENT]` … `[CONTENT END]`):
+ * здесь вывод терминала идёт в обрамлении `[CONTENT …]` … `[CONTENT END]`):
  *
  * ```text
  * Terminal <id>: the command finished (exit 0)
- * [CONTENT]
+ * [CONTENT terminal=term_1 run=run_1 status=done exit=0]
  * …вывод команды…
  * [CONTENT END]
  * ```
+ *
+ * Метаданные запуска — в **открывающем** маркере (тот же формат, что у
+ * `terminal_run` с ожиданием), закрывающий маркер не меняется.
  *
  * Сообщение — **роль USER** (его видит модель), автор `Process` (как у
  * фоновых шелл-процессов): результат фоновой работы должен попасть в
@@ -562,11 +624,28 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
           terminal_id: terminalId,
           timeout_ms: String(run.timeoutMs),
         })
-      : run.status === 'closed'
-        ? sm('terminal.tool.run_closed', { terminal_id: terminalId })
+      : run.status === 'exited'
+        ? sm('terminal.tool.run_exited', { terminal_id: terminalId })
         : sm('terminal.tool.run_finished', { terminal_id: terminalId, exit_code: exitCode });
-  const body = frameTerminalOutput(tailByBytes(run.output, MAX_RUN_NOTIFICATION_BYTES));
-  const content = `${header}\n${body}`;
+  // Таймаут **не убивает** команду: она продолжает выполняться в PTY, а
+  // терминал остаётся занятым — об этом сказано прямо (иначе модель решит,
+  // что команда снята, и запустит вторую в занятый терминал).
+  const stillRunning =
+    run.status === 'timeout'
+      ? sm('terminal.tool.run_still_running', {
+          run_id: run.runId,
+          terminal_id: terminalId,
+        })
+      : '';
+  const body = frameTerminalOutput(tailByBytes(run.output, MAX_RUN_NOTIFICATION_BYTES), {
+    terminal: terminalId,
+    run: run.runId,
+    status: run.status,
+    ...(run.exitCode !== undefined ? { exit: run.exitCode } : {}),
+    ...(run.status === 'timeout' ? { timeout_ms: run.timeoutMs } : {}),
+    ...(run.status === 'timeout' ? { still_running: true } : {}),
+  });
+  const content = [header, stillRunning, body].filter((part) => part !== '').join('\n');
   const durationMs =
     run.finishedAt !== undefined ? Math.max(0, run.finishedAt - run.startedAt) : undefined;
   return {
@@ -588,6 +667,7 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
       terminal_id: terminalId,
       run_id: run.runId,
       state: run.status,
+      ...(run.status === 'timeout' ? { still_running: true } : {}),
       ...(run.command ? { command: run.command } : {}),
       ...(run.exitCode !== undefined ? { exit_code: run.exitCode } : {}),
       started_at: run.startedAt,

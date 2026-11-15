@@ -847,6 +847,8 @@ export const SYSTEM_MESSAGES = {
     'Error: interactive terminals are unavailable in this environment: {reason}',
   // --- Запуски команд в терминале (PROP-132, Ф5) ---
   'terminal.tool.history_empty': 'The terminal output history is empty',
+  'terminal.tool.snapshot_empty':
+    'The terminal screen is empty — no visible content (the program has not drawn anything yet)',
   'terminal.tool.run_background_started':
     'Run {run_id} started in the terminal — the result will be delivered to the chat automatically',
   'terminal.tool.run_result_header': 'Run {run_id} (status: {status})',
@@ -854,8 +856,12 @@ export const SYSTEM_MESSAGES = {
     'Terminal {terminal_id}: the command finished (exit {exit_code})',
   'terminal.tool.run_timeout':
     'Terminal {terminal_id}: the command did not finish within {timeout_ms} ms (timeout)',
-  'terminal.tool.run_closed':
-    'Terminal {terminal_id}: the terminal was closed while the command was running',
+  'terminal.tool.run_exited':
+    'Terminal {terminal_id}: the terminal exited while the command was running',
+  'terminal.tool.run_still_running':
+    'The command is still running in terminal {terminal_id} (run {run_id}): it was NOT killed, '
+    + 'the terminal is busy — the next terminal_run in it will fail with run_busy. '
+    + 'To stop the command, send Ctrl+C via terminal_write.',
   'terminal.tool.run_busy':
     'Error: another run is already active in terminal {terminal_id} — wait for it to finish',
   'terminal.tool.exit_code': 'Exit code: {exit_code}',

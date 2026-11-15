@@ -13,10 +13,13 @@
  * | `port`             | порт исполнения (ADR-077) — PTY открывается на точке исполнения |
  * | `resolvePort`      | роутер портов (PROP-135) — профиль/пул сессии или проекта |
  * | `blobs`            | blob-хранилище (ADR-096/ADR-116) — снимки терминалов |
+ * | `limits`           | параметры выполнения: `idleMs`, `maxPerProject`, `maxPerInstance` (`terminal.*`) |
  * | `eventBus`         | шина сессий — метаданные терминала           |
  * | `commandAuditLog`  | журнал исполнений команд (ADR-136) — только метаданные |
  * | `metrics`          | реестр метрик инстанса (ADR-094)             |
  * | `sessions`         | проверка «идёт ли ход в сессии» — правило idle |
+ * | `defaultShell`     | оболочка новых терминалов (`terminal.shell`) |
+ * | `auditInput`       | писать ли `terminal.input` (`terminal.auditInput`) |
  *
  * Прямое чтение `$SYNTH_DATA_DIR` в обход портов запрещено (инвариант 2) —
  * здесь только уже собранные зависимости процесса.
@@ -31,7 +34,7 @@ import { createCommandAuditTerminalSink } from '../../engine/terminal/audit.js';
 import { createTerminalMetrics } from '../../engine/terminal/metrics.js';
 import type { TerminalRunFinishedHandler } from '../../engine/terminal/runs.js';
 import { TerminalService } from '../../engine/terminal/service.js';
-import type { TerminalPortResolver } from '../../engine/terminal/types.js';
+import type { TerminalLimits, TerminalPortResolver } from '../../engine/terminal/types.js';
 
 /** Зависимости сборки терминального сервиса. */
 export interface TerminalServiceWiring {
@@ -53,6 +56,18 @@ export interface TerminalServiceWiring {
    * Восстанавливать ли терминалы из снимков при старте (`terminal.autoRestore`).
    */
   autoRestore?: boolean;
+  /**
+   * Лимиты и тайминги сервиса (параметры выполнения из секции `terminal`:
+   * `idleMs = idleMinutes * 60_000`, `maxPerProject`, `maxPerInstance`).
+   */
+  limits?: Partial<TerminalLimits>;
+  /**
+   * Оболочка по умолчанию для новых терминалов (`terminal.shell`);
+   * `null`/не задано — платформенный дефолт.
+   */
+  defaultShell?: string | null;
+  /** Писать ли ввод в терминал в журнал (`terminal.auditInput`). */
+  auditInput?: boolean;
   /** Шина событий (метаданные терминала публикуются в канал сессии). */
   eventBus?: EventBus;
   /** Журнал исполнений команд (аудит терминалов — только метаданные). */
@@ -85,6 +100,9 @@ export function createTerminalService(wiring: TerminalServiceWiring): TerminalSe
     ...(wiring.resolvePort ? { resolvePort: wiring.resolvePort } : {}),
     ...(wiring.blobs ? { blobs: wiring.blobs } : {}),
     ...(wiring.autoRestore !== undefined ? { autoRestore: wiring.autoRestore } : {}),
+    ...(wiring.limits ? { limits: wiring.limits } : {}),
+    ...(wiring.defaultShell !== undefined ? { defaultShell: wiring.defaultShell } : {}),
+    ...(wiring.auditInput !== undefined ? { auditInput: wiring.auditInput } : {}),
     ...(wiring.eventBus ? { eventBus: wiring.eventBus } : {}),
     ...(wiring.commandAuditLog
       ? { audit: createCommandAuditTerminalSink(wiring.commandAuditLog) }

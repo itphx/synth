@@ -1328,15 +1328,47 @@ export const metricsConfigSchema = z.object({
  *   blob-хранилище, ADR-096/ADR-116): `false` — снимки не поднимаются, их
  *   убирает reaper. По умолчанию `true` (`DEFAULT_TERMINAL_AUTO_RESTORE`).
  *
- * Env-оверрайды — `SYNTH_TERMINAL_ENABLED` и `SYNTH_TERMINAL_AUTO_RESTORE`
- * (общее правило секций, ADR-023).
+ * PROP-132 (параметры выполнения): секция описывает не только мастер-флаги, но
+ * и **параметры выполнения** терминалов, редактируемые из админки:
+ *
+ * - `idleMinutes` — простой (минуты) до закрытия терминала; он же TTL
+ *   снимков. Границы 30…10080, дефолт `2880` (2 дня);
+ * - `maxPerProject` — предел живых терминалов на проект. Границы 1…64,
+ *   дефолт `8`;
+ * - `maxPerInstance` — предел живых терминалов на инстанс. Границы 1…256,
+ *   дефолт `32`;
+ * - `shell` — имя программы или абсолютный путь оболочки терминала
+ *   (`^[A-Za-z0-9._/+-]{1,200}$`, без пробелов). **Не задано** —
+ *   платформенный дефолт (`$SHELL` → `/bin/bash`);
+ * - `auditInput` — писать ли `terminal.input` в журнал исполнений команд
+ *   (ADR-136). Дефолт `true`.
+ *
+ * Все поля **необязательны** (без `.default()`): «не задано в config.yaml» ≠
+ * «задано значение по умолчанию» — по этому различаются источники значения в
+ * API (`config` против `default`). Сами дефолты, границы и нормализация живут в
+ * резолвере ядра (`engine/terminal/config.ts`) — единственном источнике истины.
+ *
+ * Env-оверрайды — `SYNTH_TERMINAL_*` (`ENABLED`, `AUTO_RESTORE`,
+ * `IDLE_MINUTES`, `MAX_PER_PROJECT`, `MAX_PER_INSTANCE`, `SHELL`,
+ * `AUDIT_INPUT`; общее правило секций, ADR-023).
  */
 export const terminalConfigSchema = z.object({
   enabled: z.boolean().optional(),
   autoRestore: z.boolean().optional(),
+  idleMinutes: z.number().int().min(30).max(10080).optional(),
+  maxPerProject: z.number().int().min(1).max(64).optional(),
+  maxPerInstance: z.number().int().min(1).max(256).optional(),
+  shell: z
+    .string()
+    .regex(
+      /^[A-Za-z0-9._/+-]{1,200}$/,
+      'terminal.shell: ожидается имя программы или абсолютный путь без пробелов (допустимы A-Za-z0-9._/+-), 1…200 символов',
+    )
+    .optional(),
+  auditInput: z.boolean().optional(),
 });
 
-/** PROP-132: секция `terminal` (`enabled`). */
+/** PROP-132: секция `terminal` — мастер-флаги и параметры выполнения. */
 export type TerminalConfig = z.infer<typeof terminalConfigSchema>;
 
 // --- Webhooks (ADR-052, этап II) ---

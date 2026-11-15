@@ -11,6 +11,8 @@
  *
  * ```text
  * terminals/<id>/meta.json   — запись реестра (`TerminalRecord`) + `savedAt`
+ *                               + `runningAtSave` (терминал был жив в момент
+ *                               записи: только такие восстанавливаются)
  * terminals/<id>/output.txt  — хвост кольцевого буфера (≤ 512 КиБ)
  * ```
  *
@@ -18,8 +20,10 @@
  *
  * - **Хвост, а не весь вывод:** в снимок попадает только то, что ещё лежит в
  *   буфере (`ringBufferBytes`). Снимок — «последние 512 КиБ», а не журнал.
+ * - **Воскрешаются только живые:** запись с `runningAtSave !== true` (терминал
+ *   завершился до остановки) не восстанавливается, её снимок удаляется.
  * - **Срок жизни — `idleMs`** (2 дня от `lastActivityAt`): снимок старше срока
- *   удаляется (reaper/старт процесса), терминал не восстанавливается.
+ *   удаляется (reaper/старт процесса), терминал не восстанавливается..
  * - **Явное удаление терминала удаляет и снимок:** удалённый терминал не
  *   должен воскреснуть после рестарта.
  * - **`terminal.autoRestore === false`** — снимки не поднимаются; их убирает
@@ -45,8 +49,14 @@ export const TERMINAL_SNAPSHOT_PREFIX = 'terminals/';
  */
 export const TERMINAL_SNAPSHOT_OUTPUT_BYTES = 512 * 1024;
 
-/** Версия формата снимка (на случай смены схемы). */
-export const TERMINAL_SNAPSHOT_VERSION = 1;
+/**
+ * Версия формата снимка (на случай смены схемы).
+ *
+ * `2` — добавлено поле `runningAtSave` (терминал был жив в момент записи).
+ * Снимки версии `1` (без поля) читаются, но **не восстанавливаются**: нет
+ * признака «жив на момент остановки» — значит, воскрешать нечего.
+ */
+export const TERMINAL_SNAPSHOT_VERSION = 2;
 
 /** Метаданные снимка: запись реестра + время сохранения. */
 export interface TerminalSnapshotMeta {
@@ -54,6 +64,16 @@ export interface TerminalSnapshotMeta {
   version: number;
   /** Момент сохранения (мс epoch). */
   savedAt: number;
+  /**
+   * Терминал был **жив** в момент записи снимка (`!runtime.finished`).
+   *
+   * Только такие терминалы восстанавливаются после рестарта ядра: у них
+   * поднимается новый PTY. Терминал, завершившийся до остановки, не
+   * воскресает (снимок удаляется).
+   *
+   * Старый снимок без поля = `false` (не воскрешаем).
+   */
+  runningAtSave: boolean;
   /** Запись реестра терминала на момент сохранения. */
   record: TerminalRecord;
 }
@@ -93,6 +113,9 @@ function utf8Tail(text: string, maxBytes: number): string {
 /**
  * Записать снимок терминала (метаданные + хвост вывода).
  *
+ * `runningAtSave` — терминал был жив в момент записи (`!runtime.finished`).
+ * Не задан — выводится из статуса записи (`exited` → `false`).
+ *
  * Ошибка записи **не ломает терминал**: снимок — best-effort (то же, что
  * логи фоновых процессов, ADR-113). Вызывающий сам решает, что делать с
  * ошибкой (сервис — предупреждение в лог).
@@ -102,10 +125,12 @@ export async function writeTerminalSnapshot(
   record: TerminalRecord,
   output: string,
   now: number,
+  runningAtSave?: boolean,
 ): Promise<void> {
   const meta: TerminalSnapshotMeta = {
     version: TERMINAL_SNAPSHOT_VERSION,
     savedAt: now,
+    runningAtSave: runningAtSave ?? record.status !== 'exited',
     record,
   };
   await blobs.write(terminalSnapshotMetaPath(record.id), `${JSON.stringify(meta, null, 2)}\n`);
@@ -148,6 +173,8 @@ export async function readTerminalSnapshot(
   return {
     version: typeof candidate.version === 'number' ? candidate.version : TERMINAL_SNAPSHOT_VERSION,
     savedAt: typeof candidate.savedAt === 'number' ? candidate.savedAt : record.lastActivityAt,
+    // Старый снимок (без поля) = `false`: воскрешать нечего.
+    runningAtSave: candidate.runningAtSave === true,
     record: record as TerminalRecord,
   };
 }

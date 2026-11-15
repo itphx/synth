@@ -234,6 +234,11 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
 | `SYNTH_TERMINAL_ENABLED` | boolean | `terminal.enabled` (PROP-132; мастер-выключатель интерактивных терминалов) |
 | `SYNTH_TERMINAL_AUTO_RESTORE` | boolean | `terminal.autoRestore` (PROP-132; восстановление терминалов из снимков после рестарта ядра) |
+| `SYNTH_TERMINAL_IDLE_MINUTES` | number | `terminal.idleMinutes` (PROP-132; простой до закрытия терминала, минуты; 30..10080) |
+| `SYNTH_TERMINAL_MAX_PER_PROJECT` | number | `terminal.maxPerProject` (PROP-132; предел живых терминалов на проект; 1..64) |
+| `SYNTH_TERMINAL_MAX_PER_INSTANCE` | number | `terminal.maxPerInstance` (PROP-132; предел живых терминалов на инстанс; 1..256) |
+| `SYNTH_TERMINAL_SHELL` | string | `terminal.shell` (PROP-132; имя программы или абсолютный путь оболочки, без пробелов) |
+| `SYNTH_TERMINAL_AUDIT_INPUT` | boolean | `terminal.auditInput` (PROP-132; писать ли `terminal.input` в журнал исполнений команд) |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
 | `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` | string (секрет) | `client_secret` OAuth-провайдера: `google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET` (в config не хранится; альтернатива — файл `{dataDir}/secrets/oauth/<provider>.client_secret`, см. ниже) |
@@ -3102,30 +3107,43 @@ openssl rand -hex 32 > "$SYNTH_DATA_DIR/secrets/metrics-token"
 принадлежит проекту; привязка к сессии — необязательная. Реестр терминалов —
 **в памяти процесса**, но его содержимое переживает рестарт ядра: сервис пишет
 **снимок** терминала в blob-хранилище (`terminals/<id>/meta.json` —
-запись реестра, `terminals/<id>/output.txt` — хвост кольцевого буфера
-≤ 512 КиБ; ADR-096/ADR-116).
+запись реестра + признак `runningAtSave`, `terminals/<id>/output.txt` — хвост
+кольцевого буфера ≤ 512 КиБ; ADR-096/ADR-116).
 
-| Поле | Назначение | По умолчанию |
-|------|-----------|--------------|
-| `terminal.enabled` | Мастер-выключатель терминального контура. `false` — весь контур `/api/v2/terminals*` отвечает `403 TERMINALS_DISABLED`, живые терминалы закрываются, новые не создаются. Env — `SYNTH_TERMINAL_ENABLED` | `true` |
-| `terminal.autoRestore` | Восстанавливать ли терминалы из снимков после рестарта ядра. `true` — снимки моложе 2 дней от последней активности поднимаются как завершённые терминалы (`restored: true`, вывод в буфере, PTY не запущен — только перезапуск); `false` — снимки не поднимаются, их убирает reaper. Env — `SYNTH_TERMINAL_AUTO_RESTORE` | `true` |
+| Поле | Env | По умолчанию | Границы | Назначение |
+|------|-----|--------------|---------|-----------|
+| `terminal.enabled` | `SYNTH_TERMINAL_ENABLED` | `true` | — | Мастер-выключатель терминального контура. `false` — весь контур `/api/v2/terminals*` отвечает `403 TERMINALS_DISABLED`, живые терминалы закрываются, новые не создаются |
+| `terminal.autoRestore` | `SYNTH_TERMINAL_AUTO_RESTORE` | `true` | — | Восстанавливать ли терминалы из снимков после рестарта ядра. `true` — восстанавливаются **только активные на момент остановки** терминалы (снимок с `runningAtSave: true`): для них **запускается новый процесс** (новый PTY с теми же `cwd`/`shell`/`cols`/`rows`), а сохранённый вывод остаётся в буфере как история; терминалы, завершившиеся до остановки, не восстанавливаются (их снимок удаляется), старые снимки без признака `runningAtSave` — тоже; если процесс подняться не удалось (точка исполнения недоступна, каталог пропал), терминал остаётся `exited` с сохранённым выводом — его можно перезапустить вручную. `false` — снимки не поднимаются, их убирает reaper |
+| `terminal.idleMinutes` | `SYNTH_TERMINAL_IDLE_MINUTES` | `2880` (2 дня) | целое `30…10080` | Простой терминала (минуты) до автоматического закрытия idle-reaper'ом; он же TTL снимков — снимок старше значения не поднимается, его убирает reaper |
+| `terminal.maxPerProject` | `SYNTH_TERMINAL_MAX_PER_PROJECT` | `8` | целое `1…64` | Предел **живых** терминалов на проект; нарушение при открытии — `TERMINAL_LIMIT` (409) |
+| `terminal.maxPerInstance` | `SYNTH_TERMINAL_MAX_PER_INSTANCE` | `32` | целое `1…256` | Предел **живых** терминалов на инстанс; нарушение при открытии — `TERMINAL_LIMIT` (409) |
+| `terminal.shell` | `SYNTH_TERMINAL_SHELL` | не задано — платформенный дефолт (`$SHELL` → `/bin/bash`) | `^[A-Za-z0-9._/+-]{1,200}$` (имя или абсолютный путь, без пробелов) | Оболочка терминала; запускается как один argv-элемент, аргументы/пробелы не допускаются |
+| `terminal.auditInput` | `SYNTH_TERMINAL_AUDIT_INPUT` | `true` | — | Писать ли `terminal.input` (кадры с `Enter` — выполненные команды) в журнал исполнений команд (ADR-136, только метаданные). `false` — ввод не журналируется; метрика `synth_terminal_bytes_total{op="input"}` считается всегда |
 
-**Runtime-override.** `terminal.enabled` и `terminal.autoRestore` можно
-переключить в UI (runtime в `settings.json`/PG, API —
-`GET/PUT/DELETE /api/v2/settings/terminal`; `PUT` — частичное обновление).
-Приоритет **каждого** поля: `SYNTH_TERMINAL_ENABLED` / `SYNTH_TERMINAL_AUTO_RESTORE`
-> runtime (UI) > `config.yaml` > default `true`; env-значение блокирует **своё**
-поле (источник `env`, в UI — `409 CONFLICT`), фиксация одного поля не мешает
-менять другое.
+**Runtime-override.** Все поля секции редактируются в админке (runtime в
+`settings.json`/PG, API — `GET/PUT/DELETE /api/v2/settings/terminal`; `PUT` —
+частичное обновление). Приоритет **каждого** поля по отдельности:
+`SYNTH_TERMINAL_*` > runtime (UI) > `config.yaml` > default; env-значение
+блокирует **своё** поле (источник `env`, в UI — `409 CONFLICT`), фиксация одного
+поля не мешает менять остальные. Невалидное значение (вне границ, неверный тип,
+пустая строка) в env/runtime/config **игнорируется** — действует следующий по
+приоритету слой; ввод из UI валидируется роутом (`400 VALIDATION_ERROR`).
+`shell: null` (или пустая строка) — явный сброс на платформенный дефолт.
 
 **Применяется сразу** (`restartRequired: false`): переключение выключателя
 закрывает живые терминалы (события `terminal.exited` + `terminal.deleted` с
-причиной `disabled`) и запрещает создание новых — рестарт инстанса не нужен.
+причиной `disabled`) и запрещает создание новых; лимиты, простой и оболочка
+читаются сервисом на каждой операции — рестарт инстанса не нужен.
 
 ```yaml
 terminal:
   enabled: false
   autoRestore: false
+  idleMinutes: 720        # 12 часов простоя до закрытия
+  maxPerProject: 4
+  maxPerInstance: 16
+  shell: /bin/zsh
+  auditInput: false       # не писать terminal.input в журнал
 ```
 
 ```bash
@@ -3133,15 +3151,24 @@ terminal:
 SYNTH_TERMINAL_ENABLED=false
 # не восстанавливать терминалы из снимков после рестарта ядра
 SYNTH_TERMINAL_AUTO_RESTORE=false
+# простой 12 часов, лимиты 4/16, оболочка /bin/zsh, без журнала ввода
+SYNTH_TERMINAL_IDLE_MINUTES=720
+SYNTH_TERMINAL_MAX_PER_PROJECT=4
+SYNTH_TERMINAL_MAX_PER_INSTANCE=16
+SYNTH_TERMINAL_SHELL=/bin/zsh
+SYNTH_TERMINAL_AUDIT_INPUT=false
 ```
 
-- Секция — `terminalConfigSchema` (`packages/shared/src/config/types.ts`); флаги
-  в `config.yaml` необязательны: «не задано» отличается от «явно задано `true`» —
-  по этому API различает источники `config` и `default`.
+- Секция — `terminalConfigSchema` (`packages/shared/src/config/types.ts`); все
+  поля необязательны: «не задано» отличается от «явно задано значение по
+  умолчанию» — по этому API различает источники `config` и `default`, а
+  границы/дефолты живут в резолвере ядра (`DEFAULT_TERMINAL_*`,
+  `TERMINAL_*_RANGE`, `TERMINAL_SHELL_PATTERN`).
 - Правило приоритета — `resolveTerminalEnabled` / `resolveTerminalAutoRestore` /
   `resolveTerminalSettings` (`packages/core/src/engine/terminal/config.ts`): их
   читают и старт процесса (композиция сервиса в `deps.ts`), и роут
-  `/api/v2/settings/terminal`.
+  `/api/v2/settings/terminal`. Env-имена совпадают с общим правилом секций
+  (`SYNTH_<SECTION>_<KEY>`, camelCase → SNAKE_CASE; реестр `ENV_OVERRIDES`).
 - Сервис терминалов — **один на процесс** (`engine/terminal/service.ts`),
   собирается в `server/app/deps.ts` (managed — `backend/app/deps.ts`); на
   graceful shutdown гасится (`stopTerminalService` → `dispose()`).
@@ -3149,6 +3176,9 @@ SYNTH_TERMINAL_AUTO_RESTORE=false
   `terminals/<id>/output.txt`. Пишутся при выходе процесса, при закрытии
   терминала, при остановке сервиса и раз в 60 с (если вывод менялся). Явное
   удаление терминала (`DELETE /api/v2/terminals/:id`) удаляет и снимок.
+  В `meta.json` лежит признак `runningAtSave` — терминал был **жив** в момент
+  записи снимка; только такие терминалы восстанавливаются после рестарта
+  ядра (процесс запускается заново), а завершившиеся до остановки — нет.
 - Порт терминала выбирается **тем же** роутером, что и порт тулов
   (`executionRouter.portFor`: профиль по binding'у `сессия → агент → проект →
   дефолт`, область пула `projectId`/`sessionId`, `workspaceSubPath`; ADR-135) —

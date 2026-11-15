@@ -87,6 +87,11 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer token for `/metrics` (takes precedence over the file `{dataDir}/secrets/metrics-token`); the value is never logged | — |
 | `SYNTH_TERMINAL_ENABLED` | PROP-132: master switch of the interactive-terminal contour (`false` — the whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED`, live terminals are closed, new ones are not created) | `terminal.enabled` (`true`) |
 | `SYNTH_TERMINAL_AUTO_RESTORE` | PROP-132: restore the terminals from the snapshots after a core restart | `terminal.autoRestore` (`true`) |
+| `SYNTH_TERMINAL_IDLE_MINUTES` | PROP-132: idle time before a terminal is closed, minutes (30..10080); also the snapshot TTL | `terminal.idleMinutes` (`2880`) |
+| `SYNTH_TERMINAL_MAX_PER_PROJECT` | PROP-132: limit of live terminals per project (1..64) | `terminal.maxPerProject` (`8`) |
+| `SYNTH_TERMINAL_MAX_PER_INSTANCE` | PROP-132: limit of live terminals per instance (1..256) | `terminal.maxPerInstance` (`32`) |
+| `SYNTH_TERMINAL_SHELL` | PROP-132: shell program name or absolute path, without spaces | `terminal.shell` (not set — platform default) |
+| `SYNTH_TERMINAL_AUDIT_INPUT` | PROP-132: whether `terminal.input` is written to the command-execution log | `terminal.auditInput` (`true`) |
 | `SYNTH_EXECUTION_MODE` | ADR-077: execution topology — `inline` (default) \| `remote` (remote executor, ADR-077 step 7b; fail-closed at startup) | `inline` |
 | `SYNTH_EXECUTION_REMOTE_URL` | ADR-077: executor address list (comma-separated) | — |
 | `SYNTH_EXECUTION_TOKEN` | ADR-077: path/reference to the executor token (NOT a value, invariant 13) | — |
@@ -2954,43 +2959,77 @@ Interactive terminals (PTY sessions, [PROP-132](../arch_decisions/prop-132-ui-te
 list, create, output stream, input, resize, restart. A terminal belongs to a project; binding it to a
 session is optional. The terminal registry lives **in process memory**, but its content survives a
 core restart: the service writes a **snapshot** of the terminal into the blob store
-(`terminals/<id>/meta.json` — the registry record, `terminals/<id>/output.txt` — the tail of the ring
+(`terminals/<id>/meta.json` — the registry record + the `runningAtSave` flag,
+`terminals/<id>/output.txt` — the tail of the ring
 buffer, ≤ 512 KiB; ADR-096/ADR-116).
 
-| Field | Purpose | Default |
-|------|-----------|--------------|
-| `terminal.enabled` | Master switch of the terminal contour. `false` — the whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED`, live terminals are closed, new ones are not created. Env — `SYNTH_TERMINAL_ENABLED` | `true` |
-| `terminal.autoRestore` | Whether the terminals are restored from the snapshots after a core restart. `true` — the snapshots younger than 2 days from the last activity are raised as exited terminals (`restored: true`, the output is in the buffer, no PTY is running — restart only); `false` — the snapshots are not raised, the reaper deletes them. Env — `SYNTH_TERMINAL_AUTO_RESTORE` | `true` |
+| Field | Env | Default | Bounds | Purpose |
+|------|-----|---------|--------|-----------|
+| `terminal.enabled` | `SYNTH_TERMINAL_ENABLED` | `true` | — | Master switch of the terminal contour. `false` — the whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED`, live terminals are closed, new ones are not created |
+| `terminal.autoRestore` | `SYNTH_TERMINAL_AUTO_RESTORE` | `true` | — | Whether the terminals are restored from the snapshots after a core restart. `true` — only the terminals that were **active at the moment of the shutdown** are restored (the snapshot with `runningAtSave: true`): for them **a new process is started** (a new PTY with the same `cwd`/`shell`/`cols`/`rows`), and the saved output stays in the buffer as the history; the terminals that finished before the shutdown are not restored (their snapshot is deleted), the old snapshots without the `runningAtSave` flag — neither; if the process cannot be started (the execution point is unavailable, the directory is gone), the terminal stays `exited` with the saved output — it can be restarted manually. `false` — the snapshots are not raised, the reaper deletes them |
+| `terminal.idleMinutes` | `SYNTH_TERMINAL_IDLE_MINUTES` | `2880` (2 days) | integer `30…10080` | Terminal idle time (minutes) before the idle-reaper closes it; it is also the snapshot TTL — an older snapshot is not restored and is removed by the reaper |
+| `terminal.maxPerProject` | `SYNTH_TERMINAL_MAX_PER_PROJECT` | `8` | integer `1…64` | Limit of **live** terminals per project; exceeding it on open — `TERMINAL_LIMIT` (409) |
+| `terminal.maxPerInstance` | `SYNTH_TERMINAL_MAX_PER_INSTANCE` | `32` | integer `1…256` | Limit of **live** terminals per instance; exceeding it on open — `TERMINAL_LIMIT` (409) |
+| `terminal.shell` | `SYNTH_TERMINAL_SHELL` | not set — platform default (`$SHELL` → `/bin/bash`) | `^[A-Za-z0-9._/+-]{1,200}$` (a program name or an absolute path, no spaces) | Terminal shell; it is spawned as a single argv element, arguments/spaces are not allowed |
+| `terminal.auditInput` | `SYNTH_TERMINAL_AUDIT_INPUT` | `true` | — | Whether `terminal.input` (the frames with `Enter` — executed commands) is written to the command-execution log (ADR-136, metadata only). `false` — the input is not logged; the `synth_terminal_bytes_total{op="input"}` metric is always counted |
 
-**Runtime override.** `terminal.enabled` and `terminal.autoRestore` can be toggled in the UI (runtime in
+**Runtime override.** All fields of the section can be edited in the admin UI (runtime in
 `settings.json`/PG, API — `GET/PUT/DELETE /api/v2/settings/terminal`; `PUT` is a partial update).
-The priority **of each field**: `SYNTH_TERMINAL_ENABLED` / `SYNTH_TERMINAL_AUTO_RESTORE` > runtime
-(UI) > `config.yaml` > default `true`; an env value locks **its own** field (source `env`, the UI
-answers `409 CONFLICT`), and locking one field does not block the change of the other one.
+The priority is **per field**: `SYNTH_TERMINAL_*` > runtime (UI) > `config.yaml` > default; an env
+value locks **its own** field (source `env`, the UI answers `409 CONFLICT`), and locking one field
+does not block the change of the others. An invalid value (out of bounds, wrong type, empty string)
+in env/runtime/config is **ignored** — the next layer by priority applies; the UI input is validated
+by the route (`400 VALIDATION_ERROR`). `shell: null` (or an empty string) explicitly resets the shell
+to the platform default.
 
 **Applied immediately** (`restartRequired: false`): toggling the switch closes live terminals
-(events `terminal.exited` + `terminal.deleted` with reason `disabled`) and forbids creating new ones —
-an instance restart is not required.
+(events `terminal.exited` + `terminal.deleted` with reason `disabled`) and forbids creating new ones;
+the limits, the idle time and the shell are read by the service on every operation — an instance
+restart is not required.
 
 ```yaml
 terminal:
   enabled: false
   autoRestore: false
+  idleMinutes: 720        # close after 12 hours of idle time
+  maxPerProject: 4
+  maxPerInstance: 16
+  shell: /bin/zsh
+  auditInput: false       # do not write terminal.input to the log
 ```
 
-- The section is `terminalConfigSchema` (`packages/shared/src/config/types.ts`); the flags in
-  `config.yaml` are optional: “not set” differs from “explicitly set to `true`” — that is how the API
-  distinguishes the `config` and `default` sources.
+```bash
+# disable the terminal contour of the instance
+SYNTH_TERMINAL_ENABLED=false
+# do not restore the terminals from the snapshots after a core restart
+SYNTH_TERMINAL_AUTO_RESTORE=false
+# 12 hours idle, limits 4/16, shell /bin/zsh, input not logged
+SYNTH_TERMINAL_IDLE_MINUTES=720
+SYNTH_TERMINAL_MAX_PER_PROJECT=4
+SYNTH_TERMINAL_MAX_PER_INSTANCE=16
+SYNTH_TERMINAL_SHELL=/bin/zsh
+SYNTH_TERMINAL_AUDIT_INPUT=false
+```
+
+- The section is `terminalConfigSchema` (`packages/shared/src/config/types.ts`); all fields are
+  optional: “not set” differs from “explicitly set to the default value” — that is how the API
+  distinguishes the `config` and `default` sources, while the bounds/defaults live in the core
+  resolver (`DEFAULT_TERMINAL_*`, `TERMINAL_*_RANGE`, `TERMINAL_SHELL_PATTERN`).
 - The priority rule is `resolveTerminalEnabled` / `resolveTerminalAutoRestore` /
   `resolveTerminalSettings` (`packages/core/src/engine/terminal/config.ts`): it is read both by the
   process start-up (service composition in `deps.ts`) and by the `/api/v2/settings/terminal` route.
+  The env names follow the common section rule (`SYNTH_<SECTION>_<KEY>`, camelCase → SNAKE_CASE; the
+  `ENV_OVERRIDES` registry).
 - The terminal service is **one per process** (`engine/terminal/service.ts`), composed in
   `server/app/deps.ts` (managed — `backend/app/deps.ts`); it is stopped on graceful shutdown
   (`stopTerminalService` → `dispose()`).
 - The snapshots live in the `BlobStore` port (ADR-096/ADR-116): `terminals/<id>/meta.json` +
   `terminals/<id>/output.txt`. They are written on process exit, on terminal close, on `dispose()` and
   every 60 s (when the output changed). An explicit terminal deletion
-  (`DELETE /api/v2/terminals/:id`) removes the snapshot too.
+  (`DELETE /api/v2/terminals/:id`) removes the snapshot too. `meta.json` carries the
+  `runningAtSave` flag — the terminal was **alive** at the moment of the snapshot; only
+  such terminals are restored after a core restart (the process is started again), the
+  ones that finished before the shutdown — not.
 - The terminal port is chosen by **the same** router as the tool ports
   (`executionRouter.portFor`: the profile comes from the binding `session → agent → project → default`,
   the pool scope is `projectId`/`sessionId`, and `workspaceSubPath` is derived from the working

@@ -622,11 +622,13 @@ export const ENGINE_MESSAGE_KEYS = [
   'terminal.tool.unavailable',
   // --- Запуски команд в терминале (PROP-132, Ф5) ---
   'terminal.tool.history_empty',
+  'terminal.tool.snapshot_empty',
   'terminal.tool.run_background_started',
   'terminal.tool.run_result_header',
   'terminal.tool.run_finished',
   'terminal.tool.run_timeout',
-  'terminal.tool.run_closed',
+  'terminal.tool.run_exited',
+  'terminal.tool.run_still_running',
   'terminal.tool.run_busy',
   'terminal.tool.exit_code',
 ] as const;
@@ -1219,11 +1221,13 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'terminal.tool.unavailable': ["reason"],
   // --- Запуски команд в терминале (PROP-132, Ф5) ---
   'terminal.tool.history_empty': [],
+  'terminal.tool.snapshot_empty': [],
   'terminal.tool.run_background_started': ["run_id"],
   'terminal.tool.run_result_header': ["run_id","status"],
   'terminal.tool.run_finished': ["terminal_id","exit_code"],
   'terminal.tool.run_timeout': ["terminal_id","timeout_ms"],
-  'terminal.tool.run_closed': ["terminal_id"],
+  'terminal.tool.run_exited': ["terminal_id"],
+  'terminal.tool.run_still_running': ["run_id","terminal_id"],
   'terminal.tool.run_busy': ["terminal_id"],
   'terminal.tool.exit_code': ["exit_code"],
 };

@@ -10,6 +10,9 @@
  *   `since` отдаёт replay из буфера до live;
  * - **ввод**: кап 16 КиБ на кадр, token bucket 20 кадров/с на терминал;
  * - **лимиты**: 8 терминалов на проект, 32 на инстанс (`TerminalLimitError`);
+ *   параметры выполнения (`idleMs`/`maxPerProject`/`maxPerInstance`) меняются
+ *   **live** — `setLimits` (рестарт не нужен: reaper и TTL снимков читают
+ *   значение на каждом тике, создание — на каждой попытке);
  * - **выключатель инстанса**: `setEnabled(false)` закрывает все терминалы и
  *   запрещает создание (`TerminalDisabledError`);
  * - **idle-reaper**: терминал без подписчиков и без привязки к активной
@@ -17,7 +20,8 @@
  * - **события**: `terminal.created|updated|exited|deleted` в канал сессии
  *   (только у терминалов с привязкой — в шине нет канала проекта, дизайн §4);
  * - **аудит**: `terminal.open`/`terminal.input`/`terminal.close` — только
- *   метаданные (ADR-136);
+ *   метаданные (ADR-136); `terminal.input` пишется лишь для кадров с `Enter`
+ *   и только при `setAuditInput(true)` (метрика `op="input"` считается всегда);
  * - **метрики**: `synth_terminal_sessions{status}`/`synth_terminal_bytes_total{op}`
  *   (ADR-094).
  *
@@ -56,12 +60,14 @@ import {
   DEFAULT_TERMINAL_LIMITS,
   TerminalAlreadyRunningError,
   TerminalDisabledError,
+  TerminalExitedError,
   TerminalInvalidRequestError,
   TerminalLimitError,
   TerminalNotFoundError,
   TerminalUnavailableError,
   type TerminalCreateInput,
   type TerminalEventType,
+  type TerminalLimits,
   type TerminalListFilter,
   type TerminalLogger,
   type TerminalOutputChunk,
@@ -214,7 +220,27 @@ export class TerminalService {
   private readonly _eventBus?: EventBus;
   private readonly _audit?: TerminalAuditSink;
   private readonly _metrics?: TerminalMetricsHooks;
-  private readonly _limits: typeof DEFAULT_TERMINAL_LIMITS;
+  /**
+   * Лимиты и тайминги сервиса.
+   *
+   * **Мутабельны** (`setLimits`): параметры выполнения приходят из runtime-
+   * настроек инстанса (`/api/v2/settings/terminal`) и применяются live — те же
+   * `idleMs` читают reaper и TTL снимков на каждом тике, `maxPerProject`/
+   * `maxPerInstance` — каждая попытка создания. Неизменяемыми остаются
+   * «протокольные» лимиты (`maxInputBytes`/`inputRatePerSecond`/буфер/батчинг/
+   * период reaper): они не выводятся в настройки и меняются только конфигом
+   * при сборке сервиса.
+   */
+  private _limits: TerminalLimits;
+  /**
+   * Оболочка по умолчанию для **новых** терминалов (`terminal.shell`).
+   *
+   * `null` — платформенный дефолт (`$SHELL` → `/bin/bash`). Существующие
+   * терминалы не перезапускаются: у них `shell` зафиксирован в записи реестра.
+   */
+  private _defaultShell: string | null = null;
+  /** Писать ли `terminal.input` в журнал исполнений (`terminal.auditInput`). */
+  private _auditInput = true;
   private readonly _generateId: () => string;
   private readonly _now: () => number;
   private readonly _timers: TerminalTimers;
@@ -250,6 +276,9 @@ export class TerminalService {
     this._audit = options.audit;
     this._metrics = options.metrics;
     this._limits = { ...DEFAULT_TERMINAL_LIMITS, ...(options.limits ?? {}) };
+    const optionShell = options.defaultShell?.trim();
+    if (optionShell) this._defaultShell = optionShell;
+    this._auditInput = options.auditInput ?? true;
     this._generateId = options.generateId ?? (() => randomUUID());
     this._now = options.now ?? (() => Date.now());
     this._timers = options.timers ?? DEFAULT_TIMERS;
@@ -298,6 +327,71 @@ export class TerminalService {
   }
 
   /**
+   * Оболочка по умолчанию для **новых** терминалов (`terminal.shell`).
+   *
+   * `null`/пустая строка — платформенный дефолт (`$SHELL` → `/bin/bash`).
+   * Применяется при следующем `create()`; **существующие терминалы не
+   * перезапускаются** — их оболочка зафиксирована в записи реестра (и в снимке),
+   * перезапуск поднял бы процесс с прежней оболочкой. Чтобы применить новую
+   * оболочку к уже открытому терминалу, его нужно закрыть и открыть заново.
+   */
+  setDefaultShell(shell: string | null): void {
+    const trimmed = typeof shell === 'string' ? shell.trim() : '';
+    this._defaultShell = trimmed === '' ? null : trimmed;
+  }
+
+  /** Оболочка по умолчанию для новых терминалов (`null` — платформенный дефолт). */
+  getDefaultShell(): string | null {
+    return this._defaultShell;
+  }
+
+  /**
+   * Журналировать ли ввод в терминал (`terminal.auditInput`).
+   *
+   * `false` — записи `terminal.input` в журнал исполнений не пишутся; аудит
+   * `terminal.open`/`terminal.close` не меняется, а метрика
+   * `synth_terminal_bytes_total{op="input"}` считается по-прежнему на **каждый**
+   * кадр (объём ввода виден, содержимое — нет). Применяется **live**.
+   */
+  setAuditInput(enabled: boolean): void {
+    this._auditInput = enabled;
+  }
+
+  /** Пишется ли `terminal.input` в журнал исполнений. */
+  isAuditInput(): boolean {
+    return this._auditInput;
+  }
+
+  /**
+   * Обновить лимиты **на лету** (`/api/v2/settings/terminal`).
+   *
+   * Меняются только параметры выполнения: `idleMs` (простой терминала и TTL
+   * снимков), `maxPerProject`, `maxPerInstance`. Значение принимается, только
+   * если это **положительное целое**; иначе поле игнорируется с предупреждением
+   * в лог (исключение не бросается — резолвер настроек уже нормализовал вход,
+   * а падение live-применения сломало бы весь `PUT`).
+   *
+   * Применяется сразу: reaper и уборка снимков читают `idleMs` на каждом тике,
+   * создание терминала — на каждой попытке. Уже открытые терминалы не
+   * трогаются (новый, меньший лимит не закрывает существующие — он ограничивает
+   * только создание).
+   */
+  setLimits(patch: { idleMs?: number; maxPerProject?: number; maxPerInstance?: number }): void {
+    const fields = ['idleMs', 'maxPerProject', 'maxPerInstance'] as const;
+    for (const field of fields) {
+      const value = patch[field];
+      if (value === undefined) continue;
+      if (!Number.isInteger(value) || value <= 0) {
+        this._logger.warn(
+          `[TerminalService] лимит ${field}=${String(value)} не применён: ожидается положительное целое`,
+        );
+        continue;
+      }
+      this._limits[field] = value;
+    }
+  }
+
+  /**
    * Мастер-выключатель инстанса (`terminal.enabled`).
    *
    * `false` — все живые терминалы закрываются (события `terminal.exited` +
@@ -337,7 +431,7 @@ export class TerminalService {
     const projectId = requireText(input.projectId, 'projectId');
     const ownerId = requireText(input.ownerId, 'ownerId');
     const cwd = requireText(input.cwd, 'cwd');
-    const shell = input.shell?.trim() || defaultShell();
+    const shell = input.shell?.trim() || this._defaultShell || defaultShell();
     const cols = clampDimension(input.cols);
     const rows = clampDimension(input.rows);
 
@@ -392,11 +486,16 @@ export class TerminalService {
    * (20 кадров/с, token bucket). Нарушение → `TerminalLimitError`
    * (`scope: 'input'`/`'rate'`).
    *
-   * **Аудит — только выполненные команды** (кадр с `Enter`): обычные кадры
-   * ввода (набор текста, стрелки, Ctrl-C) — не команды, и плодить записи
-   * в журнале исполнений на каждый кадр нельзя (ADR-136). Их объём считает
-   * метрика `synth_terminal_bytes_total{op="input"}` — она и остаётся на
-   * **каждый** кадр.
+   * **Аудит — только выполненные команды** (кадр с `Enter`) **и только при
+   * включённом `terminal.auditInput`**: обычные кадры ввода (набор текста,
+   * стрелки, Ctrl-C) — не команды, и плодить записи в журнале исполнений на
+   * каждый кадр нельзя (ADR-136). Их объём считает метрика
+   * `synth_terminal_bytes_total{op="input"}` — она и остаётся на **каждый**
+   * кадр (в том числе при выключенном аудите ввода: объём виден, содержимого
+   * нет).
+   *
+   * @throws TerminalNotFoundError — терминала нет.
+   * @throws TerminalExitedError — терминал завершён (ввод невозможен).
    */
   write(id: string, data: string, options: { actorId?: string } = {}): void {
     const runtime = this._requireLiveRuntime(id);
@@ -411,14 +510,15 @@ export class TerminalService {
     this._consumeToken(runtime);
     const handle = runtime.handle;
     if (!handle) {
-      throw new TerminalNotFoundError(id, `Терминал ${id} завершён`);
+      throw new TerminalExitedError(id);
     }
     handle.write(data);
     runtime.record.lastActivityAt = this._now();
     this._metrics?.addBytes('input', bytes);
-    // Команда — кадр с `Enter`; только он попадает в журнал исполнений.
+    // Команда — кадр с `Enter`; только он попадает в журнал исполнений,
+    // и только если аудит ввода включён на инстансе.
     const enter = data.includes('\n') || data.includes('\r');
-    if (enter) {
+    if (enter && this._auditInput) {
       this._auditRuntime(runtime, 'terminal.input', {
         ...(options.actorId !== undefined ? { actorId: options.actorId } : {}),
         bytes,
@@ -431,7 +531,7 @@ export class TerminalService {
   resize(id: string, cols: number, rows: number): TerminalRecord {
     const runtime = this._requireLiveRuntime(id);
     const handle = runtime.handle;
-    if (!handle) throw new TerminalNotFoundError(id, `Терминал ${id} завершён`);
+    if (!handle) throw new TerminalExitedError(id);
     const nextCols = clampDimension(cols);
     const nextRows = clampDimension(rows);
     handle.resize(nextCols, nextRows);
@@ -450,6 +550,9 @@ export class TerminalService {
    * это проверяет роут (права и целостность привязки — на границе, инвариант 16).
    *
    * `null` — сброс поля (заголовок/привязка снимаются).
+   *
+   * Завершённый терминал тоже переименовывается: запись есть, её видно в
+   * списке с `include_exited`.
    */
   update(id: string, patch: { title?: string | null; sessionId?: string | null }): TerminalRecord {
     const runtime = this._terminals.get(id);
@@ -464,6 +567,9 @@ export class TerminalService {
     }
     runtime.record.lastActivityAt = this._now();
     this._publish(runtime, 'terminal.updated');
+    // Снимок обновляется: после рестарта ядра терминал должен вернуться с
+    // тем же заголовком.
+    void this._writeSnapshot(runtime);
     return { ...runtime.record };
   }
 
@@ -473,8 +579,9 @@ export class TerminalService {
    * PTY закрывается (`SIGTERM` → `SIGKILL` — это делает хэндл), подписчики
    * получают `onExit`, публикуются `terminal.exited` + `terminal.deleted`.
    *
-   * Снимок терминала **сохраняется**: закрытый терминал вернётся после
-   * рестарта ядра вместе с последним выводом (PROP-132). Явное удаление —
+   * Снимок терминала **сохраняется**, но терминал **не восстанавливается**:
+   * закрытый терминал завершён (`runningAtSave: false`) — воскресают только
+   * те, что были живы на момент остановки ядра. Явное удаление —
    * `delete()` — снимок убирает.
    */
   async close(id: string, options: { actorId?: string } = {}): Promise<void> {
@@ -511,8 +618,12 @@ export class TerminalService {
    * Перезапустить завершённый терминал (PROP-132).
    *
    * Поднимается **новый** PTY с теми же `cwd`/`shell`/`cols`/`rows`; id
-   * терминала сохраняется, буфер вывода очищается, статус — `running`,
-   * признак `restored` снимается. Публикуется событие `terminal.updated`.
+   * терминала сохраняется, статус — `running`, признак `restored` снимается.
+   * Публикуется событие `terminal.updated`.
+   *
+   * **История вывода сохраняется:** буфер не очищается — старый вывод
+   * остаётся в нём (его можно промотать вверх), а новый вывод дописывается в
+   * конец. Снимок после перезапуска содержит историю + новый вывод.
    *
    * @throws TerminalNotFoundError — терминала нет.
    * @throws TerminalAlreadyRunningError — терминал жив (перезапуск невозможен).
@@ -531,42 +642,16 @@ export class TerminalService {
       shell: record.shell,
     });
 
-    const openPty = port.openPty;
-    if (!openPty || port.pty === false) {
-      throw new TerminalUnavailableError(
-        'pty_unsupported',
-        'Исполнение в этой среде не поддерживает PTY',
-      );
-    }
+    const handle = await this._spawnPty(port, record);
 
-    const now = this._now();
-    let handle: PtyHandle;
-    try {
-      handle = await openPty.call(port, {
-        cwd: record.cwd,
-        shell: record.shell,
-        cols: record.cols,
-        rows: record.rows,
-      });
-    } catch (err) {
-      if (isExecutionError(err)) throw err;
-      throw new TerminalUnavailableError(
-        'spawn_failed',
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-
-    // Буфер очищается: старый вывод относится к завершённому терминалу.
-    runtime.buffer = this._newBuffer();
-    runtime.pending = [];
-    runtime.pendingBytes = 0;
-    runtime.flushTimer = null;
+    // Буфер **не** очищается: старый вывод остаётся историей (прокрутка
+    // вверх работает), новый вывод дописывается в конец.
     runtime.finished = false;
     runtime.closeReason = undefined;
     runtime.closeActor = undefined;
     runtime.markerPending = '';
     runtime.tokens = this._limits.inputRatePerSecond;
-    runtime.tokensUpdatedAt = now;
+    runtime.tokensUpdatedAt = this._now();
     runtime.handle = handle;
     runtime.outputVersion += 1;
 
@@ -574,7 +659,7 @@ export class TerminalService {
     record.restored = false;
     record.exitCode = undefined;
     record.signal = undefined;
-    record.lastActivityAt = now;
+    record.lastActivityAt = this._now();
 
     handle.onData((chunk: string) => this._onData(runtime, chunk));
     handle.onExit((info: { exitCode?: number; signal?: string }) => {
@@ -583,7 +668,7 @@ export class TerminalService {
 
     this._publish(runtime, 'terminal.updated', { status: 'running', restored: false });
     this._syncMetrics();
-    // Снимок перезаписан: в нём уже новая (пустая) история вывода.
+    // Снимок перезаписан: в нём — история вывода + новый вывод.
     void this._writeSnapshot(runtime);
     return { ...record };
   }
@@ -591,10 +676,20 @@ export class TerminalService {
   /**
    * Восстановить терминалы из снимков после рестарта ядра (PROP-132).
    *
-   * Поднимаются записи моложе `idleMs` (2 дня от `lastActivityAt`): статус
-   * `exited`, признак `restored: true`, в буфер заливается сохранённый хвост
-   * вывода (`output()` работает), подписчиков нет (`attachedClients = 0`) —
-   * PTY не запущен, терминал можно только перезапустить.
+   * Поднимаются **только те записи, которые были живы на момент остановки**
+   * (`runningAtSave === true`) и моложе `idleMs` (2 дня от `lastActivityAt`):
+   * для них реально поднимается **новый PTY** (те же `cwd`/`shell`/`cols`/
+   * `rows`), статус — `running`, признак `restored: true`, а в буфер
+   * предварительно заливается сохранённый хвост вывода (история остаётся
+   * доступной: `output()`, `GET /:id/output`, `terminal_read`).
+   *
+   * Записи, завершившиеся до остановки (`runningAtSave !== true`), не
+   * восстанавливаются — их снимок удаляется. Старый снимок без поля
+   * `runningAtSave` = `false` (не воскресаем).
+   *
+   * Если PTY подняться не удалось (точка исполнения недоступна, каталог
+   * пропал) — терминал остаётся `exited` + `restored: true` с сохранённым
+   * выводом (в лог — предупреждение): его можно перезапустить вручную.
    *
    * Снимки старше срока удаляются. При `terminal.autoRestore === false`
    * снимки не поднимаются вовсе — их убирает reaper.
@@ -633,6 +728,13 @@ export class TerminalService {
           continue;
         }
         if (this._terminals.has(id)) continue;
+        // Воскресают только терминалы, **живые на момент остановки**:
+        // завершившийся до остановки терминал не поднимается, его снимок
+        // убирается (старый снимок без поля = `false` — тоже).
+        if (meta.runningAtSave !== true) {
+          await deleteTerminalSnapshot(blobs, id);
+          continue;
+        }
 
         const output = await readTerminalSnapshotOutput(blobs, id);
         const buffer = this._newBuffer();
@@ -640,7 +742,7 @@ export class TerminalService {
 
         const record: TerminalRecord = {
           ...meta.record,
-          status: 'exited',
+          status: 'starting',
           restored: true,
         };
         const runtime: TerminalRuntime = {
@@ -652,7 +754,7 @@ export class TerminalService {
           flushTimer: null,
           tokens: this._limits.inputRatePerSecond,
           tokensUpdatedAt: now,
-          finished: true,
+          finished: false,
           markerPending: '',
           outputVersion: 0,
           snapshotVersion: 0,
@@ -660,6 +762,17 @@ export class TerminalService {
         };
         this._terminals.set(id, runtime);
         restored += 1;
+
+        // «Восстановление» = **запуск процесса**: поднимаем новый PTY.
+        const opened = await this._restorePty(runtime);
+        if (!opened) {
+          // Процесс не поднялся — терминал остаётся завершённым, но с
+          // сохранённым выводом: его можно перезапустить вручную.
+          runtime.finished = true;
+          record.status = 'exited';
+          continue;
+        }
+        record.status = 'running';
       } catch (err) {
         this._logger.warn(
           `[TerminalService] восстановление терминала ${id} не удалось: ${
@@ -723,7 +836,8 @@ export class TerminalService {
    * Ожидания завершения здесь нет — вызывающий ждёт сам (`waitRun`) или
    * забирает результат позже (`getRun`).
    *
-   * @throws TerminalNotFoundError — терминала нет или он завершён.
+   * @throws TerminalNotFoundError — терминала нет.
+   * @throws TerminalExitedError — терминал завершён (ввод/запуск невозможны).
    * @throws TerminalRunBusyError — в терминале уже идёт запуск.
    */
   startRun(input: {
@@ -880,9 +994,15 @@ export class TerminalService {
   /**
    * Остановить сервис: закрыть терминалы, снять таймеры.
    *
-   * Перед остановкой пишутся снимки живых терминалов: после рестарта ядра
-   * они вернутся с последним выводом (PROP-132). Запись — best-effort
-   * (fire-and-forget): периодический снимок (60 с) обычно уже свежий.
+   * Перед остановкой пишутся снимки **живых** терминалов: после рестарта
+   * ядра они вернутся — с новым PTY и последним выводом (PROP-132). Запись —
+   * best-effort (fire-and-forget): периодический снимок (60 с) обычно уже
+   * свежий.
+   *
+   * **Порядок важен:** снимок пишется **до** закрытия PTY — иначе все
+   * терминалы оказались бы `exited` (`runningAtSave: false`) и не
+   * восстановились бы. Поэтому выход PTY (который зовёт `_finish`) не
+   * перезаписывает снимок остановки.
    */
   dispose(): void {
     if (this._disposed) return;
@@ -891,7 +1011,9 @@ export class TerminalService {
     this._stopSnapshotTimer();
     this._runs.dispose();
     for (const runtime of [...this._terminals.values()]) {
-      void this._writeSnapshot(runtime);
+      // Снимок — состояние **до** закрытия PTY (`runningAtSave: true`).
+      // Завершённые терминалы снимок уже получили при выходе.
+      if (!runtime.finished) void this._writeSnapshot(runtime);
       try {
         const closing = runtime.handle?.close({ signal: 'SIGTERM' });
         // Закрытие не удалось — процесс убьёт supervisor; ошибку глушим.
@@ -915,11 +1037,17 @@ export class TerminalService {
     if (!this._enabled) throw new TerminalDisabledError();
   }
 
-  /** Живой терминал (иначе — `TerminalNotFoundError`). */
+  /**
+   * Живой терминал (иначе — `TerminalNotFoundError`/`TerminalExitedError`).
+   *
+   * Завершённый терминал — **не «не найден»**: запись есть, её видно и можно
+   * перезапустить. Поэтому ввод/размер/запуск в него дают
+   * `TerminalExitedError` (роут мапит его в `409 TERMINAL_EXITED`).
+   */
   private _requireLiveRuntime(id: string): TerminalRuntime {
     const runtime = this._terminals.get(id);
     if (!runtime) throw new TerminalNotFoundError(id);
-    if (runtime.finished) throw new TerminalNotFoundError(id, `Терминал ${id} завершён`);
+    if (runtime.finished) throw new TerminalExitedError(id);
     return runtime;
   }
 
@@ -1016,6 +1144,69 @@ export class TerminalService {
   }
 
   /**
+   * Открыть PTY для записи реестра (перезапуск/восстановление).
+   *
+   * Те же параметры, что и при создании: `cwd`/`shell`/`cols`/`rows`.
+   */
+  private async _spawnPty(port: ExecutionPort, record: TerminalRecord): Promise<PtyHandle> {
+    const openPty = port.openPty;
+    if (!openPty || port.pty === false) {
+      throw new TerminalUnavailableError(
+        'pty_unsupported',
+        'Исполнение в этой среде не поддерживает PTY',
+      );
+    }
+    try {
+      return await openPty.call(port, {
+        cwd: record.cwd,
+        shell: record.shell,
+        cols: record.cols,
+        rows: record.rows,
+      });
+    } catch (err) {
+      if (isExecutionError(err)) throw err;
+      throw new TerminalUnavailableError(
+        'spawn_failed',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  /**
+   * Поднять PTY восстановленного терминала (PROP-132).
+   *
+   * `false` — процесс не запустился (точка исполнения недоступна, каталог
+   * пропал, PTY не поддерживается): терминал остаётся `exited` с
+   * сохранённым выводом, в лог — предупреждение (восстановление не должно
+   * ронять старт процесса).
+   */
+  private async _restorePty(runtime: TerminalRuntime): Promise<boolean> {
+    const record = runtime.record;
+    try {
+      const port = await this._resolvePortFor({
+        projectId: record.projectId,
+        ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
+        cwd: record.cwd,
+        shell: record.shell,
+      });
+      const handle = await this._spawnPty(port, record);
+      runtime.handle = handle;
+      handle.onData((chunk: string) => this._onData(runtime, chunk));
+      handle.onExit((info: { exitCode?: number; signal?: string }) => {
+        this._finish(runtime, info, runtime.closeReason ?? 'exited', runtime.closeActor);
+      });
+      return true;
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalService] терминал ${record.id} не восстановлен: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return false;
+    }
+  }
+
+  /**
    * Записать снимок терминала (метаданные + хвост вывода).
    *
    * Ошибка записи — предупреждение в лог: снимок best-effort, его отсутствие
@@ -1027,7 +1218,15 @@ export class TerminalService {
     const output = runtime.buffer.snapshot().chunks.map((chunk) => chunk.data).join('');
     const promise = (async (): Promise<void> => {
       try {
-        await writeTerminalSnapshot(blobs, runtime.record, output, this._now());
+        // `runningAtSave` — терминал был жив в момент записи: только такие
+        // терминалы восстанавливаются после рестарта ядра.
+        await writeTerminalSnapshot(
+          blobs,
+          runtime.record,
+          output,
+          this._now(),
+          !runtime.finished,
+        );
         runtime.snapshotVersion = runtime.outputVersion;
       } catch (err) {
         this._logger.warn(
@@ -1284,9 +1483,13 @@ export class TerminalService {
       ...(runtime.record.exitCode !== undefined ? { exitCode: runtime.record.exitCode } : {}),
       ...(runtime.record.signal !== undefined ? { signal: runtime.record.signal } : {}),
     });
-    // Снимок терминала: после выхода процесса терминал вернётся при рестарте
-    // ядра вместе с последним выводом (PROP-132).
-    void this._writeSnapshot(runtime);
+    // Снимок терминала: терминал завершился — после рестарта ядра он не
+    // воскресает (`runningAtSave: false`), но его вывод остаётся доступен.
+    //
+    // Во время остановки сервиса снимок уже записан (состояние **до** закрытия
+    // PTY) — перезаписывать его состоянием «exited» нельзя: живой терминал
+    // должен восстановиться после рестарта ядра.
+    if (!this._disposed) void this._writeSnapshot(runtime);
     this._syncMetrics();
   }
 

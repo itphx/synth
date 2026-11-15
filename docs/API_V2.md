@@ -3568,22 +3568,35 @@ instance-пул берёт адрес оттуда.
 
 **Реестр терминалов — в памяти процесса**, но его содержимое переживает
 рестарт ядра: сервис пишет **снимок** терминала в blob-хранилище
-(`terminals/<id>/meta.json` — запись реестра, `terminals/<id>/output.txt` — хвост
-кольцевого буфера ≤ 512 КиБ; ADR-096/ADR-116) при выходе процесса, при
-закрытии терминала, при остановке сервиса и раз в 60 с (если вывод менялся).
-При старте ядра снимки моложе `idleMs` (2 дня от `lastActivityAt`) поднимаются
-как **завершённые** терминалы с признаком `restored: true`; вывод снимка
-залит в кольцевой буфер, PTY не запущен (`attached_clients = 0`) — такой терминал
-можно только перезапустить. Снимки старше срока удаляются; при
-`terminal.autoRestore = false` снимки не поднимаются, их убирает reaper.
-Явное удаление терминала (`DELETE`) удаляет и его снимок — удалённый терминал
-не воскреснет после рестарта.
+(`terminals/<id>/meta.json` — запись реестра + признак `runningAtSave`,
+`terminals/<id>/output.txt` — хвост кольцевого буфера ≤ 512 КиБ;
+ADR-096/ADR-116) при выходе процесса, при закрытии терминала, при остановке
+сервиса и раз в 60 с (если вывод менялся).
+
+**Авто-восстановление — только живых.** `runningAtSave` в снимке = терминал
+был **жив** в момент записи снимка (`!runtime.finished`). При старте ядра
+поднимаются **только** такие записи (и моложе `idleMs` — 2 дня от
+`lastActivityAt`): для них **реально поднимается новый PTY** (те же
+`cwd`/`shell`/`cols`/`rows`), статус — `running`, признак `restored: true`, а
+в кольцевой буфер предварительно заливается сохранённый хвост вывода (история
+остаётся доступной: `GET /terminals/:id/output`, `terminal_read`). Если PTY
+подняться не удалось (точка исполнения недоступна, каталог пропал) — терминал
+остаётся `exited` + `restored: true` с сохранённым выводом (в лог —
+предупреждение): его можно перезапустить вручную.
+
+Записи, завершившиеся **до** остановки (`runningAtSave !== true`), не
+восстанавливаются — их снимок удаляется. Старый снимок без поля
+`runningAtSave` считается `false` (не воскресает). Снимки старше срока
+удаляются; при `terminal.autoRestore = false` снимки не поднимаются, их убирает
+reaper. Явное удаление терминала (`DELETE`) удаляет и его снимок — удалённый
+терминал не воскреснет после рестарта.
 
 **Завершённые терминалы в списке — по флагу.** По умолчанию `GET /terminals`
 отдаёт **только живые** терминалы (`exited` скрыты). Восстановленный после
-рестарта терминал (`restored: true`) виден только с `include_exited=true`
-(или `include_exited=1`): без флага клиент не отличит «терминала нет» от
-«терминал завершён» и создаст лишний терминал.
+рестарта терминал (`restored: true`) — **живой** (процесс поднят заново), поэтому
+он виден и без флага; флаг `include_exited=true` (или `include_exited=1`) нужен,
+чтобы увидеть завершённые — в том числе те, чей процесс при восстановлении
+поднять не удалось.
 
 Фабрика `createTerminalRoutes` — общая для core и backend; managed передаёт
 правило доступа по проекту (`resolveProjectAccess`, PROP-133).
@@ -3593,13 +3606,13 @@ instance-пул берёт адрес оттуда.
 | GET | `/api/v2/terminals` | auth | Список терминалов `{terminals, total, offset, limit, next_offset}` (ADR-118); фильтры `project_id`/`session_id`, `include_exited` (`true`/`1` — вместе с завершёнными; по умолчанию — только живые), `limit` (по умолчанию 50, максимум 200)/`offset`; нецелый `limit`/`offset` → 400 `VALIDATION_ERROR`. Терминалы проектов, которые пользователь не читает, в выдаче не появляются |
 | POST | `/api/v2/terminals` | auth (**write**) | Открыть терминал → 201 `{terminal}`; тело `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` обязателен). `cols`/`rows` — целые (`cols` 1…1000, `rows` 1…500; по умолчанию 80×24), иначе 400 `VALIDATION_ERROR` (клампа нет). `cwd` из тела **игнорируется** — рабочий каталог вычисляет сервер (`session.worktree.directory` → `project.workspace`). Сессия должна принадлежать проекту. Нет `project_id` → 400 `VALIDATION_ERROR`, нет проекта → 404 `NOT_FOUND`, нет прав → 403 `FORBIDDEN` |
 | GET | `/api/v2/terminals/:id` | auth | Снимок терминала `{terminal}` — DTO в snake_case (см. таблицу DTO ниже); терминала нет → 404 `TERMINAL_NOT_FOUND` |
-| PATCH | `/api/v2/terminals/:id` | auth (**write**) | Точечная правка `{title?, session_id?}` → `{terminal}`; `null` — сброс поля; сессия должна принадлежать проекту терминала |
+| PATCH | `/api/v2/terminals/:id` | auth (**write**) | Точечная правка `{title?, session_id?}` → `{terminal}` (DTO несёт `title`); `null` — сброс поля; сессия должна принадлежать проекту терминала. Переименовать можно и **завершённый** терминал (запись есть, её видно с `include_exited`); снимок терминала обновляется, событие `terminal.updated` уходит в канал сессии |
 | DELETE | `/api/v2/terminals/:id` | auth (**write**) | Удалить терминал → **204** (PTY гасится, публикуются `terminal.exited` + `terminal.deleted`, **снимок терминала удаляется**); повторный `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
 | GET | `/api/v2/terminals/:id/output?since=N` | auth | Снимок вывода из кольцевого буфера: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` — курсор (только фрагменты с `seq > since`). `truncated` — часть вывода вытеснена из буфера, клиенту нужно перечитать вывод |
 | GET | `/api/v2/terminals/:id/stream?since=N` | auth | Поток вывода `application/x-ndjson`: кадры `{"seq":n,"data":"..."}` — сначала replay из буфера (`seq > since`), затем живой вывод; кадр выхода — `{"seq":n,"data":"","exit_code":…,"signal":…}`; heartbeat — пустой кадр `{"seq":n,"data":""}` раз в 15 с. При отключении клиента (abort/закрытие соединения) поток закрывается, а подписка **снимается** (`attached_clients` уменьшается при любом исходе: abort, ошибка записи, выход терминала) |
-| POST | `/api/v2/terminals/:id/input` | auth (**write**) | Ввод в терминал `{data}` → **204**; кадр больше 16 КиБ → 413 `TERMINAL_LIMIT`, слишком часто (>20 кадров/с) → 429 `TERMINAL_LIMIT` |
-| POST | `/api/v2/terminals/:id/resize` | auth (**write**) | Новый размер `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (целые), иначе 400 `VALIDATION_ERROR` |
-| POST | `/api/v2/terminals/:id/restart` | auth (**write**) | Перезапуск **завершённого** терминала → 200 `{terminal}`: поднимается новый PTY с теми же `cwd`/`shell`/`cols`/`rows`, id терминала сохраняется, буфер вывода очищается, статус — `running`, признак `restored` снимается, публикуется `terminal.updated`. Живой терминал перезапускать нельзя (вторая оболочка в том же каталоге рассинхронила бы вывод) → 409 `TERMINAL_ALREADY_RUNNING`; терминала нет → 404 `TERMINAL_NOT_FOUND` |
+| POST | `/api/v2/terminals/:id/input` | auth (**write**) | Ввод в терминал `{data}` → **204**; кадр больше 16 КиБ → 413 `TERMINAL_LIMIT`, слишком часто (>20 кадров/с) → 429 `TERMINAL_LIMIT`; терминал **завершён** → 409 `TERMINAL_EXITED` (перезапустите его) |
+| POST | `/api/v2/terminals/:id/resize` | auth (**write**) | Новый размер `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (целые), иначе 400 `VALIDATION_ERROR`; терминал **завершён** → 409 `TERMINAL_EXITED` |
+| POST | `/api/v2/terminals/:id/restart` | auth (**write**) | Перезапуск **завершённого** терминала → 200 `{terminal}`: поднимается новый PTY с теми же `cwd`/`shell`/`cols`/`rows`, id терминала сохраняется, статус — `running`, признак `restored` снимается, публикуется `terminal.updated`. **История вывода сохраняется:** буфер не очищается — старый вывод остаётся в нём (его можно промотать вверх), новый вывод дописывается в конец; снимок после перезапуска содержит историю + новый вывод. Живой терминал перезапускать нельзя (вторая оболочка в том же каталоге рассинхронила бы вывод) → 409 `TERMINAL_ALREADY_RUNNING`; терминала нет → 404 `TERMINAL_NOT_FOUND` |
 
 **DTO терминала — snake_case** (`toTerminalDto`, `engine/terminal/types.ts`):
 
@@ -3620,7 +3633,7 @@ instance-пул берёт адрес оттуда.
 | `executor_id` | string? | Адрес исполнителя (`target: executor`) |
 | `can_write` | boolean | Право текущего пользователя на запись (инвариант 21) |
 | `attached_clients` | number | Сколько клиентов подписано на поток вывода |
-| `restored` | boolean? | Терминал **восстановлен из снимка** после рестарта ядра: PTY не запущен, в буфере — сохранённый хвост вывода; поле отсутствует у обычного терминала |
+| `restored` | boolean? | Терминал **восстановлен из снимка** после рестарта ядра: поднят новый PTY, в буфере — сохранённый хвост вывода (история); поле отсутствует у обычного терминала. Если PTY подняться не удалось — терминал остаётся `exited`, но `restored` всё равно `true` |
 
 **Граница доступа (инварианты 16/21).** Право на терминал — право на его
 **проект**, и проверяется оно **на границе**: guard резолвит терминал и проект
@@ -3636,6 +3649,8 @@ instance-пул берёт адрес оттуда.
 отвечает этим кодом), `TERMINAL_NOT_FOUND` (404), `TERMINAL_LIMIT` (409 —
 лимит терминалов проекта/инстанса, 429 — скорость ввода, 413 — размер кадра
 ввода), `TERMINAL_ALREADY_RUNNING` (409 — перезапуск живого терминала),
+`TERMINAL_EXITED` (409 — терминал **завершён**: запись есть, её видно и можно
+перезапустить, но ввод/размер невозможны — в отличие от «не найден»),
 `TERMINAL_UNAVAILABLE` (503 — PTY недоступен в этой среде или точка исполнения
 недоступна), `TERMINAL_INVALID_REQUEST` (400).
 
@@ -3647,32 +3662,63 @@ instance-пул берёт адрес оттуда.
 
 ### 5.44 Настройки терминалов — `/api/v2/settings/terminal` (оба, PROP-132)
 
-Мастер-выключатель интерактивных терминалов (`terminal.enabled`) и флаг
-восстановления терминалов из снимков после рестарта ядра
-(`terminal.autoRestore`), [PROP-132](./arch_decisions/prop-132-ui-terminal.md).
-Фабрика `createTerminalSettingsRoutes` — общая для core и backend; managed передаёт
+Секция `terminal`: мастер-выключатель интерактивных терминалов
+(`terminal.enabled`), восстановление терминалов из снимков после рестарта ядра
+(`terminal.autoRestore`) и **параметры выполнения** — простой, лимиты живых
+терминалов, оболочка новых терминалов и журналирование ввода
+([PROP-132](./arch_decisions/prop-132-ui-terminal.md)). Фабрика
+`createTerminalSettingsRoutes` — общая для core и backend; managed передаёт
 guard'ы ADMIN, core — `requireAuth`.
 
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean, autoRestore:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean, autoRestore:boolean}, envLocked:boolean, restartRequired:false}`; приоритет каждого поля: `SYNTH_TERMINAL_ENABLED`/`SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled`/`terminal.autoRestore` > `true` |
-| PUT | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled?:boolean, autoRestore?:boolean}` — **частичное** обновление runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: `TerminalService.setEnabled` закрывает живые терминалы и запрещает создание новых, `setAutoRestore` включает/выключает восстановление из снимков — рестарт не нужен); не-bool → 400 `VALIDATION_ERROR`; поле, зафиксированное env, → 409 `CONFLICT`; ответ как у `GET` |
-| DELETE | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Сброс runtime-значений к env/config/default с тем же live-применением (ответ как у `GET`); хотя бы одно из значений зафиксировано env → 409 `CONFLICT` |
+| GET | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled, autoRestore, idleMinutes, maxPerProject, maxPerInstance, shell:string\|null, auditInput, source:"env"\|"runtime"\|"config"\|"default", sources:{<поле>: source}, defaults:{<7 полей>}, envLocked:boolean, envLockedFields:TerminalSettingsField[], restartRequired:false}` — эффективные значения и источники |
+| PUT | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Частичный патч **только 7 полей** (`{enabled?, autoRestore?, idleMinutes?, maxPerProject?, maxPerInstance?, shell?, auditInput?}`); неизвестный ключ, неверный тип, число вне границ или оболочка не по паттерну → 400 `VALIDATION_ERROR`; поле, зафиксированное env, → 409 `ENV_LOCKED` с `fields:[...]` — **ни одно** поле запроса при этом не применяется; применение — сразу (`restartRequired:false`); ответ как у `GET` |
+| DELETE | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Сброс runtime **всех** полей к env/config/default с тем же live-применением (ответ как у `GET`); хотя бы одно поле зафиксировано env → 409 `ENV_LOCKED` с `fields:[...]` |
 
-**Источники значения.** `env` — переменная `SYNTH_TERMINAL_ENABLED` /
-`SYNTH_TERMINAL_AUTO_RESTORE` (`true`/`1`/`false`/`0`); `runtime` — override из
-UI; `config` — `terminal.enabled` / `terminal.autoRestore` в `config.yaml`;
-`default` — `true` (контур включён, восстановление включено). Env-значение
-**фиксирует** своё поле: runtime из UI его не перекрывает (409 `CONFLICT`), а
-фиксация одного поля **не** блокирует изменение другого. В конфиге флаги
-необязательны — «не задано» отличается от «явно задано `true`», поэтому API
-различает `config` и `default`.
+**Поля, env-имена, дефолты и границы.**
 
-Поля резолвятся **по отдельности**, но контракт отдаёт один `source` — слой,
-задавший поведение терминалов: **наиболее специфичный** из двух (`env` >
-`runtime` > `config` > `default`). `envLocked` — env зафиксировал хотя бы одно
-из значений; точная привязка поля к слою видна по тому, что `PUT` проверяет
-env-фиксацию **по полю** (409 на конкретное поле).
+| Поле | Env | Default | Границы / формат |
+|---|---|---|---|
+| `enabled` | `SYNTH_TERMINAL_ENABLED` | `true` | boolean |
+| `autoRestore` | `SYNTH_TERMINAL_AUTO_RESTORE` | `true` | boolean |
+| `idleMinutes` | `SYNTH_TERMINAL_IDLE_MINUTES` | `2880` (2 дня) | целое 30…10080; он же TTL снимков |
+| `maxPerProject` | `SYNTH_TERMINAL_MAX_PER_PROJECT` | `8` | целое 1…64 |
+| `maxPerInstance` | `SYNTH_TERMINAL_MAX_PER_INSTANCE` | `32` | целое 1…256 |
+| `shell` | `SYNTH_TERMINAL_SHELL` | `null` — платформенный дефолт (`$SHELL` → `/bin/bash`) | `null`/пустая строка или имя/путь без пробелов по `TERMINAL_SHELL_PATTERN` |
+| `auditInput` | `SYNTH_TERMINAL_AUDIT_INPUT` | `true` | boolean |
+
+**Источники значения.** У каждого поля **свой** слой: `env` > `runtime`
+(`settings.json`/PG) > `config.yaml` (`terminal.*`) > `default`. Env-значение
+**фиксирует** своё поле: runtime из UI его не перекрывает (`409 ENV_LOCKED`), а
+фиксация одного поля **не** блокирует изменение другого. В конфиге все поля
+необязательны — «не задано» отличается от «явно задано значением по
+умолчанию», поэтому API различает `config` и `default`.
+
+`sources` — источник **каждого** поля (точная привязка), `source` — наиболее
+специфичный слой среди полей (`env` > `runtime` > `config` > `default`),
+`envLocked` — env зафиксировал хотя бы одно поле, `envLockedFields` — какие
+именно (канонический порядок: `enabled`, `autoRestore`, `idleMinutes`,
+`maxPerProject`, `maxPerInstance`, `shell`, `auditInput`; в UI такие поля
+`disabled` и не уходят в `PUT`). `defaults` — база без runtime (к чему вернёт
+`DELETE`).
+
+**Live-применение (без рестарта).** `setEnabled` — живые терминалы закрываются,
+создание новых запрещается; `setAutoRestore` — поднимать ли снимки при
+следующем старте; `setLimits({idleMs: idleMinutes*60_000, maxPerProject,
+maxPerInstance})` — reaper и уборка снимков читают `idleMs` на каждом тике,
+лимиты — на каждой попытке создания (уже открытые терминалы новый, меньший
+лимит не закрывает); `setDefaultShell` — оболочка **только новых** терминалов
+(существующие не перезапускаются: у них оболочка зафиксирована в записи и в
+снимке); `setAuditInput(false)` — `terminal.input` в журнал исполнений не
+пишется (метрика `synth_terminal_bytes_total{op="input"}` считается всегда,
+аудит `terminal.open`/`terminal.close` не меняется).
+
+**Коды ошибок.** `400 VALIDATION_ERROR` — пустое тело, неизвестный ключ,
+неверный тип, число вне границ, оболочка с пробелами/аргументами.
+`409 ENV_LOCKED` — `{error:{code:"ENV_LOCKED", message, fields:[<поля>]}}`:
+перечислены все зафиксированные поля **запроса**, изменения не применены.
+
 
 **Поведение при выключении.** Живые терминалы закрываются (события `terminal.exited` +
 `terminal.deleted` с причиной `disabled`), создание новых запрещено, а весь контур
@@ -3681,6 +3727,16 @@ env-фиксацию **по полю** (409 на конкретное поле).
 **Поведение при выключении восстановления.** Снимки терминалов не поднимаются
 при следующем старте ядра; их убирает reaper (существующие снимки — до 2 дней
 после последней активности терминала).
+
+**Что означает `autoRestore = true`.** Восстанавливаются **только активные на
+момент остановки** терминалы (в снимке — `runningAtSave: true`): для них
+**запускается новый процесс** (новый PTY с теми же `cwd`/`shell`/`cols`/`rows`),
+а сохранённый вывод остаётся в буфере как история. Терминалы, завершившиеся
+до остановки, не восстанавливаются (снимок удаляется); старые снимки без
+признака `runningAtSave` — тоже. Если процесс подняться не удалось (точка
+исполнения недоступна, каталог пропал), терминал остаётся `exited` с
+сохранённым выводом — его можно перезапустить вручную
+(`POST /api/v2/terminals/:id/restart`).
 
 ## 6. Источники
 
