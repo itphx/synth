@@ -557,6 +557,7 @@ export {
   TerminalDisabledError,
   TerminalError,
   TerminalExitedError,
+  TerminalForegroundAppError,
   TerminalInvalidRequestError,
   TerminalLimitError,
   TerminalNotFoundError,

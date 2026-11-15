@@ -1980,7 +1980,20 @@
   ответе тула нет. `timeout_ms` в этом режиме — необязательный **watchdog**:
   не задан — срок `0`, и реестр запусков (`engine/terminal/runs.ts`) при сроке
   `<= 0` watchdog-таймер **не ставит вовсе** (запуск без лимита: завершает
-  только маркер команды или закрытие терминала). Отдельного тула
+  только маркер команды или закрытие терминала). **Маркер завершения —
+  текстовый** `@@srn-<nonce>:<код>@@` (`printf '\n\033[2K@@srn-…@@\033[2K\r' "$?"`),
+  а не OSC: мультиплексор (tmux, в т.ч. под ssh) OSC перехватывает себе и наружу
+  не пропускает — маркер не доходил, запуск висел в `run_busy`. Команда и
+  маркер уходят **одним кадром**; маркер вырезается из буфера до записи
+  (`scanRunMarkers`), а эхо строки-обёртки и маркер — из результата запуска
+  (`cleanRunOutput`/`removeRunWrapper`). **Полноэкранное приложение в терминале
+  (tmux/vim/less/htop) — запуск запрещён:** `startRun` проверяет включённый и не
+  выключенный альтернативный экран (`?1049h`/`?1047h`/`?47h`,
+  `isForegroundAppActive`) и бросает `TerminalForegroundAppError`
+  (`TERMINAL_FOREGROUND_APP`); тул отдаёт понятный отказ (текст ключа
+  `terminal.tool.foreground_app` + `metadata.code`, не общий `tool.exec_error`) —
+  работать там `terminal_write` + `terminal_snapshot` или в отдельном терминале.
+  Отдельного тула
   `terminal_run_background` **больше нет** — ни в реестре тулов
   (`engine/tools/index.ts`), ни в группе правил `terminal`
   (`permission/groups.ts`), ни в `PLAN_BLOCKED_AUTOMATION_TOOLS`

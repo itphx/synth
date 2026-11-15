@@ -381,7 +381,8 @@ export type TerminalErrorCode =
   | 'TERMINAL_EXITED'
   | 'TERMINAL_UNAVAILABLE'
   | 'TERMINAL_INVALID_REQUEST'
-  | 'TERMINAL_ALREADY_RUNNING';
+  | 'TERMINAL_ALREADY_RUNNING'
+  | 'TERMINAL_FOREGROUND_APP';
 
 /** Базовая типизированная ошибка терминального сервиса. */
 export class TerminalError extends Error {
@@ -513,6 +514,36 @@ export class TerminalExitedError extends TerminalError {
   constructor(terminalId: string, message?: string) {
     super('TERMINAL_EXITED', message ?? `Терминал ${terminalId} завершён`);
     this.name = 'TerminalExitedError';
+    this.terminalId = terminalId;
+  }
+}
+
+/**
+ * В терминале работает полноэкранное приложение (tmux/vim/less) — запуск
+ * команды с маркером там не отследить (PROP-132, Ф5).
+ *
+ * Мультиплексор/TUI перехватывает ввод и перерисовывает экран: наша команда
+ * ушла бы **внутрь** приложения, а строка-маркер либо не выполнилась бы, либо
+ * пришла бы в чужой поток — запуск висел бы до таймаута, а терминал оставался
+ * бы занятым (`run_busy`). Поэтому `startRun` отказывает **до** записи в PTY:
+ * модель работает через `terminal_write` + `terminal_snapshot` (или открывает
+ * отдельный терминал).
+ *
+ * Признак активного приложения — переключение на альтернативный экран без
+ * возврата: `ESC [ ? 1049 h` / `?47h` / `?1047h` позже соответствующего `l`.
+ * Обычная оболочка и ssh такого не печатают — их запуск не блокируется.
+ */
+export class TerminalForegroundAppError extends TerminalError {
+  /** Идентификатор терминала. */
+  readonly terminalId: string;
+
+  constructor(terminalId: string, message?: string) {
+    super(
+      'TERMINAL_FOREGROUND_APP',
+      message ??
+        'Error: the terminal is running a full-screen application (tmux/vim/less): a wrapped command cannot be tracked there. Use terminal_write + terminal_snapshot, or open a separate terminal',
+    );
+    this.name = 'TerminalForegroundAppError';
     this.terminalId = terminalId;
   }
 }

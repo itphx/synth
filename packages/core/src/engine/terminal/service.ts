@@ -39,6 +39,7 @@ import { randomUUID } from 'node:crypto';
 import { isExecutionError, type ExecutionPort, type PtyHandle } from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
+import { t as sm } from '../system-messages.js';
 import type { TerminalAuditSink, TerminalCloseReason } from './audit.js';
 import type { TerminalMetricsHooks } from './metrics.js';
 import { TerminalRingBuffer } from './ring-buffer.js';
@@ -61,6 +62,7 @@ import {
   TerminalAlreadyRunningError,
   TerminalDisabledError,
   TerminalExitedError,
+  TerminalForegroundAppError,
   TerminalInvalidRequestError,
   TerminalLimitError,
   TerminalNotFoundError,
@@ -214,6 +216,42 @@ function requireText(value: string, field: string): string {
   const trimmed = typeof value === 'string' ? value.trim() : '';
   if (trimmed === '') throw new TerminalInvalidRequestError(`Поле ${field} обязательно`);
   return trimmed;
+}
+
+/** Режимы альтернативного экрана: tmux (`1049`), vim/less (`1047`, `47`). */
+const ALT_SCREEN_MODES = new Set(['1049', '1047', '47']);
+
+/** ESC — начало escape-последовательности. */
+const ESC = '\u001B';
+
+/** Переключение режимов терминала: `ESC [ ? <params> h|l`. */
+const ALT_SCREEN_SWITCH_PATTERN = new RegExp(`${ESC}\\[\\?([0-9;]*)([hl])`, 'g');
+
+/**
+ * В терминале активно полноэкранное приложение (tmux/vim/less).
+ *
+ * Признак — переключение на альтернативный экран **без возврата**: для любого
+ * из режимов `1049`/`1047`/`47` последнее `h` позже последнего `l` (или `l` не
+ * было вовсе). Обычная оболочка и ssh такого не печатают — их запуск не
+ * блокируется.
+ */
+export function isForegroundAppActive(text: string): boolean {
+  if (!text.includes('\u001B[?')) return false;
+  const openAt = new Map<string, number>();
+  const closedAt = new Map<string, number>();
+  ALT_SCREEN_SWITCH_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ALT_SCREEN_SWITCH_PATTERN.exec(text)) !== null) {
+    const mode = (match[1] ?? '').split(';').find((part) => ALT_SCREEN_MODES.has(part));
+    if (mode === undefined) continue;
+    if (match[2] === 'h') openAt.set(mode, match.index);
+    else closedAt.set(mode, match.index);
+  }
+  for (const [mode, openedAt] of openAt) {
+    const closed = closedAt.get(mode);
+    if (closed === undefined || openedAt > closed) return true;
+  }
+  return false;
 }
 
 /**
@@ -851,10 +889,23 @@ export class TerminalService {
   /**
    * Запустить команду в терминале и зарегистрировать запуск.
    *
-   * Команда уходит в оболочку терминала, после неё — **невидимый** маркер
-   * завершения (OSC 7770): по нему сервис узнаёт, что команда закончилась, и
-   * забирает код возврата. Маркер вырезается из потока (и из буфера), в
-   * вывод модели не попадает.
+   * Команда уходит в оболочку терминала, после неё — **текстовый** маркер
+   * завершения (`@@srn-<nonce>:<код>@@`): по нему сервис узнаёт, что команда
+   * закончилась, и забирает код возврата. Маркер вырезается из потока (и из
+   * буфера), в вывод модели не попадает. OSC-маркер не используется: в PTY с
+   * мультиплексором (tmux, в т.ч. под ssh) OSC перехватывается и до нас не
+   * доходит — запуск висел бы до таймаута.
+   *
+   * **Команда и строка-маркер уходят одним кадром** (`write`): в tmux второй
+   * кадр приходит, пока первый ещё разбирается, и первый байт команды терялся
+   * (`cho: command not found`). Один кадр — одна запись в PTY; аудит/лимиты
+   * применяются к нему как к обычной команде (кадр с `Enter`).
+   *
+   * **Полноэкранное приложение — отказ до записи.** Если в терминале активно
+   * tmux/vim/less (альтернативный экран включён и не выключен), команда ушла
+   * бы внутрь приложения, а маркер — нет: `TerminalForegroundAppError`
+   * (`TERMINAL_FOREGROUND_APP`). Работать там — `terminal_write` +
+   * `terminal_snapshot`.
    *
    * **Строки уходят с `\r`, а не с `\n`:** терминал работает в raw-режиме, и
    * `Enter` там — это CR (`tmux`/`less`/REPL ждут именно `\r`; LF не
@@ -865,6 +916,7 @@ export class TerminalService {
    *
    * @throws TerminalNotFoundError — терминала нет.
    * @throws TerminalExitedError — терминал завершён (ввод/запуск невозможны).
+   * @throws TerminalForegroundAppError — в терминале полноэкранное приложение.
    * @throws TerminalRunBusyError — в терминале уже идёт запуск.
    */
   startRun(input: {
@@ -879,6 +931,9 @@ export class TerminalService {
   }): TerminalRunRecord {
     this._assertUsable();
     const runtime = this._requireLiveRuntime(input.terminalId);
+    // Полноэкранное приложение (tmux/vim/less) перехватывает и ввод, и экран:
+    // маркер запуска в нём не отследить — отказываем до записи в PTY.
+    this._assertRunTrackable(runtime);
     const command = input.command.replace(/[\r\n]+$/, '');
     const run = this._runs.start({
       terminalId: runtime.record.id,
@@ -889,22 +944,39 @@ export class TerminalService {
       ...(input.killOnTimeout !== undefined ? { killOnTimeout: input.killOnTimeout } : {}),
     });
     // Строка-обёртка: реестр строит её из своего nonce и хранит в записи
-    // запуска — по ней из вывода снимается эхо служебной строки.
+    // запуска — по ней из вывода снимаются эхо служебной строки и маркер.
     const markerCommand = run.wrapperCommand ?? buildRunMarkerCommand(run.nonce);
     try {
+      // Один кадр — одна запись в PTY (команда + Enter + маркер + Enter):
       // Enter в raw-режиме терминала — это CR, а не LF.
-      this.write(runtime.record.id, `${command}\r`, {
-        ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
-      });
-      this.write(runtime.record.id, `${markerCommand}\r`, {
+      this.write(runtime.record.id, `${command}\r${markerCommand}\r`, {
         ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
       });
     } catch (err) {
-      // Команда не ушла — запуск отменяем (иначе терминал остался бы «занятым»).
+      // Кадр не ушёл — запуск отменяем (иначе терминал остался бы «занятым»).
       this._runs.cancel(run.runId);
       throw err;
     }
     return run;
+  }
+
+  /**
+   * Проверить, что запуск в терминале отслеживаем (нет полноэкранного
+   * приложения).
+   *
+   * Признак берётся из буфера вывода (что реально напечатал PTY): включённый
+   * и не выключенный альтернативный экран (`?1049h`/`?1047h`/`?47h`). Обычная
+   * оболочка и ssh его не печатают — запуск не блокируется.
+   */
+  private _assertRunTrackable(runtime: TerminalRuntime): void {
+    const snapshot = runtime.buffer.snapshot();
+    const text = snapshot.chunks.map((chunk) => chunk.data).join('');
+    if (isForegroundAppActive(text)) {
+      throw new TerminalForegroundAppError(
+        runtime.record.id,
+        sm('terminal.tool.foreground_app'),
+      );
+    }
   }
 
   /** Снимок запуска (копия) или `null`, если запуска нет. */
@@ -1452,8 +1524,8 @@ export class TerminalService {
   /** Вывод от PTY: маркеры запусков вырезаются, остальное — в буфер + очередь. */
   private _onData(runtime: TerminalRuntime, chunk: string): void {
     if (runtime.finished || chunk === '') return;
-    // Невидимые маркеры завершения запуска (OSC 7770) в буфер и в вывод
-    // модели не попадают: вырезаем их до записи в кольцевой буфер.
+    // Строка-маркер завершения запуска (`@@srn-…@@`) в буфер и в вывод модели
+    // не попадает: вырезаем её до записи в кольцевой буфер.
     const scan = scanRunMarkers(chunk, runtime.markerPending);
     runtime.markerPending = scan.pending;
     const text = scan.parts

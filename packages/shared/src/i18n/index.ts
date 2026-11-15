@@ -631,6 +631,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'terminal.tool.run_exited',
   'terminal.tool.run_still_running',
   'terminal.tool.run_busy',
+  'terminal.tool.foreground_app',
   'terminal.tool.exit_code',
 ] as const;
 
@@ -1231,6 +1232,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'terminal.tool.run_exited': ["terminal_id"],
   'terminal.tool.run_still_running': ["run_id","terminal_id"],
   'terminal.tool.run_busy': ["terminal_id"],
+  'terminal.tool.foreground_app': [],
   'terminal.tool.exit_code': ["exit_code"],
 };
 

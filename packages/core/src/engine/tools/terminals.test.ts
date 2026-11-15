@@ -51,6 +51,7 @@ import {
 import type { TerminalOutputSnapshot, TerminalRecord } from '../terminal/types.js';
 import {
   TerminalDisabledError,
+  TerminalForegroundAppError,
   TerminalLimitError,
 } from '../terminal/types.js';
 import {
@@ -63,6 +64,7 @@ import { TerminalRunBusyError, buildTerminalRunNotification, type TerminalRunRec
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { getToolGroups, TERMINAL_TOOLS } from '../permission/groups.js';
 import { computeToolAvailability } from '../permission/availability.js';
+import { t as sm } from '../system-messages.js';
 import { TOOL_RUNTIME_DEP } from './runtime-deps.js';
 import { createToolRegistry } from './index.js';
 
@@ -115,6 +117,8 @@ class FakeTerminalService {
   created: TerminalRecord[] = [];
   /** Ошибка, которую сервис бросит на `create`/`write`/`close`. */
   failWith: unknown = null;
+  /** Ошибка, которую сервис бросит на `startRun` (полноэкранное приложение). */
+  startRunError: unknown = null;
   /** Запуски (`startRun`/`waitRun`). */
   runs = new Map<string, FakeRun>();
   /** Аргументы запусков (терминал/команда/срок/режимы) — проверка режимов. */
@@ -201,6 +205,7 @@ class FakeTerminalService {
     background?: boolean;
     killOnTimeout?: boolean;
   }): TerminalRunRecord {
+    if (this.startRunError) throw this.startRunError;
     if (this.busy) throw new TerminalRunBusyError(input.terminalId, 'run_busy_existing');
     const runId = `run_${this.runs.size + 1}`;
     const record: TerminalRunRecord = {
@@ -1119,6 +1124,55 @@ describe('Тулы интерактивных терминалов (terminals.ts
       );
       expect(result.isError).toBe(true);
       expect(result.content).toContain('not found');
+    });
+
+    it('полноэкранное приложение → TERMINAL_FOREGROUND_APP (текст ключа + код)', async () => {
+      service.startRunError = new TerminalForegroundAppError('term_1', sm('terminal.tool.foreground_app'));
+      const result = await terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls' },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      // Текст — ровно из ключа `terminal.tool.foreground_app`, не общий
+      // `tool.exec_error` («terminal: …»).
+      expect(result.content).toBe(sm('terminal.tool.foreground_app'));
+      expect(result.content).toContain('full-screen application');
+      expect(result.content).toContain('terminal_write');
+      expect(result.content).toContain('terminal_snapshot');
+      expect(result.content).not.toContain('terminal:');
+      expect(result.metadata?.code).toBe('TERMINAL_FOREGROUND_APP');
+      expect(result.metadata?.terminal_id).toBe('term_1');
+      expect(result.metadata?.i18n).toMatchObject({ key: 'terminal.tool.foreground_app' });
+      // Запуск не состоялся: до PTY ничего не ушло.
+      expect(service.runs.size).toBe(0);
+      expect(service.started).toHaveLength(0);
+    });
+
+    it('полноэкранное приложение в фоне → тот же отказ (режим не обходит проверку)', async () => {
+      service.startRunError = new TerminalForegroundAppError('term_1', sm('terminal.tool.foreground_app'));
+      const result = await terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls', background: true },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.metadata?.code).toBe('TERMINAL_FOREGROUND_APP');
+      expect(result.metadata?.run_id).toBeUndefined();
+    });
+
+    it('обычный запуск не затронут: нет metadata.code, ошибки нет', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls' },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'done', exitCode: 0, output: 'ok\n' });
+
+      const result = await promise;
+      expect(result.isError).toBeUndefined();
+      expect(result.metadata?.code).toBeUndefined();
+      expect(result.metadata?.status).toBe('done');
+      expect(result.content).toContain('Exit code: 0');
     });
   });
 

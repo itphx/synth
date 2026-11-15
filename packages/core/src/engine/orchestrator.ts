@@ -256,9 +256,16 @@ const TOOL_BATCH_BARRIER_TOOLS: ReadonlySet<string> = new Set([
  * одинаковые аргументы — обычная последовательность нажатий. Мутирующие
  * тулы-действия в список **не** входят — для них doom-loop остаётся защитой.
  * (`terminal_run`/`execute_shell` остаются под защитой.)
+ *
+ * `terminal_read`/`terminal_snapshot` — **наблюдение/keystroke — не действия**:
+ * агент опрашивает экран и вывод с одинаковыми аргументами, пока идёт работа в
+ * TUI (сборка, тесты, установка). Опрос «тем же вызовом» — это ожидание
+ * результата, а не застревание; прерывать ход нельзя.
  */
 const DOOM_LOOP_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
   'terminal_list',
+  'terminal_read',
+  'terminal_snapshot',
   'terminal_write',
   'process_list',
   'list_sessions',
@@ -6529,10 +6536,13 @@ export class ChatOrchestrator {
           // политикой. Deny-вызовы исключены: каждая попытка должна получать
           // понятный feedback с объяснением причины запрета, а не «Цикл
           // прерван». Механика для повторяющихся легальных вызовов сохраняется.
-          // Чисто наблюдающие тулы (`terminal_list`/`process_list`/`list_sessions`)
-          // и keystroke-тул `terminal_write` исключены: повторный «посмотреть
-          // список» — мониторинг, а повтор нажатия (tmux-префикс, стрелки,
-          // макросы) — ввод, а не зацикливание.
+          // Чисто наблюдающие тулы (`terminal_list`/`terminal_read`/
+          // `terminal_snapshot`/`process_list`/`list_sessions`) и keystroke-тул
+          // `terminal_write` исключены: повторный «посмотреть список/экран/вывод» —
+          // мониторинг (ожидание результата в TUI), а повтор нажатия (tmux-префикс,
+          // стрелки, макросы) — ввод, а не зацикливание. Мутации терминала
+          // (`terminal_run`/`terminal_open`/`terminal_close`/`terminal_signal`)
+          // остаются под защитой.
           if (
             !hookBlocked
             && permissionDecision.action !== 'deny'

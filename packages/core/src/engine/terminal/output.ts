@@ -21,12 +21,12 @@
  * ## Очистка вывода запуска
  *
  * Вывод команды, ушедшей в интерактивную оболочку, содержит служебный шум:
- * ANSI-последовательности, эхо введённой строки-обёртки (маркер `OSC 7770`
- * печатается `printf`-ом, но **сама строка** эхом PTY попадает в поток),
- * прогресс-вывод с `\r`. Для модели это мусор, поэтому `cleanRunOutput`
- * прогоняет текст через `stripTerminalAnsi` → `removeRunWrapper` →
- * `normalizeTerminalOutput` — **тот же** вид, что у инлайн-ответа
- * `terminal_run` и у уведомления о завершении фонового запуска.
+ * ANSI-последовательности, эхо введённой строки-обёртки (маркер печатается
+ * `printf`-ом, но **сама строка** эхом PTY попадает в поток), строка-маркер
+ * `@@srn-<nonce>:<код>@@` и её обрывки, прогресс-вывод с `\r`. Для модели это
+ * мусор, поэтому `cleanRunOutput` прогоняет текст через `stripTerminalAnsi` →
+ * `removeRunWrapper` → `normalizeTerminalOutput` — **тот же** вид, что у
+ * инлайн-ответа `terminal_run` и у уведомления о завершении фонового запуска.
  *
  * ## Границы
  *
@@ -40,6 +40,10 @@
  *   исходника) не трогаются: удаляется строка, `trim()` которой равен
  *   команде-обёртке, — или заканчивается ею (промпт оболочки печатается в той
  *   же строке, что и эхо ввода).
+ * - **Строка-маркер снимается по nonce** (`@@srn-<nonce>:<код>@@`), а не по
+ *   «похожести»: удаляется и полный маркер, и обрывок без закрывающих `@@`
+ *   (маркер мог разорваться выводом команды). Nonce берётся из записи запуска
+ *   (`cleanRunOutput(..., nonce)`) либо выводится из команды-обёртки.
  */
 
 /** Маркер начала обрамления вывода терминала. */
@@ -53,6 +57,33 @@ const TERMINAL_CONTENT_OPEN_PREFIX = '[CONTENT';
 
 /** Маркер конца обрамления вывода терминала. */
 export const TERMINAL_CONTENT_CLOSE = '[CONTENT END]';
+
+/**
+ * Префикс маркера завершения запуска команды (PROP-132, Ф5).
+ *
+ * Маркер — **текстовая строка** `@@srn-<nonce>:<код>@@`, а не OSC
+ * (`ESC ] 7770 ; …`): мультиплексоры и TUI (tmux, а также tmux под ssh)
+ * перехватывают OSC себе и наружу его не пропускают — маркер не доходил до
+ * нашего буфера, запуск висел до таймаута, а терминал оставался занятым
+ * (`run_busy`). Текстовая строка проходит через любой мультиплексор.
+ *
+ * `printf` печатает строку отдельной строкой (`\n` до и после); самостирание
+ * (`\033[2K` + `\r`) не используется — под tmux такой маркер до внешнего
+ * буфера не доходит. Строку вырезают сканер (`scanRunMarkers`) и очистка
+ * вывода (`removeRunWrapper`).
+ */
+export const TERMINAL_RUN_MARKER_PREFIX = '@@srn-';
+
+/** Закрывающая часть маркера завершения запуска (`@@srn-<nonce>:<код>@@`). */
+export const TERMINAL_RUN_MARKER_END = '@@';
+
+/**
+ * Nonce запуска в команде-обёртке (`printf '…@@srn-<nonce>:%s@@…' "$?"`).
+ *
+ * Нужен очистке вывода: строку-маркер и её обрывки снимаем **по nonce**, а не
+ * по «похожим» строкам.
+ */
+const RUN_MARKER_NONCE_PATTERN = /@@srn-([A-Za-z0-9_-]+):/;
 
 /**
  * Максимальная длина значения атрибута открывающего маркера.
@@ -193,9 +224,8 @@ function skipCsi(text: string, from: number): number {
  * Вырезать escape-последовательности из текста.
  *
  * - **OSC** (`ESC ] …`) вырезается **целиком** — до BEL или ST: в потоке
- *   терминала это служебные строки (в т.ч. маркер запуска
- *   `ESC ] 7770 ; synth-run ; …` и `ESC ] 3008 ; …`), которые модели видеть
- *   не нужно;
+ *   терминала это служебные строки (заголовок окна `ESC ] 3008 ; …` и прочие),
+ *   которые модели видеть не нужно;
  * - **CSI** (`ESC [ …`) вырезается целиком (цвета/позиционирование);
  * - прочие escape-последовательности (`ESC` + символ) вырезаются целиком.
  */
@@ -276,25 +306,68 @@ export function stripTerminalAnsi(text: string): string {
 }
 
 /**
- * Убрать из вывода **точное** эхо служебной строки-обёртки запуска.
+ * Nonce запуска из команды-обёртки (`null` — маркера в ней нет).
  *
- * `wrapperCommand` — строка, которую сервис отправил после команды (маркер
- * `OSC 7770`). PTY эхом возвращает её в поток, и без очистки она видна модели.
+ * Формат обёртки — `printf '\n@@srn-<nonce>:%s@@\n' "$?"`.
+ */
+function runMarkerNonceOf(wrapperCommand: string): string | null {
+  const match = RUN_MARKER_NONCE_PATTERN.exec(wrapperCommand);
+  return match ? (match[1] ?? null) : null;
+}
+
+/**
+ * Строка — маркер запуска или его обрывок (сравнение **по nonce**).
  *
- * Сравнение — построчно, по `trim()` строки: удаляется строка, которая либо
+ * Учитываются три вида:
+ *
+ * - полный маркер `@@srn-<nonce>:<код>@@`;
+ * - обрывок без закрывающих `@@` (`@@srn-<nonce>:<код>`);
+ * - обрывок, оборванный внутри `<nonce>:` (`@@srn-<nonce>`).
+ *
+ * Escape-последовательности и `\r` перед маркером (CSI от оболочки/мультиплексора)
+ * не мешают: они срезаются до сравнения. Чужой nonce — не наш маркер: строка
+ * остаётся (поэтому «похожие» строки вывода не трогаются).
+ */
+function isRunMarkerLine(line: string, nonce: string): boolean {
+  const core = stripEscapeSequences(line).replace(/\r/g, '').trim();
+  if (!core.startsWith(TERMINAL_RUN_MARKER_PREFIX)) return false;
+  const rest = core.slice(TERMINAL_RUN_MARKER_PREFIX.length);
+  const head = `${nonce}:`;
+  // Полный маркер/обрывок после nonce либо обрывок внутри `<nonce>:`.
+  return rest.startsWith(head) || head.startsWith(rest);
+}
+
+/**
+ * Убрать из вывода эхо служебной строки-обёртки запуска и строку-маркер.
+ *
+ * `wrapperCommand` — строка, которую сервис отправил после команды. PTY
+ * эхом возвращает её в поток, и без очистки она видна модели. `nonce` —
+ * nonce запуска: по нему снимается строка-маркер `@@srn-<nonce>:<код>@@` и её
+ * обрывки; не задан — выводится из команды-обёртки.
+ *
+ * Сравнение эха — построчно, по `trim()` строки: удаляется строка, которая либо
  * **целиком** равна команде-обёртке, либо **заканчивается** ею (оболочка
  * печатает промпт в той же строке, что и эхо ввода: `user@host:~$ printf '…'`).
  * У маркера уникальный nonce, поэтому «похожие» строки (вывод `cat`, примеры
  * в тексте) не трогаются: совпасть с обёрткой может только её собственное эхо.
- * Пустая команда-обёртка — очистка не выполняется.
+ * Пустая команда-обёртка без маркера — очистка не выполняется.
  */
-export function removeRunWrapper(text: string, wrapperCommand: string): string {
+export function removeRunWrapper(
+  text: string,
+  wrapperCommand: string,
+  nonce?: string,
+): string {
+  if (text === '') return text;
   const needle = wrapperCommand.trim();
-  if (text === '' || needle === '') return text;
-  if (!text.includes(needle)) return text;
+  const markerNonce = nonce ?? (needle === '' ? null : runMarkerNonceOf(needle));
+  if (needle === '' && markerNonce === null) return text;
+  const hasWrapperEcho = needle !== '' && text.includes(needle);
+  if (!hasWrapperEcho && markerNonce === null) return text;
   return text
     .split('\n')
     .filter((line) => {
+      if (markerNonce !== null && isRunMarkerLine(line, markerNonce)) return false;
+      if (!hasWrapperEcho) return true;
       const trimmed = line.trim();
       if (trimmed === needle) return false;
       return !trimmed.endsWith(needle);
@@ -306,15 +379,15 @@ export function removeRunWrapper(text: string, wrapperCommand: string): string {
  * Полная очистка вывода запуска для модели.
  *
  * Порядок: `stripTerminalAnsi` (ANSI/OSC/backspace/`\r`/широкие пробелы) →
- * `removeRunWrapper` (точное эхо обёртки, если она известна) →
+ * `removeRunWrapper` (эхо обёртки и строка-маркер по nonce) →
  * `normalizeTerminalOutput` (`\r\n` → `\n`, хвостовые пустые строки). Тот же
  * вид, что у инлайн-ответа и уведомления о завершении фонового запуска.
  */
-export function cleanRunOutput(text: string, wrapperCommand?: string): string {
+export function cleanRunOutput(text: string, wrapperCommand?: string, nonce?: string): string {
   const stripped = stripTerminalAnsi(text);
   const withoutWrapper =
-    wrapperCommand !== undefined && wrapperCommand !== ''
-      ? removeRunWrapper(stripped, wrapperCommand)
+    (wrapperCommand !== undefined && wrapperCommand !== '') || nonce !== undefined
+      ? removeRunWrapper(stripped, wrapperCommand ?? '', nonce)
       : stripped;
   return normalizeTerminalOutput(withoutWrapper);
 }

@@ -42,6 +42,7 @@ import {
   TerminalAlreadyRunningError,
   TerminalDisabledError,
   TerminalExitedError,
+  TerminalForegroundAppError,
   TerminalLimitError,
   TerminalNotFoundError,
   TerminalUnavailableError,
@@ -842,12 +843,12 @@ describe('Терминальный сервис', () => {
   });
 
   describe('запуски команд', () => {
-    /** Текст маркера завершения запуска (как его печатает `printf`). */
+    /** Строка маркера завершения запуска (как её печатает `printf`). */
     function marker(nonce: string, code: string): string {
-      return `${TERMINAL_RUN_MARKER_PREFIX}${nonce};${code}\u0007`;
+      return `${TERMINAL_RUN_MARKER_PREFIX}${nonce}:${code}@@`;
     }
 
-    it('отправляет команду и невидимый маркер в терминал', async () => {
+    it('отправляет команду и маркер одним кадром', async () => {
       const service = createService();
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
 
@@ -858,14 +859,36 @@ describe('Терминальный сервис', () => {
       });
 
       const handle = port.lastHandle;
+      // Один кадр — одна запись в PTY: в tmux второй чанк приходит, пока первый
+      // ещё разбирается, и первый байт команды терялся (`cho: command not found`).
+      expect(handle.writes).toHaveLength(1);
+      const frame = handle.writes[0] ?? '';
       // Enter в raw-режиме терминала — это CR (`\r`), а не LF: tmux/less/REPL
       // ждут именно `\r`.
-      expect(handle.writes[0]).toBe('ls -la\r');
-      expect(handle.writes[1]).toContain('printf');
-      expect(handle.writes[1]).toContain(run.nonce);
-      expect(handle.writes[1]).toContain('"$?"');
-      expect(handle.writes[1]?.endsWith('\r')).toBe(true);
+      expect(frame.startsWith('ls -la\r')).toBe(true);
+      expect(frame).toContain('printf');
+      expect(frame).toContain(run.nonce);
+      expect(frame).toContain('"$?"');
+      expect(frame).toContain('@@srn-');
+      expect(frame.endsWith('\r')).toBe(true);
+      // OSC-маркер больше не используется: tmux его съедает.
+      expect(frame).not.toContain(']7770');
       expect(service.getRun(run.runId)?.status).toBe('running');
+
+      service.dispose();
+    });
+
+    it('кадр запуска — одна запись аудита с Enter', async () => {
+      const service = createService();
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+
+      service.startRun({ terminalId: record.id, command: 'ls -la', timeoutMs: 30_000 });
+
+      const inputs = auditEntries.filter((entry) => entry.action === 'terminal.input');
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.enter).toBe(true);
+      // Содержимого команды в журнале нет — только метаданные.
+      expect(JSON.stringify(inputs[0])).not.toContain('ls -la');
 
       service.dispose();
     });
@@ -880,7 +903,7 @@ describe('Терминальный сервис', () => {
       });
 
       port.lastHandle.emitData('file1\n');
-      port.lastHandle.emitData(marker(run.nonce, '0'));
+      port.lastHandle.emitData(`${marker(run.nonce, '0')}\n`);
       port.lastHandle.emitData('after\n');
 
       const finished = service.getRun(run.runId);
@@ -889,8 +912,116 @@ describe('Терминальный сервис', () => {
       expect(finished?.output).toBe('file1\n');
       // Маркер в буфер терминала не попал — только обычный текст.
       const buffered = service.output(record.id)?.chunks.map((piece) => piece.data).join('');
-      expect(buffered).toBe('file1\nafter\n');
-      expect(buffered).not.toContain('synth-run');
+      expect(buffered).toContain('file1\n');
+      expect(buffered).not.toContain('@@srn-');
+
+      service.dispose();
+    });
+
+    it('tmux-подобный поток: эхо printf не завершает запуск, маркер завершает', async () => {
+      const service = createService();
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+
+      const wrapper = buildRunMarkerCommand(run.nonce);
+      // Мультиплексор OSC не пропускает, зато эхо и текстовая строка-маркер
+      // проходят как обычный вывод.
+      port.lastHandle.emitData(`user@host:~$ ${wrapper}\r\n`);
+      expect(service.getRun(run.runId)?.status).toBe('running');
+
+      port.lastHandle.emitData('file1\r\n');
+      port.lastHandle.emitData(`${marker(run.nonce, '0')}\n`);
+
+      const finished = service.getRun(run.runId);
+      expect(finished?.status).toBe('done');
+      expect(finished?.exitCode).toBe(0);
+      expect(finished?.output).toContain('file1');
+
+      service.dispose();
+    });
+
+    it('маркер с отрицательным кодом возврата фиксируется', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const run = service.startRun({ terminalId: record.id, command: 'kill -1 $$', timeoutMs: 0 });
+
+      port.lastHandle.emitData(marker(run.nonce, '-1'));
+
+      const finished = service.getRun(run.runId);
+      expect(finished?.status).toBe('done');
+      expect(finished?.exitCode).toBe(-1);
+
+      service.dispose();
+    });
+
+    it('полноэкранное приложение (tmux) блокирует запуск до записи в PTY', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const handle = port.lastHandle;
+
+      // tmux включил альтернативный экран и не выключил — маркер туда не дошёл бы.
+      handle.emitData('\u001B[?1049h\u001B[?1049h\u001B[Htmux status line');
+
+      expect(() =>
+        service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+      ).toThrow(TerminalForegroundAppError);
+      // Команда в PTY не ушла.
+      expect(handle.writes).toHaveLength(0);
+
+      service.dispose();
+    });
+
+    it('после выхода из полноэкранного приложения (?1049l) запуск снова возможен', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const handle = port.lastHandle;
+
+      handle.emitData('\u001B[?1049h\u001B[Hvim');
+      expect(() =>
+        service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+      ).toThrow(TerminalForegroundAppError);
+
+      handle.emitData('\u001B[?1049l\u001B[2K\r$ ');
+      const run = service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+      expect(run.status).toBe('running');
+      expect(handle.writes).toHaveLength(1);
+
+      service.dispose();
+    });
+
+    it('ssh-подобный поток (без ?1049h) запуск не блокирует', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const handle = port.lastHandle;
+      // Обычный шелл под ssh: приглашение, вывод, никаких альтернативных экранов.
+      handle.emitData('Welcome to Ubuntu 24.04\r\nuser@host:~$ ');
+
+      const run = service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+      expect(run.status).toBe('running');
+      expect(handle.writes[0]?.startsWith('ls\r')).toBe(true);
+
+      service.dispose();
+    });
+
+    it('другой режим альтернативного экрана (?47h / ?1047h) тоже блокирует', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const handle = port.lastHandle;
+
+      handle.emitData('\u001B[?47h\u001B[Hless');
+      expect(() =>
+        service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+      ).toThrow(TerminalForegroundAppError);
+
+      handle.emitData('\u001B[?47l');
+      handle.emitData('\u001B[?1047h');
+      expect(() =>
+        service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+      ).toThrow(TerminalForegroundAppError);
 
       service.dispose();
     });
@@ -1101,22 +1232,22 @@ describe('Терминальный сервис', () => {
       service.dispose();
     });
 
-    it('cleanRunOutput: реальный вывод с эхом обёртки и ANSI', () => {
+    it('cleanRunOutput: реальный вывод с эхом обёртки, маркером и ANSI', () => {
       const wrapper = buildRunMarkerCommand('a1b2c3d4e5f60718');
-      // Как это выглядит в потоке PTY: эхо введённой строки-обёртки, цвета,
-      // служебный OSC-маркер (он вырезается сканером, но остаётся в примере
-      // для полноты) и CRLF от ONLCR.
+      const nonce = 'a1b2c3d4e5f60718';
+      // Как это выглядит в потоке PTY под tmux: эхо введённой обёртки, цвета,
+      // видимая строка-маркер и CRLF от ONLCR.
       const raw = [
         '\u001B[1m$ npm test\u001B[0m',
         `user@host:~/proj$ ${wrapper}`,
         '\u001B[32m✓\u001B[0m 12 passed',
-        '\u001B]3008;title\u0007',
+        `@@srn-${nonce}:0@@`,
         '',
       ].join('\r\n');
 
       const cleaned = cleanRunOutput(raw, wrapper);
       expect(cleaned).toBe('$ npm test\n✓ 12 passed');
-      expect(cleaned).not.toContain('synth-run');
+      expect(cleaned).not.toContain('@@srn-');
       expect(cleaned).not.toContain('\u001B');
     });
 

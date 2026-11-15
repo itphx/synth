@@ -358,6 +358,113 @@ class MockTerminalWriteLoopProvider extends BaseProvider {
 }
 
 /**
+ * Провайдер: 3 одинаковых вызова **наблюдающего** терминального тула
+ * (`terminal_read`/`terminal_snapshot`), затем текст. Опрос экрана/вывода теми
+ * же аргументами, пока идёт работа в TUI (сборка, тесты, установка), — это
+ * ожидание результата, а не зацикливание: doom-loop для таких тулов не
+ * срабатывает.
+ */
+class MockTerminalObserveLoopProvider extends BaseProvider {
+  static calls = 0;
+  static toolName = 'terminal_read';
+  static args: Record<string, unknown> = {};
+
+  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
+    if (MockTerminalObserveLoopProvider.calls < 3) {
+      const n = MockTerminalObserveLoopProvider.calls;
+      return {
+        content: '',
+        toolCalls: [{
+          id: `call_to${n}`,
+          function: {
+            name: MockTerminalObserveLoopProvider.toolName,
+            arguments: JSON.stringify(MockTerminalObserveLoopProvider.args),
+          },
+        }],
+      };
+    }
+    return { content: 'Готово' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    const next = this._next();
+    MockTerminalObserveLoopProvider.calls++;
+    return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const next = this._next();
+    MockTerminalObserveLoopProvider.calls++;
+    yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockterminalobserveloop';
+  }
+}
+
+/**
+ * Провайдер: 3 одинаковых вызова `terminal_run` (мутация терминала), затем
+ * текст — для мутирующих терминальных тулов doom-loop остаётся защитой.
+ */
+class MockTerminalRunLoopProvider extends BaseProvider {
+  static calls = 0;
+
+  private _next(): { content: string; toolCalls?: Record<string, unknown>[] } {
+    if (MockTerminalRunLoopProvider.calls < 3) {
+      const n = MockTerminalRunLoopProvider.calls;
+      return {
+        content: '',
+        toolCalls: [{
+          id: `call_tr${n}`,
+          function: {
+            name: 'terminal_run',
+            arguments: JSON.stringify({ terminal_id: 'pty_test', command: 'echo hi' }),
+          },
+        }],
+      };
+    }
+    return { content: 'Готово' };
+  }
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    const next = this._next();
+    MockTerminalRunLoopProvider.calls++;
+    return { content: next.content, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, toolCalls: next.toolCalls };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const next = this._next();
+    MockTerminalRunLoopProvider.calls++;
+    yield { content: next.content, isFinal: true, toolCalls: next.toolCalls, model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  getProviderName(): string {
+    return 'mockterminalrunloop';
+  }
+}
+
+/**
  * Провайдер: 3 одинаковых вызова `execute_shell` (команда разрешена политикой),
  * затем текст — исполняющий тул, для него doom-loop остаётся защитой.
  */
@@ -641,6 +748,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory.register('mockdoom', MockDoomProvider);
     ProviderFactory.register('mockterminalloop', MockTerminalListLoopProvider);
     ProviderFactory.register('mockterminalwriteloop', MockTerminalWriteLoopProvider);
+    ProviderFactory.register('mockterminalobserveloop', MockTerminalObserveLoopProvider);
+    ProviderFactory.register('mockterminalrunloop', MockTerminalRunLoopProvider);
     ProviderFactory.register('mockshellloop', MockShellLoopProvider);
     ProviderFactory.register('mockempty', MockEmptyProvider);
     ProviderFactory.register('mockfailaftertool', MockFailAfterToolProvider);
@@ -653,6 +762,10 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     MockDoomProvider.calls = 0;
     MockTerminalListLoopProvider.calls = 0;
     MockTerminalWriteLoopProvider.calls = 0;
+    MockTerminalObserveLoopProvider.calls = 0;
+    MockTerminalObserveLoopProvider.toolName = 'terminal_read';
+    MockTerminalObserveLoopProvider.args = {};
+    MockTerminalRunLoopProvider.calls = 0;
     MockShellLoopProvider.calls = 0;
     MockFailAfterToolProvider.calls = 0;
     MockOneToolThenTextProvider.calls = 0;
@@ -667,6 +780,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory['_providers'].delete('mockabortbefore');
     ProviderFactory['_providers'].delete('mockdoom');
     ProviderFactory['_providers'].delete('mockterminalloop');
+    ProviderFactory['_providers'].delete('mockterminalobserveloop');
+    ProviderFactory['_providers'].delete('mockterminalrunloop');
     ProviderFactory['_providers'].delete('mockshellloop');
     ProviderFactory['_providers'].delete('mockempty');
     ProviderFactory['_providers'].delete('mockfailaftertool');
@@ -1145,6 +1260,71 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
       (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
     );
     expect(finalAssistant!.content).toBe('Готово');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('doom-loop: три одинаковых terminal_read НЕ прерывают ход (наблюдение экрана/вывода)', async () => {
+    MockTerminalObserveLoopProvider.toolName = 'terminal_read';
+    MockTerminalObserveLoopProvider.args = { terminal_id: 'pty_test', lines: 200 };
+    const h = await makeHarness('mockterminalobserveloop');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    // Агент опрашивает вывод, пока идёт работа в TUI: все три чтения
+    // дошли до исполнения (в т.ч. третье) — цикл не прерван.
+    const toolResults = chunks.filter((c) => c.event === 'tool_call.result');
+    expect(toolResults).toHaveLength(3);
+    for (const toolResult of toolResults) {
+      const content = String((toolResult.data.result as { content?: string }).content ?? '');
+      expect(content).not.toContain('Loop broken');
+    }
+
+    // Провайдер вызван 4 раза: 3 tool-итерации + финальный текст.
+    expect(MockTerminalObserveLoopProvider.calls).toBe(4);
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const finalAssistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(finalAssistant!.content).toBe('Готово');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('doom-loop: три одинаковых terminal_snapshot НЕ прерывают ход (наблюдение экрана/вывода)', async () => {
+    MockTerminalObserveLoopProvider.toolName = 'terminal_snapshot';
+    MockTerminalObserveLoopProvider.args = { terminal_id: 'pty_test' };
+    const h = await makeHarness('mockterminalobserveloop');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    // Повторный снимок видимого экрана TUI — мониторинг, а не зацикливание.
+    const toolResults = chunks.filter((c) => c.event === 'tool_call.result');
+    expect(toolResults).toHaveLength(3);
+    for (const toolResult of toolResults) {
+      const content = String((toolResult.data.result as { content?: string }).content ?? '');
+      expect(content).not.toContain('Loop broken');
+    }
+
+    expect(MockTerminalObserveLoopProvider.calls).toBe(4);
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const finalAssistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(finalAssistant!.content).toBe('Готово');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('doom-loop: три одинаковых terminal_run по-прежнему прерывают цикл (мутация)', async () => {
+    const h = await makeHarness('mockterminalrunloop');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    const toolResults = chunks.filter((c) => c.event === 'tool_call.result');
+    expect(toolResults).toHaveLength(3);
+    const third = String((toolResults[2]!.data.result as { content?: string }).content ?? '');
+    expect(third).toContain('Loop broken');
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 

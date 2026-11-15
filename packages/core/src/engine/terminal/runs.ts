@@ -4,23 +4,38 @@
  * ## Механика завершения
  *
  * Команда уходит в интерактивную оболочку терминала, поэтому «код возврата»
- * из неё самой не достать. После команды сервис отправляет **невидимый**
- * маркер через OSC (`ESC ] 7770 ; synth-run ; <nonce> ; <код> BEL`):
+ * из неё самой не достать. После команды сервис отправляет **текстовый**
+ * маркер:
  *
  * ```text
- * printf '\033]7770;synth-run;<nonce>;%s\007' "$?"
+ * printf '\n@@srn-<nonce>:%s@@\n' "$?"
  * ```
  *
- * - `printf` — builtin любой POSIX-оболочки, `printf` не внешняя программа;
- * - `\033`/`\007` — ESC/BEL, которые xterm.js **игнорирует** ( OSC-7770 —
- *   не стандартная последовательность, терминал её не показывает);
+ * В потоке остаётся строка `@@srn-<nonce>:<код>@@` (отдельная видимая строка),
+ * и по ней реестр понимает, что команда закончилась.
+ *
+ * - `printf` — builtin любой POSIX-оболочки, внешняя программа не нужна;
  * - `"$?"` — код возврата **предыдущей** команды: маркер отправляется
  *   **отдельной строкой** после команды, поэтому `$?` ещё не изменился;
  * - `<nonce>` — случайный идентификатор запуска: маркер чужого запуска (или
  *   чужой команды) не завершит наш.
  *
- * Видимых `echo`-маркеров нет: в вывод попадает только невидимая
- * последовательность, которую сервис вырезает из потока.
+ * **Почему не OSC.** Раньше маркер был OSC-последовательностью
+ * (`ESC ] 7770 ; synth-run ; … BEL`) — «невидимой». В PTY, где работает
+ * мультиплексор или TUI (tmux, а также tmux под ssh), OSC перехватывает сам
+ * мультиплексор и наружу (в наш буфер) **не пропускает**: код возврата не
+ * приходил, запуск висел до таймаута, терминал оставался занятым
+ * (`run_busy`). Текстовая строка проходит через любой мультиплексор.
+ *
+ * **Почему без самостирания.** Вариант с `\033[2K` до и после маркера и
+ * завершающим `\r` под tmux до внешнего буфера не доходит: tmux применяет
+ * erase до перерисовки и текст наружу не отдаёт. Поэтому маркер печатается
+ * **видимой отдельной строкой**; из вывода для модели он вырезается по nonce
+ * (`cleanRunOutput`), а в самом терминале это короткая строка — принято.
+ *
+ * Маркер считается маркером, только если он **начинает строку** (эхо команды
+ * `printf '…@@srn-…'` начинается с `printf` — ложных срабатываний нет) и
+ * заканчивается `@@`; код — целое (в т.ч. отрицательное) или пусто.
  *
  * ## Реестр запусков
  *
@@ -75,24 +90,35 @@ import { randomUUID } from 'node:crypto';
 import { MessageRole, generateId as generateMessageId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
-import { cleanRunOutput, frameTerminalOutput } from './output.js';
+import {
+  cleanRunOutput,
+  frameTerminalOutput,
+  TERMINAL_RUN_MARKER_END,
+  TERMINAL_RUN_MARKER_PREFIX,
+} from './output.js';
 import type { TerminalLogger, TerminalRecord, TerminalTimers } from './types.js';
 
-/** Префикс невидимого маркера завершения запуска (OSC 7770). */
-export const TERMINAL_RUN_MARKER_PREFIX = '\u001B]7770;synth-run;';
-
-/** Завершающий байт маркера (BEL). */
-export const TERMINAL_RUN_MARKER_END = '\u0007';
+/**
+ * Префикс маркера завершения запуска (`@@srn-<nonce>:<код>@@`).
+ *
+ * Константа живёт в `output.ts` (там же очистка вывода) и реэкспортируется
+ * здесь: для потребителей протокол маркера — часть запусков.
+ */
+export { TERMINAL_RUN_MARKER_END, TERMINAL_RUN_MARKER_PREFIX };
 
 /**
  * Максимум байт хвоста, удерживаемого между чанками.
  *
- * Маркер может прийти несколькими чанками (граница в середине ESC-последовательности) —
- * такой хвост удерживается до следующего чанка. Если хвост не растёт (чужой
- * текст с префиксом маркера и без BEL) — он сбрасывается в текст: иначе
- * буфер терминала «залипнет» на неполном маркере.
+ * Маркер может прийти несколькими чанками (граница в середине строки, в том
+ * числе внутри CSI/escape-последовательности перед ней) — такой хвост
+ * удерживается до следующего чанка. Если хвост не растёт (чужой текст с
+ * префиксом маркера и без `@@`) — он сбрасывается в текст: иначе буфер
+ * терминала «залипнет» на неполном маркере.
  */
 const MAX_MARKER_PENDING = 512;
+
+/** Полезная нагрузка маркера: `<nonce>:<код>` (код — целое, в т.ч. отрицательное, или пусто). */
+const MARKER_PAYLOAD_PATTERN = /^([A-Za-z0-9_-]+):(-?\d*)$/;
 
 /** Максимум объёма вывода одного запуска, байт (1 МиБ). */
 export const MAX_RUN_OUTPUT_BYTES = 1024 * 1024;
@@ -183,9 +209,9 @@ export interface TerminalRunMarkerScan {
 /**
  * Длина longest суффикса текста, который является началом префикса маркера.
  *
- * Нужен, когда граница чанка попала внутрь ESC-последовательности: такой хвост
- * нельзя отдать в буфер (маркер должен быть вырезан целиком) — его надо
- * удержать до следующего чанка.
+ * Нужен, когда граница чанка попала внутрь строки-маркера: такой хвост нельзя
+ * отдать в буфер (маркер должен быть вырезан целиком) — его надо удержать до
+ * следующего чанка.
  */
 function partialMarkerPrefixLength(text: string): number {
   const max = Math.min(text.length, TERMINAL_RUN_MARKER_PREFIX.length - 1);
@@ -195,9 +221,93 @@ function partialMarkerPrefixLength(text: string): number {
   return 0;
 }
 
-/** Разобрать полезную нагрузку маркера (`<nonce>;<код>`). */
+/** ESC — начало escape-последовательности. */
+const ESC = '\u001B';
+
+/** Незавершённая CSI: `ESC [ <параметры>` без финального байта. */
+const PARTIAL_CSI_PATTERN = new RegExp(`^${ESC}\\[[0-9;?]*$`);
+
+/**
+ * Длина незавершённой escape-последовательности в конце текста.
+ *
+ * Перед маркером может стоять CSI (стирание/позиционирование от оболочки или
+ * мультиплексора); если граница чанка попала внутрь (`…\033[2`), хвост надо
+ * удержать: иначе следующая порция начнётся с `K@@srn-…` и кандидат уже не
+ * будет «началом строки».
+ */
+function partialEscapeSuffixLength(text: string): number {
+  const esc = text.lastIndexOf(ESC);
+  if (esc !== -1) {
+    const tail = text.slice(esc);
+    if (tail === ESC) return 1;
+    if (PARTIAL_CSI_PATTERN.test(tail)) return tail.length;
+  }
+  if (text.endsWith('\u009B')) return 1;
+  return 0;
+}
+
+/**
+ * Длина ведущих escape-последовательностей и пробельных символов.
+ *
+ * Маркер считается маркером, только если он **начинает строку**; CSI
+ * (стирание/позиционирование), пробелы и `\r` — служебное оформление той же
+ * строки, а не текст, поэтому в «начало строки» они не мешают.
+ */
+function leadingControlLength(text: string): number {
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (ch === ' ' || ch === '\t' || ch === '\r') {
+      i += 1;
+      continue;
+    }
+    if (ch === '\u001B') {
+      const next = text[i + 1];
+      if (next === '[') {
+        i += 2;
+        while (i < text.length) {
+          const code = text.charCodeAt(i);
+          i += 1;
+          if (code >= 0x40 && code <= 0x7e) break;
+        }
+        continue;
+      }
+      if (next === ']') {
+        i += 2;
+        while (i < text.length) {
+          const c = text[i]!;
+          if (c === '\u0007' || c === '\u009C') {
+            i += 1;
+            break;
+          }
+          if (c === '\u001B' && text[i + 1] === '\\') {
+            i += 2;
+            break;
+          }
+          i += 1;
+        }
+        continue;
+      }
+      i += next === undefined ? 1 : 2;
+      continue;
+    }
+    if (ch === '\u009B') {
+      i += 1;
+      while (i < text.length) {
+        const code = text.charCodeAt(i);
+        i += 1;
+        if (code >= 0x40 && code <= 0x7e) break;
+      }
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+/** Разобрать полезную нагрузку маркера (`<nonce>:<код>`). */
 function parseMarkerPayload(payload: string): { kind: 'marker'; nonce: string; code: string } {
-  const sep = payload.indexOf(';');
+  const sep = payload.indexOf(':');
   const nonce = sep === -1 ? payload : payload.slice(0, sep);
   const code = sep === -1 ? '' : payload.slice(sep + 1);
   return { kind: 'marker', nonce, code };
@@ -206,51 +316,83 @@ function parseMarkerPayload(payload: string): { kind: 'marker'; nonce: string; c
 /**
  * Разобрать поток вывода на текст и маркеры завершения запусков.
  *
- * `pending` — хвост предыдущего чанка (возможное начало маркера). На выходе —
- * новый `pending` для следующего вызова.
+ * Маркер — строка `@@srn-<nonce>:<код>@@`, которая **начинает строку** (эхо
+ * команды `printf '…@@srn-…'` начинается с `printf` — не считается) и
+ * заканчивается `@@`. Перед маркером могут стоять CSI/пробелы/`\r` — служебное
+ * оформление той же строки, а не текст.
+ *
+ * `pending` — хвост предыдущего чанка (возможное начало маркера, в т.ч. внутри
+ * CSI перед ним). На выходе — новый `pending` для следующего вызова:
+ * удерживается незавершённый маркер (в пределах `MAX_MARKER_PENDING`) и
+ * недописанная escape-последовательность; «мусор без конца» сбрасывается в
+ * текст.
  */
 export function scanRunMarkers(data: string, pending: string): TerminalRunMarkerScan {
   const buf = pending + data;
   const parts: TerminalRunMarkerPart[] = [];
   let text = '';
-  let nextPending = '';
-  let i = 0;
+  let cursor = 0;
+  let searchFrom = 0;
 
-  while (i < buf.length) {
-    const idx = buf.indexOf(TERMINAL_RUN_MARKER_PREFIX, i);
+  const flushText = (): void => {
+    if (text === '') return;
+    parts.push({ kind: 'text', text });
+    text = '';
+  };
+
+  while (searchFrom < buf.length) {
+    const idx = buf.indexOf(TERMINAL_RUN_MARKER_PREFIX, searchFrom);
     if (idx === -1) break;
-    const end = buf.indexOf(TERMINAL_RUN_MARKER_END, idx + TERMINAL_RUN_MARKER_PREFIX.length);
-    if (end === -1) {
-      // Маркер не завершён: удерживаем хвост (ограниченно), остальное — текст.
-      const keepFrom = Math.max(idx, buf.length - MAX_MARKER_PENDING);
-      text += buf.slice(i, keepFrom);
-      nextPending = buf.slice(keepFrom);
-      i = buf.length;
-      break;
+    // Маркер — только в начале строки: перед ним допустимы пробелы/`\r` и
+    // escape-последовательности (стирание строки), но не текст.
+    const lineStart = buf.lastIndexOf('\n', idx - 1) + 1;
+    if (leadingControlLength(buf.slice(lineStart, idx)) !== idx - lineStart) {
+      searchFrom = idx + TERMINAL_RUN_MARKER_PREFIX.length;
+      continue;
     }
-    text += buf.slice(i, idx);
-    if (text !== '') {
-      parts.push({ kind: 'text', text });
-      text = '';
+    const payloadStart = idx + TERMINAL_RUN_MARKER_PREFIX.length;
+    const endIdx = buf.indexOf(TERMINAL_RUN_MARKER_END, payloadStart);
+    const payload = endIdx === -1 ? buf.slice(payloadStart) : buf.slice(payloadStart, endIdx);
+    // Маркер однострочный: перевод строки внутри полезной нагрузки означает,
+    // что `@@` так и не пришёл — это обрывок, а не маркер.
+    const complete = endIdx !== -1 && !payload.includes('\n') && MARKER_PAYLOAD_PATTERN.test(payload);
+    if (complete) {
+      // Текст до маркера идёт в вывод, а служебное оформление самой строки
+      // маркера (CSI/пробелы перед ним) — нет: это не вывод команды.
+      const keepFrom = Math.max(lineStart, cursor);
+      text += buf.slice(cursor, keepFrom);
+      flushText();
+      parts.push(parseMarkerPayload(payload));
+      cursor = endIdx + TERMINAL_RUN_MARKER_END.length;
+      searchFrom = cursor;
+      continue;
     }
-    parts.push(parseMarkerPayload(buf.slice(idx + TERMINAL_RUN_MARKER_PREFIX.length, end)));
-    i = end + 1;
+    // Незавершённый кандидат (нет `@@`, нет перевода строки) — удерживаем:
+    // маркер мог разорваться границей чанка.
+    if (endIdx === -1 && !payload.includes('\n')) {
+      const keepFrom = Math.max(lineStart, cursor);
+      if (buf.length - keepFrom <= MAX_MARKER_PENDING) {
+        text += buf.slice(cursor, keepFrom);
+        flushText();
+        return { parts, pending: buf.slice(keepFrom) };
+      }
+    }
+    // «Мусор без конца» или строка, лишь похожая на маркер, — обычный текст.
+    searchFrom = idx + TERMINAL_RUN_MARKER_PREFIX.length;
   }
 
-  if (i < buf.length) {
-    const rest = buf.slice(i);
-    const keep = partialMarkerPrefixLength(rest);
-    text += rest.slice(0, rest.length - keep);
-    nextPending = rest.slice(rest.length - keep);
-  }
+  const rest = buf.slice(cursor);
+  const keep = Math.max(partialMarkerPrefixLength(rest), partialEscapeSuffixLength(rest));
+  text += rest.slice(0, rest.length - keep);
   if (text !== '') parts.push({ kind: 'text', text });
 
-  return { parts, pending: nextPending };
+  return { parts, pending: rest.slice(rest.length - keep) };
 }
 
 /** Код возврата из маркера (нецифровое значение — код неизвестен). */
 export function parseRunExitCode(code: string): number | undefined {
-  if (!/^\d+$/.test(code)) return undefined;
+  // Код может быть отрицательным (`kill` возвращает `-1` через `$?`).
+  if (!/^-?\d+$/.test(code)) return undefined;
   const parsed = Number(code);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
@@ -258,11 +400,15 @@ export function parseRunExitCode(code: string): number | undefined {
 /**
  * Строка-маркер, которую сервис отправляет в терминал после команды.
  *
- * `printf` подставляет код возврата вместо `%s`; `\033`/`\007` — escape-последовательности
- * самого `printf` (в одинарных кавычках оболочка их не трогает).
+ * `printf` подставляет код возврата вместо `%s` и печатает маркер **отдельной
+ * видимой строкой**: `\n` до и после. Самостирание (`\033[2K` … `\r`) под tmux
+ * до внешнего буфера не доходит (tmux применяет erase до перерисовки), поэтому
+ * маркер не стирается, а вырезается из вывода для модели по nonce.
+ * `\n` — escape-последовательность самого `printf` (в одинарных кавычках
+ * оболочка её не трогает).
  */
 export function buildRunMarkerCommand(nonce: string): string {
-  return `printf '\\033]7770;synth-run;${nonce};%s\\007' "$?"`;
+  return `printf '\\n${TERMINAL_RUN_MARKER_PREFIX}${nonce}:%s${TERMINAL_RUN_MARKER_END}\\n' "$?"`;
 }
 
 /** Вход запуска команды. */
@@ -760,7 +906,7 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
       })
     : '';
   // Тот же вид вывода, что у инлайн-ответа: без ANSI и без эха обёртки.
-  const cleaned = cleanRunOutput(run.output, run.wrapperCommand);
+  const cleaned = cleanRunOutput(run.output, run.wrapperCommand, run.nonce);
   const body = frameTerminalOutput(tailByBytes(cleaned, MAX_RUN_NOTIFICATION_BYTES), {
     terminal: terminalId,
     run: run.runId,

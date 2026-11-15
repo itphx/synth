@@ -4279,6 +4279,9 @@ export const dict = {
     + 'Чтобы остановить, пошлите Ctrl+C через terminal_write.',
   'terminal.tool.run_busy':
     'Ошибка: в терминале {terminal_id} уже идёт другой запуск — дождитесь его завершения',
+  'terminal.tool.foreground_app':
+    'Ошибка: в терминале работает полноэкранное приложение (tmux/vim/less) — запуск с маркером '
+    + 'там не отследить. Используйте terminal_write + terminal_snapshot или откройте отдельный терминал',
   'terminal.tool.exit_code': 'Код возврата: {exit_code}',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---

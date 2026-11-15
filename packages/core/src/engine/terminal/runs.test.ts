@@ -3,9 +3,10 @@
  * (`engine/terminal/runs.ts`).
  *
  * Проверяется:
- *   • **маркер завершения**: невидимый OSC (`ESC ] 7770 ; synth-run ; …`),
- *     разбор потока (в т.ч. маркер, разорванный границей чанка), вырезание
- *     маркера из текста;
+ *   • **маркер завершения**: текстовая строка `@@srn-<nonce>:<код>@@` (не
+ *     OSC: его съедает tmux), разбор потока (в т.ч. маркер, разорванный
+ *     границей чанка), эхо `printf` не считается маркером, код возврата —
+ *     целый (в т.ч. отрицательный);
  *   • **реестр запусков**: один активный запуск на терминал (`run_busy`),
  *     накопление вывода, код возврата из маркера, таймаут, закрытие
  *     терминала, кап объёма вывода и числа записей;
@@ -16,16 +17,23 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildRunMarkerCommand,
   buildTerminalRunNotification,
+  parseRunExitCode,
   scanRunMarkers,
   TerminalRunBusyError,
   TerminalRunRegistry,
+  TERMINAL_RUN_MARKER_END,
   TERMINAL_RUN_MARKER_PREFIX,
   type TerminalRunRecord,
 } from './runs.js';
 
-/** Текст маркера завершения запуска (как его печатает `printf`). */
+/** Строка маркера завершения запуска (как её печатает `printf`). */
 function marker(nonce: string, code: string): string {
-  return `${TERMINAL_RUN_MARKER_PREFIX}${nonce};${code}\u0007`;
+  return `${TERMINAL_RUN_MARKER_PREFIX}${nonce}:${code}${TERMINAL_RUN_MARKER_END}`;
+}
+
+/** Маркер в потоке PTY: отдельная видимая строка (после `\n`). */
+function markerFrame(nonce: string, code: string): string {
+  return `${marker(nonce, code)}\n`;
 }
 
 /** Собрать реестр с поддельными часами и таймерами. */
@@ -49,40 +57,120 @@ function createRegistry(
 }
 
 describe('Маркер завершения запуска', () => {
-  it('команда маркера — printf с кодом возврата и nonce', () => {
+  it('команда маркера — printf: маркер видимой отдельной строкой', () => {
     const command = buildRunMarkerCommand('abc123');
     expect(command).toContain('printf');
     expect(command).toContain('abc123');
     expect(command).toContain('"$?"');
-    // Видимых `echo`-маркеров нет — только невидимая OSC-последовательность.
+    // Формат: `printf '\n@@srn-<nonce>:%s@@\n' "$?"`.
+    expect(command).toBe(`printf '\\n@@srn-abc123:%s@@\\n' "$?"`);
+    // Самостирание (`\033[2K`/`\r`) не используется: под tmux такой маркер до
+    // внешнего буфера не доходит (tmux применяет erase до перерисовки).
+    expect(command).not.toContain('\\033');
+    expect(command).not.toContain('\\r');
+    // OSC больше не используется: его съедает tmux — маркер до нас не доходит.
+    expect(command).not.toContain(']7770');
+    expect(command).not.toContain('\\007');
     expect(command).not.toContain('echo');
   });
 
-  it('разбирает поток: текст и маркер', () => {
-    const scan = scanRunMarkers(`before${marker('n1', '0')}after`, '');
+  it('маркер виден в потоке отдельной строкой (tmux-подобный вывод)', () => {
+    const nonce = 'a1b2c3d4e5f60718';
+    const wrapper = buildRunMarkerCommand(nonce);
+    // Как это выглядит в PTY под tmux: эхо команды-обёртки (начинается с
+    // `printf`), вывод команды, видимая строка-маркер.
+    const stream = [
+      'ls',
+      `user@host:~$ ${wrapper}`,
+      'file1',
+      'file2',
+      markerFrame(nonce, '0'),
+    ].join('\r\n');
+
+    const scan = scanRunMarkers(stream, '');
     expect(scan.pending).toBe('');
-    expect(scan.parts).toEqual([
-      { kind: 'text', text: 'before' },
-      { kind: 'marker', nonce: 'n1', code: '0' },
-      { kind: 'text', text: 'after' },
-    ]);
+    const markers = scan.parts.filter((part) => part.kind === 'marker');
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ nonce, code: '0' });
+    const text = scan.parts
+      .filter((part): part is { kind: 'text'; text: string } => part.kind === 'text')
+      .map((part) => part.text)
+      .join('');
+    expect(text).toContain('file1');
+    expect(text).toContain('file2');
+    // Сама строка-маркер в текст не попадает.
+    expect(text).not.toContain(`@@srn-${nonce}:0@@`);
+  });
+
+  it('ведущие пробелы/\\r/CSI перед маркером не мешают', () => {
+    const scan = scanRunMarkers(`\u001B[2K  \r${marker('n1', '0')}\n`, '');
+    const markers = scan.parts.filter((part) => part.kind === 'marker');
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ nonce: 'n1', code: '0' });
+  });
+
+  it('эхо-строка `printf …@@srn-…` запуск не завершает', () => {
+    const nonce = 'deadbeefdeadbeef';
+    const wrapper = buildRunMarkerCommand(nonce);
+    // Эхо начинается с `printf` — это не маркер, хотя текст маркера в нём есть.
+    const scan = scanRunMarkers(`user@host:~$ ${wrapper}\r\n`, '');
+    expect(scan.parts.some((part) => part.kind === 'marker')).toBe(false);
+  });
+
+  it('текст перед маркером в той же строке — маркер не срабатывает', () => {
+    const scan = scanRunMarkers(`before ${marker('n1', '0')}\n`, '');
+    expect(scan.parts.some((part) => part.kind === 'marker')).toBe(false);
+    expect(scan.parts).toEqual([{ kind: 'text', text: `before ${marker('n1', '0')}\n` }]);
+    expect(scan.pending).toBe('');
+  });
+
+  it('маркер с отрицательным кодом возврата', () => {
+    const scan = scanRunMarkers(`out\n${markerFrame('n1', '-1')}`, '');
+    const markers = scan.parts.filter((part) => part.kind === 'marker');
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ nonce: 'n1', code: '-1' });
+    expect(parseRunExitCode('-1')).toBe(-1);
+    expect(parseRunExitCode('0')).toBe(0);
+    expect(parseRunExitCode('')).toBeUndefined();
+    expect(parseRunExitCode('x')).toBeUndefined();
+  });
+
+  it('маркер с пустым кодом: маркер распознан, код возврата неизвестен', () => {
+    const scan = scanRunMarkers(`out\n${markerFrame('n1', '')}`, '');
+    const markers = scan.parts.filter((part) => part.kind === 'marker');
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ nonce: 'n1', code: '' });
+    expect(parseRunExitCode('')).toBeUndefined();
   });
 
   it('маркер, разорванный границей чанка, не теряется', () => {
-    const full = `out${marker('n1', '3')}tail`;
-    const cut = 6;
+    const full = `out\n${markerFrame('n1', '3')}tail`;
+    // Граница — внутри текста маркера (`@@srn-n1:`).
+    const cut = full.indexOf('@@srn-') + 6;
     const first = scanRunMarkers(full.slice(0, cut), '');
     expect(first.parts.every((part) => part.kind === 'text')).toBe(true);
+    expect(first.pending).not.toBe('');
     const second = scanRunMarkers(full.slice(cut), first.pending);
     const markers = second.parts.filter((part) => part.kind === 'marker');
     expect(markers).toHaveLength(1);
     expect(markers[0]).toMatchObject({ nonce: 'n1', code: '3' });
   });
 
+  it('граница чанка внутри CSI перед маркером — маркер не теряется', () => {
+    const full = `out\n\u001B[2K${marker('n1', '0')}\n`;
+    const cut = full.indexOf('\u001B[2') + 4; // внутри CSI (после `\u001B[2`)
+    const first = scanRunMarkers(full.slice(0, cut), '');
+    const second = scanRunMarkers(full.slice(cut), first.pending);
+    const markers = second.parts.filter((part) => part.kind === 'marker');
+    expect(markers).toHaveLength(1);
+    expect(markers[0]).toMatchObject({ nonce: 'n1', code: '0' });
+  });
+
   it('незавершённый маркер удерживается до следующего чанка', () => {
-    const scan = scanRunMarkers(`${TERMINAL_RUN_MARKER_PREFIX}n1;0`, '');
+    const partial = `${TERMINAL_RUN_MARKER_PREFIX}n1:0`;
+    const scan = scanRunMarkers(partial, '');
     expect(scan.parts).toEqual([]);
-    expect(scan.pending).toBe(`${TERMINAL_RUN_MARKER_PREFIX}n1;0`);
+    expect(scan.pending).toBe(partial);
   });
 
   it('чужой текст с префиксом маркера не удерживается бесконечно', () => {
@@ -587,7 +675,7 @@ describe('Уведомление сессии о завершении запус
     );
   });
 
-  it('вывод очищен: нет ANSI и нет эха служебной обёртки', () => {
+  it('вывод очищен: нет ANSI, эха обёртки и строки-маркера', () => {
     const wrapper = buildRunMarkerCommand('deadbeefdeadbeef');
     const run: TerminalRunRecord = {
       runId: 'run_1',
@@ -602,6 +690,7 @@ describe('Уведомление сессии о завершении запус
       output: [
         '\u001B[32mPASS\u001B[0m src/a.test.ts',
         wrapper,
+        markerFrame('deadbeefdeadbeef', '0'),
         'wide:\u0020' + ' '.repeat(80) + 'end',
         '',
       ].join('\r\n'),
@@ -614,7 +703,7 @@ describe('Уведомление сессии о завершении запус
 
     const message = buildTerminalRunNotification(run);
     expect(message.content).not.toContain('\u001B');
-    expect(message.content).not.toContain('synth-run');
+    expect(message.content).not.toContain('@@srn-');
     expect(message.content).not.toContain('printf');
     expect(message.content).toContain('PASS src/a.test.ts');
     // «Широкие» вставки пробелов схлопнуты, CRLF нормализован.

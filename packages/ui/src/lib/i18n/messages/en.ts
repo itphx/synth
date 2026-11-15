@@ -5569,6 +5569,9 @@ export const dict = {
     + 'To stop the command, send Ctrl+C via terminal_write.',
   'terminal.tool.run_busy':
     'Error: another run is already active in terminal {terminal_id} — wait for it to finish',
+  'terminal.tool.foreground_app':
+    'Error: the terminal is running a full-screen application (tmux/vim/less): a wrapped command '
+    + 'cannot be tracked there. Use terminal_write + terminal_snapshot, or open a separate terminal',
   'terminal.tool.exit_code': 'Exit code: {exit_code}',
   'terminal.status.running': 'running',
   'terminal.status.starting': 'starting',

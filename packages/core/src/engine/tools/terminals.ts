@@ -63,6 +63,7 @@ import { renderTerminalScreen } from '../terminal/screen.js';
 import { isTerminalRunBusyError, type TerminalRunRecord } from '../terminal/runs.js';
 import {
   TerminalDisabledError,
+  TerminalForegroundAppError,
   TerminalLimitError,
   TerminalNotFoundError,
   TerminalUnavailableError,
@@ -199,6 +200,29 @@ function serviceErrorResult(err: unknown): ToolResult {
     content: sm('tool.exec_error', { tool: 'terminal', error: message }),
     isError: true,
     metadata: { error: message },
+  };
+}
+
+/**
+ * Отказ «в терминале активно полноэкранное приложение» (PROP-132, Ф5).
+ *
+ * В tmux/vim/less запуск с маркером не отследить: мультиплексор/TUI
+ * перехватывает ввод и перерисовывает экран, поэтому `startRun` отказывает
+ * **до** записи в PTY (`TerminalForegroundAppError`,
+ * `TERMINAL_FOREGROUND_APP`). Ответ — не общий `tool.exec_error`, а понятный
+ * текст ключа `terminal.tool.foreground_app` и машинный код в метаданных: по
+ * ним модель выбирает `terminal_write` + `terminal_snapshot` (или отдельный
+ * терминал), а не повторяет запуск.
+ */
+function foregroundAppResult(terminalId: string): ToolResult {
+  return {
+    content: sm('terminal.tool.foreground_app'),
+    isError: true,
+    metadata: {
+      terminal_id: terminalId,
+      code: 'TERMINAL_FOREGROUND_APP',
+      i18n: i18nMeta('terminal.tool.foreground_app'),
+    },
   };
 }
 
@@ -836,7 +860,11 @@ export const terminalWriteTool: ToolDefinition = {
     + '(tmux command prompt, less, REPLs) expect — LF does not confirm the line there. '
     + 'An empty data with enter=true sends a bare Enter (submit an empty command line — it is not checked '
     + 'by the shell policy, because there is no command); an empty data without enter=true is rejected. '
-    + 'The terminal output becomes visible via terminal_read.',
+    + 'TUI dialogs (for example the tmux command prompt) need step-by-step input: send the prefix key, '
+    + 'then ":", then the text, then a separate CR (\\r) — each step as its own call. '
+    + 'Do not glue them into one call: the emulator answers device-attribute (DA) queries on the way, and '
+    + 'a single chunk sent into a dialog gets corrupted. '
+    + 'The terminal output becomes visible via terminal_read (and the current screen via terminal_snapshot).',
   parameters: terminalWriteSchema,
   capabilities: [ToolCapability.TERMINAL],
   async execute(args, ctx) {
@@ -1200,6 +1228,11 @@ export const terminalRunTool: ToolDefinition = {
     + 'The command is checked by the same shell policy as execute_shell; a forbidden command is not sent. '
     + 'Only one command can run in a terminal at a time — if another run is active, the call fails '
     + 'with "run_busy". '
+    + 'A command CANNOT be started while a full-screen application runs in the terminal (tmux/vim/less/htop): '
+    + 'the multiplexer/TUI consumes the input and the run marker cannot be traced, so the call is refused '
+    + 'with code TERMINAL_FOREGROUND_APP (metadata.code) instead of a generic error. '
+    + 'In that case work with keys — terminal_write to type and terminal_snapshot to read the screen — '
+    + 'or open a separate terminal with terminal_open. '
     + 'Note: terminal_write is the default non-blocking way to work with a terminal — it sends input and '
     + 'never waits for a result; use terminal_run with background=true when a command result has to be '
     + 'reported back.',
@@ -1248,6 +1281,9 @@ export const terminalRunTool: ToolDefinition = {
         actorId,
       });
     } catch (err) {
+      // Полноэкранное приложение (tmux/vim/less/htop) — свой отказ: запуск с
+      // маркером там не отследить, модель работает вводом/снимком экрана.
+      if (err instanceof TerminalForegroundAppError) return foregroundAppResult(err.terminalId);
       return serviceErrorResult(err);
     }
 
