@@ -4280,8 +4280,12 @@ export const dict = {
   'terminal.tool.run_busy':
     'Ошибка: в терминале {terminal_id} уже идёт другой запуск — дождитесь его завершения',
   'terminal.tool.foreground_app':
-    'Ошибка: в терминале работает полноэкранное приложение (tmux/vim/less) — запуск с маркером '
-    + 'там не отследить. Используйте terminal_write + terminal_snapshot или откройте отдельный терминал',
+    'Ошибка: в терминале работает полноэкранное приложение (tmux, vim, less, top, htop, watch — '
+    + 'альтернативный экран или полная перерисовка кадра) — запуск с маркером там не отследить. '
+    + 'Используйте terminal_write + terminal_snapshot или откройте отдельный терминал',
+  'terminal.tool.foreground_busy':
+    'Ошибка: терминал {terminal_id} занят командой «{command}» — обёрнутая команда ушла бы в её stdin. '
+    + 'Дождитесь завершения, прервите её Ctrl+C (terminal_signal INT) или откройте отдельный терминал',
   'terminal.tool.exit_code': 'Код возврата: {exit_code}',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---

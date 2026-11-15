@@ -46,6 +46,11 @@
  * - **Ввод с Enter проверяется shell-guard'ом** — тем же чекером, что у
  *   `execute_shell` (`checkShellCommand`): команда, запрещённая политикой,
  *   до терминала не доходит. Тот же чекер — у `terminal_run` (оба режима).
+ *   **Исключение — удалённая оболочка:** если в фокусе PTY `ssh`/`docker exec`/
+ *   `kubectl exec` (факт `PtyHandle.inspect`, протокол исполнителя 9), политика
+ *   путей не применяется — команда идёт внутрь удалённой машины/контейнера, где
+ *   локальные пути не значимы (guardrail, ADR-136). Ответ несёт
+ *   `metadata.remote_shell = true`.
  */
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
@@ -61,10 +66,15 @@ import {
   stripTerminalAnsi,
 } from '../terminal/output.js';
 import { renderTerminalScreen } from '../terminal/screen.js';
+import {
+  isRemoteShellCommand,
+  normalizeForegroundCommand,
+} from '../terminal/foreground-class.js';
 import { isTerminalRunBusyError, type TerminalRunRecord } from '../terminal/runs.js';
 import {
   TerminalDisabledError,
   TerminalForegroundAppError,
+  TerminalForegroundBusyError,
   TerminalLimitError,
   TerminalNotFoundError,
   TerminalUnavailableError,
@@ -223,16 +233,63 @@ function serviceErrorResult(err: unknown): ToolResult {
  * ним модель выбирает `terminal_write` + `terminal_snapshot` (или отдельный
  * терминал), а не повторяет запуск.
  */
-function foregroundAppResult(terminalId: string): ToolResult {
+function foregroundAppResult(terminalId: string, command?: string): ToolResult {
   return {
     content: sm('terminal.tool.foreground_app'),
     isError: true,
     metadata: {
       terminal_id: terminalId,
       code: 'TERMINAL_FOREGROUND_APP',
+      ...(command !== undefined ? { foreground: command } : {}),
       i18n: i18nMeta('terminal.tool.foreground_app'),
     },
   };
+}
+
+/**
+ * Отказ «терминал занят чужой командой» (`TERMINAL_FOREGROUND_BUSY`).
+ *
+ * В фокусе обычная программа (`sleep`, `make`, `npm test`) — факт из
+ * `PtyHandle.inspect` (протокол исполнителя 9). Отличается от
+ * `TERMINAL_FOREGROUND_APP`: там полноэкранное приложение (работать можно
+ * клавишами и снимком экрана), здесь клавиши тоже ушли бы в stdin чужой
+ * программы. Правильный ход — дождаться или прервать (`Ctrl+C` через
+ * `terminal_write`/`terminal_signal`), либо открыть отдельный терминал.
+ */
+function foregroundBusyResult(err: TerminalForegroundBusyError): ToolResult {
+  const command = err.command !== undefined ? normalizeForegroundCommand(err.command) : '';
+  const params = {
+    terminal_id: err.terminalId,
+    command: command !== '' ? command : '?',
+  };
+  return {
+    content: sm('terminal.tool.foreground_busy', params),
+    isError: true,
+    metadata: {
+      terminal_id: err.terminalId,
+      code: 'TERMINAL_FOREGROUND_BUSY',
+      ...(command !== '' ? { foreground: command } : {}),
+      i18n: i18nMeta('terminal.tool.foreground_busy', params),
+    },
+  };
+}
+
+/**
+ * В фокусе терминала удалённая оболочка/контейнер (`ssh`, `docker exec`, …)?
+ *
+ * Факт — `PtyHandle.inspect` через сервис (протокол исполнителя 9). `true` —
+ * запуск и ввод идут **внутри** удалённой машины/контейнера: локальные пути
+ * политики shell-guard там не значимы (это guardrail, ADR-136), поэтому
+ * `checkCommandPolicy` не применяется. `false` (нет факта — старый исполнитель,
+ * не Linux, проба упала) — политика применяется как раньше.
+ */
+async function isRemoteShellForeground(
+  service: TerminalService,
+  terminalId: string,
+): Promise<boolean> {
+  const foreground = await service.getForeground(terminalId);
+  if (!foreground) return false;
+  return foreground.isShell !== true && isRemoteShellCommand(foreground.command);
 }
 
 /** Зависимости тулов из контекста (упаковка — оркестратор). */
@@ -339,9 +396,18 @@ function checkCommandPolicy(
  * Строка терминала для списка — машиночитаемые `key=value`.
  *
  * `own` — привязан ли терминал к текущей сессии (`record.sessionId` совпадает
- * с id сессии вызова). Терминал без сессии — `own=false`.
+ * с id сессии вызова). Терминал без сессии — `own=false`. `foreground` —
+ * имя процесса на переднем плане PTY (`PtyHandle.inspect`, протокол 9), если
+ * оно известно: по нему модель видит, что в терминале идёт чужая команда,
+ * открыт ssh или полноэкранное приложение. Нет поля — факта нет (завершённый
+ * терминал, старый исполнитель).
  */
-function formatTerminalLine(record: TerminalRecord, writable: boolean, own: boolean): string {
+function formatTerminalLine(
+  record: TerminalRecord,
+  writable: boolean,
+  own: boolean,
+  foreground?: string,
+): string {
   return [
     `- ${record.id}`,
     `cwd=${record.cwd}`,
@@ -351,6 +417,7 @@ function formatTerminalLine(record: TerminalRecord, writable: boolean, own: bool
     `session=${record.sessionId ?? '-'}`,
     `own=${own ? 'true' : 'false'}`,
     `size=${record.cols}x${record.rows}`,
+    ...(foreground !== undefined ? [`foreground=${foreground}`] : []),
   ].join(' | ');
 }
 
@@ -385,8 +452,10 @@ export const terminalListTool: ToolDefinition = {
   name: 'terminal_list',
   description:
     'List the interactive terminals of the current project: id, working directory, shell, status, '
-    + 'whether the agent can write to it, the session it is bound to, and own=true|false '
-    + '(own=true — the terminal is bound to the current session). '
+    + 'whether the agent can write to it, the session it is bound to, own=true|false '
+    + '(own=true — the terminal is bound to the current session), and foreground=<process> when it is '
+    + 'known (what currently owns the PTY: a command like sleep/make, an ssh or container session, '
+    + 'a full-screen application). '
     + 'Use it to find the terminal id for terminal_read/terminal_write/terminal_close. '
     + 'Only terminals of the current project are visible — the terminals of the project are all visible, '
     + 'own only marks the ones bound to the current session.',
@@ -418,10 +487,29 @@ export const terminalListTool: ToolDefinition = {
       };
     }
 
+    // Что в фокусе каждого PTY (протокол исполнителя 9): `PtyHandle.inspect`
+    // отдаёт факт из ядра ОС. Стоимость — одна проба на терминал (≤8 на
+    // проект), а польза большая: модель видит «в терминале идёт sleep/открыт
+    // ssh/vim» ещё до попытки запуска. Нет факта (завершён, старый
+    // исполнитель) — поля `foreground` нет вовсе.
+    const foregrounds = new Map<string, string>();
+    for (const record of records) {
+      if (record.status === 'exited') continue;
+      const foreground = await service.getForeground(record.id);
+      if (!foreground || foreground.isShell) continue;
+      const command = normalizeForegroundCommand(foreground.command);
+      if (command !== '') foregrounds.set(record.id, command);
+    }
+
     const lines = [
       sm('terminal.tool.header', { count: String(records.length) }),
       ...records.map((record) =>
-        formatTerminalLine(record, canWrite(service, record), isOwnTerminal(record, ctx.sessionId)),
+        formatTerminalLine(
+          record,
+          canWrite(service, record),
+          isOwnTerminal(record, ctx.sessionId),
+          foregrounds.get(record.id),
+        ),
       ),
     ];
     return {
@@ -436,6 +524,7 @@ export const terminalListTool: ToolDefinition = {
           can_write: canWrite(service, record),
           session_id: record.sessionId ?? null,
           own: isOwnTerminal(record, ctx.sessionId),
+          foreground: foregrounds.get(record.id) ?? null,
         })),
       },
     };
@@ -909,14 +998,20 @@ export const terminalWriteTool: ToolDefinition = {
     if (!record) return notFound(params.terminal_id);
 
     let payload = params.data;
+    // В фокусе удалённая оболочка (ssh/контейнер) — локальные пути политики
+    // там не значимы: команда идёт внутрь удалённой машины (guardrail, ADR-136).
+    let remoteShell = false;
     if (params.enter === true) {
       // Строка, уходящая в терминал с Enter, — это команда: её проверяет тот
       // же shell-guard, что и `execute_shell` (ADR-029/ADR-136). Пустая строка
       // — не команда: её не проверяем (иначе чистый Enter был бы невозможен).
       const command = params.data.replace(/[\r\n]+$/, '');
       if (command.trim() !== '') {
-        const denial = checkCommandPolicy(command, record.cwd, ctx, params.terminal_id);
-        if (denial) return denial;
+        remoteShell = await isRemoteShellForeground(service, params.terminal_id);
+        if (!remoteShell) {
+          const denial = checkCommandPolicy(command, record.cwd, ctx, params.terminal_id);
+          if (denial) return denial;
+        }
       }
       payload = `${params.data.replace(/[\r\n]+$/, '')}\r`;
     } else if (params.data === '') {
@@ -949,6 +1044,7 @@ export const terminalWriteTool: ToolDefinition = {
         terminal_id: params.terminal_id,
         bytes: Buffer.byteLength(payload, 'utf8'),
         enter: params.enter === true,
+        ...(remoteShell ? { remote_shell: true } : {}),
         ...(delayMs > 0 ? { delay_ms: delayMs } : {}),
         i18n: i18nMeta('terminal.tool.written', { id: params.terminal_id }),
       },
@@ -1273,6 +1369,9 @@ export const terminalRunTool: ToolDefinition = {
     + 'and the result (output + exit code) is delivered to the chat as a separate message when the command '
     + 'finishes; timeout_ms is then an optional watchdog (without it the background run has no time limit). '
     + 'The command is checked by the same shell policy as execute_shell; a forbidden command is not sent. '
+    + 'Exception: inside a remote shell (ssh, docker/podman exec, kubectl exec) the local path policy is '
+    + 'not applied — the command runs on the remote machine/in the container where local paths are not '
+    + 'meaningful (metadata.remote_shell=true). '
     + 'Only one command can run in a terminal at a time — if another run is active, the call fails '
     + 'with "run_busy". '
     + 'A command CANNOT be started while a full-screen application runs in the terminal (tmux/vim/less/htop): '
@@ -1280,6 +1379,10 @@ export const terminalRunTool: ToolDefinition = {
     + 'with code TERMINAL_FOREGROUND_APP (metadata.code) instead of a generic error. '
     + 'In that case work with keys — terminal_write to type and terminal_snapshot to read the screen — '
     + 'or open a separate terminal with terminal_open. '
+    + 'A command also CANNOT be started while the terminal is busy with another foreground command '
+    + '(sleep/make/npm): the input would go into that process, so the call is refused with code '
+    + 'TERMINAL_FOREGROUND_BUSY — wait for it to finish, interrupt it with terminal_signal INT, or open '
+    + 'a separate terminal. '
     + 'Note: terminal_write is the default non-blocking way to work with a terminal — it sends input and '
     + 'never waits for a result; use terminal_run with background=true when a command result has to be '
     + 'reported back.',
@@ -1307,8 +1410,14 @@ export const terminalRunTool: ToolDefinition = {
     if (!record) return notFound(params.terminal_id);
 
     // Команда — та же проверка, что у ввода с Enter (`terminal_write`).
-    const denial = checkCommandPolicy(params.command, record.cwd, ctx, params.terminal_id);
-    if (denial) return denial;
+    // Исключение — в фокусе удалённая оболочка (ssh/контейнер): локальные пути
+    // политики внутри неё не значимы (guardrail, ADR-136), команда идёт по ту
+    // сторону соединения.
+    const remoteShell = await isRemoteShellForeground(service, params.terminal_id);
+    if (!remoteShell) {
+      const denial = checkCommandPolicy(params.command, record.cwd, ctx, params.terminal_id);
+      if (denial) return denial;
+    }
 
     const background = params.background === true;
     // Режим с ожиданием: срок жёсткий (дефолт/потолок схемы). Фоновый режим:
@@ -1319,7 +1428,7 @@ export const terminalRunTool: ToolDefinition = {
     const actorId = await resolveActorId(ctx);
     let run: TerminalRunRecord;
     try {
-      run = service.startRun({
+      run = await service.startRun({
         terminalId: params.terminal_id,
         command: params.command,
         timeoutMs,
@@ -1330,7 +1439,12 @@ export const terminalRunTool: ToolDefinition = {
     } catch (err) {
       // Полноэкранное приложение (tmux/vim/less/htop) — свой отказ: запуск с
       // маркером там не отследить, модель работает вводом/снимком экрана.
-      if (err instanceof TerminalForegroundAppError) return foregroundAppResult(err.terminalId);
+      if (err instanceof TerminalForegroundAppError) {
+        return foregroundAppResult(err.terminalId, err.command);
+      }
+      // Терминал занят чужой командой (`sleep`, `make`, `npm`): команда ушла бы
+      // в её stdin — ждать или прерывать Ctrl+C.
+      if (err instanceof TerminalForegroundBusyError) return foregroundBusyResult(err);
       return serviceErrorResult(err);
     }
 
@@ -1345,6 +1459,7 @@ export const terminalRunTool: ToolDefinition = {
           status: run.status,
           command: run.command,
           background: true,
+          ...(remoteShell ? { remote_shell: true } : {}),
           // `timeout_ms` — watchdog: задан → срок, не задан → без лимита.
           ...(params.timeout_ms !== undefined ? { timeout_ms: params.timeout_ms } : {}),
           ...(params.kill_on_timeout === true ? { kill_on_timeout: true } : {}),
@@ -1367,6 +1482,7 @@ export const terminalRunTool: ToolDefinition = {
         status: finished.status,
         // Таймаут не убивает команду — это сказано прямо (текст + метаданные).
         ...(stillRunning ? { still_running: true } : {}),
+        ...(remoteShell ? { remote_shell: true } : {}),
         ...(finished.exitCode !== undefined ? { exit_code: finished.exitCode } : {}),
         timeout_ms: timeoutMs,
         ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),

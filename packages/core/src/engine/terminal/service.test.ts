@@ -26,6 +26,7 @@ import type {
   ExecRequest,
   ExecResult,
   ExecutionPort,
+  PtyForeground,
   PtyHandle,
   PtyOpenRequest,
 } from '../../execution/ports/index.js';
@@ -43,6 +44,7 @@ import {
   TerminalDisabledError,
   TerminalExitedError,
   TerminalForegroundAppError,
+  TerminalForegroundBusyError,
   TerminalLimitError,
   TerminalNotFoundError,
   TerminalUnavailableError,
@@ -78,6 +80,20 @@ class FakePtyHandle implements PtyHandle {
   readonly resizes: Array<{ cols: number; rows: number }> = [];
   /** Сколько раз закрывали. */
   closeCalls = 0;
+  /**
+   * Факт foreground'а (протокол исполнителя 9): что отдаёт `inspect`.
+   * `null` — «неизвестно» (тогда работают прежние эвристики).
+   */
+  foreground: PtyForeground | null = null;
+  /**
+   * Умеет ли хэндл пробу foreground'а. `false` — старый исполнитель: метода
+   * `inspect` нет вовсе, сервис обязан остаться на эвристике по выводу.
+   */
+  readonly inspectEnabled: boolean;
+  /**
+   * Проба foreground'а; нет метода — исполнитель не умеет её.
+   */
+  inspect?: () => Promise<PtyForeground | null>;
 
   /**
    * Если задан — `close()` ждёт его разрешения (эмуляция `SIGTERM` → `SIGKILL`:
@@ -90,8 +106,12 @@ class FakePtyHandle implements PtyHandle {
   private _exited = false;
   private _exitInfo: PtyExitInfo = {};
 
-  constructor(id: string) {
+  constructor(id: string, options: { inspect?: boolean } = {}) {
     this.id = id;
+    this.inspectEnabled = options.inspect !== false;
+    if (this.inspectEnabled) {
+      this.inspect = async (): Promise<PtyForeground | null> => this.foreground;
+    }
   }
 
   write(data: string): void {
@@ -151,6 +171,8 @@ class FakeExecutionPort implements ExecutionPort {
   readonly pty = true;
   readonly handles: FakePtyHandle[] = [];
   readonly requests: PtyOpenRequest[] = [];
+  /** Умеет ли PTY пробу foreground'а (протокол 9; `false` — старый исполнитель). */
+  inspect = true;
 
   async execute(_req: ExecRequest): Promise<ExecResult> {
     throw new Error('execute не используется в тестах терминалов');
@@ -158,7 +180,7 @@ class FakeExecutionPort implements ExecutionPort {
 
   async openPty(req: PtyOpenRequest): Promise<PtyHandle> {
     this.requests.push(req);
-    const handle = new FakePtyHandle(`pty_${this.handles.length + 1}`);
+    const handle = new FakePtyHandle(`pty_${this.handles.length + 1}`, { inspect: this.inspect });
     this.handles.push(handle);
     return handle;
   }
@@ -353,11 +375,20 @@ describe('Детект полноэкранных приложений (isForegr
     expect(isForegroundAppActive(stream)).toBe(false);
   });
 
-  it('порог перерисовки: 5 ESC[r;cH мало, 6 — полноэкранное приложение', () => {
+  it('порог перерисовки в окне 256: 2 ESC[r;cH мало, 3 — полноэкранное приложение', () => {
     const frame = (rows: number): string =>
       Array.from({ length: rows }, (_, index) => `${ESC}[${index + 1};1H`).join('');
-    expect(isForegroundAppActive(frame(5))).toBe(false);
-    expect(isForegroundAppActive(frame(6))).toBe(true);
+    expect(isForegroundAppActive(frame(2))).toBe(false);
+    expect(isForegroundAppActive(frame(3))).toBe(true);
+  });
+
+  it('после выхода из TUI (промпт, очистка, 1–2 ESC[r;cH) → false', () => {
+    // Последние 256 символов: оболочка вернулась, кадр TUI остался в истории.
+    const before = topFrame();
+    const after = `${ESC}[2J${ESC}[H${ESC}[?25h${ESC}[?1049l${ESC}[1;1H${ESC}[1;5Huser@host:~$ `;
+    expect(isForegroundAppActive(`${before}${after}`)).toBe(false);
+    // Одна курсорная адресация после очистки — тоже не перерисовка.
+    expect(isForegroundAppActive(`${before}${ESC}[2J${ESC}[3;1Huser@host:~$ `)).toBe(false);
   });
 
   it('пустой буфер → false', () => {
@@ -918,7 +949,7 @@ describe('Терминальный сервис', () => {
       const service = createService();
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
 
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'ls -la',
         timeoutMs: 30_000,
@@ -948,7 +979,7 @@ describe('Терминальный сервис', () => {
       const service = createService();
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
 
-      service.startRun({ terminalId: record.id, command: 'ls -la', timeoutMs: 30_000 });
+      await service.startRun({ terminalId: record.id, command: 'ls -la', timeoutMs: 30_000 });
 
       const inputs = auditEntries.filter((entry) => entry.action === 'terminal.input');
       expect(inputs).toHaveLength(1);
@@ -962,7 +993,7 @@ describe('Терминальный сервис', () => {
     it('маркер в потоке завершает запуск: код возврата фиксируется, маркер вырезан из буфера', async () => {
       const service = createService();
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
@@ -987,7 +1018,7 @@ describe('Терминальный сервис', () => {
     it('tmux-подобный поток: эхо printf не завершает запуск, маркер завершает', async () => {
       const service = createService();
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
@@ -1013,7 +1044,7 @@ describe('Терминальный сервис', () => {
     it('маркер с отрицательным кодом возврата фиксируется', async () => {
       const service = createService();
       const record = await service.create(createInput());
-      const run = service.startRun({ terminalId: record.id, command: 'kill -1 $$', timeoutMs: 0 });
+      const run = await service.startRun({ terminalId: record.id, command: 'kill -1 $$', timeoutMs: 0 });
 
       port.lastHandle.emitData(marker(run.nonce, '-1'));
 
@@ -1032,9 +1063,9 @@ describe('Терминальный сервис', () => {
       // tmux включил альтернативный экран и не выключил — маркер туда не дошёл бы.
       handle.emitData('\u001B[?1049h\u001B[?1049h\u001B[Htmux status line');
 
-      expect(() =>
+      await expect(
         service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
-      ).toThrow(TerminalForegroundAppError);
+      ).rejects.toThrow(TerminalForegroundAppError);
       // Команда в PTY не ушла.
       expect(handle.writes).toHaveLength(0);
 
@@ -1047,12 +1078,12 @@ describe('Терминальный сервис', () => {
       const handle = port.lastHandle;
 
       handle.emitData('\u001B[?1049h\u001B[Hvim');
-      expect(() =>
+      await expect(
         service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
-      ).toThrow(TerminalForegroundAppError);
+      ).rejects.toThrow(TerminalForegroundAppError);
 
       handle.emitData('\u001B[?1049l\u001B[2K\r$ ');
-      const run = service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+      const run = await service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
       expect(run.status).toBe('running');
       expect(handle.writes).toHaveLength(1);
 
@@ -1066,11 +1097,169 @@ describe('Терминальный сервис', () => {
       // Обычный шелл под ssh: приглашение, вывод, никаких альтернативных экранов.
       handle.emitData('Welcome to Ubuntu 24.04\r\nuser@host:~$ ');
 
-      const run = service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+      const run = await service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
       expect(run.status).toBe('running');
       expect(handle.writes[0]?.startsWith('ls\r')).toBe(true);
 
       service.dispose();
+    });
+
+    // -----------------------------------------------------------------------
+    // Классификация foreground по процессу PTY (протокол исполнителя 9)
+    // -----------------------------------------------------------------------
+
+    describe('классификация foreground (PtyHandle.inspect)', () => {
+      it('getForeground отдаёт факт из пробы; завершённый/неизвестный — null', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+
+        handle.foreground = { shellPid: 100, foregroundPgid: 200, command: 'sleep', isShell: false };
+        expect(await service.getForeground(record.id)).toEqual({
+          shellPid: 100,
+          foregroundPgid: 200,
+          command: 'sleep',
+          isShell: false,
+        });
+
+        handle.emitExit({ exitCode: 0 });
+        expect(await service.getForeground(record.id)).toBeNull();
+        // Терминала нет вовсе — тоже «неизвестно», а не ошибка.
+        expect(await service.getForeground('term_unknown')).toBeNull();
+
+        service.dispose();
+      });
+
+      it('в фокусе оболочка (isShell) — запуск разрешён', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+        handle.foreground = { shellPid: 100, foregroundPgid: 100, command: 'bash', isShell: true };
+
+        const run = await service.startRun({
+          terminalId: record.id,
+          command: 'ls',
+          timeoutMs: 30_000,
+        });
+        expect(run.status).toBe('running');
+        expect(handle.writes).toHaveLength(1);
+
+        service.dispose();
+      });
+
+      it('в фокусе ssh — запуск разрешён: маркер работает по ту сторону соединения', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+        handle.foreground = { foregroundPgid: 200, command: 'ssh', isShell: false };
+
+        const run = await service.startRun({
+          terminalId: record.id,
+          command: 'ls /',
+          timeoutMs: 30_000,
+        });
+        expect(run.status).toBe('running');
+        expect(handle.writes).toHaveLength(1);
+
+        service.dispose();
+      });
+
+      it('в фокусе контейнерная оболочка (docker) — тоже разрешён', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        port.lastHandle.foreground = { command: 'docker', isShell: false };
+
+        const run = await service.startRun({
+          terminalId: record.id,
+          command: 'ls /',
+          timeoutMs: 30_000,
+        });
+        expect(run.status).toBe('running');
+
+        service.dispose();
+      });
+
+      it('в фокусе vim — TerminalForegroundAppError с именем процесса', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+        handle.foreground = { command: 'vim', isShell: false };
+
+        await expect(
+          service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+        ).rejects.toMatchObject({
+          name: 'TerminalForegroundAppError',
+          code: 'TERMINAL_FOREGROUND_APP',
+          command: 'vim',
+        });
+        // Команда в PTY не ушла: отказ случился до записи.
+        expect(handle.writes).toHaveLength(0);
+
+        service.dispose();
+      });
+
+      it('в фокусе sleep — TerminalForegroundBusyError с именем процесса', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+        handle.foreground = { command: 'sleep', isShell: false };
+
+        await expect(
+          service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+        ).rejects.toBeInstanceOf(TerminalForegroundBusyError);
+        expect(handle.writes).toHaveLength(0);
+
+        service.dispose();
+      });
+
+      it('имя процесса нормализуется (путь/регистр/аргументы)', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+        handle.foreground = { command: '/usr/bin/Vim /etc/hosts', isShell: false };
+
+        await expect(
+          service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+        ).rejects.toMatchObject({ code: 'TERMINAL_FOREGROUND_APP', command: 'vim' });
+
+        service.dispose();
+      });
+
+      it('пробы нет (старый исполнитель) — прежняя эвристика по выводу', async () => {
+        port.inspect = false;
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+        expect(handle.inspect).toBeUndefined();
+        // tmux включил альтернативный экран — эвристика это видит.
+        handle.emitData('\u001B[?1049h\u001B[Htmux status line');
+
+        await expect(
+          service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+        ).rejects.toBeInstanceOf(TerminalForegroundAppError);
+        expect(handle.writes).toHaveLength(0);
+
+        service.dispose();
+      });
+
+      it('проба упала — эвристика, запуск не падает', async () => {
+        const service = createService();
+        const record = await service.create(createInput());
+        const handle = port.lastHandle;
+        handle.inspect = async () => {
+          throw new Error('не удалось прочитать /proc');
+        };
+
+        expect(await service.getForeground(record.id)).toBeNull();
+        const run = await service.startRun({
+          terminalId: record.id,
+          command: 'ls',
+          timeoutMs: 30_000,
+        });
+        expect(run.status).toBe('running');
+
+        service.dispose();
+      });
     });
 
     it('top-подобный поток (перерисовка ESC[r;cH без альтернативного экрана) блокирует запуск', async () => {
@@ -1085,9 +1274,9 @@ describe('Терминальный сервис', () => {
         handle.emitData(`\u001B[${row};1H\u001B[${row};20H${String(row).padStart(3, ' ')}`);
       }
 
-      expect(() =>
+      await expect(
         service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
-      ).toThrow(TerminalForegroundAppError);
+      ).rejects.toThrow(TerminalForegroundAppError);
       expect(handle.writes).toHaveLength(0);
 
       service.dispose();
@@ -1100,13 +1289,13 @@ describe('Терминальный сервис', () => {
 
       handle.emitData('\u001B[H\u001B[2J\u001B[1;1Htop output\u001B[2;1Hrow 2\u001B[3;1Hrow 3');
       handle.emitData('\u001B[4;1Hrow 4\u001B[5;1Hrow 5\u001B[6;1Hrow 6\u001B[7;1Hrow 7');
-      expect(() =>
+      await expect(
         service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
-      ).toThrow(TerminalForegroundAppError);
+      ).rejects.toThrow(TerminalForegroundAppError);
 
       // Выход из top: экран очищен, осталось приглашение — перерисовки больше нет.
       handle.emitData('\u001B[2J\u001B[H\u001B[?25h$ ');
-      const run = service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+      const run = await service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
       expect(run.status).toBe('running');
       expect(handle.writes[0]?.startsWith('ls\r')).toBe(true);
 
@@ -1119,15 +1308,15 @@ describe('Терминальный сервис', () => {
       const handle = port.lastHandle;
 
       handle.emitData('\u001B[?47h\u001B[Hless');
-      expect(() =>
+      await expect(
         service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
-      ).toThrow(TerminalForegroundAppError);
+      ).rejects.toThrow(TerminalForegroundAppError);
 
       handle.emitData('\u001B[?47l');
       handle.emitData('\u001B[?1047h');
-      expect(() =>
+      await expect(
         service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
-      ).toThrow(TerminalForegroundAppError);
+      ).rejects.toThrow(TerminalForegroundAppError);
 
       service.dispose();
     });
@@ -1135,7 +1324,7 @@ describe('Терминальный сервис', () => {
     it('ожидание завершения возвращает финальный снимок', async () => {
       const service = createService();
       const record = await service.create(createInput());
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
@@ -1154,11 +1343,11 @@ describe('Терминальный сервис', () => {
     it('второй запуск в том же терминале — TerminalRunBusyError', async () => {
       const service = createService();
       const record = await service.create(createInput());
-      service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+      await service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
 
-      expect(() =>
+      await expect(
         service.startRun({ terminalId: record.id, command: 'pwd', timeoutMs: 30_000 }),
-      ).toThrow(TerminalRunBusyError);
+      ).rejects.toThrow(TerminalRunBusyError);
 
       service.dispose();
     });
@@ -1166,7 +1355,7 @@ describe('Терминальный сервис', () => {
     it('таймаут запуска завершает его статусом timeout', async () => {
       const service = createService();
       const record = await service.create(createInput());
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'sleep 100',
         timeoutMs: 1_000,
@@ -1184,7 +1373,7 @@ describe('Терминальный сервис', () => {
     it('killOnTimeout: таймаут пишет Ctrl+C в PTY и освобождает терминал', async () => {
       const service = createService();
       const record = await service.create(createInput());
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'sleep 100',
         timeoutMs: 1_000,
@@ -1199,7 +1388,7 @@ describe('Терминальный сервис', () => {
       // Ctrl+C ушёл прямо в PTY (после команды и строки-маркера).
       expect(port.lastHandle.writes).toContain('\u0003');
       // Терминал свободен — следующий запуск проходит.
-      const next = service.startRun({
+      const next = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
@@ -1217,7 +1406,7 @@ describe('Терминальный сервис', () => {
         },
       });
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'sleep 100',
         timeoutMs: 30_000,
@@ -1242,7 +1431,7 @@ describe('Терминальный сервис', () => {
         },
       });
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
@@ -1270,7 +1459,7 @@ describe('Терминальный сервис', () => {
         },
       });
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
@@ -1293,7 +1482,7 @@ describe('Терминальный сервис', () => {
         },
       });
       const record = await service.create(createInput({ sessionId: 'sess-1' }));
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'sleep 100',
         timeoutMs: 0,
@@ -1313,7 +1502,7 @@ describe('Терминальный сервис', () => {
       expect(settled[0]?.exitCode).toBe(130);
 
       // Терминал снова свободен: следующий запуск проходит.
-      const next = service.startRun({
+      const next = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,
@@ -1326,7 +1515,7 @@ describe('Терминальный сервис', () => {
     it('обычный ввод без ETX запуск не трогает', async () => {
       const service = createService();
       const record = await service.create(createInput());
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'sleep 100',
         timeoutMs: 0,
@@ -1360,7 +1549,7 @@ describe('Терминальный сервис', () => {
     it('терминал без привязки к сессии: запуск всё равно работает', async () => {
       const service = createService();
       const record = await service.create(createInput());
-      const run = service.startRun({
+      const run = await service.startRun({
         terminalId: record.id,
         command: 'ls',
         timeoutMs: 30_000,

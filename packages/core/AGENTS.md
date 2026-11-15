@@ -2624,6 +2624,28 @@
   (`TerminalUnavailableError` → 503). HTTP-контур —
   `server/routes/terminals.ts` (`createTerminalRoutes`), сборка сервиса для
   инстанса — `server/app/terminal-service.ts` (`createTerminalService`).
+  **Передний план терминала — факт, а не эвристика (протокол исполнителя 9).**
+  `PtyHandle.inspect?()` отдаёт `PtyForeground` (`shellPid`/`foregroundPgid`/
+  `command`/`isShell`); `TerminalService.getForeground(id)` — единственная точка
+  чтения (ошибки пробы и завершённый терминал → `null` = «неизвестно», не
+  исключение). Классификация — `engine/terminal/foreground-class.ts`
+  (`REMOTE_SHELL_COMMANDS` — ssh/mosh/docker/podman/nerdctl/kubectl/minikube/oc/
+  sftp/telnet/sshpass; `FULL_SCREEN_COMMANDS` — vi/vim/nvim/nano/emacs/less/
+  more/most/man/top/htop/btop/nvtop/mc/tmux/screen/watch/fzf;
+  `normalizeForegroundCommand` — basename без пути и аргументов, нижний
+  регистр). `startRun` **сначала** смотрит факт: `isShell` — разрешено;
+  remote-shell — **разрешено** (маркер текстовый, работает по ту сторону
+  соединения) + `runtime.remoteShell = true`; full-screen —
+  `TerminalForegroundAppError` (`command` — имя процесса); любая другая команда
+  (`sleep`/`make`/`npm`) — `TerminalForegroundBusyError`
+  (`TERMINAL_FOREGROUND_BUSY`: ввод ушёл бы в её stdin). Пробы нет/`null`
+  (старый исполнитель, не Linux) — прежняя эвристика `isForegroundAppActive`
+  по выводу. **ssh-исключение политики:** тулы `terminal_run` и
+  `terminal_write(enter=true)` при remote-shell foreground'е **не применяют**
+  `checkShellCommand` (локальные пути внутри удалённой машины/контейнера не
+  значимы), ответ несёт `metadata.remote_shell = true`; на fallback-пути
+  политика строгая. `terminal_list` отдаёт `foreground` (имя процесса) в строке
+  и `metadata.terminals[]`.
   **Сервис собирается в `server/app/deps.ts` (managed — `backend/app/deps.ts`):
   один экземпляр на процесс** (тот же, что у роутов `/api/v2/terminals*` и
   `/api/v2/settings/terminal`), стартовое значение выключателя применяется на

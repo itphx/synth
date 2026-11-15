@@ -866,8 +866,13 @@ export const SYSTEM_MESSAGES = {
   'terminal.tool.run_busy':
     'Error: another run is already active in terminal {terminal_id} — wait for it to finish',
   'terminal.tool.foreground_app':
-    'Error: the terminal is running a full-screen application (tmux/vim/less): a wrapped command '
-    + 'cannot be tracked there. Use terminal_write + terminal_snapshot, or open a separate terminal',
+    'Error: the terminal is running a full-screen application (tmux, vim, less, top, htop, watch — '
+    + 'alt-screen or full-screen repaint): a wrapped command cannot be tracked there. '
+    + 'Use terminal_write + terminal_snapshot, or open a separate terminal',
+  'terminal.tool.foreground_busy':
+    'Error: terminal {terminal_id} is busy with "{command}" — a wrapped command would go into its input. '
+    + 'Wait until it finishes, or interrupt it with Ctrl+C (terminal_signal INT), '
+    + 'or open a separate terminal',
   'terminal.tool.exit_code': 'Exit code: {exit_code}',
 } as const satisfies Record<SystemMessageKey, string>;
 

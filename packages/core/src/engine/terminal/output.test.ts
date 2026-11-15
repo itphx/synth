@@ -83,6 +83,35 @@ describe('Очистка вывода запуска', () => {
     expect(stripTerminalAnsi(`a${' '.repeat(40)}b`)).toBe(`a${' '.repeat(40)}b`);
   });
 
+  it('stripTerminalAnsi: однобайтовые ESC-последовательности TUI вырезаются', () => {
+    // htop-подобный мусор: выбор charset (`ESC(B`), keypad (`ESC=`), цвета,
+    // стирание строки, скрытие курсора, save/restore, заголовок окна (OSC).
+    const raw =
+      '\u001B(B\u001B=\u001B[0m\u001B[K\u001B[?25l\u001B7\u001B8'
+      + 'Mem 0.0 B\u001B)0'
+      + '\u001B]0;htop\u0007';
+    expect(stripTerminalAnsi(raw)).toBe('Mem 0.0 B');
+    // Одиночные ESC-последовательности без мусора в тексте.
+    expect(stripTerminalAnsi('a\u001B7b\u001B8c')).toBe('abc');
+    expect(stripTerminalAnsi('a\u001B>bc')).toBe('abc');
+    expect(stripTerminalAnsi('a\u001BMb')).toBe('ab');
+    expect(stripTerminalAnsi('a\u001BDb')).toBe('ab');
+    expect(stripTerminalAnsi('a\u001BEb')).toBe('ab');
+    expect(stripTerminalAnsi('a\u001BHb')).toBe('ab');
+    expect(stripTerminalAnsi('a\u001Bcb')).toBe('ab');
+    // SS2/SS3 — ESC + вводный символ + байт обозначения.
+    expect(stripTerminalAnsi('a\u001BNxb')).toBe('ab');
+    expect(stripTerminalAnsi('a\u001BOxb')).toBe('ab');
+    // Неизвестный ESC не съедает следующий символ.
+    expect(stripTerminalAnsi('a\u001Bzb')).toBe('azb');
+  });
+
+  it('stripTerminalAnsi: прежние последовательности не изменились', () => {
+    expect(stripTerminalAnsi('\u001B[2Kabc')).toBe('abc');
+    expect(stripTerminalAnsi('a\u001B[Bb')).toBe('ab');
+    expect(stripTerminalAnsi('a\u001B[1;31mb')).toBe('ab');
+  });
+
   it('removeRunWrapper: удаляет точное эхо строки целиком', () => {
     const wrapper = "printf '\\n@@srn-abc:%s@@\\n' \"$?\"";
     const text = ['out1', wrapper, 'out2'].join('\n');

@@ -36,11 +36,21 @@
  * - **Никакого содержимого** в аудите и метриках.
  */
 import { randomUUID } from 'node:crypto';
-import { isExecutionError, type ExecutionPort, type PtyHandle } from '../../execution/ports/index.js';
+import {
+  isExecutionError,
+  type ExecutionPort,
+  type PtyForeground,
+  type PtyHandle,
+} from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 import { t as sm } from '../system-messages.js';
 import type { TerminalAuditSink, TerminalCloseReason } from './audit.js';
+import {
+  isFullScreenCommand,
+  isRemoteShellCommand,
+  normalizeForegroundCommand,
+} from './foreground-class.js';
 import type { TerminalMetricsHooks } from './metrics.js';
 import { TerminalRingBuffer } from './ring-buffer.js';
 import {
@@ -63,6 +73,7 @@ import {
   TerminalDisabledError,
   TerminalExitedError,
   TerminalForegroundAppError,
+  TerminalForegroundBusyError,
   TerminalInvalidRequestError,
   TerminalLimitError,
   TerminalNotFoundError,
@@ -152,6 +163,16 @@ interface TerminalRuntime {
    * воскрес бы после рестарта ядра.
    */
   pendingSnapshot: Promise<void> | null;
+  /**
+   * Факт последней успешной пробы foreground'а: в фокусе удалённая оболочка
+   * (ssh/контейнер), запуск внутри неё разрешён несмотря на политику путей.
+   *
+   * Выставляется в `startRun` по `PtyHandle.inspect` (протокол исполнителя 9) и
+   * сбрасывается, когда в фокусе снова локальная оболочка. Тулы спрашивают
+   * `getForeground` сами (им нужен ещё и `command`), поле — запись факта для
+   * последующих решений сервиса и диагностики.
+   */
+  remoteShell?: boolean;
 }
 
 /** Подписчик на вывод терминала. */
@@ -227,8 +248,15 @@ const ESC = '\u001B';
 /** Переключение режимов терминала: `ESC [ ? <params> h|l`. */
 const ALT_SCREEN_SWITCH_PATTERN = new RegExp(`${ESC}\\[\\?([0-9;]*)([hl])`, 'g');
 
-/** Сколько последних символов вывода смотрим на перерисовку экрана. */
-const REDRAW_TAIL_CHARS = 1024;
+/**
+ * Сколько последних символов вывода смотрим на перерисовку экрана.
+ *
+ * Окно **узкое** (256 символов): последний кадр TUI — это 1–2 КБ, поэтому
+ * широкое окно видело картинку и после выхода из `vim`/`htop`/`watch`, и флаг
+ * «полноэкранное приложение» залипал до следующего вывода. 256 символов —
+ * примерно кадр `top` в 24 строки по несколько последовательностей на строку.
+ */
+const REDRAW_TAIL_CHARS = 256;
 
 /** Курсорная адресация `ESC [ <строка> ; <колонка> H` — программа рисует экран. */
 const CURSOR_ADDRESS_PATTERN = new RegExp(`${ESC}\\[\\d+;\\d+H`, 'g');
@@ -240,9 +268,10 @@ const SCREEN_CLEAR = `${ESC}[2J`;
  * Порог курсорной адресации в хвосте вывода: полноэкранное приложение.
  *
  * `top`/`htop`/`nvtop`/`mc`/`watch` перерисовывают экран десятками `ESC[r;cH`;
- * обычный вывод и прогресс-бары — нет.
+ * обычный вывод и прогресс-бары — нет. Три последовательности в окне 256
+ * символов — уже перерисовка кадра, а промпт с одной-двумя адресациями — нет.
  */
-const REDRAW_MATCH_THRESHOLD = 6;
+const REDRAW_MATCH_THRESHOLD = 3;
 
 /** После очистки экрана стольких `ESC[r;cH` достаточно, чтобы счесть перерисовку. */
 const REDRAW_AFTER_CLEAR_THRESHOLD = 3;
@@ -264,14 +293,18 @@ function countCursorAddressing(text: string): number {
  * 1. **Альтернативный экран:** переключение на `1049`/`1047`/`47` **без
  *    возврата** — последнее `h` позже последнего `l` (или `l` не было вовсе).
  *    Так ведут себя tmux, vim, less.
- * 2. **Перерисовка экрана:** в хвосте вывода (последние ~1024 символа) не
- *    меньше 6 последовательностей курсорной адресации `ESC[r;cH`. `top`,
+ * 2. **Перерисовка экрана:** в хвосте вывода (последние 256 символов) не
+ *    меньше 3 последовательностей курсорной адресации `ESC[r;cH`. `top`,
  *    `htop`, `nvtop`, `mc`, `watch` не переключают альтернативный экран, но
  *    перерисовывают картинку построчно; обычный вывод и прогресс-бары — нет.
  *    Совпадения до последней очистки экрана не считаются: `ESC[2J` стирает
  *    нарисованное (после выхода из `top` в хвосте остаётся очистка и промпт).
  * 3. **Очистка экрана + перерисовка:** `ESC[2J` в хвосте, после которой идёт
  *    не меньше 3 `ESC[r;cH`.
+ *
+ * Окно узкое (256 символов) намеренно: широкое окно (~1024) продолжало видеть
+ * последний кадр TUI после выхода из `vim`/`htop`/`watch` — флаг «полноэкранное
+ * приложение» залипал до следующего вывода.
  *
  * Обычная оболочка, ssh и долгие команды с прогрессом (`\r`) ни одного
  * признака не дают — их запуск не блокируется.
@@ -927,6 +960,32 @@ export class TerminalService {
   }
 
   /**
+   * Что сейчас на переднем плане терминала (протокол исполнителя 9).
+   *
+   * **Факт** из ядра ОС через `PtyHandle.inspect`: в фокусе оболочка, удалённая
+   * оболочка (`ssh`, `docker exec`), полноэкранное приложение (`vim`, `htop`)
+   * или обычная команда (`sleep`, `make`). По нему `startRun` решает, можно ли
+   * запускать обёрнутую команду, а тулы — применять ли политику путей.
+   *
+   * `null` — ответа нет: терминал завершён, PTY не поднят (снимок после
+   * рестарта), у точки исполнения нет пробы (старый исполнитель, не Linux) или
+   * проба упала. Это «неизвестно», а не «в фокусе не оболочка»: вызывающий
+   * остаётся на прежних эвристиках. Ошибки пробы не пробрасываются — терминал
+   * из-за диагностики не ломается.
+   */
+  async getForeground(id: string): Promise<PtyForeground | null> {
+    const runtime = this._terminals.get(id);
+    if (!runtime || runtime.finished) return null;
+    const inspect = runtime.handle?.inspect;
+    if (!inspect) return null;
+    try {
+      return (await inspect.call(runtime.handle)) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Снимок вывода терминала (для `GET /terminals/:id/output`).
    *
    * Отдаёт и завершённый терминал: после выхода оболочки вкладка остаётся с
@@ -958,10 +1017,18 @@ export class TerminalService {
    * применяются к нему как к обычной команде (кадр с `Enter`).
    *
    * **Полноэкранное приложение — отказ до записи.** Если в терминале активно
-   * tmux/vim/less (альтернативный экран включён и не выключен), команда ушла
-   * бы внутрь приложения, а маркер — нет: `TerminalForegroundAppError`
+   * tmux/vim/less (факт из `PtyHandle.inspect`, у старого исполнителя —
+   * эвристика по выводу: альтернативный экран включён и не выключен), команда
+   * ушла бы внутрь приложения, а маркер — нет: `TerminalForegroundAppError`
    * (`TERMINAL_FOREGROUND_APP`). Работать там — `terminal_write` +
    * `terminal_snapshot`.
+   *
+   * **Занятый терминал — отказ.** В фокусе обычная команда (`sleep`, `make`,
+   * `npm`) — команда ушла бы в её stdin: `TerminalForegroundBusyError`
+   * (`TERMINAL_FOREGROUND_BUSY`). Дождаться завершения или прервать Ctrl+C.
+   * **Удалённая оболочка (`ssh`, `docker exec`) — запуск разрешён:** маркер
+   * текстовый и работает по ту сторону соединения; факт запоминается в
+   * `runtime.remoteShell`.
    *
    * **Строки уходят с `\r`, а не с `\n`:** терминал работает в raw-режиме, и
    * `Enter` там — это CR (`tmux`/`less`/REPL ждут именно `\r`; LF не
@@ -973,9 +1040,10 @@ export class TerminalService {
    * @throws TerminalNotFoundError — терминала нет.
    * @throws TerminalExitedError — терминал завершён (ввод/запуск невозможны).
    * @throws TerminalForegroundAppError — в терминале полноэкранное приложение.
+   * @throws TerminalForegroundBusyError — терминал занят чужой командой.
    * @throws TerminalRunBusyError — в терминале уже идёт запуск.
    */
-  startRun(input: {
+  async startRun(input: {
     terminalId: string;
     command: string;
     timeoutMs: number;
@@ -984,12 +1052,12 @@ export class TerminalService {
     /** По истечении watchdog'а убить команду (Ctrl+C) и освободить терминал. */
     killOnTimeout?: boolean;
     actorId?: string;
-  }): TerminalRunRecord {
+  }): Promise<TerminalRunRecord> {
     this._assertUsable();
     const runtime = this._requireLiveRuntime(input.terminalId);
-    // Полноэкранное приложение (tmux/vim/less) перехватывает и ввод, и экран:
-    // маркер запуска в нём не отследить — отказываем до записи в PTY.
-    this._assertRunTrackable(runtime);
+    // Что сейчас в фокусе терминала: сначала **факт** (протокол 9), затем —
+    // прежняя эвристика по выводу (старый исполнитель/не Linux).
+    await this._assertRunTrackable(runtime);
     const command = input.command.replace(/[\r\n]+$/, '');
     const run = this._runs.start({
       terminalId: runtime.record.id,
@@ -1017,18 +1085,61 @@ export class TerminalService {
   }
 
   /**
-   * Проверить, что запуск в терминале отслеживаем (нет полноэкранного
-   * приложения).
+   * Проверить, что запуск в терминале отслеживаем.
    *
-   * Признак берётся из буфера вывода (что реально напечатал PTY) — эвристика
-   * `isForegroundAppActive`: включённый и не выключенный альтернативный экран
-   * (`?1049h`/`?1047h`/`?47h`) **или** перерисовка экрана курсорной адресацией
-   * (`ESC[r;cH`/`ESC[2J` — `top`/`htop`/`mc`/`watch` альтернативный экран не
-   * используют). Обхода (`force`) нет: в TUI работают `terminal_write` +
-   * `terminal_snapshot`. Обычная оболочка, ssh и долгие команды с прогрессом
-   * признаков не дают — запуск не блокируется.
+   * Порядок — **сначала факт, потом эвристика**:
+   *
+   * 1. `PtyHandle.inspect()` (протокол исполнителя 9) вернул состояние:
+   *    - в фокусе оболочка (`isShell`) — запуск разрешён;
+   *    - в фокусе удалённая оболочка (`ssh`, `docker exec`, `kubectl exec`) —
+   *      разрешён: маркер текстовый и работает по ту сторону соединения, факт
+   *      запоминается в `runtime.remoteShell`;
+   *    - в фокусе полноэкранное приложение (`vim`, `less`, `htop`, `tmux`) —
+   *      `TerminalForegroundAppError` (в `command` — имя процесса);
+   *    - в фокусе что-то ещё (`sleep`, `make`, `npm`) —
+   *      `TerminalForegroundBusyError`: терминал занят, команда ушла бы в stdin
+   *      чужого процесса.
+   * 2. Пробы нет/она вернула `null` (старый исполнитель, не Linux, ошибка) —
+   *    **прежняя эвристика** по буферу вывода `isForegroundAppActive`:
+   *    включённый и не выключенный альтернативный экран (`?1049h`/`?1047h`/
+   *    `?47h`) **или** перерисовка экрана курсорной адресацией (`ESC[r;cH`/
+   *    `ESC[2J` — `top`/`htop`/`mc`/`watch`). Так поведение на старых
+   *    исполнителях не меняется.
+   *
+   * Обхода (`force`) нет: в TUI работают `terminal_write` +
+   * `terminal_snapshot`, в занятом терминале — ждут или прерывают Ctrl+C.
    */
-  private _assertRunTrackable(runtime: TerminalRuntime): void {
+  private async _assertRunTrackable(runtime: TerminalRuntime): Promise<void> {
+    const foreground = await this.getForeground(runtime.record.id);
+    if (foreground) {
+      const command = normalizeForegroundCommand(foreground.command);
+      if (foreground.isShell) {
+        // Факт: в фокусе локальная оболочка — прежний факт remote-shell снят.
+        runtime.remoteShell = false;
+        return;
+      }
+      if (isRemoteShellCommand(command)) {
+        // Мы внутри ssh/контейнера: маркер работает удалённо, запуск разрешён.
+        runtime.remoteShell = true;
+        return;
+      }
+      if (isFullScreenCommand(command)) {
+        throw new TerminalForegroundAppError(
+          runtime.record.id,
+          sm('terminal.tool.foreground_app'),
+          command !== '' ? command : undefined,
+        );
+      }
+      throw new TerminalForegroundBusyError(
+        runtime.record.id,
+        command !== '' ? command : undefined,
+        sm('terminal.tool.foreground_busy', {
+          terminal_id: runtime.record.id,
+          command: command !== '' ? command : '?',
+        }),
+      );
+    }
+    // Пробы нет (старый исполнитель, не Linux) — прежняя эвристика по выводу.
     const snapshot = runtime.buffer.snapshot();
     const text = snapshot.chunks.map((chunk) => chunk.data).join('');
     if (isForegroundAppActive(text)) {

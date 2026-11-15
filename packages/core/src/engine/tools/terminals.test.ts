@@ -52,8 +52,10 @@ import type { TerminalOutputSnapshot, TerminalRecord } from '../terminal/types.j
 import {
   TerminalDisabledError,
   TerminalForegroundAppError,
+  TerminalForegroundBusyError,
   TerminalLimitError,
 } from '../terminal/types.js';
+import type { PtyForeground } from '../../execution/ports/index.js';
 import {
   formatTerminalContentAttributes,
   frameTerminalOutput,
@@ -135,9 +137,16 @@ class FakeTerminalService {
   interrupts: Array<{ terminalId: string; exitCode: number }> = [];
   /** Терминал занят активным запуском (`run_busy`). */
   busy = false;
+  /** Факт foreground'а терминала (протокол 9); нет записи — «неизвестно». */
+  foregrounds = new Map<string, PtyForeground | null>();
 
   isEnabled(): boolean {
     return this.enabled;
+  }
+
+  /** Что сейчас на переднем плане PTY (`PtyHandle.inspect` через сервис). */
+  async getForeground(id: string): Promise<PtyForeground | null> {
+    return this.foregrounds.get(id) ?? null;
   }
 
   async create(input: {
@@ -372,6 +381,26 @@ describe('Тулы интерактивных терминалов (terminals.ts
 
       const withExited = await terminalListTool.execute({ include_exited: true }, makeCtx());
       expect(withExited.metadata?.count).toBe(3);
+    });
+
+    it('показывает foreground (факт протокола 9), когда он известен', async () => {
+      service.records.set('term_1', makeRecord({ id: 'term_1', projectId: 'proj_1' }));
+      service.records.set('term_2', makeRecord({ id: 'term_2', projectId: 'proj_1' }));
+      service.foregrounds.set('term_1', { command: '/usr/bin/ssh', isShell: false });
+
+      const result = await terminalListTool.execute({}, makeCtx());
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toMatch(/term_1[^\n]*foreground=ssh/);
+      // Второй терминал — факта нет (проба не знает): поля нет вовсе.
+      expect(result.content).toMatch(/term_2[^\n]*size=80x24(\s|$)/);
+      expect(result.content).not.toMatch(/term_2[^\n]*foreground=/);
+
+      const terminals = result.metadata?.terminals as Array<{
+        id: string;
+        foreground: string | null;
+      }>;
+      expect(terminals.find((t) => t.id === 'term_1')?.foreground).toBe('ssh');
+      expect(terminals.find((t) => t.id === 'term_2')?.foreground).toBeNull();
     });
   });
 
@@ -923,6 +952,31 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(service.writes[0]?.data).toBe(':');
       expect(result.metadata?.delay_ms).toBeUndefined();
     });
+
+    it('в ssh пути вне рабочего каталога разрешены: политика не применяется', async () => {
+      // Факт протокола 9: в фокусе удалённая оболочка — локальные пути внутри
+      // неё не значимы, команда идёт по ту сторону соединения (guardrail).
+      service.foregrounds.set('term_1', { command: 'ssh', isShell: false });
+      const result = await terminalWriteTool.execute(
+        { terminal_id: 'term_1', data: 'ls /', enter: true },
+        makeCtx(),
+      );
+      expect(result.isError).toBeUndefined();
+      expect(service.writes).toHaveLength(1);
+      expect(service.writes[0]?.data).toBe('ls /\r');
+      expect(result.metadata?.remote_shell).toBe(true);
+    });
+
+    it('без ssh та же команда требует подтверждения (политика строгая)', async () => {
+      const result = await terminalWriteTool.execute(
+        { terminal_id: 'term_1', data: 'ls /', enter: true },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('requires user approval');
+      expect(service.writes).toHaveLength(0);
+      expect(result.metadata?.remote_shell).toBeUndefined();
+    });
   });
 
   describe('terminal_run', () => {
@@ -1230,6 +1284,52 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(service.runs.size).toBe(0);
     });
 
+    it('в ssh команда с локальным путём вне каталога уходит в сервис (политика не применяется)', async () => {
+      service.foregrounds.set('term_1', { command: 'ssh', isShell: false });
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls /' },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, { status: 'done', exitCode: 0, output: 'bin\n' });
+
+      const result = await promise;
+      expect(result.isError).toBeUndefined();
+      // Команда дошла до сервиса: внешний путь внутри ssh не спрашивается.
+      expect(service.started).toHaveLength(1);
+      expect(service.started[0]?.command).toBe('ls /');
+      expect(result.metadata?.remote_shell).toBe(true);
+    });
+
+    it('без ssh тот же путь — отказ политики (external_directory → ask)', async () => {
+      const result = await terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls /' },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('requires user approval');
+      expect(service.runs.size).toBe(0);
+      expect(result.metadata?.remote_shell).toBeUndefined();
+    });
+
+    it('терминал занят командой (sleep) → TERMINAL_FOREGROUND_BUSY', async () => {
+      service.startRunError = new TerminalForegroundBusyError('term_1', 'sleep');
+      const result = await terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'ls' },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('busy with');
+      expect(result.content).toContain('sleep');
+      expect(result.content).toContain('terminal_signal INT');
+      expect(result.metadata?.code).toBe('TERMINAL_FOREGROUND_BUSY');
+      expect(result.metadata?.foreground).toBe('sleep');
+      expect(result.metadata?.terminal_id).toBe('term_1');
+      expect(result.metadata?.i18n).toMatchObject({ key: 'terminal.tool.foreground_busy' });
+      expect(service.runs.size).toBe(0);
+    });
+
     it('неизвестный терминал → «не найден»', async () => {
       const result = await terminalRunTool.execute(
         { terminal_id: 'term_missing', command: 'ls' },
@@ -1240,7 +1340,11 @@ describe('Тулы интерактивных терминалов (terminals.ts
     });
 
     it('полноэкранное приложение → TERMINAL_FOREGROUND_APP (текст ключа + код)', async () => {
-      service.startRunError = new TerminalForegroundAppError('term_1', sm('terminal.tool.foreground_app'));
+      service.startRunError = new TerminalForegroundAppError(
+        'term_1',
+        sm('terminal.tool.foreground_app'),
+        'vim',
+      );
       const result = await terminalRunTool.execute(
         { terminal_id: 'term_1', command: 'ls' },
         makeCtx(),
@@ -1255,6 +1359,8 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.content).not.toContain('terminal:');
       expect(result.metadata?.code).toBe('TERMINAL_FOREGROUND_APP');
       expect(result.metadata?.terminal_id).toBe('term_1');
+      // Имя процесса из факта (`PtyHandle.inspect`) — модель видит, что там.
+      expect(result.metadata?.foreground).toBe('vim');
       expect(result.metadata?.i18n).toMatchObject({ key: 'terminal.tool.foreground_app' });
       // Запуск не состоялся: до PTY ничего не ушло.
       expect(service.runs.size).toBe(0);

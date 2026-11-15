@@ -1680,3 +1680,14 @@
 - **Причина:** при монтировании `TerminalView` проигрывает **весь** буфер (`outputSince(0)`), в истории лежат старые запросы tmux (`ESC[c`, `ESC[>c`); новый xterm отвечает на них ещё раз, ответы через `onData` → `sendInput` уходят в PTY, где tmux их уже не ждёт и печатает.
 - **Фикс:** ввод, сгенерированный реплеем, не отправляется (`replaying` до колбэка `term.write`/`finally`/таймаута); плюс из снимка вырезаются только запросы (`stripEmulatorQueries`: `ESC[c`, `ESC[>c`, `ESC[=c`, `ESC[5n`, `ESC[6n`, `ESC[>q`, OSC 10/11/4-запросы), режимы и SGR не трогаются.
 - **Проверка:** в браузере — `printf '\033[c\033[>c'` даёт ответ вживую (как у пользователя), после переключения вкладки туда-обратно ответ **не** появляется (до фикса повторялся). UI: 4268 тестов passed, typecheck/lint чисто (28 pre-existing warnings).
+
+## 2026-11-15 — терминалы: foreground PTY (протокол 9), ssh-политика, чистка ESC
+
+- **Протокол 9:** `PtyHandle.inspect()` → `{ shellPid, foregroundPgid, command, isShell }` (Linux: `/proc/<pid>/stat` поле 8 `tpgid` → поиск процесса по `pgrp`; fallback `ps`), кэш 250 мс; исполнитель — `GET /pty/:id/foreground`, версия 9; старый исполнитель метода не отдаёт (fail-open на эвристику).
+- **Классификация:** `foreground-class.ts` — `REMOTE_SHELL_COMMANDS` (ssh/mosh/docker/podman/kubectl/…) и `FULL_SCREEN_COMMANDS` (vim/less/top/htop/mc/tmux/watch/…). `startRun`: shell → обычный запуск; remote-shell → разрешён (и `terminal_run`/`terminal_write(enter)` **не проверяют пути** — внутри чужой машины локальные пути не значимы); full-screen → `TERMINAL_FOREGROUND_APP`; прочая команда → новый `TERMINAL_FOREGROUND_BUSY` («занят командой X»); нет `inspect` → прежняя эвристика.
+- **H' (strip_ansi):** вырезаются `ESC(B`/`ESC)0` (charset), `ESC=`/`ESC>`, `ESC7/8`, `ESCM/D/E/H/c`, одиночные ESC — htop-вывод больше не даёт `B`-хвостов.
+- **J-2:** окно детекта перерисовки сужено до 256 символов, порог ≥3 `ESC[r;cH` — флаг не залипает после выхода из vim/htop/watch.
+- **J-3:** текст `foreground_app` перечисляет актуальные приложения.
+- **Ограничение:** TUI **внутри** ssh локально не виден (foreground = `ssh`) — там по-прежнему `terminal_snapshot`.
+- **Проверки:** `pnpm typecheck`, `pnpm lint` — чисто; целевые 344; полный `pnpm test` — EXIT=0.
+- **Коммиты:** `b154ee5c` (протокол 9) + следующий (классификация/политика).

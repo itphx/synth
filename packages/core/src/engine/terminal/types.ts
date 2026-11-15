@@ -382,7 +382,8 @@ export type TerminalErrorCode =
   | 'TERMINAL_UNAVAILABLE'
   | 'TERMINAL_INVALID_REQUEST'
   | 'TERMINAL_ALREADY_RUNNING'
-  | 'TERMINAL_FOREGROUND_APP';
+  | 'TERMINAL_FOREGROUND_APP'
+  | 'TERMINAL_FOREGROUND_BUSY';
 
 /** Базовая типизированная ошибка терминального сервиса. */
 export class TerminalError extends Error {
@@ -529,15 +530,19 @@ export class TerminalExitedError extends TerminalError {
  * модель работает через `terminal_write` + `terminal_snapshot` (или открывает
  * отдельный терминал).
  *
- * Признак активного приложения — переключение на альтернативный экран без
- * возврата: `ESC [ ? 1049 h` / `?47h` / `?1047h` позже соответствующего `l`.
- * Обычная оболочка и ssh такого не печатают — их запуск не блокируется.
+ * Признак берётся из **факта** (`PtyHandle.inspect`, протокол исполнителя 9):
+ * имя foreground-процесса из набора `FULL_SCREEN_COMMANDS`. У старого
+ * исполнителя (пробы нет) — прежняя эвристика по выводу: переключение на
+ * альтернативный экран без возврата (`?1049h`/`?47h`/`?1047h`) или перерисовка
+ * кадра. Обычная оболочка и ssh такого не печатают — их запуск не блокируется.
  */
 export class TerminalForegroundAppError extends TerminalError {
   /** Идентификатор терминала. */
   readonly terminalId: string;
+  /** Имя foreground-процесса, если известно (`vim`, `tmux`, …). */
+  readonly command?: string;
 
-  constructor(terminalId: string, message?: string) {
+  constructor(terminalId: string, message?: string, command?: string) {
     super(
       'TERMINAL_FOREGROUND_APP',
       message ??
@@ -545,6 +550,42 @@ export class TerminalForegroundAppError extends TerminalError {
     );
     this.name = 'TerminalForegroundAppError';
     this.terminalId = terminalId;
+    if (command !== undefined) this.command = command;
+  }
+}
+
+/**
+ * Терминал занят **чужой** командой — запуск с маркером невозможен
+ * (`TERMINAL_FOREGROUND_BUSY`, протокол исполнителя 9).
+ *
+ * Отличается от `TerminalForegroundAppError`: там полноэкранное приложение
+ * (работать можно клавишами и снимком экрана), а здесь в фокусе обычная
+ * программа (`sleep`, `make`, `npm test`) — клавиши тоже ушли бы в её stdin.
+ * Правильный ход — дождаться завершения или прервать её (`Ctrl+C` через
+ * `terminal_write`/`terminal_signal`), либо открыть отдельный терминал.
+ *
+ * Признак — **факт** из ядра ОС (`PtyHandle.inspect`): foreground-процесс не
+ * оболочка и не удалённая оболочка (`isShell === false`, имя вне
+ * `REMOTE_SHELL_COMMANDS`/`FULL_SCREEN_COMMANDS`). У старого исполнителя пробы
+ * нет — остаётся прежняя эвристика по выводу (`isForegroundAppActive`).
+ */
+export class TerminalForegroundBusyError extends TerminalError {
+  /** Идентификатор терминала. */
+  readonly terminalId: string;
+  /** Имя foreground-процесса, если известно (`sleep`, `make`, …). */
+  readonly command?: string;
+
+  constructor(terminalId: string, command?: string, message?: string) {
+    super(
+      'TERMINAL_FOREGROUND_BUSY',
+      message ??
+        `Error: terminal ${terminalId}${
+          command !== undefined ? ` is busy with "${command}"` : ' is busy'
+        } — wait for the command to finish or interrupt it with Ctrl+C`,
+    );
+    this.name = 'TerminalForegroundBusyError';
+    this.terminalId = terminalId;
+    if (command !== undefined) this.command = command;
   }
 }
 
