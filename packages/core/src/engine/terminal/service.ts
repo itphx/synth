@@ -227,31 +227,87 @@ const ESC = '\u001B';
 /** Переключение режимов терминала: `ESC [ ? <params> h|l`. */
 const ALT_SCREEN_SWITCH_PATTERN = new RegExp(`${ESC}\\[\\?([0-9;]*)([hl])`, 'g');
 
+/** Сколько последних символов вывода смотрим на перерисовку экрана. */
+const REDRAW_TAIL_CHARS = 1024;
+
+/** Курсорная адресация `ESC [ <строка> ; <колонка> H` — программа рисует экран. */
+const CURSOR_ADDRESS_PATTERN = new RegExp(`${ESC}\\[\\d+;\\d+H`, 'g');
+
+/** Очистка экрана `ESC [ 2 J`. */
+const SCREEN_CLEAR = `${ESC}[2J`;
+
 /**
- * В терминале активно полноэкранное приложение (tmux/vim/less).
+ * Порог курсорной адресации в хвосте вывода: полноэкранное приложение.
  *
- * Признак — переключение на альтернативный экран **без возврата**: для любого
- * из режимов `1049`/`1047`/`47` последнее `h` позже последнего `l` (или `l` не
- * было вовсе). Обычная оболочка и ssh такого не печатают — их запуск не
- * блокируется.
+ * `top`/`htop`/`nvtop`/`mc`/`watch` перерисовывают экран десятками `ESC[r;cH`;
+ * обычный вывод и прогресс-бары — нет.
+ */
+const REDRAW_MATCH_THRESHOLD = 6;
+
+/** После очистки экрана стольких `ESC[r;cH` достаточно, чтобы счесть перерисовку. */
+const REDRAW_AFTER_CLEAR_THRESHOLD = 3;
+
+/** Сколько раз в тексте встречается курсорная адресация. */
+function countCursorAddressing(text: string): number {
+  return text.match(CURSOR_ADDRESS_PATTERN)?.length ?? 0;
+}
+
+/**
+ * В терминале активно полноэкранное приложение (tmux/vim/less/htop/top).
+ *
+ * **Это эвристика**, а не точное состояние экрана: обходного флага (`force`)
+ * нет — в TUI работают через `terminal_write` (клавиши) и
+ * `terminal_snapshot` (видимый экран), а не `terminal_run`.
+ *
+ * Три признака (любой — блокировка):
+ *
+ * 1. **Альтернативный экран:** переключение на `1049`/`1047`/`47` **без
+ *    возврата** — последнее `h` позже последнего `l` (или `l` не было вовсе).
+ *    Так ведут себя tmux, vim, less.
+ * 2. **Перерисовка экрана:** в хвосте вывода (последние ~1024 символа) не
+ *    меньше 6 последовательностей курсорной адресации `ESC[r;cH`. `top`,
+ *    `htop`, `nvtop`, `mc`, `watch` не переключают альтернативный экран, но
+ *    перерисовывают картинку построчно; обычный вывод и прогресс-бары — нет.
+ *    Совпадения до последней очистки экрана не считаются: `ESC[2J` стирает
+ *    нарисованное (после выхода из `top` в хвосте остаётся очистка и промпт).
+ * 3. **Очистка экрана + перерисовка:** `ESC[2J` в хвосте, после которой идёт
+ *    не меньше 3 `ESC[r;cH`.
+ *
+ * Обычная оболочка, ssh и долгие команды с прогрессом (`\r`) ни одного
+ * признака не дают — их запуск не блокируется.
  */
 export function isForegroundAppActive(text: string): boolean {
-  if (!text.includes('\u001B[?')) return false;
-  const openAt = new Map<string, number>();
-  const closedAt = new Map<string, number>();
-  ALT_SCREEN_SWITCH_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = ALT_SCREEN_SWITCH_PATTERN.exec(text)) !== null) {
-    const mode = (match[1] ?? '').split(';').find((part) => ALT_SCREEN_MODES.has(part));
-    if (mode === undefined) continue;
-    if (match[2] === 'h') openAt.set(mode, match.index);
-    else closedAt.set(mode, match.index);
+  if (text === '') return false;
+  // 1) Альтернативный экран — смотрим весь буфер: `h` мог быть давно, а `l`
+  // так и не прийти.
+  if (text.includes('\u001B[?')) {
+    const openAt = new Map<string, number>();
+    const closedAt = new Map<string, number>();
+    ALT_SCREEN_SWITCH_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = ALT_SCREEN_SWITCH_PATTERN.exec(text)) !== null) {
+      const mode = (match[1] ?? '').split(';').find((part) => ALT_SCREEN_MODES.has(part));
+      if (mode === undefined) continue;
+      if (match[2] === 'h') openAt.set(mode, match.index);
+      else closedAt.set(mode, match.index);
+    }
+    for (const [mode, openedAt] of openAt) {
+      const closed = closedAt.get(mode);
+      if (closed === undefined || openedAt > closed) return true;
+    }
   }
-  for (const [mode, openedAt] of openAt) {
-    const closed = closedAt.get(mode);
-    if (closed === undefined || openedAt > closed) return true;
-  }
-  return false;
+
+  // 2–3) Перерисовка экрана — только хвост: важно **текущее** состояние, а не
+  // история буфера. Совпадения до последней очистки экрана (`ESC[2J`) — это
+  // стёртая картинка: после неё экран рисуется заново, поэтому счёт идёт от неё.
+  const tail = text.length > REDRAW_TAIL_CHARS ? text.slice(-REDRAW_TAIL_CHARS) : text;
+  const clearAt = tail.lastIndexOf(SCREEN_CLEAR);
+  const screen = clearAt === -1 ? tail : tail.slice(clearAt + SCREEN_CLEAR.length);
+  const redraws = countCursorAddressing(screen);
+  if (redraws >= REDRAW_MATCH_THRESHOLD) return true;
+  // После очистки экрана достаточно 3 `ESC[r;cH`, чтобы счесть перерисовку:
+  // так выглядят кадры `top`/`mc`/`watch`.
+  return clearAt !== -1 && redraws >= REDRAW_AFTER_CLEAR_THRESHOLD;
 }
 
 /**
@@ -964,9 +1020,13 @@ export class TerminalService {
    * Проверить, что запуск в терминале отслеживаем (нет полноэкранного
    * приложения).
    *
-   * Признак берётся из буфера вывода (что реально напечатал PTY): включённый
-   * и не выключенный альтернативный экран (`?1049h`/`?1047h`/`?47h`). Обычная
-   * оболочка и ssh его не печатают — запуск не блокируется.
+   * Признак берётся из буфера вывода (что реально напечатал PTY) — эвристика
+   * `isForegroundAppActive`: включённый и не выключенный альтернативный экран
+   * (`?1049h`/`?1047h`/`?47h`) **или** перерисовка экрана курсорной адресацией
+   * (`ESC[r;cH`/`ESC[2J` — `top`/`htop`/`mc`/`watch` альтернативный экран не
+   * используют). Обхода (`force`) нет: в TUI работают `terminal_write` +
+   * `terminal_snapshot`. Обычная оболочка, ssh и долгие команды с прогрессом
+   * признаков не дают — запуск не блокируется.
    */
   private _assertRunTrackable(runtime: TerminalRuntime): void {
     const snapshot = runtime.buffer.snapshot();

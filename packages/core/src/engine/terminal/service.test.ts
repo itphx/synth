@@ -37,7 +37,7 @@ import {
   TerminalRingBuffer,
   utf8AlignedSuffix,
 } from './ring-buffer.js';
-import { TerminalService } from './service.js';
+import { TerminalService, isForegroundAppActive } from './service.js';
 import {
   TerminalAlreadyRunningError,
   TerminalDisabledError,
@@ -296,6 +296,72 @@ describe('Кольцевой буфер вывода терминала', () => 
     expect(suffix).toBe('т😀');
     expect(hasLoneSurrogate(suffix)).toBe(false);
     expect(Buffer.byteLength(suffix, 'utf8')).toBeLessThanOrEqual(7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Детект полноэкранных приложений
+// ---------------------------------------------------------------------------
+
+describe('Детект полноэкранных приложений (isForegroundAppActive)', () => {
+  const ESC = '\u001B';
+
+  /** Кадр `top`: очистка экрана и перерисовка строк курсорной адресацией. */
+  function topFrame(rows = 24): string {
+    const parts: string[] = [`${ESC}[H${ESC}[2J`];
+    for (let row = 1; row <= rows; row += 1) {
+      parts.push(`${ESC}[${row};1H`);
+      parts.push(`${ESC}[${row};20H${String(row).padStart(3, ' ')}`);
+    }
+    return parts.join('');
+  }
+
+  it('tmux-подобный поток (альтернативный экран без возврата) → true', () => {
+    expect(isForegroundAppActive(`${ESC}[?1049h${ESC}[?1h${ESC}[=tmux status line`)).toBe(true);
+  });
+
+  it('top-подобный поток (перерисовка ESC[r;cH, без альтернативного экрана) → true', () => {
+    // Проверено на живом top: в потоке только `?1`, `?25`, `?2004` — альтернативного
+    // экрана нет, а экран перерисовывается построчно.
+    const stream = `${ESC}[?1h${ESC}[?25l${ESC}[?2004h${topFrame()}`;
+    expect(stream).not.toContain('1049');
+    expect(isForegroundAppActive(stream)).toBe(true);
+  });
+
+  it('watch-подобный поток (очистка + перерисовка) → true', () => {
+    const frame = `${ESC}[H${ESC}[2J${ESC}[1;1Hdate${ESC}[2;1Huptime${ESC}[3;1Hwho`;
+    expect(isForegroundAppActive(frame)).toBe(true);
+  });
+
+  it('обычный вывод команды → false', () => {
+    expect(isForegroundAppActive('file1\nfile2\nfile3\n')).toBe(false);
+    expect(isForegroundAppActive('user@host:~$ ls -la\r\ntotal 8\r\n')).toBe(false);
+  });
+
+  it('npm-подобный прогресс (\\r) → false', () => {
+    const stream = `${ESC}[?25l\r⠋ 1/10\r⠙ 2/10\r⠹ 3/10\r⠸ 4/10${ESC}[?25h\n`;
+    expect(isForegroundAppActive(stream)).toBe(false);
+  });
+
+  it('ssh-баннер и приглашение (без альтернативного экрана и перерисовки) → false', () => {
+    const stream = `Welcome to Ubuntu 24.04.1 LTS\r\nLast login: Sun Nov 15 10:00:00 2026\r\n${ESC}[01;32muser@host${ESC}[00m:~$ `;
+    expect(isForegroundAppActive(stream)).toBe(false);
+  });
+
+  it('после выхода из top (очистка + промпт, мало ESC[r;cH) → false', () => {
+    const stream = `${ESC}[?1h${ESC}[?25l${topFrame()}${ESC}[2J${ESC}[H${ESC}[?25h${ESC}[?1049l$ ls`;
+    expect(isForegroundAppActive(stream)).toBe(false);
+  });
+
+  it('порог перерисовки: 5 ESC[r;cH мало, 6 — полноэкранное приложение', () => {
+    const frame = (rows: number): string =>
+      Array.from({ length: rows }, (_, index) => `${ESC}[${index + 1};1H`).join('');
+    expect(isForegroundAppActive(frame(5))).toBe(false);
+    expect(isForegroundAppActive(frame(6))).toBe(true);
+  });
+
+  it('пустой буфер → false', () => {
+    expect(isForegroundAppActive('')).toBe(false);
   });
 });
 
@@ -1000,6 +1066,46 @@ describe('Терминальный сервис', () => {
       // Обычный шелл под ssh: приглашение, вывод, никаких альтернативных экранов.
       handle.emitData('Welcome to Ubuntu 24.04\r\nuser@host:~$ ');
 
+      const run = service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+      expect(run.status).toBe('running');
+      expect(handle.writes[0]?.startsWith('ls\r')).toBe(true);
+
+      service.dispose();
+    });
+
+    it('top-подобный поток (перерисовка ESC[r;cH без альтернативного экрана) блокирует запуск', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const handle = port.lastHandle;
+
+      // `top` альтернативный экран не включает — экран перерисовывается
+      // курсорной адресацией построчно.
+      handle.emitData('\u001B[?1h\u001B[?25l\u001B[?2004h\u001B[H\u001B[2J');
+      for (let row = 1; row <= 24; row += 1) {
+        handle.emitData(`\u001B[${row};1H\u001B[${row};20H${String(row).padStart(3, ' ')}`);
+      }
+
+      expect(() =>
+        service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+      ).toThrow(TerminalForegroundAppError);
+      expect(handle.writes).toHaveLength(0);
+
+      service.dispose();
+    });
+
+    it('после выхода из top (очистка экрана + промпт, мало ESC[r;cH) запуск снова возможен', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const handle = port.lastHandle;
+
+      handle.emitData('\u001B[H\u001B[2J\u001B[1;1Htop output\u001B[2;1Hrow 2\u001B[3;1Hrow 3');
+      handle.emitData('\u001B[4;1Hrow 4\u001B[5;1Hrow 5\u001B[6;1Hrow 6\u001B[7;1Hrow 7');
+      expect(() =>
+        service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 }),
+      ).toThrow(TerminalForegroundAppError);
+
+      // Выход из top: экран очищен, осталось приглашение — перерисовки больше нет.
+      handle.emitData('\u001B[2J\u001B[H\u001B[?25h$ ');
       const run = service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
       expect(run.status).toBe('running');
       expect(handle.writes[0]?.startsWith('ls\r')).toBe(true);

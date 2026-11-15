@@ -60,7 +60,7 @@ import {
   normalizeTerminalOutput,
   stripTerminalAnsi,
 } from '../terminal/output.js';
-import { TerminalRunBusyError, buildTerminalRunNotification, type TerminalRunRecord } from '../terminal/runs.js';
+import { TerminalRunBusyError, buildRunMarkerCommand, buildTerminalRunNotification, type TerminalRunRecord } from '../terminal/runs.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { getToolGroups, TERMINAL_TOOLS } from '../permission/groups.js';
 import { computeToolAvailability } from '../permission/availability.js';
@@ -208,14 +208,18 @@ class FakeTerminalService {
     if (this.startRunError) throw this.startRunError;
     if (this.busy) throw new TerminalRunBusyError(input.terminalId, 'run_busy_existing');
     const runId = `run_${this.runs.size + 1}`;
+    const nonce = `nonce-${runId}`;
     const record: TerminalRunRecord = {
       runId,
       terminalId: input.terminalId,
-      nonce: `nonce-${runId}`,
+      nonce,
       command: input.command,
       status: 'running',
       ...(input.background === true ? { background: true } : {}),
       stillRunning: true,
+      // Как реестр запусков: строка-обёртка хранится в записи — по ней
+      // очистка результата снимает эхо из вывода.
+      wrapperCommand: buildRunMarkerCommand(nonce),
       output: '',
       startedAt: 1_000,
       timeoutMs: input.timeoutMs,
@@ -856,6 +860,69 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.content).toContain('enter=true');
       expect(service.writes).toHaveLength(0);
     });
+
+    it('delay_ms вне границ (0…2000) — отказ валидации', async () => {
+      for (const bad of [-1, 2001]) {
+        const result = await terminalWriteTool.execute(
+          { terminal_id: 'term_1', data: ':', delay_ms: bad },
+          makeCtx(),
+        );
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain('argument error');
+        expect(result.content).toContain('delay_ms');
+        expect(service.writes).toHaveLength(0);
+      }
+    });
+
+    it('delay_ms: границы 0 и 2000 допустимы, дробное — нет', () => {
+      for (const ok of [0, 2000]) {
+        expect(
+          terminalWriteTool.parameters.safeParse({ terminal_id: 'term_1', data: ':', delay_ms: ok })
+            .success,
+        ).toBe(true);
+      }
+      expect(
+        terminalWriteTool.parameters.safeParse({ terminal_id: 'term_1', data: ':', delay_ms: 2000.5 })
+          .success,
+      ).toBe(false);
+    });
+
+    it('delay_ms: запись происходит после паузы, не раньше', async () => {
+      vi.useFakeTimers();
+      try {
+        // tmux разбирает кадр целиком в старом режиме: `:` и текст разносятся
+        // паузой, поэтому ввод `:` с delay_ms приходит уже после таймера.
+        const promise = terminalWriteTool.execute(
+          { terminal_id: 'term_1', data: ':', delay_ms: 50 },
+          makeCtx(),
+        );
+        // Микрозадачи (валидация, резолв владельца) отрабатывают, таймер — нет.
+        await vi.advanceTimersByTimeAsync(0);
+        expect(service.writes).toHaveLength(0);
+
+        await vi.advanceTimersByTimeAsync(49);
+        expect(service.writes).toHaveLength(0);
+
+        await vi.advanceTimersByTimeAsync(1);
+        const result = await promise;
+        expect(result.isError).toBeUndefined();
+        expect(service.writes).toHaveLength(1);
+        expect(service.writes[0]?.data).toBe(':');
+        expect(result.metadata?.delay_ms).toBe(50);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('delay_ms не задан — ввод уходит сразу (паузы нет)', async () => {
+      const result = await terminalWriteTool.execute(
+        { terminal_id: 'term_1', data: ':' },
+        makeCtx(),
+      );
+      expect(result.isError).toBeUndefined();
+      expect(service.writes[0]?.data).toBe(':');
+      expect(result.metadata?.delay_ms).toBeUndefined();
+    });
   });
 
   describe('terminal_run', () => {
@@ -881,6 +948,52 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(result.metadata?.status).toBe('done');
       expect(result.metadata?.exit_code).toBe(0);
       expect(result.metadata?.run_id).toBe(runId);
+    });
+
+    it('эхо обёртки и маркер вырезаются всегда: strip_ansi:false оставляет ANSI', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'echo red', strip_ansi: false },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      // PTY отдаёт эхо команды-обёртки, вывод и строку-маркер.
+      service.finishRun(runId, {
+        status: 'done',
+        exitCode: 0,
+        output: `user@host:~$ ${buildRunMarkerCommand('nonce-run_1')}\r\n\u001B[31mred\u001B[0m\r\n@@srn-nonce-run_1:0@@\r\n`,
+      });
+
+      const result = await promise;
+      expect(result.isError).toBeUndefined();
+      // Служебный шум запуска снят независимо от strip_ansi.
+      expect(result.content).not.toContain('@@srn-');
+      expect(result.content).not.toContain('printf');
+      expect(result.content).not.toContain('user@host');
+      // ANSI при strip_ansi:false остаётся — флаг управляет только им.
+      expect(result.content).toContain('\u001B[31mred\u001B[0m');
+    });
+
+    it('strip_ansi:true — нет ни эха обёртки, ни маркера, ни ANSI', async () => {
+      const promise = terminalRunTool.execute(
+        { terminal_id: 'term_1', command: 'echo red', strip_ansi: true },
+        makeCtx(),
+      );
+      await vi.waitFor(() => expect(service.runs.size).toBe(1));
+      const runId = [...service.runs.keys()][0]!;
+      service.finishRun(runId, {
+        status: 'done',
+        exitCode: 0,
+        output: `user@host:~$ ${buildRunMarkerCommand('nonce-run_1')}\r\n\u001B[31mred\u001B[0m\r\n@@srn-nonce-run_1:0@@\r\n`,
+      });
+
+      const result = await promise;
+      expect(result.isError).toBeUndefined();
+      expect(result.content).not.toContain('@@srn-');
+      expect(result.content).not.toContain('printf');
+      expect(result.content).not.toContain('user@host');
+      expect(result.content).not.toContain('\u001B[');
+      expect(result.content).toContain('red');
     });
 
     it('ненулевой код возврата попадает в результат', async () => {

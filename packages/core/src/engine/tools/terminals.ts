@@ -57,6 +57,7 @@ import {
   frameTerminalOutput,
   normalizeTerminalLineEndings,
   normalizeTerminalOutput,
+  removeRunWrapper,
   stripTerminalAnsi,
 } from '../terminal/output.js';
 import { renderTerminalScreen } from '../terminal/screen.js';
@@ -115,6 +116,14 @@ const MAX_SNAPSHOT_ROWS = 100;
 
 /** Потолок буфера прокрутки рендера (`terminal_snapshot`), строки. */
 const MAX_SNAPSHOT_SCROLLBACK = 500;
+
+/**
+ * Потолок паузы перед отправкой ввода (`terminal_write.delay_ms`), мс.
+ *
+ * Нужна интерактивным диалогам: tmux разбирает **весь** кадр до переключения
+ * режима, поэтому `:` и текст в одном чанке теряются.
+ */
+const MAX_WRITE_DELAY_MS = 2000;
 
 /** Единый отказ «сервис терминалов не подключён». */
 function depsUnavailable(): ToolResult {
@@ -847,6 +856,17 @@ const terminalWriteSchema = z
           + 'raw-mode programs (tmux command prompt, less, REPLs) expect. '
           + 'The line is checked by the shell policy before sending (default: false)',
       ),
+    delay_ms: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_WRITE_DELAY_MS)
+      .optional()
+      .describe(
+        `Pause before sending the data, ms (0…${MAX_WRITE_DELAY_MS}, default: 0). `
+          + 'Use it to pace keystrokes into interactive dialogs (e.g. the tmux command prompt): '
+          + 'send the prefix, then ":" with a small delay, then the text',
+      ),
   })
   .strict();
 
@@ -862,8 +882,10 @@ export const terminalWriteTool: ToolDefinition = {
     + 'by the shell policy, because there is no command); an empty data without enter=true is rejected. '
     + 'TUI dialogs (for example the tmux command prompt) need step-by-step input: send the prefix key, '
     + 'then ":", then the text, then a separate CR (\\r) — each step as its own call. '
-    + 'Do not glue them into one call: the emulator answers device-attribute (DA) queries on the way, and '
-    + 'a single chunk sent into a dialog gets corrupted. '
+    + 'Use `delay_ms` to pace keystrokes into interactive dialogs (e.g. tmux command prompt): send prefix, '
+    + 'then `:` with a small delay, then the text, then `\\r`. '
+    + 'Do not glue them into one call: tmux parses the whole frame before switching into prompt mode, so '
+    + 'the ":" and the text sent in a single chunk get lost. '
     + 'The terminal output becomes visible via terminal_read (and the current screen via terminal_snapshot).',
   parameters: terminalWriteSchema,
   capabilities: [ToolCapability.TERMINAL],
@@ -872,7 +894,12 @@ export const terminalWriteTool: ToolDefinition = {
 
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
-    const params = parsed.data as { terminal_id: string; data: string; enter?: boolean };
+    const params = parsed.data as {
+      terminal_id: string;
+      data: string;
+      enter?: boolean;
+      delay_ms?: number;
+    };
 
     const service = serviceOf(ctx);
     if (!service) return depsUnavailable();
@@ -901,6 +928,15 @@ export const terminalWriteTool: ToolDefinition = {
     }
 
     const actorId = await resolveActorId(ctx);
+    // Пауза **перед** отправкой: tmux разбирает весь кадр в старом режиме,
+    // поэтому `:` и текст в одном чанке теряются — `delay_ms` разносит
+    // нажатия по времени. Тул остаётся синхронным по результату.
+    const delayMs = params.delay_ms ?? 0;
+    if (delayMs > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
+    }
     try {
       service.write(params.terminal_id, payload, { actorId });
     } catch (err) {
@@ -913,6 +949,7 @@ export const terminalWriteTool: ToolDefinition = {
         terminal_id: params.terminal_id,
         bytes: Buffer.byteLength(payload, 'utf8'),
         enter: params.enter === true,
+        ...(delayMs > 0 ? { delay_ms: delayMs } : {}),
         i18n: i18nMeta('terminal.tool.written', { id: params.terminal_id }),
       },
     };
@@ -1113,7 +1150,9 @@ const terminalRunSchema = z
       .optional()
       .describe(
         'Remove ANSI escape sequences (colors/positions) from the output returned by the tool '
-        + '(default: keep them; in background mode the output is delivered by the terminal service)',
+        + '(default: keep them; in background mode the output is delivered by the terminal service). '
+        + 'The wrapper echo and the run marker are removed from the answer ALWAYS — strip_ansi only '
+        + 'controls ANSI sequences',
       ),
   })
   .strict();
@@ -1153,6 +1192,11 @@ async function waitRunWithAbort(
  * Обрамление — `[CONTENT …]` … `[CONTENT END]` (общее правило вывода
  * терминала): метаданные запуска (терминал, id запуска, статус, код
  * возврата) — в **открывающем** маркере, закрывающий маркер не меняется.
+ *
+ * Служебный шум запуска снимается **всегда**, независимо от `strip_ansi`:
+ * `removeRunWrapper` вырезает эхо строки-обёртки (`printf … @@srn-…`) и
+ * строку-маркер `@@srn-<nonce>:<код>@@` по nonce. `strip_ansi` управляет
+ * **только** ANSI (цвета/позиционирование) — он не условие удаления обёртки.
  */
 function formatRunResult(
   run: TerminalRunRecord,
@@ -1181,7 +1225,10 @@ function formatRunResult(
         : sm('terminal.tool.exit_code', {
             exit_code: run.exitCode !== undefined ? String(run.exitCode) : '-',
           });
-  const raw = stripAnsiOutput ? stripTerminalAnsi(run.output) : run.output;
+  // Эхо обёртки и строка-маркер — служебный шум запуска: снимаются всегда.
+  // `strip_ansi` — только про ANSI, условием очистки обёртки он не является.
+  const unwrapped = removeRunWrapper(run.output, run.wrapperCommand ?? '', run.nonce);
+  const raw = stripAnsiOutput ? stripTerminalAnsi(unwrapped) : unwrapped;
   const body = frameTerminalOutput(raw, {
     terminal: run.terminalId,
     run: run.runId,

@@ -1957,7 +1957,10 @@
   (`checkShellCommand`, `engine/security/shell-guard.ts`): запрет — понятный отказ
   модели, команда в терминал не уходит. **Enter уходит как CR (`\r`)**, а не LF:
   raw-режим и line discipline (`tmux`-промпт, `less`, REPL) подтверждают ввод
-  именно по CR. **`terminal_signal`** (`terminal_id`, `signal`:
+  именно по CR. **`delay_ms`** (0…2000, по умолчанию `0`) — пауза **перед**
+  отправкой: tmux разбирает весь кадр до переключения в command-prompt, поэтому
+  `:` и текст одним чанком теряются (рецепт: prefix → `:` с `delay_ms ≈ 50` →
+  текст → `\r`). **`terminal_signal`** (`terminal_id`, `signal`:
   `INT`/`QUIT`/`TSTP`) пишет управляющий байт (`^C` `0x03`/`^\` `0x1c`/`^Z`
   `0x1a`) в PTY **и** завершает активный запуск через
   `TerminalService.interruptRun(terminalId, 128+signum)` (130/131/147):
@@ -1986,10 +1989,13 @@
   не пропускает — маркер не доходил, запуск висел в `run_busy`. Команда и
   маркер уходят **одним кадром**; маркер вырезается из буфера до записи
   (`scanRunMarkers`), а эхо строки-обёртки и маркер — из результата запуска
-  (`cleanRunOutput`/`removeRunWrapper`). **Полноэкранное приложение в терминале
-  (tmux/vim/less/htop) — запуск запрещён:** `startRun` проверяет включённый и не
-  выключенный альтернативный экран (`?1049h`/`?1047h`/`?47h`,
-  `isForegroundAppActive`) и бросает `TerminalForegroundAppError`
+  (`cleanRunOutput`/`removeRunWrapper`; в инлайн-ответе `terminal_run` —
+  **всегда**, `strip_ansi` управляет только ANSI). **Полноэкранное приложение в
+  терминале (tmux/vim/less/htop/top/mc/watch) — запуск запрещён:** `startRun`
+  проверяет эвристику `isForegroundAppActive` — включённый и не выключенный
+  альтернативный экран (`?1049h`/`?1047h`/`?47h`) **или** перерисовку экрана
+  (≥6 `ESC[r;cH` в хвосте ~1024 символа, либо `ESC[2J` + ≥3 `ESC[r;cH` после
+  неё; `force`-обхода нет) — и бросает `TerminalForegroundAppError`
   (`TERMINAL_FOREGROUND_APP`); тул отдаёт понятный отказ (текст ключа
   `terminal.tool.foreground_app` + `metadata.code`, не общий `tool.exec_error`) —
   работать там `terminal_write` + `terminal_snapshot` или в отдельном терминале.
