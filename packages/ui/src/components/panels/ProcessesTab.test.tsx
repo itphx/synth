@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   removeProcess: vi.fn(),
   confirm: vi.fn(),
   notify: vi.fn(),
+  listTerminals: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({
@@ -41,6 +42,14 @@ vi.mock('@/lib/api/synthApi', () => ({
     removeProcess: mocks.removeProcess,
   },
 }))
+// Список терминалов проекта — серверный; в тесте перехватываем запрос.
+vi.mock('@/lib/api/terminals', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/terminals')>()
+  return {
+    ...actual,
+    terminalsApi: { ...actual.terminalsApi, list: mocks.listTerminals },
+  }
+})
 vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 vi.mock('@/hooks/useNotification', () => ({
   notifyMessage: mocks.notify,
@@ -52,6 +61,8 @@ import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ProcessesTab } from './ProcessesTab'
 import { useUIStore } from '@/stores/useUIStore'
 import { useProcessesStore } from '@/stores/processesStore'
+import { useTerminalsStore } from '@/stores/terminalsStore'
+import type { TerminalDto } from '@/lib/api/terminals'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -66,6 +77,30 @@ function makeRun(id: string, overrides: Record<string, unknown> = {}) {
     sessionId: 's1',
     startedAt: '2026-10-01T00:00:00.000Z',
     updatedAt: '2026-10-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
+/** Снимок терминала проекта. */
+function makeTerminal(id: string, overrides: Partial<TerminalDto> = {}): TerminalDto {
+  return {
+    id,
+    projectId: 'p1',
+    sessionId: 's1',
+    ownerId: null,
+    cwd: '/workspace/demo',
+    shell: '/bin/bash',
+    status: 'running',
+    cols: 80,
+    rows: 24,
+    title: `Terminal ${id}`,
+    can_write: true,
+    attached_clients: 0,
+    createdAt: 1_700_000_000_000,
+    lastActivityAt: 1_700_000_000_000,
+    exitCode: null,
+    signal: null,
+    target: null,
     ...overrides,
   }
 }
@@ -110,6 +145,13 @@ async function click(container: HTMLElement, testId: string): Promise<void> {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.listProcesses.mockResolvedValue([])
+  mocks.listTerminals.mockResolvedValue({
+    terminals: [],
+    total: 0,
+    offset: 0,
+    limit: 50,
+    nextOffset: null,
+  })
   mocks.getProcessLogs.mockResolvedValue({
     content: 'вывод процесса\n',
     offset: 0,
@@ -126,6 +168,14 @@ beforeEach(() => {
     order: [],
     logs: {},
     pendingIds: [],
+    error: null,
+  })
+
+  useTerminalsStore.setState({
+    terminalsById: {},
+    order: [],
+    queryIds: {},
+    loading: false,
     error: null,
   })
 
@@ -345,5 +395,68 @@ describe('ProcessesTab — единый реестр фоновых прогон
       expect(button.className).not.toContain('min-w-10')
       expect(button.className).toContain('size-8')
     }
+  })
+})
+
+describe('ProcessesTab — терминалы при активной вкладке терминала (PROP-132)', () => {
+  /** Активная вкладка — терминал сессии s1 проекта p1. */
+  function activateTerminalTab(): void {
+    useUIStore.setState({
+      activeCenterTabId: 'tab-term',
+      centerTabs: [
+        {
+          id: 'tab-term',
+          type: 'terminal',
+          title: 'Terminal',
+          data: { terminalId: 't1', projectId: 'p1', sessionId: 's1' },
+        },
+      ],
+    })
+  }
+
+  it('терминалы проекта видны (живые и завершённые)', async () => {
+    activateTerminalTab()
+    mocks.listTerminals.mockResolvedValue({
+      terminals: [
+        makeTerminal('t1'),
+        makeTerminal('t2', { status: 'exited', sessionId: 's2', restored: true }),
+      ],
+      total: 2,
+      offset: 0,
+      limit: 50,
+      nextOffset: null,
+    })
+
+    const container = await renderProcesses()
+
+    // Проект взят из данных вкладки терминала (useActiveProject).
+    expect(mocks.listTerminals).toHaveBeenCalledWith({ projectId: 'p1', includeExited: true })
+    expect(container.querySelector('[data-testid="terminals-item-t1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="terminals-item-t2"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="terminals-no-project"]')).toBeNull()
+  })
+
+  it('фильтр «только текущая сессия» оставляет терминалы сессии вкладки', async () => {
+    activateTerminalTab()
+    mocks.listTerminals.mockResolvedValue({
+      terminals: [makeTerminal('t1', { sessionId: 's1' }), makeTerminal('t2', { sessionId: 's2' })],
+      total: 2,
+      offset: 0,
+      limit: 50,
+      nextOffset: null,
+    })
+
+    const container = await renderProcesses()
+    expect(container.querySelector('[data-testid="terminals-item-t2"]')).not.toBeNull()
+
+    const toggle = container.querySelector('[data-testid="processes-kind-filter"] [role="switch"]')
+    expect(toggle).not.toBeNull()
+    await act(async () => {
+      ;(toggle as HTMLElement).click()
+    })
+    await flush()
+
+    expect(container.querySelector('[data-testid="terminals-item-t1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="terminals-item-t2"]')).toBeNull()
   })
 })

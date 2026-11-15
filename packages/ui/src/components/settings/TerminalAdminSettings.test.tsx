@@ -2,12 +2,14 @@
  * `TerminalAdminSettings` — админ-раздел «Терминалы» (PROP-132).
  *
  * Контракт:
- * - тумблеры `terminal.enabled` / `terminal.autoRestore` сохраняются через
- *   `PUT /api/v2/settings/terminal`;
- * - значение, зафиксированное env (`SYNTH_TERMINAL_ENABLED`), блокирует
- *   правку из UI: контролы недоступны, а серверный `409` показывается
- *   понятным уведомлением;
- * - рядом — справочный блок о поведении терминалов на инстансе.
+ * - общие параметры (`terminal.enabled` / `terminal.autoRestore`) и параметры
+ *   выполнения (`idleMinutes`, `maxPerProject`, `maxPerInstance`, `shell`,
+ *   `auditInput`) сохраняются одним PUT `PUT /api/v2/settings/terminal`;
+ * - поле, зафиксированное env (`envLockedFields`), блокирует правку из UI:
+ *   контрол недоступен, у поля бейдж «ENV», а в баннере — список полей;
+ * - серверный `409` показывается понятным уведомлением, успешный тост при этом
+ *   не показывается;
+ * - невалидное значение (вне границ) блокирует Save и подсвечивается полем.
  */
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
@@ -43,13 +45,17 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
 }))
 
-vi.mock('@/lib/api/terminalSettings', () => ({
-  terminalSettingsApi: {
-    getTerminalSettings: mocks.get,
-    updateTerminalSettings: mocks.update,
-    resetTerminalSettings: mocks.reset,
-  },
-}))
+vi.mock('@/lib/api/terminalSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/terminalSettings')>()
+  return {
+    ...actual,
+    terminalSettingsApi: {
+      getTerminalSettings: mocks.get,
+      updateTerminalSettings: mocks.update,
+      resetTerminalSettings: mocks.reset,
+    },
+  }
+})
 
 vi.mock('@/hooks/useNotification', () => ({
   notifyMessage: mocks.notify,
@@ -69,9 +75,32 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 const SETTINGS: TerminalSettings = {
   enabled: true,
   autoRestore: false,
+  idleMinutes: 2880,
+  maxPerProject: 8,
+  maxPerInstance: 32,
+  shell: 'bash',
+  auditInput: true,
   source: 'default',
-  defaults: { enabled: true, autoRestore: false },
+  sources: {
+    enabled: 'default',
+    autoRestore: 'default',
+    idleMinutes: 'default',
+    maxPerProject: 'default',
+    maxPerInstance: 'default',
+    shell: 'default',
+    auditInput: 'default',
+  },
+  defaults: {
+    enabled: true,
+    autoRestore: false,
+    idleMinutes: 2880,
+    maxPerProject: 8,
+    maxPerInstance: 32,
+    shell: 'bash',
+    auditInput: true,
+  },
   envLocked: false,
+  envLockedFields: [],
   restartRequired: false,
 }
 
@@ -95,6 +124,23 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement |
 /** Тумблер внутри блока (по `data-testid` обёртки). */
 function toggleIn(container: HTMLElement, wrapperTestId: string): HTMLButtonElement | null {
   return byTestId(container, wrapperTestId)?.querySelector('[role="switch"]') ?? null
+}
+
+/** Значение поля по `id`. */
+function inputById(container: HTMLElement, id: string): HTMLInputElement {
+  const input = container.querySelector(`#${id}`) as HTMLInputElement | null
+  if (!input) throw new Error(`поле #${id} не найдено`)
+  return input
+}
+
+/** Ввод значения в контролируемое поле (как в `MultimodalSettings.test.tsx`). */
+async function setInputValue(input: HTMLInputElement, value: string): Promise<void> {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    setter?.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await flush()
 }
 
 async function renderSettings(): Promise<HTMLElement> {
@@ -165,7 +211,9 @@ describe('TerminalAdminSettings — runtime-настройки', () => {
     await flush()
 
     expect(mocks.update).toHaveBeenCalledTimes(1)
-    expect(mocks.update).toHaveBeenCalledWith({ enabled: true, autoRestore: true })
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true, autoRestore: true }),
+    )
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Terminal settings saved' }),
     )
@@ -186,49 +234,174 @@ describe('TerminalAdminSettings — runtime-настройки', () => {
     })
     await flush()
 
-    expect(mocks.update).toHaveBeenCalledWith({ enabled: false, autoRestore: false })
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }))
+  })
+})
+
+describe('TerminalAdminSettings — карточка «Параметры выполнения»', () => {
+  it('карточка на месте со всеми полями', async () => {
+    const container = await renderSettings()
+
+    const limits = byTestId(container, 'terminal-settings-limits')
+    expect(limits, 'карточка «Параметры выполнения» не найдена').not.toBeNull()
+    expect(limits?.textContent).toContain('Execution parameters')
+
+    // Секция с id `terminals-limits` (поиск по настройкам идёт по нему).
+    const section = container.querySelector('[data-settings-section="terminals-limits"]')
+    expect(section, 'секция terminals-limits не найдена').not.toBeNull()
+
+    expect(inputById(container, 'terminal-settings-idle').value).toBe('2880')
+    expect(inputById(container, 'terminal-settings-max-per-project').value).toBe('8')
+    expect(inputById(container, 'terminal-settings-max-per-instance').value).toBe('32')
+    expect(inputById(container, 'terminal-settings-shell').value).toBe('bash')
+    expect(toggleIn(container, 'terminal-settings-audit-toggle')?.getAttribute('aria-checked')).toBe(
+      'true',
+    )
+  })
+
+  it('старый справочный блок удалён', async () => {
+    const container = await renderSettings()
+
+    expect(container.querySelector('[data-settings-section="terminals-reference"]')).toBeNull()
+    expect(container.textContent).not.toContain('How terminals behave')
+  })
+
+  it('правка простоя, лимитов и оболочки уходит в PUT', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(inputById(container, 'terminal-settings-idle'), '1440')
+    await setInputValue(inputById(container, 'terminal-settings-max-per-project'), '12')
+    await setInputValue(inputById(container, 'terminal-settings-max-per-instance'), '40')
+    await setInputValue(inputById(container, 'terminal-settings-shell'), '/bin/zsh')
+
+    const save = buttonByText(container, 'Save') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await act(async () => {
+      save.click()
+    })
+    await flush()
+
+    expect(mocks.update).toHaveBeenCalledTimes(1)
+    expect(mocks.update).toHaveBeenCalledWith({
+      enabled: true,
+      autoRestore: false,
+      idleMinutes: 1440,
+      maxPerProject: 12,
+      maxPerInstance: 40,
+      shell: '/bin/zsh',
+      auditInput: true,
+    })
+  })
+
+  it('пустая оболочка уходит как null', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(inputById(container, 'terminal-settings-shell'), '')
+
+    const save = buttonByText(container, 'Save') as HTMLButtonElement
+    await act(async () => {
+      save.click()
+    })
+    await flush()
+
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ shell: null }))
+  })
+
+  it('невалидное значение блокирует Save и показывает ошибку', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(inputById(container, 'terminal-settings-idle'), '5')
+
+    const save = buttonByText(container, 'Save') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(container.textContent).toContain('Value is out of range')
+
+    await act(async () => {
+      save.click()
+    })
+    await flush()
+    expect(mocks.update).not.toHaveBeenCalled()
+  })
+
+  it('невалидная оболочка блокирует Save', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(inputById(container, 'terminal-settings-shell'), 'zsh -l')
+
+    const save = buttonByText(container, 'Save') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(mocks.update).not.toHaveBeenCalled()
   })
 })
 
 describe('TerminalAdminSettings — фиксация через ENV', () => {
-  it('env-значение: баннер, бейдж и недоступные контролы', async () => {
+  it('env-поле: контрол выключен, бейдж «ENV», остальные активны', async () => {
     mocks.get.mockResolvedValue({
       ...SETTINGS,
-      source: 'env',
       envLocked: true,
+      envLockedFields: ['shell'],
     })
     const container = await renderSettings()
 
-    expect(byTestId(container, 'terminal-settings-env-badge')).not.toBeNull()
-    expect(byTestId(container, 'terminal-settings-env-banner')).not.toBeNull()
-    expect(byTestId(container, 'terminal-settings-source-badge')?.textContent).toBe('set via ENV')
+    const shell = inputById(container, 'terminal-settings-shell')
+    expect(shell.disabled).toBe(true)
+    expect(byTestId(container, 'terminal-settings-shell-env-badge')?.textContent).toBe('ENV')
 
-    const enabled = toggleIn(container, 'terminal-settings-enabled-toggle') as HTMLButtonElement
-    // ToggleField при `disabled` не пропускает клики (pointer-events-none + noop-обработчик).
-    expect(enabled.parentElement?.className).toContain('pointer-events-none')
+    // Остальные поля не зафиксированы — доступны.
+    expect(inputById(container, 'terminal-settings-idle').disabled).toBe(false)
+    expect(inputById(container, 'terminal-settings-max-per-project').disabled).toBe(false)
+    expect(byTestId(container, 'terminal-settings-idle-env-badge')).toBeNull()
+
+    // Баннер перечисляет зафиксированные поля.
+    const banner = byTestId(container, 'terminal-settings-env-banner')
+    expect(banner).not.toBeNull()
+    expect(banner?.textContent).toContain('Default shell')
+
+    // Зафиксированное поле не уходит в PUT.
+    await setInputValue(inputById(container, 'terminal-settings-idle'), '1440')
+    const save = buttonByText(container, 'Save') as HTMLButtonElement
     await act(async () => {
-      enabled.click()
+      save.click()
     })
-    expect(enabled.getAttribute('aria-checked')).toBe('true')
+    await flush()
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.not.objectContaining({ shell: expect.anything() }),
+    )
+  })
+
+  it('все поля зафиксированы env — Save недоступен', async () => {
+    mocks.get.mockResolvedValue({
+      ...SETTINGS,
+      envLocked: true,
+      envLockedFields: [
+        'enabled',
+        'autoRestore',
+        'idleMinutes',
+        'maxPerProject',
+        'maxPerInstance',
+        'shell',
+        'auditInput',
+      ],
+    })
+    const container = await renderSettings()
 
     const save = buttonByText(container, 'Save') as HTMLButtonElement
     expect(save.disabled).toBe(true)
     expect(mocks.update).not.toHaveBeenCalled()
   })
 
-  it('409 при сохранении — понятное уведомление и блок ошибки', async () => {
+  it('409 при сохранении — баннер, warning-тост и без успешного тоста', async () => {
     mocks.update.mockRejectedValue(
-      Object.assign(new Error('terminal.enabled is fixed by SYNTH_TERMINAL_ENABLED'), {
+      Object.assign(new Error('terminal.shell is fixed by SYNTH_TERMINAL_SHELL'), {
         status: 409,
+        code: 'ENV_LOCKED',
+        fields: ['shell'],
       }),
     )
     const container = await renderSettings()
 
-    const autoRestore = toggleIn(container, 'terminal-settings-auto-restore-toggle') as HTMLButtonElement
-    await act(async () => {
-      autoRestore.click()
-    })
-    await flush()
+    await setInputValue(inputById(container, 'terminal-settings-max-per-project'), '12')
 
     const save = buttonByText(container, 'Save') as HTMLButtonElement
     await act(async () => {
@@ -243,47 +416,20 @@ describe('TerminalAdminSettings — фиксация через ENV', () => {
         text: 'The value is fixed by an environment variable',
       }),
     )
+    expect(byTestId(container, 'terminal-settings-env-banner')).not.toBeNull()
     expect(byTestId(container, 'terminal-settings-action-error')?.textContent).toContain(
       'environment variable',
     )
-  })
-
-  it('409 при сохранении — успешный тост не показывается', async () => {
-    mocks.update.mockRejectedValue(
-      Object.assign(new Error('terminal.enabled is fixed by SYNTH_TERMINAL_ENABLED'), {
-        status: 409,
-      }),
-    )
-    const container = await renderSettings()
-
-    const autoRestore = toggleIn(container, 'terminal-settings-auto-restore-toggle') as HTMLButtonElement
-    await act(async () => {
-      autoRestore.click()
-    })
-    await flush()
-
-    const save = buttonByText(container, 'Save') as HTMLButtonElement
-    await act(async () => {
-      save.click()
-    })
-    await flush()
-
     expect(mocks.notify).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Terminal settings saved' }),
     )
-    // Значение, зафиксированное env, — контролы блокируются.
-    expect(byTestId(container, 'terminal-settings-env-banner')).not.toBeNull()
   })
 
   it('ошибка, отличная от 409, — текст ошибки без env-блокировки', async () => {
     mocks.update.mockRejectedValue(new Error('network is down'))
     const container = await renderSettings()
 
-    const autoRestore = toggleIn(container, 'terminal-settings-auto-restore-toggle') as HTMLButtonElement
-    await act(async () => {
-      autoRestore.click()
-    })
-    await flush()
+    await setInputValue(inputById(container, 'terminal-settings-max-per-project'), '12')
 
     const save = buttonByText(container, 'Save') as HTMLButtonElement
     await act(async () => {
@@ -329,22 +475,5 @@ describe('TerminalAdminSettings — фиксация через ENV', () => {
     expect(mocks.notify).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Terminal settings reset to defaults' }),
     )
-  })
-})
-
-describe('TerminalAdminSettings — справочный блок', () => {
-  it('показывает правила жизни терминалов на инстансе', async () => {
-    const container = await renderSettings()
-
-    const reference = container.querySelector(
-      '[data-settings-section="terminals-reference"]',
-    ) as HTMLElement | null
-    expect(reference, 'справочный блок не найден').not.toBeNull()
-    expect(reference?.textContent).toContain('Idle lifetime')
-    expect(reference?.textContent).toContain('2 days')
-    expect(reference?.textContent).toContain('Limits')
-    expect(reference?.textContent).toContain('8 per project, 32 per instance')
-    expect(reference?.textContent).toContain('Command audit')
-    expect(reference?.textContent).toContain('Shell')
   })
 })

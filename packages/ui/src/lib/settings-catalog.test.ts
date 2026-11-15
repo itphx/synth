@@ -23,6 +23,27 @@ describe('settings-catalog — группы категорий', () => {
   })
 })
 
+describe('settings-catalog — раздел «Терминалы»', () => {
+  it('стоит сразу после «Исполнения» и в той же группе (AI), до «Памяти»', () => {
+    const ids = SETTINGS_CATEGORIES.map((cat) => cat.id)
+    expect(ids.indexOf('terminals')).toBe(ids.indexOf('execution') + 1)
+    expect(ids.indexOf('terminals')).toBeLessThan(ids.indexOf('memory'))
+
+    const byId = new Map(SETTINGS_CATEGORIES.map((cat) => [cat.id, cat]))
+    expect(byId.get('terminals')?.group).toBe('adminAi')
+    expect(byId.get('terminals')?.group).toBe(byId.get('execution')?.group)
+    expect(byId.get('terminals')?.roles).toEqual(['ADMIN'])
+    expect(byId.get('terminals')?.icon).toBe('terminal-box')
+  })
+
+  it('находится по названию и синонимам (ru/en)', () => {
+    expect(searchSettings(t, 'terminals').categories.map((cat) => cat.id)).toContain('terminals')
+    expect(searchSettings(t, 'terminal').categories.map((cat) => cat.id)).toContain('terminals')
+    expect(searchSettings(tRu, 'терминал').categories.map((cat) => cat.id)).toContain('terminals')
+    expect(searchSettings(tRu, 'терминалы').categories.map((cat) => cat.id)).toContain('terminals')
+  })
+})
+
 describe('settings-catalog — «Управление контекстом»', () => {
   it('админская категория в группе AI, скрыта за «Расширенными»', () => {
     const category = SETTINGS_CATEGORIES.find((cat) => cat.id === 'contextManagement')

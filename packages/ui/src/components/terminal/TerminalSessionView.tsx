@@ -6,13 +6,15 @@
 //
 // В переключателе есть и **завершённые** терминалы (в т.ч. восстановленные
 // после рестарта ядра): у них статус «завершён», а `TerminalView` показывает
-// сохранённый вывод и кнопку «Восстановить терминал».
+// сохранённый вывод и кнопку «Перезапустить терминал».
+// Строка переключателя видна **всегда** (даже при одном терминале и пока
+// список ещё грузится) — иначе «создать ещё терминал» становится недостижим.
 // Активный терминал хранится в `tab.data.terminalId` — он переживает
 // переключение вкладок и перезагрузку страницы (вкладки персистятся).
 // Терминалы сессии — источник истины из `terminalsStore` (реестр + live-события
 // `terminal.*`).
 
-import React, { useCallback, useEffect, useMemo } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -68,9 +70,13 @@ export function TerminalSessionView({ tab }: TerminalSessionViewProps) {
   // `includeExited` — вместе с завершёнными: восстановленный после рестарта
   // ядра терминал иначе не попал бы в переключатель (сервер по умолчанию
   // отдаёт только живые).
+  // `loaded` — список уже приходил: до этого показываем загрузку, а не
+  // «терминалов нет» (иначе мигает пустое состояние).
+  const [loaded, setLoaded] = useState(false)
   useEffect(() => {
     if (!sessionId) return
-    void loadTerminals({ sessionId, includeExited: true })
+    setLoaded(false)
+    void loadTerminals({ sessionId, includeExited: true }).finally(() => setLoaded(true))
   }, [loadTerminals, sessionId])
 
   const activeTerminalId = tab.data.terminalId
@@ -125,19 +131,49 @@ export function TerminalSessionView({ tab }: TerminalSessionViewProps) {
 
   if (!activeTerminal) {
     return (
-      <div className="flex flex-1 items-center justify-center bg-background p-6">
-        <div className="flex flex-col items-center gap-3 text-center">
-          <Icon name="terminal-box" className="size-8 text-muted-foreground" />
-          <p className="text-sm text-foreground">{t('terminal.session.empty')}</p>
+      <div className="flex min-h-0 w-full flex-1 flex-col bg-background">
+        {/* Переключатель виден всегда — иначе «создать ещё терминал» некуда
+            нажать (терминалов ещё нет — список только грузится). */}
+        <div
+          className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1"
+          data-testid="terminal-session-tabs"
+        >
           <button
             type="button"
-            className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
             onClick={() => void handleCreate()}
-            data-testid="terminal-session-create-empty"
+            title={t('terminal.session.createAnother')}
+            aria-label={t('terminal.session.createAnother')}
+            data-testid="terminal-session-create"
+            className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
           >
-            {t('terminal.session.create')}
+            <Icon name="add" className="size-3.5" />
           </button>
         </div>
+        {loaded ? (
+          <div className="flex flex-1 items-center justify-center bg-background p-6">
+            <div className="flex flex-col items-center gap-3 text-center">
+              <Icon name="terminal-box" className="size-8 text-muted-foreground" />
+              <p className="text-sm text-foreground">{t('terminal.session.empty')}</p>
+              <button
+                type="button"
+                className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+                onClick={() => void handleCreate()}
+                data-testid="terminal-session-create-empty"
+              >
+                {t('terminal.session.create')}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            role="status"
+            className="flex flex-1 items-center justify-center gap-2 bg-background p-6 text-xs text-muted-foreground"
+            data-testid="terminal-session-loading"
+          >
+            <Icon name="loader-2" className="size-3.5 animate-spin" />
+            {t('common.loading')}
+          </div>
+        )}
       </div>
     )
   }
@@ -214,7 +250,11 @@ export function TerminalSessionView({ tab }: TerminalSessionViewProps) {
         </button>
       </div>
 
-      <TerminalView tab={activeTab} onTerminalMissing={handleTerminalMissing} />
+      <TerminalView
+        tab={activeTab}
+        onTerminalMissing={handleTerminalMissing}
+        onCreateAnother={handleCreate}
+      />
     </div>
   )
 }

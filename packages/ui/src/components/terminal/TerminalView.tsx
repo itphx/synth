@@ -33,6 +33,7 @@ import { preloadTerminalFont } from '@/lib/terminalFonts'
 import { terminalFontStack } from '@/lib/terminalPreferences'
 import { useNotification } from '@/hooks/useNotification'
 import { Icon } from '@/components/icon/Icon'
+import { Button } from '@/components/ui/button'
 import {
   buildTerminalContextBlock,
   readTerminalBufferLines,
@@ -67,6 +68,13 @@ export interface TerminalViewProps {
    * один из нескольких, вкладка остаётся.
    */
   onTerminalMissing?: (terminalId: string) => void
+  /**
+   * Создать ещё один терминал (кнопка «Создать ещё терминал» в тулбаре).
+   *
+   * Проп **не передан** — кнопки нет: одиночное открытие терминала (вкладка
+   * без сессии) создавать новые терминалы не умеет.
+   */
+  onCreateAnother?: () => void
 }
 
 /** Статус терминала → ключ i18n. */
@@ -83,7 +91,7 @@ function statusKey(status: string): string {
   }
 }
 
-export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
+export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: TerminalViewProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
   const terminalId = tab.data.terminalId ?? ''
@@ -104,10 +112,20 @@ export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
   /** Перезапуск терминала: новое подключение к потоку вывода. */
   const [restartNonce, setRestartNonce] = useState(0)
   const [restarting, setRestarting] = useState(false)
+  /** Инлайн-переименование терминала (true — вместо заголовка поле ввода). */
+  const [renaming, setRenaming] = useState(false)
+  /** Черновик нового имени терминала. */
+  const [renameValue, setRenameValue] = useState('')
+  /**
+   * Переименование уже зафиксировано (Enter/blur) — повторный `blur` после
+   * Enter шлёт второй PATCH, поэтому фиксируем факт.
+   */
+  const renameSettledRef = useRef(false)
 
   const terminal = useTerminalsStore((s) => (terminalId ? s.terminalsById[terminalId] : undefined))
   const loadTerminals = useTerminalsStore((s) => s.load)
   const closeTerminal = useTerminalsStore((s) => s.close)
+  const renameTerminal = useTerminalsStore((s) => s.rename)
   const preferences = useUIStore((s) => s.terminalPreferences)
   const { currentTheme } = useThemeSystem()
 
@@ -363,7 +381,7 @@ export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
       }
 
       // Завершённый терминал: потока вывода нет (сервер его не отдаёт) —
-      // показываем сохранённый вывод и ждём «Восстановить терминал».
+      // показываем сохранённый вывод и ждём «Перезапустить терминал».
       if (terminal.status === 'exited') return
 
       await runTerminalStreamSession({
@@ -465,8 +483,10 @@ export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
   }, [loadTerminals, terminal?.projectId])
 
   /**
-   * Восстановление терминала: сервер поднимает новую PTY (id терминала тот
-   * же), клиент переподключает поток вывода.
+   * Перезапуск терминала: сервер поднимает новую PTY (id терминала тот
+   * же), клиент пересоздаёт эмулятор и заново читает вывод **с нуля**
+   * (`outputSince(id, 0)`) — история снимка остаётся доступной (прокрутить
+   * вверх), live-вывод продолжается с курсора снимка.
    */
   const handleRestart = useCallback(async () => {
     if (!terminalId || restarting) return
@@ -483,7 +503,10 @@ export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
         }))
       }
       setStreamExit(null)
-      // Новый поток вывода: пересоздаём xterm-сессию.
+      // Новый эмулятор: `restartNonce` пересоздаёт xterm-сессию, и та заново
+      // читает снимок вывода с нуля (`term.reset()` не нужен — эмулятор новый,
+      // поэтому история не теряется).
+      setTruncated(false)
       setRestartNonce((nonce) => nonce + 1)
       notify({
         text: t('terminal.restart.done'),
@@ -502,6 +525,46 @@ export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
       setRestarting(false)
     }
   }, [notify, restarting, t, terminalId])
+
+  /** Начать переименование: заголовок терминала уходит в инлайн-поле. */
+  const handleStartRename = useCallback(() => {
+    renameSettledRef.current = false
+    setRenameValue(terminal?.title ?? '')
+    setRenaming(true)
+  }, [terminal?.title])
+
+  /** Отмена переименования (Esc) — имя прежнее. */
+  const handleCancelRename = useCallback(() => {
+    renameSettledRef.current = true
+    setRenaming(false)
+  }, [])
+
+  /**
+   * Сохранение переименования (Enter или blur).
+   *
+   * Пустое имя — **сброс** заголовка (`title: null`): терминал снова
+   * называется оболочкой/id. Заголовок **вкладки** не трогаем: вкладка-сессия
+   * называется по имени сессии.
+   */
+  const handleCommitRename = useCallback(async () => {
+    if (renameSettledRef.current) return
+    renameSettledRef.current = true
+    setRenaming(false)
+    if (!terminalId) return
+    const value = renameValue.trim()
+    const updated = await renameTerminal(terminalId, value === '' ? null : value)
+    if (updated) {
+      notify({ text: t('terminal.rename.done'), type: 'success', category: 'system' })
+      return
+    }
+    notify({
+      text: t('terminal.rename.failed', {
+        error: useTerminalsStore.getState().error ?? t('common.error'),
+      }),
+      type: 'error',
+      category: 'error',
+    })
+  }, [notify, renameTerminal, renameValue, t, terminalId])
 
   /**
    * Строки контекста: выделение (если есть) — иначе хвост буфера.
@@ -603,9 +666,47 @@ export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
     <div className="flex min-h-0 w-full flex-1 flex-col bg-background">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
         <Icon name="terminal-box" className="size-4 shrink-0 text-muted-foreground" />
-        <span className="truncate text-xs font-medium text-foreground">
-          {terminal?.title || terminal?.shell || t('terminal.title')}
-        </span>
+        {renaming ? (
+          <input
+            data-testid="terminal-rename-input"
+            value={renameValue}
+            onChange={(event) => setRenameValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void handleCommitRename()
+                return
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                handleCancelRename()
+              }
+            }}
+            onBlur={() => {
+              void handleCommitRename()
+            }}
+            placeholder={t('terminal.rename.placeholder')}
+            aria-label={t('terminal.rename.title')}
+            autoFocus
+            className="min-w-0 max-w-[16rem] flex-1 rounded-sm border border-border bg-background px-1.5 py-0.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        ) : (
+          <>
+            <span className="truncate text-xs font-medium text-foreground" data-testid="terminal-title">
+              {terminal?.title || terminal?.shell || t('terminal.title')}
+            </span>
+            <button
+              type="button"
+              className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+              onClick={handleStartRename}
+              title={t('terminal.rename.title')}
+              aria-label={t('terminal.rename.title')}
+              data-testid="terminal-rename"
+            >
+              <Icon name="pencil" className="size-3" />
+            </button>
+          </>
+        )}
         <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-[10px] text-muted-foreground">
           {t(statusKey(terminal?.status ?? 'running'))}
         </span>
@@ -641,22 +742,34 @@ export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {finished && (
+          {onCreateAnother && (
             <button
               type="button"
-              className="rounded-sm border border-border px-2 py-0.5 text-[0.625rem] font-medium text-foreground hover:bg-interactive-hover"
+              className="rounded-sm p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+              onClick={onCreateAnother}
+              title={t('terminal.create.another')}
+              aria-label={t('terminal.create.another')}
+              data-testid="terminal-create-another"
+            >
+              <Icon name="add" className="size-3.5" />
+            </button>
+          )}
+          {finished && (
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => void handleRestart()}
               disabled={restarting}
-              title={t('terminal.restart.action')}
-              aria-label={t('terminal.restart.action')}
-              data-testid="terminal-restore"
+              title={t('terminal.restart.title')}
+              aria-label={t('terminal.restart.title')}
+              data-testid="terminal-restart"
             >
               <Icon
                 name={restarting ? 'loader-2' : 'refresh'}
                 className={cn('size-3', restarting && 'animate-spin')}
               />
-              <span className="ml-1">{t('terminal.restart.action')}</span>
-            </button>
+              {t('terminal.restart.action')}
+            </Button>
           )}
           {terminal?.sessionId && (
             <button

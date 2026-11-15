@@ -5,7 +5,9 @@
 // существующую вкладку).
 //
 // Два вида вкладок терминала:
-// - `openTerminalTab` — терминал **без** сессии (карточки панели «Процессы»);
+// - `openTerminalTab` — одиночная вкладка терминала (карточки панели
+//   «Процессы»); если терминал привязан к сессии, вкладка несёт её id —
+//   тогда внутри показывается переключатель терминалов сессии;
 // - `openSessionTerminalTab` — вкладка **сессии**: заголовок вкладки = заголовок
 //   сессии, внутри — переключатель по всем терминалам сессии.
 
@@ -18,6 +20,14 @@ export interface TerminalTabTarget {
   title?: string | null
   shell?: string | null
   projectId?: string | null
+  /**
+   * Сессия, к которой терминал привязан (необязательно).
+   *
+   * Кладётся в данные вкладки: по нему панель «Процессы» понимает, чей это
+   * терминал (фильтр «только текущая сессия»), а вкладка показывает
+   * переключатель терминалов сессии.
+   */
+  sessionId?: string | null
 }
 
 /** Заголовок вкладки терминала: имя терминала → оболочка → id. */
@@ -35,6 +45,7 @@ export function openTerminalTab(terminal: TerminalTabTarget): void {
     data: {
       terminalId: terminal.id,
       ...(terminal.projectId ? { projectId: terminal.projectId } : {}),
+      ...(terminal.sessionId ? { sessionId: terminal.sessionId } : {}),
     },
   })
 }

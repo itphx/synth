@@ -143,7 +143,7 @@ export const dict = {
   // PROP-132: админ-раздел «Терминалы».
   'settings.terminals.description':
     'Instance-wide interactive terminals: master switch and restoring tabs after a restart.',
-  'settings.terminals.runtime.title': 'Runtime settings',
+  'settings.terminals.runtime.title': 'General',
   'settings.terminals.runtime.description':
     'Applied immediately — no restart required. Priority: ENV > runtime > config > default.',
   'settings.terminals.enabled.label': 'Terminals enabled',
@@ -159,6 +159,8 @@ export const dict = {
   'settings.terminals.envBadge': 'set via ENV',
   'settings.terminals.envBanner':
     'The value is fixed by an environment variable — it cannot be changed from the UI.',
+  'settings.terminals.envFields': 'Fixed via ENV: {fields}',
+  'settings.terminals.envFieldBadge': 'ENV',
   'settings.terminals.envLocked': 'The value is fixed by an environment variable',
   'settings.terminals.defaults':
     'Defaults: enabled — {enabled}, auto restore — {autoRestore}.',
@@ -170,16 +172,32 @@ export const dict = {
     'The value is fixed by an environment variable — change it in the environment.',
   'settings.terminals.loadError': 'Could not load terminal settings',
   'settings.terminals.retry': 'Retry',
-  'settings.terminals.reference.title': 'How terminals behave',
-  'settings.terminals.reference.description': 'Instance-wide rules for interactive terminals.',
-  'settings.terminals.reference.idle': 'Idle lifetime',
-  'settings.terminals.reference.idleValue': '2 days',
-  'settings.terminals.reference.limits': 'Limits',
-  'settings.terminals.reference.limitsValue': '8 per project, 32 per instance',
-  'settings.terminals.reference.audit': 'Command audit',
-  'settings.terminals.reference.auditValue': 'input and commands are logged (metadata only)',
-  'settings.terminals.reference.shell': 'Shell',
-  'settings.terminals.reference.shellValue': 'server default, in the project workspace',
+  // The settings catalog (`lib/settings-catalog.ts`) still references this key —
+  // kept as an alias of the «Execution parameters» card title.
+  'settings.terminals.reference.title': 'Execution parameters',
+  'settings.terminals.limits.title': 'Execution parameters',
+  'settings.terminals.limits.description':
+    'How the instance runs and stores terminals: idle timeout, limits, shell and input audit.',
+  'settings.terminals.limits.defaults':
+    'Defaults: idle — {idleMinutes} min, limits — {maxPerProject}/{maxPerInstance}, shell — {shell}, input audit — {auditInput}.',
+  'settings.terminals.idle.label': 'Idle timeout before closing',
+  'settings.terminals.idle.description':
+    'a terminal without activity is closed; terminal snapshots live the same long',
+  'settings.terminals.idle.days': '= {days} d',
+  'settings.terminals.maxPerProject.label': 'Terminals per project',
+  'settings.terminals.maxPerProject.description':
+    'maximum live terminals in one project',
+  'settings.terminals.maxPerInstance.label': 'Terminals per instance',
+  'settings.terminals.maxPerInstance.description':
+    'maximum live terminals on the instance',
+  'settings.terminals.shell.label': 'Default shell',
+  'settings.terminals.shell.description': 'applies to new terminals',
+  'settings.terminals.shell.placeholder': 'default (zsh)',
+  'settings.terminals.shell.invalid': 'Latin letters, digits and . _ / + - are allowed',
+  'settings.terminals.audit.label': 'Audit command input',
+  'settings.terminals.audit.description':
+    'frames with Enter are written to the log; other input is metrics only',
+  'settings.terminals.rangeError': 'Value is out of range',
   'settings.agentsLimits.description': 'Subagent prompt budget (tokens). 0 means no limit. Subagents have no automatic context compaction, so with 0 a long run may hit the model window.',
   'settings.agentsLimits.field.title': 'Prompt budget',
   'settings.agentsLimits.field.description': 'Safeguard for the subagent input prompt size. Applies to subsequent runs without restart.',
@@ -5534,14 +5552,20 @@ export const dict = {
   'terminal.tool.unavailable': 'Error: interactive terminals are unavailable in this environment: {reason}',
   // --- Запуски команд в терминале (PROP-132, Ф5) ---
   'terminal.tool.history_empty': 'The terminal output history is empty',
+  'terminal.tool.snapshot_empty':
+    'The terminal screen is empty — no visible content (the program has not drawn anything yet)',
   'terminal.tool.run_background_started':
     'Run {run_id} started in the terminal — the result will be delivered to the chat automatically',
   'terminal.tool.run_result_header': 'Run {run_id} (status: {status})',
   'terminal.tool.run_finished': 'Terminal {terminal_id}: the command finished (exit {exit_code})',
   'terminal.tool.run_timeout':
     'Terminal {terminal_id}: the command did not finish within {timeout_ms} ms (timeout)',
-  'terminal.tool.run_closed':
-    'Terminal {terminal_id}: the terminal was closed while the command was running',
+  'terminal.tool.run_exited':
+    'Terminal {terminal_id}: the terminal exited while the command was running',
+  'terminal.tool.run_still_running':
+    'The command is still running in terminal {terminal_id} (run {run_id}): it was NOT killed, '
+    + 'the terminal is busy — the next terminal_run in it will fail with run_busy. '
+    + 'To stop the command, send Ctrl+C via terminal_write.',
   'terminal.tool.run_busy':
     'Error: another run is already active in terminal {terminal_id} — wait for it to finish',
   'terminal.tool.exit_code': 'Exit code: {exit_code}',
@@ -5578,10 +5602,18 @@ export const dict = {
   'terminal.session.empty': 'No terminals in this session yet',
   'terminal.session.create': 'Create terminal',
   'terminal.session.createAnother': 'Create another terminal',
-  // PROP-132: восстановление терминала после завершения.
-  'terminal.restart.action': 'Restore terminal',
-  'terminal.restart.done': 'Terminal restored',
-  'terminal.restart.failed': 'Could not restore the terminal: {error}',
+  // PROP-132: перезапуск терминала после завершения.
+  'terminal.restart.action': 'Restart',
+  'terminal.restart.title': 'Restart terminal',
+  'terminal.restart.done': 'Terminal restarted',
+  'terminal.restart.failed': 'Could not restart the terminal: {error}',
+  // PROP-132: переименование терминала и создание ещё одного.
+  'terminal.create.another': 'Create another terminal',
+  'terminal.rename.action': 'Rename',
+  'terminal.rename.title': 'Rename terminal',
+  'terminal.rename.placeholder': 'Terminal name',
+  'terminal.rename.done': 'Terminal renamed',
+  'terminal.rename.failed': 'Could not rename the terminal: {error}',
   'terminal.missing.closed': 'The terminal is gone — the tab was closed',
   // PROP-132: terminals of the project in the "Background processes" tab.
   'terminals.title': 'Terminals',

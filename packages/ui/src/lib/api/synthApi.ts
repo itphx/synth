@@ -533,6 +533,8 @@ export type {
 // PROP-132: runtime-настройки терминалов (`/api/v2/settings/terminal`).
 export type {
   TerminalSettings,
+  TerminalSettingsDefaults,
+  TerminalSettingsField,
   TerminalSettingsSource,
   TerminalSettingsPatch,
 } from './terminalSettings'

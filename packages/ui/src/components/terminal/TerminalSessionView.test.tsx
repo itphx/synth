@@ -53,8 +53,23 @@ vi.mock('@/hooks/useNotification', () => ({
 
 // xterm не нужен: переключатель — это список вкладок + активный терминал.
 vi.mock('./TerminalView', () => ({
-  TerminalView: ({ tab }: { tab: { data: { terminalId?: string } } }) => (
-    <div data-testid="terminal-view">{tab.data.terminalId ?? ''}</div>
+  TerminalView: ({
+    tab,
+    onCreateAnother,
+  }: {
+    tab: { data: { terminalId?: string } }
+    onCreateAnother?: () => void
+  }) => (
+    <div data-testid="terminal-view">
+      <span>{tab.data.terminalId ?? ''}</span>
+      {onCreateAnother && (
+        <button
+          type="button"
+          data-testid="terminal-view-create-another"
+          onClick={onCreateAnother}
+        />
+      )}
+    </div>
   ),
 }))
 
@@ -242,18 +257,42 @@ describe('TerminalSessionView — переключатель терминало�
     expect(byTestId(container, 'terminal-view')?.textContent).toBe('t-new')
   })
 
-  it('пустое состояние: подсказка и кнопка создания', async () => {
+  it('пустое состояние: подсказка и кнопка создания (переключатель виден всегда)', async () => {
     serverTerminals = []
     const container = await render()
 
     expect(container.textContent).toContain('No terminals in this session yet')
     expect(byTestId(container, 'terminal-session-create-empty')).not.toBeNull()
-    expect(byTestId(container, 'terminal-session-tabs')).toBeNull()
+    // Строка переключателя есть всегда — иначе «создать ещё» недостижимо.
+    expect(byTestId(container, 'terminal-session-tabs')).not.toBeNull()
+    expect(byTestId(container, 'terminal-session-create')).not.toBeNull()
 
     await click(container, 'terminal-session-create-empty')
 
     expect(createBodies).toHaveLength(1)
     expect(createBodies[0]).toMatchObject({ project_id: PROJECT, session_id: SESSION })
+  })
+
+  it('кнопка «Создать ещё терминал» в тулбаре терминала создаёт терминал сессии', async () => {
+    const container = await render()
+
+    await click(container, 'terminal-view-create-another')
+
+    expect(createBodies).toHaveLength(1)
+    expect(createBodies[0]).toMatchObject({ project_id: PROJECT, session_id: SESSION })
+    // Новый терминал становится активным.
+    expect(useUIStore.getState().centerTabs[0]?.data.terminalId).toBe('t-new')
+  })
+
+  it('переключатель виден и при одном терминале сессии', async () => {
+    serverTerminals = [T1]
+    const container = await render()
+
+    expect(byTestId(container, 'terminal-session-tabs')).not.toBeNull()
+    expect(byTestId(container, 'terminal-session-tab-t1')).not.toBeNull()
+    // Кнопка «создать ещё» — и в переключателе, и в тулбаре терминала.
+    expect(byTestId(container, 'terminal-session-create')).not.toBeNull()
+    expect(byTestId(container, 'terminal-view-create-another')).not.toBeNull()
   })
 
   it('чужие терминалы (другая сессия) в переключатель не попадают', async () => {

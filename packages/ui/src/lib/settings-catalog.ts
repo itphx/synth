@@ -396,6 +396,23 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     ],
   },
   {
+    // PROP-132: терминалы — рядом с исполнением.
+    id: 'terminals',
+    group: 'adminAi',
+    labelKey: 'settings.category.terminals',
+    icon: 'terminal-box',
+    roles: ['ADMIN'],
+    keywords: [
+      'terminals',
+      'terminal',
+      'shell',
+      'pty',
+      'терминалы',
+      'терминал',
+      'оболочка',
+    ],
+  },
+  {
     id: 'maintenance',
     group: 'adminOps',
     labelKey: 'settings.category.maintenance',
@@ -411,23 +428,6 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     roles: ['ADMIN'],
     advanced: true,
     keywords: ['metrics', 'prometheus', 'метрики'],
-  },
-  {
-    // PROP-132: интерактивные терминалы (мастер-выключатель + авто-восстановление).
-    id: 'terminals',
-    group: 'adminOps',
-    labelKey: 'settings.category.terminals',
-    icon: 'terminal-box',
-    roles: ['ADMIN'],
-    keywords: [
-      'terminals',
-      'terminal',
-      'shell',
-      'pty',
-      'терминалы',
-      'терминал',
-      'оболочка',
-    ],
   },
   {
     // ADR-107 / PROP-047: портал памяти — read-only просмотр фактов и индексов.

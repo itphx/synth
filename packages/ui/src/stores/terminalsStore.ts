@@ -58,6 +58,14 @@ export interface TerminalsState {
   resize: (id: string, cols: number, rows: number) => Promise<void>
   /** Точечная правка (переименование / привязка к сессии). */
   patch: (id: string, patch: TerminalPatch) => Promise<void>
+  /**
+   * Переименовать терминал (`PATCH /terminals/:id { title }`).
+   *
+   * Пустое имя — **сброс** заголовка (`title: null`): терминал снова называется
+   * оболочкой/id. Возвращает обновлённый снимок терминала либо `null` при
+   * ошибке (ошибка также попадает в `error`).
+   */
+  rename: (id: string, title: string | null) => Promise<TerminalDto | null>
   /** Применить live-событие `terminal.*` (только метаданные). */
   applyEvent: (type: string, payload: Record<string, unknown>) => void
   /** Очистить реестр (смена пользователя/инстанса). */
@@ -189,6 +197,25 @@ export const useTerminalsStore = create<TerminalsState>()((set, get) => ({
       }))
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  rename: async (id, title) => {
+    set({ error: null })
+    try {
+      const terminal = await terminalsApi.update(id, { title })
+      set((state) => ({
+        terminalsById: {
+          ...state.terminalsById,
+          // Ответ сервера — полный снимок; прежние поля сохраняем, чтобы
+          // правка не «затирала» локальные поля, которых сервер не отдаёт.
+          [terminal.id]: { ...state.terminalsById[terminal.id], ...terminal },
+        },
+      }))
+      return terminal
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) })
+      return null
     }
   },
 

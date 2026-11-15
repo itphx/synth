@@ -138,7 +138,7 @@ export const dict = {
   // PROP-132: админ-раздел «Терминалы».
   'settings.terminals.description':
     'Интерактивные терминалы инстанса: мастер-выключатель и восстановление вкладок после рестарта.',
-  'settings.terminals.runtime.title': 'Runtime-настройки',
+  'settings.terminals.runtime.title': 'Общие',
   'settings.terminals.runtime.description':
     'Применяются сразу — рестарт не требуется. Приоритет: ENV > runtime > config > default.',
   'settings.terminals.enabled.label': 'Терминалы включены',
@@ -154,6 +154,8 @@ export const dict = {
   'settings.terminals.envBadge': 'задано через ENV',
   'settings.terminals.envBanner':
     'Значение зафиксировано переменной окружения — из UI его не изменить.',
+  'settings.terminals.envFields': 'Зафиксированы через ENV: {fields}',
+  'settings.terminals.envFieldBadge': 'ENV',
   'settings.terminals.envLocked': 'Значение зафиксировано переменной окружения',
   'settings.terminals.defaults':
     'База: включены — {enabled}, авто-восстановление — {autoRestore}.',
@@ -165,16 +167,33 @@ export const dict = {
     'Значение зафиксировано переменной окружения — измените его в окружении.',
   'settings.terminals.loadError': 'Не удалось загрузить настройки терминалов',
   'settings.terminals.retry': 'Повторить',
-  'settings.terminals.reference.title': 'Как живут терминалы',
-  'settings.terminals.reference.description': 'Правила инстанса для интерактивных терминалов.',
-  'settings.terminals.reference.idle': 'Время простоя',
-  'settings.terminals.reference.idleValue': '2 дня',
-  'settings.terminals.reference.limits': 'Лимиты',
-  'settings.terminals.reference.limitsValue': '8 на проект, 32 на инстанс',
-  'settings.terminals.reference.audit': 'Аудит команд',
-  'settings.terminals.reference.auditValue': 'ввод и команды пишутся в журнал (только метаданные)',
-  'settings.terminals.reference.shell': 'Оболочка',
-  'settings.terminals.reference.shellValue': 'серверная по умолчанию, в рабочем каталоге проекта',
+  // Каталог настроек (`lib/settings-catalog.ts`) ещё ссылается на этот ключ —
+  // как псевдоним заголовка карточки «Параметры выполнения».
+  'settings.terminals.reference.title': 'Параметры выполнения',
+  'settings.terminals.limits.title': 'Параметры выполнения',
+  'settings.terminals.limits.description':
+    'Как инстанс запускает и хранит терминалы: время простоя, лимиты, оболочка и аудит ввода.',
+  'settings.terminals.limits.defaults':
+    'База: простой — {idleMinutes} мин., лимиты — {maxPerProject}/{maxPerInstance}, оболочка — {shell}, аудит ввода — {auditInput}.',
+  'settings.terminals.idle.label': 'Время простоя до закрытия',
+  'settings.terminals.idle.description':
+    'терминал без активности закрывается; снимки терминалов живут столько же',
+  'settings.terminals.idle.days': '= {days} дн.',
+  'settings.terminals.maxPerProject.label': 'Терминалов на проект',
+  'settings.terminals.maxPerProject.description':
+    'максимум одновременно живых терминалов в одном проекте',
+  'settings.terminals.maxPerInstance.label': 'Терминалов на инстанс',
+  'settings.terminals.maxPerInstance.description':
+    'максимум одновременно живых терминалов на инстансе',
+  'settings.terminals.shell.label': 'Оболочка по умолчанию',
+  'settings.terminals.shell.description': 'применяется к новым терминалам',
+  'settings.terminals.shell.placeholder': 'по умолчанию (zsh)',
+  'settings.terminals.shell.invalid':
+    'Допустимы латинские буквы, цифры и символы . _ / + -',
+  'settings.terminals.audit.label': 'Аудит ввода команд',
+  'settings.terminals.audit.description':
+    'в журнал пишутся кадры с Enter; остальной ввод — только метрики',
+  'settings.terminals.rangeError': 'Значение вне допустимых границ',
   'settings.agentsLimits.description': 'Бюджет промпта саб-агента (токены). 0 — без лимита. У саб-агентов нет авто-сжатия контекста, поэтому при 0 длинный прогон может упереться в окно модели.',
   'settings.agentsLimits.field.title': 'Бюджет промпта',
   'settings.agentsLimits.field.description': 'Предохранитель объёма входного промпта саб-агента. Действует на следующие прогоны без перезапуска.',
@@ -4243,14 +4262,20 @@ export const dict = {
 
   // --- Запуски команд в терминале (PROP-132, Ф5) ---
   'terminal.tool.history_empty': 'История вывода терминала пуста',
+  'terminal.tool.snapshot_empty':
+    'Экран терминала пуст — видимого содержимого нет (программа ещё ничего не нарисовала)',
   'terminal.tool.run_background_started':
     'Запуск {run_id} стартовал в терминале — результат придёт в чат автоматически',
   'terminal.tool.run_result_header': 'Запуск {run_id} (статус: {status})',
   'terminal.tool.run_finished': 'Терминал {terminal_id}: команда завершена (exit {exit_code})',
   'terminal.tool.run_timeout':
     'Терминал {terminal_id}: команда не завершилась за {timeout_ms} мс (таймаут)',
-  'terminal.tool.run_closed':
-    'Терминал {terminal_id}: терминал закрыт, пока команда выполнялась',
+  'terminal.tool.run_exited':
+    'Терминал {terminal_id}: терминал завершился, пока команда выполнялась',
+  'terminal.tool.run_still_running':
+    'Терминал {terminal_id}: команда (запуск {run_id}) продолжает выполняться — она НЕ остановлена, '
+    + 'терминал занят, следующий terminal_run в нём вернёт run_busy. '
+    + 'Чтобы остановить, пошлите Ctrl+C через terminal_write.',
   'terminal.tool.run_busy':
     'Ошибка: в терминале {terminal_id} уже идёт другой запуск — дождитесь его завершения',
   'terminal.tool.exit_code': 'Код возврата: {exit_code}',
@@ -6170,10 +6195,18 @@ export const dict = {
   'terminal.session.empty': 'В этой сессии пока нет терминалов',
   'terminal.session.create': 'Создать терминал',
   'terminal.session.createAnother': 'Создать ещё терминал',
-  // PROP-132: восстановление терминала после завершения.
-  'terminal.restart.action': 'Восстановить терминал',
-  'terminal.restart.done': 'Терминал восстановлен',
-  'terminal.restart.failed': 'Не удалось восстановить терминал: {error}',
+  // PROP-132: перезапуск терминала после завершения.
+  'terminal.restart.action': 'Перезапустить',
+  'terminal.restart.title': 'Перезапустить терминал',
+  'terminal.restart.done': 'Терминал перезапущен',
+  'terminal.restart.failed': 'Не удалось перезапустить терминал: {error}',
+  // PROP-132: переименование терминала и создание ещё одного.
+  'terminal.create.another': 'Создать ещё терминал',
+  'terminal.rename.action': 'Переименовать',
+  'terminal.rename.title': 'Переименовать терминал',
+  'terminal.rename.placeholder': 'Название терминала',
+  'terminal.rename.done': 'Терминал переименован',
+  'terminal.rename.failed': 'Не удалось переименовать терминал: {error}',
   'terminal.missing.closed': 'Терминала больше нет — вкладка закрыта',
   // PROP-132: терминалы проекта во вкладке «Фоновые процессы».
   'terminals.title': 'Терминалы',

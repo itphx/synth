@@ -179,4 +179,36 @@ describe('стор терминалов (PROP-132)', () => {
     })
     expect(selectTerminalList(useTerminalsStore.getState()).map((t) => t.id)).toEqual(['b', 'a'])
   })
+
+  it('rename сохраняет новое имя терминала в реестре', async () => {
+    apiMock.update.mockResolvedValue(terminal({ id: 'x', title: 'Сборка' }))
+    const store = useTerminalsStore.getState()
+    store.applyEvent('terminal.created', { terminal: terminal({ id: 'x', title: 'Старое' }) })
+
+    const updated = await useTerminalsStore.getState().rename('x', 'Сборка')
+
+    expect(apiMock.update).toHaveBeenCalledWith('x', { title: 'Сборка' })
+    expect(updated?.title).toBe('Сборка')
+    expect(selectTerminal(useTerminalsStore.getState(), 'x')?.title).toBe('Сборка')
+  })
+
+  it('rename с пустым именем сбрасывает заголовок (title: null)', async () => {
+    apiMock.update.mockResolvedValue(terminal({ id: 'x', title: null }))
+    const store = useTerminalsStore.getState()
+    store.applyEvent('terminal.created', { terminal: terminal({ id: 'x', title: 'Старое' }) })
+
+    await useTerminalsStore.getState().rename('x', null)
+
+    expect(apiMock.update).toHaveBeenCalledWith('x', { title: null })
+    expect(selectTerminal(useTerminalsStore.getState(), 'x')?.title).toBeNull()
+  })
+
+  it('rename при ошибке возвращает null и пишет ошибку', async () => {
+    apiMock.update.mockRejectedValue(new Error('boom'))
+
+    const result = await useTerminalsStore.getState().rename('x', 'Имя')
+
+    expect(result).toBeNull()
+    expect(useTerminalsStore.getState().error).toBe('boom')
+  })
 })

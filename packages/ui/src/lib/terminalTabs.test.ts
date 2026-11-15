@@ -97,6 +97,17 @@ describe('terminalTabs — сборка вкладок', () => {
     expect(useUIStore.getState().centerTabs).toHaveLength(0)
   })
 
+  it('openTerminalTab кладёт в данные вкладки проект и сессию терминала', () => {
+    openTerminalTab({ id: 't1', title: 'Логи', projectId: 'p1', sessionId: 's1' })
+
+    const tabs = useUIStore.getState().centerTabs
+    expect(tabs[0]?.data).toMatchObject({
+      terminalId: 't1',
+      projectId: 'p1',
+      sessionId: 's1',
+    })
+  })
+
   it('вкладка-сессия: одна на сессию, активный терминал — в данных', () => {
     openSessionTerminalTab({
       sessionId: 's1',

@@ -169,6 +169,18 @@ describe('SettingsModal — группы и роли', () => {
     expect(text).not.toContain('Providers')
     expect(text).not.toContain('Multimodal input')
   })
+
+  // PROP-132: «Терминалы» — рядом с «Исполнением» (группа AI), а не внизу
+  // группы «Эксплуатация» рядом с «Метриками»/«Оформлением».
+  it('ADMIN видит «Terminals» сразу под «Execution» и до «Memory»', async () => {
+    useUIStore.setState({ settingsShowAdvanced: true })
+    await renderModal()
+
+    const text = navText()
+    expect(text).toContain('Terminals')
+    expect(text.indexOf('Terminals')).toBe(text.indexOf('Execution') + 'Execution'.length)
+    expect(text.indexOf('Terminals')).toBeLessThan(text.indexOf('Memory'))
+  })
 })
 
 describe('SettingsModal — режим «Расширенные»', () => {

@@ -107,6 +107,33 @@ describe('useActiveProject', () => {
     expect(captured).toEqual({ projectId: 'p3', source: 'commit', sessionId: null })
   })
 
+  it('terminal → projectId и sessionId вкладки, source session', async () => {
+    setTabs(
+      [
+        {
+          id: 'terminal-t1',
+          type: 'terminal',
+          title: 't',
+          data: { terminalId: 't1', projectId: 'p4', sessionId: 's4' },
+        },
+      ],
+      'terminal-t1',
+    )
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: 'p4', source: 'session', sessionId: 's4' })
+  })
+
+  it('terminal без проекта и сессии → всё null, source session', async () => {
+    setTabs(
+      [{ id: 'terminal-t2', type: 'terminal', title: 't', data: { terminalId: 't2' } }],
+      'terminal-t2',
+    )
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: null, source: 'session', sessionId: null })
+  })
+
   it('нет активной вкладки → всё null', async () => {
     setTabs([], null)
     await renderProbe()
