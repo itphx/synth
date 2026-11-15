@@ -35,6 +35,7 @@
  * | `POST` | `/pty/:id/close` | закрытие PTY-сессии (протокол 8) | bearer-токен |
  * | `GET` | `/pty/:id/status` | состояние PTY-сессии (протокол 8) | bearer-токен |
  * | `GET` | `/pty/:id/stream` | поток вывода терминала, NDJSON (протокол 8) | bearer-токен |
+ * | `GET` | `/pty/:id/foreground` | что на переднем плане терминала (протокол 9) | bearer-токен |
  * | `GET` | `/health` | liveness исполнителя | без токена |
  * | `GET` | `/metrics` | метрики исполнителя (`synth_executor_*`) | bearer-токен |
  *
@@ -93,6 +94,7 @@ import {
   parsePtyInputBody,
   parsePtyOpenBody,
   parsePtyResizeBody,
+  type PtyForegroundResponse,
   parseSpawnExecRequestBody,
   parseStopBackgroundRequestBody,
   type BackgroundLogsResponse,
@@ -1142,6 +1144,20 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
       return ptyFailure(c, 'pty_not_found', 'PTY-сессия не найдена');
     }
     const body: PtyStatusBody = status;
+    return c.json(body, 200);
+  });
+
+  // Протокол 9: что на переднем плане терминала. Отдельного кода ошибки у
+  // «неизвестно» нет — ответ `{ foreground: null }` (проба не удалась), и это
+  // не ошибка: терминал работает дальше. 404 — только когда сессии нет.
+  app.get('/pty/:id/foreground', async (c) => {
+    if (!ptyEnabled) return ptyUnsupported(c);
+    const id = c.req.param('id');
+    if (!pty.status(id)) {
+      return ptyFailure(c, 'pty_not_found', 'PTY-сессия не найдена');
+    }
+    const foreground = await pty.inspect(id);
+    const body: PtyForegroundResponse = { foreground };
     return c.json(body, 200);
   });
 

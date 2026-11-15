@@ -918,7 +918,7 @@ describe('FS-операции исполнителя: признак в /capabil
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { protocol: number; features?: { fs?: boolean } };
-    expect(body.protocol).toBe(8);
+    expect(body.protocol).toBe(9);
     expect(body.features?.fs).toBe(true);
   });
 });

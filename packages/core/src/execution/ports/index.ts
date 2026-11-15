@@ -24,6 +24,7 @@ export type {
   ExecBackgroundExit,
   ExecBackgroundProcess,
   // План терминалов (Ф1): контракт PTY-сессии.
+  PtyForeground,
   PtyHandle,
   PtyOpenRequest,
 } from './execution-port.js';

@@ -514,6 +514,7 @@ export type {
   FsUploadMode,
   FsUploadOptions,
   // План терминалов (Ф1): контракт PTY-сессии.
+  PtyForeground,
   PtyHandle,
   PtyOpenRequest,
 } from './execution/ports/index.js';
@@ -524,6 +525,10 @@ export {
   isPtyAvailable,
   PtyUnavailableError,
 } from './execution/pty/provider.js';
+// Протокол исполнителя 9: проба «что на переднем плане PTY-сессии»
+// (`/proc/<pid>/stat` → `tpgid`, fallback `ps`).
+export { inspectForeground } from './execution/pty/foreground.js';
+export type { ForegroundProbeDeps } from './execution/pty/foreground.js';
 export type {
   PtyProvider,
   PtySession,

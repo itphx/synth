@@ -10,7 +10,9 @@
  *   и не шлёт второй сигнал;
  * - **закрытие группой процессов**: node-pty запускает лидера сессии
  *   (`setsid`), поэтому `pid` — лидер группы: сигнал уходит **всему дереву**
- *   процессов терминала, а не только оболочке (как у `execute`/`spawnBackground`).
+ *   процессов терминала, а не только оболочке (как у `execute`/`spawnBackground`);
+ * - **проба переднего плана** (`inspect`, протокол исполнителя 9): факт из
+ *   ядра ОС (`inspectForeground`), кэш 250 мс и склейка одновременных вызовов.
  *
  * ## Ограничение по фоновым задачам оболочки
  *
@@ -21,7 +23,8 @@
  * Гасить сессию целиком — отдельная задача сервиса терминалов.
  */
 
-import type { PtyHandle } from '../ports/index.js';
+import type { PtyForeground, PtyHandle } from '../ports/index.js';
+import { inspectForeground } from './foreground.js';
 import type { PtySession } from './provider.js';
 
 /**
@@ -31,6 +34,25 @@ import type { PtySession } from './provider.js';
  * закрывают явно, ждать пользователю 5 с незачем.
  */
 export const PTY_CLOSE_GRACE_MS = 1_000;
+
+/**
+ * Время жизни кэша пробы переднего плана, мс.
+ *
+ * Сервис терминалов спрашивает «что в фокусе» часто (при старте запуска —
+ * несколько раз за ход), а проба читает `/proc` (скан по процессам). 250 мс —
+ * компромисс: пользователь не успевает переключиться между вопросами, а
+ * цикл «проверил → отправил команду → проверил ещё раз» уже видит свежий
+ * факт.
+ */
+export const PTY_FOREGROUND_CACHE_MS = 250;
+
+/** Настройки хэндла (тесты подставляют пробу). */
+export interface PtyHandleOptions {
+  /** Проба переднего плана (по умолчанию — `inspectForeground`). */
+  probe?: (shellPid: number | undefined) => Promise<PtyForeground | null>;
+  /** Время жизни кэша пробы, мс (по умолчанию `PTY_FOREGROUND_CACHE_MS`). */
+  inspectCacheMs?: number;
+}
 
 /** Исход выхода PTY-сессии. */
 interface PtyExitInfo {
@@ -43,14 +65,25 @@ interface PtyExitInfo {
  *
  * @param session живая сессия провайдера
  * @param id идентификатор сессии (`pty_<uuid>`)
+ * @param opts подмена пробы переднего плана (тесты)
  */
-export function createPtyHandle(session: PtySession, id: string): PtyHandle {
+export function createPtyHandle(
+  session: PtySession,
+  id: string,
+  opts?: PtyHandleOptions,
+): PtyHandle {
   const dataListeners = new Set<(chunk: string) => void>();
   const exitListeners = new Set<(e: PtyExitInfo) => void>();
   const exitWaiters: Array<() => void> = [];
   let exited = false;
   let exitInfo: PtyExitInfo = {};
   let closePromise: Promise<void> | undefined;
+  const probe = opts?.probe ?? inspectForeground;
+  const inspectCacheMs = Math.max(0, opts?.inspectCacheMs ?? PTY_FOREGROUND_CACHE_MS);
+  /** Кэш результата пробы: `at` — момент, `value` — факт (в т.ч. `null`). */
+  let inspectCache: { at: number; value: PtyForeground | null } | undefined;
+  /** Идущая проба (одновременные вызовы делят один прогон). */
+  let inspectInFlight: Promise<PtyForeground | null> | undefined;
 
   /** Разбудить ожидателей выхода. */
   const wakeExitWaiters = (): void => {
@@ -137,6 +170,36 @@ export function createPtyHandle(session: PtySession, id: string): PtyHandle {
     return closePromise;
   };
 
+  /**
+   * Проба переднего плана с кэшем (250 мс) и склейкой одновременных вызовов.
+   *
+   * После закрытия/выхода — `null`: спрашивать «что в фокусе» у мёртвого
+   * терминала бессмысленно, а пробе нечего читать.
+   */
+  const inspect = (): Promise<PtyForeground | null> => {
+    if (exited || closePromise !== undefined) return Promise.resolve(null);
+    const now = Date.now();
+    if (inspectCache && now - inspectCache.at < inspectCacheMs) {
+      return Promise.resolve(inspectCache.value);
+    }
+    if (inspectInFlight) return inspectInFlight;
+    const run: Promise<PtyForeground | null> = (async () => {
+      let value: PtyForeground | null = null;
+      try {
+        value = await probe(session.pid);
+      } catch {
+        // Проба не должна ломать вызывающего: неизвестно — значит `null`.
+        value = null;
+      }
+      inspectCache = { at: Date.now(), value };
+      return value;
+    })().finally(() => {
+      inspectInFlight = undefined;
+    });
+    inspectInFlight = run;
+    return run;
+  };
+
   return {
     id,
     pid: session.pid,
@@ -176,5 +239,6 @@ export function createPtyHandle(session: PtySession, id: string): PtyHandle {
       };
     },
     close,
+    inspect,
   };
 }

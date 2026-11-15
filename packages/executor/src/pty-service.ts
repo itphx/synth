@@ -1,5 +1,6 @@
 /**
- * PTY-сервис исполнителя (протокол 8, план терминалов, Ф2a).
+ * PTY-сервис исполнителя (протокол 8, план терминалов, Ф2a; проба переднего
+ * плана — протокол 9).
  *
  * Псевдотерминал живёт **на исполнителе**: там, где есть toolchain и рабочий
  * каталог проекта. Control plane (тонкий backend в split-топологии) общается
@@ -33,7 +34,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ExecutionPort, PtyHandle, PtyProvider } from '@itphx/synth-core';
+import type { ExecutionPort, PtyForeground, PtyHandle, PtyProvider } from '@itphx/synth-core';
 import {
   type PtyOpenBody,
   type PtyOpenResponse,
@@ -431,6 +432,28 @@ export class PtyService {
       ...(record.signal !== undefined ? { signal: record.signal } : {}),
       seq: record.seq,
     };
+  }
+
+  /**
+   * Что сейчас на переднем плане терминала (протокол 9).
+   *
+   * Делегирует `PtyHandle.inspect?()` из core (проба `/proc` → `ps`, кэш
+   * 250 мс — в хэндле): сервис не повторяет ни парсинг, ни кэш. `null` —
+   * сессии нет, хэндл не умеет пробу или факт неизвестен. Различить «сессии
+   * нет» и «неизвестно» вызывающему не нужно: маршрут сессии проверяет
+   * `status()` до вызова (404 на отсутствующую сессию).
+   */
+  async inspect(id: string): Promise<PtyForeground | null> {
+    const record = this._sessions.get(id);
+    if (!record) return null;
+    const inspect = record.handle.inspect;
+    if (!inspect) return null;
+    try {
+      return await inspect.call(record.handle);
+    } catch {
+      // Проба не должна ронять HTTP-ответ: неизвестно — значит `null`.
+      return null;
+    }
   }
 
   /** Кадры вывода с номером больше `since` (буфер повтора). */

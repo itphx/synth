@@ -46,6 +46,8 @@ function createFakeExecutor(opts: {
   streamError?: boolean;
   /** Поток не закрывается (терминал жив) — для проверок ввода/размера. */
   keepOpen?: boolean;
+  /** Ответ `GET /pty/:id/foreground` (протокол 9). */
+  foreground?: unknown;
 }): { fetchImpl: ExecutorFetch; calls: RecordedCall[] } {
   const calls: RecordedCall[] = [];
   const capabilities = opts.capabilities ?? {
@@ -106,6 +108,9 @@ function createFakeExecutor(opts: {
         status: 200,
         headers: { 'content-type': 'application/x-ndjson' },
       });
+    }
+    if (input.endsWith('/foreground')) {
+      return json({ foreground: opts.foreground ?? null });
     }
     if (input.endsWith('/input')) return json({ id: 'pty_test', bytes: 5 });
     if (input.endsWith('/resize')) return json({ cols: 120, rows: 40 });
@@ -225,6 +230,58 @@ describe('клиент удалённого порта: PTY (протокол 8,
     expect(err).toBeInstanceOf(ExecutionError);
     expect((err as ExecutionError).code).toBe('EPTY');
     expect((err as ExecutionError).reason).toBe('dependency_missing');
+  });
+
+  it('исполнитель протокола 8: метода inspect нет (проба не поддерживается)', async () => {
+    const { fetchImpl, calls } = createFakeExecutor({ keepOpen: true });
+    const port = createPort(fetchImpl);
+
+    const handle = await port.openPty!({ cwd: '/workspace', cols: 80, rows: 24 });
+    // Исполнитель 8 маршрута `/pty/:id/foreground` не знает: поля нет, и
+    // вызывающий работает по прежним эвристикам (а не получает тихий `null`).
+    expect(handle.inspect).toBeUndefined();
+    expect(calls.some((call) => call.url.endsWith('/foreground'))).toBe(false);
+    await handle.close();
+  });
+
+  it('протокол 9: inspect дёргает /pty/:id/foreground и отдаёт факт', async () => {
+    const foreground = {
+      shellPid: 4242,
+      foregroundPgid: 555,
+      command: 'vim',
+      isShell: false,
+    };
+    const { fetchImpl, calls } = createFakeExecutor({
+      capabilities: { protocol: 9, toolchain: { sh: 'sh 5.2' }, features: { pty: true } },
+      foreground,
+      keepOpen: true,
+    });
+    const port = createPort(fetchImpl);
+
+    const handle = await port.openPty!({ cwd: '/workspace', cols: 80, rows: 24 });
+    expect(handle.inspect).toBeTypeOf('function');
+    expect(await handle.inspect?.()).toEqual(foreground);
+
+    const call = calls.find((entry) => entry.url.endsWith('/pty/pty_test/foreground'));
+    expect(call?.method).toBe('GET');
+    expect(call?.url).toBe('http://exec-pty:5100/pty/pty_test/foreground');
+
+    await handle.close();
+    // Закрытая сессия на пробу отвечает `null` (транспорт не дёргается).
+    expect(await handle.inspect?.()).toBeNull();
+  });
+
+  it('протокол 9, foreground: null — «неизвестно» (не ошибка)', async () => {
+    const { fetchImpl } = createFakeExecutor({
+      capabilities: { protocol: 9, toolchain: { sh: 'sh 5.2' }, features: { pty: true } },
+      foreground: null,
+      keepOpen: true,
+    });
+    const port = createPort(fetchImpl);
+
+    const handle = await port.openPty!({ cwd: '/workspace', cols: 80, rows: 24 });
+    expect(await handle.inspect?.()).toBeNull();
+    await handle.close();
   });
 
   it('обрыв потока → onExit один раз (stream_lost), сессия мёртвая', async () => {

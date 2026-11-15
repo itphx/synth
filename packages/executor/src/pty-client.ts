@@ -9,7 +9,10 @@
  * - **читает** вывод терминала как **NDJSON** (`GET /pty/:id/stream?since=0`):
  *   кадр `{"seq":n,"data":"…"}` → `onData(data)`;
  * - **пишет** ввод (`POST /pty/:id/input`), **меняет** размер
- *   (`POST /pty/:id/resize`), **закрывает** (`POST /pty/:id/close`).
+ *   (`POST /pty/:id/resize`), **закрывает** (`POST /pty/:id/close`);
+ * - **спрашивает передний план** (`GET /pty/:id/foreground`, протокол 9):
+ *   только если исполнитель объявил протокол ≥ 9 — иначе метода `inspect`
+ *   у хэндла нет вовсе.
  *
  * ## Обрыв потока
  *
@@ -25,7 +28,7 @@
  * агентов/диспетчеров пакет не создаёт.
  */
 
-import type { PtyHandle, PtyOpenRequest } from '@itphx/synth-core';
+import type { PtyForeground, PtyHandle, PtyOpenRequest } from '@itphx/synth-core';
 import type { PtyOpenResponse, PtyStreamFrame } from './protocol.js';
 
 /**
@@ -98,6 +101,15 @@ export interface RemotePtyClientOptions {
   fetchImpl: PtyFetch;
   /** Таймаут HTTP-запросов **управления** сессией, мс (поток вывода — без него). */
   timeoutMs: number;
+  /**
+   * Исполнитель объявил протокол ≥ 9 (`GET /pty/:id/foreground`).
+   *
+   * Не задано/`false` — маршрута у исполнителя нет, и хэндл **не получает**
+   * метод `inspect` (в контракте порта это «исполнитель не умеет пробу»).
+   * Возвращать `null` из всегда присутствующего метода было бы хуже: вызывающий
+   * не отличил бы «не умеет» от «проба не удалась».
+   */
+  supportsForeground?: boolean;
 }
 
 /**
@@ -136,6 +148,7 @@ export class RemotePtyClient {
       client: this,
       id,
       ...(typeof opened.pid === 'number' ? { pid: opened.pid } : {}),
+      supportsForeground: this._opts.supportsForeground === true,
     });
     await handle.start();
     return handle;
@@ -154,6 +167,34 @@ export class RemotePtyClient {
   /** Закрытие сессии (`POST /pty/:id/close`). */
   async closeSession(id: string): Promise<void> {
     await this._postJson(`/pty/${encodeURIComponent(id)}/close`, {});
+  }
+
+  /**
+   * Проба переднего плана (`GET /pty/:id/foreground`, протокол 9).
+   *
+   * Ответ нормализуется до контракта порта: неизвестное/битое поле — `null`
+   * (факт неизвестен), а не исключение: проба — диагностика, из-за которой
+   * терминал не должен ломаться.
+   */
+  async foreground(id: string): Promise<PtyForeground | null> {
+    const response = await this._getJson(`/pty/${encodeURIComponent(id)}/foreground`);
+    let parsed: unknown;
+    try {
+      parsed = await response.json();
+    } catch {
+      return null;
+    }
+    const raw = (parsed as { foreground?: unknown } | null)?.foreground;
+    if (!raw || typeof raw !== 'object') return null;
+    const value = raw as Record<string, unknown>;
+    return {
+      ...(typeof value.shellPid === 'number' ? { shellPid: value.shellPid } : {}),
+      ...(typeof value.foregroundPgid === 'number'
+        ? { foregroundPgid: value.foregroundPgid }
+        : {}),
+      ...(typeof value.command === 'string' ? { command: value.command } : {}),
+      isShell: value.isShell === true,
+    };
   }
 
   /**
@@ -227,6 +268,34 @@ export class RemotePtyClient {
     return (await response.json()) as PtyOpenResponse;
   }
 
+  /** GET: вернуть ответ (ошибку разбирает вызывающий; таймаут — как у POST). */
+  private async _getJson(path: string): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this._opts.timeoutMs);
+    timer.unref?.();
+    let response: Response;
+    try {
+      response = await this._opts.fetchImpl(`${this._opts.url}${path}`, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${this._opts.token}` },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw await buildPtyError({
+          reason: 'timeout',
+          code: 'ETIMEDOUT',
+          message: `превышен таймаут запроса к исполнителю (${this._opts.timeoutMs} мс)`,
+        });
+      }
+      throw new PtyConnectionError(err);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) throw await this.toPtyError(response);
+    return response;
+  }
+
   /** POST с JSON-телом: вернуть ответ (ошибку разбирает вызывающий). */
   private async _postJson(path: string, body: unknown): Promise<Response> {
     const controller = new AbortController();
@@ -280,6 +349,14 @@ interface PtyExitInfo {
 class RemotePtyHandle implements PtyHandle {
   readonly id: string;
   readonly pid?: number;
+  /**
+   * Проба переднего плана — **только** у исполнителя протокола ≥ 9.
+   *
+   * Поле объявлено необязательным и присваивается в конструкторе лишь при
+   * поддержке: исполнитель 8 маршрута `/pty/:id/foreground` не знает, и метод
+   * вернул бы `404` (тихое «неизвестно» вместо «не умеет»).
+   */
+  readonly inspect?: () => Promise<PtyForeground | null>;
 
   private readonly _client: RemotePtyClient;
   private readonly _dataListeners = new Set<(chunk: string) => void>();
@@ -295,10 +372,31 @@ class RemotePtyHandle implements PtyHandle {
   private _reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   private _abort: AbortController | undefined;
 
-  constructor(opts: { client: RemotePtyClient; id: string; pid?: number }) {
+  constructor(opts: {
+    client: RemotePtyClient;
+    id: string;
+    pid?: number;
+    supportsForeground?: boolean;
+  }) {
     this._client = opts.client;
     this.id = opts.id;
     if (opts.pid !== undefined) this.pid = opts.pid;
+    if (opts.supportsForeground === true) {
+      this.inspect = () => this._inspectForeground();
+    }
+  }
+
+  /**
+   * Проба переднего плана: мёртвая сессия отвечает `null`, ошибка транспорта
+   * не бросается (проба — диагностика; вызывающий решает по `null`).
+   */
+  private async _inspectForeground(): Promise<PtyForeground | null> {
+    if (this._dead || this._exited) return null;
+    try {
+      return await this._client.foreground(this.id);
+    } catch {
+      return null;
+    }
   }
 
   /**

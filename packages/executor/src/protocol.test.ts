@@ -291,8 +291,8 @@ describe('разбор mode секрета вызова (протокол 6)', (
     expect(parsed.ok).toBe(false);
   });
 
-  it('версия протокола — 8 (PTY-сессии)', () => {
-    expect(EXECUTOR_PROTOCOL_VERSION).toBe(8);
+  it('версия протокола — 9 (проба переднего плана PTY)', () => {
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe(9);
   });
 });
 

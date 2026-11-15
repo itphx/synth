@@ -327,6 +327,16 @@ const EXECUTOR_PROTOCOL_SSH_AGENT = 6;
  */
 const EXECUTOR_PROTOCOL_PTY = 8;
 
+/**
+ * Минимальная версия протокола с пробой переднего плана PTY
+ * (`GET /pty/:id/foreground`, протокол 9).
+ *
+ * Маршрута нет у исполнителя ≤ 8: хэндл такого адреса **не получает** метод
+ * `inspect` (контракт порта: «нет метода — не умеет»). Сам терминал при этом
+ * работает как раньше — версия не блокирует открытие сессии, только пробу.
+ */
+const EXECUTOR_PROTOCOL_PTY_FOREGROUND = 9;
+
 /** Ошибка соединения — повод переключиться на следующий адрес. */
 class ConnectionFailure extends Error {
   constructor(readonly cause: unknown) {
@@ -924,6 +934,14 @@ export class RemoteExecutionPort implements ExecutionPort {
    * кодом `EPTY` и причиной `dependency_missing` (слой доступности превращает
    * её в `unavailable(dependency)`).
    *
+   * ## Проба переднего плана (протокол 9)
+   *
+   * Хэндл получает метод `inspect`, только если **этот** адрес объявил
+   * протокол ≥ 9 (`GET /pty/:id/foreground`). Исполнитель 8 маршрута не знает,
+   * поэтому у его хэндла метода **нет** (а не «есть, но всегда `null`»):
+   * вызывающий отличает «не умеет» от «проба не удалась». Терминал при этом
+   * работает как раньше — деградация без отказа.
+   *
    * ## Слот одновременных вызовов
    *
    * **Не занимается**: терминал живёт дольше запроса — держать слот до его
@@ -949,11 +967,13 @@ export class RemoteExecutionPort implements ExecutionPort {
     const fetchImpl = await resolveFetch(this._fetchImpl);
     let lastCause: unknown;
     for (const url of candidates) {
+      const entry = inventory.get(url);
       const client = new RemotePtyClient({
         url,
         token: this._token,
         fetchImpl,
         timeoutMs: this._timeoutMs,
+        supportsForeground: (entry?.protocol ?? 0) >= EXECUTOR_PROTOCOL_PTY_FOREGROUND,
       });
       try {
         return await client.open(req);

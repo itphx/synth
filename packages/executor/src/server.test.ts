@@ -365,7 +365,7 @@ describe('исполнитель: лимиты и служебные эндпо�
       };
       limits?: { timeoutMs: number; maxOutputBytes: number };
     };
-    expect(body.protocol).toBe(8);
+    expect(body.protocol).toBe(9);
     expect(body.toolchain.git).toBe('git version 2.39.2');
     expect(body.os.length).toBeGreaterThan(0);
     expect(body.arch.length).toBeGreaterThan(0);
@@ -399,8 +399,8 @@ describe('исполнитель: лимиты и служебные эндпо�
     };
     expect(body.limits?.timeoutMs).toBe(600_000);
     expect(body.limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
-    // Поле аддитивное: версия протокола и признаки не меняются.
-    expect(body.protocol).toBe(8);
+    // Поле `limits` аддитивное: из-за него версия не повышается (текущая — 9).
+    expect(body.protocol).toBe(9);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
@@ -435,7 +435,7 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; protocol: number };
     expect(body.status).toBe('ok');
-    expect(body.protocol).toBe(8);
+    expect(body.protocol).toBe(9);
   });
 });
 
@@ -579,7 +579,57 @@ describe('исполнитель: PTY-сессии (протокол 8)', () => 
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { protocol: number; features?: { pty?: boolean } };
-    expect(body.protocol).toBe(8);
+    expect(body.protocol).toBe(9);
     expect(body.features?.pty).toBe(true);
+  });
+
+  it('GET /pty/:id/foreground — 200 { foreground } (протокол 9)', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const opened = await postPty(app, '/pty/open', { cwd: workspace, cols: 80, rows: 24 });
+    const session = (await opened.json()) as { id: string };
+    // Проба подменена: маршрут проверяется как контракт, без реального /proc.
+    const foreground = {
+      shellPid: 4242,
+      foregroundPgid: 555,
+      command: 'vim',
+      isShell: false,
+    };
+    pty.inspect = async () => foreground;
+
+    const res = await app.request(`/pty/${session.id}/foreground`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ foreground });
+    await pty.dispose();
+  });
+
+  it('GET /pty/:id/foreground — неизвестная сессия 404, выключенный контур 501', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const missing = await app.request('/pty/pty_missing/foreground', {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(missing.status).toBe(404);
+    const error = await readError(missing);
+    expect(error.reason).toBe('pty_not_found');
+    expect(error.code).toBe('ENOPTY');
+    await pty.dispose();
+
+    const disabledApp = makeApp({ ptyEnabled: false });
+    const disabled = await disabledApp.request('/pty/pty_any/foreground', {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(disabled.status).toBe(501);
+    expect((await readError(disabled)).reason).toBe('pty_unsupported');
+  });
+
+  it('GET /pty/:id/foreground без токена — 401', async () => {
+    const pty = makePtyService();
+    const app = makeApp({ ptyService: pty });
+    const res = await app.request('/pty/pty_any/foreground');
+    expect(res.status).toBe(401);
+    await pty.dispose();
   });
 });

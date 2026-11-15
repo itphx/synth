@@ -308,6 +308,33 @@ describe('PTY-сервис исполнителя', () => {
     }
   });
 
+  it('inspect: нет сессии — null; живая сессия отдаёт факт пробы', async () => {
+    const { root } = await makeWorkspace();
+    const { provider } = createFakeProvider();
+    const service = new PtyService({
+      workspaceRoot: root,
+      maxSessions: 4,
+      idleTimeoutMs: 60_000,
+      inputMaxBytes: 16 * 1024,
+      providerFactory: async () => provider,
+    });
+    try {
+      // Сессии нет — проба не запускается, отказ мягкий (`null`, не бросок).
+      expect(await service.inspect('pty_missing')).toBeNull();
+
+      const opened = await service.open({ cwd: root, cols: 80, rows: 24 });
+      if (!opened.ok) throw new Error('сессия не открылась');
+      // У поддельной сессии pid не задан ⇒ проба честно отвечает «неизвестно».
+      // Делегирование `PtyHandle.inspect?()` проверяется маршрутом
+      // (`server.test.ts`, проба подменена) — здесь контракт сервиса.
+      const foreground = await service.inspect(opened.response.id);
+      expect(foreground === null || typeof foreground.isShell === 'boolean').toBe(true);
+    } finally {
+      await service.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('dispose закрывает все живые сессии', async () => {
     const { root } = await makeWorkspace();
     const { provider, sessions } = createFakeProvider();

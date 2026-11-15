@@ -128,7 +128,12 @@
  *   signal?, seq }`;
  * - `GET /pty/:id/stream?since=` → **NDJSON** поток кадров
  *   `{"seq":n,"data":"…"}`: сначала буфер повтора (256 КиБ), затем живые
- *   кадры; `since` — номер последнего кадра, который видел клиент.
+ *   кадры; `since` — номер последнего кадра, который видел клиент;
+ * - `GET /pty/:id/foreground` (протокол 9) → `200 { foreground }` —
+ *   что сейчас на переднем плане терминала: оболочка или другая программа
+ *   (`ssh`/`vim`/`top`); факт из ядра ОС (`tpgid`), а не эвристика по выводу
+ *   (`PtyForeground` в core). `foreground: null` — «неизвестно» (проба не
+ *   удалась), это не ошибка.
  *
  * Отказы: `501 pty_unsupported` (контур выключен — `SYNTH_EXECUTOR_PTY=0`, или
  * нативный модуль не загрузился), `404 pty_not_found` (сессии нет),
@@ -136,10 +141,19 @@
  * (`cwd` вне workspace), `400 invalid_request` (невалидное тело/размеры).
  */
 
-import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
+import type { ExecCommand, ExecSecret, PtyForeground } from '@itphx/synth-core';
 
 /**
  * Версия wire-протокола исполнителя.
+ *
+ * **9** — проба переднего плана PTY (`GET /pty/:id/foreground`, план
+ * терминалов): ответ `{ foreground: PtyForeground | null }` — что сейчас в
+ * фокусе терминала (оболочка/`ssh`/`vim`/…). Версия повышена, потому что это
+ * **новый маршрут**: исполнитель 8 его не знает, и клиенту нужно отличать
+ * «умеет» от «не умеет» до вызова (`RemotePtyHandle.inspect` появляется
+ * только при протоколе ≥ 9 — иначе поля нет, и вызывающий работает по
+ * прежним эвристикам, а не получает пустой ответ). Остальные `/pty/*`-роуты
+ * и признак `features.pty` не менялись.
  *
  * **8** — PTY-сессии (`/pty/open`, `/pty/:id/input`, `/pty/:id/resize`,
  * `/pty/:id/close`, `/pty/:id/status`, `/pty/:id/stream`) и признак
@@ -188,7 +202,7 @@ import type { ExecCommand, ExecSecret } from '@itphx/synth-core';
  * потолки таймаута и буфера вывода, чтобы control plane видел «тихий» потолок
  * заранее. Старый исполнитель поля не отдаёт — разбор терпимый.
  */
-export const EXECUTOR_PROTOCOL_VERSION = 8;
+export const EXECUTOR_PROTOCOL_VERSION = 9;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -1685,6 +1699,18 @@ export interface PtyStreamFrame {
   seq: number;
   /** Данные кадра (текст терминала). */
   data: string;
+}
+
+/**
+ * Ответ `GET /pty/:id/foreground` (протокол 9).
+ *
+ * `null` — проба выполнена, но факта нет (нет pid, ошибка чтения, сессия
+ * закрывается): это «неизвестно», а не «в фокусе не оболочка». Отдельного
+ * кода ошибки нет: неизвестный foreground не мешает работать терминалу.
+ */
+export interface PtyForegroundResponse {
+  /** Факт о переднем плане (`null` — неизвестно). */
+  foreground: PtyForeground | null;
 }
 
 /**
