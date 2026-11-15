@@ -1691,3 +1691,10 @@
 - **Ограничение:** TUI **внутри** ssh локально не виден (foreground = `ssh`) — там по-прежнему `terminal_snapshot`.
 - **Проверки:** `pnpm typecheck`, `pnpm lint` — чисто; целевые 344; полный `pnpm test` — EXIT=0.
 - **Коммиты:** `b154ee5c` (протокол 9) + следующий (классификация/политика).
+
+## 2026-11-15 — терминалы: приёмка build6 (H, tmux comm, terminal_signal)
+
+- **H (перенос строки):** `removeRunWrapper` сравнивал строки целиком; на локальном zsh echo обёртки переносится (длинный prompt + команда) и не вырезался. Теперь — regex по `wrapperCommand` с `\s*` между символами (перенос в любом месте, включая nonce), удаляется вся логическая строка вместе с prompt-остатком. Проверено вживую: перенесённое echo с ANSI-prompt → остаётся только вывод команды.
+- **`busy with "tmux:"`:** `/proc/<pid>/comm` у tmux = `tmux: server`; `normalizeForegroundCommand` теперь срезает `:`/`,` и хвост, `tmux` классифицируется как full-screen.
+- **Loop breaker:** `terminal_signal` исключён (повтор INT/QUIT/TSTP — не цикл); `terminal_run`/`terminal_open`/`execute_shell` остаются под эвристикой.
+- **Проверки:** целевые 337; полный `pnpm test` — EXIT=0.

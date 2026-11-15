@@ -1315,6 +1315,37 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
+  it('doom-loop: три одинаковых terminal_signal НЕ прерывают ход (сигнал — реакция, не цикл)', async () => {
+    MockTerminalObserveLoopProvider.toolName = 'terminal_signal';
+    MockTerminalObserveLoopProvider.args = { terminal_id: 'pty_test', signal: 'INT' };
+    const h = await makeHarness('mockterminalobserveloop');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    // Повторный INT/QUIT/TSTP — нормальная реакция агента («ещё раз прервать»),
+    // а не застревание: все три вызова дошли до исполнения (в т.ч. третий).
+    const toolResults = chunks.filter((c) => c.event === 'tool_call.result');
+    expect(toolResults).toHaveLength(3);
+    for (const toolResult of toolResults) {
+      const content = String((toolResult.data.result as { content?: string }).content ?? '');
+      expect(content).not.toContain('Loop broken');
+      // Дошли до самого тула (в тесте сервиса терминалов нет — его отказ),
+      // а не короткое замыкание doom-loop или отказ прав.
+      expect(content).toContain('terminal service is not available');
+      expect(content).not.toContain('Permission denied');
+    }
+
+    // Провайдер вызван 4 раза: 3 tool-итерации + финальный текст.
+    expect(MockTerminalObserveLoopProvider.calls).toBe(4);
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const finalAssistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(finalAssistant!.content).toBe('Готово');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
   it('doom-loop: три одинаковых terminal_run по-прежнему прерывают цикл (мутация)', async () => {
     const h = await makeHarness('mockterminalrunloop');
     const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];

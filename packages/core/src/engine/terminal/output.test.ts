@@ -8,7 +8,8 @@
  *   • нормализация `\r\n` → `\n` (только возвращаемый текст — буфер не трогаем);
  *   • одиночный `\r` (возврат каретки прогрес-вывода) не трогаем;
  *   • очистка вывода запуска: ANSI/OSC целиком, backspace, «широкие» пробелы,
- *     точное эхо строки-обёртки (`cleanRunOutput`).
+ *     точное эхо строки-обёртки (`cleanRunOutput`), в том числе перенесённое
+ *     по ширине терминала на две строки;
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -143,6 +144,35 @@ describe('Очистка вывода запуска', () => {
     expect(removeRunWrapper('@@srn-abc:0@@\nout', '', 'abc')).toBe('out');
     // Без nonce и без обёртки — очистка не выполняется.
     expect(removeRunWrapper('@@srn-abc:0@@', '')).toBe('@@srn-abc:0@@');
+  });
+
+  it('removeRunWrapper: эхо, перенесённое на две строки, снимается целиком', () => {
+    const wrapper = "printf '\\n@@srn-abc:%s@@\\n' \"$?\"";
+    // PTY/оболочка рвёт длинную введённую строку по ширине терминала — здесь
+    // перенос попал в середину nonce, а перед командой стоит ANSI-prompt.
+    const wrapped = wrapper.replace('@@srn-abc', '@@srn-a\r\nbc');
+    const raw = `\u001B[1m\u001B[32m[eof@omn ~]%\u001B[0m ${wrapped}\r\nfile1\r\nfile2\r\n`;
+    const removed = removeRunWrapper(raw, wrapper);
+    expect(removed).toBe('file1\r\nfile2\r\n');
+    // Ни команды-обёртки, ни пустой строки от снятого prompt не остаётся.
+    expect(removed).not.toContain('printf');
+    expect(removed).not.toContain('@@srn-');
+    expect(removed.startsWith('\r\n')).toBe(false);
+    expect(removed.startsWith('[eof@omn')).toBe(false);
+
+    // Через полную очистку — тот же результат в нормализованном виде.
+    expect(cleanRunOutput(raw, wrapper)).toBe('file1\nfile2');
+
+    // Эхо с самых первых строк вывода (перед ним нет предыдущей строки).
+    expect(removeRunWrapper(`${wrapped}\r\nout\r\n`, wrapper)).toBe('out\r\n');
+  });
+
+  it('removeRunWrapper: чужая обёртка (другой nonce) остаётся', () => {
+    const wrapper = "printf '\\n@@srn-abc:%s@@\\n' \"$?\"";
+    const foreign = "printf '\\n@@srn-zzz:%s@@\\n' \"$?\"";
+    const text = `out1\n$ ${foreign}\nout2`;
+    expect(removeRunWrapper(text, wrapper)).toBe(text);
+    expect(cleanRunOutput(text, wrapper)).toBe(text);
   });
 
   it('cleanRunOutput: strip → removeWrapper → normalize', () => {

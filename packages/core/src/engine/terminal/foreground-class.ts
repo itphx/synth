@@ -75,19 +75,28 @@ export const FULL_SCREEN_COMMANDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Нормализовать имя foreground-процесса: basename, нижний регистр, без
- * аргументов.
+ * Нормализовать имя foreground-процесса: отбросить уточнение ядра, взять первый
+ * токен, basename, нижний регистр.
  *
  * `inspect()` в разных реализациях отдаёт и `comm` (`vim`), и командную строку
- * (`vim /etc/hosts`) — для классификации нужен только исполняемый файл:
- * `"/usr/bin/Vim"` → `vim`, `"ssh user@host"` → `ssh`. Пустое значение/`null` →
- * пустая строка (классификатор ответит «неизвестно»).
+ * (`vim /etc/hosts`), а `/proc/<pid>/comm` у многопоточных программ содержит
+ * уточнение через `:` — например `tmux: server`. Поэтому сначала срезается всё
+ * после первого `:` или `,` (уточнение — не часть имени), затем берётся первый
+ * токен, basename и нижний регистр: `"tmux: server"` → `tmux`,
+ * `"/usr/bin/Vim"` → `vim`, `"ssh user@host"` → `ssh`. Буква диска Windows
+ * (`C:\…`) уточнением не считается. Пустое значение/`null` → пустая строка
+ * (классификатор ответит «неизвестно»).
  */
 export function normalizeForegroundCommand(command?: string | null): string {
   if (typeof command !== 'string') return '';
   const trimmed = command.trim();
   if (trimmed === '') return '';
-  const first = trimmed.split(/\s+/)[0] ?? '';
+  // `C:\…` — путь, а не уточнение: первый `:` пропускаем.
+  const drivePrefix = /^[A-Za-z]:[\\/]/.test(trimmed) ? 2 : 0;
+  const separator = trimmed.slice(drivePrefix).search(/[:,]/);
+  const body = separator >= 0 ? trimmed.slice(0, drivePrefix + separator) : trimmed;
+  const first = body.trim().split(/\s+/)[0] ?? '';
+  if (first === '') return '';
   const base = first.split(/[\\/]/).pop() ?? '';
   return base.trim().toLowerCase();
 }

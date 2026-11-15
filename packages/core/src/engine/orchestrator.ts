@@ -261,12 +261,19 @@ const TOOL_BATCH_BARRIER_TOOLS: ReadonlySet<string> = new Set([
  * агент опрашивает экран и вывод с одинаковыми аргументами, пока идёт работа в
  * TUI (сборка, тесты, установка). Опрос «тем же вызовом» — это ожидание
  * результата, а не застревание; прерывать ход нельзя.
+ *
+ * `terminal_signal` — тоже **не действие-мутация**, хотя и меняет состояние
+ * терминала: повторный `INT`/`QUIT`/`TSTP` — нормальная реакция агента («ещё
+ * раз прервать», «повторить Ctrl+C», «приостановить»), а не зацикливание;
+ * повторная отправка того же сигнала ничего не «застревает» и не выполняется
+ * заново как команда. (`terminal_run`/`execute_shell` остаются под защитой.)
  */
 const DOOM_LOOP_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
   'terminal_list',
   'terminal_read',
   'terminal_snapshot',
   'terminal_write',
+  'terminal_signal',
   'process_list',
   'list_sessions',
 ]);
@@ -6537,12 +6544,13 @@ export class ChatOrchestrator {
           // понятный feedback с объяснением причины запрета, а не «Цикл
           // прерван». Механика для повторяющихся легальных вызовов сохраняется.
           // Чисто наблюдающие тулы (`terminal_list`/`terminal_read`/
-          // `terminal_snapshot`/`process_list`/`list_sessions`) и keystroke-тул
-          // `terminal_write` исключены: повторный «посмотреть список/экран/вывод» —
-          // мониторинг (ожидание результата в TUI), а повтор нажатия (tmux-префикс,
-          // стрелки, макросы) — ввод, а не зацикливание. Мутации терминала
-          // (`terminal_run`/`terminal_open`/`terminal_close`/`terminal_signal`)
-          // остаются под защитой.
+          // `terminal_snapshot`/`process_list`/`list_sessions`), keystroke-тул
+          // `terminal_write` и `terminal_signal` исключены: повторный «посмотреть
+          // список/экран/вывод» — мониторинг (ожидание результата в TUI), повтор
+          // нажатия (tmux-префикс, стрелки, макросы) — ввод, а повтор сигнала
+          // (INT/QUIT/TSTP) — обычная реакция, а не зацикливание. Мутации
+          // терминала (`terminal_run`/`terminal_open`/`terminal_close`) остаются
+          // под защитой.
           if (
             !hookBlocked
             && permissionDecision.action !== 'deny'

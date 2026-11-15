@@ -27,6 +27,18 @@ describe('normalizeForegroundCommand', () => {
     expect(normalizeForegroundCommand('C:\\Windows\\notepad.exe')).toBe('notepad.exe');
   });
 
+  it('срезает уточнение /proc/<pid>/comm после «:» и «,»', () => {
+    // `/proc/<pid>/comm` у tmux — `tmux: server`: уточнение не часть имени.
+    expect(normalizeForegroundCommand('tmux: server')).toBe('tmux');
+    expect(normalizeForegroundCommand('/usr/bin/tmux: server')).toBe('tmux');
+    expect(normalizeForegroundCommand('docker, exec')).toBe('docker');
+    expect(normalizeForegroundCommand('SSH')).toBe('ssh');
+    // Уточнение не мешает классификации.
+    expect(isFullScreenCommand('tmux: server')).toBe(true);
+    expect(isRemoteShellCommand('ssh: user@host')).toBe(true);
+    expect(isFullScreenCommand('/usr/bin/top')).toBe(true);
+  });
+
   it('пустое значение/undefined/null → пустая строка (неизвестно)', () => {
     expect(normalizeForegroundCommand()).toBe('');
     expect(normalizeForegroundCommand(null)).toBe('');
