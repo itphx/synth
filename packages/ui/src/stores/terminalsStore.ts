@@ -41,7 +41,12 @@ export interface TerminalsState {
   /** Последняя ошибка чтения/мутации. */
   error: string | null
 
-  /** Перечитать реестр терминалов. */
+  /**
+   * Перечитать реестр терминалов.
+   *
+   * `options.includeExited` — вместе с завершёнными (восстановленными после
+   * рестарта ядра): без него сервер отдаёт **только живые** терминалы.
+   */
   load: (options?: TerminalListOptions) => Promise<void>
   /** Создать терминал (вернёт DTO или `null` при ошибке). */
   create: (input: CreateTerminalInput) => Promise<TerminalDto | null>
@@ -110,7 +115,13 @@ export const useTerminalsStore = create<TerminalsState>()((set, get) => ({
         // Вычищаем только записи **этой** выборки: чужой срез (другой проект
         // или другая сессия) не трогаем — он ещё нужен другому потребителю.
         for (const id of state.queryIds[key] ?? []) {
-          if (!fetched.has(id)) delete terminalsById[id]
+          if (fetched.has(id)) continue
+          const record = terminalsById[id]
+          // Завершённый терминал по «живой» выборке не удаляем: он мог
+          // прийти в другой срез (`include_exited` — восстановленные после
+          // рестарта ядра) — иначе он «мигает» между списками.
+          if (!options?.includeExited && record?.status === 'exited') continue
+          delete terminalsById[id]
         }
         return {
           terminalsById,

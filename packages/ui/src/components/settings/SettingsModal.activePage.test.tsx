@@ -55,8 +55,11 @@ describe('SettingsModal — активная категория недоступ
     expect(visibleFor(['LEAD']).some((cat) => cat.id === 'contextManagement')).toBe(false)
   })
 
-  it('«Память» идёт сразу после «Метрик» в админ-блоке', () => {
-    const ids = CATEGORIES.map((cat) => cat.id)
-    expect(ids.indexOf('memory')).toBe(ids.indexOf('metrics') + 1)
+  it('«Память» идёт сразу после adminOps-раздела в админ-блоке', () => {
+    const cats = CATEGORIES
+    const idx = cats.findIndex((cat) => cat.id === 'memory')
+    expect(idx).toBeGreaterThan(0)
+    // «Память» — первая AI-категория после ops-разделов (раньше «Метрик»).
+    expect(cats[idx - 1].group).toBe('adminOps')
   })
 })

@@ -2,8 +2,10 @@
 // правой панели (PROP-132, Ф4б).
 //
 // Источник истины — серверный список `GET /terminals?project_id=<активный
-// проект>`; live-обновление — события `terminal.*` (реестр терминалов) плюс
-// перечитывание раз в 5 с, пока секция открыта (как список фоновых прогонов).
+// проект>&include_exited=true` (завершённые терминалы — в т.ч. восстановленные
+// после рестарта ядра — тоже видны); live-обновление — события `terminal.*`
+// (реестр терминалов) плюс перечитывание раз в 5 с, пока секция открыта
+// (как список фоновых прогонов).
 //
 // Карточка: оболочка, каталог (сокращённый), статус, привязанная сессия,
 // бейдж «только просмотр» (`can_write=false`) и действия «Открыть» /
@@ -71,12 +73,13 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
   const [creating, setCreating] = useState(false)
 
   // Список терминалов проекта: первичная загрузка + перечитывание раз в 5 с,
-  // пока секция открыта.
+  // пока секция открыта. `includeExited` — вместе с завершёнными: терминал,
+  // восстановленный после рестарта ядра, иначе в списке не виден.
   useEffect(() => {
     if (!projectId) return
-    void loadTerminals({ projectId })
+    void loadTerminals({ projectId, includeExited: true })
     const timer = setInterval(() => {
-      void loadTerminals({ projectId })
+      void loadTerminals({ projectId, includeExited: true })
     }, LIST_REFRESH_MS)
     return () => clearInterval(timer)
   }, [projectId, loadTerminals])

@@ -25,7 +25,8 @@ import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
-import { terminalsApi } from '@/lib/api/terminals'
+import { terminalsApi, terminalApiErrorStatus } from '@/lib/api/terminals'
+import { cn } from '@/lib/utils'
 import { resolveTerminalTheme } from '@/lib/theme/terminal'
 import { useThemeSystem } from '@/contexts/useThemeSystem'
 import { preloadTerminalFont } from '@/lib/terminalFonts'
@@ -58,6 +59,14 @@ const MAX_INPUT_BYTES = 16 * 1024
 
 export interface TerminalViewProps {
   tab: CenterTab
+  /**
+   * Терминала нет на сервере (`GET /terminals/:id` → 404).
+   *
+   * По умолчанию вкладка закрывается (терминал не переживает рестарт ядра).
+   * Вкладка-сессия передаёт свой обработчик: там пропавший терминал — лишь
+   * один из нескольких, вкладка остаётся.
+   */
+  onTerminalMissing?: (terminalId: string) => void
 }
 
 /** Статус терминала → ключ i18n. */
@@ -74,7 +83,7 @@ function statusKey(status: string): string {
   }
 }
 
-export function TerminalView({ tab }: TerminalViewProps) {
+export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
   const terminalId = tab.data.terminalId ?? ''
@@ -92,6 +101,9 @@ export function TerminalView({ tab }: TerminalViewProps) {
   // Положение скролла — для затенения сверху/снизу как в чате: верх гаснет,
   // когда прокручено вниз, низ — когда не в конце вывода.
   const [scrollPos, setScrollPos] = useState<'top' | 'middle' | 'bottom'>('bottom')
+  /** Перезапуск терминала: новое подключение к потоку вывода. */
+  const [restartNonce, setRestartNonce] = useState(0)
+  const [restarting, setRestarting] = useState(false)
 
   const terminal = useTerminalsStore((s) => (terminalId ? s.terminalsById[terminalId] : undefined))
   const loadTerminals = useTerminalsStore((s) => s.load)
@@ -142,14 +154,30 @@ export function TerminalView({ tab }: TerminalViewProps) {
           terminalsById: { ...state.terminalsById, [fresh.id]: fresh },
           order: state.order.includes(fresh.id) ? state.order : [fresh.id, ...state.order],
         }))
-      } catch {
-        if (!cancelled) setMissing(true)
+      } catch (err) {
+        if (cancelled) return
+        // 404 — терминала на сервере нет (не пережил рестарт ядра, либо
+        // авто-восстановление выключено): вкладку закрываем.
+        if (terminalApiErrorStatus(err) === 404) {
+          notify({
+            text: t('terminal.missing.closed'),
+            type: 'warning',
+            category: 'system',
+          })
+          if (onTerminalMissing) {
+            onTerminalMissing(terminalId)
+          } else {
+            useUIStore.getState().closeTab(tab.id)
+          }
+          return
+        }
+        setMissing(true)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [terminalId, terminal])
+  }, [terminalId, terminal, notify, onTerminalMissing, t, tab.id])
 
   // Создание xterm, снимок вывода, HTTP-поток вывода.
   useEffect(() => {
@@ -334,6 +362,10 @@ export function TerminalView({ tab }: TerminalViewProps) {
         // Контейнер ещё не имеет размеров — подгонка повторится по ResizeObserver.
       }
 
+      // Завершённый терминал: потока вывода нет (сервер его не отдаёт) —
+      // показываем сохранённый вывод и ждём «Восстановить терминал».
+      if (terminal.status === 'exited') return
+
       await runTerminalStreamSession({
         terminalId,
         since: cursor,
@@ -380,12 +412,12 @@ export function TerminalView({ tab }: TerminalViewProps) {
       termRef.current = null
       fitRef.current = null
     }
-    // Пересоздание — только при смене терминала: смена геометрии/статуса
-    // приходит событием и не должна перезапускать поток (иначе вывод
-    // переигрывался бы с начала). Настройки внешнего вида применяются
-    // отдельно (палитра — мгновенно, шрифт — при следующем открытии:
-    // xterm не умеет менять шрифт на лету).
-  }, [terminalId, terminal?.id])
+    // Пересоздание — только при смене терминала (или после перезапуска):
+    // смена геометрии/статуса приходит событием и не должна перезапускать
+    // поток (иначе вывод переигрывался бы с начала). Настройки внешнего вида
+    // применяются отдельно (палитра — мгновенно, шрифт — при следующем
+    // открытии: xterm не умеет менять шрифт на лету).
+  }, [terminalId, terminal?.id, restartNonce])
 
   // Право ввода — обновляем на живой xterm (пересоздания не требует).
   useEffect(() => {
@@ -431,6 +463,45 @@ export function TerminalView({ tab }: TerminalViewProps) {
   const handleReload = useCallback(() => {
     void loadTerminals(terminal?.projectId ? { projectId: terminal.projectId } : undefined)
   }, [loadTerminals, terminal?.projectId])
+
+  /**
+   * Восстановление терминала: сервер поднимает новую PTY (id терминала тот
+   * же), клиент переподключает поток вывода.
+   */
+  const handleRestart = useCallback(async () => {
+    if (!terminalId || restarting) return
+    setRestarting(true)
+    try {
+      const fresh = await terminalsApi.restart(terminalId)
+      if (fresh?.id) {
+        useTerminalsStore.setState((state) => ({
+          terminalsById: {
+            ...state.terminalsById,
+            [fresh.id]: { ...state.terminalsById[fresh.id], ...fresh },
+          },
+          order: state.order.includes(fresh.id) ? state.order : [fresh.id, ...state.order],
+        }))
+      }
+      setStreamExit(null)
+      // Новый поток вывода: пересоздаём xterm-сессию.
+      setRestartNonce((nonce) => nonce + 1)
+      notify({
+        text: t('terminal.restart.done'),
+        type: 'success',
+        category: 'system',
+      })
+    } catch (err) {
+      notify({
+        text: t('terminal.restart.failed', {
+          error: err instanceof Error ? err.message : t('common.error'),
+        }),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setRestarting(false)
+    }
+  }, [notify, restarting, t, terminalId])
 
   /**
    * Строки контекста: выделение (если есть) — иначе хвост буфера.
@@ -570,6 +641,23 @@ export function TerminalView({ tab }: TerminalViewProps) {
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {finished && (
+            <button
+              type="button"
+              className="rounded-sm border border-border px-2 py-0.5 text-[0.625rem] font-medium text-foreground hover:bg-interactive-hover"
+              onClick={() => void handleRestart()}
+              disabled={restarting}
+              title={t('terminal.restart.action')}
+              aria-label={t('terminal.restart.action')}
+              data-testid="terminal-restore"
+            >
+              <Icon
+                name={restarting ? 'loader-2' : 'refresh'}
+                className={cn('size-3', restarting && 'animate-spin')}
+              />
+              <span className="ml-1">{t('terminal.restart.action')}</span>
+            </button>
+          )}
           {terminal?.sessionId && (
             <button
               type="button"

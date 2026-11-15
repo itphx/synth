@@ -3,7 +3,7 @@
 // Серверный контракт (ядро: `server/routes/terminals.ts`,
 // `engine/terminal/types.ts` → `toTerminalDto`):
 //
-//   GET    /api/v2/terminals?project_id&session_id&limit&offset
+//   GET    /api/v2/terminals?project_id&session_id&include_exited&limit&offset
 //          → { terminals: TerminalDto[], total, offset, limit, next_offset }
 //   GET    /api/v2/terminals/:id                  → { terminal: TerminalDto }
 //   POST   /api/v2/terminals                      → { terminal: TerminalDto } (201)
@@ -17,6 +17,8 @@
 //                                                      кадр выхода — с exit_code/signal
 //   POST   /api/v2/terminals/:id/input            → 204
 //   POST   /api/v2/terminals/:id/resize           → 204
+//   POST   /api/v2/terminals/:id/restart          → { terminal: TerminalDto }
+//                                                      (перезапуск PTY; в DTO — restored?)
 //
 // **Фильтры списка — snake_case** (`project_id`/`session_id`): сервер читает
 // именно их (`c.req.query('project_id')`), camelCase отфильтровывается.
@@ -72,6 +74,11 @@ export interface TerminalDto {
   signal: string | null
   /** Точка исполнения (`inline`/`executor`). */
   target: string | null
+  /**
+   * Терминал восстановлен сервером (запись пережила рестарт инстанса и была
+   * поднята заново). Поле аддитивное: старый сервер его не присылает.
+   */
+  restored?: boolean
 }
 
 /** Фильтр выборки терминалов (все условия — по «И»). */
@@ -80,6 +87,14 @@ export interface TerminalListOptions {
   projectId?: string
   /** Сессия, к которой терминал привязан (опционально). */
   sessionId?: string
+  /**
+   * Включить завершённые терминалы (сервер: `include_exited=true`).
+   *
+   * По умолчанию сервер отдаёт **только живые** терминалы — завершённые
+   * (в т.ч. восстановленные из снимков после рестарта ядра) скрыты. Без
+   * этого флага клиент не отличит «терминала нет» от «терминал завершён».
+   */
+  includeExited?: boolean
   /** Размер страницы (сервер: по умолчанию 50, максимум 200). */
   limit?: number
   /** Смещение страницы. */
@@ -319,6 +334,8 @@ export function toTerminalPatch(raw: unknown): Partial<TerminalDto> {
   if (signal !== undefined) patch.signal = typeof signal === 'string' ? signal : null
   const target = readValue(source, ['target'])
   if (target !== undefined) patch.target = typeof target === 'string' ? target : null
+  const restored = readValue(source, ['restored'])
+  if (restored !== undefined) patch.restored = restored === true
   return patch
 }
 
@@ -409,6 +426,7 @@ export const terminalsApi = {
     const params = new URLSearchParams()
     if (options?.projectId) params.set('project_id', options.projectId)
     if (options?.sessionId) params.set('session_id', options.sessionId)
+    if (options?.includeExited) params.set('include_exited', 'true')
     if (options?.limit !== undefined) params.set('limit', String(options.limit))
     if (options?.offset !== undefined) params.set('offset', String(options.offset))
     const query = params.toString()
@@ -478,6 +496,21 @@ export const terminalsApi = {
       method: 'POST',
       body: JSON.stringify({ cols, rows }),
     })
+  },
+
+  /**
+   * POST /terminals/:id/restart — перезапуск терминала.
+   *
+   * Терминал завершился (`exited`), но сервер помнит его запись и вывод:
+   * restart поднимает новую PTY в том же терминале (id тот же) — клиенту
+   * достаточно переподключить поток вывода. Ответ — снимок терминала.
+   */
+  async restart(id: string): Promise<TerminalDto> {
+    const response = await fetchJSON<TerminalResponse>(
+      `${BASE_URL}/terminals/${encodeURIComponent(id)}/restart`,
+      { method: 'POST' },
+    )
+    return terminalFromResponse(response)
   },
 
   /** PATCH /terminals/:id — переименование / привязка к сессии. */

@@ -413,6 +413,23 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     keywords: ['metrics', 'prometheus', 'метрики'],
   },
   {
+    // PROP-132: интерактивные терминалы (мастер-выключатель + авто-восстановление).
+    id: 'terminals',
+    group: 'adminOps',
+    labelKey: 'settings.category.terminals',
+    icon: 'terminal-box',
+    roles: ['ADMIN'],
+    keywords: [
+      'terminals',
+      'terminal',
+      'shell',
+      'pty',
+      'терминалы',
+      'терминал',
+      'оболочка',
+    ],
+  },
+  {
     // ADR-107 / PROP-047: портал памяти — read-only просмотр фактов и индексов.
     // Память — AI-подсистема (эмбеддинги/recall), не эксплуатация.
     id: 'memory',
@@ -2655,6 +2672,35 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     labelKey: 'observability.hints.title',
     keywords: ['scrape', 'config', 'prometheus', 'конфиг'],
     advanced: true,
+  },
+  // PROP-132: терминалы инстанса.
+  {
+    id: 'terminals.runtime',
+    categoryId: 'terminals',
+    sectionId: 'terminals-runtime',
+    labelKey: 'settings.terminals.runtime.title',
+    keywords: ['terminals', 'enabled', 'auto restore', 'терминалы', 'восстановление'],
+  },
+  {
+    id: 'terminals.enabled',
+    categoryId: 'terminals',
+    sectionId: 'terminals-runtime',
+    labelKey: 'settings.terminals.enabled.label',
+    keywords: ['terminals', 'enabled', 'switch', 'терминалы', 'включены'],
+  },
+  {
+    id: 'terminals.autoRestore',
+    categoryId: 'terminals',
+    sectionId: 'terminals-runtime',
+    labelKey: 'settings.terminals.autoRestore.label',
+    keywords: ['terminals', 'restore', 'restart', 'терминалы', 'восстановление'],
+  },
+  {
+    id: 'terminals.reference',
+    categoryId: 'terminals',
+    sectionId: 'terminals-reference',
+    labelKey: 'settings.terminals.reference.title',
+    keywords: ['terminals', 'limits', 'audit', 'idle', 'терминалы', 'лимиты', 'аудит'],
   },
   // Управление контекстом (`context-defaults` + `context.windowPolicy`, instance-wide).
   {

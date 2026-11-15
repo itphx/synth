@@ -81,6 +81,25 @@ describe('стор терминалов (PROP-132)', () => {
     expect(useTerminalsStore.getState().loading).toBe(false)
   })
 
+  it('load пробрасывает includeExited в запрос списка', async () => {
+    apiMock.list.mockResolvedValue(page([]))
+    await useTerminalsStore.getState().load({ sessionId: 's1', includeExited: true })
+    expect(apiMock.list).toHaveBeenCalledWith({ sessionId: 's1', includeExited: true })
+  })
+
+  it('завершённый терминал не вычищается «живой» выборкой (восстановленный не мигает)', async () => {
+    // Срез с завершёнными (include_exited) — терминал там есть.
+    apiMock.list.mockResolvedValue(page([terminal({ id: 'x', status: 'exited' })]))
+    await useTerminalsStore.getState().load({ projectId: 'p1', includeExited: true })
+    expect(selectTerminal(useTerminalsStore.getState(), 'x')).toBeDefined()
+
+    // Та же выборка, но «живая» (без include_exited): сервер её не отдаёт —
+    // запись всё равно остаётся (её мог прийти в другой срез).
+    apiMock.list.mockResolvedValue(page([]))
+    await useTerminalsStore.getState().load({ projectId: 'p1' })
+    expect(selectTerminal(useTerminalsStore.getState(), 'x')).toBeDefined()
+  })
+
   it('create добавляет терминал в начало списка', async () => {
     apiMock.create.mockResolvedValue(terminal({ id: 'new' }))
     const created = await useTerminalsStore.getState().create({ projectId: 'p1' })

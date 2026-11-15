@@ -5,10 +5,15 @@
 // `<terminal_context>` уходит в текст сообщения, ничего автоматически в LLM
 // не попадает.
 //
+// Док **не закрывается** после отправки: он показывает, идёт ли ход агента
+// («агент работает…» → «готово»), и закрывается только явно (крестик/Esc).
+// Пока док открыт, сессия не накапливает непрочитанные — ответ агента не
+// должен подсвечивать её оранжевым в дереве.
+//
 // Привязки к сессии нет — показывается селектор сессии проекта (или «новая
 // сессия»). Esc закрывает док без отправки.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -17,6 +22,8 @@ import { Button } from '@/components/ui/button'
 import { useNotification } from '@/hooks/useNotification'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTransportStore } from '@/stores/transportStore'
+import { useChatStore } from '@/stores/chatStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { buildTerminalContextBlock, TERMINAL_CONTEXT_LINES } from '@/lib/terminalContext'
@@ -26,6 +33,9 @@ import type { TerminalDto } from '@/lib/api/terminals'
 const NEW_SESSION = '__new__'
 
 export type TerminalAskDockMode = 'ask' | 'attach'
+
+/** Состояние индикатора работы агента. */
+type AskPhase = 'idle' | 'working' | 'done'
 
 export interface TerminalAskDockProps {
   /** Терминал, из которого спрашиваем. */
@@ -59,6 +69,10 @@ export const TerminalAskDock: React.FC<TerminalAskDockProps> = ({
   const [question, setQuestion] = useState('')
   const [sessionId, setSessionId] = useState<string>(terminal.sessionId ?? '')
   const [busy, setBusy] = useState(false)
+  /** Фаза индикатора: отправлено → агент работает → готово. */
+  const [phase, setPhase] = useState<AskPhase>('idle')
+  /** Сессия, в которую ушёл вопрос (по ней следим за ходом). */
+  const [askedSessionId, setAskedSessionId] = useState<string | null>(null)
 
   // Значение по умолчанию: привязанная сессия, иначе первая сессия проекта.
   useEffect(() => {
@@ -68,6 +82,45 @@ export const TerminalAskDock: React.FC<TerminalAskDockProps> = ({
     }
     setSessionId((current) => current || projectSessions[0]?.id || '')
   }, [projectSessions, terminal.sessionId])
+
+  // Активный ход сессии — единственный источник «агент работает» (ADR-118).
+  const activeTurn = useChatStore((s) =>
+    askedSessionId ? s.turnBySession[askedSessionId] ?? null : null,
+  )
+
+  /**
+   * Подавление непрочитанного счётчика сессии.
+   *
+   * Пока док открыт, сессия не подсвечивается: человек видит ответ в доке.
+   * Набор подавленных — в `notificationStore` (runtime), снимается при закрытии.
+   */
+  const suppressedRef = useRef<Set<string>>(new Set())
+  const suppressSession = useCallback((target: string | null | undefined) => {
+    if (!target) return
+    const store = useNotificationStore.getState()
+    store.suppressUnread(target, true)
+    store.clearSessionUnread(target)
+    suppressedRef.current.add(target)
+  }, [])
+  const releaseSessions = useCallback(() => {
+    const store = useNotificationStore.getState()
+    for (const id of suppressedRef.current) store.suppressUnread(id, false)
+    suppressedRef.current.clear()
+  }, [])
+
+  // Открытие дока — подавляем непрочитанные у привязанной сессии.
+  useEffect(() => {
+    suppressSession(terminal.sessionId)
+    return () => releaseSessions()
+  }, [releaseSessions, suppressSession, terminal.sessionId])
+
+  // Ход агента завершился — индикатор переключается на «готово».
+  useEffect(() => {
+    if (phase !== 'working') return
+    if (!activeTurn) return
+    const status = activeTurn.status
+    if (status && status !== 'streaming') setPhase('done')
+  }, [activeTurn, phase])
 
   const contextBlock = useMemo(
     () =>
@@ -121,8 +174,12 @@ export const TerminalAskDock: React.FC<TerminalAskDockProps> = ({
         category: 'message',
         sessionId: target,
       })
+      // Док остаётся открытым: показываем, идёт ли ход агента.
       setQuestion('')
-      onClose()
+      setAskedSessionId(target)
+      setPhase('working')
+      // Ответ агента не должен подсвечивать сессию непрочитанным.
+      suppressSession(target)
     } catch (err) {
       notify({
         text: t('terminal.ask.failed', {
@@ -135,7 +192,7 @@ export const TerminalAskDock: React.FC<TerminalAskDockProps> = ({
     } finally {
       setBusy(false)
     }
-  }, [contextBlock, lines.length, notify, onClose, question, resolveTarget, t])
+  }, [contextBlock, lines.length, notify, question, resolveTarget, suppressSession, t])
 
   /** Вставка блока в черновик композера (без автозапуска отправки). */
   const handleAttach = useCallback(async () => {
@@ -197,6 +254,27 @@ export const TerminalAskDock: React.FC<TerminalAskDockProps> = ({
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
           {mode === 'ask' ? t('terminal.ask.title') : t('terminal.attach.title')}
         </span>
+        {/* Индикатор работы агента: док не закрывается после отправки. */}
+        {phase !== 'idle' && (
+          <span
+            data-testid="terminal-ask-status"
+            data-phase={phase}
+            className={cn(
+              'flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[0.625rem]',
+              phase === 'done'
+                ? 'bg-status-success/15 text-status-success'
+                : 'bg-primary/15 text-primary',
+            )}
+          >
+            <Icon
+              name={phase === 'done' ? 'check' : 'loader-2'}
+              className={cn('size-3', phase !== 'done' && 'animate-spin')}
+            />
+            <span>
+              {phase === 'done' ? t('terminal.ask.done') : t('terminal.ask.working')}
+            </span>
+          </span>
+        )}
         <Button
           variant="ghost"
           size="icon"

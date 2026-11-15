@@ -60,6 +60,7 @@ import { processesApi } from './processes'
 import { worktreesApi } from './worktrees'
 import { executionApi } from './execution'
 import { terminalsApi } from './terminals'
+import { terminalSettingsApi } from './terminalSettings'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -529,6 +530,12 @@ export type {
   TerminalPatch,
   TerminalOutputSnapshot,
 } from './terminals'
+// PROP-132: runtime-настройки терминалов (`/api/v2/settings/terminal`).
+export type {
+  TerminalSettings,
+  TerminalSettingsSource,
+  TerminalSettingsPatch,
+} from './terminalSettings'
 
 export const synthApi = {
   fetchJSON,
@@ -617,5 +624,12 @@ export const synthApi = {
     updateTerminal: terminalsApi.update,
     closeTerminal: terminalsApi.close,
     getTerminalOutput: terminalsApi.outputSince,
+    restartTerminal: terminalsApi.restart,
+  },
+  // PROP-132: runtime-настройки терминалов.
+  ...{
+    getTerminalSettings: terminalSettingsApi.getTerminalSettings,
+    updateTerminalSettings: terminalSettingsApi.updateTerminalSettings,
+    resetTerminalSettings: terminalSettingsApi.resetTerminalSettings,
   },
 }

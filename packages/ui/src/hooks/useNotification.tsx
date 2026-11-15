@@ -18,7 +18,8 @@ function ToastContent({ text, sessionId }: { text: string; sessionId?: string })
  * (например, transportStore при stream.error).
  */
 export function notifyMessage(opts: NotifyOptions): void {
-  const { addToHistory, incSessionUnread, isCategoryEnabled } = useNotificationStore.getState()
+  const { addToHistory, incSessionUnread, isCategoryEnabled, isUnreadSuppressed } =
+    useNotificationStore.getState()
 
   addToHistory(opts)
 
@@ -43,6 +44,9 @@ export function notifyMessage(opts: NotifyOptions): void {
   }
 
   if (opts.sessionId) {
+    // Подавленная сессия (открыт док «Спросить агента») не подсвечивается
+    // непрочитанным: человек и так видит ответ.
+    if (isUnreadSuppressed(opts.sessionId)) return
     const state = useUIStore.getState()
     const activeTab = state.centerTabs.find((t) => t.id === state.activeCenterTabId)
     const isActiveSession = activeTab?.data?.sessionId === opts.sessionId

@@ -1,5 +1,8 @@
+import { useEffect, useRef } from 'react'
+
 import { useUIStore } from '@/stores/useUIStore'
 import { useI18n } from '@/lib/i18n'
+import { verifyTerminalTabs } from '@/lib/terminalTabs'
 import { SynthLogo } from '../ui/SynthLogo'
 import { CenterTabs } from './CenterTabs'
 import { ChatTab } from '../chat/ChatTab'
@@ -9,6 +12,7 @@ import { CommitDetailTab } from '../chat/CommitDetailTab'
 import { PipelineTab } from '../pipelines/PipelineTab'
 import { PipelineRunTab } from '../pipelines/PipelineRunTab'
 import { TerminalView } from '../terminal/TerminalView'
+import { TerminalSessionView } from '../terminal/TerminalSessionView'
 
 function EmptyState() {
   const { t } = useI18n()
@@ -37,6 +41,16 @@ export function CenterPanel() {
 
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
 
+  // Терминалы живут в памяти процесса: после рестарта ядра сервер их не
+  // знает (`GET /terminals/:id` → 404) — сохранённые вкладки терминала
+  // закрываем, чтобы они не «висели» пустым экраном.
+  const verifiedRef = useRef(false)
+  useEffect(() => {
+    if (verifiedRef.current) return
+    verifiedRef.current = true
+    void verifyTerminalTabs()
+  }, [])
+
   const renderTabContent = () => {
     if (!activeTab) {
       return <EmptyState />
@@ -56,9 +70,14 @@ export function CenterPanel() {
         return <PipelineTab tab={activeTab} />
       case 'pipeline-run':
         return <PipelineRunTab tab={activeTab} />
-      // PROP-132: вкладка терминала.
+      // PROP-132: вкладка терминала. Вкладка сессии — с переключателем
+      // терминалов; одиночная — просто терминал.
       case 'terminal':
-        return <TerminalView tab={activeTab} />
+        return activeTab.data.sessionId ? (
+          <TerminalSessionView tab={activeTab} />
+        ) : (
+          <TerminalView tab={activeTab} />
+        )
       default:
         return <EmptyState />
     }

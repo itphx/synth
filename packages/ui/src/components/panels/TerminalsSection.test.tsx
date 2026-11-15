@@ -227,4 +227,27 @@ describe('TerminalsSection: создание терминала из шапки 
     expect(container.querySelector('[data-testid="terminals-create-header"]')).toBeNull()
     expect(mocks.list).not.toHaveBeenCalled()
   })
+
+  it('список проекта запрашивается вместе с завершёнными (includeExited)', async () => {
+    await renderSection()
+
+    expect(mocks.list).toHaveBeenCalledWith({ projectId: 'p1', includeExited: true })
+  })
+
+  it('восстановленный (завершённый) терминал виден: бейдж статуса и кнопка «Открыть»', async () => {
+    mocks.list.mockResolvedValue({
+      terminals: [makeTerminal('t-restored', { status: 'exited', restored: true })],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      nextOffset: null,
+    })
+    const container = await renderSection()
+
+    expect(container.querySelector('[data-testid="terminals-item-t-restored"]')).not.toBeNull()
+    expect(
+      container.querySelector('[data-testid="terminals-status-t-restored"]')?.textContent,
+    ).toBe('finished')
+    expect(container.querySelector('[data-testid="terminals-open-t-restored"]')).not.toBeNull()
+  })
 })

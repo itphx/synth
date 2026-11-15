@@ -86,6 +86,26 @@ describe('terminalsApi — список терминалов', () => {
     expect(urlOf(0)).toBe('/api/v2/terminals?project_id=p1&session_id=s1')
   })
 
+  it('includeExited уходит в include_exited=true (завершённые — в списке)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ terminals: [], total: 0, offset: 0, limit: 50, next_offset: null }),
+    )
+
+    await terminalsApi.list({ sessionId: 's1', includeExited: true })
+
+    expect(urlOf(0)).toBe('/api/v2/terminals?session_id=s1&include_exited=true')
+  })
+
+  it('без includeExited параметр не уходит (сервер отдаёт только живые)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ terminals: [], total: 0, offset: 0, limit: 50, next_offset: null }),
+    )
+
+    await terminalsApi.list({ sessionId: 's1' })
+
+    expect(urlOf(0)).toBe('/api/v2/terminals?session_id=s1')
+  })
+
   it('ответ — страница: terminals/total/offset/limit/next_offset', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({

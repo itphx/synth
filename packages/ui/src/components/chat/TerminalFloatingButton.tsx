@@ -1,8 +1,8 @@
 // TerminalFloatingButton: плавающая кнопка «Терминал» в чате (PROP-132, Ф4б).
 //
-// Показывается, только если у активной сессии есть **живой** привязанный
-// терминал (реестр терминалов + live-события `terminal.*`). Клик открывает
-// вкладку терминала.
+// Показывается, если у активной сессии есть **хотя бы один** терминал
+// (реестр терминалов + live-события `terminal.*`; завершённые тоже считаются —
+// вкладку можно восстановить). Клик открывает вкладку терминалов сессии.
 
 import React from 'react'
 
@@ -25,9 +25,9 @@ export const TerminalFloatingButton: React.FC<TerminalFloatingButtonProps> = ({
   left,
 }) => {
   const { t } = useI18n()
-  const { liveTerminal, open } = useTerminalLauncher(sessionId, projectId)
+  const { hasTerminal, open } = useTerminalLauncher(sessionId, projectId)
 
-  if (!liveTerminal) return null
+  if (!hasTerminal) return null
 
   return (
     <button

@@ -56,6 +56,17 @@ interface NotificationStore {
   sessionUnread: Record<string, number>
   incSessionUnread: (sessionId: string) => void
   clearSessionUnread: (sessionId: string) => void
+  /**
+   * Подавление непрочитанного счётчика сессии.
+   *
+   * Сессия в «подавленном» состоянии не накапливает непрочитанные: пока док
+   * «Спросить агента» открыт, ответ агента не должен подсвечивать сессию
+   * оранжевым в дереве (человек и так видит док). Набор — runtime (не
+   * персистится).
+   */
+  suppressedUnread: Record<string, boolean>
+  suppressUnread: (sessionId: string, suppressed: boolean) => void
+  isUnreadSuppressed: (sessionId: string) => boolean
 }
 
 export const useNotificationStore = create<NotificationStore>()(
@@ -122,18 +133,34 @@ export const useNotificationStore = create<NotificationStore>()(
 
       sessionUnread: {},
       incSessionUnread: (sessionId) =>
-        set((state) => ({
-          sessionUnread: {
-            ...state.sessionUnread,
-            [sessionId]: (state.sessionUnread[sessionId] || 0) + 1,
-          },
-        })),
+        set((state) => {
+          // Подавленная сессия не накапливает непрочитанные (док «Спросить
+          // агента»): гейт стоит здесь, в единственной точке инкремента, —
+          // иначе счётчик подрос бы из другого места.
+          if (state.suppressedUnread[sessionId]) return state
+          return {
+            sessionUnread: {
+              ...state.sessionUnread,
+              [sessionId]: (state.sessionUnread[sessionId] || 0) + 1,
+            },
+          }
+        }),
       clearSessionUnread: (sessionId) =>
         set((state) => {
           const next = { ...state.sessionUnread }
           delete next[sessionId]
           return { sessionUnread: next }
         }),
+
+      suppressedUnread: {},
+      suppressUnread: (sessionId, suppressed) =>
+        set((state) => {
+          const next = { ...state.suppressedUnread }
+          if (suppressed) next[sessionId] = true
+          else delete next[sessionId]
+          return { suppressedUnread: next }
+        }),
+      isUnreadSuppressed: (sessionId) => get().suppressedUnread[sessionId] === true,
     }),
     {
       name: 'synth-ui-notifications',

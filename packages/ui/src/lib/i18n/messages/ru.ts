@@ -130,10 +130,51 @@ export const dict = {
   'settings.category.webhooks': 'Webhooks',
   'settings.category.maintenance': 'Обслуживание',
   'settings.category.metrics': 'Метрики',
+  'settings.category.terminals': 'Терминалы',
   'settings.category.memory': 'Память',
   'settings.category.contextWindow': 'Окно контекста',
   'settings.category.contextManagement': 'Управление контекстом',
   'settings.category.agentsLimits': 'Пределы саб-агентов',
+  // PROP-132: админ-раздел «Терминалы».
+  'settings.terminals.description':
+    'Интерактивные терминалы инстанса: мастер-выключатель и восстановление вкладок после рестарта.',
+  'settings.terminals.runtime.title': 'Runtime-настройки',
+  'settings.terminals.runtime.description':
+    'Применяются сразу — рестарт не требуется. Приоритет: ENV > runtime > config > default.',
+  'settings.terminals.enabled.label': 'Терминалы включены',
+  'settings.terminals.enabled.description':
+    'Мастер-выключатель: когда выключен, живые терминалы закрываются, а новые создать нельзя.',
+  'settings.terminals.autoRestore.label': 'Автоматически восстанавливать вкладки',
+  'settings.terminals.autoRestore.description':
+    'После рестарта инстанса восстанавливать записи терминалов и сохранённый вывод, чтобы вкладки можно было открыть снова.',
+  'settings.terminals.source.env': 'задано через ENV',
+  'settings.terminals.source.runtime': 'runtime',
+  'settings.terminals.source.config': 'config',
+  'settings.terminals.source.default': 'default',
+  'settings.terminals.envBadge': 'задано через ENV',
+  'settings.terminals.envBanner':
+    'Значение зафиксировано переменной окружения — из UI его не изменить.',
+  'settings.terminals.envLocked': 'Значение зафиксировано переменной окружения',
+  'settings.terminals.defaults':
+    'База: включены — {enabled}, авто-восстановление — {autoRestore}.',
+  'settings.terminals.saved': 'Настройки терминалов сохранены',
+  'settings.terminals.saveError': 'Не удалось сохранить: {error}',
+  'settings.terminals.resetDone': 'Настройки терминалов сброшены к базе',
+  'settings.terminals.reset': 'Сбросить',
+  'settings.terminals.conflict':
+    'Значение зафиксировано переменной окружения — измените его в окружении.',
+  'settings.terminals.loadError': 'Не удалось загрузить настройки терминалов',
+  'settings.terminals.retry': 'Повторить',
+  'settings.terminals.reference.title': 'Как живут терминалы',
+  'settings.terminals.reference.description': 'Правила инстанса для интерактивных терминалов.',
+  'settings.terminals.reference.idle': 'Время простоя',
+  'settings.terminals.reference.idleValue': '2 дня',
+  'settings.terminals.reference.limits': 'Лимиты',
+  'settings.terminals.reference.limitsValue': '8 на проект, 32 на инстанс',
+  'settings.terminals.reference.audit': 'Аудит команд',
+  'settings.terminals.reference.auditValue': 'ввод и команды пишутся в журнал (только метаданные)',
+  'settings.terminals.reference.shell': 'Оболочка',
+  'settings.terminals.reference.shellValue': 'серверная по умолчанию, в рабочем каталоге проекта',
   'settings.agentsLimits.description': 'Бюджет промпта саб-агента (токены). 0 — без лимита. У саб-агентов нет авто-сжатия контекста, поэтому при 0 длинный прогон может упереться в окно модели.',
   'settings.agentsLimits.field.title': 'Бюджет промпта',
   'settings.agentsLimits.field.description': 'Предохранитель объёма входного промпта саб-агента. Действует на следующие прогоны без перезапуска.',
@@ -4200,6 +4241,20 @@ export const dict = {
     'Ошибка: исчерпан лимит терминалов ({limit}) — закройте неиспользуемый терминал и повторите',
   'terminal.tool.unavailable': 'Ошибка: интерактивные терминалы недоступны в этом окружении: {reason}',
 
+  // --- Запуски команд в терминале (PROP-132, Ф5) ---
+  'terminal.tool.history_empty': 'История вывода терминала пуста',
+  'terminal.tool.run_background_started':
+    'Запуск {run_id} стартовал в терминале — результат придёт в чат автоматически',
+  'terminal.tool.run_result_header': 'Запуск {run_id} (статус: {status})',
+  'terminal.tool.run_finished': 'Терминал {terminal_id}: команда завершена (exit {exit_code})',
+  'terminal.tool.run_timeout':
+    'Терминал {terminal_id}: команда не завершилась за {timeout_ms} мс (таймаут)',
+  'terminal.tool.run_closed':
+    'Терминал {terminal_id}: терминал закрыт, пока команда выполнялась',
+  'terminal.tool.run_busy':
+    'Ошибка: в терминале {terminal_id} уже идёт другой запуск — дождитесь его завершения',
+  'terminal.tool.exit_code': 'Код возврата: {exit_code}',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',
@@ -6075,6 +6130,8 @@ export const dict = {
   'terminal.ask.sent': 'Вопрос отправлен агенту',
   'terminal.ask.failed': 'Не удалось отправить: {error}',
   'terminal.ask.sessionCreateFailed': 'Не удалось создать сессию',
+  'terminal.ask.working': 'агент работает…',
+  'terminal.ask.done': 'готово',
   'terminal.attach.action': 'Прикрепить вывод',
   'terminal.attach.title': 'Прикрепить вывод к сообщению',
   'terminal.attach.confirm': 'Вставить в черновик',
@@ -6109,6 +6166,15 @@ export const dict = {
   'terminal.headerButton': 'Терминал',
   'terminal.create.noProject': 'Выберите проект, чтобы создать терминал',
   'terminal.create.failed': 'Не удалось создать терминал',
+  // PROP-132: вкладка терминалов сессии (переключатель терминалов).
+  'terminal.session.empty': 'В этой сессии пока нет терминалов',
+  'terminal.session.create': 'Создать терминал',
+  'terminal.session.createAnother': 'Создать ещё терминал',
+  // PROP-132: восстановление терминала после завершения.
+  'terminal.restart.action': 'Восстановить терминал',
+  'terminal.restart.done': 'Терминал восстановлен',
+  'terminal.restart.failed': 'Не удалось восстановить терминал: {error}',
+  'terminal.missing.closed': 'Терминала больше нет — вкладка закрыта',
   // PROP-132: терминалы проекта во вкладке «Фоновые процессы».
   'terminals.title': 'Терминалы',
   'terminals.count': '{count, plural, one {# терминал} few {# терминала} many {# терминалов}}',

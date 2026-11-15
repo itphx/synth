@@ -269,6 +269,12 @@ interface UIStore {
   activeCenterTabId: string | null
   openTab: (tab: CenterTab) => void
   updateTabTitle: (tabId: string, newTitle: string) => void
+  /**
+   * Точечная правка `data` вкладки (например, активный терминал во вкладке
+   * сессии: `terminalId`). Данные **сливаются** — переданные ключи
+   * перезаписывают прежние, остальные сохраняются.
+   */
+  updateTabData: (tabId: string, data: Partial<CenterTab['data']>) => void
   setTabEditingState: (tabId: string, editingState: CenterTab['editingState']) => void
   closeTab: (tabId: string) => void
   setActiveCenterTab: (tabId: string) => void
@@ -533,6 +539,13 @@ export const useUIStore = create<UIStore>()(
         set((state) => ({
           centerTabs: state.centerTabs.map((t) =>
             t.id === tabId ? { ...t, title: newTitle } : t
+          ),
+        })),
+
+      updateTabData: (tabId, data) =>
+        set((state) => ({
+          centerTabs: state.centerTabs.map((t) =>
+            t.id === tabId ? { ...t, data: { ...t.data, ...data } } : t
           ),
         })),
 

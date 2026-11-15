@@ -103,6 +103,13 @@ afterEach(async () => {
   vi.clearAllMocks()
   document.documentElement.style.removeProperty('--chat-scale')
   document.body.innerHTML = ''
+  // Save вызывает `setChatScale` → `persistChatScale` пишет в localStorage с
+  // дебаунсом 300 мс. Незакрытый таймер из теста прилетел бы в следующий и
+  // ломал проверку «не пишет в localStorage» — дожидаемся записи и чистим ключ.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 350))
+  })
+  localStorage.removeItem(CHAT_SCALE_STORAGE_KEY)
 })
 
 describe('ChatSettings — миграция на Settings UI Kit (ADR-072)', () => {
