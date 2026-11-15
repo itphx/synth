@@ -44,10 +44,13 @@ vi.hoisted(() => {
 const mocks = vi.hoisted(() => ({
   /** Всё, что записано в эмулятор терминала. */
   writes: [] as string[],
+  /** Обработчик ввода, который зарегистрировал `TerminalView`. */
+  onDataHandler: null as ((data: string) => void) | null,
   get: vi.fn(),
   outputSince: vi.fn(),
   restart: vi.fn(),
   update: vi.fn(),
+  input: vi.fn(),
   stream: vi.fn(),
   notify: vi.fn(),
 }))
@@ -69,7 +72,8 @@ vi.mock('@xterm/xterm', () => ({
     onBell(): { dispose: () => void } {
       return { dispose: () => {} }
     }
-    onData(): { dispose: () => void } {
+    onData(handler: (data: string) => void): { dispose: () => void } {
+      mocks.onDataHandler = handler
       return { dispose: () => {} }
     }
     onResize(): { dispose: () => void } {
@@ -78,8 +82,10 @@ vi.mock('@xterm/xterm', () => ({
     onScroll(): { dispose: () => void } {
       return { dispose: () => {} }
     }
-    write(data: string): void {
+    write(data: string, callback?: () => void): void {
       mocks.writes.push(data)
+      // xterm вызывает колбэк после обработки записи — реплей снимает по нему.
+      if (callback) setTimeout(callback, 0)
     }
     getSelection(): string {
       return ''
@@ -126,6 +132,7 @@ vi.mock('@/lib/api/terminals', async (importOriginal) => {
       outputSince: mocks.outputSince,
       restart: mocks.restart,
       update: mocks.update,
+      input: mocks.input,
     },
   }
 })
@@ -231,6 +238,7 @@ async function render(
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.writes.length = 0
+  mocks.onDataHandler = null
   useTerminalsStore.setState({
     terminalsById: {},
     order: [],

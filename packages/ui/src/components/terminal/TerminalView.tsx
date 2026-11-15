@@ -10,6 +10,10 @@
  * 2. снимок вывода `GET /terminals/:id/output?since=0` — на исходном размере,
  *    чтобы переносы строк совпали с серверными; курсор снимка (`next_seq`)
  *    уходит в поток, поэтому вывод не двоится;
+ *    из снимка вычищаются **запросы** эмулятора (`stripEmulatorQueries`), а
+ *    ответы xterm на исторические запросы отбрасываются флагом `replaying`:
+ *    иначе они уходят в PTY и tmux (например, по SSH) печатает их как текст
+ *    (`1;2c0;276;0c` — ответы DA1/DA2);
  * 3. `fit()` подгоняет терминал под вьюпорт и шлёт `POST /resize`;
  * 4. поток `GET /terminals/:id/stream?since=<курсор>` — live-вывод; при обрыве
  *    сессия делает один повтор с курсора последнего кадра
@@ -57,6 +61,42 @@ const INPUT_BATCH_MS = 30
 const INPUT_MIN_INTERVAL_MS = 50
 /** Кап одного запроса ввода, байт. */
 const MAX_INPUT_BYTES = 16 * 1024
+/**
+ * Страховка на реплей снимка, мс: колбэк `term.write` может не прийти
+ * (эмулятор уничтожен, ошибка записи) — поток вывода не должен залипнуть.
+ */
+const REPLAY_SETTLE_TIMEOUT_MS = 5_000
+
+/**
+ * CSI-запросы эмулятора, **не рисующие экран**: DA1/DA2/DA3 (`ESC[c`,
+ * `ESC[>c`, `ESC[=c`), статус/позиция курсора (`ESC[5n`, `ESC[6n`),
+ * версия терминала (`ESC[>q`). Режимы (`ESC[2J`, `ESC[?1049h`) не трогаются.
+ */
+// eslint-disable-next-line no-control-regex -- `\x1b` — это ESC терминала, а не «мусорный» символ.
+const CSI_EMULATOR_QUERY = /\x1b\[(?:0?c|>0?c|=c|[56]n|>0?q)/g
+
+/**
+ * OSC-запросы цвета: `ESC]10;?…`, `ESC]11;?…` (foreground/background),
+ * `ESC]4;<n>;?…` (палитра). Терминатор — BEL или ST (`ESC\`).
+ */
+// eslint-disable-next-line no-control-regex -- `\x1b`/`\x07` — ESC и BEL терминала.
+const OSC_EMULATOR_QUERY = /\x1b\](?:1[01];\?|4;\d+;\?)[^\x07\x1b]*(?:\x07|\x1b\\)/g
+
+/**
+ * Вычистить из снимка вывода **запросы** эмулятора, не влияющие на картинку.
+ *
+ * Зачем: при монтировании вкладки снимок истории пишется в новый xterm.js,
+ * и эмулятор честно отвечает на исторические запросы (`ESC[?1;2c` — DA1,
+ * `ESC[>0;276;0c` — DA2, OSC-цвет и т.п.). Ответы уходят через `term.onData`
+ * в PTY, а программа (tmux по SSH) их уже не ждёт и печатает как текст
+ * (`1;2c0;276;0c`). Сами запросы экран не рисуют, поэтому их удаление
+ * картинку не меняет, а триггер убирает. Вторая линия защиты — флаг
+ * `replaying` в эффекте ниже (гасит ответы на запросы из живой ленты).
+ */
+export function stripEmulatorQueries(text: string): string {
+  if (!text) return text
+  return text.replace(CSI_EMULATOR_QUERY, '').replace(OSC_EMULATOR_QUERY, '')
+}
 
 export interface TerminalViewProps {
   tab: CenterTab
@@ -215,6 +255,12 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
     let fitTimer: ReturnType<typeof setTimeout> | undefined
     // Курсор последнего принятого кадра — с него продолжаем после обрыва.
     let lastSeq = 0
+    /**
+     * Идёт запись снимка в эмулятор. Пока `true`, `onData` отбрасывает данные:
+     * это ответы xterm на запросы из истории (DA1/DA2, OSC-цвет), а не ввод
+     * человека — в PTY они попадать не должны (tmux напечатал бы их текстом).
+     */
+    let replaying = true
 
     const prefs = preferencesRef.current
     const palette = paletteRef.current
@@ -322,6 +368,9 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
 
     term.onData((data) => {
       if (!canWriteRef.current) return
+      // Реплей снимка: ответы эмулятора на исторические запросы отбрасываем
+      // (см. `replaying`). Живой поток и ввод человека идут как раньше.
+      if (replaying) return
       inputBuffer += data
       if (inputTimer === undefined) {
         inputTimer = setTimeout(flushInput, INPUT_BATCH_MS)
@@ -357,6 +406,34 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
     // Предзагрузка символьного шрифта — до первой отрисовки глифов.
     void preloadTerminalFont()
 
+    /**
+     * Запись снимка в эмулятор с ожиданием колбэка xterm.
+     *
+     * Пока снимок не обработан, `replaying` включён (ответы на исторические
+     * запросы отбрасываются); снимает его `finally` вокруг вызова — в том
+     * числе если колбэк не пришёл (страховочный таймаут) или запись упала.
+     */
+    const writeSnapshot = (data: string): Promise<void> =>
+      new Promise<void>((resolve) => {
+        let settled = false
+        const settle = () => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+        // Страховка: колбэк может не прийти — не держим поток заложником.
+        const safety = setTimeout(settle, REPLAY_SETTLE_TIMEOUT_MS)
+        const finish = () => {
+          clearTimeout(safety)
+          settle()
+        }
+        try {
+          term.write(data, finish)
+        } catch {
+          finish()
+        }
+      })
+
     // Снимок вывода → поток вывода (replay уже показан, поток даёт live).
     void (async () => {
       let cursor = 0
@@ -365,11 +442,15 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
         if (disposed) return
         // Сервер сообщает, что часть вывода вытеснена из кольцевого буфера.
         if (snapshot.truncated) setTruncated(true)
-        term.write(snapshot.data)
+        // Снимок — **одна** запись: снимаем `replaying` по её завершении.
+        await writeSnapshot(stripEmulatorQueries(snapshot.data))
         cursor = snapshot.nextSeq
         lastSeq = snapshot.nextSeq
       } catch {
         // Снимок недоступен — поток отдаст вывод сам.
+      } finally {
+        // Колбэк не вызвался/ошибка записи — снимаем флаг до подключения потока.
+        replaying = false
       }
       if (disposed) return
 
