@@ -786,7 +786,8 @@ export function mountStandaloneRoutes(
   ));
 
   // PROP-132 (Ф3в): админ-раздел «Терминалы» — мастер-выключатель
-  // `terminal.enabled`. Применяется **сразу** (`terminalService.setEnabled`:
+  // `terminal.enabled` и флаг восстановления из снимков `terminal.autoRestore`.
+  // Применяются **сразу** (`terminalService.setEnabled`/`setAutoRestore`:
   // живые терминалы закрываются, новые не создаются — рестарт не нужен).
   // Core: чтение/мутации — `requireAuth` (single-user).
   app.route('/api/v2/settings', createTerminalSettingsRoutes(
@@ -794,6 +795,7 @@ export function mountStandaloneRoutes(
     {
       settingsStore,
       configEnabled: config.terminalConfig?.enabled,
+      configAutoRestore: config.terminalConfig?.autoRestore,
       terminalService: deps.terminalService,
       env: process.env,
     },

@@ -1919,7 +1919,7 @@
   проекте (`assistant`/`leader`/`devops`/`admin`/`fixer`/`tester`); у `researcher`/
   `security-auditor`/`explore`/`general`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
   **Тулы интерактивных терминалов (PROP-132, Ф5).** `terminal_list`/`terminal_open`/
-  `terminal_read`/`terminal_write`/`terminal_close` (`engine/tools/terminals.ts`) — тот же
+  `terminal_read`/`terminal_write`/`terminal_close`/`terminal_run` (`engine/tools/terminals.ts`) — тот же
   контур, что у HTTP-роутов `/api/v2/terminals*`: **тот же** экземпляр
   `TerminalService` приходит в тул через `ctx.extra.terminalService` (упаковка —
   оркестратор; в `server/app/deps.ts` и `backend/app/deps.ts` сервис уже
@@ -1943,9 +1943,26 @@
   `strip_ansi`), `tail` отбрасывает завершающий пустой элемент. `terminal_write` с
   `enter: true` проверяет строку **тем же** чекером, что `execute_shell`
   (`checkShellCommand`, `engine/security/shell-guard.ts`): запрет — понятный отказ
-  модели, команда в терминал не уходит. Аудит — внутри `TerminalService`
+  модели, команда в терминал не уходит. **`terminal_run` — один тул, два
+  режима** (параметр `background`, как у `execute_shell`/`task`):
+  `background: false` (дефолт) — **с ожиданием завершения**: тул ждёт команды
+  и возвращает вывод в обрамлении `[CONTENT]`…`[CONTENT END]` + код возврата
+  (`metadata.exit_code`); по таймауту (`timeout_ms`, дефолт 30 с, потолок
+  600000) — понятный отказ с частичным выводом. `background: true` —
+  **без ожидания**: тул возвращает `run_id` сразу, а результат приходит
+  **сообщением в чат** — доставляет его сервис терминалов
+  (`TerminalService.onRunFinished` → `notifyBackgroundParent`, точка сборки в
+  `server/app/deps.ts`/`backend/app/deps.ts`), а не тул: вывода запуска в
+  ответе тула нет. `timeout_ms` в этом режиме — необязательный **watchdog**:
+  не задан — срок `0`, и реестр запусков (`engine/terminal/runs.ts`) при сроке
+  `<= 0` watchdog-таймер **не ставит вовсе** (запуск без лимита: завершает
+  только маркер команды или закрытие терминала). Отдельного тула
+  `terminal_run_background` **больше нет** — ни в реестре тулов
+  (`engine/tools/index.ts`), ни в группе правил `terminal`
+  (`permission/groups.ts`), ни в `PLAN_BLOCKED_AUTOMATION_TOOLS`
+  (`permission/evaluator.ts` — там только `terminal_run`, оба режима). Аудит — внутри `TerminalService`
   (`terminal.open`/`terminal.input`/`terminal.close`, только метаданные) — не
-  дублируется. Тесты — `engine/tools/terminals.test.ts`.
+  дублируется. Тесты — `engine/tools/terminals.test.ts`, `engine/terminal/runs.test.ts`.
   **Контекст плагинного тула сужается.** Для `source: 'plugin'` `executeToolDef` отдаёт только
   `sessionId`/`messageId`/`workingDir`/`agentRole?`/`projectId?`/`abortSignal?` (`narrowToolContext`): `extra` и `dataDir`
   плагину **не передаются** — симметрично `out-of-process` (по проводу те же три поля). Встроенные и
@@ -2531,21 +2548,33 @@
   (`TerminalService` — реестр живых терминалов **в памяти процесса**, поток
   вывода с батчингом, ввод с капом 16 КиБ и token bucket, лимиты 8/проект и
   32/инстанс, мастер-выключатель `setEnabled`, idle-reaper; **права не решает**
-  — это делает роут на границе, инвариант 16), `types.ts` (контракты: запись,
-  DTO с `can_write`, лимиты, типизированные ошибки с машинными кодами
-  `TERMINAL_*`), `ring-buffer.ts` (кольцевой буфер вывода 512 КиБ, сегменты
+  — это делает роут на границе, инвариант 16), `types.ts` (контракты: запись
+  (с `restored`), DTO с `can_write`/`restored`, лимиты, типизированные ошибки с
+  машинными кодами `TERMINAL_*` — включая `TERMINAL_ALREADY_RUNNING`, 409 на
+  перезапуск живого терминала), `ring-buffer.ts` (кольцевой буфер вывода 512 КиБ, сегменты
   8 КиБ, границы по кодовым точкам UTF-8), `audit.ts` (аудит **только
   метаданных**: `terminal.open`/`terminal.input`/`terminal.close` — в журнал
-  исполнений команд, ADR-136), `metrics.ts` (`synth_terminal_sessions{status}`/
-  `synth_terminal_bytes_total{op}`, ADR-094), `config.ts` (мастер-выключатель:
-  `resolveTerminalEnabled` — приоритет **env `SYNTH_TERMINAL_ENABLED` > runtime
-  (`settings.json`/PG) > `config.yaml` `terminal.enabled` > default `true`**; флаг
-  в конфиге **необязателен**, чтобы «не задано» отличалось от «явно задано `true`»
-  — по этому API различает источники `config`/`default`).
+  исполнений команд, ADR-136; **`terminal.input` пишется только для кадров с
+  `Enter`** — выполненная команда; остальные кадры учитывает только метрика
+  `synth_terminal_bytes_total{op="input"}`), `metrics.ts` (`synth_terminal_sessions{status}`/
+  `synth_terminal_bytes_total{op}`, ADR-094), `config.ts` (мастер-выключатель и
+  восстановление: `resolveTerminalEnabled` / `resolveTerminalAutoRestore` /
+  `resolveTerminalSettings` — приоритет **env `SYNTH_TERMINAL_ENABLED` /
+  `SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml`
+  `terminal.enabled`/`terminal.autoRestore` > default `true`**; флаги в конфиге
+  **необязательны**, чтобы «не задано» отличалось от «явно задано `true`»
+  — по этому API различает источники `config`/`default`; env-фиксация
+  проверяется **по полю** — фиксация `enabled` не блокирует правку `autoRestore`).
   **Терминал не дублирует spawn:** своего запуска процесса у сервиса нет —
   только core PTY-провайдер через `ExecutionPort.openPty` (`execution/pty/*`,
   `getPtyProvider`); в remote-режиме PTY живёт на исполнителе, control plane
-  его не поднимает (ADR-135/137). HTTP-контур —
+  его не поднимает (ADR-135/137). **Порт терминала выбирает тот же роутер,
+  что и порт тулов** (PROP-135): `TerminalServiceOptions.resolvePort` →
+  `server/app/terminal-port.ts` (`createTerminalPortResolver`) — профиль по
+  binding'у `resolveExecutionProfile` (сессия → агент → проект → дефолт),
+  область пула `projectId`/`sessionId`, `workspaceSubPath` (тот же
+  `resolveWorkspaceSubPath`, что у хода сессии); ошибка выбора — fail-closed
+  (`TerminalUnavailableError` → 503). HTTP-контур —
   `server/routes/terminals.ts` (`createTerminalRoutes`), сборка сервиса для
   инстанса — `server/app/terminal-service.ts` (`createTerminalService`).
   **Сервис собирается в `server/app/deps.ts` (managed — `backend/app/deps.ts`):
@@ -2554,8 +2583,21 @@
   старте, остановка — на graceful shutdown (`stopTerminalService` → `dispose()`).
   Runtime-настройка — `server/routes/settings-terminal.ts`
   (`createTerminalSettingsRoutes`: `GET/PUT/DELETE /api/v2/settings/terminal`,
-  env-фиксация → 409 `CONFLICT`, изменение применяется **live** через
-  `terminalService.setEnabled`, `restartRequired: false`).
+  контракт `{enabled, autoRestore, source, defaults:{enabled, autoRestore},
+  envLocked, restartRequired:false}`; `PUT` — частичное обновление; env-фиксация
+  → 409 `CONFLICT`; изменение применяется **live** через
+  `terminalService.setEnabled`/`setAutoRestore`, `restartRequired: false`).
+  **Снимки терминалов** (`snapshot.ts`, ADR-096/ADR-116) — порт `BlobStore`:
+  `terminals/<id>/meta.json` (запись реестра + `savedAt`) и
+  `terminals/<id>/output.txt` (хвост буфера ≤ 512 КиБ). Пишутся при выходе
+  процесса, при закрытии терминала, при `dispose()` и раз в 60 с (если вывод
+  менялся; таймер `unref`). `restoreFromSnapshots()` (вызывается из `deps.ts`
+  **до** применения `setEnabled`) поднимает записи моложе `idleMs` (2 дня) как
+  `exited` с `restored: true` и залитым в буфер выводом; старые — удаляет;
+  при `autoRestore=false` не поднимает (файлы убирает reaper). Явное удаление
+  терминала (`delete()`, HTTP `DELETE /:id`) снимок **удаляет** — удалённый
+  терминал не воскреснет. `restart(id)` поднимает новый PTY с теми же
+  `cwd`/`shell`/`cols`/`rows`, чистит буфер, снимает `restored`.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); **мультифайловая правка `patch`** — пути из `metadata.files[]` (`resolvePatchChange`): все пути внутри workspace → `scope:'file'` + `op:'write'`, любой путь вне workspace или неизвестный состав → `{scope:'all'}` (дерево Files, открытые редакторы и Git-вкладка обновляются после правки); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log; публичный API не меняется,
   исполнение — через `ExecutionPort`; **клон атомарный**: git получает соседний временный
@@ -3064,11 +3106,16 @@
   на один запрос). Core-дефолт `isAllowed` — `createSessionAccessPredicate()`;
   backend передаёт правило проекта (`routes/processes.ts`).
   `createTerminalRoutes` (PROP-132, Ф3б) — HTTP-контур интерактивных
-  терминалов (`GET /` — список постранично с фильтрами `project_id`/`session_id`,
+  терминалов (`GET /` — список постранично с фильтрами `project_id`/`session_id`
+  и `include_exited` (`true`/`1` — вместе с завершёнными; по умолчанию — только
+  живые, иначе восстановленные из снимков не видны),
   `POST /` — открыть терминал, `GET /:id` — снимок, `PATCH /:id` — заголовок и
   привязка к сессии, `DELETE /:id` — закрыть, `GET /:id/output?since=` — снимок
   вывода, `GET /:id/stream?since=` — поток `application/x-ndjson`,
-  `POST /:id/input`, `POST /:id/resize`). Доступ — **на границе**
+  `POST /:id/input`, `POST /:id/resize`, `POST /:id/restart` — перезапуск
+  завершённого терминала: живой → 409 `TERMINAL_ALREADY_RUNNING`; мёртвый →
+  новый PTY с теми же `cwd`/`shell`/`cols`/`rows`, id сохраняется, буфер
+  очищается, `restored:false`, событие `terminal.updated`). Доступ — **на границе**
   (инвариант 16): guard `terminalGuard` резолвит терминал и его проект **один
   раз** (`guardedTerminal`), обработчики проверок доступа не содержат; вид
   доступа — по HTTP-методу (`read`/`write`), правило — проектное
@@ -3078,8 +3125,9 @@
   игнорируется — каталог вычисляет сервер (`session.worktree.directory` →
   `project.workspace`). Сервис терминалов — `engine/terminal/*`
   (`TerminalService`): реестр в памяти процесса, кольцевой буфер вывода,
-  аудит (`terminal.open`/`terminal.input`/`terminal.close` — только
-  метаданные), метрики `synth_terminal_*`.
+  снимки в blob-порте (восстановление после рестарта ядра), аудит
+  (`terminal.open`/`terminal.input`/`terminal.close` — только метаданные;
+  `terminal.input` — только для кадров с `Enter`), метрики `synth_terminal_*`.
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и

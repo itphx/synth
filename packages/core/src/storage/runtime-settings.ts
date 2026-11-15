@@ -91,6 +91,16 @@ export interface MetricsRuntimeSettings {
  */
 export interface TerminalRuntimeSettings {
   enabled?: boolean;
+  /**
+   * PROP-132: восстанавливать ли терминалы после рестарта ядра из снимков
+   * (`terminals/<id>/*` в blob-хранилище).
+   *
+   * Приоритет: env `SYNTH_TERMINAL_AUTO_RESTORE` > runtime > config.yaml
+   * `terminal.autoRestore` > default `true`. Применяется **сразу**
+   * (`TerminalService.setAutoRestore`): снимки либо поднимаются при старте,
+   * либо их убирает reaper.
+   */
+  autoRestore?: boolean;
 }
 
 /**

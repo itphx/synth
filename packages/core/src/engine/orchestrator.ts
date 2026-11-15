@@ -454,8 +454,11 @@ function resolveAllowedRoots(workingDir: string, projectRoot: string | null): st
  * вне `workspacesRoot` (managed всегда создаёт проект под корнем, worktree —
  * `{workspacesRoot}/.worktrees/<id>`). Отдавать наружу абсолютный путь нельзя —
  * вне корня он означал бы чужой каталог на томе.
+ *
+ * Правило — **одно** на всех: ход сессии (здесь) и терминал
+ * (`server/app/terminal-port.ts`).
  */
-function resolveWorkspaceSubPath(
+export function resolveWorkspaceSubPath(
   workspacesRoot: string,
   workingDir: string,
 ): string | undefined {

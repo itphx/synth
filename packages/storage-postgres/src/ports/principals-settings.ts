@@ -451,7 +451,9 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
       await deleteSetting(conn, 'execution');
     },
 
-    // PROP-132: runtime-выключатель терминалов (`terminal.enabled`).
+    // PROP-132: runtime-выключатель терминалов (`terminal.enabled` +
+    // `terminal.autoRestore`). Секция пишется **целиком** (JSONB), поэтому
+    // новое поле `autoRestore` сохраняется без изменений схемы.
     async getTerminal(): Promise<Partial<RuntimeSettingsValue<'terminal'>>> {
       return (await readSetting<RuntimeSettingsValue<'terminal'>>(conn, 'terminal')) ?? {};
     },

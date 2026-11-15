@@ -88,6 +88,11 @@ class FakePtyHandle implements PtyHandle {
   emitData(chunk: string): void {
     for (const cb of [...this._dataCbs]) cb(chunk);
   }
+
+  /** Завершить сессию (как из PTY). */
+  emitExit(info: PtyExitInfo): void {
+    for (const cb of [...this._exitCbs]) cb(info);
+  }
 }
 
 /** Эмулятор порта исполнения: отдаёт эмулятор PTY. */
@@ -421,6 +426,81 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('include_exited отдаёт завершённые терминалы, без флага — только живые', async () => {
+    const id = await harness.openTerminal();
+    // Оболочка вышла — терминал завершён (как терминал, восстановленный из
+    // снимка после рестарта ядра: статус `exited`, PTY не поднят).
+    harness.port.handles[0]?.emitExit({ exitCode: 0 });
+
+    const live = await req(harness.app, '/api/v2/terminals?project_id=proj-1', { user: 'owner' });
+    expect(live.status).toBe(200);
+    const liveBody = (await live.json()) as { terminals: unknown[]; total: number };
+    expect(liveBody.terminals).toHaveLength(0);
+    expect(liveBody.total).toBe(0);
+
+    for (const flag of ['include_exited=true', 'include_exited=1']) {
+      const res = await req(harness.app, `/api/v2/terminals?project_id=proj-1&${flag}`, {
+        user: 'owner',
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        terminals: Array<Record<string, unknown>>;
+        total: number;
+      };
+      expect(body.terminals).toHaveLength(1);
+      expect(body.terminals[0]?.['id']).toBe(id);
+      expect(body.terminals[0]?.['status']).toBe('exited');
+      expect(body.total).toBe(1);
+    }
+  });
+
+  it('include_exited работает и с фильтром по сессии', async () => {
+    const id = await harness.openTerminal({ session_id: 'sess-1' });
+    harness.port.handles[0]?.emitExit({ exitCode: 0 });
+
+    const res = await req(harness.app, '/api/v2/terminals?session_id=sess-1&include_exited=true', {
+      user: 'owner',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { terminals: Array<Record<string, unknown>> };
+    expect(body.terminals).toHaveLength(1);
+    expect(body.terminals[0]?.['id']).toBe(id);
+  });
+
+  it('include_exited не обходит права: чужой пользователь не видит терминал', async () => {
+    await harness.openTerminal();
+    harness.port.handles[0]?.emitExit({ exitCode: 0 });
+
+    // Явный `project_id` + нет права на проект → 403 (как и без флага).
+    const stranger = await req(
+      harness.app,
+      '/api/v2/terminals?project_id=proj-1&include_exited=true',
+      { user: 'stranger' },
+    );
+    expect(stranger.status).toBe(403);
+    expect(((await stranger.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+    // Без явного проекта чужой терминал просто не попадает в выдачу.
+    const strangerAll = await req(
+      harness.app,
+      '/api/v2/terminals?include_exited=true',
+      { user: 'stranger' },
+    );
+    expect(strangerAll.status).toBe(200);
+    expect(((await strangerAll.json()) as { terminals: unknown[] }).terminals).toHaveLength(0);
+
+    // Участник с ролью просмотра читает завершённый терминал (но не пишет).
+    const viewer = await req(
+      harness.app,
+      '/api/v2/terminals?project_id=proj-1&include_exited=true',
+      { user: 'viewer' },
+    );
+    expect(viewer.status).toBe(200);
+    const body = (await viewer.json()) as { terminals: Array<Record<string, unknown>> };
+    expect(body.terminals).toHaveLength(1);
+    expect(body.terminals[0]?.['can_write']).toBe(false);
+  });
+
   it('участник с ролью просмотра читает терминал, но не пишет в него', async () => {
     const id = await harness.openTerminal();
 
@@ -729,6 +809,51 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     );
   });
 
+  it('перезапускает завершённый терминал (POST /:id/restart)', async () => {
+    const id = await harness.openTerminal();
+    harness.port.handles[0]?.emitExit({ exitCode: 0 });
+
+    const res = await req(harness.app, `/api/v2/terminals/${id}/restart`, {
+      method: 'POST',
+      user: 'owner',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      terminal: { id: string; status: string; restored?: boolean };
+    };
+    expect(body.terminal.id).toBe(id);
+    expect(body.terminal.status).toBe('running');
+    expect(body.terminal.restored).toBe(false);
+    // Новый PTY поднят.
+    expect(harness.port.requests).toHaveLength(2);
+  });
+
+  it('живой терминал перезапустить нельзя (409 TERMINAL_ALREADY_RUNNING)', async () => {
+    const id = await harness.openTerminal();
+
+    const res = await req(harness.app, `/api/v2/terminals/${id}/restart`, {
+      method: 'POST',
+      user: 'owner',
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      'TERMINAL_ALREADY_RUNNING',
+    );
+    // Второй PTY не открывался.
+    expect(harness.port.requests).toHaveLength(1);
+  });
+
+  it('перезапуск требует прав на изменение содержимого проекта', async () => {
+    const id = await harness.openTerminal();
+    harness.port.handles[0]?.emitExit({ exitCode: 0 });
+
+    const res = await req(harness.app, `/api/v2/terminals/${id}/restart`, {
+      method: 'POST',
+      user: 'viewer',
+    });
+    expect(res.status).toBe(403);
+  });
+
   it('выключатель инстанса закрывает контур (403 TERMINALS_DISABLED)', async () => {
     const id = await harness.openTerminal();
     harness.service.setEnabled(false);
@@ -740,6 +865,7 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
       ['GET', `/api/v2/terminals/${id}/stream`, undefined],
       ['POST', `/api/v2/terminals/${id}/input`, JSON.stringify({ data: 'x' })],
       ['POST', `/api/v2/terminals/${id}/resize`, JSON.stringify({ cols: 80, rows: 24 })],
+      ['POST', `/api/v2/terminals/${id}/restart`, undefined],
       ['DELETE', `/api/v2/terminals/${id}`, undefined],
     ] as const) {
       const res = await req(harness.app, path, {

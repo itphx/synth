@@ -34,11 +34,27 @@
 import { randomUUID } from 'node:crypto';
 import { isExecutionError, type ExecutionPort, type PtyHandle } from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
+import type { BlobStore } from '../../storage/ports/blob-store.js';
 import type { TerminalAuditSink, TerminalCloseReason } from './audit.js';
 import type { TerminalMetricsHooks } from './metrics.js';
 import { TerminalRingBuffer } from './ring-buffer.js';
 import {
+  buildRunMarkerCommand,
+  scanRunMarkers,
+  TerminalRunRegistry,
+  type TerminalRunFinishedHandler,
+  type TerminalRunRecord,
+} from './runs.js';
+import {
+  deleteTerminalSnapshot,
+  listTerminalSnapshotIds,
+  readTerminalSnapshot,
+  readTerminalSnapshotOutput,
+  writeTerminalSnapshot,
+} from './snapshot.js';
+import {
   DEFAULT_TERMINAL_LIMITS,
+  TerminalAlreadyRunningError,
   TerminalDisabledError,
   TerminalInvalidRequestError,
   TerminalLimitError,
@@ -50,6 +66,8 @@ import {
   type TerminalLogger,
   type TerminalOutputChunk,
   type TerminalOutputSnapshot,
+  type TerminalPortContext,
+  type TerminalPortResolver,
   type TerminalRecord,
   type TerminalServiceOptions,
   type TerminalSubscribeOptions,
@@ -59,12 +77,27 @@ import {
   type TerminalTimers,
 } from './types.js';
 
+/**
+ * Период записи снимка живого терминала, мс (60 с).
+ *
+ * Снимок нужен, чтобы терминал, **переживший рестарт ядра** (процесс PTY не
+ * переживает), вернулся с последним выводом. Период — компромисс между
+ * свежестью снимка и объёмом записи: вывод меняется часто, а снимок пишется
+ * только когда он действительно изменился.
+ */
+const TERMINAL_SNAPSHOT_INTERVAL_MS = 60_000;
+
 /** Живой терминал: запись реестра + хэндл PTY + буфер и подписчики. */
 interface TerminalRuntime {
   /** Запись реестра (единственный источник правды по метаданным). */
   record: TerminalRecord;
-  /** Хэндл PTY-сессии. */
-  handle: PtyHandle;
+  /**
+   * Хэндл PTY-сессии.
+   *
+   * **Нет** у терминала, восстановленного из снимка: процесс не запущен —
+   * запись живёт только как история вывода (перезапуск поднимет новый PTY).
+   */
+  handle?: PtyHandle;
   /** Кольцевой буфер вывода. */
   buffer: TerminalRingBuffer;
   /** Подписчики на вывод. */
@@ -85,6 +118,23 @@ interface TerminalRuntime {
   closeReason?: TerminalCloseReason;
   /** Актор закрытия (для аудита). */
   closeActor?: string;
+  /**
+   * Хвост потока, удерживаемый между чанками: маркер завершения запуска
+   * может прийти несколькими чанками (граница внутри ESC-последовательности).
+   */
+  markerPending: string;
+  /** Счётчик изменений вывода (для снимка «вывод менялся»). */
+  outputVersion: number;
+  /** Значение `outputVersion` на момент последнего снимка. */
+  snapshotVersion: number;
+  /**
+   * Незавершённая запись снимка (best-effort, fire-and-forget).
+   *
+   * Нужна, чтобы `delete()` дождался её: иначе запись, стартовавшая до
+   * удаления, дописала бы файл **после** удаления — и удалённый терминал
+   * воскрес бы после рестарта ядра.
+   */
+  pendingSnapshot: Promise<void> | null;
 }
 
 /** Подписчик на вывод терминала. */
@@ -159,6 +209,8 @@ function requireText(value: string, field: string): string {
  */
 export class TerminalService {
   private readonly _port: ExecutionPort;
+  private readonly _resolvePort?: TerminalPortResolver;
+  private readonly _blobs?: BlobStore;
   private readonly _eventBus?: EventBus;
   private readonly _audit?: TerminalAuditSink;
   private readonly _metrics?: TerminalMetricsHooks;
@@ -167,23 +219,33 @@ export class TerminalService {
   private readonly _now: () => number;
   private readonly _timers: TerminalTimers;
   private readonly _logger: TerminalLogger;
-  private readonly _target: TerminalRecord['target'];
+  private readonly _targetOverride?: TerminalRecord['target'];
   private readonly _executorId?: string;
   private readonly _isSessionActive?: (sessionId: string) => boolean | Promise<boolean>;
+  private readonly _onRunFinished?: TerminalRunFinishedHandler;
 
   /** Живые и завершённые терминалы (id → состояние). */
   private readonly _terminals = new Map<string, TerminalRuntime>();
   /** Single-flight открытия: ключ → промис открытия. */
   private readonly _opening = new Map<string, Promise<TerminalRecord>>();
+  /** Реестр запусков команд в терминалах (PROP-132, Ф5). */
+  private readonly _runs: TerminalRunRegistry;
   /** Счётчик незавершённых открытий по проектам (учёт в лимитах). */
   private readonly _openingByProject = new Map<string, number>();
+  /** Идентификаторы портов (для ключа single-flight: разные порты — разные терминалы). */
+  private readonly _portIds = new WeakMap<object, number>();
+  private _portCounter = 0;
   private _subscriberCounter = 0;
   private _enabled = true;
+  private _autoRestore = true;
   private _reaperTimer: TerminalTimerHandle | null = null;
+  private _snapshotTimer: TerminalTimerHandle | null = null;
   private _disposed = false;
 
   constructor(options: TerminalServiceOptions) {
     this._port = options.port;
+    if (options.resolvePort) this._resolvePort = options.resolvePort;
+    if (options.blobs) this._blobs = options.blobs;
     this._eventBus = options.eventBus;
     this._audit = options.audit;
     this._metrics = options.metrics;
@@ -195,15 +257,44 @@ export class TerminalService {
       warn: (message: string) => console.warn(message),
       error: (message: string) => console.error(message),
     };
-    this._target = options.target ?? (options.port.isRemote ? 'executor' : 'inline');
+    this._targetOverride = options.target;
     if (options.executorId !== undefined) this._executorId = options.executorId;
     this._isSessionActive = options.isSessionActive;
+    if (options.onRunFinished) this._onRunFinished = options.onRunFinished;
+    this._autoRestore = options.autoRestore ?? true;
+    this._runs = new TerminalRunRegistry({
+      now: this._now,
+      generateId: this._generateId,
+      timers: this._timers,
+      logger: this._logger,
+      onSettled: (run) => this._handleRunSettled(run),
+    });
     this._startReaper();
+    this._startSnapshotTimer();
   }
 
   /** Включён ли терминальный контур на инстансе. */
   isEnabled(): boolean {
     return this._enabled;
+  }
+
+  /**
+   * Восстанавливаются ли терминалы из снимков (`terminal.autoRestore`).
+   *
+   * `false` — снимки не поднимаются при старте процесса; их убирает reaper.
+   */
+  isAutoRestore(): boolean {
+    return this._autoRestore;
+  }
+
+  /**
+   * Флаг восстановления терминалов из снимков (`terminal.autoRestore`).
+   *
+   * Применяется **сразу**: `false` — снимки не поднимаются при следующем
+   * старте процесса (текущие файлы уберёт reaper), `true` — поднимаются.
+   */
+  setAutoRestore(enabled: boolean): void {
+    this._autoRestore = enabled;
   }
 
   /**
@@ -234,8 +325,10 @@ export class TerminalService {
    *
    * - **idempotency по клиентскому id**: создание с уже существующим id
    *   возвращает существующий терминал (переподключение после reload);
-   * - **single-flight по `(cwd, shell, backend)`**: параллельные открытия с
-   *   одинаковым ключом получают **один** терминал (дизайн §10);
+   * - **single-flight по `(порт, cwd, shell)`**: параллельные открытия с
+   *   одинаковым ключом получают **один** терминал (дизайн §10). Порт входит
+   *   в ключ: терминалы разных профилей исполнения (PROP-135) — разные
+   *   терминалы, даже если каталог и оболочка совпадают;
    * - **лимиты**: `maxPerProject`/`maxPerInstance` → `TerminalLimitError`.
    */
   async create(input: TerminalCreateInput): Promise<TerminalRecord> {
@@ -260,6 +353,10 @@ export class TerminalService {
       ...(input.env ? { env: input.env } : {}),
     };
 
+    // Порт выбирается **до** single-flight: терминал живёт на той же точке
+    // исполнения, что и тулы сессии (профиль/пул по binding'у, PROP-135).
+    const port = await this._resolvePortFor(base);
+
     if (input.id !== undefined) {
       const id = normalizeTerminalId(input.id);
       const existing = this._terminals.get(id);
@@ -267,7 +364,7 @@ export class TerminalService {
       const key = `id:${id}`;
       const inflight = this._opening.get(key);
       if (inflight) return inflight;
-      const promise = this._openTerminal({ ...base, id });
+      const promise = this._openTerminal({ ...base, id }, port);
       this._opening.set(key, promise);
       try {
         return await promise;
@@ -276,10 +373,10 @@ export class TerminalService {
       }
     }
 
-    const key = `key:${this._target}\u0000${cwd}\u0000${shell}`;
+    const key = `key:${this._portKey(port)}\u0000${cwd}\u0000${shell}`;
     const inflight = this._opening.get(key);
     if (inflight) return inflight;
-    const promise = this._openTerminal(base);
+    const promise = this._openTerminal(base, port);
     this._opening.set(key, promise);
     try {
       return await promise;
@@ -294,6 +391,12 @@ export class TerminalService {
    * Кап кадра — `maxInputBytes` (16 КиБ), скорость — `inputRatePerSecond`
    * (20 кадров/с, token bucket). Нарушение → `TerminalLimitError`
    * (`scope: 'input'`/`'rate'`).
+   *
+   * **Аудит — только выполненные команды** (кадр с `Enter`): обычные кадры
+   * ввода (набор текста, стрелки, Ctrl-C) — не команды, и плодить записи
+   * в журнале исполнений на каждый кадр нельзя (ADR-136). Их объём считает
+   * метрика `synth_terminal_bytes_total{op="input"}` — она и остаётся на
+   * **каждый** кадр.
    */
   write(id: string, data: string, options: { actorId?: string } = {}): void {
     const runtime = this._requireLiveRuntime(id);
@@ -306,22 +409,32 @@ export class TerminalService {
       });
     }
     this._consumeToken(runtime);
-    runtime.handle.write(data);
+    const handle = runtime.handle;
+    if (!handle) {
+      throw new TerminalNotFoundError(id, `Терминал ${id} завершён`);
+    }
+    handle.write(data);
     runtime.record.lastActivityAt = this._now();
     this._metrics?.addBytes('input', bytes);
-    this._auditRuntime(runtime, 'terminal.input', {
-      ...(options.actorId !== undefined ? { actorId: options.actorId } : {}),
-      bytes,
-      enter: data.includes('\n') || data.includes('\r'),
-    });
+    // Команда — кадр с `Enter`; только он попадает в журнал исполнений.
+    const enter = data.includes('\n') || data.includes('\r');
+    if (enter) {
+      this._auditRuntime(runtime, 'terminal.input', {
+        ...(options.actorId !== undefined ? { actorId: options.actorId } : {}),
+        bytes,
+        enter: true,
+      });
+    }
   }
 
   /** Изменить размер терминала (колонки/строки). */
   resize(id: string, cols: number, rows: number): TerminalRecord {
     const runtime = this._requireLiveRuntime(id);
+    const handle = runtime.handle;
+    if (!handle) throw new TerminalNotFoundError(id, `Терминал ${id} завершён`);
     const nextCols = clampDimension(cols);
     const nextRows = clampDimension(rows);
-    runtime.handle.resize(nextCols, nextRows);
+    handle.resize(nextCols, nextRows);
     runtime.record.cols = nextCols;
     runtime.record.rows = nextRows;
     runtime.record.lastActivityAt = this._now();
@@ -359,6 +472,10 @@ export class TerminalService {
    *
    * PTY закрывается (`SIGTERM` → `SIGKILL` — это делает хэндл), подписчики
    * получают `onExit`, публикуются `terminal.exited` + `terminal.deleted`.
+   *
+   * Снимок терминала **сохраняется**: закрытый терминал вернётся после
+   * рестарта ядра вместе с последним выводом (PROP-132). Явное удаление —
+   * `delete()` — снимок убирает.
    */
   async close(id: string, options: { actorId?: string } = {}): Promise<void> {
     const runtime = this._terminals.get(id);
@@ -368,6 +485,191 @@ export class TerminalService {
       remove: true,
       ...(options.actorId !== undefined ? { actorId: options.actorId } : {}),
     });
+  }
+
+  /**
+   * Удалить терминал **явно** (пользователь удалил вкладку).
+   *
+   * Отличие от `close()`: удалённый терминал не должен воскреснуть после
+   * рестарта ядра — его снимок **удаляется** из blob-хранилища (PROP-132).
+   */
+  async delete(id: string, options: { actorId?: string } = {}): Promise<void> {
+    const runtime = this._terminals.get(id);
+    if (!runtime) throw new TerminalNotFoundError(id);
+    await this._closeRuntime(runtime, {
+      reason: 'user',
+      remove: true,
+      ...(options.actorId !== undefined ? { actorId: options.actorId } : {}),
+    });
+    // Ждём незавершённую запись снимка: иначе она дописала бы файл **после**
+    // удаления — и удалённый терминал воскрес бы после рестарта ядра.
+    if (runtime.pendingSnapshot) await runtime.pendingSnapshot;
+    await this._deleteSnapshot(id);
+  }
+
+  /**
+   * Перезапустить завершённый терминал (PROP-132).
+   *
+   * Поднимается **новый** PTY с теми же `cwd`/`shell`/`cols`/`rows`; id
+   * терминала сохраняется, буфер вывода очищается, статус — `running`,
+   * признак `restored` снимается. Публикуется событие `terminal.updated`.
+   *
+   * @throws TerminalNotFoundError — терминала нет.
+   * @throws TerminalAlreadyRunningError — терминал жив (перезапуск невозможен).
+   */
+  async restart(id: string): Promise<TerminalRecord> {
+    this._assertUsable();
+    const runtime = this._terminals.get(id);
+    if (!runtime) throw new TerminalNotFoundError(id);
+    if (!runtime.finished) throw new TerminalAlreadyRunningError(id);
+
+    const record = runtime.record;
+    const port = await this._resolvePortFor({
+      projectId: record.projectId,
+      ...(record.sessionId !== undefined ? { sessionId: record.sessionId } : {}),
+      cwd: record.cwd,
+      shell: record.shell,
+    });
+
+    const openPty = port.openPty;
+    if (!openPty || port.pty === false) {
+      throw new TerminalUnavailableError(
+        'pty_unsupported',
+        'Исполнение в этой среде не поддерживает PTY',
+      );
+    }
+
+    const now = this._now();
+    let handle: PtyHandle;
+    try {
+      handle = await openPty.call(port, {
+        cwd: record.cwd,
+        shell: record.shell,
+        cols: record.cols,
+        rows: record.rows,
+      });
+    } catch (err) {
+      if (isExecutionError(err)) throw err;
+      throw new TerminalUnavailableError(
+        'spawn_failed',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    // Буфер очищается: старый вывод относится к завершённому терминалу.
+    runtime.buffer = this._newBuffer();
+    runtime.pending = [];
+    runtime.pendingBytes = 0;
+    runtime.flushTimer = null;
+    runtime.finished = false;
+    runtime.closeReason = undefined;
+    runtime.closeActor = undefined;
+    runtime.markerPending = '';
+    runtime.tokens = this._limits.inputRatePerSecond;
+    runtime.tokensUpdatedAt = now;
+    runtime.handle = handle;
+    runtime.outputVersion += 1;
+
+    record.status = 'running';
+    record.restored = false;
+    record.exitCode = undefined;
+    record.signal = undefined;
+    record.lastActivityAt = now;
+
+    handle.onData((chunk: string) => this._onData(runtime, chunk));
+    handle.onExit((info: { exitCode?: number; signal?: string }) => {
+      this._finish(runtime, info, runtime.closeReason ?? 'exited', runtime.closeActor);
+    });
+
+    this._publish(runtime, 'terminal.updated', { status: 'running', restored: false });
+    this._syncMetrics();
+    // Снимок перезаписан: в нём уже новая (пустая) история вывода.
+    void this._writeSnapshot(runtime);
+    return { ...record };
+  }
+
+  /**
+   * Восстановить терминалы из снимков после рестарта ядра (PROP-132).
+   *
+   * Поднимаются записи моложе `idleMs` (2 дня от `lastActivityAt`): статус
+   * `exited`, признак `restored: true`, в буфер заливается сохранённый хвост
+   * вывода (`output()` работает), подписчиков нет (`attachedClients = 0`) —
+   * PTY не запущен, терминал можно только перезапустить.
+   *
+   * Снимки старше срока удаляются. При `terminal.autoRestore === false`
+   * снимки не поднимаются вовсе — их убирает reaper.
+   *
+   * @returns число восстановленных терминалов.
+   */
+  async restoreFromSnapshots(): Promise<number> {
+    const blobs = this._blobs;
+    if (!blobs) return 0;
+    if (!this._autoRestore) return 0;
+
+    let ids: string[];
+    try {
+      ids = await listTerminalSnapshotIds(blobs);
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalService] список снимков терминалов не прочитан: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 0;
+    }
+
+    const now = this._now();
+    let restored = 0;
+    for (const id of ids) {
+      try {
+        const meta = await readTerminalSnapshot(blobs, id);
+        if (!meta) {
+          // Битый снимок — как отсутствующий: файл уберёт reaper.
+          await deleteTerminalSnapshot(blobs, id);
+          continue;
+        }
+        if (now - meta.record.lastActivityAt >= this._limits.idleMs) {
+          await deleteTerminalSnapshot(blobs, id);
+          continue;
+        }
+        if (this._terminals.has(id)) continue;
+
+        const output = await readTerminalSnapshotOutput(blobs, id);
+        const buffer = this._newBuffer();
+        if (output !== '') buffer.append(output);
+
+        const record: TerminalRecord = {
+          ...meta.record,
+          status: 'exited',
+          restored: true,
+        };
+        const runtime: TerminalRuntime = {
+          record,
+          buffer,
+          subscribers: new Map(),
+          pending: [],
+          pendingBytes: 0,
+          flushTimer: null,
+          tokens: this._limits.inputRatePerSecond,
+          tokensUpdatedAt: now,
+          finished: true,
+          markerPending: '',
+          outputVersion: 0,
+          snapshotVersion: 0,
+          pendingSnapshot: null,
+        };
+        this._terminals.set(id, runtime);
+        restored += 1;
+      } catch (err) {
+        this._logger.warn(
+          `[TerminalService] восстановление терминала ${id} не удалось: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    this._syncMetrics();
+    return restored;
   }
 
   /** Запись терминала (копия — реестр не отдаётся наружу). */
@@ -404,6 +706,109 @@ export class TerminalService {
   output(id: string): TerminalOutputSnapshot | null {
     const runtime = this._terminals.get(id);
     return runtime ? runtime.buffer.snapshot() : null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Запуски команд (PROP-132, Ф5)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Запустить команду в терминале и зарегистрировать запуск.
+   *
+   * Команда уходит в оболочку терминала, после неё — **невидимый** маркер
+   * завершения (OSC 7770): по нему сервис узнаёт, что команда закончилась, и
+   * забирает код возврата. Маркер вырезается из потока (и из буфера), в
+   * вывод модели не попадает.
+   *
+   * Ожидания завершения здесь нет — вызывающий ждёт сам (`waitRun`) или
+   * забирает результат позже (`getRun`).
+   *
+   * @throws TerminalNotFoundError — терминала нет или он завершён.
+   * @throws TerminalRunBusyError — в терминале уже идёт запуск.
+   */
+  startRun(input: {
+    terminalId: string;
+    command: string;
+    timeoutMs: number;
+    actorId?: string;
+  }): TerminalRunRecord {
+    this._assertUsable();
+    const runtime = this._requireLiveRuntime(input.terminalId);
+    const command = input.command.replace(/[\r\n]+$/, '');
+    const run = this._runs.start({
+      terminalId: runtime.record.id,
+      ...(runtime.record.sessionId !== undefined ? { sessionId: runtime.record.sessionId } : {}),
+      command,
+      timeoutMs: input.timeoutMs,
+    });
+    try {
+      this.write(runtime.record.id, `${command}\n`, {
+        ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
+      });
+      this.write(runtime.record.id, `${buildRunMarkerCommand(run.nonce)}\n`, {
+        ...(input.actorId !== undefined ? { actorId: input.actorId } : {}),
+      });
+    } catch (err) {
+      // Команда не ушла — запуск отменяем (иначе терминал остался бы «занятым»).
+      this._runs.cancel(run.runId);
+      throw err;
+    }
+    return run;
+  }
+
+  /** Снимок запуска (копия) или `null`, если запуска нет. */
+  getRun(runId: string): TerminalRunRecord | null {
+    return this._runs.get(runId);
+  }
+
+  /**
+   * Дождаться завершения запуска.
+   *
+   * Возвращает актуальный снимок: если срок ожидания истёк, а запуск ещё
+   * идёт — снимок со статусом `running` (не `null`).
+   */
+  async waitRun(runId: string, timeoutMs: number): Promise<TerminalRunRecord | null> {
+    return this._runs.wait(runId, timeoutMs);
+  }
+
+  /**
+   * Отменить запуск (статус `closed`).
+   *
+   * @returns `true`, если запуск был активен.
+   */
+  cancelRun(runId: string): boolean {
+    return this._runs.cancel(runId);
+  }
+
+  /**
+   * Запуск завершён — зовём колбэк точки сборки (уведомление сессии).
+   *
+   * Ошибка колбэка не ломает терминал: результат уже в реестре, а уведомление
+   * —best-effort (как уведомление о фоновом процессе).
+   */
+  private _handleRunSettled(run: TerminalRunRecord): void {
+    const handler = this._onRunFinished;
+    if (!handler) return;
+    const runtime = this._terminals.get(run.terminalId);
+    const terminal = runtime ? { ...runtime.record } : null;
+    try {
+      const result = handler(run, terminal);
+      if (result && typeof (result as Promise<void>).then === 'function') {
+        void (result as Promise<void>).catch((err: unknown) => {
+          this._logger.warn(
+            `[TerminalService] уведомление о завершении запуска ${run.runId} не удалось: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
+      }
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalService] уведомление о завершении запуска ${run.runId} не удалось: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**
@@ -472,14 +877,23 @@ export class TerminalService {
     };
   }
 
-  /** Остановить сервис: закрыть терминалы, снять таймеры. */
+  /**
+   * Остановить сервис: закрыть терминалы, снять таймеры.
+   *
+   * Перед остановкой пишутся снимки живых терминалов: после рестарта ядра
+   * они вернутся с последним выводом (PROP-132). Запись — best-effort
+   * (fire-and-forget): периодический снимок (60 с) обычно уже свежий.
+   */
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
     this._stopReaper();
+    this._stopSnapshotTimer();
+    this._runs.dispose();
     for (const runtime of [...this._terminals.values()]) {
+      void this._writeSnapshot(runtime);
       try {
-        const closing = runtime.handle.close({ signal: 'SIGTERM' });
+        const closing = runtime.handle?.close({ signal: 'SIGTERM' });
         // Закрытие не удалось — процесс убьёт supervisor; ошибку глушим.
         if (closing && typeof closing.catch === 'function') closing.catch(() => undefined);
       } catch {
@@ -547,22 +961,122 @@ export class TerminalService {
     return result;
   }
 
+  /** Новый кольцевой буфер вывода (ёмкость/сегмент — из лимитов сервиса). */
+  private _newBuffer(): TerminalRingBuffer {
+    return new TerminalRingBuffer({
+      maxBytes: this._limits.ringBufferBytes,
+      segmentBytes: this._limits.ringSegmentBytes,
+    });
+  }
+
+  /**
+   * Порт исполнения для терминала (PROP-135).
+   *
+   * Задан `resolvePort` — порт выбирает **тот же** роутер, что и тулы сессии
+   * (профиль по binding'у + область пула + `workspaceSubPath`). Ошибка
+   * выбора — fail-closed (`TerminalUnavailableError` → 503): молча уйти на
+   * инстансный порт означало бы выполнить терминал не там, куда его направили.
+   */
+  private async _resolvePortFor(ctx: TerminalPortContext): Promise<ExecutionPort> {
+    const resolver = this._resolvePort;
+    if (!resolver) return this._port;
+    try {
+      return await resolver(ctx);
+    } catch (err) {
+      throw new TerminalUnavailableError(
+        'port_unavailable',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
+  /**
+   * Ключ порта для single-flight (разные порты — разные терминалы).
+   *
+   * Порт — объект; идентификатор выдаётся по **экземпляру** (`WeakMap`):
+   * роутер отдаёт один и тот же экземпляр порта для одной области/профиля,
+   * поэтому терминалы одного пула делятся, а разных — нет.
+   */
+  private _portKey(port: ExecutionPort): string {
+    const key = port as unknown as object;
+    let id = this._portIds.get(key);
+    if (id === undefined) {
+      id = ++this._portCounter;
+      this._portIds.set(key, id);
+    }
+    return String(id);
+  }
+
+  /**
+   * Точка исполнения терминала: явный override — иначе по порту
+   * (`isRemote` → исполнитель, иначе — процесс control plane).
+   */
+  private _targetFor(port: ExecutionPort): TerminalRecord['target'] {
+    return this._targetOverride ?? (port.isRemote ? 'executor' : 'inline');
+  }
+
+  /**
+   * Записать снимок терминала (метаданные + хвост вывода).
+   *
+   * Ошибка записи — предупреждение в лог: снимок best-effort, его отсутствие
+   * не ломает работу терминала (как лог фонового процесса, ADR-113).
+   */
+  private async _writeSnapshot(runtime: TerminalRuntime): Promise<void> {
+    const blobs = this._blobs;
+    if (!blobs) return;
+    const output = runtime.buffer.snapshot().chunks.map((chunk) => chunk.data).join('');
+    const promise = (async (): Promise<void> => {
+      try {
+        await writeTerminalSnapshot(blobs, runtime.record, output, this._now());
+        runtime.snapshotVersion = runtime.outputVersion;
+      } catch (err) {
+        this._logger.warn(
+          `[TerminalService] снимок терминала ${runtime.record.id} не записан: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    })();
+    // Промис запоминается **синхронно** (тело до первого `await` выполняется
+    // сразу) — `delete()` дождётся его перед удалением файла.
+    runtime.pendingSnapshot = promise;
+    await promise;
+  }
+
+  /** Удалить снимок терминала (явное удаление терминала). */
+  private async _deleteSnapshot(id: string): Promise<void> {
+    const blobs = this._blobs;
+    if (!blobs) return;
+    try {
+      await deleteTerminalSnapshot(blobs, id);
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalService] снимок терминала ${id} не удалён: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   /** Открыть PTY и зарегистрировать терминал. */
-  private async _openTerminal(params: {
-    id?: string;
-    projectId: string;
-    sessionId?: string;
-    ownerId: string;
-    cwd: string;
-    shell: string;
-    cols: number;
-    rows: number;
-    title?: string;
-    env?: Record<string, string>;
-  }): Promise<TerminalRecord> {
+  private async _openTerminal(
+    params: {
+      id?: string;
+      projectId: string;
+      sessionId?: string;
+      ownerId: string;
+      cwd: string;
+      shell: string;
+      cols: number;
+      rows: number;
+      title?: string;
+      env?: Record<string, string>;
+    },
+    port: ExecutionPort,
+  ): Promise<TerminalRecord> {
     this._assertLimits(params.projectId);
-    const openPty = this._port.openPty;
-    if (!openPty || this._port.pty === false) {
+    const openPty = port.openPty;
+    if (!openPty || port.pty === false) {
       throw new TerminalUnavailableError(
         'pty_unsupported',
         'Исполнение в этой среде не поддерживает PTY',
@@ -582,7 +1096,7 @@ export class TerminalService {
       rows: params.rows,
       createdAt: now,
       lastActivityAt: now,
-      target: this._target,
+      target: this._targetFor(port),
       ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
       ...(params.title !== undefined ? { title: params.title } : {}),
       ...(this._executorId !== undefined ? { executorId: this._executorId } : {}),
@@ -594,7 +1108,7 @@ export class TerminalService {
     );
     let handle: PtyHandle;
     try {
-      handle = await openPty.call(this._port, {
+      handle = await openPty.call(port, {
         cwd: params.cwd,
         shell: params.shell,
         cols: params.cols,
@@ -617,10 +1131,7 @@ export class TerminalService {
     const runtime: TerminalRuntime = {
       record,
       handle,
-      buffer: new TerminalRingBuffer({
-        maxBytes: this._limits.ringBufferBytes,
-        segmentBytes: this._limits.ringSegmentBytes,
-      }),
+      buffer: this._newBuffer(),
       subscribers: new Map(),
       pending: [],
       pendingBytes: 0,
@@ -628,6 +1139,10 @@ export class TerminalService {
       tokens: this._limits.inputRatePerSecond,
       tokensUpdatedAt: now,
       finished: false,
+      markerPending: '',
+      outputVersion: 0,
+      snapshotVersion: 0,
+      pendingSnapshot: null,
     };
     this._terminals.set(id, runtime);
     record.status = 'running';
@@ -645,13 +1160,26 @@ export class TerminalService {
     return { ...record };
   }
 
-  /** Вывод от PTY: в буфер + очередь на доставку. */
+  /** Вывод от PTY: маркеры запусков вырезаются, остальное — в буфер + очередь. */
   private _onData(runtime: TerminalRuntime, chunk: string): void {
     if (runtime.finished || chunk === '') return;
-    const pieces = runtime.buffer.append(chunk);
+    // Невидимые маркеры завершения запуска (OSC 7770) в буфер и в вывод
+    // модели не попадают: вырезаем их до записи в кольцевой буфер.
+    const scan = scanRunMarkers(chunk, runtime.markerPending);
+    runtime.markerPending = scan.pending;
+    const text = scan.parts
+      .filter((part): part is { kind: 'text'; text: string } => part.kind === 'text')
+      .map((part) => part.text)
+      .join('');
+    // Запуски: текст до маркера — в вывод запуска, маркер — его завершение.
+    this._runs.handleData(runtime.record.id, scan.parts);
+    if (text === '') return;
+    const pieces = runtime.buffer.append(text);
     if (pieces.length === 0) return;
     runtime.record.lastActivityAt = this._now();
-    this._metrics?.addBytes('output', Buffer.byteLength(chunk, 'utf8'));
+    // Вывод изменился — следующий периодический снимок это увидит.
+    runtime.outputVersion += 1;
+    this._metrics?.addBytes('output', Buffer.byteLength(text, 'utf8'));
     for (const piece of pieces) {
       runtime.pending.push(piece);
       runtime.pendingBytes += piece.bytes;
@@ -720,6 +1248,9 @@ export class TerminalService {
     if (runtime.finished) return;
     runtime.finished = true;
     runtime.record.status = 'exited';
+    // Активный запуск команды в этом терминале завершается статусом
+    // `closed`: команда не доиграла — терминала больше нет.
+    this._runs.closeTerminal(runtime.record.id);
     if (info.exitCode !== undefined) runtime.record.exitCode = info.exitCode;
     if (info.signal !== undefined) runtime.record.signal = info.signal;
     runtime.record.lastActivityAt = this._now();
@@ -753,6 +1284,9 @@ export class TerminalService {
       ...(runtime.record.exitCode !== undefined ? { exitCode: runtime.record.exitCode } : {}),
       ...(runtime.record.signal !== undefined ? { signal: runtime.record.signal } : {}),
     });
+    // Снимок терминала: после выхода процесса терминал вернётся при рестарте
+    // ядра вместе с последним выводом (PROP-132).
+    void this._writeSnapshot(runtime);
     this._syncMetrics();
   }
 
@@ -773,7 +1307,7 @@ export class TerminalService {
       this._publish(runtime, 'terminal.updated', { status: 'closing' });
       this._syncMetrics();
       try {
-        await runtime.handle.close({ signal: 'SIGTERM' });
+        await runtime.handle?.close({ signal: 'SIGTERM' });
       } catch (err) {
         this._logger.warn(
           `[TerminalService] закрытие ${runtime.record.id} не удалось: ${
@@ -941,6 +1475,80 @@ export class TerminalService {
     this._reaperTimer = null;
   }
 
+  /** Запустить таймер периодического снимка живых терминалов (60 с). */
+  private _startSnapshotTimer(): void {
+    if (this._snapshotTimer !== null) return;
+    if (!this._blobs) return;
+    this._snapshotTimer = this._timers.setInterval(() => {
+      void this._snapshotChanged();
+    }, TERMINAL_SNAPSHOT_INTERVAL_MS);
+    this._snapshotTimer.unref?.();
+  }
+
+  /** Остановить таймер периодического снимка. */
+  private _stopSnapshotTimer(): void {
+    if (this._snapshotTimer === null) return;
+    this._timers.clearInterval(this._snapshotTimer);
+    this._snapshotTimer = null;
+  }
+
+  /**
+   * Периодический снимок: пишутся терминалы, у которых **изменился вывод**
+   * (завершённые уже записаны в `_finish`).
+   */
+  private async _snapshotChanged(): Promise<void> {
+    if (this._disposed) return;
+    for (const runtime of [...this._terminals.values()]) {
+      if (runtime.finished) continue;
+      if (runtime.outputVersion === runtime.snapshotVersion) continue;
+      await this._writeSnapshot(runtime);
+    }
+  }
+
+  /**
+   * Уборка снимков терминалов.
+   *
+   * - `terminal.autoRestore === false` — снимки не поднимаются, файлы не нужны:
+   *   удаляются все;
+   * - снимок старше `idleMs` (2 дня от `lastActivityAt`) — терминал не
+   *   восстановится: файл удаляется;
+   * - битый снимок (нечитаемый `meta.json`) — удаляется.
+   */
+  private async _purgeSnapshots(): Promise<void> {
+    const blobs = this._blobs;
+    if (!blobs) return;
+    let ids: string[];
+    try {
+      ids = await listTerminalSnapshotIds(blobs);
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalService] список снимков терминалов не прочитан: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return;
+    }
+    const now = this._now();
+    for (const id of ids) {
+      try {
+        if (!this._autoRestore) {
+          await deleteTerminalSnapshot(blobs, id);
+          continue;
+        }
+        const meta = await readTerminalSnapshot(blobs, id);
+        if (!meta || now - meta.record.lastActivityAt >= this._limits.idleMs) {
+          await deleteTerminalSnapshot(blobs, id);
+        }
+      } catch (err) {
+        this._logger.warn(
+          `[TerminalService] уборка снимка терминала ${id} не удалась: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  }
+
   /**
    * Уборка простоявших терминалов.
    *
@@ -950,6 +1558,9 @@ export class TerminalService {
    *
    * Завершённые терминалы тоже убираются — иначе реестр растёт бесконечно;
    * их вывод хранится столько же, сколько живёт простаивающий терминал.
+   *
+   * Заодно убираются снимки терминалов: старые (старше `idleMs`) и те, что
+   * не нужны при `terminal.autoRestore === false`.
    */
   private async _reap(): Promise<void> {
     if (this._disposed) return;
@@ -977,5 +1588,6 @@ export class TerminalService {
         await this._closeRuntime(runtime, { reason: 'idle', remove: true });
       }
     }
+    await this._purgeSnapshots();
   }
 }

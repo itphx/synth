@@ -620,6 +620,15 @@ export const ENGINE_MESSAGE_KEYS = [
   'terminal.tool.command_requires_approval',
   'terminal.tool.limit',
   'terminal.tool.unavailable',
+  // --- Запуски команд в терминале (PROP-132, Ф5) ---
+  'terminal.tool.history_empty',
+  'terminal.tool.run_background_started',
+  'terminal.tool.run_result_header',
+  'terminal.tool.run_finished',
+  'terminal.tool.run_timeout',
+  'terminal.tool.run_closed',
+  'terminal.tool.run_busy',
+  'terminal.tool.exit_code',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -1208,6 +1217,15 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'terminal.tool.command_requires_approval': ["reason"],
   'terminal.tool.limit': ["limit"],
   'terminal.tool.unavailable': ["reason"],
+  // --- Запуски команд в терминале (PROP-132, Ф5) ---
+  'terminal.tool.history_empty': [],
+  'terminal.tool.run_background_started': ["run_id"],
+  'terminal.tool.run_result_header': ["run_id","status"],
+  'terminal.tool.run_finished': ["terminal_id","exit_code"],
+  'terminal.tool.run_timeout': ["terminal_id","timeout_ms"],
+  'terminal.tool.run_closed': ["terminal_id"],
+  'terminal.tool.run_busy': ["terminal_id"],
+  'terminal.tool.exit_code': ["exit_code"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

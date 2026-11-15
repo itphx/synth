@@ -206,6 +206,7 @@ export const TERMINAL_TOOLS = [
   'terminal_read',
   'terminal_write',
   'terminal_close',
+  'terminal_run',
 ];
 
 /** Все тулы пайплайнов (read + write). */

@@ -1790,9 +1790,9 @@ instance without ADMIN), `404 NOT_FOUND`, `409 CONFLICT` (name taken). Name — 
 | GET | `/api/v2/settings/metrics/status` | ADMIN (managed) / auth (core) | Live snapshot: `{enabled, running, source, restartRequired, ready, storage:"ok"\|"degraded", storageBackend, version, uptimeSec, exposition:{series,bytes,droppedSeries}, token, endpoints}` |
 | PUT | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Bearer token for `/metrics` (write-only): `{token}` (trimmed length ≥16) → `{dataDir}/secrets/metrics-token` (`0600`, atomic), applied **immediately**; short/empty → 400 `VALIDATION_ERROR`; token from env → 409 `CONFLICT`; the value is never returned |
 | DELETE | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Delete the token file (idempotent) → `{token:{configured,source}}`; token from env → 409 `CONFLICT` |
-| GET | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Master switch of the terminals (`terminal.enabled`, PROP-132): `{enabled:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean}, envLocked:boolean, restartRequired:false}`; priority `SYNTH_TERMINAL_ENABLED` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled` > `true` |
-| PUT | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | `{enabled:boolean}` — runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`: live terminals are closed and creating new ones is forbidden); a non-boolean → 400 `VALIDATION_ERROR`; a value fixed by env → 409 `CONFLICT`; the response is the same as for `GET` |
-| DELETE | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Reset the runtime value to env/config/default with the same live application (the response is the same as for `GET`); a value fixed by env → 409 `CONFLICT` |
+| GET | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Terminal settings (PROP-132): `{enabled:boolean, autoRestore:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean, autoRestore:boolean}, envLocked:boolean, restartRequired:false}`; the priority of each field: `SYNTH_TERMINAL_ENABLED`/`SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled`/`terminal.autoRestore` > `true` |
+| PUT | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | `{enabled?:boolean, autoRestore?:boolean}` — a **partial** runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`: the live terminals are closed, creating new ones is forbidden, the restore from the snapshots is turned on/off); a non-boolean → 400 `VALIDATION_ERROR`; a field fixed by env → 409 `CONFLICT`; the response is the same as for `GET` |
+| DELETE | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Reset the runtime values to env/config/default with the same live application (the response is the same as for `GET`); at least one of the values is fixed by env → 409 `CONFLICT` |
 | GET | `/api/v2/settings/limits` | ADMIN (managed) / auth (core) | Limit of heavy session operations (`limits.sessionOpsPerMinute`): `{sessionOpsPerMinute:number (0 — no limit), saved:number\|null, defaults:number, source:"env"\|"runtime"\|"config"\|"default", envLocked:boolean, restartRequired:false}`; priority `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` > runtime (`settings.json`/PG) > `config.yaml` `limits.sessionOpsPerMinute` > `10`. Limits `POST /sessions/import`, `POST /sessions/import-batch`, `GET /sessions/:id/export`, `POST /sessions/:id/fork`, `POST /sessions/:id/merge` (see §5.5) |
 | PUT | `/api/v2/settings/limits` | ADMIN (managed) / auth (core) | `{sessionOpsPerMinute:number}` — an integer ≥ 0 (`0` — no limit; `-1`/fractional → 400 `VALIDATION_ERROR`), a runtime override, **applied immediately** (`restartRequired:false`: the limiters resolve the value on every request); the value comes from env and another one is requested → 409 `CONFLICT`; the response is the same as `GET`; audit `scope:"limits"` |
 | DELETE | `/api/v2/settings/limits` | ADMIN (managed) / auth (core) | Reset the runtime value to env/config/default (same response as `GET`); audit `scope:"limits"` |
@@ -3137,23 +3137,46 @@ the config/env level — the instance pool takes its address from there.
 Interactive terminals (PTY sessions, [PROP-132](../arch_decisions/prop-132-ui-terminal.md)).
 A terminal **belongs to a project**; binding it to a session is optional. The PTY
 is raised on the execution point (the execution port, ADR-077) — the same place
-commands run. The terminal registry lives **in the process memory**: a terminal
-does not survive an instance restart (a property, not a defect).
+commands run: the terminal port is chosen by **the same** router as the tool
+ports (`executionRouter.portFor`: the profile comes from the binding
+`session → agent → project → default`, the pool scope is `projectId`/`sessionId`,
+and `workspaceSubPath` is derived from the working directory — ADR-135).
+
+**The terminal registry lives in the process memory**, but its content survives a
+core restart: the service writes a **snapshot** of the terminal into the blob
+store (`terminals/<id>/meta.json` — the registry record, `terminals/<id>/output.txt` —
+the tail of the ring buffer, ≤ 512 KiB; ADR-096/ADR-116) on process exit, on
+terminal close, on service shutdown and every 60 s (when the output changed). On
+core start-up, snapshots younger than `idleMs` (2 days from `lastActivityAt`) are
+raised as **exited** terminals with the `restored: true` flag; the saved output is
+loaded into the ring buffer, no PTY is started (`attached_clients = 0`) — such a
+terminal can only be restarted. Older snapshots are deleted; with
+`terminal.autoRestore = false` the snapshots are not raised and the reaper deletes
+them. An explicit terminal deletion (`DELETE`) removes its snapshot too — a
+deleted terminal never comes back after a restart.
+
+**Exited terminals in the list — behind a flag.** By default `GET /terminals`
+returns the **live** terminals only (`exited` ones are hidden). A terminal
+restored after a restart (`restored: true`) is visible only with
+`include_exited=true` (or `include_exited=1`): without the flag the client
+cannot tell “there is no terminal” from “the terminal has finished” and creates
+a redundant terminal.
 
 The `createTerminalRoutes` factory is shared by core and backend; managed passes
 the project access rule (`resolveProjectAccess`, PROP-133).
 
 | Method | Path | RBAC (managed) | Purpose / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/terminals` | auth | Terminal list `{terminals, total, offset, limit, next_offset}` (ADR-118); filters `project_id`/`session_id`, `limit` (default 50, max 200)/`offset`; a non-integer `limit`/`offset` → 400 `VALIDATION_ERROR`. Terminals of projects the user cannot read never appear in the output |
+| GET | `/api/v2/terminals` | auth | Terminal list `{terminals, total, offset, limit, next_offset}` (ADR-118); filters `project_id`/`session_id`, `include_exited` (`true`/`1` — together with the exited ones; by default — live only), `limit` (default 50, max 200)/`offset`; a non-integer `limit`/`offset` → 400 `VALIDATION_ERROR`. Terminals of projects the user cannot read never appear in the output |
 | POST | `/api/v2/terminals` | auth (**write**) | Open a terminal → 201 `{terminal}`; body `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` is required). `cols`/`rows` are integers (`cols` 1…1000, `rows` 1…500; default 80×24), otherwise 400 `VALIDATION_ERROR` (no clamping). `cwd` from the body is **ignored** — the server computes the working directory (`session.worktree.directory` → `project.workspace`). The session must belong to the project. No `project_id` → 400 `VALIDATION_ERROR`, unknown project → 404 `NOT_FOUND`, no rights → 403 `FORBIDDEN` |
 | GET | `/api/v2/terminals/:id` | auth | Terminal snapshot `{terminal}` — a snake_case DTO (see the DTO table below); unknown terminal → 404 `TERMINAL_NOT_FOUND` |
 | PATCH | `/api/v2/terminals/:id` | auth (**write**) | Point patch `{title?, session_id?}` → `{terminal}`; `null` clears the field; the session must belong to the terminal's project |
-| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Close the terminal → **204** (the PTY is killed, `terminal.exited` + `terminal.deleted` are published); a repeated `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
-| GET | `/api/v2/terminals/:id/output?since=N` | auth | Output snapshot from the ring buffer: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` is the cursor (only chunks with `seq > since`). `truncated` — part of the output was evicted from the buffer, the client must re-read the output |
+| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Delete the terminal → **204** (the PTY is killed, `terminal.exited` + `terminal.deleted` are published, the **terminal snapshot is deleted**); a repeated `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
+| GET | `/api/v2/terminals/:id/output?since=N` | auth | Output snapshot from the ring buffer: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` is the cursor (only chunks with `seq > since`). `truncated` — part of the output was evicted from the buffer, the client must re-read the output. For a restored terminal it returns the saved output tail |
 | GET | `/api/v2/terminals/:id/stream?since=N` | auth | Output stream `application/x-ndjson`: frames `{"seq":n,"data":"..."}` — first the replay from the buffer (`seq > since`), then the live output; the exit frame is `{"seq":n,"data":"","exit_code":…,"signal":…}`; a heartbeat empty frame `{"seq":n,"data":""}` every 15 s. When the client disconnects (abort/connection close), the stream is closed and the subscription is **removed** (`attached_clients` drops on every outcome: abort, write error, terminal exit) |
 | POST | `/api/v2/terminals/:id/input` | auth (**write**) | Write to the terminal `{data}` → **204**; a frame larger than 16 KiB → 413 `TERMINAL_LIMIT`, too frequent (>20 frames/s) → 429 `TERMINAL_LIMIT` |
 | POST | `/api/v2/terminals/:id/resize` | auth (**write**) | New size `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (integers), otherwise 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/terminals/:id/restart` | auth (**write**) | Restart an **exited** terminal → 200 `{terminal}`: a new PTY is raised with the same `cwd`/`shell`/`cols`/`rows`, the terminal id is kept, the output buffer is cleared, the status is `running`, the `restored` flag is dropped, and `terminal.updated` is published. A live terminal cannot be restarted (a second shell in the same directory would desync the output) → 409 `TERMINAL_ALREADY_RUNNING`; unknown terminal → 404 `TERMINAL_NOT_FOUND` |
 
 **Terminal DTO is snake_case** (`toTerminalDto`, `engine/terminal/types.ts`):
 
@@ -3174,6 +3197,7 @@ the project access rule (`resolveProjectAccess`, PROP-133).
 | `executor_id` | string? | Executor address (`target: executor`) |
 | `can_write` | boolean | Whether the current user may write (invariant 21) |
 | `attached_clients` | number | Number of clients subscribed to the output stream |
+| `restored` | boolean? | The terminal was **restored from a snapshot** after a core restart: no PTY is running, the buffer holds the saved output tail; the field is absent for an ordinary terminal |
 
 **Access boundary (invariants 16/21).** The right to a terminal is the right to
 its **project**, and it is checked **at the boundary**: the guard resolves the
@@ -3189,8 +3213,10 @@ instance owner applies.
 (403 — the instance switch `terminal.enabled`; the whole `/api/v2/terminals*`
 contour answers with this code), `TERMINAL_NOT_FOUND` (404), `TERMINAL_LIMIT`
 (409 — the per-project/per-instance terminal limit, 429 — the input rate, 413 —
-the input frame size), `TERMINAL_UNAVAILABLE` (503 — the PTY is unavailable in
-this environment), `TERMINAL_INVALID_REQUEST` (400).
+the input frame size), `TERMINAL_ALREADY_RUNNING` (409 — restart of a live
+terminal), `TERMINAL_UNAVAILABLE` (503 — the PTY is unavailable in this
+environment or the execution point is unavailable), `TERMINAL_INVALID_REQUEST`
+(400).
 
 **Events.** Terminal metadata arrives in the **terminal's session channel**
 (`terminal.created`/`terminal.updated`/`terminal.exited`/`terminal.deleted`; no
@@ -3200,28 +3226,43 @@ catch-up via `GET /terminals/:id/output?since=`.
 
 ### 5.44 Terminal settings — `/api/v2/settings/terminal` (both, PROP-132)
 
-The master switch of the interactive terminals (`terminal.enabled`,
-[PROP-132](../arch_decisions/prop-132-ui-terminal.md)). The factory
-`createTerminalSettingsRoutes` is shared by core and backend; managed passes the
-ADMIN guards, core — `requireAuth`.
+The master switch of the interactive terminals (`terminal.enabled`) and the flag
+that restores the terminals from the snapshots after a core restart
+(`terminal.autoRestore`), [PROP-132](../arch_decisions/prop-132-ui-terminal.md).
+The factory `createTerminalSettingsRoutes` is shared by core and backend; managed
+passes the ADMIN guards, core — `requireAuth`.
 
 | Method | Path | RBAC (managed) | Purpose / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean}, envLocked:boolean, restartRequired:false}`; priority `SYNTH_TERMINAL_ENABLED` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled` > `true` |
-| PUT | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean}` — runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`: `TerminalService.setEnabled` closes the live terminals and forbids creating new ones — no restart needed); a non-boolean → 400 `VALIDATION_ERROR`; a value fixed by env → 409 `CONFLICT`; the response is the same as for `GET` |
-| DELETE | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Reset the runtime value to env/config/default with the same live application (the response is the same as for `GET`); a value fixed by env → 409 `CONFLICT` |
+| GET | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean, autoRestore:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean, autoRestore:boolean}, envLocked:boolean, restartRequired:false}`; the priority of each field: `SYNTH_TERMINAL_ENABLED`/`SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled`/`terminal.autoRestore` > `true` |
+| PUT | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled?:boolean, autoRestore?:boolean}` — a **partial** runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`: `TerminalService.setEnabled` closes the live terminals and forbids creating new ones, `setAutoRestore` turns the restore-from-snapshots on/off — no restart needed); a non-boolean → 400 `VALIDATION_ERROR`; a field fixed by env → 409 `CONFLICT`; the response is the same as for `GET` |
+| DELETE | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Reset the runtime values to env/config/default with the same live application (the response is the same as for `GET`); at least one of the values is fixed by env → 409 `CONFLICT` |
 
-**Value sources.** `env` — the `SYNTH_TERMINAL_ENABLED` variable (`true`/`1`/`false`/`0`);
-`runtime` — the override from the UI; `config` — `terminal.enabled` in `config.yaml`;
-`default` — `true` (the contour is enabled). An env value **fixes** the switch: the runtime
-value from the UI does not override it (409 `CONFLICT`), and the flag in the config is
-optional — “not set” differs from “explicitly set to `true`”, that is how the API
-distinguishes `config` and `default`.
+**Value sources.** `env` — the `SYNTH_TERMINAL_ENABLED` /
+`SYNTH_TERMINAL_AUTO_RESTORE` variable (`true`/`1`/`false`/`0`); `runtime` — the
+override from the UI; `config` — `terminal.enabled` / `terminal.autoRestore` in
+`config.yaml`; `default` — `true` (the contour is enabled, the restore is
+enabled). An env value **fixes** its own field: the runtime value from the UI does
+not override it (409 `CONFLICT`), and fixing one field does **not** block the
+change of the other one. The flags in the config are optional — “not set” differs
+from “explicitly set to `true`”, that is how the API distinguishes `config` and
+`default`.
+
+The fields are resolved **separately**, but the contract returns one `source` —
+the layer that defines the terminal behaviour: the **most specific** of the two
+(`env` > `runtime` > `config` > `default`). `envLocked` means that env has fixed
+at least one of the values; the exact binding of a field to a layer is visible
+from the fact that `PUT` checks the env fixation **per field** (409 for that
+specific field).
 
 **Behaviour when disabled.** The live terminals are closed (events `terminal.exited` +
 `terminal.deleted` with reason `disabled`), creating new ones is forbidden, and the
 whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED` (the contour
 boundary, invariant 16).
+
+**Behaviour when the restore is disabled.** The terminal snapshots are not raised
+on the next core start; the reaper deletes them (the existing snapshots live for
+up to 2 days after the last activity of the terminal).
 
 ## 6. Sources
 

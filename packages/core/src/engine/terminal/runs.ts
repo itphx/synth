@@ -1,0 +1,630 @@
+/**
+ * Запуски команд в терминале (PROP-132, Ф5).
+ *
+ * ## Механика завершения
+ *
+ * Команда уходит в интерактивную оболочку терминала, поэтому «код возврата»
+ * из неё самой не достать. После команды сервис отправляет **невидимый**
+ * маркер через OSC (`ESC ] 7770 ; synth-run ; <nonce> ; <код> BEL`):
+ *
+ * ```text
+ * printf '\033]7770;synth-run;<nonce>;%s\007' "$?"
+ * ```
+ *
+ * - `printf` — builtin любой POSIX-оболочки, `printf` не внешняя программа;
+ * - `\033`/`\007` — ESC/BEL, которые xterm.js **игнорирует** ( OSC-7770 —
+ *   не стандартная последовательность, терминал её не показывает);
+ * - `"$?"` — код возврата **предыдущей** команды: маркер отправляется
+ *   **отдельной строкой** после команды, поэтому `$?` ещё не изменился;
+ * - `<nonce>` — случайный идентификатор запуска: маркер чужого запуска (или
+ *   чужой команды) не завершит наш.
+ *
+ * Видимых `echo`-маркеров нет: в вывод попадает только невидимая
+ * последовательность, которую сервис вырезает из потока.
+ *
+ * ## Реестр запусков
+ *
+ * `TerminalRunRegistry` — реестр запусков **в памяти процесса** (как и
+ * реестр терминалов): запуски не переживают рестарт инстанса.
+ *
+ * - не больше **одного активного** запуска на терминал: два одновременных
+ *   запуска в одной оболочке смешали бы вывод (`terminal.tool.run_busy`);
+ * - вывод запуска ограничен **1 МиБ** (хвост сохраняется, `truncated`);
+ * - в реестре не больше **32** записей (старые завершённые вытесняются);
+ * - закрытие терминала завершает его активный запуск статусом `closed`;
+ * - **watchdog** запуска (таймаут): срок `<= 0` — таймер **не ставится**
+ *   (запуск без лимита: завершает только маркер команды или закрытие
+ *   терминала), срок `> 0` — по истечении запуск завершается статусом
+ *   `timeout`.
+ *
+ * ## Границы
+ *
+ * Права — на границе (инвариант 16): сервис не решает, кто может запускать
+ * команды; это делает permission-слой. Здесь — только исполнение и учёт.
+ */
+import { randomUUID } from 'node:crypto';
+import { MessageRole, generateId as generateMessageId, makeTextPart, nowISO } from '@itphx/synth-shared';
+import type { Message } from '@itphx/synth-shared';
+import { t as sm } from '../system-messages.js';
+import { frameTerminalOutput } from './output.js';
+import type { TerminalLogger, TerminalRecord, TerminalTimers } from './types.js';
+
+/** Префикс невидимого маркера завершения запуска (OSC 7770). */
+export const TERMINAL_RUN_MARKER_PREFIX = '\u001B]7770;synth-run;';
+
+/** Завершающий байт маркера (BEL). */
+export const TERMINAL_RUN_MARKER_END = '\u0007';
+
+/**
+ * Максимум байт хвоста, удерживаемого между чанками.
+ *
+ * Маркер может прийти несколькими чанками (граница в середине ESC-последовательности) —
+ * такой хвост удерживается до следующего чанка. Если хвост не растёт (чужой
+ * текст с префиксом маркера и без BEL) — он сбрасывается в текст: иначе
+ * буфер терминала «залипнет» на неполном маркере.
+ */
+const MAX_MARKER_PENDING = 512;
+
+/** Максимум объёма вывода одного запуска, байт (1 МиБ). */
+export const MAX_RUN_OUTPUT_BYTES = 1024 * 1024;
+
+/** Максимум числа записей в реестре запусков. */
+export const MAX_STORED_RUNS = 32;
+
+/** Статус запуска. */
+export type TerminalRunStatus = 'running' | 'done' | 'timeout' | 'closed';
+
+/**
+ * Колбэк завершения запуска команды в терминале.
+ *
+ * Вызывается **один раз** на запуск (любой статус: `done`/`timeout`/`closed`).
+ * Точка сборки уведомления — наверху (composition root): сервис терминалов не
+ * знает, как доставлять результат в сессию.
+ */
+export type TerminalRunFinishedHandler = (
+  run: TerminalRunRecord,
+  terminal: TerminalRecord | null,
+) => void | Promise<void>;
+
+/** Запись реестра запусков. */
+export interface TerminalRunRecord {
+  /** Идентификатор запуска (`run_<uuid>`). */
+  runId: string;
+  /** Терминал, в котором выполняется команда. */
+  terminalId: string;
+  /** Сессия, привязанная к терминалу (куда уходит уведомление о завершении). */
+  sessionId?: string;
+  /** Случайный nonce маркера (идентификатор запуска в потоке PTY). */
+  nonce: string;
+  /** Команда, отправленная в терминал. */
+  command: string;
+  /** Статус запуска. */
+  status: TerminalRunStatus;
+  /** Вывод, накопленный к моменту чтения. */
+  output: string;
+  /** Код возврата команды (известен после завершения). */
+  exitCode?: number;
+  /** Момент старта, мс epoch. */
+  startedAt: number;
+  /** Момент завершения, мс epoch. */
+  finishedAt?: number;
+  /** Срок ожидания запуска, мс (`0` — watchdog не ставился). */
+  timeoutMs: number;
+  /** Вывод запуска обрезан по капу объёма. */
+  truncated: boolean;
+}
+
+/** Часть потока вывода: обычный текст или маркер завершения запуска. */
+export type TerminalRunMarkerPart =
+  | { kind: 'text'; text: string }
+  | { kind: 'marker'; nonce: string; code: string };
+
+/** Результат разбора потока на текст и маркеры. */
+export interface TerminalRunMarkerScan {
+  /** Части потока по порядку. */
+  parts: TerminalRunMarkerPart[];
+  /** Хвост, удерживаемый до следующего чанка (возможное начало маркера). */
+  pending: string;
+}
+
+/**
+ * Длина longest суффикса текста, который является началом префикса маркера.
+ *
+ * Нужен, когда граница чанка попала внутрь ESC-последовательности: такой хвост
+ * нельзя отдать в буфер (маркер должен быть вырезан целиком) — его надо
+ * удержать до следующего чанка.
+ */
+function partialMarkerPrefixLength(text: string): number {
+  const max = Math.min(text.length, TERMINAL_RUN_MARKER_PREFIX.length - 1);
+  for (let len = max; len > 0; len -= 1) {
+    if (text.endsWith(TERMINAL_RUN_MARKER_PREFIX.slice(0, len))) return len;
+  }
+  return 0;
+}
+
+/** Разобрать полезную нагрузку маркера (`<nonce>;<код>`). */
+function parseMarkerPayload(payload: string): { kind: 'marker'; nonce: string; code: string } {
+  const sep = payload.indexOf(';');
+  const nonce = sep === -1 ? payload : payload.slice(0, sep);
+  const code = sep === -1 ? '' : payload.slice(sep + 1);
+  return { kind: 'marker', nonce, code };
+}
+
+/**
+ * Разобрать поток вывода на текст и маркеры завершения запусков.
+ *
+ * `pending` — хвост предыдущего чанка (возможное начало маркера). На выходе —
+ * новый `pending` для следующего вызова.
+ */
+export function scanRunMarkers(data: string, pending: string): TerminalRunMarkerScan {
+  const buf = pending + data;
+  const parts: TerminalRunMarkerPart[] = [];
+  let text = '';
+  let nextPending = '';
+  let i = 0;
+
+  while (i < buf.length) {
+    const idx = buf.indexOf(TERMINAL_RUN_MARKER_PREFIX, i);
+    if (idx === -1) break;
+    const end = buf.indexOf(TERMINAL_RUN_MARKER_END, idx + TERMINAL_RUN_MARKER_PREFIX.length);
+    if (end === -1) {
+      // Маркер не завершён: удерживаем хвост (ограниченно), остальное — текст.
+      const keepFrom = Math.max(idx, buf.length - MAX_MARKER_PENDING);
+      text += buf.slice(i, keepFrom);
+      nextPending = buf.slice(keepFrom);
+      i = buf.length;
+      break;
+    }
+    text += buf.slice(i, idx);
+    if (text !== '') {
+      parts.push({ kind: 'text', text });
+      text = '';
+    }
+    parts.push(parseMarkerPayload(buf.slice(idx + TERMINAL_RUN_MARKER_PREFIX.length, end)));
+    i = end + 1;
+  }
+
+  if (i < buf.length) {
+    const rest = buf.slice(i);
+    const keep = partialMarkerPrefixLength(rest);
+    text += rest.slice(0, rest.length - keep);
+    nextPending = rest.slice(rest.length - keep);
+  }
+  if (text !== '') parts.push({ kind: 'text', text });
+
+  return { parts, pending: nextPending };
+}
+
+/** Код возврата из маркера (нецифровое значение — код неизвестен). */
+export function parseRunExitCode(code: string): number | undefined {
+  if (!/^\d+$/.test(code)) return undefined;
+  const parsed = Number(code);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+/**
+ * Строка-маркер, которую сервис отправляет в терминал после команды.
+ *
+ * `printf` подставляет код возврата вместо `%s`; `\033`/`\007` — escape-последовательности
+ * самого `printf` (в одинарных кавычках оболочка их не трогает).
+ */
+export function buildRunMarkerCommand(nonce: string): string {
+  return `printf '\\033]7770;synth-run;${nonce};%s\\007' "$?"`;
+}
+
+/** Вход запуска команды. */
+export interface TerminalRunStartInput {
+  /** Терминал, в котором выполняется команда. */
+  terminalId: string;
+  /** Сессия терминала (куда уходит уведомление о завершении). */
+  sessionId?: string;
+  /** Команда. */
+  command: string;
+  /**
+   * Срок ожидания, мс.
+   *
+   * Срок `<= 0` — **без watchdog'а**: таймер не ставится, запуск завершает
+   * только маркер команды или закрытие терминала (фоновый запуск без
+   * лимита).
+   */
+  timeoutMs: number;
+}
+
+/** Внутренняя запись реестра: снимок + промис завершения. */
+interface TerminalRunEntry {
+  /** Снимок запуска (только чтение наружу — копия). */
+  record: TerminalRunRecord;
+  /** Резолвер промиса завершения. */
+  resolve: () => void;
+  /** Промис завершения запуска. */
+  done: Promise<void>;
+  /** Таймер таймаута запуска. */
+  timer: { unref?: () => void } | null;
+}
+
+/** Опции реестра запусков. */
+export interface TerminalRunRegistryOptions {
+  /** Источник времени, мс epoch. */
+  now?: () => number;
+  /** Генератор id (тесты подменяют). */
+  generateId?: () => string;
+  /** Таймеры (тесты подменяют на fake timers). */
+  timers?: TerminalTimers;
+  /** Максимум записей в реестре. */
+  maxRuns?: number;
+  /** Максимум объёма вывода одного запуска, байт. */
+  maxOutputBytes?: number;
+  /** Логгер. */
+  logger?: TerminalLogger;
+  /**
+   * Колбэк завершения запуска (любой статус: `done`/`timeout`/`closed`).
+   *
+   * Точка сборки уведомления — наверху (composition root): сам сервис
+   * терминалов не знает, как доставлять результат в сессию.
+   */
+  onSettled?: (run: TerminalRunRecord) => void;
+}
+
+/**
+ * Реестр запусков команд в терминалах.
+ *
+ * Живёт внутри `TerminalService`: запуск — это операция над терминалом, а
+ * не отдельный ресурс инстанса.
+ */
+export class TerminalRunRegistry {
+  private readonly _runs = new Map<string, TerminalRunEntry>();
+  /** Активный запуск терминала: terminalId → runId. */
+  private readonly _activeByTerminal = new Map<string, string>();
+  private readonly _now: () => number;
+  private readonly _generateId: () => string;
+  private readonly _timers: TerminalTimers;
+  private readonly _maxRuns: number;
+  private readonly _maxOutputBytes: number;
+  private readonly _logger: TerminalLogger;
+  private readonly _onSettled?: (run: TerminalRunRecord) => void;
+
+  constructor(options: TerminalRunRegistryOptions = {}) {
+    this._now = options.now ?? (() => Date.now());
+    this._generateId = options.generateId ?? (() => randomUUID());
+    this._timers = options.timers ?? {
+      setTimeout: (handler, ms) => globalThis.setTimeout(handler, ms),
+      clearTimeout: (handle) => globalThis.clearTimeout(handle as never),
+      setInterval: (handler, ms) => globalThis.setInterval(handler, ms),
+      clearInterval: (handle) => globalThis.clearInterval(handle as never),
+    };
+    this._maxRuns = Math.max(1, options.maxRuns ?? MAX_STORED_RUNS);
+    this._maxOutputBytes = Math.max(1, options.maxOutputBytes ?? MAX_RUN_OUTPUT_BYTES);
+    this._logger = options.logger ?? {
+      warn: (message: string) => console.warn(message),
+      error: (message: string) => console.error(message),
+    };
+    if (options.onSettled) this._onSettled = options.onSettled;
+  }
+
+  /**
+   * Зарегистрировать запуск.
+   *
+   * Активный запуск на терминале уже есть → `TerminalRunBusyError`: две
+   * команды в одной оболочке смешали бы вывод.
+   */
+  start(input: TerminalRunStartInput): TerminalRunRecord {
+    const activeId = this._activeByTerminal.get(input.terminalId);
+    if (activeId !== undefined) {
+      const active = this._runs.get(activeId);
+      if (active && active.record.status === 'running') {
+        throw new TerminalRunBusyError(input.terminalId, activeId);
+      }
+    }
+
+    const runId = `run_${this._generateId()}`;
+    const nonce = randomUUID().replace(/-/g, '').slice(0, 16);
+    const record: TerminalRunRecord = {
+      runId,
+      terminalId: input.terminalId,
+      ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+      nonce,
+      command: input.command,
+      status: 'running',
+      output: '',
+      startedAt: this._now(),
+      timeoutMs: input.timeoutMs,
+      truncated: false,
+    };
+
+    let resolve!: () => void;
+    const done = new Promise<void>((res) => {
+      resolve = res;
+    });
+    const entry: TerminalRunEntry = { record, resolve, done, timer: null };
+    this._runs.set(runId, entry);
+    this._activeByTerminal.set(input.terminalId, runId);
+
+    // Watchdog запуска: срок `<= 0` — **таймер не ставится** (запуск без
+    // лимита: завершает только маркер команды или закрытие терминала).
+    const timer =
+      input.timeoutMs > 0
+        ? this._timers.setTimeout(() => {
+            this.settle(runId, 'timeout');
+          }, input.timeoutMs)
+        : null;
+    timer?.unref?.();
+    entry.timer = timer;
+
+    this._prune();
+    return { ...record };
+  }
+
+  /** Запись запуска (копия) или `null`. */
+  get(runId: string): TerminalRunRecord | null {
+    const entry = this._runs.get(runId);
+    return entry ? { ...entry.record } : null;
+  }
+
+  /**
+   * Дождаться завершения запуска (или истечения срока ожидания).
+   *
+   * Возвращает актуальный снимок: если срок ожидания истёк, а запуск ещё
+   * идёт — снимок со статусом `running`.
+   *
+   * Срок ожидания `<= 0` — **без своего таймера**: ждём завершения запуска
+   * (маркер команды или закрытие терминала). Так же трактуется watchdog
+   * запуска: у запуска без срока (`timeoutMs <= 0`) таймер не ставится вовсе.
+   */
+  async wait(runId: string, timeoutMs: number): Promise<TerminalRunRecord | null> {
+    const entry = this._runs.get(runId);
+    if (!entry) return null;
+    if (entry.record.status !== 'running') return { ...entry.record };
+
+    let timer: { unref?: () => void } | null = null;
+    const waits: Promise<void>[] = [entry.done];
+    if (timeoutMs > 0) {
+      waits.push(
+        new Promise<void>((res) => {
+          timer = this._timers.setTimeout(res, timeoutMs);
+          timer.unref?.();
+        }),
+      );
+    }
+    await Promise.race(waits);
+    if (timer) this._timers.clearTimeout(timer as never);
+    return { ...entry.record };
+  }
+
+  /**
+   * Обработать порцию вывода терминала.
+   *
+   * Текст до маркера — в вывод запуска; маркер с совпавшим nonce завершает
+   * запуск (код возврата — из маркера).
+   */
+  handleData(terminalId: string, parts: TerminalRunMarkerPart[]): void {
+    const runId = this._activeByTerminal.get(terminalId);
+    if (runId === undefined) return;
+    const entry = this._runs.get(runId);
+    if (!entry || entry.record.status !== 'running') return;
+
+    for (const part of parts) {
+      if (part.kind === 'text') {
+        this._appendOutput(entry, part.text);
+        continue;
+      }
+      if (part.nonce === entry.record.nonce) {
+        const exitCode = parseRunExitCode(part.code);
+        if (exitCode !== undefined) entry.record.exitCode = exitCode;
+        this.settle(runId, 'done');
+        return;
+      }
+    }
+  }
+
+  /**
+   * Завершить активный запуск терминала (терминал закрылся/умер).
+   *
+   * Статус `closed` — команда не завершилась, потому что терминала больше
+   * нет; вывод, накопленный к этому моменту, остаётся в записи.
+   */
+  closeTerminal(terminalId: string): void {
+    const runId = this._activeByTerminal.get(terminalId);
+    if (runId === undefined) return;
+    this.settle(runId, 'closed');
+  }
+
+  /**
+   * Отменить запуск (статус `closed` — запуск больше не отслеживается).
+   *
+   * @returns `true`, если запуск был активен.
+   */
+  cancel(runId: string): boolean {
+    const entry = this._runs.get(runId);
+    if (!entry || entry.record.status !== 'running') return false;
+    this.settle(runId, 'closed');
+    return true;
+  }
+
+  /** Остановить реестр (запуски завершаются статусом `closed`). */
+  dispose(): void {
+    for (const runId of [...this._runs.keys()]) {
+      this.settle(runId, 'closed');
+    }
+    this._runs.clear();
+    this._activeByTerminal.clear();
+  }
+
+  /** Завершить запуск статусом (идемпотентно). */
+  private settle(runId: string, status: TerminalRunStatus): void {
+    const entry = this._runs.get(runId);
+    if (!entry) return;
+    if (entry.record.status !== 'running') return;
+    entry.record.status = status;
+    entry.record.finishedAt = this._now();
+    if (entry.timer) {
+      this._timers.clearTimeout(entry.timer as never);
+      entry.timer = null;
+    }
+    if (this._activeByTerminal.get(entry.record.terminalId) === runId) {
+      this._activeByTerminal.delete(entry.record.terminalId);
+    }
+    try {
+      entry.resolve();
+    } catch (err) {
+      this._logger.warn(
+        `[TerminalRunRegistry] резолвер запуска ${runId} бросил: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    // Уведомление о завершении — **после** фиксации состояния (уведомление
+    // видит уже финальный статус и код возврата).
+    if (this._onSettled) {
+      try {
+        this._onSettled({ ...entry.record });
+      } catch (err) {
+        this._logger.warn(
+          `[TerminalRunRegistry] колбэк завершения запуска ${runId} бросил: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  }
+
+  /** Дописать вывод запуска (с капом объёма — сохраняется хвост). */
+  private _appendOutput(entry: TerminalRunEntry, text: string): void {
+    if (text === '') return;
+    let output = entry.record.output + text;
+    const bytes = Buffer.byteLength(output, 'utf8');
+    if (bytes > this._maxOutputBytes) {
+      output = tailByBytes(output, this._maxOutputBytes);
+      entry.record.truncated = true;
+    }
+    entry.record.output = output;
+  }
+
+  /** Вытеснить старые завершённые записи (лимит реестра). */
+  private _prune(): void {
+    while (this._runs.size > this._maxRuns) {
+      // Порядок вставки `Map` = порядок создания запусков: первый завершённый
+      // запуск — самый старый.
+      let removed = false;
+      for (const [runId, entry] of this._runs) {
+        if (entry.record.status === 'running') continue;
+        this._runs.delete(runId);
+        removed = true;
+        break;
+      }
+      // Активные запуски вытеснять нельзя — лимит ждёт их завершения.
+      if (!removed) return;
+    }
+  }
+}
+
+/** Хвост текста, помещающийся в `maxBytes` байт UTF-8 (по границе символа). */
+function tailByBytes(text: string, maxBytes: number): string {
+  const points = Array.from(text);
+  let bytes = 0;
+  let start = points.length;
+  for (let i = points.length - 1; i >= 0; i -= 1) {
+    const size = Buffer.byteLength(points[i]!, 'utf8');
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    start = i;
+  }
+  return points.slice(start).join('');
+}
+
+/** Кап вывода запуска в уведомлении, байт (32 КиБ — как у `terminal_read`). */
+export const MAX_RUN_NOTIFICATION_BYTES = 32 * 1024;
+
+/**
+ * Сообщение-уведомление сессии о завершении запуска команды в терминале.
+ *
+ * Формат — **без XML-конверта** (у фоновых процессов конверт `<process …>`,
+ * здесь вывод терминала идёт в обрамлении `[CONTENT]` … `[CONTENT END]`):
+ *
+ * ```text
+ * Terminal <id>: the command finished (exit 0)
+ * [CONTENT]
+ * …вывод команды…
+ * [CONTENT END]
+ * ```
+ *
+ * Сообщение — **роль USER** (его видит модель), автор `Process` (как у
+ * фоновых шелл-процессов): результат фоновой работы должен попасть в
+ * контекст сессии. Метаданные — те же метки, что у фонового процесса
+ * (`type: 'background_run_result'`, `state`, `command`, `exit_code`,
+ * `started_at`/`finished_at`/длительность), плюс `terminal_id`/`run_id`.
+ */
+export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
+  const terminalId = run.terminalId;
+  const exitCode = run.exitCode !== undefined ? String(run.exitCode) : '-';
+  const header =
+    run.status === 'timeout'
+      ? sm('terminal.tool.run_timeout', {
+          terminal_id: terminalId,
+          timeout_ms: String(run.timeoutMs),
+        })
+      : run.status === 'closed'
+        ? sm('terminal.tool.run_closed', { terminal_id: terminalId })
+        : sm('terminal.tool.run_finished', { terminal_id: terminalId, exit_code: exitCode });
+  const body = frameTerminalOutput(tailByBytes(run.output, MAX_RUN_NOTIFICATION_BYTES));
+  const content = `${header}\n${body}`;
+  const durationMs =
+    run.finishedAt !== undefined ? Math.max(0, run.finishedAt - run.startedAt) : undefined;
+  return {
+    id: generateMessageId(),
+    role: MessageRole.USER,
+    seq: 0,
+    origin: 'local',
+    parts: [makeTextPart(content)],
+    content,
+    createdAt: nowISO(),
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    ephemeral: false,
+    author: 'Process',
+    metadata: {
+      type: 'background_run_result',
+      kind: 'terminal',
+      terminal_id: terminalId,
+      run_id: run.runId,
+      state: run.status,
+      ...(run.command ? { command: run.command } : {}),
+      ...(run.exitCode !== undefined ? { exit_code: run.exitCode } : {}),
+      started_at: run.startedAt,
+      ...(run.finishedAt !== undefined ? { finished_at: run.finishedAt } : {}),
+      ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
+    },
+  };
+}
+
+/**
+ * В терминале уже идёт другой запуск.
+ *
+ * Отдельный тип (не `TerminalLimitError`): ограничение не числовое, а
+ * состояние терминала — «дождись текущего запуска».
+ */
+export class TerminalRunBusyError extends Error {
+  /** Терминал, в котором уже идёт запуск. */
+  readonly terminalId: string;
+  /** Идентификатор активного запуска. */
+  readonly activeRunId: string;
+
+  constructor(terminalId: string, activeRunId: string) {
+    super(`Терминал ${terminalId}: уже идёт запуск ${activeRunId}`);
+    this.name = 'TerminalRunBusyError';
+    this.terminalId = terminalId;
+    this.activeRunId = activeRunId;
+  }
+}
+
+/** Структурная проверка ошибки занятости (устойчива к копиям класса). */
+export function isTerminalRunBusyError(value: unknown): value is TerminalRunBusyError {
+  if (value instanceof TerminalRunBusyError) return true;
+  if (typeof value !== 'object' || value === null) return false;
+  const e = value as { name?: unknown; terminalId?: unknown; activeRunId?: unknown };
+  return (
+    e.name === 'TerminalRunBusyError' &&
+    typeof e.terminalId === 'string' &&
+    typeof e.activeRunId === 'string'
+  );
+}

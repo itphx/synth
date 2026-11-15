@@ -1323,10 +1323,17 @@ export const metricsConfigSchema = z.object({
  * значения в API (`config` против `default`). Само значение по умолчанию
  * (`enabled: true`) живёт в резолвере ядра (`DEFAULT_TERMINAL_ENABLED`).
  *
- * Env-оверрайд — `SYNTH_TERMINAL_ENABLED` (общее правило секций, ADR-023).
+ * - `autoRestore` — восстанавливать ли терминалы после рестарта ядра из
+ *   снимков (`terminals/<id>/meta.json` + `terminals/<id>/output.txt` в
+ *   blob-хранилище, ADR-096/ADR-116): `false` — снимки не поднимаются, их
+ *   убирает reaper. По умолчанию `true` (`DEFAULT_TERMINAL_AUTO_RESTORE`).
+ *
+ * Env-оверрайды — `SYNTH_TERMINAL_ENABLED` и `SYNTH_TERMINAL_AUTO_RESTORE`
+ * (общее правило секций, ADR-023).
  */
 export const terminalConfigSchema = z.object({
   enabled: z.boolean().optional(),
+  autoRestore: z.boolean().optional(),
 });
 
 /** PROP-132: секция `terminal` (`enabled`). */

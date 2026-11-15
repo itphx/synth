@@ -256,6 +256,22 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('PROP-132: SYNTH_TERMINAL_AUTO_RESTORE применяется к секции terminal', () => {
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_TERMINAL_AUTO_RESTORE: 'false' });
+    expect(cfg.terminal).toEqual({ autoRestore: false });
+
+    const cfgOn = applyEnvOverrides(makeConfig(), { SYNTH_TERMINAL_AUTO_RESTORE: 'true' });
+    expect(cfgOn.terminal).toEqual({ autoRestore: true });
+  });
+
+  it('PROP-132: env-оверрайды terminal независимы (enabled + autoRestore)', () => {
+    const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_TERMINAL_ENABLED: 'false',
+      SYNTH_TERMINAL_AUTO_RESTORE: 'true',
+    });
+    expect(cfg.terminal).toEqual({ enabled: false, autoRestore: true });
+  });
+
   it('невалидное значение → warn + игнор, значение не меняется', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const cfg = applyEnvOverrides(makeConfig(), { SYNTH_EVENTS_AUTO_BIND: 'maybe' });

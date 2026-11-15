@@ -1947,9 +1947,9 @@ instance без ADMIN), `404 NOT_FOUND`, `409 CONFLICT` (имя занято). �
 | GET | `/api/v2/settings/sticky-notes` | ADMIN (managed) / auth (core) | Instance-wide лимиты заметок сессии (`context.stickyNotes`): `{limits:{maxCount,maxChars}, saved:{…}\|null, defaults:{maxCount,maxChars}, source:"runtime"\|"config"\|"default", restartRequired:false}`; приоритет runtime (`settings.json`/PG) > `config.yaml` `context.stickyNotes` > дефолты схемы (`50`/`2000`) |
 | PUT | `/api/v2/settings/sticky-notes` | ADMIN (managed) / auth (core) | `{limits:{maxCount?:1..1000, maxChars?:1..100000}}` — частичный runtime-патч (мёржится поверх config), **применяется сразу** (`restartRequired:false`: лимиты читаются при каждой операции с заметкой); неизвестные ключи/вне диапазона → 400 `VALIDATION_ERROR`; ответ как у `GET`; аудит `scope:"sticky-notes"`. Существующие заметки не удаляются и не обрезаются |
 | DELETE | `/api/v2/settings/sticky-notes` | ADMIN (managed) / auth (core) | Сброс runtime-патча к config/default (ответ как у `GET`); аудит `scope:"sticky-notes"` |
-| GET | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Мастер-выключатель терминалов (`terminal.enabled`, PROP-132): `{enabled:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean}, envLocked:boolean, restartRequired:false}`; приоритет `SYNTH_TERMINAL_ENABLED` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled` > `true` |
-| PUT | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | `{enabled:boolean}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: живые терминалы закрываются, создание новых запрещается); не-bool → 400 `VALIDATION_ERROR`; значение зафиксировано env → 409 `CONFLICT`; ответ как у `GET` |
-| DELETE | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Сброс runtime-значения к env/config/default с тем же live-применением (ответ как у `GET`); значение зафиксировано env → 409 `CONFLICT` |
+| GET | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Настройки терминалов (PROP-132): `{enabled:boolean, autoRestore:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean, autoRestore:boolean}, envLocked:boolean, restartRequired:false}`; приоритет каждого поля: `SYNTH_TERMINAL_ENABLED`/`SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled`/`terminal.autoRestore` > `true` |
+| PUT | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | `{enabled?:boolean, autoRestore?:boolean}` — **частичный** runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: живые терминалы закрываются, создание новых запрещается, восстановление из снимков включается/выключается); не-bool → 400 `VALIDATION_ERROR`; поле, зафиксированное env, → 409 `CONFLICT`; ответ как у `GET` |
+| DELETE | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Сброс runtime-значений к env/config/default с тем же live-применением (ответ как у `GET`); хотя бы одно из значений зафиксировано env → 409 `CONFLICT` |
 
 > **Адресная egress-политика (ADR-099).** `egress.tools`/`egress.webhooks`/`mcp.networkPolicy` — единый
 > формат `{mode, list, exceptions}`: `exceptions` проверяются первыми (hostname, `*.suffix`, IP/CIDR),
@@ -3562,23 +3562,44 @@ instance-пул берёт адрес оттуда.
 Интерактивные терминалы (PTY-сессии, [PROP-132](./arch_decisions/prop-132-ui-terminal.md)).
 Терминал **принадлежит проекту**; привязка к сессии — необязательная. PTY
 поднимается на точке исполнения (порт исполнения, ADR-077) — там же, где идут
-команды. Реестр терминалов — **в памяти процесса**: терминал не переживает
-рестарт инстанса (свойство, а не дефект).
+команды: порт терминала выбирается **тем же** роутером, что и порт тулов
+(`executionRouter.portFor`: профиль по binding'у `сессия → агент → проект →
+дефолт`, область пула `projectId`/`sessionId`, `workspaceSubPath` — ADR-135).
+
+**Реестр терминалов — в памяти процесса**, но его содержимое переживает
+рестарт ядра: сервис пишет **снимок** терминала в blob-хранилище
+(`terminals/<id>/meta.json` — запись реестра, `terminals/<id>/output.txt` — хвост
+кольцевого буфера ≤ 512 КиБ; ADR-096/ADR-116) при выходе процесса, при
+закрытии терминала, при остановке сервиса и раз в 60 с (если вывод менялся).
+При старте ядра снимки моложе `idleMs` (2 дня от `lastActivityAt`) поднимаются
+как **завершённые** терминалы с признаком `restored: true`; вывод снимка
+залит в кольцевой буфер, PTY не запущен (`attached_clients = 0`) — такой терминал
+можно только перезапустить. Снимки старше срока удаляются; при
+`terminal.autoRestore = false` снимки не поднимаются, их убирает reaper.
+Явное удаление терминала (`DELETE`) удаляет и его снимок — удалённый терминал
+не воскреснет после рестарта.
+
+**Завершённые терминалы в списке — по флагу.** По умолчанию `GET /terminals`
+отдаёт **только живые** терминалы (`exited` скрыты). Восстановленный после
+рестарта терминал (`restored: true`) виден только с `include_exited=true`
+(или `include_exited=1`): без флага клиент не отличит «терминала нет» от
+«терминал завершён» и создаст лишний терминал.
 
 Фабрика `createTerminalRoutes` — общая для core и backend; managed передаёт
 правило доступа по проекту (`resolveProjectAccess`, PROP-133).
 
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/terminals` | auth | Список терминалов `{terminals, total, offset, limit, next_offset}` (ADR-118); фильтры `project_id`/`session_id`, `limit` (по умолчанию 50, максимум 200)/`offset`; нецелый `limit`/`offset` → 400 `VALIDATION_ERROR`. Терминалы проектов, которые пользователь не читает, в выдаче не появляются |
+| GET | `/api/v2/terminals` | auth | Список терминалов `{terminals, total, offset, limit, next_offset}` (ADR-118); фильтры `project_id`/`session_id`, `include_exited` (`true`/`1` — вместе с завершёнными; по умолчанию — только живые), `limit` (по умолчанию 50, максимум 200)/`offset`; нецелый `limit`/`offset` → 400 `VALIDATION_ERROR`. Терминалы проектов, которые пользователь не читает, в выдаче не появляются |
 | POST | `/api/v2/terminals` | auth (**write**) | Открыть терминал → 201 `{terminal}`; тело `{id?, project_id, session_id?, cwd?, shell?, cols?, rows?, title?}` (`project_id` обязателен). `cols`/`rows` — целые (`cols` 1…1000, `rows` 1…500; по умолчанию 80×24), иначе 400 `VALIDATION_ERROR` (клампа нет). `cwd` из тела **игнорируется** — рабочий каталог вычисляет сервер (`session.worktree.directory` → `project.workspace`). Сессия должна принадлежать проекту. Нет `project_id` → 400 `VALIDATION_ERROR`, нет проекта → 404 `NOT_FOUND`, нет прав → 403 `FORBIDDEN` |
 | GET | `/api/v2/terminals/:id` | auth | Снимок терминала `{terminal}` — DTO в snake_case (см. таблицу DTO ниже); терминала нет → 404 `TERMINAL_NOT_FOUND` |
 | PATCH | `/api/v2/terminals/:id` | auth (**write**) | Точечная правка `{title?, session_id?}` → `{terminal}`; `null` — сброс поля; сессия должна принадлежать проекту терминала |
-| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Закрыть терминал → **204** (PTY гасится, публикуются `terminal.exited` + `terminal.deleted`); повторный `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
+| DELETE | `/api/v2/terminals/:id` | auth (**write**) | Удалить терминал → **204** (PTY гасится, публикуются `terminal.exited` + `terminal.deleted`, **снимок терминала удаляется**); повторный `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
 | GET | `/api/v2/terminals/:id/output?since=N` | auth | Снимок вывода из кольцевого буфера: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` — курсор (только фрагменты с `seq > since`). `truncated` — часть вывода вытеснена из буфера, клиенту нужно перечитать вывод |
 | GET | `/api/v2/terminals/:id/stream?since=N` | auth | Поток вывода `application/x-ndjson`: кадры `{"seq":n,"data":"..."}` — сначала replay из буфера (`seq > since`), затем живой вывод; кадр выхода — `{"seq":n,"data":"","exit_code":…,"signal":…}`; heartbeat — пустой кадр `{"seq":n,"data":""}` раз в 15 с. При отключении клиента (abort/закрытие соединения) поток закрывается, а подписка **снимается** (`attached_clients` уменьшается при любом исходе: abort, ошибка записи, выход терминала) |
 | POST | `/api/v2/terminals/:id/input` | auth (**write**) | Ввод в терминал `{data}` → **204**; кадр больше 16 КиБ → 413 `TERMINAL_LIMIT`, слишком часто (>20 кадров/с) → 429 `TERMINAL_LIMIT` |
 | POST | `/api/v2/terminals/:id/resize` | auth (**write**) | Новый размер `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (целые), иначе 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/terminals/:id/restart` | auth (**write**) | Перезапуск **завершённого** терминала → 200 `{terminal}`: поднимается новый PTY с теми же `cwd`/`shell`/`cols`/`rows`, id терминала сохраняется, буфер вывода очищается, статус — `running`, признак `restored` снимается, публикуется `terminal.updated`. Живой терминал перезапускать нельзя (вторая оболочка в том же каталоге рассинхронила бы вывод) → 409 `TERMINAL_ALREADY_RUNNING`; терминала нет → 404 `TERMINAL_NOT_FOUND` |
 
 **DTO терминала — snake_case** (`toTerminalDto`, `engine/terminal/types.ts`):
 
@@ -3599,6 +3620,7 @@ instance-пул берёт адрес оттуда.
 | `executor_id` | string? | Адрес исполнителя (`target: executor`) |
 | `can_write` | boolean | Право текущего пользователя на запись (инвариант 21) |
 | `attached_clients` | number | Сколько клиентов подписано на поток вывода |
+| `restored` | boolean? | Терминал **восстановлен из снимка** после рестарта ядра: PTY не запущен, в буфере — сохранённый хвост вывода; поле отсутствует у обычного терминала |
 
 **Граница доступа (инварианты 16/21).** Право на терминал — право на его
 **проект**, и проверяется оно **на границе**: guard резолвит терминал и проект
@@ -3613,8 +3635,9 @@ instance-пул берёт адрес оттуда.
 инстансный выключатель `terminal.enabled`; весь контур `/api/v2/terminals*`
 отвечает этим кодом), `TERMINAL_NOT_FOUND` (404), `TERMINAL_LIMIT` (409 —
 лимит терминалов проекта/инстанса, 429 — скорость ввода, 413 — размер кадра
-ввода), `TERMINAL_UNAVAILABLE` (503 — PTY недоступен в этой среде),
-`TERMINAL_INVALID_REQUEST` (400).
+ввода), `TERMINAL_ALREADY_RUNNING` (409 — перезапуск живого терминала),
+`TERMINAL_UNAVAILABLE` (503 — PTY недоступен в этой среде или точка исполнения
+недоступна), `TERMINAL_INVALID_REQUEST` (400).
 
 **События.** Метаданные терминала приходят в **канале сессии** терминала
 (`terminal.created`/`terminal.updated`/`terminal.exited`/`terminal.deleted`;
@@ -3624,25 +3647,40 @@ instance-пул берёт адрес оттуда.
 
 ### 5.44 Настройки терминалов — `/api/v2/settings/terminal` (оба, PROP-132)
 
-Мастер-выключатель интерактивных терминалов (`terminal.enabled`, [PROP-132](./arch_decisions/prop-132-ui-terminal.md)).
+Мастер-выключатель интерактивных терминалов (`terminal.enabled`) и флаг
+восстановления терминалов из снимков после рестарта ядра
+(`terminal.autoRestore`), [PROP-132](./arch_decisions/prop-132-ui-terminal.md).
 Фабрика `createTerminalSettingsRoutes` — общая для core и backend; managed передаёт
 guard'ы ADMIN, core — `requireAuth`.
 
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
-| GET | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean}, envLocked:boolean, restartRequired:false}`; приоритет `SYNTH_TERMINAL_ENABLED` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled` > `true` |
-| PUT | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean}` — runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: `TerminalService.setEnabled` закрывает живые терминалы и запрещает создание новых — рестарт не нужен); не-bool → 400 `VALIDATION_ERROR`; значение зафиксировано env → 409 `CONFLICT`; ответ как у `GET` |
-| DELETE | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Сброс runtime-значения к env/config/default с тем же live-применением (ответ как у `GET`); значение зафиксировано env → 409 `CONFLICT` |
+| GET | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled:boolean, autoRestore:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean, autoRestore:boolean}, envLocked:boolean, restartRequired:false}`; приоритет каждого поля: `SYNTH_TERMINAL_ENABLED`/`SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled`/`terminal.autoRestore` > `true` |
+| PUT | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | `{enabled?:boolean, autoRestore?:boolean}` — **частичное** обновление runtime-override (`settings.json`/PG), **применяется сразу** (`restartRequired:false`: `TerminalService.setEnabled` закрывает живые терминалы и запрещает создание новых, `setAutoRestore` включает/выключает восстановление из снимков — рестарт не нужен); не-bool → 400 `VALIDATION_ERROR`; поле, зафиксированное env, → 409 `CONFLICT`; ответ как у `GET` |
+| DELETE | `/api/v2/settings/terminal` | ADMIN (core — `requireAuth`) | Сброс runtime-значений к env/config/default с тем же live-применением (ответ как у `GET`); хотя бы одно из значений зафиксировано env → 409 `CONFLICT` |
 
-**Источники значения.** `env` — переменная `SYNTH_TERMINAL_ENABLED` (`true`/`1`/`false`/`0`);
-`runtime` — override из UI; `config` — `terminal.enabled` в `config.yaml`; `default` — `true`
-(контур включён). Env-значение **фиксирует** выключатель: runtime из UI его не перекрывает
-(409 `CONFLICT`), а в конфиге флаг необязателен — «не задано» отличается от «явно задано `true`»,
-поэтому API различает `config` и `default`.
+**Источники значения.** `env` — переменная `SYNTH_TERMINAL_ENABLED` /
+`SYNTH_TERMINAL_AUTO_RESTORE` (`true`/`1`/`false`/`0`); `runtime` — override из
+UI; `config` — `terminal.enabled` / `terminal.autoRestore` в `config.yaml`;
+`default` — `true` (контур включён, восстановление включено). Env-значение
+**фиксирует** своё поле: runtime из UI его не перекрывает (409 `CONFLICT`), а
+фиксация одного поля **не** блокирует изменение другого. В конфиге флаги
+необязательны — «не задано» отличается от «явно задано `true`», поэтому API
+различает `config` и `default`.
+
+Поля резолвятся **по отдельности**, но контракт отдаёт один `source` — слой,
+задавший поведение терминалов: **наиболее специфичный** из двух (`env` >
+`runtime` > `config` > `default`). `envLocked` — env зафиксировал хотя бы одно
+из значений; точная привязка поля к слою видна по тому, что `PUT` проверяет
+env-фиксацию **по полю** (409 на конкретное поле).
 
 **Поведение при выключении.** Живые терминалы закрываются (события `terminal.exited` +
 `terminal.deleted` с причиной `disabled`), создание новых запрещено, а весь контур
 `/api/v2/terminals*` отвечает `403 TERMINALS_DISABLED` (граница контура, инвариант 16).
+
+**Поведение при выключении восстановления.** Снимки терминалов не поднимаются
+при следующем старте ядра; их убирает reaper (существующие снимки — до 2 дней
+после последней активности терминала).
 
 ## 6. Источники
 
@@ -3665,7 +3703,7 @@ guard'ы ADMIN, core — `requireAuth`.
 | Память: портал и метрики (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
 | Фоновые прогоны: реестр, сервисы, HTTP-контур (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
 | Worktrees: сервис, порт инвентаря, HTTP-контур, событие (ADR-114) | `packages/core/src/engine/worktree/*`, `packages/core/src/storage/ports/worktree-repository.ts`, `packages/core/src/storage/file-worktree-store.ts`, `packages/core/src/server/routes/projects.ts`, `packages/core/src/server/routes/sessions.ts`, `packages/core/src/engine/tools/worktree.ts`, `packages/shared/src/types/worktree.ts` |
-| Терминалы: сервис, кольцевой буфер, аудит, метрики, HTTP-контур (PROP-132) | `packages/core/src/engine/terminal/*`, `packages/core/src/server/routes/terminals.ts`, `packages/core/src/server/app/terminal-service.ts`, `packages/shared/src/types/bus-events.ts` |
+| Терминалы: сервис, кольцевой буфер, аудит, метрики, снимки, HTTP-контур (PROP-132) | `packages/core/src/engine/terminal/*`, `packages/core/src/server/routes/terminals.ts`, `packages/core/src/server/app/terminal-service.ts`, `packages/core/src/server/app/terminal-port.ts`, `packages/shared/src/types/bus-events.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

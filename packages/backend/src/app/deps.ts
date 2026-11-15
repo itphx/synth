@@ -169,6 +169,13 @@ import {
   // `terminal.enabled` (приоритет env > runtime > config > default).
   createTerminalService,
   resolveTerminalEnabled,
+  // PROP-132: восстановление терминалов из снимков (`terminal.autoRestore`).
+  resolveTerminalAutoRestore,
+  // PROP-135: порт терминала — тем же роутером, что и порт тулов.
+  createTerminalPortResolver,
+  // PROP-132 (Ф5): сообщение-уведомление о завершении запуска команды в
+  // терминале (точка сборки — тот же нотификатор, что у фоновых процессов).
+  buildTerminalRunNotification,
   // ADR-090 (Ф3а) / §5, §10 (Ф5б-1): общий реестр
   // блоков промпта (композер + фасад плагинов) и рантайм плагинов.
   PromptBlockRegistry,
@@ -1207,15 +1214,59 @@ export async function createBackendDeps(
   // graceful shutdown (`stopTerminalService`), а мастер-выключатель
   // `terminal.enabled` применяется **live** (`setEnabled`): живые терминалы
   // закрываются, создание новых запрещается — рестарт не нужен.
+  //
+  // PROP-135: порт терминала выбирается **тем же** роутером, что и порт тулов
+  // (профиль по binding'у + область пула + `workspaceSubPath`) — терминал живёт
+  // на той же точке исполнения, что и ход сессии.
+  const terminalPortResolver = createTerminalPortResolver({
+    router: executionRouter,
+    sessions: { getSession: (id: string) => sessionManager.getSession(id) },
+    projects: { load: (id: string) => projectStore.load(id) },
+    agents: { get: (role: string) => agentRegistry.get(role) },
+    workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+  });
   const terminalService = createTerminalService({
     port: executionPort,
+    resolvePort: terminalPortResolver,
+    blobs: storageContext.blobs,
     eventBus,
     commandAuditLog,
     ...(metrics ? { metrics } : {}),
     sessions: { getSession: (id: string) => sessionManager.getSession(id) },
+    // PROP-132 (Ф5): результат запуска команды в терминале приходит в сессию
+    // **сообщением** — тем же нотификатором, что у фоновых шелл-процессов
+    // (ADR-113): ровно одна копия (steer при активном ходе, иначе очередь).
+    onRunFinished: async (run, terminal) => {
+      const sessionId = terminal?.sessionId ?? run.sessionId;
+      if (!sessionId) {
+        // Терминал без привязки к сессии — уведомлять некуда (только лог).
+        console.warn(
+          `[terminal] терминал ${run.terminalId} не привязан к сессии — результат запуска ${run.runId} не доставлен`,
+        );
+        return;
+      }
+      await notifyBackgroundParent(sessionId, buildTerminalRunNotification(run));
+    },
   });
   // Стартовое значение мастер-выключателя: env > runtime > config > default.
   const terminalRuntime = await settingsStore.getTerminal();
+  // PROP-132: восстановление терминалов из снимков — тот же порядок
+  // приоритета. Значение применяется **до** восстановления: выключенное
+  // восстановление → снимки не поднимаются (их уберёт reaper).
+  terminalService.setAutoRestore(
+    resolveTerminalAutoRestore({
+      configAutoRestore: config.synth.terminal?.autoRestore,
+      runtimeAutoRestore:
+        typeof terminalRuntime.autoRestore === 'boolean' ? terminalRuntime.autoRestore : undefined,
+      env: process.env,
+    }).autoRestore,
+  );
+  // Снимки терминалов поднимаются **до** применения мастер-выключателя:
+  // восстановленная запись — это история вывода, а не живой терминал.
+  const restoredTerminals = await terminalService.restoreFromSnapshots();
+  if (restoredTerminals > 0) {
+    console.log(`[terminal] восстановлено терминалов из снимков: ${restoredTerminals}`);
+  }
   terminalService.setEnabled(
     resolveTerminalEnabled({
       configEnabled: config.synth.terminal?.enabled,

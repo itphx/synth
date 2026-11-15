@@ -553,6 +553,7 @@ export { TerminalRingBuffer, splitByUtf8Bytes, utf8AlignedSuffix } from './engin
 export {
   DEFAULT_TERMINAL_LIMITS,
   TERMINAL_EVENT_TYPES,
+  TerminalAlreadyRunningError,
   TerminalDisabledError,
   TerminalError,
   TerminalInvalidRequestError,
@@ -574,6 +575,8 @@ export type {
   TerminalLogger,
   TerminalOutputChunk,
   TerminalOutputSnapshot,
+  TerminalPortContext,
+  TerminalPortResolver,
   TerminalRecord,
   TerminalServiceOptions,
   TerminalStatus,
@@ -584,6 +587,47 @@ export type {
   TerminalTimerHandle,
   TerminalTimers,
 } from './engine/terminal/types.js';
+// PROP-132: снимки терминалов (ADR-096/ADR-116) — восстановление после
+// рестарта ядра.
+export {
+  deleteTerminalSnapshot,
+  listTerminalSnapshotIds,
+  readTerminalSnapshot,
+  readTerminalSnapshotOutput,
+  TERMINAL_SNAPSHOT_OUTPUT_BYTES,
+  TERMINAL_SNAPSHOT_PREFIX,
+  TERMINAL_SNAPSHOT_VERSION,
+  terminalSnapshotMetaPath,
+  terminalSnapshotOutputPath,
+  writeTerminalSnapshot,
+} from './engine/terminal/snapshot.js';
+export type { TerminalSnapshotMeta } from './engine/terminal/snapshot.js';
+// PROP-132 (Ф5): запуски команд в терминале — реестр запусков, маркер
+// завершения и сообщение-уведомление сессии (точка сборки — composition root).
+export {
+  buildTerminalRunNotification,
+  buildRunMarkerCommand,
+  scanRunMarkers,
+  TerminalRunRegistry,
+  TerminalRunBusyError,
+  isTerminalRunBusyError,
+} from './engine/terminal/runs.js';
+export type {
+  TerminalRunFinishedHandler,
+  TerminalRunMarkerPart,
+  TerminalRunMarkerScan,
+  TerminalRunRecord,
+  TerminalRunRegistryOptions,
+  TerminalRunStartInput,
+  TerminalRunStatus,
+} from './engine/terminal/runs.js';
+export {
+  frameTerminalOutput,
+  normalizeTerminalLineEndings,
+  normalizeTerminalOutput,
+  TERMINAL_CONTENT_CLOSE,
+  TERMINAL_CONTENT_OPEN,
+} from './engine/terminal/output.js';
 // PROP-135 (Ф1, слайс 2): общий читатель файлов — тем же кодом читает и
 // исполнитель (точечный runtime-импорт), поэтому формат вывода не зависит
 // от топологии.
@@ -2500,15 +2544,31 @@ export type { TerminalServiceWiring } from './server/app/terminal-service.js';
 // PROP-132 (Ф3в): мастер-выключатель терминалов — приоритет источников
 // (env > runtime > config > default) и HTTP-контур runtime-настройки.
 export {
+  DEFAULT_TERMINAL_AUTO_RESTORE,
   DEFAULT_TERMINAL_ENABLED,
+  TERMINAL_AUTO_RESTORE_ENV,
   TERMINAL_ENABLED_ENV,
+  parseTerminalEnvAutoRestore,
   parseTerminalEnvEnabled,
+  resolveTerminalAutoRestore,
   resolveTerminalEnabled,
+  resolveTerminalSettings,
 } from './engine/terminal/config.js';
 export type {
+  ResolvedTerminalAutoRestore,
   ResolvedTerminalEnabled,
+  ResolvedTerminalSettings,
   TerminalEnabledSource,
+  TerminalEnvLock,
 } from './engine/terminal/config.js';
+// PROP-135: порт терминала — тот же роутер, что у тулов (профиль/пул).
+export { createTerminalPortResolver, resolveTerminalWorkspaceSubPath } from './server/app/terminal-port.js';
+export type {
+  TerminalPortAgents,
+  TerminalPortProjects,
+  TerminalPortResolverDeps,
+  TerminalPortSessions,
+} from './server/app/terminal-port.js';
 export { createTerminalSettingsRoutes } from './server/routes/settings-terminal.js';
 export type {
   TerminalSettingsDeps,

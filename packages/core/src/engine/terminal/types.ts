@@ -19,8 +19,10 @@
  */
 import type { ExecutionPort } from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
+import type { BlobStore } from '../../storage/ports/blob-store.js';
 import type { TerminalAuditSink } from './audit.js';
 import type { TerminalMetricsHooks } from './metrics.js';
+import type { TerminalRunFinishedHandler } from './runs.js';
 
 /**
  * Статус терминала.
@@ -97,6 +99,14 @@ export interface TerminalRecord {
   target: TerminalTarget;
   /** Адрес исполнителя (для `executor`). */
   executorId?: string;
+  /**
+   * Терминал восстановлен из снимка после рестарта ядра (PROP-132).
+   *
+   * `true` — запись поднята из `terminals/<id>/meta.json`: PTY не запущен,
+   * в буфере — сохранённый хвост вывода. Перезапуск (`restart`) такой
+   * записи поднимает **новый** PTY с теми же `cwd`/`shell`/`cols`/`rows`.
+   */
+  restored?: boolean;
 }
 
 /** Фрагмент вывода терминала в кольцевом буфере. */
@@ -276,6 +286,13 @@ export interface TerminalDto {
   can_write: boolean;
   /** Сколько клиентов сейчас подписано на вывод. */
   attached_clients: number;
+  /**
+   * Терминал восстановлен из снимка после рестарта ядра (PROP-132).
+   *
+   * Отсутствует — терминал обычный (создан в этом процессе). `true` — запись
+   * поднята из снимка: PTY не запущен, в буфере — сохранённый хвост вывода.
+   */
+  restored?: boolean;
 }
 
 /** Вход DTO-хелпера. */
@@ -307,6 +324,7 @@ export function toTerminalDto(record: TerminalRecord, options: TerminalDtoOption
     ...(record.executorId !== undefined ? { executor_id: record.executorId } : {}),
     can_write: options.canWrite,
     attached_clients: options.attachedClients,
+    ...(record.restored !== undefined ? { restored: record.restored } : {}),
   };
 }
 
@@ -358,7 +376,8 @@ export type TerminalErrorCode =
   | 'TERMINAL_DISABLED'
   | 'TERMINAL_NOT_FOUND'
   | 'TERMINAL_UNAVAILABLE'
-  | 'TERMINAL_INVALID_REQUEST';
+  | 'TERMINAL_INVALID_REQUEST'
+  | 'TERMINAL_ALREADY_RUNNING';
 
 /** Базовая типизированная ошибка терминального сервиса. */
 export class TerminalError extends Error {
@@ -450,6 +469,29 @@ export class TerminalInvalidRequestError extends TerminalError {
   }
 }
 
+/**
+ * Терминал жив — перезапуск невозможен (PROP-132).
+ *
+ * `POST /terminals/:id/restart` на живом терминале → `409
+ * TERMINAL_ALREADY_RUNNING`: перезапуск поднял бы **вторую** оболочку в том
+ * же каталоге, а старая осталась бы жить (две PTY на один терминал — рассинхрон
+ * вывода). Перезапуск — только для завершённого терминала (вышел процесс или
+ * восстановлен из снимка).
+ */
+export class TerminalAlreadyRunningError extends TerminalError {
+  /** Идентификатор терминала. */
+  readonly terminalId: string;
+
+  constructor(terminalId: string, message?: string) {
+    super(
+      'TERMINAL_ALREADY_RUNNING',
+      message ?? `Терминал ${terminalId} ещё работает — перезапуск невозможен`,
+    );
+    this.name = 'TerminalAlreadyRunningError';
+    this.terminalId = terminalId;
+  }
+}
+
 /** Структурная проверка ошибки терминального сервиса (устойчива к копиям класса). */
 export function isTerminalError(value: unknown): value is TerminalError {
   if (value instanceof TerminalError) return true;
@@ -468,10 +510,59 @@ export function isTerminalError(value: unknown): value is TerminalError {
 // Опции сервиса
 // ---------------------------------------------------------------------------
 
+/**
+ * Контекст выбора порта исполнения для терминала (PROP-135).
+ *
+ * Ровно то, что роутер исполнения понимает: проект/сессия (область пула) и
+ * рабочий каталог (основание для `workspaceSubPath`).
+ */
+export interface TerminalPortContext {
+  /** Проект-владелец терминала. */
+  projectId: string;
+  /** Привязанная сессия (необязательно) — область сессионного пула. */
+  sessionId?: string;
+  /** Рабочий каталог терминала (основание для `workspaceSubPath`). */
+  cwd: string;
+  /** Оболочка терминала (точка исполнения может её уточнить). */
+  shell?: string;
+}
+
+/**
+ * Резолвер порта исполнения терминала.
+ *
+ * Терминал открывается **на той же точке**, что и тулы сессии: порт выбирает
+ * `ExecutionRouter.portFor` по профилю (binding: сессия → агент → проект →
+ * дефолт) и области пула (`projectId`/`sessionId` + `workspaceSubPath`).
+ * Не задан — инстансный порт сервиса (прежнее поведение).
+ */
+export type TerminalPortResolver = (
+  ctx: TerminalPortContext,
+) => ExecutionPort | Promise<ExecutionPort>;
+
 /** Опции терминального сервиса. */
 export interface TerminalServiceOptions {
   /** Порт исполнения (PTY открывается через него). */
   port: ExecutionPort;
+  /**
+   * Резолвер порта по терминалу (PROP-135).
+   *
+   * Задан — порт выбирается на каждый терминал (профиль/пул сессии или
+   * проекта); не задан — используется инстансный `port`.
+   */
+  resolvePort?: TerminalPortResolver;
+  /**
+   * Blob-хранилище для снимков терминалов (ADR-096/ADR-116).
+   *
+   * Не задан — снимки не пишутся и не восстанавливаются (терминал живёт
+   * только в памяти процесса — прежнее поведение).
+   */
+  blobs?: BlobStore;
+  /**
+   * Восстанавливать ли терминалы из снимков при старте (PROP-132).
+   *
+   * `false` — снимки не поднимаются, их убирает reaper. По умолчанию `true`.
+   */
+  autoRestore?: boolean;
   /** Шина событий (опционально): метаданные терминала публикуются в канал сессии. */
   eventBus?: EventBus;
   /** Журнал аудита (опционально): `terminal.open`/`terminal.input`/`terminal.close`. */
@@ -500,4 +591,13 @@ export interface TerminalServiceOptions {
    * (fail-safe: живой терминал не убиваем, потому что не смогли проверить).
    */
   isSessionActive?: (sessionId: string) => boolean | Promise<boolean>;
+  /**
+   * Колбэк завершения запуска команды в терминале (PROP-132, Ф5).
+   *
+   * Вызывается один раз на запуск (статус `done`/`timeout`/`closed`).
+   * Точка сборки уведомления — composition root (`server/app/deps.ts`,
+   * `backend/app/deps.ts`): сервис терминалов не знает, как доставлять
+   * результат в сессию.
+   */
+  onRunFinished?: TerminalRunFinishedHandler;
 }

@@ -845,6 +845,20 @@ export const SYSTEM_MESSAGES = {
     'Error: the terminal limit is exhausted ({limit}) — close an unused terminal and try again',
   'terminal.tool.unavailable':
     'Error: interactive terminals are unavailable in this environment: {reason}',
+  // --- Запуски команд в терминале (PROP-132, Ф5) ---
+  'terminal.tool.history_empty': 'The terminal output history is empty',
+  'terminal.tool.run_background_started':
+    'Run {run_id} started in the terminal — the result will be delivered to the chat automatically',
+  'terminal.tool.run_result_header': 'Run {run_id} (status: {status})',
+  'terminal.tool.run_finished':
+    'Terminal {terminal_id}: the command finished (exit {exit_code})',
+  'terminal.tool.run_timeout':
+    'Terminal {terminal_id}: the command did not finish within {timeout_ms} ms (timeout)',
+  'terminal.tool.run_closed':
+    'Terminal {terminal_id}: the terminal was closed while the command was running',
+  'terminal.tool.run_busy':
+    'Error: another run is already active in terminal {terminal_id} — wait for it to finish',
+  'terminal.tool.exit_code': 'Exit code: {exit_code}',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

@@ -417,6 +417,7 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('DELETE', '/api/v2/terminals/:id', G_TERMINAL, [404]),
   r('POST', '/api/v2/terminals/:id/input', G_TERMINAL, [404], { body: { data: 'x' } }),
   r('POST', '/api/v2/terminals/:id/resize', G_TERMINAL, [404], { body: { cols: 80, rows: 24 } }),
+  r('POST', '/api/v2/terminals/:id/restart', G_TERMINAL, [404]),
 
   // --- Профили и пулы исполнения (PROP-135 Ф6b-1) ---
   // Мутации пулов — только ADMIN (управление ресурсами provisioner'а); чужой

@@ -7,15 +7,16 @@
  *
  * | Метод  | Путь                       | Что делает                                   |
  * |--------|----------------------------|----------------------------------------------|
- * | `GET`  | `/`                        | список терминалов (постранично)               |
+ * | `GET`  | `/`                        | список терминалов (постранично; `include_exited` — вместе с завершёнными) |
  * | `POST` | `/`                        | открыть терминал (PTY на точке исполнения)     |
  * | `GET`  | `/:id`                     | снимок терминала                              |
  * | `PATCH`| `/:id`                     | переименование / привязка к сессии             |
- * | `DELETE`| `/:id`                    | закрыть терминал                              |
+ * | `DELETE`| `/:id`                    | удалить терминал (снимок тоже)                |
  * | `GET`  | `/:id/output?since=N`      | снимок вывода из кольцевого буфера            |
  * | `GET`  | `/:id/stream?since=N`      | поток вывода NDJSON (replay → live)           |
  * | `POST` | `/:id/input`               | ввод в терминал                               |
  * | `POST` | `/:id/resize`              | новый размер терминала                        |
+ * | `POST` | `/:id/restart`             | перезапуск завершённого терминала             |
  *
  * Список — **постраничный** (ADR-118): `{terminals, total, offset, limit,
  * next_offset}`; `limit`/`offset` — целые (невалидные → `400
@@ -46,6 +47,7 @@
  * | `VALIDATION_ERROR`      | 400    | тело/параметры запроса                       |
  * | `TERMINAL_INVALID_REQUEST` | 400 | некорректные аргументы терминала              |
  * | `TERMINAL_LIMIT`        | 409/429/413 | лимит терминалов (409), скорость ввода (429), кадр ввода (413) |
+ * | `TERMINAL_ALREADY_RUNNING` | 409 | перезапуск живого терминала                   |
  * | `TERMINAL_UNAVAILABLE`  | 503    | PTY недоступен в этой среде                   |
  *
  * ## Рабочий каталог
@@ -62,6 +64,7 @@ import { createMiddleware } from 'hono/factory';
 import type { Project, Session } from '@itphx/synth-shared';
 import type { TerminalService } from '../../engine/terminal/service.js';
 import {
+  TerminalAlreadyRunningError,
   TerminalDisabledError,
   TerminalInvalidRequestError,
   TerminalLimitError,
@@ -102,6 +105,8 @@ export interface TerminalRouteMessages {
   terminalUnavailable: (c: Context) => string;
   /** Исчерпан лимит терминалов (409/429/413). */
   terminalLimit: (c: Context) => string;
+  /** Терминал ещё работает — перезапуск невозможен (409). */
+  terminalAlreadyRunning: (c: Context) => string;
   /** Сессия не принадлежит проекту терминала (400). */
   sessionNotInProject: (c: Context) => string;
   /** У проекта нет рабочего каталога (400). */
@@ -118,6 +123,7 @@ const DEFAULT_MESSAGES: TerminalRouteMessages = {
   terminalsDisabled: () => 'Терминалы на инстансе выключены',
   terminalUnavailable: () => 'Терминалы недоступны в этой среде',
   terminalLimit: () => 'Исчерпан лимит терминалов',
+  terminalAlreadyRunning: () => 'Терминал ещё работает — перезапуск невозможен',
   sessionNotInProject: () => 'Сессия не принадлежит проекту',
   workspaceMissing: () => 'Не удалось вычислить рабочий каталог терминала',
 };
@@ -336,6 +342,19 @@ export function createTerminalRoutes(
       );
     }
     if (err instanceof TerminalNotFoundError) return terminalNotFound(c);
+    if (err instanceof TerminalAlreadyRunningError) {
+      // Перезапуск живого терминала — конфликт состояния: вторая оболочка
+      // в том же каталоге рассинхронила бы вывод (PROP-132).
+      return c.json(
+        {
+          error: {
+            code: 'TERMINAL_ALREADY_RUNNING',
+            message: messages.terminalAlreadyRunning(c),
+          },
+        },
+        409,
+      );
+    }
     if (err instanceof TerminalLimitError) {
       // `project`/`instance` — конфликт состояния (409), `rate` — слишком
       // часто (429), `input` — кадр ввода больше лимита (413).
@@ -373,6 +392,11 @@ export function createTerminalRoutes(
   app.get('/', auth.requireAuth, enabledGuard, async (c) => {
     const projectId = c.req.query('project_id')?.trim() || undefined;
     const sessionId = c.req.query('session_id')?.trim() || undefined;
+    // Завершённые терминалы (в т.ч. восстановленные из снимков после рестарта
+    // ядра) по умолчанию скрыты: клиент видит живые. `include_exited=true`
+    // (или `1`) — отдаём и их (терминал завершён, но его можно перезапустить).
+    const includeExitedRaw = c.req.query('include_exited')?.trim().toLowerCase();
+    const includeExited = includeExitedRaw === 'true' || includeExitedRaw === '1';
     const limit = parseBoundedInt(c.req.query('limit'), DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
     const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
     if (limit === null || offset === null) return invalidQuery(c);
@@ -403,6 +427,7 @@ export function createTerminalRoutes(
     for (const record of deps.terminal.list({
       ...(projectId ? { projectId } : {}),
       ...(sessionId ? { sessionId } : {}),
+      ...(includeExited ? { includeExited: true } : {}),
     })) {
       const project = await projectOf(record.projectId);
       if (!project) continue;
@@ -727,11 +752,17 @@ export function createTerminalRoutes(
     }
   });
 
-  // DELETE /:id — закрыть терминал.
+  /**
+   * DELETE /:id — удалить терминал (PROP-132).
+   *
+   * PTY гасится, запись уходит из реестра, **снимок терминала удаляется**:
+   * удалённый терминал не должен воскреснуть после рестарта ядра. Публикуются
+   * `terminal.exited` + `terminal.deleted`.
+   */
   app.delete('/:id', auth.requireAuth, enabledGuard, terminalGuard('write'), async (c) => {
     const record = guardedTerminal(c);
     try {
-      await deps.terminal.close(record.id, { actorId: await currentUserId(c) });
+      await deps.terminal.delete(record.id, { actorId: await currentUserId(c) });
       return c.body(null, 204);
     } catch (err) {
       return terminalErrorResponse(c, err);
@@ -765,6 +796,34 @@ export function createTerminalRoutes(
     try {
       deps.terminal.resize(record.id, cols, rows);
       return c.body(null, 204);
+    } catch (err) {
+      return terminalErrorResponse(c, err);
+    }
+  });
+
+  /**
+   * POST /:id/restart — перезапуск завершённого терминала (PROP-132).
+   *
+   * Поднимается **новый** PTY с теми же `cwd`/`shell`/`cols`/`rows`; id
+   * терминала сохраняется, буфер вывода очищается, статус — `running`,
+   * признак `restored` снимается. Публикуется событие `terminal.updated`.
+   *
+   * Живой терминал перезапускать нельзя (вторая оболочка в том же каталоге
+   * рассинхронила бы вывод) → `409 TERMINAL_ALREADY_RUNNING`.
+   */
+  app.post('/:id/restart', auth.requireAuth, enabledGuard, terminalGuard('write'), async (c) => {
+    const record = guardedTerminal(c);
+    try {
+      const restarted = await deps.terminal.restart(record.id);
+      const project = guardedProject(c);
+      const cache = new Map<string, ProjectAccess>();
+      const { write } = await projectAccessOf(c, project, cache);
+      return c.json({
+        terminal: toTerminalDto(restarted, {
+          canWrite: write,
+          attachedClients: deps.terminal.attachedClients(restarted.id),
+        }),
+      });
     } catch (err) {
       return terminalErrorResponse(c, err);
     }

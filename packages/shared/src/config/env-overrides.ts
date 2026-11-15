@@ -135,6 +135,8 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'metrics', key: 'enabled', type: 'boolean' },
   // terminal (PROP-132): мастер-выключатель терминального контура.
   { section: 'terminal', key: 'enabled', type: 'boolean' },
+  // terminal (PROP-132): восстановление терминалов из снимков после рестарта.
+  { section: 'terminal', key: 'autoRestore', type: 'boolean' },
   // updates (ADR-133): каналы обновлений. `check` — автопроверка в фоне;
   // `channel` — `auto`|`stable`|`beta`; интервал и реестры каналов.
   { section: 'updates', key: 'check', type: 'boolean' },

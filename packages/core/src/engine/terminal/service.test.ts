@@ -29,6 +29,8 @@ import type {
   PtyHandle,
   PtyOpenRequest,
 } from '../../execution/ports/index.js';
+import type { BlobStore } from '../../storage/ports/blob-store.js';
+import { MemoryBlobStore } from '../../storage/memory/content.js';
 import type { TerminalAuditEntry } from './audit.js';
 import {
   splitByUtf8Bytes,
@@ -37,11 +39,20 @@ import {
 } from './ring-buffer.js';
 import { TerminalService } from './service.js';
 import {
+  TerminalAlreadyRunningError,
   TerminalDisabledError,
   TerminalLimitError,
   TerminalNotFoundError,
+  TerminalUnavailableError,
   type TerminalOutputChunk,
+  type TerminalPortContext,
+  type TerminalRecord,
 } from './types.js';
+import {
+  TERMINAL_RUN_MARKER_PREFIX,
+  TerminalRunBusyError,
+  type TerminalRunRecord,
+} from './runs.js';
 
 // ---------------------------------------------------------------------------
 // Эмулятор PTY и порта
@@ -153,6 +164,44 @@ class FakeExecutionPort implements ExecutionPort {
     const handle = this.handles[this.handles.length - 1];
     if (!handle) throw new Error('PTY ещё не открывался');
     return handle;
+  }
+}
+
+/**
+ * Fake-хранилище блобов: запись откладывается до `release()`.
+ *
+ * Нужно, чтобы гонка «снимок пишется ↔ терминал удаляется» была
+ * детерминированной: без ожидания незавершённой записи снимок записался бы
+ * **после** удаления — и удалённый терминал воскрес бы после рестарта ядра.
+ */
+class DeferredWriteBlobStore extends MemoryBlobStore {
+  /** Пути начатых записей (в порядке вызовов). */
+  readonly writes: string[] = [];
+  /** Ворота: пока не открыты — записи висят. */
+  private readonly _gate: Promise<void>;
+  /** Открыватель ворот (`null` — ещё не создан). */
+  private _open: (() => void) | null = null;
+
+  constructor() {
+    super();
+    this._gate = new Promise<void>((resolve) => {
+      this._open = resolve;
+    });
+  }
+
+  override async write(
+    path: string,
+    data: Buffer | string,
+    opts?: { mode?: number },
+  ): Promise<void> {
+    this.writes.push(path);
+    await this._gate;
+    await super.write(path, data, opts);
+  }
+
+  /** Открыть ворота: отложенные записи применяются. */
+  release(): void {
+    this._open?.();
   }
 }
 
@@ -279,8 +328,13 @@ describe('Терминальный сервис', () => {
       limits?: Record<string, number>;
       now?: () => number;
       isSessionActive?: (sessionId: string) => boolean | Promise<boolean>;
+      onRunFinished?: (run: TerminalRunRecord, terminal: TerminalRecord | null) => void;
+      blobs?: BlobStore;
+      resolvePort?: (ctx: TerminalPortContext) => ExecutionPort | Promise<ExecutionPort>;
+      autoRestore?: boolean;
     } = {},
   ): TerminalService {
+    let idCounter = 0;
     return new TerminalService({
       port,
       eventBus,
@@ -293,10 +347,15 @@ describe('Терминальный сервис', () => {
         syncSessions: () => {},
         addBytes: () => {},
       },
-      generateId: () => 'uuid-1',
+      // Уникальный id на терминал: иначе два терминала выглядели бы одним.
+      generateId: () => `uuid-${++idCounter}`,
       now: options.now ?? (() => clock),
       ...(options.isSessionActive ? { isSessionActive: options.isSessionActive } : {}),
       ...(options.limits ? { limits: options.limits } : {}),
+      ...(options.onRunFinished ? { onRunFinished: options.onRunFinished } : {}),
+      ...(options.blobs ? { blobs: options.blobs } : {}),
+      ...(options.resolvePort ? { resolvePort: options.resolvePort } : {}),
+      ...(options.autoRestore !== undefined ? { autoRestore: options.autoRestore } : {}),
     });
   }
 
@@ -364,6 +423,18 @@ describe('Терминальный сервис', () => {
     expect(first.id).toBe(second.id);
     expect(port.requests).toHaveLength(1);
     expect(service.list()).toHaveLength(1);
+
+    service.dispose();
+  });
+
+  it('последовательные открытия дают разные терминалы (single-flight — только по незавершённым)', async () => {
+    const service = createService();
+    const first = await service.create(createInput());
+    const second = await service.create(createInput());
+
+    expect(first.id).not.toBe(second.id);
+    expect(port.requests).toHaveLength(2);
+    expect(service.list()).toHaveLength(2);
 
     service.dispose();
   });
@@ -683,5 +754,515 @@ describe('Терминальный сервис', () => {
     expect(exits).toHaveLength(1);
 
     service.dispose();
+  });
+
+  describe('запуски команд', () => {
+    /** Текст маркера завершения запуска (как его печатает `printf`). */
+    function marker(nonce: string, code: string): string {
+      return `${TERMINAL_RUN_MARKER_PREFIX}${nonce};${code}\u0007`;
+    }
+
+    it('отправляет команду и невидимый маркер в терминал', async () => {
+      const service = createService();
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'ls -la',
+        timeoutMs: 30_000,
+      });
+
+      const handle = port.lastHandle;
+      expect(handle.writes[0]).toBe('ls -la\n');
+      expect(handle.writes[1]).toContain('printf');
+      expect(handle.writes[1]).toContain(run.nonce);
+      expect(handle.writes[1]).toContain('"$?"');
+      expect(service.getRun(run.runId)?.status).toBe('running');
+
+      service.dispose();
+    });
+
+    it('маркер в потоке завершает запуск: код возврата фиксируется, маркер вырезан из буфера', async () => {
+      const service = createService();
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+
+      port.lastHandle.emitData('file1\n');
+      port.lastHandle.emitData(marker(run.nonce, '0'));
+      port.lastHandle.emitData('after\n');
+
+      const finished = service.getRun(run.runId);
+      expect(finished?.status).toBe('done');
+      expect(finished?.exitCode).toBe(0);
+      expect(finished?.output).toBe('file1\n');
+      // Маркер в буфер терминала не попал — только обычный текст.
+      const buffered = service.output(record.id)?.chunks.map((piece) => piece.data).join('');
+      expect(buffered).toBe('file1\nafter\n');
+      expect(buffered).not.toContain('synth-run');
+
+      service.dispose();
+    });
+
+    it('ожидание завершения возвращает финальный снимок', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+
+      const waiting = service.waitRun(run.runId, 30_000);
+      port.lastHandle.emitData(marker(run.nonce, '2'));
+      const finished = await waiting;
+
+      expect(finished?.status).toBe('done');
+      expect(finished?.exitCode).toBe(2);
+
+      service.dispose();
+    });
+
+    it('второй запуск в том же терминале — TerminalRunBusyError', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      service.startRun({ terminalId: record.id, command: 'ls', timeoutMs: 30_000 });
+
+      expect(() =>
+        service.startRun({ terminalId: record.id, command: 'pwd', timeoutMs: 30_000 }),
+      ).toThrow(TerminalRunBusyError);
+
+      service.dispose();
+    });
+
+    it('таймаут запуска завершает его статусом timeout', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'sleep 100',
+        timeoutMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(service.getRun(run.runId)?.status).toBe('timeout');
+
+      service.dispose();
+    });
+
+    it('закрытие терминала посреди запуска завершает его статусом closed', async () => {
+      const settled: TerminalRunRecord[] = [];
+      const service = createService({
+        onRunFinished: (run) => {
+          settled.push(run);
+        },
+      });
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'sleep 100',
+        timeoutMs: 30_000,
+      });
+
+      await service.close(record.id);
+
+      expect(service.getRun(run.runId)?.status).toBe('closed');
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.status).toBe('closed');
+      expect(settled[0]?.sessionId).toBe('sess-1');
+
+      service.dispose();
+    });
+
+    it('колбэк завершения зовётся один раз с финальным статусом и кодом', async () => {
+      const settled: TerminalRunRecord[] = [];
+      const service = createService({
+        onRunFinished: (run) => {
+          settled.push(run);
+        },
+      });
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+
+      port.lastHandle.emitData('out\n');
+      port.lastHandle.emitData(marker(run.nonce, '0'));
+      // Повторный маркер ничего не меняет (переход состояния — один).
+      port.lastHandle.emitData(marker(run.nonce, '0'));
+
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.status).toBe('done');
+      expect(settled[0]?.exitCode).toBe(0);
+      expect(settled[0]?.output).toBe('out\n');
+
+      service.dispose();
+    });
+
+    it('терминал без привязки к сессии: запуск всё равно работает', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const run = service.startRun({
+        terminalId: record.id,
+        command: 'ls',
+        timeoutMs: 30_000,
+      });
+
+      port.lastHandle.emitData(marker(run.nonce, '0'));
+
+      expect(service.getRun(run.runId)?.status).toBe('done');
+      expect(service.getRun(run.runId)?.sessionId).toBeUndefined();
+
+      service.dispose();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Аудит: только выполненные команды
+  // -------------------------------------------------------------------------
+
+  describe('Аудит ввода', () => {
+    it('кадр с Enter (команда) попадает в журнал', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+
+      service.write(record.id, 'ls -la\n', { actorId: 'user-1' });
+
+      const input = auditEntries.find((entry) => entry.action === 'terminal.input');
+      expect(input).toBeDefined();
+      expect(input?.bytes).toBe(7);
+      expect(input?.enter).toBe(true);
+      expect(input?.actorId).toBe('user-1');
+      // Содержимого ввода в записи нет — только метаданные.
+      expect(JSON.stringify(input)).not.toContain('ls -la');
+
+      service.dispose();
+    });
+
+    it('обычный кадр (без Enter) в журнал не попадает, но считается метрикой', async () => {
+      const bytes: Array<{ op: string; value: number }> = [];
+      const service = new TerminalService({
+        port,
+        eventBus,
+        audit: {
+          record: (entry: TerminalAuditEntry) => {
+            auditEntries.push(entry);
+          },
+        },
+        metrics: {
+          syncSessions: () => {},
+          addBytes: (op, value) => bytes.push({ op, value }),
+        },
+        generateId: () => 'uuid-1',
+        now: () => clock,
+      });
+      const record = await service.create(createInput());
+
+      service.write(record.id, 'ls', { actorId: 'user-1' });
+
+      expect(auditEntries.some((entry) => entry.action === 'terminal.input')).toBe(false);
+      expect(bytes).toContainEqual({ op: 'input', value: 2 });
+
+      service.dispose();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Снимки и восстановление (PROP-132)
+  // -------------------------------------------------------------------------
+
+  describe('Снимки терминалов', () => {
+    let blobs: MemoryBlobStore;
+
+    beforeEach(() => {
+      blobs = new MemoryBlobStore();
+    });
+
+    it('снимок пишется при выходе процесса', async () => {
+      const service = createService({ blobs });
+      const record = await service.create(createInput());
+      port.lastHandle.emitData('вывод\n');
+
+      port.lastHandle.emitExit({ exitCode: 0 });
+      // Запись снимка — best-effort (fire-and-forget): дожидаемся микротаска.
+      await vi.waitFor(async () => {
+        expect(await blobs.exists(`terminals/${record.id}/meta.json`)).toBe(true);
+      });
+
+      const meta = await blobs.read(`terminals/${record.id}/meta.json`);
+      expect(meta).not.toBeNull();
+      const parsed = JSON.parse(meta!.toString('utf8')) as {
+        record: { id: string; status: string };
+        savedAt: number;
+      };
+      expect(parsed.record.id).toBe(record.id);
+      expect(parsed.savedAt).toBeGreaterThan(0);
+
+      const output = await blobs.read(`terminals/${record.id}/output.txt`);
+      expect(output?.toString('utf8')).toContain('вывод');
+
+      service.dispose();
+    });
+
+    it('явное удаление терминала убирает его снимок', async () => {
+      const service = createService({ blobs });
+      const record = await service.create(createInput());
+      port.lastHandle.emitExit({ exitCode: 0 });
+      await vi.waitFor(async () => {
+        expect(await blobs.exists(`terminals/${record.id}/meta.json`)).toBe(true);
+      });
+
+      await service.delete(record.id);
+
+      expect(await blobs.exists(`terminals/${record.id}/meta.json`)).toBe(false);
+      expect(await blobs.exists(`terminals/${record.id}/output.txt`)).toBe(false);
+
+      service.dispose();
+    });
+
+    it('удаление сразу после выхода дожидается незавершённой записи снимка', async () => {
+      // Запись снимка отложена (fake-хранилище): без ожидания `pendingSnapshot`
+      // снимок записался бы **после** удаления — и удалённый терминал воскрес
+      // бы после рестарта ядра.
+      const deferred = new DeferredWriteBlobStore();
+      const service = createService({ blobs: deferred });
+      const record = await service.create(createInput());
+      port.lastHandle.emitData('вывод\n');
+      port.lastHandle.emitExit({ exitCode: 0 });
+
+      // Запись снимка начата, но ещё не применена (ждёт разрешения).
+      expect(deferred.writes).toContain(`terminals/${record.id}/meta.json`);
+      expect(await deferred.exists(`terminals/${record.id}/meta.json`)).toBe(false);
+
+      let deleted = false;
+      const deleting = service.delete(record.id).then(() => {
+        deleted = true;
+      });
+      // `delete()` ждёт запись снимка — снимка на диске ещё нет.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(deleted).toBe(false);
+      expect(await deferred.exists(`terminals/${record.id}/meta.json`)).toBe(false);
+
+      deferred.release();
+      await deleting;
+
+      // Снимок записан **и** убран удалением: удалённый терминал не воскреснет.
+      expect(deferred.writes).toContain(`terminals/${record.id}/meta.json`);
+      expect(await deferred.exists(`terminals/${record.id}/meta.json`)).toBe(false);
+      expect(await deferred.exists(`terminals/${record.id}/output.txt`)).toBe(false);
+
+      service.dispose();
+    });
+  });
+
+  describe('Восстановление из снимков', () => {
+    let blobs: MemoryBlobStore;
+
+    beforeEach(() => {
+      blobs = new MemoryBlobStore();
+    });
+
+    /** Положить снимок терминала в blob-хранилище. */
+    async function seedSnapshot(
+      id: string,
+      lastActivityAt: number,
+      output: string,
+    ): Promise<void> {
+      await blobs.write(
+        `terminals/${id}/meta.json`,
+        JSON.stringify({
+          version: 1,
+          savedAt: lastActivityAt,
+          record: {
+            id,
+            projectId: 'proj-1',
+            ownerId: 'user-1',
+            cwd: '/work',
+            shell: 'bash',
+            status: 'running',
+            cols: 80,
+            rows: 24,
+            createdAt: lastActivityAt,
+            lastActivityAt,
+            target: 'inline',
+          },
+        }),
+      );
+      await blobs.write(`terminals/${id}/output.txt`, output);
+    }
+
+    it('поднимает запись моложе TTL: статус exited, restored, вывод в буфере', async () => {
+      await seedSnapshot('term_r', clock - 1000, 'сохранённый вывод\n');
+      const service = createService({ blobs });
+
+      const restored = await service.restoreFromSnapshots();
+
+      expect(restored).toBe(1);
+      const record = service.get('term_r');
+      expect(record?.status).toBe('exited');
+      expect(record?.restored).toBe(true);
+      expect(record?.cwd).toBe('/work');
+      expect(service.attachedClients('term_r')).toBe(0);
+      // Вывод снимка залит в кольцевой буфер — `output()` работает.
+      expect(service.output('term_r')?.chunks.map((chunk) => chunk.data).join('')).toBe(
+        'сохранённый вывод\n',
+      );
+
+      service.dispose();
+    });
+
+    it('просроченная запись (старше TTL) не поднимается, файлы удаляются', async () => {
+      const idleMs = 2 * 24 * 60 * 60 * 1000;
+      await seedSnapshot('term_old', clock - idleMs - 1000, 'старый вывод');
+      const service = createService({ blobs });
+
+      const restored = await service.restoreFromSnapshots();
+
+      expect(restored).toBe(0);
+      expect(service.get('term_old')).toBeNull();
+      expect(await blobs.exists('terminals/term_old/meta.json')).toBe(false);
+      expect(await blobs.exists('terminals/term_old/output.txt')).toBe(false);
+
+      service.dispose();
+    });
+
+    it('autoRestore=false — снимки не поднимаются', async () => {
+      await seedSnapshot('term_off', clock - 1000, 'вывод');
+      const service = createService({ blobs, autoRestore: false });
+
+      const restored = await service.restoreFromSnapshots();
+
+      expect(restored).toBe(0);
+      expect(service.get('term_off')).toBeNull();
+      // Файлы не удаляются сразу — их убирает reaper.
+      expect(await blobs.exists('terminals/term_off/meta.json')).toBe(true);
+
+      service.dispose();
+    });
+
+    it('восстановленный терминал можно перезапустить', async () => {
+      await seedSnapshot('term_r', clock - 1000, 'вывод');
+      const service = createService({ blobs });
+      await service.restoreFromSnapshots();
+
+      const restarted = await service.restart('term_r');
+
+      expect(restarted.id).toBe('term_r');
+      expect(restarted.status).toBe('running');
+      expect(restarted.restored).toBe(false);
+      expect(restarted.cwd).toBe('/work');
+      // Буфер очищен: старый вывод к новому терминалу не относится.
+      expect(service.output('term_r')?.chunks).toHaveLength(0);
+
+      service.dispose();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Перезапуск терминала (PROP-132)
+  // -------------------------------------------------------------------------
+
+  describe('Перезапуск терминала', () => {
+    it('живой терминал перезапустить нельзя — TERMINAL_ALREADY_RUNNING', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+
+      const error = await service.restart(record.id).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(TerminalAlreadyRunningError);
+      expect((error as TerminalAlreadyRunningError).code).toBe('TERMINAL_ALREADY_RUNNING');
+
+      service.dispose();
+    });
+
+    it('завершённый терминал: новый PTY с теми же параметрами, буфер очищен', async () => {
+      const service = createService();
+      const record = await service.create(createInput({ cols: 100, rows: 30, sessionId: 'sess-1' }));
+      port.lastHandle.emitData('старый вывод\n');
+      port.lastHandle.emitExit({ exitCode: 0, signal: 'SIGTERM' });
+
+      const restarted = await service.restart(record.id);
+
+      expect(restarted.id).toBe(record.id);
+      expect(restarted.status).toBe('running');
+      expect(restarted.restored).toBe(false);
+      expect(restarted.cols).toBe(100);
+      expect(restarted.rows).toBe(30);
+      expect(restarted.cwd).toBe('/work');
+      expect(restarted.shell).toBe('bash');
+      // Новый PTY открыт с теми же параметрами.
+      expect(port.requests).toHaveLength(2);
+      expect(port.requests[1]).toMatchObject({ cwd: '/work', shell: 'bash', cols: 100, rows: 30 });
+      // Буфер очищен, код выхода прежней оболочки снят.
+      expect(service.output(record.id)?.chunks).toHaveLength(0);
+      expect(restarted.exitCode).toBeUndefined();
+      // Событие `terminal.updated` опубликовано.
+      expect(events.some((event) => event.type === ('terminal.updated' as never))).toBe(true);
+
+      service.dispose();
+    });
+
+    it('несуществующий терминал — TERMINAL_NOT_FOUND', async () => {
+      const service = createService();
+      const error = await service.restart('term_missing').catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(TerminalNotFoundError);
+      service.dispose();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Выбор порта исполнения (PROP-135)
+  // -------------------------------------------------------------------------
+
+  describe('Выбор порта исполнения', () => {
+    it('порт терминала выбирается резолвером (профиль/область)', async () => {
+      const contexts: TerminalPortContext[] = [];
+      const otherPort = new FakeExecutionPort();
+      const service = createService({
+        resolvePort: (ctx) => {
+          contexts.push(ctx);
+          return otherPort;
+        },
+      });
+
+      const record = await service.create(createInput({ sessionId: 'sess-1' }));
+
+      expect(contexts).toHaveLength(1);
+      expect(contexts[0]).toMatchObject({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        cwd: '/work',
+        shell: 'bash',
+      });
+      // PTY открыт на **выбранном** порту, а не на инстансном.
+      expect(otherPort.requests).toHaveLength(1);
+      expect(port.requests).toHaveLength(0);
+      expect(record.target).toBe('inline');
+
+      service.dispose();
+    });
+
+    it('ошибка выбора порта — TERMINAL_UNAVAILABLE (fail-closed)', async () => {
+      const service = createService({
+        resolvePort: () => {
+          throw new Error('пул недоступен');
+        },
+      });
+
+      const error = await service.create(createInput()).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(TerminalUnavailableError);
+      expect((error as TerminalUnavailableError).reason).toBe('port_unavailable');
+      expect(port.requests).toHaveLength(0);
+
+      service.dispose();
+    });
   });
 });

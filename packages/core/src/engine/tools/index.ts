@@ -99,6 +99,7 @@ import {
   terminalReadTool,
   terminalWriteTool,
   terminalCloseTool,
+  terminalRunTool,
 } from './terminals.js';
 // ADR-114: инвентарь git-worktree проекта (per-session рабочий каталог).
 import {
@@ -263,6 +264,7 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   terminalReadTool,
   terminalWriteTool,
   terminalCloseTool,
+  terminalRunTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

@@ -1584,7 +1584,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   ));
 
   // PROP-132 (Ф3в): админ-раздел «Терминалы» — мастер-выключатель
-  // `terminal.enabled`. Применяется **сразу** (`terminalService.setEnabled`:
+  // `terminal.enabled` и флаг восстановления из снимков `terminal.autoRestore`.
+  // Применяются **сразу** (`terminalService.setEnabled`/`setAutoRestore`:
   // живые терминалы закрываются, новые не создаются — рестарт не нужен).
   // Managed RBAC: чтение и мутации — только ADMIN.
   app.route('/api/v2/settings', createTerminalSettingsRoutes(
@@ -1592,6 +1593,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     {
       settingsStore,
       configEnabled: config.synth.terminal?.enabled,
+      configAutoRestore: config.synth.terminal?.autoRestore,
       terminalService: deps.terminalService,
       env: process.env,
     },
