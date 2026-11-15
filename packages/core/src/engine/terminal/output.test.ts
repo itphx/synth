@@ -175,6 +175,64 @@ describe('Очистка вывода запуска', () => {
     expect(cleanRunOutput(text, wrapper)).toBe(text);
   });
 
+  it('removeRunWrapper: все вхождения эха — эхо и перерисовка с шумом', () => {
+    const wrapper = "printf '\\n@@srn-abc:%s@@\\n' \"$?\"";
+    // Перерисовка у приглашения: `p\b` перед командой, разрыв внутри nonce с
+    // `\r`/`ESC[K` и дублем символа (`c\r c`) — как у zsh на узком терминале.
+    const redrawn =
+      "\u001B[32m$\u001B[0m p\bprintf '\\n@@srn-ab \r\u001B[Kc\r c:%s@@\\n' \"$?\"";
+    const raw = [wrapper, 'out1', redrawn, 'out2'].join('\n');
+    expect(removeRunWrapper(raw, wrapper)).toBe('out1\nout2');
+    expect(cleanRunOutput(raw, wrapper)).toBe('out1\nout2');
+    // Текст без эха не трогается (быстрый guard не ломает семантику).
+    expect(removeRunWrapper('out1\nout2', wrapper)).toBe('out1\nout2');
+  });
+
+  /**
+   * Реальный вывод запуска на локальном zsh при `cols=40` (репро дефекта H,
+   * путь заменён на `/workspace`): эхо обёртки встречается **дважды** — эхо
+   * набранной строки и перерисовка у приглашения, где перенос разорвал
+   * `@@srn-<nonce>` (`a0 ` + `\r` + `ESC[K` + `6` + `\r` + `6:%s`), а перед
+   * командой стоит `p\b`.
+   */
+  const REAL_NARROW_ZSH_RAW: string = [
+    'echo H-check; false\r\n',
+    'printf \'\\n@@srn-68caf25843234a06:%s@@\\n\' "$?"\r\n',
+    '\r\u001B[0K[oh-my-zsh] It\'s time to update! You can do that by running `omz update`\r\n',
+    '\u001B[1m\u001B[7m%\u001B[27m\u001B[1m\u001B[0m                                       \r \r\u001B]2;eof@omn:/workspace/data/workspaces/2\u0007\u001B]1;../workspaces/2\u0007\u001B]7;file://omn/workspace/data/workspaces/2\u001B\\\r\u001B[0m\u001B[27m\u001B[24m\u001B[J\u001B[32m[\u001B[1m\u001B[32meof@omn \u001B[0m\u001B[36m/workspace/data/workspaces/2\u001B[32m]\u001B[32m\u001B[1m%\u001B[0m \u001B[K\u001B[?1h\u001B=\u001B[?2004he\becho H-check; false\u001B[?1l\u001B>\u001B[?2004l\r\r\n',
+    '\u001B]2;echo H-check; false\u0007\u001B]1;echo\u0007H-check\r\n',
+    '\u001B[1m\u001B[7m%\u001B[27m\u001B[1m\u001B[0m                                       \r \r\u001B]2;eof@omn:/workspace/data/workspaces/2\u0007\u001B]1;../workspaces/2\u0007\u001B]7;file://omn/workspace/data/workspaces/2\u001B\\\r\u001B[0m\u001B[27m\u001B[24m\u001B[J\u001B[32m[\u001B[1m\u001B[32meof@omn \u001B[0m\u001B[36m/workspace/data/workspaces/2\u001B[32m]\u001B[31m\u001B[1m%\u001B[0m \u001B[K\u001B[?1h\u001B=\u001B[?2004hp\bprintf \'\\n@@srn-68caf25843234a0 \r\u001B[K6\r6:%s@@\\n\' "$?"\u001B[?1l\u001B>\u001B[?2004l\r\r\n',
+    '\u001B]2;printf \'\\n@@srn-68caf25843234a06:%s@@\\n\' "$?"\u0007\u001B]1;printf\u0007\r\n',
+  ].join('');
+  const REAL_NARROW_ZSH_WRAPPER = "printf '\\n@@srn-68caf25843234a06:%s@@\\n' \"$?\"";
+  const REAL_NARROW_ZSH_NONCE = '68caf25843234a06';
+
+  it('removeRunWrapper: реальное эхо узкого zsh (cols=40) — оба вхождения', () => {
+    const removed = removeRunWrapper(
+      REAL_NARROW_ZSH_RAW,
+      REAL_NARROW_ZSH_WRAPPER,
+      REAL_NARROW_ZSH_NONCE,
+    );
+    expect(removed).not.toContain("printf '\\n@@srn");
+    expect(removed).not.toContain('p\bprintf');
+    expect(removed).not.toContain('@@srn-');
+    // Эхо самой команды пользователя и её вывод остаются на месте.
+    expect(removed).toContain('echo H-check; false');
+    expect(removed).toContain('H-check');
+
+    const clean = cleanRunOutput(
+      REAL_NARROW_ZSH_RAW,
+      REAL_NARROW_ZSH_WRAPPER,
+      REAL_NARROW_ZSH_NONCE,
+    );
+    expect(clean).not.toContain("printf '\\n@@srn");
+    expect(clean).not.toContain('p\bprintf');
+    expect(clean).not.toContain('@@srn-');
+    expect(clean.split('\n').filter((line) => line.includes('printf'))).toEqual([]);
+    expect(clean).toContain('echo H-check; false');
+    expect(clean).toContain('H-check');
+  });
+
   it('cleanRunOutput: strip → removeWrapper → normalize', () => {
     const wrapper = "printf '\\n@@srn-abc:%s@@\\n' \"$?\"";
     const raw = `\u001B[1m$ ls\u001B[0m\r\n${wrapper}\r\nfile1\r\nfile2\r\n\r\n`;
