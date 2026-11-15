@@ -368,6 +368,8 @@ MCP-вызова на текст и нетекстовые блоки и отд�
   кодом core сделаны окружение сессии (`TERM`/`COLORTERM`, очистка ambient) и
   закрытие (`SIGTERM` группе → 1 с → `SIGKILL`). Тесты подставляют
   поддельного провайдера (`PtyServiceOptions.providerFactory`).
+- **Нативный модуль в образе**: в Alpine-flavor'ах node-pty собирается из
+  исходников (musl-предсборка сегфолтится).
 - **Containment `cwd`** — тот же `resolveContainedCwd`, что у команд и фоновых
   процессов: терминал вне workspace не заводится (`400 cwd_outside_workspace`).
 - **Идемпотентность открытия — по `id`**: повторный `POST /pty/open` с тем же

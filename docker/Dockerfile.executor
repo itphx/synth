@@ -224,6 +224,17 @@ RUN set -eux; \
     ln -sfn /opt/synth-core /app/node_modules/@itphx/synth-core; \
     node -e "import('@itphx/synth-core').then((m) => { if (!m.InlineExecutionPort) { throw new Error('core без InlineExecutionPort'); } console.log('core runtime OK'); }).catch((e) => { console.error(e); process.exit(1); })"
 
+# PTY: musl-предсборка node-pty падает (SIGSEGV) на Alpine — собираем
+# нативный модуль из исходников; glibc-ветки (browser/full) используют
+# штатную предсборку. `--nodedir=/usr/local` — заголовки из образа, без сети.
+RUN set -eux; \
+    apk add --no-cache --virtual .pty-build python3 build-base linux-headers; \
+    cd /opt/synth-core/node_modules/@homebridge/node-pty-prebuilt-multiarch; \
+    node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild \
+        --build-from-source --nodedir=/usr/local; \
+    apk del .pty-build; \
+    test -f build/Release/pty.node
+
 EXPOSE 5100
 # PID 1 (аудит 0.13.4 §5.2): `synth-executor-init` — sh-обёртка (готовит точки
 # конфигурации пользователя `~/.zshrc`/`~/.tmux.conf` и передаёт управление
