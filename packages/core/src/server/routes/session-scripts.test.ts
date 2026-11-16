@@ -68,7 +68,7 @@ function makeService(overrides: Partial<Record<string, unknown>> = {}) {
             background: true,
             run: './scripts/dev.sh',
             shell: false,
-            args: false,
+            args: true,
             file: '.synth/scripts/dev.md',
             body: 'Локальная отладка.',
           }
@@ -200,6 +200,34 @@ describe('/api/v2/sessions/:id/scripts (ADR-126 §5)', () => {
 
       const run = (service.run as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
       expect(run).toMatchObject({ name: 'dev', args: '--fast', origin: 'user' });
+    });
+
+    it('отклонённый запуск не оставляет запись started в аудите', async () => {
+      const service = makeService({
+        get: vi.fn(async () => ({
+          name: 'dev',
+          description: 'd',
+          origin: 'project',
+          available: true,
+          trusted: true,
+          run: './scripts/dev.sh',
+          shell: false,
+          args: false,
+          file: '.synth/scripts/dev.md',
+          body: 'b',
+        })),
+      });
+      const audit = makeAuditLog();
+      const app = makeApp({ scriptService: service, commandAudit: audit.log });
+      const res = await app.request(`/api/v2/sessions/${SESSION_ID}/scripts/dev/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ arguments: '--fast' }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(audit.entries).toHaveLength(0);
+      expect((service.run as unknown as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
     });
 
     it('неизвестное поле в теле — 400 VALIDATION_ERROR', async () => {

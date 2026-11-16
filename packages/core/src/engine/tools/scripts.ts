@@ -214,6 +214,15 @@ export const scriptRunTool: ToolDefinition = {
 
     const argCount = countArguments(params.arguments);
 
+    // Тот же порядок, что у HTTP-роута: отклонённый вызов не оставляет запись
+    // `started` в журнале исполнений (ADR-136). `run` повторит проверки.
+    const detail = await service.get(params.name, { projectWorkspace: ctx.workingDir });
+    if (!detail) return scriptErrorResult('script_not_found', params.name);
+    if (!detail.trusted) return scriptErrorResult('script_untrusted', params.name);
+    if ((params.arguments ?? '').trim().length > 0 && !detail.args) {
+      return scriptErrorResult('script_args_not_allowed', params.name);
+    }
+
     // ADR-136: журнал исполнений — `started` **до** запуска. Ошибка записи
     // при включённом журнале блокирует исполнение (как у `execute_shell`).
     //

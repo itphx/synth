@@ -294,6 +294,18 @@ export function createSessionScriptRoutes(
 
     const args = parsed.data.arguments ?? '';
 
+    // Отклонённый запуск не должен оставлять запись `started`: журнал — про
+    // исполнения (ADR-136). Проверяем существование, trust и аргументы ДО
+    // аудита; `run` повторит те же проверки (защита от гонки декларации).
+    const detail = await service.get(name, { projectWorkspace: workingDir });
+    if (!detail) return jsonError(c, 404, 'SCRIPT_NOT_FOUND', messages.scriptNotFound(c));
+    if (!detail.trusted) {
+      return jsonError(c, 403, 'SCRIPT_UNTRUSTED', messages.scriptUntrusted(c));
+    }
+    if (args.trim().length > 0 && !detail.args) {
+      return jsonError(c, 409, 'SCRIPT_ARGS_NOT_ALLOWED', messages.scriptArgsNotAllowed(c));
+    }
+
     // ADR-136: журнал исполнений — запись `started` **до** запуска. Только
     // метаданные: имя скрипта, cwd, число аргументов, origin.
     //

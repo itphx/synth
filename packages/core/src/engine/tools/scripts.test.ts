@@ -43,7 +43,22 @@ function makeService(overrides: Partial<Record<string, unknown>> = {}) {
       scripts: [summary('dev'), summary('deploy')],
       diagnostics: [],
     })),
-    get: vi.fn(async () => null),
+    get: vi.fn(async (name: string) =>
+      name === 'dev'
+        ? {
+            name: 'dev',
+            description: 'Поднять локальное окружение',
+            origin: 'project',
+            available: true,
+            trusted: true,
+            run: './scripts/dev.sh',
+            shell: false,
+            args: true,
+            file: '.synth/scripts/dev.md',
+            body: 'Локальная отладка.',
+          }
+        : null
+    ),
     run: vi.fn(async () => ({
       run_id: 'bgr_run1',
       process_id: 'proc_1',
