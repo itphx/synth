@@ -175,11 +175,11 @@ describe('PROP-135 Ф4b-1: ленивый порт на пул', () => {
         createPort: async () => fakePort(),
       });
       const first = expect(port.fs!.realpath('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
-      await vi.advanceTimersByTimeAsync(15000);
+      await vi.advanceTimersByTimeAsync(30000);
       await first;
 
       const second = expect(port.fs!.readText('/a')).rejects.toBeInstanceOf(ExecutionFsUnavailableError);
-      await vi.advanceTimersByTimeAsync(15000);
+      await vi.advanceTimersByTimeAsync(30000);
       await second;
     } finally {
       vi.useRealTimers();
@@ -361,9 +361,13 @@ describe('PROP-135: прогрев пула (connect-ошибки повторя
       });
 
       const promise = port.execute({ command: { kind: 'shell', command: 'echo hi' } });
-      const assertion = expect(promise).rejects.toThrow(/не ответил за .*с \(пул project:prj_1:exec:default\)/);
-      await vi.advanceTimersByTimeAsync(20000);
+      // Окно прогрева — сумма задержек (1+2+4+5+5+5+5 = 27 с), она же в тексте.
+      const assertion = expect(promise).rejects.toThrow(
+        /не ответил за 27 с \(пул project:prj_1:exec:default\)/,
+      );
+      await vi.advanceTimersByTimeAsync(30000);
       await assertion;
+      await expect(promise).rejects.toMatchObject({ durationMs: 27000 });
     } finally {
       vi.useRealTimers();
     }

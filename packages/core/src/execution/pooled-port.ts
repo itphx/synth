@@ -67,8 +67,11 @@ export interface PooledExecutionPortOptions {
   createPort: (ref: ExecutionPoolRef) => Promise<ExecutionPort>;
 }
 
-/** Задержки прогрева пула перед повтором (мс): 10 с суммарно (4 повтора). */
-const WARMUP_DELAYS_MS = [1000, 2000, 3000, 4000] as const;
+/**
+ * Задержки прогрева пула перед повтором (мс): ~27 с суммарно
+ * (7 повторов: 1+2+4+5+5+5+5); холодный пул (под + процесс) успевает подняться.
+ */
+const WARMUP_DELAYS_MS = [1000, 2000, 4000, 5000, 5000, 5000, 5000] as const;
 
 /** Ошибка означает «пул ещё не отвечает», а не отказ самой операции. */
 function isWarmupRetryable(err: unknown, allowNetwork = false): boolean {
@@ -195,7 +198,8 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
       readyPromise = (async () => {
         // `probe` при недоступном адресе возвращает `true`, а
         // `capabilitySummary` — `total: 0`: ждём именно непустой инвентарь.
-        // До 10 с, затем операция покажет исходную ошибку.
+        // До 10 с быстрого ожидания; если пул ещё не отвечает — операция
+        // повторит попытки через withWarmup (~27 с).
         const deadline = Date.now() + 10_000;
         for (;;) {
           const port = await resolve().catch(() => null);
