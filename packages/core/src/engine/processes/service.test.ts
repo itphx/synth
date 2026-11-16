@@ -80,6 +80,7 @@ function createHarness() {
     events,
     stopSignals,
     spawnRequests,
+    background,
     resolveExit: (exit: ExecBackgroundExit) => resolveExit?.(exit),
   };
 }
@@ -234,5 +235,61 @@ describe('ProcessService — секреты вызова', () => {
     await h.service.spawn({ sessionId: 's1', command: 'sleep 60', cwd: '/tmp' });
 
     expect(h.spawnRequests[0]).not.toHaveProperty('secrets');
+  });
+});
+
+/**
+ * ADR-126 §5: `origin` фонового процесса — «запуск человеком» помечается в
+ * записи реестра (`metadata.origin`), чтобы реестр прогонов умел отличать
+ * пользовательский запуск от агентского (уведомление родителя по нему не
+ * отправляется — см. `engine/background/service.ts`).
+ */
+describe('ProcessService — origin запуска (ADR-126 §5)', () => {
+  it('origin: user доходит до startProcess как metadata.origin', async () => {
+    const h = createHarness();
+    const startProcess = vi.spyOn(h.background, 'startProcess');
+
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'sleep 60',
+      cwd: '/tmp',
+      origin: 'user',
+    });
+
+    expect(startProcess).toHaveBeenCalledTimes(1);
+    expect(startProcess.mock.calls[0]![0]).toMatchObject({
+      metadata: { origin: 'user' },
+    });
+
+    // И в записи реестра маркер есть.
+    const record = await h.service.get(started.runId);
+    expect(record?.metadata?.origin).toBe('user');
+  });
+
+  it('origin: agent тоже пишется в запись реестра', async () => {
+    const h = createHarness();
+
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'sleep 60',
+      cwd: '/tmp',
+      origin: 'agent',
+    });
+
+    const record = await h.service.get(started.runId);
+    expect(record?.metadata?.origin).toBe('agent');
+  });
+
+  it('без origin запись реестра не получает metadata', async () => {
+    const h = createHarness();
+
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'sleep 60',
+      cwd: '/tmp',
+    });
+
+    const record = await h.service.get(started.runId);
+    expect(record?.metadata).toBeUndefined();
   });
 });

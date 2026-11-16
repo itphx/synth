@@ -2,7 +2,8 @@
  * ADR-126: подсветка ссылочных токенов в композере.
  *
  * Полноценный markdown-рендер здесь не нужен: подсвечиваем только то, что
- * имеет семантику ввода — `/команда`, `$скилл`, `#сниппет` и `@упоминание`.
+ * имеет семантику ввода — `/команда`, `$скилл`, `#сниппет`, `@упоминание`
+ * и `!скрипт`.
  * Правила совпадают с core-лексером (`engine/input-surface/parser.ts`):
  * начало слова, code-блоки и inline-code не трогаются, `$5`/`#123` — не токены.
  *
@@ -10,7 +11,7 @@
  * меняется — только размечается классами.
  */
 
-export type ComposerTokenKind = 'command' | 'skill' | 'snippet' | 'mention'
+export type ComposerTokenKind = 'command' | 'skill' | 'snippet' | 'mention' | 'script'
 
 export interface ComposerHighlightPart {
   text: string
@@ -22,6 +23,9 @@ const CLASS_NAME: Record<ComposerTokenKind, string> = {
   skill: 'text-status-success',
   snippet: 'text-status-warning',
   mention: 'text-status-info',
+  // `text-accent` — приглушённый песочный тон (светлая тема: почти фон), токен
+  // в нём не читается; `text-status-success`/`text-status-warning` заняты `$`/`#`.
+  script: 'text-status-caution',
 }
 
 export function composerTokenClass(kind: ComposerTokenKind): string {
@@ -32,6 +36,11 @@ const WORD = /[\p{L}\p{N}_]/u
 const SYMBOL_BODY = /[\p{L}\p{N}._-]/u
 const LETTER = /\p{L}/u
 const WHITESPACE = /\s/u
+/**
+ * ADR-126 §5: имя скрипта — `[a-z0-9][a-z0-9-]*` (как в реестре скриптов
+ * core: `^[a-z0-9]+(-[a-z0-9]+)*$`).
+ */
+const SCRIPT_NAME_BODY = /[a-z0-9-]/u
 
 /** Fenced-блок ```/~~~ и inline-code — внутри токены не подсвечиваются. */
 function buildCodeMask(text: string): boolean[] {
@@ -117,13 +126,19 @@ export function highlightComposer(text: string): ComposerHighlightPart[] {
   const parts: ComposerHighlightPart[] = []
   let plainStart = 0
   let i = 0
+  // ADR-126: `/`-команда и `!`-скрипт распознаются только как первый
+  // непробельный токен сообщения.
+  const firstNonSpace = text.search(/\S/u)
 
   const pushPlain = (end: number) => {
     if (end > plainStart) parts.push({ text: text.slice(plainStart, end) })
   }
 
   while (i < text.length) {
-    if (mask[i] || (text[i] !== '/' && text[i] !== '$' && text[i] !== '#' && text[i] !== '@')) {
+    if (
+      mask[i] ||
+      (text[i] !== '/' && text[i] !== '$' && text[i] !== '#' && text[i] !== '@' && text[i] !== '!')
+    ) {
       i++
       continue
     }
@@ -137,12 +152,23 @@ export function highlightComposer(text: string): ComposerHighlightPart[] {
 
     if (text[i] === '/') {
       // Команда — только первый непробельный символ сообщения.
-      const firstNonSpace = text.search(/\S/u)
       if (i === firstNonSpace) {
         let j = i + 1
         while (j < text.length && /[\p{L}\p{N}._-]/u.test(text[j] ?? '')) j++
         if (j > i + 1) {
           kind = 'command'
+          end = j
+        }
+      }
+    } else if (text[i] === '!') {
+      // ADR-126 §5: `!name` — только первый непробельный токен сообщения;
+      // имя — `[a-z0-9][a-z0-9-]*`. `!=`, `! ` и `!!` токеном не являются.
+      if (i === firstNonSpace) {
+        let j = i + 1
+        while (j < text.length && SCRIPT_NAME_BODY.test(text[j] ?? '')) j++
+        const name = text.slice(i + 1, j)
+        if (name && /[a-z0-9]/.test(name[0] ?? '')) {
+          kind = 'script'
           end = j
         }
       }

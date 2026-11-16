@@ -350,6 +350,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         ? normalize(project.workspace)
         : resolve(config.workspacesRoot, project.workspace);
     },
+    // ADR-126 §5: реестр скриптов проекта (`!`-запуск) — контур
+    // `/api/v2/sessions/:id/scripts*` (внутри сессий — под prefix-guard'ом).
+    deps.scriptService,
+    // Правила прав инстанса — fallback для `permission.rules.script`.
+    config.synth.permission,
+    // ADR-136: журнал исполнений — запись `script.run` (только метаданные).
+    deps.commandAuditLog,
   ));
 
   // Messages routes

@@ -212,6 +212,21 @@ export const TERMINAL_TOOLS = [
   'terminal_run',
 ];
 
+/**
+ * ADR-126 §5: тулы реестра скриптов проекта (`!`-запуск).
+ *
+ * Отдельная группа, как `pipeline`/`schedule`/`process`/`terminal`: скрипт —
+ * объявленный проектный артефакт, а не примитив ядра. Ключ группы совпадает
+ * со значением capability `script`... то есть с **именем правила**
+ * `permission.rules.script` — per-script правило (allow/deny/ask + glob по
+ * имени скрипта), как `permission.rules.skill` у скиллов.
+ *
+ * Чтение (`script_list`) в plan-режиме **разрешено**, запуск (`script_run`) —
+ * заблокирован (`isPlanBlockedTool`, `evaluator.ts`): план ничего не
+ * исполняет.
+ */
+export const SCRIPT_TOOLS = ['script_list', 'script_run'];
+
 /** Все тулы пайплайнов (read + write). */
 export const PIPELINE_TOOLS = [...PIPELINE_READ_TOOLS, ...PIPELINE_WRITE_TOOLS];
 /** Все тулы расписаний (read + write). */
@@ -265,6 +280,9 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   todo: TODO_TOOLS,
   // PROP-132 (Ф5): интерактивные терминалы (ключ совпадает с capability `terminal`).
   terminal: TERMINAL_TOOLS,
+  // ADR-126 §5: скрипты проекта (`!`-запуск). Ключ группы совпадает с именем
+  // per-script правила `permission.rules.script` (как `skill`/`command`).
+  script: SCRIPT_TOOLS,
   [ToolCapability.FILE_READ]: READ_TOOLS,
   [ToolCapability.FILE_WRITE]: WRITE_TOOLS,
   [ToolCapability.GIT_READ]: GIT_READ_TOOLS,
@@ -303,6 +321,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'todo',
   'instance',
   'terminal',
+  'script',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

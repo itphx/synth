@@ -2428,6 +2428,44 @@ export const dict = {
   'chat.snippetAutocomplete.scope.user': 'user',
   'chat.snippetAutocomplete.untrusted': 'untrusted',
 
+  // ADR-126 §5: project scripts (`!` launch) — composer picker and background
+  // run card.
+  'scripts.autocomplete.title': 'Scripts',
+  'scripts.autocomplete.empty': 'No scripts',
+  'scripts.autocomplete.hint': 'Declare a script in `.synth/scripts/<name>.md`',
+  'scripts.autocomplete.keyboardHint': '↑↓ navigate • Enter select • Esc close',
+  'scripts.autocomplete.origin.project': 'project',
+  'scripts.autocomplete.origin.instance': 'instance',
+  'scripts.autocomplete.origin.config': 'config',
+  'scripts.process.badge': 'script: {name}',
+  'scripts.process.rerun': 'Run again',
+  'scripts.rerun.started': 'Script started',
+  'scripts.unavailable.trusted': 'untrusted directory',
+  'scripts.unavailable.denied': 'denied by policy',
+
+  // ADR-126 §5: engine script keys (contract `shared/i18n` — key and the set of
+  // {param} placeholders must match the core en-template).
+  'script.tool.deps_unavailable': 'Project scripts are unavailable in this build',
+  'script.tool.run_hint':
+    'The log of the run is available via process_logs; stop it via process_stop',
+  'script.tool.empty': 'No declared scripts',
+  'script.tool.header': 'Declared scripts ({count}):',
+  'script.tool.audit_failed':
+    'The execution audit log is enabled, but the entry could not be written ({reason}); '
+    + 'the script was not started. Fix the audit log path/storage or disable security.commandAudit and retry.',
+  'script.not_found': 'Script "{name}" is not declared',
+  'script.untrusted': 'Script "{name}" is unavailable: the project directory is not trusted',
+  'script.denied': 'Script "{name}" is denied by the permission rules',
+  'script.args_not_allowed': 'Script "{name}" does not accept arguments',
+  'script.args_invalid': 'Arguments of script "{name}" could not be parsed',
+  'script.cwd_outside': 'Working directory of script "{name}" is outside the session perimeter',
+  'script.background_disabled':
+    'Background execution is unavailable in the current execution mode — script "{name}" was not started',
+  'script.started': 'Script "{name}" started in the background (run: {run})',
+  'script.plan_blocked': 'Scripts cannot be started in plan mode — only the list is available',
+  'script.gateway_unsupported':
+    'Scripts can only be started from the Synth UI — this message came from an external channel',
+
   // Chat settings
   'chatSettings.description': 'How messages and service steps are shown in the chat feed.',
   'chatSettings.viewMode': 'Message view',

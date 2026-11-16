@@ -20,6 +20,10 @@
  * (открытие PTY), `terminal.input` (кадр ввода), `terminal.close` (закрытие).
  * Их пишет терминальный сервис через тот же журнал (адаптер
  * `createCommandAuditTerminalSink`) — те же метаданные, без содержимого.
+ *
+ * ADR-126 §5: `script.run` — запуск объявленного скрипта проекта (`!`).
+ * Запись несёт **только метаданные**: имя скрипта, cwd, число аргументов
+ * (сами аргументы — не пишутся), origin (`user`/`agent`), проект/сессия.
  */
 export const COMMAND_AUDIT_TOOLS = [
   'execute_shell',
@@ -27,6 +31,7 @@ export const COMMAND_AUDIT_TOOLS = [
   'terminal.open',
   'terminal.input',
   'terminal.close',
+  'script.run',
 ] as const;
 export type CommandAuditTool = (typeof COMMAND_AUDIT_TOOLS)[number];
 

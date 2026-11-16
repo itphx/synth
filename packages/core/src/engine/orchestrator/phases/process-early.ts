@@ -91,6 +91,12 @@ export interface ProcessEarlyDeps {
    * не токен скилла). `null` — продолжаем обычный путь (LLM).
    */
   handleDollarSkills?: (args: ProcessCommandArgs) => Promise<ProcessEarlyResult | null>;
+  /**
+   * ADR-126 §5: запуск объявленного скрипта проекта по `!name args` —
+   * резолвится в тексте обычного сообщения (не `/`-команды). `null` —
+   * продолжаем обычный путь (LLM).
+   */
+  handleScriptRun?: (args: ProcessCommandArgs) => Promise<ProcessEarlyResult | null>;
   microPipeline: MicroPipeline | null;
   decisionConfig: DecisionConfig | null;
   publishLocalCompletion: (
@@ -182,6 +188,21 @@ export async function runProcessEarly(
     });
     if (commandResult) return commandResult;
     // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.
+  }
+
+  // --- ADR-126 §5: `!`-скрипт в тексте сообщения ---
+  // Порядок: после `/`-команды и **до** `$`-скиллов. Токен `!name` — первый
+  // непробельный токен сообщения, поэтому обычный текст сюда не попадает.
+  if (message.role === MessageRole.USER && deps.handleScriptRun) {
+    const scriptResult = await deps.handleScriptRun({
+      session, message, signal, publishChunk, debugCollector, streamId,
+      effectiveAgentRole, workingDir, attempt,
+      ...(allowedRoots ? { allowedRoots } : {}),
+      permissionEvaluator, sessionMode, planMode, planApproved,
+      authorityTurn,
+    });
+    if (scriptResult) return scriptResult;
+    // Скрипт не найден/запрещён — ответ локальный; `null` — обычный путь.
   }
 
   // --- ADR-126 §3: `$`-скиллы в тексте сообщения (только не `/`-команда) ---

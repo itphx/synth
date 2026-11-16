@@ -69,6 +69,18 @@ function runTitle(run: BackgroundRunRecord): string {
   return run.command ?? run.description ?? run.id
 }
 
+/**
+ * ADR-126 §5: имя скрипта, которым запущен прогон (`metadata.script`).
+ *
+ * Скриптовый прогон отличается от обычной шелл-команды: у него есть
+ * декларация в реестре, и его можно запустить снова одним нажатием.
+ * Признак — строка в `metadata`; иначе прогон обычный.
+ */
+function scriptName(run: BackgroundRunRecord): string | null {
+  const value = run.metadata?.script
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
 export const ProcessesTab: React.FC = () => {
   const { t, locale } = useI18n()
   const { notify } = useNotification()
@@ -204,6 +216,31 @@ export const ProcessesTab: React.FC = () => {
     try {
       await synthApi.stopProcess(run.id)
       notify({ text: t('processes.stopped'), type: 'success', category: 'system' })
+      await load()
+    } catch (err) {
+      notify({
+        text: t('processes.failed', {
+          error: err instanceof Error ? err.message : t('common.error'),
+        }),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /**
+   * ADR-126 §5: повторный запуск скриптового прогона.
+   *
+   * Аргументы не переиспользуются (в реестре их может не быть вовсе) —
+   * повтор идёт без аргументов. Ошибка — тост, реестр не трогаем.
+   */
+  const handleRerunScript = async (run: BackgroundRunRecord, name: string) => {
+    setBusy(run.id)
+    try {
+      await synthApi.runSessionScript(run.sessionId, name)
+      notify({ text: t('scripts.rerun.started'), type: 'success', category: 'system' })
       await load()
     } catch (err) {
       notify({
@@ -355,6 +392,7 @@ export const ProcessesTab: React.FC = () => {
         <ul className="space-y-2 min-w-0" data-testid="processes-list">
           {runs.map((run) => {
             const isRunning = run.status === 'running'
+            const script = scriptName(run)
             const started = Date.parse(run.startedAt ?? '')
             const finished = Date.parse(run.finishedAt ?? '')
             const elapsedMs = isRunning
@@ -378,6 +416,14 @@ export const ProcessesTab: React.FC = () => {
                   <span className="min-w-0 flex-1 truncate text-sm font-medium" title={runTitle(run)}>
                     {runTitle(run)}
                   </span>
+                  {script && (
+                    <span
+                      className={cn(BADGE, 'bg-status-caution/15 text-status-caution')}
+                      data-testid={`processes-script-${run.id}`}
+                    >
+                      {t('scripts.process.badge', { name: script })}
+                    </span>
+                  )}
                   <span
                     className={cn(BADGE, STATUS_CLASS[run.status] ?? 'bg-muted text-muted-foreground')}
                     data-testid={`processes-status-${run.id}`}
@@ -461,6 +507,19 @@ export const ProcessesTab: React.FC = () => {
                       data-testid={`processes-log-toggle-${run.id}`}
                     >
                       <Icon name={logId === run.id ? 'eye-off' : 'eye'} className="size-4" />
+                    </Button>
+                  )}
+                  {script && run.sessionId && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => void handleRerunScript(run, script)}
+                      disabled={busy === run.id}
+                      title={t('scripts.process.rerun')}
+                      aria-label={t('scripts.process.rerun')}
+                      data-testid={`processes-rerun-${run.id}`}
+                    >
+                      <Icon name="refresh" className="size-4" />
                     </Button>
                   )}
                   {!isRunning && (

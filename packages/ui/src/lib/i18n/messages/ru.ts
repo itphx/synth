@@ -2408,6 +2408,43 @@ export const dict = {
   'chat.snippetAutocomplete.scope.user': 'пользователь',
   'chat.snippetAutocomplete.untrusted': 'недоверенный',
 
+  // ADR-126 §5: скрипты проекта (`!`-запуск) — пикер в композере и карточка
+  // фонового прогона.
+  'scripts.autocomplete.title': 'Скрипты',
+  'scripts.autocomplete.empty': 'Скриптов нет',
+  'scripts.autocomplete.hint': 'Объявите скрипт в `.synth/scripts/<имя>.md`',
+  'scripts.autocomplete.keyboardHint': '↑↓ навигация • Enter выбор • Esc закрыть',
+  'scripts.autocomplete.origin.project': 'проект',
+  'scripts.autocomplete.origin.instance': 'инстанс',
+  'scripts.autocomplete.origin.config': 'конфиг',
+  'scripts.process.badge': 'скрипт: {name}',
+  'scripts.process.rerun': 'Запустить снова',
+  'scripts.rerun.started': 'Скрипт запущен',
+  'scripts.unavailable.trusted': 'недоверенный каталог',
+  'scripts.unavailable.denied': 'запрещён правилом прав',
+
+  // ADR-126 §5: движковые ключи скриптов (контракт `shared/i18n` — ключ и
+  // набор {param}-плейсхолдеров обязаны совпадать с en-шаблоном ядра).
+  'script.tool.deps_unavailable': 'Скрипты проекта недоступны в этой сборке',
+  'script.tool.run_hint': 'Лог прогона доступен через process_logs; остановка — process_stop',
+  'script.tool.empty': 'Скриптов нет',
+  'script.tool.header': 'Объявленные скрипты ({count}):',
+  'script.tool.audit_failed':
+    'Журнал исполнений включён, но запись не прошла ({reason}); скрипт не запущен. '
+    + 'Исправьте путь/хранилище журнала или отключите security.commandAudit и повторите',
+  'script.not_found': 'Скрипт "{name}" не объявлен',
+  'script.untrusted': 'Скрипт "{name}" недоступен: каталог проекта недоверенный',
+  'script.denied': 'Скрипт "{name}" запрещён правилами прав',
+  'script.args_not_allowed': 'Скрипт "{name}" не принимает аргументов',
+  'script.args_invalid': 'Аргументы скрипта "{name}" не разобрались',
+  'script.cwd_outside': 'Рабочий каталог скрипта "{name}" вне периметра сессии',
+  'script.background_disabled':
+    'Фоновое исполнение недоступно в текущем режиме исполнения — скрипт «{name}» не запущен',
+  'script.started': 'Скрипт "{name}" запущен в фоне (прогон: {run})',
+  'script.plan_blocked': 'В режиме плана скрипты запускать нельзя — доступен только список',
+  'script.gateway_unsupported':
+    'Скрипты запускаются только из интерфейса Synth — сообщение пришло из внешнего канала',
+
   // Chat settings
   'chatSettings.description': 'Как показывать сообщения и служебные шаги в ленте чата.',
   'chatSettings.viewMode': 'Вид сообщений',

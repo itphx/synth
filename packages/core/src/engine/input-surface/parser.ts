@@ -1,6 +1,6 @@
 /**
- * ADR-126 §2/§2: общий **core-парсер префиксов ввода** — `@` (упоминания),
- * `$` (скиллы), `#` (сниппеты).
+ * ADR-126 §2/§2/§5: общий **core-парсер префиксов ввода** — `@` (упоминания),
+ * `$` (скиллы), `#` (сниппеты), `!` (запуск скрипта проекта).
  *
  * Зачем: текущий `@`-парсер агентский и уже неоднозначен — регулярка
  * `@(\w+)` (UI: `packages/ui/src/components/chat/ChatInput.tsx`) даёт тег `src`
@@ -48,6 +48,7 @@ import type {
   InputToken,
   MentionKind,
   ParsedInput,
+  ScriptRunMention,
   SkillMention,
   SnippetMention,
 } from '@itphx/synth-shared';
@@ -58,6 +59,8 @@ const MENTION_PREFIX = '@';
 const SKILL_PREFIX = '$';
 /** Префикс ссылки на сниппет. */
 const SNIPPET_PREFIX = '#';
+/** Префикс вызова скрипта проекта (`!`, ADR-126 §5). */
+const SCRIPT_PREFIX = '!';
 
 /**
  * Завершающая пунктуация, которая не входит в нормализованный `id`.
@@ -76,6 +79,15 @@ const LETTER = /\p{L}/u;
 
 /** Символ тела `$`/`#`-токена: буква, цифра, точка, подчёркивание, дефис. */
 const SYMBOL_BODY_CHAR = /[\p{L}\p{N}._-]/u;
+
+/**
+ * Символ тела имени скрипта (`!`, ADR-126 §5): строчная буква, цифра или
+ * дефис. Имя скрипта — `^[a-z0-9]+(-[a-z0-9]+)*$` (ADR-126 §5).
+ */
+const SCRIPT_NAME_CHAR = /[a-z0-9-]/;
+
+/** Первый символ имени скрипта: строчная буква или цифра (`!Name` — не токен). */
+const SCRIPT_NAME_FIRST = /[a-z0-9]/;
 
 /** Пробельный символ (Unicode-aware). */
 const WHITESPACE = /\s/u;
@@ -116,6 +128,8 @@ export function parseInput(text: string): ParsedInput {
   if (!text) return { text, mentions, skills, snippets };
 
   const masked = buildCodeMask(text);
+  // ADR-126 §5: `!name [args]` — первый непробельный токен сообщения.
+  const scriptRun = readScriptRun(text, masked);
   let index = 0;
   while (index < text.length) {
     const char = text.charAt(index);
@@ -170,7 +184,49 @@ export function parseInput(text: string): ParsedInput {
     index = token.end;
   }
 
-  return { text, mentions, skills, snippets };
+  return {
+    text,
+    mentions,
+    skills,
+    snippets,
+    ...(scriptRun ? { scriptRun } : {}),
+  };
+}
+
+/**
+ * ADR-126 §5: вызов объявленного скрипта `!name [args]`.
+ *
+ * Токен образуется **только** первым непробельным токеном сообщения: `!` в
+ * середине текста — обычный символ (`сделай !dev` — обычный текст). Форма:
+ * `!` + имя (`[a-z0-9][a-z0-9-]*`), дальше — пробел и остаток строки
+ * (сырые аргументы, без разбора кавычек — разбор делает лексер аргументов
+ * скрипта).
+ *
+ * Не токены: `! `, `!=`, `!!`, `!Name`, `!-x` (ADR-126 §5 — имя начинается
+ * со строчной буквы или цифры). Внутри fenced-блока и inline-кода токен не
+ * образуется — как у `@`/`$`/`#`.
+ */
+function readScriptRun(text: string, masked: boolean[]): ScriptRunMention | undefined {
+  // Первый непробельный токен сообщения.
+  let index = 0;
+  while (index < text.length && isWhitespaceChar(text.charAt(index))) index++;
+  if (index >= text.length) return undefined;
+  // Код (fenced/inline) — токен не распознаётся.
+  if (masked[index]) return undefined;
+  if (text.charAt(index) !== SCRIPT_PREFIX) return undefined;
+
+  const nameStart = index + 1;
+  let end = nameStart;
+  while (end < text.length && SCRIPT_NAME_CHAR.test(text.charAt(end))) end++;
+  const name = text.slice(nameStart, end);
+  // Имя обязательно и начинается с буквы/цифры: `! `, `!=`, `!!`, `!Name`,
+  // `!-x` — не токены.
+  if (!name || !SCRIPT_NAME_FIRST.test(name.charAt(0))) return undefined;
+  // После имени — пробел или конец текста (`!dev`, `!dev --fast`).
+  if (end < text.length && !isWhitespaceChar(text.charAt(end))) return undefined;
+
+  // Аргументы — остаток строки после имени (сырые, без разбора кавычек).
+  return { name, args: text.slice(end).trim() };
 }
 
 /**

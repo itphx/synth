@@ -205,6 +205,8 @@ export class BackgroundRunService {
       ...(input.pid !== undefined ? { pid: input.pid } : {}),
       ...(input.processId ? { processId: input.processId } : {}),
       logPath: input.logPath ?? processLogPath(id),
+      // ADR-126 §5: метаданные прогона (`origin` — «запуск человеком»).
+      ...(input.metadata ? { metadata: { ...input.metadata } } : {}),
       startedAt: now,
       updatedAt: now,
     };
@@ -532,6 +534,11 @@ export class BackgroundRunService {
   private async _notifyParent(record: BackgroundRunRecord): Promise<void> {
     if (!this._onNotifyParent) return;
     if (record.kind !== 'process' && record.kind !== 'subagent') return;
+    // ADR-126 §5: запуск человеком (`origin: 'user'`) **не будит агента** —
+    // терминальный переход не инжектит USER-сообщение и не ставит автоход.
+    // Уведомление родителя (ADR-113 §4) остаётся для запусков агента и
+    // саб-агента: там результат работы должен попасть в контекст агента.
+    if (record.metadata?.origin === 'user') return;
     const state = backgroundStateOf(record);
 
     // ADR-111/ADR-113: матрица доставки. Прогон в дочерней сессии без

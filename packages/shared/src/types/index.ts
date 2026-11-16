@@ -68,6 +68,8 @@ export * from './permission.js';
 export * from './skills.js';
 // Slash-команды и bundles (ADR-126 §1) — re-exported from commands.ts
 export * from './commands.js';
+// Скрипты проекта (`!`-запуск, ADR-126 §5) — re-exported from scripts.ts
+export * from './scripts.js';
 // Внешние события (ADR-089) — re-exported from events.ts
 export * from './events.js';
 // Hooks агента и интеграций (ADR-030) — re-exported from hooks.ts

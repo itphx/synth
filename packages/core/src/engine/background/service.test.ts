@@ -526,6 +526,68 @@ describe('BackgroundRunService — уведомление родителя', () 
   });
 });
 
+/**
+ * ADR-126 §5: запуск человеком (`origin: 'user'`) **не будит агента** —
+ * терминальный переход не инжектит USER-сообщение и не ставит автоход.
+ * Уведомление родителя (ADR-113 §4) остаётся для запусков агента.
+ */
+describe('BackgroundRunService — запуск человеком не будит агента (ADR-126 §5)', () => {
+  it('finish прогона с metadata.origin=user не уведомляет родителя', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startProcess({
+      sessionId: 'parent-1',
+      command: './scripts/dev.sh',
+      cwd: '/tmp',
+      metadata: { origin: 'user' },
+    });
+    await service.finish(record.id, { status: 'completed', summary: 'готово' });
+
+    expect(notifications).toHaveLength(0);
+  });
+
+  it('finish прогона с metadata.origin=agent уведомляет родителя', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startProcess({
+      sessionId: 'parent-1',
+      command: './scripts/dev.sh',
+      cwd: '/tmp',
+      metadata: { origin: 'agent' },
+    });
+    await service.finish(record.id, { status: 'completed', summary: 'готово' });
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]!.sessionId).toBe('parent-1');
+  });
+
+  it('finish прогона без metadata уведомляет родителя (прежнее поведение)', async () => {
+    const { service, notifications } = createService();
+
+    const record = await service.startProcess({
+      sessionId: 'parent-1',
+      command: './scripts/dev.sh',
+      cwd: '/tmp',
+    });
+    await service.finish(record.id, { status: 'completed', summary: 'готово' });
+
+    expect(notifications).toHaveLength(1);
+  });
+
+  it('startProcess кладёт metadata в запись реестра', async () => {
+    const { service } = createService();
+
+    const record = await service.startProcess({
+      sessionId: 'parent-1',
+      command: './scripts/dev.sh',
+      cwd: '/tmp',
+      metadata: { origin: 'user', note: 'из UI' },
+    });
+
+    expect(record.metadata).toMatchObject({ origin: 'user', note: 'из UI' });
+  });
+});
+
 describe('BackgroundRunService — остановка прогона', () => {
   it('stop вызывает зарегистрированный хэндл отмены с reason', async () => {
     const { service } = createService();

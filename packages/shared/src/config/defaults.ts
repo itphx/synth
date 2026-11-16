@@ -226,6 +226,10 @@ export const defaultConfig: SynthConfig = {
     maxArgumentsLength: 10_000,
     maxRenderedBytes: 200_000,
   },
+  // ADR-126 §5: скрипты проекта (`!`-запуск) — каталоги-источники деклараций.
+  scripts: {
+    paths: [],
+  },
   events: {
     enabled: true,
     defaultMode: 'bound',

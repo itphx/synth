@@ -81,6 +81,12 @@ import {
 } from '../../engine/attachments/service.js';
 import { createAttachmentRoutes } from './attachments.js';
 import { createSessionTodoRoutes } from './session-todos.js';
+// ADR-126 §5: реестр скриптов проекта (`!`-запуск) — HTTP-контур в контуре сессии.
+import { createSessionScriptRoutes } from './session-scripts.js';
+import type { SessionScriptRouteMessages } from './session-scripts.js';
+import type { ScriptService } from '../../engine/scripts/service.js';
+import type { CommandAuditLog } from '../../engine/security/command-audit.js';
+import type { PermissionConfig } from '@itphx/synth-shared';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 // ADR-111 §detach: вид блокирующего прогона (`POST /:id/background`).
@@ -370,6 +376,24 @@ export interface SessionRoutesDeps {
    * — от `workspacesRoot`, абсолютный — как есть).
    */
   resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>;
+  /**
+   * ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск) — HTTP-контур
+   * `/api/v2/sessions/:id/scripts*` (список/детали/запуск).
+   *
+   * Не задан — контура нет (деградированное хранилище: фоновые процессы не
+   * создаются — запускать некуда).
+   */
+  scriptService?: ScriptService;
+  /**
+   * ADR-126 §5: правила прав инстанса — fallback для правила
+   * `permission.rules.script` (собственные правила сессии важнее).
+   */
+  permissionConfig?: PermissionConfig;
+  /**
+   * ADR-136: журнал исполнений команд — запись `script.run` (только
+   * метаданные: имя скрипта, cwd, число аргументов, origin).
+   */
+  commandAudit?: CommandAuditLog;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -471,6 +495,11 @@ export interface SessionRoutesOptions {
   /** Доп. middleware на POST /:id/messages/merge (rate limiter; backend). */
   mergeMiddleware?: Middleware[];
   messages?: Partial<SessionRouteMessages>;
+  /**
+   * ADR-126 §5: тексты HTTP-контура скриптов (`/sessions/:id/scripts*`) —
+   * backend передаёт i18n-функции, core — русские литералы по умолчанию.
+   */
+  scriptMessages?: Partial<SessionScriptRouteMessages>;
   /**
    * Instance-wide лимиты заметок сессии (`context.stickyNotes`): максимум
    * заметок и символов в заметке. Резолвер читается при каждой операции с
@@ -1078,6 +1107,42 @@ export function createSessionRoutes(
       getRemoteClient: () => resolveClient() ?? null,
     }),
   );
+
+  /**
+   * ADR-126 §5: реестр скриптов проекта (`!`-запуск) — HTTP-контур
+   * (`/api/v2/sessions/:id/scripts*`). Монтируется **внутрь** приложения
+   * сессий, то есть под тем же prefix-guard'ом (вид доступа `read`/`write`
+   * решает он, инвариант 16). Логика запуска — в доменном сервисе
+   * (`engine/scripts/service.ts`), тот же, что у тулов `script_list`/
+   * `script_run`.
+   *
+   * Сервиса нет (деградированное хранилище: фоновые процессы не создаются) —
+   * контура нет: маршруты не монтируются вовсе (404, как у `/processes`).
+   *
+   * Гибрид (ADR-042/ADR-126 §5): для `remote:`-сессии запрос форвардится на
+   * удалённый backend (права/валидация — там).
+   */
+  if (deps.scriptService) {
+    app.route(
+      '/',
+      createSessionScriptRoutes(
+        {
+          requireAuth: auth.requireAuth,
+          sessionManager,
+          scriptService: deps.scriptService,
+          // Рабочий каталог сессии — worktree или workspace проекта (там
+          // лежат декларации `.synth/scripts`).
+          resolveWorkingDir: resolveSessionWorkspace,
+          getRemoteClient: () => resolveClient() ?? null,
+          ...(deps.permissionConfig ? { permissionConfig: deps.permissionConfig } : {}),
+          ...(deps.commandAudit ? { commandAudit: deps.commandAudit } : {}),
+        },
+        {
+          messages: opts.scriptMessages,
+        },
+      ),
+    );
+  }
 
   /**
    * ADR-106 Ф4 (шаг C): смена режима сессии — **вторая** привилегия, отдельная

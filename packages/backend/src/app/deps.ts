@@ -88,6 +88,8 @@ import {
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
   ProcessService,
   startProcessLogPruner,
+  // ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск).
+  ScriptService,
   // ADR-115: GC осиротевших вложений сообщений.
   startAttachmentPruner,
   // ADR-115 × ADR-077: медиа-раннер (ffmpeg inline/remote) и серверные миниатюры.
@@ -1294,6 +1296,23 @@ export async function createBackendDeps(
       })
     : undefined;
 
+  // ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск) — mirror core.
+  //
+  // Тот же экземпляр получают HTTP-роуты `/api/v2/sessions/:id/scripts*` и
+  // тулы `script_list`/`script_run`. Создаётся только вместе с
+  // `processService`: запускать скрипты негде (фоновые процессы в
+  // деградированном режиме хранилища не создаются).
+  const scriptService = processService
+    ? new ScriptService({
+        config: {
+          dataDir,
+          scriptsPaths: config.synth.scripts.paths,
+          trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
+        },
+        processService,
+      })
+    : undefined;
+
   // ADR-114: сервис worktree (per-session рабочий каталог).
   //
   // Один инстанс на процесс: его получают HTTP-роуты проектов
@@ -1704,6 +1723,9 @@ export async function createBackendDeps(
     // PROP-097: сервис фоновых шелл-процессов — тот же экземпляр, что у
     // реестра и тула `execute_shell` (через `ctx.extra.processService`).
     ...(processService ? { processService } : {}),
+    // ADR-126 §5: реестр скриптов проекта — тулы `script_list`/`script_run`
+    // (через `ctx.extra.scriptService`) и HTTP-роут `/sessions/:id/scripts*`.
+    ...(scriptService ? { scriptService } : {}),
     // PROP-132 (Ф5): сервис интерактивных терминалов — тот же экземпляр, что у
     // HTTP-роутов `/api/v2/terminals*` (через `ctx.extra.terminalService`).
     terminalService,
@@ -2417,6 +2439,8 @@ export async function createBackendDeps(
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов (+ pruner логов).
     processService,
     stopProcessLogPruner,
+    // ADR-126 §5: сервис реестра скриптов проекта (HTTP-контур `/scripts*`).
+    scriptService,
     // ADR-115: GC осиротевших вложений сообщений.
     stopAttachmentPruner,
     // ADR-115 × ADR-077: уборка временных каталогов медиа-раннера.

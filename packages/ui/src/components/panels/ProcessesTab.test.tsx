@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   getProcessLogs: vi.fn(),
   stopProcess: vi.fn(),
   removeProcess: vi.fn(),
+  runSessionScript: vi.fn(),
   confirm: vi.fn(),
   notify: vi.fn(),
   listTerminals: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@/lib/api/synthApi', () => ({
     getProcessLogs: mocks.getProcessLogs,
     stopProcess: mocks.stopProcess,
     removeProcess: mocks.removeProcess,
+    runSessionScript: mocks.runSessionScript,
   },
 }))
 // Список терминалов проекта — серверный; в тесте перехватываем запрос.
@@ -161,6 +163,12 @@ beforeEach(() => {
   })
   mocks.stopProcess.mockResolvedValue({ status: 'stopping' })
   mocks.removeProcess.mockResolvedValue(undefined)
+  mocks.runSessionScript.mockResolvedValue({
+    run_id: 'bgr_2',
+    process_id: 'proc_2',
+    log_path: 'processes/bgr_2.log',
+    status: 'running',
+  })
   mocks.confirm.mockResolvedValue(true)
 
   useProcessesStore.setState({
@@ -395,6 +403,66 @@ describe('ProcessesTab — единый реестр фоновых прогон
       expect(button.className).not.toContain('min-w-10')
       expect(button.className).toContain('size-8')
     }
+  })
+})
+
+describe('ProcessesTab — скриптовые прогоны (ADR-126 §5)', () => {
+  it('скриптовый прогон помечен бейджем «скрипт: <имя>»', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', {
+        command: './scripts/dev.sh',
+        metadata: { script: 'dev' },
+      }),
+    ])
+
+    const container = await renderProcesses()
+
+    const badge = container.querySelector('[data-testid="processes-script-bgr_1"]')
+    expect(badge).not.toBeNull()
+    expect(badge?.textContent).toContain('script: dev')
+  })
+
+  it('у обычного процесса бейджа и кнопки «Запустить снова» нет', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-script-bgr_1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processes-rerun-bgr_1"]')).toBeNull()
+  })
+
+  it('«Запустить снова» вызывает runSessionScript без аргументов и сообщает об успехе', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', {
+        command: './scripts/dev.sh',
+        metadata: { script: 'dev' },
+      }),
+    ])
+
+    const container = await renderProcesses()
+    await click(container, 'processes-rerun-bgr_1')
+
+    expect(mocks.runSessionScript).toHaveBeenCalledWith('s1', 'dev')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Script started', type: 'success' }),
+    )
+  })
+
+  it('ошибка повторного запуска показывается тостом', async () => {
+    mocks.runSessionScript.mockRejectedValue(new Error('скрипт запрещён'))
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', {
+        command: './scripts/dev.sh',
+        metadata: { script: 'dev' },
+      }),
+    ])
+
+    const container = await renderProcesses()
+    await click(container, 'processes-rerun-bgr_1')
+
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('скрипт запрещён'), type: 'error' }),
+    )
   })
 })
 

@@ -131,6 +131,11 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/sessions/:id/skills', G_SESSION, [404]),
   r('GET', '/api/v2/sessions/:id/skills/effective', G_SESSION, [404]),
   r('GET', '/api/v2/sessions/:id/attachments/:partId', G_SESSION, [404]),
+  // ADR-126 §5: реестр скриптов проекта (`!`-запуск) — контур сессии,
+  // доступ решает тот же prefix-guard (чтение — read, запуск — write).
+  r('GET', '/api/v2/sessions/:id/scripts', G_SESSION, [404]),
+  r('GET', '/api/v2/sessions/:id/scripts/:name', G_SESSION, [404]),
+  r('POST', '/api/v2/sessions/:id/scripts/:name/run', G_SESSION, [404]),
   // Экспорт: доступ решает prefix-guard, привилегию карты обфускации — route-level
   // guard core (`createSessionExportGuard`); чужой — отказ границы.
   r('GET', '/api/v2/sessions/:id/export', G_SESSION, [404]),

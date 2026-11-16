@@ -53,7 +53,7 @@ const EXPECTED_API_METHODS = [
   'getWorkspaceRoot', 'getWorkspaceSetting', 'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate',
   'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings', 'listMemoryFacts',
   'listMemoryIndexes', 'listPendingPermissions', 'listPipelineRuns', 'listPipelineRunsPage', 'listPluginAudit', 'listPlugins',
-  'listProcesses', 'listSnippets', 'listSshKeys', 'listTerminals', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'listProcesses', 'listSessionScripts', 'listSnippets', 'listSshKeys', 'listTerminals', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'moveProjectPlanItem', 'patchSessionMode', 'permissionReply', 'pinMessage', 'probeMcpServer', 'probeRawFile',
   'pruneCommandAudit', 'pruneWorktrees', 'publishProject', 'publishProjectPipeline', 'putProjectInvariants', 'putSkillFile', 'putUpdatesSettings',
   'rawFileUrl', 'readFile', 'rebuildMemoryIndex', 'refreshOAuthCredential', 'regenerateWebhookSecret',
@@ -67,7 +67,7 @@ const EXPECTED_API_METHODS = [
   'resetMcpSettings', 'resetPluginsSettings', 'resetProtectedPaths', 'resetProxy', 'resetRequestLimits', 'resetSkillsSettings',
   'resetSshMode', 'resetTerminalSettings', 'resetToolsDisabled', 'resetToolsPolicy', 'resetUpdatesSettings', 'resizeTerminal', 'restartInstance', 'restartTerminal', 'resumePipelineRun', 'resumeQueue',
   'resumeSubagent', 'retryMessage', 'retryQueueNow', 'returnQueue', 'revokeEventBindingKey', 'revokeServiceKey',
-  'rollbackPlugin', 'runSchedule', 'saveAgent', 'saveContextFile', 'saveDebugConfig', 'saveDictionary',
+  'rollbackPlugin', 'runSchedule', 'runSessionScript', 'saveAgent', 'saveContextFile', 'saveDebugConfig', 'saveDictionary',
   'saveEgressPolicy', 'saveExecutionSettings', 'saveGatewayPatterns', 'saveLlmGatewaySettings', 'saveMcpNetworkPolicy', 'saveMcpPolicy',
   'saveMcpToolSettings', 'saveModel', 'saveProtectedPaths', 'saveProxy', 'saveSecuritySettings',
   'saveToolsDisabled', 'saveToolsPolicy', 'scanGitRepos', 'scheduleRestore', 'sendTerminalInput', 'setAgentsLimits', 'setDefaultAgent',
@@ -88,7 +88,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (424)', () => {
+  it('набор методов совпадает с зафиксированным (426)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

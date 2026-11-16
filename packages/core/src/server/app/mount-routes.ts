@@ -194,6 +194,13 @@ export function mountStandaloneRoutes(
       analytics,
       // ADR-126 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
       ...(snippetService ? { snippetService } : {}),
+      // ADR-126 §5: реестр скриптов проекта (`!`-запуск) — контур
+      // `/api/v2/sessions/:id/scripts*` (внутри сессий — под prefix-guard'ом).
+      ...(deps.scriptService ? { scriptService: deps.scriptService } : {}),
+      // Правила прав инстанса — fallback для `permission.rules.script`.
+      permissionConfig: config.permissionConfig,
+      // ADR-136: журнал исполнений — запись `script.run` (только метаданные).
+      commandAudit: deps.commandAuditLog,
       // Рабочий каталог проекта — project-уровень сниппетов. Резолв тот же,
       // что у snippet-routes (относительный workspace — от `workspacesRoot`).
       resolveProjectWorkspace: async (projectId) => {

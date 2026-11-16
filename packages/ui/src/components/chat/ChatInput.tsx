@@ -15,6 +15,7 @@ import { MentionPopup, type MentionFileEntry, type MentionSelection, type Mentio
 import { CommandAutocomplete } from './CommandAutocomplete'
 import { SkillAutocomplete } from './SkillAutocomplete'
 import { SnippetAutocomplete } from './SnippetAutocomplete'
+import { ScriptAutocomplete } from './ScriptAutocomplete'
 import { composerTokenClass, highlightComposer } from './composerHighlight'
 import { ModelSelector } from './ModelSelector'
 import { AgentModeSelector } from './AgentModeSelector'
@@ -107,6 +108,14 @@ const SYMBOL_TOKEN_BODY_REGEX = /^[\p{L}][\p{L}\p{N}._-]*$/u
 const SNIPPET_TRIGGER_REGEX = /(^|\s)#([^\s#]*)$/u
 
 /**
+ * ADR-126 §5: триггер `!`-пикера — `!` **первым непробельным токеном**
+ * сообщения и ещё не завершённое имя скрипта (`!`, `!de`). Пробел после
+ * имени закрывает пикер (имя завершено, дальше — аргументы). Ядро резолвит
+ * `!`-токен по тем же правилам (`engine/input-surface/parser.ts`).
+ */
+const SCRIPT_TRIGGER_REGEX = /^(\s*)!([a-z0-9-]*)$/u
+
+/**
  * ADR-126 §3: ищет `$`-токен в тексте до курсора.
  *
  * Возвращает `null`, если триггера нет: `$` не в начале слова, тело токена
@@ -137,6 +146,24 @@ function findSnippetTrigger(
   if (!match) return null
   const query = match[2] ?? ''
   if (query && !SYMBOL_TOKEN_BODY_REGEX.test(query)) return null
+  const start = match.index + match[1].length
+  return { query, start, end: textBeforeCursor.length }
+}
+
+/**
+ * ADR-126 §5: ищет `!`-токен в тексте до курсора.
+ *
+ * Возвращает `null`, если триггера нет: `!` не первый непробельный токен
+ * сообщения (в середине текста `!` — обычный символ), после `!` пробел или
+ * имя начинается не с буквы/цифры (`!-dev`).
+ */
+function findScriptTrigger(
+  textBeforeCursor: string,
+): { query: string; start: number; end: number } | null {
+  const match = SCRIPT_TRIGGER_REGEX.exec(textBeforeCursor)
+  if (!match) return null
+  const query = match[2] ?? ''
+  if (query && !/^[a-z0-9]/u.test(query)) return null
   const start = match.index + match[1].length
   return { query, start, end: textBeforeCursor.length }
 }
@@ -383,6 +410,14 @@ export function ChatInput({
     position: { left: number }
   } | null>(null)
   const [snippetMatches, setSnippetMatches] = useState(0)
+  // ADR-126 §5: `!`-пикер скриптов (триггер — `!` первым токеном сообщения).
+  const [scriptState, setScriptState] = useState<{
+    query: string
+    start: number
+    end: number
+    position: { left: number }
+  } | null>(null)
+  const [scriptMatches, setScriptMatches] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
@@ -593,6 +628,22 @@ export function ChatInput({
     } else {
       setSnippetState(null)
     }
+
+    // ADR-126 §5: `!`-скрипт — первый непробельный токен сообщения; внутри
+    // кода токен ядром не распознаётся, поэтому пикер там не открывается.
+    const scriptTrigger = isInsideCode(textBeforeCursor)
+      ? null
+      : findScriptTrigger(textBeforeCursor)
+    if (scriptTrigger) {
+      setScriptState({
+        query: scriptTrigger.query,
+        start: scriptTrigger.start,
+        end: scriptTrigger.end,
+        position: { left: 0 },
+      })
+    } else {
+      setScriptState(null)
+    }
   }
 
   const handleSelectCommand = useCallback((command: CommandSummary) => {
@@ -603,6 +654,8 @@ export function ChatInput({
     setSkillMatches(0)
     setSnippetState(null)
     setSnippetMatches(0)
+    setScriptState(null)
+    setScriptMatches(0)
     textareaRef.current?.focus()
   }, [setValue])
 
@@ -654,6 +707,32 @@ export function ChatInput({
 
   const handleSnippetMatches = useCallback((count: number) => {
     setSnippetMatches(count)
+  }, [])
+
+  /**
+   * ADR-126 §5: подстановка выбранного скрипта — `!<имя> ` (с пробелом,
+   * чтобы токен не слипся со следующим словом). Каретка встаёт за вставку.
+   *
+   * Это только вставка текста: запуск скрипта делает ядро, когда сообщение
+   * уходит (`!` — первый непробельный токен сообщения).
+   */
+  const handleSelectScript = useCallback((name: string) => {
+    if (!scriptState) return
+    const current = valueRef.current
+    const before = current.slice(0, scriptState.start)
+    const after = current.slice(scriptState.end)
+    const inserted = `!${name} `
+    const nextValue = `${before}${inserted}${after}`
+    valueRef.current = nextValue
+    pendingCaretRef.current = scriptState.start + inserted.length
+    setValue(nextValue)
+    setScriptState(null)
+    setScriptMatches(0)
+    textareaRef.current?.focus()
+  }, [scriptState, setValue])
+
+  const handleScriptMatches = useCallback((count: number) => {
+    setScriptMatches(count)
   }, [])
 
   /**
@@ -948,6 +1027,8 @@ export function ChatInput({
     setSkillMatches(0)
     setSnippetState(null)
     setSnippetMatches(0)
+    setScriptState(null)
+    setScriptMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -990,6 +1071,8 @@ export function ChatInput({
     setSkillMatches(0)
     setSnippetState(null)
     setSnippetMatches(0)
+    setScriptState(null)
+    setScriptMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -1019,6 +1102,8 @@ export function ChatInput({
     setSkillMatches(0)
     setSnippetState(null)
     setSnippetMatches(0)
+    setScriptState(null)
+    setScriptMatches(0)
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
@@ -1067,6 +1152,23 @@ export function ChatInput({
       }
       if (
         snippetMatches > 0
+        && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab')
+      ) {
+        e.preventDefault()
+        return
+      }
+    }
+
+    // ADR-126 §5: пока открыт непустой список скриптов — навигация/выбор у
+    // ScriptAutocomplete, сообщение не отправляется.
+    if (scriptState) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setScriptState(null)
+        return
+      }
+      if (
+        scriptMatches > 0
         && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === 'Tab')
       ) {
         e.preventDefault()
@@ -1144,7 +1246,7 @@ export function ChatInput({
 
         <div className={`pt-1 pl-2 pr-2 relative ${expanded ? 'flex-1 min-h-0' : ''}`}>
           {/*
-            ADR-126: подсветка токенов `/`, `$`, `#`, `@`. Слой лежит под
+            ADR-126: подсветка токенов `/`, `$`, `#`, `@`, `!`. Слой лежит под
             textarea и повторяет текст; сам textarea прозрачный, поэтому
             каретка/выделение остаются нативными.
           */}
@@ -1226,6 +1328,17 @@ export function ChatInput({
               onClose={() => setSnippetState(null)}
               onMatchesChange={handleSnippetMatches}
               projectId={mentionProjectId}
+            />
+          )}
+
+          {scriptState && (
+            <ScriptAutocomplete
+              query={scriptState.query}
+              position={scriptState.position}
+              sessionId={sessionId}
+              onSelect={handleSelectScript}
+              onClose={() => setScriptState(null)}
+              onMatchesChange={handleScriptMatches}
             />
           )}
         </div>

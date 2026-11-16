@@ -129,6 +129,8 @@ export function buildStandaloneOptions(input: StandaloneOptionsInput): Partial<S
     skillsConfig: synth.skills,
     // ADR-126 §1: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
     commandsConfig: synth.commands,
+    // ADR-126 §5: конфигурация реестра скриптов проекта (`paths`).
+    scriptsConfig: synth.scripts,
     // ADR-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
     // ADR-069 §9.2: ignore-rules/safe-mode → enabled=false (без мутации конфига).
     instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,

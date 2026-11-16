@@ -127,6 +127,8 @@ import { sshExecTool } from './ssh-exec.js';
 import { sshCopyTool } from './ssh-copy.js';
 // PROP-124 §4c: адресный ssh-тул — проброс порта через удалённый хост.
 import { sshTunnelTool } from './ssh-tunnel.js';
+// ADR-126 §5: реестр скриптов проекта (`!`-запуск).
+import { scriptListTool, scriptRunTool } from './scripts.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -269,6 +271,9 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   terminalSignalTool,
   terminalCloseTool,
   terminalRunTool,
+  // ADR-126 §5: скрипты проекта (`!`-запуск) — список и запуск.
+  scriptListTool,
+  scriptRunTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {

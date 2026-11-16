@@ -684,6 +684,20 @@ export const commandsConfigSchema = z.object({
   maxRenderedBytes: z.number().int().min(1).default(200_000),
 });
 
+// --- Скрипты проекта (ADR-126 §5) ---
+
+/**
+ * ADR-126 §5: конфигурация реестра скриптов проекта (`!`-запуск).
+ *
+ * `paths` — дополнительные каталоги-источники деклараций `.synth/scripts`.
+ * Приоритет источников: проект (`{project.workspace}/.synth/scripts`) >
+ * инстанс (`{dataDir}/scripts`) > `config.scripts.paths` — как у команд и
+ * скиллов (ADR-126 §9).
+ */
+export const scriptsConfigSchema = z.object({
+  paths: z.array(z.string()).prefault([]),
+});
+
 // --- Внешние события (ADR-089) ---
 
 /**
@@ -2037,6 +2051,7 @@ export const synthConfigSchema = z.object({
   tools: toolsConfigSchema.prefault({}),
   skills: skillsConfigSchema.prefault({}),
   commands: commandsConfigSchema.prefault({}),
+  scripts: scriptsConfigSchema.prefault({}),
   events: eventsConfigSchema.prefault({}),
   scheduler: schedulerConfigSchema.prefault({}),
   decision: decisionConfigSchema.prefault({}),
@@ -2098,6 +2113,8 @@ export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
 export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
+/** ADR-126 §5: секция `scripts` (каталоги-источники деклараций скриптов). */
+export type ScriptsConfig = z.infer<typeof scriptsConfigSchema>;
 export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
 export type DecisionConfig = z.infer<typeof decisionConfigSchema>;

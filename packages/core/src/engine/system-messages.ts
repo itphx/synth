@@ -874,6 +874,28 @@ export const SYSTEM_MESSAGES = {
     + 'Wait until it finishes, or interrupt it with Ctrl+C (terminal_signal INT), '
     + 'or open a separate terminal',
   'terminal.tool.exit_code': 'Exit code: {exit_code}',
+
+  // --- Скрипты проекта (`!`-запуск, ADR-126 §5) ---
+  'script.tool.deps_unavailable': 'Project scripts are unavailable in this build',
+  'script.tool.run_hint':
+    'The log of the run is available via process_logs; stop it via process_stop',
+  'script.tool.empty': 'No declared scripts',
+  'script.tool.header': 'Declared scripts ({count}):',
+  'script.tool.audit_failed':
+    'The execution audit log is enabled, but the entry could not be written ({reason}); '
+    + 'the script was not started. Fix the audit log path/storage or disable security.commandAudit and retry.',
+  'script.not_found': 'Script "{name}" is not declared',
+  'script.untrusted': 'Script "{name}" is unavailable: the project directory is not trusted',
+  'script.denied': 'Script "{name}" is denied by the permission rules',
+  'script.args_not_allowed': 'Script "{name}" does not accept arguments',
+  'script.args_invalid': 'Arguments of script "{name}" could not be parsed',
+  'script.cwd_outside': 'Working directory of script "{name}" is outside the session perimeter',
+  'script.background_disabled':
+    'Background execution of script "{name}" is unavailable in the current execution mode',
+  'script.started': 'Script "{name}" started in the background (run: {run})',
+  'script.plan_blocked': 'Scripts cannot be started in plan mode — only the list is available',
+  'script.gateway_unsupported':
+    'Scripts can only be started from the Synth UI — this message came from an external channel',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

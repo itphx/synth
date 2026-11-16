@@ -232,7 +232,7 @@ export class ProcessService {
         // Shell-форма — прежнее поведение `execute_shell`.
         command: input.argv
           ? { kind: 'argv', file: input.argv.file, args: [...input.argv.args] }
-          : { kind: 'shell', command: input.command, shell: 'bash' },
+          : { kind: 'shell', command: input.command ?? '', shell: 'bash' },
         cwd: input.cwd,
         ...(input.env ? { env: input.env } : {}),
         // Фоновый процесс по умолчанию **без таймаута**: он переживает ход агента.
@@ -260,16 +260,23 @@ export class ProcessService {
 
     let record: BackgroundRunRecord;
     try {
+      // ADR-126 §5: `origin`/`metadata` — в запись реестра (аддитивно).
+      // `origin` идёт последним: он важнее пользовательских метаданных.
+      const metadata = {
+        ...(input.metadata ?? {}),
+        ...(input.origin ? { origin: input.origin } : {}),
+      };
       record = await this._background.startProcess({
         sessionId: input.sessionId,
         ...(input.projectId ? { projectId: input.projectId } : {}),
         // В реестр идёт **одна строка** команды: для argv — склейка
         // «бинарник + аргументы» (только для показа в UI; перезапуска по
         // этой строке не происходит — процесс уже запущен).
-        command: input.argv ? formatArgvCommand(input.argv) : input.command,
+        command: input.argv ? formatArgvCommand(input.argv) : (input.command ?? ''),
         cwd: input.cwd,
         ...(proc.pid !== undefined ? { pid: proc.pid } : {}),
         processId: proc.processId,
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
       });
     } catch (err) {
       // Реестр отказал (лимит) — уже запущенный процесс останавливаем.

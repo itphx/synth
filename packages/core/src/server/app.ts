@@ -4,7 +4,7 @@ import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { createMiddleware } from 'hono/factory';
-import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
+import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, ScriptsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import type { SessionConfig } from '@itphx/synth-shared/config';
 import {
   applyBootstrapServiceKeys,
@@ -158,6 +158,8 @@ export interface StandaloneConfig {
   skillsConfig?: SkillsConfig;
   /** ADR-126 §1: конфигурация slash-команд из config.yaml `commands`. */
   commandsConfig?: CommandsConfig;
+  /** ADR-126 §5: конфигурация реестра скриптов проекта из config.yaml `scripts`. */
+  scriptsConfig?: ScriptsConfig;
   /** ADR-069 Фаза 1: конфигурация проектных инструкций из config.yaml `instructions`. */
   instructionsConfig?: InstructionsConfig;
   /** ADR-089: конфигурация приёма внешних событий из config.yaml `events`. */

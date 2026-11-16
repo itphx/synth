@@ -66,7 +66,7 @@ import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel, DecisionModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
-import { PermissionEvaluator, extractPaths, isPlanRestricted, type PermissionCheckInput } from './permission/evaluator.js';
+import { PermissionEvaluator, extractPaths, isPlanRestricted, resolveScriptRule, type PermissionCheckInput } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import {
   PermissionApprovalManager,
@@ -113,6 +113,10 @@ import type { TerminalService } from './terminal/service.js';
 // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
 import { ActiveRunRegistry } from './background/active-runs.js';
 import type { ProcessService } from './processes/service.js';
+// ADR-126 §5: реестр скриптов проекта (`!`-запуск).
+import type { ScriptService } from './scripts/service.js';
+// ADR-126 §5: коды ошибок доменного слоя скриптов → локальный ответ.
+import { ScriptError, type ScriptErrorCode } from './scripts/types.js';
 import type { BlobRefRepository } from '../storage/ports/blob-ref-repository.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, isFfmpegAvailable, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
@@ -201,7 +205,7 @@ import { DEFAULT_MAX_OUTPUT_TOKENS, resolveMaxOutputTokens } from './orchestrato
 import { ContextLengthExceededError } from '../providers/exceptions.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn, resolveTurnQuery as resolveTurnQueryFn, type CurrentModelPair, type LlmHistoryOptions } from './orchestrator/prompt-info.js';
 import { resolveHistoryNormalization } from './orchestrator/history-normalize.js';
-import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
+import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps, type LocalCommandDescriptor } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
 import { runProcessEarly, type ProcessEarlyDeps, type ProcessCommandArgs } from './orchestrator/phases/process-early.js';
@@ -224,6 +228,46 @@ const MAX_MID_TURN_COMPRESSIONS = 2;
 const MAX_REPEATED_DENY_COUNT = 5;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
+
+/**
+ * ADR-126 §5: префикс вызова скрипта в локальном ответе (`!name`).
+ *
+ * Имя команды в `metadata.commandName` — с префиксом, чтобы UI отрисовал
+ * вызов как команду, а не как текст.
+ */
+const SCRIPT_COMMAND_PREFIX = '!';
+
+/**
+ * ADR-126 §5: ключи локального ответа по `!`-скрипту.
+ *
+ * Ответ всегда локальный (ход LLM не запускается) — ключ берётся из
+ * `shared/i18n` (ADR-041).
+ */
+type ScriptReplyKey =
+  | 'script.plan_blocked'
+  | 'script.gateway_unsupported'
+  | 'script.tool.deps_unavailable'
+  | 'script.not_found'
+  | 'script.untrusted'
+  | 'script.denied'
+  | 'script.args_not_allowed'
+  | 'script.args_invalid'
+  | 'script.cwd_outside'
+  | 'script.background_disabled';
+
+/**
+ * ADR-126 §5: таблица кодов доменной ошибки скриптов → ключ локального ответа.
+ *
+ * Единственное место маппинга: сервис знает коды, но не знает форму ответа.
+ */
+const SCRIPT_ERROR_I18N: Record<ScriptErrorCode, ScriptReplyKey> = {
+  script_not_found: 'script.not_found',
+  script_untrusted: 'script.untrusted',
+  script_args_not_allowed: 'script.args_not_allowed',
+  script_args_invalid: 'script.args_invalid',
+  script_cwd_outside: 'script.cwd_outside',
+  script_background_disabled: 'script.background_disabled',
+};
 
 /**
  * PROP-127 (этап T2): инструменты, меняющие состояние сессии, — **барьер** батча.
@@ -1132,6 +1176,14 @@ export interface OrchestratorOptions {
    */
   processService?: ProcessService;
   /**
+   * ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск).
+   *
+   * Тот же экземпляр, что у HTTP-роутов `/api/v2/sessions/:id/scripts*`.
+   * Не задан — тулы `script_list`/`script_run` недоступны
+   * (`script.tool.deps_unavailable`).
+   */
+  scriptService?: ScriptService;
+  /**
    * ADR-115: порт учёта ссылок на объекты blob-хранилища (`StorageContext.blobRefs`).
    *
    * Нужен инъекции вложений из `ToolResult.attachments`: сообщение хода
@@ -1467,6 +1519,11 @@ export class ChatOrchestrator {
    * режим `background: true` у `execute_shell` недоступен).
    */
   private readonly _processService: ProcessService | null;
+  /**
+   * ADR-126 §5: сервис реестра скриптов проекта (`null` — не задан: тулы
+   * `script_list`/`script_run` недоступны).
+   */
+  private readonly _scriptService: ScriptService | null;
   /**
    * ADR-115: порт учёта ссылок на blob-объекты (`StorageContext.blobRefs`);
    * `null` — не задан (ссылка сообщения не пишется — best-effort).
@@ -2026,6 +2083,8 @@ export class ChatOrchestrator {
     this._subagentDepth = options.subagentDepth ?? DEFAULT_SUBAGENT_DEPTH;
     // PROP-097 (блок 5b): сервис фоновых шелл-процессов.
     this._processService = options.processService ?? null;
+    // ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск).
+    this._scriptService = options.scriptService ?? null;
     // ADR-114: сервис worktree (тулы `git_worktree_*`).
     this._worktreeService = options.worktreeService ?? null;
     // ADR-115: порт ссылок на blob-объекты (инъекция вложений тулов).
@@ -3320,6 +3379,131 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-126 §5: запуск объявленного скрипта проекта по `!name args`.
+   *
+   * Резолвинг — **в core** (ранний путь, рядом с `/` и `$`), а не в UI:
+   * иначе CLI, гибрид и шлюзы увидели бы разное поведение.
+   *
+   * Ход LLM не запускается: ответ — локальный (`finishLocalCommand`), в ленте
+   * он помечен `ephemeral` + `commandPrompt` (реплика пользователя не уходит
+   * в историю как обычный текст).
+   *
+   * Гейты (все — локальный ответ, без хода LLM):
+   * - **режим плана** — скрипты не запускаются (доступен только список);
+   * - **внешний канал** (мессенджер/шедулер) — `!` это действие человека в
+   *   UI: ограничение по источнику сообщения, а не по тексту;
+   * - **нет сервиса скриптов** — контур недоступен в этой сборке.
+   */
+  private async _handleScriptRun(args: ProcessCommandArgs): Promise<ProcessMessageResult | null> {
+    const {
+      session, message, publishChunk, streamId, workingDir, allowedRoots,
+      sessionMode, planMode, planApproved,
+    } = args;
+    const text = message.content ?? '';
+    if (!text) return null;
+
+    // ADR-126 §5: `!name` — первый непробельный токен сообщения; `!` в
+    // середине текста — обычный символ (токена нет → обычный путь).
+    const scriptRun = parseInput(text).scriptRun;
+    if (!scriptRun) return null;
+
+    const { name } = scriptRun;
+    const scriptArgs = scriptRun.args;
+
+    /** Локальный ответ по ключу i18n (ADR-041) + имя/аргументы команды. */
+    const reply = (
+      key: ScriptReplyKey,
+      params?: Record<string, string>,
+    ): Promise<ProcessMessageResult> => this._finishLocalCommand(
+      session,
+      message,
+      publishChunk,
+      sm(key, params),
+      streamId,
+      {
+        name: `${SCRIPT_COMMAND_PREFIX}${name}`,
+        args: scriptArgs,
+        i18nKey: key,
+        ...(params ? { i18nParams: params } : {}),
+        metadata: { script: name },
+      },
+    );
+
+    // В режиме плана скрипты не запускаются (ADR-126 §5: «в `plan` — только
+    // список»). Явный режим сессии — всегда; строгий режим (`strict`) — пока
+    // план не утверждён (ADR-025).
+    if (sessionMode === 'plan' || (planMode === 'strict' && !planApproved)) {
+      return reply('script.plan_blocked');
+    }
+
+    // ADR-126 §5: `!` из мессенджеров не исполняется — действие человека в
+    // UI. Признак внешнего источника — metadata сообщения (ADR-089/ADR-051).
+    const metadata = message.metadata;
+    if (
+      metadata?.principal_id
+      || metadata?.chat_key
+      || metadata?.thread_key
+      || metadata?.scheduler
+    ) {
+      return reply('script.gateway_unsupported');
+    }
+
+    const service = this._scriptService;
+    if (!service) {
+      return reply('script.tool.deps_unavailable');
+    }
+
+    const detail = await service.get(name, { projectWorkspace: workingDir });
+    if (!detail) {
+      return reply('script.not_found', { name });
+    }
+    // Недоверенный каталог источника: скрипт виден, но не запускается
+    // (ADR-126 §9) — причина «trusted», отдельная от запрета правилом прав.
+    if (detail.trusted === false) {
+      return reply('script.untrusted', { name });
+    }
+    // Право `permission.rules.script = deny` (ADR-029) — скрипт запрещён.
+    const permissionConfig = session.settings.permission ?? this._permissionConfig;
+    const denied = resolveScriptRule(permissionConfig, name)?.action === 'deny'
+      || detail.available === false;
+    if (denied) {
+      return reply('script.denied', { name });
+    }
+
+    try {
+      const result = await service.run({
+        name,
+        args: scriptArgs,
+        sessionId: session.id,
+        ...(session.projectId ? { projectId: session.projectId } : {}),
+        workingDir,
+        ...(allowedRoots ? { allowedRoots: [...allowedRoots] } : {}),
+        // ADR-126 §5: запуск человеком — origin `user` (агент не будится).
+        origin: 'user',
+        projectWorkspace: workingDir,
+      });
+      return this._finishLocalCommand(
+        session,
+        message,
+        publishChunk,
+        sm('script.started', { name, run: result.log_path }),
+        streamId,
+        {
+          name: `${SCRIPT_COMMAND_PREFIX}${name}`,
+          args: scriptArgs,
+          i18nKey: 'script.started',
+          i18nParams: { name, run: result.log_path },
+          metadata: { script: name },
+        },
+      );
+    } catch (err) {
+      // Неизвестная ошибка — пробросить как есть (не подменять «не найден»).
+      if (!(err instanceof ScriptError)) throw err;
+      return reply(SCRIPT_ERROR_I18N[err.code], { name });
+    }
+  }
+
+  /**
    * ADR-119: доступен ли ручной запуск сжатия контекста в указанном профиле.
    *
    * Профиль задан явно (`/summary` — `summarization`, `/compact` —
@@ -3380,6 +3564,7 @@ export class ChatOrchestrator {
         this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, reasoningLevel, attempt),
       handleCommand: (args) => this._handleCommand(args),
       handleDollarSkills: (args) => this._handleDollarSkills(args),
+      handleScriptRun: (args) => this._handleScriptRun(args),
       microPipeline: this._microPipeline,
       decisionConfig: this._decisionConfig,
       publishLocalCompletion: (publishChunk, streamId, content, opts) =>
@@ -4402,7 +4587,7 @@ export class ChatOrchestrator {
     publishChunk: (event: string, data: Record<string, unknown>) => void,
     output: string,
     streamId: string,
-    command?: { name: string; args?: string; i18nKey?: string },
+    command?: LocalCommandDescriptor,
   ): Promise<ProcessMessageResult> {
     return finishLocalCommandFn(
       session,
@@ -6945,6 +7130,15 @@ export class ChatOrchestrator {
                   // тул `execute_shell` с `background: true` запускает команду
                   // в фоне и возвращает управление сразу.
                   processService: this._processService ?? undefined,
+                  // ADR-126 §5: сервис реестра скриптов проекта — тулы
+                  // `script_list`/`script_run` (`!`-запуск).
+                  scriptService: this._scriptService ?? undefined,
+                  // ADR-136: журнал исполнений — запись `script.run`
+                  // (только метаданные) из тула `script_run`.
+                  commandAudit: this._commandAudit ?? undefined,
+                  // ADR-126 §5: правила прав сессии — deny-скрипты скрываются
+                  // из списка (резолвер тот же, что у permission-слоя).
+                  // Снимок по ссылке — см. `get permissionConfig()` выше.
                   // PROP-132 (Ф5): сервис интерактивных терминалов — тулы
                   // `terminal_list`/`terminal_open`/`terminal_read`/
                   // `terminal_write`/`terminal_close`.

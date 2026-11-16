@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getCommands: vi.fn(),
   getSkills: vi.fn(),
   listSnippets: vi.fn(),
+  listSessionScripts: vi.fn(),
   getSession: vi.fn(),
   listDirectory: vi.fn(),
   onSend: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('@/lib/api/synthApi', () => ({
     getCommands: mocks.getCommands,
     getSkills: mocks.getSkills,
     listSnippets: mocks.listSnippets,
+    listSessionScripts: mocks.listSessionScripts,
     getSession: mocks.getSession,
     listDirectory: mocks.listDirectory,
   },
@@ -35,7 +37,7 @@ import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ChatInput, splitMessageWithTags } from './ChatInput'
 import type { AgentInfo } from '@/lib/api/synthApi'
 import type { Snippet } from '@/lib/api/synthApi'
-import type { SkillSummary, SteerMode } from '@itphx/synth-shared/types'
+import type { SkillSummary, ScriptSummary, SteerMode } from '@itphx/synth-shared/types'
 import { useChatStore } from '@/stores/chatStore'
 import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { useSkillsStore } from '@/stores/skillsStore'
@@ -71,6 +73,16 @@ const SNIPPET: Snippet = {
   scope: 'instance',
   file: '/snippets/api-review.md',
   trusted: true,
+}
+
+/** Скрипт реестра (`GET /api/v2/sessions/:id/scripts`) — источник `!`-пикера. */
+const SCRIPT: ScriptSummary = {
+  name: 'dev',
+  description: 'Поднять backend и UI',
+  origin: 'project',
+  available: true,
+  trusted: true,
+  background: true,
 }
 
 async function renderInput(props?: {
@@ -116,6 +128,7 @@ beforeEach(() => {
   })
   mocks.getSkills.mockResolvedValue({ skills: [SKILL], diagnostics: [] })
   mocks.listSnippets.mockResolvedValue({ snippets: [SNIPPET], diagnostics: [] })
+  mocks.listSessionScripts.mockResolvedValue({ scripts: [SCRIPT], diagnostics: [] })
   // Снимок сессии — источник участников (`@user`) и проекта (`@file`).
   mocks.getSession.mockResolvedValue({
     id: 's1',
@@ -556,6 +569,62 @@ describe('ChatInput — `#`-пикер сниппетов (ADR-126 §4)', () => 
     await act(async () => {})
     expect(container.querySelector('[data-testid="command-autocomplete"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="snippet-autocomplete"]')).toBeNull()
+  })
+})
+
+describe('ChatInput — `!`-пикер скриптов (ADR-126 §5)', () => {
+  it('открывается на `!`, а выбор подставляет `!name ` без отправки', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '!')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="script-autocomplete"]')).not.toBeNull()
+    const item = container.querySelector(
+      '[data-testid="script-autocomplete-item-dev"]',
+    ) as HTMLButtonElement
+    expect(item).not.toBeNull()
+
+    await act(async () => {
+      item.click()
+    })
+
+    expect(textarea.value).toBe('!dev ')
+    expect(container.querySelector('[data-testid="script-autocomplete"]')).toBeNull()
+    expect(mocks.onSend).not.toHaveBeenCalled()
+  })
+
+  it('`!` в середине текста пикер не открывает', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, 'запусти !dev')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="script-autocomplete"]')).toBeNull()
+  })
+
+  it('Enter при открытом непустом списке скриптов не отправляет сообщение', async () => {
+    const container = await renderInput()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+
+    await act(async () => {
+      setTextareaValue(textarea, '!')
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(mocks.onSend).not.toHaveBeenCalled()
   })
 })
 

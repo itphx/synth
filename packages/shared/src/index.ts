@@ -239,6 +239,9 @@ export {
   skillsConfigSchema,
   type CommandsConfig,
   commandsConfigSchema,
+  // ADR-126 §5: секция `scripts` (реестр скриптов проекта).
+  type ScriptsConfig,
+  scriptsConfigSchema,
   type InstructionsConfig,
   type InstructionsLazyConfig,
   type InstructionsFetchConfig,

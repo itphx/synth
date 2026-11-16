@@ -67,7 +67,7 @@ import {
   FileBlobStore,
   FileBlobRefRepository,
 } from '@itphx/synth-core';
-import type { ChatOrchestrator } from '@itphx/synth-core';
+import type { ChatOrchestrator, ScriptService } from '@itphx/synth-core';
 import type { Message, Project, User } from '@itphx/synth-shared';
 import { MessageRole, ProjectRole, nowISO, makeTextPart, defaultConfig } from '@itphx/synth-shared';
 import { createSessionRoutes as createBackendSessionRoutes } from './sessions.js';
@@ -240,6 +240,12 @@ const MATRIX: Row[] = [
   row('sessions', 'GET', '/:id/skills'),
   row('sessions', 'GET', '/:id/skills/effective'),
   row('sessions', 'PUT', '/:id/skills'),
+
+  // --- ADR-126 §5: реестр скриптов проекта (`!`-запуск) ---
+  // Чтение — правило чтения сессии; запуск — правило мутации (VIEWER → 403).
+  row('sessions', 'GET', '/:id/scripts'),
+  row('sessions', 'GET', '/:id/scripts/:name'),
+  row('sessions', 'POST', '/:id/scripts/:name/run', { status: 202 }),
 
   // --- core message routes ---
   row('messages', 'POST', '/:sessionId/batch'),
@@ -434,8 +440,43 @@ async function buildWorld(tmpDir: string): Promise<World> {
     timeoutMs: 60_000,
   });
 
+  // ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск) — тот же
+  // контур, что в production (`GET/POST /:id/scripts*`).
+  const scriptService = {
+    list: async () => ({
+      scripts: [{
+        name: 'dev',
+        description: 'Локальная отладка',
+        origin: 'project',
+        available: true,
+        trusted: true,
+        background: true,
+      }],
+      diagnostics: [],
+    }),
+    get: async (name: string) => (name === 'dev' ? {
+      name: 'dev',
+      description: 'Локальная отладка',
+      origin: 'project',
+      available: true,
+      trusted: true,
+      background: true,
+      run: './scripts/dev.sh',
+      shell: false,
+      args: false,
+      file: '.synth/scripts/dev.md',
+      body: 'Локальная отладка.',
+    } : null),
+    run: async () => ({
+      run_id: 'bgr_matrix',
+      process_id: 'proc_matrix',
+      log_path: 'processes/bgr_matrix.log',
+      status: 'running' as const,
+    }),
+  } as unknown as ScriptService;
+
   // Проект: владелец `projectOwner`, участники `viewer` (VIEWER) и `editor` (EDITOR).
-  const project = projectStore.create('Shared', 'projectOwner');
+  const project = projectStore.create('Shared', 'projectOwner', { workspace: tmpDir });
   project.members['viewer'] = ProjectRole.VIEWER;
   project.members['editor'] = ProjectRole.EDITOR;
   await projectStore.save(project);
@@ -494,6 +535,21 @@ async function buildWorld(tmpDir: string): Promise<World> {
         maxActiveUploads: defaultConfig.attachments.maxActiveUploads,
       },
     },
+    // backgroundService / approvalRegistry / getStickyNoteLimits /
+    // llmAvailability / getSessionOpsPerMinute / executionProfileCatalog /
+    // browserProfileCatalog / snippetService / resolveProjectWorkspace —
+    // в песочнице не заданы.
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    // ADR-126 §5: сервис реестра скриптов — тот же контур, что в production.
+    scriptService,
   ));
   app.route('/api/v2/messages', createBackendMessageRoutes(
     kit as never,
@@ -686,7 +742,9 @@ function urlFor(base: Base, path: string, sessionId: string): string {
     .replace(':id', sessionId)
     .replace(':messageId', MATRIX_MESSAGE_ID)
     .replace(':refSid', 'ref-1')
-    .replace(':noteId', 'note-1');
+    .replace(':noteId', 'note-1')
+    // ADR-126 §5: имя скрипта в `:name`-маршрутах реестра скриптов.
+    .replace(':name', 'dev');
   return `${PREFIX[base]}${replaced}`;
 }
 

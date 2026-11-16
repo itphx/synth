@@ -2250,6 +2250,29 @@ export { SkillBundleStore } from './storage/skill-bundle-store.js';
 export type { SkillBundleStoreConfig } from './storage/skill-bundle-store.js';
 export { createCommandRoutes } from './server/routes/commands.js';
 export type { CommandRoutesDeps, CommandRoutesOptions, CommandRoutesMessages } from './server/routes/commands.js';
+// ADR-126 §5: скрипты проекта (`!`-запуск) — реестр, запуск, HTTP-контур.
+export { ScriptService } from './engine/scripts/service.js';
+export type {
+  ScriptServiceOptions,
+  ScriptListContext,
+  ScriptListResult,
+  ScriptRunInput,
+} from './engine/scripts/service.js';
+export { ScriptError, SCRIPT_ERROR_CODES } from './engine/scripts/types.js';
+export type { ScriptErrorCode, ScriptRuntimeConfig, TemplateScript } from './engine/scripts/types.js';
+export {
+  buildScriptSources,
+  scanScriptSource,
+  mergeScriptScans,
+  listUndeclaredExecutables,
+  PROJECT_SCRIPTS_DIR,
+} from './engine/scripts/discovery.js';
+export { splitScriptArguments } from './engine/scripts/args.js';
+export { createSessionScriptRoutes } from './server/routes/session-scripts.js';
+export type {
+  SessionScriptRoutesDeps,
+  SessionScriptRouteMessages,
+} from './server/routes/session-scripts.js';
 export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';

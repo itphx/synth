@@ -52,6 +52,10 @@ import type { ApprovalRegistry } from '@itphx/synth-core';
 import type { ExecutionProfileCatalog } from '@itphx/synth-core';
 // ADR-126 §4: сервис сниппетов (`#`) — раскрытие в приёме промпта.
 import type { SnippetService } from '@itphx/synth-core';
+// ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск) + журнал
+// исполнений (ADR-136).
+import type { ScriptService, CommandAuditLog } from '@itphx/synth-core';
+import type { PermissionConfig } from '@itphx/synth-shared';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -193,6 +197,21 @@ export function createSessionRoutes(
    * сниппетов. Не задан — workspace берётся из карточки проекта как есть.
    */
   resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>,
+  /**
+   * ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск) — HTTP-контур
+   * `/api/v2/sessions/:id/scripts*`. Не задан — контура нет.
+   */
+  scriptService?: ScriptService,
+  /**
+   * ADR-126 §5: правила прав инстанса — fallback для правила
+   * `permission.rules.script` (собственные правила сессии важнее).
+   */
+  permissionConfig?: PermissionConfig,
+  /**
+   * ADR-136: журнал исполнений команд — запись `script.run` (только
+   * метаданные).
+   */
+  commandAudit?: CommandAuditLog,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -806,7 +825,7 @@ export function createSessionRoutes(
   // ADMIN|AUDITOR соответственно) — порядок регистрации оставляет её в силе.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}), ...(snippetService ? { snippetService } : {}), ...(resolveProjectWorkspace ? { resolveProjectWorkspace } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}), ...(snippetService ? { snippetService } : {}), ...(resolveProjectWorkspace ? { resolveProjectWorkspace } : {}), ...(scriptService ? { scriptService } : {}), ...(permissionConfig ? { permissionConfig } : {}), ...(commandAudit ? { commandAudit } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

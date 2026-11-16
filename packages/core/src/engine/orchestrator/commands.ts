@@ -72,6 +72,27 @@ export function publishLocalCompletion(
   publishTurnFinished(publishChunk, { turnId, status: 'completed' });
 }
 
+/**
+ * Описание локальной команды (ADR-126 §14).
+ *
+ * `i18nKey`/`i18nParams` — локализация ответа в UI по `metadata.i18n`
+ * (ADR-041): ключ без параметров оставляет плейсхолдеры в тексте, поэтому
+ * параметры передаются явно. `metadata` — дополнительные поля ответа
+ * (например `script` — имя запущенного скрипта, ADR-126 §5).
+ */
+export interface LocalCommandDescriptor {
+  /** Имя команды (для `/`-команд — без префикса, для `!`-скрипта — с `!`). */
+  name: string;
+  /** Аргументы команды (сырая строка). */
+  args?: string;
+  /** Ключ локализации ответа (`shared/i18n`). */
+  i18nKey?: string;
+  /** Параметры ключа локализации. */
+  i18nParams?: Record<string, string>;
+  /** Дополнительные поля `metadata` ответа. */
+  metadata?: Record<string, unknown>;
+}
+
 /** Зависимости `finishLocalCommand`. */
 export interface FinishLocalCommandDeps {
   sessionManager: SessionManager;
@@ -94,7 +115,7 @@ export async function finishLocalCommand(
   publishChunk: (event: string, data: Record<string, unknown>) => void,
   output: string,
   streamId: string,
-  command: { name: string; args?: string; i18nKey?: string } | undefined,
+  command: LocalCommandDescriptor | undefined,
   deps: FinishLocalCommandDeps,
 ): Promise<{ error?: string; errorType?: string; canRetry?: boolean }> {
   // Признак команды для UI — и в сохранённом assistant-сообщении, и в
@@ -102,10 +123,13 @@ export async function finishLocalCommand(
   // (без `message.added`), поэтому без metadata оптимистичное сообщение
   // отрисовалось бы как ответ агента.
   const commandMetadata: Record<string, unknown> = {
+    // Дополнительные поля вызывающего — **до** служебных: служебные не
+    // перекрываются (иначе `metadata` ответа подменял бы признак команды).
+    ...(command?.metadata ?? {}),
     command: true,
     ...(command ? { commandName: command.name, commandArgs: command.args ?? '' } : {}),
     // ADR-041: строки движка локализуются в UI по `metadata.i18n`.
-    ...(command?.i18nKey ? { i18n: i18nMeta(command.i18nKey) } : {}),
+    ...(command?.i18nKey ? { i18n: i18nMeta(command.i18nKey, command.i18nParams) } : {}),
   };
 
   const assistant: Message = {

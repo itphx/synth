@@ -634,6 +634,22 @@ export const ENGINE_MESSAGE_KEYS = [
   'terminal.tool.foreground_app',
   'terminal.tool.foreground_busy',
   'terminal.tool.exit_code',
+  // --- Скрипты проекта (`!`-запуск, ADR-126 §5) ---
+  'script.tool.deps_unavailable',
+  'script.tool.run_hint',
+  'script.tool.empty',
+  'script.tool.header',
+  'script.tool.audit_failed',
+  'script.not_found',
+  'script.untrusted',
+  'script.denied',
+  'script.args_not_allowed',
+  'script.args_invalid',
+  'script.cwd_outside',
+  'script.background_disabled',
+  'script.started',
+  'script.plan_blocked',
+  'script.gateway_unsupported',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -1236,6 +1252,22 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'terminal.tool.foreground_app': [],
   'terminal.tool.foreground_busy': ["terminal_id","command"],
   'terminal.tool.exit_code': ["exit_code"],
+  // --- Скрипты проекта (`!`-запуск, ADR-126 §5) ---
+  'script.tool.deps_unavailable': [],
+  'script.tool.run_hint': [],
+  'script.tool.empty': [],
+  'script.tool.header': ["count"],
+  'script.tool.audit_failed': ["reason"],
+  'script.not_found': ["name"],
+  'script.untrusted': ["name"],
+  'script.denied': ["name"],
+  'script.args_not_allowed': ["name"],
+  'script.args_invalid': ["name"],
+  'script.cwd_outside': ["name"],
+  'script.background_disabled': ["name"],
+  'script.started': ["name","run"],
+  'script.plan_blocked': [],
+  'script.gateway_unsupported': [],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

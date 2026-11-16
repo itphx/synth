@@ -114,8 +114,62 @@ describe('parseInput — сниппеты `#`', () => {
   });
 });
 
-describe('parseInput — код', () => {
-  it('не распознаёт токены внутри fenced-блока', () => {
+describe('parseInput — вызов скрипта `!` (ADR-126 §5)', () => {
+  it('разбирает вызов скрипта без аргументов', () => {
+    expect(parseInput('!dev').scriptRun).toEqual({ name: 'dev', args: '' });
+  });
+
+  it('разбирает вызов скрипта с аргументами (остаток строки)', () => {
+    expect(parseInput('!dev --fast').scriptRun).toEqual({ name: 'dev', args: '--fast' });
+  });
+
+  it('аргументы сохраняются как есть (без разбора кавычек)', () => {
+    expect(parseInput('!dev --msg "привет мир"').scriptRun).toEqual({
+      name: 'dev',
+      args: '--msg "привет мир"',
+    });
+  });
+
+  it('пробел после `!` — не токен', () => {
+    expect(parseInput('! dev').scriptRun).toBeUndefined();
+    expect(parseInput('!').scriptRun).toBeUndefined();
+  });
+
+  it('`!=` и `!!` — не токены', () => {
+    expect(parseInput('!=').scriptRun).toBeUndefined();
+    expect(parseInput('!!').scriptRun).toBeUndefined();
+  });
+
+  it('имя не может начинаться с заглавной буквы или дефиса', () => {
+    expect(parseInput('!Name').scriptRun).toBeUndefined();
+    expect(parseInput('!-x').scriptRun).toBeUndefined();
+  });
+
+  it('`!` в середине текста — обычный символ (токен только первый)', () => {
+    expect(parseInput('текст !dev').scriptRun).toBeUndefined();
+    expect(parseInput('сделай !dev --fast').scriptRun).toBeUndefined();
+  });
+
+  it('не распознаёт токен внутри fenced-блока и inline-кода', () => {
+    expect(parseInput('```bash\n!dev --fast\n```').scriptRun).toBeUndefined();
+    expect(parseInput('`!dev`').scriptRun).toBeUndefined();
+  });
+
+  it('экранированный `!` не создаёт токен', () => {
+    expect(parseInput('\\!dev').scriptRun).toBeUndefined();
+  });
+
+  it('токен — только первый токен сообщения (перевод строки не «сбрасывает» правило)', () => {
+    expect(parseInput('первая строка\n!dev').scriptRun).toBeUndefined();
+    expect(parseInput('\n  !dev --fast').scriptRun).toEqual({ name: 'dev', args: '--fast' });
+  });
+
+  it('обычный текст без `!` — токена нет', () => {
+    expect(parseInput('обычный текст').scriptRun).toBeUndefined();
+  });
+});
+
+describe('parseInput — код', () => {  it('не распознаёт токены внутри fenced-блока', () => {
     expect(parseInput('```\n@alice\n```').mentions).toEqual([]);
     expect(parseInput('```ts\n$skill\n#snippet\n```').skills).toEqual([]);
     expect(parseInput('```ts\n$skill\n#snippet\n```').snippets).toEqual([]);

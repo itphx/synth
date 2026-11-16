@@ -1953,6 +1953,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // без сборщика — fail-closed (ключи не выдаются вовсе).
           extra: {
             ...(extra as unknown as Record<string, unknown>),
+            // ADR-029/ADR-126 §5: правила прав **ребёнка** — собственные
+            // правила сессии ребёнка (ADR-029: наследуются от родителя +
+            // deny-дополнения), иначе — производные от родителя. Это нужно
+            // тулу `script_list` (скрытие deny-скриптов) и не дублирует
+            // enforcement permission-слоя (`childEvaluator`).
+            permissionConfig: childSessionSettings?.permission ?? derivedPermission,
             // ADR-039: todo-тулы ребёнка меняют **его** список, а не список
             // родителя. `sessionId` в extra остаётся родительским (события,
             // permission.ask/replied, проектный/automation-скоуп).

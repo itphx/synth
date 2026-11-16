@@ -1634,6 +1634,23 @@ export type TodoUpdateRequest = z.infer<typeof todoUpdateSchema>;
 export type TodoOrderRequest = z.infer<typeof todoOrderSchema>;
 export type TodoClearRequest = z.infer<typeof todoClearSchema>;
 
+// --- Тело запуска скрипта проекта (ADR-126 §5) — strict ---
+
+/**
+ * Тело `POST /sessions/:id/scripts/:name/run`: только аргументы скрипта.
+ *
+ * Аргументы приходят **строкой** — их разбирает лексер скриптов
+ * (`engine/scripts/args.ts`), без shell. Строгая схема: неизвестные поля →
+ * 400 `VALIDATION_ERROR`.
+ */
+export const scriptRunRequestSchema = z
+  .object({
+    arguments: z.string().max(10_000).optional(),
+  })
+  .strict();
+
+export type ScriptRunRequest = z.infer<typeof scriptRunRequestSchema>;
+
 // --- Тела HTTP-мутаций журнала и инвариантов (PROP-054) — strict ---
 
 /** Новая запись журнала проекта (Markdown, лимит `MARKDOWN_LIMITS.journalEntry`). */

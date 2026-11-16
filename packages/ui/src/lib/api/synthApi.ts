@@ -24,6 +24,7 @@ import { securityApi } from './security'
 import { settingsApi } from './settings'
 import { skillsApi } from './skills'
 import { snippetsApi } from './snippets'
+import { scriptsApi } from './scripts'
 import { commandsApi } from './commands'
 import { skillBundlesApi } from './skill-bundles'
 import { dictionariesApi } from './dictionaries'
@@ -167,6 +168,14 @@ export type {
   SnippetExpandResponse,
   SnippetListParams,
 } from './snippets'
+// ADR-126 §5: скрипты проекта (`!`-запуск) — реестр и запуск в контуре сессии.
+export type {
+  ScriptDiagnostic,
+  ScriptRunResponse,
+  ScriptSummary,
+  SessionScriptsResponse,
+  ListSessionScriptsOptions,
+} from './scripts'
 export type { SkillBundlesResponse } from './skill-bundles'
 export type {
   LlmGatewaySettings,
@@ -568,6 +577,9 @@ export const synthApi = {
   ...settingsApi,
   ...skillsApi,
   ...snippetsApi,
+  // ADR-126 §5: скрипты проекта (`!`-запуск) — имена с префиксом домена,
+  // чтобы не переопределить короткие `list`/`run` соседних доменов.
+  ...scriptsApi,
   ...commandsApi,
   ...skillBundlesApi,
   ...dictionariesApi,

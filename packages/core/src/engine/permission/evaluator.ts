@@ -160,6 +160,10 @@ const PLAN_BLOCKED_AUTOMATION_TOOLS: ReadonlySet<string> = new Set([
   // целиком (оба режима `terminal_run` — с ожиданием и фоновый;
   // чтение вывода — `terminal_read` — остаётся разрешённым).
   'terminal_run',
+  // ADR-126 §5: запуск объявленного скрипта проекта (`!`) — исполнение.
+  // План ничего не исполняет: в plan-режиме доступен только список
+  // скриптов (`script_list`), запуск — нет.
+  'script_run',
 ]);
 
 /**
@@ -754,6 +758,13 @@ export class PermissionEvaluator {
       if (skillDecision) return skillDecision;
     }
 
+    // ADR-126 §5: per-script permissions — правило `script` (строка или glob по
+    // имени скрипта). `deny` скрывает скрипт из реестра и блокирует запуск.
+    if (toolName === 'script_run' && typeof params.name === 'string' && params.name.trim() !== '') {
+      const scriptDecision = resolveScriptRule(this._config, params.name);
+      if (scriptDecision) return scriptDecision;
+    }
+
     // 1. Правило по конкретному имени тула
     const toolRule = this._rules[toolName];
     if (toolRule !== undefined) {
@@ -1069,6 +1080,19 @@ export function resolveCommandRule(
   commandName: string,
 ): PermissionDecision | undefined {
   return resolveNamedRule(config, 'command', commandName);
+}
+
+/**
+ * ADR-126 §5: per-script permissions. Правило — `permission.rules.script`:
+ * строка (действие для всех скриптов) либо объект glob-паттернов по имени
+ * скрипта. `deny` скрывает скрипт из реестра и блокирует запуск; наследуется
+ * саб-агентами (derive.ts — правила копируются как есть).
+ */
+export function resolveScriptRule(
+  config: PermissionConfig | undefined,
+  scriptName: string,
+): PermissionDecision | undefined {
+  return resolveNamedRule(config, 'script', scriptName);
 }
 
 /**

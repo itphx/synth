@@ -57,6 +57,13 @@ export interface BackgroundProcessInput {
   processId?: string;
   /** Путь лога в BlobStore; не задан — `processes/<id>.log`. */
   logPath?: string;
+  /**
+   * ADR-126 §5: дополнительные метаданные прогона (пишутся в запись реестра).
+   *
+   * Аддитивное поле: `origin: 'user'` означает «запуск человеком» — такой
+   * прогон **не будит агента** (уведомление родителя не отправляется).
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /** Патч завершения прогона. */
