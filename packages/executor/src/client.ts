@@ -594,8 +594,9 @@ export class RemoteExecutionPort implements ExecutionPort {
    * Умеет ли пул PTY-сессии (протокол 8) — по последнему снимку инвентаря.
    *
    * `undefined` — **состав пула ещё неизвестен** (снимка не было): это не
-   * «не умеет» (вызывающий решит по вызову `openPty`, где отказ приходит как
-   * `EPTY`/`dependency_missing`), а «неизвестно». `false` — известно, что
+   * «не умеет» (вызывающий решит по вызову `openPty`: там недоступный пул —
+   * `EUNREACHABLE`/`spawn_failed`, а отсутствие PTY — `EPTY`/
+   * `dependency_missing`), а «неизвестно». `false` — известно, что
    * терминалов в пуле нет.
    */
   private _ptySupported: boolean | undefined;
@@ -633,7 +634,8 @@ export class RemoteExecutionPort implements ExecutionPort {
    * Значение — по последнему снимку инвентаря; **до первого снимка**
    * `undefined` («состав пула неизвестен» — это не «не умеет»: неизвестное не
    * значит «нет»). **Авторитетная** проверка — при вызове `openPty`: там
-   * отказ приходит как `EPTY`/`dependency_missing`.
+   * недоступный пул даёт `EUNREACHABLE` (повторяется прогревом), а отсутствие
+   * `features.pty` — `EPTY`/`dependency_missing`.
    */
   get pty(): boolean | undefined {
     return this._ptySupported;
@@ -927,12 +929,17 @@ export class RemoteExecutionPort implements ExecutionPort {
    *
    * ## Выбор адреса
    *
-   * Только адрес, который **ответил** на `/capabilities` и объявил
-   * `features.pty` при протоколе ≥ 8: старый исполнитель терминалы не умеет,
-   * а тихого возврата к неинтерактивной команде нет (пользователь получил бы
-   * не терминал). Нет такого адреса — **fail-closed**: `ExecutionError` с
-   * кодом `EPTY` и причиной `dependency_missing` (слой доступности превращает
-   * её в `unavailable(dependency)`).
+   * Порядок отказов важен: **сначала недоступность, потом отсутствие PTY**.
+   *
+   * 1. Ни один адрес не ответил на `/capabilities` (под стартует, тянется
+   *    образ) — состав пула неизвестен, и это **не** «PTY не поддерживается»:
+   *    `EUNREACHABLE`/`spawn_failed`. Причина **повторяемая** — прогрев пула
+   *    (ленивый порт) повторит вызов, а не сообщит «нет PTY».
+   * 2. Пул ответил, но ни у одного адреса нет `features.pty` при протоколе ≥ 8
+   *    — старый исполнитель терминалы не умеет, а тихого возврата к
+   *    неинтерактивной команде нет (пользователь получил бы не терминал):
+   *    **fail-closed** `EPTY`/`dependency_missing` (слой доступности
+   *    превращает её в `unavailable(dependency)`).
    *
    * ## Проба переднего плана (протокол 9)
    *
@@ -950,6 +957,17 @@ export class RemoteExecutionPort implements ExecutionPort {
   async openPty(req: PtyOpenRequest): Promise<PtyHandle> {
     const core = await loadCore();
     const inventory = await this._ensureInventory();
+    const reachable = [...inventory.values()].filter((entry) => entry.reachable);
+    // Пул целиком не ответил (холодный под / тянется образ) — это
+    // недоступность, а не «нет PTY»: состав пула неизвестен. Код
+    // `EUNREACHABLE` повторяемый — прогрев повторит вызов.
+    if (reachable.length === 0) {
+      throw new core.ExecutionError({
+        message: 'исполнитель пула недоступен: ни один адрес не ответил на /capabilities',
+        code: 'EUNREACHABLE',
+        reason: 'spawn_failed',
+      });
+    }
     const candidates: string[] = [];
     for (const [url, entry] of inventory) {
       if (entry.reachable && entry.pty) candidates.push(url);
@@ -957,7 +975,7 @@ export class RemoteExecutionPort implements ExecutionPort {
     if (candidates.length === 0) {
       throw new core.ExecutionError({
         message:
-          'исполнитель не поддерживает PTY-сессии (нужен features.pty и протокол 8): ' +
+          'в пуле нет исполнителя с features.pty (протокол ≥ 8): ' +
           'терминал недоступен в этом пуле',
         code: core.EXECUTION_PTY_UNSUPPORTED_CODE,
         reason: 'dependency_missing',

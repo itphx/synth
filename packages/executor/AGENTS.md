@@ -389,6 +389,11 @@ MCP-вызова на текст и нетекстовые блоки и отд�
   (тихого возврата в inline нет). Контур выключается оператором
   (`SYNTH_EXECUTOR_PTY=0`) — тогда все PTY-роуты отвечают `501
   pty_unsupported`.
+  **Недоступный адрес ≠ отсутствие PTY.** Если ни один адрес пула не ответил на
+  `/capabilities` (под стартует, тянется образ), `openPty` бросает
+  `EUNREACHABLE`/`spawn_failed` — причина **повторяется прогревом**;
+  `EPTY`/`dependency_missing` — только когда адрес ответил, но PTY не объявлен
+  (fail-closed: терминал живёт там, где toolchain).
 - **Браузерный пул — без терминалов по конструкции:** в стадии `browser`
   (`docker/Dockerfile.executor`) стоит `ENV SYNTH_EXECUTOR_PTY=0`, поэтому
   исполнитель не объявляет `features.pty`, а control plane отдаёт `503

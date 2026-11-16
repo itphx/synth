@@ -17,7 +17,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createPooledExecutionPort } from './pooled-port.js';
 import type { ExecutionPoolKey, ExecutionPoolRef } from './pool-provider.js';
-import { ExecutionFsUnavailableError, type ExecutionPort } from './ports/index.js';
+import {
+  ExecutionFsUnavailableError,
+  type ExecutionPort,
+  type PtyHandle,
+} from './ports/index.js';
 
 const KEY: ExecutionPoolKey = {
   scope: 'project',
@@ -381,6 +385,96 @@ describe('PROP-135: прогрев пула (connect-ошибки повторя
       createPort: async () => inner,
     });
     await expect(port.execute({ command: { kind: 'shell', command: 'echo hi' } })).rejects.toThrow('boom');
+  });
+});
+
+describe('PROP-135: пере-резолв пула на каждой попытке (холодный пул)', () => {
+  const okResult = { stdout: 'ok', stderr: '', exitCode: 0, truncated: false, durationMs: 1 };
+  const unreachable = (): Error =>
+    Object.assign(
+      new Error('исполнитель пула недоступен: ни один адрес не ответил на /capabilities'),
+      { code: 'EUNREACHABLE' },
+    );
+
+  /** `ensure` выдаёт A на первом вызове и B — на последующих. */
+  function poolSwitching() {
+    let issued = 0;
+    const ensure = vi.fn(async (_key: ExecutionPoolKey): Promise<ExecutionPoolRef> => {
+      issued += 1;
+      return { url: issued === 1 ? 'http://a:5100' : 'http://b:5100' };
+    });
+    const created: string[] = [];
+    const createPort = vi.fn(async (ref: ExecutionPoolRef): Promise<ExecutionPort> => {
+      created.push(ref.url);
+      if (ref.url === 'http://a:5100') {
+        // Адрес A «не ответил»: его клиент держит недоступный инвентарь.
+        return fakePort({
+          execute: async () => {
+            throw unreachable();
+          },
+          openPty: async () => {
+            throw unreachable();
+          },
+        });
+      }
+      return fakePort({
+        openPty: async () => ({ id: 'pty_b' }) as unknown as PtyHandle,
+      });
+    });
+    return { ensure, created, createPort };
+  }
+
+  it('execute: после сброса кэша вызов уходит на B (старый клиент A не залипает)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ensure, created, createPort } = poolSwitching();
+      const port = createPooledExecutionPort({ key: KEY, provider: { ensure }, createPort });
+
+      const call = port.execute({ command: { kind: 'shell', command: 'echo hi' } });
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(call).resolves.toMatchObject({ stdout: okResult.stdout });
+
+      // Порт собран дважды: после resetPool адрес запрошен заново.
+      expect(ensure).toHaveBeenCalledTimes(2);
+      expect(created).toEqual(['http://a:5100', 'http://b:5100']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('openPty: после сброса кэша вызов уходит на B и отдаёт её хэндл', async () => {
+    vi.useFakeTimers();
+    try {
+      const { ensure, created, createPort } = poolSwitching();
+      const port = createPooledExecutionPort({ key: KEY, provider: { ensure }, createPort });
+
+      const call = port.openPty!({ cwd: '/workspace', cols: 80, rows: 24 });
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(call).resolves.toMatchObject({ id: 'pty_b' });
+
+      expect(ensure).toHaveBeenCalledTimes(2);
+      expect(created).toEqual(['http://a:5100', 'http://b:5100']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('openPty на порте без метода → EPTY и без повторов', async () => {
+    const ensure = vi.fn(async (_key: ExecutionPoolKey): Promise<ExecutionPoolRef> => ({
+      url: 'http://pool:8080',
+    }));
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider: { ensure },
+      createPort: async () => fakePort(),
+    });
+
+    const err = await port
+      .openPty!({ cwd: '/workspace', cols: 80, rows: 24 })
+      .catch((e: unknown) => e);
+    // «Не умеет PTY» — fail-closed и не повторяется (в отличие от смены адреса).
+    expect((err as { code?: unknown }).code).toBe('EPTY');
+    expect(ensure).toHaveBeenCalledTimes(1);
   });
 });
 

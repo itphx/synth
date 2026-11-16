@@ -12,7 +12,10 @@
  *
  * - `execute`/`spawnBackground`/`probe`/`capabilitySummary`/`fs.*` сначала
  *   `await resolve()` — дождаться адреса пула и собрать реальный порт, —
- *   затем делегируют вызов;
+ *   затем делегируют вызов. **Порт резолвится на каждой попытке прогрева**:
+ *   после сброса кэша (`resetPort`/`resetPool`) адрес пула мог смениться —
+ *   старый клиент остался бы со своим закэшированным инвентарём (TTL 120 с)
+ *   и продолжал бы отвечать «адрес недоступен»;
  * - адрес пула запрашивается **один раз**: кэшируется промис; при ошибке
  *   кэш **сбрасывается**, и следующий вызов повторяет `ensure` (пул мог
  *   появиться позже);
@@ -192,6 +195,10 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
    * падает `fetch failed`. Проверка read-only (`capabilities`/`probe`) идёт
    * через `withWarmup` с сетевыми повторами; неудача не блокирует вызов —
    * ошибку покажет сама операция.
+   *
+   * Проверки внутри `withWarmup` резолвят порт **на каждой попытке**: после
+   * сброса кэша адрес пула мог смениться, а старый клиент держит свой
+   * инвентарь (TTL 120 с) и продолжал бы отвечать как недоступный.
    */
   const waitReady = (): Promise<void> => {
     if (!readyPromise) {
@@ -206,14 +213,27 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
           if (port) {
             if (port.capabilitySummary) {
               const summary = await withWarmup(
-                key, () => port.capabilitySummary!('sh'), true, resetPort,
+                key,
+                async () => {
+                  const p = await resolve();
+                  return p.capabilitySummary ? p.capabilitySummary('sh') : null;
+                },
+                true,
+                resetPort,
               ).catch(() => null);
               // `total` включает и недоступные адреса — готовность = хотя бы
               // один reachable (unreachable < total).
               if (summary && summary.total > 0 && summary.unreachable < summary.total) return;
             } else if (port.probe) {
-              const ok = await withWarmup(key, () => port.probe!('sh'), true, resetPort)
-                .catch(() => false);
+              const ok = await withWarmup(
+                key,
+                async () => {
+                  const p = await resolve();
+                  return p.probe ? p.probe('sh') : true;
+                },
+                true,
+                resetPort,
+              ).catch(() => false);
               if (ok) return;
             } else {
               return;
@@ -255,10 +275,13 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     fs,
 
     async execute(req: ExecRequest): Promise<ExecResult> {
-      const port = await resolve();
+      // Первый резолв — fail-fast при ошибке provisioner'а (пул не выдан).
+      // Дальше порт резолвится **на каждой попытке**: после `resetPool` адрес
+      // мог смениться, а старый клиент держит свой инвентарь (TTL 120 с).
+      await resolve();
       await waitReady();
       try {
-        return await withWarmup(key, () => port.execute(req), false, resetPool);
+        return await withWarmup(key, async () => (await resolve()).execute(req), false, resetPool);
       } finally {
         // Активность была в любом исходе: успех и ошибка команды одинаково
         // означают, что пул использовался.
@@ -267,18 +290,28 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     },
 
     async spawnBackground(req: ExecRequest): Promise<ExecBackgroundProcess> {
-      const port = await resolve();
+      // Fail-fast при ошибке provisioner'а; в повторах — резолв заново
+      // (адрес мог смениться после reset).
+      await resolve();
       await waitReady();
-      if (!port.spawnBackground) {
-        // Тот же машинный код, что у удалённого порта старой версии
-        // (протокол < 3): «фон не поддерживается» — не «есть метод, но падает».
-        throw new ExecutionError({
-          message: 'executor does not support background processes (features.background)',
-          code: EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
-          reason: 'spawn_failed',
-        });
-      }
-      const process = await withWarmup(key, () => port.spawnBackground!(req), false, resetPool);
+      const process = await withWarmup(
+        key,
+        async () => {
+          const p = await resolve();
+          if (!p.spawnBackground) {
+            // Тот же машинный код, что у удалённого порта старой версии
+            // (протокол < 3): «фон не поддерживается» — не «есть метод, но падает».
+            throw new ExecutionError({
+              message: 'executor does not support background processes (features.background)',
+              code: EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
+              reason: 'spawn_failed',
+            });
+          }
+          return p.spawnBackground(req);
+        },
+        false,
+        resetPool,
+      );
       // Долгий фоновый процесс — тоже активность пула (пул живёт, пока
       // процесс работает).
       markActive();
@@ -286,6 +319,8 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     },
 
     async browserCall(req: BrowserCallRequest): Promise<BrowserCallResult> {
+      // Внешний резолв — только чтобы отличить «порта без browser-вызова»
+      // (тихий отказ без обращения к пулу) от рабочего вызова.
       const port = await resolve();
       await waitReady();
       if (!port.browserCall) {
@@ -300,7 +335,21 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
         // Интерактивные действия не повторяем (двойной клик); навигацию,
         // снимок, ожидание и скриншот — можно.
         const readOnly = !['browser_click','browser_type','browser_press_key'].includes(req.tool);
-        return await withWarmup(key, () => port.browserCall!(req), readOnly, resetPool);
+        return await withWarmup(
+          key,
+          async () => {
+            const p = await resolve();
+            if (!p.browserCall) {
+              return {
+                content: 'browser execution is unavailable in the current execution environment',
+                isError: true,
+              };
+            }
+            return p.browserCall(req);
+          },
+          readOnly,
+          resetPool,
+        );
       } finally {
         // Обращение к пулу — активность (как у execute): provisioner не должен
         // снять пул по idle между вызовами браузера.
@@ -309,8 +358,17 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
     },
 
     async probe(bin: string, args?: string[]): Promise<boolean> {
-      const port = await resolve();
-      return port.probe ? withWarmup(key, () => port.probe!(bin, args), true, resetPool) : true;
+      // Fail-fast при ошибке provisioner'а; в повторах — резолв заново.
+      await resolve();
+      return withWarmup(
+        key,
+        async () => {
+          const p = await resolve();
+          return p.probe ? p.probe(bin, args) : true;
+        },
+        true,
+        resetPool,
+      );
     },
 
     /**
@@ -318,30 +376,52 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
      *
      * Пул собирается лениво, поэтому признак «умеет PTY» у порта **не
      * объявляется** (`pty` — `false` до первого разрешения пула): вызывающий
-     * ориентируется на сам вызов — отказ приходит как `ExecutionError` с
-     * кодом `EPTY` и причиной `dependency_missing` (fail-closed, тихого
-     * возврата к неинтерактивной команде нет).
+     * ориентируется на сам вызов. Отказы различимы и приходят из клиента
+     * пула: недоступный адрес (никто не ответил на `/capabilities`) —
+     * `EUNREACHABLE` (повторяется прогревом: под мог ещё подниматься), а
+     * отсутствие `features.pty` у ответившего пула — `EPTY`/
+     * `dependency_missing` (fail-closed, тихого возврата к неинтерактивной
+     * команде нет). Порт в повторах резолвится заново: после `resetPool`
+     * адрес мог смениться.
      */
     async openPty(req: PtyOpenRequest): Promise<PtyHandle> {
-      const port = await resolve();
+      // Fail-fast при ошибке provisioner'а; в повторах — резолв заново.
+      await resolve();
       await waitReady();
-      if (!port.openPty) {
-        throw new ExecutionError({
-          message: 'executor does not support PTY sessions (features.pty)',
-          code: EXECUTION_PTY_UNSUPPORTED_CODE,
-          reason: 'dependency_missing',
-        });
-      }
-      const handle = await withWarmup(key, () => port.openPty!(req), false, resetPool);
+      const handle = await withWarmup(
+        key,
+        async () => {
+          const p = await resolve();
+          if (!p.openPty) {
+            throw new ExecutionError({
+              message: 'executor does not support PTY sessions (features.pty)',
+              code: EXECUTION_PTY_UNSUPPORTED_CODE,
+              reason: 'dependency_missing',
+            });
+          }
+          return p.openPty(req);
+        },
+        false,
+        resetPool,
+      );
       markActive();
       return handle;
     },
     async capabilitySummary(bin: string): Promise<ExecutionCapabilitySummary> {
-      const port = await resolve();
-      if (!port.capabilitySummary) {
-        throw new Error('capabilitySummary не поддерживается портом');
-      }
-      return withWarmup(key, () => port.capabilitySummary!(bin), true, resetPool);
+      // Fail-fast при ошибке provisioner'а; в повторах — резолв заново.
+      await resolve();
+      return withWarmup(
+        key,
+        async () => {
+          const p = await resolve();
+          if (!p.capabilitySummary) {
+            throw new Error('capabilitySummary не поддерживается портом');
+          }
+          return p.capabilitySummary(bin);
+        },
+        true,
+        resetPool,
+      );
     },
   };
 }

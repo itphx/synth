@@ -10,6 +10,9 @@
  * - `pty_unsupported` → `ExecutionError` с кодом `EPTY` и причиной
  *   `dependency_missing` (fail-closed: тихого возврата к неинтерактивной
  *   команде нет);
+ * - **недоступный пул** (ни один адрес не ответил на `/capabilities`) →
+ *   `EUNREACHABLE`/`spawn_failed` — это не «нет PTY»: причина повторяемая
+ *   (холодный под ещё поднимается, прогрев повторит вызов);
  * - обрыв потока → `onExit` **один раз** (`stream_lost`), сессия мёртвая.
  *
  * Транспорт подменён фейком (`fetchImpl`) — сеть в тесте не участвует.
@@ -155,6 +158,29 @@ describe('клиент удалённого порта: PTY (протокол 8,
     const err = await port.openPty!({ cwd: '/workspace', cols: 80, rows: 24 }).catch((e: unknown) => e);    expect(err).toBeInstanceOf(ExecutionError);
     expect((err as ExecutionError).code).toBe('EPTY');
     expect((err as ExecutionError).reason).toBe('dependency_missing');
+  });
+
+  it('все адреса недоступны: openPty → EUNREACHABLE (не EPTY), причина повторяемая', async () => {
+    // Холодный пул: под стартует / тянется образ — `/capabilities` не отвечает.
+    const fetchImpl: ExecutorFetch = async (input) => {
+      if (input.endsWith('/capabilities')) {
+        throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:5100'), {
+          code: 'ECONNREFUSED',
+        });
+      }
+      return new Response(JSON.stringify({ error: { reason: 'not_found', message: 'unknown' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const port = createPort(fetchImpl);
+
+    const err = await port.openPty!({ cwd: '/workspace', cols: 80, rows: 24 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExecutionError);
+    // Недоступность ≠ отсутствие PTY: `EPTY` не повторяется, `EUNREACHABLE` —
+    // повторяется прогревом пула.
+    expect((err as ExecutionError).code).toBe('EUNREACHABLE');
+    expect((err as ExecutionError).reason).toBe('spawn_failed');
   });
 
   it('openPty открывает сессию и читает кадры потока', async () => {
