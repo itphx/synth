@@ -1,6 +1,6 @@
 # ADR-126: Поверхность ввода и скиллы — `/`-команды, `$`-скиллы, `@`-упоминания, `#`-сниппеты, `!`-скрипты и механика скиллов
 
-> **Статус:** ⚠️ Частично — команды, `$`/`#`/`@`, `!`-запуск скриптов (MVP), механика скиллов и подсветка ввода реализованы; остаток — install/подписи/`lock.json` и backend-админка каталога скиллов ([PROP-068](./prop-068-skills-agents-registry.md)); в `!` — `finished`-аудит, `background:false` и `ready`-детект.
+> **Статус:** ⚠️ Частично — команды, `$`/`#`/`@`, `!`-запуск скриптов (MVP), механика скиллов и подсветка ввода реализованы; остаток — install/подписи/`lock.json` и backend-админка каталога скиллов ([PROP-068](./prop-068-skills-agents-registry.md)); в `!` — `ready`-детект (пара `started`/`finished` в журнале исполнений реализована).
 > **Дата:** 2026-11-14 (объединение с механикой скиллов — 2026-11-16; `!` закрыт решением — 2026-11-16).
 > **Источник:** PROP-126 (файл удалён после принятия); механика скиллов перенесена из [ADR-046](./legacy/adr-046-skills-and-slash-commands.md) (заменён).
 > **Связано:** [ADR-115](./adr-115-multimodal-input.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-069](./adr-069-project-instructions-agents-md.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-104](./adr-104-mid-turn-steering.md), [ADR-118](./adr-118-message-stream-v2.md), [ADR-119](./adr-119-context-compaction.md), [PROP-057](./prop-057-loop-engine.md), [PROP-068](./prop-068-skills-agents-registry.md), [ADR-132](./adr-132-ui-terminal.md)
@@ -68,16 +68,15 @@ capability-соответствие. Два документа описывал�
    - **Формат — декларация, а не сам скрипт.** Markdown + tolerant frontmatter
      (`shared/src/skills/frontmatter.ts`): обязательные `description` и `run`,
      опциональные `args` (`false` — аргументы не принимаются, лишние → ошибка),
-     `cwd` (относительно workspace, containment периметра), `background`
-     (по умолчанию `true`; `false` — ждать завершения до `timeout` и вернуть хвост
-     лога в ленту), `timeout` (фон — `0`, ожидание — 120 с), `requires[]`, `env`,
-     `shell`, `ready`. Тело — описание действия для человека и агента; в системный
-     промпт оно **не** уходит.
+     `cwd` (относительно workspace, containment периметра), `timeout` (по умолчанию
+     `0` — без лимита; `0..600000` мс), `requires[]`, `env`, `shell`, `ready`.
+     Поля режима запуска **нет**: все запуски всегда фоновые (см. ниже). Тело —
+     описание действия для человека и агента; в системный промпт оно **не** уходит.
      ```md
      ---
      description: Поднять backend (:5000) и UI (:5002)
      run: ./scripts/dev.sh
-     background: true
+     timeout: 0
      requires: [bash]
      ---
      Локальная отладка без сборки пакетов. Останов — «Процессы» → dev.
@@ -93,9 +92,10 @@ capability-соответствие. Два документа описывал�
      (`ProcessSpawnInput.argv`, [ADR-124](./adr-124-remote-ssh-access.md)): аргументы
      пользователя разбирает лексер в argv, конкатенации в shell нет. `shell: true` —
      `run` как shell-строка, проходит `checkShellCommand` (ADR-029/ADR-136), а аргументы
-     приходят через `SYNTH_ARGS`/`SYNTH_ARG_<n>`, не подстановкой в строку. Ожидание
-     (`background: false`) не создаёт отдельного пути исполнения: тот же процесс, но
-     ответ ждёт `process.exited` и показывает хвост лога.
+     приходят через `SYNTH_ARGS`/`SYNTH_ARG_<n>`, не подстановкой в строку. **Все запуски
+     фоновые** — это режим подсистемы, а не опция декларации: блокировать композер до
+     завершения процесса нельзя (решение владельца). Пара `started`/`finished` пишется в
+     журнал исполнений (ADR-136) с одним `execution_id`.
    - **Права.** `permission.rules.script` (allow/deny/ask + glob по имени, как `skill`);
      `deny` скрывает скрипт; `cwd` — внутри периметра сессии; человек запускает и
      останавливает по `canEditProjectContent` (`VIEWER` только видит список, инвариант 21);
@@ -208,13 +208,13 @@ capability-соответствие. Два документа описывал�
   запустит другой участник (класс риска «терминал/shell», ADR-136).
 - Вне объёма: транспортные команды мессенджеров; `/compact`-кнопка (slash работает);
   install/подписи/`lock.json` и backend-админка каталога скиллов (PROP-068); в `!` —
-  `finished`-аудит `script.run`, `background: false` (ожидание завершения) и `ready`-детект.
+  `ready`-детект (вне объёма).
 
 ## Остаток по командам
 
 | Что | Состояние |
 |---|---|
-| `!` — запуск скрипта проекта | Реализовано (MVP, §5): реестр `.synth/scripts`, `ScriptService` → `ProcessService`, роуты `/sessions/:id/scripts*`, тулы `script_list`/`script_run`, `!` в `process-early.ts`, UI-пикер. Остаток: `finished`-аудит `script.run`, `background: false` (ожидание + хвост лога), `ready`-детект |
+| `!` — запуск скрипта проекта | Реализовано (MVP, §5): реестр `.synth/scripts`, `ScriptService` → `ProcessService`, роуты `/sessions/:id/scripts*`, тулы `script_list`/`script_run`, `!` в `process-early.ts`, UI-пикер. Остаток: `ready`-детект (вне объёма); аудит — пара `started`/`finished` с одним `execution_id` |
 | `/review` | Prompt-команда реализована; жёсткого `available:false` при отсутствии git/diff **нет** — гейт на стороне модели (промпт честно говорит «ревью недоступно») |
 | `/compact` | Slash-команда реализована; отдельной UI-кнопки нет (UI вызывает `/summarize`-маршрут без `mode`) |
 | TUI-команды | `/new`, `/undo`, `/redo`, `/sessions`, `/models`, `/connect` намеренно не перенесены; для шлюзов — отдельный слой |
@@ -264,7 +264,7 @@ capability-соответствие. Два документа описывал�
 - 2026-11-16/17 — `!` закрыт как **запуск объявленного скрипта проекта** (§5) и реализован (MVP):
   реестр `.synth/scripts`, `ScriptService` → `ProcessService` (`argv`, `origin:'user'` не будит
   агента), роуты/тулы/права/`!`-ранний путь, UI-пикер; raw shell через `!` отклонён. Остаток —
-  `finished`-аудит, `background:false`, `ready`.
+  `ready`-детект (вне объёма).
 - 2026-11-16 — builtin-ассеты переехали в `prompts/skills/`: скилл `synth-html-report` поставляется
   каталогом (`assets/report.css`, `assets/logo.svg`, `scripts/check_html.mjs`), `metadata.synth.command`
   объявлен legacy — `/`-имя скилла больше не создаётся, поле ни на что не влияет.

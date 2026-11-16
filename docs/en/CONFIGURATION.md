@@ -1984,7 +1984,6 @@ description: Start the backend (:5000) and the UI (:5002)
 run: ./scripts/dev.sh
 args: false
 cwd: .
-background: true
 timeout: 0
 requires: [bash]
 env: {}
@@ -2000,7 +1999,6 @@ Local debugging without building the packages. Stop it — "Processes" → dev.
 | `run` | The run command: a file path (argv form) or a string (with `shell: true`) | — (required) |
 | `args` | Whether the script accepts arguments (`!name a b`) | `false` |
 | `cwd` | The working directory — a **relative** path inside the session perimeter | the working directory of the session |
-| `background` | Background run (by default — yes) | `true` |
 | `timeout` | The run timeout, ms (0..600000; `0` — no timeout) | `0` (no timeout) |
 | `requires` | The binary requirements of the run (the shell form defaults to `bash`) | — |
 | `env` | Extra environment variables of the run (names — `^[A-Za-z_][A-Za-z0-9_]*$`) | — |
@@ -2012,10 +2010,11 @@ otherwise from the file name without `.md`. The advisory hint about the argument
 `argument-hint` (in the DTO — `argumentHint`). The arguments are parsed by the script lexer
 (without shell substitutions).
 
-⚠️ **Right now every run is a background one.** `background: false` (waiting for the
-completion) is **not implemented yet**: the value is accepted and returned in the DTO, but a run
-always creates a background process — the caller waits for the completion, there is no
-separate execution path (ADR-126 §5). The readiness detection (`ready`) is out of scope too.
+**Every run is always a background one** — this is a mode of the subsystem, not a
+declaration option: a run creates a background process (ADR-113) and the composer is not
+blocked until it completes. The `started`/`finished` pair is written to the command audit
+journal (ADR-136) with a single `execution_id`. The readiness detection (`ready`) is out of
+scope.
 
 ### Tool groups for skills (`skills.toolsets`)
 

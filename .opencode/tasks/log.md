@@ -1761,3 +1761,15 @@
 - «Прикрепить вывод»: `buildTerminalReadBlock` срезает хвостовые пустые/пробельные строки; `tail`/`bytes` — по фактическому телу, внутренние пустые строки сохраняются. Коммит `7a6da324`.
 - PROP-132 принят как **ADR-132** (`docs/arch_decisions/adr-132-ui-terminal.md`, ✅ Реализовано, Источник PROP-132), PROP-файл удалён; индекс/roadmap, ссылки в docs/AGENTS/пакетных AGENTS обновлены; `adr-check` 0 ошибок, `docs-link-check` 0 ошибок. Коммит `feac0fbf`.
 - Комментарии в коде с историческим `PROP-132` (~120 мест) не менялись — это не ссылки; при необходимости отдельная механическая замена.
+
+## 2026-11-17 — ADR-126 §5: `!` — запуск скриптов проекта (реализовано)
+
+- **Решение:** `!name args` — **первый непробельный токен** сообщения; raw shell через `!` отклонён (интерактив — терминал ADR-132, произвольная команда агента — `execute_shell`). ADR-126 закрыт: §5 переписан из «отложено», добавлены альтернативы/последствия/остаток; отдельный PROP не заводился (релиза не было).
+- **Реестр:** `.synth/scripts/<name>.md` — project > `{dataDir}/scripts` > `config.scripts.paths`; trust как у скиллов; tolerant frontmatter `description`+`run` (опц. `args`/`cwd`/`timeout`/`requires`/`env`/`shell`/`ready`; поля `background` нет — запуск всегда фоновый); `shadowed`/`untrusted`, диагностика «исполняемый файл без декларации».
+- **Домен:** `ScriptService` поверх `ProcessService`: `argv` без `sh -c`, `shell:true` — shell-строка + `SYNTH_ARGS`/`SYNTH_ARG_<n>`, containment `cwd`, `splitScriptArguments`. Все запуски фоновые (ADR-113); `origin:'user'` не будит агента (`metadata.origin`, `_notifyParent`); в записи — `metadata.script`.
+- **Контуры:** `GET/POST /sessions/:id/scripts*` (внутри `createSessionRoutes`, граничный guard, `remote:` форвард); тулы `script_list`/`script_run` (capability `shell`, plan — только список); `permission.rules.script` (glob, `deny` скрывает, наследуется саб-агентами; `ask` человеческий запуск не блокирует); аудит `script.run` — пара `started`/`finished` с одним `execution_id` (только метаданные: имя/origin/cwd/exitCode/durationMs, без вывода); `ProcessServiceOptions.onFinished` → `createScriptRunAuditFinisher`.
+- **Ввод:** `ParsedInput.scriptRun` + `handleScriptRun` в `process-early.ts` — без хода LLM, локальный эфемерный ответ (`finishLocalCommand`, `commandName: "!name"`); гейты plan / внешний канал (`principal_id`/`chat_key`) / trust / deny.
+- **UI:** `ScriptAutocomplete` (только вставка), подсветка `text-status-caution`, бейдж «скрипт» и «Запустить снова» в «Процессах», i18n ru/en (+13 движковых ключей).
+- **Проверка:** typecheck 10/10; lint 0 errors; core 11 587, shared 1 161, ui 4 379, backend 987 — зелёные (IDOR-матрица и access-census +3 пути).
+- **Остаток:** `ready`-детект (вне объёма); портал docs.synth.itphx.ru не обновлялся.
+- **Коммиты:** `b525b52e` (docs/ADR/AGENTS), `b33d10e1` (код + тесты).
