@@ -365,6 +365,14 @@ synth/
   builtin `skill-creator` — скилл-инструкция в коде.
 - **Вызов скилла** — только `$name` в тексте сообщения (`engine/commands/dollar-skills.ts`) или тул
   `skill` для модели; `/skills` показывает `$name`, `GET /commands` скиллов не отдаёт.
+- **`!`-запуск скрипта** (ADR-126 §5): реестр деклараций `.synth/scripts/*.md`
+  (`engine/scripts/*` — `discovery`/`parser`/`service`), источники — project > `{dataDir}/scripts` >
+  `config.scripts.paths`, тот же project-trust, что у скиллов и команд. `ScriptService` поверх
+  `ProcessService` (ADR-113) — **единственный** путь исполнения (фоновый процесс, лог в
+  blob-хранилище, события `process.*`); резолвинг `!name args` — в ранней фазе оркестратора
+  (`orchestrator/phases/process-early.ts`, рядом с `/` и `$`) и **без хода LLM**: ответ —
+  локальное эфемерное сообщение. Raw shell через `!` не поддерживается: интерактив — это
+  терминал (PTY, ADR-132), произвольная команда агента — `execute_shell`.
 - **Сниппеты** (`engine/snippets/*`, ADR-126 §4): `#name` — три уровня (`instance`/`project`/`user`),
   приоритет `user > project > instance`; файловый discovery `*.md` + project-trust, раскрытие в приёме
   промпта до очереди (лимиты 15/64 КБ, code-блоки не трогаются). HTTP — `server/routes/snippets.ts`.

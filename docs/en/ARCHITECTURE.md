@@ -332,6 +332,14 @@ skills are **instructions**, they do not register new tools, and the only core t
   the `skill-creator` builtin is a skill instruction in code.
 - **Skill invocation** — only `$name` in the message text (`engine/commands/dollar-skills.ts`) or the
   `skill` tool for the model; `/skills` lists `$name`, `GET /commands` returns no skills.
+- **`!` run of a project script** (ADR-126 §5): the registry of declarations `.synth/scripts/*.md`
+  (`engine/scripts/*` — `discovery`/`parser`/`service`), the sources — project > `{dataDir}/scripts` >
+  `config.scripts.paths`, the same project trust as for skills and commands. `ScriptService` on top of
+  `ProcessService` (ADR-113) is the **only** execution path (a background process, the log in the blob
+  store, the `process.*` events); the resolution of `!name args` happens in the early phase of the
+  orchestrator (`orchestrator/phases/process-early.ts`, next to `/` and `$`) and **without an LLM turn**:
+  the reply is a local ephemeral message. Raw shell through `!` is not supported: interactivity is the
+  terminal (PTY, ADR-132), and an arbitrary command for the agent is `execute_shell`.
 - **Snippets** (`engine/snippets/*`, ADR-126 §4): `#name` — three levels (`instance`/`project`/`user`),
   precedence `user > project > instance`; file discovery `*.md` + project trust, expansion on prompt
   ingress before the queue (limits 15/64 KB, code blocks untouched). HTTP — `server/routes/snippets.ts`.

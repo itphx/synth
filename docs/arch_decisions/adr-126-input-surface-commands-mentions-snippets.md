@@ -1,6 +1,6 @@
 # ADR-126: Поверхность ввода и скиллы — `/`-команды, `$`-скиллы, `@`-упоминания, `#`-сниппеты, `!`-скрипты и механика скиллов
 
-> **Статус:** ⚠️ Частично — команды, `$`/`#`/`@`, механика скиллов и подсветка ввода реализованы; остаток — реализация `!`-запуска скриптов проекта (§5, решение зафиксировано), install/подписи/`lock.json` и backend-админка каталога скиллов ([PROP-068](./prop-068-skills-agents-registry.md)).
+> **Статус:** ⚠️ Частично — команды, `$`/`#`/`@`, `!`-запуск скриптов (MVP), механика скиллов и подсветка ввода реализованы; остаток — install/подписи/`lock.json` и backend-админка каталога скиллов ([PROP-068](./prop-068-skills-agents-registry.md)); в `!` — `finished`-аудит, `background:false` и `ready`-детект.
 > **Дата:** 2026-11-14 (объединение с механикой скиллов — 2026-11-16; `!` закрыт решением — 2026-11-16).
 > **Источник:** PROP-126 (файл удалён после принятия); механика скиллов перенесена из [ADR-046](./legacy/adr-046-skills-and-slash-commands.md) (заменён).
 > **Связано:** [ADR-115](./adr-115-multimodal-input.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-069](./adr-069-project-instructions-agents-md.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-104](./adr-104-mid-turn-steering.md), [ADR-118](./adr-118-message-stream-v2.md), [ADR-119](./adr-119-context-compaction.md), [PROP-057](./prop-057-loop-engine.md), [PROP-068](./prop-068-skills-agents-registry.md), [ADR-132](./adr-132-ui-terminal.md)
@@ -54,8 +54,9 @@ capability-соответствие. Два документа описывал�
    `POST /prompt` до очереди; лимиты 15/64 КБ, без рекурсии, code-блоки не трогаются. Trust — по
    каталогу источника (как у проектных скиллов/команд); недоверенный project-сниппет виден, но не
    раскрывается.
-5. **`!` — запуск объявленного скрипта проекта.** `!name [args]` в обычном сообщении
-   резолвится по реестру скриптов и запускает его **фоновым процессом** (ADR-113).
+5. **`!` — запуск объявленного скрипта проекта.** `!name [args]` — **первый непробельный токен**
+   обычного сообщения (в середине текста `!` — обычный символ); резолвится по реестру скриптов и
+   запускает его **фоновым процессом** (ADR-113).
    Raw shell через `!` не поддерживается: интерактив — это терминал
    ([ADR-132](./adr-132-ui-terminal.md), PTY), произвольная команда агента —
    `execute_shell`. Резолвинг — в core (`orchestrator/phases/process-early.ts`,
@@ -205,15 +206,15 @@ capability-соответствие. Два документа описывал�
   конфликтов стал проще (без скиллов), а `namespacePrefix` фактически не используется. Скрипты —
   исполняемый контент проекта: доверие выдаётся явно, и `EDITOR` может объявить действие, которое
   запустит другой участник (класс риска «терминал/shell», ADR-136).
-- Вне объёма: реализация реестра скриптов (§5) — решение зафиксировано, кода нет; транспортные
-  команды мессенджеров; `/compact`-кнопка (slash работает); install/подписи/`lock.json` и
-  backend-админка каталога скиллов (PROP-068).
+- Вне объёма: транспортные команды мессенджеров; `/compact`-кнопка (slash работает);
+  install/подписи/`lock.json` и backend-админка каталога скиллов (PROP-068); в `!` —
+  `finished`-аудит `script.run`, `background: false` (ожидание завершения) и `ready`-детект.
 
 ## Остаток по командам
 
 | Что | Состояние |
 |---|---|
-| `!` — запуск скрипта проекта | Решение — §5; кода нет (реестр + `ProcessService` + тул + автокомплит) |
+| `!` — запуск скрипта проекта | Реализовано (MVP, §5): реестр `.synth/scripts`, `ScriptService` → `ProcessService`, роуты `/sessions/:id/scripts*`, тулы `script_list`/`script_run`, `!` в `process-early.ts`, UI-пикер. Остаток: `finished`-аудит `script.run`, `background: false` (ожидание + хвост лога), `ready`-детект |
 | `/review` | Prompt-команда реализована; жёсткого `available:false` при отсутствии git/diff **нет** — гейт на стороне модели (промпт честно говорит «ревью недоступно») |
 | `/compact` | Slash-команда реализована; отдельной UI-кнопки нет (UI вызывает `/summarize`-маршрут без `mode`) |
 | TUI-команды | `/new`, `/undo`, `/redo`, `/sessions`, `/models`, `/connect` намеренно не перенесены; для шлюзов — отдельный слой |
@@ -232,12 +233,15 @@ capability-соответствие. Два документа описывал�
 - Команды: `engine/commands/{builtin,service,resolver}.ts`, `orchestrator.ts`, `POST /sessions/:id/summarize`
   (`mode`), `POST /sessions/:id/prompt`. `GET /api/v2/commands` отдаёт только builtin/template/bundle;
   `CommandService.list`/`resolve` скиллов не содержат.
-- `!`-запуск скриптов (§5): **решения в коде пока нет**. Точки, куда ложится реализация: сканер
-  `.synth/scripts` (по образцу `engine/commands/discovery.ts`), `ScriptService` над
-  `ProcessService` (`engine/processes/service.ts`, форма `argv`), лексер
-  `engine/input-surface/parser.ts`, ранний путь `orchestrator/phases/process-early.ts`,
-  роуты в контуре сессии, тулы `script_list`/`script_run` (`engine/tools/`),
-  правило `permission.rules.script`, карточка в `components/panels/ProcessesTab.tsx`.
+- `!`-запуск скриптов (§5) — **реализован**: `engine/scripts/*` (`parser`/`discovery`/`args`/
+  `service`), `engine/tools/scripts.ts` (`script_list`/`script_run`), `server/routes/session-scripts.ts`
+  (монтируется внутрь `createSessionRoutes`), `engine/input-surface/parser.ts` (`ParsedInput.scriptRun`)
+  + `orchestrator/phases/process-early.ts` (`handleScriptRun`), `permission.rules.script`
+  (`resolveScriptRule`), `config.scripts.paths`, `metadata.origin`/`metadata.script` в реестре
+  процессов; UI — `components/chat/ScriptAutocomplete.tsx`, `composerHighlight.ts` (`script`),
+  `components/panels/ProcessesTab.tsx` (бейдж/повтор). Тесты — `engine/scripts/*.test.ts`,
+  `engine/orchestrator-script-run.test.ts`, `server/routes/session-scripts.test.ts`,
+  `packages/backend/src/routes/session-idor-matrix.test.ts`.
 - Скиллы: `engine/skills/*` (формат `SKILL.md`, discovery/приоритет/`shadowed`, trust, каталог
   stable/volatile, scope-гейты, `seed`, `watcher`), `engine/tools/skill.ts`, `engine/commands/dollar-skills.ts`
   (`$`-вызов), `engine/commands/bundles.ts` (`/bundle-name`), `engine/context/*` (каталог в промпте,
@@ -257,9 +261,10 @@ capability-соответствие. Два документа описывал�
 
 ## История
 
-- 2026-11-16 — `!` закрыт как **запуск объявленного скрипта проекта** (§5): реестр `.synth/scripts`,
-  исполнение через `ProcessService`/`ProcessSpawnInput.argv`, терминал — только для интерактива;
-  raw shell через `!` отклонён. Кода пока нет — остаток в §«Остаток по командам».
+- 2026-11-16/17 — `!` закрыт как **запуск объявленного скрипта проекта** (§5) и реализован (MVP):
+  реестр `.synth/scripts`, `ScriptService` → `ProcessService` (`argv`, `origin:'user'` не будит
+  агента), роуты/тулы/права/`!`-ранний путь, UI-пикер; raw shell через `!` отклонён. Остаток —
+  `finished`-аудит, `background:false`, `ready`.
 - 2026-11-16 — builtin-ассеты переехали в `prompts/skills/`: скилл `synth-html-report` поставляется
   каталогом (`assets/report.css`, `assets/logo.svg`, `scripts/check_html.mjs`), `metadata.synth.command`
   объявлен legacy — `/`-имя скилла больше не создаётся, поле ни на что не влияет.

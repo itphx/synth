@@ -1559,6 +1559,24 @@
   ADMIN, user — self, project — OWNER/EDITOR); раскрытие — в `POST /sessions/:id/prompt` до очереди.
   Тесты — `engine/snippets/*.test.ts`, `server/routes/snippets.test.ts`,
   `server/routes/sessions-snippets.routes.test.ts`.
+- `engine/scripts/*` — ADR-126 §5: реестр скриптов проекта. `types`/`parser` — декларация
+  `.synth/scripts/<name>.md` (tolerant frontmatter: `description`/`run` обязательны; `args`,
+  `cwd`, `background`, `timeout`, `requires`, `env`, `shell`, `ready` — опциональны; невалидная
+  декларация запись не создаёт), `discovery` — приоритет project > `{dataDir}/scripts` >
+  `config.scripts.paths`, trust-гейт и `shadowed`/`untrusted` как у команд,
+  `listUndeclaredExecutables` — диагностика «файл без декларации»; `args` — `splitScriptArguments`
+  (кавычки/экранирование, без shell-подстановок); `service` — `ScriptService.list/get/run`
+  поверх `ProcessService` (форма `argv` без `sh -c` для файла, `shell: true` — shell-строка +
+  `SYNTH_ARGS`/`SYNTH_ARG_<n>`; `cwd` — containment периметра; `background: false` — семантика
+  вызывающего, пока не реализовано). Права — `permission.rules.script` (glob по имени, `deny`
+  скрывает); запуск человеком не будит агента (`origin:'user'`). HTTP — `server/routes/session-scripts.ts`
+  (`createSessionScriptRoutes` монтируется **внутрь** `createSessionRoutes`, доступ решает
+  prefix-guard, `remote:`-сессия форвардится); вход `!name args` — `engine/input-surface/parser.ts`
+  (`ParsedInput.scriptRun`, только первый токен) и `orchestrator/phases/process-early.ts`
+  (`handleScriptRun`, без хода LLM, локальный ответ через `finishLocalCommand`; гейты plan /
+  внешний канал / trust / deny). Тулы — `engine/tools/scripts.ts` (`script_list`/`script_run`,
+  capability `shell`, группа `script`). Тесты — `engine/scripts/*.test.ts`,
+  `engine/orchestrator-script-run.test.ts`, `server/routes/session-scripts.test.ts`.
 - `engine/input-surface/*` — ADR-126 §2/§2.1: общий лексер `@`/`$`/`#` (`parser.ts`, code-блоки,
   экранирование, span'ы) и `@user`-разбор (`user-mentions.ts`: участники сессии/проекта →
   `resolveMentionableUsers` → `validateExplicitMentions` → `resolveUserMentionSplit`; первое `@user`
@@ -2591,6 +2609,10 @@
   журналом на исполнителе (до его `prune`). Исполнитель старой версии (протокол < 3, нет
   `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
   (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported`.
+  **`ProcessSpawnInput.origin`** (`'user'|'agent'`, ADR-126 §5) пишется в запись реестра
+  (`metadata.origin`); при `origin:'user'` (`BackgroundRunService._notifyParent`) терминальный
+  переход **не** инжектит USER-сообщение в историю и не ставит автоход — человек инициировал
+  запуск, агента будить не нужно (в отличие от запуска агентом, п. 4 ADR-113).
 - `engine/worktree/*` — ADR-114 (per-session рабочий каталог): `WorktreeService`
   (`engine/worktree/service.ts` — git-операции **только** через порт `ExecutionPort` (ADR-077),
   корень `{workspacesRoot}/.worktrees/<projectId>`, создание/удаление/prune/sweep, детект secondary

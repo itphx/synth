@@ -32,6 +32,7 @@
 | Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (ADR-126: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
 | Терминалы (ADR-132) | `terminal_list`, `terminal_read`, `terminal_snapshot` (чтение; plan разрешён), `terminal_open`, `terminal_write`, `terminal_signal`, `terminal_close`, `terminal_run` (мутации/исполнение; plan запрещён) — capability `terminal`, группа правил `terminal`; параметры, лимиты, обрамление `[CONTENT …]`, режимы запуска (`background`, `kill_on_timeout`), «экран вместо потока» (`terminal_snapshot`), полноэкранные приложения (`TERMINAL_FOREGROUND_APP`, рецепт ввода в диалог TUI), сигналы (`terminal_signal`) и правило «нет `cwd` — нет открытия» — в разделе «Терминалы» ниже |
+| Скрипты проекта (ADR-126 §5) | `script_list` (чтение; plan разрешён), `script_run` (запуск; plan запрещён) — capability `shell`, группа правил `script` (`permission.rules.script`: allow/deny/ask + glob по имени; `deny` **скрывает** скрипт из списка и блокирует запуск). Скрипт — **декларация** (`.synth/scripts/<name>.md`), а не исполняемый файл: интерпретатор и аргументы — данные декларации. Запуск идёт через **тот же** реестр фоновых процессов (ADR-113), а не отдельным путём: ответ — `run_id`/`process_id`/`log_path`, лог читается `process_logs`, остановка — `process_stop`; параметры и ограничения — в разделе «Скрипты проекта» ниже |
 
 **Общий предел вывода** (`tools.outputMaxLines`/`tools.outputMaxBytes`, по умолчанию
 2000 строк / 51 200 байт) применяется в единой точке вызова (`executeToolDef`)
@@ -713,6 +714,38 @@ PTY переносит длинную строку по ширине терми�
 | старый исполнитель (protocol ≤ 7) | нет (тот же 503) |
 
 `terminal_*` на неподдерживающем профиле завершаются понятной ошибкой, а не 500.
+
+## Скрипты проекта (ADR-126 §5)
+
+Скрипт — **декларация** (markdown + frontmatter), а не исполняемый файл: интерпретатор
+и аргументы — данные декларации, сам исполняемый файл остаётся обычным файлом
+репозитория. Реестр: `{project.workspace}/.synth/scripts` (project) > `{dataDir}/scripts`
+(instance) > `config.scripts.paths` (приоритет first-wins); проектные каталоги проходят
+**тот же trust-гейт**, что скиллы и команды (ADR-126 §9) — недоверенный каталог виден в
+реестре (`available: false`), но не запускается. Формат frontmatter — в
+[`docs/CONFIGURATION.md`](./CONFIGURATION.md) §«Скрипты проекта».
+
+| Тул | Параметры | Результат |
+|---|---|---|
+| `script_list` | нет | Реестр скриптов: `name`, `description`, `origin` (`project`/`instance`/`config`), `available` (`false` — каталог недоверенный), подсказка по аргументам (`argument_hint`). Скрипты, запрещённые правилом прав, **не показываются** |
+| `script_run` | `name` (обязателен — из `script_list`), `arguments?` (строка; разбирается лексером скриптов — без shell и без подстановок) | `run_id`, `process_id`, `log_path` — запуск **асинхронный** (фоновый процесс), `metadata.status = 'script_started'` |
+
+- **Единственный путь исполнения — общий реестр фоновых прогонов (ADR-113).**
+  `script_run` не заводит отдельного пути: процесс стартует через
+  `ProcessService`/`ExecutionPort.spawnBackground`, лог пишется в blob-хранилище
+  (`processes/<runId>.log`), события — `process.started`/`process.exited`. Лог читается
+  тулом `process_logs`, остановка — `process_stop`; карточка прогона — во вкладке
+  «Фоновые процессы» (HTTP-контур — [`docs/API_V2.md`](./API_V2.md) §5.39).
+- **Права — `permission.rules.script`** (allow/deny/ask + glob по имени, как у `skill`):
+  `deny` **скрывает** скрипт из списка (и для агента, и для человека) и блокирует запуск;
+  `ask` спрашивает только агента — человек инициировал действие сам, спрашивать его не о чем.
+- **Plan-режим:** `script_list` разрешён, `script_run` **заблокирован**
+  (`isPlanBlockedTool`) — план ничего не исполняет.
+- **Аудит** (`security.commandAudit`, ADR-136): запись `script.run` — только метаданные
+  (имя скрипта, cwd, число аргументов, origin); сами аргументы не пишутся.
+- **`!name args` в сообщении** — тот же запуск, но **без хода LLM**: резолвится в ядре
+  (ранняя фаза оркестратора, рядом с `/`-командами и `$`-скиллами), ответ — локальное
+  эфемерное сообщение. Подробности — [`docs/API_V2.md`](./API_V2.md) §5.5.1.
 
 ## Песочный запуск (`sandbox_exec`, ADR-135)
 

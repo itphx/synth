@@ -715,6 +715,64 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 > **DTO сессии — `context_usage` (ADR-119).** Аддитивное поле занятости контекстного окна: `{tokens: number, limit: number, estimated: boolean}`. `tokens` — оценка объёма контекста **после** учёта компактизации (тот же счётчик `estimatePromptTokens`, что триггерит авто-сжатие — после сжатия индикатор уменьшается сразу), `limit` — окно модели, `estimated: true` — окно модели неизвестно, взята фолбэк-оценка (200 000 токенов). Поле считается **только для одной сессии**: detail `GET /api/v2/sessions/:id` и точечные ответы (`POST /`, `PATCH /:id`, `POST /:id/clear`, `POST /:id/fork`); в **списочных сводках** `GET /api/v2/sessions` его нет (оценка линейна по истории — считать её для каждой сессии списка дорого).
 
+### 5.5.1 Скрипты проекта — `/api/v2/sessions/:id/scripts*` (оба, ADR-126 §5)
+
+Реестр объявленных скриптов проекта и их запуск (`!`-запуск, ADR-126 §5). Скрипт —
+**декларация** (`{project.workspace}/.synth/scripts/<name>.md`), а не исполняемый файл:
+интерпретатор и аргументы — данные декларации. Источники и приоритет — project >
+`{dataDir}/scripts` > `config.scripts.paths`; формат frontmatter и секция конфигурации —
+[docs/CONFIGURATION.md](./CONFIGURATION.md) §«Скрипты проекта».
+
+| Метод | Путь | Сборка | RBAC | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/sessions/:id/scripts` | оба | auth (чтение сессии) | Реестр скриптов: `{scripts: ScriptSummary[]}`; `?diagnostics=1` добавляет `diagnostics` (уровень/код/сообщение/путь — по каждой найденной проблеме: `shadowed`, `untrusted`, `invalid-frontmatter`, `undeclared-executable` и др.). Элемент сводки: `{name, description, origin ('project'\|'instance'\|'config'), argumentHint?, available, unavailableReason? ('trusted' — недоверенный каталог), trusted, background}`. Скрипт из недоверенного каталога **виден** (`available:false`), но не запускается; скрипт, запрещённый `permission.rules.script = deny`, **скрыт** |
+| GET | `/api/v2/sessions/:id/scripts/:name` | оба | auth (чтение сессии) | Декларация скрипта: `{...ScriptSummary, run, shell, cwd?, args, timeout?, requires?, file, body}` — `file` — путь **относительно** источника (workspace проекта / каталог данных / каталог конфигурации), абсолютные пути наружу не отдаются; `body` — тело декларации (описание действия; в системный промпт не уходит). Нет скрипта (или он скрыт правилом прав) → `404 SCRIPT_NOT_FOUND` |
+| POST | `/api/v2/sessions/:id/scripts/:name/run` | оба | auth (**write** сессии) | Запуск скрипта: тело `{arguments?: string}` (строгая схема — неизвестное поле → `400 VALIDATION_ERROR`; строка аргументов ≤ 10 000 символов) → **`202`** `{run_id, process_id, log_path, status:'running'}`. Запуск всегда **фоновый** (ADR-113): лог — `processes/<runId>.log` в blob-хранилище, чтение — `GET /api/v2/processes/:id/logs`, остановка — `POST /api/v2/processes/:id/stop` (§5.39) |
+
+Коды ошибок запуска (`ScriptError` → HTTP — единая таблица в
+`packages/core/src/server/routes/session-scripts.ts`):
+
+| Код | HTTP | Когда |
+|---|---|---|
+| `SCRIPT_NOT_FOUND` | 404 | Скрипт не объявлен (или скрыт правилом прав) |
+| `SCRIPT_UNTRUSTED` | 403 | Каталог источника недоверенный (project-trust гейт, ADR-126 §9) |
+| `SCRIPT_DENIED` | 403 | `permission.rules.script = deny` для этого имени |
+| `SCRIPT_ARGS_NOT_ALLOWED` | 409 | Скрипт не принимает аргументов (`args: false`), а аргументы заданы |
+| `SCRIPT_ARGS_INVALID` | 400 | Аргументы не разобрались (незакрытая кавычка/висячий escape) |
+| `SCRIPT_CWD_OUTSIDE` | 400 | `cwd` декларации вне периметра сессии (или у сессии нет рабочего каталога) |
+| `SCRIPT_BACKGROUND_DISABLED` | 503 | Фоновое исполнение недоступно в текущем режиме исполнения (старый исполнитель) |
+| `VALIDATION_ERROR` | 400 | Некорректное тело: неизвестное поле, `arguments` длиннее 10 000 |
+| `SCRIPTS_UNAVAILABLE` | 404 | Контур скриптов недоступен в этой сборке (нет сервиса — деградированное хранилище) |
+| `SCRIPT_AUDIT_FAILED` | 503 | Не удалось записать аудит исполнения (`security.commandAudit`) — запуск не выполняется |
+
+> **Права и поведение.** Чтение (`GET /scripts`, `GET /scripts/:name`) — доступ к сессии
+> на чтение; **запуск** — уровень записи: в managed участник проекта с ролью `VIEWER`
+> получает `403 FORBIDDEN` (`EDITOR`/`OWNER` — могут; инвариант 21). Проверки доступа —
+> **на границе** (единый prefix-guard сессий), в обработчиках их нет (инвариант 16).
+> Правило `permission.rules.script` (allow/deny/ask + glob по имени, как
+> `permission.rules.skill`): `deny` **блокирует запуск и скрывает** скрипт (и в HTTP, и
+> в тулах `script_list`/`script_run`); `ask` человеческий запуск **не блокирует** — человек
+> сам инициировал действие, `ask` защищает агентские вызовы. Правила сессии
+> (`session.settings.permission`) важнее инстансных.
+>
+> **Гибрид (ADR-042).** Для `remote:`-сессии все три запроса **форвардятся** на удалённый
+> backend — реестр скриптов и права живут в его мире; форвард — до локальной обработки
+> (права и валидация решает удалённая сторона), ответ возвращается как есть.
+>
+> **Аудит (ADR-136).** Запуск пишет запись `script.run` в журнал исполнений команд
+> (`security.commandAudit`) — только метаданные: имя скрипта, cwd, число аргументов,
+> origin. Сами аргументы не пишутся; ошибка записи блокирует запуск.
+
+**`!`-запуск в промпте.** `!name [args]` — **первый непробельный токен** обычного сообщения
+(`POST /api/v2/sessions/:id/prompt`); в середине текста `!` — обычный символ, а токен в
+блоке кода не распознаётся. Резолвится **в ядре** (ранняя фаза оркестратора, рядом с
+`/`-командами и `$`-скиллами), поэтому CLI, гибрид и шлюзы видят одно поведение. Ход LLM
+**не запускается**: ответ — локальное эфемерное сообщение (`metadata.command = true`,
+`commandName: "!name"`, `commandArgs`, `metadata.script` — имя скрипта); реплика пользователя
+помечается `metadata.commandPrompt` и не уходит в историю обычным текстом. В plan-режиме
+запуск запрещён. Из **внешних каналов** (`metadata.principal_id`/`chat_key`/`thread_key`,
+шедулер) `!` **не исполняется** — это действие человека в UI.
+
 ### 5.6 Messages — `/api/v2/messages`
 
 | Метод | Путь | Сборка | RBAC | Назначение |

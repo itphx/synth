@@ -1958,6 +1958,65 @@ Sources of template commands (priority): `{project.workspace}/.synth/commands` >
 
 Snippets (`#name`, ADR-126 §4) are markdown content files: `instance` — `{dataDir}/snippets`, `project` — `{project.workspace}/.synth/snippets`, `user` — `{dataDir}/snippets/users/<userId>`; precedence `user > project > instance`, canonical name beats an alias. Expansion happens on prompt ingress before the queue; limits 15 expansions / 64 KB; code blocks are untouched; snippets of an untrusted project are visible but not expanded. Name — `[a-z][a-z0-9_-]{0,79}`.
 
+### Project scripts (`scripts.*`, ADR-126 §5)
+
+The `scripts` section is the registry of the declared project scripts (the `!` run, ADR-126 §5).
+A script is a **declaration** (markdown + frontmatter), not an executable file: the interpreter
+and the arguments are the data of the declaration; the executable file stays an ordinary
+repository file.
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `scripts.paths` | Extra directories of `.md` declarations (after project/instance) | `[]` |
+
+Sources of declarations (precedence, first-wins): `{project.workspace}/.synth/scripts` >
+`{dataDir}/scripts` > `scripts.paths`. The project declarations live in
+`{project.workspace}/.synth/scripts/<name>.md` and obey **the same trust gate** as the skills
+and the commands (ADR-126 §9): an untrusted project directory is visible in the registry
+(`available: false`) but is not run.
+
+The format of a declaration is markdown + a tolerant YAML frontmatter (the same parser as for
+skills; unknown keys do not break the discovery):
+
+```md
+---
+description: Start the backend (:5000) and the UI (:5002)
+run: ./scripts/dev.sh
+args: false
+cwd: .
+background: true
+timeout: 0
+requires: [bash]
+env: {}
+shell: false
+ready: ""
+---
+Local debugging without building the packages. Stop it — "Processes" → dev.
+```
+
+| Key | Purpose | Default |
+|------|-----------|--------------|
+| `description` | Description of the action (1..1024) — for the human and the agent | — (required) |
+| `run` | The run command: a file path (argv form) or a string (with `shell: true`) | — (required) |
+| `args` | Whether the script accepts arguments (`!name a b`) | `false` |
+| `cwd` | The working directory — a **relative** path inside the session perimeter | the working directory of the session |
+| `background` | Background run (by default — yes) | `true` |
+| `timeout` | The run timeout, ms (0..600000; `0` — no timeout) | `0` (no timeout) |
+| `requires` | The binary requirements of the run (the shell form defaults to `bash`) | — |
+| `env` | Extra environment variables of the run (names — `^[A-Za-z_][A-Za-z0-9_]*$`) | — |
+| `shell` | `run` is executed by a shell (otherwise — the file is run directly) | `false` |
+| `ready` | The readiness marker — **kept, the detection is out of scope** | — |
+
+The script name is `^[a-z0-9]+(-[a-z0-9]+)*$`: it is taken from `name` in the frontmatter,
+otherwise from the file name without `.md`. The advisory hint about the arguments is
+`argument-hint` (in the DTO — `argumentHint`). The arguments are parsed by the script lexer
+(without shell substitutions).
+
+⚠️ **Right now every run is a background one.** `background: false` (waiting for the
+completion) is **not implemented yet**: the value is accepted and returned in the DTO, but a run
+always creates a background process — the caller waits for the completion, there is no
+separate execution path (ADR-126 §5). The readiness detection (`ready`) is out of scope too.
+
 ### Tool groups for skills (`skills.toolsets`)
 
 `skills.toolsets` — a dictionary `name → ToolCapability[]`. It expands a skill's `metadata.synth.requires_toolsets`: the availability check runs over `requires_capabilities ∪ expand(requires_toolsets)`. Example:

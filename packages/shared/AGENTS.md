@@ -37,6 +37,10 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
 - ADR-126: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
   `commands` (`paths`/`bundlesPath`/`conflict`/лимиты); типы команд/бандлов —
   `src/types/commands.ts`, Zod — `schemas` (`skillBundleSchema`, session/project/settings-skills).
+  ADR-126 §5 (скрипты проекта): секция `scripts` (`paths` — доп. каталоги деклараций),
+  DTO реестра — `src/types/scripts.ts` (`ScriptSummary`/`ScriptDetail`/`ScriptDiagnostic`/
+  `ScriptRunResponse`), тело запуска — `scriptRunRequestSchema` (`{arguments?: string}`, strict);
+  ключи движка `script.*` — в `i18n` (совпадают с `system-messages` core и ru-словарём UI).
 - Скоп/уровни (ADR-126 / ADR-071 §2.4): `ProjectSkillSettings`/`ProjectMcpSettings`
   (`enabled` — hard-gate, `defaultOn` — сид новых сессий), `SessionSettings.skillsDefaultOn`/
   `mcpDefaultOn` (снапшот-дефолты), `McpRegistryEntry.enabled` (мастер hard-gate) +

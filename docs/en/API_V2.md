@@ -726,6 +726,66 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **The session task list (ToDo) — `/api/v2/sessions/:id/todos*` (ADR-130).** All operations are atomic under `SessionManager.withLock` (a per-session lock); the ToDo list has no version of its own (there are no conflicts). Access — the **single prefix guard** of the sessions: reading (`GET /:id/todos`) — read access, mutations — write access (the owner/a project member with the modification right/`LEAD`/`ADMIN`); there are no checks in the handler (invariant 16). After every mutation `todos.updated` is published to the session channel with the current list. The order of the list is the order of the array; `order` accepts only existing ids (unknown ids are ignored, the items not named are appended to the end — deleted items are not resurrected). The item text is Markdown, limit 4 KiB (`MARKDOWN_LIMITS.todoContent`); exceeding it — `400 VALIDATION_ERROR`. The logic lives in the domain service `engine/todo/service.ts` — the same one the `todo_*` tools use.
 > **Hybrid (ADR-042/ADR-130).** For a remote session (`remote:<uuid>`) the operations are **forwarded** to the remote backend (the method, the path and the body are preserved; the id is sent without the `remote:` prefix). The session prefix guard skips the `remote:` ids — the access and the validation are decided by the remote side. The response is returned as is (the status + the body), the transport errors — `502 OFFLINE`/`401 UNAUTHORIZED`; the hybrid is not configured — `502 REMOTE_UNAVAILABLE`.
 
+### 5.5.1 Project scripts — `/api/v2/sessions/:id/scripts*` (both, ADR-126 §5)
+
+The registry of the declared project scripts and their run (the `!` run, ADR-126 §5). A script
+is a **declaration** (`{project.workspace}/.synth/scripts/<name>.md`), not an executable file:
+the interpreter and the arguments are the data of the declaration. The sources and the
+precedence — project > `{dataDir}/scripts` > `config.scripts.paths`; the frontmatter format
+and the configuration section — [docs/CONFIGURATION.md](./CONFIGURATION.md) §«Project scripts».
+
+| Method | Path | Build | RBAC | Purpose / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/sessions/:id/scripts` | both | auth (session read) | The script registry: `{scripts: ScriptSummary[]}`; `?diagnostics=1` adds `diagnostics` (level/code/message/path for every problem found: `shadowed`, `untrusted`, `invalid-frontmatter`, `undeclared-executable`, etc.). A summary element: `{name, description, origin ('project'\|'instance'\|'config'), argumentHint?, available, unavailableReason? ('trusted' — an untrusted directory), trusted, background}`. A script from an untrusted directory is **visible** (`available:false`) but is not run; a script forbidden by `permission.rules.script = deny` is **hidden** |
+| GET | `/api/v2/sessions/:id/scripts/:name` | both | auth (session read) | The script declaration: `{...ScriptSummary, run, shell, cwd?, args, timeout?, requires?, file, body}` — `file` is a path **relative** to the source (the project workspace / the data directory / the configuration directory), absolute paths are not returned; `body` is the body of the declaration (the description of the action; it does not go into the system prompt). No script (or it is hidden by a permission rule) → `404 SCRIPT_NOT_FOUND` |
+| POST | `/api/v2/sessions/:id/scripts/:name/run` | both | auth (**session write**) | Run a script: the body `{arguments?: string}` (a strict schema — an unknown field → `400 VALIDATION_ERROR`; the argument string ≤ 10 000 chars) → **`202`** `{run_id, process_id, log_path, status:'running'}`. A run is always a **background** one (ADR-113): the log — `processes/<runId>.log` in the blob store, reading it — `GET /api/v2/processes/:id/logs`, stopping it — `POST /api/v2/processes/:id/stop` (§5.39) |
+
+The error codes of a run (`ScriptError` → HTTP — a single table in
+`packages/core/src/server/routes/session-scripts.ts`):
+
+| Code | HTTP | When |
+|---|---|---|
+| `SCRIPT_NOT_FOUND` | 404 | The script is not declared (or it is hidden by a permission rule) |
+| `SCRIPT_UNTRUSTED` | 403 | The source directory is untrusted (the project-trust gate, ADR-126 §9) |
+| `SCRIPT_DENIED` | 403 | `permission.rules.script = deny` for this name |
+| `SCRIPT_ARGS_NOT_ALLOWED` | 409 | The script accepts no arguments (`args: false`), but arguments were given |
+| `SCRIPT_ARGS_INVALID` | 400 | The arguments did not parse (an unclosed quote / a dangling escape) |
+| `SCRIPT_CWD_OUTSIDE` | 400 | The `cwd` of the declaration is outside the session perimeter (or the session has no working directory) |
+| `SCRIPT_BACKGROUND_DISABLED` | 503 | The background execution is unavailable in the current execution mode (an old executor) |
+| `VALIDATION_ERROR` | 400 | An invalid body: an unknown field, `arguments` longer than 10 000 |
+| `SCRIPTS_UNAVAILABLE` | 404 | The script contour is unavailable in this build (no service — a degraded storage) |
+| `SCRIPT_AUDIT_FAILED` | 503 | The execution audit could not be written (`security.commandAudit`) — the run is not performed |
+
+> **Permissions and behavior.** Reading (`GET /scripts`, `GET /scripts/:name`) — read access to
+> the session; **a run** — the write level: in managed a project member with the `VIEWER` role
+> gets `403 FORBIDDEN` (`EDITOR`/`OWNER` may run; invariant 21). The access checks are **on the
+> boundary** (the single session prefix guard), there are none in the handlers (invariant 16).
+> The rule `permission.rules.script` (allow/deny/ask + a glob by the name, like
+> `permission.rules.skill`): `deny` **blocks the run and hides** the script (both in HTTP and in
+> the `script_list`/`script_run` tools); `ask` does **not** block a human run — the human has
+> initiated the action themselves, `ask` protects the agent calls. The session rules
+> (`session.settings.permission`) are more important than the instance ones.
+>
+> **Hybrid (ADR-042).** For a `remote:` session all three requests are **forwarded** to the
+> remote backend — the script registry and the permissions live in its world; the forwarding is
+> before the local handling (the permissions and the validation are decided by the remote side),
+> the response is returned as is.
+>
+> **Audit (ADR-136).** A run writes a `script.run` record into the command execution journal
+> (`security.commandAudit`) — metadata only: the script name, the cwd, the number of arguments,
+> the origin. The arguments themselves are not written; a failure of the write blocks the run.
+
+**The `!` run in a prompt.** `!name [args]` is the **first non-whitespace token** of an ordinary
+message (`POST /api/v2/sessions/:id/prompt`); in the middle of the text `!` is an ordinary
+character, and a token inside a code block is not recognized. It is resolved **in the core**
+(the early phase of the orchestrator, next to the `/` commands and the `$` skills), so the CLI,
+the hybrid and the gateways see one behavior. The LLM turn does **not** run: the reply is a
+local ephemeral message (`metadata.command = true`, `commandName: "!name"`, `commandArgs`,
+`metadata.script` — the script name); the user utterance is marked `metadata.commandPrompt` and
+does not enter the history as ordinary text. In the plan mode a run is forbidden. From the
+**external channels** (`metadata.principal_id`/`chat_key`/`thread_key`, the scheduler) `!` is
+**not executed** — it is an action of the human in the UI.
+
 ### 5.6 Messages — `/api/v2/messages`
 
 > ⚠️ Outdated (ADR-118 §7): mutations are addressed by message id
