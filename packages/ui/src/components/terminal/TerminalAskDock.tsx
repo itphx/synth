@@ -8,8 +8,11 @@
 // вопроса.
 //
 // Док — **часть панели терминала**, а не карточка поверх: шапки (иконка,
-// заголовок, статус, крестик) и рамки нет — только строка контекста, выбор
-// сессии (если терминал не привязан) и само поле ввода.
+// заголовок, статус, крестик) и рамки нет — только выбор сессии (если терминал
+// не привязан) и само поле ввода. Строка контекста («N строк · каталог ·
+// оболочка») в доке **не показывается**: вывод терминала и так уходит
+// отдельным полем `context`. Кнопки вложений в доке тоже нет — вложения
+// прикрепляются в чате (`showAttachments={false}`).
 //
 // Логика очереди/отправки — **общая с чатом** (`SessionComposer` +
 // `useSessionComposer`, UI-1): второй копии правил очереди в доке нет.
@@ -275,16 +278,6 @@ export function TerminalAskDock({ terminal, lines, onClose }: TerminalAskDockPro
       data-testid="terminal-ask-dock"
       className="terminal-ask-dock mx-2 mt-3 mb-2 shrink-0 max-h-[60%] overflow-y-auto"
     >
-      {/* Автоконтекст: одна строка — сколько строк, каталог, оболочка. */}
-      <p
-        className="mb-1 text-[0.6875rem] text-muted-foreground break-words"
-        data-testid="terminal-ask-context"
-      >
-        {t('terminal.ask.context', { count: lines.length })}
-        {terminal.cwd ? ` · ${t('terminal.ask.cwd')}: ${terminal.cwd}` : ''}
-        {terminal.shell ? ` · ${t('terminal.ask.shell')}: ${terminal.shell}` : ''}
-      </p>
-
       {/* Цель: привязанная сессия или выбор из сессий проекта. */}
       {!hasBinding && (
         <div className="mb-1 flex flex-wrap items-center gap-2">
@@ -313,6 +306,9 @@ export function TerminalAskDock({ terminal, lines, onClose }: TerminalAskDockPro
           controller={composerController}
           agents={agents}
           isStreaming={isStreaming}
+          // В доке кнопка вложений не нужна: вывод терминала уже приложен
+          // полем `context`, файлы прикрепляются в чате.
+          showAttachments={false}
         />
       ) : (
         <p className="text-[0.6875rem] text-muted-foreground" data-testid="terminal-ask-no-session">

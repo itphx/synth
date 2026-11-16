@@ -5,7 +5,8 @@
  * - док — на **общем композере** сессии (`SessionComposer`): поле ввода,
  *   «Стоп», очередь и «В разрыв» приходят оттуда, второй копии очереди нет;
  * - док — **часть панели терминала**: ни шапки (крестик/статус), ни рамки
- *   карточки; только строка контекста, выбор сессии и само поле ввода;
+ *   карточки; ни строки контекста, ни кнопки вложений — только выбор
+ *   сессии и само поле ввода;
  * - отправка уходит обычным сообщением в целевую сессию; вывод терминала
  *   уходит **отдельным** полем `context` (вопрос остаётся чистым, без
  *   `<terminal_context>`);
@@ -276,8 +277,21 @@ describe('TerminalAskDock — общий композер сессии', () => {
     expect(sendButton(container)).toBeTruthy()
     // Кнопка «Отправить» из дока убрана — отправка через композер.
     expect(byTestId(container, 'terminal-ask-send')).toBeNull()
-    // Контекст терминала — одной строкой над композером.
-    expect(byTestId(container, 'terminal-ask-context')?.textContent).toContain('/workspace/demo')
+    // Строки контекста («N строк · каталог · оболочка») в доке нет:
+    // вывод терминала уходит отдельным полем `context`.
+    expect(byTestId(container, 'terminal-ask-context')).toBeNull()
+    expect(container.textContent).not.toContain('/workspace/demo')
+    expect(container.textContent).not.toContain('/bin/bash')
+  })
+
+  it('в доке нет кнопки вложений — вложения прикрепляются в чате', async () => {
+    const { container } = await renderDock()
+
+    // Кнопка «Прикрепить файл» (`AttachmentButton`) и её скрытый input.
+    expect(byTestId(container, 'attachment-input')).toBeNull()
+    expect(
+      container.querySelector(`button[title="${enDict['chat.attachments.attach']}"]`),
+    ).toBeNull()
   })
 
   it('док без шапки и рамки: нет крестика, статуса и кнопки разворота', async () => {

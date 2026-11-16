@@ -61,6 +61,15 @@ interface ChatInputProps {
   onCreateNote: (text: string) => void
   expanded?: boolean
   onToggleExpand?: () => void
+  /**
+   * Показывать кнопку прикрепления вложений (ADR-115).
+   *
+   * По умолчанию — `true` (обычный чат). В доке «Спросить агента» кнопка
+   * не нужна: там прикрепляют не файлы, а вывод терминала (уходит отдельным
+   * полем `context`). Значение `false` убирает кнопку вместе с её скрытым
+   * `<input type="file">`.
+   */
+  showAttachments?: boolean
 }
 
 export interface TagPart {
@@ -306,6 +315,7 @@ export function ChatInput({
   onCreateNote,
   expanded,
   onToggleExpand,
+  showAttachments = true,
 }: ChatInputProps) {
   const { t } = useI18n()
   // Есть грубый указатель (тач): Enter на композере = перенос строки;
@@ -1226,7 +1236,11 @@ export function ChatInput({
           }`}
         >
           <div className="flex shrink-0 items-center gap-0.5">
-            <AttachmentButton sessionId={sessionId} onFiles={attachFiles} />
+            {/* Кнопка вложений — только там, где вложения уместны (чат).
+                В доке терминала её нет (`showAttachments={false}`). */}
+            {showAttachments && (
+              <AttachmentButton sessionId={sessionId} onFiles={attachFiles} />
+            )}
             {/* Кнопка разворота — только там, где разворот есть (чат).
                 В доке терминала разворачивать нечего — кнопки нет. */}
             {onToggleExpand && (

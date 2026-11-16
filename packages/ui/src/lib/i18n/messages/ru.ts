@@ -6152,9 +6152,6 @@ export const dict = {
   // Док «Спросить агента» (PROP-132, Ф4б) — без шапки и карточки.
   'terminal.openSession': 'Перейти в сессию',
   'terminal.ask.action': 'Спросить агента',
-  'terminal.ask.context': '{count, plural, one {# строка} few {# строки} many {# строк}}',
-  'terminal.ask.cwd': 'каталог',
-  'terminal.ask.shell': 'оболочка',
   'terminal.ask.session': 'Сессия',
   'terminal.ask.newSession': 'Новая сессия',
   'terminal.ask.noSession': 'Нет доступной сессии для вопроса',

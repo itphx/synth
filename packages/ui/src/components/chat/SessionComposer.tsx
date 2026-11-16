@@ -40,6 +40,14 @@ export interface SessionComposerProps {
   banner?: ReactNode
   /** Блоки между панелью очереди и полем ввода. */
   children?: ReactNode
+  /**
+   * Показывать кнопку прикрепления вложений (ADR-115).
+   *
+   * По умолчанию — `true` (обычный чат). Док «Спросить агента» в терминале
+   * передаёт `false`: там прикрепляют не файлы, а вывод терминала (уходит
+   * отдельным полем `context`).
+   */
+  showAttachments?: boolean
 }
 
 /** Композер сессии: очередь + ввод. */
@@ -52,6 +60,7 @@ export function SessionComposer({
   showQueue = true,
   banner,
   children,
+  showAttachments = true,
 }: SessionComposerProps) {
   const { pending, queue, sendBlocked } = controller
   // В развёрнутом виде композерной зоны видно только поле ввода.
@@ -95,6 +104,7 @@ export function SessionComposer({
         onCreateNote={controller.handleCreateNote}
         expanded={expanded}
         onToggleExpand={onToggleExpand}
+        showAttachments={showAttachments}
       />
     </>
   )

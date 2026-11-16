@@ -56,7 +56,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 const SESSION = 's1'
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-async function renderInput(): Promise<HTMLElement> {
+async function renderInput(props: { showAttachments?: boolean } = {}): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -72,6 +72,7 @@ async function renderInput(): Promise<HTMLElement> {
           onSend={mocks.onSend}
           onStop={mocks.onStop}
           onCreateNote={mocks.onCreateNote}
+          showAttachments={props.showAttachments}
         />
       </I18nProvider>,
     )
@@ -177,6 +178,27 @@ afterEach(async () => {
 })
 
 describe('ChatInput — вложения (ADR-115)', () => {
+  it('кнопка вложений есть по умолчанию (обычный чат)', async () => {
+    const container = await renderInput()
+
+    expect(container.querySelector('[data-testid="attachment-input"]')).toBeTruthy()
+    expect(
+      container.querySelector(`button[title="${enDict['chat.attachments.attach']}"]`),
+    ).toBeTruthy()
+  })
+
+  it('showAttachments={false} убирает кнопку вложений (док терминала)', async () => {
+    const container = await renderInput({ showAttachments: false })
+
+    expect(container.querySelector('[data-testid="attachment-input"]')).toBeNull()
+    expect(
+      container.querySelector(`button[title="${enDict['chat.attachments.attach']}"]`),
+    ).toBeNull()
+    // Поле ввода и отправка на месте — убран только выбор файла.
+    expect(container.querySelector('textarea')).toBeTruthy()
+    expect(sendButton(container)).toBeTruthy()
+  })
+
   it('выбор файла добавляет чип и отправляет partId, после успеха чипы исчезают', async () => {
     const container = await renderInput()
     const input = container.querySelector('[data-testid="attachment-input"]') as HTMLInputElement
