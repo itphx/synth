@@ -1734,3 +1734,8 @@
 - **Различение:** `terminal_context:true` отделяет контекст от уведомлений `terminal_run` (у них `kind:'terminal'` без маркера — снова «Фоновый процесс»/`execute_shell`). Коммит `5ea88055`.
 - **Онбординг:** служебные user-сообщения (контекст, фон, steer, scheduler, tool-attachment) не считаются «разговорными» — контекст перед первым вопросом не отнимает `[INTERVIEW]`. Коммит `eaca03a6`.
 - **Dev:** `./scripts/dev.sh` поднят (backend :5000, UI :5002, core :4300); проверено: док без рамки/крестика, toggle, нет attach/expand, контекст в теле запроса, невалидный context → 400, interrupt+context → 400. Test не переразворачивался.
+
+## 2026-11-16 — док терминала: без строки контекста и скрепки
+
+- `TerminalAskDock`: убрана строка «N строк · каталог · оболочка»; `SessionComposer`/`ChatInput` получили `showAttachments` (default true), док передаёт `false` — paperclip остаётся только в чате; i18n `terminal.ask.context/cwd/shell` удалены. Коммит `fcedc952`.
+- Проверено на dev: в доке нет строки и скрепки, в чате скрепка есть; 34 теста, typecheck/lint чисто. Test не переразворачивался.
