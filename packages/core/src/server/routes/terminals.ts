@@ -77,6 +77,7 @@ import {
   type TerminalSubscription,
 } from '../../engine/terminal/types.js';
 import { parseSinceParam } from '../../events/bus.js';
+import { EXECUTION_PTY_UNSUPPORTED_CODE, isExecutionError } from '../../execution/ports/index.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
@@ -105,6 +106,14 @@ export interface TerminalRouteMessages {
   terminalsDisabled: (c: Context) => string;
   /** PTY недоступен (503). */
   terminalUnavailable: (c: Context) => string;
+  /**
+   * PTY не поддерживается самой точкой исполнения (503).
+   *
+   * Пользователю нужно объяснить причину, а не показать общее «терминалы
+   * недоступны»: профиль исполнения (браузерный/старый образ без
+   * `features.pty`) не умеет интерактивные сессии.
+   */
+  terminalPtyUnsupported?: (c: Context) => string;
   /** Исчерпан лимит терминалов (409/429/413). */
   terminalLimit: (c: Context) => string;
   /** Терминал ещё работает — перезапуск невозможен (409). */
@@ -127,6 +136,8 @@ const DEFAULT_MESSAGES: TerminalRouteMessages = {
   invalidBody: () => 'Некорректное тело запроса',
   terminalsDisabled: () => 'Терминалы на инстансе выключены',
   terminalUnavailable: () => 'Терминалы недоступны в этой среде',
+  terminalPtyUnsupported: () =>
+    'Терминалы недоступны в этом профиле исполнения: исполнитель не поддерживает PTY (нет features.pty)',
   terminalLimit: () => 'Исчерпан лимит терминалов',
   terminalAlreadyRunning: () => 'Терминал ещё работает — перезапуск невозможен',
   terminalExited: () => 'Терминал завершён — перезапустите его',
@@ -386,7 +397,13 @@ export function createTerminalRoutes(
     }
     if (err instanceof TerminalUnavailableError) {
       return c.json(
-        { error: { code: 'TERMINAL_UNAVAILABLE', message: messages.terminalUnavailable(c) } },
+        {
+          error: {
+            code: 'TERMINAL_UNAVAILABLE',
+            message: messages.terminalUnavailable(c),
+            details: { reason: err.reason },
+          },
+        },
         503,
       );
     }
@@ -394,6 +411,30 @@ export function createTerminalRoutes(
       return c.json(
         { error: { code: 'TERMINAL_INVALID_REQUEST', message: err.message } },
         400,
+      );
+    }
+    // Ошибка порта исполнения: PTY поднимает **исполнитель** (PROP-135), и
+    // профиль может его не уметь — `EPTY` (`dependency_missing`, нет
+    // `features.pty`) или сбой спавна (`ESPAWN`/`spawn_failed`). Это не
+    // внутренняя ошибка ядра: клиенту нужен `503` с причиной, иначе
+    // пользователь видит бессмысленное «Внутренняя ошибка терминала».
+    if (isExecutionError(err)) {
+      const ptyUnsupported = err.code === EXECUTION_PTY_UNSUPPORTED_CODE;
+      return c.json(
+        {
+          error: {
+            code: 'TERMINAL_UNAVAILABLE',
+            message: ptyUnsupported
+              ? (messages.terminalPtyUnsupported ?? messages.terminalUnavailable)(c)
+              : messages.terminalUnavailable(c),
+            details: {
+              reason: ptyUnsupported ? 'pty_unsupported' : 'executor',
+              code: err.code,
+              detail: err.message,
+            },
+          },
+        },
+        503,
       );
     }
     return c.json(

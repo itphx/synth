@@ -209,7 +209,7 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
           className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
           data-testid="terminals-error"
         >
-          {t('terminals.loadError', { error: loadError })}
+          {t('terminals.requestError', { error: loadError })}
         </div>
       )}
 

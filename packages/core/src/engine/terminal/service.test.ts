@@ -173,6 +173,11 @@ class FakeExecutionPort implements ExecutionPort {
   readonly requests: PtyOpenRequest[] = [];
   /** Умеет ли PTY пробу foreground'а (протокол 9; `false` — старый исполнитель). */
   inspect = true;
+  /**
+   * Признак удалённого исполнения (порт исполнителя). Не задан — inline:
+   * дефолтная оболочка берётся из окружения, как у локального пользователя.
+   */
+  isRemote?: boolean;
 
   async execute(_req: ExecRequest): Promise<ExecResult> {
     throw new Error('execute не используется в тестах терминалов');
@@ -652,6 +657,32 @@ describe('Терминальный сервис', () => {
     expect(record.shell).toBe('/bin/fish');
     expect(port.requests[0]?.shell).toBe('/bin/fish');
     service.dispose();
+  });
+
+  it('удалённое исполнение по умолчанию открывает zsh (managed-образ исполнителя)', async () => {
+    // `$SHELL` control plane к точке исполнения отношения не имеет: в slim
+    // образе backend переменная пуста, а исполнитель даёт zsh+OMZ. Явный shell
+    // и настройка `terminal.shell` по-прежнему приоритетнее.
+    port.isRemote = true;
+    const service = createService();
+    try {
+      const record = await service.create(createInput({ shell: undefined }));
+      expect(record.shell).toBe('/bin/zsh');
+      expect(port.requests[0]?.shell).toBe('/bin/zsh');
+
+      // Явный shell клиента — сильнее дефолта удалённого исполнения.
+      const explicit = await service.create(createInput({ shell: '/bin/bash', cwd: '/work-2' }));
+      expect(explicit.shell).toBe('/bin/bash');
+      expect(port.requests[1]?.shell).toBe('/bin/bash');
+
+      // Настройка `terminal.shell` — тоже сильнее.
+      service.setDefaultShell('/usr/bin/fish');
+      const configured = await service.create(createInput({ shell: undefined, cwd: '/work-3' }));
+      expect(configured.shell).toBe('/usr/bin/fish');
+      expect(port.requests[2]?.shell).toBe('/usr/bin/fish');
+    } finally {
+      service.dispose();
+    }
   });
 
   it('пишет ввод в терминал и аудитирует только метаданные', async () => {
@@ -2111,8 +2142,10 @@ describe('Терминальный сервис', () => {
         projectId: 'proj-1',
         sessionId: 'sess-1',
         cwd: '/work',
-        shell: 'bash',
       });
+      // Оболочки в контексте нет: она вычисляется **после** выбора порта
+      // (дефолт зависит от `isRemote`, см. «удалённое исполнение → zsh»).
+      expect(contexts[0]?.shell).toBeUndefined();
       // PTY открыт на **выбранном** порту, а не на инстансном.
       expect(otherPort.requests).toHaveLength(1);
       expect(port.requests).toHaveLength(0);

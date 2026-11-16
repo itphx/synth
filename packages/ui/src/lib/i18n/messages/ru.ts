@@ -6219,7 +6219,7 @@ export const dict = {
   // PROP-132: терминалы проекта во вкладке «Фоновые процессы».
   'terminals.title': 'Терминалы',
   'terminals.count': '{count, plural, one {# терминал} few {# терминала} many {# терминалов}}',
-  'terminals.loadError': 'Не удалось загрузить терминалы: {error}',
+  'terminals.requestError': 'Ошибка терминала: {error}',
   'terminals.empty': 'Терминалов пока нет',
   'terminals.emptyHint': 'Терминал запускает оболочку в рабочем каталоге проекта.',
   'terminals.create': 'Создать терминал',

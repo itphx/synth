@@ -19,12 +19,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { EventBus } from '../../events/bus.js';
-import type {
-  ExecRequest,
-  ExecResult,
-  ExecutionPort,
-  PtyHandle,
-  PtyOpenRequest,
+import {
+  ExecutionError,
+  type ExecRequest,
+  type ExecResult,
+  type ExecutionPort,
+  type PtyHandle,
+  type PtyOpenRequest,
 } from '../../execution/ports/index.js';
 import { TerminalService } from '../../engine/terminal/service.js';
 import { createTerminalRoutes } from './terminals.js';
@@ -173,6 +174,11 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 interface Harness {
   app: Hono;
   service: TerminalService;
+  /**
+   * Эмулятор порта по умолчанию (`options.port` не задан). Если тест подставил
+   * свой порт (PTY не поддерживается/падает), сервис работает с ним, а этот
+   * остаётся пустым — на него не опираться.
+   */
   port: FakeExecutionPort;
   events: { type: string; data: Record<string, unknown> }[];
   /** Создать терминал (owner) — вернуть его id. */
@@ -185,9 +191,12 @@ function userOf(c: Context): string {
 }
 
 /** Собрать приложение с контуром терминалов. */
-function createHarness(options: { limits?: Record<string, number> } = {}): Harness {
+function createHarness(
+  options: { limits?: Record<string, number>; port?: ExecutionPort } = {},
+): Harness {
   const app = new Hono();
-  const port = new FakeExecutionPort();
+  const defaultPort = new FakeExecutionPort();
+  const port = options.port ?? defaultPort;
   const eventBus = new EventBus();
   const events: { type: string; data: Record<string, unknown> }[] = [];
   eventBus.subscribeAll((event) => {
@@ -249,7 +258,7 @@ function createHarness(options: { limits?: Record<string, number> } = {}): Harne
     return id;
   };
 
-  return { app, service, port, events, openTerminal };
+  return { app, service, port: defaultPort, events, openTerminal };
 }
 
 /** Запрос к приложению от имени пользователя. */
@@ -852,6 +861,80 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
       user: 'viewer',
     });
     expect(res.status).toBe(403);
+  });
+
+  it('PTY не поддерживается исполнителем (EPTY) → 503 TERMINAL_UNAVAILABLE, reason pty_unsupported', async () => {
+    // Браузерный профиль/старый образ (protocol ≤ 7): `features.pty` нет,
+    // `openPty` отвечает `EPTY` — сервис пробрасывает ошибку порта, роут
+    // обязан объяснить причину, а не отдавать общий 500.
+    const unsupported: ExecutionPort = {
+      async execute(): Promise<ExecResult> {
+        throw new Error('execute не используется в тестах терминалов');
+      },
+      async openPty(): Promise<PtyHandle> {
+        throw new ExecutionError({
+          message: 'Исполнитель не поддерживает PTY-сессии: нет features.pty',
+          code: 'EPTY',
+          reason: 'dependency_missing',
+        });
+      },
+    };
+    const ptyHarness = createHarness({ port: unsupported });
+    try {
+      const res = await req(ptyHarness.app, '/api/v2/terminals', {
+        method: 'POST',
+        user: 'owner',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: 'proj-1', cols: 80, rows: 24 }),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as {
+        error: {
+          code: string;
+          message: string;
+          details?: { reason?: string; code?: string; detail?: string };
+        };
+      };
+      expect(body.error.code).toBe('TERMINAL_UNAVAILABLE');
+      expect(body.error.details?.reason).toBe('pty_unsupported');
+      expect(body.error.details?.code).toBe('EPTY');
+      expect(body.error.message).toContain('PTY');
+    } finally {
+      ptyHarness.service.dispose();
+    }
+  });
+
+  it('спавн PTY на исполнителе упал (spawn_failed) → 503, reason executor', async () => {
+    const broken: ExecutionPort = {
+      async execute(): Promise<ExecResult> {
+        throw new Error('execute не используется в тестах терминалов');
+      },
+      async openPty(): Promise<PtyHandle> {
+        throw new ExecutionError({
+          message: 'не удалось запустить оболочку на исполнителе',
+          code: 'ESPAWN',
+          reason: 'spawn_failed',
+        });
+      },
+    };
+    const brokenHarness = createHarness({ port: broken });
+    try {
+      const res = await req(brokenHarness.app, '/api/v2/terminals', {
+        method: 'POST',
+        user: 'owner',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: 'proj-1', cols: 80, rows: 24 }),
+      });
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as {
+        error: { code: string; details?: { reason?: string; code?: string } };
+      };
+      expect(body.error.code).toBe('TERMINAL_UNAVAILABLE');
+      expect(body.error.details?.reason).toBe('executor');
+      expect(body.error.details?.code).toBe('ESPAWN');
+    } finally {
+      brokenHarness.service.dispose();
+    }
   });
 
   it('выключатель инстанса закрывает контур (403 TERMINALS_DISABLED)', async () => {

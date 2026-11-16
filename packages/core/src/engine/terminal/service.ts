@@ -216,8 +216,18 @@ function clampDimension(value: number): number {
   return Math.min(MAX_TERMINAL_DIMENSION, Math.max(MIN_TERMINAL_DIMENSION, Math.floor(value)));
 }
 
-/** Оболочка по умолчанию (та же цепочка, что у inline-порта). */
-function defaultShell(): string {
+/**
+ * Оболочка по умолчанию, если её не задал ни клиент, ни настройка
+ * `terminal.shell`.
+ *
+ * `remote` — терминал живёт **на исполнителе**: managed-контракт образов даёт
+ * zsh+OMZ, а `$SHELL` процесса control plane к точке исполнения отношения не
+ * имеет (в image backend переменная пустая — терминал открывался с
+ * `/bin/bash`, которого у исполнителя может не быть). Inline/local — оболочка
+ * пользователя.
+ */
+function defaultShell(remote = false): string {
+  if (remote) return '/bin/zsh';
   return process.env.SHELL?.trim() || '/bin/bash';
 }
 
@@ -568,9 +578,19 @@ export class TerminalService {
     const projectId = requireText(input.projectId, 'projectId');
     const ownerId = requireText(input.ownerId, 'ownerId');
     const cwd = requireText(input.cwd, 'cwd');
-    const shell = input.shell?.trim() || this._defaultShell || defaultShell();
     const cols = clampDimension(input.cols);
     const rows = clampDimension(input.rows);
+
+    // Порт выбирается **до** single-flight и до оболочки: терминал живёт на той
+    // же точке исполнения, что и тулы сессии (профиль/пул по binding'у,
+    // PROP-135), а дефолтная оболочка зависит от того, **где** он открывается
+    // (у исполнителя — zsh из managed-образа, локально — оболочка пользователя).
+    const port = await this._resolvePortFor({
+      projectId,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      cwd,
+    });
+    const shell = input.shell?.trim() || this._defaultShell || defaultShell(port.isRemote === true);
 
     const base = {
       projectId,
@@ -583,10 +603,6 @@ export class TerminalService {
       ...(input.title ? { title: input.title } : {}),
       ...(input.env ? { env: input.env } : {}),
     };
-
-    // Порт выбирается **до** single-flight: терминал живёт на той же точке
-    // исполнения, что и тулы сессии (профиль/пул по binding'у, PROP-135).
-    const port = await this._resolvePortFor(base);
 
     if (input.id !== undefined) {
       const id = normalizeTerminalId(input.id);

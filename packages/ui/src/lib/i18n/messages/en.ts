@@ -5626,7 +5626,7 @@ export const dict = {
   // PROP-132: terminals of the project in the "Background processes" tab.
   'terminals.title': 'Terminals',
   'terminals.count': '{count, plural, one {# terminal} other {# terminals}}',
-  'terminals.loadError': 'Failed to load terminals: {error}',
+  'terminals.requestError': 'Terminal error: {error}',
   'terminals.empty': 'No terminals yet',
   'terminals.emptyHint': 'A terminal runs a shell in the project workspace.',
   'terminals.create': 'Create terminal',
