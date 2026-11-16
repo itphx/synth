@@ -37,6 +37,15 @@ log() {
     echo "[executor-init] $*" >&2
 }
 
+# Flavor без PTY (`browser`: `SYNTH_EXECUTOR_PTY=0`) терминалов не имеет:
+# конфигов zsh/tmux в образе нет (их ставит только `full`), поэтому ни ссылки,
+# ни кэш OMZ не нужны — сразу передаём управление `synth-init` без шума в логе.
+case "${SYNTH_EXECUTOR_PTY:-1}" in
+    0|false)
+        exec /usr/local/bin/synth-init "$@"
+        ;;
+esac
+
 # Создаёт симлинк, только если цели ещё нет: пользовательский файл важнее.
 link_if_absent() {
     target=$1

@@ -52,6 +52,13 @@
 > [ADR-138](./arch_decisions/adr-138-plugin-execution-contour.md).
 > Ниже описано **действующее** поведение до реализации; расхождения с PROP — ожидаемы.
 
+> **Терминалы — не во всех flavor'ах.** PTY объявляют `core`/`dev`/`devops`/`full`
+> (`features.pty`, протокол ≥ 8; по умолчанию zsh + Oh My Zsh + тема `eof`), а
+> `browser`/`browser-full` — **нет** (`SYNTH_EXECUTOR_PTY=0`: браузерный пул —
+> Chromium/Playwright), поэтому `POST /api/v2/terminals*` отвечает
+> `503 TERMINAL_UNAVAILABLE` (reason `pty_unsupported`). Матрица —
+> [docs/TOOLS.md](./TOOLS.md) §«Терминалы» → «Доступность по типу исполнения».
+
 ---
 
 ## 1. Топологии развёртывания

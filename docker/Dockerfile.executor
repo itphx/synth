@@ -17,7 +17,8 @@
 #   browser — flavor `browser` (debian-ветка): hard deps + tier 0 + tier 1 +
 #             tier 3 (Playwright + Chromium) + диаг + ffmpeg (без pnpm);
 #   full    — flavor `full` (debian-ветка): browser + tier 2 + tier 4 + tier 5 +
-#             БД + docker CLI + buildah + pnpm.
+#             БД + docker CLI + buildah + pnpm + терминальный тир (tier 6);
+#             `browser` (и его пул) — без терминалов: `SYNTH_EXECUTOR_PTY=0`.
 #
 # pnpm в образе (flavor'ы `dev`/`devops`/`full`): версия зафиксирована
 # (pnpm@12.14.0 — как `packageManager` в package.json репозитория) и
@@ -167,9 +168,11 @@ ENV PIP_CACHE_DIR=/home/synth/.cache/pip
 # исполнителя: базовый состав образов all-in-one/backend не меняется.
 #
 # Oh My Zsh качается на этапе сборки по закреплённому коммиту (`OMZ_REF`) и
-# НЕ вендорится в репозиторий (9.7 МБ).
+# НЕ вендорится в репозиторий (9.7 МБ); тема `eof` — наоборот, вендорится
+# (`docker/executor/themes/eof.zsh-theme`) и кладётся рядом со скриптом.
 ARG OMZ_REF
-COPY docker/install-lib.sh docker/install-tier-6.sh /tmp/synth-install/
+COPY docker/install-lib.sh docker/install-tier-6.sh \
+     docker/executor/themes/eof.zsh-theme /tmp/synth-install/
 RUN set -eux; \
     OMZ_REF="$OMZ_REF" sh /tmp/synth-install/install-tier-6.sh; \
     rm -rf /tmp/synth-install
@@ -205,6 +208,13 @@ ENV TERM=xterm-256color \
     SHELL=/bin/zsh \
     TMUX_TMPDIR=/tmp \
     ZSH_CACHE_DIR=/home/synth/.cache/oh-my-zsh
+
+# Fail-closed: тема `eof` обязана быть в образе (zshrc ссылается на неё), а
+# синтаксис zshrc должен быть валиден — иначе терминал не стартует, и лучше
+# узнать это на сборке, чем в рантайме.
+RUN set -eux; \
+    test -f /opt/oh-my-zsh/custom/themes/eof.zsh-theme; \
+    zsh -n /etc/synth/zshrc
 
 # Рантайм исполнителя: пакет исполнителя + core (импортируется в рантайме).
 COPY --from=build /out/app /app
@@ -367,6 +377,11 @@ ENV NODE_ENV=production
 ENV SYNTH_EXECUTOR_HOST=0.0.0.0
 ENV SYNTH_EXECUTOR_PORT=5100
 
+# Терминалы в браузерном пуле не предусмотрены: исполнитель не объявляет
+# features.pty (control plane отдаёт 503 TERMINAL_UNAVAILABLE). zsh/OMZ
+# ставит только `full` (он наследует browser).
+ENV SYNTH_EXECUTOR_PTY=0
+
 COPY docker/install-lib.sh docker/install-hard-deps.sh docker/install-tier-0.sh /tmp/synth-install/
 RUN set -eux; \
     sh /tmp/synth-install/install-hard-deps.sh; \
@@ -385,40 +400,13 @@ ENV HOME=/home/synth
 ENV PYTHONUSERBASE=/home/synth/.local
 ENV PIP_CACHE_DIR=/home/synth/.cache/pip
 
-# Терминальный тир (tier 6): zsh + tmux + Oh My Zsh — рабочее место человека
-# в терминале исполнителя (ADR терминалов). Ставится ТОЛЬКО в образ
-# исполнителя: базовый состав образов all-in-one/backend не меняется.
-#
-# В debian-ветке имена пакетов отличаются (ncurses-term/ncurses-base,
-# procps, vim-tiny) — сопоставление живёт в `docker/install-tier-6.sh`.
-# Oh My Zsh качается по закреплённому коммиту (`OMZ_REF`) и НЕ вендорится
-# в репозиторий (9.7 МБ).
-ARG OMZ_REF
-COPY docker/install-lib.sh docker/install-tier-6.sh /tmp/synth-install/
-RUN set -eux; \
-    OMZ_REF="$OMZ_REF" sh /tmp/synth-install/install-tier-6.sh; \
-    rm -rf /tmp/synth-install
-
-# Продуктовые конфиги терминала: zsh (Oh My Zsh) и tmux. В `$HOME`
-# пользователя они попадают симлинками (`~/.zshrc`, `~/.tmux.conf`) — их
-# заводит `synth-executor-init` при старте (при `readOnlyRootFilesystem`
-# `$HOME` — `emptyDir`, и симлинки из сборки том скрывает).
-COPY docker/executor/zshrc /etc/synth/zshrc
-COPY docker/executor/tmux.conf /etc/synth/tmux.conf
-
-# Режим конфигов — 0644 явно: права файла в контексте сборки зависят от umask
-# машины сборки, а читать их должен uid 1000 (non-root, ADR-137 Ф1).
-RUN set -eux; \
-    chmod 0644 /etc/synth/zshrc /etc/synth/tmux.conf
-
-# Окружение терминала (ADR терминалов) — см. пояснения в стадии `core`.
+# Окружение инструментов (терминала в этом flavor'е нет): TERM/COLORTERM — как
+# у клиента (xterm.js), LANG — UTF-8, EDITOR — `vim` (пакет ставит `full`,
+# совместимость `vim.tiny` → `vim` — `docker/install-tier-6.sh`).
 ENV TERM=xterm-256color \
     COLORTERM=truecolor \
     LANG=C.UTF-8 \
-    EDITOR=vim \
-    SHELL=/bin/zsh \
-    TMUX_TMPDIR=/tmp \
-    ZSH_CACHE_DIR=/home/synth/.cache/oh-my-zsh
+    EDITOR=vim
 
 # Каталог браузеров Playwright: общий для всех пользователей образа.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
@@ -492,6 +480,7 @@ CMD ["/bin/sh", "/usr/local/bin/synth-executor-init", "node", "dist/init.js"]
 
 # ------------------------------------------------------------------------------
 # flavor `full` — browser + tier 2 + tier 4 + tier 5 + БД + docker CLI + buildah
+#             + терминальный тир (tier 6)
 # ------------------------------------------------------------------------------
 FROM browser AS full
 
@@ -502,7 +491,11 @@ USER root
 LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="Synth Executor (full)"
-LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-4, tier 5 repo lint, Playwright/Chromium, MCP servers, DB clients, buildah, diag tools, docker CLI, ffmpeg)."
+LABEL org.opencontainers.image.description="Synth executor: runtime исполнителя + toolchain (hard deps, tier 0-6, tier 5 repo lint, Playwright/Chromium, MCP servers, DB clients, buildah, diag tools, docker CLI, ffmpeg)."
+
+# Терминалы: `full` — рабочее место человека, PTY включён. `browser` объявляет
+# `SYNTH_EXECUTOR_PTY=0` (браузерный пул без терминалов) — здесь переопределяем.
+ENV SYNTH_EXECUTOR_PTY=1
 
 # pnpm в образе: `full` умеет собирать монорепо внутри контейнера
 # (`pnpm install --frozen-lockfile && pnpm build && pnpm typecheck &&
@@ -537,6 +530,53 @@ RUN set -eux; \
     git config --system user.name "Synth Agent"; \
     git config --system user.email "agent@synth.local"
 
+# Терминальный тир (tier 6): zsh + tmux + Oh My Zsh + тема `eof` — рабочее
+# место человека в терминале исполнителя (ADR терминалов). `full` —
+# единственный debian-flavor с терминалами: у `browser` PTY нет
+# (`SYNTH_EXECUTOR_PTY=0`), поэтому zsh там не ставится (см. `full` наследует
+# `browser`).
+#
+# В debian-ветке имена пакетов отличаются (ncurses-term/ncurses-base,
+# procps, vim-tiny) — сопоставление живёт в `docker/install-tier-6.sh`.
+# Oh My Zsh качается по закреплённому коммиту (`OMZ_REF`) и НЕ вендорится
+# в репозиторий (9.7 МБ); тема `eof` — вендорится и кладётся рядом со скриптом.
+ARG OMZ_REF
+COPY docker/install-lib.sh docker/install-tier-6.sh \
+     docker/executor/themes/eof.zsh-theme /tmp/synth-install/
+RUN set -eux; \
+    OMZ_REF="$OMZ_REF" sh /tmp/synth-install/install-tier-6.sh; \
+    rm -rf /tmp/synth-install
+
+# Продуктовые конфиги терминала: zsh (Oh My Zsh) и tmux. В `$HOME`
+# пользователя они попадают симлинками (`~/.zshrc`, `~/.tmux.conf`) — их
+# заводит `synth-executor-init` при старте (при `readOnlyRootFilesystem`
+# `$HOME` — `emptyDir`, и симлинки из сборки том скрывает).
+COPY docker/executor/zshrc /etc/synth/zshrc
+COPY docker/executor/tmux.conf /etc/synth/tmux.conf
+
+# Режим конфигов — 0644 явно: права файла в контексте сборки зависят от umask
+# машины сборки, а читать их должен uid 1000 (non-root, ADR-137 Ф1).
+RUN set -eux; \
+    chmod 0644 /etc/synth/zshrc /etc/synth/tmux.conf
+
+# Окружение терминала (ADR терминалов) — см. пояснения в стадии `core`.
+# TERM/COLORTERM/LANG/EDITOR унаследованы от `browser`; здесь — то, что нужно
+# только при наличии zsh/tmux: `SHELL` (zsh по умолчанию, `bash` доступен;
+# `execute_shell` зовёт `bash` явно), `TMUX_TMPDIR` (сокет tmux — не в `$HOME`)
+# и `ZSH_CACHE_DIR` (кэш OMZ — в writable-`$HOME`).
+ENV SHELL=/bin/zsh \
+    TMUX_TMPDIR=/tmp \
+    ZSH_CACHE_DIR=/home/synth/.cache/oh-my-zsh
+
+# Fail-closed: тема `eof` обязана быть в образе (zshrc ссылается на неё), а
+# синтаксис zshrc должен быть валиден — иначе терминал не стартует, и лучше
+# узнать это на сборке, чем в рантайме.
+RUN set -eux; \
+    test -f /opt/oh-my-zsh/custom/themes/eof.zsh-theme; \
+    zsh -n /etc/synth/zshrc
+
+# tier 2 (kubectl/kustomize/tofu/ansible) + tier 5 (repo lint) + БД-клиенты +
+# docker CLI + buildah.
 COPY docker/install-lib.sh docker/install-tier-2.sh docker/install-tier-5.sh \
      docker/install-tier-4.sh \
      docker/install-db-clients.sh docker/install-docker-cli.sh \

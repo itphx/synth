@@ -701,6 +701,19 @@ PTY переносит длинную строку по ширине терми�
   TUI (tmux command-prompt)» выше). Перед вводом в промпт можно нажать Ctrl+U
   (`\u0015`) — очистить строку.
 
+### Доступность по типу исполнения
+
+Терминалы работают там, где у точки исполнения есть PTY.
+
+| Точка исполнения | Терминалы |
+|---|---|
+| inline (standalone/dev) | да (PTY в процессе control plane; оболочка пользователя) |
+| remote `core`/`dev`/`devops`/`full` | да (протокол ≥ 8, `features.pty`; по умолчанию zsh + OMZ + тема `eof`, bash доступен) |
+| remote `browser`/`browser-full` | **нет** (`SYNTH_EXECUTOR_PTY=0`: браузерный пул — Chromium/Playwright; `POST /terminals` → 503 `TERMINAL_UNAVAILABLE`, reason `pty_unsupported`) |
+| старый исполнитель (protocol ≤ 7) | нет (тот же 503) |
+
+`terminal_*` на неподдерживающем профиле завершаются понятной ошибкой, а не 500.
+
 ## Песочный запуск (`sandbox_exec`, ADR-135)
 
 `sandbox_exec` — **разовый** запуск команд в отдельном профиле исполнения: адрес пула выдаёт

@@ -389,6 +389,11 @@ MCP-вызова на текст и нетекстовые блоки и отд�
   (тихого возврата в inline нет). Контур выключается оператором
   (`SYNTH_EXECUTOR_PTY=0`) — тогда все PTY-роуты отвечают `501
   pty_unsupported`.
+- **Браузерный пул — без терминалов по конструкции:** в стадии `browser`
+  (`docker/Dockerfile.executor`) стоит `ENV SYNTH_EXECUTOR_PTY=0`, поэтому
+  исполнитель не объявляет `features.pty`, а control plane отдаёт `503
+  TERMINAL_UNAVAILABLE` (reason `pty_unsupported`). В `full` — `SYNTH_EXECUTOR_PTY=1`
+  (терминалы нужны: это рабочее место человека).
 - **Передний план терминала — `GET /pty/:id/foreground` (протокол 9).**
   Ответ `{ foreground }`: `isShell: true` — в фокусе оболочка (обёрнутую команду
   вставлять можно), `isShell: false` + `command` (`comm`) — работает другая
@@ -577,15 +582,20 @@ MCP-вызова на текст и нетекстовые блоки и отд�
   `shellcheck`, `yamllint`: в `dev` (→ `devops`) и `full`; из tier 2 они
   **убраны** (остались `kubectl`/`kustomize`/`tofu`/`ansible`).
 - **Media-тир** — `ffmpeg`: в `dev`, `browser` и `full`; в `core` его нет.
-- **Терминальный тир (tier 6) — во всех flavor'ах исполнителя** (`core`/`dev`/
-  `devops`/`browser`/`full`): `zsh`, `tmux` (≥ 3.3), `ncurses-term`/`ncurses-base`,
+- **Терминальный тир (tier 6) — только во flavor'ах с терминалами** (`core` →
+  `dev`/`devops`, и `full`): `zsh`, `tmux` (≥ 3.3), `ncurses-term`/`ncurses-base`,
   `procps`, `vim-tiny` и Oh My Zsh в `/opt/oh-my-zsh` (пин — коммит в
   `ARG OMZ_REF`, `docker/Dockerfile.executor`: репозиторий OMZ git-тегов не
-  публикует). Продуктовые конфиги — `/etc/synth/zshrc` и `/etc/synth/tmux.conf`;
-  в `$HOME` они попадают симлинками (`~/.zshrc`, `~/.tmux.conf`), которые заводит
-  `docker/executor-init.sh` при старте (при `readOnlyRootFilesystem` `$HOME` —
-  `emptyDir`, симлинки из сборки том скрывает). Только образ исполнителя:
-  базовый состав образов all-in-one/backend не меняется.
+  публикует). Тема Oh My Zsh — `eof`, **вендорится** в репозиторий
+  (`docker/executor/themes/eof.zsh-theme`, копирует `install-tier-6.sh`;
+  нет файла — ошибка сборки), конфиг — `docker/executor/zshrc` →
+  `/etc/synth/zshrc` (+ `tmux.conf`); в `$HOME` они попадают симлинками
+  (`~/.zshrc`, `~/.tmux.conf`), которые заводит `docker/executor-init.sh` при
+  старте (при `readOnlyRootFilesystem` `$HOME` — `emptyDir`, симлинки из сборки
+  том скрывает). **`browser` тир не ставит:** PTY в браузерном пуле нет
+  (`SYNTH_EXECUTOR_PTY=0`), а zsh приходит в `full` (он наследует `browser`).
+  Только образ исполнителя: базовый состав образов all-in-one/backend не
+  меняется.
 - **Git в образе** — системная конфигурация: `safe.directory` для
   `/var/synth/data/workspaces/*` (иначе git откажется работать в общем томе
   workspace) и идентификация автора коммитов (`user.name`/`user.email`).
