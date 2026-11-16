@@ -17,6 +17,10 @@
  *   запрещает создание (`TerminalDisabledError`);
  * - **idle-reaper**: терминал без подписчиков и без привязки к активной
  *   сессии дольше `idleMs` (по умолчанию 2 дня) закрывается; таймер `unref`;
+ * - **heartbeat пула**: пока терминал жив, control plane раз в 5 минут
+ *   сообщает provisioner'у об активности пула (`ExecutionPort.touch`) — иначе
+ *   пул снимался бы по **своему** idle-таймауру (15 мин по умолчанию, 10 мин
+ *   на test) вместе с живым PTY. Простой терминала heartbeat не продлевает;
  * - **события**: `terminal.created|updated|exited|deleted` в канал сессии
  *   (только у терминалов с привязкой — в шине нет канала проекта, дизайн §4);
  * - **аудит**: `terminal.open`/`terminal.input`/`terminal.close` — только
@@ -107,6 +111,32 @@ import {
 const TERMINAL_SNAPSHOT_INTERVAL_MS = 60_000;
 
 /**
+ * Период heartbeat'а пула для живого терминала, мс (5 минут).
+ *
+ * ## Зачем
+ *
+ * Пул исполнителей живёт по **своему** idle-таймауту (`provisioner.idleTimeoutMs`:
+ * дефолт 15 минут, на test — 10 минут), а терминал — по своему
+ * (`terminal.idleMinutes`, дефолт 2 дня). Терминал без единой команды — это
+ * «пустой» пул с точки зрения provisioner'а: тот снимает его вместе с PTY, и
+ * терминал умирает, хотя пользователь его не закрывал.
+ *
+ * Heartbeat закрывает разрыв: пока терминал жив, control plane раз в 5 минут
+ * сообщает provisioner'у об активности пула (`ExecutionPort.touch`).
+ *
+ * ## Требование к provisioner'у
+ *
+ * `provisioner.idleTimeoutMs` должен быть **больше 5 минут** (дефолт 15 мин,
+ * на test — 10 мин): иначе пул снимается между двумя heartbeat'ами.
+ *
+ * ## Простой терминала
+ *
+ * Heartbeat **не** продлевает простой терминала: `lastActivityAt` он не
+ * трогает — иначе 2-дневный idle не наступил бы никогда.
+ */
+const TERMINAL_KEEPALIVE_MS = 5 * 60_000;
+
+/**
  * `ETX` (Ctrl+C) — прерывание текущей строки/команды в интерактивной оболочке.
  *
  * Кадр ввода с этим байтом означает «пользователь прервал команду»: маркер
@@ -173,6 +203,14 @@ interface TerminalRuntime {
    * последующих решений сервиса и диагностики.
    */
   remoteShell?: boolean;
+  /**
+   * Точка исполнения терминала (порт).
+   *
+   * Нужна для heartbeat'а пула (`ExecutionPort.touch`): пул живёт по своему
+   * idle-таймауту, и пока терминал жив, control plane сообщает provisioner'у
+   * об активности. Порт известен с момента открытия PTY.
+   */
+  port?: ExecutionPort;
 }
 
 /** Подписчик на вывод терминала. */
@@ -412,6 +450,14 @@ export class TerminalService {
   private _autoRestore = true;
   private _reaperTimer: TerminalTimerHandle | null = null;
   private _snapshotTimer: TerminalTimerHandle | null = null;
+  /**
+   * Heartbeat'ы пула по id терминала (PROP-135).
+   *
+   * Живой терминал держит пул «используемым»: раз в 5 минут control plane
+   * сообщает provisioner'у об активности (`ExecutionPort.touch`) — иначе пул
+   * снимается по своему idle-таймауту вместе с PTY.
+   */
+  private readonly _keepalives = new Map<string, TerminalTimerHandle>();
   private _disposed = false;
 
   constructor(options: TerminalServiceOptions) {
@@ -820,6 +866,9 @@ export class TerminalService {
     runtime.tokensUpdatedAt = this._now();
     runtime.handle = handle;
     runtime.outputVersion += 1;
+    // Точка исполнения могла смениться (новый профиль/пул) — heartbeat
+    // должен бить в актуальный порт.
+    runtime.port = port;
 
     record.status = 'running';
     record.restored = false;
@@ -831,6 +880,9 @@ export class TerminalService {
     handle.onExit((info: { exitCode?: number; signal?: string }) => {
       this._finish(runtime, info, runtime.closeReason ?? 'exited', runtime.closeActor);
     });
+
+    // Heartbeat пула перезапускается вместе с терминалом.
+    this._startKeepalive(runtime);
 
     this._publish(runtime, 'terminal.updated', { status: 'running', restored: false });
     this._syncMetrics();
@@ -1358,6 +1410,8 @@ export class TerminalService {
     this._disposed = true;
     this._stopReaper();
     this._stopSnapshotTimer();
+    // Heartbeat'ы пула: терминалы закрываются — держать пул «живым» нечем.
+    for (const id of [...this._keepalives.keys()]) this._stopKeepalive(id);
     this._runs.dispose();
     for (const runtime of [...this._terminals.values()]) {
       // Снимок — состояние **до** закрытия PTY (`runningAtSave: true`).
@@ -1540,10 +1594,13 @@ export class TerminalService {
       });
       const handle = await this._spawnPty(port, record);
       runtime.handle = handle;
+      runtime.port = port;
       handle.onData((chunk: string) => this._onData(runtime, chunk));
       handle.onExit((info: { exitCode?: number; signal?: string }) => {
         this._finish(runtime, info, runtime.closeReason ?? 'exited', runtime.closeActor);
       });
+      // Восстановленный терминал — живой: heartbeat пула ему тоже нужен.
+      this._startKeepalive(runtime);
       return true;
     } catch (err) {
       this._logger.warn(
@@ -1691,6 +1748,7 @@ export class TerminalService {
       outputVersion: 0,
       snapshotVersion: 0,
       pendingSnapshot: null,
+      port,
     };
     this._terminals.set(id, runtime);
     record.status = 'running';
@@ -1699,6 +1757,9 @@ export class TerminalService {
     handle.onExit((info: { exitCode?: number; signal?: string }) => {
       this._finish(runtime, info, runtime.closeReason ?? 'exited', runtime.closeActor);
     });
+
+    // Heartbeat пула: пока терминал жив, пул не должен сниматься по idle.
+    this._startKeepalive(runtime);
 
     this._auditRuntime(runtime, 'terminal.open', {
       ...(params.ownerId !== undefined ? { actorId: params.ownerId } : {}),
@@ -1796,6 +1857,8 @@ export class TerminalService {
     if (runtime.finished) return;
     runtime.finished = true;
     runtime.record.status = 'exited';
+    // Терминал завершён — heartbeat пула больше не нужен (пул можно снимать).
+    this._stopKeepalive(runtime.record.id);
     // Активный запуск команды в этом терминале завершается статусом
     // `closed`: команда не доиграла — терминала больше нет.
     this._runs.closeTerminal(runtime.record.id);
@@ -1879,6 +1942,8 @@ export class TerminalService {
     }
     if (options.remove && this._terminals.get(runtime.record.id) === runtime) {
       this._terminals.delete(runtime.record.id);
+      // Терминал удалён из реестра — heartbeat пула не нужен.
+      this._stopKeepalive(runtime.record.id);
       this._publish(runtime, 'terminal.deleted', { reason: options.reason });
       this._syncMetrics();
     }
@@ -2042,6 +2107,47 @@ export class TerminalService {
     if (this._snapshotTimer === null) return;
     this._timers.clearInterval(this._snapshotTimer);
     this._snapshotTimer = null;
+  }
+
+  /**
+   * Запустить heartbeat пула для живого терминала (PROP-135).
+   *
+   * Пул исполнителей снимается по **своему** idle-таймауту (15 мин по
+   * умолчанию, 10 мин на test), а терминал живёт по своему (`terminal.idleMinutes`,
+   * 2 дня). Без heartbeat'а пул уходил бы под нож вместе с PTY, хотя
+   * пользователь терминал не закрывал.
+   *
+   * Heartbeat **не** трогает `lastActivityAt`: простой терминала считается
+   * по вводу/выводу, иначе 2-дневный idle не наступил бы никогда.
+   *
+   * Порт без `touch` (inline-порт, старый порт) — пул не поддерживает: таймер
+   * не создаётся вовсе.
+   *
+   * Идемпотентно: повторный запуск (рестарт терминала) пересоздаёт таймер.
+   */
+  private _startKeepalive(runtime: TerminalRuntime): void {
+    const id = runtime.record.id;
+    this._stopKeepalive(id);
+    const port = runtime.port;
+    const touch = port?.touch;
+    // Пул не поддерживает heartbeat — таймер не нужен.
+    if (!port || typeof touch !== 'function') return;
+    const timer = this._timers.setInterval(() => {
+      // Best-effort: сбой провайдера не должен ломать терминал.
+      void Promise.resolve()
+        .then(() => touch.call(port))
+        .catch(() => {});
+    }, TERMINAL_KEEPALIVE_MS);
+    timer.unref?.();
+    this._keepalives.set(id, timer);
+  }
+
+  /** Остановить heartbeat пула терминала (терминал завершён/удалён). */
+  private _stopKeepalive(id: string): void {
+    const timer = this._keepalives.get(id);
+    if (timer === undefined) return;
+    this._timers.clearInterval(timer);
+    this._keepalives.delete(id);
   }
 
   /**

@@ -322,6 +322,31 @@ describe('PROP-135: touch — сообщение provisioner\'у об актив
     const result = await port.execute({ command: { kind: 'shell', command: 'echo hi' } });
     expect(result.stdout).toBe('ok');
   });
+
+  it('явный touch() → провайдеру сообщается активность пула (heartbeat)', async () => {
+    const { provider, touch } = touchProvider();
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider,
+      createPort: async () => fakePort(),
+    });
+
+    expect(touch).not.toHaveBeenCalled();
+    await port.touch?.();
+
+    expect(touch).toHaveBeenCalledTimes(1);
+    expect(touch).toHaveBeenCalledWith(KEY);
+  });
+
+  it('явный touch() у провайдера без touch — no-op', async () => {
+    const port = createPooledExecutionPort({
+      key: KEY,
+      provider: { ensure: async () => ({ url: 'http://pool:8080' }) },
+      createPort: async () => fakePort(),
+    });
+
+    await expect(port.touch?.()).resolves.toBeUndefined();
+  });
 });
 
 describe('PROP-135: прогрев пула (connect-ошибки повторяются)', () => {

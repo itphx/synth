@@ -30,7 +30,10 @@
  *   «трогается» (`provider.touch`) **fire-and-forget**: иначе provisioner
  *   снял бы пул по idle, хотя им пользуются. Задержки в горячий путь это не
  *   добавляет, ошибки `touch` игнорируются. `ensure` уже обновляет
- *   `lastUsedAt` — там `touch` не нужен.
+ *   `lastUsedAt` — там `touch` не нужен;
+ * - `touch` — **явный** heartbeat: владелец долгоживущего ресурса (терминал)
+ *   сообщает об активности сам, когда команд в пуле нет (иначе пул сняли бы
+ *   по idle вместе с PTY).
  */
 
 import { ExecutionError, ExecutionFsUnavailableError, EXECUTION_BACKGROUND_UNSUPPORTED_CODE, EXECUTION_PTY_UNSUPPORTED_CODE, isExecutionFsUnavailableError } from './ports/index.js';
@@ -422,6 +425,22 @@ export function createPooledExecutionPort(opts: PooledExecutionPortOptions): Exe
         true,
         resetPool,
       );
+    },
+
+    /**
+     * Сообщить provisioner'у об активности пула (PROP-135).
+     *
+     * Отдельный от `markActive` метод: heartbeat дергает его **сам** —
+     * владелец долгоживущего ресурса (терминальный сервис) шлёт `touch` раз
+     * в несколько минут, пока ресурс жив. Команды при этом не идут, а пул
+     * всё равно должен считаться используемым — иначе provisioner снимет его
+     * по idle вместе с PTY.
+     *
+     * Провайдер без `touch` — no-op (такого пула нет / старая версия).
+     */
+    async touch(): Promise<void> {
+      if (!provider.touch) return;
+      await provider.touch(key);
     },
   };
 }

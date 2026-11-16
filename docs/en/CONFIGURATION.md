@@ -3034,6 +3034,12 @@ SYNTH_TERMINAL_AUDIT_INPUT=false
   (`executionRouter.portFor`: the profile comes from the binding `session → agent → project → default`,
   the pool scope is `projectId`/`sessionId`, and `workspaceSubPath` is derived from the working
   directory; ADR-135) — a terminal lives on the same execution point as the session turn.
+- **Pool heartbeat.** While a terminal is alive, the control plane pings the pool every 5 minutes
+  (`ExecutionPort.touch` → `POST /v1/pools/{key}/touch`): the pool lives by **its own** idle timeout,
+  and without the heartbeat the provisioner would remove it together with the live PTY. Therefore
+  `provisioner.idleTimeoutMs` (`SYNTH_PROVISIONER_IDLE_TIMEOUT_MS`) must be **greater than 5 minutes**
+  (15 minutes by default, 10 minutes on test). The heartbeat does not extend the terminal idle time:
+  `terminal.idleMinutes` is counted by the input/output activity.
 - Metrics — `synth_terminal_sessions{status}` / `synth_terminal_bytes_total{op}`
   ([OBSERVABILITY.md](../OBSERVABILITY.md) (RU)); terminal actions are audited as
   `terminal.open`/`terminal.input`/`terminal.close` in the command-execution log (ADR-136, metadata

@@ -19,7 +19,7 @@
  * Изолированно: fake-порт исполнения (никакого реального PTY), fake-таймеры,
  * без сети и без записи на диск.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import type { BusEvent } from '@itphx/synth-shared';
 import { EventBus } from '../../events/bus.js';
 import type {
@@ -178,6 +178,16 @@ class FakeExecutionPort implements ExecutionPort {
    * дефолтная оболочка берётся из окружения, как у локального пользователя.
    */
   isRemote?: boolean;
+  /**
+   * Heartbeat пула (`ExecutionPort.touch`): сообщение провайдеру об
+   * активности. `undefined` — порт **без** поддержки (inline/старый порт):
+   * терминальный сервис тогда не создаёт heartbeat-таймер.
+   */
+  touch: Mock<() => Promise<void>> | undefined;
+
+  constructor(options: { touch?: boolean } = {}) {
+    this.touch = options.touch === false ? undefined : vi.fn(async () => {});
+  }
 
   async execute(_req: ExecRequest): Promise<ExecResult> {
     throw new Error('execute не используется в тестах терминалов');
@@ -968,6 +978,118 @@ describe('Терминальный сервис', () => {
     expect(exits).toHaveLength(1);
 
     service.dispose();
+  });
+
+  describe('Heartbeat пула (PROP-135)', () => {
+    it('раз в 5 минут сообщает провайдеру об активности пула', async () => {
+      const service = createService();
+      await service.create(createInput());
+
+      // До первого тика пул не трогаем.
+      expect(port.touch).not.toHaveBeenCalled();
+
+      // Тик — раз в 5 минут: за 4 мин 59 с пул ещё не тронут.
+      await vi.advanceTimersByTimeAsync(4 * 60_000 + 59_000);
+      expect(port.touch).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(port.touch).toHaveBeenCalledTimes(2);
+
+      service.dispose();
+    });
+
+    it('heartbeat не продлевает простой терминала (lastActivityAt не меняется)', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      const before = service.get(record.id)?.lastActivityAt;
+      expect(before).toBe(clock);
+
+      clock += 5 * 60_000;
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      expect(port.touch).toHaveBeenCalledTimes(1);
+      // Простой считается по вводу/выводу: heartbeat его не продлевает, иначе
+      // 2-дневный idle не наступил бы никогда.
+      expect(service.get(record.id)?.lastActivityAt).toBe(before);
+
+      service.dispose();
+    });
+
+    it('после закрытия терминала heartbeat больше не идёт', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      await service.close(record.id);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      service.dispose();
+    });
+
+    it('после выхода PTY heartbeat останавливается', async () => {
+      const service = createService();
+      await service.create(createInput());
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      port.lastHandle.emitExit({ exitCode: 0, signal: 'SIGTERM' });
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      service.dispose();
+    });
+
+    it('порт без touch — heartbeat-таймер не создаётся, ошибок нет', async () => {
+      port = new FakeExecutionPort({ touch: false });
+      const service = createService();
+      const record = await service.create(createInput());
+
+      expect(port.touch).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+      // Терминал жив и работает: отсутствие heartbeat ничего не ломает.
+      expect(service.get(record.id)?.status).toBe('running');
+
+      service.dispose();
+    });
+
+    it('restart перезапускает heartbeat', async () => {
+      const service = createService();
+      const record = await service.create(createInput());
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      // Терминал завершился — heartbeat остановлен.
+      port.lastHandle.emitExit({ exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      // Перезапуск поднимает новый PTY — heartbeat должен вернуться.
+      await service.restart(record.id);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(port.touch).toHaveBeenCalledTimes(2);
+
+      service.dispose();
+    });
+
+    it('dispose гасит heartbeat', async () => {
+      const service = createService();
+      await service.create(createInput());
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(port.touch).toHaveBeenCalledTimes(1);
+
+      service.dispose();
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+
+      expect(port.touch).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('запуски команд', () => {

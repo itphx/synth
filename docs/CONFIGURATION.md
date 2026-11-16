@@ -3183,6 +3183,13 @@ SYNTH_TERMINAL_AUDIT_INPUT=false
   (`executionRouter.portFor`: профиль по binding'у `сессия → агент → проект →
   дефолт`, область пула `projectId`/`sessionId`, `workspaceSubPath`; ADR-135) —
   терминал живёт на той же точке исполнения, что и ход сессии.
+- **Heartbeat пула.** Пока терминал жив, control plane раз в 5 мин дергает
+  `touch` пула (`ExecutionPort.touch` → `POST /v1/pools/{key}/touch`): пул живёт
+  по **своему** idle-таймауру, и без heartbeat'а provisioner снимал бы его
+  вместе с живым PTY. Поэтому `provisioner.idleTimeoutMs`
+  (`SYNTH_PROVISIONER_IDLE_TIMEOUT_MS`) должен быть **больше 5 мин** (дефолт
+  15 мин, на test — 10 мин). Heartbeat не продлевает простой терминала:
+  `terminal.idleMinutes` считается по вводу/выводу.
 - Метрики — `synth_terminal_sessions{status}` / `synth_terminal_bytes_total{op}`
   ([OBSERVABILITY.md](./OBSERVABILITY.md)); аудит действий терминала —
   `terminal.open`/`terminal.input`/`terminal.close` в журнале исполнений

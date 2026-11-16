@@ -2590,7 +2590,11 @@
 - `engine/terminal/*` — PROP-132 (интерактивные терминалы): `service.ts`
   (`TerminalService` — реестр живых терминалов **в памяти процесса**, поток
   вывода с батчингом, ввод с капом 16 КиБ и token bucket, лимиты 8/проект и
-  32/инстанс, мастер-выключатель `setEnabled`, idle-reaper; **права не решает**
+  32/инстанс, мастер-выключатель `setEnabled`, idle-reaper, **heartbeat пула**
+  (раз в 5 мин `ExecutionPort.touch` — пока терминал жив, пул не снимается по
+  **своему** idle-таймауру; `provisioner.idleTimeoutMs` должен быть больше
+  5 мин; heartbeat не продлевает простой терминала — `lastActivityAt` он не
+  трогает); **права не решает**
   — это делает роут на границе, инвариант 16), `types.ts` (контракты: запись
   (с `restored`), DTO с `can_write`/`restored`, лимиты, типизированные ошибки с
   машинными кодами `TERMINAL_*` — включая `TERMINAL_ALREADY_RUNNING`, 409 на
