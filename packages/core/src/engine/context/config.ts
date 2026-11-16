@@ -5,26 +5,11 @@ import { fileURLToPath } from 'node:url';
 import type { ContextFileInfo, ContextFileContent, ContextCategory } from '@itphx/synth-shared';
 import { atomicWrite } from '@itphx/synth-shared';
 import { info, warning } from '../../logger.js';
+import { findPackageRoot } from '../package-root.js';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import type { ExecutionEnvironmentKind } from './environment.js';
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
-
-/**
- * Резолвинг корня пакета @itphx/synth-core по package.json — поиск вверх от startDir.
- * Работает одинаково при src-запуске (tsx), dist-запуске и в установленном пакете
- * node_modules/@itphx/synth-core (включая Docker-образ, где копируется только dist/).
- */
-function findPackageRoot(startDir: string): string {
-  let dir = startDir;
-  for (;;) {
-    if (existsSync(join(dir, 'package.json'))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return startDir;
-}
 
 /**
  * Каталог встроенных промптов: {root}/prompts (источник, публикуется в npm через files).

@@ -14,6 +14,7 @@
 export type FileKind =
   | 'text'
   | 'markdown'
+  | 'html'
   | 'code'
   | 'image'
   | 'video'
@@ -22,6 +23,13 @@ export type FileKind =
   | 'binary';
 
 const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdown']);
+
+/**
+ * HTML-документы — отдельное семейство, а не `code`: такой файл рендерится в
+ * UI в sandbox-iframe (скрипты/формы/сеть отключены), а не показывается
+ * исходником и не отдаётся inline через `GET /api/v2/fs/raw`.
+ */
+const HTML_EXTENSIONS = new Set(['.html', '.htm']);
 
 const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.svg',
@@ -42,7 +50,7 @@ const CODE_EXTENSIONS = new Set([
   '.c', '.h', '.cc', '.cpp', '.hpp', '.cs', '.php', '.lua', '.pl', '.pm',
   '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
   '.vue', '.svelte', '.astro',
-  '.html', '.htm', '.css', '.scss', '.sass', '.less',
+  '.css', '.scss', '.sass', '.less',
   '.sql', '.graphql', '.gql', '.proto', '.prisma',
   '.tf', '.tfvars', '.gradle', '.m', '.mm',
   '.ex', '.exs', '.erl', '.hs', '.clj', '.groovy', '.dart', '.r', '.jl', '.nim', '.zig',
@@ -75,6 +83,7 @@ export function fileKind(path: string): FileKind {
   const ext = extensionOf(path);
   if (!ext) return 'binary';
   if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown';
+  if (HTML_EXTENSIONS.has(ext)) return 'html';
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (VIDEO_EXTENSIONS.has(ext)) return 'video';
   if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
@@ -162,6 +171,7 @@ export function fileMime(path: string): string {
  * HTML/CSS/JS и прочий текст/код **в списке нет** — иначе `text/html`
  * исполнился бы в origin приложения (XSS). Правило — на сервере:
  * `GET /api/v2/fs/raw` для kind вне списка отдаёт `application/octet-stream`
- * + `Content-Disposition: attachment`.
+ * + `Content-Disposition: attachment`. HTML-документы (`kind: 'html'`) UI
+ * рендерит сам — в sandbox-iframe, а не через `/fs/raw`.
  */
 export const INLINE_PREVIEW_KINDS: readonly FileKind[] = ['image', 'video', 'audio', 'pdf'];

@@ -105,7 +105,8 @@ describe('SkillService — builtin synth-agents-md (ADR-069 §8.2)', () => {
     expect(builtin!.trusted).toBe(true);
     expect(builtin!.source.scope).toBe('instance');
     expect(builtin!.source.level).toBe('system');
-    expect(builtin!.meta.command).toBe('agents-md');
+    // ADR-126 §7: `/`-имя скилла больше не создаётся — `command` не задаётся.
+    expect(builtin!.meta.command).toBeUndefined();
     expect(builtin!.meta.requiresCapabilities).toEqual(['file_read', 'search', 'file_write']);
 
     const { skills: summaries } = await service.listSummaries();

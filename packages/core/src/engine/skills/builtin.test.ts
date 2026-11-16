@@ -1,20 +1,18 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { ToolCapability } from '@itphx/synth-shared';
 import {
   BUILTIN_SKILLS_DIRNAME,
   BUILTIN_SOURCE,
   SKILL_CREATOR_NAME,
-  SYNTH_AGENTS_MD_COMMAND,
   SYNTH_AGENTS_MD_NAME,
-  SYNTH_PIPELINES_COMMAND,
   SYNTH_PIPELINES_NAME,
-  SYNTH_INSTANCE_COMMAND,
   SYNTH_INSTANCE_NAME,
-  SYNTH_SCHEDULES_COMMAND,
   SYNTH_SCHEDULES_NAME,
-  SYNTH_SERVICE_COMMAND,
   SYNTH_SERVICE_NAME,
   SYNTH_STORAGE_RECOVERY_NAME,
+  SYNTH_HTML_REPORT_NAME,
   buildBuiltinSkills,
   buildSkillCreatorMeta,
   buildSynthAgentsMdMeta,
@@ -46,7 +44,6 @@ describe('builtin skills (ADR-126 §15)', () => {
     expect(meta.userInvocable).toBe(true);
     expect(meta.disableModelInvocation).toBe(false);
     expect(meta.invocation).toBe('both');
-    expect(meta.command).toBe('skill-creator');
     expect(meta.requiresCapabilities).toEqual([
       ToolCapability.FILE_READ,
       ToolCapability.FILE_WRITE,
@@ -95,9 +92,6 @@ describe('builtin skill synth-agents-md (ADR-069 §8.2)', () => {
       ToolCapability.FILE_WRITE,
     ]);
     expect(meta.relatedSkills).toEqual([SKILL_CREATOR_NAME]);
-    // Команда НЕ `init`: имя занято builtin `/init`, иначе была бы коллизия shadowed.
-    expect(meta.command).toBe(SYNTH_AGENTS_MD_COMMAND);
-    expect(meta.command).not.toBe('init');
   });
 
   it('тело описывает создание/обновление/аудит AGENTS.md', () => {
@@ -129,13 +123,11 @@ describe('builtin skills автоматизации: synth-pipelines и synth-sc
     }
   });
 
-  it('команды: pipelines/schedules, capability и мета — как задумано', () => {
+  it('capability и мета pipelines/schedules — как задумано', () => {
     const skills = buildBuiltinSkills();
     const pipelines = skills.find((s) => s.name === SYNTH_PIPELINES_NAME)!;
     const schedules = skills.find((s) => s.name === SYNTH_SCHEDULES_NAME)!;
 
-    expect(pipelines.meta.command).toBe(SYNTH_PIPELINES_COMMAND);
-    expect(pipelines.meta.command).toBe('pipelines');
     expect(pipelines.meta.requiresCapabilities).toEqual([ToolCapability.PIPELINE]);
     expect(pipelines.meta.category).toBe('automation');
     expect(pipelines.meta.scope).toBe('instance');
@@ -146,8 +138,6 @@ describe('builtin skills автоматизации: synth-pipelines и synth-sc
     expect(pipelines.meta.disableModelInvocation).toBe(false);
     expect(pipelines.meta.relatedSkills).toEqual([SYNTH_SCHEDULES_NAME]);
 
-    expect(schedules.meta.command).toBe(SYNTH_SCHEDULES_COMMAND);
-    expect(schedules.meta.command).toBe('schedules');
     expect(schedules.meta.requiresCapabilities).toEqual([ToolCapability.SCHEDULE]);
     expect(schedules.meta.category).toBe('automation');
     expect(schedules.meta.scope).toBe('instance');
@@ -159,17 +149,14 @@ describe('builtin skills автоматизации: synth-pipelines и synth-sc
     expect(schedules.meta.relatedSkills).toEqual([SYNTH_PIPELINES_NAME]);
   });
 
-  it('все команды встроенных скиллов уникальны (иначе resolveCatalog → shadowed)', () => {
-    const commands = buildBuiltinSkills()
-      .map((s) => s.meta.command ?? s.name)
-      .filter((c): c is string => Boolean(c));
-    expect(new Set(commands).size).toBe(commands.length);
-    // Команды не пересекаются с встроенными slash-командами (`/init` и др.).
-    expect(commands).not.toContain('init');
-    expect(commands).not.toContain('help');
-    expect(commands).not.toContain('skills');
-    expect(commands).not.toContain('commands');
-    expect(commands).not.toContain('summary');
+  it('имена встроенных скиллов уникальны и не задают legacy-команду', () => {
+    const skills = buildBuiltinSkills();
+    const names = skills.map((s) => s.name);
+    expect(new Set(names).size).toBe(names.length);
+    // ADR-126 §7: `/`-имя скилла больше не создаётся — `command` не задаём вовсе.
+    for (const skill of skills) {
+      expect(skill.meta.command, skill.name).toBeUndefined();
+    }
   });
 
   it('тела непустые и называют ключевые тулы', () => {
@@ -213,7 +200,7 @@ describe('builtin skills автоматизации: synth-pipelines и synth-sc
  * MCP (вход, реестр MCP, проекты/сессии, сетевая политика, перезапуск).
  */
 describe('builtin skill synth-instance (Workstream A1/A2)', () => {
-  it('присутствует, trusted/system, команда instance, category ops, trigger auto', () => {
+  it('присутствует, trusted/system, category ops, trigger auto', () => {
     const skill = buildBuiltinSkills({ dataDir: '/data' }).find((s) => s.name === SYNTH_INSTANCE_NAME);
     expect(skill).toBeDefined();
     expect(skill!.trusted).toBe(true);
@@ -223,7 +210,6 @@ describe('builtin skill synth-instance (Workstream A1/A2)', () => {
 
     const meta = skill!.meta;
     expect(meta.name).toBe(SYNTH_INSTANCE_NAME);
-    expect(meta.command).toBe(SYNTH_INSTANCE_COMMAND);
     expect(meta.category).toBe('ops');
     expect(meta.trigger).toBe('auto');
     expect(meta.scope).toBe('instance');
@@ -284,10 +270,10 @@ describe('builtin skill synth-instance (Workstream A1/A2)', () => {
 
 /**
  * ADR-134: встроенный скилл `synth-service` — регистрация userspace-сервиса
- * systemd (`/service`). Unit пишется только CLI, агент файлов не трогает.
+ * systemd (`$synth-service`). Unit пишется только CLI, агент файлов не трогает.
  */
 describe('builtin skill synth-service (ADR-134)', () => {
-  it('присутствует, trusted/system, команда service, category instance, trigger manual', () => {
+  it('присутствует, trusted/system, category instance, trigger manual', () => {
     const skill = buildBuiltinSkills({ dataDir: '/data' }).find((s) => s.name === SYNTH_SERVICE_NAME);
     expect(skill).toBeDefined();
     expect(skill!.trusted).toBe(true);
@@ -296,7 +282,6 @@ describe('builtin skill synth-service (ADR-134)', () => {
 
     const meta = skill!.meta;
     expect(meta.name).toBe(SYNTH_SERVICE_NAME);
-    expect(meta.command).toBe(SYNTH_SERVICE_COMMAND);
     expect(meta.category).toBe('instance');
     expect(meta.trigger).toBe('manual');
     expect(meta.scope).toBe('instance');
@@ -336,5 +321,67 @@ describe('builtin skill synth-service (ADR-134)', () => {
 
   it('buildSynthServiceMeta не переиспользует объект между вызовами', () => {
     expect(buildSynthServiceMeta()).not.toBe(buildSynthServiceMeta());
+  });
+});
+
+/**
+ * ADR-126 §15: встроенный скилл `synth-html-report` — единственный builtin,
+ * поставляемый **каталогом** `prompts/skills/<name>` (у него есть supporting-файлы
+ * `assets/`/`scripts/`). `meta`/`body` читаются из `SKILL.md`, `mtimeMs: 0`.
+ */
+describe('builtin skill synth-html-report (ADR-126 §15)', () => {
+  it('присутствует, trusted/system, meta из SKILL.md', () => {
+    const skill = buildBuiltinSkills({ dataDir: '/data' }).find((s) => s.name === SYNTH_HTML_REPORT_NAME);
+    expect(skill).toBeDefined();
+    expect(skill!.trusted).toBe(true);
+    expect(skill!.mtimeMs).toBe(0);
+    expect(skill!.source).toBe(BUILTIN_SOURCE);
+    expect(skill!.source.level).toBe('system');
+
+    const meta = skill!.meta;
+    expect(meta.name).toBe(SYNTH_HTML_REPORT_NAME);
+    expect(meta.description.length).toBeGreaterThan(0);
+    expect(meta.description).toContain('HTML');
+    expect(meta.userInvocable).toBe(true);
+    expect(meta.disableModelInvocation).toBe(false);
+    expect(meta.invocation).toBe('both');
+    expect(meta.category).toBe('docs');
+    expect(meta.trigger).toBe('auto');
+    expect(meta.mode).toBe('any');
+    // ADR-126 §7: `/`-имя больше не создаётся — `command` не задаётся.
+    expect(meta.command).toBeUndefined();
+    expect(meta.requiresCapabilities).toEqual(
+      expect.arrayContaining([ToolCapability.FILE_READ, ToolCapability.FILE_WRITE]),
+    );
+    expect(meta.tags).toEqual(expect.arrayContaining(['report', 'html', 'analysis']));
+  });
+
+  it('dir/file указывают на реальный каталог prompts/skills/synth-html-report', () => {
+    const skill = buildBuiltinSkills().find((s) => s.name === SYNTH_HTML_REPORT_NAME)!;
+    expect(skill.dir).toContain(`prompts/skills/${SYNTH_HTML_REPORT_NAME}`);
+    expect(skill.dir.endsWith(SYNTH_HTML_REPORT_NAME)).toBe(true);
+    expect(skill.file).toBe(join(skill.dir, 'SKILL.md'));
+    expect(existsSync(skill.file)).toBe(true);
+    // Каталожный builtin не притворяется синтетическим `.builtin/<name>`.
+    expect(skill.dir).not.toContain(BUILTIN_SKILLS_DIRNAME);
+  });
+
+  it('body содержит вызов, шапку, язык и путь отчёта', () => {
+    const skill = buildBuiltinSkills().find((s) => s.name === SYNTH_HTML_REPORT_NAME)!;
+    for (const marker of [
+      '$synth-html-report',
+      'tmp/reports',
+      'https://synth.itphx.ru/',
+      'Синтез человека и ИИ',
+      '## Шапка отчёта',
+      '## Язык отчёта',
+      '## Ассеты скилла',
+      '## Тёмная тема и печать',
+      '## Превью в UI',
+      'scripts/check_html.mjs',
+      'rel="noopener noreferrer"',
+    ]) {
+      expect(skill.body, marker).toContain(marker);
+    }
   });
 });

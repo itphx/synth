@@ -54,6 +54,7 @@ describe('/api/v2/skills (ADR-126 §7)', () => {
       'synth-schedules',
       'synth-instance',
       'synth-service',
+      'synth-html-report',
     ]);
     expect(body.skills[0].trusted).toBe(true);
     expect(body.skills[0].scope).toBe('instance');
@@ -254,6 +255,7 @@ describe('/api/v2/skills/:name — невалидные и отсутствую�
       'synth-schedules',
       'synth-instance',
       'synth-service',
+      'synth-html-report',
     ]);
     expect(await skillService.instanceExists('Bad_Name')).toBe(false);
   });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fileKind } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
+import { buildSandboxedHtmlDocument } from '@/lib/htmlPreview'
 import { useI18n } from '@/lib/i18n'
 import { resolveRelativePath, splitFilePath } from '@/lib/markdown/relativeAssets'
 import { useUIStore } from '@/stores/useUIStore'
@@ -44,7 +45,7 @@ function DownloadLink({ projectId, filePath }: { projectId?: string; filePath?: 
     <a
       href={synthApi.downloadFile(projectId, filePath)}
       download={filePath.split('/').pop()}
-      className="rounded border border-border px-3 py-1 text-xs text-foreground hover:bg-muted"
+      className="inline-flex items-center rounded border border-border px-3 py-1 text-xs text-foreground hover:bg-muted pointer-coarse:min-h-10"
     >
       {t('file.download')}
     </a>
@@ -63,6 +64,8 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
   const [previewFailed, setPreviewFailed] = useState(false)
   // Markdown: по умолчанию рендер, «Исходник» — `<pre>`.
   const [markdownSource, setMarkdownSource] = useState(false)
+  // HTML: по умолчанию sandbox-предпросмотр, «Исходник» — `<pre>`.
+  const [htmlSource, setHtmlSource] = useState(false)
 
   const openTab = useUIStore((s) => s.openTab)
 
@@ -73,10 +76,17 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
   // Медиа отдаётся inline через `/fs/raw`; текст/код/markdown/неизвестное — чтением.
   const isMedia = kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf'
   const isMarkdown = kind === 'markdown'
+  const isHtml = kind === 'html'
 
   // Относительные `src`/`href` внутри `.md` резолвятся от каталога документа
   // в workspace (ведущий `/` — корень workspace, выход выше корня — `null`).
   const assetDir = useMemo(() => (filePath ? splitFilePath(filePath).dir : ''), [filePath])
+  // Документ для `srcDoc` собирается один раз на содержимое: файл читается до
+  // 5 МиБ, конкатенацию на каждый рендер не делаем.
+  const sandboxedHtml = useMemo(
+    () => (content === null ? '' : buildSandboxedHtmlDocument(content)),
+    [content],
+  )
   const resolveAsset = useCallback(
     (target: string): string | null => {
       if (!projectId) return null
@@ -117,6 +127,7 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
     setTooLarge(null)
     setPreviewFailed(false)
     setMarkdownSource(false)
+    setHtmlSource(false)
     setError(null)
 
     if (!projectId || !filePath) {
@@ -310,6 +321,69 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
           <Icon name="file-3" className="size-12" />
           <span className="text-sm">{t('file.binaryFile', { size: String(binarySize) })}</span>
           <DownloadLink projectId={projectId} filePath={filePath} />
+        </div>
+      </div>
+    )
+  }
+
+  // HTML-документ проекта: изоляция — атрибут `sandbox` (граница), meta-CSP —
+  // второй слой. `allow-scripts`/`allow-same-origin`/`allow-forms` не выдаём:
+  // отчёт агента не исполняет код и не ходит в сеть от нашего origin. Режим
+  // «Исходник» — прежний `<pre>`, «Скачать» — для печати и офлайна.
+  if (isHtml && content !== null) {
+    return (
+      <div
+        className="flex flex-1 h-full w-full min-w-0 flex-col overflow-hidden bg-background"
+        data-testid="file-viewer-root"
+      >
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-1">
+          <button
+            type="button"
+            onClick={() => setHtmlSource(false)}
+            aria-pressed={!htmlSource}
+            className={
+              htmlSource
+                ? 'rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted pointer-coarse:min-h-10'
+                : 'rounded bg-muted px-2 py-1 text-xs text-foreground pointer-coarse:min-h-10'
+            }
+          >
+            {t('file.markdownPreview')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setHtmlSource(true)}
+            aria-pressed={htmlSource}
+            className={
+              htmlSource
+                ? 'rounded bg-muted px-2 py-1 text-xs text-foreground pointer-coarse:min-h-10'
+                : 'rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted pointer-coarse:min-h-10'
+            }
+          >
+            {t('file.markdownSource')}
+          </button>
+          <span className="ml-auto px-2 text-xs text-muted-foreground">
+            {t('file.htmlSandboxed')}
+          </span>
+          <DownloadLink projectId={projectId} filePath={filePath} />
+        </div>
+        {/* У iframe своего внешнего скролла нет — прокручивается сам документ. */}
+        <div className="flex-1 min-h-0 w-full">
+          {htmlSource ? (
+            <div className="h-full w-full overflow-auto">
+              <pre className="p-4 min-w-0 w-full max-w-full text-sm font-mono text-foreground whitespace-pre-wrap break-words min-h-full">
+                {content}
+              </pre>
+            </div>
+          ) : (
+            <iframe
+              title={fileName}
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
+              referrerPolicy="no-referrer"
+              srcDoc={sandboxedHtml}
+              className="h-full w-full border-0 bg-white"
+              data-testid="html-preview"
+            />
+          )}
         </div>
       </div>
     )

@@ -18,7 +18,7 @@
 2. **Строгий read-only + ADMIN-only.** В деградации: мутирующие методы (`POST/PUT/PATCH/DELETE`) → `503 STORAGE_DEGRADED_READONLY`, не-администраторы → `503 STORAGE_DEGRADED`; разрешены чтение, диагностика и ремонтные операции. Единый guard — `createStorageDegradedGuard` (`@itphx/synth-core/server/storage-degraded.js`), переиспользуется standalone-core и managed-backend (без дублей).
 3. **Диагностика.** `/health` (и `/api/v2/health`) отдаёт `status: 'degraded'` + блок `storage.{backend,fallbackDir,reason,since}` (аддитивно к `{status,version,time}`); `GET /api/v2/storage/status` пробит исходный backend и сообщает `recovery.{connection,restartRequired:true,autoRecovery:false}`; `synth doctor` показывает `db-connection`/`db-schema` (файловые проверки — `неприменимо`).
 4. **Авто-возврата нет.** `StorageContext` замкнут в deps (живая подмена backend'а рискованна — split-brain/гонки): возврат — после устранения причины и **рестарта** сервиса.
-5. **Скилл `synth-storage-recovery`** — встроенный (`builtin.ts`) read-only рунбук (`/storage-recovery`): диагностика, классификация причины (сеть/креды/схема/ёмкость), лечение, что доступно в деградации, возврат в норму.
+5. **Скилл `synth-storage-recovery`** — встроенный (`builtin.ts`) read-only рунбук (`$synth-storage-recovery`): диагностика, классификация причины (сеть/креды/схема/ёмкость), лечение, что доступно в деградации, возврат в норму.
 6. **Данные фоллбека не переносятся** в БД: он диагностический (созданные в нём записи остаются в отдельном каталоге).
 
 ### Матрица ошибок (`fail-closed` vs деградация)

@@ -1,12 +1,20 @@
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { SkillMeta } from '@itphx/synth-shared';
+import { warning } from '../../logger.js';
+import { findPackageRoot } from '../package-root.js';
+import { parseSkillFile } from './parser.js';
 import type { DiscoveredSkill, SkillSource } from './types.js';
 
+const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
+
 /**
- * ADR-126 §15: встроенные (builtin) скиллы — объявлены в коде (TS-константа),
- * без нового asset-каталога (ADR-038). Не сидятся на ФС: `dir` — синтетический
- * маркер, читать его не нужно (supporting-файлов нет).
+ * ADR-126 §15: встроенные (builtin) скиллы — объявлены в коде (TS-константа).
+ * Скилл, которому нужны supporting-файлы (`assets/`, `scripts/`), поставляется
+ * каталогом `prompts/skills/<name>` (сборка копирует его в `dist/prompts`, npm
+ * публикует через `files`); у остальных `dir` — синтетический маркер `.builtin`.
  */
 export const BUILTIN_SKILLS_DIRNAME = '.builtin';
 
@@ -15,14 +23,9 @@ export const SKILL_CREATOR_NAME = 'skill-creator';
 
 /**
  * ADR-069 §8.2: имя встроенного скилла генерации/аудита проектных инструкций.
- * Slash-команда — `agents-md`, а не `init`: имя `init` занято встроенной
- * командой `/init` (ADR-069 §8.1), а `resolveCatalog` при коллизии эмитит
- * диагностику `shadowed` и скилл был бы недостижим.
+ * Вызывается `$synth-agents-md`; `/`-имя не создаётся (ADR-126 §7).
  */
 export const SYNTH_AGENTS_MD_NAME = 'synth-agents-md';
-
-/** Slash-команда скилла `synth-agents-md` (без конфликта с builtin `/init`). */
-export const SYNTH_AGENTS_MD_COMMAND = 'agents-md';
 
 /**
  * ADR-098 (W5): имя встроенного скилла-руководства по восстановлению
@@ -31,50 +34,38 @@ export const SYNTH_AGENTS_MD_COMMAND = 'agents-md';
  */
 export const SYNTH_STORAGE_RECOVERY_NAME = 'synth-storage-recovery';
 
-/** Slash-команда скилла `synth-storage-recovery`. */
-export const SYNTH_STORAGE_RECOVERY_COMMAND = 'storage-recovery';
-
 /**
  * ADR-101: имя встроенного скилла-руководства по пайплайнам проекта
- * (спецификация → публикация версии → прогон → журнал). Команда `pipelines`
- * не занята ни встроенной командой (`/help`, `/skills`, `/commands`,
- * `/summary`, `/init`), ни другим скиллом — иначе `resolveCatalog` эмитил бы
- * диагностику `shadowed` и скилл был бы недостижим.
+ * (спецификация → публикация версии → прогон → журнал).
  */
 export const SYNTH_PIPELINES_NAME = 'synth-pipelines';
 
-/** Slash-команда скилла `synth-pipelines`. */
-export const SYNTH_PIPELINES_COMMAND = 'pipelines';
-
 /**
  * ADR-051: имя встроенного скилла-руководства по расписаниям планировщика
- * (cron/интервал → цель). Команда `schedules` свободна — коллизий с
- * встроенными командами и другими скиллами нет.
+ * (cron/интервал → цель).
  */
 export const SYNTH_SCHEDULES_NAME = 'synth-schedules';
-
-/** Slash-команда скилла `synth-schedules`. */
-export const SYNTH_SCHEDULES_COMMAND = 'schedules';
 
 /**
  * Workstream A1/A2: имя встроенного скилла-руководства по инстансу и MCP
  * (вход/ключи, реестр MCP, проекты/сессии, сетевая политика, перезапуск).
- * Команда `instance` не занята.
  */
 export const SYNTH_INSTANCE_NAME = 'synth-instance';
 
-/** Slash-команда скилла `synth-instance`. */
-export const SYNTH_INSTANCE_COMMAND = 'instance';
-
 /**
  * ADR-134: имя встроенного скилла регистрации userspace-сервиса systemd
- * (`synth service install`). Команда `service` не занята ни встроенными
- * командами, ни другими скиллами.
+ * (`synth service install`).
  */
 export const SYNTH_SERVICE_NAME = 'synth-service';
 
-/** Slash-команда скилла `synth-service`. */
-export const SYNTH_SERVICE_COMMAND = 'service';
+/**
+ * ADR-126 §15: встроенный скилл аналитического HTML-отчёта. Поставляется
+ * **каталогом** `prompts/skills/synth-html-report` — у него есть supporting-файлы
+ * (`assets/report.css`, `assets/logo.svg`, `scripts/check_html.mjs`), которые
+ * читаются только тулом `skill` (base directory скилла лежит вне рабочего
+ * каталога проекта и файловым тулам недоступен).
+ */
+export const SYNTH_HTML_REPORT_NAME = 'synth-html-report';
 
 /**
  * Синтетический каталог-источник builtin-скиллов: system-уровень, `trusted: true`.
@@ -92,7 +83,9 @@ export const BUILTIN_SOURCE: SkillSource = {
 const SKILL_CREATOR_BODY = `# Skill Creator
 
 Create or update a project skill: a directory with a \`SKILL.md\` and optional
-supporting files, loaded on demand via the \`skill\` tool or a \`/name\` command.
+supporting files (ADR-126). Skills are **not** slash-commands: a user invokes a
+skill with the \`$<name>\` mention in the composer, and the model loads it with
+the \`skill\` tool. There is no \`/<name>\` command for skills.
 
 ## When to use
 - The user asks to create, scaffold, or update a skill.
@@ -122,7 +115,8 @@ description: <one-line summary, <= 1024 chars>
 - \`requires_toolsets\`: named sets from config (\`git\`, \`web\`, ...)
 - \`agents\` / \`groups\`: binding; empty = all
 - \`trigger\`: \`manual\` | \`auto\`
-- \`command\`: \`/\`-command name, if different from \`name\`
+- \`command\`: **legacy** — \`/\`-имя скилла больше не создаётся (ADR-126 §7); поле
+  читается только для совместимости frontmatter и ни на что не влияет
 - \`mode\`: \`plan\` | \`act\` | \`any\`
 
 ## Body structure
@@ -136,6 +130,8 @@ path; relative paths resolve from the skill base directory.
 
 ## Verify
 - Confirm the skill appears in \`/skills\` and \`GET /api/v2/skills\`.
+- Invoke it with \`$<name>\` in the composer (never \`/<name>\` — that surface is
+  commands only) and confirm the \`skill\` tool loads its body.
 - Ensure \`name\` matches the directory and the frontmatter parses.
 
 ## Safety
@@ -151,7 +147,6 @@ export function buildSkillCreatorMeta(): SkillMeta {
     disableModelInvocation: false,
     invocation: 'both',
     trigger: 'auto',
-    command: SKILL_CREATOR_NAME,
     category: 'meta',
     tags: ['skills', 'meta', 'scaffold'],
     requiresCapabilities: [ToolCapability.FILE_READ, ToolCapability.FILE_WRITE],
@@ -165,7 +160,7 @@ Create, update and audit \`AGENTS.md\` — repository project instructions that
 Synth loads automatically (ADR-069).
 
 ## When to use
-- The user runs \`/init\` or \`/${SYNTH_AGENTS_MD_COMMAND}\`.
+- The user runs \`/init\` or \`$synth-agents-md\`.
 - Project instructions need to be created, refreshed or reviewed.
 
 ## Steps
@@ -202,7 +197,6 @@ export function buildSynthAgentsMdMeta(): SkillMeta {
     disableModelInvocation: false,
     invocation: 'both',
     trigger: 'manual',
-    command: SYNTH_AGENTS_MD_COMMAND,
     category: 'meta',
     tags: [SYNTH_AGENTS_MD_NAME, 'onboarding', 'instructions', 'docs'],
     relatedSkills: [SKILL_CREATOR_NAME],
@@ -274,7 +268,6 @@ export function buildSynthStorageRecoveryMeta(): SkillMeta {
     disableModelInvocation: false,
     invocation: 'both',
     trigger: 'manual',
-    command: SYNTH_STORAGE_RECOVERY_COMMAND,
     category: 'ops',
     tags: [SYNTH_STORAGE_RECOVERY_NAME, 'storage', 'postgres', 'recovery', 'degraded', 'runbook'],
     relatedSkills: [SYNTH_AGENTS_MD_NAME],
@@ -377,7 +370,6 @@ export function buildSynthPipelinesMeta(): SkillMeta {
     disableModelInvocation: false,
     invocation: 'both',
     trigger: 'manual',
-    command: SYNTH_PIPELINES_COMMAND,
     category: 'automation',
     tags: [SYNTH_PIPELINES_NAME, 'pipelines', 'automation', 'adr-101'],
     relatedSkills: [SYNTH_SCHEDULES_NAME],
@@ -468,7 +460,6 @@ export function buildSynthSchedulesMeta(): SkillMeta {
     disableModelInvocation: false,
     invocation: 'both',
     trigger: 'manual',
-    command: SYNTH_SCHEDULES_COMMAND,
     category: 'automation',
     tags: [SYNTH_SCHEDULES_NAME, 'schedules', 'automation', 'cron', 'scheduler', 'adr-051'],
     relatedSkills: [SYNTH_PIPELINES_NAME],
@@ -690,7 +681,6 @@ export function buildSynthInstanceMeta(): SkillMeta {
     disableModelInvocation: false,
     invocation: 'both',
     trigger: 'auto',
-    command: SYNTH_INSTANCE_COMMAND,
     category: 'ops',
     tags: [
       'synth-instance',
@@ -794,7 +784,6 @@ export function buildSynthServiceMeta(): SkillMeta {
     disableModelInvocation: false,
     invocation: 'both',
     trigger: 'manual',
-    command: SYNTH_SERVICE_COMMAND,
     category: 'instance',
     tags: ['synth-service', 'systemd', 'service', 'autostart', 'install', 'ops'],
     relatedSkills: [SYNTH_INSTANCE_NAME],
@@ -805,8 +794,67 @@ export function buildSynthServiceMeta(): SkillMeta {
 }
 
 /**
- * Собирает встроенные скиллы. `dir`/`file` — синтетические пути (на ФС нет);
- * `mtimeMs: 0` — builtin вне mtime-инвалидации watcher'а.
+ * Каталог builtin-скиллов с supporting-файлами: `{root}/prompts/skills` с
+ * fallback на `{root}/dist/prompts/skills` (сборка копирует `prompts/` в `dist/`,
+ * поэтому в Docker-образе рядом с `package.json` каталога `prompts/` может не быть).
+ * Нет ни одного кандидата — `undefined` (каталожные builtin'ы не регистрируются).
+ */
+function resolveBuiltinSkillsDir(): string | undefined {
+  const root = findPackageRoot(CURRENT_DIR);
+  const candidates = [join(root, 'prompts', 'skills'), join(root, 'dist', 'prompts', 'skills')];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * ADR-126 §15: builtin-скилл из каталога `prompts/skills/<name>` (нужен, когда
+ * у скилла есть supporting-файлы). `dir`/`file` — реальные пути каталога, тело и
+ * `meta` — из `SKILL.md` (формат тот же, что у проектных скиллов, §13).
+ *
+ * Каталога/файла нет или `SKILL.md` невалиден — предупреждение в лог и `undefined`:
+ * скилл не регистрируется, остальные builtin'ы продолжают работать.
+ */
+function buildDirectorySkill(
+  name: string,
+  skillsRoot: string | undefined,
+): DiscoveredSkill | undefined {
+  if (!skillsRoot) {
+    warning('SKILLS', `builtin ${name}: каталог prompts/skills не найден — скилл не зарегистрирован`);
+    return undefined;
+  }
+  const dir = join(skillsRoot, name);
+  const file = join(dir, 'SKILL.md');
+  let raw: string;
+  try {
+    raw = readFileSync(file, 'utf-8');
+  } catch {
+    warning('SKILLS', `builtin ${name}: не прочитан ${file} — скилл не зарегистрирован`);
+    return undefined;
+  }
+  const parsed = parseSkillFile(raw, name);
+  if (!parsed.skill || parsed.issues.length > 0) {
+    const issues = parsed.issues.map((i) => `${i.code}: ${i.message}`).join('; ');
+    warning('SKILLS', `builtin ${name}: невалидный SKILL.md (${issues}) — скилл не зарегистрирован`);
+    return undefined;
+  }
+  return {
+    name: parsed.skill.name,
+    meta: parsed.skill.meta,
+    body: parsed.skill.body,
+    dir,
+    file,
+    source: BUILTIN_SOURCE,
+    trusted: true,
+    mtimeMs: 0,
+  };
+}
+
+/**
+ * Собирает встроенные скиллы. У объявленных в коде `dir`/`file` — синтетические
+ * пути (на ФС нет); у каталожного `synth-html-report` — реальный каталог
+ * `prompts/skills/<name>`. `mtimeMs: 0` — builtin вне mtime-инвалидации watcher'а.
  */
 export function buildBuiltinSkills(opts: { dataDir?: string } = {}): DiscoveredSkill[] {
   const root = opts.dataDir ?? '.';
@@ -827,6 +875,8 @@ export function buildBuiltinSkills(opts: { dataDir?: string } = {}): DiscoveredS
       mtimeMs: 0,
     };
   };
+  const skillsRoot = resolveBuiltinSkillsDir();
+  const htmlReport = buildDirectorySkill(SYNTH_HTML_REPORT_NAME, skillsRoot);
   return [
     build(SKILL_CREATOR_NAME, buildSkillCreatorMeta(), SKILL_CREATOR_BODY),
     build(SYNTH_AGENTS_MD_NAME, buildSynthAgentsMdMeta(), SYNTH_AGENTS_MD_BODY),
@@ -835,5 +885,6 @@ export function buildBuiltinSkills(opts: { dataDir?: string } = {}): DiscoveredS
     build(SYNTH_SCHEDULES_NAME, buildSynthSchedulesMeta(), SYNTH_SCHEDULES_BODY),
     build(SYNTH_INSTANCE_NAME, buildSynthInstanceMeta(), SYNTH_INSTANCE_BODY),
     build(SYNTH_SERVICE_NAME, buildSynthServiceMeta(), SYNTH_SERVICE_BODY),
+    ...(htmlReport ? [htmlReport] : []),
   ];
 }

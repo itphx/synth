@@ -1670,6 +1670,7 @@ export const dict = {
   'file.zoomLevel': '{percent}%',
   'file.markdownPreview': 'Preview',
   'file.markdownSource': 'Source',
+  'file.htmlSandboxed': 'Scripts, forms, and network are disabled',
   'file.openInNewTab': 'Open in new tab',
   'file.listTruncated': 'Not all entries are shown: the listing was truncated by the limit.',
 

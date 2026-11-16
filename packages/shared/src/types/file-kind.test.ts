@@ -35,8 +35,15 @@ describe('fileKind (классификация файла по расширен�
     expect(fileKind('doc.pdf')).toBe('pdf');
   });
 
-  it('code: исходники и конфиги (в т.ч. html/css/js)', () => {
-    for (const ext of ['js', 'ts', 'tsx', 'py', 'go', 'rs', 'java', 'sh', 'html', 'htm', 'css', 'scss', 'sql', 'yaml', 'yml', 'json', 'toml']) {
+  it('html: .html/.htm — отдельное семейство (рендер в UI sandbox-iframe)', () => {
+    expect(fileKind('report.html')).toBe('html');
+    expect(fileKind('page.htm')).toBe('html');
+    expect(fileKind('REPORT.HTML')).toBe('html');
+    expect(fileKind('tmp/reports/deep.dive.html')).toBe('html');
+  });
+
+  it('code: исходники и конфиги (html/css/js)', () => {
+    for (const ext of ['js', 'ts', 'tsx', 'py', 'go', 'rs', 'java', 'sh', 'css', 'scss', 'sql', 'yaml', 'yml', 'json', 'toml']) {
       expect(fileKind(`main.${ext}`)).toBe('code');
     }
   });
@@ -112,6 +119,11 @@ describe('fileMime (MIME по расширению)', () => {
     expect(fileMime('a.csv')).toBe('text/csv');
   });
 
+  it('html — text/html (но inline-предпросмотр через /fs/raw всё равно запрещён)', () => {
+    expect(fileMime('a.html')).toBe('text/html');
+    expect(fileMime('a.htm')).toBe('text/html');
+  });
+
   it('binary/неизвестное → application/octet-stream', () => {
     expect(fileMime('a.zip')).toBe('application/octet-stream');
     expect(fileMime('a.exe')).toBe('application/octet-stream');
@@ -128,7 +140,7 @@ describe('fileMime (MIME по расширению)', () => {
 describe('INLINE_PREVIEW_KINDS (allow-list inline-предпросмотра)', () => {
   it('содержит только media/pdf — текст, код и html исключены', () => {
     expect(INLINE_PREVIEW_KINDS).toEqual(['image', 'video', 'audio', 'pdf']);
-    for (const kind of ['text', 'markdown', 'code', 'binary'] as FileKind[]) {
+    for (const kind of ['text', 'markdown', 'html', 'code', 'binary'] as FileKind[]) {
       expect(INLINE_PREVIEW_KINDS).not.toContain(kind);
     }
   });

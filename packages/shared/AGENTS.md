@@ -220,12 +220,13 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
 
 `src/types/index.ts` + `src/schemas/index.ts` — единые контракты сущностей; схемы `projectCreate/Update`, `sessionCreate/Update`.
 - `src/types/file-kind.ts` (browser-safe: только типы, константы и чистые функции, без `node:*`;
-  re-export из `types`): `FileKind` (`text`/`markdown`/`code`/`image`/`video`/`audio`/`pdf`/`binary`),
+  re-export из `types`): `FileKind` (`text`/`markdown`/`html`/`code`/`image`/`video`/`audio`/`pdf`/`binary`),
   `fileKind(path)`/`fileMime(path)` — классификация и MIME по расширению (регистронезависимо;
   неизвестное/без расширения → `binary`/`application/octet-stream`) и allow-list
   `INLINE_PREVIEW_KINDS = ['image','video','audio','pdf']`. Единый контракт UI и ядра: сервер
   (`GET /api/v2/fs/raw`) по нему выбирает `inline` vs `attachment` — HTML/код/текст **никогда** не
-  `inline` (XSS). Лимиты предпросмотра — `DEFAULT_MAX_PREVIEW_BYTES` (100 МиБ),
+  `inline` (XSS); отдельный kind `html` (`.html`/`.htm`) нужен UI, чтобы рендерить документ в
+  sandbox-iframe, а не показывать исходником. Лимиты предпросмотра — `DEFAULT_MAX_PREVIEW_BYTES` (100 МиБ),
   `MIN_PREVIEW_BYTES`/`MAX_PREVIEW_BYTES_LIMIT`.
 - ADR-126: `src/skills/frontmatter.ts` — толерантный `parseFrontmatter`/`stringifyFrontmatter` формата `SKILL.md` (js-yaml; невалидный YAML → `issues`, не throw; неизвестные ключи сохраняются в `SkillMeta.extra`); типы скиллов — `src/types/skills.ts` (`SkillScope`/`SkillLevel`/`SkillInvocation`/`SkillMeta`/`SkillSummary`/`SkillDetail`/`SkillDiagnostic`, `requires_capabilities`/`requires_toolsets`).
 - `EventType` включает `fs.changed` (мутирующий тул ядра изменил workspace) и `session.moved` (перенос сессии между проектами); потребители — `transportStore` UI (ADR-024). ADR-101: типы событий движка пайплайнов — `pipeline.run.started`/`node_started`/`node_finished`/`awaiting_human`/`finished`/`failed` и `pipeline.completed` (выход `gateway`) в `types/bus-events.ts`; это **инстансные** события (прогон — не сессия) — публикуются в инстансный канал шины, новых транспортных каналов нет.

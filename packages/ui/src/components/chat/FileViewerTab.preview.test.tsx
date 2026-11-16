@@ -48,6 +48,7 @@ vi.mock('@/stores/useUIStore', () => ({
 }))
 
 import { FileViewerTab } from './FileViewerTab'
+import { HTML_PREVIEW_CSP } from '@/lib/htmlPreview'
 import type { CenterTab } from '@/stores/useUIStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -353,5 +354,114 @@ describe('FileViewerTab — предпросмотр файла по семей�
     const link = container.querySelector('a[download]') as HTMLAnchorElement | null
     expect(link).not.toBeNull()
     expect(link!.getAttribute('href')).toContain('/fs/download')
+  })
+
+  // --- HTML: sandbox-iframe + meta-CSP (без нового API и серверного эндпоинта) ---
+
+  async function rerender(node: React.ReactNode): Promise<void> {
+    const last = roots[roots.length - 1]
+    await act(async () => {
+      last.root.render(node)
+    })
+    await act(async () => {})
+  }
+
+  /** HTML-файл читается текстом; содержимое зависит от пути (для смены файла). */
+  function mockHtmlFiles(docs: Record<string, string>): void {
+    mocks.readFile.mockImplementation(async (_projectId: string, path: string) => ({
+      path,
+      content: docs[path] ?? `<p>${path}</p>`,
+      size: 10,
+      encoding: 'utf-8',
+    }))
+  }
+
+  it('html → sandbox-iframe с meta-CSP, никаких скриптов/same-origin', async () => {
+    const html = '<!DOCTYPE html>\n<html><body><h1>Отчёт</h1><script>alert(1)</script></body></html>'
+    mockHtmlFiles({ 'reports/audit.html': html })
+
+    const container = await render(<FileViewerTab tab={fileTab('reports/audit.html')} />)
+    await act(async () => {})
+
+    const frame = container.querySelector<HTMLIFrameElement>('[data-testid="html-preview"]')
+    expect(frame).not.toBeNull()
+
+    // Граница изоляции — ровно этот набор разрешений.
+    const sandbox = frame!.getAttribute('sandbox')
+    expect(sandbox).toBe('allow-popups allow-popups-to-escape-sandbox')
+    expect(sandbox).not.toContain('allow-scripts')
+    expect(sandbox).not.toContain('allow-same-origin')
+    expect(sandbox).not.toContain('allow-forms')
+    expect(sandbox).not.toContain('allow-top-navigation')
+
+    // Документ приходит только через `srcDoc` — ни `src`, ни blob:/data:.
+    expect(frame!.hasAttribute('src')).toBe(false)
+    expect(frame!.getAttribute('referrerpolicy')).toBe('no-referrer')
+
+    const srcDoc = frame!.getAttribute('srcdoc') ?? ''
+    expect(srcDoc).toContain('http-equiv="Content-Security-Policy"')
+    expect(srcDoc).toContain(HTML_PREVIEW_CSP)
+    expect(srcDoc).toContain('<h1>Отчёт</h1>')
+    expect(srcDoc.indexOf('Content-Security-Policy')).toBeLessThan(srcDoc.indexOf('<h1>'))
+
+    // Подсказка и «Скачать» (для печати/офлайна) — в том же тулбаре.
+    expect(container.textContent).toContain('file.htmlSandboxed')
+    expect(container.textContent).toContain('file.markdownPreview')
+    expect(container.textContent).toContain('file.markdownSource')
+    const link = container.querySelector('a[download]') as HTMLAnchorElement | null
+    expect(link).not.toBeNull()
+    expect(link!.getAttribute('href')).toContain('/fs/download')
+  })
+
+  it('html «Исходник» → iframe убирается, показывается исходный текст', async () => {
+    const html = '<!DOCTYPE html><html><body><p>raw</p></body></html>'
+    mockHtmlFiles({ 'index.html': html })
+
+    const container = await render(<FileViewerTab tab={fileTab('index.html')} />)
+    await act(async () => {})
+
+    const sourceButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'file.markdownSource',
+    )
+    expect(sourceButton).toBeTruthy()
+    await act(async () => {
+      sourceButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('[data-testid="html-preview"]')).toBeNull()
+    expect(container.querySelector('pre')?.textContent).toContain('<!DOCTYPE html>')
+    expect(container.querySelector('pre')?.textContent).toContain('<p>raw</p>')
+  })
+
+  it('html: открытие другого html-файла сбрасывает режим на «Просмотр»', async () => {
+    mockHtmlFiles({ 'a.html': '<!DOCTYPE html><html><body>A</body></html>', 'b.html': '<p>B</p>' })
+
+    const container = await render(<FileViewerTab tab={fileTab('a.html')} />)
+    await act(async () => {})
+
+    const sourceButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'file.markdownSource',
+    )
+    await act(async () => {
+      sourceButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(container.querySelector('[data-testid="html-preview"]')).toBeNull()
+
+    await rerender(<FileViewerTab tab={fileTab('b.html')} />)
+
+    const frame = container.querySelector<HTMLIFrameElement>('[data-testid="html-preview"]')
+    expect(frame).not.toBeNull()
+    expect(frame!.getAttribute('srcdoc')).toContain('<p>B</p>')
+    expect(container.querySelector('pre')).toBeNull()
+  })
+
+  it('html: 413 FILE_TOO_LARGE → прежний блок причины и «Скачать»', async () => {
+    mocks.readFile.mockRejectedValue(tooLargeError('size'))
+
+    const container = await render(<FileViewerTab tab={fileTab('reports/huge.html')} />)
+
+    expect(container.textContent).toContain('file.tooLarge')
+    expect(container.querySelector('[data-testid="html-preview"]')).toBeNull()
+    expect(container.querySelector('a[download]')).not.toBeNull()
   })
 })

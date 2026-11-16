@@ -1647,6 +1647,7 @@ export const dict = {
   'file.zoomLevel': '{percent}%',
   'file.markdownPreview': 'Просмотр',
   'file.markdownSource': 'Исходник',
+  'file.htmlSandboxed': 'Скрипты, формы и сеть отключены',
   'file.openInNewTab': 'Открыть в новой вкладке',
   'file.listTruncated': 'Показаны не все элементы: список обрезан по лимиту.',
 

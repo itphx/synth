@@ -1506,19 +1506,26 @@
   `trigger`, `command`, `mode`. `invocation` — комбинация двух флагов: `both`/`user`/
   `model`/`none` (`scope.ts`). Невалидный скилл не попадает в реестр (ошибка в
   `GET /api/v2/skills?diagnostics=1`), discovery остальных не ломает. Встроенные
-  (`builtin.ts`) объявлены **в коде** (ADR-126 §15; отдельного asset-каталога нет):
+  (`builtin.ts`) объявлены в коде; скилл, у которого есть supporting-файлы, поставляется
+  каталогом `prompts/skills/<name>` (копируется сборкой в `dist/prompts`, публикуется
+  в npm; ADR-126 §15):
   `skill-creator` (вызов `$skill-creator`, capability-aware `file_read`/`file_write`),
   `synth-agents-md` (ADR-069: вызов `$synth-agents-md`; `/`-имя не нужно — `/init` остаётся встроенной
-  командой; `file_read`/`search`/`file_write`), `synth-storage-recovery` (ADR-098 W5: команда
+  командой; `file_read`/`search`/`file_write`), `synth-storage-recovery` (ADR-098 W5: вызов
   `$synth-storage-recovery`, read-only runbook), `synth-pipelines` (ADR-101: вызов `$synth-pipelines`,
   capability `pipeline`) и `synth-schedules` (ADR-051: вызов `$synth-schedules`, capability
   `schedule`) — последние два описывают агенту жизненный цикл пайплайна (спецификация →
   публикация → прогон → журнал, шаблоны инстанца) и расписания (cron/интервал → цель, ручной
   запуск, история срабатываний). `synth-instance` (ADR-131: вызов `$synth-instance`, trigger `auto`) —
   self-help инстанса/MCP/проектов/сессий; capability не требуется (при недоступности `synth_*`
-  делегирует @admin/UI). Встроенные скиллы вызываются **только** `$name` (ADR-126 §3/§7):
-  `metadata.synth.command` больше не создаёт `/`-команду, поэтому прежнее требование
-  уникальности их команд со slash-командами снято. Тесты — `engine/skills/*.test.ts`.
+  делегирует @admin/UI). `synth-html-report` (ADR-126 §15: вызов `$synth-html-report`, capabilities
+  `file_read`/`file_write`, category `docs`, trigger `auto`) — единый аналитический отчёт в
+  self-contained HTML (варианты, сравнение, рекомендация, риски, открытые вопросы); **единственный**
+  builtin, поставляемый каталогом `prompts/skills/synth-html-report` — CSS/логотип/чекер читаются
+  только тулом `skill` (`file_path`), файловым тулам base directory недоступен (вне периметра).
+  Встроенные скиллы вызываются **только** `$name` (ADR-126 §3/§7):
+  `metadata.synth.command` больше не создаёт `/`-команду и нигде не задаётся, поэтому прежнее
+  требование уникальности их команд со slash-командами снято. Тесты — `engine/skills/*.test.ts`.
 - `engine/commands/*` — slash-команды и bundles (ADR-126): `parser`/`template`/
   `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
   до LLM, событие `command.invoked`; per-command права `permission.rules.command`;
