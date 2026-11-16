@@ -118,6 +118,22 @@ function sanitizeMarkerValue(value: string): string {
 }
 
 /**
+ * Хвостовые пустые/пробельные строки убрать.
+ *
+ * Буфер терминала часто заканчивается пустыми строками (пустая строка после
+ * последней команды, добитая пробелами). В блоке они читались как «пустой
+ * вывод» — и модель получала лишние пустые строки в теле.
+ *
+ * Срезается **только хвост**: внутренние пустые строки (разделители блоков
+ * вывода) и начало не трогаются — они часть вывода.
+ */
+function trimTrailingBlankLines(lines: string[]): string[] {
+  let end = lines.length
+  while (end > 0 && lines[end - 1].trim() === '') end -= 1
+  return end === lines.length ? lines : lines.slice(0, end)
+}
+
+/**
  * Блок вывода терминала в формате `terminal_read`.
  *
  * Тот же контракт, что у тула `terminal_read` в ядре: метаданные — **в
@@ -130,6 +146,10 @@ function sanitizeMarkerValue(value: string): string {
  * [CONTENT END]
  * ```
  *
+ * Хвостовые пустые/пробельные строки срезаются (как `normalizeTerminalOutput`
+ * в ядре): `tail` — число строк **после** среза, `bytes` — размер фактического
+ * тела.
+ *
  * Пустой вывод — открывающий маркер и сразу `[CONTENT END]` (без пустой
  * строки между маркерами: иначе модель прочитает «пустую строку вывода» как
  * результат).
@@ -139,13 +159,14 @@ export function buildTerminalReadBlock(input: {
   status: string
   lines: string[]
 }): string {
-  const body = input.lines.join('\n')
+  const lines = trimTrailingBlankLines(input.lines)
+  const body = lines.join('\n')
   const bytes = new TextEncoder().encode(body).length
   const open = [
     `[CONTENT terminal=${sanitizeMarkerValue(input.terminalId)}`,
     `status=${sanitizeMarkerValue(input.status)}`,
     `bytes=${bytes}`,
-    `tail=${input.lines.length}`,
+    `tail=${lines.length}`,
     'stripped=true]',
   ].join(' ')
   if (body === '') return `${open}\n[CONTENT END]`

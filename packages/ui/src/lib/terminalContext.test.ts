@@ -163,6 +163,44 @@ describe('buildTerminalReadBlock — блок вывода в формате ter
     )
   })
 
+  it('хвостовые пустые строки срезаются: body, tail и bytes — после среза', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'running',
+      lines: ['a', 'b', '', '  ', ''],
+    })
+    // Хвост срезан → тело «a\nb» (3 байта), tail — 2 строки.
+    expect(block).toBe(
+      '[CONTENT terminal=term_1 status=running bytes=3 tail=2 stripped=true]\n'
+      + 'a\nb\n'
+      + '[CONTENT END]',
+    )
+  })
+
+  it('только пустые строки — пустое тело и [CONTENT END]', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'running',
+      lines: ['', '  ', ''],
+    })
+    expect(block).toBe(
+      '[CONTENT terminal=term_1 status=running bytes=0 tail=0 stripped=true]\n[CONTENT END]',
+    )
+  })
+
+  it('внутренняя пустая строка сохраняется', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'running',
+      lines: ['a', '', 'b'],
+    })
+    expect(block).toBe(
+      '[CONTENT terminal=term_1 status=running bytes=4 tail=3 stripped=true]\n'
+      + 'a\n\nb\n'
+      + '[CONTENT END]',
+    )
+  })
+
   it('значения маркера не ломают формат (пробелы и скобка)', () => {
     const block = buildTerminalReadBlock({
       terminalId: 'term 1]',
