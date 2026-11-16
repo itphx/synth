@@ -38,7 +38,9 @@ import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
 import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
 import { dropSteerInjections } from '../../engine/steering/apply.js';
-import { requeueMessages, publishQueueState } from '../../queue/processor.js';
+// ADR-041: строки движка — через ключи `shared/i18n` (не литералы).
+import { t as sm, i18n as i18nMeta } from '../../engine/system-messages.js';
+import { requeueMessages, publishQueueState, queueCounts } from '../../queue/processor.js';
 import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
 // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (`ask_user`).
@@ -63,6 +65,13 @@ import {
 import { resolveFileMentions } from '../../engine/input-surface/file-mentions.js';
 // ADR-118 §2: монотонный `ord` — счётчик порядка записи в историю.
 import { nextOrd } from '../../storage/message-write.js';
+// PROP-132: контекст терминала, приходящий с клиента вместе с вопросом
+// (`POST /:id/prompt`, поле `context`) — служебное сообщение с выводом
+// терминала, которое доставляется **перед** вопросом.
+import {
+  buildTerminalContextMessage,
+  parseTerminalContext,
+} from '../../engine/terminal/context-message.js';
 import { warning } from '../../logger.js';
 // ADR-115: вложения сообщений — сервис (blob-хранилище + лимиты) и роуты загрузки/раздачи.
 import {
@@ -414,6 +423,16 @@ export interface SessionRouteMessages {
   invalidMentions?: (c: Context) => string;
   /** ADR-126 §2: `@file` не разрешён/не прочитан (400 `VALIDATION_ERROR`). */
   invalidFileMentions?: (c: Context, paths: string[], reasons: string[]) => string;
+  /**
+   * PROP-132: поле `context` тела промпта невалидно (400 `VALIDATION_ERROR`).
+   * `reason` — понятная причина отказа от разбора контекста.
+   */
+  terminalContextInvalid?: (c: Context, reason: string) => string;
+  /**
+   * PROP-132: контекст терминала вместе с `mode=interrupt` (400
+   * `VALIDATION_ERROR`) — контекст нельзя вклинить перед interrupt-сообщением.
+   */
+  terminalContextWithInterrupt?: (c: Context) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -566,6 +585,9 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   invalidMentions: () => 'Поле mentions должно быть массивом упоминаний корректной формы',
   invalidFileMentions: (_c: Context, paths: string[], reasons: string[]) =>
     `Не удалось прочитать файлы: ${paths.map((path, index) => `${path} (${reasons[index] ?? 'error'})`).join(', ')}`,
+  terminalContextInvalid: (_c: Context, reason: string) => reason,
+  terminalContextWithInterrupt: () =>
+    'Контекст терминала нельзя отправлять вместе с mode=interrupt',
 };
 
 /**
@@ -714,6 +736,79 @@ function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: re
  */
 function isTurnActive(session: Session, queueManager: QueueProcessorManager): boolean {
   return !!session.status?.blocked || queueManager.isRunning(session.id);
+}
+
+/**
+ * PROP-132: снять контекст терминала из очереди инъекций (`steerInbox`).
+ *
+ * Контекст ставится в `steerInbox` **первым** (ADR-104), вопрос — следом. Если
+ * вопрос отклонён (лимит инъекций на ход), контекст снимается: иначе в ходе
+ * остался бы вывод терминала без вопроса, к которому он относится.
+ *
+ * Публикуется `steer.dropped` (причина `limit`) — тот же контракт, что у
+ * отклонённой инъекции (`queue/processor.ts`).
+ */
+async function dropTerminalContextFromSteer(
+  sessionManager: SessionManager,
+  eventBus: EventBus,
+  sessionId: string,
+  contextMessage: Message,
+): Promise<void> {
+  try {
+    await sessionManager.withLock(sessionId, async (s) => {
+      const inbox = s.steerInbox ?? [];
+      const next = inbox.filter((m) => m.id !== contextMessage.id);
+      if (next.length === inbox.length) return;
+      s.steerInbox = next;
+      s.updatedAt = nowISO();
+      await sessionManager.saveSession(s);
+      // Счётчики очереди изменились — `queue.state` (иначе панель очереди в UI
+      // показала бы лишнюю инъекцию).
+      publishQueueState(eventBus, sessionId, queueCounts(s));
+    });
+  } catch {
+    // Сессия исчезла — снимать нечего (ошибка не должна ломать ответ 429).
+    return;
+  }
+  eventBus.publish(sessionId, 'steer.dropped', {
+    reason: 'limit',
+    code: STEERING_ERROR_CODES.limitExceeded,
+    limit: MAX_STEER_INJECTIONS_PER_TURN,
+    dropped_count: 1,
+    error: sm('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
+    i18n: i18nMeta('steer.limit_exceeded', { limit: String(MAX_STEER_INJECTIONS_PER_TURN) }),
+  });
+}
+
+/**
+ * PROP-132: откатить контекст терминала из истории сессии.
+ *
+ * Контекст пишется в историю **до** вопроса (контракт — «контекст раньше
+ * вопроса»). Если вопрос не принят (очередь полна), контекст снимается: иначе
+ * в истории остался бы вывод терминала без вопроса. Публикуется
+ * `message.deleted` — мутация адресуется по `id` (ADR-118 §7).
+ */
+async function dropTerminalContextFromHistory(
+  sessionManager: SessionManager,
+  eventBus: EventBus,
+  sessionId: string,
+  contextMessage: Message,
+): Promise<void> {
+  try {
+    await sessionManager.withLock(sessionId, async (s) => {
+      const next = s.messages.filter((m) => m.id !== contextMessage.id);
+      if (next.length === s.messages.length) return;
+      s.messages = next;
+      s.updatedAt = nowISO();
+      await sessionManager.saveSession(s);
+    });
+  } catch {
+    // Сессия исчезла — откатывать нечего (ошибка не должна ломать ответ 429).
+    return;
+  }
+  eventBus.publish(sessionId, 'message.deleted', { message_id: contextMessage.id });
+  const fresh = await sessionManager.getSession(sessionId).catch(() => null);
+  if (fresh) eventBus.publish(sessionId, 'session.updated', serializeSession(fresh));
 }
 
 /**
@@ -2566,7 +2661,7 @@ export function createSessionRoutes(
     // совместимость: поле необязательное).
     const mode = isSteerMode(body.mode) ? body.mode : DEFAULT_STEER_MODE;
 
-    const session = await sessionManager.getSession(sessionId);
+    let session = await sessionManager.getSession(sessionId);
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
@@ -2604,6 +2699,38 @@ export function createSessionRoutes(
     // Доступ — у prefix-guard (единая точка истины): он учитывает владельца,
     // участника проекта и сквозной обзор ADMIN/LEAD. Здесь остаётся только
     // специфика тела запроса (проверка контента выше).
+
+    // PROP-132: контекст терминала — необязательный блок вывода терминала,
+    // который клиент присылает **вместе с вопросом** (`context`). Разбирается
+    // здесь — до любой записи в историю/очередь: невалидный контекст = 400
+    // без частичной доставки (ни контекста, ни вопроса).
+    const rawContext = (body as { context?: unknown }).context;
+    let contextMessage: Message | undefined;
+    if (rawContext !== undefined && rawContext !== null) {
+      const parsedContext = parseTerminalContext(rawContext);
+      if (!parsedContext.ok) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: messages.terminalContextInvalid?.(c, parsedContext.message)
+              ?? parsedContext.message,
+          },
+        }, 400);
+      }
+      contextMessage = buildTerminalContextMessage(parsedContext.value);
+    }
+    // ADR-104: контекст нельзя вклинить перед interrupt-сообщением —
+    // `orderSteerInjections` ставит класс `interrupt` первым, и контекст
+    // оказался бы ПОСЛЕ вопроса (контракт — «контекст раньше вопроса»).
+    if (contextMessage && mode === 'interrupt') {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: messages.terminalContextWithInterrupt?.(c)
+            ?? 'Контекст терминала нельзя отправлять вместе с mode=interrupt',
+        },
+      }, 400);
+    }
 
     // ADR-126 §2.1: `@user` — граница «агенту / пользователю». Первое
     // упоминание пользователя (среди доступных участников сессии/проекта) делит
@@ -2830,6 +2957,50 @@ export function createSessionRoutes(
     // (гранты по группам применяются к этому снимку).
     const turnPrincipal = resolveUserPrincipal(await resolveUserId(c), [], resolveUserGroups(c));
 
+    // ADR-104: идёт ли сейчас ход сессии — от этого зависит способ доставки
+    // контекста терминала (вмешательство в ход или обычная очередь).
+    const turnActive = !!content && mode !== 'queue' && isTurnActive(session, queueManager);
+
+    // PROP-132: контекст терминала доставляется **до** вопроса — он должен
+    // попасть в историю раньше вопроса (`ord` контекста < `ord` вопроса),
+    // поэтому материализуется до расчёта `baseOrd` (ADR-118 §2).
+    let contextInSteer = false;
+    if (contextMessage) {
+      if (turnActive) {
+        // Вмешательство в активный ход: контекст — **первым** в `steerInbox`
+        // (вопрос встанет следом — порядок «контекст → вопрос»).
+        const contextSteer = await enqueueSteerMessage(
+          sessionManager, eventBus, sessionId, contextMessage, MAX_STEER_INJECTIONS_PER_TURN,
+          (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+          { messageId: contextMessage.id },
+        );
+        if (!contextSteer.accepted) {
+          return c.json({
+            error: {
+              code: STEERING_ERROR_CODES.limitExceeded,
+              message: messages.steerLimitExceeded(c, MAX_STEER_INJECTIONS_PER_TURN),
+            },
+          }, 429);
+        }
+        contextInSteer = true;
+      } else {
+        const updated = await sessionManager.addMessage(sessionId, contextMessage);
+        if (!updated) {
+          return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+        }
+        session = updated;
+        // UI должен увидеть контекст сразу (инвариант 27): `message.added` +
+        // `session.updated` — тот же путь, что у fallback-уведомления фонового
+        // прогона (`engine/background/notify-parent.ts`).
+        const contextIndex = updated.messages.length - 1;
+        eventBus.publish(sessionId, 'message.added', {
+          message: serializeMessage(updated.messages[contextIndex]!, contextIndex),
+          index: contextIndex,
+        });
+        eventBus.publish(sessionId, 'session.updated', serializeSession(updated));
+      }
+    }
+
     // ADR-118 §2: `ord` — монотонный порядок записи в историю. Резервируем его
     // для агентской части **до** постановки в очередь: user-directed хвост
     // записывается в историю сразу и должен быть **новее** триггера — тогда он
@@ -2936,7 +3107,7 @@ export function createSessionRoutes(
     // генерации), `interrupt` — прерывание текущей генерации с продолжением
     // хода. Если активного хода нет — ведём себя как обычная очередь
     // (сообщение начнёт новый ход).
-    if (content && mode !== 'queue' && isTurnActive(session, queueManager)) {
+    if (turnActive) {
       const interruptMode = mode === 'interrupt';
       const steerResult = await enqueueSteerMessage(
         sessionManager, eventBus, sessionId, message, MAX_STEER_INJECTIONS_PER_TURN,
@@ -2949,6 +3120,12 @@ export function createSessionRoutes(
         },
       );
       if (!steerResult.accepted) {
+        // Вопрос не принят (лимит инъекций на ход) — контекст терминала из
+        // `steerInbox` снимаем: без вопроса он остался бы в ходе один
+        // (контракт — «контекст раньше вопроса»).
+        if (contextInSteer && contextMessage) {
+          await dropTerminalContextFromSteer(sessionManager, eventBus, sessionId, contextMessage);
+        }
         return c.json({
           error: {
             code: STEERING_ERROR_CODES.limitExceeded,
@@ -2991,6 +3168,12 @@ export function createSessionRoutes(
       );
 
       if (!result) {
+        // Очередь полна — вопрос не принят: контекст терминала откатываем
+        // (в истории остался бы вывод терминала без вопроса, к которому он
+        // относится).
+        if (contextMessage) {
+          await dropTerminalContextFromHistory(sessionManager, eventBus, sessionId, contextMessage);
+        }
         return c.json({
           error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
         }, 429);

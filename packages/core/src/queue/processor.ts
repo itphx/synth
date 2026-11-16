@@ -47,7 +47,7 @@ export function publishQueueState(
  * `queued`. Идентификатор элемента — id потока сообщения (`metadata.stream_id`):
  * по нему клиент связывает элемент очереди с живым ходом.
  */
-function queueCounts(session: Session | null | undefined): QueueStatePayload {
+export function queueCounts(session: Session | null | undefined): QueueStatePayload {
   const pending = session?.pendingMessages ?? [];
   const startingId = session?.currentStream?.streamId;
   const items: QueueItemState[] = pending.map((m) => {

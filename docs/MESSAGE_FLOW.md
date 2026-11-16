@@ -1396,6 +1396,23 @@ sequenceDiagram
 
 Код: `queue/processor.ts`, `sessions/manager.ts`, `docs/arch_decisions/prop-105-multi-replica-coordination.md`.
 
+### 8.33 Контекст терминала вместе с вопросом (PROP-132)
+
+1. `POST /prompt {content, context}` — клиент присылает **вопрос** и блок вывода
+   терминала (`context`) одним запросом. Контекст — служебное user-сообщение
+   (`metadata.type = 'background_run_result'`, `kind: 'terminal'`, `author: 'Terminal'`),
+   текст — тот же `[CONTENT …]` … `[CONTENT END]`, что у `terminal_read`.
+2. Доставка — **до вопроса**: в режиме `queue` контекст материализуется в историю
+   (`ord` контекста < `ord` вопроса; `message.added` + `session.updated`), в режиме
+   `steer` при активном ходе — первым в `steerInbox` (вопрос следом). Контекст не
+   реплика человека: авто-заголовок и статистика реплик его не считают.
+3. Отказ — без частичной доставки: невалидный `context` → `400`; `mode: 'interrupt'`
+   вместе с контекстом → `400` (инъекции класса `interrupt` применяются первыми);
+   очередь полна / лимит инъекций → `429`, и тогда контекст откатывается (из
+   истории или из `steerInbox`).
+
+Код: `engine/terminal/context-message.ts`, `server/routes/sessions.ts`.
+
 ## 9. Расширение и изменение
 
 ### 9.1 Новый тип части

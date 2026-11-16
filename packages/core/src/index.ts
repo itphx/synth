@@ -635,6 +635,20 @@ export {
   TERMINAL_CONTENT_CLOSE,
   TERMINAL_CONTENT_OPEN,
 } from './engine/terminal/output.js';
+// PROP-132: контекст терминала, приходящий с клиента вместе с вопросом
+// (`POST /api/v2/sessions/:id/prompt`, поле `context`): служебное сообщение
+// с выводом терминала, которое кладётся в историю **перед** вопросом.
+export {
+  buildTerminalContextMessage,
+  parseTerminalContext,
+  MAX_TERMINAL_CONTEXT_BYTES,
+  TERMINAL_CONTEXT_STATUSES,
+} from './engine/terminal/context-message.js';
+export type {
+  TerminalContextInput,
+  TerminalContextParseResult,
+  TerminalContextStatus,
+} from './engine/terminal/context-message.js';
 // PROP-132: рендер **видимого экрана** терминала (тул `terminal_snapshot`) —
 // чистый рендер потока в сетку `cols × rows`, без I/O (headless-эмулятор xterm).
 export { renderTerminalScreen } from './engine/terminal/screen.js';

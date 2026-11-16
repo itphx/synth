@@ -371,6 +371,11 @@
   принятого сообщения (клиентский `messageId` либо выданный сервером), он же уходит в
   `message.accepted`/`message.delivered`. В гибриде проксируется **только** `202`; ответ старой
   версии сервера → мягкая деградация `202 {messageId, mode:'queue', position:null}`.
+- **Контекст терминала в промпте (PROP-132).** Необязательное поле `context` тела
+  `POST /api/v2/sessions/:id/prompt` — блок вывода терминала, который клиент шлёт
+  **вместе с вопросом**: контекст — служебное user-сообщение (`engine/terminal/context-message.ts`),
+  доставляется **перед** вопросом (`queue` — в историю, `steer` — первым в `steerInbox`);
+  `mode:'interrupt'` + контекст → 400, отказ постановки вопроса → откат контекста.
 - **Новые события.** Публикация — `engine/orchestrator/turn-events.ts` (единая точка
   `turn.*`/`step.*`/`part.*` и детерминированных `partId`: `msg:text:N`, `msg:reasoning:N`,
   `callId`), очередь — `queue/processor.ts`:
@@ -2628,6 +2633,15 @@
   (`TerminalUnavailableError` → 503). HTTP-контур —
   `server/routes/terminals.ts` (`createTerminalRoutes`), сборка сервиса для
   инстанса — `server/app/terminal-service.ts` (`createTerminalService`).
+  **Контекст терминала из тела промпта.** `engine/terminal/context-message.ts`
+  (`buildTerminalContextMessage`/`parseTerminalContext`, предел 32 КиБ UTF-8) —
+  `context` в `POST /api/v2/sessions/:id/prompt`: вопрос и вывод терминала
+  приходят **одним** запросом; контекст — служебное user-сообщение
+  (`metadata.type='background_run_result'`, `kind='terminal'`, `author='Terminal'`,
+  текст — тот же `[CONTENT …]`…`[CONTENT END]`, что у `terminal_read`), которое
+  доставляется **перед** вопросом (`queue` — в историю, `steer` — первым в
+  `steerInbox`); `mode:'interrupt'` + контекст → 400, отказ постановки вопроса →
+  откат контекста.
   **Передний план терминала — факт, а не эвристика (протокол исполнителя 9).**
   `PtyHandle.inspect?()` отдаёт `PtyForeground` (`shellPid`/`foregroundPgid`/
   `command`/`isShell`); `TerminalService.getForeground(id)` — единственная точка
