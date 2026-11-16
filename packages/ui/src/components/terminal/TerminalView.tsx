@@ -44,6 +44,7 @@ import {
   tailLines,
   TERMINAL_CONTEXT_LINES,
 } from '@/lib/terminalContext'
+import { scrollShadowState, type TerminalScrollShadow } from '@/lib/terminalScroll'
 import { TerminalQuickKeys } from './TerminalQuickKeys'
 import { TerminalAskDock, type TerminalAskDockMode } from './TerminalAskDock'
 import {
@@ -146,9 +147,12 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
   )
   /** Док «Спросить агента» / «Прикрепить вывод» (null — док закрыт). */
   const [dock, setDock] = useState<{ mode: TerminalAskDockMode; lines: string[] } | null>(null)
-  // Положение скролла — для затенения сверху/снизу как в чате: верх гаснет,
-  // когда прокручено вниз, низ — когда не в конце вывода.
-  const [scrollPos, setScrollPos] = useState<'top' | 'middle' | 'bottom'>('bottom')
+  /**
+   * Затенение краёв — **два независимых** признака (как `handleScroll` в чате):
+   * `hasTop` — сверху есть контент, `hasBottom` — снизу есть контент. Изначально
+   * оба false: пустой терминал не показывает затенение ни с одной стороны.
+   */
+  const [shadow, setShadow] = useState<TerminalScrollShadow>({ hasTop: false, hasBottom: false })
   /** Перезапуск терминала: новое подключение к потоку вывода. */
   const [restartNonce, setRestartNonce] = useState(0)
   const [restarting, setRestarting] = useState(false)
@@ -317,6 +321,20 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
     termRef.current = term
     fitRef.current = fitAddon
 
+    /**
+     * Затенение краёв — по положению вьюпорта в буфере xterm.
+     *
+     * Обновляется на прокрутке, после подгонки (`fit`) и после записи снимка:
+     * иначе затенение осталось бы от прежней геометрии.
+     */
+    const updateScrollShadow = () => {
+      const buffer = term.buffer.active
+      const next = scrollShadowState(buffer.viewportY, buffer.baseY)
+      setShadow((prev) =>
+        prev.hasTop === next.hasTop && prev.hasBottom === next.hasBottom ? prev : next,
+      )
+    }
+
     // `Ctrl/Cmd+Shift+Enter` — док «Спросить агента» (Ф4б).
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true
@@ -398,6 +416,8 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
           } catch {
             // Контейнер мог схлопнуться — следующая подгонка пройдёт.
           }
+          // Геометрия изменилась — затенение пересчитываем.
+          updateScrollShadow()
         }, FIT_DEBOUNCE_MS)
       })
       observer.observe(container)
@@ -460,6 +480,8 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
       } catch {
         // Контейнер ещё не имеет размеров — подгонка повторится по ResizeObserver.
       }
+      // Снимок записан и геометрия подогнана — затенение пересчитываем.
+      updateScrollShadow()
 
       // Завершённый терминал: потока вывода нет (сервер его не отдаёт) —
       // показываем сохранённый вывод и ждём «Перезапустить терминал».
@@ -485,15 +507,10 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
       })
     })()
 
-    // Затенение краёв: зависит от положения скролла (как data-scroll-shadow в чате).
-    const updateScrollPos = () => {
-      const buffer = term.buffer.active
-      const atBottom = buffer.viewportY >= buffer.baseY
-      const atTop = buffer.viewportY <= 0
-      setScrollPos(atBottom ? 'bottom' : atTop ? 'top' : 'middle')
-    }
-    const scrollSub = term.onScroll(updateScrollPos)
-    updateScrollPos()
+    // Затенение краёв: обновляется на прокрутке (два независимых признака —
+    // сверху/снизу есть контент), после подгонки и после записи снимка.
+    const scrollSub = term.onScroll(updateScrollShadow)
+    updateScrollShadow()
 
     return () => {
       disposed = true
@@ -913,20 +930,21 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
           data-testid="terminal-container"
           className="h-full w-full min-w-0 overflow-hidden p-2"
         />
-        {/* Затенение как в чате: край гаснет только когда за ним есть контент. */}
-        {scrollPos !== 'top' && (
+        {/* Затенение как в чате: край гаснет только когда за ним есть контент.
+            Высота — как в чате (`--scroll-shadow-size: 3rem`). */}
+        {shadow.hasTop && (
           <div
             aria-hidden
             data-testid="terminal-fade-top"
-            className="pointer-events-none absolute inset-x-0 top-0 h-6"
+            className="pointer-events-none absolute inset-x-0 top-0 h-12"
             style={{ background: `linear-gradient(to bottom, ${palette.background}, transparent)` }}
           />
         )}
-        {scrollPos !== 'bottom' && (
+        {shadow.hasBottom && (
           <div
             aria-hidden
             data-testid="terminal-fade-bottom"
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-6"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-12"
             style={{ background: `linear-gradient(to top, ${palette.background}, transparent)` }}
           />
         )}

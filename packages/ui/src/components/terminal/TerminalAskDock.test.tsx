@@ -2,11 +2,16 @@
  * `TerminalAskDock` — док «Спросить агента» над терминалом (PROP-132, Ф4б).
  *
  * Инварианты:
+ * - док — на **общем композере** сессии (`SessionComposer`): поле ввода,
+ *   «Стоп», очередь и «В разрыв» приходят оттуда, второй копии очереди нет;
+ * - отправка уходит обычным сообщением в целевую сессию, а к тексту
+ *   добавляется блок `<terminal_context>`;
  * - после отправки док **не закрывается** — он показывает, идёт ли ход агента
- *   («агент работает…» → «готово»), и закрывается только явно;
- * - поле вопроса очищается после отправки;
+ *   («агент работает…» → «готово»), и закрывается только явно (крестик/Esc);
  * - пока док открыт, сессия не накапливает непрочитанные (`suppressUnread`),
- *   при закрытии подавление снимается.
+ *   при закрытии подавление снимается;
+ * - режим «прикрепить вывод» (`attach`) — прежнее поведение: блок контекста
+ *   уходит в черновик композера, композера в доке нет.
  */
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
@@ -36,7 +41,6 @@ vi.hoisted(() => {
 })
 
 const mocks = vi.hoisted(() => ({
-  sendMessage: vi.fn(),
   notify: vi.fn(),
   suppressUnread: vi.fn(),
   clearSessionUnread: vi.fn(),
@@ -48,23 +52,8 @@ vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
 }))
 
-// Отправка вопроса — обычное сообщение в сессию (транспорт перехватываем).
-vi.mock('@/stores/transportStore', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/stores/transportStore')>()
-  const real = actual.useTransportStore
-  const mocked = Object.assign(
-    (selector?: (state: unknown) => unknown) =>
-      typeof selector === 'function' ? selector(real.getState()) : real.getState(),
-    {
-      ...real,
-      getState: () => ({ ...real.getState(), sendMessage: mocks.sendMessage }),
-    },
-  )
-  return { ...actual, useTransportStore: mocked }
-})
-
 // Подавление непрочитанных — фиксируем вызовы (в сторе состояние заменяется
-// на новый объект, поэтому.spy на методе не переживает первый set).
+// на новый объект, поэтому .spy на методе не переживает первый set).
 vi.mock('@/stores/notificationStore', () => {
   const state = {
     suppressedUnread: {} as Record<string, boolean>,
@@ -86,13 +75,57 @@ vi.mock('@/stores/notificationStore', () => {
   }
 })
 
+// Композер сессии (общий с чатом) — моки как в `SessionComposer.test.tsx`.
+vi.mock('@/lib/api/synthApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api/synthApi')>()
+  return {
+    ...actual,
+    synthApi: {
+      ...actual.synthApi,
+      enqueueMessage: vi.fn(),
+      getSession: vi.fn(),
+      getAgents: vi.fn(),
+      returnQueue: vi.fn(),
+      steerQueue: vi.fn(),
+      clearQueue: vi.fn(),
+      resumeQueue: vi.fn(),
+      reorderQueue: vi.fn(),
+      addStickyNote: vi.fn(),
+    },
+  }
+})
+
+vi.mock('@/hooks/useDevice', () => ({
+  useDevice: () => ({ isTouch: false, deviceType: 'desktop' }),
+}))
+vi.mock('@/components/ui/OverlayScrollbar', () => ({ OverlayScrollbar: () => null }))
+vi.mock('@/components/chat/ModelSelector', () => ({ ModelSelector: () => null }))
+vi.mock('@/components/chat/AgentModeSelector', () => ({ AgentModeSelector: () => null }))
+vi.mock('@/components/chat/PlanActModeToggle', () => ({ PlanActModeToggle: () => null }))
+vi.mock('@/components/chat/ReasoningLevelSelector', () => ({ ReasoningLevelSelector: () => null }))
+
+if (typeof Element.prototype.scrollTo !== 'function') {
+  Element.prototype.scrollTo = () => {}
+}
+if (typeof (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver === 'undefined') {
+  class ResizeObserverStub {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub
+}
+
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { useChatStore } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { resetChatStore } from '@/stores/testUtils'
+import { synthApi } from '@/lib/api/synthApi'
 import type { TerminalDto } from '@/lib/api/terminals'
-import { TerminalAskDock } from './TerminalAskDock'
+import { TerminalAskDock, type TerminalAskDockMode } from './TerminalAskDock'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -121,7 +154,7 @@ const TERMINAL: TerminalDto = {
   target: null,
 }
 
-async function flush(times = 3): Promise<void> {
+async function flush(times = 4): Promise<void> {
   for (let i = 0; i < times; i++) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -136,14 +169,22 @@ const byTestId = (container: HTMLElement, testId: string): HTMLElement | null =>
  * Хост как в `TerminalView`: док живёт, пока его не закрыли явно
  * (`onClose` → размонтирование).
  */
-function DockHost({ onClose }: { onClose: () => void }): React.ReactElement {
+function DockHost({
+  onClose,
+  mode = 'ask',
+  terminal = TERMINAL,
+}: {
+  onClose: () => void
+  mode?: TerminalAskDockMode
+  terminal?: TerminalDto
+}): React.ReactElement {
   const [open, setOpen] = React.useState(true)
   if (!open) return <div data-testid="dock-closed" />
   return (
     <TerminalAskDock
-      terminal={TERMINAL}
+      terminal={terminal}
       lines={['последняя строка вывода']}
-      mode="ask"
+      mode={mode}
       onClose={() => {
         onClose()
         setOpen(false)
@@ -154,6 +195,8 @@ function DockHost({ onClose }: { onClose: () => void }): React.ReactElement {
 
 async function renderDock(
   onClose: () => void = () => {},
+  mode: TerminalAskDockMode = 'ask',
+  terminal: TerminalDto = TERMINAL,
 ): Promise<{ container: HTMLElement; onClose: () => void }> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -163,7 +206,7 @@ async function renderDock(
   await act(async () => {
     root.render(
       <I18nProvider>
-        <DockHost onClose={onClose} />
+        <DockHost onClose={onClose} mode={mode} terminal={terminal} />
       </I18nProvider>,
     )
   })
@@ -171,7 +214,7 @@ async function renderDock(
   return { container, onClose }
 }
 
-/** Вводит текст в контролируемое поле (React видит `onChange`). */
+/** Вводит текст в композер (React видит `onChange`). */
 async function typeInto(textarea: HTMLTextAreaElement, value: string): Promise<void> {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
   await act(async () => {
@@ -180,10 +223,32 @@ async function typeInto(textarea: HTMLTextAreaElement, value: string): Promise<v
   })
 }
 
+/** Кнопка отправки композера (`ChatInput`). */
+function sendButton(container: HTMLElement): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll('button')).find(
+    (el) => el.getAttribute('title') === enDict['chat.input.send'],
+  ) as HTMLButtonElement | undefined
+  expect(button, 'кнопка отправки композера').toBeTruthy()
+  return button!
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   resetChatStore()
-  mocks.sendMessage.mockResolvedValue({ messageId: 'm1' })
+  useComposerDraftsStore.setState({ textBySession: {} })
+  useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+  vi.mocked(synthApi.enqueueMessage).mockResolvedValue({
+    messageId: 'm1',
+    mode: 'queue',
+    position: 1,
+  } as never)
+  vi.mocked(synthApi.getSession).mockResolvedValue({
+    id: SESSION,
+    pending_messages: [],
+  } as never)
+  vi.mocked(synthApi.getAgents).mockResolvedValue({ agents: [], default_agent: null } as never)
+  vi.mocked(synthApi.steerQueue).mockResolvedValue({ steered: true, pending_count: 0 } as never)
+  vi.mocked(synthApi.returnQueue).mockResolvedValue({ texts: ['x'] } as never)
   useSessionsStore.setState({
     sessions: [
       {
@@ -208,34 +273,52 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('TerminalAskDock — отправка вопроса', () => {
-  it('после отправки док остаётся открытым, поле очищено, индикатор «агент работает…»', async () => {
-    const onClose = vi.fn()
-    const { container } = await renderDock(onClose)
+describe('TerminalAskDock — общий композер сессии', () => {
+  it('док рендерит композер: поле ввода и кнопка отправки (своей кнопки нет)', async () => {
+    const { container } = await renderDock()
 
-    const textarea = byTestId(container, 'terminal-ask-input') as HTMLTextAreaElement
+    expect(byTestId(container, 'terminal-ask-dock')).not.toBeNull()
+    expect(container.querySelector('textarea')).toBeTruthy()
+    expect(sendButton(container)).toBeTruthy()
+    // Кнопка «Отправить» из дока убрана — отправка через композер.
+    expect(byTestId(container, 'terminal-ask-send')).toBeNull()
+    // Контекст терминала — плашкой над композером.
+    expect(byTestId(container, 'terminal-ask-context')?.textContent).toContain('/workspace/demo')
+  })
+
+  it('отправка: к тексту добавляется блок контекста терминала', async () => {
+    const { container } = await renderDock()
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
     await typeInto(textarea, 'что здесь происходит?')
-
-    const send = byTestId(container, 'terminal-ask-send') as HTMLButtonElement
     await act(async () => {
-      send.click()
+      sendButton(container).click()
     })
     await flush()
 
-    // Вопрос ушёл в сессию вместе с блоком контекста.
-    expect(mocks.sendMessage).toHaveBeenCalledTimes(1)
-    const [target, message] = mocks.sendMessage.mock.calls[0] as [string, string]
+    expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(1)
+    const [target, message] = vi.mocked(synthApi.enqueueMessage).mock.calls[0] as [string, string]
     expect(target).toBe(SESSION)
     expect(message).toContain('что здесь происходит?')
     expect(message).toContain('<terminal_context terminal="t1"')
     expect(message).toContain('последняя строка вывода')
+  })
 
-    // Док **не** закрылся, поле очищено.
+  it('после отправки док остаётся открытым, индикатор «агент работает…»', async () => {
+    const onClose = vi.fn()
+    const { container } = await renderDock(onClose)
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    await typeInto(textarea, 'вопрос')
+    await act(async () => {
+      sendButton(container).click()
+    })
+    await flush()
+
     expect(onClose).not.toHaveBeenCalled()
     expect(byTestId(container, 'terminal-ask-dock')).not.toBeNull()
-    expect((byTestId(container, 'terminal-ask-input') as HTMLTextAreaElement).value).toBe('')
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('')
 
-    // Индикатор работы агента.
     const status = byTestId(container, 'terminal-ask-status')
     expect(status?.getAttribute('data-phase')).toBe('working')
     expect(status?.textContent).toContain('the agent is working…')
@@ -244,14 +327,13 @@ describe('TerminalAskDock — отправка вопроса', () => {
   it('ход агента завершился — индикатор «готово»', async () => {
     const { container } = await renderDock()
 
-    const textarea = byTestId(container, 'terminal-ask-input') as HTMLTextAreaElement
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
     await typeInto(textarea, 'вопрос')
     await act(async () => {
-      ;(byTestId(container, 'terminal-ask-send') as HTMLButtonElement).click()
+      sendButton(container).click()
     })
     await flush()
 
-    // Ход идёт — индикатор «агент работает…».
     await act(async () => {
       useChatStore.setState({
         turnBySession: { [SESSION]: { turnId: 'turn-1', status: 'streaming' } },
@@ -260,7 +342,6 @@ describe('TerminalAskDock — отправка вопроса', () => {
     await flush()
     expect(byTestId(container, 'terminal-ask-status')?.getAttribute('data-phase')).toBe('working')
 
-    // Ход завершён — индикатор «готово».
     await act(async () => {
       useChatStore.setState({
         turnBySession: { [SESSION]: { turnId: 'turn-1', status: 'completed' } },
@@ -274,22 +355,79 @@ describe('TerminalAskDock — отправка вопроса', () => {
   })
 
   it('ошибка отправки — док остаётся, показывается уведомление об ошибке', async () => {
-    mocks.sendMessage.mockRejectedValue(new Error('соединение потеряно'))
+    vi.mocked(synthApi.enqueueMessage).mockRejectedValueOnce(new Error('соединение потеряно'))
     const onClose = vi.fn()
     const { container } = await renderDock(onClose)
 
-    const textarea = byTestId(container, 'terminal-ask-input') as HTMLTextAreaElement
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
     await typeInto(textarea, 'вопрос')
     await act(async () => {
-      ;(byTestId(container, 'terminal-ask-send') as HTMLButtonElement).click()
+      sendButton(container).click()
     })
     await flush()
 
     expect(onClose).not.toHaveBeenCalled()
     expect(byTestId(container, 'terminal-ask-dock')).not.toBeNull()
     expect(mocks.notify).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'error', text: 'Could not send: соединение потеряно' }),
+      expect.objectContaining({ type: 'error', text: expect.stringContaining('соединение потеряно') }),
     )
+  })
+
+  it('очередь сессии доступна в доке: «Вклинить» уходит в разрыв хода', async () => {
+    act(() => {
+      useChatStore.getState().setPendingMessages(SESSION, [{ id: 'msg-1', content: 'в очереди' }])
+      useChatStore.getState().updateQueueCount(SESSION, 1)
+      // Активный ход — «Вклинить» доступно (ADR-118 §1).
+      useChatStore.setState({
+        turnBySession: { [SESSION]: { turnId: 'turn-1', status: 'streaming' } },
+      })
+    })
+    const { container } = await renderDock()
+
+    // Панель очереди — общая с чатом.
+    expect(byTestId(container, 'queue-header-toggle')).not.toBeNull()
+
+    const toggle = byTestId(container, 'queue-header-toggle') as HTMLButtonElement
+    await act(async () => {
+      toggle.click()
+    })
+    await flush(2)
+
+    const steer = byTestId(container, 'queue-steer-0') as HTMLButtonElement | null
+    expect(steer).not.toBeNull()
+    await act(async () => {
+      steer!.click()
+    })
+    await flush()
+
+    expect(synthApi.steerQueue).toHaveBeenCalledWith(SESSION, { id: 'msg-1' })
+  })
+})
+
+describe('TerminalAskDock — закрытие', () => {
+  it('крестик закрывает док', async () => {
+    const onClose = vi.fn()
+    const { container } = await renderDock(onClose)
+
+    await act(async () => {
+      ;(byTestId(container, 'terminal-ask-close') as HTMLButtonElement).click()
+    })
+    await flush()
+
+    expect(onClose).toHaveBeenCalled()
+    expect(byTestId(container, 'dock-closed')).not.toBeNull()
+  })
+
+  it('Esc закрывает док', async () => {
+    const onClose = vi.fn()
+    await renderDock(onClose)
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await flush()
+
+    expect(onClose).toHaveBeenCalled()
   })
 })
 
@@ -308,5 +446,27 @@ describe('TerminalAskDock — подавление непрочитанных', 
 
     expect(byTestId(container, 'dock-closed')).not.toBeNull()
     expect(mocks.suppressUnread).toHaveBeenCalledWith(SESSION, false)
+  })
+})
+
+describe('TerminalAskDock — режим «прикрепить вывод»', () => {
+  it('композера нет: блок контекста уходит в черновик, чат открывается', async () => {
+    const onClose = vi.fn()
+    const { container } = await renderDock(onClose, 'attach')
+
+    // Композера в доке нет.
+    expect(container.querySelector('textarea')).toBeNull()
+    expect(byTestId(container, 'terminal-attach-confirm')).not.toBeNull()
+
+    await act(async () => {
+      ;(byTestId(container, 'terminal-attach-confirm') as HTMLButtonElement).click()
+    })
+    await flush()
+
+    const draft = useComposerDraftsStore.getState().textBySession[SESSION] ?? ''
+    expect(draft).toContain('<terminal_context terminal="t1"')
+    expect(draft).toContain('последняя строка вывода')
+    expect(onClose).toHaveBeenCalled()
+    expect(useUIStore.getState().centerTabs.some((tab) => tab.data?.sessionId === SESSION)).toBe(true)
   })
 })

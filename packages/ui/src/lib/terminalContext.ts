@@ -61,7 +61,11 @@ export function readTerminalBufferLines(
   if (!term || limit <= 0) return []
   const buffer = term.buffer?.active
   if (!buffer) return []
-  const end = buffer.baseY + buffer.length
+  // `length` — число строк в буфере (прокрутка + текущая страница), значит
+  // последняя строка — `length - 1`. `baseY` — индекс начала нижней страницы:
+  // прибавлять его нельзя, иначе индексы уходят за конец буфера и контекст
+  // оказывается пустым, как только есть прокрутка.
+  const end = buffer.length
   const out: string[] = []
   for (let i = Math.max(0, end - limit); i < end; i++) {
     const line = buffer.getLine(i)
