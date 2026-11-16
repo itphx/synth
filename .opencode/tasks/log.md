@@ -1755,3 +1755,9 @@
 - `TerminalSessionView`: `+` создания сразу после терминалов (`ml-1`), не справа; лишний `terminal-create-another` из тулбара `TerminalView` удалён.
 - «Прикрепить вывод» (`terminal-attach-output`) вернулся: `buildTerminalReadBlock` → `[CONTENT terminal=… status=… bytes=… tail=… stripped=true] … [CONTENT END]` в черновик сессии; без привязки — тост.
 - Коммит `9b4bc2c1`; UI 4345 тестов, typecheck/lint чисто. Test не переразворачивался.
+
+## 2026-11-16 — attach без пустых хвостов; PROP-132 → ADR-132
+
+- «Прикрепить вывод»: `buildTerminalReadBlock` срезает хвостовые пустые/пробельные строки; `tail`/`bytes` — по фактическому телу, внутренние пустые строки сохраняются. Коммит `7a6da324`.
+- PROP-132 принят как **ADR-132** (`docs/arch_decisions/adr-132-ui-terminal.md`, ✅ Реализовано, Источник PROP-132), PROP-файл удалён; индекс/roadmap, ссылки в docs/AGENTS/пакетных AGENTS обновлены; `adr-check` 0 ошибок, `docs-link-check` 0 ошибок. Коммит `feac0fbf`.
+- Комментарии в коде с историческим `PROP-132` (~120 мест) не менялись — это не ссылки; при необходимости отдельная механическая замена.
