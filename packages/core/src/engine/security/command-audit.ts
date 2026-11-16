@@ -23,10 +23,11 @@
  * записи `started` **блокирует** выполнение команды (PROP-136).
  */
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { AsyncLock, atomicWrite } from '@itphx/synth-shared';
 import type {
+  BackgroundRunRecord,
   CommandAuditConfig,
   CommandAuditDecision,
   CommandAuditEntry,
@@ -381,4 +382,68 @@ export class CommandAuditLog {
 /** Фабрика журнала (путь/`enabled` — из `security.commandAudit`). */
 export function createCommandAuditLog(options: CommandAuditLogOptions): CommandAuditLog {
   return new CommandAuditLog(options);
+}
+
+/**
+ * Парная запись журнала по терминальному переходу фонового скрипта
+ * (ADR-136/ADR-126 §5).
+ *
+ * Пишет запись `phase: 'finished'` по записи реестра фоновых прогонов:
+ * - `id` — тот же `execution_id`, что у записи `started` (`metadata.audit_id`);
+ *   нет метки — новый id (запись `started` не велась);
+ * - `durationMs` — разница `finishedAt`/`startedAt` (мс);
+ * - `exitCode` — код выхода процесса.
+ *
+ * **Вывод процесса в журнал не пишется** — только метаданные (как и в записи
+ * `started`).
+ *
+ * Журнал выключен или запись реестра не про скрипт — запись не создаётся.
+ * Ошибка записи — предупреждение в лог: процесс уже завершён, его состояние
+ * не трогаем.
+ */
+export function createScriptRunAuditFinisher(options: {
+  /** Журнал исполнений (не задан — записи не пишутся). */
+  audit?: CommandAuditLog;
+  /** Логгер предупреждений. */
+  logger?: { warn?: (message: string) => void };
+}): (record: BackgroundRunRecord) => Promise<void> {
+  const { audit, logger } = options;
+  return async (record: BackgroundRunRecord): Promise<void> => {
+    if (!audit || !audit.enabled) return;
+    const script = record.metadata?.script;
+    if (typeof script !== 'string') return;
+    const origin = typeof record.metadata?.origin === 'string'
+      ? record.metadata.origin
+      : 'agent';
+    const description = `script.run name=${script} origin=${origin}`;
+    // Длительность — из ISO-строк записи реестра; неразобранная дата —
+    // поле не пишем (NaN в журнал не попадает).
+    const startedAtMs = Date.parse(record.startedAt);
+    const finishedAtMs = record.finishedAt ? Date.parse(record.finishedAt) : Number.NaN;
+    const durationMs = Number.isFinite(startedAtMs) && Number.isFinite(finishedAtMs)
+      ? Math.max(0, finishedAtMs - startedAtMs)
+      : undefined;
+    try {
+      await audit.append({
+        id: typeof record.metadata?.audit_id === 'string' ? record.metadata.audit_id : randomUUID(),
+        ts: new Date().toISOString(),
+        sessionId: record.sessionId,
+        ...(record.projectId ? { projectId: record.projectId } : {}),
+        tool: 'script.run',
+        command: description,
+        commandHash: sha256Hex(description),
+        cwd: record.cwd ?? '',
+        background: true,
+        decision: 'allow',
+        decidedBy: 'permission',
+        phase: 'finished',
+        ...(record.exitCode !== undefined ? { exitCode: record.exitCode } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
+    } catch (err) {
+      logger?.warn?.(
+        `[CommandAuditLog] запись завершения запуска скрипта "${script}" не удалась: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
 }

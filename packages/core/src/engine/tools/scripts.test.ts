@@ -15,11 +15,12 @@
  *   заблокирован; группа `script` отключаема админом.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { ToolContext } from '@itphx/synth-shared';
+import type { CommandAuditEntry, ToolContext } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
 import { scriptListTool, scriptRunTool } from './scripts.js';
 import type { ScriptService } from '../scripts/service.js';
 import { ScriptError } from '../scripts/types.js';
+import type { CommandAuditLog } from '../security/command-audit.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { getToolGroups } from '../permission/groups.js';
 
@@ -31,7 +32,6 @@ function summary(name: string, overrides: Record<string, unknown> = {}) {
     origin: 'project',
     available: true,
     trusted: true,
-    background: true,
     ...overrides,
   };
 }
@@ -64,6 +64,15 @@ function makeCtx(extra: Record<string, unknown> = {}): ToolContext {
     allowedRoots: ['/work/project-root'],
     extra,
   };
+}
+
+/** Заглушка журнала исполнений (ADR-136): пишет записи в массив. */
+function makeAuditLog() {
+  const entries: CommandAuditEntry[] = [];
+  const append = vi.fn(async (entry: CommandAuditEntry) => {
+    entries.push(entry);
+  });
+  return { entries, append, log: { enabled: true, append } as unknown as CommandAuditLog };
 }
 
 describe('Встроенные тулы реестра скриптов проекта (scripts.ts)', () => {
@@ -156,6 +165,38 @@ describe('Встроенные тулы реестра скриптов прое
 
       expect(result.isError).toBe(true);
       expect(result.metadata?.i18n).toMatchObject({ key: 'script.tool.deps_unavailable' });
+    });
+
+    /**
+     * ADR-136: у пары `started`/`finished` — один `execution_id`. Запись
+     * `started` несёт его в `id`, в запуск скрипта он уходит как `auditId`.
+     */
+    it('запись started получает id, тот же id уходит в сервис как auditId', async () => {
+      const service = makeService();
+      const audit = makeAuditLog();
+
+      await scriptRunTool.execute(
+        { name: 'dev' },
+        makeCtx({ scriptService: service, commandAudit: audit.log }),
+      );
+
+      expect(audit.entries).toHaveLength(1);
+      const entry = audit.entries[0]!;
+      expect(entry.phase).toBe('started');
+      expect(entry.tool).toBe('script.run');
+      expect(entry.id).toBeTruthy();
+
+      const run = (service.run as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(run).toMatchObject({ auditId: entry.id });
+    });
+
+    it('без журнала запуск идёт без auditId', async () => {
+      const service = makeService();
+
+      await scriptRunTool.execute({ name: 'dev' }, makeCtx({ scriptService: service }));
+
+      const run = (service.run as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(run).not.toHaveProperty('auditId');
     });
   });
 

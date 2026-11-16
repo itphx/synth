@@ -35,6 +35,7 @@ interface SpawnCall {
   requires?: string[];
   title?: string;
   origin?: 'user' | 'agent';
+  metadata?: Record<string, unknown>;
 }
 
 beforeEach(async () => {
@@ -199,6 +200,39 @@ describe('ScriptService — запуск', () => {
     expect(call.title).toBe('dev');
   });
 
+  /**
+   * ADR-136: `auditId` — id пары записей журнала исполнений (`started`/
+   * `finished`). Он кладётся в запись реестра прогона (`metadata.audit_id`),
+   * по нему терминальный переход дописывает парную запись `finished`.
+   */
+  it('auditId попадает в metadata.audit_id записи реестра', async () => {
+    await writeScript('dev', ['description: D', 'run: ./scripts/dev.sh']);
+    const { service, spawn } = createService();
+
+    await service.run({
+      name: 'dev',
+      sessionId: 's1',
+      workingDir: workspace,
+      projectWorkspace: workspace,
+      origin: 'user',
+      auditId: 'exec-1',
+    });
+
+    const call = spawn.mock.calls[0]![0] as SpawnCall;
+    expect(call.metadata).toMatchObject({ script: 'dev', audit_id: 'exec-1' });
+  });
+
+  it('без auditId в метаданных нет ключа audit_id', async () => {
+    await writeScript('dev', ['description: D', 'run: ./scripts/dev.sh']);
+    const { service, spawn } = createService();
+
+    await service.run({ name: 'dev', sessionId: 's1', workingDir: workspace, projectWorkspace: workspace, origin: 'user' });
+
+    const call = spawn.mock.calls[0]![0] as SpawnCall;
+    expect(call.metadata).toMatchObject({ script: 'dev' });
+    expect(call.metadata).not.toHaveProperty('audit_id');
+  });
+
   it('BackgroundUnsupportedError → script_background_disabled', async () => {
     await writeScript('dev', ['description: D', 'run: ./scripts/dev.sh']);
     const { service } = createService(() => {
@@ -213,7 +247,7 @@ describe('ScriptService — запуск', () => {
 
 describe('ScriptService — чтение реестра', () => {
   it('list отдаёт сводки и диагностику, пути — относительные', async () => {
-    await writeScript('dev', ['description: Поднять dev', 'run: ./scripts/dev.sh', 'background: false']);
+    await writeScript('dev', ['description: Поднять dev', 'run: ./scripts/dev.sh']);
     const { service } = createService();
 
     const res = await service.list({ projectWorkspace: workspace });
@@ -225,8 +259,9 @@ describe('ScriptService — чтение реестра', () => {
       origin: 'project',
       available: true,
       trusted: true,
-      background: false,
     });
+    // Поле `background` удалено из контракта: запуск всегда фоновый.
+    expect(res.scripts[0]).not.toHaveProperty('background');
     for (const diagnostic of res.diagnostics) {
       if (diagnostic.path) expect(diagnostic.path.startsWith('/')).toBe(false);
     }

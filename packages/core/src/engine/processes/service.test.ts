@@ -13,7 +13,7 @@
  * заглушка (реальный процесс не запускается), без сети.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { BusEvent } from '@itphx/synth-shared';
+import type { BackgroundRunRecord, BusEvent } from '@itphx/synth-shared';
 import { EventBus } from '../../events/bus.js';
 import { MemoryBlobStore } from '../../storage/memory/content.js';
 import { MemoryBackgroundRunRepository } from '../../storage/memory/background-runs.js';
@@ -24,10 +24,13 @@ import {
   type ExecutionPort,
 } from '../../execution/ports/index.js';
 import { ProcessService } from './service.js';
-import { BackgroundUnsupportedError } from './types.js';
+import { BackgroundUnsupportedError, type ProcessLogger } from './types.js';
 
 /** Заглушка порта исполнения: фоновый процесс не запускается, выход — вручную. */
-function createHarness() {
+function createHarness(opts: {
+  onFinished?: (record: BackgroundRunRecord) => void | Promise<void>;
+  logger?: ProcessLogger;
+} = {}) {
   const repository = new MemoryBackgroundRunRepository();
   const eventBus = new EventBus();
   const events: BusEvent[] = [];
@@ -73,6 +76,8 @@ function createHarness() {
     blobs: new MemoryBlobStore(),
     eventBus,
     limits: { maxLogBytes: 1024 },
+    ...(opts.onFinished ? { onFinished: opts.onFinished } : {}),
+    ...(opts.logger ? { logger: opts.logger } : {}),
   });
 
   return {
@@ -190,6 +195,61 @@ describe('ProcessService — остановка фонового процесс�
     await expect(
       service.spawn({ sessionId: 's1', command: 'sleep 60', cwd: '/tmp' }),
     ).rejects.toBeInstanceOf(BackgroundUnsupportedError);
+  });
+});
+
+/**
+ * ADR-136/ADR-126 §5: хук терминального перехода фонового процесса.
+ *
+ * Хук получает **финальную** запись реестра (`status`/`exitCode`/`finishedAt`)
+ * — по ней пишется парная запись журнала исполнений (`phase: 'finished'`).
+ * Ошибка хука не влияет на процесс: терминальный статус к этому моменту уже
+ * зафиксирован.
+ */
+describe('ProcessService — хук завершения (ADR-136)', () => {
+  it('onFinished получает финальную запись (статус/код выхода)', async () => {
+    const finished: BackgroundRunRecord[] = [];
+    const h = createHarness({ onFinished: (record) => { finished.push(record); } });
+
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'sleep 60',
+      cwd: '/tmp',
+    });
+    h.resolveExit({ exitCode: 0, signal: null, durationMs: 5 });
+
+    await vi.waitFor(() => {
+      expect(finished).toHaveLength(1);
+    });
+    expect(finished[0]).toMatchObject({
+      id: started.runId,
+      status: 'completed',
+      exitCode: 0,
+    });
+    expect(finished[0]!.finishedAt).toBeTruthy();
+  });
+
+  it('ошибка хука не ломает процесс — запись остаётся completed', async () => {
+    const warnings: string[] = [];
+    const h = createHarness({
+      onFinished: () => {
+        throw new Error('аудит не записался');
+      },
+      logger: { warn: (message: string) => { warnings.push(message); } },
+    });
+
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'sleep 60',
+      cwd: '/tmp',
+    });
+    h.resolveExit({ exitCode: 0, signal: null, durationMs: 5 });
+
+    await vi.waitFor(() => {
+      expect(warnings.some((w) => w.includes('хук завершения'))).toBe(true);
+    });
+    const record = await h.service.get(started.runId);
+    expect(record?.status).toBe('completed');
   });
 });
 

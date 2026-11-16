@@ -189,6 +189,8 @@ export class ProcessService {
   private readonly _eventBus: EventBus;
   private readonly _limits: { maxLogBytes: number };
   private readonly _logger: ProcessLogger;
+  /** Хук терминального перехода (ADR-136/ADR-126 §5) — парная запись аудита. */
+  private readonly _onFinished?: ProcessServiceOptions['onFinished'];
   /** Живые процессы: `runId` → хэндл. */
   private readonly _live = new Map<string, LiveProcess>();
 
@@ -202,6 +204,7 @@ export class ProcessService {
       warn: (message: string) => console.warn(message),
       error: (message: string) => console.error(message),
     };
+    this._onFinished = options.onFinished;
   }
 
   /**
@@ -526,8 +529,11 @@ export class ProcessService {
     signal: string | null,
   ): Promise<void> {
     const status = signal ? 'cancelled' : exitCode === 0 ? 'completed' : 'failed';
+    // Финальная запись реестра: терминальный статус уже зафиксирован — именно
+    // её получает хук (исходная запись ещё `running`).
+    let finalRecord: BackgroundRunRecord | null = null;
     try {
-      await this._background.finish(record.id, {
+      finalRecord = await this._background.finish(record.id, {
         status,
         ...(exitCode !== null ? { exitCode } : {}),
         ...(signal ? { signal } : {}),
@@ -548,6 +554,18 @@ export class ProcessService {
       scope: 'all',
       tool: 'execute_shell',
     });
+    // ADR-136/ADR-126 §5: хук терминального перехода (парная запись журнала
+    // исполнений). Вызывается только при успешной фиксации статуса: ошибка
+    // хука не влияет на процесс — переход уже зафиксирован.
+    if (this._onFinished && finalRecord) {
+      try {
+        await this._onFinished(finalRecord);
+      } catch (err) {
+        this._logger.warn?.(
+          `[ProcessService] хук завершения фонового процесса ${record.id} не удался: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   /** Перекачка вывода процесса в писатель лога. */

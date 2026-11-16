@@ -296,13 +296,20 @@ export function createSessionScriptRoutes(
 
     // ADR-136: журнал исполнений — запись `started` **до** запуска. Только
     // метаданные: имя скрипта, cwd, число аргументов, origin.
+    //
+    // `execution_id` — один на пару `started`/`finished`: тот же id уходит в
+    // запись реестра прогона (`metadata.audit_id`), по нему терминальный
+    // переход дописывает парную запись `finished`.
     const audit = deps.commandAudit;
+    let auditId: string | undefined;
     if (audit && audit.enabled) {
+      const executionId = randomUUID();
+      auditId = executionId;
       const argCount = countArguments(args);
       const description = `script.run name=${name} args=${argCount} origin=user`;
       try {
         await audit.append({
-          id: randomUUID(),
+          id: executionId,
           ts: new Date().toISOString(),
           sessionId,
           ...(session?.projectId ? { projectId: session.projectId } : {}),
@@ -333,6 +340,7 @@ export function createSessionScriptRoutes(
         workingDir,
         origin: 'user',
         projectWorkspace: workingDir,
+        ...(auditId ? { auditId } : {}),
       });
       return c.json(result, 202);
     } catch (err) {

@@ -82,7 +82,6 @@ const SCRIPT: ScriptSummary = {
   origin: 'project',
   available: true,
   trusted: true,
-  background: true,
 }
 
 async function renderInput(props?: {

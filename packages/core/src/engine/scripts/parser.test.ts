@@ -37,7 +37,6 @@ describe('parseScriptFile — валидная декларация', () => {
     expect(res.script!.run).toBe('./scripts/dev.sh');
     expect(res.script!.shell).toBe(false);
     expect(res.script!.args).toBe(false);
-    expect(res.script!.background).toBe(true);
     expect(res.script!.body).toBe('Описание действия');
     expect(res.script!.file).toBe(FILE);
     expect(res.script!.dir).toBe(DIR);
@@ -59,7 +58,6 @@ describe('parseScriptFile — валидная декларация', () => {
       'run: ./scripts/dev.sh --flag',
       'shell: true',
       'args: true',
-      'background: false',
       'timeout: 120000',
       'requires: [bash, git]',
       'env:',
@@ -73,12 +71,25 @@ describe('parseScriptFile — валидная декларация', () => {
     const script = res.script!;
     expect(script.shell).toBe(true);
     expect(script.args).toBe(true);
-    expect(script.background).toBe(false);
     expect(script.timeout).toBe(120000);
     expect(script.requires).toEqual(['bash', 'git']);
     expect(script.env).toEqual({ PORT: '3000', DEBUG: '1' });
     expect(script.ready).toBe('готов на :5000');
     expect(script.argumentHint).toBe('[port]');
+  });
+
+  it('`background: false` в frontmatter игнорируется — скрипт валиден', () => {
+    const res = parse(frontmatter([
+      'description: D',
+      'run: ./scripts/dev.sh',
+      'background: false',
+    ]));
+
+    // Ключ больше не поддерживается — но декларация с ним остаётся валидной
+    // (обратная совместимость объявлений): запуск всегда фоновый.
+    expect(res.diagnostics).toEqual([]);
+    expect(res.script).toBeTruthy();
+    expect(res.script).not.toHaveProperty('background');
   });
 
   it('неизвестные ключи frontmatter не ломают discovery', () => {

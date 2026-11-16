@@ -67,8 +67,6 @@ export interface ScriptSummary {
   unavailableReason?: 'trusted' | 'denied';
   /** Доверен ли источник скрипта (project-trust гейт, ADR-126 §9). */
   trusted: boolean;
-  /** Фоновый запуск по умолчанию (`background` в декларации). */
-  background: boolean;
 }
 
 /**
@@ -99,8 +97,8 @@ export interface ScriptDetail extends ScriptSummary {
 /**
  * Ответ запуска скрипта — по смыслу совпадает с ответом фонового процесса.
  *
- * Скрипт всегда стартует фоновым процессом (ADR-113), даже если в декларации
- * `background: false` — тогда ожидание завершения делает вызывающий.
+ * Скрипт всегда стартует фоновым процессом (ADR-113): отдельного режима
+ * «с ожиданием завершения» нет — декларация такого поля не предусматривает.
  */
 export interface ScriptRunResponse {
   /** id записи реестра фоновых прогонов (`bgr_<uuid>`). */

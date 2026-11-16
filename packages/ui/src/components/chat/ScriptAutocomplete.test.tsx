@@ -31,7 +31,6 @@ function makeScript(overrides: Partial<ScriptSummary> = {}): ScriptSummary {
     origin: 'project',
     available: true,
     trusted: true,
-    background: true,
     ...overrides,
   }
 }

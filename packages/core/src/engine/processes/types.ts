@@ -5,6 +5,7 @@
  * `kind: 'process'`), здесь — только типы **сервиса**: вход запуска, результат
  * запуска, чтение лога и типизированные ошибки.
  */
+import type { BackgroundRunRecord } from '@itphx/synth-shared';
 import type { ExecBackgroundChunk, ExecBackgroundProcess, ExecSecret, ExecutionPort } from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
@@ -60,6 +61,15 @@ export interface ProcessServiceOptions {
   limits: ProcessLimits;
   /** Логгер (по умолчанию — console). */
   logger?: ProcessLogger;
+  /**
+   * ADR-136/ADR-126 §5: хук терминального перехода фонового процесса.
+   *
+   * Вызывается **после** фиксации терминального статуса в реестре прогонов;
+   * аргумент — финальная запись (`status`/`exitCode`/`finishedAt`). Нужен для
+   * парной записи журнала исполнений (`phase: 'finished'`). Ошибки хука не
+   * влияют на процесс: переход к этому моменту уже зафиксирован.
+   */
+  onFinished?: (record: BackgroundRunRecord) => void | Promise<void>;
   /** Источник времени (тесты подменяют). */
   now?: () => string;
 }

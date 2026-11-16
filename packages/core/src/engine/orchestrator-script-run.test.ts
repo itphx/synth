@@ -14,10 +14,11 @@ import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
-import type { BusEvent, PermissionConfig, Project, ScriptDetail } from '@itphx/synth-shared';
+import type { BusEvent, CommandAuditEntry, PermissionConfig, Project, ScriptDetail } from '@itphx/synth-shared';
 import type { ContextBuilder } from './context/builder.js';
 import { generateId, MessageRole, nowISO, makeTextPart, type Message } from '@itphx/synth-shared';
 import type { ScriptService } from './scripts/service.js';
+import type { CommandAuditLog } from './security/command-audit.js';
 import { stubContextFiles } from '../test-helpers/storage-stubs.js';
 
 function makeCtxBuilder(): ContextBuilder {
@@ -44,7 +45,6 @@ function makeDetail(overrides?: Partial<ScriptDetail>): ScriptDetail {
     origin: 'project',
     available: true,
     trusted: true,
-    background: true,
     run: './scripts/dev.sh',
     shell: false,
     args: true,
@@ -81,6 +81,15 @@ let projectDir: string;
 /** Каталог worktree сессии — рабочий каталог хода. */
 let worktreeDir: string;
 
+/**
+ * Заглушка журнала исполнений (ADR-136) — структурный объект: оркестратору
+ * нужны только `enabled` и `append`.
+ */
+function makeAuditLog(enabled = true) {
+  const append = vi.fn(async (_entry: CommandAuditEntry) => {});
+  return { append, log: { enabled, append } as unknown as CommandAuditLog };
+}
+
 async function run(
   content: string,
   opts?: {
@@ -88,6 +97,7 @@ async function run(
     permissionConfig?: PermissionConfig;
     messageMetadata?: Record<string, unknown>;
     sessionMode?: 'plan' | 'act' | 'yolo';
+    commandAudit?: CommandAuditLog;
   },
 ) {
   tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-script-'));
@@ -129,6 +139,7 @@ async function run(
       ? { scriptService: scriptService as unknown as ScriptService }
       : {}),
     ...(opts?.permissionConfig ? { permissionConfig: opts.permissionConfig } : {}),
+    ...(opts?.commandAudit ? { commandAudit: opts.commandAudit } : {}),
   });
 
   const session = await sessionManager.createSession({
@@ -283,5 +294,39 @@ describe('ChatOrchestrator — `!`-скрипты (ADR-126 §5)', () => {
     const reply = localReply(after.messages);
     expect(reply).toBeDefined();
     expect(reply!.content.length).toBeGreaterThan(0);
+  });
+});
+
+describe('ChatOrchestrator — журнал исполнений `!`-скрипта (ADR-136)', () => {
+  it('аудит включён → запись `started` с тем же id, что уходит в `run({auditId})`', async () => {
+    const audit = makeAuditLog();
+    const { scriptService } = await run('!dev --fast', { commandAudit: audit.log });
+
+    expect(audit.append).toHaveBeenCalledTimes(1);
+    const entry = audit.append.mock.calls[0]![0] as CommandAuditEntry;
+    expect(entry.phase).toBe('started');
+    expect(entry.tool).toBe('script.run');
+    // Только метаданные: имя скрипта, число аргументов, origin.
+    expect(entry.command).toBe('script.run name=dev args=1 origin=user');
+    expect(entry.commandHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(entry.background).toBe(true);
+    expect(entry.decision).toBe('allow');
+    expect(entry.decidedBy).toBe('permission');
+    expect(entry.cwd).toBe(worktreeDir);
+    expect(entry.sessionId).toBeTruthy();
+
+    // Пара `started`/`finished` — один `execution_id`: он же уходит в запись
+    // реестра прогона (`metadata.audit_id`).
+    const input = scriptService!.run.mock.calls[0]![0] as { auditId?: string };
+    expect(input.auditId).toBe(entry.id);
+  });
+
+  it('аудит выключен → записи нет, `run` без `auditId`', async () => {
+    const audit = makeAuditLog(false);
+    const { scriptService } = await run('!dev', { commandAudit: audit.log });
+
+    expect(audit.append).not.toHaveBeenCalled();
+    const input = scriptService!.run.mock.calls[0]![0] as { auditId?: string };
+    expect(input.auditId).toBeUndefined();
   });
 });

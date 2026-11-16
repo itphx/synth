@@ -132,6 +132,9 @@ import {
   // PROP-136 (слайс 136a): журнал исполнений команд + его метрики.
   createCommandAuditLog,
   createCommandAuditMetrics,
+  // ADR-136/ADR-126 §5: парная запись `finished` по терминальному переходу
+  // фонового скрипта.
+  createScriptRunAuditFinisher,
   // PROP-136b (слайс 136b-2a): зеркальный чекер команд (провайдер + метрики).
   createCommandPolicyMetrics,
   createCommandPolicyProvider,
@@ -1286,6 +1289,9 @@ export async function createBackendDeps(
   // ожидания, а не отдельный путь исполнения. Учёт прогона — общий реестр
   // фоновых прогонов (`kind: 'process'`), лог — blob-хранилище (ADR-096).
   // В деградированном режиме хранилища сервиса нет (писать некуда).
+  //
+  // Логгер сервиса: предупреждения — в вывод процесса (в journal — консоль).
+  const processLogger = { warn: (message: string) => console.warn(message) };
   const processService = backgroundService
     ? new ProcessService({
         executionPort,
@@ -1293,6 +1299,14 @@ export async function createBackendDeps(
         blobs: storageContext.blobs,
         eventBus,
         limits: { maxLogBytes: config.synth.background.logMaxBytes },
+        logger: processLogger,
+        // ADR-136/ADR-126 §5: терминальный переход фонового процесса
+        // дописывает в журнал исполнений парную запись `finished`
+        // (только метаданные — вывод процесса не пишется).
+        onFinished: createScriptRunAuditFinisher({
+          audit: commandAuditLog,
+          logger: processLogger,
+        }),
       })
     : undefined;
 

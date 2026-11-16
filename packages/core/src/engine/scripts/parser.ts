@@ -12,6 +12,10 @@ import type { TemplateScript } from './types.js';
  * `^[a-z0-9]+(-[a-z0-9]+)*$`; берётся из `name` во frontmatter, иначе — из
  * имени файла без `.md`.
  *
+ * Ключ `background` больше не поддерживается (запуск всегда фоновый,
+ * ADR-113): он считается **неизвестным** и молча игнорируется — декларации с
+ * ним остаются валидными (обратная совместимость объявлений).
+ *
  * Невалидная декларация **не создаёт запись** (fail-closed): битая
  * декларация не должна запускаться. Причина — в диагностике.
  */
@@ -261,7 +265,6 @@ export function parseScriptFile(
     shell: asBoolean(data.shell) ?? false,
     args: asBoolean(data.args) ?? false,
     ...(cwd ? { cwd } : {}),
-    background: asBoolean(data.background) ?? true,
     ...(timeout !== undefined ? { timeout } : {}),
     ...(requires ? { requires } : {}),
     ...(env ? { env } : {}),

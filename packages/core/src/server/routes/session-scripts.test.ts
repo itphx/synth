@@ -15,10 +15,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import type { PermissionConfig } from '@itphx/synth-shared';
+import type { CommandAuditEntry, PermissionConfig } from '@itphx/synth-shared';
 import { createSessionScriptRoutes } from './session-scripts.js';
 import type { ScriptService } from '../../engine/scripts/service.js';
 import { ScriptError } from '../../engine/scripts/types.js';
+import type { CommandAuditLog } from '../../engine/security/command-audit.js';
 import type { SessionManager } from '../../sessions/manager.js';
 
 const SESSION_ID = 'sess-1';
@@ -87,6 +88,7 @@ function makeApp(
   opts: {
     scriptService?: ScriptService;
     permissionConfig?: PermissionConfig;
+    commandAudit?: CommandAuditLog;
   } = {},
 ) {
   const app = new Hono();
@@ -99,11 +101,21 @@ function makeApp(
         ...(opts.scriptService ? { scriptService: opts.scriptService } : {}),
         resolveWorkingDir: async () => '/work/project',
         ...(opts.permissionConfig ? { permissionConfig: opts.permissionConfig } : {}),
+        ...(opts.commandAudit ? { commandAudit: opts.commandAudit } : {}),
       },
       {},
     ),
   );
   return app;
+}
+
+/** Заглушка журнала исполнений (ADR-136): пишет записи в массив. */
+function makeAuditLog() {
+  const entries: CommandAuditEntry[] = [];
+  const append = vi.fn(async (entry: CommandAuditEntry) => {
+    entries.push(entry);
+  });
+  return { entries, append, log: { enabled: true, append } as unknown as CommandAuditLog };
 }
 
 describe('/api/v2/sessions/:id/scripts (ADR-126 §5)', () => {
@@ -263,6 +275,48 @@ describe('/api/v2/sessions/:id/scripts (ADR-126 §5)', () => {
       });
 
       expect(res.status).toBe(202);
+    });
+
+    /**
+     * ADR-136: у пары `started`/`finished` — один `execution_id`. Запись
+     * `started` несёт его в `id`, а в запуск скрипта он уходит как `auditId`
+     * (в запись реестра прогона — `metadata.audit_id`).
+     */
+    it('запись started получает id, тот же id уходит в сервис как auditId', async () => {
+      const service = makeService();
+      const audit = makeAuditLog();
+      const app = makeApp({ scriptService: service, commandAudit: audit.log });
+
+      const res = await app.request(`/api/v2/sessions/${SESSION_ID}/scripts/dev/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      expect(res.status).toBe(202);
+      expect(audit.entries).toHaveLength(1);
+      const entry = audit.entries[0]!;
+      expect(entry.phase).toBe('started');
+      expect(entry.tool).toBe('script.run');
+      expect(entry.id).toBeTruthy();
+
+      const run = (service.run as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(run).toMatchObject({ auditId: entry.id });
+    });
+
+    it('без журнала запуск идёт без auditId', async () => {
+      const service = makeService();
+      const app = makeApp({ scriptService: service });
+
+      const res = await app.request(`/api/v2/sessions/${SESSION_ID}/scripts/dev/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      expect(res.status).toBe(202);
+      const run = (service.run as unknown as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(run).not.toHaveProperty('auditId');
     });
   });
 

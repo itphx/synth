@@ -117,6 +117,8 @@ import type { ProcessService } from './processes/service.js';
 import type { ScriptService } from './scripts/service.js';
 // ADR-126 §5: коды ошибок доменного слоя скриптов → локальный ответ.
 import { ScriptError, type ScriptErrorCode } from './scripts/types.js';
+// ADR-126 §5: разбор аргументов скрипта (число аргументов — только для аудита).
+import { splitScriptArguments } from './scripts/args.js';
 import type { BlobRefRepository } from '../storage/ports/blob-ref-repository.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, isFfmpegAvailable, refreshRuntimeDeps, type RuntimeDeps } from './tools/runtime-deps.js';
@@ -268,6 +270,22 @@ const SCRIPT_ERROR_I18N: Record<ScriptErrorCode, ScriptReplyKey> = {
   script_cwd_outside: 'script.cwd_outside',
   script_background_disabled: 'script.background_disabled',
 };
+
+/**
+ * ADR-136: число аргументов скрипта — только для аудита (сами аргументы не
+ * пишутся).
+ *
+ * Разбор лексером скриптов: неразобранные аргументы дают `0` — сервис вернёт
+ * ошибку разбора отдельно.
+ */
+function countScriptArguments(args: string | undefined): number {
+  if (!args || !args.trim()) return 0;
+  try {
+    return splitScriptArguments(args).length;
+  } catch {
+    return 0;
+  }
+}
 
 /**
  * PROP-127 (этап T2): инструменты, меняющие состояние сессии, — **барьер** батча.
@@ -3470,6 +3488,51 @@ export class ChatOrchestrator {
       return reply('script.denied', { name });
     }
 
+    // ADR-136: журнал исполнений — запись `started` **до** запуска (пара
+    // `started`/`finished` одним `execution_id`). Только метаданные: имя
+    // скрипта, cwd, число аргументов, origin.
+    //
+    // `execution_id` — один на пару: тот же id уходит в запись реестра прогона
+    // (`metadata.audit_id`), по нему терминальный переход дописывает парную
+    // запись `finished`.
+    //
+    // В отличие от HTTP-роута (`server/routes/session-scripts.ts`) ошибка
+    // записи **не** превращается в отказ запуска: это контур сессии, а не
+    // HTTP-ответ (503 там — fail-closed по контракту роута). Здесь след в логе
+    // обязателен, запуск продолжается.
+    const audit = this._commandAudit;
+    let auditId: string | undefined;
+    if (audit && audit.enabled) {
+      const executionId = randomUUID();
+      auditId = executionId;
+      const description = `script.run name=${name} args=${countScriptArguments(scriptArgs)} origin=user`;
+      try {
+        await audit.append({
+          id: executionId,
+          ts: new Date().toISOString(),
+          sessionId: session.id,
+          ...(session.projectId ? { projectId: session.projectId } : {}),
+          ...(session.ownerId ?? session.userId
+            ? { actor: session.ownerId ?? session.userId }
+            : {}),
+          tool: 'script.run',
+          command: description,
+          commandHash: sha256Hex(description),
+          cwd: workingDir,
+          background: true,
+          decision: 'allow',
+          decidedBy: 'permission',
+          phase: 'started',
+        });
+      } catch (auditErr) {
+        const reason = auditErr instanceof Error ? auditErr.message : String(auditErr);
+        warning(
+          'ORCHESTRATOR',
+          `Command audit write failed for script "${name}": ${reason} — script run continues`,
+        );
+      }
+    }
+
     try {
       const result = await service.run({
         name,
@@ -3481,6 +3544,7 @@ export class ChatOrchestrator {
         // ADR-126 §5: запуск человеком — origin `user` (агент не будится).
         origin: 'user',
         projectWorkspace: workingDir,
+        ...(auditId ? { auditId } : {}),
       });
       return this._finishLocalCommand(
         session,

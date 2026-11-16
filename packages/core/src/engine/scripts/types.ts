@@ -30,8 +30,6 @@ export interface TemplateScript {
   args: boolean;
   /** Рабочий каталог относительно рабочего каталога сессии. */
   cwd?: string;
-  /** Фоновый запуск по умолчанию (`background`, по умолчанию `true`). */
-  background: boolean;
   /** Таймаут запуска, мс (`0` — без таймаута). */
   timeout?: number;
   /** Бинарные требования запуска (ADR-077). */

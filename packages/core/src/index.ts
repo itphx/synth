@@ -1062,6 +1062,7 @@ export type {
 export {
   CommandAuditLog,
   createCommandAuditLog,
+  createScriptRunAuditFinisher,
   resolveCommandAuditConfig,
   redactCommand,
   prepareCommandForAudit,

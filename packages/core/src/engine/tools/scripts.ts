@@ -216,12 +216,19 @@ export const scriptRunTool: ToolDefinition = {
 
     // ADR-136: журнал исполнений — `started` **до** запуска. Ошибка записи
     // при включённом журнале блокирует исполнение (как у `execute_shell`).
+    //
+    // `execution_id` — один на пару `started`/`finished`: тот же id уходит в
+    // запись реестра прогона (`metadata.audit_id`), по нему терминальный
+    // переход дописывает парную запись `finished`.
     const audit = extra?.commandAudit;
+    let auditId: string | undefined;
     if (audit && audit.enabled) {
+      const executionId = randomUUID();
+      auditId = executionId;
       const description = `script.run name=${params.name} args=${argCount} origin=agent`;
       try {
         await audit.append({
-          id: randomUUID(),
+          id: executionId,
           ts: new Date().toISOString(),
           sessionId: ctx.sessionId,
           ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
@@ -258,6 +265,7 @@ export const scriptRunTool: ToolDefinition = {
         ...(ctx.allowedRoots && ctx.allowedRoots.length > 0 ? { allowedRoots: ctx.allowedRoots } : {}),
         origin: 'agent',
         projectWorkspace: ctx.workingDir,
+        ...(auditId ? { auditId } : {}),
       });
 
       const lines = [

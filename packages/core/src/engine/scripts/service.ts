@@ -73,6 +73,15 @@ export interface ScriptRunInput {
   allowedRoots?: string[];
   /** Кто инициировал запуск: человек или агент (ADR-126 §5). */
   origin: 'user' | 'agent';
+  /**
+   * `execution_id` пары записей журнала исполнений (`started`/`finished`,
+   * ADR-136).
+   *
+   * Один id на пару: он же `id` записи `started` и `metadata.audit_id` в
+   * записи реестра прогона — по нему терминальный переход дописывает запись
+   * `finished`. Не задан — запись аудита не ведётся.
+   */
+  auditId?: string;
   /** Рабочий каталог проекта — для поиска project-скриптов. */
   projectWorkspace?: string;
 }
@@ -149,9 +158,9 @@ export class ScriptService {
    * Запустить скрипт.
    *
    * Запуск всегда **фоновый** (ADR-113): процесс пишет лог, события идут в
-   * канал сессии-владельца. Декларация `background: false` означает
-   * «ждать завершения» — это делает вызывающий (ответ ждёт `process.exited`),
-   * отдельного пути исполнения не создаётся (ADR-126 §5).
+   * канал сессии-владельца. Отдельного режима «с ожиданием завершения» нет:
+   * декларация такого поля не предусматривает (ключ `background` в frontmatter
+   * игнорируется как неизвестный).
    *
    * @throws ScriptError `script_not_found` — скрипт не объявлен;
    *   `script_untrusted` — каталог источника недоверенный;
@@ -202,8 +211,12 @@ export class ScriptService {
         title: script.name,
         origin: input.origin,
         // ADR-126 §5: метка скрипта в записи реестра фоновых прогонов —
-        // UI показывает бейдж по `metadata.script`.
-        metadata: { script: script.name },
+        // UI показывает бейдж по `metadata.script`. `audit_id` — id пары
+        // записей журнала исполнений (`started`/`finished`, ADR-136).
+        metadata: {
+          script: script.name,
+          ...(input.auditId ? { audit_id: input.auditId } : {}),
+        },
       });
       return {
         run_id: result.runId,
@@ -317,7 +330,6 @@ export class ScriptService {
       available: script.trusted,
       ...(script.trusted ? {} : { unavailableReason: 'trusted' as const }),
       trusted: script.trusted,
-      background: script.background,
     };
   }
 
