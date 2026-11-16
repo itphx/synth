@@ -1840,7 +1840,11 @@
   `assistant`), поэтому тул доступен не всем агентам и блок `[INTERVIEW]` инжектится только
   при доступном агенту `profile_update` (гейт `_interviewEligible` — `_availabilityPredicate` +
   `_isAdminDisabled`, fail-closed без тула); стор приходит через `ToolContext.extra.profilesStore`,
-  нет владельца — понятная ошибка.
+  нет владельца — понятная ошибка. «Разговорными» для гейта считаются ответ агента и
+  **реплика человека**: служебные user-сообщения (`sessions/user-messages.ts`,
+  `isServiceUserMessage` — контекст терминала PROP-132, фон, steer, шедулер, вложение тула)
+  разговорными не считаются — служебный контекст, доставленный **перед** вопросом, иначе
+  отнимал бы право на интервью у первого настоящего вопроса сессии.
   **Тулы вложений (ADR-115).** `attach_workspace_file` (`attach-workspace-file.ts`,
   capability `file_read`) — файл из workspace (`stat` до чтения, containment: абсолютный путь/`..`/
   симлинк наружу → отказ) загружается через `AttachmentService.upload` и возвращается в

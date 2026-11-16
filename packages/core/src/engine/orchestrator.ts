@@ -5,6 +5,7 @@ import type { AutoTitleConfig } from '@itphx/synth-shared/config';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { autoTitleConfigSchema } from '@itphx/synth-shared/config';
 import { autoTitleSession } from '../sessions/auto-title.js';
+import { isServiceUserMessage } from '../sessions/user-messages.js';
 import { join, isAbsolute, normalize, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { resolvePath } from './tools/path-utils.js';
@@ -2847,6 +2848,12 @@ export class ChatOrchestrator {
    * «разговорных» (user|assistant) не должно быть других, кроме него. Без
    * `message` (диагностика `getPromptInfo`) — «разговорных» ровно одно и это
    * user-сообщение от пользователя.
+   *
+   * Служебные user-сообщения (контекст терминала PROP-132, уведомление фонового
+   * прогона, steer-инъекция, сообщение шедулера, вложение тула) репликами
+   * человека не являются (`sessions/user-messages.ts`) и разговорными не
+   * считаются: иначе служебный контекст, доставленный **перед** вопросом,
+   * «съедал» бы право на интервью у первого настоящего вопроса сессии.
    */
   private _interviewEligible(
     session: Session,
@@ -2871,14 +2878,25 @@ export class ChatOrchestrator {
     ) {
       return false;
     }
-    const conversational = session.messages.filter(
-      (m) => m.role === MessageRole.USER || m.role === MessageRole.ASSISTANT,
-    );
+    const conversational = session.messages.filter((m) => this._isDialogueMessage(m));
     if (message) {
       if (!this._isUserMessage(message)) return false;
       return conversational.every((m) => m.id === message.id);
     }
     return conversational.length === 1 && this._isUserMessage(conversational[0]!);
+  }
+
+  /**
+   * «Разговорное» сообщение: ответ агента или реплика человека.
+   *
+   * Служебные user-сообщения (фон, steer, шедулер, контекст терминала,
+   * вложение тула) репликами человека не являются — см.
+   * `sessions/user-messages.ts` (`isServiceUserMessage`).
+   */
+  private _isDialogueMessage(message: Message): boolean {
+    if (message.role === MessageRole.ASSISTANT) return true;
+    if (message.role !== MessageRole.USER) return false;
+    return !isServiceUserMessage(message);
   }
 
   /** Сообщение «от пользователя»: role user, не Scheduler и без метки планировщика. */
@@ -2888,11 +2906,21 @@ export class ChatOrchestrator {
       && message.author !== 'Scheduler';
   }
 
-  /** Последнее «разговорное» сообщение (user|assistant) в истории сессии. */
+  /**
+   * Последнее «разговорное» сообщение (user|assistant) в истории сессии.
+   *
+   * Служебные user-сообщения (контекст терминала, фон, steer, вложение тула)
+   * разговорными не считаются и не маскируют последнее разговорное сообщение.
+   * Сообщение планировщика — исключение: оно служебное, но именно его маркер
+   * `metadata.scheduler` проверяет `_schedulerCurrentTurn` (ADR-051).
+   */
   private _lastConversationalMessage(session: Session): Message | undefined {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
-      if (msg.role === MessageRole.USER || msg.role === MessageRole.ASSISTANT) return msg;
+      if (msg.role === MessageRole.ASSISTANT) return msg;
+      if (msg.role !== MessageRole.USER) continue;
+      if (msg.metadata?.scheduler === true) return msg;
+      if (!isServiceUserMessage(msg)) return msg;
     }
     return undefined;
   }

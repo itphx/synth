@@ -54,9 +54,9 @@ function makeCtxBuilder(): ContextBuilder {
 
 function makeMessage(
   role: MessageRole,
-  opts: { author?: string; scheduler?: boolean } = {},
+  opts: { author?: string; scheduler?: boolean; metadata?: Record<string, unknown> } = {},
 ): Message {
-  const metadata: Record<string, unknown> = {};
+  const metadata: Record<string, unknown> = { ...(opts.metadata ?? {}) };
   if (opts.scheduler) metadata.scheduler = true;
   return {
     id: generateId(),
@@ -129,6 +129,37 @@ describe('ChatOrchestrator — интервью и ход планировщик
       const sys = makeMessage(MessageRole.SYSTEM);
       const msg = makeMessage(MessageRole.USER, { author: 'user' });
       expect(priv._interviewEligible(makeSession([sys, msg]), msg, access())).toBe(true);
+    });
+
+    it('служебное user-сообщение (контекст терминала) перед вопросом → true', () => {
+      // PROP-132: контекст терминала — служебное user-сообщение
+      // (`metadata.type='background_run_result'`), а не реплика человека:
+      // вопрос остаётся первым разговорным сообщением сессии.
+      const context = makeMessage(MessageRole.USER, {
+        author: 'Terminal',
+        metadata: { type: 'background_run_result', kind: 'terminal' },
+      });
+      const question = makeMessage(MessageRole.USER, { author: 'user' });
+      expect(priv._interviewEligible(makeSession([context, question]), question, access())).toBe(true);
+    });
+
+    it('служебное сообщение + вопрос + ответ ассистента → false', () => {
+      const context = makeMessage(MessageRole.USER, {
+        author: 'Terminal',
+        metadata: { type: 'background_run_result', kind: 'terminal' },
+      });
+      const question = makeMessage(MessageRole.USER, { author: 'user' });
+      const assistant = makeMessage(MessageRole.ASSISTANT);
+      expect(priv._interviewEligible(makeSession([context, question, assistant]), question, access())).toBe(false);
+    });
+
+    it('без message: служебное сообщение + вопрос → true', () => {
+      const context = makeMessage(MessageRole.USER, {
+        author: 'Terminal',
+        metadata: { type: 'background_run_result', kind: 'terminal' },
+      });
+      const question = makeMessage(MessageRole.USER, { author: 'user' });
+      expect(priv._interviewEligible(makeSession([context, question]), undefined, access())).toBe(true);
     });
 
     it('без message: ровно одно user-сообщение → true', () => {
@@ -211,6 +242,15 @@ describe('ChatOrchestrator — интервью и ход планировщик
 
     it('без message: разговорных нет → false', () => {
       expect(priv._schedulerCurrentTurn(makeSession([makeMessage(MessageRole.SYSTEM)]))).toBe(false);
+    });
+
+    it('без message: служебное сообщение не маскирует сообщение планировщика → true', () => {
+      const sched = makeMessage(MessageRole.USER, { scheduler: true });
+      const context = makeMessage(MessageRole.USER, {
+        author: 'Terminal',
+        metadata: { type: 'background_run_result', kind: 'terminal' },
+      });
+      expect(priv._schedulerCurrentTurn(makeSession([sched, context]))).toBe(true);
     });
   });
 });
