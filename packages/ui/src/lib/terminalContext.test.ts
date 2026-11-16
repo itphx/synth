@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   buildTerminalContextBlock,
+  buildTerminalReadBlock,
   readTerminalBufferLines,
   tailLines,
   type TerminalBufferLike,
@@ -112,5 +113,63 @@ describe('buildTerminalContextBlock — блок <terminal_context>', () => {
     expect(block).toContain('terminal="t&quot;1"')
     expect(block).toContain('cwd=""')
     expect(block).toContain('shell=""')
+  })
+})
+
+describe('buildTerminalReadBlock — блок вывода в формате terminal_read', () => {
+  it('маркеры и метаданные — как у тула terminal_read', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'running',
+      lines: ['first', 'second'],
+    })
+    expect(block).toBe(
+      '[CONTENT terminal=term_1 status=running bytes=12 tail=2 stripped=true]\n'
+      + 'first\nsecond\n'
+      + '[CONTENT END]',
+    )
+  })
+
+  it('закрывающий маркер — именно [CONTENT END]', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'running',
+      lines: ['a'],
+    })
+    expect(block.endsWith('[CONTENT END]')).toBe(true)
+    expect(block).not.toContain('[/CONTENT]')
+  })
+
+  it('bytes — размер тела в UTF-8, tail — число строк', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'exited',
+      lines: ['ы', 'b'],
+    })
+    // «ы» — 2 байта в UTF-8, «b» — 1, перевод строки — 1 → 4 байта.
+    expect(block).toContain('bytes=4')
+    expect(block).toContain('tail=2')
+    expect(block).toContain('status=exited')
+  })
+
+  it('пустой вывод — открывающий маркер и сразу [CONTENT END]', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'running',
+      lines: [],
+    })
+    expect(block).toBe(
+      '[CONTENT terminal=term_1 status=running bytes=0 tail=0 stripped=true]\n[CONTENT END]',
+    )
+  })
+
+  it('значения маркера не ломают формат (пробелы и скобка)', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term 1]',
+      status: 'running',
+      lines: [],
+    })
+    expect(block).toContain('terminal=term1')
+    expect(block).not.toContain('term 1]')
   })
 })

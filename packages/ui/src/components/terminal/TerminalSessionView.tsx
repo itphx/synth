@@ -22,6 +22,8 @@ import { Icon } from '@/components/icon/Icon'
 import { useNotification } from '@/hooks/useNotification'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
+import { syncTerminalTabTitle } from '@/lib/terminalTabs'
 import { TerminalView } from './TerminalView'
 
 export interface TerminalSessionViewProps {
@@ -50,6 +52,17 @@ export function TerminalSessionView({ tab }: TerminalSessionViewProps) {
   const order = useTerminalsStore((s) => s.order)
   const loadTerminals = useTerminalsStore((s) => s.load)
   const createTerminal = useTerminalsStore((s) => s.create)
+  const sessions = useSessionsStore((s) => s.sessions)
+
+  /**
+   * Заголовок вкладки = имя сессии (в том числе после переименования).
+   *
+   * Эффект работает и в пустом состоянии (терминалов ещё нет): имя сессии
+   * известно, а вкладка уже открыта.
+   */
+  useEffect(() => {
+    syncTerminalTabTitle(tab.id, sessionId)
+  }, [sessionId, sessions, tab.id])
 
   // Терминалы сессии — по созданию (старые сверху, как их открывали).
   const terminals = useMemo(() => {
@@ -144,7 +157,7 @@ export function TerminalSessionView({ tab }: TerminalSessionViewProps) {
             title={t('terminal.session.createAnother')}
             aria-label={t('terminal.session.createAnother')}
             data-testid="terminal-session-create"
-            className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+            className="ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
           >
             <Icon name="add" className="size-3.5" />
           </button>
@@ -244,7 +257,7 @@ export function TerminalSessionView({ tab }: TerminalSessionViewProps) {
           title={t('terminal.session.createAnother')}
           aria-label={t('terminal.session.createAnother')}
           data-testid="terminal-session-create"
-          className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+          className="ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
         >
           <Icon name="add" className="size-3.5" />
         </button>
@@ -253,7 +266,6 @@ export function TerminalSessionView({ tab }: TerminalSessionViewProps) {
       <TerminalView
         tab={activeTab}
         onTerminalMissing={handleTerminalMissing}
-        onCreateAnother={handleCreate}
       />
     </div>
   )

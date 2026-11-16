@@ -10,9 +10,14 @@
 //   тогда внутри показывается переключатель терминалов сессии;
 // - `openSessionTerminalTab` — вкладка **сессии**: заголовок вкладки = заголовок
 //   сессии, внутри — переключатель по всем терминалам сессии.
+//
+// Заголовок вкладки терминала — **всегда имя сессии** (и ручной терминал, и
+// вкладка-сессия), в том числе после переименования сессии: заголовок
+// синхронизируется из списка сессий (`syncTerminalTabTitle`).
 
 import { terminalsApi, terminalApiErrorStatus } from '@/lib/api/terminals'
 import { useUIStore } from '@/stores/useUIStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
 
 /** Минимальный снимок терминала, нужный для открытия вкладки. */
 export interface TerminalTabTarget {
@@ -35,13 +40,49 @@ export function terminalTabTitle(terminal: TerminalTabTarget): string {
   return terminal.title || terminal.shell || terminal.id
 }
 
+/**
+ * Заголовок вкладки терминала, привязанного к сессии: **имя сессии**.
+ *
+ * Источник истины — список сессий в сторе (`name || id`): заголовок вкладки
+ * терминала всегда называет сессию, а не оболочку. Сессии нет в списке
+ * (список не загружен) — откат на заголовок самого терминала.
+ */
+export function terminalTabTitleForSession(terminal: TerminalTabTarget): string {
+  if (!terminal.sessionId) return terminalTabTitle(terminal)
+  const session = useSessionsStore
+    .getState()
+    .sessions.find((sess) => sess.id === terminal.sessionId)
+  if (!session) return terminalTabTitle(terminal)
+  return session.name || session.id
+}
+
+/**
+ * Синхронизировать заголовок вкладки терминала с именем сессии.
+ *
+ * Заголовок вкладки терминала = имя сессии **всегда**, в том числе после
+ * переименования сессии (событие `session.updated` обновляет список сессий
+ * в сторе). Терминал без сессии заголовок не трогает; совпадающее имя —
+ * тоже (иначе вкладка «моргала» бы при каждом обновлении списка).
+ */
+export function syncTerminalTabTitle(tabId: string, sessionId?: string | null): void {
+  if (!sessionId) return
+  const session = useSessionsStore
+    .getState()
+    .sessions.find((sess) => sess.id === sessionId)
+  if (!session) return
+  const title = session.name || session.id
+  const tab = useUIStore.getState().centerTabs.find((t) => t.id === tabId)
+  if (!tab || tab.title === title) return
+  useUIStore.getState().updateTabTitle(tabId, title)
+}
+
 /** Открыть (или переключиться на) вкладку терминала. */
 export function openTerminalTab(terminal: TerminalTabTarget): void {
   if (!terminal.id) return
   useUIStore.getState().openTab({
     id: `terminal-${terminal.id}`,
     type: 'terminal',
-    title: terminalTabTitle(terminal),
+    title: terminalTabTitleForSession(terminal),
     data: {
       terminalId: terminal.id,
       ...(terminal.projectId ? { projectId: terminal.projectId } : {}),

@@ -2,12 +2,22 @@
 //
 // Вывод терминала **не уходит в LLM сам** — только явное действие человека:
 // «Спросить агента» (док с автоконтекстом) или «Прикрепить вывод» (вставка
-// блока в черновик композера). Формат блока — такой же, как у прочих
-// служебных блоков сообщений (`<system-state>`, `<process …>`):
+// блока в черновик композера).
+//
+// Два формата блока:
+// - контекст дока «Спросить агента» — такой же, как у прочих служебных
+//   блоков сообщений (`<system-state>`, `<process …>`):
 //
 //   <terminal_context terminal="<id>" cwd="<cwd>" shell="<shell>">
 //   …последние N строк…
 //   </terminal_context>
+//
+// - «Прикрепить вывод» — **формат `terminal_read`** (как у тула в ядре):
+//   метаданные в открывающем маркере, закрывающий — `[CONTENT END]`:
+//
+//   [CONTENT terminal=<id> status=<status> bytes=<n> tail=<n> stripped=true]
+//   …строки вывода…
+//   [CONTENT END]
 //
 // Модуль чистый (без React и без xterm): берёт строки текстом/буфером и
 // собирает блок. Так его можно проверить обычным тестом.
@@ -95,6 +105,51 @@ export function buildTerminalContextBlock(input: {
   ].join(' ')
   const body = input.lines.join('\n')
   return `<terminal_context ${attrs}>\n${body}\n</terminal_context>`
+}
+
+/**
+ * Значение атрибута маркера `[CONTENT …]`: без пробелов и `]`.
+ *
+ * Иначе значение закрыло бы маркер досрочно (или слиплось с соседним
+ * атрибутом) — формат тот же, что у `terminal_read` в ядре.
+ */
+function sanitizeMarkerValue(value: string): string {
+  return value.replace(/\s+/g, '').replace(/\]/g, '')
+}
+
+/**
+ * Блок вывода терминала в формате `terminal_read`.
+ *
+ * Тот же контракт, что у тула `terminal_read` в ядре: метаданные — **в
+ * открывающем маркере** (`terminal`/`status`/`bytes`/`tail`/`stripped`), тело —
+ * строки вывода, закрывающий маркер — именно `[CONTENT END]`.
+ *
+ * ```
+ * [CONTENT terminal=<id> status=<status> bytes=<utf8> tail=<lines> stripped=true]
+ * <строки вывода>
+ * [CONTENT END]
+ * ```
+ *
+ * Пустой вывод — открывающий маркер и сразу `[CONTENT END]` (без пустой
+ * строки между маркерами: иначе модель прочитает «пустую строку вывода» как
+ * результат).
+ */
+export function buildTerminalReadBlock(input: {
+  terminalId: string
+  status: string
+  lines: string[]
+}): string {
+  const body = input.lines.join('\n')
+  const bytes = new TextEncoder().encode(body).length
+  const open = [
+    `[CONTENT terminal=${sanitizeMarkerValue(input.terminalId)}`,
+    `status=${sanitizeMarkerValue(input.status)}`,
+    `bytes=${bytes}`,
+    `tail=${input.lines.length}`,
+    'stripped=true]',
+  ].join(' ')
+  if (body === '') return `${open}\n[CONTENT END]`
+  return `${open}\n${body}\n[CONTENT END]`
 }
 
 /**

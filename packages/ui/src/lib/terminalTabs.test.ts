@@ -47,11 +47,15 @@ vi.mock('@/lib/api/terminals', async (importOriginal) => {
 })
 
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
+import type { SessionData } from '@/lib/api/synthApi'
 import {
   openSessionTerminalTab,
   openTerminalTab,
   sessionTerminalTabId,
+  syncTerminalTabTitle,
   terminalTabTitle,
+  terminalTabTitleForSession,
   verifyTerminalTabs,
 } from './terminalTabs'
 
@@ -69,9 +73,37 @@ function terminalTab(id: string, terminalId: string): CenterTab {
   }
 }
 
+/** Сессия в списке сессий (источник имени для заголовка вкладки). */
+function session(id: string, name: string | null): SessionData {
+  return {
+    id,
+    name,
+    user_id: 'u1',
+    owner_id: 'u1',
+    project_id: null,
+    messages: [],
+    pending_messages: [],
+    status: { blocked: null },
+    settings: {},
+    sticky_notes: [],
+    summarization_pending: false,
+    can_summarize: false,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    processor_running: false,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+  useSessionsStore.setState({ sessions: [], error: null })
 })
 
 describe('terminalTabs — сборка вкладок', () => {
@@ -125,6 +157,59 @@ describe('terminalTabs — сборка вкладок', () => {
       projectId: 'p1',
       terminalId: 't2',
     })
+  })
+})
+
+describe('terminalTabs — заголовок вкладки = имя сессии', () => {
+  it('терминал с сессией: заголовок вкладки — имя сессии', () => {
+    useSessionsStore.setState({ sessions: [session('s1', 'Сессия 1')] })
+
+    expect(terminalTabTitleForSession({ id: 't1', shell: '/bin/zsh', sessionId: 's1' })).toBe(
+      'Сессия 1',
+    )
+
+    openTerminalTab({ id: 't1', title: 'Логи', shell: '/bin/zsh', sessionId: 's1' })
+
+    const tabs = useUIStore.getState().centerTabs
+    expect(tabs[0]?.title).toBe('Сессия 1')
+  })
+
+  it('сессия без имени — её id', () => {
+    useSessionsStore.setState({ sessions: [session('s1', null)] })
+
+    expect(terminalTabTitleForSession({ id: 't1', shell: '/bin/zsh', sessionId: 's1' })).toBe('s1')
+  })
+
+  it('сессии нет в списке — откат на заголовок терминала', () => {
+    useSessionsStore.setState({ sessions: [] })
+
+    expect(terminalTabTitleForSession({ id: 't1', title: 'Логи', sessionId: 's1' })).toBe('Логи')
+    expect(terminalTabTitleForSession({ id: 't1', shell: '/bin/zsh' })).toBe('/bin/zsh')
+  })
+
+  it('syncTerminalTabTitle переименовывает вкладку по имени сессии', () => {
+    useUIStore.setState({
+      centerTabs: [terminalTab('terminal-t1', 't1')],
+      activeCenterTabId: 'terminal-t1',
+    })
+    useSessionsStore.setState({ sessions: [session('s1', 'Новое имя')] })
+
+    syncTerminalTabTitle('terminal-t1', 's1')
+
+    expect(useUIStore.getState().centerTabs[0]?.title).toBe('Новое имя')
+  })
+
+  it('syncTerminalTabTitle: терминал без сессии и неизвестная сессия заголовок не трогают', () => {
+    useUIStore.setState({
+      centerTabs: [terminalTab('terminal-t1', 't1')],
+      activeCenterTabId: 'terminal-t1',
+    })
+    useSessionsStore.setState({ sessions: [session('s1', 'Сессия 1')] })
+
+    syncTerminalTabTitle('terminal-t1', null)
+    syncTerminalTabTitle('terminal-t1', 's-other')
+
+    expect(useUIStore.getState().centerTabs[0]?.title).toBe('Terminal t1')
   })
 })
 

@@ -5518,6 +5518,10 @@ export const dict = {
   'terminal.ask.noSession': 'No session available for the question',
   'terminal.ask.failed': 'Could not send: {error}',
   'terminal.ask.sessionCreateFailed': 'Could not create a session',
+  // PROP-132: «Прикрепить вывод» — блок вывода в черновик композера сессии.
+  'terminal.attach.action': 'Attach output',
+  'terminal.attach.done': 'Terminal output attached to the draft',
+  'terminal.attach.noSession': 'The terminal is not linked to a session',
   'terminal.tool.deps_unavailable': 'Error: the terminal service is unavailable in this session',
   'terminal.tool.disabled': 'Error: interactive terminals are disabled on the instance (terminal.enabled = false)',
   'terminal.tool.project_required':
@@ -5603,8 +5607,7 @@ export const dict = {
   'terminal.restart.title': 'Restart terminal',
   'terminal.restart.done': 'Terminal restarted',
   'terminal.restart.failed': 'Could not restart the terminal: {error}',
-  // PROP-132: переименование терминала и создание ещё одного.
-  'terminal.create.another': 'Create another terminal',
+  // PROP-132: переименование терминала.
   'terminal.rename.action': 'Rename',
   'terminal.rename.title': 'Rename terminal',
   'terminal.rename.placeholder': 'Terminal name',

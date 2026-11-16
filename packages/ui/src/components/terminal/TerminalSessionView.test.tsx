@@ -53,22 +53,9 @@ vi.mock('@/hooks/useNotification', () => ({
 
 // xterm не нужен: переключатель — это список вкладок + активный терминал.
 vi.mock('./TerminalView', () => ({
-  TerminalView: ({
-    tab,
-    onCreateAnother,
-  }: {
-    tab: { data: { terminalId?: string } }
-    onCreateAnother?: () => void
-  }) => (
+  TerminalView: ({ tab }: { tab: { data: { terminalId?: string } } }) => (
     <div data-testid="terminal-view">
       <span>{tab.data.terminalId ?? ''}</span>
-      {onCreateAnother && (
-        <button
-          type="button"
-          data-testid="terminal-view-create-another"
-          onClick={onCreateAnother}
-        />
-      )}
     </div>
   ),
 }))
@@ -77,6 +64,8 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
+import type { SessionData } from '@/lib/api/sessions'
 import type { TerminalDto } from '@/lib/api/terminals'
 import { TerminalSessionView } from './TerminalSessionView'
 
@@ -115,6 +104,33 @@ function makeTerminal(id: string, overrides: Partial<TerminalDto> = {}): Termina
 const T1 = makeTerminal('t1', { createdAt: 1000, title: 'Первый' })
 const T2 = makeTerminal('t2', { createdAt: 2000, title: 'Второй' })
 const CREATED = makeTerminal('t-new', { createdAt: 3000, title: 'Новый' })
+
+/** Сессия в списке сессий (источник имени для заголовка вкладки). */
+function makeSession(id: string, name: string | null): SessionData {
+  return {
+    id,
+    name,
+    user_id: 'u1',
+    owner_id: 'u1',
+    project_id: PROJECT,
+    messages: [],
+    pending_messages: [],
+    status: { blocked: null },
+    settings: {},
+    sticky_notes: [],
+    summarization_pending: false,
+    can_summarize: false,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    processor_running: false,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }
+}
 
 /** Терминалы, которые «отдаёт» сервер (список). */
 let serverTerminals: TerminalDto[] = [T1, T2]
@@ -177,6 +193,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   serverTerminals = [T1, T2]
   createBodies = []
+  useSessionsStore.setState({ sessions: [makeSession(SESSION, 'Сессия 1')], error: null })
   useTerminalsStore.setState({
     terminalsById: {},
     order: [],
@@ -273,15 +290,11 @@ describe('TerminalSessionView — переключатель терминало�
     expect(createBodies[0]).toMatchObject({ project_id: PROJECT, session_id: SESSION })
   })
 
-  it('кнопка «Создать ещё терминал» в тулбаре терминала создаёт терминал сессии', async () => {
+  it('в тулбаре терминала кнопки «Создать ещё терминал» нет — создание в переключателе', async () => {
     const container = await render()
 
-    await click(container, 'terminal-view-create-another')
-
-    expect(createBodies).toHaveLength(1)
-    expect(createBodies[0]).toMatchObject({ project_id: PROJECT, session_id: SESSION })
-    // Новый терминал становится активным.
-    expect(useUIStore.getState().centerTabs[0]?.data.terminalId).toBe('t-new')
+    expect(byTestId(container, 'terminal-view-create-another')).toBeNull()
+    expect(byTestId(container, 'terminal-session-create')).not.toBeNull()
   })
 
   it('переключатель виден и при одном терминале сессии', async () => {
@@ -290,9 +303,13 @@ describe('TerminalSessionView — переключатель терминало�
 
     expect(byTestId(container, 'terminal-session-tabs')).not.toBeNull()
     expect(byTestId(container, 'terminal-session-tab-t1')).not.toBeNull()
-    // Кнопка «создать ещё» — и в переключателе, и в тулбаре терминала.
+    // Кнопка «создать ещё» — в переключателе (слева от края, сразу после
+    // терминалов), в тулбаре терминала её нет.
     expect(byTestId(container, 'terminal-session-create')).not.toBeNull()
-    expect(byTestId(container, 'terminal-view-create-another')).not.toBeNull()
+    expect(byTestId(container, 'terminal-view-create-another')).toBeNull()
+    const create = byTestId(container, 'terminal-session-create') as HTMLElement
+    expect(create.className).toContain('ml-1')
+    expect(create.className).not.toContain('ml-auto')
   })
 
   it('чужие терминалы (другая сессия) в переключатель не попадают', async () => {
@@ -326,5 +343,34 @@ describe('TerminalSessionView — переключатель терминало�
     expect(byTestId(container, 'terminal-session-status-t-restored')?.textContent).toBe('finished')
     // Точка статуса на месте.
     expect(byTestId(container, 'terminal-session-dot-t-restored')).not.toBeNull()
+  })
+})
+
+describe('TerminalSessionView — заголовок вкладки = имя сессии', () => {
+  it('заголовок вкладки — имя сессии', async () => {
+    await render()
+
+    expect(useUIStore.getState().centerTabs[0]?.title).toBe('Сессия 1')
+  })
+
+  it('после переименования сессии заголовок вкладки меняется', async () => {
+    await render()
+    expect(useUIStore.getState().centerTabs[0]?.title).toBe('Сессия 1')
+
+    await act(async () => {
+      useSessionsStore.setState({
+        sessions: [makeSession(SESSION, 'Переименованная сессия')],
+      })
+    })
+    await flush()
+
+    expect(useUIStore.getState().centerTabs[0]?.title).toBe('Переименованная сессия')
+  })
+
+  it('в пустом состоянии (терминалов нет) заголовок тоже имя сессии', async () => {
+    serverTerminals = []
+    await render()
+
+    expect(useUIStore.getState().centerTabs[0]?.title).toBe('Сессия 1')
   })
 })

@@ -40,8 +40,11 @@ import { Button } from '@/components/ui/button'
 import {
   readTerminalBufferLines,
   tailLines,
+  buildTerminalReadBlock,
   TERMINAL_CONTEXT_LINES,
 } from '@/lib/terminalContext'
+import { syncTerminalTabTitle } from '@/lib/terminalTabs'
+import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { scrollShadowState, type TerminalScrollShadow } from '@/lib/terminalScroll'
 import { TerminalQuickKeys } from './TerminalQuickKeys'
 import { TerminalAskDock } from './TerminalAskDock'
@@ -107,13 +110,6 @@ export interface TerminalViewProps {
    * один из нескольких, вкладка остаётся.
    */
   onTerminalMissing?: (terminalId: string) => void
-  /**
-   * Создать ещё один терминал (кнопка «Создать ещё терминал» в тулбаре).
-   *
-   * Проп **не передан** — кнопки нет: одиночное открытие терминала (вкладка
-   * без сессии) создавать новые терминалы не умеет.
-   */
-  onCreateAnother?: () => void
 }
 
 /** Статус терминала → ключ i18n. */
@@ -130,7 +126,7 @@ function statusKey(status: string): string {
   }
 }
 
-export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: TerminalViewProps) {
+export function TerminalView({ tab, onTerminalMissing }: TerminalViewProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
   const terminalId = tab.data.terminalId ?? ''
@@ -182,6 +178,18 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
     for (const session of sessions) map.set(session.id, session.name || session.id)
     return map
   }, [sessions])
+
+  /**
+   * Заголовок вкладки = имя сессии (в том числе после переименования).
+   *
+   * Список сессий в сторе обновляется по `session.updated` — эффект видит
+   * новое имя и переименовывает **свою** вкладку. Терминал без сессии
+   * заголовок не трогает.
+   */
+  const terminalSessionId = terminal?.sessionId ?? null
+  useEffect(() => {
+    syncTerminalTabTitle(tab.id, terminalSessionId)
+  }, [tab.id, terminalSessionId, sessions])
 
   const palette = useMemo(
     () => resolveTerminalTheme(preferences.theme, currentTheme),
@@ -705,6 +713,47 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
     setDock((current) => (current ? null : { lines: collectContextLines() }))
   }, [collectContextLines])
 
+  /**
+   * «Прикрепить вывод»: блок вывода — в черновик композера сессии.
+   *
+   * Формат блока — как у тула `terminal_read` (`[CONTENT …]`…`[CONTENT END]`),
+   * чтобы модель прочитала прикреплённый вывод так же, как вывод, прочитанный
+   * тулом. Привязки к сессии нет — прикреплять некуда: тост и выход.
+   */
+  const handleAttachOutput = useCallback(() => {
+    const sessionId = terminal?.sessionId
+    if (!sessionId) {
+      notify({
+        text: t('terminal.attach.noSession'),
+        type: 'warning',
+        category: 'system',
+      })
+      return
+    }
+    const lines = collectContextLines()
+    const block = buildTerminalReadBlock({
+      terminalId: terminal?.id ?? terminalId,
+      status: terminal?.status ?? 'running',
+      lines,
+    })
+    const drafts = useComposerDraftsStore.getState()
+    const existing = drafts.textBySession[sessionId] ?? ''
+    drafts.setText(sessionId, existing ? `${existing}\n${block}` : block)
+    const name = sessionNames.get(sessionId) ?? sessionId
+    useUIStore.getState().openTab({
+      id: `chat-${sessionId}`,
+      type: 'chat',
+      title: name,
+      data: { sessionId },
+    })
+    notify({
+      text: t('terminal.attach.done'),
+      type: 'success',
+      category: 'message',
+      sessionId,
+    })
+  }, [collectContextLines, notify, sessionNames, t, terminal?.id, terminal?.sessionId, terminal?.status, terminalId])
+
   if (missing) {
     return (
       <div className="flex flex-1 items-center justify-center bg-background p-6">
@@ -801,18 +850,6 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          {onCreateAnother && (
-            <button
-              type="button"
-              className="rounded-sm p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
-              onClick={onCreateAnother}
-              title={t('terminal.create.another')}
-              aria-label={t('terminal.create.another')}
-              data-testid="terminal-create-another"
-            >
-              <Icon name="add" className="size-3.5" />
-            </button>
-          )}
           {finished && (
             <Button
               variant="outline"
@@ -842,6 +879,16 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
               <Icon name="chat-new" className="size-3.5" />
             </button>
           )}
+          <button
+            type="button"
+            className="rounded-sm p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+            onClick={handleAttachOutput}
+            title={t('terminal.attach.action')}
+            aria-label={t('terminal.attach.action')}
+            data-testid="terminal-attach-output"
+          >
+            <Icon name="clipboard" className="size-3.5" />
+          </button>
           <button
             type="button"
             className={cn(

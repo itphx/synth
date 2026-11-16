@@ -6158,6 +6158,10 @@ export const dict = {
   'terminal.ask.noSession': 'Нет доступной сессии для вопроса',
   'terminal.ask.failed': 'Не удалось отправить: {error}',
   'terminal.ask.sessionCreateFailed': 'Не удалось создать сессию',
+  // PROP-132: «Прикрепить вывод» — блок вывода в черновик композера сессии.
+  'terminal.attach.action': 'Прикрепить вывод',
+  'terminal.attach.done': 'Вывод терминала прикреплён к черновику',
+  'terminal.attach.noSession': 'Терминал не привязан к сессии',
   'terminal.status.running': 'работает',
   'terminal.status.starting': 'запускается',
   'terminal.status.exited': 'завершён',
@@ -6196,8 +6200,7 @@ export const dict = {
   'terminal.restart.title': 'Перезапустить терминал',
   'terminal.restart.done': 'Терминал перезапущен',
   'terminal.restart.failed': 'Не удалось перезапустить терминал: {error}',
-  // PROP-132: переименование терминала и создание ещё одного.
-  'terminal.create.another': 'Создать ещё терминал',
+  // PROP-132: переименование терминала.
   'terminal.rename.action': 'Переименовать',
   'terminal.rename.title': 'Переименовать терминал',
   'terminal.rename.placeholder': 'Название терминала',

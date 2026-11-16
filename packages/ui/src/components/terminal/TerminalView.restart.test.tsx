@@ -1,5 +1,5 @@
 /**
- * `TerminalView` — перезапуск, переименование и «создать ещё» (PROP-132, Ф3б).
+ * `TerminalView` — перезапуск, переименование и «Прикрепить вывод» (PROP-132, Ф3б).
  *
  * Контракт:
  * - терминал в статусе `exited` показывает сохранённый вывод (снимок
@@ -10,7 +10,11 @@
  * - «Переименовать» — инлайн-поле вместо заголовка, Enter/blur сохраняют
  *   (`PATCH /terminals/:id { title }`), Esc отменяет, пустое имя сбрасывает
  *   заголовок (`title: null`);
- * - «Создать ещё терминал» — только когда передан `onCreateAnother`;
+ * - кнопки «Создать ещё терминал» в тулбаре нет: создание — в переключателе
+ *   терминалов (`terminal-session-create`);
+ * - «Прикрепить вывод» вставляет блок `[CONTENT …]`…`[CONTENT END]` (формат
+ *   `terminal_read`) в черновик композера привязанной сессии; без привязки —
+ *   тост, ничего не вставляется;
  * - терминала нет на сервере (404) — вкладка закрывается; вкладка-сессия
  *   передаёт свой обработчик (`onTerminalMissing`), и тогда остаётся открытой.
  */
@@ -160,6 +164,9 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
+import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
+import type { SessionData } from '@/lib/api/sessions'
 import type { TerminalDto } from '@/lib/api/terminals'
 import { TerminalView } from './TerminalView'
 
@@ -202,6 +209,33 @@ async function flush(times = 4): Promise<void> {
   }
 }
 
+/** Сессия в списке сессий (источник имени для заголовка вкладки). */
+function makeSession(id: string, name: string | null): SessionData {
+  return {
+    id,
+    name,
+    user_id: 'u1',
+    owner_id: 'u1',
+    project_id: 'p1',
+    messages: [],
+    pending_messages: [],
+    status: { blocked: null },
+    settings: {},
+    sticky_notes: [],
+    summarization_pending: false,
+    can_summarize: false,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    reasoning_tokens: 0,
+    processor_running: false,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  }
+}
+
 const byTestId = (container: HTMLElement, testId: string): HTMLElement | null =>
   container.querySelector(`[data-testid="${testId}"]`)
 
@@ -227,7 +261,6 @@ async function pressKey(input: HTMLInputElement, key: string): Promise<void> {
 async function render(
   props: {
     onTerminalMissing?: (id: string) => void
-    onCreateAnother?: () => void
   } = {},
 ): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
@@ -266,6 +299,8 @@ beforeEach(() => {
     error: null,
   })
   useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+  useSessionsStore.setState({ sessions: [], error: null })
+  useComposerDraftsStore.setState({ textBySession: {} })
   mocks.outputSince.mockResolvedValue({
     data: 'сохранённый вывод\n',
     seq: 0,
@@ -445,28 +480,7 @@ describe('TerminalView — переименование терминала', () 
 })
 
 describe('TerminalView — «создать ещё терминал»', () => {
-  it('кнопка в тулбаре вызывает onCreateAnother', async () => {
-    useTerminalsStore.setState({
-      terminalsById: { [TERMINAL_ID]: makeTerminal({ status: 'running' }) },
-      order: [TERMINAL_ID],
-    })
-    const onCreateAnother = vi.fn()
-
-    const container = await render({ onCreateAnother })
-
-    const button = byTestId(container, 'terminal-create-another') as HTMLButtonElement
-    expect(button, 'кнопки «Создать ещё терминал» нет').not.toBeNull()
-    expect(button.getAttribute('aria-label')).toBe('Create another terminal')
-
-    await act(async () => {
-      button.click()
-    })
-    await flush()
-
-    expect(onCreateAnother).toHaveBeenCalledTimes(1)
-  })
-
-  it('без пропса кнопки нет (одиночное открытие терминала)', async () => {
+  it('кнопки в тулбаре нет: создание — в переключателе терминалов', async () => {
     useTerminalsStore.setState({
       terminalsById: { [TERMINAL_ID]: makeTerminal({ status: 'running' }) },
       order: [TERMINAL_ID],
@@ -512,15 +526,58 @@ describe('TerminalView — док «Спросить агента» (тумбл�
     expect(button.getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('кнопки «Прикрепить вывод» больше нет', async () => {
+  it('кнопка «Прикрепить вывод» вставляет блок в черновик сессии', async () => {
     useTerminalsStore.setState({
       terminalsById: { [TERMINAL_ID]: makeTerminal({ status: 'running' }) },
+      order: [TERMINAL_ID],
+    })
+    useSessionsStore.setState({ sessions: [makeSession('s1', 'Сессия 1')] })
+
+    const container = await render()
+
+    const button = byTestId(container, 'terminal-attach-output') as HTMLButtonElement
+    expect(button, 'кнопки «Прикрепить вывод» нет').not.toBeNull()
+    expect(button.getAttribute('aria-label')).toBe('Attach output')
+
+    await act(async () => {
+      button.click()
+    })
+    await flush()
+
+    // Блок — в формате `terminal_read`: маркеры и метаданные в открывающем.
+    const draft = useComposerDraftsStore.getState().textBySession['s1'] ?? ''
+    expect(draft).toContain('[CONTENT terminal=t1 status=running bytes=')
+    expect(draft).toContain('stripped=true]')
+    expect(draft.endsWith('[CONTENT END]')).toBe(true)
+    // Вкладка чата сессии открыта.
+    expect(
+      useUIStore.getState().centerTabs.find((t) => t.id === 'chat-s1')?.title,
+    ).toBe('Сессия 1')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', text: 'Terminal output attached to the draft' }),
+    )
+  })
+
+  it('без привязки к сессии — тост и ничего не вставляется', async () => {
+    useTerminalsStore.setState({
+      terminalsById: { [TERMINAL_ID]: makeTerminal({ status: 'running', sessionId: null }) },
       order: [TERMINAL_ID],
     })
 
     const container = await render()
 
-    expect(byTestId(container, 'terminal-attach-output')).toBeNull()
+    await act(async () => {
+      ;(byTestId(container, 'terminal-attach-output') as HTMLButtonElement).click()
+    })
+    await flush()
+
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'warning',
+        text: 'The terminal is not linked to a session',
+      }),
+    )
+    expect(Object.keys(useComposerDraftsStore.getState().textBySession)).toHaveLength(0)
   })
 })
 
