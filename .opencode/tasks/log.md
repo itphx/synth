@@ -1725,3 +1725,12 @@
 - **UI-1:** общий `SessionComposer` + `useSessionComposer` вынесены из `ChatTab` (очередь/отправка/стоп/steer/return/remove/reorder/заметки), `ChatTab` −368 строк; тесты 25.
 - **UI-2:** док «Спросить агента» на `SessionComposer` (агент/модель, очередь, «В разрыв», вложения, plan/act) + контекст терминала; `TerminalView` — независимые `hasTop`/`hasBottom`, затенение `h-12` (3rem), сверху нет в самом верху/пустом; фикс `readTerminalBufferLines` (`end=buffer.length`, контекст больше не пуст при прокрутке). Коммит `bc085733`.
 - **Деплой test:** сборка `bc085733`, чарт `0.13.9-31`; `/health` build `bc085733`; пул `project:…:exec:default` на `dev-bc085733`, `/pty/open` 201, shell `/bin/zsh`, тема `synth` (`%c`, `RPROMPT=git_super_status`).
+
+## 2026-11-16 — терминал: вопрос + контекст одним prompt, док без рамки (dev)
+
+- **Контракт:** `POST /sessions/:id/prompt` принимает `context {terminal_id, content, cwd?, shell?, status?, lines?, truncated?}` (≤32 КиБ). Backend строит служебное сообщение `author:'Terminal'`, `metadata.type='background_run_result'`, `kind:'terminal'`, `terminal_context:true`, текст `[CONTENT …]`/`[CONTENT END]` (как `terminal_read`).
+- **Порядок:** queue — контекст в историю до `ord` вопроса (`message.added`), вопрос следом; steer+активный ход — контекст первым в `steerInbox`, вопрос следом; `interrupt+context` → 400; `QUEUE_FULL`/лимит инъекций — откат контекста. Коммит `c36050e6`.
+- **UI:** док без шапки/крестика/рамки/hint, кнопка «Спросить агента» — toggle; attach и expand убраны; контекст уходит отдельным `context`, вопрос чистый; сообщение рисуется как `Notice` + карточка `terminal_read` («Содержимое терминала · N строк»). Коммит `f16690c1`.
+- **Различение:** `terminal_context:true` отделяет контекст от уведомлений `terminal_run` (у них `kind:'terminal'` без маркера — снова «Фоновый процесс»/`execute_shell`). Коммит `5ea88055`.
+- **Онбординг:** служебные user-сообщения (контекст, фон, steer, scheduler, tool-attachment) не считаются «разговорными» — контекст перед первым вопросом не отнимает `[INTERVIEW]`. Коммит `eaca03a6`.
+- **Dev:** `./scripts/dev.sh` поднят (backend :5000, UI :5002, core :4300); проверено: док без рамки/крестика, toggle, нет attach/expand, контекст в теле запроса, невалидный context → 400, interrupt+context → 400. Test не переразворачивался.
