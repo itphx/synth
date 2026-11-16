@@ -1772,4 +1772,7 @@
 - **UI:** `ScriptAutocomplete` (только вставка), подсветка `text-status-caution`, бейдж «скрипт» и «Запустить снова» в «Процессах», i18n ru/en (+13 движковых ключей).
 - **Проверка:** typecheck 10/10; lint 0 errors; core 11 587, shared 1 161, ui 4 379, backend 987 — зелёные (IDOR-матрица и access-census +3 пути).
 - **Остаток:** `ready`-детект (вне объёма); портал docs.synth.itphx.ru не обновлялся.
-- **Коммиты:** `b525b52e` (docs/ADR/AGENTS), `b33d10e1` (код + тесты).
+- **Dev-проверка (изолированный инстанс 5010/5012, свой dataDir):** `!demo` → эфемерный ответ без хода LLM; процесс `metadata.script`/`audit_id`/`origin:user`; лог читается; аудит — пара `started`/`finished` с одним `execution_id`, у отклонённого запуска `started` не пишется (исправлено); `!demo x` → 409, `!nope` → not_found; «Стоп» → `cancelled`/`SIGTERM`. Найдено и исправлено: `GET /:id/scripts` не видел декларации у сессии **без проекта** (фоллбек `defaultWorkingDir`).
+- **Бета:** `0.13.9-beta.20261116205453.2c1794a6` (Gitea, dist-tag `beta`, smoke-установка ok); `latest` не двигался.
+- **Test:** чарт `0.13.9-33` (synth-deploy `626cdb0`), образы `0.13.9` (пересобраны), `/health` → `build: 2c1794a6`; бандл `synth-test` 1/1. Промежуточный выкат `0.13.9-32` заменён.
+- **Коммиты:** `b525b52e` (docs/ADR/AGENTS), `b33d10e1` (код + тесты), `d31c035d` (docs: фон/аудит/журнал), `4f09886e` (finished-аудит + удаление `background`), `90cb0fc1` (аудит без started для отказа), `2c1794a6` (реестр для сессии без проекта); synth-deploy: `b52d831`, `626cdb0`.
