@@ -123,7 +123,7 @@ PTY поднимается на точке исполнения — там же,
 - [ADR-114](./adr-114-git-worktrees.md) — worktree сессии как cwd терминала.
 - [ADR-136](./adr-136-shell-trust.md) — shell-guard и аудит исполнений; [ADR-137](./adr-137-executor-isolation.md) — изоляция образа.
 - [ADR-140](./adr-140-project-access-sharing.md) — права участников проекта.
-- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) — `!`-shell-режим композера.
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) — `!`-запуск скриптов проекта (терминал — только интерактив); решение §5.
 - [PROP-064](./prop-064-agent-browser.md) — браузер (выделен из общего документа).
 
 ## История
