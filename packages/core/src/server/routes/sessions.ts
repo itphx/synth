@@ -257,6 +257,14 @@ export interface SessionRoutesDeps {
   contextOptimizer?: ContextOptimizer;
   projectStore?: ProjectStoreLike;
   /**
+   * Рабочий каталог по умолчанию (`env SYNTH_DEFAULT_WORKSPACE` → config →
+   * `{dataDir}/workspaces/default`). Фоллбек для сессии **без проекта**:
+   * `!`-запуск в оркестраторе резолвит декларации из него же, поэтому реестр
+   * скриптов (`GET /:id/scripts`) обязан смотреть туда же — иначе скрипт
+   * запускается, а автокомплит его не видит.
+   */
+  defaultWorkingDir?: string;
+  /**
    * PROP-135 Ф6a: каталог профилей исполнения (`execution.remote`).
    *
    * Задан — `PATCH /:id { settings: { executorProfile } }` проверяет
@@ -1004,7 +1012,10 @@ export function createSessionRoutes(
   const resolveSessionWorkspace = async (session: Session): Promise<string | undefined> => {
     const worktreeDir = session.worktree?.directory?.trim();
     if (worktreeDir) return worktreeDir;
-    return resolveProjectWorkspaceOnly(session);
+    const projectWorkspace = await resolveProjectWorkspaceOnly(session);
+    // Сессия без проекта: тот же фоллбек, что у `_resolveWorkingDir`
+    // оркестратора (`!` резолвит `.synth/scripts` из default workspace).
+    return projectWorkspace ?? deps.defaultWorkingDir;
   };
 
   /**

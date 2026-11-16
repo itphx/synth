@@ -189,6 +189,8 @@ export function mountStandaloneRoutes(
       contextOptimizer,
       projectStore,
       profilesStore,
+      // Сессия без проекта: `.synth/scripts` из default workspace (ADR-126 §5).
+      defaultWorkingDir,
       getRemoteClient: () => getClient(),
       requestSessionService,
       analytics,

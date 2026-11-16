@@ -357,6 +357,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     config.synth.permission,
     // ADR-136: журнал исполнений — запись `script.run` (только метаданные).
     deps.commandAuditLog,
+    // ADR-126 §5: реестр скриптов для сессии без проекта — default workspace.
+    defaultWorkingDir,
   ));
 
   // Messages routes

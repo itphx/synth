@@ -212,6 +212,11 @@ export function createSessionRoutes(
    * метаданные).
    */
   commandAudit?: CommandAuditLog,
+  /**
+   * ADR-126 §5: рабочий каталог по умолчанию — фоллбек для сессии **без
+   * проекта** (`.synth/scripts` из default workspace, как у `!`-запуска).
+   */
+  defaultWorkingDir?: string,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -825,7 +830,7 @@ export function createSessionRoutes(
   // ADMIN|AUDITOR соответственно) — порядок регистрации оставляет её в силе.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}), ...(snippetService ? { snippetService } : {}), ...(resolveProjectWorkspace ? { resolveProjectWorkspace } : {}), ...(scriptService ? { scriptService } : {}), ...(permissionConfig ? { permissionConfig } : {}), ...(commandAudit ? { commandAudit } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}), ...(snippetService ? { snippetService } : {}), ...(resolveProjectWorkspace ? { resolveProjectWorkspace } : {}), ...(scriptService ? { scriptService } : {}), ...(permissionConfig ? { permissionConfig } : {}), ...(commandAudit ? { commandAudit } : {}), ...(defaultWorkingDir ? { defaultWorkingDir } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,
