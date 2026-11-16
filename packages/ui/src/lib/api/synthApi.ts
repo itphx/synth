@@ -100,6 +100,8 @@ export type {
 } from './projects'
 export type { SessionData, StickyNoteData, PromptInfoResponse } from './sessions'
 export type { SessionWorktreeBinding } from './sessions'
+// Контекст терминала в теле `POST /sessions/:id/prompt` (PROP-132, Ф4б).
+export type { TerminalPromptContext } from './sessions'
 // PROP-054: точечные операции с ToDo сессии.
 export type {
   SessionTodosResponse,

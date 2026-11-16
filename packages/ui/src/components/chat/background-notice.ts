@@ -14,8 +14,14 @@
  * но в UI лишний: в карточке показывается только тело (лог/итог прогона).
  */
 
-/** Вид фонового прогона. */
-export type BackgroundNoticeKind = 'process' | 'subagent';
+/**
+ * Вид служебного блока по результату фоновой работы.
+ *
+ * `terminal` — сообщение-контекст терминала (PROP-132, Ф4б): сервер сохраняет
+ * его отдельным сообщением **до** вопроса агента, в UI это карточка вывода
+ * терминала, а не «фоновый процесс».
+ */
+export type BackgroundNoticeKind = 'process' | 'subagent' | 'terminal';
 
 /** Терминальное состояние фонового прогона. */
 export type BackgroundNoticeState = 'completed' | 'failed' | 'cancelled';
@@ -35,11 +41,69 @@ const ENVELOPE_RE = /^\s*<(process|subagent)\b[^>]*>\n?([\s\S]*?)\n?<\/\1>\s*$/;
  */
 const OPEN_ENVELOPE_RE = /^\s*<(process|subagent)\b[^>]*>\n?([\s\S]*)$/;
 
+/**
+ * Конверт контекста терминала.
+ *
+ * Канонический вид backend'а (`frameTerminalOutput`): открывающий маркер
+ * `[CONTENT key=value …]` и закрывающий **`[CONTENT END]`**. Закрывающий
+ * `[/CONTENT]` — на всякий случай (прежний вариант), как и прежний конверт
+ * `<terminal_context …>…</terminal_context>`.
+ *
+ * В UI конверт лишний — в карточке только сам вывод.
+ *
+ * `(?!\s*END\])` в открывающем маркере: закрывающий `[CONTENT END]` не должен
+ * приниматься за открывающий (иначе пустой конверт съел бы весь текст).
+ */
+const TERMINAL_ENVELOPE_RES = [
+  /^\s*\[CONTENT(?!\s*END\])[^\]]*\]\r?\n?([\s\S]*?)\r?\n?\[CONTENT END\]\s*$/,
+  /^\s*\[CONTENT(?!\s*END\])[^\]]*\]\r?\n?([\s\S]*?)\r?\n?\[\/CONTENT\]\s*$/,
+  /^\s*<terminal_context\b[^>]*>\r?\n?([\s\S]*?)\r?\n?<\/terminal_context>\s*$/,
+];
+
+/** Конверт контекста терминала без закрывающего маркера (обрезанный контент). */
+const OPEN_TERMINAL_ENVELOPE_RES = [
+  /^\s*\[CONTENT(?!\s*END\])[^\]]*\]\r?\n?([\s\S]*)$/,
+  /^\s*<terminal_context\b[^>]*>\r?\n?([\s\S]*)$/,
+];
+
 /** Вид прогона по `metadata.kind` (неизвестное → `process`). */
 export function resolveBackgroundKind(
   metadata: Record<string, unknown> | null | undefined,
 ): BackgroundNoticeKind {
+  if (metadata?.kind === 'terminal') return 'terminal';
   return metadata?.kind === 'subagent' ? 'subagent' : 'process';
+}
+
+/**
+ * Сколько строк вывода терминала ушло в контекст (`metadata.lines`).
+ *
+ * `undefined` — строки неизвестны (подпись без счётчика).
+ */
+export function backgroundTerminalLines(
+  metadata: Record<string, unknown> | null | undefined,
+): number | undefined {
+  const lines = metadata?.lines;
+  return typeof lines === 'number' && Number.isFinite(lines) ? lines : undefined;
+}
+
+/**
+ * Снять конверт контекста терминала — вернуть сам вывод.
+ *
+ * Закрывающий маркер backend'а — `[CONTENT END]` (канон); `[/CONTENT]` и
+ * `<terminal_context …>` принимаются для совместимости. Если конверт не
+ * распознан — текст возвращается как есть.
+ */
+export function extractTerminalContent(content: string): string {
+  const trimmed = content.trim();
+  for (const re of TERMINAL_ENVELOPE_RES) {
+    const full = trimmed.match(re);
+    if (full) return full[1] ?? '';
+  }
+  for (const re of OPEN_TERMINAL_ENVELOPE_RES) {
+    const partial = trimmed.match(re);
+    if (partial) return partial[1] ?? '';
+  }
+  return content;
 }
 
 /** Терминальное состояние по `metadata.state` (неизвестное → `completed`). */
@@ -63,12 +127,19 @@ export function isBackgroundSuccess(state: BackgroundNoticeState): boolean {
 
 /**
  * Имя прогона для подписи: команда (процесс) или описание (саб-агент).
+ *
+ * Для контекста терминала — **число строк** вывода (без слова: слово
+ * подставляет локализованная подпись `chat.notice.terminalContextLines`).
  * Длинные значения обрезаются — подпись не должна ломать вёрстку.
  */
 export function backgroundNoticeName(
   metadata: Record<string, unknown> | null | undefined,
   kind: BackgroundNoticeKind,
 ): string {
+  if (kind === 'terminal') {
+    const lines = backgroundTerminalLines(metadata);
+    return lines === undefined ? '' : String(lines);
+  }
   const raw =
     kind === 'subagent'
       ? typeof metadata?.description === 'string'
@@ -158,6 +229,8 @@ export interface BackgroundToolCall {
  * `kind:'process'` → карточка результата `execute_shell` (аргументы — команда
  * и рабочий каталог, тело — хвост лога). `kind:'subagent'` → карточка
  * результата `task` (аргументы — описание, тело — итог саб-агента).
+ * `kind:'terminal'` → карточка `terminal_read` (аргументы — терминал, каталог
+ * и оболочка, тело — вывод терминала без конверта `[CONTENT …]…[CONTENT END]`).
  */
 export function backgroundToolCall(
   metadata: Record<string, unknown> | null | undefined,
@@ -169,6 +242,21 @@ export function backgroundToolCall(
   const startedAt = metaString(metadata?.started_at);
   const completedAt = metaString(metadata?.finished_at);
   const isError = !isBackgroundSuccess(state);
+
+  if (kind === 'terminal') {
+    // Контекст терминала: конверт модели (`[CONTENT …]…[CONTENT END]`) в UI лишний.
+    const output = extractTerminalContent(content) || metaString(metadata?.content) || '';
+    return {
+      name: 'terminal_read',
+      args: {
+        terminal_id: metaString(metadata?.terminal_id) ?? '',
+        cwd: metaString(metadata?.cwd) ?? '',
+        shell: metaString(metadata?.shell) ?? '',
+      },
+      result: { content: output, isError: false },
+      status: 'done',
+    };
+  }
 
   if (kind === 'subagent') {
     return {

@@ -15,6 +15,7 @@ import { MessageAttachments, hasMediaParts } from './attachments/MessageAttachme
 import {
   backgroundNoticeName,
   backgroundNoticeRelayedFrom,
+  backgroundTerminalLines,
   backgroundToolCall,
   resolveBackgroundKind,
   resolveBackgroundState,
@@ -863,6 +864,17 @@ function ChatMessageInner({
     const kind = resolveBackgroundKind(metadata)
     const state = resolveBackgroundState(metadata)
     const name = backgroundNoticeName(metadata, kind)
+    // Контекст терминала — не «фоновый процесс»: подпись «Содержимое
+    // терминала» (+ число строк), без статуса прогона.
+    const terminalLines = backgroundTerminalLines(metadata)
+    const terminalLabel = [
+      t('chat.notice.terminalContext'),
+      terminalLines !== undefined
+        ? t('chat.notice.terminalContextLines', { count: terminalLines })
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
     const baseLabel =
       kind === 'subagent'
         ? t('chat.notice.backgroundSubagent', { name })
@@ -878,7 +890,10 @@ function ChatMessageInner({
     const relayedSuffix = relayedFrom
       ? ` · ${t('chat.backgroundNotice.relayedFrom', { title: relayedFrom })}`
       : ''
-    const label = `${name ? baseLabel : baseLabel.replace(/\s*·\s*$/, '')} · ${stateLabel}${relayedSuffix}`
+    const label =
+      kind === 'terminal'
+        ? terminalLabel
+        : `${name ? baseLabel : baseLabel.replace(/\s*·\s*$/, '')} · ${stateLabel}${relayedSuffix}`
 
     const selectionCheckboxEl = selectionMode ? (
       <div className="flex items-center self-stretch pr-1">

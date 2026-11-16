@@ -1227,12 +1227,15 @@ export function ChatInput({
         >
           <div className="flex shrink-0 items-center gap-0.5">
             <AttachmentButton sessionId={sessionId} onFiles={attachFiles} />
-            <FooterBtn
-              icon={expanded ? 'fullscreen-exit' : 'fullscreen'}
-              title={expanded ? t('chat.footer.collapse') : t('chat.footer.expand')}
-              onClick={onToggleExpand}
-              disabled={!onToggleExpand}
-            />
+            {/* Кнопка разворота — только там, где разворот есть (чат).
+                В доке терминала разворачивать нечего — кнопки нет. */}
+            {onToggleExpand && (
+              <FooterBtn
+                icon={expanded ? 'fullscreen-exit' : 'fullscreen'}
+                title={expanded ? t('chat.footer.collapse') : t('chat.footer.expand')}
+                onClick={onToggleExpand}
+              />
+            )}
           </div>
 
           <div className="chat-toolbar-actions flex flex-wrap items-center justify-end gap-1.5 pr-1 min-w-0 ml-auto">
@@ -1330,7 +1333,7 @@ function FooterBtn({
   icon,
   title,
   onClick,
-  disabled = true,
+  disabled = false,
 }: {
   icon: string
   title: string

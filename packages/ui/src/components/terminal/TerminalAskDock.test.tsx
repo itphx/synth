@@ -4,14 +4,14 @@
  * Инварианты:
  * - док — на **общем композере** сессии (`SessionComposer`): поле ввода,
  *   «Стоп», очередь и «В разрыв» приходят оттуда, второй копии очереди нет;
- * - отправка уходит обычным сообщением в целевую сессию, а к тексту
- *   добавляется блок `<terminal_context>`;
- * - после отправки док **не закрывается** — он показывает, идёт ли ход агента
- *   («агент работает…» → «готово»), и закрывается только явно (крестик/Esc);
+ * - док — **часть панели терминала**: ни шапки (крестик/статус), ни рамки
+ *   карточки; только строка контекста, выбор сессии и само поле ввода;
+ * - отправка уходит обычным сообщением в целевую сессию; вывод терминала
+ *   уходит **отдельным** полем `context` (вопрос остаётся чистым, без
+ *   `<terminal_context>`);
+ * - после отправки док **не закрывается**; закрывается явно (Esc);
  * - пока док открыт, сессия не накапливает непрочитанные (`suppressUnread`),
- *   при закрытии подавление снимается;
- * - режим «прикрепить вывод» (`attach`) — прежнее поведение: блок контекста
- *   уходит в черновик композера, композера в доке нет.
+ *   при закрытии подавление снимается.
  */
 
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
@@ -120,12 +120,11 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { useChatStore } from '@/stores/chatStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { resetChatStore } from '@/stores/testUtils'
 import { synthApi } from '@/lib/api/synthApi'
 import type { TerminalDto } from '@/lib/api/terminals'
-import { TerminalAskDock, type TerminalAskDockMode } from './TerminalAskDock'
+import { TerminalAskDock } from './TerminalAskDock'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -171,11 +170,9 @@ const byTestId = (container: HTMLElement, testId: string): HTMLElement | null =>
  */
 function DockHost({
   onClose,
-  mode = 'ask',
   terminal = TERMINAL,
 }: {
   onClose: () => void
-  mode?: TerminalAskDockMode
   terminal?: TerminalDto
 }): React.ReactElement {
   const [open, setOpen] = React.useState(true)
@@ -184,7 +181,6 @@ function DockHost({
     <TerminalAskDock
       terminal={terminal}
       lines={['последняя строка вывода']}
-      mode={mode}
       onClose={() => {
         onClose()
         setOpen(false)
@@ -195,7 +191,6 @@ function DockHost({
 
 async function renderDock(
   onClose: () => void = () => {},
-  mode: TerminalAskDockMode = 'ask',
   terminal: TerminalDto = TERMINAL,
 ): Promise<{ container: HTMLElement; onClose: () => void }> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
@@ -206,7 +201,7 @@ async function renderDock(
   await act(async () => {
     root.render(
       <I18nProvider>
-        <DockHost onClose={onClose} mode={mode} terminal={terminal} />
+        <DockHost onClose={onClose} terminal={terminal} />
       </I18nProvider>,
     )
   })
@@ -235,7 +230,6 @@ function sendButton(container: HTMLElement): HTMLButtonElement {
 beforeEach(() => {
   vi.clearAllMocks()
   resetChatStore()
-  useComposerDraftsStore.setState({ textBySession: {} })
   useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
   vi.mocked(synthApi.enqueueMessage).mockResolvedValue({
     messageId: 'm1',
@@ -282,11 +276,26 @@ describe('TerminalAskDock — общий композер сессии', () => {
     expect(sendButton(container)).toBeTruthy()
     // Кнопка «Отправить» из дока убрана — отправка через композер.
     expect(byTestId(container, 'terminal-ask-send')).toBeNull()
-    // Контекст терминала — плашкой над композером.
+    // Контекст терминала — одной строкой над композером.
     expect(byTestId(container, 'terminal-ask-context')?.textContent).toContain('/workspace/demo')
   })
 
-  it('отправка: к тексту добавляется блок контекста терминала', async () => {
+  it('док без шапки и рамки: нет крестика, статуса и кнопки разворота', async () => {
+    const { container } = await renderDock()
+
+    // Шапки нет: ни крестика, ни индикатора хода.
+    expect(byTestId(container, 'terminal-ask-close')).toBeNull()
+    expect(byTestId(container, 'terminal-ask-status')).toBeNull()
+    // Карточки нет: у корня нет рамки/тени/скругления.
+    const dock = byTestId(container, 'terminal-ask-dock') as HTMLElement
+    expect(dock.className).not.toContain('border')
+    expect(dock.className).not.toContain('shadow')
+    expect(dock.className).not.toContain('rounded')
+    // «Развернуть» в доке нечего — кнопки нет (в чате она есть).
+    expect(container.querySelector(`button[title="${enDict['chat.footer.expand']}"]`)).toBeNull()
+  })
+
+  it('отправка: вопрос уходит чистым, вывод терминала — отдельным context', async () => {
     const { container } = await renderDock()
 
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
@@ -297,14 +306,28 @@ describe('TerminalAskDock — общий композер сессии', () => {
     await flush()
 
     expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(1)
-    const [target, message] = vi.mocked(synthApi.enqueueMessage).mock.calls[0] as [string, string]
+    const [target, message, options] = vi.mocked(synthApi.enqueueMessage).mock.calls[0] as [
+      string,
+      string,
+      { context?: Record<string, unknown> },
+    ]
     expect(target).toBe(SESSION)
-    expect(message).toContain('что здесь происходит?')
-    expect(message).toContain('<terminal_context terminal="t1"')
-    expect(message).toContain('последняя строка вывода')
+    // Текст вопроса чистый — блока `<terminal_context>` в нём нет.
+    expect(message).toBe('что здесь происходит?')
+    expect(message).not.toContain('<terminal_context')
+    // Вывод терминала ушёл отдельным полем `context`.
+    expect(options.context).toEqual({
+      terminal_id: 't1',
+      content: 'последняя строка вывода',
+      cwd: '/workspace/demo',
+      shell: '/bin/bash',
+      status: 'running',
+      lines: 1,
+      truncated: false,
+    })
   })
 
-  it('после отправки док остаётся открытым, индикатор «агент работает…»', async () => {
+  it('после отправки док остаётся открытым, текст очищен', async () => {
     const onClose = vi.fn()
     const { container } = await renderDock(onClose)
 
@@ -318,21 +341,10 @@ describe('TerminalAskDock — общий композер сессии', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(byTestId(container, 'terminal-ask-dock')).not.toBeNull()
     expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('')
-
-    const status = byTestId(container, 'terminal-ask-status')
-    expect(status?.getAttribute('data-phase')).toBe('working')
-    expect(status?.textContent).toContain('the agent is working…')
   })
 
-  it('ход агента завершился — индикатор «готово»', async () => {
+  it('ход агента идёт — композер переключается на «в очередь»', async () => {
     const { container } = await renderDock()
-
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
-    await typeInto(textarea, 'вопрос')
-    await act(async () => {
-      sendButton(container).click()
-    })
-    await flush()
 
     await act(async () => {
       useChatStore.setState({
@@ -340,18 +352,12 @@ describe('TerminalAskDock — общий композер сессии', () => {
       })
     })
     await flush()
-    expect(byTestId(container, 'terminal-ask-status')?.getAttribute('data-phase')).toBe('working')
 
-    await act(async () => {
-      useChatStore.setState({
-        turnBySession: { [SESSION]: { turnId: 'turn-1', status: 'completed' } },
-      })
-    })
-    await flush()
-
-    const status = byTestId(container, 'terminal-ask-status')
-    expect(status?.getAttribute('data-phase')).toBe('done')
-    expect(status?.textContent).toContain('done')
+    // Кнопка отправки в развёрнутом ходе — «Добавить в очередь».
+    const enqueue = Array.from(container.querySelectorAll('button')).find(
+      (el) => el.getAttribute('title') === enDict['chat.input.enqueue'],
+    )
+    expect(enqueue).toBeTruthy()
   })
 
   it('ошибка отправки — док остаётся, показывается уведомление об ошибке', async () => {
@@ -405,19 +411,6 @@ describe('TerminalAskDock — общий композер сессии', () => {
 })
 
 describe('TerminalAskDock — закрытие', () => {
-  it('крестик закрывает док', async () => {
-    const onClose = vi.fn()
-    const { container } = await renderDock(onClose)
-
-    await act(async () => {
-      ;(byTestId(container, 'terminal-ask-close') as HTMLButtonElement).click()
-    })
-    await flush()
-
-    expect(onClose).toHaveBeenCalled()
-    expect(byTestId(container, 'dock-closed')).not.toBeNull()
-  })
-
   it('Esc закрывает док', async () => {
     const onClose = vi.fn()
     await renderDock(onClose)
@@ -438,9 +431,9 @@ describe('TerminalAskDock — подавление непрочитанных', 
     expect(mocks.suppressUnread).toHaveBeenCalledWith(SESSION, true)
     expect(mocks.clearSessionUnread).toHaveBeenCalledWith(SESSION)
 
-    // Закрытие дока (крестик) — док размонтируется, подавление снимется.
+    // Закрытие дока (Esc) — док размонтируется, подавление снимется.
     await act(async () => {
-      ;(byTestId(container, 'terminal-ask-close') as HTMLButtonElement).click()
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
     await flush()
 
@@ -449,24 +442,12 @@ describe('TerminalAskDock — подавление непрочитанных', 
   })
 })
 
-describe('TerminalAskDock — режим «прикрепить вывод»', () => {
-  it('композера нет: блок контекста уходит в черновик, чат открывается', async () => {
-    const onClose = vi.fn()
-    const { container } = await renderDock(onClose, 'attach')
+describe('TerminalAskDock — режима «прикрепить вывод» больше нет', () => {
+  it('ни кнопки прикрепления, ни режима attach в доке нет', async () => {
+    const { container } = await renderDock()
 
-    // Композера в доке нет.
-    expect(container.querySelector('textarea')).toBeNull()
-    expect(byTestId(container, 'terminal-attach-confirm')).not.toBeNull()
-
-    await act(async () => {
-      ;(byTestId(container, 'terminal-attach-confirm') as HTMLButtonElement).click()
-    })
-    await flush()
-
-    const draft = useComposerDraftsStore.getState().textBySession[SESSION] ?? ''
-    expect(draft).toContain('<terminal_context terminal="t1"')
-    expect(draft).toContain('последняя строка вывода')
-    expect(onClose).toHaveBeenCalled()
-    expect(useUIStore.getState().centerTabs.some((tab) => tab.data?.sessionId === SESSION)).toBe(true)
+    expect(byTestId(container, 'terminal-attach-confirm')).toBeNull()
+    // Док — только про композер: выбора режима нет.
+    expect(container.querySelector('textarea')).toBeTruthy()
   })
 })

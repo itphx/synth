@@ -111,6 +111,25 @@ vi.mock('./terminalStream', () => ({
   runTerminalStreamSession: (...args: unknown[]) => mocks.stream(...args),
 }))
 
+// Док «Спросить агента» в этом файле — заглушка: проверяем тумблер в тулбаре,
+// а не композер дока (его контракт — в `TerminalAskDock.test.tsx`).
+vi.mock('./TerminalAskDock', () => ({
+  TerminalAskDock: ({
+    lines,
+    onClose,
+  }: {
+    terminal: unknown
+    lines: string[]
+    onClose: () => void
+  }) => (
+    <div data-testid="terminal-ask-dock" data-lines={String(lines.length)}>
+      <button type="button" data-testid="terminal-ask-dock-close" onClick={onClose}>
+        close
+      </button>
+    </div>
+  ),
+}))
+
 vi.mock('@/hooks/useNotification', () => ({
   notifyMessage: mocks.notify,
   useNotification: () => ({ notify: mocks.notify }),
@@ -456,6 +475,52 @@ describe('TerminalView — «создать ещё терминал»', () => {
     const container = await render()
 
     expect(byTestId(container, 'terminal-create-another')).toBeNull()
+  })
+})
+
+describe('TerminalView — док «Спросить агента» (тумблер)', () => {
+  it('кнопка открывает док, повторный клик закрывает; aria-pressed отражает состояние', async () => {
+    useTerminalsStore.setState({
+      terminalsById: { [TERMINAL_ID]: makeTerminal({ status: 'running' }) },
+      order: [TERMINAL_ID],
+    })
+
+    const container = await render()
+
+    const button = byTestId(container, 'terminal-ask-agent') as HTMLButtonElement
+    expect(button, 'кнопки «Спросить агента» нет').not.toBeNull()
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(byTestId(container, 'terminal-ask-dock')).toBeNull()
+
+    await act(async () => {
+      button.click()
+    })
+    await flush()
+
+    expect(byTestId(container, 'terminal-ask-dock')).not.toBeNull()
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    // Активный стиль кнопки — как у включённого тумблера.
+    expect(button.className).toContain('bg-primary/10')
+
+    // Повторный клик — док закрыт.
+    await act(async () => {
+      button.click()
+    })
+    await flush()
+
+    expect(byTestId(container, 'terminal-ask-dock')).toBeNull()
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('кнопки «Прикрепить вывод» больше нет', async () => {
+    useTerminalsStore.setState({
+      terminalsById: { [TERMINAL_ID]: makeTerminal({ status: 'running' }) },
+      order: [TERMINAL_ID],
+    })
+
+    const container = await render()
+
+    expect(byTestId(container, 'terminal-attach-output')).toBeNull()
   })
 })
 

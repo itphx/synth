@@ -20,6 +20,30 @@ import {
   type PermissionRequest,
 } from '@/stores/permissionStore'
 
+/**
+ * Контекст терминала, уходящий вместе с вопросом агента.
+ *
+ * Контракт `POST /sessions/:id/prompt`: `context` — **отдельное** сообщение-контекст
+ * (сервер оборачивает `content` в `[CONTENT …]` и сохраняет его **до** вопроса),
+ * поэтому текст вопроса остаётся чистым. Поля — snake_case, как в HTTP-теле.
+ */
+export interface TerminalPromptContext {
+  /** Id терминала, из которого взят вывод. */
+  terminal_id: string
+  /** Сырой вывод терминала (строки через `\n`). */
+  content: string
+  /** Рабочий каталог терминала. */
+  cwd?: string
+  /** Оболочка терминала. */
+  shell?: string
+  /** Статус терминала на момент отправки. */
+  status?: 'starting' | 'running' | 'exited'
+  /** Сколько строк ушло в контекст. */
+  lines?: number
+  /** Вывод обрезан (по лимиту строк или по лимиту байт). */
+  truncated?: boolean
+}
+
 export interface SessionData {
   id: string
   /** Происхождение сущности (гибридный режим): local — локальный мир, remote — удалённый backend. */
@@ -533,6 +557,12 @@ export const sessionsApi = {
      * тело как `attachments`; пустой — поле не появляется.
      */
     attachments?: string[]
+    /**
+     * Контекст терминала (`terminal_id`/`content`/`cwd`/`shell`/…). Сервер
+     * сохраняет его отдельным сообщением **до** вопроса, поэтому текст
+     * сообщения остаётся чистым. Не задан — поля `context` в теле нет.
+     */
+    context?: TerminalPromptContext
   }): Promise<PromptAcceptedResponse> {
     const body: Record<string, unknown> = {
       content: message,
@@ -545,6 +575,7 @@ export const sessionsApi = {
       ...(options?.attachments && options.attachments.length > 0
         ? { attachments: options.attachments }
         : {}),
+      ...(options?.context ? { context: options.context } : {}),
     }
 
     // `fetchJSON` пробрасывает `status`/`code`/`details` (ADR-075/ADR-114):

@@ -389,3 +389,88 @@ describe('ChatMessage: уведомление о завершении фонов
     expect(container.querySelector('[role="group"]')).toBeNull()
   })
 })
+
+describe('ChatMessage: сообщение-контекст терминала (PROP-132)', () => {
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+
+  /** Реальный конверт backend'а (`frameTerminalOutput`). */
+  const TERMINAL_CONTENT = [
+    '[CONTENT terminal=term_1 status=running cwd=/work shell=/bin/zsh lines=2 bytes=12]',
+    'line1',
+    'line2',
+    '[CONTENT END]',
+  ].join('\n')
+
+  /** Метаданные служебного сообщения (backend `buildTerminalContextMessage`). */
+  const TERMINAL_METADATA = {
+    type: 'background_run_result',
+    kind: 'terminal',
+    state: 'completed',
+    terminal_id: 'term_1',
+    status: 'running',
+    cwd: '/work',
+    shell: '/bin/zsh',
+    lines: 2,
+    bytes: 12,
+  }
+
+  /** Клик по шапке карточки результата (раскрытие/сворачивание). */
+  function toggleCard(container: HTMLElement): void {
+    const header = container.querySelector('[data-tool-call-toggle]') as HTMLButtonElement
+    expect(header).not.toBeNull()
+    act(() => {
+      header.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+  }
+
+  /** Иконка в шапке системного блока (`Notice`). */
+  function noticeIcon(container: HTMLElement): string | null {
+    const group = container.querySelector('[role="group"]') as HTMLElement | null
+    const header = group?.firstElementChild as HTMLElement | null
+    return header?.querySelector('[data-icon]')?.getAttribute('data-icon') ?? null
+  }
+
+  it('контекст терминала → подпись «Terminal output · N lines», иконка терминала, карточка terminal_read', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: TERMINAL_CONTENT,
+        metadata: TERMINAL_METADATA,
+      }),
+    )
+
+    // Подпись — не «Фоновый процесс», а «Содержимое терминала» + число строк.
+    const group = container.querySelector('[role="group"]') as HTMLElement
+    expect(group.getAttribute('aria-label')).toBe('Terminal output · 2 lines')
+    expect(container.textContent).toContain('Terminal output · 2 lines')
+    expect(container.textContent).not.toContain('Background process')
+    expect(noticeIcon(container)).toBe('terminal-box')
+
+    // Внутри — карточка `terminal_read`, свёрнута: вывод не видно.
+    expect(container.textContent).toContain('Term read')
+    expect(container.textContent).not.toContain('line1')
+    // Конверт модели в UI не показывается.
+    expect(container.textContent).not.toContain('[CONTENT')
+  })
+
+  it('контекст терминала → после раскрытия карточки виден сам вывод без маркеров', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: TERMINAL_CONTENT,
+        metadata: TERMINAL_METADATA,
+      }),
+    )
+
+    await act(async () => {
+      toggleCard(container)
+    })
+
+    expect(container.textContent).toContain('line1')
+    expect(container.textContent).toContain('line2')
+    // Маркеры конверта в карточке не остаются.
+    expect(container.textContent).not.toContain('[CONTENT')
+    expect(container.textContent).not.toContain('CONTENT END')
+    expect(container.textContent).not.toContain('bytes=12')
+  })
+})

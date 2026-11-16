@@ -25,6 +25,8 @@ import { MESSAGE_MODEL_VERSION, supportsMessageModel } from '@itphx/synth-shared
 import { synthApi } from '@/lib/api/synthApi'
 import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
 import type { SessionData } from '@/lib/api/synthApi'
+// Контекст терминала в теле промпта (PROP-132, Ф4б) — отдельное сообщение-контекст.
+import type { TerminalPromptContext } from '@/lib/api/sessions'
 import type { MessageListResponse } from '@/lib/api/messages'
 import { sessionsApi } from '@/lib/api/sessions'
 import { notifyMessage } from '@/hooks/useNotification'
@@ -1688,6 +1690,7 @@ interface TransportState {
     model?: string,
     mode?: SteerMode,
     attachmentIds?: string[],
+    context?: TerminalPromptContext,
   ) => Promise<PromptAcceptedResponse>
   cancel: (sessionId: string) => void
   /**
@@ -3702,7 +3705,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     get().connect(mode)
   },
 
-  sendMessage: async (sessionId, text, agentRole, provider, model, mode, attachmentIds) => {
+  sendMessage: async (sessionId, text, agentRole, provider, model, mode, attachmentIds, context) => {
     // ADR-118 §3: приём — только HTTP (`POST /sessions/:id/prompt` → `202`).
     // WS-кадр `send_message` и ожидание ack со «Send timeout» удалены:
     // подтверждение приходит адресным событием `message.accepted`.
@@ -3721,6 +3724,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
       mode,
       streamId: messageId,
       attachments: attachmentIds,
+      context,
     })
 
     // Строка очереди: показывается сразу (своя реплика — не утечка чужих

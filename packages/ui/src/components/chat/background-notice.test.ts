@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   backgroundNoticeName,
+  backgroundTerminalLines,
   backgroundToolCall,
   extractBackgroundBody,
+  extractTerminalContent,
   isBackgroundSuccess,
   resolveBackgroundKind,
   resolveBackgroundState,
@@ -134,5 +136,84 @@ describe('background-notice: данные карточки результата'
     expect(call.startedAt).toBeUndefined()
     expect(call.completedAt).toBeUndefined()
     expect(call.result.content).toBe('тело')
+  })
+})
+
+/**
+ * Контекст терминала: конверт backend'а (`frameTerminalOutput`) —
+ * `[CONTENT key=value …]` … **`[CONTENT END]`**.
+ */
+describe('background-notice: контекст терминала', () => {
+  /** Реальный конверт backend'а. */
+  const TERMINAL_CONTENT = [
+    '[CONTENT terminal=term_1 status=running cwd=/work shell=/bin/zsh lines=2 bytes=12]',
+    'line1',
+    'line2',
+    '[CONTENT END]',
+  ].join('\n')
+
+  const TERMINAL_METADATA = {
+    type: 'background_run_result',
+    kind: 'terminal',
+    state: 'completed',
+    terminal_id: 'term_1',
+    status: 'running',
+    cwd: '/work',
+    shell: '/bin/zsh',
+    lines: 2,
+    bytes: 12,
+  }
+
+  it('extractTerminalContent снимает конверт [CONTENT …]…[CONTENT END]', () => {
+    expect(extractTerminalContent(TERMINAL_CONTENT)).toBe('line1\nline2')
+  })
+
+  it('extractTerminalContent принимает и прежний закрывающий [/CONTENT]', () => {
+    const legacy = [
+      '[CONTENT terminal=term_1 status=running]',
+      'line1',
+      '[/CONTENT]',
+    ].join('\n')
+    expect(extractTerminalContent(legacy)).toBe('line1')
+  })
+
+  it('extractTerminalContent снимает конверт без закрывающего маркера (обрезанный контент)', () => {
+    const open = '[CONTENT terminal=term_1 status=running]\npartial'
+    expect(extractTerminalContent(open)).toBe('partial')
+  })
+
+  it('extractTerminalContent без конверта возвращает текст как есть', () => {
+    expect(extractTerminalContent('просто вывод')).toBe('просто вывод')
+  })
+
+  it('закрывающий маркер не принимается за открывающий', () => {
+    expect(extractTerminalContent('[CONTENT END]')).toBe('[CONTENT END]')
+  })
+
+  it('resolveBackgroundKind/backgroundTerminalLines: терминал и число строк', () => {
+    expect(resolveBackgroundKind(TERMINAL_METADATA)).toBe('terminal')
+    expect(backgroundTerminalLines(TERMINAL_METADATA)).toBe(2)
+    expect(backgroundTerminalLines({})).toBeUndefined()
+  })
+
+  it('backgroundNoticeName для терминала — число строк', () => {
+    expect(backgroundNoticeName(TERMINAL_METADATA, 'terminal')).toBe('2')
+    expect(backgroundNoticeName({}, 'terminal')).toBe('')
+  })
+
+  it('терминал → карточка terminal_read: вывод без маркеров', () => {
+    const call = backgroundToolCall(TERMINAL_METADATA, TERMINAL_CONTENT)
+
+    expect(call.name).toBe('terminal_read')
+    expect(call.args).toEqual({
+      terminal_id: 'term_1',
+      cwd: '/work',
+      shell: '/bin/zsh',
+    })
+    expect(call.result.content).toBe('line1\nline2')
+    expect(call.result.content).not.toContain('[CONTENT')
+    expect(call.result.content).not.toContain('line1\nline2\n[CONTENT END]')
+    expect(call.result.isError).toBe(false)
+    expect(call.status).toBe('done')
   })
 })

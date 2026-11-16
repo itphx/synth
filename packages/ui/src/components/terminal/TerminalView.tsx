@@ -28,7 +28,6 @@ import { useI18n } from '@/lib/i18n'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useComposerDraftsStore } from '@/stores/composerDraftsStore'
 import { terminalsApi, terminalApiErrorStatus } from '@/lib/api/terminals'
 import { cn } from '@/lib/utils'
 import { resolveTerminalTheme } from '@/lib/theme/terminal'
@@ -39,14 +38,13 @@ import { useNotification } from '@/hooks/useNotification'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '@/components/ui/button'
 import {
-  buildTerminalContextBlock,
   readTerminalBufferLines,
   tailLines,
   TERMINAL_CONTEXT_LINES,
 } from '@/lib/terminalContext'
 import { scrollShadowState, type TerminalScrollShadow } from '@/lib/terminalScroll'
 import { TerminalQuickKeys } from './TerminalQuickKeys'
-import { TerminalAskDock, type TerminalAskDockMode } from './TerminalAskDock'
+import { TerminalAskDock } from './TerminalAskDock'
 import {
   runTerminalStreamSession,
   type TerminalConnectionState,
@@ -145,8 +143,12 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
   const [streamExit, setStreamExit] = useState<{ exitCode?: number; signal?: string } | null>(
     null,
   )
-  /** Док «Спросить агента» / «Прикрепить вывод» (null — док закрыт). */
-  const [dock, setDock] = useState<{ mode: TerminalAskDockMode; lines: string[] } | null>(null)
+  /**
+   * Док «Спросить агента» (null — док закрыт).
+   *
+   * Кнопка в тулбаре — **тумблер**: повторный клик закрывает док.
+   */
+  const [dock, setDock] = useState<{ lines: string[] } | null>(null)
   /**
    * Затенение краёв — **два независимых** признака (как `handleScroll` в чате):
    * `hasTop` — сверху есть контент, `hasBottom` — снизу есть контент. Изначально
@@ -341,7 +343,7 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
       if (event.key !== 'Enter') return true
       if (!event.shiftKey) return true
       if (!(event.ctrlKey || event.metaKey)) return true
-      setDock({ mode: 'ask', lines: collectContextLinesRef.current() })
+      setDock({ lines: collectContextLinesRef.current() })
       return false
     })
 
@@ -698,50 +700,9 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
     })
   }, [sessionNames, terminal?.sessionId])
 
-  /** Вставка блока контекста в черновик композера сессии. */
-  const insertContextIntoDraft = useCallback(
-    (sessionId: string, lines: string[]) => {
-      const block = buildTerminalContextBlock({
-        terminalId,
-        cwd: terminal?.cwd,
-        shell: terminal?.shell,
-        lines,
-      })
-      const drafts = useComposerDraftsStore.getState()
-      const existing = drafts.textBySession[sessionId] ?? ''
-      drafts.setText(sessionId, existing ? `${existing}\n${block}` : block)
-      const name = sessionNames.get(sessionId) ?? sessionId
-      useUIStore.getState().openTab({
-        id: `chat-${sessionId}`,
-        type: 'chat',
-        title: name,
-        data: { sessionId },
-      })
-      notify({
-        text: t('terminal.attach.done'),
-        type: 'success',
-        category: 'message',
-        sessionId,
-      })
-    },
-    [notify, sessionNames, t, terminal?.cwd, terminal?.shell, terminalId],
-  )
-
-  /** «Прикрепить вывод»: выделение или последние N строк — в черновик композера. */
-  const handleAttach = useCallback(() => {
-    const lines = collectContextLines()
-    const sessionId = terminal?.sessionId
-    if (!sessionId) {
-      // Привязки нет — выбор цели в доке.
-      setDock({ mode: 'attach', lines })
-      return
-    }
-    insertContextIntoDraft(sessionId, lines)
-  }, [collectContextLines, insertContextIntoDraft, terminal?.sessionId])
-
-  /** «Спросить агента»: док с полем вопроса и автоконтекстом. */
+  /** «Спросить агента»: док с полем вопроса и автоконтекстом (тумблер). */
   const handleAskAgent = useCallback(() => {
-    setDock({ mode: 'ask', lines: collectContextLines() })
+    setDock((current) => (current ? null : { lines: collectContextLines() }))
   }, [collectContextLines])
 
   if (missing) {
@@ -883,23 +844,17 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
           )}
           <button
             type="button"
-            className="rounded-sm p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+            className={cn(
+              'rounded-sm p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground',
+              dock && 'bg-primary/10 text-primary',
+            )}
             onClick={handleAskAgent}
             title={t('terminal.ask.action')}
             aria-label={t('terminal.ask.action')}
+            aria-pressed={dock !== null}
             data-testid="terminal-ask-agent"
           >
             <Icon name="robot-2" className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            className="rounded-sm p-1 text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
-            onClick={handleAttach}
-            title={t('terminal.attach.action')}
-            aria-label={t('terminal.attach.action')}
-            data-testid="terminal-attach-output"
-          >
-            <Icon name="clipboard" className="size-3.5" />
           </button>
           <button
             type="button"
@@ -963,7 +918,6 @@ export function TerminalView({ tab, onTerminalMissing, onCreateAnother }: Termin
         <TerminalAskDock
           terminal={terminal}
           lines={dock.lines}
-          mode={dock.mode}
           onClose={() => setDock(null)}
         />
       )}

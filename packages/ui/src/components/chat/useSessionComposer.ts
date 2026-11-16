@@ -18,6 +18,7 @@ import { useProvidersStore } from '@/stores/providersStore'
 import { useChatStore, type MessageData, type QueuedMessage, type QueueState } from '@/stores/chatStore'
 import { useTransportStore } from '@/stores/transportStore'
 import { synthApi } from '@/lib/api/synthApi'
+import type { TerminalPromptContext } from '@/lib/api/sessions'
 import { isQueueChangedError } from '@/lib/api/queue'
 import { stickyNoteErrorKey, useStickyNotesLimits } from '@/lib/api/stickyNotesLimits'
 import { sendBlockedFromError, type SendBlockedState } from './SendBlockedPanel'
@@ -26,12 +27,19 @@ import { toQueuedMessage } from './queueMessages'
 /** Стабильная пустая очередь: иначе каждый рендер создаёт новый массив. */
 const EMPTY_PENDING: QueuedMessage[] = []
 
-/** Отправка сообщения — сигнатура как у `ChatInput.onSend`. */
+/**
+ * Отправка сообщения — сигнатура как у `ChatInput.onSend`.
+ *
+ * Пятый аргумент — **контекст терминала** (PROP-132, Ф4б): сервер сохраняет
+ * его отдельным сообщением **до** вопроса, поэтому текст остаётся чистым.
+ * Чат его не передаёт — там пятым аргументом ничего нет.
+ */
 export type SessionComposerSend = (
   text: string,
   agentRole?: string,
   mode?: SteerMode,
   attachmentIds?: string[],
+  context?: TerminalPromptContext,
 ) => Promise<void>
 
 /** Контроллер композера: состояние + обработчики. */
@@ -96,7 +104,7 @@ export function useSessionComposer(sessionId: string): SessionComposerController
   const stickyNotesLimits = useStickyNotesLimits()
 
   const handleSend = useCallback<SessionComposerSend>(
-    async (text, agentRole, mode, attachmentIds) => {
+    async (text, agentRole, mode, attachmentIds, context) => {
       const { activeAgentId, defaultAgentId } = useAgentsStore.getState()
       const effectiveAgentRole = agentRole || activeAgentId || defaultAgentId || undefined
 
@@ -109,7 +117,8 @@ export function useSessionComposer(sessionId: string): SessionComposerController
         // ADR-115: id загруженных вложений уходят в тело запроса промпта.
         // ADR-118 §3: ответ — `202 {messageId, mode, position}`; реплика уже
         // показана в ленте оптимистично по `messageId`.
-        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
+        // PROP-132: `context` (вывод терминала) — отдельное сообщение-контекст.
+        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds, context)
         setSendBlocked(null)
         notify({
           text: t('chat.message.sent'),
