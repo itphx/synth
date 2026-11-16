@@ -154,9 +154,9 @@ export interface StandaloneConfig {
   mcpServers?: Record<string, McpServerConfig>;
   /** ADR-071 §2.3.1: политика сетевого доступа HTTP MCP из config.yaml mcp.networkPolicy. */
   mcpNetworkPolicy?: McpNetworkPolicy;
-  /** ADR-046: конфигурация скиллов из config.yaml `skills` (paths/trustedProjectDirs/inlineShell). */
+  /** ADR-126: конфигурация скиллов из config.yaml `skills` (paths/trustedProjectDirs/inlineShell). */
   skillsConfig?: SkillsConfig;
-  /** ADR-046 §7: конфигурация slash-команд из config.yaml `commands`. */
+  /** ADR-126 §1: конфигурация slash-команд из config.yaml `commands`. */
   commandsConfig?: CommandsConfig;
   /** ADR-069 Фаза 1: конфигурация проектных инструкций из config.yaml `instructions`. */
   instructionsConfig?: InstructionsConfig;

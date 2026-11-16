@@ -29,7 +29,7 @@ function service(skills: SkillSummary[]): SkillService {
   } as unknown as SkillService;
 }
 
-describe('resolveProjectSkillSeed (ADR-046 §4.5)', () => {
+describe('resolveProjectSkillSeed (ADR-126 §11)', () => {
   it('сид = все обнаруженные скиллы, кроме disabledForNewProjects', async () => {
     const seed = await resolveProjectSkillSeed(
       service([

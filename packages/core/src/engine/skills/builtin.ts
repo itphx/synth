@@ -4,7 +4,7 @@ import type { SkillMeta } from '@itphx/synth-shared';
 import type { DiscoveredSkill, SkillSource } from './types.js';
 
 /**
- * ADR-046 §9.5: встроенные (builtin) скиллы — объявлены в коде (TS-константа),
+ * ADR-126 §15: встроенные (builtin) скиллы — объявлены в коде (TS-константа),
  * без нового asset-каталога (ADR-038). Не сидятся на ФС: `dir` — синтетический
  * маркер, читать его не нужно (supporting-файлов нет).
  */

@@ -35,7 +35,7 @@ export interface UpdateSkillMarkdownInput {
 }
 
 /**
- * ADR-046 §4.1/§4.3: instance-скиллы — дерево файлов под `{dataDir}/skills/<name>/`
+ * ADR-126 §7/§4.3: instance-скиллы — дерево файлов под `{dataDir}/skills/<name>/`
  * (`SKILL.md` + supporting-файлы). Запись — атомарная (tmp → rename, ADR-005),
  * образец — `McpRegistryStore` (`AsyncLock` + `atomicWrite`).
  *

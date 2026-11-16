@@ -32,13 +32,10 @@ interface SkillEntry {
 /**
  * ADR-126 §3: `$`-пикер скиллов над композером.
  *
- * Источник данных — реестр скиллов (`GET /api/v2/skills`) и общий реестр
- * команд (`GET /api/v2/commands`, `kind:'skill'`). Имя берётся **из реестра
- * скиллов**: ядро резолвит `$`-токен по имени скилла
- * (`engine/commands/dollar-skills.ts` → `skillRuntime.get(name)`), а в
- * реестре команд у скилла может быть другое имя — `metadata.synth.command`
- * (`synth-pipelines` → команда `pipelines`). Поэтому запись команды — только
- * дополнение, если скилла с таким именем в реестре нет.
+ * Источник данных — **только** реестр скиллов (`GET /api/v2/skills`):
+ * ядро резолвит `$`-токен по имени скилла (`engine/commands/dollar-skills.ts`
+ * → `skillRuntime.get(name)`). Реестр `/`-команд вторым источником больше не
+ * служит — скиллы из `/`-каталога удалены (ADR-126 §7).
  *
  * Клавиатура, позиционирование и `data-testid` — как у `CommandAutocomplete`.
  */
@@ -50,33 +47,24 @@ export function SkillAutocomplete({
   onMatchesChange,
 }: SkillAutocompleteProps) {
   const { t } = useI18n()
-  const commands = useSkillsStore((s) => s.commands)
   const skills = useSkillsStore((s) => s.skills)
-  const fetchCommands = useSkillsStore((s) => s.fetchCommands)
   const fetchSkills = useSkillsStore((s) => s.fetchSkills)
 
   const ref = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const [highlightedIdx, setHighlightedIdx] = useState(0)
 
-  // Реестры тянутся один раз: пока данных нет — подгружаем.
-  useEffect(() => {
-    if (commands === null) void fetchCommands()
-  }, [commands, fetchCommands])
+  // Реестр тянется один раз: пока данных нет — подгружаем.
   useEffect(() => {
     if (skills === null) void fetchSkills()
   }, [skills, fetchSkills])
 
   const entries = useMemo<SkillEntry[]>(() => {
-    const fromRegistry = (skills ?? [])
+    return (skills ?? [])
       .filter((skill) => skill.userInvocable !== false && skill.available !== false)
       .map((skill) => ({ name: skill.name, description: skill.description ?? '' }))
-    const known = new Set(fromRegistry.map((entry) => entry.name))
-    const fromCommands = (commands ?? [])
-      .filter((cmd) => cmd.kind === 'skill' && cmd.available !== false && !known.has(cmd.name))
-      .map((cmd) => ({ name: cmd.name, description: cmd.description ?? '' }))
-    return [...fromRegistry, ...fromCommands].sort((a, b) => a.name.localeCompare(b.name))
-  }, [skills, commands])
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [skills])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

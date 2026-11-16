@@ -3,7 +3,7 @@
 import type { CommandDiagnostic, CommandSummary } from '@itphx/synth-shared'
 import { BASE_URL, fetchJSON } from './base'
 
-/** ADR-046 §7/§9.1: ответ GET /api/v2/commands. */
+/** ADR-126 §1/§9.1: ответ GET /api/v2/commands. */
 export interface CommandsListResponse {
   commands: CommandSummary[]
   workspace?: string
@@ -11,7 +11,7 @@ export interface CommandsListResponse {
 }
 
 export const commandsApi = {
-  // --- Slash-команды (ADR-046 §7/§9.1) ---
+  // --- Slash-команды (ADR-126 §1/§9.1) ---
   /** GET /commands — встроенные + шаблонные + скиллы + bundles; `diagnostics` — shadowed/collision. */
   async getCommands(params?: { projectId?: string; diagnostics?: boolean }): Promise<CommandsListResponse> {
     const q = new URLSearchParams()

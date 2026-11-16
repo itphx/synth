@@ -555,7 +555,7 @@ export const dict = {
     'mcpPolicy.saved': 'Политика MCP сохранена',
   'mcpPolicy.saveError': 'Не удалось сохранить политику MCP: {error}',
 
-  // Скиллы и slash-команды (ADR-046)
+  // Скиллы и slash-команды (ADR-126)
   'skillsPolicy.title': 'Политика скиллов',
   'skillsPolicy.description': 'Какие определения скиллов отправляются модели в запросах. Механизм каталога и резолвинга команд отключать нельзя.',
   'skillsPolicy.label': 'Глобальная политика скиллов',
@@ -684,7 +684,7 @@ export const dict = {
   'skillsAdmin.diagnostics.title': 'Диагностика',
   'skillsAdmin.diagnostics.description': 'Проблемы discovery и валидации (shadowed, невалидный frontmatter, недоверенные).',
   'commands.title': 'Команды',
-  'commands.description': 'Slash-команды: встроенные, шаблонные, скиллы и bundles, а также диагностика discovery.',
+  'commands.description': 'Slash-команды: встроенные, шаблонные и bundles (скиллы вызываются через $name), а также диагностика discovery.',
   'commands.count': '{count, plural, one {# команда} few {# команды} many {# команд}}',
   'commands.empty': 'Команд нет',
   'commands.error.load': 'Не удалось загрузить команды',
@@ -1748,11 +1748,11 @@ export const dict = {
   'chat.actions.fork': 'Создать ветку',
   'chat.actions.debug': 'Отладка',
 
-  // ADR-046 §7.1: нейтральный system-блок системной (builtin) команды
+  // ADR-126 §14: нейтральный system-блок системной (builtin) команды
   'chat.command.title': 'Команда',
   'chat.command.copy': 'Копировать',
 
-  // ADR-046 §7.1: единый Notice служебных сообщений
+  // ADR-126 §14: единый Notice служебных сообщений
   'chat.notice.summary': 'Сводка',
   'chat.notice.debug': 'Отладка',
   'chat.notice.error': 'Ошибка',
@@ -2193,7 +2193,7 @@ export const dict = {
   'sessionSettings.mcp.source.server': 'серверный',
   'sessionSettings.mcp.toggleLabel': 'Включён',
 
-  // ADR-046 §4.5/§8.2/§9.3: скиллы и команды (панели, статистика, автокомплит)
+  // ADR-126 §11/§8.2/§9.3: скиллы и команды (панели, статистика, автокомплит)
   'sessionSettings.skills.title': 'Скиллы',
   'sessionSettings.skills.hint': 'Включение/отключение на уровне сессии. Переопределяет настройки проекта.',
   'sessionSettings.skills.toggleLabel': 'Включён',
@@ -3925,14 +3925,14 @@ export const dict = {
   'micro.intent.fix': 'Понял, нужно исправить баг. Покажите проблемный код — найдём причину.',
   'micro.intent.test': 'Понял, нужны тесты. Укажите функцию или модуль — напишу тесты.',
 
-  // --- Скиллы (ADR-046) ---
+  // --- Скиллы (ADR-126) ---
   'skill.args_error': 'Ошибка аргументов скилла: {issues}',
   'skill.not_found': 'Скилл «{name}» не найден',
   'skill.untrusted': 'Скилл «{name}» принадлежит недоверенному проекту и не может быть загружен',
   'skill.delegation': 'Для скилла «{name}» нужны capabilities: {capabilities}; у агента «{agent}» их нет. Вызови `task` с агентом, который их поддерживает.',
   'skill.file_not_found': 'Supporting-файл «{path}» не найден в каталоге скилла',
   'skill.scope_disabled': 'Скилл «{name}» отключён ({reason}) и не может быть загружен',
-  // --- Slash-команды (ADR-046 §7) ---
+  // --- Slash-команды (ADR-126 §1) ---
   'command.unknown': 'Неизвестная команда: /{name}',
   'command.denied': 'Команда /{name} запрещена правилами прав',
   'command.unavailable': 'Команда /{name} недоступна: не хватает capabilities {capabilities}',
@@ -3951,7 +3951,7 @@ export const dict = {
   'context.compression_output_limit': 'Ответ сжатия обрезан лимитом вывода',
   'context.summary_applied': 'Контекст сжат ({mode})',
 
-  // --- Inline shell (ADR-046 §7.4) ---
+  // --- Inline shell (ADR-126 §15) ---
   'command.inline_shell_disabled': 'Inline shell отключён в этом окружении',
   'command.inline_shell_denied': 'Inline shell-команда «!`{command}`» запрещена: {reason}',
   'command.inline_shell_failed': 'Ошибка inline shell-команды: {output}',

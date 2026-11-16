@@ -34,10 +34,10 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
 - Дефолты `plugins.*` сверяются тестом (`src/config/plugins-docs-defaults.test.ts`) с
   `docs/CONFIGURATION.md` (RU и EN) — расхождение с кодом ломает сборку.
 - Читать только через `@itphx/synth-shared/config` (корневой инвариант 10).
-- ADR-046: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
+- ADR-126: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
   `commands` (`paths`/`bundlesPath`/`conflict`/лимиты); типы команд/бандлов —
   `src/types/commands.ts`, Zod — `schemas` (`skillBundleSchema`, session/project/settings-skills).
-- Скоп/уровни (ADR-046 / ADR-071 §2.4): `ProjectSkillSettings`/`ProjectMcpSettings`
+- Скоп/уровни (ADR-126 / ADR-071 §2.4): `ProjectSkillSettings`/`ProjectMcpSettings`
   (`enabled` — hard-gate, `defaultOn` — сид новых сессий), `SessionSettings.skillsDefaultOn`/
   `mcpDefaultOn` (снапшот-дефолты), `McpRegistryEntry.enabled` (мастер hard-gate) +
   `enabledByDefault` (дефолт новых проектов); Zod — `skillsSystemSettingsSchema`
@@ -227,7 +227,7 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   (`GET /api/v2/fs/raw`) по нему выбирает `inline` vs `attachment` — HTML/код/текст **никогда** не
   `inline` (XSS). Лимиты предпросмотра — `DEFAULT_MAX_PREVIEW_BYTES` (100 МиБ),
   `MIN_PREVIEW_BYTES`/`MAX_PREVIEW_BYTES_LIMIT`.
-- ADR-046: `src/skills/frontmatter.ts` — толерантный `parseFrontmatter`/`stringifyFrontmatter` формата `SKILL.md` (js-yaml; невалидный YAML → `issues`, не throw; неизвестные ключи сохраняются в `SkillMeta.extra`); типы скиллов — `src/types/skills.ts` (`SkillScope`/`SkillLevel`/`SkillInvocation`/`SkillMeta`/`SkillSummary`/`SkillDetail`/`SkillDiagnostic`, `requires_capabilities`/`requires_toolsets`).
+- ADR-126: `src/skills/frontmatter.ts` — толерантный `parseFrontmatter`/`stringifyFrontmatter` формата `SKILL.md` (js-yaml; невалидный YAML → `issues`, не throw; неизвестные ключи сохраняются в `SkillMeta.extra`); типы скиллов — `src/types/skills.ts` (`SkillScope`/`SkillLevel`/`SkillInvocation`/`SkillMeta`/`SkillSummary`/`SkillDetail`/`SkillDiagnostic`, `requires_capabilities`/`requires_toolsets`).
 - `EventType` включает `fs.changed` (мутирующий тул ядра изменил workspace) и `session.moved` (перенос сессии между проектами); потребители — `transportStore` UI (ADR-024). ADR-101: типы событий движка пайплайнов — `pipeline.run.started`/`node_started`/`node_finished`/`awaiting_human`/`finished`/`failed` и `pipeline.completed` (выход `gateway`) в `types/bus-events.ts`; это **инстансные** события (прогон — не сессия) — публикуются в инстансный канал шины, новых транспортных каналов нет.
 - ADR-101: **движок пайплайнов** — `src/types/pipeline-engine.ts` (re-export из `src/types/index.ts`): `PipelineMode` (`plan`/`act`/`yolo`, `PIPELINE_MODES`), `PipelineNodeKind` (`agent`/`script`/`tool`/`human`), `PipelineExitKind` (`session`/`file`/`gateway`/`none`), `PipelineConditionOp` (`eq`/`ne`/`in`/`exists`/`gt`/`lt`), `PipelineCondition`, `PipelineTransition`, `PipelineNode`, `PipelineExit`, `PipelineSpec` (`id`/`name`/`version`/`status`/`mode`/`projectId?`/`io?`/`vars?`/`nodes`/`exits`), `PipelineRunTrigger` (`kind` = `user|gateway|schedule|tool|webhook|manual`, `source?`/`type?`/`payload?`/`dedupKey?`), `StepResult`, `PipelineRunStatus`, `PipelineRun`, `PipelineRunEventType`/`PipelineRunEvent` и `validatePipelineSpec(spec)` — валидатор графа (проблемы **строками**, без throw). Zod — `pipelineModeSchema`/`pipelineNodeKindSchema`/`pipelineExitKindSchema`/`pipelineConditionOpSchema`/`jsonSchemaLikeSchema`/`pipelineConditionSchema`/`pipelineSpecEdgeSchema`/`pipelineSpecNodeSchema`/`pipelineExitSchema`/`pipelineSpecSchema`/`pipelineRunTriggerSchema`/`pipelineStepResultSchema`/`pipelineRunStatusSchema`/`pipelineRunSchema`/`pipelineRunEventTypeSchema`/`pipelineRunEventSchema`. Имя `PipelineTrigger` занято legacy-контрактом ADR-100 (`types/pipeline.ts`) — не путать.
 - ADR-101: **i18n-ключи движка пайплайнов** — `src/i18n/index.ts`: `ENGINE_MESSAGE_KEYS` дополнены префиксом `pipeline.*` (`not_found`, `not_published`, `invalid_spec`, `loop_limit`, `cancelled`, `executor_missing`, `gate_rejected`, `gate_timeout`, `step_failed`, `step_timeout`, `run_not_found`, `invalid_state`, `tool_not_found`, `tool_failed`, `script_failed`, `script_no_command`, `permission_denied`, `agent_unavailable`, `provider_not_found`, `llm_failed`, `llm_unrecoverable`) с параметрами в `ENGINE_MESSAGE_PARAMS` (ADR-041: строки движка — только через ключи `shared/i18n`).
@@ -506,7 +506,7 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
 - ADR-078: ключи `tool.binary_missing` (`{tool}`/`{binary}`) и
   `permission.dep_unavailable` (`{binary}`) — тул недоступен, т.к. в окружении нет
   внешней программы (`git`/`rg`/`sh`/`bash`).
-- ADR-046: `skill.scope_disabled` (`{name}`/`{reason}`) — скилл недоступен по scope
+- ADR-126: `skill.scope_disabled` (`{name}`/`{reason}`) — скилл недоступен по scope
   (причина `system`/`project`/`session`).
 - ADR-030/ADR-089: `event.ingested`, `event.routed.*`, `event.binding.not_found`,
   `event.source_not_allowed`, `event.duplicate`, `hook.blocked`.

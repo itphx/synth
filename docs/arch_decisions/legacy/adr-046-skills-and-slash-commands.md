@@ -1,11 +1,12 @@
-# ADR-046: Скиллы и slash-команды
+# ADR-046: Скиллы и slash-команды (историческая редакция)
 
-> **Статус:** ⚠️ Частично — механизм скиллов, slash-команды/bundles, scope-уровни и UI реализованы (Фазы 1–3, часть); остаток — install/доверие/подписи/`lock.json` и backend-админка каталога ([PROP-068](./prop-068-skills-agents-registry.md)).
+> **Статус:** ⛔ Заменено
+> **Заменено:** [ADR-126](../adr-126-input-surface-commands-mentions-snippets.md) — поверхность ввода и механика скиллов (вызов скилла — только `$name`, `/` — только команды).
 > **Дата:** 2026-09-17 (as-built вынесено в spec — 2026-10-15).
 > **Обновлено:** 2026-11-14 — `/compact` реализован (ADR-126 §1); `/review` остаётся отложенным.
-> **Парные документы (as-built):** [ARCHITECTURE.md](../ARCHITECTURE.md) «Скиллы и slash-команды» · [API_V2.md](../API_V2.md) §5.17–§5.17.2 · [CONFIGURATION.md](../CONFIGURATION.md) (`skills`/`commands`) · `packages/{core,ui,shared}/AGENTS.md`.
-> **Связано:** [ADR-025](./adr-025-plan-act-toggle.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-035](./adr-035-micro-model-first.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-039](./adr-039-plan-in-project.md), [ADR-041](./adr-041-llm-error-taxonomy.md), [ADR-042](./adr-042-hybrid-mode.md), [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-069](./adr-069-project-instructions-agents-md.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-071](./adr-071-mcp-servers-prompt.md); контент-платформа — [PROP-068](./prop-068-skills-agents-registry.md).
-> **Карта подразделов (прежняя нумерация §) → spec-дом:** §3 формат `SKILL.md` → `packages/core/AGENTS.md`, `packages/shared/AGENTS.md`; §4 discovery/скоупы/trust → [CONFIGURATION.md](../CONFIGURATION.md), [ARCHITECTURE.md](../ARCHITECTURE.md); §4.5 уровни/включение → [API_V2.md](../API_V2.md) §5.17.2; §5 доставка → [ARCHITECTURE.md](../ARCHITECTURE.md); §6 invocation/binding → `packages/core/AGENTS.md`; §7 команды/bundles → [CONFIGURATION.md](../CONFIGURATION.md), [API_V2.md](../API_V2.md) §5.17.1; §8 права/аудит → `packages/core/AGENTS.md`; §9 API/UI/CLI → [API_V2.md](../API_V2.md) §5.17, `packages/ui/AGENTS.md`.
+> **Парные документы (as-built):** [ARCHITECTURE.md](../../ARCHITECTURE.md) «Скиллы и slash-команды» · [API_V2.md](../../API_V2.md) §5.17–§5.17.2 · [CONFIGURATION.md](../../CONFIGURATION.md) (`skills`/`commands`) · `packages/{core,ui,shared}/AGENTS.md`.
+> **Связано:** [ADR-025](../adr-025-plan-act-toggle.md), [ADR-029](../adr-029-granular-permissions.md), [ADR-035](../adr-035-micro-model-first.md), [ADR-036](../adr-036-llm-gateway.md), [ADR-039](../adr-039-plan-in-project.md), [ADR-041](../adr-041-llm-error-taxonomy.md), [ADR-042](../adr-042-hybrid-mode.md), [ADR-045](../adr-045-hybrid-server-profiles.md), [ADR-069](../adr-069-project-instructions-agents-md.md), [ADR-070](../adr-070-system-prompt-composer.md), [ADR-071](../adr-071-mcp-servers-prompt.md); контент-платформа — [PROP-068](../prop-068-skills-agents-registry.md).
+> **Карта подразделов (прежняя нумерация §) → spec-дом:** §3 формат `SKILL.md` → `packages/core/AGENTS.md`, `packages/shared/AGENTS.md`; §4 discovery/скоупы/trust → [CONFIGURATION.md](../../CONFIGURATION.md), [ARCHITECTURE.md](../../ARCHITECTURE.md); §4.5 уровни/включение → [API_V2.md](../../API_V2.md) §5.17.2; §5 доставка → [ARCHITECTURE.md](../../ARCHITECTURE.md); §6 invocation/binding → `packages/core/AGENTS.md`; §7 команды/bundles → [CONFIGURATION.md](../../CONFIGURATION.md), [API_V2.md](../../API_V2.md) §5.17.1; §8 права/аудит → `packages/core/AGENTS.md`; §9 API/UI/CLI → [API_V2.md](../../API_V2.md) §5.17, `packages/ui/AGENTS.md`.
 
 ## Контекст
 
@@ -29,26 +30,26 @@
 - **Отдельные тулы на скилл / autoload `scripts/`** — отклонён: скиллы — инструкции; один тул `skill`.
 - **Резолвинг `/`-команд в UI** — отклонён: расхождение UI/CLI/гибрида.
 - **Автодоверие «своему» репозиторию** — отклонён: trust выдаётся явно, не по факту `.git`/`git pull`.
-- **Доверие к внешним каталогам и `skills.urls`** — ограничено read-only индексацией; install/подписи — [PROP-068](./prop-068-skills-agents-registry.md).
+- **Доверие к внешним каталогам и `skills.urls`** — ограничено read-only индексацией; install/подписи — [PROP-068](../prop-068-skills-agents-registry.md).
 
 ## Последствия
 
 - (+) Процедурное знание переиспользуется без раздувания промпта; единый вход `/`-команд во всех клиентах; проектный контент исполняется только после явного доверия.
 - (−) Два уровня доверия (бинарный project-trust механизма vs trust-уровни источников PROP-068) нужно не путать; inline shell — осознанный opt-in.
-- Вне объёма: install/доверие/подписи/`lock.json`, backend-админка каталога — [PROP-068](./prop-068-skills-agents-registry.md).
+- Вне объёма: install/доверие/подписи/`lock.json`, backend-админка каталога — [PROP-068](../prop-068-skills-agents-registry.md).
 
 ## Статус реализации
 
-Реализовано (Фазы 1–3, часть): механизм скиллов (`engine/skills/*`: формат `SKILL.md`, discovery/приоритет/`shadowed`, trust, тул `skill`, каталог stable/volatile, per-skill permissions), slash-команды и bundles (`engine/commands/*`, резолвинг в core, `command.invoked`), scope-API (system/project/session, снапшоты, миграция `migrateSessionScopeSnapshots`), внешние каталоги и `skills.urls` (read-only), builtin `skill-creator`, UI (настройки/панели/статистика/`/`-автокомплит`). Формат `SKILL.md` и `invocation` — spec в `packages/core/AGENTS.md`; эндпоинты/RBAC — [API_V2.md](../API_V2.md) §5.17–§5.17.2; конфиг — [CONFIGURATION.md](../CONFIGURATION.md).
-Остаток: install/доверие/подписи/`lock.json`, backend-админка каталога ([PROP-068](./prop-068-skills-agents-registry.md)).
+Реализовано (Фазы 1–3, часть): механизм скиллов (`engine/skills/*`: формат `SKILL.md`, discovery/приоритет/`shadowed`, trust, тул `skill`, каталог stable/volatile, per-skill permissions), slash-команды и bundles (`engine/commands/*`, резолвинг в core, `command.invoked`), scope-API (system/project/session, снапшоты, миграция `migrateSessionScopeSnapshots`), внешние каталоги и `skills.urls` (read-only), builtin `skill-creator`, UI (настройки/панели/статистика/`/`-автокомплит`). Формат `SKILL.md` и `invocation` — spec в `packages/core/AGENTS.md`; эндпоинты/RBAC — [API_V2.md](../../API_V2.md) §5.17–§5.17.2; конфиг — [CONFIGURATION.md](../../CONFIGURATION.md).
+Остаток: install/доверие/подписи/`lock.json`, backend-админка каталога ([PROP-068](../prop-068-skills-agents-registry.md)).
 
 ## Открытые вопросы
 
-Формат `skills.urls` (opencode `index.json` vs git/архивы); `requires_toolsets` — фиксированный словарь или config-маппинг; кэш/офлайн удалённых каталогов; приоритет bundle над встроенными командами; UI недоверенных скиллов (метаданные vs read-only тело); наследование binding в саб-агентах; `allowed-tools` — advisory vs авто-deny. Детали — [PROP-068](./prop-068-skills-agents-registry.md).
+Формат `skills.urls` (opencode `index.json` vs git/архивы); `requires_toolsets` — фиксированный словарь или config-маппинг; кэш/офлайн удалённых каталогов; приоритет bundle над встроенными командами; UI недоверенных скиллов (метаданные vs read-only тело); наследование binding в саб-агентах; `allowed-tools` — advisory vs авто-deny. Детали — [PROP-068](../prop-068-skills-agents-registry.md).
 
 ## История
 
-- 2026-10-15 — сжатие до одной страницы: as-built вынесено в spec ([ARCHITECTURE.md](../ARCHITECTURE.md), [API_V2.md](../API_V2.md) §5.17–§5.17.2, [CONFIGURATION.md](../CONFIGURATION.md), `packages/{core,ui,shared}/AGENTS.md`).
+- 2026-10-15 — сжатие до одной страницы: as-built вынесено в spec ([ARCHITECTURE.md](../../ARCHITECTURE.md), [API_V2.md](../../API_V2.md) §5.17–§5.17.2, [CONFIGURATION.md](../../CONFIGURATION.md), `packages/{core,ui,shared}/AGENTS.md`).
 - 2026-09-30 — единая per-item модель включения (мастер hard-gate + дефолты-снапшоты).
 - 2026-09-24 — Фаза 3 (часть): внешние каталоги, `skills.urls` read-only, builtin `skill-creator`.
 - 2026-09-23 — Фазы 1–2: механизм скиллов, команды/bundles, scope-API, UI.

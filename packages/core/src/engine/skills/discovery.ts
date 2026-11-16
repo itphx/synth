@@ -9,11 +9,11 @@ import { expandHome, isProjectTrusted } from './trust.js';
 import { BLOB_SKILL_DIR_PREFIX, PORT_SKILLS_SOURCE_DIR } from './types.js';
 import type { DiscoveredSkill, SkillScanResult, SkillSource } from './types.js';
 
-/** Подкаталог проекта для проектных скиллов (ADR-046 §4.1). */
+/** Подкаталог проекта для проектных скиллов (ADR-126 §7). */
 export const PROJECT_SKILLS_DIR = join('.synth', 'skills');
 
 /**
- * ADR-046 §4.2: внешние локальные каталоги совместимости в рабочем каталоге
+ * ADR-126 §7: внешние локальные каталоги совместимости в рабочем каталоге
  * проекта — read-only discovery, trust наследуется от проектного каталога.
  */
 export const EXTERNAL_PROJECT_SKILL_DIRS: readonly string[] = [
@@ -23,7 +23,7 @@ export const EXTERNAL_PROJECT_SKILL_DIRS: readonly string[] = [
   join('.agents', 'skills'),
 ];
 
-/** ADR-046 §4.2: внешний каталог совместимости в домашней конфигурации (trusted). */
+/** ADR-126 §7: внешний каталог совместимости в домашней конфигурации (trusted). */
 export const EXTERNAL_HOME_SKILL_DIR = join('.config', 'opencode', 'skills');
 
 /** Подкаталог кэша удалённых каталогов внутри `skillsCacheDir`. */
@@ -46,7 +46,7 @@ export function urlCacheDir(cacheDir: string, url: string): string {
 }
 
 /**
- * ADR-046 §4.2/§4.3: источник удалённого каталога (кэш `skills.urls`).
+ * ADR-126 §7/§4.3: источник удалённого каталога (кэш `skills.urls`).
  * `trusted: false` — read-only индексация: скиллы видны в реестре/диагностике,
  * но не попадают в каталог для модели и не грузятся (установка/доверие/подписи —
  * PROP-068).
@@ -83,7 +83,7 @@ export interface BuildSkillSourcesOptions {
 }
 
 /**
- * ADR-046 §4.2/§4.3: источники discovery в порядке приоритета:
+ * ADR-126 §7/§4.3: источники discovery в порядке приоритета:
  * `project > instance > config.paths > external > urls`.
  * Внешние локальные каталоги — read-only discovery; удалённые (`urls`) — кэш,
  * `trusted: false`. Отсутствие каталога — не ошибка (см. `scanSkillSource`).
@@ -139,7 +139,7 @@ export function buildSkillSources(opts: BuildSkillSourcesOptions): SkillSource[]
     });
   }
 
-  // ADR-046 §4.2: внешние локальные каталоги — read-only discovery (приоритет выше urls).
+  // ADR-126 §7: внешние локальные каталоги — read-only discovery (приоритет выше urls).
   if (hasProject) {
     for (const rel of EXTERNAL_PROJECT_SKILL_DIRS) {
       sources.push({
@@ -159,7 +159,7 @@ export function buildSkillSources(opts: BuildSkillSourcesOptions): SkillSource[]
     trusted: true,
   });
 
-  // ADR-046 §4.2/§4.3: удалённые каталоги — по одному кэш-источнику на URL.
+  // ADR-126 §7/§4.3: удалённые каталоги — по одному кэш-источнику на URL.
   if (opts.urls && opts.urls.length > 0) {
     const cacheDir = opts.skillsCacheDir ?? join(opts.dataDir, 'skills-cache');
     for (const raw of opts.urls) {
@@ -294,7 +294,7 @@ export async function scanSkillRepositorySource(
 }
 
 /**
- * ADR-046 §4.3: дедупликация по приоритету источников (first-wins). Проигравшие
+ * ADR-126 §7: дедупликация по приоритету источников (first-wins). Проигравшие
  * фиксируются в диагностике как `shadowed`. Недоверенные — с диагностикой
  * `untrusted` (видны в реестре, не грузятся).
  */

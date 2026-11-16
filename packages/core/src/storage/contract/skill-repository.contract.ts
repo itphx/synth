@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SkillRepository } from '../ports/index.js';
 
 /**
- * Паспорт порта `SkillRepository` (ADR-046 §4, ADR-096, ADR-116).
+ * Паспорт порта `SkillRepository` (ADR-126 §9, ADR-096, ADR-116).
  *
  * Проверяется **поведение**, а не файловая раскладка: порт не отдаёт путей,
  * поэтому ни `root()`, ни `skillDir()` в контракте нет. Общий для всех

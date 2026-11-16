@@ -747,7 +747,7 @@ export class PermissionEvaluator {
     // Путь внутри любого из них внешним не считается (сессия в worktree, ADR-114).
     const roots: readonly string[] = perimeterRoots(workingDir, input.allowedRoots);
 
-    // ADR-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
+    // ADR-126 §10: per-skill permissions — правило `skill` (строка или glob по
     // имени скилла). `deny` скрывает скилл из каталога; `ask` спрашивает.
     if (toolName === 'skill' && typeof params.name === 'string' && params.name.trim() !== '') {
       const skillDecision = resolveSkillRule(this._config, params.name);
@@ -1002,7 +1002,7 @@ export function matchPathPattern(
 }
 
 /**
- * ADR-046 §8.1: именованные правила `permission.rules.<key>` — строка (действие
+ * ADR-126 §10: именованные правила `permission.rules.<key>` — строка (действие
  * для всех) либо объект glob-паттернов по имени. Общий резолвер для скиллов
  * (`skill`) и команд (`command`).
  */
@@ -1047,7 +1047,7 @@ function resolveNamedRule(
 }
 
 /**
- * ADR-046 §8.1: per-skill permissions. Правило — `permission.rules.skill`:
+ * ADR-126 §10: per-skill permissions. Правило — `permission.rules.skill`:
  * строка (действие для всех скиллов) либо объект glob-паттернов по имени
  * скилла. `deny` скрывает скилл из каталога (в отличие от capability-unavailable,
  * где скилл виден); наследуется саб-агентами (derive.ts).
@@ -1060,7 +1060,7 @@ export function resolveSkillRule(
 }
 
 /**
- * ADR-046 §8.1: per-command permissions. Правило — `permission.rules.command`:
+ * ADR-126 §10: per-command permissions. Правило — `permission.rules.command`:
  * строка либо объект glob-паттернов по имени команды. `deny` скрывает команду
  * из `/commands` и блокирует резолвинг; наследуется саб-агентами (derive.ts).
  */

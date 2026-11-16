@@ -197,7 +197,7 @@ describe('toolsConfigSchema (ADR-071 §2.3)', () => {
   });
 });
 
-describe('skillsConfigSchema (ADR-046)', () => {
+describe('skillsConfigSchema (ADR-126)', () => {
   it('дефолты: пустые списки, inlineShell=false', () => {
     const parsed = skillsConfigSchema.parse({});
     expect(parsed.paths).toEqual([]);

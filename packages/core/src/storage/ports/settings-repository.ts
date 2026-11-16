@@ -84,7 +84,7 @@ export interface SettingsRepository {
   clearSkillsPolicy(): Promise<void>;
 
   /**
-   * ADR-046/ADR-069: runtime-override project-trust гейта (`skills.trustedProjectDirs`).
+   * ADR-126/ADR-069: runtime-override project-trust гейта (`skills.trustedProjectDirs`).
    * Применяется при старте (резолверы скиллов/команд/инструкций собираются на
    * старте) — `restartRequired: true` в API, инвариант 24.
    */

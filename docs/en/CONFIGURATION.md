@@ -1878,10 +1878,12 @@ tools:
   outputMaxBytes: 51200
 ```
 
-### Skills (`skills.*`, ADR-046)
+### Skills (`skills.*`, ADR-126)
 
 The `skills` section manages skill discovery, trust of project directories,
-inline shell in template commands and remote catalogs:
+inline shell in template commands and remote catalogs. A skill is invoked
+**only** as `$name` (ADR-126 §3): `/` commands and skills no longer compete for
+names, and `metadata.synth.command` does not create a `/` command.
 
 | Field | Purpose | Default |
 |------|-----------|--------------|
@@ -1898,8 +1900,8 @@ Order of sources (priority, first-wins): `{project.workspace}/.synth/skills` >
 
 - **Project-trust:** an untrusted project directory (not in `trustedProjectDirs`)
   is visible in the registry/diagnostics (`untrusted`), but its skills and template commands
-  are not loaded — they do not get into the model catalog, the `/` autocomplete or the core
-  `skill` tool. Commands additionally cannot override a trusted skill/bundle.
+  are not loaded — they do not get into the model catalog, the `$` invocation or the core
+  `skill` tool.
 - **`skills.urls`** are cached, indexed and visible in the registry, but marked
   **`trusted:false`** (they do not get into the model catalog). Installation/update,
   trust levels and signatures of remote catalogs — the task [PROP-068](../arch_decisions/prop-068-skills-agents-registry.md).
@@ -1909,7 +1911,7 @@ Order of sources (priority, first-wins): `{project.workspace}/.synth/skills` >
   refusal without an interactive prompt.
 - **Builtin skill `skill-creator`** (`instance`/`system`, `trusted`) — a built-in
   instruction on creating a project skill in `{project.workspace}/.synth/skills`;
-  available as `/skill-creator` (requires `file_read`/`file_write`).
+  available as `$skill-creator` (requires `file_read`/`file_write`); `/skill-creator` is not supported (ADR-126 §7).
 
 ### Project instructions (`instructions.*`, ADR-069)
 
@@ -1932,14 +1934,14 @@ Auto-loading of repository `AGENTS.md` into the system prompt (the `[PROJECT INS
 - Discovery: the chain `git root → … → workspace` (deeper = higher priority), per directory `AGENTS.override.md` > `AGENTS.md` > `agents.md` > `CLAUDE.md` > `CONTEXT.md`; sha256 deduplication.
 - **`sources`:** `position: before|after` — before/after the merged chain; `kind: path` — `value` relative/glob/`~/`/absolute; `kind: url` — read-only fetch with a TTL cache in `{dataDir}/instructions-cache` (`ttlSec` overrides `fetch.cacheTtlSec`), cap `fetch.maxBytes`.
 - Each block goes through a **threat scan** (ADR-036): `block` — not loaded, `flag` — with a WARN line.
-- **Project-trust:** instructions of an untrusted project (not in `skills.trustedProjectDirs`) are not loaded (status `untrusted`). A directory inside `storage.workspacesRoot` is trusted **automatically** (R3) — the gate is shared by the system chain and lazy loading; it does not affect project-trust of skills (ADR-046).
+- **Project-trust:** instructions of an untrusted project (not in `skills.trustedProjectDirs`) are not loaded (status `untrusted`). A directory inside `storage.workspacesRoot` is trusted **automatically** (R3) — the gate is shared by the system chain and lazy loading; it does not affect project-trust of skills (ADR-126).
 - **Install-tree guard:** inside the Synth source tree instructions are not loaded (status `skipped-install-tree`), except with `allowInstallTreeFallback: true`.
-- **Cache/invalidation (R5, no new settings):** the resolver result is cached by the candidate signature (`mtime:size`, the helper `engine/file-signature.ts`, shared with skills ADR-046); a file change/addition/removal invalidates it, `ProjectInstructionsResolver.clear()` — a forced reset. In a real turn the result is additionally memoized by `turnId`.
+- **Cache/invalidation (R5, no new settings):** the resolver result is cached by the candidate signature (`mtime:size`, the helper `engine/file-signature.ts`, shared with skills ADR-126); a file change/addition/removal invalidates it, `ProjectInstructionsResolver.clear()` — a forced reset. In a real turn the result is additionally memoized by `turnId`.
 - Disabling: `instructions.enabled=false`, `excludeProjects`, the CLI `--ignore-rules`/`--safe-mode` (or the env `SYNTH_IGNORE_RULES=1|true`; the flags take precedence over env, they work for `serve` and `chat`), as well as the `session.settings.systemPrompt` override.
 - Transparency: `GET /api/v2/context/instructions?session_id=…` and the event `context.instructions_loaded`; the UI — the "Project instructions" section in the right panel (the "Session" tab).
-- `/init` — a builtin command (status `prompt`) that generates/updates `AGENTS.md`; the skill `synth-agents-md` (`/agents-md`) — audits/updates the instructions.
+- `/init` — a builtin command (status `prompt`) that generates/updates `AGENTS.md`; the skill `synth-agents-md` (`$synth-agents-md`) audits/updates the instructions.
 
-### Slash commands (`commands.*`, ADR-046)
+### Slash commands (`commands.*`, ADR-126)
 
 Resolving `/` commands is done in core. The `commands` section:
 
@@ -1948,11 +1950,11 @@ Resolving `/` commands is done in core. The `commands` section:
 | `commands.paths` | Extra directories of templated `.md` commands (after project/instance) | `[]` |
 | `commands.bundlesPath` | Subdirectory of `{dataDir}` for YAML bundles | `skill-bundles` |
 | `commands.conflict.mode` | Name-conflict mode: `bundle-wins` \| `conservative` \| `namespace` | `bundle-wins` |
-| `commands.conflict.namespacePrefix` | In `namespace`: bundle skills as `<bundle>:<skill>` on a conflict with a builtin | `false` |
+| `commands.conflict.namespacePrefix` | Deprecated: there are no skills in the `/` catalog (ADR-126 §7), so `<bundle>:<skill>` is not created | `false` |
 | `commands.maxArgumentsLength` | Limit of `$ARGUMENTS` | `10000` |
 | `commands.maxRenderedBytes` | Limit of rendering a template/bundle aggregate | `200000` |
 
-Sources of template commands (priority): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Built-in commands — `/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init` (ADR-069), `/review` (ADR-126 §1). `/summary` and `/compact` trigger manual context compression (ADR-119; profile `summarization`/`compaction`); session settings are unchanged. `/init` and `/review` are prompt commands (status `prompt`): `/init` generates/updates `AGENTS.md`, `/review` reviews **code changes** in a git repository (no argument — uncommitted changes, argument — commit/branch/PR; when there is no git repository or no diff, the model states that reviewing the changes is not available instead of inventing changes). Skill commands — `/skill-creator`, `/agents-md` (builtin skills). `allowed-tools` in the frontmatter — advisory (not translated into permissions).
+Sources of template commands (priority): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Built-in commands — `/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init` (ADR-069), `/review` (ADR-126 §1). `/summary` and `/compact` trigger manual context compression (ADR-119; profile `summarization`/`compaction`); session settings are unchanged. `/init` and `/review` are prompt commands (status `prompt`): `/init` generates/updates `AGENTS.md`, `/review` reviews **code changes** in a git repository (no argument — uncommitted changes, argument — commit/branch/PR; when there is no git repository or no diff, the model states that reviewing the changes is not available instead of inventing changes). Skills are **not** part of the `/` catalog: invoke them as `$name` (`$skill-creator`, `$synth-agents-md`, …), list them with `/skills`; `GET /commands` and the `/` autocomplete contain no skills. `commands.conflict.namespacePrefix` no longer creates `<bundle>:<skill>`; conflict modes describe builtin/template/bundle only. `allowed-tools` in the frontmatter is advisory (not translated into permissions).
 
 Snippets (`#name`, ADR-126 §4) are markdown content files: `instance` — `{dataDir}/snippets`, `project` — `{project.workspace}/.synth/snippets`, `user` — `{dataDir}/snippets/users/<userId>`; precedence `user > project > instance`, canonical name beats an alias. Expansion happens on prompt ingress before the queue; limits 15 expansions / 64 KB; code blocks are untouched; snippets of an untrusted project are visible but not expanded. Name — `[a-z][a-z0-9_-]{0,79}`.
 

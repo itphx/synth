@@ -111,7 +111,7 @@ managed и hybrid. Остатки и границы — в самих ADR.
 | [PROP-064](./arch_decisions/prop-064-agent-browser.md) | Браузер под управлением агента | 2026-11-14 | серверный headless уже есть; пользовательский headed — только local/hybrid |
 | [PROP-065](./arch_decisions/prop-065-ui-docs-plan-todo.md) | Docs/план/ToDo в UI | 2026-11-14 | docs-браузер, Obsidian Bridge |
 | [PROP-066](./arch_decisions/prop-066-doc-style-skills.md) | Doc-стандарты и docs-lint | 2026-11-14 | дёшево, ничего не блокирует |
-| [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) | Реестр и каталог расширений | 2026-11-14 | остаток ADR-046; каталог-MVP — в 0.14 |
+| [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) | Реестр и каталог расширений | 2026-11-14 | остаток ADR-126; каталог-MVP — в 0.14 |
 | [PROP-073](./arch_decisions/prop-073-client-integrity-hybrid.md) | Целостность клиента в гибриде | 2026-11-14 | enforcement на сервере, сигналы опционально |
 | [PROP-074](./arch_decisions/prop-074-soft-delete-retention.md) | Soft-delete и аудит-режим | 2026-11-14 | restore/purge — ADMIN |
 | [PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md) | Управляемый гибрид: режимы-полюса | 2026-11-14 | сужает ADR-045 |

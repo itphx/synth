@@ -137,7 +137,7 @@ export interface MessageRow {
   source?: string | null;
   author?: string | null;
   agent_role?: string | null;
-  /** ADR-126 §2.1: `@`-упоминания сообщения (jsonb, миграция `036`). */
+  /** ADR-126 §2: `@`-упоминания сообщения (jsonb, миграция `036`). */
   mentions?: unknown;
   qa_pass?: boolean | null;
   qa_reason?: string | null;
@@ -251,7 +251,7 @@ export interface SerializedMessage {
   source?: string;
   author?: string;
   agent_role?: string;
-  /** ADR-126 §2.1: `@`-упоминания (jsonb, миграция `036`). */
+  /** ADR-126 §2: `@`-упоминания (jsonb, миграция `036`). */
   mentions?: unknown;
   metadata?: Record<string, unknown>;
   prompt_meta?: unknown;
@@ -370,7 +370,7 @@ export function serializeMessage(msg: Message): SerializedMessage {
     source: msg.source,
     author: msg.author,
     agent_role: msg.agentRole,
-    // ADR-126 §2.1: `@`-упоминания (jsonb, миграция `036`).
+    // ADR-126 §2: `@`-упоминания (jsonb, миграция `036`).
     mentions: msg.mentions,
     metadata: msg.metadata,
     prompt_meta: msg.promptMeta,
@@ -502,7 +502,7 @@ export function deserializeMessage(row: MessageRow): Message {
     source: (row.source ?? undefined) as Message['source'],
     author: row.author ?? undefined,
     agentRole: row.agent_role ?? undefined,
-    // ADR-126 §2.1: legacy-строки без колонки → `undefined`.
+    // ADR-126 §2: legacy-строки без колонки → `undefined`.
     mentions: Array.isArray(row.mentions)
       ? (row.mentions as Message['mentions'])
       : undefined,

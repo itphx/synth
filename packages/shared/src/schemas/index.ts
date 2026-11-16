@@ -241,7 +241,7 @@ export const sessionSettingsSchema = z.object({
   language: z.string().optional(),
   // === Plan/Act (ADR-025) ===
   planMode: z.enum(['auto', 'strict', 'off']).optional(),
-  // === Скиллы (ADR-046 §4.5) ===
+  // === Скиллы (ADR-126 §11) ===
   skills: z.array(z.string()).optional(),
   skillsDisabled: z.array(z.string()).optional(),
   // === Микро-слой (ADR-035/ADR-084) ===
@@ -683,13 +683,13 @@ export type GitReposFetchBody = z.infer<typeof gitReposFetchBodySchema>;
 export type GitLogQuery = z.infer<typeof gitLogQuerySchema>;
 export type GitCommitQuery = z.infer<typeof gitCommitQuerySchema>;
 
-// --- Скиллы (ADR-046) ---
+// --- Скиллы (ADR-126) ---
 
-/** ADR-046 §3.2: имя скилла — 1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`. */
+/** ADR-126 §13: имя скилла — 1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`. */
 export const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const SKILL_NAME_MIN = 1;
 export const SKILL_NAME_MAX = 64;
-/** ADR-046 §3.2: длина `description`. */
+/** ADR-126 §13: длина `description`. */
 export const SKILL_DESCRIPTION_MIN = 1;
 export const SKILL_DESCRIPTION_MAX = 1024;
 
@@ -725,7 +725,7 @@ export const skillFileWriteSchema = z.object({
 });
 
 /**
- * ADR-046 §4.5: per-session enable/disable скиллов (по образцу MCP-скоупа).
+ * ADR-126 §11: per-session enable/disable скиллов (по образцу MCP-скоупа).
  * `undefined` ≠ `[]`: отсутствующее поле сохраняет текущее значение.
  */
 export const skillSessionOverrideSchema = z.object({
@@ -738,9 +738,9 @@ export type SkillUpdateRequest = z.infer<typeof skillUpdateSchema>;
 export type SkillFileWriteRequest = z.infer<typeof skillFileWriteSchema>;
 export type SkillSessionOverrideRequest = z.infer<typeof skillSessionOverrideSchema>;
 
-// --- Slash-команды и bundles (ADR-046 §7) ---
+// --- Slash-команды и bundles (ADR-126 §1) ---
 
-/** ADR-046 §7.3: тело `POST/PATCH /api/v2/skill-bundles` (YAML-группа скиллов). */
+/** ADR-126 §14: тело `POST/PATCH /api/v2/skill-bundles` (YAML-группа скиллов). */
 export const skillBundleSchema = z.object({
   name: skillNameSchema,
   description: z.string().min(SKILL_DESCRIPTION_MIN).max(SKILL_DESCRIPTION_MAX),
@@ -750,7 +750,7 @@ export const skillBundleSchema = z.object({
 
 export type SkillBundleRequest = z.infer<typeof skillBundleSchema>;
 
-/** ADR-046 §7.4: тело `PUT /api/v2/settings/skills-disabled` (группы/имена). */
+/** ADR-126 §15: тело `PUT /api/v2/settings/skills-disabled` (группы/имена). */
 export const skillsDisabledSchema = z.object({
   categories: z.array(z.string()).default([]),
   groups: z.array(z.string()).default([]),
@@ -760,7 +760,7 @@ export const skillsDisabledSchema = z.object({
 export type SkillsDisabledRequest = z.infer<typeof skillsDisabledSchema>;
 
 /**
- * ADR-046 §4.5: тело `PUT /api/v2/settings/skills` — системные настройки:
+ * ADR-126 §11: тело `PUT /api/v2/settings/skills` — системные настройки:
  * - `disabled` — hard-gate: скиллы, недоступные НИГДЕ;
  * - `disabledForNewProjects` — сид для НОВЫХ проектов (снимок при создании);
  * - `policy` — политика доступности (строкой, валидируется роутом).
@@ -774,7 +774,7 @@ export const skillsSystemSettingsSchema = z.object({
 export type SkillsSystemSettingsRequest = z.infer<typeof skillsSystemSettingsSchema>;
 
 /**
- * ADR-046 §4.5: тело `PUT /api/v2/sessions/:id/skills`: точечный toggle
+ * ADR-126 §11: тело `PUT /api/v2/sessions/:id/skills`: точечный toggle
  * (`{ name, enabled }`) или полная/частичная замена (`{ skills?, skillsDisabled? }`).
  */
 export const sessionSkillUpdateSchema = z
@@ -791,7 +791,7 @@ export const sessionSkillUpdateSchema = z
     { message: 'Требуется name, skills или skillsDisabled' },
   );
 
-/** ADR-046 §4.5: тело `PUT /api/v2/projects/:id/skills`. */
+/** ADR-126 §11: тело `PUT /api/v2/projects/:id/skills`. */
 export const projectSkillUpdateSchema = z.object({
   enabled: z.array(z.string()).optional(),
   defaultOn: z.array(z.string()).optional(),

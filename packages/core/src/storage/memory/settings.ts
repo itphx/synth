@@ -201,7 +201,7 @@ export class MemorySettingsRepository implements SettingsRepository {
     this._clear('skillsPolicy');
   }
 
-  /** ADR-046/ADR-069: runtime-override project-trust гейта. */
+  /** ADR-126/ADR-069: runtime-override project-trust гейта. */
   async getSkillsTrustedProjectDirs(): Promise<string[] | undefined> {
     return this._settings.skillsTrustedProjectDirs;
   }

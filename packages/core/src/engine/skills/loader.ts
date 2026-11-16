@@ -6,11 +6,11 @@ import { t as sm } from '../system-messages.js';
 import { BLOB_SKILL_DIR_PREFIX } from './types.js';
 import type { DiscoveredSkill, LoadedSkill } from './types.js';
 
-/** ADR-046 §5: не более 10 supporting-файлов в выдаче тула `skill`. */
+/** ADR-126 §5: не более 10 supporting-файлов в выдаче тула `skill`. */
 export const MAX_SKILL_FILES = 10;
-/** ADR-046 §5: обрезка вывода — 50 KB. */
+/** ADR-126 §5: обрезка вывода — 50 KB. */
 export const SKILL_MAX_BYTES = 50 * 1024;
-/** ADR-046 §5: обрезка вывода — 2000 строк. */
+/** ADR-126 §5: обрезка вывода — 2000 строк. */
 export const SKILL_MAX_LINES = 2000;
 
 /** Рекурсивный список файлов скилла (относительные пути, без `SKILL.md`), отсортирован. */
@@ -90,7 +90,7 @@ export async function readSkillSupportingFile(
 }
 
 /**
- * ADR-046 §5: обрезка вывода тула `skill` — 50 KB / 2000 строк (локально,
+ * ADR-126 §5: обрезка вывода тула `skill` — 50 KB / 2000 строк (локально,
  * аналог ToolOutputStore).
  */
 export function truncateSkillOutput(content: string): string {
@@ -122,7 +122,7 @@ export function truncateSkillOutput(content: string): string {
 }
 
 /**
- * ADR-046 §5 (по образцу opencode): `<skill_content>` + тело + base directory +
+ * ADR-126 §5 (по образцу opencode): `<skill_content>` + тело + base directory +
  * `<skill_files>` (до 10 путей, без содержимого).
  *
  * ADR-116: у instance-скиллов из порта ФС-пути нет (`dir` — `blob:skills/<name>`),

@@ -132,7 +132,7 @@ export const packMcpProvideSchema = z.object({
 export type PackMcpProvide = z.infer<typeof packMcpProvideSchema>;
 
 /**
- * Метаданные скилла в манифесте. Блок `metadata.synth` (ADR-046 §6.2:
+ * Метаданные скилла в манифесте. Блок `metadata.synth` (ADR-126 §9:
  * `agents`/`requires_capabilities`/`scope`/`trigger`/`groups`) произвольный по
  * составу — схема его не детализирует, но и не отбрасывает.
  */
@@ -140,9 +140,9 @@ export const packSkillMetadataSchema = z
   .object({ synth: z.record(z.string(), z.unknown()).optional() })
   .catchall(z.unknown());
 
-/** Скилл-предоставление (ADR-046): каталог скилла внутри пака. */
+/** Скилл-предоставление (ADR-126): каталог скилла внутри пака. */
 export const packSkillProvideSchema = z.object({
-  /** Имя скилла (совпадает с `SKILL_NAME_REGEX` конвенцией ADR-046 §3.2). */
+  /** Имя скилла (совпадает с `SKILL_NAME_REGEX` конвенцией ADR-126 §13). */
   name: z.string().min(1),
   /** Путь к каталогу скилла относительно корня расширения. */
   path: z.string().min(1),
@@ -195,7 +195,7 @@ export const packAgentProvideSchema = z.object({
   provider: z.string().optional(),
   /** Модель по умолчанию. */
   model: z.string().optional(),
-  /** Группы агентов (ADR-046 §6.2: привязка скиллов к агентам). */
+  /** Группы агентов (ADR-126 §9: привязка скиллов к агентам). */
   groups: z.array(z.string()).optional(),
   /** Лимит шагов агента (`0` — без ограничений). */
   maxSteps: z.number().int().min(0).optional(),

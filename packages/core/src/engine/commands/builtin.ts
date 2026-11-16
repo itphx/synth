@@ -2,7 +2,7 @@ import type { CommandSummary } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
 
 /**
- * ADR-046 §7.2: встроенные продуктовые команды Фазы 2. `/compact` (ADR-126 §1)
+ * ADR-126 §1: встроенные продуктовые команды Фазы 2. `/compact` (ADR-126 §1)
  * — ручной запуск компактизации контекста (ADR-119).
  * `/init` (ADR-069 §8.1) генерирует prompt для LLM (`status: 'prompt'`), а не
  * локальный ответ; `/review` (ADR-126 §1) — тоже prompt-команда (ревью
@@ -32,10 +32,15 @@ export function renderHelp(): string {
   return lines.join('\n');
 }
 
-/** `/skills` — список доступных скиллов. */
-export function renderSkillsList(skills: readonly { commandName: string; description: string; available: boolean }[]): string {
+/**
+ * `/skills` — список доступных скиллов.
+ *
+ * ADR-126 §7: скиллы вызываются только `$name`, поэтому список показывает
+ * `$name`, а не `/command-name`.
+ */
+export function renderSkillsList(skills: readonly { name: string; description: string; available: boolean }[]): string {
   if (skills.length === 0) return sm('command.skills_empty');
-  const lines = skills.map((s) => `- /${s.commandName}${s.available ? '' : ' (unavailable)'}: ${s.description}`);
+  const lines = skills.map((s) => `- $${s.name}${s.available ? '' : ' (unavailable)'}: ${s.description}`);
   return lines.join('\n');
 }
 

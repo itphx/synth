@@ -347,7 +347,7 @@ export const taskTool: ToolDefinition = {
       llmSystemPrompt += `\n\n${extra.projectInstructions}`;
     }
 
-    // ADR-046 §5/§6.2: каталог скиллов саб-агенту. Binding — родителя
+    // ADR-126 §5/§6.2: каталог скиллов саб-агенту. Binding — родителя
     // (fixed decision Фазы 1), capabilities — самого саб-агента (executor).
     if (extra.skillRuntime) {
       try {

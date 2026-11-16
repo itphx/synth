@@ -152,7 +152,7 @@ export interface ProjectRoutesOptions {
    */
   getMcpServerSources?: () => Record<string, 'local' | 'server'>;
   /**
-   * ADR-071 §2.4 / ADR-046 §4.5: сид скоупа нового проекта (снимок системных
+   * ADR-071 §2.4 / ADR-126 §11: сид скоупа нового проекта (снимок системных
    * дефолтов). Не задан — проект создаётся без `mcp`/`skills` (legacy-гейт открыт).
    */
   getProjectSeeds?: () => Promise<{ mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }> | { mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings };
@@ -623,7 +623,7 @@ export function createProjectRoutes(
       return c.json({ error: { code: resolved.code, message: resolved.message } }, resolved.status);
     }
 
-    // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа проекта из системных дефолтов.
+    // ADR-071 §2.4 / ADR-126 §11: сид скоупа проекта из системных дефолтов.
     const seeds = await Promise.resolve(opts.getProjectSeeds?.()).catch(() => undefined);
 
     const project = store.create(name, ownerId, {

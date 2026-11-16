@@ -1,5 +1,5 @@
 /**
- * PG-реализация порта **instance-скиллов** (ADR-046 §4, ADR-116, ADR-097).
+ * PG-реализация порта **instance-скиллов** (ADR-126 §9, ADR-116, ADR-097).
  *
  * Разделение хранения (ADR-116 §«Что переводится»):
  * - **метаданные** (заголовок `SKILL.md` — `name`/`description`/прочие ключи) —
@@ -234,7 +234,7 @@ export class PgSkillRepository implements SkillRepository {
   }
 }
 
-/** Собрать порт instance-скиллов (ADR-046 §4, ADR-116). */
+/** Собрать порт instance-скиллов (ADR-126 §9, ADR-116). */
 export function buildSkillPorts(deps: PortDeps, blobs: BlobStore): SkillPorts {
   return {
     skills: new PgSkillRepository(deps, blobs),

@@ -79,7 +79,6 @@
 |----|------|--------|------|
 | ADR-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ Частично | [adr-018-session-engine-selection.md](./adr-018-session-engine-selection.md) |
 | ADR-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов — **реализовано** (ADR-090); остаток — эмит `callback` (вне ядра) | ⚠️ Частично | [adr-030-hooks-agent-events.md](./adr-030-hooks-agent-events.md) |
-| ADR-046 | Скиллы и slash-команды: формат `SKILL.md`, discovery, progressive disclosure, core-тул `skill`, команды/bundles, scope-API, UI; Фаза 3 — trust-гейт проектных команд, inline shell, `skills.urls` read-only, внешние каталоги, builtin `skill-creator`; остаток — install/trust/подписи/`lock.json` и backend-админка каталога (PROP-068) | ⚠️ Частично | [adr-046-skills-and-slash-commands.md](./adr-046-skills-and-slash-commands.md) |
 | ADR-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (ADR-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны вынесены в ADR-100/ADR-101 (движок реализован), размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ Частично | [adr-051-scheduler-pipelines.md](./adr-051-scheduler-pipelines.md) |
 | ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (ADR-090 — **реализован**), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон Add-on — `synth-media`; остаток — editions/contribution | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |
 | ADR-087 | **Шлюзы (gateways)** — отдельный класс расширений (внешний сервис-транспорт внешний мир ↔ Synth, двусторонний обмен): контракт (приём через `POST /api/v2/events`, доставка наружу через SSE-watcher, MCP-часть, Binding, identity/claim-flow, allowlist, вложения, дедуп, прокси/egress, секреты at-rest); Telegram-шлюз (`addons/synth-gateway-telegram`) реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); публикация в канал — агентом через MCP шлюза (ADR-089); HA через leader election, webhook-транспорт, второй канал — нет | ⚠️ Частично | [adr-087-gateways.md](./adr-087-gateways.md) |
@@ -99,7 +98,7 @@
 | ADR-120 | Бюджет памяти инстанса — лёгкие листинги, bounded-кэши и капы чтения | ⚠️ Частично | [adr-120-memory-budget.md](./adr-120-memory-budget.md) |
 | ADR-121 | Portable offline-дистрибутивы — pinned Node и ripgrep, SHA256SUMS | ⚠️ Частично | [adr-121-offline-portable-distribution.md](./adr-121-offline-portable-distribution.md) |
 | ADR-122 | Память как продукт — порты, плагин, индексы и recall | ⚠️ Частично | [adr-122-memory-product.md](./adr-122-memory-product.md) |
-| ADR-126 | Поверхность ввода — `/`-команды, `@`-упоминания, `$`-скиллы, `#`-сниппеты и `!`-shell | ⚠️ Частично | [adr-126-input-surface-commands-mentions-snippets.md](./adr-126-input-surface-commands-mentions-snippets.md) |
+| ADR-126 | Поверхность ввода и скиллы — `/`-команды (без скиллов), `$`-скиллы, `@`-упоминания, `#`-сниппеты и `!`-shell; механика скиллов (формат `SKILL.md`, discovery/trust/scope, bundles, `skill`-тул) | ⚠️ Частично | [adr-126-input-surface-commands-mentions-snippets.md](./adr-126-input-surface-commands-mentions-snippets.md) |
 | ADR-131 | Self-management инструменты инстанса и MCP | ⚠️ Частично | [adr-131-self-management-tools.md](./adr-131-self-management-tools.md) |
 | ADR-135 | Единый контур исполнения — пулы, профили и provisioner | ⚠️ Частично | [adr-135-execution-contour.md](./adr-135-execution-contour.md) |
 | ADR-136 | Модель доверия shell — аудит исполнений и внешний чекер команд | ⚠️ Частично | [adr-136-shell-trust.md](./adr-136-shell-trust.md) |
@@ -185,9 +184,10 @@
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
 | ADR-027 | Двойная передача плана (диск + system prompt) | ⛔ Заменено | [legacy/adr-027-double-plan-passing.md](./legacy/adr-027-double-plan-passing.md) |
+| ADR-046 | Скиллы и slash-команды (историческая редакция) | ⛔ Заменено | [legacy/adr-046-skills-and-slash-commands.md](./legacy/adr-046-skills-and-slash-commands.md) |
 | ADR-077 | Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote | ⛔ Заменено | [legacy/adr-077-runtime-toolchain.md](./legacy/adr-077-runtime-toolchain.md) |
 
 ---
 
-Всего документов: 121 (Решения: 60, Частично: 28, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 2).
+Всего документов: 121 (Решения: 60, Частично: 27, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 3).
 Удалено: 28 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

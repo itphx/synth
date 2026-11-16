@@ -51,7 +51,7 @@ export * from './fs.js';
 // Классификация файла по расширению (kind/MIME, allow-list inline-предпросмотра)
 // — browser-safe контракт для UI и ядра.
 export * from './file-kind.js';
-// ADR-126 §0/§2: контракты «поверхности ввода» — упоминания (`@`), скиллы (`$`)
+// ADR-126 §2/§2: контракты «поверхности ввода» — упоминания (`@`), скиллы (`$`)
 // и сниппеты (`#`): span'ы, виды токенов и результат разбора (browser-safe —
 // читают и ядро, и UI; сам разбор — в core, `engine/input-surface/parser.ts`).
 export * from './mentions.js';
@@ -64,9 +64,9 @@ export { DEFAULT_CONTEXT_WINDOW } from '../model-metadata.js';
 export * from './tools.js';
 // Permission types (ADR-029) — re-exported from permission.ts
 export * from './permission.js';
-// Skill types (ADR-046) — re-exported from skills.ts
+// Skill types (ADR-126) — re-exported from skills.ts
 export * from './skills.js';
-// Slash-команды и bundles (ADR-046 §7) — re-exported from commands.ts
+// Slash-команды и bundles (ADR-126 §1) — re-exported from commands.ts
 export * from './commands.js';
 // Внешние события (ADR-089) — re-exported from events.ts
 export * from './events.js';

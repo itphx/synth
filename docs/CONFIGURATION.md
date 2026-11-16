@@ -1878,10 +1878,12 @@ tools:
   outputMaxBytes: 51200
 ```
 
-### Скиллы (`skills.*`, ADR-046)
+### Скиллы (`skills.*`, ADR-126)
 
 Секция `skills` управляет discovery скиллов, доверием проектным каталогам,
-inline shell в шаблонных командах и удалёнными каталогами:
+inline shell в шаблонных командах и удалёнными каталогами. Вызов скилла —
+**только** `$name` (ADR-126 §3): `/`-команды и скиллы больше не конкурируют
+за имена, `metadata.synth.command` не создаёт `/`-команду.
 
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
@@ -1898,8 +1900,8 @@ inline shell в шаблонных командах и удалёнными ка
 
 - **Project-trust:** недоверенный проектный каталог (нет в `trustedProjectDirs`)
   виден в реестре/диагностике (`untrusted`), но его скиллы и шаблонные команды
-  не грузятся — не попадают в каталог для модели, `/`-автокомплит и core-тул
-  `skill`. Команды дополнительно не могут перекрыть доверенный skill/bundle.
+  не грузятся — не попадают в каталог для модели, `$`-вызов и core-тул
+  `skill`.
 - **`skills.urls`** кэшируются, индексируются и видны в реестре, но помечены
   **`trusted:false`** (в каталог для модели не попадают). Установка/обновление,
   trust-уровни и подписи удалённых каталогов — задача [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md).
@@ -1909,7 +1911,7 @@ inline shell в шаблонных командах и удалёнными ка
   отказ без интерактива.
 - **Builtin-скилл `skill-creator`** (`instance`/`system`, `trusted`) — встроенная
   инструкция по созданию проектного скилла в `{project.workspace}/.synth/skills`;
-  доступен как `/skill-creator` (требует `file_read`/`file_write`).
+  доступен как `$skill-creator` (требует `file_read`/`file_write`); `/skill-creator` не поддерживается (ADR-126 §7).
 
 ### Проектные инструкции (`instructions.*`, ADR-069)
 
@@ -1932,14 +1934,14 @@ inline shell в шаблонных командах и удалёнными ка
 - Discovery: цепочка `git root → … → workspace` (глубже = приоритетнее), на каталог `AGENTS.override.md` > `AGENTS.md` > `agents.md` > `CLAUDE.md` > `CONTEXT.md`; дедуп sha256.
 - **`sources`:** `position: before|after` — до/после merged chain; `kind: path` — `value` относительный/glob/`~/`/абсолютный; `kind: url` — read-only fetch с TTL-кэшем `{dataDir}/instructions-cache` (`ttlSec` переопределяет `fetch.cacheTtlSec`), кап `fetch.maxBytes`.
 - Каждый блок проходит **threat-scan** (ADR-036): `block` — не грузится, `flag` — с WARN-строкой.
-- **Project-trust:** инструкции недоверенного проекта (нет в `skills.trustedProjectDirs`) не грузятся (статус `untrusted`). Каталог внутри `storage.workspacesRoot` доверяется **автоматически** (R3) — гейт общий для system-chain и lazy-догрузки; на project-trust скиллов (ADR-046) не влияет.
+- **Project-trust:** инструкции недоверенного проекта (нет в `skills.trustedProjectDirs`) не грузятся (статус `untrusted`). Каталог внутри `storage.workspacesRoot` доверяется **автоматически** (R3) — гейт общий для system-chain и lazy-догрузки; на project-trust скиллов (ADR-126) не влияет.
 - **Install-tree guard:** внутри дерева исходников Synth инструкции не грузятся (статус `skipped-install-tree`), кроме `allowInstallTreeFallback: true`.
-- **Кэш/инвалидация (R5, новых настроек нет):** результат резолвера кэшируется по подписи кандидатов (`mtime:size`, helper `engine/file-signature.ts`, общий со скиллами ADR-046); изменение/добавление/удаление файла инвалидирует, `ProjectInstructionsResolver.clear()` — принудительный сброс. В реальном ходе результат дополнительно мемоизируется на `turnId`.
+- **Кэш/инвалидация (R5, новых настроек нет):** результат резолвера кэшируется по подписи кандидатов (`mtime:size`, helper `engine/file-signature.ts`, общий со скиллами ADR-126); изменение/добавление/удаление файла инвалидирует, `ProjectInstructionsResolver.clear()` — принудительный сброс. В реальном ходе результат дополнительно мемоизируется на `turnId`.
 - Отключение: `instructions.enabled=false`, `excludeProjects`, CLI `--ignore-rules`/`--safe-mode` (или env `SYNTH_IGNORE_RULES=1|true`; флаги приоритетнее env, работают для `serve` и `chat`), а также `session.settings.systemPrompt` override.
 - Прозрачность: `GET /api/v2/context/instructions?session_id=…` и событие `context.instructions_loaded`; UI — секция «Проектные инструкции» в правой панели (вкладка «Сессия»).
-- `/init` — builtin-команда (статус `prompt`), генерирует/обновляет `AGENTS.md`; скилл `synth-agents-md` (`/agents-md`) — аудит/обновление инструкций.
+- `/init` — builtin-команда (статус `prompt`), генерирует/обновляет `AGENTS.md`; скилл `synth-agents-md` (`$synth-agents-md`) — аудит/обновление инструкций.
 
-### Slash-команды (`commands.*`, ADR-046)
+### Slash-команды (`commands.*`, ADR-126)
 
 Резолвинг `/`-команд выполняется в core. Секция `commands`:
 
@@ -1948,11 +1950,11 @@ inline shell в шаблонных командах и удалёнными ка
 | `commands.paths` | Доп. каталоги шаблонных `.md`-команд (после project/instance) | `[]` |
 | `commands.bundlesPath` | Подкаталог `{dataDir}` для YAML-bundles | `skill-bundles` |
 | `commands.conflict.mode` | Режим конфликтов имён: `bundle-wins` \| `conservative` \| `namespace` | `bundle-wins` |
-| `commands.conflict.namespacePrefix` | В `namespace`: бандл-скиллы как `<bundle>:<skill>` при конфликте с builtin | `false` |
+| `commands.conflict.namespacePrefix` | Устарело: скиллов в `/`-каталоге нет (ADR-126 §7), `<bundle>:<skill>` не создаётся | `false` |
 | `commands.maxArgumentsLength` | Лимит `$ARGUMENTS` | `10000` |
 | `commands.maxRenderedBytes` | Лимит рендера шаблона/агрегата bundle | `200000` |
 
-Источники шаблонных команд (приоритет): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Встроенные команды — `/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init` (ADR-069), `/review` (ADR-126 §1). `/summary` и `/compact` — ручное сжатие контекста (ADR-119; профиль `summarization`/`compaction`), настройки сессии не меняются. `/init` и `/review` — prompt-команды (статус `prompt`): `/init` генерирует/обновляет `AGENTS.md`, `/review` — ревью **изменений кода** в git-репозитории (без аргумента — незакоммиченные изменения, аргумент — commit/branch/PR; если git-репозитория или diff нет, модель сообщает, что ревью недоступно, а не выдумывает изменения). Скилловые команды — `/skill-creator`, `/agents-md` (builtin-скиллы). `allowed-tools` во frontmatter — advisory (в права не транслируется).
+Источники шаблонных команд (приоритет): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Встроенные команды — `/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init` (ADR-069), `/review` (ADR-126 §1). `/summary` и `/compact` — ручное сжатие контекста (ADR-119; профиль `summarization`/`compaction`), настройки сессии не меняются. `/init` и `/review` — prompt-команды (статус `prompt`): `/init` генерирует/обновляет `AGENTS.md`, `/review` — ревью **изменений кода** в git-репозитории (без аргумента — незакоммиченные изменения, аргумент — commit/branch/PR; если git-репозитория или diff нет, модель сообщает, что ревью недоступно, а не выдумывает изменения). Скиллы в `/`-каталог **не входят**: их вызов — `$name` (`$skill-creator`, `$synth-agents-md`, …), список — `/skills`; `GET /commands` и `/`-автокомплит скиллов не содержат. `commands.conflict.namespacePrefix` больше не создаёт `<bundle>:<skill>`; режимы конфликтов описывают только builtin/template/bundle. `allowed-tools` во frontmatter — advisory (в права не транслируется).
 
 Сниппеты (`#name`, ADR-126 §4) — контент-файлы markdown: `instance` — `{dataDir}/snippets`, `project` — `{project.workspace}/.synth/snippets`, `user` — `{dataDir}/snippets/users/<userId>`; приоритет `user > project > instance`, каноническое имя важнее алиаса. Раскрытие — в приёме промпта, до очереди; лимиты 15 раскрытий / 64 КБ; code-блоки не трогаются; проектные сниппеты недоверенного проекта видны, но не раскрываются. Имя — `[a-z][a-z0-9_-]{0,79}`.
 

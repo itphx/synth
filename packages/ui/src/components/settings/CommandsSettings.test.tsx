@@ -53,7 +53,7 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 
 const COMMANDS: CommandSummary[] = [
   { name: 'help', kind: 'builtin', description: 'Show help', available: true },
-  { name: 'api-review', kind: 'skill', description: 'Review API', scope: 'instance', level: 'system', available: false, unavailableReason: 'capabilities' },
+  { name: 'api-review', kind: 'template', description: 'Review API', available: false, unavailableReason: 'capabilities' },
 ]
 
 const BUNDLE: SkillBundle = {
@@ -119,7 +119,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('CommandsSettings — команды и bundles (ADR-046 §9.2)', () => {
+describe('CommandsSettings — команды и bundles (ADR-126 §7)', () => {
   it('рендерит команды с видом и бейджем недоступности', async () => {
     const container = await renderSettings()
 
@@ -127,7 +127,7 @@ describe('CommandsSettings — команды и bundles (ADR-046 §9.2)', () =>
     expect(container.querySelector('[data-testid="command-api-review"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="command-unavailable-api-review"]')).not.toBeNull()
     expect(container.textContent).toContain('built-in')
-    expect(container.textContent).toContain('skill')
+    expect(container.textContent).toContain('template')
   })
 
   it('показывает диагностику shadowed/collision', async () => {

@@ -1410,7 +1410,7 @@
   состояние per-session — в оркестраторе, `seed()` инициализирует `loaded` из merged chain).
   Резолвится оркестратором и отдаётся composer'у как блок `instructions` тира `context`
   (ADR-070); per-turn мемоизация — `_resolveProjectInstructions(turnId)` в `engine/orchestrator.ts`.
-- `engine/file-signature.ts` — ADR-069 (R5) / ADR-046: `filesSignature`/`dirsSignature`
+- `engine/file-signature.ts` — ADR-069 (R5) / ADR-126: `filesSignature`/`dirsSignature`
   (`id:floor(mtimeMs):size`, отсутствующий кандидат — маркер `!`) для ленивой инвалидации
   кэшей (общий со скиллами).
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация;
@@ -1489,7 +1489,7 @@
   (`engine/orchestrator/phases/process-setup.ts` → `refreshExecutorServers`): иначе сервер,
   найденный в этом ходе, не попадает в список подключаемых (`ensureToolsLoaded`) и первый
   ход остаётся без тулов. В `inline` источника нет — поведение прежнее.
-- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-046);
+- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-126);
   гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`,
   `skill.scope_disabled`), сид новых проектов — `seed.ts` (мастер `disabled` +
   `disabledForNewProjects`); ленивая инвалидация кэша по mtime/size — `watcher.ts`;
@@ -1506,23 +1506,24 @@
   `trigger`, `command`, `mode`. `invocation` — комбинация двух флагов: `both`/`user`/
   `model`/`none` (`scope.ts`). Невалидный скилл не попадает в реестр (ошибка в
   `GET /api/v2/skills?diagnostics=1`), discovery остальных не ломает. Встроенные
-  (`builtin.ts`) объявлены **в коде** (ADR-046 §9.5; отдельного asset-каталога нет):
-  `skill-creator` (команда `/skill-creator`, capability-aware `file_read`/`file_write`),
-  `synth-agents-md` (ADR-069: команда `/agents-md` — не `/init`, та занята встроенной
+  (`builtin.ts`) объявлены **в коде** (ADR-126 §15; отдельного asset-каталога нет):
+  `skill-creator` (вызов `$skill-creator`, capability-aware `file_read`/`file_write`),
+  `synth-agents-md` (ADR-069: вызов `$synth-agents-md`; `/`-имя не нужно — `/init` остаётся встроенной
   командой; `file_read`/`search`/`file_write`), `synth-storage-recovery` (ADR-098 W5: команда
-  `/storage-recovery`, read-only runbook), `synth-pipelines` (ADR-101: команда `/pipelines`,
-  capability `pipeline`) и `synth-schedules` (ADR-051: команда `/schedules`, capability
+  `$synth-storage-recovery`, read-only runbook), `synth-pipelines` (ADR-101: вызов `$synth-pipelines`,
+  capability `pipeline`) и `synth-schedules` (ADR-051: вызов `$synth-schedules`, capability
   `schedule`) — последние два описывают агенту жизненный цикл пайплайна (спецификация →
   публикация → прогон → журнал, шаблоны инстанца) и расписания (cron/интервал → цель, ручной
-  запуск, история срабатываний). `synth-instance` (ADR-131: команда `/instance`, trigger `auto`) —
+  запуск, история срабатываний). `synth-instance` (ADR-131: вызов `$synth-instance`, trigger `auto`) —
   self-help инстанса/MCP/проектов/сессий; capability не требуется (при недоступности `synth_*`
-  делегирует @admin/UI). Команды встроенных скиллов **уникальны** и не пересекаются с
-  встроенными slash-командами (`help`/`skills`/`commands`/`summary`/`compact`/`init`/`review`) — иначе
-  `resolveCatalog` (`engine/commands/resolver.ts`) эмитил бы диагностику `shadowed` и скилл
-  был бы недостижим. Тесты — `engine/skills/*.test.ts`.
-- `engine/commands/*` — slash-команды и bundles (ADR-046): `parser`/`template`/
+  делегирует @admin/UI). Встроенные скиллы вызываются **только** `$name` (ADR-126 §3/§7):
+  `metadata.synth.command` больше не создаёт `/`-команду, поэтому прежнее требование
+  уникальности их команд со slash-командами снято. Тесты — `engine/skills/*.test.ts`.
+- `engine/commands/*` — slash-команды и bundles (ADR-126): `parser`/`template`/
   `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
   до LLM, событие `command.invoked`; per-command права `permission.rules.command`;
+  каталог `/`-команд — **только** builtin/template/bundle (скиллы в него не входят,
+  ADR-126 §7; `GET /commands` и `/`-автокомплит их не отдают, `/skills` показывает `$name`);
   локальные builtin-ответы — `Message.ephemeral` (вне LLM-контекста); inline shell
   (`` !`cmd` ``) — opt-in через `execute_shell`; `/summary` и `/compact` — ручное сжатие
   контекста (ADR-119, ADR-126 §1), профиль передаётся `compressionMode`; встроенная `/init`
@@ -1535,8 +1536,8 @@
   **`dollar-skills.ts` — `$`-вызов скилла в тексте сообщения (ADR-126 §3):**
   `resolveDollarSkills` (`{prompt, skills, unavailable}`) — общий лексер
   `engine/input-surface/parser.ts` (`$name`, code-блоки игнорируются), дедуп по id с сохранением
-  порядка; гейты те же, что у `/skill-name` (ADR-046 §4.4 trust, §4.5 scope, §6.1
-  `user-invocable`, §6.2 binding, §6.3 capabilities, §8.1 `permission.rules.skill`) —
+  порядка; гейты — ADR-126 §9 trust, §11 scope, §3 `user-invocable`, §9 binding,
+  §10 capabilities, §10 `permission.rules.skill` —
   недоступный скилл не грузится, а попадает в `unavailable`. Вызов — из раннего пути
   (`orchestrator/phases/process-early.ts`, `handleDollarSkills`): **только обычное user-сообщение,
   не `/`-команда** (в шаблонах `$ARGUMENTS` — не токен скилла); тело скилла (`<skill_content>`)
@@ -1551,7 +1552,7 @@
   ADMIN, user — self, project — OWNER/EDITOR); раскрытие — в `POST /sessions/:id/prompt` до очереди.
   Тесты — `engine/snippets/*.test.ts`, `server/routes/snippets.test.ts`,
   `server/routes/sessions-snippets.routes.test.ts`.
-- `engine/input-surface/*` — ADR-126 §0/§2.1: общий лексер `@`/`$`/`#` (`parser.ts`, code-блоки,
+- `engine/input-surface/*` — ADR-126 §2/§2.1: общий лексер `@`/`$`/`#` (`parser.ts`, code-блоки,
   экранирование, span'ы) и `@user`-разбор (`user-mentions.ts`: участники сессии/проекта →
   `resolveMentionableUsers` → `validateExplicitMentions` → `resolveUserMentionSplit`; первое `@user`
   делит текст на агентскую часть и user-directed хвост). Приём — `POST /sessions/:id/prompt`
@@ -2903,7 +2904,7 @@
   (`restartRequired:false`) — оркестратор и резолверы читают live-значение на каждый
   вызов; `getSshMode`/`setSshMode`/`clearSshMode`),
   `McpRegistryStore` (единый реестр MCP, ADR-071),
-  `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-046), `SSHKeyStore`
+  `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-126), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, ADR-076; PROP-124: политика ключа `usages`/
   `allowHosts`/`allowPorts` — в метаданных, секреты наружу не отдаются),
   `ExternalCredentialStore` (ADR-105 Ф1: внешние доступы к коннекторам —

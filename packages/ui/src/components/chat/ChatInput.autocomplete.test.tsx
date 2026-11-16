@@ -156,7 +156,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
+describe('ChatInput — `/`-автокомплит (ADR-126 §7)', () => {
   it('открывается на `/`, а выбор подставляет `/name ` без отправки', async () => {
     const container = await renderInput()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement
@@ -389,9 +389,9 @@ describe('ChatInput — `$`-пикер скиллов (ADR-126 §3)', () => {
     expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
   })
 
-  it('скилл-команда из реестра команд (`kind: skill`) тоже попадает в пикер', async () => {
-    // Реестр команд — второй источник `$`-пикера (ADR-126 §3): команда вида
-    // `skill` предлагается, даже если её нет в реестре скиллов.
+  it('скилл-команда из `/`-реестра (`kind: skill`) в `$`-пикер не попадает', async () => {
+    // ADR-126 §7: источник `$`-пикера — только реестр скиллов; `/`-реестр
+    // команд скиллов не содержит и вторым источником не служит.
     useSkillsStore.setState({
       skills: [],
       commands: [
@@ -407,17 +407,7 @@ describe('ChatInput — `$`-пикер скиллов (ADR-126 §3)', () => {
     })
     await act(async () => {})
 
-    const item = container.querySelector(
-      '[data-testid="skill-autocomplete-item-docs-helper"]',
-    ) as HTMLButtonElement
-    expect(item).not.toBeNull()
-
-    await act(async () => {
-      item.click()
-    })
-
-    expect(textarea.value).toBe('$docs-helper ')
-    expect(mocks.onSend).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="skill-autocomplete"]')).toBeNull()
   })
 })
 

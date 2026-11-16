@@ -257,7 +257,7 @@ export function isInsideDir(parent: string, child: string): boolean {
 
 /** Контекст trust-гейта проектных инструкций (ADR-069 §3.5/R1/R3). */
 export interface InstructionsTrustOptions {
-  /** ADR-046 project-trust: явный список доверенных проектных каталогов. */
+  /** ADR-126 project-trust: явный список доверенных проектных каталогов. */
   trustedProjectDirs?: readonly string[];
   /** ADR-069 R3: workspace внутри `workspacesRoot` доверяется автоматически. */
   workspacesRoot?: string;
@@ -270,7 +270,7 @@ export interface InstructionsTrustOptions {
  * merged-chain (`ProjectInstructionsResolver`) и lazy-догрузки
  * (`LazyInstructionsLoader`).
  *
- * Доверено, если каталог явно в `trustedProjectDirs` (project-trust ADR-046)
+ * Доверено, если каталог явно в `trustedProjectDirs` (project-trust ADR-126)
  * ИЛИ лежит внутри `workspacesRoot` (рабочие каталоги Synth получают
  * авто-trust — инструкции там не несут риска чужого клона).
  *

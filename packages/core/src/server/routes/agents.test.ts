@@ -249,7 +249,7 @@ describe('Agent API Routes — CRUD (core superset)', () => {
 });
 
 /**
- * ADR-046/ADR-089: приём ролевого промпта агента вместе с агентом
+ * ADR-126/ADR-089: приём ролевого промпта агента вместе с агентом
  * (`role_prompt` в теле POST) и групп агента (`groups`).
  *
  * Роль пишется портом файлов контекста в `{dataDir}/context/roles/<contextFile>`

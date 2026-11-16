@@ -17,10 +17,10 @@ export type SessionProjectStoreLike = Pick<ProjectRepository, 'load'>;
 export interface SessionManagerOptions {
   /** Поставщик глобальных настроек доступности MCP-серверов (runtime settings). */
   mcpSettingsProvider?: () => Promise<Record<string, McpServerToolSettings> | undefined>;
-  /** ADR-071 §2.4 / ADR-046 §4.5: загрузка проекта — снапшот `defaultOn` при создании сессии. */
+  /** ADR-071 §2.4 / ADR-126 §11: загрузка проекта — снапшот `defaultOn` при создании сессии. */
   projectStore?: SessionProjectStoreLike;
   /**
-   * ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий БЕЗ проекта —
+   * ADR-071 §2.4 / ADR-126 §11: системные дефолты для сессий БЕЗ проекта —
    * снапшоты `mcpDefaultOn`/`skillsDefaultOn` при создании.
    */
   systemDefaultsProvider?: () => Promise<{ mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined>;
@@ -243,7 +243,7 @@ export class SessionManager {
         mcpServers: data.settings?.mcpServers,
         // ADR-071 §2.4: явные opt-out сессии (включая системные) не теряются.
         mcpDisabledServers: data.settings?.mcpDisabledServers,
-        // ADR-046 §4.5: session-level overrides скиллов (ранее терялись при создании).
+        // ADR-126 §11: session-level overrides скиллов (ранее терялись при создании).
         skills: data.settings?.skills,
         skillsDisabled: data.settings?.skillsDisabled,
         provider: data.settings?.provider,
@@ -302,7 +302,7 @@ export class SessionManager {
       cacheWriteTokens: 0,
       reasoningTokens: 0,
     };
-    // ADR-071 §2.4 / ADR-046 §4.5: снапшоты скоупа на момент создания сессии.
+    // ADR-071 §2.4 / ADR-126 §11: снапшоты скоупа на момент создания сессии.
     await this._materializeScopeSnapshots(session, data.projectId, data.settings);
     await this.store.save(session);
     // ADR-030: `session_start` — неблокирующий эмит после сохранения сессии.
@@ -317,7 +317,7 @@ export class SessionManager {
   }
 
   /**
-   * ADR-071 §2.4 / ADR-046 §4.5: материализует `mcpDefaultOn`/`skillsDefaultOn`
+   * ADR-071 §2.4 / ADR-126 §11: материализует `mcpDefaultOn`/`skillsDefaultOn`
    * сессии из `project.defaultOn` (или системного дефолта, если проекта нет).
    * Явно переданные в `settings` значения не перетираются. Не заданы нигде —
    * остаются `undefined` (legacy-режим каталога до миграции).

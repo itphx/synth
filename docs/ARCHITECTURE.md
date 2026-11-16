@@ -288,7 +288,7 @@ synth/
 - **Три тира, порядок отправки `stable` → `context` → `volatile`.** `stable` — побайтово константные на
   сессию блоки: role-prompt (+ политики «профиль пуст → интервью», «проекта нет → предложи создать»),
   `[ADDITIONAL CONTEXT]` (SOUL/COMPANY/ABOUT), `GATEWAY`, `PLAN_GUIDE`, политика режимов `mode.policy`.
-  `context` — profile, `[PROJECT: info.md]`, проектные инструкции (ADR-069), каталог скиллов (ADR-046),
+  `context` — profile, `[PROJECT: info.md]`, проектные инструкции (ADR-069), каталог скиллов (ADR-126),
   `[ИНФОРМАЦИЯ О СЕССИИ]`. `volatile` — sticky, participants, summary, компактные state-маркеры,
   `[CLASSIFICATION]` (config-gate), interview-артефакт.
 - **Правило «политика — в `stable`, состояние — в `volatile`».** В `stable` попадает только константное
@@ -337,7 +337,7 @@ synth/
 
 ## Скиллы и slash-команды
 
-Механизм скиллов и `/`-команд (ADR-046). Скилл — папка с `SKILL.md` + supporting-файлами;
+Механизм скиллов и `/`-команд (ADR-126). Скилл — папка с `SKILL.md` + supporting-файлами;
 скиллы — **инструкции**, новых тулов не регистрируют, единственный core-тул — `skill`.
 
 - **Discovery** (`engine/skills/*`): `{project.workspace}/.synth/skills` (project) >
@@ -357,11 +357,14 @@ synth/
   (мастер `disabled`, `project.enabled`) — live; дефолты/снапшот (`skillsDefaultOn`) — snapshot;
   дефолт opt-in. Единый резолвер — `resolveSkillAvailability`.
 - **Slash-команды** (`engine/commands/*`): резолвинг в core до LLM (UI/CLI/гибрид); встроенные
-  (`/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init`, `/review`), шаблонные `.md` (`$ARGUMENTS`/`@file`),
-  скиллы-как-команды и bundles (`/bundle-name`); права `permission.rules.command`; inline shell
+  (`/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init`, `/review`), шаблонные `.md` (`$ARGUMENTS`/`@file`)
+  и bundles (`/bundle-name`); скиллы в `/`-каталог не входят — вызов только `$name` (ADR-126 §3/§7);
+  права `permission.rules.command`/`permission.rules.skill`; inline shell
   (`` !`cmd` ``) — opt-in через `execute_shell`. `/summary` и `/compact` — ручное сжатие контекста
   (ADR-119; профиль — `compressionMode`). События `skill.invoked`/`command.invoked`;
   builtin `skill-creator` — скилл-инструкция в коде.
+- **Вызов скилла** — только `$name` в тексте сообщения (`engine/commands/dollar-skills.ts`) или тул
+  `skill` для модели; `/skills` показывает `$name`, `GET /commands` скиллов не отдаёт.
 - **Сниппеты** (`engine/snippets/*`, ADR-126 §4): `#name` — три уровня (`instance`/`project`/`user`),
   приоритет `user > project > instance`; файловый discovery `*.md` + project-trust, раскрытие в приёме
   промпта до очереди (лимиты 15/64 КБ, code-блоки не трогаются). HTTP — `server/routes/snippets.ts`.
@@ -388,7 +391,7 @@ synth/
   `[TRUNCATED: see <путь> — read_file(path, offset, limit)]`; кап динамический от окна модели
   (`clamp(windowRatio*window, minChars, maxCharsCeiling)`), общий на цепочку; `maxChars` — override.
 - **Threat-scan** (`engine/security/prompt-injection.ts`, ADR-036) до вставки: `block` — блок
-  не грузится, `flag` — WARN-строка. Гейты — project-trust (ADR-046, общий с lazy) и
+  не грузится, `flag` — WARN-строка. Гейты — project-trust (ADR-126, общий с lazy) и
   install-tree guard (внутри дерева исходников Synth — `skipped-install-tree`).
 - **Lazy-догрузка** (`engine/context/lazy-instructions.ts`): по аргументам file/shell-тулов
   (`LAZY_TRIGGER_TOOLS`) ищет ближайший instruction-файл вверх (≤`lazy.maxAncestors`), только
@@ -399,7 +402,7 @@ synth/
   кэш резолвера (`.clear()` — сброс) + per-turn мемоизация в оркестраторе; TTL-слот подписи для URL.
   Снимок для UI — `GET /api/v2/context/instructions` + событие `context.instructions_loaded`.
 
-Конфиг — `docs/CONFIGURATION.md` (`instructions`); `/init` и скилл `synth-agents-md` — ADR-046.
+Конфиг — `docs/CONFIGURATION.md` (`instructions`); `/init` и скилл `synth-agents-md` — ADR-126.
 
 ## Внешние события и хуки
 

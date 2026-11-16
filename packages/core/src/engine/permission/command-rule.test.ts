@@ -5,7 +5,7 @@ import type { PermissionConfig } from '@itphx/synth-shared';
 
 const cfg = (rules: PermissionConfig['rules']): PermissionConfig => ({ rules, askTimeoutMs: 30_000 });
 
-describe('resolveCommandRule (ADR-046 §8.1)', () => {
+describe('resolveCommandRule (ADR-126 §10)', () => {
   it('нет правила → undefined', () => {
     expect(resolveCommandRule(cfg({}), 'help')).toBeUndefined();
   });
@@ -40,7 +40,7 @@ describe('resolveCommandRule (ADR-046 §8.1)', () => {
   });
 });
 
-describe('наследование command-правил саб-агентом (ADR-046 §8.1)', () => {
+describe('наследование command-правил саб-агентом (ADR-126 §10)', () => {
   it('deriveSubagentPermission сохраняет command-правила родителя', () => {
     const parent = cfg({ command: { help: 'deny' }, skill: 'allow' });
     const child = deriveSubagentPermission(parent);

@@ -16,7 +16,7 @@ import {
 } from '../lib/api/synthApi'
 import { i18nText } from '@/lib/i18n/text'
 
-/** ADR-046 §8.2: данные события `skill.invoked`. */
+/** ADR-126 §12: данные события `skill.invoked`. */
 export interface SkillInvokedEvent {
   sessionId: string
   name: string
@@ -26,7 +26,7 @@ export interface SkillInvokedEvent {
   timestamp?: string
 }
 
-/** ADR-046 §8.2: данные события `command.invoked`. */
+/** ADR-126 §12: данные события `command.invoked`. */
 export interface CommandInvokedEvent {
   sessionId: string
   command: string
@@ -69,7 +69,7 @@ export interface SkillsStore {
   /** Сид новых проектов: что не включать по умолчанию. */
   settingsDisabledForNewProjects: SkillsDisabledRequest | null
   settingsPolicy: ToolsPolicy
-  /** Project-trust (ADR-046/069): эффективный список доверенных каталогов. */
+  /** Project-trust (ADR-126/069): эффективный список доверенных каталогов. */
   settingsTrustedProjectDirs: string[]
   /** Значения из `config.yaml` (`skills.trustedProjectDirs`). */
   settingsTrustedProjectDirsDefaults: string[]
@@ -79,7 +79,7 @@ export interface SkillsStore {
   settingsLoading: boolean
   settingsError: string | null
 
-  // Метрики из событий (ADR-046 §8.2): пригодятся для статистики (часть b)
+  // Метрики из событий (ADR-126 §12): пригодятся для статистики (часть b)
   skillInvocationCounts: Record<string, number>
   commandInvocationCounts: Record<string, number>
   lastSkillInvocation: SkillInvokedEvent | null

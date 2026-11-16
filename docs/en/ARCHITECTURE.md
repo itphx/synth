@@ -256,7 +256,7 @@ blocks, the orchestrator does not concatenate strings; specialized prompts (debu
 - **Three tiers, sent in the order `stable` → `context` → `volatile`.** `stable` holds the blocks that are
   byte-for-byte constant for a session: role-prompt (+ the "profile empty → interview", "no project → suggest creating one" policies),
   `[ADDITIONAL CONTEXT]` (SOUL/COMPANY/ABOUT), `GATEWAY`, `PLAN_GUIDE`, the `mode.policy` mode policy.
-  `context` — profile, `[PROJECT: info.md]`, project instructions (ADR-069), the skills catalog (ADR-046),
+  `context` — profile, `[PROJECT: info.md]`, project instructions (ADR-069), the skills catalog (ADR-126),
   `[SESSION INFO]`. `volatile` — sticky, participants, summary, compact state markers,
   `[CLASSIFICATION]` (config gate), the interview artifact.
 - **The rule "policy goes to `stable`, state goes to `volatile`".** Only what is constant
@@ -304,7 +304,7 @@ the endpoint — `docs/API_V2.md` §5.5; UI — `packages/ui/AGENTS.md`.
 
 ## Skills and slash commands
 
-The skills and `/` command mechanism (ADR-046). A skill is a folder with `SKILL.md` + supporting files;
+The skills and `/` command mechanism (ADR-126). A skill is a folder with `SKILL.md` + supporting files;
 skills are **instructions**, they do not register new tools, and the only core tool is `skill`.
 
 - **Discovery** (`engine/skills/*`): `{project.workspace}/.synth/skills` (project) >
@@ -324,11 +324,14 @@ skills are **instructions**, they do not register new tools, and the only core t
   (the master `disabled`, `project.enabled`) is live; defaults/snapshot (`skillsDefaultOn`) are snapshot-based;
   the default is opt-in. A single resolver — `resolveSkillAvailability`.
 - **Slash commands** (`engine/commands/*`): resolved in the core before the LLM (UI/CLI/hybrid); built-in
-  (`/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init`, `/review`), template `.md` ones (`$ARGUMENTS`/`@file`),
-  skills-as-commands and bundles (`/bundle-name`); permissions via `permission.rules.command`; inline shell
+  (`/help`, `/skills`, `/commands`, `/summary`, `/compact`, `/init`, `/review`), template `.md` ones (`$ARGUMENTS`/`@file`)
+  and bundles (`/bundle-name`); skills are **not** part of the `/` catalog — invoke them only as `$name`
+  (ADR-126 §3/§7); permissions via `permission.rules.command`/`permission.rules.skill`; inline shell
   (`` !`cmd` ``) — opt-in through `execute_shell`. `/summary` and `/compact` trigger manual context
   compression (ADR-119; profile in `compressionMode`). The events `skill.invoked`/`command.invoked`;
   the `skill-creator` builtin is a skill instruction in code.
+- **Skill invocation** — only `$name` in the message text (`engine/commands/dollar-skills.ts`) or the
+  `skill` tool for the model; `/skills` lists `$name`, `GET /commands` returns no skills.
 - **Snippets** (`engine/snippets/*`, ADR-126 §4): `#name` — three levels (`instance`/`project`/`user`),
   precedence `user > project > instance`; file discovery `*.md` + project trust, expansion on prompt
   ingress before the queue (limits 15/64 KB, code blocks untouched). HTTP — `server/routes/snippets.ts`.
@@ -355,7 +358,7 @@ and nested subdirectories.
   `[TRUNCATED: see <path> — read_file(path, offset, limit)]`; the cap is dynamic, derived from the model window
   (`clamp(windowRatio*window, minChars, maxCharsCeiling)`) and shared across the chain; `maxChars` is an override.
 - **Threat scan** (`engine/security/prompt-injection.ts`, ADR-036) before insertion: `block` — the block
-  is not loaded, `flag` — a WARN line. The gates are project trust (ADR-046, shared with lazy loading) and
+  is not loaded, `flag` — a WARN line. The gates are project trust (ADR-126, shared with lazy loading) and
   the install-tree guard (inside Synth's source tree — `skipped-install-tree`).
 - **Lazy loading** (`engine/context/lazy-instructions.ts`): driven by file/shell tool arguments
   (`LAZY_TRIGGER_TOOLS`) it looks upward for the nearest instruction file (≤`lazy.maxAncestors`), only
@@ -366,7 +369,7 @@ and nested subdirectories.
   result cache (`.clear()` resets it) + per-turn memoization in the orchestrator; a TTL slot for URL signatures.
   A snapshot for the UI — `GET /api/v2/context/instructions` + the `context.instructions_loaded` event.
 
-Configuration — `docs/CONFIGURATION.md` (`instructions`); `/init` and the `synth-agents-md` skill — ADR-046.
+Configuration — `docs/CONFIGURATION.md` (`instructions`); `/init` and the `synth-agents-md` skill — ADR-126.
 
 ## External events and hooks
 

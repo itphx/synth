@@ -14,7 +14,7 @@ export function emptyPermissionConfig(): PermissionConfig {
  * приоритет над групповыми и '*', поэтому deny здесь переопределяет любые allow
  * из родительского конфига.
  *
- * ADR-046 §8.1: правила `skill` (per-skill allow/deny/ask + glob) наследуются
+ * ADR-126 §10: правила `skill` (per-skill allow/deny/ask + glob) наследуются
  * саб-агентом автоматически вместе с остальными правилами родителя — собственный
  * `skill`-deny саб-агенту не добавляется (скиллы делегируются через `task`).
  */

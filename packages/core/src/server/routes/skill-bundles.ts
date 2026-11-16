@@ -30,7 +30,7 @@ export interface SkillBundleRoutesOptions {
 }
 
 /**
- * ADR-046 §9.1/§7.3: CRUD `/api/v2/skill-bundles[/:name]` (instance-хранилище).
+ * ADR-126 §7/§7.3: CRUD `/api/v2/skill-bundles[/:name]` (instance-хранилище).
  */
 export function createSkillBundleRoutes(
   auth: AuthKit,

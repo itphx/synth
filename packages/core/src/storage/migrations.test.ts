@@ -21,7 +21,7 @@ import {
   SESSION_SCOPE_SNAPSHOT_MIGRATION,
 } from './migrations.js';
 
-describe('migrateSessionScopeSnapshots (ADR-071 §2.4 / ADR-046 §4.5)', () => {
+describe('migrateSessionScopeSnapshots (ADR-071 §2.4 / ADR-126 §11)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;

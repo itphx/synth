@@ -12,7 +12,7 @@
 > [ADR-051](./adr-051-scheduler-pipelines.md) «Шедулер и пайплайны», [ADR-089](./adr-089-external-events-automation.md) «Внешние события и автоматизация»
 > (правила маршрутизации, funnel), [ADR-052](./adr-052-public-api-platform.md) «Публичная API-платформа» (scope `automation:install`),
 > [ADR-096](./adr-096-storage-layer.md) «Слой хранения» (порты `PackRepository`/`PipelineRepository`),
-> [ADR-071](./adr-071-mcp-servers-prompt.md) «MCP», [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы»,
+> [ADR-071](./adr-071-mcp-servers-prompt.md) «MCP», [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) «Скиллы»,
 > [ADR-030](./adr-030-hooks-agent-events.md) «Hooks», [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Engine: пайплайн как второй движок»
 > (заменяет часть этого решения),
 > [ADR-090](./adr-090-extension-api.md) «Extension API v1», [PROP-057](./prop-057-loop-engine.md) «Loop Engine».
@@ -57,7 +57,7 @@
 backend). Тело: `{ manifest, files }` — манифест + карта файлов пакета, на которые ссылается
 манифест. Порядок установки (идемпотентный upsert по имени пакета):
 
-1. **скиллы** — `SKILL.md` + supporting-файлы, `metadata.synth.*` (ADR-046 §4/§9);
+1. **скиллы** — `SKILL.md` + supporting-файлы, `metadata.synth.*` (ADR-126 §9/§9);
 2. **MCP** — запись реестра: `origin: 'instance'`, `enabledByDefault: true` (иначе сервер не попадёт
    в дефолты новых сессий, ADR-071 §2.4);
 3. **агенты** — **роль сначала, потом агент** (fail-closed: агент без роли — сломанный агент);
@@ -202,7 +202,7 @@ standalone (core), не только в managed. `POST /api/v2/agents` прин�
 - [ADR-089](./adr-089-external-events-automation.md) — события, Router, funnel, правила маршрутизации.
 - [ADR-052](./adr-052-public-api-platform.md) — service-key и scope `automation:install`.
 - [ADR-096](./adr-096-storage-layer.md) — порты слоя хранения (`PackRepository`, `PipelineRepository`).
-- [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-046](./adr-046-skills-and-slash-commands.md) —
+- [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) —
   реестры MCP и скиллов, куда попадают вклады пакета.
 - [ADR-090](./adr-090-extension-api.md) — Extension API v1 (Plugin) — вне объёма ADR-100; класс Plugin вынесен в отдельное решение (реализовано).
 - [PROP-057](./prop-057-loop-engine.md) — Loop Engine — вне объёма.

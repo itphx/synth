@@ -106,9 +106,9 @@ export interface SubagentResumeDeps {
   analytics?: import('../../analytics/recorder.js').AnalyticsRecorder;
   /** ADR-071: калиброванный chars-per-token модели resumed-саб-агента. */
   loadTokenRatio?: (model: string | undefined) => Promise<number | undefined> | number | undefined;
-  /** ADR-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
+  /** ADR-126 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
   skillRuntime?: import('../skills/types.js').SkillRuntime;
-  /** ADR-046 §4.5: scope-гейты скиллов родительского контекста. */
+  /** ADR-126 §11: scope-гейты скиллов родительского контекста. */
   skillScope?: import('../skills/types.js').SkillScopeOptions;
   /**
    * ADR-075/ADR-076: проектные зависимости resumed-саб-агента — прокидываются в
@@ -282,7 +282,7 @@ export async function runSubagentResume(
     });
     if (todoFinalize) systemPrompt += `\n\n${todoFinalize}`;
 
-    // ADR-046 §5/§6.2: каталог скиллов resumed-саб-агенту. Binding — родителя,
+    // ADR-126 §5/§6.2: каталог скиллов resumed-саб-агенту. Binding — родителя,
     // capabilities — самого resumed-агента (executor).
     if (deps.skillRuntime) {
       try {
@@ -369,7 +369,7 @@ export async function runSubagentResume(
       analytics: deps.analytics,
       // ADR-071: тот же калиброванный chars-per-token, что у родителя.
       loadTokenRatio: deps.loadTokenRatio,
-      // ADR-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
+      // ADR-126 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
       skillRuntime: deps.skillRuntime,
       skillScope: deps.skillScope,
       // ADR-075/ADR-076: проектные зависимости — проектные и сетевые git-тулы

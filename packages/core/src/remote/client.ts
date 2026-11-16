@@ -918,7 +918,7 @@ export class RemoteBackendClient {
     return this.request<unknown>('PUT', `/api/v2/projects/${encodeURIComponent(id)}/mcp`, body);
   }
 
-  // Проектный скоуп скиллов (ADR-046 §4.5) удалённого проекта.
+  // Проектный скоуп скиллов (ADR-126 §11) удалённого проекта.
   getProjectSkills(id: string): Promise<unknown> {
     return this.request<unknown>('GET', `/api/v2/projects/${encodeURIComponent(id)}/skills`);
   }

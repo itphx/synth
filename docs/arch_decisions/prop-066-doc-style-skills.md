@@ -5,7 +5,7 @@
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D21, «Скиллы и гайдлайны оформления документации»;
 > идея пользователя 2026-09-16).
-> **Связано:** [ADR-046](./adr-046-skills-and-slash-commands.md),
+> **Связано:** [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md),
 > [PROP-068](./prop-068-skills-agents-registry.md),
 > [ADR-069](./adr-069-project-instructions-agents-md.md),
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
@@ -24,7 +24,7 @@
 
 ### Что уже есть
 
-- **Механизм скиллов** — [ADR-046](./adr-046-skills-and-slash-commands.md) (формат `SKILL.md`,
+- **Механизм скиллов** — [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) (формат `SKILL.md`,
   discovery, progressive disclosure, core-тул `skill`, слэш-команды/bundles, scope-API,
   trust-гейт). Реализованы Фазы 1–3 (core+API+CLI, UI; см. корневой `AGENTS.md`).
 - **Реестр и каталог** — [PROP-068](./prop-068-skills-agents-registry.md) (индекс, trust/guard,
@@ -54,7 +54,7 @@
 - `CHANGELOG` (формат, разделы);
 - комментарии/`AGENTS.md`.
 
-Стандарт оформляется как **скилл** (формат [ADR-046](./adr-046-skills-and-slash-commands.md)), чтобы
+Стандарт оформляется как **скилл** (формат [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)), чтобы
 агент грузил его по триггеру «пишу/правлю документацию».
 
 ### 2. Скиллы оформления
@@ -65,7 +65,7 @@
 ### 3. Шаблоны документов
 
 Заготовки (front-matter/структура) для новых AD/README/CHANGELOG, из которых агент генерирует
-документ. Могут лежать как supporting-файлы скилла ([ADR-046](./adr-046-skills-and-slash-commands.md),
+документ. Могут лежать как supporting-файлы скилла ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md),
 прогрессивное раскрытие).
 
 ### 4. Авто-проверка (docs-lint)
@@ -88,7 +88,7 @@
 **Не реализовано (в объёме AD).** Проверено по репозиторию (`packages/**`, без `dist/`/`node_modules/`):
 
 - Идентификаторы `docs-lint`/`doc-lint`/`docGuidelines`/`doc-guidelines` — 0 вхождений.
-- Механизм скиллов есть ([ADR-046](./adr-046-skills-and-slash-commands.md), `packages/core/src/engine/skills/*`,
+- Механизм скиллов есть ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md), `packages/core/src/engine/skills/*`,
   `server/routes/skill-scope.ts`), но продуктовых doc-скиллов в поставке нет.
 - `.opencode/skills/synth-docs/SKILL.md` и `synth-agents-md` — dev-скиллы проекта (не продуктовый
   стандарт).
@@ -107,7 +107,7 @@
 
 ## Связи
 
-- [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — механизм доставки
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) «Скиллы и slash-команды» — механизм доставки
   doc-гайдлайнов (формат `SKILL.md`, тул `skill`).
 - [PROP-068](./prop-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — публикация и
   trust doc-скиллов, install-policy.

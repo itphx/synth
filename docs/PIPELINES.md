@@ -230,7 +230,7 @@ interface StepResult {
 | Инструменты | `ToolRegistry` (встроенные) + MCP-тулы активных серверов | доступность — общий `computeToolAvailability` (ADR-070 §2.9.1): режим, capabilities агента, зависимости окружения, гейт `workspace` |
 | MCP-скоуп | система + проект (ADR-071) | без сессионного снапшота — `resolveMcpProjectScope` (`engine/mcp/scope.ts`) |
 | Проектные инструкции | резолвер ADR-069 (`engine/context/instructions.ts`) | резолв от имени проекта; без рабочего каталога инструкций нет |
-| Каталог скиллов | ADR-046 (`engine/skills/catalog.ts`) | уровень system/project; сессионного слоя нет |
+| Каталог скиллов | ADR-126 (`engine/skills/catalog.ts`) | уровень system/project; сессионного слоя нет |
 | Агент шага | `node.agent` → `AgentRegistry` | его `capabilities` участвуют в отборе тулов |
 
 **Гейт `workspace` (ADR-075).** Рабочего каталога нет → `workspaceReady: false`,
@@ -843,7 +843,7 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 
 **Что это.** Шаблон инстанца (`scope:'instance'`), объявленный **в коде** и засеянный в порт
 спецификаций при старте процесса — по образцу встроенных скиллов (`engine/skills/builtin.ts`,
-ADR-046 §9.5): отдельного asset-каталога и пакета расширения не нужно. Сидирование —
+ADR-126 §15): отдельного asset-каталога и пакета расширения не нужно. Сидирование —
 **идемпотентное**: существующая запись не перезаписывается (правка шаблона в UI переживает
 рестарт), ошибка сидирования не роняет старт (только `warn` в лог), в деградированном режиме
 (ADR-098) запись не выполняется вовсе. **Удалённый** шаблон вернётся при следующем старте —
@@ -1036,8 +1036,8 @@ HTTP API. Двенадцать тулов `pipeline_*` и шесть `schedule_*
 `pipeline_run_status`.
 
 **Встроенные скиллы.** Те же контуры доступны агенту как инструкции: `synth-pipelines`
-(команда `/pipelines`) и `synth-schedules` (команда `/schedules`) — объявлены в коде в
-`packages/core/src/engine/skills/builtin.ts` (ADR-046 §9.5), требуют capability `pipeline`/
+(вызов `$synth-pipelines`) и `synth-schedules` (вызов `$synth-schedules`) — объявлены в коде в
+`packages/core/src/engine/skills/builtin.ts` (ADR-126 §15), требуют capability `pipeline`/
 `schedule` соответственно.
 
 **Ссылки:** реализация тулов — `packages/core/src/engine/tools/pipeline-authoring.ts`,

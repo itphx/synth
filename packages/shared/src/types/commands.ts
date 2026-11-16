@@ -2,11 +2,11 @@ import type { SkillScope, SkillLevel } from './skills.js';
 import type { PermissionConfig } from './permission.js';
 
 /**
- * ADR-046 §7: slash-команды и bundles — контракты. Здесь только типы (без
+ * ADR-126 §1: slash-команды и bundles — контракты. Здесь только типы (без
  * бизнес-логики движка); резолвинг выполняется в core до обращения к LLM.
  */
 
-/** Вид команды (ADR-046 §7.2). */
+/** Вид команды (ADR-126 §1). */
 export const COMMAND_KINDS = ['builtin', 'template', 'skill', 'bundle'] as const;
 export type CommandKind = (typeof COMMAND_KINDS)[number];
 
@@ -30,7 +30,7 @@ export type CommandIssueCode =
   | 'invalid-bundle'
   | 'missing-skill'
   | 'read-error'
-  /** ADR-046 §4.4/§7.1: проектный каталог недоверенный — команда не грузится. */
+  /** ADR-126 §9/§7.1: проектный каталог недоверенный — команда не грузится. */
   | 'untrusted';
 
 /** Диагностика реестра команд (видна в `GET /api/v2/commands?diagnostics=1`). */
@@ -45,7 +45,7 @@ export interface CommandDiagnostic {
 }
 
 /**
- * YAML-группа скиллов (ADR-046 §7.3). `/bundle-name` грузит N тел одним
+ * YAML-группа скиллов (ADR-126 §14). `/bundle-name` грузит N тел одним
  * сообщением; bundle побеждает одноимённый skill.
  */
 export interface SkillBundle {
@@ -73,7 +73,10 @@ export interface CommandSummary {
   unavailableReason?: 'capabilities' | 'denied';
 }
 
-/** Статус результата резолвинга команды. */
+/**
+ * Статус результата резолвинга команды. `skill` — legacy: `CommandService`
+ * больше не резолвит скиллы через `/` (ADR-126 §7).
+ */
 export type CommandResolveStatus =
   | 'builtin'
   | 'prompt'
@@ -94,7 +97,7 @@ export type CommandResolveStatus =
 export type CommandCompressionMode = 'summarization' | 'compaction';
 
 /**
- * Результат резолвинга `/`-команды (ADR-046 §7.1).
+ * Результат резолвинга `/`-команды (ADR-126 §14).
  *
  * - `builtin` — локальный ответ (`output`), LLM не вызывается; user+assistant
  *   сообщения помечаются `ephemeral` и исключаются из LLM-контекста;
@@ -131,14 +134,14 @@ export interface CommandResolveResult {
   message?: string;
 }
 
-/** ADR-046 §7.4: результат исполнения inline shell (`` !`cmd` ``). */
+/** ADR-126 §15: результат исполнения inline shell (`` !`cmd` ``). */
 export interface CommandShellResult {
   output: string;
   isError: boolean;
 }
 
 /**
- * ADR-046 §7.4: раннер inline shell. Оркестратор передаёт замыкание, которое
+ * ADR-126 §15: раннер inline shell. Оркестратор передаёт замыкание, которое
  * само проходит `PermissionEvaluator` (ADR-029) и исполняет команду; сервис
  * команд только вызывает его для подстановки `` !`cmd` ``.
  */
@@ -152,12 +155,12 @@ export interface CommandRuntimeOpts {
   sessionEnabled?: string[];
   sessionDisabled?: string[];
   permissionConfig?: PermissionConfig;
-  /** ADR-046 §7.4: раннер inline shell (только при включённом `skills.inlineShell`). */
+  /** ADR-126 §15: раннер inline shell (только при включённом `skills.inlineShell`). */
   runShell?: CommandShellRunner;
 }
 
 /**
- * ADR-046 §7.3: рантайм-контракт команд для оркестратора/CLI. Структурно
+ * ADR-126 §14: рантайм-контракт команд для оркестратора/CLI. Структурно
  * реализуется `CommandService`; прокидывается в `OrchestratorOptions`.
  */
 export interface CommandRuntime {

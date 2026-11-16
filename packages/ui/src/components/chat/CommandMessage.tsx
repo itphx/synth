@@ -21,7 +21,7 @@ export function commandHeader(name: string, args?: string): string {
 }
 
 /**
- * ADR-046 §7.1: системная (локальная builtin) команда — нейтральный system-блок
+ * ADR-126 §14: системная (локальная builtin) команда — нейтральный system-блок
  * (`Notice` variant `command`). Команда и её вывод объединены в один блок
  * (`> /name args` + результат), без шапки агента, бейджа, статистики и retry;
  * из действий — только «Копировать».

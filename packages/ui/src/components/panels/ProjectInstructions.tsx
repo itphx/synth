@@ -85,7 +85,7 @@ export function ProjectInstructions({ sessionId }: { sessionId: string }) {
       )
     }
 
-    // Project-trust (ADR-046/069): каталог вне доверенных — показываем причину,
+    // Project-trust (ADR-126/069): каталог вне доверенных — показываем причину,
     // каталог и где включить доверие, а не «файлы не найдены».
     const untrusted = info.diagnostics.find((d) => d.code === 'untrusted')
     if (untrusted) {

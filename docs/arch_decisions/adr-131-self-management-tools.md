@@ -3,7 +3,7 @@
 > **Статус:** ⚠️ Частично
 > **Дата:** 2026-11-10
 > **Источник:** PROP-048 (срез 2026-11-10)
-> **Связано:** [ADR-046](./adr-046-skills-and-slash-commands.md), [ADR-071](./adr-071-mcp-servers-prompt.md),
+> **Связано:** [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md), [ADR-071](./adr-071-mcp-servers-prompt.md),
 > [ADR-105](./adr-105-external-credentials.md), [ADR-106](./adr-106-authority-layer.md),
 > [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [PROP-056](./prop-056-synth-mcp-server.md).
 

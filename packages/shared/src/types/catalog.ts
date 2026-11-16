@@ -410,7 +410,7 @@ export function isCatalogIndexDocument(raw: unknown): boolean {
  *    строгим контрактом `catalogEntrySchema`, невалидные пропускаются молча;
  * 2. `{ skills: [...] }` — записи скиллов;
  * 3. Голый массив `[{ name, path? }]` — legacy-формат внешнего каталога скиллов
- *    (ADR-046 §4.3).
+ *    (ADR-126 §7).
  *
  * Формы 2 и 3 — это **скиллы**: `kind: 'pack'`, `packType: 'skills'`,
  * `trust_level: 'community'`, `source: 'registry'`, `identifier` = `path`

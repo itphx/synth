@@ -31,8 +31,10 @@ const KIND_BADGE: Record<string, string> = {
 }
 
 /**
- * ADR-046 §7/§9.3: автокомплит `/`-команд над композером. Источник — единый
- * реестр команд core (`GET /api/v2/commands`): builtin/template/skill/bundle.
+ * ADR-126 §7: автокомплит `/`-команд над композером. Источник — реестр
+ * команд core (`GET /api/v2/commands`): builtin/template/bundle. Скиллы в
+ * `/`-каталог не входят (вызов — только `$name`), поэтому `kind:'skill'`
+ * отфильтровывается даже от старого сервера.
  * Визуальный референс — архив форка (`CommandAutocomplete`/`SkillAutocomplete`),
  * сторы форка не переиспользуются.
  */
@@ -57,7 +59,8 @@ export function CommandAutocomplete({
   }, [fetchCommands])
 
   const filtered = useMemo(() => {
-    const list = commands ?? []
+    // ADR-126 §7: `/` — только команды; скилл вызывается `$name`.
+    const list = (commands ?? []).filter((cmd) => cmd.kind !== 'skill')
     const q = query.trim().toLowerCase()
     const matched = q
       ? list.filter(

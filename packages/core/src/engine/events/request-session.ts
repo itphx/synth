@@ -898,7 +898,7 @@ export class RequestSessionService {
   /**
    * Минимальное разрешение `agentTemplate` в сессию: шаблон проставляется в
    * per-session `settings.agentRole` (задел — семантика шаблона агента/скилла
-   * ADR-046 будет уточнена на следующих этапах).
+   * ADR-126 будет уточнена на следующих этапах).
    */
   private _agentSettings(
     agentRole: string | undefined,

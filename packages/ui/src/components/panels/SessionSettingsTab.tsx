@@ -134,7 +134,7 @@ function parseMaxTokens(raw: string): number | null {
 }
 
 /**
- * ADR-046 §6.3: бейдж «недоступен» с подсказкой о недостающих capability агента.
+ * ADR-126 §10: бейдж «недоступен» с подсказкой о недостающих capability агента.
  * Списка нет (старый сервер) — прежний вид без подсказки.
  */
 function SkillUnavailableBadge({ missingCapabilities }: { missingCapabilities?: string[] }) {
@@ -349,7 +349,7 @@ export function SessionSettingsTab() {
   const [mcpEffective, setMcpEffective] = useState<McpServerEffective[]>([])
   const [mcpLoading, setMcpLoading] = useState(false)
 
-  // ADR-046 §4.5: per-session скиллы (вкл/выкл), аналог MCP-скоупа
+  // ADR-126 §11: per-session скиллы (вкл/выкл), аналог MCP-скоупа
   const [sessionSkills, setSessionSkills] = useState<EffectiveSkillEntry[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
 
@@ -793,7 +793,7 @@ export function SessionSettingsTab() {
     })
   }
 
-  /** ADR-046 §4.5: точечный toggle скилла в сессии (`{ name, enabled }`). */
+  /** ADR-126 §11: точечный toggle скилла в сессии (`{ name, enabled }`). */
   const handleToggleSkill = async (skill: EffectiveSkillEntry) => {
     if (!sessionId) return
     const key = `skill:${skill.name}`

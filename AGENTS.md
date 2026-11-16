@@ -344,7 +344,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - **Веб/модели** — `web_fetch`, `web_search`, `list_models`.
 - **Профиль/скиллы** — `profile_update`, `skill`.
 
-Встроенные скиллы `synth-pipelines`/`synth-schedules`/`synth-instance` (команда `/instance` — self-help инстанса/MCP/проектов/сессий, ADR-131)/`synth-service` (команда `/service` — регистрация userspace-сервиса systemd, ADR-134), доступность групп (`ToolCapability`), MCP-слои и правило «deny не останавливает ход» — [docs/TOOLS.md](./docs/TOOLS.md).
+Встроенные скиллы `synth-pipelines`/`synth-schedules`/`synth-instance` (вызов `$synth-instance` — self-help инстанса/MCP/проектов/сессий, ADR-131)/`synth-service` (вызов `$synth-service` — регистрация userspace-сервиса systemd, ADR-134), доступность групп (`ToolCapability`), MCP-слои и правило «deny не останавливает ход» — [docs/TOOLS.md](./docs/TOOLS.md).
 
 **Роли агентов: прежний набор и миграция.** Набор ролей заменён: `pm`/`developer`/`qa`/`analyst`/`auditor` → `leader`/`fixer`/`tester`/`researcher`/`security-auditor`; каноническая карта — `LEGACY_AGENT_ROLE_ALIASES` (`engine/agents/migrations.ts`). Два шва, оба обязательны: (1) **миграция stored-агентов** при старте (`migrateLegacyStoredAgents` в `server/app/deps.ts` и `backend/app/deps.ts` до `registerStoredAgents`) — запись прежнего id переносит только пользовательские настройки (`enabled`, `provider`, `model`, `temperature`, `topP`, `topK`, `reasoningLevel`, `groups`) в **встроенное** определение целевого агента (идентичность, права, промпт, лимиты — из поставки), существующую целевую запись не перетирает, устаревшую удаляет, идемпотентна; (2) **runtime-алиас** (`ChatOrchestrator._resolveEffectiveAgentRole`) — у старых сессий `settings.agentRole` остаётся исторической меткой (`pm`), но промпт/capabilities/лимиты берутся у `leader`; фоллбек на `assistant` — только для роли, которой нет ни в реестре, ни в алиасах. Полнота ролевых файлов (RU+EN у каждого `contextFile`) закреплена тестом `engine/agents/definitions.test.ts`.
 
@@ -393,7 +393,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 121 (Решения: 60, Частично: 28, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 2).
+Всего документов: 121 (Решения: 60, Частично: 27, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 3).
 Удалено: 28 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
@@ -432,7 +432,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | npm / Docker / Helm / релиз / CI / аудит | [ADR-038](./docs/arch_decisions/adr-038-npm-packages.md), [docs/PUBLISHING.md](./docs/PUBLISHING.md), [docs/security/README.md](./docs/security/README.md), [docs/security/AUDIT-CHECKLIST.md](./docs/security/AUDIT-CHECKLIST.md), скиллы `synth-build-publish`, `synth-release`, `synth-security-audit` |
 | бета-пакеты / быстрая сборка для local/hybrid | скилл `synth-beta-publish`, [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«Бета-версии (Gitea)» |
 | K3s / dev-окружение / MCP GitVerse / API-тесты | скиллы `synth-k3s-deploy`, `synth-dev`, `synth-gitverse-mcp`, `synth-api-testing`, `synth-deploy/AGENTS.md`, [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) |
-| скиллы / команды / реестр скиллов и агентов | [ADR-046](./docs/arch_decisions/adr-046-skills-and-slash-commands.md), [PROP-068](./docs/arch_decisions/prop-068-skills-agents-registry.md) |
+| скиллы / команды / реестр скиллов и агентов | [ADR-126](./docs/arch_decisions/adr-126-input-surface-commands-mentions-snippets.md), [PROP-068](./docs/arch_decisions/prop-068-skills-agents-registry.md) |
 | инструкции AGENTS.md | [ADR-069](./docs/arch_decisions/adr-069-project-instructions-agents-md.md), скилл `synth-agents-md` |
 | промпт / prompt-cache / MCP в промпте | [ADR-070](./docs/arch_decisions/adr-070-system-prompt-composer.md), [ADR-071](./docs/arch_decisions/adr-071-mcp-servers-prompt.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md), [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
 | настройки / settings UI kit / кастомизация / брендинг | [ADR-072](./docs/arch_decisions/adr-072-settings-ui-kit.md), [PROP-083](./docs/arch_decisions/prop-083-instance-customization-branding.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |

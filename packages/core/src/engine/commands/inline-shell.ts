@@ -2,7 +2,7 @@ import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import type { ExecutionError, ExecutionPort } from '../../execution/ports/index.js';
 
 /**
- * ADR-046 §7.4: исполнение inline shell (`` !`cmd` ``) шаблонной команды.
+ * ADR-126 §15: исполнение inline shell (`` !`cmd` ``) шаблонной команды.
  *
  * Это низкоуровневый исполнитель: permission-проверку (`PermissionEvaluator`,
  * ADR-029) и аудит делает вызывающая сторона (оркестратор). Параметры процесса

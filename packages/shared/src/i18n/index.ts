@@ -360,14 +360,14 @@ export const ENGINE_MESSAGE_KEYS = [
   'micro.intent.debug',
   'micro.intent.fix',
   'micro.intent.test',
-  // --- Скиллы (ADR-046) ---
+  // --- Скиллы (ADR-126) ---
   'skill.args_error',
   'skill.not_found',
   'skill.untrusted',
   'skill.delegation',
   'skill.file_not_found',
   'skill.scope_disabled',
-  // --- Slash-команды (ADR-046 §7) ---
+  // --- Slash-команды (ADR-126 §1) ---
   'command.unknown',
   'command.denied',
   'command.unavailable',
@@ -384,7 +384,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'context.compression_template',
   'context.compression_output_limit',
   'context.summary_applied',
-  // --- Inline shell (ADR-046 §7.4) ---
+  // --- Inline shell (ADR-126 §15) ---
   'command.inline_shell_disabled',
   'command.inline_shell_denied',
   'command.inline_shell_failed',
@@ -971,14 +971,14 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'micro.intent.debug': [],
   'micro.intent.fix': [],
   'micro.intent.test': [],
-  // --- Скиллы (ADR-046) ---
+  // --- Скиллы (ADR-126) ---
   'skill.args_error': ["issues"],
   'skill.not_found': ["name"],
   'skill.untrusted': ["name"],
   'skill.delegation': ["name","capabilities","agent"],
   'skill.file_not_found': ["path"],
   'skill.scope_disabled': ["name","reason"],
-  // --- Slash-команды (ADR-046 §7) ---
+  // --- Slash-команды (ADR-126 §1) ---
   'command.unknown': ["name"],
   'command.denied': ["name"],
   'command.unavailable': ["name","capabilities"],
@@ -995,7 +995,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'context.compression_template': [],
   'context.compression_output_limit': [],
   'context.summary_applied': ["mode"],
-  // --- Inline shell (ADR-046 §7.4) ---
+  // --- Inline shell (ADR-126 §15) ---
   'command.inline_shell_disabled': [],
   'command.inline_shell_denied': ["command","reason"],
   'command.inline_shell_failed': ["output"],

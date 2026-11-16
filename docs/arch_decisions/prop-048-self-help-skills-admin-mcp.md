@@ -4,7 +4,7 @@
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D3, идея 3 — dogfooding).
-> **Связано:** [ADR-046](./adr-046-skills-and-slash-commands.md), [ADR-036](./adr-036-llm-gateway.md),
+> **Связано:** [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md), [ADR-036](./adr-036-llm-gateway.md),
 > [PROP-037](./prop-037-commit-security-step.md), [PROP-056](./prop-056-synth-mcp-server.md),
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
 > [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-091](./adr-091-backup-restore-transfer.md),
@@ -45,7 +45,7 @@ ops-скиллы автоматизируют **через локальный Sy
 
 ### Runbook-скиллы
 
-- Продуктовые скиллы (формат `SKILL.md`, механизм — [ADR-046](./adr-046-skills-and-slash-commands.md))
+- Продуктовые скиллы (формат `SKILL.md`, механизм — [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md))
   для типовых задач: **deploy**, **admin**, **troubleshoot**.
 - Скиллы несут пошаговый сценарий, ссылки на проверки/тулы и правила безопасной работы с секретами.
 
@@ -59,7 +59,7 @@ ops-скиллы автоматизируют **через локальный Sy
 - **Экспорт/импорт** — перенос проекта между инстансами.
 - **Миграция/откат** — `synth migrate`, `synth update --to`, `helm rollback`.
 
-Каждый ops-скилл = runbook-скилл ([ADR-046](./adr-046-skills-and-slash-commands.md)) + при необходимости вызов утилиты/скрипта; секреты не попадают в контекст LLM ([ADR-036](./adr-036-llm-gateway.md), [PROP-037](./prop-037-commit-security-step.md)). Так «Synth эксплуатирует Synth»: те же шаги, что для клиента, выполняются агентом под своим локальным инстансом ([ADR-079](./adr-079-local-home-independent-instances.md)).
+Каждый ops-скилл = runbook-скилл ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)) + при необходимости вызов утилиты/скрипта; секреты не попадают в контекст LLM ([ADR-036](./adr-036-llm-gateway.md), [PROP-037](./prop-037-commit-security-step.md)). Так «Synth эксплуатирует Synth»: те же шаги, что для клиента, выполняются агентом под своим локальным инстансом ([ADR-079](./adr-079-local-home-independent-instances.md)).
 
 ### Read-only status-MCP
 
@@ -93,7 +93,7 @@ status-MCP (см. «Открытые вопросы»); детали и гейт
 
 Есть:
 
-- capability `instance`, группы read/write и встроенный скилл `synth-instance` (`/instance`, auto);
+- capability `instance`, группы read/write и встроенный скилл `synth-instance` (`$synth-instance`, auto);
 - `synth_info` и `synth_mcp_list|test|add|update|remove|enable|reconnect` (in-process, без секретов);
 - `list_projects`, `get_project`, `list_sessions`, `get_session_info`, `session_rename`;
   `project_attach` по `projectId` или точному имени (кандидаты при неоднозначности);
@@ -120,7 +120,7 @@ status-MCP (см. «Открытые вопросы»); детали и гейт
 
 ## Связи
 
-- [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — механизм доставки runbook-скиллов (D1).
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) «Скиллы и slash-команды» — механизм доставки runbook-скиллов (D1).
 - [PROP-056](./prop-056-synth-mcp-server.md) «MCP-сервер Synth» — общая основа для status-MCP (D11).
 - [ADR-036](./adr-036-llm-gateway.md) / [PROP-037](./prop-037-commit-security-step.md) — секреты, guard, security-step.
 - [ADR-023](./adr-023-configuration.md) — конфигурация инстанса; [ADR-029](./adr-029-granular-permissions.md) — гейтинг ADMIN.

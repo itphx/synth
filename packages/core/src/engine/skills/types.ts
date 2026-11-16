@@ -19,14 +19,14 @@ export const PORT_SKILLS_SOURCE_DIR = 'instance:skills';
 export const BLOB_SKILL_DIR_PREFIX = 'blob:';
 
 /**
- * Происхождение каталога-источника (ADR-046 §4.2/§4.3).
+ * Происхождение каталога-источника (ADR-126 §7/§4.3).
  * `external` — локальные каталоги совместимости (`.opencode`/`.claude`/`.agents`,
  * `~/.config/opencode`); `url` — кэш удалённого каталога (`skills.urls`,
  * read-only, `trusted: false`).
  */
 export type SkillOrigin = 'instance' | 'project' | 'config' | 'external' | 'url';
 
-/** Каталог-источник скиллов (ADR-046 §4.2/§4.4). */
+/** Каталог-источник скиллов (ADR-126 §7/§4.4). */
 export interface SkillSource {
   scope: SkillScope;
   level: SkillLevel;
@@ -71,7 +71,7 @@ export interface SkillScanResult {
 }
 
 /**
- * ADR-046 §4.5: параметры гейтов скиллов (система/проект/сессия) — общие для
+ * ADR-126 §11: параметры гейтов скиллов (система/проект/сессия) — общие для
  * каталога, API скоупа и тула `skill`.
  */
 export interface SkillScopeOptions {
@@ -92,7 +92,7 @@ export interface SkillScopeOptions {
   sessionDisabled?: string[];
 }
 
-/** Параметры сборки каталога для промпта (ADR-046 §5/§6). */
+/** Параметры сборки каталога для промпта (ADR-126 §5/§6). */
 export interface SkillCatalogOptions extends SkillScopeOptions {
   /** Рабочий каталог проекта (источник project-скиллов и trust-статуса). */
   projectWorkspace?: string;
@@ -117,7 +117,7 @@ export interface LoadedSkill {
 }
 
 /**
- * ADR-046: рантайм скиллов, прокидываемый в тул `skill` через
+ * ADR-126: рантайм скиллов, прокидываемый в тул `skill` через
  * `ToolContext.extra` (в `ToolContext` нет `dataDir`). Структурно реализуется
  * `SkillService`; саб-агенты получают тот же объект через `TaskExtra`.
  */
@@ -129,7 +129,7 @@ export interface SkillRuntime {
     opts?: { projectWorkspace?: string; capabilities?: readonly string[] },
   ): Promise<LoadedSkill | undefined>;
   /**
-   * ADR-046 §3.2: отсутствующие capabilities с учётом экспансии
+   * ADR-126 §13: отсутствующие capabilities с учётом экспансии
    * `requires_toolsets` (config.skills.toolsets). Необязателен — вызывающие
    * без конфига используют `requires_capabilities` напрямую.
    */

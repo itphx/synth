@@ -1,7 +1,7 @@
 import type { CreateSkillInput, UpdateSkillMarkdownInput } from '../skill-store.js';
 
 /**
- * ADR-046 / ADR-116: порт instance-хранилища скиллов — `SKILL.md` (тело и
+ * ADR-126 / ADR-116: порт instance-хранилища скиллов — `SKILL.md` (тело и
  * frontmatter) + supporting-файлы.
  *
  * Порт **не отдаёт файловых путей**: домен (`SkillService`/discovery/loader)
@@ -24,7 +24,7 @@ export interface SkillFileEntry {
 }
 
 /**
- * Порт instance-хранилища скиллов (ADR-046 §4.1/§4.3; ADR-096 — слой хранения).
+ * Порт instance-хранилища скиллов (ADR-126 §7/§4.3; ADR-096 — слой хранения).
  */
 export interface SkillRepository {
   /** Есть ли скилл (есть `SKILL.md`). */

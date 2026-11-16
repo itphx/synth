@@ -4,7 +4,7 @@
  * Шаг пайплайна — **не сессия** (ADR-101 §1), но он работает в том же окружении:
  * проект (ADR-014), рабочий каталог (ADR-075), режим пайплайна (ADR-025),
  * инструменты (ADR-070/ADR-071), проектные инструкции (ADR-069) и скиллы
- * (ADR-046). Этот модуль **собирает** всё это из спецификации/прогона и
+ * (ADR-126). Этот модуль **собирает** всё это из спецификации/прогона и
  * проекта — без HTTP, без сессий и без очереди: только порты слоя хранения
  * (ADR-096) и инъектированные зависимости.
  *
@@ -18,7 +18,7 @@
  * | Инструменты | `ToolRegistry` (встроенные) + MCP-тулы проекта | доступность — общий `computeToolAvailability` (ADR-070 §2.9.1) |
  * | MCP-скоуп | система + проект (ADR-071) | без сессионного снапшота — `resolveMcpProjectScope` |
  * | Инструкции | резолвер ADR-069 | резолвятся от имени проекта; без проекта — пусто |
- * | Скиллы | каталог ADR-046 | уровень system/project (сессионного слоя нет) |
+ * | Скиллы | каталог ADR-126 | уровень system/project (сессионного слоя нет) |
  * | Агент шага | `node.agent` → `AgentRegistry` | его `capabilities` участвуют в отборе тулов |
  *
  * ## Отсутствие проекта/рабочего каталога
@@ -89,7 +89,7 @@ export interface PipelineAgentRegistryLike {
   get(id: string): AgentDefinition | undefined;
 }
 
-/** Источник каталога скиллов (ADR-046) — уровень system/project. */
+/** Источник каталога скиллов (ADR-126) — уровень system/project. */
 export interface PipelineSkillsCatalogLike {
   buildCatalog(opts: SkillCatalogOptions): Promise<ComposerSkillsCatalog>;
 }
@@ -111,7 +111,7 @@ export interface PipelineStepContextDeps {
   instructionsResolver?: PipelineInstructionsResolverLike | null;
   /** Реестр агентов (ADR-070 §2.7) — определение агента шага. */
   agentRegistry?: PipelineAgentRegistryLike | null;
-  /** Каталог скиллов (ADR-046). */
+  /** Каталог скиллов (ADR-126). */
   skillsCatalog?: PipelineSkillsCatalogLike | null;
   /** Доступность внешних программ окружения (git/rg/sh) — ADR-078. */
   runtimeDeps?: RuntimeDeps;
@@ -163,7 +163,7 @@ export interface PipelineStepContext {
   mcpDecisions: McpScopeDecision[];
   /** Проектные инструкции (ADR-069); нет проекта/workspace — не загружались. */
   instructions?: ComposerInstructions;
-  /** Каталог скиллов шага (ADR-046) — system/project-уровень. */
+  /** Каталог скиллов шага (ADR-126) — system/project-уровень. */
   skillsCatalog?: ComposerSkillsCatalog;
 }
 
@@ -211,7 +211,7 @@ export async function buildPipelineStepContext(
   // Проектные инструкции (ADR-069) — от имени проекта; без workspace их нет.
   const instructions = await resolveInstructions(project, workspace, projectId, deps);
 
-  // Каталог скиллов (ADR-046) — уровень system/project.
+  // Каталог скиллов (ADR-126) — уровень system/project.
   const skillsCatalog = await resolveSkillsCatalog(project, workspace, agent, deps);
 
   return {
@@ -374,7 +374,7 @@ async function resolveInstructions(
 }
 
 /**
- * Каталог скиллов шага (ADR-046) — system/project-уровень: проектный
+ * Каталог скиллов шага (ADR-126) — system/project-уровень: проектный
  * hard-gate (`project.skills.enabled`) и проектный сид (`project.skills.defaultOn`).
  * Сессионного слоя нет (у шага нет сессии).
  */

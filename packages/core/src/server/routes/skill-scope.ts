@@ -41,13 +41,13 @@ export interface SkillScopeRoutesDeps {
   resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>;
   /**
    * Capabilities агента сессии для capability-гейта эффективного списка
-   * (ADR-046 §6.3). Не задан — гейт не применяется (как в рантайме без
+   * (ADR-126 §10). Не задан — гейт не применяется (как в рантайме без
    * контекста агента); реестр/проектный список передают полный набор
    * `ToolCapability` — «доступен» = инстанс в принципе поддерживает.
    */
   resolveAgentCapabilities?: (role?: string) => readonly string[] | undefined;
   /**
-   * ADR-046/ADR-069: `config.yaml` `skills.trustedProjectDirs` — дефолт
+   * ADR-126/ADR-069: `config.yaml` `skills.trustedProjectDirs` — дефолт
    * project-trust гейта; runtime-значение (`settings.json`/PG) приоритетнее.
    */
   trustedProjectDirsDefaults?: readonly string[];
@@ -74,7 +74,7 @@ export interface SkillScopeRoutesOptions {
   resolveElevated?: (c: Context) => boolean | Promise<boolean>;
   /** Доступ к управлению проектом (owner/LEAD/ADMIN). Standalone — разрешено. */
   canAccessProject?: (project: Project, c: Context, userId: string) => boolean | Promise<boolean>;
-  /** ADR-046 §4.5: live-обновление системного hard-gate скиллов (оркестратор). */
+  /** ADR-126 §11: live-обновление системного hard-gate скиллов (оркестратор). */
   onSkillsDisabledChange?: (disabled: SkillsDisabledRequest) => void;
   /**
    * ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
@@ -116,7 +116,7 @@ async function listEffectiveSkills(
     defaultOn?: string[];
     /** Effective permission-конфиг (session.settings.permission ?? global). */
     permissionConfig?: PermissionConfig;
-    /** Capabilities агента (capability-гейт, ADR-046 §6.3); undefined — без гейта. */
+    /** Capabilities агента (capability-гейт, ADR-126 §10); undefined — без гейта. */
     capabilities?: readonly string[];
   },
 ): Promise<EffectiveSkill[]> {
@@ -135,7 +135,7 @@ async function listEffectiveSkills(
   };
 
   return skills
-    // ADR-046 §8.1: `deny` скрывает скилл из выдачи (в отличие от disabled).
+    // ADR-126 §10: `deny` скрывает скилл из выдачи (в отличие от disabled).
     .filter((s) => resolveSkillRule(opts.permissionConfig, s.name)?.action !== 'deny')
     .map((s) => {
       const availability = resolveSkillAvailability(
@@ -160,7 +160,7 @@ async function listEffectiveSkills(
 }
 
 /**
- * ADR-046 §4.5: scope-API скиллов (аналог MCP).
+ * ADR-126 §11: scope-API скиллов (аналог MCP).
  * - `/sessions/:id/skills` — per-session enable/disable + effective;
  * - `/projects/:id/skills` — проектный скоуп (owner/lead);
  * - `/settings/skills` — instance-wide группы/имена + policy.

@@ -477,7 +477,7 @@ export const SYSTEM_MESSAGES = {
   'micro.intent.fix': "Got it, a bug fix is needed. Show me the problematic code — we'll find the cause.",
   'micro.intent.test': "Got it, tests are needed. Specify the function or module — I'll write the tests.",
 
-  // --- Скиллы (ADR-046) ---
+  // --- Скиллы (ADR-126) ---
   'skill.args_error': 'Skill argument error: {issues}',
   'skill.not_found': 'Skill "{name}" not found',
   'skill.untrusted': 'Skill "{name}" belongs to an untrusted project and cannot be loaded',
@@ -485,7 +485,7 @@ export const SYSTEM_MESSAGES = {
   'skill.file_not_found': 'Supporting file "{path}" not found in the skill directory',
   'skill.scope_disabled': 'Skill "{name}" is disabled ({reason}) and cannot be loaded',
 
-  // --- Slash-команды (ADR-046 §7) ---
+  // --- Slash-команды (ADR-126 §1) ---
   'command.unknown': 'Unknown command: /{name}',
   'command.denied': 'Command /{name} is denied by permission rules',
   'command.unavailable': 'Command /{name} is unavailable: missing capabilities {capabilities}',
@@ -504,7 +504,7 @@ export const SYSTEM_MESSAGES = {
   'context.compression_output_limit': 'Compression response was cut off by the output limit',
   'context.summary_applied': 'Context compacted ({mode})',
 
-  // --- Inline shell (ADR-046 §7.4) ---
+  // --- Inline shell (ADR-126 §15) ---
   'command.inline_shell_disabled': 'Inline shell is disabled',
   'command.inline_shell_denied': 'Inline shell command "!`{command}`" denied: {reason}',
   'command.inline_shell_failed': 'Inline shell command failed: {output}',

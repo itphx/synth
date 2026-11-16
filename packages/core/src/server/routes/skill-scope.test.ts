@@ -25,7 +25,7 @@ function createMockAuth(): AuthKit {
   } as unknown as AuthKit;
 }
 
-/** Ответ `GET/PUT /api/v2/settings/skills` (trust-блок — ADR-046/ADR-069). */
+/** Ответ `GET/PUT /api/v2/settings/skills` (trust-блок — ADR-126/ADR-069). */
 interface SkillsSettingsBody {
   disabled: { categories: string[]; groups: string[]; skills: string[] };
   disabledForNewProjects: { categories: string[]; groups: string[]; skills: string[] };
@@ -36,7 +36,7 @@ interface SkillsSettingsBody {
   restartRequired: boolean;
 }
 
-/** Ответ scope-API: доступность скилла (capability-гейт, ADR-046 §6.3). */
+/** Ответ scope-API: доступность скилла (capability-гейт, ADR-126 §10). */
 interface EffectiveSkillsBody {
   skills: Array<{
     available: boolean;
@@ -87,7 +87,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('scope-API скиллов (ADR-046 §4.5)', () => {
+describe('scope-API скиллов (ADR-126 §11)', () => {
   it('sessions: GET effective + PUT toggle', async () => {
     const app = makeApp();
     const session = await sessionManager.createSession({});
@@ -146,7 +146,7 @@ describe('scope-API скиллов (ADR-046 §4.5)', () => {
     expect(after.defaultOn).toEqual(['b']);
   });
 
-  it('deny из permission-конфига скрывает скилл (ADR-046 §8.1)', async () => {
+  it('deny из permission-конфига скрывает скилл (ADR-126 §10)', async () => {
     const summary = (name: string) => ({
       name, description: '', scope: 'instance', level: 'system', dir: `/skills/${name}`,
       invocation: 'both', userInvocable: true, modelInvocable: true, tags: [], agents: [],
@@ -285,7 +285,7 @@ describe('scope-API скиллов (ADR-046 §4.5)', () => {
   });
 });
 
-describe('scope-API — capability-гейт по агенту (ADR-046 §6.3)', () => {
+describe('scope-API — capability-гейт по агенту (ADR-126 §10)', () => {
   /** Сводка `synth-pipelines`; `missing` зависит от переданных capabilities. */
   const summary = (missing: string[]) => ({
     name: 'synth-pipelines', description: '', scope: 'instance', level: 'system',
@@ -404,7 +404,7 @@ describe('scope-API — контроль доступа (IDOR)', () => {
     expect((await app.request('/api/v2/projects/p-idor/skills')).status).toBe(200);
     expect((await json(app, '/api/v2/projects/p-idor/skills', { enabled: ['x'] }, 'PUT')).status).toBe(200);
 
-    // LEAD — PUT разрешён (ADR-046 §4.5: owner/LEAD управляют проектным уровнем).
+    // LEAD — PUT разрешён (ADR-126 §11: owner/LEAD управляют проектным уровнем).
     user = 'lead';
     expect((await json(app, '/api/v2/projects/p-idor/skills', { enabled: ['y'] }, 'PUT')).status).toBe(200);
     const afterLead = await projectStore.load('p-idor');

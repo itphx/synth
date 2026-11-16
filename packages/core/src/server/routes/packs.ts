@@ -107,7 +107,7 @@ export interface PacksRouteMessages {
 }
 
 /**
- * Минимальный порт скиллов, нужный установщику пакета (ADR-046 §4/§9).
+ * Минимальный порт скиллов, нужный установщику пакета (ADR-126 §9/§9).
  * Структурно совместим с `SkillService`.
  */
 export interface PackSkillsPort {
@@ -146,7 +146,7 @@ export interface PacksRoutesDeps {
   packs: PackRepository;
   /** Реестр пайплайнов (ADR-051/ADR-100). */
   pipelines: PipelineRepository;
-  /** Скиллы инстанса (ADR-046). */
+  /** Скиллы инстанса (ADR-126). */
   skills: PackSkillsPort;
   /** Реестр MCP-серверов (ADR-071). */
   mcpRegistry: McpRegistryRepository;
@@ -429,7 +429,7 @@ type PipelineDefinitionInput = Omit<PipelineDefinitionRecord, 'createdAt' | 'upd
  *
  * Файл — JSON или YAML. YAML разбирается **общим** frontmatter-парсером
  * (`parseFrontmatter` в shared, внутри — js-yaml): новой зависимости в core
- * нет (ADR-046 §7.3 — тот же приём у bundles).
+ * нет (ADR-126 §14 — тот же приём у bundles).
  */
 function resolvePipelineDefinition(
   provide: PackPipelineProvide,
@@ -509,7 +509,7 @@ export function createPacksRoutes(
     problems: string[];
   }
 
-  /** Установка скиллов пакета (ADR-046 §4/§9). */
+  /** Установка скиллов пакета (ADR-126 §9/§9). */
   async function installSkills(
     prepared: PreparedPack,
     files: Record<string, string>,
@@ -554,7 +554,7 @@ export function createPacksRoutes(
         }
       }
       // `metadata.synth.*` задаётся через updateInstance: при create frontmatter
-      // пересобирается из name+description (ADR-046 §3.1).
+      // пересобирается из name+description (ADR-126 §3).
       if (skill.metadata && Object.keys(skill.metadata).length > 0) {
         await deps.skills.updateInstance(skill.name, {
           metadata: skill.metadata as Record<string, unknown>,
@@ -607,7 +607,7 @@ export function createPacksRoutes(
 
   /**
    * Установка агентов пакета: **роль сначала, потом агент** (fail-closed).
-   * Роль — `{dataDir}/context/roles/<contextFile>` (ADR-046/ADR-089).
+   * Роль — `{dataDir}/context/roles/<contextFile>` (ADR-126/ADR-089).
    */
   async function installAgents(
     prepared: PreparedPack,

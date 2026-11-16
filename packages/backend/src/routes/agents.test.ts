@@ -268,7 +268,7 @@ describe('Agent API Routes — default_agent', () => {
 });
 
 /**
- * ADR-046/ADR-089: managed-обёртка передаёт порт файлов контекста в core-фабрику —
+ * ADR-126/ADR-089: managed-обёртка передаёт порт файлов контекста в core-фабрику —
  * ролевой промпт агента доставляется по HTTP (файл роли в `{dataDir}/context/roles`).
  */
 describe('Agent API Routes — ролевой промпт (managed)', () => {

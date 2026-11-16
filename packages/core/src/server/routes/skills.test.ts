@@ -40,8 +40,8 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('/api/v2/skills (ADR-046 §9.1)', () => {
-  it('GET / — реестр содержит builtin skill-creator/synth-agents-md/synth-storage-recovery (ADR-046 §9.5)', async () => {
+describe('/api/v2/skills (ADR-126 §7)', () => {
+  it('GET / — реестр содержит builtin skill-creator/synth-agents-md/synth-storage-recovery (ADR-126 §15)', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/skills');
     expect(res.status).toBe(200);

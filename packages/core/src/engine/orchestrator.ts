@@ -155,8 +155,8 @@ import { createAuthorityTurnContext, type AuthorityTurnContext } from './authori
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
-// ADR-126 §3: пользовательский вызов скиллов через `$name` (в тексте
-// сообщения; резолв — тем же путём, что у `/skill-name`).
+// ADR-126 §3: единственный пользовательский вызов скилла — `$name` в тексте
+// сообщения (резолвер `engine/commands/dollar-skills.ts`; `/skill-name` удалён).
 import { resolveDollarSkills } from './commands/dollar-skills.js';
 import { parseInput } from './input-surface/parser.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
@@ -956,7 +956,7 @@ export interface OrchestratorOptions {
    */
   toolsDisabled?: ToolsDisabledConfig;
   /**
-   * ADR-046 §4.5: системный hard-gate скиллов (категории/группы/имена) из
+   * ADR-126 §11: системный hard-gate скиллов (категории/группы/имена) из
    * runtime-настроек. Runtime-обновление — `setSkillsDisabled`.
    */
   skillsDisabled?: SkillsDisabledRequest;
@@ -1013,12 +1013,12 @@ export interface OrchestratorOptions {
   /** ADR-071 §2.6: сохранение откалиброванного chars-per-token после ответа. */
   onTokenRatioCalibrated?: (model: string, ratio: number) => void | Promise<void>;
   /**
-   * ADR-046 §5: рантайм скиллов (SkillService) — каталог в промпт и тул `skill`.
+   * ADR-126 §5: рантайм скиллов (SkillService) — каталог в промпт и тул `skill`.
    * Не задан — скиллы не участвуют в промпте/тулах.
    */
   skillRuntime?: SkillRuntime;
   /**
-   * ADR-046 §7: рантайм `/`-команд (CommandService). Не задан — `/`-команды не
+   * ADR-126 §1: рантайм `/`-команд (CommandService). Не задан — `/`-команды не
    * резолвятся (сообщение уходит в LLM как есть).
    */
   commandRuntime?: CommandRuntime;
@@ -1363,7 +1363,7 @@ export class ChatOrchestrator {
   private _mcpPolicy: ToolsPolicy;
   /** ADR-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
   private _toolsDisabled: ToolsDisabledConfig;
-  /** ADR-046 §4.5: системный hard-gate скиллов (runtime-изменяемая, admin). */
+  /** ADR-126 §11: системный hard-gate скиллов (runtime-изменяемая, admin). */
   private _skillsDisabled: SkillsDisabledRequest;
   /** ADR-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
   private _runtimeDeps: RuntimeDeps;
@@ -1409,9 +1409,9 @@ export class ChatOrchestrator {
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** ADR-071 §2.6: сохранение калибровки chars-per-token после ответа. */
   private readonly _onTokenRatioCalibrated: ((model: string, ratio: number) => void | Promise<void>) | undefined;
-  /** ADR-046 §5: рантайм скиллов (каталог промпта + тул `skill`). */
+  /** ADR-126 §5: рантайм скиллов (каталог промпта + тул `skill`). */
   private readonly _skillRuntime: SkillRuntime | null;
-  /** ADR-046 §7: рантайм `/`-команд (резолвинг до LLM). */
+  /** ADR-126 §1: рантайм `/`-команд (резолвинг до LLM). */
   private readonly _commandRuntime: CommandRuntime | null;
   /** ADR-089: late-bound funnel создания сессий для тула `task` (null — не задан). */
   private readonly _getRequestSessionService: (() => RequestSessionService | undefined) | null;
@@ -2491,7 +2491,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-046 §4.5: live-применение системного hard-gate скиллов (runtime-настройка).
+   * ADR-126 §11: live-применение системного hard-gate скиллов (runtime-настройка).
    * Отключённые скиллы не попадают в каталог промпта и не грузятся тулом `skill`.
    */
   setSkillsDisabled(config: SkillsDisabledRequest): void {
@@ -2731,7 +2731,7 @@ export class ChatOrchestrator {
     project?: Project | null;
     toolSelection?: ReturnType<ToolRegistry['selectForSession']>;
     debugCollector?: DebugCollector;
-    /** ADR-046 §5: каталог скиллов (stable/volatile-блоки). */
+    /** ADR-126 §5: каталог скиллов (stable/volatile-блоки). */
     skillsCatalog?: ComposerSkillsCatalog;
     /** ADR-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md). */
     instructions?: ComposerInstructions;
@@ -2963,7 +2963,7 @@ export class ChatOrchestrator {
    *
    * - только при `project.workspace` (ADR-040: сессия без проекта инструкции не грузит);
    * - `session.settings.systemPrompt` override → инструкции не добавляются (как
-   *   каталог скиллов ADR-046);
+   *   каталог скиллов ADR-126);
    * - кап — от окна модели (ADR-069 §5.1), окно резолвится как в провайдере;
    * - ADR-069 §3.5/R5: при заданном `turnId` результат мемоизируется на время
    *   хода (последний ход на сессию; ключ включает workspace/модель/язык/
@@ -2983,7 +2983,7 @@ export class ChatOrchestrator {
     if (!resolver) return undefined;
     // ADR-040: без project.workspace проектный контекст недоступен.
     if (!args.project?.workspace) return undefined;
-    // ADR-046 §5/ADR-069 §9.2: override заменяет system prompt целиком.
+    // ADR-126 §5/ADR-069 §9.2: override заменяет system prompt целиком.
     if (args.session.settings.systemPrompt?.trim()) return undefined;
 
     const model = args.model || args.session.settings.model || '';
@@ -3066,7 +3066,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-046 §7: раннее разрешение `/`-команды до micro-first/LLM.
+   * ADR-126 §1: раннее разрешение `/`-команды до micro-first/LLM.
    *
    * - builtin/unknown/denied/unavailable — локальный ответ (user+assistant
    *   помечаются `ephemeral`, исключаются из LLM-контекста), ранний возврат;
@@ -3085,7 +3085,7 @@ export class ChatOrchestrator {
     workingDir: string;
     /** ADR-114: периметр сессии (рабочий каталог + корень проекта). */
     allowedRoots?: readonly string[];
-    /** ADR-046 §7.4: evaluator для inline shell — тот же, что в tool-loop. */
+    /** ADR-126 §15: evaluator для inline shell — тот же, что в tool-loop. */
     permissionEvaluator: PermissionEvaluator;
     sessionMode: SessionMode;
     planMode: PlanMode;
@@ -3105,7 +3105,7 @@ export class ChatOrchestrator {
     const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
     const permissionConfig = session.settings.permission ?? this._permissionConfig;
 
-    // ADR-046 §7.4: inline shell `` !`cmd` `` исполняется только через
+    // ADR-126 §15: inline shell `` !`cmd` `` исполняется только через
     // PermissionEvaluator (ADR-029) — как обычный `execute_shell`. allow —
     // исполняем; deny/ask — отказ БЕЗ интерактива: inline shell не поднимает
     // диалог одобрения, а молчаливый auto-approve `ask` был бы обходом прав.
@@ -3253,10 +3253,10 @@ export class ChatOrchestrator {
    * ADR-126 §3: пользовательский вызов скиллов через `$name`.
    *
    * Тело скилла (`<skill_content>`) добавляется к user-сообщению; исходный
-   * текст пользователя сохраняется. Гейты — те же, что у `/skill-name`
-   * (ADR-046 §4.4/§4.5/§6.2/§6.3/§8.1): недоверенный, отключённый scope'ом,
-   * не привязанный к агенту или не покрытый capabilities скилл не грузится
-   * (имя — в `unavailable`).
+   * текст пользователя сохраняется. Гейты — ADR-126 §9 (trust), §11 (scope),
+   * §9 (binding), §10 (capabilities, `permission.rules.skill`): недоверенный,
+   * отключённый scope'ом, не привязанный к агенту или не покрытый capabilities
+   * скилл не грузится (имя — в `unavailable`).
    *
    * Вызывается только для обычного сообщения пользователя: в `/`-шаблонах
    * `$ARGUMENTS`/`$1` — не токен скилла (ADR-126 §3).
@@ -3340,7 +3340,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-046 §7.1: завершение локального ответа (builtin/команда/micro-first) теми
+   * ADR-126 §14: завершение локального ответа (builtin/команда/micro-first) теми
    * же событиями, что обычный стрим — `stream.chunk` + `stream.done`, иначе
    * SSE-цикл `POST /sessions/:id/prompt` не закрывается (ждёт `stream.done`).
    */
@@ -3354,7 +3354,7 @@ export class ChatOrchestrator {
       usage?: TokenUsage;
       durationMs?: number;
       metadata?: Record<string, unknown>;
-      /** ADR-046 §7.1: index/id сохранённого assistant-сообщения — UI не плодит копии. */
+      /** ADR-126 §14: index/id сохранённого assistant-сообщения — UI не плодит копии. */
       messageIndex?: number;
       messageId?: string;
     },
@@ -4390,7 +4390,7 @@ export class ChatOrchestrator {
   /**
    * Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`.
    *
-   * `command` (ADR-046 §7.1) — имя/аргументы системной (builtin) команды: уходят в
+   * `command` (ADR-126 §14) — имя/аргументы системной (builtin) команды: уходят в
    * `metadata` ассистента, чтобы UI отрисовал нейтральный system-блок, а не ответ
    * агента (бейдж/статистику). `model`/`provider` = `command` — тот же признак для
    * live-стрима. Для `/summary`-нотиса (недоступна суммаризация) передаётся
@@ -4416,7 +4416,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-046 §5: каталог скиллов для промпта (аналог `_collectComposerMcpServers`).
+   * ADR-126 §5: каталог скиллов для промпта (аналог `_collectComposerMcpServers`).
    * Учитывает project-trust, binding агента, capability-aware и permission-deny
    * (`deny` скрывает). Ошибка discovery не должна ломать ход — возвращаем
    * `undefined` (блоки не добавляются).
@@ -4445,7 +4445,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * ADR-046 §4.5: scope-гейты скиллов сессии (система/проект/сессия) — единый
+   * ADR-126 §11: scope-гейты скиллов сессии (система/проект/сессия) — единый
    * объект для каталога промпта и тула `skill` (в т.ч. у саб-агентов).
    */
   private _skillScopeFor(session: Session, project: Project | null): SkillScopeOptions {
@@ -5025,7 +5025,7 @@ export class ChatOrchestrator {
     // слои запроса — `tools` (встроенные), `plugin.tools` (плагинные тулы) и
     // `mcp.tools` (MCP сессии); тир `tools` зависит от `tools.policy`, слои
     // `plugin.tools`/MCP всегда volatile.
-    // ADR-046 §5: каталог скиллов — тем же путём, что и в запросе.
+    // ADR-126 §5: каталог скиллов — тем же путём, что и в запросе.
     const skillsCatalog = await this._collectSkillsCatalog({
       session,
       agentDef,
@@ -6619,7 +6619,7 @@ export class ChatOrchestrator {
             iteration: toolIteration,
           });
 
-          // ADR-046 §8.2: `skill.invoked` — рядом с `tool_call.started`
+          // ADR-126 §12: `skill.invoked` — рядом с `tool_call.started`
           // (аудит/метрики/UI-подсветка).
           if (toolName === 'skill' && typeof toolArgs.name === 'string') {
             const skillName = toolArgs.name;
@@ -6922,7 +6922,7 @@ export class ChatOrchestrator {
                   // (граница шага) — резюме сохраняется тем же швом, что у
                   // основного цикла (usage/счётчики сессии ребёнка).
                   saveSummary: createCompressionSummarySaver(this._saveAssistantMessage.bind(this)),
-                  // ADR-046 §5: тул `skill` получает рантайм через ToolContext.extra
+                  // ADR-126 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
                   skillRuntime: this._skillRuntime ?? undefined,
                   // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю —
@@ -6988,7 +6988,7 @@ export class ChatOrchestrator {
                   unregisterCancelToken: (id: string) => {
                     this.unregisterCancelToken(id);
                   },
-                  // ADR-046 §4.5: scope-гейты скиллов (система/проект/сессия).
+                  // ADR-126 §11: scope-гейты скиллов (система/проект/сессия).
                   skillScope: this._skillScopeFor(session, projectForState),
                   // ADR-069 §7: уже резолвленные проектные инструкции — в extra,
                   // чтобы `task`/`task-resume` не резолвили их повторно в ребёнке.
@@ -8303,7 +8303,7 @@ export class ChatOrchestrator {
       analytics: this._analytics ?? undefined,
       // ADR-071: калиброванный chars-per-token resumed-саб-агента.
       loadTokenRatio: (model) => this._loadTokenRatio(model),
-      // ADR-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
+      // ADR-126 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
       skillRuntime: this._skillRuntime ?? undefined,
       // ADR-075/ADR-076: проектные зависимости resumed-саб-агента — те же, что у
       // обычного пути `task` (проектные тулы, workspace-политика, SSH-окружение).

@@ -3,7 +3,7 @@
 > **Статус:** ✅ Реализовано
 > **Дата:** 2026-11-11
 > **Связано:** [ADR-042](./adr-042-hybrid-mode.md), [ADR-043](./adr-043-unified-identity-login.md),
-> [ADR-046](./adr-046-skills-and-slash-commands.md), [ADR-079](./adr-079-local-home-independent-instances.md),
+> [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md), [ADR-079](./adr-079-local-home-independent-instances.md),
 > [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md),
 > [ADR-099](./adr-099-egress-tls-trust.md), [ADR-131](./adr-131-self-management-tools.md).
 

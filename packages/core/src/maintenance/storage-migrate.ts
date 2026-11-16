@@ -794,7 +794,7 @@ async function copySkillBundles(src: StorageContext, dst: StorageContext, ctx: C
 }
 
 /**
- * Instance-скиллы (ADR-046 §4): переносятся **портом** — заголовок
+ * Instance-скиллы (ADR-126 §9): переносятся **портом** — заголовок
  * (`readMarkdown` → `create` с `frontmatter`) и supporting-файлы
  * (`listFiles`/`readFile` → `create.files`).
  *

@@ -24,7 +24,7 @@ import {
   buildSynthServiceMeta,
 } from './builtin.js';
 
-describe('builtin skills (ADR-046 §9.5)', () => {
+describe('builtin skills (ADR-126 §15)', () => {
   it('BUILTIN_SOURCE — instance/system/trusted', () => {
     expect(BUILTIN_SOURCE).toMatchObject({
       scope: 'instance',

@@ -5,7 +5,7 @@
 > **Реализация:** Ф1 — слои `tools`/`mcp.tools` и per-session выборка (фикс кросс-сессионной утечки); Ф2 — блоки `mcp.servers`/`mcp.status` (`description` + `instructions`); Ф3 — политики `tools.policy`/`mcp.policy` (`consistency`/`available`/`auto`, дефолт `auto` + per-session override); Ф4 — единый PostgreSQL-ready реестр MCP, уровни `system`/`project`/`session`, RBAC, сетевой доступ; Ф5 — таблицы «Встроенные инструменты»/«MCP» и UI управления (сессия/проект/админка).
 > **Дополнение (2026-09-20):** §2.6, §2.8, §2.9 — вкладки правой панели, оценка/калибровка токенов инструментов, admin-отключение встроенных инструментов (`tools.disabled`), разделение настроек MCP на пользовательские и админские (Ф6).
 > **Дополнение (2026-09-21):** §2.3 — политика разделена на две независимые: `tools.policy` (только встроенные, default `auto`) и `mcp.policy` (только MCP, default `auto`); MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) — **всегда `volatile`**; порядок `tools → mcp.servers → mcp.tools → mcp.status`.
-> **Дополнение (2026-09-30):** §2.2/§2.4/§2.5 — единая per-item модель включения: `McpRegistryEntry.enabled` (мастер hard-gate), `enabledByDefault` = «дефолт для НОВЫХ проектов», `project.enabled` — hard-gate (в т.ч. для системных серверов), дефолты — snapshot (`session.settings.mcpDefaultOn`), причина `system_disabled`; ту же модель переиспользуют скиллы (ADR-046 §4.5).
+> **Дополнение (2026-09-30):** §2.2/§2.4/§2.5 — единая per-item модель включения: `McpRegistryEntry.enabled` (мастер hard-gate), `enabledByDefault` = «дефолт для НОВЫХ проектов», `project.enabled` — hard-gate (в т.ч. для системных серверов), дефолты — snapshot (`session.settings.mcpDefaultOn`), причина `system_disabled`; ту же модель переиспользуют скиллы (ADR-126 §11).
 > **Дополнение (2026-10-17):** §2.3.1 — `mcp.networkPolicy` стал экземпляром общей адресной egress-политики
 > ([ADR-099](./adr-099-egress-tls-trust.md) п. 8–11): формат `{mode, list, exceptions}`, live per-request,
 > проверка только `origin:'user'` HTTP/SSE, аудит изменений.
@@ -177,7 +177,7 @@ DNS-резолв и CIDR-сверка **не выполняются** — адр
 - **ADR-070:** добавляются `mcp.servers`/`mcp.tools`; правило «tools всегда `stable`» заменяется на «`tools` стабильны, все MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) — volatile».
 - **ADR-014/ADR-040:** проектный и сессионный скоуп.
 - **PROP-068:** переиспользование trust/guard/install-policy для реестра MCP.
-- **ADR-046/PROP-068 (скиллы):** модель уровней и включения (`system`/`project`/`session`, enable/disable группами и точечно, стабильный каталог vs volatile) переиспользуется для скиллов — ADR-046 §4.5, PROP-068 §8.1.
+- **ADR-126/PROP-068 (скиллы):** модель уровней и включения (`system`/`project`/`session`, enable/disable группами и точечно, стабильный каталог vs volatile) переиспользуется для скиллов — ADR-126 §11, PROP-068 §8.1.
 - **ADR-036:** обфускация MCP-аргументов — без изменений.
 
 ---

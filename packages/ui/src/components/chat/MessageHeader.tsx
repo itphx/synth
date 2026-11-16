@@ -18,7 +18,7 @@ interface MessageHeaderProps {
   /** true — вместо времени показать индикатор обработки (три прыгающие точки) */
   processing?: boolean
   /**
-   * ADR-046 §7.1: рендерить только мета-часть (модель/качество/время) — для
+   * ADR-126 §14: рендерить только мета-часть (модель/качество/время) — для
    * шапки `Notice` (сводка/отладка), без бейджей автора/агента/Summary.
    */
   metaOnly?: boolean
@@ -140,7 +140,7 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, me
     <QualityBadge qa_pass={message.qa_pass} qa_reason={message.qa_reason} />
   )
 
-  // ADR-046 §7.1: мета шапки Notice (сводка/отладка) — только модель/качество/время.
+  // ADR-126 §14: мета шапки Notice (сводка/отладка) — только модель/качество/время.
   if (metaOnly) {
     return (
       <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70">

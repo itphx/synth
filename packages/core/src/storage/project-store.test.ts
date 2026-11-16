@@ -127,7 +127,7 @@ describe('ProjectStore', () => {
     expect(ok!.color).toBe('a7');
   });
 
-  it('create сидит скоуп mcp/skills (ADR-071 §2.4 / ADR-046 §4.5)', () => {
+  it('create сидит скоуп mcp/skills (ADR-071 §2.4 / ADR-126 §11)', () => {
     const project = store.create('Seeded', 'u1', {
       mcp: { enabled: ['s'], defaultOn: ['s'] },
       skills: { enabled: ['a', 'b'], defaultOn: ['a', 'b'] },

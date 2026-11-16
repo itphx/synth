@@ -61,7 +61,7 @@ export interface AgentDefinition {
   color?: string;
   description?: string;
   /**
-   * ADR-046 §6.2: группы агентов для привязки скиллов
+   * ADR-126 §9: группы агентов для привязки скиллов
    * (`metadata.synth.groups`). Пусто/не задано — скилл с непустым `groups`
    * не привязан к агенту.
    */

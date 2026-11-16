@@ -3,13 +3,17 @@ import { BUILTIN_COMMANDS, isBuiltinCommand, type BuiltinCommandName } from './b
 import type {
   CommandConflictConfig,
   CommandEntry,
-  CommandSkillEntry,
   TemplateCommand,
 } from './types.js';
 
+/**
+ * ADR-126 §7: каталог `/`-команд — **только** builtin/template/bundle.
+ * Скиллы в `/`-каталог не входят: единственный пользовательский вызов
+ * скилла — `$name` (ADR-126 §3), а список доступных скиллов отдаёт
+ * встроенная `/skills`.
+ */
 export interface ResolveCatalogInput {
   templates: readonly TemplateCommand[];
-  skills: readonly CommandSkillEntry[];
   bundles: readonly SkillBundle[];
   conflict: CommandConflictConfig;
 }
@@ -31,19 +35,19 @@ function kindOrder(mode: CommandConflictConfig['mode'], has: Record<string, bool
     if (has.builtin) return 'builtin';
     if (has.template) return 'template';
     if (has.bundle) return 'bundle';
-    if (has.skill) return 'skill';
     return undefined;
   }
   if (mode === 'namespace') {
+    // Скиллов в `/`-каталоге больше нет (ADR-126 §7), поэтому bare-имена —
+    // builtin и bundle; шаблоны в этом режиме не перекрывают их.
     if (has.builtin) return 'builtin';
-    if (has.skill) return 'skill';
+    if (has.bundle) return 'bundle';
     return undefined;
   }
   // bundle-wins
   if (has.bundle) return 'bundle';
   if (has.builtin) return 'builtin';
   if (has.template) return 'template';
-  if (has.skill) return 'skill';
   return undefined;
 }
 
@@ -55,34 +59,30 @@ function shadowedDiag(name: string, loser: string, winner: string): CommandDiagn
 }
 
 /**
- * ADR-046 §7.1/§7.3: единый порядок имён по режиму конфликта. Возвращает
+ * ADR-126 §7: единый порядок имён по режиму конфликта. Возвращает
  * упорядоченный список записей + `shadowed`-диагностику проигравших.
  *
  * | Режим | Порядок |
  * |---|---|
- * | `bundle-wins` | bundle > builtin > template > skill |
- * | `conservative` | builtin > template > bundle > skill; bundle↔builtin → error |
- * | `namespace` | bare: builtin > skill; `namespacePrefix` → `<bundle>:<skill>`, `template:<name>` |
+ * | `bundle-wins` | bundle > builtin > template |
+ * | `conservative` | builtin > template > bundle; bundle↔builtin → error |
+ * | `namespace` | bare: builtin > bundle; шаблоны не перекрывают |
+ *
+ * Скиллы в каталог не входят (вызов — только `$name`), поэтому
+ * `commands.conflict.namespacePrefix` больше не создаёт `<bundle>:<skill>`.
  */
 export function resolveCatalog(input: ResolveCatalogInput): ResolvedCatalog {
-  const { templates, skills, bundles, conflict } = input;
+  const { templates, bundles, conflict } = input;
   const entries: CommandEntry[] = [];
   const diagnostics: CommandDiagnostic[] = [];
 
   const builtinByName = new Map(BUILTIN_COMMANDS.map((c) => [c.name, c]));
   const templateByName = new Map(templates.map((t) => [t.name, t]));
-  const skillByName = new Map<string, CommandSkillEntry[]>();
-  for (const skill of skills) {
-    const list = skillByName.get(skill.commandName) ?? [];
-    list.push(skill);
-    skillByName.set(skill.commandName, list);
-  }
   const bundleByName = new Map(bundles.map((b) => [b.name, b]));
 
   const names = new Set<string>();
   for (const n of builtinByName.keys()) names.add(n);
   for (const n of templateByName.keys()) names.add(n);
-  for (const n of skillByName.keys()) names.add(n);
   for (const n of bundleByName.keys()) names.add(n);
 
   const emit = (entry: CommandEntry): void => { entries.push(entry); };
@@ -91,13 +91,12 @@ export function resolveCatalog(input: ResolveCatalogInput): ResolvedCatalog {
     const has = {
       builtin: builtinByName.has(name),
       template: templateByName.has(name),
-      skill: skillByName.has(name),
       bundle: bundleByName.has(name),
     };
     const winner = kindOrder(conflict.mode, has);
     if (!winner) {
-      // `namespace`: bare-имена разрешены только для builtin/skill; шаблоны и
-      // бандлы не перекрывают их и не получают изобретённых префиксов.
+      // `namespace`: bare-имена разрешены только для builtin/bundle; шаблоны
+      // не перекрывают их и не получают изобретённых префиксов.
       continue;
     }
 
@@ -116,48 +115,15 @@ export function resolveCatalog(input: ResolveCatalogInput): ResolvedCatalog {
     if (winner === 'builtin') {
       if (has.bundle) diagnostics.push(shadowedDiag(name, 'bundle', 'builtin'));
       if (has.template) diagnostics.push(shadowedDiag(name, 'template', 'builtin'));
-      if (has.skill) diagnostics.push(shadowedDiag(name, 'skill', 'builtin'));
       emit({ kind: 'builtin', summary: builtinByName.get(name)! });
     } else if (winner === 'template') {
       if (has.bundle) diagnostics.push(shadowedDiag(name, 'bundle', 'template'));
-      if (has.skill) diagnostics.push(shadowedDiag(name, 'skill', 'template'));
       const template = templateByName.get(name)!;
       emit({ kind: 'template', summary: templateSummary(template), template });
-    } else if (winner === 'bundle') {
+    } else {
       if (has.template) diagnostics.push(shadowedDiag(name, 'template', 'bundle'));
-      if (has.skill) diagnostics.push(shadowedDiag(name, 'skill', 'bundle'));
       const bundle = bundleByName.get(name)!;
       emit({ kind: 'bundle', summary: bundleSummary(bundle), bundle });
-    } else {
-      if (has.bundle) diagnostics.push(shadowedDiag(name, 'bundle', 'skill'));
-      if (has.template) diagnostics.push(shadowedDiag(name, 'template', 'skill'));
-      const skill = skillByName.get(name)![0]!;
-      emit({ kind: 'skill', summary: skillSummary(skill), skill });
-    }
-  }
-
-  // namespace + namespacePrefix: бандл-скиллы доступны как `<bundle>:<skill>`
-  // только тогда, когда bare-имя скилла уже занято (builtin/skill) — «конфликтующие имена».
-  if (conflict.mode === 'namespace' && conflict.namespacePrefix) {
-    for (const bundle of bundles) {
-      for (const skillName of bundle.skills) {
-        const skill = skills.find((s) => s.skillName === skillName);
-        if (!skill) {
-          diagnostics.push({
-            level: 'warning', code: 'missing-skill', command: `${bundle.name}:${skillName}`,
-            message: `bundle "${bundle.name}": скилл "${skillName}" не найден`,
-          });
-          continue;
-        }
-        // В namespace bare — builtin > skill, поэтому скилл, чьё имя совпадает
-        // со встроенной командой, иначе недостижим → доступен как `<bundle>:<skill>`.
-        if (!builtinByName.has(skillName)) continue;
-        emit({
-          kind: 'skill',
-          summary: { ...skillSummary(skill), name: `${bundle.name}:${skillName}`, bundle: bundle.name },
-          skill,
-        });
-      }
     }
   }
 
@@ -171,16 +137,6 @@ export function templateSummary(template: TemplateCommand): CommandSummary {
     description: template.description,
     ...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
     available: true,
-  };
-}
-
-export function skillSummary(skill: CommandSkillEntry): CommandSummary {
-  return {
-    name: skill.commandName,
-    kind: 'skill',
-    description: skill.description,
-    available: skill.available,
-    ...(skill.available ? {} : { unavailableReason: 'capabilities' as const }),
   };
 }
 

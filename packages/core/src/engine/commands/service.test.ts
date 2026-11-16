@@ -81,7 +81,7 @@ function makeService(opts: {
 
 const CTX = { projectWorkspace: '/work' };
 
-describe('CommandService — builtins (ADR-046 §7.2)', () => {
+describe('CommandService — builtins (ADR-126 §1)', () => {
   it('/help — локальный ответ', async () => {
     const { service } = makeService();
     const r = await service.resolve('/help', CTX);
@@ -89,17 +89,19 @@ describe('CommandService — builtins (ADR-046 §7.2)', () => {
     expect(r?.output).toContain('/help');
   });
 
-  it('/commands — список с builtin и скиллами', async () => {
+  it('/commands — только команды, без скиллов (ADR-126 §7)', async () => {
     const { service } = makeService();
     const r = await service.resolve('/commands', CTX);
     expect(r?.status).toBe('builtin');
-    expect(r?.output).toContain('/api-review');
+    expect(r?.output).toContain('/help');
+    expect(r?.output).not.toContain('/api-review');
   });
 
-  it('/skills — список скиллов', async () => {
+  it('/skills — список скиллов для `$`-вызова', async () => {
     const { service } = makeService();
     const r = await service.resolve('/skills', CTX);
-    expect(r?.output).toContain('/api-review');
+    expect(r?.output).toContain('$api-review');
+    expect(r?.output).not.toContain('/api-review');
   });
 
   it('/summary — триггер суммаризации', async () => {
@@ -204,13 +206,17 @@ describe('CommandService — builtins (ADR-046 §7.2)', () => {
 });
 
 describe('CommandService — скиллы и права', () => {
-  it('/api-review резолвится в тело скилла', async () => {
+  it('/api-review больше не резолвится как команда (ADR-126 §7)', async () => {
     const { service } = makeService();
     const r = await service.resolve('/api-review extra', CTX);
-    expect(r?.status).toBe('skill');
-    expect(r?.prompt).toContain('BODY');
-    expect(r?.prompt).toContain('extra');
-    expect(r?.skills).toEqual(['api-review']);
+    expect(r?.status).toBe('unknown');
+  });
+
+  it('скилл не попадает в список `/`-команд и в автокомплит', async () => {
+    const { service } = makeService();
+    const list = await service.list(CTX);
+    expect(list.commands.some((c) => c.name === 'api-review')).toBe(false);
+    expect(list.commands.some((c) => c.kind === 'skill')).toBe(false);
   });
 
   it('deny скрывает команду и блокирует резолвинг', async () => {
@@ -221,7 +227,7 @@ describe('CommandService — скиллы и права', () => {
     expect(list.commands.some((c) => c.name === 'help')).toBe(false);
   });
 
-  it('requiresToolsets экспандится через config.skills.toolsets', async () => {
+  it('requiresToolsets экспандится через config.skills.toolsets (видно в `/skills`)', async () => {
     const m = meta({ requiresToolsets: ['git'] });
     const { service } = makeService({
       config: { toolsets: { git: ['git_read'] } },
@@ -231,11 +237,9 @@ describe('CommandService — скиллы и права', () => {
         load: async () => undefined,
       },
     });
-    const list = await service.list({ ...CTX, capabilities: [] });
-    expect(list.commands.find((c) => c.name === 'api-review')?.available).toBe(false);
-    const r = await service.resolve('/api-review', { ...CTX, capabilities: [] });
-    expect(r?.status).toBe('unavailable');
-    expect(r?.message).toContain('git_read');
+    const r = await service.resolve('/skills', { ...CTX, capabilities: [] });
+    expect(r?.status).toBe('builtin');
+    expect(r?.output).toContain('$api-review (unavailable)');
   });
 
   it('isLocalCommandStatus: summarization и prompt не локальные', () => {
@@ -243,7 +247,7 @@ describe('CommandService — скиллы и права', () => {
     expect(isLocalCommandStatus('unknown')).toBe(true);
     expect(isLocalCommandStatus('denied')).toBe(true);
     expect(isLocalCommandStatus('unavailable')).toBe(true);
-    // template/skill/bundle — уходят в LLM; summarization — реальный запуск;
+    // template/bundle — уходят в LLM; skill-статус — legacy (ADR-126 §7); summarization — реальный запуск;
     // prompt (/init) — генерируемый prompt уходит в LLM.
     expect(isLocalCommandStatus('template')).toBe(false);
     expect(isLocalCommandStatus('skill')).toBe(false);
@@ -280,7 +284,7 @@ async function writeTemplateCommand(dir: string, name: string) {
   );
 }
 
-describe('CommandService — trust-гейт проектных шаблонов (ADR-046 §4.4/§7.1)', () => {
+describe('CommandService — trust-гейт проектных шаблонов (ADR-126 §9/§7.1)', () => {
   let dataDir: string;
   let ws: string;
 
@@ -328,50 +332,16 @@ describe('CommandService — trust-гейт проектных шаблонов 
   });
 });
 
-describe('CommandService — /skill-creator (builtin, ADR-046 §9.5)', () => {
+describe('CommandService — builtin-скиллы (ADR-126 §7)', () => {
   let dataDir: string;
   beforeEach(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-skill-creator-'));
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-builtin-skills-'));
   });
   afterEach(async () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  it('/skill-creator резолвится в kind=skill с телом builtin', async () => {
-    const skillService = new SkillService({ dataDir, home: join(dataDir, 'home') });
-    const config: CommandRuntimeConfig = {
-      dataDir,
-      commandsPaths: [],
-      bundlesPath: 'skill-bundles',
-      conflict: { mode: 'bundle-wins', namespacePrefix: false },
-      maxArgumentsLength: 1000,
-      maxRenderedBytes: 100_000,
-      toolsets: {},
-      inlineShell: false,
-    };
-    const service = new CommandService({ config, skillRuntime: skillService, skillSource: skillService });
-
-    const r = await service.resolve('/skill-creator', { capabilities: ['file_read', 'file_write'] });
-    expect(r?.status).toBe('skill');
-    expect(r?.skills).toEqual(['skill-creator']);
-    expect(r?.prompt).toContain('.synth/skills');
-
-    // Без нужных capabilities — unavailable (capability-aware).
-    const unavailable = await service.resolve('/skill-creator', { capabilities: [] });
-    expect(unavailable?.status).toBe('unavailable');
-  });
-});
-
-describe('CommandService — /agents-md (builtin skill, ADR-069 §8.2)', () => {
-  let dataDir: string;
-  beforeEach(async () => {
-    dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-agents-md-'));
-  });
-  afterEach(async () => {
-    await rm(dataDir, { recursive: true, force: true });
-  });
-
-  async function makeWithBuiltins() {
+  function makeWithBuiltins() {
     const skillService = new SkillService({ dataDir, home: join(dataDir, 'home') });
     const config: CommandRuntimeConfig = {
       dataDir,
@@ -386,34 +356,30 @@ describe('CommandService — /agents-md (builtin skill, ADR-069 §8.2)', () => {
     return new CommandService({ config, skillRuntime: skillService, skillSource: skillService });
   }
 
-  it('/agents-md резолвится в kind=skill с телом builtin', async () => {
-    const service = await makeWithBuiltins();
-    const r = await service.resolve('/agents-md', { capabilities: ['file_read', 'search', 'file_write'] });
-    expect(r?.status).toBe('skill');
-    expect(r?.skills).toEqual(['synth-agents-md']);
-    expect(r?.prompt).toContain('AGENTS.md');
+  it('builtin-скиллы видны в `/skills` как `$name`, но не как команды', async () => {
+    const service = makeWithBuiltins();
+    const r = await service.resolve('/skills', { capabilities: ['file_read', 'search', 'file_write'] });
+    expect(r?.status).toBe('builtin');
+    expect(r?.output).toContain('$skill-creator');
+    expect(r?.output).toContain('$synth-agents-md');
+    expect(r?.output).not.toContain('/skill-creator');
   });
 
-  it('без capabilities → unavailable (capability-aware делегирование)', async () => {
-    const service = await makeWithBuiltins();
-    const r = await service.resolve('/agents-md', { capabilities: [] });
-    expect(r?.status).toBe('unavailable');
-    expect(r?.message).toContain('file_read');
+  it('без capabilities — скилл помечен unavailable в `/skills` (capability-aware)', async () => {
+    const service = makeWithBuiltins();
+    const r = await service.resolve('/skills', { capabilities: [] });
+    expect(r?.output).toContain('$synth-agents-md (unavailable)');
   });
 
-  it('команда скилла agents-md не конфликтует с builtin /init (нет shadowed-диагностики)', async () => {
-    const service = await makeWithBuiltins();
-    const { commands, diagnostics } = await service.list({ capabilities: ['file_read', 'search', 'file_write'] });
-    expect(commands.some((c) => c.name === 'init' && c.kind === 'builtin')).toBe(true);
-    expect(commands.some((c) => c.name === 'agents-md' && c.kind === 'skill')).toBe(true);
-    expect(diagnostics.some((d) => d.command === 'init' || d.command === 'agents-md')).toBe(false);
-    // builtin /init резолвится в prompt, а не перекрывается скиллом.
-    expect((await service.resolve('/init', { capabilities: [] }))?.status).toBe('prompt');
+  it('/skill-creator и /agents-md больше не резолвятся как команды', async () => {
+    const service = makeWithBuiltins();
+    expect((await service.resolve('/skill-creator', { capabilities: [] }))?.status).toBe('unknown');
+    expect((await service.resolve('/agents-md', { capabilities: [] }))?.status).toBe('unknown');
   });
 });
 
 
-describe('CommandService — inline shell (ADR-046 §7.4)', () => {
+describe('CommandService — inline shell (ADR-126 §15)', () => {
   let dataDir: string;
 
   beforeEach(async () => {

@@ -2,7 +2,7 @@ import type { SkillBundle } from '@itphx/synth-shared';
 
 /**
  * Порт instance-хранилища bundles слэш-команд
- * (ADR-046 §7.3/§8.3, реализация — `SkillBundleStore`).
+ * (ADR-126 §14/§8.3, реализация — `SkillBundleStore`).
  *
  * Методы-пути (`root`/`file`) — деталь файловой реализации, в порт не входят
  * (домен работает через `list`/`get`/`exists`/`set`/`remove`).

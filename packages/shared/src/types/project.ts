@@ -78,7 +78,7 @@ export interface ProjectMcpSettings {
 }
 
 /**
- * ADR-046 §4.5: проектный скоуп скиллов (owner/lead) — аналог `ProjectMcpSettings`.
+ * ADR-126 §11: проектный скоуп скиллов (owner/lead) — аналог `ProjectMcpSettings`.
  * - `enabled` — hard-gate: доступные проекту скиллы. Пустой массив — «всё
  *   выключено» (opt-in); отсутствие `project.skills` — гейт не задан (legacy).
  * - `defaultOn` — сид «по умолчанию для новых сессий»: снапшот
@@ -177,7 +177,7 @@ export interface Project {
   worktreeSetupScript?: string;
   /** ADR-071 §2.4: проектный скоуп MCP (owner/lead). */
   mcp?: ProjectMcpSettings;
-  /** ADR-046 §4.5: проектный скоуп скиллов (owner/lead). */
+  /** ADR-126 §11: проектный скоуп скиллов (owner/lead). */
   skills?: ProjectSkillSettings;
   /** ADR-107: память проекта (undefined — наследует политику инстанса/включена). */
   memory?: ProjectMemorySettings;

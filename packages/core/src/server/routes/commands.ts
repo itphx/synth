@@ -29,8 +29,9 @@ export interface CommandRoutesOptions {
 }
 
 /**
- * ADR-046 §9.1/§7: `GET /api/v2/commands` — встроенные + шаблонные команды +
- * скиллы (invocation user/both) + bundles. `?diagnostics=1` — shadowed/ошибки.
+ * ADR-126 §7: `GET /api/v2/commands` — встроенные + шаблонные команды +
+ * bundles. Скиллов здесь нет: вызов — только `$name`, список — `/skills`.
+ * `?diagnostics=1` — shadowed/ошибки.
  */
 export function createCommandRoutes(
   auth: AuthKit,

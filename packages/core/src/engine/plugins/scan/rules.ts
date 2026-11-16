@@ -123,7 +123,7 @@ export const PLUGIN_SCAN_RULES: readonly ScanRule[] = [
     id: 'inj_inline_shell',
     category: 'injection',
     severity: 'medium',
-    description: 'Inline-shell конструкция (механизм ADR-046) в содержимом бандла',
+    description: 'Inline-shell конструкция (механизм ADR-126) в содержимом бандла',
     pattern: /!`[^`\n]+`/,
   },
 

@@ -1,5 +1,5 @@
 /**
- * ADR-095 (шаг 6a): локальные ответы `/`-команд (ADR-046 §7).
+ * ADR-095 (шаг 6a): локальные ответы `/`-команд (ADR-126 §1).
  *
  * Вынесено из `engine/orchestrator.ts` без изменения поведения. Класс
  * `ChatOrchestrator` сохраняет делегации `_publishLocalCompletion`,
@@ -22,7 +22,7 @@ import {
 } from './turn-events.js';
 
 /**
- * ADR-046 §7.1: завершение локального ответа (builtin/команда/micro-first) теми
+ * ADR-126 §14: завершение локального ответа (builtin/команда/micro-first) теми
  * же событиями, что обычный стрим — иначе клиент не увидит ни хода, ни его
  * содержимого.
  *
@@ -41,7 +41,7 @@ export function publishLocalCompletion(
     usage?: TokenUsage;
     durationMs?: number;
     metadata?: Record<string, unknown>;
-    /** ADR-046 §7.1: index/id сохранённого assistant-сообщения — UI не плодит копии. */
+    /** ADR-126 §14: index/id сохранённого assistant-сообщения — UI не плодит копии. */
     messageIndex?: number;
     messageId?: string;
   },
@@ -82,7 +82,7 @@ export interface FinishLocalCommandDeps {
 /**
  * Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`.
  *
- * `command` (ADR-046 §7.1) — имя/аргументы системной (builtin) команды: уходят в
+ * `command` (ADR-126 §14) — имя/аргументы системной (builtin) команды: уходят в
  * `metadata` ассистента, чтобы UI отрисовал нейтральный system-блок, а не ответ
  * агента (бейдж/статистику). `model`/`provider` = `command` — тот же признак для
  * live-стрима. Для `/summary`-нотиса (недоступна суммаризация) передаётся

@@ -1350,7 +1350,7 @@ class PostgresMcpRegistryRepository implements McpRegistryRepository {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// skillBundles (ADR-046)
+// skillBundles (ADR-126)
 // ────────────────────────────────────────────────────────────────────────────
 
 interface SkillBundleRow extends Row {

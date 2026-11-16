@@ -544,7 +544,7 @@ export async function runProcessSetup(
   // Composer'ом. `session.settings.systemPrompt` override, classification/
   // gateway/plan-guide/mode-policy/session-context — внутри compose.
   // Режим/план/todo — уже в state-сообщениях истории (выше), не в system.
-  // ADR-046 §5: каталог скиллов — stable/volatile-блоки (deny скрывает).
+  // ADR-126 §5: каталог скиллов — stable/volatile-блоки (deny скрывает).
   const skillsCatalog = await deps.collectSkillsCatalog({
     session,
     agentDef,
@@ -709,7 +709,7 @@ export async function runProcessSetup(
   const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
   // ADR-117: пара текущего запроса — thinking чужих provider/model в историю не
   // идёт (модель у агента могли сменить в этой же сессии).
-  // ADR-126 §2.1: триггер хода — сообщение, с которого ход начат. User-directed
+  // ADR-126 §2: триггер хода — сообщение, с которого ход начат. User-directed
   // сообщения (адресованные человеку), новые относительно триггера, в контекст
   // текущего хода не идут.
   let baseLlmMessages = sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author, {

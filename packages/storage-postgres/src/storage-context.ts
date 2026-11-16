@@ -33,7 +33,7 @@
  *   - `buildLegacyPipelinePorts(deps)` → `pipelines` (ADR-051/ADR-100 — реестр
  *     определений и экземпляров инстанса; таблицы `pipeline_definitions`/
  *     `pipeline_instances`). Не путать с `buildPipelinePorts` (ADR-101).
- *   - `buildSkillPorts(deps, blobs)` → `skills` (ADR-046 §4 / ADR-116 —
+ *   - `buildSkillPorts(deps, blobs)` → `skills` (ADR-126 §9 / ADR-116 —
  *     метаданные в таблице `instance_skills`, содержимое — в blob-сторе
  *     `skills/<name>/…`).
  *   - `buildContextFilePorts(deps, opts)` → `contextFiles` (ADR-069/ADR-070 /

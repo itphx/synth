@@ -29,7 +29,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe('renderTemplate (ADR-046 §7.2)', () => {
+describe('renderTemplate (ADR-126 §1)', () => {
   it('подставляет $ARGUMENTS и позиционные $1..$9', async () => {
     const res = await renderTemplate(cmd('ARGS=[$ARGUMENTS] F2=[$2]'), {
       ...OPTS, workingDir: dir, args: 'one two three',
@@ -87,7 +87,7 @@ describe('renderTemplate (ADR-046 §7.2)', () => {
   });
 });
 
-describe('renderTemplate — inline shell (ADR-046 §7.4)', () => {
+describe('renderTemplate — inline shell (ADR-126 §15)', () => {
   it('выключено по умолчанию: литерал не тронут, раннер не вызван, диагностики нет', async () => {
     let called = false;
     const res = await renderTemplate(cmd('A !`echo hi` B'), {

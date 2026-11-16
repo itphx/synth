@@ -2404,7 +2404,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // ADR-126 §2.1: сообщение адресовано пользователю (`@user`) — тост и
+      // ADR-126 §2: сообщение адресовано пользователю (`@user`) — тост и
       // непрочитанный бейдж сессии. Только получателю; self-mention сервер уже
       // исключил из `user_ids`. Событие хода не создаёт.
       case 'message.mentioned': {
@@ -3384,7 +3384,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // ADR-046 §8.2: вызовы скиллов/команд — счётчики и последний вызов (часть b).
+      // ADR-126 §12: вызовы скиллов/команд — счётчики и последний вызов (часть b).
       case 'skill.invoked': {
         useSkillsStore.getState().recordSkillInvoked({
           sessionId: sid,

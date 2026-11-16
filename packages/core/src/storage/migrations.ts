@@ -17,7 +17,7 @@ export interface SessionScopeMigrationDeps {
 }
 
 /**
- * ADR-071 §2.4 / ADR-046 §4.5: разовая идемпотентная миграция. Материализует
+ * ADR-071 §2.4 / ADR-126 §11: разовая идемпотентная миграция. Материализует
  * снапшоты `mcpDefaultOn`/`skillsDefaultOn` у существующих сессий:
  * `project.mcp/skills.defaultOn` (при наличии настроек проекта) либо системный
  * дефолт. Guard — маркер `migrations.session-scope-snapshots-v1` в runtime settings.

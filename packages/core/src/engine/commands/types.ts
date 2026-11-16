@@ -7,21 +7,21 @@ import type {
 } from '@itphx/synth-shared';
 
 /**
- * ADR-046 §7: внутренние типы модуля slash-команд. Контракты (для оркестратора,
+ * ADR-126 §1: внутренние типы модуля slash-команд. Контракты (для оркестратора,
  * API, CLI) — в `@itphx/synth-shared` (`types/commands.ts`).
  */
 
 /** Происхождение источника шаблонных команд (приоритет как у скиллов). */
 export type CommandOrigin = 'instance' | 'project' | 'config';
 
-/** Шаблонная `.md`-команда (ADR-046 §7.2). */
+/** Шаблонная `.md`-команда (ADR-126 §1). */
 export interface TemplateCommand {
   name: string;
   description: string;
   argumentHint?: string;
   agent?: string;
   model?: string;
-  /** Advisory-whitelist тулов (ADR-046 §8.1) — в права не транслируется. */
+  /** Advisory-whitelist тулов (ADR-126 §10) — в права не транслируется. */
   allowedTools?: string[];
   body: string;
   file: string;
@@ -49,6 +49,10 @@ export interface CommandSource {
 /** Конфиг конфликтов имён (`config.commands.conflict`). */
 export interface CommandConflictConfig {
   mode: 'bundle-wins' | 'conservative' | 'namespace';
+  /**
+   * @deprecated ADR-126 §7: скиллов в `/`-каталоге нет, `<bundle>:<skill>`
+   * не создаётся. Поле оставлено для совместимости конфига.
+   */
   namespacePrefix: boolean;
 }
 
@@ -63,7 +67,7 @@ export interface CommandRuntimeConfig {
   /** `config.skills.toolsets` — экспансия `requires_toolsets` в capabilities. */
   toolsets: Record<string, readonly string[]>;
   trustedProjectDirs?: readonly string[];
-  /** ADR-046 §7.4: `!`cmd`` в шаблонных командах (по умолчанию false). */
+  /** ADR-126 §15: `!`cmd`` в шаблонных командах (по умолчанию false). */
   inlineShell: boolean;
   home?: string;
 }
@@ -77,7 +81,7 @@ export interface CommandContext {
   sessionDisabled?: string[];
   permissionConfig?: PermissionConfig;
   /**
-   * ADR-046 §7.4: раннер inline shell. Приходит готовым от оркестратора
+   * ADR-126 §15: раннер inline shell. Приходит готовым от оркестратора
    * (замыкание уже прошло `PermissionEvaluator`); сервис команд не строит
    * permission-проверки сам (ADR-029).
    */
@@ -107,14 +111,20 @@ export interface LoadedBundle {
   diagnostics: CommandDiagnostic[];
 }
 
-/** Полный набор источников для резолвера (после discovery). */
+/**
+ * Полный набор источников для резолвера (после discovery).
+ *
+ * `skills` — **не** источник `/`-команд (ADR-126 §7): это список для
+ * встроенной `/skills`; резолвинг `$name` живёт отдельно
+ * (`engine/commands/dollar-skills.ts`).
+ */
 export interface CommandCatalog {
   builtins: string[];
   templates: TemplateCommand[];
   skills: CommandSkillEntry[];
   bundles: SkillBundle[];
   diagnostics: CommandDiagnostic[];
-  /** Упорядоченный результат разрешения конфликтов. */
+  /** Упорядоченный результат разрешения конфликтов (builtin/template/bundle). */
   entries: CommandEntry[];
 }
 
@@ -122,5 +132,4 @@ export interface CommandCatalog {
 export type CommandEntry =
   | { kind: 'builtin'; summary: CommandSummary }
   | { kind: 'template'; summary: CommandSummary; template: TemplateCommand }
-  | { kind: 'skill'; summary: CommandSummary; skill: CommandSkillEntry }
   | { kind: 'bundle'; summary: CommandSummary; bundle: SkillBundle };

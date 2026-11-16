@@ -634,10 +634,10 @@ export const toolsConfigSchema = z.object({
   outputMaxBytes: z.number().int().min(1).default(DEFAULT_TOOL_OUTPUT_MAX_BYTES),
 });
 
-// --- Скиллы (ADR-046) ---
+// --- Скиллы (ADR-126) ---
 
 /**
- * ADR-046 §4.2/§4.4/§7.4: конфигурация механизма скиллов.
+ * ADR-126 §7/§4.4/§7.4: конфигурация механизма скиллов.
  * `paths` — дополнительные пользовательские каталоги; `trustedProjectDirs` —
  * доверенные проектные каталоги (бинарный trust); `inlineShell` — выключатель
  * `!`cmd`` в шаблонных командах (по умолчанию выключено).
@@ -648,26 +648,26 @@ export const toolsConfigSchema = z.object({
  * попадают, тело не грузится). Установка/доверие/подписи/`lock.json` — PROP-068.
  *
  * Внешние локальные каталоги совместимости (`.opencode`, `.claude`, `.agents`,
- * `~/.config/opencode`) подключаются как read-only discovery в core (ADR-046 §4.2).
+ * `~/.config/opencode`) подключаются как read-only discovery в core (ADR-126 §7).
  */
 export const skillsConfigSchema = z.object({
   paths: z.array(z.string()).default([]),
-  /** ADR-046 §4.2/§4.3: удалённые каталоги — read-only индексация (`trusted: false`). */
+  /** ADR-126 §7/§4.3: удалённые каталоги — read-only индексация (`trusted: false`). */
   urls: z.array(z.string()).default([]),
   trustedProjectDirs: z.array(z.string()).default([]),
   inlineShell: z.boolean().default(false),
   /**
-   * ADR-046 §3.2/§12: именованные группы тулов → capabilities. Используется
+   * ADR-126 §13/§12: именованные группы тулов → capabilities. Используется
    * для экспансии `metadata.synth.requires_toolsets` в проверку доступности
    * скилла (union с `requires_capabilities`).
    */
   toolsets: z.record(z.string(), z.array(z.enum(toolCapabilityValues))).prefault({}),
 });
 
-// --- Slash-команды (ADR-046 §7) ---
+// --- Slash-команды (ADR-126 §1) ---
 
 /**
- * ADR-046 §7/§9.4: конфигурация slash-команд. `paths` — дополнительные каталоги
+ * ADR-126 §1/§9.4: конфигурация slash-команд. `paths` — дополнительные каталоги
  * шаблонных `.md`-команд; `bundlesPath` — подкаталог `{dataDir}` для YAML-бандлов;
  * `conflict` — режим разрешения конфликтов имён (см. resolver).
  */

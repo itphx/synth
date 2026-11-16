@@ -342,7 +342,7 @@ describe('миграция 035_project_access (список доступа к п
   });
 });
 
-describe('миграция 036_message_mentions (@-упоминания, ADR-126 §2.1)', () => {
+describe('миграция 036_message_mentions (@-упоминания, ADR-126 §2)', () => {
   it('зарегистрирована под версией 36 и последняя', () => {
     const migration = MIGRATIONS.find((m) => m.version === 36);
     expect(migration).toBeDefined();

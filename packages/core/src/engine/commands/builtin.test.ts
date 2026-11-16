@@ -1,5 +1,5 @@
 /**
- * ADR-046 §7.2 + ADR-126 §1: реестр встроенных `/`-команд.
+ * ADR-126 §1 + ADR-126 §1: реестр встроенных `/`-команд.
  *
  * `/compact` — ручной запуск компактизации контекста (ADR-119).
  * `/review` — prompt-команда ревью изменений кода в git-репозитории.
@@ -13,7 +13,7 @@ import {
   renderReviewPrompt,
 } from './builtin.js';
 
-describe('Встроенные команды (ADR-046 §7.2, ADR-126 §1)', () => {
+describe('Встроенные команды (ADR-126 §1, ADR-126 §1)', () => {
   it('/compact есть в реестре встроенных команд', () => {
     expect(BUILTIN_COMMAND_NAMES).toContain('compact');
     expect(isBuiltinCommand('compact')).toBe(true);

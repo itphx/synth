@@ -1,6 +1,6 @@
 // Сборка зависимостей standalone-core: хранилища, менеджеры, оркестратор,
 // событийное ядро (ADR-089), планировщик (ADR-051), webhooks (ADR-052),
-// скиллы/команды (ADR-046), runtime-настройки (ADR-005/023).
+// скиллы/команды (ADR-126), runtime-настройки (ADR-005/023).
 // Вынесено из `server/app.ts` (ADR-095, шаг 4a) — «вынос по швам», без изменения поведения.
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -479,10 +479,10 @@ export async function createStandaloneDeps(
   const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
   const effectiveToolsDisabled: ToolsDisabledConfig =
     runtimeToolsDisabled ?? config.toolsDisabled ?? { capabilities: [], tools: [] };
-  // ADR-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
+  // ADR-126 §11: runtime-отключение скиллов (админка) — hard-gate системного уровня.
   const effectiveSkillsDisabled = (await settingsStore.getSkillsDisabled())
     ?? { categories: [], groups: [], skills: [] };
-  // ADR-046/ADR-069: project-trust гейт скиллов/команд/инструкций. Runtime
+  // ADR-126/ADR-069: project-trust гейт скиллов/команд/инструкций. Runtime
   // (`settings.json`/PG) приоритетнее `config.yaml`; применяется при старте
   // (резолверы собираются здесь) — `restartRequired` в API, инвариант 24.
   const effectiveSkillsTrustedProjectDirs =
@@ -533,7 +533,7 @@ export async function createStandaloneDeps(
     // ADR-102: точка персиста сообщения инкрементирует `activity`
     // (`messages_assistant`/`messages_tool`); пользовательские — в процессоре.
     analytics,
-    // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
+    // ADR-071 §2.4 / ADR-126 §11: системные дефолты для сессий без проекта.
     // Список MCP-серверов — из реестра (источник истины, ADR-071 §2.5).
     systemDefaultsProvider: async () => ({
       mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
@@ -1166,7 +1166,7 @@ export async function createStandaloneDeps(
     );
   }
 
-  // ADR-046: сервис скиллов — discovery (instance/project/config.paths) + запись
+  // ADR-126: сервис скиллов — discovery (instance/project/config.paths) + запись
   // instance-дерева + каталог в промпт и тул `skill`.
   // ADR-116: instance-скиллы — порт слоя хранения (`storageContext.skills`):
   // при `storage.backend=postgres` это метаданные в SQL + содержимое в blobs,
@@ -1181,7 +1181,7 @@ export async function createStandaloneDeps(
     toolsets: config.skillsConfig?.toolsets,
   });
 
-  // ADR-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
+  // ADR-126 §7/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
   void skillService.refreshRemote().catch(() => {});
 
   // ADR-126 §4: сервис сниппетов (`#`) — три уровня (`instance`/`project`/`user`),
@@ -1220,7 +1220,7 @@ export async function createStandaloneDeps(
     });
   }
 
-  // ADR-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
+  // ADR-126 §1: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
   const commandService = new CommandService({
     config: {
       dataDir,
@@ -1768,7 +1768,7 @@ export async function createStandaloneDeps(
     toolsPolicy: effectiveToolsPolicy,
     mcpPolicy: effectiveMcpPolicy,
     toolsDisabled: effectiveToolsDisabled,
-    // ADR-046 §4.5: системный hard-gate скиллов (runtime-настройка).
+    // ADR-126 §11: системный hard-gate скиллов (runtime-настройка).
     skillsDisabled: effectiveSkillsDisabled,
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
     // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
@@ -1778,9 +1778,9 @@ export async function createStandaloneDeps(
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
-    // ADR-046 §5: каталог скиллов в промпт + тул `skill`.
+    // ADR-126 §5: каталог скиллов в промпт + тул `skill`.
     skillRuntime: skillService,
-    // ADR-046 §7: резолвинг `/`-команд до LLM.
+    // ADR-126 §1: резолвинг `/`-команд до LLM.
     commandRuntime: commandService,
     // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
     instructionsConfig: config.instructionsConfig,
@@ -2448,7 +2448,7 @@ export async function createStandaloneDeps(
     /** ADR-075: начальная политика workspace вне root (config/env + runtime-override). */
     workspaceOutsideRootPolicy: effectiveWorkspaceOutsideRootPolicy,
     /**
-     * ADR-046/ADR-069: эффективный project-trust гейт скиллов/команд/инструкций
+     * ADR-126/ADR-069: эффективный project-trust гейт скиллов/команд/инструкций
      * (runtime > config), снятый на старте. Нужен резолверу инструкций в
      * `mount-routes` (а не только оркестратору).
      */
@@ -2540,7 +2540,7 @@ export async function createStandaloneDeps(
     contextOptimizer,
     toolRegistry,
     agentRegistry,
-    // ADR-046/ADR-089: порт файлов контекста — запись ролевого промпта агента
+    // ADR-126/ADR-089: порт файлов контекста — запись ролевого промпта агента
     // вместе с агентом (`POST /api/v2/agents`, поле `role_prompt`).
     contextFiles: contextConfig,
     skillService,

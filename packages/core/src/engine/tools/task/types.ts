@@ -170,7 +170,7 @@ export interface TaskExtra {
    */
   projectInstructions?: string;
   /**
-   * ADR-046 §5/§6.2: рантайм скиллов — каталог саб-агенту (binding родителя) и
+   * ADR-126 §5/§6.2: рантайм скиллов — каталог саб-агенту (binding родителя) и
    * тул `skill` (тот же объект уходит в ToolContext.extra).
    */
   skillRuntime?: SkillRuntime;
@@ -213,7 +213,7 @@ export interface TaskExtra {
   registerCancelToken?: (streamId: string, token: CancellationToken) => void;
   /** Снятие cancel-токена фонового прогона (по завершении прогона). */
   unregisterCancelToken?: (streamId: string) => void;
-  /** ADR-046 §4.5: scope-гейты скиллов родительского контекста. */
+  /** ADR-126 §11: scope-гейты скиллов родительского контекста. */
   skillScope?: SkillScopeOptions;
   /**
    * ADR-075/ADR-076: проектные зависимости для тулов саб-агента (управление

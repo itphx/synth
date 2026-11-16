@@ -97,7 +97,7 @@ export function createProjectRoutes(
   workspacesRoot: string,
   /** ADR-071 §2.4: источник известных MCP-серверов для проектного скоупа. */
   mcpManager?: McpManager,
-  /** ADR-046 §4.5: сид скиллов нового проекта (системные дефолты). */
+  /** ADR-126 §11: сид скиллов нового проекта (системные дефолты). */
   skillService?: SkillService,
   settingsStore?: SettingsRepository,
   mcpRegistryStore?: McpRegistryRepository,

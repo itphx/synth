@@ -55,7 +55,7 @@ import type { WorktreeService } from '../../engine/worktree/service.js';
 import { publishWorktreeUpdated, type WorktreeUpdatedInput } from '../../engine/worktree/events.js';
 // ADR-126 §4: сниппеты (`#`) — раскрытие в приёме промпта (до очереди).
 import type { SnippetService } from '../../engine/snippets/service.js';
-// ADR-126 §2.1: `@user` — граница «агенту / пользователю» (разбор упоминаний).
+// ADR-126 §2: `@user` — граница «агенту / пользователю» (разбор упоминаний).
 import {
   resolveMentionableUsers,
   resolveUserMentionSplit,
@@ -415,7 +415,7 @@ export interface SessionRouteMessages {
   /** Модель отключена администратором (400 `MODEL_DISABLED`). */
   modelDisabled: (c: Context, provider: string, model: string) => string;
   /**
-   * ADR-126 §2.1: `@user` недоступен/неизвестен (400 `VALIDATION_ERROR`).
+   * ADR-126 §2: `@user` недоступен/неизвестен (400 `VALIDATION_ERROR`).
    * Перечень проблемных id — в `details.user_ids`.
    */
   unknownMentionUsers?: (c: Context, userIds: string[]) => string;
@@ -857,7 +857,7 @@ function mapRemoteError(c: Context, err: unknown): Response | undefined {
  * и отключает remote-ветки (getRemoteClient не передаётся).
  */
 /**
- * ADR-126 §2.1: собрать доступных для `@user` участников и разбить текст на
+ * ADR-126 §2: собрать доступных для `@user` участников и разбить текст на
  * агентскую часть и пользовательский хвост.
  *
  * Участники выводятся из сессии/проекта (`deriveSessionParticipants`), профиль
@@ -2732,7 +2732,7 @@ export function createSessionRoutes(
       }, 400);
     }
 
-    // ADR-126 §2.1: `@user` — граница «агенту / пользователю». Первое
+    // ADR-126 §2: `@user` — граница «агенту / пользователю». Первое
     // упоминание пользователя (среди доступных участников сессии/проекта) делит
     // сообщение: часть **до** него — агенту (обычная очередь, ход), часть
     // **от** него — пользователю (сообщение в историю + уведомление, ход **не**
@@ -2751,7 +2751,7 @@ export function createSessionRoutes(
     }
     if (mentionSplit.invalidUserIds.length > 0) {
       // Недоступный/неизвестный пользователь — 400 **до** отправки, без
-      // частичной доставки (ADR-126 §2.1 п. 4).
+      // частичной доставки (ADR-126 §2 п. 4).
       return c.json(
         {
           error: {
@@ -2765,7 +2765,7 @@ export function createSessionRoutes(
       );
     }
     // Агентская часть сообщения (до первого `@user`); пусто — агент не
-    // запускается вовсе (ADR-126 §2.1 п. 1).
+    // запускается вовсе (ADR-126 §2 п. 1).
     let content = mentionSplit.agentText;
     // Пользовательский хвост (от первого `@user` до конца) — `undefined`, если
     // упоминания пользователя в сообщении нет.
@@ -2807,7 +2807,7 @@ export function createSessionRoutes(
     // историю не уходит — в `content`/`parts` идёт уже раскрытый (обфускация
     // ADR-036 применится к нему в `enqueueUserMessage`).
     //
-    // ADR-126 §2.1: сниппеты раскрываются **только в агентской части**: в
+    // ADR-126 §2: сниппеты раскрываются **только в агентской части**: в
     // user-directed хвосте `#`/`$` — обычный текст (хвост не должен случайно
     // раскрыть сниппет или вызвать скилл).
     let snippetExpansions: string[] | undefined;
@@ -2874,7 +2874,7 @@ export function createSessionRoutes(
     }
 
     // Текст сообщения: агентская часть и пользовательский хвост — **разные**
-    // сообщения (ADR-126 §2.1). Вложения принадлежат агентской части, если она
+    // сообщения (ADR-126 §2). Вложения принадлежат агентской части, если она
     // есть; сообщение, начинающееся с `@user`, получает вложения само.
     const agentParts: Part[] = content ? [{ id: generateStreamId(), type: 'text', data: content }] : [];
     const userDirectedParts: Part[] = userDirectedText
@@ -3005,7 +3005,7 @@ export function createSessionRoutes(
     // для агентской части **до** постановки в очередь: user-directed хвост
     // записывается в историю сразу и должен быть **новее** триггера — тогда он
     // исключается из LLM-контекста текущего хода и попадает в следующий
-    // (ADR-126 §2.1 п. 6).
+    // (ADR-126 §2 п. 6).
     const baseOrd = nextOrd(session.messages);
 
     const message: Message = {
@@ -3043,11 +3043,11 @@ export function createSessionRoutes(
     // `message.accepted`/`message.enqueued` и в историю.
     const acceptedMessageId = message.id;
 
-    // ADR-126 §2.1: user-directed хвост («@alice проверь») — сообщение
+    // ADR-126 §2: user-directed хвост («@alice проверь») — сообщение
     // **человеку**, а не агенту. Оно попадает в историю сразу, публикует
-    // `message.delivered` (ADR-118) и `message.mentioned` (ADR-126 §2.1 п. 7),
+    // `message.delivered` (ADR-118) и `message.mentioned` (ADR-126 §2 п. 7),
     // но **не** ставится в очередь, **не** попадает в `steerInbox` и **не**
-    // запускает ход (ADR-126 §2.1 п. 5).
+    // запускает ход (ADR-126 §2 п. 5).
     const userMessageId = content ? generateStreamId() : acceptedMessageId;
 
     const persistUserDirected = async (): Promise<void> => {
@@ -3058,7 +3058,7 @@ export function createSessionRoutes(
         // Порядковый номер — следующий за агентской частью (в истории сообщение
         // одно на запрос; seq у agent-части уже занят).
         seq: session.messages.length + 2,
-        // ADR-126 §2.1 п. 6: хвост **новее** триггера (агентской части).
+        // ADR-126 §2 п. 6: хвост **новее** триггера (агентской части).
         ord: baseOrd + 1,
         origin: 'local',
         parts: userDirectedParts,
@@ -3072,12 +3072,12 @@ export function createSessionRoutes(
         agentRole: body.agent || session.settings.agentRole,
         provider: body.provider || session.settings.provider,
         model: body.model || session.settings.model,
-        // ADR-126 §2.1: упоминания пользователей (span'ы — в тексте хвоста).
+        // ADR-126 §2: упоминания пользователей (span'ы — в тексте хвоста).
         mentions: mentionSplit.mentions,
         metadata: {
           ...(body.metadata || {}),
           stream_id: userMessageId,
-          // ADR-126 §2.1: признак user-directed сообщения (аддитивно).
+          // ADR-126 §2: признак user-directed сообщения (аддитивно).
           userDirected: true,
         },
       };
@@ -3091,7 +3091,7 @@ export function createSessionRoutes(
         ...(userMessage.author ? { author: userMessage.author } : {}),
         ...(userMessage.principal ? { principal: userMessage.principal } : {}),
       });
-      // ADR-126 §2.1 п. 7: уведомление и бейдж. Self-mention допускается,
+      // ADR-126 §2 п. 7: уведомление и бейдж. Self-mention допускается,
       // но уведомление себе не отправляется (п. 4).
       const notifiedUserIds = mentionSplit.mentions
         .map((mention) => mention.id)
@@ -3136,7 +3136,7 @@ export function createSessionRoutes(
       // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений
       // (по ним работает дедуп и GC; снимаются при удалении сообщения).
       await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
-      // ADR-126 §2.1: user-directed хвост не участвует во вмешательстве.
+      // ADR-126 §2: user-directed хвост не участвует во вмешательстве.
       await persistUserDirected();
       if (interruptMode) {
         // Прерываем текущую генерацию: ход НЕ завершается («Стоп» — отдельный
@@ -3182,7 +3182,7 @@ export function createSessionRoutes(
       // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений.
       await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);
 
-      // ADR-126 §2.1: user-directed хвост — в историю сразу (ход не ждёт его).
+      // ADR-126 §2: user-directed хвост — в историю сразу (ход не ждёт его).
       await persistUserDirected();
 
       // ADR-118 §3: контракт приёма — **всегда** `202 {messageId, mode, position}`.
@@ -3196,7 +3196,7 @@ export function createSessionRoutes(
       }, 202);
     }
 
-    // ADR-126 §2.1 п. 1: сообщение начинается с `@user` — агент не запускается
+    // ADR-126 §2 п. 1: сообщение начинается с `@user` — агент не запускается
     // вовсе, создаётся только пользовательское сообщение. Ответ — тот же
     // контракт приёма (`202`), но без позиции в очереди.
     await registerAttachmentRefs(deps.attachments?.blobRefs, userMessageId, userDirectedParts);

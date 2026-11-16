@@ -108,7 +108,7 @@
   причиной `workspace`), режим пайплайна (ADR-025), инструменты (`ToolRegistry` + MCP-тулы,
   доступность — общий `computeToolAvailability`, ADR-070 §2.9.1), MCP-скоуп по системе и проекту
   без сессионного снапшота (`resolveMcpProjectScope`, ADR-071), проектные инструкции (ADR-069),
-  каталог скиллов system/project (ADR-046) и агент шага (`AgentRegistry`). Контракт Composer'а
+  каталог скиллов system/project (ADR-126) и агент шага (`AgentRegistry`). Контракт Composer'а
   сужен до `ComposerSessionLike = Pick<Session, 'settings' | 'promptStates' | 'projectId'>`
   (`engine/context/composer.ts`) — обычная `Session` остаётся структурно совместимой.
   Исполнители видов шагов — Э4.2/Э4.3.

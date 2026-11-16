@@ -8,11 +8,11 @@ import {
   missingCapabilities,
 } from './scope.js';
 
-/** Максимальная длина описания строки каталога (ADR-046 §5: ~60–100). */
+/** Максимальная длина описания строки каталога (ADR-126 §5: ~60–100). */
 export const CATALOG_DESCRIPTION_MAX = 100;
 
 /**
- * Запись каталога скиллов для системного промпта (ADR-046 §5). Тело не входит —
+ * Запись каталога скиллов для системного промпта (ADR-126 §5). Тело не входит —
  * progressive disclosure.
  */
 export interface ComposerSkillEntry {
@@ -38,11 +38,11 @@ export interface ComposerSkillsCatalog {
 }
 
 export interface BuildSkillCatalogOptions extends SkillCatalogOptions {
-  /** ADR-046 §8.1: `deny` скрывает скилл из каталога. */
+  /** ADR-126 §10: `deny` скрывает скилл из каталога. */
   isDenied?: (name: string) => boolean;
 }
 
-/** Сводка найденного скилла (capability-aware, ADR-046 §6.3). */
+/** Сводка найденного скилла (capability-aware, ADR-126 §10). */
 export function toSkillSummary(
   skill: DiscoveredSkill,
   opts?: { capabilities?: readonly string[]; toolsets?: Record<string, readonly string[]> },
@@ -72,7 +72,7 @@ export function toSkillSummary(
 }
 
 /**
- * ADR-046 §5/§6: каталог скиллов для промпта. Гейты (per-item, opt-in):
+ * ADR-126 §5/§6: каталог скиллов для промпта. Гейты (per-item, opt-in):
  * системный (`systemDisabled`) → проектный (`projectEnabled`) → сессионный
  * opt-out (`sessionDisabled`) → сид/явное включение. `deny` и не-model-invocable
  * — исключаются; не привязанные к агенту (binding) — исключаются.
@@ -94,7 +94,7 @@ export function buildSkillCatalog(
     opts.defaultOn === undefined ? true : opts.defaultOn.includes(name);
 
   for (const skill of skills) {
-    // ADR-046 §4.4: недоверенные проектные скиллы не грузятся.
+    // ADR-126 §9: недоверенные проектные скиллы не грузятся.
     if (!skill.trusted) continue;
     const meta = skill.meta;
     if (!isModelInvocable(meta.invocation)) continue;
@@ -142,7 +142,7 @@ function truncateDescription(description: string): string {
 }
 
 /**
- * ADR-046 §5: текстовый блок каталога. Формат строки: `name` + обрезанный
+ * ADR-126 §5: текстовый блок каталога. Формат строки: `name` + обрезанный
  * `description` + маркеры (`unavailable`/`disabled`/`enabled`).
  */
 export function formatSkillsCatalogBlock(

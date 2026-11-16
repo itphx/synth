@@ -332,10 +332,10 @@ export function serializeMessage(msg: Message, index: number, opts?: SerializeMe
     disabled: msg.disabled,
     pinned: msg.pinned,
     hidden: msg.hidden,
-    /** ADR-046 §7.1: локальный ответ `/`-команды — вне LLM-контекста. */
+    /** ADR-126 §14: локальный ответ `/`-команды — вне LLM-контекста. */
     ephemeral: msg.ephemeral ?? false,
     agent_role: msg.agentRole || null,
-    /** ADR-126 §2.1: `@`-упоминания сообщения (аддитивно; `null` — нет). */
+    /** ADR-126 §2: `@`-упоминания сообщения (аддитивно; `null` — нет). */
     mentions: msg.mentions ?? null,
     model: msg.model || null,
     provider: msg.provider || null,

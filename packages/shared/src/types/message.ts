@@ -118,7 +118,7 @@ export interface Message {
   pinned: boolean;
   hidden: boolean;
   /**
-   * ADR-046 §7.1: сообщение локальной `/`-команды (builtin-ответ) — видно в
+   * ADR-126 §14: сообщение локальной `/`-команды (builtin-ответ) — видно в
    * истории, но исключается из LLM-контекста.
    */
   ephemeral?: boolean;
@@ -178,7 +178,7 @@ export interface Message {
    */
   status?: MessageStatus;
   /**
-   * ADR-126 §2.1: упоминания сообщения (`@`-упоминания).
+   * ADR-126 §2: упоминания сообщения (`@`-упоминания).
    *
    * Аддитивное поле: у сообщений без упоминаний его нет. Для
    * **user-directed** сообщения (`metadata.userDirected === true`) содержит

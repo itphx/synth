@@ -4,7 +4,7 @@
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D22, «Впитывание организационных гайдлайнов → дефолты
 > инстанса»; идея пользователя 2026-09-16).
-> **Связано:** [ADR-046](./adr-046-skills-and-slash-commands.md),
+> **Связано:** [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md),
 > [PROP-068](./prop-068-skills-agents-registry.md),
 > [ADR-069](./adr-069-project-instructions-agents-md.md),
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
@@ -33,7 +33,7 @@
 - **Проектные инструкции** — [ADR-069](./adr-069-project-instructions-agents-md.md): discovery/merge
   `AGENTS.md`, `/init`, threat-scan, `GET /api/v2/context/instructions`,
   `context.instructions_loaded`, скилл `synth-agents-md`. **Реализовано (Ф1–Ф3).**
-- **Механизм скиллов** — [ADR-046](./adr-046-skills-and-slash-commands.md) (доставка инструкций,
+- **Механизм скиллов** — [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) (доставка инструкций,
   scope system/project/session, `skill-scope.ts`).
 - **Реестр/каталог** — [PROP-068](./prop-068-skills-agents-registry.md) (trust/guard/установка) — в коде нет.
 - **Конфигурация** — [ADR-023](./adr-023-configuration.md) — где хранить дефолты.
@@ -72,7 +72,7 @@
 ### 3. Дефолты инстанса
 
 Правила применяются ко всем новым (и, по политике, существующим) проектам/сессиям. Формат доставки:
-скилл ([ADR-046](./adr-046-skills-and-slash-commands.md)), контекст-файл категории `user/system`
+скилл ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)), контекст-файл категории `user/system`
 (`config.ts`), либо секция конфига ([ADR-023](./adr-023-configuration.md)).
 
 ### 4. Версионирование и аудит
@@ -102,7 +102,7 @@ scope (см. п. 2).
   `engine/context/lazy-instructions.ts`, секция `instructions` в
   `packages/shared/src/config/types.ts`, `GET /api/v2/context/instructions`, событие
   `context.instructions_loaded`, скилл `synth-agents-md` ([ADR-069](./adr-069-project-instructions-agents-md.md)).
-- Механизм скиллов/scope есть ([ADR-046](./adr-046-skills-and-slash-commands.md),
+- Механизм скиллов/scope есть ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md),
   `server/routes/skill-scope.ts`).
 - **Ingestion организационных гайдлайнов, каталог гайдлайнов, версионирование/аудит правил,
   применение как instance-дефолтов — отсутствуют.**
@@ -121,7 +121,7 @@ scope (см. п. 2).
 
 ## Связи
 
-- [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — механизм доставки правил.
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) «Скиллы и slash-команды» — механизм доставки правил.
 - [PROP-068](./prop-068-skills-agents-registry.md) «Реестр и каталог» — trust/guard/провенанс для
   установки наборов правил.
 - [ADR-069](./adr-069-project-instructions-agents-md.md) «Проектные инструкции (AGENTS.md)» — проектный

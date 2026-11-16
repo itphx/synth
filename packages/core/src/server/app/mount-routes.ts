@@ -322,7 +322,7 @@ export function mountStandaloneRoutes(
         });
       }
     },
-    // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа нового проекта (снимок дефолтов).
+    // ADR-071 §2.4 / ADR-126 §11: сид скоупа нового проекта (снимок дефолтов).
     // PROP-125 §2: к локальным дефолтам добавляются серверные (гибрид) —
     // backend недоступен → только локальные (серверные добавятся при
     // следующем успешном коннекте авто-сидом).
@@ -436,7 +436,7 @@ export function mountStandaloneRoutes(
   }));
 
   // Agents
-  // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
+  // ADR-126/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
   // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
   // PROP-135 Ф6a: каталог профилей — проверка `executor_profile`/`allowed_profiles`.
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, {
@@ -1230,7 +1230,7 @@ export function mountStandaloneRoutes(
     },
   ));
 
-  // Скиллы (ADR-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.
+  // Скиллы (ADR-126 §7): реестр + instance CRUD + supporting-файлы + reload.
   app.route('/api/v2/skills', createSkillRoutes(auth, {
     skillService,
     resolveProjectWorkspace: async (projectId) => {
@@ -1241,7 +1241,7 @@ export function mountStandaloneRoutes(
     },
   }));
 
-  // ADR-046 §9.1: список команд (встроенные + шаблонные + скиллы + bundles).
+  // ADR-126 §7: список команд (встроенные + шаблонные + скиллы + bundles).
   app.route('/api/v2/commands', createCommandRoutes(auth, {
     commandService,
     resolveProjectWorkspace: async (projectId) => {
@@ -1265,7 +1265,7 @@ export function mountStandaloneRoutes(
     },
   }));
 
-  // ADR-046 §9.1: bundles (instance-хранилище YAML-групп скиллов).
+  // ADR-126 §7: bundles (instance-хранилище YAML-групп скиллов).
   app.route('/api/v2/skill-bundles', createSkillBundleRoutes(auth, {
     bundleStore,
     validateSkills: async (names) => {
@@ -1277,7 +1277,7 @@ export function mountStandaloneRoutes(
     },
   }));
 
-  // ADR-046 §4.5: scope-API скиллов (сессии/проекты/настройки, аналог MCP).
+  // ADR-126 §11: scope-API скиллов (сессии/проекты/настройки, аналог MCP).
   const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
     const project = await projectStore.load(projectId);
     if (!project?.workspace) return undefined;
@@ -1288,7 +1288,7 @@ export function mountStandaloneRoutes(
     sessionManager, skillService, settingsStore, projectStore,
     permissionConfig: config.permissionConfig,
     resolveProjectWorkspace: resolveSkillWorkspace,
-    // ADR-046 §6.3: capability-гейт сессии — по capabilities её агента
+    // ADR-126 §10: capability-гейт сессии — по capabilities её агента
     // (legacy-роль резолвится алиасом, как в рантайме оркестратора).
     resolveAgentCapabilities: (role) => {
       const resolved = role ? (resolveAgentRoleAlias(role) ?? role) : undefined;

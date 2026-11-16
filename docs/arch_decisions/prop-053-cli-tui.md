@@ -5,7 +5,7 @@
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D8, идея 8; прототип `~/dev/aic/t11/synth-cli/`).
 > **Связано:** [ADR-023](./adr-023-configuration.md), [ADR-038](./adr-038-npm-packages.md),
-> [ADR-042](./adr-042-hybrid-mode.md), [ADR-046](./adr-046-skills-and-slash-commands.md),
+> [ADR-042](./adr-042-hybrid-mode.md), [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md),
 > [ADR-079](./adr-079-local-home-independent-instances.md).
 
 **Решение:** навести порядок в CLI и расширить интерфейс:
@@ -45,7 +45,7 @@ CLI не является полноценным клиентом удалённ
 - Учесть аутентификацию (ключ/OIDC, [ADR-043](./adr-043-unified-identity-login.md)) и гибрид
   ([ADR-042](./adr-042-hybrid-mode.md)); пути/конфиг — через [ADR-023](./adr-023-configuration.md) и
   home-раскладку [ADR-079](./adr-079-local-home-independent-instances.md).
-- Согласовать со slash-командами скиллов ([ADR-046](./adr-046-skills-and-slash-commands.md)) в интерактивном
+- Согласовать с `$`-вызовом скиллов ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)) в интерактивном
   режиме.
 
 ### TUI
@@ -80,7 +80,7 @@ CLI не является полноценным клиентом удалённ
 - [ADR-023](./adr-023-configuration.md) «Конфигурация» — флаги/env/приоритеты CLI.
 - [ADR-038](./adr-038-npm-packages.md) «npm-пакеты» — публикуемая тонкая CLI-обёртка.
 - [ADR-042](./adr-042-hybrid-mode.md) «Гибридный режим» — работа CLI с удалённым сервером.
-- [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — `/`-команды в интерактивном CLI.
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) — поверхность ввода: `/`-команды и `$`-скиллы в интерактивном CLI.
 - [ADR-079](./adr-079-local-home-independent-instances.md) «Локальный home» — пути и изоляция инстансов.
 - [ADR-043](./adr-043-unified-identity-login.md) «Единая идентичность» — аутентификация как клиента API.
 - Смежные черновики: D19 — [PROP-064](./prop-064-agent-browser.md) (браузер) и [PROP-132](./prop-132-ui-terminal.md) (терминал).

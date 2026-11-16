@@ -1,10 +1,9 @@
 /**
  * ADR-126 §3: пользовательский вызов скилла через `$name`.
  *
- * Зачем: `/skill-name` — устаревший алиас (ADR-126 §1), основной триггер
- * скилла — `$name` **в тексте сообщения**. Резолв тот же, что у `/`-команды
- * (`CommandService`, case `skill`), но токен ищется в тексте, а не в начале
- * сообщения.
+ * `$name` — **единственный** пользовательский вызов скилла (ADR-126 §3/§7):
+ * `/skill-name` удалён, скиллы в `/`-каталоге отсутствуют. Токен ищется в
+ * тексте сообщения, а не в начале, поэтому вызов не конкурирует с `/`-командами.
  *
  * Правила (ADR-126 §3):
  *
@@ -35,17 +34,17 @@ import { resolveSkillRule } from '../permission/evaluator.js';
 export type DollarSkillUnavailableReason =
   /** Скилл не найден в реестре. */
   | 'unknown'
-  /** Проектный скилл недоверенного каталога (ADR-046 §4.4). */
+  /** Проектный скилл недоверенного каталога (ADR-126 §9). */
   | 'untrusted'
-  /** Отключён scope-гейтом (система/проект/сессия) — ADR-046 §4.5. */
+  /** Отключён scope-гейтом (система/проект/сессия) — ADR-126 §11. */
   | 'scope'
-  /** Скилл не привязан к текущему агенту (ADR-046 §6.2). */
+  /** Скилл не привязан к текущему агенту (ADR-126 §9). */
   | 'binding'
   /** Скилл не вызывается пользователем (`user-invocable: false`). */
   | 'invocation'
-  /** Правило `permission.rules.skill` запрещает скилл (ADR-046 §8.1). */
+  /** Правило `permission.rules.skill` запрещает скилл (ADR-126 §10). */
   | 'permission'
-  /** Агенту не хватает требуемых capabilities (ADR-046 §6.3). */
+  /** Агенту не хватает требуемых capabilities (ADR-126 §10). */
   | 'capabilities';
 
 /** Вход резолвера `$`-скиллов. */
@@ -58,11 +57,11 @@ export interface DollarSkillsInput {
   capabilities?: readonly string[];
   /** Привязка агента (`id` + `groups`). */
   agent?: { id?: string; groups?: string[] };
-  /** Per-session явное включение имён (ADR-046 §4.5). */
+  /** Per-session явное включение имён (ADR-126 §11). */
   sessionEnabled?: string[];
-  /** Per-session opt-out имён/категорий/групп (ADR-046 §4.5). */
+  /** Per-session opt-out имён/категорий/групп (ADR-126 §11). */
   sessionDisabled?: string[];
-  /** Permission-конфиг сессии (deny скрывает скилл, ADR-046 §8.1). */
+  /** Permission-конфиг сессии (deny скрывает скилл, ADR-126 §10). */
   permissionConfig?: PermissionConfig;
   /** Рантайм скиллов (discovery + загрузка тела). */
   skillRuntime: SkillRuntime;
@@ -72,7 +71,7 @@ export interface DollarSkillsInput {
    */
   scope?: SkillScopeOptions;
   /**
-   * `config.skills.toolsets` — экспансия `requires_toolsets` (ADR-046 §3.2).
+   * `config.skills.toolsets` — экспансия `requires_toolsets` (ADR-126 §13).
    * Используется, если рантайм не умеет сам считать недостающие capability.
    */
   toolsets?: Record<string, readonly string[]>;
@@ -153,26 +152,26 @@ async function loadDollarSkill(
   const discovered = await skillRuntime.get(name, { projectWorkspace });
   if (!discovered) return { reason: 'unknown' };
 
-  // ADR-046 §4.4: недоверенный проектный скилл виден, но не грузится.
+  // ADR-126 §9: недоверенный проектный скилл виден, но не грузится.
   if (!discovered.trusted) return { reason: 'untrusted' };
 
-  // ADR-046 §6.1: `$` — явный вызов пользователя; скилл, запрещённый к
-  // пользовательскому вызову, недоступен (как и `/skill-name`).
+  // ADR-126 §3: `$` — явный вызов пользователя; скилл, запрещённый к
+  // пользовательскому вызову, недоступен.
   if (!discovered.meta.userInvocable) return { reason: 'invocation' };
 
-  // ADR-046 §4.5: scope-гейты (система/проект/сессия).
+  // ADR-126 §11: scope-гейты (система/проект/сессия).
   const availability = resolveSkillAvailability(discovered.meta, input.scope);
   if (!availability.enabled) return { reason: 'scope' };
 
-  // ADR-046 §6.2: привязка к агенту (`agents`/`groups`).
+  // ADR-126 §9: привязка к агенту (`agents`/`groups`).
   if (!matchesBinding(discovered.meta, input.agent)) return { reason: 'binding' };
 
-  // ADR-046 §8.1: per-skill права (`permission.rules.skill`).
+  // ADR-126 §10: per-skill права (`permission.rules.skill`).
   if (resolveSkillRule(input.permissionConfig, name)?.action === 'deny') {
     return { reason: 'permission' };
   }
 
-  // ADR-046 §6.3: capability-aware (с экспансией `requires_toolsets`).
+  // ADR-126 §10: capability-aware (с экспансией `requires_toolsets`).
   const missing = skillRuntime.missingCapabilities
     ? skillRuntime.missingCapabilities(discovered.meta, input.capabilities)
     : missingCapabilities(discovered.meta, input.capabilities, input.toolsets);

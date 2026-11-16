@@ -11,22 +11,22 @@ import type {
 import type { ToolsPolicy } from '@itphx/synth-shared/types'
 import { BASE_URL, encodeFilePath, fetchJSON } from './base'
 
-// --- Скиллы и slash-команды (ADR-046) ---
+// --- Скиллы и slash-команды (ADR-126) ---
 
-/** ADR-046 §9.1: ответ GET /api/v2/skills. */
+/** ADR-126 §7: ответ GET /api/v2/skills. */
 export interface SkillsListResponse {
   skills: SkillSummary[]
   workspace?: string
   diagnostics?: SkillDiagnostic[]
 }
 
-/** ADR-046 §9.1: список supporting-файлов скилла. */
+/** ADR-126 §7: список supporting-файлов скилла. */
 export interface SkillFilesResponse {
   name: string
   files: string[]
 }
 
-/** ADR-046 §9.1: содержимое supporting-файла скилла. */
+/** ADR-126 §7: содержимое supporting-файла скилла. */
 export interface SkillFileResponse {
   name: string
   path: string
@@ -34,7 +34,7 @@ export interface SkillFileResponse {
 }
 
 /**
- * ADR-046 §4.5: эффективная запись скилла в сессии/проекте (уровень, trust,
+ * ADR-126 §11: эффективная запись скилла в сессии/проекте (уровень, trust,
  * доступность, включён/отключён с причиной).
  */
 export interface EffectiveSkillEntry {
@@ -52,7 +52,7 @@ export interface EffectiveSkillEntry {
   disabledReason?: 'session' | 'system' | 'project'
 }
 
-/** ADR-046 §4.5: ответ GET/PUT /api/v2/sessions/:id/skills. */
+/** ADR-126 §11: ответ GET/PUT /api/v2/sessions/:id/skills. */
 export interface SessionSkillsResponse {
   session_id: string
   skills: EffectiveSkillEntry[]
@@ -60,7 +60,7 @@ export interface SessionSkillsResponse {
   disabled: string[]
 }
 
-/** ADR-046 §4.5: ответ GET/PUT /api/v2/projects/:id/skills. */
+/** ADR-126 §11: ответ GET/PUT /api/v2/projects/:id/skills. */
 export interface ProjectSkillsResponse {
   project_id: string
   skills: EffectiveSkillEntry[]
@@ -68,10 +68,10 @@ export interface ProjectSkillsResponse {
   defaultOn: string[]
 }
 
-/** ADR-046/069: откуда взялся эффективный список доверенных каталогов. */
+/** ADR-126/069: откуда взялся эффективный список доверенных каталогов. */
 export type SkillsTrustedProjectDirsSource = 'runtime' | 'config' | 'default'
 
-/** ADR-046 §4.5: ответ GET/PUT /api/v2/settings/skills. */
+/** ADR-126 §11: ответ GET/PUT /api/v2/settings/skills. */
 export interface SkillsSettingsResponse {
   /** Мастер-гейт: скиллы, недоступные нигде. */
   disabled: SkillsDisabledRequest
@@ -79,7 +79,7 @@ export interface SkillsSettingsResponse {
   disabledForNewProjects: SkillsDisabledRequest
   policy: ToolsPolicy
   /**
-   * Project-trust (ADR-046/069): эффективный список доверенных каталогов.
+   * Project-trust (ADR-126/069): эффективный список доверенных каталогов.
    * Поле аддитивное — старый сервер может его не отдавать.
    */
   trustedProjectDirs?: string[]
@@ -92,7 +92,7 @@ export interface SkillsSettingsResponse {
 }
 
 export const skillsApi = {
-  // --- Скиллы (ADR-046 §9.1) ---
+  // --- Скиллы (ADR-126 §7) ---
   /** GET /skills — реестр скиллов; `diagnostics` добавляет discovery-диагностику. */
   async getSkills(params?: { projectId?: string; diagnostics?: boolean }): Promise<SkillsListResponse> {
     const q = new URLSearchParams()
@@ -165,12 +165,12 @@ export const skillsApi = {
     )
   },
 
-  /** POST /skills/reload — принудительный ре-скан реестра (ADR-046 §8.3). */
+  /** POST /skills/reload — принудительный ре-скан реестра (ADR-126 §10). */
   async reloadSkills(): Promise<void> {
     await fetchJSON<{ status: string }>(`${BASE_URL}/skills/reload`, { method: 'POST' })
   },
 
-  // --- Scope-API скиллов (ADR-046 §4.5, аналог MCP) ---
+  // --- Scope-API скиллов (ADR-126 §11, аналог MCP) ---
   /** GET /sessions/:id/skills — эффективный per-session набор (включая отключённые с причиной). */
   async getSessionSkills(sessionId: string): Promise<SessionSkillsResponse> {
     return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills`)
@@ -208,7 +208,7 @@ export const skillsApi = {
     })
   },
 
-  // --- Скиллы: instance-wide настройки (ADR-046 §4.5) ---
+  // --- Скиллы: instance-wide настройки (ADR-126 §11) ---
   /** GET /settings/skills — мастер-гейт, сид новых проектов и политика. */
   async getSkillsSettings(): Promise<SkillsSettingsResponse> {
     return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`)

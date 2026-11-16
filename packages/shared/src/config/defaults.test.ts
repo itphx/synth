@@ -162,13 +162,13 @@ describe('defaultConfig', () => {
     expect(defaultConfig.tools.outputMaxBytes).toBe(51_200);
   });
 
-  it('skills по умолчанию пусты (paths/urls), inlineShell выключен (ADR-046)', () => {
+  it('skills по умолчанию пусты (paths/urls), inlineShell выключен (ADR-126)', () => {
     expect(defaultConfig.skills).toEqual({
       paths: [], urls: [], trustedProjectDirs: [], inlineShell: false, toolsets: {},
     });
   });
 
-  it('commands по умолчанию: bundle-wins, лимиты, пустые paths (ADR-046 §7)', () => {
+  it('commands по умолчанию: bundle-wins, лимиты, пустые paths (ADR-126 §1)', () => {
     expect(defaultConfig.commands).toEqual({
       paths: [],
       bundlesPath: 'skill-bundles',

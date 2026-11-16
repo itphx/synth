@@ -86,7 +86,7 @@ export function ProjectTab() {
   // Отказ загрузки скоупа — честное пустое состояние вместо вечного «Загрузка…».
   const [mcpFailed, setMcpFailed] = useState(false)
 
-  // ADR-046 §4.5: проектный скоуп скиллов (owner/lead/admin)
+  // ADR-126 §11: проектный скоуп скиллов (owner/lead/admin)
   const [projectSkills, setProjectSkills] = useState<ProjectSkillsResponse | null>(null)
   const [skillsFailed, setSkillsFailed] = useState(false)
 
@@ -204,7 +204,7 @@ export function ProjectTab() {
     })
   }
 
-  /** ADR-046 §4.5: проектный скоуп скиллов — «Доступен»/«Включён по умолчанию». */
+  /** ADR-126 §11: проектный скоуп скиллов — «Доступен»/«Включён по умолчанию». */
   const handleToggleProjectSkill = async (name: string, kind: 'enabled' | 'defaultOn') => {
     if (!projectId || !projectSkills) return
     const key = `skill:${name}`
@@ -1521,7 +1521,7 @@ function ProjectMcpBlock({
   )
 }
 
-/** ADR-046 §4.5: проектный скоуп скиллов — «Доступен» и «Включён по умолчанию». */
+/** ADR-126 §11: проектный скоуп скиллов — «Доступен» и «Включён по умолчанию». */
 function ProjectSkillsBlock({
   skills,
   failed,

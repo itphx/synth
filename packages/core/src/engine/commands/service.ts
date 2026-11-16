@@ -11,7 +11,7 @@ import type {
 import type { DiscoveredSkill, LoadedSkill, SkillRuntime } from '../skills/types.js';
 import { isDisabledBySession, matchesBinding, missingCapabilities } from '../skills/scope.js';
 import { buildSkillContentBlock } from '../skills/loader.js';
-import { resolveCommandRule } from '../permission/evaluator.js';
+import { resolveCommandRule, resolveSkillRule } from '../permission/evaluator.js';
 import { t as sm } from '../system-messages.js';
 import { CommandRegistry } from './registry.js';
 import { buildCommandSources } from './discovery.js';
@@ -44,9 +44,11 @@ export interface CommandServiceOptions {
 }
 
 /**
- * ADR-046 §7: фасад резолвинга `/`-команд — discovery шаблонов, встроенные
- * команды, скиллы-как-команды и bundles. Единый путь для UI/CLI/гибрида;
- * оркестратор получает объект через `OrchestratorOptions.commandRuntime`.
+ * ADR-126 §7: фасад резолвинга `/`-команд — discovery шаблонов, встроенные
+ * команды и bundles. Скиллы в `/`-каталог **не** входят: их единственный
+ * пользовательский вызов — `$name` (ADR-126 §3), а список даёт `/skills`.
+ * Единый путь для UI/CLI/гибрида; оркестратор получает объект через
+ * `OrchestratorOptions.commandRuntime`.
  */
 export class CommandService implements CommandRuntime {
   private readonly _config: CommandRuntimeConfig;
@@ -110,7 +112,7 @@ export class CommandService implements CommandRuntime {
       sessionEnabled?: string[];
       sessionDisabled?: string[];
       permissionConfig?: PermissionConfig;
-      /** ADR-046 §7.4: раннер inline shell (готовое замыкание от оркестратора). */
+      /** ADR-126 §15: раннер inline shell (готовое замыкание от оркестратора). */
       runShell?: (cmd: string) => Promise<{ output: string; isError: boolean }>;
     },
   ): Promise<CommandResolveResult | undefined> {
@@ -152,33 +154,6 @@ export class CommandService implements CommandRuntime {
         catalog.diagnostics.push(...rendered.diagnostics);
         return { status: 'template', name, args, kind: 'template', prompt: rendered.content, message: rendered.diagnostics.length > 0 ? rendered.diagnostics[0]!.message : undefined };
       }
-      case 'skill': {
-        const missing = missingCapabilities(
-          await this._skillMeta(entry.skill.skillName, ctx),
-          ctx.capabilities,
-          this._config.toolsets,
-        );
-        if (missing.length > 0) {
-          return {
-            status: 'unavailable', name, args, kind: 'skill',
-            output: sm('command.unavailable', { name, capabilities: missing.join(', ') }),
-            message: missing.join(', '),
-          };
-        }
-        const loaded = await this._skillSource.load(entry.skill.skillName, {
-          projectWorkspace: ctx.projectWorkspace,
-          capabilities: ctx.capabilities,
-        });
-        if (!loaded) {
-          return { status: 'unknown', name, args, output: sm('command.unknown', { name }) };
-        }
-        const content = buildSkillContentBlock(loaded.summary, loaded.body, loaded.dir, loaded.files);
-        return {
-          status: 'skill', name, args, kind: 'skill',
-          prompt: args.length > 0 ? `${content}\n\n${args}` : content,
-          skills: [entry.skill.skillName],
-        };
-      }
       case 'bundle':
         return this._resolveBundle(entry.bundle, name, args, ctx);
     }
@@ -197,8 +172,15 @@ export class CommandService implements CommandRuntime {
       return { status: 'builtin', name, args, kind: 'builtin', output: renderHelp() };
     }
     if (name === 'skills') {
-      const skills = await this._skillEntries(ctx);
-      return { status: 'builtin', name, args, kind: 'builtin', output: renderSkillsList(skills) };
+      // ADR-126 §7: `/skills` — список скиллов для `$`-вызова (не `/`-команды).
+      return {
+        status: 'builtin', name, args, kind: 'builtin',
+        output: renderSkillsList(catalog.skills.map((s) => ({
+          name: s.skillName,
+          description: s.description,
+          available: s.available,
+        }))),
+      };
     }
     if (name === 'commands') {
       const visible = catalog.entries
@@ -265,12 +247,10 @@ export class CommandService implements CommandRuntime {
     };
   }
 
-  private async _skillMeta(skillName: string, ctx: CommandContext) {
-    const discovered = await this._skillSource.get(skillName, { projectWorkspace: ctx.projectWorkspace });
-    return discovered?.meta ?? { requiresCapabilities: [], requiresToolsets: [] };
-  }
-
-  /** Проекция доступных скиллов в записи команд (trust/invocation/binding/deny). */
+  /**
+   * ADR-126 §7: проекция скиллов для `/skills` (trust/invocation/binding/deny).
+   * В `/`-каталог эти записи не попадают — вызов только `$name`.
+   */
   private async _skillEntries(ctx: CommandContext): Promise<CommandSkillEntry[]> {
     const { skills } = await this._skillSource.listSummaries({
       projectWorkspace: ctx.projectWorkspace,
@@ -285,11 +265,12 @@ export class CommandService implements CommandRuntime {
       if (!meta) continue;
       if (!matchesBinding(meta, ctx.agent)) continue;
       if (isDisabledBySession({ name: summary.name, category: summary.category, groups: summary.groups }, ctx.sessionDisabled)) continue;
-      const commandName = meta.command ?? summary.name;
-      if (resolveCommandRule(ctx.permissionConfig, commandName)?.action === 'deny') continue;
+      // `$`-вызов адресуется именем скилла, поэтому запрет — `permission.rules.skill`
+      // (имя команды из `metadata.synth.command` здесь не участвует).
+      if (resolveSkillRule(ctx.permissionConfig, summary.name)?.action === 'deny') continue;
       const missing = missingCapabilities(meta, ctx.capabilities, this._config.toolsets);
       out.push({
-        commandName,
+        commandName: meta.command ?? summary.name,
         skillName: summary.name,
         description: summary.description,
         userInvocable: summary.userInvocable,
@@ -308,15 +289,15 @@ export class CommandService implements CommandRuntime {
     const { commands: templates, diagnostics: templateDiags } = await this._registry.list({
       projectWorkspace: ctx.projectWorkspace,
     });
-    // ADR-046 §4.4/§7.1: недоверенные проектные template-команды не входят в
+    // ADR-126 §9/§7.1: недоверенные проектные template-команды не входят в
     // каталог — не резолвятся и не видны в `/`-автокомплите и GET /commands;
     // диагностика `untrusted` сохраняется (эмитится в discovery/merge).
     const trustedTemplates = templates.filter((t) => t.trusted);
+    // ADR-126 §7: скиллы — только для `/skills`, в resolveCatalog не идут.
     const skills = await this._skillEntries(ctx);
     const bundles = this._bundleStore ? await this._bundleStore.list() : [];
     const resolved = resolveCatalog({
       templates: trustedTemplates,
-      skills,
       bundles,
       conflict: this._config.conflict,
     });
@@ -334,7 +315,7 @@ export class CommandService implements CommandRuntime {
 export { parseBundleFile };
 
 /**
- * ADR-046 §7.1: статусы, которые завершаются локальным ответом без LLM.
+ * ADR-126 §14: статусы, которые завершаются локальным ответом без LLM.
  * `summarization` сюда НЕ входит — `/summary`/`/compact` должны пройти через
  * оркестратор и запустить реальное сжатие контекста (ADR-119; единое
  * поведение CLI/SSE). `prompt` (ADR-069 §8.1, `/init`) тоже НЕ локальный:

@@ -85,7 +85,7 @@ export interface EventBinding {
   /** Конкретная постоянная сессия (mode=`bound`). */
   sessionId?: string;
   mode: EventDeliveryMode;
-  /** Шаблон агента/скилла для создания/настройки сессии (ADR-046). */
+  /** Шаблон агента/скилла для создания/настройки сессии (ADR-126). */
   agentTemplate?: string;
   /** `projectId` — контейнер сессии (ADR-014). */
   project?: string;

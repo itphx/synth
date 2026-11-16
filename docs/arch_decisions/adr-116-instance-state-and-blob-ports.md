@@ -10,7 +10,7 @@
 > [ADR-115](./adr-115-multimodal-input.md) (первый новый потребитель blob-порта — вложения сообщений),
 > [ADR-098](./adr-098-storage-degraded-recovery.md) (деградированный режим),
 > [ADR-005](./adr-005-json-storage.md) (файловая семантика записи),
-> [ADR-046](./adr-046-skills-and-slash-commands.md) (instance-скиллы),
+> [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) (instance-скиллы),
 > [ADR-069](./adr-069-project-instructions-agents-md.md) (промпты/инструкции),
 > [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace проекта — не состояние инстанса),
 > [ADR-077](./legacy/adr-077-runtime-toolchain.md) (исполнитель, общий RWX-том workspace — прецедент),

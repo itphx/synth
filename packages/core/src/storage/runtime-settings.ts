@@ -915,17 +915,17 @@ export interface RuntimeSettings {
   mcpPolicy?: ToolsPolicy;
   /** ADR-071 §2.6: instance-wide отключение инструментов (админка). */
   toolsDisabled?: ToolsDisabledConfig;
-  /** ADR-046 §4.5: instance-wide отключение скиллов группами/точечно (админка). */
+  /** ADR-126 §11: instance-wide отключение скиллов группами/точечно (админка). */
   skillsDisabled?: SkillsDisabledRequest;
   /**
-   * ADR-046 §4.5: сид для НОВЫХ проектов — скиллы, отключённые по умолчанию
+   * ADR-126 §11: сид для НОВЫХ проектов — скиллы, отключённые по умолчанию
    * (снимок при создании проекта).
    */
   skillsDisabledForNewProjects?: SkillsDisabledRequest;
-  /** ADR-046 §4.5: глобальная политика включения скиллов (админка). */
+  /** ADR-126 §11: глобальная политика включения скиллов (админка). */
   skillsPolicy?: ToolsPolicy;
   /**
-   * ADR-046/ADR-069: runtime-override project-trust гейта
+   * ADR-126/ADR-069: runtime-override project-trust гейта
    * (`skills.trustedProjectDirs`). Применяется при старте — `restartRequired`.
    */
   skillsTrustedProjectDirs?: string[];
@@ -1694,7 +1694,7 @@ export class RuntimeSettingsStore implements SettingsRepository {
     });
   }
 
-  /** ADR-046 §4.5: instance-wide отключение скиллов (админка). */
+  /** ADR-126 §11: instance-wide отключение скиллов (админка). */
   async getSkillsDisabled(): Promise<SkillsDisabledRequest | undefined> {
     const settings = await this.load();
     return settings.skillsDisabled;
@@ -1712,7 +1712,7 @@ export class RuntimeSettingsStore implements SettingsRepository {
     });
   }
 
-  /** ADR-046 §4.5: сид «отключено по умолчанию» для новых проектов. */
+  /** ADR-126 §11: сид «отключено по умолчанию» для новых проектов. */
   async getSkillsDisabledForNewProjects(): Promise<SkillsDisabledRequest | undefined> {
     const settings = await this.load();
     return settings.skillsDisabledForNewProjects;
@@ -1743,7 +1743,7 @@ export class RuntimeSettingsStore implements SettingsRepository {
     }));
   }
 
-  /** ADR-046 §4.5: глобальная политика включения скиллов (админка). */
+  /** ADR-126 §11: глобальная политика включения скиллов (админка). */
   async getSkillsPolicy(): Promise<ToolsPolicy | undefined> {
     const settings = await this.load();
     return settings.skillsPolicy;
@@ -1762,7 +1762,7 @@ export class RuntimeSettingsStore implements SettingsRepository {
   }
 
   /**
-   * ADR-046/ADR-069: runtime-override project-trust гейта
+   * ADR-126/ADR-069: runtime-override project-trust гейта
    * (`skills.trustedProjectDirs`); `undefined` — значение из config.yaml.
    */
   async getSkillsTrustedProjectDirs(): Promise<string[] | undefined> {

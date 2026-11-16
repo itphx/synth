@@ -11,7 +11,7 @@ import {
 import { TEMPLATE_FILE_MAX_BYTES } from '../commands/template.js';
 import { buildUrlSource } from './discovery.js';
 import type { SkillSource } from './types.js';
-// ADR-046 §4.2: общий SSRF-guard/fetch — вынесен в `engine/net/fetch.ts`,
+// ADR-126 §7: общий SSRF-guard/fetch — вынесен в `engine/net/fetch.ts`,
 // чтобы не дублироваться с проектными инструкциями (ADR-069).
 import { describeError, fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
 import { egressFetch } from '../../security/tls.js';
@@ -28,7 +28,7 @@ export {
 } from '../net/fetch.js';
 
 /**
- * ADR-046 §4.2/§4.3: read-only индексация удалённых каталогов (`skills.urls`).
+ * ADR-126 §7/§4.3: read-only индексация удалённых каталогов (`skills.urls`).
  *
  * Скачиваем внешний индекс каталога + `<base>/<path||name>/SKILL.md`
  * в детерминированный кэш `{cacheDir}/urls/<sha1(url)[:16]>`. Скиллы из кэша

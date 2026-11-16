@@ -1992,7 +1992,7 @@ export { FileMutex } from './storage/file-mutex.js';
 export type { FileMutexOptions } from './storage/file-mutex.js';
 // ADR-096: контракт межпроцессного мьютекса (file/PG) — общий шов координации.
 export type { Mutex, LockOptions, MutexFactoryOptions, LeaderFactoryOptions } from './storage/mutex.js';
-// ADR-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
+// ADR-126: скиллы (реестр/discovery/каталог/instance-запись/роуты).
 export { SkillService } from './engine/skills/service.js';
 export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';
 export { SkillRegistry } from './engine/skills/registry.js';
@@ -2224,7 +2224,7 @@ export type {
   ContextRoutesMessages,
   ContextProjectStore,
 } from './server/routes/context.js';
-// ADR-046 §7: slash-команды и bundles.
+// ADR-126 §1: slash-команды и bundles.
 export { CommandService } from './engine/commands/service.js';
 export type { CommandServiceOptions, CommandSkillSource } from './engine/commands/service.js';
 export { CommandRegistry } from './engine/commands/registry.js';

@@ -1,6 +1,6 @@
 // Сборка зависимостей backend: хранилища, менеджеры, оркестратор, событийное
 // ядро (ADR-089), планировщик (ADR-051), webhooks (ADR-052), скиллы/команды
-// (ADR-046), runtime-настройки (ADR-005/023).
+// (ADR-126), runtime-настройки (ADR-005/023).
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
 import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -388,7 +388,7 @@ export async function createBackendDeps(
     contextDefaults: () => contextDefaultsSettings.getDefaults(),
     // ADR-102: точка персиста сообщений (`messages_assistant`/`messages_tool`).
     analytics,
-    // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
+    // ADR-071 §2.4 / ADR-126 §11: системные дефолты для сессий без проекта.
     systemDefaultsProvider: async () => ({
       mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
       skillsDefaultOn: (await resolveProjectSkillSeed(
@@ -1052,10 +1052,10 @@ export async function createBackendDeps(
   const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
   const toolsDisabled: ToolsDisabledConfig =
     runtimeToolsDisabled ?? config.synth.tools.disabled ?? { capabilities: [], tools: [] };
-  // ADR-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
+  // ADR-126 §11: runtime-отключение скиллов (админка) — hard-gate системного уровня.
   const skillsDisabled = (await settingsStore.getSkillsDisabled())
     ?? { categories: [], groups: [], skills: [] };
-  // ADR-046/ADR-069: project-trust гейт скиллов/команд/инструкций. Runtime
+  // ADR-126/ADR-069: project-trust гейт скиллов/команд/инструкций. Runtime
   // (`settings.json`/PG) приоритетнее `config.yaml`; применяется при старте —
   // `restartRequired` в API, инвариант 24.
   const effectiveSkillsTrustedProjectDirs =
@@ -1109,7 +1109,7 @@ export async function createBackendDeps(
     );
   }
 
-  // ADR-046: сервис скиллов (discovery + instance-запись + каталог промпта).
+  // ADR-126: сервис скиллов (discovery + instance-запись + каталог промпта).
   // ADR-116: instance-скиллы — порт слоя хранения (`storageContext.skills`):
   // при `storage.backend=postgres` это метаданные в SQL + содержимое в blobs.
   const skillService = new SkillService({
@@ -1128,7 +1128,7 @@ export async function createBackendDeps(
     trustedProjectDirs: effectiveSkillsTrustedProjectDirs,
   });
 
-  // ADR-046 §7: slash-команды и bundles (mirror core).
+  // ADR-126 §1: slash-команды и bundles (mirror core).
   const commandService = new CommandService({
     config: {
       dataDir,
@@ -1661,7 +1661,7 @@ export async function createBackendDeps(
     toolsPolicy,
     mcpPolicy,
     toolsDisabled,
-    // ADR-046 §4.5: системный hard-gate скиллов (runtime-настройка).
+    // ADR-126 §11: системный hard-gate скиллов (runtime-настройка).
     skillsDisabled,
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
     // Проба бинарников — через тот же порт исполнения (ADR-077).
@@ -1669,9 +1669,9 @@ export async function createBackendDeps(
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
-    // ADR-046 §5: каталог скиллов в промпт + тул `skill`.
+    // ADR-126 §5: каталог скиллов в промпт + тул `skill`.
     skillRuntime: skillService,
-    // ADR-046 §7: резолвинг `/`-команд до LLM.
+    // ADR-126 §1: резолвинг `/`-команд до LLM.
     commandRuntime: commandService,
     // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
     instructionsConfig: config.synth.instructions,
@@ -2358,7 +2358,7 @@ export async function createBackendDeps(
     defaultWorkingDir,
     getDefaultAgentId,
     /**
-     * ADR-046/ADR-069: эффективный project-trust гейт скиллов/команд/инструкций
+     * ADR-126/ADR-069: эффективный project-trust гейт скиллов/команд/инструкций
      * (runtime > config), снятый на старте; нужен резолверу инструкций в
      * `mount-routes`.
      */

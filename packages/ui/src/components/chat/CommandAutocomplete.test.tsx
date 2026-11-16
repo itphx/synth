@@ -21,7 +21,7 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 
 const COMMANDS: CommandSummary[] = [
   { name: 'help', kind: 'builtin', description: 'Show help', available: true },
-  { name: 'api-review', kind: 'skill', description: 'Review API', scope: 'instance', level: 'system', available: false, unavailableReason: 'capabilities' },
+  { name: 'api-review', kind: 'template', description: 'Review API', available: false, unavailableReason: 'capabilities' },
   { name: 'backend', kind: 'bundle', description: 'Backend bundle', skills: ['a'], available: true },
 ]
 
@@ -84,7 +84,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('CommandAutocomplete — `/`-автокомплит (ADR-046 §9.3)', () => {
+describe('CommandAutocomplete — `/`-автокомплит (ADR-126 §7)', () => {
   it('рендерит команды с видом и бейджем недоступности', async () => {
     const { container, onMatchesChange } = await renderPopup()
     expect(container.querySelector('[data-testid="command-autocomplete"]')).not.toBeNull()
@@ -94,8 +94,22 @@ describe('CommandAutocomplete — `/`-автокомплит (ADR-046 §9.3)', (
     expect(container.querySelector('[data-testid="command-autocomplete-unavailable-api-review"]')).not.toBeNull()
     expect(container.textContent).toContain('built-in')
     expect(container.textContent).toContain('bundle')
-    expect(container.textContent).toContain('skill')
+    expect(container.textContent).toContain('template')
     expect(onMatchesChange).toHaveBeenCalledWith(3)
+  })
+
+  it('скиллы не показываются даже если старый сервер вернул `kind: skill` (ADR-126 §7)', async () => {
+    mocks.getCommands.mockResolvedValue({
+      commands: [
+        { name: 'help', kind: 'builtin', description: 'Show help', available: true },
+        { name: 'api-review', kind: 'skill', description: 'Review API', available: true },
+      ],
+      diagnostics: [],
+    })
+    const { container, onMatchesChange } = await renderPopup()
+    expect(container.querySelector('[data-testid="command-autocomplete-item-help"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="command-autocomplete-item-api-review"]')).toBeNull()
+    expect(onMatchesChange).toHaveBeenCalledWith(1)
   })
 
   it('фильтрует команды по запросу', async () => {
@@ -171,7 +185,7 @@ describe('CommandAutocomplete — `/`-автокомплит (ADR-046 §9.3)', (
       commands: [
         {
           name: 'developer-documentation',
-          kind: 'skill',
+          kind: 'template',
           description:
             'Create, restructure or maintain accurate developer documentation for software, tools, automations, packages, APIs, SDKs, CLIs and installations.',
           available: true,

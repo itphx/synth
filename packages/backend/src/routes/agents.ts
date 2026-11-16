@@ -13,7 +13,7 @@ import { t } from '../lib/i18n.js';
  * (GET /, GET /all, POST /, GET /:id, DELETE /:id, PATCH /:id/enabled) — в core.
  *
  * `contextFiles` — порт файлов контекста: запись ролевого промпта агента
- * вместе с агентом (ADR-046/ADR-089, поле `role_prompt` в теле POST).
+ * вместе с агентом (ADR-126/ADR-089, поле `role_prompt` в теле POST).
  * Роль пишется тем же guard'ом, что и создание агента (ADMIN).
  *
  * ADR-052: запись агентов (создание + ролевой промпт) — «роль ADMIN **или**

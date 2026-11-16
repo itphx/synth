@@ -35,7 +35,7 @@ export interface ProcessEarlyResult {
   canRetry?: boolean;
 }
 
-/** Аргументы раннего резолвинга `/`-команды (ADR-046 §7). */
+/** Аргументы раннего резолвинга `/`-команды (ADR-126 §1). */
 export interface ProcessCommandArgs {
   session: Session;
   message: Message;
@@ -166,7 +166,7 @@ export async function runProcessEarly(
     return deps.handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel, attempt);
   }
 
-  // --- ADR-046 §7: резолвинг `/`-команд в core, до LLM ---
+  // --- ADR-126 §1: резолвинг `/`-команд в core, до LLM ---
   // Флаг считается **до** разбора команды: prompt-команда (template/skill/
   // bundle) подменяет содержимое сообщения, а `$`-скиллы в `/`-сообщении
   // не разбираются (ADR-126 §3: `$ARGUMENTS` в шаблоне — не скилл).

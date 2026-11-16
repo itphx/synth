@@ -68,7 +68,7 @@ describe('resolveSubagentPrompt', () => {
     await mkdir(rolesDir, { recursive: true });
     await writeFile(join(rolesDir, 'FIXER.ru.md'), 'ROLE RU PROMPT');
 
-    // subagents/fixer.* нет → берётся ролевой промпт (ADR-069/ADR-046 не дублируют текст).
+    // subagents/fixer.* нет → берётся ролевой промпт (ADR-069/ADR-126 не дублируют текст).
     expect(resolveSubagentPrompt('fixer', 'ru', dir)).toBe('ROLE RU PROMPT');
   });
 

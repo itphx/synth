@@ -3,7 +3,7 @@ import type { SkillService } from './service.js';
 import { isDisabledBySystem } from './scope.js';
 
 /**
- * ADR-046 §4.5 / ADR-071 §2.4: сид скоупа НОВОГО проекта.
+ * ADR-126 §11 / ADR-071 §2.4: сид скоупа НОВОГО проекта.
  *
  * Скиллы — все обнаруженные, кроме системного hard-gate (`skillsDisabled`) и
  * `disabledForNewProjects` (админский сид). `defaultOn` = `enabled`.

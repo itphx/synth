@@ -23,11 +23,11 @@ export interface SkillServiceOptions {
   dataDir: string;
   /** `config.skills.paths`. */
   configPaths?: readonly string[];
-  /** ADR-046 §4.2/§4.3: `config.skills.urls` — read-only индексация удалённых каталогов. */
+  /** ADR-126 §7/§4.3: `config.skills.urls` — read-only индексация удалённых каталогов. */
   urls?: readonly string[];
   /** `config.skills.trustedProjectDirs`. */
   trustedProjectDirs?: readonly string[];
-  /** `config.skills.toolsets` — экспансия `requires_toolsets` (ADR-046 §3.2). */
+  /** `config.skills.toolsets` — экспансия `requires_toolsets` (ADR-126 §13). */
   toolsets?: Record<string, readonly string[]>;
   home?: string;
   store?: SkillRepository;
@@ -47,7 +47,7 @@ export interface SkillListOptions {
 }
 
 /**
- * ADR-046 §4–§6: сервис скиллов — единая точка discovery/реестра/каталога и
+ * ADR-126 §9–§6: сервис скиллов — единая точка discovery/реестра/каталога и
  * записи instance-скиллов. Оркестратор получает каталог и тул `skill` через
  * этот сервис; роуты `/api/v2/skills` — CRUD над instance-деревом.
  */
@@ -70,7 +70,7 @@ export class SkillService {
     this._fetchImpl = opts.fetchImpl;
     this._resolveHost = opts.resolveHost;
     this._registry = opts.registry ?? new SkillRegistry({
-      // ADR-046 §9.5: встроенный skill-creator (объявлен в коде, без ассетов).
+      // ADR-126 §15: встроенный skill-creator (объявлен в коде, без ассетов).
       builtin: buildBuiltinSkills({ dataDir: opts.dataDir }),
       sources: (o) => buildSkillSources({
         dataDir: opts.dataDir,
@@ -101,7 +101,7 @@ export class SkillService {
   }
 
   /**
-   * ADR-046 §4.2/§4.3: read-only индексация `skills.urls` в кэш + `reload`.
+   * ADR-126 §7/§4.3: read-only индексация `skills.urls` в кэш + `reload`.
    * In-flight guard (параллельные вызовы разделяют одно обновление). Конструктор
    * сеть не трогает — вызов явный (при старте — fire-and-forget).
    */
@@ -148,7 +148,7 @@ export class SkillService {
     return this._registry.get(name, opts);
   }
 
-  /** Каталог скиллов для промпта (ADR-046 §5; deny скрывает, §8.1). */
+  /** Каталог скиллов для промпта (ADR-126 §5; deny скрывает, §8.1). */
   async buildCatalog(opts: SkillCatalogOptions): Promise<ComposerSkillsCatalog> {
     const { skills } = await this._registry.list({ projectWorkspace: opts.projectWorkspace });
     return buildSkillCatalog(skills, {
@@ -159,7 +159,7 @@ export class SkillService {
   }
 
   /**
-   * ADR-046 §3.2: отсутствующие capabilities агента с экспансией
+   * ADR-126 §13: отсутствующие capabilities агента с экспансией
    * `requires_toolsets` через config.skills.toolsets.
    */
   missingCapabilities(
@@ -213,7 +213,7 @@ export class SkillService {
     // Инвалидация кэша реестра: подпись источника (`floor(mtimeMs):size` для ФС,
     // размер/состав файлов для порта, ADR-116) не отличает перезапись `SKILL.md`
     // в ту же миллисекунду при неизменном размере — без сброса `detail()` вернёт
-    // устаревшее содержимое (ADR-046 §8.3).
+    // устаревшее содержимое (ADR-126 §10).
     this.reload();
     return this.detail(name);
   }

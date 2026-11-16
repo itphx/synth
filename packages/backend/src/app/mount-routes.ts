@@ -425,7 +425,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // Agents routes
-  // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
+  // ADR-126/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
   // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
   // PROP-135 Ф6a: каталог профилей — проверка `executor_profile`/`allowed_profiles`.
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig, executionProfiles, browserProfiles));
@@ -1192,7 +1192,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   ));
 
-  // Скиллы (ADR-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
+  // Скиллы (ADR-126 §9): core-фабрика + RBAC ADMIN на запись.
   app.route('/api/v2/skills', createSkillRoutes(auth as unknown as CoreAuthKit, {
     skillService,
     resolveProjectWorkspace: async (projectId) => {
@@ -1224,7 +1224,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     canEditProject: (c, project, userId) => projectAccess.canEditProjectContent(c as never, project, userId),
   }));
 
-  // ADR-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
+  // ADR-126 §1/§14: команды и bundles (mirror core, мутации — ADMIN); скиллов в каталоге нет.
   app.route('/api/v2/commands', createCommandRoutes(auth as unknown as CoreAuthKit, {
     commandService,
     resolveProjectWorkspace: async (projectId) => {
@@ -1246,7 +1246,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   }, { writeGuard: auth.requireAdmin }));
 
-  // ADR-046 §4.5: scope-API скиллов. Доступ к сессии — та же семантика, что у
+  // ADR-126 §11: scope-API скиллов. Доступ к сессии — та же семантика, что у
   // `createSessionRoutes` (единая точка истины на ресурс сессии): владелец|ADMIN
   // (`canAccess`), участник проекта (`resolveCanAccessExtra`), сквозной обзор
   // ADMIN/LEAD (`resolveElevated`); проект — owner/LEAD/ADMIN.
@@ -1261,7 +1261,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     sessionManager, skillService, settingsStore, projectStore,
     permissionConfig: config.synth.permission,
     resolveProjectWorkspace: resolveSkillWorkspace,
-    // ADR-046 §6.3: capability-гейт сессии — по capabilities её агента
+    // ADR-126 §10: capability-гейт сессии — по capabilities её агента
     // (legacy-роль резолвится алиасом, как в рантайме оркестратора).
     resolveAgentCapabilities: (role) => {
       const resolved = role ? (resolveAgentRoleAlias(role) ?? role) : undefined;
@@ -1295,7 +1295,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     permissionConfig: config.synth.permission,
     resolveProjectWorkspace: resolveSkillWorkspace,
   }, {
-    // ADR-046 §4.5: проектным уровнем управляют owner/LEAD/ADMIN — как в
+    // ADR-126 §11: проектным уровнем управляют owner/LEAD/ADMIN — как в
     // project-MCP (`canManageProjectMcp`), поэтому writeGuard не requireAdmin;
     // владение проверяет canAccessProject (403 не-членам, 404 — нет проекта).
     writeGuard: auth.requireAuth,

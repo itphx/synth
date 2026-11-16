@@ -54,7 +54,7 @@ rework rate, automation coverage, context freshness, guardrail hit rate. Явн�
 `understanding score`. Цель — обучение и осознанность, **не блокирующий аудит**.
 
 Возможные точки встраивания: git-flow ([ADR-076](./adr-076-git-repo-registry-ssh.md)), pipelines
-([ADR-101](./adr-101-pipeline-engine.md)), скиллы ([ADR-046](./adr-046-skills-and-slash-commands.md)).
+([ADR-101](./adr-101-pipeline-engine.md)), скиллы ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)).
 
 ### 2. Анализ сессий
 

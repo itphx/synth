@@ -311,7 +311,7 @@ export interface ComposerContext {
    */
   mcpServers?: ComposerMcpServer[];
   /**
-   * ADR-046 §4.5/§5: каталог скиллов — `stable` (system/project, доступные) и
+   * ADR-126 §11/§5: каталог скиллов — `stable` (system/project, доступные) и
    * `session` (session enable/disable + маркеры `unavailable`). Тело скиллов в
    * промпт не попадает (progressive disclosure). При `systemPrompt`-override
    * каталог не добавляется (§5).
@@ -703,7 +703,7 @@ export class SystemPromptComposer {
       }
     }
 
-    // ADR-046 §5: каталог скиллов — только name + краткое description
+    // ADR-126 §5: каталог скиллов — только name + краткое description
     // (progressive disclosure). `stable` — system/project-скиллы (константа
     // сессии), `session` — session enable/disable и маркеры `unavailable`.
     // При `session.settings.systemPrompt` override каталог не добавляется.

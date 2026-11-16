@@ -11,7 +11,7 @@ import type {
 /**
  * ADR-126 §4: реестр сниппетов — слияние трёх уровней с приоритетом
  * `user > project > instance`, каноническое имя важнее алиаса, кэш с ленивой
- * инвалидацией по mtime/size (как `CommandRegistry`, ADR-046 §8.3).
+ * инвалидацией по mtime/size (как `CommandRegistry`, ADR-126 §10).
  */
 
 /**

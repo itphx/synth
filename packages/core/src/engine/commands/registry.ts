@@ -32,7 +32,7 @@ async function snapshotDir(dir: string): Promise<string> {
 }
 
 /**
- * ADR-046 §8.3: реестр шаблонных команд — discovery + кэш с ленивой
+ * ADR-126 §10: реестр шаблонных команд — discovery + кэш с ленивой
  * mtime-инвалидацией (по образцу `SkillRegistry`).
  */
 export class CommandRegistry {

@@ -2,7 +2,7 @@
 
 > **Статус:** ✅ Реализовано — подход применён ко всем целевым объектам (2026-10-15).
 > **Дата:** 2026-10-15
-> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-046](./adr-046-skills-and-slash-commands.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-089](./adr-089-external-events-automation.md); `docs/ARCH_DECISIONS.md`.
+> **Связано:** [ADR-005](./adr-005-json-storage.md), [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-089](./adr-089-external-events-automation.md); `docs/ARCH_DECISIONS.md`.
 
 ## Контекст
 

@@ -1,5 +1,5 @@
 /**
- * Миграция 026_instance_skills — instance-скиллы в SQL (ADR-116, ADR-046 §4):
+ * Миграция 026_instance_skills — instance-скиллы в SQL (ADR-116, ADR-126 §9):
  * метаданные (`frontmatter` из `SKILL.md`) — в таблице, **содержимое**
  * (`SKILL.md` и supporting-файлы) — в blob-сторе под `skills/<name>/…`
  * (blobs остаются файловыми по конструкции, ADR-116 §2).

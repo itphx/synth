@@ -351,7 +351,7 @@ export function ChatInput({
   const [mentionProjectId, setMentionProjectId] = useState<string | null>(null)
   /** Кэш списка файлов по `projectId` (workspace проекта не меняется на время сессии). */
   const mentionFilesCacheRef = useRef<Map<string, MentionFileEntry[]>>(new Map())
-  // ADR-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
+  // ADR-126 §7: `/`-автокомплит команд (триггер — ввод начинается с `/`).
   const [commandState, setCommandState] = useState<{
     query: string
     position: { left: number }
@@ -541,7 +541,7 @@ export function ChatInput({
       setMentionState(null)
     }
 
-    // ADR-046 §9.3: `/`-команда — ввод начинается с `/`, первый токен без пробелов.
+    // ADR-126 §7: `/`-команда — ввод начинается с `/`, первый токен без пробелов.
     const commandMatch = /^\/(\S*)$/.exec(newValue)
     if (commandMatch) {
       setCommandState({
@@ -1064,7 +1064,7 @@ export function ChatInput({
       }
     }
 
-    // ADR-046 §9.3: пока открыт непустой список команд — навигация/выбор у
+    // ADR-126 §7: пока открыт непустой список команд — навигация/выбор у
     // CommandAutocomplete, сообщение не отправляется.
     if (commandState) {
       if (e.key === 'Escape') {

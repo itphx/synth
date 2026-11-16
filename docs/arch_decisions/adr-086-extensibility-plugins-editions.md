@@ -26,7 +26,7 @@
 > **Связано:** [ADR-100](./adr-100-extension-packs-pipelines.md) «Пакет расширения и пайплайн в ядре»,
 > [ADR-090](./adr-090-extension-api.md) «Extension API v1», [ADR-087](./adr-087-gateways.md) «Шлюзы (gateways)»,
 > [ADR-030](./adr-030-hooks-agent-events.md) «Hooks/Plugin SDK», [ADR-038](./adr-038-npm-packages.md) «npm-пакеты»,
-> [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы», [PROP-068](./prop-068-skills-agents-registry.md) «Реестр и каталог»,
+> [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) «Скиллы», [PROP-068](./prop-068-skills-agents-registry.md) «Реестр и каталог»,
 > [ADR-077](./legacy/adr-077-runtime-toolchain.md) «Flavor-образы», [ADR-089](./adr-089-external-events-automation.md) «Платформа внешних событий»,
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md),
 > [ADR-042](./adr-042-hybrid-mode.md), [PROP-080](./prop-080-managed-hybrid-modes.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md),
@@ -74,7 +74,7 @@
 
 Synth открыт (лицензия MIT), но расширить его сегодня можно только форком ядра. При этом уже есть заделы:
 публикуемые npm-пакеты ([ADR-038](./adr-038-npm-packages.md)), flavor-образы ([ADR-077](./legacy/adr-077-runtime-toolchain.md)),
-контент-платформа скиллов/агентов ([ADR-046](./adr-046-skills-and-slash-commands.md)/[PROP-068](./prop-068-skills-agents-registry.md)),
+контент-платформа скиллов/агентов ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)/[PROP-068](./prop-068-skills-agents-registry.md)),
 проект hooks/Plugin SDK ([ADR-030](./adr-030-hooks-agent-events.md)). Не хватает формализованного контракта расширения,
 механизма упаковки/распространения и — отдельно — места для **сервисов**, которые не должны жить в ядре
 (мессенджер-шлюзы, коннекторы, внешние интеграции).
@@ -190,7 +190,7 @@ capability-гранты (непустые `capabilities` агента), объя
   тонкая `@itphx/synth`, `scripts/{build,publish,version-bump}.sh`.
 - **Flavor-образы** [ADR-077](./legacy/adr-077-runtime-toolchain.md) — уже предтеча «editions» для образов
   (`slim/core/dev/devops/browser/full`, alpine+debian); не реализовано.
-- **Контент-платформа** [ADR-046](./adr-046-skills-and-slash-commands.md)/[PROP-068](./prop-068-skills-agents-registry.md) —
+- **Контент-платформа** [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)/[PROP-068](./prop-068-skills-agents-registry.md) —
   скиллы/agent-packs, реестр, trust/install-policy/провенанс, `skill-creator`; плагины/editions/add-on'ы/шлюзы
   логично наследуют trust/guard-модель (внешние каталоги по умолчанию выключены).
 - **Dogfooding-скиллы** — локальные `.opencode/skills/` (`synth-dev`, `synth-build-publish`, `synth-release`,
@@ -213,7 +213,7 @@ capability-гранты (непустые `capabilities` агента), объя
 
 [ADR-030](./adr-030-hooks-agent-events.md) (hooks/Plugin SDK — фундамент), [ADR-038](./adr-038-npm-packages.md) (npm),
 [PROP-068](./prop-068-skills-agents-registry.md) (trust/guard/каталог/провенанс + контент-паки/`synth.pack`),
-[ADR-046](./adr-046-skills-and-slash-commands.md) (скиллы/команды/`skill-creator`),
+[ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) (скиллы/команды/`skill-creator`),
 [ADR-077](./legacy/adr-077-runtime-toolchain.md) (flavor-образы),
 [ADR-089](./adr-089-external-events-automation.md) (Event/Binding/Router для событийных add-on'ов и шлюзов),
 [ADR-087](./adr-087-gateways.md) (класс Gateway — шлюзы/Telegram, HA),
@@ -243,14 +243,14 @@ capability-гранты (непустые `capabilities` агента), объя
   (`SynthPlugin`) — **реализованы** ([ADR-090](./adr-090-extension-api.md)).
 - Реестра/каталога editions и add-on'ов нет; install-policy для них не существует.
 - [ADR-077](./legacy/adr-077-runtime-toolchain.md) (flavor-образы) — не реализовано.
-- [PROP-068](./prop-068-skills-agents-registry.md) (реестр/каталог контента) — не реализовано; [ADR-046](./adr-046-skills-and-slash-commands.md)
+- [PROP-068](./prop-068-skills-agents-registry.md) (реестр/каталог контента) — не реализовано; [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)
   реализован частично (скиллы/команды есть, backend-админка каталога — нет).
 - **Telegram-шлюз** (`addons/synth-gateway-telegram`) — реализован и мультитенантен (см. [ADR-087](./adr-087-gateways.md)).
 
 **Что уже можно переиспользовать:**
 
 - npm-пакеты и `scripts/{build,publish,version-bump}.sh` ([ADR-038](./adr-038-npm-packages.md)) — реализованы.
-- Механизм скиллов и slash-команд ([ADR-046](./adr-046-skills-and-slash-commands.md)) — реализован (формат `SKILL.md`,
+- Механизм скиллов и slash-команд ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)) — реализован (формат `SKILL.md`,
   discovery, тул `skill`, scope-API).
 - Внешние сервисы: `synth-media` (Telegram-MCP + бот) и Telegram-шлюз ([ADR-087](./adr-087-gateways.md)) — де-факто
   существующие add-on/gateway.
@@ -288,7 +288,7 @@ _Вопросы шлюза (топология приёма, HA-стейт, ре
 - [ADR-030](./adr-030-hooks-agent-events.md) — hooks/Plugin SDK: фундамент Extension API и событийных add-on'ов.
 - [ADR-038](./adr-038-npm-packages.md) — npm-пакеты: enabler editions и распространения плагинов.
 - [PROP-068](./prop-068-skills-agents-registry.md) — переиспользуемая инфраструктура trust/guard/каталога/провенанса и единый манифест контент-паков `synth.pack`.
-- [ADR-046](./adr-046-skills-and-slash-commands.md) — механизм скиллов; агент-паки и `skill-creator`.
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) — механизм скиллов; агент-паки и `skill-creator`.
 - [ADR-077](./legacy/adr-077-runtime-toolchain.md) — flavor-образы как предтеча editions и образов add-on'ов.
 - [ADR-089](./adr-089-external-events-automation.md) — Event/Binding/Router: как шлюзы и add-on'ы приносят события в Synth.
 - [ADR-042](./adr-042-hybrid-mode.md), [PROP-080](./prop-080-managed-hybrid-modes.md), [PROP-081](./prop-081-hybrid-policy-leak-protection.md) — гибрид и политики для сторонних расширений.

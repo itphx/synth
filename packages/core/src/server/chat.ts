@@ -91,7 +91,7 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
   const modelCache = new Map<string, ModelConfig>();
   (await modelStore.list()).forEach((m) => modelCache.set(m.id, m));
 
-  // ADR-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
+  // ADR-126: сервис скиллов + slash-команд (резолвинг в core до LLM).
   // ADR-116: instance-скиллы — порт хранения (`storage.skills`), иначе сервис
   // создал бы собственный файловый стор и писал бы мимо backend'а.
   const skillService = new SkillService({
@@ -120,7 +120,7 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     bundleStore,
   });
 
-  // ADR-046 §9.4: локальные `/`-команды (help/skills/commands/summary) не
+  // ADR-126 §9: локальные `/`-команды (help/skills/commands/summary) не
   // поднимают LLM и не требуют настроенного провайдера. `/summary` НЕ
   // короткозамыкается здесь: оркестратор запускает реальную суммаризацию
   // (как в SSE-пути), поэтому управление уходит в обычный поток.
@@ -210,7 +210,7 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
 
-  // ADR-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
+  // ADR-126: сервис скиллов + slash-команд (резолвинг в core до LLM).
   // ADR-077: порт исполнения команд — по режиму `execution.mode`
   // (`inline` — исполнение в процессе, `remote` — удалённый исполнитель).
   const executionPort = await createExecutionPortForConfig(

@@ -7,7 +7,7 @@
 > `~/dev/aic/t11` (`synth-mcp-tools`, `synth-mcp-git`) — только чтение.
 > **Связано:** [ADR-017](./adr-017-api-v2-hono.md), [ADR-024](./adr-024-eventhub-transport.md),
 > [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md),
-> [ADR-046](./adr-046-skills-and-slash-commands.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md),
+> [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md),
 > [ADR-052](./adr-052-public-api-platform.md), [ADR-089](./adr-089-external-events-automation.md).
 
 **Решение:** отдать возможности Synth **внешним агентам** (opencode, hermes, Claude Code и др.) через
@@ -62,7 +62,7 @@
 
 ### 4. Скиллы для внешних агентов
 
-Вместе с MCP-сервером Synth поставляет **скиллы** ([ADR-046](./adr-046-skills-and-slash-commands.md)) —
+Вместе с MCP-сервером Synth поставляет **скиллы** ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)) —
 инструкции внешнему агенту о том, как пользоваться MCP-инструментами Synth (типовые сценарии,
 ограничения, best practices). Это отдельный слой от скиллов самого Synth.
 
@@ -85,7 +85,7 @@ hermes и т.п.) — с подключением stdio/HTTP и передаче
   (`StdioClientTransport`, `StreamableHTTPClientTransport`), `manager.ts`, `scope.ts`, `settings.ts`,
   `network-policy.ts`; роут `POST /api/v2/mcp/probe` (`packages/core/src/server/routes/mcp.ts`).
 - MCP-сервера Synth (эндпоинт, отдающий тулы наружу) нет; SDK MCP-сервера в зависимостях не используется.
-- Механизм скиллов ([ADR-046](./adr-046-skills-and-slash-commands.md)) в коде есть
+- Механизм скиллов ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)) в коде есть
   (`packages/core/src/engine/skills/`), но поставки скиллов для **внешних** агентов нет.
 - API v2 ([ADR-017](./adr-017-api-v2-hono.md)) служит базой, но публичный контур/токены внешних
   потребителей не оформлены ([ADR-052](./adr-052-public-api-platform.md)).
@@ -106,7 +106,7 @@ hermes и т.п.) — с подключением stdio/HTTP и передаче
   live-режима внешнего клиента.
 - [ADR-029](./adr-029-granular-permissions.md) «Гранулярные permissions» — права внешнего агента.
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — безопасность LLM-вызовов через MCP.
-- [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — формат скиллов для
+- [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) «Скиллы и slash-команды» — формат скиллов для
   внешних агентов.
 - [PROP-048](./prop-048-self-help-skills-admin-mcp.md) «Self-help скиллы и admin-MCP» — admin-частный
   случай MCP-сервера.

@@ -124,12 +124,12 @@ function mcpAvailabilityLabel(server: McpServerEffective, t: (key: string) => st
   return `${t('rightPanel.stats.mcpDisabled')} · ${reason}`
 }
 
-/** ADR-046 §9.3: подпись доступности скилла (capability-aware). */
+/** ADR-126 §7: подпись доступности скилла (capability-aware). */
 function skillAvailabilityLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
   return skill.available ? t('rightPanel.stats.toolAvailable') : t('rightPanel.stats.toolUnavailable')
 }
 
-/** ADR-046 §9.3: подпись «включён в сессии» (disabled + причина). */
+/** ADR-126 §7: подпись «включён в сессии» (disabled + причина). */
 function skillEnabledLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
   if (!skill.disabled) return t('rightPanel.stats.skillEnabled')
   if (!skill.disabledReason) return t('rightPanel.stats.mcpDisabled')
@@ -137,7 +137,7 @@ function skillEnabledLabel(skill: EffectiveSkillEntry, t: (key: string) => strin
 }
 
 /**
- * ADR-046 §9.3: источник записи скилла — `session` (включён/выключен в сессии),
+ * ADR-126 §7: источник записи скилла — `session` (включён/выключен в сессии),
  * `project` (гейт проекта) или `stable` (системный каталог промпта).
  */
 function skillSourceLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
@@ -149,7 +149,7 @@ function skillSourceLabel(skill: EffectiveSkillEntry, t: (key: string) => string
 }
 
 /**
- * ADR-046 §9.3: локальная оценка вклада скилла в каталог промпта —
+ * ADR-126 §7: локальная оценка вклада скилла в каталог промпта —
  * строка `name` + `description`. `~` — оценка, ratio берётся из манифеста.
  */
 function skillTokenEstimate(
@@ -220,11 +220,11 @@ export const StatsTab: React.FC = () => {
   // ADR-071 §2.6: таблицы инструментов и MCP свёрнуты по умолчанию (как промпт/история).
   const [toolsExpanded, setToolsExpanded] = useState(false)
   const [mcpExpanded, setMcpExpanded] = useState(false)
-  // ADR-046 §9.3: таблица скиллов и счётчики команд.
+  // ADR-126 §7: таблица скиллов и счётчики команд.
   const [skillsExpanded, setSkillsExpanded] = useState(false)
   const [commandsExpanded, setCommandsExpanded] = useState(false)
 
-  // ADR-046 §8.2: счётчики вызовов из событий skill.invoked / command.invoked.
+  // ADR-126 §12: счётчики вызовов из событий skill.invoked / command.invoked.
   const skillInvocationCounts = useSkillsStore((s) => s.skillInvocationCounts)
   const commandInvocationCounts = useSkillsStore((s) => s.commandInvocationCounts)
   const lastSkillInvocation = useSkillsStore((s) => s.lastSkillInvocation)
@@ -404,7 +404,7 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick, toolsDisabledTick])
 
-  // ADR-046 §4.5/§9.3: эффективный per-session скоуп скиллов для таблицы «Скиллы».
+  // ADR-126 §11/§9.3: эффективный per-session скоуп скиллов для таблицы «Скиллы».
   useEffect(() => {
     if (!activeSessionId) {
       setSkillsEffective(null)
@@ -442,7 +442,7 @@ export const StatsTab: React.FC = () => {
   const toolsPolicy = promptInfo?.manifest.toolsPolicy
   const mcpServers = mcpEffective?.servers ?? []
 
-  // ADR-046 §9.3: скиллы сессии + блочные размеры каталога из манифеста.
+  // ADR-126 §7: скиллы сессии + блочные размеры каталога из манифеста.
   const skillsList = skillsEffective?.skills ?? []
   const skillsCatalogEntries = promptEntries.filter(
     (entry) => entry.key === 'skills.catalog' || entry.key === 'skills.catalog.session',
@@ -450,7 +450,7 @@ export const StatsTab: React.FC = () => {
   const skillsCatalogTokens = skillsCatalogEntries.reduce((sum, entry) => sum + entry.estTokens, 0)
   const manifestRatio = promptInfo?.manifest.ratio
 
-  // ADR-046 §8.2: счётчики вызовов команд/скиллов из стора.
+  // ADR-126 §12: счётчики вызовов команд/скиллов из стора.
   const commandCounterRows = Object.entries(commandInvocationCounts).sort((a, b) => b[1] - a[1])
   const skillCounterRows = Object.entries(skillInvocationCounts).sort((a, b) => b[1] - a[1])
   const hasInvocations = commandCounterRows.length > 0
@@ -895,7 +895,7 @@ export const StatsTab: React.FC = () => {
         )}
       </Section>
 
-      {/* ADR-046 §4.5/§9.3: скиллы — имя/scope-уровень/доступность/включение/
+      {/* ADR-126 §11/§9.3: скиллы — имя/scope-уровень/доступность/включение/
           причина/trust/вклад в каталог/источник. Включая отключённые (disabled + причина). */}
       <Section title={t('rightPanel.stats.skills')}>
         {skillsList.length > 0 ? (
@@ -963,7 +963,7 @@ export const StatsTab: React.FC = () => {
         )}
       </Section>
 
-      {/* ADR-046 §8.2/§9.3: счётчики вызовов команд и скиллов из событий. */}
+      {/* ADR-126 §12/§9.3: счётчики вызовов команд и скиллов из событий. */}
       <Section title={t('rightPanel.stats.commands')}>
         {hasInvocations ? (
           <>

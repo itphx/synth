@@ -30,7 +30,7 @@ export interface SkillEditorFormProps {
 }
 
 /**
- * ADR-046 §9.1/§9.2 / ADR-072: форма `SKILL.md` — name/description/body и
+ * ADR-126 §7/§9.2 / ADR-072: форма `SKILL.md` — name/description/body и
  * supporting-файлы. Используется админ-категорией `skillsAdmin` (создание и
  * правка instance-скиллов).
  */

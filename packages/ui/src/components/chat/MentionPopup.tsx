@@ -5,7 +5,7 @@ import { useI18n } from '@/lib/i18n'
 import { cn, resolveColor } from '@/lib/utils'
 import type { AgentInfo } from '@/lib/api/synthApi'
 
-/** Участник сессии, доступный для упоминания (`@user`, ADR-126 §2.1). */
+/** Участник сессии, доступный для упоминания (`@user`, ADR-126 §2). */
 export interface MentionUserEntry {
   /** id пользователя — именно он подставляется в текст (`@<id>`). */
   id: string

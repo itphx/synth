@@ -103,7 +103,7 @@ describe('workspaceApi — рабочая директория и корень w
   })
 })
 
-describe('skillsApi — реестр и CRUD (ADR-046)', () => {
+describe('skillsApi — реестр и CRUD (ADR-126)', () => {
   it('getSkills: query строится только при параметрах', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ skills: [] }))
     await synthApi.getSkills()
@@ -224,7 +224,7 @@ describe('skillsApi — реестр и CRUD (ADR-046)', () => {
   })
 })
 
-describe('commandsApi / skillBundlesApi (ADR-046)', () => {
+describe('commandsApi / skillBundlesApi (ADR-126)', () => {
   it('getCommands: query только при параметрах', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ commands: [] }))
     await synthApi.getCommands()

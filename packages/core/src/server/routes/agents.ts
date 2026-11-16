@@ -71,7 +71,7 @@ export interface AgentRoutesOptions {
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<AgentRouteMessages>;
   /**
-   * ADR-046/ADR-089: порт файлов контекста — запись ролевого промпта агента
+   * ADR-126/ADR-089: порт файлов контекста — запись ролевого промпта агента
    * вместе с агентом (поле `role_prompt` в теле `POST /`). Файл роли пишется
    * в `{dataDir}/context/roles/<contextFile>` и имеет приоритет над системным
    * `prompts/roles/` (резолв — `ContextConfig.getRolePrompt`).
@@ -125,7 +125,7 @@ const AGENT_FIELDS = (a: AgentDefinition, isBuiltin: boolean) => ({
   // ADR-117: явный тир усилия агента (`xhigh`/`max` — только так); `null` — авто.
   effort: a.effort ?? null,
   context_file: a.contextFile || null,
-  // ADR-046 §6.2: группы агента (привязка скиллов по `metadata.synth.groups`).
+  // ADR-126 §9: группы агента (привязка скиллов по `metadata.synth.groups`).
   groups: a.groups ?? null,
   // PROP-135 Ф6a: профиль исполнения агента и потолок разрешённых профилей.
   executor_profile: a.executorProfile ?? null,
@@ -158,7 +158,7 @@ function isSafeRoleFileName(name: string): boolean {
 }
 
 /**
- * ADR-046 §6.2: группы агента — массив непустых строк без дублей.
+ * ADR-126 §9: группы агента — массив непустых строк без дублей.
  * Не-массив → `undefined` (поле не меняется, приоритет `body → existing → builtin`).
  */
 function normalizeGroups(value: unknown): string[] | undefined {
@@ -539,7 +539,7 @@ export function createAgentRoutes(
       description: body.description ?? existing?.description,
       agentMode: normalizeAgentModes(body.agent_mode ?? body.agentMode ?? existing?.agentMode ?? builtin?.agentMode),
       maxSteps: body.max_steps ?? body.maxSteps ?? existing?.maxSteps,
-      // ADR-046 §6.2: группы агента (привязка скиллов по `metadata.synth.groups`).
+      // ADR-126 §9: группы агента (привязка скиллов по `metadata.synth.groups`).
       groups: normalizeGroups(body.groups) ?? existing?.groups ?? builtin?.groups,
       // PROP-135 Ф6a: профиль исполнения и потолок разрешённых профилей.
       executorProfile,
@@ -549,7 +549,7 @@ export function createAgentRoutes(
       allowedBrowserProfiles,
     };
 
-    // ADR-046/ADR-089: ролевой промпт агента — содержимое (не путь) в теле
+    // ADR-126/ADR-089: ролевой промпт агента — содержимое (не путь) в теле
     // запроса. Файл роли пишется ДО сохранения агента: агент без роли —
     // сломанный агент, а «лишний» файл роли перезапишется следующей установкой.
     const rolePrompt = readRolePrompt(body);

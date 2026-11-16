@@ -3,7 +3,7 @@
 > **Статус:** 🧩 Предложение — Реестр и каталог скиллов и агентов: индекс, trust/guard, install-policy, agent-packs
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-17
-> **Парный документ:** [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы и slash-команды» —
+> **Парный документ:** [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) «Скиллы и slash-команды» —
 > механизм (формат `SKILL.md`, discovery, доставка, тул `skill`, команды). PROP-068 отвечает за
 > **контент и распространение**: собственный категоризированный каталог, agent-packs,
 > централизованный индекс, адаптеры источников, доверие/безопасность установки, UI.
@@ -29,10 +29,10 @@
 (`lock.json`, `taps.json`, audit log, quarantine) и UI управления установленными
 скиллами. **Внешние каталоги по умолчанию выключены** — Synth лишь показывает список
 рекомендуемых проверенных источников; включение выполняет пользователь/админ явно.
-Реестр **не владеет форматом** `SKILL.md` — это ADR-046; реестр владеет каталогом,
+Реестр **не владеет форматом** `SKILL.md` — это ADR-126; реестр владеет каталогом,
 доставкой и доверием.
 
-**Контекст:** механизм скиллов (ADR-046) без контента бесполезен: пользователю нужен
+**Контекст:** механизм скиллов (ADR-126) без контента бесполезен: пользователю нужен
 подбор скиллов под задачу, установка из проверенных источников и гарантия, что
 установленный контент не выполнит произвольный код. Сегодня источники фрагментированы:
 вендорские репозитории (`anthropics/skills`, `openai/plugins`, `google/skills`,
@@ -69,7 +69,7 @@ health floors и watchdog'ом) и openchamber (захардкоженные к�
                                               └────────────────┘   └──────────────┘
                                                       │
                                               ┌───────▼────────┐
-                                              │ discovery      │ ← ADR-046 (тул skill,
+                                              │ discovery      │ ← ADR-126 (тул skill,
                                               │ SKILL.md       │   команды, enable/disable)
                                               └────────────────┘
 ```
@@ -127,9 +127,9 @@ synth-skills/
 категория задаётся в метаданных скилла, а не в имени каталога, чтобы один и тот же
 контент не дублировался.
 
-**Метаданные скилла.** Источник истины — frontmatter `SKILL.md` (формат — [ADR-046](./adr-046-skills-and-slash-commands.md)).
+**Метаданные скилла.** Источник истины — frontmatter `SKILL.md` (формат — [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)).
 Реестр **обогащает** карточку скилла полями индекса/lock, не дублируя и не переопределяя формат frontmatter.
-Соответствие: `category`/`tags` — это `metadata.synth.category`/`metadata.synth.tags` (ADR-046 §3.2);
+Соответствие: `category`/`tags` — это `metadata.synth.category`/`metadata.synth.tags` (ADR-126 §13);
 `minSynth` — нормализованное представление `compatibility`; `source`/`identifier`/`version` — поля
 реестра (индекс/lock), а не frontmatter:
 
@@ -145,7 +145,7 @@ synth-skills/
 | `identifier` | Устойчивый id в источнике (owner/repo/path или URL) |
 | `minSynth` | Минимальная версия Synth (совместимость) |
 | `agents` | Совместимые/целевые агенты (для agent-packs) |
-| `groups` | Группы для binding'а (ADR-046) |
+| `groups` | Группы для binding'а (ADR-126) |
 
 **Версионирование.** Каталог — обычный git; релиз каталога — тег `skills-vX.Y.Z`.
 Индекс публикуется вместе с тегом и содержит `generated_at`. Контент скилла
@@ -153,7 +153,7 @@ synth-skills/
 сканер (§6.3) — вредоносный/невалидный скилл не попадает в индекс.
 
 **Agent-packs.** Каталог агентов закладывается как основа: `agents/<pack>/pack.json`
-описывает набор агентов и их группы; каждый агент — `AGENT.md`. Связь с ADR-046 —
+описывает набор агентов и их группы; каждый агент — `AGENT.md`. Связь с ADR-126 —
 через binding `agents`/`groups` (формат `AGENT.md` и семантика групп — открытый
 вопрос, §10). Agent-pack не исполняется реестром: реестр его доставляет и
 устанавливает, а применение — движок/сессии (ADR-025/ADR-026).
@@ -173,7 +173,7 @@ synth-skills/
 
 | `packType` | Что содержит | Текущее состояние в коде |
 |---|---|---|
-| `skills` | скиллы/команды (`SKILL.md`) | механизм есть ([ADR-046](./adr-046-skills-and-slash-commands.md)); паков нет |
+| `skills` | скиллы/команды (`SKILL.md`) | механизм есть ([ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)); паков нет |
 | `agents` | agent-packs (наборы агентов, `AGENT.md`) | определения — `packages/core/src/engine/agents/definitions/*.json` (11 шт.); паков нет |
 | `mcp` | MCP-серверы | реестр есть ([ADR-071](./adr-071-mcp-servers-prompt.md)); паков нет |
 | `themes` | темы оформления | только встроенные — `packages/ui/src/lib/theme/*`; паков нет |
@@ -291,7 +291,7 @@ Trust резолвится по источнику и по репозитори�
 > **Не путать с project-trust.** `trust_level` здесь — доверие к **источнику/записи реестра**
 > (иерархия `builtin…agent-created`, install-policy). Доверие к **локальному проектному каталогу**
 > скиллов (бинарное trusted/untrusted, `skills.trustedProjectDirs`, команды
-> `synth skills trust-project/untrust-project`) — mechanism [ADR-046](./adr-046-skills-and-slash-commands.md);
+> `synth skills trust-project/untrust-project`) — mechanism [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md);
 > оно ортогонально и не переопределяется install-policy реестра.
 
 > **Примечание.** Звёзды GitHub в этом окружении аномально завышены и не отражают
@@ -347,7 +347,7 @@ Trust резолвится по источнику и по репозитори�
 - Значения квот — из этого §4.3; при изменении — правка обоих документов.
 
 Остальные правила сканера:
-- **Inline shell** (`` !`cmd` ``): конструкция механизма [ADR-046](./adr-046-skills-and-slash-commands.md), по умолчанию **выключена** (`skills.inlineShell: false`); сканер независимо флагует shell-конструкции категориями `injection`/`destructive`.
+- **Inline shell** (`` !`cmd` ``): конструкция механизма [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md), по умолчанию **выключена** (`skills.inlineShell: false`); сканер независимо флагует shell-конструкции категориями `injection`/`destructive`.
 - **`content_hash`:** sha256 отсортированного набора файлов; фиксируется в lock.
 - **Кэш сканов:** ключ `sha256(source\0source_url)` + `content_hash` — повторный скан
   идентичного контента не выполняется.
@@ -422,7 +422,7 @@ Trust резолвится по источнику и по репозитори�
 «удобно, но небезопасно». Речь о **реестровых/удалённых** источниках
 (github/well-known/url/skills.sh/taps). Локальные каталоги агентов-совместимости
 (`.opencode/skills`, `.claude/skills`, `.agents/skills`) — read-only discovery
-механизма [ADR-046](./adr-046-skills-and-slash-commands.md); это не источники установки
+механизма [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md); это не источники установки
 и не подключаются через реестр.
 
 При развёртывании/настройке Synth показывает **список рекомендуемых проверенных
@@ -491,7 +491,7 @@ ClawHub может быть добавлен только как осознан�
 | inspect | `GET /api/v2/skills/inspect` | `synth skills inspect <id>` | Карточка | Метаданные, лицензия, trust, версия, хеш, findings |
 | install | `POST /api/v2/skills/install` | `synth skills install <id> [--ref --force]` | Кнопка | Скачать → quarantine → скан → policy → копирование |
 | update | `POST /api/v2/skills/update` | `synth skills update [<name>]` | Обновить | По pinned ref/hash; явно |
-| enable | `POST /api/v2/skills/:name/enable` | `synth skills enable <name>` | Тумблер | Доступность тулу `skill` (ADR-046) |
+| enable | `POST /api/v2/skills/:name/enable` | `synth skills enable <name>` | Тумблер | Доступность тулу `skill` (ADR-126) |
 | disable | `POST /api/v2/skills/:name/disable` | `synth skills disable <name>` | Тумблер | Скрыть из discovery |
 | audit | `GET /api/v2/skills/audit` | `synth skills audit` | Вкладка аудита | Audit log + вердикты сканов |
 | trust | `POST /api/v2/skills/trust` | `synth skills trust <source> --level` | Селектор (ADMIN) | Смена trust-уровня источника |
@@ -505,11 +505,11 @@ backend). Установка никогда не происходит автом
 
 ---
 
-## 8. Связь с ADR-046 и другими AD
+## 8. Связь с ADR-126 и другими AD
 
-- **[ADR-046](./adr-046-skills-and-slash-commands.md) (парный):** формат `SKILL.md`, discovery, доставка, тул `skill`,
+- **[ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) (парный):** формат `SKILL.md`, discovery, доставка, тул `skill`,
   slash-команды, binding `agents`/`groups`, project-trust гейт. PROP-068 поставляет
-  контент, индекс и доверие; ADR-046 потребляет установленное. Реестр **не**
+  контент, индекс и доверие; ADR-126 потребляет установленное. Реестр **не**
   переопределяет формат.
 - **ADR-023 (конфигурация):** секция `skills` в `config.yaml` (источники, TTL кэша,
   install-policy overrides, путь cache root) по общему приоритету CLI > env > config >
@@ -529,16 +529,16 @@ backend). Установка никогда не происходит автом
 - **ADR-042 (гибрид):** в гибридном режиме индекс и установка доступны локально;
   при недоступности сети — stale-кэш и установка только из уже закэшированного
   (remote-операции — по правилам offline-деградации).
-- **ADR-046 §4.5 / ADR-071 §2.4, §2.9 (уровни и включение):** реестр переиспользует
+- **ADR-126 §11 / ADR-071 §2.4, §2.9 (уровни и включение):** реестр переиспользует
   модель уровней `system`/`project`/`session` и enable/disable (группами и точечно)
   — см. §8.1; собственной модели уровней реестр не вводит.
 
-### 8.1. Уровни и включение (переиспользование ADR-046/ADR-071)
+### 8.1. Уровни и включение (переиспользование ADR-126/ADR-071)
 
 Реестр скиллов/агентов **не дублирует** модель уровней и включения:
 
 - **уровни** `system`/`project`/`session` и merge `system > project > session` —
-  [ADR-046](./adr-046-skills-and-slash-commands.md) §4.5 (для скиллов) и
+  [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) §11 (для скиллов) и
   [ADR-071](./adr-071-mcp-servers-prompt.md) §2.4 (для MCP);
 - **enable/disable** группами и отдельными записями, неотключаемость механизма —
   там же; реестр хранит статус включения и историю (`audit.log`, §4.4), UI-тумблеры
@@ -593,7 +593,7 @@ UI — smoke через dev-сервер; фикстуры вредоносны�
   «всегда latest» запрещено.
 - **Доверие по звёздам** — не используем как критерий.
 - **Исполнение кода скиллов реестром** — только доставка файлов.
-- **Дублирование формата `SKILL.md`** — это ADR-046.
+- **Дублирование формата `SKILL.md`** — это ADR-126.
 - **Собственный формат и канал установки у портала (§12)** — витрина рендерит тот же индекс (§3);
   установка идёт через API v2 инстанса, а не «своим» способом.
 
@@ -608,7 +608,7 @@ UI — smoke через dev-сервер; фикстуры вредоносны�
 4. **Судьба `verified` vs `trusted`** — не слить ли, если подписанных вендоров будет
    больше одного.
 5. **Хранение cache root** — `{dataDir}/skills/` или проектный `.synth/skills/` для
-   проектных скиллов (гейт — [ADR-046](./adr-046-skills-and-slash-commands.md)).
+   проектных скиллов (гейт — [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md)).
 6. **TTL индекса и политика stale** — значения по умолчанию (предлагается TTL 6 ч,
    stale ≤ 7 суток с предупреждением).
 7. **Совместимость версий** — правила `minSynth` и что делать со старым скиллом при
@@ -677,7 +677,7 @@ installer-ключ провижнится идемпотентно (`security.bo
 (advisory, не блокирует без policy); необходимость обновлять индекс и следить за
 freshness; расхождение trust-моделей с внешними агрегаторами.
 
-**Связи:** ADR-046 (механизм), ADR-005 (атомарная запись), ADR-023 (конфиг), ADR-025/026
+**Связи:** ADR-126 (механизм), ADR-005 (атомарная запись), ADR-023 (конфиг), ADR-025/026
 (агенты/контекст), ADR-029 (permissions), ADR-036/037 (безопасность), ADR-038 (npm),
 ADR-042/045 (гибрид/dataDir).
 

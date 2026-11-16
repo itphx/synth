@@ -63,7 +63,7 @@ export interface BuildSnippetSourcesOptions {
 /**
  * ADR-126 §4: источники в порядке приоритета `user > project > instance`.
  * Проектный уровень доверен, только если доверен каталог проекта
- * (ADR-046 §4.4 — тот же гейт, что у скиллов и команд).
+ * (ADR-126 §9 — тот же гейт, что у скиллов и команд).
  */
 export function buildSnippetSources(opts: BuildSnippetSourcesOptions): SnippetSource[] {
   const home = opts.home ?? homedir();

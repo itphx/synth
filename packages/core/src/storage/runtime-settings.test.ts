@@ -1303,7 +1303,7 @@ describe('resolveSessionOpsPerMinute (limits.sessionOpsPerMinute)', () => {
   });
 });
 
-describe('RuntimeSettingsStore: project-trust скиллов (ADR-046/ADR-069)', () => {
+describe('RuntimeSettingsStore: project-trust скиллов (ADR-126/ADR-069)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

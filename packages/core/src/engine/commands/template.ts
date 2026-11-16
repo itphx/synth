@@ -7,7 +7,7 @@ import type { TemplateCommand } from './types.js';
 /** Лимит одного supporting-файла, подставляемого через `@file` (50 KB). */
 export const TEMPLATE_FILE_MAX_BYTES = 50 * 1024;
 
-/** ADR-046 §7.4: лимит вывода одной inline shell-команды (50 KB). */
+/** ADR-126 §15: лимит вывода одной inline shell-команды (50 KB). */
 export const TEMPLATE_SHELL_MAX_BYTES = 50 * 1024;
 
 export interface RenderTemplateOptions {
@@ -15,9 +15,9 @@ export interface RenderTemplateOptions {
   args: string;
   maxArgumentsLength: number;
   maxRenderedBytes: number;
-  /** ADR-046 §7.4: включён ли inline shell (`` !`cmd` ``); по умолчанию выключено. */
+  /** ADR-126 §15: включён ли inline shell (`` !`cmd` ``); по умолчанию выключено. */
   inlineShell?: boolean;
-  /** ADR-046 §7.4: раннер (уже прошёл permission в оркестраторе). */
+  /** ADR-126 §15: раннер (уже прошёл permission в оркестраторе). */
   runShell?: (cmd: string) => Promise<{ output: string; isError: boolean }>;
 }
 
@@ -58,7 +58,7 @@ function truncateUtf8(s: string, maxBytes: number): string {
 }
 
 /**
- * ADR-046 §7.2: рендер шаблонной команды. Подстановки:
+ * ADR-126 §1: рендер шаблонной команды. Подстановки:
  * - `$ARGUMENTS` — аргументы после имени команды (лимит `maxArgumentsLength`);
  * - `@path` — содержимое файла относительно `workingDir` (защита от escape,
  *   бинарники и превышение размера отклоняются с диагностикой);
@@ -78,7 +78,7 @@ export async function renderTemplate(
   content = content.replace(/\$ARGUMENTS/g, args);
   content = content.replace(/\$([1-9])/g, (_m, d: string) => positional[Number(d) - 1] ?? '');
 
-  // ADR-046 §7.4: inline shell `` !`cmd` ``. По умолчанию выключено — литерал
+  // ADR-126 §15: inline shell `` !`cmd` ``. По умолчанию выключено — литерал
   // остаётся нетронутым (диагностического шума не создаём). При включении
   // команда исполняется ТОЛЬКО через переданный раннер: permission-проверку
   // (ADR-029) и аудит делает оркестратор, сервис команд их не дублирует.

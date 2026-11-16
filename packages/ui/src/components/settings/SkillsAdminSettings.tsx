@@ -26,7 +26,7 @@ interface EditorState {
 const EMPTY_EDITOR: EditorState = { mode: 'create', name: '', description: '', body: '', files: [] }
 
 /**
- * Две оси системных гейтов скиллов (ADR-046 §4.5):
+ * Две оси системных гейтов скиллов (ADR-126 §11):
  * - `disabled` — мастер: выключенный скилл недоступен нигде;
  * - `disabledForNewProjects` — сид новых проектов: что не включать по умолчанию.
  */
@@ -40,7 +40,7 @@ const EMPTY_SKILLS_GATES: SkillsGates = {
   disabledForNewProjects: EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
 }
 
-/** ADR-046/069: цвета бейджа источника доверенных каталогов. */
+/** ADR-126/069: цвета бейджа источника доверенных каталогов. */
 const TRUST_SOURCE_BADGE_CLASS: Record<SkillsTrustedProjectDirsSource, string> = {
   runtime: 'bg-primary/15 text-primary',
   config: 'bg-muted text-muted-foreground',
@@ -48,7 +48,7 @@ const TRUST_SOURCE_BADGE_CLASS: Record<SkillsTrustedProjectDirsSource, string> =
 }
 
 /**
- * ADR-046 §4.5/§9.2 / ADR-072: админ-категория «Скиллы и инструкции» — instance-реестр с CRUD
+ * ADR-126 §11/§9.2 / ADR-072: админ-категория «Скиллы и инструкции» — instance-реестр с CRUD
  * (`SKILL.md` + supporting-файлы), system-level enable/disable группами
  * (categories/groups) и точечно (name), политика включения.
  */
@@ -95,7 +95,7 @@ export function SkillsAdminSettings() {
   const [policySaving, setPolicySaving] = useState(false)
   const [policyError, setPolicyError] = useState<string | null>(null)
 
-  // Project-trust (ADR-046/069): черновик списка каталогов живёт локально.
+  // Project-trust (ADR-126/069): черновик списка каталогов живёт локально.
   const [trustDirs, setTrustDirs] = useState<string[]>([])
   const [trustSaving, setTrustSaving] = useState(false)
   const [trustError, setTrustError] = useState<string | null>(null)
@@ -488,7 +488,7 @@ export function SkillsAdminSettings() {
         />
       </SettingsSection>
 
-      {/* Project-trust (ADR-046/069): доверенные каталоги проектов */}
+      {/* Project-trust (ADR-126/069): доверенные каталоги проектов */}
       <SettingsSection
         id="skills-admin-trusted"
         title={t('skillsAdmin.trust.title')}
@@ -684,7 +684,7 @@ function SkillAdminRow({
 }
 
 /**
- * ADR-046 §4.5: одно измерение системных гейтов (мастер или сид проектов) —
+ * ADR-126 §11: одно измерение системных гейтов (мастер или сид проектов) —
  * три группы (категории/группы/отдельные скиллы). Заголовок оси даёт
  * родительская `SettingsSection` (ADR-072: секции не вкладывать).
  */

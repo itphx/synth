@@ -125,9 +125,9 @@ export function buildStandaloneOptions(input: StandaloneOptionsInput): Partial<S
     // ADR-075: политика для абсолютного workspace вне root (env > config > 'confirm').
     workspaceOutsideRootPolicy: resolveWorkspaceOutsideRootPolicy(synth, env) || 'confirm',
     mcpServers: synth.mcp?.servers ?? {},
-    // ADR-046: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
+    // ADR-126: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
     skillsConfig: synth.skills,
-    // ADR-046 §7: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
+    // ADR-126 §1: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
     commandsConfig: synth.commands,
     // ADR-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
     // ADR-069 §9.2: ignore-rules/safe-mode → enabled=false (без мутации конфига).

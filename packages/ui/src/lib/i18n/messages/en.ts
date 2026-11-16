@@ -559,7 +559,7 @@ export const dict = {
     'mcpPolicy.saved': 'MCP policy saved',
   'mcpPolicy.saveError': 'Failed to save MCP policy: {error}',
 
-  // Skills & slash-commands (ADR-046)
+  // Skills & slash-commands (ADR-126)
   'skillsPolicy.title': 'Skills policy',
   'skillsPolicy.description': 'Which skill definitions are sent to the model in requests. The catalog and command resolution mechanism is always on.',
   'skillsPolicy.label': 'Global skills policy',
@@ -688,7 +688,7 @@ export const dict = {
   'skillsAdmin.diagnostics.title': 'Diagnostics',
   'skillsAdmin.diagnostics.description': 'Discovery and validation issues (shadowed, invalid frontmatter, untrusted).',
   'commands.title': 'Commands',
-  'commands.description': 'Slash-commands: built-in, template, skills and bundles, plus discovery diagnostics.',
+  'commands.description': 'Slash-commands: built-in, template and bundle commands (skills are invoked as $name), plus discovery diagnostics.',
   'commands.count': '{count, plural, one {# command} other {# commands}}',
   'commands.empty': 'No commands',
   'commands.error.load': 'Failed to load commands',
@@ -1771,11 +1771,11 @@ export const dict = {
   'chat.actions.fork': 'Create branch',
   'chat.actions.debug': 'Debug',
 
-  // ADR-046 §7.1: нейтральный system-блок системной (builtin) команды
+  // ADR-126 §14: нейтральный system-блок системной (builtin) команды
   'chat.command.title': 'Command',
   'chat.command.copy': 'Copy',
 
-  // ADR-046 §7.1: единый Notice служебных сообщений
+  // ADR-126 §14: единый Notice служебных сообщений
   'chat.notice.summary': 'Summary',
   'chat.notice.debug': 'Debug',
   'chat.notice.error': 'Error',
@@ -2215,7 +2215,7 @@ export const dict = {
   'sessionSettings.mcp.source.server': 'server',
   'sessionSettings.mcp.toggleLabel': 'Enabled',
 
-  // ADR-046 §4.5/§8.2/§9.3: skills & commands (panels, stats, autocomplete)
+  // ADR-126 §11/§8.2/§9.3: skills & commands (panels, stats, autocomplete)
   'sessionSettings.skills.title': 'Skills',
   'sessionSettings.skills.hint': 'Session-level toggle. Overrides project settings.',
   'sessionSettings.skills.toggleLabel': 'Enabled',

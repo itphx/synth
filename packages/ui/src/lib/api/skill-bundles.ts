@@ -3,13 +3,13 @@
 import type { SkillBundle } from '@itphx/synth-shared'
 import { BASE_URL, fetchJSON } from './base'
 
-/** ADR-046 §7.3: ответ GET /api/v2/skill-bundles. */
+/** ADR-126 §14: ответ GET /api/v2/skill-bundles. */
 export interface SkillBundlesResponse {
   bundles: SkillBundle[]
 }
 
 export const skillBundlesApi = {
-  // --- Bundles (ADR-046 §7.3) ---
+  // --- Bundles (ADR-126 §14) ---
   /** GET /skill-bundles — список YAML-групп скиллов. */
   async getSkillBundles(): Promise<SkillBundlesResponse> {
     return fetchJSON<SkillBundlesResponse>(`${BASE_URL}/skill-bundles`)

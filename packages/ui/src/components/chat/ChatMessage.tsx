@@ -485,7 +485,7 @@ function ChatMessageInner({
     tokenPrefix: message.metadata?.usage_estimated === true ? '~' : '',
   }, t), [message.usage, message.metadata, t])
 
-  // ADR-046 §7.1: локальный ответ системной (builtin) команды — нейтральный
+  // ADR-126 §14: локальный ответ системной (builtin) команды — нейтральный
   // system-блок без шапки агента/статистики; команда и вывод объединены
   // (`metadata.command === true` на assistant-сообщении). Шаблонные/skill/bundle
   // команды сюда не попадают: у них `metadata.command` — объект, а не `true`.
@@ -582,7 +582,7 @@ function ChatMessageInner({
   const messageParts = message.parts ?? []
   const hasAttachments = hasMediaParts(messageParts)
 
-  // ADR-046 §7.1: reasoning / intermediate / tool-call блоки. Для assistant
+  // ADR-126 §14: reasoning / intermediate / tool-call блоки. Для assistant
   // рендерятся в пузыре напрямую, для summary/debug — внутри Notice-тела.
   const partsContent = isAssistant || isSummary || isDebug
     ? (() => {
@@ -729,7 +729,7 @@ function ChatMessageInner({
     )
   }
 
-  // ADR-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
+  // ADR-126 §14: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
   const noticeVariant: NoticeVariant | null = isSummary
     ? 'summary'
     : isDebug
