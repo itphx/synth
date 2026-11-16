@@ -2641,11 +2641,14 @@
   (`buildTerminalContextMessage`/`parseTerminalContext`, предел 32 КиБ UTF-8) —
   `context` в `POST /api/v2/sessions/:id/prompt`: вопрос и вывод терминала
   приходят **одним** запросом; контекст — служебное user-сообщение
-  (`metadata.type='background_run_result'`, `kind='terminal'`, `author='Terminal'`,
+  (`metadata.type='background_run_result'`, `kind='terminal'`,
+  `terminal_context=true`, `author='Terminal'`,
   текст — тот же `[CONTENT …]`…`[CONTENT END]`, что у `terminal_read`), которое
   доставляется **перед** вопросом (`queue` — в историю, `steer` — первым в
   `steerInbox`); `mode:'interrupt'` + контекст → 400, отказ постановки вопроса →
-  откат контекста.
+  откат контекста. **`terminal_context=true` — явный маркер контекста:** тот же
+  `kind:'terminal'` носит и уведомление о завершении команды в терминале
+  (`engine/terminal/runs.ts`, маркера нет) — по одному `kind` их не различить.
   **Передний план терминала — факт, а не эвристика (протокол исполнителя 9).**
   `PtyHandle.inspect?()` отдаёт `PtyForeground` (`shellPid`/`foregroundPgid`/
   `command`/`isShell`); `TerminalService.getForeground(id)` — единственная точка

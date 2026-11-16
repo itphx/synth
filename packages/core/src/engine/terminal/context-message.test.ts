@@ -5,8 +5,9 @@
  * Проверяется:
  *   • формат текста — тот же `[CONTENT …]` … `[CONTENT END]`, что у
  *     `terminal_read`, с атрибутами в открывающем маркере (только непустые);
- *   • metadata служебного сообщения (`background_run_result`/`terminal`) и
- *     служебность (`isServiceUserMessage`) — контекст не реплика человека;
+ *   • metadata служебного сообщения (`background_run_result`/`terminal` +
+ *     маркер `terminal_context`) и служебность (`isServiceUserMessage`) —
+ *     контекст не реплика человека;
  *   • разбор тела: валидный контекст, предел 32 КиБ, список статусов,
  *     целое неотрицательное `lines`, игнорирование лишних полей.
  */
@@ -74,6 +75,9 @@ describe('Контекст терминала — сборка сообщени�
     expect(message.author).toBe('Terminal');
     expect(message.metadata?.type).toBe('background_run_result');
     expect(message.metadata?.kind).toBe('terminal');
+    // Явный маркер контекста: уведомление о завершении команды в терминале
+    // носит тот же `kind`, но маркера не имеет.
+    expect(message.metadata?.terminal_context).toBe(true);
     expect(message.metadata?.state).toBe('completed');
     expect(message.metadata?.terminal_id).toBe('term_3');
     expect(message.metadata?.cwd).toBe('/work');

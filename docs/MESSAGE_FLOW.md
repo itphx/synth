@@ -1400,8 +1400,13 @@ sequenceDiagram
 
 1. `POST /prompt {content, context}` — клиент присылает **вопрос** и блок вывода
    терминала (`context`) одним запросом. Контекст — служебное user-сообщение
-   (`metadata.type = 'background_run_result'`, `kind: 'terminal'`, `author: 'Terminal'`),
-   текст — тот же `[CONTENT …]` … `[CONTENT END]`, что у `terminal_read`.
+   (`metadata.type = 'background_run_result'`, `kind: 'terminal'`,
+   **`terminal_context: true`**, `author: 'Terminal'`), текст — тот же
+   `[CONTENT …]` … `[CONTENT END]`, что у `terminal_read`. Маркер
+   `terminal_context` отличает контекст от уведомления о завершении команды в
+   терминале: у того `kind` тоже `'terminal'`, но маркера нет — значит, это
+   фоновый процесс (карточка `execute_shell`), а не вывод терминала
+   (карточка `terminal_read`).
 2. Доставка — **до вопроса**: в режиме `queue` контекст материализуется в историю
    (`ord` контекста < `ord` вопроса; `message.added` + `session.updated`), в режиме
    `steer` при активном ходе — первым в `steerInbox` (вопрос следом). Контекст не

@@ -23,6 +23,11 @@
  * репликой пользователя (авто-заголовок сессии, статистика реплик, границы
  * хода) — см. `sessions/user-messages.ts`.
  *
+ * `metadata.kind = 'terminal'` называет вид служебного сообщения, а
+ * `metadata.terminal_context = true` — **именно контекст** терминала: тот же
+ * `kind` носит и уведомление о завершении команды в терминале
+ * (`engine/terminal/runs.ts`), и по одному `kind` их не различить.
+ *
  * ## Границы
  *
  * - **Предел вывода — 32 КиБ** (`MAX_TERMINAL_CONTEXT_BYTES`, UTF-8): вывод
@@ -113,6 +118,12 @@ export function buildTerminalContextMessage(input: TerminalContextInput): Messag
       // Служебное сообщение (`isServiceUserMessage`): не реплика человека.
       type: 'background_run_result',
       kind: 'terminal',
+      // Явный маркер «это контекст терминала»: уведомление о завершении
+      // команды в терминале (`engine/terminal/runs.ts`) несёт тот же
+      // `kind:'terminal'`, но без маркера — по нему UI отличает контекст
+      // (карточка `terminal_read`) от уведомления о запуске (карточка
+      // `execute_shell`).
+      terminal_context: true,
       state: 'completed',
       terminal_id: input.terminal_id,
       ...(input.cwd ? { cwd: input.cwd } : {}),

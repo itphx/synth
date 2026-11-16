@@ -19,7 +19,9 @@
  *
  * `terminal` — сообщение-контекст терминала (PROP-132, Ф4б): сервер сохраняет
  * его отдельным сообщением **до** вопроса агента, в UI это карточка вывода
- * терминала, а не «фоновый процесс».
+ * терминала, а не «фоновый процесс». Отличается маркером
+ * `metadata.terminal_context === true` (у уведомления о завершении команды
+ * в терминале маркера нет — это фоновый процесс).
  */
 export type BackgroundNoticeKind = 'process' | 'subagent' | 'terminal';
 
@@ -66,11 +68,20 @@ const OPEN_TERMINAL_ENVELOPE_RES = [
   /^\s*<terminal_context\b[^>]*>\r?\n?([\s\S]*)$/,
 ];
 
-/** Вид прогона по `metadata.kind` (неизвестное → `process`). */
+/**
+ * Вид прогона по `metadata` (неизвестное → `process`).
+ *
+ * `terminal` — **только** сообщение-контекст терминала (PROP-132, Ф4б):
+ * сервер помечает его явным маркером `metadata.terminal_context === true`
+ * рядом с `kind:'terminal'`. Уведомление о завершении команды в терминале
+ * (`engine/terminal/runs.ts`) носит **тот же** `kind:'terminal'`, но маркера
+ * не имеет — значит, это обычный фоновый процесс (карточка `execute_shell`),
+ * а не вывод терминала (карточка `terminal_read`).
+ */
 export function resolveBackgroundKind(
   metadata: Record<string, unknown> | null | undefined,
 ): BackgroundNoticeKind {
-  if (metadata?.kind === 'terminal') return 'terminal';
+  if (metadata?.kind === 'terminal' && metadata?.terminal_context === true) return 'terminal';
   return metadata?.kind === 'subagent' ? 'subagent' : 'process';
 }
 

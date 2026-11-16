@@ -155,6 +155,8 @@ describe('background-notice: контекст терминала', () => {
   const TERMINAL_METADATA = {
     type: 'background_run_result',
     kind: 'terminal',
+    // Маркер контекста терминала (backend `buildTerminalContextMessage`).
+    terminal_context: true,
     state: 'completed',
     terminal_id: 'term_1',
     status: 'running',
@@ -215,5 +217,38 @@ describe('background-notice: контекст терминала', () => {
     expect(call.result.content).not.toContain('line1\nline2\n[CONTENT END]')
     expect(call.result.isError).toBe(false)
     expect(call.status).toBe('done')
+  })
+})
+
+/**
+ * Уведомление о завершении команды в терминале (`engine/terminal/runs.ts`):
+ * `kind` — тоже `terminal`, но **без** маркера `terminal_context` — это
+ * фоновый процесс, а не контекст терминала.
+ */
+describe('background-notice: уведомление о завершении команды в терминале', () => {
+  const RUN_METADATA = {
+    type: 'background_run_result',
+    kind: 'terminal',
+    run_id: 'run_1',
+    terminal_id: 'term_1',
+    command: 'echo hi',
+    state: 'completed',
+  }
+
+  it('без маркера terminal_context → процесс, а не контекст терминала', () => {
+    expect(resolveBackgroundKind(RUN_METADATA)).toBe('process')
+  })
+
+  it('карточка — execute_shell (команда), как у фонового процесса', () => {
+    const call = backgroundToolCall(RUN_METADATA, 'hi\n')
+
+    expect(call.name).toBe('execute_shell')
+    expect(call.args).toEqual({ command: 'echo hi', cwd: '' })
+    expect(call.result.content).toBe('hi')
+    expect(call.result.isError).toBe(false)
+  })
+
+  it('подпись блока — имя прогона (команда), не число строк терминала', () => {
+    expect(backgroundNoticeName(RUN_METADATA, resolveBackgroundKind(RUN_METADATA))).toBe('echo hi')
   })
 })

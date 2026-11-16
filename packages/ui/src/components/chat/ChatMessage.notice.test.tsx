@@ -405,6 +405,8 @@ describe('ChatMessage: сообщение-контекст терминала (P
   const TERMINAL_METADATA = {
     type: 'background_run_result',
     kind: 'terminal',
+    // Маркер контекста терминала (backend `buildTerminalContextMessage`).
+    terminal_context: true,
     state: 'completed',
     terminal_id: 'term_1',
     status: 'running',
@@ -472,5 +474,36 @@ describe('ChatMessage: сообщение-контекст терминала (P
     expect(container.textContent).not.toContain('[CONTENT')
     expect(container.textContent).not.toContain('CONTENT END')
     expect(container.textContent).not.toContain('bytes=12')
+  })
+
+  it('уведомление о завершении команды в терминале → фоновый процесс, а не контекст терминала', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: [
+          'Terminal term_1: the command finished (exit 0)',
+          '[CONTENT terminal=term_1 run=run_1 status=done exit=0]',
+          'hi',
+          '[CONTENT END]',
+        ].join('\n'),
+        // Тот же `kind:'terminal'`, но **без** маркера `terminal_context` —
+        // это уведомление о запуске, а не контекст терминала.
+        metadata: {
+          type: 'background_run_result',
+          kind: 'terminal',
+          run_id: 'run_1',
+          terminal_id: 'term_1',
+          command: 'echo hi',
+          state: 'completed',
+        },
+      }),
+    )
+
+    const group = container.querySelector('[role="group"]') as HTMLElement
+    expect(group.getAttribute('aria-label')).toBe('Background process · echo hi · completed')
+    expect(container.textContent).not.toContain('Terminal output')
+    // Карточка — результат фонового процесса, а не `terminal_read`.
+    expect(container.textContent).toContain('Shell')
+    expect(container.textContent).not.toContain('Term read')
   })
 })
