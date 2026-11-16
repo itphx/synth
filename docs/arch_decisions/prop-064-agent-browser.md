@@ -3,8 +3,8 @@
 > **Статус:** 🧩 Предложение — серверный headless-браузер уже есть; пользовательский headed-браузер на машине пользователя (local/hybrid)
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
-> **Источник:** перенесено из `AD-DRAFTS.md` (D19, «Встроенные в UI браузер и терминал»; идея пользователя 2026-09-16). 2026-11-09 — терминал выделен в [PROP-132](./prop-132-ui-terminal.md), документ сужен до браузера.
-> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-042](./adr-042-hybrid-mode.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-115](./adr-115-multimodal-input.md), [ADR-116](./adr-116-instance-state-and-blob-ports.md), [PROP-132](./prop-132-ui-terminal.md)
+> **Источник:** перенесено из `AD-DRAFTS.md` (D19, «Встроенные в UI браузер и терминал»; идея пользователя 2026-09-16). 2026-11-09 — терминал выделен в [ADR-132](./adr-132-ui-terminal.md) (исходно PROP-132), документ сужен до браузера.
+> **Связано:** [ADR-019](./adr-019-react-spa.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-042](./adr-042-hybrid-mode.md), [ADR-044](./adr-044-mobile-adaptive-ui-pwa.md), [ADR-045](./adr-045-hybrid-server-profiles.md), [ADR-075](./adr-075-project-workspace-provisioning.md), [ADR-077](./legacy/adr-077-runtime-toolchain.md), [ADR-099](./adr-099-egress-tls-trust.md), [ADR-115](./adr-115-multimodal-input.md), [ADR-116](./adr-116-instance-state-and-blob-ports.md), [ADR-132](./adr-132-ui-terminal.md)
 > **Обновлено:** 2026-11-09 — зафиксировано разделение на два браузера, режимная матрица, headed-окно и постоянный профиль, attach по открытому окну.
 
 ## Решение (предложение)
@@ -37,7 +37,7 @@
 
 ### Что изменилось в документе
 
-Изначально PROP-064 описывал «встроенные браузер и терминал» одной идеей (D19). 2026-11-09 терминал вынесен в [PROP-132](./prop-132-ui-terminal.md); здесь остаётся только браузер.
+Изначально PROP-064 описывал «встроенные браузер и терминал» одной идеей (D19). 2026-11-09 терминал вынесен в [ADR-132](./adr-132-ui-terminal.md) (исходно PROP-132); здесь остаётся только браузер.
 
 ## Режимная матрица
 
@@ -102,9 +102,9 @@
 - [ADR-077](./legacy/adr-077-runtime-toolchain.md) — исполнитель и серверный Playwright MCP.
 - [ADR-099](./adr-099-egress-tls-trust.md) — egress, TLS/CA, прокси.
 - [ADR-115](./adr-115-multimodal-input.md), [ADR-116](./adr-116-instance-state-and-blob-ports.md) — вложения и blob-порты.
-- [PROP-132](./prop-132-ui-terminal.md) — встроенный терминал (выделен из этого документа).
+- [ADR-132](./adr-132-ui-terminal.md) — встроенный терминал (выделен из этого документа).
 
 ## История
 
 - 2026-09-16 — документ создан (D19, браузер и терминал).
-- 2026-11-09 — терминал вынесен в PROP-132; зафиксировано разделение серверного headless и пользовательского headed, режимная матрица, профиль и attach.
+- 2026-11-09 — терминал вынесен в PROP-132 (принят как [ADR-132](./adr-132-ui-terminal.md)); зафиксировано разделение серверного headless и пользовательского headed, режимная матрица, профиль и attach.

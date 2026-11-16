@@ -371,7 +371,7 @@
   принятого сообщения (клиентский `messageId` либо выданный сервером), он же уходит в
   `message.accepted`/`message.delivered`. В гибриде проксируется **только** `202`; ответ старой
   версии сервера → мягкая деградация `202 {messageId, mode:'queue', position:null}`.
-- **Контекст терминала в промпте (PROP-132).** Необязательное поле `context` тела
+- **Контекст терминала в промпте (ADR-132).** Необязательное поле `context` тела
   `POST /api/v2/sessions/:id/prompt` — блок вывода терминала, который клиент шлёт
   **вместе с вопросом**: контекст — служебное user-сообщение (`engine/terminal/context-message.ts`),
   доставляется **перед** вопросом (`queue` — в историю, `steer` — первым в `steerInbox`);
@@ -1850,7 +1850,7 @@
   `_isAdminDisabled`, fail-closed без тула); стор приходит через `ToolContext.extra.profilesStore`,
   нет владельца — понятная ошибка. «Разговорными» для гейта считаются ответ агента и
   **реплика человека**: служебные user-сообщения (`sessions/user-messages.ts`,
-  `isServiceUserMessage` — контекст терминала PROP-132, фон, steer, шедулер, вложение тула)
+  `isServiceUserMessage` — контекст терминала ADR-132, фон, steer, шедулер, вложение тула)
   разговорными не считаются — служебный контекст, доставленный **перед** вопросом, иначе
   отнимал бы право на интервью у первого настоящего вопроса сессии.
   **Тулы вложений (ADR-115).** `attach_workspace_file` (`attach-workspace-file.ts`,
@@ -1935,7 +1935,7 @@
   в `read_session_reference`). Capability `process` выдана агентам, которые ведут работу в
   проекте (`assistant`/`leader`/`devops`/`admin`/`fixer`/`tester`); у `researcher`/
   `security-auditor`/`explore`/`general`/`title` её нет (тест — `engine/agents/capabilities.test.ts`).
-  **Тулы интерактивных терминалов (PROP-132, Ф5).** `terminal_list`/`terminal_open`/
+  **Тулы интерактивных терминалов (ADR-132, Ф5).** `terminal_list`/`terminal_open`/
   `terminal_read`/`terminal_snapshot`/`terminal_write`/`terminal_signal`/`terminal_close`/
   `terminal_run`
   (`engine/tools/terminals.ts`) — тот же
@@ -2604,7 +2604,7 @@
   (ADR-096); привязка сессии — `Session.worktree` (в форме хранения — snake_case, PostgreSQL —
   миграция `023_session_worktree`); резолв cwd — `engine/orchestrator.ts` (fail-closed при
   исчезнувшем каталоге). Спецификация — `docs/WORKTREES.md`.
-- `engine/terminal/*` — PROP-132 (интерактивные терминалы): `service.ts`
+- `engine/terminal/*` — ADR-132 (интерактивные терминалы): `service.ts`
   (`TerminalService` — реестр живых терминалов **в памяти процесса**, поток
   вывода с батчингом, ввод с капом 16 КиБ и token bucket, лимиты 8/проект и
   32/инстанс, мастер-выключатель `setEnabled`, idle-reaper, **heartbeat пула**
@@ -3224,7 +3224,7 @@
   21). Список прогонов фильтруется по доступу к сессии-владельцу (сессии кэшируются
   на один запрос). Core-дефолт `isAllowed` — `createSessionAccessPredicate()`;
   backend передаёт правило проекта (`routes/processes.ts`).
-  `createTerminalRoutes` (PROP-132, Ф3б) — HTTP-контур интерактивных
+  `createTerminalRoutes` (ADR-132, Ф3б) — HTTP-контур интерактивных
   терминалов (`GET /` — список постранично с фильтрами `project_id`/`session_id`
   и `include_exited` (`true`/`1` — вместе с завершёнными; по умолчанию — только
   живые, иначе восстановленные из снимков не видны),

@@ -232,13 +232,13 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_TOOLS_OUTPUT_MAX_LINES` | number | `tools.outputMaxLines` (общий предел вывода инструментов, строк; ≥ 1) |
 | `SYNTH_TOOLS_OUTPUT_MAX_BYTES` | number | `tools.outputMaxBytes` (общий предел вывода инструментов, байт; ≥ 1) |
 | `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
-| `SYNTH_TERMINAL_ENABLED` | boolean | `terminal.enabled` (PROP-132; мастер-выключатель интерактивных терминалов) |
-| `SYNTH_TERMINAL_AUTO_RESTORE` | boolean | `terminal.autoRestore` (PROP-132; восстановление терминалов из снимков после рестарта ядра) |
-| `SYNTH_TERMINAL_IDLE_MINUTES` | number | `terminal.idleMinutes` (PROP-132; простой до закрытия терминала, минуты; 30..10080) |
-| `SYNTH_TERMINAL_MAX_PER_PROJECT` | number | `terminal.maxPerProject` (PROP-132; предел живых терминалов на проект; 1..64) |
-| `SYNTH_TERMINAL_MAX_PER_INSTANCE` | number | `terminal.maxPerInstance` (PROP-132; предел живых терминалов на инстанс; 1..256) |
-| `SYNTH_TERMINAL_SHELL` | string | `terminal.shell` (PROP-132; имя программы или абсолютный путь оболочки, без пробелов) |
-| `SYNTH_TERMINAL_AUDIT_INPUT` | boolean | `terminal.auditInput` (PROP-132; писать ли `terminal.input` в журнал исполнений команд) |
+| `SYNTH_TERMINAL_ENABLED` | boolean | `terminal.enabled` (ADR-132; мастер-выключатель интерактивных терминалов) |
+| `SYNTH_TERMINAL_AUTO_RESTORE` | boolean | `terminal.autoRestore` (ADR-132; восстановление терминалов из снимков после рестарта ядра) |
+| `SYNTH_TERMINAL_IDLE_MINUTES` | number | `terminal.idleMinutes` (ADR-132; простой до закрытия терминала, минуты; 30..10080) |
+| `SYNTH_TERMINAL_MAX_PER_PROJECT` | number | `terminal.maxPerProject` (ADR-132; предел живых терминалов на проект; 1..64) |
+| `SYNTH_TERMINAL_MAX_PER_INSTANCE` | number | `terminal.maxPerInstance` (ADR-132; предел живых терминалов на инстанс; 1..256) |
+| `SYNTH_TERMINAL_SHELL` | string | `terminal.shell` (ADR-132; имя программы или абсолютный путь оболочки, без пробелов) |
+| `SYNTH_TERMINAL_AUDIT_INPUT` | boolean | `terminal.auditInput` (ADR-132; писать ли `terminal.input` в журнал исполнений команд) |
 | `SYNTH_AUTHORITY_ENABLED` | boolean | `authority.enabled` (ADR-106; мастер-выключатель слоя полномочий) |
 | `SYNTH_AUTHORITY_SHADOW` | boolean | `authority.shadow` (ADR-106; `true` — наблюдение, `false` — принуждение) |
 | `SYNTH_OAUTH_<PROVIDER>_CLIENT_SECRET` | string (секрет) | `client_secret` OAuth-провайдера: `google` → `SYNTH_OAUTH_GOOGLE_CLIENT_SECRET` (в config не хранится; альтернатива — файл `{dataDir}/secrets/oauth/<provider>.client_secret`, см. ниже) |
@@ -3102,9 +3102,9 @@ openssl rand -hex 32 > "$SYNTH_DATA_DIR/secrets/metrics-token"
   или `ServiceMonitor`, дашборды `grafana.dashboards`, правила `alerts` ([charts/synth/README.md](../charts/synth/README.md)
   §«Наблюдаемость»). Dev-стенд — `docker-compose.observability.yml` ([deploy/observability/README.md](../deploy/observability/README.md)).
 
-### Терминалы (`terminal.*`, PROP-132)
+### Терминалы (`terminal.*`, ADR-132)
 
-Интерактивные терминалы (PTY-сессии, [PROP-132](./arch_decisions/prop-132-ui-terminal.md)):
+Интерактивные терминалы (PTY-сессии, [ADR-132](./arch_decisions/adr-132-ui-terminal.md)):
 список, создание, поток вывода, ввод, изменение размера, перезапуск. Терминал
 принадлежит проекту; привязка к сессии — необязательная. Реестр терминалов —
 **в памяти процесса**, но его содержимое переживает рестарт ядра: сервис пишет

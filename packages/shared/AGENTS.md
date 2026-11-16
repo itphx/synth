@@ -441,7 +441,7 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   **не** `question.*` — `question.asked` уже занят смыслом «очередь зависла»),
   `process.started`/`process.exited`/`process.stopped` и `child.completed`/`child.failed`/
   `child.cancelled`; все публикуются в **канале сессии** (ADR-009/ADR-024, новых каналов нет).
-- PROP-132 (план терминалов): **метаданные терминала** в `EventType`
+- ADR-132 (план терминалов): **метаданные терминала** в `EventType`
   (`types/bus-events.ts`) — `terminal.created`/`terminal.updated`/`terminal.exited`/
   `terminal.deleted` (канал — сессия терминала; **поток вывода по шине не идёт** —
   волатильный класс, отдельный NDJSON-поток). Payload-типы

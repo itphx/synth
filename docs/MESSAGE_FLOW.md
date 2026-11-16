@@ -1396,7 +1396,7 @@ sequenceDiagram
 
 Код: `queue/processor.ts`, `sessions/manager.ts`, `docs/arch_decisions/prop-105-multi-replica-coordination.md`.
 
-### 8.33 Контекст терминала вместе с вопросом (PROP-132)
+### 8.33 Контекст терминала вместе с вопросом (ADR-132)
 
 1. `POST /prompt {content, context}` — клиент присылает **вопрос** и блок вывода
    терминала (`context`) одним запросом. Контекст — служебное user-сообщение

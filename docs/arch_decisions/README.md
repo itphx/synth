@@ -68,6 +68,7 @@
 | ADR-128 | Компактизация на границе шага (mid-turn) | ✅ Реализовано | [adr-128-step-boundary-compaction.md](./adr-128-step-boundary-compaction.md) |
 | ADR-129 | Список задач дочерней сессии саб-агента | ✅ Реализовано | [adr-129-child-session-todos.md](./adr-129-child-session-todos.md) |
 | ADR-130 | Рабочая панель плана, ToDo, журнала и инвариантов | ✅ Реализовано | [adr-130-plan-journal-work-panel.md](./adr-130-plan-journal-work-panel.md) |
+| ADR-132 | Встроенный терминал — PTY на точке исполнения, вкладка в UI | ✅ Реализовано | [adr-132-ui-terminal.md](./adr-132-ui-terminal.md) |
 | ADR-133 | Каналы обновлений и проверка обновлений | ✅ Реализовано | [adr-133-update-channels.md](./adr-133-update-channels.md) |
 | ADR-134 | Сервис инстанса: synth service и systemd --user | ✅ Реализовано | [adr-134-instance-service-systemd-user.md](./adr-134-instance-service-systemd-user.md) |
 | ADR-139 | LLM-шлюз по умолчанию включён в managed и hybrid | ✅ Реализовано | [adr-139-llm-gateway-hybrid.md](./adr-139-llm-gateway-hybrid.md) |
@@ -130,7 +131,6 @@
 | PROP-109 | Централизация внешних агентных систем (федерация) | 🧩 Предложение | [prop-109-agent-system-federation.md](./prop-109-agent-system-federation.md) |
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
-| PROP-132 | Встроенный терминал в UI | 🧩 Предложение | [prop-132-ui-terminal.md](./prop-132-ui-terminal.md) |
 | PROP-140 | Класс исполнителей MCP — пулы, хостящие MCP-серверы | 🧩 Предложение | [prop-140-mcp-executor-class.md](./prop-140-mcp-executor-class.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
@@ -172,6 +172,7 @@
 | PROP-125 | [ADR-125](./adr-125-hybrid-remote-mcp.md) | принято |
 | PROP-126 | [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) | принято |
 | PROP-127 | [ADR-127](./adr-127-parallel-tool-execution.md) | принято |
+| PROP-132 | [ADR-132](./adr-132-ui-terminal.md) | принят 2026-11-16 |
 | PROP-133 | [ADR-140](./adr-140-project-access-sharing.md) | реализованы Ф1–Ф3 |
 | PROP-135 | [ADR-135](./adr-135-execution-contour.md) | принято |
 | PROP-136 | [ADR-136](./adr-136-shell-trust.md) | принято |
@@ -189,5 +190,5 @@
 
 ---
 
-Всего документов: 121 (Решения: 60, Частично: 27, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 3).
-Удалено: 28 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
+Всего документов: 121 (Решения: 61, Частично: 27, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 3).
+Удалено: 29 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

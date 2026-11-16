@@ -148,4 +148,4 @@
 - [ADR-122](./adr-122-memory-product.md) «Память Synth» — журнал/guardrails/шаблоны.
 - [PROP-063](./prop-063-user-learning-metrics.md) «Обучение пользователя и метрики» — метрики циклов.
 - [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) — поверхность ввода (goal не вводит отдельный префикс).
-- [PROP-132](./prop-132-ui-terminal.md) — терминал в UI, если шаг/проверка цикла идёт через shell.
+- [ADR-132](./adr-132-ui-terminal.md) — терминал в UI, если шаг/проверка цикла идёт через shell.

@@ -1792,7 +1792,7 @@ instance without ADMIN), `404 NOT_FOUND`, `409 CONFLICT` (name taken). Name — 
 | GET | `/api/v2/settings/metrics/status` | ADMIN (managed) / auth (core) | Live snapshot: `{enabled, running, source, restartRequired, ready, storage:"ok"\|"degraded", storageBackend, version, uptimeSec, exposition:{series,bytes,droppedSeries}, token, endpoints}` |
 | PUT | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Bearer token for `/metrics` (write-only): `{token}` (trimmed length ≥16) → `{dataDir}/secrets/metrics-token` (`0600`, atomic), applied **immediately**; short/empty → 400 `VALIDATION_ERROR`; token from env → 409 `CONFLICT`; the value is never returned |
 | DELETE | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Delete the token file (idempotent) → `{token:{configured,source}}`; token from env → 409 `CONFLICT` |
-| GET | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Terminal settings (PROP-132): `{enabled:boolean, autoRestore:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean, autoRestore:boolean}, envLocked:boolean, restartRequired:false}`; the priority of each field: `SYNTH_TERMINAL_ENABLED`/`SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled`/`terminal.autoRestore` > `true` |
+| GET | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Terminal settings (ADR-132): `{enabled:boolean, autoRestore:boolean, source:"env"\|"runtime"\|"config"\|"default", defaults:{enabled:boolean, autoRestore:boolean}, envLocked:boolean, restartRequired:false}`; the priority of each field: `SYNTH_TERMINAL_ENABLED`/`SYNTH_TERMINAL_AUTO_RESTORE` > runtime (`settings.json`/PG) > `config.yaml` `terminal.enabled`/`terminal.autoRestore` > `true` |
 | PUT | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | `{enabled?:boolean, autoRestore?:boolean}` — a **partial** runtime override (`settings.json`/PG), **applied immediately** (`restartRequired:false`: the live terminals are closed, creating new ones is forbidden, the restore from the snapshots is turned on/off); a non-boolean → 400 `VALIDATION_ERROR`; a field fixed by env → 409 `CONFLICT`; the response is the same as for `GET` |
 | DELETE | `/api/v2/settings/terminal` | ADMIN (managed) / auth (core) | Reset the runtime values to env/config/default with the same live application (the response is the same as for `GET`); at least one of the values is fixed by env → 409 `CONFLICT` |
 | GET | `/api/v2/settings/limits` | ADMIN (managed) / auth (core) | Limit of heavy session operations (`limits.sessionOpsPerMinute`): `{sessionOpsPerMinute:number (0 — no limit), saved:number\|null, defaults:number, source:"env"\|"runtime"\|"config"\|"default", envLocked:boolean, restartRequired:false}`; priority `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` > runtime (`settings.json`/PG) > `config.yaml` `limits.sessionOpsPerMinute` > `10`. Limits `POST /sessions/import`, `POST /sessions/import-batch`, `GET /sessions/:id/export`, `POST /sessions/:id/fork`, `POST /sessions/:id/merge` (see §5.5) |
@@ -3134,9 +3134,9 @@ restart, `GET /api/v2/execution/profiles` returns the **running** catalogue. The
 section-wide address (`execution.remote.url`) and the mode (`execution.mode`) stay at
 the config/env level — the instance pool takes its address from there.
 
-### 5.43 Terminals — `/api/v2/terminals` (both, PROP-132)
+### 5.43 Terminals — `/api/v2/terminals` (both, ADR-132)
 
-Interactive terminals (PTY sessions, [PROP-132](../arch_decisions/prop-132-ui-terminal.md)).
+Interactive terminals (PTY sessions, [ADR-132](../arch_decisions/adr-132-ui-terminal.md)).
 A terminal **belongs to a project**; binding it to a session is optional. The PTY
 is raised on the execution point (the execution port, ADR-077) — the same place
 commands run: the terminal port is chosen by **the same** router as the tool
@@ -3241,14 +3241,14 @@ new transport channels). **The output stream does not go through the bus** — i
 is a volatile class: a separate NDJSON stream `GET /terminals/:id/stream` and
 catch-up via `GET /terminals/:id/output?since=`.
 
-### 5.44 Terminal settings — `/api/v2/settings/terminal` (both, PROP-132)
+### 5.44 Terminal settings — `/api/v2/settings/terminal` (both, ADR-132)
 
 The `terminal` section: the master switch of the interactive terminals
 (`terminal.enabled`), the flag that restores the terminals from the snapshots
 after a core restart (`terminal.autoRestore`) and the **execution parameters** —
 the idle timeout, the live-terminal limits, the default shell of new terminals
 and the input journaling
-([PROP-132](../arch_decisions/prop-132-ui-terminal.md)). The factory
+([ADR-132](../arch_decisions/adr-132-ui-terminal.md)). The factory
 `createTerminalSettingsRoutes` is shared by core and backend; managed passes the
 ADMIN guards, core — `requireAuth`.
 
@@ -3341,7 +3341,7 @@ execution point is unavailable, the directory is gone), the terminal stays
 | Memory: the portal and the metrics (ADR-107, PROP-047) | `packages/core/src/server/routes/memory.ts`, `packages/core/src/metrics/collectors/memory.ts`, `packages/core/src/storage/ports/{memory-fact-repository,memory-index-repository}.ts`, `packages/core/src/engine/plugins/scoped-memory.ts` |
 | External credentials (ADR-105) | `packages/core/src/server/routes/oauth.ts`, `packages/core/src/engine/oauth/*` (client, service, registry, audit), `packages/core/src/storage/external-credential-store.ts`, `packages/core/src/storage/ports/{external-credential-repository,credential-audit-repository}.ts`, `packages/shared/src/types/external-credentials.ts` |
 | Background runs: the registry, the services, the HTTP contour (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
-| Terminals: the service, the ring buffer, the audit, the metrics, the HTTP contour (PROP-132) | `packages/core/src/engine/terminal/*`, `packages/core/src/server/routes/terminals.ts`, `packages/core/src/server/app/terminal-service.ts`, `packages/shared/src/types/bus-events.ts` |
+| Terminals: the service, the ring buffer, the audit, the metrics, the HTTP contour (ADR-132) | `packages/core/src/engine/terminal/*`, `packages/core/src/server/routes/terminals.ts`, `packages/core/src/server/app/terminal-service.ts`, `packages/shared/src/types/bus-events.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

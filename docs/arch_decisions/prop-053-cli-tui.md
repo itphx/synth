@@ -83,4 +83,4 @@ CLI не является полноценным клиентом удалённ
 - [ADR-126](./adr-126-input-surface-commands-mentions-snippets.md) — поверхность ввода: `/`-команды и `$`-скиллы в интерактивном CLI.
 - [ADR-079](./adr-079-local-home-independent-instances.md) «Локальный home» — пути и изоляция инстансов.
 - [ADR-043](./adr-043-unified-identity-login.md) «Единая идентичность» — аутентификация как клиента API.
-- Смежные черновики: D19 — [PROP-064](./prop-064-agent-browser.md) (браузер) и [PROP-132](./prop-132-ui-terminal.md) (терминал).
+- Смежные черновики: D19 — [PROP-064](./prop-064-agent-browser.md) (браузер) и [ADR-132](./adr-132-ui-terminal.md) (терминал).

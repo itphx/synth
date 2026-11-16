@@ -3,7 +3,7 @@
 > **Статус:** ⚠️ Частично — команды, `$`/`#`/`@`, механика скиллов и подсветка ввода реализованы; остаток — реализация `!`-запуска скриптов проекта (§5, решение зафиксировано), install/подписи/`lock.json` и backend-админка каталога скиллов ([PROP-068](./prop-068-skills-agents-registry.md)).
 > **Дата:** 2026-11-14 (объединение с механикой скиллов — 2026-11-16; `!` закрыт решением — 2026-11-16).
 > **Источник:** PROP-126 (файл удалён после принятия); механика скиллов перенесена из [ADR-046](./legacy/adr-046-skills-and-slash-commands.md) (заменён).
-> **Связано:** [ADR-115](./adr-115-multimodal-input.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-069](./adr-069-project-instructions-agents-md.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-104](./adr-104-mid-turn-steering.md), [ADR-118](./adr-118-message-stream-v2.md), [ADR-119](./adr-119-context-compaction.md), [PROP-057](./prop-057-loop-engine.md), [PROP-068](./prop-068-skills-agents-registry.md), [PROP-132](./prop-132-ui-terminal.md)
+> **Связано:** [ADR-115](./adr-115-multimodal-input.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-069](./adr-069-project-instructions-agents-md.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-104](./adr-104-mid-turn-steering.md), [ADR-118](./adr-118-message-stream-v2.md), [ADR-119](./adr-119-context-compaction.md), [PROP-057](./prop-057-loop-engine.md), [PROP-068](./prop-068-skills-agents-registry.md), [ADR-132](./adr-132-ui-terminal.md)
 
 ## Контекст
 
@@ -57,7 +57,7 @@ capability-соответствие. Два документа описывал�
 5. **`!` — запуск объявленного скрипта проекта.** `!name [args]` в обычном сообщении
    резолвится по реестру скриптов и запускает его **фоновым процессом** (ADR-113).
    Raw shell через `!` не поддерживается: интерактив — это терминал
-   ([PROP-132](./prop-132-ui-terminal.md), PTY), произвольная команда агента —
+   ([ADR-132](./adr-132-ui-terminal.md), PTY), произвольная команда агента —
    `execute_shell`. Резолвинг — в core (`orchestrator/phases/process-early.ts`,
    рядом с `/` и `$`), а не в UI: иначе разойдутся CLI, гибрид и шлюзы.
    - **Реестр.** `.synth/scripts/<name>.md` (project) > `{dataDir}/scripts` (instance) >
@@ -189,7 +189,7 @@ capability-соответствие. Два документа описывал�
 - **Доверие к внешним каталогам и `skills.urls`** — ограничено read-only индексацией; install/подписи — [PROP-068](./prop-068-skills-agents-registry.md).
 - **`!` как raw shell (opencode)** — отклонён: второй путь исполнения кода из композера, неоднозначный
   парсинг (`!dev` — скрипт или команда `dev`?) и грант «на весь shell» вместо гранта по имени.
-  Интерактивный shell уже есть в терминале ([PROP-132](./prop-132-ui-terminal.md)), агенту — `execute_shell`.
+  Интерактивный shell уже есть в терминале ([ADR-132](./adr-132-ui-terminal.md)), агенту — `execute_shell`.
 - **Скрипты как голые `.sh`/`.py` без декларации** — отклонён: интерпретатор, аргументы и описание
   пришлось бы угадывать по расширению и шапке-комментариям; trust-гейт и «видно, но не запускается»
   вешать некуда, а discovery/кэш/диагностика стали бы вторым набором правил рядом с `.synth/*`.

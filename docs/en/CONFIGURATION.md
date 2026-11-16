@@ -85,13 +85,13 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DECISION_MODEL` | ADR-084: decision-layer model (e.g. `clef-flash`) | `decision.model` |
 | `SYNTH_METRICS_ENABLED` | ADR-094: enable `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer token for `/metrics` (takes precedence over the file `{dataDir}/secrets/metrics-token`); the value is never logged | — |
-| `SYNTH_TERMINAL_ENABLED` | PROP-132: master switch of the interactive-terminal contour (`false` — the whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED`, live terminals are closed, new ones are not created) | `terminal.enabled` (`true`) |
-| `SYNTH_TERMINAL_AUTO_RESTORE` | PROP-132: restore the terminals from the snapshots after a core restart | `terminal.autoRestore` (`true`) |
-| `SYNTH_TERMINAL_IDLE_MINUTES` | PROP-132: idle time before a terminal is closed, minutes (30..10080); also the snapshot TTL | `terminal.idleMinutes` (`2880`) |
-| `SYNTH_TERMINAL_MAX_PER_PROJECT` | PROP-132: limit of live terminals per project (1..64) | `terminal.maxPerProject` (`8`) |
-| `SYNTH_TERMINAL_MAX_PER_INSTANCE` | PROP-132: limit of live terminals per instance (1..256) | `terminal.maxPerInstance` (`32`) |
-| `SYNTH_TERMINAL_SHELL` | PROP-132: shell program name or absolute path, without spaces | `terminal.shell` (not set — platform default) |
-| `SYNTH_TERMINAL_AUDIT_INPUT` | PROP-132: whether `terminal.input` is written to the command-execution log | `terminal.auditInput` (`true`) |
+| `SYNTH_TERMINAL_ENABLED` | ADR-132: master switch of the interactive-terminal contour (`false` — the whole `/api/v2/terminals*` contour answers `403 TERMINALS_DISABLED`, live terminals are closed, new ones are not created) | `terminal.enabled` (`true`) |
+| `SYNTH_TERMINAL_AUTO_RESTORE` | ADR-132: restore the terminals from the snapshots after a core restart | `terminal.autoRestore` (`true`) |
+| `SYNTH_TERMINAL_IDLE_MINUTES` | ADR-132: idle time before a terminal is closed, minutes (30..10080); also the snapshot TTL | `terminal.idleMinutes` (`2880`) |
+| `SYNTH_TERMINAL_MAX_PER_PROJECT` | ADR-132: limit of live terminals per project (1..64) | `terminal.maxPerProject` (`8`) |
+| `SYNTH_TERMINAL_MAX_PER_INSTANCE` | ADR-132: limit of live terminals per instance (1..256) | `terminal.maxPerInstance` (`32`) |
+| `SYNTH_TERMINAL_SHELL` | ADR-132: shell program name or absolute path, without spaces | `terminal.shell` (not set — platform default) |
+| `SYNTH_TERMINAL_AUDIT_INPUT` | ADR-132: whether `terminal.input` is written to the command-execution log | `terminal.auditInput` (`true`) |
 | `SYNTH_EXECUTION_MODE` | ADR-077: execution topology — `inline` (default) \| `remote` (remote executor, ADR-077 step 7b; fail-closed at startup) | `inline` |
 | `SYNTH_EXECUTION_REMOTE_URL` | ADR-077: executor address list (comma-separated) | — |
 | `SYNTH_EXECUTION_TOKEN` | ADR-077: path/reference to the executor token (NOT a value, invariant 13) | — |
@@ -2955,9 +2955,9 @@ metrics:
   ([charts/synth/README.md](../../charts/synth/README.md) §"Наблюдаемость"). Dev stand —
   `docker-compose.observability.yml` ([deploy/observability/README.md](../../deploy/observability/README.md)).
 
-### Terminals (`terminal.*`, PROP-132)
+### Terminals (`terminal.*`, ADR-132)
 
-Interactive terminals (PTY sessions, [PROP-132](../arch_decisions/prop-132-ui-terminal.md)):
+Interactive terminals (PTY sessions, [ADR-132](../arch_decisions/adr-132-ui-terminal.md)):
 list, create, output stream, input, resize, restart. A terminal belongs to a project; binding it to a
 session is optional. The terminal registry lives **in process memory**, but its content survives a
 core restart: the service writes a **snapshot** of the terminal into the blob store
