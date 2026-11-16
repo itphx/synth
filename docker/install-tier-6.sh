@@ -47,9 +47,9 @@
 #
 # Сам OMZ в репозиторий НЕ вендорится (9.7 МБ) — качается на этапе сборки.
 #
-# Тема `eof` — наоборот, вендорится (`docker/executor/themes/eof.zsh-theme`,
-# ~2 КБ, источник — git.itphx.ru/eka/.dots): иначе сборка зависела бы от
-# доступа к личному Gitea. Файл копируется в эту же директорию рядом со
+# Тема `synth` — наоборот, вендорится (`docker/executor/themes/synth.zsh-theme`,
+# ~1.5 КБ, основана на `eof` из git.itphx.ru/eka/.dots): иначе сборка зависела
+# бы от доступа к личному Gitea. Файл копируется в эту же директорию рядом со
 # скриптом (см. COPY в `docker/Dockerfile.executor`).
 
 set -eu
@@ -148,17 +148,17 @@ rm -rf "$OMZ_DIR/.git"
 chmod -R a+rX "$OMZ_DIR"
 echo "install-tier-6.sh: Oh My Zsh установлен в $OMZ_DIR ($omz_actual)"
 
-# Тема `eof` вендорится в репозиторий (docker/executor/themes/eof.zsh-theme)
+# Тема `synth` вендорится в репозиторий (docker/executor/themes/synth.zsh-theme)
 # и копируется в этой же директории рядом со скриптом. Нет файла — ошибка
 # сборки (образ без темы не годен: zshrc ссылается на неё).
-THEME_SRC="$SCRIPT_DIR/eof.zsh-theme"
+THEME_SRC="$SCRIPT_DIR/synth.zsh-theme"
 if [ ! -f "$THEME_SRC" ]; then
-    echo "install-tier-6.sh: не найден eof.zsh-theme рядом со скриптом ($THEME_SRC)" >&2
+    echo "install-tier-6.sh: не найден synth.zsh-theme рядом со скриптом ($THEME_SRC)" >&2
     exit 1
 fi
 mkdir -p "$OMZ_DIR/custom/themes"
-cp "$THEME_SRC" "$OMZ_DIR/custom/themes/eof.zsh-theme"
-chmod 0644 "$OMZ_DIR/custom/themes/eof.zsh-theme"
+cp "$THEME_SRC" "$OMZ_DIR/custom/themes/synth.zsh-theme"
+chmod 0644 "$OMZ_DIR/custom/themes/synth.zsh-theme"
 
 # ---------------------------------------------------------------------------
 # Проверки состава (fail-closed: образ без этого не годен)
@@ -202,8 +202,8 @@ if command -v infocmp >/dev/null 2>&1; then
     echo "install-tier-6.sh: terminfo tmux-256color — OK"
 fi
 
-if [ ! -f "$OMZ_DIR/custom/themes/eof.zsh-theme" ]; then
-    echo "install-tier-6.sh: тема eof не установлена" >&2
+if [ ! -f "$OMZ_DIR/custom/themes/synth.zsh-theme" ]; then
+    echo "install-tier-6.sh: тема synth не установлена" >&2
     exit 1
 fi
 

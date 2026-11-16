@@ -2,30 +2,26 @@ import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useAgentsStore } from '@/stores/agentsStore'
-import { useChatStore, type MessageData, type QueuedMessage } from '@/stores/chatStore'
+import { useChatStore, type MessageData } from '@/stores/chatStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useTransportStore, applyHistoryPage, restoreLiveTurnFromSession } from '@/stores/transportStore'
+import { applyHistoryPage, restoreLiveTurnFromSession } from '@/stores/transportStore'
 import { synthApi, type AgentInfo, type StickyNoteData } from '@/lib/api/synthApi'
 import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
-import { stickyNoteErrorKey, useStickyNotesLimits } from '@/lib/api/stickyNotesLimits'
 import { restorePendingPermissions, restorePendingQuestions } from '@/lib/pendingRestore'
-import { isQueueChangedError } from '@/lib/api/queue'
 import { attachmentThumbnailUrl } from '@/lib/api/attachments'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { copyMessageText } from '@/lib/messageCopy'
 import { resolveLiveParts } from '@/lib/messageParts'
 import { MessageList } from './MessageList'
-import { ChatInput } from './ChatInput'
+import { SessionComposer } from './SessionComposer'
+import { useSessionComposer } from './useSessionComposer'
 import { DebugModal } from './DebugModal'
-import { QueuePanel } from './QueuePanel'
-import { mediaPartsOf } from './attachments/MessageAttachments'
 import { PermissionRequestBar } from './PermissionRequestBar'
 import { QuestionDock } from './QuestionDock'
 import { StickyNotesPanel } from './StickyNotesPanel'
 import { StreamErrorPanel } from './StreamErrorPanel'
-import { SendBlockedPanel, sendBlockedFromError, type SendBlockedState } from './SendBlockedPanel'
 import { ContextWarningPanel } from './ContextWarningPanel'
 import {
   useContextWindowUsage,
@@ -36,7 +32,8 @@ import { useBackgroundHotkey } from './useBackgroundHotkey'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAttachmentsStore, type RestorableAttachment } from '@/stores/attachmentsStore'
-import { DEFAULT_STEER_MODE, type MediaPartData, type Part, type SteerMode } from '@itphx/synth-shared/types'
+import { toQueuedMessage } from './queueMessages'
+import type { MediaPartData, Part } from '@itphx/synth-shared/types'
 
 interface ChatTabProps {
   tab: CenterTab
@@ -45,9 +42,12 @@ interface ChatTabProps {
 // Стабильные пустые референсы: иначе каждый рендер создаёт новые []/{}/Set,
 // ломая мемоизацию memo-детей (MessageList и пр.).
 const EMPTY_MESSAGES: MessageData[] = []
-const EMPTY_PENDING: QueuedMessage[] = []
 const EMPTY_STICKY: StickyNoteData[] = []
 const EMPTY_SELECTED_IDS: Set<string> = new Set()
+
+// `toQueuedMessage` живёт в отдельном модуле (общий с контроллером композера),
+// но прежний импорт из `ChatTab` остаётся рабочим.
+export { toQueuedMessage }
 
 /**
  * ADR-115: восстановить вложения сообщения в композер («Повторить»).
@@ -91,26 +91,11 @@ function restoreAttachmentsFromMessage(
   if (items.length > 0) useAttachmentsStore.getState().restore(sessionId, items)
 }
 
-/**
- * `pending_messages` сессии → строка очереди (`QueuedMessage`).
- * ADR-115: число вложений считаем по медиа-частям сообщения.
- */
-export function toQueuedMessage(pm: MessageData): QueuedMessage {
-  return {
-    id: pm.id,
-    content: pm.content,
-    agentRole: pm.agent_role || null,
-    attachmentCount: mediaPartsOf(pm.parts).length,
-  }
-}
-
 export function ChatTab({ tab }: ChatTabProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
   const messagesBySession = useChatStore(s => s.messagesBySession)
   const turnBySession = useChatStore(s => s.turnBySession)
-  const queueBySession = useChatStore(s => s.queueBySession)
-  const pendingBySession = useChatStore(s => s.pendingBySession)
   const retryBySession = useChatStore(s => s.retryBySession)
   const finalErrorBySession = useChatStore(s => s.finalErrorBySession)
   const stickyNotesBySession = useChatStore(s => s.stickyNotesBySession)
@@ -118,14 +103,10 @@ export function ChatTab({ tab }: ChatTabProps) {
   const debugModalSessionId = useChatStore(s => s.debugModalSessionId)
   const debugModalMessageId = useChatStore(s => s.debugModalMessageId)
   const updateMessageById = useChatStore(s => s.updateMessageById)
-  const clearQueueState = useChatStore(s => s.clearQueueState)
   const resetQueueStalled = useChatStore(s => s.resetQueueStalled)
   const updateQueueCount = useChatStore(s => s.updateQueueCount)
   const setPendingMessages = useChatStore(s => s.setPendingMessages)
-  const reorderPending = useChatStore(s => s.reorderPending)
   const setStickyNotes = useChatStore(s => s.setStickyNotes)
-  // Лимиты заметок нужны для понятного текста отказа (409/400) вместо общего.
-  const stickyNotesLimits = useStickyNotesLimits()
   const setSummarizationPending = useChatStore(s => s.setSummarizationPending)
   const openDebugModal = useChatStore(s => s.openDebugModal)
   const closeDebugModal = useChatStore(s => s.closeDebugModal)
@@ -143,8 +124,6 @@ export function ChatTab({ tab }: ChatTabProps) {
   const contextUsage = useContextWindowUsage(sessionId)
   useContextWindowWarning(sessionId, contextUsage.percent)
   const messages = messagesBySession[sessionId] || EMPTY_MESSAGES
-  const queue = queueBySession[sessionId]
-  const pending = pendingBySession[sessionId] || EMPTY_PENDING
   const stickyNotes = stickyNotesBySession[sessionId] || EMPTY_STICKY
   const streamRetry = retryBySession[sessionId]
   const summarizationPending = summarizationPendingBySession[sessionId] || false
@@ -154,10 +133,14 @@ export function ChatTab({ tab }: ChatTabProps) {
   const isStreaming = activeTurn?.status === 'streaming'
   const hasActiveStream = isStreaming
 
+  // Общий контроллер композера (UI-1): отправка, «Стоп», заметки и очередь.
+  // Логика живёт в хуке — её переиспользует док «Спросить агента» в терминале.
+  const composer = useSessionComposer(sessionId)
+
   // ADR-111 §detach: `ctrl+b` переводит все блокирующие прогоны активной сессии
   // в фон — только пока ход идёт (вне стрима переводить нечего).
   useBackgroundHotkey(sessionId, isStreaming)
-  const isEmpty = messages.length === 0 && !hasActiveStream && pending.length === 0 && !summarizationPending
+  const isEmpty = messages.length === 0 && !hasActiveStream && composer.pending.length === 0 && !summarizationPending
   const debugMessage = debugModalSessionId && debugModalMessageId
     ? messages.find((m) => m.id === debugModalMessageId) ?? null
     : null
@@ -183,21 +166,6 @@ export function ChatTab({ tab }: ChatTabProps) {
   const isSubagent = sessionOrigin === 'subagent'
   const isReadOnly = isSubagent
   const [inputExpanded, setInputExpanded] = useState(false)
-
-  // Отправка заблокирована отключённым провайдером/моделью: понятная плашка над
-  // композером (вместо общего тоста). Снимается при успешной отправке, смене
-  // модели/провайдера и переключении сессии.
-  const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
-  const selectedModelName = useProvidersStore(s => s.selectedModelName)
-  const [sendBlocked, setSendBlocked] = useState<SendBlockedState | null>(null)
-  useEffect(() => {
-    setSendBlocked(null)
-  }, [sessionId, selectedProviderName, selectedModelName])
-
-  // ADR-104: режим отправки сообщения по умолчанию для композера. Выбор
-  // пользователя (`queue`/`steer`/`interrupt`) делает селектор композера — он
-  // виден только при активном ходе; без хода сообщение уходит обычной очередью.
-  const sendMode: SteerMode = DEFAULT_STEER_MODE
 
   const agentsRef = useRef<AgentInfo[]>([])
   const forkingRef = useRef(false)
@@ -360,63 +328,6 @@ export function ChatTab({ tab }: ChatTabProps) {
     [sessionId, notify, t]
   )
 
-  const handleSend = useCallback(
-    async (text: string, agentRole?: string, mode?: SteerMode, attachmentIds?: string[]) => {
-      const { activeAgentId, defaultAgentId } = useAgentsStore.getState()
-      const effectiveAgentRole = agentRole || activeAgentId || defaultAgentId || undefined
-
-      // Сообщение пользователя появляется в чате только когда сервер
-      // начинает его обработку (event message.added из QueueProcessor)
-
-      try {
-        const { selectedModelName, selectedProviderName } = useProvidersStore.getState()
-        useChatStore.getState().setStreamRetry(sessionId, null)
-        // ADR-115: id загруженных вложений уходят в тело запроса промпта.
-        // ADR-118 §3: ответ — `202 {messageId, mode, position}`; реплика уже
-        // показана в ленте оптимистично по `messageId`.
-        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds)
-        setSendBlocked(null)
-        notify({
-          text: t('chat.message.sent'),
-          type: 'info',
-          category: 'message',
-          sessionId,
-        })
-      } catch (e) {
-        const blocked = sendBlockedFromError(e)
-        if (blocked) {
-          // Отключённая пара: показываем плашку по коду (тост не дублируем).
-          setSendBlocked(blocked)
-        } else {
-          notify({ text: `${t('chat.error.sendFailed')} ${(e as Error).message}`, type: 'error', category: 'error', sessionId })
-        }
-        // Ошибку пробрасываем композеру: он не очищает вложения при неудаче.
-        throw e
-      }
-    },
-    [sessionId, notify, t]
-  )
-
-  const handleStop = useCallback(async () => {
-    // Во время ретрая «Стоп» = отмена повторных попыток (иначе abort оставит
-    // pending-сообщение и сессия зависнет до queue.stalled).
-    const retry = useChatStore.getState().retryBySession[sessionId]
-    if (retry) {
-      try {
-        await synthApi.cancelQueueRetry(sessionId)
-        setStreamRetry(sessionId, null)
-      } catch {
-        // ignore
-      }
-      return
-    }
-    try {
-      useTransportStore.getState().cancel(sessionId)
-    } catch {
-      // ignore
-    }
-  }, [sessionId, setStreamRetry])
-
   const handleRetryNow = useCallback(async () => {
     try {
       await synthApi.retryQueueNow(sessionId)
@@ -521,16 +432,6 @@ export function ChatTab({ tab }: ChatTabProps) {
       // ignore
     }
   }, [sessionId])
-
-  const handleStopAll = useCallback(async () => {
-    try {
-      useTransportStore.getState().cancel(sessionId)
-      await synthApi.clearQueue(sessionId)
-      clearQueueState(sessionId)
-    } catch {
-      // ignore
-    }
-  }, [sessionId, clearQueueState])
 
   const handleCopy = useCallback(
     // Копируем видимый текст, а не legacy-`content`: там reasoning и вызовы
@@ -700,186 +601,6 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
   }, [sessionId, setSummarizationPending, notify, t])
 
-  /**
-   * Полный рефреш очереди с сервера: после отказа steer (409 `NO_ACTIVE_TURN`,
-   * 429 лимит инъекций) локальное состояние могло разойтись с серверным.
-   * Семантика та же, что у первичной загрузки: при живом стриме первый
-   * pending-элемент — текущее сообщение хода, в списке очереди его нет.
-   */
-  const refreshQueueFromApi = useCallback(async () => {
-    try {
-      const session = await synthApi.getSession(sessionId)
-      const data = session as unknown as Record<string, unknown>
-      const pendingMsgs = data.pending_messages as MessageData[] | undefined
-      if (!pendingMsgs || pendingMsgs.length === 0) {
-        clearQueueState(sessionId)
-        return
-      }
-      const hasActiveStream = data.current_stream != null
-        || useChatStore.getState().turnBySession[sessionId]?.status === 'streaming'
-      const displayMsgs = hasActiveStream ? pendingMsgs.slice(1) : pendingMsgs
-      if (displayMsgs.length === 0) {
-        clearQueueState(sessionId)
-        return
-      }
-      setPendingMessages(sessionId, displayMsgs.map(toQueuedMessage))
-      updateQueueCount(sessionId, displayMsgs.length)
-    } catch {
-      // Сеть/сервер недоступны — оставляем UI как есть, ошибку показал вызывающий.
-    }
-  }, [sessionId, clearQueueState, setPendingMessages, updateQueueCount])
-
-  const handleResumeQueue = useCallback(async () => {
-    try {
-      await synthApi.resumeQueue(sessionId)
-      clearQueueState(sessionId)
-      notify({ text: t('chat.queue.resumed'), type: 'success', category: 'queue', sessionId })
-    } catch {
-      notify({ text: t('chat.error.resumeQueue'), type: 'error', category: 'queue', sessionId })
-    }
-  }, [sessionId, clearQueueState, notify, t])
-
-  const handleClearQueue = useCallback(async () => {
-    try {
-      await synthApi.clearQueue(sessionId)
-      clearQueueState(sessionId)
-      notify({ text: t('chat.queue.cleared'), type: 'success', category: 'queue', sessionId })
-    } catch {
-      notify({ text: t('chat.error.clearQueue'), type: 'error', category: 'queue', sessionId })
-    }
-  }, [sessionId, clearQueueState, notify, t])
-
-  const handleReturnQueue = useCallback(async () => {
-    try {
-      const resp = await synthApi.returnQueue(sessionId)
-      const data = resp as { texts?: string[] }
-      if (data?.texts && data.texts.length > 0) {
-        setRetryInput(sessionId, data.texts.join('\n\n'))
-        setPendingMessages(sessionId, [])
-        clearQueueState(sessionId)
-        notify({ text: t('chat.queue.returned'), type: 'success', category: 'queue', sessionId })
-      } else {
-        notify({ text: t('chat.queue.empty'), type: 'info', category: 'queue', sessionId })
-      }
-    } catch {
-      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
-    }
-  }, [sessionId, setPendingMessages, clearQueueState, setRetryInput, notify, t])
-
-  const handleReturnMsg = useCallback(async (uiIndex: number) => {
-    const queued = pending[uiIndex]
-    // Адресация — только по серверному id: индекс мог сдвинуться (стрим/очередь).
-    if (!queued?.id) {
-      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
-      void refreshQueueFromApi()
-      return
-    }
-    try {
-      const resp = await synthApi.returnQueue(sessionId, { id: queued.id })
-      const data = resp as { texts?: string[] }
-      if (data?.texts && data.texts.length > 0) {
-        setRetryInput(sessionId, data.texts[0])
-        const cur = useChatStore.getState().pendingBySession[sessionId] || []
-        setPendingMessages(sessionId, cur.filter((_, i) => i !== uiIndex))
-        const qs = useChatStore.getState().queueBySession[sessionId]
-        if (qs && qs.pendingCount > 0) {
-          if (qs.pendingCount <= 1) {
-            useChatStore.getState().clearQueueState(sessionId)
-          } else {
-            useChatStore.getState().updateQueueCount(sessionId, qs.pendingCount - 1)
-          }
-        }
-        notify({ text: t('chat.queue.returned'), type: 'success', category: 'queue', sessionId })
-      } else {
-        notify({ text: t('chat.queue.empty'), type: 'info', category: 'queue', sessionId })
-      }
-    } catch {
-      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
-    }
-  }, [sessionId, setPendingMessages, setRetryInput, notify, t, pending, refreshQueueFromApi])
-
-  /**
-   * Локальное снятие элемента очереди после успешного действия (steer/удаление):
-   * та же арифметика, что у возврата в редактор (`handleReturnMsg`).
-   */
-  const dropPendingAt = useCallback((uiIndex: number) => {
-    const store = useChatStore.getState()
-    const cur = store.pendingBySession[sessionId] || []
-    store.setPendingMessages(sessionId, cur.filter((_, i) => i !== uiIndex))
-    const qs = store.queueBySession[sessionId]
-    if (qs && qs.pendingCount > 0) {
-      if (qs.pendingCount <= 1) {
-        store.clearQueueState(sessionId)
-      } else {
-        store.updateQueueCount(sessionId, qs.pendingCount - 1)
-      }
-    }
-  }, [sessionId])
-
-  /** «В разрыв»: принудительный steer сообщения из очереди в текущий ход (ADR-104). */
-  const handleSteerMsg = useCallback(async (uiIndex: number) => {
-    const queued = pending[uiIndex]
-    if (!queued?.id) {
-      notify({ text: t('chat.error.steerQueue'), type: 'error', category: 'queue', sessionId })
-      void refreshQueueFromApi()
-      return
-    }
-    try {
-      await synthApi.steerQueue(sessionId, { id: queued.id })
-      dropPendingAt(uiIndex)
-      notify({ text: t('chat.queue.steered'), type: 'success', category: 'queue', sessionId })
-    } catch {
-      // 409 `NO_ACTIVE_TURN`/`CONFLICT` / 429 лимит инъекций / 404: локально
-      // ничего не меняем и перечитываем очередь целиком — иначе UI разойдётся.
-      notify({ text: t('chat.error.steerQueue'), type: 'error', category: 'queue', sessionId })
-      void refreshQueueFromApi()
-    }
-  }, [sessionId, dropPendingAt, refreshQueueFromApi, notify, t, pending])
-
-  /**
-   * DnD-переупорядочивание очереди: локально применяем порядок сразу
-   * (перетаскивание не должно «отскакивать»), затем фиксируем на сервере.
-   *
-   * `409 QUEUE_CHANGED` — очередь на сервере уже другая (элемент увели/добавили):
-   * локальный порядок недостоверен, перечитываем состав у сервера и
-   * предупреждаем пользователя. Прочие ошибки — перечитываем с тостом ошибки.
-   */
-  const handleReorderQueue = useCallback(async (ids: string[]) => {
-    if (ids.length === 0) return
-    reorderPending(sessionId, ids)
-    try {
-      await synthApi.reorderQueue(sessionId, ids)
-    } catch (err) {
-      if (isQueueChangedError(err)) {
-        notify({ text: t('chat.queue.changed'), type: 'info', category: 'queue', sessionId })
-      } else {
-        notify({ text: t('chat.error.reorderQueue'), type: 'error', category: 'queue', sessionId })
-      }
-      void refreshQueueFromApi()
-    }
-  }, [sessionId, reorderPending, refreshQueueFromApi, notify, t])
-
-  /** «Удалить»: сообщение снимается с сервера, возвращённый текст выбрасывается. */
-  const handleRemoveMsg = useCallback(async (uiIndex: number) => {
-    const queued = pending[uiIndex]
-    if (!queued?.id) {
-      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
-      void refreshQueueFromApi()
-      return
-    }
-    try {
-      const resp = await synthApi.returnQueue(sessionId, { id: queued.id })
-      const data = resp as { texts?: string[] }
-      if (data?.texts && data.texts.length > 0) {
-        dropPendingAt(uiIndex)
-      } else {
-        notify({ text: t('chat.queue.empty'), type: 'info', category: 'queue', sessionId })
-      }
-    } catch {
-      notify({ text: t('chat.error.returnQueue'), type: 'error', category: 'queue', sessionId })
-    }
-  }, [sessionId, dropPendingAt, refreshQueueFromApi, notify, t, pending])
-
   // --- Selection mode handlers ---
 
   const handleToggleSelect = useCallback((messageId: string) => {
@@ -945,29 +666,6 @@ export function ChatTab({ tab }: ChatTabProps) {
     }
   }, [handleForwardConfirm])
 
-  const handleCreateNote = useCallback(async (text: string) => {
-    try {
-      const result = await synthApi.addStickyNote(sessionId, text)
-      setStickyNotes(sessionId, result.notes)
-      notify({ text: t('chat.message.sent'), type: 'info', category: 'message', sessionId })
-    } catch (err) {
-      // Сервер отклонил заметку по лимитам (409 LIMIT_EXCEEDED / 400
-      // VALIDATION_ERROR) — показываем причину, а не общий «ошибка сохранения».
-      const key = stickyNoteErrorKey(err)
-      notify({
-        text: key
-          ? t(key, {
-              maxCount: stickyNotesLimits.maxCount,
-              maxChars: stickyNotesLimits.maxChars,
-            })
-          : t('common.saveError'),
-        type: 'error',
-        category: 'error',
-        sessionId,
-      })
-    }
-  }, [sessionId, setStickyNotes, notify, t, stickyNotesLimits.maxCount, stickyNotesLimits.maxChars])
-
   const handleUpdateNote = useCallback(async (noteId: string, content: string) => {
     try {
       const result = await synthApi.updateStickyNote(sessionId, noteId, { content })
@@ -1028,18 +726,13 @@ export function ChatTab({ tab }: ChatTabProps) {
 
       {isEmpty && !isSubagent ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2">
-          {sendBlocked && <SendBlockedPanel state={sendBlocked} />}
-          <ChatInput
-            sessionId={sessionId}
+          <SessionComposer
+            controller={composer}
             agents={agentsRef.current}
             isStreaming={isStreaming}
-            onSend={handleSend}
-            sendMode={sendMode}
-            onStop={handleStop}
-            onStopQueue={handleStopAll}
-            onCreateNote={handleCreateNote}
             expanded={false}
             onToggleExpand={() => setInputExpanded((v) => !v)}
+            showQueue={false}
           />
         </div>
       ) : (
@@ -1081,41 +774,6 @@ export function ChatTab({ tab }: ChatTabProps) {
             />
           )}
 
-          {!inputExpanded && !isSubagent && sendBlocked && (
-            <SendBlockedPanel state={sendBlocked} />
-          )}
-
-          {!inputExpanded && !isSubagent && (
-            <ContextWarningPanel sessionId={sessionId} />
-          )}
-
-          {!inputExpanded && !isSubagent && (
-            <QueuePanel
-              pending={pending}
-              isStalled={queue?.isStalled ?? false}
-              pendingCount={queue?.pendingCount ?? 0}
-              canSteer={isStreaming}
-              // «Стоп» оставляет очередь в покое (автозапуска нет) — продолжить
-              // обработку можно кнопкой в панели очереди.
-              canResume={pending.length > 0 && !isStreaming}
-              onResume={handleResumeQueue}
-              onClear={handleClearQueue}
-              onReturnAll={handleReturnQueue}
-              onReturnMsg={handleReturnMsg}
-              onSteerMsg={handleSteerMsg}
-              onRemoveMsg={handleRemoveMsg}
-              onReorder={handleReorderQueue}
-            />
-          )}
-
-          {!inputExpanded && !isSubagent && (
-            <PermissionRequestBar sessionId={sessionId} />
-          )}
-
-          {!inputExpanded && !isSubagent && (
-            <QuestionDock sessionId={sessionId} />
-          )}
-
           {isSubagent ? (
             <>
               <SubagentResumeBar
@@ -1129,18 +787,20 @@ export function ChatTab({ tab }: ChatTabProps) {
               </div>
             </>
           ) : (
-            <ChatInput
-              sessionId={sessionId}
+            // Композерная зона: плашка «отправка заблокирована», панель очереди
+            // и поле ввода — общим компонентом (`SessionComposer`). Баннеры
+            // (контекст, права, вопросы) — слотами: их порядок прежний.
+            <SessionComposer
+              controller={composer}
               agents={agentsRef.current}
               isStreaming={isStreaming}
-              onSend={handleSend}
-              sendMode={sendMode}
-              onStop={handleStop}
-              onStopQueue={handleStopAll}
-              onCreateNote={handleCreateNote}
               expanded={inputExpanded}
               onToggleExpand={() => setInputExpanded((v) => !v)}
-            />
+              banner={<ContextWarningPanel sessionId={sessionId} />}
+            >
+              <PermissionRequestBar sessionId={sessionId} />
+              <QuestionDock sessionId={sessionId} />
+            </SessionComposer>
           )}
         </>
       )}

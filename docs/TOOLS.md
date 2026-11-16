@@ -708,7 +708,7 @@ PTY переносит длинную строку по ширине терми�
 | Точка исполнения | Терминалы |
 |---|---|
 | inline (standalone/dev) | да (PTY в процессе control plane; оболочка пользователя) |
-| remote `core`/`dev`/`devops`/`full` | да (протокол ≥ 8, `features.pty`; по умолчанию zsh + OMZ + тема `eof`, bash доступен) |
+| remote `core`/`dev`/`devops`/`full` | да (протокол ≥ 8, `features.pty`; по умолчанию zsh + OMZ + тема `synth`, bash доступен) |
 | remote `browser`/`browser-full` | **нет** (`SYNTH_EXECUTOR_PTY=0`: браузерный пул — Chromium/Playwright; `POST /terminals` → 503 `TERMINAL_UNAVAILABLE`, reason `pty_unsupported`) |
 | старый исполнитель (protocol ≤ 7) | нет (тот же 503) |
 

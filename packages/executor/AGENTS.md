@@ -589,11 +589,13 @@ MCP-вызова на текст и нетекстовые блоки и отд�
 - **Media-тир** — `ffmpeg`: в `dev`, `browser` и `full`; в `core` его нет.
 - **Терминальный тир (tier 6) — только во flavor'ах с терминалами** (`core` →
   `dev`/`devops`, и `full`): `zsh`, `tmux` (≥ 3.3), `ncurses-term`/`ncurses-base`,
-  `procps`, `vim-tiny` и Oh My Zsh в `/opt/oh-my-zsh` (пин — коммит в
-  `ARG OMZ_REF`, `docker/Dockerfile.executor`: репозиторий OMZ git-тегов не
-  публикует). Тема Oh My Zsh — `eof`, **вендорится** в репозиторий
-  (`docker/executor/themes/eof.zsh-theme`, копирует `install-tier-6.sh`;
-  нет файла — ошибка сборки), конфиг — `docker/executor/zshrc` →
+  `procps`, `vim-tiny` и Oh My Zsh в `/opt/oh-my-zsh` (upstream-репозиторий по
+  `ARG OMZ_REF` — коммит: git-тегов OMZ не публикует; плагины OMZ — по фактически
+  установленным бинарям). Тема Oh My Zsh — `synth`, **вендорится** в репозиторий
+  (`docker/executor/themes/synth.zsh-theme`, копирует `install-tier-6.sh`;
+  нет файла — ошибка сборки): путь в промпте короткий (`%c`), полный (`%~`) — при
+  `ZSH_THEME_SYNTH_PATH=full`, имени хоста/пользователя нет; git-статус — в
+  `RPROMPT` (плагин `git-prompt`). Конфиг — `docker/executor/zshrc` →
   `/etc/synth/zshrc` (+ `tmux.conf`); в `$HOME` они попадают симлинками
   (`~/.zshrc`, `~/.tmux.conf`), которые заводит `docker/executor-init.sh` при
   старте (при `readOnlyRootFilesystem` `$HOME` — `emptyDir`, симлинки из сборки

@@ -1,55 +1,35 @@
-# Продуктовый zshrc образа исполнителя Synth (zsh + Oh My Zsh, тема `eof`).
-#
-# Где лежит: `/etc/synth/zshrc` — часть образа (`docker/Dockerfile.executor`,
-# копируется из `docker/executor/zshrc`, стадии `core` и `full` — только они
-# дают терминалы). В `$HOME` пользователя он попадает симлинком
-# (`~/.zshrc` → `/etc/synth/zshrc`); симлинк заводит `docker/executor-init.sh`
-# при старте контейнера — потому что при `readOnlyRootFilesystem` `$HOME`
-# (`/home/synth`) — это `emptyDir`, и симлинк, созданный на этапе сборки
-# образа, примонтированный том скрывает. Если `~/.zshrc` уже есть
-# (пользователь заменил симлинк своим файлом) — ничего не трогаем:
-# переопределение пользователя важнее.
-#
-# Источник конфигурации и темы — `git.itphx.ru/eka/.dots` (`zshrc`,
-# `zsh/custom/themes/eof.zsh-theme`). Тема вендорится в репозиторий
-# (`docker/executor/themes/eof.zsh-theme`), чтобы сборка не зависела от
-# доступа к личному Gitea. Автостарт tmux из `.dots` НЕ переносится: у
-# веб-терминала может быть несколько клиентов, а `tmux attach -d` отцепляет
-# других.
-#
-# Назначение — рабочее место человека в терминале исполнителя (ADR
-# терминалов). Никаких личных путей и никакого автостарта tmux.
+# Продуктовый zshrc образа исполнителя Synth (zsh + Oh My Zsh, тема `synth`).
+# Лежит в образе как `/etc/synth/zshrc`; в `$HOME` пользователя — симлинк
+# `~/.zshrc` (заводит `docker/executor-init.sh` при старте контейнера).
+# tmux запускает человек: автостарта tmux нет (у веб-терминала может быть
+# несколько клиентов, а `tmux attach -d` отцепляет других).
 
 export PATH=$HOME/bin:$HOME/.local/bin:/usr/local/bin:$PATH
 
-# Oh My Zsh установлен в образе (`/opt/oh-my-zsh`, `docker/install-tier-6.sh`).
 export ZSH=/opt/oh-my-zsh
-ZSH_THEME="eof"
-
-# eof: компактный промпт внутри tmux, обычный — вне его.
-if [[ -n "$TMUX" ]]; then
-  ZSH_THEME_EOF_MODE="tiny"
-else
-  ZSH_THEME_EOF_MODE="small"
-fi
+ZSH_THEME="synth"
+# short (по умолчанию) — %c; full — %~
+: "${ZSH_THEME_SYNTH_PATH:=short}"
 
 # Обновления OMZ в рантайме выключены: образ неизменяем, сети может не быть.
 zstyle ':omz:update' mode disabled
 DISABLE_AUTO_UPDATE=true
-
+DISABLE_AUTO_TITLE=true
 export ZSH_CACHE_DIR="${ZSH_CACHE_DIR:-$HOME/.cache/oh-my-zsh}"
 
-# Плагины из .dots; git-prompt нужен теме eof. Отсутствующие бинари плагины
-# переживают молча.
-plugins=(git themes common-aliases git-prompt terraform tmux ansible docker docker-compose kubectl kubectx)
+# Плагины — по фактически установленным бинарям (core/dev без docker/terraform,
+# devops/full — с ними). git-prompt обязателен теме (git-статус).
+plugins=(git git-prompt common-aliases)
+(( $+commands[tmux] )) && plugins+=(tmux)
+(( $+commands[docker] )) && plugins+=(docker docker-compose)
+(( $+commands[kubectl] )) && plugins+=(kubectl)
+(( $+commands[kubectx] )) && plugins+=(kubectx)
+(( $+commands[terraform] )) && plugins+=(terraform)
+(( $+commands[ansible] )) && plugins+=(ansible)
 
 source $ZSH/oh-my-zsh.sh
 
 export EDITOR=vim
 export VISUAL="$EDITOR"
 
-# Несколько вкладок терминала: история не шарится между сессиями.
 unsetopt share_history
-
-# tmux НЕ запускается автоматически: у веб-терминала может быть несколько
-# клиентов, а `tmux attach -d` отцепляет других. tmux запускает человек.

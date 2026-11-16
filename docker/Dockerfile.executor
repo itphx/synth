@@ -168,11 +168,11 @@ ENV PIP_CACHE_DIR=/home/synth/.cache/pip
 # исполнителя: базовый состав образов all-in-one/backend не меняется.
 #
 # Oh My Zsh качается на этапе сборки по закреплённому коммиту (`OMZ_REF`) и
-# НЕ вендорится в репозиторий (9.7 МБ); тема `eof` — наоборот, вендорится
-# (`docker/executor/themes/eof.zsh-theme`) и кладётся рядом со скриптом.
+# НЕ вендорится в репозиторий (9.7 МБ); тема `synth` — наоборот, вендорится
+# (`docker/executor/themes/synth.zsh-theme`) и кладётся рядом со скриптом.
 ARG OMZ_REF
 COPY docker/install-lib.sh docker/install-tier-6.sh \
-     docker/executor/themes/eof.zsh-theme /tmp/synth-install/
+     docker/executor/themes/synth.zsh-theme /tmp/synth-install/
 RUN set -eux; \
     OMZ_REF="$OMZ_REF" sh /tmp/synth-install/install-tier-6.sh; \
     rm -rf /tmp/synth-install
@@ -209,11 +209,11 @@ ENV TERM=xterm-256color \
     TMUX_TMPDIR=/tmp \
     ZSH_CACHE_DIR=/home/synth/.cache/oh-my-zsh
 
-# Fail-closed: тема `eof` обязана быть в образе (zshrc ссылается на неё), а
+# Fail-closed: тема `synth` обязана быть в образе (zshrc ссылается на неё), а
 # синтаксис zshrc должен быть валиден — иначе терминал не стартует, и лучше
 # узнать это на сборке, чем в рантайме.
 RUN set -eux; \
-    test -f /opt/oh-my-zsh/custom/themes/eof.zsh-theme; \
+    test -f /opt/oh-my-zsh/custom/themes/synth.zsh-theme; \
     zsh -n /etc/synth/zshrc
 
 # Рантайм исполнителя: пакет исполнителя + core (импортируется в рантайме).
@@ -530,7 +530,7 @@ RUN set -eux; \
     git config --system user.name "Synth Agent"; \
     git config --system user.email "agent@synth.local"
 
-# Терминальный тир (tier 6): zsh + tmux + Oh My Zsh + тема `eof` — рабочее
+# Терминальный тир (tier 6): zsh + tmux + Oh My Zsh + тема `synth` — рабочее
 # место человека в терминале исполнителя (ADR терминалов). `full` —
 # единственный debian-flavor с терминалами: у `browser` PTY нет
 # (`SYNTH_EXECUTOR_PTY=0`), поэтому zsh там не ставится (см. `full` наследует
@@ -539,10 +539,10 @@ RUN set -eux; \
 # В debian-ветке имена пакетов отличаются (ncurses-term/ncurses-base,
 # procps, vim-tiny) — сопоставление живёт в `docker/install-tier-6.sh`.
 # Oh My Zsh качается по закреплённому коммиту (`OMZ_REF`) и НЕ вендорится
-# в репозиторий (9.7 МБ); тема `eof` — вендорится и кладётся рядом со скриптом.
+# в репозиторий (9.7 МБ); тема `synth` — вендорится и кладётся рядом со скриптом.
 ARG OMZ_REF
 COPY docker/install-lib.sh docker/install-tier-6.sh \
-     docker/executor/themes/eof.zsh-theme /tmp/synth-install/
+     docker/executor/themes/synth.zsh-theme /tmp/synth-install/
 RUN set -eux; \
     OMZ_REF="$OMZ_REF" sh /tmp/synth-install/install-tier-6.sh; \
     rm -rf /tmp/synth-install
@@ -568,11 +568,11 @@ ENV SHELL=/bin/zsh \
     TMUX_TMPDIR=/tmp \
     ZSH_CACHE_DIR=/home/synth/.cache/oh-my-zsh
 
-# Fail-closed: тема `eof` обязана быть в образе (zshrc ссылается на неё), а
+# Fail-closed: тема `synth` обязана быть в образе (zshrc ссылается на неё), а
 # синтаксис zshrc должен быть валиден — иначе терминал не стартует, и лучше
 # узнать это на сборке, чем в рантайме.
 RUN set -eux; \
-    test -f /opt/oh-my-zsh/custom/themes/eof.zsh-theme; \
+    test -f /opt/oh-my-zsh/custom/themes/synth.zsh-theme; \
     zsh -n /etc/synth/zshrc
 
 # tier 2 (kubectl/kustomize/tofu/ansible) + tier 5 (repo lint) + БД-клиенты +
