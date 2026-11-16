@@ -1704,3 +1704,15 @@
 - **Причина:** на узком PTY zsh перерисовывает перенесённую строку эха, вставляя внутрь команды `\r`, `ESC[K` и дубль символа (`…a0 \r ESC[K 6\r6:%s…`), а эхо приходит дважды (набранная строка + перерисовка у приглашения). Прежний шаблон требовал смежности символов и не совпадал.
 - **Фикс:** `runWrapperEchoPattern` — «шум + повторы»: `token(c) = c(?:NOISE*c){0,4}`, между токенами `NOISE*`; NOISE = пробелы, `\b`, BEL, CSI, OSC, charset, ESC=/>/7/8. Guard по 8-символьным окнам обёртки (0,4 мс), чтобы не гонять regex на 1 МиБ; предел повторов обязателен (без него худший вход — 606 мс, с ним 70 мс).
 - **Проверка:** живое репро на cols=40 (`node /tmp/diag.mjs`): в `CLEAN` нет ни `printf '\n@@srn`, ни `p\bprintf`; тесты 202 по terminal; полный `pnpm test` — EXIT=0.
+
+## 2026-11-16 — терминалы на test: 500→503, zsh+eof, browser без PTY, сборка flavor'ов
+
+- **500 при создании терминала.** `PooledPort` не объявляет `pty`, поэтому `ExecutionError(EPTY/ESPAWN)` из `openPty` не мапился и давал generic 500. Теперь `503 TERMINAL_UNAVAILABLE` + `details.reason` (`pty_unsupported`/`executor`); UI показывает «Ошибка терминала», а не «Не удалось загрузить». Коммит `be472ed2`.
+- **Managed-оболочка.** Remote-терминал по умолчанию `/bin/zsh` (в backend `$SHELL` пуст); `terminal.shell` и явный `shell` приоритетнее. Там же.
+- **zsh + OMZ + тема `eof`.** Тема из `git.itphx.ru/eka/.dots` вендорится (`docker/executor/themes/eof.zsh-theme`), zshrc адаптирован (tiny в tmux / small вне, без автостарта tmux, OMZ без обновлений). `core`→`dev`/`devops` и `full`. Коммит `fbb64f53`.
+- **Browser без терминалов.** `browser`/`browser-full`: `SYNTH_EXECUTOR_PTY=0`, zsh/OMZ/tier6 не ставятся, `executor-init` сразу уходит в `synth-init`; `features.pty=false` → 501 на исполнителе, 503 в API. `full` — `=1`.
+- **Сборка.** `build-and-publish.sh`: матрица `EXECUTOR_FLAVORS` (core/dev/devops/browser/full), immutable-теги `<app>-<flavor>-<suffix>`, авто-пиннинг `provisioner.profiles.*` по `EXECUTOR_PROFILE_FLAVORS`, `--executor-only`, BuildKit registry cache; фикс `pin_marker`/`version_is_lower`. Коммит `e8d59fa`.
+- **Прогрев холодного пула.** `WARMUP_DELAYS_MS` = 1,2,4 + 4×5 с → ~27 с (было 10 с); `waitReady` оставлен 10 с быстрого ожидания. Коммит `a8458556`.
+- **Деплой test:** сборка `fbb64f53` (чарт `0.13.9-28`), затем `a8458556` (чарт `0.13.9-29`); образы `0.13.9-<flavor>-<sha>`.
+- **Проверено в кластере:** `default` — protocol 9, pty true, `/pty/open` 201, cmdline `/bin/zsh`; `browser` — protocol 9, pty false; `/health` build `a8458556`. Старые пулы удалены (следующий запрос поднимет `a8458556`).
+- **Холодный пул (после жалобы «опять ошибка»).** Причина не в таймауте: клиент опрашивал `/capabilities` до старта исполнителя, кэшировал `unreachable` на 120 с, а `openPty` превращал «нет ответивших адресов» в `EPTY` (не повторяется). Теперь нет ответивших → `EUNREACHABLE` (прогрев повторяет), `EPTY` — только для ответившего пула без `features.pty`; `PooledPort` резолвит адрес на каждой попытке `withWarmup`/`waitReady` (после reset — новый клиент). Коммит `ee68847f`, чарт `0.13.9-30`.
