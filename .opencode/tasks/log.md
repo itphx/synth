@@ -1748,3 +1748,10 @@
 - **Чистка после ADR-126:** из builtin-мет удалён legacy `command` и `SYNTH_*_COMMAND`, `skill-creator` учит `$name`; обновлены `docs/TOOLS.md`, AGENTS (root/core/shared/ui), `docs/MAINTENANCE.md`, ADR-098. Правки ADR-126 (§13 legacy `command`, §15 каталог `prompts/skills`, История) лежат в рабочем дереве вместе с параллельной задачей про `!`-скрипты и **не входят** в коммит `ad2b944f` — уйдут с её коммитом.
 - **Проверка:** `pnpm build` / `typecheck` / `lint` — чисто; `env -u NO_PROXY -u no_proxy pnpm test` — 0 failed (без снятия env падает предсуществующий `src/git/git-proxy-env.test.ts` из-за `NO_PROXY` песочницы). E2E на изолированном инстансе (backend 5010, UI 5012, временные данные): превью рендерится, темы переключаются кликом без JS, при печати фон белый и `color-scheme: light`, логотип 42×42; `evil.html` — 0 запросов к `example.com`/`127.0.0.1:9`, `window.__pwned` не появился, `title`/URL не изменились, `contentDocument` из родителя недоступен; `/fs/raw` → `attachment`, `GET /api/v2/skills/synth-html-report` → 3 supporting-файла, чекер на реальном отчёте → exit 0. Временные данные/серверы e2e удалены.
 - **Коммит:** `ad2b944f`.
+
+## 2026-11-16 — терминал: вкладка по сессии, + слева, attach terminal_read
+
+- Заголовок вкладки терминала = имя сессии (ручное открытие и переименование): `terminalTabTitleForSession`/`syncTerminalTabTitle`, эффекты в `TerminalView`/`TerminalSessionView`; live-проверка PATCH `name` на dev.
+- `TerminalSessionView`: `+` создания сразу после терминалов (`ml-1`), не справа; лишний `terminal-create-another` из тулбара `TerminalView` удалён.
+- «Прикрепить вывод» (`terminal-attach-output`) вернулся: `buildTerminalReadBlock` → `[CONTENT terminal=… status=… bytes=… tail=… stripped=true] … [CONTENT END]` в черновик сессии; без привязки — тост.
+- Коммит `9b4bc2c1`; UI 4345 тестов, typecheck/lint чисто. Test не переразворачивался.
