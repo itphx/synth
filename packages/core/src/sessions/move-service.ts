@@ -25,11 +25,11 @@
  * **Fail-closed:** любая неудача останова → перенос **не выполняется**
  * (остановленные ресурсы остаются остановленными, `projectId` не меняется).
  */
-import type { Schedule, Timer } from '@itphx/synth-shared';
-import { generateId, nowISO } from '@itphx/synth-shared';
-import type { Session } from '@itphx/synth-shared';
+import type { Message, Schedule, Session, Timer } from '@itphx/synth-shared';
+import { generateId, makeTextPart, MessageRole, nowISO } from '@itphx/synth-shared';
 import type { SessionManager } from './manager.js';
 import type { EventBus } from '../events/bus.js';
+import { serializeMessage, serializeSession } from '../server/serialize.js';
 import type { BackgroundRunRepository } from '../storage/ports/background-run-repository.js';
 import type { TimerRepository } from '../storage/ports/timer-repository.js';
 import type { SecurityAuditRepository } from '../storage/ports/security-audit-repository.js';
@@ -228,6 +228,29 @@ function errorMessage(err: unknown): string {
 }
 
 /**
+ * Компактный конверт переноса сессии — единственный текст служебного
+ * сообщения о переносе (PROP-141, Часть D).
+ *
+ * Формат — как у конвертов таймера/планировщика: одна открывающая строка с
+ * id проектов, затем по строке на эффект (`<вид>.<действие> <id>`), затем
+ * закрывающая. Пользовательского текста нет — сообщение несёт только факты.
+ */
+export function buildSessionMovedEnvelope(
+  fromProjectId: string | undefined,
+  toProjectId: string | undefined,
+  effects: SessionMoveEffect[],
+): string {
+  const lines = effects.map((effect) =>
+    `${effect.kind}.${effect.action}${effect.id ? ` ${effect.id}` : ''}`,
+  );
+  return [
+    `<session_moved from="${fromProjectId ?? ''}" to="${toProjectId ?? ''}">`,
+    ...lines,
+    '</session_moved>',
+  ].join('\n');
+}
+
+/**
  * Единый шов переноса сессии между проектами (PROP-141, Часть D).
  *
  * Вызывают HTTP-роут `PATCH /api/v2/sessions/:id { project_id }`, агентские
@@ -297,7 +320,11 @@ export class SessionMoveService {
     // 6. Переатрибуция завершённых записей (фоновые прогоны).
     await this._reattributeRuns(moved, prevProjectId, targetProjectId, effects);
 
-    // 7. Событие (по одному на перенесённую сессию) + аудит.
+    // 7. Служебное уведомление о переносе — в корневой сессии (ход не
+    // запускается: сообщение пишется прямо в историю).
+    await this._notifySessionMoved(session.id, prevProjectId, targetProjectId, moved, effects);
+
+    // 8. Событие (по одному на перенесённую сессию) + аудит.
     const worktreeDetached = effects.some(
       (effect) => effect.kind === 'worktree' && effect.action === 'detached',
     );
@@ -689,6 +716,61 @@ export class SessionMoveService {
           });
         }
       }
+    }
+  }
+
+  /**
+   * Служебное сообщение о переносе — в **корневой** сессии (PROP-141, Часть D).
+   *
+   * Ход **не запускается**: сообщение пишется прямо в историю (тем же
+   * путём, что фоллбек нотификатора фоновых прогонов) и публикуется
+   * `message.added`/`session.updated`. В дочерние сессии поддерева сообщение
+   * не пишется — уведомление одно, в корне.
+   *
+   * Автор — системный `Session`; `metadata.type === 'session_moved'` — общий
+   * признак служебности (`sessions/user-messages.ts`), поэтому сообщение не
+   * считается репликой человека (авто-тайтл, статистика автора, границы хода).
+   */
+  private async _notifySessionMoved(
+    rootSessionId: string,
+    prevProjectId: string | undefined,
+    targetProjectId: string | undefined,
+    moved: string[],
+    effects: SessionMoveEffect[],
+  ): Promise<void> {
+    const content = buildSessionMovedEnvelope(prevProjectId, targetProjectId, effects);
+    const message: Message = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      author: 'Session',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      metadata: {
+        type: 'session_moved',
+        from_project_id: prevProjectId ?? null,
+        to_project_id: targetProjectId ?? null,
+        effects: effects.map((effect) => ({ ...effect })),
+        moved_sessions: [...moved],
+      },
+    };
+    try {
+      const updated = await this._deps.sessionManager.addMessage(rootSessionId, message);
+      if (!updated) return;
+      const index = updated.messages.length - 1;
+      this._deps.eventBus?.publish(rootSessionId, 'message.added', {
+        message: serializeMessage(updated.messages[index]!, index),
+        index,
+      });
+      this._deps.eventBus?.publish(rootSessionId, 'session.updated', serializeSession(updated));
+    } catch (err) {
+      // Перенос уже выполнен — сбой записи уведомления его не отменяет.
+      console.warn(`[session-move] уведомление о переносе не записано: ${errorMessage(err)}`);
     }
   }
 

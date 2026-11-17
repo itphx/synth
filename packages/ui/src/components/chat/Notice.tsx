@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n'
  * единый центрированный блок. Текст внутри выровнен по левому краю, у блока
  * всегда есть шапка (иконка + подпись) и кнопка «Копировать».
  */
-export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process' | 'attachment' | 'timer'
+export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process' | 'attachment' | 'timer' | 'session-moved'
 
 interface NoticeVariantStyle {
   /** Иконка по умолчанию. */
@@ -40,6 +40,9 @@ const VARIANT_STYLES: Record<NoticeVariant, NoticeVariantStyle> = {
   // (как сообщение планировщика). Иконка по умолчанию — часы; для будильника
   // компонент подставляет `alarm`.
   timer: { icon: 'time', box: 'bg-surface-inset border-border/40 text-foreground' },
+  // PROP-141 (Часть D): уведомление о переносе сессии между проектами —
+  // служебный блок (как сообщение планировщика). Иконка — перенос стрелками.
+  'session-moved': { icon: 'arrow-left-right', box: 'bg-surface-inset border-border/40 text-foreground' },
 }
 
 export interface NoticeProps {

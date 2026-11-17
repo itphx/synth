@@ -7,6 +7,7 @@ import {
   RiArrowDownLine,
   RiArrowDownSLine,
   RiArrowGoBackLine,
+  RiArrowLeftRightLine,
   RiArrowRightLine,
   RiArrowRightSLine,
   RiArrowUpSLine,
@@ -134,6 +135,8 @@ const iconMap: Record<string, React.ComponentType<{ className?: string; style?: 
   'arrow-down': RiArrowDownLine,
   'arrow-down-s': RiArrowDownSLine,
   'arrow-go-back': RiArrowGoBackLine,
+  // PROP-141 (Часть D): уведомление о переносе сессии между проектами.
+  'arrow-left-right': RiArrowLeftRightLine,
   'arrow-right': RiArrowRightLine,
   'arrow-right-s': RiArrowRightSLine,
   'arrow-up-s': RiArrowUpSLine,

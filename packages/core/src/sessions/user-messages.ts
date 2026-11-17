@@ -25,7 +25,8 @@ export type ClassifiableUserMessage = Pick<Message, 'author' | 'ephemeral' | 'me
  * шедулера (`metadata.scheduler` / `schedule_id` / `author === 'Scheduler'`),
  * вложение тула (`metadata.source === 'tool-attachment'` — медиа-реплика
  * текущего хода, см. `_injectToolAttachments`), срабатывание таймера
- * (`metadata.type === 'timer_fired'` — PROP-141, Часть B).
+ * (`metadata.type === 'timer_fired'` — PROP-141, Часть B), уведомление о
+ * переносе сессии (`metadata.type === 'session_moved'` — PROP-141, Часть D).
  */
 export function isServiceUserMessage(message: ClassifiableUserMessage): boolean {
   if (message.ephemeral) return true;
@@ -39,8 +40,25 @@ export function isServiceUserMessage(message: ClassifiableUserMessage): boolean 
   // PROP-141: срабатывание таймера/будильника — служебное сообщение системы,
   // а не реплика человека (авто-тайтл, границы хода, статистика автора).
   if (meta?.type === 'timer_fired') return true;
+  // PROP-141 (Часть D): уведомление о переносе сессии между проектами —
+  // служебное сообщение системы, а не реплика человека.
+  if (meta?.type === 'session_moved') return true;
   if (message.author === 'Scheduler') return true;
   return false;
+}
+
+/**
+ * Служебное user-сообщение, **не открывающее свой ход**: приходит в историю
+ * внутри чужого хода (вложение тула, ADR-115) или вовсе без хода
+ * (уведомление о переносе сессии, PROP-141 — ход не запускается).
+ *
+ * Такое сообщение не сдвигает границу хода (`engine/context/disabled-turns.ts`)
+ * и не становится границей автора в статистике (`sessions/stats.ts`).
+ */
+export function isNonTurnServiceUserMessage(message: ClassifiableUserMessage): boolean {
+  if (!isServiceUserMessage(message)) return false;
+  const meta = message.metadata;
+  return meta?.source === 'tool-attachment' || meta?.type === 'session_moved';
 }
 
 /** Реплика пользователя диалога: `role: 'user'` и не служебное сообщение. */

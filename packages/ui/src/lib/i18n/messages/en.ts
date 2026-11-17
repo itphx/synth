@@ -1810,6 +1810,18 @@ export const dict = {
   'chat.notice.timerNamed': 'Timer · {name}',
   'chat.notice.timerAlarm': 'Alarm',
   'chat.notice.timerAlarmNamed': 'Alarm · {name}',
+  // PROP-141 (Part D): notice about a session moved between projects.
+  'chat.notice.sessionMoved': 'Session moved',
+  'chat.notice.sessionMovedEffects.processStopped': 'Process stopped · {id}',
+  'chat.notice.sessionMovedEffects.subagentStopped': 'Subagent stopped · {id}',
+  'chat.notice.sessionMovedEffects.terminalClosed': 'Terminal closed · {id}',
+  'chat.notice.sessionMovedEffects.terminalLeft': 'Terminal left in the old project · {id}',
+  'chat.notice.sessionMovedEffects.timerCancelled': 'Timer cancelled · {id}',
+  'chat.notice.sessionMovedEffects.alarmCancelled': 'Alarm cancelled · {id}',
+  'chat.notice.sessionMovedEffects.scheduleDisabled': 'Schedule disabled · {id}',
+  'chat.notice.sessionMovedEffects.worktreeDetached': 'Working copy detached · {id}',
+  'chat.notice.sessionMovedEffects.sessionReattributed': 'Record moved to the new project · {id}',
+  'chat.notice.sessionMovedEffects.moved': '{count, plural, one {# session moved} other {# sessions moved}}',
   // ADR-115: an attachment delivered by a tool — service block.
   'chat.notice.toolAttachment': 'Agent · {name} · attachment',
   'chat.notice.toolAttachmentAnonymous': 'Agent · attachment',

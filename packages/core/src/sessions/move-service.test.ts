@@ -10,6 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BackgroundRunRecord, Schedule, Timer } from '@itphx/synth-shared';
+import { MessageRole } from '@itphx/synth-shared';
 import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
 import {
@@ -469,5 +470,58 @@ describe('SessionMoveService (PROP-141, Часть D)', () => {
     const result = await service.move({ sessionId, targetProjectId: 'p2' });
     expect(result.moved).toEqual([sessionId]);
     expect((await manager.getSession(sessionId))?.projectId).toBe('p2');
+  });
+
+  it('после переноса — ровно одно служебное сообщение session_moved в корневой сессии', async () => {
+    const rootId = await makeSession('p1', 'root');
+    const child = await manager.createSession({ title: 'child', userId: 'u1', parentId: rootId });
+    await manager.withLock(child.id, async (s) => {
+      s.projectId = 'p1';
+      await manager.updateSession(s);
+    });
+    await runs.save(run('bgr1', { kind: 'process', status: 'running', sessionId: rootId }));
+
+    const result = await service.move({
+      sessionId: rootId,
+      targetProjectId: 'p2',
+      consent: { stop_running: true },
+    });
+
+    const root = await manager.getSession(rootId);
+    const notices = root?.messages.filter((m) => m.metadata?.type === 'session_moved') ?? [];
+    expect(notices).toHaveLength(1);
+    // В истории корня это единственное сообщение (уведомление — не реплика).
+    expect(root?.messages).toHaveLength(1);
+
+    const notice = notices[0]!;
+    expect(notice.role).toBe(MessageRole.USER);
+    expect(notice.author).toBe('Session');
+    expect(notice.metadata?.type).toBe('session_moved');
+    expect(notice.metadata?.from_project_id).toBe('p1');
+    expect(notice.metadata?.to_project_id).toBe('p2');
+    expect(notice.metadata?.moved_sessions).toEqual(result.moved);
+    const noticeEffects = notice.metadata?.effects as Array<{ kind: string; action: string; id: string }>;
+    expect(noticeEffects).toHaveLength(result.effects.length);
+    expect(noticeEffects[0]).toMatchObject({ kind: 'process', action: 'stopped', id: 'bgr1' });
+
+    // Конверт: факты без пользовательского текста.
+    expect(notice.content).toContain('<session_moved from="p1" to="p2">');
+    expect(notice.content).toContain('process.stopped bgr1');
+    expect(notice.content).toContain('</session_moved>');
+
+    // В дочернюю сессию поддерева уведомление не пишется.
+    const childSession = await manager.getSession(child.id);
+    expect(childSession?.messages.filter((m) => m.metadata?.type === 'session_moved')).toHaveLength(0);
+
+    // Ход не запускался: ни очереди, ни событий хода/приёма.
+    expect(root?.pendingMessages).toHaveLength(0);
+    const types = publish.mock.calls.map((call) => call[1]);
+    expect(types).not.toContain('turn.started');
+    expect(types).not.toContain('message.accepted');
+    expect(types).not.toContain('message.enqueued');
+    expect(types).toContain('message.added');
+    const added = publish.mock.calls.filter((call) => call[1] === 'message.added');
+    expect(added).toHaveLength(1);
+    expect(added[0]![0]).toBe(rootId);
   });
 });

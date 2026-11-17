@@ -9,6 +9,7 @@ import type {
 } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import { computeCacheHitRate, computeUsageCost, type UsagePricing } from '../providers/usage.js';
+import { isNonTurnServiceUserMessage } from './user-messages.js';
 
 /** Максимальная глубина рекурсии по дочерним сессиям саб-агентов. */
 export const MAX_SUBAGENT_DEPTH = 5;
@@ -284,10 +285,11 @@ function buildUserStats(
 
   for (const msg of session.messages) {
     if (msg.role === MessageRole.USER) {
-      // Вложение тула (ADR-115) — часть текущего хода, а не новая реплика
-      // пользователя: иначе usage последующих шагов хода приписывался бы
-      // системному автору `Tool`.
-      if (msg.metadata?.source === 'tool-attachment') continue;
+      // Служебные user-сообщения, не открывающие свой ход, границей автора не
+      // становятся: вложение тула (ADR-115) — часть текущего хода, уведомление
+      // о переносе сессии (PROP-141) — хода не открывает вовсе. Иначе usage
+      // последующих шагов хода приписывался бы системному автору.
+      if (isNonTurnServiceUserMessage(msg)) continue;
       currentAuthor = msg.author || 'unknown';
       get(currentAuthor).messages += 1;
       continue;

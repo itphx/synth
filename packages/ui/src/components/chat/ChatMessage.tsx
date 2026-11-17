@@ -11,6 +11,7 @@ import { SubagentPart, type SubagentPartData } from './SubagentPart'
 import { RetryStatus } from './RetryStatus'
 import { CommandMessage } from './CommandMessage'
 import { Notice, type NoticeVariant } from './Notice'
+import { sessionMovedEffectLines, sessionMovedEffects } from './session-moved-notice'
 import { MessageAttachments, hasMediaParts } from './attachments/MessageAttachments'
 import {
   backgroundNoticeName,
@@ -251,6 +252,11 @@ function ChatMessageInner({
   // с metadata.type === 'timer_fired' и автором `Timer` — системный блок
   // (как сообщение планировщика), а не реплика человека.
   const isTimerFired = isUser && message.metadata?.type === 'timer_fired'
+  // PROP-141 (Часть D): уведомление о переносе сессии между проектами
+  // приходит как role:'user' с metadata.type === 'session_moved' и автором
+  // `Session` — системный блок (как сообщение планировщика), а не реплика
+  // человека.
+  const isSessionMoved = isUser && message.metadata?.type === 'session_moved'
   // Вид автоматизации: будильник (`alarm`) — своя иконка, таймер — часы.
   const isTimerAlarm = isTimerFired && message.metadata?.timer_kind === 'alarm'
   // ADR-104: инъекция во время активного хода (`metadata.steer`) — **без
@@ -1208,6 +1214,96 @@ function ChatMessageInner({
       <div className="flex items-start">
         {selectionCheckboxEl}
         <div className="min-w-0 flex-1">{timerEl}</div>
+      </div>
+    )
+  }
+
+  // PROP-141 (Часть D): уведомление о переносе сессии между проектами —
+  // центрированный служебный блок (как сообщение планировщика): автор —
+  // система (`Session`), а не текущий пользователь. Тело — локализованный
+  // список последствий переноса (что остановили/закрыли/отменили); без
+  // эффектов — фоллбек на конверт `content`.
+  if (isSessionMoved) {
+    const effectLines = sessionMovedEffectLines(
+      sessionMovedEffects(message.metadata),
+      t,
+    )
+    const label = t('chat.notice.sessionMoved')
+
+    const selectionCheckboxEl = selectionMode ? (
+      <div className="flex items-center self-stretch pr-1">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            const ev = e.nativeEvent as MouseEvent
+            handleToggleSelect(ev.shiftKey ?? false)
+          }}
+          className="size-4 rounded border-border cursor-pointer accent-primary"
+        />
+      </div>
+    ) : null
+
+    const movedEl = (
+      <Notice
+        variant="session-moved"
+        icon="arrow-left-right"
+        label={label}
+        ariaLabel={label}
+        meta={<MessageHeader message={message} metaOnly />}
+        actions={
+          actionsVisible ? (
+            <MessageActions
+              embedded
+              showCopy={false}
+              messageId={message.id}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          ) : undefined
+        }
+        onCopy={handleCopy}
+        disabled={message.disabled}
+      >
+        {effectLines.length > 0 ? (
+          <ul className="m-0 list-disc space-y-0.5 pl-4 text-sm">
+            {effectLines.map((line, i) => (
+              <li key={`${i}-${line}`} data-testid="session-moved-effect">
+                {line}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          displayContent && (
+            <SecretMarkdown
+              content={displayContent}
+              secrets={secrets}
+              sessionId={sessionId}
+            />
+          )
+        )}
+      </Notice>
+    )
+
+    if (!selectionMode) return movedEl
+    return (
+      <div className="flex items-start">
+        {selectionCheckboxEl}
+        <div className="min-w-0 flex-1">{movedEl}</div>
       </div>
     )
   }

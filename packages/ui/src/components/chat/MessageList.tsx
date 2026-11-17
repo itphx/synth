@@ -188,6 +188,9 @@ function isHumanReply(msg: MessageData): boolean {
   // PROP-141 (Часть B): срабатывание таймера/будильника — системный блок,
   // а не реплика человека.
   if (meta.type === 'timer_fired') return false
+  // PROP-141 (Часть D): уведомление о переносе сессии — системный блок,
+  // а не реплика человека.
+  if (meta.type === 'session_moved') return false
   if (msg.author === 'Scheduler') return false
   // ADR-115: вложение тула — не реплика человека (служебный блок).
   if (meta.source === 'tool-attachment') return false

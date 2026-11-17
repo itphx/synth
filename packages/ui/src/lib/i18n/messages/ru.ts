@@ -1787,6 +1787,18 @@ export const dict = {
   'chat.notice.timerNamed': 'Таймер · {name}',
   'chat.notice.timerAlarm': 'Будильник',
   'chat.notice.timerAlarmNamed': 'Будильник · {name}',
+  // PROP-141 (Часть D): уведомление о переносе сессии между проектами.
+  'chat.notice.sessionMoved': 'Сессия перенесена',
+  'chat.notice.sessionMovedEffects.processStopped': 'Процесс остановлен · {id}',
+  'chat.notice.sessionMovedEffects.subagentStopped': 'Саб-агент остановлен · {id}',
+  'chat.notice.sessionMovedEffects.terminalClosed': 'Терминал закрыт · {id}',
+  'chat.notice.sessionMovedEffects.terminalLeft': 'Терминал остался в старом проекте · {id}',
+  'chat.notice.sessionMovedEffects.timerCancelled': 'Таймер отменён · {id}',
+  'chat.notice.sessionMovedEffects.alarmCancelled': 'Будильник отменён · {id}',
+  'chat.notice.sessionMovedEffects.scheduleDisabled': 'Расписание отключено · {id}',
+  'chat.notice.sessionMovedEffects.worktreeDetached': 'Рабочая копия отсоединена · {id}',
+  'chat.notice.sessionMovedEffects.sessionReattributed': 'Запись перенесена в новый проект · {id}',
+  'chat.notice.sessionMovedEffects.moved': '{count, plural, one {# сессия перенесена} few {# сессии перенесены} many {# сессий перенесено}}',
   // ADR-115: вложение, доставленное инструментом, — служебный блок.
   'chat.notice.toolAttachment': 'Агент · {name} · вложение',
   'chat.notice.toolAttachmentAnonymous': 'Агент · вложение',

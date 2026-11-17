@@ -10,9 +10,11 @@
  * Поэтому отключённая **пользовательская** реплика выключает весь свой ход:
  * assistant/tool/error-сообщения до следующей пользовательской реплики.
  * System-state (mode/agent) и summary не подавляются — это состояние, а не
- * часть выключенного хода. Вложение тула (`metadata.source === 'tool-attachment'`,
- * ADR-115) — тоже часть текущего хода, а не новая реплика: границу хода оно не
- * сдвигает и наследует состояние (отключённый ход гасит и вложение).
+ * часть выключенного хода. Служебные сообщения без своего хода (вложение
+ * тула — `metadata.source === 'tool-attachment'`, ADR-115; уведомление о
+ * переносе сессии — `metadata.type === 'session_moved'`, PROP-141) — тоже
+ * часть текущего хода, а не новая реплика: границу хода они не сдвигают и
+ * наследуют состояние (отключённый ход гасит и их).
  *
  * Отключённый assistant с `toolCalls` подавляет свои tool-результаты: иначе
  * они остаются сиротами и провайдер получает `tool` без `tool_use`.
@@ -20,6 +22,7 @@
  * Функция не мутирует исходные сообщения: изменённые возвращаются копиями.
  */
 import { MessageRole, type Message } from '@itphx/synth-shared';
+import { isNonTurnServiceUserMessage } from '../../sessions/user-messages.js';
 
 export function suppressDisabledTurns(messages: readonly Message[]): Message[] {
   /** id tool-вызовов отключённых assistant-сообщений. */
@@ -28,9 +31,11 @@ export function suppressDisabledTurns(messages: readonly Message[]): Message[] {
 
   return messages.map((message) => {
     if (message.role === MessageRole.USER) {
-      // Вложение тула — часть текущего хода, а не новая пользовательская
-      // реплика: границу хода не сдвигает, применяет текущее состояние.
-      if (message.metadata?.source === 'tool-attachment') {
+      // Служебное сообщение без своего хода — часть текущего хода, а не новая
+      // пользовательская реплика: границу хода оно не сдвигает, применяет
+      // текущее состояние (вложение тула ADR-115, уведомление о переносе
+      // сессии PROP-141).
+      if (isNonTurnServiceUserMessage(message)) {
         return turnDisabled ? { ...message, disabled: true } : message;
       }
       // Новая пользовательская реплика — новая граница хода.

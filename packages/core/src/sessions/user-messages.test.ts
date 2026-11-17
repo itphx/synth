@@ -15,7 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import { MessageRole } from '@itphx/synth-shared';
 import type { Message, SynthEvent } from '@itphx/synth-shared';
-import { isServiceUserMessage, isUserDialogueMessage } from './user-messages.js';
+import { isServiceUserMessage, isNonTurnServiceUserMessage, isUserDialogueMessage } from './user-messages.js';
 import { eventToMessage } from '../engine/events/request-session.js';
 
 /** Минимальное сообщение истории (только поля, нужные классификации). */
@@ -100,5 +100,43 @@ describe('Классификация user-сообщений: срабатыва
 
     expect(isServiceUserMessage(message)).toBe(true);
     expect(isUserDialogueMessage(message)).toBe(false);
+  });
+});
+
+/**
+ * PROP-141 (Часть D): уведомление о переносе сессии между проектами попадает
+ * в историю как `role: 'user'` (автор — системный `Session`), но это
+ * **служебное** сообщение: репликой человека оно не считается (авто-тайтл,
+ * статистика автора, границы хода).
+ */
+describe('Классификация user-сообщений: перенос сессии (PROP-141, Часть D)', () => {
+  it('session_moved — служебное сообщение, а не реплика человека', () => {
+    const message = makeMessage({
+      role: MessageRole.USER,
+      author: 'Session',
+      metadata: {
+        type: 'session_moved',
+        from_project_id: 'p1',
+        to_project_id: 'p2',
+        effects: [{ kind: 'process', action: 'stopped', id: 'bgr1' }],
+        moved_sessions: ['s1'],
+      },
+    });
+
+    expect(isServiceUserMessage(message)).toBe(true);
+    expect(isUserDialogueMessage(message)).toBe(false);
+    // Служебное, но свой ход не открывает — границей автора/хода не становится.
+    expect(isNonTurnServiceUserMessage(message)).toBe(true);
+  });
+
+  it('контроль: обычное user-сообщение — реплика диалога и граница хода', () => {
+    const message = makeMessage({
+      role: MessageRole.USER,
+      content: 'посчитай до трёх',
+    });
+
+    expect(isServiceUserMessage(message)).toBe(false);
+    expect(isNonTurnServiceUserMessage(message)).toBe(false);
+    expect(isUserDialogueMessage(message)).toBe(true);
   });
 });

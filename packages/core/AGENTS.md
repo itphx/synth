@@ -3054,10 +3054,14 @@
   `isServiceUserMessage` — `ephemeral` (локальный ответ `/`-команды), `metadata.synthetic`
   (state-сообщения), steer-инъекция (`metadata.steer`), уведомление фонового прогона
   (`metadata.type === 'background_run_result'`), шедулер (`metadata.scheduler` /
-  `metadata.schedule_id` / `author === 'Scheduler'`). Предикат использует **авто-тайтл**
+  `metadata.schedule_id` / `author === 'Scheduler'`), таймер (`metadata.type === 'timer_fired'`)
+  и перенос сессии (`metadata.type === 'session_moved'`). Предикат используется **авто-тайтл**
   (`auto-title.ts` — иначе steer-инъекция в первом ходе блокировала заголовок и сессия
   оставалась «New session»); новые служебные виды user-сообщений добавлять сюда, а не
-  локальными проверками.
+  локальными проверками. Отдельный предикат `isNonTurnServiceUserMessage` — служебное
+  сообщение **без своего хода** (вложение тула ADR-115, перенос сессии PROP-141): границей
+  хода (`engine/context/disabled-turns.ts`) и границей автора в статистике
+  (`sessions/stats.ts`) оно не становится.
 - `sessions/stats.ts` — `computeSessionStats` (ADR-070): usage сообщений + рекурсивный usage
   саб-агентов (tool `task`), агрегаты по агентам/пользователям — для `GET /api/v2/sessions/:id/stats`.
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла; **«Стоп» останавливает только активный ход — очередь (`pendingMessages`) сохраняется целиком**, решение владельца 2026-11-01: снимаются `blocked`/`cancelRequested`/`currentStream`/`retry`, публикуется `queue.state` (счётчики по фактической очереди) и `stream.cancelled` ровно один раз; автозапуска обработки нет — продолжение через `POST /queue/:sessionId/resume` или новую постановку сообщения). Публикация приёма: `message.accepted` (адресное, без текста) и `message.enqueued` (**адресное — только отправителю/владельцу сессии; владельца нет — не публикуется**, со снимком сообщения — снимок уже обфусцирован, `ord` нет; `enqueueUserMessage` → `delivery:'queue'`, `enqueueSteerMessage` → `delivery:'steer'`; при отказе постановки события нет). **Перенос из очереди в очередь инъекций (`fromPending`) — атомарный**: под одним локом сессии проверяется лимит, сообщение снимается из `pendingMessages` и его user-копия из истории (по `metadata.stream_id`, кроме активного стрима) — и только потом публикуется `message.enqueued` (иначе клиент увидел бы реплику в `pending_messages` и удалил её из ленты как «вернувшуюся в очередь»); отказ по лимиту → `reason:'limit'` (429, очередь не тронута), сообщения нет в очереди → `reason:'not_found'` (404, повторный steer того же id).
