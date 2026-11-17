@@ -3,6 +3,7 @@ import { useUIStore, type ChatDensity, type ChatViewMode, type UserMessageMarkdo
 import { useI18n } from "@/lib/i18n"
 import { profileService } from '@/lib/api/profileService'
 import { CHAT_SCALE_DEFAULT, applyChatScale, normalizeChatScale } from '@/lib/uiScale'
+import type { MermaidMode } from '@/lib/markdown/mermaid'
 import {
   SegmentedControl,
   SettingsActions,
@@ -23,6 +24,8 @@ interface ChatSettingsDraft {
   chatDensity: ChatDensity
   /** Рендер сообщений пользователя: markdown-разметка или текст как набран. */
   userMessageMarkdown: UserMessageMarkdown
+  /** Рендер диаграмм Mermaid: схема (SVG), текст (ASCII) или только код. */
+  mermaidRenderingMode: MermaidMode
   /** Масштаб области чата (множитель поверх общего масштаба UI). */
   chatScale: number
 }
@@ -32,6 +35,7 @@ const CHAT_SETTINGS_DEFAULTS: ChatSettingsDraft = {
   intermediateTextDisplay: 'inline',
   chatDensity: 'normal',
   userMessageMarkdown: 'markdown',
+  mermaidRenderingMode: 'svg',
   chatScale: CHAT_SCALE_DEFAULT,
 }
 
@@ -45,6 +49,8 @@ export const ChatSettings = () => {
   const setChatDensity = useUIStore((s) => s.setChatDensity)
   const userMessageMarkdown = useUIStore((s) => s.userMessageMarkdown)
   const setUserMessageMarkdown = useUIStore((s) => s.setUserMessageMarkdown)
+  const mermaidRenderingMode = useUIStore((s) => s.mermaidRenderingMode)
+  const setMermaidRenderingMode = useUIStore((s) => s.setMermaidRenderingMode)
   const chatScale = useUIStore((s) => s.chatScale)
   const setChatScale = useUIStore((s) => s.setChatScale)
 
@@ -63,9 +69,15 @@ export const ChatSettings = () => {
       intermediateTextDisplay: intermediateTextDisplay === 'bottom' ? 'bottom' : 'inline',
       chatDensity: chatDensity === 'compact' ? 'compact' : 'normal',
       userMessageMarkdown: userMessageMarkdown === 'plain' ? 'plain' : 'markdown',
+      mermaidRenderingMode:
+        mermaidRenderingMode === 'ascii'
+          ? 'ascii'
+          : mermaidRenderingMode === 'off'
+            ? 'off'
+            : 'svg',
       chatScale: normalizeChatScale(savedChatScale),
     }),
-    [chatViewMode, intermediateTextDisplay, chatDensity, userMessageMarkdown, savedChatScale],
+    [chatViewMode, intermediateTextDisplay, chatDensity, userMessageMarkdown, mermaidRenderingMode, savedChatScale],
   )
 
   // ADR-072 (фидбек): без автосохранения — выбор меняет черновик, стор
@@ -80,11 +92,18 @@ export const ChatSettings = () => {
       const density: ChatDensity = next.chatDensity === 'compact' ? 'compact' : 'normal'
       const markdownMode: UserMessageMarkdown =
         next.userMessageMarkdown === 'plain' ? 'plain' : 'markdown'
+      const mermaidMode: MermaidMode =
+        next.mermaidRenderingMode === 'ascii'
+          ? 'ascii'
+          : next.mermaidRenderingMode === 'off'
+            ? 'off'
+            : 'svg'
       const scale = normalizeChatScale(next.chatScale)
       setChatViewMode(viewMode)
       setIntermediateTextDisplay(display)
       setChatDensity(density)
       setUserMessageMarkdown(markdownMode)
+      setMermaidRenderingMode(mermaidMode)
       // `setChatScale` применяет `--chat-scale`, пишет localStorage и стор.
       setChatScale(scale)
       setSavedChatScale(scale)
@@ -95,6 +114,7 @@ export const ChatSettings = () => {
       void profileService.syncChatDensityToProfile(density)
       void profileService.syncChatScaleToProfile(scale)
       void profileService.syncUserMessageMarkdownToProfile(markdownMode)
+      void profileService.syncMermaidRenderingModeToProfile(mermaidMode)
       return { ...next, chatScale: scale }
     },
   })
@@ -113,6 +133,12 @@ export const ChatSettings = () => {
   const density: ChatDensity = current.chatDensity === 'compact' ? 'compact' : 'normal'
   const markdownMode: UserMessageMarkdown =
     current.userMessageMarkdown === 'plain' ? 'plain' : 'markdown'
+  const mermaidMode: MermaidMode =
+    current.mermaidRenderingMode === 'ascii'
+      ? 'ascii'
+      : current.mermaidRenderingMode === 'off'
+        ? 'off'
+        : 'svg'
 
   const handleChatScaleChange = (value: number) => {
     const scale = normalizeChatScale(value)
@@ -151,6 +177,11 @@ export const ChatSettings = () => {
     { value: 'markdown', label: t('chatSettings.userMessageMarkdownOn') },
     { value: 'plain', label: t('chatSettings.userMessageMarkdownOff') },
   ]
+  const mermaidOptions: SegmentedControlOption<MermaidMode>[] = [
+    { value: 'svg', label: t('chatSettings.mermaidSvg') },
+    { value: 'ascii', label: t('chatSettings.mermaidAscii') },
+    { value: 'off', label: t('chatSettings.mermaidOff') },
+  ]
 
   return (
     <SettingsPanel
@@ -186,6 +217,23 @@ export const ChatSettings = () => {
             options={userMessageMarkdownOptions}
             onChange={(value) => draft.update({ userMessageMarkdown: value })}
             ariaLabel={t('chatSettings.userMessageMarkdown')}
+          />
+        </SettingsItem>
+      </SettingsSection>
+
+      {/* Диаграммы Mermaid — рядом с разметкой сообщений: это тоже «как
+          показывать ответ агента», только для блоков ```mermaid. */}
+      <SettingsSection
+        id="chat-mermaid"
+        title={t('chatSettings.mermaid')}
+        description={t('chatSettings.mermaidDescription')}
+      >
+        <SettingsItem>
+          <SegmentedControl<MermaidMode>
+            value={mermaidMode}
+            options={mermaidOptions}
+            onChange={(value) => draft.update({ mermaidRenderingMode: value })}
+            ariaLabel={t('chatSettings.mermaid')}
           />
         </SettingsItem>
       </SettingsSection>

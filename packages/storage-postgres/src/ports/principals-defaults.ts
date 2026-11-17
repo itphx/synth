@@ -63,6 +63,18 @@ function sanitize(raw: unknown): AppearanceDefaults {
   if (desktop !== undefined) out.uiScaleDesktop = desktop;
   if (src.chatViewMode === 'detailed' || src.chatViewMode === 'feed') out.chatViewMode = src.chatViewMode;
   if (src.chatDensity === 'normal' || src.chatDensity === 'compact') out.chatDensity = src.chatDensity;
+  // Рендер сообщений пользователя и диаграмм Mermaid — только известные
+  // значения (паритет `DefaultsStore.sanitize`).
+  if (src.userMessageMarkdown === 'markdown' || src.userMessageMarkdown === 'plain') {
+    out.userMessageMarkdown = src.userMessageMarkdown;
+  }
+  if (
+    src.mermaidRenderingMode === 'svg' ||
+    src.mermaidRenderingMode === 'ascii' ||
+    src.mermaidRenderingMode === 'off'
+  ) {
+    out.mermaidRenderingMode = src.mermaidRenderingMode;
+  }
   const chatMobile = sanitizeChatScale(src.chatScaleMobile);
   if (chatMobile !== undefined) out.chatScaleMobile = chatMobile;
   const chatDesktop = sanitizeChatScale(src.chatScaleDesktop);

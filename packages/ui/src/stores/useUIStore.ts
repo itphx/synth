@@ -7,6 +7,7 @@ import {
   type TerminalPreferences,
 } from '@/lib/terminalPreferences'
 import { profileService } from '@/lib/api/profileService'
+import type { MermaidMode } from '@/lib/markdown/mermaid'
 import { useFilesStore } from './filesStore'
 import {
   applyChatScale,
@@ -150,7 +151,11 @@ export interface SettingsFocusRequest {
 export const UI_SETTINGS_STORAGE_KEY = 'synth-ui-settings'
 
 /** Поля режима отображения ленты, у которых бывает личный выбор пользователя. */
-export type ChatDisplayKey = 'chatViewMode' | 'chatDensity' | 'userMessageMarkdown'
+export type ChatDisplayKey =
+  | 'chatViewMode'
+  | 'chatDensity'
+  | 'userMessageMarkdown'
+  | 'mermaidRenderingMode'
 
 /**
  * Личный выбор режима отображения ленты, **зафиксированный до гидратации**
@@ -163,6 +168,7 @@ const explicitChatDisplay: Record<ChatDisplayKey, boolean> = {
   chatViewMode: false,
   chatDensity: false,
   userMessageMarkdown: false,
+  mermaidRenderingMode: false,
 }
 
 function readPersistedChatDisplay(): Record<ChatDisplayKey, boolean> {
@@ -170,6 +176,7 @@ function readPersistedChatDisplay(): Record<ChatDisplayKey, boolean> {
     chatViewMode: false,
     chatDensity: false,
     userMessageMarkdown: false,
+    mermaidRenderingMode: false,
   }
   if (typeof window === 'undefined') {
     return empty
@@ -185,6 +192,8 @@ function readPersistedChatDisplay(): Record<ChatDisplayKey, boolean> {
       chatViewMode: state.chatViewMode !== undefined && state.chatViewMode !== null,
       chatDensity: state.chatDensity !== undefined && state.chatDensity !== null,
       userMessageMarkdown: state.userMessageMarkdown !== undefined && state.userMessageMarkdown !== null,
+      mermaidRenderingMode:
+        state.mermaidRenderingMode !== undefined && state.mermaidRenderingMode !== null,
     }
   } catch {
     return empty
@@ -351,6 +360,16 @@ interface UIStore {
   setUserMessageMarkdown: (mode: UserMessageMarkdown) => void
 
   /**
+   * Рендер диаграмм Mermaid (персистится; см. `MermaidMode`).
+   *
+   * `svg` — схема (по умолчанию), `ascii` — текстовое представление,
+   * `off` — блок остаётся кодом. Настройка одна на пользователя и действует
+   * и в чате, и в просмотрщике файла (рендер — общий, `lib/markdown/mermaid.ts`).
+   */
+  mermaidRenderingMode: MermaidMode
+  setMermaidRenderingMode: (mode: MermaidMode) => void
+
+  /**
    * Ширина чтения markdown в просмотрщике файла (персистится; см. `FileViewerWidth`).
    *
    * `column` — колонка `max-w-[108ch]` по центру панели, `full` — во всю ширину.
@@ -398,6 +417,7 @@ interface UIStore {
     viewMode?: ChatViewMode | null
     density?: ChatDensity | null
     userMessageMarkdown?: UserMessageMarkdown | null
+    mermaidRenderingMode?: MermaidMode | null
   }) => void
 
   /**
@@ -408,6 +428,7 @@ interface UIStore {
     viewMode?: ChatViewMode
     density?: ChatDensity
     userMessageMarkdown?: UserMessageMarkdown
+    mermaidRenderingMode?: MermaidMode
   }) => void
 
   /** ADR-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
@@ -769,6 +790,12 @@ export const useUIStore = create<UIStore>()(
         set({ userMessageMarkdown: mode })
       },
 
+      mermaidRenderingMode: 'svg',
+      setMermaidRenderingMode: (mode) => {
+        explicitChatDisplay.mermaidRenderingMode = true
+        set({ mermaidRenderingMode: mode })
+      },
+
       fileViewerWidth: 'column',
       setFileViewerWidth: (width) => set({ fileViewerWidth: width }),
 
@@ -811,7 +838,7 @@ export const useUIStore = create<UIStore>()(
         set({ expandedChatGroup: expanded, revealedServiceGroups: revealed })
       },
 
-      setServerChatDisplayDefaults: ({ viewMode, density, userMessageMarkdown }) =>
+      setServerChatDisplayDefaults: ({ viewMode, density, userMessageMarkdown, mermaidRenderingMode }) =>
         set(() => {
           const next: Partial<UIStore> = {}
           if (
@@ -832,10 +859,18 @@ export const useUIStore = create<UIStore>()(
           ) {
             next.userMessageMarkdown = userMessageMarkdown
           }
+          if (
+            (mermaidRenderingMode === 'svg' ||
+              mermaidRenderingMode === 'ascii' ||
+              mermaidRenderingMode === 'off') &&
+            !hasPersonalChatDisplay('mermaidRenderingMode')
+          ) {
+            next.mermaidRenderingMode = mermaidRenderingMode
+          }
           return next
         }),
 
-      applyPersonalChatDisplay: ({ viewMode, density, userMessageMarkdown }) =>
+      applyPersonalChatDisplay: ({ viewMode, density, userMessageMarkdown, mermaidRenderingMode }) =>
         set(() => {
           const next: Partial<UIStore> = {}
           if (viewMode && !hasPersonalChatDisplay('chatViewMode')) {
@@ -853,6 +888,15 @@ export const useUIStore = create<UIStore>()(
           ) {
             next.userMessageMarkdown = userMessageMarkdown
             explicitChatDisplay.userMessageMarkdown = true
+          }
+          if (
+            (mermaidRenderingMode === 'svg' ||
+              mermaidRenderingMode === 'ascii' ||
+              mermaidRenderingMode === 'off') &&
+            !hasPersonalChatDisplay('mermaidRenderingMode')
+          ) {
+            next.mermaidRenderingMode = mermaidRenderingMode
+            explicitChatDisplay.mermaidRenderingMode = true
           }
           return next
         }),
@@ -877,6 +921,7 @@ export const useUIStore = create<UIStore>()(
         chatDensity: state.chatDensity,
         chatViewMode: state.chatViewMode,
         userMessageMarkdown: state.userMessageMarkdown,
+        mermaidRenderingMode: state.mermaidRenderingMode,
         fileViewerWidth: state.fileViewerWidth,
         expandedChatGroup: state.expandedChatGroup,
         revealedServiceGroups: state.revealedServiceGroups,
@@ -911,6 +956,14 @@ export const useUIStore = create<UIStore>()(
           // Рендер сообщений пользователя: только явное сохранённое значение,
           // иначе разметка markdown (значение по умолчанию).
           userMessageMarkdown: p?.userMessageMarkdown === 'plain' ? 'plain' : 'markdown',
+          // Режим диаграмм Mermaid: только явное сохранённое значение,
+          // иначе SVG (значение по умолчанию).
+          mermaidRenderingMode:
+            p?.mermaidRenderingMode === 'ascii'
+              ? 'ascii'
+              : p?.mermaidRenderingMode === 'off'
+                ? 'off'
+                : 'svg',
           // Ширина чтения в просмотрщике: `full` — только явное сохранённое
           // значение, иначе колонка (значение по умолчанию).
           fileViewerWidth: p?.fileViewerWidth === 'full' ? 'full' : 'column',

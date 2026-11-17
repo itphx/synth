@@ -6,9 +6,15 @@ import { i18nText, useI18nStore } from '@/lib/i18n'
 import { codeFileName } from '@/lib/markdown/codeFile'
 import { getThemeEpoch, highlightCode, subscribeThemeChange } from '@/lib/markdown/highlight'
 import { createMathExtension, renderMathInPlace } from '@/lib/markdown/math'
+import {
+  clearMermaidInPlace,
+  renderMermaidInPlace,
+  setMermaidSourceVisible,
+} from '@/lib/markdown/mermaid'
 import { rewriteRelativeAssets } from '@/lib/markdown/relativeAssets'
 import { createSlugger } from '@/lib/markdown/slug'
 import { resolveColor } from '@/lib/utils'
+import { useUIStore } from '@/stores/useUIStore'
 import type { AgentInfo } from '@/lib/api/synthApi'
 
 interface MarkdownContentProps {
@@ -274,6 +280,12 @@ export function MarkdownContent({
   // Словарь в зависимостях: подписи кнопки копирования переводятся при смене локали.
   const dictionary = useI18nStore((s) => s.dictionary)
   /**
+   * Режим рендера диаграмм Mermaid (одна настройка на пользователя): схема,
+   * текст (ASCII) или только исходный код. Настройка личная, поэтому берём её
+   * из стора — она действует и в чате, и в просмотрщике файла.
+   */
+  const mermaidMode = useUIStore((s) => s.mermaidRenderingMode)
+  /**
    * Epoch темы: растёт при каждой смене темы. Подсветка shiki пишет цвета
    * инлайном, поэтому уже подсвеченные блоки при смене темы надо перерисовать.
    */
@@ -419,6 +431,29 @@ export function MarkdownContent({
   }, [html, streaming])
 
   /**
+   * Диаграммы Mermaid — по образцу формул: во время стриминга не рисуем
+   * (иначе DOM пересобирается на каждой дельте), после завершения шага
+   * (`streaming: false`) — один раз; маркер `data-mermaid` не даёт рисовать
+   * диаграмму дважды.
+   *
+   * Режим `off` — блок остаётся кодом; ранее нарисованную диаграмму снимаем
+   * (разметка сообщения не меняется, React не трогает DOM — диаграмма осталась
+   * бы висеть поверх кода).
+   *
+   * Ошибка (битый синтаксис, не загрузилась библиотека) оставляет блок
+   * **кодом** — рендер не падает.
+   */
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || streaming) return
+    if (mermaidMode === 'off') {
+      clearMermaidInPlace(container)
+      return
+    }
+    void renderMermaidInPlace(container, mermaidMode)
+  }, [html, streaming, mermaidMode])
+
+  /**
    * Подсветка `@`-упоминаний агентов цветом агента — тем же способом, что и
    * в plain-тексте сообщения человека (`SecretPlainText`), но уже в разобранном
    * markdown: обходим текстовые узлы готового DOM и оборачиваем известные
@@ -524,6 +559,19 @@ export function MarkdownContent({
         typeof window.matchMedia === 'function' &&
         window.matchMedia('(prefers-reduced-motion: reduce)').matches
       heading.scrollIntoView({ block: 'start', behavior: reduceMotion ? 'auto' : 'smooth' })
+      return
+    }
+
+    // Переключатель «код ↔ диаграмма» в шапке блока с диаграммой Mermaid.
+    // Кнопка добавлена нашим рендером (после санитайзера), поэтому обработчик
+    // делегирован здесь — как копирование и скачивание.
+    const mermaidToggle = target.closest<HTMLButtonElement>('[data-mermaid-toggle]')
+    if (mermaidToggle) {
+      const block = mermaidToggle.closest<HTMLElement>('.md-code')
+      if (!block) return
+      // `data-show-source` на блоке — состояние «показан исходник»; его же
+      // читает CSS (диаграмма прячется, когда видно код).
+      setMermaidSourceVisible(block, block.dataset.showSource !== 'true')
       return
     }
 

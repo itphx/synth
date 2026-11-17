@@ -20,6 +20,10 @@ export interface BuiltInAppearanceDefaults {
   uiScaleDesktop: number | null;
   chatViewMode: 'detailed' | 'feed' | null;
   chatDensity: 'normal' | 'compact' | null;
+  /** Рендер сообщений пользователя (`null` — умолчание не задано). */
+  userMessageMarkdown: 'markdown' | 'plain' | null;
+  /** Рендер диаграмм Mermaid (`null` — умолчание не задано). */
+  mermaidRenderingMode: 'svg' | 'ascii' | 'off' | null;
   chatScaleMobile: number | null;
   chatScaleDesktop: number | null;
 }
@@ -36,6 +40,8 @@ export const BUILT_IN_APPEARANCE_DEFAULTS: BuiltInAppearanceDefaults = {
   uiScaleDesktop: null,
   chatViewMode: null,
   chatDensity: null,
+  userMessageMarkdown: null,
+  mermaidRenderingMode: null,
   chatScaleMobile: null,
   chatScaleDesktop: null,
 };
@@ -58,6 +64,10 @@ export async function resolveAppearanceDefaults(
     uiScaleDesktop: stored.uiScaleDesktop ?? BUILT_IN_APPEARANCE_DEFAULTS.uiScaleDesktop,
     chatViewMode: stored.chatViewMode ?? BUILT_IN_APPEARANCE_DEFAULTS.chatViewMode,
     chatDensity: stored.chatDensity ?? BUILT_IN_APPEARANCE_DEFAULTS.chatDensity,
+    userMessageMarkdown:
+      stored.userMessageMarkdown ?? BUILT_IN_APPEARANCE_DEFAULTS.userMessageMarkdown,
+    mermaidRenderingMode:
+      stored.mermaidRenderingMode ?? BUILT_IN_APPEARANCE_DEFAULTS.mermaidRenderingMode,
     chatScaleMobile: stored.chatScaleMobile ?? BUILT_IN_APPEARANCE_DEFAULTS.chatScaleMobile,
     chatScaleDesktop: stored.chatScaleDesktop ?? BUILT_IN_APPEARANCE_DEFAULTS.chatScaleDesktop,
   };

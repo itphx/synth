@@ -38,6 +38,8 @@ export interface UserPreferences {
   chatDensity?: 'normal' | 'compact' | null
   /** Рендер сообщений пользователя: markdown-разметка или текст как набран. */
   userMessageMarkdown?: 'markdown' | 'plain' | null
+  /** Режим рендера диаграмм Mermaid: SVG, текст (ASCII) или только код. */
+  mermaidRenderingMode?: 'svg' | 'ascii' | 'off' | null
   /** Личный масштаб области чата (одно значение; клампится по устройству). */
   chatScale?: number | null
   /** Серверное умолчание масштаба области чата для мобильных. */

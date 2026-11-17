@@ -1000,6 +1000,33 @@ html.pointer-coarse .markdown-content .md-code-download {
   height: 1.75rem;
 }
 
+/* Переключатель «код ↔ диаграмма» в шапке блока с диаграммой Mermaid.
+   В отличие от копирования и скачивания у него есть видимая подпись: иконки
+   соседей иначе не отличить друг от друга. Кнопку добавляет наш рендер
+   (`lib/markdown/mermaid.ts`) — в разметку из marked она не попадает. */
+.markdown-content .md-code-toggle {
+  padding: 0 0.25rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: transparent;
+  color: var(--muted-foreground, inherit);
+  font-family: inherit;
+  font-size: var(--text-xs, 0.75rem);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.markdown-content .md-code-toggle:hover {
+  background: var(--interactive-hover, var(--surface-raised, var(--card)));
+  color: var(--foreground);
+}
+
+/* Нажата — показан исходный код блока (диаграмма скрыта правилом ниже). */
+.markdown-content .md-code-toggle[aria-pressed='true'] {
+  color: var(--foreground);
+}
+
 .markdown-content .md-code-pre {
   max-width: 100%;
   /* `pre` — скролл-контейнер: его внутренний `padding-right` прокручивается
@@ -1036,6 +1063,42 @@ html.pointer-coarse .markdown-content .md-code-download {
   font-family: var(--font-mono);
   font-size: inherit;
   counter-reset: md-code-line;
+}
+
+/* Диаграммы Mermaid: результат рендера (`lib/markdown/mermaid.ts`) — первым
+   блоком под шапкой блока кода. Исходник при этом остаётся в DOM (скрыт),
+   чтобы работали копирование и скачивание. */
+.markdown-content .md-mermaid-chart {
+  margin: 0.25rem 0;
+  overflow-x: auto;
+}
+
+.markdown-content .md-mermaid-chart svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-content .md-mermaid-ascii {
+  margin: 0.25rem 0;
+  padding: 0.5rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-code, 0.8125rem);
+  line-height: 1.35;
+  color: var(--foreground);
+  background: transparent;
+}
+
+/* Пока показан рендер — исходник блока скрыт (но остаётся в DOM: его читают
+   кнопки копирования и скачивания). `data-show-source` на блоке — состояние
+   переключателя «код ↔ диаграмма». */
+.markdown-content .md-code[data-mermaid]:not([data-show-source='true']) pre.md-code-pre {
+  display: none;
+}
+
+.markdown-content .md-code[data-mermaid][data-show-source='true'] .md-mermaid-chart,
+.markdown-content .md-code[data-mermaid][data-show-source='true'] .md-mermaid-ascii {
+  display: none;
 }
 
 .markdown-content .md-code-line {

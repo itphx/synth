@@ -134,6 +134,31 @@ describe('settings-catalog — раздел «Пользователи» и пр
   })
 })
 
+describe('settings-catalog — умолчания разметки и Mermaid', () => {
+  it('записи привязаны к секции «Разметка и диаграммы» в разделе «Оформление»', () => {
+    const byId = new Map(
+      SETTINGS_CATALOG.filter((entry) => entry.categoryId === 'defaults').map((entry) => [
+        entry.id,
+        entry,
+      ]),
+    )
+
+    expect(byId.get('defaults.userMessageMarkdown')?.sectionId).toBe('defaults-chat-markdown')
+    expect(byId.get('defaults.mermaid')?.sectionId).toBe('defaults-chat-markdown')
+  })
+
+  it('находятся поиском по названию и синонимам (ru/en)', () => {
+    expect(searchSettings(t, 'markdown').entries.map((e) => e.id)).toContain(
+      'defaults.userMessageMarkdown',
+    )
+    expect(searchSettings(tRu, 'разметка').entries.map((e) => e.id)).toContain(
+      'defaults.userMessageMarkdown',
+    )
+    expect(searchSettings(t, 'mermaid').entries.map((e) => e.id)).toContain('defaults.mermaid')
+    expect(searchSettings(tRu, 'диаграммы').entries.map((e) => e.id)).toContain('defaults.mermaid')
+  })
+})
+
 describe('settings-catalog — searchSettings', () => {
   it('пустой запрос не возвращает результатов', () => {
     expect(searchSettings(t, '')).toEqual({ categories: [], entries: [] })

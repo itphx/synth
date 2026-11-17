@@ -767,6 +767,13 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     keywords: ['markdown', 'разметка', 'текст', 'plain', 'сообщения'],
   },
   {
+    id: 'chat.mermaid',
+    categoryId: 'chat',
+    sectionId: 'chat-mermaid',
+    labelKey: 'chatSettings.mermaid',
+    keywords: ['mermaid', 'диаграмма', 'схема', 'graph', 'sequence'],
+  },
+  {
     id: 'chat.intermediateTextDisplay',
     categoryId: 'chat',
     sectionId: 'chat-intermediate-text',
@@ -2928,6 +2935,22 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     sectionId: 'defaults-chat-display',
     labelKey: 'chatSettings.density',
     keywords: ['density', 'compact', 'плотность', 'компактная'],
+    advanced: true,
+  },
+  {
+    id: 'defaults.userMessageMarkdown',
+    categoryId: 'defaults',
+    sectionId: 'defaults-chat-markdown',
+    labelKey: 'defaults.chatMarkdown.userMessages',
+    keywords: ['markdown', 'user message', 'plain', 'разметка', 'сообщения пользователя'],
+    advanced: true,
+  },
+  {
+    id: 'defaults.mermaid',
+    categoryId: 'defaults',
+    sectionId: 'defaults-chat-markdown',
+    labelKey: 'defaults.chatMarkdown.mermaid',
+    keywords: ['mermaid', 'diagram', 'ascii', 'диаграммы', 'схемы'],
     advanced: true,
   },
   {

@@ -1869,6 +1869,11 @@ export const dict = {
   'markdown.code.download': 'Скачать',
   'markdown.code.downloaded': 'Скачано',
 
+  // Диаграммы Mermaid: переключатель «код/диаграмма» в шапке блока и
+  // доступное имя самой диаграммы.
+  'markdown.mermaid.toggle': 'Код',
+  'markdown.mermaid.aria': 'Диаграмма',
+
   'chat.actions.copy': 'Копировать',
   'chat.actions.copyHint': 'Копировать · Shift — без разметки',
   'chat.actions.toggleOff': 'Выключить',
@@ -2614,6 +2619,12 @@ export const dict = {
     'Как показывать ваши сообщения: разбирать их как Markdown или показывать текст как набран.',
   'chatSettings.userMessageMarkdownOn': 'Markdown',
   'chatSettings.userMessageMarkdownOff': 'Текст',
+  'chatSettings.mermaid': 'Диаграммы Mermaid',
+  'chatSettings.mermaidDescription':
+    'Как показывать блоки ```mermaid: как схему, как текст или как исходный код.',
+  'chatSettings.mermaidSvg': 'Диаграмма',
+  'chatSettings.mermaidAscii': 'Текст (ASCII)',
+  'chatSettings.mermaidOff': 'Код',
   'chatSettings.intermediateTextDisplay': 'Промежуточные ответы',
   'chatSettings.intermediateTextInline': 'Между блоками',
   'chatSettings.intermediateTextBottom': 'Снизу',
@@ -3140,6 +3151,16 @@ export const dict = {
   'admin.defaults.saved': 'Сохранено',
   'admin.defaults.save': 'Сохранить',
   'admin.defaults.confirmReset': 'Сбросить оформление к серверным значениям по умолчанию?',
+
+  // Умолчания инстанса: разметка сообщений пользователя и рендер диаграмм Mermaid.
+  'defaults.chatMarkdown.section': 'Разметка и диаграммы',
+  'defaults.chatMarkdown.userMessages': 'Сообщения пользователя',
+  'defaults.chatMarkdown.mermaid': 'Диаграммы Mermaid',
+  'defaults.chatMarkdown.userMessagesMarkdown': 'Markdown',
+  'defaults.chatMarkdown.userMessagesPlain': 'Текст',
+  'defaults.chatMarkdown.mermaidSvg': 'Диаграмма',
+  'defaults.chatMarkdown.mermaidAscii': 'Текст ASCII',
+  'defaults.chatMarkdown.mermaidOff': 'Код',
 
   // Color picker
   'admin.colorPicker.default': 'По умолчанию',
@@ -5905,6 +5926,8 @@ export const dict = {
   'settings.help.defaults.section.defaults-language': 'Язык интерфейса по умолчанию для новых пользователей.',
   'settings.help.defaults.section.defaults-chat-display': 'Вид и плотность ленты чата по умолчанию; личный выбор пользователя всегда важнее.',
   'settings.help.defaults.section.defaults-chat-scale': 'Масштаб области чата по умолчанию для мобильных и десктопных устройств; личный выбор пользователя важнее.',
+  'settings.help.defaults.chatMarkdown':
+    'Как по умолчанию показывать сообщения пользователя (разметка или текст) и диаграммы Mermaid (схема, текст или код); личный выбор пользователя важнее.',
   'settings.help.defaults.chatViewMode': 'Подробный вид — ответ агента в пузыре; лента — плоская проза без пузыря.',
   'settings.help.defaults.chatDensity': 'Компактная плотность сворачивает прошлые ходы в одну строку; текущий ход всегда раскрыт.',
   'settings.help.defaults.chatScaleMobile': 'Масштаб области чата на телефоне и планшете, 75–150%; на устройстве действует минимум 85%.',

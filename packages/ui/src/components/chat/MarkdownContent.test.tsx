@@ -6,8 +6,30 @@ import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 import { i18nText } from '@/lib/i18n'
 import { highlightCode, resetThemeWatcher } from '@/lib/markdown/highlight'
+import { useUIStore } from '@/stores/useUIStore'
 import { MarkdownContent, MAX_NUMBERED_CODE_LINES } from './MarkdownContent'
 
 // Подсветка (shiki) — отдельный модуль со своим тестом; здесь проверяем только
@@ -1221,5 +1243,41 @@ describe('MarkdownContent: формулы (KaTeX)', () => {
 
     expect(container.querySelector('.md-math')).toBeNull()
     expect(container.textContent).toContain('$5')
+  })
+})
+
+/**
+ * Диаграммы Mermaid: по умолчанию блок ` ```mermaid ` рисуется схемой (SVG),
+ * в режиме `off` — остаётся кодом. Исходник в обоих случаях остаётся в DOM:
+ * его читают кнопки копирования и скачивания.
+ */
+describe('MarkdownContent: диаграммы Mermaid', () => {
+  afterEach(() => {
+    useUIStore.setState({ mermaidRenderingMode: 'svg' })
+  })
+
+  it('по умолчанию (svg) появляется диаграмма, исходник сохранён', async () => {
+    useUIStore.setState({ mermaidRenderingMode: 'svg' })
+    const container = await renderMarkdown('```mermaid\ngraph TD\n  A[Start] --> B[End]\n```')
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('.md-mermaid-chart svg')).not.toBeNull()
+    })
+
+    // Исходник на месте (копирование и скачивание работают) — он скрыт.
+    expect(container.querySelector('pre.md-code-pre code')?.textContent).toContain('graph TD')
+    expect(container.querySelector<HTMLElement>('pre.md-code-pre')?.hidden).toBe(true)
+    expect(container.querySelector('[data-mermaid-toggle]')).not.toBeNull()
+  })
+
+  it('режим off — блок остаётся кодом, диаграммы нет', async () => {
+    useUIStore.setState({ mermaidRenderingMode: 'off' })
+    const container = await renderMarkdown('```mermaid\ngraph TD\n  A[Start] --> B[End]\n```')
+
+    await flushEffects()
+
+    expect(container.querySelector('.md-mermaid-chart')).toBeNull()
+    expect(container.querySelector('pre.md-code-pre code')?.textContent).toContain('graph TD')
+    expect(container.querySelector<HTMLElement>('pre.md-code-pre')?.hidden).toBe(false)
   })
 })

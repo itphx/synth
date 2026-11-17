@@ -30,6 +30,7 @@ const profileMock = vi.hoisted(() => ({
   syncChatScaleToProfile: vi.fn(),
   syncIntermediateTextDisplayToProfile: vi.fn(),
   syncUserMessageMarkdownToProfile: vi.fn(),
+  syncMermaidRenderingModeToProfile: vi.fn(),
 }))
 
 vi.mock('@/lib/api/profileService', () => ({ profileService: profileMock }))
@@ -88,6 +89,7 @@ beforeEach(() => {
     chatDensity: 'normal',
     chatViewMode: 'detailed',
     userMessageMarkdown: 'markdown',
+    mermaidRenderingMode: 'svg',
     chatScale: CHAT_SCALE_DEFAULT,
   })
   localStorage.removeItem(CHAT_SCALE_STORAGE_KEY)
@@ -348,6 +350,79 @@ describe('ChatSettings — разметка в моих сообщениях', (
 
     expect(radioByText(container, 'Markdown').getAttribute('aria-checked')).toBe('true')
     expect(useUIStore.getState().userMessageMarkdown).toBe('markdown')
+  })
+})
+
+/**
+ * Рендер диаграмм Mermaid: секция `chat-mermaid`, переключатель
+ * «Диаграмма»/«Текст (ASCII)»/«Код» (ru) = Diagram/Text (ASCII)/Code (en),
+ * Save → стор + синк в профиль, Cancel — откат без синка.
+ */
+describe('ChatSettings — режим рендера диаграмм Mermaid', () => {
+  it('секция chat-mermaid есть, дефолт — «Диаграмма» (svg)', async () => {
+    const container = await renderSettings()
+
+    const section = container.querySelector('[data-settings-section="chat-mermaid"]')
+    expect(section).not.toBeNull()
+    expect(section!.textContent).toContain('Mermaid diagrams')
+    expect(radioByText(container, 'Diagram').getAttribute('aria-checked')).toBe('true')
+    expect(radioByText(container, 'Text (ASCII)').getAttribute('aria-checked')).toBe('false')
+    expect(radioByText(container, 'Code').getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('переключение на ASCII меняет черновик, Save пишет в стор и синхит профиль', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Text (ASCII)').click()
+    })
+
+    expect(radioByText(container, 'Text (ASCII)').getAttribute('aria-checked')).toBe('true')
+    // До Save стор не тронут.
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('svg')
+    expect(profileMock.syncMermaidRenderingModeToProfile).not.toHaveBeenCalled()
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
+
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('ascii')
+    expect(profileMock.syncMermaidRenderingModeToProfile).toHaveBeenCalledWith('ascii')
+  })
+
+  it('переключение на «Код» меняет черновик, Save пишет в стор и синхит профиль', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Code').click()
+    })
+
+    expect(radioByText(container, 'Code').getAttribute('aria-checked')).toBe('true')
+    // До Save стор не тронут.
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('svg')
+    expect(profileMock.syncMermaidRenderingModeToProfile).not.toHaveBeenCalled()
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
+
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('off')
+    expect(profileMock.syncMermaidRenderingModeToProfile).toHaveBeenCalledWith('off')
+  })
+
+  it('Cancel возвращает прежнее значение стора и не синкает профиль', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Code').click()
+    })
+    await act(async () => {
+      byTestId(container, 'chat-cancel')!.click()
+    })
+
+    expect(radioByText(container, 'Diagram').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('svg')
+    expect(profileMock.syncMermaidRenderingModeToProfile).not.toHaveBeenCalled()
   })
 })
 

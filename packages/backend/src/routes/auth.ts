@@ -44,6 +44,8 @@ const DEFAULT_FIELDS = [
   'uiScaleDesktop',
   'chatViewMode',
   'chatDensity',
+  'userMessageMarkdown',
+  'mermaidRenderingMode',
   'chatScaleMobile',
   'chatScaleDesktop',
 ] as const satisfies readonly (keyof AppearanceDefaults)[];

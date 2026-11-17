@@ -528,6 +528,70 @@ describe('useUIStore.userMessageMarkdown', () => {
 })
 
 /**
+ * Режим рендера диаграмм Mermaid: пользовательская настройка, персистится;
+ * `svg`/`ascii`/`off` восстанавливаются только по явному значению, иначе SVG
+ * (значение по умолчанию).
+ */
+describe('useUIStore.mermaidRenderingMode', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ mermaidRenderingMode: 'svg' })
+  })
+
+  async function rehydrateWith(mermaidRenderingMode: unknown): Promise<void> {
+    storage.setItem(
+      'synth-ui-settings',
+      JSON.stringify({ state: { mermaidRenderingMode }, version: 0 }),
+    )
+    await useUIStore.persist.rehydrate()
+  }
+
+  it('значение по умолчанию — svg', () => {
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('svg')
+  })
+
+  it('экшен переключает режим', () => {
+    useUIStore.getState().setMermaidRenderingMode('ascii')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('ascii')
+    useUIStore.getState().setMermaidRenderingMode('off')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('off')
+  })
+
+  it('попадает в partialize (персистится)', () => {
+    useUIStore.setState({ mermaidRenderingMode: 'ascii' })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.mermaidRenderingMode).toBe('ascii')
+  })
+
+  it('восстанавливает сохранённое значение ascii', async () => {
+    await rehydrateWith('ascii')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('ascii')
+  })
+
+  it('восстанавливает сохранённое значение off', async () => {
+    await rehydrateWith('off')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('off')
+  })
+
+  it('неизвестное значение сбрасывается в svg', async () => {
+    await rehydrateWith('rich-text')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('svg')
+  })
+
+  it('отсутствующее значение — svg', async () => {
+    await rehydrateWith(undefined)
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('svg')
+  })
+
+  it('svg восстанавливается как есть', async () => {
+    await rehydrateWith('svg')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('svg')
+  })
+})
+
+/**
  * Ширина чтения markdown в просмотрщике файла: пользовательская настройка,
  * персистится; `full` восстанавливается только по явному значению, иначе
  * колонка (значение по умолчанию).

@@ -5,7 +5,8 @@ import { profileService } from '@/lib/api/profileService'
 import { confirm } from '@/lib/confirm'
 import { THEME_PRESETS } from '@/lib/theme/themes'
 import type { ThemeMode } from '@/types/theme'
-import { useUIStore, type ChatDensity, type ChatViewMode } from '@/stores/useUIStore'
+import { useUIStore, type ChatDensity, type ChatViewMode, type UserMessageMarkdown } from '@/stores/useUIStore'
+import type { MermaidMode } from '@/lib/markdown/mermaid'
 import {
   CHAT_SCALE_DEFAULT,
   CHAT_SCALE_MIN,
@@ -43,6 +44,8 @@ interface DefaultsDraft {
   uiScaleDesktop: number
   chatViewMode: ChatViewMode
   chatDensity: ChatDensity
+  userMessageMarkdown: UserMessageMarkdown
+  mermaidRenderingMode: MermaidMode
   chatScaleMobile: number
   chatScaleDesktop: number
 }
@@ -58,6 +61,15 @@ const toDraft = (defaults: UserPreferences): DefaultsDraft => ({
   uiScaleDesktop: normalizeUiScale(defaults.uiScaleDesktop ?? UI_SCALE_DESKTOP_DEFAULT),
   chatViewMode: defaults.chatViewMode === 'feed' ? 'feed' : 'detailed',
   chatDensity: defaults.chatDensity === 'compact' ? 'compact' : 'normal',
+  // Рендер сообщений пользователя и диаграмм Mermaid: `null` (умолчание не
+  // задано) — берём встроенный дефолт клиента (markdown / svg).
+  userMessageMarkdown: defaults.userMessageMarkdown === 'plain' ? 'plain' : 'markdown',
+  mermaidRenderingMode:
+    defaults.mermaidRenderingMode === 'ascii'
+      ? 'ascii'
+      : defaults.mermaidRenderingMode === 'off'
+        ? 'off'
+        : 'svg',
   // У чат-скейла свой диапазон 0.75…1.5 (мобильный минимум 0.85 — на клиенте).
   chatScaleMobile: clampChatScale(defaults.chatScaleMobile ?? CHAT_SCALE_DEFAULT),
   chatScaleDesktop: clampChatScale(defaults.chatScaleDesktop ?? CHAT_SCALE_DEFAULT),
@@ -78,6 +90,8 @@ export const DefaultsPanel = () => {
         uiScaleDesktop: next.uiScaleDesktop,
         chatViewMode: next.chatViewMode,
         chatDensity: next.chatDensity,
+        userMessageMarkdown: next.userMessageMarkdown,
+        mermaidRenderingMode: next.mermaidRenderingMode,
         chatScaleMobile: next.chatScaleMobile,
         chatScaleDesktop: next.chatScaleDesktop,
       })
@@ -95,6 +109,8 @@ export const DefaultsPanel = () => {
       useUIStore.getState().setServerChatDisplayDefaults({
         viewMode: next.chatViewMode,
         density: next.chatDensity,
+        userMessageMarkdown: next.userMessageMarkdown,
+        mermaidRenderingMode: next.mermaidRenderingMode,
       })
       setServerDefaults(next)
       return next
@@ -148,6 +164,15 @@ export const DefaultsPanel = () => {
     { value: 'normal', label: t('chatSettings.densityNormal') },
     { value: 'compact', label: t('chatSettings.densityCompact') },
   ]
+  const userMessageMarkdownOptions: SegmentedControlOption<UserMessageMarkdown>[] = [
+    { value: 'markdown', label: t('defaults.chatMarkdown.userMessagesMarkdown') },
+    { value: 'plain', label: t('defaults.chatMarkdown.userMessagesPlain') },
+  ]
+  const mermaidRenderingModeOptions: SegmentedControlOption<MermaidMode>[] = [
+    { value: 'svg', label: t('defaults.chatMarkdown.mermaidSvg') },
+    { value: 'ascii', label: t('defaults.chatMarkdown.mermaidAscii') },
+    { value: 'off', label: t('defaults.chatMarkdown.mermaidOff') },
+  ]
 
   const handleReset = async () => {
     if (!(await confirm({ title: t('admin.defaults.confirmReset'), variant: 'danger' }))) return
@@ -163,6 +188,8 @@ export const DefaultsPanel = () => {
     useUIStore.getState().setServerChatDisplayDefaults({
       viewMode: defaults.chatViewMode,
       density: defaults.chatDensity,
+      userMessageMarkdown: defaults.userMessageMarkdown,
+      mermaidRenderingMode: defaults.mermaidRenderingMode,
     })
   }
 
@@ -240,6 +267,35 @@ export const DefaultsPanel = () => {
                     options={chatDensityOptions}
                     onChange={(value) => update({ chatDensity: value })}
                     ariaLabel={t('chatSettings.density')}
+                  />
+                }
+              />
+            </SettingsSection>
+
+            <SettingsSection
+              id="defaults-chat-markdown"
+              title={t('defaults.chatMarkdown.section')}
+              tooltip={t('settings.help.defaults.chatMarkdown')}
+            >
+              <SettingsRow
+                label={t('defaults.chatMarkdown.userMessages')}
+                control={
+                  <SegmentedControl<UserMessageMarkdown>
+                    value={current.userMessageMarkdown}
+                    options={userMessageMarkdownOptions}
+                    onChange={(value) => update({ userMessageMarkdown: value })}
+                    ariaLabel={t('defaults.chatMarkdown.userMessages')}
+                  />
+                }
+              />
+              <SettingsRow
+                label={t('defaults.chatMarkdown.mermaid')}
+                control={
+                  <SegmentedControl<MermaidMode>
+                    value={current.mermaidRenderingMode}
+                    options={mermaidRenderingModeOptions}
+                    onChange={(value) => update({ mermaidRenderingMode: value })}
+                    ariaLabel={t('defaults.chatMarkdown.mermaid')}
                   />
                 }
               />

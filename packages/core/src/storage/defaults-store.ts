@@ -55,7 +55,8 @@ function sanitizeChatScale(value: unknown): number | undefined {
  * themeMode system/light/dark, theme — непустая строка, uiScaleMobile и
  * uiScaleDesktop — каждое независимо число в диапазоне 0.5..1.2,
  * chatViewMode/chatDensity — только известные значения, chatScaleMobile и
- * chatScaleDesktop — независимо числа в диапазоне 0.75..1.5.
+ * chatScaleDesktop — независимо числа в диапазоне 0.75..1.5,
+ * userMessageMarkdown — markdown/plain, mermaidRenderingMode — svg/ascii/off.
  * Некорректные поля отбрасываются (без исключений).
  */
 function sanitize(raw: unknown): AppearanceDefaults {
@@ -85,6 +86,19 @@ function sanitize(raw: unknown): AppearanceDefaults {
   }
   if (src.chatDensity === 'normal' || src.chatDensity === 'compact') {
     out.chatDensity = src.chatDensity;
+  }
+  // Рендер сообщений пользователя и диаграмм Mermaid — enum из конечного
+  // набора значений: неизвестное значение молча выкидываем, чтобы клиент взял
+  // свой встроенный дефолт, а не сломанный режим.
+  if (src.userMessageMarkdown === 'markdown' || src.userMessageMarkdown === 'plain') {
+    out.userMessageMarkdown = src.userMessageMarkdown;
+  }
+  if (
+    src.mermaidRenderingMode === 'svg' ||
+    src.mermaidRenderingMode === 'ascii' ||
+    src.mermaidRenderingMode === 'off'
+  ) {
+    out.mermaidRenderingMode = src.mermaidRenderingMode;
   }
   const chatMobile = sanitizeChatScale(src.chatScaleMobile);
   if (chatMobile !== undefined) {

@@ -35,6 +35,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: confirmMock }))
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useUIStore } from '@/stores/useUIStore'
 import { DefaultsPanel } from './DefaultsPanel'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -47,6 +48,8 @@ const DEFAULTS = {
   uiScaleDesktop: null,
   chatViewMode: null,
   chatDensity: null,
+  userMessageMarkdown: null,
+  mermaidRenderingMode: null,
   chatScaleMobile: null,
   chatScaleDesktop: null,
 }
@@ -268,5 +271,63 @@ describe('DefaultsPanel — умолчания отображения чата',
     expect(radioByText(container, 'Detailed')!.getAttribute('aria-checked')).toBe('true')
     // Сброс не сохраняет: PUT не вызывался.
     expect(apiMock.updateDefaults).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Умолчания рендера: разметка сообщений пользователя (`userMessageMarkdown`)
+ * и режим диаграмм Mermaid (`mermaidRenderingMode`). Оба — личные настройки
+ * чата, вынесенные в умолчания инстанса: серверное значение применяется тем,
+ * у кого нет личного выбора.
+ */
+describe('DefaultsPanel — умолчания разметки и Mermaid', () => {
+  it('секция рендерится с переключателями обоих параметров', async () => {
+    const container = await renderPanel()
+
+    expect(container.querySelector('[data-settings-section="defaults-chat-markdown"]')).not.toBeNull()
+    expect(radioByText(container, 'Markdown')).toBeDefined()
+    expect(radioByText(container, 'Plain text')).toBeDefined()
+    expect(radioByText(container, 'Diagram')).toBeDefined()
+    expect(radioByText(container, 'ASCII text')).toBeDefined()
+    expect(radioByText(container, 'Code')).toBeDefined()
+  })
+
+  it('Save отправляет оба значения и применяет их в текущей сессии', async () => {
+    const container = await renderPanel()
+
+    await act(async () => {
+      radioByText(container, 'Plain text')!.click()
+    })
+    await act(async () => {
+      radioByText(container, 'ASCII text')!.click()
+    })
+
+    const save = byTestId(container, 'defaults-save')!
+    expect(save.disabled).toBe(false)
+    await act(async () => {
+      save.click()
+    })
+
+    expect(apiMock.updateDefaults).toHaveBeenCalledTimes(1)
+    expect(apiMock.updateDefaults).toHaveBeenCalledWith(
+      expect.objectContaining({ userMessageMarkdown: 'plain', mermaidRenderingMode: 'ascii' }),
+    )
+    // Локальное применение: умолчание инстанса действует сразу.
+    expect(useUIStore.getState().userMessageMarkdown).toBe('plain')
+    expect(useUIStore.getState().mermaidRenderingMode).toBe('ascii')
+  })
+
+  it('сохранённые сервером значения подхватываются в черновик', async () => {
+    profileMock.getDefaults.mockResolvedValue({
+      ...DEFAULTS,
+      userMessageMarkdown: 'plain',
+      mermaidRenderingMode: 'off',
+    })
+
+    const container = await renderPanel()
+
+    expect(radioByText(container, 'Plain text')!.getAttribute('aria-checked')).toBe('true')
+    expect(radioByText(container, 'Code')!.getAttribute('aria-checked')).toBe('true')
+    expect(radioByText(container, 'Markdown')!.getAttribute('aria-checked')).toBe('false')
   })
 })

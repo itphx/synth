@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { ensureDataDir } from '@itphx/synth-shared';
 import type { AuthConfig } from '@itphx/synth-shared';
 import { createAuthRoutes } from './auth.js';
+import { DefaultsStore } from '../lib/defaults-store.js';
 
 // /auth/oidc-meta не использует kit — достаточно заглушки.
 function makeApp(config: AuthConfig): Hono {
@@ -255,5 +256,96 @@ describe('routes/auth: группы пользователя (ADR-140)', () => {
     expect(user.groups).toEqual(['team-a']);
     const body = (await res.json()) as { user?: Record<string, unknown> };
     expect(body.user).not.toHaveProperty('groups');
+  });
+});
+
+/**
+ * Умолчания оформления инстанса (`GET/PUT /auth/defaults`): вид/плотность
+ * ленты, разметка сообщений пользователя и рендер диаграмм Mermaid.
+ *
+ * Whitelist полей — на границе роута (`DEFAULT_FIELDS`), валидация значений —
+ * в сторе (`DefaultsStore.sanitize`), поэтому проверяем оба слоя вместе.
+ */
+describe('routes/auth: умолчания инстанса (GET/PUT /auth/defaults)', () => {
+  let dataDir: string;
+
+  const makeApp = (): Hono => {
+    const kit = {
+      getCurrentUser: async () => null,
+      requireAdmin: async (_c: unknown, next: () => Promise<void>) => next(),
+    };
+    const app = new Hono();
+    app.route(
+      '/auth',
+      createAuthRoutes(
+        kit as never,
+        BASE_CONFIG,
+        undefined,
+        dataDir,
+        new DefaultsStore({ dataDir }),
+      ),
+    );
+    return app;
+  };
+
+  // Свой каталог на каждый тест: умолчания инстанса — общий стейт, иначе
+  // тесты влияют друг на друга.
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-auth-defaults-'));
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  it('GET отдаёт встроенные умолчания (поля рендера — null)', async () => {
+    const res = await makeApp().request('/auth/defaults');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.userMessageMarkdown).toBeNull();
+    expect(body.mermaidRenderingMode).toBeNull();
+  });
+
+  it('PUT принимает разметку сообщений и режим Mermaid, GET их отдаёт', async () => {
+    const app = makeApp();
+    const put = await app.request('/auth/defaults', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userMessageMarkdown: 'plain', mermaidRenderingMode: 'ascii' }),
+    });
+    expect(put.status).toBe(200);
+    const putBody = (await put.json()) as { defaults?: Record<string, unknown> };
+    expect(putBody.defaults?.userMessageMarkdown).toBe('plain');
+    expect(putBody.defaults?.mermaidRenderingMode).toBe('ascii');
+
+    const get = await app.request('/auth/defaults');
+    const getBody = (await get.json()) as Record<string, unknown>;
+    expect(getBody.userMessageMarkdown).toBe('plain');
+    expect(getBody.mermaidRenderingMode).toBe('ascii');
+  });
+
+  it('мусорные значения отбрасываются стором (остаются встроенные)', async () => {
+    const app = makeApp();
+    const put = await app.request('/auth/defaults', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ userMessageMarkdown: 'yes', mermaidRenderingMode: 3 }),
+    });
+    expect(put.status).toBe(200);
+    const body = (await put.json()) as { defaults?: Record<string, unknown> };
+    expect(body.defaults?.userMessageMarkdown).toBeNull();
+    expect(body.defaults?.mermaidRenderingMode).toBeNull();
+  });
+
+  it('поля вне whitelist не сохраняются', async () => {
+    const app = makeApp();
+    const put = await app.request('/auth/defaults', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ evilField: 'x' }),
+    });
+    expect(put.status).toBe(200);
+    const body = (await put.json()) as { defaults?: Record<string, unknown> };
+    expect(body.defaults).not.toHaveProperty('evilField');
   });
 });

@@ -1892,6 +1892,11 @@ export const dict = {
   'markdown.code.download': 'Download',
   'markdown.code.downloaded': 'Downloaded',
 
+  // Диаграммы Mermaid: переключатель «код/диаграмма» в шапке блока и
+  // доступное имя самой диаграммы.
+  'markdown.mermaid.toggle': 'Code',
+  'markdown.mermaid.aria': 'Diagram',
+
   'chat.actions.copy': 'Copy',
   'chat.actions.copyHint': 'Copy · Shift for plain text',
   'chat.actions.toggleOff': 'Disable',
@@ -2635,6 +2640,12 @@ export const dict = {
     'How your messages are shown: parsed as Markdown, or as plain text exactly as typed.',
   'chatSettings.userMessageMarkdownOn': 'Markdown',
   'chatSettings.userMessageMarkdownOff': 'Text',
+  'chatSettings.mermaid': 'Mermaid diagrams',
+  'chatSettings.mermaidDescription':
+    'How to show ```mermaid blocks: as a diagram, as plain text, or as source code.',
+  'chatSettings.mermaidSvg': 'Diagram',
+  'chatSettings.mermaidAscii': 'Text (ASCII)',
+  'chatSettings.mermaidOff': 'Code',
   'chatSettings.intermediateTextDisplay': 'Intermediate responses',
   'chatSettings.intermediateTextInline': 'Between blocks',
   'chatSettings.intermediateTextBottom': 'At bottom',
@@ -3160,6 +3171,16 @@ export const dict = {
   'admin.defaults.saved': 'Saved',
   'admin.defaults.save': 'Save',
   'admin.defaults.confirmReset': 'Reset system appearance to server defaults?',
+
+  // Instance defaults: user message markup and Mermaid diagram rendering.
+  'defaults.chatMarkdown.section': 'Markup and diagrams',
+  'defaults.chatMarkdown.userMessages': 'User messages',
+  'defaults.chatMarkdown.mermaid': 'Mermaid diagrams',
+  'defaults.chatMarkdown.userMessagesMarkdown': 'Markdown',
+  'defaults.chatMarkdown.userMessagesPlain': 'Plain text',
+  'defaults.chatMarkdown.mermaidSvg': 'Diagram',
+  'defaults.chatMarkdown.mermaidAscii': 'ASCII text',
+  'defaults.chatMarkdown.mermaidOff': 'Code',
 
   // Color picker
   'admin.colorPicker.default': 'Default',
@@ -5222,6 +5243,8 @@ export const dict = {
   'settings.help.defaults.section.defaults-language': 'Default interface language for new users.',
   'settings.help.defaults.section.defaults-chat-display': 'Default chat feed view and density; a user’s own choice always wins.',
   'settings.help.defaults.section.defaults-chat-scale': 'Default chat area scale for mobile and desktop devices; a user’s own choice wins.',
+  'settings.help.defaults.chatMarkdown':
+    'How user messages (markup or plain text) and Mermaid diagrams (diagram, text or code) are shown by default; a user’s own choice wins.',
   'settings.help.defaults.chatViewMode': 'Detailed shows the agent reply in a bubble; feed renders it as flat prose.',
   'settings.help.defaults.chatDensity': 'Compact collapses previous turns into one summary line; the live turn always stays expanded.',
   'settings.help.defaults.chatScaleMobile': 'Chat area scale on phones and tablets, 75–150%; a 85% floor applies on the device.',

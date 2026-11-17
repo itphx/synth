@@ -42,6 +42,8 @@ describe('createStandaloneApp: публичные роуты экрана вхо
         uiScaleDesktop: null,
         chatViewMode: null,
         chatDensity: null,
+        userMessageMarkdown: null,
+        mermaidRenderingMode: null,
         chatScaleMobile: null,
         chatScaleDesktop: null,
       });

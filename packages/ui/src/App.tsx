@@ -151,6 +151,7 @@ function DefaultsSync() {
         viewMode: defaults.chatViewMode ?? null,
         density: defaults.chatDensity ?? null,
         userMessageMarkdown: defaults.userMessageMarkdown ?? null,
+        mermaidRenderingMode: defaults.mermaidRenderingMode ?? null,
       })
     }
     apply()

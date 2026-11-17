@@ -59,6 +59,7 @@ export const profileService = {
         chatViewMode: null,
         chatDensity: null,
         userMessageMarkdown: null,
+        mermaidRenderingMode: null,
         chatScaleMobile: null,
         chatScaleDesktop: null,
       }
@@ -94,6 +95,16 @@ export const profileService = {
     if (prefs.userMessageMarkdown === 'markdown' || prefs.userMessageMarkdown === 'plain') {
       useUIStore.getState().applyPersonalChatDisplay({
         userMessageMarkdown: prefs.userMessageMarkdown,
+      })
+    }
+    // Режим диаграмм Mermaid: тот же приоритет, что у вида/плотности.
+    if (
+      prefs.mermaidRenderingMode === 'svg' ||
+      prefs.mermaidRenderingMode === 'ascii' ||
+      prefs.mermaidRenderingMode === 'off'
+    ) {
+      useUIStore.getState().applyPersonalChatDisplay({
+        mermaidRenderingMode: prefs.mermaidRenderingMode,
       })
     }
     if (typeof prefs.chatScale === 'number' && Number.isFinite(prefs.chatScale)) {
@@ -155,6 +166,11 @@ export const profileService = {
   /** Рендер сообщений пользователя: markdown или текст (managed, best-effort). */
   async syncUserMessageMarkdownToProfile(mode: 'markdown' | 'plain'): Promise<void> {
     await this.syncToProfile('userMessageMarkdown', mode)
+  },
+
+  /** Режим рендера диаграмм Mermaid: SVG / ASCII / код (managed, best-effort). */
+  async syncMermaidRenderingModeToProfile(mode: 'svg' | 'ascii' | 'off'): Promise<void> {
+    await this.syncToProfile('mermaidRenderingMode', mode)
   },
 
   /** Личный масштаб области чата (managed, best-effort). */
