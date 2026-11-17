@@ -1,7 +1,16 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { Schedule, ScheduleInput, ScheduleRunStatus } from '@itphx/synth-shared';
-import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
+import {
+  generateId,
+  AsyncLock,
+  atomicWrite,
+  safeJsonParse,
+  nowISO,
+  deriveScheduleProjectId,
+  normalizeScheduleProject,
+  SCHEDULE_PROJECT_REQUIRED_ERROR,
+} from '@itphx/synth-shared';
 import { FileMutex } from './file-mutex.js';
 import type { Mutex } from './mutex.js';
 import type { ScheduleRepository } from './ports/schedule-repository.js';
@@ -23,6 +32,15 @@ export interface ScheduleStoreConfig {
    * `crossProcess` — мутации идут только под in-process `AsyncLock`.
    */
   mutex?: Mutex;
+  /**
+   * PROP-141: резолвер «id сессии → id проекта» для бэкфилла `projectId`
+   * у легаси-расписаний с целью `bound`/`queue` (проект сессии-цели).
+   *
+   * Задаёт **composition root** (порт сессий хранилища). Не задан — проект
+   * таких записей вывести нечем: они остаются в реестре, но отключаются
+   * (`lastError = 'project_required'`).
+   */
+  resolveSessionProject?: (sessionId: string) => Promise<string | undefined>;
 }
 
 /** ADR-051/ADR-089: результат очередного запуска расписания (`markRun`). */
@@ -97,7 +115,7 @@ export class ScheduleStore implements ScheduleRepository {
     }
   }
 
-  private async _load(): Promise<SchedulesFile> {
+  private async _loadRaw(): Promise<SchedulesFile> {
     try {
       const raw = await readFile(this._filePath(), 'utf-8');
       const parsed = safeJsonParse<SchedulesFile | null>(raw, null);
@@ -111,6 +129,16 @@ export class ScheduleStore implements ScheduleRepository {
     } catch {
       return { schemaVersion: SCHEDULES_SCHEMA_VERSION, schedules: [] };
     }
+  }
+
+  /**
+   * PROP-141: чтение приводит записи к контракту «проект обязателен»:
+   * проект выводится из цели; вывести нельзя — запись отключается
+   * (`project_required`) и не срабатывает. Запись при этом **не теряется**.
+   */
+  private async _load(): Promise<SchedulesFile> {
+    const file = await this._loadRaw();
+    return { ...file, schedules: file.schedules.map(normalizeScheduleProject) };
   }
 
   private async _save(file: SchedulesFile): Promise<void> {
@@ -164,7 +192,15 @@ export class ScheduleStore implements ScheduleRepository {
       this._validateId(id);
 
       const now = nowISO();
-      const schedule: Schedule = { ...input, id, createdAt: now, updatedAt: now };
+      // PROP-141: проект обязателен — запись без проекта отключается
+      // (`project_required`) и не срабатывает.
+      const schedule: Schedule = normalizeScheduleProject({
+        ...input,
+        projectId: input.projectId ?? '',
+        id,
+        createdAt: now,
+        updatedAt: now,
+      });
       const file = await this._load();
       file.schedules.push(schedule);
       await this._save(file);
@@ -197,10 +233,90 @@ export class ScheduleStore implements ScheduleRepository {
         if (current.ownerId !== undefined) updated.ownerId = current.ownerId;
         else delete updated.ownerId;
       }
-      file.schedules[index] = updated;
+      // PROP-141: проект — обязательное денормализованное поле: собственным
+      // ключом с `undefined` он не очищается (иначе расписание осталось бы
+      // без проекта и перестало бы срабатывать).
+      if (Object.hasOwn(patch, 'projectId') && patch.projectId === undefined) {
+        updated.projectId = current.projectId;
+      }
+      // PROP-141: запись без проекта не срабатывает — нормализация и на
+      // записи (иначе «включено без проекта» сохранилось бы в файле).
+      file.schedules[index] = normalizeScheduleProject(updated);
       await this._save(file);
-      return updated;
+      return file.schedules[index];
     });
+  }
+
+  /**
+   * PROP-141: бэкфилл `projectId` у легаси-расписаний (идемпотентно).
+   *
+   * Проект выводится из цели: `pipeline` → `target.projectId`, `ephemeral` →
+   * `target.project`, `bound`/`queue` → проект сессии-цели
+   * (`resolveSessionProject`, резолвер даёт composition root).
+   *
+   * Вывести нельзя — запись **не теряется**: она остаётся в реестре, но
+   * отключается и помечается `lastError = 'project_required'` (не
+   * срабатывает). Повторный вызов ничего не меняет (у всех записей проект
+   * уже есть либо запись уже отключена) — безопасно вызывать при каждом
+   * старте процесса.
+   */
+  async backfillProjectIds(): Promise<{ backfilled: number; disabled: number }> {
+    return this._lockedMutation(async () => {
+      const file = await this._loadRaw();
+      let backfilled = 0;
+      let disabled = 0;
+      let changed = false;
+      const schedules: Schedule[] = [];
+
+      for (const schedule of file.schedules) {
+        const projectId = await this._resolveProjectId(schedule);
+        if (projectId) {
+          if (schedule.projectId !== projectId) {
+            schedule.projectId = projectId;
+            backfilled++;
+            changed = true;
+          }
+          schedules.push(schedule);
+          continue;
+        }
+        // Проект вывести нельзя: запись остаётся, но не срабатывает.
+        if (schedule.enabled || schedule.lastError !== SCHEDULE_PROJECT_REQUIRED_ERROR) {
+          disabled++;
+          changed = true;
+        }
+        schedule.enabled = false;
+        schedule.lastError = SCHEDULE_PROJECT_REQUIRED_ERROR;
+        schedules.push(schedule);
+      }
+
+      if (changed) {
+        file.schedules = schedules;
+        await this._save(file);
+      }
+      return { backfilled, disabled };
+    });
+  }
+
+  /**
+   * PROP-141: проект расписания (свой или выводимый из цели).
+   *
+   * `bound`/`queue` — проект сессии-цели: нужен резолвер composition root'а.
+   * Ошибка резолвера не роняет бэкфилл — запись просто останется без
+   * проекта (и будет отключена).
+   */
+  private async _resolveProjectId(schedule: Schedule): Promise<string | undefined> {
+    if (schedule.projectId) return schedule.projectId;
+    const derived = deriveScheduleProjectId(schedule.target);
+    if (derived) return derived;
+    const target = schedule.target;
+    if (target.mode !== 'bound' && target.mode !== 'queue') return undefined;
+    const resolver = this._config.resolveSessionProject;
+    if (!resolver) return undefined;
+    try {
+      return (await resolver(target.sessionId)) || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   async remove(id: string): Promise<boolean> {

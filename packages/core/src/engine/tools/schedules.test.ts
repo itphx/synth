@@ -151,8 +151,24 @@ describe('Встроенные тулы расписаний (ADR-051, schedules
     expect(result.metadata?.count).toBe(0);
   });
 
-  it('создание своего расписания без проекта у сессии работает; ownerId = userId, refreshNextRun вызван', async () => {
+  it('PROP-141: сессия без проекта — расписание не создаётся (инстансных автоматизаций нет)', async () => {
     await bindSession('u1', 'u1', null);
+
+    const created = await scheduleSaveTool.execute(
+      {
+        name: 'Моё расписание',
+        cron: '0 9 * * *',
+        target: { mode: 'bound', sessionId },
+      },
+      makeCtx(),
+    );
+    expect(created.isError).toBe(true);
+    expect(created.content).toContain('the session has no project');
+    expect(scheduler.refreshCalls).toHaveLength(0);
+  });
+
+  it('создание своего расписания в проекте работает; ownerId = userId, проект проставлен, refreshNextRun вызван', async () => {
+    await bindSession('u1', 'u1');
 
     const created = await scheduleSaveTool.execute(
       {
@@ -170,6 +186,8 @@ describe('Встроенные тулы расписаний (ADR-051, schedules
     expect(stored?.ownerId).toBe('u1');
     expect(stored?.cron).toBe('0 9 * * *');
     expect(stored?.enabled).toBe(true);
+    // PROP-141: проект расписания обязателен — он проставлен у сессии.
+    expect(stored?.projectId).toBe(projectId);
 
     // После записи пересчитан следующий запуск.
     expect(scheduler.refreshCalls).toContain(scheduleId);

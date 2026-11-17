@@ -8,7 +8,13 @@
  */
 
 import type { ScheduleRunUpdate, JobListOptions, StorageContext } from '@itphx/synth-core';
-import { type Schedule, type ScheduleInput, type ScheduleJob, generateId } from '@itphx/synth-shared';
+import {
+  type Schedule,
+  type ScheduleInput,
+  type ScheduleJob,
+  generateId,
+  SCHEDULE_PROJECT_REQUIRED_ERROR,
+} from '@itphx/synth-shared';
 import type { PortDeps } from './deps.js';
 import { jsonbParam } from '../json-param.js';
 import { compact, toInt, toIso, toIsoRequired } from './events-core.js';
@@ -29,6 +35,9 @@ type ScheduleRow = {
   payload: unknown;
   owner_id: string | null;
   catch_up: string | null;
+  // PROP-141: проект-владелец расписания (обязателен; NULL — проект не
+  // определён, запись отключена миграцией).
+  project_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
   last_run_at: Date | string | null;
@@ -42,6 +51,8 @@ function toSchedule(row: ScheduleRow): Schedule {
     id: row.id,
     name: row.name,
     enabled: row.enabled,
+    // PROP-141: пустая строка — «проект не определён» (легаси-запись).
+    projectId: row.project_id ?? '',
     cron: row.cron ?? undefined,
     every: row.every ?? undefined,
     target: (row.target ?? { mode: 'ephemeral' }) as Schedule['target'],
@@ -98,16 +109,20 @@ export class PgScheduleRepository {
   async create(input: ScheduleInput): Promise<Schedule> {
     const id = `sch_${generateId()}`;
     const now = new Date().toISOString();
+    // PROP-141: проект расписания обязателен — запись без проекта не
+    // срабатывает (отключается и помечается `project_required`).
+    const projectId = input.projectId ?? '';
+    const needsProject = !projectId;
     const rows = await this._deps.connection.query<ScheduleRow>(
       `INSERT INTO schedules
          (id, name, enabled, cron, every, target, prompt, payload, owner_id, catch_up,
-          created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10, $11, $11)
+          project_id, created_at, updated_at, last_error)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10, $11, $12, $12, $13)
        RETURNING *`,
       [
         id,
         input.name,
-        input.enabled,
+        needsProject ? false : input.enabled,
         input.cron ?? null,
         input.every ?? null,
         jsonbParam(input.target ?? {}),
@@ -115,7 +130,9 @@ export class PgScheduleRepository {
         input.payload !== undefined ? jsonbParam(input.payload) : null,
         input.ownerId ?? null,
         input.catchUp ?? null,
+        projectId || null,
         now,
+        needsProject ? SCHEDULE_PROJECT_REQUIRED_ERROR : null,
       ],
     );
     return toSchedule(rows[0]!);
@@ -147,6 +164,13 @@ export class PgScheduleRepository {
     if (patch.target !== undefined) {
       params.push(jsonbParam(patch.target));
       sets.push(`target = $${params.length}::jsonb`);
+    }
+    // PROP-141: проект расписания — обязательное денормализованное поле:
+    // собственным ключом с `undefined` он не очищается (иначе расписание
+    // осталось бы без проекта и перестало бы срабатывать).
+    if (patch.projectId !== undefined) {
+      params.push(patch.projectId || null);
+      sets.push(`project_id = $${params.length}`);
     }
     // Nullable-поля — own-property семантика: собственный ключ со значением
     // `undefined` очищает колонку (`NULL`), отсутствие ключа — не трогает.

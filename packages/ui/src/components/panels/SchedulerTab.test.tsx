@@ -120,6 +120,8 @@ function schedule(overrides: Partial<Schedule> = {}): Schedule {
     id: 'sch_1',
     name: 'Nightly build',
     enabled: true,
+    // PROP-141: проект расписания обязателен.
+    projectId: 'p1',
     cron: '0 3 * * *',
     target: { mode: 'bound', sessionId: 's1' },
     prompt: 'run build',

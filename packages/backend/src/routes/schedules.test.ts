@@ -50,10 +50,18 @@ function makeGuards(user: User | null) {
 const VALID_BODY: ScheduleInput = {
   name: 'nightly',
   enabled: true,
+  // PROP-141: проект расписания обязателен (инстансных автоматизаций нет).
+  projectId: 'proj_1',
   every: '1h',
   target: { mode: 'bound', sessionId: 's1' },
   prompt: 'ping',
 };
+
+/**
+ * PROP-141: резолвер «сессия → проект» (composition root) — все сессии теста
+ * принадлежат проекту `proj_1`.
+ */
+const resolveSessionProject = async (): Promise<string | undefined> => 'proj_1';
 
 describe('Schedules API Routes (ADR-051 срез / ADR-089, backend RBAC)', () => {
   let dataDir: string;
@@ -85,7 +93,7 @@ describe('Schedules API Routes (ADR-051 срез / ADR-089, backend RBAC)', () =
     app.route('/api/v2/schedules', createSchedulerRoutes(
       { requireAuth },
       { scheduleStore, scheduler },
-      { writeGuard: requireAdmin },
+      { writeGuard: requireAdmin, resolveSessionProject },
     ));
     return app;
   }
@@ -191,6 +199,7 @@ describe('Schedules API Routes (ADR-051 срез / ADR-089, backend RBAC)', () =
         writeGuard: requireAdmin,
         runGuard: requireAdmin,
         runMiddleware: [createRateLimiter(2, 60_000)],
+        resolveSessionProject,
       },
     ));
     const created = await scheduleStore.create(VALID_BODY);

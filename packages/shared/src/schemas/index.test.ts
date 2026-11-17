@@ -607,9 +607,20 @@ describe('schedule schemas (ADR-051 / ADR-089)', () => {
   it('scheduleTargetSchema: четыре варианта (ADR-051 / ADR-089 / ADR-101)', () => {
     expect(scheduleTargetSchema.safeParse({ mode: 'bound', sessionId: 's1' }).success).toBe(true);
     expect(scheduleTargetSchema.safeParse({ mode: 'queue', sessionId: 's1' }).success).toBe(true);
-    expect(scheduleTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m' }).success).toBe(true);
     expect(scheduleTargetSchema.safeParse({ mode: 'bound' }).success).toBe(false);
     expect(scheduleTargetSchema.safeParse({ mode: 'other' }).success).toBe(false);
+  });
+
+  it('scheduleTargetSchema: ephemeral-цель требует проект (PROP-141)', () => {
+    expect(
+      scheduleTargetSchema.safeParse({ mode: 'ephemeral', project: 'proj_1', ttl: '30m' }).success,
+    ).toBe(true);
+    // Проект у ephemeral-цели обязателен: инстансных автоматизаций нет.
+    expect(scheduleTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m' }).success).toBe(false);
+    expect(scheduleTargetSchema.safeParse({ mode: 'ephemeral' }).success).toBe(false);
+    expect(
+      scheduleTargetSchema.safeParse({ mode: 'ephemeral', project: '', ttl: '30m' }).success,
+    ).toBe(false);
   });
 
   it('scheduleTargetSchema: pipeline-цель (ADR-101) — проект, пайплайн, версия, payload', () => {
@@ -737,8 +748,10 @@ describe('schedule schemas (ADR-051 / ADR-089)', () => {
       id: 'sch_1',
       name: 'job',
       enabled: true,
+      // PROP-141: проект расписания обязателен (инстансных автоматизаций нет).
+      projectId: 'proj_1',
       every: '1h',
-      target: { mode: 'ephemeral', agentTemplate: 'triage' },
+      target: { mode: 'ephemeral', agentTemplate: 'triage', project: 'proj_1' },
       payload: { foo: 'bar' },
       catchUp: 'once',
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -749,6 +762,29 @@ describe('schedule schemas (ADR-051 / ADR-089)', () => {
     });
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.catchUp).toBe('once');
+  });
+
+  it('scheduleSchema: projectId обязателен (PROP-141)', () => {
+    const base = {
+      id: 'sch_1',
+      name: 'job',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    expect(scheduleSchema.safeParse({ ...base, projectId: 'proj_1' }).success).toBe(true);
+    expect(scheduleSchema.safeParse(base).success).toBe(false);
+  });
+
+  it('scheduleInputSchema: projectId необязателен — его выводит сервер (PROP-141)', () => {
+    const base = { name: 'x', every: '1h', target: { mode: 'bound', sessionId: 's1' } };
+    // Без projectId — валидно: сервер выводит проект из цели.
+    expect(scheduleInputSchema.safeParse(base).success).toBe(true);
+    expect(scheduleInputSchema.safeParse({ ...base, projectId: 'proj_1' }).success).toBe(true);
+    // Пустой projectId в теле — невалидно (сервер подставит проект сам).
+    expect(scheduleInputSchema.safeParse({ ...base, projectId: '' }).success).toBe(false);
   });
 
   it('scheduleInputSchema: catchUp опционален (skip/once)', () => {

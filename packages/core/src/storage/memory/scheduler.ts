@@ -9,7 +9,7 @@
  */
 
 import type { Schedule, ScheduleInput, ScheduleJob } from '@itphx/synth-shared';
-import { generateId, nowISO } from '@itphx/synth-shared';
+import { generateId, nowISO, normalizeScheduleProject } from '@itphx/synth-shared';
 import type { JobListOptions } from '../job-store.js';
 import type { ScheduleRunUpdate } from '../schedule-store.js';
 import type { JobRepository, ScheduleRepository } from '../ports/index.js';
@@ -43,7 +43,15 @@ export class MemoryScheduleRepository implements ScheduleRepository {
 
   async create(input: ScheduleInput): Promise<Schedule> {
     const now = nowISO();
-    const schedule: Schedule = { ...input, id: `sch_${generateId()}`, createdAt: now, updatedAt: now };
+    // PROP-141: проект обязателен — запись без проекта отключается
+    // (`project_required`) и не срабатывает (паритет с файловым стором).
+    const schedule: Schedule = normalizeScheduleProject({
+      ...input,
+      projectId: input.projectId ?? '',
+      id: `sch_${generateId()}`,
+      createdAt: now,
+      updatedAt: now,
+    });
     this._schedules.set(schedule.id, structuredClone(schedule));
     return structuredClone(schedule);
   }
@@ -67,8 +75,15 @@ export class MemoryScheduleRepository implements ScheduleRepository {
       if (current.ownerId !== undefined) updated.ownerId = current.ownerId;
       else delete updated.ownerId;
     }
-    this._schedules.set(id, structuredClone(updated));
-    return structuredClone(updated);
+    // PROP-141: проект — обязательное денормализованное поле: собственным
+    // ключом с `undefined` он не очищается.
+    if (Object.hasOwn(patch, 'projectId') && patch.projectId === undefined) {
+      updated.projectId = current.projectId;
+    }
+    // PROP-141: запись без проекта не срабатывает (паритет с файловым стором).
+    const normalized = normalizeScheduleProject(updated);
+    this._schedules.set(id, structuredClone(normalized));
+    return structuredClone(normalized);
   }
 
   async remove(id: string): Promise<boolean> {

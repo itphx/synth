@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ScheduleInput } from '@itphx/synth-shared';
@@ -9,10 +9,29 @@ import { FileMutex } from './file-mutex.js';
 const input = (overrides: Partial<ScheduleInput> = {}): ScheduleInput => ({
   name: 'Ночная проверка',
   enabled: true,
+  // PROP-141: проект расписания обязателен (инстансных автоматизаций нет).
+  projectId: 'p1',
   every: '1h',
   target: { mode: 'bound', sessionId: 's1' },
   ...overrides,
 });
+
+/**
+ * PROP-141: легаси-запись расписания — без `projectId` (записана до перехода
+ * на проектные автоматизации). Пишется в обход стора, чтобы проверить
+ * бэкфилл.
+ */
+async function writeLegacySchedule(
+  dataDir: string,
+  schedule: Record<string, unknown>,
+): Promise<void> {
+  const path = join(dataDir, 'schedules.json');
+  await writeFile(
+    path,
+    JSON.stringify({ schemaVersion: 1, schedules: [schedule] }, null, 2),
+    'utf-8',
+  );
+}
 
 describe('ScheduleStore (ADR-051 / ADR-089)', () => {
   let store: ScheduleStore;
@@ -60,7 +79,7 @@ describe('ScheduleStore (ADR-051 / ADR-089)', () => {
     await store.create(
       input({ name: 'd', enabled: false, target: { mode: 'bound', sessionId: 's3' } }),
     );
-    await store.create(input({ name: 'e', target: { mode: 'ephemeral', agentTemplate: 't' } }));
+    await store.create(input({ name: 'e', target: { mode: 'ephemeral', agentTemplate: 't', project: 'p1' } }));
 
     expect(await store.hasEnabledTargetFor('s1')).toBe(true);
     expect(await store.hasEnabledTargetFor('s2')).toBe(true);
@@ -261,5 +280,120 @@ describe('ScheduleStore (ADR-051 / ADR-089)', () => {
     const schedule = await reloaded;
     expect(schedule?.nextRunAt).toBeDefined();
     expect(schedule?.lastStatus).toBe('ok');
+  });
+});
+
+/**
+ * PROP-141: бэкфилл `projectId` у легаси-расписаний (проект обязателен —
+ * инстансных автоматизаций нет).
+ */
+describe('ScheduleStore — бэкфилл projectId (PROP-141)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-schedules-backfill-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  const legacy = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'sch_legacy',
+    name: 'Легаси',
+    enabled: true,
+    every: '1h',
+    target: { mode: 'bound', sessionId: 's1' },
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  });
+
+  it('bound/queue: проект берётся у сессии-цели (резолвер composition root)', async () => {
+    await writeLegacySchedule(tmpDir, legacy());
+    const store = new ScheduleStore({
+      dataDir: tmpDir,
+      resolveSessionProject: async (sessionId) => (sessionId === 's1' ? 'p9' : undefined),
+    });
+
+    const result = await store.backfillProjectIds();
+    expect(result).toEqual({ backfilled: 1, disabled: 0 });
+
+    const schedule = await store.get('sch_legacy');
+    expect(schedule?.projectId).toBe('p9');
+    // Включённость легаси-записи сохраняется — проект вывести удалось.
+    expect(schedule?.enabled).toBe(true);
+    expect(schedule?.lastError).toBeUndefined();
+  });
+
+  it('pipeline: проект берётся из цели', async () => {
+    await writeLegacySchedule(
+      tmpDir,
+      legacy({ target: { mode: 'pipeline', projectId: 'p7', pipelineId: 'pl_1' } }),
+    );
+    const store = new ScheduleStore({ dataDir: tmpDir });
+
+    expect(await store.backfillProjectIds()).toEqual({ backfilled: 1, disabled: 0 });
+    expect((await store.get('sch_legacy'))?.projectId).toBe('p7');
+  });
+
+  it('проект вывести нельзя — запись не теряется, но отключается (project_required)', async () => {
+    await writeLegacySchedule(tmpDir, legacy());
+    const store = new ScheduleStore({ dataDir: tmpDir });
+
+    expect(await store.backfillProjectIds()).toEqual({ backfilled: 0, disabled: 1 });
+
+    const schedule = await store.get('sch_legacy');
+    expect(schedule).not.toBeNull();
+    expect(schedule?.projectId).toBe('');
+    expect(schedule?.enabled).toBe(false);
+    expect(schedule?.lastError).toBe('project_required');
+  });
+
+  it('легаси ephemeral без проекта — тоже отключается', async () => {
+    await writeLegacySchedule(tmpDir, legacy({ target: { mode: 'ephemeral' } }));
+    const store = new ScheduleStore({ dataDir: tmpDir });
+
+    expect(await store.backfillProjectIds()).toEqual({ backfilled: 0, disabled: 1 });
+    expect((await store.get('sch_legacy'))?.lastError).toBe('project_required');
+  });
+
+  it('идемпотентно: повторный бэкфилл ничего не меняет', async () => {
+    await writeLegacySchedule(tmpDir, legacy());
+    const store = new ScheduleStore({
+      dataDir: tmpDir,
+      resolveSessionProject: async () => 'p9',
+    });
+
+    expect(await store.backfillProjectIds()).toEqual({ backfilled: 1, disabled: 0 });
+    expect(await store.backfillProjectIds()).toEqual({ backfilled: 0, disabled: 0 });
+    expect((await store.get('sch_legacy'))?.projectId).toBe('p9');
+  });
+
+  it('устойчивость к рестарту: проект сохранён в файле и перечитан новым стором', async () => {
+    await writeLegacySchedule(tmpDir, legacy());
+    await new ScheduleStore({
+      dataDir: tmpDir,
+      resolveSessionProject: async () => 'p9',
+    }).backfillProjectIds();
+
+    const reopened = new ScheduleStore({ dataDir: tmpDir });
+    expect((await reopened.get('sch_legacy'))?.projectId).toBe('p9');
+    expect((await reopened.get('sch_legacy'))?.enabled).toBe(true);
+  });
+
+  it('создание без проекта: запись не теряется, но не срабатывает', async () => {
+    const store = new ScheduleStore({ dataDir: tmpDir });
+    const created = await store.create({
+      name: 'без проекта',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+
+    expect(created.projectId).toBe('');
+    expect(created.enabled).toBe(false);
+    expect(created.lastError).toBe('project_required');
+    expect((await store.get(created.id))?.lastError).toBe('project_required');
   });
 });

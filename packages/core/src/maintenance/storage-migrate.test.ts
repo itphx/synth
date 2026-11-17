@@ -118,7 +118,7 @@ async function seed(ctx: StorageContext): Promise<void> {
     name: 'nightly',
     enabled: true,
     cron: '0 3 * * *',
-    target: { mode: 'ephemeral' },
+    target: { mode: 'ephemeral', project: 'proj-1' },
   });
   await ctx.jobs.append({
     id: 'job-1',
@@ -129,7 +129,7 @@ async function seed(ctx: StorageContext): Promise<void> {
     startedAt: ISO,
     finishedAt: ISO,
     durationMs: 5,
-    target: { mode: 'ephemeral' },
+    target: { mode: 'ephemeral', project: 'proj-1' },
   });
   await ctx.webhooks.create({ label: 'hook', url: 'https://example.com/hook', events: ['event.*'] }, 'local');
   await ctx.webhookDeliveries.record({

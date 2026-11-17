@@ -1154,7 +1154,9 @@ export const scheduleTargetSchema = z.discriminatedUnion('mode', [
   z.object({
     mode: z.literal('ephemeral'),
     agentTemplate: z.string().optional(),
-    project: z.string().optional(),
+    // PROP-141: проект у ephemeral-цели обязателен — инстансных
+    // автоматизаций нет (каждая автоматизация принадлежит проекту).
+    project: z.string().min(1),
     ttl: z.string().optional(),
   }),
   z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }),
@@ -1272,6 +1274,10 @@ export const scheduleInputSchema = z
   .object({
     name: z.string().min(1),
     enabled: z.boolean().default(true),
+    // PROP-141: проект расписания. В теле необязателен — сервер выводит его
+    // из цели расписания (и сверяет с переданным); в самой записи
+    // (`scheduleSchema`) поле обязательно.
+    projectId: z.string().min(1).optional(),
     cron: z.string().optional(),
     every: z.string().optional(),
     target: scheduleTargetSchema,
@@ -1288,6 +1294,9 @@ export const scheduleSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     enabled: z.boolean(),
+    // PROP-141: проект расписания обязателен (пустая строка — «проект не
+    // определён», легаси-запись без проекта: отключена, `project_required`).
+    projectId: z.string(),
     cron: z.string().optional(),
     every: z.string().optional(),
     target: scheduleTargetSchema,

@@ -963,8 +963,10 @@ const SAMPLE_SCHEDULE = {
   id: 'sch_0000',
   name: 'spike',
   enabled: true,
+  // PROP-141: проект расписания обязателен (инстансных автоматизаций нет).
+  projectId: 'prj_0000',
   cron: '0 * * * *',
-  target: { mode: 'ephemeral' as const },
+  target: { mode: 'ephemeral' as const, project: 'prj_0000' },
   createdAt: '1970-01-01T00:00:00.000Z',
   updatedAt: '1970-01-01T00:00:00.000Z',
 };

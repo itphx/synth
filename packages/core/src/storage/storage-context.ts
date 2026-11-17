@@ -665,9 +665,10 @@ function createBlobStore(dataDir: string): FileBlobStore {
 export function createFileStorage(config: StorageContextConfig): StorageContext {
   const dataDir = config.dataDir;
   const contextUserDataDir = config.contextUserDataDir ?? join(dataDir, 'context');
+  const sessions = new FileStore({ dataDir });
   return {
     kind: 'file',
-    sessions: new FileStore({ dataDir }),
+    sessions,
     projects: new ProjectStore({ dataDir }),
     profiles: new FileProfileStore({ dataDir }),
     settings: new RuntimeSettingsStore({ dataDir }),
@@ -697,6 +698,10 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     schedules: new ScheduleStore({
       dataDir,
       crossProcess: config.scheduleCrossProcess,
+      // PROP-141: бэкфилл `projectId` у легаси-расписаний с целью
+      // `bound`/`queue` — проект берётся у сессии-цели (порт сессий).
+      resolveSessionProject: async (sessionId) =>
+        (await sessions.loadLight(sessionId))?.projectId,
     }),
     jobs: new JobStore({ dataDir }),
     maintenanceAudit: new MaintenanceAuditStore({ dataDir }),

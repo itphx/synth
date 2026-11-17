@@ -411,11 +411,18 @@ export const scheduleSaveTool: ToolDefinition = {
     const cron = hasCron ? params.cron : hasEvery ? undefined : current?.cron;
     const every = hasEvery ? params.every : hasCron ? undefined : current?.every;
 
+    // PROP-141: расписание принадлежит проекту (инстансных автоматизаций
+    // нет). Проект берётся у сессии: у любой допустимой цели он совпадает с
+    // проектом сессии (это проверяет `validateTarget` ниже).
+    const projectId = scope.project?.id;
+    if (!projectId) return invalidSchedule(['the session has no project']);
+
     // Слияние с текущим расписанием (частичный патч).
     const catchUp = params.catch_up ?? current?.catchUp;
     const merged = {
       name: params.name ?? current?.name,
       enabled: params.enabled ?? current?.enabled ?? true,
+      projectId,
       ...(cron !== undefined ? { cron } : {}),
       ...(every !== undefined ? { every } : {}),
       target: params.target ?? current?.target,
@@ -447,6 +454,8 @@ export const scheduleSaveTool: ToolDefinition = {
     const ownerId = current?.ownerId ?? (scope.userId || undefined);
     const input: ScheduleInput = {
       ...validated.data,
+      // PROP-141: проект расписания обязателен (см. выше).
+      projectId,
       // Патч частичный: отсутствующие поля не меняются. Пару триггеров порт
       // заменяет целиком (`ScheduleRepository.update`: собственный ключ
       // `cron`/`every` сбрасывает второй), поэтому явно проставлять неактивное

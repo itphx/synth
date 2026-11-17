@@ -129,7 +129,9 @@ function editorToInput(editor: EditorState): ScheduleInput {
       ? {
           mode: 'ephemeral',
           agentTemplate: editor.agentTemplate || undefined,
-          project: editor.project || undefined,
+          // PROP-141: проект у ephemeral-цели обязателен (инстансных
+          // автоматизаций нет) — пустое значение отвергает сервер.
+          project: editor.project.trim(),
           ttl: editor.ttl || undefined,
         }
       : editor.mode === 'pipeline'
@@ -304,6 +306,12 @@ export function SchedulerTab() {
     }
     if (editor.mode !== 'ephemeral' && editor.mode !== 'pipeline' && !editor.sessionId) {
       setFormError(t('rightPanel.scheduler.form.sessionRequired'))
+      return
+    }
+    // PROP-141: проект у ephemeral-цели обязателен (инстансных автоматизаций
+    // нет) — тот же текст, что у pipeline-цели.
+    if (editor.mode === 'ephemeral' && !editor.project.trim()) {
+      setFormError(t('rightPanel.scheduler.form.projectRequired'))
       return
     }
     // ADR-101: цель `pipeline` — проект и пайплайн обязательны, payload —

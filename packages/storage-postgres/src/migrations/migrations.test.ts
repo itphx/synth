@@ -25,6 +25,7 @@ import { MIGRATION_034_PENDING_APPROVALS } from './034-pending-approvals.js';
 import { MIGRATION_035_PROJECT_ACCESS } from './035-project-access.js';
 import { MIGRATION_036_MESSAGE_MENTIONS } from './036-message-mentions.js';
 import { MIGRATION_037_TIMERS } from './037-timers.js';
+import { MIGRATION_038_SCHEDULE_PROJECT_ID } from './038-schedule-project-id.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -315,7 +316,7 @@ describe('миграция 035_project_access (список доступа к п
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('035_project_access');
     expect(migration!.sql).toBe(MIGRATION_035_PROJECT_ACCESS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(37);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(38);
   });
 
   it('добавляет колонки group_members и everyone_role идемпотентно', () => {
@@ -349,7 +350,7 @@ describe('миграция 036_message_mentions (@-упоминания, ADR-126
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('036_message_mentions');
     expect(migration!.sql).toBe(MIGRATION_036_MESSAGE_MENTIONS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(37);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(38);
   });
 
   it('добавляет messages.mentions jsonb идемпотентно', () => {
@@ -361,12 +362,12 @@ describe('миграция 036_message_mentions (@-упоминания, ADR-126
 });
 
 describe('миграция 037_timers (таймеры и будильники, PROP-141)', () => {
-  it('зарегистрирована под версией 37 и последняя', () => {
+  it('зарегистрирована под версией 37', () => {
     const migration = MIGRATIONS.find((m) => m.version === 37);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('037_timers');
     expect(migration!.sql).toBe(MIGRATION_037_TIMERS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(37);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(38);
   });
 
   it('заводит таблицу timers: проект и сессия обязательны, повтор — jsonb', () => {
@@ -387,5 +388,48 @@ describe('миграция 037_timers (таймеры и будильники, P
     expect(MIGRATION_037_TIMERS).not.toMatch(/CREATE TABLE(?! IF NOT EXISTS)/);
     expect(MIGRATION_037_TIMERS).not.toMatch(/CREATE INDEX(?! IF NOT EXISTS)/);
     expect(MIGRATION_037_TIMERS).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
+  });
+});
+
+describe('миграция 038_schedule_project_id (проект расписания, PROP-141)', () => {
+  it('зарегистрирована под версией 38 и последняя', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 38);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('038_schedule_project_id');
+    expect(migration!.sql).toBe(MIGRATION_038_SCHEDULE_PROJECT_ID);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(38);
+  });
+
+  it('добавляет колонку project_id идемпотентно + индекс по ней', () => {
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain(
+      'ALTER TABLE schedules ADD COLUMN IF NOT EXISTS project_id text',
+    );
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain(
+      'CREATE INDEX IF NOT EXISTS schedules_project_idx ON schedules (project_id)',
+    );
+  });
+
+  it('бэкфилт проекта из цели: pipeline → projectId, ephemeral → project, bound/queue → проект сессии', () => {
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain("NULLIF(target->>'projectId', '')");
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain("NULLIF(target->>'project', '')");
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain(
+      '(SELECT s.project_id FROM sessions s WHERE s.id = target->>\'sessionId\')',
+    );
+  });
+
+  it('проект не выводится — запись не теряется, а отключается (project_required)', () => {
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain(
+      "SET enabled = false, last_error = 'project_required'",
+    );
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain('WHERE project_id IS NULL OR project_id =');
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).not.toMatch(/DELETE\s+FROM/i);
+  });
+
+  it('идемпотентна (IF NOT EXISTS + WHERE project_id IS NULL), без DROP', () => {
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).not.toMatch(
+      /ALTER TABLE schedules ADD COLUMN(?! IF NOT EXISTS)/,
+    );
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).toContain('WHERE project_id IS NULL;');
+    expect(MIGRATION_038_SCHEDULE_PROJECT_ID).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
   });
 });

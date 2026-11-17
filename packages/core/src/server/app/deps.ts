@@ -2484,6 +2484,26 @@ export async function createStandaloneDeps(
     // тикера нет): общий `SharedLeader` поверх одного экземпляра лока.
     leader: sharedLeader,
   });
+  // PROP-141: бэкфилл `projectId` у легаси-расписаний (идемпотентно).
+  //
+  // Выполняется **до** старта шедулера: инстансных автоматизаций нет, каждое
+  // расписание принадлежит проекту. Проект выводится из цели (`pipeline`/
+  // `ephemeral` — из самой цели, `bound`/`queue` — у сессии-цели); вывести
+  // нельзя — запись остаётся в реестре, но отключается (`project_required`)
+  // и не срабатывает. Ошибка бэкфилла не роняет старт (запись не теряется).
+  try {
+    const backfill = await storageContext.schedules.backfillProjectIds?.();
+    if (backfill && (backfill.backfilled > 0 || backfill.disabled > 0)) {
+      console.warn(
+        `[scheduler] бэкфилл проектов расписаний: проект проставлен у ${backfill.backfilled}, `
+          + `отключено ${backfill.disabled}`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[scheduler] бэкфилл проектов расписаний не удался: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   if (config.schedulerConfig?.enabled !== false && !storageDegraded) {
     void schedulerService.start().catch((err) => {
       console.warn(`[scheduler] не удалось запустить: ${err instanceof Error ? err.message : String(err)}`);

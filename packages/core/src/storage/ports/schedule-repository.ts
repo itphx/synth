@@ -32,4 +32,16 @@ export interface ScheduleRepository {
   markRun(id: string, run: ScheduleRunUpdate): Promise<Schedule | null>;
   /** Обновление только `nextRunAt` (служебное поле сервиса). */
   setNextRun(id: string, nextRunAt: string | undefined): Promise<Schedule | null>;
+  /**
+   * PROP-141: бэкфилл `projectId` у легаси-расписаний (идемпотентно).
+   *
+   * Проект выводится из цели (`pipeline` → `target.projectId`, `ephemeral` →
+   * `target.project`, `bound`/`queue` → проект сессии-цели); вывести нельзя —
+   * запись остаётся в реестре, но отключается (`lastError =
+   * 'project_required'`) и не срабатывает.
+   *
+   * Не задан — бэкфилла нет: в памяти записей не бывает, а PostgreSQL
+   * выполняет его миграцией схемы.
+   */
+  backfillProjectIds?(): Promise<{ backfilled: number; disabled: number }>;
 }

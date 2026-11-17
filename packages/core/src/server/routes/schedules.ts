@@ -123,6 +123,29 @@ export function createSchedulerRoutes(
       : undefined;
   };
 
+  /**
+   * PROP-141: проект расписания — **обязателен** (инстансных автоматизаций
+   * нет, каждое расписание принадлежит проекту).
+   *
+   * Проект выводится из цели (`projectForTarget`); переданный в теле
+   * `projectId`, если он есть, должен совпадать с выведенным — иначе цель и
+   * проект противоречат друг другу. Вывести нельзя (сессия-цель вне проекта
+   * или не найдена) — запись не создаётся: без проекта она всё равно не
+   * срабатывала бы.
+   */
+  const resolveProjectId = async (
+    input: ScheduleInputRequest,
+  ): Promise<{ ok: true; projectId: string } | { ok: false; message: string }> => {
+    const projectId = await projectForTarget(input.target);
+    if (!projectId) {
+      return { ok: false, message: 'Не удалось определить проект расписания по цели' };
+    }
+    if (input.projectId !== undefined && input.projectId !== projectId) {
+      return { ok: false, message: 'Проект расписания не совпадает с проектом цели' };
+    }
+    return { ok: true, projectId };
+  };
+
   const invalid = (c: Context, message?: string) =>
     c.json(
       { error: { code: 'VALIDATION_ERROR', message: message ?? messages.invalidSchedule(c) } },
@@ -154,11 +177,18 @@ export function createSchedulerRoutes(
     const triggerError = validateTrigger(parsed.data);
     if (triggerError) return invalid(c, triggerError);
 
+    // PROP-141: проект расписания обязателен — выводится из цели.
+    const project = await resolveProjectId(parsed.data);
+    if (!project.ok) return invalid(c, project.message);
+
     // ADR-052: проектная проекция — цель расписания адресует проект/сессию.
-    const denied = serviceProjectProjection(c, await projectForTarget(parsed.data.target));
+    const denied = serviceProjectProjection(c, project.projectId);
     if (denied) return denied;
 
-    const created = await deps.scheduleStore.create(parsed.data);
+    const created = await deps.scheduleStore.create({
+      ...parsed.data,
+      projectId: project.projectId,
+    });
     const schedule = await deps.scheduler.refreshNextRun(created.id);
     return c.json({ schedule: schedule ?? created }, 201);
   });
@@ -180,11 +210,18 @@ export function createSchedulerRoutes(
     const triggerError = validateTrigger(parsed.data);
     if (triggerError) return invalid(c, triggerError);
 
+    // PROP-141: проект расписания обязателен — выводится из цели.
+    const project = await resolveProjectId(parsed.data);
+    if (!project.ok) return invalid(c, project.message);
+
     // ADR-052: проектная проекция — цель расписания адресует проект/сессию.
-    const denied = serviceProjectProjection(c, await projectForTarget(parsed.data.target));
+    const denied = serviceProjectProjection(c, project.projectId);
     if (denied) return denied;
 
-    const updated = await deps.scheduleStore.update(id, parsed.data);
+    const updated = await deps.scheduleStore.update(id, {
+      ...parsed.data,
+      projectId: project.projectId,
+    });
     if (!updated) return notFound(c);
 
     const schedule = await deps.scheduler.refreshNextRun(id);

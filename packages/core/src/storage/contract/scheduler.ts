@@ -5,6 +5,8 @@ import type { ScheduleInput, ScheduleJob } from '@itphx/synth-shared';
 const scheduleInput = (name: string): ScheduleInput => ({
   name,
   enabled: true,
+  // PROP-141: проект расписания обязателен (инстансных автоматизаций нет).
+  projectId: 'proj-1',
   cron: '* * * * *',
   target: { mode: 'bound', sessionId: 'sess-1' },
   prompt: 'tick',
@@ -130,6 +132,7 @@ export function describeScheduleRepository(
       const bound = await repo.create({
         name: 'b',
         enabled: true,
+        projectId: 'proj-1',
         cron: '* * * * *',
         target: { mode: 'bound', sessionId: 'sess-1' },
       });
@@ -137,8 +140,37 @@ export function describeScheduleRepository(
       await repo.update(bound.id, { enabled: false });
       expect(await repo.hasEnabledTargetFor('sess-1')).toBe(false);
 
-      await repo.create({ name: 'e', enabled: true, cron: '* * * * *', target: { mode: 'ephemeral' } });
+      await repo.create({
+        name: 'e',
+        enabled: true,
+        projectId: 'proj-1',
+        cron: '* * * * *',
+        target: { mode: 'ephemeral', project: 'proj-1' },
+      });
       expect(await repo.hasEnabledTargetFor('sess-1')).toBe(false);
+    });
+
+    it('PROP-141: projectId пишется и читается; запись без проекта отключается', async () => {
+      const { repo } = await make();
+      const created = await repo.create(scheduleInput('projected'));
+      expect(created.projectId).toBe('proj-1');
+      expect((await repo.get(created.id))?.projectId).toBe('proj-1');
+
+      const patched = await repo.update(created.id, { projectId: 'proj-2' });
+      expect(patched?.projectId).toBe('proj-2');
+      expect((await repo.get(created.id))?.projectId).toBe('proj-2');
+
+      // Запись без проекта не теряется, но не срабатывает (fail-closed).
+      const noProject = await repo.create({
+        name: 'no-project',
+        enabled: true,
+        cron: '* * * * *',
+        target: { mode: 'bound', sessionId: 'sess-1' },
+      });
+      expect(noProject.projectId).toBe('');
+      expect(noProject.enabled).toBe(false);
+      expect(noProject.lastError).toBe('project_required');
+      expect((await repo.get(noProject.id))?.lastError).toBe('project_required');
     });
   });
 }

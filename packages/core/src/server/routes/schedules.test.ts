@@ -19,6 +19,12 @@ const auth = {
   },
 } as unknown as SchedulerRoutesAuth;
 
+/**
+ * PROP-141: резолвер «сессия → проект» (composition root). Все сессии теста
+ * принадлежат проекту `proj_1`.
+ */
+const resolveSessionProject = async (): Promise<string | undefined> => 'proj_1';
+
 function makeIngress() {
   const ingest = vi.fn(async (input: EventIngestInput) => ({
     event: { source: input.source, type: input.type, dedupKey: input.dedupKey } as SynthEvent,
@@ -45,7 +51,9 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
       createSchedulerRoutes(
         auth,
         { scheduleStore: store, scheduler, jobStore },
-        { writeGuard, runGuard },
+        // PROP-141: проект расписания выводится из цели; у `bound`/`queue` —
+        // проект сессии-цели (резолвер даёт composition root).
+        { writeGuard, runGuard, resolveSessionProject: resolveSessionProject },
       ),
     );
     return app;
@@ -83,7 +91,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     expect(empty.status).toBe(200);
     expect(((await empty.json()) as { schedules: unknown[] }).schedules).toEqual([]);
 
-    await store.create({ name: 'x', enabled: true, every: '1h', target: { mode: 'bound', sessionId: 's1' } });
+    await store.create({ name: 'x', enabled: true, projectId: 'proj_1', every: '1h', target: { mode: 'bound', sessionId: 's1' } });
     const list = await app.request('/api/v2/schedules');
     expect(((await list.json()) as { schedules: unknown[] }).schedules).toHaveLength(1);
   });
@@ -178,6 +186,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'old',
       enabled: true,
+      projectId: 'proj_1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -203,6 +212,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'switch',
       enabled: true,
+      projectId: 'proj_1',
       cron: '0 9 * * *',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -238,6 +248,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'del',
       enabled: true,
+      projectId: 'proj_1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -251,6 +262,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'run',
       enabled: true,
+      projectId: 'proj_1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -280,6 +292,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'j',
       enabled: true,
+      projectId: 'proj_1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -303,13 +316,14 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'j2',
       enabled: true,
+      projectId: 'proj_1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
     const app = new Hono();
     app.route(
       '/api/v2/schedules',
-      createSchedulerRoutes(auth, { scheduleStore: store, scheduler }),
+      createSchedulerRoutes(auth, { scheduleStore: store, scheduler }, { resolveSessionProject }),
     );
     const res = await app.request(`/api/v2/schedules/${created.id}/jobs`);
     expect(res.status).toBe(200);
@@ -322,6 +336,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'g',
       enabled: true,
+      projectId: 'proj_1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -411,7 +426,11 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
     );
     app.route(
       '/api/v2/schedules',
-      createSchedulerRoutes(auth, { scheduleStore: store, scheduler, jobStore }),
+      createSchedulerRoutes(
+        auth,
+        { scheduleStore: store, scheduler, jobStore },
+        { resolveSessionProject },
+      ),
     );
 
     const foreign = await app.request(

@@ -336,6 +336,26 @@ export class SchedulerService {
     trigger: ScheduleJobTrigger,
     opts?: { force?: boolean },
   ): Promise<void> {
+    // PROP-141: инстансных автоматизаций нет — расписание без проекта не
+    // срабатывает (Job `skipped`, причина `project_required`). Запись при этом
+    // остаётся в реестре: её можно починить (указать проект).
+    if (!schedule.projectId) {
+      const atIso = at.toISOString();
+      await this._recordJob({
+        scheduleId: schedule.id,
+        scheduleName: schedule.name,
+        trigger,
+        status: 'skipped',
+        startedAt: atIso,
+        finishedAt: atIso,
+        durationMs: 0,
+        target: schedule.target,
+        dedupKey,
+        reason: 'project_required',
+      });
+      return;
+    }
+
     if (this._inFlight.has(schedule.id)) {
       const atIso = at.toISOString();
       await this._recordJob({

@@ -54,6 +54,7 @@ describe('SchedulerRuleProvider (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'off',
       enabled: false,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -67,6 +68,7 @@ describe('SchedulerRuleProvider (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'off-force',
       enabled: false,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -90,6 +92,7 @@ describe('SchedulerRuleProvider (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'b',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's-bound' },
     });
@@ -103,6 +106,7 @@ describe('SchedulerRuleProvider (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'q',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'queue', sessionId: 'owner-1' },
     });
@@ -116,30 +120,32 @@ describe('SchedulerRuleProvider (ADR-051 / ADR-089)', () => {
     const created = await store.create({
       name: 'e',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
-      target: { mode: 'ephemeral', agentTemplate: 'triage', ttl: '30m' },
+      target: { mode: 'ephemeral', agentTemplate: 'triage', project: 'proj-1', ttl: '30m' },
     });
     const provider = new SchedulerRuleProvider(store);
     expect(
       await provider.resolve({ event: event({ payload: { scheduleId: created.id } }), bindings: [] }),
-    ).toEqual({ kind: 'ephemeral', agentTemplate: 'triage', ttl: '30m' });
+    ).toEqual({ kind: 'ephemeral', agentTemplate: 'triage', ttl: '30m', project: 'proj-1' });
   });
 
   it('ephemeral без ttl/agentTemplate → дефолт провайдера', async () => {
     const created = await store.create({
       name: 'e2',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
-      target: { mode: 'ephemeral' },
+      target: { mode: 'ephemeral', project: 'proj-1' },
     });
     const provider = new SchedulerRuleProvider(store, '6h');
     expect(
       await provider.resolve({ event: event({ payload: { scheduleId: created.id } }), bindings: [] }),
-    ).toEqual({ kind: 'ephemeral', agentTemplate: '', ttl: '6h' });
+    ).toEqual({ kind: 'ephemeral', agentTemplate: '', ttl: '6h', project: 'proj-1' });
 
     const defaultProvider = new SchedulerRuleProvider(store);
     expect(
       await defaultProvider.resolve({ event: event({ payload: { scheduleId: created.id } }), bindings: [] }),
-    ).toEqual({ kind: 'ephemeral', agentTemplate: '', ttl: '24h' });
+    ).toEqual({ kind: 'ephemeral', agentTemplate: '', ttl: '24h', project: 'proj-1' });
   });
 });

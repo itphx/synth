@@ -51,6 +51,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'e',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
       prompt: 'ping',
@@ -83,6 +84,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'hooks',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
       prompt: 'секретный текст задания',
@@ -121,8 +123,9 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'c',
       enabled: true,
+      projectId: 'proj-1',
       cron: '*/5 * * * *',
-      target: { mode: 'ephemeral', agentTemplate: 'triage', ttl: '30m' },
+      target: { mode: 'ephemeral', agentTemplate: 'triage', project: 'proj-1', ttl: '30m' },
     });
     const { ingress, ingest } = makeIngress();
     const svc = new SchedulerService({ scheduleStore: store, ingress, now: () => current });
@@ -141,6 +144,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'off',
       enabled: false,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -161,6 +165,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'boom',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -185,6 +190,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'now',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'queue', sessionId: 'owner-1' },
     });
@@ -214,6 +220,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'no-catchup',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -240,6 +247,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'lazy',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -258,6 +266,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'bad-cron',
       enabled: true,
+      projectId: 'proj-1',
       cron: 'bad',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -275,6 +284,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'job',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -304,6 +314,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'd',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -326,6 +337,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'cu',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -351,6 +363,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'cu-once',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -382,6 +395,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'cu-skip',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       catchUp: 'skip',
       target: { mode: 'bound', sessionId: 's1' },
@@ -414,6 +428,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'busy',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -466,6 +481,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'off',
       enabled: false,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -515,6 +531,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'e',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -541,6 +558,7 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     const schedule = await store.create({
       name: 'e',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -583,6 +601,7 @@ describe('SchedulerService × ADR-101 (цель `pipeline` — прямой за
     const schedule = await store.create({
       name: 'pl',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       payload: { shared: 'from-schedule', sessionId: 'ses_schedule' },
       target: {
@@ -640,6 +659,7 @@ describe('SchedulerService × ADR-101 (цель `pipeline` — прямой за
     const schedule = await store.create({
       name: 'pl',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' },
     });
@@ -683,6 +703,7 @@ describe('SchedulerService × ADR-101 (цель `pipeline` — прямой за
     const schedule = await store.create({
       name: 'pl',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' },
     });
@@ -714,6 +735,7 @@ describe('SchedulerService × ADR-101 (цель `pipeline` — прямой за
     const schedule = await store.create({
       name: 'pl',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'pipeline', projectId: 'proj_1', pipelineId: 'pl_1' },
     });
@@ -755,6 +777,7 @@ describe('SchedulerService × ADR-101 (цель `pipeline` — прямой за
     const schedule = await store.create({
       name: 'b',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -808,6 +831,7 @@ describe('SchedulerService × ADR-094 (метрики Job)', () => {
     const schedule = await store.create({
       name: 'metrics-manual',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
@@ -838,6 +862,7 @@ describe('SchedulerService × ADR-094 (метрики Job)', () => {
     await store.create({
       name: 'metrics-cron',
       enabled: true,
+      projectId: 'proj-1',
       every: '1h',
       target: { mode: 'bound', sessionId: 's1' },
     });
