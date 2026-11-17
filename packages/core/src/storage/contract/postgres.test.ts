@@ -52,6 +52,8 @@ import {
   describeSkillBundleRepository,
   describeSkillRepository,
   describeSSHKeyRepository,
+  describeTimerFiringRepository,
+  describeTimerRepository,
   describeWebhookDeliveryRepository,
   describeWebhookRepository,
   describeWorktreeRepository,
@@ -291,4 +293,10 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   // миграция 035) — отдельный стор, не документ сессии.
   describePendingApprovalRepository('PG → PendingApprovalRepository', () =>
     makePort('pendingApprovals'));
+
+  // PROP-141 (Часть B): реестр таймеров/будильников (таблица `timers`) и
+  // append-only история их срабатываний (`timer_firings`) — миграция 037.
+  describeTimerRepository('PG → TimerRepository', () => makePort('timers'));
+  describeTimerFiringRepository('PG → TimerFiringRepository', () =>
+    makePort('timerFirings'));
 });

@@ -47,6 +47,8 @@ import {
   describeSkillBundleRepository,
   describeSkillRepository,
   describeSSHKeyRepository,
+  describeTimerFiringRepository,
+  describeTimerRepository,
   describeWebhookDeliveryRepository,
   describeWebhookRepository,
   describeWorktreeRepository,
@@ -99,6 +101,10 @@ import { FileQuestionStore } from '../file-question-store.js';
 import { FileBackgroundRunStore } from '../file-background-run-store.js';
 import { FileWorktreeStore } from '../file-worktree-store.js';
 import { FilePendingApprovalStore } from '../file-pending-approval-store.js';
+// PROP-141 (Часть B): реестр таймеров (`timers.json`) и история срабатываний
+// (`timers/firings.jsonl`).
+import { FileTimerStore } from '../file-timer-store.js';
+import { FileTimerFiringStore } from '../file-timer-firing-store.js';
 
 /** Мастер-ключ для шифрующих хранилищ (base64, 32 байта) — файл master.key не создаётся. */
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -401,6 +407,16 @@ describe('контрактные тесты файловых реализаци�
     'FilePendingApprovalStore → PendingApprovalRepository',
     async () => ({ repo: new FilePendingApprovalStore({ dataDir: await tmp() }) }),
   );
+
+  // PROP-141 (Часть B): реестр таймеров/будильников (`timers.json`) и
+  // append-only история срабатываний (`timers/firings.jsonl`).
+  describeTimerRepository('FileTimerStore → TimerRepository', async () => ({
+    repo: new FileTimerStore({ dataDir: await tmp() }),
+  }));
+
+  describeTimerFiringRepository('FileTimerFiringStore → TimerFiringRepository', async () => ({
+    repo: new FileTimerFiringStore({ dataDir: await tmp() }),
+  }));
 
   // Файловая деталь (ADR-005/ADR-114): повреждённый JSON — **понятная ошибка**,
   // а не тихий пустой список (иначе «все worktree потеряны» выглядели бы как

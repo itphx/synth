@@ -39,6 +39,8 @@
  *   - `buildContextFilePorts(deps, opts)` → `contextFiles` (ADR-069/ADR-070 /
  *     ADR-116 — пользовательская часть в таблице `context_files`, системные
  *     промпты образа остаются ФС).
+ *   - `buildTimerPorts(deps)` → `timers`/`timerFirings` (PROP-141, Часть B —
+ *     таймеры и будильники; таблицы `timers`/`timer_firings`).
  *
  * Все доменные порты реализованы поверх SQL; **`blobs`** остаётся файловым по
  * конструкции (байты вложений/логов/содержимого скиллов — на томе, в БД только
@@ -95,6 +97,9 @@ import { buildWorktreePorts } from './ports/worktrees.js';
 // ADR-029: ожидания подтверждения прав — отдельный стор (таблица
 // `pending_approvals`, миграция 035), а не поле документа сессии.
 import { buildPendingApprovalPorts } from './ports/pending-approvals.js';
+// PROP-141 (Часть B): реестр таймеров/будильников (`timers`) и append-only
+// история их срабатываний (`timer_firings`) — миграция 037.
+import { buildTimerPorts } from './ports/timers.js';
 // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (таблица `blob_refs`).
 import { buildBlobRefPorts } from './ports/blob-refs.js';
 import { buildPluginLockPorts } from './ports/plugin-lock.js';
@@ -247,6 +252,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // ADR-029: ожидания подтверждения прав — отдельная таблица
     // `pending_approvals` (миграция 035); документ сессии не трогаем.
     ...buildPendingApprovalPorts(deps),
+    // PROP-141 (Часть B): реестр таймеров/будильников (`timers`) и история
+    // их срабатываний (`timer_firings`) — миграция 037.
+    ...buildTimerPorts(deps),
     // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища — таблица
     // `blob_refs` (миграция 024). Байты объектов остаются на томе (`blobs`).
     ...buildBlobRefPorts(deps),

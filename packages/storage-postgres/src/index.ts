@@ -91,3 +91,7 @@ export type { SkillPorts } from './ports/skills.js';
 // миграция 027), системные промпты образа остаются ФС.
 export { buildContextFilePorts, PgContextFileRepository } from './ports/context-files.js';
 export type { ContextFilePorts, ContextFilePortOptions, ContextOverrideSourceLike } from './ports/context-files.js';
+// PROP-141 (Часть B): реестр таймеров/будильников (`timers`) и append-only
+// история их срабатываний (`timer_firings`) — миграция 037.
+export { buildTimerPorts, PgTimerRepository, PgTimerFiringRepository } from './ports/timers.js';
+export type { TimerPorts } from './ports/timers.js';

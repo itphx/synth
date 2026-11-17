@@ -184,3 +184,8 @@ export type {
   PendingApprovalRepository,
   PendingApprovalRecord,
 } from './pending-approval-repository.js';
+// PROP-141 (Часть B): порты таймеров/будильников и истории их срабатываний.
+export type {
+  TimerRepository,
+  TimerFiringRepository,
+} from './timer-repository.js';

@@ -24,6 +24,7 @@ import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
 import { MIGRATION_034_PENDING_APPROVALS } from './034-pending-approvals.js';
 import { MIGRATION_035_PROJECT_ACCESS } from './035-project-access.js';
 import { MIGRATION_036_MESSAGE_MENTIONS } from './036-message-mentions.js';
+import { MIGRATION_037_TIMERS } from './037-timers.js';
 import { MIGRATIONS, latestSchemaVersion } from './index.js';
 
 describe('миграция 023_session_worktree (ADR-114)', () => {
@@ -309,12 +310,12 @@ describe('миграция 034_pending_approvals (ожидания подтве�
 });
 
 describe('миграция 035_project_access (список доступа к проекту, PROP-133)', () => {
-  it('зарегистрирована в реестре под версией 35 и последняя по версии', () => {
+  it('зарегистрирована в реестре под версией 35', () => {
     const migration = MIGRATIONS.find((m) => m.version === 35);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('035_project_access');
     expect(migration!.sql).toBe(MIGRATION_035_PROJECT_ACCESS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(36);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(37);
   });
 
   it('добавляет колонки group_members и everyone_role идемпотентно', () => {
@@ -343,12 +344,12 @@ describe('миграция 035_project_access (список доступа к п
 });
 
 describe('миграция 036_message_mentions (@-упоминания, ADR-126 §2)', () => {
-  it('зарегистрирована под версией 36 и последняя', () => {
+  it('зарегистрирована под версией 36', () => {
     const migration = MIGRATIONS.find((m) => m.version === 36);
     expect(migration).toBeDefined();
     expect(migration!.id).toBe('036_message_mentions');
     expect(migration!.sql).toBe(MIGRATION_036_MESSAGE_MENTIONS);
-    expect(latestSchemaVersion(MIGRATIONS)).toBe(36);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(37);
   });
 
   it('добавляет messages.mentions jsonb идемпотентно', () => {
@@ -356,5 +357,35 @@ describe('миграция 036_message_mentions (@-упоминания, ADR-126
       'ALTER TABLE messages ADD COLUMN IF NOT EXISTS mentions jsonb',
     );
     expect(MIGRATION_036_MESSAGE_MENTIONS).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
+  });
+});
+
+describe('миграция 037_timers (таймеры и будильники, PROP-141)', () => {
+  it('зарегистрирована под версией 37 и последняя', () => {
+    const migration = MIGRATIONS.find((m) => m.version === 37);
+    expect(migration).toBeDefined();
+    expect(migration!.id).toBe('037_timers');
+    expect(migration!.sql).toBe(MIGRATION_037_TIMERS);
+    expect(latestSchemaVersion(MIGRATIONS)).toBe(37);
+  });
+
+  it('заводит таблицу timers: проект и сессия обязательны, повтор — jsonb', () => {
+    expect(MIGRATION_037_TIMERS).toContain('CREATE TABLE IF NOT EXISTS timers (');
+    expect(MIGRATION_037_TIMERS).toMatch(/project_id\s+text NOT NULL/);
+    expect(MIGRATION_037_TIMERS).toMatch(/session_id\s+text NOT NULL/);
+    expect(MIGRATION_037_TIMERS).toMatch(/repeat\s+jsonb NOT NULL/);
+    expect(MIGRATION_037_TIMERS).toMatch(/fires_at\s+timestamptz NOT NULL/);
+  });
+
+  it('заводит append-only таблицу timer_firings с порядком добавления', () => {
+    expect(MIGRATION_037_TIMERS).toContain('CREATE TABLE IF NOT EXISTS timer_firings (');
+    expect(MIGRATION_037_TIMERS).toMatch(/seq\s+bigserial PRIMARY KEY/);
+    expect(MIGRATION_037_TIMERS).toMatch(/lag_ms\s+bigint NOT NULL/);
+  });
+
+  it('идемпотентна (IF NOT EXISTS)', () => {
+    expect(MIGRATION_037_TIMERS).not.toMatch(/CREATE TABLE(?! IF NOT EXISTS)/);
+    expect(MIGRATION_037_TIMERS).not.toMatch(/CREATE INDEX(?! IF NOT EXISTS)/);
+    expect(MIGRATION_037_TIMERS).not.toMatch(/DROP\s+(COLUMN|TABLE)/i);
   });
 });

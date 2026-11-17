@@ -68,6 +68,8 @@ import type {
   SkillBundleRepository,
   SkillRepository,
   SSHKeyRepository,
+  TimerFiringRepository,
+  TimerRepository,
   WebhookDeliveryRepository,
   WebhookRepository,
   WorktreeRepository,
@@ -132,6 +134,10 @@ import { FileWorktreeStore } from './file-worktree-store.js';
 // ADR-029: ожидания подтверждения прав — отдельный стор (документ сессии не
 // трогается: гонка lost update с точечной записью истории, ADR-118 §4).
 import { FilePendingApprovalStore } from './file-pending-approval-store.js';
+// PROP-141 (Часть B): реестр таймеров/будильников (`timers.json`) и
+// append-only история срабатываний (`timers/firings.jsonl`).
+import { FileTimerStore } from './file-timer-store.js';
+import { FileTimerFiringStore } from './file-timer-firing-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -192,6 +198,8 @@ import {
   MemoryDedupRepository,
   MemoryWorktreeRepository,
   MemoryPendingApprovalRepository,
+  MemoryTimerRepository,
+  MemoryTimerFiringRepository,
 } from './memory/index.js';
 
 /** Физический backend хранения (`storage.backend` в конфиге). */
@@ -459,6 +467,18 @@ export interface StorageContext {
    * драйвером PostgreSQL (таблица `pending_approvals`).
    */
   pendingApprovals: PendingApprovalRepository;
+  /**
+   * PROP-141 (Часть B): реестр таймеров/будильников. Реализовано файловым
+   * (`{dataDir}/timers.json`), in-memory и драйвером PostgreSQL (таблица
+   * `timers`).
+   */
+  timers: TimerRepository;
+  /**
+   * PROP-141 (Часть B): append-only история срабатываний таймеров.
+   * Реализовано файловым (`{dataDir}/timers/firings.jsonl`), in-memory и
+   * драйвером PostgreSQL (таблица `timer_firings`).
+   */
+  timerFirings: TimerFiringRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -748,6 +768,10 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // ADR-029: ожидания подтверждения прав (`pending-approvals.json`) —
     // отдельный стор: документ сессии не трогаем.
     pendingApprovals: new FilePendingApprovalStore({ dataDir }),
+    // PROP-141 (Часть B): реестр таймеров/будильников (`timers.json`) и
+    // append-only история срабатываний (`timers/firings.jsonl`).
+    timers: new FileTimerStore({ dataDir }),
+    timerFirings: new FileTimerFiringStore({ dataDir }),
   };
 }
 
@@ -815,6 +839,9 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     worktrees: new MemoryWorktreeRepository(),
     // ADR-029: ожидания подтверждения прав (отдельный стор).
     pendingApprovals: new MemoryPendingApprovalRepository(),
+    // PROP-141 (Часть B): реестр таймеров/будильников и история срабатываний.
+    timers: new MemoryTimerRepository(),
+    timerFirings: new MemoryTimerFiringRepository(),
   };
 }
 

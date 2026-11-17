@@ -87,4 +87,10 @@ export { describeWorktreeRepository } from './worktree-repository.contract.js';
 // ADR-029: ожидания подтверждения прав (отдельный стор).
 export { describePendingApprovalRepository } from './pending-approval-repository.contract.js';
 
+// PROP-141 (Часть B): таймеры/будильники и история их срабатываний.
+export {
+  describeTimerRepository,
+  describeTimerFiringRepository,
+} from './timer-repository.contract.js';
+
 export { createTmpDir, makeSession, makeMessage, makeProject, makeProfile } from './helpers.js';

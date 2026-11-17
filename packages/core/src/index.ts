@@ -1126,6 +1126,12 @@ export type { FileWorktreeStoreConfig } from './storage/file-worktree-store.js';
 // ADR-029: ожидания подтверждения прав — отдельный стор (`pending-approvals.json`).
 export { FilePendingApprovalStore } from './storage/file-pending-approval-store.js';
 export type { FilePendingApprovalStoreConfig } from './storage/file-pending-approval-store.js';
+// PROP-141 (Часть B): реестр таймеров/будильников (`timers.json`) и
+// append-only история их срабатываний (`timers/firings.jsonl`).
+export { FileTimerStore } from './storage/file-timer-store.js';
+export type { FileTimerStoreConfig } from './storage/file-timer-store.js';
+export { FileTimerFiringStore } from './storage/file-timer-firing-store.js';
+export type { FileTimerFiringStoreConfig } from './storage/file-timer-firing-store.js';
 // Этап 1 roadmap 0.13 (блок 1.4.1b): сервис worktree (ADR-114) — git-операции,
 // lifecycle инвентаря, детект secondary worktree.
 export {
@@ -1270,6 +1276,9 @@ export type {
   // ADR-029: ожидания подтверждения прав (отдельный стор — не документ сессии).
   PendingApprovalRepository,
   PendingApprovalRecord,
+  // PROP-141 (Часть B): порты таймеров/будильников и истории срабатываний.
+  TimerRepository,
+  TimerFiringRepository,
   // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища (дедуп/GC).
   BlobRefRepository,
   BlobRef,
@@ -1330,6 +1339,9 @@ export {
   MemoryWorktreeRepository,
   // ADR-029: ожидания подтверждения прав (отдельный стор).
   MemoryPendingApprovalRepository,
+  // PROP-141 (Часть B): реестр таймеров/будильников и история срабатываний.
+  MemoryTimerRepository,
+  MemoryTimerFiringRepository,
   // ADR-115/ADR-116: учёт ссылок на объекты blob-хранилища.
   MemoryBlobRefRepository,
 } from './storage/memory/index.js';

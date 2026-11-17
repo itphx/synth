@@ -45,6 +45,7 @@ import { MIGRATION_033_SESSION_SOURCE_ID } from './033-session-source-id.js';
 import { MIGRATION_034_PENDING_APPROVALS } from './034-pending-approvals.js';
 import { MIGRATION_035_PROJECT_ACCESS } from './035-project-access.js';
 import { MIGRATION_036_MESSAGE_MENTIONS } from './036-message-mentions.js';
+import { MIGRATION_037_TIMERS } from './037-timers.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -94,6 +95,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 34, id: '034_pending_approvals', sql: MIGRATION_034_PENDING_APPROVALS },
   { version: 35, id: '035_project_access', sql: MIGRATION_035_PROJECT_ACCESS },
   { version: 36, id: '036_message_mentions', sql: MIGRATION_036_MESSAGE_MENTIONS },
+  { version: 37, id: '037_timers', sql: MIGRATION_037_TIMERS },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

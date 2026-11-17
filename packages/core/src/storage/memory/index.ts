@@ -78,3 +78,5 @@ export { MemoryBackgroundRunRepository } from './background-runs.js';
 export { MemoryWorktreeRepository } from './worktrees.js';
 // ADR-029: ожидания подтверждения прав (отдельный стор, не документ сессии).
 export { MemoryPendingApprovalRepository } from './pending-approvals.js';
+// PROP-141 (Часть B): реестр таймеров/будильников и история их срабатываний.
+export { MemoryTimerRepository, MemoryTimerFiringRepository } from './timers.js';

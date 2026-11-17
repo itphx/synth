@@ -129,3 +129,6 @@ export * from './background.js';
 // Этап 1 roadmap 0.13 (блок 1.4): git worktrees — per-session рабочий каталог
 // (ADR-114): тип записи, тела HTTP-входа и привязка сессии.
 export * from './worktree.js';
+// PROP-141 (Часть B): таймеры и будильники — модель автоматизации, лимиты
+// и Zod-схемы (порты хранения — в core, ADR-096).
+export * from './timers.js';

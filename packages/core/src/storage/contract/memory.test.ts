@@ -45,6 +45,8 @@ import {
   describeSkillBundleRepository,
   describeSkillRepository,
   describeSSHKeyRepository,
+  describeTimerFiringRepository,
+  describeTimerRepository,
   describeWebhookDeliveryRepository,
   describeWebhookRepository,
   describeWorktreeRepository,
@@ -97,6 +99,8 @@ import {
   MemoryWebhookRepository,
   MemoryWorktreeRepository,
   MemoryPendingApprovalRepository,
+  MemoryTimerRepository,
+  MemoryTimerFiringRepository,
 } from '../memory/index.js';
 
 /**
@@ -324,6 +328,16 @@ describe('контрактные тесты in-memory реализаций по�
   describePendingApprovalRepository(
     'MemoryPendingApprovalRepository → PendingApprovalRepository',
     async () => ({ repo: new MemoryPendingApprovalRepository() }),
+  );
+
+  // PROP-141 (Часть B): реестр таймеров/будильников и история срабатываний.
+  describeTimerRepository('MemoryTimerRepository → TimerRepository', async () => ({
+    repo: new MemoryTimerRepository(),
+  }));
+
+  describeTimerFiringRepository(
+    'MemoryTimerFiringRepository → TimerFiringRepository',
+    async () => ({ repo: new MemoryTimerFiringRepository() }),
   );
 });
 
