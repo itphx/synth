@@ -44,12 +44,16 @@ const UI_COMPANION_PACKAGES = new Set([
 const MARKDOWN_PACKAGES = new Set(["marked", "dompurify"])
 
 /**
- * Подсветка кода (shiki) и формулы (KaTeX) грузятся **лениво**
- * (`lib/markdown/highlight.ts`, `lib/markdown/math.ts`) и в вендорные группы
- * не попадают: иначе ядро, движок oniguruma, wasm, все грамматики и KaTeX
- * сливаются в eager `vendor-misc` и ленивость теряется. Без группы rolldown
- * делает под них отдельные асинхронные чанки, которые грузятся при первом
- * блоке кода / первой формуле.
+ * Подсветка кода (shiki), формулы (KaTeX) и диаграммы (Mermaid) грузятся
+ * **лениво** (`lib/markdown/highlight.ts`, `lib/markdown/math.ts`,
+ * `lib/markdown/mermaid.ts`) и в вендорные группы не попадают: иначе ядро,
+ * движок oniguruma, wasm, все грамматики, KaTeX и — главное —
+ * `beautiful-mermaid` с движком раскладки ELK сливаются в eager
+ * `vendor-misc`, и ленивость теряется (чанк растёт с ~2.1 МБ до ~3.7 МБ,
+ * mermaid тянется вместе с приложением, хотя нужен только при первом
+ * блоке с диаграммой). Без группы rolldown делает под них отдельные
+ * асинхронные чанки, которые грузятся при первом блоке кода / первой
+ * формуле / первой диаграмме.
  *
  * Второй список — транзитивные зависимости shiki (`hast-util-to-html` и его
  * семейства): приложению они не нужны и тоже должны остаться в ленивых чанках.
@@ -73,8 +77,20 @@ const LAZY_VENDOR_FAMILIES = [
   "trim-lines",
 ]
 
-/** Пакеты, которые грузятся только по требованию (см. список семейств выше). */
-const LAZY_VENDOR_PACKAGES = new Set(["katex"])
+/**
+ * Пакеты, которые грузятся только по требованию (см. список семейств выше).
+ *
+ * `elkjs` и `entities` — транзитивные зависимости `beautiful-mermaid`
+ * (движок раскладки ELK и декодирование HTML-сущностей): в браузерном
+ * бандле их импортирует только mermaid (проверено по sourcemap), поэтому
+ * они уезжают вместе с ним в ленивый чанк, а не в eager `vendor-misc`.
+ */
+const LAZY_VENDOR_PACKAGES = new Set([
+  "katex",
+  "beautiful-mermaid",
+  "elkjs",
+  "entities",
+])
 
 function isLazyVendorPackage(pkg: string): boolean {
   if (pkg === "shiki" || pkg.startsWith("@shikijs/")) return true
