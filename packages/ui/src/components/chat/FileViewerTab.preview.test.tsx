@@ -41,11 +41,38 @@ vi.mock('@/lib/markdown/highlight', async (importOriginal) => {
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 
+// Стор UI в просмотрщике: нужен настоящий subscribe — иначе переключатель
+// ширины не перерисует обёртку (мок без подписки не даёт React узнать об
+// изменении состояния). Значение ширины — здесь же, в моке.
+const uiStoreMock = vi.hoisted(() => {
+  const listeners = new Set<() => void>()
+  const state = {
+    fileViewerWidth: 'column' as 'column' | 'full',
+    setFileViewerWidth: (width: 'column' | 'full') => {
+      state.fileViewerWidth = width
+      for (const listener of listeners) listener()
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+  }
+  return state
+})
+
 // Клик по ссылке на файл открывает center-tab — тот же `openTab`, что у дерева.
-vi.mock('@/stores/useUIStore', () => ({
-  useUIStore: (selector: (state: { openTab: typeof mocks.openTab }) => unknown) =>
-    selector({ openTab: mocks.openTab }),
-}))
+vi.mock('@/stores/useUIStore', async () => {
+  const { useSyncExternalStore } = await import('react')
+  return {
+    useUIStore: (selector: (state: Record<string, unknown>) => unknown) =>
+      useSyncExternalStore(
+        uiStoreMock.subscribe,
+        () => selector({ ...uiStoreMock, openTab: mocks.openTab }),
+      ),
+  }
+})
 
 import { FileViewerTab } from './FileViewerTab'
 import { HTML_PREVIEW_CSP } from '@/lib/htmlPreview'
@@ -94,6 +121,8 @@ describe('FileViewerTab — предпросмотр файла по семей�
     vi.clearAllMocks()
     mocks.readFile.mockResolvedValue({ path: 'x', content: '', size: 0, encoding: 'utf-8' })
     mocks.probeRawFile.mockResolvedValue({ ok: true, status: 200, size: 10 })
+    // Ширина чтения — дефолт «колонка» (как в сторе).
+    uiStoreMock.fileViewerWidth = 'column'
   })
 
   afterEach(async () => {
@@ -131,6 +160,53 @@ describe('FileViewerTab — предпросмотр файла по семей�
     expect(container.querySelector('pre')?.textContent).toContain('# Заголовок')
   })
 
+  it('markdown: ширина чтения — колонка по умолчанию, переключатель даёт полную ширину и обратно', async () => {
+    mocks.readFile.mockResolvedValue({
+      path: 'README.md',
+      content: '# Заголовок\n\nТекст.',
+      size: 22,
+      encoding: 'utf-8',
+    })
+
+    const container = await render(<FileViewerTab tab={fileTab('README.md')} />)
+
+    // Обёртка markdown-превью — родитель `.markdown-content`.
+    const wrapper = () =>
+      container.querySelector('.markdown-content')!.parentElement as HTMLElement
+    const button = (label: string) =>
+      Array.from(container.querySelectorAll('button')).find((b) => b.textContent === label)!
+
+    // Дефолт — колонка: контент ограничен по ширине и отцентрован.
+    expect(wrapper().classList.contains('max-w-[108ch]')).toBe(true)
+    expect(wrapper().classList.contains('mx-auto')).toBe(true)
+    expect(wrapper().classList.contains('max-w-full')).toBe(false)
+
+    const columnButton = button('file.widthColumn')
+    const fullButton = button('file.widthFull')
+    expect(columnButton.getAttribute('aria-pressed')).toBe('true')
+    expect(fullButton.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => {
+      fullButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(wrapper().classList.contains('max-w-full')).toBe(true)
+    expect(wrapper().classList.contains('max-w-[108ch]')).toBe(false)
+    expect(wrapper().classList.contains('mx-auto')).toBe(false)
+    expect(fullButton.getAttribute('aria-pressed')).toBe('true')
+    expect(columnButton.getAttribute('aria-pressed')).toBe('false')
+    // Состояние — в сторе (оно персистится между вкладками).
+    expect(uiStoreMock.fileViewerWidth).toBe('full')
+
+    await act(async () => {
+      columnButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(wrapper().classList.contains('max-w-[108ch]')).toBe(true)
+    expect(wrapper().classList.contains('mx-auto')).toBe(true)
+    expect(uiStoreMock.fileViewerWidth).toBe('column')
+  })
+
   it('markdown с таблицей и кодом → панель не расширяется, скролл внутри блоков', async () => {
     const content = [
       '| имя | значение | ещё колонка |',
@@ -164,7 +240,10 @@ describe('FileViewerTab — предпросмотр файла по семей�
     const wrapper = markdown!.parentElement as HTMLElement
     expect(wrapper.classList.contains('min-w-0')).toBe(true)
     expect(wrapper.classList.contains('w-full')).toBe(true)
-    expect(wrapper.classList.contains('max-w-full')).toBe(true)
+    // Ширина чтения по умолчанию — колонка: контент ограничен `108ch` и
+    // отцентрован, панель при этом не расширяется (`w-full` + `min-w-0`).
+    expect(wrapper.classList.contains('mx-auto')).toBe(true)
+    expect(wrapper.classList.contains('max-w-[108ch]')).toBe(true)
 
     // Шапка «Просмотр / Исходник» переносится на узком экране, а не вылезает.
     const toolbar = root!.firstElementChild as HTMLElement | null

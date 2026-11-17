@@ -470,6 +470,59 @@ describe('useUIStore.chatViewMode', () => {
   })
 })
 
+/**
+ * Ширина чтения markdown в просмотрщике файла: пользовательская настройка,
+ * персистится; `full` восстанавливается только по явному значению, иначе
+ * колонка (значение по умолчанию).
+ */
+describe('useUIStore.fileViewerWidth', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ fileViewerWidth: 'column' })
+  })
+
+  async function rehydrateWith(fileViewerWidth: unknown): Promise<void> {
+    storage.setItem('synth-ui-settings', JSON.stringify({ state: { fileViewerWidth }, version: 0 }))
+    await useUIStore.persist.rehydrate()
+  }
+
+  it('попадает в partialize (персистится)', () => {
+    useUIStore.setState({ fileViewerWidth: 'full' })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.fileViewerWidth).toBe('full')
+  })
+
+  it('setFileViewerWidth меняет значение', () => {
+    useUIStore.getState().setFileViewerWidth('full')
+    expect(useUIStore.getState().fileViewerWidth).toBe('full')
+
+    useUIStore.getState().setFileViewerWidth('column')
+    expect(useUIStore.getState().fileViewerWidth).toBe('column')
+  })
+
+  it('восстанавливает сохранённое значение full', async () => {
+    await rehydrateWith('full')
+    expect(useUIStore.getState().fileViewerWidth).toBe('full')
+  })
+
+  it('неизвестное значение сбрасывается в column', async () => {
+    await rehydrateWith('wide')
+    expect(useUIStore.getState().fileViewerWidth).toBe('column')
+  })
+
+  it('отсутствующее значение — column', async () => {
+    await rehydrateWith(undefined)
+    expect(useUIStore.getState().fileViewerWidth).toBe('column')
+  })
+
+  it('column восстанавливается как есть', async () => {
+    await rehydrateWith('column')
+    expect(useUIStore.getState().fileViewerWidth).toBe('column')
+  })
+})
+
 describe('useUIStore.chatScale', () => {
   beforeEach(() => {
     storage.clear()

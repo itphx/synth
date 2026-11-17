@@ -42,6 +42,15 @@ export type ChatDensity = 'normal' | 'compact'
  */
 export type ChatViewMode = 'detailed' | 'feed'
 
+/**
+ * Ширина чтения markdown в просмотрщике файла.
+ *
+ * `column` — колонка ограниченной ширины (комфортная длина строки ~108 символов,
+ * текст читается «столбиком»); `full` — во всю ширину панели (широкие таблицы,
+ * код, схемы). Настройка пользователя, персистится.
+ */
+export type FileViewerWidth = 'column' | 'full'
+
 const LEFT_PANEL_MIN_WIDTH = 280
 const LEFT_PANEL_MAX_WIDTH = 500
 const RIGHT_PANEL_MIN_WIDTH = 320
@@ -317,6 +326,14 @@ interface UIStore {
   /** Вид ленты чата (персистится; см. `ChatViewMode`). */
   chatViewMode: ChatViewMode
   setChatViewMode: (mode: ChatViewMode) => void
+
+  /**
+   * Ширина чтения markdown в просмотрщике файла (персистится; см. `FileViewerWidth`).
+   *
+   * `column` — колонка `max-w-[108ch]` по центру панели, `full` — во всю ширину.
+   */
+  fileViewerWidth: FileViewerWidth
+  setFileViewerWidth: (width: FileViewerWidth) => void
 
   /**
    * Настройки внешнего вида терминала (PROP-132).
@@ -718,6 +735,9 @@ export const useUIStore = create<UIStore>()(
         set({ chatViewMode: mode })
       },
 
+      fileViewerWidth: 'column',
+      setFileViewerWidth: (width) => set({ fileViewerWidth: width }),
+
       terminalPreferences: DEFAULT_TERMINAL_PREFERENCES,
       setTerminalPreferences: (prefs) =>
         set({ terminalPreferences: normalizeTerminalPreferences(prefs) }),
@@ -809,6 +829,7 @@ export const useUIStore = create<UIStore>()(
         settingsShowAdvanced: state.settingsShowAdvanced,
         chatDensity: state.chatDensity,
         chatViewMode: state.chatViewMode,
+        fileViewerWidth: state.fileViewerWidth,
         expandedChatGroup: state.expandedChatGroup,
         revealedServiceGroups: state.revealedServiceGroups,
         terminalPreferences: state.terminalPreferences,
@@ -839,6 +860,9 @@ export const useUIStore = create<UIStore>()(
           chatDensity: p?.chatDensity === 'compact' ? 'compact' : 'normal',
           // `feed` — только явное сохранённое значение, иначе подробный вид.
           chatViewMode: p?.chatViewMode === 'feed' ? 'feed' : 'detailed',
+          // Ширина чтения в просмотрщике: `full` — только явное сохранённое
+          // значение, иначе колонка (значение по умолчанию).
+          fileViewerWidth: p?.fileViewerWidth === 'full' ? 'full' : 'column',
           // Сохранённая развёрнутая панель: только непустая строка.
           expandedChatGroup:
             typeof p?.expandedChatGroup === 'string' && p.expandedChatGroup !== ''

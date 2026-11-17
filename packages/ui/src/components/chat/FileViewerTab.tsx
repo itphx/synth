@@ -68,6 +68,9 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
   const [htmlSource, setHtmlSource] = useState(false)
 
   const openTab = useUIStore((s) => s.openTab)
+  // Ширина чтения markdown: колонка (по центру) или во всю ширину панели.
+  const fileViewerWidth = useUIStore((s) => s.fileViewerWidth)
+  const setFileViewerWidth = useUIStore((s) => s.setFileViewerWidth)
 
   const projectId = tab.data.projectId
   const filePath = tab.data.filePath
@@ -421,11 +424,47 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
           >
             {t('file.markdownSource')}
           </button>
+          {/* Ширина чтения: колонка (комфортная длина строки) или во всю
+              ширину панели (широкие таблицы и код). Только для markdown —
+              у остальных файлов ширина фиксирована превью. */}
+          <div role="group" aria-label={t('file.widthToggleAria')} className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setFileViewerWidth('column')}
+              aria-pressed={fileViewerWidth === 'column'}
+              className={
+                fileViewerWidth === 'column'
+                  ? 'rounded bg-muted px-2 py-1 text-xs text-foreground'
+                  : 'rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted'
+              }
+            >
+              {t('file.widthColumn')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setFileViewerWidth('full')}
+              aria-pressed={fileViewerWidth === 'full'}
+              className={
+                fileViewerWidth === 'full'
+                  ? 'rounded bg-muted px-2 py-1 text-xs text-foreground'
+                  : 'rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted'
+              }
+            >
+              {t('file.widthFull')}
+            </button>
+          </div>
         </div>
       )}
       <div className="flex-1 min-w-0 w-full overflow-auto">
         {showMarkdown && !markdownSource ? (
-          <div className="p-4 min-w-0 w-full max-w-full" onClick={handleMarkdownClick}>
+          <div
+            className={
+              fileViewerWidth === 'column'
+                ? 'p-4 min-w-0 w-full mx-auto max-w-[108ch]'
+                : 'p-4 min-w-0 w-full max-w-full'
+            }
+            onClick={handleMarkdownClick}
+          >
             <MarkdownContent content={content ?? ''} resolveAsset={resolveAsset} />
           </div>
         ) : (

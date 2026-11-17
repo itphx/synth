@@ -889,7 +889,9 @@ html.device-tablet .notifications-popup {
 
 .markdown-content .md-code {
   max-width: 100%;
-  margin: 0.6rem 0;
+  /* Отступ блока кода — общий токен ритма (`--markdown-paragraph-spacing`),
+     литерал не дублируем: ритм документа меняется в одном месте. */
+  margin: var(--markdown-paragraph-spacing) 0;
   overflow: hidden;
   border: 1px solid var(--border, currentColor);
   border-radius: var(--radius-md, 0.5rem);
@@ -1172,14 +1174,141 @@ html.pointer-coarse .markdown-content .md-code-download {
   border-bottom: 0;
 }
 
-/* details/summary — свёрнутые блоки в ответе (renderer пропускает raw HTML). */
-.markdown-content details {
-  margin: 0.5rem 0;
-}
-
+/* details/summary — свёрнутые блоки в ответе (renderer пропускает raw HTML).
+   Отступ `details` — общий ритм документа (см. блок типографики ниже). */
 .markdown-content summary {
   color: var(--markdown-link, var(--primary));
   cursor: pointer;
+}
+
+/* =============================================================
+   Типографика markdown.
+
+   Рендер markdown один (`components/chat/MarkdownContent.tsx`), и им
+   пользуются и чат, и reasoning, и рабочая панель, и просмотрщик файла —
+   поэтому «выразительный» вид собирается здесь, а не в компонентах.
+
+   Tailwind v4 preflight обнуляет отступы (`*{margin:0}`) и сбрасывает
+   заголовки (`h1..h6{font-size:inherit;font-weight:inherit}`), поэтому
+   без этих правил заголовок неотличим от абзаца, а абзацы слипаются.
+
+   Размеры шрифтов — в `em` от базового шрифта контейнера: reasoning-блок
+   (`text-xs`) и ответ агента (`text-sm`) масштабируются вместе со своей
+   базой, а не прибиты к абсолютным px. Цвета — только токены темы
+   (`--markdown-*`): тема перекрашивает markdown без правок разметки.
+
+   Вертикальный ритм блоков — общий токен `--markdown-paragraph-spacing`;
+   у блока кода и таблицы — свои (`--markdown-paragraph-spacing` и
+   `--markdown-table-spacing`), литералы не дублируются.
+   ============================================================= */
+
+/* Заголовки: два уровня акцента. h1/h2 — крупные и в основном цвете темы,
+   h3/h4 — мельче и приглушённее, h5/h6 — по размеру обычного текста, но
+   полужирные и самые тихие по цвету. */
+.markdown-content h1,
+.markdown-content h2 {
+  margin-block: var(--markdown-heading-primary-top) var(--markdown-heading-primary-bottom);
+  color: var(--markdown-heading1, var(--foreground));
+  font-size: 1.32em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.markdown-content h3,
+.markdown-content h4 {
+  margin-block: var(--markdown-heading-secondary-top) var(--markdown-heading-secondary-bottom);
+  font-size: 1.14em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.markdown-content h3 {
+  color: var(--markdown-heading2, var(--foreground));
+}
+
+.markdown-content h4 {
+  color: var(--markdown-heading3, var(--foreground));
+}
+
+.markdown-content h5,
+.markdown-content h6 {
+  margin-block: var(--markdown-heading-secondary-top) var(--markdown-heading-secondary-bottom);
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.markdown-content h5 {
+  color: var(--markdown-heading4, var(--foreground));
+}
+
+.markdown-content h6 {
+  color: var(--muted-foreground);
+}
+
+/* Абзац и текстовые блоки — общий вертикальный ритм документа. */
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content details,
+.markdown-content dl {
+  margin-block: var(--markdown-paragraph-spacing);
+}
+
+/* Списки: между пунктами — небольшой зазор (иначе строки слипаются в одну),
+   маркер — приглушённый цвет темы, вложенные списки — плотнее внешнего. */
+.markdown-content li + li {
+  margin-top: 0.25em;
+}
+
+.markdown-content li::marker {
+  color: var(--markdown-list-marker, var(--muted-foreground));
+}
+
+.markdown-content ul ul,
+.markdown-content ul ol,
+.markdown-content ol ul,
+.markdown-content ol ol {
+  margin-block: 0.25em;
+}
+
+/* Цитата: полоса слева и приглушённый текст (цвет — токен темы). */
+.markdown-content blockquote {
+  padding-inline-start: var(--markdown-blockquote-padding, 0.75rem);
+  border-inline-start: 3px solid var(--markdown-blockquote-border, var(--border));
+  color: var(--markdown-blockquote, var(--muted-foreground));
+}
+
+/* Разделитель — линия темы с воздухом вокруг. */
+.markdown-content hr {
+  margin-block: var(--markdown-divider-spacing);
+  border-top: 1px solid var(--markdown-hr, var(--border));
+}
+
+/* Акценты текста — цвет из темы. Вес `strong` не переопределяем: preflight
+   даёт ему `bolder`, и понижение до 600 ослабило бы выделение. */
+.markdown-content strong {
+  color: var(--markdown-bold, inherit);
+}
+
+.markdown-content em {
+  color: var(--markdown-italic, inherit);
+}
+
+.markdown-content del {
+  color: var(--markdown-strikethrough, inherit);
+}
+
+/* Крайние блоки документа не отступают от краёв контейнера: верхний отступ
+   первого и нижний последнего блока — «воздух» вокруг текста, а не пустота
+   перед ним и после него. */
+.markdown-content > :first-child {
+  margin-block-start: 0;
+}
+
+.markdown-content > :last-child {
+  margin-block-end: 0;
 }
 
 /* =============================================================
