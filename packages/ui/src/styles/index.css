@@ -1130,6 +1130,29 @@ html.pointer-coarse .markdown-content .md-code-download {
   font-weight: 500;
 }
 
+/* Формулы (KaTeX). Разметку даёт marked (`.md-math` + `data-math`:
+   `block`/`inline`), сам KaTeX рисуется лениво (`lib/markdown/math.ts`).
+   До рендера внутри элемента лежит исходник TeX — он выглядит как обычный
+   текст (никакого «loading»-состояния). */
+.markdown-content .md-math[data-math='block'] {
+  display: block;
+  /* Отступ блока — общий токен ритма документа (как у абзаца). */
+  margin-block: var(--markdown-paragraph-spacing);
+  /* Длинная формула не должна распирать чат: она прокручивается внутри. */
+  overflow-x: auto;
+}
+
+.markdown-content .md-math[data-math='inline'] {
+  display: inline;
+}
+
+/* Блочная формула: KaTeX оборачивает её в `.katex-display` со своими
+   внешними отступами — снимаем их, иначе ритм удваивается (отступ блока
+   плюс отступ `.katex-display`). */
+.markdown-content .md-math .katex-display {
+  margin: 0;
+}
+
 .markdown-content .md-table-wrap {
   max-width: 100%;
   margin: var(--markdown-table-spacing, 0.9rem) 0;

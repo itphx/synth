@@ -44,11 +44,12 @@ const UI_COMPANION_PACKAGES = new Set([
 const MARKDOWN_PACKAGES = new Set(["marked", "dompurify"])
 
 /**
- * Подсветка кода (shiki) грузится **лениво** (`lib/markdown/highlight.ts`) и в
- * вендорные группы не попадает: иначе ядро, движок oniguruma, wasm и все
- * грамматики сливаются в eager `vendor-misc` и ленивость теряется. Без группы
- * rolldown делает под них отдельные асинхронные чанки, которые грузятся при
- * первом блоке кода.
+ * Подсветка кода (shiki) и формулы (KaTeX) грузятся **лениво**
+ * (`lib/markdown/highlight.ts`, `lib/markdown/math.ts`) и в вендорные группы
+ * не попадают: иначе ядро, движок oniguruma, wasm, все грамматики и KaTeX
+ * сливаются в eager `vendor-misc` и ленивость теряется. Без группы rolldown
+ * делает под них отдельные асинхронные чанки, которые грузятся при первом
+ * блоке кода / первой формуле.
  *
  * Второй список — транзитивные зависимости shiki (`hast-util-to-html` и его
  * семейства): приложению они не нужны и тоже должны остаться в ленивых чанках.
@@ -72,8 +73,12 @@ const LAZY_VENDOR_FAMILIES = [
   "trim-lines",
 ]
 
+/** Пакеты, которые грузятся только по требованию (см. список семейств выше). */
+const LAZY_VENDOR_PACKAGES = new Set(["katex"])
+
 function isLazyVendorPackage(pkg: string): boolean {
   if (pkg === "shiki" || pkg.startsWith("@shikijs/")) return true
+  if (LAZY_VENDOR_PACKAGES.has(pkg)) return true
   return LAZY_VENDOR_FAMILIES.some((family) => pkg === family || pkg.startsWith(family))
 }
 

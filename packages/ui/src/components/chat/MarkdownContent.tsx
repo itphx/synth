@@ -1,10 +1,11 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
-import { marked, Renderer } from 'marked'
+import { Marked, Renderer } from 'marked'
 import DOMPurify from 'dompurify'
 import { downloadBlob } from '@/lib/download'
 import { i18nText, useI18nStore } from '@/lib/i18n'
 import { codeFileName } from '@/lib/markdown/codeFile'
 import { getThemeEpoch, highlightCode, subscribeThemeChange } from '@/lib/markdown/highlight'
+import { createMathExtension, renderMathInPlace } from '@/lib/markdown/math'
 import { rewriteRelativeAssets } from '@/lib/markdown/relativeAssets'
 import { createSlugger } from '@/lib/markdown/slug'
 import { resolveColor } from '@/lib/utils'
@@ -66,6 +67,7 @@ export const MARKDOWN_ALLOWED_ATTR = [
   'alt', 'title', 'class', 'id', 'type', 'checked', 'disabled',
   'data-ph', 'data-lang', 'data-copy-code', 'data-numbered', 'data-copied',
   'data-download-code', 'data-downloaded', 'data-file-path',
+  'data-math',
   'target', 'rel', 'open', 'align',
 ]
 
@@ -125,6 +127,21 @@ function findAnchorTarget(container: HTMLElement, id: string): HTMLElement | nul
     return null
   }
 }
+
+/**
+ * Локальный инстанс marked с расширением формул (`$$…$$`).
+ *
+ * marked v18: глобальный `marked.use()` мутирует **общий** singleton — так
+ * делать нельзя (рендерер и расширения живут только здесь, см. правило
+ * «глобальный `marked.use` не трогаем»). Поэтому расширение подключается на
+ * инстансе: `new Marked(extension)` вызывает `use()` уже на своих
+ * `defaults`, глобальный `marked` не затрагивается.
+ *
+ * Важно: `Marked.parser(tokens, options)` **не** совмещает опции с
+ * `defaults` (в отличие от `Marked.parse`), поэтому расширения передаются в
+ * опциях явно — `{ ...markedWithMath.defaults, renderer }`.
+ */
+const markedWithMath = new Marked(createMathExtension())
 
 /**
  * Локальные renderer'ы marked: заголовок с `id` для якорных ссылок, язык,
@@ -265,10 +282,14 @@ export function MarkdownContent({
   const html = useMemo(() => {
     if (!source) return ''
     try {
-      const tokens = marked.lexer(source)
+      const tokens = markedWithMath.lexer(source)
       // Рендерер — на каждый разбор: счётчик дубликатов заголовков (slugger)
-      // должен начинаться с нуля для каждого документа.
-      let raw = marked.parser(tokens, { renderer: createMarkdownRenderer(escapeRawHtml) })
+      // должен начинаться с нуля для каждого документа. Расширение формул
+      // (`$$…$$`) приходит вместе с `defaults` — иначе marked его не увидит.
+      let raw = markedWithMath.parser(tokens, {
+        ...markedWithMath.defaults,
+        renderer: createMarkdownRenderer(escapeRawHtml),
+      })
       if (transformHtml) raw = transformHtml(raw)
       // Относительные `src`/`href`/`srcset` (и markdown, и сырой HTML) —
       // до санитайзера: `data-file-path`/`srcset` должны попасть в allowlist.
@@ -380,6 +401,22 @@ export function MarkdownContent({
       })
     }
   }, [html, streaming, themeEpoch])
+
+  /**
+   * Формулы (KaTeX, лениво) — по образцу подсветки кода: во время стриминга
+   * не рисуем (иначе DOM пересобирается на каждой дельте), после завершения
+   * шага (`streaming: false`) — один раз; маркер `data-rendered` не даёт
+   * повторять работу при перерисовках.
+   *
+   * Смена темы перерисовку не требует: KaTeX красит `currentColor`.
+   * Ошибка (битый TeX, не загрузилась библиотека) оставляет формулу исходным
+   * текстом — рендер не падает.
+   */
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || streaming) return
+    void renderMathInPlace(container)
+  }, [html, streaming])
 
   /**
    * Подсветка `@`-упоминаний агентов цветом агента — тем же способом, что и

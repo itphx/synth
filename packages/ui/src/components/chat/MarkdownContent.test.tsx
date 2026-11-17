@@ -1179,3 +1179,47 @@ describe('MarkdownContent: фон блока кода и таблицы (CSS)', 
     expect(offenders).toEqual([])
   })
 })
+
+describe('MarkdownContent: формулы (KaTeX)', () => {
+  it('формула рендерится: .md-math в разметке и .katex после эффекта', async () => {
+    const container = await renderMarkdown('$$E=mc^2$$')
+
+    // Разметка формулы — сразу (marked), KaTeX — лениво, после эффекта.
+    const math = container.querySelector('.md-math[data-math="block"]')
+    expect(math).not.toBeNull()
+    expect(math?.getAttribute('data-rendered')).toBeNull()
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('.md-math .katex')).not.toBeNull()
+    })
+    expect(container.querySelector('.md-math')?.getAttribute('data-rendered')).toBe('1')
+  })
+
+  it('инлайновая формула внутри абзаца', async () => {
+    const container = await renderMarkdown('текст $$a+b$$ текст')
+
+    expect(container.querySelector('.md-math[data-math="inline"]')).not.toBeNull()
+    expect(container.querySelector('.md-math[data-math="block"]')).toBeNull()
+
+    await vi.waitFor(() => {
+      expect(container.querySelector('.md-math[data-math="inline"] .katex')).not.toBeNull()
+    })
+  })
+
+  it('во время стриминга формула не рисуется', async () => {
+    const { container } = await renderTree('$$E=mc^2$$', true)
+    await flushEffects()
+
+    expect(container.querySelector('.md-math')).not.toBeNull()
+    expect(container.querySelector('.md-math')?.getAttribute('data-rendered')).toBeNull()
+    expect(container.querySelector('.md-math .katex')).toBeNull()
+  })
+
+  it('одинарный $ остаётся текстом', async () => {
+    const container = await renderMarkdown('Цена $5 за штуку')
+    await flushEffects()
+
+    expect(container.querySelector('.md-math')).toBeNull()
+    expect(container.textContent).toContain('$5')
+  })
+})
