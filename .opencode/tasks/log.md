@@ -1799,3 +1799,15 @@
 - **Проверка:** typecheck/lint 0 errors (core 489/490, ui 28/28); core 11 798 passed (единственный fail — экологический `git-proxy-env` при ambient `no_proxy`), ui 4 502, backend 1 008, shared/executor/storage-postgres — зелёные; `pnpm build` успешен; `adr:check` 0 ошибок.
 - **Коммиты:** `4a512879`, `e96331fd`, `bc6dae28`, `0d6b5236`, `14299602`, `bdf8c6df`, `bd96d399`, `e0f07ce8`, `fc248c95`, `2828a5c0`, `11121533`, `9f195186`, `b3d698c1`, `eb2d12fa`, `7910aba5`, `9ce9303c`.
 - **Остатки:** SDK намеренно не расширяем — таймеры только через HTTP API (решение владельца); визуальная проверка панели в браузере после лимита провайдера не выполнялась (компонентные тесты и сборка — зелёные).
+
+### Дополнение: разбор отчёта тестирования (timer/alarm)
+
+- **stop/delete** вместо `cancel`: `stop` → `status=cancelled` (запись/история остаются, `include_stopped:true` их показывает), `delete` → удаление; HTTP `POST /timers/:id/stop`, UI-действие «Остановить».
+- **Строгие схемы** `timer`/`alarm` (лишние аргументы → ошибка) и `list`/`show` исключены из doom-loop (трекер и так per-turn; исправлена блокировка мониторинга в длинном ходе).
+- **Дубликаты**: `allow_duplicate` (default `false`), при совпадении вида/комментария/имени среди активных — `timer_duplicate` (HTTP `409 TIMER_DUPLICATE` + `details.existingId`).
+- **Прошлое `at`**: ошибка с допуском 60 с (`TIMER_PAST_GRACE_SEC`); догон сохранённых записей после рестарта не затронут.
+- **`name`** — в списке, в конверте `<timer name="…">` и в metadata; добавлен `show` с полным комментарием.
+- **`alm_`** для будильников (id), тексты «Alarm/Timer» по виду, `wrong_kind` вместо `not found` при чужом виде.
+- **`at` без зоны** — явно описано как локальная зона сервера; `timer update` добавлен.
+- Проверки: core 11 811 passed (единственный fail — экологический `git-proxy-env`), ui 4 503, backend 1 008; typecheck/lint/build зелёные.
+- Коммит: `3850dfdd`.
