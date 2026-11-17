@@ -53,6 +53,8 @@ import { applySteerInjections, dropSteerInjections } from '../../steering/apply.
 import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
 import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
 import type { AssistantMessageStatus } from '../../orchestrator/persistence.js';
+import { appendStopRecord } from '../../stop-record.js';
+import type { StopRecordInput } from '../../stop-reason.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import { renderTodosSection } from '../todo.js';
 import { resolveBrowserProfile } from '../../../execution/profile-binding.js';
@@ -302,6 +304,56 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   let lastIterationDurationMs: number | undefined;
   let subagentModel: string | undefined;
   const subagentStartedAt = Date.now();
+
+  /**
+   * PROP-143: ключ идемпотентности durable-записи причины остановки.
+   *
+   * Обычно — `streamId` прогона (`extra.streamId`): повторный терминальный
+   * статус того же прогона второй записи не добавляет. `streamId` не задан
+   * (вызов без хода родителя) — ключ прогон-специфичный: следующий прогон
+   * (resume) получает свою запись, а повтор внутри прогона — нет.
+   */
+  const stopDedupeKey = extra.streamId ?? `subagent-run:${generateId()}`;
+
+  /**
+   * PROP-143: durable-запись причины остановки прогона саб-агента.
+   *
+   * Запись живёт в истории **дочерней** сессии — там, где остановка и
+   * случилась: без неё факт остановки виден только в tool_result родителя и
+   * пропадает после reload. Формат записи — общий нормализатор
+   * (`engine/stop-reason.ts`), писатель — общий (`engine/stop-record.ts`).
+   *
+   * Нет дочерней сессии (чистый `none`-контекст) — записи нет: писать некуда.
+   * Ошибка записи **не ломает прогон** (остановка уже состоялась — её фиксация
+   * best-effort).
+   */
+  const writeStopRecord = async (input: StopRecordInput): Promise<void> => {
+    const sessionManager = extra.sessionManager;
+    if (!childSessionId || !sessionManager) return;
+    try {
+      await appendStopRecord({
+        sessionManager,
+        ...(extra.eventBus ? { eventBus: extra.eventBus } : {}),
+        sessionId: childSessionId,
+        input: {
+          ...input,
+          provider: input.provider ?? effectiveProvider?.name,
+          model: input.model ?? subagentModel,
+          agentRole: input.agentRole ?? subagentType,
+          // Ход ребёнка = id дочерней сессии (так же, как в `turn.started`/
+          // `step.started` ребёнка).
+          turnId: childSessionId,
+          streamId: extra.streamId,
+        },
+        dedupeKey: stopDedupeKey,
+      });
+    } catch (err) {
+      warning(
+        'SUBAGENT',
+        `Не удалось записать причину остановки: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
 
   /** Накопить usage одного LLM-ответа саб-агента (все итерации суммируются). */
   const accumulateUsage = (usage: TokenUsage | undefined): void => {
@@ -983,27 +1035,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
       }
 
-      // 2. Маркер прерывания в историю дочерней сессии
-      const stopMarkerText = sm('task.stopped_by_user');
-      await addChildMessage({
-        id: generateId(),
-        role: MessageRole.INFO,
-        seq: 0,
-        origin: 'local',
-        parts: [makeTextPart(stopMarkerText)],
-        content: stopMarkerText,
-        createdAt: nowISO(),
-        disabled: false,
-        pinned: false,
-        hidden: false,
-        agentRole: subagentType,
-        metadata: {
-          stream_id: extra.streamId,
-          stopped_by: 'user',
-          interrupted: true,
-          i18n: i18nMeta('task.stopped_by_user'),
-        },
-      });
+      // 2. PROP-143: durable-запись причины остановки (`stopped_by_user`) —
+      // вместо прежнего INFO-сообщения «Task stopped by the user»: причина
+      // остаётся в истории ребёнка после reload и доходит до модели в виде
+      // машиночитаемого конверта. Запись идёт **после** частичного ответа
+      // (PROP-143 §«Остаточные технические вопросы»): лента и контекст
+      // читаются сверху вниз — сначала «что успело», потом «почему оборвалось».
+      // Ключ дедупликации — прогон: повторный вызов `finishAborted` второй
+      // записи не добавляет.
+      await writeStopRecord({ reason: 'stopped_by_user' });
 
       // 3. Финализация дочерней сессии
       // ADR-104: очередь инъекций ребёнка снимается и на отмене («Стоп») —
@@ -1150,6 +1190,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             context_budget_tokens: estimatedTokens,
             steps: iteration,
           }, stepMessageId);
+          // PROP-143: durable-запись причины остановки (`context_budget`) —
+          // предохранитель сработал, прогон завершён без LLM. Запись идёт
+          // после отчёта: лента читается сверху вниз.
+          await writeStopRecord({
+            reason: 'context_budget',
+            tokens: estimatedTokens,
+            steps: iteration,
+          });
           // Родителю/UI — сигнал срабатывания предохранителя.
           publish?.('subagent.context_budget', {
             child_session_id: childSessionId,
@@ -1486,34 +1534,23 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         const errText = attempts > 1
           ? sm(errKey, { ...errParams, attempts: String(attempts) })
           : sm(errKey, errParams);
-        await addChildMessage({
-          id: generateId(),
-          role: MessageRole.ERROR,
-          seq: 0,
-          origin: 'local',
-          parts: [makeTextPart(errText)],
-          content: errText,
-          createdAt: nowISO(),
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          agentRole: subagentType,
-          model: subagentModel,
-          // ADR-102: сообщение об ошибке не несёт накопленный расход —
-          // предыдущие шаги уже в своих сообщениях, а неудавшийся вызов
-          // провайдером не тарифицирован (`commitChildUsage` = сумма шагов).
-          metadata: buildChildAssistantMetadata('error', {
-            stream_id: extra.streamId,
-            duration_ms: Date.now() - subagentStartedAt,
-            ...(lastIterationDurationMs !== undefined
-              ? { step_duration_ms: lastIterationDurationMs }
-              : {}),
-            error: true,
-            attempts,
-            max_retries: retryMaxAttempts,
-            error_type: llmFailure.errorType,
-            i18n: i18nMeta(errKey, attempts > 1 ? { ...errParams, attempts: String(attempts) } : errParams),
-          }),
+        // PROP-143: durable-запись причины остановки (`provider_error`) —
+        // вместо прежнего сообщения `role: 'error'`: причина остановки после
+        // reload остаётся в истории ребёнка и доходит до модели в виде
+        // машиночитаемого конверта (`engine/stop-reason.ts`). Запись идёт
+        // **до** финализации сессии — в ленте она встаёт сразу после упавшего
+        // шага. Ошибка записи прогон не роняет (best-effort).
+        await writeStopRecord({
+          reason: 'provider_error',
+          errorType: llmFailure.errorType,
+          retryable: isLlmErrorRecoverable(
+            llmFailure.error,
+            String(llmFailure.error),
+            llmFailure.errorType,
+          ),
+          attempts,
+          maxRetries: retryMaxAttempts,
+          error: String(llmFailure.error),
         });
         // ADR-104: ошибка провайдера — тоже терминальный путь прогона: очередь
         // инъекций ребёнка снимается, остаток не «протекает» в следующий ход.
@@ -1643,6 +1680,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             // оставлял дочернюю сессию без финального ответа вовсе.
             await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, stepMessageId, 'limit', stepUsage);
           }
+          // PROP-143: durable-запись причины остановки (`steps_limit`) —
+          // прогон остановлен по лимиту шагов. Запись идёт после отчёта:
+          // лента читается сверху вниз (сначала отчёт, потом причина).
+          await writeStopRecord({ reason: 'steps_limit', limit: Number(stepLimitValue) });
           break;
         }
 
@@ -2389,6 +2430,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
           await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit', undefined, Math.max(0, iteration - 1));
         }
+        // PROP-143: durable-запись причины остановки (`steps_limit`) —
+        // прогон остановлен по лимиту шагов (шаг-отчёт получен, вызовы
+        // инструментов не исполнялись). Запись идёт после отчёта.
+        await writeStopRecord({ reason: 'steps_limit', limit: Number(stepLimitValue) });
         break;
       }
 
@@ -2409,6 +2454,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
     if (subagentDenied && !finalContent) {
       finalContent = sm('task.stopped_by_deny');
+      // PROP-143: durable-запись причины остановки (`denied`) — отказ прав
+      // остановил прогон (содержательного ответа модели нет). Запись идёт
+      // после фоллбек-текста: лента читается сверху вниз.
+      await writeStopRecord({ reason: 'denied' });
     }
 
     const output = finalContent || sm('task.empty_response');

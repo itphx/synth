@@ -1437,11 +1437,12 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
       (m) => !m.content.startsWith('You are a subagent spawned by another session.'),
     )).toBe(true);
     expect(child.messages.some((m) => m.role === MessageRole.TOOL)).toBe(true);
-    // Маркер прерывания
-    const stopMarker = child.messages.find((m) => m.metadata?.stopped_by === 'user');
+    // PROP-143: маркер прерывания — durable-запись причины остановки.
+    const stopMarker = child.messages.find((m) => m.metadata?.type === 'execution_stopped');
     expect(stopMarker).toBeDefined();
-    // Последним сообщением должен быть маркер остановки (частичный текст перед ним)
-    expect(child.messages[child.messages.length - 1]!.metadata?.stopped_by).toBe('user');
+    expect(stopMarker!.metadata!.reason).toBe('stopped_by_user');
+    // Последним сообщением должна быть запись остановки (частичный текст перед ней)
+    expect(child.messages[child.messages.length - 1]!.metadata?.type).toBe('execution_stopped');
   });
 
   it('abort по внешнему сигналу уже в aborted-состоянии: task немедленно останавливается', async () => {
@@ -1526,8 +1527,11 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     expect(child.messages.some(
       (m) => m.role === MessageRole.USER && m.content === 'hello',
     )).toBe(true);
-    const errMsg = child.messages.find((m) => m.metadata?.error === true);
+    // PROP-143: причина остановки — durable-запись (`provider_error`) вместо
+    // прежнего сообщения `role: 'error'`.
+    const errMsg = child.messages.find((m) => m.metadata?.type === 'execution_stopped');
     expect(errMsg).toBeDefined();
+    expect(errMsg!.metadata!.reason).toBe('provider_error');
     expect(errMsg!.content).toContain('provider down');
     expect(errMsg!.metadata!.attempts).toBe(3);
   });
@@ -2226,7 +2230,7 @@ describe('taskTool — metadata финального child-сообщения (A
     expect(stepMsg!.metadata?.usage_estimated).toBeUndefined();
   });
 
-  it('error: сообщение child несёт status=error', async () => {
+  it('error: запись причины остановки в истории child несёт reason=provider_error', async () => {
     const parent = await sessionManager.createSession({ title: 'Parent' });
     const provider = {
       model: 'test-model',
@@ -2262,9 +2266,9 @@ describe('taskTool — metadata финального child-сообщения (A
     expect(result.isError).toBe(true);
     const childId = result.metadata!.child_session_id as string;
     const child = (await sessionManager.getSession(childId))!;
-    const errMsg = child.messages.find((m) => m.metadata?.error === true);
+    const errMsg = child.messages.find((m) => m.metadata?.type === 'execution_stopped');
     expect(errMsg).toBeDefined();
-    expect(errMsg!.metadata?.status).toBe('error');
+    expect(errMsg!.metadata?.reason).toBe('provider_error');
   });
 });
 

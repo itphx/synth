@@ -172,6 +172,14 @@ function makeConfig(over: Partial<SubagentRunConfig> & { extra: TaskExtra }): Su
   } as SubagentRunConfig;
 }
 
+/**
+ * Durable-записи причины остановки (PROP-143) в истории сессии:
+ * служебные `user`-сообщения с маркером `metadata.type='execution_stopped'`.
+ */
+function stopRecords(messages: Message[]): Message[] {
+  return messages.filter((m) => m.metadata?.type === 'execution_stopped');
+}
+
 describe('run-cycle — единая политика retry и doom-loop (константы)', () => {
   it('SUBAGENT_MAX_ATTEMPTS/DELAYS совпадают с LLM-политией (не разъезжаются)', () => {
     expect(SUBAGENT_MAX_ATTEMPTS).toBe(LLM_MAX_ATTEMPTS);
@@ -1515,7 +1523,14 @@ describe('run-cycle — hooks (ADR-030)', () => {
     expect(result.content).toContain('<status>error</status>');
 
     const saved = (await sessionManager.getSession(child.id))!;
-    expect(saved.messages.some((m) => m.role === MessageRole.ERROR)).toBe(true);
+    // PROP-143: вместо сообщения `role: 'error'` — durable-запись причины
+    // остановки (`provider_error`) в истории ребёнка.
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('provider_error');
+    expect(stops[0]!.metadata!.error_type).toBe('auth_error');
+    expect(stops[0]!.metadata!.attempts).toBe(1);
+    expect(stops[0]!.content).toContain('401 Unauthorized: invalid api key');
 
     await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
     expect(failed.mock.calls[0]![0]).toMatchObject({ agentId: child.id });
@@ -1866,9 +1881,11 @@ describe('run-cycle — отмена', () => {
     expect(result.metadata!.stopped_by).toBe('user');
     expect(result.metadata!.interrupted).toBe(true);
 
-    // В истории ребёнка — маркер остановки.
+    // В истории ребёнка — durable-запись причины остановки (PROP-143).
     const saved = (await sessionManager.getSession(child.id))!;
-    expect(saved.messages.some((m) => m.metadata?.stopped_by === 'user')).toBe(true);
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('stopped_by_user');
   });
 
   it('отмена во время работы: дополнительного шага-отчёта нет', async () => {
@@ -3114,5 +3131,186 @@ describe('run-cycle — маркер currentStream без сдвига updatedAt
     expect(start!.bumped).toBe(false);
     // После прогона маркер снят (финализация — с бампом, паритет `updateSession`).
     expect((await sessionManager.getSession(child.id))!.currentStream).toBeUndefined();
+  });
+});
+
+/**
+ * PROP-143: durable-запись причины остановки прогона саб-агента.
+ *
+ * Запись живёт в истории **дочерней** сессии: служебное `user`-сообщение с
+ * маркером `metadata.type='execution_stopped'`, машиночитаемым `reason` и
+ * конвертом `<execution_stopped …>`. Записи заменяют прежние маркеры
+ * (`role: 'error'`, INFO «Task stopped by the user»).
+ */
+describe('run-cycle — durable-запись причины остановки (PROP-143)', () => {
+  it('ошибка провайдера: ровно одна запись provider_error (error_type/attempts/retryable + текст ошибки)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const provider = throwingProvider(new Error('503 Service Unavailable'));
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, streamId: 'st-err' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      retry: { maxRetries: 2, delaysMs: [0, 0] },
+    }));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.attempts).toBe(2);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('provider_error');
+    expect(stops[0]!.metadata!.error_type).toBe('server_error');
+    expect(stops[0]!.metadata!.attempts).toBe(2);
+    expect(stops[0]!.metadata!.max_retries).toBe(2);
+    expect(stops[0]!.metadata!.retryable).toBe(true);
+    expect(stops[0]!.metadata!.stream_id).toBe('st-err');
+    // Тело конверта — сырой текст провайдера (ADR-036: обфускация — на границе).
+    expect(stops[0]!.content).toContain('503 Service Unavailable');
+    // Старое сообщение `role: 'error'` больше не создаётся.
+    expect(saved.messages.some((m) => m.role === MessageRole.ERROR)).toBe(false);
+  });
+
+  it('шаг-лимит: запись steps_limit с лимитом в теле конверта', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'ОТЧЁТ по лимиту шагов' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 2,
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('steps_limit');
+    expect(stops[0]!.content).toContain('reason="steps_limit"');
+    expect(stops[0]!.content).toContain(sm('stop.steps_limit', { limit: '2' }));
+  });
+
+  it('бюджет контекста: запись context_budget с оценкой токенов и шагами', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'недостижимо' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'x'.repeat(400) }) });
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        subagentMaxInputTokens: 50,
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const tokens = result.metadata!.context_budget_tokens as number;
+    expect(tokens).toBeGreaterThan(50);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('context_budget');
+    expect(stops[0]!.content).toContain('reason="context_budget"');
+    expect(stops[0]!.content).toContain(
+      sm('stop.context_budget', { tokens: String(tokens), steps: '1' }),
+    );
+  });
+
+  it('«Стоп»: ровно одна запись stopped_by_user, прежнего INFO-маркера нет', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'never' }]]);
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      ctx: makeCtx({ abortSignal: ac.signal }),
+    }));
+
+    expect(result.content).toContain('<status>stopped_by_user</status>');
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('stopped_by_user');
+    // Прежний INFO-маркер «Task stopped by the user» не создаётся.
+    expect(saved.messages.some((m) => m.metadata?.stopped_by === 'user')).toBe(false);
+  });
+
+  it('отказ прав: запись denied (фоллбек task.stopped_by_deny)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const bus = new EventBus();
+    bus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') {
+        bus.publish(parent.id, 'permission.replied', {
+          approval_id: (e.data as Record<string, unknown>).approval_id,
+          action: 'deny',
+        });
+      }
+    });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: '' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, eventBus: bus, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        permissionConfig: { rules: { noop: 'ask' }, askTimeoutMs: 1000 },
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('denied');
+  });
+
+  it('повторный терминальный статус того же прогона: второй записи нет (dedupeKey)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const provider = throwingProvider(new Error('401 Unauthorized: invalid api key'));
+
+    for (let i = 0; i < 2; i++) {
+      await runSubagent(makeConfig({
+        extra: makeExtra({ provider, sessionManager, sessionId: parent.id, streamId: 'st-same' }),
+        childSessionId: child.id,
+        parentSessionId: parent.id,
+      }));
+    }
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(stopRecords(saved.messages)).toHaveLength(1);
+  });
+
+  it('без дочерней сессии запись не пишется, прогон не падает', async () => {
+    const provider = throwingProvider(new Error('401 Unauthorized: invalid api key'));
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: 'parent-1' }),
+    }));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('<status>error</status>');
   });
 });

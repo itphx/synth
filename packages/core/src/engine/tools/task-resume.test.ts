@@ -116,14 +116,14 @@ describe('taskTool retry — recoverable/unrecoverable/abort (B1)', () => {
     expect(retryEvent!.data.error_type).toBe('network_error');
     expect(retryEvent!.data.child_session_id).toBe(result.metadata!.child_session_id);
 
-    // Мусорных ERROR-сообщений в истории дочерней сессии нет — только финал
+    // Мусорных записей об ошибке в истории дочерней сессии нет — только финал
     const childId = result.metadata!.child_session_id as string;
     const child = (await sessionManager.getSession(childId))!;
-    expect(child.messages.some((m) => m.metadata?.error === true)).toBe(false);
+    expect(child.messages.some((m) => m.metadata?.type === 'execution_stopped')).toBe(false);
     expect(child.messages.some((m) => m.role === MessageRole.ASSISTANT && m.content.includes('готово со второй'))).toBe(true);
   });
 
-  it('исчерпание ретраев: isError + metadata.attempts=3, две публикации subagent.retry, ERROR в истории ребёнка один', async () => {
+  it('исчерпание ретраев: isError + metadata.attempts=3, две публикации subagent.retry, запись остановки в истории ребёнка одна', async () => {
     const parent = await sessionManager.createSession({ title: 'Parent' });
     const provider = {
       model: 'test-model',
@@ -161,9 +161,13 @@ describe('taskTool retry — recoverable/unrecoverable/abort (B1)', () => {
 
     const childId = result.metadata!.child_session_id as string;
     const child = (await sessionManager.getSession(childId))!;
-    const errors = child.messages.filter((m) => m.metadata?.error === true);
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.metadata!.attempts).toBe(3);
+    // PROP-143: причина остановки — durable-запись (`provider_error`),
+    // а не сообщение `role: 'error'`.
+    const stops = child.messages.filter((m) => m.metadata?.type === 'execution_stopped');
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('provider_error');
+    expect(stops[0]!.metadata!.error_type).toBe('server_error');
+    expect(stops[0]!.metadata!.attempts).toBe(3);
   });
 
   it('unrecoverable ошибка (invalid api key): сразу финал, без ретраев и subagent.retry', async () => {
