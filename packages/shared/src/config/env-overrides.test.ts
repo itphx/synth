@@ -136,6 +136,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       analytics: { retentionDays: 400 },
       questions: { timeoutMs: 600_000, retentionDays: 14 },
       background: { enabled: true, maxSubagentsPerSession: 2, maxProcessesPerSession: 5, maxRunsPerSession: 10, logMaxBytes: 10_485_760 },
+      recovery: { autoResume: true, maxAttempts: 3, crashLoop: { windowMinutes: 10, maxRestarts: 3 } },
       agents: { subagentMaxInputTokens: 0, subagentDepth: 1 },
       limits: { sessionOpsPerMinute: 10 },
       attachments: {
@@ -229,6 +230,30 @@ describe('applyEnvOverrides (ADR-023)', () => {
     expect(cfg.metrics).toEqual({ enabled: true });
     // Общий предел вывода инструментов.
     expect(cfg.tools).toEqual({ outputMaxLines: 500, outputMaxBytes: 4096 });
+  });
+
+  it('PROP-142 §3: SYNTH_RECOVERY_* применяются к секции recovery', () => {
+    const cfg = applyEnvOverrides(makeConfig(), {
+      SYNTH_RECOVERY_AUTO_RESUME: 'false',
+      SYNTH_RECOVERY_MAX_ATTEMPTS: '5',
+      SYNTH_RECOVERY_CRASH_LOOP_WINDOW_MINUTES: '30',
+      SYNTH_RECOVERY_CRASH_LOOP_MAX_RESTARTS: '7',
+    });
+
+    expect(cfg.recovery).toEqual({
+      autoResume: false,
+      maxAttempts: 5,
+      crashLoop: { windowMinutes: 30, maxRestarts: 7 },
+    });
+  });
+
+  it('PROP-142 §3: невалидное значение SYNTH_RECOVERY_MAX_ATTEMPTS → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyEnvOverrides(makeConfig(), { SYNTH_RECOVERY_MAX_ATTEMPTS: 'много' });
+
+    expect(cfg.recovery).toMatchObject({ maxAttempts: 3 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain('SYNTH_RECOVERY_MAX_ATTEMPTS');
   });
 
   it('PROP-132: SYNTH_TERMINAL_ENABLED применяется к секции terminal', () => {

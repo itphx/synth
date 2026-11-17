@@ -128,6 +128,17 @@ describe('defaultConfig', () => {
     expect(defaultConfig.agents).toEqual({ subagentMaxInputTokens: 0, subagentDepth: 1 });
   });
 
+  it('recovery по умолчанию: автовосстановление включено, 3 попытки на ход, crash-loop 3/10 мин (PROP-142 §3)', () => {
+    expect(defaultConfig.recovery).toEqual({
+      autoResume: true,
+      maxAttempts: 3,
+      crashLoop: {
+        windowMinutes: 10,
+        maxRestarts: 3,
+      },
+    });
+  });
+
   it('limits по умолчанию: 10 тяжёлых операций с сессиями в минуту', () => {
     expect(defaultConfig.limits).toEqual({ sessionOpsPerMinute: 10 });
   });

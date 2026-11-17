@@ -109,6 +109,13 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'background', key: 'maxRunsPerSession', type: 'number' },
   { section: 'background', key: 'logMaxBytes', type: 'number' },
   { section: 'background', key: 'retentionDays', type: 'number' },
+  // recovery (PROP-142 §3): бюджет автовосстановления прерванных ходов +
+  // детект crash-loop. Вложенные ключи `crashLoop.*` дают
+  // `SYNTH_RECOVERY_CRASH_LOOP_WINDOW_MINUTES`/`SYNTH_RECOVERY_CRASH_LOOP_MAX_RESTARTS`.
+  { section: 'recovery', key: 'autoResume', type: 'boolean' },
+  { section: 'recovery', key: 'maxAttempts', type: 'number' },
+  { section: 'recovery', key: 'crashLoop.windowMinutes', type: 'number' },
+  { section: 'recovery', key: 'crashLoop.maxRestarts', type: 'number' },
   // agents: предохранитель по объёму промпта саб-агента (не окно модели).
   { section: 'agents', key: 'subagentMaxInputTokens', type: 'number' },
   // agents: лимит глубины вложенности саб-агентов (0 — без ограничения).

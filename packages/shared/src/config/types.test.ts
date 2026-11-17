@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { authConfigSchema, mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema, commandPolicyConfigSchema, securityConfigSchema } from './types.js';
+import { authConfigSchema, mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, recoveryConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema, commandPolicyConfigSchema, securityConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('storageConfigSchema — лимиты чтения/предпросмотра', () => {
@@ -442,6 +442,51 @@ describe('backgroundConfigSchema (PROP-096/PROP-097)', () => {
   it('отрицательные лимиты отклоняются', () => {
     expect(backgroundConfigSchema.safeParse({ maxProcessesPerSession: -1 }).success).toBe(false);
     expect(backgroundConfigSchema.safeParse({ logMaxBytes: -1 }).success).toBe(false);
+  });
+});
+
+/**
+ * PROP-142 §3: секция `recovery` — бюджет автовосстановления прерванных ходов.
+ */
+describe('recoveryConfigSchema (PROP-142 §3)', () => {
+  it('дефолт: автовосстановление включено, 3 попытки на ход, crash-loop 3/10 мин', () => {
+    expect(recoveryConfigSchema.parse({})).toEqual({
+      autoResume: true,
+      maxAttempts: 3,
+      crashLoop: {
+        windowMinutes: 10,
+        maxRestarts: 3,
+      },
+    });
+  });
+
+  it('подсекция crashLoop заполняется дефолтами, когда не задана', () => {
+    expect(recoveryConfigSchema.parse({ autoResume: false }).crashLoop).toEqual({
+      windowMinutes: 10,
+      maxRestarts: 3,
+    });
+  });
+
+  it('autoResume=false допустим (мастер-выключатель)', () => {
+    expect(recoveryConfigSchema.parse({ autoResume: false }).autoResume).toBe(false);
+  });
+
+  it('нулевые и отрицательные бюджеты отклоняются', () => {
+    expect(recoveryConfigSchema.safeParse({ maxAttempts: 0 }).success).toBe(false);
+    expect(recoveryConfigSchema.safeParse({ maxAttempts: -1 }).success).toBe(false);
+    expect(
+      recoveryConfigSchema.safeParse({ crashLoop: { windowMinutes: 0 } }).success,
+    ).toBe(false);
+    expect(
+      recoveryConfigSchema.safeParse({ crashLoop: { maxRestarts: 0 } }).success,
+    ).toBe(false);
+  });
+
+  it('дробные значения отклоняются', () => {
+    expect(recoveryConfigSchema.safeParse({ maxAttempts: 1.5 }).success).toBe(false);
+    expect(
+      recoveryConfigSchema.safeParse({ crashLoop: { windowMinutes: 2.5 } }).success,
+    ).toBe(false);
   });
 });
 

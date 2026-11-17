@@ -992,6 +992,30 @@ export const backgroundConfigSchema = z.object({
   retentionDays: z.number().int().default(7),
 });
 
+// --- Автовосстановление прерванных ходов (PROP-142 §3) ---
+
+/**
+ * Секция `recovery` — бюджет автовосстановления прерванных ходов после
+ * рестарта инстанса (PROP-142 §3).
+ *
+ * - `autoResume` — мастер-выключатель автовосстановления: при `false` инстанс
+ *   не возобновляет прерванные ходы сам (деградация к «терминализировать»);
+ * - `maxAttempts` — максимум автовосстановлений **одного хода**: превышен →
+ *   ход терминализируется (`failed`), владельцу уходит уведомление;
+ * - `crashLoop.windowMinutes` — окно детекта crash-loop (минуты);
+ * - `crashLoop.maxRestarts` — сколько рестартов в окне считаются crash-loop'ом.
+ *
+ * Решение владельца (2026-11-18): «попытки на ход + детект crash-loop».
+ */
+export const recoveryConfigSchema = z.object({
+  autoResume: z.boolean().default(true),
+  maxAttempts: z.number().int().min(1).default(3),
+  crashLoop: z.object({
+    windowMinutes: z.number().int().min(1).default(10),
+    maxRestarts: z.number().int().min(1).default(3),
+  }).prefault({}),
+});
+
 // --- Агенты: предохранители прогонов ---
 
 /**
@@ -2061,6 +2085,7 @@ export const synthConfigSchema = z.object({
   ssh: sshConfigSchema.prefault({}),
   questions: questionsConfigSchema.prefault({}),
   background: backgroundConfigSchema.prefault({}),
+  recovery: recoveryConfigSchema.prefault({}),
   agents: agentsConfigSchema.prefault({}),
   limits: limitsConfigSchema.prefault({}),
   attachments: attachmentsConfigSchema.prefault({}),
@@ -2131,6 +2156,8 @@ export type SshConfig = z.infer<typeof sshConfigSchema>;
 export type QuestionsConfig = z.infer<typeof questionsConfigSchema>;
 /** Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых прогонов). */
 export type BackgroundConfig = z.infer<typeof backgroundConfigSchema>;
+/** PROP-142 §3: секция `recovery` (бюджет автовосстановления прерванных ходов). */
+export type RecoveryConfig = z.infer<typeof recoveryConfigSchema>;
 /** Секция `agents` — предохранители прогонов агентов. */
 export type AgentsConfig = z.infer<typeof agentsConfigSchema>;
 /** ADR-115: секция `attachments` (лимиты и политика вложений сообщений). */

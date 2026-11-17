@@ -30,6 +30,18 @@ export type {
 export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } from './sessions/ephemeral.js';
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';
+// PROP-142 §3: бюджет автовосстановления прерванных ходов (попытки + crash-loop).
+export {
+  evaluateRecovery,
+  recordRecoveryAttempt,
+  resetRecoveryState,
+  MAX_RECOVERY_ATTEMPT_MARKERS,
+} from './sessions/recovery.js';
+export type {
+  RecoveryBudgetConfig,
+  RecoveryDecision,
+  RecoveryDenyReason,
+} from './sessions/recovery.js';
 export {
   EventBus, INSTANCE_EVENT_CHANNEL,
   // ADR-118: адресная доставка (`recipient`), нумерация событий (`eventSeq`),
