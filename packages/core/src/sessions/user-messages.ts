@@ -43,6 +43,10 @@ export function isServiceUserMessage(message: ClassifiableUserMessage): boolean 
   // PROP-141 (Часть D): уведомление о переносе сессии между проектами —
   // служебное сообщение системы, а не реплика человека.
   if (meta?.type === 'session_moved') return true;
+  // PROP-143: durable-запись причины остановки хода — служебное сообщение
+  // системы (автор `System`), а не реплика человека: авто-тайтл, счётчики
+  // диалога и интервью её не считают.
+  if (meta?.type === 'execution_stopped') return true;
   if (message.author === 'Scheduler') return true;
   return false;
 }
@@ -50,7 +54,8 @@ export function isServiceUserMessage(message: ClassifiableUserMessage): boolean 
 /**
  * Служебное user-сообщение, **не открывающее свой ход**: приходит в историю
  * внутри чужого хода (вложение тула, ADR-115) или вовсе без хода
- * (уведомление о переносе сессии, PROP-141 — ход не запускается).
+ * (уведомление о переносе сессии, PROP-141 — ход не запускается; запись
+ * причины остановки хода, PROP-143 — свой ход уже закрыт).
  *
  * Такое сообщение не сдвигает границу хода (`engine/context/disabled-turns.ts`)
  * и не становится границей автора в статистике (`sessions/stats.ts`).
@@ -58,7 +63,9 @@ export function isServiceUserMessage(message: ClassifiableUserMessage): boolean 
 export function isNonTurnServiceUserMessage(message: ClassifiableUserMessage): boolean {
   if (!isServiceUserMessage(message)) return false;
   const meta = message.metadata;
-  return meta?.source === 'tool-attachment' || meta?.type === 'session_moved';
+  return meta?.source === 'tool-attachment'
+    || meta?.type === 'session_moved'
+    || meta?.type === 'execution_stopped';
 }
 
 /** Реплика пользователя диалога: `role: 'user'` и не служебное сообщение. */

@@ -6,7 +6,8 @@
  * таксономию, что и QueueProcessor основной сессии:
  *   recoverable   — network_error, timeout, rate_limit, server_error, unknown
  *   unrecoverable — auth_error, remote_auth_expired, model_not_found,
- *                   context_length, provider_not_found, no_user_query
+ *                   context_length, provider_not_found, no_user_query,
+ *                   quota_exceeded
  */
 import { ContextLengthExceededError, RemoteAuthExpiredError } from '../providers/exceptions.js';
 import { RemoteError } from '../remote/types.js';
@@ -21,6 +22,18 @@ export function classifyLlmError(errMsg: string): string {
   // openai: `Bad request: {"detail":"no user query found in messages"}`,
   // ollama: `Ollama bad request: ...`). Это тупик tool-цепочки, не ретраится.
   if (lower.includes('no user query found in messages')) return 'no_user_query';
+  // Квота/биллинг провайдера (PROP-143 §5): исчерпан лимит тарифа — повтор
+  // не помогает, нужен другой план/ключ. Проверка ДО `rate_limit`: тексты
+  // вида «billing limit reached» иначе ушли бы в rate_limit, а
+  // «insufficient_quota» — в unknown (recoverable) с бесполезными ретраями.
+  if (
+    lower.includes('insufficient_quota')
+    || lower.includes('exceeded your current quota')
+    || lower.includes('quota exceeded')
+    || lower.includes('billing')
+  ) {
+    return 'quota_exceeded';
+  }
   if (lower.includes('rate') || lower.includes('limit') || lower.includes('429')) return 'rate_limit';
   if (lower.includes('abort') || lower.includes('operation was aborted')) return 'timeout';
   if (lower.includes('timeout') || lower.includes('timed out')) return 'timeout';
@@ -69,6 +82,10 @@ export function classifyLlmErrorFor(error: unknown): string {
 const UNRECOVERABLE_TYPES = [
   'auth_error', 'remote_auth_expired', 'model_not_found', 'context_length',
   'provider_not_found', 'validation', 'no_user_query',
+  // Квота провайдера: лимит тарифа исчерпан, повтор всё равно откажет
+  // (PROP-143 §5). Тип невосстановим **по списку типов**, а не по
+  // подстрочной проверке — текст ошибки у разных провайдеров разный.
+  'quota_exceeded',
 ];
 
 /**
@@ -114,8 +131,8 @@ export const MAX_DOOM_LOOP_COUNT = 3;
 
 /**
  * Восполняемая ли ошибка провайдера (можно ретраить): network/timeout/
- * rate_limit/server_error — да; auth/model_not_found/context_length —
- * нет. Приоритеты:
+ * rate_limit/server_error — да; auth/model_not_found/context_length/
+ * quota_exceeded — нет. Приоритеты:
  *   1. ContextLengthExceededError (по классу) — невосполнима.
  *   2. Явно переданный `errorType` из UNRECOVERABLE_TYPES — невосполнима.
  *   3. `errorType === 'server_error'` — ВОССТАНОВИМА: серверный отказ (5xx либо

@@ -104,6 +104,42 @@ describe('Классификация user-сообщений: срабатыва
 });
 
 /**
+ * PROP-143: причина остановки хода попадает в историю как `role: 'user'`
+ * (автор — системный `System`, маркер `metadata.type === 'execution_stopped'`),
+ * но это **служебное** сообщение: репликой человека оно не считается
+ * (авто-тайтл, статистика автора, границы хода).
+ */
+describe('Классификация user-сообщений: причина остановки хода (PROP-143)', () => {
+  it('execution_stopped — служебное сообщение, а не реплика человека', () => {
+    const message = makeMessage({
+      role: MessageRole.USER,
+      author: 'System',
+      metadata: {
+        type: 'execution_stopped',
+        reason: 'provider_error',
+        error_type: 'quota_exceeded',
+      },
+    });
+
+    expect(isServiceUserMessage(message)).toBe(true);
+    // Служебное, но свой ход не открывает — границей автора/хода не становится.
+    expect(isNonTurnServiceUserMessage(message)).toBe(true);
+    expect(isUserDialogueMessage(message)).toBe(false);
+  });
+
+  it('контроль: обычное user-сообщение — реплика диалога', () => {
+    const message = makeMessage({
+      role: MessageRole.USER,
+      content: 'посчитай до трёх',
+    });
+
+    expect(isServiceUserMessage(message)).toBe(false);
+    expect(isNonTurnServiceUserMessage(message)).toBe(false);
+    expect(isUserDialogueMessage(message)).toBe(true);
+  });
+});
+
+/**
  * PROP-141 (Часть D): уведомление о переносе сессии между проектами попадает
  * в историю как `role: 'user'` (автор — системный `Session`), но это
  * **служебное** сообщение: репликой человека оно не считается (авто-тайтл,

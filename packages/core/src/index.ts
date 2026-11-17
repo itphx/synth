@@ -270,6 +270,11 @@ export type { ExecutionEnvironmentKind } from './engine/context/index.js';
 
 export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult, ModelPricing, PermissionGrantTrigger } from './engine/orchestrator.js';
+// PROP-143: причина остановки хода — нормализованный код, конверт и
+// durable-запись служебного сообщения в истории (точки записи подключают
+// модуль позже).
+export { STOP_MESSAGE_TYPE, renderStopEnvelope, buildStopRecord } from './engine/stop-reason.js';
+export type { StopReason, StopRecordInput } from './engine/stop-reason.js';
 export { runSubagentResume, validateSubagentResume, SubagentResumeError } from './engine/tools/task-resume.js';
 export type { SubagentResumeDeps, SubagentResumeOptions, SubagentResumeResult, SubagentResumeErrorCode } from './engine/tools/task-resume.js';
 export { SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS } from './engine/tools/task.js';

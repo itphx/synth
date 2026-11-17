@@ -108,6 +108,8 @@ export function errorTypeI18n(
     case 'timeout': return i18nMeta('router.timeout');
     case 'network_error': return i18nMeta('router.network_error');
     case 'rate_limit': return i18nMeta('router.rate_limit_exceeded');
+    // PROP-143 §5: квота/биллинг провайдера — повтор не помогает.
+    case 'quota_exceeded': return i18nMeta('router.quota_exceeded');
     case 'context_length': return i18nMeta('router.context_length_exceeded');
     case 'no_user_query': return i18nMeta('router.no_user_query');
     case 'remote_auth_expired': return i18nMeta('router.remote_auth_expired');

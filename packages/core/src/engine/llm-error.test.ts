@@ -59,6 +59,29 @@ describe('classifyLlmError — единая таксономия типов', ()
   });
 });
 
+describe('classifyLlmError — квота провайдера (PROP-143 §5)', () => {
+  it('признаки квоты/биллинга → quota_exceeded', () => {
+    expect(classifyLlmError('insufficient_quota')).toBe('quota_exceeded');
+    expect(classifyLlmError('You exceeded your current quota')).toBe('quota_exceeded');
+    expect(classifyLlmError('Quota exceeded for this account')).toBe('quota_exceeded');
+    expect(classifyLlmError('Billing issue — check your plan')).toBe('quota_exceeded');
+  });
+
+  it('квота невосстановима — без бесполезных ретраев', () => {
+    const msg = 'insufficient_quota';
+    const type = classifyLlmError(msg);
+    expect(type).toBe('quota_exceeded');
+    // Невосстановимость — по ТИПУ (UNRECOVERABLE_TYPES), а не по подстрочной
+    // проверке: текст ошибки у провайдеров разный.
+    expect(isLlmErrorRecoverable(new Error(msg), msg, type)).toBe(false);
+  });
+
+  it('rate limit остаётся rate_limit (квота не съедает соседний тип)', () => {
+    expect(classifyLlmError('rate limit exceeded')).toBe('rate_limit');
+    expect(classifyLlmError('429 Too Many Requests')).toBe('rate_limit');
+  });
+});
+
 describe('isLlmErrorRecoverable — серверный сбой в 400-обёртке', () => {
   const gateway400 =
     'Bad request: {"detail":"Internal Server Error (request_id: 52993302-6b57-4e69-983e-244315f0ca3d)"}';
@@ -224,7 +247,7 @@ describe('isLlmErrorRecoverable — объединённый набор патт
 
 describe('isLlmErrorRecoverable — приоритет errorType', () => {
   // errorType из UNRECOVERABLE_TYPES -> false, даже если текст их не содержит.
-  it.each(['context_length', 'auth_error', 'remote_auth_expired', 'model_not_found', 'provider_not_found', 'validation', 'no_user_query'])(
+  it.each(['context_length', 'auth_error', 'remote_auth_expired', 'model_not_found', 'provider_not_found', 'validation', 'no_user_query', 'quota_exceeded'])(
     'errorType=%s → false даже без совпадения по тексту',
     (type) => {
       expect(isLlmErrorRecoverable(new Error('argle bargle'), 'argle bargle', type)).toBe(false);

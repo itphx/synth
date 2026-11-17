@@ -434,6 +434,9 @@ export const SYSTEM_MESSAGES = {
   'router.escalation': 'Escalated to {provider}/{model}: {reason}',
   'router.context_length_exceeded': 'Context window exceeded',
   'router.rate_limit_exceeded': 'Request rate limit exceeded',
+  // Квота/биллинг провайдера (PROP-143 §5): повтор не помогает — лимит
+  // тарифа исчерпан, нужен другой план/ключ.
+  'router.quota_exceeded': 'Provider quota exceeded (billing/plan limit)',
   'router.no_user_query':
     'The model could not process the tool-call chain (the original user query was lost). Try again, reduce the number of tools, or increase the model context window.',
   // Гибрид (ADR-042): токена к серверу нет — чаще всего истекла серверная
@@ -444,6 +447,20 @@ export const SYSTEM_MESSAGES = {
   // текстовых путей (`classifyLlmError` = `auth_error`).
   'router.remote_auth_expired':
     'The server session has expired — sign in to hybrid mode again (authentication required)',
+
+  // --- Остановка хода: тело durable-записи причины (PROP-143 §1) ---
+  // Локализованный текст используется, когда у провайдера нет своего текста
+  // ошибки (лимит шага, бюджет контекста, рестарт, потеря прогона).
+  // Формулировки **нейтральны к типу сессии**: запись причины остановки
+  // может лежать и в основной сессии, где шаблоны `task.*`/`session.*`
+  // (про сабагента/отчёт модели) были бы неверны.
+  'stop.steps_limit': 'Execution stopped at the step limit ({limit})',
+  'stop.context_budget': 'Execution stopped by the context budget ({tokens} tokens, steps: {steps})',
+  'stop.stopped_by_user': 'Execution stopped by the user',
+  'stop.denied': 'Execution stopped: the tool execution request was denied',
+  'stop.restarted': 'Execution was interrupted by an instance restart',
+  'stop.orphaned': 'Execution was lost: the run no longer exists',
+  'stop.internal': 'Execution stopped by an internal error',
 
   // --- Quality check (ADR-034) ---
   'qc.min_length_ok': 'Response length {length} >= {min}',
