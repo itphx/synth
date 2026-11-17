@@ -4,6 +4,29 @@
 export { FileStore } from './storage/file-store.js';
 export type { StorageConfig } from './storage/file-store.js';
 export { SessionManager } from './sessions/manager.js';
+// PROP-141 (Часть D): единая модель переноса сессии между проектами.
+export {
+  SessionMoveService,
+  SessionMoveError,
+  attachedStateDetails,
+  hasAttachedStateBlockers,
+  summarizeAttachedState,
+} from './sessions/move-service.js';
+export type {
+  AttachedState,
+  AttachedStateEntry,
+  AttachedStateGroup,
+  AttachedStateKind,
+  SessionMoveConsent,
+  SessionMoveEffect,
+  SessionMoveEffectAction,
+  SessionMoveEffectKind,
+  SessionMoveErrorCode,
+  SessionMoveRequest,
+  SessionMoveResult,
+  SessionMoveScheduleStore,
+  SessionMoveServiceDeps,
+} from './sessions/move-service.js';
 export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } from './sessions/ephemeral.js';
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';

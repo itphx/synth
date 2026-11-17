@@ -16,6 +16,8 @@ import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@i
 // env/CLI выше — их разрешает `resolveExecutionConfig`, ADR-023).
 import { applyExecutionRuntimeSettings } from '@itphx/synth-shared/config';
 import { serializeMessage } from '../serialize.js';
+// PROP-141 (Часть D): сервис переноса сессии между проектами (единый шов).
+import { SessionMoveService } from '../../sessions/move-service.js';
 import type { InstanceRuntimeMeta } from '../../engine/instance/meta.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 
@@ -537,6 +539,9 @@ export async function createStandaloneDeps(
   // Сервис таймеров собирается ниже (после ingress'а), поэтому ссылка
   // late-bound: шов один — `SessionManager.deleteSession` (инвариант 16).
   const timerServiceRef: { service?: TimerService } = {};
+  // PROP-141 (Часть D): сервис переноса сессии — тоже late-bound (собирается
+  // после движка таймеров, а оркестратор/extra тулов читают его на лету).
+  const moveServiceRef: { service?: SessionMoveService } = {};
   const sessionManager = new SessionManager(fileStore, {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
     projectStore,
@@ -1840,6 +1845,9 @@ export async function createStandaloneDeps(
     // ADR-051: late-bound резолвер активности расписания в сессии (ScheduleStore
     // создаётся ниже) — включает статический блок `Scheduler` в промпт.
     isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
+    // PROP-141 (Часть D): сервис переноса сессии (late-bound — собирается
+    // после движка таймеров) → extra тулов `project_attach`/`project_create`.
+    getMoveService: () => moveServiceRef.service,
     // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — тул
     // `question` задаёт вопрос и ждёт ответа пользователя.
     ...(questionService ? { questionService } : {}),
@@ -2564,6 +2572,31 @@ export async function createStandaloneDeps(
     });
   }
 
+  // PROP-141 (Часть D): сервис переноса сессии между проектами — единый шов
+  // для HTTP-роута `PATCH /sessions/:id { project_id }` и агентских
+  // `project_attach`/`project_create`.
+  //
+  // Зависимости — те же инстансы, что у остального контура: реестр фоновых
+  // прогонов (порт), сервис фоновых прогонов, сервис шелл-процессов, сервис
+  // терминалов, движок таймеров, реестр таймеров, реестр расписаний, признак
+  // активного хода, шина событий и журнал аудита.
+  const moveService = storageDegraded
+    ? undefined
+    : new SessionMoveService({
+        sessionManager,
+        backgroundRuns: storageContext.backgroundRuns,
+        ...(backgroundService ? { backgroundService } : {}),
+        ...(processService ? { processService } : {}),
+        terminalService,
+        ...(timerService ? { timerService } : {}),
+        timers: storageContext.timers,
+        scheduleStore,
+        isTurnActive: isBackgroundTurnActive,
+        eventBus,
+        ...(securityAudit ? { audit: securityAudit } : {}),
+      });
+  moveServiceRef.service = moveService;
+
   // ADR-101/ADR-051: шедулер появился — отдаём его тулам `schedule_*`
   // через рантайм автоматизации (late-bound).
   automationRuntime.scheduler = schedulerService;
@@ -2664,6 +2697,9 @@ export async function createStandaloneDeps(
     // PROP-132 (Ф3в): сервис терминалов инстанса (один на процесс) + его
     // остановка на graceful shutdown (`dispose()` закрывает живые терминалы).
     terminalService,
+    // PROP-141 (Часть D): сервис переноса сессии между проектами (роуты
+    // `PATCH /sessions/:id { project_id }`).
+    moveService,
     stopTerminalService: () => terminalService.dispose(),
     // PROP-136b (слайс 136b-2a): зеркальный чекер команд — возвращается для
     // тестов/UI (провайдер уже передан оркестратору).

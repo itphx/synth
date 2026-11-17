@@ -24,7 +24,7 @@ import { localEntries, remoteEntries, sortHybridList, sliceRemoteMessages } from
 import type { HybridListEntry } from './hybrid-list.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
-import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
+import { requireScope, checkServiceProjectProjection, getServiceCredential } from '../service-scope.js';
 import { resolveAgentRoleAlias } from '../../engine/agents/migrations.js';
 import { resolveUserPrincipal } from '../../engine/authority/principal.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
@@ -100,6 +100,14 @@ import type { Part } from '@itphx/synth-shared';
 // принимает решение через тот же реестр подтверждений.
 import type { ApprovalRegistry, PendingApproval } from '../../engine/permission/approval.js';
 import type { AuthorityPrincipal } from '@itphx/synth-shared';
+// PROP-141 (Часть D): единая модель переноса сессии между проектами —
+// сервис (единственный шов: блокеры, согласие, порядок эффектов).
+import {
+  SessionMoveError,
+  type SessionMoveConsent,
+  type SessionMoveResult,
+  type SessionMoveService,
+} from '../../sessions/move-service.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -332,6 +340,15 @@ export interface SessionRoutesDeps {
    * Не задан — поле `worktreeId` в PATCH игнорируется (привязка недоступна).
    */
   worktreeService?: WorktreeService;
+  /**
+   * PROP-141 (Часть D): единая модель переноса сессии между проектами.
+   *
+   * Сервис — единственный шов: проверка блокеров, разбор согласия
+   * (`move_consent`), детерминированный порядок эффектов и перенос поддерева
+   * сессий. Не задан (деградированный инстанс) — смена проекта выполняется
+   * прежним путём (под локом, без проверки привязанного состояния).
+   */
+  moveService?: SessionMoveService;
   /**
    * ADR-115: вложения сообщений — blob-хранилище, учёт ссылок и лимиты
    * (`POST /:id/attachments`, `GET /:id/attachments/:partId`,
@@ -776,6 +793,29 @@ function isTurnActive(session: Session, queueManager: QueueProcessorManager): bo
 }
 
 /**
+ * PROP-141 (Часть D): разбор согласия на последствия переноса сессии.
+ *
+ * Флаги явные: «согласиться на всё» одним `force` нельзя. Необъектное
+ * значение — `'invalid'` (роут отвечает 400), `undefined`/`null` — согласия
+ * нет (перенос без согласия блокируется при блокерах).
+ */
+function parseMoveConsent(raw: unknown): SessionMoveConsent | 'invalid' | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const value = raw as Record<string, unknown>;
+  const result: SessionMoveConsent = {};
+  if (value.stop_running !== undefined) {
+    if (typeof value.stop_running !== 'boolean') return 'invalid';
+    result.stop_running = value.stop_running;
+  }
+  if (value.cancel_automations !== undefined) {
+    if (typeof value.cancel_automations !== 'boolean') return 'invalid';
+    result.cancel_automations = value.cancel_automations;
+  }
+  return result;
+}
+
+/**
  * PROP-132: снять контекст терминала из очереди инъекций (`steerInbox`).
  *
  * Контекст ставится в `steerInbox` **первым** (ADR-104), вопрос — следом. Если
@@ -1000,6 +1040,64 @@ export function createSessionRoutes(
   // ADR-052 (этап I): scope-гейты service-key и проектная проекция сессии.
   const scoped = opts.scopeGuard ?? requireScope;
   const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
+
+  /**
+   * ADR-114 §5.2: резолв записи worktree для привязки сессии.
+   *
+   * Запись чужого проекта выглядит как отсутствующая (существование не
+   * выдаётся). Резолв вынесен из тела PATCH: при переносе проекта запись
+   * ищется **до** переноса (проект-цель известен из запроса), иначе неудачная
+   * привязка откатила бы уже выполненный перенос.
+   */
+  const resolveWorktreeBinding = async (
+    projectId: string | undefined,
+    worktreeId: string,
+  ): Promise<
+    | { binding: SessionWorktree }
+    | { error: { status: 400 | 404 | 409; code: string; message: string } }
+  > => {
+    if (!projectId) {
+      return {
+        error: {
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'Привязать worktree можно только сессии с проектом',
+        },
+      };
+    }
+    if (!deps.worktreeService) {
+      return {
+        error: {
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'Привязка к worktree в этом инстансе недоступна',
+        },
+      };
+    }
+    const summaries = await deps.worktreeService.list(projectId);
+    const found = summaries.find((item) => item.id === worktreeId);
+    if (!found) {
+      return { error: { status: 404, code: 'WORKTREE_NOT_FOUND', message: 'Worktree не найден' } };
+    }
+    if (found.exists === false) {
+      return {
+        error: {
+          status: 409,
+          code: 'WORKTREE_DIRECTORY_MISSING',
+          message: `Каталог worktree не найден: ${found.directory}`,
+        },
+      };
+    }
+    return {
+      binding: {
+        worktreeId: found.id,
+        projectId: found.projectId,
+        ...(found.repoPath !== undefined ? { repoPath: found.repoPath } : {}),
+        directory: found.directory,
+        branch: found.branch,
+      },
+    };
+  };
 
   /**
    * ADR-126 §2: рабочий каталог сессии для `@file` — привязанный git-worktree
@@ -1555,6 +1653,16 @@ export function createSessionRoutes(
         return c.json({ error: { code: 'REMOTE_UNAVAILABLE', message: 'Гибридный режим не настроен' } }, 502);
       }
       const body = await c.req.json().catch(() => ({}));
+      // PROP-141 (Часть D): перенос удалённой сессии не поддерживается —
+      // удалённый backend решает это сам, локальный контур не переносит.
+      if (body.project_id !== undefined || body.projectId !== undefined) {
+        return c.json({
+          error: {
+            code: 'SESSION_MOVE_REMOTE_UNSUPPORTED',
+            message: 'Сессия удалённого инстанса не переносится между проектами',
+          },
+        }, 409);
+      }
       try {
         const updated = (await remoteClient.updateSession(toLocalId(id), body)) as Record<string, unknown>;
         return c.json(toRemote(updated));
@@ -1669,8 +1777,9 @@ export function createSessionRoutes(
     }
 
     // ADR-040: перенос сессии между проектами (project_id). Валидируем существование
-    // нового проекта и публикуем session.moved при фактической смене проекта.
-    // (Валидация/авторизация — по предварительному чтению; сама мутация — под локом ниже.)
+    // нового проекта; сама мутация — единым шовом `SessionMoveService` (PROP-141,
+    // Часть D): блокеры, согласие, детерминированный порядок эффектов.
+    // (Валидация/авторизация — по предварительному чтению.)
     const projectParam = body.project_id ?? body.projectId;
     if (projectParam !== undefined) {
       if (projectParam) {
@@ -1727,6 +1836,79 @@ export function createSessionRoutes(
       }, 400);
     }
 
+    // PROP-141 (Часть D): перенос сессии между проектами — единый шов.
+    //
+    // Порядок: 1) согласие (`move_consent`) — даёт только человек; 2) привязка
+    // к worktree резолвится ДО переноса (проект-цель известен из запроса — иначе
+    // неудачная привязка откатила бы уже выполненный перенос); 3) сам перенос.
+    //
+    // Без согласия при блокерах — 409 `SESSION_HAS_ATTACHED_STATE` с `details`
+    // (counts + компактный список `{id, kind, name}`).
+    let moveResult: SessionMoveResult | null = null;
+    let preResolvedWorktree: SessionWorktree | undefined;
+    let prevProjectBeforeMove: string | undefined;
+    if (projectParam !== undefined) {
+      const targetProjectId = projectParam || undefined;
+      if (targetProjectId !== session.projectId) {
+        // 1. Согласие: service-key согласие не даёт (403).
+        const consentRaw = (body as { move_consent?: unknown; moveConsent?: unknown }).move_consent
+          ?? (body as { moveConsent?: unknown }).moveConsent;
+        const consent = parseMoveConsent(consentRaw);
+        if (consent === 'invalid') {
+          return c.json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'move_consent должен быть объектом с полями stop_running/cancel_automations',
+            },
+          }, 400);
+        }
+        if (consent && getServiceCredential(c)) {
+          return c.json({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'Согласие на последствия переноса даёт только человек',
+            },
+          }, 403);
+        }
+        // 2. Привязка к worktree — резолвим до переноса.
+        if (worktreeRequest?.kind === 'bind') {
+          const resolved = await resolveWorktreeBinding(targetProjectId, worktreeRequest.id);
+          if ('error' in resolved) {
+            return c.json(
+              { error: { code: resolved.error.code, message: resolved.error.message } },
+              resolved.error.status as 400 | 404 | 409,
+            );
+          }
+          preResolvedWorktree = resolved.binding;
+        }
+        // 3. Перенос — единый шов. Сервиса нет (деградированный инстанс) —
+        // смена проекта выполняется прежним путём (под локом, без проверки
+        // привязанного состояния): перенос остаётся доступным.
+        if (deps.moveService) {
+          prevProjectBeforeMove = session.projectId;
+          try {
+            moveResult = await deps.moveService.move({
+              sessionId: id,
+              targetProjectId,
+              actor: (await resolveUserId(c)) || LOCAL_USER_ID,
+              ...(consent ? { consent } : {}),
+            });
+          } catch (err) {
+            if (err instanceof SessionMoveError) {
+              return c.json({
+                error: {
+                  code: err.code,
+                  message: err.message,
+                  ...(err.details ? { details: err.details } : {}),
+                },
+              }, err.status as 400 | 404 | 409);
+            }
+            throw err;
+          }
+        }
+      }
+    }
+
     // read-modify-write сессии — только под `SessionManager.withLock`: без лока
     // параллельные PATCH/clear/skills затирают правки друг друга (lost update —
     // победитель сохраняет свой снапшот целиком). Внутри лока сессия перечитывается.
@@ -1778,6 +1960,11 @@ export function createSessionRoutes(
       if (worktreeRequest?.kind === 'unbind') {
         worktreeUnbind = true;
       } else if (worktreeRequest?.kind === 'bind') {
+        if (preResolvedWorktree) {
+          // Перенос проекта уже выполнен — запись worktree разрешена до него
+          // (проект-цель известен), резолвить заново не нужно.
+          worktreeBinding = preResolvedWorktree;
+        } else {
         const targetProjectId = session.projectId;
         if (!targetProjectId) {
           worktreeError = {
@@ -1815,6 +2002,7 @@ export function createSessionRoutes(
               branch: found.branch,
             };
           }
+        }
         }
       }
       if (worktreeError) {
@@ -1937,6 +2125,18 @@ export function createSessionRoutes(
     // (статус записи attached/detached) → событие в каналы сессий проекта.
     for (const event of worktreeEvents) {
       await publishWorktreeUpdated({ eventBus, sessionStore: sessionManager }, event);
+    }
+    // PROP-141 (Часть D): перенос сессии снял привязку к worktree (ADR-114 §3.4)
+    // — инвентарь **старого** проекта изменился, событие публикует сервис
+    // переноса через effects (сам `worktree.updated` — здесь).
+    if (moveResult && prevProjectBeforeMove) {
+      for (const effect of moveResult.effects) {
+        if (effect.kind !== 'worktree' || effect.action !== 'detached') continue;
+        await publishWorktreeUpdated(
+          { eventBus, sessionStore: sessionManager },
+          { projectId: prevProjectBeforeMove, worktreeId: effect.id, action: 'detached' },
+        );
+      }
     }
     // Точечный ответ — сводка без истории (история — в `GET /:id/messages`).
     // ADR-119: `context_usage` — занятость контекста «прямо сейчас».

@@ -298,6 +298,7 @@ export const SYSTEM_MESSAGES = {
   'project.read_error': 'Error: failed to read the project',
   'project.not_found': 'Project {id} not found',
   'project.attached': 'Session attached to project "{name}".',
+  'project.move_blocked': 'Error: the session has attached state ({details}). Stop the running resources and automations, then retry the attach.',
   'project.log_no_project': 'No project: the log is available only within a project',
   'project.log_save_error': 'Error saving the project log: {error}',
   'project.log_added': 'Log entry added. Total entries: {count}.',

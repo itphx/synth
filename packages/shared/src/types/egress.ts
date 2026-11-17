@@ -134,11 +134,17 @@ export interface EgressRequestLogEntry {
  * (`members`/`group_members`/`everyone_role`).
  * `timer` (PROP-141, Часть B) — создание/правка/снятие таймера и будильника
  * и ошибка его срабатывания.
+ * `session` (PROP-141, Часть D) — перенос сессии между проектами (смена
+ * «дома» сессии с последствиями для её ресурсов).
  */
-export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'projects', 'limits', 'permission', 'ssh', 'timer'] as const;
+export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'projects', 'limits', 'permission', 'ssh', 'timer', 'session'] as const;
 export type SecurityAuditScope = (typeof SECURITY_AUDIT_SCOPES)[number];
 
-export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke', 'create', 'remove', 'fire'] as const;
+/**
+ * Действия аудита. `move` (PROP-141, Часть D) — перенос сессии между
+ * проектами.
+ */
+export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke', 'create', 'remove', 'fire', 'move'] as const;
 export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];
 
 /**

@@ -363,6 +363,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     deps.commandAuditLog,
     // ADR-126 §5: реестр скриптов для сессии без проекта — default workspace.
     defaultWorkingDir,
+    // PROP-141 (Часть D): сервис переноса сессии между проектами (единый шов:
+    // блокеры, согласие `move_consent`, порядок эффектов).
+    deps.moveService,
   ));
 
   // Messages routes

@@ -78,6 +78,8 @@ import {
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader, SharedLeader,
   // PROP-141 (Часть B): движок таймеров/будильников + правило маршрутизации.
   TimerService, TimerRuleProvider, TIMER_EVENT_SOURCE, TIMER_EVENT_TYPE,
+  // PROP-141 (Часть D): сервис переноса сессии между проектами.
+  SessionMoveService,
   createExternalIdentityResolver,
   startEventJournalPruner,
   // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю + retention.
@@ -394,6 +396,9 @@ export async function createBackendDeps(
   // Сервис таймеров собирается ниже (после ingress'а), поэтому ссылка
   // late-bound: шов один — `SessionManager.deleteSession` (инвариант 16).
   const timerServiceRef: { service?: TimerService } = {};
+  // PROP-141 (Часть D): сервис переноса сессии — late-bound (собирается после
+  // движка таймеров, а оркестратор/extra тулов читают его на лету).
+  const moveServiceRef: { service?: SessionMoveService } = {};
   const sessionManager = new SessionManager(fileStore, {
     projectStore,
     hooks,
@@ -1728,6 +1733,9 @@ export async function createBackendDeps(
     // ADR-051: late-bound резолвер активности расписания в сессии (ScheduleStore
     // создаётся ниже) — включает статический блок `Scheduler` в промпт.
     isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
+    // PROP-141 (Часть D): сервис переноса сессии (late-bound — собирается
+    // после движка таймеров) → extra тулов `project_attach`/`project_create`.
+    getMoveService: () => moveServiceRef.service,
     // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
     // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
     // поэтому геттер отдаёт актуальный снимок в момент хода.
@@ -2437,6 +2445,26 @@ export async function createBackendDeps(
     });
   }
 
+  // PROP-141 (Часть D): сервис переноса сессии между проектами — единый шов
+  // для HTTP-роута `PATCH /sessions/:id { project_id }` и агентских
+  // `project_attach`/`project_create`.
+  const moveService = storageDegraded
+    ? undefined
+    : new SessionMoveService({
+        sessionManager,
+        backgroundRuns: storageContext.backgroundRuns,
+        ...(backgroundService ? { backgroundService } : {}),
+        ...(processService ? { processService } : {}),
+        terminalService,
+        ...(timerService ? { timerService } : {}),
+        timers: storageContext.timers,
+        scheduleStore,
+        isTurnActive: isBackgroundTurnActive,
+        eventBus,
+        ...(securityAudit ? { audit: securityAudit } : {}),
+      });
+  moveServiceRef.service = moveService;
+
   // ADR-101/ADR-051: шедулер появился — отдаём его тулам `schedule_*`
   // через рантайм автоматизации (late-bound).
   automationRuntime.scheduler = schedulerService;
@@ -2522,6 +2550,9 @@ export async function createBackendDeps(
     // остановка на graceful shutdown (`dispose()` закрывает живые терминалы).
     terminalService,
     stopTerminalService: () => terminalService.dispose(),
+    // PROP-141 (Часть D): сервис переноса сессии между проектами (роуты
+    // `PATCH /sessions/:id { project_id }`).
+    moveService,
     // PROP-136b (слайс 136b-2a): зеркальный чекер команд — для тестов/UI.
     commandPolicyProvider,
     // ADR-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.

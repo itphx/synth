@@ -39,6 +39,17 @@ import {
   ProjectInvariantsLimitExceededError,
 } from '../project/invariants-service.js';
 import { publishProjectUpdated } from '../project/events.js';
+// PROP-141 (Часть D): единая модель переноса сессии — блокеры, согласие и
+// порядок эффектов считает сервис (единственный шов), агентский путь только
+// сообщает о блокерах.
+import {
+  SessionMoveError,
+  hasAttachedStateBlockers,
+  summarizeAttachedState,
+  type AttachedState,
+  type SessionMoveEffect,
+  type SessionMoveService,
+} from '../../sessions/move-service.js';
 
 export interface ProjectManageExtra extends PrincipalExtra {
   sessionManager?: SessionManager;
@@ -53,7 +64,25 @@ export interface ProjectManageExtra extends PrincipalExtra {
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
   /** Workstream A1: клиент удалённого backend (гибрид) для attach-проверок. */
   getRemoteClient?: () => RemoteBackendClient | null;
+  /**
+   * PROP-141 (Часть D): сервис переноса сессии между проектами.
+   *
+   * Задан — перенос идёт через него (блокеры → отказ с подсказкой «останови
+   * ресурсы и повтори»). Не задан — прежнее поведение (перенос без проверки
+   * блокеров; в инстансах без сервиса переноса это осознанный остаток).
+   */
+  moveService?: SessionMoveService;
 }
+
+/**
+ * Итог привязки сессии к проекту.
+ *
+ * `ok: false` — перенос заблокирован привязанным состоянием (PROP-141,
+ * Часть D): запись сессии **не меняется**.
+ */
+export type AttachSessionOutcome =
+  | { ok: true; worktreeDetached: boolean; effects?: SessionMoveEffect[]; moved?: string[] }
+  | { ok: false; reason: 'blocked'; code: string; state: AttachedState };
 
 /** Извлекает зависимости для project_create / project_attach из ctx.extra. */
 export function getSessionExtra(ctx: ToolContext): ProjectManageExtra {
@@ -98,6 +127,10 @@ function workspaceErrorResult(code: string, message: string) {
  * старому проекту, а чужая привязка дала бы сессии каталог вне её проекта.
  * Факт снятия виден в событии `session.moved` (`worktree_detached`) и в ответе
  * тула (`worktree_detached` в metadata).
+ *
+ * PROP-141 (Часть D): если задан `moveService` — перенос идёт через него
+ * (единый шов): привязанное состояние сессии блокирует перенос, а согласие
+ * даёт только человек (агент его не даёт). Без сервиса — прежнее поведение.
  */
 export async function attachSessionToProject(
   sessionManager: SessionManager,
@@ -105,7 +138,32 @@ export async function attachSessionToProject(
   eventBus: EventBus | undefined,
   sessionId: string,
   projectId: string,
-): Promise<boolean> {
+  options?: { moveService?: SessionMoveService; actor?: string },
+): Promise<AttachSessionOutcome> {
+  const moveService = options?.moveService;
+  if (moveService) {
+    try {
+      const result = await moveService.move({
+        sessionId,
+        targetProjectId: projectId,
+        ...(options?.actor ? { actor: options.actor } : {}),
+      });
+      return {
+        ok: true,
+        worktreeDetached: result.effects.some(
+          (effect) => effect.kind === 'worktree' && effect.action === 'detached',
+        ),
+        effects: result.effects,
+        moved: result.moved,
+      };
+    } catch (err) {
+      if (err instanceof SessionMoveError && err.state) {
+        return { ok: false, reason: 'blocked', code: err.code, state: err.state };
+      }
+      throw err;
+    }
+  }
+
   let worktreeDetached = false;
   await sessionManager.withLock(sessionId, async (s) => {
     s.projectId = projectId;
@@ -122,7 +180,25 @@ export async function attachSessionToProject(
     project_id: projectId,
     ...(worktreeDetached ? { worktree_detached: true } : {}),
   });
-  return worktreeDetached;
+  return { ok: true, worktreeDetached };
+}
+
+/**
+ * Отказ привязки из-за привязанного состояния сессии (PROP-141, Часть D):
+ * агент получает подсказку «останови ресурсы и повтори» и список счётчиков.
+ * Запись сессии при этом **не меняется**.
+ */
+function moveBlockedResult(state: AttachedState) {
+  const details = summarizeAttachedState(state);
+  return {
+    content: sm('project.move_blocked', { details }),
+    isError: true as const,
+    metadata: {
+      i18n: i18nMeta('project.move_blocked', { details }),
+      blocked: true,
+      details,
+    },
+  };
 }
 
 const NO_PROJECT_LOG_ERROR = sm('project.log_no_project');
@@ -216,6 +292,16 @@ export const projectCreateTool: ToolDefinition = {
 
     const ownerId = session.ownerId || session.userId || 'local';
 
+    // PROP-141 (Часть D): проверка блокеров переноса — **до** создания
+    // проекта. Согласие даёт только человек, поэтому агент при живом
+    // привязанном состоянии отказывает и ничего не меняет.
+    if (extra.moveService) {
+      const state = await extra.moveService.preview(extra.sessionId).catch(() => null);
+      if (state && hasAttachedStateBlockers(state)) {
+        return moveBlockedResult(state);
+      }
+    }
+
     // ADR-075: нормализация + создание каталога workspace через общий provisioning
     // (та же политика/containment, что у HTTP-роута — обход политики закрыт).
     const resolved = await provisionWorkspace(
@@ -247,13 +333,20 @@ export const projectCreateTool: ToolDefinition = {
       };
     }
 
-    const worktreeDetached = await attachSessionToProject(
+    const attachOutcome = await attachSessionToProject(
       extra.sessionManager,
       extra.projectStore,
       extra.eventBus,
       extra.sessionId,
       project.id,
+      extra.moveService ? { moveService: extra.moveService, actor: ownerId } : undefined,
     );
+    if (!attachOutcome.ok) {
+      // Блокеры переноса (PROP-141, Часть D): проект уже создан, но сессия
+      // осталась в старом проекте — сообщаем агенту, что остановить.
+      return moveBlockedResult(attachOutcome.state);
+    }
+    const worktreeDetached = attachOutcome.worktreeDetached;
 
     const summary = {
       id: project.id,
@@ -494,15 +587,20 @@ export const projectAttachTool: ToolDefinition = {
       return attachResult(project, myRole, { sameProject: true });
     }
 
-    const worktreeDetached = await attachSessionToProject(
+    const attachOutcome = await attachSessionToProject(
       extra.sessionManager,
       extra.projectStore,
       extra.eventBus,
       extra.sessionId,
       project.id,
+      extra.moveService ? { moveService: extra.moveService, actor: userId } : undefined,
     );
+    if (!attachOutcome.ok) {
+      // PROP-141 (Часть D): блокеры переноса — запись сессии не меняется.
+      return moveBlockedResult(attachOutcome.state);
+    }
 
-    return attachResult(project, myRole, { worktreeDetached });
+    return attachResult(project, myRole, { worktreeDetached: attachOutcome.worktreeDetached });
   },
 };
 

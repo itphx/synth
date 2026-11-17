@@ -225,6 +225,9 @@ export function mountStandaloneRoutes(
       // ADR-114: сервис worktree — привязка сессии к worktree
       // (`PATCH /api/v2/sessions/:id { worktreeId }`).
       ...(deps.worktreeService ? { worktreeService: deps.worktreeService } : {}),
+      // PROP-141 (Часть D): сервис переноса сессии между проектами
+      // (`PATCH /api/v2/sessions/:id { project_id }`) — единый шов.
+      ...(deps.moveService ? { moveService: deps.moveService } : {}),
       // ADR-107: вкладка «Память» — агрегаты памяти сессии.
       ...(deps.storageContext
         ? {

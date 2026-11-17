@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
+import type { createMiddleware } from 'hono/factory';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
@@ -17,13 +18,18 @@ import {
   MemoryBackgroundRunRepository,
 } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
+// PROP-141 (Часть D): сервис переноса сессии между проектами.
+import { SessionMoveService } from '../../sessions/move-service.js';
 import { WorktreeService } from '../../engine/worktree/service.js';
 import { MemoryWorktreeRepository } from '../../storage/memory/worktrees.js';
 import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO, ProjectRole } from '@itphx/synth-shared';
-import type { ProfileStore, Project, Session } from '@itphx/synth-shared';
+import type { ProfileStore, Project, Session, BackgroundRunRecord } from '@itphx/synth-shared';
 
 const execFileAsync = promisify(execFile);
+
+/** Тип middleware (как в `createSessionRoutes`). */
+type Middleware = ReturnType<typeof createMiddleware>;
 
 /**
  * Страница списка сессий (`GET /api/v2/sessions`): контракт v2 — объект
@@ -122,7 +128,20 @@ function createTestApp(
     canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
   },
   requestSessionService?: unknown,
-  extraDeps?: Partial<SessionRoutesDeps>,
+  /**
+   * Доп. зависимости роутов. Объект — как есть; функция — получает собранные
+   * инстансы (нужно для сервисов, которые строятся вокруг них, напр. сервиса
+   * переноса сессии — PROP-141, Часть D).
+   */
+  extraDeps?:
+    | Partial<SessionRoutesDeps>
+    | ((ctx: {
+      sessionManager: SessionManager;
+      projectStore: ProjectStore;
+      eventBus: EventBus;
+    }) => Partial<SessionRoutesDeps>),
+  /** Middleware до регистрации роутов (напр. подстановка service-key). */
+  beforeRoutes?: Middleware,
 ) {
   const app = new Hono();
   const fileStore = new FileStore({ dataDir: tmpDir });
@@ -131,6 +150,10 @@ function createTestApp(
   const eventBus = new EventBus();
   const queueManager = createMockQueueManager();
   const orchestrator = createMockOrchestrator();
+
+  const resolvedExtraDeps = typeof extraDeps === 'function'
+    ? extraDeps({ sessionManager, projectStore, eventBus })
+    : extraDeps ?? {};
 
   const sessionRoutes = createSessionRoutes(
     createMockAuth(),
@@ -143,11 +166,12 @@ function createTestApp(
       projectStore,
       profilesStore,
       ...(requestSessionService ? { requestSessionService: requestSessionService as any } : {}),
-      ...(extraDeps ?? {}),
+      ...resolvedExtraDeps,
     },
     opts ?? {},
   );
 
+  if (beforeRoutes) app.use('*', beforeRoutes);
   app.route('/api/v2/sessions', sessionRoutes);
   return { app, sessionManager, projectStore, eventBus };
 }
@@ -2128,5 +2152,210 @@ describe('POST /api/v2/sessions/:id/prompt — принципал хода не�
     const updated = await sessionManager.getSession(session.id);
     const principal = updated?.pendingMessages[0]?.principal;
     expect(principal).toEqual({ kind: 'user', id: 'u1', roles: [], groups: [] });
+  });
+});
+
+/**
+ * PROP-141 (Часть D): перенос сессии между проектами через HTTP.
+ *
+ * Контракт: `PATCH /api/v2/sessions/:id { project_id }` — при блокерах 409
+ * `SESSION_HAS_ATTACHED_STATE` с `details` (counts + компактный список);
+ * повтор с `move_consent` — перенос; service-key с согласием — 403;
+ * удалённая (`remote:`) сессия — 409; `session.moved` несёт `effects`.
+ */
+describe('PATCH /api/v2/sessions/:id — перенос между проектами (PROP-141, Часть D)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-move-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Реестр фоновых прогонов (для блокеров и переатрибуции). */
+  function createRuns() {
+    return new MemoryBackgroundRunRepository();
+  }
+
+  /** Запись фонового прогона (упрощённая). */
+  function runningRun(sessionId: string, id = 'bgr_1'): BackgroundRunRecord {
+    return {
+      id,
+      kind: 'process',
+      status: 'running',
+      sessionId,
+      projectId: 'p1',
+      startedAt: nowISO(),
+      updatedAt: nowISO(),
+    };
+  }
+
+  /** Приложение с сервисом переноса сессии. */
+  function createMoveApp(options?: {
+    runs?: MemoryBackgroundRunRepository;
+    beforeRoutes?: Middleware;
+  }) {
+    const runs = options?.runs ?? createRuns();
+    const created = createTestApp(
+      tmpDir,
+      undefined,
+      undefined,
+      undefined,
+      ({ sessionManager, eventBus }) => ({
+        moveService: new SessionMoveService({
+          sessionManager,
+          eventBus,
+          backgroundRuns: runs,
+        }),
+      }),
+      options?.beforeRoutes,
+    );
+    return { ...created, runs };
+  }
+
+  it('без согласия при блокерах — 409 SESSION_HAS_ATTACHED_STATE с details', async () => {
+    const runs = createRuns();
+    const { app, sessionManager, projectStore } = createMoveApp({ runs });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const project = projectStore.create('Target', 'local');
+    await projectStore.save(project);
+    await sessionManager.withLock(session.id, async (s) => {
+      s.projectId = 'p1';
+      await sessionManager.updateSession(s);
+    });
+    await runs.save(runningRun(session.id));
+
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: project.id }),
+    });
+
+    expect(res.status).toBe(409);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('SESSION_HAS_ATTACHED_STATE');
+    expect(body.error.details.active_turn).toBe(false);
+    expect(body.error.details.processes.count).toBe(1);
+    expect(body.error.details.processes.items[0]).toMatchObject({ id: 'bgr_1', kind: 'process' });
+    // Запись не перенесена.
+    expect((await sessionManager.getSession(session.id))?.projectId).toBe('p1');
+  });
+
+  it('с move_consent — перенос выполнен, событие session.moved несёт effects', async () => {
+    const runs = createRuns();
+    const { app, sessionManager, projectStore, eventBus } = createMoveApp({ runs });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const project = projectStore.create('Target', 'local');
+    await projectStore.save(project);
+    await sessionManager.withLock(session.id, async (s) => {
+      s.projectId = 'p1';
+      await sessionManager.updateSession(s);
+    });
+
+    const moved: any[] = [];
+    eventBus.subscribe(session.id, (event) => {
+      if (event.type === 'session.moved') moved.push(event.data);
+    });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        move_consent: { stop_running: true, cancel_automations: true },
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect((await sessionManager.getSession(session.id))?.projectId).toBe(project.id);
+    expect(moved).toHaveLength(1);
+    expect(moved[0].project_id).toBe(project.id);
+    expect(Array.isArray(moved[0].effects)).toBe(true);
+    expect(moved[0].effects.some((e: any) => e.kind === 'session' && e.action === 'moved')).toBe(true);
+  });
+
+  it('service-key с move_consent — 403 (согласие даёт только человек)', async () => {
+    const serviceKeyMiddleware: Middleware = async (c, next) => {
+      c.set('serviceKey' as never, {
+        keyId: 'svk_1',
+        label: 'test',
+        roles: [],
+        scopes: ['sessions:prompt'],
+      } as never);
+      await next();
+    };
+    const { app, sessionManager, projectStore } = createMoveApp({ beforeRoutes: serviceKeyMiddleware });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const project = projectStore.create('Target', 'local');
+    await projectStore.save(project);
+
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: project.id,
+        move_consent: { stop_running: true },
+      }),
+    });
+
+    expect(res.status).toBe(403);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('удалённая сессия (remote:) — 409 (перенос не поддерживается)', async () => {
+    const { app } = createTestApp(tmpDir, undefined, undefined, undefined, undefined, undefined);
+    // Отдельное приложение: гибридный клиент нужен, чтобы сработала remote-ветка.
+    const remoteApp = new Hono();
+    const fileStore = new FileStore({ dataDir: tmpDir });
+    const sessionManager = new SessionManager(fileStore);
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const eventBus = new EventBus();
+    const queueManager = createMockQueueManager();
+    const orchestrator = createMockOrchestrator();
+    const routes = createSessionRoutes(
+      createMockAuth(),
+      {
+        sessionManager,
+        eventBus,
+        queueManager: queueManager as any,
+        processMessage: orchestrator.createProcessMessage(),
+        orchestrator: orchestrator as any,
+        projectStore,
+        getRemoteClient: () => ({} as never),
+      },
+      {},
+    );
+    remoteApp.route('/api/v2/sessions', routes);
+    void app;
+
+    const res = await remoteApp.request('/api/v2/sessions/remote:abc', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: 'p2' }),
+    });
+
+    expect(res.status).toBe(409);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('SESSION_MOVE_REMOTE_UNSUPPORTED');
+  });
+
+  it('невалидный move_consent — 400 VALIDATION_ERROR', async () => {
+    const { app, sessionManager, projectStore } = createMoveApp();
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const project = projectStore.create('Target', 'local');
+    await projectStore.save(project);
+
+    const res = await app.request(`/api/v2/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: project.id, move_consent: 'yes' }),
+    });
+
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 });

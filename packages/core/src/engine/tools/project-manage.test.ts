@@ -10,6 +10,9 @@ import { EventBus } from '../../events/bus.js';
 import type { ToolContext } from '@itphx/synth-shared';
 import { generateId, ProjectRole } from '@itphx/synth-shared';
 import { RemoteError } from '../../remote/types.js';
+// PROP-141 (Часть D): сервис переноса сессии между проектами + реестр прогонов.
+import { SessionMoveService } from '../../sessions/move-service.js';
+import { MemoryBackgroundRunRepository } from '../../storage/memory/background-runs.js';
 
 describe('project_create / project_attach', () => {
   let tmpDir: string;
@@ -1024,5 +1027,113 @@ describe('project_attach — hybrid awareness', () => {
     );
     expect(result.isError).toBeUndefined();
     expect((await sessionManager.getSession(sessionId))!.projectId).toBe(local.id);
+  });
+});
+
+/**
+ * PROP-141 (Часть D): агентский путь переноса сессии.
+ *
+ * Согласие на последствия даёт только человек, поэтому при привязанном
+ * состоянии сессии `project_attach`/`project_create` отказывают: запись сессии
+ * не меняется, а `project_create` не создаёт проект.
+ */
+describe('project_attach / project_create при привязанном состоянии (PROP-141, Часть D)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let eventBus: EventBus;
+  let sessionId: string;
+  let runs: MemoryBackgroundRunRepository;
+  let moveService: SessionMoveService;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-project-move-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    eventBus = new EventBus();
+    runs = new MemoryBackgroundRunRepository();
+
+    const session = await sessionManager.createSession({ title: 'No project' });
+    sessionId = session.id;
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.ownerId = 'u1';
+      await sessionManager.saveSession(s);
+    });
+
+    moveService = new SessionMoveService({
+      sessionManager,
+      eventBus,
+      backgroundRuns: runs,
+    });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(): ToolContext {
+    return {
+      sessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: {
+        sessionManager,
+        projectStore,
+        sessionId,
+        eventBus,
+        moveService,
+        workspacesRoot: join(tmpDir, 'workspaces'),
+      },
+    };
+  }
+
+  /** Живой фоновой процесс сессии — блокер переноса. */
+  async function addRunningProcess(): Promise<void> {
+    await runs.save({
+      id: 'bgr_1',
+      kind: 'process',
+      status: 'running',
+      sessionId,
+      projectId: undefined,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  it('project_attach при блокерах — ошибка, сессия не перенесена', async () => {
+    const project = projectStore.create('Existing', 'u1');
+    await projectStore.save(project);
+    await addRunningProcess();
+
+    const result = await projectAttachTool.execute({ projectId: project.id }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata?.i18n as { key?: string } | undefined)?.key).toBe('project.move_blocked');
+    expect(result.metadata?.blocked).toBe(true);
+    // Сессия осталась без проекта.
+    expect((await sessionManager.getSession(sessionId))?.projectId).toBeUndefined();
+  });
+
+  it('project_create при блокерах — проект не создаётся', async () => {
+    await addRunningProcess();
+
+    const result = await projectCreateTool.execute({ name: 'New Project' }, makeCtx());
+
+    expect(result.isError).toBe(true);
+    expect((result.metadata?.i18n as { key?: string } | undefined)?.key).toBe('project.move_blocked');
+    // Проект не создан.
+    expect(await projectStore.list()).toHaveLength(0);
+    expect((await sessionManager.getSession(sessionId))?.projectId).toBeUndefined();
+  });
+
+  it('project_attach без блокеров — перенос выполняется (единый шов)', async () => {
+    const project = projectStore.create('Existing', 'u1');
+    await projectStore.save(project);
+
+    const result = await projectAttachTool.execute({ projectId: project.id }, makeCtx());
+
+    expect(result.isError).toBeUndefined();
+    expect((await sessionManager.getSession(sessionId))?.projectId).toBe(project.id);
   });
 });

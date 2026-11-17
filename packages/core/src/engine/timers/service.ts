@@ -372,6 +372,39 @@ export class TimerService {
     return removed;
   }
 
+  /**
+   * Отмена таймеров/будильников указанных сессий (PROP-141, Часть D —
+   * перенос сессии: автоматизации сессии отменяются).
+   *
+   * Снимаются **только живые** записи (`active`/`paused`): `fired`/`cancelled`
+   * — это история, её не трогаем. Каждая снятая запись публикует live-событие
+   * `timer.cancelled` (второй клиент узнаёт об отмене без опроса), расписание
+   * движка пересчитывается один раз в конце.
+   *
+   * @returns число снятых записей.
+   */
+  async cancelForSessions(sessionIds: string[]): Promise<number> {
+    let removed = 0;
+    for (const sessionId of sessionIds) {
+      let records: Timer[];
+      try {
+        records = await this._timers.list({ sessionId, limit: ACTIVE_LIST_LIMIT });
+      } catch (err) {
+        console.warn(`[timers] выборка таймеров сессии ${sessionId} не удалась: ${errorMessage(err)}`);
+        continue;
+      }
+      for (const timer of records) {
+        if (timer.status !== 'active' && timer.status !== 'paused') continue;
+        const ok = await this._timers.remove(timer.id);
+        if (!ok) continue;
+        removed += 1;
+        this._publish('timer.cancelled', timer, { status: 'cancelled' });
+      }
+    }
+    await this._refreshSchedule();
+    return removed;
+  }
+
   // ── Внутреннее ───────────────────────────────────────────────────────────
 
   /** Тело тика: выборка просроченных → срабатывания → пересчёт расписания. */

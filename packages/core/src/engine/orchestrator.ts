@@ -110,6 +110,8 @@ import type { QuestionService } from './question/service.js';
 // Этап 1 roadmap 0.13 (блок 4): единый реестр фоновых прогонов (PROP-096).
 import type { BackgroundRunService } from './background/service.js';
 import type { TerminalService } from './terminal/service.js';
+// PROP-141 (Часть D): сервис переноса сессии между проектами (единый шов).
+import type { SessionMoveService } from '../sessions/move-service.js';
 // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
 import { ActiveRunRegistry } from './background/active-runs.js';
 import type { ProcessService } from './processes/service.js';
@@ -1148,6 +1150,18 @@ export interface OrchestratorOptions {
    */
   terminalService?: TerminalService;
   /**
+   * PROP-141 (Часть D): сервис переноса сессии между проектами.
+   *
+   * Тот же экземпляр, что у HTTP-роутов `PATCH /sessions/:id { project_id }`
+   * (единый шов). Передаётся **late-bound** (геттером): сервис собирается
+   * позже оркестратора (ему нужен движок таймеров), а extra тулов читается
+   * на каждом вызове.
+   *
+   * Не задан — тулы `project_attach`/`project_create` переносят сессию без
+   * проверки привязанного состояния (прежнее поведение).
+   */
+  getMoveService?: () => SessionMoveService | undefined;
+  /**
    * ADR-104 × ADR-111/ADR-113: вернуть в очередь **все** сообщения, оставшиеся
    * в steer-очереди к концу хода (ни пользовательский ввод, ни уведомления
    * фоновых прогонов теряться не должны). `opts.autostart` — поднять ли ход:
@@ -1509,6 +1523,11 @@ export class ChatOrchestrator {
    * `terminal_*` недоступны, `terminal.tool.deps_unavailable`).
    */
   private readonly _terminalService: TerminalService | null;
+  /**
+   * PROP-141 (Часть D): late-bound доступ к сервису переноса сессии
+   * (null — сервис не задан).
+   */
+  private readonly _getMoveService: (() => SessionMoveService | undefined) | null;
   /**
    * ADR-104 × ADR-111/ADR-113: возврат остатка steer-очереди в обычную очередь
    * (ни ввод пользователя, ни уведомления фоновых прогонов не теряются).
@@ -2095,6 +2114,8 @@ export class ChatOrchestrator {
     this._backgroundService = options.backgroundService ?? null;
     // PROP-132 (Ф5): сервис интерактивных терминалов.
     this._terminalService = options.terminalService ?? null;
+    // PROP-141 (Часть D): сервис переноса сессии (late-bound).
+    this._getMoveService = options.getMoveService ?? null;
     this._requeueSteerMessages = options.requeueSteerMessages ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
@@ -7208,6 +7229,9 @@ export class ChatOrchestrator {
                   // `terminal_list`/`terminal_open`/`terminal_read`/
                   // `terminal_write`/`terminal_close`.
                   terminalService: this._terminalService ?? undefined,
+                  // PROP-141 (Часть D): сервис переноса сессии между проектами
+                  // (единый шов для `project_attach`/`project_create`).
+                  moveService: this._getMoveService?.() ?? undefined,
                   // ADR-115: привязка файла из workspace к диалогу — сервис
                   // вложений, live-конфиг (ранние проверки), доставка
                   // user-сообщения (очередь + автоход) и учёт ссылок на blob.
