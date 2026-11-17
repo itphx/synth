@@ -870,25 +870,35 @@ async function dropTerminalContextFromSteer(
  * вопроса»). Если вопрос не принят (очередь полна), контекст снимается: иначе
  * в истории остался бы вывод терминала без вопроса. Публикуется
  * `message.deleted` — мутация адресуется по `id` (ADR-118 §7).
+ *
+ * @internal Экспорт — для тестов (путь достижим только из приёма промпта).
  */
-async function dropTerminalContextFromHistory(
+export async function dropTerminalContextFromHistory(
   sessionManager: SessionManager,
   eventBus: EventBus,
   sessionId: string,
   contextMessage: Message,
 ): Promise<void> {
+  let removed = false;
   try {
-    await sessionManager.withLock(sessionId, async (s) => {
+    // Правка истории — точечная (`mutateHistory`): свежий документ читается под
+    // локом порта, параллельная дозапись сообщений не теряется. `updatedAt`
+    // двигается (паритет с прежним явным `s.updatedAt = nowISO()`); контекста в
+    // истории уже нет — записи нет (`shouldWrite`).
+    const result = await sessionManager.mutateHistory(sessionId, (s) => {
       const next = s.messages.filter((m) => m.id !== contextMessage.id);
-      if (next.length === s.messages.length) return;
+      if (next.length === s.messages.length) return false;
       s.messages = next;
-      s.updatedAt = nowISO();
-      await sessionManager.saveSession(s);
-    });
+      return true;
+    }, { shouldWrite: (changed) => changed });
+    removed = result.ok && result.value;
   } catch {
     // Сессия исчезла — откатывать нечего (ошибка не должна ломать ответ 429).
     return;
   }
+  // Ничего не удалено (контекста в истории нет) — событий нет: иначе клиенты
+  // убрали бы из ленты сообщение, которое там осталось.
+  if (!removed) return;
   eventBus.publish(sessionId, 'message.deleted', { message_id: contextMessage.id });
   const fresh = await sessionManager.getSession(sessionId).catch(() => null);
   if (fresh) eventBus.publish(sessionId, 'session.updated', serializeSession(fresh));
@@ -2757,10 +2767,6 @@ export function createSessionRoutes(
       c, id, (client, localId) => client.createSessionNote(localId, body), undefined, 201,
     );
     if (forwarded) return forwarded;
-    const session = await sessionManager.getSession(id);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
-    }
 
     const content = typeof body.content === 'string' ? body.content.trim() : '';
     if (!content) {
@@ -2771,9 +2777,13 @@ export function createSessionRoutes(
     if (content.length > limits.maxChars) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.noteTooLong(c, limits.maxChars) } }, 400);
     }
-    // Проверка лимита — под локом сессии (иначе две параллельные заметки
-    // прошли бы проверку до записи и превысили `maxCount`).
-    let limitReached = false;
+    // Заметки живут в child-наборе сессии (`stickyNotes`), который пишется
+    // вместе с документом, поэтому правка — `mutateHistory` на **свежем**
+    // документе под локом порта: проверка лимита и запись в одной критической
+    // секции (две параллельные заметки не превысят `maxCount`), параллельная
+    // дозапись сообщений не теряется. `updatedAt` не двигается — паритет с
+    // прежним `saveSession` (заметка не «оживляет» сессию в списках).
+    // Лимит достигнут — записи нет (`shouldWrite`), 409 ниже.
     const now = nowISO();
     const note = {
       id: generateStreamId(),
@@ -2783,21 +2793,21 @@ export function createSessionRoutes(
       disabled: false,
     };
 
-    await sessionManager.withLock(c.req.param('id'), async (s) => {
-      if (s.stickyNotes.length >= limits.maxCount) {
-        limitReached = true;
-        return;
-      }
+    const added = await sessionManager.mutateHistory(id, (s) => {
+      if (s.stickyNotes.length >= limits.maxCount) return false;
       s.stickyNotes.push(note);
-      await sessionManager.saveSession(s);
-    });
+      return true;
+    }, { touchUpdatedAt: false, shouldWrite: (written) => written });
 
-    if (limitReached) {
+    if (!added.ok) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    if (!added.value) {
       return c.json({ error: { code: 'LIMIT_EXCEEDED', message: messages.noteLimitReached(c, limits.maxCount) } }, 409);
     }
 
-    const updated = await sessionManager.getSession(c.req.param('id'));
-    eventBus.publish(c.req.param('id'), 'context.sticky_note_added', { note_id: note.id });
+    const updated = await sessionManager.getSession(id);
+    eventBus.publish(id, 'context.sticky_note_added', { note_id: note.id });
     return c.json({ note, notes: updated!.stickyNotes }, 201);
   });
 
@@ -2811,33 +2821,34 @@ export function createSessionRoutes(
       c, id, (client, localId) => client.updateSessionNote(localId, noteId, body),
     );
     if (forwarded) return forwarded;
-    const session = await sessionManager.getSession(id);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
-    }
 
     const limits = getStickyNoteLimits();
     if (typeof body.content === 'string' && body.content.length > limits.maxChars) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.noteTooLong(c, limits.maxChars) } }, 400);
     }
 
-    const found = session.stickyNotes.some((n) => n.id === noteId);
-    if (!found) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.noteNotFound(c) } }, 404);
-    }
-
-    await sessionManager.withLock(c.req.param('id'), async (s) => {
+    // Правка заметки — `mutateHistory` на свежем документе под локом порта
+    // (child-набор `stickyNotes` пишется вместе с ним). `updatedAt` сессии не
+    // двигается (паритет с `saveSession`); заметки нет — записи нет, 404.
+    const updatedNote = await sessionManager.mutateHistory(id, (s) => {
       const note = s.stickyNotes.find((n) => n.id === noteId);
-      if (!note) return;
+      if (!note) return false;
 
       if (body.content !== undefined) note.content = body.content;
       if (body.disabled !== undefined) note.disabled = body.disabled;
       note.updatedAt = nowISO();
-      await sessionManager.saveSession(s);
-    });
+      return true;
+    }, { touchUpdatedAt: false, shouldWrite: (written) => written });
 
-    const updated = await sessionManager.getSession(c.req.param('id'));
-    eventBus.publish(c.req.param('id'), 'context.sticky_note_updated', { note_id: noteId });
+    if (!updatedNote.ok) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    if (!updatedNote.value) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.noteNotFound(c) } }, 404);
+    }
+
+    const updated = await sessionManager.getSession(id);
+    eventBus.publish(id, 'context.sticky_note_updated', { note_id: noteId });
     return c.json({ notes: updated!.stickyNotes });
   });
 
@@ -2850,15 +2861,20 @@ export function createSessionRoutes(
       c, id, (client, localId) => client.deleteSessionNote(localId, noteId),
     );
     if (forwarded) return forwarded;
-    const session = await sessionManager.getSession(id);
-    if (!session) {
+
+    // Удаление — `mutateHistory` на свежем документе под локом порта;
+    // `updatedAt` не двигается (паритет с `saveSession`). Заметки не было —
+    // записи нет (`shouldWrite`), событие прежнее.
+    const removed = await sessionManager.mutateHistory(id, (s) => {
+      const next = s.stickyNotes.filter((n) => n.id !== noteId);
+      if (next.length === s.stickyNotes.length) return false;
+      s.stickyNotes = next;
+      return true;
+    }, { touchUpdatedAt: false, shouldWrite: (deleted) => deleted });
+
+    if (!removed.ok) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-
-    await sessionManager.withLock(id, async (s) => {
-      s.stickyNotes = s.stickyNotes.filter((n) => n.id !== noteId);
-      await sessionManager.saveSession(s);
-    });
 
     const updated = await sessionManager.getSession(id);
     eventBus.publish(id, 'context.sticky_note_deleted', { note_id: noteId });
@@ -3625,9 +3641,11 @@ export function createSessionRoutes(
     if (!existing) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    // read-modify-write сессии — только под `SessionManager.withLock`: без лока
-    // конкурентная правка (PATCH/сообщение) затирается снапшотом clear (lost update).
-    const session = await sessionManager.withLock(id, async (s) => {
+    // Правка — точечная (`mutateHistory`): свежий документ читается под локом
+    // порта, поэтому конкурентная правка/дозапись сообщений не затирается
+    // снимком clear (lost update). `updatedAt` двигается (паритет с
+    // `withLock`+`updateSession`).
+    const clearedResult = await sessionManager.mutateHistory(id, (s) => {
       s.messages = s.messages.filter((m) => m.pinned);
       s.pendingMessages = [];
       s.inputTokens = 0;
@@ -3637,14 +3655,16 @@ export function createSessionRoutes(
       s.outputCost = 0;
       s.cacheReadCost = 0;
       s.cacheWriteCost = 0;
-      await sessionManager.updateSession(s);
-      return s;
     });
+    if (!clearedResult.ok) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    // Точечный ответ — сводка **после** мутации (история уже очищена).
+    const session = (await sessionManager.getSession(id)) ?? existing;
     // ADR-118 §4: история очищена (кроме закреплённых) — другие клиенты
     // перечитывают ленту; очередь сброшена (`pendingMessages = []`).
     eventBus.publish(id, 'session.messages.cleared', { session_id: id });
     publishQueueState(eventBus, id, { pendingCount: 0, steerCount: 0 });
-    // Точечный ответ — сводка без истории.
     // ADR-119: `context_usage` — занятость контекста «прямо сейчас».
     return c.json(
       serializeSession(session, {

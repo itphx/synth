@@ -29,19 +29,27 @@ function makeMessage(content: string): Message {
 
 const auth = { requireAuth: async (_c: Context, next: Next) => { await next(); } };
 
-function createTestApp(tmpDir: string, eventBus?: { publish: ReturnType<typeof vi.fn> }) {
+function createTestApp(
+  tmpDir: string,
+  eventBus?: { publish: ReturnType<typeof vi.fn> },
+  opts?: { blobRefs?: Record<string, ReturnType<typeof vi.fn>> },
+) {
   const app = new Hono();
   const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
   app.route(
     '/api/v2/messages',
-    createMessageRoutes(
-      auth,
-      sessionManager,
-      undefined,
-      eventBus ? { eventBus: eventBus as unknown as EventBus } : undefined,
-    ),
+    createMessageRoutes(auth, sessionManager, undefined, {
+      ...(eventBus ? { eventBus: eventBus as unknown as EventBus } : {}),
+      // Фейковый порт ссылок blob: важно только снятие ссылок владельца.
+      ...(opts?.blobRefs ? { blobRefs: opts.blobRefs as never } : {}),
+    }),
   );
   return { app, sessionManager };
+}
+
+/** Фейковый репозиторий ссылок blob: фиксируем снятие ссылок удаляемого сообщения. */
+function makeBlobRefs() {
+  return { removeByOwner: vi.fn(async () => 1) };
 }
 
 /** Фейковая шина: публикации фиксируются, остальное не нужно роутам сообщений. */
@@ -390,5 +398,197 @@ describe('Messages API — адресация мутаций по id (ADR-118 §
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_MESSAGE_IDS');
     }
+  });
+});
+
+/**
+ * Этап 3a-2: HISTORY-пути роутов сообщений правятся **точечными мутациями**
+ * порта (`mutateMessage`/`mutateHistory`), а не полной записью снимка
+ * (`withLock`+`updateSession`).
+ *
+ * Контракты (паритет с прежним поведением):
+ *  - возвраты/коды прежние (`{disabled|pinned, success}`, `{content, success}`, 404);
+ *  - `updatedAt` сессии двигается (это настоящие изменения истории сообщений);
+ *  - 404 — без записи: `updatedAt` и история не меняются (`shouldWrite`);
+ *  - параллельная дозапись сообщения не теряется (lost update исключён);
+ *  - `seq` после удаления — позиционный `1..n`.
+ */
+describe('Messages API — точечные мутации истории (этап 3a-2)', () => {
+  let tmpDir: string;
+  const FROZEN_AT = '2024-01-01T00:00:00.000Z';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-messages-mut-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Зафиксировать `updatedAt` (запись без bump) — тогда bump виден детерминированно. */
+  async function freezeUpdatedAt(sessionManager: SessionManager, sessionId: string): Promise<void> {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.updatedAt = FROZEN_AT;
+      await sessionManager.saveSession(s);
+    });
+    expect((await sessionManager.getSession(sessionId))!.updatedAt).toBe(FROZEN_AT);
+  }
+
+  it('toggle: значение, bump updatedAt, свидетель на месте', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId, ids } = await seedSession(sessionManager);
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[1]}/toggle`, { method: 'PATCH' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ disabled: true, success: true });
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.messages.map((m) => m.content)).toEqual(['a', 'b', 'c']);
+    expect(s.messages.map((m) => m.disabled)).toEqual([false, true, false]);
+    // Настоящее изменение — время сессии двигается.
+    expect(s.updatedAt).not.toBe(FROZEN_AT);
+  });
+
+  it('toggle: неизвестный id → 404 без записи (updatedAt не сдвинут)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId } = await seedSession(sessionManager);
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/missing/toggle`, { method: 'PATCH' });
+    expect(res.status).toBe(404);
+    expect((await sessionManager.getSession(sessionId))!.updatedAt).toBe(FROZEN_AT);
+  });
+
+  it('pin: значение, bump updatedAt, свидетель на месте', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId, ids } = await seedSession(sessionManager);
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[0]}/pin`, { method: 'PATCH' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ pinned: true, success: true });
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.messages.map((m) => m.pinned)).toEqual([true, false, false]);
+    expect(s.updatedAt).not.toBe(FROZEN_AT);
+  });
+
+  it('pin: неизвестный id → 404 без записи', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId } = await seedSession(sessionManager);
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/missing/pin`, { method: 'PATCH' });
+    expect(res.status).toBe(404);
+    expect((await sessionManager.getSession(sessionId))!.updatedAt).toBe(FROZEN_AT);
+  });
+
+  it('toggle ∥ appendMessage: параллельная дозапись не теряется', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const witnesses = [makeMessage('w1'), makeMessage('w2'), makeMessage('w3')];
+    await Promise.all([
+      app.request(`/api/v2/messages/${sessionId}/${ids[0]}/toggle`, { method: 'PATCH' }),
+      ...witnesses.map((w) => sessionManager.appendMessage(sessionId, w)),
+    ]);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    for (const witness of witnesses) {
+      expect(s.messages.map((m) => m.id)).toContain(witness.id);
+    }
+    expect(s.messages.find((m) => m.id === ids[0])!.disabled).toBe(true);
+  });
+
+  it('DELETE: удаляет по id, seq 1..n, bump, свидетель цел, ссылки blob сняты после мутации', async () => {
+    const blobRefs = makeBlobRefs();
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, { blobRefs });
+    const { sessionId, ids } = await seedSession(sessionManager);
+    const witness = makeMessage('свидетель');
+    await sessionManager.addMessage(sessionId, witness);
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[1]}`, { method: 'DELETE' });
+    expect(res.status).toBe(200);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.messages.map((m) => m.content)).toEqual(['a', 'c', 'свидетель']);
+    expect(s.messages.map((m) => m.seq)).toEqual([1, 2, 3]);
+    expect(s.messages.map((m) => m.id)).toContain(witness.id);
+    expect(s.updatedAt).not.toBe(FROZEN_AT);
+    expect(blobRefs.removeByOwner).toHaveBeenCalledWith('message', ids[1]);
+  });
+
+  it('DELETE: неизвестный id → 404 без записи и без снятия ссылок', async () => {
+    const blobRefs = makeBlobRefs();
+    const { app, sessionManager } = createTestApp(tmpDir, undefined, { blobRefs });
+    const { sessionId, ids } = await seedSession(sessionManager);
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/missing`, { method: 'DELETE' });
+    expect(res.status).toBe(404);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.messages.map((m) => m.id)).toEqual(ids);
+    expect(s.updatedAt).toBe(FROZEN_AT);
+    expect(blobRefs.removeByOwner).not.toHaveBeenCalled();
+  });
+
+  it('DELETE ∥ appendMessage: параллельная дозапись не теряется', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId, ids } = await seedSession(sessionManager);
+
+    const witnesses = [makeMessage('w1'), makeMessage('w2'), makeMessage('w3')];
+    await Promise.all([
+      app.request(`/api/v2/messages/${sessionId}/${ids[0]}`, { method: 'DELETE' }),
+      ...witnesses.map((w) => sessionManager.appendMessage(sessionId, w)),
+    ]);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.messages.map((m) => m.id)).not.toContain(ids[0]);
+    for (const witness of witnesses) {
+      expect(s.messages.map((m) => m.id)).toContain(witness.id);
+    }
+    // `seq` нормализован позиционно (порт), порядок — по массиву истории.
+    expect(s.messages.map((m) => m.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('retry: закрывает суффикс от id, очищает очередь, bump; свидетель до точки отсчёта цел', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId, ids } = await seedSession(sessionManager);
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.pendingMessages = [makeMessage('p1'), makeMessage('p2')];
+      await sessionManager.saveSession(s);
+    });
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/${ids[1]}/retry`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ content: 'b', success: true });
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    // 'a' до точки отсчёта не тронут; 'b','c' отключены.
+    expect(s.messages.map((m) => m.disabled)).toEqual([false, true, true]);
+    expect(s.pendingMessages).toEqual([]);
+    expect(s.updatedAt).not.toBe(FROZEN_AT);
+  });
+
+  it('retry: неизвестный id → 404 без записи (очередь и флаги не тронуты)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const { sessionId } = await seedSession(sessionManager);
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.pendingMessages = [makeMessage('p1')];
+      await sessionManager.saveSession(s);
+    });
+    await freezeUpdatedAt(sessionManager, sessionId);
+
+    const res = await app.request(`/api/v2/messages/${sessionId}/missing/retry`, { method: 'POST' });
+    expect(res.status).toBe(404);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.messages.map((m) => m.disabled)).toEqual([false, false, false]);
+    expect(s.pendingMessages).toHaveLength(1);
+    expect(s.updatedAt).toBe(FROZEN_AT);
   });
 });

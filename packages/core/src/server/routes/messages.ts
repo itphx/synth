@@ -250,23 +250,19 @@ export function createMessageRoutes(
       }
     }
 
-    const session = await sessionManager.getSession(sessionId);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
-    }
-
     // ADR-118 §7: сообщение ищется по `id` (позиция в массиве нестабильна).
-    const disabled = await sessionManager.withLock(sessionId, async (locked) => {
-      const msg = locked.messages.find((m) => m.id === messageId);
-      if (!msg) return null;
+    // Правка — точечная (`mutateMessage`): чтение и запись под одним локом
+    // хранилища, параллельная дозапись сообщений не теряется. `updatedAt`
+    // двигается (паритет с прежним `withLock`+`updateSession`).
+    const result = await sessionManager.mutateMessage(sessionId, messageId, (msg) => {
       msg.disabled = !msg.disabled;
-      await sessionManager.updateSession(locked);
-      return msg.disabled;
+      return msg.disabled === true;
     });
 
-    if (disabled === null) {
+    if (!result.found) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
+    const disabled = result.value;
 
     // ADR-118 §4: состояние сообщения изменилось — другие клиенты обновляют ленту.
     eventBus?.publish(sessionId, 'message.updated', { message_id: messageId, disabled });
@@ -294,22 +290,15 @@ export function createMessageRoutes(
       }
     }
 
-    const session = await sessionManager.getSession(sessionId);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
-    }
-
-    const pinned = await sessionManager.withLock(sessionId, async (locked) => {
-      const msg = locked.messages.find((m) => m.id === messageId);
-      if (!msg) return null;
+    const result = await sessionManager.mutateMessage(sessionId, messageId, (msg) => {
       msg.pinned = !msg.pinned;
-      await sessionManager.updateSession(locked);
-      return msg.pinned;
+      return msg.pinned === true;
     });
 
-    if (pinned === null) {
+    if (!result.found) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
+    const pinned = result.value;
 
     // ADR-118 §4: состояние сообщения изменилось — другие клиенты обновляют ленту.
     eventBus?.publish(sessionId, 'message.updated', { message_id: messageId, pinned });
@@ -337,29 +326,28 @@ export function createMessageRoutes(
       }
     }
 
-    const session = await sessionManager.getSession(sessionId);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
-    }
-
-    const removed = await sessionManager.withLock(sessionId, async (locked) => {
+    // ADR-115: сообщение удаляется — снимаем его ссылки на объекты вложений.
+    // Правка истории — точечная (`mutateHistory`): свежий документ читается под
+    // локом порта, `seq` нормализуется позиционно, параллельная дозапись не
+    // теряется. `updatedAt` двигается (паритет с `withLock`+`updateSession`).
+    // Не найдено — записи нет (`shouldWrite`), 404.
+    const result = await sessionManager.mutateHistory(sessionId, (locked) => {
       const index = locked.messages.findIndex((m) => m.id === messageId);
       if (index < 0) return false;
-      // ADR-115: сообщение удаляется — снимаем его ссылки на объекты вложений.
-      const removedId = locked.messages[index]!.id;
       locked.messages.splice(index, 1);
-      locked.messages.forEach((m, i) => { m.seq = i + 1; });
-      await sessionManager.updateSession(locked);
-      if (blobRefs && removedId) await blobRefs.removeByOwner('message', removedId).catch(() => 0);
       return true;
-    });
+    }, { shouldWrite: (removed) => removed });
 
-    if (!removed) {
+    if (!result.ok || !result.value) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
+    // Ссылки вложений снимаются **после** успешной мутации — иначе при отказе
+    // записи объект остался бы без владельца (и ушёл бы в GC раньше времени).
+    if (blobRefs) await blobRefs.removeByOwner('message', messageId).catch(() => 0);
+
     // ADR-118 §4/§7: сообщение удалено — клиенты убирают его из ленты по `id`.
-    // При 404 (removed === false) и в remote-ветке события нет: удалённый
+    // При 404 (мутации не было) и в remote-ветке события нет: удалённый
     // инстанс публикует у себя, мост форвардит.
     eventBus?.publish(sessionId, 'message.deleted', { message_id: messageId });
 
@@ -386,14 +374,12 @@ export function createMessageRoutes(
       }
     }
 
-    const session = await sessionManager.getSession(sessionId);
-    if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
-    }
-
     // ADR-118 §7: точка отсчёта — найденное по id сообщение (позиция берётся
-    // от него, а не из пути).
-    const retried = await sessionManager.withLock(sessionId, async (locked) => {
+    // от него, а не из пути). Правка истории — точечная (`mutateHistory`):
+    // свежий документ читается под локом порта, параллельная дозапись не
+    // теряется. `updatedAt` двигается (паритет с `withLock`+`updateSession`).
+    // Сообщения нет — записи нет (`shouldWrite`), 404 ниже.
+    const result = await sessionManager.mutateHistory(sessionId, (locked) => {
       const index = locked.messages.findIndex((m) => m.id === messageId);
       if (index < 0) return null;
       const text = locked.messages[index]!.content;
@@ -403,13 +389,16 @@ export function createMessageRoutes(
         affectedIds.push(locked.messages[i]!.id);
       }
       locked.pendingMessages = [];
-      await sessionManager.updateSession(locked);
       return { text, affectedIds };
-    });
+    }, { shouldWrite: (value) => value !== null });
 
-    if (retried === null) {
+    if (!result.ok) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    if (result.value === null) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
+    const retried = result.value;
 
     // ADR-118 §4: сообщения от точки повтора отключены, очередь сброшена —
     // другие клиенты обновляют ленту и счётчики.

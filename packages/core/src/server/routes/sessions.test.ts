@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSessionRoutes, type SessionRoutesDeps } from './sessions.js';
+import { createSessionRoutes, dropTerminalContextFromHistory, type SessionRoutesDeps } from './sessions.js';
 import {
   SessionManager,
   EventBus,
@@ -2369,5 +2369,177 @@ describe('PATCH /api/v2/sessions/:id — перенос между проект�
     expect(res.status).toBe(400);
     const body = (await res.json()) as ApiErrorBody;
     expect(body.error?.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+/**
+ * Этап 3a-2: очистка истории и откат контекста терминала — точечные мутации
+ * (`mutateHistory`) вместо полной записи снимка.
+ *
+ * Контракты (паритет с прежним `withLock`+`updateSession`/`saveSession`):
+ *  - `clear` оставляет `pinned`, чистит очередь и счётчики расхода, двигает
+ *    `updatedAt`, публикует `session.messages.cleared` + `queue.state`;
+ *  - параллельная дозапись сообщения не теряется (lost update исключён);
+ *  - откат контекста терминала удаляет только контекст, двигает `updatedAt` и
+ *    публикует `message.deleted` + `session.updated`; контекста нет — ни
+ *    записи, ни событий.
+ */
+describe('очистка истории и откат контекста — точечные мутации (этап 3a-2)', () => {
+  let tmpDir: string;
+  const FROZEN_AT = '2024-01-01T00:00:00.000Z';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-history-mut-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeHistoryMessage(content: string, pinned = false) {
+    return {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local' as const,
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned,
+      hidden: false,
+      author: 'local',
+    };
+  }
+
+  async function freezeUpdatedAt(sessionManager: SessionManager, sessionId: string): Promise<void> {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.updatedAt = FROZEN_AT;
+      await sessionManager.saveSession(s);
+    });
+    expect((await sessionManager.getSession(sessionId))!.updatedAt).toBe(FROZEN_AT);
+  }
+
+  it('clear: pinned остаются, очередь и счётчики обнулены, bump, события', async () => {
+    const { app, sessionManager, eventBus } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'C', userId: 'local' });
+    await sessionManager.addMessage(session.id, makeHistoryMessage('keep', true));
+    await sessionManager.addMessage(session.id, makeHistoryMessage('drop'));
+    await sessionManager.withLock(session.id, async (s) => {
+      s.pendingMessages = [makeHistoryMessage('pending')];
+      s.inputTokens = 10;
+      s.outputTokens = 20;
+      s.totalTokens = 30;
+      s.inputCost = 1.5;
+      s.outputCost = 2.5;
+      s.cacheReadCost = 0.5;
+      s.cacheWriteCost = 0.25;
+      await sessionManager.saveSession(s);
+    });
+    await freezeUpdatedAt(sessionManager, session.id);
+
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(session.id, (e) => {
+      events.push({ type: e.type, data: e.data as Record<string, unknown> });
+    });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/clear`, { method: 'POST' });
+    expect(res.status).toBe(200);
+
+    const cleared = (await sessionManager.getSession(session.id))!;
+    expect(cleared.messages.map((m) => m.content)).toEqual(['keep']);
+    expect(cleared.pendingMessages).toEqual([]);
+    expect(cleared.inputTokens).toBe(0);
+    expect(cleared.outputTokens).toBe(0);
+    expect(cleared.totalTokens).toBe(0);
+    expect(cleared.inputCost).toBe(0);
+    expect(cleared.outputCost).toBe(0);
+    expect(cleared.cacheReadCost).toBe(0);
+    expect(cleared.cacheWriteCost).toBe(0);
+    expect(cleared.updatedAt).not.toBe(FROZEN_AT);
+
+    // Ответ — сводка **после** мутации (история уже очищена).
+    const body = (await res.json()) as { id: string; messages?: unknown[] };
+    expect(body.id).toBe(session.id);
+    expect(body.messages).toBeUndefined();
+
+    expect(events).toEqual([
+      { type: 'session.messages.cleared', data: { session_id: session.id } },
+      { type: 'queue.state', data: { pendingCount: 0, steerCount: 0 } },
+    ]);
+  });
+
+  it('clear ∥ appendMessage: параллельная дозапись закреплённого сообщения не теряется', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'C', userId: 'local' });
+    await sessionManager.addMessage(session.id, makeHistoryMessage('drop'));
+
+    const witness = makeHistoryMessage('witness', true);
+    const [res] = await Promise.all([
+      app.request(`/api/v2/sessions/${session.id}/clear`, { method: 'POST' }),
+      sessionManager.appendMessage(session.id, witness),
+    ]);
+    expect(res.status).toBe(200);
+
+    const cleared = (await sessionManager.getSession(session.id))!;
+    // Закреплённый свидетель либо пришёл до мутации (остался как `pinned`),
+    // либо после — но в любом случае не потерян.
+    expect(cleared.messages.map((m) => m.id)).toContain(witness.id);
+    expect(cleared.messages.every((m) => m.pinned === true)).toBe(true);
+  });
+
+  it('dropTerminalContextFromHistory: удаляет только контекст, bump, события', async () => {
+    const { sessionManager, eventBus } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'T', userId: 'local' });
+    await sessionManager.addMessage(session.id, makeHistoryMessage('вопрос'));
+    const context = makeHistoryMessage('контекст терминала');
+    await sessionManager.addMessage(session.id, context);
+    await freezeUpdatedAt(sessionManager, session.id);
+
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(session.id, (e) => {
+      events.push({ type: e.type, data: e.data as Record<string, unknown> });
+    });
+
+    await dropTerminalContextFromHistory(sessionManager, eventBus, session.id, context);
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    expect(stored.messages.map((m) => m.content)).toEqual(['вопрос']);
+    expect(stored.updatedAt).not.toBe(FROZEN_AT);
+    expect(events.map((e) => e.type)).toEqual(['message.deleted', 'session.updated']);
+    expect(events[0]!.data).toEqual({ message_id: context.id });
+  });
+
+  it('dropTerminalContextFromHistory: контекста нет — ни записи, ни событий', async () => {
+    const { sessionManager, eventBus } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'T', userId: 'local' });
+    await sessionManager.addMessage(session.id, makeHistoryMessage('вопрос'));
+    await freezeUpdatedAt(sessionManager, session.id);
+
+    const events: Array<{ type: string }> = [];
+    eventBus.subscribe(session.id, (e) => { events.push({ type: e.type }); });
+
+    await dropTerminalContextFromHistory(sessionManager, eventBus, session.id, makeHistoryMessage('чужой'));
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    expect(stored.messages.map((m) => m.content)).toEqual(['вопрос']);
+    // `shouldWrite` — реального удаления нет, поэтому записи и bump нет.
+    expect(stored.updatedAt).toBe(FROZEN_AT);
+    expect(events).toEqual([]);
+  });
+
+  it('dropTerminalContextFromHistory: сессии нет — молча выходит (429 не ломается)', async () => {
+    const { sessionManager, eventBus } = createTestApp(tmpDir);
+    const published: string[] = [];
+    const original = eventBus.publish.bind(eventBus);
+    eventBus.publish = ((...args: Parameters<typeof original>) => {
+      published.push(args[1]);
+      return original(...args);
+    }) as typeof eventBus.publish;
+
+    await expect(
+      dropTerminalContextFromHistory(sessionManager, eventBus, 'missing', makeHistoryMessage('ctx')),
+    ).resolves.toBeUndefined();
+    expect(published).toEqual([]);
   });
 });

@@ -19,6 +19,7 @@ import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import type { SessionRoutesAuth } from './sessions.js';
 import type { BusEvent, StickyNotesLimits } from '@itphx/synth-shared';
+import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 
 function createMockQueueManager() {
   return {
@@ -262,5 +263,200 @@ describe('заметки сессии (core-фабрика)', () => {
     const sessionId = await seed();
     const res = await app.request(`/api/v2/sessions/${sessionId}/notes`);
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * Этап 3a-2: заметки сессии (`stickyNotes` — child-набор документа) правятся
+ * `mutateHistory` на **свежем** документе под локом порта, без полной
+ * перезаписи снимка.
+ *
+ * Контракты (паритет с прежним `withLock`+`saveSession`):
+ *  - `updatedAt` сессии **не** двигается (заметка не «оживляет» сессию);
+ *  - лимит `maxCount` проверяется внутри мутатора (409 без записи);
+ *  - параллельная дозапись сообщений не теряется (lost update исключён).
+ */
+describe('заметки сессии — точечные мутации (этап 3a-2)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let app: Hono;
+  let limits: StickyNotesLimits;
+  const FROZEN_AT = '2024-01-01T00:00:00.000Z';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-notes-mut-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+    limits = { maxCount: 50, maxChars: 2000 };
+    const orchestrator = createMockOrchestrator();
+    app = new Hono();
+    app.route('/api/v2/sessions', createSessionRoutes(
+      createAuth(),
+      {
+        sessionManager,
+        eventBus,
+        queueManager: createMockQueueManager() as never,
+        processMessage: orchestrator.createProcessMessage() as never,
+        orchestrator: orchestrator as never,
+      },
+      {
+        resolveUserId: () => 'local',
+        getStickyNoteLimits: () => limits,
+      },
+    ));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function seed(): Promise<string> {
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local', ownerId: 'local' });
+    return session.id;
+  }
+
+  /** Зафиксировать `updatedAt` записью без bump. */
+  async function freezeUpdatedAt(sessionId: string): Promise<void> {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.updatedAt = FROZEN_AT;
+      await sessionManager.saveSession(s);
+    });
+    expect((await sessionManager.getSession(sessionId))!.updatedAt).toBe(FROZEN_AT);
+  }
+
+  function makeMessage(content: string) {
+    return {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local' as const,
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'local',
+    };
+  }
+
+  function postNote(sessionId: string, content: string): Promise<Response> {
+    return Promise.resolve(app.request(`/api/v2/sessions/${sessionId}/notes`, {
+      method: 'POST',
+      headers: { ...AUTH, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }));
+  }
+
+  function patchNote(sessionId: string, noteId: string, body: unknown): Promise<Response> {
+    return Promise.resolve(app.request(`/api/v2/sessions/${sessionId}/notes/${noteId}`, {
+      method: 'PATCH',
+      headers: { ...AUTH, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+  }
+
+  function deleteNote(sessionId: string, noteId: string): Promise<Response> {
+    return Promise.resolve(app.request(`/api/v2/sessions/${sessionId}/notes/${noteId}`, {
+      method: 'DELETE',
+      headers: AUTH,
+    }));
+  }
+
+  it('POST: заметка создаётся, updatedAt не двигается, параллельная дозапись цела', async () => {
+    const sessionId = await seed();
+    await freezeUpdatedAt(sessionId);
+    const witness = makeMessage('свидетель');
+
+    const [res] = await Promise.all([
+      postNote(sessionId, 'заметка'),
+      sessionManager.appendMessage(sessionId, witness),
+    ]);
+    expect(res.status).toBe(201);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.stickyNotes.map((n) => n.content)).toEqual(['заметка']);
+    // Сообщение-свидетель не потеряно: мутация идёт на свежем документе.
+    expect(s.messages.map((m) => m.id)).toContain(witness.id);
+
+    // Без параллельной дозаписи время сессии не двигается (заметка — без bump).
+    const quiet = await seed();
+    await freezeUpdatedAt(quiet);
+    expect((await postNote(quiet, 'только заметка')).status).toBe(201);
+    expect((await sessionManager.getSession(quiet))!.updatedAt).toBe(FROZEN_AT);
+  });
+
+  it('POST: лимит maxCount → 409 без записи (updatedAt и список не меняются)', async () => {
+    const sessionId = await seed();
+    limits = { maxCount: 1, maxChars: 2000 };
+    expect((await postNote(sessionId, 'one')).status).toBe(201);
+    await freezeUpdatedAt(sessionId);
+
+    const res = await postNote(sessionId, 'two');
+    expect(res.status).toBe(409);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('LIMIT_EXCEEDED');
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.stickyNotes.map((n) => n.content)).toEqual(['one']);
+    expect(s.updatedAt).toBe(FROZEN_AT);
+  });
+
+  it('PATCH: правка без bump, свидетель цел; неизвестная заметка → 404 без записи', async () => {
+    const sessionId = await seed();
+    const created = await postNote(sessionId, 'было');
+    const noteId = ((await created.json()) as { note: { id: string } }).note.id;
+    const witness = makeMessage('свидетель');
+    await sessionManager.appendMessage(sessionId, witness);
+    await freezeUpdatedAt(sessionId);
+
+    const res = await patchNote(sessionId, noteId, { content: 'стало', disabled: true });
+    expect(res.status).toBe(200);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.stickyNotes[0]).toMatchObject({ id: noteId, content: 'стало', disabled: true });
+    expect(s.messages.map((m) => m.id)).toContain(witness.id);
+    expect(s.updatedAt).toBe(FROZEN_AT);
+
+    const missing = await patchNote(sessionId, 'missing', { content: 'x' });
+    expect(missing.status).toBe(404);
+    expect((await sessionManager.getSession(sessionId))!.updatedAt).toBe(FROZEN_AT);
+  });
+
+  it('DELETE: удаление без bump, свидетель цел; неизвестная заметка — без записи', async () => {
+    const sessionId = await seed();
+    const created = await postNote(sessionId, 'удалить');
+    const noteId = ((await created.json()) as { note: { id: string } }).note.id;
+    const witness = makeMessage('свидетель');
+    await sessionManager.appendMessage(sessionId, witness);
+    await freezeUpdatedAt(sessionId);
+
+    const res = await deleteNote(sessionId, noteId);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ notes: [] });
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    expect(s.messages.map((m) => m.id)).toContain(witness.id);
+    expect(s.updatedAt).toBe(FROZEN_AT);
+
+    const missing = await deleteNote(sessionId, 'missing');
+    expect(missing.status).toBe(200);
+    expect((await sessionManager.getSession(sessionId))!.updatedAt).toBe(FROZEN_AT);
+  });
+
+  it('POST ∥ appendMessage: повтор прогонов — ни одна дозапись не теряется', async () => {
+    const sessionId = await seed();
+    const witnesses = [makeMessage('w1'), makeMessage('w2'), makeMessage('w3')];
+
+    await Promise.all([
+      postNote(sessionId, 'заметка'),
+      ...witnesses.map((w) => sessionManager.appendMessage(sessionId, w)),
+    ]);
+
+    const s = (await sessionManager.getSession(sessionId))!;
+    for (const witness of witnesses) {
+      expect(s.messages.map((m) => m.id)).toContain(witness.id);
+    }
+    expect(s.stickyNotes.map((n) => n.content)).toEqual(['заметка']);
   });
 });
