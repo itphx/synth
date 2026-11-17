@@ -4352,6 +4352,8 @@ export const dict = {
   'timer.tool.updated': '{noun} «{id}» обновлён',
   'timer.tool.cancelled': 'Таймер «{id}» отменён',
   'timer.tool.stopped': '{noun} «{id}» остановлен — больше не сработает',
+  'timer.tool.already_fired': '{noun} «{id}» уже сработал — больше не сработает',
+  'timer.tool.already_stopped': '{noun} «{id}» уже остановлен',
   'timer.tool.deleted': '{noun} «{id}» удалён',
   'timer.tool.show_header': 'Автоматизация «{id}»:',
   'timer.tool.duplicate':

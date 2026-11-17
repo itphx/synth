@@ -335,6 +335,25 @@ async function resolveRecord(
   return { ok: true, timer };
 }
 
+/**
+ * Результат `stop` для терминального статуса: **идемпотентный успех**.
+ *
+ * `stop` — «обеспечь, что больше не сработает»: для `fired`/`cancelled` цель
+ * уже достигнута, поэтому это не ошибка (в отличие от `update`, который
+ * завершённую запись менять отказывается).
+ */
+function terminalStopResult(
+  key: 'timer.tool.already_fired' | 'timer.tool.already_stopped',
+  kind: 'timer' | 'alarm',
+  timer: Timer,
+): ToolResult {
+  const params = { id: timer.id, noun: nounOf(kind) };
+  return {
+    content: sm(key, params),
+    metadata: { id: timer.id, status: timer.status, i18n: i18nMeta(key, params) },
+  };
+}
+
 /** Подпись результата мутации: `{noun} "{id}" created/updated/stopped/deleted`. */
 function mutationResult(
   key: 'timer.tool.created' | 'timer.tool.updated' | 'timer.tool.stopped' | 'timer.tool.deleted',
@@ -585,7 +604,10 @@ export const timerTool: ToolDefinition = {
 
     if (params.action === 'stop') {
       if (existing.status === 'fired') {
-        return argErrorResult(this.name, 'this timer has already fired — nothing to stop');
+        return terminalStopResult('timer.tool.already_fired', 'timer', existing);
+      }
+      if (existing.status === 'cancelled') {
+        return terminalStopResult('timer.tool.already_stopped', 'timer', existing);
       }
       const stopped = await scope.service.stopTimer(existing.id);
       return stopped ? mutationResult('timer.tool.stopped', 'timer', stopped) : notFound(existing.id, 'timer');
@@ -754,7 +776,10 @@ export const alarmTool: ToolDefinition = {
 
     if (params.action === 'stop') {
       if (existing.status === 'fired') {
-        return argErrorResult(this.name, 'this alarm has already fired — nothing to stop');
+        return terminalStopResult('timer.tool.already_fired', 'alarm', existing);
+      }
+      if (existing.status === 'cancelled') {
+        return terminalStopResult('timer.tool.already_stopped', 'alarm', existing);
       }
       const stopped = await scope.service.stopTimer(existing.id);
       return stopped ? mutationResult('timer.tool.stopped', 'alarm', stopped) : notFound(existing.id, 'alarm');

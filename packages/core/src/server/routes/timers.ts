@@ -491,12 +491,8 @@ export function createTimerRoutes(
       const deniedProject = await authorize(c, existing.projectId, 'write');
       if (deniedProject) return deniedProject;
 
-      // Отработавший таймер не «останавливается»: это уже терминальное
-      // состояние (иначе stop переписал бы историю срабатывания).
-      if (existing.status === 'fired') {
-        return conflict(c, messages.timerNotMutable(c));
-      }
-
+      // `stop` идемпотентен: для `fired`/`cancelled` возвращаем текущую
+      // запись (цель «больше не сработает» уже достигнута).
       const denied = serviceProjectProjection(c, existing.projectId);
       if (denied) return denied;
 

@@ -573,5 +573,19 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       expect(fired.metadata?.count).toBe(1);
       expect(fired.content).toContain(id);
     });
+
+    it('stop по сработавшему — идемпотентный успех, статус не меняется', async () => {
+      const created = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'сработал' },
+        makeCtx(),
+      );
+      const id = String(created.metadata?.id);
+      await timers.setStatus(id, 'fired', { firedAt: new Date().toISOString() });
+
+      const result = await timerTool.execute({ action: 'stop', timer_id: id }, makeCtx());
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain('has already fired');
+      expect((await timers.get(id))?.status).toBe('fired');
+    });
   });
 });

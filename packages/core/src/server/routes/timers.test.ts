@@ -362,11 +362,12 @@ describe('Timers API Routes (PROP-141, этап 5 B-2)', () => {
     expect(repeated.status).toBe(200);
   });
 
-  it('POST /:id/stop — отработавший таймер → 409', async () => {
+  it('POST /:id/stop — отработавший таймер идемпотентен (200, статус не меняется)', async () => {
     const app = makeApp();
     const created = await seed({ status: 'fired' });
     const res = await app.request(`/api/v2/timers/${created.id}/stop`, { method: 'POST' });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { timer: Timer }).timer.status).toBe('fired');
   });
 
   it('POST / — семантический дубликат → 409 TIMER_DUPLICATE; allow_duplicate разрешает', async () => {

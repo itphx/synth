@@ -721,6 +721,8 @@ export const SYSTEM_MESSAGES = {
   'timer.tool.updated': '{noun} "{id}" updated',
   'timer.tool.cancelled': 'Timer "{id}" cancelled',
   'timer.tool.stopped': '{noun} "{id}" stopped — it will not fire again',
+  'timer.tool.already_fired': '{noun} "{id}" has already fired — it will not fire again',
+  'timer.tool.already_stopped': '{noun} "{id}" is already stopped',
   'timer.tool.deleted': '{noun} "{id}" deleted',
   'timer.tool.show_header': 'Automation "{id}":',
   'timer.tool.duplicate':
