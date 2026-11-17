@@ -9,9 +9,10 @@
  * **не создаёт assistant-сообщение** (в истории/ленте ничего не остаётся);
  * фиксируются `last_error` на user-реплике и aux-расход `llm-error`.
  */
-import type { TokenUsage } from '@itphx/synth-shared';
+import type { Message, TokenUsage } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
+import type { EventBus } from '../../events/bus.js';
 import { ContextLengthExceededError, RemoteAuthExpiredError } from '../../providers/exceptions.js';
 import { RemoteError } from '../../remote/types.js';
 import { classifyLlmErrorFor, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS } from '../llm-error.js';
@@ -20,6 +21,7 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { warning } from '../../logger.js';
 import { estimateUsage, addTokenUsage } from './usage.js';
 import type { AuxUsageRecorder } from '../usage-accounting.js';
+import { appendStopRecord } from '../stop-record.js';
 
 /**
  * Контекст терминальной ошибки LLM основной сессии. Заполняется на месте
@@ -126,23 +128,37 @@ export function errorTypeI18n(
  * `recordUsage` — шов aux-учёта (ADR-102): терминальная ошибка основной сессии
  * сообщением не становится, но её расход попадает в счётчики/аналитику с
  * `source: 'llm-error'` (`engine/usage-accounting.ts`, best-effort).
+ *
+ * `eventBus`/`obfuscate` — PROP-143: durable-запись причины остановки
+ * (`engine/stop-record.ts`). Заданы только там, где ошибка **останавливает
+ * ход пользователя**: вспомогательные LLM-вызовы (сжатие контекста, debug-эхо)
+ * ход не останавливают, и запись для них была бы ложной.
  */
 export interface HandleLlmFailureDeps {
   sessionManager: SessionManager;
   recordUsage?: AuxUsageRecorder;
+  /** Шина сессии — публикация `message.added` для записи причины остановки. */
+  eventBus?: EventBus;
+  /** Обфускация тела записи (ADR-036): текст провайдера может нести секреты. */
+  obfuscate?: (sessionId: string, message: Message) => Promise<Message>;
 }
 
 /**
  * Единая обработка ошибки LLM-стрима основной сессии.
  *
- * Ошибка **не создаёт сообщение** (решение владельца 2026-11-06): в истории и
- * ленте после reload ничего не остаётся, пользователю показывается временная
- * плашка `stream.error` (UI). Здесь фиксируются:
+ * Ошибка **не создаёт assistant-сообщение** (решение владельца 2026-11-06): в
+ * истории и ленте после reload плашка `stream.error` (UI) исчезает. Здесь
+ * фиксируются:
  *  - `last_error` в user-сообщение сессии (по `stream_id`);
  *  - расход неудавшегося вызова как **aux-вызов** `llm-error` (счётчики сессии
  *    + роллап `usage`, без `messages`) — только когда повтор невозможен/исчерпан
  *    (`attempt`); на recoverable-ретраях ничего не пишется, иначе расход
- *    считался бы многократно.
+ *    считался бы многократно;
+ *  - PROP-143: durable-запись причины остановки (`engine/stop-record.ts`) —
+ *    служебное сообщение `execution_stopped` в истории; тоже **только** при
+ *    терминальном исходе и **только** если заданы `deps.eventBus`/`deps.obfuscate`
+ *    (вспомогательные LLM-вызовы — сжатие контекста, debug-эхо — ход
+ *    пользователя не останавливают, запись для них была бы ложной).
  *
  * Возвращает ProcessMessageResult. Публикация финального исхода (stream.retry
  * для recoverable / stream.error для non-recoverable) — зона ответственности
@@ -216,12 +232,16 @@ export async function handleLlmFailure(
     }
   }
 
+  // Свежий снимок сессии — берётся один раз: по нему и пишется `last_error`,
+  // и из него берётся id хода (`currentStream.turnId`) для записи причины
+  // остановки (PROP-143).
+  let freshSession: Awaited<ReturnType<SessionManager['getSession']>> = null;
   try {
     // `last_error` — служебная пометка реплики хода: пишем точечно (по `id`
     // свежего снимка) и **без** `touchUpdatedAt` — сессия не «оживляется» и
     // время настоящего изменения не перебивается. История не перезаписывается.
-    const fresh = await deps.sessionManager.getSession(sessionId);
-    const userMsg = fresh?.messages.find(
+    freshSession = await deps.sessionManager.getSession(sessionId);
+    const userMsg = freshSession?.messages.find(
       (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
     );
     if (userMsg) {
@@ -231,6 +251,47 @@ export async function handleLlmFailure(
     }
   } catch (err) {
     warning('ORCHESTRATOR', `Не удалось записать last_error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // PROP-143: durable-запись причины остановки — **только** при терминальном
+  // исходе: на recoverable-попытке повтор ещё будет, запись появилась бы
+  // раньше времени (и съела бы ключ дедупликации хода).
+  //
+  // Ключ дедупликации — `streamId` хода: повторный терминальный статус того
+  // же хода второй записи не добавляет. Ошибка записи не ломает обработку
+  // ошибки (остановка уже состоялась — фиксация best-effort).
+  if (isTerminal) {
+    try {
+      const turnId = freshSession?.currentStream?.turnId;
+      await appendStopRecord({
+        sessionManager: deps.sessionManager,
+        ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
+        sessionId,
+        input: {
+          reason: 'provider_error',
+          errorType,
+          retryable: canRetry,
+          attempts: attempt,
+          maxRetries: LLM_MAX_ATTEMPTS,
+          // Тело конверта — сырой текст провайдера (ADR-036: обфускация).
+          error: rawError || humanError,
+          provider: ctx?.providerName,
+          model: ctx?.model,
+          agentRole: ctx?.agentRole,
+          turnId,
+          streamId,
+        },
+        dedupeKey: streamId,
+        ...(deps.obfuscate
+          ? { obfuscate: (m: Message) => deps.obfuscate!(sessionId, m) }
+          : {}),
+      });
+    } catch (err) {
+      warning(
+        'ORCHESTRATOR',
+        `Не удалось записать причину остановки: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   return { error: humanError, errorType, canRetry };

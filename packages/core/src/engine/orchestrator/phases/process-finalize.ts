@@ -40,6 +40,7 @@ import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { dropSteerInjections } from '../../steering/apply.js';
 import type { SteerRequeueResult } from '../../steering/apply.js';
 import { requeueMessages } from '../../../queue/processor.js';
+import { appendStopRecord } from '../../stop-record.js';
 import type { StreamTiming } from '../stream-stats.js';
 // ADR-118 §4: единая точка публикации `step.*`/`turn.*` (замена `stream.done`).
 import {
@@ -261,6 +262,12 @@ export interface ProcessFinalizeDeps {
   ) => Promise<SteerRequeueResult | void>;
   /** ADR-102: aux-учёт (title/QA self-check) — счётчики сессии + роллап usage. */
   recordAuxUsage?: AuxUsageRecorder;
+  /**
+   * PROP-143: обфускация тела durable-записи причины остановки (ADR-036) —
+   * текст ошибки провайдера может нести ключи/URL. Не задана — запись пишется
+   * без обфускации.
+   */
+  obfuscate?: (sessionId: string, message: Message) => Promise<Message>;
 }
 
 /**
@@ -537,6 +544,39 @@ export async function runProcessFinalize(
       turnCostBreakdown,
     );
 
+    // PROP-143: durable-запись причины остановки — пользовательский «Стоп».
+    // Запись идёт **после** сообщения отмены (PROP-143 §«Остаточные технические
+    // вопросы»): лента и контекст читаются сверху вниз — сначала «что успели»,
+    // потом «почему оборвалось». Ключ дедупликации — `streamId` хода: повторный
+    // терминальный статус того же хода второй записи не добавляет.
+    //
+    // Прерывание (`interrupt`, ADR-104) сюда не попадает: оно продолжает тот же
+    // ход, а не останавливает его. Ошибка записи не ломает финализацию.
+    try {
+      await appendStopRecord({
+        sessionManager: deps.sessionManager,
+        eventBus: deps.eventBus,
+        sessionId: session.id,
+        input: {
+          reason: 'stopped_by_user',
+          turnId,
+          streamId,
+          provider: providerName,
+          model: cancelModel,
+          agentRole: effectiveAgentRole,
+        },
+        dedupeKey: streamId,
+        ...(deps.obfuscate
+          ? { obfuscate: (m: Message) => deps.obfuscate!(session.id, m) }
+          : {}),
+      });
+    } catch (err) {
+      warning(
+        'ORCHESTRATOR',
+        `Не удалось записать причину остановки: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     publishChunk('stream.cancelled', {
       stream_id: streamId,
       content: partialContent,
@@ -810,6 +850,41 @@ export async function runProcessFinalize(
     ...(fallbackI18n ? { i18n: fallbackI18n } : {}),
     ...(stepLimitReached ? { step_limit_reached: true } : {}),
   });
+
+  // PROP-143: durable-запись причины остановки — отказ прав (`denied`).
+  // Финальный статус хода `stopped` по ключу `session.denied_blocked` — ход
+  // остановлен политикой/отказом прав, а не «модель промолчала». Запись идёт
+  // **после** финального сообщения хода и не дублирует его: это отдельное
+  // служебное сообщение с машиночитаемой причиной.
+  //
+  // Ключ дедупликации — `streamId` хода: повторный терминальный статус того
+  // же хода второй записи не добавляет. Ошибка записи не ломает финализацию.
+  if (messageStatus === 'stopped' && fallbackI18n?.key === 'session.denied_blocked') {
+    try {
+      await appendStopRecord({
+        sessionManager: deps.sessionManager,
+        eventBus: deps.eventBus,
+        sessionId: session.id,
+        input: {
+          reason: 'denied',
+          turnId,
+          streamId,
+          provider: providerName,
+          model: finalModel,
+          agentRole: effectiveAgentRole,
+        },
+        dedupeKey: streamId,
+        ...(deps.obfuscate
+          ? { obfuscate: (m: Message) => deps.obfuscate!(session.id, m) }
+          : {}),
+      });
+    } catch (err) {
+      warning(
+        'ORCHESTRATOR',
+        `Не удалось записать причину остановки: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   // ADR-115 (outbound): вложения финального ответа — метаданные без байтов.
   // Байты шлюз забирает по sha (`GET /api/v2/attachments/:sha256`), доступ к

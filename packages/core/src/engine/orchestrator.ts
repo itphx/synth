@@ -4641,6 +4641,8 @@ export class ChatOrchestrator {
         this._cancellationTokens.delete(streamId);
       },
       recordAuxUsage: (input) => this._recordAuxUsage(input),
+      // PROP-143: обфускация тела durable-записи причины остановки (ADR-036).
+      obfuscate: (sessionId, message) => this.obfuscateUserMessageForHistory(sessionId, message),
       ...(this._requeueSteerMessages
         ? { requeueSteerMessages: this._requeueSteerMessages }
         : {}),
@@ -8733,8 +8735,10 @@ export class ChatOrchestrator {
       getProvider: (providerName, session, reasoningLevel) =>
         this._getProvider(providerName, session, reasoningLevel),
       cancellationTokens: this._cancellationTokens,
+      // PROP-143: debug-эхо — вспомогательный LLM-вызов: ход пользователя он
+      // не останавливает, поэтому durable-запись причины остановки не пишется.
       handleLlmFailure: (sessionId, streamId, error, attempt, ctx) =>
-        this._handleLlmFailure(sessionId, streamId, error, attempt, ctx),
+        this._handleLlmFailure(sessionId, streamId, error, attempt, ctx, { stopRecord: false }),
       estimatePromptChars: (messages, systemPrompt, tools) =>
         this._estimatePromptChars(messages, systemPrompt, tools),
       computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
@@ -8763,8 +8767,11 @@ export class ChatOrchestrator {
     return {
       optimizer: this._optimizer,
       cancellationTokens: this._cancellationTokens,
+      // PROP-143: сжатие контекста — вспомогательный LLM-вызов: провал сжатия
+      // не останавливает ход пользователя, поэтому durable-запись причины
+      // остановки не пишется (иначе она съела бы ключ дедупликации хода).
       handleLlmFailure: (sessionId, streamId, error, attempt, ctx) =>
-        this._handleLlmFailure(sessionId, streamId, error, attempt, ctx),
+        this._handleLlmFailure(sessionId, streamId, error, attempt, ctx, { stopRecord: false }),
       estimatePromptChars: (messages, systemPrompt, tools) =>
         this._estimatePromptChars(messages, systemPrompt, tools),
       computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
@@ -9348,6 +9355,12 @@ export class ChatOrchestrator {
    * двойной публикации stream.error. Если ошибка recoverable — session
    * разблокируется на уровне QueueProcessor после исчерпания попыток; сессия
    * не остаётся заблокированной навсегда.
+   *
+   * PROP-143: при терминальном исходе пишется durable-запись причины
+   * остановки (`engine/stop-record.ts`) — служебное сообщение
+   * `execution_stopped` в истории. `opts.stopRecord === false` отключает её
+   * для вспомогательных LLM-вызовов (сжатие контекста, debug-эхо): они ход
+   * пользователя **не** останавливают, и запись для них была бы ложной.
    */
   private async _handleLlmFailure(
     sessionId: string,
@@ -9355,10 +9368,18 @@ export class ChatOrchestrator {
     error: unknown,
     attempt?: number,
     ctx?: LlmFailureContext,
+    opts?: { stopRecord?: boolean },
   ): Promise<ProcessMessageResult> {
+    const withStopRecord = opts?.stopRecord !== false;
     return handleLlmFailure(sessionId, streamId, error, attempt, ctx, {
       sessionManager: this._sessionManager,
       recordUsage: (input) => this._recordAuxUsage(input),
+      ...(withStopRecord
+        ? {
+          eventBus: this._eventBus,
+          obfuscate: (sid: string, message: Message) => this.obfuscateUserMessageForHistory(sid, message),
+        }
+        : {}),
     });
   }
 

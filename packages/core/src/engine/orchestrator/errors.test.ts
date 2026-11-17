@@ -28,6 +28,7 @@ import {
   RemoteAuthExpiredError,
 } from '../../providers/exceptions.js';
 import { LLM_MAX_ATTEMPTS } from '../llm-error.js';
+import { STOP_MESSAGE_TYPE } from '../stop-reason.js';
 import { RemoteError } from '../../remote/types.js';
 import { t as sm } from '../system-messages.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './errors.js';
@@ -167,8 +168,15 @@ describe('handleLlmFailure', () => {
     });
     // best-effort оценка usage: promptChars/4 и content.length/4
     expect(input.usage).toMatchObject({ inputTokens: 10, outputTokens: 2, totalTokens: 12 });
-    // сообщения об ошибке нет — только user-реплика
-    expect((await sessionManager.getSession(sessionId))!.messages).toHaveLength(1);
+    // Assistant-сообщения об ошибке нет — только user-реплика и служебная
+    // запись причины остановки (PROP-143: причина стала durable).
+    const messages = (await sessionManager.getSession(sessionId))!.messages;
+    expect(messages.filter((m) => m.role === MessageRole.ASSISTANT)).toHaveLength(0);
+    expect(messages).toHaveLength(2);
+    const stopRecord = messages.find((m) => m.metadata?.type === STOP_MESSAGE_TYPE)!;
+    expect(stopRecord.metadata?.reason).toBe('provider_error');
+    expect(stopRecord.metadata?.error_type).toBe('network_error');
+    expect(stopRecord.metadata?.attempts).toBe(LLM_MAX_ATTEMPTS + 1);
   });
 
   it('attempt === undefined (прямой вызов без QueueProcessor) — терминальный путь', async () => {
@@ -318,6 +326,11 @@ describe('handleLlmFailure', () => {
     );
 
     expect(result).toMatchObject({ errorType: 'auth_error', canRetry: false });
-    expect((await sessionManager.getSession(sessionId))!.messages).toHaveLength(1);
+    // Assistant-сообщения нет; служебная запись причины остановки — есть
+    // (PROP-143) и не зависит от необязательных deps.
+    const messages = (await sessionManager.getSession(sessionId))!.messages;
+    expect(messages.filter((m) => m.role === MessageRole.ASSISTANT)).toHaveLength(0);
+    expect(messages.find((m) => m.metadata?.type === STOP_MESSAGE_TYPE)?.metadata?.reason)
+      .toBe('provider_error');
   });
 });

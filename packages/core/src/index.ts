@@ -275,6 +275,10 @@ export type { OrchestratorOptions, ProcessMessageResult, ModelPricing, Permissio
 // модуль позже).
 export { STOP_MESSAGE_TYPE, renderStopEnvelope, buildStopRecord } from './engine/stop-reason.js';
 export type { StopReason, StopRecordInput } from './engine/stop-reason.js';
+// PROP-143: общий писатель durable-записи причины остановки (идемпотентно,
+// с обфускацией тела и публикацией `message.added`).
+export { appendStopRecord, hasStopRecord } from './engine/stop-record.js';
+export type { AppendStopRecordOptions } from './engine/stop-record.js';
 export { runSubagentResume, validateSubagentResume, SubagentResumeError } from './engine/tools/task-resume.js';
 export type { SubagentResumeDeps, SubagentResumeOptions, SubagentResumeResult, SubagentResumeErrorCode } from './engine/tools/task-resume.js';
 export { SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS } from './engine/tools/task.js';
