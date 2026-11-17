@@ -38,6 +38,8 @@ vi.hoisted(() => {
 const mocks = vi.hoisted(() => ({
   getSessionMemory: vi.fn(),
   getOptimization: vi.fn(),
+  getSchedules: vi.fn(),
+  listTimers: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
@@ -93,6 +95,15 @@ beforeEach(() => {
     summarize_head_messages: 0,
     summarize_tail_messages: 0,
   })
+  // Вкладка «Автоматизация» (PROP-141, этап 7b) тоже ходит в API.
+  mocks.getSchedules.mockResolvedValue({ schedules: [] })
+  mocks.listTimers.mockResolvedValue({
+    timers: [],
+    total: 0,
+    offset: 0,
+    limit: 50,
+    next_offset: null,
+  })
   useUIStore.setState({
     rightPanelTab: 'context',
     activeCenterTabId: 'tab-1',
@@ -121,7 +132,7 @@ describe('RightPanel — порядок вкладок (ADR-071)', () => {
       'stats',
       'memory',
       'references',
-      'scheduler',
+      'automation',
       'processes',
     ])
     expect(ids.indexOf('params')).toBe(0)
@@ -135,9 +146,9 @@ describe('RightPanel — порядок вкладок (ADR-071)', () => {
     expect(ids.indexOf('memory')).toBe(ids.indexOf('stats') + 1)
   })
 
-  it('вкладка «Процессы» идёт рядом с «Шедулером» (PROP-096/097)', () => {
+  it('вкладка «Процессы» идёт рядом с «Автоматизацией» (PROP-096/097)', () => {
     const ids = RIGHT_TABS.map((tab) => tab.id)
-    expect(ids.indexOf('processes')).toBe(ids.indexOf('scheduler') + 1)
+    expect(ids.indexOf('processes')).toBe(ids.indexOf('automation') + 1)
   })
 
   it('сетка вкладок: 4 в первом ряду, остальные — во втором', () => {
@@ -164,6 +175,26 @@ describe('RightPanel — порядок вкладок (ADR-071)', () => {
 
     expect(useUIStore.getState().rightPanelTab).toBe('memory')
   })
+
+  it('вкладка «Автоматизация» открывается и рендерит свои секции', async () => {
+    useUIStore.setState({ rightPanelTab: 'automation' })
+    const container = await renderRightPanel()
+
+    // Ленивый импорт вкладки — дожидаемся появления секции.
+    // `vi.waitFor` внутри `act` блокирует разрешение промиса ленивого чанка
+    // (act держит очередь обновлений), поэтому ждём снаружи.
+    await vi.waitFor(
+      () => {
+        expect(
+          container.querySelector('[data-testid="automation-section-schedule"]'),
+        ).not.toBeNull()
+      },
+      { timeout: 5000, interval: 10 },
+    )
+
+    expect(container.querySelector('[data-testid="automation-section-timer"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="automation-section-alarm"]')).not.toBeNull()
+  })
 })
 
 describe('RightPanel — выделенный проект (сессии нет)', () => {
@@ -182,7 +213,7 @@ describe('RightPanel — выделенный проект (сессии нет)
       expect(button.getAttribute('title')).toBe(enDict['rightPanel.tab.requiresSession'])
     }
 
-    for (const id of ['project', 'scheduler', 'processes']) {
+    for (const id of ['project', 'automation', 'processes']) {
       const button = tabButton(container, id)
       expect(button, `вкладка ${id}`).toBeTruthy()
       expect(button.disabled, `вкладка ${id} должна быть доступна`).toBe(false)

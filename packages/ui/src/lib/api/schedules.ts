@@ -3,11 +3,30 @@
 import type { Schedule, ScheduleInput, ScheduleJob } from '@itphx/synth-shared/types'
 import { BASE_URL, fetchJSON } from './base'
 
+/**
+ * Фильтры списка расписаний (`GET /api/v2/schedules`).
+ *
+ * Скоуп отдаётся **серверу**: при большом числе расписаний клиентская
+ * выборка «все и отфильтровать» могла не содержать запись нужного скоупа.
+ */
+export interface ScheduleListOptions {
+  /** Цель `bound`/`queue` — id сессии. */
+  sessionId?: string
+  /** Проект расписания (PROP-141: проект у расписания обязателен). */
+  projectId?: string
+}
+
 export const schedulesApi = {
   // --- Шедулер расписаний (ADR-051 / ADR-089) ---
-  /** GET /schedules — список расписаний инстанса. */
-  async getSchedules(): Promise<{ schedules: Schedule[] }> {
-    return fetchJSON<{ schedules: Schedule[] }>(`${BASE_URL}/schedules`)
+  /** GET /schedules — список расписаний (по скоупу — фильтр на сервере). */
+  async getSchedules(options?: ScheduleListOptions): Promise<{ schedules: Schedule[] }> {
+    const params = new URLSearchParams()
+    if (options?.sessionId) params.set('sessionId', options.sessionId)
+    if (options?.projectId) params.set('projectId', options.projectId)
+    const query = params.toString()
+    return fetchJSON<{ schedules: Schedule[] }>(
+      `${BASE_URL}/schedules${query ? `?${query}` : ''}`,
+    )
   },
 
   /** POST /schedules — создание расписания. */

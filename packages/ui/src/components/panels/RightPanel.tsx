@@ -21,7 +21,9 @@ const SessionSettingsTab = lazy(() =>
   import('./SessionSettingsTab').then((m) => ({ default: m.SessionSettingsTab })),
 )
 const ProjectTab = lazy(() => import('./ProjectTab').then((m) => ({ default: m.ProjectTab })))
-const SchedulerTab = lazy(() => import('./SchedulerTab').then((m) => ({ default: m.SchedulerTab })))
+const AutomationTab = lazy(
+  () => import('./automation/AutomationTab').then((m) => ({ default: m.AutomationTab })),
+)
 const ProcessesTab = lazy(() => import('./ProcessesTab').then((m) => ({ default: m.ProcessesTab })))
 
 /** Заглушка на время загрузки ленивой вкладки — спиннер в сетке панели. */
@@ -43,7 +45,8 @@ export const RIGHT_TABS = [
   { id: 'stats', icon: 'bar-chart-2' as const, labelKey: 'rightPanel.tab.stats' },
   { id: 'memory', icon: 'brain' as const, labelKey: 'rightPanel.tab.memory' },
   { id: 'references', icon: 'link' as const, labelKey: 'rightPanel.tab.references' },
-  { id: 'scheduler', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.scheduler' },
+  // PROP-141 (этап 7b): «Автоматизация» — расписания, таймеры и будильники.
+  { id: 'automation', icon: 'calendar-schedule' as const, labelKey: 'rightPanel.tab.automation' },
   // PROP-096/097: единый реестр фоновых процессов и фоновых саб-агентов.
   { id: 'processes', icon: 'terminal-box' as const, labelKey: 'rightPanel.tab.processes' },
 ] as const
@@ -53,7 +56,7 @@ export const RIGHT_TABS = [
  *
  * В режиме выделенного проекта (`selectedProjectId`) сессии нет: вкладки
  * остаются в списке, но становятся недоступны («Нужна сессия»). Проектные
- * вкладки («Проект», «Шедулер», «Процессы») доступны всегда.
+ * вкладки («Проект», «Автоматизация», «Процессы») доступны всегда.
  */
 const SESSION_SCOPED_TABS = new Set<string>([
   'params',
@@ -165,7 +168,7 @@ export const RightPanel: React.FC = () => {
               </div>
             </PanelTab>
           )}
-          {rightPanelTab === 'scheduler' && <SchedulerTab />}
+          {rightPanelTab === 'automation' && <AutomationTab />}
           {rightPanelTab === 'processes' && <ProcessesTab />}
         </Suspense>
       </div>

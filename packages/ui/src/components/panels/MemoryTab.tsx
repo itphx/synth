@@ -576,7 +576,7 @@ export const MemoryTab: React.FC = () => {
     }
   }
 
-  /** «Расписание»: deep-link в «Шедулер» с предзаполненной формой (не создаёт). */
+  /** «Расписание»: deep-link в «Автоматизацию» с предзаполненной формой (не создаёт). */
   const handleSchedule = (action: MemoryAutomationAction): void => {
     const projectId = automationProjectId
     const pipeline = findPipeline(action.templateId)
@@ -588,7 +588,7 @@ export const MemoryTab: React.FC = () => {
       ...(action.withSession && sessionId ? { payload: { sessionId } } : {}),
       cron: '0 3 * * *',
     })
-    setRightPanelTab('scheduler')
+    setRightPanelTab('automation')
   }
 
   return (

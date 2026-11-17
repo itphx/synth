@@ -783,7 +783,7 @@ describe('MemoryTab — автоматизация памяти (ADR-101)', () =
       pipelineId: 'pl-dedupe',
       cron: '0 3 * * *',
     })
-    expect(useUIStore.getState().rightPanelTab).toBe('scheduler')
+    expect(useUIStore.getState().rightPanelTab).toBe('automation')
     expect(mocks.startPipelineRun).not.toHaveBeenCalled()
   })
 
