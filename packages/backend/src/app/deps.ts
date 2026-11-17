@@ -1736,6 +1736,11 @@ export async function createBackendDeps(
     // PROP-141 (Часть D): сервис переноса сессии (late-bound — собирается
     // после движка таймеров) → extra тулов `project_attach`/`project_create`.
     getMoveService: () => moveServiceRef.service,
+    // PROP-141 (этап 6): движок таймеров/будильников (late-bound — тот же
+    // экземпляр, что у HTTP-роутов `/api/v2/timers*`) и порт реестра →
+    // extra тулов `timer`/`alarm`.
+    getTimerService: () => timerServiceRef.service,
+    timerRepository: storageContext.timers,
     // ADR-101/ADR-051: late-bound рантайм автоматизации для встроенных тулов
     // (`pipeline_*`/`schedule_*`) — движок пайплайнов и шедулер создаются ниже,
     // поэтому геттер отдаёт актуальный снимок в момент хода.

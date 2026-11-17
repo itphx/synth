@@ -1848,6 +1848,11 @@ export async function createStandaloneDeps(
     // PROP-141 (Часть D): сервис переноса сессии (late-bound — собирается
     // после движка таймеров) → extra тулов `project_attach`/`project_create`.
     getMoveService: () => moveServiceRef.service,
+    // PROP-141 (этап 6): движок таймеров/будильников (late-bound — тот же
+    // экземпляр, что у HTTP-роутов `/api/v2/timers*`) и порт реестра →
+    // extra тулов `timer`/`alarm`.
+    getTimerService: () => timerServiceRef.service,
+    timerRepository: storageContext.timers,
     // Этап 1 roadmap 0.13 (блок 3): сервис «вопрос пользователю» — тул
     // `question` задаёт вопрос и ждёт ответа пользователя.
     ...(questionService ? { questionService } : {}),

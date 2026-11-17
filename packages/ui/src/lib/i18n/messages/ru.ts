@@ -4224,6 +4224,32 @@ export const dict = {
   'schedule.tool.target_forbidden': 'Цель расписания недоступна: {reason}',
   'schedule.tool.not_published': 'У пайплайна «{id}» нет опубликованной версии',
 
+  // --- Встроенные тулы таймеров и будильников (PROP-141, этап 6) ---
+  'timer.tool.deps_unavailable':
+    'Ошибка: сервис автоматизаций (таймеры и будильники) недоступен в этой сессии',
+  'timer.tool.no_project':
+    'Ошибка: автоматизации возможны только в проекте — у этой сессии нет проекта, поэтому таймер и будильник создать нельзя',
+  'timer.tool.not_found': 'Ошибка: таймер «{id}» не найден',
+  'timer.tool.created': 'Таймер «{id}» создан — сработает в {fires_at}',
+  'timer.tool.updated': 'Таймер «{id}» обновлён',
+  'timer.tool.cancelled': 'Таймер «{id}» отменён',
+  'timer.tool.list_header': 'Автоматизации ({count}):',
+  'timer.tool.list_empty': 'Нет автоматизаций такого вида',
+  'timer.tool.invalid_comment':
+    'Ошибка: некорректный комментарий — он должен быть длиной 1–500 символов и объяснять, что делать при срабатывании',
+  'timer.tool.invalid_interval':
+    'Ошибка: некорректный интервал — «{field}» должно быть целым числом секунд (10…2592000)',
+  'timer.tool.invalid_time':
+    'Ошибка: некорректное время — «{field}» должно быть в формате HH:MM (00:00–23:59)',
+  'timer.tool.invalid_timezone':
+    'Ошибка: неизвестный часовой пояс — «{field}» не похоже на IANA-идентификатор (например Europe/Moscow)',
+  'timer.tool.invalid_horizon':
+    'Ошибка: за пределами горизонта — «{field}» дальше 30 суток для одноразовой автоматизации',
+  'timer.tool.invalid_target':
+    'Ошибка: некорректное время срабатывания — «{field}» не указывает на реальный момент',
+  'timer.tool.limit_exceeded':
+    'Ошибка: превышен лимит — не больше {limit} активных автоматизаций на сессию',
+
   // --- Исполнение (ADR-077) ---
   'execution.remote_url_required': 'Удалённый режим исполнения (execution.mode=remote) требует хотя бы один адрес исполнителя (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
   'execution.remote_unavailable': 'Удалённый режим исполнения (execution.mode=remote) недоступен: {reason}',

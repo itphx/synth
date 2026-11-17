@@ -112,6 +112,10 @@ import type { BackgroundRunService } from './background/service.js';
 import type { TerminalService } from './terminal/service.js';
 // PROP-141 (Часть D): сервис переноса сессии между проектами (единый шов).
 import type { SessionMoveService } from '../sessions/move-service.js';
+// PROP-141 (этап 6): движок таймеров/будильников — тулы `timer`/`alarm`.
+import type { TimerService } from './timers/service.js';
+// PROP-141 (этап 6): порт реестра таймеров (список/чтение записей, ADR-096).
+import type { TimerRepository } from '../storage/ports/timer-repository.js';
 // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
 import { ActiveRunRegistry } from './background/active-runs.js';
 import type { ProcessService } from './processes/service.js';
@@ -1162,6 +1166,26 @@ export interface OrchestratorOptions {
    */
   getMoveService?: () => SessionMoveService | undefined;
   /**
+   * PROP-141 (этап 6): движок таймеров/будильников — тулы `timer`/`alarm`.
+   *
+   * Тот же экземпляр, что у HTTP-роутов `/api/v2/timers*` (один на процесс).
+   * Передаётся **late-bound** (геттером): сервис собирается позже
+   * оркестратора (ему нужны шина событий и порты хранилища), а extra тулов
+   * читается на каждом вызове.
+   *
+   * Не задан — тулы `timer`/`alarm` недоступны
+   * (`timer.tool.deps_unavailable`).
+   */
+  getTimerService?: () => TimerService | undefined;
+  /**
+   * PROP-141 (этап 6): порт реестра таймеров/будильников (ADR-096) — список
+   * и чтение записей для тулов `timer`/`alarm`.
+   *
+   * Не задан — список автоматизаций недоступен
+   * (`timer.tool.deps_unavailable`).
+   */
+  timerRepository?: TimerRepository;
+  /**
    * ADR-104 × ADR-111/ADR-113: вернуть в очередь **все** сообщения, оставшиеся
    * в steer-очереди к концу хода (ни пользовательский ввод, ни уведомления
    * фоновых прогонов теряться не должны). `opts.autostart` — поднять ли ход:
@@ -1528,6 +1552,15 @@ export class ChatOrchestrator {
    * (null — сервис не задан).
    */
   private readonly _getMoveService: (() => SessionMoveService | undefined) | null;
+  /**
+   * PROP-141 (этап 6): late-bound доступ к движку таймеров/будильников
+   * (null — сервис не задан: тулы `timer`/`alarm` недоступны).
+   */
+  private readonly _getTimerService: (() => TimerService | undefined) | null;
+  /**
+   * PROP-141 (этап 6): порт реестра таймеров (null — не задан).
+   */
+  private readonly _timerRepository: TimerRepository | null;
   /**
    * ADR-104 × ADR-111/ADR-113: возврат остатка steer-очереди в обычную очередь
    * (ни ввод пользователя, ни уведомления фоновых прогонов не теряются).
@@ -2116,6 +2149,9 @@ export class ChatOrchestrator {
     this._terminalService = options.terminalService ?? null;
     // PROP-141 (Часть D): сервис переноса сессии (late-bound).
     this._getMoveService = options.getMoveService ?? null;
+    // PROP-141 (этап 6): движок таймеров (late-bound) + порт реестра.
+    this._getTimerService = options.getTimerService ?? null;
+    this._timerRepository = options.timerRepository ?? null;
     this._requeueSteerMessages = options.requeueSteerMessages ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
@@ -7232,6 +7268,10 @@ export class ChatOrchestrator {
                   // PROP-141 (Часть D): сервис переноса сессии между проектами
                   // (единый шов для `project_attach`/`project_create`).
                   moveService: this._getMoveService?.() ?? undefined,
+                  // PROP-141 (этап 6): движок таймеров/будильников и порт
+                  // реестра — тулы `timer`/`alarm` (создание/правка/отмена/список).
+                  timerService: this._getTimerService?.() ?? undefined,
+                  timers: this._timerRepository ?? undefined,
                   // ADR-115: привязка файла из workspace к диалогу — сервис
                   // вложений, live-конфиг (ранние проверки), доставка
                   // user-сообщения (очередь + автоход) и учёт ссылок на blob.

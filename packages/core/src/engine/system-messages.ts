@@ -711,6 +711,32 @@ export const SYSTEM_MESSAGES = {
   'schedule.tool.target_forbidden': 'The target of the schedule is not allowed: {reason}',
   'schedule.tool.not_published': 'Pipeline "{id}" has no published version',
 
+  // --- Встроенные тулы таймеров и будильников (PROP-141, этап 6) ---
+  'timer.tool.deps_unavailable':
+    'Error: the automation service (timers and alarms) is unavailable in this session',
+  'timer.tool.no_project':
+    'Error: automations require a project — this session has no project, so timers and alarms cannot be created',
+  'timer.tool.not_found': 'Error: timer "{id}" not found',
+  'timer.tool.created': 'Timer "{id}" created — fires at {fires_at}',
+  'timer.tool.updated': 'Timer "{id}" updated',
+  'timer.tool.cancelled': 'Timer "{id}" cancelled',
+  'timer.tool.list_header': 'Automations ({count}):',
+  'timer.tool.list_empty': 'No automations of this kind',
+  'timer.tool.invalid_comment':
+    'Error: invalid comment — the comment must be 1-500 characters and must explain what to do when the automation fires',
+  'timer.tool.invalid_interval':
+    'Error: invalid interval — "{field}" must be a whole number of seconds (10…2592000)',
+  'timer.tool.invalid_time':
+    'Error: invalid time — "{field}" must be in the HH:MM format (00:00-23:59)',
+  'timer.tool.invalid_timezone':
+    'Error: invalid timezone — "{field}" is not a known IANA timezone (for example Europe/Moscow)',
+  'timer.tool.invalid_horizon':
+    'Error: out of range — "{field}" is beyond the 30-day horizon of a one-shot automation',
+  'timer.tool.invalid_target':
+    'Error: invalid fire time — "{field}" does not point to a valid moment',
+  'timer.tool.limit_exceeded':
+    'Error: limit exceeded — at most {limit} active automations per session',
+
   // --- Исполнение (ADR-077) ---
   'execution.remote_url_required':
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',

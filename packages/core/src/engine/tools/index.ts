@@ -129,6 +129,8 @@ import { sshCopyTool } from './ssh-copy.js';
 import { sshTunnelTool } from './ssh-tunnel.js';
 // ADR-126 §5: реестр скриптов проекта (`!`-запуск).
 import { scriptListTool, scriptRunTool } from './scripts.js';
+// PROP-141 (этап 6): таймеры и будильники — автоматизации, которые будят агента.
+import { timerTool, alarmTool } from './timers.js';
 
 export { ToolRegistry } from './registry.js';
 export { zodToJsonSchema } from './json-schema.js';
@@ -274,6 +276,9 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   // ADR-126 §5: скрипты проекта (`!`-запуск) — список и запуск.
   scriptListTool,
   scriptRunTool,
+  // PROP-141 (этап 6): таймеры и будильники (автоматизации «вернуться позже»).
+  timerTool,
+  alarmTool,
 ];
 
 export function createToolRegistry(): ToolRegistry {
