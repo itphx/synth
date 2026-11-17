@@ -64,6 +64,11 @@ export const ENGINE_MESSAGE_KEYS = [
   'task.background_disabled',
   'task.resume_foreign_child',
   'task.resume_child_busy',
+  // PROP-142 §1–§2: доставка сообщения идущему сабагенту и продолжение с
+  // новыми указаниями.
+  'task.agent_switch_unsupported',
+  'task.continuation_prompt_required',
+  'task.delivery_rejected',
   'tool.args_error',
   'tool.exec_error',
   // Вызов инструмента без имени/идентификатора — результат всё равно должен
@@ -741,6 +746,9 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'task.background_disabled': [],
   'task.resume_foreign_child': ["id"],
   'task.resume_child_busy': ["id"],
+  'task.agent_switch_unsupported': ["current","requested"],
+  'task.continuation_prompt_required': [],
+  'task.delivery_rejected': ["reason"],
   'tool.args_error': ["tool","issues"],
   'tool.exec_error': ["tool","error"],
   'tool.malformed_call': ["tool","id"],

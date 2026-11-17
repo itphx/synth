@@ -733,7 +733,52 @@ describe('task/tool.ts — продолжение ребёнка через task
     expect(chatAsync).not.toHaveBeenCalled();
   });
 
-  it('занятый ребёнок (currentStream) → task.resume_child_busy', async () => {
+  it('занятый ребёнок (currentStream) → сообщение доставляется (steer), прогон не запускается', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const eventBus = new EventBus();
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    child.currentStream = {
+      streamId: 'st-1',
+      message: 'идёт',
+      agentRole: 'explore',
+      startedAt: new Date().toISOString(),
+      cancelled: false,
+    };
+    await sessionManager.saveSession(child);
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'новое указание', task_id: child.id, delivery: 'steer' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        eventBus,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    // Доставка не блокирует ход родителя — тул возвращает статус.
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata!.status).toBe('steered');
+    expect(result.metadata!.child_session_id).toBe(child.id);
+    expect(result.metadata!.pending_count).toBe(1);
+    expect(JSON.parse(result.content)).toMatchObject({ status: 'steered', child_session_id: child.id });
+    // Прогон ребёнка не запускался (родительский LLM не звали).
+    expect(chatAsync).not.toHaveBeenCalled();
+
+    // Сообщение — в очереди инъекций ребёнка с маркером `steer`.
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.steerInbox).toHaveLength(1);
+    expect(saved.steerInbox![0]!.content).toBe('новое указание');
+    expect(saved.steerInbox![0]!.metadata?.steer).toBe(true);
+  });
+
+  it('занятый ребёнок без prompt → task.continuation_prompt_required', async () => {
     const { provider, chatAsync } = makeProvider();
     const child = await sessionManager.createSession({
       title: 'C',
@@ -751,13 +796,12 @@ describe('task/tool.ts — продолжение ребёнка через task
     await sessionManager.saveSession(child);
 
     const result = await taskTool.execute(
-      { description: 'd', prompt: 'go', subagent_type: 'explore', task_id: child.id },
+      { description: 'd', task_id: child.id },
       makeCtx({ provider, agentRegistry: makeAgentRegistry(), sessionManager, sessionId: parent.id }, parent.id),
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('is busy or already running');
-    expect(result.metadata!.i18n).toMatchObject({ key: 'task.resume_child_busy' });
+    expect(result.metadata!.i18n).toMatchObject({ key: 'task.continuation_prompt_required' });
     expect(chatAsync).not.toHaveBeenCalled();
   });
 
@@ -780,10 +824,35 @@ describe('task/tool.ts — продолжение ребёнка через task
     expect(result.content).toContain('resumed answer');
     expect(chatAsync).toHaveBeenCalledTimes(1);
 
-    // В историю ребёнка добавлен маркер продолжения и ответ саб-агента.
+    // В историю ребёнка добавлено продолжение с текстом (PROP-142 §2) и ответ
+    // саб-агента.
+    const saved = (await sessionManager.getSession(child.id))!;
+    const continuation = saved.messages.find((m) => m.metadata?.continuation === true);
+    expect(continuation).toBeDefined();
+    expect(continuation!.content).toBe('go');
+    expect(saved.messages.some((m) => m.content.includes('resumed answer'))).toBe(true);
+  });
+
+  it('свободный ребёнок без prompt — служебный маркер resume (как раньше)', async () => {
+    const { provider, chatAsync } = makeProvider('resumed answer');
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', task_id: child.id },
+      makeCtx({ provider, agentRegistry: makeAgentRegistry(), sessionManager, sessionId: parent.id }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(chatAsync).toHaveBeenCalledTimes(1);
     const saved = (await sessionManager.getSession(child.id))!;
     expect(saved.messages.some((m) => m.metadata?.resume === true)).toBe(true);
-    expect(saved.messages.some((m) => m.content.includes('resumed answer'))).toBe(true);
+    // Продолжения с текстом нет — текста не было.
+    expect(saved.messages.some((m) => m.metadata?.continuation === true)).toBe(false);
   });
 
   it('продолжение через task_id: температура агента (клон провайдера родителя)', async () => {
@@ -994,6 +1063,296 @@ describe('task/tool.ts — продолжение ребёнка через task
     expect(
       child.messages.some((m) => m.metadata?.state === true && m.metadata?.type === 'todos_updated'),
     ).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROP-142 §1–§2: доставка сообщения **занятому** ребёнку (`delivery`) и
+// продолжение с новыми указаниями (`prompt`, `model`/`provider`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('task/tool.ts — PROP-142: доставка занятому ребёнку и продолжение с указаниями', () => {
+  let dir: string;
+  let sessionManager: SessionManager;
+  let parent: Session;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-task-delivery-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+    parent = await sessionManager.createSession({ title: 'P' });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  });
+
+  /** Ребёнок с идущим ходом (`currentStream`) — «занят». */
+  async function makeBusyChild(): Promise<Session> {
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    child.currentStream = {
+      streamId: 'st-1',
+      message: 'идёт',
+      agentRole: 'explore',
+      startedAt: new Date().toISOString(),
+      cancelled: false,
+    };
+    await sessionManager.saveSession(child);
+    return child;
+  }
+
+  /** Реестр фоновых прогонов (memory-порт) — для проверки «занят по реестру». */
+  function makeBackgroundService() {
+    const repository = new MemoryBackgroundRunRepository();
+    const eventBus = new EventBus();
+    const service = new BackgroundRunService({
+      repository,
+      eventBus,
+      limits: {
+        maxSubagentsPerSession: 0,
+        maxProcessesPerSession: 0,
+        maxRunsPerSession: 0,
+      },
+      generateId: () => 'id-1',
+      onNotifyParent: () => {},
+    });
+    return { service, eventBus };
+  }
+
+  it('новая задача без prompt/subagent_type → argError с указанием полей', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const result = await taskTool.execute(
+      { description: 'd' },
+      makeCtx({ provider, agentRegistry: makeAgentRegistry(), sessionManager, sessionId: parent.id }, parent.id),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('prompt');
+    expect(result.content).toContain('subagent_type');
+    expect(result.metadata!.i18n).toMatchObject({ key: 'tool.args_error' });
+    expect(chatAsync).not.toHaveBeenCalled();
+    // Дочерней сессии не создалось.
+    expect((await sessionManager.listSessions()).filter((s) => s.parentId === parent.id)).toHaveLength(0);
+  });
+
+  it('delivery=queue: сообщение попадает в очередь ребёнка, статус queued', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const eventBus = new EventBus();
+    const child = await makeBusyChild();
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'после текущего прогона', task_id: child.id, delivery: 'queue' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        eventBus,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata!.status).toBe('queued');
+    expect(result.metadata!.child_session_id).toBe(child.id);
+    expect(result.metadata!.pending_count).toBe(1);
+    expect(JSON.parse(result.content)).toMatchObject({ status: 'queued', child_session_id: child.id });
+    expect(chatAsync).not.toHaveBeenCalled();
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.pendingMessages).toHaveLength(1);
+    expect(saved.pendingMessages[0]!.content).toBe('после текущего прогона');
+    // В очередь инъекций ничего не попало.
+    expect(saved.steerInbox ?? []).toHaveLength(0);
+  });
+
+  it('delivery=steer по умолчанию: инъекция в идущий ход, статус steered', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const eventBus = new EventBus();
+    const child = await makeBusyChild();
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'уточнение', task_id: child.id },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        eventBus,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata!.status).toBe('steered');
+    expect(result.metadata!.pending_count).toBe(1);
+    expect(chatAsync).not.toHaveBeenCalled();
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.steerInbox).toHaveLength(1);
+    expect(saved.steerInbox![0]!.content).toBe('уточнение');
+    expect(saved.steerInbox![0]!.metadata?.steer).toBe(true);
+    // В обычную очередь ничего не попало.
+    expect(saved.pendingMessages ?? []).toHaveLength(0);
+  });
+
+  it('занятость по реестру фоновых прогонов (currentStream нет) — тоже доставка', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    const { service, eventBus } = makeBackgroundService();
+    await service.startSubagent({
+      sessionId: parent.id,
+      childSessionId: child.id,
+      agentRole: 'explore',
+      description: 'фоновый прогон',
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'подсказка', task_id: child.id, delivery: 'steer' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(),
+        sessionManager,
+        eventBus,
+        backgroundService: service,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata!.status).toBe('steered');
+    expect(chatAsync).not.toHaveBeenCalled();
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.steerInbox).toHaveLength(1);
+  });
+
+  it('subagent_type не совпадает с агентом ребёнка → task.agent_switch_unsupported', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', task_id: child.id, subagent_type: 'fixer' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore', 'fixer']),
+        sessionManager,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.i18n).toMatchObject({ key: 'task.agent_switch_unsupported' });
+    expect(result.content).toContain('explore');
+    expect(result.content).toContain('fixer');
+    expect(chatAsync).not.toHaveBeenCalled();
+  });
+
+  it('subagent_type совпадает с агентом ребёнка — продолжение идёт', async () => {
+    const { provider, chatAsync } = makeProvider('ok');
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', task_id: child.id, subagent_type: 'explore' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(chatAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('свободный ребёнок + model/provider: настройки обновлены, прогон на новой паре', async () => {
+    const parentProv = makeNamedProvider('parent-prov', 'parent-model');
+    const newProv = makeNamedProvider('new-prov', 'new-model');
+    const { getProvider, router } = makeModelRouterMock({
+      providerFor: (d) => (d.providerName === 'new-prov' ? newProv.provider : null),
+    });
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore', provider: 'parent-prov', model: 'parent-model' },
+    });
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        task_id: child.id,
+        provider: 'new-prov',
+        model: 'new-model',
+      },
+      makeCtx({
+        provider: parentProv.provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        modelRouter: router,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Настройки ребёнка переключены на новую пару.
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.settings.provider).toBe('new-prov');
+    expect(saved.settings.model).toBe('new-model');
+    // Прогон идёт на новой паре, а не на родительской.
+    expect(getProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerName: 'new-prov',
+      modelName: 'new-model',
+    }), undefined);
+    expect(newProv.chatAsync).toHaveBeenCalledTimes(1);
+    expect(parentProv.chatAsync).not.toHaveBeenCalled();
+  });
+
+  it('свободный ребёнок + delivery — доставка не применяется, идёт синхронный прогон', async () => {
+    const { provider, chatAsync } = makeProvider('ok');
+    const eventBus = new EventBus();
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', task_id: child.id, delivery: 'steer' },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        eventBus,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata!.status).toBeUndefined();
+    expect(chatAsync).toHaveBeenCalledTimes(1);
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.steerInbox ?? []).toHaveLength(0);
+    expect(saved.pendingMessages ?? []).toHaveLength(0);
   });
 });
 

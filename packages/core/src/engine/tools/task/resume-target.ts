@@ -109,6 +109,48 @@ export async function appendResumeMarker(
 }
 
 /**
+ * Добавить в историю дочерней сессии **обычное user-сообщение** с новыми
+ * указаниями (PROP-142 §2: продолжение передаёт текст, а не только маркер).
+ *
+ * Отличие от `appendResumeMarker`: маркер — служебный текст без указаний
+ * (`task.resume_marker`), здесь — текст, который задал вызывающий. Метка
+ * `metadata.continuation` отличает продолжение от обычной реплики в UI и в
+ * статистике; `stream_id` — как у обычного ввода.
+ *
+ * Маркер остаётся для путей без текста (HTTP-resume, автовосстановление).
+ */
+export async function appendContinuationMessage(
+  sessionManager: SessionManager,
+  eventBus: EventBus | undefined,
+  opts: { child: Session; parentSessionId: string; streamId: string; text: string },
+): Promise<Session> {
+  const { child, parentSessionId, streamId, text } = opts;
+  const continuationMsg: Message = {
+    id: generateId(),
+    role: MessageRole.USER,
+    seq: 0,
+    origin: 'local',
+    parts: [makeTextPart(text)],
+    content: text,
+    createdAt: nowISO(),
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    author: 'user',
+    metadata: {
+      continuation: true,
+      stream_id: streamId,
+    },
+  };
+  const updated = await sessionManager.addMessage(child.id, continuationMsg);
+  if (updated && eventBus) {
+    const idx = updated.messages.length - 1;
+    await publishMessageAdded(eventBus, parentSessionId, child.id, updated.messages[idx]!, idx, updated);
+  }
+  return updated ?? child;
+}
+
+/**
  * История дочерней сессии → LLM-сообщения (system добавит вызывающий).
  *
  * Скрытые и отключённые сообщения в контекст не идут.

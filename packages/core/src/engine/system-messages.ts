@@ -104,6 +104,14 @@ export const SYSTEM_MESSAGES = {
     'Session {id} is not a subagent session of the current session — it cannot be continued from here',
   'task.resume_child_busy':
     'Session {id} is busy or already running — it cannot be continued right now',
+  // PROP-142 §1–§2: доставка сообщения идущему сабагенту и продолжение с
+  // новыми указаниями.
+  'task.agent_switch_unsupported':
+    'Cannot switch the subagent type of an existing child session ({current} → {requested}); start a new task instead',
+  'task.continuation_prompt_required':
+    'A running subagent can only be updated with a prompt',
+  'task.delivery_rejected':
+    'Could not deliver the message to the running subagent ({reason})',
 
   // --- Тулы: общие ошибки и результаты ---
   'tool.args_error': 'Tool "{tool}" argument error: {issues}',

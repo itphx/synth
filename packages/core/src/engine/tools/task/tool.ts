@@ -4,10 +4,11 @@
  * ADR-095 (шаг 5): вынесено из `task.ts` без изменения поведения; общий цикл —
  * в `run-cycle.ts`, создание дочерней сессии — в `fork.ts`, промпт — в `prompt.ts`.
  */
-import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability } from '@itphx/synth-shared';
-import type { ToolDefinition, Message, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig, TodoItem, AgentDefinition } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, ToolCapability, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
+import type { ToolDefinition, Message, Session, SessionSettings, ToolForLLM, ToolContext, ToolResult, ModelConfig, TodoItem, AgentDefinition } from '@itphx/synth-shared';
 import { DEFAULT_SUBAGENT_DEPTH } from '@itphx/synth-shared/config';
 import { normalizeAgentModes } from '../../agents/normalize.js';
+import { resolveAgentRoleAlias } from '../../agents/migrations.js';
 import type { CancellationToken, LLMMessage, BaseProvider } from '../../../providers/base.js';
 import type { ModelRouter } from '../../router/router.js';
 import { formatSkillsCatalogBlock } from '../../skills/catalog.js';
@@ -22,7 +23,9 @@ import { toTodoItem } from '../todo.js';
 import { buildSubagentUnavailableToolsSection, buildTodoFinalizeSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
 import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
 import { runDetachableSubagent } from './detachable.js';
-import { appendResumeMarker, resumeInitialMessages } from './resume-target.js';
+import { appendContinuationMessage, appendResumeMarker, resumeInitialMessages } from './resume-target.js';
+import { enqueueSteerMessage, requeueMessages } from '../../../queue/processor.js';
+import { EventBus } from '../../../events/bus.js';
 import { taskParametersSchema, type TaskParams } from './args.js';
 import type { ContextMode, TaskExtra } from './types.js';
 
@@ -57,19 +60,32 @@ export const taskTool: ToolDefinition = {
       };
     }
 
-    const agentDef = extra.agentRegistry.get(params.subagent_type);
-    if (!agentDef) {
-      return {
-        content: sm('task.subagent_not_found', { type: params.subagent_type, types: extra.agentRegistry.getSubagents().map((a) => a.id).join(', ') }),
-        isError: true,
-      };
-    }
+    // ─── Агент нового ребёнка ─────────────────────────────────────
+    // Резолв агента относится только к **новой** задаче: при `task_id`
+    // `subagent_type` необязателен (PROP-142 §2), а агента ребёнка проверяет
+    // `continueChildSession` — по `child.settings.agentRole`.
+    let agentDef: AgentDefinition | undefined;
+    if (!params.task_id) {
+      const subagentType = params.subagent_type;
+      if (!subagentType) {
+        // Схема (`superRefine`) уже отсекает этот случай — защита от «схема
+        // ослабла» (в т.ч. при вызове мимо схемы).
+        return argErrorResult(this.name, 'subagent_type: is required for a new task');
+      }
+      agentDef = extra.agentRegistry.get(subagentType);
+      if (!agentDef) {
+        return {
+          content: sm('task.subagent_not_found', { type: subagentType, types: extra.agentRegistry.getSubagents().map((a) => a.id).join(', ') }),
+          isError: true,
+        };
+      }
 
-    if (!normalizeAgentModes(agentDef.agentMode).includes('subagent')) {
-      return {
-        content: sm('task.subagent_not_allowed', { type: params.subagent_type, modes: String(agentDef.agentMode) }),
-        isError: true,
-      };
+      if (!normalizeAgentModes(agentDef.agentMode).includes('subagent')) {
+        return {
+          content: sm('task.subagent_not_allowed', { type: subagentType, modes: String(agentDef.agentMode) }),
+          isError: true,
+        };
+      }
     }
 
     // ─── Лимит глубины вложенности (`agents.subagentDepth`) ──────────
@@ -104,6 +120,14 @@ export const taskTool: ToolDefinition = {
       return await continueChildSession({ params, extra, ctx });
     }
 
+    // Дальше — только **новая** задача: `subagent_type`/`prompt` обязательны
+    // (проверено `superRefine` в `args.ts`). Защита — от «схема ослабла».
+    const subagentType = params.subagent_type;
+    const promptText = params.prompt;
+    if (!agentDef || !subagentType || promptText === undefined) {
+      return argErrorResult(this.name, 'prompt and subagent_type are required for a new task');
+    }
+
     // ─── Фон недоступен → отказ ДО создания дочерней сессии ────────
     // Проверка идёт до `prepareChildSession`: иначе при выключенном фоне
     // оставался бы «пустой» ребёнок (сессия + `session.created`) без прогона.
@@ -129,7 +153,7 @@ export const taskTool: ToolDefinition = {
     const contextMode: ContextMode = params.context_mode || 'none';
     const contextCount = params.context_count || DEFAULT_LAST_N;
     const systemPrompt = resolveSubagentPrompt(
-      params.subagent_type,
+      subagentType,
       extra.parentSessionSettings?.language,
       extra.contextConfig?.systemPromptsDir,
     );
@@ -219,7 +243,7 @@ export const taskTool: ToolDefinition = {
     await prepareChildSession(childState, {
       extra,
       description: params.description,
-      subagentType: params.subagent_type,
+      subagentType,
       contextMode,
       contextCount,
       childRoutingOverrides,
@@ -417,7 +441,7 @@ export const taskTool: ToolDefinition = {
     const userPromptMsg: LLMMessage = {
       id: '',
       role: 'user' as const,
-      content: params.prompt,
+      content: promptText,
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       disabled: false,
       pinned: false,
@@ -433,8 +457,8 @@ export const taskTool: ToolDefinition = {
           role: MessageRole.USER,
           seq: childMessages.length + 1,
           origin: 'local',
-          parts: [makeTextPart(params.prompt)],
-          content: params.prompt,
+          parts: [makeTextPart(promptText)],
+          content: promptText,
           createdAt: nowISO(),
           disabled: false,
           pinned: false,
@@ -457,7 +481,7 @@ export const taskTool: ToolDefinition = {
 
     // ─── Запуск цикла саб-агента: общий код для task и resume (ниже) ──
     const runConfig: SubagentRunConfig = {
-      subagentType: params.subagent_type,
+      subagentType,
       description: params.description,
       contextMode,
       maxSteps,
@@ -823,7 +847,9 @@ async function resolveSubagentProvider(opts: {
     try {
       const decision = await extra.modelRouter.route({
         sessionSettings: parentSettings,
-        userMessage: params.prompt,
+        // Промпт новой задачи обязателен (схема); для пустого — пустая строка
+        // (роутер классифицирует по содержимому, отсутствие текста — «ничего»).
+        userMessage: params.prompt ?? '',
       });
       // Sampling агента сохраняется и на роутнутой модели (temp — прогона).
       const routedProvider = getPoolProvider(extra.modelRouter, decision, temperature, topP, topK);
@@ -851,9 +877,14 @@ async function resolveSubagentProvider(opts: {
 /**
  * Продолжение дочерней сессии саб-агента из тула `task` (`task_id`).
  *
- * Проверки: сессия существует, она — ребёнок **текущей** сессии, не занята.
- * Далее — общий цикл саб-агента (`runSubagent`) в текущем ходе родителя:
- * родитель ждёт результат, ответ приходит обычным `task_result`.
+ * Проверки: сессия существует, она — ребёнок **текущей** сессии, агент ребёнка
+ * в реестре и в режиме `subagent`.
+ *
+ * Дальше — два пути (PROP-142 §1–§2):
+ *  - ребёнок **занят** (идёт ход или фоновый прогон) — сообщение доставляется
+ *    в него (`delivery: steer|queue`), тул возвращает `{status}` сразу;
+ *  - ребёнок **свободен** — синхронное продолжение в текущем ходе родителя
+ *    (общий цикл `runSubagent`), родитель ждёт результат.
  */
 async function continueChildSession(opts: {
   params: TaskParams;
@@ -883,14 +914,6 @@ async function continueChildSession(opts: {
       metadata: { i18n: i18nMeta('task.resume_foreign_child', { id: childId }) },
     };
   }
-  // Занятый ребёнок (идёт прогон) — продолжение невозможно.
-  if (child.status.blocked || child.currentStream) {
-    return {
-      content: sm('task.resume_child_busy', { id: childId }),
-      isError: true,
-      metadata: { i18n: i18nMeta('task.resume_child_busy', { id: childId }) },
-    };
-  }
 
   const agentRole = child.settings.agentRole || '';
   const agentDef = agentRole ? extra.agentRegistry.get(agentRole) : undefined;
@@ -902,13 +925,93 @@ async function continueChildSession(opts: {
     };
   }
 
+  // PROP-142 §2: агента ребёнка **не переключаем** (история, системный промпт
+  // и права принадлежат одному агенту). `subagent_type` при `task_id`
+  // необязателен; задан и не совпадает — отказ с объяснением (тихое
+  // игнорирование недопустимо). Сравнение — с учётом алиасов прежних ролей.
+  const requestedType = params.subagent_type?.trim();
+  if (requestedType && normalizeAgentRole(requestedType) !== normalizeAgentRole(agentRole)) {
+    const i18nParams = { current: agentRole, requested: requestedType };
+    return {
+      content: sm('task.agent_switch_unsupported', i18nParams),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.agent_switch_unsupported', i18nParams) },
+    };
+  }
+
+  // Занятость ребёнка: идёт ход (`currentStream`/blocked) **или** идёт его
+  // фоновый прогон (реестр фоновых прогонов, ADR-111).
+  const busy = Boolean(child.status.blocked || child.currentStream)
+    || await isChildBusyInBackground(child.id, ctx.sessionId, extra);
+  if (busy) {
+    return await deliverToBusyChild({ params, extra, ctx, child });
+  }
+
+  // ─── Свободный ребёнок: пара прогона и новое указание ─────────────
+  // PROP-142 §2: `model`/`provider` при `task_id` переключают пару ребёнка
+  // (точечная правка `settings`); агента — нет.
+  let explicitProvider = params.provider?.trim() ?? '';
+  let explicitModelRaw = params.model?.trim() ?? '';
+  // Составной id (`provider/model`) без явного `provider` — тот же разбор,
+  // что у нового прогона (`resolveSubagentProvider`).
+  if (explicitModelRaw.includes('/') && !explicitProvider) {
+    const slash = explicitModelRaw.indexOf('/');
+    explicitProvider = explicitModelRaw.slice(0, slash).trim();
+    explicitModelRaw = explicitModelRaw.slice(slash + 1).trim();
+  }
+  if (explicitProvider && explicitModelRaw) {
+    const pairError = await validateContinuationPair({
+      extra,
+      provider: explicitProvider,
+      model: explicitModelRaw,
+    });
+    if (pairError) return pairError;
+  }
+
+  // Настройки ребёнка — точечная правка (ADR-144: полная запись снимка
+  // затирает чужую дозапись). `touchUpdatedAt:false` — смена пары не
+  // «оживляет» сессию ребёнка в списках.
+  let currentChild = child;
+  if (explicitProvider || explicitModelRaw) {
+    try {
+      await sessionManager.mutateMeta(child.id, (meta) => {
+        let changed = false;
+        if (explicitProvider && meta.settings.provider !== explicitProvider) {
+          meta.settings.provider = explicitProvider;
+          changed = true;
+        }
+        if (explicitModelRaw && meta.settings.model !== explicitModelRaw) {
+          meta.settings.model = explicitModelRaw;
+          changed = true;
+        }
+        return changed;
+      }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
+      const refreshed = await sessionManager.getSession(child.id);
+      if (refreshed) currentChild = refreshed;
+    } catch {
+      // Правка настроек не удалась — продолжаем с прежней парой (резолвер
+      // провайдера ниже возьмёт фактическую).
+    }
+  }
+
   const streamId = generateStreamId();
-  // Маркер продолжения — в историю ребёнка (общий помощник с HTTP-resume).
-  let freshChild = await appendResumeMarker(sessionManager, extra.eventBus, {
-    child,
-    parentSessionId: ctx.sessionId,
-    streamId,
-  });
+  // Продолжение с текстом — обычное user-сообщение (`metadata.continuation`);
+  // без текста — прежний служебный маркер (`task.resume_marker`).
+  const continuationText = params.prompt !== undefined && params.prompt.trim() !== ''
+    ? params.prompt
+    : undefined;
+  let freshChild = continuationText !== undefined
+    ? await appendContinuationMessage(sessionManager, extra.eventBus, {
+      child: currentChild,
+      parentSessionId: ctx.sessionId,
+      streamId,
+      text: continuationText,
+    })
+    : await appendResumeMarker(sessionManager, extra.eventBus, {
+      child: currentChild,
+      parentSessionId: ctx.sessionId,
+      streamId,
+    });
 
   // ADR-039: `task_id` + `todos` — полная замена списка задач ребёнка (как
   // `todo_write`); без `todos` список не трогается. State-сообщение
@@ -933,24 +1036,25 @@ async function continueChildSession(opts: {
   const childExtra: TaskExtra = {
     ...extra,
     // Настройки ребёнка — его собственные (permission/настройки/язык).
-    parentSessionSettings: child.settings,
-    permissionConfig: child.settings.permission ?? extra.permissionConfig,
+    parentSessionSettings: currentChild.settings,
+    permissionConfig: currentChild.settings.permission ?? extra.permissionConfig,
     streamId,
   };
 
   // Температура продолжения: `agent.temperature` → настройки ребёнка (унаследованы
   // от родителя при создании). Провайдер родителя кэширован и разделяется —
   // берём клон, иначе ребёнок шёл бы с температурой родительского хода.
-  // Пара продолжения: `agent.provider/model` → настройки ребёнка (при создании
-  // туда зафиксирована фактическая пара прогона) → провайдер родителя.
+  // Пара продолжения: явные `provider`/`model` → пара агента → настройки
+  // ребёнка (при создании туда зафиксирована фактическая пара прогона) →
+  // провайдер родителя.
   const agentProvider = agentDef.provider?.trim() || undefined;
   const agentModel = agentDef.model?.trim() || undefined;
   const agentTopP = agentDef.topP && agentDef.topP > 0 ? agentDef.topP : undefined;
   const agentTopK = agentDef.topK && agentDef.topK > 0 ? agentDef.topK : undefined;
 
-  const childTemperature = agentDef.temperature ?? child.settings.temperature;
-  const desiredProvider = agentProvider || child.settings.provider || extra.provider.name;
-  const desiredModel = agentModel || child.settings.model || extra.provider.model;
+  const childTemperature = agentDef.temperature ?? currentChild.settings.temperature;
+  const desiredProvider = explicitProvider || agentProvider || currentChild.settings.provider || extra.provider.name;
+  const desiredModel = explicitModelRaw || agentModel || currentChild.settings.model || extra.provider.model;
 
   // Пара отличается от провайдера родителя — берём её из пула роутера
   // (с температурой и sampling агента); иначе — клон родительского.
@@ -964,6 +1068,16 @@ async function continueChildSession(opts: {
       agentTopK,
     );
   }
+  // Явная пара, которой нет в пуле, — **отказ**, а не тихий откат на
+  // родительского провайдера (иначе ребёнок пошёл бы на другой модели).
+  if (!childProvider && (explicitProvider || explicitModelRaw)) {
+    const i18nParams = { provider: desiredProvider, model: desiredModel };
+    return {
+      content: sm('task.model_unavailable', i18nParams),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.model_unavailable', i18nParams) },
+    };
+  }
   childProvider ??= withAgentSampling(extra.provider, childTemperature, agentTopP, agentTopK);
 
   // ADR-039: тулы ребёнка собираются один раз — по ним же решается, нужна ли
@@ -973,25 +1087,25 @@ async function continueChildSession(opts: {
     tools: childTools,
     todos: freshChild.todos ?? [],
     contextConfig: extra.contextConfig,
-    language: child.settings.language || 'ru',
+    language: currentChild.settings.language || 'ru',
   });
 
   return runSubagent({
     subagentType: agentRole,
-    description: params.description || child.title || '',
+    description: params.description || currentChild.title || '',
     contextMode: 'none',
     maxSteps: agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS,
     llmSystemPrompt: [
       resolveSubagentPrompt(
         agentRole,
-        child.settings.language,
+        currentChild.settings.language,
         extra.contextConfig?.systemPromptsDir,
       ),
       // ADR-135/PROP-135: среда исполнения — тот же блок, что у нового прогона.
       extra.environmentKind
         ? extra.contextConfig?.getEnvironment(
             extra.environmentKind,
-            child.settings.language || 'ru',
+            currentChild.settings.language || 'ru',
           ) ?? ''
         : '',
       todoFinalize,
@@ -1005,15 +1119,239 @@ async function continueChildSession(opts: {
     topK: agentTopK,
     // ADR-117: effort продолжения — `agent.effort` → настройки ребёнка
     // (`reasoningLevel` — отдельным полем, `effort` приоритетнее).
-    effort: agentDef.effort ?? child.settings.effort,
-    reasoningLevel: agentDef.reasoningLevel ?? child.settings.reasoningLevel,
+    effort: agentDef.effort ?? currentChild.settings.effort,
+    reasoningLevel: agentDef.reasoningLevel ?? currentChild.settings.reasoningLevel,
     tools: childTools,
-    childSessionId: child.id,
+    childSessionId: currentChild.id,
     parentSessionId: ctx.sessionId,
     extra: childExtra,
     ctx,
     retry: extra.retry,
   });
+}
+
+/**
+ * Роль агента в каноническом виде: прежние метки (`pm`, `qa`, …) приводятся к
+ * своей роли (`LEGACY_AGENT_ROLE_ALIASES`) — как в оркестраторе
+ * (`ChatOrchestrator._resolveEffectiveAgentRole`).
+ */
+function normalizeAgentRole(role: string): string {
+  return resolveAgentRoleAlias(role) ?? role;
+}
+
+/**
+ * Идёт ли по ребёнку **фоновый** прогон (реестр фоновых прогонов, ADR-111).
+ *
+ * Занятый ребёнок виден не только по `currentStream`: фоновый прогон держит
+ * `currentStream` ребёнка, но после рестарта инстанса маркер мог не сохраниться
+ * — реестр прогонов остаётся источником истины.
+ */
+async function isChildBusyInBackground(
+  childId: string,
+  parentSessionId: string,
+  extra: TaskExtra,
+): Promise<boolean> {
+  const service = extra.backgroundService;
+  if (!service) return false;
+  try {
+    const runs = await service.list({
+      kind: 'subagent',
+      status: 'running',
+      sessionId: parentSessionId,
+    });
+    return runs.some((run) => run.childSessionId === childId);
+  } catch {
+    // Реестр недоступен — считаем ребёнка свободным (прежнее поведение).
+    return false;
+  }
+}
+
+/**
+ * Доставка сообщения **занятому** ребёнку (PROP-142 §1).
+ *
+ * `delivery: 'steer'` (по умолчанию) — инъекция в идущий ход ребёнка
+ * (`steerInbox`, применяется на границе шага; ADR-104). `delivery: 'queue'` —
+ * сообщение в обычную очередь ребёнка (`pendingMessages`; доставляется после
+ * текущего прогона).
+ *
+ * Тул **не блокирует** ход родителя: возвращает `{status, child_session_id,
+ * pending_count}`. Итог работы ребёнка приходит обычным уведомлением.
+ */
+async function deliverToBusyChild(opts: {
+  params: TaskParams;
+  extra: TaskExtra;
+  ctx: ToolContext;
+  child: Session;
+}): Promise<ToolResult> {
+  const { params, extra, child } = opts;
+  const sessionManager = extra.sessionManager;
+  if (!sessionManager) {
+    return { content: sm('task.deps_unavailable'), isError: true };
+  }
+  // Занятого ребёнка можно только **обновить** текстом: без указания
+  // доставлять нечего.
+  const text = params.prompt ?? '';
+  if (text.trim() === '') {
+    return {
+      content: sm('task.continuation_prompt_required'),
+      isError: true,
+      metadata: { i18n: i18nMeta('task.continuation_prompt_required') },
+    };
+  }
+
+  const delivery = params.delivery ?? 'steer';
+  // Сообщение — как обычный ввод: роль USER, автор — вызывающий агент.
+  const msg: Message = {
+    id: generateId(),
+    role: MessageRole.USER,
+    seq: 0,
+    origin: 'local',
+    parts: [makeTextPart(text)],
+    content: text,
+    createdAt: nowISO(),
+    disabled: false,
+    pinned: false,
+    hidden: false,
+    author: extra.callerAgentRole ?? 'user',
+    metadata: { stream_id: generateStreamId() },
+  };
+
+  if (delivery === 'queue') {
+    // Очередь ребёнка: сообщение ждёт текущего прогона (авто-продолжение —
+    // отдельный этап, ADR-142 §3).
+    const queued = await requeueMessages({
+      sessionManager,
+      eventBus: extra.eventBus,
+      sessionId: child.id,
+      messages: [msg],
+    });
+    if (queued.dropped > 0) {
+      const i18nParams = { reason: 'queue_full' };
+      return {
+        content: sm('task.delivery_rejected', i18nParams),
+        isError: true,
+        metadata: {
+          reason: 'queue_full',
+          pending_count: queued.requeued,
+          i18n: i18nMeta('task.delivery_rejected', i18nParams),
+        },
+      };
+    }
+    const fresh = await sessionManager.getSession(child.id);
+    const pendingCount = fresh?.pendingMessages.length ?? queued.requeued;
+    return {
+      content: JSON.stringify({
+        status: 'queued',
+        child_session_id: child.id,
+        pending_count: pendingCount,
+      }),
+      metadata: {
+        status: 'queued',
+        child_session_id: child.id,
+        pending_count: pendingCount,
+      },
+    };
+  }
+
+  // `steer` (по умолчанию): инъекция в идущий ход ребёнка.
+  // Шины может не быть (вне оркестратора) — доставка всё равно нужна,
+  // события просто никому не уходят.
+  const eventBus = extra.eventBus ?? new EventBus();
+  const steered = await enqueueSteerMessage(
+    sessionManager,
+    eventBus,
+    child.id,
+    msg,
+    MAX_STEER_INJECTIONS_PER_TURN,
+  );
+  if (!steered.accepted) {
+    const i18nParams = { reason: 'steer_limit' };
+    return {
+      content: sm('task.delivery_rejected', i18nParams),
+      isError: true,
+      metadata: {
+        reason: 'steer_limit',
+        pending_count: steered.pending,
+        i18n: i18nMeta('task.delivery_rejected', i18nParams),
+      },
+    };
+  }
+  return {
+    content: JSON.stringify({
+      status: 'steered',
+      child_session_id: child.id,
+      pending_count: steered.pending,
+    }),
+    metadata: {
+      status: 'steered',
+      child_session_id: child.id,
+      pending_count: steered.pending,
+    },
+  };
+}
+
+/**
+ * Проверка запрошенной пары `provider/model` при продолжении (PROP-142 §2).
+ *
+ * Порядок: каталог моделей инстанса (тот же загрузчик, что у нового прогона)
+ * → пул провайдеров роутера. Каталога и роутера нет — проверку пропускаем
+ * (резолвер провайдера прогона отработает штатно).
+ */
+async function validateContinuationPair(opts: {
+  extra: TaskExtra;
+  provider: string;
+  model: string;
+}): Promise<ToolResult | null> {
+  const { extra, provider, model } = opts;
+  if (extra.listModels) {
+    let catalog: ModelConfig[] | null = null;
+    try {
+      catalog = await extra.listModels();
+    } catch {
+      catalog = null;
+    }
+    if (catalog) {
+      const entry = catalog.find((m) => m.provider === provider && m.name === model);
+      if (!entry || entry.enabled === false) {
+        const available = catalog
+          .filter((m) => m.enabled !== false)
+          .map((m) => `${m.provider}/${m.name}`)
+          .slice(0, MODEL_HINTS_LIMIT)
+          .join(', ');
+        const i18nParams = { provider, model, available };
+        return {
+          content: sm('task.model_not_in_catalog', i18nParams),
+          isError: true,
+          metadata: {
+            available_models: available,
+            i18n: i18nMeta('task.model_not_in_catalog', i18nParams),
+          },
+        };
+      }
+      return null;
+    }
+  }
+  // Каталога нет — проверяем пулом провайдеров роутера. Пара родителя
+  // доступна всегда (провайдер уже в руках).
+  if (provider === extra.provider.name && model === extra.provider.model) return null;
+  if (extra.modelRouter) {
+    const resolved = getPoolProvider(
+      extra.modelRouter,
+      { providerName: provider, modelName: model, reason: 'explicit override', strategy: 'default' },
+      undefined,
+      undefined,
+      undefined,
+    );
+    if (!resolved) {
+      const i18nParams = { provider, model };
+      return {
+        content: sm('task.model_unavailable', i18nParams),
+        isError: true,
+        metadata: { i18n: i18nMeta('task.model_unavailable', i18nParams) },
+      };
+    }
+  }
+  return null;
 }
 
 /**

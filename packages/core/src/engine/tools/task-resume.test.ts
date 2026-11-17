@@ -6,6 +6,7 @@ import { taskTool } from './task.js';
 import {
   runSubagentResume, validateSubagentResume,
 } from './task-resume.js';
+import { appendContinuationMessage } from './task/resume-target.js';
 import { ChatOrchestrator } from '../orchestrator.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
@@ -1023,5 +1024,63 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(seen.gitService).toBe(gitServiceMock);
     expect(seen.workspaceManaged).toBe(true);
     expect((seen.getWorkspaceOutsideRootPolicy as () => string)()).toBe('deny');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// PROP-142 §2: продолжение с текстом — обычное user-сообщение
+// (`metadata.continuation`), а не служебный маркер. Маркер остаётся
+// для путей без текста (HTTP-resume, автовосстановление).
+// ─────────────────────────────────────────────────────────────────────
+
+describe('appendContinuationMessage (PROP-142 §2)', () => {
+  let tmpDir: string;
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-task-continuation-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('пишет user-сообщение с текстом указания и меткой continuation', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const child = await sessionManager.createSession({
+      title: 'Child',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    const events: Array<{ sessionId: string; type: string }> = [];
+    const origPublish = eventBus.publish.bind(eventBus);
+    eventBus.publish = ((sessionId: string, type: never) => {
+      events.push({ sessionId, type });
+      return origPublish(sessionId, type, {});
+    }) as typeof eventBus.publish;
+
+    const updated = await appendContinuationMessage(sessionManager, eventBus, {
+      child,
+      parentSessionId: parent.id,
+      streamId: 'st-cont',
+      text: 'теперь сделай вот это',
+    });
+
+    const msg = updated.messages.at(-1)!;
+    expect(msg.role).toBe(MessageRole.USER);
+    expect(msg.content).toBe('теперь сделай вот это');
+    expect(msg.parts?.[0]).toEqual(expect.objectContaining({ type: 'text', data: 'теперь сделай вот это' }));
+    expect(msg.metadata?.continuation).toBe(true);
+    expect(msg.metadata?.stream_id).toBe('st-cont');
+    expect(msg.author).toBe('user');
+    // Служебного маркера resume в этом сообщении нет.
+    expect(msg.metadata?.resume).toBeUndefined();
+    // Событие — в канал ребёнка и в канал родителя (`child.message.added`).
+    expect(events.some((e) => e.sessionId === child.id && e.type === 'message.added')).toBe(true);
+    expect(events.some((e) => e.sessionId === parent.id && e.type === 'child.message.added')).toBe(true);
   });
 });
