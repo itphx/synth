@@ -317,6 +317,95 @@ describe('SessionManager', () => {
     expect(loaded!.status.queueStoppedAt).toBeUndefined();
   });
 
+  describe('takePendingMessages — дренаж очереди в историю (PROP-142 §3)', () => {
+    it('два pending → оба в истории, очередь пуста, seq/ord назначены', async () => {
+      const session = await manager.createSession({});
+      await manager.addPendingMessage(session.id, makeMsg('первое'));
+      await manager.addPendingMessage(session.id, makeMsg('второе'));
+
+      const taken = await manager.takePendingMessages(session.id);
+
+      expect(taken.map((m) => m.content)).toEqual(['первое', 'второе']);
+      const loaded = await manager.getSession(session.id);
+      expect(loaded!.pendingMessages).toHaveLength(0);
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['первое', 'второе']);
+      // `seq` — позиционный (1..n), `ord` — монотонный счётчик: назначает порт.
+      expect(loaded!.messages[0]!.seq).toBe(1);
+      expect(loaded!.messages[1]!.seq).toBe(2);
+      expect(typeof loaded!.messages[0]!.ord).toBe('number');
+      expect(loaded!.messages[1]!.ord!).toBeGreaterThan(loaded!.messages[0]!.ord!);
+    });
+
+    it('повторный вызов → [] (очередь уже пуста, история не растёт)', async () => {
+      const session = await manager.createSession({});
+      await manager.addPendingMessage(session.id, makeMsg('раз'));
+
+      expect(await manager.takePendingMessages(session.id)).toHaveLength(1);
+      expect(await manager.takePendingMessages(session.id)).toEqual([]);
+      const loaded = await manager.getSession(session.id);
+      expect(loaded!.messages).toHaveLength(1);
+    });
+
+    it('дубль по stream_id в историю не добавляется', async () => {
+      const session = await manager.createSession({});
+      // Копия реплики уже в истории (тот же stream_id) — в очередь легла другая
+      // запись с тем же stream_id.
+      await manager.addMessage(session.id, {
+        ...makeMsg('уже в истории'),
+        metadata: { stream_id: 'stream-1' },
+      });
+      await manager.addPendingMessage(session.id, {
+        ...makeMsg('уже в истории'),
+        id: 'msg-copy',
+        metadata: { stream_id: 'stream-1' },
+      });
+
+      const taken = await manager.takePendingMessages(session.id);
+
+      // Копия снята из очереди, но в историю повторно не попадает (дубль реплики).
+      expect(taken).toHaveLength(1);
+      expect(taken[0]!.id).toBe('msg-copy');
+      const loaded = await manager.getSession(session.id);
+      expect(loaded!.pendingMessages).toHaveLength(0);
+      expect(loaded!.messages).toHaveLength(1);
+      expect(loaded!.messages[0]!.id).not.toBe('msg-copy');
+    });
+
+    it('limit ограничивает пачку, остаток очереди ждёт следующей доставки', async () => {
+      const session = await manager.createSession({});
+      for (let i = 0; i < 3; i++) {
+        await manager.addPendingMessage(session.id, makeMsg(`m-${i}`));
+      }
+
+      const taken = await manager.takePendingMessages(session.id, 2);
+
+      expect(taken.map((m) => m.content)).toEqual(['m-0', 'm-1']);
+      const loaded = await manager.getSession(session.id);
+      expect(loaded!.pendingMessages.map((m) => m.content)).toEqual(['m-2']);
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['m-0', 'm-1']);
+    });
+
+    it('takePendingMessages снимает queueStopped (очередь снова обрабатывается)', async () => {
+      const session = await manager.createSession({});
+      await manager.withLock(session.id, async (s) => {
+        s.status.queueStopped = true;
+        s.status.queueStoppedAt = nowISO();
+        await manager.saveSession(s);
+      });
+      await manager.addPendingMessage(session.id, makeMsg('продолжить'), 5, { clearQueueStopped: false });
+
+      await manager.takePendingMessages(session.id);
+
+      const loaded = await manager.getSession(session.id);
+      expect(loaded!.status.queueStopped).toBeUndefined();
+      expect(loaded!.status.queueStoppedAt).toBeUndefined();
+    });
+
+    it('несуществующая сессия → [] (доставлять нечего)', async () => {
+      expect(await manager.takePendingMessages('missing')).toEqual([]);
+    });
+  });
+
   it('addMessage удаляет U+0000 из content/parts/reasoning/toolCalls/metadata (file backend)', async () => {
     const session = await manager.createSession({});
     const message = {

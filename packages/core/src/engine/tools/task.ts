@@ -17,7 +17,9 @@ export { taskTool } from './task/tool.js';
 export {
   SUBAGENT_MAX_ATTEMPTS,
   SUBAGENT_RETRY_DELAYS_MS,
+  MAX_CHILD_QUEUE_DRAIN,
   runSubagent,
+  runSubagentWithQueueDrain,
 } from './task/run-cycle.js';
 export type { SubagentRunConfig } from './task/run-cycle.js';
 export {

@@ -822,6 +822,50 @@ export class SessionManager {
   }
 
   /**
+   * Забрать сообщения обычной очереди в историю (для дочерней сессии без
+   * `QueueProcessor`): атомарно снимает до `limit` первых сообщений из
+   * `pendingMessages`, добавляет их в историю (если копии ещё нет по `id` или
+   * `metadata.stream_id`) и снимает `queueStopped`. `seq`/`ord` назначает порт.
+   *
+   * Зачем: у дочерней сессии процессора очереди нет — сообщение, доставленное
+   * занятому ребёнку (`delivery: 'queue'`, PROP-142 §1), лежит в
+   * `pendingMessages` и ждёт. Дренаж забирает пачку в историю, чтобы ребёнок
+   * мог продолжить ход (PROP-142 §3).
+   *
+   * Возвращает сообщения, **снятые из очереди**. Сообщение, копия которого уже
+   * есть в истории (тот же `id` или тот же `stream_id`), в историю повторно не
+   * добавляется (иначе в ленте ребёнка будет дубль реплики), но из очереди
+   * снимается — иначе оно висело бы в очереди вечно.
+   */
+  async takePendingMessages(sessionId: string, limit = 5): Promise<Message[]> {
+    const max = Math.max(0, Math.floor(limit));
+    const result = await this.store.mutateHistory(sessionId, (session) => {
+      const taken = session.pendingMessages.splice(0, max);
+      for (const message of taken) {
+        const streamId = message.metadata?.stream_id as string | undefined;
+        // Копия уже в истории (тот же id или тот же stream_id) — второй раз
+        // не добавляем: иначе в ленте ребёнка будет дубль реплики.
+        const alreadyInHistory = session.messages.some((existing) => {
+          if (existing.role !== MessageRole.USER) return false;
+          if (message.id && existing.id === message.id) return true;
+          return !!streamId && existing.metadata?.stream_id === streamId;
+        });
+        if (alreadyInHistory) continue;
+        // `seq`/`ord` назначает порт при записи (позиционный `seq`,
+        // монотонный `ord` — ADR-118 §2).
+        session.messages.push({ ...message, seq: 0 });
+      }
+      // Очередь снова обрабатывается — осознанная остановка снимается.
+      session.status.queueStopped = undefined;
+      session.status.queueStoppedAt = undefined;
+      return taken;
+    }, { shouldWrite: (messages) => messages.length > 0 });
+    // Сессии нет (удалена) — доставлять нечего.
+    if (!result.ok) return [];
+    return result.value;
+  }
+
+  /**
    * Добавить сообщение в историю.
    *
    * Запись — точечная (`SessionRepository.appendMessage`): `id`/`seq`/`origin`/

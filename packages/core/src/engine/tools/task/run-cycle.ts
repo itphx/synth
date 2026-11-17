@@ -6,7 +6,7 @@
  * (`task-resume.ts`). ADR-095 (шаг 5): вынесено из `task.ts` без изменения
  * поведения.
  */
-import { MessageRole, nowISO, generateId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
 import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision, TodoItem } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
@@ -31,6 +31,7 @@ import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-ste
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { debug, info, warning } from '../../../logger.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
+import { resumeInitialMessages } from './resume-target.js';
 import {
   publishPartDelta,
   publishPartUpdated,
@@ -2688,4 +2689,51 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     // вызов безопасен (очередь снимается один раз).
     await dropChildSteerInjections('turn_ended');
   }
+}
+
+/**
+ * Потолок дренажа очереди ребёнка за один проход (PROP-142 §3): «один проход
+ * на пачку, без накопления» — забираем не больше этого числа сообщений,
+ * остаток ждёт следующей доставки.
+ */
+export const MAX_CHILD_QUEUE_DRAIN = 5;
+
+/**
+ * Прогон саб-агента **с дренажем очереди** дочерней сессии (PROP-142 §3).
+ *
+ * У дочерней сессии нет `QueueProcessor`: сообщение, доставленное занятому
+ * ребёнку с `delivery: 'queue'` (PROP-142 §1), лежит в `pendingMessages` и
+ * ждёт. После текущего прогона ребёнок сам делает **ровно один** проход
+ * продолжения: сообщения переносятся в историю, история уходит в LLM — и цикл
+ * идёт снова. Больше одного прохода не делаем (остаток очереди ждёт следующей
+ * доставки) — иначе ребёнок «накапливал» бы ввод.
+ *
+ * Дренаж — только после **успешного** завершения прогона: после провала
+ * провайдера или «Стопа» очередь не продолжаем (пользователь/ошибка важнее
+ * доставленного уточнения).
+ */
+export async function runSubagentWithQueueDrain(config: SubagentRunConfig): Promise<ToolResult> {
+  const result = await runSubagent(config);
+  // Провал или «Стоп» — очередь ребёнка не продолжаем.
+  if (result.isError || result.metadata?.stopped_by === 'user') return result;
+
+  const sessionManager = config.extra.sessionManager;
+  const childSessionId = config.childSessionId;
+  // Чистый `none`-контекст (без дочерней сессии) — очереди нет.
+  if (!sessionManager || !childSessionId) return result;
+
+  // Пачка сообщений очереди → история ребёнка (атомарно, порт).
+  const pending = await sessionManager.takePendingMessages(childSessionId, MAX_CHILD_QUEUE_DRAIN);
+  // Очередь пуста — продолжать нечем.
+  if (pending.length === 0) return result;
+
+  // Сессия могла быть удалена — второй проход не делаем.
+  const fresh = await sessionManager.getSession(childSessionId);
+  if (!fresh) return result;
+
+  // Новый `streamId` второго прохода: иначе запись причины остановки
+  // (`dedupeKey`) и маркер `currentStream` совпали бы с первым прогоном.
+  const extra: TaskExtra = { ...config.extra, streamId: generateStreamId() };
+  // Ровно один повторный проход — остаток очереди ждёт следующей доставки.
+  return runSubagent({ ...config, initialMessages: resumeInitialMessages(fresh), extra });
 }
