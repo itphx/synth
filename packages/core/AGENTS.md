@@ -3235,6 +3235,14 @@
   Статический сегмент `/fetch-icon` регистрируется **до** параметрического `/:name`.
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
+  `createSchedulerRoutes` (PROP-141, этап 5 B-1) — ещё опции `authorizeProject`
+  (`(c, projectId, 'read'|'write') => Response | null`; граничная проверка прав на
+  проект расписания: `null` — разрешено, иначе готовый 403/404; сбой — fail-closed)
+  и `listVisibleProjectIds` (`(c) => string[] | null`; скоуп списка: `null` — «все»
+  (ADMIN/LEAD), иначе — id видимых проектов + собственные расписания). Фильтры
+  `GET /api/v2/schedules`: `sessionId`/`projectId`/`enabled`/`status` (невалидное
+  значение → 400 `VALIDATION_ERROR`). Опции не заданы (core/standalone) — прежнее
+  поведение: доступ к проекту не разграничен.
   `createAgentRoutes` — опция `scopeGuard` для записи агентов (ADR-052; дефолт —
   `requireScopeOrAdminRole`): достаточно любого из `SERVICE_SCOPE_SETS.agentsWrite`
   (сейчас — `automation:install`) **или** роли ADMIN у ключа.

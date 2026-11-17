@@ -2310,11 +2310,21 @@ backend). Срабатывание не создаёт сессию
 `type: 'schedule_fired'` через `EventIngress`, а маршрутизацию выполняет
 `SchedulerRuleProvider` (`RouteRuleProvider`). Исключение — цель `mode:'pipeline'`:
 шедулер запускает прогон пайплайна **напрямую** (событие в Router не публикуется и
-сессия не создаётся), см. ниже. RBAC managed (backend): чтение
-(`GET`) — `requireAuth`; мутации (`POST`/`PUT`/`DELETE`) и принудительный запуск
-(`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`); `run` дополнительно
-под rate limit 10/60 c (`runMiddleware`). В core (standalone) — единый `requireAuth`
-на все методы. **Scope service-key (ADR-052):** `schedules:read` (чтение и `GET /:id/jobs`),
+сессия не создаётся), см. ниже.
+
+**RBAC managed (backend) — по проекту расписания** (ADR-089 §5.5/§5.8,
+PROP-141, этап 5): чтение (`GET`, `GET /:id/jobs`) — право чтения проекта
+(владелец/участник/`LEAD`/`ADMIN`); мутации (`POST`/`PUT`/`DELETE`/
+`POST /:id/run`) — право изменения содержимого (`OWNER`/`EDITOR`/`LEAD`/`ADMIN`;
+`VIEWER` читает, но не мутирует — инвариант 21). Прежний `requireAdmin` на все
+мутации **снят** (решение владельца 2026-11-17). Проверка — **на границе**
+(`authorizeProject` → `canReadProject`/`canEditProjectContent`, ADR-089 §5.8);
+проект расписания обязателен (PROP-141) и выводится из цели. Список `GET`
+ограничен видимыми проектами и **собственными** расписаниями
+(`listVisibleProjectIds`); чужое расписание в списке не видно, а по id — 403
+(`FORBIDDEN`). В core (standalone) — единый `requireAuth` на все методы (доступ
+к проекту не разграничивается). `run` дополнительно под rate limit 10/60 c
+(`runMiddleware`). **Scope service-key (ADR-052):** `schedules:read` (чтение и `GET /:id/jobs`),
 `schedules:write` (`POST`/`PUT`/`DELETE`/`POST /:id/run`); запись расписаний доступна
 service-key с `schedules:write` **или** `automation:install` (зонтичный scope
 установщика пакетов расширений — достаточно **любого** из двух: расписание,
@@ -2325,12 +2335,12 @@ service-key с `schedules:write` **или** `automation:install` (зонтичн
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
-| GET | `/api/v2/schedules` | оба | requireAuth | Список расписаний `{schedules}` |
-| POST | `/api/v2/schedules` | оба | ADMIN | Создание (`scheduleInputSchema`): `{name, enabled?, cron?, every?, target, prompt?, payload?, ownerId?}`; ровно одно из `cron`/`every`; невалидно → 400 `VALIDATION_ERROR`; → 201 `{schedule}` |
-| PUT | `/api/v2/schedules/:id` | оба | ADMIN | Обновление (полное тело как POST) → 200 `{schedule}`; нет записи → 404 `NOT_FOUND` |
-| DELETE | `/api/v2/schedules/:id` | оба | ADMIN | Удаление → 204; нет записи → 404 |
-| POST | `/api/v2/schedules/:id/run` | оба | ADMIN | Принудительный запуск (force, ingest события с уникальным dedup-ключом; managed — rate limit 10/60 c) → 200 `{schedule}`; нет записи → 404 |
-| GET | `/api/v2/schedules/:id/jobs` | оба | requireAuth | История срабатываний `{jobs}` (`ScheduleJob[]`, ADR-051); `?limit=` (дефолт 20, max 200); нет расписания → 404; без `JobStore` → `{jobs:[]}` |
+| GET | `/api/v2/schedules` | оба | по проекту расписания (read) | Список расписаний `{schedules}`; фильтры: `sessionId` (цель `bound`/`queue`), `projectId`, `enabled` (`true`/`false`/`1`/`0`), `status` (`ok`/`error`/`skipped` — статус последнего запуска); невалидное значение → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/schedules` | оба | по проекту цели (write) | Создание (`scheduleInputSchema`): `{name, enabled?, cron?, every?, target, prompt?, payload?, ownerId?}`; ровно одно из `cron`/`every`; невалидно → 400 `VALIDATION_ERROR`; → 201 `{schedule}` |
+| PUT | `/api/v2/schedules/:id` | оба | по проекту расписания (write) | Обновление (полное тело как POST) → 200 `{schedule}`; нет записи → 404 `NOT_FOUND`; перенос в другой проект — право нужно и на него |
+| DELETE | `/api/v2/schedules/:id` | оба | по проекту расписания (write) | Удаление → 204; нет записи → 404 |
+| POST | `/api/v2/schedules/:id/run` | оба | по проекту расписания (write) | Принудительный запуск (force, ingest события с уникальным dedup-ключом; managed — rate limit 10/60 c) → 200 `{schedule}`; нет записи → 404 |
+| GET | `/api/v2/schedules/:id/jobs` | оба | по проекту расписания (read) | История срабатываний `{jobs}` (`ScheduleJob[]`, ADR-051); `?limit=` (дефолт 20, max 200); нет расписания → 404; без `JobStore` → `{jobs:[]}` |
 
 `ScheduleJob` (`types/schedules.ts`): `trigger` (`cron`/`manual`/`catchup`),
 `status` (`ok`/`error`/`skipped`), `startedAt`/`finishedAt`/`durationMs`, `target`,

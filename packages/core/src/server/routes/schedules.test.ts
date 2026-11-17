@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import type { RouteDecision, SynthEvent } from '@itphx/synth-shared';
+import type { RouteDecision, ScheduleInput, SynthEvent } from '@itphx/synth-shared';
 import { createSchedulerRoutes } from './schedules.js';
-import type { SchedulerRoutesAuth } from './schedules.js';
+import type { SchedulerRoutesAuth, SchedulerRoutesOptions } from './schedules.js';
 import { ScheduleStore } from '../../storage/schedule-store.js';
 import { JobStore } from '../../storage/job-store.js';
 import { SchedulerService } from '../../engine/scheduler/scheduler.js';
@@ -44,6 +44,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
   const makeApp = (
     writeGuard: MiddlewareHandler = auth.requireAuth as unknown as MiddlewareHandler,
     runGuard?: MiddlewareHandler,
+    extraOpts: Partial<SchedulerRoutesOptions> = {},
   ) => {
     const app = new Hono();
     app.route(
@@ -53,7 +54,7 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
         { scheduleStore: store, scheduler, jobStore },
         // PROP-141: проект расписания выводится из цели; у `bound`/`queue` —
         // проект сессии-цели (резолвер даёт composition root).
-        { writeGuard, runGuard, resolveSessionProject: resolveSessionProject },
+        { writeGuard, runGuard, resolveSessionProject, ...extraOpts },
       ),
     );
     return app;
@@ -453,5 +454,120 @@ describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
       }),
     );
     expect(allowed.status).toBe(201);
+  });
+
+  // ── Фильтры и скоуп списка (PROP-141, этап 5 B-1) ─────────────────────────
+
+  /** Расписание в реестре (без HTTP) — фикстура фильтров/скоупа. */
+  const seed = async (
+    name: string,
+    target: ScheduleInput['target'],
+    extra: Partial<ScheduleInput> = {},
+  ) =>
+    store.create({
+      name,
+      enabled: true,
+      projectId: 'proj_1',
+      every: '1h',
+      target,
+      ...extra,
+    });
+
+  const names = async (res: Response): Promise<string[]> => {
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { schedules: { name: string }[] };
+    return body.schedules.map((schedule) => schedule.name);
+  };
+
+  it('GET / — фильтр sessionId (цель bound/queue)', async () => {
+    const app = makeApp();
+    await seed('bound', { mode: 'bound', sessionId: 's1' });
+    await seed('queue', { mode: 'queue', sessionId: 's2' });
+    await seed('ephemeral', { mode: 'ephemeral', project: 'proj_1' });
+
+    expect(await names(await app.request('/api/v2/schedules?sessionId=s2'))).toEqual(['queue']);
+    expect(await names(await app.request('/api/v2/schedules?sessionId=s1'))).toEqual(['bound']);
+  });
+
+  it('GET / — фильтр projectId', async () => {
+    const app = makeApp();
+    await seed('in-1', { mode: 'bound', sessionId: 's1' }, { projectId: 'proj_1' });
+    await seed('in-2', { mode: 'bound', sessionId: 's2' }, { projectId: 'proj_2' });
+
+    expect(await names(await app.request('/api/v2/schedules?projectId=proj_2'))).toEqual(['in-2']);
+    expect(await names(await app.request('/api/v2/schedules?projectId=proj_none'))).toEqual([]);
+  });
+
+  it('GET / — фильтры enabled и status', async () => {
+    const app = makeApp();
+    await seed('on', { mode: 'bound', sessionId: 's1' });
+    const off = await seed('off', { mode: 'bound', sessionId: 's2' }, { enabled: false });
+    await store.markRun(off.id, { at: '2026-01-01T00:00:00.000Z', status: 'error' });
+
+    expect(await names(await app.request('/api/v2/schedules?enabled=true'))).toEqual(['on']);
+    expect(await names(await app.request('/api/v2/schedules?enabled=false'))).toEqual(['off']);
+    expect(await names(await app.request('/api/v2/schedules?status=error'))).toEqual(['off']);
+    expect(await names(await app.request('/api/v2/schedules?status=ok'))).toEqual([]);
+  });
+
+  it('GET / — невалидный фильтр → 400 VALIDATION_ERROR', async () => {
+    const app = makeApp();
+    for (const query of ['sessionId=', 'projectId=', 'enabled=maybe', 'status=unknown']) {
+      const res = await app.request(`/api/v2/schedules?${query}`);
+      expect(res.status, query).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    }
+  });
+
+  it('GET / — без опции скоупа список не ограничен (прежнее поведение)', async () => {
+    const app = makeApp();
+    await seed('in-1', { mode: 'bound', sessionId: 's1' }, { projectId: 'proj_1' });
+    await seed('in-2', { mode: 'bound', sessionId: 's2' }, { projectId: 'proj_2' });
+
+    // Скоупа нет — видны все расписания инстанса (core/standalone).
+    expect((await names(await app.request('/api/v2/schedules'))).sort()).toEqual(['in-1', 'in-2']);
+  });
+
+  it('GET / — listVisibleProjectIds: чужие расписания не раскрываются, свои — видны', async () => {
+    await seed('visible', { mode: 'bound', sessionId: 's1' }, { projectId: 'proj_1' });
+    await seed('foreign', { mode: 'bound', sessionId: 's2' }, { projectId: 'proj_2' });
+    await seed('own', { mode: 'bound', sessionId: 's3' }, { projectId: 'proj_2', ownerId: 'u-1' });
+
+    const scoped = new Hono();
+    scoped.use('*', async (c, next) => {
+      c.set('user' as never, { id: 'u-1' } as never);
+      await next();
+    });
+    scoped.route(
+      '/api/v2/schedules',
+      createSchedulerRoutes(
+        auth,
+        { scheduleStore: store, scheduler, jobStore },
+        { resolveSessionProject, listVisibleProjectIds: async () => ['proj_1'] },
+      ),
+    );
+
+    // Видны расписание видимого проекта и собственное; чужое — нет.
+    expect((await names(await scoped.request('/api/v2/schedules'))).sort()).toEqual([
+      'own',
+      'visible',
+    ]);
+  });
+
+  it('GET / — listVisibleProjectIds: null — все расписания (ADMIN/LEAD)', async () => {
+    await seed('in-1', { mode: 'bound', sessionId: 's1' }, { projectId: 'proj_1' });
+    await seed('in-2', { mode: 'bound', sessionId: 's2' }, { projectId: 'proj_2' });
+
+    const scoped = new Hono();
+    scoped.route(
+      '/api/v2/schedules',
+      createSchedulerRoutes(
+        auth,
+        { scheduleStore: store, scheduler, jobStore },
+        { resolveSessionProject, listVisibleProjectIds: async () => null },
+      ),
+    );
+
+    expect((await names(await scoped.request('/api/v2/schedules'))).sort()).toEqual(['in-1', 'in-2']);
   });
 });

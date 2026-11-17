@@ -49,6 +49,8 @@ const G_RUN =
   'run-project-role (прогон → его проект): core src/server/routes/pipeline-project-routes.ts (runGuard)';
 const G_PROCESS =
   'process-access (право на сессию-владельца прогона): backend src/routes/processes.ts';
+const G_SCHEDULE_PROJECT =
+  'schedule-project-role (read=canReadProject, write=canEditProjectContent): backend src/routes/schedules.ts (authorizeProject)';
 const G_TERMINAL =
   'terminal-project-role (read=canReadProject, write=canEditProjectContent): core src/server/routes/terminals.ts (terminalGuard)';
 const G_MCP_SESSION =
@@ -76,6 +78,7 @@ const OWNERSHIP_GUARDS = new Set<string>([
   G_PROJECT,
   G_RUN,
   G_PROCESS,
+  G_SCHEDULE_PROJECT,
   G_TERMINAL,
   G_MCP_SESSION,
   G_OWNER,
@@ -317,11 +320,14 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('DELETE', '/api/v2/events/bindings/:id', G_ADMIN_LEAD, [403]),
   r('DELETE', '/api/v2/events/routes/:id', G_ADMIN_LEAD, [403]),
 
-  // --- Расписания (ADR-051): чтение — requireAuth, мутации — ADMIN ---
-  r('GET', '/api/v2/schedules/:id/jobs', G_AUTH, [404]),
-  r('PUT', '/api/v2/schedules/:id', G_ADMIN, [403], { body: {} }),
-  r('DELETE', '/api/v2/schedules/:id', G_ADMIN, [403]),
-  r('POST', '/api/v2/schedules/:id/run', G_ADMIN, [403], { body: {} }),
+  // --- Расписания (ADR-051 / PROP-141): права — по проекту расписания ---
+  // Проект расписания обязателен (PROP-141), доступ — `canReadProject` (чтение)
+  // / `canEditProjectContent` (мутации); `VIEWER` читает, но не мутирует.
+  // Несуществующее расписание → 404 (ресурса нет — независимо от прав).
+  r('GET', '/api/v2/schedules/:id/jobs', G_SCHEDULE_PROJECT, [404]),
+  r('PUT', '/api/v2/schedules/:id', G_SCHEDULE_PROJECT, [404], { body: {} }),
+  r('DELETE', '/api/v2/schedules/:id', G_SCHEDULE_PROJECT, [404]),
+  r('POST', '/api/v2/schedules/:id/run', G_SCHEDULE_PROJECT, [404], { body: {} }),
 
   // --- Service-key (ADR-052): только ADMIN ---
   r('GET', '/api/v2/service-keys/:id', G_ADMIN, [403]),

@@ -69,6 +69,7 @@ import {
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
 import { createBackendProcessAccess } from '../routes/processes.js';
+import { createBackendScheduleAccess } from '../routes/schedules.js';
 import { createSessionRoutes } from '../routes/sessions.js';
 import { createMessageRoutes } from '../routes/messages.js';
 import { createQueueRoutes } from '../routes/queue.js';
@@ -544,22 +545,32 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   ));
 
-  // ADR-051 / ADR-089: CRUD расписаний, принудительный запуск и Job-история.
-  // Чтение — requireAuth (дефолт core-фабрики), мутации — ADMIN. `run` —
-  // ADMIN + rate limit (образец — ingest внешних событий): 10 запусков / 60 c
-  // на ключ, т.к. каждый запуск ингестит событие в Router.
+  // ADR-051 / ADR-089 / PROP-141 (этап 5, B-1): CRUD расписаний, принудительный
+  // запуск и Job-история. Права — **по проекту расписания** (ADR-089 §5.5/§5.8):
+  // читать — владелец/участник/`LEAD`/`ADMIN`, изменять — `OWNER`/`EDITOR`/
+  // `LEAD`/`ADMIN` (`VIEWER` читает, но не мутирует — инвариант 21). Прежний
+  // `requireAdmin` на все мутации снят (PROP-141, решение владельца 2026-11-17).
+  // Проверка — граничная (инвариант 16): `authorizeProject`/`listVisibleProjectIds`
+  // из `routes/schedules.ts` (тот же `createProjectAccess`, что у процессов).
+  // `run` — `requireAuth` + rate limit (образец — ingest внешних событий):
+  // 10 запусков / 60 c на ключ, т.к. каждый запуск ингестит событие в Router.
+  const scheduleAccess = createBackendScheduleAccess({ auth, projectStore });
   app.route('/api/v2/schedules', createSchedulerRoutes(
     auth,
     { scheduleStore, scheduler: schedulerService, jobStore },
     {
-      writeGuard: auth.requireAdmin,
-      runGuard: auth.requireAdmin,
+      writeGuard: auth.requireAuth,
+      runGuard: auth.requireAuth,
       runMiddleware: [createRateLimiter(10, 60_000)],
       // ADR-052 (этап I): scope-гейт, проектная проекция и резолвинг
       // projectId `bound`/`queue`-целей расписания.
       scopeGuard,
       serviceProjectProjection,
       resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+      // PROP-141 (этап 5): права — по проекту расписания; список ограничен
+      // видимыми проектами и собственными расписаниями.
+      authorizeProject: scheduleAccess.authorizeProject,
+      listVisibleProjectIds: scheduleAccess.listVisibleProjectIds,
     },
   ));
 

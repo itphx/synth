@@ -482,6 +482,16 @@ const JournalQuery = z.object({
 const JobsQuery = z.object({
   limit: z.coerce.number().int().positive().optional().openapi({ description: 'default 20, max 200' }),
 });
+/**
+ * PROP-141 (этап 5, B-1): фильтры списка расписаний. Некорректное значение —
+ * 400 `VALIDATION_ERROR`.
+ */
+const SchedulesQuery = z.object({
+  sessionId: z.string().min(1).optional().openapi({ description: 'Цель `bound`/`queue` — id сессии' }),
+  projectId: z.string().min(1).optional().openapi({ description: 'Проект расписания' }),
+  enabled: z.enum(['true', 'false', '1', '0']).optional().openapi({ description: 'Включено/выключено' }),
+  status: z.enum(['ok', 'error', 'skipped']).optional().openapi({ description: 'Статус последнего запуска' }),
+});
 
 // --- Операции: events (ADR-089) ---
 
@@ -817,7 +827,10 @@ const listSchedulesRoute = createRoute({
   path: '/schedules',
   tags: ['schedules'],
   summary: 'Список расписаний',
+  description:
+    'Фильтры: `sessionId` (цель `bound`/`queue`), `projectId`, `enabled`, `status` (статус последнего запуска). Некорректное значение фильтра — 400 `VALIDATION_ERROR`.',
   security: BEARER_SECURITY,
+  request: { query: SchedulesQuery },
   responses: {
     200: jsonResponse('Список расписаний', z.object({ schedules: z.array(Schedule) })),
     ...publicErrorResponses,
