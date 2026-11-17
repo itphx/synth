@@ -3,7 +3,15 @@ import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, Sess
 import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, orderSteerInjections, isDefaultTitle } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
-import type { SessionRepository } from '../storage/ports/session-repository.js';
+import type {
+  MutateHistoryOptions,
+  MutateHistoryResult,
+  MutateMessageResult,
+  MutateMetaOptions,
+  MutateMetaResult,
+  SessionMeta,
+  SessionRepository,
+} from '../storage/ports/session-repository.js';
 import type { ProjectRepository } from '../storage/ports/project-repository.js';
 import { isTerminalMessageStatus, nextOrd } from '../storage/message-write.js';
 import type { HookBus } from '../engine/hooks/hook-bus.js';
@@ -181,6 +189,15 @@ export class SessionManager {
     this._locks.set(sessionId, promise);
   }
 
+  /**
+   * Сериализация «чтение → изменение → запись» сессии в рамках процесса.
+   *
+   * ⚠️ Полная запись снимка (`store.save`) допустима только для
+   * create/import/replace: снимок, прочитанный до параллельной точечной записи
+   * (`appendMessage`/`mutateMessage`), затирает её (lost update). Для
+   * поточечных изменений — `mutateMeta`/`mutateHistory`/`mutateMessage`:
+   * чтение и запись идут под **одним** локом слоя хранения.
+   */
   async withLock<T>(sessionId: string, fn: (session: Session) => Promise<T>): Promise<T> {
     const prevLock = this._getLock(sessionId);
     let release: () => void;
@@ -482,18 +499,23 @@ export class SessionManager {
    * отсутствующая — `null`. Успешный архив эмитит `session_end` (ADR-030).
    */
   async archiveSession(sessionId: string): Promise<Session | null> {
-    const session = await this.store.load(sessionId);
-    if (!session || session.archivedAt) return null;
-    session.archivedAt = nowISO();
-    session.updatedAt = nowISO();
-    await this.store.save(session);
+    const archivedAt = nowISO();
+    // Только метаданные: история/child-наборы не читаются и не перезаписываются
+    // (параллельная дозапись сообщений не теряется).
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      if (meta.archivedAt) return false;
+      meta.archivedAt = archivedAt;
+      return true;
+    }, { shouldWrite: (ok) => ok });
+    if (!result.found || !result.value) return null;
     // ADR-102: `archived:true` отличает архив от удаления (мера `sessions_archived`).
     this._options.hooks?.emitAsync('session_end', {
       sessionId,
       archived: true,
-      ...sessionAxes(session),
+      ...sessionAxes(result.session),
     });
-    return session;
+    // Публичный контракт — полная сессия (как и раньше): читаем после записи.
+    return this.store.load(sessionId);
   }
 
   /**
@@ -515,45 +537,60 @@ export class SessionManager {
     return archived;
   }
 
+  /**
+   * Полная запись сессии. ⚠️ Только create/import/replace (или полная замена
+   * документа): снимок пишется целиком и может затереть параллельные точечные
+   * изменения. Для поточечных правок — {@link mutateMeta}/{@link mutateHistory}/
+   * {@link mutateMessage}.
+   */
   async updateSession(session: Session): Promise<void> {
     session.updatedAt = nowISO();
     await this.store.save(session);
   }
 
+  /**
+   * Полная запись переданного снимка сессии (без перечитывания).
+   * ⚠️ Только create/import/replace — см. {@link updateSession}.
+   */
   async saveSession(session: Session): Promise<void> {
     await this.store.save(session);
   }
 
+  /**
+   * Захват блокировки сессии (`status.blocked`) — атомарная правка метаданных.
+   * `updatedAt` не двигается (паритет с прежним поведением: захват блокировки
+   * не «оживляет» сессию в списках).
+   */
   async acquireLock(sessionId: string, processId: string): Promise<boolean> {
-    return this.withLock(sessionId, async (session) => {
-      if (session.status.blocked) return false;
-      session.status.blocked = processId;
-      session.status.blockedAt = nowISO();
-      session.status.blockedOwner = this.instanceId;
-      await this.store.save(session);
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      if (meta.status.blocked) return false;
+      meta.status.blocked = processId;
+      meta.status.blockedAt = nowISO();
+      meta.status.blockedOwner = this.instanceId;
       return true;
-    });
+    }, { touchUpdatedAt: false, shouldWrite: (ok) => ok });
+    return result.found && result.value;
   }
 
   async releaseLock(sessionId: string, processId: string): Promise<boolean> {
-    return this.withLock(sessionId, async (session) => {
-      if (session.status.blocked !== processId) return false;
-      session.status.blocked = undefined;
-      session.status.blockedAt = undefined;
-      session.status.blockedOwner = undefined;
-      await this.store.save(session);
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      if (meta.status.blocked !== processId) return false;
+      meta.status.blocked = undefined;
+      meta.status.blockedAt = undefined;
+      meta.status.blockedOwner = undefined;
       return true;
-    });
+    }, { touchUpdatedAt: false, shouldWrite: (ok) => ok });
+    return result.found && result.value;
   }
 
   async forceReleaseLock(sessionId: string): Promise<boolean> {
-    return this.withLock(sessionId, async (session) => {
-      session.status.blocked = undefined;
-      session.status.blockedAt = undefined;
-      session.status.blockedOwner = undefined;
-      await this.store.save(session);
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      meta.status.blocked = undefined;
+      meta.status.blockedAt = undefined;
+      meta.status.blockedOwner = undefined;
       return true;
-    });
+    }, { touchUpdatedAt: false });
+    return result.found && result.value;
   }
 
   async cleanupStaleLocks(timeoutMinutes = 15): Promise<string[]> {
@@ -621,81 +658,102 @@ export class SessionManager {
         listed.status.blockedOwner !== this.instanceId;
       if (!streamStale && !blockedStale) continue;
 
-      let turnId: string | undefined;
-      let streamId: string | undefined;
-      let resumeMessage: Message | undefined;
-      let pendingLeft = 0;
-      let changed = false;
-      let ownLiveStream = false;
-
-      try {
-        await this.withLock(listed.id, async (session) => {
-          // Перепроверяем под локом: за время обхода список мог устареть, а
-          // ход — смениться (в т.ч. на собственный).
-          const staleStream = !!session.currentStream && session.currentStream.owner !== this.instanceId;
-          const staleBlocked =
-            (!!session.status.blocked || !!session.status.blockedOwner) &&
-            session.status.blockedOwner !== this.instanceId;
-          if (!staleStream && !staleBlocked) {
-            ownLiveStream = !!session.currentStream;
-            pendingLeft = session.pendingMessages.length;
-            return;
-          }
-          changed = true;
-          if (staleStream && session.currentStream) {
-            turnId = session.currentStream.turnId;
-            streamId = session.currentStream.streamId;
-            session.currentStream = undefined;
-          }
-          if (session.currentStream) ownLiveStream = true;
-          if (staleBlocked) {
-            session.status.blocked = undefined;
-            session.status.blockedAt = undefined;
-            session.status.blockedOwner = undefined;
-          } else if (!session.status.blocked) {
-            // Блокировки нет — владелец не имеет смысла (например, сняли
-            // маркер напрямую, не тронув `blockedOwner`).
-            session.status.blockedOwner = undefined;
-          }
-          session.status.cancelRequested = undefined;
-          session.status.cancelRequestedAt = undefined;
-          session.retry = undefined;
-
-          // In-flight сообщение прерванного хода: забираем из очереди (оно уже
-          // взято в работу — в очереди ему не место) либо, если очередь его не
-          // содержит, берём user-копию из истории. Процессор получит копию как
-          // `resumeMessage`; в историю повторно она не пишется (Phase 1 дедуп
-          // по `stream_id`). Флаг `resumed` — чтобы не эмитить `message_received`.
-          if (staleStream && streamId) {
-            const pendingIdx = session.pendingMessages.findIndex(
-              (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
-            );
-            const source = pendingIdx >= 0
-              ? session.pendingMessages.splice(pendingIdx, 1)[0]
-              : [...session.messages].reverse().find(
-                (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
-              );
-            if (source) {
-              resumeMessage = {
-                ...source,
-                metadata: { ...(source.metadata ?? {}), resumed: true },
-              };
+      // Снятие маркеров и выборка in-flight сообщения — атомарная правка
+      // **метаданных** (история не читается и не перезаписывается: иначе
+      // параллельная дозапись tool-сообщений терялась бы). `resumeMessage`
+      // строится после мутации; user-копия в истории (fallback) читается
+      // отдельно — это только чтение.
+      //
+      // Восстановление — best-effort (как и раньше): сессию могли удалить или
+      // хранилище могло сбоить — пропускаем её, обход продолжается.
+      const outcome = await (async () => {
+        try {
+          return await this.store.mutateMeta(listed.id, (meta) => {
+            // Перепроверяем под локом порта: за время обхода список мог устареть,
+            // а ход — смениться (в т.ч. на собственный).
+            const staleStream = !!meta.currentStream
+              && meta.currentStream.owner !== this.instanceId;
+            const staleBlocked =
+              (!!meta.status.blocked || !!meta.status.blockedOwner) &&
+              meta.status.blockedOwner !== this.instanceId;
+            if (!staleStream && !staleBlocked) {
+              return {
+                changed: false,
+                ownLiveStream: !!meta.currentStream,
+                pendingLeft: meta.pendingMessages.length,
+              } as const;
             }
-          }
 
-          pendingLeft = session.pendingMessages.length;
-          session.updatedAt = nowISO();
-          await this.store.save(session);
-        });
-      } catch {
-        // Сессия могла быть удалена — пропускаем, восстановление best-effort.
-        continue;
+            const nextTurnId = staleStream ? meta.currentStream?.turnId : undefined;
+            const nextStreamId = staleStream ? meta.currentStream?.streamId : undefined;
+            if (staleStream) meta.currentStream = undefined;
+            const ownLive = !!meta.currentStream;
+            if (staleBlocked) {
+              meta.status.blocked = undefined;
+              meta.status.blockedAt = undefined;
+              meta.status.blockedOwner = undefined;
+            } else if (!meta.status.blocked) {
+              // Блокировки нет — владелец не имеет смысла (например, сняли
+              // маркер напрямую, не тронув `blockedOwner`).
+              meta.status.blockedOwner = undefined;
+            }
+            meta.status.cancelRequested = undefined;
+            meta.status.cancelRequestedAt = undefined;
+            meta.retry = undefined;
+
+            // In-flight сообщение прерванного хода: забираем из очереди (оно уже
+            // взято в работу — в очереди ему не место). Если очередь его не
+            // содержит, user-копию берём из истории **после** мутации (чтение).
+            let source: Message | undefined;
+            if (staleStream && nextStreamId) {
+              const pendingIdx = meta.pendingMessages.findIndex(
+                (m) => m.role === MessageRole.USER && m.metadata?.stream_id === nextStreamId,
+              );
+              if (pendingIdx >= 0) source = meta.pendingMessages.splice(pendingIdx, 1)[0];
+            }
+
+            return {
+              changed: true,
+              ownLiveStream: ownLive,
+              pendingLeft: meta.pendingMessages.length,
+              turnId: nextTurnId,
+              streamId: nextStreamId,
+              source,
+            } as const;
+          }, { shouldWrite: (v) => v.changed });
+        } catch {
+          return null;
+        }
+      })();
+
+      if (!outcome || !outcome.found) continue;
+      const { value } = outcome;
+      if (!value.changed) continue;
+      const { turnId, streamId } = value;
+      let resumeMessage = value.source;
+      // Fallback: user-копия уже материализована в истории (очередь её не
+      // содержит). Процессор получит копию как `resumeMessage`; в историю
+      // повторно она не пишется (Phase 1 дедуп по `stream_id`). Флаг `resumed` —
+      // чтобы не эмитить `message_received`.
+      if (!resumeMessage && streamId) {
+        const snapshot = await this.store.load(listed.id);
+        const found = snapshot
+          ? [...snapshot.messages].reverse().find(
+            (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+          )
+          : undefined;
+        if (found) resumeMessage = found;
+      }
+      if (resumeMessage) {
+        resumeMessage = {
+          ...resumeMessage,
+          metadata: { ...(resumeMessage.metadata ?? {}), resumed: true },
+        };
       }
 
-      if (!changed) continue;
       // Сообщения «живого стрима» помечаем прерванными только если своего
       // живого хода в сессии нет (иначе погасили бы его сегменты).
-      if (!ownLiveStream) {
+      if (!value.ownLiveStream) {
         await this.recoverStreamingMessages(listed.id);
       }
       recovered.push({
@@ -703,7 +761,7 @@ export class SessionManager {
         ...(turnId ? { turnId } : {}),
         ...(streamId ? { streamId } : {}),
         ...(resumeMessage ? { resumeMessage } : {}),
-        pendingLeft,
+        pendingLeft: value.pendingLeft,
       });
     }
 
@@ -727,56 +785,65 @@ export class SessionManager {
    * История и `queueStopped` не меняются; повторный вызов идемпотентен.
    */
   async takePendingInFlight(sessionId: string): Promise<Message | undefined> {
-    return this.withLock(sessionId, async (session) => {
-      const first = session.pendingMessages[0];
-      if (!first) return undefined;
-      const streamId = first.metadata?.stream_id as string | undefined;
-      const alreadyInHistory = session.messages.some((m) => {
-        if (m.role !== MessageRole.USER) return false;
-        if (first.id && m.id === first.id) return true;
-        return !!streamId && m.metadata?.stream_id === streamId;
-      });
-      if (!alreadyInHistory) return undefined;
-      session.pendingMessages.splice(0, 1);
-      session.updatedAt = nowISO();
-      await this.store.save(session);
-      return {
-        ...first,
-        metadata: { ...(first.metadata ?? {}), resumed: true },
-      };
+    // Признак in-flight требует истории (user-копия уже материализована):
+    // читаем снимок **до** мутации, сама мутация — атомарная правка метаданных
+    // (очередь), история не перезаписывается.
+    const snapshot = await this.store.load(sessionId);
+    if (!snapshot) throw new Error(`Session ${sessionId} not found`);
+    const first = snapshot.pendingMessages[0];
+    if (!first) return undefined;
+    const streamId = first.metadata?.stream_id as string | undefined;
+    const alreadyInHistory = snapshot.messages.some((m) => {
+      if (m.role !== MessageRole.USER) return false;
+      if (first.id && m.id === first.id) return true;
+      return !!streamId && m.metadata?.stream_id === streamId;
     });
+    if (!alreadyInHistory) return undefined;
+
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      // Очередь могла измениться между чтением и мутацией: снимаем только тот
+      // же первый элемент, иначе оставляем очередь как есть (идемпотентность).
+      const head = meta.pendingMessages[0];
+      if (!head) return undefined;
+      const sameId = (first.id ?? '') !== '' && head.id === first.id;
+      const sameStream = !!streamId && head.metadata?.stream_id === streamId;
+      if (!sameId && !sameStream) return undefined;
+      meta.pendingMessages.splice(0, 1);
+      return head;
+    }, { shouldWrite: (taken) => !!taken });
+    if (!result.found || !result.value) return undefined;
+    const taken = result.value;
+    return {
+      ...taken,
+      metadata: { ...(taken.metadata ?? {}), resumed: true },
+    };
   }
 
+  /**
+   * Добавить сообщение в историю.
+   *
+   * Запись — точечная (`SessionRepository.appendMessage`): `id`/`seq`/`origin`/
+   * `ord` назначает порт (`ord` — монотонный счётчик сессии, ADR-118 §2).
+   * Полный снимок истории не перезаписывается — параллельные дозаписи не
+   * теряются.
+   */
   async addMessage(sessionId: string, message: Message): Promise<Session | null> {
-    return this.withLock(sessionId, async (session) => {
-      if (!message.id) message.id = generateId();
-      if (!message.seq) message.seq = session.messages.length + 1;
-      if (!message.origin) message.origin = 'local';
-      // ADR-118 §2: `ord` — монотонный счётчик сессии (выдаётся в момент
-      // материализации записи в историю). Уже проставленный `ord` не
-      // перетирается; ранее выданные значения не перенумеровываются.
-      if (!Number.isFinite(message.ord)) {
-        message.ord = nextOrd(session.messages);
-      }
-      if (!message.parts || message.parts.length === 0) {
-        message.parts = [makeTextPart(message.content)];
-      }
-      sanitizeMessageNullBytes(message);
-      session.messages.push(message);
-      session.updatedAt = nowISO();
-      await this.store.save(session);
-      // ADR-102: точка персиста сообщения — инкремент `activity`
-      // (`messages_assistant`/`messages_tool`); пользовательские сообщения
-      // персистит `QueueProcessor` (своя точка записи). Скрытые промежуточные
-      // assistant-сообщения tool-chain не считаем (паритет с `computeSessionStats`).
-      // Запись best-effort: рекордер не пробрасывает ошибки и не блокирует сохранение.
-      const measure =
-        message.metadata?.tool_chain === true ? null : activityMeasureForMessage(message.role);
-      if (measure) {
-        void this._options.analytics?.recordActivity(measure, sessionAxes(session));
-      }
-      return session;
-    });
+    if (!message.id) message.id = generateId();
+    sanitizeMessageNullBytes(message);
+    const saved = await this.store.appendMessage(sessionId, message);
+    if (!saved) throw new Error(`Session ${sessionId} not found`);
+    // ADR-102: точка персиста сообщения — инкремент `activity`
+    // (`messages_assistant`/`messages_tool`); пользовательские сообщения
+    // персистит `QueueProcessor` (своя точка записи). Скрытые промежуточные
+    // assistant-сообщения tool-chain не считаем (паритет с `computeSessionStats`).
+    // Запись best-effort: рекордер не пробрасывает ошибки и не блокирует сохранение.
+    const measure =
+      saved.metadata?.tool_chain === true ? null : activityMeasureForMessage(saved.role);
+    if (measure) {
+      void this._recordAppendActivity(sessionId, measure);
+    }
+    // Публичный контракт — сессия с историей (как и раньше): читаем после записи.
+    return this.store.load(sessionId);
   }
 
   /**
@@ -836,6 +903,50 @@ export class SessionManager {
   }
 
   /**
+   * Атомарная правка **метаданных** сессии (порт `SessionRepository.mutateMeta`):
+   * чтение → синхронный мутатор → запись под одним локом хранилища. История и
+   * child-наборы не читаются и не перезаписываются — параллельная дозапись
+   * сообщений (`appendMessage`) не теряется.
+   *
+   * Для поточечных изменений использовать этот метод (или
+   * {@link mutateHistory}/{@link mutateMessage}), а не `saveSession`: полная
+   * запись снимка допустима только для create/import/replace.
+   */
+  async mutateMeta<T>(
+    sessionId: string,
+    mutator: (meta: SessionMeta) => T,
+    opts?: MutateMetaOptions<T>,
+  ): Promise<MutateMetaResult<T>> {
+    return this.store.mutateMeta(sessionId, mutator, opts);
+  }
+
+  /**
+   * Атомарная правка **истории** целиком: свежий документ читается под локом,
+   * `seq` нормализуется позиционно, `ord` не перенумеровывается. Для поточечной
+   * правки сообщения — {@link mutateMessage}.
+   */
+  async mutateHistory<T>(
+    sessionId: string,
+    mutator: (session: Session) => T,
+    opts?: MutateHistoryOptions<T>,
+  ): Promise<MutateHistoryResult<T>> {
+    return this.store.mutateHistory(sessionId, mutator, opts);
+  }
+
+  /**
+   * Атомарная правка одного сообщения по `id` (порт
+   * `SessionRepository.mutateMessage`): `id`/`seq`/`createdAt`/`ord`
+   * иммутабельны, поздняя запись черновика не «воскрешает» закрытый шаг.
+   */
+  async mutateMessage<T>(
+    sessionId: string,
+    messageId: string,
+    mutator: (message: Message) => T,
+  ): Promise<MutateMessageResult<T>> {
+    return this.store.mutateMessage(sessionId, messageId, mutator);
+  }
+
+  /**
    * Шаг 2б: восстановление сообщений, «зависших» после падения/рестарта.
    *
    * - `metadata.streaming === true` → `streaming:false`, `interrupted:true`,
@@ -854,7 +965,9 @@ export class SessionManager {
    * Возвращает число исправленных сообщений.
    */
   async recoverStreamingMessages(sessionId: string): Promise<number> {
-    return this.withLock(sessionId, async (session) => {
+    // Правка истории — только при реальных изменениях (`shouldWrite`): проход
+    // идемпотентен и не должен «оживлять» сессию/перезаписывать историю впустую.
+    const result = await this.store.mutateHistory(sessionId, (session) => {
       let changed = 0;
 
       for (let i = 0; i < session.messages.length; i++) {
@@ -903,12 +1016,13 @@ export class SessionManager {
         changed++;
       }
 
-      if (changed > 0) {
-        session.updatedAt = nowISO();
-        await this.store.save(session);
-      }
       return changed;
-    });
+    }, { shouldWrite: (changed) => changed > 0 });
+    if (!result.ok) {
+      if (result.reason === 'not_found') throw new Error(`Session ${sessionId} not found`);
+      return 0;
+    }
+    return result.value;
   }
 
   /**
@@ -933,9 +1047,11 @@ export class SessionManager {
   async repairStaleStreamingMessages(
     sessionId: string,
   ): Promise<{ changed: number; session: Session | null }> {
-    return this.withLock(sessionId, async (session) => {
+    // Правка истории, запись — только при изменениях (`shouldWrite`): ремонт
+    // идемпотентен и не перезаписывает историю при чтении впустую.
+    const result = await this.store.mutateHistory(sessionId, (session) => {
       // Активный шаг (любой owner, в т.ч. чужой) — не наш случай.
-      if (session.currentStream) return { changed: 0, session };
+      if (session.currentStream) return { changed: 0, skip: true };
 
       let changed = 0;
       for (let i = 0; i < session.messages.length; i++) {
@@ -960,12 +1076,14 @@ export class SessionManager {
         if (touched) changed++;
       }
 
-      if (changed > 0) {
-        session.updatedAt = nowISO();
-        await this.store.save(session);
-      }
-      return { changed, session };
-    });
+      return { changed, skip: false };
+    }, { shouldWrite: (value) => !value.skip && value.changed > 0 });
+    if (!result.ok) {
+      if (result.reason === 'not_found') throw new Error(`Session ${sessionId} not found`);
+      return { changed: 0, session: null };
+    }
+    // Публичный контракт — сессия после ремонта (или текущая, если нечего менять).
+    return { changed: result.value.changed, session: await this.store.load(sessionId) };
   }
 
   /**
@@ -997,25 +1115,29 @@ export class SessionManager {
       clearQueueStopped?: boolean;
     },
   ): Promise<Session | null> {
-    return this.withLock(sessionId, async (session) => {
-      if (session.pendingMessages.length >= maxPending) return null;
-      if (!message.id) message.id = generateId();
-      if (!message.origin) message.origin = 'local';
-      if (!message.parts || message.parts.length === 0) {
-        message.parts = [makeTextPart(message.content)];
-      }
-      sanitizeMessageNullBytes(message);
-      session.pendingMessages.push(message);
+    if (!message.id) message.id = generateId();
+    if (!message.origin) message.origin = 'local';
+    if (!message.parts || message.parts.length === 0) {
+      message.parts = [makeTextPart(message.content)];
+    }
+    sanitizeMessageNullBytes(message);
+
+    // Очередь — часть метаданных: атомарная правка без чтения/перезаписи истории.
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      if (meta.pendingMessages.length >= maxPending) return false;
+      meta.pendingMessages = [...meta.pendingMessages, message];
       // Новый пользовательский ввод возобновляет осознанно остановленную
       // обработку (Stop/stall): очередь снова живёт.
       if (options?.clearQueueStopped !== false && message.role === MessageRole.USER) {
-        session.status.queueStopped = undefined;
-        session.status.queueStoppedAt = undefined;
+        meta.status.queueStopped = undefined;
+        meta.status.queueStoppedAt = undefined;
       }
-      session.updatedAt = nowISO();
-      await this.store.save(session);
-      return session;
-    });
+      return true;
+    }, { shouldWrite: (ok) => ok });
+    if (!result.found) throw new Error(`Session ${sessionId} not found`);
+    if (!result.value) return null;
+    // Публичный контракт — сессия (вызывающие читают очередь/настройки).
+    return this.store.load(sessionId);
   }
 
   /**
@@ -1043,49 +1165,67 @@ export class SessionManager {
       activeStreamId?: string;
     },
   ): Promise<{ accepted: boolean; pending: number; reason?: 'limit' | 'not_found' }> {
-    return this.withLock(sessionId, async (session) => {
+    if (!message.id) message.id = generateId();
+    if (!message.origin) message.origin = 'local';
+    if (!message.parts || message.parts.length === 0) {
+      message.parts = [makeTextPart(message.content)];
+    }
+    sanitizeMessageNullBytes(message);
+
+    // Без переноса из очереди меняются только метаданные (inbox/статус) —
+    // история не читается и не перезаписывается.
+    if (!options?.fromPending) {
+      const result = await this.store.mutateMeta(sessionId, (meta) => {
+        const inbox = meta.steerInbox ?? [];
+        if (inbox.length >= maxInjections) {
+          return { accepted: false as const, pending: inbox.length, reason: 'limit' as const };
+        }
+        meta.steerInbox = [...inbox, message];
+        // Вмешательство пользователя — новая работа: осознанная остановка
+        // обработки снимается.
+        meta.status.queueStopped = undefined;
+        meta.status.queueStoppedAt = undefined;
+        return { accepted: true as const, pending: inbox.length + 1 };
+      }, { shouldWrite: (r) => r.accepted });
+      if (!result.found) throw new Error(`Session ${sessionId} not found`);
+      return result.value;
+    }
+
+    // Перенос из `pendingMessages` требует удаления user-копии из **истории** —
+    // это правка истории: одна атомарная операция (проверка лимита, снятие из
+    // очереди, снятие копии из истории, постановка в `steerInbox`).
+    const result = await this.store.mutateHistory(sessionId, (session) => {
       const inbox = session.steerInbox ?? [];
       if (inbox.length >= maxInjections) {
-        return { accepted: false, pending: inbox.length, reason: 'limit' };
+        return { accepted: false as const, pending: inbox.length, reason: 'limit' as const };
       }
-      if (!message.id) message.id = generateId();
-      if (options?.fromPending) {
-        // Сообщения нет в обычной очереди (уже отправлено «в разрыв» или
-        // исчезло) — принимать нечего: очередь не трогаем.
-        const idx = session.pendingMessages.findIndex(
-          (m) => (message.id ? m.id === message.id : m === message),
-        );
-        if (idx < 0) {
-          return { accepted: false, pending: inbox.length, reason: 'not_found' };
-        }
-        session.pendingMessages.splice(idx, 1);
-        // User-копия из истории (по `stream_id`) — активный стрим не трогаем
-        // (как в `/return`): иначе после инъекции был бы дубль реплики.
-        const sid = message.metadata?.stream_id as string | undefined;
-        if (sid && sid !== options.activeStreamId) {
-          session.messages = session.messages.filter((m) => {
-            if (m.role !== MessageRole.USER) return true;
-            const copySid = m.metadata?.stream_id as string | undefined;
-            if (!copySid) return true;
-            return copySid !== sid;
-          });
-        }
+      // Сообщения нет в обычной очереди (уже отправлено «в разрыв» или
+      // исчезло) — принимать нечего: очередь и история не трогаются.
+      const idx = session.pendingMessages.findIndex(
+        (m) => (message.id ? m.id === message.id : m === message),
+      );
+      if (idx < 0) {
+        return { accepted: false as const, pending: inbox.length, reason: 'not_found' as const };
       }
-      if (!message.origin) message.origin = 'local';
-      if (!message.parts || message.parts.length === 0) {
-        message.parts = [makeTextPart(message.content)];
+      session.pendingMessages.splice(idx, 1);
+      // User-копия из истории (по `stream_id`) — активный стрим не трогаем
+      // (как в `/return`): иначе после инъекции был бы дубль реплики.
+      const sid = message.metadata?.stream_id as string | undefined;
+      if (sid && sid !== options.activeStreamId) {
+        session.messages = session.messages.filter((m) => {
+          if (m.role !== MessageRole.USER) return true;
+          const copySid = m.metadata?.stream_id as string | undefined;
+          if (!copySid) return true;
+          return copySid !== sid;
+        });
       }
-      sanitizeMessageNullBytes(message);
-      inbox.push(message);
-      session.steerInbox = inbox;
-      // Вмешательство пользователя — новая работа: осознанная остановка
-      // обработки снимается.
+      session.steerInbox = [...inbox, message];
       session.status.queueStopped = undefined;
       session.status.queueStoppedAt = undefined;
-      session.updatedAt = nowISO();
-      await this.store.save(session);
-      return { accepted: true, pending: inbox.length };
-    });
+      return { accepted: true as const, pending: inbox.length + 1 };
+    }, { shouldWrite: (value) => value.accepted });
+    if (!result.ok) throw new Error(`Session ${sessionId} not found`);
+    return result.value;
   }
 
   /**
@@ -1100,18 +1240,19 @@ export class SessionManager {
     sessionId: string,
     maxInjections = MAX_STEER_INJECTIONS_PER_TURN,
   ): Promise<{ messages: Message[]; dropped: Message[] }> {
-    return this.withLock(sessionId, async (session) => {
-      const inbox = session.steerInbox ?? [];
-      if (inbox.length === 0) return { messages: [], dropped: [] };
+    // Очередь инъекций — метаданные: история не перезаписывается.
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      const inbox = meta.steerInbox ?? [];
+      if (inbox.length === 0) return { messages: [] as Message[], dropped: [] as Message[] };
       const limit = Math.max(0, maxInjections);
       const ordered = orderSteerInjections(inbox);
       const messages = ordered.slice(0, limit);
       const dropped = ordered.slice(limit);
-      session.steerInbox = [];
-      session.updatedAt = nowISO();
-      await this.store.save(session);
+      meta.steerInbox = [];
       return { messages, dropped };
-    });
+    }, { shouldWrite: (r) => r.messages.length + r.dropped.length > 0 });
+    if (!result.found) throw new Error(`Session ${sessionId} not found`);
+    return result.value;
   }
 
   /**
@@ -1123,14 +1264,14 @@ export class SessionManager {
    * попадают — о снятии сообщает `steer.dropped`.
    */
   async clearSteerInbox(sessionId: string): Promise<Message[]> {
-    return this.withLock(sessionId, async (session) => {
-      const inbox = session.steerInbox ?? [];
-      if (inbox.length === 0) return [];
-      session.steerInbox = [];
-      session.updatedAt = nowISO();
-      await this.store.save(session);
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      const inbox = meta.steerInbox ?? [];
+      if (inbox.length === 0) return [] as Message[];
+      meta.steerInbox = [];
       return inbox;
-    });
+    }, { shouldWrite: (msgs) => msgs.length > 0 });
+    if (!result.found) throw new Error(`Session ${sessionId} not found`);
+    return result.value;
   }
 
   async createCheckpoint(sessionId: string): Promise<Session | null> {
@@ -1159,38 +1300,34 @@ export class SessionManager {
     });
   }
 
-  async safeUpdate(sessionId: string, updateFn: (session: Session) => Promise<void> | void): Promise<void> {
-    await this.withLock(sessionId, async (stored) => {
-      await updateFn(stored);
-      stored.updatedAt = nowISO();
-      await this.store.save(stored);
-    });
-  }
-
+  /**
+   * Переименовать сессию (метаданные, атомарно; история не перезаписывается).
+   * Публичный контракт — сессия после правки.
+   */
   async renameSession(sessionId: string, title: string): Promise<Session | null> {
-    return this.withLock(sessionId, async (s) => {
-      s.title = title;
-      s.updatedAt = nowISO();
-      await this.store.save(s);
-      return s;
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      meta.title = title;
     });
+    if (!result.found) throw new Error(`Session ${sessionId} not found`);
+    return this.store.load(sessionId);
   }
 
   /**
    * Переименовать сессию **только если** заголовок ещё дефолтный
    * (`isDefaultTitle`) — авто-заголовок не перетирает заголовок, заданный
-   * пользователем. Проверка и запись — под одним локом (гонка двух ходов не
-   * должна затереть чужое имя). Возвращает обновлённую сессию; `null` — имя
-   * уже задано (или сессии нет).
+   * пользователем. Проверка и запись — в одном мутаторе под локом порта (гонка
+   * двух ходов не должна затереть чужое имя). Возвращает обновлённую сессию;
+   * `null` — имя уже задано (или сессии нет).
    */
   async renameSessionIfDefault(sessionId: string, title: string): Promise<Session | null> {
-    return this.withLock(sessionId, async (s) => {
-      if (!isDefaultTitle(s.title)) return null;
-      s.title = title;
-      s.updatedAt = nowISO();
-      await this.store.save(s);
-      return s;
-    });
+    const result = await this.store.mutateMeta(sessionId, (meta) => {
+      if (!isDefaultTitle(meta.title)) return false;
+      meta.title = title;
+      return true;
+    }, { shouldWrite: (ok) => ok });
+    if (!result.found) throw new Error(`Session ${sessionId} not found`);
+    if (!result.value) return null;
+    return this.store.load(sessionId);
   }
 
   /**

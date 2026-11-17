@@ -11,9 +11,6 @@ import { sessionAxes } from '../analytics/recorder.js';
 // сериализация, что у списка сообщений, но без `ord` (записи в истории ещё
 // нет) и без реальных значений секретов (ADR-036).
 import { serializeEnqueuedMessage } from '../server/serialize.js';
-// ADR-118 §2: `ord` — монотонный счётчик сессии (выдаётся при материализации
-// записи в истории). Тот же помощник, что и в `SessionManager.addMessage`.
-import { nextOrd } from '../storage/message-write.js';
 
 const MAX_PENDING = 5;
 
@@ -40,6 +37,16 @@ export function publishQueueState(
 }
 
 /**
+ * Источник счётчиков очереди: полная сессия либо снимок метаданных
+ * (`SessionMeta` из `mutateMeta` — очередь и `currentStream` в нём есть,
+ * истории нет).
+ */
+export type QueueCountsSource = Pick<
+  Session,
+  'pendingMessages' | 'steerInbox' | 'currentStream'
+>;
+
+/**
  * Счётчики очереди сессии: обычная очередь + очередь вмешательств.
  *
  * `items` — элементы очереди с состоянием: обрабатываемое сообщение —
@@ -47,7 +54,7 @@ export function publishQueueState(
  * `queued`. Идентификатор элемента — id потока сообщения (`metadata.stream_id`):
  * по нему клиент связывает элемент очереди с живым ходом.
  */
-export function queueCounts(session: Session | null | undefined): QueueStatePayload {
+export function queueCounts(session: QueueCountsSource | null | undefined): QueueStatePayload {
   const pending = session?.pendingMessages ?? [];
   const startingId = session?.currentStream?.streamId;
   const items: QueueItemState[] = pending.map((m) => {
@@ -287,7 +294,9 @@ export class QueueProcessor {
     // «Стопа» продолжения не будет.
     this._resumeMessage = undefined;
 
-    const { id: streamId, counts } = await this.sessionManager.withLock(this.sessionId, async (s) => {
+    // Снятие маркеров — атомарная правка метаданных: история не перезаписывается
+    // (параллельная дозапись сообщений не теряется).
+    const stopped = await this.sessionManager.mutateMeta(this.sessionId, (s) => {
       const id = s.currentStream?.streamId;
       // Очередь НЕ чистится: «Стоп» останавливает только активный ход.
       s.status.blocked = undefined;
@@ -305,10 +314,11 @@ export class QueueProcessor {
         s.status.queueStopped = true;
         s.status.queueStoppedAt = nowISO();
       }
-      s.updatedAt = nowISO();
-      await this.sessionManager.saveSession(s);
       return { id, counts: queueCounts(s) };
     });
+    // Сессии нет — снимать нечего (best-effort: процессор просто останавливается).
+    if (!stopped.found) return;
+    const { id: streamId, counts } = stopped.value;
 
     // ADR-118 §4: состояние очереди (счётчики — по фактической очереди).
     publishQueueState(this.eventBus, this.sessionId, counts);
@@ -340,16 +350,15 @@ export class QueueProcessor {
    * (can_retry: false) — UI завершает стрим и показывает стандартное уведомление.
    */
   async cancelRetry(): Promise<void> {
-    const session = await this.sessionManager.getSession(this.sessionId);
-    const streamId = session?.currentStream?.streamId;
-
     this._cancelled = true;
 
     // Порядок важен (фикс гонки): сначала снимаем pending/blocked/currentStream
-    // под локом, и только ПОТОМ будим backoff и абортим активный вызов. Иначе
-    // _run(), проснувшись, доходил до финальной проверки pending раньше, чем
-    // withLock успевал удалить сообщение, и публиковал ложный queue.stalled.
-    await this.sessionManager.withLock(this.sessionId, async (s) => {
+    // одной атомарной правкой метаданных, и только ПОТОМ будим backoff и
+    // абортим активный вызов. Иначе _run(), проснувшись, доходил до финальной
+    // проверки pending раньше, чем мутация удаляла сообщение, и публиковал
+    // ложный queue.stalled.
+    const cancelled = await this.sessionManager.mutateMeta(this.sessionId, (s) => {
+      const sid = s.currentStream?.streamId;
       const active = this._resumeMessage ?? s.pendingMessages[0];
       if (active) this._removeProcessed(s, active);
       s.status.blocked = undefined;
@@ -359,10 +368,13 @@ export class QueueProcessor {
       // Ретраи отменены — состояние ретрая снимается (иначе DTO сессии
       // продолжал бы показывать «повтор» при отменённых ретраях).
       s.retry = undefined;
-      await this.sessionManager.saveSession(s);
-      // ADR-118 §4: очередь изменилась (отмена ретрая) — состояние очереди.
-      publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
+      return { streamId: sid, counts: queueCounts(s) };
     });
+    const streamId = cancelled.found ? cancelled.value.streamId : undefined;
+    if (cancelled.found) {
+      // ADR-118 §4: очередь изменилась (отмена ретрая) — состояние очереди.
+      publishQueueState(this.eventBus, this.sessionId, cancelled.value.counts);
+    }
 
     this._resumeMessage = undefined;
     this.wakeBackoff();
@@ -409,7 +421,7 @@ export class QueueProcessor {
    * Нельзя удалять «первый элемент»: resume-сообщение после рестарта в очереди
    * отсутствует, и `splice(0, 1)` снял бы **следующее** (ещё не обработанное).
    */
-  private _removeProcessed(session: Session, message: Message): void {
+  private _removeProcessed(session: Pick<Session, 'pendingMessages'>, message: Message): void {
     const streamId = message.metadata?.stream_id as string | undefined;
     const idx = session.pendingMessages.findIndex(
       (m) => (message.id ? m.id === message.id : false)
@@ -457,7 +469,10 @@ export class QueueProcessor {
       // Проверка: ожидается ли суммаризация перед следующим сообщением?
       if (this.contextOptimizer && session.summarizationPending) {
         try {
-          session = await this.sessionManager.withLock(this.sessionId, async (s) => {
+          // Режим сжатия считается по снимку (settings стабильны в ходе).
+          const mode = this.contextOptimizer.effectiveMode(session) ?? 'summarization';
+          // Инъекция служебного сообщения — правка очереди (метаданные).
+          const injected = await this.sessionManager.mutateMeta(this.sessionId, (meta) => {
             // Вставить системное сообщение в начало очереди вместо блокирующего вызова
             const sysMsg: Message = {
               id: generateId(),
@@ -473,15 +488,14 @@ export class QueueProcessor {
               metadata: {
                 type: 'summarization_request',
                 reason: 'auto',
-                mode: this.contextOptimizer!.effectiveMode(s) ?? 'summarization',
+                mode,
                 stream_id: generateStreamId(),
               },
             };
-            s.pendingMessages.unshift(sysMsg);
-            s.summarizationPending = false;
-            await this.sessionManager.saveSession(s);
-            return s;
+            meta.pendingMessages = [sysMsg, ...meta.pendingMessages];
+            meta.summarizationPending = false;
           });
+          if (!injected.found) break;
 
           // Продолжить цикл — системное сообщение обработается следующим
           continue;
@@ -493,9 +507,9 @@ export class QueueProcessor {
             can_retry: false,
           });
 
-          await this.sessionManager.withLock(this.sessionId, async (s) => {
-            s.summarizationPending = false;
-            await this.sessionManager.saveSession(s);
+          // Откат флага — правка метаданных (история не трогается).
+          await this.sessionManager.mutateMeta(this.sessionId, (meta) => {
+            meta.summarizationPending = false;
           });
         }
       }
@@ -507,10 +521,20 @@ export class QueueProcessor {
       const isRetry = streamId in this._retryDelays;
 
       if (!isRetry) {
-        // Phase 1 — блокировка и сохранение сообщения (только при первом запуске)
+        // Phase 1 — блокировка и материализация сообщения (первый запуск).
         const isSystemMessage = message.role === MessageRole.SYSTEM;
-        let alreadyInHistory = false;
-        session = await this.sessionManager.withLock(this.sessionId, async (s) => {
+        // Дедупликация — по снимку сессии, полученному в начале итерации:
+        // если сообщение с тем же `stream_id` уже в истории (resume зависшей
+        // сессии), повторно не пишем.
+        const alreadyInHistory = !isSystemMessage && session.messages.some(
+          (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+        );
+
+        // Маркеры хода — метаданные (история не перезаписывается). Порядок
+        // безопасен при падении между операциями: сообщение ещё лежит в
+        // `pendingMessages`, поэтому recovery его подхватит, а Phase 1 следующего
+        // запуска дедуплицирует материализацию по `stream_id`.
+        const phase = await this.sessionManager.mutateMeta(this.sessionId, (s) => {
           s.status.blocked = this.sessionId;
           s.status.blockedAt = nowISO();
           // Владелец маркеров — этот процесс: после рестарта recovery по нему
@@ -527,38 +551,20 @@ export class QueueProcessor {
           // Сообщение взято в работу — состояние ретрая (его не было: это первая
           // попытка) снимается: сессия теперь «busy», а не «retry».
           s.retry = undefined;
-          // Системные сообщения НЕ пушить в историю (не user-сообщения)
-          if (!isSystemMessage) {
-            // Дедупликация: если сообщение с тем же stream_id уже в истории
-            // (например, после resume зависшей сессии) — не пушим его повторно,
-            // иначе получим дубль в s.messages.
-            const already = s.messages.some(
-              (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
-            );
-            alreadyInHistory = already;
-            if (!already) {
-              // ADR-118 §2: `ord` — монотонный счётчик сессии, выдаётся при
-              // материализации записи в историю (считаем ДО push — иначе
-              // счётчик не учтёт себя). Ранее выданные `ord` не перенумеровываются.
-              if (!Number.isFinite(message.ord)) {
-                message.ord = nextOrd(s.messages);
-              }
-              s.messages.push(message);
-            }
-          }
-          s.updatedAt = nowISO();
-          await this.sessionManager.saveSession(s);
-          return s;
+          return queueCounts(s);
         });
+        if (!phase.found) break;
 
-        if (!session) break;
-
-        // ADR-118 §4: сообщение материализовано в истории — `message.delivered`
-        // (канал сессии): `messageId`, `ord` (монотонный порядок записи), роль,
-        // автор и принципал. Прежний `message.added` с усечённым содержимым
-        // удалён без dual-emit.
+        // Материализация в историю — точечная дозапись (`ord` выдаёт порт).
         if (!isSystemMessage && !alreadyInHistory) {
-          const delivered = session.messages[session.messages.length - 1] ?? message;
+          const delivered = await this.sessionManager.appendMessage(this.sessionId, message);
+          if (!delivered) break;
+          // `ord` — монотонный счётчик сессии: отдаём его дальше по циклу.
+          if (!Number.isFinite(message.ord)) message.ord = delivered.ord;
+          // ADR-118 §4: сообщение материализовано в истории — `message.delivered`
+          // (канал сессии): `messageId`, `ord` (монотонный порядок записи), роль,
+          // автор и принципал. Прежний `message.added` с усечённым содержимым
+          // удалён без dual-emit.
           this.eventBus.publish(this.sessionId, 'message.delivered', {
             messageId: delivered.id,
             ord: Number.isFinite(delivered.ord) ? (delivered.ord as number) : 0,
@@ -571,7 +577,7 @@ export class QueueProcessor {
             ...(delivered.turnId ? { turnId: delivered.turnId } : {}),
           });
           // ADR-102: точка персиста пользовательского сообщения (ось `user`).
-          void this.analytics?.recordActivity('messages_user', sessionAxes(session));
+          void this.analytics?.recordActivity('messages_user', sessionAxes(phase.session));
         }
 
         this.eventBus.publish(this.sessionId, 'stream.start', {
@@ -589,10 +595,10 @@ export class QueueProcessor {
         // ADR-118 §4: элемент очереди взят в работу — состояние очереди уходит
         // с новым `starting` (иначе клиент до следующего `queue.state` видел бы
         // элемент как `queued`, хотя ход уже идёт).
-        publishQueueState(this.eventBus, this.sessionId, queueCounts(session));
+        publishQueueState(this.eventBus, this.sessionId, phase.value);
       } else {
-        // Повторная попытка: обновляем startedAt у currentStream
-        session = await this.sessionManager.withLock(this.sessionId, async (s) => {
+        // Повторная попытка: обновляем startedAt у currentStream (метаданные).
+        const retried = await this.sessionManager.mutateMeta(this.sessionId, (s) => {
           if (s.currentStream) {
             s.currentStream.startedAt = nowISO();
           }
@@ -600,11 +606,16 @@ export class QueueProcessor {
           // (пока идёт попытка, сессия «busy»; при следующей ошибке состояние
           // ретрая запишется заново).
           s.retry = undefined;
-          await this.sessionManager.saveSession(s);
-          return s;
         });
-        if (!session) break;
+        if (!retried.found) break;
       }
+
+      // Свежий снимок для хода: Phase 1 менял только метаданные, а `processMessage`
+      // получает историю (в ней уже есть материализованное сообщение и правки
+      // recovery, сделанные в начале итерации).
+      const fresh = await this.sessionManager.getSession(this.sessionId);
+      if (!fresh) break;
+      session = fresh;
 
       try {
         // Phase 2 — вызов LLM через processMessage
@@ -664,26 +675,33 @@ export class QueueProcessor {
             // Unrecoverable или исчерпаны попытки — удалить из очереди
             // ADR-118 §4 (аддитивно): адресация ошибки — `message_id` реплики и
             // `turn_id` хода. `turnId` снимаем ДО очистки `currentStream`.
-            let failedTurnId: string | undefined;
-            await this.sessionManager.withLock(this.sessionId, async (s) => {
-              failedTurnId = s.currentStream?.turnId;
+            // Снятие маркеров/очереди — метаданные; `last_error` — точечно на
+            // user-сообщение (история не перезаписывается).
+            const failed = await this.sessionManager.mutateMeta(this.sessionId, (s) => {
+              const turnId = s.currentStream?.turnId;
               this._removeProcessed(s, message);
-              const msg = s.messages.find(
-                (m) => m.metadata?.stream_id === streamId && m.role === 'user',
-              );
-              if (msg) {
-                msg.metadata = { ...msg.metadata, last_error: result.error };
-              }
               s.status.blocked = undefined;
               s.status.blockedAt = undefined;
               s.status.blockedOwner = undefined;
               s.currentStream = undefined;
               // Терминальная ошибка — повторов не будет: состояние ретрая снимается.
               s.retry = undefined;
-              await this.sessionManager.saveSession(s);
-              // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
-              publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
+              return { turnId, counts: queueCounts(s) };
             });
+            const failedTurnId = failed.found ? failed.value.turnId : undefined;
+            if (failed.found) {
+              // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
+              publishQueueState(this.eventBus, this.sessionId, failed.value.counts);
+            }
+            // Косметика: id ищем по снимку; нет сообщения — пропускаем.
+            const errorMessageId = session.messages.find(
+              (m) => m.metadata?.stream_id === streamId && m.role === MessageRole.USER,
+            )?.id;
+            if (errorMessageId) {
+              await this.sessionManager.mutateMessage(this.sessionId, errorMessageId, (target) => {
+                target.metadata = { ...(target.metadata ?? {}), last_error: result.error };
+              });
+            }
 
             this.eventBus.publish(this.sessionId, 'stream.error', {
               stream_id: streamId,
@@ -704,8 +722,8 @@ export class QueueProcessor {
             // вместо вечной крутилки (раньше ретраи были полностью скрыты).
             const delay = this._calcBackoff(retryCount);
             // Персистентное состояние ретрая: после reload/restart клиент видит
-            // «повтор», а не «пусто» (значение переживает перезагрузку).
-            await this.sessionManager.withLock(this.sessionId, async (s) => {
+            // «повтор», а не «пусто» (значение переживает перезагрузку; метаданные).
+            await this.sessionManager.mutateMeta(this.sessionId, (s) => {
               s.retry = {
                 streamId,
                 attempt: retryCount,
@@ -713,8 +731,6 @@ export class QueueProcessor {
                 retryAt: new Date(Date.now() + delay).toISOString(),
                 ...(result.error ? { error: result.error } : {}),
               };
-              s.updatedAt = nowISO();
-              await this.sessionManager.saveSession(s);
             });
             this.eventBus.publish(this.sessionId, 'stream.retry', {
               stream_id: streamId,
@@ -728,26 +744,32 @@ export class QueueProcessor {
           }
         }
 
-        // Успех — удалить сообщение из очереди и очистить устаревший last_error
-        await this.sessionManager.withLock(this.sessionId, async (s) => {
+        // Успех — удалить сообщение из очереди (метаданные) и точечно очистить
+        // устаревший `last_error` на user-сообщении (история не перезаписывается).
+        const completed = await this.sessionManager.mutateMeta(this.sessionId, (s) => {
           this._removeProcessed(s, message);
-          const userMsg = s.messages.find(
-            (m) => m.metadata?.stream_id === streamId && m.role === MessageRole.USER,
-          );
-          if (userMsg?.metadata?.last_error) {
-            delete userMsg.metadata.last_error;
-          }
           s.status.blocked = undefined;
           s.status.blockedAt = undefined;
           s.status.blockedOwner = undefined;
           s.currentStream = undefined;
           // Ход завершился успехом — состояние ретрая неактуально.
           s.retry = undefined;
-          s.updatedAt = nowISO();
-          await this.sessionManager.saveSession(s);
-          // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
-          publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
+          return queueCounts(s);
         });
+        if (completed.found) {
+          // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
+          publishQueueState(this.eventBus, this.sessionId, completed.value);
+        }
+        const staleErrorMessageId = session.messages.find(
+          (m) => m.metadata?.stream_id === streamId
+            && m.role === MessageRole.USER
+            && !!m.metadata?.last_error,
+        )?.id;
+        if (staleErrorMessageId) {
+          await this.sessionManager.mutateMessage(this.sessionId, staleErrorMessageId, (target) => {
+            if (target.metadata) delete target.metadata.last_error;
+          });
+        }
 
         this._resumeMessage = undefined;
         delete this._retryDelays[streamId];
@@ -758,25 +780,31 @@ export class QueueProcessor {
         // и фиксируем ошибку в last_error.
         let failedTurnId: string | undefined;
         try {
-          await this.sessionManager.withLock(this.sessionId, async (s) => {
-            failedTurnId = s.currentStream?.turnId;
+          const failed = await this.sessionManager.mutateMeta(this.sessionId, (s) => {
+            const turnId = s.currentStream?.turnId;
             this._removeProcessed(s, message);
-            const msg = s.messages.find(
-              (m) => m.metadata?.stream_id === streamId && m.role === 'user',
-            );
-            if (msg) {
-              msg.metadata = { ...msg.metadata, last_error: String(err) };
-            }
             s.status.blocked = undefined;
             s.status.blockedAt = undefined;
             s.status.blockedOwner = undefined;
             s.currentStream = undefined;
             // Полная очистка — состояние ретрая тоже.
             s.retry = undefined;
-            await this.sessionManager.saveSession(s);
-            // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
-            publishQueueState(this.eventBus, this.sessionId, queueCounts(s));
+            return { turnId, counts: queueCounts(s) };
           });
+          failedTurnId = failed.found ? failed.value.turnId : undefined;
+          if (failed.found) {
+            // ADR-118 §4: сообщение извлечено из очереди — состояние очереди.
+            publishQueueState(this.eventBus, this.sessionId, failed.value.counts);
+          }
+          // `last_error` — точечно (косметика: нет сообщения — пропускаем).
+          const errorMessageId = session.messages.find(
+            (m) => m.metadata?.stream_id === streamId && m.role === MessageRole.USER,
+          )?.id;
+          if (errorMessageId) {
+            await this.sessionManager.mutateMessage(this.sessionId, errorMessageId, (target) => {
+              target.metadata = { ...(target.metadata ?? {}), last_error: String(err) };
+            });
+          }
         } catch (lockErr) {
           console.warn(`[QueueProcessor] Не удалось очистить сессию ${this.sessionId}: ${String(lockErr)}`);
         }
@@ -810,15 +838,15 @@ export class QueueProcessor {
       }
       if (session && session.pendingMessages.length > 0) {
         // Очередь осиротела (процессор завершился, работа осталась) — это
-        // осознанная остановка: после рестарта не автозапускаем.
+        // осознанная остановка: после рестарта не автозапускаем. Маркер —
+        // метаданные: правка атомарная, история не перезаписывается.
         try {
-          await this.sessionManager.withLock(this.sessionId, async (s) => {
-            if (s.pendingMessages.length === 0) return;
-            s.status.queueStopped = true;
-            s.status.queueStoppedAt = nowISO();
-            s.updatedAt = nowISO();
-            await this.sessionManager.saveSession(s);
-          });
+          await this.sessionManager.mutateMeta(this.sessionId, (meta) => {
+            if (meta.pendingMessages.length === 0) return false;
+            meta.status.queueStopped = true;
+            meta.status.queueStoppedAt = nowISO();
+            return true;
+          }, { shouldWrite: (changed) => changed });
         } catch {
           // состояние не записалось — баннер всё равно опубликуем
         }
@@ -1157,39 +1185,42 @@ export async function reorderPendingMessages(
     return { ok: false, reason: 'mismatch' };
   }
 
-  try {
-    return await sessionManager.withLock(
-      sessionId,
-      async (s): Promise<ReorderPendingResult> => {
-        const pending = s.pendingMessages ?? [];
-        const currentIds = pending.map((m) => m.id);
-        const wanted = new Set(ids);
-        if (
-          currentIds.length !== ids.length
-          || !currentIds.every((id) => wanted.has(id))
-        ) {
-          return { ok: false, reason: 'mismatch' };
-        }
-        // Пустая очередь/один элемент — переставлять нечего.
-        if (pending.length <= 1) {
-          return { ok: true, order: currentIds };
-        }
+  // Перестановка — правка **метаданных** (очередь): история и child-наборы не
+  // читаются и не перезаписываются. Состав `ids` сверяется внутри мутатора —
+  // под тем же локом порта, что и запись (гонка с параллельной постановкой
+  // сообщения даёт `mismatch`, а не потерю элемента).
+  type ReorderOutcome =
+    | { status: 'mismatch' }
+    | { status: 'noop'; order: string[] }
+    | { status: 'reordered'; order: string[]; counts: QueueStatePayload };
 
-        const byId = new Map(pending.map((m) => [m.id, m] as const));
-        s.pendingMessages = ids.map((id) => byId.get(id)!);
-        s.updatedAt = nowISO();
-        await sessionManager.saveSession(s);
-        publishQueueState(eventBus, sessionId, queueCounts(s));
-        return { ok: true, order: ids.slice() };
-      },
-    );
-  } catch (err) {
-    // `withLock` бросает, если сессия исчезла между запросом и локом.
-    if (err instanceof Error && err.message === `Session ${sessionId} not found`) {
-      return { ok: false, reason: 'not_found' };
+  const result = await sessionManager.mutateMeta<ReorderOutcome>(sessionId, (meta) => {
+    const pending = meta.pendingMessages ?? [];
+    const currentIds = pending.map((m) => m.id);
+    const wanted = new Set(ids);
+    if (
+      currentIds.length !== ids.length
+      || !currentIds.every((id) => wanted.has(id))
+    ) {
+      return { status: 'mismatch' };
     }
-    throw err;
+    // Пустая очередь/один элемент — переставлять нечего.
+    if (pending.length <= 1) {
+      return { status: 'noop', order: currentIds };
+    }
+
+    const byId = new Map(pending.map((m) => [m.id, m] as const));
+    meta.pendingMessages = ids.map((id) => byId.get(id)!);
+    return { status: 'reordered', order: ids.slice(), counts: queueCounts(meta) };
+  }, { shouldWrite: (o) => o.status === 'reordered' });
+  if (!result.found) return { ok: false, reason: 'not_found' };
+  const outcome: ReorderOutcome = result.value;
+
+  if (outcome.status === 'mismatch') return { ok: false, reason: 'mismatch' };
+  if (outcome.status === 'reordered') {
+    publishQueueState(eventBus, sessionId, outcome.counts);
   }
+  return { ok: true, order: outcome.order };
 }
 
 /**
@@ -1249,16 +1280,22 @@ export async function enqueueUserMessage(
   const session = await sessionManager.addPendingMessage(sessionId, message, MAX_PENDING);
   if (!session) return null;
 
-  // Синхронизируем настройки провайдера/модели с последним сообщением
+  // Синхронизируем настройки провайдера/модели с последним сообщением —
+  // правка метаданных (история не перезаписывается).
   const newProvider = message.provider;
   const newModel = message.model;
   if (newProvider && newModel) {
     if (session.settings.provider !== newProvider || session.settings.model !== newModel) {
-      await sessionManager.withLock(sessionId, async (s) => {
-        s.settings.provider = newProvider;
-        s.settings.model = newModel;
-        await sessionManager.saveSession(s);
-      });
+      await sessionManager.mutateMeta(sessionId, (meta) => {
+        // Свежее чтение под локом: снимок мог устареть (например, другой ход
+        // уже синхронизировал настройки) — тогда записи нет.
+        if (meta.settings.provider === newProvider && meta.settings.model === newModel) {
+          return false;
+        }
+        meta.settings.provider = newProvider;
+        meta.settings.model = newModel;
+        return true;
+      }, { shouldWrite: (changed) => changed });
     }
   }
 

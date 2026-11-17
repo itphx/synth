@@ -1199,6 +1199,12 @@ export type { WorktreeSweeperTarget } from './engine/worktree/index.js';
 export type {
   SessionRepository,
   SessionFilter,
+  SessionMeta,
+  MutateMetaOptions,
+  MutateMetaResult,
+  MutateHistoryOptions,
+  MutateHistoryResult,
+  MutateMessageResult,
   ProjectRepository,
   CreateProjectData,
   ProfileRepository,

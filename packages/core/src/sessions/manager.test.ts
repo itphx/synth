@@ -41,9 +41,9 @@ describe('SessionManager', () => {
     const session = await manager.createSession({ title: 'S', userId: 'u1' });
     await manager.addMessage(session.id, makeMsg('история', MessageRole.ASSISTANT));
     await manager.addPendingMessage(session.id, makeMsg('в очереди'));
-    await manager.safeUpdate(session.id, (s) => {
-      s.status.blocked = 'proc-1';
-      s.currentStream = {
+    await manager.mutateMeta(session.id, (meta) => {
+      meta.status.blocked = 'proc-1';
+      meta.currentStream = {
         streamId: 'stream-1', message: 'x', startedAt: nowISO(), cancelled: false,
       };
     });
@@ -429,13 +429,18 @@ describe('SessionManager', () => {
     expect(await manager.updateMessage(session.id, { ...makeMsg('ghost'), seq: 42 })).toBeNull();
   });
 
-  it('safeUpdate сохраняет изменения', async () => {
+  it('mutateMeta сохраняет изменения метаданных и не перезаписывает историю', async () => {
     const session = await manager.createSession({ title: 'Before' });
-    await manager.safeUpdate(session.id, (_s) => {
-      _s.title = 'After';
+    await manager.appendMessage(session.id, makeMsg('свидетель'));
+    const result = await manager.mutateMeta(session.id, (meta) => {
+      meta.title = 'After';
+      return meta.title;
     });
+    expect(result.found).toBe(true);
     const loaded = await manager.getSession(session.id);
     expect(loaded!.title).toBe('After');
+    // История не перезаписана правкой метаданных.
+    expect(loaded!.messages.map((m) => m.content)).toEqual(['свидетель']);
   });
 
   it('renameSessionIfDefault меняет дефолтный заголовок и обновляет updatedAt', async () => {
@@ -472,12 +477,57 @@ describe('SessionManager', () => {
     const session = await manager.createSession({});
     await manager.acquireLock(session.id, 'old');
     // Искусственно ставим blockedAt в прошлое
-    await manager.safeUpdate(session.id, (_s) => {
-      _s.status.blockedAt = new Date(Date.now() - 30 * 60_000).toISOString();
+    await manager.mutateMeta(session.id, (meta) => {
+      meta.status.blockedAt = new Date(Date.now() - 30 * 60_000).toISOString();
     });
 
     const stale = await manager.cleanupStaleLocks(15);
     expect(stale).toContain(session.id);
+  });
+
+  it('mutateMeta/mutateHistory/mutateMessage — обёртки атомарных операций порта', async () => {
+    const session = await manager.createSession({ title: 'meta' });
+    const appended = await manager.appendMessage(session.id, makeMsg('first'));
+    expect(appended).not.toBeNull();
+
+    // mutateMeta: метаданные меняются, история (append) остаётся.
+    const metaResult = await manager.mutateMeta(session.id, (meta) => {
+      meta.title = 'meta-updated';
+      meta.status = { ...meta.status, blocked: 'p1' };
+      return 'ok';
+    });
+    expect(metaResult.found).toBe(true);
+    let loaded = await manager.getSession(session.id);
+    expect(loaded!.title).toBe('meta-updated');
+    expect(loaded!.status.blocked).toBe('p1');
+    expect(loaded!.messages.map((m) => m.content)).toEqual(['first']);
+
+    // mutateMessage: точечно по id.
+    const messageResult = await manager.mutateMessage(session.id, appended!.id, (message) => {
+      message.content = 'first+';
+      message.parts = [makeTextPart('first+')];
+      return 'ok';
+    });
+    expect(messageResult.found).toBe(true);
+    loaded = await manager.getSession(session.id);
+    expect(loaded!.messages[0]!.content).toBe('first+');
+
+    // mutateHistory: полная замена истории (seq 1..n, ord сохранён).
+    const historyResult = await manager.mutateHistory(session.id, (s) => {
+      s.messages = s.messages.slice(0, 1);
+      return s.messages.length;
+    });
+    expect(historyResult).toEqual({ ok: true, value: 1 });
+    loaded = await manager.getSession(session.id);
+    expect(loaded!.messages).toHaveLength(1);
+
+    // Неизвестная сессия — found:false/not_found, без вызова мутатора.
+    expect(await manager.mutateMeta('missing', () => 1)).toEqual({ found: false });
+    expect(await manager.mutateMessage('missing', 'x', () => 1)).toEqual({ found: false });
+    expect(await manager.mutateHistory('missing', () => 1)).toEqual({
+      ok: false,
+      reason: 'not_found',
+    });
   });
 
   it('createCheckpoint создаёт и восстанавливается', async () => {
@@ -998,8 +1048,8 @@ describe('ADR-089: ephemeral-сессии (TTL, архивация)', () => {
 
   it('listActiveSessions исключает архивированные', async () => {
     const session = await manager.createSession({});
-    await manager.safeUpdate(session.id, (s) => {
-      s.currentStream = {
+    await manager.mutateMeta(session.id, (meta) => {
+      meta.currentStream = {
         streamId: 'stream-1',
         message: 'x',
         startedAt: nowISO(),

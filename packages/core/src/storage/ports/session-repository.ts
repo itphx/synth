@@ -1,4 +1,60 @@
-import type { Message, Session, SessionReference } from '@itphx/synth-shared';
+import type { Message, Session, SessionMeta, SessionReference } from '@itphx/synth-shared';
+
+export type { SessionMeta };
+
+/** Опции `SessionRepository.mutateMeta`. */
+export interface MutateMetaOptions<T = unknown> {
+  /**
+   * Обновить `updatedAt` перед записью (по умолчанию `true`). `false` — оставить
+   * значение мутатора/снимка: нужно служебным проходам, которые не должны
+   * «оживлять» сессию в списках.
+   */
+  touchUpdatedAt?: boolean;
+  /**
+   * Нужно ли писать результат (`false` — мутатор только посчитал/проверил,
+   * запись не выполняется). По умолчанию пишем всегда (паритет с прежним
+   * поведением).
+   *
+   * `shouldWrite(value) === false` → записи нет: ни строка `sessions`, ни
+   * `updatedAt` не меняются, а `session` в результате — снимок метаданных
+   * **до** мутатора (без алиасинга с хранилищем). Нужно веткам, которые
+   * исторически ничего не сохраняли на no-op (пустой inbox, отказ по лимиту,
+   * повторный архив и т.п.): иначе безобидная проверка «оживляла» бы сессию
+   * в списках и перезаписывала строку впустую.
+   */
+  shouldWrite?: (value: T) => boolean;
+}
+
+/** Результат `SessionRepository.mutateMeta`. */
+export type MutateMetaResult<T> =
+  | { found: false }
+  | { found: true; value: T; session: SessionMeta };
+
+/** Опции `SessionRepository.mutateHistory`. */
+export interface MutateHistoryOptions<T> {
+  /**
+   * Ожидаемый максимум `ord` в хранилище (оптимистичная блокировка). Если
+   * фактический `MAX(ord)` в свежем снимке больше — история изменилась после
+   * того, как вызывающий её прочитал: мутатор не вызывается, результат —
+   * `stale`.
+   */
+  expectMaxOrd?: number;
+  /**
+   * Нужно ли писать результат (`false` — мутатор только посчитал/проверил,
+   * запись не выполняется). По умолчанию пишем всегда.
+   */
+  shouldWrite?: (value: T) => boolean;
+}
+
+/** Результат `SessionRepository.mutateHistory`. */
+export type MutateHistoryResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: 'not_found' | 'stale' };
+
+/** Результат `SessionRepository.mutateMessage`. */
+export type MutateMessageResult<T> =
+  | { found: false }
+  | { found: true; value: T; message: Message };
 
 /**
  * Фильтр списка сессий. Доменный параметр, а не generic-KV: будущему SQL-бэкенду
@@ -59,6 +115,91 @@ export interface SessionRepository {
    * значение из обновления — так проставляет `ord` миграция данных.
    */
   updateMessage(sessionId: string, message: Message): Promise<Message | null>;
+  /**
+   * Атомарная правка **метаданных** сессии: чтение → синхронный мутатор →
+   * запись под одним локом хранилища.
+   *
+   * Не читает и не пишет историю (`messages`/`checkpoints`) и связи
+   * (`references`) — точечные записи сообщений (`appendMessage`) не теряются.
+   * Это замена связке `load` + правка в памяти + `save`: `save` пишет переданный
+   * снимок целиком и затирает параллельные точечные изменения (lost update).
+   *
+   * Семантика:
+   * - мутатор **строго синхронный** (реализация под транзакцией/локом не ждёт
+   *   I/O; async-мутатор считается ошибкой контракта);
+   * - мутатор бросил — записи нет, ошибка пробрасывается;
+   * - сессии нет — `found:false`, мутатор не вызывается;
+   * - `opts.touchUpdatedAt` (по умолчанию `true`) выставляет `updatedAt` перед
+   *   записью;
+   * - `opts.shouldWrite(value) === false` → записи нет (`found:true`, `value` —
+   *   как вернул мутатор, `session` — снимок **до** мутатора): ни строка
+   *   `sessions`, ни `updatedAt` не меняются.
+   *
+   * Атомарность — **в пределах одного процесса** для FileStore и in-memory
+   * реализаций (per-session `AsyncLock`): параллельные операции того же
+   * процесса сериализуются. Межпроцессная координация есть только у PostgreSQL
+   * (`pg_advisory_xact_lock` на сессию). Это ограничение, а не обещание
+   * кластерной атомарности файлового хранилища.
+   *
+   * `stickyNotes` не входят в `SessionMeta` (в PostgreSQL это child-таблица —
+   * правка заметок идёт своими операциями, не через `mutateMeta`).
+   */
+  mutateMeta<T>(
+    sessionId: string,
+    mutator: (meta: SessionMeta) => T,
+    opts?: MutateMetaOptions<T>,
+  ): Promise<MutateMetaResult<T>>;
+  /**
+   * Атомарная правка **истории** целиком: свежий полный документ читается
+   * **внутри лока**, применяется синхронный мутатор, запись — атомарная.
+   *
+   * Инварианты:
+   * - `seq` нормализуется позиционно `1..n` (порядок массива — порядок истории);
+   * - `ord` ранее выданных сообщений **не** перенумеровывается (монотонный
+   *   счётчик сессии, ADR-118 §2) — реализация его не трогает; сообщениям без
+   *   конечного `ord` (добавлены мутатором/импортом) порт **выдаёт** `ord` сам,
+   *   подряд в порядке массива, начиная с `max(ord среди сообщений с ord) + 1`
+   *   (иначе сортировка по `ord` поставила бы их в начало истории);
+   * - `id` сессии иммутабелен; при записи `updatedAt` обновляется;
+   * - `opts.expectMaxOrd` — оптимистичная проверка: `MAX(ord)` в свежем снимке
+   *   больше ожидаемого → `stale`, мутатор не вызывается;
+   * - `opts.shouldWrite(value) === false` → запись не выполняется (`ok:true`,
+   *   история **и** `updatedAt`/`seq` не меняются);
+   * - мутатор бросил — записи нет, ошибка пробрасывается;
+   * - сессии нет — `{ok:false, reason:'not_found'}`.
+   *
+   * Атомарность — **в пределах одного процесса** для FileStore и in-memory
+   * реализаций (per-session `AsyncLock`); межпроцессная координация — только
+   * PostgreSQL (`pg_advisory_xact_lock`). Снимок читается внутри критической
+   * секции, поэтому параллельный `appendMessage` не теряется (lost update
+   * исключён в рамках процесса).
+   *
+   * Для поточечной правки одного сообщения — `mutateMessage`/`updateMessage`,
+   * для метаданных — `mutateMeta`: полная запись истории нужна только
+   * операциям уровня «заменить/восстановить историю».
+   */
+  mutateHistory<T>(
+    sessionId: string,
+    mutator: (session: Session) => T,
+    opts?: MutateHistoryOptions<T>,
+  ): Promise<MutateHistoryResult<T>>;
+  /**
+   * Атомарная точечная правка **одного** сообщения по `id` (не по `seq`):
+   * чтение → синхронный мутатор → запись под одним локом.
+   *
+   * `id`/`seq`/`createdAt`/`ord` исходной записи **иммутабельны** — изменения
+   * этих полей мутатором игнорируются (как в `updateMessage`). Поздняя запись
+   * черновика поверх терминального сообщения (`isStaleDraftWrite`) не
+   * применяется: возвращается текущее сообщение, записи нет.
+   *
+   * Сессии/сообщения нет — `found:false`, мутатор не вызывается. Мутатор
+   * бросил — записи нет, ошибка пробрасывается.
+   */
+  mutateMessage<T>(
+    sessionId: string,
+    messageId: string,
+    mutator: (message: Message) => T,
+  ): Promise<MutateMessageResult<T>>;
   /**
    * Точечное чтение метаданных сессии (**без истории**): `messages`/
    * `pendingMessages`/`checkpoints` пусты, child-таблицы не читаются. Нужна

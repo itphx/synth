@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type {
   ProfileRepository,
   ProjectRepository,
+  SessionMeta,
   SessionRepository,
   SettingsRepository,
 } from '../ports/index.js';
-import { MessageRole, ProjectRole, makeTextPart } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole, makeTextPart, nowISO } from '@itphx/synth-shared';
 import { makeProfile, makeProject, makeSession, makeMessage } from './helpers.js';
 
 /** Паспорт порта `SessionRepository`: round-trip, список, видимость, поиск, сортировка. */
@@ -397,6 +398,680 @@ export function describeSessionRepository(
       expect(loaded!.messages[1]!.metadata).toEqual({ note: 'm', nested: ['n'] });
       // Ни реального NUL, ни JSON-escape `\u0000` в прочитанной сессии.
       expect(JSON.stringify(loaded)).not.toContain('\\u0000');
+    });
+
+    it('mutateMeta: меняет метаданные, история и child-наборы не теряются', async () => {
+      const { repo } = await make();
+      const first = { ...makeMessage('first'), seq: 1 };
+      const second = { ...makeMessage('second'), seq: 2 };
+      await repo.save(makeSession({
+        id: 'meta-target',
+        title: 'до',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [first, second],
+        checkpoints: [{ id: 'cp', sessionId: 'meta-target', messages: [makeMessage('cp-msg')], createdAt: '2024-01-01T00:00:00.000Z' }],
+      }));
+
+      const result = await repo.mutateMeta('meta-target', (meta) => {
+        meta.title = 'после';
+        meta.id = 'hacked-id';
+        meta.settings = { ...meta.settings, model: 'test/model' };
+        meta.status = { ...meta.status, blocked: 'proc-1' };
+        meta.todos = [{ id: 't1', content: 'задача', status: 'pending', priority: 'low' }];
+        return 'done';
+      });
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error('ожидали found:true');
+      expect(result.value).toBe('done');
+      expect(result.session.title).toBe('после');
+      expect(result.session.id).toBe('meta-target');
+
+      const loaded = await repo.load('meta-target');
+      expect(loaded!.id).toBe('meta-target');
+      expect(loaded!.title).toBe('после');
+      expect(loaded!.settings.model).toBe('test/model');
+      expect(loaded!.status.blocked).toBe('proc-1');
+      expect(loaded!.todos).toEqual([
+        { id: 't1', content: 'задача', status: 'pending', priority: 'low' },
+      ]);
+      // История и чекпоинты целы (mutateMeta их не читает/не пишет).
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first', 'second']);
+      expect(loaded!.checkpoints).toHaveLength(1);
+      expect(loaded!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('mutateMeta и appendMessage не затирают друг друга (в любом порядке)', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({ id: 'meta-append', messages: [] }));
+
+      await repo.appendMessage('meta-append', makeMessage('first'));
+      await repo.mutateMeta('meta-append', (meta) => {
+        meta.title = 't1';
+      });
+      await repo.appendMessage('meta-append', makeMessage('second'));
+      await repo.mutateMeta('meta-append', (meta) => {
+        meta.title = 't2';
+      });
+
+      const loaded = await repo.load('meta-append');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first', 'second']);
+      expect(loaded!.title).toBe('t2');
+    });
+
+    it('конкурентность: параллельные appendMessage и mutateMeta не теряют сообщения', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({ id: 'meta-race', messages: [] }));
+
+      const appends = Array.from({ length: 12 }, (_, index) =>
+        repo.appendMessage('meta-race', makeMessage(`m${index}`)),
+      );
+      const metas = Array.from({ length: 12 }, (_, index) =>
+        repo.mutateMeta('meta-race', (meta) => {
+          meta.todos = [{ id: `t${index}`, content: `c${index}`, status: 'pending', priority: 'low' }];
+        }),
+      );
+      await Promise.all([...appends, ...metas]);
+
+      const loaded = await repo.load('meta-race');
+      expect(loaded!.messages).toHaveLength(12);
+      expect(loaded!.messages.map((m) => m.content).sort()).toEqual(
+        Array.from({ length: 12 }, (_, index) => `m${index}`).sort(),
+      );
+    });
+
+    it('mutateMeta: брошенный мутатор не пишет; неизвестная сессия → found:false', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'meta-throw',
+        title: 'до',
+        messages: [{ ...makeMessage('keep'), seq: 1 }],
+      }));
+
+      await expect(
+        repo.mutateMeta('meta-throw', () => {
+          throw new Error('boom');
+        }),
+      ).rejects.toThrow('boom');
+
+      const loaded = await repo.load('meta-throw');
+      expect(loaded!.title).toBe('до');
+      expect(loaded!.messages).toHaveLength(1);
+
+      let called = false;
+      const missing = await repo.mutateMeta('missing-session', () => {
+        called = true;
+        return 1;
+      });
+      expect(missing).toEqual({ found: false });
+      expect(called).toBe(false);
+    });
+
+    it('mutateHistory: полная замена, seq 1..n, ord сохранён; expectMaxOrd→stale; shouldWrite:false→нет записи', async () => {
+      const { repo } = await make();
+      const m1 = { ...makeMessage('first'), seq: 5, ord: 10 };
+      const m2 = { ...makeMessage('second'), seq: 7, ord: 11 };
+      const m3 = { ...makeMessage('third'), seq: 9, ord: 12 };
+      await repo.save(makeSession({ id: 'history-target', messages: [m1, m2, m3] }));
+
+      const result = await repo.mutateHistory('history-target', (session) => {
+        session.id = 'hacked-id';
+        session.messages = [session.messages[0]!, session.messages[2]!];
+        // `content` собирается из `parts` при чтении — правим обе формы.
+        session.messages[0]!.content = 'first-updated';
+        session.messages[0]!.parts = [makeTextPart('first-updated')];
+        return session.messages.length;
+      });
+      expect(result).toEqual({ ok: true, value: 2 });
+
+      let loaded = await repo.load('history-target');
+      expect(loaded!.id).toBe('history-target');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first-updated', 'third']);
+      expect(loaded!.messages.map((m) => m.seq)).toEqual([1, 2]);
+      expect(loaded!.messages.map((m) => m.ord)).toEqual([10, 12]);
+
+      // MAX(ord) = 12 > 11 → stale, мутатор не вызывается.
+      let staleMutatorCalled = false;
+      const stale = await repo.mutateHistory('history-target', () => {
+        staleMutatorCalled = true;
+        return 1;
+      }, { expectMaxOrd: 11 });
+      expect(stale).toEqual({ ok: false, reason: 'stale' });
+      expect(staleMutatorCalled).toBe(false);
+
+      // shouldWrite=false → мутатор выполнен, записи нет.
+      const noWrite = await repo.mutateHistory('history-target', (session) => {
+        session.title = 'не должно сохраниться';
+        return 42;
+      }, { shouldWrite: () => false });
+      expect(noWrite).toEqual({ ok: true, value: 42 });
+      loaded = await repo.load('history-target');
+      expect(loaded!.title).toBeUndefined();
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first-updated', 'third']);
+
+      // Неизвестная сессия.
+      expect(await repo.mutateHistory('missing-session', () => 1)).toEqual({
+        ok: false,
+        reason: 'not_found',
+      });
+    });
+
+    it('mutateMessage: правка по id, id/seq/createdAt/ord иммутабельны; stale-черновик не воскрешает шаг', async () => {
+      const { repo } = await make();
+      const step = {
+        ...makeMessage('финал'),
+        id: 'step-id',
+        seq: 1,
+        ord: 7,
+        role: MessageRole.ASSISTANT,
+        status: 'completed' as const,
+        createdAt: '2024-02-02T00:00:00.000Z',
+        parts: [makeTextPart('финал')],
+        metadata: { stream_id: 'stream-1' },
+      };
+      await repo.save(makeSession({
+        id: 'message-target',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [step],
+      }));
+
+      const result = await repo.mutateMessage('message-target', 'step-id', (message) => {
+        message.content = 'финал+';
+        message.parts = [makeTextPart('финал+')];
+        message.pinned = true;
+        // Иммутабельные поля — попытка перебить (должна игнорироваться).
+        message.id = 'hacked';
+        message.seq = 99;
+        message.createdAt = '2030-01-01T00:00:00.000Z';
+        message.ord = 100;
+        return 'ok';
+      });
+      expect(result.found).toBe(true);
+      if (!result.found) throw new Error('ожидали found:true');
+      expect(result.value).toBe('ok');
+      expect(result.message).toMatchObject({
+        id: 'step-id',
+        seq: 1,
+        createdAt: '2024-02-02T00:00:00.000Z',
+        ord: 7,
+        content: 'финал+',
+        pinned: true,
+        status: 'completed',
+      });
+
+      let loaded = await repo.load('message-target');
+      expect(loaded!.messages[0]).toMatchObject({
+        id: 'step-id',
+        seq: 1,
+        ord: 7,
+        createdAt: '2024-02-02T00:00:00.000Z',
+        content: 'финал+',
+        pinned: true,
+        status: 'completed',
+      });
+      const updatedAtAfterLegit = loaded!.updatedAt;
+      expect(updatedAtAfterLegit).not.toBe('2024-01-01T00:00:00.000Z');
+
+      // Поздняя запись черновика поверх завершённого шага — игнорируется.
+      const stale = await repo.mutateMessage('message-target', 'step-id', (message) => {
+        message.status = 'streaming';
+        message.content = 'частичный';
+        message.parts = [makeTextPart('частичный')];
+        message.metadata = { stream_id: 'stream-1', streaming: true };
+        return message.content;
+      });
+      expect(stale.found).toBe(true);
+      if (stale.found) {
+        expect(stale.message.status).toBe('completed');
+        expect(stale.message.content).toBe('финал+');
+      }
+      loaded = await repo.load('message-target');
+      expect(loaded!.messages[0]).toMatchObject({ status: 'completed', content: 'финал+' });
+      expect(loaded!.updatedAt).toBe(updatedAtAfterLegit);
+
+      // Неизвестное сообщение/сессия — мутатор не вызывается.
+      let called = false;
+      expect(await repo.mutateMessage('message-target', 'missing-message', () => {
+        called = true;
+        return 1;
+      })).toEqual({ found: false });
+      expect(await repo.mutateMessage('missing-session', 'step-id', () => {
+        called = true;
+        return 1;
+      })).toEqual({ found: false });
+      expect(called).toBe(false);
+    });
+
+    it('документирующий: save(устаревший снимок) затирает точечный append (почему save нельзя для метаданных)', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'lost-update',
+        messages: [{ ...makeMessage('base'), seq: 1 }],
+      }));
+
+      const snapshot = await repo.load('lost-update');
+      expect(snapshot).not.toBeNull();
+      await repo.appendMessage('lost-update', makeMessage('appended'));
+      expect((await repo.load('lost-update'))!.messages).toHaveLength(2);
+
+      // Полная запись снимка, прочитанного до append, возвращает историю назад —
+      // ровно та гонка, ради которой введены mutateMeta/mutateHistory.
+      await repo.save(snapshot!);
+      expect((await repo.load('lost-update'))!.messages.map((m) => m.content)).toEqual(['base']);
+    });
+
+    it('конкурентность: 8×appendMessage + 8×mutateMeta (разные поля) — все сообщения и все изменения на месте', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'meta-fields',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [],
+        pendingMessages: [{ ...makeMessage('pending-seed'), id: 'pending-seed', seq: 0 }],
+      }));
+
+      const now = nowISO();
+      const mutators: Array<(meta: SessionMeta) => void> = [
+        (meta) => { meta.status = { ...meta.status, blocked: 'proc-1' }; },
+        (meta) => { meta.steerInbox = [{ ...makeMessage('steer'), id: 'steer-1', seq: 0 }]; },
+        (meta) => { meta.todos = [{ id: 't1', content: 'задача', status: 'pending', priority: 'low' }]; },
+        (meta) => { meta.settings = { ...meta.settings, model: 'test/model-1' }; },
+        (meta) => {
+          meta.currentStream = {
+            streamId: 'stream-1',
+            message: 'x',
+            startedAt: now,
+            cancelled: false,
+            owner: 'proc-1',
+          };
+        },
+        (meta) => { meta.retry = { streamId: 'stream-1', attempt: 1, maxRetries: 3, retryAt: now }; },
+        (meta) => { meta.title = 'после гонки'; },
+        (meta) => {
+          meta.pendingMessages = [
+            ...meta.pendingMessages,
+            { ...makeMessage('pending-added'), id: 'pending-added', seq: 0 },
+          ];
+        },
+      ];
+
+      const appends = Array.from({ length: 8 }, (_, index) =>
+        repo.appendMessage('meta-fields', makeMessage(`m${index}`)),
+      );
+      const metas = mutators.map((mutator) => repo.mutateMeta('meta-fields', mutator));
+      await Promise.all([...appends, ...metas]);
+
+      const loaded = await repo.load('meta-fields');
+      // Все 8 append'ов на месте (ни один не затёрт мета-записью).
+      expect(loaded!.messages).toHaveLength(8);
+      expect(loaded!.messages.map((m) => m.content).sort()).toEqual(
+        Array.from({ length: 8 }, (_, index) => `m${index}`).sort(),
+      );
+      // Каждое мета-изменение применилось (разные поля не перетирают друг друга).
+      expect(loaded!.status.blocked).toBe('proc-1');
+      expect(loaded!.steerInbox).toHaveLength(1);
+      expect(loaded!.steerInbox![0]!.id).toBe('steer-1');
+      expect(loaded!.todos).toEqual([
+        { id: 't1', content: 'задача', status: 'pending', priority: 'low' },
+      ]);
+      expect(loaded!.settings.model).toBe('test/model-1');
+      expect(loaded!.currentStream).toMatchObject({ streamId: 'stream-1', owner: 'proc-1' });
+      expect(loaded!.retry).toMatchObject({ streamId: 'stream-1', attempt: 1, maxRetries: 3 });
+      expect(loaded!.title).toBe('после гонки');
+      expect(loaded!.pendingMessages.map((m) => m.id).sort()).toEqual([
+        'pending-added',
+        'pending-seed',
+      ]);
+      expect(loaded!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('mutateMeta: очередь переживает правку, если её не трогать, и меняется, если мутатор её меняет', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'queues',
+        pendingMessages: [
+          { ...makeMessage('p1'), id: 'p1', seq: 0 },
+          { ...makeMessage('p2'), id: 'p2', seq: 0 },
+        ],
+        steerInbox: [{ ...makeMessage('s1'), id: 's1', seq: 0 }],
+      }));
+
+      await repo.mutateMeta('queues', (meta) => {
+        meta.title = 't';
+      });
+      let loaded = await repo.load('queues');
+      expect(loaded!.pendingMessages.map((m) => m.id)).toEqual(['p1', 'p2']);
+      expect(loaded!.steerInbox!.map((m) => m.id)).toEqual(['s1']);
+
+      await repo.mutateMeta('queues', (meta) => {
+        meta.pendingMessages = [meta.pendingMessages[1]!];
+        meta.steerInbox = [{ ...makeMessage('s2'), id: 's2', seq: 0 }, ...(meta.steerInbox ?? [])];
+      });
+      loaded = await repo.load('queues');
+      expect(loaded!.pendingMessages.map((m) => m.id)).toEqual(['p2']);
+      expect(loaded!.steerInbox!.map((m) => m.id)).toEqual(['s2', 's1']);
+    });
+
+    it('mutateMeta({touchUpdatedAt:false}) не двигает updatedAt, но применяет правку', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'no-touch',
+        title: 'до',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      }));
+
+      const result = await repo.mutateMeta('no-touch', (meta) => {
+        meta.title = 'после';
+      }, { touchUpdatedAt: false });
+      expect(result.found).toBe(true);
+
+      const loaded = await repo.load('no-touch');
+      expect(loaded!.title).toBe('после');
+      expect(loaded!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('mutateMeta не может править stickyNotes (их нет в SessionMeta)', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'notes-meta',
+        stickyNotes: [{
+          id: 'n1',
+          content: 'заметка',
+          createdAt: '2024-01-01T00:00:00.000Z',
+          updatedAt: '2024-01-01T00:00:00.000Z',
+          disabled: false,
+        }],
+      }));
+
+      await repo.mutateMeta('notes-meta', (meta) => {
+        // Обход типа: поля нет в `SessionMeta` — попытка записать его должна
+        // игнорироваться (в PostgreSQL это child-таблица).
+        (meta as unknown as { stickyNotes?: unknown }).stickyNotes = [];
+        meta.title = 't';
+      });
+
+      const loaded = await repo.load('notes-meta');
+      expect(loaded!.title).toBe('t');
+      expect(loaded!.stickyNotes.map((note) => note.id)).toEqual(['n1']);
+    });
+
+    it('mutateMeta: shouldWrite=false — значение мутатора возвращается, записи нет', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'meta-noop',
+        title: 'до',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [
+          { ...makeMessage('first'), seq: 1, ord: 1 },
+          { ...makeMessage('second'), seq: 2, ord: 2 },
+        ],
+      }));
+
+      // `shouldWrite` получает значение мутатора: `false` — записи нет.
+      const skipped = await repo.mutateMeta('meta-noop', (meta) => {
+        meta.title = 'после';
+        meta.status = { ...meta.status, blocked: 'x' };
+        return false;
+      }, { shouldWrite: (value) => value });
+      expect(skipped.found).toBe(true);
+      if (skipped.found) {
+        expect(skipped.value).toBe(false);
+        // `session` — снимок **до** мутатора (правки наружу не утекают).
+        expect(skipped.session.title).toBe('до');
+        expect(skipped.session.status.blocked).toBeUndefined();
+        // И не алиасится с хранилищем.
+        skipped.session.title = 'взлом';
+      }
+
+      const loaded = await repo.load('meta-noop');
+      expect(loaded!.title).toBe('до');
+      expect(loaded!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+      expect(loaded!.status.blocked).toBeUndefined();
+      // История не тронута.
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first', 'second']);
+
+      // Явная проверка `v === true` при `false` — тоже без записи.
+      const skippedTrue = await repo.mutateMeta('meta-noop', (meta) => {
+        meta.title = 'ещё раз';
+        return false;
+      }, { shouldWrite: (value) => value === true });
+      expect(skippedTrue.found).toBe(true);
+      if (skippedTrue.found) {
+        expect(skippedTrue.value).toBe(false);
+        expect(skippedTrue.session.title).toBe('до');
+      }
+      expect((await repo.load('meta-noop'))!.title).toBe('до');
+      expect((await repo.load('meta-noop'))!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('mutateMeta: возвращённый session санитизирован так же, как сохранённый (NUL в jsonb)', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({ id: 'nul-meta' }));
+
+      const result = await repo.mutateMeta('nul-meta', (meta) => {
+        meta.settings = { ...meta.settings, systemPrompt: 'до\u0000после' };
+      });
+      expect(result.found).toBe(true);
+      // Паритет file/memory/PG: возврат — то же, что прочитается из хранилища.
+      if (result.found) expect(result.session.settings.systemPrompt).toBe('допосле');
+
+      const loaded = await repo.load('nul-meta');
+      expect(loaded!.settings.systemPrompt).toBe('допосле');
+    });
+
+    it('mutateHistory: брошенный мутатор после частичной правки — в хранилище ничего не меняется', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'history-throw',
+        title: 'до',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [
+          { ...makeMessage('first'), seq: 1, ord: 1 },
+          { ...makeMessage('second'), seq: 2, ord: 2 },
+        ],
+      }));
+
+      await expect(repo.mutateHistory('history-throw', (session) => {
+        session.title = 'грязно';
+        session.messages[0]!.content = 'грязно';
+        session.messages[0]!.parts = [makeTextPart('грязно')];
+        session.messages.pop();
+        throw new Error('boom-history');
+      })).rejects.toThrow('boom-history');
+
+      const loaded = await repo.load('history-throw');
+      expect(loaded!.title).toBe('до');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first', 'second']);
+      expect(loaded!.messages.map((m) => m.seq)).toEqual([1, 2]);
+      expect(loaded!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('mutateHistory({shouldWrite:false}) не пишет, не двигает updatedAt и не нормализует seq', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'history-nowrite',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [
+          { ...makeMessage('first'), seq: 5, ord: 10 },
+          { ...makeMessage('second'), seq: 7, ord: 11 },
+        ],
+      }));
+
+      const before = await repo.load('history-nowrite');
+      const result = await repo.mutateHistory('history-nowrite', (session) => {
+        session.messages[0]!.content = 'иное';
+        session.messages[0]!.parts = [makeTextPart('иное')];
+        return session.messages.length;
+      }, { shouldWrite: () => false });
+      expect(result).toEqual({ ok: true, value: 2 });
+
+      const loaded = await repo.load('history-nowrite');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first', 'second']);
+      // `seq` не нормализован: значения те же, что были в хранилище до вызова
+      // (абсолютные числа зависят от реализации записи, важна неизменность).
+      expect(loaded!.messages.map((m) => m.seq)).toEqual(before!.messages.map((m) => m.seq));
+      expect(loaded!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('mutateHistory выдаёт ord новым сообщениям: порядок массива, от max(ord)+1', async () => {
+      const { repo } = await make();
+      const first = { ...makeMessage('first'), id: 'ord-first', seq: 1, ord: 10 };
+      const second = { ...makeMessage('second'), id: 'ord-second', seq: 2, ord: 11 };
+      await repo.save(makeSession({ id: 'history-ord', messages: [first, second] }));
+
+      const addedA = { ...makeMessage('added-a'), id: 'added-a', seq: 0 };
+      const addedB = { ...makeMessage('added-b'), id: 'added-b', seq: 0 };
+      delete (addedA as { ord?: number }).ord;
+      delete (addedB as { ord?: number }).ord;
+
+      const result = await repo.mutateHistory('history-ord', (session) => {
+        session.messages.push(addedA, addedB);
+        return session.messages.length;
+      });
+      expect(result).toEqual({ ok: true, value: 4 });
+
+      const loaded = await repo.load('history-ord');
+      expect(loaded!.messages.map((m) => m.id)).toEqual([
+        'ord-first',
+        'ord-second',
+        'added-a',
+        'added-b',
+      ]);
+      // Ранее выданные `ord` не перенумерованы; новые — подряд после максимума.
+      expect(loaded!.messages.map((m) => m.ord)).toEqual([10, 11, 12, 13]);
+      expect(loaded!.messages.map((m) => m.seq)).toEqual([1, 2, 3, 4]);
+    });
+
+    it('mutateHistory ∥ appendMessage (20 итераций): append не теряются, seq 1..n, ord уникальны, пары tool целы', async () => {
+      const { repo } = await make();
+      const assistant = {
+        ...makeMessage('шаг'),
+        id: 'assistant-step',
+        role: MessageRole.ASSISTANT,
+        seq: 1,
+        ord: 1,
+        toolCalls: [{ id: 'call-0' }],
+      };
+      await repo.save(makeSession({ id: 'history-race', messages: [assistant] }));
+
+      for (let index = 0; index < 20; index++) {
+        const snapshot = await repo.load('history-race');
+        const expectedMaxOrd = snapshot!.messages.reduce(
+          (acc, message) => (Number.isFinite(message.ord) ? Math.max(acc, message.ord as number) : acc),
+          0,
+        );
+        const toolMessage = {
+          ...makeMessage(`result-${index}`),
+          id: `tool-${index}`,
+          role: MessageRole.TOOL,
+          toolCallId: `call-${index + 1}`,
+          seq: 0,
+        };
+
+        const [appended, mutated] = await Promise.all([
+          repo.appendMessage('history-race', toolMessage),
+          repo.mutateHistory('history-race', (session) => {
+            session.title = `итерация ${index}`;
+            return session.messages.length;
+          }, { expectMaxOrd: expectedMaxOrd }),
+        ]);
+        expect(appended).not.toBeNull();
+        // Мутатор либо успел (ok), либо увидел append и отказался (stale):
+        // «потерянного» исхода нет.
+        expect(mutated.ok || mutated.reason === 'stale').toBe(true);
+      }
+
+      const loaded = await repo.load('history-race');
+      // 1 шаг assistant + 20 tool-сообщений: ни один append не потерян.
+      expect(loaded!.messages).toHaveLength(21);
+      expect(loaded!.messages.map((m) => m.seq)).toEqual(
+        Array.from({ length: 21 }, (_, index) => index + 1),
+      );
+      const ords = loaded!.messages.map((m) => m.ord as number);
+      expect(ords.every((ord) => Number.isInteger(ord))).toBe(true);
+      expect(new Set(ords).size).toBe(ords.length);
+      // Пары assistant(tool_calls)/tool целы: у каждого вызова результат ниже.
+      const assistantIndex = loaded!.messages.findIndex((m) => m.id === 'assistant-step');
+      expect(assistantIndex).toBe(0);
+      const callIds = new Set(loaded!.messages.slice(assistantIndex + 1).map((m) => m.toolCallId));
+      expect([...callIds].sort()).toEqual(
+        Array.from({ length: 20 }, (_, index) => `call-${index + 1}`).sort(),
+      );
+    });
+
+    it('mutateMessage: брошенный мутатор — записи нет', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'message-throw',
+        messages: [{ ...makeMessage('keep'), id: 'keep', seq: 1, ord: 1 }],
+      }));
+
+      await expect(repo.mutateMessage('message-throw', 'keep', (message) => {
+        message.content = 'грязно';
+        message.parts = [makeTextPart('грязно')];
+        throw new Error('boom-message');
+      })).rejects.toThrow('boom-message');
+
+      const loaded = await repo.load('message-throw');
+      expect(loaded!.messages[0]!.content).toBe('keep');
+    });
+
+    it('mutateMessage: при legacy-дублях id правится ровно первая запись по (seq, created_at, id)', async () => {
+      const { repo } = await make();
+      const first = {
+        ...makeMessage('first'),
+        id: 'dup',
+        seq: 0,
+        createdAt: '2024-01-01T00:00:00.000Z',
+      };
+      const second = {
+        ...makeMessage('second'),
+        id: 'dup',
+        seq: 0,
+        createdAt: '2024-01-02T00:00:00.000Z',
+      };
+      await repo.save(makeSession({ id: 'dup-message', messages: [first, second] }));
+
+      const result = await repo.mutateMessage('dup-message', 'dup', (message) => {
+        message.content = 'первая-правка';
+        message.parts = [makeTextPart('первая-правка')];
+      });
+      expect(result.found).toBe(true);
+
+      const loaded = await repo.load('dup-message');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['первая-правка', 'second']);
+    });
+
+    it('mutateMeta/mutateMessage: возвращённые объекты не алиасятся с хранилищем', async () => {
+      const { repo } = await make();
+      // `settings` — полный тип сессии: частичное значение сливаем с дефолтом
+      // хелпера (без `any`/каста).
+      const session = makeSession({
+        id: 'alias',
+        title: 'до',
+        messages: [{ ...makeMessage('msg'), id: 'alias-msg', seq: 1, ord: 1 }],
+      });
+      session.settings = { ...session.settings, model: 'a/b' };
+      await repo.save(session);
+
+      const metaResult = await repo.mutateMeta('alias', (meta) => {
+        meta.title = 'после';
+      });
+      expect(metaResult.found).toBe(true);
+      if (metaResult.found) {
+        metaResult.session.title = 'взлом';
+        metaResult.session.settings = { ...metaResult.session.settings, model: 'взлом/модель' };
+      }
+
+      const messageResult = await repo.mutateMessage('alias', 'alias-msg', (message) => {
+        message.content = 'правка';
+        message.parts = [makeTextPart('правка')];
+      });
+      expect(messageResult.found).toBe(true);
+      if (messageResult.found) messageResult.message.content = 'взлом';
+
+      const loaded = await repo.load('alias');
+      expect(loaded!.title).toBe('после');
+      expect(loaded!.settings.model).toBe('a/b');
+      expect(loaded!.messages[0]!.content).toBe('правка');
     });
 
     it('loadLight: метаданные без истории; отсутствующая → null', async () => {

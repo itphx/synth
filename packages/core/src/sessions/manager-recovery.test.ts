@@ -547,9 +547,9 @@ describe('SessionManager.takePendingInFlight (pending уже в истории)'
     await manager.appendMessage(created.id, userMsg);
     await manager.addPendingMessage(created.id, pendingCopy, 5, { clearQueueStopped: false });
     await manager.addPendingMessage(created.id, laterMsg);
-    await manager.safeUpdate(created.id, (s) => {
-      s.status.queueStopped = true;
-      s.status.queueStoppedAt = nowISO();
+    await manager.mutateMeta(created.id, (meta) => {
+      meta.status.queueStopped = true;
+      meta.status.queueStoppedAt = nowISO();
     });
 
     const resume = await manager.takePendingInFlight(created.id);

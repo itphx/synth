@@ -528,6 +528,21 @@ export interface Session {
   cacheHitRate?: number;
 }
 
+/**
+ * Метаданные сессии — документ без истории и child-наборов.
+ *
+ * Используется атомарной операцией порта `SessionRepository.mutateMeta`
+ * (ADR-096): «чтение → изменение → запись» метаданных под одним локом, без
+ * чтения и перезаписи истории (`messages`/`checkpoints`) и связей
+ * (`references`). `stickyNotes` намеренно **не входит**: в PostgreSQL это
+ * отдельная child-таблица, а `mutateMeta` не имеет права её трогать
+ * (иначе файловая и SQL-реализации разошлись бы по семантике).
+ *
+ * `pendingMessages`/`steerInbox` остаются частью метаданных: это jsonb-колонки
+ * самой записи сессии (не child-таблица), малы и нужны recovery/автозапуску.
+ */
+export type SessionMeta = Omit<Session, 'messages' | 'checkpoints' | 'references' | 'stickyNotes'>;
+
 // --- Queue ---
 export interface QueueItem {
   message: Message;

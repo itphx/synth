@@ -58,9 +58,18 @@
 
 import type { PostgresConnection, PostgresExecutor } from '../pool.js';
 import { jsonbParam } from '../json-param.js';
-import type { Message, Session, SessionReference } from '@itphx/synth-shared';
-import { generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { SessionFilter, SessionRepository, StorageContext } from '@itphx/synth-core';
+import type { Message, Session, SessionMeta, SessionReference } from '@itphx/synth-shared';
+import { generateId, makeTextPart, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
+import type {
+  MutateHistoryOptions,
+  MutateHistoryResult,
+  MutateMessageResult,
+  MutateMetaOptions,
+  MutateMetaResult,
+  SessionFilter,
+  SessionRepository,
+  StorageContext,
+} from '@itphx/synth-core';
 import type { PortDeps } from './deps.js';
 import {
   checkpointRow,
@@ -69,6 +78,7 @@ import {
   deserializeSession,
   deserializeSessionLight,
   deserializeSessionMeta,
+  deserializeSessionMetaDocument,
   emptySessionChildren,
   messageRow,
   referenceRow,
@@ -275,6 +285,45 @@ function isStaleDraftWrite(target: { status: Message['status'] | null }, incomin
 }
 
 /**
+ * Максимальный выданный `ord` в истории (`0`, если `ord` ни у кого нет).
+ * Нужен оптимистичной проверке `mutateHistory({ expectMaxOrd })`; считается по
+ * свежему снимку в той же транзакции (отдельный `MAX(ord)` не требуется).
+ */
+function maxOrdOf(messages: Message[]): number {
+  return messages.reduce((acc, message) => {
+    const ord = Number.isFinite(message.ord) ? (message.ord as number) : 0;
+    return ord > acc ? ord : acc;
+  }, 0);
+}
+
+/**
+ * `seq` — позиционный (порядок массива истории), нормализация `1..n`.
+ * `ord` не трогается: монотонный и иммутабельный после выдачи (ADR-118 §2).
+ */
+function normalizeMessageSeq(messages: Message[]): void {
+  messages.forEach((message, index) => {
+    message.seq = index + 1;
+  });
+}
+
+/**
+ * Выдать `ord` сообщениям без него (`mutateHistory`: добавление
+ * мутатором/импортом) — подряд в порядке массива, от `max(ord)+1`. Ранее
+ * выданные значения не перенумеровываются; иначе новые записи сортировались бы
+ * в начало истории. Возвращает число выданных `ord`.
+ */
+function assignMissingOrd(messages: Message[]): number {
+  let next = maxOrdOf(messages) + 1;
+  let assigned = 0;
+  for (const message of messages) {
+    if (Number.isFinite(message.ord)) continue;
+    message.ord = next++;
+    assigned++;
+  }
+  return assigned;
+}
+
+/**
  * ADR-118 §2: `ord` — **монотонный** счётчик порядка записи в историю
  * сессии (выдаётся при материализации, ранее выданные значения не
  * перенумеровываются).
@@ -467,6 +516,18 @@ export class PostgresSessionRepository implements SessionRepository {
    * дубликаты `id` сохраняются как есть.
    */
   async save(session: Session): Promise<void> {
+    await this._connection.withTransaction(async (tx) => {
+      await this._lockSession(tx, session.id);
+      await this._writeSession(tx, session);
+    });
+  }
+
+  /**
+   * Запись полного документа сессии под уже взятым advisory-локом: upsert
+   * строки `sessions` + **полная замена** child-таблиц. Общий помощник `save`
+   * и `mutateHistory` (одна семантика, один код).
+   */
+  private async _writeSession(tx: PostgresExecutor, session: Session): Promise<void> {
     const sessionRow = serializeSession(session);
     // `seq` — позиция сообщения в массиве (`1..n`): снимает legacy-коллизию
     // `UNIQUE (session_id, seq)` (у старых сессий `seq = 0` у всех) и делает
@@ -480,32 +541,28 @@ export class PostgresSessionRepository implements SessionRepository {
     const checkpointRows = (session.checkpoints ?? []).map(checkpointRow);
     const noteRows = (session.stickyNotes ?? []).map((note) => stickyNoteRow(session.id, note));
 
-    await this._connection.withTransaction(async (tx) => {
-      await this._lockSession(tx, session.id);
+    await upsertRows(tx, 'sessions', SESSION_FIELDS, [sessionRow], SESSION_JSON_FIELDS, ['id']);
 
-      await upsertRows(tx, 'sessions', SESSION_FIELDS, [sessionRow], SESSION_JSON_FIELDS, ['id']);
+    // Сообщения — полная замена в той же транзакции: `DELETE` + массовый
+    // `INSERT`. Дубликаты `id` допустимы (суррогатный PK `message_uid`);
+    // уникальность `(session_id, seq)` выполняется по построению (позиция).
+    await replaceRows(tx, 'messages', MESSAGE_FIELDS, messageRows, MESSAGE_JSON_FIELDS, session.id);
 
-      // Сообщения — полная замена в той же транзакции: `DELETE` + массовый
-      // `INSERT`. Дубликаты `id` допустимы (суррогатный PK `message_uid`);
-      // уникальность `(session_id, seq)` выполняется по построению (позиция).
-      await replaceRows(tx, 'messages', MESSAGE_FIELDS, messageRows, MESSAGE_JSON_FIELDS, session.id);
+    // Ссылки — полная замена (паритет с файловой реализацией: `save`
+    // перезаписывает `session.references` целиком); `id`/`ordinal` — свежие,
+    // дубликаты одной `ref_session_id` допустимы (разные диапазоны).
+    await replaceRows(
+      tx,
+      'session_references',
+      REFERENCE_FIELDS,
+      referenceRows,
+      REFERENCE_JSON_FIELDS,
+      session.id,
+    );
 
-      // Ссылки — полная замена (паритет с файловой реализацией: `save`
-      // перезаписывает `session.references` целиком); `id`/`ordinal` — свежие,
-      // дубликаты одной `ref_session_id` допустимы (разные диапазоны).
-      await replaceRows(
-        tx,
-        'session_references',
-        REFERENCE_FIELDS,
-        referenceRows,
-        REFERENCE_JSON_FIELDS,
-        session.id,
-      );
+    await replaceRows(tx, 'checkpoints', CHECKPOINT_FIELDS, checkpointRows, CHECKPOINT_JSON_FIELDS, session.id);
 
-      await replaceRows(tx, 'checkpoints', CHECKPOINT_FIELDS, checkpointRows, CHECKPOINT_JSON_FIELDS, session.id);
-
-      await replaceRows(tx, 'sticky_notes', NOTE_FIELDS, noteRows, NOTE_JSON_FIELDS, session.id);
-    });
+    await replaceRows(tx, 'sticky_notes', NOTE_FIELDS, noteRows, NOTE_JSON_FIELDS, session.id);
   }
 
   /**
@@ -602,6 +659,159 @@ export class PostgresSessionRepository implements SessionRepository {
 
       const updatedRow = updated[0];
       return updatedRow ? deserializeMessage(updatedRow) : null;
+    });
+  }
+
+  /**
+   * Атомарная правка метаданных (порт `SessionRepository.mutateMeta`): одна
+   * транзакция, `pg_advisory_xact_lock` **до** чтения строки `sessions`.
+   *
+   * Пишется только строка `sessions` (`UPDATE` по `SESSION_FIELDS`); child-таблицы
+   * (`messages`/`session_references`/`checkpoints`/`sticky_notes`) не трогаются —
+   * параллельный `appendMessage` не теряется. Очередь (`pending_messages`/
+   * `steer_inbox`) — колонки самой записи, читаются свежими и пишутся обратно.
+   */
+  async mutateMeta<T>(
+    sessionId: string,
+    mutator: (meta: SessionMeta) => T,
+    opts?: MutateMetaOptions<T>,
+  ): Promise<MutateMetaResult<T>> {
+    return this._connection.withTransaction(async (tx) => {
+      await this._lockSession(tx, sessionId);
+
+      const rows = await tx.query<SessionRow>('SELECT * FROM sessions WHERE id = $1', [sessionId]);
+      const row = rows[0];
+      if (!row) return { found: false };
+
+      // `shouldWrite`: мутатор работает с клоном; при отказе от записи `UPDATE`
+      // не выполняется, а `session` — снимок **до** мутатора (без алиасинга).
+      const snapshot = deserializeSessionMetaDocument(row);
+      const baseline = opts?.shouldWrite ? structuredClone(snapshot) : undefined;
+      const meta = opts?.shouldWrite ? structuredClone(snapshot) : snapshot;
+      const value = mutator(meta);
+      if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+        return { found: true, value, session: baseline! };
+      }
+      // Идентичность сессии неизменяема (строку адресует `id`).
+      meta.id = sessionId;
+      if (opts?.touchUpdatedAt !== false) meta.updatedAt = nowISO();
+
+      // Паритет с file/memory: возврат — санитизированное значение (NUL-байты
+      // несовместимы с PostgreSQL; так же их чистит `jsonParam` при записи).
+      const sanitized = stripNullBytesDeep(meta);
+      // `serializeSession` строит значения по колонкам `sessions`; child-наборы
+      // сюда не входят. `id` в SET — то же значение (строку уже заблокировали).
+      const values = rowValues(serializeSession(sanitized), SESSION_FIELDS, SESSION_JSON_FIELDS);
+      const setClauses = SESSION_FIELDS.map((field, index) => `${field} = $${index + 1}`);
+      await tx.query(
+        `UPDATE sessions SET ${setClauses.join(', ')} WHERE id = $${SESSION_FIELDS.length + 1}`,
+        [...values, sessionId],
+      );
+
+      return { found: true, value, session: sanitized };
+    });
+  }
+
+  /**
+   * Атомарная правка истории (порт `SessionRepository.mutateHistory`): свежий
+   * полный документ читается **внутри транзакции** под advisory-локом, затем
+   * синхронный мутатор и полная замена child-наборов (как `save`).
+   *
+   * `seq` нормализуется позиционно `1..n`; `ord` не перенумеровывается.
+   * `expectMaxOrd` проверяется по свежему снимку; `shouldWrite === false` —
+   * запись не выполняется (транзакция завершается без изменений).
+   */
+  async mutateHistory<T>(
+    sessionId: string,
+    mutator: (session: Session) => T,
+    opts?: MutateHistoryOptions<T>,
+  ): Promise<MutateHistoryResult<T>> {
+    return this._connection.withTransaction(async (tx) => {
+      await this._lockSession(tx, sessionId);
+
+      const session = await this._loadSessionInTx(tx, sessionId);
+      if (!session) return { ok: false, reason: 'not_found' };
+      if (opts?.expectMaxOrd !== undefined && maxOrdOf(session.messages) > opts.expectMaxOrd) {
+        return { ok: false, reason: 'stale' };
+      }
+
+      const value = mutator(session);
+      if (opts?.shouldWrite && !opts.shouldWrite(value)) return { ok: true, value };
+
+      session.id = sessionId;
+      // Новым записям (добавлены мутатором/импортом) порт выдаёт `ord` сам:
+      // без него сортировка по `ord` поставила бы их в начало истории.
+      assignMissingOrd(session.messages);
+      normalizeMessageSeq(session.messages);
+      session.updatedAt = nowISO();
+      await this._writeSession(tx, session);
+      return { ok: true, value };
+    });
+  }
+
+  /**
+   * Атомарная правка одного сообщения по `id` (порт
+   * `SessionRepository.mutateMessage`): одна транзакция + advisory-лок; цель —
+   * по доменному `id` (при legacy-дублях — первая по `seq, created_at, id`).
+   * `id`/`seq`/`created_at`/`ord` исходной строки сохраняются, поздняя запись
+   * черновика поверх терминального сообщения не применяется.
+   */
+  async mutateMessage<T>(
+    sessionId: string,
+    messageId: string,
+    mutator: (message: Message) => T,
+  ): Promise<MutateMessageResult<T>> {
+    return this._connection.withTransaction(async (tx) => {
+      await this._lockSession(tx, sessionId);
+
+      const rows = await tx.query<MessageRow>(
+        'SELECT * FROM messages WHERE session_id = $1 AND id = $2 '
+          + 'ORDER BY seq, created_at, id LIMIT 1',
+        [sessionId, messageId],
+      );
+      const row = rows[0];
+      if (!row) return { found: false };
+
+      const original = deserializeMessage(row);
+      const target = structuredClone(original);
+      const value = mutator(target);
+
+      // ADR-118 §5: поздняя запись черновика не «воскрешает» закрытый шаг.
+      if (isStaleDraftWrite({ status: toMessageStatus(row.status) ?? null }, target)) {
+        return { found: true, value, message: original };
+      }
+
+      // Иммутабельные поля берутся из исходной строки, изменяются только
+      // `MESSAGE_MUTABLE_FIELDS`; `ord` — `COALESCE` (уже выданный не перебить).
+      const prepared = prepareMessage({
+        ...target,
+        id: original.id,
+        seq: original.seq,
+        createdAt: original.createdAt,
+        ord: original.ord,
+      });
+      const updatedRow = messageRow(prepared, sessionId, original.seq);
+      const setClauses = MESSAGE_MUTABLE_FIELDS.map(
+        (field, index) => `${field} = $${index + 1}`,
+      );
+      const params = rowValues(updatedRow, MESSAGE_MUTABLE_FIELDS, MESSAGE_JSON_FIELDS);
+      if (prepared.ord !== undefined && prepared.ord !== null) {
+        params.push(prepared.ord);
+        setClauses.push(`ord = COALESCE(messages.ord, $${params.length})`);
+      }
+
+      const updated = await tx.query<MessageRow>(
+        `UPDATE messages SET ${setClauses.join(', ')} WHERE message_uid = $${params.length + 1} RETURNING *`,
+        [...params, row.message_uid],
+      );
+      await tx.query('UPDATE sessions SET updated_at = now() WHERE id = $1', [sessionId]);
+
+      const updatedRowResult = updated[0];
+      return {
+        found: true,
+        value,
+        message: updatedRowResult ? deserializeMessage(updatedRowResult) : original,
+      };
     });
   }
 
@@ -739,36 +949,73 @@ export class PostgresSessionRepository implements SessionRepository {
   }
 
   /**
+   * Полный документ сессии внутри готовой транзакции (для `mutateHistory`).
+   * Чтение — тем же кодом, что у `load`; лок уже держит вызывающий.
+   */
+  private async _loadSessionInTx(tx: PostgresExecutor, sessionId: string): Promise<Session | null> {
+    const rows = await tx.query<SessionRow>('SELECT * FROM sessions WHERE id = $1', [sessionId]);
+    const row = rows[0];
+    if (!row) return null;
+    const children = await this._loadChildren([sessionId], tx, true);
+    return deserializeSession(row, children.get(sessionId) ?? emptySessionChildren());
+  }
+
+  /**
    * Child-данные набора сессий — четыре запроса с `ANY($1)` (никакого N+1),
    * `ORDER BY session_id, …` для стабильного порядка внутри каждой сессии.
+   *
+   * `db` — исполнитель запросов: соединение (обычное чтение) либо транзакция
+   * (`mutateHistory` — читать нужно в той же транзакции, что и запись).
+   * `sequential` обязателен для транзакции: `pg` запрещает параллельные запросы
+   * на одном клиенте (пул — можно, транзакция — один клиент).
    */
-  private async _loadChildren(sessionIds: string[]): Promise<Map<string, SessionChildren>> {
+  private async _loadChildren(
+    sessionIds: string[],
+    db: PostgresExecutor = this._connection,
+    sequential = false,
+  ): Promise<Map<string, SessionChildren>> {
     const buckets = new Map<string, SessionChildren>();
     for (const sessionId of sessionIds) buckets.set(sessionId, emptySessionChildren());
     if (sessionIds.length === 0) return buckets;
 
-    const [messages, references, checkpoints, notes] = await Promise.all([
-      this._connection.query<MessageRow>(
-        'SELECT * FROM messages WHERE session_id = ANY($1::text[]) '
-          + 'ORDER BY session_id, seq, created_at, id',
-        [sessionIds],
-      ),
-      this._connection.query<SessionReferenceRow>(
-        'SELECT * FROM session_references WHERE session_id = ANY($1::text[]) '
-          + 'ORDER BY session_id, ordinal',
-        [sessionIds],
-      ),
-      this._connection.query<CheckpointRow>(
-        'SELECT * FROM checkpoints WHERE session_id = ANY($1::text[]) '
-          + 'ORDER BY session_id, created_at, id',
-        [sessionIds],
-      ),
-      this._connection.query<StickyNoteRow>(
-        'SELECT * FROM sticky_notes WHERE session_id = ANY($1::text[]) '
-          + 'ORDER BY session_id, created_at, id',
-        [sessionIds],
-      ),
-    ]);
+    const loadMessages = (): Promise<MessageRow[]> => db.query<MessageRow>(
+      'SELECT * FROM messages WHERE session_id = ANY($1::text[]) '
+        + 'ORDER BY session_id, seq, created_at, id',
+      [sessionIds],
+    );
+    const loadReferences = (): Promise<SessionReferenceRow[]> => db.query<SessionReferenceRow>(
+      'SELECT * FROM session_references WHERE session_id = ANY($1::text[]) '
+        + 'ORDER BY session_id, ordinal',
+      [sessionIds],
+    );
+    const loadCheckpoints = (): Promise<CheckpointRow[]> => db.query<CheckpointRow>(
+      'SELECT * FROM checkpoints WHERE session_id = ANY($1::text[]) '
+        + 'ORDER BY session_id, created_at, id',
+      [sessionIds],
+    );
+    const loadNotes = (): Promise<StickyNoteRow[]> => db.query<StickyNoteRow>(
+      'SELECT * FROM sticky_notes WHERE session_id = ANY($1::text[]) '
+        + 'ORDER BY session_id, created_at, id',
+      [sessionIds],
+    );
+
+    let messages: MessageRow[];
+    let references: SessionReferenceRow[];
+    let checkpoints: CheckpointRow[];
+    let notes: StickyNoteRow[];
+    if (sequential) {
+      messages = await loadMessages();
+      references = await loadReferences();
+      checkpoints = await loadCheckpoints();
+      notes = await loadNotes();
+    } else {
+      [messages, references, checkpoints, notes] = await Promise.all([
+        loadMessages(),
+        loadReferences(),
+        loadCheckpoints(),
+        loadNotes(),
+      ]);
+    }
 
     for (const row of messages) buckets.get(row.session_id ?? '')?.messages.push(row);
     for (const row of references) buckets.get(row.session_id)?.references.push(row);

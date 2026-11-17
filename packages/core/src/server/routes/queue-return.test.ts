@@ -93,8 +93,8 @@ describe('POST /api/v2/queue/:sessionId/return — message.deleted', () => {
     await sessionManager.addMessage(sessionId, msgA);
     await sessionManager.addMessage(sessionId, msgB);
 
-    await sessionManager.safeUpdate(sessionId, async (s) => {
-      s.pendingMessages = [
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.pendingMessages = [
         { ...makeUserMessage('a', streamA), id: `p-${msgA.id}` },
         { ...makeUserMessage('b', streamB), id: `p-${msgB.id}` },
       ];
@@ -123,9 +123,9 @@ describe('POST /api/v2/queue/:sessionId/return — message.deleted', () => {
     await sessionManager.addMessage(sessionId, activeMsg);
     await sessionManager.addMessage(sessionId, queuedMsg);
 
-    await sessionManager.safeUpdate(sessionId, async (s) => {
-      s.currentStream = { streamId: activeStream, cancelled: false } as never;
-      s.pendingMessages = [{ ...makeUserMessage('queued', queuedStream), id: `p-${queuedMsg.id}` }];
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.currentStream = { streamId: activeStream, cancelled: false } as never;
+      meta.pendingMessages = [{ ...makeUserMessage('queued', queuedStream), id: `p-${queuedMsg.id}` }];
     });
 
     const res = await app.request(`/api/v2/queue/${sessionId}/return`, { method: 'POST' });

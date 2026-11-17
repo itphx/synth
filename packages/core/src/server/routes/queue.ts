@@ -159,10 +159,15 @@ export function createQueueRoutes(
       }
     }
     let counts: QueueStatePayload = { pendingCount: 0, steerCount: 0 };
-    await sessionManager.safeUpdate(sessionId, async (session) => {
-      session.pendingMessages = [];
-      counts = { pendingCount: 0, steerCount: session.steerInbox?.length ?? 0 };
+    // Очередь — метаданные: правка атомарная, история не перезаписывается.
+    const cleared = await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.pendingMessages = [];
+      return { pendingCount: 0, steerCount: meta.steerInbox?.length ?? 0 };
     });
+    if (!cleared.found) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    counts = cleared.value;
     queueManager.stop(sessionId);
     // ADR-118 §4: очередь сброшена — состояние очереди (счётчики, без текста).
     publishQueueState(eventBus, sessionId, counts);
@@ -220,14 +225,16 @@ export function createQueueRoutes(
 
     let texts: string[] = [];
     let remainingCount = 0;
-    /** Найден ли элемент по `id` внутри `safeUpdate` (гонка: исчез между чтениями). */
+    /** Найден ли элемент по `id` внутри мутации (гонка: исчез между чтениями). */
     let idRemoved = false;
     /** ADR-118 §4: id user-сообщений истории, реально удалённых возвратом в поле. */
     const removedMessageIds: string[] = [];
     /** ADR-118 §4: счётчики очереди после извлечения сообщений. */
     let counts: QueueStatePayload = { pendingCount: 0, steerCount: 0 };
 
-    await sessionManager.safeUpdate(sessionId, async (s) => {
+    // Возврат снимает user-копии из истории — это правка **истории**:
+    // одна атомарная операция (чтение свежего документа внутри лока порта).
+    const returned = await sessionManager.mutateHistory(sessionId, (s) => {
       let removedStreamIds: string[] = [];
       if (targetId !== undefined) {
         const msg = s.pendingMessages.find((m) => m.id === targetId);
@@ -283,6 +290,10 @@ export function createQueueRoutes(
         steerCount: s.steerInbox?.length ?? 0,
       };
     });
+
+    if (!returned.ok) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
 
     // Элемент исчез между чтением и записью (параллельный `/return`/`/steer`) —
     // честный 404, а не «успех с пустым texts».
@@ -494,21 +505,21 @@ export function createQueueRoutes(
     if (session.pendingMessages.length === 0) {
       // Явное «Продолжить» снимает осознанную остановку даже при пустой
       // очереди (маркер не должен переживать действие пользователя).
-      await sessionManager.safeUpdate(sessionId, async (s) => {
-        s.status.queueStopped = undefined;
-        s.status.queueStoppedAt = undefined;
+      await sessionManager.mutateMeta(sessionId, (meta) => {
+        meta.status.queueStopped = undefined;
+        meta.status.queueStoppedAt = undefined;
       });
       return c.json({ resumed: true, pending_count: 0 });
     }
 
-    await sessionManager.safeUpdate(sessionId, async (s) => {
+    await sessionManager.mutateMeta(sessionId, (meta) => {
       // Пользователь возобновил обработку — снимаем маркер остановки.
-      s.status.queueStopped = undefined;
-      s.status.queueStoppedAt = undefined;
+      meta.status.queueStopped = undefined;
+      meta.status.queueStoppedAt = undefined;
       // Используем существующий stream_id первого pending-сообщения, НЕ
       // генерируем новый — иначе Phase 1 нового процессора повторно запушит
       // сообщение в историю. Если stream_id отсутствует — генерируем один раз.
-      const p = s.pendingMessages[0];
+      const p = meta.pendingMessages[0];
       if (!p) return;
       if (!p.metadata) p.metadata = {};
       if (!p.metadata.stream_id) p.metadata.stream_id = generateStreamId();

@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { QueueProcessor, enqueueUserMessage, enqueueSteerMessage, requeueMessages } from './processor.js';
+import {
+  QueueProcessor,
+  enqueueUserMessage,
+  enqueueSteerMessage,
+  requeueMessages,
+  reorderPendingMessages,
+} from './processor.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
@@ -619,9 +625,9 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     const events = collectEvents(eventBus, sessionId);
 
     // Имитация abort-роута: флаг выставлен до запуска, стрима/токена ещё нет.
-    await sessionManager.safeUpdate(sessionId, (s) => {
-      s.status.cancelRequested = true;
-      s.status.cancelRequestedAt = nowISO();
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.status.cancelRequested = true;
+      meta.status.cancelRequestedAt = nowISO();
     });
 
     const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => {
@@ -657,8 +663,8 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
 
     // Флаг выставлен «снаружи» (другой инстанс/шлюз), requestStop не вызывался —
     // будим backoff и проверяем, что граница цикла видит флаг.
-    await sessionManager.safeUpdate(sessionId, (s) => {
-      s.status.cancelRequested = true;
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.status.cancelRequested = true;
     });
     processor.retryNow();
     await startPromise;
@@ -1435,5 +1441,267 @@ describe('QueueProcessor — resume-сообщение после рестарт
     expect(stored.status.queueStopped).toBe(true);
     expect(stored.status.queueStoppedAt).toBeTruthy();
     expect(events.some((e) => e.type === 'queue.stalled')).toBe(true);
+  });
+});
+
+/**
+ * Этап 2a: точечная персистентность процессора — Phase 1 материализует
+ * сообщение через `appendMessage`, терминальные ветки правят только метаданные
+ * и одно сообщение (`last_error`), очередь переставляется без полной записи
+ * истории.
+ */
+describe('QueueProcessor — точечная персистентность (этап 2a)', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qpersist-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('Phase 1: сообщение в истории ровно один раз, pending не тронут, delivered несёт ord', async () => {
+    const session = await sessionManager.createSession({ title: 'P1' });
+    const msg = makeMessage();
+    const streamId = msg.metadata!.stream_id as string;
+    await sessionManager.addPendingMessage(session.id, msg);
+    const events = collectEvents(eventBus, session.id);
+
+    let observed: { history: number; pending: number; ord?: number } | undefined;
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async (_s, message) => {
+      const live = (await sessionManager.getSession(session.id))!;
+      observed = {
+        history: live.messages.filter(
+          (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+        ).length,
+        pending: live.pendingMessages.length,
+        ord: message.ord,
+      };
+      return {};
+    });
+    await processor.start();
+
+    expect(observed).toBeDefined();
+    // Материализовано ровно один раз, очередь до завершения хода не тронута.
+    expect(observed!.history).toBe(1);
+    expect(observed!.pending).toBe(1);
+    expect(Number.isFinite(observed!.ord)).toBe(true);
+
+    const delivered = events.find((e) => e.type === 'message.delivered')!;
+    expect(delivered).toBeDefined();
+    expect(delivered.data).toMatchObject({ messageId: msg.id, role: MessageRole.USER });
+    expect(delivered.data.ord).toBe(observed!.ord);
+
+    // `queue.state`: элемент взят в работу (`starting`), затем очередь пуста.
+    const states = events
+      .filter((e) => e.type === 'queue.state')
+      .map((e) => e.data as { pendingCount: number; items: Array<{ id: string; status: string }> });
+    expect(states.some(
+      (state) => state.pendingCount === 1
+        && state.items.some((item) => item.id === streamId && item.status === 'starting'),
+    )).toBe(true);
+    expect(states.at(-1)!.pendingCount).toBe(0);
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    expect(stored.messages.filter((m) => m.metadata?.stream_id === streamId)).toHaveLength(1);
+    expect(stored.pendingMessages).toHaveLength(0);
+  });
+
+  it('Phase 1: alreadyInHistory — повторной вставки нет', async () => {
+    const session = await sessionManager.createSession({ title: 'P1-dedup' });
+    const msg = makeMessage();
+    const streamId = msg.metadata!.stream_id as string;
+    // Сообщение уже материализовано прошлым процессом и лежит в истории.
+    await sessionManager.appendMessage(session.id, msg);
+    await sessionManager.addPendingMessage(session.id, { ...msg, id: generateId() });
+
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    await processor.start();
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    expect(stored.messages.filter(
+      (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+    )).toHaveLength(1);
+    expect(stored.pendingMessages).toHaveLength(0);
+  });
+
+  it('успех: pending снимается, устаревший last_error чистится точечно, история цела', async () => {
+    const session = await sessionManager.createSession({ title: 'success' });
+    const msg = makeMessage();
+    const streamId = msg.metadata!.stream_id as string;
+    // User-копия с прошлой ошибкой (как после ретрая) и «свидетель» истории.
+    await sessionManager.appendMessage(session.id, {
+      ...msg,
+      seq: 0,
+      metadata: { ...(msg.metadata ?? {}), last_error: 'старая ошибка' },
+    });
+    const witness = makeMessage();
+    witness.role = MessageRole.ASSISTANT;
+    witness.content = 'свидетель';
+    witness.parts = [makeTextPart('свидетель')];
+    witness.metadata = { stream_id: generateId() };
+    await sessionManager.appendMessage(session.id, witness);
+    await sessionManager.addPendingMessage(session.id, { ...msg, id: generateId() });
+
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({}));
+    await processor.start();
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    expect(stored.pendingMessages).toHaveLength(0);
+    // Свидетель не потерян — история не перезаписывалась целиком.
+    expect(stored.messages.map((m) => m.content)).toContain('свидетель');
+    const userMsg = stored.messages.find((m) => m.metadata?.stream_id === streamId)!;
+    expect(userMsg.metadata?.last_error).toBeUndefined();
+    // Точечная правка не задела соседние сообщения.
+    expect(stored.messages.find((m) => m.id === witness.id)?.metadata).toEqual(witness.metadata);
+  });
+
+  it('терминальная ошибка: pending снимается, last_error пишется на user-сообщение, история цела', async () => {
+    const session = await sessionManager.createSession({ title: 'error' });
+    const witness = makeMessage();
+    witness.role = MessageRole.ASSISTANT;
+    witness.content = 'свидетель';
+    witness.parts = [makeTextPart('свидетель')];
+    witness.metadata = { stream_id: generateId() };
+    await sessionManager.appendMessage(session.id, witness);
+    const msg = makeMessage();
+    const streamId = msg.metadata!.stream_id as string;
+    await sessionManager.addPendingMessage(session.id, msg);
+
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async () => ({
+      error: 'неверная модель',
+      errorType: 'model_not_found',
+      canRetry: false,
+    }));
+    await processor.start();
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    expect(stored.pendingMessages).toHaveLength(0);
+    expect(stored.messages.map((m) => m.content)).toContain('свидетель');
+    const userMsg = stored.messages.find(
+      (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+    )!;
+    expect(userMsg.metadata?.last_error).toBe('неверная модель');
+  });
+
+  it('повторная попытка обновляет currentStream.startedAt', async () => {
+    const session = await sessionManager.createSession({ title: 'retry-start' });
+    await sessionManager.addPendingMessage(session.id, makeMessage());
+    const events = collectEvents(eventBus, session.id);
+
+    const startedAt: Array<string | undefined> = [];
+    const processor = new QueueProcessor(session.id, sessionManager, eventBus, async (s) => {
+      startedAt.push(s.currentStream?.startedAt);
+      if (startedAt.length === 1) {
+        return { error: 'timeout', errorType: 'timeout', canRetry: true };
+      }
+      return {};
+    });
+
+    const running = processor.start();
+    await waitForEvent(events, 'stream.retry');
+    processor.retryNow();
+    await running;
+
+    expect(startedAt).toHaveLength(2);
+    expect(startedAt[0]).toBeTruthy();
+    expect(startedAt[1]).toBeTruthy();
+    // Phase 2 повтора переставляет метку старта хода.
+    expect(startedAt[1]).not.toBe(startedAt[0]);
+  });
+
+  it('reorderPendingMessages: mismatch не меняет очередь, верный состав — перестановка и queue.state', async () => {
+    const session = await sessionManager.createSession({ title: 'reorder' });
+    const first = makeMessage();
+    const second = makeMessage();
+    const third = makeMessage();
+    for (const message of [first, second, third]) {
+      await sessionManager.addPendingMessage(session.id, message);
+    }
+    const events = collectEvents(eventBus, session.id);
+
+    // Состав не совпал — очередь не меняется.
+    const mismatch = await reorderPendingMessages(
+      sessionManager,
+      eventBus,
+      session.id,
+      [first.id, third.id],
+    );
+    expect(mismatch).toEqual({ ok: false, reason: 'mismatch' });
+    expect((await sessionManager.getSession(session.id))!.pendingMessages.map((m) => m.id)).toEqual([
+      first.id,
+      second.id,
+      third.id,
+    ]);
+
+    // Верный состав — перестановка; queue.state с новым порядком.
+    const reordered = await reorderPendingMessages(
+      sessionManager,
+      eventBus,
+      session.id,
+      [third.id, first.id, second.id],
+    );
+    expect(reordered).toEqual({ ok: true, order: [third.id, first.id, second.id] });
+
+    const stored = (await sessionManager.getSession(session.id))!;
+    expect(stored.pendingMessages.map((m) => m.id)).toEqual([third.id, first.id, second.id]);
+    expect(stored.pendingMessages).toHaveLength(3);
+
+    const state = events.filter((e) => e.type === 'queue.state').at(-1)!;
+    const payload = state.data as { pendingCount: number; items: Array<{ id: string }> };
+    expect(payload.pendingCount).toBe(3);
+    expect(payload.items.map((item) => item.id)).toEqual([
+      third.metadata!.stream_id,
+      first.metadata!.stream_id,
+      second.metadata!.stream_id,
+    ]);
+
+    // Несуществующая сессия — not_found.
+    expect(await reorderPendingMessages(sessionManager, eventBus, 'missing', [])).toEqual({
+      ok: false,
+      reason: 'not_found',
+    });
+  });
+
+  it('reorderPendingMessages: mismatch и очередь ≤1 не пишут сессию и не публикуют queue.state', async () => {
+    const frozen = '2024-01-01T00:00:00.000Z';
+    const freeze = async (sessionId: string): Promise<void> => {
+      await sessionManager.mutateMeta(sessionId, (meta) => {
+        meta.updatedAt = frozen;
+      }, { touchUpdatedAt: false });
+    };
+
+    const session = await sessionManager.createSession({ title: 'reorder-noop' });
+    const first = makeMessage();
+    const second = makeMessage();
+    await sessionManager.addPendingMessage(session.id, first);
+    await sessionManager.addPendingMessage(session.id, second);
+    const events = collectEvents(eventBus, session.id);
+
+    await freeze(session.id);
+    expect(await reorderPendingMessages(
+      sessionManager,
+      eventBus,
+      session.id,
+      [first.id, generateId()],
+    )).toEqual({ ok: false, reason: 'mismatch' });
+    expect((await sessionManager.getSession(session.id))!.updatedAt).toBe(frozen);
+
+    // Очередь из одного элемента — «нечего переставлять», записи нет.
+    await sessionManager.mutateMeta(session.id, (meta) => {
+      meta.pendingMessages = [meta.pendingMessages[0]!];
+    });
+    await freeze(session.id);
+    expect(await reorderPendingMessages(sessionManager, eventBus, session.id, [first.id]))
+      .toEqual({ ok: true, order: [first.id] });
+    expect((await sessionManager.getSession(session.id))!.updatedAt).toBe(frozen);
+
+    // Ни один из no-op не опубликовал queue.state.
+    expect(events.some((e) => e.type === 'queue.state')).toBe(false);
   });
 });

@@ -142,8 +142,8 @@ describe('Queue API Routes', () => {
       await sessionManager.addMessage(session.id, queued);
 
       const activeStreamId = active.metadata!.stream_id as string;
-      await sessionManager.safeUpdate(session.id, async (s) => {
-        s.currentStream = {
+      await sessionManager.mutateMeta(session.id, (meta) => {
+        meta.currentStream = {
           streamId: activeStreamId,
           message: active.content,
           agentRole: active.agentRole,
@@ -172,10 +172,10 @@ describe('Queue API Routes', () => {
       await sessionManager.addMessage(session.id, msg);
 
       // Имитация «зависшей» сессии: currentStream не null, но cancelled=true
-      await sessionManager.safeUpdate(session.id, async (s) => {
-        s.status.blocked = session.id;
-        s.status.blockedAt = nowISO();
-        s.currentStream = {
+      await sessionManager.mutateMeta(session.id, (meta) => {
+        meta.status.blocked = session.id;
+        meta.status.blockedAt = nowISO();
+        meta.currentStream = {
           streamId: msg.metadata!.stream_id as string,
           message: msg.content,
           agentRole: msg.agentRole,

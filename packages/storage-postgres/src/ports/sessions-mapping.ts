@@ -24,6 +24,7 @@ import {
   type Message,
   type Part,
   type Session,
+  type SessionMeta,
   type SessionReference,
   type SessionRetryState,
   type SessionWorktree,
@@ -100,6 +101,11 @@ export interface SessionRow {
 
 /** Строка `messages` (или элемент jsonb-массива `pending_messages`/`checkpoints.messages`). */
 export interface MessageRow {
+  /**
+   * Суррогатный PK `messages` (bigserial). Нужен точечным операциям
+   * (`updateMessage`/`mutateMessage`): доменный `id` не уникален (legacy-дубли).
+   */
+  message_uid?: string | number;
   id: string;
   session_id?: string;
   seq: number;
@@ -518,11 +524,14 @@ export function deserializeMessage(row: MessageRow): Message {
 // ── Сессия ──────────────────────────────────────────────────────────────────
 
 /**
- * Сессия → строка `sessions` (колонки — как в `serializeSession` файловой
- * реализации; jsonb-поля остаются нативными значениями, их сериализует слой
- * параметров `jsonParam`).
+ * Сессия (её метаданные) → строка `sessions` (колонки — как в `serializeSession`
+ * файловой реализации; jsonb-поля остаются нативными значениями, их
+ * сериализует слой параметров `jsonParam`).
+ *
+ * Принимает `SessionMeta`: история/child-наборы в строку `sessions` не входят
+ * (они пишутся отдельными таблицами). Полная `Session` структурно совместима.
  */
-export function serializeSession(session: Session): Record<string, unknown> {
+export function serializeSession(session: SessionMeta): Record<string, unknown> {
   return {
     id: session.id,
     title: session.title ?? null,
@@ -847,4 +856,26 @@ export function deserializeSessionMeta(row: SessionRow): Session {
   session.pendingMessages = [];
   session.steerInbox = [];
   return session;
+}
+
+/**
+ * Строка `sessions` → **снимок метаданных** для `SessionRepository.mutateMeta`:
+ * без истории и child-наборов (`messages`/`checkpoints`/`references`/
+ * `stickyNotes`), но **с очередью** (`pendingMessages`/`steerInbox` — jsonb-колонки
+ * самой записи, мутатор вправе их менять).
+ *
+ * В отличие от `deserializeSessionMeta` (loadLight) очередь здесь сохраняется:
+ * `mutateMeta` пишет `pending_messages`/`steer_inbox` обратно, и очистка
+ * очереди молча потеряла бы in-flight сообщения.
+ */
+export function deserializeSessionMetaDocument(row: SessionRow): SessionMeta {
+  const session = deserializeSessionLight(row);
+  const {
+    messages: _messages,
+    checkpoints: _checkpoints,
+    references: _references,
+    stickyNotes: _stickyNotes,
+    ...meta
+  } = session;
+  return meta;
 }

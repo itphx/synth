@@ -28,12 +28,19 @@ import {
 } from '@itphx/synth-shared';
 import type {
   CreateProjectData,
+  MutateHistoryOptions,
+  MutateHistoryResult,
+  MutateMessageResult,
+  MutateMetaOptions,
+  MutateMetaResult,
   ProfileRepository,
   ProjectRepository,
   SessionFilter,
+  SessionMeta,
   SessionRepository,
 } from '../ports/index.js';
 import { findMessageIndex, isStaleDraftWrite, prepareMessageForAppend, prepareMessageForUpdate } from '../message-write.js';
+import { assignMissingOrd, maxOrdOf, mergeSessionMeta, normalizeMessageSeq, toSessionMeta } from '../session-meta.js';
 
 /**
  * Порт хранилища сессий поверх `Map` (семантика `FileStore`).
@@ -101,6 +108,91 @@ export class MemorySessionRepository implements SessionRepository {
     session.messages[index] = structuredClone(updated);
     session.updatedAt = nowISO();
     return structuredClone(updated);
+  }
+
+  /**
+   * Атомарная правка метаданных (порт `SessionRepository.mutateMeta`).
+   * Операция синхронная (над `Map`) — гонок нет; мутатор получает клон, поэтому
+   * брошенное исключение не оставляет половинчатой записи.
+   */
+  async mutateMeta<T>(
+    sessionId: string,
+    mutator: (meta: SessionMeta) => T,
+    opts?: MutateMetaOptions<T>,
+  ): Promise<MutateMetaResult<T>> {
+    const stored = this._sessions.get(sessionId);
+    if (!stored) return { found: false };
+    const session = structuredClone(stored);
+    // `shouldWrite`: мутатор работает с клоном, при отказе от записи снимок
+    // **до** мутатора уходит наружу, хранилище не меняется вовсе.
+    const snapshot = toSessionMeta(session);
+    const baseline = opts?.shouldWrite ? structuredClone(snapshot) : undefined;
+    const meta = opts?.shouldWrite ? structuredClone(snapshot) : snapshot;
+    const value = mutator(meta);
+    if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+      return { found: true, value, session: baseline! };
+    }
+    // Идентичность сессии неизменяема (ключ `Map`/запись адресуются по `id`).
+    meta.id = sessionId;
+    const merged = mergeSessionMeta(session, meta);
+    if (opts?.touchUpdatedAt !== false) merged.updatedAt = nowISO();
+    const persisted = structuredClone(stripNullBytesDeep(merged));
+    this._sessions.set(sessionId, persisted);
+    // Возврат — санитизированная **копия** (паритет с PostgreSQL: там читается
+    // записанное значение) и не алиас хранилища: правка результата не меняет
+    // сохранённую сессию.
+    return { found: true, value, session: toSessionMeta(structuredClone(persisted)) };
+  }
+
+  /** Атомарная правка истории (порт `SessionRepository.mutateHistory`). */
+  async mutateHistory<T>(
+    sessionId: string,
+    mutator: (session: Session) => T,
+    opts?: MutateHistoryOptions<T>,
+  ): Promise<MutateHistoryResult<T>> {
+    const stored = this._sessions.get(sessionId);
+    if (!stored) return { ok: false, reason: 'not_found' };
+    // Мутатор работает с клоном: при исключении сохранённая запись не меняется.
+    const session = structuredClone(stored);
+    if (opts?.expectMaxOrd !== undefined && maxOrdOf(session.messages) > opts.expectMaxOrd) {
+      return { ok: false, reason: 'stale' };
+    }
+    const value = mutator(session);
+    if (opts?.shouldWrite && !opts.shouldWrite(value)) return { ok: true, value };
+    session.id = sessionId;
+    // Новым записям (добавлены мутатором/импортом) порт выдаёт `ord` сам:
+    // без него сортировка по `ord` поставила бы их в начало истории.
+    assignMissingOrd(session.messages);
+    normalizeMessageSeq(session.messages);
+    session.updatedAt = nowISO();
+    this._sessions.set(sessionId, structuredClone(stripNullBytesDeep(session)));
+    return { ok: true, value };
+  }
+
+  /** Атомарная правка одного сообщения по `id` (порт `SessionRepository.mutateMessage`). */
+  async mutateMessage<T>(
+    sessionId: string,
+    messageId: string,
+    mutator: (message: Message) => T,
+  ): Promise<MutateMessageResult<T>> {
+    const stored = this._sessions.get(sessionId);
+    if (!stored) return { found: false };
+    const session = structuredClone(stored);
+    const index = session.messages.findIndex((candidate) => candidate.id === messageId);
+    if (index < 0) return { found: false };
+
+    const original = structuredClone(session.messages[index]!);
+    const target = structuredClone(original);
+    const value = mutator(target);
+    // ADR-118 §5: поздняя запись черновика не «воскрешает» закрытый шаг.
+    if (isStaleDraftWrite(original, target)) {
+      return { found: true, value, message: original };
+    }
+    const updated = prepareMessageForUpdate(original, target);
+    session.messages[index] = updated;
+    session.updatedAt = nowISO();
+    this._sessions.set(sessionId, structuredClone(stripNullBytesDeep(session)));
+    return { found: true, value, message: structuredClone(updated) };
   }
 
   /** Метаданные без истории (порт `SessionRepository.loadLight`). */

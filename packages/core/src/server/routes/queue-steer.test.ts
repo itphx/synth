@@ -72,24 +72,10 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
   let queueManager: ReturnType<typeof createMockQueueManager>;
   let app: Hono;
   let sessionId: string;
-  /**
-   * Снимки сессии на каждой записи в хранилище: последний снимок — состояние
-   * «сейчас». По нему проверяем, что **в момент публикации** `message.enqueued`
-   * сообщения уже нет ни в очереди, ни в истории (иначе клиент считал бы
-   * реплику «вернувшейся в очередь» и удалял её из ленты).
-   */
-  let saves: Session[];
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-queue-steer-'));
-    saves = [];
-    const store = new FileStore({ dataDir: tmpDir });
-    const originalSave = store.save.bind(store);
-    store.save = async (session: Session) => {
-      saves.push(JSON.parse(JSON.stringify(session)) as Session);
-      return originalSave(session);
-    };
-    sessionManager = new SessionManager(store);
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
     eventBus = new EventBus();
     queueManager = createMockQueueManager({ running: true });
     app = new Hono();
@@ -166,28 +152,31 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
   it('202 — в момент публикации message.enqueued сообщения нет ни в очереди, ни в истории', async () => {
     const message = await seedPending();
     const streamId = message.metadata!.stream_id as string;
-    // Снимок состояния на момент публикации события (последняя запись в
-    // хранилище — атомарный перенос из очереди в очередь инъекций).
-    let snapshot: Session | undefined;
+    // Снимок состояния на момент публикации события: чтение стартует
+    // синхронно из обработчика `message.enqueued` (атомарный перенос из
+    // очереди в очередь инъекций уже завершён — событие публикуется после).
+    let snapshotPromise: Promise<Session | null> | undefined;
     const unsubscribe = eventBus.subscribe(sessionId, (event) => {
       if (event.type !== 'message.enqueued') return;
-      snapshot = saves[saves.length - 1];
+      snapshotPromise = sessionManager.getSession(sessionId);
     }, { userId: 'local' });
 
     const res = await steer();
     unsubscribe();
 
     expect(res.status).toBe(202);
-    expect(snapshot).toBeDefined();
+    expect(snapshotPromise).toBeDefined();
+    const snapshot = (await snapshotPromise)!;
+    expect(snapshot).not.toBeNull();
     // Сообщения нет в обычной очереди...
-    expect(snapshot!.pendingMessages.map((m) => m.id)).not.toContain(message.id);
+    expect(snapshot.pendingMessages.map((m) => m.id)).not.toContain(message.id);
     // ...и нет его user-копии в истории (иначе UI счёл бы реплику «вернувшейся
     // в очередь» и удалил её из ленты).
-    expect(snapshot!.messages.some(
+    expect(snapshot.messages.some(
       (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
     )).toBe(false);
     // При этом сообщение уже в очереди инъекций.
-    expect(snapshot!.steerInbox ?? []).toHaveLength(1);
+    expect(snapshot.steerInbox ?? []).toHaveLength(1);
   });
 
   it('404 — повторный steer того же id (сообщение уже отправлено «в разрыв»)', async () => {
@@ -260,14 +249,15 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
 
   it('404 — return?id= для элемента, исчезнувшего между чтением и записью', async () => {
     const message = await seedPending()
-    const original = sessionManager.safeUpdate.bind(sessionManager)
-    const spy = vi.spyOn(sessionManager, 'safeUpdate').mockImplementation(async (sid, fn) => {
-      // Конкурентное удаление ровно перед записью роута.
-      await sessionManager.withLock(sid, async (s) => {
-        s.pendingMessages = s.pendingMessages.filter((m) => m.id !== message.id)
-        await sessionManager.saveSession(s);
-      });
-      return original(sid, fn);
+    const original = sessionManager.mutateHistory.bind(sessionManager)
+    // Спай на правку **истории**: роут возврата снимает user-копию из истории
+    // одной атомарной операцией. Имитируем конкурентное удаление элемента из
+    // очереди ровно перед ней — роут обязан ответить 404, а не «успех».
+    const spy = vi.spyOn(sessionManager, 'mutateHistory').mockImplementation(async (sid, fn, opts) => {
+      await sessionManager.mutateMeta(sid, (meta) => {
+        meta.pendingMessages = meta.pendingMessages.filter((m) => m.id !== message.id)
+      })
+      return original(sid, fn, opts)
     });
 
     try {

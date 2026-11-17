@@ -24,7 +24,16 @@
  * только типизация. Переключение DI и БД-реализации — последующие шаги.
  */
 
-export type { SessionRepository, SessionFilter } from './session-repository.js';
+export type {
+  SessionRepository,
+  SessionFilter,
+  SessionMeta,
+  MutateMetaOptions,
+  MutateMetaResult,
+  MutateHistoryOptions,
+  MutateHistoryResult,
+  MutateMessageResult,
+} from './session-repository.js';
 export type { ProjectRepository, CreateProjectData } from './project-repository.js';
 export type { ProfileRepository } from './profile-repository.js';
 export type { SettingsRepository } from './settings-repository.js';

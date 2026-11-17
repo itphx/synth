@@ -1,9 +1,18 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Session, Message, MessageStatus, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal, InputMention } from '@itphx/synth-shared';
+import type { Session, SessionMeta, Message, MessageStatus, SessionStatus, SessionSettings, SessionMode, Part, SessionOrigin, SessionReference, SessionWorktree, PromptState, PromptMeta, AuthorityPrincipal, InputMention } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, normalizeSessionParticipantRole, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
-import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
+import type {
+  MutateHistoryOptions,
+  MutateHistoryResult,
+  MutateMessageResult,
+  MutateMetaOptions,
+  MutateMetaResult,
+  SessionFilter,
+  SessionRepository,
+} from './ports/session-repository.js';
 import { findMessageIndex, isStaleDraftWrite, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
+import { assignMissingOrd, maxOrdOf, mergeSessionMeta, normalizeMessageSeq, toSessionMeta } from './session-meta.js';
 
 export interface StorageConfig {
   dataDir: string;
@@ -727,6 +736,118 @@ export class FileStore implements SessionRepository {
       session.updatedAt = nowISO();
       await this._writeSession(session);
       return updated;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Атомарная правка метаданных (порт `SessionRepository.mutateMeta`):
+   * сессия читается **внутри** критической секции, поэтому параллельный
+   * `appendMessage` (он держит тот же per-session лок) не теряется.
+   *
+   * `_writeSession` вызывается напрямую: публичный `save` берёт лок повторно,
+   * а `AsyncLock` не реентерабелен (был бы дедлок).
+   */
+  async mutateMeta<T>(
+    sessionId: string,
+    mutator: (meta: SessionMeta) => T,
+    opts?: MutateMetaOptions<T>,
+  ): Promise<MutateMetaResult<T>> {
+    const lock = this._getLock(sessionId);
+    await lock.acquire();
+    try {
+      const session = await this.load(sessionId);
+      if (!session) return { found: false };
+      // `shouldWrite` — мутатор работает с клоном, чтобы при отказе от записи
+      // вернуть нетронутый снимок **до** мутатора (без записи и без алиасинга).
+      const snapshot = toSessionMeta(session);
+      const baseline = opts?.shouldWrite ? structuredClone(snapshot) : undefined;
+      const meta = opts?.shouldWrite ? structuredClone(snapshot) : snapshot;
+      const value = mutator(meta);
+      if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+        return { found: true, value, session: baseline! };
+      }
+      // Идентичность сессии неизменяема (лок/файл адресуются по `id`).
+      meta.id = sessionId;
+      const merged = mergeSessionMeta(session, meta);
+      if (opts?.touchUpdatedAt !== false) merged.updatedAt = nowISO();
+      // Запись и возврат — через одну санитизированную копию: NUL-байты
+      // (несовместимы с PostgreSQL) удалены так же, как в `_writeSession`, и
+      // результат не алиасится с внутренним состоянием (паритет с PG: там
+      // возвращается прочитанное из БД значение).
+      const persisted = structuredClone(stripNullBytesDeep(merged));
+      await this._writeSession(persisted);
+      return { found: true, value, session: toSessionMeta(structuredClone(persisted)) };
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Атомарная правка истории (порт `SessionRepository.mutateHistory`):
+   * свежий документ читается под локом, `seq` нормализуется позиционно,
+   * `ord` не перенумеровывается. `shouldWrite === false` — записи нет.
+   */
+  async mutateHistory<T>(
+    sessionId: string,
+    mutator: (session: Session) => T,
+    opts?: MutateHistoryOptions<T>,
+  ): Promise<MutateHistoryResult<T>> {
+    const lock = this._getLock(sessionId);
+    await lock.acquire();
+    try {
+      const session = await this.load(sessionId);
+      if (!session) return { ok: false, reason: 'not_found' };
+      if (opts?.expectMaxOrd !== undefined && maxOrdOf(session.messages) > opts.expectMaxOrd) {
+        return { ok: false, reason: 'stale' };
+      }
+      const value = mutator(session);
+      if (opts?.shouldWrite && !opts.shouldWrite(value)) return { ok: true, value };
+      session.id = sessionId;
+      // Новым записям (добавлены мутатором/импортом) порт выдаёт `ord` сам:
+      // без него сортировка по `ord` поставила бы их в начало истории.
+      assignMissingOrd(session.messages);
+      normalizeMessageSeq(session.messages);
+      session.updatedAt = nowISO();
+      await this._writeSession(session);
+      return { ok: true, value };
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Атомарная правка одного сообщения по `id` (порт
+   * `SessionRepository.mutateMessage`): `id`/`seq`/`createdAt`/`ord` исходной
+   * записи иммутабельны, поздняя запись черновика поверх терминального
+   * сообщения не применяется (`isStaleDraftWrite`).
+   */
+  async mutateMessage<T>(
+    sessionId: string,
+    messageId: string,
+    mutator: (message: Message) => T,
+  ): Promise<MutateMessageResult<T>> {
+    const lock = this._getLock(sessionId);
+    await lock.acquire();
+    try {
+      const session = await this.load(sessionId);
+      if (!session) return { found: false };
+      const index = session.messages.findIndex((candidate) => candidate.id === messageId);
+      if (index < 0) return { found: false };
+
+      const target = session.messages[index]!;
+      // Неизменяемые поля/статус — до мутатора: он не должен их перебить.
+      const before: Message = { ...target };
+      const value = mutator(target);
+      if (isStaleDraftWrite(before, target)) {
+        return { found: true, value, message: before };
+      }
+      const updated = prepareMessageForUpdate(before, target);
+      session.messages[index] = updated;
+      session.updatedAt = nowISO();
+      await this._writeSession(session);
+      return { found: true, value, message: updated };
     } finally {
       lock.release();
     }
