@@ -1294,13 +1294,24 @@ html.pointer-coarse .markdown-content .md-code-download {
    `--markdown-table-spacing`), литералы не дублируются.
    ============================================================= */
 
-/* Заголовки: два уровня акцента. h1/h2 — крупные и в основном цвете темы,
-   h3/h4 — мельче и приглушённее, h5/h6 — по размеру обычного текста, но
-   полужирные и самые тихие по цвету. */
-.markdown-content h1,
-.markdown-content h2 {
+/* Заголовки: два уровня акцента, но разного размера. h1 — крупнее h2
+   (1.5em против 1.32em), h3/h4 — мельче и приглушённее, h5/h6 — по размеру
+   обычного текста, но полужирные и самые тихие по цвету.
+
+   Размеры в `em`, а не в `px`: reasoning-блок (`text-xs`) и ответ агента
+   (`text-sm`) масштабируются вместе со своей базой, а не прибиты к
+   абсолютному кеглю. */
+.markdown-content h1 {
   margin-block: var(--markdown-heading-primary-top) var(--markdown-heading-primary-bottom);
   color: var(--markdown-heading1, var(--foreground));
+  font-size: 1.5em;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.markdown-content h2 {
+  margin-block: var(--markdown-heading-primary-top) var(--markdown-heading-primary-bottom);
+  color: var(--markdown-heading2, var(--foreground));
   font-size: 1.32em;
   font-weight: 600;
   line-height: 1.25;
