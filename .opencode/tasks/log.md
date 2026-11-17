@@ -1823,3 +1823,13 @@
 - **3c (коммит `b8cb30ca`):** «битая цепочка» отделена от прерывания: `recoverStreamingMessages` ставит `disabled:true` + `metadata.repaired='orphan_tool_calls'` (константы в `shared`) и **не** ставит `interrupted`; исторические `disabled+interrupted` с осиротевшими `tool_calls` ретро-переклассифицируются (реальный interrupt `toolCalls` не сохраняет); реальный `interrupted` и стриминговый черновик после рестарта не тронуты. UI — нейтральная подпись «Шаг не отправлен модели» (`chat.messageRepaired`/`Hint`, вне пузыря ради контраста 5.5:1, при обоих маркерах приоритет `interrupted`), `disabled`-затемнение/зачёркивание остаётся; `packages/ui/AGENTS.md` дополнен.
 - **Доки:** ADR-144 (`docs/arch_decisions/adr-144-atomic-session-writes.md`, ✅ Реализовано, статус в коде, остатки: FileStore межпроцессно не защищён; позиционные индексы плана сжатия/чекпоинтов не переживают вставку в начало истории); корневой `AGENTS.md` — инвариант 2 + строка триггеров; `packages/core/AGENTS.md` (инварианты + `SessionRepository`); `packages/storage-postgres/AGENTS.md` (`mutateMeta`/`mutateHistory` под advisory-локом, census).
 - **Известный несвязанный сбой:** `packages/backend/src/app/route-access-census.test.ts` — `POST /api/v2/timers/:id/stop` отсутствует в `DECLARED_PARAM_ROUTES` (появился в таймерах ADR-141); к задаче отношения не имеет, чинится отдельно.
+
+### Дополнение 2: второй отчёт (RUN2)
+
+- **R1 закрыт**: `update` по `fired`/`cancelled` → ошибка `timer_not_active` (тул) / `409 CONFLICT` (HTTP); «мёртвая» запись со свежим `fires_at` больше не создаётся.
+- **R2 закрыт**: `timer list`/`alarm list` получили `status: active|paused|fired|cancelled` (плюс прежний `include_stopped`), завершённые находятся по id из уведомления.
+- **R3**: точность оговорена в описаниях тулов/доках (десятки мс дрейфа под нагрузкой).
+- **R4**: защита от дублей реализована ещё в `3850dfdd` (`allow_duplicate`, default false; 409 `TIMER_DUPLICATE`); RUN2 её не воспроизводил — покрыто unit/route-тестами, на живом инстансе нужен перезапуск процесса под новый build.
+- **R5**: тексты ошибок repeat приведены к единому стилю (`invalid repeat — …`).
+- Проверки: core 11 979 passed (единственный fail — экологический `git-proxy-env`), ui 4 509, backend 1 011; typecheck/lint/build зелёные.
+- Коммит: `b01e4d09`.
