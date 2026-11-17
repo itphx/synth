@@ -254,6 +254,9 @@ export const useTimersStore = create<TimersState>()((set) => ({
       const now = new Date().toISOString()
       const status = statusFromEvent(type, payload, prev)
       const patch: Partial<Timer> = {
+        // `id` — часть записи (не только ключ реестра): карточка/история/
+        // действия используют `timer.id`, а live-событие приходит без тела.
+        id,
         kind: kindFromPayload(payload),
         status,
         sessionId: str(payload, 'session_id') ?? prev?.sessionId ?? '',

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import type { Schedule, Timer } from '@itphx/synth-shared/types'
 import { synthApi } from '@/lib/api/synthApi'
-import { useI18n } from '@/lib/i18n'
+import { useI18n, type I18nKey } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
@@ -59,10 +59,25 @@ type AutomationScope = 'session' | 'project' | 'none'
 const KIND_FILTERS: KindFilter[] = ['all', 'schedule', 'timer', 'alarm']
 const STATUS_FILTERS: StatusFilter[] = ['active', 'paused', 'error']
 
-/** Усечение длинного комментария. */
-function truncate(text: string, max = COMMENT_MAX): string {
-  if (text.length <= max) return text
-  return `${text.slice(0, max - 1)}…`
+/**
+ * Ключи подписей фильтра вида.
+ *
+ * Значения `KindFilter` — единственное число (`schedule`), а ключи i18n —
+ * множественное (`automation.filter.schedules`): раньше подставлялся
+ * `automation.filter.${filter}`, и чипы показывали сырые ключи.
+ */
+const KIND_FILTER_LABELS: Record<KindFilter, I18nKey> = {
+  all: 'automation.filter.all',
+  schedule: 'automation.filter.schedules',
+  timer: 'automation.filter.timers',
+  alarm: 'automation.filter.alarms',
+}
+
+/** Усечение длинного комментария (неполная запись из live-события — пустая строка). */
+function truncate(text: string | undefined, max = COMMENT_MAX): string {
+  const value = text ?? ''
+  if (value.length <= max) return value
+  return `${value.slice(0, max - 1)}…`
 }
 
 /**
@@ -286,13 +301,16 @@ export const AutomationTab: React.FC = () => {
   /** Триггер таймера/будильника — человекочитаемая строка. */
   const timerTriggerLabel = useCallback(
     (timer: Timer): string => {
+      // Запись из live-события (`timer.created`/`fired`) приходит **без**
+      // `repeat` и `comment` (пользовательский текст в события не попадает),
+      // поэтому повтор может быть ещё неизвестен до ближайшего опроса.
       const repeat = timer.repeat
-      if (repeat.mode === 'every') {
+      if (repeat?.mode === 'every') {
         return t('automation.trigger.everyMin', {
           minutes: String(Math.max(1, Math.round(repeat.everySec / 60))),
         })
       }
-      if (repeat.mode === 'daily') {
+      if (repeat?.mode === 'daily') {
         return t('automation.trigger.dailyAt', { time: repeat.time })
       }
       if (timer.kind === 'alarm') {
@@ -428,7 +446,7 @@ export const AutomationTab: React.FC = () => {
     async (timer: Timer) => {
       const ok = await confirm({
         title: t('automation.deleteTitle'),
-        message: t('automation.deleteConfirm', { name: timer.name || timer.comment }),
+        message: t('automation.deleteConfirm', { name: timer.name || timer.comment || timer.id }),
         confirmLabel: t('common.delete'),
         variant: 'danger',
         icon: 'delete-bin',
@@ -572,14 +590,15 @@ export const AutomationTab: React.FC = () => {
         testId="automation-section-schedule"
         actions={
           <Button
-            variant="outline-muted"
+            variant="ghost"
             size="icon"
+            className="size-6 shrink-0"
             onClick={() => setScheduleDialog({ open: true, schedule: null, draft: null })}
             title={t('automation.action.addSchedule')}
             aria-label={t('automation.action.addSchedule')}
             data-testid="automation-add-schedule"
           >
-            <Icon name="add" className="size-4" />
+            <Icon name="add" className="size-3.5" />
           </Button>
         }
       />
@@ -649,14 +668,15 @@ export const AutomationTab: React.FC = () => {
         testId="automation-section-timer"
         actions={
           <Button
-            variant="outline-muted"
+            variant="ghost"
             size="icon"
+            className="size-6 shrink-0"
             onClick={() => setTimerDialog({ open: true, kind: 'timer', timer: null })}
             title={t('automation.action.addTimer')}
             aria-label={t('automation.action.addTimer')}
             data-testid="automation-add-timer"
           >
-            <Icon name="add" className="size-4" />
+            <Icon name="add" className="size-3.5" />
           </Button>
         }
       />
@@ -696,11 +716,11 @@ export const AutomationTab: React.FC = () => {
                 key={timer.id}
                 testId={`automation-item-${timer.id}`}
                 icon="time"
-                name={timer.name || truncate(timer.comment, 60)}
+                name={timer.name || truncate(timer.comment ?? timer.id, 60)}
                 statusKey={timer.status}
                 statusLabel={t(`automation.status.${timer.status}`)}
                 fields={fields}
-                {...(timer.name ? { comment: truncate(timer.comment) } : {})}
+                {...(timer.name && timer.comment ? { comment: truncate(timer.comment) } : {})}
                 {...(timer.lastError ? { error: timer.lastError } : {})}
                 actions={timerActions(timer)}
               >
@@ -727,14 +747,15 @@ export const AutomationTab: React.FC = () => {
         testId="automation-section-alarm"
         actions={
           <Button
-            variant="outline-muted"
+            variant="ghost"
             size="icon"
+            className="size-6 shrink-0"
             onClick={() => setTimerDialog({ open: true, kind: 'alarm', timer: null })}
             title={t('automation.action.addAlarm')}
             aria-label={t('automation.action.addAlarm')}
             data-testid="automation-add-alarm"
           >
-            <Icon name="add" className="size-4" />
+            <Icon name="add" className="size-3.5" />
           </Button>
         }
       />
@@ -774,11 +795,11 @@ export const AutomationTab: React.FC = () => {
                 key={timer.id}
                 testId={`automation-item-${timer.id}`}
                 icon="alarm"
-                name={timer.name || truncate(timer.comment, 60)}
+                name={timer.name || truncate(timer.comment ?? timer.id, 60)}
                 statusKey={timer.status}
                 statusLabel={t(`automation.status.${timer.status}`)}
                 fields={fields}
-                {...(timer.name ? { comment: truncate(timer.comment) } : {})}
+                {...(timer.name && timer.comment ? { comment: truncate(timer.comment) } : {})}
                 {...(timer.lastError ? { error: timer.lastError } : {})}
                 actions={timerActions(timer)}
               >
@@ -816,7 +837,7 @@ export const AutomationTab: React.FC = () => {
                 onClick={() => setKindFilter(filter)}
                 data-testid={`automation-filter-${filter}`}
               >
-                {t(`automation.filter.${filter}`)}
+                {t(KIND_FILTER_LABELS[filter])}
               </Button>
             ))}
           </div>

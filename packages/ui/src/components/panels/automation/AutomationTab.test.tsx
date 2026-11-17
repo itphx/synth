@@ -241,6 +241,36 @@ describe('AutomationTab — секции и счётчики', () => {
     expect(query(container, 'automation-section-alarm')).not.toBeNull()
   })
 
+  it('подписи фильтров локализованы (нет сырых ключей)', async () => {
+    const container = await renderTab()
+
+    expect(query(container, 'automation-filter-all')?.textContent).toBe('All')
+    expect(query(container, 'automation-filter-schedule')?.textContent).toBe('Schedules')
+    expect(query(container, 'automation-filter-timer')?.textContent).toBe('Timers')
+    expect(query(container, 'automation-filter-alarm')?.textContent).toBe('Alarms')
+  })
+
+  // Регресс: `timer.created` приходит во время активного хода **без** `repeat`
+  // и `comment` (пользовательский текст в live-события не попадает). Панель
+  // обязана переживать такую запись до ближайшего опроса, иначе React падал
+  // и вкладка оставалась пустой, пока идёт ход.
+  it('запись из timer.created без repeat/comment не ломает панель', async () => {
+    useTimersStore.getState().applyEvent('timer.created', {
+      timer_id: 'tmr_live',
+      kind: 'timer',
+      session_id: 's1',
+      project_id: 'p1',
+      status: 'active',
+      fires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+    })
+
+    const container = await renderTab()
+
+    const card = query(container, 'automation-item-tmr_live')
+    expect(card).not.toBeNull()
+    expect(card!.textContent).toContain('In 15 min')
+  })
+
   it('счётчики секций — ICU-плараль по числу записей', async () => {
     mocks.listTimers.mockResolvedValue(timersPage([timer(), timer({ id: 'tmr_2', kind: 'alarm' })]))
 
