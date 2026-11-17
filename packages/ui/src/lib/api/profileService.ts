@@ -58,6 +58,7 @@ export const profileService = {
         uiScaleDesktop: null,
         chatViewMode: null,
         chatDensity: null,
+        userMessageMarkdown: null,
         chatScaleMobile: null,
         chatScaleDesktop: null,
       }
@@ -88,6 +89,12 @@ export const profileService = {
     }
     if (prefs.chatDensity === 'normal' || prefs.chatDensity === 'compact') {
       useUIStore.getState().applyPersonalChatDisplay({ density: prefs.chatDensity })
+    }
+    // Рендер сообщений пользователя: тот же приоритет, что у вида/плотности.
+    if (prefs.userMessageMarkdown === 'markdown' || prefs.userMessageMarkdown === 'plain') {
+      useUIStore.getState().applyPersonalChatDisplay({
+        userMessageMarkdown: prefs.userMessageMarkdown,
+      })
     }
     if (typeof prefs.chatScale === 'number' && Number.isFinite(prefs.chatScale)) {
       if (applyPersonalChatScale(prefs.chatScale)) {
@@ -143,6 +150,11 @@ export const profileService = {
   /** Личная плотность ленты чата (managed, best-effort). */
   async syncChatDensityToProfile(density: 'normal' | 'compact'): Promise<void> {
     await this.syncToProfile('chatDensity', density)
+  },
+
+  /** Рендер сообщений пользователя: markdown или текст (managed, best-effort). */
+  async syncUserMessageMarkdownToProfile(mode: 'markdown' | 'plain'): Promise<void> {
+    await this.syncToProfile('userMessageMarkdown', mode)
   },
 
   /** Личный масштаб области чата (managed, best-effort). */

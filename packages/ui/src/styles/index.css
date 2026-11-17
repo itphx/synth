@@ -1124,6 +1124,12 @@ html.pointer-coarse .markdown-content .md-code-download {
   white-space: break-spaces;
 }
 
+/* `@`-упоминание агента: цвет подставляется из реестра агентов (JS, инлайном),
+   здесь только начертание — размер шрифта наследуется от контейнера. */
+.markdown-content .md-mention {
+  font-weight: 500;
+}
+
 .markdown-content .md-table-wrap {
   max-width: 100%;
   margin: var(--markdown-table-spacing, 0.9rem) 0;

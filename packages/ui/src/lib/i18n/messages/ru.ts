@@ -2609,6 +2609,11 @@ export const dict = {
   'chatSettings.viewModeFeed': 'Лента',
   'chatSettings.viewModeDescription':
     'Лента показывает ответы агента плоским текстом без пузырей; реплики пользователя остаются выделенными.',
+  'chatSettings.userMessageMarkdown': 'Разметка в моих сообщениях',
+  'chatSettings.userMessageMarkdownDescription':
+    'Как показывать ваши сообщения: разбирать их как Markdown или показывать текст как набран.',
+  'chatSettings.userMessageMarkdownOn': 'Markdown',
+  'chatSettings.userMessageMarkdownOff': 'Текст',
   'chatSettings.intermediateTextDisplay': 'Промежуточные ответы',
   'chatSettings.intermediateTextInline': 'Между блоками',
   'chatSettings.intermediateTextBottom': 'Снизу',

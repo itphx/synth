@@ -150,6 +150,7 @@ function DefaultsSync() {
       useUIStore.getState().setServerChatDisplayDefaults({
         viewMode: defaults.chatViewMode ?? null,
         density: defaults.chatDensity ?? null,
+        userMessageMarkdown: defaults.userMessageMarkdown ?? null,
       })
     }
     apply()

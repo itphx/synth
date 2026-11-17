@@ -29,6 +29,7 @@ const profileMock = vi.hoisted(() => ({
   syncChatDensityToProfile: vi.fn(),
   syncChatScaleToProfile: vi.fn(),
   syncIntermediateTextDisplayToProfile: vi.fn(),
+  syncUserMessageMarkdownToProfile: vi.fn(),
 }))
 
 vi.mock('@/lib/api/profileService', () => ({ profileService: profileMock }))
@@ -86,6 +87,7 @@ beforeEach(() => {
     intermediateTextDisplay: 'inline',
     chatDensity: 'normal',
     chatViewMode: 'detailed',
+    userMessageMarkdown: 'markdown',
     chatScale: CHAT_SCALE_DEFAULT,
   })
   localStorage.removeItem(CHAT_SCALE_STORAGE_KEY)
@@ -296,6 +298,56 @@ describe('ChatSettings — миграция на Settings UI Kit (ADR-072)', () 
 
     expect(radioByText(container, 'Detailed').getAttribute('aria-checked')).toBe('true')
     expect(useUIStore.getState().chatViewMode).toBe('detailed')
+  })
+})
+
+/**
+ * Рендер сообщений пользователя: секция `chat-user-markdown`, переключатель
+ * Markdown/Текст, Save → стор + синх в профиль.
+ */
+describe('ChatSettings — разметка в моих сообщениях', () => {
+  it('секция chat-user-markdown есть, в ней переключатель Markdown/Текст', async () => {
+    const container = await renderSettings()
+
+    const section = container.querySelector('[data-settings-section="chat-user-markdown"]')
+    expect(section).not.toBeNull()
+    expect(section!.textContent).toContain('Formatting in my messages')
+    expect(radioByText(container, 'Markdown').getAttribute('aria-checked')).toBe('true')
+    expect(radioByText(container, 'Text').getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('переключение меняет черновик, Save пишет в стор и синхит профиль', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Text').click()
+    })
+
+    expect(radioByText(container, 'Text').getAttribute('aria-checked')).toBe('true')
+    // До Save стор не тронут.
+    expect(useUIStore.getState().userMessageMarkdown).toBe('markdown')
+    expect(profileMock.syncUserMessageMarkdownToProfile).not.toHaveBeenCalled()
+
+    await act(async () => {
+      byTestId(container, 'chat-save')!.click()
+    })
+
+    expect(useUIStore.getState().userMessageMarkdown).toBe('plain')
+    expect(profileMock.syncUserMessageMarkdownToProfile).toHaveBeenCalledWith('plain')
+  })
+
+  it('Cancel не пишет в стор', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      radioByText(container, 'Text').click()
+    })
+    await act(async () => {
+      byTestId(container, 'chat-cancel')!.click()
+    })
+
+    expect(radioByText(container, 'Markdown').getAttribute('aria-checked')).toBe('true')
+    expect(useUIStore.getState().userMessageMarkdown).toBe('markdown')
   })
 })
 

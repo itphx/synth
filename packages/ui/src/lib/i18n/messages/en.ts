@@ -2630,6 +2630,11 @@ export const dict = {
   'chatSettings.viewModeFeed': 'Feed',
   'chatSettings.viewModeDescription':
     'Feed shows agent answers as flat text without bubbles; user messages stay highlighted.',
+  'chatSettings.userMessageMarkdown': 'Formatting in my messages',
+  'chatSettings.userMessageMarkdownDescription':
+    'How your messages are shown: parsed as Markdown, or as plain text exactly as typed.',
+  'chatSettings.userMessageMarkdownOn': 'Markdown',
+  'chatSettings.userMessageMarkdownOff': 'Text',
   'chatSettings.intermediateTextDisplay': 'Intermediate responses',
   'chatSettings.intermediateTextInline': 'Between blocks',
   'chatSettings.intermediateTextBottom': 'At bottom',

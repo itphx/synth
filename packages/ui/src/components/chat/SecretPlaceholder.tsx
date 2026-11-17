@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { cn, resolveColor } from '@/lib/utils'
 import { synthApi, type AgentInfo } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
-import { MarkdownContent } from './MarkdownContent'
+import { MarkdownContent, MENTION_TOKEN_REGEX } from './MarkdownContent'
 
 /**
  * Плейсхолдер секрета LLM Gateway (ADR-036): ⟦SYNTH_SECRET_N⟧.
@@ -94,6 +94,10 @@ interface SecretMarkdownProps {
   className?: string
   /** Идёт стриминг ответа — markdown парсится отложенно (см. `MarkdownContent`). */
   streaming?: boolean
+  /** Реестр агентов — для подсветки `@`-упоминаний в ответе. */
+  agents?: AgentInfo[]
+  /** Подсвечивать `@`-упоминания известных агентов цветом агента. */
+  highlightMentions?: boolean
 }
 
 /** Базовые классы inline-маркера секрета в markdown (наследует шрифт от .markdown-content). */
@@ -126,6 +130,48 @@ export function replaceSecretsInHtml(
 }
 
 /**
+ * Клик по inline-маркеру секрета в готовом HTML: раскрыть значение или
+ * свернуть его обратно. Общий обработчик для `SecretMarkdown` и
+ * `SecretUserMarkdown` — разметка секретов у них одна и та же (ADR-036).
+ *
+ * Значение подставляется прямой правкой DOM (без React-состояния): маркеры
+ * живут внутри `dangerouslySetInnerHTML`, их нет в React-дереве.
+ */
+function useSecretRevealHandler(
+  secrets: Record<string, string> | undefined,
+  sessionId?: string,
+): (e: React.MouseEvent<HTMLDivElement>) => void {
+  const { t } = useI18n()
+  return useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const el = (e.target as HTMLElement).closest<HTMLElement>('.synth-secret-ph')
+      if (!el) return
+      const placeholder = el.getAttribute('data-ph')
+      if (!placeholder) return
+      const value = secrets?.[placeholder]
+      if (!value) return
+
+      const revealed = el.getAttribute('data-revealed') === '1'
+      if (!revealed) {
+        // Раскрытие: «Значение скрыто» → реальное значение (слот палитры, «янтарный»), аудит fire-and-forget.
+        el.textContent = value
+        el.setAttribute('data-revealed', '1')
+        el.className = SECRET_PH_REVEALED_CLASS
+        el.title = 'Скрыть значение'
+        synthApi.auditRevealed(sessionId, placeholder).catch(() => {})
+      } else {
+        // Сворачивание: значение → «Значение скрыто» (слот палитры, «фиолетовый»).
+        el.textContent = t('gateway.secret.hidden')
+        el.setAttribute('data-revealed', '0')
+        el.className = SECRET_PH_HIDDEN_CLASS
+        el.title = `Показать значение: ${placeholder}`
+      }
+    },
+    [secrets, sessionId, t],
+  )
+}
+
+/**
  * Markdown-контент с плейсхолдерами секретов (ADR-036).
  * Рендерится ОДИН раз через MarkdownContent: плейсхолдеры заменяются на inline-маркеры
  * `<span class="synth-secret-ph" data-ph="…">` ПОСЛЕ marked.parser и ДО DOMPurify.sanitize,
@@ -133,17 +179,20 @@ export function replaceSecretsInHtml(
  * и внутри fenced/inline code (span становится настоящим элементом).
  * Клик по маркеру раскрывает значение через прямую DOM-манипуляцию (без React-состояния).
  */
-export function SecretMarkdown({ content, secrets, sessionId, className = '', streaming = false }: SecretMarkdownProps) {
+export function SecretMarkdown({
+  content,
+  secrets,
+  sessionId,
+  className = '',
+  streaming = false,
+  agents,
+  highlightMentions = false,
+}: SecretMarkdownProps) {
   const { t } = useI18n()
   // SECRET_PLACEHOLDER_REGEX — global regex c lastIndex: сбросить и до test, и до replace.
   SECRET_PLACEHOLDER_REGEX.lastIndex = 0
   const hasPlaceholder = SECRET_PLACEHOLDER_REGEX.test(content)
   SECRET_PLACEHOLDER_REGEX.lastIndex = 0
-
-  // Нет плейсхолдеров — обычный markdown без обвязки (минимальные изменения).
-  if (!hasPlaceholder) {
-    return <MarkdownContent content={content} className={className} streaming={streaming} />
-  }
 
   const hiddenText = t('gateway.secret.hidden')
 
@@ -152,34 +201,31 @@ export function SecretMarkdown({ content, secrets, sessionId, className = '', st
     [secrets, hiddenText],
   )
 
-  const handleSecretClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = (e.target as HTMLElement).closest<HTMLElement>('.synth-secret-ph')
-    if (!el) return
-    const placeholder = el.getAttribute('data-ph')
-    if (!placeholder) return
-    const value = secrets?.[placeholder]
-    if (!value) return
+  const handleSecretClick = useSecretRevealHandler(secrets, sessionId)
 
-    const revealed = el.getAttribute('data-revealed') === '1'
-    if (!revealed) {
-      // Раскрытие: «Значение скрыто» → реальное значение (слот палитры, «янтарный»), аудит fire-and-forget.
-      el.textContent = value
-      el.setAttribute('data-revealed', '1')
-      el.className = SECRET_PH_REVEALED_CLASS
-      el.title = 'Скрыть значение'
-      synthApi.auditRevealed(sessionId, placeholder).catch(() => {})
-    } else {
-      // Сворачивание: значение → «Значение скрыто» (слот палитры, «фиолетовый»).
-      el.textContent = t('gateway.secret.hidden')
-      el.setAttribute('data-revealed', '0')
-      el.className = SECRET_PH_HIDDEN_CLASS
-      el.title = `Показать значение: ${placeholder}`
-    }
+  // Нет плейсхолдеров — обычный markdown без обвязки (минимальные изменения).
+  if (!hasPlaceholder) {
+    return (
+      <MarkdownContent
+        content={content}
+        className={className}
+        streaming={streaming}
+        agents={agents}
+        highlightMentions={highlightMentions}
+      />
+    )
   }
 
   return (
     <div onClick={handleSecretClick}>
-      <MarkdownContent content={content} transformHtml={transformHtml} className={className} streaming={streaming} />
+      <MarkdownContent
+        content={content}
+        transformHtml={transformHtml}
+        className={className}
+        streaming={streaming}
+        agents={agents}
+        highlightMentions={highlightMentions}
+      />
     </div>
   )
 }
@@ -192,8 +238,13 @@ interface SecretPlainTextProps {
   agents?: AgentInfo[]
 }
 
-/** Токен упоминания агента в тексте: `@<agentId>`. */
-export const MENTION_REGEX = /@(\w+)/g
+/**
+ * Токен упоминания агента в тексте: `@<agentId>`.
+ * id может содержать дефис (`security-auditor`) — поэтому класс символов шире
+ * `\w`. Регулярка общая с markdown-рендером (`MarkdownContent`), чтобы граница
+ * упоминания не расходилась в plain-тексте и в разметке.
+ */
+export const MENTION_REGEX = MENTION_TOKEN_REGEX
 
 export interface MentionSegment {
   type: 'text' | 'mention'
@@ -268,5 +319,68 @@ export function SecretPlainText({ content, secrets, sessionId, agents = [] }: Se
         ),
       )}
     </p>
+  )
+}
+
+interface SecretUserMarkdownProps {
+  content: string
+  secrets?: Record<string, string>
+  sessionId?: string
+  /** Реестр агентов — для подсветки `@`-упоминаний. */
+  agents?: AgentInfo[]
+  /** `markdown` — разметка (по умолчанию), `plain` — текст как набран. */
+  mode: 'markdown' | 'plain'
+}
+
+/**
+ * Текст сообщения пользователя: markdown-разметка или обычный текст.
+ *
+ * `plain` — прежнее поведение (`SecretPlainText`): текст как набран,
+ * переносы сохраняются, `@`-упоминания подсвечены цветом агента.
+ *
+ * `markdown` — тот же рендер, что у ответа агента (`MarkdownContent`):
+ *  - `escapeRawHtml` — сырой HTML текста остаётся **текстом** (человек видит
+ *    ровно то, что набрал); fenced-код и инлайн-код не затрагиваются;
+ *  - `highlightMentions` — `@<id>` известных агентов подсвечиваются цветом
+ *    агента (тот же контракт, что у ответа агента: «везде»);
+ *  - плейсхолдеры секретов (ADR-036) заменяются на inline-маркеры тем же
+ *    `replaceSecretsInHtml`, что и в `SecretMarkdown`, и раскрываются кликом.
+ *
+ * Хуки вызываются **всегда** (без раннего `return`): режим переключается
+ * пользователем прямо в открытом чате, порядок хуков меняться не должен.
+ */
+export function SecretUserMarkdown({
+  content,
+  secrets,
+  sessionId,
+  agents = [],
+  mode,
+}: SecretUserMarkdownProps) {
+  const { t } = useI18n()
+  const hiddenText = t('gateway.secret.hidden')
+
+  const transformHtml = useCallback(
+    (html: string): string => replaceSecretsInHtml(html, secrets, hiddenText),
+    [secrets, hiddenText],
+  )
+
+  const handleSecretClick = useSecretRevealHandler(secrets, sessionId)
+
+  if (mode === 'plain') {
+    return (
+      <SecretPlainText content={content} secrets={secrets} sessionId={sessionId} agents={agents} />
+    )
+  }
+
+  return (
+    <div onClick={handleSecretClick}>
+      <MarkdownContent
+        content={content}
+        transformHtml={transformHtml}
+        escapeRawHtml
+        highlightMentions
+        agents={agents}
+      />
+    </div>
   )
 }

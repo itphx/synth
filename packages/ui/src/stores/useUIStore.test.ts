@@ -471,6 +471,63 @@ describe('useUIStore.chatViewMode', () => {
 })
 
 /**
+ * Рендер сообщений пользователя: пользовательская настройка, персистится;
+ * по умолчанию — markdown-разметка, неизвестное значение при восстановлении —
+ * тоже `markdown`.
+ */
+describe('useUIStore.userMessageMarkdown', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ userMessageMarkdown: 'markdown' })
+  })
+
+  async function rehydrateWith(userMessageMarkdown: unknown): Promise<void> {
+    storage.setItem(
+      'synth-ui-settings',
+      JSON.stringify({ state: { userMessageMarkdown }, version: 0 }),
+    )
+    await useUIStore.persist.rehydrate()
+  }
+
+  it('значение по умолчанию — markdown', () => {
+    expect(useUIStore.getState().userMessageMarkdown).toBe('markdown')
+  })
+
+  it('экшен переключает режим', () => {
+    useUIStore.getState().setUserMessageMarkdown('plain')
+    expect(useUIStore.getState().userMessageMarkdown).toBe('plain')
+  })
+
+  it('попадает в partialize (персистится)', () => {
+    useUIStore.setState({ userMessageMarkdown: 'plain' })
+    const partialize = useUIStore.persist.getOptions().partialize
+    expect(partialize).toBeTypeOf('function')
+    const persisted = partialize!(useUIStore.getState()) as Record<string, unknown>
+    expect(persisted.userMessageMarkdown).toBe('plain')
+  })
+
+  it('восстанавливает сохранённое значение plain', async () => {
+    await rehydrateWith('plain')
+    expect(useUIStore.getState().userMessageMarkdown).toBe('plain')
+  })
+
+  it('неизвестное значение сбрасывается в markdown', async () => {
+    await rehydrateWith('rich-text')
+    expect(useUIStore.getState().userMessageMarkdown).toBe('markdown')
+  })
+
+  it('отсутствующее значение — markdown', async () => {
+    await rehydrateWith(undefined)
+    expect(useUIStore.getState().userMessageMarkdown).toBe('markdown')
+  })
+
+  it('markdown восстанавливается как есть', async () => {
+    await rehydrateWith('markdown')
+    expect(useUIStore.getState().userMessageMarkdown).toBe('markdown')
+  })
+})
+
+/**
  * Ширина чтения markdown в просмотрщике файла: пользовательская настройка,
  * персистится; `full` восстанавливается только по явному значению, иначе
  * колонка (значение по умолчанию).

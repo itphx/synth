@@ -36,6 +36,8 @@ export interface UserPreferences {
   chatViewMode?: 'detailed' | 'feed' | null
   /** Плотность ленты чата (личный выбор в профиле / серверное умолчание). */
   chatDensity?: 'normal' | 'compact' | null
+  /** Рендер сообщений пользователя: markdown-разметка или текст как набран. */
+  userMessageMarkdown?: 'markdown' | 'plain' | null
   /** Личный масштаб области чата (одно значение; клампится по устройству). */
   chatScale?: number | null
   /** Серверное умолчание масштаба области чата для мобильных. */

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useUIStore, type ChatDensity, type ChatViewMode } from "../../stores/useUIStore"
+import { useUIStore, type ChatDensity, type ChatViewMode, type UserMessageMarkdown } from "../../stores/useUIStore"
 import { useI18n } from "@/lib/i18n"
 import { profileService } from '@/lib/api/profileService'
 import { CHAT_SCALE_DEFAULT, applyChatScale, normalizeChatScale } from '@/lib/uiScale'
@@ -21,6 +21,8 @@ interface ChatSettingsDraft {
   chatViewMode: ChatViewMode
   intermediateTextDisplay: IntermediateTextDisplay
   chatDensity: ChatDensity
+  /** Рендер сообщений пользователя: markdown-разметка или текст как набран. */
+  userMessageMarkdown: UserMessageMarkdown
   /** Масштаб области чата (множитель поверх общего масштаба UI). */
   chatScale: number
 }
@@ -29,6 +31,7 @@ const CHAT_SETTINGS_DEFAULTS: ChatSettingsDraft = {
   chatViewMode: 'detailed',
   intermediateTextDisplay: 'inline',
   chatDensity: 'normal',
+  userMessageMarkdown: 'markdown',
   chatScale: CHAT_SCALE_DEFAULT,
 }
 
@@ -40,6 +43,8 @@ export const ChatSettings = () => {
   const setIntermediateTextDisplay = useUIStore((s) => s.setIntermediateTextDisplay)
   const chatDensity = useUIStore((s) => s.chatDensity)
   const setChatDensity = useUIStore((s) => s.setChatDensity)
+  const userMessageMarkdown = useUIStore((s) => s.userMessageMarkdown)
+  const setUserMessageMarkdown = useUIStore((s) => s.setUserMessageMarkdown)
   const chatScale = useUIStore((s) => s.chatScale)
   const setChatScale = useUIStore((s) => s.setChatScale)
 
@@ -57,9 +62,10 @@ export const ChatSettings = () => {
       chatViewMode: chatViewMode === 'feed' ? 'feed' : 'detailed',
       intermediateTextDisplay: intermediateTextDisplay === 'bottom' ? 'bottom' : 'inline',
       chatDensity: chatDensity === 'compact' ? 'compact' : 'normal',
+      userMessageMarkdown: userMessageMarkdown === 'plain' ? 'plain' : 'markdown',
       chatScale: normalizeChatScale(savedChatScale),
     }),
-    [chatViewMode, intermediateTextDisplay, chatDensity, savedChatScale],
+    [chatViewMode, intermediateTextDisplay, chatDensity, userMessageMarkdown, savedChatScale],
   )
 
   // ADR-072 (фидбек): без автосохранения — выбор меняет черновик, стор
@@ -72,10 +78,13 @@ export const ChatSettings = () => {
       const display: IntermediateTextDisplay =
         next.intermediateTextDisplay === 'bottom' ? 'bottom' : 'inline'
       const density: ChatDensity = next.chatDensity === 'compact' ? 'compact' : 'normal'
+      const markdownMode: UserMessageMarkdown =
+        next.userMessageMarkdown === 'plain' ? 'plain' : 'markdown'
       const scale = normalizeChatScale(next.chatScale)
       setChatViewMode(viewMode)
       setIntermediateTextDisplay(display)
       setChatDensity(density)
+      setUserMessageMarkdown(markdownMode)
       // `setChatScale` применяет `--chat-scale`, пишет localStorage и стор.
       setChatScale(scale)
       setSavedChatScale(scale)
@@ -85,6 +94,7 @@ export const ChatSettings = () => {
       void profileService.syncChatViewModeToProfile(viewMode)
       void profileService.syncChatDensityToProfile(density)
       void profileService.syncChatScaleToProfile(scale)
+      void profileService.syncUserMessageMarkdownToProfile(markdownMode)
       return { ...next, chatScale: scale }
     },
   })
@@ -101,6 +111,8 @@ export const ChatSettings = () => {
   const display: IntermediateTextDisplay =
     current.intermediateTextDisplay === 'bottom' ? 'bottom' : 'inline'
   const density: ChatDensity = current.chatDensity === 'compact' ? 'compact' : 'normal'
+  const markdownMode: UserMessageMarkdown =
+    current.userMessageMarkdown === 'plain' ? 'plain' : 'markdown'
 
   const handleChatScaleChange = (value: number) => {
     const scale = normalizeChatScale(value)
@@ -135,6 +147,10 @@ export const ChatSettings = () => {
     { value: 'normal', label: t('chatSettings.densityNormal') },
     { value: 'compact', label: t('chatSettings.densityCompact') },
   ]
+  const userMessageMarkdownOptions: SegmentedControlOption<UserMessageMarkdown>[] = [
+    { value: 'markdown', label: t('chatSettings.userMessageMarkdownOn') },
+    { value: 'plain', label: t('chatSettings.userMessageMarkdownOff') },
+  ]
 
   return (
     <SettingsPanel
@@ -153,6 +169,23 @@ export const ChatSettings = () => {
             options={viewModeOptions}
             onChange={(value) => draft.update({ chatViewMode: value })}
             ariaLabel={t('chatSettings.viewMode')}
+          />
+        </SettingsItem>
+      </SettingsSection>
+
+      {/* Рендер сообщений пользователя — сразу за видом ленты: это то же
+          «как показывать текст», только со стороны человека. */}
+      <SettingsSection
+        id="chat-user-markdown"
+        title={t('chatSettings.userMessageMarkdown')}
+        description={t('chatSettings.userMessageMarkdownDescription')}
+      >
+        <SettingsItem>
+          <SegmentedControl<UserMessageMarkdown>
+            value={markdownMode}
+            options={userMessageMarkdownOptions}
+            onChange={(value) => draft.update({ userMessageMarkdown: value })}
+            ariaLabel={t('chatSettings.userMessageMarkdown')}
           />
         </SettingsItem>
       </SettingsSection>

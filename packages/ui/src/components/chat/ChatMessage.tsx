@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils'
 import { Fragment, memo, useId } from 'react'
 import { MarkdownContent } from './MarkdownContent'
-import { SecretMarkdown, SecretPlainText } from './SecretPlaceholder'
+import { SecretMarkdown, SecretUserMarkdown } from './SecretPlaceholder'
 import { MessageHeader } from './MessageHeader'
 import { MessageActions } from './MessageActions'
 import { MessageStats, hasMessageStats } from './MessageStats'
@@ -311,6 +311,8 @@ function ChatMessageInner({
   const i18nMeta = message.metadata?.i18n
   // Реестр агентов — подсветка `@`-упоминаний в сообщениях пользователя.
   const agents = useAgentsStore((s) => s.agents)
+  // Как показывать сообщения пользователя: markdown-разметка или текст (настройка).
+  const userMessageMarkdown = useUIStore((s) => s.userMessageMarkdown)
   const activeTab = useUIStore((s) => s.centerTabs.find((t) => t.id === s.activeCenterTabId))
   // Сессия — из пропа (MessageList/ChatTab), фоллбек — активная вкладка:
   // от неё зависят URL вложений и подсветка плейсхолдеров секретов.
@@ -1431,7 +1433,13 @@ function ChatMessageInner({
 
           {displayContent && (
             isUser ? (
-              <SecretPlainText content={displayContent} secrets={secrets} sessionId={sessionId} agents={agents} />
+              <SecretUserMarkdown
+                content={displayContent}
+                secrets={secrets}
+                sessionId={sessionId}
+                agents={agents}
+                mode={userMessageMarkdown}
+              />
             ) : isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
               <SessionReferenceCard
                 sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}
@@ -1444,6 +1452,8 @@ function ChatMessageInner({
                 secrets={secrets}
                 sessionId={sessionId}
                 streaming={isLive}
+                agents={agents}
+                highlightMentions
               />
             )
           )}

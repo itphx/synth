@@ -51,6 +51,16 @@ export type ChatViewMode = 'detailed' | 'feed'
  */
 export type FileViewerWidth = 'column' | 'full'
 
+/**
+ * Как показывать сообщения пользователя в ленте.
+ *
+ * `markdown` — текст человека разбирается как markdown (по умолчанию):
+ * `**жирный**`, списки, блоки кода; сырой HTML показывается как текст.
+ * `plain` — текст как набран (прежнее поведение): без разметки, с сохранением
+ * переносов.
+ */
+export type UserMessageMarkdown = 'markdown' | 'plain'
+
 const LEFT_PANEL_MIN_WIDTH = 280
 const LEFT_PANEL_MAX_WIDTH = 500
 const RIGHT_PANEL_MIN_WIDTH = 320
@@ -140,7 +150,7 @@ export interface SettingsFocusRequest {
 export const UI_SETTINGS_STORAGE_KEY = 'synth-ui-settings'
 
 /** Поля режима отображения ленты, у которых бывает личный выбор пользователя. */
-export type ChatDisplayKey = 'chatViewMode' | 'chatDensity'
+export type ChatDisplayKey = 'chatViewMode' | 'chatDensity' | 'userMessageMarkdown'
 
 /**
  * Личный выбор режима отображения ленты, **зафиксированный до гидратации**
@@ -152,10 +162,15 @@ const persistedChatDisplay: Record<ChatDisplayKey, boolean> = readPersistedChatD
 const explicitChatDisplay: Record<ChatDisplayKey, boolean> = {
   chatViewMode: false,
   chatDensity: false,
+  userMessageMarkdown: false,
 }
 
 function readPersistedChatDisplay(): Record<ChatDisplayKey, boolean> {
-  const empty: Record<ChatDisplayKey, boolean> = { chatViewMode: false, chatDensity: false }
+  const empty: Record<ChatDisplayKey, boolean> = {
+    chatViewMode: false,
+    chatDensity: false,
+    userMessageMarkdown: false,
+  }
   if (typeof window === 'undefined') {
     return empty
   }
@@ -169,6 +184,7 @@ function readPersistedChatDisplay(): Record<ChatDisplayKey, boolean> {
     return {
       chatViewMode: state.chatViewMode !== undefined && state.chatViewMode !== null,
       chatDensity: state.chatDensity !== undefined && state.chatDensity !== null,
+      userMessageMarkdown: state.userMessageMarkdown !== undefined && state.userMessageMarkdown !== null,
     }
   } catch {
     return empty
@@ -328,6 +344,13 @@ interface UIStore {
   setChatViewMode: (mode: ChatViewMode) => void
 
   /**
+   * Рендер сообщений пользователя (персистится; см. `UserMessageMarkdown`).
+   * По умолчанию — `markdown`: текст человека разбирается как разметка.
+   */
+  userMessageMarkdown: UserMessageMarkdown
+  setUserMessageMarkdown: (mode: UserMessageMarkdown) => void
+
+  /**
    * Ширина чтения markdown в просмотрщике файла (персистится; см. `FileViewerWidth`).
    *
    * `column` — колонка `max-w-[108ch]` по центру панели, `full` — во всю ширину.
@@ -374,13 +397,18 @@ interface UIStore {
   setServerChatDisplayDefaults: (patch: {
     viewMode?: ChatViewMode | null
     density?: ChatDensity | null
+    userMessageMarkdown?: UserMessageMarkdown | null
   }) => void
 
   /**
    * Личные значения из профиля (managed): приоритетнее серверных умолчаний,
    * но не перекрывают локальный выбор пользователя.
    */
-  applyPersonalChatDisplay: (patch: { viewMode?: ChatViewMode; density?: ChatDensity }) => void
+  applyPersonalChatDisplay: (patch: {
+    viewMode?: ChatViewMode
+    density?: ChatDensity
+    userMessageMarkdown?: UserMessageMarkdown
+  }) => void
 
   /** ADR-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
    *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
@@ -735,6 +763,12 @@ export const useUIStore = create<UIStore>()(
         set({ chatViewMode: mode })
       },
 
+      userMessageMarkdown: 'markdown',
+      setUserMessageMarkdown: (mode) => {
+        explicitChatDisplay.userMessageMarkdown = true
+        set({ userMessageMarkdown: mode })
+      },
+
       fileViewerWidth: 'column',
       setFileViewerWidth: (width) => set({ fileViewerWidth: width }),
 
@@ -777,7 +811,7 @@ export const useUIStore = create<UIStore>()(
         set({ expandedChatGroup: expanded, revealedServiceGroups: revealed })
       },
 
-      setServerChatDisplayDefaults: ({ viewMode, density }) =>
+      setServerChatDisplayDefaults: ({ viewMode, density, userMessageMarkdown }) =>
         set(() => {
           const next: Partial<UIStore> = {}
           if (
@@ -792,10 +826,16 @@ export const useUIStore = create<UIStore>()(
           ) {
             next.chatDensity = density
           }
+          if (
+            (userMessageMarkdown === 'markdown' || userMessageMarkdown === 'plain') &&
+            !hasPersonalChatDisplay('userMessageMarkdown')
+          ) {
+            next.userMessageMarkdown = userMessageMarkdown
+          }
           return next
         }),
 
-      applyPersonalChatDisplay: ({ viewMode, density }) =>
+      applyPersonalChatDisplay: ({ viewMode, density, userMessageMarkdown }) =>
         set(() => {
           const next: Partial<UIStore> = {}
           if (viewMode && !hasPersonalChatDisplay('chatViewMode')) {
@@ -806,6 +846,13 @@ export const useUIStore = create<UIStore>()(
           if (density && !hasPersonalChatDisplay('chatDensity')) {
             next.chatDensity = density
             explicitChatDisplay.chatDensity = true
+          }
+          if (
+            (userMessageMarkdown === 'markdown' || userMessageMarkdown === 'plain') &&
+            !hasPersonalChatDisplay('userMessageMarkdown')
+          ) {
+            next.userMessageMarkdown = userMessageMarkdown
+            explicitChatDisplay.userMessageMarkdown = true
           }
           return next
         }),
@@ -829,6 +876,7 @@ export const useUIStore = create<UIStore>()(
         settingsShowAdvanced: state.settingsShowAdvanced,
         chatDensity: state.chatDensity,
         chatViewMode: state.chatViewMode,
+        userMessageMarkdown: state.userMessageMarkdown,
         fileViewerWidth: state.fileViewerWidth,
         expandedChatGroup: state.expandedChatGroup,
         revealedServiceGroups: state.revealedServiceGroups,
@@ -860,6 +908,9 @@ export const useUIStore = create<UIStore>()(
           chatDensity: p?.chatDensity === 'compact' ? 'compact' : 'normal',
           // `feed` — только явное сохранённое значение, иначе подробный вид.
           chatViewMode: p?.chatViewMode === 'feed' ? 'feed' : 'detailed',
+          // Рендер сообщений пользователя: только явное сохранённое значение,
+          // иначе разметка markdown (значение по умолчанию).
+          userMessageMarkdown: p?.userMessageMarkdown === 'plain' ? 'plain' : 'markdown',
           // Ширина чтения в просмотрщике: `full` — только явное сохранённое
           // значение, иначе колонка (значение по умолчанию).
           fileViewerWidth: p?.fileViewerWidth === 'full' ? 'full' : 'column',

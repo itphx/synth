@@ -760,6 +760,13 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     keywords: ['лента', 'вид', 'feed', 'view', 'сообщения'],
   },
   {
+    id: 'chat.userMessageMarkdown',
+    categoryId: 'chat',
+    sectionId: 'chat-user-markdown',
+    labelKey: 'chatSettings.userMessageMarkdown',
+    keywords: ['markdown', 'разметка', 'текст', 'plain', 'сообщения'],
+  },
+  {
     id: 'chat.intermediateTextDisplay',
     categoryId: 'chat',
     sectionId: 'chat-intermediate-text',

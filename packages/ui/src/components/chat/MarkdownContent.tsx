@@ -7,12 +7,28 @@ import { codeFileName } from '@/lib/markdown/codeFile'
 import { getThemeEpoch, highlightCode, subscribeThemeChange } from '@/lib/markdown/highlight'
 import { rewriteRelativeAssets } from '@/lib/markdown/relativeAssets'
 import { createSlugger } from '@/lib/markdown/slug'
+import { resolveColor } from '@/lib/utils'
+import type { AgentInfo } from '@/lib/api/synthApi'
 
 interface MarkdownContentProps {
   content: string
   className?: string
   /** Трансформация HTML между marked.parser и DOMPurify.sanitize (например, подмена плейсхолдеров). */
   transformHtml?: (html: string) => string
+  /**
+   * Сырой HTML в тексте показывать **как текст** (экранировать), а не разбирать
+   * в DOM. Нужен для сообщений человека: его текст должен читаться ровно так,
+   * как он его набрал. Fenced-код и инлайн-код — другие типы токенов, поэтому
+   * не затрагиваются (`<b>` внутри fence остаётся как набран).
+   */
+  escapeRawHtml?: boolean
+  /**
+   * Реестр агентов — источник цвета для `@`-упоминаний.
+   * Пустой реестр → упоминания не подсвечиваются (обычный текст).
+   */
+  agents?: AgentInfo[]
+  /** Подсвечивать `@`-упоминания известных агентов цветом агента. */
+  highlightMentions?: boolean
   /**
    * Резолвер **относительного** `src`/`href`/`srcset` (`img.png`, `docs/a.md`)
    * в рабочий URL. Применяется пост-обработкой готового HTML
@@ -60,6 +76,15 @@ const HTML_ESCAPES: Record<string, string> = {
   '"': '&quot;',
   "'": '&#39;',
 }
+
+/**
+ * Токен упоминания агента в тексте: `@<agentId>`.
+ *
+ * id агента может содержать дефис (`security-auditor`), поэтому класс символов
+ * шире `\w`. Регулярка **общая** для markdown-рендера и plain-текста
+ * (`SecretPlaceholder`), чтобы граница упоминания не расходилась в двух местах.
+ */
+export const MENTION_TOKEN_REGEX = /@([A-Za-z0-9_-]+)/g
 
 /** Экранирование текста кода/языка перед вставкой в HTML (сырой HTML не проходит). */
 function escapeHtml(text: string): string {
@@ -109,8 +134,14 @@ function findAnchorTarget(container: HTMLElement, id: string): HTMLElement | nul
  *
  * Рендерер создаётся **на каждый разбор**: `createSlugger()` внутри держит
  * счётчик дубликатов заголовков, и он обязан сбрасываться на документ.
+ *
+ * `escapeRawHtml` — для сообщений человека: html-токен (и блочный, и
+ * инлайновый) отдаётся **экранированным текстом**, чтобы разметка не
+ * превращалась в DOM-элементы. Fenced-код и инлайн-код — другие типы
+ * токенов (`code`/`codespan`), поэтому `<b>` внутри fence остаётся как
+ * набран и не экранируется повторно.
  */
-function createMarkdownRenderer(): Renderer {
+function createMarkdownRenderer(escapeRawHtml = false): Renderer {
   const renderer = new Renderer()
   const renderTable = renderer.table.bind(renderer)
   const renderLink = renderer.link.bind(renderer)
@@ -173,6 +204,11 @@ function createMarkdownRenderer(): Renderer {
 
   renderer.codespan = ({ text }) => `<code class="md-inline-code">${escapeHtml(text)}</code>`
 
+  if (escapeRawHtml) {
+    // Сырой HTML текста человека — как текст: экранируем содержимое токена.
+    renderer.html = ({ text }) => escapeHtml(text)
+  }
+
   return renderer
 }
 
@@ -208,6 +244,9 @@ export function MarkdownContent({
   content,
   className = '',
   transformHtml,
+  escapeRawHtml = false,
+  agents,
+  highlightMentions = false,
   resolveAsset,
   streaming = false,
 }: MarkdownContentProps) {
@@ -229,7 +268,7 @@ export function MarkdownContent({
       const tokens = marked.lexer(source)
       // Рендерер — на каждый разбор: счётчик дубликатов заголовков (slugger)
       // должен начинаться с нуля для каждого документа.
-      let raw = marked.parser(tokens, { renderer: createMarkdownRenderer() })
+      let raw = marked.parser(tokens, { renderer: createMarkdownRenderer(escapeRawHtml) })
       if (transformHtml) raw = transformHtml(raw)
       // Относительные `src`/`href`/`srcset` (и markdown, и сырой HTML) —
       // до санитайзера: `data-file-path`/`srcset` должны попасть в allowlist.
@@ -242,7 +281,7 @@ export function MarkdownContent({
       console.warn('[MarkdownContent] marked failed, falling back to plain text:', e)
       return DOMPurify.sanitize(source)
     }
-  }, [source, transformHtml, dictionary, resolveAsset])
+  }, [source, transformHtml, dictionary, resolveAsset, escapeRawHtml])
 
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
   useEffect(() => {
@@ -341,6 +380,82 @@ export function MarkdownContent({
       })
     }
   }, [html, streaming, themeEpoch])
+
+  /**
+   * Подсветка `@`-упоминаний агентов цветом агента — тем же способом, что и
+   * в plain-тексте сообщения человека (`SecretPlainText`), но уже в разобранном
+   * markdown: обходим текстовые узлы готового DOM и оборачиваем известные
+   * `@<id>` в `<span class="md-mention" data-mention="<id>">`.
+   *
+   * Почему пост-проход, а не разбор markdown: цвет берётся из реестра агентов,
+   * который приходит из стора и меняется без смены текста сообщения.
+   *
+   * Инварианты:
+   *  - код и ссылки не трогаем (`pre`/`code`/`a`) — там `@` не упоминание;
+   *  - повторный прогон идемпотентен (в `.md-mention` не заходим);
+   *  - текст и переносы сохраняются: заменяем текстовый узел, а не весь блок;
+   *  - пустой реестр агентов → ничего не подсвечиваем.
+   *
+   * С эффектом подсветки кода (shiki) не конфликтует: `code` исключён, а
+   * shiki перезаписывает только содержимое блока кода.
+   */
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !highlightMentions) return
+    const known = agents ?? []
+    // Реестр пуст — упоминания не подсвечиваем (обычный текст).
+    if (known.length === 0) return
+    const byId = new Map(known.map((agent) => [agent.id, agent]))
+
+    // Узлы собираем заранее: во время обхода DOM меняется (текстовый узел
+    // заменяется фрагментом), и «живой» walker по изменённому дереву врёт.
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+    const nodes: Text[] = []
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      nodes.push(node as Text)
+    }
+
+    for (const node of nodes) {
+      const parent = node.parentElement
+      if (!parent) continue
+      // Код/ссылки/служебные теги — не упоминания.
+      if (parent.closest('pre, code, a, script, style')) continue
+      // Идемпотентность: уже обёрнутое упоминание не трогаем.
+      if (parent.closest('.md-mention')) continue
+      const text = node.data
+      if (!text.includes('@')) continue
+
+      MENTION_TOKEN_REGEX.lastIndex = 0
+      const hits: Array<{ id: string; index: number; length: number }> = []
+      let match: RegExpExecArray | null
+      while ((match = MENTION_TOKEN_REGEX.exec(text)) !== null) {
+        if (!byId.has(match[1])) continue
+        hits.push({ id: match[1], index: match.index, length: match[0].length })
+      }
+      if (hits.length === 0) continue
+
+      const fragment = document.createDocumentFragment()
+      let lastIndex = 0
+      for (const hit of hits) {
+        if (hit.index > lastIndex) {
+          fragment.appendChild(document.createTextNode(text.slice(lastIndex, hit.index)))
+        }
+        const agent = byId.get(hit.id)!
+        const span = document.createElement('span')
+        span.className = 'md-mention'
+        span.setAttribute('data-mention', agent.id)
+        const color = resolveColor(agent.color)
+        if (color) span.style.color = color
+        span.textContent = text.slice(hit.index, hit.index + hit.length)
+        fragment.appendChild(span)
+        lastIndex = hit.index + hit.length
+      }
+      if (lastIndex < text.length) {
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex)))
+      }
+      parent.replaceChild(fragment, node)
+    }
+  }, [html, highlightMentions, agents])
 
   // Делегирование клика: кнопки копирования и скачивания живут в HTML из marked,
   // не в React-дереве.

@@ -438,6 +438,136 @@ describe('MarkdownContent: заголовки и якорные ссылки', (
   })
 })
 
+describe('MarkdownContent: escapeRawHtml (текст человека)', () => {
+  async function renderEscaped(content: string): Promise<HTMLElement> {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push({ root, container })
+    await act(async () => {
+      root.render(<MarkdownContent content={content} escapeRawHtml />)
+    })
+    return container
+  }
+
+  it('сырой HTML не превращается в элемент: виден ровно как набран', async () => {
+    const container = await renderEscaped('проверка <b>x</b> конец')
+
+    expect(container.querySelector('b')).toBeNull()
+    expect(container.textContent).toContain('<b>x</b>')
+  })
+
+  it('блочный сырой HTML тоже остаётся текстом', async () => {
+    const container = await renderEscaped('<div class="x">\n  блок\n</div>')
+
+    expect(container.querySelector('div.x')).toBeNull()
+    expect(container.textContent).toContain('<div class="x">')
+  })
+
+  it('тег из allowlist тоже остаётся текстом (без флага он разбирался бы)', async () => {
+    const escaped = await renderEscaped('проверка <em>x</em> конец')
+    expect(escaped.querySelector('em')).toBeNull()
+    expect(escaped.textContent).toContain('<em>x</em>')
+
+    // Без флага поведение прежнее: html разбирается как разметка.
+    const parsed = await renderMarkdown('проверка <em>x</em> конец')
+    expect(parsed.querySelector('em')?.textContent).toBe('x')
+  })
+
+  it('текст внутри fenced-кода не экранируется повторно', async () => {
+    const container = await renderEscaped('```html\n<b>bold</b>\n```')
+
+    expect(container.querySelector('code')?.textContent).toBe('<b>bold</b>')
+    expect(container.innerHTML).toContain('&lt;b&gt;')
+    // Двойного экранирования (`&amp;lt;`) нет: код — другой тип токена.
+    expect(container.innerHTML).not.toContain('&amp;lt;')
+  })
+})
+
+describe('MarkdownContent: подсветка `@`-упоминаний', () => {
+  const AGENTS = [
+    { id: 'fixer', color: '--status-error' },
+    { id: 'security-auditor', color: '--palette-3' },
+  ] as unknown as NonNullable<Parameters<typeof MarkdownContent>[0]['agents']>
+
+  async function renderWithAgents(
+    content: string,
+    agents: typeof AGENTS = AGENTS,
+  ): Promise<HTMLElement> {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push({ root, container })
+    await act(async () => {
+      root.render(
+        <MarkdownContent content={content} agents={agents} highlightMentions />,
+      )
+    })
+    await act(async () => {})
+    return container
+  }
+
+  it('известное упоминание оборачивается в span с цветом агента', async () => {
+    const container = await renderWithAgents('@fixer почини')
+
+    const mention = container.querySelector('[data-mention="fixer"]') as HTMLElement | null
+    expect(mention).not.toBeNull()
+    expect(mention!.textContent).toBe('@fixer')
+    expect(mention!.style.color).toBe('var(--status-error)')
+    // Текст сообщения не потерян.
+    expect(container.textContent).toContain('@fixer почини')
+  })
+
+  it('id с дефисом распознаётся', async () => {
+    const container = await renderWithAgents('@security-auditor проверь')
+
+    const mention = container.querySelector('[data-mention="security-auditor"]') as HTMLElement | null
+    expect(mention).not.toBeNull()
+    expect(mention!.style.color).toBe('var(--palette-3)')
+  })
+
+  it('неизвестный агент и пустой реестр — обычный текст', async () => {
+    const unknown = await renderWithAgents('@nobody привет')
+    expect(unknown.querySelector('[data-mention]')).toBeNull()
+
+    const empty = await renderWithAgents('@fixer привет', [])
+    expect(empty.querySelector('[data-mention]')).toBeNull()
+  })
+
+  it('подсветка не заходит в код и ссылки', async () => {
+    const container = await renderWithAgents('`@fixer` и [@fixer](https://example.com)')
+
+    expect(container.querySelector('[data-mention]')).toBeNull()
+  })
+
+  it('повторный прогон эффекта не оборачивает упоминание дважды', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    roots.push({ root, container })
+
+    await act(async () => {
+      root.render(
+        <MarkdownContent content="@fixer почини" agents={AGENTS} highlightMentions />,
+      )
+    })
+    await act(async () => {})
+
+    const first = container.querySelectorAll('[data-mention="fixer"]').length
+    expect(first).toBe(1)
+
+    // Тот же html — тот же DOM: обёртка не должна дублироваться.
+    await act(async () => {
+      root.render(
+        <MarkdownContent content="@fixer почини" agents={AGENTS} highlightMentions />,
+      )
+    })
+    await act(async () => {})
+
+    expect(container.querySelectorAll('[data-mention="fixer"]').length).toBe(1)
+  })
+})
+
 describe('MarkdownContent: копирование', () => {
   it('кнопка — иконка: подпись в aria-label/title, текстового содержимого нет', async () => {
     const container = await renderMarkdown('```ts\nconst a = 1\n```')
