@@ -1020,6 +1020,8 @@ export const dict = {
   'leftPanel.activity.process': '{count, plural, one {# фоновый процесс} few {# фоновых процесса} many {# фоновых процессов}}',
   'leftPanel.activity.subagent': '{count, plural, one {# фоновый саб-агент} few {# фоновых саб-агента} many {# фоновых саб-агентов}}',
   'leftPanel.activity.terminal': '{count, plural, one {# живой терминал} few {# живых терминала} many {# живых терминалов}}',
+  'leftPanel.activity.timer': '{count, plural, one {# активный таймер} few {# активных таймера} many {# активных таймеров}}',
+  'leftPanel.activity.alarm': '{count, plural, one {# активный будильник} few {# активных будильника} many {# активных будильников}}',
 
   'git.repo': 'Репозиторий',
   'git.workspaceRoot': 'Корень workspace',

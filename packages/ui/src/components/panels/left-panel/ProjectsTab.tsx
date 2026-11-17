@@ -10,6 +10,7 @@ import { useNotificationStore } from '@/stores/notificationStore'
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useProcessesStore } from '@/stores/processesStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
+import { useTimersStore } from '@/stores/timersStore'
 import { countSessionActivity, type SessionActivityCounts } from '@/lib/sessionActivity'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
@@ -40,13 +41,16 @@ import { GroupNode } from './GroupNode'
 const ACTIVITY_RUNS_REFRESH_MS = 30_000
 /** Период обновления списка живых терминалов (значки в дереве), мс. */
 const ACTIVITY_TERMINALS_REFRESH_MS = 60_000
+/** Период обновления списка активных таймеров (значки в дереве), мс. */
+const ACTIVITY_TIMERS_REFRESH_MS = 30_000
 
 /**
  * Значки активной фоновой работы в строке сессии.
  *
  * Показывают только то, что идёт **сейчас**: выполняющиеся фоновые процессы
- * и саб-агенты и живые терминалы сессии. Цвет — не единственный сигнал: у
- * каждой иконки есть текстовая подпись (`aria-label` + тултип) с числом.
+ * и саб-агенты, живые терминалы и активные таймеры/будильники сессии. Цвет —
+ * не единственный сигнал: у каждой иконки есть текстовая подпись
+ * (`aria-label` + тултип) с числом.
  */
 function SessionActivityBadge({ activity }: { activity?: SessionActivityCounts }) {
   const { t } = useI18n()
@@ -57,24 +61,43 @@ function SessionActivityBadge({ activity }: { activity?: SessionActivityCounts }
     icon: IconName
     color: string
     labelKey: string
+    testId: string
   }> = [
     {
       key: 'processes',
       icon: 'command',
       color: 'text-status-caution',
       labelKey: 'leftPanel.activity.process',
+      testId: 'session-activity-processes',
     },
     {
       key: 'subagents',
       icon: 'robot-2',
       color: 'text-primary',
       labelKey: 'leftPanel.activity.subagent',
+      testId: 'session-activity-subagents',
     },
     {
       key: 'terminals',
       icon: 'terminal-box',
       color: 'text-status-success',
       labelKey: 'leftPanel.activity.terminal',
+      testId: 'session-activity-terminals',
+    },
+    // PROP-141: активные таймеры и будильники сессии.
+    {
+      key: 'timers',
+      icon: 'time',
+      color: 'text-status-info',
+      labelKey: 'leftPanel.activity.timer',
+      testId: 'session-activity-timers',
+    },
+    {
+      key: 'alarms',
+      icon: 'alarm',
+      color: 'text-status-warning',
+      labelKey: 'leftPanel.activity.alarm',
+      testId: 'session-activity-alarms',
     },
   ]
 
@@ -94,7 +117,7 @@ function SessionActivityBadge({ activity }: { activity?: SessionActivityCounts }
             role="img"
             aria-label={label}
             title={label}
-            data-testid={`session-activity-${item.key}`}
+            data-testid={item.testId}
           />
         )
       })}
@@ -139,12 +162,14 @@ export function ProjectsTab() {
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
   // Фоновая активность сессий: значки в дереве (процессы, саб-агенты,
-  // терминалы). Реестры подгружаются уже при монтировании панели — значки
-  // видны до открытия панели «Процессы».
+  // терминалы, таймеры/будильники). Реестры подгружаются уже при монтировании
+  // панели — значки видны до открытия панели «Процессы»/«Автоматизация».
   const loadActiveRuns = useProcessesStore((s) => s.loadActive)
   const loadTerminals = useTerminalsStore((s) => s.load)
+  const loadActiveTimers = useTimersStore((s) => s.loadActive)
   const runsById = useProcessesStore((s) => s.byId)
   const terminalsById = useTerminalsStore((s) => s.terminalsById)
+  const timersById = useTimersStore((s) => s.byId)
   const isOffline = useHybridStore(selectIsOffline)
   const hybridEnabled = useHybridStore((s) => s.enabled)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
@@ -170,31 +195,43 @@ export function ProjectsTab() {
   useEffect(() => { loadProjects(); loadSessions() }, [loadProjects, loadSessions])
 
   /**
-   * Фоновая активность: активные прогоны и живые терминалы.
+   * Фоновая активность: активные прогоны, живые терминалы и активные
+   * таймеры/будильники.
    *
-   * Подгружаются при монтировании панели и обновляются таймерами (прогоны —
-   * раз в 30 с, терминалы — раз в 60 с). Live-события `terminal.*`/
-   * `process.*`/`child.*` обновляют сторы сами — значки появляются сразу.
+   * Подгружаются при монтировании панели и обновляются таймерами (прогоны и
+   * таймеры — раз в 30 с, терминалы — раз в 60 с). Live-события
+   * `terminal.*`/`process.*`/`child.*`/`timer.*` обновляют сторы сами — значки
+   * появляются сразу.
    */
   useEffect(() => {
     void loadActiveRuns()
     void loadTerminals()
+    void loadActiveTimers()
     const runsTimer = setInterval(() => {
       void loadActiveRuns()
     }, ACTIVITY_RUNS_REFRESH_MS)
     const terminalsTimer = setInterval(() => {
       void loadTerminals()
     }, ACTIVITY_TERMINALS_REFRESH_MS)
+    const timersTimer = setInterval(() => {
+      void loadActiveTimers()
+    }, ACTIVITY_TIMERS_REFRESH_MS)
     return () => {
       clearInterval(runsTimer)
       clearInterval(terminalsTimer)
+      clearInterval(timersTimer)
     }
-  }, [loadActiveRuns, loadTerminals])
+  }, [loadActiveRuns, loadTerminals, loadActiveTimers])
 
   /** Счётчики активной фоновой работы по сессиям. */
   const sessionActivity = useMemo(
-    () => countSessionActivity(Object.values(runsById), Object.values(terminalsById)),
-    [runsById, terminalsById],
+    () =>
+      countSessionActivity(
+        Object.values(runsById),
+        Object.values(terminalsById),
+        Object.values(timersById),
+      ),
+    [runsById, terminalsById, timersById],
   )
 
   /**

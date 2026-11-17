@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   getProjectsPage: vi.fn(),
   listProcesses: vi.fn(),
   listTerminals: vi.fn(),
+  listTimers: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', async (importOriginal) => {
@@ -60,6 +61,7 @@ vi.mock('@/lib/api/synthApi', async (importOriginal) => {
       getSessionsPage: mocks.getSessionsPage,
       getProjectsPage: mocks.getProjectsPage,
       listProcesses: mocks.listProcesses,
+      listTimers: mocks.listTimers,
     },
   }
 })
@@ -81,7 +83,8 @@ import { useChatStore } from '@/stores/chatStore'
 import { usePermissionStore } from '@/stores/permissionStore'
 import { useProcessesStore } from '@/stores/processesStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
-import type { BackgroundRunRecord } from '@/lib/api/synthApi'
+import { useTimersStore } from '@/stores/timersStore'
+import type { BackgroundRunRecord, Timer } from '@/lib/api/synthApi'
 import type { TerminalDto } from '@/lib/api/terminals'
 import { ProjectsTab } from './ProjectsTab'
 
@@ -151,6 +154,24 @@ function makeTerminal(id: string, overrides: Partial<TerminalDto> = {}): Termina
   }
 }
 
+/** Таймер/будильник (активный по умолчанию). */
+function makeTimer(id: string, overrides: Partial<Timer> = {}): Timer {
+  return {
+    id,
+    kind: 'timer',
+    comment: 'напомнить',
+    projectId: 'p1',
+    sessionId: 's1',
+    ownerId: 'u1',
+    repeat: { mode: 'once' },
+    status: 'active',
+    firesAt: '2026-10-01T00:00:00.000Z',
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
 async function renderTree(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -213,6 +234,17 @@ beforeEach(() => {
     limit: 50,
     nextOffset: null,
   })
+  // Активные таймеры инстанса — ответ `loadActive` (`status=active`).
+  mocks.listTimers.mockResolvedValue({
+    timers: [
+      makeTimer('tmr_1', { kind: 'timer', sessionId: 's1' }),
+      makeTimer('tmr_2', { kind: 'alarm', sessionId: 's1' }),
+    ],
+    total: 2,
+    offset: 0,
+    limit: 200,
+    next_offset: null,
+  })
 
   useSessionsStore.setState({
     sessions: [session('s1'), session('s2')] as never,
@@ -252,6 +284,19 @@ beforeEach(() => {
     loading: false,
     error: null,
   })
+
+  useTimersStore.setState({
+    byId: {
+      tmr_1: makeTimer('tmr_1', { kind: 'timer', sessionId: 's1' }),
+      tmr_2: makeTimer('tmr_2', { kind: 'alarm', sessionId: 's1' }),
+      // Приостановленный таймер — не активность.
+      tmr_3: makeTimer('tmr_3', { kind: 'timer', sessionId: 's1', status: 'paused' }),
+    },
+    order: ['tmr_1', 'tmr_2', 'tmr_3'],
+    pendingIds: [],
+    loading: false,
+    error: null,
+  })
 })
 
 afterEach(async () => {
@@ -266,25 +311,32 @@ afterEach(async () => {
 })
 
 describe('ProjectsTab — индикаторы активной фоновой работы', () => {
-  it('у сессии с активностью — три значка с подписями и числом', async () => {
+  it('у сессии с активностью — значки с подписями и числом', async () => {
     const container = await renderTree()
     const node = sessionNode(container, 's1')
 
     const process = activityIcon(node, 'processes')
     const subagent = activityIcon(node, 'subagents')
     const terminal = activityIcon(node, 'terminals')
+    const timer = activityIcon(node, 'timers')
+    const alarm = activityIcon(node, 'alarms')
 
     expect(process).not.toBeNull()
     expect(subagent).not.toBeNull()
     expect(terminal).not.toBeNull()
+    expect(timer).not.toBeNull()
+    expect(alarm).not.toBeNull()
 
     expect(process!.getAttribute('aria-label')).toBe('1 background process')
     expect(subagent!.getAttribute('aria-label')).toBe('1 background sub-agent')
     expect(terminal!.getAttribute('aria-label')).toBe('1 live terminal')
+    expect(timer!.getAttribute('aria-label')).toBe('1 active timer')
+    expect(alarm!.getAttribute('aria-label')).toBe('1 active alarm')
 
     // Цвет — не единственный сигнал: у значка есть текстовая подпись.
     expect(process!.getAttribute('title')).toBe('1 background process')
     expect(process!.getAttribute('role')).toBe('img')
+    expect(timer!.getAttribute('title')).toBe('1 active timer')
   })
 
   it('у сессии без активности значков нет', async () => {
@@ -295,6 +347,8 @@ describe('ProjectsTab — индикаторы активной фоновой �
     expect(activityIcon(node, 'processes')).toBeNull()
     expect(activityIcon(node, 'subagents')).toBeNull()
     expect(activityIcon(node, 'terminals')).toBeNull()
+    expect(activityIcon(node, 'timers')).toBeNull()
+    expect(activityIcon(node, 'alarms')).toBeNull()
   })
 
   it('завершённые прогоны и терминалы активностью не считаются', async () => {
@@ -305,6 +359,16 @@ describe('ProjectsTab — индикаторы активной фоновой �
     expect(activityIcon(node, 'processes')!.getAttribute('aria-label')).toBe('1 background process')
     expect(activityIcon(node, 'subagents')!.getAttribute('aria-label')).toBe('1 background sub-agent')
     expect(activityIcon(node, 'terminals')!.getAttribute('aria-label')).toBe('1 live terminal')
+  })
+
+  it('приостановленный таймер активностью не считается', async () => {
+    const container = await renderTree()
+    const node = sessionNode(container, 's1')
+
+    // Активных таймеров один (tmr_1), будильников один (tmr_2);
+    // приостановленный tmr_3 в значок не попадает.
+    expect(activityIcon(node, 'timers')!.getAttribute('aria-label')).toBe('1 active timer')
+    expect(activityIcon(node, 'alarms')!.getAttribute('aria-label')).toBe('1 active alarm')
   })
 
   it('значки не ломают точку статуса и счётчик непрочитанного', async () => {
@@ -321,5 +385,6 @@ describe('ProjectsTab — индикаторы активной фоновой �
 
     expect(mocks.listProcesses).toHaveBeenCalledWith({ status: 'running', limit: 200 })
     expect(mocks.listTerminals).toHaveBeenCalled()
+    expect(mocks.listTimers).toHaveBeenCalledWith({ status: 'active', limit: 200 })
   })
 })

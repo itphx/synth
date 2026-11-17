@@ -1043,6 +1043,8 @@ export const dict = {
   'leftPanel.activity.process': '{count, plural, one {# background process} other {# background processes}}',
   'leftPanel.activity.subagent': '{count, plural, one {# background sub-agent} other {# background sub-agents}}',
   'leftPanel.activity.terminal': '{count, plural, one {# live terminal} other {# live terminals}}',
+  'leftPanel.activity.timer': '{count, plural, one {# active timer} other {# active timers}}',
+  'leftPanel.activity.alarm': '{count, plural, one {# active alarm} other {# active alarms}}',
 
   'git.repo': 'Repository',
   'git.workspaceRoot': 'Workspace root',

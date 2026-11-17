@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 
 import { countSessionActivity } from './sessionActivity'
-import type { BackgroundRunRecord } from '@/lib/api/synthApi'
+import type { BackgroundRunRecord, Timer } from '@/lib/api/synthApi'
 import type { TerminalDto } from '@/lib/api/terminals'
 
 /** Фоновый прогон (процесс или саб-агент). */
@@ -47,6 +47,27 @@ function makeTerminal(
   }
 }
 
+/** Таймер/будильник (активный по умолчанию). */
+function makeTimer(
+  id: string,
+  overrides: Partial<Timer> = {},
+): Timer {
+  return {
+    id,
+    kind: 'timer',
+    comment: 'напомнить',
+    projectId: 'p1',
+    sessionId: 's1',
+    ownerId: 'u1',
+    repeat: { mode: 'once' },
+    status: 'active',
+    firesAt: '2026-10-01T00:00:00.000Z',
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt: '2026-10-01T00:00:00.000Z',
+    ...overrides,
+  }
+}
+
 describe('countSessionActivity — активная фоновая работа по сессиям', () => {
   it('считает только выполняющиеся прогоны', () => {
     const counts = countSessionActivity(
@@ -60,7 +81,13 @@ describe('countSessionActivity — активная фоновая работа 
       [],
     )
 
-    expect(counts.get('s1')).toEqual({ processes: 1, subagents: 0, terminals: 0 })
+    expect(counts.get('s1')).toEqual({
+      processes: 1,
+      subagents: 0,
+      terminals: 0,
+      timers: 0,
+      alarms: 0,
+    })
   })
 
   it('саб-агент считается по родительской сессии', () => {
@@ -72,7 +99,13 @@ describe('countSessionActivity — активная фоновая работа 
       [],
     )
 
-    expect(counts.get('parent-1')).toEqual({ processes: 0, subagents: 1, terminals: 0 })
+    expect(counts.get('parent-1')).toEqual({
+      processes: 0,
+      subagents: 1,
+      terminals: 0,
+      timers: 0,
+      alarms: 0,
+    })
     expect(counts.has('child-1')).toBe(false)
   })
 
@@ -95,7 +128,13 @@ describe('countSessionActivity — активная фоновая работа 
       ],
     )
 
-    expect(counts.get('s1')).toEqual({ processes: 0, subagents: 0, terminals: 2 })
+    expect(counts.get('s1')).toEqual({
+      processes: 0,
+      subagents: 0,
+      terminals: 2,
+      timers: 0,
+      alarms: 0,
+    })
   })
 
   it('прогон без сессии-владельца не учитывается', () => {
@@ -115,11 +154,89 @@ describe('countSessionActivity — активная фоновая работа 
       [makeTerminal('t1', { sessionId: 's1' }), makeTerminal('t2', { sessionId: 's2' })],
     )
 
-    expect(counts.get('s1')).toEqual({ processes: 2, subagents: 1, terminals: 1 })
-    expect(counts.get('s2')).toEqual({ processes: 1, subagents: 0, terminals: 1 })
+    expect(counts.get('s1')).toEqual({
+      processes: 2,
+      subagents: 1,
+      terminals: 1,
+      timers: 0,
+      alarms: 0,
+    })
+    expect(counts.get('s2')).toEqual({
+      processes: 1,
+      subagents: 0,
+      terminals: 1,
+      timers: 0,
+      alarms: 0,
+    })
   })
 
   it('пустые входы дают пустую карту', () => {
     expect(countSessionActivity([], []).size).toBe(0)
+  })
+
+  // PROP-141: таймеры и будильники.
+
+  it('активные таймеры и будильники считаются по видам', () => {
+    const counts = countSessionActivity(
+      [],
+      [],
+      [
+        makeTimer('t1', { kind: 'timer' }),
+        makeTimer('t2', { kind: 'timer' }),
+        makeTimer('a1', { kind: 'alarm' }),
+      ],
+    )
+
+    expect(counts.get('s1')).toEqual({
+      processes: 0,
+      subagents: 0,
+      terminals: 0,
+      timers: 2,
+      alarms: 1,
+    })
+  })
+
+  it('неактивные таймеры активностью не считаются', () => {
+    const counts = countSessionActivity(
+      [],
+      [],
+      [
+        makeTimer('paused', { status: 'paused' }),
+        makeTimer('fired', { status: 'fired' }),
+        makeTimer('cancelled', { status: 'cancelled' }),
+      ],
+    )
+
+    expect(counts.size).toBe(0)
+  })
+
+  it('таймер без сессии-получателя не учитывается', () => {
+    const counts = countSessionActivity([], [], [makeTimer('no-session', { sessionId: '' })])
+
+    expect(counts.size).toBe(0)
+  })
+
+  it('таймеры считаются вместе с прочими видами работы', () => {
+    const counts = countSessionActivity(
+      [makeRun('p1', { sessionId: 's1' })],
+      [makeTerminal('t1', { sessionId: 's1' })],
+      [makeTimer('tmr1', { sessionId: 's1' }), makeTimer('al1', { sessionId: 's1', kind: 'alarm' })],
+    )
+
+    expect(counts.get('s1')).toEqual({
+      processes: 1,
+      subagents: 0,
+      terminals: 1,
+      timers: 1,
+      alarms: 1,
+    })
+  })
+
+  it('без таймеров поведение прежнее (третий аргумент необязателен)', () => {
+    const withTimers = countSessionActivity([], [], [])
+    const withoutTimers = countSessionActivity([], [])
+
+    expect(withTimers.size).toBe(0)
+    expect(withoutTimers.size).toBe(0)
   })
 })

@@ -62,6 +62,7 @@ import { worktreesApi } from './worktrees'
 import { executionApi } from './execution'
 import { terminalsApi } from './terminals'
 import { terminalSettingsApi } from './terminalSettings'
+import { timersApi } from './timers'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -551,6 +552,19 @@ export type {
   TerminalSettingsSource,
   TerminalSettingsPatch,
 } from './terminalSettings'
+// PROP-141: таймеры и будильники (отложенный возврат к работе).
+export type {
+  Timer,
+  TimerFiring,
+  TimerKind,
+  TimerRepeat,
+  TimerStatus,
+  TimersListOptions,
+  TimersListResponse,
+  TimerFiringsListResponse,
+  TimerCreateInput,
+  TimerPatchInput,
+} from './timers'
 
 export const synthApi = {
   fetchJSON,
@@ -650,5 +664,16 @@ export const synthApi = {
     getTerminalSettings: terminalSettingsApi.getTerminalSettings,
     updateTerminalSettings: terminalSettingsApi.updateTerminalSettings,
     resetTerminalSettings: terminalSettingsApi.resetTerminalSettings,
+  },
+  // PROP-141: таймеры и будильники — имена с префиксом домена (`list`/`create`
+  // в barrel уже заняты соседними доменами).
+  ...{
+    listTimers: timersApi.list,
+    createTimer: timersApi.create,
+    patchTimer: timersApi.patch,
+    pauseTimer: timersApi.pause,
+    resumeTimer: timersApi.resume,
+    removeTimer: timersApi.remove,
+    getTimerFirings: timersApi.firings,
   },
 }

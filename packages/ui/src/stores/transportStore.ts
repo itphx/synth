@@ -15,6 +15,7 @@ import { usePipelinesStore } from './pipelinesStore'
 import { useProcessesStore } from './processesStore'
 import { useWorktreesStore } from './worktreesStore'
 import { useTerminalsStore } from './terminalsStore'
+import { useTimersStore } from './timersStore'
 import { useProjectLogStore } from './projectLogStore'
 import { useInstanceCapabilitiesStore } from './instanceCapabilitiesStore'
 import type { TransportMode } from './useUIStore'
@@ -1761,6 +1762,17 @@ export function createDispatcher(): EventDispatcher {
             ? { ...payload, session_id: payload.session_id ?? sid }
             : payload,
         )
+      return
+    }
+
+    // PROP-141: события таймеров и будильников (`timer.created|updated|fired|
+    // cancelled`). Они публикуются в канал сессии-получателя, но разбираются
+    // ДО проверки `sid`: id сессии лежит в payload, а в кадре WS его может не
+    // быть. Тостов нет — значок активности в дереве сессий показывает, что
+    // таймер ждёт срабатывания (событие `fired` само по себе не требует
+    // уведомления: сообщение таймера приходит в ленту отдельным ходом).
+    if (type.startsWith('timer.')) {
+      useTimersStore.getState().applyEvent(type, payload)
       return
     }
 
