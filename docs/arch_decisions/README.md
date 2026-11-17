@@ -136,6 +136,8 @@
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-140 | Класс исполнителей MCP — пулы, хостящие MCP-серверы | 🧩 Предложение | [prop-140-mcp-executor-class.md](./prop-140-mcp-executor-class.md) |
+| PROP-142 | Управление сабагентом на ходу и автовосстановление прерванных прогонов | 🧩 Предложение | [prop-142-subagent-control-and-auto-recovery.md](./prop-142-subagent-control-and-auto-recovery.md) |
+| PROP-143 | Причина остановки хода — durable служебное сообщение в истории | 🧩 Предложение | [prop-143-stop-reason-history.md](./prop-143-stop-reason-history.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -195,5 +197,5 @@
 
 ---
 
-Всего документов: 125 (Решения: 65, Частично: 27, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 3).
+Всего документов: 127 (Решения: 65, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 3).
 Удалено: 30 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
