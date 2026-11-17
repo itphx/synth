@@ -189,7 +189,9 @@ describe('CommandAuditLog', () => {
       env: {},
       metrics: sink,
     });
-    await withMetrics.append(makeEntry({ phase: 'started' }));
+    // Свежая запись: prune(5) ниже не должен её удалять. Фиксированная дата
+    // в `makeEntry` со временем уходит за окно retention — берём текущее время.
+    await withMetrics.append(makeEntry({ phase: 'started', ts: new Date().toISOString() }));
     expect(calls).toEqual(['written:started:execute_shell']);
 
     const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
