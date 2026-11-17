@@ -1833,3 +1833,12 @@
 - **R5**: тексты ошибок repeat приведены к единому стилю (`invalid repeat — …`).
 - Проверки: core 11 979 passed (единственный fail — экологический `git-proxy-env`), ui 4 509, backend 1 011; typecheck/lint/build зелёные.
 - Коммит: `b01e4d09`.
+
+### Дополнение 3: RUN3 (приёмка)
+
+- Все тул-кейсы R1/R2/R4/R5 и регресс L1–L11 — зелёные.
+- **N1 закрыт**: `stop` идемпотентен для `fired`/`cancelled` (успех с «already fired/stopped»), HTTP `POST /:id/stop` для терминальных — 200, не 409.
+- **N2**: HTTP-часть не проверена из-за 401 — тестировщику нужен `Authorization: Bearer <api-key>` (ключ: `SYNTH_API_KEY`, `synth serve --api-key` или `{dataDir}/secrets/api-key`); заголовки `X-Synth-Key`/`X-Api-Key` API не использует.
+- **N3**: параллельные `delete`/`show` — ожидаемая гонка ответов, не дефект.
+- Проверки: typecheck/lint/build; core timers 119 тестов.
+- Коммит: `f7658b6b`.
