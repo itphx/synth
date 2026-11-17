@@ -41,6 +41,9 @@ import { dropSteerInjections } from '../../engine/steering/apply.js';
 // ADR-041: строки движка — через ключи `shared/i18n` (не литералы).
 import { t as sm, i18n as i18nMeta } from '../../engine/system-messages.js';
 import { requeueMessages, publishQueueState, queueCounts } from '../../queue/processor.js';
+// PROP-142 §3: бюджет автовосстановления прерванных ходов (сброс — ручной
+// повтор через `POST /:id/recovery/retry`).
+import { resetRecoveryState } from '../../sessions/recovery.js';
 import type { MemoryFactRepository } from '../../storage/ports/memory-fact-repository.js';
 import type { MemoryIndexRepository } from '../../storage/ports/memory-index-repository.js';
 // Этап 1 roadmap 0.13 (блок 3): «вопрос пользователю» (`ask_user`).
@@ -482,6 +485,16 @@ export interface SessionRouteMessages {
    * `VALIDATION_ERROR`) — контекст нельзя вклинить перед interrupt-сообщением.
    */
   terminalContextWithInterrupt?: (c: Context) => string;
+  /**
+   * PROP-142 §1: вложения в продолжении дочерней сессии саб-агента не
+   * поддержаны (400 `VALIDATION_ERROR`).
+   */
+  attachmentsToSubagentChild?: (c: Context) => string;
+  /**
+   * PROP-142 §3.7: ручной повтор восстановления, пока сессия занята
+   * (409 `LOCKED`).
+   */
+  recoveryLocked?: (c: Context) => string;
 }
 
 export interface SessionRoutesOptions {
@@ -642,6 +655,9 @@ const DEFAULT_MESSAGES: SessionRouteMessages = {
   terminalContextInvalid: (_c: Context, reason: string) => reason,
   terminalContextWithInterrupt: () =>
     'Контекст терминала нельзя отправлять вместе с mode=interrupt',
+  attachmentsToSubagentChild: () =>
+    'Вложения в дочернюю сессию саб-агента не поддерживаются',
+  recoveryLocked: () => 'Сессия занята — повтор восстановления невозможен',
 };
 
 /**
@@ -658,6 +674,50 @@ function normalizeAttachmentPaths(value: unknown): string[] | null | undefined {
     paths.push(item.trim());
   }
   return Array.from(new Set(paths));
+}
+
+/**
+ * PROP-142 §2: тело `POST /:id/resume-subagent` — необязательные указания
+ * продолжения: `{prompt?, model?, provider?}`.
+ *
+ * Пустое тело — «никаких указаний» (прежнее поведение: только маркер resume).
+ * Невалидный тип поля — 400 `VALIDATION_ERROR`: молча игнорировать нельзя
+ * (клиент думает, что пара сменилась, а прогон пошёл со старой).
+ */
+export type SubagentResumeBody = {
+  /** Новые указания для ребёнка (текст) — обычное user-сообщение в его истории. */
+  prompt?: string;
+  /** Новая модель прогона ребёнка. */
+  model?: string;
+  /** Новый провайдер прогона ребёнка. */
+  provider?: string;
+};
+
+/**
+ * Разбор тела resume-subagent. `null` — тело невалидно (400).
+ * Пустая строка — «указание не задано» (поле игнорируется, как отсутствующее).
+ */
+function parseSubagentResumeBody(body: unknown): SubagentResumeBody | null {
+  if (body === undefined || body === null) return {};
+  if (typeof body !== 'object' || Array.isArray(body)) return null;
+  const record = body as Record<string, unknown>;
+  const result: SubagentResumeBody = {};
+  const prompt = record.prompt;
+  if (prompt !== undefined && prompt !== null) {
+    if (typeof prompt !== 'string') return null;
+    result.prompt = prompt;
+  }
+  const model = record.model;
+  if (model !== undefined && model !== null) {
+    if (typeof model !== 'string') return null;
+    result.model = model;
+  }
+  const provider = record.provider;
+  if (provider !== undefined && provider !== null) {
+    if (typeof provider !== 'string') return null;
+    result.provider = provider;
+  }
+  return result;
 }
 
 /** ADR-115: медиа-части сообщения (для учёта квоты сессии и ссылок на объекты). */
@@ -3268,7 +3328,15 @@ export function createSessionRoutes(
 
     // ADR-104: идёт ли сейчас ход сессии — от этого зависит способ доставки
     // контекста терминала (вмешательство в ход или обычная очередь).
-    const turnActive = !!content && mode !== 'queue' && isTurnActive(session, queueManager);
+    //
+    // PROP-142 §1: у дочерней сессии саб-агента нет процессора очереди —
+    // активность прогона помечает `currentStream`. Без этого признака
+    // `steer`/`interrupt` не нашли бы идущий ход ребёнка и ушли бы в обычную
+    // очередь сессии («скрытая третья семантика»).
+    const isSubagentChild = !!session.parentId && session.sessionOrigin === 'subagent';
+    const sessionTurnActive = isTurnActive(session, queueManager)
+      || (isSubagentChild && !!session.currentStream);
+    const turnActive = !!content && mode !== 'queue' && sessionTurnActive;
 
     // PROP-132: контекст терминала доставляется **до** вопроса — он должен
     // попасть в историю раньше вопроса (`ord` контекста < `ord` вопроса),
@@ -3463,6 +3531,71 @@ export function createSessionRoutes(
         mode,
         position: null,
       }, 202);
+    }
+
+    // ─── PROP-142 §1: дочерняя сессия саб-агента — без «скрытой третьей
+    // семантики» (обычный процессор очереди сессии). Продолжение ведёт цикл
+    // саб-агента: свободный ребёнок — продолжение с текстом указаний
+    // (`startSubagentResume`), занятый — сообщение в его очередь
+    // (`pendingMessages`), которую разберёт цикл ребёнка.
+    if (content && isSubagentChild) {
+      // Вложения в продолжении ребёнка не поддержаны (ADR-115: медиа-части
+      // требуют контура очереди обычной сессии) — отказ до приёма.
+      if (attachmentPaths && attachmentPaths.length > 0) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: messages.attachmentsToSubagentChild?.(c)
+              ?? 'Вложения в дочернюю сессию саб-агента не поддерживаются',
+          },
+        }, 400);
+      }
+      if (!sessionTurnActive) {
+        // Ребёнок свободен — продолжение с текстом: сообщение в его историю
+        // пишет сам resume-путь (`appendContinuationMessage`) — второй раз не
+        // добавляем.
+        try {
+          const started = await orchestrator.startSubagentResume(sessionId, { prompt: content });
+          // ADR-126 §2: user-directed хвост («@alice …») — в историю сразу
+          // (ход ребёнка его не ждёт).
+          await persistUserDirected();
+          return c.json({
+            status: 'resumed',
+            stream_id: started.stream_id,
+            child_session_id: started.child_session_id,
+          }, 202);
+        } catch (err) {
+          if (err instanceof SubagentResumeError) {
+            return c.json({ error: { code: err.code, message: err.message } }, err.httpStatus as 400 | 404 | 409);
+          }
+          return c.json({ error: { code: 'INTERNAL_ERROR', message: String(err) } }, 500);
+        }
+      }
+      if (mode === 'queue') {
+        // Ребёнок занят — сообщение ждёт в его очереди (`pendingMessages`).
+        // Автозапуска нет: цикл ребёнка разберёт очередь сам (PROP-142 §1).
+        const queued = await requeueMessages({
+          sessionManager,
+          eventBus,
+          sessionId,
+          messages: [await orchestrator.obfuscateUserMessageForHistory(sessionId, message)],
+        });
+        if (queued.dropped > 0) {
+          // Очередь ребёнка переполнена — сообщение не принято.
+          return c.json({
+            error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
+          }, 429);
+        }
+        // ADR-126 §2: user-directed хвост — в историю сразу.
+        await persistUserDirected();
+        const fresh = await sessionManager.getSession(sessionId);
+        return c.json({
+          messageId: acceptedMessageId,
+          mode: 'queue',
+          position: fresh?.pendingMessages.length ?? 1,
+        }, 202);
+      }
+      // `steer`/`interrupt` при активном ходе — существующая ветка выше.
     }
 
     if (content) {
@@ -4068,15 +4201,49 @@ export function createSessionRoutes(
   // POST /api/v2/sessions/:id/resume-subagent — возобновить прерванную/ошибочную
   // дочернюю сессию саб-агента (B2). Валидация + блокировка синхронно, прогон —
   // в фоне; итог resume пишется в родительскую сессию.
+  //
+  // PROP-142 §2: тело необязательное — `{prompt?, model?, provider?}`: новые
+  // указания (текст) и (необязательно) новая пара прогона ребёнка.
   app.post('/:id/resume-subagent', auth.requireAuth, async (c) => {
     const id = c.req.param('id');
-    // Гибрид: прогон дочерней сессии живёт в процессе своего backend.
+    // Тело: пустое — «никаких указаний» (прежнее поведение).
+    const rawBody = await c.req.text().catch(() => '');
+    let resumeBody: SubagentResumeBody | null = {};
+    if (rawBody.trim()) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        return c.json({
+          error: { code: 'VALIDATION_ERROR', message: 'Некорректное тело запроса' },
+        }, 400);
+      }
+      resumeBody = parseSubagentResumeBody(parsed);
+      if (!resumeBody) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Поля prompt, model и provider должны быть строками',
+          },
+        }, 400);
+      }
+    }
+    // Гибрид: прогон дочерней сессии живёт в процессе своего backend. Тело
+    // уезжает как есть (старый сервер его игнорирует — совместимо); указаний
+    // нет — запрос без тела (как раньше).
+    const hasResumeBody = Object.keys(resumeBody).length > 0;
     const forwarded = await forwardRemoteSession(
-      c, id, (client, localId) => client.resumeSubagent(localId), undefined, 202,
+      c,
+      id,
+      (client, localId) => (hasResumeBody
+        ? client.resumeSubagent(localId, resumeBody)
+        : client.resumeSubagent(localId)),
+      undefined,
+      202,
     );
     if (forwarded) return forwarded;
     try {
-      const result = await orchestrator.startSubagentResume(id);
+      const result = await orchestrator.startSubagentResume(id, resumeBody);
       return c.json(result, 202);
     } catch (err) {
       if (err instanceof SubagentResumeError) {
@@ -4084,6 +4251,80 @@ export function createSessionRoutes(
       }
       return c.json({ error: { code: 'INTERNAL_ERROR', message: String(err) } }, 500);
     }
+  });
+
+  // POST /api/v2/sessions/:id/recovery/retry — ручной повтор восстановления
+  // после терминализации (PROP-142 §3.7): сбрасывает бюджет попыток и
+  // запускает восстановление заново.
+  //
+  // Идемпотентность: сессия занята (идёт ход) → 409 `LOCKED`; восстанавливать
+  // нечего → 200 `{status:'nothing_to_resume'}`. Дочерняя сессия саб-агента
+  // возобновляется циклом саб-агента (`startSubagentResume`), основная —
+  // продолжением незавершённого in-flight хода или запуском процессора очереди.
+  //
+  // Доступ — граничный prefix-guard (вид `write` из HTTP-метода); проверок
+  // доступа в обработчике нет (инвариант 16).
+  app.post('/:id/recovery/retry', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
+    const id = c.req.param('id');
+    // Гибрид: восстановление живёт на стороне владельца данных — форвард.
+    const forwarded = await forwardRemoteSession(
+      c, id, (client, localId) => client.retrySessionRecovery(localId), undefined, 202,
+    );
+    if (forwarded) return forwarded;
+    const session = await sessionManager.getSession(id);
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    // Занята — повтор невозможен (ход идёт; сброс счётчика ждал бы его конца).
+    if (session.currentStream || session.status?.blocked || isTurnActive(session, queueManager)) {
+      return c.json({
+        error: {
+          code: 'LOCKED',
+          message: messages.recoveryLocked?.(c) ?? 'Сессия занята — повтор восстановления невозможен',
+        },
+      }, 409);
+    }
+    // Сброс бюджета автовосстановления (PROP-142 §3): состояние «попыток не
+    // было» снова достижимо.
+    try {
+      await resetRecoveryState(sessionManager, id);
+    } catch {
+      // Сессия могла исчезнуть между чтением и сбросом — решение ниже по
+      // фактическому состоянию (ошибка не должна ронять ручной повтор).
+    }
+    // Дочерняя сессия саб-агента — продолжение ведёт цикл саб-агента.
+    if (session.parentId && session.sessionOrigin === 'subagent') {
+      try {
+        const started = await orchestrator.startSubagentResume(id);
+        return c.json({
+          status: 'started',
+          child_session_id: started.child_session_id,
+          stream_id: started.stream_id,
+        }, 202);
+      } catch (err) {
+        if (err instanceof SubagentResumeError) {
+          return c.json({ error: { code: err.code, message: err.message } }, err.httpStatus as 400 | 404 | 409);
+        }
+        return c.json({ error: { code: 'INTERNAL_ERROR', message: String(err) } }, 500);
+      }
+    }
+    // Основная сессия: незавершённый in-flight ход (сообщение уже в истории) —
+    // продолжаем его как resume, иначе сообщение материализуется повторно.
+    const resume = await sessionManager.takePendingInFlight(id);
+    if (resume) {
+      queueManager.createProcessor(id, sessionManager, eventBus, processMessage, { resumeMessage: resume });
+      return c.json({
+        status: 'resumed',
+        stream_id: (resume.metadata?.stream_id as string | undefined) ?? null,
+      }, 202);
+    }
+    // Очередь без активного хода — обычный запуск процессора (осознанно
+    // остановленная очередь `queueStopped` не трогаем).
+    if (session.pendingMessages.length > 0 && !session.status?.queueStopped) {
+      queueManager.createProcessor(id, sessionManager, eventBus, processMessage);
+      return c.json({ status: 'queued' }, 202);
+    }
+    return c.json({ status: 'nothing_to_resume' }, 200);
   });
 
   app.post('/:id/summarize', auth.requireAuth, async (c) => {

@@ -47,6 +47,7 @@ import {
 } from './task.js';
 import {
   SubagentResumeError,
+  appendContinuationMessage,
   appendResumeMarker,
   loadResumeChild,
   resumeInitialMessages,
@@ -182,6 +183,12 @@ export interface SubagentResumeOptions {
   /** Сигнал отмены: абортируется при orchestrator.cancel(streamId) («Стоп»). */
   abortSignal: AbortSignal;
   retry?: SubagentRetryConfig;
+  /**
+   * PROP-142 §2: новые указания для ребёнка (текст). Заданы — в историю
+   * пишется обычное user-сообщение (`metadata.continuation`); не заданы —
+   * служебный маркер resume (`task.resume_marker`, прежнее поведение).
+   */
+  prompt?: string;
 }
 
 /**
@@ -242,13 +249,25 @@ export async function runSubagentResume(
     // ADR-075: workspace-гейт resumed-саб-агента — как у родителя.
     const workspaceReady = deps.getWorkspaceReady ? await deps.getWorkspaceReady(child) : undefined;
 
-    // ─── 2. Synthetic user-маркер resume в историю дочерней сессии ──
-    // Общий помощник продолжения (тот же, что у `task_id` в туле `task`).
-    const freshChild = await appendResumeMarker(deps.sessionManager, deps.eventBus, {
-      child,
-      parentSessionId: parent.id,
-      streamId,
-    });
+    // ─── 2. Продолжение в историю дочерней сессии ──────────────────
+    // Текст новых указаний (PROP-142 §2) — обычное user-сообщение
+    // (`metadata.continuation`); без текста — служебный маркер resume
+    // (HTTP-resume без указаний, автовосстановление после рестарта).
+    const continuationText = typeof options.prompt === 'string' && options.prompt.trim() !== ''
+      ? options.prompt
+      : undefined;
+    const freshChild = continuationText !== undefined
+      ? await appendContinuationMessage(deps.sessionManager, deps.eventBus, {
+        child,
+        parentSessionId: parent.id,
+        streamId,
+        text: continuationText,
+      })
+      : await appendResumeMarker(deps.sessionManager, deps.eventBus, {
+        child,
+        parentSessionId: parent.id,
+        streamId,
+      });
 
     // ─── 3. Durable state списка задач (ADR-039/ADR-070) ──────────────
     // Ребёнок видит `session.todos` как state-сообщение `todos_updated` (как

@@ -846,8 +846,30 @@ export class RemoteBackendClient {
     return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/clear`);
   }
 
-  resumeSubagent(id: string): Promise<unknown> {
-    return this.request<unknown>('POST', `/api/v2/sessions/${encodeURIComponent(id)}/resume-subagent`);
+  /**
+   * Возобновить дочернюю сессию саб-агента (`POST /:id/resume-subagent`).
+   *
+   * PROP-142 §2: `body` — необязательные указания продолжения
+   * (`{prompt?, model?, provider?}`). Тело не задано — запрос как раньше (без
+   * тела); старый сервер тело игнорирует (совместимо).
+   */
+  resumeSubagent(id: string, body?: Record<string, unknown>): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/sessions/${encodeURIComponent(id)}/resume-subagent`,
+      body,
+    );
+  }
+
+  /**
+   * Ручной повтор восстановления прерванного хода
+   * (`POST /:id/recovery/retry`, PROP-142 §3.7).
+   */
+  retrySessionRecovery(id: string): Promise<unknown> {
+    return this.request<unknown>(
+      'POST',
+      `/api/v2/sessions/${encodeURIComponent(id)}/recovery/retry`,
+    );
   }
 
   getSessionChildren(id: string): Promise<unknown> {

@@ -165,6 +165,10 @@ const MATRIX: Row[] = [
   // сессии (право изменения содержимого проекта, VIEWER → 403).
   row('sessions', 'POST', '/:id/background'),
   row('sessions', 'POST', '/:id/resume-subagent', { status: 202 }),
+  // PROP-142 §3.7: ручной повтор восстановления — мутация сессии (право
+  // изменения содержимого проекта, VIEWER → 403). Сессия без чего
+  // восстанавливать → 200 `nothing_to_resume`.
+  row('sessions', 'POST', '/:id/recovery/retry'),
   row('sessions', 'POST', '/:id/summarize', { status: 400 }),
   row('sessions', 'GET', '/:id/children'),
   row('sessions', 'GET', '/:id/tree'),

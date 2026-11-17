@@ -1029,6 +1029,71 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(seen.workspaceManaged).toBe(true);
     expect((seen.getWorkspaceOutsideRootPolicy as () => string)()).toBe('deny');
   });
+
+  // ─── PROP-142 §2: продолжение с новыми указаниями и сменой пары ───
+  it('PROP-142 §2: указания (prompt) → user-сообщение с metadata.continuation, маркера resume нет', async () => {
+    const { child } = await createInterruptedChild();
+
+    const started = await orchestrator.startSubagentResume(child, { prompt: 'теперь проверь тесты' });
+    expect(started.status).toBe('started');
+
+    await vi.waitFor(async () => {
+      const s = await sessionManager.getSession(child);
+      expect(s!.status.blocked).toBeFalsy();
+      expect(s!.currentStream).toBeUndefined();
+    }, { timeout: 5000 });
+
+    const c = (await sessionManager.getSession(child))!;
+    const continuation = c.messages.find((m) => m.metadata?.continuation === true);
+    expect(continuation).toBeDefined();
+    expect(continuation!.role).toBe(MessageRole.USER);
+    expect(continuation!.content).toBe('теперь проверь тесты');
+    expect(continuation!.metadata?.resume).toBeUndefined();
+    // Служебный маркер resume в этом прогоне не писался (текст заменил его).
+    expect(c.messages.some((m) => m.metadata?.resume === true)).toBe(false);
+  });
+
+  it('PROP-142 §2: без указаний — прежний служебный маркер resume', async () => {
+    const { child } = await createInterruptedChild();
+    await orchestrator.startSubagentResume(child);
+    await vi.waitFor(async () => {
+      const s = await sessionManager.getSession(child);
+      expect(s!.status.blocked).toBeFalsy();
+      expect(s!.currentStream).toBeUndefined();
+    }, { timeout: 5000 });
+    const c = (await sessionManager.getSession(child))!;
+    expect(c.messages.some((m) => m.metadata?.resume === true)).toBe(true);
+    expect(c.messages.some((m) => m.metadata?.continuation === true)).toBe(false);
+  });
+
+  it('PROP-142 §2: model/provider обновляют настройки ребёнка', async () => {
+    const { child } = await createInterruptedChild();
+    await orchestrator.startSubagentResume(child, { model: 'm2', provider: 'mockres' });
+    await vi.waitFor(async () => {
+      const s = await sessionManager.getSession(child);
+      expect(s!.status.blocked).toBeFalsy();
+      expect(s!.currentStream).toBeUndefined();
+    }, { timeout: 5000 });
+    const c = (await sessionManager.getSession(child))!;
+    expect(c.settings.model).toBe('m2');
+    expect(c.settings.provider).toBe('mockres');
+  });
+
+  it('PROP-142 §2: пара без провайдера не блокирует запуск (валидация пары не дублируется)', async () => {
+    const { parent, child } = await createInterruptedChild();
+    await orchestrator.startSubagentResume(child, { provider: 'no-such-provider' });
+    await vi.waitFor(async () => {
+      const p = await sessionManager.getSession(parent);
+      expect(p!.messages.some((m) => m.metadata?.type === 'subagent_resumed_result')).toBe(true);
+    }, { timeout: 5000 });
+    const c = (await sessionManager.getSession(child))!;
+    // Пара записана в настройки ребёнка; невалидный провайдер дал обычный
+    // failed-путь (NO_PROVIDER), а не отказ на границе.
+    expect(c.settings.provider).toBe('no-such-provider');
+    const p = (await sessionManager.getSession(parent))!;
+    const result = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result')!;
+    expect(result.metadata!.resume_status).toBe('failed');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────

@@ -8539,8 +8539,16 @@ export class ChatOrchestrator {
    * 400/404/409), выполнение — фоновое (mimo очереди: у дочерней сессии нет
    * своего QueueProcessor). Защита от двойного resume — acquireLock +
    * currentStream (последний также делает сессию abort-совместимой).
+   *
+   * PROP-142 §2: `opts.prompt` — новые указания (в историю ребёнка пишется
+   * обычное user-сообщение вместо служебного маркера), `opts.model`/
+   * `opts.provider` — смена пары прогона ребёнка (настройки сессии).
    */
-  async startSubagentResume(childSessionId: string): Promise<{
+  async startSubagentResume(childSessionId: string, opts?: {
+    prompt?: string;
+    model?: string;
+    provider?: string;
+  }): Promise<{
     status: 'started';
     child_session_id: string;
     parent_session_id: string;
@@ -8558,6 +8566,33 @@ export class ChatOrchestrator {
     const acquired = await this._sessionManager.acquireLock(childSessionId, processId);
     if (!acquired) {
       throw new SubagentResumeError('LOCKED', sm('task.resume_locked', { id: childSessionId }));
+    }
+
+    // PROP-142 §2: смена пары прогона ребёнка — точечная правка настроек
+    // (`mutateMeta`, ADR-144; `touchUpdatedAt:false` — служебная смена, время
+    // сессии не двигается). Запись — только при реальном изменении.
+    // Валидацию пары здесь не дублируем: резолвер провайдера в
+    // `runSubagentResume` отработает и вернёт обычный failed-путь.
+    const explicitProvider = opts?.provider?.trim() || undefined;
+    const explicitModel = opts?.model?.trim() || undefined;
+    if (explicitProvider || explicitModel) {
+      try {
+        await this._sessionManager.mutateMeta(childSessionId, (meta) => {
+          let changed = false;
+          if (explicitProvider && meta.settings.provider !== explicitProvider) {
+            meta.settings.provider = explicitProvider;
+            changed = true;
+          }
+          if (explicitModel && meta.settings.model !== explicitModel) {
+            meta.settings.model = explicitModel;
+            changed = true;
+          }
+          return changed;
+        }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
+      } catch {
+        // Правка настроек не удалась — продолжаем с прежней парой (резолвер
+        // провайдера возьмёт фактическую).
+      }
     }
 
     // currentStream — маркер активности для UI и abort-механики. Точечная
@@ -8596,6 +8631,9 @@ export class ChatOrchestrator {
       parent,
       streamId,
       abortSignal: resumeAbort.signal,
+      // PROP-142 §2: указания для ребёнка (текст) — обычное user-сообщение
+      // в его истории; без текста — служебный маркер resume.
+      ...(opts?.prompt !== undefined ? { prompt: opts.prompt } : {}),
     })
       .catch((err) => {
         warning('ORCHESTRATOR', `subagent resume failed: ${err instanceof Error ? err.message : String(err)}`);

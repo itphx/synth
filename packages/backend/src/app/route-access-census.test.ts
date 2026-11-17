@@ -168,6 +168,10 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('POST', '/api/v2/sessions/:id/abort', G_SESSION, [404], { body: {} }),
   r('POST', '/api/v2/sessions/:id/background', G_SESSION, [404], { body: {} }),
   r('POST', '/api/v2/sessions/:id/resume-subagent', G_SESSION, [404], { body: {} }),
+  // PROP-142 §3.7: ручной повтор восстановления — тот же prefix-guard
+  // (write-доступ по методу); чужой/несуществующий id → 404 (сессия не
+  // раскрывается).
+  r('POST', '/api/v2/sessions/:id/recovery/retry', G_SESSION, [404], { body: {} }),
   r('POST', '/api/v2/sessions/:id/summarize', G_SESSION, [404], { body: {} }),
   r('POST', '/api/v2/sessions/:id/fork', G_SESSION, [404], { body: {} }),
   r('POST', '/api/v2/sessions/:id/references', G_SESSION, [404], { body: {} }),
