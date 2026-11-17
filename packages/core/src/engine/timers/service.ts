@@ -37,6 +37,7 @@ import {
   TIMER_MAX_INTERVAL_SEC,
   TIMER_MIN_INTERVAL_SEC,
   TIMER_ONE_SHOT_HORIZON_DAYS,
+  TIMER_PAST_GRACE_SEC,
   TIMER_TIME_REGEX,
   generateId,
   nowISO,
@@ -48,7 +49,7 @@ import type { TimerMetricsHooks } from '../../metrics/collectors/timers.js';
 import { AlwaysLeader } from '../scheduler/leader.js';
 import type { SchedulerLeader } from '../scheduler/leader.js';
 import { isValidTimezone, nextFireForRepeat, resolveFirstFire } from './next-fire.js';
-import { TimerLimitExceededError, TimerValidationError } from './types.js';
+import { TimerDuplicateError, TimerLimitExceededError, TimerValidationError } from './types.js';
 import type { TimerDeliver, TimerIntent, TimerUpdatePatch } from './types.js';
 
 /** Страховочный тик (ловит дрейф часов и пропущенные окна), мс. */
@@ -87,7 +88,12 @@ export type TimerAuditAction = Extract<SecurityAuditAction, 'create' | 'update' 
  * метаданные (id/вид/статус/время): комментарий таймера — пользовательский
  * текст, в live-событие он не попадает.
  */
-export type TimerEventType = 'timer.created' | 'timer.updated' | 'timer.fired' | 'timer.cancelled';
+export type TimerEventType =
+  | 'timer.created'
+  | 'timer.updated'
+  | 'timer.fired'
+  | 'timer.cancelled'
+  | 'timer.deleted';
 
 /** Колбэк публикации live-события таймера в канал сессии. */
 export type TimerEventPublisher = (
@@ -257,6 +263,9 @@ export class TimerService {
   async createTimer(intent: TimerIntent): Promise<Timer> {
     const now = this._clock();
     this._validateIntent(intent, now);
+    if (intent.allowDuplicate !== true) {
+      await this._assertNotDuplicate(intent);
+    }
 
     const active = await this._timers.countActive(intent.sessionId);
     if (active >= TIMER_MAX_ACTIVE_PER_SESSION) {
@@ -304,6 +313,23 @@ export class TimerService {
         if (firesAt) next.firesAt = firesAt.toISOString();
       }
     }
+    if (next.firesAt !== undefined) {
+      const fireMs = Date.parse(next.firesAt);
+      if (!Number.isFinite(fireMs)) {
+        throw new TimerValidationError(
+          'timer_invalid_target',
+          `Некорректное время срабатывания «${String(next.firesAt)}»`,
+          'at',
+        );
+      }
+      if (fireMs < this._clock().getTime() - TIMER_PAST_GRACE_SEC * 1000) {
+        throw new TimerValidationError(
+          'timer_time_in_past',
+          'Время срабатывания в прошлом — укажите будущее время',
+          'at',
+        );
+      }
+    }
 
     const updated = await this._timers.update(id, next);
     if (!updated) return null;
@@ -314,6 +340,25 @@ export class TimerService {
     return updated;
   }
 
+  /**
+   * Остановить автоматизацию: запись остаётся со статусом `cancelled`
+   * (история/аудит), срабатывания прекращаются. Повторный stop идемпотентен.
+   */
+  async stopTimer(id: string): Promise<Timer | null> {
+    const current = await this._timers.get(id);
+    if (!current) return null;
+    // Терминальные записи не меняем: `fired` уже отработал, `cancelled` уже
+    // остановлен (повторный stop идемпотентен).
+    if (current.status !== 'active' && current.status !== 'paused') return current;
+
+    const stopped = await this._timers.setStatus(id, 'cancelled');
+    if (!stopped) return null;
+    await this._refreshSchedule();
+    await this._auditOp('update', stopped, describeTimer(current), describeTimer(stopped));
+    this._publish('timer.cancelled', stopped, { status: 'cancelled' });
+    return stopped;
+  }
+
   /** Удалить таймер (история срабатываний остаётся). */
   async removeTimer(id: string): Promise<boolean> {
     const current = await this._timers.get(id);
@@ -321,7 +366,7 @@ export class TimerService {
     if (removed) {
       await this._refreshSchedule();
       await this._auditOp('remove', current, describeTimer(current), null);
-      if (current) this._publish('timer.cancelled', current, { status: 'cancelled' });
+      if (current) this._publish('timer.deleted', current, { status: current.status });
     }
     return removed;
   }
@@ -714,7 +759,39 @@ export class TimerService {
         'at',
       );
     }
-    // Время в прошлом не запрещено: будильник сработает как догон (один раз).
+    // Время в прошлом — ошибка ввода, но с допуском на сетевую задержку и
+    // гонку «создал в 12:00:00.9 на 12:00:00». Догон уже сохранённых записей
+    // после рестарта этим не ограничивается (они существовали до простоя).
+    if (at < now.getTime() - TIMER_PAST_GRACE_SEC * 1000) {
+      throw new TimerValidationError(
+        'timer_time_in_past',
+        'Время срабатывания в прошлом — укажите будущее время',
+        'at',
+      );
+    }
+  }
+
+  /**
+   * Семантический дубликат: активная автоматизация того же вида с тем же
+   * комментарием и именем в этой сессии. `allowDuplicate` снимает проверку.
+   */
+  private async _assertNotDuplicate(intent: TimerIntent): Promise<void> {
+    let active: Timer[];
+    try {
+      active = await this._timers.list({
+        sessionId: intent.sessionId,
+        kind: intent.kind,
+        status: 'active',
+        limit: ACTIVE_LIST_LIMIT,
+      });
+    } catch {
+      return; // выборка не удалась — не блокируем создание
+    }
+    const name = intent.name ?? '';
+    const match = active.find(
+      (timer) => timer.comment === intent.comment && (timer.name ?? '') === name,
+    );
+    if (match) throw new TimerDuplicateError(match.id);
   }
 
   /** Валидация правила повтора (используется и при правке). */

@@ -716,10 +716,20 @@ export const SYSTEM_MESSAGES = {
     'Error: the automation service (timers and alarms) is unavailable in this session',
   'timer.tool.no_project':
     'Error: automations require a project — this session has no project, so timers and alarms cannot be created',
-  'timer.tool.not_found': 'Error: timer "{id}" not found',
-  'timer.tool.created': 'Timer "{id}" created — fires at {fires_at}',
-  'timer.tool.updated': 'Timer "{id}" updated',
+  'timer.tool.not_found': 'Error: {noun} "{id}" not found',
+  'timer.tool.created': '{noun} "{id}" created — fires at {fires_at}',
+  'timer.tool.updated': '{noun} "{id}" updated',
   'timer.tool.cancelled': 'Timer "{id}" cancelled',
+  'timer.tool.stopped': '{noun} "{id}" stopped — it will not fire again',
+  'timer.tool.deleted': '{noun} "{id}" deleted',
+  'timer.tool.show_header': 'Automation "{id}":',
+  'timer.tool.duplicate':
+    'Error: an active {noun} with the same comment and name already exists: "{id}". '
+    + 'Pass allow_duplicate: true to create another one.',
+  'timer.tool.wrong_kind':
+    'Error: "{id}" is {actual}, not {expected} — use the {expected} tool (or its {expected}_id parameter)',
+  'timer.tool.time_in_past':
+    'Error: the fire time is in the past — choose a future time (the server local time zone is used when `at` has no offset)',
   'timer.tool.list_header': 'Automations ({count}):',
   'timer.tool.list_empty': 'No automations of this kind',
   'timer.tool.invalid_comment':

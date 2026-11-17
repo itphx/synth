@@ -174,6 +174,7 @@ export type EventType =
   | 'timer.updated'
   | 'timer.fired'
   | 'timer.cancelled'
+  | 'timer.deleted'
   | 'error';
 
 export interface BusEvent {
@@ -362,12 +363,13 @@ export interface TerminalDeletedEventData extends TerminalUpdatedEventData {
 // (он виден в сообщении `timer_fired` и в карточке панели).
 
 /**
- * Payload событий `timer.created`/`timer.updated`/`timer.fired`/`timer.cancelled`.
+ * Payload событий `timer.created`/`timer.updated`/`timer.fired`/`timer.cancelled`/
+ * `timer.deleted`.
  *
  * Идентификаторы — snake_case (как у остальных payload'ов шины).
  */
 export interface TimerEventData {
-  /** Id записи таймера/будильника (`tmr_<uuid>`). */
+  /** Id записи: `tmr_<uuid>` для таймера, `alm_<uuid>` для будильника. */
   timer_id: string;
   /** Вид автоматизации (`timer`/`alarm`). */
   kind: string;

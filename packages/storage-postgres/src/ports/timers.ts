@@ -172,7 +172,7 @@ export class PgTimerRepository implements TimerRepository {
                now()::timestamptz, now()::timestamptz)
        RETURNING *`,
       [
-        `tmr_${randomUUID()}`,
+        `${input.kind === 'alarm' ? 'alm' : 'tmr'}_${randomUUID()}`,
         input.kind,
         input.name ?? null,
         input.comment,

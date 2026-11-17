@@ -26,6 +26,12 @@
  * - **Мутации — через движок** (`TimerService`): лимиты, валидация и пересчёт
  *   `firesAt` — его дело; тул в порт напрямую не пишет (инвариант 2).
  * - **Тексты — только через ключи `shared/i18n`** (ADR-041).
+ *
+ * ## Глаголы
+ *
+ * `stop` — прекратить срабатывания, запись остаётся (`status: cancelled`) и
+ * видна в `list include_stopped: true`; `delete` — удалить запись совсем
+ * (история срабатываний остаётся). Слова `cancel` нет: он смешивал оба смысла.
  */
 import { z } from 'zod';
 import {
@@ -57,13 +63,9 @@ import { t as sm, i18n as i18nMeta } from '../system-messages.js';
  * Зависимости тулов таймеров из `ToolContext.extra` (упаковка — оркестратор).
  *
  * - `timerService` — движок таймеров/будильников (PROP-141): создание,
- *   правка, отмена (лимиты и валидация — его дело).
+ *   правка, остановка (лимиты и валидация — его дело).
  * - `timers` — порт реестра таймеров (ADR-096): список и чтение записей.
- * - `sessionManager` — менеджер сессий: владелец сессии (`ownerId`
- *   автоматизации).
- *
- * Не заданы — контур автоматизаций в этой сборке недоступен
- * (`timer.tool.deps_unavailable`).
+ * - `sessionManager` — менеджер сессий: владелец сессии (`ownerId`).
  */
 export interface TimerToolsExtra extends PrincipalExtra {
   timerService?: TimerService;
@@ -89,17 +91,41 @@ function noProject(): ToolResult {
   };
 }
 
+/** Человеческое имя вида для текстов: `timer` → `Timer`, `alarm` → `Alarm`. */
+function nounOf(kind: 'timer' | 'alarm'): string {
+  return kind === 'alarm' ? 'Alarm' : 'Timer';
+}
+
 /**
  * Единый отказ «автоматизация не найдена».
  *
  * Один текст для «нет такого id» и «чужой автоматизации» — существование
  * чужого ресурса не раскрывается.
  */
-function notFound(id: string): ToolResult {
+function notFound(id: string, kind: 'timer' | 'alarm'): ToolResult {
+  const noun = nounOf(kind);
+  const params = { id, noun };
   return {
-    content: sm('timer.tool.not_found', { id }),
+    content: sm('timer.tool.not_found', params),
     isError: true,
-    metadata: { i18n: i18nMeta('timer.tool.not_found', { id }) },
+    metadata: { i18n: i18nMeta('timer.tool.not_found', params) },
+  };
+}
+
+/**
+ * Отказ «id существует, но это другой вид»: иначе `alarm stop` по id таймера
+ * отвечает «not found», хотя запись есть (дезориентирует модель).
+ */
+function wrongKind(
+  id: string,
+  expected: 'timer' | 'alarm',
+  actual: 'timer' | 'alarm',
+): ToolResult {
+  const params = { id, actual: nounOf(actual), expected: nounOf(expected) };
+  return {
+    content: sm('timer.tool.wrong_kind', params),
+    isError: true,
+    metadata: { i18n: i18nMeta('timer.tool.wrong_kind', params), code: 'timer_wrong_kind' },
   };
 }
 
@@ -117,23 +143,37 @@ const TIMER_ERROR_KEYS = {
   timer_invalid_horizon: 'timer.tool.invalid_horizon',
   timer_invalid_target: 'timer.tool.invalid_target',
   timer_limit_exceeded: 'timer.tool.limit_exceeded',
+  timer_duplicate: 'timer.tool.duplicate',
+  timer_time_in_past: 'timer.tool.time_in_past',
 } as const satisfies Record<TimerErrorCode, string>;
 
-/**
- * Отказ движка (`TimerValidationError`/`TimerLimitExceededError`) → результат
- * тула: текст по i18n-ключу + машинный код в `metadata.code`.
- *
- * `null` — ошибка не доменная (её пробрасывают дальше).
- */
+/** Отказ движка → результат тула (текст по i18n-ключу + код в metadata). */
 function engineErrorResult(err: unknown): ToolResult | null {
   if (!(err instanceof TimerValidationError)) return null;
   const key = TIMER_ERROR_KEYS[err.code];
+
   if (err.code === 'timer_limit_exceeded') {
     const limit = String((err as { limit?: number }).limit ?? '');
     return {
       content: sm(key, { limit }),
       isError: true,
       metadata: { i18n: i18nMeta(key, { limit }), code: err.code },
+    };
+  }
+  if (err.code === 'timer_duplicate') {
+    const id = String((err as { existingId?: string }).existingId ?? '');
+    const params = { id, noun: 'Automation' };
+    return {
+      content: sm(key, params),
+      isError: true,
+      metadata: { i18n: i18nMeta(key, params), code: err.code, existing_id: id },
+    };
+  }
+  if (err.code === 'timer_time_in_past') {
+    return {
+      content: sm(key),
+      isError: true,
+      metadata: { i18n: i18nMeta(key), code: err.code },
     };
   }
   const field = err.field ?? 'value';
@@ -146,38 +186,22 @@ function engineErrorResult(err: unknown): ToolResult | null {
 
 /** Scope тула автоматизации: движок + порт + проект/сессия/владелец. */
 interface TimerToolScope {
-  /** Движок таймеров (создание/правка/отмена). */
   service: TimerService;
-  /** Порт реестра таймеров (список/чтение). */
   repository: TimerRepository;
-  /** Проект сессии — обязателен (инстансных автоматизаций нет). */
   projectId: string;
-  /** Сессия-получатель сообщения при срабатывании. */
   sessionId: string;
-  /** Владелец (принципал-человек; в standalone — `local`). */
   ownerId: string;
 }
 
-/** Результат `loadScope`: готовый scope либо готовый отказ. */
 type ScopeResult = { ok: true; scope: TimerToolScope } | { ok: false; result: ToolResult };
 
-/**
- * Владелец автоматизации — владелец сессии/текущий пользователь.
- *
- * Тот же резолвер, что у соседних тулов (`resolveViewer`): принципал хода →
- * владелец сессии → `local` (standalone-дефолт).
- */
+/** Владелец автоматизации — владелец сессии/текущий пользователь. */
 async function resolveOwnerId(ctx: ToolContext, extra: TimerToolsExtra): Promise<string> {
   const viewer = await resolveViewer(ctx, extra);
   return viewer.userId || 'local';
 }
 
-/**
- * Загрузить scope тула: движок, порт, проект, сессия, владелец.
- *
- * Отказ — когда считать нечем: контур недоступен (`deps_unavailable`) либо у
- * сессии нет проекта (`no_project` — автоматизации бывают только в проекте).
- */
+/** Загрузить scope тула: движок, порт, проект, сессия, владелец. */
 async function loadScope(ctx: ToolContext, extra: TimerToolsExtra): Promise<ScopeResult> {
   const service = extra.timerService;
   const repository = extra.timers;
@@ -219,22 +243,49 @@ function formatTimerLine(timer: Timer): string {
   return [
     `- ${timer.id}`,
     `status=${timer.status}`,
+    ...(timer.name ? [`name=${timer.name}`] : []),
     `fires_at=${timer.firesAt}`,
     `repeat=${describeRepeat(timer.repeat)}`,
     `comment=${truncate(timer.comment, MAX_COMMENT_CHARS)}`,
   ].join(' | ');
 }
 
+/** Подробная карточка (`show`): комментарий не обрезается. */
+function showResult(timer: Timer): ToolResult {
+  const lines = [
+    sm('timer.tool.show_header', { id: timer.id }),
+    `kind=${timer.kind}`,
+    `status=${timer.status}`,
+    ...(timer.name ? [`name=${timer.name}`] : []),
+    `fires_at=${timer.firesAt}`,
+    `repeat=${describeRepeat(timer.repeat)}`,
+    `created_at=${timer.createdAt}`,
+    ...(timer.firedAt ? [`fired_at=${timer.firedAt}`] : []),
+    ...(timer.lastError ? [`last_error=${timer.lastError}`] : []),
+    `comment=${timer.comment}`,
+  ];
+  return {
+    content: lines.join('\n'),
+    metadata: {
+      id: timer.id,
+      kind: timer.kind,
+      status: timer.status,
+      fires_at: timer.firesAt,
+      i18n: i18nMeta('timer.tool.show_header', { id: timer.id }),
+    },
+  };
+}
+
 /** Список автоматизаций сессии (по виду и статусу). */
 async function listTimers(
   scope: TimerToolScope,
   kind: 'timer' | 'alarm',
-  includeCancelled: boolean,
+  includeStopped: boolean,
 ): Promise<Timer[]> {
   const filter: TimerFilter = {
     sessionId: scope.sessionId,
     kind,
-    ...(includeCancelled ? {} : { status: 'active' }),
+    ...(includeStopped ? {} : { status: 'active' }),
   };
   return scope.repository.list(filter);
 }
@@ -259,146 +310,62 @@ function listResult(timers: Timer[]): ToolResult {
         id: timer.id,
         kind: timer.kind,
         status: timer.status,
+        ...(timer.name ? { name: timer.name } : {}),
         firesAt: timer.firesAt,
       })),
     },
   };
 }
 
-// ─────────────────────────────── timer ───────────────────────────────
+/** Загрузить запись нужного вида; чужая — not found, другой вид — wrong kind. */
+async function resolveRecord(
+  scope: TimerToolScope,
+  id: string,
+  expected: 'timer' | 'alarm',
+): Promise<{ ok: true; timer: Timer } | { ok: false; result: ToolResult }> {
+  const timer = await scope.repository.get(id);
+  if (!timer || !inScope(timer, scope)) return { ok: false, result: notFound(id, expected) };
+  if (timer.kind !== expected) {
+    return { ok: false, result: wrongKind(id, expected, timer.kind) };
+  }
+  return { ok: true, timer };
+}
 
-const timerToolSchema = z.discriminatedUnion('action', [
-  z.object({
-    action: z.literal('create'),
-    delay: z
-      .number()
-      .int()
-      .min(TIMER_MIN_INTERVAL_SEC)
-      .max(TIMER_MAX_INTERVAL_SEC)
-      .describe('Seconds from now until the reminder fires (10…2592000)'),
-    comment: z
-      .string()
-      .min(1)
-      .max(TIMER_COMMENT_MAX)
-      .describe(
-        'What to do when the timer fires — the only meaning of this automation. '
-        + 'Write it so that it is still clear a day later.',
-      ),
-    name: z.string().min(1).optional().describe('Optional short name of the timer'),
-  }),
-  z.object({
-    action: z.literal('list'),
-    include_cancelled: z
-      .boolean()
-      .optional()
-      .describe(
-        'Include cancelled, paused and already fired timers (default: only the active ones of this session)',
-      ),
-  }),
-  z.object({
-    action: z.literal('cancel'),
-    timer_id: z.string().min(1).describe('Id of the timer to cancel (tmr_...)'),
-  }),
-]);
+/** Подпись результата мутации: `{noun} "{id}" created/updated/stopped/deleted`. */
+function mutationResult(
+  key: 'timer.tool.created' | 'timer.tool.updated' | 'timer.tool.stopped' | 'timer.tool.deleted',
+  kind: 'timer' | 'alarm',
+  timer: Timer,
+): ToolResult {
+  const params: Record<string, string> = { id: timer.id, noun: nounOf(kind) };
+  if (key === 'timer.tool.created') params.fires_at = timer.firesAt;
+  return {
+    content: sm(key, params),
+    metadata: {
+      id: timer.id,
+      ...(timer.name ? { name: timer.name } : {}),
+      ...(key === 'timer.tool.created' ? { fires_at: timer.firesAt } : {}),
+      i18n: i18nMeta(key, params),
+    },
+  };
+}
 
-type TimerToolInput = z.infer<typeof timerToolSchema>;
-
-export const timerTool: ToolDefinition = {
-  name: 'timer',
-  description:
-    'Create a one-shot reminder that wakes this session up after N seconds ("come back to this in 15 minutes"). '
-    + 'Use it instead of `sleep` or a blocking shell command whenever the work has to continue later — never block the '
-    + 'current turn waiting, create a timer and let it wake you up. '
-    + 'The comment is the only meaning of this automation: it must explain what to do when the timer fires, written so '
-    + 'that it is still clear a day later. '
-    + 'Actions: create (delay in seconds + comment), list (the timers of this session), cancel (timer_id).',
-  parameters: timerToolSchema,
-  capabilities: [ToolCapability.SCHEDULE],
-  async execute(args, ctx) {
-    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
-    if (isAborted(ctx)) return abortedResult(this.name);
-
-    const parsed = this.parameters.safeParse(args);
-    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
-    const params = parsed.data as TimerToolInput;
-
-    const extra = (ctx.extra ?? {}) as TimerToolsExtra;
-    const loaded = await loadScope(ctx, extra);
-    if (!loaded.ok) return loaded.result;
-    const scope = loaded.scope;
-
-    if (params.action === 'create') {
-      try {
-        const timer = await scope.service.createTimer({
-          kind: 'timer',
-          ...(params.name !== undefined ? { name: params.name } : {}),
-          comment: params.comment,
-          projectId: scope.projectId,
-          sessionId: scope.sessionId,
-          ownerId: scope.ownerId,
-          repeat: { mode: 'once' },
-          delaySec: params.delay,
-        });
-        const text = sm('timer.tool.created', { id: timer.id, fires_at: timer.firesAt });
-        return {
-          content: text,
-          metadata: {
-            id: timer.id,
-            fires_at: timer.firesAt,
-            i18n: i18nMeta('timer.tool.created', { id: timer.id, fires_at: timer.firesAt }),
-          },
-        };
-      } catch (err) {
-        const failure = engineErrorResult(err);
-        if (failure) return failure;
-        throw err;
-      }
-    }
-
-    if (params.action === 'list') {
-      const timers = await listTimers(scope, 'timer', params.include_cancelled === true);
-      return listResult(timers);
-    }
-
-    // cancel
-    const existing = await scope.repository.get(params.timer_id);
-    if (!existing || existing.kind !== 'timer' || !inScope(existing, scope)) {
-      return notFound(params.timer_id);
-    }
-    const removed = await scope.service.removeTimer(params.timer_id);
-    if (!removed) return notFound(params.timer_id);
-    const text = sm('timer.tool.cancelled', { id: params.timer_id });
-    return {
-      content: text,
-      metadata: {
-        id: params.timer_id,
-        i18n: i18nMeta('timer.tool.cancelled', { id: params.timer_id }),
-      },
-    };
-  },
-};
-
-// ─────────────────────────────── alarm ───────────────────────────────
-
-/** Поля времени/повтора будильника (общие для `create` и `update`). */
+/** Общие поля времени для будильника (create/update). */
 const alarmTimeFields = {
   at: z
     .string()
     .min(1)
     .optional()
-    .describe('Absolute fire time, ISO-8601 (for example 2026-11-18T09:00:00Z)'),
+    .describe(
+      'Absolute fire time, ISO-8601. With `Z` or an offset it is absolute; '
+      + 'without an offset it is interpreted in the **server local time zone**.',
+    ),
   time: z.string().min(1).optional().describe('Wall-clock time HH:MM — requires `timezone`'),
-  timezone: z
-    .string()
-    .min(1)
-    .optional()
-    .describe('IANA timezone of `time` (for example Europe/Moscow)'),
+  timezone: z.string().min(1).optional().describe('IANA timezone of `time` (for example Europe/Moscow)'),
   repeat: z
     .enum(['once', 'daily', 'every'])
     .optional()
-    .describe(
-      'Repetition rule: once (needs `at`), daily (needs `time` + `timezone`), every (needs `every_sec`)',
-    ),
+    .describe('Repetition rule: once (needs `at`), daily (needs `time` + `timezone`), every (needs `every_sec`)'),
   every_sec: z
     .number()
     .int()
@@ -407,49 +374,6 @@ const alarmTimeFields = {
     .optional()
     .describe('Interval in seconds for repeat=every (10…2592000)'),
 };
-
-const alarmToolSchema = z.discriminatedUnion('action', [
-  z.object({
-    action: z.literal('create'),
-    ...alarmTimeFields,
-    comment: z
-      .string()
-      .min(1)
-      .max(TIMER_COMMENT_MAX)
-      .describe(
-        'What to do when the alarm fires — the only meaning of this automation. '
-        + 'Write it so that it is still clear a day later.',
-      ),
-    name: z.string().min(1).optional().describe('Optional short name of the alarm'),
-  }),
-  z.object({
-    action: z.literal('list'),
-    include_cancelled: z
-      .boolean()
-      .optional()
-      .describe(
-        'Include cancelled, paused and already fired alarms (default: only the active ones of this session)',
-      ),
-  }),
-  z.object({
-    action: z.literal('update'),
-    alarm_id: z.string().min(1).describe('Id of the alarm to update (tmr_...)'),
-    ...alarmTimeFields,
-    comment: z
-      .string()
-      .min(1)
-      .max(TIMER_COMMENT_MAX)
-      .optional()
-      .describe('New comment — what to do when the alarm fires'),
-    name: z.string().min(1).optional().describe('New name of the alarm'),
-  }),
-  z.object({
-    action: z.literal('cancel'),
-    alarm_id: z.string().min(1).describe('Id of the alarm to cancel (tmr_...)'),
-  }),
-]);
-
-type AlarmToolInput = z.infer<typeof alarmToolSchema>;
 
 /** Поля времени/повтора, как их видит тул. */
 interface AlarmTimeInput {
@@ -468,12 +392,8 @@ type RepeatResult = { ok: true; repeat: TimerRepeat } | { ok: false; error: stri
  *
  * `repeat` необязателен: без него режим выводится из переданных полей
  * (`every_sec` → every, `time`/`timezone` → daily, иначе once). Несовместимые
- * комбинации (`at` вместе с `time`, `every_sec` вместе с `time`) — понятный
- * отказ: иначе будильник «просыпается не вовремя», и никто не поймёт почему.
- *
- * `current` — действующее правило правки: недостающие «парные» поля
- * (`time`/`timezone`/`every_sec`) берутся из него, поэтому смену часового
- * пояса можно задать одной строкой.
+ * комбинации — понятный отказ. Для `update` недостающие `time`/`timezone`
+ * берутся из текущего правила.
  */
 function buildRepeat(input: AlarmTimeInput, current?: TimerRepeat): RepeatResult {
   const hasAt = input.at !== undefined;
@@ -517,19 +437,256 @@ function buildRepeat(input: AlarmTimeInput, current?: TimerRepeat): RepeatResult
   return { ok: true, repeat: { mode: 'once' } };
 }
 
+// ─────────────────────────────── timer ───────────────────────────────
+
+const timerToolSchema = z.discriminatedUnion('action', [
+  z
+    .object({
+      action: z.literal('create'),
+      delay: z
+        .number()
+        .int()
+        .min(TIMER_MIN_INTERVAL_SEC)
+        .max(TIMER_MAX_INTERVAL_SEC)
+        .describe('Seconds from now until the reminder fires (10…2592000)'),
+      comment: z
+        .string()
+        .min(1)
+        .max(TIMER_COMMENT_MAX)
+        .describe(
+          'What to do when the timer fires — the only meaning of this automation. '
+          + 'Write it so that it is still clear a day later.',
+        ),
+      name: z.string().min(1).optional().describe('Optional short name of the timer'),
+      allow_duplicate: z
+        .boolean()
+        .optional()
+        .describe(
+          'Create even if an active timer with the same comment and name already exists (default: false)',
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('list'),
+      include_stopped: z
+        .boolean()
+        .optional()
+        .describe(
+          'Include stopped, paused and already fired timers (default: only the active ones of this session)',
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('show'),
+      timer_id: z.string().min(1).describe('Id of the timer (tmr_...)'),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('update'),
+      timer_id: z.string().min(1).describe('Id of the timer (tmr_...)'),
+      delay: z
+        .number()
+        .int()
+        .min(TIMER_MIN_INTERVAL_SEC)
+        .max(TIMER_MAX_INTERVAL_SEC)
+        .optional()
+        .describe('New delay from now, seconds (10…2592000)'),
+      comment: z.string().min(1).max(TIMER_COMMENT_MAX).optional().describe('New comment'),
+      name: z.string().min(1).optional().describe('New name'),
+    })
+    .strict()
+    .refine(
+      (value) => value.delay !== undefined || value.comment !== undefined || value.name !== undefined,
+      { message: 'nothing to change: pass `delay`, `comment` or `name`' },
+    ),
+  z
+    .object({
+      action: z.literal('stop'),
+      timer_id: z.string().min(1).describe('Id of the timer to stop (tmr_...)'),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('delete'),
+      timer_id: z.string().min(1).describe('Id of the timer to delete (tmr_...)'),
+    })
+    .strict(),
+]);
+
+type TimerToolInput = z.infer<typeof timerToolSchema>;
+
+export const timerTool: ToolDefinition = {
+  name: 'timer',
+  description:
+    'Create a one-shot reminder that wakes this session up after N seconds ("come back to this in 15 minutes"). '
+    + 'Use it instead of `sleep` or a blocking shell command whenever the work has to continue later — never block the '
+    + 'current turn waiting, create a timer and let it wake you up. '
+    + 'The comment is the only meaning of this automation: it must explain what to do when the timer fires, written so '
+    + 'that it is still clear a day later. '
+    + 'Actions: create (delay in seconds + comment), list (active timers of this session), show (full details), '
+    + 'update (delay/comment/name), stop (no more firings, record stays), delete (remove the record).',
+  parameters: timerToolSchema,
+  capabilities: [ToolCapability.SCHEDULE],
+  async execute(args, ctx) {
+    if (isAborted(ctx)) return abortedResult(this.name);
+
+    const parsed = this.parameters.safeParse(args);
+    if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
+    const params = parsed.data as TimerToolInput;
+
+    const extra = (ctx.extra ?? {}) as TimerToolsExtra;
+    const loaded = await loadScope(ctx, extra);
+    if (!loaded.ok) return loaded.result;
+    const scope = loaded.scope;
+
+    if (params.action === 'create') {
+      try {
+        const timer = await scope.service.createTimer({
+          kind: 'timer',
+          ...(params.name !== undefined ? { name: params.name } : {}),
+          comment: params.comment,
+          projectId: scope.projectId,
+          sessionId: scope.sessionId,
+          ownerId: scope.ownerId,
+          repeat: { mode: 'once' },
+          delaySec: params.delay,
+          ...(params.allow_duplicate === true ? { allowDuplicate: true } : {}),
+        });
+        return mutationResult('timer.tool.created', 'timer', timer);
+      } catch (err) {
+        const failure = engineErrorResult(err);
+        if (failure) return failure;
+        throw err;
+      }
+    }
+
+    if (params.action === 'list') {
+      return listResult(await listTimers(scope, 'timer', params.include_stopped === true));
+    }
+
+    const found = await resolveRecord(scope, params.timer_id, 'timer');
+    if (!found.ok) return found.result;
+    const existing = found.timer;
+
+    if (params.action === 'show') return showResult(existing);
+
+    if (params.action === 'stop') {
+      if (existing.status === 'fired') {
+        return argErrorResult(this.name, 'this timer has already fired — nothing to stop');
+      }
+      const stopped = await scope.service.stopTimer(existing.id);
+      return stopped ? mutationResult('timer.tool.stopped', 'timer', stopped) : notFound(existing.id, 'timer');
+    }
+
+    if (params.action === 'delete') {
+      const removed = await scope.service.removeTimer(existing.id);
+      return removed ? mutationResult('timer.tool.deleted', 'timer', existing) : notFound(existing.id, 'timer');
+    }
+
+    // update
+    try {
+      const patch: { comment?: string; name?: string; firesAt?: string } = {};
+      if (params.comment !== undefined) patch.comment = params.comment;
+      if (params.name !== undefined) patch.name = params.name;
+      if (params.delay !== undefined) {
+        patch.firesAt = new Date(Date.now() + params.delay * 1000).toISOString();
+      }
+      const updated = await scope.service.updateTimer(existing.id, patch);
+      return updated ? mutationResult('timer.tool.updated', 'timer', updated) : notFound(existing.id, 'timer');
+    } catch (err) {
+      const failure = engineErrorResult(err);
+      if (failure) return failure;
+      throw err;
+    }
+  },
+};
+
+// ─────────────────────────────── alarm ───────────────────────────────
+
+const alarmToolSchema = z.discriminatedUnion('action', [
+  z
+    .object({
+      action: z.literal('create'),
+      ...alarmTimeFields,
+      comment: z
+        .string()
+        .min(1)
+        .max(TIMER_COMMENT_MAX)
+        .describe(
+          'What to do when the alarm fires — the only meaning of this automation. '
+          + 'Write it so that it is still clear a day later.',
+        ),
+      name: z.string().min(1).optional().describe('Optional short name of the alarm'),
+      allow_duplicate: z
+        .boolean()
+        .optional()
+        .describe(
+          'Create even if an active alarm with the same comment and name already exists (default: false)',
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('list'),
+      include_stopped: z
+        .boolean()
+        .optional()
+        .describe(
+          'Include stopped, paused and already fired alarms (default: only the active ones of this session)',
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('show'),
+      alarm_id: z.string().min(1).describe('Id of the alarm (alm_...)'),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('update'),
+      alarm_id: z.string().min(1).describe('Id of the alarm (alm_...)'),
+      ...alarmTimeFields,
+      comment: z
+        .string()
+        .min(1)
+        .max(TIMER_COMMENT_MAX)
+        .optional()
+        .describe('New comment — what to do when the alarm fires'),
+      name: z.string().min(1).optional().describe('New name of the alarm'),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('stop'),
+      alarm_id: z.string().min(1).describe('Id of the alarm to stop (alm_...)'),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('delete'),
+      alarm_id: z.string().min(1).describe('Id of the alarm to delete (alm_...)'),
+    })
+    .strict(),
+]);
+
+type AlarmToolInput = z.infer<typeof alarmToolSchema>;
+
 export const alarmTool: ToolDefinition = {
   name: 'alarm',
   description:
     'Create an absolute or recurring wake-up for this session: once ("tomorrow at 09:00"), daily ("every day at 09:00, '
-    + 'Europe/Moscow") or every ("every 10 minutes"). Unlike a schedule (schedule_*), an alarm carries only a comment '
-    + '— no task text: you interpret the comment from the context and the history of the session yourself. '
-    + 'The comment is the only meaning of this automation: write it so that it is still clear a day later. '
-    + 'Actions: create (at or time+timezone, repeat, comment), list (the alarms of this session), update (alarm_id), '
-    + 'cancel (alarm_id).',
+    + 'Europe/Moscow") or every N seconds. Unlike `schedule_*` there is no task text: the comment is the only meaning — '
+    + 'it must explain what to do when the alarm fires, and you interpret it from the session context. '
+    + '`at` with `Z`/offset is absolute; without an offset it is the server local time zone. '
+    + 'Actions: create, list (active alarms of this session), show (full details), update (time/repeat/comment/name), '
+    + 'stop (no more firings, record stays), delete (remove the record).',
   parameters: alarmToolSchema,
   capabilities: [ToolCapability.SCHEDULE],
   async execute(args, ctx) {
-    // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
 
     const parsed = this.parameters.safeParse(args);
@@ -544,6 +701,11 @@ export const alarmTool: ToolDefinition = {
     if (params.action === 'create') {
       const built = buildRepeat(params);
       if (!built.ok) return argErrorResult(this.name, built.error);
+      if (built.repeat.mode === 'once') {
+        if (params.at === undefined) {
+          return argErrorResult(this.name, 'for repeat="once" `at` is required');
+        }
+      }
       try {
         const alarm = await scope.service.createTimer({
           kind: 'alarm',
@@ -554,16 +716,9 @@ export const alarmTool: ToolDefinition = {
           ownerId: scope.ownerId,
           repeat: built.repeat,
           ...(params.at !== undefined ? { at: params.at } : {}),
+          ...(params.allow_duplicate === true ? { allowDuplicate: true } : {}),
         });
-        const text = sm('timer.tool.created', { id: alarm.id, fires_at: alarm.firesAt });
-        return {
-          content: text,
-          metadata: {
-            id: alarm.id,
-            fires_at: alarm.firesAt,
-            i18n: i18nMeta('timer.tool.created', { id: alarm.id, fires_at: alarm.firesAt }),
-          },
-        };
+        return mutationResult('timer.tool.created', 'alarm', alarm);
       } catch (err) {
         const failure = engineErrorResult(err);
         if (failure) return failure;
@@ -572,33 +727,29 @@ export const alarmTool: ToolDefinition = {
     }
 
     if (params.action === 'list') {
-      const alarms = await listTimers(scope, 'alarm', params.include_cancelled === true);
-      return listResult(alarms);
+      return listResult(await listTimers(scope, 'alarm', params.include_stopped === true));
     }
 
-    if (params.action === 'cancel') {
-      const existing = await scope.repository.get(params.alarm_id);
-      if (!existing || existing.kind !== 'alarm' || !inScope(existing, scope)) {
-        return notFound(params.alarm_id);
+    const found = await resolveRecord(scope, params.alarm_id, 'alarm');
+    if (!found.ok) return found.result;
+    const existing = found.timer;
+
+    if (params.action === 'show') return showResult(existing);
+
+    if (params.action === 'stop') {
+      if (existing.status === 'fired') {
+        return argErrorResult(this.name, 'this alarm has already fired — nothing to stop');
       }
-      const removed = await scope.service.removeTimer(params.alarm_id);
-      if (!removed) return notFound(params.alarm_id);
-      const text = sm('timer.tool.cancelled', { id: params.alarm_id });
-      return {
-        content: text,
-        metadata: {
-          id: params.alarm_id,
-          i18n: i18nMeta('timer.tool.cancelled', { id: params.alarm_id }),
-        },
-      };
+      const stopped = await scope.service.stopTimer(existing.id);
+      return stopped ? mutationResult('timer.tool.stopped', 'alarm', stopped) : notFound(existing.id, 'alarm');
+    }
+
+    if (params.action === 'delete') {
+      const removed = await scope.service.removeTimer(existing.id);
+      return removed ? mutationResult('timer.tool.deleted', 'alarm', existing) : notFound(existing.id, 'alarm');
     }
 
     // update
-    const existing = await scope.repository.get(params.alarm_id);
-    if (!existing || existing.kind !== 'alarm' || !inScope(existing, scope)) {
-      return notFound(params.alarm_id);
-    }
-
     const patch: {
       comment?: string;
       name?: string;
@@ -608,7 +759,6 @@ export const alarmTool: ToolDefinition = {
     if (params.comment !== undefined) patch.comment = params.comment;
     if (params.name !== undefined) patch.name = params.name;
 
-    // Правило повтора меняется только когда заданы поля времени/повтора.
     const timeTouched =
       params.at !== undefined
       || params.time !== undefined
@@ -637,17 +787,8 @@ export const alarmTool: ToolDefinition = {
     }
 
     try {
-      const updated = await scope.service.updateTimer(params.alarm_id, patch);
-      if (!updated) return notFound(params.alarm_id);
-      const text = sm('timer.tool.updated', { id: params.alarm_id });
-      return {
-        content: text,
-        metadata: {
-          id: params.alarm_id,
-          fires_at: updated.firesAt,
-          i18n: i18nMeta('timer.tool.updated', { id: params.alarm_id }),
-        },
-      };
+      const updated = await scope.service.updateTimer(existing.id, patch);
+      return updated ? mutationResult('timer.tool.updated', 'alarm', updated) : notFound(existing.id, 'alarm');
     } catch (err) {
       const failure = engineErrorResult(err);
       if (failure) return failure;

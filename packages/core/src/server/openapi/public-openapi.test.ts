@@ -15,7 +15,7 @@ const API_BASE = '/api/v2';
 
 /**
  * Ожидаемая публичная поверхность (интеграционное ядро, ADR-052 этап III, часть 1):
- * path → HTTP-методы. 36 операций: events 13, sessions 8, schedules 6, timers 7,
+ * path → HTTP-методы. 37 операций: events 13, sessions 8, schedules 6, timers 8,
  * llm 1, system 1.
  */
 const EXPECTED_PATHS: Record<string, string[]> = {
@@ -43,6 +43,7 @@ const EXPECTED_PATHS: Record<string, string[]> = {
   // timers (PROP-141, этап 5 B-2)
   '/timers': ['get', 'post'],
   '/timers/{id}': ['patch', 'delete'],
+  '/timers/{id}/stop': ['post'],
   '/timers/{id}/pause': ['post'],
   '/timers/{id}/resume': ['post'],
   '/timers/{id}/firings': ['get'],
@@ -142,9 +143,9 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
       expect(methods[path], `path ${path}`).toEqual([...expected].sort());
     }
 
-    // Всего 36 операций в интеграционном ядре.
+    // Всего 37 операций в интеграционном ядре.
     const operationCount = Object.values(methods).reduce((n, ms) => n + ms.length, 0);
-    expect(operationCount).toBe(36);
+    expect(operationCount).toBe(37);
 
     // Именованные модели присутствуют (не только inline).
     const schemas = doc.components?.schemas ?? {};

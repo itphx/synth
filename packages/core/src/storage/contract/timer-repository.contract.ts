@@ -7,7 +7,7 @@ import type { TimerFiringRepository, TimerRepository } from '../ports/index.js';
  * ADR-096 — слой хранения).
  *
  * Проверяется общий для всех backend'ов контракт:
- * - `create` — запись с id `tmr_<uuid>`, таймстемпы заданы, статус по
+ * - `create` — запись с id `tmr_<uuid>`/`alm_<uuid>` (по виду), таймстемпы заданы, статус по
  *   умолчанию — `active`;
  * - `get` — чтение по `id`, отсутствующая запись — `null`;
  * - `update` — частичная правка (`comment`/`name`/`firesAt`/…), `updatedAt`
@@ -53,6 +53,10 @@ export function describeTimerRepository(
       const loaded = await repo.get(created.id);
       expect(loaded?.id).toBe(created.id);
       expect(loaded?.comment).toBe('проверить сборку');
+
+      // ADR-141: id читаем по виду — у будильника префикс `alm_`.
+      const alarm = await repo.create(timerInput({ kind: 'alarm', comment: 'будильник' }));
+      expect(alarm.id.startsWith('alm_')).toBe(true);
     });
 
     it('update: частичная правка; updatedAt меняется, id неизменен', async () => {

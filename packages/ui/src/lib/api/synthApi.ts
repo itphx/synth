@@ -671,6 +671,7 @@ export const synthApi = {
     listTimers: timersApi.list,
     createTimer: timersApi.create,
     patchTimer: timersApi.patch,
+    stopTimer: timersApi.stop,
     pauseTimer: timersApi.pause,
     resumeTimer: timersApi.resume,
     removeTimer: timersApi.remove,

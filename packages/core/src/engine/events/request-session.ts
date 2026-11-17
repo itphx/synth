@@ -287,9 +287,10 @@ function timerPayloadOf(event: SynthEvent): TimerFiredPayload {
  */
 function buildTimerEnvelope(timer: TimerFiredPayload): string {
   const comment = timer.comment.replace(/<\/?timer>/gi, '');
+  const name = timer.name ? ` name="${timer.name.replace(/"/g, '&quot;')}"` : '';
   return (
     `<timer id="${timer.timerId}" kind="${timer.kind}" repeat="${timer.repeat}" ` +
-    `fired_at="${timer.firedAt}">\n${comment}\n</timer>`
+    `fired_at="${timer.firedAt}"${name}>\n${comment}\n</timer>`
   );
 }
 

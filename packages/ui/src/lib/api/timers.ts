@@ -5,6 +5,7 @@
 //            → { timers, total, offset, limit, next_offset }
 //   POST   /api/v2/timers           → 201 { timer }
 //   PATCH  /api/v2/timers/:id       → { timer }
+//   POST   /api/v2/timers/:id/stop  → { timer } (cancelled, запись остаётся)
 //   POST   /api/v2/timers/:id/pause → { timer }
 //   POST   /api/v2/timers/:id/resume→ { timer }
 //   DELETE /api/v2/timers/:id       → 204
@@ -132,6 +133,15 @@ export const timersApi = {
     const res = await fetchJSON<{ timer: Timer }>(
       `${BASE_URL}/timers/${encodeURIComponent(id)}`,
       { method: 'PATCH', body: JSON.stringify(input) },
+    )
+    return res.timer
+  },
+
+  /** POST /timers/:id/stop — остановить насовсем (`status: cancelled`). */
+  async stop(id: string): Promise<Timer> {
+    const res = await fetchJSON<{ timer: Timer }>(
+      `${BASE_URL}/timers/${encodeURIComponent(id)}/stop`,
+      { method: 'POST' },
     )
     return res.timer
   },

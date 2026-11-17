@@ -337,6 +337,27 @@ const TOOL_BATCH_BARRIER_TOOLS: ReadonlySet<string> = new Set([
  * повторная отправка того же сигнала ничего не «застревает» и не выполняется
  * заново как команда. (`terminal_run`/`execute_shell` остаются под защитой.)
  */
+/**
+ * PROP-141: read-only действия тулов с `action` — не считаются зацикливанием.
+ *
+ * `timer list`/`alarm list`/`show` в длинном ходе — это мониторинг состояния
+ * (как `process_list`), а не повтор одного и того же действия: третий
+ * одинаковый вызов не должен «ломать цикл».
+ */
+const READ_ONLY_TOOL_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  timer: new Set(['list', 'show']),
+  alarm: new Set(['list', 'show']),
+};
+
+/** Read-only вызов тула (`list`/`show` у автоматизаций). */
+function isReadOnlyToolCall(toolName: string, args: unknown): boolean {
+  const actions = READ_ONLY_TOOL_ACTIONS[toolName];
+  if (!actions) return false;
+  if (!args || typeof args !== 'object') return false;
+  const action = (args as { action?: unknown }).action;
+  return typeof action === 'string' && actions.has(action);
+}
+
 const DOOM_LOOP_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
   'terminal_list',
   'terminal_read',
@@ -6890,6 +6911,7 @@ export class ChatOrchestrator {
             !hookBlocked
             && permissionDecision.action !== 'deny'
             && !DOOM_LOOP_EXEMPT_TOOLS.has(toolName)
+            && !isReadOnlyToolCall(toolName, toolArgs)
           ) {
             const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
             const doomCount = (doomLoopTracker.get(doomKey) || 0) + 1;

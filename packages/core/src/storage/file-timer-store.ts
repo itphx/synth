@@ -99,7 +99,9 @@ export class FileTimerStore implements TimerRepository {
       const now = nowISO();
       const timer: Timer = {
         ...input,
-        id: `tmr_${generateId()}`,
+        // Префикс по виду: `alm_` для будильника, `tmr_` для таймера
+        // (ADR-141 — одна сущность `Timer`, но id читаем).
+        id: `${input.kind === 'alarm' ? 'alm' : 'tmr'}_${generateId()}`,
         status: input.status ?? 'active',
         createdAt: now,
         updatedAt: now,

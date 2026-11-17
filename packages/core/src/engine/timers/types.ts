@@ -38,6 +38,12 @@ export interface TimerIntent {
   delaySec?: number;
   /** Будильник, режим `once`: абсолютное время (ISO-8601). */
   at?: string;
+  /**
+   * Разрешить семантический дубликат (та же сессия, вид, комментарий и имя
+   * среди активных). По умолчанию `false`: повторный `create` с тем же
+   * содержанием — ошибка `timer_duplicate` с id существующей записи.
+   */
+  allowDuplicate?: boolean;
 }
 
 /**
@@ -89,6 +95,8 @@ export const TIMER_ERROR_CODES = [
   'timer_invalid_horizon',
   'timer_invalid_target',
   'timer_limit_exceeded',
+  'timer_duplicate',
+  'timer_time_in_past',
 ] as const;
 
 /** Код ошибки подсистемы таймеров. */
@@ -128,6 +136,28 @@ export class TimerValidationError extends TimerError {
  * Сейчас один — число активных таймеров на сессию
  * (`TIMER_MAX_ACTIVE_PER_SESSION` = 50, решение владельца, PROP-141).
  */
+/**
+ * Семантический дубликат: активная автоматизация того же вида с тем же
+ * комментарием и именем уже есть в сессии.
+ *
+ * `existingId` — id существующей записи (чтобы модель могла переиспользовать
+ * её или осознанно передать `allow_duplicate: true`).
+ */
+export class TimerDuplicateError extends TimerValidationError {
+  /** Id уже существующей активной автоматизации. */
+  readonly existingId: string;
+
+  constructor(existingId: string) {
+    super(
+      'timer_duplicate',
+      `Активная автоматизация с тем же комментарием уже есть: ${existingId}`,
+      'comment',
+    );
+    this.name = 'TimerDuplicateError';
+    this.existingId = existingId;
+  }
+}
+
 export class TimerLimitExceededError extends TimerValidationError {
   /** Текущий лимит. */
   readonly limit: number;

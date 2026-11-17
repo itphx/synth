@@ -249,6 +249,22 @@ export const useTimersStore = create<TimersState>()((set) => ({
     const id = str(payload, 'timer_id')
     if (!id) return
 
+    // `timer.deleted` — запись удалена физически: убираем из реестра, а не
+    // помечаем статусом (у `stop` для этого есть `timer.cancelled`).
+    if (type === 'timer.deleted') {
+      set((s) => {
+        if (!s.byId[id]) return {}
+        const byId = { ...s.byId }
+        delete byId[id]
+        return {
+          byId,
+          order: sortOrder(byId),
+          pendingIds: s.pendingIds.filter((pending) => pending !== id),
+        }
+      })
+      return
+    }
+
     set((s) => {
       const prev = s.byId[id]
       const now = new Date().toISOString()

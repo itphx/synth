@@ -2524,7 +2524,7 @@ try {
   **инварианты**: `projectInvariants`/`putProjectInvariants`), `pipelines`, `models`, `fs`, `git`, `llm`
   (`chatCompletions`).
 - **Таймеры в спеке, но не в SDK.** Операции `/api/v2/timers*` описаны в public-OpenAPI
-  (7 операций, §5.45), однако namespace `timers` в `@itphx/synth-sdk` **ещё нет** —
+  (8 операций, §5.45), однако namespace `timers` в `@itphx/synth-sdk` **ещё нет** —
   по решению владельца (PROP-141) SDK для таймеров вынесен за пределы итерации;
   до тех пор контур используется напрямую по HTTP (scopes `timers:read`/`timers:write`).
 - **PROP-054 в SDK.** Журнал проекта **вынесен из детали**: `projects.get()` возвращает DTO **без**
@@ -3867,8 +3867,8 @@ core и backend). Таймер — **персистентная** автомат
 
 **RBAC managed (backend) — по проекту таймера** (ADR-089 §5.5/§5.8, инвариант 21):
 чтение (`GET /`, `GET /:id/firings`) — право чтения проекта (владелец/участник/
-`LEAD`/`ADMIN`); мутации (`POST`/`PATCH`/`POST /:id/pause`/`POST /:id/resume`/
-`DELETE`) — право изменения содержимого (`OWNER`/`EDITOR`/`LEAD`/`ADMIN`;
+`LEAD`/`ADMIN`); мутации (`POST`/`PATCH`/`POST /:id/stop`/`POST /:id/pause`/
+`POST /:id/resume`/`DELETE`) — право изменения содержимого (`OWNER`/`EDITOR`/`LEAD`/`ADMIN`;
 `VIEWER` читает, но не мутирует). Проверка — **на границе**
 (`authorizeProject` → `canReadProject`/`canEditProjectContent`); правило общее с
 расписаниями (`packages/backend/src/routes/project-access.ts` →
@@ -3882,14 +3882,15 @@ core и backend). Таймер — **персистентная** автомат
 | Метод | Путь | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|
 | GET | `/api/v2/timers` | по проекту таймера (read) | Список таймеров — **страница-сводка** `{timers,total,offset,limit,next_offset}` (ADR-118 §4); фильтры: `sessionId`, `projectId`, `status` (`active`/`paused`/`fired`/`cancelled`), `kind` (`timer`/`alarm`); невалидный фильтр или `limit`/`offset` → 400 `VALIDATION_ERROR` |
-| POST | `/api/v2/timers` | по проекту таймера (write) | Создание (`timerIntentRequestSchema`): `{kind, name?, comment, sessionId, projectId?, repeat, delaySec?, at?}`; проект выводится из сессии, переданный несовпадающий → 400; лимит активных таймеров сессии (50) → 409 `TIMER_LIMIT_EXCEEDED`; → 201 `{timer}` |
+| POST | `/api/v2/timers` | по проекту таймера (write) | Создание (`timerIntentRequestSchema`): `{kind, name?, comment, sessionId, projectId?, repeat, delaySec?, at?}`; проект выводится из сессии, переданный несовпадающий → 400; лимит активных таймеров сессии (50) → 409 `TIMER_LIMIT_EXCEEDED`; активный дубликат (тот же вид/комментарий/имя) → 409 `TIMER_DUPLICATE` + `details.existingId`, если не передан `allow_duplicate: true`; → 201 `{timer}` |
 | PATCH | `/api/v2/timers/:id` | по проекту таймера (write) | Правка `{name?, comment?, repeat?}` (`name: null` — сбросить); пустой патч → 400; смена `repeat` пересчитывает `firesAt` (движок) → 200 `{timer}`; нет записи → 404 `NOT_FOUND` |
+| POST | `/api/v2/timers/:id/stop` | по проекту таймера (write) | Остановить: статус `cancelled`, запись остаётся (история/аудит) → 200 `{timer}`; повтор идемпотентен; `fired` → 409 `CONFLICT` |
 | POST | `/api/v2/timers/:id/pause` | по проекту таймера (write) | Пауза → 200 `{timer}` (статус `paused`); терминальный статус (`fired`/`cancelled`) → 409 `CONFLICT` |
 | POST | `/api/v2/timers/:id/resume` | по проекту таймера (write) | Снятие с паузы → 200 `{timer}` (статус `active`); повторяющиеся пересчитывают ближайшее срабатывание от текущего времени; терминальный статус → 409 `CONFLICT` |
 | DELETE | `/api/v2/timers/:id` | по проекту таймера (write) | Удаление → 204 (история срабатываний остаётся); нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/timers/:id/firings` | по проекту таймера (read) | История срабатываний — **страница-сводка** `{firings,total,offset,limit,next_offset}`; `?limit=` (дефолт 20, max 200), `?offset=`; нет таймера → 404 `NOT_FOUND` |
 
-**DTO `Timer`** (`shared/src/types/timers.ts`): `id` (`tmr_<uuid>`), `kind`
+**DTO `Timer`** (`shared/src/types/timers.ts`): `id` (`tmr_<uuid>` для таймера, `alm_<uuid>` для будильника), `kind`
 (`timer`/`alarm`), `name?`, `comment` (1…500 символов), `projectId`, `sessionId`,
 `ownerId` (владелец — текущий пользователь; для service-key — `service:<keyId>`),
 `repeat` (`{mode:'once'}` | `{mode:'daily',time,timezone}` |
@@ -3903,8 +3904,10 @@ core и backend). Таймер — **персистентная** автомат
 **Ошибки.** `400 VALIDATION_ERROR` — некорректное тело/фильтр/пагинация,
 комментарий длиннее 500 символов, интервал/задержка вне 10…2 592 000 с, время
 или часовой пояс не разобраны, горизонт one-shot больше 30 суток, `projectId` не
-совпадает с проектом сессии, сессия вне проекта. `409 TIMER_LIMIT_EXCEEDED` —
-достигнут лимит активных таймеров сессии (50). `409 CONFLICT` — пауза/возобновление
+совпадает с проектом сессии, сессия вне проекта, `at` в прошлом (допуск 60 с).
+`409 TIMER_LIMIT_EXCEEDED` — достигнут лимит активных таймеров сессии (50).
+`409 TIMER_DUPLICATE` — активный дубликат (тот же вид/комментарий/имя) без
+`allow_duplicate: true`. `409 CONFLICT` — пауза/возобновление/остановка
 таймера в терминальном статусе. `403 FORBIDDEN` — нет прав на проект таймера (или
 проект вне проекции `allowedProjects` — `403 PROJECT_FORBIDDEN`). `404 NOT_FOUND` —
 таймера нет. `403 SCOPE_REQUIRED` — у service-key нет нужного scope.

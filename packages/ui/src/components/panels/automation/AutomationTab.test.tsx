@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   listTimers: vi.fn(),
   createTimer: vi.fn(),
   patchTimer: vi.fn(),
+  stopTimer: vi.fn(),
   pauseTimer: vi.fn(),
   resumeTimer: vi.fn(),
   removeTimer: vi.fn(),
@@ -191,6 +192,7 @@ beforeEach(() => {
   mocks.createTimer.mockResolvedValue(timer())
   mocks.patchTimer.mockResolvedValue(timer())
   mocks.pauseTimer.mockResolvedValue(timer({ status: 'paused' }))
+  mocks.stopTimer.mockResolvedValue(timer({ status: 'cancelled' }))
   mocks.resumeTimer.mockResolvedValue(timer({ status: 'active' }))
   mocks.removeTimer.mockResolvedValue(undefined)
   mocks.getTimerFirings.mockResolvedValue([])
@@ -442,27 +444,15 @@ describe('AutomationTab — действия', () => {
     })
   })
 
-  it('пауза таймера вызывает pauseTimer', async () => {
+  it('остановка таймера вызывает stopTimer', async () => {
     mocks.listTimers.mockResolvedValue(timersPage([timer()]))
 
     const container = await renderTab()
 
-    await click(query(container, 'automation-item-tmr_1-pause'))
+    await click(query(container, 'automation-item-tmr_1-stop'))
 
     await waitFor(() => {
-      expect(mocks.pauseTimer).toHaveBeenCalledWith('tmr_1')
-    })
-  })
-
-  it('возобновление таймера вызывает resumeTimer', async () => {
-    mocks.listTimers.mockResolvedValue(timersPage([timer({ status: 'paused' })]))
-
-    const container = await renderTab()
-
-    await click(query(container, 'automation-item-tmr_1-pause'))
-
-    await waitFor(() => {
-      expect(mocks.resumeTimer).toHaveBeenCalledWith('tmr_1')
+      expect(mocks.stopTimer).toHaveBeenCalledWith('tmr_1')
     })
   })
 

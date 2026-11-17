@@ -1038,6 +1038,21 @@ const deleteTimerRoute = createRoute({
   },
 });
 
+const stopTimerRoute = createRoute({
+  method: 'post',
+  path: '/timers/{id}/stop',
+  tags: ['timers'],
+  summary: 'Остановить таймер или будильник',
+  description:
+    'Запись остаётся со статусом `cancelled` (история и аудит); для удаления используйте DELETE.',
+  security: BEARER_SECURITY,
+  request: { params: TimerParams },
+  responses: {
+    200: jsonResponse('Автоматизация остановлена', TimerResponse),
+    ...publicErrorResponses,
+  },
+});
+
 const pauseTimerRoute = createRoute({
   method: 'post',
   path: '/timers/{id}/pause',
@@ -1251,6 +1266,7 @@ export function createPublicOpenApiApp(): OpenAPIHono {
   app.openapi(createTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 201));
   app.openapi(patchTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 200));
   app.openapi(deleteTimerRoute, (c) => c.body(null, 204));
+  app.openapi(stopTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 200));
   app.openapi(pauseTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 200));
   app.openapi(resumeTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 200));
   app.openapi(listTimerFiringsRoute, (c) =>

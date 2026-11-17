@@ -349,6 +349,61 @@ describe('Timers API Routes (PROP-141, этап 5 B-2)', () => {
     expect(((await resumed.json()) as { timer: Timer }).timer.status).toBe('active');
   });
 
+  it('POST /:id/stop — статус cancelled, запись остаётся; повтор идемпотентен', async () => {
+    const app = makeApp();
+    const created = await seed();
+
+    const stopped = await app.request(`/api/v2/timers/${created.id}/stop`, { method: 'POST' });
+    expect(stopped.status).toBe(200);
+    expect(((await stopped.json()) as { timer: Timer }).timer.status).toBe('cancelled');
+    expect(await timers.get(created.id)).not.toBeNull();
+
+    const repeated = await app.request(`/api/v2/timers/${created.id}/stop`, { method: 'POST' });
+    expect(repeated.status).toBe(200);
+  });
+
+  it('POST /:id/stop — отработавший таймер → 409', async () => {
+    const app = makeApp();
+    const created = await seed({ status: 'fired' });
+    const res = await app.request(`/api/v2/timers/${created.id}/stop`, { method: 'POST' });
+    expect(res.status).toBe(409);
+  });
+
+  it('POST / — семантический дубликат → 409 TIMER_DUPLICATE; allow_duplicate разрешает', async () => {
+    const app = makeApp();
+    const body = timerBody({ comment: 'дубликат' });
+    expect((await app.request('/api/v2/timers', json('POST', body))).status).toBe(201);
+
+    const duplicate = await app.request('/api/v2/timers', json('POST', body));
+    expect(duplicate.status).toBe(409);
+    const duplicateBody = (await duplicate.json()) as {
+      error: { code: string; details?: { existingId?: string } };
+    };
+    expect(duplicateBody.error.code).toBe('TIMER_DUPLICATE');
+    expect(duplicateBody.error.details?.existingId).toBeTruthy();
+
+    const allowed = await app.request(
+      '/api/v2/timers',
+      json('POST', { ...body, allow_duplicate: true }),
+    );
+    expect(allowed.status).toBe(201);
+  });
+
+  it('POST / — at в прошлом → 400', async () => {
+    const app = makeApp();
+    const res = await app.request(
+      '/api/v2/timers',
+      json('POST', {
+        kind: 'alarm',
+        comment: 'прошлое',
+        sessionId: 's1',
+        repeat: { mode: 'once' },
+        at: new Date(Date.now() - 3_600_000).toISOString(),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
   it('POST /:id/pause — таймер в терминальном статусе → 409', async () => {
     const app = makeApp();
     const created = await seed({ status: 'fired' });

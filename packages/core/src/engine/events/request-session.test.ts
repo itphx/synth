@@ -1400,7 +1400,7 @@ describe('RequestSessionService (ADR-089)', () => {
     expect(msg.role).toBe('user');
     expect(msg.author).toBe('Timer');
     expect(msg.content).toContain(
-      '<timer id="tmr_1" kind="timer" repeat="once" fired_at="2026-11-17T10:00:00.500Z">',
+      '<timer id="tmr_1" kind="timer" repeat="once" fired_at="2026-11-17T10:00:00.500Z" name="Звонок">',
     );
     expect(msg.content).toContain('позвонить в сервис');
     expect(msg.content).toContain('</timer>');

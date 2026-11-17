@@ -306,7 +306,8 @@ describe('TimerService: лимиты и валидация (PROP-141)', () => {
   it('не более 50 активных таймеров на сессию', async () => {
     const { service } = makeService();
     for (let i = 0; i < 50; i += 1) {
-      await service.createTimer(intent({ delaySec: 600 }));
+      // Разный комментарий: одинаковый теперь ловится как семантический дубликат.
+      await service.createTimer(intent({ delaySec: 600, comment: `задача ${i}` }));
     }
     await expect(service.createTimer(intent({ delaySec: 600 }))).rejects.toBeInstanceOf(
       TimerLimitExceededError,
@@ -656,21 +657,21 @@ describe('TimerService: live-события (PROP-141, Часть B)', () => {
     expect(updated[0]!.data.comment).toBeUndefined();
   });
 
-  it('removeTimer публикует timer.cancelled со статусом cancelled', async () => {
+  it('removeTimer публикует timer.deleted', async () => {
     const { events, onEvent } = captureEvents();
     const { service } = makeService({ onEvent });
     const created = await service.createTimer(intent({ delaySec: 600 }));
 
     await service.removeTimer(created.id);
 
-    const cancelled = events.filter((e) => e.type === 'timer.cancelled');
-    expect(cancelled).toHaveLength(1);
-    expect(cancelled[0]!.sessionId).toBe('ses_1');
-    expect(cancelled[0]!.data).toMatchObject({
+    const deleted = events.filter((e) => e.type === 'timer.deleted');
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.sessionId).toBe('ses_1');
+    expect(deleted[0]!.data).toMatchObject({
       timer_id: created.id,
-      status: 'cancelled',
+      status: 'active',
     });
-    expect(cancelled[0]!.data.comment).toBeUndefined();
+    expect(deleted[0]!.data.comment).toBeUndefined();
   });
 
   it('успешное срабатывание публикует timer.fired', async () => {

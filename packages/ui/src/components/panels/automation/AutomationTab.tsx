@@ -416,24 +416,17 @@ export const AutomationTab: React.FC = () => {
     [loadSchedules, notify, reportError, t],
   )
 
-  /** Пауза/возобновление таймера или будильника. */
-  const handleToggleTimer = useCallback(
+  /** Остановить таймер/будильник: запись остаётся со статусом `cancelled`. */
+  const handleStopTimer = useCallback(
     async (timer: Timer) => {
       setBusy(timer.id)
       try {
-        const updated =
-          timer.status === 'paused'
-            ? await synthApi.resumeTimer(timer.id)
-            : await synthApi.pauseTimer(timer.id)
+        const updated = await synthApi.stopTimer(timer.id)
         upsertTimer(updated)
-        notify({
-          text: t(updated.status === 'paused' ? 'automation.paused' : 'automation.resumed'),
-          type: 'success',
-          category: 'system',
-        })
+        notify({ text: t('automation.stopped'), type: 'success', category: 'system' })
         await refreshTimers()
       } catch (err) {
-        reportError('automation.pauseError', err)
+        reportError('automation.stopError', err)
       } finally {
         setBusy(null)
       }
@@ -552,13 +545,15 @@ export const AutomationTab: React.FC = () => {
 
   /** Действия карточки таймера/будильника. */
   const timerActions = (timer: Timer): AutomationCardAction[] => [
-    {
-      key: 'pause',
-      icon: timer.status === 'paused' ? 'play' : 'pause',
-      label: t(timer.status === 'paused' ? 'automation.action.resume' : 'automation.action.pause'),
-      onClick: () => void handleToggleTimer(timer),
-      disabled: busy === timer.id,
-    },
+    ...(timer.status === 'active' || timer.status === 'paused'
+      ? [{
+          key: 'stop',
+          icon: 'stop' as const,
+          label: t('automation.action.stop'),
+          onClick: () => void handleStopTimer(timer),
+          disabled: busy === timer.id,
+        }]
+      : []),
     {
       key: 'edit',
       icon: 'edit-2',

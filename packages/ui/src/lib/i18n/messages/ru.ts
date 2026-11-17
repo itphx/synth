@@ -1604,6 +1604,9 @@ export const dict = {
   'automation.action.history': 'История',
   'automation.action.delete': 'Удалить',
   'automation.action.pause': 'Пауза',
+  'automation.action.stop': 'Остановить',
+  'automation.stopped': 'Автоматизация остановлена',
+  'automation.stopError': 'Не удалось остановить: {error}',
   'automation.action.resume': 'Продолжить',
   'automation.row.target': 'Цель',
   'automation.row.trigger': 'Триггер',
@@ -4338,10 +4341,20 @@ export const dict = {
     'Ошибка: сервис автоматизаций (таймеры и будильники) недоступен в этой сессии',
   'timer.tool.no_project':
     'Ошибка: автоматизации возможны только в проекте — у этой сессии нет проекта, поэтому таймер и будильник создать нельзя',
-  'timer.tool.not_found': 'Ошибка: таймер «{id}» не найден',
-  'timer.tool.created': 'Таймер «{id}» создан — сработает в {fires_at}',
-  'timer.tool.updated': 'Таймер «{id}» обновлён',
+  'timer.tool.not_found': 'Ошибка: {noun} «{id}» не найден',
+  'timer.tool.created': '{noun} «{id}» создан — сработает в {fires_at}',
+  'timer.tool.updated': '{noun} «{id}» обновлён',
   'timer.tool.cancelled': 'Таймер «{id}» отменён',
+  'timer.tool.stopped': '{noun} «{id}» остановлен — больше не сработает',
+  'timer.tool.deleted': '{noun} «{id}» удалён',
+  'timer.tool.show_header': 'Автоматизация «{id}»:',
+  'timer.tool.duplicate':
+    'Ошибка: активная автоматизация «{noun}» с тем же комментарием и именем уже есть: «{id}». '
+    + 'Передайте allow_duplicate: true, чтобы создать ещё одну.',
+  'timer.tool.wrong_kind':
+    'Ошибка: «{id}» — это {actual}, а не {expected}; используйте инструмент {expected} (или его параметр {expected}_id)',
+  'timer.tool.time_in_past':
+    'Ошибка: время срабатывания в прошлом — укажите будущее время (если у `at` нет смещения, используется локальная зона сервера)',
   'timer.tool.list_header': 'Автоматизации ({count}):',
   'timer.tool.list_empty': 'Нет автоматизаций такого вида',
   'timer.tool.invalid_comment':

@@ -68,6 +68,16 @@ export const TIMER_MAX_ACTIVE_PER_SESSION = 50;
 export const TIMER_ONE_SHOT_HORIZON_DAYS = 30;
 
 /**
+ * Допуск для времени «в прошлом» при создании/правке будильника, секунды.
+ *
+ * Абсолютное время `at` в прошлом — ошибка ввода (частая опечатка), но
+ * небольшой допуск нужен из-за сетевой задержки и гонки «создал в 12:00:00.9
+ * на 12:00:00». Догон уже сохранённых записей после рестарта этим не
+ * ограничивается (там запись существовала до простоя).
+ */
+export const TIMER_PAST_GRACE_SEC = 60;
+
+/**
  * Потолок интервала повтора `every` — 30 суток в секундах
  * (совпадает с горизонтом one-shot: дольше — это уже не «каждые N секунд»).
  */
@@ -328,6 +338,8 @@ export const timerIntentRequestSchema = z.object({
   repeat: timerRepeatSchema,
   delaySec: z.number().int().optional(),
   at: timerTimestampSchema.optional(),
+  /** Разрешить семантический дубликат (см. ADR-141); по умолчанию — нет. */
+  allow_duplicate: z.boolean().optional(),
 });
 
 /**

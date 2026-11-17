@@ -53,7 +53,7 @@ export class MemoryTimerRepository implements TimerRepository {
     const now = nowISO();
     const timer: Timer = {
       ...structuredClone(input),
-      id: `tmr_${generateId()}`,
+      id: `${input.kind === 'alarm' ? 'alm' : 'tmr'}_${generateId()}`,
       status: input.status ?? 'active',
       createdAt: now,
       updatedAt: now,

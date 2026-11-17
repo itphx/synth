@@ -70,8 +70,12 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       const alarmSchema = zodToJsonSchema(alarmTool.parameters) as {
         properties?: { action?: { enum?: string[] } };
       };
-      expect(timerSchema.properties?.action?.enum).toEqual(['create', 'list', 'cancel']);
-      expect(alarmSchema.properties?.action?.enum).toEqual(['create', 'list', 'update', 'cancel']);
+      expect(timerSchema.properties?.action?.enum).toEqual([
+        'create', 'list', 'show', 'update', 'stop', 'delete',
+      ]);
+      expect(alarmSchema.properties?.action?.enum).toEqual([
+        'create', 'list', 'show', 'update', 'stop', 'delete',
+      ]);
     });
   });
 
@@ -162,7 +166,7 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       expect(result.metadata?.count).toBe(1);
     });
 
-    it('list с include_cancelled показывает и неактивные автоматизации', async () => {
+    it('list с include_stopped показывает и неактивные автоматизации', async () => {
       const created = await timerTool.execute(
         { action: 'create', delay: 600, comment: 'отработал' },
         makeCtx(),
@@ -173,23 +177,35 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       const active = await timerTool.execute({ action: 'list' }, makeCtx());
       expect(active.metadata?.count).toBe(0);
 
-      const all = await timerTool.execute({ action: 'list', include_cancelled: true }, makeCtx());
+      const all = await timerTool.execute({ action: 'list', include_stopped: true }, makeCtx());
       expect(all.metadata?.count).toBe(1);
       expect(all.content).toContain(id);
     });
 
-    it('cancel снимает свой таймер', async () => {
+    it('stop останавливает таймер, оставляя запись со статусом cancelled', async () => {
       const created = await timerTool.execute(
-        { action: 'create', delay: 600, comment: 'отмена' },
+        { action: 'create', delay: 600, comment: 'остановка' },
         makeCtx(),
       );
       const id = String(created.metadata?.id);
-      const result = await timerTool.execute({ action: 'cancel', timer_id: id }, makeCtx());
+      const result = await timerTool.execute({ action: 'stop', timer_id: id }, makeCtx());
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain('stopped');
+      expect((await timers.get(id))?.status).toBe('cancelled');
+    });
+
+    it('delete удаляет запись физически', async () => {
+      const created = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'удаление' },
+        makeCtx(),
+      );
+      const id = String(created.metadata?.id);
+      const result = await timerTool.execute({ action: 'delete', timer_id: id }, makeCtx());
       expect(result.isError).toBeUndefined();
       expect(await timers.get(id)).toBeNull();
     });
 
-    it('cancel чужого таймера → «не найден» (существование не раскрывается)', async () => {
+    it('stop чужого таймера → «не найден» (существование не раскрывается)', async () => {
       await service.createTimer({
         kind: 'timer',
         comment: 'чужой',
@@ -201,7 +217,7 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       });
       const foreign = await timers.list({ sessionId: 'ses_2' });
       const result = await timerTool.execute(
-        { action: 'cancel', timer_id: foreign[0]!.id },
+        { action: 'stop', timer_id: foreign[0]!.id },
         makeCtx(),
       );
       expect(result.isError).toBe(true);
@@ -368,15 +384,19 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       expect(result.content).toContain('not found');
     });
 
-    it('cancel снимает свой будильник', async () => {
+    it('stop останавливает свой будильник, delete удаляет', async () => {
       const at = new Date(Date.now() + 3_600_000).toISOString();
       const created = await alarmTool.execute(
-        { action: 'create', at, repeat: 'once', comment: 'отмена будильника' },
+        { action: 'create', at, repeat: 'once', comment: 'остановка будильника' },
         makeCtx(),
       );
       const id = String(created.metadata?.id);
-      const result = await alarmTool.execute({ action: 'cancel', alarm_id: id }, makeCtx());
-      expect(result.isError).toBeUndefined();
+      const stopped = await alarmTool.execute({ action: 'stop', alarm_id: id }, makeCtx());
+      expect(stopped.isError).toBeUndefined();
+      expect((await timers.get(id))?.status).toBe('cancelled');
+
+      const deleted = await alarmTool.execute({ action: 'delete', alarm_id: id }, makeCtx());
+      expect(deleted.isError).toBeUndefined();
       expect(await timers.get(id)).toBeNull();
     });
   });
@@ -405,6 +425,123 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       expect(result.isError).toBe(true);
       expect(result.content).toContain('require a project');
       expect(await timers.list({})).toHaveLength(0);
+    });
+  });
+
+  describe('PROP-141: дубликаты, stop/delete, show и строгие аргументы', () => {
+    it('повторный create с тем же комментарием — ошибка; allow_duplicate разрешает', async () => {
+      const first = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'одно и то же' },
+        makeCtx(),
+      );
+      expect(first.isError).toBeUndefined();
+
+      const duplicate = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'одно и то же' },
+        makeCtx(),
+      );
+      expect(duplicate.isError).toBe(true);
+      expect(duplicate.content).toContain('already exists');
+      expect(duplicate.metadata?.existing_id).toBeTruthy();
+
+      const allowed = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'одно и то же', allow_duplicate: true },
+        makeCtx(),
+      );
+      expect(allowed.isError).toBeUndefined();
+      expect(await timers.list({ sessionId: 'ses_1', kind: 'timer' })).toHaveLength(2);
+    });
+
+    it('at в прошлом — отказ, запись не создаётся', async () => {
+      const result = await alarmTool.execute(
+        {
+          action: 'create',
+          at: new Date(Date.now() - 3_600_000).toISOString(),
+          repeat: 'once',
+          comment: 'прошлое',
+        },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('past');
+      expect(await timers.list({ sessionId: 'ses_1', kind: 'alarm' })).toHaveLength(0);
+    });
+
+    it('show возвращает полный комментарий, list — укороченный', async () => {
+      const long = 'x'.repeat(200);
+      const created = await timerTool.execute(
+        { action: 'create', delay: 600, comment: long },
+        makeCtx(),
+      );
+      const id = String(created.metadata?.id);
+
+      const list = await timerTool.execute({ action: 'list' }, makeCtx());
+      expect(list.content).toContain('…');
+      expect(list.content).not.toContain(long);
+
+      const shown = await timerTool.execute({ action: 'show', timer_id: id }, makeCtx());
+      expect(shown.content).toContain(long);
+      expect(shown.content).toContain(`kind=timer`);
+    });
+
+    it('name попадает в список', async () => {
+      await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'сборка', name: 'Deploy' },
+        makeCtx(),
+      );
+      const list = await timerTool.execute({ action: 'list' }, makeCtx());
+      expect(list.content).toContain('name=Deploy');
+    });
+
+    it('лишний аргумент — ошибка схемы (strict)', async () => {
+      const result = await timerTool.execute(
+        { action: 'list', timer_id: 'tmr_x' } as never,
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('Unrecognized');
+    });
+
+    it('чужой вид — понятный отказ, а не not found', async () => {
+      const timer = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'это таймер' },
+        makeCtx(),
+      );
+      const id = String(timer.metadata?.id);
+      const result = await alarmTool.execute({ action: 'stop', alarm_id: id }, makeCtx());
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('is Timer, not Alarm');
+    });
+
+    it('update таймера меняет задержку и комментарий', async () => {
+      const created = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'старый' },
+        makeCtx(),
+      );
+      const id = String(created.metadata?.id);
+      const before = await timers.get(id);
+
+      const updated = await timerTool.execute(
+        { action: 'update', timer_id: id, delay: 1200, comment: 'новый' },
+        makeCtx(),
+      );
+      expect(updated.isError).toBeUndefined();
+      const after = await timers.get(id);
+      expect(after?.comment).toBe('новый');
+      expect(Date.parse(after!.firesAt)).toBeGreaterThan(Date.parse(before!.firesAt));
+    });
+
+    it('будильник получает префикс alm_', async () => {
+      const created = await alarmTool.execute(
+        {
+          action: 'create',
+          at: new Date(Date.now() + 3_600_000).toISOString(),
+          repeat: 'once',
+          comment: 'префикс',
+        },
+        makeCtx(),
+      );
+      expect(String(created.metadata?.id).startsWith('alm_')).toBe(true);
     });
   });
 });

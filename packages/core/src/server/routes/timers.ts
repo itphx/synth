@@ -37,7 +37,11 @@ import type { TimerKind, TimerStatus } from '@itphx/synth-shared';
 import type { TimerFiringRepository, TimerRepository } from '../../storage/ports/timer-repository.js';
 import { TIMER_LIST_MAX_LIMIT } from '../../storage/timer-utils.js';
 import type { TimerService } from '../../engine/timers/service.js';
-import { TimerLimitExceededError, TimerValidationError } from '../../engine/timers/types.js';
+import {
+  TimerDuplicateError,
+  TimerLimitExceededError,
+  TimerValidationError,
+} from '../../engine/timers/types.js';
 import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 import { paginate, parseBoundedInt } from '../pagination.js';
@@ -288,6 +292,18 @@ export function createTimerRoutes(
    * Остальные ошибки — не наш случай: пробрасываются наружу (500).
    */
   const engineError = (c: Context, err: unknown): Response | null => {
+    if (err instanceof TimerDuplicateError) {
+      return c.json(
+        {
+          error: {
+            code: 'TIMER_DUPLICATE',
+            message: err.message || messages.invalidTimer(c),
+            details: { existingId: err.existingId },
+          },
+        },
+        409,
+      );
+    }
     if (err instanceof TimerLimitExceededError) {
       return c.json(
         { error: { code: 'TIMER_LIMIT_EXCEEDED', message: err.message || messages.limitExceeded(c) } },
@@ -394,6 +410,7 @@ export function createTimerRoutes(
           repeat: input.repeat,
           ...(input.delaySec !== undefined ? { delaySec: input.delaySec } : {}),
           ...(input.at !== undefined ? { at: input.at } : {}),
+          ...(input.allow_duplicate === true ? { allowDuplicate: true } : {}),
         });
         return c.json({ timer }, 201);
       } catch (err) {
@@ -449,6 +466,37 @@ export function createTimerRoutes(
         if (response) return response;
         throw err;
       }
+    },
+  );
+
+  // POST /api/v2/timers/:id/stop — остановить насовсем: запись остаётся со
+  // статусом `cancelled` (история/аудит), срабатывания прекращаются.
+  // `DELETE /:id` — удалить запись физически.
+  app.post(
+    '/:id/stop',
+    writeGuard,
+    scoped(...SERVICE_SCOPE_SETS.timersWrite),
+    ...writeMiddleware,
+    async (c) => {
+      const id = c.req.param('id');
+      const existing = await deps.timers.get(id);
+      if (!existing) return notFound(c);
+
+      const deniedProject = await authorize(c, existing.projectId, 'write');
+      if (deniedProject) return deniedProject;
+
+      // Отработавший таймер не «останавливается»: это уже терминальное
+      // состояние (иначе stop переписал бы историю срабатывания).
+      if (existing.status === 'fired') {
+        return conflict(c, messages.timerNotMutable(c));
+      }
+
+      const denied = serviceProjectProjection(c, existing.projectId);
+      if (denied) return denied;
+
+      const stopped = await deps.timerService.stopTimer(id);
+      if (!stopped) return notFound(c);
+      return c.json({ timer: stopped });
     },
   );
 
