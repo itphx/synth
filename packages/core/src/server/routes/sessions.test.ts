@@ -51,6 +51,21 @@ interface SessionListPage {
   next_offset: number | null;
 }
 
+/**
+ * Тело ошибки HTTP-ответа: код, сообщение и детали привязанного состояния
+ * (PROP-141, Часть D — `409 SESSION_HAS_ATTACHED_STATE`).
+ */
+interface ApiErrorBody {
+  error?: {
+    code?: string;
+    message?: string;
+    details?: {
+      active_turn?: boolean;
+      processes?: { count?: number; items?: Array<{ id?: string; kind?: string; name?: string }> };
+    };
+  };
+}
+
 /** Страница истории сообщений (`GET /api/v2/sessions/:id/messages`). */
 interface MessageListPage {
   messages: Array<{
@@ -954,9 +969,9 @@ describe('Session API Routes (icon/color)', () => {
       body: JSON.stringify({ title: 'S', icon: '🚀' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
-    expect(body.error.message).toContain('code');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message ?? '').toContain('code');
   });
 
   it('PATCH обновляет icon/color', async () => {
@@ -2164,6 +2179,14 @@ describe('POST /api/v2/sessions/:id/prompt — принципал хода не�
  * удалённая (`remote:`) сессия — 409; `session.moved` несёт `effects`.
  */
 describe('PATCH /api/v2/sessions/:id — перенос между проектами (PROP-141, Часть D)', () => {
+  /** Payload события `session.moved` (фактические последствия переноса). */
+  interface MoveEventData {
+    session_id?: string;
+    project_id?: string | null;
+    prev_project_id?: string | null;
+    effects?: Array<{ kind: string; action: string; id: string }>;
+  }
+
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -2234,11 +2257,11 @@ describe('PATCH /api/v2/sessions/:id — перенос между проект�
     });
 
     expect(res.status).toBe(409);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('SESSION_HAS_ATTACHED_STATE');
-    expect(body.error.details.active_turn).toBe(false);
-    expect(body.error.details.processes.count).toBe(1);
-    expect(body.error.details.processes.items[0]).toMatchObject({ id: 'bgr_1', kind: 'process' });
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('SESSION_HAS_ATTACHED_STATE');
+    expect(body.error?.details?.active_turn).toBe(false);
+    expect(body.error?.details?.processes?.count).toBe(1);
+    expect(body.error?.details?.processes?.items?.[0]).toMatchObject({ id: 'bgr_1', kind: 'process' });
     // Запись не перенесена.
     expect((await sessionManager.getSession(session.id))?.projectId).toBe('p1');
   });
@@ -2254,9 +2277,9 @@ describe('PATCH /api/v2/sessions/:id — перенос между проект�
       await sessionManager.updateSession(s);
     });
 
-    const moved: any[] = [];
+    const moved: MoveEventData[] = [];
     eventBus.subscribe(session.id, (event) => {
-      if (event.type === 'session.moved') moved.push(event.data);
+      if (event.type === 'session.moved') moved.push(event.data as MoveEventData);
     });
 
     const res = await app.request(`/api/v2/sessions/${session.id}`, {
@@ -2271,9 +2294,9 @@ describe('PATCH /api/v2/sessions/:id — перенос между проект�
     expect(res.status).toBe(200);
     expect((await sessionManager.getSession(session.id))?.projectId).toBe(project.id);
     expect(moved).toHaveLength(1);
-    expect(moved[0].project_id).toBe(project.id);
-    expect(Array.isArray(moved[0].effects)).toBe(true);
-    expect(moved[0].effects.some((e: any) => e.kind === 'session' && e.action === 'moved')).toBe(true);
+    expect(moved[0]?.project_id).toBe(project.id);
+    expect(Array.isArray(moved[0]?.effects)).toBe(true);
+    expect(moved[0]?.effects?.some((e) => e.kind === 'session' && e.action === 'moved')).toBe(true);
   });
 
   it('service-key с move_consent — 403 (согласие даёт только человек)', async () => {
@@ -2301,45 +2324,29 @@ describe('PATCH /api/v2/sessions/:id — перенос между проект�
     });
 
     expect(res.status).toBe(403);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('FORBIDDEN');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('FORBIDDEN');
   });
 
   it('удалённая сессия (remote:) — 409 (перенос не поддерживается)', async () => {
-    const { app } = createTestApp(tmpDir, undefined, undefined, undefined, undefined, undefined);
-    // Отдельное приложение: гибридный клиент нужен, чтобы сработала remote-ветка.
-    const remoteApp = new Hono();
-    const fileStore = new FileStore({ dataDir: tmpDir });
-    const sessionManager = new SessionManager(fileStore);
-    const projectStore = new ProjectStore({ dataDir: tmpDir });
-    const eventBus = new EventBus();
-    const queueManager = createMockQueueManager();
-    const orchestrator = createMockOrchestrator();
-    const routes = createSessionRoutes(
-      createMockAuth(),
-      {
-        sessionManager,
-        eventBus,
-        queueManager: queueManager as any,
-        processMessage: orchestrator.createProcessMessage(),
-        orchestrator: orchestrator as any,
-        projectStore,
-        getRemoteClient: () => ({} as never),
-      },
-      {},
+    // Гибридный клиент нужен, чтобы сработала remote-ветка PATCH.
+    const { app } = createTestApp(
+      tmpDir,
+      undefined,
+      undefined,
+      undefined,
+      { getRemoteClient: () => ({}) as never },
     );
-    remoteApp.route('/api/v2/sessions', routes);
-    void app;
 
-    const res = await remoteApp.request('/api/v2/sessions/remote:abc', {
+    const res = await app.request('/api/v2/sessions/remote:abc', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: 'p2' }),
     });
 
     expect(res.status).toBe(409);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('SESSION_MOVE_REMOTE_UNSUPPORTED');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('SESSION_MOVE_REMOTE_UNSUPPORTED');
   });
 
   it('невалидный move_consent — 400 VALIDATION_ERROR', async () => {
@@ -2355,7 +2362,7 @@ describe('PATCH /api/v2/sessions/:id — перенос между проект�
     });
 
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 });
