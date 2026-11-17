@@ -3386,7 +3386,14 @@ export class ChatOrchestrator {
       };
       const idx = session.messages.findIndex((m) => m.id === message.id);
       if (idx >= 0) session.messages[idx] = { ...session.messages[idx]!, ...message };
-      await this._sessionManager.updateSession(session).catch(() => {});
+      // Точечная запись реплики (только `content`/`parts`/`metadata`): полная
+      // запись снимка теряла параллельные точки истории. `updatedAt` двигается
+      // (паритет с прежним `updateSession`) — инжект команды меняет сообщение.
+      await this._sessionManager.mutateMessage(session.id, message.id, (target) => {
+        target.content = message.content;
+        target.parts = message.parts;
+        target.metadata = message.metadata;
+      }).catch(() => {});
       for (const skillName of result.skills ?? []) {
         this._eventBus.publish(session.id, 'skill.invoked', {
           session_id: session.id,
@@ -3462,7 +3469,13 @@ export class ChatOrchestrator {
     };
     const idx = session.messages.findIndex((m) => m.id === message.id);
     if (idx >= 0) session.messages[idx] = { ...session.messages[idx]!, ...message };
-    await this._sessionManager.updateSession(session).catch(() => {});
+    // Точечная запись реплики (только `content`/`parts`/`metadata`); `updatedAt`
+    // двигается — паритет с прежним `updateSession`.
+    await this._sessionManager.mutateMessage(session.id, message.id, (target) => {
+      target.content = message.content;
+      target.parts = message.parts;
+      target.metadata = message.metadata;
+    }).catch(() => {});
 
     for (const skillName of result.skills) {
       this._eventBus.publish(session.id, 'skill.invoked', {
@@ -8423,8 +8436,11 @@ export class ChatOrchestrator {
    * UI группирует сегменты хода по `turn_id`, а подавление отключённых реплик
    * (`engine/context/disabled-turns.ts`) гасит ход именно по `turnId` — без
    * метки на user-сообщении работает только legacy-фоллбек «по соседству».
-   * Обновление одно на ход, под локом сессии и по `id`; реплику с уже
-   * проставленным `turnId` не перезаписываем. Best-effort: сбой записи ход не
+   * Обновление одно на ход — двумя точечными мутациями (`currentStream`, затем
+   * само сообщение по `id`); реплику с уже проставленным `turnId` не
+   * перезаписываем. Обе записи идут **без** `touchUpdatedAt`: метка хода —
+   * служебная и не должна сдвигать время изменения сессии (паритет с прежним
+   * `saveSession`, который его не бампил). Best-effort: сбой записи ход не
    * роняет (метка нужна UI и подавлению, а не самому ответу).
    */
   private async _markTurnUserMessage(
@@ -8434,26 +8450,27 @@ export class ChatOrchestrator {
   ): Promise<void> {
     if (message.role !== MessageRole.USER) return;
     try {
-      await this._sessionManager.withLock(sessionId, async (s) => {
-        let changed = false;
-        // ADR-118 §10: метка хода в `currentStream` — UI восстанавливает ход
-        // после перезагрузки страницы (`current_stream.turn_id` в DTO).
-        if (s.currentStream && s.currentStream.turnId !== turnId) {
-          s.currentStream.turnId = turnId;
-          changed = true;
-        }
-        // Реплику с уже проставленным turnId не перезаписываем (повторный
-        // вход в тот же ход) — метка `currentStream` при этом обновляется.
-        if (!message.turnId) {
-          const target = s.messages.find((m) => m.id === message.id);
-          if (target && !target.turnId) {
-            target.turnId = turnId;
-            message.turnId = turnId;
-            changed = true;
-          }
-        }
-        if (changed) await this._sessionManager.saveSession(s);
-      });
+      // ADR-118 §10: метка хода в `currentStream` — UI восстанавливает ход
+      // после перезагрузки страницы (`current_stream.turn_id` в DTO).
+      // `shouldWrite` — только при реальной смене метки: иначе безобидный
+      // повторный вход переписывал бы строку сессии впустую.
+      await this._sessionManager.mutateMeta(sessionId, (meta) => {
+        if (!meta.currentStream || meta.currentStream.turnId === turnId) return false;
+        meta.currentStream.turnId = turnId;
+        return true;
+      }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
+
+      // Реплику с уже проставленным turnId не перезаписываем (повторный вход в
+      // тот же ход) — метка `currentStream` при этом обновляется.
+      if (message.turnId) return;
+      const marked = await this._sessionManager.mutateMessage(sessionId, message.id, (target) => {
+        if (target.turnId) return false;
+        target.turnId = turnId;
+        return true;
+      }, { touchUpdatedAt: false });
+      // В памяти — как раньше: метка появляется только у реально записанной
+      // реплики (`found:false` — сообщения нет, объект не трогаем).
+      if (marked.found && marked.value) message.turnId = turnId;
     } catch (err) {
       warning(
         'ORCHESTRATOR',
@@ -8541,21 +8558,22 @@ export class ChatOrchestrator {
       throw new SubagentResumeError('LOCKED', sm('task.resume_locked', { id: childSessionId }));
     }
 
-    // currentStream — маркер активности для UI и abort-механики
-    await this._sessionManager.withLock(childSessionId, async (s) => {
-      s.currentStream = {
+    // currentStream — маркер активности для UI и abort-механики. Точечная
+    // метамутация без `touchUpdatedAt`: маркер служебный, время изменения
+    // сессии не сдвигается (паритет с прежним `saveSession`).
+    await this._sessionManager.mutateMeta(childSessionId, (meta) => {
+      meta.currentStream = {
         streamId,
         // ADR-118 §10: id хода в UI ребёнка (совпадает с `turn.started` цикла).
         turnId: childSessionId,
         message: sm('task.resume_marker'),
-        agentRole: s.settings.agentRole,
+        agentRole: meta.settings.agentRole,
         startedAt: nowISO(),
         cancelled: false,
         // Владелец маркера — процесс инстанса (recovery после рестарта).
         owner: this._sessionManager.instanceId,
       };
-      await this._sessionManager.saveSession(s);
-    });
+    }, { touchUpdatedAt: false });
 
     // Отмена: orchestrator.cancel(streamId) → resumeAbort.abort() →
     // runSubagent видит отмену (стрим + backoff-пауза) → finishAborted.
@@ -8599,15 +8617,18 @@ export class ChatOrchestrator {
         });
         this.unregisterCancelToken(streamId);
         try {
-          await this._sessionManager.withLock(childSessionId, async (s) => {
-            // Снимаем только свой маркер (ADR-118 §10): в сессии мог уже
-            // начаться новый ход с другим `streamId`.
-            if (s.currentStream && s.currentStream.streamId !== streamId) return;
-            s.currentStream = undefined;
+          // Снимаем только свой маркер (ADR-118 §10): в сессии мог уже
+          // начаться новый ход с другим `streamId`. Условие — внутри мутатора
+          // (решение по свежему документу), запись — только при реальном
+          // изменении; `touchUpdatedAt:false` — маркер служебный.
+          await this._sessionManager.mutateMeta(childSessionId, (meta) => {
+            if (meta.currentStream && meta.currentStream.streamId !== streamId) return false;
+            const changed = meta.currentStream !== undefined || meta.retry !== undefined;
+            meta.currentStream = undefined;
             // Прогон завершён — состояние ретрая (если было) неактуально.
-            s.retry = undefined;
-            await this._sessionManager.saveSession(s);
-          });
+            meta.retry = undefined;
+            return changed;
+          }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
         } catch { /* сессия могла быть удалена */ }
         try {
           await this._sessionManager.releaseLock(childSessionId, processId);
@@ -9505,21 +9526,28 @@ export class ChatOrchestrator {
       if (shellDirectories.length > 0) next = this._applyDirectoryAllow(next, shellDirectories);
       return next ?? this._permissionConfig;
     };
-    // База правила читается **внутри лока** (`s` — свежая копия документа из
+    // База правила читается **внутри мутатора** (`meta` — свежий документ из
     // хранилища), а не из `session`: у живого хода и у HTTP-ответа на
     // восстановленное ожидание это снимок на момент вызова. Грант от снимка
     // затирал более свежие правила — при нескольких одобрениях подряд в
     // «Сессионных одобрениях» оставался только последний пункт.
+    // `touchUpdatedAt:false` — выдача разрешения не «оживляет» сессию в списках
+    // (паритет с прежним `saveSession`).
     let next: PermissionConfig = session.settings.permission ?? this._permissionConfig;
 
-    await this._sessionManager.withLock(session.id, async (s) => {
-      next = apply(s.settings.permission);
-      s.settings.permission = next;
-      await this._sessionManager.saveSession(s);
-      this._eventBus.publish(session.id, 'session.updated', {
-        session_id: session.id,
-        settings: s.settings,
-      });
+    const granted = await this._sessionManager.mutateMeta(session.id, (meta) => {
+      const applied = apply(meta.settings.permission);
+      meta.settings = { ...meta.settings, permission: applied };
+      // Настройки возвращаем из мутатора — событие несёт свежий документ.
+      return { next: applied, settings: meta.settings };
+    }, { touchUpdatedAt: false });
+    // Паритет с прежним `withLock`+`saveSession`: отсутствие сессии — ошибка,
+    // а не молчаливый пропуск гранта (вызывающий считает правило записанным).
+    if (!granted.found) throw new Error(`Session ${session.id} not found`);
+    next = granted.value.next;
+    this._eventBus.publish(session.id, 'session.updated', {
+      session_id: session.id,
+      settings: granted.value.settings,
     });
 
     // Аудит выдачи shell-гранта — fire-and-forget, ход не блокирует.
@@ -9540,13 +9568,18 @@ export class ChatOrchestrator {
     // и ребёнком. Родительский грант обновляет и effectivePermissionConfig, и
     // PermissionEvaluator при следующей обработке (сессия сохраняется в store).
     if (session.parentId) {
-      await this._sessionManager.withLock(session.parentId, async (parent) => {
-        parent.settings.permission = apply(parent.settings.permission);
-        await this._sessionManager.saveSession(parent);
-        this._eventBus.publish(parent.id, 'session.updated', {
-          session_id: parent.id,
-          settings: parent.settings,
-        });
+      const parentId = session.parentId;
+      const parentGranted = await this._sessionManager.mutateMeta(parentId, (meta) => {
+        const applied = apply(meta.settings.permission);
+        meta.settings = { ...meta.settings, permission: applied };
+        return { settings: meta.settings };
+      }, { touchUpdatedAt: false });
+      // Паритет с прежним `withLock`: нет родителя — ошибка (грант ребёнка уже
+      // записан, но молча «половина» правила хуже явного сбоя).
+      if (!parentGranted.found) throw new Error(`Session ${parentId} not found`);
+      this._eventBus.publish(parentId, 'session.updated', {
+        session_id: parentId,
+        settings: parentGranted.value.settings,
       });
     }
 

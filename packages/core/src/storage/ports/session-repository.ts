@@ -51,6 +51,17 @@ export type MutateHistoryResult<T> =
   | { ok: true; value: T }
   | { ok: false; reason: 'not_found' | 'stale' };
 
+/** Опции `SessionRepository.mutateMessage`. */
+export interface MutateMessageOptions {
+  /**
+   * Обновить `updatedAt` сессии при записи сообщения (по умолчанию `true`).
+   * `false` — не менять `session.updatedAt`: нужно служебным меткам (метка
+   * хода `turnId`, `last_error`), которые не должны «оживлять» сессию в
+   * списках и перебивать время настоящего изменения.
+   */
+  touchUpdatedAt?: boolean;
+}
+
 /** Результат `SessionRepository.mutateMessage`. */
 export type MutateMessageResult<T> =
   | { found: false }
@@ -194,11 +205,16 @@ export interface SessionRepository {
    *
    * Сессии/сообщения нет — `found:false`, мутатор не вызывается. Мутатор
    * бросил — записи нет, ошибка пробрасывается.
+   *
+   * `opts.touchUpdatedAt` (по умолчанию `true`) обновляет `session.updatedAt`
+   * вместе с записью сообщения; `false` — запись сообщения выполняется, время
+   * сессии остаётся прежним (служебные метки: `turnId`, `last_error`).
    */
   mutateMessage<T>(
     sessionId: string,
     messageId: string,
     mutator: (message: Message) => T,
+    opts?: MutateMessageOptions,
   ): Promise<MutateMessageResult<T>>;
   /**
    * Точечное чтение метаданных сессии (**без истории**): `messages`/

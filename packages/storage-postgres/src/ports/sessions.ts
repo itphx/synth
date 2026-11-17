@@ -63,6 +63,7 @@ import { generateId, makeTextPart, nowISO, stripNullBytesDeep } from '@itphx/syn
 import type {
   MutateHistoryOptions,
   MutateHistoryResult,
+  MutateMessageOptions,
   MutateMessageResult,
   MutateMetaOptions,
   MutateMetaResult,
@@ -760,6 +761,7 @@ export class PostgresSessionRepository implements SessionRepository {
     sessionId: string,
     messageId: string,
     mutator: (message: Message) => T,
+    opts?: MutateMessageOptions,
   ): Promise<MutateMessageResult<T>> {
     return this._connection.withTransaction(async (tx) => {
       await this._lockSession(tx, sessionId);
@@ -804,7 +806,11 @@ export class PostgresSessionRepository implements SessionRepository {
         `UPDATE messages SET ${setClauses.join(', ')} WHERE message_uid = $${params.length + 1} RETURNING *`,
         [...params, row.message_uid],
       );
-      await tx.query('UPDATE sessions SET updated_at = now() WHERE id = $1', [sessionId]);
+      // `touchUpdatedAt:false` — служебные метки (`turnId`/`last_error`) не
+      // «оживляют» сессию: строка `sessions` не трогается.
+      if (opts?.touchUpdatedAt !== false) {
+        await tx.query('UPDATE sessions SET updated_at = now() WHERE id = $1', [sessionId]);
+      }
 
       const updatedRowResult = updated[0];
       return {

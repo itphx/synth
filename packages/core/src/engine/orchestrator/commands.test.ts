@@ -19,7 +19,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { BusEvent, Message, Session, TokenUsage } from '@itphx/synth-shared';
+import type { BusEvent, Message, TokenUsage } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBus } from '../../events/bus.js';
@@ -147,9 +147,15 @@ describe('finishLocalCommand', () => {
   /** Обёртка с записью порядка вызовов (сравнение «сохранение user до addMessage»). */
   function recording(order: string[]): SessionManager {
     return {
-      updateSession: async (s: Session) => {
-        order.push('updateSession');
-        await sessionManager.updateSession(s);
+      // Точечная запись правки реплики команды (порт `mutateMessage`).
+      mutateMessage: async (
+        sessionId: string,
+        messageId: string,
+        mutator: (m: Message) => unknown,
+        opts?: { touchUpdatedAt?: boolean },
+      ) => {
+        order.push('mutateMessage');
+        return sessionManager.mutateMessage(sessionId, messageId, mutator, opts);
       },
       addMessage: async (sessionId: string, message: Message) => {
         order.push('addMessage');
@@ -178,7 +184,8 @@ describe('finishLocalCommand', () => {
     );
 
     expect(result).toEqual({});
-    expect(order).toEqual(['updateSession', 'addMessage']);
+    // Реплика команды сохраняется точечной мутацией — **до** добавления ответа.
+    expect(order).toEqual(['mutateMessage', 'addMessage']);
 
     const stored = (await sessionManager.getSession(session.id))!;
     expect(stored.messages).toHaveLength(2);

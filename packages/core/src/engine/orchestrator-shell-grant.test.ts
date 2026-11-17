@@ -45,6 +45,55 @@ const SHELL_POLICY: ShellPolicy = {
   deniedCommandPrefixes: ['rm -rf /'],
 };
 
+/** Лёгкий снимок сессии для фейковых менеджеров гранта. */
+type GrantSession = {
+  id: string;
+  ownerId?: string;
+  parentId?: string;
+  updatedAt?: string;
+  settings: { permission: PermissionConfig };
+};
+
+/** Фейковое хранилище: id → документ сессии. */
+type GrantStore = Map<string, GrantSession>;
+
+/**
+ * Фейк `SessionManager.mutateMeta` с семантикой порта: мутатор работает со
+ * **свежим** документом из стора, `touchUpdatedAt:false` не двигает `updatedAt`,
+ * `shouldWrite:false` — записи нет. `calls` собирает вызовы (вместо прежнего
+ * шпиона `saveSession`).
+ */
+function fakeMutateMeta(
+  store: GrantStore,
+  calls?: Array<{ sessionId: string; touchUpdatedAt?: boolean }>,
+) {
+  return async (
+    sessionId: string,
+    mutator: (meta: GrantSession) => unknown,
+    opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+  ): Promise<
+    | { found: false }
+    | { found: true; value: unknown; session: GrantSession }
+  > => {
+    calls?.push({ sessionId, ...(opts?.touchUpdatedAt !== undefined ? { touchUpdatedAt: opts.touchUpdatedAt } : {}) });
+    const current = store.get(sessionId);
+    if (!current) return { found: false };
+    const meta = structuredClone(current);
+    const value = mutator(meta);
+    if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+      return { found: true, value, session: structuredClone(current) };
+    }
+    if (opts?.touchUpdatedAt !== false) meta.updatedAt = new Date().toISOString();
+    store.set(sessionId, structuredClone(meta));
+    return { found: true, value, session: meta };
+  };
+}
+
+/** Стор с одной сессией (клон: правки идут в стор, не в объект вызывающего). */
+function grantStore(session: GrantSession): GrantStore {
+  return new Map([[session.id, structuredClone(session)]]);
+}
+
 describe('shell-грант сессии (оркестратор)', () => {
   it('_applyShellAllow смёрживает паттерны, не заменяя строковый allow', () => {
     const ctx = {
@@ -104,21 +153,19 @@ describe('shell-грант сессии (оркестратор)', () => {
   });
 
   it('нерезолвимая динамика: грант не выдаётся, конфиг не меняется и не сохраняется', async () => {
-    const session = {
+    const session: GrantSession = {
       id: 's1',
       ownerId: 'user1',
-      parentId: undefined as string | undefined,
+      parentId: undefined,
       settings: { permission: { rules: { execute_shell: 'ask' }, askTimeoutMs: 30_000 } as PermissionConfig },
     };
-    const saveSession = vi.fn(async () => {});
+    const store = grantStore(session);
+    const mutateCalls: Array<{ sessionId: string; touchUpdatedAt?: boolean }> = [];
     const publish = vi.fn();
     const granted: unknown[] = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
-      _sessionManager: {
-        withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-        saveSession,
-      },
+      _sessionManager: { mutateMeta: fakeMutateMeta(store, mutateCalls) },
       _eventBus: { publish },
       _onPermissionGrant: (entry: unknown) => {
         granted.push(entry);
@@ -139,7 +186,7 @@ describe('shell-грант сессии (оркестратор)', () => {
     expect(config.rules.execute_shell).toBe('ask');
     expect(config).toBe(session.settings.permission);
     // Зря не сохраняем, не паблишим и не пишем аудит.
-    expect(saveSession).not.toHaveBeenCalled();
+    expect(mutateCalls).toHaveLength(0);
     expect(publish).not.toHaveBeenCalled();
     expect(granted).toHaveLength(0);
     // Fallback на `_applyToolAllow` не вызывался.
@@ -152,21 +199,19 @@ describe('shell-грант сессии (оркестратор)', () => {
     // Живая ветка всегда передаёт trigger (решение permission-слоя); у
     // восстановленного после рестарта ожидания trigger берётся из снимка, а у
     // старых записей его нет → гранта нет вовсе (fail-closed).
-    const session = {
+    const session: GrantSession = {
       id: 's1',
       ownerId: 'user1',
-      parentId: undefined as string | undefined,
+      parentId: undefined,
       settings: { permission: { rules: { execute_shell: 'ask' }, askTimeoutMs: 30_000 } as PermissionConfig },
     };
-    const saveSession = vi.fn(async () => {});
+    const store = grantStore(session);
+    const mutateCalls: Array<{ sessionId: string; touchUpdatedAt?: boolean }> = [];
     const publish = vi.fn();
     const granted: unknown[] = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
-      _sessionManager: {
-        withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-        saveSession,
-      },
+      _sessionManager: { mutateMeta: fakeMutateMeta(store, mutateCalls) },
       _eventBus: { publish },
       _onPermissionGrant: (entry: unknown) => {
         granted.push(entry);
@@ -187,7 +232,7 @@ describe('shell-грант сессии (оркестратор)', () => {
     // Ни `execute_shell: 'allow'`, ни паттерна `rm *` — конфиг не тронут.
     expect(config).toBe(session.settings.permission);
     expect(config.rules.execute_shell).toBe('ask');
-    expect(saveSession).not.toHaveBeenCalled();
+    expect(mutateCalls).toHaveLength(0);
     expect(publish).not.toHaveBeenCalled();
     expect(granted).toHaveLength(0);
     // Fallback на `_applyToolAllow` (грант по путям) не вызывался.
@@ -253,10 +298,10 @@ describe('shell-грант сессии (оркестратор)', () => {
  * не снимается (жёсткий слой выше правил, ADR-029).
  */
 describe('shell-грант сессии: каталог вместо паттерна', () => {
-  const baseSession = () => ({
+  const baseSession = (): GrantSession => ({
     id: 's1',
     ownerId: 'user1',
-    parentId: undefined as string | undefined,
+    parentId: undefined,
     settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
   });
 
@@ -290,7 +335,8 @@ describe('shell-грант сессии: каталог вместо патте�
       await writeFile(join(root, 'a.js'), 'x');
       const session = baseSession();
       const published: string[] = [];
-      const saveSession = vi.fn(async () => {});
+      const store = grantStore(session);
+      let writes = 0;
       const granted: Array<{
         sessionId: string;
         actor: string;
@@ -301,8 +347,17 @@ describe('shell-грант сессии: каталог вместо патте�
       const ctx = {
         _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
         _sessionManager: {
-          withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-          saveSession,
+          // Запись — только точечная мутация метаданных, без `touchUpdatedAt`.
+          mutateMeta: async (
+            id: string,
+            mutator: (meta: GrantSession) => unknown,
+            opts?: { touchUpdatedAt?: boolean },
+          ) => {
+            writes += 1;
+            expect(id).toBe('s1');
+            expect(opts?.touchUpdatedAt).toBe(false);
+            return fakeMutateMeta(store)(id, mutator, opts);
+          },
         },
         _eventBus: { publish: (_s: string, type: string) => { published.push(type); } },
         _onPermissionGrant: (entry: {
@@ -332,7 +387,7 @@ describe('shell-грант сессии: каталог вместо патте�
       // Командный паттерн не выдан, каталог — выдан.
       expect(config.rules.execute_shell).toBeUndefined();
       expect(config.rules.external_directory).toEqual({ [`${root}/*`]: 'allow' });
-      expect(saveSession).toHaveBeenCalled();
+      expect(writes).toBe(1);
       expect(published).toEqual(['session.updated']);
       expect(granted).toEqual([{
         sessionId: 's1',
@@ -365,13 +420,11 @@ describe('shell-грант сессии: каталог вместо патте�
       const outsideFile = join(outside, 'a.txt');
       await writeFile(outsideFile, 'x');
       const session = baseSession();
+      const store = grantStore(session);
       const granted: Array<{ patterns: string[]; directories: string[] }> = [];
       const ctx = {
         _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
-        _sessionManager: {
-          withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-          saveSession: async () => {},
-        },
+        _sessionManager: { mutateMeta: fakeMutateMeta(store) },
         _eventBus: { publish: () => {} },
         _onPermissionGrant: (entry: { patterns: string[]; directories: string[] }) => {
           granted.push(entry);
@@ -418,13 +471,11 @@ describe('shell-грант сессии: каталог вместо патте�
     const root = await mkdtemp(join(tmpdir(), 'synth-grant-cwd-'));
     try {
       const session = baseSession();
+      const store = grantStore(session);
       const granted: Array<{ directories: string[] }> = [];
       const ctx = {
         _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
-        _sessionManager: {
-          withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-          saveSession: async () => {},
-        },
+        _sessionManager: { mutateMeta: fakeMutateMeta(store) },
         _eventBus: { publish: () => {} },
         _onPermissionGrant: (entry: { directories: string[] }) => { granted.push(entry); },
         _applyShellAllow: proto._applyShellAllow,
@@ -450,15 +501,13 @@ describe('shell-грант сессии: каталог вместо патте�
 
   it('protected-ask: грант не выдаётся (конфиг не меняется, аудита нет)', async () => {
     const session = baseSession();
-    const saveSession = vi.fn(async () => {});
+    const store = grantStore(session);
+    const mutateCalls: Array<{ sessionId: string; touchUpdatedAt?: boolean }> = [];
     const publish = vi.fn();
     const granted: unknown[] = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
-      _sessionManager: {
-        withLock: async (_id: string, fn: (s: typeof session) => Promise<void>) => fn(session),
-        saveSession,
-      },
+      _sessionManager: { mutateMeta: fakeMutateMeta(store, mutateCalls) },
       _eventBus: { publish },
       _onPermissionGrant: (entry: unknown) => { granted.push(entry); },
       _applyShellAllow: proto._applyShellAllow,
@@ -476,58 +525,101 @@ describe('shell-грант сессии: каталог вместо патте�
     );
 
     expect(config).toBe(session.settings.permission);
-    expect(saveSession).not.toHaveBeenCalled();
+    expect(mutateCalls).toHaveLength(0);
     expect(publish).not.toHaveBeenCalled();
     expect(granted).toHaveLength(0);
+  });
+
+  it('сессия не найдена → ошибка (паритет с `withLock`), а не молчаливый пропуск', async () => {
+    const session: GrantSession = {
+      id: 's-missing',
+      settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
+    };
+    const publish = vi.fn();
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+      // Пустой стор: мутация вернёт `found:false`.
+      _sessionManager: { mutateMeta: fakeMutateMeta(new Map()) },
+      _eventBus: { publish },
+      _applyShellAllow: proto._applyShellAllow,
+      _applyDirectoryAllow: proto._applyDirectoryAllow,
+      _applyToolAllow: proto._applyToolAllow,
+    };
+
+    await expect(proto._grantSessionToolAllow.call(
+      ctx,
+      session,
+      'read_file',
+      { file_path: 'a.txt' },
+      '/workspace/project',
+    )).rejects.toThrow('Session s-missing not found');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('родитель не найден → ошибка (паритет с `withLock`)', async () => {
+    const child: GrantSession = {
+      id: 's-child',
+      parentId: 's-absent',
+      settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
+    };
+    const store = grantStore(child);
+    const publish = vi.fn();
+    const ctx = {
+      _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+      _sessionManager: { mutateMeta: fakeMutateMeta(store) },
+      _eventBus: { publish },
+      _applyShellAllow: proto._applyShellAllow,
+      _applyDirectoryAllow: proto._applyDirectoryAllow,
+      _applyToolAllow: proto._applyToolAllow,
+    };
+
+    await expect(proto._grantSessionToolAllow.call(
+      ctx,
+      child,
+      'read_file',
+      { file_path: 'a.txt' },
+      '/workspace/project',
+    )).rejects.toThrow('Session s-absent not found');
+    // Грант ребёнка при этом записан (мутация прошла до ошибки по родителю).
+    expect(store.get('s-child')!.settings.permission.rules.read_file).toEqual({
+      '/workspace/project/a.txt': 'allow',
+    });
   });
 });
 
 /**
  * Гонка «несколько одобрений подряд»: вызывающий держит **снимок** сессии
  * (у живого хода это объект хода, у HTTP-ответа — загруженный ранее документ),
- * а `withLock` отдаёт свежую копию из хранилища. Грант обязан считаться от
- * свежей базы внутри лока, иначе второй грант затирает первый (в панели
+ * а `mutateMeta` отдаёт свежий документ из хранилища. Грант обязан считаться от
+ * свежей базы внутри мутатора, иначе второй грант затирает первый (в панели
  * «Сессионные одобрения» виден только последний пункт).
  */
 describe('грант сессии: последовательные одобрения не затирают друг друга', () => {
-  type GrantSession = {
-    id: string;
-    ownerId?: string;
-    parentId?: string;
-    settings: { permission: PermissionConfig };
-  };
-
   const baseSession = (): GrantSession => ({
     id: 's1',
     ownerId: 'user1',
     settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
   });
 
-  /** Фейк менеджера сессий с настоящей семантикой: лок отдаёт копию из стора. */
+  /** Фейк менеджера сессий с настоящей семантикой: мутатор видит копию из стора. */
   const storeBackedCtx = (initial: GrantSession) => {
-    const store = new Map<string, GrantSession>([[initial.id, structuredClone(initial)]]);
-    const saveSession = vi.fn(async (s: GrantSession) => {
-      store.set(s.id, structuredClone(s));
-    });
+    const store = grantStore(initial);
+    const mutateCalls: Array<{ sessionId: string; touchUpdatedAt?: boolean }> = [];
     const publish = vi.fn();
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
-      _sessionManager: {
-        withLock: async (id: string, fn: (s: GrantSession) => Promise<void>) =>
-          fn(structuredClone(store.get(id)!)),
-        saveSession,
-      },
+      _sessionManager: { mutateMeta: fakeMutateMeta(store, mutateCalls) },
       _eventBus: { publish },
       _applyShellAllow: proto._applyShellAllow,
       _applyDirectoryAllow: proto._applyDirectoryAllow,
       _applyToolAllow: proto._applyToolAllow,
     };
-    return { ctx, store, saveSession };
+    return { ctx, store, mutateCalls, publish };
   };
 
   it('файловый тул: два пути из одного устаревшего снимка — оба правила в сессии', async () => {
     const session = baseSession();
-    const { ctx, store, saveSession } = storeBackedCtx(session);
+    const { ctx, store, mutateCalls } = storeBackedCtx(session);
 
     const first = await proto._grantSessionToolAllow.call(
       ctx,
@@ -553,7 +645,9 @@ describe('грант сессии: последовательные одобре
     expect(second.rules.read_file).toEqual(expected);
     // В хранилище — оба пути, второй грант первый не затёр.
     expect(store.get('s1')!.settings.permission.rules.read_file).toEqual(expected);
-    expect(saveSession).toHaveBeenCalledTimes(2);
+    expect(mutateCalls).toHaveLength(2);
+    // Время сессии не двигается: грант — служебная правка прав.
+    expect(mutateCalls.every((c) => c.touchUpdatedAt === false)).toBe(true);
     // Сам снимок вызывающего не мутирован (правило живёт в сторе).
     expect(session.settings.permission.rules.read_file).toBeUndefined();
   });

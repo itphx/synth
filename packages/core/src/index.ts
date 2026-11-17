@@ -1204,6 +1204,7 @@ export type {
   MutateMetaResult,
   MutateHistoryOptions,
   MutateHistoryResult,
+  MutateMessageOptions,
   MutateMessageResult,
   ProjectRepository,
   CreateProjectData,

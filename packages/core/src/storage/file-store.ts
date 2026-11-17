@@ -5,6 +5,7 @@ import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildC
 import type {
   MutateHistoryOptions,
   MutateHistoryResult,
+  MutateMessageOptions,
   MutateMessageResult,
   MutateMetaOptions,
   MutateMetaResult,
@@ -822,11 +823,15 @@ export class FileStore implements SessionRepository {
    * `SessionRepository.mutateMessage`): `id`/`seq`/`createdAt`/`ord` исходной
    * записи иммутабельны, поздняя запись черновика поверх терминального
    * сообщения не применяется (`isStaleDraftWrite`).
+   *
+   * `opts.touchUpdatedAt === false` — запись сообщения есть, `updatedAt`
+   * сессии не двигается (служебные метки: `turnId`, `last_error`).
    */
   async mutateMessage<T>(
     sessionId: string,
     messageId: string,
     mutator: (message: Message) => T,
+    opts?: MutateMessageOptions,
   ): Promise<MutateMessageResult<T>> {
     const lock = this._getLock(sessionId);
     await lock.acquire();
@@ -845,7 +850,7 @@ export class FileStore implements SessionRepository {
       }
       const updated = prepareMessageForUpdate(before, target);
       session.messages[index] = updated;
-      session.updatedAt = nowISO();
+      if (opts?.touchUpdatedAt !== false) session.updatedAt = nowISO();
       await this._writeSession(session);
       return { found: true, value, message: updated };
     } finally {

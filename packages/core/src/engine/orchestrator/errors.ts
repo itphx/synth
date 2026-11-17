@@ -215,15 +215,18 @@ export async function handleLlmFailure(
   }
 
   try {
-    await deps.sessionManager.withLock(sessionId, async (s) => {
-      const userMsg = s.messages.find(
-        (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
-      );
-      if (userMsg) {
-        userMsg.metadata = { ...userMsg.metadata, last_error: humanError };
-        await deps.sessionManager.saveSession(s);
-      }
-    });
+    // `last_error` — служебная пометка реплики хода: пишем точечно (по `id`
+    // свежего снимка) и **без** `touchUpdatedAt` — сессия не «оживляется» и
+    // время настоящего изменения не перебивается. История не перезаписывается.
+    const fresh = await deps.sessionManager.getSession(sessionId);
+    const userMsg = fresh?.messages.find(
+      (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
+    );
+    if (userMsg) {
+      await deps.sessionManager.mutateMessage(sessionId, userMsg.id, (target) => {
+        target.metadata = { ...target.metadata, last_error: humanError };
+      }, { touchUpdatedAt: false });
+    }
   } catch (err) {
     warning('ORCHESTRATOR', `Не удалось записать last_error: ${err instanceof Error ? err.message : String(err)}`);
   }

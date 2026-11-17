@@ -32,6 +32,7 @@ export type {
   MutateMetaResult,
   MutateHistoryOptions,
   MutateHistoryResult,
+  MutateMessageOptions,
   MutateMessageResult,
 } from './session-repository.js';
 export type { ProjectRepository, CreateProjectData } from './project-repository.js';

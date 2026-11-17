@@ -6,6 +6,7 @@ import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type {
   MutateHistoryOptions,
   MutateHistoryResult,
+  MutateMessageOptions,
   MutateMessageResult,
   MutateMetaOptions,
   MutateMetaResult,
@@ -937,13 +938,17 @@ export class SessionManager {
    * Атомарная правка одного сообщения по `id` (порт
    * `SessionRepository.mutateMessage`): `id`/`seq`/`createdAt`/`ord`
    * иммутабельны, поздняя запись черновика не «воскрешает» закрытый шаг.
+   *
+   * `opts.touchUpdatedAt === false` — запись сообщения есть, `updatedAt`
+   * сессии не двигается (служебные метки: `turnId`, `last_error`).
    */
   async mutateMessage<T>(
     sessionId: string,
     messageId: string,
     mutator: (message: Message) => T,
+    opts?: MutateMessageOptions,
   ): Promise<MutateMessageResult<T>> {
-    return this.store.mutateMessage(sessionId, messageId, mutator);
+    return this.store.mutateMessage(sessionId, messageId, mutator, opts);
   }
 
   /**

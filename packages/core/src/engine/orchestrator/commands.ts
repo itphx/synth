@@ -154,8 +154,10 @@ export async function finishLocalCommand(
 
   // Помечаем пользовательское сообщение эфемерным и командным (`commandPrompt` —
   // UI не рисует отдельный user-пузырь: команда объединена с выводом) и сохраняем
-  // ДО addMessage, иначе updateSession(session) перезапишет сессию без только что
-  // добавленного ответа. Существующие metadata не затираем.
+  // ДО addMessage, иначе полная запись снимка перезаписала бы сессию без только
+  // что добавленного ответа. Правка — точечная (по `id`, только служебные поля),
+  // с обычным `updatedAt`: команда меняет сообщение (паритет с прежним
+  // `updateSession`). Существующие metadata не затираем.
   userMessage.ephemeral = true;
   userMessage.metadata = { ...(userMessage.metadata ?? {}), commandPrompt: true };
   const idx = session.messages.findIndex((m) => m.id === userMessage.id);
@@ -166,7 +168,10 @@ export async function finishLocalCommand(
       metadata: userMessage.metadata,
     };
   }
-  await deps.sessionManager.updateSession(session).catch(() => {});
+  await deps.sessionManager.mutateMessage(session.id, userMessage.id, (target) => {
+    target.ephemeral = true;
+    target.metadata = { ...(target.metadata ?? {}), commandPrompt: true };
+  }).catch(() => {});
 
   // Сохраняем ответ и только потом публикуем завершение: нужны реальные
   // `message_index`/`message_id`, иначе UI в `finishStream` вычислит index

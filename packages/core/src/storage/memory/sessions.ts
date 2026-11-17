@@ -30,6 +30,7 @@ import type {
   CreateProjectData,
   MutateHistoryOptions,
   MutateHistoryResult,
+  MutateMessageOptions,
   MutateMessageResult,
   MutateMetaOptions,
   MutateMetaResult,
@@ -169,11 +170,16 @@ export class MemorySessionRepository implements SessionRepository {
     return { ok: true, value };
   }
 
-  /** Атомарная правка одного сообщения по `id` (порт `SessionRepository.mutateMessage`). */
+  /**
+   * Атомарная правка одного сообщения по `id` (порт `SessionRepository.mutateMessage`).
+   * `opts.touchUpdatedAt === false` — запись сообщения есть, `updatedAt` сессии
+   * не двигается (служебные метки: `turnId`, `last_error`).
+   */
   async mutateMessage<T>(
     sessionId: string,
     messageId: string,
     mutator: (message: Message) => T,
+    opts?: MutateMessageOptions,
   ): Promise<MutateMessageResult<T>> {
     const stored = this._sessions.get(sessionId);
     if (!stored) return { found: false };
@@ -190,7 +196,7 @@ export class MemorySessionRepository implements SessionRepository {
     }
     const updated = prepareMessageForUpdate(original, target);
     session.messages[index] = updated;
-    session.updatedAt = nowISO();
+    if (opts?.touchUpdatedAt !== false) session.updatedAt = nowISO();
     this._sessions.set(sessionId, structuredClone(stripNullBytesDeep(session)));
     return { found: true, value, message: structuredClone(updated) };
   }

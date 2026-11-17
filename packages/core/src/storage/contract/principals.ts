@@ -641,6 +641,56 @@ export function describeSessionRepository(
       expect(called).toBe(false);
     });
 
+    it('mutateMessage({touchUpdatedAt:false}) не двигает updatedAt, но применяет правку; свидетель цел', async () => {
+      const { repo } = await make();
+      const witness = { ...makeMessage('свидетель'), id: 'witness', seq: 1 };
+      const marked = {
+        ...makeMessage('реплика'),
+        id: 'marked',
+        seq: 2,
+        role: MessageRole.USER,
+        parts: [makeTextPart('реплика')],
+      };
+      await repo.save(makeSession({
+        id: 'message-no-touch',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [witness, marked],
+      }));
+
+      // Служебная метка (turnId/last_error): сообщение меняется, время сессии — нет.
+      const quiet = await repo.mutateMessage('message-no-touch', 'marked', (message) => {
+        message.turnId = 'turn_1';
+        message.metadata = { ...(message.metadata ?? {}), last_error: 'сбой' };
+        return 'quiet';
+      }, { touchUpdatedAt: false });
+      expect(quiet.found).toBe(true);
+      if (!quiet.found) throw new Error('ожидали found:true');
+      expect(quiet.value).toBe('quiet');
+      expect(quiet.message).toMatchObject({ id: 'marked', turnId: 'turn_1' });
+
+      let loaded = await repo.load('message-no-touch');
+      expect(loaded!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+      expect(loaded!.messages[1]).toMatchObject({
+        id: 'marked',
+        turnId: 'turn_1',
+        metadata: { last_error: 'сбой' },
+      });
+      // Свидетель истории не тронут.
+      expect(loaded!.messages[0]).toMatchObject({ id: 'witness', content: 'свидетель' });
+      expect(loaded!.messages[0]!.turnId).toBeUndefined();
+
+      // По умолчанию (без опции) `updatedAt` двигается — паритет обычной правки.
+      const touched = await repo.mutateMessage('message-no-touch', 'marked', (message) => {
+        message.pinned = true;
+        return 'touched';
+      });
+      expect(touched.found).toBe(true);
+      loaded = await repo.load('message-no-touch');
+      expect(loaded!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+      expect(loaded!.messages[1]).toMatchObject({ id: 'marked', pinned: true, turnId: 'turn_1' });
+      expect(loaded!.messages[0]).toMatchObject({ id: 'witness', content: 'свидетель' });
+    });
+
     it('документирующий: save(устаревший снимок) затирает точечный append (почему save нельзя для метаданных)', async () => {
       const { repo } = await make();
       await repo.save(makeSession({
