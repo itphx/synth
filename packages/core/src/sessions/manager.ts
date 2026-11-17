@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project, ContextDefaults } from '@itphx/synth-shared';
 import { getForkedTitle, MessageRole, MAX_STEER_INJECTIONS_PER_TURN, orderSteerInjections, isDefaultTitle } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
+import { MESSAGE_REPAIRED_METADATA_KEY, ORPHAN_TOOL_CALLS_REPAIRED } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type {
   MutateHistoryOptions,
@@ -962,9 +963,14 @@ export class SessionManager {
    *   `terminalStatusForStep`); уже терминальный статус не перетирается;
    * - assistant с `toolCalls`, для которого хотя бы у одного `id` нет
    *   последующего tool-сообщения с этим `toolCallId`, помечается
-   *   `disabled:true` + `metadata.interrupted:true` — `sessionMessagesToLlm`
-   *   не отдаст провайдеру assistant(tool_calls) без пары (осиротевшие
-   *   tool-сообщения он и так превращает в user-текст).
+   *   `disabled:true` + `metadata.repaired='orphan_tool_calls'` (ADR-144) —
+   *   `sessionMessagesToLlm` не отдаст провайдеру assistant(tool_calls) без
+   *   пары (осиротевшие tool-сообщения он и так превращает в user-текст).
+   *   `metadata.interrupted` здесь **не** ставится: шаг не прерывался, у него
+   *   разорвана цепочка вызовов (иначе UI показывал бы ложное «Прервано»).
+   *   Историческая запись с прежним маркером (`disabled` + `interrupted` +
+   *   осиротевшие вызовы) ретро-переклассифицируется в `repaired` — ветка
+   *   реального interrupt `toolCalls` не сохраняет, поэтому маркер там ложный.
    *
    * Запись — одна, под `withLock`, и только если что-то изменилось.
    * Возвращает число исправленных сообщений.
@@ -1014,10 +1020,23 @@ export class SessionManager {
 
         const hasOrphan = callIds.some((id) => !laterToolIds.has(id));
         if (!hasOrphan) continue;
-        if (message.disabled === true && message.metadata?.interrupted === true) continue;
 
+        // Идемпотентность: повторный проход не пишет, если маркер уже стоит
+        // и ложного «Прервано» нет.
+        const repaired = message.metadata?.[MESSAGE_REPAIRED_METADATA_KEY] === ORPHAN_TOOL_CALLS_REPAIRED;
+        const hadInterrupted = message.metadata?.interrupted === true;
+        if (message.disabled === true && repaired && !hadInterrupted) continue;
+
+        const metadata: Record<string, unknown> = {
+          ...(message.metadata ?? {}),
+          [MESSAGE_REPAIRED_METADATA_KEY]: ORPHAN_TOOL_CALLS_REPAIRED,
+        };
+        // Ретро-переклассификация исторической записи: шаг не прерывался —
+        // у него разорвана цепочка tool-вызовов (реальный interrupt `toolCalls`
+        // не сохраняет), поэтому маркер «Прервано» снимается.
+        delete metadata.interrupted;
         message.disabled = true;
-        message.metadata = { ...(message.metadata ?? {}), interrupted: true };
+        message.metadata = metadata;
         changed++;
       }
 

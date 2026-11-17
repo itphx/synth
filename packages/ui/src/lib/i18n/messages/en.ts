@@ -1989,6 +1989,12 @@ export const dict = {
   // Agent answer expanded to the full chat column width
   'chat.message.expand': 'Expand',
   'chat.message.collapse': 'Collapse',
+  // The step was excluded from the context **not** because it was interrupted,
+  // but because the core repaired a broken tool-call chain (`metadata.repaired`):
+  // the calls were left without results. Neutral label, not "Interrupted"/error.
+  'chat.messageRepaired': 'Step was not sent to the model',
+  'chat.messageRepairedHint':
+    "The step's tool calls had no results, so the step was excluded from the context; history is preserved",
 
   // ADR-070 §2.6: per-message answer stats
   'chat.messageStats.stopped': 'Stopped',

@@ -276,7 +276,7 @@ describe('MessageList: ход как один блок (ADR-118 §1)', () => {
     expect(block).not.toBeNull()
     expect(block.querySelector('[data-message-id="u1"]')).toBeNull()
     const userSegment = container.querySelector('[data-message-id="u1"]') as HTMLElement
-    expect(userSegment.querySelector(':scope > div')?.className).toContain('bg-primary/10')
+    expect(userSegment.querySelector('[data-bubble]')?.className).toContain('bg-primary/10')
     expect(container.querySelectorAll('.bg-card')).toHaveLength(1) // только блок хода
   })
 

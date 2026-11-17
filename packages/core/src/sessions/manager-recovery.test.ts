@@ -133,9 +133,81 @@ describe('SessionManager.recoverStreamingMessages (шаг 2б)', () => {
     const orphan = stored.messages.find((m) => m.toolCalls?.some((c) => c.id === 'call_orphan'))!;
     const paired = stored.messages.find((m) => m.toolCalls?.some((c) => c.id === 'call_ok'))!;
     expect(orphan.disabled).toBe(true);
-    expect(orphan.metadata?.interrupted).toBe(true);
+    // Битым цепочкам — маркер `repaired`, а не «Прервано»: шаг не прерывался,
+    // у него разорвана цепочка tool-вызовов.
+    expect(orphan.metadata?.repaired).toBe('orphan_tool_calls');
+    expect(orphan.metadata?.interrupted).toBeUndefined();
     expect(paired.disabled).toBe(false);
+    expect(paired.metadata?.repaired).toBeUndefined();
     expect(paired.metadata?.interrupted).toBeUndefined();
+  });
+
+  it('идемпотентен: повторный проход не пишет (маркер already repaired)', async () => {
+    const session = await manager.createSession({ title: 'Recovery orphan idem' });
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.ASSISTANT,
+      content: 'шаг',
+      toolCalls: [{ id: 'call_orphan', function: { name: 'read_file', arguments: '{}' } }],
+      metadata: { stream_id: 's1', tool_chain: true },
+    }));
+
+    expect(await manager.recoverStreamingMessages(session.id)).toBe(1);
+
+    const before = (await manager.getSession(session.id))!;
+    const changed = await manager.recoverStreamingMessages(session.id);
+    const after = (await manager.getSession(session.id))!;
+
+    expect(changed).toBe(0);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.messages).toEqual(before.messages);
+  });
+
+  it('ретро: disabled+interrupted с осиротевшим вызовом переклассифицируется в repaired', async () => {
+    // Историческая запись инцидента: шаг был помечен `disabled:true` +
+    // `metadata.interrupted:true` ещё до разделения маркеров — UI показывал
+    // ложное «Прервано».
+    const session = await manager.createSession({ title: 'Recovery legacy marker' });
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.ASSISTANT,
+      content: 'шаг с 5 вызовами',
+      disabled: true,
+      toolCalls: [
+        { id: 'call_a', function: { name: 'read_file', arguments: '{}' } },
+        { id: 'call_b', function: { name: 'read_file', arguments: '{}' } },
+      ],
+      metadata: { stream_id: 's1', tool_chain: true, interrupted: true },
+    }));
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.TOOL,
+      content: 'результат',
+      toolCallId: 'call_a',
+    }));
+
+    expect(await manager.recoverStreamingMessages(session.id)).toBe(1);
+
+    const stored = (await manager.getSession(session.id))!;
+    const step = stored.messages[0]!;
+    expect(step.disabled).toBe(true);
+    expect(step.metadata?.repaired).toBe('orphan_tool_calls');
+    expect(step.metadata?.interrupted).toBeUndefined();
+  });
+
+  it('реальный interrupted (без toolCalls) не переклассифицируется', async () => {
+    const session = await manager.createSession({ title: 'Recovery real interrupt' });
+    await manager.appendMessage(session.id, message({
+      role: MessageRole.ASSISTANT,
+      content: 'частичный ответ',
+      metadata: { stream_id: 's1', streaming: false, interrupted: true, status: 'error' },
+    }));
+
+    const before = (await manager.getSession(session.id))!;
+    const changed = await manager.recoverStreamingMessages(session.id);
+    const after = (await manager.getSession(session.id))!;
+
+    expect(changed).toBe(0);
+    expect(after.updatedAt).toBe(before.updatedAt);
+    expect(after.messages[0]!.metadata?.interrupted).toBe(true);
+    expect(after.messages[0]!.metadata?.repaired).toBeUndefined();
   });
 
   it('не пишет сессию, если нечего исправлять', async () => {

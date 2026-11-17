@@ -4,6 +4,20 @@ import type { AuthorityPrincipal } from './authority.js';
 import type { MessageStatus } from './message-stream.js';
 import type { InputMention } from './mentions.js';
 
+/**
+ * Маркер восстановления истории: ключ `metadata.repaired` и значение
+ * `orphan_tool_calls` (ADR-144).
+ *
+ * У assistant-шага с `toolCalls`, у которых нет парных `tool`-сообщений,
+ * восстановление (`recoverStreamingMessages`) ставит `disabled: true` +
+ * `metadata.repaired = ORPHAN_TOOL_CALLS_REPAIRED`. Это **не** прерывание хода:
+ * шаг не прерывался, у него разорвана цепочка вызовов, поэтому
+ * `metadata.interrupted` для такого шага не ставится (он остаётся только у
+ * реального steer-interrupt и у недописанного стрима после рестарта).
+ */
+export const MESSAGE_REPAIRED_METADATA_KEY = 'repaired';
+export const ORPHAN_TOOL_CALLS_REPAIRED = 'orphan_tool_calls';
+
 // --- Message role ---
 
 export enum MessageRole {

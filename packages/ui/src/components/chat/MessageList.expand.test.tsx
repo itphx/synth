@@ -112,11 +112,16 @@ function ribbon(container: HTMLElement): HTMLElement | null {
   return container.querySelector('.chat-scroll-container') as HTMLElement | null
 }
 
-/** Классы пузыря сообщения (первый `div` внутри контейнера сообщения). */
+/**
+ * Пузырь сообщения (карточка с контентом). Ищем по маркеру `[data-bubble]`, а не
+ * как «первый `div`»: сегмент может нести прозрачную колонку-обёртку
+ * (`display: contents`, подпись над пузырём) — она бокса не создаёт, поэтому
+ * цепочка растяжения панели (`styles/index.css`, селекторы потомков) не рвётся.
+ */
 function bubbleOf(root: HTMLElement, messageId: string): HTMLElement {
   const segment = root.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement
   expect(segment).not.toBeNull()
-  return segment.querySelector(':scope > div') as HTMLElement
+  return segment.querySelector('[data-bubble]') as HTMLElement
 }
 
 async function click(el: HTMLElement): Promise<void> {
@@ -255,9 +260,10 @@ describe('MessageList: разворот ответа агента', () => {
     const segment = pane.querySelector('[data-message-id="a1"]') as HTMLElement
     // Цепочка растяжения — `styles/index.css`: `.chat-column > *` → `[data-bubble]`.
     // Значит контейнер сообщения обязан быть **прямым** ребёнком колонки, а пузырь —
-    // прямым ребёнком контейнера.
+    // лежать внутри контейнера (между ними допустима прозрачная обёртка
+    // `display: contents`: бокса она не создаёт).
     expect(segment.parentElement).toBe(column)
-    const bubble = segment.querySelector(':scope > [data-bubble]') as HTMLElement
+    const bubble = segment.querySelector('[data-bubble]') as HTMLElement
     expect(bubble).not.toBeNull()
   })
 
@@ -277,7 +283,7 @@ describe('MessageList: разворот ответа агента', () => {
     // действий, и свободное место панели доходит до его пузыря.
     expect(block.lastElementChild).toBe(segments[2])
     for (const segment of segments) {
-      expect(segment.querySelector(':scope > [data-bubble]')).not.toBeNull()
+      expect(segment.querySelector('[data-bubble]')).not.toBeNull()
     }
     // Ряд действий один — у последнего сегмента; у первых его нет.
     const actions = pane.querySelectorAll('.message-actions')

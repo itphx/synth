@@ -823,7 +823,9 @@ describe('QueueProcessor — ремонт битой цепочки перед �
     const saved = (await sessionManager.getSession(session.id))!;
     const orphan = saved.messages.find((m) => m.toolCalls?.some((c) => c.id === 'call_orphan'))!;
     expect(orphan.disabled).toBe(true);
-    expect(orphan.metadata?.interrupted).toBe(true);
+    // Битая цепочка — маркер `repaired` (ADR-144), ложного «Прервано» нет.
+    expect(orphan.metadata?.repaired).toBe('orphan_tool_calls');
+    expect(orphan.metadata?.interrupted).toBeUndefined();
 
     // LLM-диалог валиден: осиротевший assistant(toolUse) не отдаётся модели.
     const llm = sessionMessagesToLlm(saved.messages, undefined, 'user');

@@ -279,6 +279,24 @@ function ChatMessageInner({
     message.metadata?.status === 'interrupted'
     || message.metadata?.interrupted === true
   )
+  /**
+   * Починка разорванной цепочки вызовов инструментов (`metadata.repaired`,
+   * маркер ставит ядро: `MESSAGE_REPAIRED_METADATA_KEY` =
+   * `ORPHAN_TOOL_CALLS_REPAIRED` в `@itphx/synth-shared/types`, ADR-144): шаг с
+   * вызовами без результатов **исключён из контекста** (`disabled`), но **не
+   * прерывался** — пользователь видел его полностью. Это не «Прервано» и не
+   * ошибка, а нейтральное пояснение, почему шаг помечен выключенным; история при
+   * этом сохранена. Маркер сравниваем строкой — как соседние маркеры
+   * `metadata` (`interrupted`, `background_run_result`, …) в этом компоненте.
+   *
+   * Приоритет при обоих маркерах — реальное прерывание (`isInterrupted`):
+   * «Прервано» описывает то, что видел человек, а починка — техническая причина
+   * исключения из контекста. Подменять «Прервано» технической пометкой нельзя.
+   */
+  const isRepaired = isAssistant
+    && message.metadata?.repaired === 'orphan_tool_calls'
+    && message.disabled === true
+    && !isInterrupted
   const canRetry = isUser
   /** Дебаг-цель хода (финальное сообщение с `debug_data`) — фоллбек на само сообщение. */
   const debugMessage = debugTarget ?? message
@@ -1323,144 +1341,178 @@ function ChatMessageInner({
           />
         </div>
       )}
-      <div className={bubbleClass} data-bubble="">
+      {/*
+        Колонка «пояснение + пузырь». В обычном режиме обёртка прозрачна
+        (`display: contents`) — раскладку не меняет: пояснение и пузырь
+        остаются элементами контейнера сообщения (как раньше были маркеры с
+        пузырём). В режиме выделения контейнер — `flex-row` (чекбокс + тело),
+        поэтому тело становится своей колонкой — как у служебных блоков.
+      */}
+      <div className={selectionMode ? 'flex min-w-0 flex-1 flex-col items-start' : 'contents'}>
         {/*
-          ADR-104: маркер **прерывания** хода (`metadata.interrupt`) — оставлен.
-          Маркера «вмешательство в ход» (`metadata.steer`) больше нет: реплика,
-          вклинившаяся в ход, рисуется обычным пузырём ( ADR-118 §4).
+          Починка разорванной цепочки вызовов инструментов
+          (`metadata.repaired === 'orphan_tool_calls'`): шаг исключён из
+          контекста, но **не прерывался** — нейтральное пояснение, а не
+          «Прервано»/ошибка. Иконка `information` (ⓘ) — «пояснение»; `tools` на
+          12px читается как «✕» (отменено/ошибка), `stop`/`alert` тем более
+          передают неверный смысл. Цвет — `muted` (контраст 5.5:1 в обеих темах).
+
+          Подпись стоит **вне** пузыря осознанно: у `disabled` пузыря
+          `opacity-50 line-through` — зачёркнутая и полупрозрачная подпись
+          нечитаема (контраст падал бы ниже 4.5:1). Сам текст шага остаётся
+          выключенным и зачёркнутым: «исключено из контекста» показывает именно
+          он, а подпись объясняет причину.
         */}
-        {isInterruptSteer && (
+        {isRepaired && (
           <span
-            className="mb-1 inline-flex items-center gap-1 self-end rounded-sm bg-primary/10 px-1.5 py-0.5 text-[11px] leading-4 text-primary"
-            title={t('chat.steer.interruptMarker')}
+            data-testid="message-repaired-badge"
+            className="mb-1 inline-flex items-center gap-1 self-start rounded-sm bg-muted px-1.5 py-0.5 text-[11px] leading-4 text-muted-foreground"
+            title={t('chat.messageRepairedHint')}
           >
-            <Icon name="stop" className="size-3" />
-            {t('chat.steer.interruptMarker')}
+            <Icon name="information" className="size-3" />
+            {t('chat.messageRepaired')}
           </span>
         )}
 
-        {isInterrupted && (
-          <span
-            className="mb-1 inline-flex items-center gap-1 self-start rounded-sm bg-status-warning/15 px-1.5 py-0.5 text-[11px] leading-4 text-status-warning"
-            title={t('chat.steer.interruptMarker')}
-          >
-            <Icon name="stop" className="size-3" />
-            {t('chat.messageStats.interrupted')}
-          </span>
-        )}
+        <div className={bubbleClass} data-bubble="">
+          {/*
+            ADR-104: маркер **прерывания** хода (`metadata.interrupt`) — оставлен.
+            Маркера «вмешательство в ход» (`metadata.steer`) больше нет: реплика,
+            вклинившаяся в ход, рисуется обычным пузырём ( ADR-118 §4).
+          */}
+          {isInterruptSteer && (
+            <span
+              className="mb-1 inline-flex items-center gap-1 self-end rounded-sm bg-primary/10 px-1.5 py-0.5 text-[11px] leading-4 text-primary"
+              title={t('chat.steer.interruptMarker')}
+            >
+              <Icon name="stop" className="size-3" />
+              {t('chat.steer.interruptMarker')}
+            </span>
+          )}
 
-        {isAssistant && showHeader && (
-          <MessageHeader
-            message={message}
-            isSubagent={isSubagent}
-            onOriginClick={handleOriginClick}
-            processing={headerProcessing}
-            expanded={expanded}
-            // Кнопка «Развернуть» — только у ответа агента; в user-шапку,
-            // metaOnly-шапки (Notice/фон/планировщик) и пустой live-сегмент
-            // пропс не передаётся.
-            onToggleExpand={onToggleExpand ? handleToggleExpand : undefined}
-          />
-        )}
+          {isInterrupted && (
+            <span
+              className="mb-1 inline-flex items-center gap-1 self-start rounded-sm bg-status-warning/15 px-1.5 py-0.5 text-[11px] leading-4 text-status-warning"
+              title={t('chat.steer.interruptMarker')}
+            >
+              <Icon name="stop" className="size-3" />
+              {t('chat.messageStats.interrupted')}
+            </span>
+          )}
 
-        {partsContentEl}
-
-        {isUser && (
-          <MessageHeader
-            message={message}
-            isSubagent={isSubagent}
-            onOriginClick={handleOriginClick}
-            processing={pending?.status === 'processing'}
-          />
-        )}
-
-        {hasAttachments && sessionId && (
-          <MessageAttachments sessionId={sessionId} parts={messageParts} />
-        )}
-
-        {displayContent && (
-          isUser ? (
-            <SecretPlainText content={displayContent} secrets={secrets} sessionId={sessionId} agents={agents} />
-          ) : isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
-            <SessionReferenceCard
-              sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}
-              content={displayContent}
-              metadata={message.metadata as Record<string, unknown> | undefined}
+          {isAssistant && showHeader && (
+            <MessageHeader
+              message={message}
+              isSubagent={isSubagent}
+              onOriginClick={handleOriginClick}
+              processing={headerProcessing}
+              expanded={expanded}
+              // Кнопка «Развернуть» — только у ответа агента; в user-шапку,
+              // metaOnly-шапки (Notice/фон/планировщик) и пустой live-сегмент
+              // пропс не передаётся.
+              onToggleExpand={onToggleExpand ? handleToggleExpand : undefined}
             />
-          ) : (
-            <SecretMarkdown
-              content={resolveI18nText(i18nMeta, displayContent)}
-              secrets={secrets}
-              sessionId={sessionId}
-              streaming={isLive}
+          )}
+
+          {partsContentEl}
+
+          {isUser && (
+            <MessageHeader
+              message={message}
+              isSubagent={isSubagent}
+              onOriginClick={handleOriginClick}
+              processing={pending?.status === 'processing'}
             />
-          )
-        )}
+          )}
 
-        {/* Автоповтор хода — внизу ответа у последнего сегмента (не у реплики). */}
-        {serviceSummaryEl}
+          {hasAttachments && sessionId && (
+            <MessageAttachments sessionId={sessionId} parts={messageParts} />
+          )}
 
-        {showRetry && retry && (
-          <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
-        )}
+          {displayContent && (
+            isUser ? (
+              <SecretPlainText content={displayContent} secrets={secrets} sessionId={sessionId} agents={agents} />
+            ) : isInfo && (message.metadata as Record<string, unknown>)?.type === 'session_reference' ? (
+              <SessionReferenceCard
+                sessionId={String((message.metadata as Record<string, unknown>)?.session_id || '')}
+                content={displayContent}
+                metadata={message.metadata as Record<string, unknown> | undefined}
+              />
+            ) : (
+              <SecretMarkdown
+                content={resolveI18nText(i18nMeta, displayContent)}
+                secrets={secrets}
+                sessionId={sessionId}
+                streaming={isLive}
+              />
+            )
+          )}
 
-        {/*
-          ADR-118 §1/§5: live-статистика и «В фон» (ADR-111 §detach) — в
-          **конце** содержимого сегмента. Точек-индикатора в теле больше нет:
-          «идёт» показывают точки в шапке последнего сегмента хода.
-        */}
-        {isLive && (
-          <div className="mt-1 flex flex-wrap items-center gap-1 self-start text-[11px] text-muted-foreground">
-            {liveSegments.length > 0 && (
-              <StatsPopoverButton>
-                <span className="flex flex-nowrap items-center gap-1 whitespace-nowrap" data-testid="live-stats">
-                  {liveSegments.map((segment, i) => (
-                    <Fragment key={segment}>
-                      {i > 0 && <span aria-hidden="true">·</span>}
-                      <span>{segment}</span>
-                    </Fragment>
-                  ))}
-                </span>
-              </StatsPopoverButton>
-            )}
-            {canDetach && (
-              <button
-                type="button"
-                onClick={handleBackground}
-                disabled={detaching}
-                title={t('chat.background.hint')}
-                aria-label={t('chat.background.move')}
-                className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-interactive-hover disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
-              >
-                <Icon name="download" className="size-3" />
-                {t('chat.background.move')}
-              </button>
-            )}
-          </div>
-        )}
+          {/* Автоповтор хода — внизу ответа у последнего сегмента (не у реплики). */}
+          {serviceSummaryEl}
 
-        {actionsVisible && (
-          <MessageActions
-            messageId={message.id}
-            role={message.role}
-            disabled={message.disabled}
-            pinned={message.pinned}
-            canRetry={canRetry}
-            hasDebug={hasDebug}
-            debugActive={debugActive}
-            readOnly={readOnly}
-            hasStats={showStats}
-            // ADR-070 §2.6: статистика ответа — в поповере по кнопке (единый путь).
-            statsContent={<MessageStats message={message} />}
-            onCopy={handleCopy}
-            onToggle={handleToggle}
-            onPin={handlePin}
-            onDelete={handleDelete}
-            onRetry={handleRetry}
-            onDebug={handleDebug}
-            onFork={handleFork}
-          />
-        )}
+          {showRetry && retry && (
+            <RetryStatus retry={retry} onRetryNow={onRetryNow} onCancelRetry={onCancelRetry} />
+          )}
+
+          {/*
+            ADR-118 §1/§5: live-статистика и «В фон» (ADR-111 §detach) — в
+            **конце** содержимого сегмента. Точек-индикатора в теле больше нет:
+            «идёт» показывают точки в шапке последнего сегмента хода.
+          */}
+          {isLive && (
+            <div className="mt-1 flex flex-wrap items-center gap-1 self-start text-[11px] text-muted-foreground">
+              {liveSegments.length > 0 && (
+                <StatsPopoverButton>
+                  <span className="flex flex-nowrap items-center gap-1 whitespace-nowrap" data-testid="live-stats">
+                    {liveSegments.map((segment, i) => (
+                      <Fragment key={segment}>
+                        {i > 0 && <span aria-hidden="true">·</span>}
+                        <span>{segment}</span>
+                      </Fragment>
+                    ))}
+                  </span>
+                </StatsPopoverButton>
+              )}
+              {canDetach && (
+                <button
+                  type="button"
+                  onClick={handleBackground}
+                  disabled={detaching}
+                  title={t('chat.background.hint')}
+                  aria-label={t('chat.background.move')}
+                  className="inline-flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-interactive-hover disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent"
+                >
+                  <Icon name="download" className="size-3" />
+                  {t('chat.background.move')}
+                </button>
+              )}
+            </div>
+          )}
+
+          {actionsVisible && (
+            <MessageActions
+              messageId={message.id}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              // ADR-070 §2.6: статистика ответа — в поповере по кнопке (единый путь).
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          )}
+        </div>
       </div>
     </div>
   )
