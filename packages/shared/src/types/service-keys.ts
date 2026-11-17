@@ -22,6 +22,7 @@ export const SERVICE_SCOPE_FAMILIES = [
   'routes',
   'sessions',
   'schedules',
+  'timers',
   'mcp',
 ] as const;
 
@@ -61,6 +62,8 @@ export const SERVICE_SCOPES = [
   'sessions:prompt',
   'schedules:read',
   'schedules:write',
+  'timers:read',
+  'timers:write',
   'llm:chat',
   'addons:install',
   'automation:install',
@@ -79,6 +82,12 @@ export type ServiceScope = (typeof SERVICE_SCOPES)[number];
  * покрыт **хотя бы один** элемент набора. `routes:write`/`schedules:write`
  * остаются самостоятельными (правка чужих правил/расписаний), а
  * `automation:install` — доступ установщика пакета к тем же точкам.
+ *
+ * PROP-141 (этап 5, B-2): скоупы таймеров/будильников — `timers:read`/
+ * `timers:write`. Зонтичный `automation:install` их **не** покрывает:
+ * таймер — runtime-автоматизация пользователя, а не артефакт пакета
+ * расширений (в отличие от агентов/пайплайнов/правил/расписаний, которые
+ * установщик пакета действительно порождает).
  */
 export const SERVICE_SCOPE_SETS = {
   /** Запись правил маршрутизации: `routes:write` или установщик пакета. */
@@ -87,6 +96,10 @@ export const SERVICE_SCOPE_SETS = {
   schedulesWrite: ['schedules:write', 'automation:install'],
   /** Установка агентов и их ролевых промптов: установщик пакета. */
   agentsWrite: ['automation:install'],
+  /** Чтение таймеров/будильников (PROP-141, этап 5 B-2). */
+  timersRead: ['timers:read'],
+  /** Запись таймеров/будильников (PROP-141, этап 5 B-2). */
+  timersWrite: ['timers:write'],
 } as const;
 
 /** Набор скоупов «достаточно любого из» (см. `SERVICE_SCOPE_SETS`). */

@@ -58,17 +58,18 @@ managed добавляет RBAC). В гибриде на backend проксир�
 `403 SCOPE_REQUIRED`). Для интерактивных кред (cookie/debug/OIDC/API-key/локальный
 ключ) scope-гейт — no-op (запрос пропускается). Каталог scope: `events:ingest`,
 `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`,
-`sessions:create|read|prompt`, `schedules:read|write`, `llm:chat`, `addons:install`,
+`sessions:create|read|prompt`, `schedules:read|write`, `timers:read|write`, `llm:chat`,
+`addons:install`,
 `automation:install`, `users:read` + wildcard-семейства
-`events:*`, `bindings:*`, `keys:*`, `routes:*`, `sessions:*`, `schedules:*`
+`events:*`, `bindings:*`, `keys:*`, `routes:*`, `sessions:*`, `schedules:*`, `timers:*`
 (глобального `*` нет; `automation` в wildcard-семейства **не** входит — wildcard
 `automation:*` намеренно не вводится, иначе он молча покрывал бы будущие
 `automation:*`-скоупы, не связанные с установкой пакета). Отдельно: на части роутов (запись реестра MCP, запись
 скиллов, чтение админского user-API) scope работает как альтернатива роли ADMIN
 («ADMIN **или** scope», см. §5.14/§5.16/§5.17). Проектная проекция `allowedProjects`: если у ключа задан
 непустой список, доступны только входящие в него проекты — применяется в sessions,
-events/bindings и schedules (иначе `403 PROJECT_FORBIDDEN`); пусто/отсутствует —
-политика инстанса. Точки применения scope по роутам — в §5.5, §5.26, §5.27, §5.23.
+events/bindings, schedules и timers (иначе `403 PROJECT_FORBIDDEN`); пусто/отсутствует —
+политика инстанса. Точки применения scope по роутам — в §5.5, §5.26, §5.27, §5.23, §5.45.
 
 **Зонтичный scope `automation:install` (ADR-052).** Scope установщика пакетов
 расширений: агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
@@ -2480,8 +2481,8 @@ function verify(rawBody, header, secret, nowSec = Math.floor(Date.now() / 1000))
 
 ### 5.30 Публичный OpenAPI и SDK — `@itphx/synth-sdk` (ADR-052, этап III)
 
-Публичный HTTP-контракт (интеграционное ядро: `events`/`sessions`/`schedules`/`llm`; 28 операций —
-events 13, sessions 8, schedules 6, llm 1) описан декларативной **public-OpenAPI 3.1**-спекой и отдаётся ручкой `GET /api/v2/openapi.json`
+Публичный HTTP-контракт (интеграционное ядро: `events`/`sessions`/`schedules`/`timers`/`llm`;
+36 операций — events 13, sessions 8, schedules 6, timers 7, llm 1) описан декларативной **public-OpenAPI 3.1**-спекой и отдаётся ручкой `GET /api/v2/openapi.json`
 (§5.4). Потреблять его удобнее через публикуемый пакет **`@itphx/synth-sdk`** — типизированный
 клиент над этой спекой (тонкий пакет, зависимость только от `@itphx/synth-shared`; ESM,
 браузер-совместимый).
@@ -2522,6 +2523,10 @@ try {
   **журнал**: `projectLog`/`createProjectLogEntry`/`updateProjectLogEntry`/`deleteProjectLogEntry`;
   **инварианты**: `projectInvariants`/`putProjectInvariants`), `pipelines`, `models`, `fs`, `git`, `llm`
   (`chatCompletions`).
+- **Таймеры в спеке, но не в SDK.** Операции `/api/v2/timers*` описаны в public-OpenAPI
+  (7 операций, §5.45), однако namespace `timers` в `@itphx/synth-sdk` **ещё нет** —
+  по решению владельца (PROP-141) SDK для таймеров вынесен за пределы итерации;
+  до тех пор контур используется напрямую по HTTP (scopes `timers:read`/`timers:write`).
 - **PROP-054 в SDK.** Журнал проекта **вынесен из детали**: `projects.get()` возвращает DTO **без**
   поля `log` (план в детали остаётся), записи журнала читаются постранично — `projects.projectLog(id, {limit, offset})`
   → `ProjectLogPage` (`{entries, total, offset, limit, next_offset}`; `limit` по умолчанию 50, максимум 200).
@@ -3844,6 +3849,75 @@ maxPerInstance})` — reaper и уборка снимков читают `idleMs
 сохранённым выводом — его можно перезапустить вручную
 (`POST /api/v2/terminals/:id/restart`).
 
+### 5.45 Таймеры и будильники — `/api/v2/timers` (оба, PROP-141 этап 5 B-2)
+
+HTTP-контур таймеров и будильников (единая core-фабрика `createTimerRoutes` для
+core и backend). Таймер — **персистентная** автоматизация: он переживает
+рестарт инстанса (реестр — `TimerRepository`, файл `{dataDir}/timers.json`;
+история срабатываний — `TimerFiringRepository`, `{dataDir}/timers/firings.jsonl`).
+Мутации идут **через движок** (`TimerService`, `engine/timers/`): лимиты,
+валидация и пересчёт ближайшего срабатывания при смене правила повтора — его
+дело; роут в порт напрямую не пишет (инвариант 2).
+
+Отличие от расписания (ADR-051): у таймера нет **своего текста задания** —
+несёт только комментарий (1…500 символов), а смысл срабатывания восстанавливает
+агент по комментарию и истории. Вид: `timer` (относительный отсчёт) или `alarm`
+(абсолютное время/повтор); правило повтора — `once` | `daily` (`HH:MM` + часовой
+пояс) | `every` (`everySec`).
+
+**RBAC managed (backend) — по проекту таймера** (ADR-089 §5.5/§5.8, инвариант 21):
+чтение (`GET /`, `GET /:id/firings`) — право чтения проекта (владелец/участник/
+`LEAD`/`ADMIN`); мутации (`POST`/`PATCH`/`POST /:id/pause`/`POST /:id/resume`/
+`DELETE`) — право изменения содержимого (`OWNER`/`EDITOR`/`LEAD`/`ADMIN`;
+`VIEWER` читает, но не мутирует). Проверка — **на границе**
+(`authorizeProject` → `canReadProject`/`canEditProjectContent`); правило общее с
+расписаниями (`packages/backend/src/routes/project-access.ts` →
+`createBackendProjectAccess`). Проект таймера **обязателен** (инстансных
+автоматизаций нет) и выводится из сессии. Список `GET /` ограничен видимыми
+проектами и **собственными** таймерами (`listVisibleProjectIds`): чужой таймер в
+списке не виден, а по id — 403 `FORBIDDEN`; несуществующий — 404 `NOT_FOUND`.
+В core (standalone) — единый `requireAuth` (пользователь инстанса один). Мутации
+в managed — под rate limit 10/60 c.
+
+| Метод | Путь | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|
+| GET | `/api/v2/timers` | по проекту таймера (read) | Список таймеров — **страница-сводка** `{timers,total,offset,limit,next_offset}` (ADR-118 §4); фильтры: `sessionId`, `projectId`, `status` (`active`/`paused`/`fired`/`cancelled`), `kind` (`timer`/`alarm`); невалидный фильтр или `limit`/`offset` → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/timers` | по проекту таймера (write) | Создание (`timerIntentRequestSchema`): `{kind, name?, comment, sessionId, projectId?, repeat, delaySec?, at?}`; проект выводится из сессии, переданный несовпадающий → 400; лимит активных таймеров сессии (50) → 409 `TIMER_LIMIT_EXCEEDED`; → 201 `{timer}` |
+| PATCH | `/api/v2/timers/:id` | по проекту таймера (write) | Правка `{name?, comment?, repeat?}` (`name: null` — сбросить); пустой патч → 400; смена `repeat` пересчитывает `firesAt` (движок) → 200 `{timer}`; нет записи → 404 `NOT_FOUND` |
+| POST | `/api/v2/timers/:id/pause` | по проекту таймера (write) | Пауза → 200 `{timer}` (статус `paused`); терминальный статус (`fired`/`cancelled`) → 409 `CONFLICT` |
+| POST | `/api/v2/timers/:id/resume` | по проекту таймера (write) | Снятие с паузы → 200 `{timer}` (статус `active`); повторяющиеся пересчитывают ближайшее срабатывание от текущего времени; терминальный статус → 409 `CONFLICT` |
+| DELETE | `/api/v2/timers/:id` | по проекту таймера (write) | Удаление → 204 (история срабатываний остаётся); нет записи → 404 `NOT_FOUND` |
+| GET | `/api/v2/timers/:id/firings` | по проекту таймера (read) | История срабатываний — **страница-сводка** `{firings,total,offset,limit,next_offset}`; `?limit=` (дефолт 20, max 200), `?offset=`; нет таймера → 404 `NOT_FOUND` |
+
+**DTO `Timer`** (`shared/src/types/timers.ts`): `id` (`tmr_<uuid>`), `kind`
+(`timer`/`alarm`), `name?`, `comment` (1…500 символов), `projectId`, `sessionId`,
+`ownerId` (владелец — текущий пользователь; для service-key — `service:<keyId>`),
+`repeat` (`{mode:'once'}` | `{mode:'daily',time,timezone}` |
+`{mode:'every',everySec}`), `status` (`active`/`paused`/`fired`/`cancelled`),
+`firesAt` (ближайшее срабатывание, ISO-8601), `createdAt`, `updatedAt`, `firedAt?`,
+`lastError?`.
+
+**DTO `TimerFiring`**: `id` (`tmf_<uuid>`), `timerId`, `firedAt`, `scheduledFor`,
+`lagMs`, `outcome` (`ok`/`error`/`skipped`), `sessionId`.
+
+**Ошибки.** `400 VALIDATION_ERROR` — некорректное тело/фильтр/пагинация,
+комментарий длиннее 500 символов, интервал/задержка вне 10…2 592 000 с, время
+или часовой пояс не разобраны, горизонт one-shot больше 30 суток, `projectId` не
+совпадает с проектом сессии, сессия вне проекта. `409 TIMER_LIMIT_EXCEEDED` —
+достигнут лимит активных таймеров сессии (50). `409 CONFLICT` — пауза/возобновление
+таймера в терминальном статусе. `403 FORBIDDEN` — нет прав на проект таймера (или
+проект вне проекции `allowedProjects` — `403 PROJECT_FORBIDDEN`). `404 NOT_FOUND` —
+таймера нет. `403 SCOPE_REQUIRED` — у service-key нет нужного scope.
+
+**Scope service-key (ADR-052):** `timers:read` (чтение списка и истории
+срабатываний), `timers:write` (создание, правка, пауза/возобновление, удаление);
+проектная проекция — по проекту таймера (выведен из сессии). Зонтичный
+`automation:install` скоупы таймеров **не** покрывает: таймер — runtime-автоматизация
+пользователя, а не артефакт пакета расширений.
+
+**Деградированный режим хранилища (ADR-098).** Движок таймеров не создаётся —
+контур `/api/v2/timers*` **не монтируется** (404), как у фоновых прогонов.
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -3866,6 +3940,7 @@ maxPerInstance})` — reaper и уборка снимков читают `idleMs
 | Фоновые прогоны: реестр, сервисы, HTTP-контур (ADR-111, PROP-096/097) | `packages/core/src/server/routes/processes.ts`, `packages/core/src/engine/background/*`, `packages/core/src/engine/processes/*`, `packages/core/src/storage/ports/background-run-repository.ts`, `packages/backend/src/routes/processes.ts`, `packages/shared/src/types/background.ts` |
 | Worktrees: сервис, порт инвентаря, HTTP-контур, событие (ADR-114) | `packages/core/src/engine/worktree/*`, `packages/core/src/storage/ports/worktree-repository.ts`, `packages/core/src/storage/file-worktree-store.ts`, `packages/core/src/server/routes/projects.ts`, `packages/core/src/server/routes/sessions.ts`, `packages/core/src/engine/tools/worktree.ts`, `packages/shared/src/types/worktree.ts` |
 | Терминалы: сервис, кольцевой буфер, аудит, метрики, снимки, HTTP-контур (ADR-132) | `packages/core/src/engine/terminal/*`, `packages/core/src/server/routes/terminals.ts`, `packages/core/src/server/app/terminal-service.ts`, `packages/core/src/server/app/terminal-port.ts`, `packages/shared/src/types/bus-events.ts` |
+| Таймеры и будильники: движок, порты, HTTP-контур (PROP-141, этап 5 B-2) | `packages/core/src/engine/timers/*`, `packages/core/src/storage/ports/timer-repository.ts`, `packages/core/src/storage/file-timer-store.ts`, `packages/core/src/storage/file-timer-firing-store.ts`, `packages/core/src/server/routes/timers.ts`, `packages/backend/src/routes/project-access.ts`, `packages/shared/src/types/timers.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

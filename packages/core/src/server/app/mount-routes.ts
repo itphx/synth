@@ -20,6 +20,8 @@ import {
   createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createQueueRoutes, createMessageRoutes, createSettingsRoutes,
   createDictionaryRoutes, createMcpRoutes, createMcpRegistryRoutes, createEventRoutes, createSchedulerRoutes,
+  // PROP-141 (этап 5, B-2): HTTP-контур таймеров и будильников.
+  createTimerRoutes,
   createOAuthRoutes, bindCredentialToConnector,
   createAuditRoutes,
   createServiceKeyRoutes, createWebhookRoutes, createSkillRoutes, createCommandRoutes,
@@ -1048,6 +1050,26 @@ export function mountStandaloneRoutes(
       resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
     },
   ));
+
+  // PROP-141 (этап 5, B-2): HTTP-контур таймеров и будильников.
+  // Standalone — дефолтные guard'ы (`requireAuth`); доступ к проекту не
+  // разграничивается (пользователь инстанса один, ADR-079). Движок не создан
+  // в деградированном режиме хранилища — тогда контура нет (404), как у
+  // фоновых прогонов.
+  if (deps.timerService) {
+    app.route('/api/v2/timers', createTimerRoutes(
+      auth,
+      {
+        timerService: deps.timerService,
+        timers: deps.storageContext.timers,
+        firings: deps.storageContext.timerFirings,
+      },
+      {
+        // Проект таймера выводится из сессии (инстансных автоматизаций нет).
+        resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+      },
+    ));
+  }
 
   // ADR-051/ADR-100: API пайплайнов — определения (ставит установщик пакета),
   // экземпляры и ручной запуск. Standalone — дефолтные guard'ы (`requireAuth`).

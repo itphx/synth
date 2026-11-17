@@ -305,3 +305,41 @@ export const timerFiringSchema = z.object({
   outcome: z.enum(['ok', 'error', 'skipped']),
   sessionId: z.string().min(1),
 });
+
+/**
+ * Тело создания таймера/будильника через HTTP (PROP-141, этап 5 B-2).
+ *
+ * Отличие от записи `Timer`/`timerCreateInputSchema`: это **интент** — правило
+ * первого срабатывания, а не вычисленная метка времени:
+ * - `repeat.mode = 'once'` + `kind:'timer'` — относительная задержка `delaySec`;
+ * - `repeat.mode = 'once'` + `kind:'alarm'` — абсолютное время `at`;
+ * - `repeat.mode = 'daily'|'every'` — правило повтора (метку вычисляет движок).
+ *
+ * `projectId` в теле необязателен: сервер выводит его из сессии
+ * (`sessionId`) и сверяет с переданным (несовпадение → 400). `ownerId` в теле
+ * **нет**: владелец — текущий пользователь (для service-key — `service:<keyId>`).
+ */
+export const timerIntentRequestSchema = z.object({
+  kind: timerKindSchema,
+  name: z.string().min(1).optional(),
+  comment: timerCommentSchema,
+  sessionId: z.string().min(1),
+  projectId: z.string().min(1).optional(),
+  repeat: timerRepeatSchema,
+  delaySec: z.number().int().optional(),
+  at: timerTimestampSchema.optional(),
+});
+
+/**
+ * Тело частичной правки таймера через HTTP (PROP-141, этап 5 B-2).
+ *
+ * Правятся только «смысловые» поля: `name` (`null` — сбросить), `comment`
+ * и `repeat` (смена правила повтора пересчитывает ближайшее срабатывание —
+ * это делает движок). Статус (`status`) и метка времени (`firesAt`) — не в
+ * HTTP-контракте: их меняют операции паузы/возобновления.
+ */
+export const timerPatchRequestSchema = z.object({
+  name: z.string().min(1).nullable().optional(),
+  comment: timerCommentSchema.optional(),
+  repeat: timerRepeatSchema.optional(),
+});

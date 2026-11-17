@@ -15,7 +15,8 @@ const API_BASE = '/api/v2';
 
 /**
  * Ожидаемая публичная поверхность (интеграционное ядро, ADR-052 этап III, часть 1):
- * path → HTTP-методы. 29 операций: events 13, sessions 8, schedules 6, llm 1, system 1.
+ * path → HTTP-методы. 36 операций: events 13, sessions 8, schedules 6, timers 7,
+ * llm 1, system 1.
  */
 const EXPECTED_PATHS: Record<string, string[]> = {
   // events
@@ -39,6 +40,12 @@ const EXPECTED_PATHS: Record<string, string[]> = {
   '/schedules/{id}': ['put', 'delete'],
   '/schedules/{id}/run': ['post'],
   '/schedules/{id}/jobs': ['get'],
+  // timers (PROP-141, этап 5 B-2)
+  '/timers': ['get', 'post'],
+  '/timers/{id}': ['patch', 'delete'],
+  '/timers/{id}/pause': ['post'],
+  '/timers/{id}/resume': ['post'],
+  '/timers/{id}/firings': ['get'],
   // llm
   '/llm/chat/completions': ['post'],
   // system (ADR-118 §8)
@@ -76,6 +83,13 @@ const EXPECTED_SCHEMAS = [
   'Schedule',
   'ScheduleInput',
   'ScheduleJob',
+  'Timer',
+  'TimerFiring',
+  'TimerIntentRequest',
+  'TimerPatchRequest',
+  'TimerResponse',
+  'TimerListResponse',
+  'TimerFiringListResponse',
   'ChatCompletionsRequest',
   'ChatCompletionsResponse',
 ];
@@ -115,6 +129,7 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
       'schedules',
       'sessions',
       'system',
+      'timers',
     ]);
     expect(doc.security).toEqual([{ bearerAuth: [] }]);
     expect(doc.components?.securitySchemes).toMatchObject({
@@ -127,9 +142,9 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
       expect(methods[path], `path ${path}`).toEqual([...expected].sort());
     }
 
-    // Всего 29 операций в интеграционном ядре.
+    // Всего 36 операций в интеграционном ядре.
     const operationCount = Object.values(methods).reduce((n, ms) => n + ms.length, 0);
-    expect(operationCount).toBe(29);
+    expect(operationCount).toBe(36);
 
     // Именованные модели присутствуют (не только inline).
     const schemas = doc.components?.schemas ?? {};
@@ -344,6 +359,7 @@ describe('public OpenAPI (ADR-052, этап III)', () => {
     expect(json.paths).toHaveProperty('/events');
     expect(json.paths).toHaveProperty('/sessions/{id}');
     expect(json.paths).toHaveProperty('/schedules/{id}/run');
+    expect(json.paths).toHaveProperty('/timers/{id}/firings');
     expect(json.paths).toHaveProperty('/llm/chat/completions');
   });
 });

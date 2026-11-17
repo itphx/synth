@@ -7,11 +7,13 @@
  * заглушки, возвращающие валидные примеры. Заглушки нужны только для генерации
  * документа и проверки, что `createRoute` типизируется нашими shared-схемами;
  * живая логика остаётся в единых core-фабриках (`createEventRoutes`,
- * `createSessionRoutes`, `createSchedulerRoutes`, LLM-прокси). Так сохраняется
+ * `createSessionRoutes`, `createSchedulerRoutes`, `createTimerRoutes`,
+ * LLM-прокси). Так сохраняется
  * паритет core↔backend (одна фабрика на оба) и не дублируется логика; спека
  * описывает контракт, а не подменяет боевые обработчики.
  *
- * Публикуется только **интеграционное ядро** (`events`/`sessions`/`schedules`/`llm`)
+ * Публикуется только **интеграционное ядро**
+ * (`events`/`sessions`/`schedules`/`timers`/`llm`)
  * и публичный `GET /meta` (`system`, ADR-118 §8: версия модели сообщений).
  * — см. ADR-052 (OpenAPI — только public, детали — `docs/API_V2.md` §5.30): fs/audit/admin/секреты
  * наружу не выводим.
@@ -48,6 +50,11 @@ import {
   sessionCreateSchema,
   sessionUpdateSchema,
   synthEventSchema,
+  // PROP-141 (этап 5, B-2): контракты таймеров и будильников.
+  timerFiringSchema,
+  timerIntentRequestSchema,
+  timerPatchRequestSchema,
+  timerSchema,
 } from '@itphx/synth-shared';
 
 /**
@@ -401,6 +408,44 @@ const ScheduleJobListResponse = z
   .object({ jobs: z.array(ScheduleJob) })
   .openapi('ScheduleJobListResponse');
 
+// --- Таймеры и будильники (PROP-141, этап 5 B-2) ---
+
+const Timer = reopened(timerSchema).openapi('Timer', {
+  description: 'Запись таймера/будильника (PROP-141).',
+});
+const TimerFiring = reopened(timerFiringSchema).openapi('TimerFiring', {
+  description: 'Запись истории срабатываний таймера (PROP-141).',
+});
+const TimerIntentRequest = reopened(timerIntentRequestSchema).openapi('TimerIntentRequest', {
+  description:
+    'Тело создания таймера/будильника: правило первого срабатывания (`repeat` + ' +
+    '`delaySec`/`at`). `projectId` выводится сервером из `sessionId`; `ownerId` — ' +
+    'текущий пользователь.',
+});
+const TimerPatchRequest = reopened(timerPatchRequestSchema).openapi('TimerPatchRequest', {
+  description: 'Частичная правка таймера: `name`/`comment`/`repeat`.',
+});
+
+const TimerResponse = z.object({ timer: Timer }).openapi('TimerResponse');
+const TimerListResponse = z
+  .object({
+    timers: z.array(Timer),
+    total: z.number().int(),
+    offset: z.number().int(),
+    limit: z.number().int(),
+    next_offset: z.number().int().nullable(),
+  })
+  .openapi('TimerListResponse');
+const TimerFiringListResponse = z
+  .object({
+    firings: z.array(TimerFiring),
+    total: z.number().int(),
+    offset: z.number().int(),
+    limit: z.number().int(),
+    next_offset: z.number().int().nullable(),
+  })
+  .openapi('TimerFiringListResponse');
+
 // --- LLM Proxy (OpenAI-совместимый), по факту `packages/backend/src/routes/llm.ts` ---
 
 const ChatMessage = z.object({
@@ -459,6 +504,7 @@ const ChatCompletionsResponse = z
 
 const SessionParams = z.object({ id: z.string().min(1) });
 const ScheduleParams = z.object({ id: z.string().min(1) });
+const TimerParams = z.object({ id: z.string().min(1) });
 const BindingParams = z.object({ id: z.string().min(1) });
 const BindingKeyParams = z.object({ id: z.string().min(1), keyId: z.string().min(1) });
 
@@ -491,6 +537,26 @@ const SchedulesQuery = z.object({
   projectId: z.string().min(1).optional().openapi({ description: 'Проект расписания' }),
   enabled: z.enum(['true', 'false', '1', '0']).optional().openapi({ description: 'Включено/выключено' }),
   status: z.enum(['ok', 'error', 'skipped']).optional().openapi({ description: 'Статус последнего запуска' }),
+});
+/**
+ * PROP-141 (этап 5, B-2): фильтры списка таймеров/будильников. Некорректное
+ * значение — 400 `VALIDATION_ERROR`.
+ */
+const TimersQuery = z.object({
+  sessionId: z.string().min(1).optional().openapi({ description: 'Сессия-получатель' }),
+  projectId: z.string().min(1).optional().openapi({ description: 'Проект автоматизации' }),
+  status: z
+    .enum(['active', 'paused', 'fired', 'cancelled'])
+    .optional()
+    .openapi({ description: 'Статус записи' }),
+  kind: z.enum(['timer', 'alarm']).optional().openapi({ description: 'Вид автоматизации' }),
+  limit: z.coerce.number().int().positive().optional().openapi({ description: 'Размер страницы: default 50, max 200' }),
+  offset: z.coerce.number().int().nonnegative().optional().openapi({ description: 'Смещение страницы: default 0' }),
+});
+/** Query истории срабатываний таймера. */
+const TimerFiringsQuery = z.object({
+  limit: z.coerce.number().int().positive().optional().openapi({ description: 'default 20, max 200' }),
+  offset: z.coerce.number().int().nonnegative().optional().openapi({ description: 'Смещение страницы: default 0' }),
 });
 
 // --- Операции: events (ADR-089) ---
@@ -908,8 +974,111 @@ const listScheduleJobsRoute = createRoute({
   },
 });
 
-// --- Операции: llm (OpenAI-совместимый прокси) ---
+// --- Операции: timers (PROP-141, этап 5 B-2) ---
 
+const listTimersRoute = createRoute({
+  method: 'get',
+  path: '/timers',
+  tags: ['timers'],
+  summary: 'Список таймеров и будильников',
+  description:
+    'Фильтры: `sessionId`, `projectId`, `status`, `kind`. Некорректное значение фильтра — 400 `VALIDATION_ERROR`. Список — страница-сводка (ADR-118 §4).',
+  security: BEARER_SECURITY,
+  request: { query: TimersQuery },
+  responses: {
+    200: jsonResponse('Список таймеров', TimerListResponse),
+    ...publicErrorResponses,
+  },
+});
+
+const createTimerRoute = createRoute({
+  method: 'post',
+  path: '/timers',
+  tags: ['timers'],
+  summary: 'Создать таймер или будильник',
+  description:
+    'Требует scope `timers:write` (service-key). Проект выводится из `sessionId`; переданный `projectId` обязан совпадать (иначе 400).',
+  security: BEARER_SECURITY,
+  request: {
+    body: { required: true, content: { 'application/json': { schema: TimerIntentRequest } } },
+  },
+  responses: {
+    201: jsonResponse('Таймер создан', TimerResponse),
+    ...publicErrorResponses,
+  },
+});
+
+const patchTimerRoute = createRoute({
+  method: 'patch',
+  path: '/timers/{id}',
+  tags: ['timers'],
+  summary: 'Изменить таймер',
+  description: 'Правятся `name`/`comment`/`repeat`; смена правила повтора пересчитывает ближайшее срабатывание.',
+  security: BEARER_SECURITY,
+  request: {
+    params: TimerParams,
+    body: { required: true, content: { 'application/json': { schema: TimerPatchRequest } } },
+  },
+  responses: {
+    200: jsonResponse('Таймер обновлён', TimerResponse),
+    ...publicErrorResponses,
+  },
+});
+
+const deleteTimerRoute = createRoute({
+  method: 'delete',
+  path: '/timers/{id}',
+  tags: ['timers'],
+  summary: 'Удалить таймер',
+  security: BEARER_SECURITY,
+  request: { params: TimerParams },
+  responses: {
+    204: { description: 'Таймер удалён' },
+    ...publicErrorResponses,
+  },
+});
+
+const pauseTimerRoute = createRoute({
+  method: 'post',
+  path: '/timers/{id}/pause',
+  tags: ['timers'],
+  summary: 'Поставить таймер на паузу',
+  security: BEARER_SECURITY,
+  request: { params: TimerParams },
+  responses: {
+    200: jsonResponse('Таймер на паузе', TimerResponse),
+    ...publicErrorResponses,
+  },
+});
+
+const resumeTimerRoute = createRoute({
+  method: 'post',
+  path: '/timers/{id}/resume',
+  tags: ['timers'],
+  summary: 'Снять таймер с паузы',
+  description: 'Повторяющиеся таймеры пересчитывают ближайшее срабатывание от текущего времени.',
+  security: BEARER_SECURITY,
+  request: { params: TimerParams },
+  responses: {
+    200: jsonResponse('Таймер возобновлён', TimerResponse),
+    ...publicErrorResponses,
+  },
+});
+
+const listTimerFiringsRoute = createRoute({
+  method: 'get',
+  path: '/timers/{id}/firings',
+  tags: ['timers'],
+  summary: 'История срабатываний таймера',
+  security: BEARER_SECURITY,
+  request: { params: TimerParams, query: TimerFiringsQuery },
+  responses: {
+    200: jsonResponse('История срабатываний', TimerFiringListResponse),
+    ...publicErrorResponses,
+  },
+});
+
+// --- Операции: llm (OpenAI-совместимый прокси) ---
 const chatCompletionsRoute = createRoute({
   method: 'post',
   path: '/llm/chat/completions',
@@ -980,6 +1149,20 @@ const SAMPLE_SCHEDULE = {
   projectId: 'prj_0000',
   cron: '0 * * * *',
   target: { mode: 'ephemeral' as const, project: 'prj_0000' },
+  createdAt: '1970-01-01T00:00:00.000Z',
+  updatedAt: '1970-01-01T00:00:00.000Z',
+};
+
+const SAMPLE_TIMER = {
+  id: 'tmr_0000',
+  kind: 'timer' as const,
+  comment: 'напомнить',
+  projectId: 'prj_0000',
+  sessionId: 'ses_0000',
+  ownerId: 'user_0000',
+  repeat: { mode: 'once' as const },
+  status: 'active' as const,
+  firesAt: '1970-01-01T00:00:00.000Z',
   createdAt: '1970-01-01T00:00:00.000Z',
   updatedAt: '1970-01-01T00:00:00.000Z',
 };
@@ -1061,6 +1244,19 @@ export function createPublicOpenApiApp(): OpenAPIHono {
   app.openapi(runScheduleRoute, (c) => c.json({ schedule: SAMPLE_SCHEDULE }, 200));
   app.openapi(listScheduleJobsRoute, (c) => c.json({ jobs: [] }, 200));
 
+  // --- timers (PROP-141) ---
+  app.openapi(listTimersRoute, (c) =>
+    c.json({ timers: [], total: 0, offset: 0, limit: 50, next_offset: null }, 200),
+  );
+  app.openapi(createTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 201));
+  app.openapi(patchTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 200));
+  app.openapi(deleteTimerRoute, (c) => c.body(null, 204));
+  app.openapi(pauseTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 200));
+  app.openapi(resumeTimerRoute, (c) => c.json({ timer: SAMPLE_TIMER }, 200));
+  app.openapi(listTimerFiringsRoute, (c) =>
+    c.json({ firings: [], total: 0, offset: 0, limit: 20, next_offset: null }, 200),
+  );
+
   // --- llm ---
   app.openapi(chatCompletionsRoute, (c) =>
     c.json(
@@ -1084,6 +1280,7 @@ const PUBLIC_TAGS = [
   { name: 'events', description: 'Внешние события, привязки, правила маршрутизации (ADR-089).' },
   { name: 'sessions', description: 'Сессии: создание, чтение, приём сообщений (ADR-017/ADR-040/ADR-118).' },
   { name: 'schedules', description: 'Расписания планировщика (ADR-051).' },
+  { name: 'timers', description: 'Таймеры и будильники (PROP-141, этап 5 B-2).' },
   { name: 'llm', description: 'OpenAI-совместимый LLM-прокси (ADR-036/ADR-052).' },
   { name: 'system', description: 'Возможности инстанса и версия протокола (ADR-118 §8).' },
 ];
@@ -1102,7 +1299,7 @@ export function getPublicOpenApiDocument(): ReturnType<OpenAPIHono['getOpenAPI31
       title: 'Synth Public API',
       version: SYNTH_VERSION,
       description:
-        'Публичный интеграционный контракт Synth (ADR-052): events/sessions/schedules/llm + meta (ADR-118 §8). Единый формат ошибок: { error: { code, message } }. Аутентификация — service-key (`Authorization: Bearer synth_svc_…`); `GET /meta` — без аутентификации.',
+        'Публичный интеграционный контракт Synth (ADR-052): events/sessions/schedules/timers/llm + meta (ADR-118 §8). Единый формат ошибок: { error: { code, message } }. Аутентификация — service-key (`Authorization: Bearer synth_svc_…`); `GET /meta` — без аутентификации.',
     },
     servers: [{ url: '/api/v2' }],
     tags: PUBLIC_TAGS,

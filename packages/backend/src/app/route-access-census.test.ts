@@ -51,6 +51,8 @@ const G_PROCESS =
   'process-access (право на сессию-владельца прогона): backend src/routes/processes.ts';
 const G_SCHEDULE_PROJECT =
   'schedule-project-role (read=canReadProject, write=canEditProjectContent): backend src/routes/schedules.ts (authorizeProject)';
+const G_TIMER_PROJECT =
+  'timer-project-role (read=canReadProject, write=canEditProjectContent): backend src/routes/project-access.ts (authorizeProject)';
 const G_TERMINAL =
   'terminal-project-role (read=canReadProject, write=canEditProjectContent): core src/server/routes/terminals.ts (terminalGuard)';
 const G_MCP_SESSION =
@@ -79,6 +81,7 @@ const OWNERSHIP_GUARDS = new Set<string>([
   G_RUN,
   G_PROCESS,
   G_SCHEDULE_PROJECT,
+  G_TIMER_PROJECT,
   G_TERMINAL,
   G_MCP_SESSION,
   G_OWNER,
@@ -328,6 +331,17 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('PUT', '/api/v2/schedules/:id', G_SCHEDULE_PROJECT, [404], { body: {} }),
   r('DELETE', '/api/v2/schedules/:id', G_SCHEDULE_PROJECT, [404]),
   r('POST', '/api/v2/schedules/:id/run', G_SCHEDULE_PROJECT, [404], { body: {} }),
+
+  // --- Таймеры и будильники (PROP-141, этап 5 B-2): права — по проекту таймера ---
+  // Правило доступа — то же проектное (`createBackendProjectAccess` — общий
+  // хелпер с расписаниями): чтение — `canReadProject`, мутации —
+  // `canEditProjectContent` (`VIEWER` читает, но не мутирует — инвариант 21).
+  // Несуществующий таймер → 404 (ресурса нет — независимо от прав).
+  r('GET', '/api/v2/timers/:id/firings', G_TIMER_PROJECT, [404]),
+  r('PATCH', '/api/v2/timers/:id', G_TIMER_PROJECT, [404], { body: {} }),
+  r('DELETE', '/api/v2/timers/:id', G_TIMER_PROJECT, [404]),
+  r('POST', '/api/v2/timers/:id/pause', G_TIMER_PROJECT, [404], { body: {} }),
+  r('POST', '/api/v2/timers/:id/resume', G_TIMER_PROJECT, [404], { body: {} }),
 
   // --- Service-key (ADR-052): только ADMIN ---
   r('GET', '/api/v2/service-keys/:id', G_ADMIN, [403]),

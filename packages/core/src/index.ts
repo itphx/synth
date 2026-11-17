@@ -2602,6 +2602,14 @@ export type {
   SchedulerRoutesOptions,
   SchedulerRouteMessages,
 } from './server/routes/schedules.js';
+// PROP-141 (этап 5, B-2): HTTP-контур таймеров и будильников.
+export { createTimerRoutes } from './server/routes/timers.js';
+export type {
+  TimerRoutesAuth,
+  TimerRoutesDeps,
+  TimerRoutesOptions,
+  TimerRouteMessages,
+} from './server/routes/timers.js';
 // ADR-051/ADR-100: API пайплайнов (определения/экземпляры/ручной запуск).
 export { createPipelinesRoutes } from './server/routes/pipelines.js';
 export type {

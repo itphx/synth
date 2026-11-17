@@ -13,6 +13,8 @@ import {
   getPublicOpenApiDocument,
   createFsRoutes, createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes,
+  // PROP-141 (этап 5, B-2): HTTP-контур таймеров и будильников.
+  createTimerRoutes,
   mergeLlmGatewayConfig, mergeSecurityConfig, mergePluginsConfig,
   createSkillRoutes, createCommandRoutes, createSkillBundleRoutes,
   createSnippetRoutes,
@@ -70,6 +72,7 @@ import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, Storage
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
 import { createBackendProcessAccess } from '../routes/processes.js';
 import { createBackendScheduleAccess } from '../routes/schedules.js';
+import { createBackendProjectAccess } from '../routes/project-access.js';
 import { createSessionRoutes } from '../routes/sessions.js';
 import { createMessageRoutes } from '../routes/messages.js';
 import { createQueueRoutes } from '../routes/queue.js';
@@ -573,6 +576,37 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       listVisibleProjectIds: scheduleAccess.listVisibleProjectIds,
     },
   ));
+
+  // PROP-141 (этап 5, B-2): HTTP-контур таймеров и будильников
+  // (`/api/v2/timers`). Права — **по проекту таймера** (ADR-089 §5.5/§5.8):
+  // читать — владелец/участник/`LEAD`/`ADMIN`, изменять — `OWNER`/`EDITOR`/
+  // `LEAD`/`ADMIN` (`VIEWER` читает, но не мутирует — инвариант 21). Проверка —
+  // граничная (инвариант 16): `authorizeProject`/`listVisibleProjectIds` из
+  // `routes/project-access.ts` (общий хелпер с расписаниями — правило одно).
+  // Мутации — под rate limit 10/60 c (как принудительный запуск расписания).
+  // Движок не создан в деградированном режиме хранилища — тогда контура нет.
+  if (deps.timerService) {
+    const timerAccess = createBackendProjectAccess({ auth, projectStore });
+    app.route('/api/v2/timers', createTimerRoutes(
+      auth,
+      {
+        timerService: deps.timerService,
+        timers: deps.storageContext.timers,
+        firings: deps.storageContext.timerFirings,
+      },
+      {
+        writeGuard: auth.requireAuth,
+        writeMiddleware: [createRateLimiter(10, 60_000)],
+        // ADR-052 (этап I): scope-гейт service-key и проектная проекция.
+        scopeGuard,
+        serviceProjectProjection,
+        // Проект таймера выводится из сессии (инстансных автоматизаций нет).
+        resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+        authorizeProject: timerAccess.authorizeProject,
+        listVisibleProjectIds: timerAccess.listVisibleProjectIds,
+      },
+    ));
+  }
 
   // ADR-051/ADR-100: API пайплайнов — определения (ставит установщик пакета),
   // экземпляры и ручной запуск. Чтение — ADMIN (реестр автоматов инстанса),

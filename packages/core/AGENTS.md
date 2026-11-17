@@ -304,7 +304,11 @@
   расширений**: агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
   правила маршрутизации и расписания — наборы «любой из» в
   `SERVICE_SCOPE_SETS`: `routesWrite`/`schedulesWrite`/`agentsWrite`; `addons:install`
-  создание агентов **не** открывает) и `users:read`. Провижининг installer-ключа — `security.bootstrapServiceKeys`
+  создание агентов **не** открывает) и `users:read`. Скоупы таймеров —
+  `timers:read`/`timers:write` (`SERVICE_SCOPE_SETS.timersRead`/`timersWrite`,
+  PROP-141 этап 5 B-2): зонтичный `automation:install` их **не** покрывает (таймер —
+  runtime-автоматизация пользователя, а не артефакт пакета расширений).
+  Провижининг installer-ключа — `security.bootstrapServiceKeys`
   (config) / env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (JSON) → `applyBootstrapServiceKeys` при старте.
 - Создание сессии — через единый funnel `RequestSessionService`
   (`engine/events/request-session.ts`): явный запрос — `direct`, внешнее событие —
@@ -729,6 +733,8 @@
   `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `meta` (ADR-118: `GET /api/v2/meta` — возможности инстанса, без аутентификации), `dictionaries`, `mcp`, `mcp-registry` (ADR-071: HTTP-контур реестра MCP — см. §MCP), `skills`,
   `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
+  `timers` (PROP-141, этап 5 B-2: `/api/v2/timers*` — таймеры и будильники; список
+  и история срабатываний — страницами-сводками, права — по проекту таймера),
   `logs`, `audit`, `gateway-patterns`, `context-files`, `debug` (админ-контуры LLM Gateway,
   логов, файлов контекста и групп логирования — общая реализация для standalone и
   managed; детали — в следующем пункте),
@@ -3243,6 +3249,26 @@
   `GET /api/v2/schedules`: `sessionId`/`projectId`/`enabled`/`status` (невалидное
   значение → 400 `VALIDATION_ERROR`). Опции не заданы (core/standalone) — прежнее
   поведение: доступ к проекту не разграничен.
+  `createTimerRoutes` (PROP-141, этап 5 B-2) — HTTP-контур таймеров и будильников
+  (`/api/v2/timers`): `GET /` — список **страницей-сводкой** (ADR-118 §4:
+  `{timers,total,offset,limit,next_offset}`; фильтры `sessionId`/`projectId`/
+  `status`/`kind`, невалидное значение → 400 `VALIDATION_ERROR`), `POST /` —
+  создание, `PATCH /:id` — правка (`name`/`comment`/`repeat`), `POST /:id/pause` /
+  `POST /:id/resume`, `DELETE /:id` (204), `GET /:id/firings` — история срабатываний
+  (тоже страница-сводкой). Deps: `timerService` (движок — лимиты, валидация,
+  пересчёт `firesAt`), `timers`/`firings` (порты слоя хранения — выборка и
+  история). Опции: `authorizeProject`/`listVisibleProjectIds` — **те же**, что у
+  расписаний (правило доступа одно; в backend — общий хелпер
+  `routes/project-access.ts` → `createBackendProjectAccess`), `writeGuard`,
+  `writeMiddleware` (rate limit на мутации), `scopeGuard`/`serviceProjectProjection`
+  (ADR-052; скоупы `timers:read`/`timers:write` — `SERVICE_SCOPE_SETS.timersRead`/
+  `timersWrite`), `resolveSessionProject` (проект таймера выводится из сессии —
+  инстансных автоматизаций нет; переданный несовпадающий `projectId` → 400),
+  `messages`. Мутации идут **через движок** (в порт роут не пишет): превышение
+  лимита активных таймеров сессии (50) → `409 TIMER_LIMIT_EXCEEDED`, прочие
+  ошибки движка → `400 VALIDATION_ERROR`. Монтирование: core — `requireAuth`
+  (пользователь один), backend — RBAC по проекту + rate limit; в деградированном
+  режиме хранилища движок не создан — контур **не монтируется** (404).
   `createAgentRoutes` — опция `scopeGuard` для записи агентов (ADR-052; дефолт —
   `requireScopeOrAdminRole`): достаточно любого из `SERVICE_SCOPE_SETS.agentsWrite`
   (сейчас — `automation:install`) **или** роли ADMIN у ключа.
