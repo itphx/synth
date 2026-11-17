@@ -1897,6 +1897,19 @@ export const dict = {
   'chat.notice.debug': 'Отладка',
   'chat.notice.error': 'Ошибка',
   'chat.notice.info': 'Инфо',
+  // PROP-143: durable-запись причины остановки хода — служебный блок.
+  'chat.notice.executionStopped': 'Остановлено: {reason}',
+  'chat.notice.executionStoppedMeta': 'попыток: {attempts} · повтор возможен: {retryable}',
+  'chat.notice.yes': 'да',
+  'chat.notice.no': 'нет',
+  'chat.notice.stopReason.provider_error': 'ошибка провайдера',
+  'chat.notice.stopReason.steps_limit': 'лимит шагов',
+  'chat.notice.stopReason.context_budget': 'бюджет контекста',
+  'chat.notice.stopReason.stopped_by_user': 'остановлено пользователем',
+  'chat.notice.stopReason.denied': 'отказ в правах',
+  'chat.notice.stopReason.internal': 'внутренняя ошибка',
+  'chat.notice.stopReason.restart': 'прервано рестартом',
+  'chat.notice.stopReason.orphaned': 'прогон потерян',
   // ADR-118/восстановление: автопродолжение хода после рестарта инстанса.
   'chat.notice.restartResumed': 'Работа восстановлена после рестарта',
   'chat.notice.restartResumedText': 'Ход был прерван рестартом инстанса и продолжен автоматически',
@@ -3793,6 +3806,24 @@ export const dict = {
   'task.resume_locked': 'Сессия {id} занята или уже возобновляется',
   'task.resume_agent_not_found': 'Агент «{type}» не найден или не может использоваться как сабагент',
   'task.resume_provider_unavailable': 'Провайдер не настроен для сессии {id} — возобновление невозможно',
+
+  // --- PROP-142 §2: доставка сообщения и продолжение с новыми указаниями ---
+  'task.agent_switch_unsupported':
+    'Нельзя сменить тип сабагента у существующей дочерней сессии ({current} → {requested}); запусти новую задачу',
+  'task.continuation_prompt_required':
+    'Идущему сабагенту можно передать только текст задания (prompt)',
+  'task.delivery_rejected':
+    'Не удалось доставить сообщение идущему сабагенту ({reason})',
+
+  // --- PROP-143: причина остановки хода (durable-запись) ---
+  'router.quota_exceeded': 'Исчерпана квота провайдера (лимит плана или биллинга)',
+  'stop.steps_limit': 'Исполнение остановлено лимитом шагов ({limit})',
+  'stop.context_budget': 'Исполнение остановлено бюджетом контекста ({tokens} токенов, шагов: {steps})',
+  'stop.stopped_by_user': 'Исполнение остановлено пользователем',
+  'stop.denied': 'Исполнение остановлено: запрос на вызов инструмента отклонён',
+  'stop.restarted': 'Исполнение прервано перезапуском инстанса',
+  'stop.orphaned': 'Прогон потерян: исполнение больше не существует',
+  'stop.internal': 'Исполнение остановлено внутренней ошибкой',
 
   // --- Фоновые саб-агенты и лимит шагов (этап 1 roadmap 0.13, блок 4) ---
   'task.steps_limit':

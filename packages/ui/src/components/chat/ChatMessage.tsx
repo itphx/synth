@@ -90,6 +90,44 @@ function getIntermediateTextBlocks(message: MessageData): IntermediateTextBlockD
   return []
 }
 
+/**
+ * PROP-143: тело конверта остановки — сырой текст провайдера.
+ *
+ * Конверт, который видит модель:
+ * `<execution_stopped reason="…" error_type="…" …>\n<текст>\n</execution_stopped>`.
+ * В чате конверт не показываем (как конверт таймера) — только тело.
+ *
+ * Тело — всё между первым `>` открывающего тега и последним
+ * `</execution_stopped>`; пустое тело — `null` (блок рисуется без тела).
+ */
+function extractExecutionStoppedBody(content: string): string | null {
+  const open = content.indexOf('<execution_stopped')
+  if (open === -1) return null
+  const tagEnd = content.indexOf('>', open)
+  if (tagEnd === -1) return null
+  const close = content.lastIndexOf('</execution_stopped>')
+  if (close === -1 || close <= tagEnd) return null
+  const body = content.slice(tagEnd + 1, close).replace(/^\r?\n/, '').trim()
+  return body.length > 0 ? body : null
+}
+
+/**
+ * PROP-143: известные коды причины остановки (`metadata.reason`).
+ *
+ * Неизвестный код (ядро новее UI) деградирует на «внутренняя ошибка» — иначе
+ * в подписи оказался бы сырой i18n-ключ.
+ */
+const STOP_REASONS = new Set([
+  'provider_error',
+  'steps_limit',
+  'context_budget',
+  'stopped_by_user',
+  'denied',
+  'internal',
+  'restart',
+  'orphaned',
+])
+
 interface ChatMessageProps {
   message: MessageData
   /**
@@ -257,6 +295,10 @@ function ChatMessageInner({
   // `Session` — системный блок (как сообщение планировщика), а не реплика
   // человека.
   const isSessionMoved = isUser && message.metadata?.type === 'session_moved'
+  // PROP-143: durable-запись о причине остановки хода приходит как role:'user'
+  // с автором `System` и metadata.type === 'execution_stopped' — служебный
+  // блок (как сообщение планировщика), а не реплика человека.
+  const isExecutionStopped = isUser && message.metadata?.type === 'execution_stopped'
   // Вид автоматизации: будильник (`alarm`) — своя иконка, таймер — часы.
   const isTimerAlarm = isTimerFired && message.metadata?.timer_kind === 'alarm'
   // ADR-104: инъекция во время активного хода (`metadata.steer`) — **без
@@ -728,6 +770,106 @@ function ChatMessageInner({
       {serviceExpanded ? t('chat.compact.hide') : serviceSummaryLabel}
     </button>
   ) : null
+
+  // PROP-143: durable-запись о причине остановки хода — центрированный
+  // служебный блок (как сообщение планировщика и завершение фонового прогона):
+  // автор остановки — система (`System`), а не текущий пользователь.
+  // Подпись — человеческая причина (`metadata.reason`) и модель хода; тело —
+  // сырой текст провайдера из конверта `<execution_stopped …>` (сам конверт
+  // модели в UI не показываем, как у таймера).
+  if (isExecutionStopped) {
+    const stopMeta = message.metadata ?? undefined
+    const reason = typeof stopMeta?.reason === 'string' ? stopMeta.reason : ''
+    const model = typeof stopMeta?.model === 'string' ? stopMeta.model : ''
+    const attempts = typeof stopMeta?.attempts === 'number' ? stopMeta.attempts : undefined
+    const retryable = typeof stopMeta?.retryable === 'boolean' ? stopMeta.retryable : undefined
+    const reasonLabel = t(
+      `chat.notice.stopReason.${reason && STOP_REASONS.has(reason) ? reason : 'internal'}`,
+    )
+    const label = [
+      t('chat.notice.executionStopped', { reason: reasonLabel }),
+      model,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const tooltip = t('chat.notice.executionStoppedMeta', {
+      attempts: String(attempts ?? '-'),
+      retryable:
+        retryable === true
+          ? t('chat.notice.yes')
+          : retryable === false
+            ? t('chat.notice.no')
+            : '-',
+    })
+    const body = extractExecutionStoppedBody(displayContent)
+
+    const selectionCheckboxEl = selectionMode ? (
+      <div className="flex items-center self-stretch pr-1">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            const ev = e.nativeEvent as MouseEvent
+            handleToggleSelect(ev.shiftKey ?? false)
+          }}
+          className="size-4 rounded border-border cursor-pointer accent-primary"
+        />
+      </div>
+    ) : null
+
+    const stoppedEl = (
+      <Notice
+        variant="error"
+        icon="error-warning"
+        label={<span title={tooltip}>{label}</span>}
+        ariaLabel={label}
+        meta={<MessageHeader message={message} metaOnly />}
+        actions={
+          actionsVisible ? (
+            <MessageActions
+              embedded
+              showCopy={false}
+              messageId={message.id}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          ) : undefined
+        }
+        onCopy={handleCopy}
+        disabled={message.disabled}
+      >
+        {body && (
+          <SecretMarkdown
+            content={body}
+            secrets={secrets}
+            sessionId={sessionId}
+          />
+        )}
+      </Notice>
+    )
+
+    if (!selectionMode) return stoppedEl
+    return (
+      <div className="flex items-start">
+        {selectionCheckboxEl}
+        <div className="min-w-0 flex-1">{stoppedEl}</div>
+      </div>
+    )
+  }
 
   // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
