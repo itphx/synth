@@ -680,11 +680,21 @@ export async function runProcessSetup(
         ? 'generation-change'
         : 'init';
     activePromptState = buildPromptState(promptStateInput, prevPromptState, reason);
+    // Этап 2b-1: пишутся **только** `promptStates` (точечная мутация метаданных),
+    // а не весь локальный снимок `session`: иначе можно потерять/перезаписать
+    // чужие поля (state-сообщения уже сохранены через `addMessage`).
+    // Паритет: старый код `updatedAt` не менял → `touchUpdatedAt:false`;
+    // писал всегда (ранних return нет).
     session.promptStates = {
       ...(session.promptStates ?? {}),
       [agentKey]: activePromptState,
     };
-    await deps.sessionManager.saveSession(session);
+    await deps.sessionManager.mutateMeta(session.id, (meta) => {
+      meta.promptStates = {
+        ...(meta.promptStates ?? {}),
+        [agentKey]: activePromptState!,
+      };
+    }, { touchUpdatedAt: false });
   }
   const promptMeta: PromptMeta = {
     agentRole: effectiveAgentRole,

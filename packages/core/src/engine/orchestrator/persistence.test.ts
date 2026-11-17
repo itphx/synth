@@ -180,6 +180,56 @@ describe('saveAssistantMessage / persistToolChain', () => {
     expect(added[0]!.data).toMatchObject({ message_index: 0, role: MessageRole.ASSISTANT, content: 'ответ' });
   });
 
+  it('этап 2b-1: параллельные финализации суммируют счётчики, свидетель истории цел, updatedAt двигается', async () => {
+    const session = await newSession();
+    const oldUpdatedAt = '2020-01-01T00:00:00.000Z';
+    await sessionManager.mutateMeta(session.id, (meta) => {
+      meta.updatedAt = oldUpdatedAt;
+    }, { touchUpdatedAt: false });
+    const witness: Message = {
+      id: 'witness-1',
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+
+    // Два параллельных начисления счётчиков хода + параллельная дозапись
+    // сообщения (как tool-результат во время шага).
+    const [firstId, secondId] = await Promise.all([
+      saveAssistantMessage(
+        deps(), session.id, 'первый', 'stream1', 'fixer', USAGE, 'm', undefined,
+        debugCollector, false, 'prov',
+      ),
+      saveAssistantMessage(
+        deps(), session.id, 'второй', 'stream2', 'fixer', USAGE, 'm', undefined,
+        debugCollector, false, 'prov',
+      ),
+      sessionManager.addMessage(session.id, witness),
+    ]);
+
+    const updated = (await sessionManager.getSession(session.id))!;
+    // Lost update исключён: начисления суммируются.
+    expect(updated.inputTokens).toBe(200);
+    expect(updated.outputTokens).toBe(20);
+    expect(updated.totalTokens).toBe(220);
+    expect(updated.cacheReadTokens).toBe(80);
+    expect(updated.cacheWriteTokens).toBe(40);
+    expect(updated.reasoningTokens).toBe(10);
+    // Ни одно сообщение не потеряно (и оба ответа, и свидетель).
+    const ids = updated.messages.map((m) => m.id);
+    expect(ids).toContain(firstId);
+    expect(ids).toContain(secondId);
+    expect(ids).toContain(witness.id);
+    // Паритет: старый код явно выставлял `updatedAt` → флаг двигается.
+    expect(new Date(updated.updatedAt).getTime()).toBeGreaterThan(new Date(oldUpdatedAt).getTime());
+  });
+
   it('ADR-118 §1: части assistant-сообщения — с детерминированными id (`msg:text:N`, `msg:reasoning:N`)', async () => {
     const session = await newSession();
 
@@ -472,6 +522,10 @@ describe('saveAssistantMessage / persistToolChain', () => {
       withLock: <T>(sessionId: string, fn: (s: never) => Promise<T>) => sessionManager.withLock(sessionId, fn as never),
       saveSession: (s: never) => sessionManager.saveSession(s as never),
       getSession: (sessionId: string) => sessionManager.getSession(sessionId),
+      // Этап 2b-1: счётчики сессии пишутся точечной мутацией метаданных —
+      // фейк проксирует порт реального менеджера.
+      mutateMeta: (...args: Parameters<SessionManager['mutateMeta']>) =>
+        sessionManager.mutateMeta(...args),
     } as unknown as SessionManager;
 
     await saveAssistantMessage(

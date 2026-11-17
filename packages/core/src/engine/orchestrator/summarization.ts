@@ -411,12 +411,18 @@ export async function handleSummarization(
   });
   publishTurnFinished(publishChunk, { turnId, status: 'completed' });
 
-  // Обновить canSummarize
+  // Обновить canSummarize.
+  //
+  // Этап 2b-1: `canSummarize` считается по **свежему** снимку (нужна история),
+  // запись флага — точечная мутация метаданных (история не переписывается).
+  // Паритет: старый код `updatedAt` не менял → `touchUpdatedAt:false`;
+  // писал всегда (ранних return нет).
   if (updatedSession) {
-    await deps.sessionManager.withLock(session.id, async (s) => {
-      s.canSummarize = deps.optimizer!.canSummarize(s);
-      await deps.sessionManager.saveSession(s);
-    });
+    const snapshot = await deps.sessionManager.getSession(session.id);
+    const canSummarize = deps.optimizer!.canSummarize(snapshot ?? session);
+    await deps.sessionManager.mutateMeta(session.id, (s) => {
+      s.canSummarize = canSummarize;
+    }, { touchUpdatedAt: false });
 
     const freshSession = await deps.sessionManager.getSession(session.id);
 

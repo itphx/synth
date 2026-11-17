@@ -340,15 +340,17 @@ export async function runProcessEarly(
         }
       } else {
         // Фоллбек без шва (тесты/старые вызовы) — только счётчики.
-        await deps.sessionManager.withLock(session.id, async (s) => {
+        // Этап 2b-1: точечная мутация метаданных (инкременты по свежему
+        // чтению под локом). Паритет: старый код `updatedAt` **не** менял —
+        // `touchUpdatedAt:false`; писал всегда (ранних return нет).
+        await deps.sessionManager.mutateMeta(session.id, (s) => {
           s.inputTokens += finalUsage.inputTokens;
           s.outputTokens += finalUsage.outputTokens;
           s.totalTokens += finalUsage.totalTokens;
           s.cacheReadTokens += finalUsage.cacheReadTokens ?? 0;
           s.cacheWriteTokens += finalUsage.cacheWriteTokens ?? 0;
           s.reasoningTokens += finalUsage.reasoningTokens ?? 0;
-          await deps.sessionManager.saveSession(s);
-        });
+        }, { touchUpdatedAt: false });
       }
 
       info('MICRO', `Ответ через микро-слой: ${microResult.microResult.taskClass} (${microResult.microResult.latencyMs}ms, confidence=${microResult.microResult.confidence.toFixed(2)})`);

@@ -40,7 +40,12 @@ export type AuxUsageSource =
 
 /** Зависимости шва (те же, что у персиста сообщений). */
 export interface AuxUsageDeps {
-  sessionManager: Pick<SessionManager, 'withLock' | 'getSession' | 'saveSession'>;
+  /**
+   * Счётчики сессии — **точечная** мутация метаданных порта (`mutateMeta`):
+   * инкременты считаются по свежему чтению под локом хранилища, история не
+   * переписывается (параллельный `appendMessage` не теряется).
+   */
+  sessionManager: Pick<SessionManager, 'mutateMeta'>;
   analytics?: AnalyticsRecorder | null;
   modelPriceLoader?: ((modelName: string) => UsagePricing | null) | null;
 }
@@ -94,10 +99,17 @@ export async function recordAuxUsage(
     : computeUsageCost(usage, deps.modelPriceLoader?.(input.model ?? '') ?? null);
 
   try {
+    // Оси аналитики (`user`/`project`) берутся из того же снимка метаданных,
+    // что и счётчики: отдельного чтения сессии не нужно (`sessionAxes` работает
+    // по `{ userId, projectId }`).
     let axes: ReturnType<typeof sessionAxes> = {};
     if (hasTokens) {
-      await deps.sessionManager.withLock(sessionId, async (session) => {
-        axes = sessionAxes(session);
+      // Этап 2b-1: счётчики пишутся точечной мутацией метаданных. Инкременты —
+      // **внутри** мутатора по свежему чтению (параллельные начисления не
+      // теряются). Паритет: старый код явно выставлял `updatedAt` → обычный
+      // `mutateMeta` (touchUpdatedAt не отключаем); писал всегда — без shouldWrite.
+      const result = await deps.sessionManager.mutateMeta(sessionId, (session) => {
+        const metaAxes = sessionAxes(session);
         const effectiveModel = input.model || session.settings.model;
         session.inputTokens += usage!.inputTokens || 0;
         session.outputTokens += usage!.outputTokens || 0;
@@ -116,12 +128,16 @@ export async function recordAuxUsage(
           session.cacheReadCost += cost.breakdown.cacheRead;
           session.cacheWriteCost += cost.breakdown.cacheWrite;
         }
-        session.updatedAt = new Date().toISOString();
-        await deps.sessionManager.saveSession(session);
+        return metaAxes;
       });
+      axes = result.found ? result.value : {};
     } else {
-      const session = await deps.sessionManager.getSession(sessionId);
-      axes = sessionAxes(session ?? null);
+      // Токенов нет (только `messages=1`) — писать нечего: оси читаются
+      // снимком метаданных без записи и без выгрузки истории.
+      const result = await deps.sessionManager.mutateMeta(sessionId, (session) => sessionAxes(session), {
+        shouldWrite: () => false,
+      });
+      axes = result.found ? result.value : {};
     }
 
     if (deps.analytics?.enabled) {

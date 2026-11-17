@@ -7880,14 +7880,16 @@ export class ChatOrchestrator {
             chunkModel ?? finalModel, toolName, toolArgs, plan.tcId, toolResult,
           );
 
-          // classify_conversation: сохраняем категорию в настройках сессии (ADR-034)
+          // classify_conversation: сохраняем категорию в настройках сессии (ADR-034).
+          // Этап 2b-1: точечная мутация метаданных (`settings.routingCategory`),
+          // история не переписывается. Паритет: `updatedAt` не менялся →
+          // `touchUpdatedAt:false`; писал всегда (ранних return нет).
           if (toolName === 'classify_conversation' && !toolResult.isError) {
             const cat = (toolResult.metadata?.routingCategory as string) || undefined;
             if (cat && (cat === 'coding' || cat === 'chat' || cat === 'research')) {
-              await this._sessionManager.withLock(session.id, async (s) => {
-                s.settings.routingCategory = cat as 'coding' | 'chat' | 'research';
-                await this._sessionManager.saveSession(s);
-              });
+              await this._sessionManager.mutateMeta(session.id, (meta) => {
+                meta.settings.routingCategory = cat as 'coding' | 'chat' | 'research';
+              }, { touchUpdatedAt: false });
               this._eventBus.publish(session.id, 'session.routing_category', {
                 category: cat,
                 source: 'model',

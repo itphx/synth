@@ -303,7 +303,9 @@ describe('runProcessSetup', () => {
   it('promptStates: init → generation=1, повтор без изменений не пересобирает состояние', async () => {
     const { id, message } = await makeSession();
     const deps = makeDeps();
-    const saveSpy = vi.spyOn(sessionManager, 'saveSession');
+    // Этап 2b-1: состояние промпта пишется точечной мутацией метаданных
+    // (`mutateMeta`), а не полной записью сессии (`saveSession`).
+    const metaSpy = vi.spyOn(sessionManager, 'mutateMeta');
 
     const first = await runProcessSetup(await makeArgs(id, message), deps);
     expect(first.failed).toBe(false);
@@ -319,15 +321,55 @@ describe('runProcessSetup', () => {
       cachePolicy: 'auto',
     });
 
-    const savesAfterFirst = saveSpy.mock.calls.length;
+    const savesAfterFirst = metaSpy.mock.calls.length;
     const second = await runProcessSetup(await makeArgs(id, message), deps);
     expect(second.failed).toBe(false);
     if (second.failed) return;
 
     stored = (await sessionManager.getSession(id))!;
     expect(stored.promptStates!.fixer!.generation).toBe(1);
-    expect(saveSpy.mock.calls.length).toBe(savesAfterFirst);
+    expect(metaSpy.mock.calls.length).toBe(savesAfterFirst);
     expect(second.state.promptMeta).toMatchObject({ generation: 1, expected: 'hit' });
+  });
+
+  it('этап 2b-1: promptStates пишется точечно — история и чужие поля сессии не перезаписываются', async () => {
+    const { id, message } = await makeSession();
+    const deps = makeDeps();
+    // Локальный снимок хода читается до конкурентного изменения (как в проде:
+    // сессия загружена в начале хода).
+    const args = await makeArgs(id, message);
+    // Конкурентное изменение — другая вкладка/клиент поменял настройку уже
+    // после чтения снимка. Полная запись `saveSession(session)` откатила бы её.
+    await sessionManager.mutateMeta(id, (meta) => {
+      meta.settings.temperature = 0.9;
+    }, { touchUpdatedAt: false });
+    const witness: Message = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+
+    const [outcome] = await Promise.all([
+      runProcessSetup(args, deps),
+      sessionManager.addMessage(id, witness),
+    ]);
+    expect(outcome.failed).toBe(false);
+    if (outcome.failed) return;
+
+    const stored = (await sessionManager.getSession(id))!;
+    // История: сообщение-свидетель (и state-сообщения) на месте.
+    expect(stored.messages.map((m) => m.id)).toContain(witness.id);
+    // Записан только `promptStates`.
+    expect(stored.promptStates!.fixer).toMatchObject({ generation: 1, reason: 'init' });
+    // Чужое поле не откатилось к снимку.
+    expect(stored.settings.temperature).toBe(0.9);
   });
 
   it('блоки памяти плагина → promptMeta.memory и onMemoryContext', async () => {

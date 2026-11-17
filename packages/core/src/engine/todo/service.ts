@@ -6,7 +6,8 @@
  * **и** HTTP-роуты (`/api/v2/sessions/:id/todos*`).
  *
  * Правила:
- * - все операции атомарны под `SessionManager.withLock` (per-session лок);
+ * - все операции — точечные мутации **метаданных** (`SessionRepository.mutateMeta`:
+ *   чтение и запись под одним локом хранилища, история не переписывается);
  * - отдельной версии ToDo нет (операции атомарны, конфликтов не бывает);
  * - `order` принимает только существующие id: неизвестные игнорируются, новые
  *   пункты дописываются в конец (воскрешения удалённых нет);
@@ -16,12 +17,26 @@
  */
 import { randomUUID } from 'node:crypto';
 import { MARKDOWN_LIMITS } from '@itphx/synth-shared';
-import type { Session, TodoItem, TodoStatus, TodoPriority } from '@itphx/synth-shared';
+import type { SessionMeta, TodoItem, TodoStatus, TodoPriority } from '@itphx/synth-shared';
+import type {
+  MutateMetaOptions,
+  MutateMetaResult,
+} from '../../storage/ports/session-repository.js';
 
-/** Минимальный контракт менеджера сессий, нужный сервису ToDo. */
+/**
+ * Минимальный контракт менеджера сессий, нужный сервису ToDo.
+ *
+ * Только `mutateMeta`: правка `session.todos` — запись **метаданных** (история
+ * и child-наборы не читаются и не переписываются), поэтому полная запись
+ * снимка (`saveSession`) здесь не нужна и опасна (затёрла бы параллельную
+ * дозапись сообщений).
+ */
 export interface TodoSessionManager {
-  withLock<T>(sessionId: string, fn: (session: Session) => Promise<T>): Promise<T>;
-  saveSession(session: Session): Promise<void>;
+  mutateMeta<T>(
+    sessionId: string,
+    mutator: (meta: SessionMeta) => T,
+    opts?: MutateMetaOptions<T>,
+  ): Promise<MutateMetaResult<T>>;
 }
 
 /** Пункт ToDo не найден (HTTP 404). */
@@ -115,28 +130,46 @@ export function assertTodoContentLimit(content: string): void {
 export class TodoService {
   constructor(private readonly sessions: TodoSessionManager) {}
 
+  /**
+   * Точечная мутация `session.todos` (`mutateMeta`: только метаданные).
+   *
+   * Паритет с прежним поведением (`withLock` + `saveSession`): `updatedAt`
+   * **не** меняется (`touchUpdatedAt:false` — правка ToDo не «оживляет»
+   * сессию в списках), история не переписывается. Отсутствие сессии —
+   * ошибка, как и прежде (`withLock` бросал).
+   */
+  private async _mutateTodos<T>(
+    sessionId: string,
+    mutator: (meta: SessionMeta) => T,
+    opts?: MutateMetaOptions<T>,
+  ): Promise<T> {
+    const result = await this.sessions.mutateMeta(sessionId, mutator, {
+      ...opts,
+      touchUpdatedAt: false,
+    });
+    if (!result.found) throw new Error(`Session ${sessionId} not found`);
+    return result.value;
+  }
+
   /** Текущий список задач сессии (с ленивой нормализацией legacy-пунктов). */
   async list(sessionId: string): Promise<TodoItem[]> {
-    return this.sessions.withLock(sessionId, async (session) => {
-      const current = normalizeTodos(session.todos);
+    const { current } = await this._mutateTodos(sessionId, (meta) => {
+      const normalized = normalizeTodos(meta.todos);
       // Ленивая миграция legacy-пунктов без id: пишем только если id реально
       // не хватало (иначе повторный вызов ничего не сохраняет — идемпотентно).
-      const missingId = (session.todos ?? []).some((t) => !t.id);
-      if (missingId) {
-        session.todos = current;
-        await this.sessions.saveSession(session);
-      }
-      return current;
-    });
+      const missingId = (meta.todos ?? []).some((t) => !t.id);
+      if (missingId) meta.todos = normalized;
+      return { current: normalized, missingId };
+    }, { shouldWrite: ({ missingId }) => missingId });
+    return current;
   }
 
   /** Полная замена списка (legacy-инструмент `todo_write`). */
   async replaceAll(sessionId: string, items: TodoItem[]): Promise<TodoItem[]> {
     for (const item of items) assertTodoContentLimit(item.content);
-    return this.sessions.withLock(sessionId, async (session) => {
-      session.todos = items;
-      await this.sessions.saveSession(session);
-      return session.todos;
+    return this._mutateTodos(sessionId, (meta) => {
+      meta.todos = items;
+      return items;
     });
   }
 
@@ -156,11 +189,11 @@ export class TodoService {
         ...(one.planItemId !== undefined ? { planItemId: one.planItemId } : {}),
       }),
     );
-    return this.sessions.withLock(sessionId, async (session) => {
-      const current = normalizeTodos(session.todos);
-      session.todos = [...current, ...items];
-      await this.sessions.saveSession(session);
-      return session.todos;
+    return this._mutateTodos(sessionId, (meta) => {
+      const current = normalizeTodos(meta.todos);
+      const next = [...current, ...items];
+      meta.todos = next;
+      return next;
     });
   }
 
@@ -174,8 +207,8 @@ export class TodoService {
       if (!patch.content.trim()) throw new TodoValidationError('Todo content is required');
       assertTodoContentLimit(patch.content);
     }
-    return this.sessions.withLock(sessionId, async (session) => {
-      const current = normalizeTodos(session.todos);
+    return this._mutateTodos(sessionId, (meta) => {
+      const current = normalizeTodos(meta.todos);
       const index = current.findIndex((t) => t.id === todoId);
       if (index < 0) throw new TodoNotFoundError(todoId);
       const item = current[index]!;
@@ -190,20 +223,18 @@ export class TodoService {
             : { planItemId: patch.planItemId }
           : {}),
       };
-      session.todos = current;
-      await this.sessions.saveSession(session);
+      meta.todos = current;
       return current;
     });
   }
 
   /** Удалить пункт. */
   async remove(sessionId: string, todoId: string): Promise<TodoItem[]> {
-    return this.sessions.withLock(sessionId, async (session) => {
-      const current = normalizeTodos(session.todos);
+    return this._mutateTodos(sessionId, (meta) => {
+      const current = normalizeTodos(meta.todos);
       const remaining = current.filter((t) => t.id !== todoId);
       if (remaining.length === current.length) throw new TodoNotFoundError(todoId);
-      session.todos = remaining;
-      await this.sessions.saveSession(session);
+      meta.todos = remaining;
       return remaining;
     });
   }
@@ -213,8 +244,8 @@ export class TodoService {
    * Неизвестные id игнорируются, не названные пункты дописываются в конец.
    */
   async reorder(sessionId: string, ids: string[]): Promise<TodoItem[]> {
-    return this.sessions.withLock(sessionId, async (session) => {
-      const current = normalizeTodos(session.todos);
+    return this._mutateTodos(sessionId, (meta) => {
+      const current = normalizeTodos(meta.todos);
       const byId = new Map(current.map((t) => [t.id, t]));
       const ordered: TodoItem[] = [];
       const seen = new Set<string>();
@@ -227,8 +258,7 @@ export class TodoService {
       for (const item of current) {
         if (!seen.has(item.id)) ordered.push(item);
       }
-      session.todos = ordered;
-      await this.sessions.saveSession(session);
+      meta.todos = ordered;
       return ordered;
     });
   }
@@ -236,11 +266,10 @@ export class TodoService {
   /** Очистить пункты по статусам (по умолчанию — `completed` + `cancelled`). */
   async clear(sessionId: string, statuses?: readonly TodoStatus[]): Promise<TodoItem[]> {
     const targets = new Set<TodoStatus>(statuses?.length ? statuses : DEFAULT_TODO_CLEAR_STATUSES);
-    return this.sessions.withLock(sessionId, async (session) => {
-      const current = normalizeTodos(session.todos);
+    return this._mutateTodos(sessionId, (meta) => {
+      const current = normalizeTodos(meta.todos);
       const remaining = current.filter((t) => !targets.has(t.status));
-      session.todos = remaining;
-      await this.sessions.saveSession(session);
+      meta.todos = remaining;
       return remaining;
     });
   }

@@ -898,10 +898,11 @@ export async function runProcessFinalize(
           `Сжатие контекста пропущено (cooldown после неудачного сжатия): сессия ${optSession.id}`,
         );
       } else {
-        await deps.sessionManager.withLock(optSession.id, async (s) => {
+        // Этап 2b-1: только метаданные (флаг `summarizationPending`), история не
+        // переписывается. Паритет: `updatedAt` не менялся → `touchUpdatedAt:false`.
+        await deps.sessionManager.mutateMeta(optSession.id, (s) => {
           s.summarizationPending = true;
-          await deps.sessionManager.saveSession(s);
-        });
+        }, { touchUpdatedAt: false });
         deps.eventBus.publish(optSession.id, 'context.summarization_pending', {
           reason: compression.reason,
           mode: compression.mode,
@@ -912,11 +913,15 @@ export async function runProcessFinalize(
       }
     }
 
-    // Обновить canSummarize после всех мутаций
-    await deps.sessionManager.withLock(optSession.id, async (s) => {
-      s.canSummarize = deps.optimizer!.canSummarize(s);
-      await deps.sessionManager.saveSession(s);
-    });
+    // Обновить canSummarize после всех мутаций.
+    //
+    // `canSummarize` считается по **свежему** снимку (нужна история: порог и
+    // граница покрытия `disabled`-сообщений), запись флага — точечная мутация
+    // метаданных. Паритет: `updatedAt` не менялся → `touchUpdatedAt:false`.
+    const canSummarizeSnapshot = await deps.sessionManager.getSession(optSession.id);
+    await deps.sessionManager.mutateMeta(optSession.id, (s) => {
+      s.canSummarize = deps.optimizer!.canSummarize(canSummarizeSnapshot ?? optSession);
+    }, { touchUpdatedAt: false });
 
     // Уведомить UI об изменении сессии
     const updatedSession2 = await deps.sessionManager.getSession(optSession.id);

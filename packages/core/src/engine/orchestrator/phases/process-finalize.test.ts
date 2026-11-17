@@ -31,6 +31,7 @@ import { DebugCollector } from '../../../debug.js';
 import { BaseProvider } from '../../../providers/base.js';
 import type { LLMMessage } from '../../../providers/base.js';
 import type { ModelRouter, RoutingDecision } from '../../router/router.js';
+import type { ContextOptimizer } from '../../context/optimizer.js';
 import { t as sm } from '../../system-messages.js';
 import {
   saveAssistantMessage,
@@ -1182,6 +1183,101 @@ describe('runProcessFinalize', () => {
       expect(lastEventOf('step.finished').data.messageId).toBe(assistants2[0]!.id);
     });
   });
+  /**
+   * Этап 2b-1: флаги оптимизации контекста (`summarizationPending`,
+   * `canSummarize`) пишутся **точечной мутацией метаданных** — история не
+   * перезаписывается, `updatedAt` этими записями не двигается.
+   */
+  describe('этап 2b-1: флаги оптимизации контекста', () => {
+    function fakeOptimizer(triggerCompression: boolean): ContextOptimizer {
+      return {
+        shouldApplySlidingWindow: () => ({ triggered: false, reason: 'none' }),
+        shouldCompress: () => (triggerCompression
+          ? {
+              triggered: true,
+              reason: 'threshold',
+              mode: 'summarization',
+              currentTokens: 1000,
+              threshold: 500,
+              userCount: 3,
+            }
+          : { triggered: false, reason: 'none', mode: null }),
+        canCompress: () => true,
+        canSummarize: vi.fn(() => true),
+      } as unknown as ContextOptimizer;
+    }
+
+    function witnessMessage(): Message {
+      return {
+        id: generateId(),
+        role: MessageRole.USER,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart('свидетель')],
+        content: 'свидетель',
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+      };
+    }
+
+    /**
+     * Обёртка над `mutateMeta`: для каждой записи фиксирует опции (`touch`)
+     * и `updatedAt` до/после. Чтение — тем же портом с `shouldWrite:false`
+     * (записи нет).
+     */
+    function observeMetaWrites(): Array<{ touch: boolean | undefined; before: string; after: string }> {
+      const observed: Array<{ touch: boolean | undefined; before: string; after: string }> = [];
+      const original = sessionManager.mutateMeta.bind(sessionManager);
+      const read = async (id: string): Promise<string> => {
+        const result = await original(id, (meta) => meta.updatedAt, { shouldWrite: () => false });
+        return result.found ? result.value : '';
+      };
+      vi.spyOn(sessionManager, 'mutateMeta').mockImplementation(async (id, mutator, opts) => {
+        const before = await read(id);
+        const result = await original(id, mutator, opts);
+        const after = await read(id);
+        observed.push({ touch: opts?.touchUpdatedAt, before, after });
+        return result;
+      });
+      return observed;
+    }
+
+    it('summarizationPending/canSummarize ∥ appendMessage: сообщение цело, флаги записаны', async () => {
+      const sessionId = await makeSession();
+      const witness = witnessMessage();
+      const deps = makeDeps({ optimizer: fakeOptimizer(true) });
+
+      await Promise.all([
+        runProcessFinalize(makeArgs(sessionId), makeState(), deps),
+        sessionManager.addMessage(sessionId, witness),
+      ]);
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      expect(stored.summarizationPending).toBe(true);
+      expect(stored.canSummarize).toBe(true);
+      expect(stored.messages.map((m) => m.id)).toContain(witness.id);
+      const pending = events.find((e) => e.type === 'context.summarization_pending');
+      expect(pending?.data).toMatchObject({ reason: 'threshold', mode: 'summarization' });
+      const updatedEvent = events.find((e) => e.type === 'session.updated');
+      expect(updatedEvent?.data).toMatchObject({ can_summarize: true });
+    });
+
+    it('запись флагов не двигает updatedAt (touchUpdatedAt: false)', async () => {
+      const sessionId = await makeSession();
+      const observed = observeMetaWrites();
+      const deps = makeDeps({ optimizer: fakeOptimizer(true) });
+
+      await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
+
+      // Записи флагов — с отключённым `updatedAt` и без сдвига значения.
+      const flagWrites = observed.filter((call) => call.touch === false);
+      expect(flagWrites.length).toBeGreaterThanOrEqual(2); // summarizationPending + canSummarize
+      for (const call of flagWrites) expect(call.after).toBe(call.before);
+    });
+  });
+
   // Авто-заголовок вынесен из финализации хода: триггер — оркестратор
   // (`_maybeAutoTitle`, сразу после подготовки запроса). Тесты авто-тайтла —
   // в `sessions/auto-title.test.ts`.

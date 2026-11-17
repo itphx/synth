@@ -1,6 +1,7 @@
 /**
  * ObfuscationMapStore (ADR-036) — доступ к карте обфускации сессии через SessionManager.
- * Карта живёт в Session.obfuscationMap; read-modify-write — атомарно через withLock.
+ * Карта живёт в Session.obfuscationMap; запись — точечная мутация метаданных
+ * (`mutateMeta`, только строка сессии, без истории).
  */
 
 import type { SessionManager } from '../../sessions/manager.js';
@@ -15,10 +16,16 @@ export class ObfuscationMapStore {
   }
 
   async set(sessionId: string, map: Record<string, string>): Promise<void> {
-    await this._sessionManager.withLock(sessionId, async (session) => {
-      session.obfuscationMap = map;
-      await this._sessionManager.saveSession(session);
-    });
+    // Этап 2b-1: пишутся только метаданные — история не читается и не
+    // перезаписывается (карта сохраняется на **каждый** LLM-вызов).
+    // Паритет: старый код `updatedAt` не менял → `touchUpdatedAt:false`;
+    // писал всегда (ранних return нет). Отсутствие сессии — ошибка, как и
+    // прежде (`withLock` бросал): путь сохранения карты не должен молча терять
+    // секреты.
+    const result = await this._sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.obfuscationMap = map;
+    }, { touchUpdatedAt: false });
+    if (!result.found) throw new Error(`Session ${sessionId} not found`);
   }
 
   async restoreForText(sessionId: string, text: string): Promise<string> {

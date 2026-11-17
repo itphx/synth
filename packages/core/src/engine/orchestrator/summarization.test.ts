@@ -413,6 +413,80 @@ describe('handleSummarization', () => {
     expect(events.find((e) => e.type === 'session.updated')!.data.can_summarize).toBe(false);
   });
 
+  /**
+   * Этап 2b-1: флаг `canSummarize` пишется **точечной мутацией метаданных**:
+   * история не переписывается (параллельная дозапись сообщения цела),
+   * `updatedAt` этой записью не двигается (паритет: старый код не менял его).
+   */
+  describe('canSummarize — точечная запись (этап 2b-1)', () => {
+    /** План без покрытых сообщений: `disableCompressedMessages` историю не трогает. */
+    function optimizerWithoutCoverage(canSummarizeValue: boolean): ContextOptimizer {
+      return makeOptimizer({
+        canSummarize: canSummarizeValue,
+        prep: () => ({
+          provider: new SummaryProvider({ url: '', apiKey: '', model: 'summary-model', type: 'summary-provider' }),
+          llmMessages: [{ id: '', role: 'user', content: 'история', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, disabled: false, pinned: false, branchId: '' }] as LLMMessage[],
+          summarizerPrompt: 'SUMMARIZER',
+          messagesToSummarize: [],
+          indices: [],
+        }),
+      });
+    }
+
+    function observeMetaWrites(): Array<{ touch: boolean | undefined; before: string; after: string }> {
+      const observed: Array<{ touch: boolean | undefined; before: string; after: string }> = [];
+      const original = sessionManager.mutateMeta.bind(sessionManager);
+      const read = async (id: string): Promise<string> => {
+        const result = await original(id, (meta) => meta.updatedAt, { shouldWrite: () => false });
+        return result.found ? result.value : '';
+      };
+      vi.spyOn(sessionManager, 'mutateMeta').mockImplementation(async (id, mutator, opts) => {
+        const before = await read(id);
+        const result = await original(id, mutator, opts);
+        const after = await read(id);
+        observed.push({ touch: opts?.touchUpdatedAt, before, after });
+        return result;
+      });
+      return observed;
+    }
+
+    it('canSummarize ∥ appendMessage: сообщение цело, флаг записан', async () => {
+      SummaryProvider.chunks = [{ content: 'итог всей истории диалога', isFinal: true, usage: USAGE }];
+      const sessionId = await makeSession([userMessage('a')]);
+      const session = (await sessionManager.getSession(sessionId))!;
+      const deps = makeDeps({ optimizer: optimizerWithoutCoverage(false) });
+      const witness = userMessage('свидетель');
+
+      const append = sessionManager.addMessage(sessionId, witness);
+      await handleSummarization(
+        session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+      );
+      await append;
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      expect(stored.canSummarize).toBe(false);
+      expect(stored.messages.map((m) => m.id)).toContain(witness.id);
+      expect(events.find((e) => e.type === 'session.updated')!.data.can_summarize).toBe(false);
+    });
+
+    it('запись canSummarize не двигает updatedAt (touchUpdatedAt: false)', async () => {
+      SummaryProvider.chunks = [{ content: 'итог всей истории диалога', isFinal: true, usage: USAGE }];
+      const sessionId = await makeSession([userMessage('a')]);
+      const session = (await sessionManager.getSession(sessionId))!;
+      const deps = makeDeps({ optimizer: optimizerWithoutCoverage(true) });
+      const observed = observeMetaWrites();
+
+      await handleSummarization(
+        session, makeMessage(), new AbortController().signal, publish(), debugCollector, 'stream1', undefined, deps,
+      );
+
+      const flagWrites = observed.filter((call) => call.touch === false);
+      expect(flagWrites).toHaveLength(1);
+      expect(flagWrites[0]!.after).toBe(flagWrites[0]!.before);
+      expect((await sessionManager.getSession(sessionId))!.canSummarize).toBe(true);
+    });
+  });
+
   it('тайминги шага в step.finished считаются по фактическим чанкам', async () => {
     SummaryProvider.chunks = [{ content: 'итог всей истории диалога', isFinal: true, usage: USAGE }];
     const sessionId = await makeSession([userMessage('a')]);

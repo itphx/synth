@@ -8,9 +8,14 @@
 // значения плейсхолдеров уезжали из инстанса через экспорт сессии и портативный
 // архив проекта (в чекпоинтах истории).
 import { describe, expect, it } from 'vitest';
-import { MessageRole } from '@itphx/synth-shared';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message, Session } from '@itphx/synth-shared';
-import { stripSessionSecrets } from './obfuscation-map-store.js';
+import { FileStore } from '../../storage/file-store.js';
+import { SessionManager } from '../../sessions/manager.js';
+import { ObfuscationMapStore, stripSessionSecrets } from './obfuscation-map-store.js';
 
 /** Реальный секрет в карте обфускации сессии (плейсхолдер → значение). */
 const REAL_SECRET = 'sk-live-DO-NOT-LEAK';
@@ -163,5 +168,99 @@ describe('stripSessionSecrets (security-фикс 0.11.3)', () => {
     const stripped = stripSessionSecrets(clean);
     expect(Object.keys(stripped).sort()).toEqual(Object.keys(clean).sort());
     expect(stripped.messages[0]!.metadata).toEqual({ note: 'ok' });
+  });
+});
+
+/**
+ * Этап 2b-1: `ObfuscationMapStore.set` — запись **только метаданных**
+ * (`mutateMeta`), вызов на каждый LLM-вызов.
+ *
+ * Паритет с прежним поведением: карта пишется всегда, `updatedAt` **не**
+ * меняется (иначе каждый LLM-вызов «оживлял» бы сессию в списках), история не
+ * читается и не перезаписывается (параллельная дозапись сообщений цела).
+ */
+describe('ObfuscationMapStore.set (этап 2b-1)', () => {
+  const OLD_UPDATED_AT = '2020-01-01T00:00:00.000Z';
+
+  function witnessMessage(): Message {
+    return {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('tool-результат')],
+      content: 'tool-результат',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+  }
+
+  it('set ∥ appendMessage: сообщение не потеряно, карта — последняя запись', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'synth-obf-map-'));
+    try {
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const store = new ObfuscationMapStore(sessionManager);
+      const session = await sessionManager.createSession({ title: 'Obf' });
+      await sessionManager.mutateMeta(session.id, (meta) => {
+        meta.updatedAt = OLD_UPDATED_AT;
+      }, { touchUpdatedAt: false });
+      const witness = witnessMessage();
+      const mapA = { '⟦SYNTH_SECRET_1⟧': 'secret-a' };
+      const mapB = { '⟦SYNTH_SECRET_2⟧': 'secret-b' };
+
+      await Promise.all([
+        store.set(session.id, mapA),
+        store.set(session.id, mapB),
+        sessionManager.addMessage(session.id, witness),
+      ]);
+
+      const saved = (await sessionManager.getSession(session.id))!;
+      expect(saved.messages.map((m) => m.id)).toContain(witness.id);
+      // Карта не смешана: победила одна из двух записей (последняя по локey).
+      expect([mapA, mapB]).toContainEqual(saved.obfuscationMap);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('set не двигает updatedAt (паритет: карта пишется на каждый LLM-вызов)', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'synth-obf-map-'));
+    try {
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const store = new ObfuscationMapStore(sessionManager);
+      const session = await sessionManager.createSession({ title: 'Obf' });
+      await sessionManager.mutateMeta(session.id, (meta) => {
+        meta.updatedAt = OLD_UPDATED_AT;
+      }, { touchUpdatedAt: false });
+
+      await store.set(session.id, { '⟦SYNTH_SECRET_1⟧': 'secret-a' });
+
+      const saved = (await sessionManager.getSession(session.id))!;
+      expect(saved.obfuscationMap).toEqual({ '⟦SYNTH_SECRET_1⟧': 'secret-a' });
+      expect(saved.updatedAt).toBe(OLD_UPDATED_AT);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('set не теряет существующую историю сессии', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'synth-obf-map-'));
+    try {
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const store = new ObfuscationMapStore(sessionManager);
+      const session = await sessionManager.createSession({ title: 'Obf' });
+      const witness = witnessMessage();
+      await sessionManager.addMessage(session.id, witness);
+
+      await store.set(session.id, { '⟦SYNTH_SECRET_1⟧': 'secret-a' });
+
+      const saved = (await sessionManager.getSession(session.id))!;
+      expect(saved.messages.map((m) => m.id)).toContain(witness.id);
+      expect(await store.get(session.id)).toEqual({ '⟦SYNTH_SECRET_1⟧': 'secret-a' });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

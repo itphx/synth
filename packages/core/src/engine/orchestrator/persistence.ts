@@ -794,8 +794,18 @@ export async function saveAssistantMessage(
     }
   }
   // Accumulate session token counters and costs (расход **хода**).
+  //
+  // Этап 2b-1: точечная мутация **метаданных** порта (`mutateMeta`) вместо
+  // `withLock` + полной записи снимка. Инкременты считаются **внутри** мутатора
+  // по свежему чтению под локом хранилища — параллельные начисления (aux-вызов,
+  // второй шаг) не теряются, а история не переписывается (параллельный
+  // `appendMessage` остаётся на месте).
+  //
+  // Паритет с прежним поведением: старый код явно ставил `updatedAt = nowISO()`,
+  // поэтому `touchUpdatedAt` **не** отключаем; писал всегда (ранних return нет) —
+  // `shouldWrite` не задаём.
   if (countersUsage) {
-    await sessionManager.withLock(sessionId, async (s) => {
+    await sessionManager.mutateMeta(sessionId, (s) => {
       s.inputTokens += countersUsage.inputTokens || 0;
       s.outputTokens += countersUsage.outputTokens || 0;
       s.totalTokens += countersUsage.totalTokens || 0;
@@ -818,8 +828,6 @@ export async function saveAssistantMessage(
         s.cacheReadCost += cost.breakdown.cacheRead;
         s.cacheWriteCost += cost.breakdown.cacheWrite;
       }
-      s.updatedAt = nowISO();
-      await sessionManager.saveSession(s);
     });
   }
 
