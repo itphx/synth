@@ -2,7 +2,7 @@
 
 > **Статус:** ✅ Реализовано — этапы I–IV закрыты 2026-10-13.
 > **Дата:** 2026-09-16 (этапы I–IV — 2026-10-13; сжатие до одной страницы — 2026-10-15).
-> **Обновлено:** 2026-11-17 — новые scopes `timers:read|write` и публичные эндпоинты `/api/v2/timers`; SDK-клиент — отдельной задачей ([ADR-141](./adr-141-timers-alarms.md)).
+> **Обновлено:** 2026-11-17 — новые scopes `timers:read|write` и публичные эндпоинты `/api/v2/timers`; SDK намеренно **не** расширяем (как `processes`/`terminals`): таймеры доступны только через HTTP API, SDK остаётся курируемым подмножеством внешних интеграций ([ADR-141](./adr-141-timers-alarms.md)).
 > **Источник:** перенесено из `AD-DRAFTS.md` (D7, идея 7).
 > **Парные документы (as-built):** [API_V2.md](../API_V2.md) §1/§5.28–§5.30 · [CONFIGURATION.md](../CONFIGURATION.md) (`webhooks`, `security.bootstrapServiceKeys`) · [ARCHITECTURE.md](../ARCHITECTURE.md) «Внешние события и хуки» · `packages/{core,backend}/AGENTS.md`.
 > **Связано:** [ADR-017](./adr-017-api-v2-hono.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-087](./adr-087-gateways.md), [ADR-099](./adr-099-egress-tls-trust.md) (политика egress webhooks), [PROP-055](./prop-055-instance-exchange.md).
