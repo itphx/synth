@@ -388,8 +388,46 @@ describe('ProjectTab — рабочий каталог (ADR-075)', () => {
   })
 })
 
-describe('ProjectTab — порядок секций', () => {
-  it('«План проекта» расположен выше «Рабочий каталог»', async () => {
+// Режим выделенного проекта: сессии нет — панель показывает проект,
+// сессионные блоки (worktree) скрыты.
+describe('ProjectTab — выделенный проект (без сессии)', () => {
+  beforeEach(() => {
+    useUIStore.setState({
+      selectedProjectId: 'p1',
+      activeCenterTabId: null,
+      centerTabs: [],
+    })
+  })
+
+  it('проект грузится и показывается', async () => {
+    const container = await renderTab()
+
+    expect(mocks.getProject).toHaveBeenCalledWith('p1')
+    expect(container.querySelector('[data-testid="project-edit-trigger"]')!.textContent).toContain('P')
+    // План, инварианты, рабочий каталог, доступ, MCP и скиллы — на месте.
+    expect(container.querySelector('[data-testid="project-workspace-input"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
+  })
+
+  it('сессионных блоков нет: worktree скрыт, ToDo недоступен', async () => {
+    const container = await renderTab()
+
+    // Worktree — сессионная сущность (привязка к сессии) — блока нет.
+    expect(container.querySelector('[data-testid="project-worktrees"]')).toBeNull()
+    // Право правки ToDo — отдельная ось (write-доступ к сессии): сессии нет.
+    expect(container.textContent).not.toContain('Todos')
+  })
+
+  it('сессии нет и проекта нет — честное пустое состояние', async () => {
+    useUIStore.setState({ selectedProjectId: null, activeCenterTabId: null, centerTabs: [] })
+    const container = await renderTab()
+
+    expect(container.textContent).toContain(enDict['rightPanel.params.noSessions'])
+    expect(mocks.getProject).not.toHaveBeenCalled()
+  })
+})
+
+describe('ProjectTab — порядок секций', () => {  it('«План проекта» расположен выше «Рабочий каталог»', async () => {
     const container = await renderTab()
     const sectionByTitle = (title: string): HTMLElement | undefined =>
       [...container.querySelectorAll('div')].find(

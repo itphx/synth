@@ -4,7 +4,7 @@
 //   GET    /api/v2/processes?sessionId&projectId&kind&status&limit
 //            → { runs: BackgroundRunRecord[] }
 //   GET    /api/v2/processes/:id                → { run }
-//   GET    /api/v2/processes/:id/logs?offset&limit
+//   GET    /api/v2/processes/:id/logs?offset&limit&stream=combined|stdout|stderr
 //            → { content, offset, nextOffset, totalBytes, truncated }
 //   POST   /api/v2/processes/:id/stop            → { status: 'stopping' }
 //   DELETE /api/v2/processes/:id                → 204
@@ -24,6 +24,15 @@ import type {
 import { BASE_URL, fetchJSON } from './base'
 
 export type { BackgroundRunKind, BackgroundRunRecord, BackgroundRunStatus }
+
+/**
+ * Поток вывода фонового процесса.
+ *
+ * `combined` (по умолчанию) — общий лог прогона (stdout и stderr в порядке
+ * прихода); `stdout`/`stderr` — отдельный файл потока (он есть у прогонов,
+ * запущенных после разделения потоков; у более старых — файла нет → 404).
+ */
+export type ProcessLogStream = 'stdout' | 'stderr' | 'combined'
 
 /** Фильтр выборки фоновых прогонов (все условия — по «И»). */
 export interface ProcessesListOptions {
@@ -55,6 +64,8 @@ export interface ProcessLogsOptions {
   offset?: number
   /** Предел выдачи, байт (сервер: по умолчанию и максимум 256 КиБ — как отдаёт сервер). */
   limit?: number
+  /** Поток вывода (не задан — общий лог прогона, `combined`). */
+  stream?: ProcessLogStream
 }
 
 /** Ответ `GET /processes/:id/logs` — отрезок лога фонового процесса. */
@@ -106,6 +117,7 @@ export const processesApi = {
     const params = new URLSearchParams()
     if (options?.offset !== undefined) params.set('offset', String(options.offset))
     if (options?.limit !== undefined) params.set('limit', String(options.limit))
+    if (options?.stream !== undefined) params.set('stream', options.stream)
     const query = params.toString()
     return fetchJSON<ProcessLogsResponse>(
       `${BASE_URL}/processes/${encodeURIComponent(id)}/logs${query ? `?${query}` : ''}`,

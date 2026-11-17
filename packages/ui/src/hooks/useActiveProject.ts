@@ -1,9 +1,13 @@
 import { useMemo } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useProjectsStore } from '@/stores/projectsStore'
 
-/** Источник активного проекта: активная сессия, терминал, файловая или commit-вкладка. */
-export type ActiveProjectSource = 'session' | 'file' | 'commit' | null
+/**
+ * Источник активного проекта: выделенный проект, активная сессия, терминал,
+ * файловая или commit-вкладка.
+ */
+export type ActiveProjectSource = 'session' | 'file' | 'commit' | 'project' | null
 
 export interface ActiveProjectInfo {
   projectId: string | null
@@ -12,7 +16,13 @@ export interface ActiveProjectInfo {
 }
 
 /**
- * Проект, к которому привязан активный центр-таб (вариант C левой панели):
+ * Проект, к которому привязан активный контекст (вариант C левой панели):
+ * выделенный проект → активная сессия/терминал → файловая/commit-вкладка.
+ *
+ * Выделенный проект (`useUIStore.selectedProjectId`) имеет приоритет над
+ * активным центр-табом: клик по проекту в дереве переключает панели на
+ * проектный контекст. Сессии у выделенного проекта нет (`sessionId: null`).
+ *
  * chat → project_id сессии (fallback на `tab.data.projectId`, пока сессии не догружены),
  * terminal → projectId/sessionId вкладки (терминал привязан к сессии и проекту),
  * file-viewer/file-editor → projectId вкладки, commit-detail → projectId вкладки.
@@ -21,9 +31,22 @@ export interface ActiveProjectInfo {
 export function useActiveProject(): ActiveProjectInfo {
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const centerTabs = useUIStore((s) => s.centerTabs)
+  const selectedProjectId = useUIStore((s) => s.selectedProjectId)
   const sessions = useSessionsStore((s) => s.sessions)
+  const projects = useProjectsStore((s) => s.projects)
 
   return useMemo(() => {
+    // Выделенный проект — приоритет над активным центр-табом.
+    if (selectedProjectId) {
+      const known =
+        projects.some((p) => p.id === selectedProjectId) ||
+        // Список проектов ещё не загружен — признак проекта берём из сессий.
+        (projects.length === 0 && sessions.some((s) => s.project_id === selectedProjectId))
+      if (known) {
+        return { projectId: selectedProjectId, source: 'project', sessionId: null }
+      }
+    }
+
     const tab = (centerTabs ?? []).find((t) => t.id === activeCenterTabId)
     if (!tab) return { projectId: null, source: null, sessionId: null }
 
@@ -47,6 +70,17 @@ export function useActiveProject(): ActiveProjectInfo {
       }
     }
 
+    // Экран «Вывод процесса»: прогон живёт в сессии и её проекте — вкладка
+    // несёт их id (см. `lib/processTabs.ts`). Без этой ветки панель
+    // «Процессы» на экране вывода не знала бы свой скоуп.
+    if (tab.type === 'process-log') {
+      return {
+        projectId: tab.data?.projectId ?? null,
+        source: 'session',
+        sessionId: tab.data?.sessionId ?? null,
+      }
+    }
+
     if (tab.type === 'file-viewer' || tab.type === 'file-editor') {
       return { projectId: tab.data?.projectId ?? null, source: 'file', sessionId: null }
     }
@@ -56,5 +90,5 @@ export function useActiveProject(): ActiveProjectInfo {
     }
 
     return { projectId: null, source: null, sessionId: null }
-  }, [activeCenterTabId, centerTabs, sessions])
+  }, [activeCenterTabId, centerTabs, sessions, selectedProjectId, projects])
 }

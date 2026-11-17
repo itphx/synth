@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { synthApi } from '@/lib/api/synthApi'
 import type { BackgroundRunRecord } from '@/lib/api/synthApi'
@@ -8,25 +8,29 @@ import { confirm } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/formatDate'
 import { formatDuration } from '@/lib/formatStats'
+import { openProcessLogTab } from '@/lib/processTabs'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/Toggle'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useProcessesStore, bySession, runningCount } from '@/stores/processesStore'
+import { useProcessesStore } from '@/stores/processesStore'
 import { useActiveProject } from '@/hooks/useActiveProject'
 import { PanelTab } from './PanelTab'
+import { PanelSectionEmpty, PanelSectionHeader } from './PanelSection'
 import { TerminalsSection } from './TerminalsSection'
 
 /**
- * PROP-096/097: вкладка «Процессы» правой панели — единый реестр фоновой
- * работы: шелл-процессов (`kind: 'process'`) и фоновых дочерних сессий
- * саб-агентов (`kind: 'subagent'`).
+ * Вкладка «Процессы» правой панели — единый реестр фоновой работы:
+ * шелл-процессы (`kind: 'process'`), фоновые дочерние сессии саб-агентов
+ * (`kind: 'subagent'`) и интерактивные терминалы (`TerminalsSection`).
  *
- * PROP-132 (Ф4б): четвёртый срез — **терминалы** (`TerminalsSection`):
- * интерактивные PTY-сессии проекта. Список терминалов — серверный
- * (`GET /terminals?project_id=…`), живое обновление — события `terminal.*`
- * плюс перечитывание раз в 5 с, пока секция открыта.
+ * **Скоуп показа** — не «весь инстанс», а текущий контекст:
+ * - есть сессия → по умолчанию только её записи; тумблер «Весь проект»
+ *   расширяет выборку до всех сессий проекта;
+ * - сессии нет (выделенный проект, файловая вкладка) → всегда проект,
+ *   тумблер скрыт;
+ * - нет ни проекта, ни сессии → пустое состояние «Выберите сессию или проект».
  *
  * Источник истины — серверный реестр (`GET /api/v2/processes`), live-обновление
  * — события `process.*`/`child.*` (диспетчер `stores/transportStore.ts`).
@@ -36,9 +40,7 @@ import { TerminalsSection } from './TerminalsSection'
 
 /** Период перечитывания списка прогонов, мс (вкладка активна). */
 const LIST_REFRESH_MS = 5000
-/** Период авто-подгрузки лога, мс (пока процесс выполняется). */
-const LOG_POLL_MS = 2000
-/** Тикер «идёт уже N» — раз в секунду. */
+/** Тикер «время работы» — раз в секунду. */
 const ELAPSED_TICK_MS = 1000
 
 /** Фильтр вида фоновой работы. */
@@ -46,6 +48,9 @@ type KindFilter = 'all' | 'process' | 'subagent' | 'terminal'
 
 /** Фильтры вида (для кнопок-переключателей). */
 const KIND_FILTERS: KindFilter[] = ['all', 'process', 'subagent', 'terminal']
+
+/** Скоуп показа записей реестра. */
+type RunScope = 'session' | 'project' | 'none'
 
 /** Общий стиль бейджа (как в «Памяти»). */
 const BADGE = 'shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium'
@@ -81,22 +86,27 @@ function scriptName(run: BackgroundRunRecord): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+/** Время работы прогона: выполняется — от старта до «сейчас», иначе — по финишу. */
+function runUptimeMs(run: BackgroundRunRecord, now: number): number | undefined {
+  const started = Date.parse(run.startedAt ?? '')
+  if (run.status === 'running') {
+    return Math.max(0, now - (Number.isFinite(started) ? started : now))
+  }
+  const finished = Date.parse(run.finishedAt ?? '')
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return undefined
+  return Math.max(0, finished - started)
+}
+
 export const ProcessesTab: React.FC = () => {
-  const { t, locale } = useI18n()
+  const { t } = useI18n()
   const { notify } = useNotification()
 
-  // Фильтры: вид фоновой работы и «только текущая сессия».
+  // Фильтр вида фоновой работы и переключатель скоупа («Весь проект»).
   const [kindFilter, setKindFilter] = useState<KindFilter>('all')
-  const [onlyCurrent, setOnlyCurrent] = useState(false)
+  const [wholeProject, setWholeProject] = useState(false)
 
-  // Активная сессия — из активной центральной вкладки.
-  const activeTabId = useUIStore((s) => s.activeCenterTabId)
-  const centerTabs = useUIStore((s) => s.centerTabs)
-  const activeTab = centerTabs.find((tab) => tab.id === activeTabId)
-  const currentSessionId = activeTab?.data?.sessionId
-
-  // Активный проект — для списка терминалов (`GET /terminals?project_id=…`).
-  const { projectId: activeProjectId } = useActiveProject()
+  // Скоуп: сессия активного контекста и её проект.
+  const { projectId, sessionId } = useActiveProject()
 
   const sessions = useSessionsStore((s) => s.sessions)
   const sessionNames = useMemo(() => {
@@ -105,93 +115,92 @@ export const ProcessesTab: React.FC = () => {
     return map
   }, [sessions])
 
+  /** Проект каждой сессии — по нему прогон попадает в скоуп проекта. */
+  const sessionProjects = useMemo(() => {
+    const map = new Map<string, string | null>()
+    for (const session of sessions) map.set(session.id, session.project_id ?? null)
+    return map
+  }, [sessions])
+
   const byId = useProcessesStore((s) => s.byId)
   const order = useProcessesStore((s) => s.order)
-  const logs = useProcessesStore((s) => s.logs)
   const loadError = useProcessesStore((s) => s.error)
   const load = useProcessesStore((s) => s.load)
-  const mergeLog = useProcessesStore((s) => s.mergeLog)
   const removeRun = useProcessesStore((s) => s.remove)
 
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
-  const [logId, setLogId] = useState<string | null>(null)
-  const [logError, setLogError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
-  const logRef = useRef<HTMLPreElement>(null)
+
+  /**
+   * Скоуп показа: сессия (по умолчанию) или весь её проект.
+   *
+   * Тумблер «Весь проект» есть только у сессии; без сессии (выделенный
+   * проект, файловая вкладка) скоуп всегда проектный, а переключатель скрыт.
+   */
+  const scope: RunScope = useMemo(() => {
+    if (!sessionId && !projectId) return 'none'
+    if (sessionId && !wholeProject) return 'session'
+    return projectId ? 'project' : 'session'
+  }, [projectId, sessionId, wholeProject])
+
+  /**
+   * Загрузка списка **в текущем скоупе** — фильтр задаётся серверу.
+   *
+   * Раньше список грузился без фильтров (50 свежих по всему инстансу), а
+   * скоуп фильтровался на клиенте: при большом числе прогонов записи нужного
+   * скоупа в выборку просто не попадали. Теперь сервер отдаёт ровно скоуп.
+   */
+  const loadScope = useCallback(() => {
+    if (scope === 'session' && sessionId) return load({ sessionId })
+    if (scope === 'project' && projectId) return load({ projectId })
+    return load()
+  }, [load, projectId, scope, sessionId])
 
   // Список: первичная загрузка + перечитывание раз в 5 с, пока вкладка активна.
   useEffect(() => {
     let disposed = false
     const refresh = async () => {
-      await load()
+      await loadScope()
       if (!disposed) setLoading(false)
     }
     void refresh()
     const timer = setInterval(() => {
-      void load()
+      void loadScope()
     }, LIST_REFRESH_MS)
     return () => {
       disposed = true
       clearInterval(timer)
     }
-  }, [load])
+  }, [loadScope])
 
-  // Тикер «идёт уже N» для выполняющихся прогонов.
+  // Тикер «время работы» для выполняющихся прогонов.
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS)
     return () => clearInterval(timer)
   }, [])
 
-  /** Чтение отрезка лога и слияние его с накопленным текстом. */
-  const fetchLog = useCallback(
-    async (id: string, offset: number) => {
-      try {
-        const chunk = await synthApi.getProcessLogs(id, offset > 0 ? { offset } : undefined)
-        mergeLog(id, {
-          content: chunk.content,
-          offset: chunk.offset,
-          nextOffset: chunk.nextOffset,
-          totalBytes: chunk.totalBytes,
-          truncated: chunk.truncated,
-        })
-        setLogError(null)
-      } catch (err) {
-        setLogError(err instanceof Error ? err.message : t('common.error'))
-      }
-    },
-    [mergeLog, t],
-  )
+  /** Записи реестра в текущем скоупе. */
+  const runs = useMemo(() => {
+    const all = order
+      .map((id) => byId[id])
+      .filter((run): run is BackgroundRunRecord => !!run)
+    if (scope === 'none') return []
+    if (scope === 'session') return all.filter((run) => run.sessionId === sessionId)
+    // Проектный скоуп: у прогона либо свой `projectId`, либо он принадлежит
+    // сессии проекта (в live-событиях проекта нет — берём из списка сессий).
+    return all.filter((run) => {
+      if (run.projectId && run.projectId === projectId) return true
+      const owner = run.sessionId
+      return !!owner && sessionProjects.get(owner) === projectId
+    })
+  }, [byId, order, projectId, scope, sessionId, sessionProjects])
 
-  const logRun = logId ? byId[logId] : undefined
-  const logIsRunning = logRun?.status === 'running'
-
-  // Первое чтение лога при открытии.
-  useEffect(() => {
-    if (!logId) return
-    setLogError(null)
-    void fetchLog(logId, 0)
-  }, [logId, fetchLog])
-
-  // Авто-подгрузка лога, пока процесс выполняется и лог открыт.
-  useEffect(() => {
-    if (!logId || !logIsRunning) return
-    const id = logId
-    const timer = setInterval(() => {
-      const current = useProcessesStore.getState().logs[id]
-      void fetchLog(id, current?.offset ?? 0)
-    }, LOG_POLL_MS)
-    return () => clearInterval(timer)
-  }, [logId, logIsRunning, fetchLog])
-
-  // Автоскролл лога вниз (новый хвост).
-  useEffect(() => {
-    const el = logRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [logId, logs])
+  const processRuns = useMemo(() => runs.filter((run) => run.kind === 'process'), [runs])
+  const subagentRuns = useMemo(() => runs.filter((run) => run.kind === 'subagent'), [runs])
 
   /** Открытие дочерней сессии саб-агента в центральной вкладке. */
-  const handleOpenSession = (run: BackgroundRunRecord) => {
+  const handleOpenSession = useCallback((run: BackgroundRunRecord) => {
     const childId = run.childSessionId
     if (!childId) return
     useUIStore.getState().openTab({
@@ -200,35 +209,38 @@ export const ProcessesTab: React.FC = () => {
       title: sessionNames.get(childId) ?? run.description ?? childId,
       data: { sessionId: childId },
     })
-  }
+  }, [sessionNames])
 
   /** Остановка фонового прогона (сервер останавливает асинхронно). */
-  const handleStop = async (run: BackgroundRunRecord) => {
-    const ok = await confirm({
-      title: t('processes.confirm.stopTitle'),
-      message: t('processes.confirm.stopMessage', { name: runTitle(run) }),
-      confirmLabel: t('processes.action.stop'),
-      variant: 'danger',
-      icon: 'stop',
-    })
-    if (!ok) return
-    setBusy(run.id)
-    try {
-      await synthApi.stopProcess(run.id)
-      notify({ text: t('processes.stopped'), type: 'success', category: 'system' })
-      await load()
-    } catch (err) {
-      notify({
-        text: t('processes.failed', {
-          error: err instanceof Error ? err.message : t('common.error'),
-        }),
-        type: 'error',
-        category: 'error',
+  const handleStop = useCallback(
+    async (run: BackgroundRunRecord) => {
+      const ok = await confirm({
+        title: t('processes.confirm.stopTitle'),
+        message: t('processes.confirm.stopMessage', { name: runTitle(run) }),
+        confirmLabel: t('processes.action.stop'),
+        variant: 'danger',
+        icon: 'stop',
       })
-    } finally {
-      setBusy(null)
-    }
-  }
+      if (!ok) return
+      setBusy(run.id)
+      try {
+        await synthApi.stopProcess(run.id)
+        notify({ text: t('processes.stopped'), type: 'success', category: 'system' })
+        await loadScope()
+      } catch (err) {
+        notify({
+          text: t('processes.failed', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+          type: 'error',
+          category: 'error',
+        })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [loadScope, notify, t],
+  )
 
   /**
    * ADR-126 §5: повторный запуск скриптового прогона.
@@ -236,88 +248,86 @@ export const ProcessesTab: React.FC = () => {
    * Аргументы не переиспользуются (в реестре их может не быть вовсе) —
    * повтор идёт без аргументов. Ошибка — тост, реестр не трогаем.
    */
-  const handleRerunScript = async (run: BackgroundRunRecord, name: string) => {
-    setBusy(run.id)
-    try {
-      await synthApi.runSessionScript(run.sessionId, name)
-      notify({ text: t('scripts.rerun.started'), type: 'success', category: 'system' })
-      await load()
-    } catch (err) {
-      notify({
-        text: t('processes.failed', {
-          error: err instanceof Error ? err.message : t('common.error'),
-        }),
-        type: 'error',
-        category: 'error',
-      })
-    } finally {
-      setBusy(null)
-    }
-  }
+  const handleRerunScript = useCallback(
+    async (run: BackgroundRunRecord, name: string) => {
+      setBusy(run.id)
+      try {
+        await synthApi.runSessionScript(run.sessionId, name)
+        notify({ text: t('scripts.rerun.started'), type: 'success', category: 'system' })
+        await loadScope()
+      } catch (err) {
+        notify({
+          text: t('processes.failed', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+          type: 'error',
+          category: 'error',
+        })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [loadScope, notify, t],
+  )
 
   /** Удаление терминальной записи реестра. */
-  const handleRemove = async (run: BackgroundRunRecord) => {
-    const ok = await confirm({
-      title: t('processes.confirm.removeTitle'),
-      message: t('processes.confirm.removeMessage', { name: runTitle(run) }),
-      confirmLabel: t('processes.action.remove'),
-      variant: 'danger',
-      icon: 'delete-bin',
-    })
-    if (!ok) return
-    setBusy(run.id)
-    try {
-      await synthApi.removeProcess(run.id)
-      removeRun(run.id)
-      if (logId === run.id) setLogId(null)
-      notify({ text: t('processes.removed'), type: 'success', category: 'system' })
-    } catch (err) {
-      notify({
-        text: t('processes.failed', {
-          error: err instanceof Error ? err.message : t('common.error'),
-        }),
-        type: 'error',
-        category: 'error',
+  const handleRemove = useCallback(
+    async (run: BackgroundRunRecord) => {
+      const ok = await confirm({
+        title: t('processes.confirm.removeTitle'),
+        message: t('processes.confirm.removeMessage', { name: runTitle(run) }),
+        confirmLabel: t('processes.action.remove'),
+        variant: 'danger',
+        icon: 'delete-bin',
       })
-    } finally {
-      setBusy(null)
-    }
+      if (!ok) return
+      setBusy(run.id)
+      try {
+        await synthApi.removeProcess(run.id)
+        removeRun(run.id)
+        notify({ text: t('processes.removed'), type: 'success', category: 'system' })
+      } catch (err) {
+        notify({
+          text: t('processes.failed', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+          type: 'error',
+          category: 'error',
+        })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [notify, removeRun, t],
+  )
+
+  // Без сессии и проекта показывать нечего.
+  if (scope === 'none') {
+    return (
+      <PanelTab>
+        <PanelSectionEmpty
+          icon="terminal-box"
+          title={t('processes.empty.noContext')}
+          hint={t('processes.emptyHint.process')}
+          testId="processes-no-context"
+        />
+      </PanelTab>
+    )
   }
 
-  /** Отфильтрованные прогоны (вид + «только текущая сессия»). */
-  const runs = useMemo(() => {
-    const base =
-      onlyCurrent && currentSessionId
-        ? bySession({ byId, order }, currentSessionId)
-        : order.map((id) => byId[id]).filter((run): run is BackgroundRunRecord => !!run)
-    return base.filter((run) => kindFilter === 'all' || run.kind === kindFilter)
-  }, [byId, order, kindFilter, onlyCurrent, currentSessionId])
-
-  const runningTotal = useMemo(() => runningCount({ byId }), [byId])
-
-  const logState = logId ? logs[logId] : undefined
+  const sessionOnly = scope === 'session'
 
   return (
     <PanelTab>
-      {/* Сводка и фильтры. */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {t('processes.title')}
-          </h3>
-          {kindFilter !== 'terminal' && (
-            <span className="text-xs text-muted-foreground" data-testid="processes-count">
-              {t('processes.count', { count: runs.length })}
-            </span>
-          )}
-        </div>
-
-        <div
-          className="flex flex-wrap items-center gap-1"
-          role="group"
-          aria-label={t('processes.filter.title')}
-          data-testid="processes-kind-filter"
-        >
+      {/* Фильтры вида + переключатель скоупа. Чипы переносятся внутри своей
+          области, тумблер всегда прижат к правому краю строки фильтров. */}
+      <div
+        className="flex items-start gap-2"
+        role="group"
+        aria-label={t('processes.filter.title')}
+        data-testid="processes-kind-filter"
+      >
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
           {KIND_FILTERS.map((filter) => (
             <Button
               key={filter}
@@ -330,33 +340,26 @@ export const ProcessesTab: React.FC = () => {
               {t(`processes.filter.${filter}`)}
             </Button>
           ))}
+        </div>
 
-          <span className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <span data-testid="processes-running-count">
-              {t('processes.runningCount', { count: runningTotal })}
-            </span>
-            {t('processes.filter.onlyCurrent')}
+        {/* Тумблер есть только у сессии проекта: без сессии скоуп всегда
+            проектный, а без проекта расширять выборку нечем. */}
+        {sessionId && projectId && (
+          <span
+            className="shrink-0 ml-auto flex items-center gap-2 text-xs text-muted-foreground"
+            data-testid="processes-whole-project"
+          >
+            {t('processes.filter.wholeProject')}
             <Toggle
-              enabled={onlyCurrent}
-              onToggle={() => setOnlyCurrent((value) => !value)}
-              ariaLabel={t('processes.filter.onlyCurrent')}
-              disabled={!currentSessionId}
+              enabled={wholeProject}
+              onToggle={() => setWholeProject((value) => !value)}
+              ariaLabel={t('processes.filter.wholeProject')}
             />
           </span>
-        </div>
+        )}
       </div>
 
-      {/* Секция терминалов — свой срез (серверный список проекта).
-          В режиме «все» показываем её вместе с фоновыми прогонами. */}
-      {(kindFilter === 'terminal' || kindFilter === 'all') && (
-        <TerminalsSection
-          projectId={activeProjectId}
-          currentSessionId={currentSessionId ?? null}
-          onlyCurrent={onlyCurrent}
-        />
-      )}
-
-      {kindFilter !== 'terminal' && loadError && (
+      {loadError && (
         <div
           role="alert"
           className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive break-words"
@@ -366,7 +369,7 @@ export const ProcessesTab: React.FC = () => {
         </div>
       )}
 
-      {kindFilter !== 'terminal' && loading && runs.length === 0 && (
+      {loading && runs.length === 0 && (
         <div
           role="status"
           className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground"
@@ -377,226 +380,256 @@ export const ProcessesTab: React.FC = () => {
         </div>
       )}
 
-      {kindFilter !== 'terminal' && !loading && runs.length === 0 && (
-        <div
-          className="py-6 text-center text-muted-foreground"
-          data-testid="processes-empty"
-        >
-          <Icon name="terminal-box" className="mx-auto mb-2 size-8 opacity-40" />
-          <p className="text-sm">{t('processes.empty')}</p>
-          <p className="mt-1 text-xs opacity-80">{t('processes.emptyHint')}</p>
-        </div>
+      {/* Секция терминалов — свой срез (серверный список проекта). */}
+      {(kindFilter === 'terminal' || kindFilter === 'all') && (
+        <TerminalsSection
+          projectId={projectId}
+          sessionId={sessionId}
+          sessionOnly={sessionOnly}
+        />
       )}
 
-      {kindFilter !== 'terminal' && runs.length > 0 && (
-        <ul className="space-y-2 min-w-0" data-testid="processes-list">
-          {runs.map((run) => {
-            const isRunning = run.status === 'running'
-            const script = scriptName(run)
-            const started = Date.parse(run.startedAt ?? '')
-            const finished = Date.parse(run.finishedAt ?? '')
-            const elapsedMs = isRunning
-              ? Math.max(0, now - (Number.isFinite(started) ? started : now))
-              : Number.isFinite(started) && Number.isFinite(finished)
-                ? finished - started
-                : undefined
-            return (
-              <li
-                key={run.id}
-                data-testid={`processes-item-${run.id}`}
-                data-kind={run.kind}
-                data-status={run.status}
-                className="min-w-0 space-y-2 rounded-lg border border-border bg-surface-inset p-3"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <Icon
-                    name={kindIcon(run.kind)}
-                    className="size-4 shrink-0 text-muted-foreground"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium" title={runTitle(run)}>
-                    {runTitle(run)}
-                  </span>
-                  {script && (
-                    <span
-                      className={cn(BADGE, 'bg-status-caution/15 text-status-caution')}
-                      data-testid={`processes-script-${run.id}`}
-                    >
-                      {t('scripts.process.badge', { name: script })}
-                    </span>
-                  )}
-                  <span
-                    className={cn(BADGE, STATUS_CLASS[run.status] ?? 'bg-muted text-muted-foreground')}
-                    data-testid={`processes-status-${run.id}`}
-                  >
-                    {isRunning && <Icon name="loader-2" className="mr-1 inline size-3 animate-spin" />}
-                    {t(`processes.status.${run.status}`)}
-                  </span>
-                </div>
-
-                <dl className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-muted-foreground min-w-0">
-                  {run.cwd && (
-                    <Row label={t('processes.row.cwd')} value={run.cwd} mono />
-                  )}
-                  <Row
-                    label={t('processes.row.session')}
-                    value={sessionNames.get(run.sessionId) ?? run.sessionId}
-                    mono
-                  />
-                  {run.agentRole && (
-                    <Row label={t('processes.row.agent')} value={run.agentRole} />
-                  )}
-                  {isRunning && elapsedMs !== undefined && (
-                    <Row
-                      label={t('processes.row.elapsed')}
-                      value={formatDuration(elapsedMs)}
-                    />
-                  )}
-                  {!isRunning && run.finishedAt && (
-                    <Row
-                      label={t('processes.row.finished')}
-                      value={formatDateTime(run.finishedAt, locale)}
-                    />
-                  )}
-                  {!isRunning && run.exitCode !== undefined && (
-                    <Row label={t('processes.row.exitCode')} value={String(run.exitCode)} mono />
-                  )}
-                  {!isRunning && run.signal && (
-                    <Row label={t('processes.row.signal')} value={run.signal} mono />
-                  )}
-                </dl>
-
-                {run.summary && (
-                  <p className="break-words text-xs text-muted-foreground" data-testid={`processes-summary-${run.id}`}>
-                    {run.summary}
-                  </p>
-                )}
-
-                <div className="flex flex-wrap items-center justify-end gap-1">
-                  {isRunning && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => void handleStop(run)}
-                      disabled={busy === run.id}
-                      title={t('processes.action.stop')}
-                      aria-label={t('processes.action.stop')}
-                      data-testid={`processes-stop-${run.id}`}
-                    >
-                      <Icon name="stop" className="size-4" />
-                    </Button>
-                  )}
-                  {run.kind === 'subagent' && run.childSessionId && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleOpenSession(run)}
-                      title={t('processes.action.openSession')}
-                      aria-label={t('processes.action.openSession')}
-                      data-testid={`processes-open-${run.id}`}
-                    >
-                      <Icon name="external-link" className="size-4" />
-                    </Button>
-                  )}
-                  {run.kind === 'process' && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setLogId((current) => (current === run.id ? null : run.id))}
-                      title={logId === run.id ? t('processes.action.hideLog') : t('processes.action.showLog')}
-                      aria-label={logId === run.id ? t('processes.action.hideLog') : t('processes.action.showLog')}
-                      data-testid={`processes-log-toggle-${run.id}`}
-                    >
-                      <Icon name={logId === run.id ? 'eye-off' : 'eye'} className="size-4" />
-                    </Button>
-                  )}
-                  {script && run.sessionId && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => void handleRerunScript(run, script)}
-                      disabled={busy === run.id}
-                      title={t('scripts.process.rerun')}
-                      aria-label={t('scripts.process.rerun')}
-                      data-testid={`processes-rerun-${run.id}`}
-                    >
-                      <Icon name="refresh" className="size-4" />
-                    </Button>
-                  )}
-                  {!isRunning && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="hover:text-destructive"
-                      onClick={() => void handleRemove(run)}
-                      disabled={busy === run.id}
-                      title={t('processes.action.remove')}
-                      aria-label={t('processes.action.remove')}
-                      data-testid={`processes-remove-${run.id}`}
-                    >
-                      <Icon name="delete-bin" className="size-4" />
-                    </Button>
-                  )}
-                </div>
-              </li>
-            )
-          })}
-        </ul>
+      {/* Фоновые процессы. */}
+      {(kindFilter === 'process' || kindFilter === 'all') && (
+        <section className="space-y-2" data-testid="processes-section-process">
+          <PanelSectionHeader
+            title={t('processes.title')}
+            count={t('processes.count.process', { count: processRuns.length })}
+            testId="processes-section-process"
+          />
+          {processRuns.length === 0 ? (
+            <PanelSectionEmpty
+              icon="terminal-box"
+              title={t('processes.empty.process')}
+              hint={t('processes.emptyHint.process')}
+              testId="processes-empty-process"
+            />
+          ) : (
+            <ul className="space-y-2 min-w-0" data-testid="processes-list-process">
+              {processRuns.map((run) => (
+                <RunCard
+                  key={run.id}
+                  run={run}
+                  now={now}
+                  busy={busy === run.id}
+                  sessionName={sessionNames.get(run.sessionId) ?? run.sessionId}
+                  onOutput={() => openProcessLogTab(run)}
+                  onStop={() => void handleStop(run)}
+                  onRerun={(script) => void handleRerunScript(run, script)}
+                  onRemove={() => void handleRemove(run)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
-      {/* Лог фонового процесса — под списком. */}
-      {kindFilter !== 'terminal' && logId && logRun && (
-        <div
-          className="min-w-0 space-y-2 rounded-lg border border-border bg-card p-3"
-          data-testid="processes-log"
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="min-w-0 flex-1 truncate text-xs font-medium" title={runTitle(logRun)}>
-              {runTitle(logRun)}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => void fetchLog(logId, 0)}
-              title={t('processes.action.refreshLog')}
-              aria-label={t('processes.action.refreshLog')}
-              data-testid="processes-log-refresh"
-            >
-              <Icon name="refresh" className="size-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setLogId(null)}
-              title={t('processes.action.hideLog')}
-              aria-label={t('processes.action.hideLog')}
-              data-testid="processes-log-hide"
-            >
-              <Icon name="close" className="size-4" />
-            </Button>
-          </div>
-
-          {logState?.truncated && (
-            <p className="text-xs text-status-warning" data-testid="processes-log-truncated">
-              {t('processes.log.truncated')}
-            </p>
+      {/* Фоновые саб-агенты. */}
+      {(kindFilter === 'subagent' || kindFilter === 'all') && (
+        <section className="space-y-2" data-testid="processes-section-subagent">
+          <PanelSectionHeader
+            title={t('processes.section.subagent')}
+            count={t('processes.count.subagent', { count: subagentRuns.length })}
+            testId="processes-section-subagent"
+          />
+          {subagentRuns.length === 0 ? (
+            <PanelSectionEmpty
+              icon="robot-2"
+              title={t('processes.empty.subagent')}
+              hint={t('processes.emptyHint.subagent')}
+              testId="processes-empty-subagent"
+            />
+          ) : (
+            <ul className="space-y-2 min-w-0" data-testid="processes-list-subagent">
+              {subagentRuns.map((run) => (
+                <RunCard
+                  key={run.id}
+                  run={run}
+                  now={now}
+                  busy={busy === run.id}
+                  sessionName={sessionNames.get(run.sessionId) ?? run.sessionId}
+                  onOpenSession={() => handleOpenSession(run)}
+                  onStop={() => void handleStop(run)}
+                  onRerun={(script) => void handleRerunScript(run, script)}
+                  onRemove={() => void handleRemove(run)}
+                />
+              ))}
+            </ul>
           )}
-
-          {logError && (
-            <p role="alert" className="break-words text-xs text-destructive" data-testid="processes-log-error">
-              {t('processes.log.error', { error: logError })}
-            </p>
-          )}
-
-          <pre
-            ref={logRef}
-            className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-2 font-mono text-[0.6875rem] text-foreground"
-            data-testid="processes-log-content"
-          >
-            {logState?.content || t('processes.log.empty')}
-          </pre>
-        </div>
+        </section>
       )}
     </PanelTab>
+  )
+}
+
+interface RunCardProps {
+  /** Запись реестра фоновой работы. */
+  run: BackgroundRunRecord
+  /** Текущее время (тикер раз в секунду). */
+  now: number
+  /** Идёт ли операция над записью (кнопки заблокированы). */
+  busy: boolean
+  /** Имя сессии-владельца (для строки «Сессия»). */
+  sessionName: string
+  /** Открыть экран вывода (только для процесса). */
+  onOutput?: () => void
+  /** Открыть дочернюю сессию (только для саб-агента). */
+  onOpenSession?: () => void
+  /** Остановить прогон. */
+  onStop: () => void
+  /** Запустить скрипт снова. */
+  onRerun: (script: string) => void
+  /** Удалить запись реестра. */
+  onRemove: () => void
+}
+
+/**
+ * Карточка фонового прогона — та же форма, что у терминала: шапка (вид,
+ * имя, статус, скрипт), строки-подробности и действия внизу справа.
+ */
+function RunCard({
+  run,
+  now,
+  busy,
+  sessionName,
+  onOutput,
+  onOpenSession,
+  onStop,
+  onRerun,
+  onRemove,
+}: RunCardProps) {
+  const { t, locale } = useI18n()
+  const isRunning = run.status === 'running'
+  const script = scriptName(run)
+  const uptimeMs = runUptimeMs(run, now)
+
+  return (
+    <li
+      data-testid={`processes-item-${run.id}`}
+      data-kind={run.kind}
+      data-status={run.status}
+      className="min-w-0 space-y-2 rounded-lg border border-border bg-surface-inset p-3"
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <Icon name={kindIcon(run.kind)} className="size-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={runTitle(run)}>
+          {runTitle(run)}
+        </span>
+        {script && (
+          <span
+            className={cn(BADGE, 'bg-status-caution/15 text-status-caution')}
+            data-testid={`processes-script-${run.id}`}
+          >
+            {t('scripts.process.badge', { name: script })}
+          </span>
+        )}
+        <span
+          className={cn(BADGE, STATUS_CLASS[run.status] ?? 'bg-muted text-muted-foreground')}
+          data-testid={`processes-status-${run.id}`}
+        >
+          {isRunning && <Icon name="loader-2" className="mr-1 inline size-3 animate-spin" />}
+          {t(`processes.status.${run.status}`)}
+        </span>
+      </div>
+
+      <dl className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-muted-foreground min-w-0">
+        {run.kind === 'process' && run.cwd && (
+          <Row label={t('processes.row.cwd')} value={run.cwd} mono />
+        )}
+        {run.kind === 'subagent' && run.agentRole && (
+          <Row label={t('processes.row.agent')} value={run.agentRole} />
+        )}
+        <Row label={t('processes.row.session')} value={sessionName} mono />
+        {uptimeMs !== undefined && (
+          <Row label={t('processes.row.uptime')} value={formatDuration(uptimeMs)} />
+        )}
+        {!isRunning && run.finishedAt && (
+          <Row label={t('processes.row.finished')} value={formatDateTime(run.finishedAt, locale)} />
+        )}
+        {!isRunning && run.exitCode !== undefined && (
+          <Row label={t('processes.row.exitCode')} value={String(run.exitCode)} mono />
+        )}
+        {!isRunning && run.signal && (
+          <Row label={t('processes.row.signal')} value={run.signal} mono />
+        )}
+      </dl>
+
+      {run.summary && (
+        <p
+          className="break-words text-xs text-muted-foreground"
+          data-testid={`processes-summary-${run.id}`}
+        >
+          {run.summary}
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center justify-end gap-1">
+        {isRunning && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onStop}
+            disabled={busy}
+            title={t('processes.action.stop')}
+            aria-label={t('processes.action.stop')}
+            data-testid={`processes-stop-${run.id}`}
+          >
+            <Icon name="stop" className="size-4" />
+          </Button>
+        )}
+        {run.kind === 'subagent' && run.childSessionId && onOpenSession && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onOpenSession}
+            title={t('processes.action.openSession')}
+            aria-label={t('processes.action.openSession')}
+            data-testid={`processes-open-${run.id}`}
+          >
+            <Icon name="arrow-right-s" className="size-4" />
+          </Button>
+        )}
+        {run.kind === 'process' && onOutput && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onOutput}
+            title={t('processes.action.output')}
+            aria-label={t('processes.action.output')}
+            data-testid={`processes-output-${run.id}`}
+          >
+            <Icon name="eye" className="size-4" />
+          </Button>
+        )}
+        {script && run.sessionId && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => onRerun(script)}
+            disabled={busy}
+            title={t('scripts.process.rerun')}
+            aria-label={t('scripts.process.rerun')}
+            data-testid={`processes-rerun-${run.id}`}
+          >
+            <Icon name="refresh" className="size-4" />
+          </Button>
+        )}
+        {!isRunning && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="hover:text-destructive"
+            onClick={onRemove}
+            disabled={busy}
+            title={t('processes.action.remove')}
+            aria-label={t('processes.action.remove')}
+            data-testid={`processes-remove-${run.id}`}
+          >
+            <Icon name="delete-bin" className="size-4" />
+          </Button>
+        )}
+      </div>
+    </li>
   )
 }
 

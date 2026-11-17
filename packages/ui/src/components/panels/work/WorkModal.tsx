@@ -192,8 +192,9 @@ export function WorkModal({
   }, [open, loadPlan, loadTodos, loadJournal, loadInvariants, t])
 
   useEffect(() => {
-    setTab(initialTab)
-  }, [initialTab])
+    // Без сессии вкладки ToDo нет — открывать её нельзя.
+    setTab(initialTab === 'todos' && !sessionId ? 'board' : initialTab)
+  }, [initialTab, sessionId])
 
   const moveItem = useCallback(
     async (itemId: string, columnId: string) => {
@@ -516,12 +517,16 @@ export function WorkModal({
   const tabs = useMemo(
     () => [
       { value: 'board', label: t('work.modal.tab.board'), title: t('work.modal.tab.board') },
-      { value: 'todos', label: t('work.modal.tab.todos'), title: t('work.modal.tab.todos') },
+      // ToDo — сессионная сущность: без сессии вкладки нет (в режиме
+      // выделенного проекта сессия не задана).
+      ...(sessionId
+        ? [{ value: 'todos', label: t('work.modal.tab.todos'), title: t('work.modal.tab.todos') }]
+        : []),
       { value: 'journal', label: t('work.modal.tab.journal'), title: t('work.modal.tab.journal') },
       { value: 'invariants', label: t('work.modal.tab.invariants'), title: t('work.modal.tab.invariants') },
       { value: 'stats', label: t('work.modal.tab.stats'), title: t('work.modal.tab.stats') },
     ],
-    [t],
+    [t, sessionId],
   )
 
   const editingItem = editingItemId

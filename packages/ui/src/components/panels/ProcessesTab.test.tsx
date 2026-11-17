@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
   notify: vi.fn(),
   listTerminals: vi.fn(),
+  openProcessLogTab: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({
@@ -52,6 +53,8 @@ vi.mock('@/lib/api/terminals', async (importOriginal) => {
     terminalsApi: { ...actual.terminalsApi, list: mocks.listTerminals },
   }
 })
+// Экран вывода — отдельная центральная вкладка; в тесте проверяем вызов.
+vi.mock('@/lib/processTabs', () => ({ openProcessLogTab: mocks.openProcessLogTab }))
 vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 vi.mock('@/hooks/useNotification', () => ({
   notifyMessage: mocks.notify,
@@ -63,6 +66,7 @@ import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ProcessesTab } from './ProcessesTab'
 import { useUIStore } from '@/stores/useUIStore'
 import { useProcessesStore } from '@/stores/processesStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
 import type { TerminalDto } from '@/lib/api/terminals'
 
@@ -144,6 +148,18 @@ async function click(container: HTMLElement, testId: string): Promise<void> {
   await flush()
 }
 
+/** Клик по тумблеру «Весь проект». */
+async function toggleWholeProject(container: HTMLElement): Promise<void> {
+  const toggle = container.querySelector(
+    '[data-testid="processes-whole-project"] [role="switch"]',
+  ) as HTMLElement | null
+  expect(toggle, 'тумблер «Весь проект» не найден').toBeTruthy()
+  await act(async () => {
+    toggle!.click()
+  })
+  await flush()
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.listProcesses.mockResolvedValue([])
@@ -187,9 +203,19 @@ beforeEach(() => {
     error: null,
   })
 
+  // Сессия s1 в проекте p1, s2 — тоже в p1, s3 — в чужом проекте.
+  useSessionsStore.setState({
+    sessions: [
+      { id: 's1', name: 'Session one', project_id: 'p1' },
+      { id: 's2', name: 'Session two', project_id: 'p1' },
+      { id: 's3', name: 'Session three', project_id: 'p9' },
+    ] as never,
+  })
+
   useUIStore.setState({
     activeCenterTabId: 'tab-1',
     centerTabs: [{ id: 'tab-1', type: 'chat', title: 'Chat', data: { sessionId: 's1' } }],
+    selectedProjectId: null,
   })
 })
 
@@ -201,10 +227,11 @@ afterEach(async () => {
     })
     container.remove()
   }
+  document.body.innerHTML = ''
 })
 
-describe('ProcessesTab — единый реестр фоновых прогонов (PROP-096/097)', () => {
-  it('рендерит список прогонов: вид, статус, команда', async () => {
+describe('ProcessesTab — реестр фоновой работы (PROP-096/097)', () => {
+  it('рендерит карточки прогонов: вид, статус, команда', async () => {
     mocks.listProcesses.mockResolvedValue([
       makeRun('bgr_1', { command: 'npm run build', cwd: '/work' }),
       makeRun('bgr_2', {
@@ -240,18 +267,96 @@ describe('ProcessesTab — единый реестр фоновых прогон
     expect(text).toContain('Рефакторинг')
   })
 
-  it('пустое состояние — «Фоновых процессов нет» + подсказка', async () => {
-    mocks.listProcesses.mockResolvedValue([])
+  it('в карточке прогона есть строка «Время работы»', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
 
     const container = await renderProcesses()
 
-    const empty = container.querySelector('[data-testid="processes-empty"]')
-    expect(empty).not.toBeNull()
-    expect(empty?.textContent).toContain('No background processes')
-    expect(empty?.textContent).toContain('appear here')
+    expect(container.textContent).toContain('Uptime')
   })
 
-  it('фильтр «Саб-агенты» оставляет только фоновых саб-агентов', async () => {
+  it('три секции с заголовками и счётчиками', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { command: 'npm test' }),
+      makeRun('bgr_2', { kind: 'subagent', childSessionId: 'child-1' }),
+    ])
+    mocks.listTerminals.mockResolvedValue({
+      terminals: [makeTerminal('t1')],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      nextOffset: null,
+    })
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="terminals-section-title"]')?.textContent).toBe(
+      'Terminals',
+    )
+    expect(container.querySelector('[data-testid="terminals-section-count"]')?.textContent).toBe(
+      '1 terminal',
+    )
+    expect(container.querySelector('[data-testid="processes-section-process-title"]')?.textContent).toBe(
+      'Background processes',
+    )
+    expect(
+      container.querySelector('[data-testid="processes-section-process-count"]')?.textContent,
+    ).toBe('1 process')
+    expect(container.querySelector('[data-testid="processes-section-subagent-title"]')?.textContent).toBe(
+      'Sub-agents',
+    )
+    expect(
+      container.querySelector('[data-testid="processes-section-subagent-count"]')?.textContent,
+    ).toBe('1 sub-agent')
+  })
+
+  it('пустые состояния секций — крупные блоки без кнопок', async () => {
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-empty-process"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-empty-process"]')?.textContent).toContain(
+      'No background processes',
+    )
+    expect(container.querySelector('[data-testid="processes-empty-subagent"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-empty-subagent"]')?.textContent).toContain(
+      'No sub-agents',
+    )
+    expect(container.querySelector('[data-testid="terminals-empty"]')).not.toBeNull()
+    // Кнопка создания терминала в пустом блоке не осталась — только «+» в шапке.
+    expect(container.querySelector('[data-testid="terminals-create"]')).toBeNull()
+    expect(container.querySelector('[data-testid="terminals-create-header"]')).not.toBeNull()
+  })
+
+  it('счётчиков «N прогонов» и «N выполняется» больше нет', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-count"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processes-running-count"]')).toBeNull()
+  })
+
+  it('инлайн-лога в панели нет — вывод открывается отдельным экраном', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-log"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processes-log-content"]')).toBeNull()
+    expect(mocks.getProcessLogs).not.toHaveBeenCalled()
+  })
+
+  it('«Вывод» открывает экран вывода процесса', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
+
+    const container = await renderProcesses()
+    await click(container, 'processes-output-bgr_1')
+
+    expect(mocks.openProcessLogTab).toHaveBeenCalledTimes(1)
+    expect(mocks.openProcessLogTab.mock.calls[0]?.[0]).toMatchObject({ id: 'bgr_1' })
+  })
+
+  it('фильтр вида «Саб-агенты» оставляет только фоновых саб-агентов', async () => {
     mocks.listProcesses.mockResolvedValue([
       makeRun('bgr_1'),
       makeRun('bgr_2', { kind: 'subagent', childSessionId: 'child-1' }),
@@ -264,26 +369,9 @@ describe('ProcessesTab — единый реестр фоновых прогон
 
     expect(container.querySelector('[data-testid="processes-item-bgr_2"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="processes-item-bgr_1"]')).toBeNull()
-  })
-
-  it('фильтр «Только текущая сессия» оставляет прогоны активной сессии', async () => {
-    mocks.listProcesses.mockResolvedValue([
-      makeRun('bgr_1', { sessionId: 's1' }),
-      makeRun('bgr_2', { sessionId: 's2' }),
-    ])
-
-    const container = await renderProcesses()
-    expect(container.querySelector('[data-testid="processes-item-bgr_2"]')).not.toBeNull()
-
-    const toggle = container.querySelector('[data-testid="processes-kind-filter"] [role="switch"]')
-    expect(toggle).not.toBeNull()
-    await act(async () => {
-      ;(toggle as HTMLElement).click()
-    })
-    await flush()
-
-    expect(container.querySelector('[data-testid="processes-item-bgr_1"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="processes-item-bgr_2"]')).toBeNull()
+    // Остальные секции скрыты.
+    expect(container.querySelector('[data-testid="processes-section-process"]')).toBeNull()
+    expect(container.querySelector('[data-testid="terminals-section"]')).toBeNull()
   })
 
   it('«Остановить» вызывает stopProcess (после подтверждения)', async () => {
@@ -332,27 +420,14 @@ describe('ProcessesTab — единый реестр фоновых прогон
     expect(opened?.type).toBe('chat')
   })
 
-  it('«Показать лог» подгружает лог процесса и выводит его', async () => {
-    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
-
-    const container = await renderProcesses()
-    expect(container.querySelector('[data-testid="processes-log"]')).toBeNull()
-
-    await click(container, 'processes-log-toggle-bgr_1')
-
-    expect(mocks.getProcessLogs).toHaveBeenCalledWith('bgr_1', undefined)
-    const log = container.querySelector('[data-testid="processes-log-content"]')
-    expect(log?.textContent).toContain('вывод процесса')
-  })
-
-  it('у саб-агента кнопки лога нет (лог есть только у процесса)', async () => {
+  it('у саб-агента кнопки «Вывод» нет (лог есть только у процесса)', async () => {
     mocks.listProcesses.mockResolvedValue([
       makeRun('bgr_1', { kind: 'subagent', childSessionId: 'child-1' }),
     ])
 
     const container = await renderProcesses()
 
-    expect(container.querySelector('[data-testid="processes-log-toggle-bgr_1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processes-output-bgr_1"]')).toBeNull()
   })
 
   it('ошибка загрузки списка показывается в баннере', async () => {
@@ -379,7 +454,7 @@ describe('ProcessesTab — единый реестр фоновых прогон
     expect(filter.className).not.toContain('min-w-10')
 
     // Кнопки-действия строк — компактные (size="icon" → 32px), не 40px.
-    for (const testId of ['processes-stop-bgr_1', 'processes-log-toggle-bgr_1', 'processes-remove-bgr_2']) {
+    for (const testId of ['processes-stop-bgr_1', 'processes-output-bgr_1', 'processes-remove-bgr_2']) {
       const button = container.querySelector(`[data-testid="${testId}"]`) as HTMLElement
       expect(button, `элемент ${testId} не найден`).toBeTruthy()
       expect(button.className).not.toContain('min-h-10')
@@ -389,20 +464,109 @@ describe('ProcessesTab — единый реестр фоновых прогон
       expect(button.className).toContain('pointer-coarse:size-10')
     }
   })
+})
 
-  it('кнопки панели лога — компактные (size="icon")', async () => {
-    mocks.listProcesses.mockResolvedValue([makeRun('bgr_1', { command: 'npm test' })])
+describe('ProcessesTab — скоуп показа (сессия / проект)', () => {
+  it('список грузится с серверным фильтром сессии', async () => {
+    await renderProcesses()
+
+    expect(mocks.listProcesses).toHaveBeenCalledWith({ sessionId: 's1' })
+  })
+
+  it('после «Весь проект» список перечитывается с фильтром проекта', async () => {
+    const container = await renderProcesses()
+    expect(mocks.listProcesses).toHaveBeenLastCalledWith({ sessionId: 's1' })
+
+    await toggleWholeProject(container)
+
+    expect(mocks.listProcesses).toHaveBeenLastCalledWith({ projectId: 'p1' })
+  })
+
+  it('в режиме выделенного проекта список грузится с фильтром проекта', async () => {
+    useUIStore.setState({
+      selectedProjectId: 'p1',
+      activeCenterTabId: null,
+      centerTabs: [],
+    })
+
+    await renderProcesses()
+
+    expect(mocks.listProcesses).toHaveBeenCalledWith({ projectId: 'p1' })
+  })
+
+  it('по умолчанию видны только записи текущей сессии', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { sessionId: 's1' }),
+      makeRun('bgr_2', { sessionId: 's2' }),
+      makeRun('bgr_3', { sessionId: 's3' }),
+    ])
 
     const container = await renderProcesses()
-    await click(container, 'processes-log-toggle-bgr_1')
 
-    for (const testId of ['processes-log-refresh', 'processes-log-hide']) {
-      const button = container.querySelector(`[data-testid="${testId}"]`) as HTMLElement
-      expect(button, `элемент ${testId} не найден`).toBeTruthy()
-      expect(button.className).not.toContain('min-h-10')
-      expect(button.className).not.toContain('min-w-10')
-      expect(button.className).toContain('size-8')
-    }
+    expect(container.querySelector('[data-testid="processes-item-bgr_1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-item-bgr_2"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processes-item-bgr_3"]')).toBeNull()
+  })
+
+  it('тумблер «Весь проект» показывает записи других сессий проекта', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { sessionId: 's1' }),
+      makeRun('bgr_2', { sessionId: 's2' }),
+      makeRun('bgr_3', { sessionId: 's3' }),
+    ])
+
+    const container = await renderProcesses()
+    expect(container.querySelector('[data-testid="processes-whole-project"]')).not.toBeNull()
+
+    await toggleWholeProject(container)
+
+    expect(container.querySelector('[data-testid="processes-item-bgr_1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-item-bgr_2"]')).not.toBeNull()
+    // Чужой проект — не показываем.
+    expect(container.querySelector('[data-testid="processes-item-bgr_3"]')).toBeNull()
+  })
+
+  it('прогон с собственным projectId попадает в скоуп проекта', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { sessionId: 's1' }),
+      makeRun('bgr_4', { sessionId: 's5', projectId: 'p1' }),
+    ])
+
+    const container = await renderProcesses()
+    await toggleWholeProject(container)
+
+    expect(container.querySelector('[data-testid="processes-item-bgr_4"]')).not.toBeNull()
+  })
+
+  it('в режиме выделенного проекта тумблера нет, скоуп всегда проектный', async () => {
+    useUIStore.setState({
+      selectedProjectId: 'p1',
+      activeCenterTabId: null,
+      centerTabs: [],
+    })
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { sessionId: 's1' }),
+      makeRun('bgr_2', { sessionId: 's2' }),
+      makeRun('bgr_3', { sessionId: 's3' }),
+    ])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-whole-project"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processes-item-bgr_1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-item-bgr_2"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-item-bgr_3"]')).toBeNull()
+  })
+
+  it('без сессии и проекта — пустое состояние «Выберите сессию или проект»', async () => {
+    useUIStore.setState({ activeCenterTabId: null, centerTabs: [], selectedProjectId: null })
+
+    const container = await renderProcesses()
+
+    const empty = container.querySelector('[data-testid="processes-no-context"]')
+    expect(empty).not.toBeNull()
+    expect(empty?.textContent).toContain('Select a session or a project')
+    expect(container.querySelector('[data-testid="processes-section-process"]')).toBeNull()
   })
 })
 
@@ -500,11 +664,17 @@ describe('ProcessesTab — терминалы при активной вклад
     // Проект взят из данных вкладки терминала (useActiveProject).
     expect(mocks.listTerminals).toHaveBeenCalledWith({ projectId: 'p1', includeExited: true })
     expect(container.querySelector('[data-testid="terminals-item-t1"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="terminals-item-t2"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="terminals-no-project"]')).toBeNull()
+
+    // Скоуп сессии: терминал чужой сессии скрыт.
+    expect(container.querySelector('[data-testid="terminals-item-t2"]')).toBeNull()
+
+    // «Весь проект» — терминалы всех сессий проекта.
+    await toggleWholeProject(container)
+    expect(container.querySelector('[data-testid="terminals-item-t2"]')).not.toBeNull()
   })
 
-  it('фильтр «только текущая сессия» оставляет терминалы сессии вкладки', async () => {
+  it('скоуп сессии оставляет терминалы только этой сессии', async () => {
     activateTerminalTab()
     mocks.listTerminals.mockResolvedValue({
       terminals: [makeTerminal('t1', { sessionId: 's1' }), makeTerminal('t2', { sessionId: 's2' })],
@@ -515,16 +685,12 @@ describe('ProcessesTab — терминалы при активной вклад
     })
 
     const container = await renderProcesses()
-    expect(container.querySelector('[data-testid="terminals-item-t2"]')).not.toBeNull()
-
-    const toggle = container.querySelector('[data-testid="processes-kind-filter"] [role="switch"]')
-    expect(toggle).not.toBeNull()
-    await act(async () => {
-      ;(toggle as HTMLElement).click()
-    })
-    await flush()
-
     expect(container.querySelector('[data-testid="terminals-item-t1"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="terminals-item-t2"]')).toBeNull()
+
+    await toggleWholeProject(container)
+
+    expect(container.querySelector('[data-testid="terminals-item-t1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="terminals-item-t2"]')).not.toBeNull()
   })
 })

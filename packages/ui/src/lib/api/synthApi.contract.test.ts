@@ -48,7 +48,7 @@ const EXPECTED_API_METHODS = [
   'getSessionReferences', 'getSessionSecrets', 'getSessionSkills', 'getSessionSkillsEffective', 'getSessionStats',
   'getSessionTodos', 'getSessions', 'getSessionsPage', 'getSkill', 'getSkillBundle', 'getSkillBundles',
   'getSkillFile', 'getSkillFiles', 'getSkills', 'getSkillsSettings', 'getSshSettings', 'getStatus',
-  'getStickyNotes', 'getTerminal', 'getTerminalOutput', 'getTerminalSettings', 'getTls', 'getToolsDisabledInfo', 'getToolsPolicyInfo', 'getUpdatesSettings', 'getUser', 'getUsers',
+  'getStickyNotes', 'getTerminal', 'getTerminalForeground', 'getTerminalOutput', 'getTerminalSettings', 'getTls', 'getToolsDisabledInfo', 'getToolsPolicyInfo', 'getUpdatesSettings', 'getUser', 'getUsers',
   'getWebhookDeliveries', 'getWebhookSubscription', 'getWebhookSubscriptions', 'getWorkspacePolicy',
   'getWorkspaceRoot', 'getWorkspaceSetting', 'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate',
   'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings', 'listMemoryFacts',

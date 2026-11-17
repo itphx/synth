@@ -13,6 +13,7 @@ import { PipelineTab } from '../pipelines/PipelineTab'
 import { PipelineRunTab } from '../pipelines/PipelineRunTab'
 import { TerminalView } from '../terminal/TerminalView'
 import { TerminalSessionView } from '../terminal/TerminalSessionView'
+import { ProcessLogTab } from '../processes/ProcessLogTab'
 
 function EmptyState() {
   const { t } = useI18n()
@@ -78,6 +79,9 @@ export function CenterPanel() {
         ) : (
           <TerminalView tab={activeTab} />
         )
+      // Экран «Вывод процесса» (per-run: лог фонового прогона).
+      case 'process-log':
+        return <ProcessLogTab tab={activeTab} />
       default:
         return <EmptyState />
     }

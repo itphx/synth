@@ -1,4 +1,4 @@
-// TerminalsSection: карточки терминалов во вкладке «Фоновые процессы»
+// TerminalsSection: карточки терминалов во вкладке «Процессы»
 // правой панели (PROP-132, Ф4б).
 //
 // Источник истины — серверный список `GET /terminals?project_id=<активный
@@ -8,15 +8,23 @@
 // (как список фоновых прогонов).
 //
 // Карточка: оболочка, каталог (сокращённый), статус, привязанная сессия,
-// бейдж «только просмотр» (`can_write=false`) и действия «Открыть» /
-// «Остановить» (DELETE — с подтверждением).
+// «Время работы», бейдж «только просмотр» (`can_write=false`) и действия
+// «Открыть» / «Остановить» (DELETE — с подтверждением).
+//
+// **Средний клик по карточке** закрывает терминал: завершённый — сразу,
+// живой — после пробы переднего плана (`GET /terminals/:id/foreground`):
+// в фокусе оболочка → закрываем, в фокусе обычная команда → не закрываем
+// (тост), факт неизвестен → спрашиваем человека.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
+import { synthApi } from '@/lib/api/synthApi'
+import type { TerminalForeground } from '@/lib/api/synthApi'
 import { confirm } from '@/lib/confirm'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/formatDate'
+import { formatDuration } from '@/lib/formatStats'
 import { openTerminalTab } from '@/lib/terminalTabs'
 import { shortenPath } from '@/lib/terminalContext'
 import { Icon } from '@/components/icon/Icon'
@@ -24,9 +32,13 @@ import { Button } from '@/components/ui/button'
 import { useNotification } from '@/hooks/useNotification'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
+import { useUIStore } from '@/stores/useUIStore'
+import { PanelSectionEmpty, PanelSectionHeader } from './PanelSection'
 
 /** Период перечитывания списка терминалов, мс (секция открыта). */
 const LIST_REFRESH_MS = 5000
+/** Тикер «время работы» — раз в секунду. */
+const ELAPSED_TICK_MS = 1000
 
 /** Общий стиль бейджа (как в «Памяти»/«Процессах»). */
 const BADGE = 'shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium'
@@ -38,19 +50,35 @@ const STATUS_CLASS: Record<string, string> = {
   exited: 'bg-muted text-muted-foreground',
 }
 
+/**
+ * Время работы терминала: живой — от создания до «сейчас», завершённый —
+ * от создания до последней активности.
+ */
+function terminalUptimeMs(
+  terminal: { createdAt: number; lastActivityAt: number; status: string },
+  now: number,
+): number | undefined {
+  const created = terminal.createdAt
+  if (!created) return undefined
+  if (terminal.status === 'exited') {
+    return Math.max(0, (terminal.lastActivityAt || created) - created)
+  }
+  return Math.max(0, now - created)
+}
+
 export interface TerminalsSectionProps {
   /** Активный проект (список терминалов проекта). */
   projectId: string | null
-  /** Сессия активной вкладки — для фильтра «только текущая сессия». */
-  currentSessionId: string | null
-  /** Фильтр «только текущая сессия». */
-  onlyCurrent: boolean
+  /** Сессия активного контекста — терминалы привязываются к ней. */
+  sessionId: string | null
+  /** Показывать только терминалы этой сессии (иначе — весь проект). */
+  sessionOnly: boolean
 }
 
 export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
   projectId,
-  currentSessionId,
-  onlyCurrent,
+  sessionId,
+  sessionOnly,
 }) => {
   const { t, locale } = useI18n()
   const { notify } = useNotification()
@@ -71,18 +99,28 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
 
   const [busy, setBusy] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
 
   // Список терминалов проекта: первичная загрузка + перечитывание раз в 5 с,
   // пока секция открыта. `includeExited` — вместе с завершёнными: терминал,
   // восстановленный после рестарта ядра, иначе в списке не виден.
   useEffect(() => {
-    if (!projectId) return
-    void loadTerminals({ projectId, includeExited: true })
+    if (!projectId && !sessionId) return
+    const options = projectId
+      ? { projectId, includeExited: true }
+      : { sessionId: sessionId!, includeExited: true }
+    void loadTerminals(options)
     const timer = setInterval(() => {
-      void loadTerminals({ projectId, includeExited: true })
+      void loadTerminals(options)
     }, LIST_REFRESH_MS)
     return () => clearInterval(timer)
-  }, [projectId, loadTerminals])
+  }, [projectId, sessionId, loadTerminals])
+
+  // Тикер «время работы» живых терминалов.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS)
+    return () => clearInterval(timer)
+  }, [])
 
   const terminals = useMemo(() => {
     const list = order
@@ -91,9 +129,9 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
     return list
       .filter((terminal) => (projectId ? terminal.projectId === projectId : true))
       .filter((terminal) =>
-        onlyCurrent && currentSessionId ? terminal.sessionId === currentSessionId : true,
+        sessionOnly && sessionId ? terminal.sessionId === sessionId : true,
       )
-  }, [currentSessionId, onlyCurrent, order, projectId, terminalsById])
+  }, [sessionId, sessionOnly, order, projectId, terminalsById])
 
   /** Открытие терминала в центральной вкладке. */
   const handleOpen = useCallback((terminalId: string) => {
@@ -101,6 +139,18 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
     if (!terminal) return
     openTerminalTab(terminal)
   }, [])
+
+  /** Закрытие терминала: DELETE + закрытие открытой вкладки. */
+  const closeTerminalById = useCallback(
+    async (terminalId: string) => {
+      const closed = await closeTerminal(terminalId)
+      if (!closed) return
+      // Вкладка закрытого терминала больше не нужна.
+      useUIStore.getState().closeTab(`terminal-${terminalId}`)
+      notify({ text: t('terminals.stopped'), type: 'success', category: 'system' })
+    },
+    [closeTerminal, notify, t],
+  )
 
   /** Остановка терминала (сервер убивает PTY) — с подтверждением. */
   const handleStop = useCallback(
@@ -117,12 +167,7 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
       if (!ok) return
       setBusy(terminalId)
       try {
-        await closeTerminal(terminalId)
-        notify({
-          text: t('terminals.stopped'),
-          type: 'success',
-          category: 'system',
-        })
+        await closeTerminalById(terminalId)
       } catch (err) {
         notify({
           text: t('terminals.failed', {
@@ -135,17 +180,85 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
         setBusy(null)
       }
     },
-    [closeTerminal, notify, t],
+    [closeTerminalById, notify, t],
   )
 
-  /** Создание терминала проекта (шапка секции и пустое состояние). */
+  /**
+   * Средний клик по карточке терминала — закрыть его.
+   *
+   * Завершённый терминал закрываем сразу. Живой — сначала проба переднего
+   * плана: в фокусе оболочка → закрываем; в фокусе обычная команда → не
+   * закрываем (тост-предупреждение); факт неизвестен (проба не удалась или
+   * сервер не ответил) → подтверждение человека.
+   */
+  const handleMiddleClick = useCallback(
+    async (terminalId: string) => {
+      if (busy) return
+      setBusy(terminalId)
+      try {
+        const terminal = useTerminalsStore.getState().terminalsById[terminalId]
+        if (!terminal) return
+        const name = terminal.title || terminal.shell || terminal.id
+
+        if (terminal.status === 'exited') {
+          await closeTerminalById(terminalId)
+          return
+        }
+
+        let foreground: TerminalForeground | null = null
+        try {
+          foreground = await synthApi.getTerminalForeground(terminalId)
+        } catch {
+          foreground = null
+        }
+
+        // В терминале идёт обычная команда — закрывать его нельзя.
+        if (foreground && !foreground.isShell) {
+          notify({
+            text: t('terminals.busy', { command: foreground.command ?? '' }),
+            type: 'warning',
+            category: 'system',
+          })
+          return
+        }
+        if (foreground?.isShell) {
+          await closeTerminalById(terminalId)
+          return
+        }
+
+        // Факт неизвестен — спрашиваем человека.
+        const ok = await confirm({
+          title: t('terminals.confirm.stopTitle'),
+          message: t('terminals.confirm.stopMessage', { name }),
+          confirmLabel: t('terminals.action.stop'),
+          variant: 'danger',
+          icon: 'stop',
+        })
+        if (!ok) return
+        await closeTerminalById(terminalId)
+      } catch (err) {
+        notify({
+          text: t('terminals.failed', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+          type: 'error',
+          category: 'error',
+        })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [busy, closeTerminalById, notify, t],
+  )
+
+  /** Создание терминала проекта (шапка секции). */
   const handleCreate = useCallback(async () => {
     if (!projectId) return
     setCreating(true)
     try {
       const created = await createTerminal({
         projectId,
-        ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+        ...(sessionId ? { sessionId } : {}),
       })
       if (!created) {
         notify({
@@ -159,49 +272,47 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
     } finally {
       setCreating(false)
     }
-  }, [createTerminal, currentSessionId, notify, projectId, t])
+  }, [createTerminal, notify, projectId, sessionId, t])
 
-  if (!projectId) {
+  if (!projectId && !sessionId) {
     return (
-      <div
-        className="py-6 text-center text-muted-foreground"
-        data-testid="terminals-no-project"
-      >
-        <Icon name="terminal-box" className="mx-auto mb-2 size-8 opacity-40" />
-        <p className="text-sm">{t('terminals.noProject')}</p>
-      </div>
+      <PanelSectionEmpty
+        icon="terminal-box"
+        title={t('terminals.noProject')}
+        hint={t('terminals.emptyHint')}
+        testId="terminals-no-project"
+      />
     )
   }
 
   return (
     <div className="space-y-2" data-testid="terminals-section">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {t('terminals.title')}
-        </span>
-        <div className="flex shrink-0 items-center gap-1">
-          <span className="text-xs text-muted-foreground" data-testid="terminals-count">
-            {t('terminals.count', { count: terminals.length })}
-          </span>
-          {/* Создание доступно всегда (не только в пустом состоянии): у проекта
-              уже могут быть терминалы, а нужен ещё один. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 shrink-0"
-            onClick={() => void handleCreate()}
-            disabled={creating || !projectId}
-            title={t('terminals.create')}
-            aria-label={t('terminals.create')}
-            data-testid="terminals-create-header"
-          >
-            <Icon
-              name={creating ? 'loader-2' : 'add'}
-              className={cn('size-3.5', creating && 'animate-spin')}
-            />
-          </Button>
-        </div>
-      </div>
+      <PanelSectionHeader
+        title={t('terminals.title')}
+        count={t('terminals.count', { count: terminals.length })}
+        testId="terminals-section"
+        actions={
+          // Создание доступно всегда (не только в пустом состоянии): у проекта
+          // уже могут быть терминалы, а нужен ещё один.
+          projectId ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 shrink-0"
+              onClick={() => void handleCreate()}
+              disabled={creating || !projectId}
+              title={t('terminals.create')}
+              aria-label={t('terminals.create')}
+              data-testid="terminals-create-header"
+            >
+              <Icon
+                name={creating ? 'loader-2' : 'add'}
+                className={cn('size-3.5', creating && 'animate-spin')}
+              />
+            </Button>
+          ) : undefined
+        }
+      />
 
       {loadError && (
         <div
@@ -214,104 +325,112 @@ export const TerminalsSection: React.FC<TerminalsSectionProps> = ({
       )}
 
       {terminals.length === 0 ? (
-        <div className="py-6 text-center text-muted-foreground" data-testid="terminals-empty">
-          <Icon name="terminal-box" className="mx-auto mb-2 size-8 opacity-40" />
-          <p className="text-sm">{t('terminals.empty')}</p>
-          <p className="mt-1 text-xs opacity-80">{t('terminals.emptyHint')}</p>
-          <Button
-            variant="outline-primary"
-            size="sm"
-            className="mt-3"
-            onClick={() => void handleCreate()}
-            disabled={creating}
-            data-testid="terminals-create"
-          >
-            <Icon name="terminal-box" className="size-3.5" />
-            {t('terminals.create')}
-          </Button>
-        </div>
+        <PanelSectionEmpty
+          icon="terminal-box"
+          title={t('terminals.empty')}
+          hint={t('terminals.emptyHint')}
+          testId="terminals-empty"
+        />
       ) : (
         <ul className="space-y-2 min-w-0" data-testid="terminals-list">
-          {terminals.map((terminal) => (
-            <li
-              key={terminal.id}
-              data-testid={`terminals-item-${terminal.id}`}
-              data-status={terminal.status}
-              className="min-w-0 space-y-2 rounded-lg border border-border bg-surface-inset p-3"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <Icon name="terminal-box" className="size-4 shrink-0 text-muted-foreground" />
-                <span
-                  className="min-w-0 flex-1 truncate text-sm font-medium"
-                  title={terminal.title || terminal.shell || terminal.id}
-                >
-                  {terminal.title || terminal.shell || terminal.id}
-                </span>
-                <span
-                  className={cn(
-                    BADGE,
-                    STATUS_CLASS[terminal.status] ?? 'bg-muted text-muted-foreground',
-                  )}
-                  data-testid={`terminals-status-${terminal.id}`}
-                >
-                  {t(`terminal.status.${terminal.status}`)}
-                </span>
-                {terminal.can_write === false && (
+          {terminals.map((terminal) => {
+            const uptimeMs = terminalUptimeMs(terminal, now)
+            return (
+              <li
+                key={terminal.id}
+                data-testid={`terminals-item-${terminal.id}`}
+                data-status={terminal.status}
+                className="min-w-0 space-y-2 rounded-lg border border-border bg-surface-inset p-3"
+                onMouseDown={(event) => {
+                  // Средняя кнопка не должна запускать автоскролл браузера.
+                  if (event.button === 1) event.preventDefault()
+                }}
+                onAuxClick={(event) => {
+                  if (event.button !== 1) return
+                  event.preventDefault()
+                  void handleMiddleClick(terminal.id)
+                }}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Icon name="terminal-box" className="size-4 shrink-0 text-muted-foreground" />
                   <span
-                    className={cn(BADGE, 'bg-surface-muted text-muted-foreground')}
-                    data-testid={`terminals-readonly-${terminal.id}`}
+                    className="min-w-0 flex-1 truncate text-sm font-medium"
+                    title={terminal.title || terminal.shell || terminal.id}
                   >
-                    {t('terminal.readOnly')}
+                    {terminal.title || terminal.shell || terminal.id}
                   </span>
-                )}
-              </div>
+                  <span
+                    className={cn(
+                      BADGE,
+                      STATUS_CLASS[terminal.status] ?? 'bg-muted text-muted-foreground',
+                    )}
+                    data-testid={`terminals-status-${terminal.id}`}
+                  >
+                    {t(`terminal.status.${terminal.status}`)}
+                  </span>
+                  {terminal.can_write === false && (
+                    <span
+                      className={cn(BADGE, 'bg-surface-muted text-muted-foreground')}
+                      data-testid={`terminals-readonly-${terminal.id}`}
+                    >
+                      {t('terminal.readOnly')}
+                    </span>
+                  )}
+                </div>
 
-              <dl className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-muted-foreground min-w-0">
-                <Row label={t('terminals.row.cwd')} value={shortenPath(terminal.cwd)} mono />
-                <Row label={t('terminals.row.shell')} value={terminal.shell} mono />
-                <Row
-                  label={t('terminals.row.session')}
-                  value={
-                    terminal.sessionId
-                      ? (sessionNames.get(terminal.sessionId) ?? terminal.sessionId)
-                      : t('terminals.row.noSession')
-                  }
-                  mono
-                />
-                {terminal.lastActivityAt > 0 && (
+                <dl className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-muted-foreground min-w-0">
+                  <Row label={t('terminals.row.cwd')} value={shortenPath(terminal.cwd)} mono />
+                  <Row label={t('terminals.row.shell')} value={terminal.shell} mono />
                   <Row
-                    label={t('terminals.row.activity')}
-                    value={formatDateTime(new Date(terminal.lastActivityAt).toISOString(), locale)}
+                    label={t('terminals.row.session')}
+                    value={
+                      terminal.sessionId
+                        ? (sessionNames.get(terminal.sessionId) ?? terminal.sessionId)
+                        : t('terminals.row.noSession')
+                    }
+                    mono
                   />
-                )}
-              </dl>
+                  {uptimeMs !== undefined && (
+                    <Row
+                      label={t('terminals.row.uptime')}
+                      value={formatDuration(uptimeMs)}
+                    />
+                  )}
+                  {terminal.lastActivityAt > 0 && (
+                    <Row
+                      label={t('terminals.row.activity')}
+                      value={formatDateTime(new Date(terminal.lastActivityAt).toISOString(), locale)}
+                    />
+                  )}
+                </dl>
 
-              <div className="flex flex-wrap items-center justify-end gap-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleOpen(terminal.id)}
-                  title={t('terminals.action.open')}
-                  aria-label={t('terminals.action.open')}
-                  data-testid={`terminals-open-${terminal.id}`}
-                >
-                  <Icon name="external-link" className="size-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="hover:text-destructive"
-                  onClick={() => void handleStop(terminal.id)}
-                  disabled={busy === terminal.id}
-                  title={t('terminals.action.stop')}
-                  aria-label={t('terminals.action.stop')}
-                  data-testid={`terminals-stop-${terminal.id}`}
-                >
-                  <Icon name="stop" className="size-4" />
-                </Button>
-              </div>
-            </li>
-          ))}
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleOpen(terminal.id)}
+                    title={t('terminals.action.open')}
+                    aria-label={t('terminals.action.open')}
+                    data-testid={`terminals-open-${terminal.id}`}
+                  >
+                    <Icon name="external-link" className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="hover:text-destructive"
+                    onClick={() => void handleStop(terminal.id)}
+                    disabled={busy === terminal.id}
+                    title={t('terminals.action.stop')}
+                    aria-label={t('terminals.action.stop')}
+                    data-testid={`terminals-stop-${terminal.id}`}
+                  >
+                    <Icon name="stop" className="size-4" />
+                  </Button>
+                </div>
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>

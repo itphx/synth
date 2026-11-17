@@ -3,6 +3,7 @@ import {
   createTerminalFrameParser,
   terminalsApi,
   toTerminalDto,
+  toTerminalForeground,
   toTerminalPatch,
 } from './terminals'
 
@@ -207,6 +208,54 @@ describe('terminalsApi — DTO терминала', () => {
     expect(urlOf(0)).toBe('/api/v2/terminals/term_1')
     expect(dto.id).toBe('term_1')
     expect(dto.projectId).toBe('p1')
+  })
+})
+
+describe('terminalsApi — проба переднего плана терминала', () => {
+  it('snake_case приводится к camelCase', () => {
+    const foreground = toTerminalForeground({
+      shell_pid: 4242,
+      foreground_pgid: 4300,
+      command: 'vim',
+      is_shell: false,
+    })
+
+    expect(foreground).toEqual({
+      shellPid: 4242,
+      foregroundPgid: 4300,
+      command: 'vim',
+      isShell: false,
+    })
+  })
+
+  it('camelCase принимается так же', () => {
+    const foreground = toTerminalForeground({ shellPid: 42, isShell: true })
+
+    expect(foreground).toEqual({ shellPid: 42, isShell: true })
+  })
+
+  it('без is_shell факт неизвестен (null)', () => {
+    expect(toTerminalForeground({ command: 'vim' })).toBeNull()
+    expect(toTerminalForeground(null)).toBeNull()
+  })
+
+  it('ответ сервера разбирается: foreground = null — «неизвестно»', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ foreground: null }))
+
+    const foreground = await terminalsApi.getForeground('term_1')
+
+    expect(urlOf(0)).toBe('/api/v2/terminals/term_1/foreground')
+    expect(foreground).toBeNull()
+  })
+
+  it('ответ сервера разбирается: объект переднего плана', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ foreground: { shell_pid: 7, command: 'npm', is_shell: false } }),
+    )
+
+    const foreground = await terminalsApi.getForeground('term_1')
+
+    expect(foreground).toEqual({ shellPid: 7, command: 'npm', isShell: false })
   })
 })
 

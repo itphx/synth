@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   create: vi.fn(),
   close: vi.fn(),
+  getTerminalForeground: vi.fn(),
   openTerminalTab: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
@@ -45,6 +46,9 @@ vi.mock('@/lib/api/terminals', async (importOriginal) => {
     },
   }
 })
+vi.mock('@/lib/api/synthApi', () => ({
+  synthApi: { getTerminalForeground: mocks.getTerminalForeground },
+}))
 vi.mock('@/lib/terminalTabs', () => ({ openTerminalTab: mocks.openTerminalTab }))
 vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 vi.mock('@/hooks/useNotification', () => ({
@@ -56,6 +60,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TerminalsSection } from './TerminalsSection'
 import { useTerminalsStore } from '@/stores/terminalsStore'
+import { useUIStore } from '@/stores/useUIStore'
 import type { TerminalDto } from '@/lib/api/terminals'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -95,7 +100,10 @@ async function flush(times = 3): Promise<void> {
   }
 }
 
-async function renderSection(projectId: string | null = 'p1'): Promise<HTMLElement> {
+async function renderSection(
+  options: { projectId?: string | null; sessionId?: string | null; sessionOnly?: boolean } = {},
+): Promise<HTMLElement> {
+  const { projectId = 'p1', sessionId = 's1', sessionOnly = false } = options
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -104,7 +112,7 @@ async function renderSection(projectId: string | null = 'p1'): Promise<HTMLEleme
   await act(async () => {
     root.render(
       <I18nProvider>
-        <TerminalsSection projectId={projectId} currentSessionId="s1" onlyCurrent={false} />
+        <TerminalsSection projectId={projectId} sessionId={sessionId} sessionOnly={sessionOnly} />
       </I18nProvider>,
     )
   })
@@ -123,6 +131,18 @@ async function click(container: HTMLElement, testId: string): Promise<void> {
   await flush()
 }
 
+/** Средний клик по карточке терминала. */
+async function middleClick(container: HTMLElement, terminalId: string): Promise<void> {
+  const card = container.querySelector(
+    `[data-testid="terminals-item-${terminalId}"]`,
+  ) as HTMLElement | null
+  expect(card, `карточка ${terminalId} не найдена`).toBeTruthy()
+  await act(async () => {
+    card!.dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true }))
+  })
+  await flush()
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.list.mockResolvedValue({
@@ -133,6 +153,9 @@ beforeEach(() => {
     nextOffset: null,
   })
   mocks.create.mockResolvedValue(makeTerminal('t-new'))
+  mocks.close.mockResolvedValue(undefined)
+  mocks.getTerminalForeground.mockResolvedValue({ isShell: true })
+  mocks.confirm.mockResolvedValue(true)
   useTerminalsStore.setState({
     terminalsById: {},
     order: [],
@@ -140,6 +163,7 @@ beforeEach(() => {
     loading: false,
     error: null,
   })
+  useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
 })
 
 afterEach(async () => {
@@ -165,7 +189,6 @@ describe('TerminalsSection: создание терминала из шапки 
     const container = await renderSection()
 
     expect(container.querySelector('[data-testid="terminals-list"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="terminals-create"]')).toBeNull()
     const headerButton = container.querySelector('[data-testid="terminals-create-header"]')
     expect(headerButton, 'кнопки создания в шапке нет').not.toBeNull()
     expect((headerButton as HTMLButtonElement).disabled).toBe(false)
@@ -177,11 +200,11 @@ describe('TerminalsSection: создание терминала из шапки 
     expect(mocks.openTerminalTab).toHaveBeenCalledWith(makeTerminal('t-new'))
   })
 
-  it('в пустом состоянии остаются обе кнопки — в шапке и в пустом блоке', async () => {
+  it('в пустом состоянии кнопки создания в блоке нет — остаётся только шапка', async () => {
     const container = await renderSection()
 
     expect(container.querySelector('[data-testid="terminals-empty"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="terminals-create"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="terminals-create"]')).toBeNull()
     expect(container.querySelector('[data-testid="terminals-create-header"]')).not.toBeNull()
   })
 
@@ -220,8 +243,8 @@ describe('TerminalsSection: создание терминала из шапки 
     expect(headerButton.innerHTML).not.toContain('animate-spin')
   })
 
-  it('без проекта шапки нет — только подсказка выбрать проект', async () => {
-    const container = await renderSection(null)
+  it('без проекта и сессии шапки нет — только подсказка выбрать проект', async () => {
+    const container = await renderSection({ projectId: null, sessionId: null })
 
     expect(container.querySelector('[data-testid="terminals-no-project"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="terminals-create-header"]')).toBeNull()
@@ -249,5 +272,120 @@ describe('TerminalsSection: создание терминала из шапки 
       container.querySelector('[data-testid="terminals-status-t-restored"]')?.textContent,
     ).toBe('finished')
     expect(container.querySelector('[data-testid="terminals-open-t-restored"]')).not.toBeNull()
+  })
+
+  it('в карточке есть строка «Время работы»', async () => {
+    mocks.list.mockResolvedValue({
+      terminals: [makeTerminal('t1')],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      nextOffset: null,
+    })
+    const container = await renderSection()
+
+    expect(container.textContent).toContain('Uptime')
+  })
+})
+
+describe('TerminalsSection: средний клик по терминалу', () => {
+  /** Терминал в списке (живой). */
+  function withTerminal(id = 't1', overrides: Partial<TerminalDto> = {}): void {
+    mocks.list.mockResolvedValue({
+      terminals: [makeTerminal(id, overrides)],
+      total: 1,
+      offset: 0,
+      limit: 50,
+      nextOffset: null,
+    })
+  }
+
+  it('оболочка на переднем плане → терминал закрывается, вкладка закрыта', async () => {
+    withTerminal()
+    useUIStore.setState({
+      centerTabs: [
+        { id: 'terminal-t1', type: 'terminal', title: 't', data: { terminalId: 't1' } },
+      ],
+      activeCenterTabId: 'terminal-t1',
+    })
+    const container = await renderSection()
+
+    await middleClick(container, 't1')
+
+    expect(mocks.getTerminalForeground).toHaveBeenCalledWith('t1')
+    expect(mocks.close).toHaveBeenCalledWith('t1')
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    expect(useUIStore.getState().centerTabs.find((tab) => tab.id === 'terminal-t1')).toBeUndefined()
+  })
+
+  it('в терминале идёт команда → терминал не закрывается, тост-предупреждение', async () => {
+    withTerminal()
+    mocks.getTerminalForeground.mockResolvedValue({ isShell: false, command: 'npm' })
+    const container = await renderSection()
+
+    await middleClick(container, 't1')
+
+    expect(mocks.close).not.toHaveBeenCalled()
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'The terminal is running "npm"', type: 'warning' }),
+    )
+  })
+
+  it('факт неизвестен (null) → подтверждение человека, без согласия терминал жив', async () => {
+    withTerminal()
+    mocks.getTerminalForeground.mockResolvedValue(null)
+    mocks.confirm.mockResolvedValue(false)
+    const container = await renderSection()
+
+    await middleClick(container, 't1')
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.close).not.toHaveBeenCalled()
+  })
+
+  it('факт неизвестен (null) и согласие → терминал закрывается', async () => {
+    withTerminal()
+    mocks.getTerminalForeground.mockResolvedValue(null)
+    const container = await renderSection()
+
+    await middleClick(container, 't1')
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.close).toHaveBeenCalledWith('t1')
+  })
+
+  it('ошибка пробы переднего плана → подтверждение человека', async () => {
+    withTerminal()
+    mocks.getTerminalForeground.mockRejectedValue(new Error('нет связи'))
+    const container = await renderSection()
+
+    await middleClick(container, 't1')
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('завершённый терминал закрывается сразу — без пробы и подтверждения', async () => {
+    withTerminal('t-exited', { status: 'exited' })
+    const container = await renderSection()
+
+    await middleClick(container, 't-exited')
+
+    expect(mocks.getTerminalForeground).not.toHaveBeenCalled()
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    expect(mocks.close).toHaveBeenCalledWith('t-exited')
+  })
+
+  it('средняя кнопка не запускает автоскролл (mousedown отменён)', async () => {
+    withTerminal()
+    const container = await renderSection()
+    const card = container.querySelector('[data-testid="terminals-item-t1"]') as HTMLElement
+
+    const event = new MouseEvent('mousedown', { button: 1, bubbles: true, cancelable: true })
+    await act(async () => {
+      card.dispatchEvent(event)
+    })
+
+    expect(event.defaultPrevented).toBe(true)
   })
 })

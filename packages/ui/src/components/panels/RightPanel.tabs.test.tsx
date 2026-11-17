@@ -165,3 +165,59 @@ describe('RightPanel — порядок вкладок (ADR-071)', () => {
     expect(useUIStore.getState().rightPanelTab).toBe('memory')
   })
 })
+
+describe('RightPanel — выделенный проект (сессии нет)', () => {
+  const tabButton = (container: HTMLElement, id: string): HTMLButtonElement =>
+    container.querySelector(`[data-tab-id="${id}"]`) as HTMLButtonElement
+
+  it('сессионные вкладки недоступны, проектные — доступны', async () => {
+    useUIStore.setState({ selectedProjectId: 'p1' })
+    const container = await renderRightPanel()
+
+    for (const id of ['params', 'context', 'stats', 'memory', 'references', 'secrets']) {
+      const button = tabButton(container, id)
+      expect(button, `вкладка ${id}`).toBeTruthy()
+      expect(button.disabled, `вкладка ${id} должна быть недоступна`).toBe(true)
+      expect(button.getAttribute('aria-disabled')).toBe('true')
+      expect(button.getAttribute('title')).toBe(enDict['rightPanel.tab.requiresSession'])
+    }
+
+    for (const id of ['project', 'scheduler', 'processes']) {
+      const button = tabButton(container, id)
+      expect(button, `вкладка ${id}`).toBeTruthy()
+      expect(button.disabled, `вкладка ${id} должна быть доступна`).toBe(false)
+      expect(button.getAttribute('aria-disabled')).toBeNull()
+      expect(button.getAttribute('title')).not.toBe(enDict['rightPanel.tab.requiresSession'])
+    }
+  })
+
+  it('активная сессионная вкладка переключается на «Проект»', async () => {
+    useUIStore.setState({ rightPanelTab: 'context', selectedProjectId: 'p1' })
+    await renderRightPanel()
+
+    expect(useUIStore.getState().rightPanelTab).toBe('project')
+  })
+
+  it('сессионная вкладка не переключается кликом (нужна сессия)', async () => {
+    useUIStore.setState({ rightPanelTab: 'project', selectedProjectId: 'p1' })
+    const container = await renderRightPanel()
+
+    const sessionButton = tabButton(container, 'params')
+    await act(async () => {
+      sessionButton.click()
+    })
+
+    expect(useUIStore.getState().rightPanelTab).toBe('project')
+  })
+
+  it('без выделенного проекта поведение вкладок прежнее', async () => {
+    useUIStore.setState({ rightPanelTab: 'context', selectedProjectId: null })
+    const container = await renderRightPanel()
+
+    expect(useUIStore.getState().rightPanelTab).toBe('context')
+    const sessionButton = tabButton(container, 'params')
+    expect(sessionButton.disabled).toBe(false)
+    expect(sessionButton.getAttribute('aria-disabled')).toBeNull()
+    expect(sessionButton.getAttribute('title')).toBe(enDict['rightPanel.tab.session'])
+  })
+})

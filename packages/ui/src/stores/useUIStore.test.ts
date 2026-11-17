@@ -69,6 +69,68 @@ describe('useUIStore.openTab', () => {
   })
 })
 
+// Выделенный проект (runtime-навигация): снимается при переходе в сессию.
+describe('useUIStore.selectedProjectId', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({
+      centerTabs: [],
+      activeCenterTabId: null,
+      selectedProjectId: null,
+    })
+  })
+
+  it('selectProject выделяет проект и снимает выделение', () => {
+    useUIStore.getState().selectProject('p1')
+    expect(useUIStore.getState().selectedProjectId).toBe('p1')
+
+    useUIStore.getState().selectProject(null)
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+  })
+
+  it('открытие chat-таба снимает выделение проекта', () => {
+    useUIStore.getState().selectProject('p1')
+    useUIStore.getState().openTab(tab('chat-1'))
+
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+  })
+
+  it('открытие существующей chat-вкладки тоже снимает выделение', () => {
+    useUIStore.setState({ centerTabs: [tab('chat-1')] })
+    useUIStore.getState().selectProject('p1')
+    useUIStore.getState().openTab(tab('chat-1'))
+
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+  })
+
+  it('переключение на chat-таб снимает выделение проекта', () => {
+    useUIStore.setState({ centerTabs: [tab('chat-1')] })
+    useUIStore.getState().selectProject('p1')
+    useUIStore.getState().setActiveCenterTab('chat-1')
+
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+  })
+
+  it('не-chat вкладка выделение не снимает', () => {
+    useUIStore.setState({
+      centerTabs: [
+        { id: 'f1', type: 'file-viewer', title: 'a', data: { projectId: 'p1', filePath: 'a.ts' } },
+      ],
+    })
+    useUIStore.getState().selectProject('p1')
+    useUIStore.getState().setActiveCenterTab('f1')
+
+    expect(useUIStore.getState().selectedProjectId).toBe('p1')
+  })
+
+  it('выделение не персистится (runtime-навигация)', () => {
+    useUIStore.getState().selectProject('p1')
+
+    const raw = storage.getItem('synth-ui-settings') ?? ''
+    expect(raw).not.toContain('selectedProjectId')
+  })
+})
+
 describe('useUIStore.onlyActiveProject (variant C)', () => {
   beforeEach(() => {
     storage.clear()

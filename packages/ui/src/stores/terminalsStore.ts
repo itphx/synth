@@ -50,8 +50,8 @@ export interface TerminalsState {
   load: (options?: TerminalListOptions) => Promise<void>
   /** Создать терминал (вернёт DTO или `null` при ошибке). */
   create: (input: CreateTerminalInput) => Promise<TerminalDto | null>
-  /** Закрыть терминал (сервер убивает PTY). */
-  close: (id: string) => Promise<void>
+  /** Закрыть терминал (сервер убивает PTY). `true` — терминал закрыт. */
+  close: (id: string) => Promise<boolean>
   /** Отправить ввод пользователя. */
   sendInput: (id: string, data: string) => Promise<void>
   /** Сообщить серверу новую геометрию терминала. */
@@ -167,8 +167,10 @@ export const useTerminalsStore = create<TerminalsState>()((set, get) => ({
     try {
       await terminalsApi.close(id)
       get().applyEvent('terminal.deleted', { terminal_id: id })
+      return true
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })
+      return false
     }
   },
 

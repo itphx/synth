@@ -8,8 +8,12 @@ import { useChatStore } from '@/stores/chatStore'
 import { usePermissionStore } from '@/stores/permissionStore'
 import { useNotificationStore } from '@/stores/notificationStore'
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
+import { useProcessesStore } from '@/stores/processesStore'
+import { useTerminalsStore } from '@/stores/terminalsStore'
+import { countSessionActivity, type SessionActivityCounts } from '@/lib/sessionActivity'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
+import type { IconName } from '@/components/icon/Icon'
 import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
 import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
@@ -31,6 +35,73 @@ import type { ConfirmAction } from './types'
 import { GroupNode } from './GroupNode'
 
 // ---- Projects tab ----
+
+/** Период обновления реестра активных прогонов (значки в дереве), мс. */
+const ACTIVITY_RUNS_REFRESH_MS = 30_000
+/** Период обновления списка живых терминалов (значки в дереве), мс. */
+const ACTIVITY_TERMINALS_REFRESH_MS = 60_000
+
+/**
+ * Значки активной фоновой работы в строке сессии.
+ *
+ * Показывают только то, что идёт **сейчас**: выполняющиеся фоновые процессы
+ * и саб-агенты и живые терминалы сессии. Цвет — не единственный сигнал: у
+ * каждой иконки есть текстовая подпись (`aria-label` + тултип) с числом.
+ */
+function SessionActivityBadge({ activity }: { activity?: SessionActivityCounts }) {
+  const { t } = useI18n()
+  if (!activity) return null
+
+  const items: Array<{
+    key: keyof SessionActivityCounts
+    icon: IconName
+    color: string
+    labelKey: string
+  }> = [
+    {
+      key: 'processes',
+      icon: 'command',
+      color: 'text-status-caution',
+      labelKey: 'leftPanel.activity.process',
+    },
+    {
+      key: 'subagents',
+      icon: 'robot-2',
+      color: 'text-primary',
+      labelKey: 'leftPanel.activity.subagent',
+    },
+    {
+      key: 'terminals',
+      icon: 'terminal-box',
+      color: 'text-status-success',
+      labelKey: 'leftPanel.activity.terminal',
+    },
+  ]
+
+  const visible = items.filter((item) => (activity[item.key] ?? 0) > 0)
+  if (visible.length === 0) return null
+
+  return (
+    <span className="flex items-center gap-1" data-testid="session-activity">
+      {visible.map((item) => {
+        const count = activity[item.key] ?? 0
+        const label = t(item.labelKey, { count })
+        return (
+          <Icon
+            key={item.key}
+            name={item.icon}
+            className={cn('h-3 w-3 shrink-0', item.color)}
+            role="img"
+            aria-label={label}
+            title={label}
+            data-testid={`session-activity-${item.key}`}
+          />
+        )
+      })}
+    </span>
+  )
+}
+
 export function ProjectsTab() {
   const { t } = useI18n()
   const projects = useProjectsStore(s => s.projects)
@@ -51,6 +122,8 @@ export function ProjectsTab() {
   const { isTouch } = useDevice()
   const collapsedProjects = useUIStore((s) => s.collapsedProjects)
   const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
+  const selectedProjectId = useUIStore((s) => s.selectedProjectId)
+  const selectProject = useUIStore((s) => s.selectProject)
   const openTab = useUIStore((s) => s.openTab)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
@@ -65,6 +138,13 @@ export function ProjectsTab() {
   const requestsBySession = usePermissionStore((s) => s.requestsBySession)
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
+  // Фоновая активность сессий: значки в дереве (процессы, саб-агенты,
+  // терминалы). Реестры подгружаются уже при монтировании панели — значки
+  // видны до открытия панели «Процессы».
+  const loadActiveRuns = useProcessesStore((s) => s.loadActive)
+  const loadTerminals = useTerminalsStore((s) => s.load)
+  const runsById = useProcessesStore((s) => s.byId)
+  const terminalsById = useTerminalsStore((s) => s.terminalsById)
   const isOffline = useHybridStore(selectIsOffline)
   const hybridEnabled = useHybridStore((s) => s.enabled)
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
@@ -88,6 +168,59 @@ export function ProjectsTab() {
   }, [forwardMode.active])
 
   useEffect(() => { loadProjects(); loadSessions() }, [loadProjects, loadSessions])
+
+  /**
+   * Фоновая активность: активные прогоны и живые терминалы.
+   *
+   * Подгружаются при монтировании панели и обновляются таймерами (прогоны —
+   * раз в 30 с, терминалы — раз в 60 с). Live-события `terminal.*`/
+   * `process.*`/`child.*` обновляют сторы сами — значки появляются сразу.
+   */
+  useEffect(() => {
+    void loadActiveRuns()
+    void loadTerminals()
+    const runsTimer = setInterval(() => {
+      void loadActiveRuns()
+    }, ACTIVITY_RUNS_REFRESH_MS)
+    const terminalsTimer = setInterval(() => {
+      void loadTerminals()
+    }, ACTIVITY_TERMINALS_REFRESH_MS)
+    return () => {
+      clearInterval(runsTimer)
+      clearInterval(terminalsTimer)
+    }
+  }, [loadActiveRuns, loadTerminals])
+
+  /** Счётчики активной фоновой работы по сессиям. */
+  const sessionActivity = useMemo(
+    () => countSessionActivity(Object.values(runsById), Object.values(terminalsById)),
+    [runsById, terminalsById],
+  )
+
+  /**
+   * Выделение не должно «висеть» после удаления проекта: если выделенного
+   * проекта больше нет в списке — снимаем выделение (иначе панели остались
+   * бы в проектном контексте удалённого проекта).
+   */
+  useEffect(() => {
+    const selected = useUIStore.getState().selectedProjectId
+    if (!selected) return
+    if (projects.some((p) => p.id === selected)) return
+    // Список ещё грузится — выделение сбрасывать рано (проект мог просто
+    // не попасть в первую страницу до перезагрузки списка).
+    if (useProjectsStore.getState().loading) return
+    useUIStore.getState().selectProject(null)
+  }, [projects])
+
+  /**
+   * Клик по строке проекта — выделение проекта (повторный клик снимает).
+   * В bulk-режиме и в режиме пересылки клик по проекту ничего не меняет.
+   */
+  const handleProjectClick = useCallback((projectId: string) => {
+    if (selectionMode) return
+    if (forwardMode.active) return
+    selectProject(useUIStore.getState().selectedProjectId === projectId ? null : projectId)
+  }, [forwardMode.active, selectProject, selectionMode])
 
   useEffect(() => {
     if (projects.length === 0) return
@@ -240,7 +373,12 @@ export function ProjectsTab() {
       // в фоне). У закрытой — undefined, чтобы работал класс TreeNode (серая иконка).
       iconColor: (isTabOpen || isActive) ? resolveIconColor(session.color) : undefined,
       subtitle: formatRelativeTime(session.updated_at),
-      badge: <OriginBadge origin={session.origin} />,
+      badge: (
+        <>
+          <OriginBadge origin={session.origin} />
+          <SessionActivityBadge activity={sessionActivity.get(session.id)} />
+        </>
+      ),
       isSelected: selectedIds.has(session.id),
       isTabOpen,
       isActive,
@@ -329,6 +467,8 @@ export function ProjectsTab() {
         if (selectionMode) { toggleSelected(session.id); return }
         if (pendingDeleteRef.current.has(session.id)) return
         clearSessionUnread(session.id)
+        // Переход в сессионный контекст снимает выделение проекта.
+        selectProject(null)
         openTab({ id: `chat-${session.id}`, type: 'chat', title: session.name || session.id, data: { sessionId: session.id, projectId: session.project_id || undefined } })
       },
     }
@@ -583,6 +723,8 @@ export function ProjectsTab() {
             origin={project.origin}
             visibility={project.visibility}
             offline={isOffline}
+            isActive={selectedProjectId === project.id}
+            onClick={() => handleProjectClick(project.id)}
             onCreateSession={() => void handleCreateSession(project.id, project.origin, project.origin ?? 'local')}
             projectActions={projectActions}
             onDropSession={async (sessionId) => { await moveSession(sessionId, project.id) }}

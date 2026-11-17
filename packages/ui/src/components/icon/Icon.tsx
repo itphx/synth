@@ -27,6 +27,7 @@ import {
   RiCloseLine,
   RiCodeBoxLine,
   RiCodeSSlashLine,
+  RiCommandLine,
   RiCornerUpRightLine,
   RiComputerLine,
   RiCpuLine,
@@ -152,6 +153,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string; style?: 
   'close': RiCloseLine,
   'code-box': RiCodeBoxLine,
   'code-s-slash': RiCodeSSlashLine,
+  'command': RiCommandLine,
   'computer': RiComputerLine,
   'corner-up-right': RiCornerUpRightLine,
   'cpu': RiCpuLine,
@@ -253,6 +255,13 @@ export type IconName = keyof typeof iconMap
 
 export interface IconProps extends React.ComponentPropsWithoutRef<'svg'> {
   name: IconName
+  /**
+   * Подпись иконки (тултип).
+   *
+   * В типах SVG-атрибутов React `title` нет, хотя сам атрибут валиден и
+   * браузер показывает по нему подсказку — поэтому объявляем его явно.
+   */
+  title?: string
 }
 
 /** Проверка, что строка — валидное имя иконки из реестра (без `as never`). */

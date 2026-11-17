@@ -27,6 +27,7 @@ vi.hoisted(() => {
 import { useActiveProject, type ActiveProjectInfo } from './useActiveProject'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useProjectsStore } from '@/stores/projectsStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -56,6 +57,8 @@ const setTabs = (tabs: CenterTab[], activeId: string | null) => {
 beforeEach(() => {
   captured = null
   useSessionsStore.setState({ sessions: [] })
+  useProjectsStore.setState({ projects: [] })
+  useUIStore.setState({ selectedProjectId: null })
   setTabs([], null)
 })
 
@@ -134,6 +137,30 @@ describe('useActiveProject', () => {
     expect(captured).toEqual({ projectId: null, source: 'session', sessionId: null })
   })
 
+  it('process-log → projectId и sessionId прогона, source session', async () => {
+    setTabs(
+      [
+        {
+          id: 'process-bgr_1',
+          type: 'process-log',
+          title: 'p',
+          data: { processRunId: 'bgr_1', projectId: 'p5', sessionId: 's5' },
+        },
+      ],
+      'process-bgr_1',
+    )
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: 'p5', source: 'session', sessionId: 's5' })
+  })
+
+  it('process-log без проекта и сессии → всё null, source session', async () => {
+    setTabs([{ id: 'process-bgr_2', type: 'process-log', title: 'p', data: { processRunId: 'bgr_2' } }], 'process-bgr_2')
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: null, source: 'session', sessionId: null })
+  })
+
   it('нет активной вкладки → всё null', async () => {
     setTabs([], null)
     await renderProbe()
@@ -147,5 +174,46 @@ describe('useActiveProject', () => {
     await renderProbe()
 
     expect(captured).toEqual({ projectId: 'pf', source: 'session', sessionId: 'sx' })
+  })
+})
+
+describe('useActiveProject — выделенный проект (левая панель)', () => {
+  it('выделенный проект важнее активной chat-вкладки → source project', async () => {
+    useProjectsStore.setState({ projects: [{ id: 'p1' } as never] })
+    useSessionsStore.setState({ sessions: [{ id: 's1', project_id: 'p1' } as never] })
+    useUIStore.setState({ selectedProjectId: 'p1' })
+    setTabs([{ id: 'chat-s1', type: 'chat', title: 'c', data: { sessionId: 's1' } }], 'chat-s1')
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: 'p1', source: 'project', sessionId: null })
+  })
+
+  it('выделение без активного центра-таба → source project', async () => {
+    useProjectsStore.setState({ projects: [{ id: 'p2' } as never] })
+    useUIStore.setState({ selectedProjectId: 'p2' })
+    setTabs([], null)
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: 'p2', source: 'project', sessionId: null })
+  })
+
+  it('список проектов не загружен — проект узнаём по сессиям', async () => {
+    useProjectsStore.setState({ projects: [] })
+    useSessionsStore.setState({ sessions: [{ id: 's1', project_id: 'p9' } as never] })
+    useUIStore.setState({ selectedProjectId: 'p9' })
+    setTabs([], null)
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: 'p9', source: 'project', sessionId: null })
+  })
+
+  it('выделенного проекта больше нет в списке → прежняя логика активной вкладки', async () => {
+    useProjectsStore.setState({ projects: [{ id: 'other' } as never] })
+    useSessionsStore.setState({ sessions: [{ id: 's1', project_id: 'p1' } as never] })
+    useUIStore.setState({ selectedProjectId: 'ghost' })
+    setTabs([{ id: 'chat-s1', type: 'chat', title: 'c', data: { sessionId: 's1' } }], 'chat-s1')
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: 'p1', source: 'session', sessionId: 's1' })
   })
 })

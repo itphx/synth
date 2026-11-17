@@ -133,6 +133,24 @@ describe('WorkModal: вкладки рабочего окна', () => {
     expect(body.querySelector('[data-testid="work-modal-board-column-c1"]')).not.toBeNull()
   })
 
+  // ToDo — сессионная сущность: без сессии (выделенный проект) вкладки нет.
+  it('без сессии вкладка ToDo скрыта', async () => {
+    await render(<WorkModal open onOpenChange={() => {}} projectId="p1" initialTab="board" testId="wm" />)
+
+    const todosTab = [...document.querySelectorAll('button[role="tab"]')].find(
+      (b) => b.textContent === 'ToDo',
+    )
+    expect(todosTab).toBeUndefined()
+    expect(mocks.getSessionTodos).not.toHaveBeenCalled()
+  })
+
+  it('без сессии initialTab=todos открывает «Доску»', async () => {
+    await render(<WorkModal open onOpenChange={() => {}} projectId="p1" initialTab="todos" testId="wm" />)
+
+    expect(document.querySelector('[data-testid="work-modal-body-board"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="work-modal-body-todos"]')).toBeNull()
+  })
+
   it('переключение вкладки «Статистика» показывает счётчики', async () => {
     await render(<WorkModal open onOpenChange={() => {}} projectId="p1" initialTab="board" testId="wm" />)
     const statsTab = [...document.querySelectorAll('button[role="tab"]')].find(

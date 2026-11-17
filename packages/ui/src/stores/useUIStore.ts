@@ -80,6 +80,8 @@ export type CenterTabType =
   | 'pipeline-run'
   // PROP-132: вкладка терминала (интерактивная shell-сессия).
   | 'terminal'
+  // Экран «Вывод процесса» (per-run: лог фонового прогона).
+  | 'process-log'
 
 export interface CenterTab {
   id: string
@@ -97,6 +99,8 @@ export interface CenterTab {
     runId?: string
     /** PROP-132: id терминала (вкладка «Терминал»). */
     terminalId?: string
+    /** id фонового прогона (вкладка «Вывод процесса»). */
+    processRunId?: string
   }
   editingState?: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 }
@@ -213,6 +217,19 @@ interface UIStore {
   setRightPanelTab: (tab: string) => void
   collapsedProjects: Set<string>
   toggleProjectCollapse: (projectId: string) => void
+
+  /**
+   * Выделенный проект в левой панели (runtime-навигация, **не персистится**).
+   *
+   * Выделение переключает контекст панелей на проект: `useActiveProject`
+   * отдаёт его вместо проекта активного центр-таба, а в правой панели
+   * сессионные вкладки становятся недоступны («Нужна сессия»).
+   * Снимается при переходе в сессионный контекст (открытие/переключение
+   * на chat-таб) — см. `openTab`/`setActiveCenterTab`.
+   */
+  selectedProjectId: string | null
+  /** Выделить проект (id) или снять выделение (null). */
+  selectProject: (id: string | null) => void
 
   /** Вкладки Files/Git: показывать только проект активного контекста (сессия/файл/коммит). */
   onlyActiveProject: boolean
@@ -449,6 +466,9 @@ export const useUIStore = create<UIStore>()(
           return { collapsedProjects: next }
         }),
 
+      selectedProjectId: null,
+      selectProject: (id) => set({ selectedProjectId: id }),
+
       onlyActiveProject: false,
       setOnlyActiveProject: (value) => set({ onlyActiveProject: value }),
 
@@ -523,15 +543,24 @@ export const useUIStore = create<UIStore>()(
       openTab: (tab) =>
         set((state) => {
           const existingIdx = state.centerTabs.findIndex((t) => t.id === tab.id)
+          // Переход в сессионный контекст снимает выделение проекта.
+          const selectedProjectId =
+            tab.type === 'chat' && tab.data?.sessionId ? null : state.selectedProjectId
           if (existingIdx >= 0) {
             const nextTabs = [...state.centerTabs]
             nextTabs[existingIdx] = { ...nextTabs[existingIdx], title: tab.title }
-            return { centerTabs: nextTabs, activeCenterTabId: tab.id, mobileLeftOpen: false }
+            return {
+              centerTabs: nextTabs,
+              activeCenterTabId: tab.id,
+              mobileLeftOpen: false,
+              selectedProjectId,
+            }
           }
           return {
             centerTabs: [...state.centerTabs, tab],
             activeCenterTabId: tab.id,
             mobileLeftOpen: false,
+            selectedProjectId,
           }
         }),
 
@@ -582,7 +611,14 @@ export const useUIStore = create<UIStore>()(
         })
       },
 
-      setActiveCenterTab: (tabId) => set({ activeCenterTabId: tabId }),
+      setActiveCenterTab: (tabId) =>
+        set((state) => {
+          const tab = state.centerTabs.find((t) => t.id === tabId)
+          // Переключение на сессию снимает выделение проекта.
+          const selectedProjectId =
+            tab?.type === 'chat' && tab.data?.sessionId ? null : state.selectedProjectId
+          return { activeCenterTabId: tabId, selectedProjectId }
+        }),
 
       reorderTabs: (fromIndex, toIndex) =>
         set((state) => {

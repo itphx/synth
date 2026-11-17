@@ -48,12 +48,29 @@ export const RIGHT_TABS = [
   { id: 'processes', icon: 'terminal-box' as const, labelKey: 'rightPanel.tab.processes' },
 ] as const
 
+/**
+ * Сессионные вкладки правой панели — те, что живут в контексте сессии.
+ *
+ * В режиме выделенного проекта (`selectedProjectId`) сессии нет: вкладки
+ * остаются в списке, но становятся недоступны («Нужна сессия»). Проектные
+ * вкладки («Проект», «Шедулер», «Процессы») доступны всегда.
+ */
+const SESSION_SCOPED_TABS = new Set<string>([
+  'params',
+  'context',
+  'stats',
+  'memory',
+  'references',
+  'secrets',
+])
+
 export const RightPanel: React.FC = () => {
   const { t } = useI18n()
   const rightPanelTab = useUIStore(s => s.rightPanelTab)
   const setRightPanelTab = useUIStore(s => s.setRightPanelTab)
   const centerTabs = useUIStore(s => s.centerTabs)
   const activeCenterTabId = useUIStore(s => s.activeCenterTabId)
+  const selectedProjectId = useUIStore(s => s.selectedProjectId)
   const user = useAuthStore((s) => s.user)
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
   const sessionId = activeTab?.data?.sessionId
@@ -64,12 +81,24 @@ export const RightPanel: React.FC = () => {
     ? [...RIGHT_TABS, { id: 'secrets', icon: 'shield-keyhole' as const, labelKey: 'rightPanel.tab.secrets' }]
     : RIGHT_TABS
 
+  // Режим выделенного проекта: сессии нет — сессионные вкладки недоступны.
+  const projectScope = !!selectedProjectId
+
   // Нормализация: если вкладка secrets недоступна (роль без прав) — сбрасываем на дефолтную
   useEffect(() => {
     if (rightPanelTab === 'secrets' && !canViewSecrets) {
       setRightPanelTab('context')
     }
   }, [rightPanelTab, canViewSecrets, setRightPanelTab])
+
+  // Нормализация: активная сессионная вкладка в режиме выделенного проекта
+  // недоступна — переключаем на проектную.
+  useEffect(() => {
+    if (!projectScope) return
+    if (SESSION_SCOPED_TABS.has(rightPanelTab)) {
+      setRightPanelTab('project')
+    }
+  }, [projectScope, rightPanelTab, setRightPanelTab])
 
   const firstRow = tabs.slice(0, 4)
   const secondRow = tabs.slice(4)
@@ -79,17 +108,22 @@ export const RightPanel: React.FC = () => {
 
   const renderTab = (tab: (typeof tabs)[number]) => {
     const active = rightPanelTab === tab.id
+    const disabled = projectScope && SESSION_SCOPED_TABS.has(tab.id)
     return (
       <button
         key={tab.id}
-        onClick={() => setRightPanelTab(tab.id)}
-        title={t(tab.labelKey)}
+        onClick={() => { if (disabled) return; setRightPanelTab(tab.id) }}
+        disabled={disabled}
+        aria-disabled={disabled || undefined}
+        title={disabled ? t('rightPanel.tab.requiresSession') : t(tab.labelKey)}
         data-compact
+        data-tab-id={tab.id}
         className={`flex items-center justify-center gap-1.5 py-1.5 text-xs transition-colors
           border-r border-sidebar-border last:border-r-0
           flex-1
           ${iconsOnly ? 'min-w-0 px-2' : 'min-w-[4.5rem] px-3'}
-          ${active ? 'bg-card text-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
+          ${active ? 'bg-card text-foreground' : disabled ? 'text-muted-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
+          ${disabled ? 'cursor-default opacity-50' : ''}
         `}
       >
         <Icon name={tab.icon} className="h-4 w-4 shrink-0" />

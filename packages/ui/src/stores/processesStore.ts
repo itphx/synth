@@ -10,6 +10,9 @@
 // `stores/transportStore.ts`).
 //
 // Порядок записей — свежие первыми (по `startedAt` убывающе).
+//
+// Накопленные логи ключуются по `runId:stream` (`processLogKey`): у прогона
+// три потока вывода (`combined`/`stdout`/`stderr`), их тексты не смешиваются.
 
 import { create } from 'zustand'
 
@@ -17,8 +20,29 @@ import { synthApi } from '@/lib/api/synthApi'
 import type {
   BackgroundRunRecord,
   BackgroundRunStatus,
+  ProcessLogStream,
   ProcessesListOptions,
 } from '@/lib/api/synthApi'
+
+export type { ProcessLogStream }
+
+/**
+ * Предел выборки активных прогонов (`loadActive`).
+ *
+ * Сервер отдаёт не больше 200 записей за раз — этого хватает, чтобы значки
+ * в дереве не «мигали» на больших инстансах.
+ */
+const ACTIVE_LIST_LIMIT = 200
+
+/**
+ * Ключ накопленного лога: прогон + поток вывода.
+ *
+ * У прогона три потока (`combined`/`stdout`/`stderr`), и их накопленные тексты
+ * не должны смешиваться — поэтому ключ включает поток.
+ */
+export function processLogKey(runId: string, stream: ProcessLogStream): string {
+  return `${runId}:${stream}`
+}
 
 /** Накопленный лог фонового процесса. */
 export interface ProcessLogState {
@@ -51,25 +75,42 @@ interface ProcessesState {
   byId: Record<string, BackgroundRunRecord>
   /** id записей в порядке «свежие первыми» (`startedAt` убыв.). */
   order: string[]
-  /** Накопленные логи по id прогона. */
+  /** Накопленные логи по ключу `runId:stream` (см. `processLogKey`). */
   logs: Record<string, ProcessLogState>
   /** id прогонов, пришедших из live-событий и ещё не подтверждённых списком сервера. */
   pendingIds: string[]
   /** Ошибка загрузки списка (текст). */
   error: string | null
 
-  /** Загрузить реестр и слить его с текущим состоянием. */
+  /**
+   * Загрузить реестр и слить его с текущим состоянием.
+   *
+   * Чистка — **по скоупу запроса**: при `sessionId`/`projectId` убираются
+   * только записи этого скоупа, которых больше нет в ответе; без фильтров —
+   * весь реестр (прежнее поведение).
+   */
   load: (options?: ProcessesListOptions) => Promise<void>
+  /**
+   * Загрузить **только активные** прогоны инстанса (`status=running`).
+   *
+   * Нужен дереву сессий: значки фоновой активности должны быть видны до
+   * открытия панели «Процессы». Ответ сервера — выборка `running`, поэтому
+   * терминальные записи (`completed`/`failed`/…) из неё выпасть не могут и
+   * остаются в реестре как есть; из `running`-записей убираются только те,
+   * которых сервер больше не отдаёт (кроме `pendingIds` — их принесли
+   * live-события, и серверный список мог их ещё не увидеть).
+   */
+  loadActive: () => Promise<void>
   /** Применить live-событие (`process.*`/`child.*`). */
   applyEvent: (type: string, payload: Record<string, unknown>) => void
   /** Добавить или заменить запись реестра. */
   upsert: (run: BackgroundRunRecord) => void
-  /** Убрать запись реестра (и её лог). */
+  /** Убрать запись реестра (и её логи — все потоки). */
   remove: (id: string) => void
   /** Очистить реестр целиком. */
   clear: () => void
-  /** Слить отрезок лога в накопленный текст. */
-  mergeLog: (id: string, chunk: ProcessLogChunk) => void
+  /** Слить отрезок лога в накопленный текст (прогон + поток). */
+  mergeLog: (runId: string, stream: ProcessLogStream, chunk: ProcessLogChunk) => void
 }
 
 /** Момент старта прогона в миллисекундах (0 — дата не разбирается). */
@@ -85,6 +126,23 @@ function sortOrder(byId: Record<string, BackgroundRunRecord>): string[] {
     if (diff !== 0) return diff
     return a < b ? -1 : a > b ? 1 : 0
   })
+}
+
+/**
+ * Попадает ли запись в скоуп запроса списка прогонов.
+ *
+ * Ответ сервера отфильтрован (`sessionId`/`projectId`), поэтому записи
+ * **вне** скоупа в нём просто не приходят — но и удалять их нельзя: реестр
+ * общий, и от чужих записей зависят значки фоновой активности в дереве
+ * сессий. Без фильтра запроса скоуп — весь реестр (прежнее поведение).
+ */
+function inRequestedScope(
+  run: BackgroundRunRecord,
+  options?: ProcessesListOptions,
+): boolean {
+  if (options?.sessionId) return run.sessionId === options.sessionId
+  if (options?.projectId) return run.projectId === options.projectId
+  return true
 }
 
 /** Статус прогона из поля `state` события (неизвестное — `running`). */
@@ -150,16 +208,52 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
         for (const run of runs) {
           byId[run.id] = { ...byId[run.id], ...run }
         }
-        // Записи, которых больше нет в ответе сервера, убираем — кроме тех,
-        // что пришли из live-событий и ещё не видны в списке (событие могло
-        // прийти раньше ответа сервера).
-        for (const id of Object.keys(byId)) {
-          if (!fetched.has(id) && !s.pendingIds.includes(id)) delete byId[id]
+        // Записи, которых больше нет в ответе сервера, убираем — но только
+        // **в том скоупе, который запросили**: ответ отфильтрован сервером,
+        // и записи других сессий/проектов в нём не приходят вовсе. Иначе
+        // открытая панель «Процессы» вычищала бы из общего реестра чужие
+        // записи (от них зависят значки активности в дереве сессий).
+        // Кроме тех, что пришли из live-событий и ещё не видны в списке
+        // (событие могло прийти раньше ответа сервера).
+        for (const [id, run] of Object.entries(byId)) {
+          if (fetched.has(id)) continue
+          if (s.pendingIds.includes(id)) continue
+          if (!inRequestedScope(run, options)) continue
+          delete byId[id]
         }
         return {
           byId,
           order: sortOrder(byId),
           pendingIds: s.pendingIds.filter((id) => !fetched.has(id)),
+          error: null,
+        }
+      })
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  loadActive: async () => {
+    try {
+      const runs = await synthApi.listProcesses({ status: 'running', limit: ACTIVE_LIST_LIMIT })
+      set((s) => {
+        const byId: Record<string, BackgroundRunRecord> = { ...s.byId }
+        const fetched = new Set(runs.map((run) => run.id))
+        for (const run of runs) {
+          byId[run.id] = { ...byId[run.id], ...run }
+        }
+        // Ответ — выборка `running`, поэтому терминальные записи в нём
+        // отсутствуют и остаются в реестре как есть. Убираем только
+        // `running`-записи, которых сервер больше не отдаёт.
+        for (const [id, run] of Object.entries(byId)) {
+          if (run.status !== 'running') continue
+          if (fetched.has(id)) continue
+          if (s.pendingIds.includes(id)) continue
+          delete byId[id]
+        }
+        return {
+          byId,
+          order: sortOrder(byId),
           error: null,
         }
       })
@@ -236,11 +330,14 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
 
   remove: (id) => {
     set((s) => {
-      if (!s.byId[id] && !s.logs[id]) return {}
+      const prefix = `${id}:`
+      const logKeys = Object.keys(s.logs).filter((key) => key.startsWith(prefix))
+      if (!s.byId[id] && logKeys.length === 0) return {}
       const byId = { ...s.byId }
       delete byId[id]
+      // Логи прогона удаляются **всех потоков** (ключ — `runId:stream`).
       const logs = { ...s.logs }
-      delete logs[id]
+      for (const key of logKeys) delete logs[key]
       return {
         byId,
         logs,
@@ -254,9 +351,10 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
     set({ byId: {}, order: [], logs: {}, pendingIds: [], error: null })
   },
 
-  mergeLog: (id, chunk) => {
+  mergeLog: (runId, stream, chunk) => {
     set((s) => {
-      const prev = s.logs[id]
+      const key = processLogKey(runId, stream)
+      const prev = s.logs[key]
       const content = prev?.content ?? ''
       let nextContent: string
       if (chunk.offset === 0) {
@@ -275,7 +373,7 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
       return {
         logs: {
           ...s.logs,
-          [id]: {
+          [key]: {
             content: nextContent,
             offset: nextOffset,
             totalBytes: chunk.totalBytes ?? prev?.totalBytes ?? nextContent.length,

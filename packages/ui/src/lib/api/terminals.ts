@@ -179,6 +179,25 @@ export interface TerminalStreamOptions {
   onExit?: (info: { exitCode?: number; signal?: string }) => void
 }
 
+/**
+ * Проба переднего плана терминала (`GET /terminals/:id/foreground`).
+ *
+ * Факт из ядра ОС: в фокусе оболочка (`isShell === true`) или обычная
+ * команда (`isShell === false`, `command` — её имя). `null` вместо объекта —
+ * «неизвестно»: терминал завершён, PTY не поднят (снимок после рестарта)
+ * или точка исполнения не умеет пробить факт.
+ */
+export interface TerminalForeground {
+  /** pid оболочки терминала. */
+  shellPid?: number
+  /** pgid процесса на переднем плане. */
+  foregroundPgid?: number
+  /** Команда на переднем плане (имя процесса без пути и аргументов). */
+  command?: string
+  /** На переднем плане оболочка (иначе — обычная команда). */
+  isShell: boolean
+}
+
 interface TerminalListResponse {
   terminals?: unknown[]
   total?: number
@@ -339,6 +358,33 @@ export function toTerminalPatch(raw: unknown): Partial<TerminalDto> {
   return patch
 }
 
+/** Ответ `GET /terminals/:id/foreground` — `{ foreground: … | null }`. */
+interface TerminalForegroundResponse {
+  foreground?: unknown
+}
+
+/**
+ * Проба переднего плана из «сырого» объекта (snake_case → camelCase).
+ *
+ * `null` — «неизвестно»: сервер не прислал объект либо в нём нет признака
+ * `is_shell` (без него отличить оболочку от команды нельзя).
+ */
+export function toTerminalForeground(raw: unknown): TerminalForeground | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const source = raw as RawRecord
+  const isShell = source['is_shell'] ?? source['isShell']
+  if (typeof isShell !== 'boolean') return null
+  const shellPid = readNumber(source, ['shell_pid', 'shellPid'])
+  const foregroundPgid = readNumber(source, ['foreground_pgid', 'foregroundPgid'])
+  const command = readString(source, ['command'])
+  return {
+    isShell,
+    ...(shellPid !== undefined ? { shellPid } : {}),
+    ...(foregroundPgid !== undefined ? { foregroundPgid } : {}),
+    ...(command !== undefined ? { command } : {}),
+  }
+}
+
 /** DTO терминала из ответа сервера (camelCase и snake_case равнозначны). */
 export function toTerminalDto(raw: unknown): TerminalDto {
   return { ...EMPTY_TERMINAL, ...toTerminalPatch(raw) }
@@ -480,6 +526,20 @@ export const terminalsApi = {
       body: JSON.stringify(body),
     })
     return terminalFromResponse(response)
+  },
+
+  /**
+   * GET /terminals/:id/foreground — что сейчас на переднем плане терминала.
+   *
+   * `null` — «неизвестно» (валидный ответ 200, а не ошибка): терминал
+   * завершён, PTY не поднят или точка исполнения не умеет пробить факт.
+   */
+  async getForeground(id: string): Promise<TerminalForeground | null> {
+    const response = await fetchJSON<TerminalForegroundResponse>(
+      `${BASE_URL}/terminals/${encodeURIComponent(id)}/foreground`,
+    )
+    const source = asRecord(response)
+    return toTerminalForeground(source['foreground'] ?? null)
   },
 
   /** POST /terminals/:id/input — ввод пользователя (байты PTY). */

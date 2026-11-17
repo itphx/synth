@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   getProjectsPage: vi.fn(),
   getProject: vi.fn(),
   getSessions: vi.fn(),
+  getSessionsPage: vi.fn(),
   listSshKeys: vi.fn(),
   getFileTree: vi.fn(),
   readFile: vi.fn(),
@@ -55,6 +56,7 @@ import { FilesTabToolbar } from './FilesTabToolbar'
 import { GitTabToolbar } from './GitTabToolbar'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
+import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useFilesStore } from '@/stores/filesStore'
 import { useGitStore } from '@/stores/gitStore'
 import { useUIStore, OTHER_PROJECTS_COLLAPSE_KEY } from '@/stores/useUIStore'
@@ -112,6 +114,26 @@ async function renderScope(tab: 'files' | 'git'): Promise<HTMLElement> {
   return container
 }
 
+/** Левая панель на вкладке «Проекты» — дерево проектов и сессий. */
+async function renderProjects(): Promise<HTMLElement> {
+  useUIStore.setState({ leftPanelTab: 'projects' })
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  roots.push({ root, container })
+  await act(async () => {
+    root.render(
+      <I18nProvider>
+        <LeftPanel />
+      </I18nProvider>,
+    )
+  })
+  await act(async () => {})
+  await act(async () => {})
+  return container
+}
+
 beforeEach(() => {
   storage.clear()
   mocks.getProjects.mockResolvedValue([P1, P2])
@@ -125,6 +147,14 @@ beforeEach(() => {
   }))
   mocks.getProject.mockResolvedValue(P1)
   mocks.getSessions.mockResolvedValue([SESSION_S1])
+  // Список сессий пагинирован: страница повторяет данные списка.
+  mocks.getSessionsPage.mockImplementation(async () => ({
+    sessions: (await mocks.getSessions()) as never[],
+    total: 0,
+    offset: 0,
+    limit: 100,
+    next_offset: null,
+  }))
   mocks.listSshKeys.mockResolvedValue([])
   mocks.getFileTree.mockResolvedValue({ entries: [] })
 
@@ -406,5 +436,87 @@ describe('LeftPanel — контекст-ориентированный пока
 
     const toggle = container.querySelector('[data-project-scope-toggle]') as HTMLButtonElement
     expect(toggle.disabled).toBe(true)
+  })
+})
+
+// Выделение проекта в дереве: переключает контекст панелей на проект.
+describe('LeftPanel — выделение проекта (проектный контекст)', () => {
+  const projectRow = (container: HTMLElement, id: string): HTMLElement =>
+    container.querySelector(`[data-tree-node="group:${id}"]`) as HTMLElement
+
+  beforeEach(() => {
+    useUIStore.setState({ selectedProjectId: null })
+  })
+
+  it('клик по проекту выделяет его, повторный клик снимает', async () => {
+    const container = await renderProjects()
+    expect(projectRow(container, 'p1')).toBeTruthy()
+
+    await act(async () => {
+      projectRow(container, 'p1').click()
+    })
+    expect(useUIStore.getState().selectedProjectId).toBe('p1')
+
+    await act(async () => {
+      projectRow(container, 'p1').click()
+    })
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+  })
+
+  it('клик по сессии снимает выделение проекта', async () => {
+    const container = await renderProjects()
+
+    await act(async () => {
+      projectRow(container, 'p1').click()
+    })
+    expect(useUIStore.getState().selectedProjectId).toBe('p1')
+
+    const sessionRow = container.querySelector('[data-tree-node="session:s1"]') as HTMLElement
+    expect(sessionRow).toBeTruthy()
+    await act(async () => {
+      sessionRow.click()
+    })
+
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+  })
+
+  it('группа «Без проекта» не выделяется', async () => {
+    const container = await renderProjects()
+
+    await act(async () => {
+      projectRow(container, '__none__').click()
+    })
+
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+  })
+
+  it('в bulk-режиме клик по проекту не выделяет', async () => {
+    useSessionsTreeStore.setState({ selectionMode: true, selectedIds: new Set<string>() })
+    const container = await renderProjects()
+
+    await act(async () => {
+      projectRow(container, 'p1').click()
+    })
+
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+    useSessionsTreeStore.setState({ selectionMode: false, selectedIds: new Set<string>() })
+  })
+
+  it('удалённый проект не оставляет висящего выделения', async () => {
+    const container = await renderProjects()
+
+    await act(async () => {
+      projectRow(container, 'p1').click()
+    })
+    expect(useUIStore.getState().selectedProjectId).toBe('p1')
+
+    // Проект исчез из списка (удалён на сервере) — выделение снимается.
+    await act(async () => {
+      useProjectsStore.setState({ projects: [P2] as never })
+    })
+    await act(async () => {})
+
+    expect(useUIStore.getState().selectedProjectId).toBe(null)
+    expect(container).toBeTruthy()
   })
 })

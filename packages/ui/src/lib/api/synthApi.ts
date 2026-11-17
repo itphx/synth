@@ -491,6 +491,7 @@ export type {
   BackgroundRunStatus,
   ProcessesListOptions,
   ProcessesListResponse,
+  ProcessLogStream,
   ProcessLogsOptions,
   ProcessLogsResponse,
   ProcessResponse,
@@ -540,6 +541,7 @@ export type {
   CreateTerminalInput,
   TerminalPatch,
   TerminalOutputSnapshot,
+  TerminalForeground,
 } from './terminals'
 // PROP-132: runtime-настройки терминалов (`/api/v2/settings/terminal`).
 export type {
@@ -640,6 +642,7 @@ export const synthApi = {
     updateTerminal: terminalsApi.update,
     closeTerminal: terminalsApi.close,
     getTerminalOutput: terminalsApi.outputSince,
+    getTerminalForeground: terminalsApi.getForeground,
     restartTerminal: terminalsApi.restart,
   },
   // PROP-132: runtime-настройки терминалов.

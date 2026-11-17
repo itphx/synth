@@ -15,6 +15,7 @@ export function GroupNode({
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
   origin, visibility, offline, isTouch,
+  isActive, onClick,
   isRenaming, renameValue, onRenameChange, onRenameCommit, onRenameCancel,
 }: {
   id: string; label: string; icon: string; iconColor?: string
@@ -31,6 +32,10 @@ export function GroupNode({
   offline?: boolean
   isTouch?: boolean
   t: any
+  /** Проект выделен в дереве (визуал выделения + приоритет контекста). */
+  isActive?: boolean
+  /** Клик по строке проекта (выделение проекта). */
+  onClick?: () => void
   isRenaming?: boolean; renameValue?: string
   onRenameChange?: (v: string) => void
   onRenameCommit?: () => void
@@ -90,6 +95,8 @@ export function GroupNode({
     ),
     actions,
     contextItems: projectContextItems,
+    isActive,
+    onClick,
     isRenaming,
     renameValue,
     onRenameChange,

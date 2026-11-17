@@ -8,7 +8,7 @@ vi.mock('@/lib/api/synthApi', () => ({
   synthApi: { listProcesses: mocks.listProcesses },
 }))
 
-import { useProcessesStore, runningCount, bySession } from './processesStore'
+import { useProcessesStore, runningCount, bySession, processLogKey } from './processesStore'
 import type { BackgroundRunRecord } from '@/lib/api/synthApi'
 
 function makeRun(id: string, overrides: Partial<BackgroundRunRecord> = {}): BackgroundRunRecord {
@@ -75,10 +75,101 @@ describe('processesStore', () => {
     expect(state.byId['keep']).toBeDefined()
   })
 
+  it('load с фильтром по сессии не трогает записи других сессий', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('s1-run', { sessionId: 's1' })])
+    useProcessesStore.getState().upsert(makeRun('s2-run', { sessionId: 's2' }))
+    useProcessesStore.getState().upsert(makeRun('s1-stale', { sessionId: 's1' }))
+
+    await useProcessesStore.getState().load({ sessionId: 's1' })
+
+    const state = useProcessesStore.getState()
+    // Запись чужой сессии на месте — от неё зависят значки активности в дереве.
+    expect(state.byId['s2-run']).toBeDefined()
+    // Своя сессия — чистится по ответу.
+    expect(state.byId['s1-stale']).toBeUndefined()
+    expect(state.byId['s1-run']).toBeDefined()
+  })
+
+  it('load с фильтром по проекту не трогает чужие проекты и записи без проекта', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('p1-run', { projectId: 'p1' })])
+    useProcessesStore.getState().upsert(makeRun('p9-run', { projectId: 'p9' }))
+    // Пришёл только live-событием — проекта у записи нет.
+    useProcessesStore.getState().upsert(makeRun('no-project'))
+    useProcessesStore.getState().upsert(makeRun('p1-stale', { projectId: 'p1' }))
+
+    await useProcessesStore.getState().load({ projectId: 'p1' })
+
+    const state = useProcessesStore.getState()
+    expect(state.byId['p9-run']).toBeDefined()
+    expect(state.byId['no-project']).toBeDefined()
+    expect(state.byId['p1-stale']).toBeUndefined()
+    expect(state.byId['p1-run']).toBeDefined()
+  })
+
+  it('load без фильтров по-прежнему чистит всё лишнее', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('keep')])
+    useProcessesStore.getState().upsert(makeRun('stale', { sessionId: 's2', projectId: 'p2' }))
+
+    await useProcessesStore.getState().load()
+
+    expect(useProcessesStore.getState().byId['stale']).toBeUndefined()
+  })
+
   it('load сохраняет ошибку в сторе', async () => {
     mocks.listProcesses.mockRejectedValue(new Error('boom'))
 
     await useProcessesStore.getState().load()
+
+    expect(useProcessesStore.getState().error).toBe('boom')
+  })
+
+  it('loadActive просит только активные прогоны и наполняет реестр', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('active')])
+
+    await useProcessesStore.getState().loadActive()
+
+    expect(mocks.listProcesses).toHaveBeenCalledWith({ status: 'running', limit: 200 })
+    expect(useProcessesStore.getState().byId['active']).toBeDefined()
+  })
+
+  it('loadActive не удаляет терминальные записи', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('active')])
+    useProcessesStore.getState().upsert(makeRun('done', { status: 'completed' }))
+
+    await useProcessesStore.getState().loadActive()
+
+    const state = useProcessesStore.getState()
+    expect(state.byId['done']).toBeDefined()
+    expect(state.byId['active']).toBeDefined()
+  })
+
+  it('loadActive убирает «running»-записи, которых больше нет в ответе', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('active')])
+    useProcessesStore.getState().upsert(makeRun('stale'))
+
+    await useProcessesStore.getState().loadActive()
+
+    const state = useProcessesStore.getState()
+    expect(state.byId['stale']).toBeUndefined()
+    expect(state.byId['active']).toBeDefined()
+  })
+
+  it('loadActive не трогает запись, пришедшую из live-события (pendingIds)', async () => {
+    mocks.listProcesses.mockResolvedValue([])
+    useProcessesStore.getState().applyEvent('process.started', {
+      background_run_id: 'event',
+      session_id: 's1',
+    })
+
+    await useProcessesStore.getState().loadActive()
+
+    expect(useProcessesStore.getState().byId['event']).toBeDefined()
+  })
+
+  it('loadActive сохраняет ошибку в сторе', async () => {
+    mocks.listProcesses.mockRejectedValue(new Error('boom'))
+
+    await useProcessesStore.getState().loadActive()
 
     expect(useProcessesStore.getState().error).toBe('boom')
   })
@@ -179,22 +270,39 @@ describe('processesStore', () => {
     expect(run.command).toBe('a')
   })
 
-  it('remove убирает запись и её лог', () => {
+  it('remove убирает запись и её логи (все потоки)', () => {
     const store = useProcessesStore.getState()
     store.upsert(makeRun('bgr_1'))
-    store.mergeLog('bgr_1', { content: 'строка', offset: 0 })
+    store.mergeLog('bgr_1', 'combined', { content: 'строка', offset: 0 })
+    store.mergeLog('bgr_1', 'stdout', { content: 'stdout', offset: 0 })
+    store.mergeLog('bgr_1', 'stderr', { content: 'stderr', offset: 0 })
     store.remove('bgr_1')
 
     const state = useProcessesStore.getState()
     expect(state.byId['bgr_1']).toBeUndefined()
-    expect(state.logs['bgr_1']).toBeUndefined()
+    expect(state.logs[processLogKey('bgr_1', 'combined')]).toBeUndefined()
+    expect(state.logs[processLogKey('bgr_1', 'stdout')]).toBeUndefined()
+    expect(state.logs[processLogKey('bgr_1', 'stderr')]).toBeUndefined()
     expect(state.order).toEqual([])
+  })
+
+  it('remove не трогает логи другого прогона', () => {
+    const store = useProcessesStore.getState()
+    store.upsert(makeRun('bgr_1'))
+    store.upsert(makeRun('bgr_2'))
+    store.mergeLog('bgr_1', 'combined', { content: 'один', offset: 0 })
+    store.mergeLog('bgr_2', 'combined', { content: 'два', offset: 0 })
+    store.remove('bgr_1')
+
+    const state = useProcessesStore.getState()
+    expect(state.logs[processLogKey('bgr_1', 'combined')]).toBeUndefined()
+    expect(state.logs[processLogKey('bgr_2', 'combined')]?.content).toBe('два')
   })
 
   it('clear очищает реестр целиком', () => {
     const store = useProcessesStore.getState()
     store.upsert(makeRun('bgr_1'))
-    store.mergeLog('bgr_1', { content: 'строка', offset: 0 })
+    store.mergeLog('bgr_1', 'combined', { content: 'строка', offset: 0 })
     store.clear()
 
     const state = useProcessesStore.getState()
@@ -205,28 +313,46 @@ describe('processesStore', () => {
 
   it('mergeLog накапливает отрезки лога', () => {
     const store = useProcessesStore.getState()
-    store.mergeLog('bgr_1', { content: 'первая\n', offset: 0, nextOffset: 7 })
-    store.mergeLog('bgr_1', { content: 'вторая\n', offset: 7, nextOffset: 14 })
+    store.mergeLog('bgr_1', 'combined', { content: 'первая\n', offset: 0, nextOffset: 7 })
+    store.mergeLog('bgr_1', 'combined', { content: 'вторая\n', offset: 7, nextOffset: 14 })
 
-    const log = useProcessesStore.getState().logs['bgr_1']!
+    const log = useProcessesStore.getState().logs[processLogKey('bgr_1', 'combined')]!
     expect(log.content).toBe('первая\nвторая\n')
     expect(log.offset).toBe(14)
   })
 
   it('mergeLog не дублирует уже полученный отрезок', () => {
     const store = useProcessesStore.getState()
-    store.mergeLog('bgr_1', { content: 'строка\n', offset: 0, nextOffset: 7 })
-    store.mergeLog('bgr_1', { content: 'строка\n', offset: 0, nextOffset: 7 })
+    store.mergeLog('bgr_1', 'combined', { content: 'строка\n', offset: 0, nextOffset: 7 })
+    store.mergeLog('bgr_1', 'combined', { content: 'строка\n', offset: 0, nextOffset: 7 })
 
-    expect(useProcessesStore.getState().logs['bgr_1']!.content).toBe('строка\n')
+    expect(useProcessesStore.getState().logs[processLogKey('bgr_1', 'combined')]!.content).toBe('строка\n')
   })
 
   it('mergeLog с offset 0 перезагружает лог целиком', () => {
     const store = useProcessesStore.getState()
-    store.mergeLog('bgr_1', { content: 'старое\n', offset: 0, nextOffset: 7 })
-    store.mergeLog('bgr_1', { content: 'новое\n', offset: 0, nextOffset: 6 })
+    store.mergeLog('bgr_1', 'combined', { content: 'старое\n', offset: 0, nextOffset: 7 })
+    store.mergeLog('bgr_1', 'combined', { content: 'новое\n', offset: 0, nextOffset: 6 })
 
-    expect(useProcessesStore.getState().logs['bgr_1']!.content).toBe('новое\n')
+    expect(useProcessesStore.getState().logs[processLogKey('bgr_1', 'combined')]!.content).toBe('новое\n')
+  })
+
+  it('логи разных потоков не смешиваются', () => {
+    const store = useProcessesStore.getState()
+    store.mergeLog('bgr_1', 'combined', { content: 'общий\n', offset: 0 })
+    store.mergeLog('bgr_1', 'stdout', { content: 'out\n', offset: 0 })
+    store.mergeLog('bgr_1', 'stderr', { content: 'err\n', offset: 0 })
+
+    const logs = useProcessesStore.getState().logs
+    expect(logs[processLogKey('bgr_1', 'combined')]!.content).toBe('общий\n')
+    expect(logs[processLogKey('bgr_1', 'stdout')]!.content).toBe('out\n')
+    expect(logs[processLogKey('bgr_1', 'stderr')]!.content).toBe('err\n')
+  })
+
+  it('processLogKey различает прогоны и потоки', () => {
+    expect(processLogKey('bgr_1', 'combined')).toBe('bgr_1:combined')
+    expect(processLogKey('bgr_1', 'stdout')).toBe('bgr_1:stdout')
+    expect(processLogKey('bgr_2', 'combined')).toBe('bgr_2:combined')
   })
 
   it('runningCount считает только выполняющиеся прогоны', () => {

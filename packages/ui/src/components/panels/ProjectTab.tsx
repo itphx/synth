@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
-import { useUIStore } from '@/stores/useUIStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useProjectLogStore } from '@/stores/projectLogStore'
 import { useNotification } from '@/hooks/useNotification'
 import { usePanelSettingSave } from '@/hooks/usePanelSettingSave'
+import { useActiveProject } from '@/hooks/useActiveProject'
 import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry, type ExecutionProfilesDto } from '@/lib/api/synthApi'
 import type { WorktreeSummary } from '@/lib/api/synthApi'
@@ -61,11 +61,13 @@ export function ProjectTab() {
   const { t, locale } = useI18n()
   const { notify } = useNotification()
 
-  const activeTabId = useUIStore((s) => s.activeCenterTabId)
-  const centerTabs = useUIStore((s) => s.centerTabs)
-  const activeTab = centerTabs.find((tab) => tab.id === activeTabId)
-  const sessionId = activeTab?.data?.sessionId
-  const session = useSessionsStore((s) => s.sessions.find((ses) => ses.id === sessionId))
+  // Проект активного контекста: выделенный проект в левой панели → проект
+  // активной сессии/вкладки. Сессия **опциональна**: в режиме выделенного
+  // проекта её нет, поэтому сессионные блоки (ToDo, worktree) скрываются.
+  const { projectId, sessionId } = useActiveProject()
+  const session = useSessionsStore((s) =>
+    sessionId ? s.sessions.find((ses) => ses.id === sessionId) : undefined,
+  )
 
   const [project, setProject] = useState<ProjectData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -90,7 +92,6 @@ export function ProjectTab() {
   const [projectSkills, setProjectSkills] = useState<ProjectSkillsResponse | null>(null)
   const [skillsFailed, setSkillsFailed] = useState(false)
 
-  const projectId = session?.project_id ?? null
   const projects = useProjectsStore((s) => s.projects)
   // Актуальная запись проекта из стора — единственный источник правды. Локальная
   // копия ниже нужна для черновиков (workspace/invariants), но обязана следовать
@@ -288,17 +289,19 @@ export function ProjectTab() {
     setProject((prev) => (prev === storeProject ? prev : storeProject))
   }, [storeProject])
 
-  if (!session) {
-    return (
-      <PanelTab>
-        <div className="text-sm text-muted-foreground">
-          {t('rightPanel.params.noSessions')}
-        </div>
-      </PanelTab>
-    )
-  }
-
+  // Нет проекта: сессия без проекта (предложение привязать) либо вовсе
+  // нет активного контекста (не выбран ни проект, ни сессия).
   if (!projectId) {
+    if (!session) {
+      return (
+        <PanelTab>
+          <div className="text-sm text-muted-foreground">
+            {t('rightPanel.params.noSessions')}
+          </div>
+        </PanelTab>
+      )
+    }
+
     const handleAttachProject = async (e: React.ChangeEvent<HTMLSelectElement>) => {
       const targetId = e.target.value
       if (!targetId) return
@@ -593,7 +596,7 @@ export function ProjectTab() {
         <Section title={t('project.access.transfer.title')}>
           <ProjectOwnershipBlock
             project={project}
-            sessionId={sessionId}
+            sessionId={sessionId ?? undefined}
             onUpdated={(updated) => {
               setProject(updated)
               useProjectsStore.getState().updateProjectInList(updated)
@@ -607,7 +610,7 @@ export function ProjectTab() {
         <Section title={t('project.access.title')}>
           <ProjectAccessBlock
             project={project}
-            sessionId={sessionId}
+            sessionId={sessionId ?? undefined}
             onUpdated={(updated) => {
               setProject(updated)
               useProjectsStore.getState().updateProjectInList(updated)
@@ -637,7 +640,7 @@ export function ProjectTab() {
           <ProjectExecutorBlock
             project={project}
             canManage={canManageMcp}
-            sessionId={sessionId}
+            sessionId={sessionId ?? undefined}
             onUpdated={(updated) => {
               setProject(updated)
               useProjectsStore.getState().updateProjectInList(updated)

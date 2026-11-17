@@ -35,6 +35,8 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
   'pipeline-run': 'time',
   // PROP-132: терминал.
   terminal: 'terminal-box',
+  // Экран «Вывод процесса».
+  'process-log': 'terminal-box',
 }
 
 /**
@@ -94,6 +96,11 @@ function TabTooltipLabel({ tab }: { tab: CenterTab }) {
     return projectName
       ? t('center.tabTooltip.terminal', { title: tab.title, project: projectName })
       : t('center.tabTooltip.noProject.terminal', { title: tab.title })
+  }
+  if (tab.type === 'process-log') {
+    return projectName
+      ? t('center.tabTooltip.processLog', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.processLog', { title: tab.title })
   }
   return projectName
     ? t('center.tabTooltip.fileEditor', { title: tab.title, project: projectName })
