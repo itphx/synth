@@ -132,7 +132,7 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
 - **Схема и миграции (`migrations/*`, `migrate.ts`).** Свой контур версионирования
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
-  (`src/migrations/001-init.ts` … `036-message-mentions.ts`; **36 миграций**, реестр —
+  (`src/migrations/001-init.ts` … `038-schedule-project-id.ts`; **38 миграций**, реестр —
   `src/migrations/index.ts`, версии строго возрастают) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   Миграции **006–009** — слой плагинов (PROP-090): `006_plugin_audit` (таблица `plugin_audit`,
   `seq bigserial` — порядок «свежие первыми»), `007_plugin_lock` (таблица `plugin_lock`, PK — имя

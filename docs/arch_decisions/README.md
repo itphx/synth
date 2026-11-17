@@ -73,6 +73,9 @@
 | ADR-134 | Сервис инстанса: synth service и systemd --user | ✅ Реализовано | [adr-134-instance-service-systemd-user.md](./adr-134-instance-service-systemd-user.md) |
 | ADR-139 | LLM-шлюз по умолчанию включён в managed и hybrid | ✅ Реализовано | [adr-139-llm-gateway-hybrid.md](./adr-139-llm-gateway-hybrid.md) |
 | ADR-140 | Доступ к проекту — участники, группы и видимость | ✅ Реализовано | [adr-140-project-access-sharing.md](./adr-140-project-access-sharing.md) |
+| ADR-141 | Таймеры и будильники — автоматизация проекта без своего промпта | ✅ Реализовано | [adr-141-timers-alarms.md](./adr-141-timers-alarms.md) |
+| ADR-142 | Перенос сессии между проектами — блокеры, согласие и эффекты | ✅ Реализовано | [adr-142-session-move-effects.md](./adr-142-session-move-effects.md) |
+| ADR-143 | Таймауты инструментов — секунды и предел по режиму исполнения | ✅ Реализовано | [adr-143-tool-timeouts.md](./adr-143-tool-timeouts.md) |
 
 ## Частично
 
@@ -132,7 +135,6 @@
 | PROP-110 | Портал-платформа — общий UI-kit, единый вход и шаблон специализированного портала | 🧩 Предложение | [prop-110-portal-platform.md](./prop-110-portal-platform.md) |
 | PROP-131 | Зеркала внешних зависимостей сборки | 🧩 Предложение | [prop-131-external-dependency-mirrors.md](./prop-131-external-dependency-mirrors.md) |
 | PROP-140 | Класс исполнителей MCP — пулы, хостящие MCP-серверы | 🧩 Предложение | [prop-140-mcp-executor-class.md](./prop-140-mcp-executor-class.md) |
-| PROP-141 | Автоматизация проекта — таймеры, будильники и секундные таймауты инструментов | 🧩 Предложение | [prop-141-automation-timers-alarms.md](./prop-141-automation-timers-alarms.md) |
 | PROP-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 | 🧊 Icebox | [prop-050-external-engines-runner.md](./prop-050-external-engines-runner.md) |
 
 ## Vision
@@ -180,6 +182,7 @@
 | PROP-137 | [ADR-137](./adr-137-executor-isolation.md) | принято |
 | PROP-138 | [ADR-138](./adr-138-plugin-execution-contour.md) | принято |
 | PROP-139 | [ADR-139](./adr-139-llm-gateway-hybrid.md) | принято |
+| PROP-141 | [ADR-143](./adr-143-tool-timeouts.md) | принято |
 
 ## Legacy
 
@@ -191,5 +194,5 @@
 
 ---
 
-Всего документов: 122 (Решения: 61, Частично: 27, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 3).
-Удалено: 29 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).
+Всего документов: 124 (Решения: 64, Частично: 27, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 3).
+Удалено: 30 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

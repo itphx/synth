@@ -233,6 +233,9 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 | `synth_event_journal_size` | gauge | — | Записей в журнале событий; фон, **5 мин** |
 | `synth_scheduler_jobs_total` | counter | `outcome` (`ok`/`error`) | Завершённые Job (`skipped` учитывается как `ok`) |
 | `synth_scheduler_drift_seconds` | gauge | — | Дрейф последнего cron-срабатывания (факт − план) |
+| `synth_timer_active` | gauge | `kind` (`timer`/`alarm`) | Активных таймеров/будильников (ADR-141) |
+| `synth_timer_firings_total` | counter | `kind`, `outcome` (`ok`/`error`/`skipped`) | Срабатывания таймеров |
+| `synth_timer_lag_seconds` | histogram | — | Задержка срабатывания относительно плана (секунды) |
 | `synth_webhook_deliveries_total` | counter | `outcome` (`ok`/`error`/`blocked`) | Доставки webhooks |
 | `synth_webhook_retries_total` | counter | — | Повторы (попытки сверх первой) |
 | `synth_webhook_delivery_duration_seconds` | histogram | — | Длительность доставки |

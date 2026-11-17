@@ -44,6 +44,7 @@
 28. При `execution.mode=remote` все файловые/git/shell-тулы исполняются **только** на исполнителе; порт — `exec+fs+stream`; control plane не читает ФС агента (ADR-135).
 29. Shell — произвольный код: `shell-guard`/path-периметр — guardrail, не граница; обязательны аудит исполнений и внешний чекер (ADR-136).
 30. Все runtime-образы non-root; `readOnlyRootFilesystem`/сетевые классы `none|restricted|full` — контракт изоляции исполнителя (ADR-137).
+31. Автоматизации — **только в проекте**: расписания, таймеры и будильники привязаны к `projectId`/`sessionId`, инстансных нет; срабатывание таймера доставляется как завершение фонового прогона (`RouteDecision.delivery:'steer'` → notifier), комментарий — единственный смысл срабатывания, своего промпта у будильника нет (ADR-141). Перенос сессии между проектами — только через `SessionMoveService`: живые ресурсы дают `409`, согласие `move_consent` даёт человек, эффекты фиксируются в `session.moved.effects[]` и служебном `session_moved` (ADR-142).
 
 ## Карта репозитория
 
@@ -336,7 +337,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - **Shell/git** — `execute_shell`, `git_status|diff|log|commit|push|pull|checkout|branch_list|show|blame|stash`.
 - **SSH-ключи/worktrees (ADR-076/114)** — `ssh_keys_list`, `git_worktree_list|create|remove|prune`.
 - **План/ToDo** — `plan_enter|exit|read|list|write`, `todo_write|list|add|update|delete`.
-- **Пайплайны/расписания (ADR-101/051)** — `pipeline_*`, `schedule_*`.
+- **Пайплайны/расписания/автоматизация (ADR-101/051/141)** — `pipeline_*`, `schedule_*`, `timer`, `alarm`.
 - **Процессы/задачи/вопрос (ADR-111/112/113)** — `process_list|logs|stop|delete`, `task`, `classify_conversation`, `read_session_reference`, `question`.
 - **Скрипты проекта (ADR-126 §5)** — `script_list`, `script_run`; реестр `.synth/scripts/<name>.md` (project > `{dataDir}/scripts` > `config.scripts.paths`, trust как у скиллов). Запуск — **только** через реестр фоновых процессов (ADR-113), отдельного exec-пути нет; `permission.rules.script` (`deny` скрывает скрипт, `ask` человеческий запуск не блокирует). `!name args` в композере — первый непробельный токен сообщения, исполняется в ядре **без хода LLM** (локальный эфемерный ответ); из внешних каналов (`metadata.principal_id`/`chat_key`) не исполняется.
 - **Проект/лог/инварианты** — `get_project_info`, `list_repos`, `project_*`, `project_log_*`, `project_invariants_*`.
@@ -394,8 +395,8 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 122 (Решения: 61, Частично: 27, Предложения: 23, Vision: 7, Icebox: 1, Legacy: 3).
-Удалено: 29 (принятые и поглощённые предложения).
+Всего документов: 124 (Решения: 64, Частично: 27, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 3).
+Удалено: 30 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
 
@@ -438,7 +439,9 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | промпт / prompt-cache / MCP в промпте | [ADR-070](./docs/arch_decisions/adr-070-system-prompt-composer.md), [ADR-071](./docs/arch_decisions/adr-071-mcp-servers-prompt.md), [ADR-029](./docs/arch_decisions/adr-029-granular-permissions.md), [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
 | настройки / settings UI kit / кастомизация / брендинг | [ADR-072](./docs/arch_decisions/adr-072-settings-ui-kit.md), [PROP-083](./docs/arch_decisions/prop-083-instance-customization-branding.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | мессенджеры / шлюзы | [ADR-087](./docs/arch_decisions/adr-087-gateways.md), [ADR-103](./docs/arch_decisions/adr-103-gateway-core-channel-contract.md) |
-| шедулер / пайплайны | [ADR-051](./docs/arch_decisions/adr-051-scheduler-pipelines.md), [ADR-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md), [ADR-101](./docs/arch_decisions/adr-101-pipeline-engine.md), [docs/PIPELINES.md](./docs/PIPELINES.md), [PROP-057](./docs/arch_decisions/prop-057-loop-engine.md) |
+| шедулер / пайплайны / таймеры | [ADR-051](./docs/arch_decisions/adr-051-scheduler-pipelines.md), [ADR-100](./docs/arch_decisions/adr-100-extension-packs-pipelines.md), [ADR-101](./docs/arch_decisions/adr-101-pipeline-engine.md), [ADR-141](./docs/arch_decisions/adr-141-timers-alarms.md), [docs/PIPELINES.md](./docs/PIPELINES.md), [docs/TOOLS.md](./docs/TOOLS.md), [PROP-057](./docs/arch_decisions/prop-057-loop-engine.md) |
+| перенос сессии между проектами | [ADR-142](./docs/arch_decisions/adr-142-session-move-effects.md), [ADR-040](./docs/arch_decisions/adr-040-sessions-without-project.md), [ADR-113](./docs/arch_decisions/adr-113-background-processes.md), [ADR-132](./docs/arch_decisions/adr-132-ui-terminal.md) |
+| таймауты инструментов / длительные операции | [ADR-143](./docs/arch_decisions/adr-143-tool-timeouts.md), [ADR-135](./docs/arch_decisions/adr-135-execution-contour.md), [ADR-126](./docs/arch_decisions/adr-126-input-surface-commands-mentions-snippets.md) |
 | плагины / add-on / editions / MCP-сервер Synth | [ADR-086](./docs/arch_decisions/adr-086-extensibility-plugins-editions.md), [ADR-090](./docs/arch_decisions/adr-090-extension-api.md), [docs/PLUGINS.md](./docs/PLUGINS.md), [PROP-068](./docs/arch_decisions/prop-068-skills-agents-registry.md), [PROP-056](./docs/arch_decisions/prop-056-synth-mcp-server.md), [PROP-048](./docs/arch_decisions/prop-048-self-help-skills-admin-mcp.md) |
 | публикации о Synth / новый AD / версионирование документации | скилл `media-hub` + агент `publisher` (пакет `synth-media`), [PROP-093](./docs/arch_decisions/prop-093-docs-versioning.md), скилл `synth-docs` |
 | прокси / egress / TLS / CA / адресная политика | [ADR-099](./docs/arch_decisions/adr-099-egress-tls-trust.md), [PROP-100](./docs/arch_decisions/prop-100-ssrf-dns-rebinding.md), [ADR-071](./docs/arch_decisions/adr-071-mcp-servers-prompt.md) §2.3.1, [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |

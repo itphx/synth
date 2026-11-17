@@ -2,6 +2,7 @@
 
 > **Статус:** ⚠️ Частично — команды, `$`/`#`/`@`, `!`-запуск скриптов (MVP), механика скиллов и подсветка ввода реализованы; остаток — install/подписи/`lock.json` и backend-админка каталога скиллов ([PROP-068](./prop-068-skills-agents-registry.md)); в `!` — `ready`-детект (пара `started`/`finished` в журнале исполнений реализована).
 > **Дата:** 2026-11-14 (объединение с механикой скиллов — 2026-11-16; `!` закрыт решением — 2026-11-16).
+> **Обновлено:** 2026-11-17 — `timeout` в декларации скрипта — секунды (1…86 400), потолок фонового режима ([ADR-143](./adr-143-tool-timeouts.md)).
 > **Источник:** PROP-126 (файл удалён после принятия); механика скиллов перенесена из [ADR-046](./legacy/adr-046-skills-and-slash-commands.md) (заменён).
 > **Связано:** [ADR-115](./adr-115-multimodal-input.md), [ADR-029](./adr-029-granular-permissions.md), [ADR-024](./adr-024-eventhub-transport.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-069](./adr-069-project-instructions-agents-md.md), [ADR-070](./adr-070-system-prompt-composer.md), [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-104](./adr-104-mid-turn-steering.md), [ADR-118](./adr-118-message-stream-v2.md), [ADR-119](./adr-119-context-compaction.md), [PROP-057](./prop-057-loop-engine.md), [PROP-068](./prop-068-skills-agents-registry.md), [ADR-132](./adr-132-ui-terminal.md)
 

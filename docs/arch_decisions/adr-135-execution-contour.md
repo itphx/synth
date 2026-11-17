@@ -6,6 +6,7 @@
 > Остаток: per-project UI выбора browser-профиля, remote builder (внешняя инфраструктура),
 > e2e на кластере (поды/RBAC/NetworkPolicy).
 > **Дата:** 2026-11-13
+> **Обновлено:** 2026-11-17 — потолок таймаута исполнителя 86 400 000 мс (сутки), синхронно с пределами инструментов ([ADR-143](./adr-143-tool-timeouts.md)).
 > **Источник:** PROP-135 (файл удалён после принятия).
 > **Заменяет:** [ADR-077](./legacy/adr-077-runtime-toolchain.md) по топологии исполнения и порту.
 > **Связано:** [ADR-075](./adr-075-project-workspace-provisioning.md) (workspace), [ADR-114](./adr-114-git-worktrees.md)

@@ -3,6 +3,7 @@
 > **Статус:** ✅ Реализовано (ядро) — Event/Binding/Router, единый funnel, API/UI, источник cron ([ADR-051](./adr-051-scheduler-pipelines.md)), API-ключи привязок, runtime-настройки «События», decision-маршрутизация ([ADR-084](./adr-084-decision-models-clef.md), opt-in), auto-bind, идентичности профиля + claim-flow, права внешних отправителей (fail-closed), надёжный Stop, живая доставка ответа наружу (сделана на стороне шлюза, [ADR-087](./adr-087-gateways.md)).
 > **Вне объёма ADR:** пайплайны ([ADR-101](./adr-101-pipeline-engine.md)), HA/второй канал ([ADR-087](./adr-087-gateways.md)). Plugin SDK — отдельное решение, принято как [ADR-090](./adr-090-extension-api.md) (реализовано).
 > **Дата:** 2026-10-08 (as-built вынесено в spec — 2026-10-15).
+> **Обновлено:** 2026-11-17 — добавлен источник `timer` (`timer_fired`) и аддитивный режим доставки `RouteDecision.delivery:'steer'`; таймер доставляется как завершение фонового прогона ([ADR-141](./adr-141-timers-alarms.md)).
 > **Обновлено:** 2026-10-27 — добавлены **вложения события** (`attachments[]`, ADR-115 × ADR-089):
 > ссылки на объекты blob-хранилища, валидация до дедупа/журнала, `blob_refs` после доставки;
 > права/identity не меняются.
