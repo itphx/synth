@@ -5,8 +5,8 @@
  * Агент задаёт один или несколько вопросов с вариантами ответа и **ждёт**
  * ответа: ход стоит, пока пользователь не ответит, не отменит вопрос и не
  * истечёт срок ожидания. По умолчанию срока **нет** (`questions.timeoutMs = 0`
- * — вопрос ждёт бесконечно); срок может задать сам тул (`timeout`, ≥ 5 минут —
- * не рекомендуется: ожидание обрывается).
+ * — вопрос ждёт бесконечно); срок может задать сам тул (`timeout`, **секунды**,
+ * 300…86 400 — не рекомендуется: ожидание обрывается).
  *
  * Механика — в сервисе `engine/question/service.ts` (владеет записью вопроса,
  * ожиданием и событиями `user_question.*`); тул только переводит исход
@@ -69,15 +69,15 @@ const questionToolSchema = z
     timeout: z
       .number()
       .int()
-      .min(300_000)
-      .max(86_400_000)
+      .min(300)
+      .max(86_400)
       // Описание — до `.optional()`: конвертер `zodToJsonSchema` разворачивает
       // обёртку `optional` и берёт описание внутреннего типа — иначе модель
       // не увидит ни единицы измерения, ни минимума.
       .describe(
-        'Optional answer timeout in milliseconds — a top-level parameter of the tool call, not a field of a question. '
+        'Optional answer timeout in seconds — a top-level parameter of the tool call, not a field of a question. '
         + 'By default the question waits indefinitely (no timeout). Not recommended: it aborts waiting. '
-        + 'Minimum 300000 (5 minutes).',
+        + 'Range: 300..86400 seconds (5 minutes .. 1 day).',
       )
       .optional(),
   })
@@ -129,8 +129,9 @@ export const questionTool: ToolDefinition = {
       questions,
       // Срок ожидания ответа: переопределение конфигурации `questions.timeoutMs`
       // для конкретного вопроса. Не задан — берётся конфиг (по умолчанию — без
-      // таймаута, вопрос ждёт ответа бесконечно).
-      ...(typeof parsed.data.timeout === 'number' ? { timeoutMs: parsed.data.timeout } : {}),
+      // таймаута, вопрос ждёт ответа бесконечно). Параметр тула — в секундах,
+      // сервис ждёт миллисекунды (перевод на границе).
+      ...(typeof parsed.data.timeout === 'number' ? { timeoutMs: parsed.data.timeout * 1000 } : {}),
       // Сигнал отмены хода: по нему вопрос снимается с ожидания.
       ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
     });

@@ -90,6 +90,7 @@ import { randomUUID } from 'node:crypto';
 import { MessageRole, generateId as generateMessageId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
+import { msToTimeoutSec } from '../timeout.js';
 import {
   cleanRunOutput,
   frameTerminalOutput,
@@ -891,7 +892,7 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
     run.status === 'timeout'
       ? sm('terminal.tool.run_timeout', {
           terminal_id: terminalId,
-          timeout_ms: String(run.timeoutMs),
+          timeout: String(msToTimeoutSec(run.timeoutMs)),
         })
       : run.status === 'exited'
         ? sm('terminal.tool.run_exited', { terminal_id: terminalId })
@@ -912,7 +913,7 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
     run: run.runId,
     status: run.status,
     ...(run.exitCode !== undefined ? { exit: run.exitCode } : {}),
-    ...(run.status === 'timeout' ? { timeout_ms: run.timeoutMs } : {}),
+    ...(run.status === 'timeout' ? { timeout: msToTimeoutSec(run.timeoutMs) } : {}),
     ...(stillRunning ? { still_running: true } : {}),
   });
   const content = [header, stillRunningNote, body].filter((part) => part !== '').join('\n');

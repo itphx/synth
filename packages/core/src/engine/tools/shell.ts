@@ -14,16 +14,28 @@ import type { ActiveRunRegistry } from '../background/active-runs.js';
 import { BackgroundUnsupportedError } from '../processes/types.js';
 import type { ProcessService } from '../processes/service.js';
 import { MAX_OUTPUT_LENGTH, isDetachableShellEnabled, runDetachableShell } from './shell-detachable.js';
+import {
+  TIMEOUT_BG_DEFAULT_SEC,
+  TIMEOUT_BG_LIMIT_MESSAGE,
+  TIMEOUT_BG_MAX_SEC,
+  TIMEOUT_FG_DEFAULT_SEC,
+  TIMEOUT_FG_LIMIT_MESSAGE,
+  TIMEOUT_FG_MAX_SEC,
+  timeoutParam,
+} from '../timeout.js';
 
 /**
- * Предел времени блокирующей shell-команты по умолчанию, мс.
+ * Предел времени блокирующей shell-команты по умолчанию, **секунды**.
  *
  * 30 с оказывалось мало для обычной работы (сборка, тесты, `npm ci`), поэтому
- * дефолт — 2 минуты. Per-call параметр `timeout` переопределяет его
- * (`0` — без лимита); верхняя граница параметра — 10 минут (дальше — фоновый
- * запуск, а не ожидание).
+ * дефолт — 2 минуты. Per-call параметр `timeout` (секунды) переопределяет его;
+ * потолок зависит от режима: foreground — 10 минут (дальше — фоновый запуск,
+ * а не ожидание), background — сутки (`0`/«без лимита» больше нет).
  */
-const DEFAULT_TIMEOUT = 120_000;
+const DEFAULT_TIMEOUT_SEC = TIMEOUT_FG_DEFAULT_SEC;
+
+/** Таймаут фонового шелла по умолчанию, секунды (сутки). */
+const DEFAULT_BACKGROUND_TIMEOUT_SEC = TIMEOUT_BG_DEFAULT_SEC;
 
 /**
  * Зависимости тула из `ToolContext.extra` (упаковка — оркестратор).
@@ -58,20 +70,35 @@ export const executeShellTool: ToolDefinition = {
   description:
     'Execute a shell command (bash) and return its output (stdout and stderr). Use only for legitimate development tasks. '
     + 'Commands run in the project working directory, or in `cwd` when given (absolute or relative to the working directory). '
-    + 'Timeout: 120 seconds by default (set timeout to change it, max 600000 ms, 0 = no limit). '
+    + 'Timeout in seconds: 120 by default (set timeout to change it); at most 600 seconds in foreground, '
+    + 'up to 86400 seconds in background mode. Do not use sleep to wait - run the command in the background instead. '
     + 'The interpreter is bash ([[ … ]], arrays, pipefail, ${var,,} work). If bash is not installed in the environment, the tool is unavailable. '
     + 'Prefer dedicated tools over shell commands when possible (read_file/list_directory/glob/grep_files and the git_* tools): they are safer and their output is structured. '
     + 'Large output is truncated (a truncation marker is appended) — filter the output in the command instead of dumping everything. '
     + 'Set background=true to run the command in the background: it returns immediately, the full output is written to a log file, and a notification with the result arrives automatically — do not poll for the status.',
   parameters: z.object({
     command: z.string().describe('The command to execute (e.g., "npm test", "ls -la")'),
-    timeout: z.number().int().min(0).max(600_000).optional()
-      .describe('Timeout in milliseconds (default: 120000; 0 = no limit; max 600000; in background mode there is no timeout by default)'),
+    timeout: timeoutParam({
+      max: TIMEOUT_BG_MAX_SEC,
+      // Верхняя граница — общий потолок фонового режима: текст отказа
+      // говорит про background, а не про foreground (foreground-потолок
+      // проверяет `.refine` ниже — по режиму).
+      maxMessage: TIMEOUT_BG_LIMIT_MESSAGE,
+      description:
+        'Timeout in seconds (foreground: default 120, max 600; background: default 86400, max 86400)',
+    }),
     cwd: z.string().optional()
       .describe('Working directory for the command (absolute or relative to the working directory; defaults to working directory)'),
     background: z.boolean().optional()
       .describe('Run the command in the background and return immediately; a notification with the result arrives automatically (do not poll for the status)'),
-  }),
+  })
+    // Потолок таймаута зависит от режима исполнения: в foreground — 10 минут
+    // (дальше ход агента «подвесит»), в background — сутки. Отдельная проверка
+    // нужна, потому что режим задан соседним полем, а не самим `timeout`.
+    .refine(
+      (value) => value.background === true || value.timeout === undefined || value.timeout <= TIMEOUT_FG_MAX_SEC,
+      { message: TIMEOUT_FG_LIMIT_MESSAGE, path: ['timeout'] },
+    ),
   capabilities: [ToolCapability.SHELL],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — команда не стартует (см. tools/abort.ts)
@@ -81,7 +108,12 @@ export const executeShellTool: ToolDefinition = {
       return argErrorResult(this.name, parsed.error.issues);
     }
     const params = parsed.data as { command: string; timeout?: number; cwd?: string; background?: boolean };
-    const timeout = params.timeout ?? DEFAULT_TIMEOUT;
+    // Таймаут — **секунды** (входной параметр тула). В порт уходит миллисекунды:
+    // перевод на границе, внутренние контракты остаются в мс.
+    const timeoutSec = params.background === true
+      ? (params.timeout ?? DEFAULT_BACKGROUND_TIMEOUT_SEC)
+      : (params.timeout ?? DEFAULT_TIMEOUT_SEC);
+    const timeoutMs = timeoutSec * 1000;
     if (params.cwd !== undefined) validateInputPath(params.cwd, 'cwd');
     const cwd = resolvePath(params.cwd, ctx.workingDir);
     if (isSymlinkEscapeInRoots(toolRoots(ctx), cwd)) return pathEscapesWorkspaceResult(cwd);
@@ -98,7 +130,7 @@ export const executeShellTool: ToolDefinition = {
     // PROP-097: фоновый запуск — команда не блокирует ход, результат придёт
     // уведомлением (см. engine/processes).
     if (params.background === true) {
-      return await startBackgroundProcess(params, command, cwd, ctx, secrets);
+      return await startBackgroundProcess(params, command, cwd, ctx, secrets, timeoutSec);
     }
 
     // ADR-113 §«Detach идущего шелла»: когда хэндл процесса доступен (есть
@@ -114,7 +146,7 @@ export const executeShellTool: ToolDefinition = {
         command,
         displayCommand: params.command,
         cwd,
-        timeoutMs: timeout,
+        timeoutMs,
         secrets,
       });
     }
@@ -131,7 +163,7 @@ export const executeShellTool: ToolDefinition = {
         // уходит в адрес пула, где оболочка есть. Inline-режим поле игнорирует.
         requires: toolRuntimeRequires('execute_shell'),
         cwd,
-        timeoutMs: timeout,
+        timeoutMs,
         // «Стоп» (POST /sessions/:id/abort → toolAbortController.abort) убивает
         // процесс SIGTERM — зомби-процессов не остаётся.
         signal: ctx.abortSignal,
@@ -181,15 +213,15 @@ export const executeShellTool: ToolDefinition = {
         let partial = '';
         if (execError.stdout) partial += execError.stdout;
         if (execError.stderr) partial += (partial ? '\n--- stderr ---\n' : '') + execError.stderr;
-        const message = sm('tool.shell_timeout', { timeout: String(timeout) });
+        const message = sm('tool.shell_timeout', { timeout: String(timeoutSec) });
         return {
           content: (partial ? `${partial}\n` : '') + message,
           isError: true,
           metadata: {
             command: params.command,
             reason: 'timeout',
-            timeoutMs: timeout,
-            i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeout) }),
+            timeout: timeoutSec,
+            i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeoutSec) }),
           },
         };
       }
@@ -215,8 +247,8 @@ export const executeShellTool: ToolDefinition = {
  * пишется в лог, а по завершении приходит уведомление в сессию (сообщение
  * роли USER + автоход) и событие `process.exited`.
  *
- * Таймаут в фоне по умолчанию **не задан** (процесс переживает ход агента);
- * явный `timeout` передаётся как есть.
+ * Таймаут в фоне — по умолчанию сутки (86 400 с); явный `timeout` (секунды)
+ * переопределяет его.
  */
 async function startBackgroundProcess(
   params: { command: string; timeout?: number; background?: boolean },
@@ -224,6 +256,7 @@ async function startBackgroundProcess(
   cwd: string,
   ctx: ToolContext,
   secrets: ExecSecret[],
+  timeoutSec: number,
 ): Promise<ToolResult> {
   const extra = ctx.extra as ShellToolExtra | undefined;
   // Мастер-выключатель фоновой работы (`background.enabled`) — гейтит и
@@ -250,8 +283,9 @@ async function startBackgroundProcess(
       ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
       command,
       cwd,
-      // Явный таймаут — как задал; без него фоновый процесс живёт без срока.
-      ...(params.timeout !== undefined ? { timeoutMs: params.timeout } : {}),
+      // Таймаут фонового процесса — всегда задан: дефолт — сутки, «без
+      // лимита» больше нет (потолок фона — 86 400 с).
+      timeoutMs: timeoutSec * 1000,
       env: { HOME: process.env.HOME || '/root' },
       // Секреты вызова (PROP-124 §7) — на время жизни фонового процесса;
       // в запись реестра и в лог они не попадают.

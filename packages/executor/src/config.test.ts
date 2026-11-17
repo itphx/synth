@@ -38,13 +38,13 @@ describe('конфигурация исполнителя (env)', () => {
     expect(config.workspaceRoot).toBe('/workspace');
   });
 
-  it('дефолт потолка таймаута — 600000 мс (10 мин)', () => {
-    expect(EXECUTOR_DEFAULTS.maxTimeoutMs).toBe(600_000);
+  it('дефолт потолка таймаута — 86400000 мс (сутки)', () => {
+    expect(EXECUTOR_DEFAULTS.maxTimeoutMs).toBe(86_400_000);
     const config = resolveExecutorConfig({
       [EXECUTOR_ENV.token]: 'secret',
       [EXECUTOR_ENV.workspace]: '/workspace',
     } as NodeJS.ProcessEnv);
-    expect(config.maxTimeoutMs).toBe(600_000);
+    expect(config.maxTimeoutMs).toBe(86_400_000);
   });
 
   it('явный потолок таймаута — как задано (дефолт не перекрывается)', () => {

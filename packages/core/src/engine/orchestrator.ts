@@ -1905,7 +1905,7 @@ export class ChatOrchestrator {
    * `null` — тул не из shell-класса (проверяется только `execute_shell`/
    * `sandbox_exec`: у прочих тулов команды нет) или команда пуста. `cwd` —
    * тот же, что попадает в журнал; таймаут — подсказка политике (`timeout`
-   * у `execute_shell`, `timeout_ms` у `sandbox_exec`).
+   * у `execute_shell` и `sandbox_exec`).
    */
   private _buildCommandPolicyInput(params: {
     toolName: string;
@@ -1915,11 +1915,12 @@ export class ChatOrchestrator {
     if (!isCommandAuditTool(params.toolName)) return null;
     const command = commandFromToolArgs(params.toolName, params.toolArgs);
     if (!command) return null;
-    const rawTimeout =
-      params.toolName === 'sandbox_exec' ? params.toolArgs.timeout_ms : params.toolArgs.timeout;
+    // Параметр `timeout` у обоих тулов — в **секундах**; чекер команд ждёт
+    // миллисекунды (перевод на границе).
+    const rawTimeout = params.toolArgs.timeout;
     const timeoutMs =
       typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
-        ? rawTimeout
+        ? rawTimeout * 1000
         : undefined;
     return {
       command,

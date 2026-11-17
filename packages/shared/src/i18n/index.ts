@@ -1245,7 +1245,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'terminal.tool.run_background_started': ["run_id"],
   'terminal.tool.run_result_header': ["run_id","status"],
   'terminal.tool.run_finished': ["terminal_id","exit_code"],
-  'terminal.tool.run_timeout': ["terminal_id","timeout_ms"],
+  'terminal.tool.run_timeout': ["terminal_id","timeout"],
   'terminal.tool.run_exited': ["terminal_id"],
   'terminal.tool.run_still_running': ["run_id","terminal_id"],
   'terminal.tool.run_busy': ["terminal_id"],

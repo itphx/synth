@@ -327,7 +327,8 @@ describe('project repos tools (ADR-076)', () => {
 
   it('clone: таймаут → git.clone_timeout с {timeout}, каталога не остаётся', async () => {
     const port = new TimingOutPort('clone');
-    const slowGit = new GitService(workspacesRoot, { execution: port, cloneTimeoutMs: 777 });
+    // Предел операции — из конфига (миллисекунды); модель видит его в секундах.
+    const slowGit = new GitService(workspacesRoot, { execution: port, cloneTimeoutMs: 777_000 });
 
     const result = await projectRepoCloneTool.execute(
       { url: 'https://example.invalid/org/slow.git', path: 'slow' },
@@ -339,7 +340,7 @@ describe('project repos tools (ADR-076)', () => {
     // В сообщении — действие: повторить или поднять `git.cloneTimeoutMs`.
     expect(result.content).toMatch(/git\.cloneTimeoutMs/);
     expect(await exists(join(workspacesRoot, 'proj', 'slow'))).toBe(false);
-    expect(port.calls.at(-1)?.timeoutMs).toBe(777);
+    expect(port.calls.at(-1)?.timeoutMs).toBe(777_000);
   });
 
   it('clone: путь заняли во время клона (гонка) → git.repo_exists с путём', async () => {
@@ -369,13 +370,13 @@ describe('project repos tools (ADR-076)', () => {
     await projectRepoCloneTool.execute({ url: `file://${bare}`, path: 'app' }, makeCtx());
 
     const port = new TimingOutPort('fetch');
-    const slowGit = new GitService(workspacesRoot, { execution: port, fetchTimeoutMs: 888 });
+    const slowGit = new GitService(workspacesRoot, { execution: port, fetchTimeoutMs: 888_000 });
     const result = await projectRepoFetchTool.execute({ path: 'app' }, makeCtx({ gitService: slowGit }));
 
     expect(result.isError).toBe(true);
     expect(result.metadata?.i18n).toEqual({ key: 'git.fetch_timeout', params: { timeout: '888' } });
     expect(result.content).toMatch(/git\.fetchTimeoutMs/);
-    expect(port.calls.at(-1)?.timeoutMs).toBe(888);
+    expect(port.calls.at(-1)?.timeoutMs).toBe(888_000);
   });
 
   it('init: создаёт репозиторий и регистрирует запись', async () => {

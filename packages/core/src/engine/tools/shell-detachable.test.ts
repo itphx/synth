@@ -403,7 +403,7 @@ describe('execute_shell — detach идущего шелла (ADR-113)', () => {
 
     const promise = executeShellTool.execute(
       // `exec sleep` — SIGTERM убивает сам `sleep`, сирот не остаётся.
-      { command: 'echo early; exec sleep 30', timeout: 120_000 },
+      { command: 'echo early; exec sleep 30', timeout: 120 },
       ctx,
     );
     await vi.waitFor(() => expect(registry.list('s1')).toHaveLength(1), { timeout: 5_000 });

@@ -785,7 +785,7 @@ remote:                           # гибридный режим: локаль�
 | `execution.remote.browserProfile` | строка | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Профиль **браузерного** пула (`class: 'browser'`): у браузера свой образ/профиль, поэтому `defaultProfile` он **не** наследует. Применяется, когда профиль цели не задан явно |
 | `execution.remote.browserProfiles` | string[] | `[]` | `SYNTH_EXECUTION_BROWSER_PROFILES` (csv) | Явный каталог **браузерных** профилей (отдельный контур, ADR-135 п. 10): пусто — каталог равен `[browserProfile]`. Имена исключаются из exec-каталога (`profiles`), но metadata в `execution.remote.profiles` остаётся для `details` |
 | `execution.remote.browserMcpServer` | строка | `playwright-mcp` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Имя MCP-сервера браузера в поде исполнителя: встроенные `browser_*`-тулы адресуют ему вызов (`POST /mcp/call`), без MCP-discovery |
-| `execution.remote.browserTimeoutMs` | число | `120000` | `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS` | Таймаут **одного** вызова браузерного MCP-инструмента (2 мин). У тулов `browser_navigate`/`browser_wait`/`browser_screenshot` переопределяется параметром `timeout` (1…600 000 мс). Потолок — 600 000 мс: значение выше — **ошибка конфигурации** (fail-closed). Настройка общая для секции — профили её не переопределяют |
+| `execution.remote.browserTimeoutMs` | число | `120000` | `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS` | Таймаут **одного** вызова браузерного MCP-инструмента (2 мин). У тулов `browser_navigate`/`browser_wait`/`browser_screenshot` переопределяется параметром `timeout` (**в секундах**, 1…600). Потолок — 600 000 мс: значение выше — **ошибка конфигурации** (fail-closed). Настройка общая для секции — профили её не переопределяют |
 | `execution.remote.profiles` | карта профилей | `{}` | — (только `config.yaml`) | Каталог профилей: `имя → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. Профиль **поверх** общих параметров: пустой `url` наследует `execution.remote.url`, незаданные `timeoutMs`/`concurrency`/`failMode` — общие значения секции. Метаданные (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **только имена**) отдаются в `GET /api/v2/execution/profiles` → `details` и **не влияют** на маршрутизацию и создание портов |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Поведение при непригодном профиле (нет адреса ни у профиля, ни общего): `instance` — откат на instance-порт; `fail` — fail-closed (старт прерывается) |
 | `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Провайдер пулов (ADR-135 Ф4b-1): `static` — пулы из конфигурации (адреса профиля, порт на старте — поведение Ф4a); `http` — пулы запрашиваются у provisioner'а (адрес и токен пула приходят ответом, порт собирается лениво) |
@@ -1983,7 +1983,7 @@ description: Поднять backend (:5000) и UI (:5002)
 run: ./scripts/dev.sh
 args: false
 cwd: .
-timeout: 0
+timeout: 86400
 requires: [bash]
 env: {}
 shell: false
@@ -1998,7 +1998,7 @@ ready: ""
 | `run` | Команда запуска: путь к файлу (argv-форма) или строка (при `shell: true`) | — (обязателен) |
 | `args` | Принимает ли скрипт аргументы (`!name a b`) | `false` |
 | `cwd` | Рабочий каталог — **относительный** путь внутри периметра сессии | рабочий каталог сессии |
-| `timeout` | Таймаут запуска, мс (0..600000; `0` — без таймаута) | `0` (без таймаута) |
+| `timeout` | Таймаут запуска, **в секундах** (1..86 400). Скрипт всегда запускается в фоне — действует потолок фонового режима | `86400` (сутки) |
 | `requires` | Бинарные требования запуска (для shell-формы по умолчанию `bash`) | — |
 | `env` | Доп. переменные окружения запуска (имена — `^[A-Za-z_][A-Za-z0-9_]*$`) | — |
 | `shell` | `run` исполняется оболочкой (иначе — прямой запуск файла) | `false` |
@@ -2312,7 +2312,7 @@ analytics:
 
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
-| `questions.timeoutMs` | Срок ожидания ответа, мс. `0` — **без таймаута** (по умолчанию): вопрос ждёт, пока ответят или его отменят (конец хода, «Стоп», ручная отмена). Тул `question` может задать срок для конкретного вопроса (`timeout`, ≥ 5 минут — не рекомендуется: ожидание обрывается). По истечении срока вопрос снимается с причиной `timeout`. Env — `SYNTH_QUESTIONS_TIMEOUT_MS` | `0` (без таймаута) |
+| `questions.timeoutMs` | Срок ожидания ответа, мс. `0` — **без таймаута** (по умолчанию): вопрос ждёт, пока ответят или его отменят (конец хода, «Стоп», ручная отмена). Тул `question` может задать срок для конкретного вопроса (`timeout` — **в секундах**, 300…86 400; не рекомендуется: ожидание обрывается). По истечении срока вопрос снимается с причиной `timeout`. Env — `SYNTH_QUESTIONS_TIMEOUT_MS` | `0` (без таймаута) |
 | `questions.retentionDays` | Срок хранения терминальных записей вопросов (`answered`/`cancelled`), дни; `<= 0` — без ограничения. Env — `SYNTH_QUESTIONS_RETENTION_DAYS` | `14` |
 
 ```yaml
@@ -2820,8 +2820,8 @@ opaque-данные `redacted_thinking` сохраняются **на каждо
 |------|-----------|--------------|
 | `git.cloneTimeoutMs` | Предел `git clone`, мс; `0` — без таймаута. Истечение → `git.clone_timeout` (HTTP **504**). Env — `SYNTH_GIT_CLONE_TIMEOUT_MS` | `300000` (5 минут) |
 | `git.fetchTimeoutMs` | Предел `git fetch`, мс; `0` — без таймаута. Истечение → `git.fetch_timeout` (HTTP **504**). Env — `SYNTH_GIT_FETCH_TIMEOUT_MS` | `300000` (5 минут) |
-| `git.localTimeoutMs` | Предел **локальных изменяющих** git-тулов агента (`git_commit`/`git_checkout`/`git_stash`), мс; `0` — без таймаута. Env — `SYNTH_GIT_LOCAL_TIMEOUT_MS` | `120000` (2 минуты) |
-| `git.networkTimeoutMs` | Предел **сетевых** git-тулов агента (`git_push`/`git_pull`), мс; `0` — без таймаута. Env — `SYNTH_GIT_NETWORK_TIMEOUT_MS` | `300000` (5 минут) |
+| `git.localTimeoutMs` | Предел **локальных изменяющих** git-тулов агента (`git_commit`/`git_checkout`/`git_stash`), мс; `0` — без таймаута. Env — `SYNTH_GIT_LOCAL_TIMEOUT_MS`. Per-call `timeout` у git-тулов — **в секундах** (1…600) | `120000` (2 минуты) |
+| `git.networkTimeoutMs` | Предел **сетевых** git-тулов агента (`git_push`/`git_pull`), мс; `0` — без таймаута. Env — `SYNTH_GIT_NETWORK_TIMEOUT_MS`. Per-call `timeout` у git-тулов — **в секундах** (1…600) | `300000` (5 минут) |
 
 - Прочие сбои (нет remote, нет прав, обрыв соединения) **не** подменяются таймаутом —
   наружу уходит исходная ошибка git.
@@ -2882,25 +2882,44 @@ ssh:
 
 ### Таймауты встроенных тулов
 
-Пределы времени работы инструментов агента. Класс операции задаёт дефолт, параметр
-`timeout` конкретного вызова — переопределяет его; `0` — без лимита.
+Пределы времени работы инструментов агента. **Единица входа — секунды**: параметр
+`timeout` любого тула — целое число секунд. Класс операции задаёт дефолт,
+per-call `timeout` — переопределяет его.
+
+Потолок задаёт **режим исполнения**, а не тул: **foreground ≤ 600 с** (10 минут),
+**background ≤ 86 400 с** (сутки). `0` («без лимита») больше не принимается.
 
 | Тул | Класс операции | Предел по умолчанию |
 |-----|----------------|---------------------|
 | `git_status`, `git_diff`, `git_log`, `git_show`, `git_blame`, `git_branch_list` | Чтение репозитория | 30 с (фиксированно) |
 | `git_commit`, `git_checkout`, `git_stash` | Локальные изменения | `git.localTimeoutMs` (120 с) |
 | `git_push`, `git_pull` | Сетевые операции | `git.networkTimeoutMs` (300 с) |
-| `execute_shell` | Блокирующая shell-команда | 120 с; `timeout` — до 600 000 мс, `0` — без лимита |
+| `execute_shell` | Блокирующая shell-команда | 120 с; в фоне — 86 400 с |
+| `terminal_run` | Запуск в терминале | 30 с (foreground); в фоне — 86 400 с |
+| `ssh_exec` | Команда на удалённом хосте | 120 с (foreground); в фоне — 86 400 с |
+| `ssh_copy` | Копирование по sftp | 120 с |
+| `ssh_tunnel` | Проброс порта (всегда фон) | 86 400 с |
+| `sandbox_exec` | Команда в песочнице | 120 с |
+| `browser_navigate`, `browser_wait`, `browser_screenshot` | Вызов браузерного инструмента | таймаут инстанса `execution.remote.browserTimeoutMs` (120 с) |
+| `web_fetch` | Загрузка URL | 30 с (потолок — 600 с) |
+| `question` | Ожидание ответа человека | без таймаута (`timeout` — 300…86 400 с) |
 | `grep_files`, `glob` | Поиск по файлам | 30 с (фиксированно) |
 
-- Per-call `timeout` есть у **всех** git-тулов: целое `0…600000` мс, `0` — без лимита.
-  У `execute_shell` — тот же диапазон (`0` — без лимита, максимум 600 000 мс).
-- `execute_shell` в фоне (`background: true`) таймаута по умолчанию **не имеет**: процесс
-  живёт, пока его не остановят; явный `timeout` переносится как есть.
+- Per-call `timeout` есть у **всех** git-тулов: целое `1…600` **секунд**.
+  У `execute_shell`/`terminal_run`/`ssh_exec` — тот же диапазон в foreground и
+  `1…86 400` в background (`background: true`).
+- `execute_shell`/`terminal_run`/`ssh_exec` в фоне таймаут **всегда задан**: дефолт —
+  сутки; «без лимита» у фонового процесса больше нет.
 - Пределы `execute_shell` и поиска — **свойства тула**, а не ключи конфига: меняются
   per-call параметром `timeout`.
 - Истечение лимита — **не** «Command failed»: модель получает величину предела и подсказку
   (увеличить `timeout`, поднять лимит в конфиге или уйти в фон).
+- **Внутри всё в миллисекундах:** порты исполнения (`ExecRequest.timeoutMs`),
+  executor-протокол и **конфиг-дефолты** (`git.*TimeoutMs`,
+  `execution.remote.browserTimeoutMs`, `questions.timeoutMs`) — в мс. Перевод —
+  на границе (`timeoutMs = timeout * 1000`); в сообщениях и метаданных тулов
+  величина показывается **в секундах** (`metadata.timeout`).
+- Единицы/пределы — PROP-141 (Часть A).
 
 ### Вложения сообщений (`attachments.*`, ADR-115)
 

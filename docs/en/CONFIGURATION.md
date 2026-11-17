@@ -2,6 +2,13 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-11-17 (**секция «Таймауты встроенных тулов»** — единица входа
+> `timeout` — **секунды**, потолок по режиму исполнения: foreground ≤ 600 с, background ≤ 86 400 с
+> (сутки), «без лимита» (`0`) больше нет; `web_fetch` — отдельный потолок 600 с, `question` —
+> 300…86 400 с; декларация скрипта `.synth/scripts/*.md` — `timeout` в секундах (1…86 400,
+> по умолчанию сутки); внутри всё в миллисекундах (порты, executor-протокол, конфиг-дефолты),
+> перевод — на границе; PROP-141 (Часть A) — **переведено**).
+
 > ⚠️ RU-версия обновлена 2026-11-14 (**секция «Группы OIDC» (`auth.oidc.groups`,
 > `SYNTH_OIDC_GROUPS_CLAIM`/`SYNTH_OIDC_GROUPS_ALLOW`, ADR-140)** — claim'а с группами и
 > allowlist имён (env — csv, приоритет env > config), пустой allowlist → групп нет
@@ -767,7 +774,7 @@ setting: switching the mode requires a process restart (invariant 24). The speci
 | `execution.remote.browserProfile` | string | `browser` | `SYNTH_EXECUTION_BROWSER_PROFILE` | Profile of the **browser** pool (`class: 'browser'`): the browser has its own image/profile, so it does **not** inherit `defaultProfile`. Used when the call target has no explicit profile |
 | `execution.remote.browserProfiles` | string[] | `[]` | `SYNTH_EXECUTION_BROWSER_PROFILES` (csv) | Explicit catalog of **browser** profiles (separate contour, ADR-135 §10): empty means `[browserProfile]`. Names are excluded from the exec catalog (`profiles`), while metadata in `execution.remote.profiles` is kept for `details` |
 | `execution.remote.browserMcpServer` | string | `playwright-mcp` | `SYNTH_EXECUTION_BROWSER_MCP_SERVER` | Name of the browser MCP server in the executor pod: the built-in `browser_*` tools address their calls to it (`POST /mcp/call`), without MCP discovery |
-| `execution.remote.browserTimeoutMs` | number | `120000` | `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS` | Timeout of **one** browser MCP tool call (2 min). The `browser_navigate`/`browser_wait`/`browser_screenshot` tools override it with the `timeout` parameter (1…600 000 ms). The ceiling is 600 000 ms: a value above it is a **configuration error** (fail-closed). The setting is common for the section — profiles do not override it |
+| `execution.remote.browserTimeoutMs` | number | `120000` | `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS` | Timeout of **one** browser MCP tool call (2 min). The `browser_navigate`/`browser_wait`/`browser_screenshot` tools override it with the `timeout` parameter (**in seconds**, 1…600). The ceiling is 600 000 ms: a value above it is a **configuration error** (fail-closed). The setting is common for the section — profiles do not override it |
 | `execution.remote.profiles` | map of profiles | `{}` | — (`config.yaml` only) | Profile catalogue: `name → { url, timeoutMs, concurrency, failMode, description?, image?, network?, resources?, runtimeClass?, mcpServers? }`. A profile is **on top of** the common parameters: an empty `url` inherits `execution.remote.url`, unset `timeoutMs`/`concurrency`/`failMode` inherit the section values. Metadata (`description` ≤ 500, `image`, `network` `none\|restricted\|full`, `resources.requests/limits.{cpu,memory}`, `runtimeClass`, `mcpServers` — **names only**) is returned in `GET /api/v2/execution/profiles` → `details` and does **not** affect routing or port creation |
 | `execution.remote.fallback` | `instance` \| `fail` | `instance` | `SYNTH_EXECUTION_FALLBACK` | Behaviour for an unusable profile (no address in the profile nor in the common `url`): `instance` — fall back to the instance port; `fail` — fail-closed (the startup is aborted) |
 | `execution.remote.provider` | `static` \| `http` | `static` | `SYNTH_EXECUTION_PROVIDER` | Pool provider (ADR-135 F4b-1): `static` — pools from the configuration (profile addresses, the port is built at startup — the F4a behaviour); `http` — pools are requested from the provisioner (the pool address and token come from the response, the port is built lazily) |
@@ -1984,7 +1991,7 @@ description: Start the backend (:5000) and the UI (:5002)
 run: ./scripts/dev.sh
 args: false
 cwd: .
-timeout: 0
+timeout: 86400
 requires: [bash]
 env: {}
 shell: false
@@ -1999,7 +2006,7 @@ Local debugging without building the packages. Stop it — "Processes" → dev.
 | `run` | The run command: a file path (argv form) or a string (with `shell: true`) | — (required) |
 | `args` | Whether the script accepts arguments (`!name a b`) | `false` |
 | `cwd` | The working directory — a **relative** path inside the session perimeter | the working directory of the session |
-| `timeout` | The run timeout, ms (0..600000; `0` — no timeout) | `0` (no timeout) |
+| `timeout` | The run timeout, **in seconds** (1..86 400). A script always runs in the background — the background ceiling applies | `86400` (one day) |
 | `requires` | The binary requirements of the run (the shell form defaults to `bash`) | — |
 | `env` | Extra environment variables of the run (names — `^[A-Za-z_][A-Za-z0-9_]*$`) | — |
 | `shell` | `run` is executed by a shell (otherwise — the file is run directly) | `false` |
@@ -2842,25 +2849,44 @@ ssh:
 
 ### Timeouts of the built-in tools
 
-The time limits of the agent's tools. The operation class sets the default, the `timeout`
-parameter of a single call overrides it; `0` — no limit.
+The time limits of the agent's tools. **The input unit is seconds**: the `timeout`
+parameter of any tool is an integer number of seconds. The operation class sets the default,
+a per-call `timeout` overrides it.
+
+The ceiling is set by the **execution mode**, not by the tool: **foreground ≤ 600 s**
+(10 minutes), **background ≤ 86 400 s** (one day). `0` ("no limit") is no longer accepted.
 
 | Tool | Operation class | Default limit |
 |------|-----------------|---------------|
 | `git_status`, `git_diff`, `git_log`, `git_show`, `git_blame`, `git_branch_list` | Reading the repository | 30 s (fixed) |
 | `git_commit`, `git_checkout`, `git_stash` | Local changes | `git.localTimeoutMs` (120 s) |
 | `git_push`, `git_pull` | Network operations | `git.networkTimeoutMs` (300 s) |
-| `execute_shell` | Blocking shell command | 120 s; `timeout` — up to 600 000 ms, `0` — no limit |
+| `execute_shell` | Blocking shell command | 120 s; in the background — 86 400 s |
+| `terminal_run` | Run in a terminal | 30 s (foreground); in the background — 86 400 s |
+| `ssh_exec` | Command on a remote host | 120 s (foreground); in the background — 86 400 s |
+| `ssh_copy` | Copying over sftp | 120 s |
+| `ssh_tunnel` | Port forwarding (always background) | 86 400 s |
+| `sandbox_exec` | Command in the sandbox | 120 s |
+| `browser_navigate`, `browser_wait`, `browser_screenshot` | Browser tool call | the instance timeout `execution.remote.browserTimeoutMs` (120 s) |
+| `web_fetch` | URL fetch | 30 s (ceiling — 600 s) |
+| `question` | Waiting for a human | no timeout (`timeout` — 300…86 400 s) |
 | `grep_files`, `glob` | Searching the files | 30 s (fixed) |
 
-- The per-call `timeout` is available in **all** git tools: an integer `0…600000` ms, `0` — no
-  limit. `execute_shell` has the same range (`0` — no limit, maximum 600 000 ms).
-- `execute_shell` in the background (`background: true`) has **no** timeout by default: the
-  process lives until it is stopped; an explicit `timeout` is passed as is.
+- The per-call `timeout` is available in **all** git tools: an integer `1…600` **seconds**.
+  `execute_shell`/`terminal_run`/`ssh_exec` have the same range in foreground and
+  `1…86 400` in the background (`background: true`).
+- `execute_shell`/`terminal_run`/`ssh_exec` in the background always have a timeout: the
+  default is one day; a background process has no "no limit" mode anymore.
 - The limits of `execute_shell` and of the search tools are **properties of the tool**, not
   configuration keys: change them per call with the `timeout` parameter.
 - Exceeding a limit is **not** a "Command failed": the model gets the limit value and a hint
   (raise `timeout`, raise the limit in the config, or move the work to the background).
+- **Internally everything is in milliseconds:** the execution ports (`ExecRequest.timeoutMs`),
+  the executor protocol and the **configuration defaults** (`git.*TimeoutMs`,
+  `execution.remote.browserTimeoutMs`, `questions.timeoutMs`) are in ms. The conversion
+  happens **at the boundary** (`timeoutMs = timeout * 1000`); tool messages and metadata
+  show the value **in seconds** (`metadata.timeout`).
+- Units and ceilings — PROP-141 (Part A).
 
 ### Message attachments (`attachments.*`, ADR-115)
 

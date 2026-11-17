@@ -662,7 +662,7 @@ describe('Уведомление сессии о завершении запус
     expect(timeout.content).toContain('Ctrl+C');
     // Маркер таймаута: срок ожидания и «команда ещё жива», кода возврата нет.
     expect(timeout.content).toContain(
-      '[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=30000 still_running=true]\npartial\n[CONTENT END]',
+      '[CONTENT terminal=term_1 run=run_1 status=timeout timeout=30 still_running=true]\npartial\n[CONTENT END]',
     );
 
     const exited = buildTerminalRunNotification({ ...base, status: 'exited', stillRunning: false });

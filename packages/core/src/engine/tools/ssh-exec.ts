@@ -51,6 +51,7 @@ import { resolveSshAccess, SshAccessError } from '../ssh/access.js';
 import { sshAccessFailureResult, sshToolFailureResult } from '../ssh/result.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { TIMEOUT_BG_LIMIT_MESSAGE, TIMEOUT_FG_LIMIT_MESSAGE, timeoutParam } from '../timeout.js';
 import { isAborted, abortedResult } from './abort.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 import { MAX_OUTPUT_LENGTH } from './shell-detachable.js';
@@ -63,14 +64,21 @@ import { BackgroundUnsupportedError } from '../processes/types.js';
 export const SSH_EXEC_TOOL = 'ssh_exec';
 
 /**
- * Таймаут вызова по умолчанию, мс (как у `execute_shell`).
- *
- * В фоне таймаут по умолчанию **не задаётся** (процесс переживает ход агента).
+ * Таймаут вызова по умолчанию, **секунды** (как у `execute_shell`).
  */
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_SEC = 120;
 
-/** Верхняя граница таймаута, мс (как у `execute_shell`). */
-const MAX_TIMEOUT_MS = 600_000;
+/**
+ * Таймаут фонового вызова по умолчанию, секунды (сутки) — фоновый процесс
+ * переживает ход агента, но не бесконечно.
+ */
+const DEFAULT_BACKGROUND_TIMEOUT_SEC = 86_400;
+
+/** Верхняя граница таймаута в foreground, секунды (10 минут). */
+const MAX_FG_TIMEOUT_SEC = 600;
+
+/** Верхняя граница таймаута в background, секунды (сутки). */
+const MAX_BG_TIMEOUT_SEC = 86_400;
 
 /** Предел длины хоста, символов (RFC 1035 — длина DNS-имени). */
 const MAX_HOST_LENGTH = 253;
@@ -145,19 +153,28 @@ const sshExecSchema = z
       .min(1)
       .max(MAX_ARGV_ITEMS)
       .describe('Remote command as an argument list (no shell on the local side)'),
-    timeout_ms: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_TIMEOUT_MS)
-      .optional()
-      .describe(`Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS}; max ${MAX_TIMEOUT_MS})`),
+    timeout: timeoutParam({
+      max: MAX_BG_TIMEOUT_SEC,
+      // Верхняя граница — общий потолок фонового режима: текст отказа
+      // говорит про background, а не про foreground (foreground-потолок
+      // проверяет `.refine` ниже — по режиму).
+      maxMessage: TIMEOUT_BG_LIMIT_MESSAGE,
+      description:
+        `Timeout in seconds (foreground: default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_FG_TIMEOUT_SEC}; `
+        + `background: default ${DEFAULT_BACKGROUND_TIMEOUT_SEC}, max ${MAX_BG_TIMEOUT_SEC})`,
+    }),
     background: z
       .boolean()
       .optional()
       .describe('Run the command in the background and return immediately (a notification arrives later)'),
   })
-  .strict();
+  .strict()
+  // Потолок таймаута зависит от режима: foreground — 10 минут, background —
+  // сутки. Режим задан соседним полем, поэтому проверка отдельная.
+  .refine(
+    (value) => value.background === true || value.timeout === undefined || value.timeout <= MAX_FG_TIMEOUT_SEC,
+    { message: TIMEOUT_FG_LIMIT_MESSAGE, path: ['timeout'] },
+  );
 
 /** Параметры тула после валидации схемой. */
 interface SshExecParams {
@@ -166,7 +183,7 @@ interface SshExecParams {
   port?: number;
   key_id?: string;
   argv: string[];
-  timeout_ms?: number;
+  timeout?: number;
   background?: boolean;
 }
 
@@ -226,7 +243,8 @@ export const sshExecTool: ToolDefinition = {
     + 'it ssh would connect as the local user of the executor. The SSH key is chosen by id '
     + '(see ssh_keys_list) or automatically, and the host/port must be allowed by the key policy. '
     + 'The key is delivered through a temporary ssh-agent for the duration of the call — it never '
-    + 'appears in the command line. Timeout: 120000 ms by default (max 600000 ms). '
+    + 'appears in the command line. Timeout in seconds: 120 by default (max 600 in foreground, '
+    + 'up to 86400 in background mode). '
     + 'Set background=true to run the command in the background: it returns immediately and a '
     + 'notification with the result arrives automatically — do not poll for the status.',
   parameters: sshExecSchema,
@@ -297,7 +315,11 @@ export const sshExecTool: ToolDefinition = {
       argv: params.argv,
     });
     const displayCommand = formatCommandDisplay(command);
-    const timeout = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
+    // Таймаут — **секунды** (входной параметр тула); в порт уходит миллисекунды.
+    const timeoutSec = params.background === true
+      ? (params.timeout ?? DEFAULT_BACKGROUND_TIMEOUT_SEC)
+      : (params.timeout ?? DEFAULT_TIMEOUT_SEC);
+    const timeoutMs = timeoutSec * 1000;
 
     // Рабочий каталог — рабочий каталог сессии (containment как у
     // `execute_shell`): команда исполняется в периметре сессии.
@@ -305,7 +327,7 @@ export const sshExecTool: ToolDefinition = {
     if (isSymlinkEscapeInRoots(toolRoots(ctx), cwd)) return pathEscapesWorkspaceResult(cwd);
 
     if (params.background === true) {
-      return await startBackgroundProcess(params, command, displayCommand, cwd, timeout, secrets, ctx);
+      return await startBackgroundProcess(params, command, displayCommand, cwd, timeoutSec, secrets, ctx);
     }
 
     try {
@@ -315,7 +337,7 @@ export const sshExecTool: ToolDefinition = {
         // адрес пула, где есть клиент SSH.
         requires: toolRuntimeRequires(SSH_EXEC_TOOL),
         cwd,
-        timeoutMs: timeout,
+        timeoutMs,
         // «Стоп» (POST /sessions/:id/abort) убивает процесс SIGTERM.
         signal: ctx.abortSignal,
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
@@ -366,13 +388,13 @@ export const sshExecTool: ToolDefinition = {
       // Таймаут — actionable-текст (величина лимита + следующий шаг).
       if (isExecutionError(err) && err.reason === 'timeout') {
         return {
-          content: sm('tool.shell_timeout', { timeout: String(timeout) }),
+          content: sm('tool.shell_timeout', { timeout: String(timeoutSec) }),
           isError: true,
           metadata: {
             command: displayCommand,
             reason: 'timeout',
-            timeoutMs: timeout,
-            i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeout) }),
+            timeout: timeoutSec,
+            i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeoutSec) }),
           },
         };
       }
@@ -410,7 +432,7 @@ async function startBackgroundProcess(
   command: { file: string; args: string[] },
   displayCommand: string,
   cwd: string,
-  timeout: number,
+  timeoutSec: number,
   secrets: ExecSecret[],
   ctx: ToolContext,
 ): Promise<ToolResult> {
@@ -433,7 +455,8 @@ async function startBackgroundProcess(
       argv: { file: command.file, args: command.args },
       requires: toolRuntimeRequires(SSH_EXEC_TOOL),
       cwd,
-      ...(params.timeout_ms !== undefined ? { timeoutMs: params.timeout_ms } : {}),
+      // Таймаут фонового процесса — всегда задан (дефолт — сутки).
+      timeoutMs: timeoutSec * 1000,
       env: { HOME: process.env.HOME || '/root' },
       // Секреты вызова — на время жизни фонового процесса; в запись реестра
       // и в лог они не попадают.

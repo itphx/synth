@@ -27,7 +27,7 @@
  *   занятость терминала (`run_busy`), запрет команды политикой;
  * - `terminal_run` с `background: true` — запуск без ожидания: `run_id` +
  *   подсказка, доставка результата — нотификатором сервиса (`onRunFinished`),
- *   а не тулом; `timeout_ms` — необязательный watchdog;
+ *   а не тулом; `timeout` — срок ожидания/watchdog (секунды);
  * - `terminal_close` — закрытие и единый отказ «не найден»;
  * - permission-слой: plan-блокировка мутирующих тулов, группа `terminal`,
  *   доступность при выключенном контуре и при отсутствии PTY.
@@ -1079,9 +1079,9 @@ describe('Тулы интерактивных терминалов (terminals.ts
       );
     });
 
-    it('маркер запуска (timeout): timeout_ms и still_running, без exit', async () => {
+    it('маркер запуска (timeout): timeout и still_running, без exit', async () => {
       const promise = terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
+        { terminal_id: 'term_1', command: 'sleep 100', timeout: 1 },
         makeCtx(),
       );
       await vi.waitFor(() => expect(service.runs.size).toBe(1));
@@ -1090,7 +1090,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
 
       const result = await promise;
       expect(result.content).toContain(
-        '[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000 still_running=true]\npartial\n[CONTENT END]',
+        '[CONTENT terminal=term_1 run=run_1 status=timeout timeout=1 still_running=true]\npartial\n[CONTENT END]',
       );
       // Кода возврата нет — атрибута `exit` тоже нет.
       expect(result.content).not.toContain('exit=');
@@ -1113,7 +1113,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
 
     it('таймаут запуска — понятный статус и частичный вывод', async () => {
       const promise = terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
+        { terminal_id: 'term_1', command: 'sleep 100', timeout: 1 },
         makeCtx(),
       );
       await vi.waitFor(() => expect(service.runs.size).toBe(1));
@@ -1123,13 +1123,13 @@ describe('Тулы интерактивных терминалов (terminals.ts
       const result = await promise;
       expect(result.metadata?.status).toBe('timeout');
       expect(result.content).toContain('timeout');
-      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000 still_running=true]');
+      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout=1 still_running=true]');
       expect(result.content).toContain('partial');
     });
 
     it('таймаут не убивает команду: в ответе still_running, run_id и подсказка', async () => {
       const promise = terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
+        { terminal_id: 'term_1', command: 'sleep 100', timeout: 1 },
         makeCtx(),
       );
       await vi.waitFor(() => expect(service.runs.size).toBe(1));
@@ -1159,7 +1159,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
 
     it('timeout + stillRunning: признак «продолжает выполняться» — из записи запуска', async () => {
       const promise = terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000 },
+        { terminal_id: 'term_1', command: 'sleep 100', timeout: 1 },
         makeCtx(),
       );
       await vi.waitFor(() => expect(service.runs.size).toBe(1));
@@ -1169,12 +1169,12 @@ describe('Тулы интерактивных терминалов (terminals.ts
       const result = await promise;
       expect(result.metadata?.still_running).toBe(true);
       expect(result.content).toContain('still running');
-      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000 still_running=true]');
+      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout=1 still_running=true]');
     });
 
     it('kill_on_timeout: по таймауту Ctrl+C, терминал свободен (без «продолжает выполняться»)', async () => {
       const promise = terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'sleep 100', timeout_ms: 1_000, kill_on_timeout: true },
+        { terminal_id: 'term_1', command: 'sleep 100', timeout: 1, kill_on_timeout: true },
         makeCtx(),
       );
       await vi.waitFor(() => expect(service.runs.size).toBe(1));
@@ -1192,7 +1192,7 @@ describe('Тулы интерактивных терминалов (terminals.ts
       // Отказ по сроку с частичным выводом.
       expect(result.content).toContain('did not finish');
       expect(result.content).toContain('partial');
-      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout_ms=1000]');
+      expect(result.content).toContain('[CONTENT terminal=term_1 run=run_1 status=timeout timeout=1]');
     });
 
     it('вышедший терминал — своя строка статуса (без «Exit code: -»)', async () => {
@@ -1233,14 +1233,14 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(notBool.content).toContain('argument error');
 
       const zeroTimeout = await terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'ls', timeout_ms: 0 },
+        { terminal_id: 'term_1', command: 'ls', timeout: 0 },
         makeCtx(),
       );
       expect(zeroTimeout.isError).toBe(true);
       expect(zeroTimeout.content).toContain('argument error');
 
       const tooBigTimeout = await terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'ls', timeout_ms: 600_001 },
+        { terminal_id: 'term_1', command: 'ls', timeout: 601 },
         makeCtx(),
       );
       expect(tooBigTimeout.isError).toBe(true);
@@ -1450,23 +1450,22 @@ describe('Тулы интерактивных терминалов (terminals.ts
       expect(service.started[0]?.killOnTimeout).toBe(false);
     });
 
-    it('timeout_ms — необязательный watchdog: без него лимита нет', async () => {
+    it('timeout фонового запуска по умолчанию — сутки («без лимита» больше нет)', async () => {
       const result = await terminalRunTool.execute(
         { terminal_id: 'term_1', command: 'npm test', background: true },
         makeCtx(),
       );
-      // Срок не задан — в метаданных его нет, сервису уходит срок `0`:
-      // реестр запусков при таком сроке watchdog-таймер **не ставит**.
-      expect(result.metadata?.timeout_ms).toBeUndefined();
-      expect(service.started[0]?.timeoutMs).toBe(0);
+      // Срок не задан — дефолт фонового режима: сутки (86 400 с → 86 400 000 мс).
+      expect(result.metadata?.timeout).toBeUndefined();
+      expect(service.started[0]?.timeoutMs).toBe(86_400_000);
     });
 
-    it('заданный timeout_ms — watchdog фонового запуска', async () => {
+    it('заданный timeout — watchdog фонового запуска', async () => {
       const result = await terminalRunTool.execute(
-        { terminal_id: 'term_1', command: 'npm test', background: true, timeout_ms: 60_000 },
+        { terminal_id: 'term_1', command: 'npm test', background: true, timeout: 60 },
         makeCtx(),
       );
-      expect(result.metadata?.timeout_ms).toBe(60_000);
+      expect(result.metadata?.timeout).toBe(60);
       expect(service.started[0]?.timeoutMs).toBe(60_000);
     });
 

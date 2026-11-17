@@ -51,18 +51,19 @@ import { isAborted, abortedResult } from './abort.js';
 import { argErrorResult } from './arg-error.js';
 import { resolveExecutionRouter } from '../../execution/tool-port.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError } from '../../execution/ports/index.js';
+import { TIMEOUT_FG_MAX_SEC, timeoutParam } from '../timeout.js';
 import type { ExecutionError } from '../../execution/ports/index.js';
 
 /** Предел числа команд за один вызов. */
 export const SANDBOX_MAX_COMMANDS = 5;
 
 /**
- * Таймаут одной команды по умолчанию, мс (как у `execute_shell`).
+ * Таймаут одной команды по умолчанию, **секунды** (как у `execute_shell`).
  *
  * Ограничение — **на команду**, а не на вызов: команды идут последовательно,
  * и модель должна видеть, какая именно не уложилась.
  */
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_SEC = 120;
 
 /** Текст отказа, когда роутера исполнения нет (inline/без пулов). */
 const NO_ROUTER_TEXT =
@@ -91,13 +92,10 @@ const sandboxExecSchema = z.object({
       'Working directory for the commands (absolute or relative to the working directory; '
       + 'defaults to the working directory)',
     ),
-  timeout_ms: z
-    .number()
-    .int()
-    .min(1000)
-    .max(600_000)
-    .optional()
-    .describe('Timeout per command in milliseconds (default: 120000; max 600000)'),
+  timeout: timeoutParam({
+    max: TIMEOUT_FG_MAX_SEC,
+    description: 'Timeout per command in seconds (default: 120; max 600)',
+  }),
 });
 
 /** Разобранные аргументы `sandbox_exec`. */
@@ -136,7 +134,7 @@ export const sandboxExecTool: ToolDefinition = {
     + 'execution profile — a different image/toolchain than the session workspace (use execute_shell for the '
     + 'project working tree). Each command starts in `cwd` (absolute or relative to the working directory; '
     + 'defaults to the working directory) and execution stops at the first failure. '
-    + 'Timeout: 120 seconds per command by default (set timeout_ms to change it, 1000..600000 ms). '
+    + 'Timeout in seconds: 120 per command by default (set timeout to change it, 1..600). '
     + 'Returns the per-command stdout, stderr, and exit code. '
     + 'Permission-wise this tool belongs to the `shell` group; it does not apply the shell guard of '
     + 'execute_shell (the command runs in another pool), and it is unavailable when the instance runs '
@@ -191,7 +189,9 @@ export const sandboxExecTool: ToolDefinition = {
       };
     }
 
-    const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
+    // Параметр тула — **секунды**; в порт уходит миллисекунды (перевод на
+    // границе, внутренний контракт остаётся в мс).
+    const timeoutMs = (params.timeout ?? DEFAULT_TIMEOUT_SEC) * 1000;
     const reports: string[] = [];
     const exitCodes: number[] = [];
     let failed = false;

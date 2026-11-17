@@ -84,7 +84,7 @@ export interface ScriptDetail extends ScriptSummary {
   cwd?: string;
   /** Принимает ли скрипт аргументы (`args` в декларации). */
   args: boolean;
-  /** Таймаут запуска, мс (`0` — без таймаута). */
+  /** Таймаут запуска, **секунды** (1…86 400; по умолчанию 86 400). */
   timeout?: number;
   /** Бинарные требования запуска. */
   requires?: string[];

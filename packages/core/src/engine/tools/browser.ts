@@ -35,6 +35,7 @@ import { AttachmentError, type AttachmentService } from '../attachments/service.
 import { warning } from '../../logger.js';
 import { abortedResult, isAborted } from './abort.js';
 import { argErrorResult } from './arg-error.js';
+import { TIMEOUT_FG_MAX_SEC } from '../timeout.js';
 
 /** Текст отказа, когда порт не умеет browser-вызов (inline/старая реализация). */
 export const BROWSER_UNAVAILABLE_TEXT =
@@ -325,20 +326,28 @@ async function callBrowserScreenshot(
 }
 
 /**
- * Параметр `timeout` — таймаут одного вызова браузерного инструмента, мс.
+ * Параметр `timeout` — таймаут одного вызова браузерного инструмента, **секунды**.
  *
- * Перекрывает таймаут инстанса (`execution.remote.browserTimeoutMs`); потолок —
- * 600 000 мс (`MAX_EXECUTION_BROWSER_TIMEOUT_MS` в `@itphx/synth-shared`).
+ * Перекрывает таймаут инстанса (`execution.remote.browserTimeoutMs`, дефолт 120 с);
+ * потолок — 600 с (`MAX_EXECUTION_BROWSER_TIMEOUT_MS` в `@itphx/synth-shared`).
  */
 const timeoutParam = z
   .number()
   .int()
   .min(1)
-  .max(600_000)
+  .max(TIMEOUT_FG_MAX_SEC)
   .optional()
   .describe(
-    'Timeout in milliseconds for this call (default from instance settings; max 600000)',
+    'Timeout in seconds for this call (default: instance settings, usually 120; max 600)',
   );
+
+/**
+ * Таймаут вызова: **секунды** (входной параметр тула) → миллисекунды
+ * (внутренний контракт `BrowserCallRequest.timeoutMs`).
+ */
+function timeoutMsOf(timeoutSec: number | undefined): number | undefined {
+  return timeoutSec !== undefined ? timeoutSec * 1000 : undefined;
+}
 
 const navigateSchema = z.object({
   url: z
@@ -437,7 +446,7 @@ export const browserNavigateTool: ToolDefinition = {
       this.name,
       'browser_navigate',
       { url: parsed.data.url },
-      parsed.data.timeout,
+      timeoutMsOf(parsed.data.timeout),
     );
   },
 };
@@ -545,7 +554,7 @@ export const browserWaitTool: ToolDefinition = {
         ...(parsed.data.time !== undefined ? { time: parsed.data.time } : {}),
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
       },
-      parsed.data.timeout,
+      timeoutMsOf(parsed.data.timeout),
     );
   },
 };
@@ -579,7 +588,7 @@ export const browserScreenshotTool: ToolDefinition = {
         ...(parsed.data.fullPage !== undefined ? { fullPage: parsed.data.fullPage } : {}),
       },
       filename,
-      parsed.data.timeout,
+      timeoutMsOf(parsed.data.timeout),
     );
   },
 };

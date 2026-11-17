@@ -380,7 +380,7 @@ describe('исполнитель: лимиты и служебные эндпо�
   });
 
   it('capabilities — эффективные лимиты исполнителя (потолок таймаута и вывода)', async () => {
-    // Дефолт исполнителя: потолок таймаута 600 c (10 мин), буфер вывода 10 МиБ.
+    // Дефолт исполнителя: потолок таймаута 86400 c (сутки), буфер вывода 10 МиБ.
     const app = makeApp();
     const res = await app.request('/capabilities', {
       headers: { authorization: `Bearer ${TOKEN}` },
@@ -397,7 +397,7 @@ describe('исполнитель: лимиты и служебные эндпо�
       };
       limits?: { timeoutMs: number; maxOutputBytes: number };
     };
-    expect(body.limits?.timeoutMs).toBe(600_000);
+    expect(body.limits?.timeoutMs).toBe(86_400_000);
     expect(body.limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
     // Поле `limits` аддитивное: из-за него версия не повышается (текущая — 9).
     expect(body.protocol).toBe(9);

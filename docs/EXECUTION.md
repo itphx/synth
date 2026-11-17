@@ -103,7 +103,7 @@
 | **Хранилище** | файловое (`{dataDir}`) или PostgreSQL | PostgreSQL (предпосылка — см. «Миграция между топологиями») |
 | **Workspace проекта** (`project.workspace`, [ADR-075](./arch_decisions/adr-075-project-workspace-provisioning.md)) | локальный каталог backend'а | общий том (backend ↔ исполнители), см. «Доступ к workspace» |
 | **Toolchain** (`git`, `ripgrep`, `bash`, `python3`, `openssh-client`) | в образе backend'а (flavor — PROP-082) | в образе worker'а (`synth-executor`) |
-| **Исполнитель** (spawn/timeout/kill, лимиты вывода) | `InlineExecutionPort` — `spawn` с `detached: true` в процессе (kill группы: `SIGTERM` → `SIGKILL`) | удалённый порт — HTTP к `synth-executor` |
+| **Исполнитель** (spawn/timeout/kill, лимиты вывода) | `InlineExecutionPort` — `spawn` с `detached: true` в процессе (kill группы: `SIGTERM` → `SIGKILL`) | удалённый порт — HTTP к `synth-executor`; потолок таймаута — `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` (дефолт `86400000` мс — сутки, потолок фонового режима) |
 | **Исполняемые команды** (shell, grep, git) | в процессе backend'а | в контейнере worker'а |
 | **FS-роуты** (чтение/запись файлов через HTTP) | backend | backend (не уезжают — см. матрицу) |
 | **Provisioning workspace** | backend (`engine/workspace-provision.ts`) | backend (тот же модуль) |
@@ -424,7 +424,7 @@ Discovery и вызовы MCP-инструментов исполнителя и
 | Сервер в поде | `execution.remote.browserMcpServer` (дефолт `playwright-mcp` — совпадает с дефолтом образа; env `SYNTH_EXECUTION_BROWSER_MCP_SERVER`) |
 | Профиль пула | `execution.remote.browserProfile` (дефолт `browser`; env `SYNTH_EXECUTION_BROWSER_PROFILE`) |
 | Область пула | проект сессии (`project:<projectId>:browser:<profile>`), без проекта — `sessionId` |
-| Таймаут вызова | `execution.remote.browserTimeoutMs` (дефолт `120000`; env `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS`; потолок `600000`) |
+| Таймаут вызова | `execution.remote.browserTimeoutMs` (дефолт `120000` мс; env `SYNTH_EXECUTION_BROWSER_TIMEOUT_MS`; потолок `600000` мс). Параметр тула `timeout` — **в секундах** (1…600) |
 
 Имена инструментов на MCP-сервере не совпадают с именами тулов: `browser_press` → `browser_press_key`,
 `browser_wait` → `browser_wait_for`, `browser_screenshot` → `browser_take_screenshot`. `ref`
@@ -438,8 +438,8 @@ Discovery и вызовы MCP-инструментов исполнителя и
   потолка — **ошибка конфигурации**, а не тихая обрезка). Настройка общая для секции: профили
   (`execution.remote.profiles`) её не переопределяют;
 - параметр `timeout` у тулов `browser_navigate`/`browser_wait`/`browser_screenshot` — таймаут
-  **одного** вызова, мс (1…600 000). В порт уходит полем `BrowserCallRequest.timeoutMs`; в аргументы
-  MCP-инструмента он **не** попадает.
+  **одного** вызова, **в секундах** (1…600). В порт уходит полем `BrowserCallRequest.timeoutMs`
+  (миллисекунды — внутренний контракт); в аргументы MCP-инструмента он **не** попадает.
 
 Клиент удалённого порта (`packages/executor/src/client.ts`) считает лимит так: без `timeoutMs` —
 таймаут инстанса; с `timeoutMs` — `min(timeoutMs, 600000) + 5000` (запас `REMOTE_TIMEOUT_GRACE_MS`,
@@ -1036,7 +1036,7 @@ control plane и пул исполнителей обновляются **вме
     "fs": true,
     "pty": true
   },
-  "limits": { "timeoutMs": 1800000, "maxOutputBytes": 33554432 }
+  "limits": { "timeoutMs": 86400000, "maxOutputBytes": 33554432 }
 }
 ```
 
@@ -1052,7 +1052,8 @@ control plane и пул исполнителей обновляются **вме
   (путь есть, но это не каталог), `403 permission` (нет доступа), `400 unresolvable`
   (битый симлинк/цикл/ошибка ФС — fail-closed), `400 invalid_request` (невалидное тело).
 - **Поле `limits` — аддитивное** (появилось в протоколе **6**, в **7** не изменилось): эффективные потолки
-  исполнителя — таймаут команды (`timeoutMs`) и буфер вывода (`maxOutputBytes`).
+  исполнителя — таймаут команды (`timeoutMs`, мс; дефолт — сутки, `86400000`) и буфер вывода
+  (`maxOutputBytes`).
   Значения берутся из env исполнителя (`SYNTH_EXECUTOR_MAX_TIMEOUT_MS`,
   `SYNTH_EXECUTOR_MAX_OUTPUT_BYTES`). Старый control plane поле просто не читает
   (лишнее поле в ответе), а **у старого исполнителя поля нет — это норма**, не

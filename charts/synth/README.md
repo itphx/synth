@@ -169,7 +169,7 @@ ingress:
 | `executor.service.port` / `.targetPort` | `5100` / `5100` | Service исполнителя (его адрес — `SYNTH_EXECUTION_REMOTE_URL`) |
 | `executor.service.sessionAffinity` | `None` | Привязка клиента к поду пула: `None` \| `ClientIP`. Нужна при `executor.replicaCount > 1` — браузерные MCP-сессии живут внутри под'а (см. «Привязка клиента к поду пула исполнителей») |
 | `executor.resources` | limits `4`/8Gi, requests `1`/2Gi | Ресурсы исполнителя — **рабочее место агента**: сборка монорепо (`pnpm install`/`build`/`typecheck`) идёт минутами и требует CPU и памяти; прежние дефолты (200m/256Mi) для неё малы. Переопределяется своими значениями (`executor.resources.*`) |
-| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `1800000` / `33554432` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`): таймаут 30 мин (полная сборка Synth идёт минутами), буфер вывода 32 МиБ (лог vite/tsc большой) |
+| `executor.limits.maxConcurrency` / `.maxTimeoutMs` / `.maxOutputBytes` | `4` / `86400000` / `33554432` | Лимиты исполнителя (env `SYNTH_EXECUTOR_MAX_*`): таймаут сутки (потолок фонового режима, PROP-141), буфер вывода 32 МиБ (лог vite/tsc большой) |
 | `executor.metrics.enabled` | `false` | Метрики исполнителя (ADR-077 шаг 7d; ADR-094): env `SYNTH_EXECUTOR_METRICS_ENABLED=true` → свой `GET /metrics`; выключено по умолчанию (404). См. «Метрики исполнителя» |
 | `executor.mcp.enabled` | `true` | MCP-хостинг в исполнителе; `false` → env `SYNTH_EXECUTOR_MCP_SERVERS=""` (серверов нет, дефолт образа отключён) |
 | `executor.mcp.servers` | `[]` | MCP-серверы, которые хостит исполнитель (stdio, ADR-077 шаг B1): `[{name, command, args, env}]` → env `SYNTH_EXECUTOR_MCP_SERVERS` (JSON). Пусто → env не выставляется, действует дефолт образа (у flavor'ов с браузером — Playwright MCP) |
@@ -1409,7 +1409,7 @@ executor:
 |---|---|---|
 | `executor.resources.requests` | `cpu: 1`, `memory: 2Gi` | постоянная нагрузка сборки (tsc/vite — многопоточные) |
 | `executor.resources.limits` | `cpu: 4`, `memory: 8Gi` | пик: сборка всех пакетов монорепо + node_modules в памяти |
-| `executor.limits.maxTimeoutMs` | `1800000` (30 мин) | полная сборка Synth идёт минутами — прежних 120 с ей не хватало |
+| `executor.limits.maxTimeoutMs` | `86400000` (сутки) | потолок фонового режима (PROP-141): фоновый процесс не обрезается до 10 минут |
 | `executor.limits.maxOutputBytes` | `33554432` (32 МиБ) | лог `vite`/`tsc` большой — прежних 10 МиБ обрезали вывод |
 
 Переопределяются своими values (например, для лёгких сценариев «только чтение

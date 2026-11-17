@@ -118,10 +118,10 @@ describe('question tool', () => {
 });
 
 describe('question tool: опция timeout (срок ожидания ответа)', () => {
-  it('timeout: 299000 → ошибка аргументов (минимум 5 минут)', async () => {
+  it('timeout: 299 → ошибка аргументов (минимум 5 минут)', async () => {
     const service = createService();
     const result = await questionTool.execute(
-      { questions: QUESTIONS, timeout: 299_000 },
+      { questions: QUESTIONS, timeout: 299 },
       makeCtx({ questionService: service }),
     );
     expect(result.isError).toBe(true);
@@ -130,12 +130,12 @@ describe('question tool: опция timeout (срок ожидания отве�
     expect(await service.listPending('s1')).toHaveLength(0);
   });
 
-  it('timeout: 300000 → срок ожидания передаётся в сервис', async () => {
+  it('timeout: 300 (с) → срок ожидания передаётся в сервис в мс', async () => {
     const service = createService();
     const spy = vi.spyOn(service, 'ask');
     const ctx = makeCtx({ questionService: service });
 
-    const pending = questionTool.execute({ questions: QUESTIONS, timeout: 300_000 }, ctx);
+    const pending = questionTool.execute({ questions: QUESTIONS, timeout: 300 }, ctx);
     await new Promise((r) => setTimeout(r, 0));
 
     expect(spy).toHaveBeenCalledTimes(1);
@@ -170,10 +170,10 @@ describe('question tool: опция timeout (срок ожидания отве�
     };
 
     const timeout = schema.properties.timeout!;
-    expect(timeout.description).toContain('Optional answer timeout in milliseconds');
+    expect(timeout.description).toContain('Optional answer timeout in seconds');
     expect(timeout.description).toContain('waits indefinitely');
-    expect(timeout.minimum).toBe(300_000);
-    expect(timeout.maximum).toBe(86_400_000);
+    expect(timeout.minimum).toBe(300);
+    expect(timeout.maximum).toBe(86_400);
     // `timeout` необязателен — в `required` его нет.
     expect(schema.required).toEqual(['questions']);
   });

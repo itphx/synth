@@ -1561,7 +1561,8 @@
   `server/routes/sessions-snippets.routes.test.ts`.
 - `engine/scripts/*` — ADR-126 §5: реестр скриптов проекта. `types`/`parser` — декларация
   `.synth/scripts/<name>.md` (tolerant frontmatter: `description`/`run` обязательны; `args`,
-  `cwd`, `background`, `timeout`, `requires`, `env`, `shell`, `ready` — опциональны; невалидная
+  `cwd`, `background`, `timeout` (**в секундах**, 1…86 400; по умолчанию сутки), `requires`,
+  `env`, `shell`, `ready` — опциональны; невалидная
   декларация запись не создаёт), `discovery` — приоритет project > `{dataDir}/scripts` >
   `config.scripts.paths`, trust-гейт и `shadowed`/`untrusted` как у команд,
   `listUndeclaredExecutables` — диагностика «файл без декларации»; `args` — `splitScriptArguments`
@@ -1652,8 +1653,9 @@
   (`GIT_READ_TIMEOUT_MS`), локальные изменяющие (`commit`/`checkout`/`stash`) —
   `git.localTimeoutMs` (дефолт 120 с), сетевые (`push`/`pull`) —
   `git.networkTimeoutMs` (дефолт 300 с); у всех git-тулов параметр `timeout`
-  (0..600000, `0` — без лимита) перекрывает класс операции; истечение — отказ
-  `git.timeout` с `metadata.reason='timeout'` (а не «Command failed»). Пределы из
+  (**в секундах**, 1..600) перекрывает класс операции; истечение — отказ
+  `git.timeout` с `metadata.reason='timeout'` и `metadata.timeout` (секунды)
+  (а не «Command failed»). Пределы из
   конфига инстанца приезжают в `ctx.extra` (`gitLocalTimeoutMs`/`gitNetworkTimeoutMs`),
   env — `SYNTH_GIT_LOCAL_TIMEOUT_MS`/`SYNTH_GIT_NETWORK_TIMEOUT_MS`
   (подробности — `docs/CONFIGURATION.md` §`git`).
@@ -1710,9 +1712,10 @@
   `glob`/`list_directory` не фильтруются (перечисление ≠ поиск совпадений).
   `execute_shell` принимает `cwd` (относительно рабочего
   каталога), оболочка — bash, большой вывод усекается маркером; предел по умолчанию —
-  120 с, параметр `timeout` (0..600000, `0` — без лимита) его перекрывает; истечение —
+  120 с, параметр `timeout` (**в секундах**: foreground 1..600, background 1..86400;
+  потолок задаёт режим исполнения, «без лимита» больше нет) его перекрывает; истечение —
   `tool.shell_timeout` с подсказкой (тот же контракт у detach-пути,
-  `shell-detachable.ts`); фоновый запуск — по умолчанию без лимита. Тул `task` (ADR-095 шаг 5) разбит на
+  `shell-detachable.ts`); фоновый запуск — по умолчанию сутки. Тул `task` (ADR-095 шаг 5) разбит на
   `engine/tools/task/*`: `tool.ts` (`taskTool`), `fork.ts` (fork/контекст-режимы ADR-026 +
   permissions), `child-session.ts` (создание/сообщения/события), `run-cycle.ts` (общий
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
@@ -2005,8 +2008,8 @@
   режима** (параметр `background`, как у `execute_shell`/`task`):
   `background: false` (дефолт) — **с ожиданием завершения**: тул ждёт команды
   и возвращает вывод в обрамлении `[CONTENT]`…`[CONTENT END]` + код возврата
-  (`metadata.exit_code`); по таймауту (`timeout_ms`, дефолт 30 с, потолок
-  600000) — понятный отказ с частичным выводом. `kill_on_timeout: true` —
+  (`metadata.exit_code`); по таймауту (`timeout` — **в секундах**, дефолт 30 с,
+  потолок foreground 600 / background 86 400) — понятный отказ с частичным выводом. `kill_on_timeout: true` —
   по таймауту сервис шлёт Ctrl+C и освобождает терминал (`timeout`,
   `stillRunning: false`); без него команда продолжает работу, а ответ несёт
   `metadata.still_running` (признак берётся из `run.stillRunning`, не из
@@ -2015,10 +2018,10 @@
   **сообщением в чат** — доставляет его сервис терминалов
   (`TerminalService.onRunFinished` → `notifyBackgroundParent`, точка сборки в
   `server/app/deps.ts`/`backend/app/deps.ts`), а не тул: вывода запуска в
-  ответе тула нет. `timeout_ms` в этом режиме — необязательный **watchdog**:
-  не задан — срок `0`, и реестр запусков (`engine/terminal/runs.ts`) при сроке
-  `<= 0` watchdog-таймер **не ставит вовсе** (запуск без лимита: завершает
-  только маркер команды или закрытие терминала). **Маркер завершения —
+  ответе тула нет. `timeout` (секунды) в этом режиме — **watchdog** фонового
+  запуска: не задан — дефолт фонового режима (сутки, 86 400 с); «без лимита»
+  больше нет (реестр запусков `engine/terminal/runs.ts` срок `<= 0` ещё трактует
+  как «watchdog не ставить», но тул такое значение уже не передаёт). **Маркер завершения —
   текстовый** `@@srn-<nonce>:<код>@@` (`printf '\n\033[2K@@srn-…@@\033[2K\r' "$?"`),
   а не OSC: мультиплексор (tmux, в т.ч. под ssh) OSC перехватывает себе и наружу
   не пропускает — маркер не доходил, запуск висел в `run_busy`. Команда и
@@ -2572,7 +2575,7 @@
   `storage/memory/questions.ts`, PG — миграция `021_background_runs`; контракт —
   `storage/contract/question-repository.contract.ts`). Срок ожидания ответа по умолчанию **не
   задан** (`questions.timeoutMs = 0` — без таймера, без `expiresAt`); срок может задать тул
-  `question` (`timeout`, ≥ 5 мин — не рекомендуется: по истечении вопрос снимается с причиной
+  `question` (`timeout` — **в секундах**, 300…86 400; не рекомендуется: по истечении вопрос снимается с причиной
   `timeout`).
 - `engine/background/*` — ADR-111 (этап 1 roadmap 0.13 — блок 1.2): единый реестр фоновой
   работы. `service.ts` (`BackgroundRunService`: `startSubagent`/`startProcess`/`finish`/`stop`/

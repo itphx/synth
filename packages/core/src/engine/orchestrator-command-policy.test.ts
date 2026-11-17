@@ -387,14 +387,14 @@ describe('PROP-136b (слайс 136b-2a): зеркальный чекер ком
     expect(await log.list()).toEqual([]);
   });
 
-  it('sandbox_exec: чекер получает join(" && ") и таймаут timeout_ms', async () => {
+  it('sandbox_exec: чекер получает join(" && ") и таймаут (секунды → мс)', async () => {
     const log = createCommandAuditLog({ dataDir: dir, config: { enabled: false }, env: {} });
     const provider = fakeProvider({ action: 'deny', reason: 'no' });
     const harness = await makeHarness({
       commandAudit: log,
       commandPolicy: provider,
       toolName: 'sandbox_exec',
-      toolArgs: { profile: 'sandbox', commands: ['npm ci', 'npm test'], timeout_ms: 60_000 },
+      toolArgs: { profile: 'sandbox', commands: ['npm ci', 'npm test'], timeout: 60 },
       prompt: 'запусти в песочнице',
     });
     await runTurn(harness);

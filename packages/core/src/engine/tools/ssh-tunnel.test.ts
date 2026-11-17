@@ -291,8 +291,8 @@ describe('ssh_tunnel — запуск (фоновый процесс)', () => {
     expect(args).toContain('-N');
     // Бинарное требование — клиент SSH.
     expect(input.requires).toEqual(['ssh']);
-    // Таймаут не задан — туннель живёт до `process_stop`.
-    expect(input.timeoutMs).toBeUndefined();
+    // Таймаут не задан — дефолт фонового режима: сутки.
+    expect(input.timeoutMs).toBe(86_400_000);
 
     // Идентификатор процесса и путь журнала — в метаданных.
     expect(result.metadata?.process_id).toBe('proc_1');
@@ -348,7 +348,7 @@ describe('ssh_tunnel — запуск (фоновый процесс)', () => {
     expect(JSON.stringify(input.env ?? {})).not.toContain(PRIVATE_KEY);
   });
 
-  it('явный timeout_ms ограничивает жизнь туннеля', async () => {
+  it('явный timeout (секунды) ограничивает жизнь туннеля', async () => {
     const store = new FakeSshKeyStore([usableKey()]);
     const { ctx, spawn } = makeCtx({ store });
 
@@ -360,7 +360,7 @@ describe('ssh_tunnel — запуск (фоновый процесс)', () => {
         listen_port: 8080,
         target_host: 'db.internal',
         target_port: 5432,
-        timeout_ms: 60_000,
+        timeout: 60,
       },
       ctx,
     );

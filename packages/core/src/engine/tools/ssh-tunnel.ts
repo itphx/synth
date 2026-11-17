@@ -36,8 +36,8 @@
  * возвращает `process_id` + путь журнала; останавливается он существующим
  * инструментом `process_stop` (реестр фоновых прогонов, ADR-111/ADR-113).
  *
- * Таймаут по умолчанию — **0** (без таймаута): туннель живёт до
- * `process_stop`. Явный `timeout_ms` ограничивает его lifetime.
+ * Таймаут жизни туннеля — по умолчанию **сутки** (`timeout`, секунды):
+ * «без лимита» больше нет, туннель всегда имеет срок (1…86 400 с).
  */
 import { z } from 'zod';
 import { ToolCapability, normalizeTlsHost } from '@itphx/synth-shared';
@@ -49,6 +49,7 @@ import { resolveSshAccess, SshAccessError } from '../ssh/access.js';
 import { sshAccessFailureResult, sshToolFailureResult } from '../ssh/result.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { TIMEOUT_BG_DEFAULT_SEC, TIMEOUT_BG_MAX_SEC, timeoutParam } from '../timeout.js';
 import { isAborted, abortedResult } from './abort.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 import type { ProcessService } from '../processes/service.js';
@@ -59,11 +60,10 @@ import { BackgroundUnsupportedError } from '../processes/types.js';
 export const SSH_TUNNEL_TOOL = 'ssh_tunnel';
 
 /**
- * Верхняя граница таймаута жизни туннеля, мс (как у `ssh_exec`).
- *
- * `0` — без таймаута (по умолчанию): туннель живёт до `process_stop`.
+ * Таймаут жизни туннеля по умолчанию, секунды (сутки) — туннель всегда
+ * фоновый процесс, поэтому срок фонового режима.
  */
-const MAX_TIMEOUT_MS = 600_000;
+const DEFAULT_TIMEOUT_SEC = TIMEOUT_BG_DEFAULT_SEC;
 
 /** Предел длины хоста, символов (RFC 1035 — длина DNS-имени). */
 const MAX_HOST_LENGTH = 253;
@@ -190,15 +190,10 @@ const sshTunnelSchema = z
       .min(1)
       .max(65535)
       .describe('Target port of the forwarded port (must be allowed by the key port policy)'),
-    timeout_ms: z
-      .number()
-      .int()
-      .min(0)
-      .max(MAX_TIMEOUT_MS)
-      .optional()
-      .describe(
-        `Lifetime limit in milliseconds (0 / omitted — the tunnel runs until it is stopped with process_stop; max ${MAX_TIMEOUT_MS})`,
-      ),
+    timeout: timeoutParam({
+      max: TIMEOUT_BG_MAX_SEC,
+      description: `Lifetime limit in seconds (default: ${DEFAULT_TIMEOUT_SEC}; max ${TIMEOUT_BG_MAX_SEC})`,
+    }),
   })
   .strict();
 
@@ -212,7 +207,7 @@ interface SshTunnelParams {
   listen_port: number;
   target_host?: string;
   target_port: number;
-  timeout_ms?: number;
+  timeout?: number;
 }
 
 /**
@@ -419,8 +414,8 @@ export const sshTunnelTool: ToolDefinition = {
         // адреса пула, где есть клиент SSH.
         requires: toolRuntimeRequires(SSH_TUNNEL_TOOL),
         cwd: ctx.workingDir,
-        // Таймаут не задан — туннель живёт до `process_stop`.
-        ...(params.timeout_ms !== undefined ? { timeoutMs: params.timeout_ms } : {}),
+        // Таймаут жизни туннеля — всегда задан (по умолчанию сутки).
+        timeoutMs: (params.timeout ?? DEFAULT_TIMEOUT_SEC) * 1000,
         env: { HOME: process.env.HOME || '/root' },
         // Секреты вызова — на время жизни фонового процесса; в запись реестра
         // и в лог они не попадают.

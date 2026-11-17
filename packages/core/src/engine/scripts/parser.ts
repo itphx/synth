@@ -29,8 +29,18 @@ export const SCRIPT_DESCRIPTION_MAX = 1024;
 /** Предел длины команды запуска (символов). */
 export const SCRIPT_RUN_MAX = 4000;
 
-/** Предел таймаута запуска (мс). */
-export const SCRIPT_TIMEOUT_MAX = 600_000;
+/**
+ * Предел таймаута запуска, **секунды** (PROP-141, Часть A).
+ *
+ * Скрипт всегда запускается фоновым процессом, поэтому действует потолок
+ * фонового режима — сутки.
+ */
+export const SCRIPT_TIMEOUT_MAX = 86_400;
+
+/**
+ * Таймаут запуска по умолчанию, секунды (сутки) — «без лимита» больше нет.
+ */
+export const SCRIPT_TIMEOUT_DEFAULT = 86_400;
 
 /** Безопасное имя переменной окружения (`^[A-Za-z_][A-Za-z0-9_]*$`). */
 export const SCRIPT_ENV_KEY_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -199,11 +209,11 @@ export function parseScriptFile(
   const timeoutRaw = data.timeout;
   if (timeoutRaw !== undefined && timeoutRaw !== null) {
     const value = typeof timeoutRaw === 'number' ? timeoutRaw : Number(timeoutRaw);
-    if (!Number.isInteger(value) || value < 0 || value > SCRIPT_TIMEOUT_MAX) {
+    if (!Number.isInteger(value) || value < 1 || value > SCRIPT_TIMEOUT_MAX) {
       diagnostics.push({
         level: 'error',
         code: 'invalid-run',
-        message: `скрипт "${name}": timeout должен быть целым числом 0..${SCRIPT_TIMEOUT_MAX}`,
+        message: `скрипт "${name}": timeout должен быть целым числом 1..${SCRIPT_TIMEOUT_MAX} (секунды)`,
         script: name,
         path: file,
       });

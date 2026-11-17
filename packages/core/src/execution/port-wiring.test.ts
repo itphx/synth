@@ -116,19 +116,20 @@ describe('ADR-077: точки исполнения ходят в порт с п�
     expect(port.requests[0]!.requires).toEqual(['bash']);
   });
 
-  it('execute_shell: явный таймаут уходит в порт; лимит 600 с не менялся', async () => {
+  it('execute_shell: явный таймаут (секунды) уходит в порт в мс; лимит foreground — 600 с', async () => {
     const port = new RecordingPort();
-    await executeShellTool.execute({ command: 'echo ok', timeout: 5_000 }, makeCtx(port));
+    await executeShellTool.execute({ command: 'echo ok', timeout: 5 }, makeCtx(port));
     expect(port.requests[0]!.timeoutMs).toBe(5_000);
 
-    // 0 — без лимита (значение разрешено и доходит до порта как есть)
-    await executeShellTool.execute({ command: 'echo ok', timeout: 0 }, makeCtx(port));
-    expect(port.requests[1]!.timeoutMs).toBe(0);
+    // 0 — «без лимита» больше не принимается
+    const zero = await executeShellTool.execute({ command: 'echo ok', timeout: 0 }, makeCtx(port));
+    expect(zero.isError).toBe(true);
+    expect((zero.metadata?.i18n as { key?: string })?.key).toBe('tool.args_error');
 
-    const tooBig = await executeShellTool.execute({ command: 'echo ok', timeout: 600_001 }, makeCtx(port));
+    const tooBig = await executeShellTool.execute({ command: 'echo ok', timeout: 601 }, makeCtx(port));
     expect(tooBig.isError).toBe(true);
     expect((tooBig.metadata?.i18n as { key?: string })?.key).toBe('tool.args_error');
-    expect(port.requests).toHaveLength(2);
+    expect(port.requests).toHaveLength(1);
   });
 
   it('execute_shell: сигнал отмены передаётся в порт', async () => {
@@ -249,9 +250,10 @@ describe('ADR-077: тексты ошибок тулов не изменилис�
     expect(result.metadata?.interrupted).toBeUndefined();
     expect(result.metadata?.stopped_by).toBeUndefined();
     expect(result.metadata?.reason).toBe('timeout');
-    expect(result.metadata?.timeoutMs).toBe(120_000);
+    // Величина лимита — в секундах (внутри остаётся мс).
+    expect(result.metadata?.timeout).toBe(120);
     // Текст с величиной лимита и подсказкой — не generic «Command failed».
-    expect(result.content).toContain('120000');
+    expect(result.content).toContain('120 seconds');
     expect(result.content).not.toContain('Command failed: sh -c sleep 5');
   });
 
@@ -281,8 +283,9 @@ describe('ADR-077: тексты ошибок тулов не изменилис�
     expect(result.isError).toBe(true);
     expect(result.metadata?.interrupted).toBeUndefined();
     expect(result.metadata?.reason).toBe('timeout');
-    expect(result.metadata?.timeoutMs).toBe(30_000);
-    expect(result.content).toContain('30000');
+    // Величина лимита — в секундах (внутри остаётся мс).
+    expect(result.metadata?.timeout).toBe(30);
+    expect(result.content).toContain('30 seconds');
     // Не «Ошибка git status» — actionable-текст с подсказкой.
     expect(result.content).not.toContain('Ошибка git status');
   });

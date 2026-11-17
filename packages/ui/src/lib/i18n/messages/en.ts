@@ -5609,7 +5609,7 @@ export const dict = {
   'terminal.tool.run_result_header': 'Run {run_id} (status: {status})',
   'terminal.tool.run_finished': 'Terminal {terminal_id}: the command finished (exit {exit_code})',
   'terminal.tool.run_timeout':
-    'Terminal {terminal_id}: the command did not finish within {timeout_ms} ms (timeout)',
+    'Terminal {terminal_id}: the command did not finish within {timeout} seconds (timeout)',
   'terminal.tool.run_exited':
     'Terminal {terminal_id}: the terminal exited while the command was running',
   'terminal.tool.run_still_running':

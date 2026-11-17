@@ -311,11 +311,11 @@ describe('browser-тулы — имена инструментов и аргум
     const ctx = makeCtx({ executionRouter: fakeRouter(port).router });
 
     await browserNavigateTool.execute(
-      { url: 'https://example.com', timeout: 45_000 },
+      { url: 'https://example.com', timeout: 45 },
       ctx,
     );
-    await browserWaitTool.execute({ time: 2, timeout: 30_000 }, ctx);
-    await browserScreenshotTool.execute({ timeout: 15_000 }, ctx);
+    await browserWaitTool.execute({ time: 2, timeout: 30 }, ctx);
+    await browserScreenshotTool.execute({ timeout: 15 }, ctx);
 
     expect(port.calls).toEqual([
       {
@@ -337,12 +337,12 @@ describe('browser-тулы — имена инструментов и аргум
     expect(port.calls[0]?.timeoutMs).toBeUndefined();
   });
 
-  it('timeout вне потолка (600 000) → argErrorResult, порт не вызывается', async () => {
+  it('timeout вне потолка (600 с) → argErrorResult, порт не вызывается', async () => {
     const port = new FakeBrowserPort(() => ok('ok'));
     const { router, targets } = fakeRouter(port);
 
     const result = await browserNavigateTool.execute(
-      { url: 'https://example.com', timeout: 600_001 },
+      { url: 'https://example.com', timeout: 601 },
       makeCtx({ executionRouter: router }),
     );
 

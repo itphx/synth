@@ -13,6 +13,7 @@ import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
 import { runtimeRequires } from './runtime-deps.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError, type ExecutionError, type ExecutionPort, type ExecSecret } from '../../execution/ports/index.js';
+import { TIMEOUT_FG_MAX_SEC, msToTimeoutSec, timeoutParam } from '../timeout.js';
 
 const MAX_GIT_OUTPUT = 20_000;
 
@@ -43,15 +44,17 @@ const GIT_NETWORK_TIMEOUT_DEFAULT_MS = 300_000;
  * операции задаёт дефолт, per-call — переопределяет).
  */
 const GIT_TIMEOUT_DESCRIPTION =
-  'Timeout in milliseconds (0 = no limit). Defaults: 30 s for read-only commands, 120 s for local changes, 300 s for push/pull. '
-  + 'Raise it for large repositories.';
+  'Timeout in seconds. Defaults: 30 s for read-only commands, 120 s for local changes, 300 s for push/pull. '
+  + 'Raise it for large repositories (max 600).';
 
 /**
- * Схема параметра `timeout` git-тулов (одинаковая для всех): целое, `0` — без
- * лимита, верхняя граница — 10 минут (дальше — «фоновый запуск», а не ожидание).
+ * Схема параметра `timeout` git-тулов (одинаковая для всех): целое число
+ * **секунд**, `1`…`600` (10 минут — дальше «фоновый запуск», а не ожидание).
  */
-const gitTimeoutSchema = z.number().int().min(0).max(600_000).optional()
-  .describe(GIT_TIMEOUT_DESCRIPTION);
+const gitTimeoutSchema = timeoutParam({
+  max: TIMEOUT_FG_MAX_SEC,
+  description: GIT_TIMEOUT_DESCRIPTION,
+});
 
 /**
  * Таймауты git-тулов из `ToolContext.extra` (конфиг инстанца).
@@ -225,19 +228,19 @@ function gitBinaryMissingResult(name: string, cwd: string): ToolResult {
 function gitTimeoutResult(
   name: string,
   cwd: string,
-  timeoutMs: number,
+  timeoutSec: number,
   err: ExecutionError,
 ): ToolResult {
   const partial = [err.stdout, err.stderr].filter(Boolean).join('\n');
-  const message = sm('git.timeout', { tool: name, timeout: String(timeoutMs) });
+  const message = sm('git.timeout', { tool: name, timeout: String(timeoutSec) });
   return {
     content: partial ? `${partial}\n${message}` : message,
     isError: true,
     metadata: {
       cwd,
       reason: 'timeout',
-      timeoutMs,
-      i18n: i18nMeta('git.timeout', { tool: name, timeout: String(timeoutMs) }),
+      timeout: timeoutSec,
+      i18n: i18nMeta('git.timeout', { tool: name, timeout: String(timeoutSec) }),
     },
   };
 }
@@ -424,7 +427,7 @@ export const gitStatusTool: ToolDefinition = {
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
-    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : GIT_READ_TIMEOUT_MS;
 
     try {
       const { stdout } = await runGit(['status', '--porcelain', '--branch'], cwd, ctx.abortSignal, undefined, execution, undefined, timeoutMs);
@@ -444,7 +447,7 @@ export const gitStatusTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git status: ${(err as Error).message}`,
@@ -478,7 +481,7 @@ export const gitDiffTool: ToolDefinition = {
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
-    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : GIT_READ_TIMEOUT_MS;
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
     // Пустая строка — как и раньше, просто не попадает в argv.
@@ -509,7 +512,7 @@ export const gitDiffTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git diff: ${(err as Error).message}`,
@@ -543,7 +546,7 @@ export const gitLogTool: ToolDefinition = {
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
-    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : GIT_READ_TIMEOUT_MS;
 
     try {
       const { stdout } = await runGit(
@@ -565,7 +568,7 @@ export const gitLogTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git log: ${(err as Error).message}`,
@@ -601,7 +604,7 @@ export const gitCommitTool: ToolDefinition = {
     const execution = resolveExecutionPort(ctx);
     // Локальная изменяющая операция — предел из конфига инстанца
     // (`git.localTimeoutMs`), иначе дефолт класса.
-    const timeoutMs = params.timeout ?? localTimeoutMs(ctx);
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : localTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; message: string; allow_empty?: boolean; timeout?: number };
@@ -621,7 +624,7 @@ export const gitCommitTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git commit: ${(err as Error).message}`,
@@ -658,7 +661,7 @@ export const gitPushTool: ToolDefinition = {
     const execution = resolveExecutionPort(ctx);
     // Сетевая операция — предел из конфига инстанса (`git.networkTimeoutMs`),
     // иначе дефолт класса.
-    const timeoutMs = params.timeout ?? networkTimeoutMs(ctx);
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : networkTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string; timeout?: number };
@@ -707,7 +710,7 @@ export const gitPushTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git push: ${(err as Error).message}`,
@@ -746,7 +749,7 @@ export const gitPullTool: ToolDefinition = {
     const execution = resolveExecutionPort(ctx);
     // Сетевая операция — предел из конфига инстанса (`git.networkTimeoutMs`),
     // иначе дефолт класса.
-    const timeoutMs = params.timeout ?? networkTimeoutMs(ctx);
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : networkTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string; timeout?: number };
@@ -793,7 +796,7 @@ export const gitPullTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git pull: ${(err as Error).message}`,
@@ -831,7 +834,7 @@ export const gitCheckoutTool: ToolDefinition = {
     const execution = resolveExecutionPort(ctx);
     // Локальная изменяющая операция — предел из конфига инстанца
     // (`git.localTimeoutMs`), иначе дефолт класса.
-    const timeoutMs = params.timeout ?? localTimeoutMs(ctx);
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : localTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; target: string; create_branch?: boolean; timeout?: number };
@@ -858,7 +861,7 @@ export const gitCheckoutTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git checkout: ${(err as Error).message}`,
@@ -892,7 +895,7 @@ export const gitBranchListTool: ToolDefinition = {
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
-    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : GIT_READ_TIMEOUT_MS;
 
     try {
       const branchArgs = ['branch'];
@@ -933,7 +936,7 @@ export const gitBranchListTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git branch: ${(err as Error).message}`,
@@ -968,7 +971,7 @@ export const gitShowTool: ToolDefinition = {
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
-    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : GIT_READ_TIMEOUT_MS;
 
     // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
     // Вид `object` дополнительно разрешает `HEAD:src/file.ts` (blob/tree) и
@@ -1000,7 +1003,7 @@ export const gitShowTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git show: ${(err as Error).message}`,
@@ -1036,7 +1039,7 @@ export const gitBlameTool: ToolDefinition = {
     if (typeof cwd !== 'string') return cwd;
     // ADR-077: порт исполнения (внедрённый — из `ctx.extra`, иначе inline).
     const execution = resolveExecutionPort(ctx);
-    const timeoutMs = params.timeout ?? GIT_READ_TIMEOUT_MS;
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : GIT_READ_TIMEOUT_MS;
 
     try {
       const blameArgs = ['blame'];
@@ -1067,7 +1070,7 @@ export const gitBlameTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git blame: ${(err as Error).message}`,
@@ -1115,7 +1118,7 @@ export const gitStashTool: ToolDefinition = {
     const action = params.action ?? 'push';
     // Локальная изменяющая операция (apply/pop меняют рабочее дерево) —
     // предел из конфига инстанца (`git.localTimeoutMs`), иначе дефолт класса.
-    const timeoutMs = params.timeout ?? localTimeoutMs(ctx);
+    const timeoutMs = params.timeout !== undefined ? params.timeout * 1000 : localTimeoutMs(ctx);
 
     // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as typeof params;
@@ -1169,7 +1172,7 @@ export const gitStashTool: ToolDefinition = {
       if (isBinaryMissing(err)) return gitBinaryMissingResult(this.name, cwd);
       // Таймаут — actionable-текст (величина лимита + следующий шаг), не «ошибка git».
       if (isExecutionError(err) && err.reason === 'timeout') {
-        return gitTimeoutResult(this.name, cwd, timeoutMs, err);
+        return gitTimeoutResult(this.name, cwd, msToTimeoutSec(timeoutMs), err);
       }
       return {
         content: `Ошибка git stash: ${(err as Error).message}`,

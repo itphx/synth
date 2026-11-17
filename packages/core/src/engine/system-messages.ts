@@ -128,7 +128,7 @@ export const SYSTEM_MESSAGES = {
     'Output truncated: showing {shown} of {total} lines. Narrow the command or pattern, or read a smaller range (offset/limit).',
   'tool.shell_error': 'Error: {message}',
   'tool.shell_timeout':
-    'Command timed out after {timeout} ms. Retry with a larger timeout if the command is expected to take longer.',
+    'Command timed out after {timeout} seconds. Retry with a larger timeout if the command is expected to take longer.',
   'tool.search_timeout':
     'Search timed out after {seconds} seconds. Consider using a more specific path or pattern.',
   'tool.command_failed_default': 'Command failed',
@@ -572,13 +572,13 @@ export const SYSTEM_MESSAGES = {
   'git.repo_path_unreadable':
     'Error: "{path}" exists but cannot be read (permissions?). Fix access to the directory or choose another path.',
   'git.clone_timeout':
-    'Error: git clone did not finish within {timeout} ms and was interrupted; no files were left behind. '
-    + 'Retry, or raise `git.cloneTimeoutMs` for a slow network.',
+    'Error: git clone did not finish within {timeout} seconds and was interrupted; no files were left behind. '
+    + 'Retry, or raise `git.cloneTimeoutMs` (milliseconds) for a slow network.',
   'git.fetch_timeout':
-    'Error: git fetch did not finish within {timeout} ms and was interrupted. '
-    + 'Retry, or raise `git.fetchTimeoutMs` for a slow network.',
+    'Error: git fetch did not finish within {timeout} seconds and was interrupted. '
+    + 'Retry, or raise `git.fetchTimeoutMs` (milliseconds) for a slow network.',
   'git.timeout':
-    'Error: {tool} was interrupted after the {timeout} ms timeout. '
+    'Error: {tool} was interrupted by the timeout ({timeout} seconds). '
     + 'Retry with a larger `timeout` argument, raise the git local/network timeout in config, '
     + 'or run the command in the background (execute_shell with background: true). '
     + 'If the repository is left in an inconsistent state (for example a merge in progress), '
@@ -856,7 +856,7 @@ export const SYSTEM_MESSAGES = {
   'terminal.tool.run_finished':
     'Terminal {terminal_id}: the command finished (exit {exit_code})',
   'terminal.tool.run_timeout':
-    'Terminal {terminal_id}: the command did not finish within {timeout_ms} ms (timeout)',
+    'Terminal {terminal_id}: the command did not finish within {timeout} seconds (timeout)',
   'terminal.tool.run_exited':
     'Terminal {terminal_id}: the terminal exited while the command was running',
   'terminal.tool.run_still_running':

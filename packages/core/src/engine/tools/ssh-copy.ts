@@ -67,6 +67,7 @@ import { DEFAULT_SSH_PORT, resolveSshAccess, SshAccessError } from '../ssh/acces
 import { sshAccessFailureResult, sshToolFailureResult } from '../ssh/result.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { TIMEOUT_FG_MAX_SEC, timeoutParam } from '../timeout.js';
 import { isAborted, abortedResult } from './abort.js';
 import { runtimeRequires, toolRuntimeRequires } from './runtime-deps.js';
 import { MAX_OUTPUT_LENGTH } from './shell-detachable.js';
@@ -75,11 +76,14 @@ import { isInsideAnyRoot, pathEscapesWorkspaceResult, resolvePath, toolRoots } f
 /** Имя тула (используется в permission-группах, trust и authority). */
 export const SSH_COPY_TOOL = 'ssh_copy';
 
-/** Таймаут вызова по умолчанию, мс (как у `ssh_exec`). */
-const DEFAULT_TIMEOUT_MS = 120_000;
+/** Таймаут вызова по умолчанию, **секунды** (как у `ssh_exec`). */
+const DEFAULT_TIMEOUT_SEC = 120;
 
-/** Верхняя граница таймаута, мс (как у `ssh_exec`). */
-const MAX_TIMEOUT_MS = 600_000;
+/**
+ * Верхняя граница таймаута, секунды (10 минут) — у `ssh_copy` только
+ * foreground-режим.
+ */
+const MAX_TIMEOUT_SEC = TIMEOUT_FG_MAX_SEC;
 
 /** Предел длины хоста, символов (RFC 1035 — длина DNS-имени). */
 const MAX_HOST_LENGTH = 253;
@@ -188,13 +192,10 @@ const sshCopySchema = z
       .boolean()
       .optional()
       .describe('Copy directories recursively (sftp -R)'),
-    timeout_ms: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_TIMEOUT_MS)
-      .optional()
-      .describe(`Timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS}; max ${MAX_TIMEOUT_MS})`),
+    timeout: timeoutParam({
+      max: MAX_TIMEOUT_SEC,
+      description: `Timeout in seconds (default: ${DEFAULT_TIMEOUT_SEC}; max ${MAX_TIMEOUT_SEC})`,
+    }),
   })
   .strict();
 
@@ -208,7 +209,7 @@ interface SshCopyParams {
   local: string;
   remote: string;
   recursive?: boolean;
-  timeout_ms?: number;
+  timeout?: number;
 }
 
 /** Зависимости тула из `ToolContext.extra` (упаковка — оркестратор). */
@@ -312,8 +313,8 @@ export const sshCopyTool: ToolDefinition = {
     + 'user to fall back to — without it ssh would connect as the local user of the executor. The SSH key '
     + 'is chosen by id (see ssh_keys_list) or automatically, and the host/port must be allowed by the key '
     + 'policy. The key is delivered through a temporary ssh-agent for the duration of the call — it never '
-    + 'appears in the command line. Set recursive=true to copy directories. Timeout: 120000 ms by default '
-    + '(max 600000 ms).',
+    + 'appears in the command line. Set recursive=true to copy directories. Timeout in seconds: 120 by '
+    + 'default (max 600).',
   parameters: sshCopySchema,
   capabilities: [ToolCapability.SSH],
   async execute(args, ctx: ToolContext): Promise<ToolResult> {
@@ -402,7 +403,9 @@ export const sshCopyTool: ToolDefinition = {
       user: params.user,
       ...(params.port !== undefined ? { port: params.port } : {}),
     });
-    const timeout = params.timeout_ms ?? DEFAULT_TIMEOUT_MS;
+    // Таймаут — **секунды** (входной параметр тула); в порт уходит миллисекунды.
+    const timeoutSec = params.timeout ?? DEFAULT_TIMEOUT_SEC;
+    const timeoutMs = timeoutSec * 1000;
 
     try {
       const { stdout, stderr } = await resolveExecutionPort(ctx).execute({
@@ -412,7 +415,7 @@ export const sshCopyTool: ToolDefinition = {
         // пула, где есть toolchain с sftp.
         requires: [...toolRuntimeRequires(SSH_COPY_TOOL), ...runtimeRequires('bash')],
         cwd,
-        timeoutMs: timeout,
+        timeoutMs,
         // «Стоп» (POST /sessions/:id/abort) убивает процесс SIGTERM.
         signal: ctx.abortSignal,
         maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
@@ -471,13 +474,13 @@ export const sshCopyTool: ToolDefinition = {
       // Таймаут — actionable-текст (величина лимита + следующий шаг).
       if (isExecutionError(err) && err.reason === 'timeout') {
         return {
-          content: sm('tool.shell_timeout', { timeout: String(timeout) }),
+          content: sm('tool.shell_timeout', { timeout: String(timeoutSec) }),
           isError: true,
           metadata: {
             command: displayCommand,
             reason: 'timeout',
-            timeoutMs: timeout,
-            i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeout) }),
+            timeout: timeoutSec,
+            i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeoutSec) }),
           },
         };
       }

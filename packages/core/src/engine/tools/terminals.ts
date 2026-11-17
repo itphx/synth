@@ -83,6 +83,15 @@ import { checkShellCommand, type ShellPolicy } from '../security/shell-guard.js'
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import {
+  TIMEOUT_BG_DEFAULT_SEC,
+  TIMEOUT_BG_LIMIT_MESSAGE,
+  TIMEOUT_BG_MAX_SEC,
+  TIMEOUT_FG_LIMIT_MESSAGE,
+  TIMEOUT_FG_MAX_SEC,
+  msToTimeoutSec,
+  timeoutParam,
+} from '../timeout.js';
 
 /**
  * Зависимости тулов из `ToolContext.extra` (упаковка — оркестратор).
@@ -1190,20 +1199,25 @@ export const terminalSignalTool: ToolDefinition = {
 
 // ─────────────────────────────── terminal_run ───────────────────────────────
 
-/** Дефолтный срок ожидания запуска команды (режим с ожиданием), мс. */
-const DEFAULT_RUN_TIMEOUT_MS = 30_000;
-
-/** Потолок срока ожидания запуска команды, мс. */
-const MAX_RUN_TIMEOUT_MS = 600_000;
+/**
+ * Дефолтный срок ожидания запуска команды (режим с ожиданием), **секунды**.
+ */
+const DEFAULT_RUN_TIMEOUT_SEC = 30;
 
 /**
- * Срок ожидания запуска «без лимита» (`0`).
+ * Потолок срока ожидания запуска команды в foreground, секунды (10 минут).
+ */
+const MAX_FG_RUN_TIMEOUT_SEC = TIMEOUT_FG_MAX_SEC;
+
+/**
+ * Таймаут фонового запуска по умолчанию, секунды (сутки).
  *
  * В реестре запусков (`engine/terminal/runs.ts`) срок `<= 0` означает
  * **отсутствие watchdog-таймера**: запуск завершает только маркер команды
- * или закрытие терминала. Фоновый режим без `timeout_ms` — именно такой.
+ * или закрытие терминала. Тул туда больше не попадает — «без лимита» у
+ * фонового запуска больше нет (потолок фона — сутки).
  */
-const NO_RUN_TIMEOUT_MS = 0;
+const DEFAULT_BACKGROUND_RUN_TIMEOUT_SEC = TIMEOUT_BG_DEFAULT_SEC;
 
 const terminalRunSchema = z
   .object({
@@ -1223,16 +1237,17 @@ const terminalRunSchema = z
         + 'the run id immediately, and the result (output + exit code) is delivered to the chat as a message '
         + 'when the command finishes.',
       ),
-    timeout_ms: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_RUN_TIMEOUT_MS)
-      .optional()
-      .describe(
-        `How long to wait for the command, ms (default: ${DEFAULT_RUN_TIMEOUT_MS}, max: ${MAX_RUN_TIMEOUT_MS}). `
-        + 'With background=true it is an optional watchdog — without it the background run has no time limit.',
-      ),
+    timeout: timeoutParam({
+      max: TIMEOUT_BG_MAX_SEC,
+      // Верхняя граница — общий потолок фонового режима: текст отказа
+      // говорит про background, а не про foreground (foreground-потолок
+      // проверяет `.refine` ниже — по режиму).
+      maxMessage: TIMEOUT_BG_LIMIT_MESSAGE,
+      description:
+        `How long to wait for the command, in seconds (foreground: default ${DEFAULT_RUN_TIMEOUT_SEC}, `
+        + `max ${MAX_FG_RUN_TIMEOUT_SEC}; background: default ${DEFAULT_BACKGROUND_RUN_TIMEOUT_SEC}, `
+        + `max ${TIMEOUT_BG_MAX_SEC})`,
+    }),
     kill_on_timeout: z
       .boolean()
       .optional()
@@ -1251,7 +1266,13 @@ const terminalRunSchema = z
         + 'controls ANSI sequences',
       ),
   })
-  .strict();
+  .strict()
+  // Потолок таймаута зависит от режима: foreground — 10 минут, background —
+  // сутки. Режим задан соседним полем, поэтому проверка отдельная.
+  .refine(
+    (value) => value.background === true || value.timeout === undefined || value.timeout <= MAX_FG_RUN_TIMEOUT_SEC,
+    { message: TIMEOUT_FG_LIMIT_MESSAGE, path: ['timeout'] },
+  );
 
 /**
  * Ожидание завершения запуска с учётом отмены хода.
@@ -1316,7 +1337,7 @@ function formatRunResult(
       : run.status === 'timeout'
         ? sm('terminal.tool.run_timeout', {
             terminal_id: run.terminalId,
-            timeout_ms: String(run.timeoutMs),
+            timeout: String(msToTimeoutSec(run.timeoutMs)),
           })
         : sm('terminal.tool.exit_code', {
             exit_code: run.exitCode !== undefined ? String(run.exitCode) : '-',
@@ -1330,7 +1351,7 @@ function formatRunResult(
     run: run.runId,
     status: run.status,
     ...(run.exitCode !== undefined ? { exit: run.exitCode } : {}),
-    ...(run.status === 'timeout' ? { timeout_ms: run.timeoutMs } : {}),
+    ...(run.status === 'timeout' ? { timeout: msToTimeoutSec(run.timeoutMs) } : {}),
     ...(stillRunning ? { still_running: true } : {}),
   });
   return {
@@ -1367,7 +1388,7 @@ export const terminalRunTool: ToolDefinition = {
     + 'kill_on_timeout=true so the timeout itself sends Ctrl+C (SIGINT) and frees the terminal. '
     + 'With background=true the command starts without waiting: the tool returns the run id immediately, '
     + 'and the result (output + exit code) is delivered to the chat as a separate message when the command '
-    + 'finishes; timeout_ms is then an optional watchdog (without it the background run has no time limit). '
+    + 'finishes; timeout is then the watchdog of the background run (default 86400 seconds = 1 day). '
     + 'The command is checked by the same shell policy as execute_shell; a forbidden command is not sent. '
     + 'Exception: inside a remote shell (ssh, docker/podman exec, kubectl exec) the local path policy is '
     + 'not applied — the command runs on the remote machine/in the container where local paths are not '
@@ -1397,7 +1418,7 @@ export const terminalRunTool: ToolDefinition = {
       terminal_id: string;
       command: string;
       background?: boolean;
-      timeout_ms?: number;
+      timeout?: number;
       kill_on_timeout?: boolean;
       strip_ansi?: boolean;
     };
@@ -1420,11 +1441,13 @@ export const terminalRunTool: ToolDefinition = {
     }
 
     const background = params.background === true;
-    // Режим с ожиданием: срок жёсткий (дефолт/потолок схемы). Фоновый режим:
-    // срок — необязательный watchdog, без него лимита нет.
-    const timeoutMs = background
-      ? (params.timeout_ms ?? NO_RUN_TIMEOUT_MS)
-      : (params.timeout_ms ?? DEFAULT_RUN_TIMEOUT_MS);
+    // Режим с ожиданием: срок жёсткий (дефолт 30 с, потолок 600 с). Фоновый
+    // режим: срок — watchdog (дефолт — сутки); «без лимита» больше нет.
+    // Параметр тула — в секундах, реестр запусков ждёт миллисекунды.
+    const timeoutSec = background
+      ? (params.timeout ?? DEFAULT_BACKGROUND_RUN_TIMEOUT_SEC)
+      : (params.timeout ?? DEFAULT_RUN_TIMEOUT_SEC);
+    const timeoutMs = timeoutSec * 1000;
     const actorId = await resolveActorId(ctx);
     let run: TerminalRunRecord;
     try {
@@ -1460,8 +1483,8 @@ export const terminalRunTool: ToolDefinition = {
           command: run.command,
           background: true,
           ...(remoteShell ? { remote_shell: true } : {}),
-          // `timeout_ms` — watchdog: задан → срок, не задан → без лимита.
-          ...(params.timeout_ms !== undefined ? { timeout_ms: params.timeout_ms } : {}),
+          // `timeout` — watchdog фонового запуска (секунды).
+          ...(params.timeout !== undefined ? { timeout: params.timeout } : {}),
           ...(params.kill_on_timeout === true ? { kill_on_timeout: true } : {}),
           i18n: i18nMeta('terminal.tool.run_background_started', { run_id: run.runId }),
         },
@@ -1484,7 +1507,7 @@ export const terminalRunTool: ToolDefinition = {
         ...(stillRunning ? { still_running: true } : {}),
         ...(remoteShell ? { remote_shell: true } : {}),
         ...(finished.exitCode !== undefined ? { exit_code: finished.exitCode } : {}),
-        timeout_ms: timeoutMs,
+        timeout: timeoutSec,
         ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
         bytes,
         truncated: finished.truncated,

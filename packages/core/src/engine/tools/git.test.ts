@@ -898,11 +898,11 @@ describe('git tools — таймауты', () => {
     const sessionId = await seedProject();
     const calls: ExecCall[] = [];
 
-    await gitStatusTool.execute({ timeout: 45_000 }, makeCtx(makePort(calls)));
+    await gitStatusTool.execute({ timeout: 45 }, makeCtx(makePort(calls)));
     expect(calls[0]!.timeoutMs).toBe(45_000);
 
     await gitPullTool.execute(
-      { branch: 'main', timeout: 90_000 },
+      { branch: 'main', timeout: 90 },
       makeCtx(
         makePort(calls),
         { sessionId },
@@ -920,10 +920,10 @@ describe('git tools — таймауты', () => {
 
     expect(result.isError).toBe(true);
     expect(result.metadata?.reason).toBe('timeout');
-    expect(result.metadata?.timeoutMs).toBe(30_000);
+    expect(result.metadata?.timeout).toBe(30);
     expect((result.metadata?.i18n as { key?: string })?.key).toBe('git.timeout');
-    // Величина лимита + подсказка (не «Ошибка git status»).
-    expect(result.content).toContain('30000');
+    // Величина лимита (в секундах) + подсказка (не «Ошибка git status»).
+    expect(result.content).toContain('30 seconds');
     expect(result.content).toContain('timeout');
     expect(result.content).not.toContain('Ошибка git status');
   });
@@ -944,8 +944,8 @@ describe('git tools — таймауты', () => {
 
     expect(result.isError).toBe(true);
     expect(result.metadata?.reason).toBe('timeout');
-    expect(result.metadata?.timeoutMs).toBe(300_000);
-    expect(result.content).toContain('300000');
+    expect(result.metadata?.timeout).toBe(300);
+    expect(result.content).toContain('300 seconds');
   });
 });
 

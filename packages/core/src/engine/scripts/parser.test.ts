@@ -58,7 +58,7 @@ describe('parseScriptFile — валидная декларация', () => {
       'run: ./scripts/dev.sh --flag',
       'shell: true',
       'args: true',
-      'timeout: 120000',
+      'timeout: 120',
       'requires: [bash, git]',
       'env:',
       '  PORT: 3000',
@@ -71,7 +71,7 @@ describe('parseScriptFile — валидная декларация', () => {
     const script = res.script!;
     expect(script.shell).toBe(true);
     expect(script.args).toBe(true);
-    expect(script.timeout).toBe(120000);
+    expect(script.timeout).toBe(120);
     expect(script.requires).toEqual(['bash', 'git']);
     expect(script.env).toEqual({ PORT: '3000', DEBUG: '1' });
     expect(script.ready).toBe('готов на :5000');
@@ -177,7 +177,7 @@ describe('parseScriptFile — невалидные декларации', () => 
   });
 
   it('timeout вне диапазона — ошибка invalid-run, записи нет', () => {
-    const tooBig = parse(frontmatter(['description: D', 'run: ./x.sh', 'timeout: 600001']));
+    const tooBig = parse(frontmatter(['description: D', 'run: ./x.sh', 'timeout: 86401']));
     expect(tooBig.script).toBeUndefined();
     expect(tooBig.diagnostics[0]).toMatchObject({ level: 'error', code: 'invalid-run' });
 

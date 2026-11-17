@@ -9,6 +9,7 @@ import type { ProcessService } from '../processes/service.js';
 import { BackgroundUnsupportedError } from '../processes/types.js';
 import { isLexicallyInside, isSymlinkEscapeInRoots, toolRoots } from '../tools/path-utils.js';
 import { splitScriptArguments } from './args.js';
+import { SCRIPT_TIMEOUT_DEFAULT } from './parser.js';
 import {
   buildScriptSources,
   listUndeclaredExecutables,
@@ -204,7 +205,9 @@ export class ScriptService {
         ...(script.shell ? {} : { argv: { file: script.run, args } }),
         cwd,
         env: buildEnv(script, args),
-        timeoutMs: script.timeout ?? 0,
+        // Таймаут запуска — **секунды** в декларации, миллисекунды в порту
+        // (перевод на границе). «Без лимита» больше нет: дефолт — сутки.
+        timeoutMs: (script.timeout ?? SCRIPT_TIMEOUT_DEFAULT) * 1000,
         // Бинарные требования: из декларации, иначе — `bash` для shell-формы.
         // Для argv-формы требования не задаются: запускается сам файл.
         requires: script.requires ?? (script.shell ? ['bash'] : []),

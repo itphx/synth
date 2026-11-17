@@ -200,7 +200,7 @@ export interface ExecutorAppOptions {
 
 /** Дефолты лимитов исполнителя (совпадают с `EXECUTOR_DEFAULTS`). */
 const DEFAULT_MAX_CONCURRENCY = 4;
-const DEFAULT_MAX_TIMEOUT_MS = 600_000;
+const DEFAULT_MAX_TIMEOUT_MS = 86_400_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 /** Протокол 8: дефолты контура PTY. */
 const DEFAULT_PTY_MAX_SESSIONS = 4;

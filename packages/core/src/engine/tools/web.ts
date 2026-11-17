@@ -889,8 +889,8 @@ export const webFetchTool: ToolDefinition = {
         'The format to return the content in: "markdown" (default, HTML is converted to Markdown), '
         + '"text" (plain text, HTML tags stripped) or "html" (raw HTML as received).',
       ),
-    timeout: z.number().int().min(1).max(120).optional()
-      .describe('Timeout per URL in seconds (max 120); covers reading the response body as well'),
+    timeout: z.number().int().min(1).max(600).optional()
+      .describe('Timeout per URL in seconds (default: 30; max 600); covers reading the response body as well'),
     include_media: z.boolean().optional().default(false)
       .describe(
         'Download image/pdf/audio/video responses and attach them to the dialog '

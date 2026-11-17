@@ -71,7 +71,7 @@ describe('execute_shell — прерывание по «Стоп» (abortSignal)
     // exec sleep: sleep заменяет sh — SIGTERM по «Стоп» убивает его напрямую,
     // дочерних процессов-сирот не остаётся
     const promise = executeShellTool.execute(
-      { command: 'echo partial-before-stop; exec sleep 60', timeout: 120_000 },
+      { command: 'echo partial-before-stop; exec sleep 60', timeout: 120 },
       makeCtx({ abortSignal: ac.signal }),
     );
 
@@ -122,15 +122,15 @@ describe('execute_shell — прерывание по «Стоп» (abortSignal)
 
   it('таймаут (без «Стопа») — ошибка с actionable-текстом, а не маркер прерывания', async () => {
     const result = await executeShellTool.execute(
-      { command: 'sleep 5', timeout: 1000 },
+      { command: 'sleep 5', timeout: 1 },
       makeCtx(),
     );
 
     expect(result.isError).toBe(true);
     // Таймаут не должен выглядеть как «Command failed»: модель получает
-    // величину лимита и подсказку.
+    // величину лимита (в секундах) и подсказку.
     expect(result.content).toContain('timed out');
-    expect(result.content).toContain('1000');
+    expect(result.content).toContain('1 seconds');
     expect(result.metadata?.reason).toBe('timeout');
     expect(result.metadata?.interrupted).toBeUndefined();
     expect(result.metadata?.stopped_by).toBeUndefined();
@@ -177,23 +177,49 @@ describe('execute_shell — таймаут', () => {
     expect(port.requests[0]!.timeoutMs).toBe(120_000);
   });
 
-  it('timeout: 0 — без лимита (допустимо, в порт уходит 0)', async () => {
+  it('timeout: 0 — отказ аргументов («без лимита» больше нет)', async () => {
     const port = makePort();
     const result = await executeShellTool.execute({ command: 'echo ok', timeout: 0 }, makeCtx({ executionPort: port }));
 
-    expect(result.isError).toBeFalsy();
-    expect(port.requests[0]!.timeoutMs).toBe(0);
+    expect(result.isError).toBe(true);
+    expect((result.metadata?.i18n as { key?: string })?.key).toBe('tool.args_error');
+    expect(port.requests).toHaveLength(0);
   });
 
-  it('timeout больше 600000 — отказ аргументов (команда не запускается)', async () => {
+  it('timeout больше 600 с в foreground — отказ аргументов (команда не запускается)', async () => {
     const port = makePort();
     const result = await executeShellTool.execute(
-      { command: 'echo ok', timeout: 600_001 },
+      { command: 'echo ok', timeout: 601 },
       makeCtx({ executionPort: port }),
     );
 
     expect(result.isError).toBe(true);
     expect((result.metadata?.i18n as { key?: string })?.key).toBe('tool.args_error');
+    expect(port.requests).toHaveLength(0);
+  });
+
+  it('background: timeout до 86400 с допустим (потолок фонового режима)', async () => {
+    const port = makePort();
+    const result = await executeShellTool.execute(
+      { command: 'echo ok', timeout: 86_400, background: true },
+      makeCtx({ executionPort: port }),
+    );
+
+    // Валидация параметров пройдена (фоновый запуск без сервиса процессов
+    // отказывает по другой причине — `process.deps_unavailable`).
+    expect((result.metadata?.i18n as { key?: string })?.key).not.toBe('tool.args_error');
+  });
+
+  it('timeout выше потолка фонового режима — текст отказа про background, не про foreground', async () => {
+    const port = makePort();
+    const result = await executeShellTool.execute(
+      { command: 'echo ok', timeout: 86_401, background: true },
+      makeCtx({ executionPort: port }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/background mode/);
+    expect(result.content).not.toMatch(/in foreground/);
     expect(port.requests).toHaveLength(0);
   });
 });

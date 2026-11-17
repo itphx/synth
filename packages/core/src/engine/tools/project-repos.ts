@@ -21,6 +21,7 @@ import type { RepoOccupancyInfo } from '../../git/repo-occupancy.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { isAborted, abortedResult } from './abort.js';
 import { errorText } from './error-text.js';
+import { msToTimeoutSec } from '../timeout.js';
 import { loadSessionProject } from './project-manage.js';
 import { canEditProject } from './project-access.js';
 import type { PrincipalExtra } from './project-resolve.js';
@@ -164,11 +165,15 @@ function repoOccupiedResult(relPath: string, info: RepoOccupancyInfo): ToolResul
  */
 function repoOpError(tool: string, err: unknown, timeoutMs?: number, repoPath?: string): ToolResult {
   const code = (err as { code?: unknown } | null | undefined)?.code;
+  // Предел операции — из конфига инстанса (`git.cloneTimeoutMs`/`git.fetchTimeoutMs`,
+  // миллисекунды). Модели показываем **секунды** (перевод на границе): единица
+  // таймаутов у тулов и сообщений — секунды.
+  const timeoutSec = String(msToTimeoutSec(timeoutMs ?? 0));
   if (code === 'git.clone_timeout') {
-    return i18nError('git.clone_timeout', { timeout: String(timeoutMs ?? 0) });
+    return i18nError('git.clone_timeout', { timeout: timeoutSec });
   }
   if (code === 'git.fetch_timeout') {
-    return i18nError('git.fetch_timeout', { timeout: String(timeoutMs ?? 0) });
+    return i18nError('git.fetch_timeout', { timeout: timeoutSec });
   }
   // `NOT_FOUND` от git-слоя (`ensureRepo`): запись в реестре есть, а репозитория
   // по её пути нет (каталог удалён/очищен/никогда не был репозиторием).

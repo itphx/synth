@@ -148,7 +148,7 @@ describe('sandbox_exec — запуск и отчёт', () => {
     const { router } = fakeRouter(port);
 
     await sandboxExecTool.execute(
-      { profile: 'devops', commands: ['pwd'], cwd: 'sub', timeout_ms: 5000 },
+      { profile: 'devops', commands: ['pwd'], cwd: 'sub', timeout: 5 },
       makeCtx({ executionRouter: router }),
     );
 
