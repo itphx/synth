@@ -2000,6 +2000,32 @@ export type {
   SchedulerLeader,
   FileLeaderOptions,
 } from './engine/scheduler/index.js';
+// PROP-141 (Часть B): движок таймеров и будильников (доставка — этап 4).
+export {
+  nextDailyFire,
+  nextEveryFire,
+  nextFireForRepeat,
+  resolveFirstFire,
+  isValidTimezone,
+  TimerService,
+  TIMER_SAFETY_TICK_MS,
+  TIMER_CATCHUP_LAG_MS,
+  TIMER_DEDUP_HISTORY,
+  TIMER_ERROR_CODES,
+  TimerError,
+  TimerValidationError,
+  TimerLimitExceededError,
+} from './engine/timers/index.js';
+export type {
+  TimerErrorCode,
+  TimerIntent,
+  TimerIntentRepeat,
+  TimerUpdatePatch,
+  TimerDeliveryMeta,
+  TimerDeliver,
+  TimerServiceDeps,
+  TimerAuditAction,
+} from './engine/timers/index.js';
 // ADR-051/ADR-089: файловый мьютекс (общий dataDir на одном хосте/FS).
 export { FileMutex } from './storage/file-mutex.js';
 export type { FileMutexOptions } from './storage/file-mutex.js';

@@ -132,11 +132,13 @@ export interface EgressRequestLogEntry {
  *
  * `projects` (PROP-133 §3.1) — изменение состояния доступа к проекту
  * (`members`/`group_members`/`everyone_role`).
+ * `timer` (PROP-141, Часть B) — создание/правка/снятие таймера и будильника
+ * и ошибка его срабатывания.
  */
-export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'projects', 'limits', 'permission', 'ssh'] as const;
+export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'projects', 'limits', 'permission', 'ssh', 'timer'] as const;
 export type SecurityAuditScope = (typeof SECURITY_AUDIT_SCOPES)[number];
 
-export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke'] as const;
+export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke', 'create', 'remove', 'fire'] as const;
 export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];
 
 /**

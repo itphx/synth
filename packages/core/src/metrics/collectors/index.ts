@@ -24,6 +24,15 @@ export type { EventMetricsHooks } from './events.js';
 export { createSchedulerMetrics } from './scheduler.js';
 export type { SchedulerJobInfo, SchedulerJobMetrics } from './scheduler.js';
 export {
+  createTimerMetrics,
+  normalizeTimerMetricKind,
+  normalizeTimerFiringOutcome,
+  TIMER_LAG_BUCKETS,
+  TIMER_METRIC_KINDS,
+  TIMER_METRIC_OUTCOMES,
+} from './timers.js';
+export type { TimerMetricsHooks, TimerActiveCounts } from './timers.js';
+export {
   createPipelineMetrics,
   normalizePipelineRunStatus,
   normalizePipelineStepOutcome,
