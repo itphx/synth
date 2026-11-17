@@ -42,6 +42,15 @@ export type {
   RecoveryDecision,
   RecoveryDenyReason,
 } from './sessions/recovery.js';
+// PROP-142 §3: планировщик автовосстановления при старте инстанса (boot) —
+// чистый модуль: решение по списку сессий и бюджету, без доступа к хранилищу.
+export {
+  planBootRecovery,
+  isChildSession,
+  resolveRecoveryBudget,
+  DEFAULT_RECOVERY_BUDGET,
+} from './sessions/recovery-boot.js';
+export type { BootRecoveryPlan, BootRecoverySession } from './sessions/recovery-boot.js';
 export {
   EventBus, INSTANCE_EVENT_CHANNEL,
   // ADR-118: адресная доставка (`recipient`), нумерация событий (`eventSeq`),

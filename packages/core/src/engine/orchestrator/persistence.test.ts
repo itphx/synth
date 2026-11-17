@@ -19,6 +19,7 @@ import { MessageRole, makeMediaPart, makeTextPart } from '@itphx/synth-shared';
 import type { BusEvent, Message, TokenUsage } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
+import { recordRecoveryAttempt } from '../../sessions/recovery.js';
 import { EventBus } from '../../events/bus.js';
 import { DebugCollector } from '../../debug.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
@@ -398,6 +399,35 @@ describe('saveAssistantMessage / persistToolChain', () => {
     const updated = (await sessionManager.getSession(session.id))!;
     expect(updated.messages[0]!.metadata!.status).toBe('error');
     expect(updated.messages[1]!.metadata!.status).toBe('stopped');
+  });
+
+  it('PROP-142 §3: успешный финал хода сбрасывает счётчик автовосстановления', async () => {
+    const session = await newSession();
+    await recordRecoveryAttempt(sessionManager, session.id);
+    expect((await sessionManager.getSession(session.id))!.status.recovery).toBeDefined();
+
+    await saveAssistantMessage(
+      deps(), session.id, 'ответ', 'stream1', 'fixer', USAGE, 'm', undefined,
+      debugCollector, false, 'prov', MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined,
+    );
+
+    const updated = (await sessionManager.getSession(session.id))!;
+    expect(updated.status.recovery).toBeUndefined();
+  });
+
+  it('PROP-142 §3: неуспешный финал (отмена) счётчик восстановления сохраняет', async () => {
+    const session = await newSession();
+    await recordRecoveryAttempt(sessionManager, session.id);
+
+    await saveAssistantMessage(
+      deps(), session.id, 'частичный', 'stream1', 'fixer', USAGE, 'm', undefined,
+      debugCollector, true, 'prov', MessageRole.ASSISTANT, undefined, false,
+      undefined, undefined, undefined, undefined,
+    );
+
+    const updated = (await sessionManager.getSession(session.id))!;
+    expect(updated.status.recovery?.attempts).toBe(1);
   });
 
   it('отмена: status=cancelled, стоимость по цене модели, reasonings, длительность', async () => {

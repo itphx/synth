@@ -55,6 +55,12 @@ import {
   createBackgroundParentNotifier,
   // PROP-143: durable-запись о прогоне, потерянном при рестарте.
   appendLostRunRecords,
+  // PROP-142 §3: бюджет автовосстановления + планировщик boot-восстановления.
+  recordRecoveryAttempt,
+  planBootRecovery,
+  resolveRecoveryBudget,
+  // PROP-143: durable-запись причины остановки хода (след отказа по бюджету).
+  appendStopRecord,
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
   ProcessService,
   startProcessLogPruner,
@@ -868,6 +874,35 @@ export async function createStandaloneDeps(
   // показывает активность. Восстановление отложено на 60 с, чтобы старый под
   // успел умереть, а живые маркеры работающего процесса не были сняты.
   // В деградации хранилище read-only — ничего не пишем и не запускаем.
+  //
+  // PROP-142 §3: автовосстановление — **под бюджетом** (попытки на ход +
+  // детект crash-loop). Секция `recovery` конфига (`shared/config/types.ts`).
+  const recoveryBudget = resolveRecoveryBudget(config);
+  /**
+   * Отказ по бюджету автовосстановления: след в истории (PROP-143) —
+   * durable-запись `execution_stopped` с причиной `orphaned`. Запись
+   * идемпотентна по `dedupeKey` (ход/сессия), ошибка записи не ломает boot.
+   */
+  const recordRecoveryDenied = async (
+    sessionId: string,
+    reason: string,
+    dedupeKey: string,
+  ): Promise<void> => {
+    try {
+      await appendStopRecord({
+        sessionManager,
+        eventBus,
+        sessionId,
+        input: { reason: 'orphaned', error: `recovery budget exhausted (${reason})` },
+        dedupeKey,
+      });
+    } catch (err) {
+      console.warn(
+        `[sessions] запись об отказе восстановления не добавлена: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    console.warn(`[sessions] восстановление ${sessionId} запрещено бюджетом (${reason})`);
+  };
   if (!storageDegraded) {
     const bootRecovery = setTimeout(() => {
       void sessionManager.recoverInterruptedSessions()
@@ -880,13 +915,60 @@ export async function createStandaloneDeps(
               status: 'stopped',
             });
             eventBus.publish(r.sessionId, 'session.updated', { session_id: r.sessionId });
-            if (!r.resumeMessage) continue;
-            // Автопродолжение: info-блок в истории (в LLM-контекст не попадает —
-            // роль INFO исключена из промпта) и resume-сообщение процессору.
-            await addRestartResumedNotice(r.sessionId, r.streamId);
-            queueManager.createProcessor(r.sessionId, sessionManager, eventBus, processMessage, {
-              resumeMessage: r.resumeMessage,
-            });
+            // PROP-142 §3: план восстановления — вид сессии (основная/дочерняя)
+            // и бюджет попыток/crash-loop. Одна сессия не должна ломать boot.
+            try {
+              const session = await sessionManager.getSession(r.sessionId);
+              const plan = planBootRecovery({
+                sessions: [
+                  {
+                    id: r.sessionId,
+                    ...(session?.parentId ? { parentId: session.parentId } : {}),
+                    ...(session?.sessionOrigin ? { sessionOrigin: session.sessionOrigin } : {}),
+                    ...(session?.status.recovery ? { recovery: session.status.recovery } : {}),
+                  },
+                ],
+                config: recoveryBudget,
+              })[0];
+              if (!plan) continue;
+              if (plan.action === 'deny') {
+                // Бюджет исчерпан: ход терминализируется, след — в истории.
+                await recordRecoveryDenied(
+                  r.sessionId,
+                  plan.reason,
+                  `recovery:${r.turnId ?? r.sessionId}`,
+                );
+                continue;
+              }
+              if (plan.action === 'resume-child') {
+                // Дочерняя сессия (саб-агент): её цикл ведёт родитель — процессор
+                // очереди не создаём (у ребёнка нет своей очереди), возобновляем
+                // через цикл саб-агента (PROP-142 §3).
+                await recordRecoveryAttempt(sessionManager, r.sessionId);
+                try {
+                  await orchestrator.startSubagentResume(r.sessionId);
+                  await addRestartResumedNotice(r.sessionId, r.streamId);
+                } catch (err) {
+                  console.warn(
+                    `[sessions] возобновление дочерней сессии не выполнено: ${err instanceof Error ? err.message : String(err)}`,
+                  );
+                }
+                continue;
+              }
+              // Основная сессия — прежнее поведение автопродолжения.
+              if (!r.resumeMessage) continue;
+              await recordRecoveryAttempt(sessionManager, r.sessionId);
+              // Автопродолжение: info-блок в истории (в LLM-контекст не попадает —
+              // роль INFO исключена из промпта) и resume-сообщение процессору.
+              await addRestartResumedNotice(r.sessionId, r.streamId);
+              queueManager.createProcessor(r.sessionId, sessionManager, eventBus, processMessage, {
+                resumeMessage: r.resumeMessage,
+              });
+            } catch (err) {
+              console.warn(
+                `[sessions] восстановление сессии не выполнено: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
           }
           if (recovered.length) {
             console.log(`[sessions] сняты маркеры прерванных ходов: ${recovered.length}`);
@@ -910,29 +992,55 @@ export async function createStandaloneDeps(
               if (s.currentStream || s.status.blocked) continue;
               if (s.pendingMessages.length === 0) continue;
               queueCandidates += 1;
-              if (s.status.queueStopped) {
-                eventBus.publish(s.id, 'queue.stalled', {
-                  pending_count: s.pendingMessages.length,
-                });
-                continue;
-              }
-              // Маркеры мог снять прошлый recovery, а сообщение осталось и в
-              // истории, и в очереди. Это прерванный in-flight ход: продолжаем
-              // его как resume (info-блок + метка `resumed`), а не как новую
-              // очередь — иначе сообщение материализуется в историю повторно.
-              const resume = await sessionManager.takePendingInFlight(s.id);
-              if (resume) {
-                inFlightResumed += 1;
-                await addRestartResumedNotice(
-                  s.id,
-                  resume.metadata?.stream_id as string | undefined,
+              try {
+                // PROP-142 §3: бюджет автовосстановления — до любых действий
+                // (в т.ч. `queue.stalled`): при отказе очередь не трогаем, след
+                // в истории оставляем.
+                const plan = planBootRecovery({
+                  sessions: [
+                    {
+                      id: s.id,
+                      ...(s.parentId ? { parentId: s.parentId } : {}),
+                      ...(s.sessionOrigin ? { sessionOrigin: s.sessionOrigin } : {}),
+                      ...(s.status.recovery ? { recovery: s.status.recovery } : {}),
+                    },
+                  ],
+                  config: recoveryBudget,
+                })[0];
+                if (plan?.action === 'deny') {
+                  await recordRecoveryDenied(s.id, plan.reason, `recovery:queue:${s.id}`);
+                  continue;
+                }
+                if (s.status.queueStopped) {
+                  eventBus.publish(s.id, 'queue.stalled', {
+                    pending_count: s.pendingMessages.length,
+                  });
+                  continue;
+                }
+                // Маркеры мог снять прошлый recovery, а сообщение осталось и в
+                // истории, и в очереди. Это прерванный in-flight ход: продолжаем
+                // его как resume (info-блок + метка `resumed`), а не как новую
+                // очередь — иначе сообщение материализуется в историю повторно.
+                const resume = await sessionManager.takePendingInFlight(s.id);
+                if (resume) {
+                  inFlightResumed += 1;
+                  await recordRecoveryAttempt(sessionManager, s.id);
+                  await addRestartResumedNotice(
+                    s.id,
+                    resume.metadata?.stream_id as string | undefined,
+                  );
+                  queueManager.createProcessor(s.id, sessionManager, eventBus, processMessage, {
+                    resumeMessage: resume,
+                  });
+                  continue;
+                }
+                await recordRecoveryAttempt(sessionManager, s.id);
+                queueManager.createProcessor(s.id, sessionManager, eventBus, processMessage);
+              } catch (err) {
+                console.warn(
+                  `[sessions] автозапуск очереди не выполнен: ${err instanceof Error ? err.message : String(err)}`,
                 );
-                queueManager.createProcessor(s.id, sessionManager, eventBus, processMessage, {
-                  resumeMessage: resume,
-                });
-                continue;
               }
-              queueManager.createProcessor(s.id, sessionManager, eventBus, processMessage);
             }
             if (queueCandidates > 0) {
               // Только счётчики: ни id, ни содержимого сессий/сообщений.

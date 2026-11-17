@@ -15,6 +15,7 @@ import type { Message, MessageStatus, Part, PromptMeta, Session, TokenUsage } fr
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { SessionManager } from '../../sessions/manager.js';
+import { resetRecoveryState } from '../../sessions/recovery.js';
 import type { EventBus } from '../../events/bus.js';
 import type { DebugCollector } from '../../debug.js';
 import { makeReasoningParts, type ReasoningBlockLike } from '../reasoning-blocks.js';
@@ -713,6 +714,36 @@ export async function saveAssistantMessage(
   } else {
     const added = await sessionManager.addMessage(sessionId, msg);
     messageIndex = added ? added.messages.length - 1 : -1;
+  }
+
+  /**
+   * PROP-142 §3: успешный финал хода сбрасывает счётчик автовосстановления —
+   * ход завершился, бюджет попыток не израсходован (иначе следующий прерванный
+   * ход той же сессии унаследовал бы старые попытки и быстро исчерпал бюджет).
+   *
+   * Сбрасываются только **финальные** assistant-сообщения хода (`role=ASSISTANT`
+   * и терминальный статус `completed`/`limit`): служебные записи (суммаризация,
+   * debug-эхо, отмена) счётчик не трогают — иначе aux-вызов посреди хода
+   * обнулил бы бюджет восстановления.
+   *
+   * Запись выполняется, только если счётчик есть (иначе — лишняя запись в
+   * хранилище), и ошибка сброса **не ломает ход** (ход уже сохранён).
+   */
+  if (
+    role === MessageRole.ASSISTANT
+    && (metadata.status === 'completed' || metadata.status === 'limit')
+  ) {
+    try {
+      const snapshot = await loadSession();
+      if (snapshot?.status.recovery) {
+        await resetRecoveryState(sessionManager, sessionId);
+      }
+    } catch (err) {
+      warning(
+        'RECOVERY',
+        `счётчик автовосстановления не сброшен: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // ADR-115 (outbound): сообщение ссылается на объекты вложений — учитываем
