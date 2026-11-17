@@ -862,12 +862,17 @@ export async function runProcessFinalize(
     if (optSession.settings.contextOptimization === 'sliding_window') {
       const swResult = deps.optimizer.shouldApplySlidingWindow(optSession);
       if (swResult.triggered) {
-        let disabledIndices: number[] = [];
-        await deps.sessionManager.withLock(optSession.id, async (s) => {
-          const applied = deps.optimizer!.applySlidingWindow(s);
-          disabledIndices = applied.disabledIndices;
-          await deps.sessionManager.saveSession(s);
-        });
+        // Паритет с прежним `withLock`+`saveSession`: окно не «оживляет» сессию
+        // (`touchUpdatedAt:false`), запись — только при реальных отключениях.
+        // Мутатор синхронный (`applySlidingWindow` правит сессию на месте) и
+        // работает со свежим документом из порта — параллельная дозапись в конец
+        // не теряется.
+        const swMutation = await deps.sessionManager.mutateHistory(
+          optSession.id,
+          (s) => deps.optimizer!.applySlidingWindow(s).disabledIndices,
+          { touchUpdatedAt: false, shouldWrite: (indices) => indices.length > 0 },
+        );
+        const disabledIndices = swMutation.ok ? swMutation.value : [];
         deps.eventBus.publish(optSession.id, 'context.sliding_window_applied', {
           reason: swResult.reason,
           trigger_type: swResult.reason,

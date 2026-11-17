@@ -165,7 +165,8 @@ export class MemorySessionRepository implements SessionRepository {
     // без него сортировка по `ord` поставила бы их в начало истории.
     assignMissingOrd(session.messages);
     normalizeMessageSeq(session.messages);
-    session.updatedAt = nowISO();
+    // `touchUpdatedAt:false` — служебная запись истории не «оживляет» сессию.
+    if (opts?.touchUpdatedAt !== false) session.updatedAt = nowISO();
     this._sessions.set(sessionId, structuredClone(stripNullBytesDeep(session)));
     return { ok: true, value };
   }

@@ -1279,8 +1279,15 @@ export class SessionManager {
     return result.value;
   }
 
+  /**
+   * Создать контрольную точку истории.
+   *
+   * Запись — атомарная мутация истории (свежий документ под локом порта:
+   * параллельная дозапись сообщения не теряется). `updatedAt` двигается
+   * (паритет с прежним `save` после `nowISO()`).
+   */
   async createCheckpoint(sessionId: string): Promise<Session | null> {
-    return this.withLock(sessionId, async (session) => {
+    const result = await this.store.mutateHistory(sessionId, (session) => {
       const checkpoint: Checkpoint = {
         id: generateId(),
         sessionId: session.id,
@@ -1288,21 +1295,26 @@ export class SessionManager {
         createdAt: nowISO(),
       };
       session.checkpoints.push(checkpoint);
-      session.updatedAt = nowISO();
-      await this.store.save(session);
-      return session;
+      return checkpoint;
     });
+    if (!result.ok) return null;
+    return this.store.load(sessionId);
   }
 
+  /**
+   * Восстановить историю из контрольной точки.
+   *
+   * `seq` нормализуется позиционно портом, `ord` (монотонный счётчик сессии)
+   * **не** перенумеровывается. `updatedAt` двигается (паритет с прежним `save`).
+   */
   async restoreCheckpoint(sessionId: string, checkpointId: string): Promise<Session | null> {
-    return this.withLock(sessionId, async (session) => {
+    const result = await this.store.mutateHistory(sessionId, (session) => {
       const checkpoint = session.checkpoints.find((c) => c.id === checkpointId);
       if (!checkpoint) throw new Error(`Checkpoint ${checkpointId} not found`);
       session.messages = JSON.parse(JSON.stringify(checkpoint.messages));
-      session.updatedAt = nowISO();
-      await this.store.save(session);
-      return session;
     });
+    if (!result.ok) return null;
+    return this.store.load(sessionId);
   }
 
   /**
@@ -1362,31 +1374,34 @@ export class SessionManager {
     sourceSessionId: string,
     options: { label?: string; messageRange?: [number, number]; autoSummarize?: boolean; position?: 'after' | 'before' },
   ): Promise<SessionReference> {
-    return this.withLock(targetSessionId, async (target) => {
-      const source = await this.getSession(sourceSessionId);
-      if (!source) throw new Error(`Source session ${sourceSessionId} not found`);
+    // Источник читается до мутации: мутатор порта строго синхронный.
+    const source = await this.getSession(sourceSessionId);
+    if (!source) throw new Error(`Source session ${sourceSessionId} not found`);
 
-      const range: [number, number] = options.messageRange || [1, source.messages.length];
-      const label = options.label || source.title || sm('session.reference_label');
+    const range: [number, number] = options.messageRange || [1, source.messages.length];
+    const label = options.label || source.title || sm('session.reference_label');
 
-      let autoSummary: string | undefined;
-      if (options.autoSummarize && range[0] <= range[1]) {
-        const msgsInRange = source.messages
-          .filter((m: Message) => m.seq >= range[0] && m.seq <= range[1] && !m.hidden && !m.disabled);
-        autoSummary = msgsInRange
-          .map((m: Message) => `[${m.role}]: ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`)
-          .join(' | ');
-      }
+    let autoSummary: string | undefined;
+    if (options.autoSummarize && range[0] <= range[1]) {
+      const msgsInRange = source.messages
+        .filter((m: Message) => m.seq >= range[0] && m.seq <= range[1] && !m.hidden && !m.disabled);
+      autoSummary = msgsInRange
+        .map((m: Message) => `[${m.role}]: ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}`)
+        .join(' | ');
+    }
 
-      const ref: SessionReference = {
-        type: 'session_reference',
-        sessionId: sourceSessionId,
-        label,
-        messageRange: range,
-        autoSummary,
-        createdAt: nowISO(),
-      };
+    const ref: SessionReference = {
+      type: 'session_reference',
+      sessionId: sourceSessionId,
+      label,
+      messageRange: range,
+      autoSummary,
+      createdAt: nowISO(),
+    };
 
+    // Правка истории и списка ссылок — одна атомарная мутация (свежий документ
+    // под локом порта: параллельная дозапись сообщения не теряется).
+    const result = await this.store.mutateHistory(targetSessionId, (target) => {
       if (!target.references) target.references = [];
       const existingIdx = target.references.findIndex((r) => r.sessionId === sourceSessionId);
       if (existingIdx >= 0) {
@@ -1427,11 +1442,10 @@ export class SessionManager {
         target.messages.push(refMessage);
       }
       target.messages.forEach((m, i) => { m.seq = i + 1; });
-
-      target.updatedAt = nowISO();
-      await this.store.save(target);
       return ref;
     });
+    if (!result.ok) throw new Error(`Session ${targetSessionId} not found`);
+    return result.value;
   }
 
   async batchMessageOperation(
@@ -1440,7 +1454,10 @@ export class SessionManager {
     messageIds: string[],
     state?: boolean,
   ): Promise<{ results: Array<{ messageId: string; success: boolean; state?: boolean }> }> {
-    return this.withLock(sessionId, async (session) => {
+    // Паритет с прежним `withLock`+`save`: запись/bump `updatedAt` — всегда
+    // (даже если ни одно сообщение не найдено), история правится на свежем
+    // документе под локом порта — параллельная дозапись не теряется.
+    const result = await this.store.mutateHistory(sessionId, (session) => {
       const results: Array<{ messageId: string; success: boolean; state?: boolean }> = [];
       // ADR-118 §7: адресация — по `id` сообщения; позиция находится внутри лока.
       // Удаление идёт от конца к началу (splice сдвигает массив), остальные
@@ -1472,23 +1489,22 @@ export class SessionManager {
       }
 
       session.messages.forEach((m, i) => { m.seq = i + 1; });
-      session.updatedAt = new Date().toISOString();
-      await this.store.save(session);
       return { results };
     });
+    if (!result.ok) throw new Error(`Session ${sessionId} not found`);
+    return result.value;
   }
 
   async removeReference(targetSessionId: string, refSessionId: string): Promise<void> {
-    return this.withLock(targetSessionId, async (session) => {
+    const result = await this.store.mutateHistory(targetSessionId, (session) => {
       if (session.references) {
         session.references = session.references.filter((r) => r.sessionId !== refSessionId);
       }
       session.messages = session.messages.filter(
         (m) => m.metadata?.type !== 'session_reference' || m.metadata?.session_id !== refSessionId,
       );
-      session.updatedAt = nowISO();
-      await this.store.save(session);
     });
+    if (!result.ok) throw new Error(`Session ${targetSessionId} not found`);
   }
 
   async getReferences(sessionId: string): Promise<SessionReference[]> {
@@ -1505,45 +1521,48 @@ export class SessionManager {
       summarize?: boolean;
     },
   ): Promise<Message[]> {
-    return this.withLock(targetSessionId, async (target) => {
-      const source = await this.getSession(sourceSessionId);
-      if (!source) throw new Error(`Source session ${sourceSessionId} not found`);
+    // Источник читается до мутации: мутатор порта строго синхронный.
+    const source = await this.getSession(sourceSessionId);
+    if (!source) throw new Error(`Source session ${sourceSessionId} not found`);
 
-      const [fromSeq, toSeq] = options.sourceRange;
-      const sourceMsgs = source.messages.filter(
-        (m) => m.seq >= fromSeq && m.seq <= toSeq && !m.hidden && !m.disabled,
-      );
+    const [fromSeq, toSeq] = options.sourceRange;
+    const sourceMsgs = source.messages.filter(
+      (m) => m.seq >= fromSeq && m.seq <= toSeq && !m.hidden && !m.disabled,
+    );
 
-      if (sourceMsgs.length === 0) return [];
+    if (sourceMsgs.length === 0) return [];
 
-      let messagesToInsert: Message[];
-      if (options.summarize) {
-        const combined = sourceMsgs.map((m) => `[${m.role}]: ${m.content}`).join('\n\n');
-        const summaryMsg: Message = {
-          id: generateId(),
-          role: MessageRole.SUMMARY,
-          seq: 0,
-          origin: 'merged',
-          sourceMsgId: sourceSessionId,
-          parts: [makeTextPart(combined.slice(0, 4000))],
-          content: combined.slice(0, 4000),
-          createdAt: nowISO(),
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          metadata: { type: 'merged_summary', source_session_id: sourceSessionId, source_range: [fromSeq, toSeq] },
-        };
-        messagesToInsert = [summaryMsg];
-      } else {
-        messagesToInsert = sourceMsgs.map((m) => ({
-          ...structuredClone(m),
-          id: generateId(),
-          origin: 'merged' as const,
-          sourceMsgId: m.id,
-          seq: 0,
-        }));
-      }
+    let messagesToInsert: Message[];
+    if (options.summarize) {
+      const combined = sourceMsgs.map((m) => `[${m.role}]: ${m.content}`).join('\n\n');
+      const summaryMsg: Message = {
+        id: generateId(),
+        role: MessageRole.SUMMARY,
+        seq: 0,
+        origin: 'merged',
+        sourceMsgId: sourceSessionId,
+        parts: [makeTextPart(combined.slice(0, 4000))],
+        content: combined.slice(0, 4000),
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { type: 'merged_summary', source_session_id: sourceSessionId, source_range: [fromSeq, toSeq] },
+      };
+      messagesToInsert = [summaryMsg];
+    } else {
+      messagesToInsert = sourceMsgs.map((m) => ({
+        ...structuredClone(m),
+        id: generateId(),
+        origin: 'merged' as const,
+        sourceMsgId: m.id,
+        seq: 0,
+      }));
+    }
 
+    // Вставка — одна атомарная мутация истории (свежий документ под локом
+    // порта: параллельная дозапись сообщения не теряется).
+    const result = await this.store.mutateHistory(targetSessionId, (target) => {
       let anchorIdx = target.messages.length;
       if (options.anchorMessageId) {
         const found = target.messages.findIndex((m) => m.id === options.anchorMessageId);
@@ -1565,10 +1584,10 @@ export class SessionManager {
         const msg = target.messages[i];
         if (msg) msg.seq = i + 1;
       }
-      target.updatedAt = nowISO();
-      await this.store.save(target);
       return messagesToInsert;
     });
+    if (!result.ok) throw new Error(`Session ${targetSessionId} not found`);
+    return result.value;
   }
 
   async forkSession(

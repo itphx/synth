@@ -32,6 +32,8 @@ import { BaseProvider } from '../../../providers/base.js';
 import type { LLMMessage } from '../../../providers/base.js';
 import type { ModelRouter, RoutingDecision } from '../../router/router.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
+import { ContextOptimizer as RealContextOptimizer } from '../../context/optimizer.js';
+import { ContextConfig } from '../../context/config.js';
 import { t as sm } from '../../system-messages.js';
 import {
   saveAssistantMessage,
@@ -1275,6 +1277,125 @@ describe('runProcessFinalize', () => {
       const flagWrites = observed.filter((call) => call.touch === false);
       expect(flagWrites.length).toBeGreaterThanOrEqual(2); // summarizationPending + canSummarize
       for (const call of flagWrites) expect(call.after).toBe(call.before);
+    });
+  });
+
+  /**
+   * Этап 3a-1: скользящее окно применяется **точечной мутацией истории**:
+   * событие несёт отключённые индексы, `updatedAt` не двигается (паритет с
+   * прежним `save`), параллельная дозапись сообщения не теряется.
+   */
+  describe('этап 3a-1: скользящее окно', () => {
+    function slidingOptimizer(): ContextOptimizer {
+      return new RealContextOptimizer(
+        new ContextConfig({ userDataDir: tmpDir }),
+        () => null,
+        { provider: 'mock', model: 'mock-model', temperature: 0.3, promptFile: 'SUMMARIZER' },
+        () => 8192,
+      ) as unknown as ContextOptimizer;
+    }
+
+    /** История сессии с тремя user-репликами: `messages`-окно с лимитом 1 сработает. */
+    async function makeWindowSession(): Promise<string> {
+      const session = await sessionManager.createSession({
+        title: 'SW',
+        settings: {
+          contextOptimization: 'sliding_window',
+          slidingWindowMode: 'messages',
+          slidingWindowMessageLimit: 1,
+        } as never,
+      });
+      for (const text of ['первый', 'второй', 'третий']) {
+        await sessionManager.addMessage(session.id, {
+          id: generateId(),
+          role: MessageRole.USER,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(text)],
+          content: text,
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+        });
+      }
+      return session.id;
+    }
+
+    it('окно применяется, событие несёт индексы, updatedAt не двигается', async () => {
+      const sessionId = await makeWindowSession();
+
+      // Наблюдаем опции мутации истории и `updatedAt` до/после.
+      const observed: Array<{ touch: boolean | undefined; before: string; after: string }> = [];
+      const originalHistory = sessionManager.mutateHistory.bind(sessionManager);
+      const readUpdatedAt = async (id: string): Promise<string> => {
+        const result = await originalHistory(id, (session) => session.updatedAt, {
+          shouldWrite: () => false,
+        });
+        return result.ok ? result.value : '';
+      };
+      const spy = vi.spyOn(sessionManager, 'mutateHistory').mockImplementation(async (id, mutator, opts) => {
+        const before = await readUpdatedAt(id);
+        const result = await originalHistory(id, mutator, opts);
+        observed.push({ touch: opts?.touchUpdatedAt, before, after: await readUpdatedAt(id) });
+        return result;
+      });
+
+      try {
+        await runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps({ optimizer: slidingOptimizer() }));
+      } finally {
+        spy.mockRestore();
+      }
+
+      const applied = events.find((e) => e.type === 'context.sliding_window_applied');
+      expect(applied).toBeDefined();
+      const disabledIndices = (applied!.data as { disabled_indices: number[] }).disabled_indices;
+      expect(disabledIndices.length).toBeGreaterThan(0);
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      // Отключены ровно индексы из события и только они.
+      const actualDisabled = stored.messages
+        .map((message, index) => (message.disabled ? index : -1))
+        .filter((index) => index >= 0);
+      expect(actualDisabled).toEqual(disabledIndices);
+      // Хвост (последняя user-реплика и финальный ответ) живой.
+      expect(stored.messages.at(-1)!.disabled).toBe(false);
+
+      // Запись окна — служебная: `updatedAt` не сдвинулся.
+      const windowWrite = observed.find((call) => call.touch === false && call.before === call.after);
+      expect(windowWrite).toBeDefined();
+      for (const call of observed.filter((c) => c.touch === false)) {
+        expect(call.after).toBe(call.before);
+      }
+    });
+
+    it('параллельный append не теряется', async () => {
+      const sessionId = await makeWindowSession();
+      const witness: Message = {
+        id: generateId(),
+        role: MessageRole.USER,
+        seq: 0,
+        origin: 'local',
+        parts: [makeTextPart('свидетель')],
+        content: 'свидетель',
+        createdAt: nowISO(),
+        disabled: false,
+        pinned: false,
+        hidden: false,
+      };
+
+      await Promise.all([
+        runProcessFinalize(
+          makeArgs(sessionId),
+          makeState(),
+          makeDeps({ optimizer: slidingOptimizer() }),
+        ),
+        sessionManager.addMessage(sessionId, witness),
+      ]);
+
+      const stored = (await sessionManager.getSession(sessionId))!;
+      expect(stored.messages.map((m) => m.id)).toContain(witness.id);
+      expect(events.some((e) => e.type === 'context.sliding_window_applied')).toBe(true);
     });
   });
 

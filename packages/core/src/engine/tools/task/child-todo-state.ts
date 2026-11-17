@@ -35,30 +35,36 @@ function isTodosStateMessage(message: { metadata?: Record<string, unknown> }): b
  * - контент совпадает с последним сообщением — ничего не делаем (идемпотентно);
  * - иначе дописываем `createStateMessage('todos_updated', content)`.
  *
- * Всё — под per-session локом; ошибки не глотаются (вызывающий решает,
- * фатальны ли они — state-сообщение derived и не должно ломать прогон).
+ * Правка — одна атомарная мутация истории под локом хранилища (свежий документ:
+ * параллельная дозапись сообщения не теряется). Паритет с прежним
+ * `withLock`+`saveSession`: `updatedAt` state-сообщение не двигает
+ * (`touchUpdatedAt:false`), а ранние `return` записывают только при реальных
+ * изменениях (`shouldWrite`). Ошибки не глотаются (вызывающий решает, фатальны
+ * ли они — state-сообщение derived и не должно ломать прогон).
  */
 export async function ensureTodoStateMessage(
   sessionManager: SessionManager,
   sessionId: string,
 ): Promise<void> {
-  await sessionManager.withLock(sessionId, async (session) => {
+  const result = await sessionManager.mutateHistory(sessionId, (session) => {
     const content = buildTodosUpdatedContent(session.todos ?? []);
     const last = findLastStateMessage(session.messages, 'todos_updated');
 
     if (!content) {
-      if (!last) return;
+      if (!last) return false;
       session.messages = session.messages.filter((message) => !isTodosStateMessage(message));
-      await sessionManager.saveSession(session);
-      return;
+      return true;
     }
 
-    if (last && last.content === content) return;
+    if (last && last.content === content) return false;
 
     const message = createStateMessage('todos_updated', content);
     message.seq = session.messages.length + 1;
     message.ord = nextOrd(session.messages);
     session.messages.push(message);
-    await sessionManager.saveSession(session);
-  });
+    return true;
+  }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
+
+  // Сессии нет — прежнее поведение (`withLock` бросал ту же ошибку).
+  if (!result.ok) throw new Error(`Session ${sessionId} not found`);
 }

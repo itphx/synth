@@ -90,30 +90,44 @@ export function publishCompressionFailure(
 
 /** Минимальный набор зависимостей применения плана. */
 export interface CompressionApplyDeps {
-  sessionManager: Pick<SessionManager, 'withLock' | 'getSession' | 'saveSession'>;
+  sessionManager: Pick<SessionManager, 'mutateHistory' | 'getSession'>;
   eventBus: EventBus;
 }
 
 /**
  * Отключить ровно покрытые резюме сообщения. `pinned` не трогаем, хвост не
  * трогаем; каждому отключённому ставим `metadata.compactedBy = mode`.
+ *
+ * Паритет с прежним `withLock`+`saveSession`: время сессии сжатие не двигает
+ * (`touchUpdatedAt:false`), запись — только при реальных изменениях
+ * (`shouldWrite`).
+ *
+ * Индексы плана относятся к **префиксу** истории, а мутатор получает свежий
+ * документ из порта (чтение и запись под одним локом хранилища): параллельная
+ * дозапись в конец (`appendMessage`) индексы не сдвигает и не теряется.
+ * ⚠️ Остаток: вставка в **начало** истории (`addReference` с `position:'before'`)
+ * сдвигает покрытые индексы — план не несёт снимка истории, поэтому проверять
+ * его нечем (`expectMaxOrd` фиксирует только рост `ord`, но не вставку).
+ * Сценарий редкий (ручная ссылка во время сжатия), а пропуск сообщения/лишнее
+ * отключение безвредны: отключение идемпотентно, `disabled` не удаляет запись.
  */
 export async function disableCompressedMessages(
   deps: CompressionApplyDeps,
   sessionId: string,
   plan: CompressionPlan,
 ): Promise<void> {
-  await deps.sessionManager.withLock(sessionId, async (session) => {
+  await deps.sessionManager.mutateHistory(sessionId, (session) => {
     let changed = false;
     for (const index of plan.coveredIndices) {
+      // Индекс вне диапазона/`disabled`/`pinned` — пропуск.
       const msg = session.messages[index];
       if (!msg || msg.disabled || msg.pinned) continue;
       msg.disabled = true;
       msg.metadata = { ...(msg.metadata ?? {}), compactedBy: plan.mode };
       changed = true;
     }
-    if (changed) await deps.sessionManager.saveSession(session);
-  });
+    return changed;
+  }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
 }
 
 /** Зависимости принудительного сжатия (нужен способ сохранить резюме). */

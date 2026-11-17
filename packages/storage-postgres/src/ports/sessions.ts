@@ -720,7 +720,8 @@ export class PostgresSessionRepository implements SessionRepository {
    *
    * `seq` нормализуется позиционно `1..n`; `ord` не перенумеровывается.
    * `expectMaxOrd` проверяется по свежему снимку; `shouldWrite === false` —
-   * запись не выполняется (транзакция завершается без изменений).
+   * запись не выполняется (транзакция завершается без изменений);
+   * `touchUpdatedAt === false` — запись есть, `sessions.updated_at` не меняется.
    */
   async mutateHistory<T>(
     sessionId: string,
@@ -744,7 +745,9 @@ export class PostgresSessionRepository implements SessionRepository {
       // без него сортировка по `ord` поставила бы их в начало истории.
       assignMissingOrd(session.messages);
       normalizeMessageSeq(session.messages);
-      session.updatedAt = nowISO();
+      // `touchUpdatedAt:false` — служебная запись истории не «оживляет» сессию:
+      // `updated_at` пишется как прочитан (паритет с file/memory).
+      if (opts?.touchUpdatedAt !== false) session.updatedAt = nowISO();
       await this._writeSession(tx, session);
       return { ok: true, value };
     });

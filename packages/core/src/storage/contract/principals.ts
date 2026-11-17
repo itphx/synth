@@ -506,6 +506,49 @@ export function describeSessionRepository(
       expect(called).toBe(false);
     });
 
+    it('mutateHistory({touchUpdatedAt:false}) пишет историю, но не двигает updatedAt; default — двигает', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'history-touch',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [{ ...makeMessage('first'), seq: 1, ord: 1 }],
+      }));
+
+      const kept = await repo.mutateHistory('history-touch', (session) => {
+        session.messages[0]!.content = 'иное';
+        session.messages[0]!.parts = [makeTextPart('иное')];
+        return session.messages.length;
+      }, { touchUpdatedAt: false });
+      expect(kept).toEqual({ ok: true, value: 1 });
+
+      let loaded = await repo.load('history-touch');
+      // История заменена...
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['иное']);
+      // ...а время сессии осталось прежним (служебный проход).
+      expect(loaded!.updatedAt).toBe('2024-01-01T00:00:00.000Z');
+
+      // По умолчанию (как и при `touchUpdatedAt:true`) — bump.
+      await repo.mutateHistory('history-touch', (session) => {
+        session.messages.push({ ...makeMessage('second'), seq: 0 });
+        return session.messages.length;
+      });
+      loaded = await repo.load('history-touch');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['иное', 'second']);
+      expect(loaded!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+
+      // Явный `touchUpdatedAt:true` — тот же bump (фиксируем время, чтобы
+      // сравнение не зависело от миллисекундного разрешения).
+      await repo.mutateHistory('history-touch', (session) => {
+        session.updatedAt = '2024-02-02T00:00:00.000Z';
+      }, { touchUpdatedAt: false });
+      await repo.mutateHistory('history-touch', (session) => {
+        session.title = 't';
+      }, { touchUpdatedAt: true });
+      loaded = await repo.load('history-touch');
+      expect(loaded!.title).toBe('t');
+      expect(loaded!.updatedAt).not.toBe('2024-02-02T00:00:00.000Z');
+    });
+
     it('mutateHistory: полная замена, seq 1..n, ord сохранён; expectMaxOrd→stale; shouldWrite:false→нет записи', async () => {
       const { repo } = await make();
       const m1 = { ...makeMessage('first'), seq: 5, ord: 10 };

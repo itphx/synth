@@ -788,7 +788,8 @@ export class FileStore implements SessionRepository {
   /**
    * Атомарная правка истории (порт `SessionRepository.mutateHistory`):
    * свежий документ читается под локом, `seq` нормализуется позиционно,
-   * `ord` не перенумеровывается. `shouldWrite === false` — записи нет.
+   * `ord` не перенумеровывается. `shouldWrite === false` — записи нет;
+   * `touchUpdatedAt === false` — запись есть, время сессии не двигается.
    */
   async mutateHistory<T>(
     sessionId: string,
@@ -810,7 +811,7 @@ export class FileStore implements SessionRepository {
       // без него сортировка по `ord` поставила бы их в начало истории.
       assignMissingOrd(session.messages);
       normalizeMessageSeq(session.messages);
-      session.updatedAt = nowISO();
+      if (opts?.touchUpdatedAt !== false) session.updatedAt = nowISO();
       await this._writeSession(session);
       return { ok: true, value };
     } finally {
