@@ -1090,7 +1090,7 @@ async function continueChildSession(opts: {
     language: currentChild.settings.language || 'ru',
   });
 
-  return runSubagent({
+  const runConfig: SubagentRunConfig = {
     subagentType: agentRole,
     description: params.description || currentChild.title || '',
     contextMode: 'none',
@@ -1127,7 +1127,28 @@ async function continueChildSession(opts: {
     extra: childExtra,
     ctx,
     retry: extra.retry,
-  });
+  };
+
+  // PROP-142 §1: `background: true` при `task_id` — «продолжить, но не ждать».
+  // Свободный ребёнок уходит в фоновый прогон: запись в реестре, родительский
+  // ход не блокируется, итог приходит уведомлением. Настройки ребёнка
+  // (`permissionConfig`/`parentSessionSettings`) уже в `runConfig.extra`.
+  if (params.background === true) {
+    return await startBackgroundSubagent({
+      params: {
+        ...params,
+        // Агент ребёнка (при продолжении он не переключается) и описание —
+        // в запись реестра фоновых прогонов.
+        subagent_type: agentRole,
+        description: params.description || currentChild.title || '',
+      },
+      runConfig,
+      extra,
+      ctx,
+    });
+  }
+
+  return runSubagent(runConfig);
 }
 
 /**
@@ -1470,8 +1491,10 @@ async function startBackgroundSubagent(opts: {
 
   // 4. Detached-прогон: собственный контекст (сигнал отмены — свой), без
   //    публикации в родительский стрим (`publish` опционален в цикле).
+  //    База — `extra` прогона: у новой задачи это `extra` вызывающего, у
+  //    продолжения — настройки ребёнка (`permissionConfig`/`parentSessionSettings`).
   const detachedExtra: TaskExtra = {
-    ...extra,
+    ...(runConfig.extra ?? extra),
     publish: undefined,
     streamId,
     // Сессия в extra остаётся **родительской** — по ней идут child.*-события.

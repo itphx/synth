@@ -8,8 +8,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { MessageRole, ToolCapability, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, Session, SessionSettings, ToolContext, RouterConfig, ToolForLLM } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings, ToolContext, RouterConfig, ToolForLLM, ToolDefinition } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../../providers/base.js';
 import type { AgentRegistry } from '../../agents/registry.js';
 import type { ModelRouter } from '../../router/router.js';
@@ -31,6 +32,7 @@ import {
   resolveSubagentPrompt,
 } from './prompt.js';
 import { publishMessageAdded } from './child-session.js';
+import { ToolRegistry } from '../registry.js';
 import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../../llm-error.js';
 import type { TaskExtra } from './types.js';
@@ -407,6 +409,47 @@ function gatedProvider() {
   })());
   const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
   return { provider, chatAsync, release: () => release() };
+}
+
+/**
+ * Провайдер, который первым вызовом просит тул, вторым — отвечает текстом.
+ * Нужен, чтобы проверить permission-слой саб-агента (deny по правилам ребёнка).
+ */
+function toolCallingProvider(toolName: string, args: Record<string, unknown> = {}) {
+  let calls = 0;
+  const chatAsync = vi.fn(() => {
+    const idx = calls++;
+    return (async function* () {
+      if (idx === 0) {
+        yield {
+          isFinal: true,
+          content: '',
+          toolCalls: [{ id: 'c1', function: { name: toolName, arguments: JSON.stringify(args) } }],
+        };
+        return;
+      }
+      yield { isFinal: true, content: 'done', toolCalls: [] };
+    })();
+  });
+  const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+  return { provider, chatAsync };
+}
+
+/** Реестр тулов с одним счётчиком вызовов (для проверки «тул не исполнился»). */
+function makeToolRegistry(toolName: string) {
+  const registry = new ToolRegistry();
+  const counters: Record<string, number> = {};
+  registry.register({
+    name: toolName,
+    description: toolName,
+    parameters: z.object({}).passthrough(),
+    capabilities: [],
+    execute: async () => {
+      counters[toolName] = (counters[toolName] ?? 0) + 1;
+      return { content: `${toolName} ok` };
+    },
+  } as unknown as ToolDefinition);
+  return { registry, counters };
 }
 
 describe('task/tool.ts — фоновый саб-агент (PROP-096)', () => {
@@ -1353,6 +1396,185 @@ describe('task/tool.ts — PROP-142: доставка занятому ребё�
     const saved = (await sessionManager.getSession(child.id))!;
     expect(saved.steerInbox ?? []).toHaveLength(0);
     expect(saved.pendingMessages ?? []).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROP-142 §1: `background: true` вместе с `task_id` — «продолжить, но не
+// ждать». Свободный ребёнок уходит в фоновый прогон: запись в реестре,
+// `{status:'running'}`, родительский ход не блокируется, итог — уведомлением.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('task/tool.ts — PROP-142: продолжение ребёнка в фоне (background + task_id)', () => {
+  let dir: string;
+  let sessionManager: SessionManager;
+  let parent: Session;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-task-bg-continue-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+    parent = await sessionManager.createSession({ title: 'P' });
+  });
+
+  afterEach(async () => {
+    // Фоновый прогон может дописывать файлы сессии уже после теста.
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+  });
+
+  /** Реестр фоновых прогонов (memory-порт) + сбор уведомлений родителю. */
+  function makeBackgroundService() {
+    const repository = new MemoryBackgroundRunRepository();
+    const eventBus = new EventBus();
+    const notifications: Message[] = [];
+    let counter = 0;
+    const service = new BackgroundRunService({
+      repository,
+      eventBus,
+      limits: {
+        maxSubagentsPerSession: 0,
+        maxProcessesPerSession: 0,
+        maxRunsPerSession: 0,
+      },
+      generateId: () => `id-${++counter}`,
+      onNotifyParent: (_sessionId: string, message: Message) => {
+        notifications.push(message);
+      },
+    });
+    return { service, notifications };
+  }
+
+  /** Свободный ребёнок агента `explore`. */
+  async function makeChild(settings: Partial<SessionSettings> = {}): Promise<Session> {
+    return await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore', ...settings },
+    });
+  }
+
+  it('свободный ребёнок + background=true — фоновый прогон продолжения, родитель не ждёт', async () => {
+    const { provider, chatAsync, release } = gatedProvider();
+    const { service, notifications } = makeBackgroundService();
+    const startSubagent = vi.spyOn(service, 'startSubagent');
+    const child = await makeChild();
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'продолжи в фоне', task_id: child.id, background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+        backgroundService: service,
+        backgroundEnabled: true,
+      }, parent.id),
+    );
+
+    // Родительский ход не заблокирован: ответ есть, а LLM-вызов ещё висит.
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata!.status).toBe('running');
+    expect(result.metadata!.background_run_id).toBeTruthy();
+    expect(result.metadata!.child_session_id).toBe(child.id);
+
+    // Реестр — фоновой прогон **ребёнка** с его агентом (агент не переключается).
+    expect(startSubagent).toHaveBeenCalledTimes(1);
+    expect(startSubagent.mock.calls[0]![0]).toMatchObject({
+      sessionId: parent.id,
+      childSessionId: child.id,
+      agentRole: 'explore',
+    });
+
+    // Фоновый прогон пошёл, но ещё не завершён (провайдер на «воротах»).
+    await vi.waitFor(() => expect(chatAsync).toHaveBeenCalledTimes(1));
+
+    // Продолжение с текстом — обычное user-сообщение в истории ребёнка.
+    const saved = (await sessionManager.getSession(child.id))!;
+    const continuation = saved.messages.find((m) => m.metadata?.continuation === true);
+    expect(continuation).toBeDefined();
+    expect(continuation!.content).toBe('продолжи в фоне');
+
+    // Отпускаем прогон — он завершается, родитель получает уведомление.
+    release();
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+    const record = await service.get(result.metadata!.background_run_id as string);
+    expect(record?.status).toBe('completed');
+  });
+
+  it('фон недоступен (выключен или сервиса нет) + task_id + background=true — task.background_disabled, прогон не запускается', async () => {
+    const { provider, chatAsync } = makeProvider();
+    const { service } = makeBackgroundService();
+    const startSubagent = vi.spyOn(service, 'startSubagent');
+    const child = await makeChild();
+
+    // 1. Фон выключен инстансом (`backgroundEnabled: false`).
+    const disabled = await taskTool.execute(
+      { description: 'd', prompt: 'go', task_id: child.id, background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+        backgroundService: service,
+        backgroundEnabled: false,
+      }, parent.id),
+    );
+
+    expect(disabled.isError).toBe(true);
+    expect(disabled.content).toContain('Background subagents are disabled');
+    expect(disabled.metadata!.i18n).toMatchObject({ key: 'task.background_disabled' });
+
+    // 2. Сервиса фоновых прогонов нет вовсе.
+    const noService = await taskTool.execute(
+      { description: 'd', prompt: 'go', task_id: child.id, background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(noService.isError).toBe(true);
+    expect(noService.content).toContain('Background subagents are disabled');
+    expect(noService.metadata!.i18n).toMatchObject({ key: 'task.background_disabled' });
+
+    // Прогон не запускался: ни записи в реестре, ни LLM-вызова.
+    expect(startSubagent).not.toHaveBeenCalled();
+    expect(chatAsync).not.toHaveBeenCalled();
+    expect(await service.list()).toHaveLength(0);
+  });
+
+  it('фоновое продолжение: правила прав **ребёнка**, а не родителя', async () => {
+    const { provider } = toolCallingProvider('noop');
+    const { service, notifications } = makeBackgroundService();
+    const { registry, counters } = makeToolRegistry('noop');
+    // У ребёнка тул запрещён; у родителя (в extra) — разрешён.
+    const child = await makeChild({ permission: { rules: { '*': 'allow', noop: 'deny' }, askTimeoutMs: 30_000 } });
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', task_id: child.id, background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: registry,
+        permissionConfig: { rules: { '*': 'allow' }, askTimeoutMs: 30_000 },
+        backgroundService: service,
+        backgroundEnabled: true,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+
+    // Тул ребёнка запрещён его правилами — вызов не исполнился.
+    expect(counters.noop).toBeUndefined();
+    const saved = (await sessionManager.getSession(child.id))!;
+    const toolMsg = saved.messages.find((m) => m.role === MessageRole.TOOL);
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.content).toContain('Permission denied');
   });
 });
 
