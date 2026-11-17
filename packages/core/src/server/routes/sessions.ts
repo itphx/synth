@@ -832,17 +832,23 @@ async function dropTerminalContextFromSteer(
   contextMessage: Message,
 ): Promise<void> {
   try {
-    await sessionManager.withLock(sessionId, async (s) => {
-      const inbox = s.steerInbox ?? [];
+    // Очередь инъекций — метаданные: точечная правка под локом порта, история
+    // не перезаписывается (параллельная дозапись сообщений не теряется).
+    // `updatedAt` двигаем (паритет с прежним явным `s.updatedAt = nowISO()`).
+    const result = await sessionManager.mutateMeta(sessionId, (meta) => {
+      const inbox = meta.steerInbox ?? [];
       const next = inbox.filter((m) => m.id !== contextMessage.id);
-      if (next.length === inbox.length) return;
-      s.steerInbox = next;
-      s.updatedAt = nowISO();
-      await sessionManager.saveSession(s);
+      if (next.length === inbox.length) return null;
+      meta.steerInbox = next;
       // Счётчики очереди изменились — `queue.state` (иначе панель очереди в UI
       // показала бы лишнюю инъекцию).
-      publishQueueState(eventBus, sessionId, queueCounts(s));
-    });
+      return queueCounts(meta);
+    }, { shouldWrite: (state) => state !== null });
+    // Сессия исчезла — снимать нечего (прежний ранний выход из `withLock`).
+    if (!result.found) return;
+    if (result.value) {
+      publishQueueState(eventBus, sessionId, result.value);
+    }
   } catch {
     // Сессия исчезла — снимать нечего (ошибка не должна ломать ответ 429).
     return;
@@ -1590,8 +1596,14 @@ export function createSessionRoutes(
     const session = created;
     // ADR-075/D5: createSession сам проставляет ownerId из userId; выставляем
     // явно для совместимости и чтобы serializeSession отдавал owner_id.
+    // Правка — точечная: полная запись снимка затёрла бы параллельную
+    // дозапись сообщений (порт `mutateMeta`, `updatedAt` двигается — паритет
+    // с прежним `updateSession`).
     session.ownerId = owner;
-    await sessionManager.updateSession(session);
+    const owned = await sessionManager.mutateMeta(session.id, (meta) => {
+      meta.ownerId = owner;
+    });
+    if (owned.found) session.updatedAt = owned.session.updatedAt;
     // Хук подписки EventHub вызываем ДО publish: EventBus не буферизует события,
     // и `session.created` с 0 подписчиков теряется (backend подписывал клиента раньше).
     await opts.onSessionCreated?.(await resolveUserId(c), session.id);
@@ -1909,24 +1921,58 @@ export function createSessionRoutes(
       }
     }
 
-    // read-modify-write сессии — только под `SessionManager.withLock`: без лока
-    // параллельные PATCH/clear/skills затирают правки друг друга (lost update —
-    // победитель сохраняет свой снапшот целиком). Внутри лока сессия перечитывается.
-    const {
-      updatedSession,
-      prevProjectId,
-      prevTitle,
-      projectChanged,
-      worktreeDetached,
-      worktreeError,
-      worktreeEvents,
-    } = await sessionManager.withLock(id, async (s) => {
+    // ADR-114: привязка worktree — резолв записи **до** мутации: мутатор
+    // `mutateMeta` строго синхронный (ждать I/O под локом порта нельзя).
+    // Проект-цель известен: при переносе — из запроса, иначе проект сессии из
+    // предварительного чтения. Принадлежность проекту перепроверяется внутри
+    // мутатора по свежему `projectId` — резолв вне лока не должен привязать
+    // worktree прежнего проекта (ADR-114 §3.4).
+    let resolvedWorktree: SessionWorktree | undefined;
+    let worktreeResolveError: { status: number; code: string; message: string } | undefined;
+    if (worktreeRequest?.kind === 'bind') {
+      if (preResolvedWorktree) {
+        // Перенос проекта уже выполнен — запись worktree разрешена до него
+        // (проект-цель известен), резолвить заново не нужно.
+        resolvedWorktree = preResolvedWorktree;
+      } else {
+        const bindingProjectId = projectParam !== undefined
+          ? (projectParam || undefined)
+          : session.projectId;
+        const resolved = await resolveWorktreeBinding(bindingProjectId, worktreeRequest.id);
+        if ('error' in resolved) worktreeResolveError = resolved.error;
+        else resolvedWorktree = resolved.binding;
+      }
+    }
+
+    // Правка сессии — **точечно**, под локом порта (`mutateMeta`): полная запись
+    // снимка (`saveSession`) затирала параллельную дозапись сообщений и правки
+    // других запросов (lost update). `updatedAt` двигается — паритет с прежним
+    // `updateSession`.
+    const outcome = await sessionManager.mutateMeta<{
+      prevProjectId?: string;
+      prevTitle?: string;
+      projectChanged: boolean;
+      worktreeDetached: boolean;
+      worktreeEvents: WorktreeUpdatedInput[];
+      worktreeError?: { status: number; code: string; message: string };
+    }>(id, (s) => {
       const prevProjectId = s.projectId;
       const prevWorktreeId = s.worktree?.worktreeId;
       let projectChanged = false;
       let worktreeDetached = false;
-      let worktreeRebound = false;
       const worktreeEvents: WorktreeUpdatedInput[] = [];
+      // Ошибка резолва записи worktree (резолв — вне мутатора: `list` это I/O) —
+      // сессия не меняется вовсе (в т.ч. перенос проекта): записи и событий нет.
+      if (worktreeResolveError) {
+        return {
+          prevProjectId,
+          prevTitle: undefined,
+          projectChanged: false,
+          worktreeDetached: false,
+          worktreeEvents,
+          worktreeError: worktreeResolveError,
+        };
+      }
       if (projectParam !== undefined) {
         const resolved = projectParam || undefined;
         if (prevProjectId !== resolved) {
@@ -1949,89 +1995,34 @@ export function createSessionRoutes(
           }
         }
       }
-      // ADR-114: привязка/отвязка worktree — резолв **под локом** (свежая
-      // сессия): проект сессии к этому моменту уже актуален (возможен перенос
-      // тем же PATCH'ем), поэтому запись ищется именно в нём.
-      let worktreeBinding: SessionWorktree | undefined;
-      let worktreeUnbind = false;
-      let worktreeError:
-        | { status: number; code: string; message: string }
-        | undefined;
-      if (worktreeRequest?.kind === 'unbind') {
-        worktreeUnbind = true;
-      } else if (worktreeRequest?.kind === 'bind') {
-        if (preResolvedWorktree) {
-          // Перенос проекта уже выполнен — запись worktree разрешена до него
-          // (проект-цель известен), резолвить заново не нужно.
-          worktreeBinding = preResolvedWorktree;
-        } else {
-        const targetProjectId = session.projectId;
-        if (!targetProjectId) {
-          worktreeError = {
-            status: 400,
-            code: 'VALIDATION_ERROR',
-            message: 'Привязать worktree можно только сессии с проектом',
-          };
-        } else if (!deps.worktreeService) {
-          worktreeError = {
-            status: 400,
-            code: 'VALIDATION_ERROR',
-            message: 'Привязка к worktree в этом инстансе недоступна',
-          };
-        } else {
-          const summaries = await deps.worktreeService.list(targetProjectId);
-          const found = summaries.find((item) => item.id === worktreeRequest.id);
-          if (!found) {
-            worktreeError = {
-              status: 404,
-              code: 'WORKTREE_NOT_FOUND',
-              message: 'Worktree не найден',
-            };
-          } else if (found.exists === false) {
-            worktreeError = {
-              status: 409,
-              code: 'WORKTREE_DIRECTORY_MISSING',
-              message: `Каталог worktree не найден: ${found.directory}`,
-            };
-          } else {
-            worktreeBinding = {
-              worktreeId: found.id,
-              projectId: found.projectId,
-              ...(found.repoPath !== undefined ? { repoPath: found.repoPath } : {}),
-              directory: found.directory,
-              branch: found.branch,
-            };
-          }
-        }
-        }
-      }
-      if (worktreeError) {
-        // Ошибка привязки — сессия не меняется вовсе (в т.ч. перенос проекта):
-        // запись не сохраняем, события не публикуем.
+      // Запись чужого проекта: `projectId` сессии мог смениться между резолвом
+      // (вне лока) и мутацией — привязку не применяем, сессия не меняется
+      // (для запроса это тот же «чужой worktree», что и в отсутствии записи).
+      if (resolvedWorktree && resolvedWorktree.projectId !== s.projectId) {
         return {
-          updatedSession: s,
           prevProjectId,
           prevTitle: undefined,
           projectChanged,
           worktreeDetached,
-          worktreeRebound: false,
-          worktreeError,
           worktreeEvents,
+          worktreeError: {
+            status: 404,
+            code: 'WORKTREE_NOT_FOUND',
+            message: 'Worktree не найден',
+          },
         };
       }
       // ADR-114: привязка/отвязка worktree (после смены проекта: привязка
       // должна принадлежать проекту сессии на момент записи).
-      if (worktreeBinding) {
-        s.worktree = worktreeBinding;
-        worktreeRebound = true;
+      if (resolvedWorktree) {
+        s.worktree = resolvedWorktree;
         worktreeEvents.push({
           projectId: s.projectId ?? '',
-          worktreeId: worktreeBinding.worktreeId,
+          worktreeId: resolvedWorktree.worktreeId,
           action: 'attached',
         });
-      } else if (worktreeUnbind) {
+      } else if (worktreeRequest?.kind === 'unbind') {
         s.worktree = undefined;
-        worktreeRebound = true;
         // Отвязка без прежней привязки — ничего не изменилось: события нет.
         if (prevWorktreeId && s.projectId) {
           worktreeEvents.push({
@@ -2061,26 +2052,39 @@ export function createSessionRoutes(
         applySessionMode(s, body.mode, modeDecision?.scope ?? { kind: 'session' });
       }
       if (parsed.data.settings !== undefined) {
+        // Семантика прежняя: поверх текущих настроек (merge по ключам верхнего
+        // уровня), а не замена объекта целиком.
         s.settings = { ...s.settings, ...parsed.data.settings };
       }
-      await sessionManager.updateSession(s);
       return {
-        updatedSession: s,
         prevProjectId,
         prevTitle,
         projectChanged,
         worktreeDetached,
-        worktreeRebound,
-        worktreeError: undefined,
         worktreeEvents,
+        worktreeError: undefined,
       };
+    }, {
+      // Ошибка привязки worktree — записи нет (паритет с прежним ранним выходом).
+      shouldWrite: (value) => value.worktreeError === undefined,
     });
 
-    if (worktreeError) {
+    if (!outcome.found) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
+    }
+    if (outcome.value.worktreeError) {
+      const worktreeError = outcome.value.worktreeError;
       return c.json(
         { error: { code: worktreeError.code, message: worktreeError.message } },
         worktreeError.status as 400 | 404 | 409,
       );
+    }
+    const { prevProjectId, prevTitle, projectChanged, worktreeDetached, worktreeEvents } = outcome.value;
+    // Свежий полный снимок — для событий и ответа: `mutateMeta` возвращает
+    // метаданные без истории, а DTO сессии строится из сессии.
+    const updatedSession = await sessionManager.getSession(id);
+    if (!updatedSession) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
 
     // Регенерация заголовка (`title: ""`) — ПОСЛЕ блока локов: LLM-вызов под
@@ -2459,7 +2463,10 @@ export function createSessionRoutes(
     }
 
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    await sessionManager.withLock(id, async (s) => {
+    // Настройки оптимизации — метаданные: точечная правка под локом порта
+    // (история не перезаписывается). `updatedAt` не двигаем — паритет с прежним
+    // `saveSession` (настройки вкладки «Контекст» не «оживляют» сессию).
+    await sessionManager.mutateMeta(id, (s) => {
       if (body.context_optimization !== undefined) s.settings.contextOptimization = body.context_optimization as Session['settings']['contextOptimization'];
       if (body.sliding_window_mode !== undefined) s.settings.slidingWindowMode = body.sliding_window_mode as Session['settings']['slidingWindowMode'];
       if (body.sliding_window_message_limit !== undefined) s.settings.slidingWindowMessageLimit = body.sliding_window_message_limit as number;
@@ -2473,8 +2480,7 @@ export function createSessionRoutes(
       if (body.summarization_keep_tokens !== undefined) s.settings.summarizationKeepTokens = body.summarization_keep_tokens as number;
       if (body.compaction_keep_tokens !== undefined) s.settings.compactionKeepTokens = body.compaction_keep_tokens as number;
       if (body.compaction_token_threshold !== undefined) s.settings.compactionTokenThreshold = body.compaction_token_threshold as number;
-      await sessionManager.saveSession(s);
-    });
+    }, { touchUpdatedAt: false });
 
     const updated = await sessionManager.getSession(id);
     if (!updated) {
@@ -2552,10 +2558,12 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    await sessionManager.withLock(session.id, async (s) => {
-      s.summarizationPending = false;
-      await sessionManager.saveSession(s);
-    });
+    // Флаг — метаданные: точечная правка под локом порта. `updatedAt` не
+    // двигаем — паритет с прежним `saveSession` (отмена сжатия не «оживляет»
+    // сессию в списках).
+    await sessionManager.mutateMeta(session.id, (meta) => {
+      meta.summarizationPending = false;
+    }, { touchUpdatedAt: false });
     const optimizer = deps.contextOptimizer;
     if (optimizer) {
       const updated = await sessionManager.getSession(session.id);
@@ -2652,27 +2660,36 @@ export function createSessionRoutes(
       }
     }
 
-    if (name !== undefined) {
-      // Точечный toggle: enabled → session.enabled; disabled → opt-out.
-      const enabledList = new Set(session.settings.mcpServers ?? []);
-      const disabledList = new Set(session.settings.mcpDisabledServers ?? []);
-      if (enabled === false) {
-        enabledList.delete(name);
-        disabledList.add(name);
+    // Тоггл/список — метаданные сессии: точечная правка под локом порта
+    // (история и очередь не перезаписываются). `updatedAt` двигается — паритет
+    // с прежним `updateSession` (вкладка MCP меняет состояние хода).
+    const scoped = await sessionManager.mutateMeta(id, (meta) => {
+      if (name !== undefined) {
+        // Точечный toggle: enabled → session.enabled; disabled → opt-out.
+        const enabledList = new Set(meta.settings.mcpServers ?? []);
+        const disabledList = new Set(meta.settings.mcpDisabledServers ?? []);
+        if (enabled === false) {
+          enabledList.delete(name);
+          disabledList.add(name);
+        } else {
+          enabledList.add(name);
+          disabledList.delete(name);
+        }
+        meta.settings.mcpServers = [...enabledList];
+        meta.settings.mcpDisabledServers = [...disabledList];
       } else {
-        enabledList.add(name);
-        disabledList.delete(name);
+        if (mcpServers !== undefined) meta.settings.mcpServers = mcpServers;
+        if (mcpDisabledServers !== undefined) meta.settings.mcpDisabledServers = mcpDisabledServers;
       }
-      session.settings.mcpServers = [...enabledList];
-      session.settings.mcpDisabledServers = [...disabledList];
-    } else {
-      if (mcpServers !== undefined) session.settings.mcpServers = mcpServers;
-      if (mcpDisabledServers !== undefined) session.settings.mcpDisabledServers = mcpDisabledServers;
+      return meta.settings;
+    });
+    if (!scoped.found) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-
-    await sessionManager.updateSession(session);
-    eventBus.publish(session.id, 'session.updated', serializeSession(session, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
-    return c.json(await buildSessionMcpPayload(session));
+    // Свежий снимок — для события и ответа (запись могла пройти после чтения).
+    const updatedSession = (await sessionManager.getSession(id)) ?? session;
+    eventBus.publish(updatedSession.id, 'session.updated', serializeSession(updatedSession, { agentRegistry, ...SUMMARY_SERIALIZE_OPTS }));
+    return c.json(await buildSessionMcpPayload(updatedSession));
   });
 
   // ===== ADR-036: карта обфускации сессии (вкладка «Безопасность») =====
@@ -3660,13 +3677,14 @@ export function createSessionRoutes(
     }
     // Персистентный флаг отмены (ADR-005): работает и когда `currentStream`/
     // cancel-token отсутствуют (сессия в очереди / backoff / между итерациями),
-    // когда `orchestrator.cancel` — no-op. Пишем под локом, чтобы не потерять
-    // конкурентную запись процессора; сбрасывает флаг сам процессор.
-    await sessionManager.withLock(id, async (s) => {
-      s.status.cancelRequested = true;
-      s.status.cancelRequestedAt = nowISO();
-      await sessionManager.saveSession(s);
-    });
+    // когда `orchestrator.cancel` — no-op. Пишем **точечно** под локом порта,
+    // чтобы не потерять конкурентную запись процессора (полный снимок затирал
+    // параллельную дозапись сообщений); сбрасывает флаг сам процессор.
+    // `updatedAt` не двигаем — паритет с прежним `saveSession`.
+    await sessionManager.mutateMeta(id, (meta) => {
+      meta.status.cancelRequested = true;
+      meta.status.cancelRequestedAt = nowISO();
+    }, { touchUpdatedAt: false });
 
     // Graceful-отмена активного стрима: оркестратор публикует stream.cancelled
     // и сохраняет частичный ответ (если токен ещё жив).
@@ -3682,18 +3700,20 @@ export function createSessionRoutes(
     // иначе сессия остаётся «зависшей» (stalled). Если процессора нет — снимаем
     // флаг, иначе следующий запуск ложно отменится.
     if (!queueManager.requestStop(id)) {
-      const pendingCount = await sessionManager.withLock(id, async (s) => {
-        s.status.cancelRequested = undefined;
-        s.status.cancelRequestedAt = undefined;
+      // Снятие флага/остановка — метаданные: та же точечная правка под локом
+      // порта (`updatedAt` не двигаем — паритет с прежним `saveSession`).
+      const reset = await sessionManager.mutateMeta(id, (meta) => {
+        meta.status.cancelRequested = undefined;
+        meta.status.cancelRequestedAt = undefined;
         // Осознанный «Стоп» при непустой очереди: после рестарта такую сессию
         // не автозапускаем, UI показывает баннер «Обработка остановлена».
-        if (s.pendingMessages.length > 0) {
-          s.status.queueStopped = true;
-          s.status.queueStoppedAt = nowISO();
+        if (meta.pendingMessages.length > 0) {
+          meta.status.queueStopped = true;
+          meta.status.queueStoppedAt = nowISO();
         }
-        await sessionManager.saveSession(s);
-        return s.pendingMessages.length;
-      });
+        return meta.pendingMessages.length;
+      }, { touchUpdatedAt: false });
+      const pendingCount = reset.found ? reset.value : 0;
       if (pendingCount > 0) {
         deps.eventBus.publish(id, 'queue.stalled', { pending_count: pendingCount });
       }

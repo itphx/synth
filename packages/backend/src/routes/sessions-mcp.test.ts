@@ -81,7 +81,8 @@ let tmpDir: string;
 async function makeApp() {
   const app = new Hono();
   const kit = createMockKit();
-  const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+  const fileStore = new FileStore({ dataDir: tmpDir });
+  const sessionManager = new SessionManager(fileStore);
   const orchestrator = {
     agentRegistry: { get: () => undefined },
     resolveMcpServers: vi.fn(async (session: Session) => resolveMock(session)),
@@ -96,7 +97,7 @@ async function makeApp() {
     { subscribeToSession: vi.fn() } as never,
   );
   app.route('/api/v2/sessions', routes);
-  return { app, sessionManager };
+  return { app, sessionManager, fileStore };
 }
 
 function auth(user: string) {
@@ -209,6 +210,44 @@ describe('Session MCP scope API (ADR-071 §2.4)', () => {
       body: JSON.stringify({ name: 'sess', enabled: true }),
     });
     expect(denied.status).toBe(403);
+  });
+
+  it('PUT /:id/mcp: сообщение в истории цело, updatedAt сдвинут (паритет updateSession)', async () => {
+    const id = await seedSession();
+    const { app, sessionManager, fileStore } = await makeApp();
+    // «Свидетель» — уже записанное сообщение: правка MCP-скоупа не должна
+    // переписывать историю снимком.
+    await sessionManager.addMessage(id, {
+      id: 'witness',
+      role: 'user' as never,
+      seq: 0,
+      origin: 'local',
+      parts: [{ id: 'p1', type: 'text', data: 'свидетель' }],
+      content: 'свидетель',
+      createdAt: new Date().toISOString(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    } as never);
+    const OLD_STAMP = '2020-01-01T00:00:00.000Z';
+    const current = await sessionManager.getSession(id);
+    await fileStore.save({ ...current!, updatedAt: OLD_STAMP });
+
+    const res = await app.request(`/api/v2/sessions/${id}/mcp`, {
+      method: 'PUT',
+      headers: auth('owner'),
+      body: JSON.stringify({ name: 'sess', enabled: true }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { mcpServers: string[]; servers: McpServerEffective[] };
+    // Ответ прежний: включённый сервер и эффективный список.
+    expect(body.mcpServers).toEqual(['sess']);
+    expect(body.servers.find((s) => s.name === 'sess')).toMatchObject({ enabled: true });
+
+    const saved = await sessionManager.getSession(id);
+    expect(saved!.messages.map((m) => m.content)).toEqual(['свидетель']);
+    // Паритет: прежний `updateSession` двигал `updatedAt`.
+    expect(saved!.updatedAt).not.toBe(OLD_STAMP);
   });
 
   it('GET /:id/mcp несуществующей сессии → 404', async () => {

@@ -553,17 +553,17 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
                 const session = await sessionManager.getSession(sid);
                 if (session?.currentStream) {
                   const streamId = session.currentStream.streamId;
-                  // read-modify-write сессии — только под `SessionManager.withLock`:
-                  // иначе снятие/запись `cancelled` затёрло бы конкурентную запись
-                  // (частичный ответ процессора). `currentStream` перечитывается под
-                  // локом: если стрим уже завершён — ничего не пишем.
-                  const cancelled = await sessionManager.withLock(sid, async (s) => {
-                    if (!s.currentStream) return false;
-                    s.currentStream.cancelled = true;
-                    await sessionManager.updateSession(s);
+                  // Правка — точечная, под локом порта (`mutateMeta`): полный
+                  // снимок затирал конкурентную запись процессора (частичный
+                  // ответ/дозапись сообщений). `currentStream` перечитывается
+                  // мутатором: если стрим уже завершён — ничего не пишем.
+                  // `updatedAt` двигается — паритет с прежним `updateSession`.
+                  const cancelled = await sessionManager.mutateMeta(sid, (meta) => {
+                    if (!meta.currentStream) return false;
+                    meta.currentStream.cancelled = true;
                     return true;
                   });
-                  if (cancelled) orchestrator.cancel(streamId);
+                  if (cancelled.found && cancelled.value) orchestrator.cancel(streamId);
                 }
                 queueManager.stop(sid);
               })().catch(() => {});

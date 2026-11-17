@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MessageRole, type Message, type Session } from '@itphx/synth-shared';
+import { MessageRole, makeTextPart, type Message, type Session } from '@itphx/synth-shared';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from './file-store.js';
 import { ProjectStore } from './project-store.js';
@@ -23,13 +23,15 @@ import {
 
 describe('migrateSessionScopeSnapshots (ADR-071 §2.4 / ADR-126 §11)', () => {
   let tmpDir: string;
+  let fileStore: FileStore;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;
   let settingsStore: RuntimeSettingsStore;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-migrate-'));
-    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    fileStore = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(fileStore);
     projectStore = new ProjectStore({ dataDir: tmpDir });
     settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
   });
@@ -52,6 +54,20 @@ describe('migrateSessionScopeSnapshots (ADR-071 §2.4 / ADR-126 §11)', () => {
     const noProject = await sessionManager.createSession({});
     expect(withProject.settings.skillsDefaultOn).toBeUndefined();
 
+    // Свидетель в истории: прежний `saveSession` переписывал снимок целиком —
+    // правка метаданных не должна терять историю.
+    await sessionManager.addMessage(withProject.id, {
+      id: 'witness', role: MessageRole.USER, seq: 0, origin: 'local',
+      parts: [makeTextPart('свидетель')], content: 'свидетель',
+      createdAt: '2026-01-01T00:00:00.000Z', disabled: false, pinned: false, hidden: false,
+    } as Message);
+    // `updatedAt` — заведомо старый: миграция служебная и не должна его двигать.
+    const OLD_STAMP = '2020-01-01T00:00:00.000Z';
+    for (const id of [withProject.id, noProject.id]) {
+      const current = await sessionManager.getSession(id);
+      await fileStore.save({ ...current!, updatedAt: OLD_STAMP });
+    }
+
     const resolveSystemDefaults = async () => ({ mcpDefaultOn: ['sys'], skillsDefaultOn: ['x'] });
     const first = await migrateSessionScopeSnapshots({ sessionManager, projectStore, settingsStore, resolveSystemDefaults });
     expect(first).toBe(2);
@@ -59,10 +75,13 @@ describe('migrateSessionScopeSnapshots (ADR-071 §2.4 / ADR-126 §11)', () => {
     const loadedWithProject = await sessionManager.getSession(withProject.id);
     expect(loadedWithProject!.settings.skillsDefaultOn).toEqual(['a']);
     expect(loadedWithProject!.settings.mcpDefaultOn).toEqual(['s']);
+    expect(loadedWithProject!.messages.map((m) => m.content)).toEqual(['свидетель']);
+    expect(loadedWithProject!.updatedAt).toBe(OLD_STAMP);
 
     const loadedNoProject = await sessionManager.getSession(noProject.id);
     expect(loadedNoProject!.settings.skillsDefaultOn).toEqual(['x']);
     expect(loadedNoProject!.settings.mcpDefaultOn).toEqual(['sys']);
+    expect(loadedNoProject!.updatedAt).toBe(OLD_STAMP);
 
     // Маркер выставлен; повторный вызов — no-op.
     expect(await settingsStore.getMigrationMarker(SESSION_SCOPE_SNAPSHOT_MIGRATION)).toBe(true);
@@ -71,6 +90,46 @@ describe('migrateSessionScopeSnapshots (ADR-071 §2.4 / ADR-126 §11)', () => {
 
     const afterSecond = await sessionManager.getSession(withProject.id);
     expect(afterSecond!.settings.skillsDefaultOn).toEqual(['a']);
+  });
+
+  it('не перетирает снапшоты, проставленные параллельно (shouldWrite: записи нет)', async () => {
+    const projectId = await makeProject();
+    const session = await sessionManager.createSession({ projectId });
+    const OLD_STAMP = '2020-01-01T00:00:00.000Z';
+    const stored = await sessionManager.getSession(session.id);
+    await fileStore.save({ ...stored!, updatedAt: OLD_STAMP });
+
+    // Гонка: пока миграция резолвит снапшоты (чтение проекта), другой путь уже
+    // проставил оба поля — мутатор видит свежий снимок и не пишет ничего.
+    const originalLoad = projectStore.load.bind(projectStore);
+    let raced = false;
+    projectStore.load = async (id: string) => {
+      if (!raced) {
+        raced = true;
+        await sessionManager.mutateMeta(session.id, (meta) => {
+          meta.settings.mcpDefaultOn = ['custom-mcp'];
+          meta.settings.skillsDefaultOn = ['custom-skills'];
+        }, { touchUpdatedAt: false });
+      }
+      return originalLoad(id);
+    };
+
+    const updated = await migrateSessionScopeSnapshots({
+      sessionManager,
+      projectStore,
+      settingsStore,
+      resolveSystemDefaults: async () => ({ mcpDefaultOn: ['sys'], skillsDefaultOn: ['x'] }),
+    });
+    projectStore.load = originalLoad;
+
+    expect(raced).toBe(true);
+    expect(updated).toBe(0);
+    const loaded = await sessionManager.getSession(session.id);
+    // Значения конкурента не перетёрты дефолтами проекта.
+    expect(loaded!.settings.mcpDefaultOn).toEqual(['custom-mcp']);
+    expect(loaded!.settings.skillsDefaultOn).toEqual(['custom-skills']);
+    // Записи не было — `updatedAt` не двигался.
+    expect(loaded!.updatedAt).toBe(OLD_STAMP);
   });
 
   it('не перетирает уже существующие снапшоты', async () => {

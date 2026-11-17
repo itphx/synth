@@ -246,10 +246,12 @@ export function createSessionSkillScopeRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректные данные скиллов сессии' } }, 400);
     }
     const { name, enabled, skills, skillsDisabled } = parsed.data;
-    // read-modify-write сессии — только под `SessionManager.withLock`: без лока
-    // параллельные PUT/PATCH на одной сессии затирают правки друг друга
-    // (lost update — победитель сохраняет свой снапшот целиком).
-    await deps.sessionManager.withLock(session.id, async (s) => {
+    // read-modify-write сессии — точечно, под локом порта (`mutateMeta`): без
+    // этого параллельные PUT/PATCH на одной сессии затирают правки друг друга
+    // (lost update — победитель сохраняет свой снапшот целиком), а полный снимок
+    // затирал бы и параллельную дозапись сообщений. `updatedAt` двигается —
+    // паритет с прежним `updateSession`.
+    await deps.sessionManager.mutateMeta(session.id, (s) => {
       if (name !== undefined) {
         const enabledList = new Set(s.settings.skills ?? []);
         const disabledList = new Set(s.settings.skillsDisabled ?? []);
@@ -260,7 +262,6 @@ export function createSessionSkillScopeRoutes(
       }
       if (skills !== undefined) s.settings.skills = skills;
       if (skillsDisabled !== undefined) s.settings.skillsDisabled = skillsDisabled;
-      await deps.sessionManager.updateSession(s);
     });
     return effective(c);
   });

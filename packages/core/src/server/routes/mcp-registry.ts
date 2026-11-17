@@ -579,17 +579,22 @@ export function createMcpRegistryRoutes(
 
       // Legacy-совместимость: `mcpServers` — явно включённые; `mcpDisabledServers`
       // — явные opt-out. Оба поля независимы (новый opt-out доступен и здесь).
-      if (mcpServers !== undefined) session.settings.mcpServers = mcpServers;
-      if (mcpDisabledServers !== undefined) session.settings.mcpDisabledServers = mcpDisabledServers;
-      await sessionManager.saveSession(session);
+      // Скоуп — метаданные сессии: точечная правка под локом порта; `updatedAt`
+      // не двигаем — паритет с прежним `saveSession`.
+      const scoped = await sessionManager.mutateMeta(sessionId, (meta) => {
+        if (mcpServers !== undefined) meta.settings.mcpServers = mcpServers;
+        if (mcpDisabledServers !== undefined) meta.settings.mcpDisabledServers = mcpDisabledServers;
+        return meta.settings;
+      }, { touchUpdatedAt: false });
+      const settings = scoped.found ? scoped.value : session.settings;
 
       const entries = await registry.list();
       return c.json({
-        mcpServers: session.settings.mcpServers || [],
-        mcpDisabledServers: session.settings.mcpDisabledServers || [],
+        mcpServers: settings.mcpServers || [],
+        mcpDisabledServers: settings.mcpDisabledServers || [],
         allServers: entries.map((entry) => ({
           name: entry.name,
-          active: (session.settings.mcpServers || []).includes(entry.name),
+          active: (settings.mcpServers || []).includes(entry.name),
         })),
       });
     });

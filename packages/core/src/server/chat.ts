@@ -303,7 +303,13 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
   });
   session.userId = 'local';
   session.ownerId = 'local';
-  await sessionManager.updateSession(session);
+  // Атрибуция владельца — метаданные: точечная правка (`updatedAt` двигается —
+  // паритет с прежним `updateSession`).
+  const owned = await sessionManager.mutateMeta(session.id, (meta) => {
+    meta.userId = 'local';
+    meta.ownerId = 'local';
+  });
+  if (owned.found) session.updatedAt = owned.session.updatedAt;
 
   const message: Message = {
     id: generateId(),
@@ -321,8 +327,16 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     metadata: { stream_id: generateId() },
   };
 
+  // Первое сообщение — точечная дозапись в историю (`appendMessage`): снимок
+  // сессии не перезаписывается. `ord`/`seq` выдаёт порт — забираем в локальный
+  // объект, чтобы оркестратор видел те же значения, что в хранилище.
+  const stored = await sessionManager.appendMessage(session.id, message);
+  if (stored) {
+    message.seq = stored.seq;
+    if (stored.ord !== undefined) message.ord = stored.ord;
+  }
+  // В памяти — тот же объект, что уходит в `processMessage` (идентичность).
   session.messages.push(message);
-  await sessionManager.updateSession(session);
 
   const processMessage = orchestrator.createProcessMessage();
   const abortController = new AbortController();

@@ -530,7 +530,7 @@ describe('createMcpRegistryRoutes: session-owner guard (legacy /session/:id)', (
   let registry: McpRegistryStore;
   let tmpDir: string;
   let mcpManager: ReturnType<typeof createMockMcpManager>;
-  let sessions: Map<string, { id: string; ownerId: string; settings: Record<string, unknown> }>;
+  let sessions: Map<string, { id: string; ownerId: string; settings: Record<string, unknown>; updatedAt: string }>;
 
   function makeApp() {
     const app = new Hono();
@@ -542,7 +542,24 @@ describe('createMcpRegistryRoutes: session-owner guard (legacy /session/:id)', (
     const sessionManager = {
       getSession: async (id: string) => (sessions.get(id) ?? null),
       saveSession: async (session: { id: string; ownerId: string; settings: Record<string, unknown> }) => {
-        sessions.set(session.id, session);
+        sessions.set(session.id, session as never);
+      },
+      // Порт: точечная правка метаданных (история/очередь не трогаются).
+      mutateMeta: async (
+        id: string,
+        mutator: (meta: { id: string; ownerId: string; settings: Record<string, unknown>; updatedAt: string }) => unknown,
+        opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+      ) => {
+        const current = sessions.get(id);
+        if (!current) return { found: false as const };
+        const meta = structuredClone(current);
+        const value = mutator(meta);
+        if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+          return { found: true as const, value, session: current };
+        }
+        if (opts?.touchUpdatedAt !== false) meta.updatedAt = new Date().toISOString();
+        sessions.set(id, meta);
+        return { found: true as const, value, session: meta };
       },
     } as unknown as SessionManager;
     const routes = createMcpRegistryRoutes(
@@ -559,9 +576,10 @@ describe('createMcpRegistryRoutes: session-owner guard (legacy /session/:id)', (
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-mcp-session-'));
     registry = new McpRegistryStore({ dataDir: tmpDir });
     mcpManager = createMockMcpManager();
+    const stamp = '2026-01-01T00:00:00.000Z';
     sessions = new Map([
-      ['own', { id: 'own', ownerId: 'developer', settings: { mcpServers: [] } }],
-      ['foreign', { id: 'foreign', ownerId: 'other', settings: { mcpServers: [] } }],
+      ['own', { id: 'own', ownerId: 'developer', settings: { mcpServers: [] }, updatedAt: stamp }],
+      ['foreign', { id: 'foreign', ownerId: 'other', settings: { mcpServers: [] }, updatedAt: stamp }],
     ]);
   });
 
@@ -619,6 +637,8 @@ describe('createMcpRegistryRoutes: session-owner guard (legacy /session/:id)', (
     });
     expect(res.status).toBe(200);
     expect(sessions.get('own')?.settings.mcpServers).toEqual(['known']);
+    // Паритет `updatedAt`: прежний `saveSession` (legacy-роут) его не двигал.
+    expect(sessions.get('own')?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
   });
 });
 

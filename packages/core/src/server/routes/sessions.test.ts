@@ -1735,14 +1735,16 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
    *
    * Имитация детерминированная: чтение инвентаря (`worktreeService.list`)
    * — точка гонки — **во время вызова** переносит сессию в другой проект
-   * (запись в хранилище мимо лока — как чужой PATCH, успевший раньше).
+   * (запись в хранилище мимо лока порта — как чужой PATCH, успевший раньше).
    *
-   * Ожидание: сессия не получает **чужой** worktree — привязанный worktree
-   * принадлежит тому же проекту, что и сессия. Если резолв записи сделан
-   * по проекту, прочитанному ДО лока, привязка «переезжает» вместе с
-   * сессией в чужой проект.
+   * Ожидание: сессия не получает **чужой** worktree. Резолв записи идёт по
+   * проекту, прочитанному до мутации, поэтому принадлежность перепроверяется
+   * внутри `mutateMeta` по **свежему** `projectId`: перенос конкурента не
+   * откатывается (точечная запись не затирает его — прежний снапшотный `save`
+   * «возвращал» сессию в проект A), а привязка не применяется — для запроса это
+   * тот же «чужой worktree», что и при отсутствии записи в проекте (404).
    */
-  it('гонка: сессия, перенесённая между чтением и локом, не получает чужой worktree', async () => {
+  it('гонка: сессия, перенесённая между резолвом worktree и мутацией, не получает чужой worktree', async () => {
     const app = new Hono();
     const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
     const projectStore = new ProjectStore({ dataDir: tmpDir });
@@ -1796,13 +1798,16 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
       body: JSON.stringify({ worktreeId: inA.worktree.id }),
     });
 
-    expect(res.status).toBe(200);
+    // Привязка не применена: запись искалась в проекте сессии на момент чтения,
+    // а сессия уже в другом проекте — «чужой worktree» = не найден.
+    expect(res.status).toBe(404);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('WORKTREE_NOT_FOUND');
     expect(listCalls).toEqual([projectA.id]);
 
     const persisted = await sessionManager.getSession(session.id);
-    expect(persisted?.worktree?.worktreeId).toBe(inA.worktree.id);
-    // Worktree принадлежит проекту сессии — «чужой» worktree не привязывается.
-    expect(persisted?.worktree?.projectId).toBe(persisted?.projectId);
+    expect(persisted?.worktree).toBeUndefined();
+    // Точечная правка не откатывает конкурентный перенос (нет lost update).
+    expect(persisted?.projectId).toBe(projectB.id);
   });
 });
 

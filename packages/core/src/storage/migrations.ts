@@ -63,21 +63,25 @@ export async function migrateSessionScopeSnapshots(deps: SessionScopeMigrationDe
     }
     if (mcpDefaultOn === undefined && skillsDefaultOn === undefined) continue;
 
-    // `saveSession` перезаписывает сессию целиком (включая `messages`), поэтому
-    // обновляем только полную запись — лёгкая (`listLight`) потеряла бы историю.
-    const full = await deps.sessionManager.getSession(session.id);
-    if (!full) continue;
-
-    const updatedSession: Session = {
-      ...full,
-      settings: {
-        ...full.settings,
-        ...(mcpDefaultOn !== undefined ? { mcpDefaultOn } : {}),
-        ...(skillsDefaultOn !== undefined ? { skillsDefaultOn } : {}),
-      },
-    };
-    await deps.sessionManager.saveSession(updatedSession);
-    updated++;
+    // Запись — точечная (`mutateMeta`): история не читается и не
+    // перезаписывается (прежний `saveSession` переписывал снапшот целиком и
+    // терял параллельную дозапись сообщений). `updatedAt` не двигаем — миграция
+    // служебная и не должна «оживлять» сессии в списках. Пишем только если
+    // снапшот реально изменился (`shouldWrite`): сессия, у которой параллельно
+    // уже проставлены оба поля, не перезаписывается.
+    const written = await deps.sessionManager.mutateMeta(session.id, (meta) => {
+      let changed = false;
+      if (meta.settings.mcpDefaultOn === undefined && mcpDefaultOn !== undefined) {
+        meta.settings.mcpDefaultOn = mcpDefaultOn;
+        changed = true;
+      }
+      if (meta.settings.skillsDefaultOn === undefined && skillsDefaultOn !== undefined) {
+        meta.settings.skillsDefaultOn = skillsDefaultOn;
+        changed = true;
+      }
+      return changed;
+    }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
+    if (written.found && written.value) updated++;
   }
 
   await deps.settingsStore.setMigrationMarker(SESSION_SCOPE_SNAPSHOT_MIGRATION);

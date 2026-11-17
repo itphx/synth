@@ -72,17 +72,65 @@ function createMockMcpManager(connected: boolean = false) {
   };
 }
 
+/** Состояние фейковой сессии: метаданные + «свидетель» в истории. */
+interface FakeSession {
+  id: string;
+  settings: SessionSettings;
+  /** Время последней записи — проверяется паритет `touchUpdatedAt`. */
+  updatedAt: string;
+  /** История (для проверки, что точечная правка её не переписывает). */
+  messages: Array<{ id: string; content: string }>;
+}
+
+/** Заведомо старая метка: любое движение `updatedAt` видно однозначно. */
+const FAKE_OLD_STAMP = '2020-01-01T00:00:00.000Z';
+
 function createMockSessionManager() {
-  const sessions = new Map<string, { id: string; settings: SessionSettings }>();
+  const sessions = new Map<string, FakeSession>();
   return {
     getSession: async (id: string) => {
       return sessions.get(id) ?? null;
     },
-    saveSession: async (session: { id: string; settings: SessionSettings }) => {
+    saveSession: async (session: FakeSession) => {
       sessions.set(session.id, session);
     },
+    /**
+     * Порт `SessionRepository.mutateMeta`: мутатор работает с **клоном**
+     * метаданных, `shouldWrite`/`touchUpdatedAt` соблюдаются, отсутствующая
+     * сессия — `{found:false}` (мутатор не вызывается).
+     */
+    mutateMeta: async (
+      id: string,
+      mutator: (meta: FakeSession) => unknown,
+      opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+    ) => {
+      const current = sessions.get(id);
+      if (!current) return { found: false as const };
+      const meta = structuredClone(current);
+      const value = mutator(meta);
+      if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+        return { found: true as const, value, session: current };
+      }
+      if (opts?.touchUpdatedAt !== false) meta.updatedAt = new Date().toISOString();
+      sessions.set(id, meta);
+      return { found: true as const, value, session: meta };
+    },
     _setSession(id: string, settings: Partial<SessionSettings>) {
-      sessions.set(id, { id, settings: settings as SessionSettings });
+      sessions.set(id, {
+        id,
+        settings: settings as SessionSettings,
+        updatedAt: FAKE_OLD_STAMP,
+        messages: [],
+      });
+    },
+    /** Записать «свидетеля» в историю (как уже существующее сообщение). */
+    _addMessage(id: string, content: string) {
+      const session = sessions.get(id);
+      if (!session) throw new Error(`Нет фейковой сессии ${id}`);
+      session.messages = [...session.messages, { id: `m${session.messages.length + 1}`, content }];
+    },
+    _getSession(id: string) {
+      return sessions.get(id) ?? null;
     },
   };
 }
@@ -409,6 +457,39 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       expect(res.status).toBe(200);
       const body: any = await res.json();
       expect(body.mcpServers).toContain('test-server');
+    });
+
+    it('пишет через mutateMeta: updatedAt не двигается, свидетель цел, ответ прежний', async () => {
+      // Второй сервер в реестре — чтобы проверить и opt-out список.
+      await registry.add({ name: 'other', config: makeStdioConfig(), origin: 'instance', trust: 'builtin' });
+      sessionManager._setSession('s1', { mcpServers: [] });
+      // «Свидетель» — уже существующее сообщение: правка MCP-скоупа не должна
+      // переписывать историю снимком.
+      sessionManager._addMessage('s1', 'свидетель');
+      const app = createTestApp(registry, mcpManager, sessionManager);
+
+      const res = await app.request('/api/v2/mcp/session/s1', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcpServers: ['test-server'], mcpDisabledServers: ['other'] }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json() as {
+        mcpServers: string[];
+        mcpDisabledServers: string[];
+        allServers: Array<{ name: string; active: boolean }>;
+      };
+      // Ответ прежний: оба поля скоупа и флаг активности.
+      expect(body.mcpServers).toEqual(['test-server']);
+      expect(body.mcpDisabledServers).toEqual(['other']);
+      expect(body.allServers.find((s) => s.name === 'test-server')?.active).toBe(true);
+
+      const saved = sessionManager._getSession('s1')!;
+      expect(saved.settings.mcpServers).toEqual(['test-server']);
+      expect(saved.settings.mcpDisabledServers).toEqual(['other']);
+      expect(saved.messages.map((m) => m.content)).toEqual(['свидетель']);
+      // Паритет: legacy-роут писал через `saveSession` — `updatedAt` не двигался.
+      expect(saved.updatedAt).toBe(FAKE_OLD_STAMP);
     });
 
     it('возвращает 400 для невалидного тела', async () => {

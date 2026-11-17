@@ -393,27 +393,36 @@ export function createSessionRoutes(
       }
     }
 
-    if (name !== undefined) {
-      // Точечный toggle: enabled → session.enabled; disabled → opt-out.
-      const enabledList = new Set(session.settings.mcpServers ?? []);
-      const disabledList = new Set(session.settings.mcpDisabledServers ?? []);
-      if (enabled === false) {
-        enabledList.delete(name);
-        disabledList.add(name);
+    // Тоггл/список — метаданные сессии: точечная правка под локом порта
+    // (`mutateMeta`); история и очередь не перезаписываются. `updatedAt`
+    // двигается — паритет с прежним `updateSession`.
+    const scoped = await sessionManager.mutateMeta(session.id, (meta) => {
+      if (name !== undefined) {
+        // Точечный toggle: enabled → session.enabled; disabled → opt-out.
+        const enabledList = new Set(meta.settings.mcpServers ?? []);
+        const disabledList = new Set(meta.settings.mcpDisabledServers ?? []);
+        if (enabled === false) {
+          enabledList.delete(name);
+          disabledList.add(name);
+        } else {
+          enabledList.add(name);
+          disabledList.delete(name);
+        }
+        meta.settings.mcpServers = [...enabledList];
+        meta.settings.mcpDisabledServers = [...disabledList];
       } else {
-        enabledList.add(name);
-        disabledList.delete(name);
+        if (mcpServers !== undefined) meta.settings.mcpServers = mcpServers;
+        if (mcpDisabledServers !== undefined) meta.settings.mcpDisabledServers = mcpDisabledServers;
       }
-      session.settings.mcpServers = [...enabledList];
-      session.settings.mcpDisabledServers = [...disabledList];
-    } else {
-      if (mcpServers !== undefined) session.settings.mcpServers = mcpServers;
-      if (mcpDisabledServers !== undefined) session.settings.mcpDisabledServers = mcpDisabledServers;
+      return meta.settings;
+    });
+    if (!scoped.found) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-
-    await sessionManager.updateSession(session);
-    eventBus.publish(session.id, 'session.updated', serializeSession(session, { agentRegistry }));
-    return c.json(await buildSessionMcpPayload(session));
+    // Свежий снимок — для события и ответа.
+    const updatedSession = (await sessionManager.getSession(session.id)) ?? session;
+    eventBus.publish(updatedSession.id, 'session.updated', serializeSession(updatedSession, { agentRegistry }));
+    return c.json(await buildSessionMcpPayload(updatedSession));
   });
 
   // GET /api/v2/sessions/:id/secrets — карта обфускации LLM Gateway (ADR-036).

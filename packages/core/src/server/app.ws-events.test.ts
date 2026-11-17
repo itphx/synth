@@ -13,7 +13,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
-import { MessageRole, nowISO } from '@itphx/synth-shared';
+import { MessageRole, makeTextPart, nowISO } from '@itphx/synth-shared';
 import { createStandaloneApp } from './app.js';
 import { closeTestServer } from '../test-helpers/close-server.js';
 import { FileStore, SessionManager } from '../index.js';
@@ -420,6 +420,71 @@ describe('createStandaloneApp: WS /ws/events — авто-подписка по 
 
       expect(app.eventBus.subscriberCount('foreign-1')).toBe(0);
       expect(client.received.some((m) => m.sessionId === 'foreign-1')).toBe(false);
+    } finally {
+      client.ws.terminate();
+      await close();
+    }
+  });
+});
+
+describe('createStandaloneApp: WS /ws/events — кадр cancel (ADR-005/ADR-104)', () => {
+  /**
+   * `cancel` пишет `currentStream.cancelled` **точечно** (`mutateMeta`):
+   * параллельная дозапись сообщений не теряется, `updatedAt` двигается
+   * (паритет с прежним `updateSession`).
+   *
+   * Состояние сессии читаем/готовим вторым экземпляром `SessionManager` над
+   * тем же каталогом данных (порт `FileStore`) — приложение своего менеджера
+   * наружу не отдаёт.
+   */
+  it('cancel: флаг записан, свидетель в истории цел, updatedAt сдвинут', async () => {
+    const { app, port, dir, close } = await startApp();
+    const client = connect(port);
+    const OLD_STAMP = '2020-01-01T00:00:00.000Z';
+    try {
+      await client.ready;
+      await waitForMessage(client.received, (m) => m.type === 'connected');
+
+      // Сессия через HTTP-роут (владелец `local` — клиент подписан на её канал).
+      const created = await req(app, '/api/v2/sessions', { method: 'POST', body: { name: 'Cancel' } });
+      expect(created.status).toBe(201);
+      const sessionId = ((await created.json()) as { id: string }).id;
+      await waitForMessage(client.received, (m) => m.type === 'session.created' && m.sessionId === sessionId);
+
+      // Свидетель в истории + живой стрим; `updatedAt` — заведомо старый.
+      const yard = new SessionManager(new FileStore({ dataDir: dir }));
+      await yard.appendMessage(sessionId, {
+        id: 'witness', role: MessageRole.USER, seq: 0, origin: 'local',
+        parts: [makeTextPart('свидетель')], content: 'свидетель',
+        createdAt: nowISO(), disabled: false, pinned: false, hidden: false,
+      });
+      const current = await yard.getSession(sessionId);
+      await yard.saveSession({
+        ...current!,
+        updatedAt: OLD_STAMP,
+        currentStream: {
+          streamId: 'stream-1',
+          message: 'ответ',
+          startedAt: nowISO(),
+          cancelled: false,
+        },
+      });
+
+      // Кадр отмены — как «Стоп» в UI.
+      client.ws.send(JSON.stringify({ type: 'cancel', session_id: sessionId }));
+
+      // Обработчик кадра асинхронный — ждём фактической записи флага.
+      let stored = await yard.getSession(sessionId);
+      const deadline = Date.now() + 3000;
+      while (!stored?.currentStream?.cancelled && Date.now() < deadline) {
+        await sleep(20);
+        stored = await yard.getSession(sessionId);
+      }
+      expect(stored?.currentStream?.cancelled).toBe(true);
+      // Свидетель не потерян (правка метаданных историю не переписывает).
+      expect(stored?.messages.map((m) => m.content)).toEqual(['свидетель']);
+      // Паритет: прежний `updateSession` двигал `updatedAt`.
+      expect(stored?.updatedAt).not.toBe(OLD_STAMP);
     } finally {
       client.ws.terminate();
       await close();

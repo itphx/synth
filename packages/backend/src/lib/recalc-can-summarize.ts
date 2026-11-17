@@ -38,11 +38,14 @@ export function createRecalcCanSummarize({
       }
     }
 
-    await sessionManager.withLock(sessionId, async (locked) => {
-      locked.canSummarize = can;
-      if (shouldClearPending) locked.summarizationPending = false;
-      await sessionManager.saveSession(locked);
-    });
+    // Значение считается по **свежему снимку** (нужна история), а запись —
+    // точечная, под локом порта: полный снимок затирал бы параллельную
+    // дозапись сообщений. `updatedAt` не двигаем — паритет с прежним
+    // `saveSession` (пересчёт после правок истории не «оживляет» сессию).
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.canSummarize = can;
+      if (shouldClearPending) meta.summarizationPending = false;
+    }, { touchUpdatedAt: false });
 
     eventBus.publish(sessionId, 'session.updated', {
       session_id: sessionId,
