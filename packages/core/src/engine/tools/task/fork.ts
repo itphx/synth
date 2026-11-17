@@ -8,6 +8,7 @@
  */
 import { MessageRole } from '@itphx/synth-shared';
 import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
+import type { SessionManager } from '../../../sessions/manager.js';
 import { serializeSession } from '../../../server/serialize.js';
 import { deriveSubagentPermission } from '../../permission/derive.js';
 import { t as sm } from '../../system-messages.js';
@@ -72,6 +73,41 @@ function resetForkRuntimeFlags(session: Session): void {
 }
 
 /**
+ * Перенести метаданные ребёнка после `forkSession` **точечной** мутацией
+ * (`mutateMeta`, ADR-144): история остаётся той, что создал `forkSession`, а
+ * параллельная дозапись сообщений (`appendMessage`) не теряется. Прежняя
+ * связка «правка снимка + `updateSession`» писала документ целиком.
+ *
+ * Локальный объект `fork` обновляется теми же значениями: он нужен дальнейшему
+ * коду (`summarize(fork)` читает `settings`/`mode`), а его `messages` — то, что
+ * `forkSession` уже сохранил (мутация метаданных историю не трогает).
+ */
+async function applyForkedChildMeta(
+  manager: SessionManager,
+  fork: Session,
+  parent: Session,
+  childSettingsPatch: Partial<SessionSettings>,
+): Promise<void> {
+  fork.sessionOrigin = 'subagent';
+  fork.userId = parent.userId;
+  fork.ownerId = parent.ownerId;
+  fork.mode = parent.mode;
+  fork.settings = { ...fork.settings, ...childSettingsPatch };
+  resetForkRuntimeFlags(fork);
+
+  const result = await manager.mutateMeta(fork.id, (meta) => {
+    meta.sessionOrigin = 'subagent';
+    meta.userId = parent.userId;
+    meta.ownerId = parent.ownerId;
+    meta.mode = parent.mode;
+    meta.settings = { ...meta.settings, ...childSettingsPatch };
+    meta.summarizationPending = false;
+    meta.retry = undefined;
+  });
+  if (!result.found) throw new Error(`Session ${fork.id} not found`);
+}
+
+/**
  * Создать дочернюю сессию саб-агента и заполнить историю/заметки родителя.
  * Мутации — в `state` (переживают частичный сбой так же, как локальные
  * переменные прежнего инлайн-блока).
@@ -132,13 +168,7 @@ export async function prepareChildSession(
           const fork = await extra.sessionManager.forkSession(extra.sessionId, {
             title: sm('session.subtask_title', { description }),
           });
-          fork.sessionOrigin = 'subagent';
-          fork.userId = parentSession.userId;
-          fork.ownerId = parentSession.ownerId;
-          fork.mode = parentSession.mode;
-          fork.settings = { ...fork.settings, ...childSettingsPatch };
-          resetForkRuntimeFlags(fork);
-          await extra.sessionManager.updateSession(fork);
+          await applyForkedChildMeta(extra.sessionManager, fork, parentSession, childSettingsPatch);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
         } else if (effectiveMode === 'last_n') {
@@ -147,26 +177,14 @@ export async function prepareChildSession(
             messageIndex: startIdx,
             title: sm('session.subtask_title', { description }),
           });
-          fork.sessionOrigin = 'subagent';
-          fork.userId = parentSession.userId;
-          fork.ownerId = parentSession.ownerId;
-          fork.mode = parentSession.mode;
-          fork.settings = { ...fork.settings, ...childSettingsPatch };
-          resetForkRuntimeFlags(fork);
-          await extra.sessionManager.updateSession(fork);
+          await applyForkedChildMeta(extra.sessionManager, fork, parentSession, childSettingsPatch);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
         } else if (effectiveMode === 'summary') {
           const fork = await extra.sessionManager.forkSession(extra.sessionId, {
             title: sm('session.subtask_title', { description }),
           });
-          fork.sessionOrigin = 'subagent';
-          fork.userId = parentSession.userId;
-          fork.ownerId = parentSession.ownerId;
-          fork.mode = parentSession.mode;
-          fork.settings = { ...fork.settings, ...childSettingsPatch };
-          resetForkRuntimeFlags(fork);
-          await extra.sessionManager.updateSession(fork);
+          await applyForkedChildMeta(extra.sessionManager, fork, parentSession, childSettingsPatch);
           state.childSessionId = fork.id;
           state.childMessages = fork.messages;
 
@@ -196,22 +214,22 @@ export async function prepareChildSession(
           }
 
           // Всегда отключаем унаследованные сообщения — в summary-режиме
-          // они заменены суммаризацией в системном промпте (или мы fallback-нули без неё)
+          // они заменены суммаризацией в системном промпте (или мы fallback-нули без неё).
+          // Правка — точечная (`mutateHistory`, ADR-144): свежий документ
+          // читается под локом, отключение применяется к нему же, полная
+          // перезапись снимка не затирает параллельную дозапись сообщений.
           {
-            const child = await extra.sessionManager.getSession(state.childSessionId);
-            if (child) {
+            const disabled = await extra.sessionManager.mutateHistory(state.childSessionId, (session) => {
               let changed = false;
-              for (const msg of child.messages) {
+              for (const msg of session.messages) {
                 if (msg.role !== MessageRole.SUMMARY && !msg.disabled) {
                   msg.disabled = true;
                   changed = true;
                 }
               }
-              if (changed) {
-                await extra.sessionManager.updateSession(child);
-              }
-              state.childMessages = child.messages;
-            }
+              return { changed, messages: session.messages };
+            }, { shouldWrite: (value) => value.changed });
+            if (disabled.ok) state.childMessages = disabled.value.messages;
           }
         } else {
           // none mode (default)
@@ -243,14 +261,20 @@ export async function prepareChildSession(
                 settings: childSettings,
               });
           if (!child) throw new Error('failed to create subagent child session');
-          child.userId = parentSession.userId;
-          child.ownerId = parentSession.ownerId;
-          child.mode = parentSession.mode;
-          // Новый инстанс и так чистый (`createSession`/funnel не наследуют
-          // runtime-флаги родителя) — но сброс делаем явно: «жду суммаризацию»
-          // и состояние ретрая родителя к задаче ребёнка отношения не имеют.
-          resetForkRuntimeFlags(child);
-          await extra.sessionManager.updateSession(child);
+          // Метаданные ребёнка — точечно (`mutateMeta`, ADR-144): полная
+          // перезапись снимка (`updateSession`) затирала бы параллельную
+          // дозапись сообщений.
+          const metaResult = await extra.sessionManager.mutateMeta(child.id, (meta) => {
+            meta.userId = parentSession.userId;
+            meta.ownerId = parentSession.ownerId;
+            meta.mode = parentSession.mode;
+            // Новый инстанс и так чистый (`createSession`/funnel не наследуют
+            // runtime-флаги родителя) — но сброс делаем явно: «жду суммаризацию»
+            // и состояние ретрая родителя к задаче ребёнка отношения не имеют.
+            meta.summarizationPending = false;
+            meta.retry = undefined;
+          });
+          if (!metaResult.found) throw new Error(`Session ${child.id} not found`);
           state.childSessionId = child.id;
         }
 
@@ -263,20 +287,22 @@ export async function prepareChildSession(
         if (state.childSessionId && manager) {
           const seeded = todos !== undefined ? todos.map(toTodoItem) : undefined;
           try {
-            const updated = await manager.withLock(state.childSessionId, async (s) => {
-              const messages = s.messages.filter(
+            // Правка истории/метаданных ребёнка точечно (`mutateHistory`,
+            // ADR-144): `updatedAt` не двигаем — паритет с прежним
+            // `saveSession` (создание сессии время уже проставило).
+            const seededResult = await manager.mutateHistory(state.childSessionId, (session) => {
+              const messages = session.messages.filter(
                 (m) => !(m.metadata?.state === true && m.metadata?.type === 'todos_updated'),
               );
-              let changed = messages.length !== s.messages.length;
-              if (changed) s.messages = messages;
+              let changed = messages.length !== session.messages.length;
+              if (changed) session.messages = messages;
               if (seeded !== undefined) {
-                s.todos = seeded;
+                session.todos = seeded;
                 changed = true;
               }
-              if (changed) await manager.saveSession(s);
-              return s;
-            });
-            state.childMessages = updated.messages;
+              return { changed, messages: session.messages };
+            }, { touchUpdatedAt: false, shouldWrite: (value) => value.changed });
+            if (seededResult.ok) state.childMessages = seededResult.value.messages;
           } catch {
             // не фатально — продолжаем без сида/очистки
           }

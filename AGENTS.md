@@ -15,7 +15,7 @@
 ## Инварианты (не нарушать)
 
 1. План — в `project.plan`, todo — в `session.todos`; состояние менять только инструментами `plan_*`/`todo_*`, не файлами (ADR-039).
-2. Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая реализация — `FileStore`/`JsonStore` (JSON + атомарная запись tmp→rename, ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя. Исключение: фикс самого хранилища / миграция схемы.
+2. Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая реализация — `FileStore`/`JsonStore` (JSON + атомарная запись tmp→rename, ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя. Исключение: фикс самого хранилища / миграция схемы. **Запись сессии — только точечными мутациями порта** (`mutateMeta`/`mutateHistory`/`mutateMessage`/`appendMessage`): полная запись (`save`/`saveSession`/`updateSession`) допустима лишь для create/import/replace (материализация, импорт, перенос, миграция backend'а) — иначе снимок, прочитанный до чужой дозаписи, затирает её (ADR-144, гвард — `packages/core/src/sessions/session-write-census.test.ts`).
 3. Любой LLM-вызов — через `GatewayProvider` (guard, обфускация, rate limit, аудит); провайдера напрямую не дёргать (ADR-036). Это включает **эмбеддинги**: только `GatewayProvider.embed` (не `provider.embed`) — в том числе для плагинов через сервис фасада `facade.embed` (ADR-107); микро-слой и память ходят только этим путём.
 4. Движки stateless: история и состояние — на бэкенде; движок получает историю + новое сообщение + контекст (ADR-022).
 5. Permissions и режимы — только через permission-слой (`plan`/`act`/`yolo`, `allow`/`deny`/`ask`); не хардкодить проверки в тулах (ADR-025/ADR-028/ADR-029).
@@ -395,7 +395,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 124 (Решения: 64, Частично: 27, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 3).
+Всего документов: 125 (Решения: 65, Частично: 27, Предложения: 22, Vision: 7, Icebox: 1, Legacy: 3).
 Удалено: 30 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
@@ -408,7 +408,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 |---|---|
 | пользовательская документация / портал | https://docs.synth.itphx.ru/ |
 | документация (портал и dev-доки) | скилл `synth-docs` |
-| storage / JSON / FileStore / порты / деградация | [ADR-005](./docs/arch_decisions/adr-005-json-storage.md), [ADR-096](./docs/arch_decisions/adr-096-storage-layer.md), [ADR-097](./docs/arch_decisions/adr-097-storage-provider-class.md), [ADR-116](./docs/arch_decisions/adr-116-instance-state-and-blob-ports.md), [ADR-098](./docs/arch_decisions/adr-098-storage-degraded-recovery.md), скилл `synth-storage-recovery` |
+| storage / JSON / FileStore / порты / деградация | [ADR-005](./docs/arch_decisions/adr-005-json-storage.md), [ADR-096](./docs/arch_decisions/adr-096-storage-layer.md), [ADR-097](./docs/arch_decisions/adr-097-storage-provider-class.md), [ADR-116](./docs/arch_decisions/adr-116-instance-state-and-blob-ports.md), [ADR-098](./docs/arch_decisions/adr-098-storage-degraded-recovery.md), [ADR-144](./docs/arch_decisions/adr-144-atomic-session-writes.md) (точечные записи сессии), скилл `synth-storage-recovery` |
 | события / WS / SSE / хуки / роутинг сессий | [ADR-008](./docs/arch_decisions/adr-008-websocket-events.md), [ADR-009](./docs/arch_decisions/adr-009-session-event-bus.md), [ADR-024](./docs/arch_decisions/adr-024-eventhub-transport.md), [ADR-030](./docs/arch_decisions/adr-030-hooks-agent-events.md), [ADR-089](./docs/arch_decisions/adr-089-external-events-automation.md) |
 | связь / переподключение / офлайн / PWA-возврат из фона | [ADR-123](./docs/arch_decisions/adr-123-connection-state-and-offline-ux.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | проект / сессии / ветвление / merge | [ADR-014](./docs/arch_decisions/adr-014-project-container.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md), [ADR-040](./docs/arch_decisions/adr-040-sessions-without-project.md), [ADR-140](./docs/arch_decisions/adr-140-project-access-sharing.md) (доступ к проекту) |

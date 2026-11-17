@@ -182,6 +182,12 @@
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
+- **Запись сессии — только точечными мутациями порта** (`mutateMeta`/`mutateHistory`/
+  `mutateMessage`/`appendMessage`): чтение и запись под одним локом, мутатор применяется к
+  свежему документу. Полная запись (`save`/`saveSession`/`updateSession`) — только
+  create/import/replace (materialization, импорт, перенос, миграция backend'а). Иначе снимок,
+  прочитанный до чужой дозаписи, затирает её (lost update — инцидент timer-steer;
+  ADR-144). Гвард — `src/sessions/session-write-census.test.ts`.
 - **Вложения — только через `AttachmentService` (ADR-115).** Байты медиа живут в blob-порте
   (`{dataDir}/blobs`, content-addressed `attachments/<sha2>/<sha256>`), в сообщении — ссылка
   (`MediaPartData`); **единственная точка записи байтов** — `AttachmentService.upload`
@@ -2885,7 +2891,9 @@
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
-  `origin` назначает порт, `update` целится по `seq` с fallback по `id`), `loadLight`/`listLight` —
+  `origin` назначает порт, `update` целится по `seq` с fallback по `id`), **`mutateMeta`/
+  `mutateHistory`/`mutateMessage` — атомарные правки под локом** (свежий документ внутри
+  критической секции; `shouldWrite`/`touchUpdatedAt`; ADR-144), `loadLight`/`listLight` —
   метаданные без истории; семантика — часть контракта порта (`storage/contract/*`), нормализация
   сообщений для file/memory — `storage/message-write.ts`,
   файловые реализации (объявляют `implements` портов — поведение не менялось), in-memory

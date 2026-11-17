@@ -279,6 +279,13 @@ core-хелперами `encryptSecret`/`decryptSecret` через ленивы�
     Точечная запись (`appendMessage`/`updateMessage`) меняет одну строку `messages`
     (`INSERT … RETURNING *` / `UPDATE … WHERE message_uid`, транзакция + advisory-лок)
     и `sessions.updated_at`, не трогая остальную историю.
+    **Мутации сессии (ADR-144).** `mutateMeta` — транзакция + `pg_advisory_xact_lock`
+    **до** чтения строки `sessions`, меняются только метаданные (child-таблицы не
+    трогаются). `mutateHistory` — та же транзакция под advisory-локом: свежий документ
+    читается внутри неё, `seq` нормализуется, `ord` не перенумеровывается, дочерние
+    наборы заменяются. Полная запись `save` остаётся только для create/import/replace;
+    «удобный save» вне этого контура ловит census-тест
+    (`packages/core/src/sessions/session-write-census.test.ts`).
     **ADR-118: `ord` — монотонный порядок.** Выдаётся при `appendMessage` как
     `MAX(ord)+1` по сессии в той же транзакции (два параллельных append не получат один
     `ord`); заданный вызывающим `ord` (перенос/миграция) **не перетирается**. `save()` его
