@@ -543,5 +543,35 @@ describe('Тулы таймеров и будильников (timers.ts)', () =
       );
       expect(String(created.metadata?.id).startsWith('alm_')).toBe(true);
     });
+
+    it('update по остановленной автоматизации — отказ, запись не меняется', async () => {
+      const created = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'остановленный' },
+        makeCtx(),
+      );
+      const id = String(created.metadata?.id);
+      await timerTool.execute({ action: 'stop', timer_id: id }, makeCtx());
+
+      const result = await timerTool.execute(
+        { action: 'update', timer_id: id, delay: 120 },
+        makeCtx(),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain('cannot be updated');
+      expect((await timers.get(id))?.status).toBe('cancelled');
+    });
+
+    it('list status=fired находит завершённую запись', async () => {
+      const created = await timerTool.execute(
+        { action: 'create', delay: 600, comment: 'сработавший' },
+        makeCtx(),
+      );
+      const id = String(created.metadata?.id);
+      await timers.setStatus(id, 'fired', { firedAt: new Date().toISOString() });
+
+      const fired = await timerTool.execute({ action: 'list', status: 'fired' }, makeCtx());
+      expect(fired.metadata?.count).toBe(1);
+      expect(fired.content).toContain(id);
+    });
   });
 });

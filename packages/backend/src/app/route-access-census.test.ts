@@ -340,6 +340,7 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/timers/:id/firings', G_TIMER_PROJECT, [404]),
   r('PATCH', '/api/v2/timers/:id', G_TIMER_PROJECT, [404], { body: {} }),
   r('DELETE', '/api/v2/timers/:id', G_TIMER_PROJECT, [404]),
+  r('POST', '/api/v2/timers/:id/stop', G_TIMER_PROJECT, [404], { body: {} }),
   r('POST', '/api/v2/timers/:id/pause', G_TIMER_PROJECT, [404], { body: {} }),
   r('POST', '/api/v2/timers/:id/resume', G_TIMER_PROJECT, [404], { body: {} }),
 

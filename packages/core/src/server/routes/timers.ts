@@ -310,6 +310,12 @@ export function createTimerRoutes(
         409,
       );
     }
+    if (err instanceof TimerValidationError && err.code === 'timer_not_active') {
+      return c.json(
+        { error: { code: 'CONFLICT', message: err.message || messages.timerNotMutable(c) } },
+        409,
+      );
+    }
     if (err instanceof TimerValidationError) {
       return c.json(
         { error: { code: 'VALIDATION_ERROR', message: err.message || messages.invalidTimer(c) } },

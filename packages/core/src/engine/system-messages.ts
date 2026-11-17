@@ -730,6 +730,8 @@ export const SYSTEM_MESSAGES = {
     'Error: "{id}" is {actual}, not {expected} — use the {expected} tool (or its {expected}_id parameter)',
   'timer.tool.time_in_past':
     'Error: the fire time is in the past — choose a future time (the server local time zone is used when `at` has no offset)',
+  'timer.tool.not_active':
+    'Error: this automation is already finished or stopped and cannot be updated — create a new one',
   'timer.tool.list_header': 'Automations ({count}):',
   'timer.tool.list_empty': 'No automations of this kind',
   'timer.tool.invalid_comment':

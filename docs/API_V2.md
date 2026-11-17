@@ -3883,7 +3883,7 @@ core и backend). Таймер — **персистентная** автомат
 |---|---|---|---|
 | GET | `/api/v2/timers` | по проекту таймера (read) | Список таймеров — **страница-сводка** `{timers,total,offset,limit,next_offset}` (ADR-118 §4); фильтры: `sessionId`, `projectId`, `status` (`active`/`paused`/`fired`/`cancelled`), `kind` (`timer`/`alarm`); невалидный фильтр или `limit`/`offset` → 400 `VALIDATION_ERROR` |
 | POST | `/api/v2/timers` | по проекту таймера (write) | Создание (`timerIntentRequestSchema`): `{kind, name?, comment, sessionId, projectId?, repeat, delaySec?, at?}`; проект выводится из сессии, переданный несовпадающий → 400; лимит активных таймеров сессии (50) → 409 `TIMER_LIMIT_EXCEEDED`; активный дубликат (тот же вид/комментарий/имя) → 409 `TIMER_DUPLICATE` + `details.existingId`, если не передан `allow_duplicate: true`; → 201 `{timer}` |
-| PATCH | `/api/v2/timers/:id` | по проекту таймера (write) | Правка `{name?, comment?, repeat?}` (`name: null` — сбросить); пустой патч → 400; смена `repeat` пересчитывает `firesAt` (движок) → 200 `{timer}`; нет записи → 404 `NOT_FOUND` |
+| PATCH | `/api/v2/timers/:id` | по проекту таймера (write) | Правка `{name?, comment?, repeat?}` (`name: null` — сбросить); пустой патч → 400; смена `repeat` пересчитывает `firesAt` (движок) → 200 `{timer}`; `fired`/`cancelled` → 409 `CONFLICT` (нельзя править завершённую); нет записи → 404 `NOT_FOUND` |
 | POST | `/api/v2/timers/:id/stop` | по проекту таймера (write) | Остановить: статус `cancelled`, запись остаётся (история/аудит) → 200 `{timer}`; повтор идемпотентен; `fired` → 409 `CONFLICT` |
 | POST | `/api/v2/timers/:id/pause` | по проекту таймера (write) | Пауза → 200 `{timer}` (статус `paused`); терминальный статус (`fired`/`cancelled`) → 409 `CONFLICT` |
 | POST | `/api/v2/timers/:id/resume` | по проекту таймера (write) | Снятие с паузы → 200 `{timer}` (статус `active`); повторяющиеся пересчитывают ближайшее срабатывание от текущего времени; терминальный статус → 409 `CONFLICT` |
@@ -3907,7 +3907,7 @@ core и backend). Таймер — **персистентная** автомат
 совпадает с проектом сессии, сессия вне проекта, `at` в прошлом (допуск 60 с).
 `409 TIMER_LIMIT_EXCEEDED` — достигнут лимит активных таймеров сессии (50).
 `409 TIMER_DUPLICATE` — активный дубликат (тот же вид/комментарий/имя) без
-`allow_duplicate: true`. `409 CONFLICT` — пауза/возобновление/остановка
+`allow_duplicate: true`. `409 CONFLICT` — пауза/возобновление/остановка/правка
 таймера в терминальном статусе. `403 FORBIDDEN` — нет прав на проект таймера (или
 проект вне проекции `allowedProjects` — `403 PROJECT_FORBIDDEN`). `404 NOT_FOUND` —
 таймера нет. `403 SCOPE_REQUIRED` — у service-key нет нужного scope.

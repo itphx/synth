@@ -404,6 +404,18 @@ describe('Timers API Routes (PROP-141, этап 5 B-2)', () => {
     expect(res.status).toBe(400);
   });
 
+
+  it('PATCH /:id — остановленный таймер → 409, запись не меняется', async () => {
+    const app = makeApp();
+    const created = await seed({ status: 'cancelled' });
+    const res = await app.request(
+      `/api/v2/timers/${created.id}`,
+      json('PATCH', { comment: 'нельзя' }),
+    );
+    expect(res.status).toBe(409);
+    expect((await timers.get(created.id))?.comment).not.toBe('нельзя');
+  });
+
   it('POST /:id/pause — таймер в терминальном статусе → 409', async () => {
     const app = makeApp();
     const created = await seed({ status: 'fired' });

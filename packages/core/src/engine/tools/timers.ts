@@ -145,6 +145,7 @@ const TIMER_ERROR_KEYS = {
   timer_limit_exceeded: 'timer.tool.limit_exceeded',
   timer_duplicate: 'timer.tool.duplicate',
   timer_time_in_past: 'timer.tool.time_in_past',
+  timer_not_active: 'timer.tool.not_active',
 } as const satisfies Record<TimerErrorCode, string>;
 
 /** Отказ движка → результат тула (текст по i18n-ключу + код в metadata). */
@@ -169,7 +170,7 @@ function engineErrorResult(err: unknown): ToolResult | null {
       metadata: { i18n: i18nMeta(key, params), code: err.code, existing_id: id },
     };
   }
-  if (err.code === 'timer_time_in_past') {
+  if (err.code === 'timer_time_in_past' || err.code === 'timer_not_active') {
     return {
       content: sm(key),
       isError: true,
@@ -281,11 +282,14 @@ async function listTimers(
   scope: TimerToolScope,
   kind: 'timer' | 'alarm',
   includeStopped: boolean,
+  status?: 'active' | 'paused' | 'fired' | 'cancelled',
 ): Promise<Timer[]> {
   const filter: TimerFilter = {
     sessionId: scope.sessionId,
     kind,
-    ...(includeStopped ? {} : { status: 'active' }),
+    // Явный статус важнее «показать всё»: так можно найти завершённые записи
+    // по id из уведомления (`status: fired`).
+    ...(status ? { status } : includeStopped ? {} : { status: 'active' }),
   };
   return scope.repository.list(filter);
 }
@@ -416,9 +420,9 @@ function buildRepeat(input: AlarmTimeInput, current?: TimerRepeat): RepeatResult
     if (hasEvery) return { ok: false, error: 'for repeat="daily" use `time` + `timezone`, not `every_sec`' };
     const time = input.time ?? (current?.mode === 'daily' ? current.time : undefined);
     const timezone = input.timezone ?? (current?.mode === 'daily' ? current.timezone : undefined);
-    if (time === undefined) return { ok: false, error: 'for repeat="daily" `time` (HH:MM) is required' };
+    if (time === undefined) return { ok: false, error: 'invalid repeat — for repeat="daily" `time` (HH:MM) is required' };
     if (timezone === undefined) {
-      return { ok: false, error: 'for repeat="daily" `timezone` (IANA, e.g. Europe/Moscow) is required' };
+      return { ok: false, error: 'invalid repeat — for repeat="daily" `timezone` (IANA, e.g. Europe/Moscow) is required' };
     }
     return { ok: true, repeat: { mode: 'daily', time, timezone } };
   }
@@ -427,7 +431,7 @@ function buildRepeat(input: AlarmTimeInput, current?: TimerRepeat): RepeatResult
     if (hasAt) return { ok: false, error: 'for repeat="every" use `every_sec`, not `at`' };
     if (hasTime) return { ok: false, error: 'for repeat="every" use `every_sec`, not `time`/`timezone`' };
     const everySec = input.every_sec ?? (current?.mode === 'every' ? current.everySec : undefined);
-    if (everySec === undefined) return { ok: false, error: 'for repeat="every" `every_sec` is required' };
+    if (everySec === undefined) return { ok: false, error: 'invalid repeat — for repeat="every" `every_sec` is required' };
     return { ok: true, repeat: { mode: 'every', everySec } };
   }
 
@@ -475,6 +479,10 @@ const timerToolSchema = z.discriminatedUnion('action', [
         .describe(
           'Include stopped, paused and already fired timers (default: only the active ones of this session)',
         ),
+      status: z
+        .enum(['active', 'paused', 'fired', 'cancelled'])
+        .optional()
+        .describe('Show only this status (for example `fired` to find a fired timer by id)'),
     })
     .strict(),
   z
@@ -525,7 +533,7 @@ export const timerTool: ToolDefinition = {
     + 'Use it instead of `sleep` or a blocking shell command whenever the work has to continue later — never block the '
     + 'current turn waiting, create a timer and let it wake you up. '
     + 'The comment is the only meaning of this automation: it must explain what to do when the timer fires, written so '
-    + 'that it is still clear a day later. '
+    + 'that it is still clear a day later. Firing time is approximate: under load it can drift by tens of milliseconds. '
     + 'Actions: create (delay in seconds + comment), list (active timers of this session), show (full details), '
     + 'update (delay/comment/name), stop (no more firings, record stays), delete (remove the record).',
   parameters: timerToolSchema,
@@ -564,7 +572,9 @@ export const timerTool: ToolDefinition = {
     }
 
     if (params.action === 'list') {
-      return listResult(await listTimers(scope, 'timer', params.include_stopped === true));
+      return listResult(
+        await listTimers(scope, 'timer', params.include_stopped === true, params.status),
+      );
     }
 
     const found = await resolveRecord(scope, params.timer_id, 'timer');
@@ -637,6 +647,10 @@ const alarmToolSchema = z.discriminatedUnion('action', [
         .describe(
           'Include stopped, paused and already fired alarms (default: only the active ones of this session)',
         ),
+      status: z
+        .enum(['active', 'paused', 'fired', 'cancelled'])
+        .optional()
+        .describe('Show only this status (for example `fired` to find a fired alarm by id)'),
     })
     .strict(),
   z
@@ -680,7 +694,7 @@ export const alarmTool: ToolDefinition = {
   description:
     'Create an absolute or recurring wake-up for this session: once ("tomorrow at 09:00"), daily ("every day at 09:00, '
     + 'Europe/Moscow") or every N seconds. Unlike `schedule_*` there is no task text: the comment is the only meaning — '
-    + 'it must explain what to do when the alarm fires, and you interpret it from the session context. '
+    + 'it must explain what to do when the alarm fires, and you interpret it from the session context. Firing time is approximate (tens of milliseconds of drift under load). '
     + '`at` with `Z`/offset is absolute; without an offset it is the server local time zone. '
     + 'Actions: create, list (active alarms of this session), show (full details), update (time/repeat/comment/name), '
     + 'stop (no more firings, record stays), delete (remove the record).',
@@ -727,7 +741,9 @@ export const alarmTool: ToolDefinition = {
     }
 
     if (params.action === 'list') {
-      return listResult(await listTimers(scope, 'alarm', params.include_stopped === true));
+      return listResult(
+        await listTimers(scope, 'alarm', params.include_stopped === true, params.status),
+      );
     }
 
     const found = await resolveRecord(scope, params.alarm_id, 'alarm');

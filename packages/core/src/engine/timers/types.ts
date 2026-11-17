@@ -97,6 +97,7 @@ export const TIMER_ERROR_CODES = [
   'timer_limit_exceeded',
   'timer_duplicate',
   'timer_time_in_past',
+  'timer_not_active',
 ] as const;
 
 /** Код ошибки подсистемы таймеров. */

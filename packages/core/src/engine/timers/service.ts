@@ -303,6 +303,16 @@ export class TimerService {
   async updateTimer(id: string, patch: TimerUpdatePatch): Promise<Timer | null> {
     const current = await this._timers.get(id);
     if (!current) return null;
+    // Завершённую/остановленную запись не правим: иначе получится «мёртвая»
+    // запись со свежим `firesAt`, которую планировщик игнорирует. Правильный
+    // путь — создать новую (или `resume` для `paused`).
+    if (current.status === 'fired' || current.status === 'cancelled') {
+      throw new TimerValidationError(
+        'timer_not_active',
+        `Автоматизация в статусе ${current.status}: изменить её нельзя — создайте новую`,
+        'status',
+      );
+    }
 
     const next: TimerUpdatePatch = { ...patch };
     if (patch.comment !== undefined) this._validateComment(patch.comment);
