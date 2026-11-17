@@ -13,7 +13,8 @@ export {
   isValidTimezone,
 } from './next-fire.js';
 export { TimerService, TIMER_SAFETY_TICK_MS, TIMER_CATCHUP_LAG_MS, TIMER_DEDUP_HISTORY } from './service.js';
-export type { TimerServiceDeps, TimerAuditAction } from './service.js';
+export type { TimerServiceDeps, TimerAuditAction, TimerEventType, TimerEventPublisher } from './service.js';
+export { TimerRuleProvider, TIMER_EVENT_SOURCE, TIMER_EVENT_TYPE } from './route-provider.js';
 export {
   TIMER_ERROR_CODES,
   TimerError,

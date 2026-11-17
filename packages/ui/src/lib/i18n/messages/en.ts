@@ -1805,6 +1805,11 @@ export const dict = {
   'chat.notice.restartResumedText': 'The turn was interrupted by an instance restart and continued automatically',
   'chat.notice.scheduler': 'Scheduler',
   'chat.notice.schedulerNamed': 'Scheduler · {name}',
+  // PROP-141 (Часть B): timer/alarm firing — service block.
+  'chat.notice.timer': 'Timer',
+  'chat.notice.timerNamed': 'Timer · {name}',
+  'chat.notice.timerAlarm': 'Alarm',
+  'chat.notice.timerAlarmNamed': 'Alarm · {name}',
   // ADR-115: an attachment delivered by a tool — service block.
   'chat.notice.toolAttachment': 'Agent · {name} · attachment',
   'chat.notice.toolAttachmentAnonymous': 'Agent · attachment',

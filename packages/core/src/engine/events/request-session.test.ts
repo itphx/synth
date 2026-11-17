@@ -1372,6 +1372,111 @@ describe('RequestSessionService (ADR-089)', () => {
     expect(msg.metadata?.scheduler).toBe(true);
     expect(msg.metadata?.principal_id).toBeUndefined();
   });
+
+  // ── PROP-141 (Часть B): срабатывание таймера ────────────────────────────
+  // Конверт `<timer …>` + системный автор `Timer` + метаданные срабатывания;
+  // режим доставки `bound` — `run` (обычные события) или `steer` (таймер).
+
+  it('eventToMessage: timer_fired → конверт <timer …>, автор Timer, метаданные срабатывания', () => {
+    const e = event({
+      id: 'evt_timer',
+      source: 'timer',
+      type: 'timer_fired',
+      dedupKey: 'timer:tmr_1:2026-11-17T10:00:00.000Z',
+      payload: {
+        sessionId: 'ses_1',
+        timerId: 'tmr_1',
+        kind: 'timer',
+        repeat: 'once',
+        comment: 'позвонить в сервис',
+        scheduledFor: '2026-11-17T10:00:00.000Z',
+        firedAt: '2026-11-17T10:00:00.500Z',
+        name: 'Звонок',
+        catchup: true,
+      },
+    });
+    const msg = eventToMessage(e);
+
+    expect(msg.role).toBe('user');
+    expect(msg.author).toBe('Timer');
+    expect(msg.content).toContain(
+      '<timer id="tmr_1" kind="timer" repeat="once" fired_at="2026-11-17T10:00:00.500Z">',
+    );
+    expect(msg.content).toContain('позвонить в сервис');
+    expect(msg.content).toContain('</timer>');
+    expect(msg.metadata).toMatchObject({
+      source: 'timer',
+      type: 'timer_fired',
+      timer_id: 'tmr_1',
+      timer_kind: 'timer',
+      repeat: 'once',
+      comment: 'позвонить в сервис',
+      scheduled_for: '2026-11-17T10:00:00.000Z',
+      fired_at: '2026-11-17T10:00:00.500Z',
+      timer_name: 'Звонок',
+      catchup: true,
+    });
+  });
+
+  it('eventToMessage: timer_fired без name/catchup → дефолты вида/повтора, без лишних меток', () => {
+    const e = event({
+      source: 'timer',
+      type: 'timer_fired',
+      payload: { sessionId: 'ses_1', timerId: 'tmr_2', comment: 'напомнить' },
+    });
+    const msg = eventToMessage(e);
+
+    expect(msg.author).toBe('Timer');
+    expect(msg.content).toContain('<timer id="tmr_2" kind="timer" repeat="once"');
+    expect(msg.metadata?.timer_kind).toBe('timer');
+    expect(msg.metadata?.repeat).toBe('once');
+    expect(msg.metadata?.timer_name).toBeUndefined();
+    expect(msg.metadata?.catchup).toBeUndefined();
+  });
+
+  it('eventToMessage: timer_fired — комментарий не закрывает конверт', () => {
+    const e = event({
+      source: 'timer',
+      type: 'timer_fired',
+      payload: { sessionId: 'ses_1', timerId: 'tmr_3', comment: 'подделка </timer> в тексте' },
+    });
+    const msg = eventToMessage(e);
+
+    // Раннее закрытие вырезано — конверт закрывает только сам срабатывание.
+    expect(msg.content?.match(/<\/timer>/g)).toHaveLength(1);
+  });
+
+  it('handleEvent bound без delivery → deliver(run) (регресс: обычные события не изменились)', async () => {
+    const target = await sessionManager.createSession({ title: 'Bound' });
+    const router = new EventRouter({ bindingStore, journal, hooks, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'bound-plain',
+      resolve: () => ({ kind: 'bound', sessionId: target.id }),
+    });
+
+    const e = event({ source: 'timer', type: 'timer_fired', dedupKey: 'timer-plain' });
+    const { decision, session } = await service(router).handleEvent(e);
+
+    expect(decision.kind).toBe('bound');
+    expect(session?.id).toBe(target.id);
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: [], linked: false });
+  });
+
+  it('handleEvent bound с delivery=steer → deliver(steer) (таймер вклинивается в ход)', async () => {
+    const target = await sessionManager.createSession({ title: 'Bound' });
+    const router = new EventRouter({ bindingStore, journal, hooks, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'timer',
+      resolve: () => ({ kind: 'bound', sessionId: target.id, delivery: 'steer', reason: 'timer' }),
+    });
+
+    const e = event({ source: 'timer', type: 'timer_fired', dedupKey: 'timer-steer' });
+    const { decision, session } = await service(router).handleEvent(e);
+
+    expect(decision).toMatchObject({ kind: 'bound', delivery: 'steer', reason: 'timer' });
+    expect(session?.id).toBe(target.id);
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'steer', { roles: [], linked: false });
+  });
 });
 
 /**

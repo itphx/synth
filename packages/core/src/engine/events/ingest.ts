@@ -149,6 +149,12 @@ export class EventIngress {
     decision: RouteDecision;
     session: Session | null;
     identityHint?: IdentityClaimHint;
+    /**
+     * PROP-141: текст ошибки материализации (доставки). Сама ошибка наружу не
+     * бросается (ADR-089: Router не роняет вызывающего), но признак доставки
+     * нужен движку таймеров — по нему он ставит `outcome:'error'`.
+     */
+    error?: string;
   }> {
     const event = this.normalize(input);
     // ADR-115 × ADR-089: вложения проверяются **до** роутинга/дедупа —
@@ -168,8 +174,14 @@ export class EventIngress {
       throw err;
     }
     this._reportIngest(input.source, 'ok');
-    const { decision, session, identityHint } = result;
-    return { event, decision, session, ...(identityHint ? { identityHint } : {}) };
+    const { decision, session, identityHint, error } = result;
+    return {
+      event,
+      decision,
+      session,
+      ...(identityHint ? { identityHint } : {}),
+      ...(error ? { error } : {}),
+    };
   }
 
   /** ADR-094: ошибки колбэка метрик не влияют на приём события. */

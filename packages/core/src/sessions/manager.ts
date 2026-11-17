@@ -48,6 +48,18 @@ export interface SessionManagerOptions {
    * от оставшегося после рестарта.
    */
   instanceId?: string;
+  /**
+   * PROP-141 (Часть B): каскад удаления сессии — снятие её автоматизаций
+   * (таймеры/будильники).
+   *
+   * Единый шов — `deleteSession`: сюда сходятся и HTTP `DELETE /sessions/:id`,
+   * и удаление временной сессии в CLI. Проверок в каждом роуте не добавляем
+   * (инвариант 16).
+   *
+   * Колбэк best-effort: ошибка каскада не должна ломать удаление сессии —
+   * ошибка логируется.
+   */
+  onSessionDeleted?: (sessionId: string) => void | Promise<void>;
 }
 
 export interface SessionTree {
@@ -365,6 +377,18 @@ export class SessionManager {
   async deleteSession(sessionId: string): Promise<void> {
     await this.store.delete(sessionId);
     this._locks.delete(sessionId);
+    // PROP-141: каскад удаления сессии — снятие её таймеров/будильников.
+    // Единственный шов (инвариант 16): и HTTP DELETE, и удаление временной
+    // сессии в CLI сходятся здесь.
+    try {
+      await this._options.onSessionDeleted?.(sessionId);
+    } catch (err) {
+      console.warn(
+        `[sessions] каскад удаления сессии "${sessionId}" не удался: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
     // ADR-030: `session_end` — неблокирующий эмит после удаления сессии.
     this._options.hooks?.emitAsync('session_end', { sessionId });
   }

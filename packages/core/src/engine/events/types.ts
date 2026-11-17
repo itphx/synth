@@ -63,6 +63,11 @@ export interface EventDeliveryContext {
  * ADR-089: доставка сообщения события в сессию. `run` — запустить процессор
  * сейчас; `defer` — только положить в очередь владельца (без старта).
  *
+ * PROP-141 (Часть B, «Доставка»): `steer` — доставка **как завершение
+ * фонового процесса** (ADR-113/ADR-104): ход идёт — вклинивание в текущий ход
+ * на границе шага, хода нет — обычная очередь, фоллбек — запись в историю.
+ * Вклинивание обязательно (решение владельца, PROP-141).
+ *
  * ADR-089 (этап 5): необязательный `context` несёт эффективные роли отправителя
  * (`resolveEffectiveRoles`). Не задан — прежнее поведение (обратная
  * совместимость; `deliver` сам решает, писать ли роли в metadata).
@@ -70,6 +75,6 @@ export interface EventDeliveryContext {
 export type EventDelivery = (
   sessionId: string,
   event: SynthEvent,
-  mode: 'run' | 'defer',
+  mode: 'run' | 'defer' | 'steer',
   context?: EventDeliveryContext,
 ) => Promise<void>;

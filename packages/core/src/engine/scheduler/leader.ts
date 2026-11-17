@@ -33,6 +33,54 @@ export interface FileLeaderOptions {
 }
 
 /**
+ * PROP-141 (Часть B): общий лидер-выбор для нескольких тикеров.
+ *
+ * Шедулер и движок таймеров работают в одном процессе и должны быть лидером
+ * **одновременно** (иначе в multi-replica один процесс тикает расписания, а
+ * другой — таймеры, и «лидером» оказываются оба). Второй лок означал бы двух
+ * владельцев; `FileMutex.tryAcquire` на том же экземпляре повторно не
+ * проходит (лок уже наш) — поэтому лидер-выбор **общий**, а не продублированный.
+ *
+ * Обёртка считает потребителей: первый `acquire()` захватывает лок, следующие
+ * присоединяются к нему; лок освобождается, когда последний потребитель
+ * вышел (`release`).
+ */
+export class SharedLeader implements SchedulerLeader {
+  private _users = 0;
+  private _acquired = false;
+
+  constructor(private _inner: SchedulerLeader) {}
+
+  /** Захват лидерства (первый потребитель — реальный захват лока). */
+  async acquire(): Promise<boolean> {
+    if (this._acquired) {
+      this._users += 1;
+      return true;
+    }
+    const acquired = await this._inner.acquire();
+    if (!acquired) return false;
+    this._acquired = true;
+    this._users = 1;
+    return true;
+  }
+
+  /** Продление владения — только владельцем лока. */
+  async touch(): Promise<void> {
+    if (!this._acquired) return;
+    await this._inner.touch();
+  }
+
+  /** Выход потребителя; лок освобождается последним. */
+  async release(): Promise<void> {
+    if (!this._acquired) return;
+    this._users = Math.max(0, this._users - 1);
+    if (this._users > 0) return;
+    this._acquired = false;
+    await this._inner.release();
+  }
+}
+
+/**
  * File-based лидер на общем `dataDir`: владелец — тот, кто создал каталог-лок
  * `{dataDir}/scheduler/leader.lock`. Лок старше `3 × tickMs` перехватывается
  * (падение владельца). Работает только при общем FS; иначе — `AlwaysLeader`.

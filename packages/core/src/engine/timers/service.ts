@@ -79,6 +79,23 @@ const ONE_SHOT_HORIZON_SEC = TIMER_ONE_SHOT_HORIZON_DAYS * SECONDS_PER_DAY;
 /** Действия аудита таймеров (входят в `SECURITY_AUDIT_ACTIONS`). */
 export type TimerAuditAction = Extract<SecurityAuditAction, 'create' | 'update' | 'remove' | 'fire'>;
 
+/**
+ * PROP-141 (Часть B): live-события таймеров в канале сессии.
+ *
+ * Типы — `timer.created`/`timer.updated`/`timer.fired`/`timer.cancelled`
+ * (шина сессии, ADR-009/ADR-024; новых каналов нет). Payload — только
+ * метаданные (id/вид/статус/время): комментарий таймера — пользовательский
+ * текст, в live-событие он не попадает.
+ */
+export type TimerEventType = 'timer.created' | 'timer.updated' | 'timer.fired' | 'timer.cancelled';
+
+/** Колбэк публикации live-события таймера в канал сессии. */
+export type TimerEventPublisher = (
+  sessionId: string,
+  type: TimerEventType,
+  data: Record<string, unknown>,
+) => void;
+
 /** Зависимости движка таймеров. */
 export interface TimerServiceDeps {
   /** Реестр таймеров/будильников (порт слоя хранения, ADR-096). */
@@ -98,6 +115,11 @@ export interface TimerServiceDeps {
   metrics?: TimerMetricsHooks;
   /** Аудит изменений (best-effort); не задан — аудит не пишется. */
   audit?: SecurityAuditRepository;
+  /**
+   * PROP-141 (Часть B): публикация live-событий в канал сессии. Не задана —
+   * события не публикуются (движок работает как раньше).
+   */
+  onEvent?: TimerEventPublisher;
 }
 
 function errorMessage(err: unknown): string {
@@ -133,6 +155,7 @@ export class TimerService {
   private readonly _clock: () => Date;
   private readonly _metrics?: TimerMetricsHooks;
   private readonly _audit?: SecurityAuditRepository;
+  private readonly _onEvent?: TimerEventPublisher;
 
   private _isLeader = false;
   private _started = false;
@@ -152,6 +175,7 @@ export class TimerService {
     this._clock = deps.clock ?? (() => new Date());
     this._metrics = deps.metrics;
     this._audit = deps.audit;
+    this._onEvent = deps.onEvent;
   }
 
   /**
@@ -257,6 +281,7 @@ export class TimerService {
 
     await this._refreshSchedule();
     await this._auditOp('create', timer, null, describeTimer(timer));
+    this._publish('timer.created', timer);
     return timer;
   }
 
@@ -285,6 +310,7 @@ export class TimerService {
 
     await this._refreshSchedule();
     await this._auditOp('update', updated, describeTimer(current), describeTimer(updated));
+    this._publish('timer.updated', updated);
     return updated;
   }
 
@@ -295,6 +321,7 @@ export class TimerService {
     if (removed) {
       await this._refreshSchedule();
       await this._auditOp('remove', current, describeTimer(current), null);
+      if (current) this._publish('timer.cancelled', current, { status: 'cancelled' });
     }
     return removed;
   }
@@ -307,6 +334,7 @@ export class TimerService {
     if (!paused) return null;
     await this._refreshSchedule();
     await this._auditOp('update', paused, describeTimer(current), describeTimer(paused));
+    this._publish('timer.updated', paused);
     return paused;
   }
 
@@ -330,6 +358,7 @@ export class TimerService {
     if (!resumed) return null;
     await this._refreshSchedule();
     await this._auditOp('update', resumed, describeTimer(current), describeTimer(resumed));
+    this._publish('timer.updated', resumed);
     return resumed;
   }
 
@@ -452,6 +481,11 @@ export class TimerService {
 
       await this._appendFiring(firing);
       this._reportFiring({ kind: timer.kind, outcome, lagSeconds: lagMs / 1000 });
+      // PROP-141: live-событие срабатывания — в канал сессии (метаданные).
+      this._publish('timer.fired', timer, {
+        fired_at: firing.firedAt,
+        scheduled_for: firing.scheduledFor,
+      });
 
       if (outcome === 'error') {
         console.warn(`[timers] доставка таймера "${timer.id}" не удалась: ${failure ?? 'неизвестная ошибка'}`);
@@ -717,9 +751,38 @@ export class TimerService {
     }
   }
 
-  /** Счётчики активных таймеров для метрик (ошибка метрик не ломает движок). */
-  private _reportActive(counts: Record<TimerKind, number>): void {
+  /**
+   * PROP-141: публикация live-события таймера в канал сессии.
+   *
+   * Только метаданные (id/вид/проект/сессия/статус/время) — комментарий
+   * таймера (пользовательский текст) в live-событие не попадает. Ошибка
+   * публикации не ломает движок (событие — сигнал для UI, а не состояние).
+   */
+  private _publish(
+    type: TimerEventType,
+    timer: Timer,
+    extra?: Record<string, unknown>,
+  ): void {
+    const publisher = this._onEvent;
+    if (!publisher) return;
     try {
+      publisher(timer.sessionId, type, {
+        timer_id: timer.id,
+        kind: timer.kind,
+        project_id: timer.projectId,
+        session_id: timer.sessionId,
+        status: timer.status,
+        fires_at: timer.firesAt,
+        ...(timer.name ? { name: timer.name } : {}),
+        ...(extra ?? {}),
+      });
+    } catch (err) {
+      console.warn(`[timers] live-событие "${type}" не опубликовано: ${errorMessage(err)}`);
+    }
+  }
+
+  /** Счётчики активных таймеров для метрик (ошибка метрик не ломает движок). */
+  private _reportActive(counts: Record<TimerKind, number>): void {    try {
       this._metrics?.setActive(counts);
     } catch (err) {
       console.warn(`[timers] метрики активных таймеров не записаны: ${errorMessage(err)}`);

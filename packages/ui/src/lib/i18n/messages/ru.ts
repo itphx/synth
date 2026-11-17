@@ -1782,6 +1782,11 @@ export const dict = {
   'chat.notice.restartResumedText': 'Ход был прерван рестартом инстанса и продолжен автоматически',
   'chat.notice.scheduler': 'Планировщик',
   'chat.notice.schedulerNamed': 'Планировщик · {name}',
+  // PROP-141 (Часть B): срабатывание таймера/будильника — служебный блок.
+  'chat.notice.timer': 'Таймер',
+  'chat.notice.timerNamed': 'Таймер · {name}',
+  'chat.notice.timerAlarm': 'Будильник',
+  'chat.notice.timerAlarmNamed': 'Будильник · {name}',
   // ADR-115: вложение, доставленное инструментом, — служебный блок.
   'chat.notice.toolAttachment': 'Агент · {name} · вложение',
   'chat.notice.toolAttachmentAnonymous': 'Агент · вложение',

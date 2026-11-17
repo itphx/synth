@@ -166,6 +166,14 @@ export type EventType =
   | 'terminal.updated'
   | 'terminal.exited'
   | 'terminal.deleted'
+  // PROP-141 (Часть B): таймеры и будильники. События публикуются в **канал
+  // сессии** (ADR-009/ADR-024, новых транспортных каналов нет) — по ним
+  // второй клиент узнаёт о создании/правке/срабатывании/отмене автоматизации
+  // без опроса (панель «Автоматизация» — этап 7).
+  | 'timer.created'
+  | 'timer.updated'
+  | 'timer.fired'
+  | 'timer.cancelled'
   | 'error';
 
 export interface BusEvent {
@@ -345,4 +353,36 @@ export interface TerminalExitedEventData extends TerminalUpdatedEventData {
 export interface TerminalDeletedEventData extends TerminalUpdatedEventData {
   /** Причина удаления (`user`/`idle`/`disabled`). */
   reason?: string;
+}
+
+// --- PROP-141 (Часть B): таймеры и будильники -------------------------------
+//
+// События несут **только метаданные** автоматизации: id, вид, статус и время.
+// Комментарий таймера — пользовательский текст, в live-событие он не попадает
+// (он виден в сообщении `timer_fired` и в карточке панели).
+
+/**
+ * Payload событий `timer.created`/`timer.updated`/`timer.fired`/`timer.cancelled`.
+ *
+ * Идентификаторы — snake_case (как у остальных payload'ов шины).
+ */
+export interface TimerEventData {
+  /** Id записи таймера/будильника (`tmr_<uuid>`). */
+  timer_id: string;
+  /** Вид автоматизации (`timer`/`alarm`). */
+  kind: string;
+  /** Проект автоматизации. */
+  project_id: string;
+  /** Сессия-получатель сообщения. */
+  session_id: string;
+  /** Статус записи (`active`/`paused`/`fired`/`cancelled`). */
+  status?: string;
+  /** Ближайшее срабатывание (ISO-8601). */
+  fires_at?: string;
+  /** Момент фактического срабатывания (ISO-8601) — для `timer.fired`. */
+  fired_at?: string;
+  /** Плановое время срабатывания (ISO-8601) — для `timer.fired`. */
+  scheduled_for?: string;
+  /** Имя автоматизации (необязательное). */
+  name?: string;
 }

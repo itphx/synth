@@ -768,6 +768,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     webhookService: deps.webhookService,
     // ADR-051 (срез): остановка планировщика (на graceful shutdown).
     stopScheduler: () => deps.schedulerService.stop(),
+    // PROP-141 (Часть B): остановка движка таймеров/будильников.
+    stopTimerService: () => deps.stopTimerService(),
     // ADR-077 (шаг B2): остановка источника MCP-серверов исполнителя (в inline — no-op).
     stopExecutorMcpSource: () => deps.executorMcpSource?.close(),
     // PROP-125 §2: остановка источника серверных MCP-серверов гибрида.

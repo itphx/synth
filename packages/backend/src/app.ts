@@ -109,6 +109,11 @@ export interface BackendAppHandle {
   scheduler: SchedulerService;
   /** ADR-051 (срез): остановка планировщика (на graceful shutdown). */
   stopScheduler: () => void;
+  /**
+   * PROP-141 (Часть B): остановка движка таймеров/будильников (на graceful
+   * shutdown — рядом с `stopScheduler`).
+   */
+  stopTimerService: () => void;
   /** ADR-089: остановка sweeper'а авто-архивации ephemeral-сессий. */
   stopEphemeralSweeper: () => void;
   /** ADR-089: остановка периодической retention-очистки журнала событий. */
@@ -487,6 +492,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       scheduleStore: deps.scheduleStore,
       scheduler: deps.schedulerService,
       stopScheduler: () => deps.schedulerService.stop(),
+      // PROP-141 (Часть B): остановка движка таймеров/будильников.
+      stopTimerService: () => deps.stopTimerService(),
       stopEphemeralSweeper: deps.stopEphemeralSweeper,
       stopEventJournalPruner: deps.stopEventJournalPruner,
       stopAnalyticsRollupPruner: deps.stopAnalyticsRollupPruner,

@@ -185,6 +185,9 @@ function isHumanReply(msg: MessageData): boolean {
   if (meta.state === true) return false
   if (meta.commandPrompt === true) return false
   if (meta.scheduler) return false
+  // PROP-141 (Часть B): срабатывание таймера/будильника — системный блок,
+  // а не реплика человека.
+  if (meta.type === 'timer_fired') return false
   if (msg.author === 'Scheduler') return false
   // ADR-115: вложение тула — не реплика человека (служебный блок).
   if (meta.source === 'tool-attachment') return false

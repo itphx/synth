@@ -7,7 +7,10 @@ import type { SessionOrigin, SessionSettings } from './index.js';
 
 /**
  * Источник события. Свободная строка, известные значения: `'telegram'`,
- * `'synth-media'`, `'webhook'`, `'cron'`, `'ci'`, `'ui'`.
+ * `'synth-media'`, `'webhook'`, `'cron'`, `'ci'`, `'ui'`, `'timer'`.
+ *
+ * `'timer'` — срабатывание таймера/будильника (PROP-141, Часть B): источник
+ * добавляет движок `engine/timers`, тип события — `'timer_fired'`.
  */
 export type EventSource = string;
 
@@ -202,7 +205,28 @@ export interface RouteDecisionMeta {
 
 /** ADR-089: вариант решения Router без меты (дискриминант `kind`). */
 type RouteDecisionKind =
-  | { kind: 'bound'; sessionId: string }
+  | {
+      kind: 'bound';
+      sessionId: string;
+      /**
+       * PROP-141 (Часть B, «Доставка»): режим доставки в существующую сессию.
+       *
+       * `'steer'` — вклинивание в текущий ход (как завершение фонового
+       * процесса, ADR-113/ADR-104): ход идёт — инъекция на границе шага, хода
+       * нет — обычная очередь, фоллбек — запись в историю. Поле **аддитивное**
+       * и осмысленно только для `bound`: у остальных вариантов режим доставки
+       * задаёт сам Router/funnel, поведение источников не меняется.
+       *
+       * Не задано (или `'run'`) — прежнее поведение: сообщение ставится в
+       * очередь владельца с автозапуском обработки.
+       */
+      delivery?: 'steer';
+      /**
+       * Диагностическая метка правила, породившего решение (напр. `'timer'`).
+       * Аддитивная: у решений, порождённых не правилом, поля нет.
+       */
+      reason?: string;
+    }
   | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string; pipeline?: PipelineRef }
   | { kind: 'queue'; owner: string; reason: string }
   | { kind: 'drop'; reason: string; audited: true }

@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n'
  * единый центрированный блок. Текст внутри выровнен по левому краю, у блока
  * всегда есть шапка (иконка + подпись) и кнопка «Копировать».
  */
-export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process' | 'attachment'
+export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process' | 'attachment' | 'timer'
 
 interface NoticeVariantStyle {
   /** Иконка по умолчанию. */
@@ -36,6 +36,10 @@ const VARIANT_STYLES: Record<NoticeVariant, NoticeVariantStyle> = {
   // ADR-115: вложение, доставленное инструментом, — служебный блок (как
   // фоновый результат), а не user-пузырь: автор — не текущий пользователь.
   attachment: { icon: 'attachment-2', box: 'bg-surface-inset border-border/40 text-foreground' },
+  // PROP-141 (Часть B): срабатывание таймера/будильника — служебный блок
+  // (как сообщение планировщика). Иконка по умолчанию — часы; для будильника
+  // компонент подставляет `alarm`.
+  timer: { icon: 'time', box: 'bg-surface-inset border-border/40 text-foreground' },
 }
 
 export interface NoticeProps {

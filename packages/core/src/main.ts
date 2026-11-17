@@ -332,6 +332,9 @@ program
       // ADR-051 (срез): остановить планировщик расписаний.
       appHandle.stopScheduler?.();
 
+      // PROP-141 (Часть B): остановить движок таймеров/будильников.
+      await appHandle.stopTimerService?.();
+
       // ADR-077 (шаг B2): остановить источник MCP-серверов исполнителя.
       appHandle.stopExecutorMcpSource?.();
 

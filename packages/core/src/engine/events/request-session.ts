@@ -237,6 +237,63 @@ function eventAuthorFromPayload(event: SynthEvent): string | undefined {
 }
 
 /**
+ * PROP-141 (Часть B): разобранное срабатывание таймера из `payload` события
+ * `timer_fired`.
+ *
+ * Значения нормализуются (строки/числа приводятся к строкам, неизвестное — к
+ * пустому значению): конверт сообщения не должен развалиться из-за битого
+ * payload — иначе модель получит мусор вместо комментария.
+ */
+interface TimerFiredPayload {
+  timerId: string;
+  kind: string;
+  repeat: string;
+  comment: string;
+  scheduledFor: string;
+  firedAt: string;
+  name?: string;
+  catchup?: boolean;
+}
+
+/** Строка из неизвестного значения (пустая строка — «нет значения»). */
+function timerString(value: unknown): string {
+  return typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
+}
+
+/** Разобрать `payload` события `timer_fired`. */
+function timerPayloadOf(event: SynthEvent): TimerFiredPayload {
+  const payload =
+    event.payload && typeof event.payload === 'object'
+      ? (event.payload as Record<string, unknown>)
+      : {};
+  return {
+    timerId: timerString(payload.timerId),
+    kind: timerString(payload.kind) || 'timer',
+    repeat: timerString(payload.repeat) || 'once',
+    comment: timerString(payload.comment),
+    scheduledFor: timerString(payload.scheduledFor),
+    firedAt: timerString(payload.firedAt),
+    ...(timerString(payload.name) ? { name: timerString(payload.name) } : {}),
+    ...(payload.catchup === true ? { catchup: true } : {}),
+  };
+}
+
+/**
+ * PROP-141: конверт срабатывания таймера — текст, который видит модель.
+ *
+ * Формат — как у конверта фонового прогона (`<process …>`): атрибуты в одну
+ * строку, тело — комментарий. Комментарий экранируется от `</timer>`, чтобы
+ * пользовательский текст не закрыл конверт раньше времени.
+ */
+function buildTimerEnvelope(timer: TimerFiredPayload): string {
+  const comment = timer.comment.replace(/<\/?timer>/gi, '');
+  return (
+    `<timer id="${timer.timerId}" kind="${timer.kind}" repeat="${timer.repeat}" ` +
+    `fired_at="${timer.firedAt}">\n${comment}\n</timer>`
+  );
+}
+
+/**
  * Собирает user-сообщение из события (единый формат для `deliver` core/backend).
  *
  * ADR-051: для `source === 'cron'` сообщение помечается автором `Scheduler`, а в
@@ -250,10 +307,18 @@ function eventAuthorFromPayload(event: SynthEvent): string | undefined {
  * `principalId` — напр. `tg:123`); cron-ветка не меняется (`Scheduler`). Для
  * прочих источников (без `from`/`principalId`) `author` не задаётся — прежнее
  * поведение.
+ *
+ * PROP-141 (Часть B, «Сообщение»): для `type === 'timer_fired'` собирается
+ * **конверт** `<timer id="…" kind="…" repeat="…" fired_at="…">\n{comment}\n</timer>`,
+ * автор — системный `Timer`, а `metadata` несёт `type:'timer_fired'` и
+ * подробности срабатывания (`timer_id`/`timer_kind`/`repeat`/`comment`/
+ * `scheduled_for`/`fired_at`/`catchup?`). Смысл срабатывания восстанавливает
+ * агент по комментарию — у таймера нет своего текста задания (в отличие от
+ * расписания, ADR-051).
  */
 export function eventToMessage(event: SynthEvent): Message {
-  const text = eventToMessageText(event);
   const isCron = event.source === 'cron';
+  const isTimer = event.type === 'timer_fired';
   const attachments = event.attachments ?? [];
 
   const payloadObject =
@@ -298,9 +363,29 @@ export function eventToMessage(event: SynthEvent): Message {
 
   // ADR-089: cron — системный автор; внешние события — из `payload.from` /
   // `principalId`; прочие — без автора (прежнее поведение).
+  // PROP-141: таймер — системный автор `Timer` (владелец-человек известен из
+  // `metadata.owner_id`/сессии, подменять автора нельзя).
   const author = isCron
     ? 'Scheduler'
-    : eventAuthorFromPayload(event) ?? event.identity?.principalId;
+    : isTimer
+      ? 'Timer'
+      : eventAuthorFromPayload(event) ?? event.identity?.principalId;
+
+  // PROP-141: конверт срабатывания таймера — единственный текст сообщения.
+  let text = eventToMessageText(event);
+  if (isTimer) {
+    const timer = timerPayloadOf(event);
+    text = buildTimerEnvelope(timer);
+    metadata.type = 'timer_fired';
+    metadata.timer_id = timer.timerId;
+    metadata.timer_kind = timer.kind;
+    metadata.repeat = timer.repeat;
+    metadata.comment = timer.comment;
+    metadata.scheduled_for = timer.scheduledFor;
+    metadata.fired_at = timer.firedAt;
+    if (timer.name) metadata.timer_name = timer.name;
+    if (timer.catchup) metadata.catchup = true;
+  }
 
   // ADR-115 × ADR-089: вложения события — медиа-части сообщения (текст первым,
   // порядок ссылок события сохраняется). `content` — текст + плейсхолдеры
@@ -533,7 +618,18 @@ export class RequestSessionService {
       audit?: { keyId?: string; principalId?: string };
       ownerId?: string;
     },
-  ): Promise<{ decision: RouteDecision; session: Session | null; identityHint?: IdentityClaimHint }> {
+  ): Promise<{
+    decision: RouteDecision;
+    session: Session | null;
+    identityHint?: IdentityClaimHint;
+    /**
+     * PROP-141: текст ошибки материализации (доставки). Ошибка **не**
+     * пробрасывается наружу (Router не роняет вызывающего — ADR-089), но
+     * вызывающий должен знать, что доставка не состоялась: движок таймеров
+     * по нему ставит `outcome:'error'` (PROP-141, Часть B).
+     */
+    error?: string;
+  }> {
     const audit = opts?.audit;
     const hookRes = this._hooks ? await this._hooks.emit('external_event', { event }) : undefined;
     if (hookRes?.blocked) {
@@ -578,7 +674,12 @@ export class RequestSessionService {
     // ADR-089 (claim-flow): неизвестному отправителю выдаём код подтверждения.
     const identityHint = await this._issueClaimForUnknown(event);
 
-    return { decision, session, ...(identityHint ? { identityHint } : {}) };
+    return {
+      decision,
+      session,
+      ...(identityHint ? { identityHint } : {}),
+      ...(error ? { error } : {}),
+    };
   }
 
   /**
@@ -613,7 +714,11 @@ export class RequestSessionService {
       // `service:<keyId>` или пустой → человек). «Чужую человеческую» не трогаем.
       await this._maybeReassignOwner(session, event);
       await this._trackPipeline(decision, event, session.id);
-      await this._deliver(session.id, event, 'run', context);
+      // PROP-141 (Часть B, «Доставка»): решение `bound` может нести режим
+      // доставки `steer` — вклинивание в текущий ход (как завершение фонового
+      // процесса). Остальные режимы не меняем.
+      const mode = decision.delivery === 'steer' ? 'steer' : 'run';
+      await this._deliver(session.id, event, mode, context);
       return session;
     }
 

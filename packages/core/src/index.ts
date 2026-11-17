@@ -1993,6 +1993,7 @@ export {
   DEFAULT_SCHEDULER_TICK_MS,
   AlwaysLeader,
   FileLeader,
+  SharedLeader,
 } from './engine/scheduler/index.js';
 export type {
   ScheduleTrigger,
@@ -2015,6 +2016,9 @@ export {
   TimerError,
   TimerValidationError,
   TimerLimitExceededError,
+  TimerRuleProvider,
+  TIMER_EVENT_SOURCE,
+  TIMER_EVENT_TYPE,
 } from './engine/timers/index.js';
 export type {
   TimerErrorCode,
@@ -2025,6 +2029,8 @@ export type {
   TimerDeliver,
   TimerServiceDeps,
   TimerAuditAction,
+  TimerEventType,
+  TimerEventPublisher,
 } from './engine/timers/index.js';
 // ADR-051/ADR-089: файловый мьютекс (общий dataDir на одном хосте/FS).
 export { FileMutex } from './storage/file-mutex.js';
@@ -2947,6 +2953,8 @@ export {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
+  // PROP-141 (Часть B): метрики таймеров (`synth_timer_*`).
+  createTimerMetrics,
   createPipelineMetrics,
   // ADR-094/ADR-115: метрики вложений сообщений (`synth_attachment_*`).
   createAttachmentMetrics,

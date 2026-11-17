@@ -247,6 +247,12 @@ function ChatMessageInner({
   // приходит как role:'user' с `author:'Tool'` — это служебный блок, а не
   // реплика пользователя (автор — не текущий пользователь).
   const isToolAttachment = isUser && message.metadata?.source === 'tool-attachment'
+  // PROP-141 (Часть B): срабатывание таймера/будильника приходит как role:'user'
+  // с metadata.type === 'timer_fired' и автором `Timer` — системный блок
+  // (как сообщение планировщика), а не реплика человека.
+  const isTimerFired = isUser && message.metadata?.type === 'timer_fired'
+  // Вид автоматизации: будильник (`alarm`) — своя иконка, таймер — часы.
+  const isTimerAlarm = isTimerFired && message.metadata?.timer_kind === 'alarm'
   // ADR-104: инъекция во время активного хода (`metadata.steer`) — **без
   // маркера**: реплика, вклинившаяся в ход, рисуется обычным пузырём.
   // Режим `interrupt` (`metadata.interrupt === true`) — маркером «прерывание
@@ -1116,6 +1122,92 @@ function ChatMessageInner({
       <div className="flex items-start">
         {selectionCheckboxEl}
         <div className="min-w-0 flex-1">{schedulerEl}</div>
+      </div>
+    )
+  }
+
+  // PROP-141 (Часть B): срабатывание таймера/будильника — центрированный
+  // служебный блок (как сообщение планировщика и завершение фонового прогона):
+  // автор срабатывания — система (`Timer`), а не текущий пользователь.
+  // Тело — комментарий таймера («единственный смысл срабатывания»); конверт
+  // `<timer …>` модели не показываем.
+  if (isTimerFired) {
+    const timerName =
+      typeof message.metadata?.timer_name === 'string' ? message.metadata.timer_name : ''
+    const timerComment =
+      typeof message.metadata?.comment === 'string' ? message.metadata.comment : ''
+    const label = isTimerAlarm
+      ? timerName
+        ? t('chat.notice.timerAlarmNamed', { name: timerName })
+        : t('chat.notice.timerAlarm')
+      : timerName
+        ? t('chat.notice.timerNamed', { name: timerName })
+        : t('chat.notice.timer')
+
+    const selectionCheckboxEl = selectionMode ? (
+      <div className="flex items-center self-stretch pr-1">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            const ev = e.nativeEvent as MouseEvent
+            handleToggleSelect(ev.shiftKey ?? false)
+          }}
+          className="size-4 rounded border-border cursor-pointer accent-primary"
+        />
+      </div>
+    ) : null
+
+    const timerEl = (
+      <Notice
+        variant="timer"
+        icon={isTimerAlarm ? 'alarm' : 'time'}
+        label={label}
+        ariaLabel={label}
+        meta={<MessageHeader message={message} metaOnly />}
+        actions={
+          actionsVisible ? (
+            <MessageActions
+              embedded
+              showCopy={false}
+              messageId={message.id}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          ) : undefined
+        }
+        onCopy={handleCopy}
+        disabled={message.disabled}
+      >
+        {(timerComment || displayContent) && (
+          <SecretMarkdown
+            content={timerComment || displayContent}
+            secrets={secrets}
+            sessionId={sessionId}
+          />
+        )}
+      </Notice>
+    )
+
+    if (!selectionMode) return timerEl
+    return (
+      <div className="flex items-start">
+        {selectionCheckboxEl}
+        <div className="min-w-0 flex-1">{timerEl}</div>
       </div>
     )
   }

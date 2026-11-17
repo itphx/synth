@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1072,5 +1072,83 @@ describe('ADR-089: ephemeral-сессии (TTL, архивация)', () => {
     expect(session.settings.slidingWindowMode).toBe('messages');
     expect(session.settings.slidingWindowMessageLimit).toBe(10);
     expect(session.settings.slidingWindowTokenThreshold).toBe(80);
+  });
+});
+
+/**
+ * PROP-141 (Часть B): каскад удаления сессии — снятие её автоматизаций
+ * (таймеров/будильников). Единый шов — `SessionManager.deleteSession`
+ * (инвариант 16): и HTTP `DELETE /sessions/:id`, и удаление временной
+ * сессии в CLI сходятся здесь.
+ */
+describe('PROP-141: каскад удаления сессии (onSessionDeleted)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-test-cascade-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('deleteSession вызывает onSessionDeleted ровно один раз с id сессии', async () => {
+    const calls: string[] = [];
+    const withCascade = new SessionManager(new FileStore({ dataDir: tmpDir }), {
+      onSessionDeleted: (sessionId: string) => {
+        calls.push(sessionId);
+      },
+    });
+    const session = await withCascade.createSession({ title: 'S' });
+
+    await withCascade.deleteSession(session.id);
+
+    expect(calls).toEqual([session.id]);
+  });
+
+  it('удаление одной сессии не вызывает каскад для другой', async () => {
+    const calls: string[] = [];
+    const withCascade = new SessionManager(new FileStore({ dataDir: tmpDir }), {
+      onSessionDeleted: (sessionId: string) => {
+        calls.push(sessionId);
+      },
+    });
+    const first = await withCascade.createSession({ title: 'A' });
+    const second = await withCascade.createSession({ title: 'B' });
+
+    await withCascade.deleteSession(first.id);
+
+    expect(calls).toEqual([first.id]);
+    expect(calls).not.toContain(second.id);
+  });
+
+  it('ошибка каскада не ломает удаление сессии (предупреждение допустимо)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const withCascade = new SessionManager(new FileStore({ dataDir: tmpDir }), {
+        onSessionDeleted: () => {
+          throw new Error('каскад не удался');
+        },
+      });
+      const session = await withCascade.createSession({ title: 'S' });
+
+      await expect(withCascade.deleteSession(session.id)).resolves.toBeUndefined();
+
+      // Сессия удалена несмотря на ошибку каскада.
+      expect(await withCascade.getSession(session.id)).toBeNull();
+      // Ошибка залогирована предупреждением (не исключением).
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('без опции onSessionDeleted удаление работает как раньше', async () => {
+    const plain = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    const session = await plain.createSession({ title: 'S' });
+
+    await plain.deleteSession(session.id);
+
+    expect(await plain.getSession(session.id)).toBeNull();
   });
 });

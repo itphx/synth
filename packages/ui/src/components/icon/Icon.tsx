@@ -2,6 +2,7 @@ import React from 'react'
 import {
   RiAddLine,
   RiAdminLine,
+  RiAlarmLine,
   RiAlertLine,
   RiArrowDownLine,
   RiArrowDownSLine,
@@ -126,6 +127,8 @@ import {
 const iconMap: Record<string, React.ComponentType<{ className?: string; style?: React.CSSProperties; size?: number | string; [key: string]: unknown }>> = {
   'add': RiAddLine,
   'admin': RiAdminLine,
+  // PROP-141 (Часть B): будильник (таймер — иконка `time`).
+  'alarm': RiAlarmLine,
   'alert': RiAlertLine,
   'alert-triangle': RiErrorWarningLine,
   'arrow-down': RiArrowDownLine,

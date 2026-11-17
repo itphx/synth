@@ -75,7 +75,9 @@ import {
   addEventAttachmentRefs, AttachmentService,
   ProjectRuleProvider, DecisionRuleProvider,
   PipelineTracker,
-  SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
+  SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader, SharedLeader,
+  // PROP-141 (Часть B): движок таймеров/будильников + правило маршрутизации.
+  TimerService, TimerRuleProvider, TIMER_EVENT_SOURCE, TIMER_EVENT_TYPE,
   createExternalIdentityResolver,
   startEventJournalPruner,
   // Этап 1 roadmap 0.13 (блок 3): сервис вопросов пользователю + retention.
@@ -122,6 +124,8 @@ import {
   createExecutorMetricsCollector,
   createWebhookMetrics,
   createEventMetrics,
+  // PROP-141 (Часть B): метрики таймеров (`synth_timer_*`, ADR-094).
+  createTimerMetrics,
   // ADR-094/ADR-115: метрики вложений (`synth_attachment_*`) + установка их
   // sink'а (сервис вложений собирается внутри фабрики роутов сессий).
   createAttachmentMetrics,
@@ -386,9 +390,17 @@ export async function createBackendDeps(
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (не пишем домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
+  // PROP-141 (Часть B): каскад удаления сессии — снятие её таймеров/будильников.
+  // Сервис таймеров собирается ниже (после ingress'а), поэтому ссылка
+  // late-bound: шов один — `SessionManager.deleteSession` (инвариант 16).
+  const timerServiceRef: { service?: TimerService } = {};
   const sessionManager = new SessionManager(fileStore, {
     projectStore,
     hooks,
+    // PROP-141: удаление сессии снимает её автоматизации (таймеры/будильники).
+    onSessionDeleted: async (sessionId: string) => {
+      await timerServiceRef.service?.onSessionDeleted(sessionId);
+    },
     // Дефолты оптимизации контекста новых сессий (`context.defaults` + runtime).
     contextDefaults: () => contextDefaultsSettings.getDefaults(),
     // ADR-102: точка персиста сообщений (`messages_assistant`/`messages_tool`).
@@ -1915,6 +1927,10 @@ export async function createBackendDeps(
   eventRouter.registerRuleProvider(
     new SchedulerRuleProvider(scheduleStore, effectiveEvents.ephemeralTtl),
   );
+  // PROP-141 (Часть B): правило маршрутизации срабатываний таймеров/будильников.
+  // Источник свой (`timer`), тип свой (`timer_fired`) — правила cron и внешних
+  // событий не затрагиваются.
+  eventRouter.registerRuleProvider(new TimerRuleProvider());
   // ADR-089: правила маршрутизации по матчу события (после scheduler).
   eventRouter.registerRuleProvider(
     new ProjectRuleProvider(routeRuleStore, effectiveEvents.ephemeralTtl),
@@ -2040,7 +2056,12 @@ export async function createBackendDeps(
       let message = eventToMessage(event);
       // ADR-089: для слинкованного человека `displayName` из резолвера приоритетнее
       // имени из `payload.from` (tg-имя). Cron (`Scheduler`) не переопределяем.
-      if (event.source !== 'cron' && event.identity?.principalId) {
+      // PROP-141: таймер — системный автор `Timer`, его не переопределяем.
+      if (
+        event.source !== 'cron'
+        && event.source !== TIMER_EVENT_SOURCE
+        && event.identity?.principalId
+      ) {
         try {
           const linked = await resolveExternalIdentity(event.identity);
           if (linked?.displayName) message.author = linked.displayName;
@@ -2068,6 +2089,16 @@ export async function createBackendDeps(
         if (queued) {
           await addEventAttachmentRefs(storageContext.blobRefs, event, message.id);
         }
+      } else if (mode === 'steer') {
+        // PROP-141 (Часть B, «Доставка»): доставка срабатывания таймера —
+        // **как завершение фонового процесса** (ADR-113/ADR-104): ход идёт —
+        // вклинивание в него на границе шага, хода нет — обычная очередь с
+        // автоходом, фоллбек — запись в историю. Ровно одна копия в истории
+        // гарантирует сам нотификатор (`createBackgroundParentNotifier`).
+        //
+        // Ошибка доставки **пробрасывается наружу**: движок таймеров по ней
+        // ставит `outcome:'error'` (и `lastError` у записи).
+        await notifyBackgroundParent(sessionId, message);
       } else {
         // ADR-036: `defer` тоже кладёт сообщение в историю — обфусцируем до
         // постановки. Старт процессора не выполняем (только очередь владельца).
@@ -2279,6 +2310,17 @@ export async function createBackendDeps(
         '(нужен storage.backend=postgres) — используется AlwaysLeader',
     );
   }
+  // ADR-051/ADR-089 + PROP-141: **общий** лидер-выбор для шедулера и движка
+  // таймеров. Второй лок означал бы двух владельцев (тик расписаний в одной
+  // реплике, таймеров — в другой), а `FileMutex` повторно не захватывается тем
+  // же экземпляром. `SharedLeader` — один лок на оба тикера.
+  const sharedLeader = new SharedLeader(
+    config.synth.scheduler.leaderElection === 'file'
+      ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
+      : config.synth.scheduler.leaderElection === 'postgres' && storageContext.locks
+        ? storageContext.locks.createLeader({ name: 'scheduler/leader', tickMs: schedulerTickMs })
+        : new AlwaysLeader(),
+  );
   const schedulerService = new SchedulerService({
     scheduleStore,
     ingress: eventIngress,
@@ -2312,16 +2354,66 @@ export async function createBackendDeps(
     // ADR-051/ADR-089/ADR-096: тикер стартует только у лидера (default —
     // AlwaysLeader). `file` — файловый лок на общем dataDir, `postgres` —
     // session-level advisory-lock драйвера (доступен только при PG-backend).
-    leader:
-      config.synth.scheduler.leaderElection === 'file'
-        ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
-        : config.synth.scheduler.leaderElection === 'postgres' && storageContext.locks
-          ? storageContext.locks.createLeader({ name: 'scheduler/leader', tickMs: schedulerTickMs })
-          : new AlwaysLeader(),
+    // PROP-141: тот же лидер-выбор — и у шедулера, и у таймеров.
+    leader: sharedLeader,
   });
   if (config.synth.scheduler.enabled !== false && !storageDegraded) {
     void schedulerService.start().catch((err) => {
       console.warn(`[scheduler] не удалось запустить: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  // PROP-141 (Часть B, «Доставка»): движок таймеров/будильников.
+  //
+  // Доставка — **гибрид** (PROP-141, «Доставка»): журнал и дедуп — через
+  // событийный контур (`EventIngress` → Router → `TimerRuleProvider`), сама
+  // доставка в сессию — как завершение фонового процесса (ADR-113/ADR-104):
+  // вклинивание в текущий ход, иначе очередь, иначе запись в историю.
+  const timerMetrics = metrics ? createTimerMetrics(metrics) : undefined;
+  const timerService = storageDegraded
+    ? undefined
+    : new TimerService({
+        // ADR-096: порты реестра таймеров и истории срабатываний.
+        timers: storageContext.timers,
+        firings: storageContext.timerFirings,
+        // Ошибка доставки пробрасывается наружу — движок ставит `outcome:'error'`.
+        deliver: async (timer, firing, meta) => {
+          const result = await eventIngress.ingest({
+            source: TIMER_EVENT_SOURCE,
+            type: TIMER_EVENT_TYPE,
+            payload: {
+              sessionId: timer.sessionId,
+              timerId: timer.id,
+              kind: timer.kind,
+              repeat: timer.repeat.mode,
+              comment: timer.comment,
+              ...(timer.name ? { name: timer.name } : {}),
+              scheduledFor: firing.scheduledFor,
+              firedAt: firing.firedAt,
+              catchup: meta.catchup,
+            },
+            // Дедуп по (таймер, плановое время) — повторный тик и смена лидера
+            // не дают двух сообщений.
+            dedupKey: `timer:${timer.id}:${firing.scheduledFor}`,
+            identity: { principalId: timer.ownerId },
+          });
+          if (result.error) throw new Error(result.error);
+        },
+        // PROP-141: лидер тот же, что у шедулера (второго тикера нет).
+        leader: sharedLeader,
+        // ADR-094: метрики `synth_timer_*`.
+        metrics: timerMetrics,
+        // Аудит `scope:'timer'` (создание/правка/срабатывание/отмена).
+        audit: securityAudit,
+        // Live-события в канале сессии (ADR-009/ADR-024; новых каналов нет).
+        onEvent: (sessionId, type, data) => {
+          eventBus.publish(sessionId, type, data);
+        },
+      });
+  timerServiceRef.service = timerService;
+  if (timerService) {
+    void timerService.start().catch((err) => {
+      console.warn(`[timers] не удалось запустить: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
@@ -2520,6 +2612,10 @@ export async function createBackendDeps(
     requestSessionService,
     eventIngress,
     schedulerService,
+    // PROP-141 (Часть B): движок таймеров/будильников + его остановка
+    // (graceful shutdown — рядом с `stopScheduler`).
+    timerService,
+    stopTimerService: () => timerService?.stop(),
     /**
      * Живые (мутируемые) эффективные настройки — аксессоры, а не значения:
      * обновляются админкой в рантайме (`mountBackendRoutes`), читаются
