@@ -735,7 +735,11 @@ describe('BackgroundRunService — восстановление при стар�
     await service.finish(done.id, { status: 'completed', summary: 'ok' });
 
     const recovered = await service.recoverOnStart();
-    expect(recovered).toBe(1);
+    // Контракт — массив переведённых записей (PROP-143 §4 п.3).
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]!.id).toBe(running.id);
+    expect(recovered[0]!.status).toBe('orphaned');
+    expect(recovered[0]!.summary).toBe('interrupted by restart');
 
     const orphan = await repository.get(running.id);
     expect(orphan?.status).toBe('orphaned');
@@ -752,8 +756,8 @@ describe('BackgroundRunService — восстановление при стар�
     const { service } = createService();
     await service.startSubagent({ sessionId: 'parent-1', childSessionId: 'child-1' });
 
-    expect(await service.recoverOnStart()).toBe(1);
-    expect(await service.recoverOnStart()).toBe(0);
+    expect(await service.recoverOnStart()).toHaveLength(1);
+    expect(await service.recoverOnStart()).toHaveLength(0);
   });
 });
 

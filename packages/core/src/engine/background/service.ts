@@ -392,21 +392,28 @@ export class BackgroundRunService {
    *
    * Их нельзя отследить и отменить — но запись в реестре должна честно
    * показывать, что прогон не завершился штатно. Идемпотентно.
+   *
+   * @returns записи **после** перевода (`status: 'orphaned'`, summary
+   *          `interrupted by restart`) — их переведено в этом вызове. Нужны
+   *          вызывающему для лога и durable-записи в историю сессии-владельца
+   *          (PROP-143 §4 п.3): родитель/человек должен видеть, что
+   *          исполнение прервано рестартом, а не только запись в реестре.
    */
-  async recoverOnStart(): Promise<number> {
+  async recoverOnStart(): Promise<BackgroundRunRecord[]> {
     const running = await this._repository.list({ status: 'running' });
-    let recovered = 0;
+    const recovered: BackgroundRunRecord[] = [];
     for (const record of running) {
       try {
         const now = this._now();
-        await this._repository.save({
+        const updated: BackgroundRunRecord = {
           ...record,
           status: 'orphaned',
           summary: 'interrupted by restart',
           finishedAt: now,
           updatedAt: now,
-        });
-        recovered += 1;
+        };
+        await this._repository.save(updated);
+        recovered.push(updated);
       } catch (err) {
         this._logger.warn?.(
           `[BackgroundRunService] восстановление прогона ${record.id} не удалось: ${err instanceof Error ? err.message : String(err)}`,

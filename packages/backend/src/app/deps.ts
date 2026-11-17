@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, ModelCompatibility, ToolsDisabledConfig, WebhooksConfig,
-  SummarizationConfig, DecisionConfig, Message,
+  SummarizationConfig, DecisionConfig, Message, BackgroundRunRecord,
 } from '@itphx/synth-shared';
 import {
   ensureDataDir, mergeModelCompatibility, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
@@ -89,6 +89,8 @@ import {
   BackgroundRunService,
   startBackgroundRunPruner,
   createBackgroundParentNotifier,
+  // PROP-143: durable-запись о прогоне, потерянном при рестарте.
+  appendLostRunRecords,
   // PROP-097 (блок 5b): сервис фоновых шелл-процессов + retention логов.
   ProcessService,
   startProcessLogPruner,
@@ -690,12 +692,33 @@ export async function createBackendDeps(
   // Старт: прогоны прошлого процесса не пережили рестарт (хэндлы отмены — в
   // памяти) — помечаем их `orphaned`. Best-effort: ошибка не роняет старт.
   if (backgroundService) {
+    let recovered: BackgroundRunRecord[] = [];
     try {
-      await backgroundService.recoverOnStart();
+      recovered = await backgroundService.recoverOnStart();
     } catch (err) {
       console.warn(
         `[background] восстановление фоновых прогонов не удалось: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+    // PROP-143 §4 п.3: факт прерывания возвращается в историю сессии-владельца
+    // (durable-запись `execution_stopped`) — иначе о потере прогона знает только
+    // реестр, а не человек/родитель. Ход не запускается — только дозапись.
+    if (recovered.length) {
+      try {
+        const written = await appendLostRunRecords({
+          sessionManager,
+          eventBus,
+          records: recovered,
+          logger: { warn: (message: string) => console.warn(message) },
+        });
+        console.log(
+          `[background] фоновые прогоны прерваны рестартом: осиротело ${recovered.length}, записей в историю добавлено ${written}`,
+        );
+      } catch (err) {
+        console.warn(
+          `[background] записи о прерванных прогонах не добавлены: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
   /**

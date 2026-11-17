@@ -36,6 +36,17 @@ export interface AppendStopRecordOptions {
    * ключом в истории не создаётся второй раз.
    */
   dedupeKey?: string;
+  /**
+   * Дополнительные поля метаданных записи (PROP-143): мержатся **после**
+   * `buildStopRecord` и **до** `dedupe_key` — итог:
+   * `{...metadata записи, ...metadata, ...(dedupe_key)}`.
+   *
+   * `dedupe_key` ставится после merge — перекрыть его нельзя. Служебные поля
+   * записи (маркер `execution_stopped`, `reason`) обфускация тела не теряет —
+   * они восстанавливаются из снимка метаданных (см. ниже); но в `metadata`
+   * их передавать не нужно: поле перекроет маркер записи.
+   */
+  metadata?: Record<string, unknown>;
   /** Обфускация тела записи (ADR-036): текст провайдера может нести ключи/URL. */
   obfuscate?: (message: Message) => Promise<Message>;
 }
@@ -62,7 +73,8 @@ export async function hasStopRecord(
  * Записать причину остановки в историю сессии (идемпотентно).
  *
  * Порядок: проверка дедупликации → сборка записи (`buildStopRecord`) →
- * обфускация тела → точечная дозапись в историю → публикация `message.added`.
+ * слияние доп. метаданных (`opts.metadata`) → `dedupe_key` → обфускация тела →
+ * точечная дозапись в историю → публикация `message.added`.
  *
  * Возвращает `appended: false`, если запись с тем же ключом уже есть (или
  * сессия недоступна для записи) — повторный терминальный статус того же хода
@@ -71,13 +83,18 @@ export async function hasStopRecord(
 export async function appendStopRecord(
   opts: AppendStopRecordOptions,
 ): Promise<{ appended: boolean; message?: Message }> {
-  const { sessionManager, eventBus, sessionId, input, dedupeKey, obfuscate } = opts;
+  const { sessionManager, eventBus, sessionId, input, dedupeKey, metadata, obfuscate } = opts;
 
   if (dedupeKey && (await hasStopRecord(sessionManager, sessionId, dedupeKey))) {
     return { appended: false };
   }
 
   let message = buildStopRecord(input);
+  // Дополнительные поля записи — после сборки и до `dedupe_key`
+  // (`dedupe_key` служебный и не перекрывается пользовательскими полями).
+  if (metadata) {
+    message.metadata = { ...message.metadata, ...metadata };
+  }
   if (dedupeKey) {
     message.metadata = { ...message.metadata, dedupe_key: dedupeKey };
   }

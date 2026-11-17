@@ -324,6 +324,8 @@ export {
   buildSubagentNotification,
   buildProcessNotification,
   createBackgroundParentNotifier,
+  // PROP-143: durable-запись о прогоне, потерянном при рестарте (сессия-владелец).
+  appendLostRunRecords,
   processLogPath,
   PROCESS_LOG_DIR,
   BACKGROUND_RUN_ID_PREFIX,
@@ -336,6 +338,7 @@ export type {
   BackgroundRunServiceOptions,
   BackgroundRunPrunerOptions,
   BackgroundParentNotifierDeps,
+  LostRunRecordOptions,
   BackgroundErrorCode,
   BackgroundFinalState,
   BackgroundFinishPatch,

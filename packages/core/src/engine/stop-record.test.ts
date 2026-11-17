@@ -164,4 +164,53 @@ describe('appendStopRecord (PROP-143)', () => {
 
     expect(await stopRecords(sessionId)).toHaveLength(2);
   });
+
+  it('дополнительные metadata попадают в запись (и не теряются при обфускации)', async () => {
+    const sessionId = await makeSession();
+
+    const result = await appendStopRecord({
+      sessionManager,
+      eventBus,
+      sessionId,
+      input: { reason: 'restart' },
+      dedupeKey: 'background:bgr_1',
+      metadata: { background_run_id: 'bgr_1', background_run_kind: 'process' },
+    });
+
+    expect(result.appended).toBe(true);
+    const records = await stopRecords(sessionId);
+    expect(records).toHaveLength(1);
+    expect(records[0]!.metadata?.background_run_id).toBe('bgr_1');
+    expect(records[0]!.metadata?.background_run_kind).toBe('process');
+    // Служебные поля записи на месте.
+    expect(records[0]!.metadata?.type).toBe(STOP_MESSAGE_TYPE);
+    expect(records[0]!.metadata?.dedupe_key).toBe('background:bgr_1');
+  });
+
+  it('metadata не перекрывает dedupe_key, служебные поля не теряются при обфускации', async () => {
+    const sessionId = await makeSession();
+    const obfuscate = vi.fn(async (message: Message): Promise<Message> => ({
+      ...message,
+      content: message.content,
+      // Обфускация теряет метаданные — писатель обязан их восстановить.
+      metadata: undefined,
+    }));
+
+    await appendStopRecord({
+      sessionManager,
+      eventBus,
+      sessionId,
+      input: { reason: 'restart' },
+      dedupeKey: 'background:bgr_2',
+      // `dedupe_key` из metadata не перекрывается — он ставится после merge.
+      metadata: { background_run_id: 'bgr_2', dedupe_key: 'wrong' },
+      obfuscate,
+    });
+
+    const records = await stopRecords(sessionId);
+    expect(records).toHaveLength(1);
+    expect(records[0]!.metadata?.background_run_id).toBe('bgr_2');
+    expect(records[0]!.metadata?.dedupe_key).toBe('background:bgr_2');
+    expect(records[0]!.metadata?.type).toBe(STOP_MESSAGE_TYPE);
+  });
 });

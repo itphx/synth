@@ -22,6 +22,10 @@ export {
   type BackgroundParentNotifierDeps,
 } from './notify-parent.js';
 export {
+  appendLostRunRecords,
+  type LostRunRecordOptions,
+} from './lost-records.js';
+export {
   BackgroundRunError,
   BackgroundLimitExceededError,
   BACKGROUND_ERROR_CODES,
