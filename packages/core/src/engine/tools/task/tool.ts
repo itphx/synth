@@ -916,10 +916,12 @@ async function continueChildSession(opts: {
   try {
     if (params.todos !== undefined) {
       const normalized = params.todos.map(toTodoItem);
-      await sessionManager.withLock(child.id, async (s) => {
-        s.todos = normalized;
-        await sessionManager.saveSession(s);
-      });
+      // Точечная правка списка (полная замена): `withLock`+`saveSession` писал
+      // снимок целиком. `touchUpdatedAt:false` — паритет: старт продолжения
+      // время сессии ребёнка не двигал.
+      await sessionManager.mutateMeta(child.id, (meta) => {
+        meta.todos = normalized;
+      }, { touchUpdatedAt: false });
     }
     await ensureTodoStateMessage(sessionManager, child.id);
     const refreshed = await sessionManager.getSession(child.id);
@@ -1107,8 +1109,11 @@ async function startBackgroundSubagent(opts: {
     };
   }
   try {
-    await sessionManager.withLock(childSessionId, async (s) => {
-      s.currentStream = {
+    // Точечная метка активности: `withLock`+`saveSession` писал снимок целиком
+    // и мог затереть параллельные точечные записи истории. `touchUpdatedAt:false`
+    // — паритет: маркер служебный, время сессии ребёнка не двигается.
+    await sessionManager.mutateMeta(childSessionId, (meta) => {
+      meta.currentStream = {
         streamId,
         // ADR-118 §10: id хода в UI ребёнка (совпадает с `turn.started` цикла).
         turnId: childSessionId,
@@ -1119,8 +1124,7 @@ async function startBackgroundSubagent(opts: {
         // Владелец маркера — процесс инстанса (recovery после рестарта).
         owner: sessionManager.instanceId,
       };
-      await sessionManager.saveSession(s);
-    });
+    }, { touchUpdatedAt: false });
   } catch {
     // Блокировка могла не записаться — прогон всё равно пойдёт, отмена
     // останется доступна через реестр (`stop`).
@@ -1173,13 +1177,16 @@ async function startBackgroundSubagent(opts: {
     .finally(async () => {
       extra.unregisterCancelToken?.(streamId);
       try {
-        await sessionManager.withLock(childSessionId, async (s) => {
-          // Снимаем только свой маркер (ADR-118 §10): прогон в этой сессии
-          // мог уже начать новый ход с другим `streamId`.
-          if (s.currentStream && s.currentStream.streamId !== streamId) return;
-          s.currentStream = undefined;
-          await sessionManager.saveSession(s);
-        });
+        // Снимаем только свой маркер (ADR-118 §10): прогон в этой сессии мог
+        // уже начать новый ход с другим `streamId`. Условие — внутри мутатора
+        // (решение по свежему документу), запись — только при реальном
+        // изменении; `touchUpdatedAt:false` — маркер служебный.
+        await sessionManager.mutateMeta(childSessionId, (meta) => {
+          if (meta.currentStream && meta.currentStream.streamId !== streamId) return false;
+          const changed = meta.currentStream !== undefined;
+          meta.currentStream = undefined;
+          return changed;
+        }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
       } catch {
         // сессия могла быть удалена
       }

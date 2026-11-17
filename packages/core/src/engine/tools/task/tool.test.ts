@@ -899,6 +899,75 @@ describe('task/tool.ts — продолжение ребёнка через task
     expect(saved.todos![0]!.id).toBe('seed-1');
   });
 
+  it('task_id + todos: правка списка точечная (touchUpdatedAt:false), свидетель истории цел', async () => {
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    // Свидетель: реплика, добавленная до правки списка, обязана остаться.
+    await sessionManager.addMessage(child.id, {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    });
+
+    // Наблюдаем опции порта: ищем ровно ту запись, которая меняет `todos`.
+    const todoWrites: Array<{ touchUpdatedAt?: boolean }> = [];
+    const originalMutate = sessionManager.mutateMeta.bind(sessionManager);
+    const mutateSpy = vi.spyOn(sessionManager, 'mutateMeta');
+    mutateSpy.mockImplementation((async (
+      sessionId: string,
+      mutator: (meta: unknown) => unknown,
+      opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+    ) => {
+      const before = await sessionManager.getSession(sessionId);
+      const beforeTodos = JSON.stringify(before?.todos ?? []);
+      const result = await originalMutate(
+        sessionId,
+        mutator as never,
+        opts as never,
+      );
+      const after = await sessionManager.getSession(sessionId);
+      if (after && JSON.stringify(after.todos ?? []) !== beforeTodos) {
+        todoWrites.push({ touchUpdatedAt: opts?.touchUpdatedAt });
+      }
+      return result;
+    }) as unknown as typeof sessionManager.mutateMeta);
+
+    const result = await taskTool.execute(
+      {
+        description: 'd',
+        prompt: 'go',
+        subagent_type: 'explore',
+        task_id: child.id,
+        todos: [{ id: 'seed-1', content: 'Новая A' }],
+      },
+      makeCtx(
+        { provider: makeProvider().provider, agentRegistry: makeAgentRegistry(), sessionManager, sessionId: parent.id },
+        parent.id,
+      ),
+    );
+    mutateSpy.mockRestore();
+    expect(result.isError).toBeFalsy();
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.todos!.map((t) => t.content)).toEqual(['Новая A']);
+    // Паритет: прежний `withLock`+`saveSession` время сессии ребёнка не двигал.
+    expect(todoWrites).toHaveLength(1);
+    expect(todoWrites[0]!.touchUpdatedAt).toBe(false);
+    // Свидетель цел.
+    expect(saved.messages.some((m) => m.content === 'свидетель')).toBe(true);
+  });
+
   it('новый ребёнок: todos — стартовый список (id сохраняются, дефолты применяются)', async () => {
     const { provider } = makeProvider('done');
     const result = await taskTool.execute(

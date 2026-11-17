@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { generateId, ProjectRole, type McpRegistryEntry, type McpServerConfig, type Project, type Session, type ToolContext } from '@itphx/synth-shared';
+import { generateId, nowISO, MessageRole, ProjectRole, type McpRegistryEntry, type McpServerConfig, type Message, type Project, type Session, type SessionMeta, type ToolContext } from '@itphx/synth-shared';
 import {
   synthMcpAddTool,
   synthMcpUpdateTool,
@@ -134,6 +134,23 @@ function makeCtx(opts: {
   const session = opts.session;
   const sessionManager = {
     getSession: vi.fn(async () => session ?? null),
+    // Порт `mutateMeta`: тесты живут на одном in-memory объекте сессии, поэтому
+    // мутатор применяется к нему напрямую (семантика `touchUpdatedAt`/`shouldWrite`
+    // соблюдается — паритет с файловой реализацией).
+    mutateMeta: vi.fn(async (
+      _id: string,
+      mutator: (meta: SessionMeta) => unknown,
+      opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+    ) => {
+      if (!session) return { found: false as const };
+      const before = structuredClone(session) as unknown as SessionMeta;
+      const value = mutator(session as unknown as SessionMeta);
+      if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+        return { found: true as const, value, session: before };
+      }
+      if (opts?.touchUpdatedAt !== false) session.updatedAt = nowISO();
+      return { found: true as const, value, session: session as unknown as SessionMeta };
+    }),
     withLock: vi.fn(async (_id: string, fn: (s: Session) => Promise<unknown>) => {
       if (!session) throw new Error('not found');
       return fn(session);
@@ -351,9 +368,23 @@ describe('synth_mcp_enable (Workstream A2)', () => {
   it('session: server in settings, disabled removed, session.updated published', async () => {
     const entry = makeEntry({ name: 'srv' });
     const registry = makeRegistry([entry]);
+    const witness: Message = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [{ id: generateId(), type: 'text', data: 'свидетель' }],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
     const current = session({
+      messages: [witness],
       settings: { mcpServers: [], mcpDisabledServers: ['srv'] } as unknown as Session['settings'],
     });
+    const before = current.updatedAt;
     const eventBus = { publish: vi.fn() } as unknown as EventBus;
 
     const result = await synthMcpEnableTool.execute(
@@ -363,6 +394,12 @@ describe('synth_mcp_enable (Workstream A2)', () => {
     expect(result.isError).toBeUndefined();
     expect(current.settings.mcpServers).toEqual(['srv']);
     expect(current.settings.mcpDisabledServers).toEqual([]);
+    // Паритет: прежний код явно ставил `updatedAt = nowISO()` перед `saveSession`
+    // — переключение MCP двигает время изменения сессии.
+    expect(current.updatedAt).not.toBe(before);
+    // Свидетель истории цел: полной перезаписи нет.
+    expect(current.messages).toHaveLength(1);
+    expect(current.messages[0]!.content).toBe('свидетель');
     expect(eventBus.publish).toHaveBeenCalledWith('s1', 'session.updated', expect.objectContaining({
       session_id: 's1',
       settings: current.settings,
@@ -378,6 +415,7 @@ describe('synth_mcp_enable (Workstream A2)', () => {
       ownerId: 'u2',
       settings: { mcpServers: [], mcpDisabledServers: [] } as unknown as Session['settings'],
     });
+    const before = current.updatedAt;
     const eventBus = { publish: vi.fn() } as unknown as EventBus;
 
     const result = await synthMcpEnableTool.execute(
@@ -394,6 +432,8 @@ describe('synth_mcp_enable (Workstream A2)', () => {
     expect(result.metadata?.i18n).toMatchObject({ key: 'instance.mcp_enable.session_forbidden' });
     expect(current.settings.mcpServers).toEqual([]);
     expect(current.settings.mcpDisabledServers).toEqual([]);
+    // Отказ — записи нет: время сессии не двигается (shouldWrite).
+    expect(current.updatedAt).toBe(before);
     expect(eventBus.publish).not.toHaveBeenCalled();
   });
 

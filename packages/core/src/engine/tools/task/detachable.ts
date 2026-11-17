@@ -172,11 +172,17 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
       const sessionManager = extra.sessionManager;
       if (!sessionManager) return;
       try {
-        await sessionManager.withLock(childSessionId, async (s) => {
-          if (streamId && s.currentStream && s.currentStream.streamId !== streamId) return;
-          s.currentStream = undefined;
-          await sessionManager.saveSession(s);
-        });
+        // Точечная метка активности: `withLock`+`saveSession` писал снимок и
+        // мог затереть параллельные точечные записи истории. Снимаем только
+        // **свой** маркер — чужой прогон не должен потерять живой индикатор
+        // (ADR-118 §10); запись — только при реальном изменении,
+        // `touchUpdatedAt:false` — маркер служебный.
+        await sessionManager.mutateMeta(childSessionId, (meta) => {
+          if (streamId && meta.currentStream && meta.currentStream.streamId !== streamId) return false;
+          const changed = meta.currentStream !== undefined;
+          meta.currentStream = undefined;
+          return changed;
+        }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
       } catch {
         // сессия могла быть удалена — маркер всё равно не нужен
       }
@@ -235,8 +241,10 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
       const sessionManager = extra.sessionManager;
       if (sessionManager) {
         try {
-          await sessionManager.withLock(childSessionId, async (s) => {
-            s.currentStream = {
+          // Точечная метка активности (`touchUpdatedAt:false` — паритет с
+          // прежним `saveSession`: маркер служебный, время сессии не двигается).
+          await sessionManager.mutateMeta(childSessionId, (meta) => {
+            meta.currentStream = {
               streamId,
               // Ход ребёнка виден в его UI по `turnId` (тот же id, что у
               // `turn.started` цикла) — иначе после reload живой ход
@@ -249,8 +257,7 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
               // Владелец маркера — процесс инстанса (recovery после рестарта).
               owner: sessionManager.instanceId,
             };
-            await sessionManager.saveSession(s);
-          });
+          }, { touchUpdatedAt: false });
         } catch {
           // не фатально
         }

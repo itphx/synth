@@ -165,16 +165,20 @@ export async function attachSessionToProject(
   }
 
   let worktreeDetached = false;
-  await sessionManager.withLock(sessionId, async (s) => {
-    s.projectId = projectId;
-    s.planApproved = false;
+  // Точечная правка метаданных: полная запись снимка затирала параллельные
+  // точечные записи истории. `touchUpdatedAt:false` — паритет: прежний
+  // `withLock`+`saveSession` время сессии не двигал.
+  const attached = await sessionManager.mutateMeta(sessionId, (meta) => {
+    meta.projectId = projectId;
+    meta.planApproved = false;
     // ADR-114: привязка к worktree принадлежит проекту — перенос её снимает.
-    if (s.worktree) {
-      s.worktree = undefined;
+    if (meta.worktree) {
+      meta.worktree = undefined;
       worktreeDetached = true;
     }
-    await sessionManager.saveSession(s);
-  });
+  }, { touchUpdatedAt: false });
+  // Паритет с прежним `withLock`: отсутствие сессии — ошибка, а не тихий пропуск.
+  if (!attached.found) throw new Error(`Session ${sessionId} not found`);
   eventBus?.publish(sessionId, 'session.moved', {
     session_id: sessionId,
     project_id: projectId,

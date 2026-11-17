@@ -487,20 +487,19 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     return { sessionId: session.id, streamId: msg.metadata!.stream_id as string };
   }
 
-  async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 2000): Promise<void> {
-    const started = Date.now();
-    while (Date.now() - started <= timeoutMs) {
-      if (await predicate()) return;
-      await new Promise((r) => setTimeout(r, 5));
-    }
-    throw new Error('waitUntil: timeout');
-  }
-
   it('graceful-отмена (processMessage сам публикует stream.cancelled) — без дубля', async () => {
     const { sessionId } = await enqueue();
     const events = collectEvents(eventBus, sessionId);
 
+    // Сигнал фактического старта `processMessage` (Phase 2 завершена): «Стоп»
+    // до него штатно уходит в `_handleStopRequest` (очередь сохраняется — решение
+    // владельца), поэтому ждём именно старт колбэка, а не только `currentStream`
+    // (Phase 1: между меткой и стартом хода теперь есть перечитывание сессии).
+    let resolveStarted!: () => void;
+    const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+
     const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async (_s, _m, signal, publish) => {
+      resolveStarted();
       return new Promise((resolve) => {
         const gracefulCancel = () => {
           // Имитация graceful-отмены оркестратором: он публикует stream.cancelled
@@ -520,9 +519,9 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     });
 
     const startPromise = processor.start();
-    await waitUntil(async () => (await sessionManager.getSession(sessionId))!.currentStream !== undefined);
+    await started;
 
-    // «Стоп» на активном стриме
+    // «Стоп» на уже стартовавшем стриме — graceful-ветка.
     processor.requestStop();
     await startPromise;
 

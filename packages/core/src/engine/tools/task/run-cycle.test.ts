@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { MessageRole, generateId, nowISO, makeTextPart, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
-import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message, Session } from '@itphx/synth-shared';
+import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message, Session, SessionMeta } from '@itphx/synth-shared';
 import type { BaseProvider, CancellationToken, ChatOptions, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
 import { RemoteAuthExpiredError } from '../../../providers/exceptions.js';
 import { RemoteError } from '../../../remote/types.js';
@@ -1134,6 +1134,106 @@ describe('run-cycle — permission-слой саб-агента (ADR-029)', () =
     expect(calls()).toBe(2);
     expect(result.content).toContain('done');
   });
+
+  it('ask approved (once=false) дважды: оба правила из свежего settings.permission, updatedAt сдвинут', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Свидетель истории: его не должна терять точечная запись гранта.
+    await sessionManager.addMessage(child.id, {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    } as Message);
+    const bus = new EventBus();
+    // «UI»: одобряет оба вопроса «в сессии» (once=false).
+    bus.subscribe(parent.id, (e) => {
+      if (e.type === 'permission.asked') {
+        bus.publish(parent.id, 'permission.replied', {
+          approval_id: (e.data as Record<string, unknown>).approval_id,
+          action: 'allow',
+          once: false,
+        });
+      }
+    });
+    const OLD_STAMP = '2024-01-01T00:00:00.000Z';
+    await sessionManager.mutateMeta(child.id, (meta) => {
+      meta.updatedAt = OLD_STAMP;
+    }, { touchUpdatedAt: false });
+    const { provider } = scriptedProvider([
+      [{
+        isFinal: true,
+        content: '',
+        toolCalls: [
+          { id: 'c1', function: { name: 'noop', arguments: '{}' } },
+          { id: 'c2', function: { name: 'noop2', arguments: '{}' } },
+        ],
+      }],
+      [{ isFinal: true, content: 'done' }],
+    ]);
+    const { registry } = makeRegistry({
+      noop: () => ({ content: 'ok' }),
+      noop2: () => ({ content: 'ok2' }),
+    });
+    const tools: ToolForLLM[] = [
+      { type: 'function', function: { name: 'noop', description: 'noop', parameters: {} } },
+      { type: 'function', function: { name: 'noop2', description: 'noop2', parameters: {} } },
+    ];
+
+    // Наблюдаем записи гранта: `updatedAt` двигается (паритет `updateSession`).
+    const grantWrites: Array<{ touchUpdatedAt?: boolean; bumped: boolean }> = [];
+    const originalMutate = sessionManager.mutateMeta.bind(sessionManager);
+    const spy = vi.spyOn(sessionManager, 'mutateMeta');
+    spy.mockImplementation((async (
+      sessionId: string,
+      mutator: (meta: SessionMeta) => unknown,
+      opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+    ) => {
+      const before = await sessionManager.getSession(sessionId);
+      const beforePerm = JSON.stringify(before?.settings.permission ?? null);
+      const result = await originalMutate(sessionId, mutator, opts as never);
+      const after = await sessionManager.getSession(sessionId);
+      if (after && JSON.stringify(after.settings.permission ?? null) !== beforePerm) {
+        grantWrites.push({
+          touchUpdatedAt: opts?.touchUpdatedAt,
+          bumped: after.updatedAt !== before?.updatedAt,
+        });
+      }
+      return result;
+    }) as unknown as typeof sessionManager.mutateMeta);
+
+    const result = await runSubagent(makeConfig({
+      tools,
+      extra: makeExtra({
+        provider, eventBus: bus, sessionManager, sessionId: parent.id, toolRegistry: registry,
+        permissionConfig: { rules: { noop: 'ask', noop2: 'ask' }, askTimeoutMs: 2000 },
+      }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+    spy.mockRestore();
+
+    expect(result.content).toContain('done');
+    const saved = (await sessionManager.getSession(child.id))!;
+    // Два гранта — оба правила в свежих настройках (гранты не затирают друг друга).
+    expect(saved.settings.permission!.rules.noop).toBe('allow');
+    expect(saved.settings.permission!.rules.noop2).toBe('allow');
+    expect(grantWrites.length).toBeGreaterThanOrEqual(1);
+    // Запись гранта идёт с бампом `updatedAt` (паритет с прежним `updateSession`):
+    // `touchUpdatedAt` не выключен, время сессии сдвинулось с «до прогона».
+    for (const write of grantWrites) {
+      expect(write.touchUpdatedAt).not.toBe(false);
+    }
+    expect(saved.updatedAt).not.toBe(OLD_STAMP);
+    // Свидетель истории цел.
+    expect(saved.messages.some((m) => m.content === 'свидетель')).toBe(true);
+  });
 });
 
 describe('run-cycle — quality check и эскалация (ADR-034)', () => {
@@ -1150,8 +1250,42 @@ describe('run-cycle — quality check и эскалация (ADR-034)', () => {
   it('QA pass: контент не меняется, quality-блок с pass=true', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Свидетель: реплика до правки QA-полей обязана остаться.
+    await sessionManager.addMessage(child.id, {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    } as Message);
     const { provider } = scriptedProvider([[{ isFinal: true, content: 'draft answer' }]]);
     const modelRouter = makeModelRouter({ checkQuality: () => ({ pass: true, reason: 'ok' }) });
+
+    // Наблюдаем точечную правку QA-полей: одно сообщение, с бампом `updatedAt`.
+    const qaWrites: Array<{ messageId: string; touchUpdatedAt?: boolean; bumped: boolean }> = [];
+    const originalMutateMessage = sessionManager.mutateMessage.bind(sessionManager);
+    const messageSpy = vi.spyOn(sessionManager, 'mutateMessage');
+    messageSpy.mockImplementation((async (
+      sessionId: string,
+      messageId: string,
+      mutator: (message: Message) => unknown,
+      opts?: { touchUpdatedAt?: boolean },
+    ) => {
+      const before = await sessionManager.getSession(sessionId);
+      const result = await originalMutateMessage(sessionId, messageId, mutator as never, opts as never);
+      const after = await sessionManager.getSession(sessionId);
+      qaWrites.push({
+        messageId,
+        touchUpdatedAt: opts?.touchUpdatedAt,
+        bumped: Boolean(after && before && after.updatedAt !== before.updatedAt),
+      });
+      return result;
+    }) as unknown as typeof sessionManager.mutateMessage);
 
     const result = await runSubagent(makeConfig({
       extra: makeExtra({
@@ -1162,16 +1296,49 @@ describe('run-cycle — quality check и эскалация (ADR-034)', () => {
       parentSessionId: parent.id,
       routingDecisionInfo: { providerName: 'p', modelName: 'm', strategy: 'content' },
     }));
+    messageSpy.mockRestore();
 
     expect(result.metadata!.qa_pass).toBe(true);
     expect(result.content).toContain('draft answer');
     expect(result.content).toContain('<quality pass="true"');
     // QC-поля проставляются на последнем assistant-сообщении ребёнка и
     // персистятся (FileStore), поэтому бейдж качества переживает перезагрузку.
-    const childMsg = (await sessionManager.getSession(child.id))!.messages
-      .filter((m) => m.role === MessageRole.ASSISTANT).at(-1);
+    const saved = (await sessionManager.getSession(child.id))!;
+    const childMsg = saved.messages.filter((m) => m.role === MessageRole.ASSISTANT).at(-1);
     expect(childMsg?.qa_pass).toBe(true);
     expect(childMsg?.qa_reason).toBe('ok');
+    // Точечная правка: ровно одно сообщение (последний assistant), бамп времени
+    // сессии — паритет с прежним `updateSession`.
+    expect(qaWrites).toHaveLength(1);
+    expect(qaWrites[0]!.messageId).toBe(childMsg!.id);
+    expect(qaWrites[0]!.touchUpdatedAt).not.toBe(false);
+    expect(qaWrites[0]!.bumped).toBe(true);
+    // Свидетель цел и не помечен QA-полями.
+    const witness = saved.messages.find((m) => m.content === 'свидетель')!;
+    expect(witness).toBeTruthy();
+    expect(witness.qa_pass).toBeUndefined();
+  });
+
+  it('QA: в истории нет assistant-сообщения — записи нет (mutateMessage не вызывается)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'draft answer' }]]);
+    const modelRouter = makeModelRouter({ checkQuality: () => ({ pass: true, reason: 'ok' }) });
+    const messageSpy = vi.spyOn(sessionManager, 'mutateMessage');
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({
+        provider, sessionManager, sessionId: parent.id, modelRouter,
+        routerConfig: { escalation: { enabled: true } },
+      }),
+      // Сессии нет: assistant-сообщений в истории тоже — правки быть не должно.
+      childSessionId: 'ghost-child',
+      parentSessionId: parent.id,
+      routingDecisionInfo: { providerName: 'p', modelName: 'm', strategy: 'content' },
+    }));
+    messageSpy.mockRestore();
+
+    expect(result.metadata!.qa_pass).toBe(true);
+    expect(messageSpy).not.toHaveBeenCalled();
   });
 
   it('QA fail + fallback-модель: ответ эскалируется, routing_strategy=escalation_fallback', async () => {
@@ -2896,5 +3063,56 @@ describe('run-cycle — todo-тулы ребёнка (ADR-039, ownership спи�
     }));
 
     expect(seen).toEqual({ todoSessionId: child.id, sessionId: parent.id });
+  });
+});
+
+/**
+ * Этап 2b-2b-2: маркер `currentStream` пишется **точечно** (`mutateMeta`) —
+ * служебная метка не сдвигает `updatedAt` сессии (паритет с прежним
+ * `saveSession`), а финализация снимает только свой маркер.
+ */
+describe('run-cycle — маркер currentStream без сдвига updatedAt (этап 2b-2b-2)', () => {
+  it('старт маркера — touchUpdatedAt:false, updatedAt не двигается этой записью', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'готово' }]]);
+
+    const markerWrites: Array<{ touchUpdatedAt?: boolean; streamId?: string; bumped: boolean }> = [];
+    const originalMutate = sessionManager.mutateMeta.bind(sessionManager);
+    const spy = vi.spyOn(sessionManager, 'mutateMeta');
+    spy.mockImplementation((async (
+      sessionId: string,
+      mutator: (meta: SessionMeta) => unknown,
+      opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+    ) => {
+      const before = await sessionManager.getSession(sessionId);
+      const beforeStream = before?.currentStream?.streamId;
+      const result = await originalMutate(sessionId, mutator, opts as never);
+      const after = await sessionManager.getSession(sessionId);
+      const afterStream = after?.currentStream?.streamId;
+      if (beforeStream !== afterStream) {
+        markerWrites.push({
+          touchUpdatedAt: opts?.touchUpdatedAt,
+          streamId: afterStream,
+          bumped: Boolean(after && before && after.updatedAt !== before.updatedAt),
+        });
+      }
+      return result;
+    }) as unknown as typeof sessionManager.mutateMeta);
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, streamId: 'stream-own' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+    spy.mockRestore();
+
+    // Установка маркера — ровно своя метка, без бампа времени.
+    const start = markerWrites.find((w) => w.streamId === 'stream-own');
+    expect(start).toBeTruthy();
+    expect(start!.touchUpdatedAt).toBe(false);
+    expect(start!.bumped).toBe(false);
+    // После прогона маркер снят (финализация — с бампом, паритет `updateSession`).
+    expect((await sessionManager.getSession(child.id))!.currentStream).toBeUndefined();
   });
 });

@@ -690,12 +690,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   // Best-effort: маркер не записался — прогон всё равно идёт.
   if (childSessionId && extra.sessionManager) {
     try {
-      await extra.sessionManager.withLock(childSessionId, async (s) => {
-        // Чужой маркер (например, прогон уже переведён в фон с другим
-        // `streamId`, ADR-111 §detach) не перетираем — иначе UI ребёнка
-        // потеряет живую часть прогона.
-        if (s.currentStream && s.currentStream.streamId !== runStreamId()) return;
-        s.currentStream = {
+      // Точечная метка активности: `withLock`+`saveSession` писал снимок и мог
+      // затереть параллельные точечные записи истории. Чужой маркер (например,
+      // прогон уже переведён в фон с другим `streamId`, ADR-111 §detach) не
+      // перетираем — иначе UI ребёнка потеряет живую часть прогона; на чужом
+      // маркере строка не пишется (`shouldWrite`). `touchUpdatedAt:false` —
+      // маркер служебный (паритет с прежним `saveSession`).
+      await extra.sessionManager.mutateMeta(childSessionId, (meta) => {
+        if (meta.currentStream && meta.currentStream.streamId !== runStreamId()) return false;
+        meta.currentStream = {
           streamId: runStreamId(),
           turnId: childSessionId,
           message: description,
@@ -705,8 +708,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // Владелец маркера — процесс инстанса (recovery после рестарта).
           owner: extra.sessionManager!.instanceId,
         };
-        await extra.sessionManager!.saveSession(s);
-      });
+        return true;
+      }, { touchUpdatedAt: false, shouldWrite: (written) => written });
     } catch {
       // не фатально: прогон важнее маркера активности
     }
@@ -2214,11 +2217,16 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               grantsSession = true;
               if (childSessionId && extra.sessionManager) {
                 try {
-                  const child = await extra.sessionManager.getSession(childSessionId);
-                  if (child) {
-                    child.settings.permission = { ...derivedPermission };
-                    await extra.sessionManager.updateSession(child);
-                  }
+                  // Грант «в сессии» — точечно: полная запись снимка затирала
+                  // параллельные точечные записи истории. `updatedAt` двигается
+                  // (паритет с прежним `updateSession`); правило ставится по
+                  // свежему документу внутри мутатора.
+                  await extra.sessionManager.mutateMeta(childSessionId, (meta) => {
+                    meta.settings = {
+                      ...meta.settings,
+                      permission: { ...derivedPermission },
+                    };
+                  });
                 } catch {
                   // не фатально
                 }
@@ -2436,15 +2444,18 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // Пометить QA-информацию в дочерней сессии
         if (childSessionId && extra.sessionManager) {
           try {
+            // Снимок нужен только чтобы найти id последнего assistant-сообщения;
+            // запись — точечная по `id` (`mutateMessage`), `updatedAt` двигается
+            // (паритет с прежним `updateSession`). История не перезаписывается.
             const childSession = await extra.sessionManager.getSession(childSessionId);
-            if (childSession) {
-              const lastAssistantMsg = [...childSession.messages].reverse()
-                .find(m => m.role === MessageRole.ASSISTANT);
-              if (lastAssistantMsg) {
-                lastAssistantMsg.qa_pass = qaResult.pass;
-                lastAssistantMsg.qa_reason = qaResult.reason;
-                await extra.sessionManager.updateSession(childSession);
-              }
+            const lastAssistantMsg = childSession
+              ? [...childSession.messages].reverse().find(m => m.role === MessageRole.ASSISTANT)
+              : undefined;
+            if (lastAssistantMsg) {
+              await extra.sessionManager.mutateMessage(childSessionId, lastAssistantMsg.id, (target) => {
+                target.qa_pass = qaResult.pass;
+                target.qa_reason = qaResult.reason;
+              });
             }
           } catch {
             // не фатально
@@ -2587,11 +2598,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     publishChildEvent('turn.finished', { turnId: childSessionId ?? '', status: 'error' });
     if (childSessionId && extra.sessionManager) {
       try {
-        await extra.sessionManager.withLock(childSessionId, async (s) => {
-          if (s.currentStream?.streamId !== runStreamId()) return;
-          s.currentStream = undefined;
-          await extra.sessionManager!.saveSession(s);
-        });
+        // Снимаем только свой маркер (ADR-118 §10). Условие — внутри мутатора,
+        // запись — только при реальном изменении; `touchUpdatedAt:false` —
+        // маркер служебный (паритет с прежним `saveSession`).
+        await extra.sessionManager.mutateMeta(childSessionId, (meta) => {
+          if (meta.currentStream?.streamId !== runStreamId()) return false;
+          meta.currentStream = undefined;
+          return true;
+        }, { touchUpdatedAt: false, shouldWrite: (changed) => changed });
       } catch {
         // маркер не снялся — терминальное событие уже опубликовано
       }

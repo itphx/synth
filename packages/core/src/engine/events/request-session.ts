@@ -935,20 +935,20 @@ export class RequestSessionService {
     // Чужая человеческая сессия — не угоняем (общий чат: пишет другой человек).
     if (currentOwner && !isMachineOwnerId(currentOwner)) return;
 
-    // read-modify-write сессии — только под `SessionManager.withLock`: окно между
-    // `getSession` выше и сохранением узкое, но конкурентная запись (процессор
-    // очереди, HTTP-роут) в нём терялась бы. Под локом сессия перечитывается, а
-    // решение «чужой человеческий владелец» принимается по актуальному состоянию.
-    const reassigned = await this._sessionManager.withLock(session.id, async (s) => {
-      const owner = s.ownerId || s.userId || '';
+    // read-modify-write сессии — только одной атомарной мутацией метаданных:
+    // окно между `getSession` выше и записью узкое, но конкурентная запись
+    // (процессор очереди, HTTP-роут) в нём терялась бы. Решение «чужой
+    // человеческий владелец» принимается по актуальному состоянию внутри
+    // мутатора; `updatedAt` двигается (паритет с прежним `updateSession`).
+    const reassigned = await this._sessionManager.mutateMeta(session.id, (meta) => {
+      const owner = meta.ownerId || meta.userId || '';
       if (owner === externalUserId) return false;
       if (owner && !isMachineOwnerId(owner)) return false;
-      s.ownerId = externalUserId;
-      s.userId = externalUserId;
-      await this._sessionManager.updateSession(s);
+      meta.ownerId = externalUserId;
+      meta.userId = externalUserId;
       return true;
-    });
-    if (!reassigned) return;
+    }, { shouldWrite: (changed) => changed });
+    if (!reassigned.found || !reassigned.value) return;
     // Отражаем нового владельца в переданном объекте: он используется вызывающим
     // (`_deliver`/хаб ниже) и возвращается из `handleEvent`.
     session.ownerId = externalUserId;

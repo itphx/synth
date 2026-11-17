@@ -23,6 +23,7 @@ import type {
   McpRegistryEntry,
   Project,
   Session,
+  SessionMeta,
   ToolContext,
   ToolDefinition,
 } from '@itphx/synth-shared';
@@ -180,6 +181,22 @@ function canManage(entry: McpRegistryEntry, viewer: { userId: string; elevated: 
  */
 function isInstanceAdmin(extra: InstanceMcpExtra): boolean {
   return (extra.principal?.roles ?? []).some((role) => role.toUpperCase() === 'ADMIN');
+}
+
+/**
+ * Снимок метаданных (`mutateMeta`) → объект `Session` для резолверов, которым
+ * нужны только атрибуты сессии (`settings`/`projectId`/…): child-наборы пусты,
+ * история не читается (точечная запись её не трогала).
+ */
+function sessionFromMeta(meta: SessionMeta): Session {
+  return {
+    ...meta,
+    messages: [],
+    pendingMessages: [],
+    checkpoints: [],
+    references: [],
+    stickyNotes: [],
+  };
 }
 
 async function effectiveFor(
@@ -456,23 +473,28 @@ export const synthMcpEnableTool: ToolDefinition = {
       const sessionId = ctx.sessionId || extra.sessionId;
       if (!sessionManager || !sessionId) return fail('instance.mcp_enable.no_session');
 
-      let updatedSession: Session | null = null;
+      let updatedSession: SessionMeta | null = null;
       let forbidden = false;
       try {
-        await sessionManager.withLock(sessionId, async (session) => {
+        // Точечная правка `settings` — полная запись снимка затирала
+        // параллельные точечные записи истории. Права и новое содержимое
+        // решаются **внутри** мутатора по свежему документу (мутатор
+        // синхронный, валидация реестра выполнена выше). `updatedAt`
+        // двигается — паритет с прежним кодом (явный `nowISO()` перед
+        // `saveSession`).
+        const switched = await sessionManager.mutateMeta(sessionId, (meta) => {
           // Уровень сессии меняет только владелец сессии (паритет с HTTP
           // `sessionOwnerGuard`: owner/ADMIN) — иначе участник проекта мог бы
           // переключать MCP у чужой сессии.
           if (
             !viewer.elevated
-            && session.ownerId !== viewer.userId
-            && session.userId !== viewer.userId
+            && meta.ownerId !== viewer.userId
+            && meta.userId !== viewer.userId
           ) {
-            forbidden = true;
-            return;
+            return false;
           }
-          const servers = new Set(session.settings.mcpServers ?? []);
-          const disabled = new Set(session.settings.mcpDisabledServers ?? []);
+          const servers = new Set(meta.settings.mcpServers ?? []);
+          const disabled = new Set(meta.settings.mcpDisabledServers ?? []);
           if (params.enabled) {
             servers.add(entry.name);
             disabled.delete(entry.name);
@@ -480,17 +502,21 @@ export const synthMcpEnableTool: ToolDefinition = {
             servers.delete(entry.name);
             disabled.add(entry.name);
           }
-          session.settings.mcpServers = [...servers];
-          session.settings.mcpDisabledServers = [...disabled];
-          session.updatedAt = nowISO();
-          updatedSession = session;
-          await sessionManager.saveSession(session);
-        });
+          meta.settings = {
+            ...meta.settings,
+            mcpServers: [...servers],
+            mcpDisabledServers: [...disabled],
+          };
+          return true;
+        }, { shouldWrite: (changed) => changed });
+        if (!switched.found) return fail('instance.mcp_enable.no_session');
+        if (!switched.value) forbidden = true;
+        else updatedSession = switched.session;
       } catch {
         return fail('instance.mcp_enable.no_session');
       }
       if (forbidden) return fail('instance.mcp_enable.session_forbidden');
-      const session = updatedSession as Session | null;
+      const session = updatedSession;
       if (session) {
         extra.eventBus?.publish(session.id, 'session.updated', {
           session_id: session.id,
@@ -498,7 +524,7 @@ export const synthMcpEnableTool: ToolDefinition = {
           updated_at: session.updatedAt,
         });
       }
-      const effective = (await effectiveFor(extra, session ?? undefined))
+      const effective = (await effectiveFor(extra, session ? sessionFromMeta(session) : undefined))
         .find((item) => item.name === entry.name);
       return {
         content: sm('instance.mcp_enable.session_ok', {

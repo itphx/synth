@@ -9,7 +9,7 @@
  * тянется: только лёгкие метаданные (`SessionManager.listSessions`).
  */
 import { z } from 'zod';
-import { nowISO, ToolCapability } from '@itphx/synth-shared';
+import { ToolCapability } from '@itphx/synth-shared';
 import type { Project, Session, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
@@ -725,13 +725,22 @@ export const sessionRenameTool: ToolDefinition = {
     let prevTitle: string | undefined;
     let updatedAt = '';
     try {
-      await extra.sessionManager.withLock(sessionId, async (session) => {
-        prevTitle = session.title;
-        session.title = params.title;
-        session.updatedAt = nowISO();
-        updatedAt = session.updatedAt;
-        await extra.sessionManager!.saveSession(session);
+      // Точечная правка заголовка: полная запись снимка затирала параллельные
+      // точечные записи истории. `updatedAt` двигается — паритет с прежним
+      // кодом, который явно ставил `updatedAt = nowISO()` перед `saveSession`
+      // (переименование поднимает сессию в списке и видно в событии).
+      const renamed = await extra.sessionManager.mutateMeta(sessionId, (meta) => {
+        prevTitle = meta.title;
+        meta.title = params.title;
       });
+      if (!renamed.found) {
+        return {
+          content: sm('session.not_found', { id: sessionId }),
+          isError: true,
+          metadata: { i18n: i18nMeta('session.not_found', { id: sessionId }) },
+        };
+      }
+      updatedAt = renamed.session.updatedAt;
     } catch (err) {
       const existing = await extra.sessionManager.getSession(sessionId).catch(() => null);
       if (!existing) {

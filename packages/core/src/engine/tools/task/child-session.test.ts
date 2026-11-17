@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { generateId, makeTextPart, MessageRole, nowISO } from '@itphx/synth-shared';
-import type { Message, Session, TokenUsage } from '@itphx/synth-shared';
+import type { Message, Session, SessionMeta, TokenUsage } from '@itphx/synth-shared';
 import { EventBus } from '../../../events/bus.js';
 import type { SessionManager } from '../../../sessions/manager.js';
 import { createChildSessionLifecycle, publishMessageAdded } from './child-session.js';
@@ -66,9 +66,9 @@ function makeSession(id: string): Session {
   } as unknown as Session;
 }
 
-/** Mock SessionManager: in-memory сессия + шпионы. */
+/** Mock SessionManager: in-memory сессия + шпионы (порт `mutateMeta`/`mutateMessage`). */
 function makeSessionManager(session: Session) {
-  const calls = { updateSession: 0, saveSession: 0, withLock: 0 };
+  const calls = { updateSession: 0, saveSession: 0, withLock: 0, mutateMeta: 0, mutateMessage: 0 };
   const manager = {
     calls,
     session,
@@ -77,6 +77,21 @@ function makeSessionManager(session: Session) {
     addMessage: vi.fn(async (_id: string, msg: Message) => {
       manager.session.messages.push(msg);
       return manager.session;
+    }),
+    mutateMeta: vi.fn(async (
+      _id: string,
+      mutator: (meta: SessionMeta) => unknown,
+      opts?: { touchUpdatedAt?: boolean; shouldWrite?: (value: unknown) => boolean },
+    ) => {
+      calls.mutateMeta++;
+      const meta = manager.session as unknown as SessionMeta;
+      const before = structuredClone(meta);
+      const value = mutator(meta);
+      if (opts?.shouldWrite && !opts.shouldWrite(value)) {
+        return { found: true, value, session: before };
+      }
+      if (opts?.touchUpdatedAt !== false) meta.updatedAt = nowISO();
+      return { found: true, value, session: meta };
     }),
     withLock: vi.fn(async (_id: string, fn: (s: Session) => Promise<unknown>) => {
       calls.withLock++;
@@ -134,6 +149,7 @@ describe('createChildSessionLifecycle', () => {
   it('finalize: обновляет updatedAt и публикует терминальные события (child + parent)', async () => {
     const bus = new EventBus();
     const session = makeSession('child-1');
+    session.updatedAt = '2024-01-01T00:00:00.000Z';
     const manager = makeSessionManager(session);
     const { events } = capture(bus);
 
@@ -147,7 +163,11 @@ describe('createChildSessionLifecycle', () => {
 
     await lifecycle.finalize();
 
-    expect(manager.calls.updateSession).toBe(1);
+    // Точечная правка метаданных; `updatedAt` сдвинут — паритет с прежним
+    // `updatedAt = nowISO()` + `updateSession` (полной записи больше нет).
+    expect(manager.calls.mutateMeta).toBe(1);
+    expect(manager.calls.updateSession).toBe(0);
+    expect(manager.session.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
     // ADR-118 §10: `turn.finished` — терминальный статус хода ребёнка
     // (открытая дочерняя сессия гасит живой сегмент и индикатор).
     expect(events.map((e) => e.type).sort()).toEqual(
@@ -161,6 +181,9 @@ describe('createChildSessionLifecycle', () => {
     expect(ended.data.stream_id).toBe('stream-1');
     const parentEvt = events.find((e) => e.type === 'child.session.updated')!;
     expect(parentEvt.sessionId).toBe('parent-1');
+    // Снимок метаданных: id/настройки есть, история в шине не выкладывается.
+    expect((parentEvt.data.session as Record<string, unknown>).id).toBe('child-1');
+    expect((parentEvt.data.session as Record<string, unknown>).messages).toEqual([]);
   });
 
   it('finalize снимает currentStream только своего streamId (чужой маркер не трогает)', async () => {
@@ -179,6 +202,7 @@ describe('createChildSessionLifecycle', () => {
 
     await ownLifecycle.finalize('completed');
     expect(ownManager.session.currentStream).toBeUndefined();
+    expect(ownManager.calls.mutateMeta).toBe(1);
 
     // Сессия уже занята другим прогоном (например, переведённым в фон) —
     // маркер чужой, финализация его не снимает.
@@ -233,8 +257,7 @@ describe('createChildSessionLifecycle', () => {
 
   it('finalize проглатывает ошибку SessionManager (не фатально)', async () => {
     const manager = {
-      getSession: vi.fn(async () => { throw new Error('boom'); }),
-      updateSession: vi.fn(),
+      mutateMeta: vi.fn(async () => { throw new Error('boom'); }),
     };
     const lifecycle = createChildSessionLifecycle({
       childSessionId: 'child-1',
@@ -245,7 +268,7 @@ describe('createChildSessionLifecycle', () => {
     });
 
     await expect(lifecycle.finalize()).resolves.toBeUndefined();
-    expect(manager.updateSession).not.toHaveBeenCalled();
+    expect(manager.mutateMeta).toHaveBeenCalledTimes(1);
   });
 
   it('addMessage: пишет в дочернюю сессию и публикует message.added/child.message.added', async () => {
@@ -307,7 +330,9 @@ describe('createChildSessionLifecycle', () => {
     // Идемпотентность: повторный вызов не должен удваивать счётчики.
     await lifecycle.commitUsage();
 
-    expect(manager.calls.withLock).toBe(1);
+    // Одна точечная правка метаданных (вместо `withLock`+`saveSession`).
+    expect(manager.calls.mutateMeta).toBe(1);
+    expect(manager.calls.withLock).toBe(0);
     expect(manager.session.inputTokens).toBe(100);
     expect(manager.session.outputTokens).toBe(40);
     expect(manager.session.totalTokens).toBe(140);

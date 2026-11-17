@@ -610,32 +610,37 @@ export class SessionMoveService {
     const prevProjectId = session.projectId;
     const subtree = await this._collectSubtree(session.id, prevProjectId);
 
-    // Поддерево: смена проекта + снятие worktree (ADR-114 §3.4).
+    // Поддерево: смена проекта + снятие worktree (ADR-114 §3.4). Точечная
+    // правка метаданных вместо `withLock`+`updateSession` (снимок затирал
+    // параллельные записи истории); `updatedAt` двигается — паритет с прежним
+    // `updateSession`. Дети, у которых проект уже сменился, не пишутся вовсе.
     for (const child of subtree) {
-      await this._deps.sessionManager.withLock(child.id, async (s) => {
-        if (s.projectId !== prevProjectId) return;
-        s.projectId = targetProjectId;
-        s.planApproved = false;
-        if (s.worktree) {
-          const worktreeId = s.worktree.worktreeId;
-          s.worktree = undefined;
-          effects.push({ kind: 'worktree', action: 'detached', id: worktreeId });
-        }
-        await this._deps.sessionManager.updateSession(s);
-      });
+      const movedChild = await this._deps.sessionManager.mutateMeta(child.id, (meta) => {
+        if (meta.projectId !== prevProjectId) return { moved: false as const };
+        meta.projectId = targetProjectId;
+        meta.planApproved = false;
+        const worktreeId = meta.worktree?.worktreeId;
+        if (meta.worktree) meta.worktree = undefined;
+        return { moved: true as const, worktreeId };
+      }, { shouldWrite: (value) => value.moved });
+      if (!movedChild.found) throw new Error(`Session ${child.id} not found`);
+      if (movedChild.value.moved && movedChild.value.worktreeId) {
+        effects.push({ kind: 'worktree', action: 'detached', id: movedChild.value.worktreeId });
+      }
     }
 
     // Корневая сессия: смена проекта + снятие worktree.
-    await this._deps.sessionManager.withLock(session.id, async (s) => {
-      s.projectId = targetProjectId;
-      s.planApproved = false;
-      if (s.worktree) {
-        const worktreeId = s.worktree.worktreeId;
-        s.worktree = undefined;
-        effects.push({ kind: 'worktree', action: 'detached', id: worktreeId });
-      }
-      await this._deps.sessionManager.updateSession(s);
+    const movedRoot = await this._deps.sessionManager.mutateMeta(session.id, (meta) => {
+      meta.projectId = targetProjectId;
+      meta.planApproved = false;
+      const worktreeId = meta.worktree?.worktreeId;
+      if (meta.worktree) meta.worktree = undefined;
+      return { worktreeId };
     });
+    if (!movedRoot.found) throw new Error(`Session ${session.id} not found`);
+    if (movedRoot.value.worktreeId) {
+      effects.push({ kind: 'worktree', action: 'detached', id: movedRoot.value.worktreeId });
+    }
 
     const moved = [session.id, ...subtree.map((child) => child.id)];
     for (const id of moved) {

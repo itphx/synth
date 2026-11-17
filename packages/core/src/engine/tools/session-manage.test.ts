@@ -212,6 +212,40 @@ describe('list_sessions / get_session_info / session_rename (Workstream B)', () 
     expect(updated?.data.updated_at).toBeTruthy();
   });
 
+  it('session_rename: точечная правка метаданных — updatedAt сдвинут, свидетель истории цел', async () => {
+    const OLD_STAMP = '2024-01-01T00:00:00.000Z';
+    await sessionManager.mutateMeta(current.id, (meta) => {
+      meta.updatedAt = OLD_STAMP;
+    }, { touchUpdatedAt: false });
+    const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+    eventBus.subscribe(current.id, (event) => {
+      events.push({ type: event.type, data: event.data as Record<string, unknown> });
+    });
+
+    const result = await sessionRenameTool.execute({ title: 'Renamed' }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const stored = (await sessionManager.getSession(current.id))!;
+    expect(stored.title).toBe('Renamed');
+    // Паритет: прежний код явно ставил `updatedAt = nowISO()` перед `saveSession`
+    // — переименование поднимает сессию в списке.
+    expect(stored.updatedAt).not.toBe(OLD_STAMP);
+    const updated = events.find((event) => event.type === 'session.updated');
+    expect(updated?.data.updated_at).toBe(stored.updatedAt);
+    // Свидетель цел: полной перезаписи истории нет.
+    expect(stored.messages).toHaveLength(1);
+    expect(stored.messages[0]!.content).toBe('DO-NOT-LEAK-MESSAGE');
+  });
+
+  it('session_rename: отсутствующая сессия — прежняя ошибка not_found', async () => {
+    const result = await sessionRenameTool.execute(
+      { title: 'Ghost' },
+      makeCtx(undefined, 'missing-session-id'),
+    );
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toMatchObject({ key: 'session.not_found' });
+  });
+
   it('session_rename: только текущая сессия (чужой id в аргументах игнорируется)', async () => {
     const ctx = makeCtx();
     await sessionRenameTool.execute({ title: 'Only current', sessionId: foreignOwn.id } as never, ctx);

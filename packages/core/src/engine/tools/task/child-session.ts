@@ -4,8 +4,14 @@
  *
  * ADR-095 (шаг 5): вынесено из `task.ts` без изменения поведения.
  */
-import { nowISO } from '@itphx/synth-shared';
-import type { EventType, Message, Session, TokenUsage, TurnStatus } from '@itphx/synth-shared';
+import type {
+  EventType,
+  Message,
+  Session,
+  SessionMeta,
+  TokenUsage,
+  TurnStatus,
+} from '@itphx/synth-shared';
 import type { EventBus } from '../../../events/bus.js';
 import { serializeMessage, serializeSession } from '../../../server/serialize.js';
 import { computeCacheHitRate, computeUsageCost } from '../../../providers/usage.js';
@@ -18,6 +24,22 @@ import type { TaskExtra } from './types.js';
  * Предел обхода цепочки `parentId` (защита от длинных/циклических цепочек).
  */
 const MAX_SESSION_DEPTH_WALK = 64;
+
+/**
+ * Снимок метаданных (`mutateMeta`) → объект `Session` с пустыми child-наборами.
+ * Нужен только сериализации события `child.session.updated` (id/настройки):
+ * история ребёнка в шину не выкладывается — её везут `message.added`.
+ */
+function sessionFromMeta(meta: SessionMeta): Session {
+  return {
+    ...meta,
+    messages: [],
+    pendingMessages: [],
+    checkpoints: [],
+    references: [],
+    stickyNotes: [],
+  };
+}
 
 /**
  * Глубина сессии в дереве саб-агентов (`agents.subagentDepth`).
@@ -144,40 +166,44 @@ export function createChildSessionLifecycle(opts: ChildSessionLifecycleOptions):
   const finalize = async (status: TurnStatus = 'completed'): Promise<void> => {
     if (!childSessionId || !extra.sessionManager) return;
     try {
-      const childSession = await extra.sessionManager.getSession(childSessionId);
-      if (childSession) {
-        // ADR-118 §10: маркер активного прогона ребёнка снимается только
-        // свой — чужой (новый прогон с другим `streamId`) не трогаем.
-        if (childSession.currentStream && childSession.currentStream.streamId === ownStreamId()) {
-          childSession.currentStream = undefined;
+      // Точечная правка метаданных: `currentStream` снимается только свой
+      // (ADR-118 §10), а `updatedAt` двигается всегда — паритет с прежним
+      // `updatedAt = nowISO()` + `updateSession`. История не читается и не
+      // перезаписывается (параллельные точки сообщений не теряются).
+      const finalized = await extra.sessionManager.mutateMeta(childSessionId, (meta) => {
+        if (meta.currentStream && meta.currentStream.streamId === ownStreamId()) {
+          meta.currentStream = undefined;
         }
-        childSession.updatedAt = nowISO();
-        await extra.sessionManager.updateSession(childSession);
+      });
+      // Сессии нет — событий не публикуем (паритет с прежней веткой `else`).
+      if (!finalized.found) return;
 
-        if (extra.eventBus) {
-          // ADR-118 §1/§4: терминальный статус хода ребёнка — открытая
-          // дочерняя сессия гасит живой сегмент и индикатор «идёт»
-          // (`turn.finished` закрывает все `streaming`-сегменты своего хода).
-          publishTurnFinished(
-            (type, data) => extra.eventBus!.publish(childSessionId, type as EventType, data),
-            { turnId: childSessionId, status },
-          );
-          // ADR-070 §2.6: терминальное live-событие дочерней сессии. Дочерний
-          // саб-агент не публикует stream.start/stream.done, а его live-статистика
-          // идёт только stream.usage. Это событие гарантирует, что открытая
-          // дочерняя сессия сбросит live-плейсхолдер после завершения работы
-          // (сообщение ребёнка сохраняется отдельно, дубля не возникает).
-          extra.eventBus.publish(childSessionId, 'stream.ended', {
-            session_id: childSessionId,
-            stream_id: extra.streamId,
-          });
-          extra.eventBus.publish(childSessionId, 'session.updated', {
-            session_id: childSessionId,
-          });
-          extra.eventBus.publish(parentSessionId, 'child.session.updated', {
-            session: serializeSession(childSession),
-          });
-        }
+      if (extra.eventBus) {
+        // ADR-118 §1/§4: терминальный статус хода ребёнка — открытая
+        // дочерняя сессия гасит живой сегмент и индикатор «идёт»
+        // (`turn.finished` закрывает все `streaming`-сегменты своего хода).
+        publishTurnFinished(
+          (type, data) => extra.eventBus!.publish(childSessionId, type as EventType, data),
+          { turnId: childSessionId, status },
+        );
+        // ADR-070 §2.6: терминальное live-событие дочерней сессии. Дочерний
+        // саб-агент не публикует stream.start/stream.done, а его live-статистика
+        // идёт только stream.usage. Это событие гарантирует, что открытая
+        // дочерняя сессия сбросит live-плейсхолдер после завершения работы
+        // (сообщение ребёнка сохраняется отдельно, дубля не возникает).
+        extra.eventBus.publish(childSessionId, 'stream.ended', {
+          session_id: childSessionId,
+          stream_id: extra.streamId,
+        });
+        extra.eventBus.publish(childSessionId, 'session.updated', {
+          session_id: childSessionId,
+        });
+        extra.eventBus.publish(parentSessionId, 'child.session.updated', {
+          // Снимок метаданных: событию нужны id/настройки (подписка хаба,
+          // карточка прогона); история ребёнка в шину не выкладывается —
+          // она приходит своими `message.added`.
+          session: serializeSession(sessionFromMeta(finalized.session)),
+        });
       }
     } catch {
       // не фатально
@@ -237,16 +263,17 @@ export function createChildSessionLifecycle(opts: ChildSessionLifecycleOptions):
     const sessionManager = extra.sessionManager;
     if (!childSessionId || !sessionManager) return;
     try {
-      await sessionManager.withLock(childSessionId, async (s) => {
-        s.inputTokens += usage.inputTokens || 0;
-        s.outputTokens += usage.outputTokens || 0;
-        s.totalTokens += usage.totalTokens || 0;
-        s.cacheReadTokens += usage.cacheReadTokens || 0;
-        s.cacheWriteTokens += usage.cacheWriteTokens || 0;
-        s.reasoningTokens += usage.reasoningTokens || 0;
-        s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
-        s.updatedAt = nowISO();
-        await sessionManager.saveSession(s);
+      // Счётчики — точечно, `updatedAt` двигается (паритет с прежним
+      // `updatedAt = nowISO()` + `saveSession`): история и очередь не
+      // перезаписываются, параллельные начисления не теряются.
+      await sessionManager.mutateMeta(childSessionId, (meta) => {
+        meta.inputTokens += usage.inputTokens || 0;
+        meta.outputTokens += usage.outputTokens || 0;
+        meta.totalTokens += usage.totalTokens || 0;
+        meta.cacheReadTokens += usage.cacheReadTokens || 0;
+        meta.cacheWriteTokens += usage.cacheWriteTokens || 0;
+        meta.reasoningTokens += usage.reasoningTokens || 0;
+        meta.cacheHitRate = computeCacheHitRate(meta.cacheReadTokens, meta.inputTokens);
       });
     } catch {
       // не фатально

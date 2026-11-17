@@ -7,8 +7,8 @@ import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
-import type { ToolContext } from '@itphx/synth-shared';
-import { generateId, ProjectRole } from '@itphx/synth-shared';
+import type { Message, ToolContext } from '@itphx/synth-shared';
+import { generateId, makeTextPart, MessageRole, nowISO, ProjectRole } from '@itphx/synth-shared';
 import { RemoteError } from '../../remote/types.js';
 // PROP-141 (Часть D): сервис переноса сессии между проектами + реестр прогонов.
 import { SessionMoveService } from '../../sessions/move-service.js';
@@ -233,6 +233,38 @@ describe('project_attach — снятие привязки к worktree (ADR-114 
     expect(moved).toBeTruthy();
     expect(moved?.project_id).toBe(targetProjectId);
     expect(moved?.worktree_detached).toBe(true);
+  });
+
+  it('правка метаданных: updatedAt не меняется, свидетель истории цел', async () => {
+    const OLD_STAMP = '2024-01-01T00:00:00.000Z';
+    const witness: Message = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+    await sessionManager.addMessage(sessionId, witness);
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.updatedAt = OLD_STAMP;
+    }, { touchUpdatedAt: false });
+
+    const result = await projectAttachTool.execute({ projectId: targetProjectId }, makeCtx());
+    expect(result.isError).toBeUndefined();
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.projectId).toBe(targetProjectId);
+    expect(session.worktree).toBeUndefined();
+    // Паритет: прежний `withLock`+`saveSession` время сессии не двигал.
+    expect(session.updatedAt).toBe(OLD_STAMP);
+    // Свидетель цел: история не перезаписывается.
+    expect(session.messages).toHaveLength(1);
+    expect(session.messages[0]!.content).toBe('свидетель');
   });
 
   it('сессия без привязки: worktree_detached не выставляется (прежнее поведение)', async () => {

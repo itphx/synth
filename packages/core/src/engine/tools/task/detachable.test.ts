@@ -62,6 +62,7 @@ function makeParams(overrides: Record<string, unknown> = {}) {
 
 describe('task/detachable — перевод идущего прогона в фон (ADR-111)', () => {
   let dir: string;
+  let store: FileStore;
   let sessionManager: SessionManager;
   let parent: Session;
   let child: Session;
@@ -69,7 +70,8 @@ describe('task/detachable — перевод идущего прогона в ф
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'synth-task-detach-'));
-    sessionManager = new SessionManager(new FileStore({ dataDir: dir }));
+    store = new FileStore({ dataDir: dir });
+    sessionManager = new SessionManager(store);
     parent = await sessionManager.createSession({ title: 'Parent' });
     child = await sessionManager.createSession({ title: 'Child' });
     eventBus = new EventBus();
@@ -193,6 +195,7 @@ describe('task/detachable — перевод идущего прогона в ф
     // Хэндл виден в реестре активных прогонов сессии.
     expect(registry.list(parent.id).map((r) => r.id)).toEqual([child.id]);
 
+    const stampBeforeDetach = (await sessionManager.getSession(child.id))!.updatedAt;
     const detachResult = await registry.detachAll(parent.id);
     expect(detachResult.failed).toEqual([]);
     expect(detachResult.detached).toEqual([
@@ -262,9 +265,104 @@ describe('task/detachable — перевод идущего прогона в ф
     await vi.waitFor(() => expect(unregisterCancelToken).toHaveBeenCalledWith(streamId));
     const finishedChild = await sessionManager.getSession(child.id);
     expect(finishedChild?.currentStream).toBeUndefined();
+    // Маркер — служебная метка: постановка и снятие `updatedAt` не двигают
+    // (паритет с прежним `saveSession`; `touchUpdatedAt:false`).
+    expect(finishedChild?.updatedAt).toBe(stampBeforeDetach);
     // Реестр активных прогонов очищен — повторный detach ничего не найдёт.
     expect(registry.list(parent.id)).toEqual([]);
     expect((await registry.detachAll(parent.id)).detached).toEqual([]);
+  });
+
+  it('cleanup: чужой маркер не снимается, updatedAt не двигается', async () => {
+    const { service } = makeService();
+    const registry = new ActiveRunRegistry();
+    const run = controllableRun();
+    const unregisterCancelToken = vi.fn();
+    const extra = makeExtra({ service, registry, unregisterCancelToken });
+    const ctx = makeCtx();
+
+    const toolPromise = runDetachableSubagent({
+      params: makeParams(),
+      runConfig: makeRunConfig(extra, ctx),
+      extra,
+      ctx,
+      run: run.run,
+    });
+    await vi.waitFor(() => expect(run.run).toHaveBeenCalledTimes(1));
+    await registry.detachAll(parent.id);
+    const toolResult = await toolPromise;
+    const runId = String(toolResult.metadata!.background_run_id);
+
+    // В сессии уже начался другой прогон — маркер чужой, снимать его нельзя.
+    await sessionManager.mutateMeta(child.id, (meta) => {
+      meta.currentStream = {
+        streamId: 'stream-foreign',
+        message: 'другой прогон',
+        startedAt: new Date().toISOString(),
+        cancelled: false,
+      };
+    }, { touchUpdatedAt: false });
+    const foreignStamp = (await sessionManager.getSession(child.id))!.updatedAt;
+
+    run.finishWith({ content: 'done', metadata: { final_content: 'done' } });
+    await vi.waitFor(async () => {
+      expect((await service.get(runId))?.status).toBe('completed');
+    });
+    // Cleanup фоновой части начинается со снятия cancel-токена.
+    await vi.waitFor(() => expect(unregisterCancelToken).toHaveBeenCalled());
+
+    const afterForeign = (await sessionManager.getSession(child.id))!;
+    expect(afterForeign.currentStream?.streamId).toBe('stream-foreign');
+    expect(afterForeign.updatedAt).toBe(foreignStamp);
+  });
+
+  it('cleanup без маркера — no-op: строка сессии не пишется', async () => {
+    const { service } = makeService();
+    const registry = new ActiveRunRegistry();
+    const run = controllableRun();
+    const unregisterCancelToken = vi.fn();
+    const extra = makeExtra({ service, registry, unregisterCancelToken });
+    const ctx = makeCtx();
+
+    const toolPromise = runDetachableSubagent({
+      params: makeParams(),
+      runConfig: makeRunConfig(extra, ctx),
+      extra,
+      ctx,
+      run: run.run,
+    });
+    await vi.waitFor(() => expect(run.run).toHaveBeenCalledTimes(1));
+    await registry.detachAll(parent.id);
+    const toolResult = await toolPromise;
+    const runId = String(toolResult.metadata!.background_run_id);
+
+    // Маркер уже снят (например, финализацией прогона) — cleanup не должен писать.
+    await sessionManager.mutateMeta(child.id, (meta) => {
+      meta.currentStream = undefined;
+    }, { touchUpdatedAt: false });
+    const stamp = (await sessionManager.getSession(child.id))!.updatedAt;
+
+    // Наблюдаем записи сессии: after reset — ни одного вызова.
+    const writeSpy = vi.spyOn(
+      store as unknown as { _writeSession: (s: Session) => Promise<void> },
+      '_writeSession',
+    );
+    const mutateSpy = vi.spyOn(sessionManager, 'mutateMeta');
+    writeSpy.mockClear();
+    mutateSpy.mockClear();
+
+    run.finishWith({ content: 'done', metadata: { final_content: 'done' } });
+    await vi.waitFor(async () => {
+      expect((await service.get(runId))?.status).toBe('completed');
+    });
+    // Cleanup дошёл до мутатора маркера (одна попытка) — и не записал строку.
+    await vi.waitFor(() => expect(mutateSpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(unregisterCancelToken).toHaveBeenCalled());
+
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect((await sessionManager.getSession(child.id))!.updatedAt).toBe(stamp);
+    mutateSpy.mockRestore();
+    writeSpy.mockRestore();
   });
 
   it('detach: ошибка прогона → запись `failed`', async () => {

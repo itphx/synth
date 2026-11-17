@@ -9,8 +9,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BackgroundRunRecord, Schedule, Timer } from '@itphx/synth-shared';
-import { MessageRole } from '@itphx/synth-shared';
+import type { BackgroundRunRecord, Message, Schedule, Timer } from '@itphx/synth-shared';
+import { generateId, makeTextPart, MessageRole, nowISO } from '@itphx/synth-shared';
 import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
 import {
@@ -355,6 +355,26 @@ describe('SessionMoveService (PROP-141, Часть D)', () => {
       });
     }
 
+    // Свидетели истории + метки времени «до переноса».
+    const witness = (content: string): Message => ({
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    });
+    await manager.addMessage(rootId, witness('root-свидетель'));
+    await manager.addMessage(child.id, witness('child-свидетель'));
+    const stamps = new Map<string, string>();
+    for (const id of [rootId, child.id, grandChild.id, foreign.id]) {
+      stamps.set(id, (await manager.getSession(id))!.updatedAt);
+    }
+
     const result = await service.move({ sessionId: rootId, targetProjectId: 'p2' });
 
     expect(result.moved.sort()).toEqual([rootId, child.id, grandChild.id].sort());
@@ -363,6 +383,15 @@ describe('SessionMoveService (PROP-141, Часть D)', () => {
     expect((await manager.getSession(grandChild.id))?.projectId).toBe('p2');
     // Потомок в другом проекте не тронут.
     expect((await manager.getSession(foreign.id))?.projectId).toBe('p9');
+    // Паритет `updateSession`: перенос двигает `updatedAt` перенесённых сессий.
+    for (const id of [rootId, child.id, grandChild.id]) {
+      expect((await manager.getSession(id))!.updatedAt).not.toBe(stamps.get(id));
+    }
+    // Ребёнок с уже изменённым проектом не пишется (shouldWrite): время стоит.
+    expect((await manager.getSession(foreign.id))!.updatedAt).toBe(stamps.get(foreign.id));
+    // История цела: свидетели на месте, полной перезаписи нет.
+    expect((await manager.getSession(rootId))!.messages.some((m) => m.content === 'root-свидетель')).toBe(true);
+    expect((await manager.getSession(child.id))!.messages.some((m) => m.content === 'child-свидетель')).toBe(true);
   });
 
   it('завершённые прогоны переатрибутируются на новый проект', async () => {

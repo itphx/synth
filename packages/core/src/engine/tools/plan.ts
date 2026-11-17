@@ -82,12 +82,14 @@ async function updateSessionMode(
   patch: { mode: 'plan' | 'act'; planApproved?: boolean },
 ): Promise<boolean> {
   try {
-    await sessionManager.withLock(sessionId, async (s) => {
-      s.mode = patch.mode;
-      if (patch.planApproved !== undefined) s.planApproved = patch.planApproved;
-      await sessionManager.saveSession(s);
-    });
-    return true;
+    // Точечная правка метаданных: `withLock`+`saveSession` писал снимок целиком
+    // и мог затереть параллельные точечные записи истории. `touchUpdatedAt:false`
+    // — паритет: смена режима и одобрение плана время сессии не двигали.
+    const result = await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.mode = patch.mode;
+      if (patch.planApproved !== undefined) meta.planApproved = patch.planApproved;
+    }, { touchUpdatedAt: false });
+    return result.found;
   } catch {
     return false;
   }

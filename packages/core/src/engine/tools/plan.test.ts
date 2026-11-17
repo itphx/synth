@@ -7,8 +7,8 @@ import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
-import type { ToolContext } from '@itphx/synth-shared';
-import { generateId, ProjectRole } from '@itphx/synth-shared';
+import type { Message, ToolContext } from '@itphx/synth-shared';
+import { generateId, makeTextPart, MessageRole, nowISO, ProjectRole } from '@itphx/synth-shared';
 
 async function exists(file: string): Promise<boolean> {
   try {
@@ -112,6 +112,39 @@ describe('plan_enter / plan_exit', () => {
     delete ctx.extra;
     const result = await planExitTool.execute({}, ctx);
     expect(result.isError).toBe(true);
+  });
+
+  it('plan_enter/plan_exit правят только метаданные: updatedAt не двигается, свидетель цел', async () => {
+    const OLD_STAMP = '2024-01-01T00:00:00.000Z';
+    const witness: Message = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+    await sessionManager.addMessage(sessionId, witness);
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.updatedAt = OLD_STAMP;
+    }, { touchUpdatedAt: false });
+
+    expect((await planEnterTool.execute({}, makeCtx())).isError).toBeUndefined();
+    expect((await planExitTool.execute({}, makeCtx())).isError).toBeUndefined();
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.mode).toBe('act');
+    expect(session.planApproved).toBe(true);
+    // Паритет: смена режима и одобрение плана время сессии не двигали
+    // (прежний `saveSession` его не бампил).
+    expect(session.updatedAt).toBe(OLD_STAMP);
+    // Свидетель цел: полной перезаписи истории больше нет.
+    expect(session.messages).toHaveLength(1);
+    expect(session.messages[0]!.content).toBe('свидетель');
   });
 
   it('plan_exit публикует событие plan.approved', async () => {

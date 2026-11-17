@@ -3,7 +3,8 @@ import type { Mock } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EventAttachmentRef, EventBinding, EventIdentity, Session, SynthEvent } from '@itphx/synth-shared';
+import type { EventAttachmentRef, EventBinding, EventIdentity, Message, Session, SynthEvent } from '@itphx/synth-shared';
+import { generateId, makeTextPart, MessageRole, nowISO } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import { SessionManager } from '../../sessions/manager.js';
@@ -955,6 +956,21 @@ describe('RequestSessionService (ADR-089)', () => {
       userId: 'service:svk_1',
       ownerId: 'service:svk_1',
     });
+    // Свидетель истории + метка времени «до переустановки владельца».
+    const witness: Message = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('свидетель')],
+      content: 'свидетель',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+    };
+    await sessionManager.addMessage(machine.id, witness);
+    const stampBefore = (await sessionManager.getSession(machine.id))!.updatedAt;
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:reassign',
@@ -977,6 +993,10 @@ describe('RequestSessionService (ADR-089)', () => {
     const reloaded = await sessionManager.getSession(machine.id);
     expect(reloaded?.ownerId).toBe('u-human');
     expect(reloaded?.userId).toBe('u-human');
+    // Паритет `updateSession`: переустановка владельца двигает `updatedAt`.
+    expect(reloaded?.updatedAt).not.toBe(stampBefore);
+    // История цела: точечная правка метаданных, а не полная перезапись снимка.
+    expect(reloaded?.messages.some((m) => m.content === 'свидетель')).toBe(true);
     // Хаб уведомлён — клиенты нового владельца подписываются на сессию.
     expect(onMaterialized).toHaveBeenCalledOnce();
     expect(onMaterialized).toHaveBeenCalledWith(
@@ -1010,6 +1030,7 @@ describe('RequestSessionService (ADR-089)', () => {
       userId: 'u-a',
       ownerId: 'u-a',
     });
+    const stampBefore = (await sessionManager.getSession(human.id))!.updatedAt;
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:group-owners',
@@ -1029,6 +1050,8 @@ describe('RequestSessionService (ADR-089)', () => {
     expect(session?.ownerId).toBe('u-a');
     expect(session?.userId).toBe('u-a');
     expect((await sessionManager.getSession(human.id))?.ownerId).toBe('u-a');
+    // Нет переустановки — нет и записи: время сессии не двигается (shouldWrite).
+    expect((await sessionManager.getSession(human.id))?.updatedAt).toBe(stampBefore);
     // Переподписка не требуется — владелец не менялся.
     expect(onMaterialized).not.toHaveBeenCalled();
     // Доставка состоялась несмотря на то, что владелец остался прежним.
