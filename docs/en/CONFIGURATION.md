@@ -2340,7 +2340,9 @@ background:
 - **Registry storage** — the `BackgroundRunRepository` domain port (ADR-096): the file
   backend — `{dataDir}/processes/registry.json` (ADR-005, an atomic write), PostgreSQL —
   the `background_runs` table (the `021_background_runs` migration of the driver). The logs
-  of the background processes — a blob store (`BlobStore`), the path `processes/<id>.log`.
+  of the background processes — a blob store (`BlobStore`), the path `processes/<id>.log`
+  (the combined log) and the per-stream files `processes/<id>.stdout.log` /
+  `processes/<id>.stderr.log`; the `logMaxBytes` limit is **its own for each file**.
 - **A restart does not resume the background runs.** The "live" cancel handles live in the
   process memory, therefore at start all the `running` records are turned into `orphaned`
   with the note "interrupted by restart": the record stays in the registry (it honestly

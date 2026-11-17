@@ -325,6 +325,55 @@ describe('Встроенные тулы реестра фоновых прого
       expect(result.content).toBe('The background run registry is unavailable in this build');
       expect(result.metadata?.i18n).toMatchObject({ key: 'process.tool.deps_unavailable' });
     });
+
+    it('stream=stdout|stderr — тул отдаёт только свой поток', async () => {
+      const record = await background.startProcess({
+        sessionId,
+        command: 'npm test',
+        cwd: tmpDir,
+      });
+      await blobs.write(record.logPath!, 'out-1\nerr-1\n');
+      await blobs.write(`processes/${record.id}.stdout.log`, 'out-1\n');
+      await blobs.write(`processes/${record.id}.stderr.log`, 'err-1\n');
+
+      const stdout = await processLogsTool.execute(
+        { process_id: record.id, stream: 'stdout' },
+        makeCtx(),
+      );
+      expect(stdout.isError).toBeUndefined();
+      expect(stdout.content).toContain('out-1');
+      expect(stdout.content).not.toContain('err-1');
+      expect(stdout.content).toContain('requested_stream=stdout | log_stream=stdout');
+
+      const stderr = await processLogsTool.execute(
+        { process_id: record.id, stream: 'stderr' },
+        makeCtx(),
+      );
+      expect(stderr.isError).toBeUndefined();
+      expect(stderr.content).toContain('err-1');
+      expect(stderr.content).not.toContain('out-1');
+    });
+
+    it('stream=stdout, а файла потока нет (старый прогон) — понятный ответ, не падение', async () => {
+      const record = await background.startProcess({
+        sessionId,
+        command: 'npm test',
+        cwd: tmpDir,
+      });
+      // Общий лог есть, файлов потоков нет (прогон до разделения потоков).
+      await blobs.write(record.logPath!, 'old-output');
+
+      const result = await processLogsTool.execute(
+        { process_id: record.id, stream: 'stdout' },
+        makeCtx(),
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content).toContain('There is no log for this background run');
+      expect(result.content).toContain('requested_stream=stdout | log_stream=missing');
+      expect(result.metadata?.stream).toBe('stdout');
+      expect(result.metadata?.i18n).toMatchObject({ key: 'process.tool.no_log' });
+    });
   });
 
   describe('process_stop / process_delete', () => {

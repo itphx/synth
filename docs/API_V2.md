@@ -3441,7 +3441,7 @@ background_run_id, title?}`). Процесс при detach **не перезап
 |---|---|---|---|---|
 | GET | `/api/v2/processes` | оба | auth | Список прогонов `{runs}`; фильтры `sessionId`/`projectId`/`kind` (`subagent`/`process`)/`status` (`running`/`completed`/`failed`/`cancelled`/`orphaned`)/`limit` (по умолчанию 50, максимум 200); неверный `kind`/`status` → 400 `VALIDATION_ERROR`. Выдаются только прогоны сессий, доступных пользователю (владелец/участник проекта; `ADMIN`/`LEAD` — все) |
 | GET | `/api/v2/processes/:id` | оба | auth | Прогон `{run}` (запись реестра целиком); прогона нет → 404 `NOT_FOUND`, сессии-владельца нет → 404, нет прав → 403 `FORBIDDEN` |
-| GET | `/api/v2/processes/:id/logs` | оба | auth | Отрезок лога фонового процесса `{content, offset, nextOffset, totalBytes, truncated}`; только `kind:'process'` (для `subagent` → 400 `VALIDATION_ERROR`), файла лога нет → 404 `NOT_FOUND`. `offset` — смещение в байтах от начала лога, `limit` — размер выдачи (по умолчанию и максимум — 256 КиБ) |
+| GET | `/api/v2/processes/:id/logs` | оба | auth | Отрезок лога фонового процесса `{content, offset, nextOffset, totalBytes, truncated}`; только `kind:'process'` (для `subagent` → 400 `VALIDATION_ERROR`), файла лога нет → 404 `NOT_FOUND`. `offset` — смещение в байтах от начала лога, `limit` — размер выдачи (по умолчанию и максимум — 256 КиБ). `stream` — поток вывода: `combined` (по умолчанию) — общий лог прогона (`processes/<id>.log`, stdout и stderr в порядке прихода), `stdout`/`stderr` — файл потока (`processes/<id>.stdout.log` / `.stderr.log`); иное значение → 400 `VALIDATION_ERROR`, файла потока нет (прогон старше разделения потоков) → 404 `NOT_FOUND` |
 | POST | `/api/v2/processes/:id/stop` | оба | auth (**write**) | Остановить прогон → 200 `{status:'stopping'}` (остановка асинхронная: запрос остановки приходит событием `process.stopped`, итоговый статус — событием `process.exited`); прогон уже не `running` либо идёт в другом процессе (остановить отсюда нельзя) → 409 `CONFLICT` |
 | DELETE | `/api/v2/processes/:id` | оба | auth (**write**) | Удалить запись реестра → **204**; прогон ещё `running` → 409 `CONFLICT` |
 
@@ -3474,9 +3474,30 @@ ADR-009/ADR-024; новых транспортных каналов нет) — 
 **Хранилище.** Реестр — `{dataDir}/processes/registry.json` (ADR-005, атомарная
 запись); PostgreSQL — таблица `background_runs` (миграция `021_background_runs`
 драйвера `@itphx/synth-storage-postgres`, ADR-097). Логи фоновых процессов —
-blob-хранилище (`BlobStore`), путь `processes/<id>.log`; предел записи лога —
-`background.logMaxBytes` (потолок выдачи за один HTTP-запрос — 256 КиБ, это
-разные величины).
+blob-хранилище (`BlobStore`); предел записи лога — `background.logMaxBytes`
+(потолок выдачи за один HTTP-запрос — 256 КиБ, это разные величины).
+
+**Три файла лога прогона.** У каждого фонового процесса **три** файла в
+blob-хранилище:
+
+| Файл | Содержимое |
+|---|---|
+| `processes/<id>.log` | **общий** лог: stdout и stderr в порядке прихода чанков (источник «как было») |
+| `processes/<id>.stdout.log` | только stdout |
+| `processes/<id>.stderr.log` | только stderr |
+
+Разделение по потокам — аддитивно: общий лог и его путь не меняются.
+Предел размера (`background.logMaxBytes`) — **свой у каждого файла**: по
+превышении прекращается запись именно этого файла (остальные пишутся дальше);
+признак усечения общего лога — `metadata.truncated` в записи реестра, потоков —
+`metadata.stdout_truncated`/`metadata.stderr_truncated`. Ошибка записи лога не
+роняет процесс — это предупреждение в лог. Retention (`background.retentionDays`)
+удаляет **все три** файла вместе с записью реестра; «сиротская» очистка
+каталога `processes/` не трогает файлы потоков живых (не истёкших) записей.
+
+Файлы потоков появляются у прогонов, запущенных **после** разделения потоков:
+у более старых прогонов их нет, поэтому `GET /:id/logs?stream=stdout|stderr`
+для них отдаёт `404 NOT_FOUND` (а `?stream=combined` — общий лог, как раньше).
 
 **UI.** Вкладка «Процессы» правой панели
 (`packages/ui/src/components/panels/ProcessesTab.tsx`): список прогонов (вид,
@@ -3670,6 +3691,7 @@ reaper. Явное удаление терминала (`DELETE`) удаляет
 | PATCH | `/api/v2/terminals/:id` | auth (**write**) | Точечная правка `{title?, session_id?}` → `{terminal}` (DTO несёт `title`); `null` — сброс поля; сессия должна принадлежать проекту терминала. Переименовать можно и **завершённый** терминал (запись есть, её видно с `include_exited`); снимок терминала обновляется, событие `terminal.updated` уходит в канал сессии |
 | DELETE | `/api/v2/terminals/:id` | auth (**write**) | Удалить терминал → **204** (PTY гасится, публикуются `terminal.exited` + `terminal.deleted`, **снимок терминала удаляется**); повторный `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
 | GET | `/api/v2/terminals/:id/output?since=N` | auth | Снимок вывода из кольцевого буфера: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` — курсор (только фрагменты с `seq > since`). `truncated` — часть вывода вытеснена из буфера, клиенту нужно перечитать вывод |
+| GET | `/api/v2/terminals/:id/foreground` | auth | Что сейчас на переднем плане терминала: `{foreground}` — `foreground` — объект `{shell_pid?, foreground_pgid?, command?, is_shell}` (факт из ядра ОС, `PtyHandle.inspect`, протокол исполнителя 9) **или** `null` («неизвестно»: терминал завершён, PTY не поднят, точка исполнения не умеет пробу) — это валидный ответ 200. Терминала нет → 404 `TERMINAL_NOT_FOUND`, нет прав на проект → 403 `FORBIDDEN` |
 | GET | `/api/v2/terminals/:id/stream?since=N` | auth | Поток вывода `application/x-ndjson`: кадры `{"seq":n,"data":"..."}` — сначала replay из буфера (`seq > since`), затем живой вывод; кадр выхода — `{"seq":n,"data":"","exit_code":…,"signal":…}`; heartbeat — пустой кадр `{"seq":n,"data":""}` раз в 15 с. При отключении клиента (abort/закрытие соединения) поток закрывается, а подписка **снимается** (`attached_clients` уменьшается при любом исходе: abort, ошибка записи, выход терминала) |
 | POST | `/api/v2/terminals/:id/input` | auth (**write**) | Ввод в терминал `{data}` → **204**; кадр больше 16 КиБ → 413 `TERMINAL_LIMIT`, слишком часто (>20 кадров/с) → 429 `TERMINAL_LIMIT`; терминал **завершён** → 409 `TERMINAL_EXITED` (перезапустите его) |
 | POST | `/api/v2/terminals/:id/resize` | auth (**write**) | Новый размер `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (целые), иначе 400 `VALIDATION_ERROR`; терминал **завершён** → 409 `TERMINAL_EXITED` |
@@ -3704,6 +3726,19 @@ reaper. Явное удаление терминала (`DELETE`) удаляет
 (инвариант 21). Правила ролей managed: владелец проекта; `ADMIN`/`LEAD` —
 сквозной доступ; участник — `read` любая роль, `write` — `OWNER`/`EDITOR`.
 В standalone (core) действует правило единственного владельца инстанса.
+
+**Проба переднего плана (`GET /:id/foreground`).** Факт «в фокусе оболочка или
+другая программа» берётся из ядра ОС через `PtyHandle.inspect`
+(`engine/terminal/service.ts` → `TerminalService.getForeground`): в фокусе может
+быть сама оболочка, удалённая оболочка (`ssh`, `docker exec`), полноэкранное
+приложение (`vim`, `htop`) или обычная команда (`sleep`, `make`). По этому
+факту сервис решает, можно ли запускать обёрнутые команды (`terminal_run`) и
+применять ли политику путей.
+
+Ответ — **факт или «неизвестно»**, а не ошибка: `null` означает, что ответа
+нет (терминал завершён, PTY не поднят — снимок после рестарта, у точки
+исполнения нет пробы — старый исполнитель/не Linux, проба упала). Ошибки пробы
+не пробрасываются: терминал из-за диагностики не ломается.
 
 **Коды ошибок.** Машинные коды сервиса терминалов: `TERMINALS_DISABLED` (403 —
 инстансный выключатель `terminal.enabled`; весь контур `/api/v2/terminals*`

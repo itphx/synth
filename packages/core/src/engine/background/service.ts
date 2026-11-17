@@ -52,6 +52,18 @@ export function processLogPath(runId: string): string {
 }
 
 /**
+ * Путь лога **потока** фонового процесса по id записи реестра.
+ *
+ * Разделение потоков (ADR-113): кроме общего лога `processes/<id>.log`
+ * пишутся файлы потоков `processes/<id>.stdout.log` и
+ * `processes/<id>.stderr.log`. Общий лог не меняется — он остаётся
+ * источником «как было» (порядок прихода чанков).
+ */
+export function processStreamLogPath(runId: string, stream: 'stdout' | 'stderr'): string {
+  return `${PROCESS_LOG_DIR}/${runId}.${stream}.log`;
+}
+
+/**
  * Предел глубины обхода дочерних сессий в `stopBySession`.
  *
  * «Стоп» родителя останавливает и живые прогоны детей (решение 2026-10-28,

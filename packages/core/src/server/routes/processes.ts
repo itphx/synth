@@ -35,6 +35,7 @@ import type {
 import type { BackgroundRunRepository } from '../../storage/ports/background-run-repository.js';
 import type { BackgroundRunService } from '../../engine/background/service.js';
 import type { ProcessService } from '../../engine/processes/service.js';
+import type { ProcessLogStream } from '../../engine/processes/types.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { accessKindOf, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind, SessionAccessPredicate } from '../session-access-guard.js';
@@ -135,6 +136,9 @@ const RUN_STATUSES: readonly BackgroundRunStatus[] = [
 
 /** Виды фоновой работы (валидация фильтра `kind`). */
 const RUN_KINDS: readonly BackgroundRunKind[] = ['subagent', 'process'];
+
+/** Потоки лога фонового процесса (валидация параметра `stream`). */
+const LOG_STREAMS: readonly ProcessLogStream[] = ['combined', 'stdout', 'stderr'];
 
 /** Потолок выборки списка прогонов. */
 const MAX_LIST_LIMIT = 200;
@@ -289,9 +293,18 @@ export function createProcessRoutes(
     if (record.kind !== 'process') {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidKind(c) } }, 400);
     }
+    // `stream` — поток вывода: `combined` (по умолчанию) — общий лог,
+    // `stdout`/`stderr` — файл потока (у прогонов до разделения потоков
+    // такого файла нет → 404, как и для отсутствующего общего лога).
+    const rawStream = c.req.query('stream')?.trim();
+    let stream: ProcessLogStream = 'combined';
+    if (rawStream) {
+      if (!LOG_STREAMS.includes(rawStream as ProcessLogStream)) return invalidQuery(c);
+      stream = rawStream as ProcessLogStream;
+    }
     const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
     const limit = parseBoundedInt(c.req.query('limit'), maxLogBytes, maxLogBytes);
-    const logs = await deps.processes.logs(record.id, { offset, limit });
+    const logs = await deps.processes.logs(record.id, { offset, limit, stream });
     if (!logs) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.logNotFound(c) } }, 404);
     }

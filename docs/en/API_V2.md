@@ -3072,7 +3072,7 @@ error, the turn does not fail; in detach — the `BACKGROUND_LIMIT` code in `fai
 |---|---|---|---|---|
 | GET | `/api/v2/processes` | both | auth | The run list `{runs}`; filters `sessionId`/`projectId`/`kind` (`subagent`/`process`)/`status` (`running`/`completed`/`failed`/`cancelled`/`orphaned`)/`limit` (default 50, maximum 200); an invalid `kind`/`status` → 400 `VALIDATION_ERROR`. Only the runs of the sessions available to the user are returned (the owner/a project member; `ADMIN`/`LEAD` — all) |
 | GET | `/api/v2/processes/:id` | both | auth | The run `{run}` (the whole registry record); no run → 404 `NOT_FOUND`, no owner session → 404, no rights → 403 `FORBIDDEN` |
-| GET | `/api/v2/processes/:id/logs` | both | auth | A segment of the background process log `{content, offset, nextOffset, totalBytes, truncated}`; only `kind:'process'` (for `subagent` → 400 `VALIDATION_ERROR`), no log file → 404 `NOT_FOUND`. `offset` — the offset in bytes from the beginning of the log, `limit` — the size of the output (default and maximum — 256 KiB) |
+| GET | `/api/v2/processes/:id/logs` | both | auth | A segment of the background process log `{content, offset, nextOffset, totalBytes, truncated}`; only `kind:'process'` (for `subagent` → 400 `VALIDATION_ERROR`), no log file → 404 `NOT_FOUND`. `offset` — the offset in bytes from the beginning of the log, `limit` — the size of the output (default and maximum — 256 KiB). `stream` — the output stream: `combined` (default) — the combined run log (`processes/<id>.log`, stdout and stderr in arrival order), `stdout`/`stderr` — the per-stream file (`processes/<id>.stdout.log` / `.stderr.log`); any other value → 400 `VALIDATION_ERROR`, no per-stream file (a run older than the stream split) → 404 `NOT_FOUND` |
 | POST | `/api/v2/processes/:id/stop` | both | auth (**write**) | Stop the run → 200 `{status:'stopping'}` (the stop is asynchronous: the stop request arrives with the `process.stopped` event, the final status — with the `process.exited` event); the run is not `running` anymore or it runs in another process (it cannot be stopped from here) → 409 `CONFLICT` |
 | DELETE | `/api/v2/processes/:id` | both | auth (**write**) | Delete the registry record → **204**; the run is still `running` → 409 `CONFLICT` |
 
@@ -3104,9 +3104,31 @@ parent's turn (an auto-turn) — see
 **Storage.** The registry — `{dataDir}/processes/registry.json` (ADR-005, an atomic write);
 PostgreSQL — the `background_runs` table (the `021_background_runs` migration of the
 `@itphx/synth-storage-postgres` driver, ADR-097). The logs of the background processes — a
-blob store (`BlobStore`), the path `processes/<id>.log`; the log write limit —
-`background.logMaxBytes` (the ceiling of the output per HTTP request — 256 KiB, these are
-different values).
+blob store (`BlobStore`); the log write limit — `background.logMaxBytes` (the ceiling of
+the output per HTTP request — 256 KiB, these are different values).
+
+**Three log files per run.** Every background process has **three** files in the blob
+store:
+
+| File | Content |
+|---|---|
+| `processes/<id>.log` | the **combined** log: stdout and stderr in the arrival order of the chunks (the “as before” source) |
+| `processes/<id>.stdout.log` | stdout only |
+| `processes/<id>.stderr.log` | stderr only |
+
+The split by streams is additive: the combined log and its path do not change. The size
+limit (`background.logMaxBytes`) is **its own for each file**: on exceeding it the writing
+of exactly that file stops (the others keep being written); the truncation mark of the
+combined log — `metadata.truncated` in the registry record, of the streams —
+`metadata.stdout_truncated`/`metadata.stderr_truncated`. A log write error does not
+kill the process — it is a warning to the log. The retention (`background.retentionDays`)
+deletes **all three** files together with the registry record; the “orphan” cleanup of
+the `processes/` directory does not touch the stream files of the live (not expired)
+records.
+
+The per-stream files appear for the runs started **after** the stream split: older runs
+have none, so `GET /:id/logs?stream=stdout|stderr` responds `404 NOT_FOUND` for them
+(while `?stream=combined` returns the combined log, as before).
 
 **UI.** The “Processes” tab of the right panel
 (`packages/ui/src/components/panels/ProcessesTab.tsx`): the run list (kind, status,
@@ -3248,6 +3270,7 @@ the project access rule (`resolveProjectAccess`, PROP-133).
 | PATCH | `/api/v2/terminals/:id` | auth (**write**) | Point patch `{title?, session_id?}` → `{terminal}` (the DTO carries `title`); `null` clears the field; the session must belong to the terminal's project. An **exited** terminal can be renamed too (the record exists, it is visible with `include_exited`); the terminal snapshot is updated and the `terminal.updated` event goes to the session channel |
 | DELETE | `/api/v2/terminals/:id` | auth (**write**) | Delete the terminal → **204** (the PTY is killed, `terminal.exited` + `terminal.deleted` are published, the **terminal snapshot is deleted**); a repeated `GET`/`DELETE` → 404 `TERMINAL_NOT_FOUND` |
 | GET | `/api/v2/terminals/:id/output?since=N` | auth | Output snapshot from the ring buffer: `{data, seq, next_seq, truncated, total_bytes, dropped_bytes, chunks}`; `since` is the cursor (only chunks with `seq > since`). `truncated` — part of the output was evicted from the buffer, the client must re-read the output. For a restored terminal it returns the saved output tail |
+| GET | `/api/v2/terminals/:id/foreground` | auth | What is currently in the foreground of the terminal: `{foreground}` — `foreground` is an object `{shell_pid?, foreground_pgid?, command?, is_shell}` (a fact from the OS kernel, `PtyHandle.inspect`, the executor protocol 9) **or** `null` (“unknown”: the terminal has exited, the PTY was not raised, the execution point cannot probe) — a valid 200 response. Unknown terminal → 404 `TERMINAL_NOT_FOUND`, no rights on the project → 403 `FORBIDDEN` |
 | GET | `/api/v2/terminals/:id/stream?since=N` | auth | Output stream `application/x-ndjson`: frames `{"seq":n,"data":"..."}` — first the replay from the buffer (`seq > since`), then the live output; the exit frame is `{"seq":n,"data":"","exit_code":…,"signal":…}`; a heartbeat empty frame `{"seq":n,"data":""}` every 15 s. When the client disconnects (abort/connection close), the stream is closed and the subscription is **removed** (`attached_clients` drops on every outcome: abort, write error, terminal exit) |
 | POST | `/api/v2/terminals/:id/input` | auth (**write**) | Write to the terminal `{data}` → **204**; a frame larger than 16 KiB → 413 `TERMINAL_LIMIT`, too frequent (>20 frames/s) → 429 `TERMINAL_LIMIT`; the terminal has **exited** → 409 `TERMINAL_EXITED` (restart it) |
 | POST | `/api/v2/terminals/:id/resize` | auth (**write**) | New size `{cols, rows}` → **204**; `cols` 1…1000, `rows` 1…500 (integers), otherwise 400 `VALIDATION_ERROR`; the terminal has **exited** → 409 `TERMINAL_EXITED` |
@@ -3283,6 +3306,20 @@ terminal but **cannot** write to it (invariant 21). Managed role rules: the
 project owner; `ADMIN`/`LEAD` — cross-cutting access; a member — `read` with any
 role, `write` with `OWNER`/`EDITOR`. In standalone (core) the rule of the single
 instance owner applies.
+
+**The foreground probe (`GET /:id/foreground`).** The fact “is the shell in focus
+or another program” comes from the OS kernel via `PtyHandle.inspect`
+(`engine/terminal/service.ts` → `TerminalService.getForeground`): the focus can be
+the shell itself, a remote shell (`ssh`, `docker exec`), a full-screen application
+(`vim`, `htop`) or an ordinary command (`sleep`, `make`). The service uses this fact
+to decide whether wrapped commands (`terminal_run`) may be started and whether the
+path policy applies.
+
+The answer is a **fact or “unknown”**, not an error: `null` means there is no
+answer (the terminal has exited, the PTY was not raised — a snapshot after a
+restart, the execution point has no probe — an old executor/not Linux, the probe
+failed). The probe errors are not propagated: the terminal does not break because
+of a diagnostic.
 
 **Error codes.** Machine codes of the terminal service: `TERMINALS_DISABLED`
 (403 — the instance switch `terminal.enabled`; the whole `/api/v2/terminals*`

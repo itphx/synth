@@ -262,7 +262,11 @@ const processLogsSchema = z
     stream: z
       .enum(['stdout', 'stderr', 'combined'])
       .optional()
-      .describe('Requested stream of the log (the log is stored combined, so the whole log is returned)'),
+      .describe(
+        'Stream of the log to read: combined (default) — stdout and stderr interleaved in arrival order; '
+        + 'stdout/stderr — the separate per-stream log (available for runs started after the streams '
+        + 'were separated; older runs have no per-stream file)',
+      ),
     offset: z
       .number()
       .int()
@@ -284,7 +288,9 @@ export const processLogsTool: ToolDefinition = {
   description:
     'Read the log of a background shell process by the id of its background run record (from process_list). '
     + 'A background subagent has no log: its history is in the child session (read_session_reference). '
-    + 'The log is stored combined (stdout and stderr are not separated).',
+    + 'By default the log is combined (stdout and stderr interleaved in arrival order). For runs started '
+    + 'after the streams were separated you can also read stdout or stderr separately; older runs have no '
+    + 'per-stream log file.',
   parameters: processLogsSchema,
   capabilities: [ToolCapability.PROCESS],
   async execute(args, ctx) {
@@ -339,8 +345,27 @@ export const processLogsTool: ToolDefinition = {
       ? Math.max(0, Math.floor(params.offset))
       : 0;
     const limit = resolveLogLimit(params.limit);
-    const logs = await service.logs(record.id, { offset, limit });
+    const stream = params.stream ?? 'combined';
+    const logs = await service.logs(record.id, { offset, limit, stream });
     if (!logs) {
+      // Файла потока нет (прогон старше разделения потоков) — понятный ответ,
+      // а не падение: модель видит, чего именно не хватает.
+      if (stream !== 'combined') {
+        return {
+          content: [
+            sm('process.tool.no_log'),
+            `requested_stream=${stream} | log_stream=missing`,
+            formatRunLine(record),
+          ].join('\n'),
+          metadata: {
+            run_id: record.id,
+            kind: record.kind,
+            status: record.status,
+            stream,
+            i18n: i18nMeta('process.tool.no_log'),
+          },
+        };
+      }
       return {
         content: sm('process.tool.no_log'),
         metadata: {
@@ -354,7 +379,7 @@ export const processLogsTool: ToolDefinition = {
 
     const lines = [
       formatRunLine(record),
-      `requested_stream=${params.stream ?? 'combined'} | log_stream=combined`,
+      `requested_stream=${stream} | log_stream=${stream}`,
       `next_offset=${logs.nextOffset} | total_bytes=${logs.totalBytes} | truncated=${logs.truncated === true}`,
       '--- log ---',
       logs.content,

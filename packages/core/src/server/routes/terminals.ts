@@ -603,6 +603,30 @@ export function createTerminalRoutes(
     });
   });
 
+  // GET /:id/foreground — что сейчас на переднем плане терминала.
+  //
+  // Факт из ядра ОС (`PtyHandle.inspect`, протокол исполнителя 9): в фокусе
+  // оболочка, удалённая оболочка (`ssh`), полноэкранное приложение (`vim`) или
+  // обычная команда (`sleep`). `null` — «неизвестно»: терминал завершён, PTY
+  // не поднят (снимок после рестарта) или точка исполнения не умеет пробу.
+  // Это валидный ответ 200, а не ошибка.
+  app.get('/:id/foreground', auth.requireAuth, enabledGuard, terminalGuard('read'), async (c) => {
+    const record = guardedTerminal(c);
+    const foreground = await deps.terminal.getForeground(record.id);
+    return c.json({
+      foreground: foreground
+        ? {
+            ...(foreground.shellPid !== undefined ? { shell_pid: foreground.shellPid } : {}),
+            ...(foreground.foregroundPgid !== undefined
+              ? { foreground_pgid: foreground.foregroundPgid }
+              : {}),
+            ...(foreground.command !== undefined ? { command: foreground.command } : {}),
+            is_shell: foreground.isShell,
+          }
+        : null,
+    });
+  });
+
   // GET /:id/stream — поток вывода NDJSON (replay из буфера → live).
   app.get('/:id/stream', auth.requireAuth, enabledGuard, terminalGuard('read'), async (c) => {
     const record = guardedTerminal(c);

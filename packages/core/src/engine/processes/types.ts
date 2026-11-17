@@ -183,12 +183,24 @@ export interface ProcessAdoptInput {
   title?: string;
 }
 
+/** Поток вывода фонового процесса. */
+export type ProcessLogStream = 'stdout' | 'stderr' | 'combined';
+
 /** Параметры чтения лога процесса. */
 export interface ProcessLogsOptions {
   /** Смещение от начала лога, байт. */
   offset?: number;
   /** Предел размера выдачи, байт. Не задан — до конца лога. */
   limit?: number;
+  /**
+   * Поток вывода.
+   *
+   * `combined` (по умолчанию) — общий лог прогона (`processes/<id>.log`,
+   * stdout и stderr в порядке прихода). `stdout`/`stderr` — файл потока
+   * (`processes/<id>.stdout.log` / `.stderr.log`); он появляется у прогонов,
+   * запущенных после разделения потоков, у более старых — файла нет.
+   */
+  stream?: ProcessLogStream;
 }
 
 /** Отрезок лога процесса. */

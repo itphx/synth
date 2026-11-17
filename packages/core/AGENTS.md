@@ -2602,7 +2602,16 @@
   `process.stopped` в канал владельца — один раз на прогон, терминальный статус
   приходит позже — `process.exited`), `types.ts`
   (`BackgroundUnsupportedError` и пр.), `prune.ts` (очистка логов). Логи — blob-хранилище
-  (`BlobStore`), путь `processes/<id>.log`. **Фоновый запуск — в обеих реализациях**
+  (`BlobStore`), **три файла на прогон**: общий `processes/<id>.log` (stdout и stderr
+  в порядке прихода) и по одному на поток — `processes/<id>.stdout.log` /
+  `.stderr.log` (`processStreamLogPath`, `engine/background/service.ts`); предел размера
+  — **свой у каждого файла** (переполнение одного не мешает писать остальные),
+  признак усечения общего лога — `metadata.truncated`, потоков —
+  `metadata.stdout_truncated`/`metadata.stderr_truncated`; retention удаляет все три
+  файла вместе с записью, «сиротская» очистка не трогает файлы потоков живых записей.
+  `ProcessService.logs(id, {stream})` — `combined` (по умолчанию) / `stdout` / `stderr`;
+  файла потока нет у прогонов старше разделения — `null`. **Фоновый запуск — в обеих
+  реализациях**
   (inline и remote, ADR-077 шаг 7c): в `remote` процесс живёт на исполнителе, control
   plane наблюдает его опросом (журнал — 300 мс, состояние — 500 мс; стриминга на проводе
   нет), поэтому лог в control plane появляется с задержкой опроса и **дублируется** с
@@ -2683,7 +2692,9 @@
   `PtyHandle.inspect?()` отдаёт `PtyForeground` (`shellPid`/`foregroundPgid`/
   `command`/`isShell`); `TerminalService.getForeground(id)` — единственная точка
   чтения (ошибки пробы и завершённый терминал → `null` = «неизвестно», не
-  исключение). Классификация — `engine/terminal/foreground-class.ts`
+  исключение); HTTP-контур — `GET /api/v2/terminals/:id/foreground`
+  (`{foreground: {...} | null}`; `null` — «неизвестно», валидный 200; доступ — как
+  у `GET /:id`). Классификация — `engine/terminal/foreground-class.ts`
   (`REMOTE_SHELL_COMMANDS` — ssh/mosh/docker/podman/nerdctl/kubectl/minikube/oc/
   sftp/telnet/sshpass; `FULL_SCREEN_COMMANDS` — vi/vim/nvim/nano/emacs/less/
   more/most/man/top/htop/btop/nvtop/mc/tmux/screen/watch/fzf;
@@ -3238,7 +3249,9 @@
   `createProcessRoutes` (PROP-096/097) — HTTP-контур единого реестра фоновых
   прогонов (`GET /` — список с фильтрами `sessionId`/`projectId`/`kind`/`status`/
   `limit`, `GET /:id` — деталь, `GET /:id/logs` — отрезок лога фонового
-  процесса, `POST /:id/stop` — остановка, `DELETE /:id` — удаление терминальной
+  процесса (query `stream` — `combined` (по умолчанию) / `stdout` / `stderr`;
+  иное значение → 400 `VALIDATION_ERROR`, файла потока нет → 404 `NOT_FOUND`),
+  `POST /:id/stop` — остановка, `DELETE /:id` — удаление терминальной
   записи). Доступ — **на границе** (инвариант 16): guard `processGuard` резолвит
   запись реестра и её сессию-владельца **один раз**, кладёт запись в контекст
   (`guardedProcess`), обработчики проверок доступа не содержат; вид доступа —
@@ -3252,7 +3265,10 @@
   живые, иначе восстановленные из снимков не видны),
   `POST /` — открыть терминал, `GET /:id` — снимок, `PATCH /:id` — заголовок и
   привязка к сессии, `DELETE /:id` — закрыть, `GET /:id/output?since=` — снимок
-  вывода, `GET /:id/stream?since=` — поток `application/x-ndjson`,
+  вывода, `GET /:id/foreground` — **проба переднего плана**
+  (`{foreground: {shell_pid?, foreground_pgid?, command?, is_shell} | null}`; `null` —
+  «неизвестно», валидный 200),
+  `GET /:id/stream?since=` — поток `application/x-ndjson`,
   `POST /:id/input`, `POST /:id/resize`, `POST /:id/restart` — перезапуск
   завершённого терминала: живой → 409 `TERMINAL_ALREADY_RUNNING`; мёртвый →
   новый PTY с теми же `cwd`/`shell`/`cols`/`rows`, id сохраняется, буфер

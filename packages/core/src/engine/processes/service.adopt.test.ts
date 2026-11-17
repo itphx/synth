@@ -176,6 +176,15 @@ describe('ProcessService.adopt — перевод идущего процесс�
       expect(logs?.content).toBe('early-out\nearly-err\nlater-out\nlater-err\n');
     });
 
+    // Потоки не склеены: буферизованный префикс и последующие куски идут
+    // в **свои** файлы (общий лог — stdout, затем stderr, как было).
+    await vi.waitFor(async () => {
+      const stdout = await h.service.logs(adopted.runId, { stream: 'stdout' });
+      expect(stdout?.content).toBe('early-out\nlater-out\n');
+      const stderr = await h.service.logs(adopted.runId, { stream: 'stderr' });
+      expect(stderr?.content).toBe('early-err\nlater-err\n');
+    });
+
     fake.finish({ exitCode: 0, signal: null, durationMs: 5 });
   });
 

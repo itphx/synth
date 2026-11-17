@@ -24,6 +24,7 @@ import {
   type ExecRequest,
   type ExecResult,
   type ExecutionPort,
+  type PtyForeground,
   type PtyHandle,
   type PtyOpenRequest,
 } from '../../execution/ports/index.js';
@@ -51,6 +52,11 @@ class FakePtyHandle implements PtyHandle {
   readonly writes: string[] = [];
   /** Все изменения размера. */
   readonly resizes: Array<{ cols: number; rows: number }> = [];
+  /**
+   * Факт переднего плана (протокол исполнителя 9): `null` — «неизвестно»
+   * (старый исполнитель/проба не дала ответа).
+   */
+  foreground: PtyForeground | null = null;
 
   private _dataCbs = new Set<(chunk: string) => void>();
   private _exitCbs = new Set<(e: PtyExitInfo) => void>();
@@ -79,6 +85,11 @@ class FakePtyHandle implements PtyHandle {
     return () => {
       this._exitCbs.delete(cb);
     };
+  }
+
+  /** Проба переднего плана (как у настоящего PTY-хэндла). */
+  async inspect(): Promise<PtyForeground | null> {
+    return this.foreground;
   }
 
   close(): Promise<void> {
@@ -551,6 +562,69 @@ describe('HTTP-контур терминалов (PROP-132, Ф3б)', () => {
     const res = await req(harness.app, '/api/v2/terminals/term_missing', { user: 'owner' });
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('TERMINAL_NOT_FOUND');
+  });
+
+  it('отдаёт факт переднего плана терминала (foreground)', async () => {
+    const id = await harness.openTerminal();
+    harness.port.lastHandle.foreground = {
+      shellPid: 4242,
+      foregroundPgid: 4300,
+      command: 'vim',
+      isShell: false,
+    };
+
+    const res = await req(harness.app, `/api/v2/terminals/${id}/foreground`, { user: 'owner' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      foreground: {
+        shell_pid?: number;
+        foreground_pgid?: number;
+        command?: string;
+        is_shell: boolean;
+      } | null;
+    };
+    expect(body.foreground).toEqual({
+      shell_pid: 4242,
+      foreground_pgid: 4300,
+      command: 'vim',
+      is_shell: false,
+    });
+  });
+
+  it('foreground без ответа пробы — {foreground: null} (неизвестно, а не ошибка)', async () => {
+    const id = await harness.openTerminal();
+    // Проба не дала ответа (старый исполнитель/не Linux) — «неизвестно».
+    harness.port.lastHandle.foreground = null;
+
+    const res = await req(harness.app, `/api/v2/terminals/${id}/foreground`, { user: 'owner' });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { foreground: unknown };
+    expect(body.foreground).toBeNull();
+  });
+
+  it('foreground завершённого терминала — {foreground: null}', async () => {
+    const id = await harness.openTerminal();
+    harness.port.lastHandle.emitExit({ exitCode: 0 });
+
+    const res = await req(harness.app, `/api/v2/terminals/${id}/foreground`, { user: 'owner' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { foreground: unknown }).foreground).toBeNull();
+  });
+
+  it('foreground чужого терминала — 403, несуществующего — 404 TERMINAL_NOT_FOUND', async () => {
+    const id = await harness.openTerminal();
+
+    const stranger = await req(harness.app, `/api/v2/terminals/${id}/foreground`, {
+      user: 'stranger',
+    });
+    expect(stranger.status).toBe(403);
+    expect(((await stranger.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+    const missing = await req(harness.app, '/api/v2/terminals/term_missing/foreground', {
+      user: 'owner',
+    });
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { error: { code: string } }).error.code).toBe('TERMINAL_NOT_FOUND');
   });
 
   it('догоняет вывод по курсору (output?since=)', async () => {

@@ -417,6 +417,7 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   // Несуществующий терминал → 404 (граница разрешает ресурс до проверки роли).
   r('GET', '/api/v2/terminals/:id', G_TERMINAL, [404]),
   r('GET', '/api/v2/terminals/:id/output', G_TERMINAL, [404]),
+  r('GET', '/api/v2/terminals/:id/foreground', G_TERMINAL, [404]),
   r('GET', '/api/v2/terminals/:id/stream', G_TERMINAL, [404]),
   r('PATCH', '/api/v2/terminals/:id', G_TERMINAL, [404], { body: { title: 'x' } }),
   r('DELETE', '/api/v2/terminals/:id', G_TERMINAL, [404]),

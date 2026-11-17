@@ -2347,7 +2347,7 @@ questions:
 | `background.maxSubagentsPerSession` | Максимум одновременно идущих фоновых саб-агентов на сессию-владельца; превышение → `background_limit_exceeded` (ошибка тула, ход не падает). Env — `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | `2` |
 | `background.maxProcessesPerSession` | Максимум одновременно идущих фоновых шелл-процессов на сессию-владельца; превышение → `background_limit_exceeded`. Env — `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | `5` |
 | `background.maxRunsPerSession` | Максимум **одновременно идущих** фоновых прогонов любого вида (саб-агенты + процессы) на сессию-владельца; терминальные записи лимитом не считаются — это история реестра, её чистит retention. Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
-| `background.logMaxBytes` | Предел размера лога фонового процесса, байт; `0` — без ограничения. Не путать с потолком выдачи лога за один HTTP-запрос (256 КиБ) — это разные величины. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 МиБ) |
+| `background.logMaxBytes` | Предел размера лога фонового процесса, байт; `0` — без ограничения. Предел **свой у каждого файла** (общий лог и логи потоков). Не путать с потолком выдачи лога за один HTTP-запрос (256 КиБ) — это разные величины. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 МиБ) |
 | `background.retentionDays` | Срок хранения терминальных записей реестра (`completed`/`failed`/`cancelled`/`orphaned`), дни; `<= 0` — без ограничения. Env — `SYNTH_BACKGROUND_RETENTION_DAYS` | `7` |
 
 ```yaml
@@ -2364,7 +2364,9 @@ background:
   файловый backend — `{dataDir}/processes/registry.json` (ADR-005, атомарная
   запись), PostgreSQL — таблица `background_runs` (миграция
   `021_background_runs` драйвера). Логи фоновых процессов — blob-хранилище
-  (`BlobStore`), путь `processes/<id>.log`.
+  (`BlobStore`), путь `processes/<id>.log` (общий лог) и файлы потоков
+  `processes/<id>.stdout.log` / `processes/<id>.stderr.log`; предел
+  `logMaxBytes` — **свой у каждого файла**).
 - **Рестарт не возобновляет фоновые прогоны.** «Живые» хэндлы отмены живут в
   памяти процесса, поэтому при старте все записи `running` переводятся в
   `orphaned` с пометкой «interrupted by restart»: запись остаётся в реестре

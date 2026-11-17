@@ -291,6 +291,58 @@ describe('HTTP: реестр фоновых прогонов (PROP-096/097)', ()
       const missingFile = await app.request('/api/v2/processes/bgr_2/logs');
       expect(missingFile.status).toBe(404);
     });
+
+    it('GET /:id/logs?stream=stdout|stderr — только свой поток', async () => {
+      const { app, backgroundRuns, sessionManager, blobs } = createHarness();
+      await createSession(sessionManager, 'session-1');
+      await blobs.append('processes/bgr_1.log', 'out-1\nerr-1\n');
+      await blobs.append('processes/bgr_1.stdout.log', 'out-1\n');
+      await blobs.append('processes/bgr_1.stderr.log', 'err-1\n');
+      await backgroundRuns.save(run('bgr_1', { logPath: 'processes/bgr_1.log' }));
+
+      const stdout = await app.request('/api/v2/processes/bgr_1/logs?stream=stdout');
+      expect(stdout.status).toBe(200);
+      const stdoutBody = (await stdout.json()) as {
+        content: string;
+        totalBytes: number;
+        nextOffset: number;
+      };
+      expect(stdoutBody.content).toBe('out-1\n');
+      expect(stdoutBody.totalBytes).toBe(6);
+      expect(stdoutBody.nextOffset).toBe(6);
+
+      const stderr = await app.request('/api/v2/processes/bgr_1/logs?stream=stderr');
+      expect(stderr.status).toBe(200);
+      expect(((await stderr.json()) as { content: string }).content).toBe('err-1\n');
+
+      // Без параметра — общий лог (порядок прихода не меняется).
+      const combined = await app.request('/api/v2/processes/bgr_1/logs');
+      expect(combined.status).toBe(200);
+      expect(((await combined.json()) as { content: string }).content).toBe('out-1\nerr-1\n');
+    });
+
+    it('GET /:id/logs?stream= — неверное значение → 400 VALIDATION_ERROR', async () => {
+      const { app, backgroundRuns, sessionManager } = createHarness();
+      await createSession(sessionManager, 'session-1');
+      await backgroundRuns.save(run('bgr_1', { logPath: 'processes/bgr_1.log' }));
+
+      const res = await app.request('/api/v2/processes/bgr_1/logs?stream=bogus');
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('GET /:id/logs?stream=stdout — файла потока нет → 404 (старый прогон)', async () => {
+      const { app, backgroundRuns, sessionManager, blobs } = createHarness();
+      await createSession(sessionManager, 'session-1');
+      // Прогон, запущенный до разделения потоков: общий лог есть, файлов
+      // потоков нет.
+      await blobs.append('processes/bgr_1.log', 'old-output');
+      await backgroundRuns.save(run('bgr_1', { logPath: 'processes/bgr_1.log' }));
+
+      const res = await app.request('/api/v2/processes/bgr_1/logs?stream=stdout');
+      expect(res.status).toBe(404);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+    });
   });
 
   describe('остановка прогона', () => {

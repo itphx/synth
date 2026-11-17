@@ -20,6 +20,7 @@ import { MemoryBackgroundRunRepository } from '../../storage/memory/background-r
 import { BackgroundRunService } from '../background/service.js';
 import {
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
+  type ExecBackgroundChunk,
   type ExecBackgroundExit,
   type ExecutionPort,
 } from '../../execution/ports/index.js';
@@ -351,5 +352,172 @@ describe('ProcessService — origin запуска (ADR-126 §5)', () => {
 
     const record = await h.service.get(started.runId);
     expect(record?.metadata).toBeUndefined();
+  });
+});
+
+/**
+ * Разделение лога фонового процесса по потокам (ADR-113).
+ *
+ * Проверяется:
+ *   • stdout и stderr попадают в **свои** файлы и в общий лог (порядок
+ *     прихода чанков сохраняется);
+ *   • предел размера (`background.logMaxBytes`) — свой у каждого файла:
+ *     переполнение одного файла не мешает писать остальные;
+ *   • `logs({stream})` отдаёт только свой поток;
+ *   • у прогона без файлов потоков (старый прогон) — `null`.
+ */
+describe('ProcessService — разделение лога по потокам', () => {
+  /** Песочница с управляемым выводом процесса и доступом к blob-хранилищу. */
+  function createStreamHarness(options: { maxLogBytes?: number } = {}) {
+    const repository = new MemoryBackgroundRunRepository();
+    const eventBus = new EventBus();
+    let counter = 0;
+    const background = new BackgroundRunService({
+      repository,
+      eventBus,
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+      generateId: () => `id-${++counter}`,
+    });
+
+    const queue: ExecBackgroundChunk[] = [];
+    let notify: (() => void) | null = null;
+    let closed = false;
+    let resolveExit!: (exit: ExecBackgroundExit) => void;
+    const exited = new Promise<ExecBackgroundExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const wake = (): void => {
+      const resolve = notify;
+      notify = null;
+      resolve?.();
+    };
+    const output: AsyncIterable<ExecBackgroundChunk> = {
+      async *[Symbol.asyncIterator]() {
+        for (;;) {
+          while (queue.length > 0) yield queue.shift() as ExecBackgroundChunk;
+          if (closed) return;
+          await new Promise<void>((resolve) => {
+            notify = resolve;
+          });
+        }
+      },
+    };
+
+    const executionPort = {
+      execute: async () => ({ stdout: '', stderr: '' }),
+      spawnBackground: async () => ({
+        processId: 'proc_1',
+        pid: 4242,
+        output,
+        exited,
+        stop: () => undefined,
+      }),
+    } as unknown as ExecutionPort;
+
+    const blobs = new MemoryBlobStore();
+    const service = new ProcessService({
+      executionPort,
+      background,
+      blobs,
+      eventBus,
+      limits: { maxLogBytes: options.maxLogBytes ?? 0 },
+    });
+
+    return {
+      service,
+      blobs,
+      emit: (stream: 'stdout' | 'stderr', data: string) => {
+        queue.push({ stream, data });
+        wake();
+      },
+      finish: (exit: ExecBackgroundExit) => {
+        closed = true;
+        wake();
+        resolveExit(exit);
+      },
+    };
+  }
+
+  it('stdout и stderr пишутся и в свои файлы, и в общий лог (порядок прихода)', async () => {
+    const h = createStreamHarness();
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'npm test',
+      cwd: '/tmp',
+    });
+
+    h.emit('stdout', 'out-1\n');
+    h.emit('stderr', 'err-1\n');
+    h.emit('stdout', 'out-2\n');
+    h.finish({ exitCode: 0, signal: null, durationMs: 1 });
+
+    await vi.waitFor(async () => {
+      const logs = await h.service.logs(started.runId);
+      expect(logs?.content).toBe('out-1\nerr-1\nout-2\n');
+    });
+
+    // Файлы потоков — только свой поток.
+    const stdout = await h.service.logs(started.runId, { stream: 'stdout' });
+    expect(stdout?.content).toBe('out-1\nout-2\n');
+    const stderr = await h.service.logs(started.runId, { stream: 'stderr' });
+    expect(stderr?.content).toBe('err-1\n');
+
+    // Общий лог на месте — путь прогона прежний.
+    const combined = await h.blobs.read(`processes/${started.runId}.log`);
+    expect(combined?.toString('utf-8')).toBe('out-1\nerr-1\nout-2\n');
+    expect(await h.blobs.exists(`processes/${started.runId}.stdout.log`)).toBe(true);
+    expect(await h.blobs.exists(`processes/${started.runId}.stderr.log`)).toBe(true);
+  });
+
+  it('предел размера — свой у каждого файла: переполнение stdout не мешает stderr', async () => {
+    // Предел — 10 байт на файл.
+    const h = createStreamHarness({ maxLogBytes: 10 });
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'npm test',
+      cwd: '/tmp',
+    });
+
+    h.emit('stdout', '0123456789ABCDEF');
+    h.emit('stderr', 'short-err');
+    h.finish({ exitCode: 0, signal: null, durationMs: 1 });
+
+    await vi.waitFor(async () => {
+      const stderr = await h.service.logs(started.runId, { stream: 'stderr' });
+      expect(stderr?.content).toBe('short-err');
+    });
+
+    // stdout обрезан по своему пределу.
+    const stdout = await h.service.logs(started.runId, { stream: 'stdout' });
+    expect(stdout?.totalBytes).toBe(10);
+    expect(stdout?.truncated).toBe(true);
+
+    // Общий лог — свой предел: он тоже обрезан.
+    const combined = await h.service.logs(started.runId);
+    expect(combined?.totalBytes).toBe(10);
+    expect(combined?.truncated).toBe(true);
+
+    // Признак усечения потока попадает в запись реестра.
+    const record = await h.service.get(started.runId);
+    expect(record?.metadata?.truncated).toBe(true);
+    expect(record?.metadata?.stdout_truncated).toBe(true);
+    expect(record?.metadata?.stderr_truncated).toBeUndefined();
+  });
+
+  it('старый прогон без файлов потоков — logs({stream}) отдаёт null', async () => {
+    const h = createStreamHarness();
+    // Запись реестра без файлов потоков — как у прогона, запущенного до
+    // разделения потоков: общий лог есть, файлов потоков нет.
+    const started = await h.service.spawn({
+      sessionId: 's1',
+      command: 'npm test',
+      cwd: '/tmp',
+    });
+    await h.blobs.write(`processes/${started.runId}.log`, 'old-output');
+
+    expect(await h.service.logs(started.runId, { stream: 'stdout' })).toBeNull();
+    expect(await h.service.logs(started.runId, { stream: 'stderr' })).toBeNull();
+    // Общий лог на месте.
+    expect((await h.service.logs(started.runId))?.content).toBe('old-output');
   });
 });

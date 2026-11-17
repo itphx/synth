@@ -35,6 +35,7 @@ import {
 } from '../../execution/ports/index.js';
 import type { EventBus } from '../../events/bus.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
+import { processStreamLogPath } from '../background/service.js';
 import type { BackgroundRunService } from '../background/service.js';
 import { toolRuntimeRequires } from '../tools/runtime-deps.js';
 import {
@@ -79,6 +80,66 @@ interface LiveProcess {
 }
 
 /**
+ * Одна запись лога: путь в blob-хранилище, **свой** предел размера и свой
+ * признак усечения.
+ *
+ * Предел (`background.logMaxBytes`) применяется к каждому файлу отдельно:
+ * переполнение одного файла не мешает писать остальные.
+ */
+class ProcessLogFile {
+  private readonly _blobs: BlobStore;
+  private readonly _path: string;
+  private readonly _maxBytes: number;
+  /** Сколько байт уже записано в файл. */
+  private _bytes = 0;
+  /** Файл усечён по пределу размера. */
+  private _truncated = false;
+
+  constructor(blobs: BlobStore, path: string, maxBytes: number) {
+    this._blobs = blobs;
+    this._path = path;
+    this._maxBytes = maxBytes;
+  }
+
+  /** Файл усечён по пределу размера. */
+  get truncated(): boolean {
+    return this._truncated;
+  }
+
+  /** Сколько байт записано в файл. */
+  get bytesWritten(): number {
+    return this._bytes;
+  }
+
+  /**
+   * Дописать текст в файл (с учётом предела).
+   *
+   * Возвращает фактически записанные байты (пусто — писать уже нечего:
+   * файл усечён). Ошибка записи **не роняет процесс** — вызывающий
+   * превращает её в предупреждение в лог.
+   */
+  async append(text: string): Promise<Buffer> {
+    if (!text || this._truncated) return Buffer.alloc(0);
+    const buf = Buffer.from(text, 'utf-8');
+    let payload = buf;
+    if (this._maxBytes > 0) {
+      const room = this._maxBytes - this._bytes;
+      if (room <= 0) {
+        this._truncated = true;
+        return Buffer.alloc(0);
+      }
+      if (payload.length > room) {
+        payload = payload.subarray(0, room);
+        this._truncated = true;
+      }
+    }
+    await this._blobs.append(this._path, payload);
+    this._bytes += payload.length;
+    return payload;
+  }
+}
+
+/**
  * Буфер записи лога фонового процесса.
  *
  * Куски вывода копятся в буфере и пишутся в blob **пачками**: при 64 КиБ
@@ -86,19 +147,21 @@ interface LiveProcess {
  * ждёт накопления). Записи сериализованы цепочкой промисов — порядок вывода
  * сохраняется.
  *
+ * Пишутся **три** файла: общий лог (`combined`) — в порядке прихода чанков,
+ * и файлы потоков (`stdout`/`stderr`) — только свой поток. У каждого файла
+ * свой предел размера и свой признак усечения.
+ *
  * Ошибка записи **не роняет процесс**: она — предупреждение в лог.
  */
 class ProcessLogWriter {
-  private readonly _blobs: BlobStore;
-  private readonly _path: string;
-  private readonly _maxBytes: number;
+  private readonly _combined: ProcessLogFile;
+  private readonly _stdout: ProcessLogFile;
+  private readonly _stderr: ProcessLogFile;
   private readonly _logger: ProcessLogger;
-  /** Накопленный, ещё не записанный текст. */
+  /** Накопленный, ещё не записанный текст (общий лог). */
   private _pending = '';
-  /** Сколько байт уже записано в blob. */
-  private _bytes = 0;
-  /** Лог усечён по пределу размера. */
-  private _truncated = false;
+  /** Накопленный, ещё не записанный текст потоков. */
+  private _pendingStreams: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' };
   /** Хвост записанного текста (для уведомления родителя). */
   private _tail = '';
   /** Таймер интервального флаша. */
@@ -106,21 +169,33 @@ class ProcessLogWriter {
   /** Цепочка записей (порядок вывода сохраняется). */
   private _chain: Promise<void> = Promise.resolve();
 
-  constructor(blobs: BlobStore, path: string, maxBytes: number, logger: ProcessLogger) {
-    this._blobs = blobs;
-    this._path = path;
-    this._maxBytes = maxBytes;
+  constructor(
+    blobs: BlobStore,
+    combinedPath: string,
+    stdoutPath: string,
+    stderrPath: string,
+    maxBytes: number,
+    logger: ProcessLogger,
+  ) {
+    this._combined = new ProcessLogFile(blobs, combinedPath, maxBytes);
+    this._stdout = new ProcessLogFile(blobs, stdoutPath, maxBytes);
+    this._stderr = new ProcessLogFile(blobs, stderrPath, maxBytes);
     this._logger = logger;
   }
 
-  /** Лог усечён по пределу размера. */
+  /** Общий лог усечён по пределу размера. */
   get truncated(): boolean {
-    return this._truncated;
+    return this._combined.truncated;
   }
 
-  /** Сколько байт записано в blob. */
+  /** Сколько байт записано в общий лог. */
   get bytesWritten(): number {
-    return this._bytes;
+    return this._combined.bytesWritten;
+  }
+
+  /** Лог потока усечён по пределу размера. */
+  streamTruncated(stream: 'stdout' | 'stderr'): boolean {
+    return this._file(stream).truncated;
   }
 
   /** Хвост записанного текста (≤ `PROCESS_LOG_TAIL_LIMIT` символов). */
@@ -128,11 +203,19 @@ class ProcessLogWriter {
     return this._tail;
   }
 
-  /** Принять кусок вывода процесса. */
-  push(chunk: string): void {
-    if (!chunk || this._truncated) return;
-    this._pending += chunk;
-    if (Buffer.byteLength(this._pending, 'utf-8') >= PROCESS_LOG_FLUSH_BYTES) {
+  /**
+   * Принять кусок вывода процесса.
+   *
+   * `stream` — поток куска: текст пишется и в общий лог (в порядке прихода),
+   * и в файл своего потока. Переполнение предела одного файла не мешает
+   * писать остальные.
+   */
+  push(stream: 'stdout' | 'stderr', data: string): void {
+    if (!data) return;
+    if (!this._combined.truncated) this._pending += data;
+    const file = this._file(stream);
+    if (!file.truncated) this._pendingStreams[stream] += data;
+    if (this._pendingBytes() >= PROCESS_LOG_FLUSH_BYTES) {
       void this.flush();
       return;
     }
@@ -141,32 +224,20 @@ class ProcessLogWriter {
 
   /** Записать накопленное в blob (ошибка записи — только предупреждение). */
   flush(): Promise<void> {
-    const text = this._pending;
+    const combinedText = this._pending;
     this._pending = '';
-    if (!text) return this._chain;
+    const stdoutText = this._pendingStreams.stdout;
+    const stderrText = this._pendingStreams.stderr;
+    this._pendingStreams.stdout = '';
+    this._pendingStreams.stderr = '';
+    if (!combinedText && !stdoutText && !stderrText) return this._chain;
     this._chain = this._chain.then(async () => {
-      try {
-        const buf = Buffer.from(text, 'utf-8');
-        let payload = buf;
-        if (this._maxBytes > 0) {
-          const room = this._maxBytes - this._bytes;
-          if (room <= 0) {
-            this._truncated = true;
-            return;
-          }
-          if (payload.length > room) {
-            payload = payload.subarray(0, room);
-            this._truncated = true;
-          }
-        }
-        await this._blobs.append(this._path, payload);
-        this._bytes += payload.length;
-        this._tail = (this._tail + payload.toString('utf-8')).slice(-PROCESS_LOG_TAIL_LIMIT);
-      } catch (err) {
-        this._logger.warn?.(
-          `[ProcessService] запись лога процесса не удалась: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      const written = await this._append(this._combined, combinedText);
+      if (written.length > 0) {
+        this._tail = (this._tail + written.toString('utf-8')).slice(-PROCESS_LOG_TAIL_LIMIT);
       }
+      await this._append(this._stdout, stdoutText);
+      await this._append(this._stderr, stderrText);
     });
     return this._chain;
   }
@@ -179,6 +250,33 @@ class ProcessLogWriter {
       void this.flush();
     }, PROCESS_LOG_FLUSH_INTERVAL_MS);
     this._timer.unref?.();
+  }
+
+  /** Файл потока по имени. */
+  private _file(stream: 'stdout' | 'stderr'): ProcessLogFile {
+    return stream === 'stdout' ? this._stdout : this._stderr;
+  }
+
+  /** Сколько байт ждёт записи (общий лог + потоки). */
+  private _pendingBytes(): number {
+    return (
+      Buffer.byteLength(this._pending, 'utf-8') +
+      Buffer.byteLength(this._pendingStreams.stdout, 'utf-8') +
+      Buffer.byteLength(this._pendingStreams.stderr, 'utf-8')
+    );
+  }
+
+  /** Запись в файл: ошибка — предупреждение, процесс продолжает работать. */
+  private async _append(file: ProcessLogFile, text: string): Promise<Buffer> {
+    if (!text) return Buffer.alloc(0);
+    try {
+      return await file.append(text);
+    } catch (err) {
+      this._logger.warn?.(
+        `[ProcessService] запись лога процесса не удалась: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return Buffer.alloc(0);
+    }
   }
 }
 
@@ -293,7 +391,14 @@ export class ProcessService {
     }
 
     const logPath = record.logPath ?? '';
-    const writer = new ProcessLogWriter(this._blobs, logPath, this._limits.maxLogBytes, this._logger);
+    const writer = new ProcessLogWriter(
+      this._blobs,
+      logPath,
+      processStreamLogPath(record.id, 'stdout'),
+      processStreamLogPath(record.id, 'stderr'),
+      this._limits.maxLogBytes,
+      this._logger,
+    );
     this._track(record, proc, proc.output, writer);
 
     return {
@@ -351,9 +456,19 @@ export class ProcessService {
       ...(input.title ? { title: input.title } : {}),
     });
 
-    const writer = new ProcessLogWriter(this._blobs, logPath, this._limits.maxLogBytes, this._logger);
-    const prefix = `${input.bufferedStdout}${input.bufferedStderr}`;
-    if (prefix) writer.push(prefix);
+    const writer = new ProcessLogWriter(
+      this._blobs,
+      logPath,
+      processStreamLogPath(record.id, 'stdout'),
+      processStreamLogPath(record.id, 'stderr'),
+      this._limits.maxLogBytes,
+      this._logger,
+    );
+    // Префикс лога — вывод, накопленный до перевода в фон. Потоки не
+    // склеиваются: stdout и stderr попадают в **свои** файлы, а в общий
+    // лог — stdout, затем stderr (как было до разделения потоков).
+    if (input.bufferedStdout) writer.push('stdout', input.bufferedStdout);
+    if (input.bufferedStderr) writer.push('stderr', input.bufferedStderr);
 
     this._track(
       record,
@@ -438,8 +553,14 @@ export class ProcessService {
   /**
    * Отрезок лога фонового процесса.
    *
-   * Чтение — из blob-хранилища по пути из записи реестра. `offset`/`limit` —
+   * Чтение — из blob-хранилища по пути записи реестра. `offset`/`limit` —
    * в байтах; усечение по границе UTF-8 допускается (простой срез по байтам).
+   *
+   * `stream` — поток вывода: `combined` (по умолчанию) — общий лог прогона
+   * (`record.logPath`), `stdout`/`stderr` — файл потока
+   * (`processes/<id>.<stream>.log`). Файла потока нет у прогонов, запущенных
+   * до разделения потоков, — тогда ответ `null` (как и для отсутствующего
+   * общего лога).
    *
    * `null` — записи (или лога) нет: файла лога не существует (запись без
    * пути, либо лог удалён retention-очисткой). Пустой, но существующий лог —
@@ -448,9 +569,15 @@ export class ProcessService {
   async logs(id: string, opts: ProcessLogsOptions = {}): Promise<ProcessLogsResult | null> {
     const record = await this.get(id);
     if (!record) return null;
-    const truncated = record.metadata?.truncated === true;
-    if (!record.logPath) return null;
-    const buf = await this._blobs.read(record.logPath);
+    const stream = opts.stream ?? 'combined';
+    const path = stream === 'combined'
+      ? record.logPath
+      : processStreamLogPath(record.id, stream);
+    if (!path) return null;
+    const truncated = stream === 'combined'
+      ? record.metadata?.truncated === true
+      : record.metadata?.[`${stream}_truncated`] === true;
+    const buf = await this._blobs.read(path);
     if (!buf) return null;
     const totalBytes = buf.length;
     const rawOffset = Number.isFinite(opts.offset) ? Number(opts.offset) : 0;
@@ -529,6 +656,11 @@ export class ProcessService {
     signal: string | null,
   ): Promise<void> {
     const status = signal ? 'cancelled' : exitCode === 0 ? 'completed' : 'failed';
+    // Признаки усечения логов: общий (`truncated`, как было) и — отдельно —
+    // по каждому потоку (у каждого файла свой предел размера).
+    const metadata: Record<string, unknown> = { truncated: writer.truncated };
+    if (writer.streamTruncated('stdout')) metadata['stdout_truncated'] = true;
+    if (writer.streamTruncated('stderr')) metadata['stderr_truncated'] = true;
     // Финальная запись реестра: терминальный статус уже зафиксирован — именно
     // её получает хук (исходная запись ещё `running`).
     let finalRecord: BackgroundRunRecord | null = null;
@@ -539,7 +671,7 @@ export class ProcessService {
         ...(signal ? { signal } : {}),
         // Хвост лога — он же попадает в уведомление родителя.
         summary: writer.tail(),
-        metadata: { truncated: writer.truncated },
+        metadata,
       });
     } catch (err) {
       this._logger.warn?.(
@@ -575,7 +707,9 @@ export class ProcessService {
   ): Promise<void> {
     try {
       for await (const chunk of output) {
-        writer.push(chunk.data);
+        // Поток куска сохраняется: текст попадает и в общий лог, и в файл
+        // своего потока.
+        writer.push(chunk.stream, chunk.data);
       }
     } catch (err) {
       this._logger.warn?.(
