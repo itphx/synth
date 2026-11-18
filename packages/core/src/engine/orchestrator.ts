@@ -5298,19 +5298,27 @@ export class ChatOrchestrator {
       // PROP-125: причина недоступности/деградации сервера (без секретов) —
       // попадает в блок `mcp.status` промпта.
       const error = manager.getServerError?.(name);
+      // Advisory: признаки prompt injection в контенте MCP (детектор в менеджере);
+      // в промпт идёт только WARN-строка, сам контент не меняется.
+      const serverFlags = manager.getServerContentFlags?.(name);
 
       return {
         name,
         level: decision.level,
         ...(description ? { description } : {}),
         ...(instructions ? { instructions } : {}),
-        tools: tools.map((tool) => ({
-          name: tool.name,
-          ...(tool.description ? { description: tool.description } : {}),
-        })),
+        tools: tools.map((tool) => {
+          const toolFlags = manager.getToolContentFlags?.(`${name}_${tool.name}`);
+          return {
+            name: tool.name,
+            ...(tool.description ? { description: tool.description } : {}),
+            ...(toolFlags ? { suspicious: { matches: toolFlags.matches } } : {}),
+          };
+        }),
         status,
         ...(decision.reason ? { disabledReason: decision.reason } : {}),
         ...(error ? { error } : {}),
+        ...(serverFlags ? { suspicious: { matches: serverFlags.matches } } : {}),
       };
     });
   }

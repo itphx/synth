@@ -224,6 +224,21 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 (ADR-094 п. 5). Ошибка метрик не влияет на загрузку/выдачу/GC. При `metrics.enabled=false` рекордер
 не создаётся (no-op).
 
+### Контент MCP (advisory)
+
+Описания и `instructions` MCP-серверов приходят от третьей стороны и попадают в системный
+промпт как данные. При регистрации/перерегистрации состава `McpManager` прогоняет словарный
+детектор IPI (категория `injection`, ru+en) по `server.description`, `server.instructions`,
+`tool.description` и `tool.name`; совпадения записываются флагами (`mcp.servers` — WARN-строка
+перед описанием/пунктом списка). Вердикт **advisory**: ничего не блокируется и не вырезается.
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_content_filter_hits_total` | counter | `source` (`mcp_server`/`mcp_tool`), `kind` (`description`/`instructions`/`name`) | Поля MCP-контента с признаками prompt injection; на поле с совпадениями при регистрации/перерегистрации состава |
+
+Наборы значений закрыты (`source` — 2, `kind` — 3), текстов описаний и имён серверов в лейблах
+нет — серии не «взрываются» (ADR-094 п. 5). При `metrics.enabled=false` счётчик не создаётся.
+
 ### События, шедулер, webhooks, гибрид, decision
 
 | Метрика | Тип | Лейблы | Смысл / обновление |

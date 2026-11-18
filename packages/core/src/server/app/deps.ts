@@ -621,6 +621,10 @@ export async function createStandaloneDeps(
     // инструменты не регистрируются — у модели есть встроенные `browser_*`.
     // `inline` → пусто (`browserMcpServer` там ни при чём).
     hiddenServers: hiddenMcpServersForExecution(effectiveExecutionConfig),
+    // Advisory-детекция prompt injection в описаниях/`instructions` MCP
+    // (ru+en словарь `injection`) — только пометка в промпте, без блокировки.
+    dictionaryStore,
+    ...(metrics ? { metrics } : {}),
   });
   // ADR-071 §2.5: единый источник истины для конфигурации MCP-серверов —
   // реестр `McpRegistryStore` (в standalone так же, как в managed). Instance-

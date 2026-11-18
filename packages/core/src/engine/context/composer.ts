@@ -36,6 +36,7 @@ import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
 import { truncateHeadTailWithMarker } from './instructions.js';
 import { MEMORY_PLUGIN_NAME } from '../plugins/memory-namespace.js';
+import { buildWarnLine } from '../security/prompt-injection.js';
 
 /** Эвристика оценки токенов (ADR-070 §2.5, открытый вопрос 4 — chars/4). */
 const EST_TOKENS_DIVISOR = 4;
@@ -165,6 +166,12 @@ export type ComposerMcpServerStatus = 'connected' | 'error' | 'disabled' | 'circ
 export interface ComposerMcpServerTool {
   name: string;
   description?: string;
+  /**
+   * Advisory-пометка: в описании/имени инструмента найдены признаки prompt
+   * injection (детектор ru+en в `McpManager`). Ничего не вырезается — перед
+   * пунктом списка ставится WARN-строка.
+   */
+  suspicious?: { matches: string[] };
 }
 
 /**
@@ -193,6 +200,12 @@ export interface ComposerMcpServer {
    * выводится в блоке `mcp.status` для статуса `error`.
    */
   error?: string;
+  /**
+   * Advisory-пометка: в описании/`instructions` сервера найдены признаки
+   * prompt injection (детектор ru+en в `McpManager`). WARN-строка ставится
+   * перед `Description`/`Instructions`; контент не вырезается.
+   */
+  suspicious?: { matches: string[] };
 }
 
 /**
@@ -1055,6 +1068,11 @@ export class SystemPromptComposer {
       if (server.level) {
         lines.push(`${en ? 'Level' : 'Уровень'}: ${server.level}`);
       }
+      // Advisory: признаки prompt injection в описании/`instructions` сервера —
+      // строка идёт перед `Description`/`Instructions`, контент не меняется.
+      if (server.suspicious && server.suspicious.matches.length > 0) {
+        lines.push(buildWarnLine(server.suspicious.matches));
+      }
       if (server.description) {
         lines.push(`${en ? 'Description' : 'Описание'}: ${server.description}`);
       }
@@ -1064,6 +1082,10 @@ export class SystemPromptComposer {
       if (server.tools.length > 0) {
         lines.push(en ? 'Tools:' : 'Инструменты:');
         for (const tool of server.tools) {
+          // Advisory: WARN-строка ставится перед пунктом списка этого инструмента.
+          if (tool.suspicious && tool.suspicious.matches.length > 0) {
+            lines.push(buildWarnLine(tool.suspicious.matches));
+          }
           lines.push(`- ${tool.name}${tool.description ? `: ${tool.description}` : ''}`);
         }
       }

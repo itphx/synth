@@ -15,9 +15,44 @@ import { debug, info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
 import { obfuscationSessionId, parentSessionIdOf } from '../tools/session-scope.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
+import type { MetricsRegistry } from '../../metrics/registry.js';
+import { detectPromptInjection } from '../security/prompt-injection.js';
 
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+/** Кап совпадений на запись флагов (как в IPI-слое). */
+const MAX_CONTENT_FLAG_MATCHES = 5;
+
+/**
+ * Поле MCP-контента, в котором найдены признаки prompt injection.
+ * `name` — только имена инструментов (имена серверов в промпт как данные не идут).
+ */
+export type McpContentFlagField = 'description' | 'instructions' | 'name';
+
+/** Источник совпадения для метрики: описание сервера или его инструмент. */
+export type McpContentFlagSource = 'mcp_server' | 'mcp_tool';
+
+/**
+ * Advisory-флаги сервера: `matches` — только ключевые слова детектора (без текста
+ * описаний), `fields` — где они найдены.
+ */
+export interface McpServerContentFlags {
+  matches: string[];
+  fields: McpContentFlagField[];
+}
+
+/** Advisory-флаги инструмента (полное имя — `server_tool`). */
+export interface McpToolContentFlags {
+  server: string;
+  tool: string;
+  matches: string[];
+}
+
+/** Дедуп совпадений с капом на запись (порядок первого вхождения сохраняется). */
+function dedupeMatches(matches: readonly string[]): string[] {
+  return [...new Set(matches)].slice(0, MAX_CONTENT_FLAG_MATCHES);
+}
 
 /** Параметры менеджера (инъекция для тестов/расширений). */
 export interface McpManagerOptions {
@@ -36,6 +71,17 @@ export interface McpManagerOptions {
    * встроенные тулы.
    */
   hiddenServers?: readonly string[];
+  /**
+   * Порт словарей: источник ключевых слов категории `injection` (ru+en) для
+   * advisory-детекции в описаниях/`instructions` MCP-серверов и инструментов.
+   * Не задан — детекция не выполняется (флаги пусты), поведение прежнее.
+   */
+  dictionaryStore?: DictionaryRepository;
+  /**
+   * Реестр метрик (`synth_content_filter_hits_total{source,kind}`). Передаётся
+   * из сборки зависимостей при `metrics.enabled`; не задан — счётчик не создаётся.
+   */
+  metrics?: MetricsRegistry;
 }
 
 /**
@@ -125,10 +171,134 @@ export class McpManager {
    * с `auth: { kind: 'credential' }` (подстановка в транспорт).
    */
   private _credentialSource: McpCredentialSource | undefined;
+  /** Порт словарей для advisory-детекции MCP-контента (инъекция из сборки). */
+  private readonly _dictionaryStore: DictionaryRepository | undefined;
+  /** Счётчик `synth_content_filter_hits_total` (создаётся только при включённых метриках). */
+  private readonly _contentHits: { inc(labels: Record<string, string>): void } | null;
+  /** Advisory-флаги серверов: имя → совпадения + поля (текст описаний не хранится). */
+  private readonly _suspiciousServers = new Map<string, McpServerContentFlags>();
+  /** Advisory-флаги инструментов: полное имя `server_tool` → совпадения. */
+  private readonly _suspiciousTools = new Map<string, McpToolContentFlags>();
 
   constructor(opts: McpManagerOptions = {}) {
     this._createClientFactory = opts.createClient;
     this._hiddenServers = normalizeHiddenServers(opts.hiddenServers);
+    this._dictionaryStore = opts.dictionaryStore;
+    this._contentHits = opts.metrics
+      ? opts.metrics.counter(
+          'synth_content_filter_hits_total',
+          'MCP content fields with prompt-injection signs (advisory).',
+          ['source', 'kind'],
+        )
+      : null;
+  }
+
+  /**
+   * Advisory-флаги MCP-контента (копии карт): описания/`instructions` серверов и
+   * описания/имена инструментов приходят от третьей стороны и попадают в
+   * системный промпт. Ничего не блокируется — только пометка (`mcp.servers`).
+   */
+  getContentFlags(): {
+    servers: Map<string, McpServerContentFlags>;
+    tools: Map<string, McpToolContentFlags>;
+  } {
+    return {
+      servers: new Map(this._suspiciousServers),
+      tools: new Map(this._suspiciousTools),
+    };
+  }
+
+  /** Флаги одного сервера (нет — `undefined`). */
+  getServerContentFlags(name: string): McpServerContentFlags | undefined {
+    return this._suspiciousServers.get(name);
+  }
+
+  /** Флаги инструмента по полному имени (`server_tool`). */
+  getToolContentFlags(fullName: string): McpToolContentFlags | undefined {
+    return this._suspiciousTools.get(fullName);
+  }
+
+  /**
+   * Прогоняет словарный детектор (ru+en, как в IPI-слое) по описанию и
+   * `instructions` сервера и по описаниям/именам его инструментов.
+   *
+   * Единственная точка: вызывается из `registerTools` — там, где состав тулов
+   * клиента становится известен (connect/probe не регистрируют). Повторный
+   * вызов перезаписывает флаги сервера целиком — старые не залипают.
+   */
+  private _scanContentFlags(serverName: string, client: McpClientLike): void {
+    // Перерегистрация: прежние флаги этого сервера и его инструментов снимаются.
+    this._clearContentFlags(serverName);
+
+    const dictionaryStore = this._dictionaryStore;
+    if (!dictionaryStore) return;
+
+    const serverMatches: string[] = [];
+    const serverFields: McpContentFlagField[] = [];
+    const scanServerField = (
+      field: 'description' | 'instructions',
+      text: string | undefined,
+    ): void => {
+      const matches = this._detectInjection(text, dictionaryStore);
+      if (matches.length === 0) return;
+      serverFields.push(field);
+      serverMatches.push(...matches);
+      this._contentHits?.inc({ source: 'mcp_server', kind: field });
+    };
+    scanServerField('description', this.getServerDescription(serverName));
+    scanServerField('instructions', client.instructions);
+
+    const uniqueServerMatches = dedupeMatches(serverMatches);
+    if (uniqueServerMatches.length > 0) {
+      this._suspiciousServers.set(serverName, { matches: uniqueServerMatches, fields: serverFields });
+      this._logContentFlags({ server: serverName, matches: uniqueServerMatches });
+    }
+
+    for (const tool of client.tools) {
+      const toolMatches: string[] = [];
+      const descriptionMatches = this._detectInjection(tool.description, dictionaryStore);
+      if (descriptionMatches.length > 0) {
+        toolMatches.push(...descriptionMatches);
+        this._contentHits?.inc({ source: 'mcp_tool', kind: 'description' });
+      }
+      const nameMatches = this._detectInjection(tool.name, dictionaryStore);
+      if (nameMatches.length > 0) {
+        toolMatches.push(...nameMatches);
+        this._contentHits?.inc({ source: 'mcp_tool', kind: 'name' });
+      }
+      const uniqueMatches = dedupeMatches(toolMatches);
+      if (uniqueMatches.length === 0) continue;
+      this._suspiciousTools.set(`${serverName}_${tool.name}`, {
+        server: serverName,
+        tool: tool.name,
+        matches: uniqueMatches,
+      });
+      this._logContentFlags({ server: serverName, tool: tool.name, matches: uniqueMatches });
+    }
+  }
+
+  /** Детекция по обоим словарям (ru+en) — контент MCP бывает на любом языке. */
+  private _detectInjection(text: string | undefined, dictionaryStore: DictionaryRepository): string[] {
+    if (!text) return [];
+    const matches: string[] = [];
+    for (const lang of ['ru', 'en']) {
+      const found = detectPromptInjection(text, dictionaryStore, lang);
+      if (found.suspicious) matches.push(...found.matches);
+    }
+    return dedupeMatches(matches);
+  }
+
+  /** Журнал флагов: только ключевые слова детектора, без текста описаний. */
+  private _logContentFlags(entry: { server: string; tool?: string; matches: string[] }): void {
+    warning('MCP', `MCP content flags: ${JSON.stringify(entry)}`);
+  }
+
+  /** Снимает advisory-флаги сервера и его инструментов. */
+  private _clearContentFlags(serverName: string): void {
+    this._suspiciousServers.delete(serverName);
+    for (const [fullName, flag] of [...this._suspiciousTools]) {
+      if (flag.server === serverName) this._suspiciousTools.delete(fullName);
+    }
   }
 
   /**
@@ -717,6 +887,10 @@ export class McpManager {
     const serverEntry = this._servers.get(serverName);
     if (!serverEntry) return [];
 
+    // Advisory-скан описаний/`instructions`/тулов сервера (третья сторона):
+    // единственная точка, где состав тулов клиента известен. Ничего не блокирует.
+    this._scanContentFlags(serverName, serverEntry.client);
+
     // Скрытый сервер: подключение состоялось (статус/`callServerTool` работают),
     // но инструменты в реестр не идут — их роль играют встроенные тулы
     // (например, `browser_*` вместо инструментов Playwright MCP).
@@ -866,6 +1040,9 @@ export class McpManager {
   }
 
   async deregisterTools(serverName: string, toolRegistry: ToolRegistry): Promise<void> {
+    // Состав снят — advisory-флаги сервера больше не относятся к активному набору
+    // (перерегистрация пересчитает их заново).
+    this._clearContentFlags(serverName);
     const entry = this._servers.get(serverName);
     if (entry) {
       for (const name of entry.registeredToolNames) {

@@ -472,7 +472,12 @@ export async function createBackendDeps(
   // MCP: единый источник истины — реестр `McpRegistryStore` (ADR-071 §2.5).
   // Legacy `YamlMcpConfigStore` удалён: instance-серверы из config.mcp.servers
   // сидируются в реестр при старте (seed без дублирования по имени).
-  const mcpManager = new McpManager();
+  const mcpManager = new McpManager({
+    // Advisory-детекция prompt injection в описаниях/`instructions` MCP
+    // (ru+en словарь `injection`) — только пометка в промпте, без блокировки.
+    dictionaryStore,
+    ...(metrics ? { metrics } : {}),
+  });
   await mcpRegistryStore.seedFromConfig(config.synth.mcp.servers);
   // Одно чтение реестра на все карты менеджера (вместо пяти).
   const mcpMaps = await mcpRegistryStore.toManagerMaps();
