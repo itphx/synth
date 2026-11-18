@@ -18,13 +18,42 @@ import { ProjectStore } from '../../storage/project-store.js';
 import {
   ProjectInstructionsResolver,
   createInstructionsInfoResolver,
+  type InstructionsInfo,
   type ProjectInstructionsDeps,
 } from '../../engine/context/instructions.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { RemoteError, type RemoteErrorCode } from '../../remote/types.js';
 
+/**
+ * Тело снимка инструкций (`GET /api/v2/context/instructions`): контракт
+ * `InstructionsInfo` в конверте со scope-id (`session_id` либо `project_id`).
+ */
+interface InstructionsBody extends InstructionsInfo {
+  session_id?: string;
+  project_id?: string;
+}
+
+/**
+ * Ответ удалённой стороны при форварде `remote:`-сущности (ADR-042/ADR-069):
+ * сервер возвращает свой снимок, core добавляет `remote:`-id и `forwarded_path`.
+ * Поля снимка описаны минимально — тест проверяет только проксирование.
+ */
+interface ForwardedInstructionsBody {
+  session_id?: string;
+  project_id?: string;
+  files?: Array<{ path?: string }>;
+  diagnostics?: unknown[];
+  forwarded_path?: string;
+}
+
+/** Тело ошибки HTTP-ответа. */
+interface ApiErrorBody {
+  error?: { code?: string; message?: string };
+}
+
 function createMockAuth(): AuthKit {
+  // Фейк: реализованы только getCurrentUser/requireAuth из AuthKit.
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
@@ -134,6 +163,7 @@ const projectWs = () => join(tmpDir, 'repo');
 /** Минимальный стаб RemoteBackendClient: считает `request` и отдаёт/бросает заданное. */
 function remoteClientStub(handler: (path: string) => unknown) {
   const request = vi.fn(async (_method: string, path: string) => handler(path));
+  // Фейк: реализован только `request` из RemoteBackendClient.
   return { client: { request } as unknown as RemoteBackendClient, request };
 }
 
@@ -160,7 +190,7 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
 
     const res = await app.request(`/api/v2/context/instructions?session_id=${session.id}`);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as InstructionsBody;
     expect(body.session_id).toBe(session.id);
     expect(body.enabled).toBe(true);
     // UI показывает точный путь trust-подсказки — workspace в ответе.
@@ -168,9 +198,9 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
     // windowRatio 0.06 * 128_000 = 7 680, но floor minChars 20 000.
     expect(body.cap.chars).toBe(20_000);
     expect(body.cap.source).toBe('dynamic');
-    expect(body.files.map((f: any) => f.path)).toContain('./AGENTS.md');
+    expect(body.files.map((f) => f.path)).toContain('./AGENTS.md');
     expect(body.files[0]).toMatchObject({ kind: 'chain', chars: 17, truncated: false, status: 'loaded' });
-    expect(body.diagnostics.some((d: any) => d.code === 'loaded')).toBe(true);
+    expect(body.diagnostics.some((d) => d.code === 'loaded')).toBe(true);
   });
 
   it('session scope: cap.source=override при instructions.maxChars', async () => {
@@ -182,7 +212,7 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
       config: makeConfig({ maxChars: 1_000 }),
       routes: { resolveProjectWorkspace: async () => ws },
     });
-    const body: any = await (await app.request(`/api/v2/context/instructions?session_id=${session.id}`)).json();
+    const body = (await (await app.request(`/api/v2/context/instructions?session_id=${session.id}`)).json()) as InstructionsBody;
     expect(body.cap).toMatchObject({ chars: 1_000, source: 'override' });
   });
 
@@ -191,7 +221,7 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
     const app = makeApp({ workspace: projectWs() });
     const res = await app.request(`/api/v2/context/instructions?session_id=${session.id}`);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as InstructionsBody;
     expect(body.files).toEqual([]);
     expect(body.diagnostics).toEqual([
       expect.objectContaining({ level: 'info', code: 'no-project' }),
@@ -209,10 +239,10 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
     });
     const res = await app.request('/api/v2/context/instructions?project_id=p1');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as InstructionsBody;
     expect(body.project_id).toBe('p1');
     expect(body.workspace).toBe(ws);
-    expect(body.files.map((f: any) => f.path)).toContain('./AGENTS.md');
+    expect(body.files.map((f) => f.path)).toContain('./AGENTS.md');
   });
 
   it('project scope без workspace → no-project', async () => {
@@ -221,9 +251,9 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
       invariants: '', statusMessages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     });
     const app = makeApp({ workspace: projectWs() });
-    const body: any = await (await app.request('/api/v2/context/instructions?project_id=p-nws')).json();
+    const body = (await (await app.request('/api/v2/context/instructions?project_id=p-nws')).json()) as InstructionsBody;
     expect(body.files).toEqual([]);
-    expect(body.diagnostics.some((d: any) => d.code === 'no-project')).toBe(true);
+    expect(body.diagnostics.some((d) => d.code === 'no-project')).toBe(true);
   });
 
   it('недоверенный проект → файлы не грузятся, причина в diagnostics', async () => {
@@ -234,12 +264,12 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
       deps: { trustedProjectDirs: [] },
       routes: { resolveProjectWorkspace: async () => ws },
     });
-    const body: any = await (await app.request('/api/v2/context/instructions?project_id=p1')).json();
+    const body = (await (await app.request('/api/v2/context/instructions?project_id=p1')).json()) as InstructionsBody;
     expect(body.files).toEqual([]);
-    const diag = body.diagnostics.find((d: any) => d.code === 'untrusted');
+    const diag = body.diagnostics.find((d) => d.code === 'untrusted');
     expect(diag).toMatchObject({ level: 'warning' });
-    expect(diag.message).toContain('trustedProjectDirs');
-    expect(body.diagnostics.some((d: any) => d.code === 'skipped-install-tree')).toBe(false);
+    expect(diag?.message).toContain('trustedProjectDirs');
+    expect(body.diagnostics.some((d) => d.code === 'skipped-install-tree')).toBe(false);
   });
 
   it('install-tree guard → инструкции не грузятся', async () => {
@@ -253,11 +283,11 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
       deps: { trustedProjectDirs: [ws] },
       routes: { resolveProjectWorkspace: async () => ws },
     });
-    const body: any = await (await app.request('/api/v2/context/instructions?project_id=p1')).json();
+    const body = (await (await app.request('/api/v2/context/instructions?project_id=p1')).json()) as InstructionsBody;
     expect(body.files).toEqual([]);
-    const diag = body.diagnostics.find((d: any) => d.code === 'skipped-install-tree');
+    const diag = body.diagnostics.find((d) => d.code === 'skipped-install-tree');
     expect(diag).toMatchObject({ level: 'warning' });
-    expect(diag.message).toContain('install-tree');
+    expect(diag?.message).toContain('install-tree');
   });
 
   it('install-tree + allowInstallTreeFallback → инструкции грузятся', async () => {
@@ -272,8 +302,8 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
       deps: { trustedProjectDirs: [ws] },
       routes: { resolveProjectWorkspace: async () => ws },
     });
-    const body: any = await (await app.request('/api/v2/context/instructions?project_id=p1')).json();
-    expect(body.files.map((f: any) => f.path)).toContain('./AGENTS.md');
+    const body = (await (await app.request('/api/v2/context/instructions?project_id=p1')).json()) as InstructionsBody;
+    expect(body.files.map((f) => f.path)).toContain('./AGENTS.md');
   });
 
   it('instructions.enabled=false → enabled:false, источник пропущен', async () => {
@@ -284,10 +314,10 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
       config: makeConfig({ enabled: false }),
       routes: { resolveProjectWorkspace: async () => ws },
     });
-    const body: any = await (await app.request('/api/v2/context/instructions?project_id=p1')).json();
+    const body = (await (await app.request('/api/v2/context/instructions?project_id=p1')).json()) as InstructionsBody;
     expect(body.enabled).toBe(false);
     expect(body.files).toEqual([]);
-    expect(body.diagnostics.some((d: any) => d.code === 'skipped')).toBe(true);
+    expect(body.diagnostics.some((d) => d.code === 'skipped')).toBe(true);
   });
 
   it('truncated файл → status=truncated, level=warning', async () => {
@@ -299,11 +329,11 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
       config: makeConfig({ maxChars: 1_000 }),
       routes: { resolveProjectWorkspace: async () => ws },
     });
-    const body: any = await (await app.request('/api/v2/context/instructions?project_id=p1')).json();
-    const file = body.files.find((f: any) => f.path === './AGENTS.md');
+    const body = (await (await app.request('/api/v2/context/instructions?project_id=p1')).json()) as InstructionsBody;
+    const file = body.files.find((f) => f.path === './AGENTS.md');
     expect(file?.truncated).toBe(true);
     expect(file?.status).toBe('truncated');
-    expect(body.diagnostics.some((d: any) => d.code === 'truncated' && d.level === 'warning')).toBe(true);
+    expect(body.diagnostics.some((d) => d.code === 'truncated' && d.level === 'warning')).toBe(true);
   });
 
   it('без scope → 400; неизвестные id → 404', async () => {
@@ -331,9 +361,9 @@ describe('GET /api/v2/context/instructions — origin-aware в гибриде (A
 
     const res = await app.request(`/api/v2/context/instructions?session_id=${session.id}`);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as InstructionsBody;
     expect(body.session_id).toBe(session.id);
-    expect(body.files.map((f: any) => f.path)).toContain('./AGENTS.md');
+    expect(body.files.map((f) => f.path)).toContain('./AGENTS.md');
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -355,7 +385,7 @@ describe('GET /api/v2/context/instructions — origin-aware в гибриде (A
 
     const res = await app.request('/api/v2/context/instructions?session_id=remote:srv-1');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as ForwardedInstructionsBody;
     expect(body.session_id).toBe('remote:srv-1');
     expect(body.forwarded_path).toBe('/api/v2/context/instructions?session_id=srv-1');
     expect(request).toHaveBeenCalledWith('GET', '/api/v2/context/instructions?session_id=srv-1');
@@ -370,7 +400,7 @@ describe('GET /api/v2/context/instructions — origin-aware в гибриде (A
     const res = await app.request('/api/v2/context/instructions?project_id=remote:p-1');
 
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as ForwardedInstructionsBody;
     expect(body.project_id).toBe('remote:p-1');
     expect(request).toHaveBeenCalledWith('GET', '/api/v2/context/instructions?project_id=p-1');
   });
@@ -379,8 +409,8 @@ describe('GET /api/v2/context/instructions — origin-aware в гибриде (A
     const app = makeApp({ workspace: projectWs() });
     const res = await app.request('/api/v2/context/instructions?session_id=remote:srv-1');
     expect(res.status).toBe(502);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('REMOTE_UNAVAILABLE');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('REMOTE_UNAVAILABLE');
   });
 
   const remoteErrorCases: Array<[RemoteErrorCode, number]> = [
@@ -393,9 +423,9 @@ describe('GET /api/v2/context/instructions — origin-aware в гибриде (A
 
     const res = await app.request('/api/v2/context/instructions?session_id=remote:srv-1');
     expect(res.status).toBe(status);
-    const body: any = await res.json();
-    expect(body.error.code).toBe(code);
-    expect(body.error.message).toBe('удалённый отказ');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe(code);
+    expect(body.error?.message).toBe('удалённый отказ');
   });
 
   it('session-scope использует каталог worktree как workspace (ADR-114)', async () => {

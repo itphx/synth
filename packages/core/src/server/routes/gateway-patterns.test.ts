@@ -64,6 +64,26 @@ const customPatterns: SecretPattern[] = [
   { type: 'my_token', regex: '\\btok_[A-Za-z0-9]{32}\\b' },
 ];
 
+// ─────────────────── DTO ответов контура (формы сверены с `gateway-patterns.ts`) ───────────────────
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code: string; message?: string };
+}
+
+/** Эффективные паттерны + встроенные дефолты; `saved` — только у `PUT`. */
+interface PatternsBody {
+  patterns: SecretPattern[];
+  default_patterns: SecretPattern[];
+  is_overridden: boolean;
+  saved?: boolean;
+}
+
+/** Ответ `DELETE` — сброс override к встроенным паттернам. */
+interface PatternsResetBody {
+  status: string;
+}
+
 describe('Gateway Patterns API Routes (core, ADR-036)', () => {
   let tmpDir: string;
   let store: SecretPatternStore;
@@ -93,7 +113,7 @@ describe('Gateway Patterns API Routes (core, ADR-036)', () => {
     it('без override возвращает дефолтные паттерны (9) и is_overridden=false', async () => {
       const res = await createApp(adminUser).request('/api/v2/gateway/patterns');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PatternsBody;
       expect(body.is_overridden).toBe(false);
       expect(body.patterns).toEqual(defaultAsStrings());
       expect(body.patterns).toHaveLength(9);
@@ -104,7 +124,7 @@ describe('Gateway Patterns API Routes (core, ADR-036)', () => {
       await store.savePatterns(customPatterns);
       const res = await createApp(adminUser).request('/api/v2/gateway/patterns');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PatternsBody;
       expect(body.is_overridden).toBe(true);
       expect(body.patterns).toEqual(customPatterns);
       expect(body.default_patterns).toEqual(defaultAsStrings());
@@ -113,7 +133,7 @@ describe('Gateway Patterns API Routes (core, ADR-036)', () => {
     it('недоступен для USER (403)', async () => {
       const res = await createApp(userUser).request('/api/v2/gateway/patterns');
       expect(res.status).toBe(403);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('FORBIDDEN');
     });
   });
@@ -126,7 +146,7 @@ describe('Gateway Patterns API Routes (core, ADR-036)', () => {
         body: JSON.stringify({ patterns: customPatterns }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PatternsBody;
       expect(body.saved).toBe(true);
       expect(body.is_overridden).toBe(true);
       expect(body.patterns).toEqual(customPatterns);
@@ -141,7 +161,7 @@ describe('Gateway Patterns API Routes (core, ADR-036)', () => {
         body: JSON.stringify({ patterns: [{ type: 'bad', regex: '(' }] }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(store.hasOverride()).toBe(false);
     });
@@ -180,7 +200,7 @@ describe('Gateway Patterns API Routes (core, ADR-036)', () => {
 
       const res = await createApp(adminUser).request('/api/v2/gateway/patterns', { method: 'DELETE' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PatternsResetBody;
       expect(body).toEqual({ status: 'restored' });
       expect(store.hasOverride()).toBe(false);
       expect(store.getPatterns()).toEqual(defaultAsStrings());

@@ -7,6 +7,33 @@ import { join } from 'node:path';
 import { createDictionaryRoutes } from './dictionaries.js';
 import { DictionaryStore } from '../../engine/router/dictionary-store.js';
 
+/** Словарь в ответах API: запись стора + действующее содержимое (`withContent`). */
+interface DictionaryBody {
+  category: string;
+  language: string;
+  source: 'system' | 'user';
+  keywords: string[];
+  tools?: string[];
+  content: string;
+  size: number;
+}
+
+/** Страница списка словарей (`GET /api/v2/dictionaries`). */
+interface DictionaryListBody {
+  dictionaries: DictionaryBody[];
+}
+
+/** Ответ записи/сброса словаря (`PUT`/`DELETE`). */
+interface DictionaryResponse {
+  status?: string;
+  dictionary: DictionaryBody;
+}
+
+/** Тело ошибки HTTP-ответа. */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
 const passAuth: MiddlewareHandler = async (_c, next) => { await next(); };
 
 async function exists(path: string): Promise<boolean> {
@@ -55,12 +82,12 @@ describe('Dictionaries API Routes', () => {
       const app = createTestApp(store);
       const res = await app.request('/api/v2/dictionaries');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryListBody;
       expect(Array.isArray(body.dictionaries)).toBe(true);
-      const coding = body.dictionaries.find((d: any) => d.category === 'coding' && d.language === 'ru');
+      const coding = body.dictionaries.find((d) => d.category === 'coding' && d.language === 'ru');
       expect(coding).toMatchObject({ source: 'system' });
-      expect(coding.keywords).toContain('код');
-      expect(coding.tools).toContain('write_file');
+      expect(coding!.keywords).toContain('код');
+      expect(coding!.tools).toContain('write_file');
     });
   });
 
@@ -69,7 +96,7 @@ describe('Dictionaries API Routes', () => {
       const app = createTestApp(store);
       const res = await app.request('/api/v2/dictionaries/coding/ru');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       expect(body.dictionary).toMatchObject({ category: 'coding', language: 'ru', source: 'system' });
     });
 
@@ -89,7 +116,7 @@ describe('Dictionaries API Routes', () => {
         body: JSON.stringify({ keywords: ['  моё  ', 'слово', 'моё'] }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       expect(body.status).toBe('ok');
       expect(body.dictionary).toMatchObject({ category: 'coding', language: 'ru', source: 'user' });
       // тримминг и дедупликация
@@ -99,7 +126,7 @@ describe('Dictionaries API Routes', () => {
       expect(raw).toContain('- моё');
 
       const after = await app.request('/api/v2/dictionaries/coding/ru');
-      const afterBody: any = await after.json();
+      const afterBody = (await after.json()) as DictionaryResponse;
       expect(afterBody.dictionary.source).toBe('user');
     });
 
@@ -111,7 +138,7 @@ describe('Dictionaries API Routes', () => {
         body: JSON.stringify({ keywords: ['моё'], tools: ['my_tool'] }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       expect(body.dictionary.tools).toEqual(['my_tool']);
       expect(store.getCodingTools()).toEqual(['my_tool']);
     });
@@ -126,7 +153,7 @@ describe('Dictionaries API Routes', () => {
 
       const unknown = await put('/api/v2/dictionaries/unknown/ru', { keywords: ['x'] });
       expect(unknown.status).toBe(400);
-      expect((await unknown.json() as any).error.code).toBe('VALIDATION_ERROR');
+      expect(((await unknown.json()) as ApiErrorBody).error.code).toBe('VALIDATION_ERROR');
 
       const badLang = await put('/api/v2/dictionaries/coding/de', { keywords: ['x'] });
       expect(badLang.status).toBe(400);
@@ -182,7 +209,7 @@ describe('Dictionaries API Routes', () => {
 
       const res = await app.request('/api/v2/dictionaries/coding/ru', { method: 'DELETE' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       expect(body.status).toBe('ok');
       expect(body.dictionary).toMatchObject({ source: 'system' });
       expect(body.dictionary.keywords).toEqual(['системное', 'код']);
@@ -201,7 +228,7 @@ describe('Dictionaries API Routes', () => {
       const app = createTestApp(store);
       const res = await app.request('/api/v2/dictionaries/research/ru');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       const expected = await readFile(join(systemDir, 'research.ru.yaml'), 'utf-8');
       expect(body.dictionary.content).toBe(expected);
       expect(body.dictionary.size).toBe(Buffer.byteLength(expected, 'utf8'));
@@ -209,7 +236,7 @@ describe('Dictionaries API Routes', () => {
 
     it('GET список содержит content и size', async () => {
       const app = createTestApp(store);
-      const body: any = await (await app.request('/api/v2/dictionaries')).json();
+      const body = (await (await app.request('/api/v2/dictionaries')).json()) as DictionaryListBody;
       for (const entry of body.dictionaries) {
         expect(typeof entry.content).toBe('string');
         expect(entry.size).toBe(Buffer.byteLength(entry.content, 'utf8'));
@@ -224,7 +251,7 @@ describe('Dictionaries API Routes', () => {
         body: JSON.stringify({ keywords: ['моё', 'слово'] }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       expect(body.dictionary).toMatchObject({ source: 'user' });
       expect(body.dictionary.keywords).toEqual(['моё', 'слово']);
       expect(body.dictionary.content).toBe('keywords:\n  - моё\n  - слово\n');
@@ -242,7 +269,7 @@ describe('Dictionaries API Routes', () => {
         body: JSON.stringify({ content }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       expect(body.status).toBe('ok');
       expect(body.dictionary).toMatchObject({ category: 'research', language: 'ru', source: 'user' });
       expect(body.dictionary.keywords).toEqual(['моё', 'слово']);
@@ -250,7 +277,7 @@ describe('Dictionaries API Routes', () => {
       expect(body.dictionary.size).toBe(Buffer.byteLength(content, 'utf8'));
 
       expect(await exists(join(dataDir, 'dictionaries', 'research.ru.yaml'))).toBe(true);
-      const after: any = await (await app.request('/api/v2/dictionaries/research/ru')).json();
+      const after = (await (await app.request('/api/v2/dictionaries/research/ru')).json()) as DictionaryResponse;
       expect(after.dictionary.source).toBe('user');
       expect(after.dictionary.content).toBe(content);
     });
@@ -263,7 +290,7 @@ describe('Dictionaries API Routes', () => {
         body: JSON.stringify({ content: 'keywords: [a, b' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(typeof body.error.message).toBe('string');
       expect(body.error.message.length).toBeGreaterThan(0);
@@ -289,7 +316,7 @@ describe('Dictionaries API Routes', () => {
         body: JSON.stringify({ content }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       expect(body.dictionary.tools).toEqual(['my_tool']);
       expect(body.dictionary.content).toBe(content);
       expect(store.getCodingTools()).toEqual(['my_tool']);
@@ -306,7 +333,7 @@ describe('Dictionaries API Routes', () => {
       });
       const res = await app.request('/api/v2/dictionaries/research/ru', { method: 'DELETE' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DictionaryResponse;
       const expected = await readFile(join(systemDir, 'research.ru.yaml'), 'utf-8');
       expect(body.dictionary).toMatchObject({ source: 'system' });
       expect(body.dictionary.content).toBe(expected);

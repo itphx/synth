@@ -105,7 +105,9 @@ pnpm install                # установка зависимостей
 pnpm build                  # сборка всех пакетов
 pnpm typecheck              # проверка типов
 pnpm lint                   # ESLint
+pnpm warnings               # гейт предупреждений линта: сумма сверяется с scripts/warnings-budget.json
 pnpm test                   # Vitest
+pnpm bundle:budget          # бюджет размера чанков UI-сборки (scripts/bundle-budget.json)
 pnpm clean                  # очистка dist/
 ```
 

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAuditRoutes } from './audit.js';
 import { AuditLogger, readAuditLog } from '../../engine/gateway/audit-logger.js';
+import type { AuditEntry } from '../../engine/gateway/audit-logger.js';
 import { createCommandAuditLog, sha256Hex } from '../../engine/security/command-audit.js';
 import type { CommandAuditLog } from '../../engine/security/command-audit.js';
 import type { CommandAuditEntry } from '@itphx/synth-shared';
@@ -45,6 +46,17 @@ const userUser: User = {
   notes: '',
   interviewCompleted: false,
 };
+
+/** Ответ `GET /api/v2/audit` — записи журнала Gateway и их число. */
+interface GatewayAuditListBody {
+  entries: AuditEntry[];
+  total: number;
+}
+
+/** Тело ошибки HTTP-ответа. */
+interface ApiErrorBody {
+  error: { code: string; message?: string };
+}
 
 function createMockKit(user: User | null) {
   return {
@@ -175,7 +187,7 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
     it('возвращает пустой список если файла аудита нет', async () => {
       const res = await createApp(adminUser).request('/api/v2/audit');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as GatewayAuditListBody;
       expect(body).toEqual({ entries: [], total: 0 });
     });
 
@@ -186,11 +198,11 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
 
       const res = await createApp(adminUser).request('/api/v2/audit');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as GatewayAuditListBody;
       expect(body.total).toBe(3);
       expect(body.entries).toHaveLength(3);
-      expect(body.entries[0].type).toBe('obfuscated');
-      expect(body.entries[2].type).toBe('blocked');
+      expect(body.entries[0]!.type).toBe('obfuscated');
+      expect(body.entries[2]!.type).toBe('blocked');
     });
 
     it('фильтрует по userId и sessionId', async () => {
@@ -199,9 +211,9 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
       await writeAuditEntry(auditLogPath, entry3);
 
       const res = await createApp(adminUser).request('/api/v2/audit?userId=admin&sessionId=ses-1');
-      const body: any = await res.json();
+      const body = (await res.json()) as GatewayAuditListBody;
       expect(body.total).toBe(2);
-      expect(body.entries.map((e: any) => e.type)).toEqual(['obfuscated', 'blocked']);
+      expect(body.entries.map((e) => e.type)).toEqual(['obfuscated', 'blocked']);
     });
 
     it('фильтрует по since/until и ограничивает limit (хвост)', async () => {
@@ -212,19 +224,19 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
       const app = createApp(adminUser);
 
       const sinceRes = await app.request('/api/v2/audit?since=2026-08-05T11:00:00.000Z');
-      const sinceBody: any = await sinceRes.json();
+      const sinceBody = (await sinceRes.json()) as GatewayAuditListBody;
       expect(sinceBody.total).toBe(2);
 
       const untilRes = await app.request('/api/v2/audit?until=2026-08-05T10:30:00.000Z');
-      const untilBody: any = await untilRes.json();
+      const untilBody = (await untilRes.json()) as GatewayAuditListBody;
       expect(untilBody.total).toBe(1);
 
       const limitRes = await app.request('/api/v2/audit?limit=2');
-      const limitBody: any = await limitRes.json();
+      const limitBody = (await limitRes.json()) as GatewayAuditListBody;
       expect(limitBody.total).toBe(3);
       expect(limitBody.entries).toHaveLength(2);
-      expect(limitBody.entries[0].type).toBe('rate_limited');
-      expect(limitBody.entries[1].type).toBe('blocked');
+      expect(limitBody.entries[0]!.type).toBe('rate_limited');
+      expect(limitBody.entries[1]!.type).toBe('blocked');
     });
 
     it('доступен только ADMIN и AUDITOR (USER получает 403)', async () => {
@@ -259,7 +271,7 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
         body: JSON.stringify({ sessionId: 'ses-1', placeholder: '⟦SYNTH_SECRET_1⟧' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as { ok: boolean };
       expect(body).toEqual({ ok: true });
 
       const { entries } = await readAuditLog(auditLogPath);
@@ -277,7 +289,7 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
         body: JSON.stringify({ sessionId: 'ses-any', placeholder: 'не-плейсхолдер' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -288,7 +300,7 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
         body: JSON.stringify({}),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -300,7 +312,7 @@ describe('Audit API Routes — голый аудит LLM Gateway (core)', () => 
           body: JSON.stringify({ sessionId: 'ses-nope', placeholder: '⟦SYNTH_SECRET_1⟧' }),
         });
       expect(res.status).toBe(404);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('NOT_FOUND');
     });
 

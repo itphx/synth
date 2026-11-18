@@ -3,7 +3,7 @@
 // (POST/DELETE) — ADMIN/LEAD; валидация цели (сессия/агент) → 400; 404 при
 // удалении отсутствующей записи. ADR-089/ADR-052: API-ключи привязок и приём
 // события по ключу (без пользовательских кред).
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -17,7 +17,7 @@ import {
   RouteRuleStore,
   createEventRoutes,
 } from '@itphx/synth-core';
-import type { RouteDecision, Session, User } from '@itphx/synth-shared';
+import type { User } from '@itphx/synth-shared';
 
 function makeUser(id: string, roles: User['roles']): User {
   return {
@@ -55,14 +55,14 @@ describe('Events API Routes (ADR-089 срез B, backend RBAC)', () => {
   let bindingStore: EventBindingStore;
   let apiKeyStore: EventApiKeyStore;
   let ingress: EventIngress;
-  let handleEvent: ReturnType<typeof vi.fn>;
+  let handleEvent: Mock<RequestSessionService['handleEvent']>;
 
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'synth-backend-events-'));
     routeRuleStore = new RouteRuleStore({ dataDir });
     bindingStore = new EventBindingStore({ dataDir });
     apiKeyStore = new EventApiKeyStore({ dataDir });
-    handleEvent = vi.fn(async (): Promise<{ decision: RouteDecision; session: Session | null }> => ({
+    handleEvent = vi.fn<RequestSessionService['handleEvent']>(async () => ({
       decision: { kind: 'drop', reason: 'stub', audited: true },
       session: null,
     }));
@@ -227,20 +227,20 @@ describe('Events API Routes (ADR-089 срез B, backend RBAC)', () => {
     expect(res.status).toBe(201);
 
     expect(handleEvent).toHaveBeenCalledOnce();
-    const call = handleEvent.mock.calls[0]! as unknown as [any, { binding?: { id: string } }];
+    const call = handleEvent.mock.calls[0]!;
     expect(call[0].source).toBe('telegram');
     expect(call[0].identity.chatKey).toBe('chat:telegram:7');
-    expect(call[1].binding?.id).toBe(binding.id);
+    expect(call[1]?.binding?.id).toBe(binding.id);
 
     const bad = await post(anonApp, '/api/v2/events', { type: 'message' }, { Authorization: 'Bearer synth_evt_bad' });
     expect(bad.status).toBe(401);
 
     // GET /keys не отдаёт секрет/hash.
     const keysRes = await app.request(`/api/v2/events/bindings/${binding.id}/keys`);
-    const keys = (await keysRes.json() as { keys: any[] }).keys;
+    const keys = (await keysRes.json() as { keys: Array<{ key?: string; hash?: string }> }).keys;
     expect(keys).toHaveLength(1);
-    expect(keys[0].key).toBeUndefined();
-    expect(keys[0].hash).toBeUndefined();
+    expect(keys[0]!.key).toBeUndefined();
+    expect(keys[0]!.hash).toBeUndefined();
   });
 
   it('удаление привязки каскадно удаляет ключи (ключ перестаёт приниматься)', async () => {

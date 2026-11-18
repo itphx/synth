@@ -251,20 +251,34 @@ jobs:
       - name: Установка pnpm
         run: npm install -g pnpm@12.14.0
 
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      # Лог сборки сохраняется для гейта предупреждений (следующий шаг). `tee` не должен
+      # маскировать падение сборки — поэтому `pipefail`; группа команд в `{}`, чтобы в лог
+      # попал вывод всех пакетов, а не только последнего.
       - name: Сборка всех пакетов
         run: |
-          pnpm install --frozen-lockfile
+          set -o pipefail
           # Build id в UI-бандл (сравнение PWA) и в образы (--build-arg ниже).
           export SYNTH_BUILD_ID="$(git rev-parse HEAD)"
-          pnpm --filter @itphx/synth-shared build
-          pnpm --filter @itphx/synth-core build
-          pnpm --filter @itphx/synth-executor build
-          pnpm --filter @itphx/synth-storage-postgres build
-          pnpm --filter @itphx/synth-provisioner build
-          pnpm --filter @itphx/synth-ui build
-          pnpm --filter @itphx/synth-backend build
-          pnpm --filter @itphx/synth-sdk build
-          pnpm --filter @itphx/synth build
+          mkdir -p tmp
+          {
+            pnpm --filter @itphx/synth-shared build
+            pnpm --filter @itphx/synth-core build
+            pnpm --filter @itphx/synth-executor build
+            pnpm --filter @itphx/synth-storage-postgres build
+            pnpm --filter @itphx/synth-provisioner build
+            pnpm --filter @itphx/synth-ui build
+            pnpm --filter @itphx/synth-backend build
+            pnpm --filter @itphx/synth-sdk build
+            pnpm --filter @itphx/synth build
+          } 2>&1 | tee tmp/build.log
+
+      # Сборка не должна «шуметь»: `(!) …`, DeprecationWarning, warning TS и WARN в логе
+      # сверяются с scripts/warnings-budget.json (buildAllow — для осознанно принятого шума).
+      - name: Гейт предупреждений сборки
+        run: node scripts/warnings-gate.mjs --build tmp/build.log
 
       - name: Загрузить бандл как артефакт
         uses: actions/upload-artifact@v4

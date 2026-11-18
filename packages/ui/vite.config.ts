@@ -7,7 +7,7 @@ import {
   renderServiceWorker,
   SW_BUILD_ID_PLACEHOLDER,
   SW_VERSION_PLACEHOLDER,
-} from "./src/lib/service-worker"
+} from "./src/lib/service-worker.ts"
 
 const BACKEND_URL = process.env.VITE_BACKEND_URL || "http://localhost:5000"
 const PORT = parseInt(process.env.VITE_PORT || "5002", 10)
@@ -171,7 +171,7 @@ function serviceWorkerVersionPlugin(): Plugin {
     name: "synth-service-worker-version",
     apply: "build",
     closeBundle() {
-      const swPath = path.resolve(__dirname, "dist/sw.js")
+      const swPath = path.resolve(import.meta.dirname, "dist/sw.js")
       if (!existsSync(swPath)) return
       const source = readFileSync(swPath, "utf8")
       if (
@@ -181,7 +181,7 @@ function serviceWorkerVersionPlugin(): Plugin {
         return
       }
       const pkg = JSON.parse(
-        readFileSync(path.resolve(__dirname, "../shared/package.json"), "utf8"),
+        readFileSync(path.resolve(import.meta.dirname, "../shared/package.json"), "utf8"),
       ) as { version: string }
       writeFileSync(swPath, renderServiceWorker(source, { version: pkg.version, buildId: BUILD_ID }))
     },
@@ -195,7 +195,7 @@ export default defineConfig({
     __SYNTH_BUILD_ID__: JSON.stringify(BUILD_ID),
   },
   resolve: {
-    alias: [{ find: "@", replacement: path.resolve(__dirname, "src") }],
+    alias: [{ find: "@", replacement: path.resolve(import.meta.dirname, "src") }],
   },
   server: {
     host: process.env.VITE_HOST || "0.0.0.0",
@@ -215,19 +215,27 @@ export default defineConfig({
       output: {
         // Разделение по группам: вендоры по назначению (см. `vendorChunkName`) +
         // реестр тем отдельным чанком — он статически импортируется на старте, но
-        // весит ~316 kB и меняется редко (кэш переживает релизы, entry уходит под
-        // порог предупреждения Vite). Прикладной код остаётся в entry/ленивых
-        // чанках (`import()` в App.tsx / RightPanel.tsx).
+        // весит ~316 kB и меняется редко (кэш переживает релизы, entry остаётся
+        // компактнее). Прикладной код остаётся в entry/ленивых чанках (`import()`
+        // в App.tsx / RightPanel.tsx).
         codeSplitting: {
           groups: [
             { name: "themes", test: /[\\/]lib[\\/]theme[\\/]themes[\\/]/ },
             {
               name: vendorChunkName,
+              // Имя группы — функция (`vendorChunkName`), поэтому отчёт бандлера
+              // не может вывести его сам: `debugName` нужен для таймингов/диагностики.
+              debugName: "vendor",
               test: /node_modules[\\/]/,
             },
           ],
         },
       },
     },
+    // Порог предупреждения Vite поднят намеренно: реальный контроль размера держит
+    // бюджет `scripts/bundle-budget.mjs` (`scripts/bundle-budget.json`), а порог Vite
+    // нужен только чтобы старый долг (vendor-misc ~2.1 MB) не сыпал шумом в каждой
+    // сборке. Новые аномалии ловит бюджет: чанк без бюджета > 500 kB — ошибка.
+    chunkSizeWarningLimit: 2200,
   },
 })

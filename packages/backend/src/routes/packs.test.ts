@@ -18,6 +18,11 @@ import {
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { requireAdminRoleOrScope } from '../auth/guards.js';
 
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code?: string; message?: string };
+}
+
 /**
  * Мок AuthKit: пользователь кладётся в контекст глобальным middleware
  * (как в реальном backend — `app.use('*', auth.attachUser)`), а guard'ы только
@@ -153,7 +158,7 @@ describe('Packs API Routes (backend) — RBAC (ADR-052/ADR-086 §5)', () => {
       body: JSON.stringify({ manifest: MANIFEST, files: FILES }),
     });
     expect(denied.status).toBe(403);
-    const body: any = await denied.json();
+    const body = (await denied.json()) as ApiErrorBody;
     expect(body.error.code).toBe('SCOPE_REQUIRED');
   });
 

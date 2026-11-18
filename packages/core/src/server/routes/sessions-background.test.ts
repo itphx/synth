@@ -16,12 +16,32 @@ import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore } from '../../index.js';
 import { ActiveRunRegistry } from '../../engine/background/active-runs.js';
+import type { ActiveRunFailure, ActiveRunSummary } from '../../engine/background/active-runs.js';
 import type { AuthKit } from '../../auth/local.js';
+
+/** Ответ `POST /:id/background`: сводка перевода прогонов (ADR-111 §detach). */
+interface DetachResponse {
+  sessionId: string;
+  detached: ActiveRunSummary[];
+  /** Только непустой: пустой `failed` в ответ не попадает. */
+  failed?: ActiveRunFailure[];
+}
+
+/** Тело ошибки HTTP-ответа. */
+interface ApiErrorBody {
+  error?: { code?: string; message?: string };
+}
+
+/** JSON-тело ответа: тип объявляет вызывающий. */
+async function jsonBody<T>(res: Response): Promise<T> {
+  return (await res.json()) as T;
+}
 
 function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
+    // Фейк: из AuthKit реализованы только getCurrentUser/requireAuth.
   } as unknown as AuthKit;
 }
 
@@ -102,7 +122,7 @@ describe('POST /api/v2/sessions/:id/background — detach (ADR-111)', () => {
 
     const res = await post(session.id);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as DetachResponse;
     expect(body).toEqual({
       sessionId: session.id,
       detached: [{ id: 'child-1', kind: 'subagent', title: 'Изучить репозиторий' }],
@@ -116,7 +136,7 @@ describe('POST /api/v2/sessions/:id/background — detach (ADR-111)', () => {
     const session = await sessionManager.createSession({ title: 'S' });
     const res = await post(session.id);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as DetachResponse;
     expect(body).toEqual({ sessionId: session.id, detached: [] });
     expect('failed' in body).toBe(false);
   });
@@ -130,7 +150,7 @@ describe('POST /api/v2/sessions/:id/background — detach (ADR-111)', () => {
 
     const res = await post(session.id, JSON.stringify({ type: 'process' }));
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as DetachResponse;
     expect(body.detached).toEqual([{ id: 'proc-1', kind: 'process' }]);
     expect(sub.detach).not.toHaveBeenCalled();
     expect(proc.detach).toHaveBeenCalledTimes(1);
@@ -147,37 +167,37 @@ describe('POST /api/v2/sessions/:id/background — detach (ADR-111)', () => {
 
     const res = await post(session.id);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as DetachResponse;
     expect(body.detached).toEqual([]);
     expect(body.failed).toHaveLength(1);
-    expect(body.failed[0]).toMatchObject({ id: 'child-1', kind: 'subagent', code: 'BACKGROUND_LIMIT' });
+    expect(body.failed?.[0]).toMatchObject({ id: 'child-1', kind: 'subagent', code: 'BACKGROUND_LIMIT' });
   });
 
   it('400 VALIDATION_ERROR: неизвестный type', async () => {
     const session = await sessionManager.createSession({ title: 'S' });
     const res = await post(session.id, JSON.stringify({ type: 'shell' }));
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 
   it('400 VALIDATION_ERROR: тело не JSON', async () => {
     const session = await sessionManager.createSession({ title: 'S' });
     const res = await post(session.id, '{not-json');
     expect(res.status).toBe(400);
-    expect(((await res.json()) as any).error.code).toBe('VALIDATION_ERROR');
+    expect((await jsonBody<ApiErrorBody>(res)).error?.code).toBe('VALIDATION_ERROR');
   });
 
   it('400 DETACH_UNSUPPORTED: удалённая (гибридная) сессия', async () => {
     const res = await post('remote:00000000-0000-4000-8000-000000000000');
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('DETACH_UNSUPPORTED');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('DETACH_UNSUPPORTED');
   });
 
   it('404 NOT_FOUND: сессии нет', async () => {
     const res = await post('missing-session');
     expect(res.status).toBe(404);
-    expect(((await res.json()) as any).error.code).toBe('NOT_FOUND');
+    expect((await jsonBody<ApiErrorBody>(res)).error?.code).toBe('NOT_FOUND');
   });
 });

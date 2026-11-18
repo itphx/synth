@@ -22,6 +22,7 @@ import {
 } from '../../storage/runtime-settings.js';
 import {
   createAttachmentsSettingsRoutes,
+  type AttachmentsSettingsView,
   type ModalityModelLookup,
 } from './settings-attachments.js';
 
@@ -93,8 +94,13 @@ function createApp(options: AppOptions) {
   return { app, live, settingsStore };
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Тело ответа-ошибки (400/409): `{error:{code,message}}`. */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
+async function json<T = AttachmentsSettingsView>(res: Response): Promise<T> {
+  return (await res.json()) as T;
 }
 
 async function put(app: Hono, body: unknown): Promise<Response> {
@@ -258,7 +264,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     for (const body of invalid) {
       const res = await put(app, body);
       expect(res.status).toBe(400);
-      expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+      expect((await json<ApiErrorBody>(res)).error.code).toBe('VALIDATION_ERROR');
     }
   });
 
@@ -283,7 +289,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     // Иное значение → конфликт.
     const conflict = await put(app, { attachments: { enabled: true } });
     expect(conflict.status).toBe(409);
-    expect((await json(conflict)).error.code).toBe('CONFLICT');
+    expect((await json<ApiErrorBody>(conflict)).error.code).toBe('CONFLICT');
 
     // То же значение (идемпотентно) — не конфликт.
     const same = await put(app, { attachments: { enabled: false } });
@@ -420,7 +426,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
       attachments: { modalityModels: { audio: { provider: 'ghost', model: 'x' } } },
     });
     expect(res.status).toBe(400);
-    const err = (await json(res)).error;
+    const err = (await json<ApiErrorBody>(res)).error;
     expect(err.code).toBe('VALIDATION_ERROR');
     expect(err.message).toContain('modalityModels.audio');
     expect(err.message).toContain('провайдер "ghost" не найден');
@@ -438,7 +444,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
       attachments: { modalityModels: { image: { provider: 'openai', model: 'ghost-vision' } } },
     });
     expect(res.status).toBe(400);
-    expect((await json(res)).error.message).toContain('модель "openai/ghost-vision" не найдена');
+    expect((await json<ApiErrorBody>(res)).error.message).toContain('модель "openai/ghost-vision" не найдена');
   });
 
   it('PUT modalityModels: модель не принимает модальность → 400 со списком её модальностей', async () => {
@@ -448,7 +454,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
       attachments: { modalityModels: { image: { provider: 'openai', model: 'gpt-3.5-turbo' } } },
     });
     expect(res.status).toBe(400);
-    const message = (await json(res)).error.message;
+    const message = (await json<ApiErrorBody>(res)).error.message;
     expect(message).toContain('modalityModels.image');
     expect(message).toContain('openai/gpt-3.5-turbo');
     expect(message).toContain('не принимает модальность image');
@@ -464,7 +470,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
       attachments: { modalityModels: { image: { provider: 'openai', model: 'gpt-4o' } } },
     });
     expect(res.status).toBe(400);
-    const message = (await json(res)).error.message;
+    const message = (await json<ApiErrorBody>(res)).error.message;
     expect(message).toContain('неизвестны модальности');
     expect(message).toContain('POST /api/v2/models/fetch');
   });
@@ -482,7 +488,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     for (const body of invalid) {
       const res = await put(app, body);
       expect(res.status).toBe(400);
-      expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+      expect((await json<ApiErrorBody>(res)).error.code).toBe('VALIDATION_ERROR');
     }
   });
 
@@ -621,7 +627,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     for (const { body, path } of cases) {
       const res = await put(app, body);
       expect(res.status).toBe(400);
-      const payload = await json(res);
+      const payload = await json<ApiErrorBody>(res);
       expect(payload.error.code).toBe('VALIDATION_ERROR');
       expect(payload.error.message).toContain(path);
     }
@@ -684,7 +690,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
     for (const key of ['maxActiveUploadsPerSession', 'maxActiveUploads']) {
       const bad = await put(app, { attachments: { [key]: 0 } });
       expect(bad.status).toBe(400);
-      expect((await json(bad)).error.code).toBe('VALIDATION_ERROR');
+      expect((await json<ApiErrorBody>(bad)).error.code).toBe('VALIDATION_ERROR');
     }
   });
 
@@ -701,7 +707,7 @@ describe('createAttachmentsSettingsRoutes (ADR-115)', () => {
 
     const conflict = await put(app, { attachments: { maxChunkBytes: 2 * 1024 * 1024 } });
     expect(conflict.status).toBe(409);
-    expect((await json(conflict)).error.code).toBe('CONFLICT');
+    expect((await json<ApiErrorBody>(conflict)).error.code).toBe('CONFLICT');
 
     // То же значение (идемпотентно) и другие поля — не конфликт.
     const same = await put(app, {

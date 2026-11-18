@@ -230,8 +230,11 @@ export const patchTool: ToolDefinition = {
     if (!parsed.success) {
       return argErrorResult(this.name, parsed.error.issues);
     }
+    // `parameters` — схема произвольной формы (`ToolDefinition`), поэтому
+    // результат `safeParse` типизирован как `unknown`: сужаем к форме аргументов.
+    const data = parsed.data as { edits: Array<Record<string, unknown>> };
     // `op` без значения — это `update` (правка без `op` — старый формат).
-    const edits = (parsed.data.edits as Array<Record<string, unknown>>).map(
+    const edits = data.edits.map(
       (edit) => ({ ...edit, op: (typeof edit.op === 'string' ? edit.op : 'update') }) as unknown as PatchEdit,
     );
     const roots = toolRoots(ctx);

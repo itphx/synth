@@ -14,12 +14,12 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', ignoreRestSiblings: true },
       ],
       '@typescript-eslint/explicit-function-return-type': 'off',
-      // `no-explicit-any` остаётся warning осознанно (аудит 0.13.4, F10):
-      // 650+ существующих мест — отдельная волна. «Предупреждения не растут»
-      // держит ратчет: `--max-warnings <N>` в скрипте `lint` каждого пакета
-      // (N = фактическое число на момент ввода). Новый `as any` или любое
-      // другое предупреждение сверх N валит `pnpm lint`. Снизили — уменьшаем N.
-      '@typescript-eslint/no-explicit-any': 'warn',
+      // `no-explicit-any` — error: долг вычищен (606 срабатываний, волна закрыта),
+      // поэтому новый `any` валит `pnpm lint` сразу. Ратчет `--max-warnings <N>`
+      // в скрипте `lint` каждого пакета остаётся, но теперь он не про `any`,
+      // а про будущие правила: каждое новое предупреждение сверх N валит сборку.
+      // Снизили — уменьшаем N.
+      '@typescript-eslint/no-explicit-any': 'error',
     },
   },
   {

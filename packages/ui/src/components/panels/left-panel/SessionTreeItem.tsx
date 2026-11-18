@@ -1,7 +1,16 @@
 import { TreeNode } from '@/components/tree'
 import type { TreeNodeBase } from '@/components/tree'
 
-export function SessionTreeItem({
+/**
+ * Минимум полей сессии для строки дерева: `id` (ключ и адрес раскрытия).
+ * Дженерик — чтобы принимать и сводку из стора (`SessionData`), и урезанную
+ * запись в изолированных тестах компонента.
+ */
+interface SessionTreeItemLike {
+  id: string
+}
+
+export function SessionTreeItem<T extends SessionTreeItemLike>({
   session,
   depth,
   childrenByParentId,
@@ -9,10 +18,10 @@ export function SessionTreeItem({
   expandedSessions,
   onToggleExpand,
 }: {
-  session: any
+  session: T
   depth: number
-  childrenByParentId: Record<string, any[]>
-  renderSessionNode: (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void) => TreeNodeBase
+  childrenByParentId: Record<string, T[]>
+  renderSessionNode: (session: T, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void) => TreeNodeBase
   expandedSessions: Set<string>
   onToggleExpand: (id: string) => void
 }) {

@@ -22,6 +22,7 @@ function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
+    // Фейк: реализованы только `getCurrentUser`/`requireAuth`.
   } as unknown as AuthKit;
 }
 
@@ -39,10 +40,27 @@ interface SkillsSettingsBody {
 /** Ответ scope-API: доступность скилла (capability-гейт, ADR-126 §10). */
 interface EffectiveSkillsBody {
   skills: Array<{
+    name: string;
     available: boolean;
     unavailableReason?: string;
     missingCapabilities?: string[];
   }>;
+}
+
+/** Ответ `GET/PUT /api/v2/sessions/:id/skills` (per-session скоуп). */
+interface SessionSkillsBody {
+  session_id: string;
+  skills: EffectiveSkillsBody['skills'];
+  enabled: string[];
+  disabled: string[];
+}
+
+/** Ответ `GET/PUT /api/v2/projects/:id/skills` (проектный скоуп). */
+interface ProjectSkillsBody {
+  project_id: string;
+  skills: EffectiveSkillsBody['skills'];
+  enabled: string[];
+  defaultOn: string[];
 }
 
 let tmpDir: string;
@@ -93,19 +111,19 @@ describe('scope-API скиллов (ADR-126 §11)', () => {
     const session = await sessionManager.createSession({});
     const get = await app.request(`/api/v2/sessions/${session.id}/skills`);
     expect(get.status).toBe(200);
-    const body: any = await get.json();
+    const body = (await get.json()) as SessionSkillsBody;
     expect(body.skills).toEqual([]);
 
     const put = await json(app, `/api/v2/sessions/${session.id}/skills`, { name: 'api-review', enabled: true }, 'PUT');
     expect(put.status).toBe(200);
-    const after: any = await put.json();
+    const after = (await put.json()) as SessionSkillsBody;
     expect(after.enabled).toContain('api-review');
 
     const effective = await app.request(`/api/v2/sessions/${session.id}/skills/effective`);
     expect(effective.status).toBe(200);
 
     const off = await json(app, `/api/v2/sessions/${session.id}/skills`, { name: 'api-review', enabled: false }, 'PUT');
-    const offBody: any = await off.json();
+    const offBody = (await off.json()) as SessionSkillsBody;
     expect(offBody.disabled).toContain('api-review');
     expect(offBody.enabled).not.toContain('api-review');
   });
@@ -136,12 +154,12 @@ describe('scope-API скиллов (ADR-126 §11)', () => {
     };
     await projectStore.save(project);
 
-    const get: any = await (await app.request('/api/v2/projects/p1/skills')).json();
+    const get = (await (await app.request('/api/v2/projects/p1/skills')).json()) as ProjectSkillsBody;
     expect(get.enabled).toEqual([]);
 
     const put = await json(app, '/api/v2/projects/p1/skills', { enabled: ['a'], defaultOn: ['b'] }, 'PUT');
     expect(put.status).toBe(200);
-    const after: any = await put.json();
+    const after = (await put.json()) as ProjectSkillsBody;
     expect(after.enabled).toEqual(['a']);
     expect(after.defaultOn).toEqual(['b']);
   });
@@ -160,14 +178,14 @@ describe('scope-API скиллов (ADR-126 §11)', () => {
     });
     const session = await sessionManager.createSession({});
     const body = (await (await app.request(`/api/v2/sessions/${session.id}/skills`)).json()) as EffectiveSkillsBody;
-    const names = body.skills.map((s: any) => s.name);
+    const names = body.skills.map((s) => s.name);
     expect(names).toContain('allowed');
     expect(names).not.toContain('denied');
   });
 
   it('settings: GET/PUT/DELETE instance-wide', async () => {
     const app = makeApp();
-    const get: any = await (await app.request('/api/v2/settings/skills')).json();
+    const get = (await (await app.request('/api/v2/settings/skills')).json()) as SkillsSettingsBody;
     expect(get.disabled).toEqual({ categories: [], groups: [], skills: [] });
     expect(get.policy).toBe('auto');
 
@@ -176,13 +194,13 @@ describe('scope-API скиллов (ADR-126 §11)', () => {
       policy: 'available',
     }, 'PUT');
     expect(put.status).toBe(200);
-    const after: any = await put.json();
+    const after = (await put.json()) as SkillsSettingsBody;
     expect(after.disabled.skills).toEqual(['db-migration']);
     expect(after.policy).toBe('available');
 
     const del = await json(app, '/api/v2/settings/skills', undefined, 'DELETE');
     expect(del.status).toBe(200);
-    const reset: any = await (await app.request('/api/v2/settings/skills')).json();
+    const reset = (await (await app.request('/api/v2/settings/skills')).json()) as SkillsSettingsBody;
     expect(reset.disabled.skills).toEqual([]);
     expect(reset.policy).toBe('auto');
   });

@@ -7,11 +7,31 @@ import { join } from 'node:path';
 import { createSkillRoutes } from './skills.js';
 import { SkillService } from '../../engine/skills/service.js';
 import type { AuthKit } from '../../auth/local.js';
+import type { SkillDetail, SkillSummary } from '@itphx/synth-shared';
+
+/** Реестр скиллов (`GET /api/v2/skills`). */
+interface SkillListBody {
+  skills: SkillSummary[];
+}
+
+/** Список supporting-файлов instance-скилла (`GET /:name/files`). */
+interface SkillFilesBody {
+  name: string;
+  files: string[];
+}
+
+/** Содержимое supporting-файла (`GET /:name/files/*`). */
+interface SkillFileBody {
+  name: string;
+  path: string;
+  content: string;
+}
 
 function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
+    // Фейк: реализованы только `getCurrentUser`/`requireAuth`.
   } as unknown as AuthKit;
 }
 
@@ -45,8 +65,8 @@ describe('/api/v2/skills (ADR-126 §7)', () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/skills');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
-    expect(body.skills.map((s: any) => s.name)).toEqual([
+    const body = (await res.json()) as SkillListBody;
+    expect(body.skills.map((s) => s.name)).toEqual([
       'skill-creator',
       'synth-agents-md',
       'synth-storage-recovery',
@@ -56,15 +76,15 @@ describe('/api/v2/skills (ADR-126 §7)', () => {
       'synth-service',
       'synth-html-report',
     ]);
-    expect(body.skills[0].trusted).toBe(true);
-    expect(body.skills[0].scope).toBe('instance');
-    expect(body.skills[0].level).toBe('system');
-    expect(body.skills[1].trusted).toBe(true);
-    expect(body.skills[1].requiresCapabilities).toEqual(['file_read', 'search', 'file_write']);
+    expect(body.skills[0]!.trusted).toBe(true);
+    expect(body.skills[0]!.scope).toBe('instance');
+    expect(body.skills[0]!.level).toBe('system');
+    expect(body.skills[1]!.trusted).toBe(true);
+    expect(body.skills[1]!.requiresCapabilities).toEqual(['file_read', 'search', 'file_write']);
     // ADR-098 (W5): builtin-руководство по восстановлению хранилища — read-only
     // (диагностика через HTTP/CLI), файловых capabilities не требует.
-    expect(body.skills[2].trusted).toBe(true);
-    expect(body.skills[2].requiresCapabilities).toEqual([]);
+    expect(body.skills[2]!.trusted).toBe(true);
+    expect(body.skills[2]!.requiresCapabilities).toEqual([]);
   });
 
   it('GET / — capability-aware: реестр считает скиллы доступными для инстанса', async () => {
@@ -105,13 +125,13 @@ describe('/api/v2/skills (ADR-126 §7)', () => {
       files: { 'references/checklist.md': '- [ ] step' },
     });
     expect(created.status).toBe(201);
-    const detail: any = await created.json();
+    const detail = (await created.json()) as SkillDetail;
     expect(detail.name).toBe('api-review');
     expect(detail.body).toContain('API Review');
     expect(detail.files).toContain('references/checklist.md');
 
-    const list: any = await (await app.request('/api/v2/skills')).json();
-    expect(list.skills.map((s: any) => s.name)).toContain('api-review');
+    const list = (await (await app.request('/api/v2/skills')).json()) as SkillListBody;
+    expect(list.skills.map((s) => s.name)).toContain('api-review');
 
     const got = await app.request('/api/v2/skills/api-review');
     expect(got.status).toBe(200);
@@ -141,7 +161,7 @@ describe('/api/v2/skills (ADR-126 §7)', () => {
     await post(app, '/api/v2/skills', { name: 'a', description: 'old', body: 'old body' });
     const res = await post(app, '/api/v2/skills/a', { description: 'new', body: 'new body' }, 'PATCH');
     expect(res.status).toBe(200);
-    const detail: any = await res.json();
+    const detail = (await res.json()) as SkillDetail;
     expect(detail.description).toBe('new');
     expect(detail.body).toContain('new body');
   });
@@ -159,10 +179,10 @@ describe('/api/v2/skills (ADR-126 §7)', () => {
     const put = await post(app, '/api/v2/skills/s/files/references/a.md', { content: 'hello' }, 'PUT');
     expect(put.status).toBe(200);
 
-    const list: any = await (await app.request('/api/v2/skills/s/files')).json();
+    const list = (await (await app.request('/api/v2/skills/s/files')).json()) as SkillFilesBody;
     expect(list.files).toContain('references/a.md');
 
-    const got: any = await (await app.request('/api/v2/skills/s/files/references/a.md')).json();
+    const got = (await (await app.request('/api/v2/skills/s/files/references/a.md')).json()) as SkillFileBody;
     expect(got.content).toBe('hello');
 
     const del = await app.request('/api/v2/skills/s/files/references/a.md', { method: 'DELETE' });
@@ -245,9 +265,9 @@ describe('/api/v2/skills/:name — невалидные и отсутствую�
     const { app, skillService } = makeApp();
     const res = await app.request('/api/v2/skills/Bad_Name', { method: 'DELETE' });
     expect(res.status).toBe(404);
-    const list: any = await (await app.request('/api/v2/skills')).json();
+    const list = (await (await app.request('/api/v2/skills')).json()) as SkillListBody;
     // Только builtin; скилл с невалидным именем не создан.
-    expect(list.skills.map((s: any) => s.name)).toEqual([
+    expect(list.skills.map((s) => s.name)).toEqual([
       'skill-creator',
       'synth-agents-md',
       'synth-storage-recovery',

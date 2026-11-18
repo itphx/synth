@@ -11,14 +11,14 @@ import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
-import type { ProjectData } from '@/lib/api/synthApi'
+import type { FileEntry, ProjectData } from '@/lib/api/synthApi'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { fileIconName } from '@/lib/fileIcon'
 import { buildStatusIndex, dirStatus, fileStatus } from '@/lib/gitStatus'
 import { openFileDiffTab } from '@/lib/fileTabs'
 import type { GitStatusEntry } from '@/lib/gitStatus'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
-import type { TreeNodeBase, TreeAction } from '@/components/tree'
+import type { TreeNodeBase, TreeAction, ContextMenuEntry } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -67,13 +67,13 @@ export function FilesTab() {
   const [renameValue, setRenameValue] = useState('')
   const [renamingProject, setRenamingProject] = useState<string | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [renamingEntry, setRenamingEntry] = useState<any>(null)
+  const [renamingEntry, setRenamingEntry] = useState<FileEntry | null>(null)
   const [popover, setPopover] = useState<{ type: 'newFolder' | 'newFile'; projectId: string; parentPath: string } | null>(null)
   const [popoverName, setPopoverName] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [activeUploadProject, setActiveUploadProject] = useState<string | null>(null)
   const [activeUploadPath, setActiveUploadPath] = useState<string>('')
-  const [moveTarget, setMoveTarget] = useState<{ projectId: string; entry: any } | null>(null)
+  const [moveTarget, setMoveTarget] = useState<{ projectId: string; entry: FileEntry } | null>(null)
   const [moveDest, setMoveDest] = useState<string>('')
   // Каталоги для диалога переноса: рекурсивный листинг workspace (глубина
   // ограничена сервером — MAX_FS_LIST_DEPTH = 3).
@@ -309,7 +309,7 @@ export function FilesTab() {
     e.target.value = ''
   }
 
-  const handleDownload = (projectId: string, entry: any) => {
+  const handleDownload = (projectId: string, entry: FileEntry) => {
     const url = synthApi.downloadFile(projectId, entry.path)
     const a = document.createElement('a')
     a.href = url
@@ -332,14 +332,14 @@ export function FilesTab() {
     setPopoverName('')
   }
 
-  const handleRenameStart = (projectId: string, entry: any) => {
+  const handleRenameStart = (projectId: string, entry: FileEntry) => {
     setRenamingProject(projectId)
     setRenamingPath(entry.path)
     setRenamingEntry(entry)
     setRenameValue(entry.name)
   }
 
-  const handleRenameSubmit = async (projectId: string, entry: any) => {
+  const handleRenameSubmit = async (projectId: string, entry: FileEntry) => {
     const newName = renameValue.trim()
     if (!newName || newName === entry.name) {
       setRenamingPath(null)
@@ -361,7 +361,7 @@ export function FilesTab() {
     setRenamingEntry(null)
   }
 
-  const openMoveDialog = (projectId: string, entry: any) => {
+  const openMoveDialog = (projectId: string, entry: FileEntry) => {
     setMoveTarget({ projectId, entry })
     setMoveDest('')
     void loadMoveDirs(projectId)
@@ -385,7 +385,7 @@ export function FilesTab() {
     setMoveDest('')
   }
 
-  const handleFileDragStart = (e: React.DragEvent, projectId: string, entry: any) => {
+  const handleFileDragStart = (e: React.DragEvent, projectId: string, entry: FileEntry) => {
     e.dataTransfer.setData('text/plain', JSON.stringify({ projectId, path: entry.path }))
     e.dataTransfer.effectAllowed = 'move'
     setDragState({ projectId, path: entry.path })
@@ -445,7 +445,7 @@ export function FilesTab() {
     } catch { /* ignore */ }
   }
 
-  const renderEntry = (projectId: string, entry: any, depth: number): TreeNodeBase => {
+  const renderEntry = (projectId: string, entry: FileEntry, depth: number): TreeNodeBase => {
     const isDir = entry.isDirectory
     const dirKey = `${projectId}/${entry.path}`
     const isExpanded = expandedDirs.has(dirKey)
@@ -485,7 +485,7 @@ export function FilesTab() {
       })
     }
 
-    const entryContextItems: any[] = [
+    const entryContextItems: ContextMenuEntry[] = [
       { label: t('file.move'), icon: 'folder-received' as const, onClick: () => openMoveDialog(projectId, entry) },
       { label: t('files.rename'), icon: 'pencil-ai' as const, onClick: () => handleRenameStart(projectId, entry) },
       { label: t('common.delete'), icon: 'delete-bin' as const, onClick: () => {
@@ -550,7 +550,7 @@ export function FilesTab() {
     }
   }
 
-  const renderSubtree = (projectId: string, entry: any, depth: number): React.ReactNode => {
+  const renderSubtree = (projectId: string, entry: FileEntry, depth: number): React.ReactNode => {
     const node = renderEntry(projectId, entry, depth)
     const subKey = `${projectId}/${entry.path}`
     const isDirExpanded = expandedDirs.has(subKey)

@@ -57,6 +57,13 @@ jobs:
       - name: ESLint
         run: pnpm lint
 
+      # Числовой ратчет: суммарное число предупреждений eslint по пакетам не выше
+      # scripts/warnings-budget.json. `--max-warnings` в пакетных скриптах держит
+      # пакет по отдельности, но общий счётчик (и деградацию одного пакета за счёт
+      # другого) не видит. Окружение то же — install выше уже выполнен.
+      - name: Гейт предупреждений
+        run: node scripts/warnings-gate.mjs
+
   test-shared:
     name: Тесты @itphx/synth-shared
     runs-on: synth-ci

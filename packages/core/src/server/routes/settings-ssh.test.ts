@@ -18,7 +18,7 @@ import {
   type LiveSshMode,
 } from '../../storage/runtime-settings.js';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
-import { createSshSettingsRoutes } from './settings-ssh.js';
+import { createSshSettingsRoutes, type SshSettingsView } from './settings-ssh.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 
@@ -70,8 +70,13 @@ function createApp(options: AppOptions): {
   return { app, live, settingsStore };
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Тело ответа-ошибки (400/409): `{error:{code,message}}`. */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
+async function json<T = SshSettingsView>(res: Response): Promise<T> {
+  return (await res.json()) as T;
 }
 
 async function put(app: Hono, body: unknown): Promise<Response> {
@@ -141,7 +146,7 @@ describe('createSshSettingsRoutes', () => {
     for (const mode of ['xxx', '', 42, null]) {
       const res = await put(app, { mode });
       expect(res.status).toBe(400);
-      const body = await json(res);
+      const body = await json<ApiErrorBody>(res);
       expect(body.error.code).toBe('VALIDATION_ERROR');
     }
   });
@@ -153,7 +158,7 @@ describe('createSshSettingsRoutes', () => {
 
     const res = await put(app, { mode: 'tools' });
     expect(res.status).toBe(409);
-    const body = await json(res);
+    const body = await json<ApiErrorBody>(res);
     expect(body.error.code).toBe('CONFLICT');
   });
 

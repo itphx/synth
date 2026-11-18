@@ -4,7 +4,7 @@ import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSessionRoutes } from './sessions.js';
+import { createSessionRoutes, type SessionRoutesDeps } from './sessions.js';
 import { createProjectRoutes } from './projects.js';
 import { createHybridRoutes } from './hybrid.js';
 import { SessionManager, EventBus, FileStore } from '../../index.js';
@@ -29,6 +29,7 @@ function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
+    // Фейк: реализованы только requireAuth/getCurrentUser.
   } as unknown as AuthKit;
 }
 
@@ -128,6 +129,7 @@ function createFakeRemoteClient(overrides: Record<string, unknown> = {}) {
     fsUpload: vi.fn().mockResolvedValue({ path: 'f', name: 'f' }),
     ...overrides,
   };
+  // Фейк: реализованы только методы, которые дёргают гибридные ветки роутов.
   return fake as unknown as RemoteBackendClient & Record<string, ReturnType<typeof vi.fn>>;
 }
 
@@ -136,6 +138,70 @@ interface TestWorld {
   remote: ReturnType<typeof createFakeRemoteClient>;
   sessionManager: SessionManager;
   projectStore: ProjectStore;
+}
+
+// ─────────────────── DTO гибридных ответов (формы сверены с `hybrid.ts`/`sessions.ts`,
+// маршрутизация миров — ADR-042) ───────────────────
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code: string; message?: string };
+}
+
+/** Сводка сессии гибрида: у удалённой — `remote:`-id и `origin: 'remote'`. */
+interface HybridSessionSummary {
+  id: string;
+  name?: string;
+  origin?: string;
+  project_id?: string;
+  parent_id?: string | null;
+  references?: Array<{ session_id?: string }>;
+}
+
+/** Страница сессий гибрида (локальные + удалённые) + признак offline-деградации. */
+interface HybridSessionListPage {
+  sessions: HybridSessionSummary[];
+  total: number;
+  next_offset: number | null;
+  remote_offline?: boolean;
+}
+
+/** Деталь/создание/правка сессии гибрида — `origin` говорит, в каком мире запись. */
+interface HybridSessionBody {
+  id: string;
+  name?: string;
+  origin?: string;
+  project_id?: string;
+}
+
+/** Сводка проекта гибрида: у удалённого — `remote:`-id и `origin: 'remote'`. */
+interface HybridProjectSummary {
+  id: string;
+  name: string;
+  origin?: string;
+}
+
+/** Страница проектов гибрида + признак offline-деградации. */
+interface HybridProjectListPage {
+  projects: HybridProjectSummary[];
+  total: number;
+  next_offset: number | null;
+  remote_offline?: boolean;
+}
+
+/** Подтверждение приёма сообщения (ADR-118 §3): `{messageId, mode, position}`. */
+interface PromptAcceptedBody {
+  messageId: string;
+  mode: string;
+  position: number | null;
+}
+
+/** Страница сообщений: `session_id` переписан в `remote:`-форму. */
+interface RemoteMessagePageBody {
+  session_id: string;
+  messages: Array<{ content?: string }>;
+  has_more: boolean;
+  next_before: string | null;
 }
 
 function createTestApp(remote?: RemoteBackendClient, tmpDir?: string): TestWorld {
@@ -152,15 +218,18 @@ function createTestApp(remote?: RemoteBackendClient, tmpDir?: string): TestWorld
     {
       sessionManager,
       eventBus,
-      queueManager: queueManager as any,
+      // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+      queueManager: queueManager as unknown as SessionRoutesDeps['queueManager'],
       processMessage: orchestrator.createProcessMessage(),
-      orchestrator: orchestrator as any,
+      // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+      orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
       projectStore,
       getRemoteClient: () => remote ?? null,
     },
   ));
   app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), projectStore, remote ? () => remote : undefined));
 
+  // Фейк: тест обращается к `vi.fn()`-мокам за интерфейсом клиента.
   const fakeRemote = remote as unknown as ReturnType<typeof createFakeRemoteClient> | undefined;
   return { app, remote: fakeRemote!, sessionManager, projectStore };
 }
@@ -183,11 +252,11 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const s = await sessionManager.createSession({ title: 'Локальная', userId: 'local' });
 
       const res = await app.request('/api/v2/sessions');
-      const body = (await res.json()) as any;
+      const body = (await res.json()) as HybridSessionListPage;
       expect(body.sessions).toHaveLength(1);
-      expect(body.sessions[0].id).toBe(s.id);
-      expect(body.sessions[0].origin).toBe('local');
-      expect(body.sessions[0].name).toBe('Локальная');
+      expect(body.sessions[0]!.id).toBe(s.id);
+      expect(body.sessions[0]!.origin).toBe('local');
+      expect(body.sessions[0]!.name).toBe('Локальная');
       expect(body.total).toBe(1);
       expect(body.next_offset).toBeNull();
       // Чисто локальный ответ не несёт признака offline-деградации.
@@ -200,18 +269,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
 
       const res = await app.request('/api/v2/sessions');
       expect(res.status).toBe(200);
-      const body = (await res.json()) as {
-        sessions: Array<{
-          origin?: string;
-          id?: string;
-          name?: string;
-          project_id?: string;
-          parent_id?: string | null;
-          references?: Array<{ session_id?: string }>;
-        }>;
-        total: number;
-        next_offset: number | null;
-      };
+      const body = (await res.json()) as HybridSessionListPage;
       expect(body.sessions).toHaveLength(2);
 
       const local = body.sessions.find((x) => x.origin === 'local')!;
@@ -267,10 +325,10 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       await sessionManager.createSession({ title: 'Локальная', userId: 'local', projectId: 'prj-1' });
 
       const res = await app.request('/api/v2/sessions?project_id=remote:rp-1');
-      const body = (await res.json()) as any;
+      const body = (await res.json()) as HybridSessionListPage;
       expect(body.sessions).toHaveLength(1);
-      expect(body.sessions[0].origin).toBe('remote');
-      expect(body.sessions[0].id).toBe('remote:rs-1');
+      expect(body.sessions[0]!.origin).toBe('remote');
+      expect(body.sessions[0]!.id).toBe('remote:rs-1');
       expect(remote.listAllSessions).toHaveBeenCalledWith('rp-1');
     });
 
@@ -278,7 +336,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const { app } = createTestApp(undefined, tmpDir);
       const res = await app.request('/api/v2/sessions?project_id=remote:rp-1');
       expect(res.status).toBe(502);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('REMOTE_UNAVAILABLE');
     });
   });
@@ -288,7 +346,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const { app, remote } = createTestApp(createFakeRemoteClient(), tmpDir);
       const res = await app.request('/api/v2/sessions/remote:rs-1');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as HybridSessionBody;
       expect(body.origin).toBe('remote');
       expect(body.id).toBe('remote:rs-1');
       expect(body.project_id).toBe('remote:rp-1');
@@ -313,7 +371,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         body: JSON.stringify({ origin: 'remote', name: 'Создана на бэке', project_id: 'remote:rp-1' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as HybridSessionBody;
       expect(body.origin).toBe('remote');
       expect(body.id).toBe('remote:rs-new');
       expect(body.project_id).toBe('remote:rp-1');
@@ -334,7 +392,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         body: JSON.stringify({ name: 'Локальная' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as HybridSessionBody;
       expect(body.origin).toBe('local');
       expect(remote.createSession).not.toHaveBeenCalled();
     });
@@ -360,7 +418,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         body: JSON.stringify({ content: 'привет' }),
       });
       expect(res.status).toBe(202);
-      const body: any = await res.json();
+      const body = (await res.json()) as PromptAcceptedBody;
       expect(body).toEqual({ messageId: 'rm-1', mode: 'queue', position: null });
       expect(remote.promptSession).toHaveBeenCalledWith('rs-1', { content: 'привет' }, expect.anything());
     });
@@ -374,7 +432,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         body: JSON.stringify({ content: 'привет' }),
       });
       expect(res.status).toBe(202);
-      const body: any = await res.json();
+      const body = (await res.json()) as PromptAcceptedBody;
       expect(typeof body.messageId).toBe('string');
       expect(body.messageId.length).toBeGreaterThan(0);
       expect(body.mode).toBe('queue');
@@ -414,7 +472,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         body: JSON.stringify({ content: 'привет', mode: 'steer' }),
       });
       expect(res.status).toBe(202);
-      const body: any = await res.json();
+      const body = (await res.json()) as PromptAcceptedBody;
       expect(body.mode).toBe('steer');
       expect(body.messageId).toBe('st-1');
       expect(body.position).toBeNull();
@@ -428,7 +486,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         body: JSON.stringify({ content: 'привет', mode: 'steer', messageId: 'st-9' }),
       });
       expect(res.status).toBe(202);
-      const body: any = await res.json();
+      const body = (await res.json()) as PromptAcceptedBody;
       expect(body.mode).toBe('queue');
       expect(body.messageId).toBe('st-9');
       expect(body.position).toBeNull();
@@ -444,7 +502,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       expect(res.status).toBe(202);
       const text = await res.text();
       expect(text).not.toContain('stream.done');
-      expect((JSON.parse(text) as any).mode).toBe('queue');
+      expect((JSON.parse(text) as PromptAcceptedBody).mode).toBe('queue');
     });
   });
 
@@ -456,7 +514,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
 
       const res = await app.request('/api/v2/projects');
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { projects: any[]; total: number; next_offset: number | null };
+      const body = (await res.json()) as HybridProjectListPage;
       expect(body.projects).toHaveLength(2);
       expect(body.projects.find((x) => x.origin === 'local')!.name).toBe('Локальный');
       const remoteP = body.projects.find((x) => x.origin === 'remote')!;
@@ -480,11 +538,11 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
 
       const res = await app.request('/api/v2/projects');
       expect(res.status).toBe(200);
-      const body = (await res.json()) as { projects: any[]; remote_offline?: boolean };
+      const body = (await res.json()) as HybridProjectListPage;
       expect(body.remote_offline).toBe(true);
       expect(body.projects).toHaveLength(1);
-      expect(body.projects[0].id).toBe(p.id);
-      expect(body.projects[0].origin).toBe('local');
+      expect(body.projects[0]!.id).toBe(p.id);
+      expect(body.projects[0]!.origin).toBe('local');
     });
 
     it('без remoteClient — только локальные', async () => {
@@ -492,9 +550,9 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const p = projectStore.create('Локальный', 'local');
       await projectStore.save(p);
       const res = await app.request('/api/v2/projects');
-      const body = (await res.json()) as { projects: any[]; total: number };
+      const body = (await res.json()) as HybridProjectListPage;
       expect(body.projects).toHaveLength(1);
-      expect(body.projects[0].origin).toBe('local');
+      expect(body.projects[0]!.origin).toBe('local');
       expect(body.total).toBe(1);
       // Чисто локальный ответ не несёт признака offline-деградации.
       expect(body).not.toHaveProperty('remote_offline');
@@ -510,7 +568,7 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
         body: JSON.stringify({ name: 'Обновлено' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as HybridSessionBody;
       expect(body.id).toBe('remote:rs-1');
       expect(body.origin).toBe('remote');
       expect(remote.updateSession).toHaveBeenCalledWith('rs-1', { name: 'Обновлено' });
@@ -529,9 +587,9 @@ describe('Hybrid routes: агрегация миров (remoteClient)', () => {
       const { app, remote } = createTestApp(createFakeRemoteClient(), tmpDir);
       const res = await app.request('/api/v2/sessions/remote:rs-1/messages');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as RemoteMessagePageBody;
       expect(body.session_id).toBe('remote:rs-1');
-      expect(body.messages[0].content).toBe('hi');
+      expect(body.messages[0]!.content).toBe('hi');
       // Параметры пагинации пробрасываются в удалённый мир.
       expect(remote.getSessionMessages).toHaveBeenCalledWith('rs-1', { limit: 200, before: undefined });
       // Контракт страницы нормализуется (старый сервер без полей → дефолты).
@@ -561,7 +619,7 @@ describe('Remote-роуты: единый маппинг ошибок через
 
     const res = await app.request('/api/v2/sessions/remote:rs-1');
     expect(res.status).toBe(502);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('OFFLINE');
     expect(body.error.message).toContain('Сервер недоступен');
   });
@@ -574,7 +632,7 @@ describe('Remote-роуты: единый маппинг ошибок через
 
     const res = await app.request('/api/v2/projects/remote:rp-1');
     expect(res.status).toBe(401);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('UNAUTHORIZED');
   });
 
@@ -590,7 +648,7 @@ describe('Remote-роуты: единый маппинг ошибок через
       body: JSON.stringify({ origin: 'remote', name: 'X' }),
     });
     expect(res.status).toBe(502);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('OFFLINE');
   });
 

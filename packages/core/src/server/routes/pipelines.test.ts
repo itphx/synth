@@ -4,9 +4,33 @@ import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { PipelineInstance } from '@itphx/synth-shared';
 import { createPipelinesRoutes } from './pipelines.js';
 import { FilePipelineStore } from '../../storage/file-pipeline-store.js';
 import type { PipelineDefinitionRecord } from '../../storage/ports/pipeline-repository.js';
+
+// ─────────────────── DTO ответов контура (формы сверены с `pipelines.ts`) ───────────────────
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code: string; message?: string };
+}
+
+/** Список определений пайплайнов инстанса (`GET /`). */
+interface PipelineListBody {
+  pipelines: PipelineDefinitionRecord[];
+}
+
+/**
+ * Страница экземпляров (`GET /instances`): `total` роут не отдаёт —
+ * порт возвращает ограниченную выборку, курсор — `next_offset`.
+ */
+interface InstanceListPage {
+  instances: PipelineInstance[];
+  offset: number;
+  limit: number;
+  next_offset: number | null;
+}
 
 /** Мок auth: requireAuth — no-op (single-user режим core). */
 function createMockAuth() {
@@ -57,10 +81,10 @@ describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
 
     const res = await app.request('/api/v2/pipelines');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as PipelineListBody;
     expect(body.pipelines).toHaveLength(1);
-    expect(body.pipelines[0].id).toBe('publication');
-    expect(body.pipelines[0].installedBy).toBeUndefined();
+    expect(body.pipelines[0]!.id).toBe('publication');
+    expect(body.pipelines[0]!.installedBy).toBeUndefined();
   });
 
   it('GET /:id — определение; 404 для неизвестного', async () => {
@@ -71,13 +95,13 @@ describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
 
     const ok = await app.request('/api/v2/pipelines/publication');
     expect(ok.status).toBe(200);
-    const body: any = await ok.json();
+    const body = (await ok.json()) as PipelineDefinitionRecord;
     expect(body.id).toBe('publication');
     expect(body.installedBy).toEqual({ pack: 'synth-media', version: '1.0.0' });
 
     const missing = await app.request('/api/v2/pipelines/nope');
     expect(missing.status).toBe(404);
-    const err: any = await missing.json();
+    const err = (await missing.json()) as ApiErrorBody;
     expect(err.error.code).toBe('NOT_FOUND');
   });
 
@@ -113,23 +137,23 @@ describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
 
     const all = await app.request('/api/v2/pipelines/instances');
     expect(all.status).toBe(200);
-    const allBody: any = await all.json();
+    const allBody = (await all.json()) as InstanceListPage;
     expect(allBody.instances).toHaveLength(3);
 
     const byPipeline = await app.request('/api/v2/pipelines/instances?pipelineId=publication');
-    const byPipelineBody: any = await byPipeline.json();
-    expect(byPipelineBody.instances.map((i: any) => i.id).sort()).toEqual(['run-1', 'run-2']);
+    const byPipelineBody = (await byPipeline.json()) as InstanceListPage;
+    expect(byPipelineBody.instances.map((i) => i.id).sort()).toEqual(['run-1', 'run-2']);
 
     const byStatus = await app.request('/api/v2/pipelines/instances?status=done');
-    const byStatusBody: any = await byStatus.json();
-    expect(byStatusBody.instances.map((i: any) => i.id).sort()).toEqual(['run-2', 'run-3']);
+    const byStatusBody = (await byStatus.json()) as InstanceListPage;
+    expect(byStatusBody.instances.map((i) => i.id).sort()).toEqual(['run-2', 'run-3']);
 
     const byBoth = await app.request('/api/v2/pipelines/instances?pipelineId=publication&status=done');
-    const byBothBody: any = await byBoth.json();
-    expect(byBothBody.instances.map((i: any) => i.id)).toEqual(['run-2']);
+    const byBothBody = (await byBoth.json()) as InstanceListPage;
+    expect(byBothBody.instances.map((i) => i.id)).toEqual(['run-2']);
 
     const limited = await app.request('/api/v2/pipelines/instances?limit=1');
-    const limitedBody: any = await limited.json();
+    const limitedBody = (await limited.json()) as InstanceListPage;
     expect(limitedBody.instances).toHaveLength(1);
     expect(limitedBody.offset).toBe(0);
     expect(limitedBody.limit).toBe(1);
@@ -160,15 +184,15 @@ describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
     }
 
     const first = await app.request('/api/v2/pipelines/instances?limit=2');
-    const firstBody: any = await first.json();
-    expect(firstBody.instances.map((i: any) => i.id)).toEqual(['run-3', 'run-2']);
+    const firstBody = (await first.json()) as InstanceListPage;
+    expect(firstBody.instances.map((i) => i.id)).toEqual(['run-3', 'run-2']);
     expect(firstBody.offset).toBe(0);
     expect(firstBody.limit).toBe(2);
     expect(firstBody.next_offset).toBe(2);
 
     const second = await app.request('/api/v2/pipelines/instances?limit=2&offset=2');
-    const secondBody: any = await second.json();
-    expect(secondBody.instances.map((i: any) => i.id)).toEqual(['run-1']);
+    const secondBody = (await second.json()) as InstanceListPage;
+    expect(secondBody.instances.map((i) => i.id)).toEqual(['run-1']);
     expect(secondBody.offset).toBe(2);
     expect(secondBody.next_offset).toBeNull();
   });
@@ -187,7 +211,7 @@ describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
 
     const ok = await app.request('/api/v2/pipelines/instances/run-1');
     expect(ok.status).toBe(200);
-    const body: any = await ok.json();
+    const body = (await ok.json()) as PipelineInstance;
     expect(body.id).toBe('run-1');
 
     const missing = await app.request('/api/v2/pipelines/instances/nope');
@@ -208,7 +232,7 @@ describe('Pipelines API Routes (ADR-051/ADR-100)', () => {
     });
 
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as PipelineInstance;
     expect(body.pipelineId).toBe('publication');
     expect(body.pipelineVersion).toBe('1.0.0');
     expect(body.status).toBe('running');

@@ -5,6 +5,17 @@ import { createDebugRoutes } from './debug.js';
 import { getAllGroups, resetGroupOverrides } from '../../logger.js';
 import type { User } from '@itphx/synth-shared';
 
+/** Ответ `GET /api/v2/admin/debug/config`: группы логирования и доступные уровни. */
+interface DebugConfigBody {
+  groups: Record<string, string>;
+  available_levels: string[];
+}
+
+/** Тело ошибки HTTP-ответа роутов отладки. */
+interface ApiErrorBody {
+  error: { code: string; message?: string };
+}
+
 const adminUser: User = {
   id: 'admin',
   username: 'admin',
@@ -75,7 +86,7 @@ describe('Debug Config API Routes (core)', () => {
     it('возвращает группы и доступные уровни', async () => {
       const res = await createApp(adminUser).request('/api/v2/admin/debug/config');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DebugConfigBody;
       expect(body.groups).toEqual(getAllGroups());
       expect(Array.isArray(body.available_levels)).toBe(true);
       expect(body.available_levels.length).toBeGreaterThan(0);
@@ -110,14 +121,14 @@ describe('Debug Config API Routes (core)', () => {
     it('возвращает 400 VALIDATION_ERROR без groups', async () => {
       const res = await postConfig(createApp(adminUser));
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
     it('возвращает 400 на невалидный уровень', async () => {
       const res = await postConfig(createApp(adminUser), { ROUTES: 'TRACE' });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(getAllGroups().ROUTES).toBe('WARNING');
     });

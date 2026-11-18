@@ -6,8 +6,50 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createProjectRoutes } from './projects.js';
 import { ProjectStore } from '@itphx/synth-core';
+import type { EventBus, SessionManager } from '@itphx/synth-core';
 import type { User } from '@itphx/synth-shared';
 import { ProjectRole } from '@itphx/synth-shared';
+import type { AuthKit } from '../auth/middleware.js';
+import type { EventHub } from '../events/hub.js';
+
+/** Страница списка проектов (`GET /api/v2/projects`, ADR-118 §4). */
+interface ProjectListPage {
+  projects: Array<{ id?: string; name?: string; workspace?: string }>;
+  total: number;
+  offset: number;
+  limit: number;
+  next_offset: number | null;
+}
+
+/** Деталь проекта и ответ мутаций (`GET|POST|PUT /api/v2/projects[/:id]`). */
+interface ProjectBody {
+  id: string;
+  name: string;
+  owner_id: string;
+  description?: string;
+  plan?: unknown;
+  workspace?: string;
+}
+
+/** Ответ provisioning'а workspace: относительное имя каталога проекта (ADR-075). */
+interface ProjectWorkspaceBody {
+  workspace: string;
+}
+
+/** Статистика проекта (`GET /api/v2/projects/:id/stats`). */
+interface ProjectStatsBody {
+  total_sessions: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  total_cache_read_tokens?: number;
+  [key: string]: unknown;
+}
+
+/** Тело ошибки HTTP-ответа: `{ error: { code, message } }`. */
+interface ApiErrorBody {
+  error?: { code?: string; message?: string };
+}
 
 const testUser: User = {
   id: 'test-user',
@@ -20,13 +62,19 @@ const testUser: User = {
   interviewCompleted: false,
 };
 
-function createMockKit() {
+/**
+ * Фейк AuthKit: реализованы только `requireAuth` и `getCurrentUser` —
+ * остальные методы middleware роутам проекта не нужны.
+ */
+function createMockKit(): AuthKit {
+  // Фейк: реализованы только requireAuth/getCurrentUser.
   return {
     requireAuth: async (_c: Context, next: Next) => { await next(); },
-    getCurrentUser: () => testUser,
-  };
+    getCurrentUser: async () => testUser,
+  } as unknown as AuthKit;
 }
 
+/** Фейк менеджера сессий: реализован только `listSessions` (нужен `/stats`). */
 function createMockSessionManager() {
   return {
     listSessions: vi.fn().mockResolvedValue([]),
@@ -38,7 +86,13 @@ function createTestApp() {
   const kit = createMockKit();
   const store = new ProjectStore({ dataDir: tmpDir });
   const sessionManager = createMockSessionManager();
-  const projectRoutes = createProjectRoutes(kit as any, store, sessionManager as any, tmpDir);
+  const projectRoutes = createProjectRoutes(
+    kit,
+    store,
+    // Фейк: реализован только listSessions (нужен `/stats`).
+    sessionManager as unknown as SessionManager,
+    tmpDir,
+  );
   app.route('/api/v2/projects', projectRoutes);
   return { app, store, sessionManager };
 }
@@ -59,7 +113,7 @@ describe('Project API Routes', () => {
       const { app } = createTestApp();
       const res = await app.request('/api/v2/projects');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectListPage;
       expect(body.projects).toEqual([]);
       expect(body.total).toBe(0);
       expect(body.offset).toBe(0);
@@ -75,7 +129,7 @@ describe('Project API Routes', () => {
       await store.save(p2);
       const res = await app.request('/api/v2/projects');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectListPage;
       expect(body.projects).toHaveLength(2);
       expect(body.total).toBe(2);
     });
@@ -90,7 +144,7 @@ describe('Project API Routes', () => {
         body: JSON.stringify({ name: 'New Project' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectBody;
       expect(body.id).toBeTruthy();
       expect(body.name).toBe('New Project');
       expect(body.owner_id).toBe('test-user');
@@ -104,8 +158,8 @@ describe('Project API Routes', () => {
         body: JSON.stringify({}),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
     });
 
     it('возвращает 400 при пустом имени', async () => {
@@ -132,7 +186,7 @@ describe('Project API Routes', () => {
         body: JSON.stringify({ name: 'Planned', plan }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectBody;
       expect(body.plan).toEqual(plan);
       const stored = await store.load(body.id);
       expect(stored?.plan).toEqual(plan);
@@ -146,7 +200,7 @@ describe('Project API Routes', () => {
       await store.save(project);
       const res = await app.request(`/api/v2/projects/${project.id}`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectBody;
       expect(body.id).toBe(project.id);
       expect(body.name).toBe('GetTest');
     });
@@ -155,8 +209,8 @@ describe('Project API Routes', () => {
       const { app } = createTestApp();
       const res = await app.request('/api/v2/projects/non-existent');
       expect(res.status).toBe(404);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('NOT_FOUND');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('NOT_FOUND');
     });
   });
 
@@ -171,7 +225,7 @@ describe('Project API Routes', () => {
         body: JSON.stringify({ name: 'After', description: 'new' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectBody;
       expect(body.name).toBe('After');
       expect(body.description).toBe('new');
     });
@@ -202,7 +256,7 @@ describe('Project API Routes', () => {
         body: JSON.stringify({ plan }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectBody;
       expect(body.plan).toEqual(plan);
       const stored = await store.load(project.id);
       expect(stored?.plan).toEqual(plan);
@@ -233,7 +287,7 @@ describe('Project API Routes', () => {
       await store.save(project);
       const res = await app.request(`/api/v2/projects/${project.id}/stats`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectStatsBody;
       expect(body.total_sessions).toBe(0);
       expect(body.total_tokens).toBe(0);
       expect(body.total_input_tokens).toBe(0);
@@ -267,7 +321,7 @@ describe('Project API Routes', () => {
 
       const res = await app.request(`/api/v2/projects/${project.id}/stats`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectStatsBody;
       expect(body.total_sessions).toBe(2);
       expect(body.total_input_tokens).toBe(400);
       expect(body.total_output_tokens).toBe(40);
@@ -327,9 +381,11 @@ function makeWorkspaceApp() {
   };
   const store = new ProjectStore({ dataDir: tmpDir });
   const routes = createProjectRoutes(
-    kit as never,
+    // Фейк: реализованы только requireAuth/getCurrentUser/isAdmin/hasRole.
+    kit as unknown as AuthKit,
     store,
-    { listSessions: vi.fn().mockResolvedValue([]) } as never,
+    // Фейк: реализован только listSessions.
+    { listSessions: vi.fn().mockResolvedValue([]) } as unknown as SessionManager,
     tmpDir,
   );
   app.route('/api/v2/projects', routes);
@@ -353,7 +409,7 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
       body: JSON.stringify({ name: 'My Project' }),
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as ProjectWorkspaceBody;
     expect(body.workspace).toBe('my-project');
     expect((await stat(resolve(tmpDir, 'my-project'))).isDirectory()).toBe(true);
   });
@@ -366,7 +422,7 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
       body: JSON.stringify({ name: 'X', workspace: 'nested/dir' }),
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as ProjectWorkspaceBody;
     expect(body.workspace).toBe('nested/dir');
     expect((await stat(resolve(tmpDir, 'nested/dir'))).isDirectory()).toBe(true);
   });
@@ -382,7 +438,7 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
       body: JSON.stringify({ name: 'My Project' }),
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as ProjectWorkspaceBody;
     expect(body.workspace).toBe('my-project-2');
     expect((await stat(resolve(tmpDir, 'my-project-2'))).isDirectory()).toBe(true);
   });
@@ -398,7 +454,7 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
       body: JSON.stringify({ name: 'My Project' }),
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as ProjectWorkspaceBody;
     expect(body.workspace).toBe('my-project-2');
     expect((await stat(resolve(tmpDir, 'my-project-2'))).isDirectory()).toBe(true);
   });
@@ -415,8 +471,8 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
     ]);
     expect(r1.status).toBe(201);
     expect(r2.status).toBe(201);
-    const b1: any = await r1.json();
-    const b2: any = await r2.json();
+    const b1 = (await r1.json()) as ProjectWorkspaceBody;
+    const b2 = (await r2.json()) as ProjectWorkspaceBody;
     expect(b1.workspace).not.toBe(b2.workspace);
     expect(new Set([b1.workspace, b2.workspace])).toEqual(new Set(['race', 'race-2']));
     expect((await stat(resolve(tmpDir, b1.workspace))).isDirectory()).toBe(true);
@@ -432,7 +488,7 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
       body: JSON.stringify({ name: 'Abs', workspace: abs }),
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as ProjectWorkspaceBody;
     expect(body.workspace).toBe('abs-ws');
     expect((await stat(abs)).isDirectory()).toBe(true);
   });
@@ -446,8 +502,8 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
       body: JSON.stringify({ name: 'Outside', workspace: outside }),
     });
     expect(res.status).toBe(403);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('WORKSPACE_OUTSIDE_ROOT_DENIED');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('WORKSPACE_OUTSIDE_ROOT_DENIED');
   });
 
   it('POST confirmOutsideRoot не разрешает путь вне root (managed — всегда deny)', async () => {
@@ -481,7 +537,7 @@ describe('Project workspace provisioning (ADR-075, managed backend)', () => {
         body: JSON.stringify({ workspace: `ws-${user}` }),
       });
       expect(res.status, user).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ProjectWorkspaceBody;
       expect(body.workspace).toBe(`ws-${user}`);
     }
   });
@@ -544,8 +600,8 @@ describe('Project RBAC (D5): контент и удаление', () => {
     for (const payload of payloads) {
       const res = await put(app, project.id, 'outsider', payload);
       expect(res.status, JSON.stringify(payload)).toBe(403);
-      const body: any = await res.json();
-      expect(body.error.code, JSON.stringify(payload)).toBe('FORBIDDEN');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code, JSON.stringify(payload)).toBe('FORBIDDEN');
     }
 
     const stored = (await store.load(project.id))!;
@@ -560,7 +616,7 @@ describe('Project RBAC (D5): контент и удаление', () => {
 
     const nameRes = await put(app, project.id, 'editor', { name: 'Edited by editor' });
     expect(nameRes.status).toBe(200);
-    expect((await nameRes.json() as any).name).toBe('Edited by editor');
+    expect((await nameRes.json() as ProjectBody).name).toBe('Edited by editor');
 
     const plan = { version: 3, updatedAt: '2026-03-01T00:00:00.000Z', columns: [], items: [] };
     const planRes = await put(app, project.id, 'editor', { plan });
@@ -604,7 +660,7 @@ describe('Project RBAC (D5): контент и удаление', () => {
     for (const user of ['owner', 'lead', 'admin']) {
       const res = await put(app, project.id, user, { name: `by-${user}` });
       expect(res.status, user).toBe(200);
-      expect((await res.json() as any).name, user).toBe(`by-${user}`);
+      expect((await res.json() as ProjectBody).name, user).toBe(`by-${user}`);
     }
   });
 
@@ -654,11 +710,11 @@ describe('Project visibility (ADR-089, backend RBAC)', () => {
     await store.save(other);
 
     const mine = await app.request('/api/v2/projects', { headers: wsAuth('owner') });
-    expect((await mine.json() as { projects: any[] }).projects.map((p) => p.name)).toEqual(['Own']);
+    expect((await mine.json() as ProjectListPage).projects.map((p) => p.name)).toEqual(['Own']);
 
     for (const role of ['lead', 'admin']) {
       const res = await app.request('/api/v2/projects', { headers: wsAuth(role) });
-      expect((await res.json() as { projects: any[] }).projects.length, role).toBe(2);
+      expect((await res.json() as ProjectListPage).projects.length, role).toBe(2);
     }
   });
 
@@ -733,20 +789,24 @@ describe('Project access change event (ADR-140 Ф2, managed backend)', () => {
         filter?.projectId ? [{ id: 'sess-1', projectId: filter.projectId }] : []),
     };
     const routes = createProjectRoutes(
-      kit as never,
+      // Фейк: реализованы только requireAuth/getCurrentUser/isAdmin/hasRole.
+      kit as unknown as AuthKit,
       store,
-      sessionManager as never,
+      // Фейк: реализован только listSessions.
+      sessionManager as unknown as SessionManager,
       tmpDir,
       undefined, // mcpManager
       undefined, // skillService
       undefined, // settingsStore
       undefined, // mcpRegistryStore
       undefined, // worktreeService
-      { publish } as never, // eventBus
+      // Фейк: реализован только publish.
+      { publish } as unknown as EventBus, // eventBus
       undefined, // executionProfileCatalog
       undefined, // browserProfileCatalog
       undefined, // securityAudit
-      { resyncAllClients } as never, // eventHub
+      // Фейк: реализован только resyncAllClients.
+      { resyncAllClients } as unknown as EventHub, // eventHub
     );
     app.route('/api/v2/projects', routes);
     return { app, store, publish, resyncAllClients };

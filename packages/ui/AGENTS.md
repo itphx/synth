@@ -8,6 +8,7 @@
 - `initializeLocale()` и `initDeviceClasses()` вызываются до `createRoot` (`src/main.tsx:10-11`); `initDeviceClasses()` вешает классы `device-*`/`pointer-coarse` на `<html>`.
 - `App.tsx` собирает каркас: `Sidebar`/`MobileDrawer` + `LeftPanel`/`CenterPanel`/`RightPanel`, глобальные `SettingsModal`, `LogsModal`, `ConfirmDialog`, `ToastContainer`, `PwaUpdatePrompt`.
 - Алиас `@/` → `src/` (vite/tsconfig/vitest). Dev-прокси `/api`, `/ws`, `/auth`, `/admin` → backend (`vite.config.ts:27-32`), порт 5002, backend по умолчанию `VITE_BACKEND_URL`/`:5000` (`:6-7`).
+- Размер сборки держит бюджет `scripts/bundle-budget.json` (`pnpm bundle:budget`; обновление — `pnpm bundle:budget:update`): чанк без бюджета тяжелее 500 kB и рост больше +5% — ошибка, а `chunkSizeWarningLimit` в `vite.config.ts` поднят до известного долга и контролем не является.
 - Роутера нет: экран определяется состоянием `useUIStore` (center-tabs + вкладки панелей), URL его не отражает — не вводить react-router и не кодировать экран в `pathname`.
 - `DefaultsSync` (`App.tsx:96-143`) при инициализации авторизации подтягивает серверные preferences (`profileService`), масштаб UI и умолчания отображения чата (вид, плотность, масштаб области); личный выбор пользователя они не перекрывают — приоритет local > профиль > серверный дефолт > встроенный.
 - `ResizeObserver` в `App.tsx:188-217` вешает `html.central-narrow` при ширине центральной колонки < 800px; на этот класс реагирует CSS (`styles/index.css:423+`). Логику не дублировать в компонентах — читать класс/`centralNarrow` из стора.

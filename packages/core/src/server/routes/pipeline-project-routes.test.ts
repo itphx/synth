@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { ProjectRole } from '@itphx/synth-shared';
 import { attachmentsConfigSchema } from '@itphx/synth-shared';
-import type { PipelineSpec, Project } from '@itphx/synth-shared';
+import type { PipelineRunTrigger, PipelineSpec, Project } from '@itphx/synth-shared';
 import { createPipelineProjectRoutes } from './pipeline-project-routes.js';
 import { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from '../../storage/memory/pipelines.js';
 // Legacy-реестр шаблонов инстанца (ADR-100) — реализация в `memory/content.ts`
@@ -14,6 +14,15 @@ import { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from '..
 import { MemoryPipelineRepository } from '../../storage/memory/content.js';
 import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import type { PipelineDefinitionRecord } from '../../storage/ports/pipeline-repository.js';
+import type {
+  PipelineProvenance,
+  PipelineRecord,
+  PipelineVersionRecord,
+} from '../../storage/ports/project-pipeline-repository.js';
+import type {
+  PipelineRunEventRecord,
+  PipelineRunRecord,
+} from '../../storage/ports/pipeline-run-repository.js';
 import { PipelineEngine } from '../../engine/pipelines/index.js';
 import { PipelineArtifactStore } from '../../engine/pipelines/artifacts.js';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
@@ -21,12 +30,113 @@ import { MemoryBlobRefRepository } from '../../storage/memory/blob-refs.js';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import { AttachmentService } from '../../engine/attachments/service.js';
 import { gateDecisionResult } from '../../engine/pipelines/index.js';
-import type { StepExecutionContext, StepExecutor, StepOutcome } from '../../engine/pipelines/index.js';
+import type { PipelineTemplateSummary, StepExecutionContext, StepExecutor, StepOutcome } from '../../engine/pipelines/index.js';
 
 /**
  * ADR-101 (Э6): тесты HTTP-контура пайплайнов проекта, прогонов, HITL и
  * шаблонов инстанса + матрица прав (инвариант 17).
  */
+
+// ─────────────────── DTO ответов контура (формы сверены с
+// `pipeline-project-routes.ts`: сводка `pipelineSummary`, ответы роутов) ───────────────────
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: {
+    code: string;
+    message?: string;
+  };
+}
+
+/** Тело ошибки валидации (400/409 шаблона) — к коду добавляется список проблем. */
+interface ApiValidationErrorBody extends ApiErrorBody {
+  error: {
+    code: string;
+    message?: string;
+    problems: string[];
+  };
+}
+
+/**
+ * Сводка пайплайна (`pipelineSummary`): черновик в неё не входит — его наличие
+ * видно по `hasDraft`/`draftVersion` (ADR-101, Э6).
+ */
+interface PipelineSummaryDto {
+  id: string;
+  name: string;
+  scope: PipelineRecord['scope'];
+  projectId?: string;
+  draftVersion: number;
+  publishedVersion?: number;
+  hasDraft: boolean;
+  installedBy?: PipelineProvenance;
+}
+
+/** Пайплайн проекта с черновиком — ответ создания/правки и деталь `/:pid`. */
+interface PipelineBody {
+  pipeline: PipelineSummaryDto & { draft: PipelineSpec };
+}
+
+/**
+ * Пайплайн, инстанцированный из шаблона: провенанс `installedBy` проставлен
+ * всегда (`templateId` — ключ идемпотентного `ensure: true`).
+ */
+interface InstantiateBody {
+  pipeline: PipelineSummaryDto & { draft: PipelineSpec; installedBy: PipelineProvenance };
+  /** `true` — создан сейчас, `false` — возвращён существующий (`ensure: true`). */
+  created: boolean;
+}
+
+/** Публикация: сводка пайплайна + неизменяемая опубликованная версия. */
+interface PublishBody {
+  pipeline: PipelineSummaryDto;
+  published: PipelineVersionRecord;
+}
+
+/** Страница пайплайнов проекта (`{pipelines, total, offset, limit, next_offset}`). */
+interface PipelineListPage {
+  pipelines: PipelineSummaryDto[];
+  total: number;
+  offset: number;
+  limit: number;
+  next_offset: number | null;
+}
+
+/** Ответ запуска/возобновления/отмены прогона — заголовок прогона. */
+interface RunBody {
+  run: PipelineRunRecord;
+}
+
+/**
+ * Запуск прогона с вложениями (ADR-115 × ADR-101): маршрут всегда пишет
+ * `trigger` (по умолчанию `manual`), вход прогона лежит под `trigger.payload`.
+ */
+interface RunStartedBody extends RunBody {
+  run: PipelineRunRecord & {
+    trigger: PipelineRunTrigger & { payload: Record<string, unknown> };
+  };
+}
+
+/** Деталь прогона: заголовок + страница журнала (`events_*`). */
+interface RunDetailBody {
+  run: PipelineRunRecord;
+  events: PipelineRunEventRecord[];
+  events_has_more: boolean;
+  events_next_before: number | null;
+}
+
+/** Страница прогонов пайплайна (`{runs, offset, limit, next_offset}`). */
+interface RunListPage {
+  runs: PipelineRunRecord[];
+  offset: number;
+  limit: number;
+  next_offset: number | null;
+}
+
+/** Список шаблонов инстанса (legacy ADR-100 вперемешку с шаблонами ADR-101). */
+interface TemplatesBody {
+  templates: PipelineTemplateSummary[];
+}
 
 /** Мок auth: requireAuth — no-op (single-user режим core). */
 function createMockAuth() {
@@ -233,7 +343,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as PipelineBody;
       expect(body.pipeline.id).toMatch(/^pl_/);
       expect(body.pipeline.scope).toBe('project');
       expect(body.pipeline.projectId).toBe('proj-1');
@@ -268,7 +378,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(Array.isArray(body.error.problems)).toBe(true);
       expect(body.error.problems.join(' ')).toContain('missing');
@@ -289,7 +399,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as PipelineBody;
       expect(body.pipeline.id).toMatch(/^pl_/);
       expect(body.pipeline.draft.id).toBe(body.pipeline.id);
       expect(body.pipeline.draft.projectId).toBe('proj-1');
@@ -305,7 +415,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as PipelineBody;
       expect(body.pipeline.id).toMatch(/^pl_/);
       expect(body.pipeline.id).not.toBe('abc');
       expect(body.pipeline.draft.id).toBe(body.pipeline.id);
@@ -321,7 +431,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('узел');
     });
@@ -338,7 +448,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('agent');
     });
@@ -353,7 +463,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.length).toBeGreaterThan(0);
     });
@@ -366,19 +476,19 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const createdBody: any = await created.json();
+      const createdBody = (await created.json()) as PipelineBody;
 
       const list = await app.request('/api/v2/projects/proj-1/pipelines');
       expect(list.status).toBe(200);
-      const listBody: any = await list.json();
+      const listBody = (await list.json()) as PipelineListPage;
       expect(listBody.pipelines).toHaveLength(1);
-      expect(listBody.pipelines[0].id).toBe(createdBody.pipeline.id);
-      expect(listBody.pipelines[0].draftVersion).toBe(1);
-      expect(listBody.pipelines[0].publishedVersion).toBeUndefined();
+      expect(listBody.pipelines[0]!.id).toBe(createdBody.pipeline.id);
+      expect(listBody.pipelines[0]!.draftVersion).toBe(1);
+      expect(listBody.pipelines[0]!.publishedVersion).toBeUndefined();
 
       // Пайплайны другого проекта не видны.
       const other = await app.request('/api/v2/projects/proj-2/pipelines');
-      const otherBody: any = await other.json();
+      const otherBody = (await other.json()) as PipelineListPage;
       expect(otherBody.pipelines).toHaveLength(0);
     });
 
@@ -389,7 +499,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
 
       const res = await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}`, {
         method: 'PUT',
@@ -401,10 +511,10 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PipelineBody;
       expect(body.pipeline.name).toBe('Релизы v2');
       expect(body.pipeline.draftVersion).toBe(1);
-      expect(body.pipeline.draft.nodes[0].title).toBe('Согласовать v2');
+      expect(body.pipeline.draft.nodes[0]!.title).toBe('Согласовать v2');
     });
 
     it('PUT /projects/:id/pipelines/:pid — пустой `spec.id` (JSON-режим) не роняет запрос в 400', async () => {
@@ -414,7 +524,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
 
       // Пользователь очистил `id` в JSON-режиме редактора: серверное поле
       // «не задано» — сервер подставляет своё значение.
@@ -427,7 +537,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PipelineBody;
       expect(body.pipeline.draft.id).toBe(pipeline.id);
       expect(body.pipeline.draft.projectId).toBe('proj-1');
     });
@@ -439,13 +549,13 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
 
       const first = await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, {
         method: 'POST',
       });
       expect(first.status).toBe(200);
-      const firstBody: any = await first.json();
+      const firstBody = (await first.json()) as PublishBody;
       expect(firstBody.pipeline.publishedVersion).toBe(1);
       expect(firstBody.pipeline.draftVersion).toBe(2);
       expect(firstBody.published.version).toBe(1);
@@ -456,7 +566,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         method: 'POST',
       });
       expect(second.status).toBe(200);
-      const secondBody: any = await second.json();
+      const secondBody = (await second.json()) as PublishBody;
       expect(secondBody.pipeline.publishedVersion).toBe(1);
       expect(secondBody.pipeline.draftVersion).toBe(2);
       expect((await pipelines.listVersions(pipeline.id)).map((v) => v.version)).toEqual([1]);
@@ -473,7 +583,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         method: 'POST',
       });
       expect(third.status).toBe(200);
-      const thirdBody: any = await third.json();
+      const thirdBody = (await third.json()) as PublishBody;
       expect(thirdBody.pipeline.publishedVersion).toBe(2);
       expect(thirdBody.pipeline.draftVersion).toBe(3);
       expect((await pipelines.listVersions(pipeline.id)).map((v) => v.version)).toEqual([1, 2]);
@@ -490,7 +600,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
       await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, { method: 'POST' });
 
       const runRes = await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/runs`, {
@@ -499,7 +609,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ trigger: { kind: 'manual' } }),
       });
       expect(runRes.status).toBe(201);
-      const { run } = (await runRes.json()) as any;
+      const { run } = (await runRes.json()) as RunBody;
 
       const del = await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}`, {
         method: 'DELETE',
@@ -521,7 +631,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
 
       // Пайплайн другого проекта под чужим id — 404 (не 403: ресурс не в этом проекте).
       const foreign = await app.request(`/api/v2/projects/proj-2/pipelines/${pipeline.id}`);
@@ -537,7 +647,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
       await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, { method: 'POST' });
       return pipeline.id;
     }
@@ -549,7 +659,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
 
       const res = await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/runs`, {
         method: 'POST',
@@ -557,7 +667,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({}),
       });
       expect(res.status).toBe(409);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('pipeline.not_published');
     });
 
@@ -571,7 +681,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ trigger: { kind: 'user', source: 'ui', payload: { issue: 42 } } }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as RunBody;
       expect(body.run.pipelineId).toBe(pipelineId);
       expect(body.run.projectId).toBe('proj-1');
       expect(body.run.version).toBe(1);
@@ -582,10 +692,10 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       const detail = await app.request(`/api/v2/pipeline-runs/${body.run.id}`);
       expect(detail.status).toBe(200);
-      const detailBody: any = await detail.json();
+      const detailBody = (await detail.json()) as RunDetailBody;
       expect(detailBody.run.id).toBe(body.run.id);
       expect(detailBody.run.status).toBe('awaiting_human');
-      const types = detailBody.events.map((e: any) => e.type);
+      const types = detailBody.events.map((e) => e.type);
       expect(types).toContain('run.started');
       expect(types).toContain('gate.awaiting');
     });
@@ -598,7 +708,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const { run } = (await started.json()) as any;
+      const { run } = (await started.json()) as RunBody;
 
       const res = await app.request(`/api/v2/pipeline-runs/${run.id}/resume`, {
         method: 'POST',
@@ -606,7 +716,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ approved: true, output: { ok: 1 }, comment: 'согласовано' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as RunBody;
       expect(body.run.status).toBe('done');
       expect(body.run.finishedAt).toBeDefined();
     });
@@ -619,7 +729,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const { run } = (await started.json()) as any;
+      const { run } = (await started.json()) as RunBody;
 
       const res = await app.request(`/api/v2/pipeline-runs/${run.id}/resume`, {
         method: 'POST',
@@ -627,14 +737,14 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ approved: false, comment: 'не согласовано' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as RunBody;
       expect(body.run.status).toBe('failed');
       // `run.error` — текст ошибки; машиночитаемый код — в журнале прогона
       // (`run.failed.payload.code`), как и в движке (ADR-101 §2.9).
       expect(body.run.error).toContain('approve');
       const detail = await app.request(`/api/v2/pipeline-runs/${run.id}`);
-      const detailBody: any = await detail.json();
-      const failed = detailBody.events.find((e: any) => e.type === 'run.failed');
+      const detailBody = (await detail.json()) as RunDetailBody;
+      const failed = detailBody.events.find((e) => e.type === 'run.failed');
       expect(failed?.payload?.code).toBe('pipeline.gate_rejected');
     });
 
@@ -646,7 +756,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const { run } = (await started.json()) as any;
+      const { run } = (await started.json()) as RunBody;
       await app.request(`/api/v2/pipeline-runs/${run.id}/resume`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -659,7 +769,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ approved: true }),
       });
       expect(again.status).toBe(409);
-      const body: any = await again.json();
+      const body = (await again.json()) as ApiErrorBody;
       expect(body.error.code).toBe('pipeline.invalid_state');
     });
 
@@ -671,11 +781,11 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const { run } = (await started.json()) as any;
+      const { run } = (await started.json()) as RunBody;
 
       const res = await app.request(`/api/v2/pipeline-runs/${run.id}/cancel`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as RunBody;
       expect(body.run.status).toBe('cancelled');
       expect(body.run.finishedAt).toBeDefined();
 
@@ -703,19 +813,19 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       const list = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs`);
       expect(list.status).toBe(200);
-      const listBody: any = await list.json();
+      const listBody = (await list.json()) as RunListPage;
       expect(listBody.runs).toHaveLength(1);
 
       const filtered = await app.request(
         `/api/v2/projects/proj-1/pipelines/${pipelineId}/runs?status=awaiting_human`,
       );
-      const filteredBody: any = await filtered.json();
+      const filteredBody = (await filtered.json()) as RunListPage;
       expect(filteredBody.runs).toHaveLength(1);
 
       const empty = await app.request(
         `/api/v2/projects/proj-1/pipelines/${pipelineId}/runs?status=done`,
       );
-      const emptyBody: any = await empty.json();
+      const emptyBody = (await empty.json()) as RunListPage;
       expect(emptyBody.runs).toHaveLength(0);
 
       // Неизвестный статус — 400 (fail-closed).
@@ -737,11 +847,11 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       const res = await app.request('/api/v2/pipeline-templates');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as TemplatesBody;
       expect(body.templates).toHaveLength(1);
-      expect(body.templates[0].id).toBe('publication');
-      expect(body.templates[0].format).toBe('adr-100');
-      expect(body.templates[0].installedBy).toEqual({ pack: 'synth-media', version: '1.0.0' });
+      expect(body.templates[0]!.id).toBe('publication');
+      expect(body.templates[0]!.format).toBe('adr-100');
+      expect(body.templates[0]!.installedBy).toEqual({ pack: 'synth-media', version: '1.0.0' });
     });
 
     it('POST /pipeline-templates/:tid/instantiate — создаёт черновик в проекте', async () => {
@@ -758,7 +868,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ projectId: 'proj-1' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as PipelineBody;
       expect(body.pipeline.scope).toBe('project');
       expect(body.pipeline.projectId).toBe('proj-1');
       expect(body.pipeline.draftVersion).toBe(1);
@@ -769,7 +879,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         templateId: 'publication',
       });
       // Спецификация шаблона сконвертирована в спецификацию движка.
-      expect(body.pipeline.draft.nodes[0]).toMatchObject({ id: 'step-1', kind: 'agent', agent: 'publisher' });
+      expect(body.pipeline.draft.nodes[0]!).toMatchObject({ id: 'step-1', kind: 'agent', agent: 'publisher' });
       expect(body.pipeline.draft.exits).toHaveLength(1);
     });
 
@@ -789,7 +899,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ projectId: 'proj-1' }),
       });
       expect(res.status).toBe(409);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('PIPELINE_TEMPLATE_UNSUPPORTED');
       expect(body.error.problems.join(' ')).toContain('loop');
     });
@@ -819,7 +929,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body,
       });
       expect(first.status).toBe(201);
-      const firstBody: any = await first.json();
+      const firstBody = (await first.json()) as InstantiateBody;
       expect(firstBody.created).toBe(true);
       expect(firstBody.pipeline.installedBy).toEqual({
         pack: 'synth-media',
@@ -833,7 +943,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body,
       });
       expect(second.status).toBe(200);
-      const secondBody: any = await second.json();
+      const secondBody = (await second.json()) as InstantiateBody;
       expect(secondBody.created).toBe(false);
       // Возвращается тот же пайплайн — копии не появилось.
       expect(secondBody.pipeline.id).toBe(firstBody.pipeline.id);
@@ -865,8 +975,8 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
       expect(first.status).toBe(201);
       expect(second.status).toBe(201);
-      const firstBody: any = await first.json();
-      const secondBody: any = await second.json();
+      const firstBody = (await first.json()) as InstantiateBody;
+      const secondBody = (await second.json()) as InstantiateBody;
       expect(firstBody.created).toBe(true);
       expect(secondBody.created).toBe(true);
       expect(secondBody.pipeline.id).not.toBe(firstBody.pipeline.id);
@@ -887,7 +997,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ projectId: 'proj-1' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as InstantiateBody;
       expect(body.pipeline.installedBy).toEqual({
         pack: 'instance',
         version: '1',
@@ -908,14 +1018,14 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: 'proj-1', ensure: true }),
       });
-      const createdBody: any = await created.json();
+      const createdBody = (await created.json()) as InstantiateBody;
 
       const list = await app.request('/api/v2/projects/proj-1/pipelines');
       expect(list.status).toBe(200);
-      const listBody: any = await list.json();
+      const listBody = (await list.json()) as PipelineListPage;
       expect(listBody.pipelines).toHaveLength(1);
-      expect(listBody.pipelines[0].id).toBe(createdBody.pipeline.id);
-      expect(listBody.pipelines[0].installedBy).toEqual({
+      expect(listBody.pipelines[0]!.id).toBe(createdBody.pipeline.id);
+      expect(listBody.pipelines[0]!.installedBy).toEqual({
         pack: 'synth-media',
         version: '1.0.0',
         templateId: 'publication',
@@ -977,7 +1087,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ spec: spec() }),
       });
       expect(create.status).toBe(201);
-      const { pipeline } = (await create.json()) as any;
+      const { pipeline } = (await create.json()) as PipelineBody;
 
       const publish = await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, {
         method: 'POST',
@@ -1023,7 +1133,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         body: JSON.stringify({ spec: spec() }),
       });
       expect(create.status).toBe(403);
-      const body: any = await create.json();
+      const body = (await create.json()) as ApiErrorBody;
       expect(body.error.code).toBe('SCOPE_REQUIRED');
     });
 
@@ -1120,7 +1230,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       const missing = await app.request(`/api/v2/pipeline-runs/${runId}/artifacts/missing.md`);
       expect(missing.status).toBe(404);
-      const body: any = await missing.json();
+      const body = (await missing.json()) as ApiErrorBody;
       expect(body.error.code).toBe('NOT_FOUND');
 
       // Прогон без артефактов (хранилище не подключено) — ничего не раздаём.
@@ -1169,7 +1279,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
       await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, { method: 'POST' });
       return pipeline.id;
     }
@@ -1214,7 +1324,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       const res = await startRun(app, pipelineId, { attachments: [ref(uploaded)] });
 
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as RunStartedBody;
       // Вход прогона лёг под `trigger.payload` (путь маппинга шага).
       expect(body.run.trigger.payload.attachments).toEqual([
         {
@@ -1245,7 +1355,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('не подключён сервис вложений');
     });
@@ -1267,7 +1377,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('не найдено');
     });
@@ -1293,7 +1403,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
           attachments: [{ ...ref(uploaded), ...testCase.patch }],
         });
         expect(res.status).toBe(400);
-        const body: any = await res.json();
+        const body = (await res.json()) as ApiValidationErrorBody;
         expect(body.error.code).toBe('VALIDATION_ERROR');
         expect(body.error.problems.join(' ')).toContain(testCase.expected);
       }
@@ -1320,7 +1430,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('предел 1');
     });
@@ -1341,7 +1451,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       const res = await startRun(app, pipelineId, { attachments: [ref(uploaded)] });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('превышает предел 10');
     });
@@ -1370,7 +1480,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('Суммарный объём');
     });
@@ -1392,7 +1502,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       });
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiValidationErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.problems.join(' ')).toContain('attachments/');
     });
@@ -1408,7 +1518,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
       await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}/publish`, { method: 'POST' });
       return pipeline.id;
     }
@@ -1419,7 +1529,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, spec: spec() }),
       });
-      const { pipeline } = (await created.json()) as any;
+      const { pipeline } = (await created.json()) as PipelineBody;
       return pipeline.id;
     }
 
@@ -1429,13 +1539,13 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       const list = await app.request('/api/v2/projects/proj-1/pipelines');
       expect(list.status).toBe(200);
-      const listBody: any = await list.json();
+      const listBody = (await list.json()) as PipelineListPage;
       expect(listBody.pipelines).toHaveLength(1);
-      expect(listBody.pipelines[0].id).toBe(pipelineId);
+      expect(listBody.pipelines[0]!.id).toBe(pipelineId);
       // Черновик (тяжёлая спецификация) в списке не отдаётся.
-      expect('draft' in listBody.pipelines[0]).toBe(false);
-      expect(listBody.pipelines[0].hasDraft).toBe(true);
-      expect(listBody.pipelines[0].draftVersion).toBe(1);
+      expect('draft' in listBody.pipelines[0]!).toBe(false);
+      expect(listBody.pipelines[0]!.hasDraft).toBe(true);
+      expect(listBody.pipelines[0]!.draftVersion).toBe(1);
       // Форма ответа — страница.
       expect(listBody.total).toBe(1);
       expect(listBody.offset).toBe(0);
@@ -1444,7 +1554,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       // Деталь — полный DTO с черновиком.
       const detail = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}`);
-      const detailBody: any = await detail.json();
+      const detailBody = (await detail.json()) as PipelineBody;
       expect(detailBody.pipeline.draft).toBeTruthy();
       expect(detailBody.pipeline.draft.id).toBe(pipelineId);
     });
@@ -1456,7 +1566,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       await createPipeline(app, 'C');
 
       const first = await app.request('/api/v2/projects/proj-1/pipelines?limit=2');
-      const firstBody: any = await first.json();
+      const firstBody = (await first.json()) as PipelineListPage;
       expect(firstBody.pipelines).toHaveLength(2);
       expect(firstBody.total).toBe(3);
       expect(firstBody.offset).toBe(0);
@@ -1464,7 +1574,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       expect(firstBody.next_offset).toBe(2);
 
       const second = await app.request('/api/v2/projects/proj-1/pipelines?limit=2&offset=2');
-      const secondBody: any = await second.json();
+      const secondBody = (await second.json()) as PipelineListPage;
       expect(secondBody.pipelines).toHaveLength(1);
       expect(secondBody.offset).toBe(2);
       expect(secondBody.next_offset).toBeNull();
@@ -1474,7 +1584,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       const { app } = createHarness({ projects });
       const badLimit = await app.request('/api/v2/projects/proj-1/pipelines?limit=abc');
       expect(badLimit.status).toBe(400);
-      expect(((await badLimit.json()) as any).error.code).toBe('VALIDATION_ERROR');
+      expect(((await badLimit.json()) as ApiErrorBody).error.code).toBe('VALIDATION_ERROR');
       const badOffset = await app.request('/api/v2/projects/proj-1/pipelines?offset=-1');
       expect(badOffset.status).toBe(400);
     });
@@ -1491,7 +1601,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       }
 
       const first = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/runs?limit=2`);
-      const firstBody: any = await first.json();
+      const firstBody = (await first.json()) as RunListPage;
       expect(firstBody.runs).toHaveLength(2);
       expect(firstBody.offset).toBe(0);
       expect(firstBody.limit).toBe(2);
@@ -1500,7 +1610,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       const second = await app.request(
         `/api/v2/projects/proj-1/pipelines/${pipelineId}/runs?limit=2&offset=2`,
       );
-      const secondBody: any = await second.json();
+      const secondBody = (await second.json()) as RunListPage;
       expect(secondBody.runs).toHaveLength(1);
       expect(secondBody.offset).toBe(2);
       expect(secondBody.next_offset).toBeNull();
@@ -1514,12 +1624,12 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const { run } = (await started.json()) as any;
+      const { run } = (await started.json()) as RunBody;
 
       // Без параметров — последняя (самая новая) страница журнала.
       const all = await app.request(`/api/v2/pipeline-runs/${run.id}`);
       expect(all.status).toBe(200);
-      const allBody: any = await all.json();
+      const allBody = (await all.json()) as RunDetailBody;
       expect(allBody.run.id).toBe(run.id);
       expect(allBody.events.length).toBeGreaterThanOrEqual(3);
       expect(allBody.events_has_more).toBe(false);
@@ -1527,7 +1637,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
 
       // Страница поменьше: курсор указывает на более старые события.
       const page = await app.request(`/api/v2/pipeline-runs/${run.id}?events_limit=1`);
-      const pageBody: any = await page.json();
+      const pageBody = (await page.json()) as RunDetailBody;
       expect(pageBody.events).toHaveLength(1);
       expect(pageBody.events_has_more).toBe(true);
       // Курсор — порядковый номер самого старого события страницы.
@@ -1539,7 +1649,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       const older = await app.request(
         `/api/v2/pipeline-runs/${run.id}?events_limit=10&events_before=${cursor}`,
       );
-      const olderBody: any = await older.json();
+      const olderBody = (await older.json()) as RunDetailBody;
       expect(olderBody.events.length).toBe(allBody.events.length - 1);
       // Старая страница — префикс журнала (события строго раньше курсора).
       const key = (e: { ts: string; type: string }) => `${e.ts}|${e.type}`;
@@ -1555,7 +1665,7 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
           ? '?events_limit=1'
           : `?events_limit=1&events_before=${nextBefore}`;
         const step = await app.request(`/api/v2/pipeline-runs/${run.id}${query}`);
-        const stepBody: any = await step.json();
+        const stepBody = (await step.json()) as RunDetailBody;
         collected.push(...(stepBody.events as Array<{ ts: string; type: string }>).map((e) => `${e.ts}|${e.type}`));
         if (!stepBody.events_has_more || stepBody.events_next_before === null) break;
         nextBefore = stepBody.events_next_before as number;
@@ -1572,11 +1682,11 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const { run } = (await started.json()) as any;
+      const { run } = (await started.json()) as RunBody;
 
       const badLimit = await app.request(`/api/v2/pipeline-runs/${run.id}?events_limit=abc`);
       expect(badLimit.status).toBe(400);
-      expect(((await badLimit.json()) as any).error.code).toBe('VALIDATION_ERROR');
+      expect(((await badLimit.json()) as ApiErrorBody).error.code).toBe('VALIDATION_ERROR');
 
       const badBefore = await app.request(`/api/v2/pipeline-runs/${run.id}?events_before=not-a-number`);
       expect(badBefore.status).toBe(400);
@@ -1596,19 +1706,19 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      const { run } = (await started.json()) as any;
+      const { run } = (await started.json()) as RunBody;
 
       const all = await app.request(`/api/v2/pipeline-runs/${run.id}`);
-      const allBody: any = await all.json();
+      const allBody = (await all.json()) as RunDetailBody;
       expect(allBody.events.length).toBeGreaterThanOrEqual(3);
 
       // Курсор-метка времени: вернутся события строго старше указанной метки.
-      const oldestTs = allBody.events[0].ts as string;
+      const oldestTs = allBody.events[0]!.ts as string;
       const older = await app.request(
         `/api/v2/pipeline-runs/${run.id}?events_before=${encodeURIComponent(oldestTs)}`,
       );
       expect(older.status).toBe(200);
-      const olderBody: any = await older.json();
+      const olderBody = (await older.json()) as RunDetailBody;
       for (const event of olderBody.events as Array<{ ts: string }>) {
         expect(Date.parse(event.ts)).toBeLessThan(Date.parse(oldestTs));
       }

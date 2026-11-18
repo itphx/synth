@@ -7,7 +7,23 @@ import { join } from 'node:path';
 import { createQueueRoutes } from './queue.js';
 import { SessionManager, EventBus, FileStore } from '@itphx/synth-core';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
-import type { Message } from '@itphx/synth-shared';
+import type { BusEvent, Message } from '@itphx/synth-shared';
+
+/** Тело ответа `POST /api/v2/queue/:sessionId/return` — тексты возвращённых сообщений. */
+interface QueueReturnBody {
+  texts: string[];
+}
+
+/** Тело ответа `POST /api/v2/queue/:sessionId/resume`. */
+interface QueueResumeBody {
+  resumed: boolean;
+  pending_count: number;
+}
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code?: string; message?: string };
+}
 
 function makeMessage(content = 'Привет'): Message {
   return {
@@ -63,14 +79,16 @@ function createTestApp(tmpDir: string) {
   const sessionManager = new SessionManager(fileStore);
   const eventBus = new EventBus();
   const queueManager = createMockQueueManager();
-  const processMessage = vi.fn().mockResolvedValue({});
+  const processMessage = vi.fn<Parameters<typeof createQueueRoutes>[4]>(async () => ({}));
 
   const queueRoutes = createQueueRoutes(
-    kit as any,
+    // Фейк: из AuthKit реализованы только requireAuth/requirePermission/getCurrentUser.
+    kit as unknown as Parameters<typeof createQueueRoutes>[0],
     sessionManager,
-    queueManager as any,
+    // Фейк: из QueueProcessorManager реализованы только методы, нужные роутам очереди.
+    queueManager as unknown as Parameters<typeof createQueueRoutes>[2],
     eventBus,
-    processMessage as any,
+    processMessage,
   );
 
   app.route('/api/v2/queue', queueRoutes);
@@ -101,7 +119,7 @@ describe('Queue API Routes', () => {
 
       const res = await app.request(`/api/v2/queue/${session.id}/return`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as QueueReturnBody;
       expect(body.texts).toEqual(['первое', 'второе']);
 
       const s = await sessionManager.getSession(session.id);
@@ -121,7 +139,7 @@ describe('Queue API Routes', () => {
 
       const res = await app.request(`/api/v2/queue/${session.id}/return?index=0`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as QueueReturnBody;
       expect(body.texts).toEqual(['первое']);
 
       const s = await sessionManager.getSession(session.id);
@@ -154,7 +172,7 @@ describe('Queue API Routes', () => {
 
       const res = await app.request(`/api/v2/queue/${session.id}/return`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as QueueReturnBody;
       expect(body.texts).toEqual(['активное', 'в очереди']);
 
       const s = await sessionManager.getSession(session.id);
@@ -186,7 +204,7 @@ describe('Queue API Routes', () => {
 
       const res = await app.request(`/api/v2/queue/${session.id}/return`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as QueueReturnBody;
       expect(body.texts).toEqual(['зависшее']);
 
       const s = await sessionManager.getSession(session.id);
@@ -216,12 +234,12 @@ describe('Queue API Routes', () => {
       await sessionManager.addPendingMessage(session.id, msg);
       await sessionManager.addMessage(session.id, msg);
 
-      const events: any[] = [];
+      const events: BusEvent[] = [];
       eventBus.subscribe(session.id, (e) => events.push(e));
 
       const res = await app.request(`/api/v2/queue/${session.id}/resume`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as QueueResumeBody;
       expect(body.resumed).toBe(true);
       expect(body.pending_count).toBe(1);
 
@@ -239,7 +257,7 @@ describe('Queue API Routes', () => {
       const streamId = msg.metadata!.stream_id as string;
       await sessionManager.addPendingMessage(session.id, msg);
 
-      const events: any[] = [];
+      const events: BusEvent[] = [];
       eventBus.subscribe(session.id, (e) => events.push(e));
 
       const res = await app.request(`/api/v2/queue/${session.id}/resume`, { method: 'POST' });
@@ -247,10 +265,10 @@ describe('Queue API Routes', () => {
 
       const state = events.find((e) => e.type === 'queue.state');
       expect(state).toBeDefined();
-      expect(state.data).toMatchObject({ pendingCount: 1, steerCount: 0 });
+      expect(state!.data).toMatchObject({ pendingCount: 1, steerCount: 0 });
       // Ни текста, ни автора в `queue.state` нет (ADR-118 §4).
-      expect(state.data.content).toBeUndefined();
-      expect(state.data.author).toBeUndefined();
+      expect(state!.data.content).toBeUndefined();
+      expect(state!.data.author).toBeUndefined();
 
       const s = await sessionManager.getSession(session.id);
       expect(s!.pendingMessages[0]!.metadata?.stream_id).toBe(streamId);
@@ -262,7 +280,7 @@ describe('Queue API Routes', () => {
 
       const res = await app.request(`/api/v2/queue/${session.id}/resume`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as QueueResumeBody;
       expect(body.resumed).toBe(true);
       expect(body.pending_count).toBe(0);
     });
@@ -274,7 +292,7 @@ describe('Queue API Routes', () => {
 
     const res = await app.request(`/api/v2/queue/${session.id}/resume`, { method: 'POST' });
     expect(res.status).toBe(403);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('FORBIDDEN');
   });
 

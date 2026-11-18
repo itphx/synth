@@ -27,6 +27,13 @@ function createTestApp(mcpManager: McpManager) {
   return app;
 }
 
+/** Тело ответа `/mcp/probe`: список инструментов или тело ошибки. */
+interface McpProbeBody {
+  name: string;
+  tools: Array<{ name: string; description?: string }>;
+  error: { code: string; message: string };
+}
+
 describe('MCP API Routes (probe)', () => {
   it('POST /probe возвращает список инструментов сервера', async () => {
     const probeServer = vi.fn().mockResolvedValue([
@@ -45,7 +52,7 @@ describe('MCP API Routes (probe)', () => {
       body: JSON.stringify({ name: 'github' }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as McpProbeBody;
     expect(body.name).toBe('github');
     expect(body.tools).toEqual([
       { name: 'list_issues', description: 'Список issues' },
@@ -63,7 +70,7 @@ describe('MCP API Routes (probe)', () => {
       body: JSON.stringify({ name: 'unknown' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as McpProbeBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 
@@ -77,7 +84,7 @@ describe('MCP API Routes (probe)', () => {
       body: JSON.stringify({ name: '   ' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as McpProbeBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 
@@ -91,7 +98,7 @@ describe('MCP API Routes (probe)', () => {
       body: JSON.stringify({ name: 'github' }),
     });
     expect(res.status).toBe(500);
-    const body: any = await res.json();
+    const body = (await res.json()) as McpProbeBody;
     expect(body.error.code).toBe('INTERNAL_ERROR');
   });
 
@@ -109,7 +116,7 @@ describe('MCP API Routes (probe)', () => {
       body: JSON.stringify({ name: 'github' }),
     });
     expect(res.status).toBe(500);
-    const body: any = await res.json();
+    const body = (await res.json()) as McpProbeBody;
     expect(body.error.code).toBe('MCP_CONNECT_ERROR');
     expect(body.error.message).toContain('connection refused');
   });
@@ -134,7 +141,7 @@ describe('MCP API Routes (probe)', () => {
       body: JSON.stringify({ name: 'github' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as McpProbeBody;
     expect(body.error.code).toBe('MCP_SECRET_HEADER_FORBIDDEN');
     expect(body.error.message).toContain("auth.kind='credential'");
     // Значение секрета в ответе не утекает, подключения не было.

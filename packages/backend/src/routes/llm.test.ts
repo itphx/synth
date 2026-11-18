@@ -26,6 +26,53 @@ import type {
   User,
 } from '@itphx/synth-shared';
 
+/**
+ * Тело ошибки прокси: `{ error: { code, message } }`.
+ */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
+/**
+ * Non-stream ответ прокси — OpenAI-совместимый `chat.completion`: ровно один
+ * choice, `usage` — плоский OpenAI-объект (детали добавляются без потерь).
+ */
+interface ChatCompletionBody {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: { role: string; content: string; tool_calls?: unknown; reasoning_content?: string };
+    finish_reason: string;
+  }>;
+  usage: Record<string, unknown>;
+}
+
+/**
+ * Один SSE-чанк прокси (`chat.completion.chunk`): дельта контента, reasoning и
+ * накопленных tool_calls; `usage` — только в финальном чанке.
+ */
+interface SseChunk {
+  object?: string;
+  choices?: Array<{
+    index?: number;
+    delta?: { content?: string; reasoning_content?: string; tool_calls?: unknown[] };
+    finish_reason?: string | null;
+  }>;
+  usage?: unknown;
+}
+
+/** Запись журнала аудита шлюза (проверяются только тип события и сессия). */
+interface AuditEntry {
+  type?: string;
+  sessionId?: string;
+}
+
+/** Фейковый AuthKit прокси: реализованы только `requireAuth`/`getCurrentUser`. */
+type LlmAuthKit = Parameters<typeof createLlmRoutes>[0];
+
 const userUser: User = {
   id: 'developer',
   username: 'developer',
@@ -241,7 +288,8 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
 
     const app = new Hono();
     const kit = createMockKit(user);
-    app.route('/api/v2/llm', createLlmRoutes(kit as any, deps));
+    // Фейк: AuthKit реализует только requireAuth/getCurrentUser.
+    app.route('/api/v2/llm', createLlmRoutes(kit as unknown as LlmAuthKit, deps));
     return { app, fake, auditPath, createSpy };
   }
 
@@ -254,7 +302,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         body: '{не-json',
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('BAD_REQUEST');
     });
 
@@ -264,7 +312,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('BAD_REQUEST');
     });
 
@@ -272,7 +320,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       const { app } = createTestContext(userUser);
       const res = await app.request(BASE, postBody({ model: 'fake-model', messages: [] }));
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('BAD_REQUEST');
     });
   });
@@ -285,7 +333,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(404);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('MODEL_NOT_FOUND');
       expect(body.error.message).toContain('no-such-model');
     });
@@ -299,7 +347,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('MODEL_DISABLED');
     });
 
@@ -313,7 +361,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(502);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('PROVIDER_NOT_FOUND');
     });
 
@@ -326,7 +374,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('PROVIDER_DISABLED');
     });
   });
@@ -347,8 +395,8 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(200);
-      const body: any = await res.json();
-      expect(body.choices[0].message.content).toBe('Ответ fake-провайдера');
+      const body = (await res.json()) as ChatCompletionBody;
+      expect(body.choices[0]!.message.content).toBe('Ответ fake-провайдера');
     });
 
     it('provider существует, но не совпадает с провайдером модели → 400 MODEL_MISMATCH', async () => {
@@ -359,7 +407,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('MODEL_MISMATCH');
       expect(body.error.message).toContain('itphx');
       expect(body.error.message).toContain('fake-model');
@@ -373,7 +421,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(502);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('PROVIDER_NOT_FOUND');
     });
 
@@ -387,7 +435,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('PROVIDER_DISABLED');
     });
 
@@ -411,7 +459,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         max_tokens: 64,
       }));
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ChatCompletionBody;
       expect(body.id).toMatch(/^chatcmpl-/);
       expect(body.object).toBe('chat.completion');
       expect(typeof body.created).toBe('number');
@@ -485,7 +533,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ChatCompletionBody;
       expect(body.usage).toEqual({ prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 });
     });
 
@@ -506,7 +554,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ChatCompletionBody;
       expect(body.usage).toEqual({
         prompt_tokens: 1000,
         completion_tokens: 200,
@@ -531,10 +579,10 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'исправь' }],
       }));
       expect(res.status).toBe(200);
-      const body: any = await res.json();
-      expect(body.choices[0].message.tool_calls).toEqual(fake.toolCalls);
-      expect(body.choices[0].message.reasoning_content).toBe('надо отредактировать');
-      expect(body.choices[0].message.content).toBe('Ответ fake-провайдера');
+      const body = (await res.json()) as ChatCompletionBody;
+      expect(body.choices[0]!.message.tool_calls).toEqual(fake.toolCalls);
+      expect(body.choices[0]!.message.reasoning_content).toBe('надо отредактировать');
+      expect(body.choices[0]!.message.content).toBe('Ответ fake-провайдера');
     });
   });
 
@@ -699,20 +747,20 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
 
       // Reasoning приходит отдельным(и) стрим-чанком(ами), а не в tool_calls-чанке.
       const reasoningChunks = parsed.filter(
-        (c: any) => typeof c.choices?.[0]?.delta?.reasoning_content === 'string',
+        (c: SseChunk) => typeof c.choices?.[0]?.delta?.reasoning_content === 'string',
       );
       expect(reasoningChunks).toHaveLength(1);
-      expect(reasoningChunks[0].choices[0].delta.reasoning_content).toBe('надо поискать');
+      expect(reasoningChunks[0]?.choices?.[0]?.delta?.reasoning_content).toBe('надо поискать');
 
       // Контент-дельта как раньше.
-      const contentChunk = parsed.find((c: any) => c.choices?.[0]?.delta?.content === 'Привет');
+      const contentChunk = parsed.find((c: SseChunk) => c.choices?.[0]?.delta?.content === 'Привет');
       expect(contentChunk).toBeDefined();
 
       // Отдельный дельта-чанк с накопленными tool_calls (один раз), без reasoning.
-      const toolChunk = parsed.find((c: any) => Array.isArray(c.choices?.[0]?.delta?.tool_calls));
+      const toolChunk = parsed.find((c: SseChunk) => Array.isArray(c.choices?.[0]?.delta?.tool_calls));
       expect(toolChunk).toBeDefined();
-      expect(toolChunk.choices[0].delta.tool_calls).toEqual(fake.toolCalls);
-      expect(toolChunk.choices[0].delta.reasoning_content).toBeUndefined();
+      expect(toolChunk?.choices?.[0]?.delta?.tool_calls).toEqual(fake.toolCalls);
+      expect(toolChunk?.choices?.[0]?.delta?.reasoning_content).toBeUndefined();
 
       // Порядок: reasoning → content → tool_calls.
       const reasoningIdx = parsed.indexOf(reasoningChunks[0]);
@@ -744,20 +792,20 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         .map((l) => JSON.parse(l.slice(6)));
 
       const reasoningChunks = parsed.filter(
-        (c: any) => typeof c.choices?.[0]?.delta?.reasoning_content === 'string',
+        (c: SseChunk) => typeof c.choices?.[0]?.delta?.reasoning_content === 'string',
       );
       // Несколько чанков, а не один в конце.
       expect(reasoningChunks).toHaveLength(3);
-      const deltas = reasoningChunks.map((c: any) => c.choices[0].delta.reasoning_content);
+      const deltas = reasoningChunks.map((c) => c.choices?.[0]?.delta?.reasoning_content);
       // Дельта-инкременты (не cumulative-повторы).
       expect(deltas).toEqual(['надо', ' по', 'искать']);
       // Конкатенация = полная строка, без дублей.
       expect(deltas.join('')).toBe('надо поискать');
 
       // Все reasoning-чанки идут до content-чанка (порядок reasoning → content).
-      const contentIdx = parsed.findIndex((c: any) => c.choices?.[0]?.delta?.content === 'Привет');
+      const contentIdx = parsed.findIndex((c: SseChunk) => c.choices?.[0]?.delta?.content === 'Привет');
       const lastReasoningIdx = parsed.reduce(
-        (acc: number, c: any, i: number) =>
+        (acc: number, c: SseChunk, i: number) =>
           typeof c.choices?.[0]?.delta?.reasoning_content === 'string' ? i : acc,
         -1,
       );
@@ -962,7 +1010,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       }));
 
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('BAD_REQUEST');
       expect(body.error.message).toContain('reasoning_effort');
       expect(fake.lastMessages).toEqual([]);
@@ -984,7 +1032,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(status);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe(code);
     });
 
@@ -998,7 +1046,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(429);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('RATE_LIMITED');
     });
   });
@@ -1015,14 +1063,15 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         gatewayRateLimiter: new RateLimiter(100, 100),
         patternStore: null,
       };
-      app.route('/api/v2/llm', createLlmRoutes(kit as any, deps));
+      // Фейк: AuthKit реализует только requireAuth (401-заглушка).
+      app.route('/api/v2/llm', createLlmRoutes(kit as unknown as LlmAuthKit, deps));
 
       const res = await app.request(BASE, postBody({
         model: 'fake-model',
         messages: [{ role: 'user', content: 'привет' }],
       }));
       expect(res.status).toBe(401);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('UNAUTHORIZED');
     });
   });
@@ -1044,18 +1093,18 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: `мой ключ ${secret} используй его` }],
       }));
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ChatCompletionBody;
 
       // Провайдер получил обфусцированное сообщение, ответ деобфусцирован.
       expect(fake.lastMessages[0]!.content).toContain('⟦SYNTH_SECRET_1⟧');
       expect(fake.lastMessages[0]!.content).not.toContain(secret);
-      expect(body.choices[0].message.content).toContain(secret);
-      expect(body.choices[0].message.content).not.toContain('⟦SYNTH_SECRET_1⟧');
+      expect(body.choices[0]!.message.content).toContain(secret);
+      expect(body.choices[0]!.message.content).not.toContain('⟦SYNTH_SECRET_1⟧');
 
       // Аудит: событие obfuscated записано.
       const auditRaw = await readFile(auditPath, 'utf8');
       const entries = auditRaw.trim().split('\n').map((l) => JSON.parse(l));
-      expect(entries.some((e: any) => e.type === 'obfuscated' && e.sessionId === `llm-proxy:${userUser.id}`)).toBe(true);
+      expect(entries.some((e: AuditEntry) => e.type === 'obfuscated' && e.sessionId === `llm-proxy:${userUser.id}`)).toBe(true);
     });
 
     it('с выключенным gateway секрет не трогается', async () => {
@@ -1072,9 +1121,9 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
         messages: [{ role: 'user', content: `мой ключ ${secret}` }],
       }));
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as ChatCompletionBody;
       expect(fake.lastMessages[0]!.content).toContain(secret);
-      expect(body.choices[0].message.content).toContain(secret);
+      expect(body.choices[0]!.message.content).toContain(secret);
     });
   });
 });

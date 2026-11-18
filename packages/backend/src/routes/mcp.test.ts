@@ -5,10 +5,65 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { McpRegistryStore } from '@itphx/synth-core';
+import type { McpManager, SessionManager } from '@itphx/synth-core';
 import { createMcpRoutes } from './mcp.js';
 import type { McpServerConfig, SessionSettings } from '@itphx/synth-shared';
+import type { AuthKit } from '../auth/middleware.js';
 
-function createMockKit() {
+/** Запись сервера: карта `GET /servers` и деталь `GET|POST|PUT /servers/:name`. */
+interface McpServerBody {
+  name: string;
+  config: McpServerConfig;
+  connected?: boolean;
+}
+
+/** Инструмент в ответах probe/test/tools: маршруты отдают `{ name, description }`. */
+interface McpToolInfo {
+  name: string;
+  description?: string;
+}
+
+/** `POST /api/v2/mcp/probe`. */
+interface McpProbeBody {
+  name: string;
+  tools: McpToolInfo[];
+}
+
+/** `POST /api/v2/mcp/servers/:name/test`. */
+interface McpServerTestBody {
+  success: boolean;
+  error?: string;
+  toolCount?: number;
+  tools?: McpToolInfo[];
+}
+
+/** `GET /api/v2/mcp/servers/:name/tools`. */
+interface McpServerToolsBody {
+  server: string;
+  tools: McpToolInfo[];
+  connected: boolean;
+  probed?: boolean;
+  error?: string;
+}
+
+/** MCP-скоуп сессии (`GET|PUT /api/v2/mcp/session/:sessionId`). */
+interface McpSessionScopeBody {
+  mcpServers: string[];
+  mcpDisabledServers: string[];
+  allServers: Array<{ name: string; active: boolean }>;
+}
+
+/** Тело ошибки HTTP-ответа: `{ error: { code, message } }`. */
+interface ApiErrorBody {
+  error?: { code?: string; message?: string };
+}
+
+/**
+ * Мок AuthKit: guard'ы пропускают запрос, админ-проверка всегда `true`
+ * (пользователя в контекст ставит `app.use('*', ...)` харнеса).
+ */
+function createMockKit(): AuthKit {
+  // Фейк: реализованы только requireAuth/requireAdmin/isAdmin.
   return {
     requireAuth: async (_c: Context, next: Next) => {
       await next();
@@ -17,7 +72,7 @@ function createMockKit() {
       await next();
     },
     isAdmin: () => true,
-  };
+  } as unknown as AuthKit;
 }
 
 function makeStdioConfig(): McpServerConfig {
@@ -149,7 +204,14 @@ function createTestApp(
     c.set('user', { id: 'admin', username: 'admin', roles: ['ADMIN'] });
     await next();
   });
-  const mcpRoutes = createMcpRoutes(kit as never, mcpManager as never, sessionManager as never, { registry });
+  const mcpRoutes = createMcpRoutes(
+    kit,
+    // Фейк: реализованы только методы, нужные legacy-роутам/пробе.
+    mcpManager as unknown as McpManager,
+    // Фейк: реализованы getSession/saveSession/mutateMeta (нужны `/session/:id`).
+    sessionManager as unknown as SessionManager,
+    { registry },
+  );
   app.route('/api/v2/mcp', mcpRoutes);
   return app;
 }
@@ -178,10 +240,10 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as Record<string, McpServerBody>;
       expect(body['test-server']).toBeDefined();
-      expect(body['test-server'].config.type).toBe('stdio');
-      expect(body['test-server'].connected).toBe(true);
+      expect(body['test-server']!.config.type).toBe('stdio');
+      expect(body['test-server']!.connected).toBe(true);
     });
 
     it('возвращает empty объект когда серверов нет', async () => {
@@ -190,7 +252,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(emptyRegistry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as Record<string, McpServerBody>;
       expect(Object.keys(body)).toHaveLength(0);
     });
   });
@@ -221,7 +283,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpServerBody;
       expect(body.config.description).toBe('Мой MCP');
       const entry = await registry.getByName('described');
       expect(entry?.config.description).toBe('Мой MCP');
@@ -238,8 +300,8 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         }),
       });
       expect(res.status).toBe(409);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('CONFLICT');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('CONFLICT');
     });
 
     it('возвращает 400 для невалидного тела', async () => {
@@ -250,8 +312,8 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         body: JSON.stringify({ name: '', config: {} }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
     });
   });
 
@@ -260,7 +322,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpServerBody;
       expect(body.name).toBe('test-server');
       expect(body.config.type).toBe('stdio');
     });
@@ -318,7 +380,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/test', { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpServerTestBody;
       expect(body.success).toBe(true);
       expect(body.tools).toHaveLength(2);
     });
@@ -334,7 +396,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/test', { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpServerTestBody;
       expect(body.success).toBe(false);
       expect(body.error).toContain('Connection timeout');
     });
@@ -349,7 +411,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         body: JSON.stringify({ name: 'test-server' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpProbeBody;
       expect(body.name).toBe('test-server');
       expect(body.tools).toHaveLength(2);
       expect(body.tools[0]).toEqual({ name: 'tool1', description: 'First tool' });
@@ -363,8 +425,8 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         body: JSON.stringify({ name: '  ' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
     });
 
     it('возвращает 400 для ненастроенного сервера', async () => {
@@ -376,8 +438,8 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         body: JSON.stringify({ name: 'unknown' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
     });
 
     it('возвращает 500 при сбое probe', async () => {
@@ -389,9 +451,9 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         body: JSON.stringify({ name: 'test-server' }),
       });
       expect(res.status).toBe(500);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('MCP_CONNECT_ERROR');
-      expect(body.error.message).toContain('Connection timeout');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('MCP_CONNECT_ERROR');
+      expect(body.error?.message).toContain('Connection timeout');
     });
   });
 
@@ -400,11 +462,11 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/tools');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpServerToolsBody;
       expect(body.server).toBe('test-server');
       expect(body.connected).toBe(true);
       expect(body.tools).toHaveLength(2);
-      expect(body.tools[0].name).toBe('tool1');
+      expect(body.tools[0]!.name).toBe('tool1');
     });
 
     it('пробует получить инструменты отключённого сервера', async () => {
@@ -412,7 +474,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers/test-server/tools');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpServerToolsBody;
       expect(body.connected).toBe(false);
       expect(body.probed).toBe(true);
       expect(body.tools).toHaveLength(2);
@@ -431,9 +493,9 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/session/s1');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpSessionScopeBody;
       expect(body.mcpServers).toContain('test-server');
-      const testSrv = body.allServers.find((s: any) => s.name === 'test-server');
+      const testSrv = body.allServers.find((s) => s.name === 'test-server')!;
       expect(testSrv).toBeDefined();
       expect(testSrv.active).toBe(true);
     });
@@ -455,7 +517,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
         body: JSON.stringify({ mcpServers: ['test-server'] }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpSessionScopeBody;
       expect(body.mcpServers).toContain('test-server');
     });
 

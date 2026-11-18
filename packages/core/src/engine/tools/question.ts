@@ -111,7 +111,10 @@ export const questionTool: ToolDefinition = {
     const parsed = this.parameters.safeParse(args);
     if (!parsed.success) return argErrorResult(this.name, parsed.error.issues);
 
-    const questions = parsed.data.questions as QuestionItem[];
+    // `parameters` — схема произвольной формы (`ToolDefinition`), поэтому
+    // результат `safeParse` типизирован как `unknown`: сужаем к форме схемы.
+    const data = parsed.data as z.infer<typeof questionToolSchema>;
+    const questions: QuestionItem[] = data.questions;
     const sessionId = ctx.sessionId;
     if (!sessionId) {
       return {
@@ -131,7 +134,7 @@ export const questionTool: ToolDefinition = {
       // для конкретного вопроса. Не задан — берётся конфиг (по умолчанию — без
       // таймаута, вопрос ждёт ответа бесконечно). Параметр тула — в секундах,
       // сервис ждёт миллисекунды (перевод на границе).
-      ...(typeof parsed.data.timeout === 'number' ? { timeoutMs: parsed.data.timeout * 1000 } : {}),
+      ...(typeof data.timeout === 'number' ? { timeoutMs: data.timeout * 1000 } : {}),
       // Сигнал отмены хода: по нему вопрос снимается с ожидания.
       ...(ctx.abortSignal ? { signal: ctx.abortSignal } : {}),
     });

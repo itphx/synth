@@ -62,8 +62,42 @@ function createApp(options: AppOptions = {}): Hono {
   return app;
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Статус пароля: значение не отдаётся, только источник и флаги. */
+interface ProxyPasswordBody {
+  source: string;
+  set: boolean;
+  removable: boolean;
+}
+
+/**
+ * Тело ответов `/api/v2/settings/proxy*`: плоские поля статуса,
+ * `saved`/`running`/`defaults`, пароль, результат target-check или ошибка.
+ */
+interface ProxyBody {
+  url: string;
+  enabled: boolean;
+  source: string;
+  noProxy: string[];
+  fromEnv: boolean;
+  fallbackDirect: boolean;
+  connectTimeoutMs: number;
+  auth?: unknown;
+  /** `saved`/`defaults` проверяются только через `toMatchObject`. */
+  saved: Record<string, unknown>;
+  running: { enabled: boolean };
+  defaults: Record<string, unknown>;
+  isOverridden: boolean;
+  password: ProxyPasswordBody;
+  restartRequired: boolean;
+  /** Ответ `DELETE /settings/proxy`: `'restored'`. */
+  status: string;
+  usingSaved: boolean;
+  reachable: boolean;
+  error: { code: string; message: string };
+}
+
+async function json(res: Response): Promise<ProxyBody> {
+  return (await res.json()) as ProxyBody;
 }
 
 describe('GET /api/v2/settings/proxy', () => {
@@ -98,7 +132,7 @@ describe('GET /api/v2/settings/proxy', () => {
     const res = await app.request('/api/v2/settings/proxy');
     expect(res.status).toBe(200);
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
+    const body = JSON.parse(text) as ProxyBody;
     // Обратная совместимость: плоские поля saved-формы.
     expect(body).toMatchObject({
       enabled: true,
@@ -231,7 +265,7 @@ describe('PUT/DELETE /api/v2/settings/proxy', () => {
     });
     expect(res.status).toBe(200);
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
+    const body = JSON.parse(text) as ProxyBody;
     expect(body.restartRequired).toBe(true);
     expect(body.saved).toMatchObject({
       enabled: true,
@@ -274,7 +308,7 @@ describe('PUT/DELETE /api/v2/settings/proxy', () => {
     const res = await app.request('/api/v2/settings/proxy', { method: 'DELETE' });
     expect(res.status).toBe(200);
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
+    const body = JSON.parse(text) as ProxyBody;
     expect(body.status).toBe('restored');
     expect(body.saved).toMatchObject({ url: 'http://config:3128' });
     expect(text).not.toContain('MIIB');

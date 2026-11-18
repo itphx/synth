@@ -5,6 +5,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPacksRoutes } from './packs.js';
+import type { PackInstallResult } from './packs.js';
 import { FilePackStore } from '../../storage/file-pack-store.js';
 import { FilePipelineStore } from '../../storage/file-pipeline-store.js';
 import { McpRegistryStore } from '../../storage/mcp-registry-store.js';
@@ -14,7 +15,24 @@ import { SkillService } from '../../engine/skills/service.js';
 import { ContextConfig } from '../../engine/context/config.js';
 import { MemoryAuthorityPolicyRepository } from '../../storage/memory/authority-policy.js';
 import type { AuthorityPolicyRepository } from '../../storage/ports/authority-policy-repository.js';
-import type { AgentDefinition } from '@itphx/synth-shared';
+import type { PackInstallation } from '../../storage/ports/pack-repository.js';
+import type { AgentDefinition, PackAuthoritySummary } from '@itphx/synth-shared';
+
+/**
+ * Запись реестра установок в ответе `GET /api/v2/packs` — сводка контента
+ * полномочий (`authority`) добавляется роутом поверх записи.
+ */
+type PackDetailBody = PackInstallation & { authority?: PackAuthoritySummary };
+
+/** Список установок (`GET /api/v2/packs`). */
+interface PackListBody {
+  packs: PackDetailBody[];
+}
+
+/** Тело ошибки установки пакета (перечень проблем манифеста/файлов). */
+interface PackErrorBody {
+  error: { code: string; message?: string; problems: string[] };
+}
 
 /** Мок auth: requireAuth — no-op (single-user режим core). */
 function createMockAuth() {
@@ -131,7 +149,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
 
     // Пайплайн порождает правила маршрутизации → требуется подтверждение.
     expect(res.status).toBe(202);
-    const body: any = await res.json();
+    const body = (await res.json()) as PackInstallResult;
     expect(body.installed).toBe(false);
     expect(body.requiresApproval).toBe(true);
     expect(body.name).toBe('synth-media');
@@ -150,7 +168,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
     // Одобрение (ADMIN) — фактическая установка.
     const approve = await app.request('/api/v2/packs/synth-media/approve', { method: 'POST' });
     expect(approve.status).toBe(200);
-    const approved: any = await approve.json();
+    const approved = (await approve.json()) as PackInstallResult;
     expect(approved.installed).toBe(true);
     expect(approved.requiresApproval).toBe(false);
 
@@ -223,7 +241,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
     });
 
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as PackInstallResult;
     expect(body.installed).toBe(true);
     expect(body.requiresApproval).toBe(false);
     expect((await packStore.get('synth-media'))?.status).toBe('active');
@@ -284,7 +302,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
     });
 
     expect(res.status).toBe(202);
-    const body: any = await res.json();
+    const body = (await res.json()) as PackInstallResult;
     expect(body.requiresApproval).toBe(true);
     expect(body.installed).toBe(false);
     expect((await packStore.get('synth-media'))?.status).toBe('pending_approval');
@@ -303,7 +321,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
     });
 
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as PackErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(Array.isArray(body.error.problems)).toBe(true);
     expect(body.error.problems.length).toBeGreaterThan(0);
@@ -323,7 +341,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
     });
 
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as PackErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(JSON.stringify(body.error.problems)).toContain('agents/publisher/role.md');
     expect(await packStore.list()).toHaveLength(0);
@@ -365,15 +383,15 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
 
     const list = await app.request('/api/v2/packs');
     expect(list.status).toBe(200);
-    const listBody: any = await list.json();
+    const listBody = (await list.json()) as PackListBody;
     expect(listBody.packs).toHaveLength(1);
-    expect(listBody.packs[0].name).toBe('synth-media');
-    expect(listBody.packs[0].status).toBe('pending_approval');
-    expect(listBody.packs[0].requiresApproval).toBe(true);
+    expect(listBody.packs[0]!.name).toBe('synth-media');
+    expect(listBody.packs[0]!.status).toBe('pending_approval');
+    expect(listBody.packs[0]!.requiresApproval).toBe(true);
 
     const one = await app.request('/api/v2/packs/synth-media');
     expect(one.status).toBe(200);
-    const oneBody: any = await one.json();
+    const oneBody = (await one.json()) as PackDetailBody;
     expect(oneBody.version).toBe('1.0.0');
     expect(oneBody.provides.agents).toEqual(['publisher']);
 
@@ -449,25 +467,25 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
 
       // Контент полномочий → пакет ждёт одобрения ADMIN (даже без capabilities).
       expect(res.status).toBe(202);
-      const body: any = await res.json();
+      const body = (await res.json()) as PackInstallResult;
       expect(body.installed).toBe(false);
       expect(body.requiresApproval).toBe(true);
 
       // Сводка — «что именно» приносит пакет.
-      expect(body.authority.roles).toHaveLength(1);
-      expect(body.authority.roles[0].id).toBe('clinician');
-      expect(body.authority.roles[0].domain).toBe('clinic');
-      expect(body.authority.roles[0].grants).toBe(2);
-      expect(body.authority.roles[0].mutatingGrants).toBe(1);
-      expect(body.authority.actions).toEqual([
+      expect(body.authority!.roles).toHaveLength(1);
+      expect(body.authority!.roles[0]!.id).toBe('clinician');
+      expect(body.authority!.roles[0]!.domain).toBe('clinic');
+      expect(body.authority!.roles[0]!.grants).toBe(2);
+      expect(body.authority!.roles[0]!.mutatingGrants).toBe(1);
+      expect(body.authority!.actions).toEqual([
         { id: 'read', mutating: false },
         { id: 'sign', mutating: true },
       ]);
-      expect(body.authority.targets).toEqual([{ kind: 'record', resolver: 'record-resolver' }]);
-      expect(body.authority.agents).toEqual([
+      expect(body.authority!.targets).toEqual([{ kind: 'record', resolver: 'record-resolver' }]);
+      expect(body.authority!.agents).toEqual([
         { id: 'doctor', roles: ['clinician'], ceiling: ['sign'] },
       ]);
-      expect(body.authority.totals).toMatchObject({
+      expect(body.authority!.totals).toMatchObject({
         roles: 1,
         actions: 2,
         targets: 1,
@@ -483,12 +501,12 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
 
       // Сводка видна и в списке, и в деталях пакета.
       const list = await app.request('/api/v2/packs');
-      const listBody: any = await list.json();
-      expect(listBody.packs[0].authority.roles[0].id).toBe('clinician');
+      const listBody = (await list.json()) as PackListBody;
+      expect(listBody.packs[0]!.authority!.roles[0]!.id).toBe('clinician');
 
       const one = await app.request('/api/v2/packs/clinic-pack');
-      const oneBody: any = await one.json();
-      expect(oneBody.authority.totals.roles).toBe(1);
+      const oneBody = (await one.json()) as PackDetailBody;
+      expect(oneBody.authority!.totals.roles).toBe(1);
     });
 
     it('пакет без контента полномочий — прежнее поведение (сводки в ответе нет)', async () => {
@@ -505,7 +523,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
       });
 
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as PackInstallResult;
       expect(body.installed).toBe(true);
       expect(body.authority).toBeUndefined();
     });
@@ -528,7 +546,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
       });
 
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as PackInstallResult;
       expect(body.authority).toBeUndefined();
     });
   });
@@ -589,15 +607,15 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
 
       const approve = await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
       expect(approve.status).toBe(200);
-      const approved: any = await approve.json();
+      const approved = (await approve.json()) as PackInstallResult;
       expect(approved.installed).toBe(true);
 
       // Сводка активации — в ответе одобрения.
-      expect(approved.authorityActivation.activated.roles).toEqual(['clinician']);
-      expect(approved.authorityActivation.activated.actions).toEqual(['read', 'sign']);
-      expect(approved.authorityActivation.activated.targets).toEqual(['record']);
-      expect(approved.authorityActivation.activated.agents).toEqual(['doctor']);
-      expect(approved.authorityActivation.skipped).toEqual([]);
+      expect(approved.authorityActivation!.activated.roles).toEqual(['clinician']);
+      expect(approved.authorityActivation!.activated.actions).toEqual(['read', 'sign']);
+      expect(approved.authorityActivation!.activated.targets).toEqual(['record']);
+      expect(approved.authorityActivation!.activated.agents).toEqual(['doctor']);
+      expect(approved.authorityActivation!.skipped).toEqual([]);
 
       // Политика инстанца: роль активирована с грантами, агент привязан.
       const stored = await policy.getPolicy();
@@ -630,10 +648,10 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
 
       const approve = await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
       expect(approve.status).toBe(200);
-      const approved: any = await approve.json();
+      const approved = (await approve.json()) as PackInstallResult;
 
       // Сводка показывает причину пропуска мутирующего гранта.
-      expect(approved.authorityActivation.skipped).toContainEqual(
+      expect(approved.authorityActivation!.skipped).toContainEqual(
         expect.objectContaining({ kind: 'grant', id: 'sign', reason: 'trust_floor' }),
       );
 
@@ -693,7 +711,7 @@ describe('Packs API Routes (ADR-086 §5) — установка пакета р�
       });
       const approve = await app.request('/api/v2/packs/clinic-pack/approve', { method: 'POST' });
       expect(approve.status).toBe(200);
-      const approved: any = await approve.json();
+      const approved = (await approve.json()) as PackInstallResult;
       expect(approved.authorityActivation).toBeUndefined();
     });
   });

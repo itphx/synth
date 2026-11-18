@@ -7,6 +7,32 @@ import { join } from 'node:path';
 import { createSettingsRoutes, RuntimeSettingsStore, DEFAULT_AGENT_ID } from '@itphx/synth-core';
 import type { SettingsRoutesDeps } from '@itphx/synth-core';
 
+/** Тело ответа `GET/PUT /api/v2/settings/workspace`. */
+interface WorkspaceBody {
+  workspace: string;
+}
+
+/** Тело ответа `GET/PUT /api/v2/settings/mcp` — политика инструментов по серверам. */
+interface McpServersBody {
+  servers: Record<string, {
+    default?: { plan: boolean; act: boolean };
+    tools?: Record<string, { plan: boolean; act: boolean }>;
+  }>;
+}
+
+/** Тело ответа `GET/PUT/DELETE /api/v2/settings/default-agent`. */
+interface DefaultAgentBody {
+  status?: string;
+  defaultAgent: string;
+  isOverridden: boolean;
+  defaults: string;
+}
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code?: string; message?: string };
+}
+
 function createMockKit() {
   return {
     requireAuth: async (_c: Context, next: Next) => { await next(); },
@@ -18,7 +44,7 @@ function createTestApp(settingsStore: RuntimeSettingsStore, fallbackWorkspace: s
   const app = new Hono();
   const kit = createMockKit();
   const deps: SettingsRoutesDeps = { settingsStore, fallbackWorkspace };
-  app.route('/api/v2/settings', createSettingsRoutes(kit as any, deps));
+  app.route('/api/v2/settings', createSettingsRoutes(kit, deps));
   return app;
 }
 
@@ -39,7 +65,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
       const app = createTestApp(store, '/fallback/workspace');
       const res = await app.request('/api/v2/settings/workspace');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as WorkspaceBody;
       expect(body.workspace).toBe('/fallback/workspace');
     });
 
@@ -55,7 +81,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
       expect(putRes.status).toBe(200);
 
       const getRes = await app.request('/api/v2/settings/workspace');
-      const body: any = await getRes.json();
+      const body = (await getRes.json()) as WorkspaceBody;
       expect(body.workspace).toBe('/data/workspaces/my');
     });
 
@@ -71,7 +97,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
       const store2 = new RuntimeSettingsStore({ dataDir: tmpDir });
       const app2 = createTestApp(store2, '/fallback/workspace');
       const res = await app2.request('/api/v2/settings/workspace');
-      const body: any = await res.json();
+      const body = (await res.json()) as WorkspaceBody;
       expect(body.workspace).toBe('/persisted/ws');
     });
   });
@@ -86,7 +112,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
         body: JSON.stringify({ workspace: '   ' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -108,7 +134,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
       const app = createTestApp(store, '/fallback/workspace');
       const res = await app.request('/api/v2/settings/mcp');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as McpServersBody;
       expect(body.servers).toEqual({});
     });
   });
@@ -134,8 +160,8 @@ describe('Settings API Routes (workspace/mcp)', () => {
       expect(res.status).toBe(200);
 
       const getRes = await app.request('/api/v2/settings/mcp');
-      const body: any = await getRes.json();
-      expect(body.servers.filesystem.default).toEqual({ plan: true, act: true });
+      const body = (await getRes.json()) as McpServersBody;
+      expect(body.servers.filesystem!.default).toEqual({ plan: true, act: true });
     });
 
     it('возвращает 400 для невалидной структуры серверов', async () => {
@@ -147,7 +173,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
         body: JSON.stringify({ servers: { bad: { default: { plan: 'yes' } } } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
   });
@@ -158,7 +184,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
       const app = createTestApp(store, '/fallback/workspace');
       const res = await app.request('/api/v2/settings/default-agent');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as DefaultAgentBody;
       expect(body).toEqual({ defaultAgent: DEFAULT_AGENT_ID, isOverridden: false, defaults: DEFAULT_AGENT_ID });
     });
 
@@ -174,7 +200,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
 
       const store2 = new RuntimeSettingsStore({ dataDir: tmpDir });
       const app2 = createTestApp(store2, '/fallback/workspace');
-      const body: any = await (await app2.request('/api/v2/settings/default-agent')).json();
+      const body = (await (await app2.request('/api/v2/settings/default-agent')).json()) as DefaultAgentBody;
       expect(body).toEqual({ defaultAgent: 'developer', isOverridden: true, defaults: DEFAULT_AGENT_ID });
     });
 
@@ -187,7 +213,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
         body: JSON.stringify({ defaultAgent: 'bad id' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -199,7 +225,7 @@ describe('Settings API Routes (workspace/mcp)', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ defaultAgent: 'developer' }),
       });
-      const body: any = await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json();
+      const body = (await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json()) as DefaultAgentBody;
       expect(body).toEqual({ status: 'restored', defaultAgent: DEFAULT_AGENT_ID, isOverridden: false, defaults: DEFAULT_AGENT_ID });
       expect(await store.getDefaultAgent()).toBeUndefined();
     });

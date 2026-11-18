@@ -20,7 +20,10 @@ import {
   type LiveStickyNotesLimits,
 } from '../../storage/runtime-settings.js';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
-import { createStickyNotesSettingsRoutes } from './settings-sticky-notes.js';
+import {
+  createStickyNotesSettingsRoutes,
+  type StickyNotesSettingsView,
+} from './settings-sticky-notes.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 const deny = async (c: Context) => c.json({ error: { code: 'FORBIDDEN', message: 'deny' } }, 403);
@@ -74,8 +77,13 @@ function createApp(options: AppOptions): {
   return { app, live, settingsStore };
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Тело ответа-ошибки (400): `{error:{code,message}}`. */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
+async function json<T = StickyNotesSettingsView>(res: Response): Promise<T> {
+  return (await res.json()) as T;
 }
 
 async function put(app: Hono, body: unknown): Promise<Response> {
@@ -153,7 +161,7 @@ describe('createStickyNotesSettingsRoutes', () => {
     ]) {
       const res = await put(app, { limits });
       expect(res.status, JSON.stringify(limits)).toBe(400);
-      const body = await json(res);
+      const body = await json<ApiErrorBody>(res);
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(typeof body.error.message).toBe('string');
     }

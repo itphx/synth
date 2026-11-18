@@ -66,8 +66,62 @@ function createApp(options: AppOptions = {}): Hono {
   return app;
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Статус пароля профиля: значение не отдаётся, только источник и флаги. */
+interface ProxyPasswordBody {
+  source: string;
+  set: boolean;
+  removable: boolean;
+}
+
+/** Статус именованного профиля прокси (без значения пароля, ADR-099 §16–27). */
+interface ProxyProfileBody {
+  name?: string;
+  label?: string;
+  url?: string;
+  legacy?: boolean;
+  auth?: unknown;
+  tls?: { caFile?: string; certFile?: string; keyFile?: string; hasCaPem?: boolean };
+  password?: ProxyPasswordBody;
+}
+
+/**
+ * Тело ответов `/api/v2/settings/proxy*`: статус с профилями/правилами,
+ * `saved`, пароль, результат target-check или ошибка.
+ */
+interface ProxyProfilesBody {
+  defaultProfile: string;
+  isOverridden: boolean;
+  saved: {
+    mode?: string;
+    defaultProfile?: string;
+    profiles: Record<string, ProxyProfileBody>;
+    rules: unknown[];
+  };
+  password: ProxyPasswordBody;
+  restartRequired: boolean;
+  status: {
+    profiles: Record<string, ProxyProfileBody>;
+    tls?: { caFile?: string; certFile?: string; keyFile?: string };
+  };
+  ok: boolean;
+  httpStatus: number;
+  usingSaved: boolean;
+  authChallenge: string;
+  route: {
+    action: string;
+    via?: string;
+    reason?: string;
+    ruleId?: string;
+    ruleLabel?: string;
+    profile?: string;
+    profileLabel?: string;
+    proxyUrl?: string;
+  };
+  error: { code: string; message: string };
+}
+
+async function json(res: Response): Promise<ProxyProfilesBody> {
+  return (await res.json()) as ProxyProfilesBody;
 }
 
 function putJson(app: Hono, path: string, body: unknown): Promise<Response> {
@@ -122,7 +176,7 @@ describe('GET /api/v2/settings/proxy — профили и правила', () =
     const res = await app.request('/api/v2/settings/proxy');
     expect(res.status).toBe(200);
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
+    const body = JSON.parse(text) as ProxyProfilesBody;
 
     expect(body).toMatchObject({ mode: 'selected', defaultProfile: 'corp', isOverridden: true });
     expect(body.saved).toMatchObject({ mode: 'selected', defaultProfile: 'corp' });
@@ -154,9 +208,9 @@ describe('GET /api/v2/settings/proxy — профили и правила', () =
 
     const res = await app.request('/api/v2/settings/proxy');
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
-    expect(body.saved.profiles.corp.password).toEqual({ source: 'env', set: true, removable: false });
-    expect(body.saved.profiles.other.password).toEqual({ source: 'none', set: false, removable: false });
+    const body = JSON.parse(text) as ProxyProfilesBody;
+    expect(body.saved.profiles.corp!.password).toEqual({ source: 'env', set: true, removable: false });
+    expect(body.saved.profiles.other!.password).toEqual({ source: 'none', set: false, removable: false });
     expect(text).not.toContain('corp-secret');
   });
 
@@ -271,7 +325,7 @@ describe('PUT/DELETE /api/v2/settings/proxy/profiles/:name/password', () => {
     expect(entries[0]!.after).toMatchObject({ profile: 'corp', password: { source: 'file', set: true } });
 
     const get = await json(await app.request('/api/v2/settings/proxy'));
-    expect(get.saved.profiles.corp.password).toEqual({ source: 'file', set: true, removable: true });
+    expect(get.saved.profiles.corp!.password).toEqual({ source: 'file', set: true, removable: true });
 
     const del = await app.request('/api/v2/settings/proxy/profiles/corp/password', { method: 'DELETE' });
     expect(del.status).toBe(200);
@@ -381,10 +435,10 @@ describe('PUT/DELETE /api/v2/settings/proxy/profiles/:name/tls/*', () => {
     const res = await putJson(app, '/api/v2/settings/proxy/profiles/corp/tls/ca', { pem: CA_PEM });
     expect(res.status).toBe(200);
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
+    const body = JSON.parse(text) as ProxyProfilesBody;
     expect(body.restartRequired).toBe(true);
     const file = join(dir, 'secrets', 'proxy', 'corp', 'ca.pem');
-    expect(body.status.profiles.corp.tls).toMatchObject({ caFile: file, hasCaPem: false });
+    expect(body.status.profiles.corp!.tls).toMatchObject({ caFile: file, hasCaPem: false });
     expect(text).not.toContain('BEGIN CERTIFICATE');
 
     expect(await readFile(file, 'utf-8')).toContain('BEGIN CERTIFICATE');
@@ -397,7 +451,7 @@ describe('PUT/DELETE /api/v2/settings/proxy/profiles/:name/tls/*', () => {
 
     const del = await app.request('/api/v2/settings/proxy/profiles/corp/tls/ca', { method: 'DELETE' });
     expect(del.status).toBe(200);
-    expect((await json(del)).status.profiles.corp.tls?.caFile).toBeUndefined();
+    expect((await json(del)).status.profiles.corp!.tls?.caFile).toBeUndefined();
     await expect(readFile(file, 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -418,7 +472,7 @@ describe('PUT/DELETE /api/v2/settings/proxy/profiles/:name/tls/*', () => {
     const body = await json(res);
     const certFile = join(dir, 'secrets', 'proxy', 'corp', 'client.crt');
     const keyFile = join(dir, 'secrets', 'proxy', 'corp', 'client.key');
-    expect(body.status.profiles.corp.tls).toMatchObject({ certFile, keyFile });
+    expect(body.status.profiles.corp!.tls).toMatchObject({ certFile, keyFile });
     expect(JSON.stringify(body)).not.toContain('BEGIN PRIVATE KEY');
     expect((await stat(certFile)).mode & 0o777).toBe(0o600);
     expect((await stat(keyFile)).mode & 0o777).toBe(0o600);
@@ -427,8 +481,8 @@ describe('PUT/DELETE /api/v2/settings/proxy/profiles/:name/tls/*', () => {
     const del = await app.request('/api/v2/settings/proxy/profiles/corp/tls/client', { method: 'DELETE' });
     expect(del.status).toBe(200);
     const after = await json(del);
-    expect(after.status.profiles.corp.tls?.certFile).toBeUndefined();
-    expect(after.status.profiles.corp.tls?.keyFile).toBeUndefined();
+    expect(after.status.profiles.corp!.tls?.certFile).toBeUndefined();
+    expect(after.status.profiles.corp!.tls?.keyFile).toBeUndefined();
     await expect(readFile(certFile, 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(keyFile, 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -531,7 +585,7 @@ describe('POST /api/v2/settings/proxy/test — target-check', () => {
     const res = await postJson(app, '/api/v2/settings/proxy/test', { url: 'https://api.example.com/x' });
     expect(res.status).toBe(200);
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
+    const body = JSON.parse(text) as ProxyProfilesBody;
     expect(body).toMatchObject({
       ok: true,
       usingSaved: true,

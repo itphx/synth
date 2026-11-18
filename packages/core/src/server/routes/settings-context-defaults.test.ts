@@ -18,7 +18,7 @@ import { RuntimeSettingsStore, createLiveContextDefaults, type LiveContextDefaul
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
-import { createContextDefaultsSettingsRoutes } from './settings-context-defaults.js';
+import { createContextDefaultsSettingsRoutes, type ContextDefaultsSettingsView } from './settings-context-defaults.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 const deny = async (c: Context) => c.json({ error: { code: 'FORBIDDEN', message: 'deny' } }, 403);
@@ -72,8 +72,13 @@ function createApp(options: AppOptions): {
   return { app, live, settingsStore };
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Тело ответа-ошибки (400): `{error:{code,message}}`. */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
+async function json<T = ContextDefaultsSettingsView>(res: Response): Promise<T> {
+  return (await res.json()) as T;
 }
 
 async function put(app: Hono, body: unknown): Promise<Response> {
@@ -175,7 +180,7 @@ describe('createContextDefaultsSettingsRoutes', () => {
     for (const body of cases) {
       const res = await put(app, body);
       expect(res.status).toBe(400);
-      expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+      expect((await json<ApiErrorBody>(res)).error.code).toBe('VALIDATION_ERROR');
     }
     // Пустое тело — тоже 400.
     const empty = await app.request('/api/v2/settings/context-defaults', { method: 'PUT' });

@@ -690,6 +690,14 @@ describe('Project API Routes (icon/color)', () => {
 // ADR-089: видимость проектов (elevated) и read-уровень доступа по id
 // ---------------------------------------------------------------------------
 
+/**
+ * Страница проектов (`GET /api/v2/projects`) — `serializeProjectSummary`.
+ * Для проверки достаточно имени: остальные поля DTO тесту не нужны.
+ */
+interface ProjectListPage {
+  projects: Array<{ name?: string }>;
+}
+
 describe('Project API Routes (visibility, ADR-089)', () => {
   let tmpDir: string;
   let store: ProjectStore;
@@ -726,12 +734,12 @@ describe('Project API Routes (visibility, ADR-089)', () => {
     });
 
     const asAlice = await plain.request('/api/v2/projects', { headers: header('alice') });
-    expect(((await asAlice.json()) as { projects: any[] }).projects.map((p: any) => p.name)).toEqual(['OwnerP']);
+    expect(((await asAlice.json()) as ProjectListPage).projects.map((p) => p.name)).toEqual(['OwnerP']);
 
     const asLead = await plain.request('/api/v2/projects', {
       headers: { ...header('lead'), 'X-Elevated': '1' },
     });
-    expect(((await asLead.json()) as { projects: any[] }).projects).toHaveLength(2);
+    expect(((await asLead.json()) as ProjectListPage).projects).toHaveLength(2);
   });
 
   it('GET /:id — участник (VIEWER) читает проект, посторонний → 403', async () => {

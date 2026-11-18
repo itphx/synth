@@ -55,8 +55,35 @@ function createApp(options: AppOptions = {}): Hono {
   return app;
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Минимальная запись mapping'а в ответах `/settings/tls/mappings*`. */
+interface TlsMappingBody {
+  id: string;
+  hosts: string[];
+  label?: string;
+  certSubject?: string;
+}
+
+/**
+ * Тело ответов `/api/v2/settings/tls*`: статус/параметры, запись mapping'а,
+ * результат `validate` или тело ошибки.
+ */
+interface TlsBody {
+  ca: { source?: string; count?: number; subjects: string[] };
+  status: { ca?: { source?: string; count?: number }; rejectUnauthorized?: boolean };
+  params: { ca?: { source?: string; hasPem?: boolean } };
+  restartRequired: boolean;
+  mapping: TlsMappingBody;
+  ok: boolean;
+  caCount: number;
+  keyMatches: boolean;
+  hostPatternsValid: boolean;
+  errors: string[];
+  certSubject: string;
+  error: { code: string; message?: string };
+}
+
+async function json(res: Response): Promise<TlsBody> {
+  return (await res.json()) as TlsBody;
 }
 
 function tlsPath(path: string): string {
@@ -100,7 +127,7 @@ describe('GET /api/v2/settings/tls', () => {
     const res = await app.request('/api/v2/settings/tls');
     expect(res.status).toBe(200);
     const text = await res.text();
-    const body = JSON.parse(text) as Record<string, any>;
+    const body = JSON.parse(text) as TlsBody;
     expect(body.ca).toMatchObject({ source: 'config', count: 1 });
     expect(body.status.ca).toMatchObject({ source: 'config', count: 1 });
     expect(body.ca.subjects.some((s: string) => s.includes('localhost'))).toBe(true);

@@ -17,6 +17,18 @@ function createMockAuth(): AuthKit {
 
 let tmpDir: string;
 
+/** Сводка `/`-команды в ответе `GET /api/v2/commands` (ADR-126 §7). */
+interface CommandSummary {
+  name: string;
+  kind?: string;
+}
+
+/** Тело ответа `GET /api/v2/commands` (список и диагностика). */
+interface CommandsBody {
+  commands: CommandSummary[];
+  diagnostics: unknown[];
+}
+
 function makeApp() {
   const skillSource = {
     listSummaries: async () => ({ skills: [], diagnostics: [] }),
@@ -54,8 +66,8 @@ describe('/api/v2/commands (ADR-126 §7)', () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/commands');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
-    expect(body.commands.map((c: any) => c.name)).toEqual(
+    const body = (await res.json()) as CommandsBody;
+    expect(body.commands.map((c: CommandSummary) => c.name)).toEqual(
       expect.arrayContaining(['help', 'skills', 'commands', 'summary', 'init']),
     );
   });
@@ -68,14 +80,14 @@ describe('/api/v2/commands (ADR-126 §7)', () => {
       'utf-8',
     );
     const { app } = makeApp();
-    const body: any = await (await app.request('/api/v2/commands')).json();
-    expect(body.commands.some((c: any) => c.name === 'deploy' && c.kind === 'template')).toBe(true);
+    const body = (await (await app.request('/api/v2/commands')).json()) as CommandsBody;
+    expect(body.commands.some((c: CommandSummary) => c.name === 'deploy' && c.kind === 'template')).toBe(true);
   });
 
   it('GET /?diagnostics=1 — диагностика', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/commands?diagnostics=1');
-    const body: any = await res.json();
+    const body = (await res.json()) as CommandsBody;
     expect(Array.isArray(body.diagnostics)).toBe(true);
   });
 });

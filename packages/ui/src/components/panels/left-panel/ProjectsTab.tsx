@@ -19,12 +19,12 @@ import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
 import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
 import { applyHistoryPage } from '@/stores/transportStore'
-import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
+import type { EntityOrigin, ProjectData, SessionData } from '@/lib/api/synthApi'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { useEntityEditStore } from '@/stores/entityEditStore'
 import { formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { TreeContainer } from '@/components/tree'
-import type { TreeNodeBase, TreeAction } from '@/components/tree'
+import type { TreeNodeBase, TreeAction, ContextMenuEntry } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
 import type { ContextMenuItem } from '@/components/ui/contextMenu'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -273,10 +273,10 @@ export function ProjectsTab() {
   }, [projects])
 
   const sessionsByProject = useMemo(() => {
-    const map: Record<string, any[]> = {}
+    const map: Record<string, SessionData[]> = {}
     const sortFn = sortMode === 'date'
-      ? (a: any, b: any) => parseISODate(b.updated_at).getTime() - parseISODate(a.updated_at).getTime()
-      : (a: any, b: any) => a.id.localeCompare(b.id)
+      ? (a: SessionData, b: SessionData) => parseISODate(b.updated_at).getTime() - parseISODate(a.updated_at).getTime()
+      : (a: SessionData, b: SessionData) => a.id.localeCompare(b.id)
     const seen = new Set<string>()
     map['__none__'] = []
     for (const s of sessions) {
@@ -291,7 +291,7 @@ export function ProjectsTab() {
   }, [sessions, sortMode])
 
   const childrenByParentId = useMemo(() => {
-    const map: Record<string, any[]> = {}
+    const map: Record<string, SessionData[]> = {}
     for (const s of sessions) {
       if (s.parent_id && s.session_origin === 'subagent') {
         if (!map[s.parent_id]) map[s.parent_id] = []
@@ -393,7 +393,7 @@ export function ProjectsTab() {
     setRenameValue('')
   }
 
-  const renderSessionNode = (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
+  const renderSessionNode = (session: SessionData, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
     const isSubagent = session.session_origin === 'subagent'
     const isForwardSource = forwardMode.active && session.id === forwardMode.sourceSessionId
     const isForwardTarget = forwardMode.active && !isForwardSource
@@ -712,7 +712,7 @@ export function ProjectsTab() {
           : hybridOnline && project.origin === 'remote'
             ? { label: t('hybrid.cloneProject'), icon: 'download' as const, onClick: () => setForkTarget(project) }
             : null
-        const projectContextItems: any[] = [
+        const projectContextItems: ContextMenuEntry[] = [
           { label: t('leftPanel.rename'), icon: 'pencil-ai' as const, onClick: () => { setRenamingProjectId(project.id); setRenameValue(project.name) } },
           { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => useEntityEditStore.getState().openEntityEdit({
             kind: 'project',

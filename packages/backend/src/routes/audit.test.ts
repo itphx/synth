@@ -22,6 +22,23 @@ import { SessionManager, EventBus, FileStore, AuditLogger, readAuditLog, createC
 import type { CommandAuditLog } from '@itphx/synth-core';
 import type { CommandAuditEntry, User } from '@itphx/synth-shared';
 
+/** Страница журнала LLM Gateway (`GET /api/v2/audit`). */
+interface AuditLogPage {
+  total: number;
+  entries: Array<{ type?: string; userId?: string; [key: string]: unknown }>;
+}
+
+/** Карта обфускации сессии (`GET /api/v2/sessions/:id/secrets`). */
+interface SessionSecretsBody {
+  sessionId: string;
+  secrets: Record<string, string>;
+}
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code?: string; message?: string };
+}
+
 const adminUser: User = {
   id: 'admin', username: 'admin', roles: ['ADMIN'], preferredLanguage: 'ru',
   createdAt: '', teamRole: 'ADMIN', notes: '', interviewCompleted: false,
@@ -171,9 +188,9 @@ describe('routes/audit: managed-обвязка core-фабрики аудита 
       await writeAuditEntry(entry1);
       const res = await createApp(adminUser).request('/api/v2/audit');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as AuditLogPage;
       expect(body.total).toBe(1);
-      expect(body.entries[0].type).toBe('obfuscated');
+      expect(body.entries[0]!.type).toBe('obfuscated');
     });
   });
 
@@ -204,7 +221,7 @@ describe('routes/audit: managed-обвязка core-фабрики аудита 
         body: JSON.stringify({ sessionId: 'ses-nope', placeholder: '⟦SYNTH_SECRET_1⟧' }),
       });
       expect(res.status).toBe(404);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('NOT_FOUND');
     });
   });
@@ -278,13 +295,17 @@ describe('routes/audit: GET /api/v2/sessions/:id/secrets (backend-фабрика
     const eventHub = createMockEventHub();
 
     const sessionRoutes = createSessionRoutes(
-      kit as any,
+      // Фейк: из AuthKit реализованы только requireAuth/requirePermission/getCurrentUser.
+      kit as unknown as Parameters<typeof createSessionRoutes>[0],
       sessionManager,
       eventBus,
-      queueManager as any,
+      // Фейк: из QueueProcessorManager реализованы только методы, нужные роутам сессий.
+      queueManager as unknown as Parameters<typeof createSessionRoutes>[3],
       orchestrator.createProcessMessage(),
-      orchestrator as any,
-      eventHub as any,
+      // Фейк: из ChatOrchestrator реализованы createProcessMessage/cancel.
+      orchestrator as unknown as Parameters<typeof createSessionRoutes>[5],
+      // Фейк: из EventHub реализованы только методы подписки клиентов.
+      eventHub as unknown as Parameters<typeof createSessionRoutes>[6],
     );
 
     app.use('*', kit.requireAuth);
@@ -298,7 +319,7 @@ describe('routes/audit: GET /api/v2/sessions/:id/secrets (backend-фабрика
 
     const res = await app.request(`/api/v2/sessions/${session.id}/secrets`);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionSecretsBody;
     expect(body.sessionId).toBe(session.id);
     expect(body.secrets).toEqual({});
   });
@@ -311,7 +332,7 @@ describe('routes/audit: GET /api/v2/sessions/:id/secrets (backend-фабрика
 
     const res = await app.request(`/api/v2/sessions/${session.id}/secrets`);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionSecretsBody;
     expect(body.secrets).toEqual({ '⟦SYNTH_SECRET_1⟧': 'sk-abc123' });
   });
 

@@ -1,14 +1,25 @@
 import React, { useCallback } from 'react'
 import { TreeNode, TreeChildren } from '@/components/tree'
-import type { TreeNodeBase, TreeAction } from '@/components/tree'
+import type { TreeNodeBase, TreeAction, ContextMenuEntry } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
 import { ProjectAccessBadge } from '@/components/ui/ProjectAccessBadge'
 import { useProjectsStore } from '@/stores/projectsStore'
 import type { EntityOrigin, ProjectVisibility } from '@/lib/api/synthApi'
+import type { useI18n } from '@/lib/i18n'
 import { MAX_VISIBLE_SESSIONS } from './constants'
 import { SessionTreeItem } from './SessionTreeItem'
 
-export function GroupNode({
+/**
+ * Минимум полей сессии, который нужен узлу группы: строка дерева и фильтр
+ * саб-агентов. Дженерик позволяет прокидывать как сводку из стора
+ * (`SessionData`), так и урезанную запись в изолированных тестах компонента.
+ */
+interface GroupSessionLike {
+  id: string
+  session_origin?: string | null
+}
+
+export function GroupNode<T extends GroupSessionLike>({
   id, label, icon, iconColor, isCollapsed, onToggle,
   sessions, childrenByParentId, expandedGroups, toggleGroupExpand, renderSessionNode,
   expandedSessions, toggleSessionExpand,
@@ -20,18 +31,18 @@ export function GroupNode({
 }: {
   id: string; label: string; icon: string; iconColor?: string
   isCollapsed: boolean; onToggle: () => void
-  sessions: any[]; childrenByParentId: Record<string, any[]>
+  sessions: T[]; childrenByParentId: Record<string, T[]>
   expandedGroups: Set<string>; toggleGroupExpand: (k: string) => void
-  renderSessionNode: (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void) => TreeNodeBase
+  renderSessionNode: (session: T, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void) => TreeNodeBase
   expandedSessions: Set<string>; toggleSessionExpand: (id: string) => void
   projectId: string | null; onCreateSession: () => void; onDropSession: (sid: string) => void
-  projectActions?: TreeAction[]; projectContextItems?: any[]
+  projectActions?: TreeAction[]; projectContextItems?: ContextMenuEntry[]
   origin?: EntityOrigin
   /** PROP-133: режим доступа к проекту (бейдж в строке дерева). */
   visibility?: ProjectVisibility
   offline?: boolean
   isTouch?: boolean
-  t: any
+  t: ReturnType<typeof useI18n>['t']
   /** Проект выделен в дереве (визуал выделения + приоритет контекста). */
   isActive?: boolean
   /** Клик по строке проекта (выделение проекта). */

@@ -8,6 +8,29 @@ import { createAgentRoutes } from './agents.js';
 import { JsonStore } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { AgentRegistry, DEFAULT_AGENT_ID, ContextConfig } from '@itphx/synth-core';
+import type { AuthKit } from '../auth/middleware.js';
+
+/** Элемент списка агентов (`GET /agents`, `GET /agents/all`) — поля `AGENT_FIELDS`. */
+interface AgentListItem {
+  id: string;
+  agent_mode: string[];
+}
+
+/** Ответ списка агентов: `{ agents, default_agent }`. */
+interface AgentListBody {
+  agents: AgentListItem[];
+  default_agent: string;
+}
+
+/** Ответ создания агента: определение + результат записи ролевого промпта. */
+interface AgentCreateResponse extends AgentDefinition {
+  role?: { file: string; written: boolean; replaced: boolean };
+}
+
+/** Тело ошибки HTTP-ответа: `{ error: { code, message } }`. */
+interface ApiErrorBody {
+  error?: { code?: string; message?: string };
+}
 
 /**
  * Мок AuthKit: в реальном backend пользователь кладётся в контекст
@@ -18,7 +41,7 @@ import { AgentRegistry, DEFAULT_AGENT_ID, ContextConfig } from '@itphx/synth-cor
  * `requireAuth` (например `requireAdminRoleOrScope`), увидел бы пустой
  * контекст и вернул 401 вместо ожидаемого кода.
  */
-function createMockKit(scopes?: string[], keyRoles: string[] = ['USER']) {
+function createMockKit(scopes?: string[], keyRoles: string[] = ['USER']): AuthKit {
   const attachUser = async (c: Context, next: Next) => {
     if (scopes) {
       c.set('user', { id: 'service:svc1', username: 'installer', roles: keyRoles });
@@ -33,6 +56,7 @@ function createMockKit(scopes?: string[], keyRoles: string[] = ['USER']) {
     }
     await next();
   };
+  // Фейк: реализованы только attachUser/requireAuth/requireAdmin.
   return {
     attachUser,
     requireAuth: async (_c: Context, next: Next) => {
@@ -41,7 +65,7 @@ function createMockKit(scopes?: string[], keyRoles: string[] = ['USER']) {
     requireAdmin: async (_c: Context, next: Next) => {
       await next();
     },
-  };
+  } as unknown as AuthKit;
 }
 
 let tmpDir: string;
@@ -54,7 +78,7 @@ function createTestApp(
   kit = createMockKit(),
 ) {
   const app = new Hono();
-  const routes = createAgentRoutes(kit as any, store, agentRegistry, getDefaultAgentId, contextFiles);
+  const routes = createAgentRoutes(kit, store, agentRegistry, getDefaultAgentId, contextFiles);
   // Как в реальном backend: пользователь кладётся в контекст глобально.
   app.use('*', kit.attachUser);
   app.route('/api/v2/agents', routes);
@@ -79,9 +103,9 @@ describe('Agent API Routes — валидация id', () => {
       body: JSON.stringify({ id: '@test', display_name: 'Test', agent_mode: 'primary' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
-    expect(body.error.message).toContain('ID агента');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message).toContain('ID агента');
   });
 
   it('POST /agents отклоняет id с кириллицей', async () => {
@@ -92,8 +116,8 @@ describe('Agent API Routes — валидация id', () => {
       body: JSON.stringify({ id: 'тест', display_name: 'Тест', agent_mode: 'primary' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 
   it('POST /agents отклоняет id с пробелом', async () => {
@@ -104,8 +128,8 @@ describe('Agent API Routes — валидация id', () => {
       body: JSON.stringify({ id: 'with space', display_name: 'Test', agent_mode: 'primary' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 
   it('POST /agents принимает валидный id и сохраняет агента', async () => {
@@ -116,7 +140,7 @@ describe('Agent API Routes — валидация id', () => {
       body: JSON.stringify({ id: 'bankassist', display_name: 'Банковский ассистент', agent_mode: 'primary' }),
     });
     expect(res.status).toBe(201);
-    const agent: any = await res.json();
+    const agent = (await res.json()) as AgentDefinition;
     expect(agent.id).toBe('bankassist');
   });
 
@@ -164,8 +188,8 @@ describe('Agent API Routes — синхронизация с AgentRegistry', () 
     const app = createTestApp(registry);
     const res = await app.request('/api/v2/agents');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
-    const ids = body.agents.map((a: any) => a.id);
+    const body = (await res.json()) as AgentListBody;
+    const ids = body.agents.map((a) => a.id);
     expect(ids).toContain('assistant');
     expect(ids).toContain('fixer');
     expect(ids).not.toContain('general'); // subagent
@@ -181,15 +205,15 @@ describe('Agent API Routes — синхронизация с AgentRegistry', () 
     const app = createTestApp(registry);
     const res = await app.request('/api/v2/agents/all');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
-    const ids = body.agents.map((a: any) => a.id);
+    const body = (await res.json()) as AgentListBody;
+    const ids = body.agents.map((a) => a.id);
     expect(ids).toContain('assistant');
     expect(ids).toContain('general');
     expect(ids).toContain('explore');
     expect(ids).toContain('title');
-    const title = body.agents.find((a: any) => a.id === 'title');
+    const title = body.agents.find((a) => a.id === 'title')!;
     expect(title.agent_mode).toEqual(['system']);
-    const general = body.agents.find((a: any) => a.id === 'general');
+    const general = body.agents.find((a) => a.id === 'general')!;
     expect(general.agent_mode).toEqual(['subagent']);
   });
 
@@ -201,7 +225,7 @@ describe('Agent API Routes — синхронизация с AgentRegistry', () 
       body: JSON.stringify({ id: 'hybrid', display_name: 'Гибрид', agent_mode: ['primary', 'subagent'] }),
     });
     expect(res.status).toBe(201);
-    const agent: any = await res.json();
+    const agent = (await res.json()) as AgentDefinition;
     expect(agent.agentMode).toEqual(['primary', 'subagent']);
     expect(registry.get('hybrid')?.agentMode).toEqual(['primary', 'subagent']);
   });
@@ -248,21 +272,21 @@ describe('Agent API Routes — default_agent', () => {
   it('GET /agents без геттера отдаёт DEFAULT_AGENT_ID', async () => {
     const app = createTestApp();
     const res = await app.request('/api/v2/agents');
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentListBody;
     expect(body.default_agent).toBe(DEFAULT_AGENT_ID);
   });
 
   it('GET /agents отдаёт значение геттера', async () => {
     const app = createTestApp(undefined, () => 'researcher');
     const res = await app.request('/api/v2/agents');
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentListBody;
     expect(body.default_agent).toBe('researcher');
   });
 
   it('GET /agents/all отдаёт значение геттера', async () => {
     const app = createTestApp(undefined, async () => 'fixer');
     const res = await app.request('/api/v2/agents/all');
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentListBody;
     expect(body.default_agent).toBe('fixer');
   });
 });
@@ -297,7 +321,7 @@ describe('Agent API Routes — ролевой промпт (managed)', () => {
       }),
     });
     expect(res.status).toBe(201);
-    const agent: any = await res.json();
+    const agent = (await res.json()) as AgentCreateResponse;
     expect(agent.role).toEqual({ file: 'BANKASSIST.md', written: true, replaced: false });
     expect(agent.groups).toEqual(['finance']);
 
@@ -340,8 +364,8 @@ describe('Agent API Routes — scope-гейт записи (ADR-052)', () => {
     const app = createTestApp(undefined, undefined, undefined, createMockKit(['addons:install']));
     const res = await postAgent(app, 'nope');
     expect(res.status).toBe(403);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('SCOPE_REQUIRED');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('SCOPE_REQUIRED');
     expect(await store.load('nope')).toBeNull();
   });
 

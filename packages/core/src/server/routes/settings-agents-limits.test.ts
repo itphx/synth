@@ -18,7 +18,7 @@ import {
   type LiveSubagentMaxInputTokens,
 } from '../../storage/runtime-settings.js';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
-import { createAgentsLimitsSettingsRoutes } from './settings-agents-limits.js';
+import { createAgentsLimitsSettingsRoutes, type AgentsLimitsSettingsView } from './settings-agents-limits.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 
@@ -60,8 +60,9 @@ function createApp(options: AppOptions): {
   return { app, live, settingsStore };
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Тело ответа `GET`/`PUT`/`DELETE /settings/agents-limits`. */
+async function json(res: Response): Promise<AgentsLimitsSettingsView> {
+  return (await res.json()) as AgentsLimitsSettingsView;
 }
 
 describe('createAgentsLimitsSettingsRoutes', () => {

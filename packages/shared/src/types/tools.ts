@@ -368,7 +368,7 @@ export type ToolSource = 'builtin' | 'mcp' | 'plugin';
 export interface ToolDefinition {
   name: string;
   description: string;
-  parameters: z.ZodTypeAny<any>;
+  parameters: z.ZodTypeAny;
   capabilities: ToolCapability[];
   execute: ToolExecutor;
   jsonSchema?: Record<string, unknown>;

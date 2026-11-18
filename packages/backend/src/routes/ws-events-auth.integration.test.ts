@@ -19,19 +19,30 @@ const USER_KEY = 'user-key-456';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Минимальный кадр WS-хаба `/ws/events`: тип, сессия и данные.
+ * Поля необязательные — тест читает только их (и только в своих сценариях).
+ */
+interface WsFrame {
+  type?: string;
+  session_id?: string;
+  data?: { error?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
 /** Клиент-обёртка: копит входящие WS-сообщения и умеет ждать по предикату. */
 function makeClient(ws: WebSocket) {
-  const messages: any[] = [];
+  const messages: WsFrame[] = [];
   ws.on('message', (raw) => {
     try {
-      messages.push(JSON.parse(raw.toString()));
+      messages.push(JSON.parse(raw.toString()) as WsFrame);
     } catch {
       // ignore
     }
   });
   return {
     messages,
-    async waitFor(pred: (m: any) => boolean, timeoutMs = 1500): Promise<any | undefined> {
+    async waitFor(pred: (m: WsFrame) => boolean, timeoutMs = 1500): Promise<WsFrame | undefined> {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         const found = messages.find(pred);
@@ -117,7 +128,7 @@ describe('ADR-089 (P0): авторизация WebSocket /ws/events (backend)', 
     const err = await client.waitFor((m) => m.type === 'error' && m.session_id === adminSession);
     expect(err).toBeTruthy();
     // Существование чужой сессии не раскрывается — тот же ответ, что для несуществующей.
-    expect(err.data?.error).toBe('Session not found');
+    expect(err!.data?.error).toBe('Session not found');
 
     // Никакого ack `queued` и никакой постановки в очередь: приём сообщения
     // подтверждается событиями `message.accepted`/`queue.state` (ADR-118 §4).

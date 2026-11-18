@@ -53,8 +53,31 @@ function createApp(options: AppOptions): Hono {
   return app;
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/**
+ * Тело ответов `/api/v2/settings/metrics*`: вьюха настроек, live-статус
+ * (`/status`), ответы токена или тело ошибки.
+ */
+interface MetricsSettingsBody {
+  metrics: { enabled: boolean };
+  defaults: { enabled: boolean };
+  isOverridden: boolean;
+  source: string;
+  running: boolean;
+  restartRequired: boolean;
+  token: { configured: boolean; source: string };
+  endpoints: { metrics: string; ready: string };
+  enabled: boolean;
+  ready: boolean;
+  storage: string;
+  storageBackend: string;
+  version: string;
+  uptimeSec: number;
+  exposition: { series: number; bytes: number; droppedSeries: number };
+  error: { code: string; message: string };
+}
+
+async function json(res: Response): Promise<MetricsSettingsBody> {
+  return (await res.json()) as MetricsSettingsBody;
 }
 
 async function put(app: Hono, path: string, body: unknown): Promise<Response> {

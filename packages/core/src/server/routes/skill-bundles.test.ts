@@ -7,11 +7,23 @@ import { join } from 'node:path';
 import { createSkillBundleRoutes } from './skill-bundles.js';
 import { SkillBundleStore } from '../../storage/skill-bundle-store.js';
 import type { AuthKit } from '../../auth/local.js';
+import type { SkillBundle } from '@itphx/synth-shared';
+
+/** Список бандлов (`GET /api/v2/skill-bundles`). */
+interface SkillBundleListBody {
+  bundles: SkillBundle[];
+}
+
+/** Тело ошибки HTTP-ответа. */
+interface ApiErrorBody {
+  error: { code?: string; message?: string };
+}
 
 function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
+    // Фейк: реализованы только `getCurrentUser`/`requireAuth`.
   } as unknown as AuthKit;
 }
 
@@ -50,18 +62,18 @@ describe('/api/v2/skill-bundles (ADR-126 §7)', () => {
     }, 'POST');
     expect(created.status).toBe(201);
 
-    const list: any = await (await app.request('/api/v2/skill-bundles')).json();
+    const list = (await (await app.request('/api/v2/skill-bundles')).json()) as SkillBundleListBody;
     expect(list.bundles).toHaveLength(1);
-    expect(list.bundles[0].name).toBe('backend');
+    expect(list.bundles[0]!.name).toBe('backend');
 
-    const got: any = await (await app.request('/api/v2/skill-bundles/backend')).json();
+    const got = (await (await app.request('/api/v2/skill-bundles/backend')).json()) as SkillBundle;
     expect(got.skills).toEqual(['a', 'b']);
 
     const patched = await json(app, '/api/v2/skill-bundles/backend', {
       description: 'Backend v2', skills: ['a'],
     }, 'PATCH');
     expect(patched.status).toBe(200);
-    const after: any = await (await app.request('/api/v2/skill-bundles/backend')).json();
+    const after = (await (await app.request('/api/v2/skill-bundles/backend')).json()) as SkillBundle;
     expect(after.description).toBe('Backend v2');
     expect(after.skills).toEqual(['a']);
 
@@ -76,7 +88,7 @@ describe('/api/v2/skill-bundles (ADR-126 §7)', () => {
       name: 'x', description: 'X', skills: ['known', 'missing'],
     }, 'POST');
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.message).toContain('missing');
   });
 

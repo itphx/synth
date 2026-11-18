@@ -8,7 +8,7 @@ import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createSessionRoutes } from './sessions.js';
+import { createSessionRoutes, type SessionRoutesDeps } from './sessions.js';
 import { SessionManager, EventBus, FileStore } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
@@ -19,6 +19,7 @@ function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
+    // Фейк: реализованы только requireAuth/getCurrentUser.
   } as unknown as AuthKit;
 }
 
@@ -47,7 +48,13 @@ function createFakeRemoteClient(result: unknown = { status: 200, body: { status:
   const fake = {
     permissionReply: vi.fn().mockResolvedValue(result),
   };
+  // Фейк: реализован только `permissionReply` — его и дёргает роут.
   return fake as unknown as RemoteBackendClient & Record<string, ReturnType<typeof vi.fn>>;
+}
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code: string; message?: string };
 }
 
 interface TestWorld {
@@ -75,9 +82,11 @@ function createTestApp(
     {
       sessionManager,
       eventBus,
-      queueManager: queueManager as any,
+      // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+      queueManager: queueManager as unknown as SessionRoutesDeps['queueManager'],
       processMessage: orchestrator.createProcessMessage(),
-      orchestrator: orchestrator as any,
+      // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+      orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
       projectStore,
       ...(opts.withRemoteGetter === false ? {} : { getRemoteClient: () => remote }),
     },
@@ -173,7 +182,7 @@ describe('Гибрид: ответ на подтверждение прав уд
     });
 
     expect(res.status).toBe(502);
-    expect(((await res.json()) as any).error.code).toBe('OFFLINE');
+    expect(((await res.json()) as ApiErrorBody).error.code).toBe('OFFLINE');
   });
 
   it('remote-сессия без клиента → 502 REMOTE_UNAVAILABLE', async () => {
@@ -184,7 +193,7 @@ describe('Гибрид: ответ на подтверждение прав уд
       body: JSON.stringify({ action: 'allow' }),
     });
     expect(res.status).toBe(502);
-    expect(((await res.json()) as any).error.code).toBe('REMOTE_UNAVAILABLE');
+    expect(((await res.json()) as ApiErrorBody).error.code).toBe('REMOTE_UNAVAILABLE');
   });
 
   it('локальная сессия — прежний путь, fake не вызывается', async () => {

@@ -22,7 +22,14 @@ import {
   MEMORY_CONSOLIDATE_TOOL_NAME,
   MEMORY_GRAPH_TOOL_NAME,
 } from './memory.js';
-import type { MemoryToolInvokeInput, MemoryToolInvoker } from './memory.js';
+import type {
+  MemoryFactsSummary,
+  MemoryGraph,
+  MemoryIndexesSummary,
+  MemoryStatusView,
+  MemoryToolInvokeInput,
+  MemoryToolInvoker,
+} from './memory.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 const deny = async (c: Context) => c.json({ error: { code: 'FORBIDDEN', message: 'deny' } }, 403);
@@ -117,8 +124,36 @@ async function seed(storage: StorageContext): Promise<void> {
   await storage.memoryIndexes.saveIndex(makeIndex({ id: 'i-4', namespace: 'plugin:other-plugin' }));
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/**
+ * Тело ответов портала памяти: у каждого эндпоинта свой набор полей —
+ * статус, страницы фактов/индексов, граф, результат мутации или ошибка.
+ */
+interface MemoryBody {
+  provider: MemoryStatusView['provider'];
+  readiness: MemoryStatusView['readiness'];
+  namespace: string;
+  facts: MemoryFactsSummary;
+  indexes: MemoryIndexesSummary;
+  /** Страница фактов (`MemoryFactRecord`) либо индексов (`MemoryIndexRecord`). */
+  items: Array<MemoryFactRecord & MemoryIndexRecord>;
+  limit: number;
+  offset: number;
+  total: number;
+  /** Запись индекса в ответах мутаций портала. */
+  index: MemoryIndexRecord;
+  message: string;
+  report: unknown;
+  /** Запись факта в `GET /facts/:id`. */
+  id: string;
+  text: string;
+  nodes: MemoryGraph['nodes'];
+  edges: MemoryGraph['edges'];
+  stats: MemoryGraph['stats'];
+  error: { code: string; message: string; details: { code?: string } };
+}
+
+async function json(res: Response): Promise<MemoryBody> {
+  return (await res.json()) as MemoryBody;
 }
 
 /** Инвокер-заглушка: запоминает вызовы и отвечает результатом. */
@@ -201,8 +236,8 @@ describe('createMemoryRoutes — факты', () => {
     expect(body.offset).toBe(0);
     expect(body.total).toBe(1);
     expect(body.items).toHaveLength(1);
-    expect(body.items[0].id).toBe('f-1');
-    expect(body.items[0].namespace).toBe(MEMORY_NAMESPACE);
+    expect(body.items[0]!.id).toBe('f-1');
+    expect(body.items[0]!.namespace).toBe(MEMORY_NAMESPACE);
   });
 
   it('GET /facts?status=all — все статусы namespace', async () => {
@@ -227,7 +262,7 @@ describe('createMemoryRoutes — факты', () => {
     await seed(storage);
     const byProject = await json(await app.request('/api/v2/memory/facts?status=all&projectId=p-1'));
     expect(byProject.total).toBe(1);
-    expect(byProject.items[0].id).toBe('f-3');
+    expect(byProject.items[0]!.id).toBe('f-3');
     const byKind = await json(await app.request('/api/v2/memory/facts?status=all&kind=decision'));
     expect(byKind.total).toBe(3);
     const byUnknownKind = await json(await app.request('/api/v2/memory/facts?status=all&kind=constraint'));
@@ -319,12 +354,12 @@ describe('createMemoryRoutes — индексы', () => {
     await seed(storage);
     const stale = await json(await app.request('/api/v2/memory/indexes?state=stale'));
     expect(stale.total).toBe(1);
-    expect(stale.items[0].id).toBe('i-2');
+    expect(stale.items[0]!.id).toBe('i-2');
     const failed = await json(await app.request('/api/v2/memory/indexes?state=failed'));
     expect(failed.total).toBe(1);
     const byProject = await json(await app.request('/api/v2/memory/indexes?projectId=p-1'));
     expect(byProject.total).toBe(1);
-    expect(byProject.items[0].id).toBe('i-3');
+    expect(byProject.items[0]!.id).toBe('i-3');
   });
 
   it('GET /indexes: невалидный state → 400 VALIDATION_ERROR', async () => {

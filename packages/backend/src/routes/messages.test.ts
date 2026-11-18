@@ -7,7 +7,12 @@ import { join } from 'node:path';
 import { createMessageRoutes } from './messages.js';
 import { SessionManager, EventBus, FileStore } from '@itphx/synth-core';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
-import type { Message } from '@itphx/synth-shared';
+import type { BusEvent, Message } from '@itphx/synth-shared';
+
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code?: string; message?: string };
+}
 
 function makeMessage(content = 'Привет'): Message {
   return {
@@ -51,9 +56,11 @@ function createTestApp(tmpDir: string, contextOptimizer: unknown) {
   const eventBus = new EventBus();
 
   app.route('/api/v2/messages', createMessageRoutes(
-    createMockKit() as any,
+    // Фейк: из AuthKit реализованы только requireAuth/getCurrentUser/isAdmin/hasRole.
+    createMockKit() as unknown as Parameters<typeof createMessageRoutes>[0],
     sessionManager,
-    contextOptimizer as any,
+    // Фейк: из ContextOptimizer реализованы canSummarize/shouldSummarize.
+    contextOptimizer as unknown as Parameters<typeof createMessageRoutes>[2],
     eventBus,
   ));
 
@@ -95,7 +102,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
     // «5» — не индекс: адресация только по id (ADR-118 §7), фоллбека нет.
     const res = await app.request(`/api/v2/messages/${session.id}/5/pin`, { method: 'PATCH' });
     expect(res.status).toBe(404);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.message).toBe('Сообщение не найдено');
   });
 
@@ -109,7 +116,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
     const msg = makeMessage('a');
     await sessionManager.addMessage(session.id, msg);
 
-    const events: any[] = [];
+    const events: BusEvent[] = [];
     eventBus.subscribe(session.id, (e) => events.push(e));
 
     const res = await app.request(`/api/v2/messages/${session.id}/${msg.id}/toggle`, { method: 'PATCH' });
@@ -127,7 +134,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
 
     const res = await app.request(`/api/v2/messages/${session.id}/any-message-id/pin`, { method: 'PATCH' });
     expect(res.status).toBe(403);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('FORBIDDEN');
   });
 
@@ -140,7 +147,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
       headers: { 'Content-Type': 'application/json' },
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('INVALID_ACTION');
   });
 

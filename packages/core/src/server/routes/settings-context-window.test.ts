@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import type { SecurityAuditEntry } from '@itphx/synth-shared';
 import { RuntimeSettingsStore, createLiveContextWindowPolicy, type LiveContextWindowPolicy } from '../../storage/runtime-settings.js';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
-import { createContextWindowSettingsRoutes } from './settings-context-window.js';
+import { createContextWindowSettingsRoutes, type ContextWindowSettingsView } from './settings-context-window.js';
 
 const requireAuth = async (_c: Context, next: Next) => { await next(); };
 const deny = async (c: Context) => c.json({ error: { code: 'FORBIDDEN', message: 'deny' } }, 403);
@@ -71,8 +71,13 @@ function createApp(options: AppOptions): {
   return { app, live, settingsStore };
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Тело ответа-ошибки (400/409): `{error:{code,message}}`. */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
+async function json<T = ContextWindowSettingsView>(res: Response): Promise<T> {
+  return (await res.json()) as T;
 }
 
 async function put(app: Hono, body: unknown): Promise<Response> {
@@ -136,7 +141,7 @@ describe('createContextWindowSettingsRoutes', () => {
     for (const policy of ['strict', '', null, 42]) {
       const res = await put(app, { policy });
       expect(res.status).toBe(400);
-      expect((await json(res)).error.code).toBe('VALIDATION_ERROR');
+      expect((await json<ApiErrorBody>(res)).error.code).toBe('VALIDATION_ERROR');
     }
     // Пустое тело — тоже 400.
     const empty = await app.request('/api/v2/settings/context-window', { method: 'PUT' });
@@ -168,7 +173,7 @@ describe('createContextWindowSettingsRoutes', () => {
 
     const conflict = await put(app, { policy: 'enforce' });
     expect(conflict.status).toBe(409);
-    expect((await json(conflict)).error.code).toBe('CONFLICT');
+    expect((await json<ApiErrorBody>(conflict)).error.code).toBe('CONFLICT');
     expect(live.getPolicy()).toBe('off');
 
     // То же значение, что в env, — не конфликт (идемпотентно).

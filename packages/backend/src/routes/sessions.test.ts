@@ -7,9 +7,80 @@ import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore, FileProfileStore } from '@itphx/synth-core';
 import { ProjectStore } from '@itphx/synth-core';
-import type { User } from '@itphx/synth-shared';
+import type { Session, User } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
-import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
+
+/**
+ * Фейк-зависимости фабрики роутов: типы берём у её же параметров (в тесте
+ * реализованы только методы, которые фабрика реально дёргает).
+ */
+type SessionRoutesKit = Parameters<typeof createSessionRoutes>[0];
+type SessionRoutesQueue = Parameters<typeof createSessionRoutes>[3];
+type SessionRoutesOrchestrator = Parameters<typeof createSessionRoutes>[5];
+type SessionRoutesEventHub = Parameters<typeof createSessionRoutes>[6];
+
+/**
+ * Сериализованная сессия (`serializeSession`, snake_case) — ответ
+ * `POST /sessions`, `GET/PATCH /sessions/:id`, `fork`, `clear`, `import`.
+ * Поля, которые тест не проверяет, опущены.
+ */
+interface SessionDto {
+  id: string;
+  name?: string | null;
+  project_id?: string | null;
+  parent_id?: string | null;
+  mode?: string;
+}
+
+/**
+ * Страница списка сессий (`GET /api/v2/sessions`): контракт v2 — объект
+ * `{sessions, total, offset, limit, next_offset}` (массив не возвращается).
+ */
+interface SessionListPage {
+  sessions: Array<{ id?: string; name?: string | null }>;
+  total: number;
+  offset: number;
+  limit: number;
+  next_offset: number | null;
+}
+
+/** Тело ошибки HTTP-ответа: `{ error: { code, message } }`. */
+interface ApiErrorBody {
+  error: { code: string; message: string };
+}
+
+/** Статус сессии (`GET /sessions/:id/status`). */
+interface SessionStatusBody {
+  blocked: boolean;
+  pending_count: number;
+  processor_running: boolean;
+}
+
+/** Дерево сессий (`GET /sessions/:id/tree`): узел — сессия и её дети. */
+interface SessionTreeBody {
+  session: { id: string };
+  children: Array<{ session: { id: string } }>;
+}
+
+/** Манифест промпта (`GET /sessions/:id/prompt`, ADR-070 §2.5). */
+interface PromptInfoBody {
+  manifest: { totalChars: number };
+  history: {
+    messages: { count: number };
+    stateMessages: Array<{ type: string }>;
+    excluded: { info: number };
+  };
+  promptState: unknown;
+  lastPromptMeta: unknown;
+}
+
+/** Агрегаты статистики сессии (`GET /sessions/:id/stats`, ADR-070 §2.6). */
+interface SessionStatsBody {
+  session_id: string;
+  agents: Array<{ agent_role?: string; input_tokens?: number }>;
+  users: Array<{ author?: string; messages?: number; display_name?: string | null }>;
+}
 
 const testUser: User = {
   id: 'test-user',
@@ -87,14 +158,16 @@ function createTestApp(
   const orchestrator = createMockOrchestrator();
   const eventHub = createMockEventHub();
 
+  // Фейк: kit/queueManager/orchestrator/eventHub реализуют только методы,
+  // которые дёргает фабрика роутов (guard'ы, очередь, промпт, подписки).
   const sessionRoutes = createSessionRoutes(
-    kit as any,
+    kit as unknown as SessionRoutesKit,
     sessionManager,
     eventBus,
-    queueManager as any,
+    queueManager as unknown as SessionRoutesQueue,
     orchestrator.createProcessMessage(),
-    orchestrator as any,
-    eventHub as any,
+    orchestrator as unknown as SessionRoutesOrchestrator,
+    eventHub as unknown as SessionRoutesEventHub,
     undefined,
     projectStore,
     profilesStore,
@@ -133,7 +206,7 @@ describe('Session API Routes', () => {
       const res = await app.request('/api/v2/sessions');
       expect(res.status).toBe(200);
       // Контракт v2: список сессий — объект-страница `{sessions, total, ...}`.
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionListPage;
       expect(body.sessions).toEqual([]);
       expect(body.total).toBe(0);
       expect(body.next_offset).toBeNull();
@@ -145,7 +218,7 @@ describe('Session API Routes', () => {
       await sessionManager.createSession({ title: 'S2', userId: 'test-user' });
       const res = await app.request('/api/v2/sessions');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionListPage;
       expect(body.sessions).toHaveLength(2);
       expect(body.total).toBe(2);
       expect(body.offset).toBe(0);
@@ -163,7 +236,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ name: 'Test Session' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.id).toBeTruthy();
       expect(body.name).toBe('Test Session');
     });
@@ -176,7 +249,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ name: 'P', project_id: 'proj-1' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.project_id).toBe('proj-1');
     });
   });
@@ -187,7 +260,7 @@ describe('Session API Routes', () => {
       const session = await sessionManager.createSession({ title: 'GetMe', userId: 'test-user' });
       const res = await app.request(`/api/v2/sessions/${session.id}`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.id).toBe(session.id);
       expect(body.name).toBe('GetMe');
     });
@@ -196,7 +269,7 @@ describe('Session API Routes', () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/non-existent');
       expect(res.status).toBe(404);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('NOT_FOUND');
     });
   });
@@ -211,7 +284,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ name: 'New Title' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.name).toBe('New Title');
     });
 
@@ -234,7 +307,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ mode: 'plan' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.mode).toBe('plan');
       const persisted = await sessionManager.getSession(session.id);
       expect(persisted?.mode).toBe('plan');
@@ -250,7 +323,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ mode: 'act' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.mode).toBe('act');
     });
 
@@ -263,7 +336,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ mode: 'review' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       const persisted = await sessionManager.getSession(session.id);
       expect(persisted?.mode).toBeUndefined();
@@ -278,7 +351,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ settings: { reasoningLevel: 'bogus' } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.message).toContain('reasoningLevel');
       const persisted = await sessionManager.getSession(session.id);
@@ -310,7 +383,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ project_id: project.id }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.project_id).toBe(project.id);
     });
 
@@ -324,7 +397,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ project_id: 'missing' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('PROJECT_NOT_FOUND');
     });
 
@@ -401,7 +474,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({}),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.id).toBeTruthy();
       expect(body.parent_id).toBe(source.id);
       expect(body.name).toContain('Source');
@@ -416,7 +489,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ title: 'Forked Session' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.name).toBe('Forked Session');
     });
   });
@@ -428,9 +501,9 @@ describe('Session API Routes', () => {
       const child = await sessionManager.forkSession(parent.id, { title: 'Child', userId: 'test-user' });
       const res = await app.request(`/api/v2/sessions/${parent.id}/children`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto[];
       expect(body).toHaveLength(1);
-      expect(body[0].id).toBe(child.id);
+      expect(body[0]!.id).toBe(child.id);
     });
 
     it('возвращает пустой массив когда нет детей', async () => {
@@ -438,7 +511,7 @@ describe('Session API Routes', () => {
       const session = await sessionManager.createSession({ title: 'Leaf', userId: 'test-user' });
       const res = await app.request(`/api/v2/sessions/${session.id}/children`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto[];
       expect(body).toEqual([]);
     });
   });
@@ -449,7 +522,7 @@ describe('Session API Routes', () => {
       const session = await sessionManager.createSession({ title: 'Status', userId: 'test-user' });
       const res = await app.request(`/api/v2/sessions/${session.id}/status`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionStatusBody;
       expect(body).toHaveProperty('blocked');
       expect(body).toHaveProperty('pending_count');
       expect(body).toHaveProperty('processor_running');
@@ -471,10 +544,10 @@ describe('Session API Routes', () => {
       const child = await sessionManager.forkSession(parent.id, { title: 'Child', userId: 'test-user' });
       const res = await app.request(`/api/v2/sessions/${parent.id}/tree`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionTreeBody;
       expect(body.session.id).toBe(parent.id);
       expect(body.children).toHaveLength(1);
-      expect(body.children[0].session.id).toBe(child.id);
+      expect(body.children[0]!.session.id).toBe(child.id);
     });
   });
 
@@ -484,7 +557,7 @@ describe('Session API Routes', () => {
       const session = await sessionManager.createSession({ title: 'Clear', userId: 'test-user' });
       const res = await app.request(`/api/v2/sessions/${session.id}/clear`, { method: 'POST' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.id).toBe(session.id);
     });
 
@@ -510,11 +583,11 @@ describe('Session API Routes', () => {
 
       const res = await app.request(`/api/v2/sessions/${session.id}/export`);
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as Session;
       expect(body.id).toBe(session.id);
       expect(body.title).toBe('Exp');
       expect(body.messages).toHaveLength(1);
-      expect(body.messages[0].content).toBe('hello');
+      expect(body.messages[0]!.content).toBe('hello');
       expect(body.todos).toEqual([{ id: 't1', content: 'task', status: 'pending', priority: 'medium' }]);
       expect(body.settings).toBeTruthy();
     });
@@ -552,7 +625,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ ...exported, import: { project_id: proj.id } }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.id).not.toBe(source.id);
       expect(body.name).toBe('Src');
       expect(body.project_id).toBe(proj.id);
@@ -585,7 +658,7 @@ describe('Session API Routes', () => {
         }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.name).toBe('Snake');
       expect(body.project_id).toBe(proj.id);
     });
@@ -604,7 +677,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ ...exported, import: { project_id: proj.id } }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDto;
       expect(body.id).not.toBe(source.id);
       // parentId — как в экспорте (переписанный publish-ом remote-id).
       expect(body.parent_id).toBe(parent.id);
@@ -620,7 +693,7 @@ describe('Session API Routes', () => {
         body: JSON.stringify({ title: 'X', import: { project_id: 'no-such-project' } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('PROJECT_NOT_FOUND');
     });
 
@@ -686,7 +759,7 @@ describe('Session API Routes', () => {
           body: JSON.stringify({ title: 'X', import: { project_id: project.id } }),
         });
         expect(res.status).toBe(201);
-        const body: any = await res.json();
+        const body = (await res.json()) as SessionDto;
         expect(body.project_id).toBe(project.id);
         // Сессия создана и привязана к проекту.
         const stored = await sessionManager.getSession(body.id);
@@ -1025,12 +1098,12 @@ describe('Session API Routes', () => {
       const res = await app.request(`/api/v2/sessions/${session.id}/prompt`);
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PromptInfoBody;
       expect(body.manifest).toBeTruthy();
       expect(body.manifest.totalChars).toBe(10);
       expect(body.history).toBeTruthy();
       expect(body.history.messages.count).toBe(2);
-      expect(body.history.stateMessages[0].type).toBe('mode_change');
+      expect(body.history.stateMessages[0]!.type).toBe('mode_change');
       expect(body.history.excluded.info).toBe(1);
       expect(body.promptState).toBeNull();
       expect(body.lastPromptMeta).toBeNull();
@@ -1040,7 +1113,7 @@ describe('Session API Routes', () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/non-existent/prompt');
       expect(res.status).toBe(404);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('NOT_FOUND');
     });
   });
@@ -1070,22 +1143,22 @@ describe('Session API Routes', () => {
       const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionStatsBody;
       expect(body.session_id).toBe(session.id);
-      const dev = body.agents.find((a: any) => a.agent_role === 'developer');
+      const dev = body.agents.find((a) => a.agent_role === 'developer');
       expect(dev).toBeTruthy();
-      expect(dev.input_tokens).toBe(100);
-      const user = body.users.find((u: any) => u.author === testUser.username);
+      expect(dev!.input_tokens).toBe(100);
+      const user = body.users.find((u) => u.author === testUser.username);
       expect(user).toBeTruthy();
-      expect(user.messages).toBe(1);
-      expect(user.display_name).toBe('Test User');
+      expect(user!.messages).toBe(1);
+      expect(user!.display_name).toBe('Test User');
     });
 
     it('возвращает 404 для отсутствующей сессии', async () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/non-existent/stats');
       expect(res.status).toBe(404);
-      const body: any = await res.json();
+      const body = (await res.json()) as ApiErrorBody;
       expect(body.error.code).toBe('NOT_FOUND');
     });
   });
@@ -1137,14 +1210,15 @@ function createVisibilityApp(
   const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
   const orchestrator = createMockOrchestrator();
 
+  // Фейк: тот же минимальный набор guard'ов и заглушек, что и в createTestApp.
   const routes = createSessionRoutes(
-    kit as any,
+    kit as unknown as SessionRoutesKit,
     sessionManager,
     new EventBus(),
-    createMockQueueManager() as any,
+    createMockQueueManager() as unknown as SessionRoutesQueue,
     orchestrator.createProcessMessage(),
-    orchestrator as any,
-    createMockEventHub() as any,
+    orchestrator as unknown as SessionRoutesOrchestrator,
+    createMockEventHub() as unknown as SessionRoutesEventHub,
     undefined,
     opts.projectStore,
     undefined,
@@ -1201,7 +1275,7 @@ describe('Session visibility (ADR-089, backend RBAC)', () => {
   it('участник проекта открывает сессию проекта по id (не 403)', async () => {
     const { app, sessionManager } = createVisibilityApp(tmpDir, { projectStore });
     const project = projectStore.create('P', 'lead');
-    project.members['member'] = 'viewer' as any;
+    project.members['member'] = ProjectRole.VIEWER;
     await projectStore.save(project);
     const session = await sessionManager.createSession({ title: 'shared', userId: 'lead', projectId: project.id });
 

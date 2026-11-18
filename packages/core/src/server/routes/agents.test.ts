@@ -5,11 +5,44 @@ import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentRoutes } from './agents.js';
+import type { AgentRoleResult } from './agents.js';
 import { JsonStore } from '../../storage/json-store.js';
 import { ContextConfig } from '../../engine/context/config.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
+
+/**
+ * Элемент списка агентов (`GET /agents`, `GET /agents/all`) — поля DTO
+ * `AGENT_FIELDS` (`snake_case`); описаны только используемые тестами.
+ */
+interface AgentListItem {
+  id: string;
+  display_name?: string | null;
+  enabled?: boolean;
+  effort?: string | null;
+  groups?: string[] | null;
+  is_builtin?: boolean;
+  executor_profile?: string | null;
+  allowed_profiles?: string[] | null;
+  browser_profile?: string | null;
+  allowed_browser_profiles?: string[] | null;
+  [key: string]: unknown;
+}
+
+/** Список агентов + агент по умолчанию (`GET /agents`, `GET /agents/all`). */
+interface AgentListBody {
+  agents: AgentListItem[];
+  default_agent?: string;
+}
+
+/** Ответ `POST /agents`: определение агента (+ отчёт о записи роли). */
+type AgentWriteBody = AgentDefinition & { role?: AgentRoleResult };
+
+/** Тело ошибки HTTP-ответа роутов агентов. */
+interface ApiErrorBody {
+  error: { code: string; message?: string };
+}
 
 function createMockAuth(): AuthKit {
   return {
@@ -41,14 +74,14 @@ describe('Agent API Routes — default_agent', () => {
     const app = createTestApp();
     const res = await app.request('/api/v2/agents');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentListBody;
     expect(body.default_agent).toBe(DEFAULT_AGENT_ID);
   });
 
   it('GET /agents отдаёт значение геттера', async () => {
     const app = createTestApp(() => 'researcher');
     const res = await app.request('/api/v2/agents');
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentListBody;
     expect(body.default_agent).toBe('researcher');
   });
 
@@ -56,7 +89,7 @@ describe('Agent API Routes — default_agent', () => {
     const app = createTestApp(async () => 'fixer');
     const res = await app.request('/api/v2/agents/all');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentListBody;
     expect(body.default_agent).toBe('fixer');
   });
 });
@@ -89,9 +122,9 @@ describe('Agent API Routes — CRUD (core superset)', () => {
     });
 
     const res = await app.request('/api/v2/agents/all');
-    const body: any = await res.json();
-    const builtin = body.agents.find((a: any) => a.id === 'assistant');
-    const custom = body.agents.find((a: any) => a.id === 'custom1');
+    const body = (await res.json()) as AgentListBody;
+    const builtin = body.agents.find((a) => a.id === 'assistant')!;
+    const custom = body.agents.find((a) => a.id === 'custom1')!;
     expect(builtin.is_builtin).toBe(true);
     expect(custom.is_builtin).toBe(false);
   });
@@ -151,14 +184,14 @@ describe('Agent API Routes — CRUD (core superset)', () => {
       body: JSON.stringify({ id: 'effort-agent', display_name: 'Effort', effort: 'xhigh' }),
     });
     expect(created.status).toBe(201);
-    const createdBody: any = await created.json();
+    const createdBody = (await created.json()) as AgentDefinition;
     expect(createdBody.effort).toBe('xhigh');
     expect((await store.load('effort-agent'))?.effort).toBe('xhigh');
 
     // 2. Поле отдаётся в списке (`GET /agents/all`).
     const all = await app.request('/api/v2/agents/all');
-    const list: any = await all.json();
-    expect(list.agents.find((a: any) => a.id === 'effort-agent').effort).toBe('xhigh');
+    const list = (await all.json()) as AgentListBody;
+    expect(list.agents.find((a) => a.id === 'effort-agent')!.effort).toBe('xhigh');
 
     // 3. Поле не передано — прежнее значение сохраняется.
     await app.request('/api/v2/agents', {
@@ -184,7 +217,7 @@ describe('Agent API Routes — CRUD (core superset)', () => {
       body: JSON.stringify({ id: 'effort-agent', display_name: 'Effort', effort: 'ultra' }),
     });
     expect(invalid.status).toBe(400);
-    const invalidBody: any = await invalid.json();
+    const invalidBody = (await invalid.json()) as ApiErrorBody;
     expect(invalidBody.error.code).toBe('VALIDATION_ERROR');
     expect((await store.load('effort-agent'))?.effort).toBeUndefined();
   });
@@ -192,12 +225,12 @@ describe('Agent API Routes — CRUD (core superset)', () => {
   it('GET /agents/:id отдаёт builtin и 404 для неизвестного', async () => {    const app = createTestApp();
     const ok = await app.request('/api/v2/agents/assistant');
     expect(ok.status).toBe(200);
-    const agent: any = await ok.json();
+    const agent = (await ok.json()) as AgentDefinition;
     expect(agent.id).toBe('assistant');
 
     const missing = await app.request('/api/v2/agents/nope');
     expect(missing.status).toBe(404);
-    const body: any = await missing.json();
+    const body = (await missing.json()) as ApiErrorBody;
     expect(body.error.code).toBe('NOT_FOUND');
   });
 
@@ -209,7 +242,7 @@ describe('Agent API Routes — CRUD (core superset)', () => {
       body: JSON.stringify({ enabled: false }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as { id?: string; enabled?: boolean };
     expect(body).toEqual({ id: 'assistant', enabled: false });
     expect((await store.load('assistant'))?.enabled).toBe(false);
 
@@ -234,7 +267,7 @@ describe('Agent API Routes — CRUD (core superset)', () => {
     });
     const customDelete = await app.request('/api/v2/agents/custom2', { method: 'DELETE' });
     expect(customDelete.status).toBe(200);
-    expect((await customDelete.json() as any).status).toBe('deleted');
+    expect((await customDelete.json() as { status: string }).status).toBe('deleted');
 
     await app.request('/api/v2/agents', {
       method: 'POST',
@@ -243,7 +276,7 @@ describe('Agent API Routes — CRUD (core superset)', () => {
     });
     const reset = await app.request('/api/v2/agents/assistant', { method: 'DELETE' });
     expect(reset.status).toBe(200);
-    expect((await reset.json() as any).status).toBe('reset');
+    expect((await reset.json() as { status: string }).status).toBe('reset');
     expect(await store.load('assistant')).toBeNull();
   });
 });
@@ -295,7 +328,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     });
     expect(res.status).toBe(201);
 
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentWriteBody;
     expect(body.id).toBe('analyst2');
     expect(body.role).toEqual({ file: 'ANALYST2.md', written: true, replaced: false });
 
@@ -306,7 +339,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     // Агент сохранён; контент роли в определение агента не попадает.
     const stored = await store.load('analyst2');
     expect(stored?.id).toBe('analyst2');
-    expect((stored as any).rolePrompt).toBeUndefined();
+    expect((stored as AgentDefinition & { rolePrompt?: unknown }).rolePrompt).toBeUndefined();
   });
 
   it('POST /agents без role_prompt не создаёт файл роли (поведение прежнее)', async () => {
@@ -314,7 +347,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     const res = await postAgent(app, { id: 'plain', display_name: 'Без роли' });
     expect(res.status).toBe(201);
 
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentWriteBody;
     expect(body.role).toBeUndefined();
 
     // Каталог ролей не создан вовсе — ничего не «протекает» наружу.
@@ -337,14 +370,14 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     });
     expect(res.status).toBe(201);
 
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentWriteBody;
     expect(body.groups).toEqual(['writers', 'reviewers']);
 
     const stored = await store.load('grouped');
     expect(stored?.groups).toEqual(['writers', 'reviewers']);
 
-    const list: any = await (await app.request('/api/v2/agents/all')).json();
-    expect(list.agents.find((a: any) => a.id === 'grouped').groups).toEqual(['writers', 'reviewers']);
+    const list = (await (await app.request('/api/v2/agents/all')).json()) as AgentListBody;
+    expect(list.agents.find((a) => a.id === 'grouped')!.groups).toEqual(['writers', 'reviewers']);
   });
 
   it('POST /agents: groups нормализуются (пустые/дубли/не-строки отбрасываются)', async () => {
@@ -354,7 +387,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
       groups: ['a', '  ', 'a', 42, ' b '],
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentWriteBody;
     expect(body.groups).toEqual(['a', 'b']);
   });
 
@@ -363,7 +396,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     await postAgent(app, { id: 'grouped3', groups: ['keep'] });
     const res = await postAgent(app, { id: 'grouped3', display_name: 'Обновлён' });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentWriteBody;
     expect(body.groups).toEqual(['keep']);
   });
 
@@ -373,7 +406,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     const res = await postAgent(app, { id: 'rewritable', role_prompt: 'РОЛЬ ВЕРСИЯ 2' });
     expect(res.status).toBe(200);
 
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentWriteBody;
     expect(body.role).toEqual({ file: 'REWRITABLE.md', written: true, replaced: true });
 
     const rolePath = join(contextConfig.userRolesDir, 'REWRITABLE.md');
@@ -393,7 +426,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     });
     expect(res.status).toBe(201);
 
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentWriteBody;
     expect(body.role).toEqual({ file: 'CUSTOM_ROLE.md', written: true, replaced: false });
     expect(await readFile(join(contextConfig.userRolesDir, 'CUSTOM_ROLE.md'), 'utf-8')).toBe('РОЛЬ ПО ИМЕНИ');
   });
@@ -416,7 +449,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     const app = createTestApp(false);
     const res = await postAgent(app, { id: 'no_store', role_prompt: 'РОЛЬ' });
     expect(res.status).toBe(500);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('INTERNAL_ERROR');
     expect(await store.load('no_store')).toBeNull();
   });
@@ -429,7 +462,7 @@ describe('Agent API Routes — ролевой промпт и группы', () 
       role_prompt: 'РОЛЬ',
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(await store.load('evil')).toBeNull();
   });
@@ -499,7 +532,7 @@ describe('Agent API Routes — scope-гейт записи (ADR-052)', () => {
     const app = createScopedApp({ roles: ['USER'], scopes: ['addons:install'] });
     const res = await postAgent(app, { id: 'nope', display_name: 'Не установленный' });
     expect(res.status).toBe(403);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('SCOPE_REQUIRED');
     expect(await store.load('nope')).toBeNull();
   });
@@ -555,13 +588,13 @@ describe('Agent API Routes — профиль исполнения агента 
 
   it('DTO: встроенные профили агентов и null у системного агента без профилей', async () => {
     const app = createTestApp();
-    const list: any = await (await app.request('/api/v2/agents/all')).json();
+    const list = (await (await app.request('/api/v2/agents/all')).json()) as AgentListBody;
     // PROP-135 Ф6a: у встроенного ассистента есть профиль по умолчанию и потолок.
-    const assistant = list.agents.find((a: any) => a.id === 'assistant');
+    const assistant = list.agents.find((a) => a.id === 'assistant')!;
     expect(assistant.executor_profile).toBe('default');
     expect(assistant.allowed_profiles).toEqual(['default', 'light']);
     // У системного генератора заголовков профилей нет — DTO отдаёт null.
-    const title = list.agents.find((a: any) => a.id === 'title');
+    const title = list.agents.find((a) => a.id === 'title')!;
     expect(title.executor_profile).toBeNull();
     expect(title.allowed_profiles).toBeNull();
   });
@@ -576,7 +609,7 @@ describe('Agent API Routes — профиль исполнения агента 
     });
     expect(res.status).toBe(201);
     // POST отдаёт определение агента (camelCase), DTO списка — snake_case.
-    const body: any = await res.json();
+    const body = (await res.json()) as AgentDefinition;
     expect(body.executorProfile).toBe('devops');
     expect(body.allowedProfiles).toEqual(['devops', 'default']);
 
@@ -584,8 +617,8 @@ describe('Agent API Routes — профиль исполнения агента 
     expect(stored?.executorProfile).toBe('devops');
     expect(stored?.allowedProfiles).toEqual(['devops', 'default']);
 
-    const list: any = await (await app.request('/api/v2/agents/all')).json();
-    const item = list.agents.find((a: any) => a.id === 'exec-agent');
+    const list = (await (await app.request('/api/v2/agents/all')).json()) as AgentListBody;
+    const item = list.agents.find((a) => a.id === 'exec-agent')!;
     expect(item.executor_profile).toBe('devops');
     expect(item.allowed_profiles).toEqual(['devops', 'default']);
   });
@@ -617,7 +650,7 @@ describe('Agent API Routes — профиль исполнения агента 
       allowed_profiles: [],
     });
     expect(reset.status).toBe(200);
-    const resetBody: any = await reset.json();
+    const resetBody = (await reset.json()) as AgentDefinition;
     expect(resetBody.executorProfile).toBeUndefined();
     expect(resetBody.allowedProfiles).toEqual([]);
     expect((await store.load('exec-reset'))?.executorProfile).toBeUndefined();
@@ -656,7 +689,7 @@ describe('Agent API Routes — профиль исполнения агента 
       allowed_profiles: ['sandbox'],
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(body.error.message).toContain('должен входить в список разрешённых');
     expect(await store.load('exec-outside')).toBeNull();
@@ -670,7 +703,7 @@ describe('Agent API Routes — профиль исполнения агента 
       allowed_profiles: [],
     });
     expect(res.status).toBe(400);
-    expect((await res.json() as any).error.code).toBe('VALIDATION_ERROR');
+    expect((await res.json() as ApiErrorBody).error.code).toBe('VALIDATION_ERROR');
     expect(await store.load('exec-emptylist')).toBeNull();
   });
 
@@ -683,7 +716,7 @@ describe('Agent API Routes — профиль исполнения агента 
       allowed_profiles: ['devops'],
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(body.error.message).toContain('Профиль по умолчанию');
 
@@ -700,7 +733,7 @@ describe('Agent API Routes — профиль исполнения агента 
     const app = createTestApp();
     const res = await postAgent(app, { id: 'exec-bad', executor_profile: 'ghost' });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(body.error.message).toContain('не найден');
     expect(await store.load('exec-bad')).toBeNull();
@@ -713,7 +746,7 @@ describe('Agent API Routes — профиль исполнения агента 
       allowed_profiles: ['devops', 'ghost'],
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(body.error.message).toContain('ghost');
     expect(await store.load('exec-bad-list')).toBeNull();
@@ -723,11 +756,11 @@ describe('Agent API Routes — профиль исполнения агента 
     const app = createTestApp();
     const wrongProfile = await postAgent(app, { id: 'exec-type', executor_profile: 42 });
     expect(wrongProfile.status).toBe(400);
-    expect((await wrongProfile.json() as any).error.code).toBe('VALIDATION_ERROR');
+    expect((await wrongProfile.json() as ApiErrorBody).error.code).toBe('VALIDATION_ERROR');
 
     const wrongList = await postAgent(app, { id: 'exec-type', allowed_profiles: 'devops' });
     expect(wrongList.status).toBe(400);
-    expect((await wrongList.json() as any).error.code).toBe('VALIDATION_ERROR');
+    expect((await wrongList.json() as ApiErrorBody).error.code).toBe('VALIDATION_ERROR');
   });
 
   it('без каталога профилей проверка пропускается', async () => {

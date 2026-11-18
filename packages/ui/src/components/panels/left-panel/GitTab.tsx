@@ -26,7 +26,7 @@ import {
   type RepoOccupiedAction,
   type RepoOccupiedDetails,
 } from '@/lib/gitOccupancy'
-import type { SSHKeyMeta } from '@itphx/synth-shared'
+import type { CommitInfo, SSHKeyMeta } from '@itphx/synth-shared'
 import { CurrentProjectHeader, ScopeHint, OtherProjectsGroup } from './scope-parts'
 import { useAutoScroll } from './useAutoScroll'
 import { MAX_VISIBLE_COMMITS } from './constants'
@@ -1014,7 +1014,7 @@ export function GitTab() {
                             onShowMore={hiddenCount > 0 ? () => setCommitShowMore(prev => ({ ...prev, [rkey]: true })) : undefined}
                             onCollapse={() => setCommitShowMore(prev => ({ ...prev, [rkey]: false }))}
                           >
-                            {visibleCommits.map((commit: any) => {
+                            {visibleCommits.map((commit: CommitInfo) => {
                               const commitKey = `${project.id}::${repo.path}::${commit.hash}`
                               return (
                                 <TreeNode

@@ -8,8 +8,10 @@ import { computeSessionStats } from '../../sessions/stats.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, Session, TokenUsage, ToolForLLM } from '@itphx/synth-shared';
+import type { Message, Session, SessionRequest, TokenUsage, ToolForLLM } from '@itphx/synth-shared';
 import type { ContextOptimizer } from '../context/optimizer.js';
+import type { RequestSessionOptions } from '../events/request-session.js';
+import type { LLMMessage } from '../../providers/base.js';
 import { createToolRegistry } from './index.js';
 
 /** Минимальный тип для мока AgentRegistry — только поля, используемые в taskTool */
@@ -56,6 +58,17 @@ function makeMockProvider(content = 'mock response') {
     model: 'test-model',
     name: 'test-provider',
   };
+}
+
+/**
+ * Разобранные аргументы `task`, которые проверяют тесты контекст-режимов.
+ *
+ * `parameters` в `ToolDefinition` — схема произвольной формы, поэтому выход
+ * `safeParse` типизирован как `unknown`; тесты сужают его к этой форме.
+ */
+interface TaskContextArgs {
+  context_mode?: 'none' | 'inherit' | 'summary' | 'last_n';
+  context_count?: number;
 }
 
 describe('taskTool — context modes', () => {
@@ -117,7 +130,7 @@ describe('taskTool — context modes', () => {
       context_mode: 'none',
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.context_mode).toBe('none');
+    if (result.success) expect((result.data as TaskContextArgs).context_mode).toBe('none');
   });
 
   it('принимает context_mode: inherit', () => {
@@ -128,7 +141,7 @@ describe('taskTool — context modes', () => {
       context_mode: 'inherit',
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.context_mode).toBe('inherit');
+    if (result.success) expect((result.data as TaskContextArgs).context_mode).toBe('inherit');
   });
 
   it('принимает context_mode: summary', () => {
@@ -139,7 +152,7 @@ describe('taskTool — context modes', () => {
       context_mode: 'summary',
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.context_mode).toBe('summary');
+    if (result.success) expect((result.data as TaskContextArgs).context_mode).toBe('summary');
   });
 
   it('принимает context_mode: last_n', () => {
@@ -150,7 +163,7 @@ describe('taskTool — context modes', () => {
       context_mode: 'last_n',
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.context_mode).toBe('last_n');
+    if (result.success) expect((result.data as TaskContextArgs).context_mode).toBe('last_n');
   });
 
   it('принимает context_count', () => {
@@ -162,7 +175,7 @@ describe('taskTool — context modes', () => {
       context_count: 8,
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.context_count).toBe(8);
+    if (result.success) expect((result.data as TaskContextArgs).context_count).toBe(8);
   });
 
   it('context_mode по умолчанию optional', () => {
@@ -172,7 +185,7 @@ describe('taskTool — context modes', () => {
       subagent_type: 'explore',
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.context_mode).toBeUndefined();
+    if (result.success) expect((result.data as TaskContextArgs).context_mode).toBeUndefined();
   });
 
   it('context_count по умолчанию optional', () => {
@@ -183,7 +196,7 @@ describe('taskTool — context modes', () => {
       context_mode: 'last_n',
     });
     expect(result.success).toBe(true);
-    if (result.success) expect(result.data.context_count).toBeUndefined();
+    if (result.success) expect((result.data as TaskContextArgs).context_count).toBeUndefined();
   });
 
   it('отклоняет невалидный context_mode', () => {
@@ -331,7 +344,7 @@ describe('taskTool — context modes', () => {
 
   it('ADR-089: none mode создаёт дочернюю сессию через funnel (initiator=agent)', async () => {
     const parent = await createParentWithMessages();
-    const request = vi.fn(async (req: any, opts: any) =>
+    const request = vi.fn(async (req: SessionRequest, opts?: RequestSessionOptions) =>
       sessionManager.createSession({
         title: req.title,
         projectId: req.projectId,
@@ -607,7 +620,7 @@ describe('taskTool — context modes', () => {
 
     // Подписываемся на все сессии
     const origSubscribe = eventBus.subscribe.bind(eventBus);
-    eventBus.subscribe = vi.fn((sessionId: string, handler: any) => {
+    eventBus.subscribe = vi.fn((sessionId: string, handler: Parameters<EventBus['subscribe']>[1]) => {
       publishedSessions.add(sessionId);
       return origSubscribe(sessionId, handler);
     });
@@ -676,7 +689,7 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: LLMMessage[], systemPrompt: string) {
         // ADR-070 §1.5: system — только вторым аргументом, в messages его нет.
         capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
@@ -712,7 +725,7 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: LLMMessage[], systemPrompt: string) {
         // ADR-070 §1.5: system — только вторым аргументом, в messages его нет.
         capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
@@ -748,7 +761,7 @@ describe('taskTool — context modes', () => {
 
     let capturedSystemMsg = '';
     const capturingProvider = {
-      chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
+      chatAsync: vi.fn().mockImplementation(async function* (_messages: LLMMessage[], systemPrompt: string) {
         // ADR-070 §1.5: system — только вторым аргументом, в messages его нет.
         capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };

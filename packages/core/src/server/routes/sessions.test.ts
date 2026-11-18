@@ -24,7 +24,8 @@ import { WorktreeService } from '../../engine/worktree/service.js';
 import { MemoryWorktreeRepository } from '../../storage/memory/worktrees.js';
 import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO, ProjectRole } from '@itphx/synth-shared';
-import type { ProfileStore, Project, Session, BackgroundRunRecord } from '@itphx/synth-shared';
+import type { ProfileStore, Project, Session, BackgroundRunRecord, SessionStats } from '@itphx/synth-shared';
+import type { PromptDiagnostics } from '../../engine/orchestrator.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,6 +79,22 @@ interface MessageListPage {
   session_id: string;
   has_more: boolean;
   next_before: number | null;
+}
+
+/**
+ * DTO одной сессии (`POST /sessions`, `GET/PATCH /sessions/:id`) — поля
+ * `serializeSession` (`snake_case`); описаны только используемые тестами.
+ */
+interface SessionDetail {
+  id: string;
+  name?: string | null;
+  mode?: string;
+  mode_applicable?: boolean;
+  project_id?: string | null;
+  icon?: string | null;
+  color?: string | null;
+  context_usage?: { tokens?: number; limit?: number; estimated?: boolean } | null;
+  [key: string]: unknown;
 }
 
 function createMockAuth(): AuthKit {
@@ -175,12 +192,15 @@ function createTestApp(
     {
       sessionManager,
       eventBus,
-      queueManager: queueManager as any,
+      // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+      queueManager: queueManager as unknown as SessionRoutesDeps['queueManager'],
       processMessage: orchestrator.createProcessMessage(),
-      orchestrator: orchestrator as any,
+      // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+      orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
       projectStore,
       profilesStore,
-      ...(requestSessionService ? { requestSessionService: requestSessionService as any } : {}),
+      // Фейк: вместо funnel-сервиса тест передаёт шпион с `request`.
+      ...(requestSessionService ? { requestSessionService: requestSessionService as SessionRoutesDeps['requestSessionService'] } : {}),
       ...resolvedExtraDeps,
     },
     opts ?? {},
@@ -212,7 +232,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ mode: 'plan' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       expect(body.mode).toBe('plan');
     });
 
@@ -225,7 +245,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ mode: 'act' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       expect(body.mode).toBe('act');
     });
 
@@ -238,7 +258,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ mode: 'yolo' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       expect(body.mode).toBe('yolo');
       const reloaded = await sessionManager.getSession(session.id);
       expect(reloaded?.mode).toBe('yolo');
@@ -253,7 +273,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ mode: 'plan' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       expect(typeof body.mode_applicable).toBe('boolean');
     });
 
@@ -278,8 +298,8 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ mode: 'auto' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
       const reloaded = await sessionManager.getSession(session.id);
       expect(reloaded?.mode).toBeUndefined();
     });
@@ -304,8 +324,8 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ settings: { reasoningLevel: 'bogus' } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('VALIDATION_ERROR');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('VALIDATION_ERROR');
       const reloaded = await sessionManager.getSession(session.id);
       expect(reloaded?.settings.reasoningLevel).toBeUndefined();
     });
@@ -332,7 +352,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ name: 'New Title', mode: 'plan' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       expect(body.name).toBe('New Title');
       expect(body.mode).toBe('plan');
     });
@@ -345,8 +365,8 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ mode: 'plan' }),
       });
       expect(res.status).toBe(404);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('NOT_FOUND');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('NOT_FOUND');
     });
   });
 
@@ -363,7 +383,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ project_id: project.id }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       expect(body.project_id).toBe(project.id);
       const persisted = await sessionManager.getSession(session.id);
       expect(persisted?.projectId).toBe(project.id);
@@ -379,8 +399,8 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ project_id: 'missing' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('PROJECT_NOT_FOUND');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('PROJECT_NOT_FOUND');
       const persisted = await sessionManager.getSession(session.id);
       expect(persisted?.projectId).toBeUndefined();
     });
@@ -508,12 +528,12 @@ describe('Session API Routes (PATCH mode)', () => {
       const res = await app.request(`/api/v2/sessions/${session.id}/prompt`);
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as PromptDiagnostics;
       expect(body.manifest).toBeTruthy();
       expect(body.manifest.totalChars).toBe(10);
       expect(body.history).toBeTruthy();
       expect(body.history.messages.count).toBe(2);
-      expect(body.history.stateMessages[0].type).toBe('mode_change');
+      expect(body.history.stateMessages[0]!.type).toBe('mode_change');
       expect(body.history.excluded.info).toBe(1);
       expect(body.promptState).toBeNull();
       expect(body.lastPromptMeta).toBeNull();
@@ -523,8 +543,8 @@ describe('Session API Routes (PATCH mode)', () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/non-existent/prompt');
       expect(res.status).toBe(404);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('NOT_FOUND');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('NOT_FOUND');
     });
   });
 
@@ -542,10 +562,10 @@ describe('Session API Routes (PATCH mode)', () => {
       const res = await app.request(`/api/v2/sessions/${session.id}/messages`);
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as MessageListPage;
       expect(body.session_id).toBe(session.id);
-      expect(body.messages[0].qa_pass).toBe(true);
-      expect(body.messages[0].qa_reason).toBe('qc.all_passed');
+      expect(body.messages[0]!.qa_pass).toBe(true);
+      expect(body.messages[0]!.qa_reason).toBe('qc.all_passed');
     });
 
     it('legacy-сообщение без QC-полей не содержит ключей (бейдж не появляется)', async () => {
@@ -560,9 +580,9 @@ describe('Session API Routes (PATCH mode)', () => {
       const res = await app.request(`/api/v2/sessions/${session.id}/messages`);
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
-      expect('qa_pass' in body.messages[0]).toBe(false);
-      expect('qa_reason' in body.messages[0]).toBe(false);
+      const body = (await res.json()) as MessageListPage;
+      expect('qa_pass' in body.messages[0]!).toBe(false);
+      expect('qa_reason' in body.messages[0]!).toBe(false);
     });
   });
 
@@ -820,7 +840,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ title: 'S' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       const stored = await sessionManager.getSession(body.id);
       expect(stored?.settings.agentRole).toBe('researcher');
     });
@@ -833,7 +853,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ title: 'S', settings: { agentRole: 'fixer' } }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       const stored = await sessionManager.getSession(body.id);
       expect(stored?.settings.agentRole).toBe('fixer');
     });
@@ -846,7 +866,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ title: 'S' }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       const stored = await sessionManager.getSession(body.id);
       expect(stored?.settings.agentRole).toBe(DEFAULT_AGENT_ID);
     });
@@ -861,7 +881,7 @@ describe('Session API Routes (PATCH mode)', () => {
         body: JSON.stringify({ title: 'S', settings: { reasoningLevel: 'high' } }),
       });
       expect(res.status).toBe(201);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionDetail;
       const stored = await sessionManager.getSession(body.id);
       expect(stored?.settings.reasoningLevel).toBe('high');
     });
@@ -892,27 +912,27 @@ describe('Session API Routes (PATCH mode)', () => {
       const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
 
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body = (await res.json()) as SessionStats;
       expect(body.session_id).toBe(session.id);
       expect(Array.isArray(body.agents)).toBe(true);
       expect(Array.isArray(body.users)).toBe(true);
-      const dev = body.agents.find((a: any) => a.agent_role === 'fixer');
+      const dev = body.agents.find((a) => a.agent_role === 'fixer');
       expect(dev).toBeTruthy();
-      expect(dev.messages).toBe(1);
-      expect(dev.input_tokens).toBe(100);
-      expect(dev.output_tps).toBe(10);
-      const local = body.users.find((u: any) => u.author === 'local');
+      expect(dev!.messages).toBe(1);
+      expect(dev!.input_tokens).toBe(100);
+      expect(dev!.output_tps).toBe(10);
+      const local = body.users.find((u) => u.author === 'local');
       expect(local).toBeTruthy();
-      expect(local.messages).toBe(1);
-      expect(local.display_name).toBe('Local Dev');
+      expect(local!.messages).toBe(1);
+      expect(local!.display_name).toBe('Local Dev');
     });
 
     it('возвращает 404 для отсутствующей сессии', async () => {
       const { app } = createTestApp(tmpDir);
       const res = await app.request('/api/v2/sessions/non-existent/stats');
       expect(res.status).toBe(404);
-      const body: any = await res.json();
-      expect(body.error.code).toBe('NOT_FOUND');
+      const body = (await res.json()) as ApiErrorBody;
+      expect(body.error?.code).toBe('NOT_FOUND');
     });
 
     it('fallback на username при пустом displayName', async () => {
@@ -930,8 +950,8 @@ describe('Session API Routes (PATCH mode)', () => {
       });
 
       const res = await app.request(`/api/v2/sessions/${session.id}/stats`);
-      const body: any = await res.json();
-      expect(body.users.find((u: any) => u.author === 'local').display_name).toBe('local');
+      const body = (await res.json()) as SessionStats;
+      expect(body.users.find((u) => u.author === 'local')!.display_name).toBe('local');
     });
   });
 });
@@ -954,7 +974,7 @@ describe('Session API Routes (icon/color)', () => {
       body: JSON.stringify({ title: 'S', icon: 'rocket', color: 'a11' }),
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionDetail;
     expect(body.icon).toBe('rocket');
     expect(body.color).toBe('a11');
     const stored = await sessionManager.getSession(body.id);
@@ -982,7 +1002,7 @@ describe('Session API Routes (icon/color)', () => {
       body: JSON.stringify({ icon: 'heart', color: 'a1' }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionDetail;
     expect(body.icon).toBe('heart');
     expect(body.color).toBe('a1');
     const reloaded = await sessionManager.getSession(session.id);
@@ -1015,7 +1035,7 @@ describe('Session API Routes (icon/color)', () => {
     const reloaded = await sessionManager.getSession(session.id);
     expect(reloaded?.icon).toBeUndefined();
     expect(reloaded?.color).toBeUndefined();
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionDetail;
     expect(body.icon).toBeNull();
     expect(body.color).toBeNull();
   });
@@ -1025,7 +1045,7 @@ describe('Session API Routes (icon/color)', () => {
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
     const res = await app.request(`/api/v2/sessions/${session.id}`);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionDetail;
     expect(body.icon).toBeNull();
     expect(body.color).toBeNull();
   });
@@ -1062,7 +1082,7 @@ describe('POST /api/v2/sessions — ADR-089 funnel', () => {
     });
 
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionDetail;
     expect(body.id).toBe(created.id);
     expect(request).toHaveBeenCalledOnce();
     const [reqArg, optsArg] = request.mock.calls[0]!;
@@ -1087,7 +1107,7 @@ describe('POST /api/v2/sessions — ADR-089 funnel', () => {
       body: JSON.stringify({ title: 'Fallback', session_origin: 'subagent' }),
     });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionDetail;
     const stored = await sessionManager.getSession(body.id);
     expect(stored?.title).toBe('Fallback');
     expect(stored?.sessionOrigin).toBe('subagent');
@@ -1182,9 +1202,11 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
       {
         sessionManager,
         eventBus: new EventBus(),
-        queueManager: createMockQueueManager() as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        queueManager: createMockQueueManager() as unknown as SessionRoutesDeps['queueManager'],
         processMessage: orchestrator.createProcessMessage(),
-        orchestrator: orchestrator as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
         projectStore,
       },
       {
@@ -1309,7 +1331,7 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
   it('участник проекта получает доступ к её сессии по id (resolveCanAccessExtra)', async () => {
     const { app, sessionManager, projectStore } = makeApp({ userId: 'member' });
     const project = projectStore.create('P1', 'owner');
-    project.members['member'] = 'viewer' as any;
+    project.members['member'] = ProjectRole.VIEWER;
     await projectStore.save(project);
     const session = await sessionManager.createSession({ title: 'shared', userId: 'owner', projectId: project.id });
 
@@ -1350,9 +1372,11 @@ describe('POST /api/v2/sessions/:id/abort — персистентный фла�
       {
         sessionManager,
         eventBus: new EventBus(),
-        queueManager: queueManager as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        queueManager: queueManager as unknown as SessionRoutesDeps['queueManager'],
         processMessage: orchestrator.createProcessMessage(),
-        orchestrator: orchestrator as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
         ...(backgroundService ? { backgroundService } : {}),
       },
     );
@@ -1516,9 +1540,11 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
       {
         sessionManager,
         eventBus,
-        queueManager: queueManager as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        queueManager: queueManager as unknown as SessionRoutesDeps['queueManager'],
         processMessage: orchestrator.createProcessMessage(),
-        orchestrator: orchestrator as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
         projectStore,
         worktreeService,
       },
@@ -1709,9 +1735,11 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
       {
         sessionManager,
         eventBus: new EventBus(),
-        queueManager: createMockQueueManager() as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        queueManager: createMockQueueManager() as unknown as SessionRoutesDeps['queueManager'],
         processMessage: orchestrator.createProcessMessage(),
-        orchestrator: orchestrator as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
       },
     );
     app.route('/api/v2/sessions', routes);
@@ -1783,9 +1811,11 @@ describe('PATCH /api/v2/sessions/:id — привязка к worktree (ADR-114)'
       {
         sessionManager,
         eventBus,
-        queueManager: createMockQueueManager() as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        queueManager: createMockQueueManager() as unknown as SessionRoutesDeps['queueManager'],
         processMessage: orchestrator.createProcessMessage(),
-        orchestrator: orchestrator as any,
+        // Фейк: у мока реализованы лишь методы, которые дёргают роуты.
+        orchestrator: orchestrator as unknown as SessionRoutesDeps['orchestrator'],
         projectStore,
         worktreeService,
       },
@@ -1910,7 +1940,7 @@ describe('Session API Routes — context_usage (ADR-119)', () => {
 
     const res = await app.request(`/api/v2/sessions/${session.id}`);
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionDetail;
     expect(body.context_usage).toEqual({ tokens: 12_345, limit: 100_000, estimated: false });
   });
 
@@ -1922,9 +1952,9 @@ describe('Session API Routes — context_usage (ADR-119)', () => {
 
     const res = await app.request('/api/v2/sessions');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as SessionListPage;
     expect(body.sessions.length).toBeGreaterThan(0);
-    expect('context_usage' in body.sessions[0]).toBe(false);
+    expect('context_usage' in body.sessions[0]!).toBe(false);
   });
 });
 

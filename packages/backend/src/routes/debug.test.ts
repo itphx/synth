@@ -13,6 +13,11 @@ import { getAllGroups, resetGroupOverrides } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import type { User } from '@itphx/synth-shared';
 
+/** Тело ошибки HTTP-ответа: код и сообщение. */
+interface ApiErrorBody {
+  error: { code?: string; message?: string };
+}
+
 const adminUser: User = {
   id: 'admin', username: 'admin', roles: ['ADMIN'], preferredLanguage: 'ru',
   createdAt: '', teamRole: 'ADMIN', notes: '', interviewCompleted: false,
@@ -88,7 +93,7 @@ describe('routes/debug: managed-обвязка core-фабрики debug-кон�
   it('текст ошибки локализован (i18n, ADR-041)', async () => {
     const res = await postConfig(createApp(adminUser));
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body = (await res.json()) as ApiErrorBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
     expect(body.error.message).toBe(t('errors.validation.groupsRequired'));
   });

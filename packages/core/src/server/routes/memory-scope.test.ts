@@ -116,8 +116,17 @@ function createApp(options: AppOptions = {}): {
   return { app, storage, calls, aclCalls: () => aclCalls };
 }
 
-async function json(res: Response): Promise<Record<string, any>> {
-  return (await res.json()) as Record<string, any>;
+/** Тело ответов портала памяти в этих проверках: мутация индекса, страница или ошибка. */
+interface MemoryScopeBody {
+  message: string;
+  index: MemoryIndexRecord;
+  total: number;
+  items: MemoryIndexRecord[];
+  error: { code: string; message: string };
+}
+
+async function json(res: Response): Promise<MemoryScopeBody> {
+  return (await res.json()) as MemoryScopeBody;
 }
 
 /** POST с JSON-телом. */
@@ -305,9 +314,9 @@ describe('createMemoryRoutes — список индексов: фильтр sco
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ scope: 'instance' }));
     const body = await json(res);
     expect(body.total).toBe(1);
-    expect(body.items[0].id).toBe('i-instance');
+    expect(body.items[0]!.id).toBe('i-instance');
     // Область видимости — в ответе.
-    expect(body.items[0].scope).toBe('instance');
+    expect(body.items[0]!.scope).toBe('instance');
   });
 
   it('GET /indexes?scope=project — фильтр уходит в порт', async () => {
@@ -321,7 +330,7 @@ describe('createMemoryRoutes — список индексов: фильтр sco
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ scope: 'project' }));
     const body = await json(res);
     expect(body.total).toBe(1);
-    expect(body.items[0].id).toBe('i-project');
+    expect(body.items[0]!.id).toBe('i-project');
   });
 
   it('GET /indexes без scope — без фильтра (обе области видны)', async () => {
@@ -347,7 +356,7 @@ describe('createMemoryRoutes — список индексов: фильтр sco
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.total).toBe(1);
-    expect(body.items[0].id).toBe('i-instance');
+    expect(body.items[0]!.id).toBe('i-instance');
   });
 
   it('GET /indexes?scope=bogus → 400 VALIDATION_ERROR', async () => {

@@ -5,17 +5,61 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler, Next } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
-import type { RouteDecision, Session } from '@itphx/synth-shared';
+import type {
+  EventBinding,
+  EventBindingApiKey,
+  EventBindingApiKeyCreated,
+  RouteDecision,
+  Session,
+  SynthEvent,
+} from '@itphx/synth-shared';
 import { createEventRoutes } from './events.js';
 import type { EventRoutesOptions } from './events.js';
 import { EventIngress } from '../../engine/events/ingest.js';
 import type { RequestSessionService } from '../../engine/events/request-session.js';
 import { EventBindingStore } from '../../storage/event-binding-store.js';
 import { EventApiKeyStore } from '../../storage/event-api-key-store.js';
-import { EventJournalStore } from '../../storage/event-journal-store.js';
+import { EventJournalStore, type EventJournalEntry } from '../../storage/event-journal-store.js';
 import { RouteRuleStore } from '../../storage/route-rule-store.js';
 
+/** Опции `handleEvent` единого funnel'а (второй аргумент) — тип берём у реализации. */
+type HandleEventOptions = NonNullable<Parameters<RequestSessionService['handleEvent']>[1]>;
+
+/**
+ * Ответ `POST /api/v2/events` (`createEventRoutes`): нормализованное событие,
+ * решение Router, id материализованной сессии (`null` при drop) и claim-код
+ * неизвестному отправителю (ADR-089 claim-flow).
+ */
+interface EventIngestResponse {
+  event: SynthEvent;
+  decision: RouteDecision;
+  sessionId: string | null;
+  identityHint?: { code: string; expiresAt: string };
+  /** Внутренние поля сессии наружу не отдаются — тесты проверяют их отсутствие. */
+  session?: unknown;
+}
+
+/**
+ * Метаданные API-ключа привязки в ответе роутов. `key`/`hash` объявлены
+ * опциональными намеренно: тесты проверяют, что секрет и хеш **не** утекают.
+ */
+interface ApiKeyMeta extends EventBindingApiKey {
+  key?: unknown;
+  hash?: unknown;
+}
+
+/** Ответ создания ключа: секрет показывается единожды, `hash` наружу не отдаётся. */
+interface ApiKeyCreated extends EventBindingApiKeyCreated {
+  hash?: unknown;
+}
+
+/** Тело ошибки HTTP-ответа. */
+interface ApiErrorBody {
+  error?: { code?: string; message?: string };
+}
+
 function createMockAuth(): AuthKit {
+  // Фейк: реализованы только getCurrentUser/requireAuth из AuthKit.
   return {
     getCurrentUser: () => null,
     requireAuth: async (_c: Context, next: Next) => { await next(); },
@@ -23,6 +67,7 @@ function createMockAuth(): AuthKit {
 }
 
 function createIngress(decision: RouteDecision, session: Session | null, identityHint?: { code: string; expiresAt: string }): EventIngress {
+  // Фейк: реализован только `handleEvent` из RequestSessionService.
   const service = {
     handleEvent: vi.fn(async () => ({ decision, session, ...(identityHint ? { identityHint } : {}) })),
   } as unknown as RequestSessionService;
@@ -68,7 +113,7 @@ describe('Events API Routes (ADR-089)', () => {
     });
 
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as EventIngestResponse;
     expect(body.event.id.startsWith('evt_')).toBe(true);
     expect(body.event.source).toBe('telegram');
     expect(body.decision).toEqual({ kind: 'bound', sessionId: 's1' });
@@ -87,7 +132,7 @@ describe('Events API Routes (ADR-089)', () => {
     });
 
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as EventIngestResponse;
     expect(body.sessionId).toBeNull();
   });
 
@@ -101,8 +146,8 @@ describe('Events API Routes (ADR-089)', () => {
     });
 
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 
   // --- ADR-089 (claim-flow): identityHint в ответе POST /events ---
@@ -118,7 +163,7 @@ describe('Events API Routes (ADR-089)', () => {
     });
 
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as EventIngestResponse;
     expect(body.identityHint).toEqual(hint);
     // Контракт не сломан.
     expect(body.event).toBeDefined();
@@ -137,7 +182,7 @@ describe('Events API Routes (ADR-089)', () => {
     });
 
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as EventIngestResponse;
     expect(body.identityHint).toBeUndefined();
     expect(body.sessionId).toBe('s1');
   });
@@ -160,9 +205,9 @@ describe('Events API Routes (ADR-089)', () => {
 
     const res = await app.request('/api/v2/events/bindings');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body = (await res.json()) as { bindings: EventBinding[] };
     expect(body.bindings).toHaveLength(1);
-    expect(body.bindings[0].source).toBe('telegram');
+    expect(body.bindings[0]?.source).toBe('telegram');
   });
 
   it('POST /bindings — upsert: 201 при создании, 200 при обновлении', async () => {
@@ -175,7 +220,7 @@ describe('Events API Routes (ADR-089)', () => {
       body: JSON.stringify(payload),
     });
     expect(first.status).toBe(201);
-    const created: any = await first.json();
+    const created = (await first.json()) as EventBinding;
     expect(created.id.startsWith('bnd_')).toBe(true);
 
     const second = await app.request('/api/v2/events/bindings', {
@@ -184,11 +229,11 @@ describe('Events API Routes (ADR-089)', () => {
       body: JSON.stringify({ ...payload, sessionId: 's2' }),
     });
     expect(second.status).toBe(200);
-    const updated: any = await second.json();
+    const updated = (await second.json()) as EventBinding;
     expect(updated.id).toBe(created.id);
     expect(updated.sessionId).toBe('s2');
 
-    const list = await (await app.request('/api/v2/events/bindings')).json() as any;
+    const list = (await (await app.request('/api/v2/events/bindings')).json()) as { bindings: EventBinding[] };
     expect(list.bindings).toHaveLength(1);
   });
 
@@ -201,8 +246,8 @@ describe('Events API Routes (ADR-089)', () => {
       body: JSON.stringify({ source: 'telegram', mode: 'drop' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 
   it('DELETE /bindings/:id — 204 затем 404', async () => {
@@ -214,8 +259,8 @@ describe('Events API Routes (ADR-089)', () => {
 
     const again = await app.request(`/api/v2/events/bindings/${binding.id}`, { method: 'DELETE' });
     expect(again.status).toBe(404);
-    const body: any = await again.json();
-    expect(body.error.code).toBe('NOT_FOUND');
+    const body = (await again.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('NOT_FOUND');
   });
 
   it('GET /routes — пустой список и после создания', async () => {
@@ -459,20 +504,23 @@ describe('Events API Routes (ADR-089)', () => {
 
     const all = await app.request('/api/v2/events/journal');
     expect(all.status).toBe(200);
-    const allBody: any = await all.json();
+    const allBody = (await all.json()) as { entries: EventJournalEntry[] };
     expect(allBody.entries).toHaveLength(3);
 
     const limited = await app.request('/api/v2/events/journal?limit=2');
-    const limitedBody: any = await limited.json();
+    const limitedBody = (await limited.json()) as { entries: EventJournalEntry[] };
     expect(limitedBody.entries).toHaveLength(2);
-    expect(limitedBody.entries[1].event.id).toBe('evt_2');
+    expect(limitedBody.entries[1]?.event.id).toBe('evt_2');
   });
 
   // --- ADR-089/ADR-052: API-ключи привязок и приём события по ключу ---
 
   /** Ingress с захватом аргументов `handleEvent` (для проверки forced binding). */
   function capturingIngress(decision: RouteDecision, session: Session | null) {
-    const handleEvent = vi.fn(async () => ({ decision, session }));
+    const handleEvent = vi.fn(
+      async (_event: SynthEvent, _opts?: HandleEventOptions) => ({ decision, session }),
+    );
+    // Фейк: реализован только `handleEvent` из RequestSessionService.
     const service = { handleEvent } as unknown as RequestSessionService;
     return { ingress: new EventIngress({ requestSessionService: service }), handleEvent };
   }
@@ -500,7 +548,7 @@ describe('Events API Routes (ADR-089)', () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
     const res = await postJson(app, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'bot', description: 'telegram bot' });
     expect(res.status).toBe(201);
-    const created: any = await res.json();
+    const created = (await res.json()) as ApiKeyCreated;
     expect(created.id).toMatch(/^eak_/);
     expect(created.bindingId).toBe(binding.id);
     expect(created.label).toBe('bot');
@@ -567,7 +615,7 @@ describe('Events API Routes (ADR-089)', () => {
       { method: 'POST' },
     );
     expect(revoke.status).toBe(200);
-    const body: any = await revoke.json();
+    const body = (await revoke.json()) as EventBindingApiKey;
     expect(body.id).toBe(created.id);
     expect(typeof body.revokedAt).toBe('string');
     expect(await apiKeyStore.resolveBySecret(created.key)).toBeNull();
@@ -658,13 +706,13 @@ describe('Events API Routes (ADR-089)', () => {
 
     const list = await app.request(`/api/v2/events/bindings/${binding.id}/keys`);
     expect(list.status).toBe(200);
-    const keys = (await list.json() as { keys: any[] }).keys;
+    const keys = ((await list.json()) as { keys: ApiKeyMeta[] }).keys;
     expect(keys).toHaveLength(1);
-    expect(keys[0].key).toBeUndefined();
-    expect(keys[0].hash).toBeUndefined();
-    expect(keys[0].createdBy).toBe('u-1');
+    expect(keys[0]?.key).toBeUndefined();
+    expect(keys[0]?.hash).toBeUndefined();
+    expect(keys[0]?.createdBy).toBe('u-1');
 
-    const keyId = keys[0].id as string;
+    const keyId = keys[0]!.id;
     expect((await app.request(`/api/v2/events/bindings/${binding.id}/keys/${keyId}`, { method: 'DELETE' })).status).toBe(204);
     expect((await app.request(`/api/v2/events/bindings/${binding.id}/keys/${keyId}`, { method: 'DELETE' })).status).toBe(404);
   });
@@ -686,19 +734,19 @@ describe('Events API Routes (ADR-089)', () => {
 
     const res = await postJson(app, '/api/v2/events', { type: 'message', payload: { text: 'hi' } }, { Authorization: `Bearer ${created.key}` });
     expect(res.status).toBe(201);
-    const body: any = await res.json();
+    const body = (await res.json()) as EventIngestResponse;
     expect(body.event.source).toBe('telegram');
     expect(body.event.identity.chatKey).toBe('chat:telegram:9');
     expect(body.sessionId).toBe('s-bound');
 
     expect(handleEvent).toHaveBeenCalledOnce();
-    const call = handleEvent.mock.calls[0]! as unknown as [any, { binding?: { id: string } }];
+    const call = handleEvent.mock.calls[0]!;
     expect(call[0].source).toBe('telegram');
-    expect(call[1].binding?.id).toBe(binding.id);
+    expect(call[1]?.binding?.id).toBe(binding.id);
 
     // lastUsedAt проставлен best-effort отметкой touch.
-    const list = await (await app.request(`/api/v2/events/bindings/${binding.id}/keys`)).json() as { keys: any[] };
-    expect(typeof list.keys[0].lastUsedAt).toBe('string');
+    const list = (await (await app.request(`/api/v2/events/bindings/${binding.id}/keys`)).json()) as { keys: ApiKeyMeta[] };
+    expect(typeof list.keys[0]!.lastUsedAt).toBe('string');
   });
 
   it('POST / по ключу: source противоречит привязке → 400; неверный ключ → 401', async () => {
@@ -737,9 +785,9 @@ describe('Events API Routes (ADR-089)', () => {
     }, ingress);
 
     await postJson(app, '/api/v2/events', { type: 'message' }, { Authorization: `Bearer ${created.key}` });
-    const call = handleEvent.mock.calls[0]! as unknown as [any, { audit?: { keyId?: string; principalId?: string } }];
-    expect(call[1].audit?.keyId).toBe(created.id);
-    expect(call[1].audit?.principalId).toBeUndefined();
+    const call = handleEvent.mock.calls[0]!;
+    expect(call[1]?.audit?.keyId).toBe(created.id);
+    expect(call[1]?.audit?.principalId).toBeUndefined();
   });
 
   it('POST / без ключа: audit не передаётся (обратная совместимость)', async () => {
@@ -747,8 +795,8 @@ describe('Events API Routes (ADR-089)', () => {
     const app = keyApp({}, ingress);
 
     await postJson(app, '/api/v2/events', { source: 'telegram', type: 'message' });
-    const call = handleEvent.mock.calls[0]! as unknown as [any, { audit?: unknown }];
-    expect(call[1].audit).toBeUndefined();
+    const call = handleEvent.mock.calls[0]!;
+    expect(call[1]?.audit).toBeUndefined();
   });
 
   // --- ADR-089/ADR-052: обычный пользовательский Bearer vs binding-key ---
@@ -842,11 +890,12 @@ describe('Events API Routes (ADR-089)', () => {
 
     await postJson(app, '/api/v2/events', { type: 'message' }, { Authorization: `Bearer ${created.key}` });
 
-    const call = handleEvent.mock.calls[0]! as unknown as [any, { ownerId?: string }];
-    expect(call[1].ownerId).toBe('creator-7');
+    const call = handleEvent.mock.calls[0]!;
+    expect(call[1]?.ownerId).toBe('creator-7');
   });
 
   it('POST / без ключа: владелец сессии = аутентифицированный пользователь (ADR-089)', async () => {
+    // Фейк: реализованы только getCurrentUser/requireAuth из AuthKit.
     const authWithUser = {
       getCurrentUser: () => ({ id: 'u-9' }),
       requireAuth: async (c: Context, next: Next) => {
@@ -864,8 +913,8 @@ describe('Events API Routes (ADR-089)', () => {
     const res = await postJson(app, '/api/v2/events', { source: 'telegram', type: 'message' });
     expect(res.status).toBe(201);
 
-    const call = handleEvent.mock.calls[0]! as unknown as [any, { ownerId?: string }];
-    expect(call[1].ownerId).toBe('u-9');
+    const call = handleEvent.mock.calls[0]!;
+    expect(call[1]?.ownerId).toBe('u-9');
   });
 });
 
@@ -930,8 +979,8 @@ describe('Events API: вложения события (ADR-115 × ADR-089)', () 
     });
 
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
   });
 
   it('POST / — отказ проверки ссылки (нет сервиса вложений) → 400, не 500', async () => {
@@ -950,8 +999,8 @@ describe('Events API: вложения события (ADR-115 × ADR-089)', () 
     });
 
     expect(res.status).toBe(400);
-    const body: any = await res.json();
-    expect(body.error.code).toBe('VALIDATION_ERROR');
-    expect(body.error.message).toContain('вложен');
+    const body = (await res.json()) as ApiErrorBody;
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+    expect(body.error?.message).toContain('вложен');
   });
 });

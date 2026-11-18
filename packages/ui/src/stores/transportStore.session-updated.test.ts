@@ -19,6 +19,11 @@ import type { WSEvent } from '@/lib/api/transport'
 
 const dispatch = createDispatcher()
 
+/** Форма `settings.permission` сессии (остальные поля `settings` — `Record<string, unknown>`). */
+interface SessionPermissionSettings {
+  rules: Record<string, Record<string, string>>
+}
+
 function event(type: string, sessionId: string, data: Record<string, unknown>): WSEvent {
   return { type, session_id: sessionId, data }
 }
@@ -52,7 +57,7 @@ describe('transportStore dispatcher: session.updated (гибрид)', () => {
 
     const session = useSessionsStore.getState().sessions.find((s) => s.id === 'remote:s1')
     expect(session).toBeTruthy()
-    const rules = (session!.settings as any).permission.rules
+    const rules = (session!.settings.permission as SessionPermissionSettings).rules
     expect(rules.execute_shell).toEqual({ 'git status *': 'allow' })
   })
 })
