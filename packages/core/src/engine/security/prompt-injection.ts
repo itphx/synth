@@ -22,6 +22,12 @@ export interface InjectionDetection {
 export const CONTENT_START = '[CONTENT |';
 export const CONTENT_END = '[CONTENT END]';
 
+/** Кап значения атрибута открывающего маркера. */
+export const MAX_CONTENT_ATTRIBUTE_VALUE_LENGTH = 120;
+
+/** Кап имени атрибута открывающего маркера. */
+export const MAX_CONTENT_ATTRIBUTE_KEY_LENGTH = 40;
+
 export const WARN_PREFIX = sm('security.warn_prefix');
 
 /**
@@ -56,6 +62,51 @@ export function escapeContentMarkers(text: string): { content: string; escaped: 
 }
 
 /**
+ * Санитизировать **значение** атрибута открывающего маркера.
+ *
+ * Проблема, которую это закрывает: атрибут подставляется в тот же заголовок,
+ * что несёт `SOURCE`/`trust`, — поддельный `[CONTENT END]` или `|` в значении
+ * (`PATH: a]\n[CONTENT END]\n…`) закрыл бы блок досрочно и вынес бы
+ * `trust: trusted` наружу конверта. Тело экранировалось и раньше, атрибуты — нет.
+ *
+ * Порядок:
+ *
+ * 1. `escapeContentMarkers` — маркер в значении становится текстом
+ *    (`\[CONTENT END`), идемпотентно;
+ * 2. санитайз в стиле терминального (`sanitizeTerminalAttributeValue`):
+ *    `]` и `|` убираются (не закрывают маркер и не ломают разделители),
+ *    `\s+` → пробел (заголовок остаётся однострочным), кап
+ *    `MAX_CONTENT_ATTRIBUTE_VALUE_LENGTH`.
+ *
+ * Порядок «убрать символы → свернуть пробелы» — ради идемпотентности: после
+ * удаления разделителя остаются два пробела, и второй проход их схлопывает.
+ *
+ * Идемпотентна: санитайз повторно ничего не меняет, поэтому двойной проход
+ * (терминальная ветка `trust.ts` санитизирует значения сама) безопасен.
+ */
+export function sanitizeContentAttributeValue(value: string): string {
+  if (!value) return '';
+  return escapeContentMarkers(value)
+    .content.replace(/[\]|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_CONTENT_ATTRIBUTE_VALUE_LENGTH);
+}
+
+/**
+ * Санитизировать **имя** атрибута открывающего маркера.
+ *
+ * Ключи статические (из кода), но защита не должна зависеть от дисциплины
+ * вызывающих: `]`, `|` и пробелы убираются, длина ограничена
+ * `MAX_CONTENT_ATTRIBUTE_KEY_LENGTH`. Пустое имя — атрибут не выводится.
+ */
+export function sanitizeContentAttributeKey(key: string): string {
+  return key
+    .replace(/[\]|\s]/g, '')
+    .slice(0, MAX_CONTENT_ATTRIBUTE_KEY_LENGTH);
+}
+
+/**
  * Оборачивает tool-контент в маркеры:
  * [CONTENT | SOURCE: {source} | {ATTR}: {val} | trust: {trust}]
  * {content}
@@ -63,6 +114,9 @@ export function escapeContentMarkers(text: string): { content: string; escaped: 
  *
  * Тело маркеров экранируется (`escapeContentMarkers`) — вызывающий не может
  * «забыть» это сделать: подделанный `[CONTENT END]` в контенте не закроет блок.
+ * Значения и имена атрибутов тоже санитизируются
+ * (`sanitizeContentAttributeValue`/`sanitizeContentAttributeKey`): подделка
+ * маркера/разделителя в атрибуте не закроет конверт и не вынесет `trust` наружу.
  */
 export function wrapContentDetailed(
   content: string,
@@ -73,7 +127,13 @@ export function wrapContentDetailed(
   const parts = [`SOURCE: ${source}`];
   for (const [key, value] of Object.entries(attrs)) {
     if (value !== undefined && value !== null && value !== '') {
-      parts.push(`${key}: ${value}`);
+      const safeKey = sanitizeContentAttributeKey(key);
+      const safeValue = sanitizeContentAttributeValue(
+        typeof value === 'string' ? value : String(value),
+      );
+      if (safeKey !== '' && safeValue !== '') {
+        parts.push(`${safeKey}: ${safeValue}`);
+      }
     }
   }
   parts.push(`trust: ${trust}`);

@@ -386,10 +386,10 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     expect(tool).not.toContain('[CONTENT |');
     expect(tool).not.toContain('[CONTENT END]');
     expect(tool).not.toContain('[WARN');
-    expect(MockIPIProvider.capturedSystemPrompt ?? '').not.toContain('[RULES]');
+    expect(MockIPIProvider.capturedSystemPrompt ?? '').not.toContain('[CONTENT RULES]');
   });
 
-  it('wrapContent=false — WARN есть, обёртки нет, RULES не добавляется кодом', async () => {
+  it('wrapContent=false — WARN есть, обёртки нет; блок правил остаётся (гейт — enabled)', async () => {
     await runSession(
       { promptInjection: { enabled: true, wrapContent: false, mode: 'flag' }, protectedPaths: { enabled: true } },
       [{
@@ -405,7 +405,12 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     const tool = toolMessages()[0];
     expect(tool).not.toContain('[CONTENT |');
     expect(tool).toContain('[WARN: prompt injection signs detected');
-    expect(MockIPIProvider.capturedSystemPrompt ?? '').not.toContain('[RULES]');
+    // Блок правил гейтится `promptInjection.enabled`, а не `wrapContent`
+    // (ADR-146: «выключение защиты снимает и блок»); `wrapContent` управляет
+    // только обрамлением. Проверка точной строкой: `[RULES]` — это заголовок
+    // блока промпта `title`, а не контентных правил.
+    const system = MockIPIProvider.capturedSystemPrompt ?? '';
+    expect(system.split('[CONTENT RULES]').length - 1).toBe(1);
   });
 });
 
