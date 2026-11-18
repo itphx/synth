@@ -18,8 +18,10 @@ import { create } from 'zustand'
 
 import { synthApi } from '@/lib/api/synthApi'
 import type {
+  BackgroundRunKind,
   BackgroundRunRecord,
   BackgroundRunStatus,
+  BlockingRun,
   ProcessLogStream,
   ProcessesListOptions,
 } from '@/lib/api/synthApi'
@@ -75,6 +77,22 @@ interface ProcessesState {
   byId: Record<string, BackgroundRunRecord>
   /** id записей в порядке «свежие первыми» (`startedAt` убыв.). */
   order: string[]
+  /**
+   * Блокирующие прогоны (ADR-111 §detach) — порядок как пришёл от сервера.
+   *
+   * Это записи, которые идут **внутри хода**: в реестре фоновых прогонов их
+   * ещё нет. Обновляются списком (`load`/`refreshBlocking`) и событиями
+   * `background.auto_detached`/`process.detached` (запись переехала в фон).
+   */
+  blocking: BlockingRun[]
+  /** Был ли хотя бы один успешный список с блокирующими (для событийного рефреша). */
+  blockingLoaded: boolean
+  /** Скоуп последнего списка, принёсшего блокирующие (для рефреша по событию). */
+  blockingScope: ProcessesListOptions | null
+  /** Ключ скоупа, по которому известен набор id (чистка только своего скоупа). */
+  blockingScopeKey: string | null
+  /** id блокирующих из последнего ответа своего скоупа (для чистки). */
+  blockingKnownIds: string[]
   /** Накопленные логи по ключу `runId:stream` (см. `processLogKey`). */
   logs: Record<string, ProcessLogState>
   /** id прогонов, пришедших из live-событий и ещё не подтверждённых списком сервера. */
@@ -88,8 +106,20 @@ interface ProcessesState {
    * Чистка — **по скоупу запроса**: при `sessionId`/`projectId` убираются
    * только записи этого скоупа, которых больше нет в ответе; без фильтров —
    * весь реестр (прежнее поведение).
+   *
+   * Список запрашивается с `include=blocking`: блокирующие прогоны приходят
+   * тем же ответом, что и фоновые.
    */
   load: (options?: ProcessesListOptions) => Promise<void>
+  /**
+   * Перечитать **блокирующие** прогоны (список — `include=blocking`).
+   *
+   * Нужен событиям (`background.auto_detached`, `process.detached`): запись
+   * могла переехать из блокирующих в фоновые. Скоуп по умолчанию — последний
+   * запрошенный. Ошибка глотается: это фоновое обновление, а не действие
+   * пользователя (список всё равно перечитается периодически).
+   */
+  refreshBlocking: (options?: ProcessesListOptions) => Promise<void>
   /**
    * Загрузить **только активные** прогоны инстанса (`status=running`).
    *
@@ -105,6 +135,8 @@ interface ProcessesState {
   applyEvent: (type: string, payload: Record<string, unknown>) => void
   /** Добавить или заменить запись реестра. */
   upsert: (run: BackgroundRunRecord) => void
+  /** Убрать блокирующий прогон из снимка (после остановки/перевода в фон). */
+  removeBlocking: (id: string) => void
   /** Убрать запись реестра (и её логи — все потоки). */
   remove: (id: string) => void
   /** Очистить реестр целиком. */
@@ -127,6 +159,53 @@ function sortOrder(byId: Record<string, BackgroundRunRecord>): string[] {
     return a < b ? -1 : a > b ? 1 : 0
   })
 }
+
+/**
+ * Ключ скоупа запроса блокирующих прогонов.
+ *
+ * Чистка идёт только внутри **того же** скоупа: записи другого скоупа не
+ * удаляются (как и у фонового реестра — от них зависят значки активности).
+ */
+function blockingScopeKey(options?: ProcessesListOptions): string {
+  if (options?.sessionId) return `session:${options.sessionId}`
+  if (options?.projectId) return `project:${options.projectId}`
+  return 'all'
+}
+
+/**
+ * Слияние снимка блокирующих прогонов с уже известными записями.
+ *
+ * Ответ сервера — истина для своего скоупа: записи, которые в этом скоупе
+ * были известны, но пропали из ответа, убираются (прогон завершился/переведён
+ * в фон). Записи других скоупов сохраняются. Порядок — как пришёл от сервера,
+ * остальные записи — в конце.
+ */
+function mergeBlocking(
+  state: {
+    blocking: BlockingRun[]
+    blockingScopeKey: string | null
+    blockingKnownIds: string[]
+  },
+  options: ProcessesListOptions | undefined,
+  incoming: BlockingRun[],
+): Pick<ProcessesState, 'blocking' | 'blockingScopeKey' | 'blockingKnownIds'> {
+  const key = blockingScopeKey(options)
+  const previousKnown = state.blockingScopeKey === key ? new Set(state.blockingKnownIds) : new Set<string>()
+  const incomingIds = new Set(incoming.map((run) => run.id))
+  const next: BlockingRun[] = incoming.map((run) => ({ ...run }))
+  for (const run of state.blocking) {
+    if (incomingIds.has(run.id)) continue
+    // В этом же скоупе сервер запись больше не отдаёт — она завершилась.
+    if (previousKnown.has(run.id)) continue
+    next.push(run)
+  }
+  return {
+    blocking: next,
+    blockingScopeKey: key,
+    blockingKnownIds: [...incomingIds],
+  }
+}
+
 
 /**
  * Попадает ли запись в скоуп запроса списка прогонов.
@@ -195,13 +274,19 @@ function num(payload: Record<string, unknown>, key: string): number | undefined 
 export const useProcessesStore = create<ProcessesState>()((set) => ({
   byId: {},
   order: [],
+  blocking: [],
+  blockingLoaded: false,
+  blockingScope: null,
+  blockingScopeKey: null,
+  blockingKnownIds: [],
   logs: {},
   pendingIds: [],
   error: null,
 
   load: async (options) => {
     try {
-      const runs = await synthApi.listProcesses(options)
+      const response = await synthApi.listProcessesWithBlocking(options)
+      const runs = response.runs
       set((s) => {
         const byId: Record<string, BackgroundRunRecord> = { ...s.byId }
         const fetched = new Set(runs.map((run) => run.id))
@@ -224,12 +309,31 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
         return {
           byId,
           order: sortOrder(byId),
+          ...mergeBlocking(s, options, response.blocking),
+          blockingLoaded: true,
+          blockingScope: options ?? null,
           pendingIds: s.pendingIds.filter((id) => !fetched.has(id)),
           error: null,
         }
       })
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })
+    }
+  },
+
+  refreshBlocking: async (options) => {
+    const state = useProcessesStore.getState()
+    const scope = options ?? state.blockingScope ?? undefined
+    try {
+      const response = await synthApi.listProcessesWithBlocking(scope)
+      set((s) => ({
+        ...mergeBlocking(s, scope, response.blocking),
+        blockingLoaded: true,
+        blockingScope: scope ?? null,
+      }))
+    } catch {
+      // Фоновое обновление: ошибка не должна затирать ни реестр, ни его
+      // ошибку загрузки — список перечитается периодически.
     }
   },
 
@@ -270,7 +374,18 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
 
     const sessionId =
       str(payload, 'session_id') ?? str(payload, 'parent_session_id') ?? ''
-    const childSessionId = isChild ? str(payload, 'child_session_id') : undefined
+    // `process.detached` переводит в фон **уже идущий** прогон: у него в
+    // payload есть `kind` (`subagent` — блокирующий `task`, `process` — shell),
+    // и запись должна попасть в реестр правильным видом.
+    const payloadKind = str(payload, 'kind')
+    const kind: BackgroundRunKind =
+      payloadKind === 'subagent' || payloadKind === 'process'
+        ? payloadKind
+        : isChild
+          ? 'subagent'
+          : 'process'
+    const childSessionId =
+      isChild || type === 'process.detached' ? str(payload, 'child_session_id') : undefined
     const id = backgroundRunId ?? childSessionId ?? str(payload, 'process_id')
     if (!id) return
 
@@ -287,7 +402,7 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
       const prev = s.byId[id]
       const now = new Date().toISOString()
       const patch: Partial<BackgroundRunRecord> = {
-        kind: isChild ? 'subagent' : 'process',
+        kind,
         status,
         sessionId: sessionId || prev?.sessionId || '',
         ...(prev?.projectId !== undefined ? { projectId: prev.projectId } : {}),
@@ -348,7 +463,28 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
   },
 
   clear: () => {
-    set({ byId: {}, order: [], logs: {}, pendingIds: [], error: null })
+    set({
+      byId: {},
+      order: [],
+      blocking: [],
+      blockingLoaded: false,
+      blockingScope: null,
+      blockingScopeKey: null,
+      blockingKnownIds: [],
+      logs: {},
+      pendingIds: [],
+      error: null,
+    })
+  },
+
+  removeBlocking: (id) => {
+    set((s) => {
+      if (!s.blocking.some((run) => run.id === id)) return {}
+      return {
+        blocking: s.blocking.filter((run) => run.id !== id),
+        blockingKnownIds: s.blockingKnownIds.filter((known) => known !== id),
+      }
+    })
   },
 
   mergeLog: (runId, stream, chunk) => {
@@ -403,4 +539,12 @@ export function bySession(
     if (run && run.sessionId === sessionId) out.push(run)
   }
   return out
+}
+
+/** Блокирующие прогоны сессии-владельца (порядок — как пришёл от сервера). */
+export function blockingBySession(
+  state: { blocking: BlockingRun[] },
+  sessionId: string,
+): BlockingRun[] {
+  return state.blocking.filter((run) => run.sessionId === sessionId)
 }

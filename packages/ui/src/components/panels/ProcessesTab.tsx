@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { synthApi } from '@/lib/api/synthApi'
-import type { BackgroundRunRecord } from '@/lib/api/synthApi'
+import type { BackgroundRunRecord, BlockingRun } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
+import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/formatDate'
 import { formatDuration } from '@/lib/formatStats'
-import { openProcessLogTab } from '@/lib/processTabs'
+import { openBlockingLogTab, openProcessLogTab } from '@/lib/processTabs'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/Toggle'
@@ -19,6 +20,7 @@ import { useActiveProject } from '@/hooks/useActiveProject'
 import { PanelTab } from './PanelTab'
 import { PanelSectionEmpty, PanelSectionHeader } from './PanelSection'
 import { TerminalsSection } from './TerminalsSection'
+import { BlockingRunCard } from './BlockingRunCard'
 
 /**
  * Вкладка «Процессы» правой панели — единый реестр фоновой работы:
@@ -69,9 +71,14 @@ function kindIcon(kind: BackgroundRunRecord['kind']): 'terminal-box' | 'robot-2'
   return kind === 'subagent' ? 'robot-2' : 'terminal-box'
 }
 
-/** Человеческое имя прогона: команда, описание или id. */
-function runTitle(run: BackgroundRunRecord): string {
-  return run.command ?? run.description ?? run.id
+/** Человеческое имя прогона: команда, описание, заголовок или id. */
+function runTitle(run: {
+  id: string
+  command?: string | null
+  description?: string | null
+  title?: string | null
+}): string {
+  return run.title || run.command || run.description || run.id
 }
 
 /**
@@ -124,6 +131,7 @@ export const ProcessesTab: React.FC = () => {
 
   const byId = useProcessesStore((s) => s.byId)
   const order = useProcessesStore((s) => s.order)
+  const blocking = useProcessesStore((s) => s.blocking)
   const loadError = useProcessesStore((s) => s.error)
   const load = useProcessesStore((s) => s.load)
   const removeRun = useProcessesStore((s) => s.remove)
@@ -199,6 +207,29 @@ export const ProcessesTab: React.FC = () => {
   const processRuns = useMemo(() => runs.filter((run) => run.kind === 'process'), [runs])
   const subagentRuns = useMemo(() => runs.filter((run) => run.kind === 'subagent'), [runs])
 
+  /**
+   * Блокирующие прогоны в текущем скоупе (ADR-111 §detach).
+   *
+   * У DTO нет `projectId`, поэтому проект берётся у сессии-владельца (как у
+   * live-событий фонового реестра).
+   */
+  const blockingRuns = useMemo(() => {
+    if (scope === 'none') return []
+    if (scope === 'session') {
+      return blocking.filter((run) => run.sessionId === sessionId)
+    }
+    return blocking.filter((run) => sessionProjects.get(run.sessionId) === projectId)
+  }, [blocking, projectId, scope, sessionId, sessionProjects])
+
+  const blockingSubagentRuns = useMemo(
+    () => blockingRuns.filter((run) => run.kind === 'subagent'),
+    [blockingRuns],
+  )
+  const blockingProcessRuns = useMemo(
+    () => blockingRuns.filter((run) => run.kind === 'process'),
+    [blockingRuns],
+  )
+
   /** Открытие дочерней сессии саб-агента в центральной вкладке. */
   const handleOpenSession = useCallback((run: BackgroundRunRecord) => {
     const childId = run.childSessionId
@@ -210,6 +241,70 @@ export const ProcessesTab: React.FC = () => {
       data: { sessionId: childId },
     })
   }, [sessionNames])
+
+  /**
+   * «Открыть» у блокирующего прогона: саб-агент — его дочерняя сессия,
+   * процесс — вкладка live-лога.
+   */
+  const handleOpenBlocking = useCallback((run: BlockingRun) => {
+    if (run.kind === 'subagent') {
+      const childId = run.childSessionId
+      if (!childId) return
+      useUIStore.getState().openTab({
+        id: `chat-${childId}`,
+        type: 'chat',
+        title: sessionNames.get(childId) ?? run.title ?? childId,
+        data: { sessionId: childId },
+      })
+      return
+    }
+    openBlockingLogTab(run)
+  }, [sessionNames])
+
+  /** Остановка блокирующего прогона (правила доступа решает сервер). */
+  const handleStopBlocking = useCallback(
+    async (run: BlockingRun) => {
+      const ok = await confirm({
+        title: t('processes.confirm.stopTitle'),
+        message: t('processes.confirm.stopMessage', { name: runTitle(run) }),
+        confirmLabel: t('processes.action.stop'),
+        variant: 'danger',
+        icon: 'stop',
+      })
+      if (!ok) return
+      setBusy(run.id)
+      try {
+        await synthApi.stopBlockingRun(run.id)
+        notify({ text: t('processes.stopped'), type: 'success', category: 'system' })
+        await loadScope()
+      } catch (err) {
+        notify({
+          text: t('processes.failed', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+          type: 'error',
+          category: 'error',
+        })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [loadScope, notify, t],
+  )
+
+  /** Перевод блокирующего прогона в фон (тост с количеством даёт общий шов). */
+  const handleDetachBlocking = useCallback(
+    async (run: BlockingRun) => {
+      setBusy(run.id)
+      try {
+        await moveSessionToBackground(run.sessionId, { type: run.kind })
+        await loadScope()
+      } finally {
+        setBusy(null)
+      }
+    },
+    [loadScope],
+  )
 
   /** Остановка фонового прогона (сервер останавливает асинхронно). */
   const handleStop = useCallback(
@@ -409,6 +504,74 @@ export const ProcessesTab: React.FC = () => {
           <Icon name="loader-2" className="size-3.5 animate-spin" />
           {t('common.loading')}
         </div>
+      )}
+
+      {/* Блокирующие саб-агенты (ADR-111 §detach) — идут внутри хода. */}
+      {(kindFilter === 'subagent' || kindFilter === 'all') && (
+        <section className="space-y-2" data-testid="processes-section-blocking-subagent">
+          <PanelSectionHeader
+            title={t('processes.section.blockingSubagent')}
+            count={t('processes.count.blockingSubagent', { count: blockingSubagentRuns.length })}
+            testId="processes-section-blocking-subagent"
+          />
+          {blockingSubagentRuns.length === 0 ? (
+            <PanelSectionEmpty
+              icon="robot-2"
+              title={t('processes.empty.blockingSubagent')}
+              hint={t('processes.emptyHint.blockingSubagent')}
+              testId="processes-empty-blocking-subagent"
+            />
+          ) : (
+            <ul className="space-y-2 min-w-0" data-testid="processes-list-blocking-subagent">
+              {blockingSubagentRuns.map((run) => (
+                <BlockingRunCard
+                  key={run.id}
+                  run={run}
+                  now={now}
+                  busy={busy === run.id}
+                  sessionName={sessionNames.get(run.sessionId) ?? run.sessionId}
+                  onOpen={() => handleOpenBlocking(run)}
+                  onStop={() => void handleStopBlocking(run)}
+                  onDetach={() => void handleDetachBlocking(run)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* Блокирующие процессы (ADR-111 §detach) — foreground `execute_shell`. */}
+      {(kindFilter === 'process' || kindFilter === 'all') && (
+        <section className="space-y-2" data-testid="processes-section-blocking-process">
+          <PanelSectionHeader
+            title={t('processes.section.blockingProcess')}
+            count={t('processes.count.blockingProcess', { count: blockingProcessRuns.length })}
+            testId="processes-section-blocking-process"
+          />
+          {blockingProcessRuns.length === 0 ? (
+            <PanelSectionEmpty
+              icon="terminal-box"
+              title={t('processes.empty.blockingProcess')}
+              hint={t('processes.emptyHint.blockingProcess')}
+              testId="processes-empty-blocking-process"
+            />
+          ) : (
+            <ul className="space-y-2 min-w-0" data-testid="processes-list-blocking-process">
+              {blockingProcessRuns.map((run) => (
+                <BlockingRunCard
+                  key={run.id}
+                  run={run}
+                  now={now}
+                  busy={busy === run.id}
+                  sessionName={sessionNames.get(run.sessionId) ?? run.sessionId}
+                  onOpen={() => handleOpenBlocking(run)}
+                  onStop={() => void handleStopBlocking(run)}
+                  onDetach={() => void handleDetachBlocking(run)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
       {/* Секция терминалов — свой срез (серверный список проекта). */}

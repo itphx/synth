@@ -121,6 +121,10 @@ export interface CenterTab {
     terminalId?: string
     /** id фонового прогона (вкладка «Вывод процесса»). */
     processRunId?: string
+    /** ADR-111 §detach: id **блокирующего** прогона (вкладка live-лога). */
+    blockingRunId?: string
+    /** Заголовок блокирующего прогона (когда записи уже нет в снимке). */
+    blockingRunTitle?: string
   }
   editingState?: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 }

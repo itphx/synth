@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { getToolIcon, getToolDisplayName } from '@/lib/toolIcons'
 import { useI18n, useResolveI18n } from '@/lib/i18n'
+import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { splitBySecretPlaceholders, SecretPlaceholder } from './SecretPlaceholder'
 import { DiffView } from './DiffView'
 
@@ -236,6 +237,10 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
   const [viewMode, setViewMode] = useState<'args' | 'result'>(
     resultFirst || preferQuestionResult ? 'result' : 'args',
   )
+  // ADR-111 §detach: перевод идущего `execute_shell` в фон — состояние
+  // запроса и признак «уже переведён» (повторную кнопку не показываем).
+  const [detaching, setDetaching] = useState(false)
+  const [detached, setDetached] = useState(false)
 
   const isError = toolCall.result?.isError
   const isRunning = toolCall.status === 'running'
@@ -245,6 +250,28 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
   const duration = formatDuration(started, completed)
   const hasResult = !!toolCall.result?.content
   const isSubagent = toolCall.name === 'task'
+
+  /**
+   * ADR-111 §detach: «В фон» — только у идущего `execute_shell` открытого
+   * чата. Переводятся именно блокирующие вызовы этой сессии, поэтому нужен
+   * `sessionId` и `callId` парта.
+   */
+  const canDetach =
+    isRunning && toolCall.name === 'execute_shell' && !!sessionId && !detached
+
+  const handleBackground = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (!sessionId || detaching || detached) return
+    setDetaching(true)
+    void moveSessionToBackground(sessionId, {
+      type: 'process',
+      callIds: toolCall.callId ? [toolCall.callId] : undefined,
+    })
+      .then((response) => {
+        if (response) setDetached(true)
+      })
+      .finally(() => setDetaching(false))
+  }
   // Спец-рендер результата `question` — пары «вопрос → ответ»; форма не
   // совпала — прежний текст результата.
   const questionRows = isQuestionTool ? questionAnswerRows(toolCall.args, toolCall.result) : null
@@ -283,35 +310,51 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
           plain ? 'border-transparent' : 'border-border bg-muted'
         )}
       >
-        <button
-          data-tool-call-toggle="1"
-          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          onClick={() => setExpanded(!expanded)}
-        >
-          <Icon
-            name={expanded ? 'arrow-down-s' : 'arrow-right-s'}
-            className="size-3.5 transition-transform shrink-0"
-          />
-          <Icon
-            name={toolIcon}
-            className={`size-3.5 shrink-0 ${headerColor}${isRunning ? ' animate-tool-pulse' : ''}`}
-          />
-          <span className={`font-mono font-medium truncate ${nameColor}${isRunning ? ' animate-tool-pulse' : ''}`}>
-            {isSubagent && subagentType
-              ? `${t('chat.subagent.title')}: ${subagentType}`
-              : getToolDisplayName(toolCall.name)}
-          </span>
-          {toolCall.iteration != null && (
-            <span className="text-[0.625rem] opacity-40 shrink-0">
-              #{toolCall.iteration}
+        <div className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+          <button
+            data-tool-call-toggle="1"
+            className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+            onClick={() => setExpanded(!expanded)}
+          >
+            <Icon
+              name={expanded ? 'arrow-down-s' : 'arrow-right-s'}
+              className="size-3.5 transition-transform shrink-0"
+            />
+            <Icon
+              name={toolIcon}
+              className={`size-3.5 shrink-0 ${headerColor}${isRunning ? ' animate-tool-pulse' : ''}`}
+            />
+            <span className={`font-mono font-medium truncate ${nameColor}${isRunning ? ' animate-tool-pulse' : ''}`}>
+              {isSubagent && subagentType
+                ? `${t('chat.subagent.title')}: ${subagentType}`
+                : getToolDisplayName(toolCall.name)}
             </span>
+            {toolCall.iteration != null && (
+              <span className="text-[0.625rem] opacity-40 shrink-0">
+                #{toolCall.iteration}
+              </span>
+            )}
+            {duration && (
+              <span className="text-[0.625rem] opacity-40 shrink-0">
+                {duration}
+              </span>
+            )}
+          </button>
+          {canDetach && (
+            <button
+              type="button"
+              disabled={detaching}
+              className="inline-flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[0.625rem] text-primary transition-colors hover:bg-primary/10 hover:text-primary/80 cursor-pointer disabled:opacity-50 disabled:cursor-default disabled:hover:bg-transparent"
+              onClick={handleBackground}
+              title={t('chat.background.hint')}
+              aria-label={t('chat.background.move')}
+              data-testid="tool-call-background"
+            >
+              <Icon name="download" className="size-3" />
+              {t('chat.background.move')}
+            </button>
           )}
-          {duration && (
-            <span className="text-[0.625rem] opacity-40 shrink-0">
-              {duration}
-            </span>
-          )}
-        </button>
+        </div>
         {expanded && (
           <div className="border-t border-border">
             {hasResult && !isRunning && (

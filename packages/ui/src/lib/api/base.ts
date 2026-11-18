@@ -89,7 +89,10 @@ export async function fetchJSON<T>(url: string, options?: FetchJSONOptions): Pro
     // видит только текст и не может предложить действие (зарегистрировать /
     // удалить / сменить путь).
     const details = error.error?.details
-    throw Object.assign(new Error(msg), { status: response.status, code, forceRequired, details })
+    // `fields` — список полей, зафиксированных env (`409 ENV_LOCKED`, ADR-023):
+    // без него UI не подсветит конкретные контролы.
+    const fields = Array.isArray(error.error?.fields) ? error.error.fields : undefined
+    throw Object.assign(new Error(msg), { status: response.status, code, forceRequired, details, fields })
   }
   if (response.status === 204) return undefined as T
   return response.json()

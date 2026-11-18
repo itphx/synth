@@ -3,6 +3,15 @@
 // Серверный контракт (core, `server/routes/processes.ts`):
 //   GET    /api/v2/processes?sessionId&projectId&kind&status&limit
 //            → { runs: BackgroundRunRecord[] }
+//   GET    /api/v2/processes?…&include=blocking
+//            → { runs: BackgroundRunRecord[], blocking: BlockingRunDto[] }
+//   POST   /api/v2/processes/blocking/:id/stop   → { stopped: true }
+//   GET    /api/v2/processes/blocking/:id/logs?offset&limit
+//            → { content, offset, nextOffset, totalBytes, truncated }
+//
+// Блокирующие прогоны (ADR-111 §detach) — те, что идут **внутри хода**
+// (`execute_shell` foreground / `task`): записи в реестре фоновых прогонов у
+// них ещё нет, поэтому они приходят отдельным аддитивным полем `blocking`.
 //   GET    /api/v2/processes/:id                → { run }
 //   GET    /api/v2/processes/:id/logs?offset&limit&stream=combined|stdout|stderr
 //            → { content, offset, nextOffset, totalBytes, truncated }
@@ -46,11 +55,56 @@ export interface ProcessesListOptions {
   status?: BackgroundRunStatus
   /** Предел выборки (сервер: дефолт 50, максимум 200). */
   limit?: number
+  /**
+   * `blocking` — добавить в ответ блокирующие прогоны (ADR-111 §detach).
+   * Другое значение сервер отклоняет (400).
+   */
+  include?: 'blocking'
+}
+
+/**
+ * Блокирующий прогон (ADR-111 §detach) — идёт **внутри хода**, записи в
+ * реестре фоновых прогонов у него ещё нет.
+ *
+ * `kind` — вид работы: `process` (foreground `execute_shell`) или `subagent`
+ * (блокирующий `task`). `logPath` есть только у процесса; живой лог читается
+ * `GET /processes/blocking/:id/logs`.
+ */
+export interface BlockingRun {
+  /** id активного прогона (в памяти оркестратора). */
+  id: string
+  kind: BackgroundRunKind
+  /** Сессия-владелец (проверка доступа идёт через неё). */
+  sessionId: string
+  /** Человеческое имя: команда процесса или описание саб-агента. */
+  title?: string
+  /** id процесса исполнителя (`kind: 'process'`). */
+  processId?: string
+  /** id дочерней сессии (`kind: 'subagent'`). */
+  childSessionId?: string
+  /** Путь к live-логу (`kind: 'process'`). */
+  logPath?: string
+  /** Время старта, ISO-8601. */
+  startedAt?: string
 }
 
 /** Ответ `GET /processes` — реестр фоновых прогонов. */
 export interface ProcessesListResponse {
   runs: BackgroundRunRecord[]
+  /** Аддитивно (`include=blocking`): блокирующие прогоны видимых сессий. */
+  blocking?: BlockingRun[]
+}
+
+/** Ответ `GET /processes?include=blocking` — реестр + блокирующие прогоны. */
+export interface ProcessesWithBlockingResponse {
+  runs: BackgroundRunRecord[]
+  blocking: BlockingRun[]
+}
+
+/** Ответ `POST /processes/blocking/:id/stop`. */
+export interface BlockingStopResponse {
+  /** Всегда `true` (неудача — `409`). */
+  stopped: boolean
 }
 
 /** Ответ `GET /processes/:id` — деталь фонового прогона. */
@@ -88,20 +142,41 @@ export interface ProcessStopResponse {
   status: string
 }
 
+/** Query-строка фильтров списка прогонов (пустая — без `?`). */
+function buildListQuery(options?: ProcessesListOptions): string {
+  const params = new URLSearchParams()
+  if (options?.sessionId) params.set('sessionId', options.sessionId)
+  if (options?.projectId) params.set('projectId', options.projectId)
+  if (options?.kind) params.set('kind', options.kind)
+  if (options?.status) params.set('status', options.status)
+  if (options?.limit !== undefined) params.set('limit', String(options.limit))
+  if (options?.include) params.set('include', options.include)
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
 export const processesApi = {
   /** GET /processes — реестр фоновых прогонов (фильтры — по «И»). */
   async list(options?: ProcessesListOptions): Promise<BackgroundRunRecord[]> {
-    const params = new URLSearchParams()
-    if (options?.sessionId) params.set('sessionId', options.sessionId)
-    if (options?.projectId) params.set('projectId', options.projectId)
-    if (options?.kind) params.set('kind', options.kind)
-    if (options?.status) params.set('status', options.status)
-    if (options?.limit !== undefined) params.set('limit', String(options.limit))
-    const query = params.toString()
     const response = await fetchJSON<ProcessesListResponse>(
-      `${BASE_URL}/processes${query ? `?${query}` : ''}`,
+      `${BASE_URL}/processes${buildListQuery(options)}`,
     )
     return response.runs ?? []
+  },
+
+  /**
+   * GET /processes?include=blocking — реестр **и** блокирующие прогоны.
+   *
+   * Отдельный метод (а не флаг у `list`): форма ответа отличается, а `list`
+   * остаётся прежним — его вызывающие не должны внезапно получать конверт.
+   */
+  async listWithBlocking(
+    options?: Omit<ProcessesListOptions, 'include'>,
+  ): Promise<ProcessesWithBlockingResponse> {
+    const response = await fetchJSON<ProcessesListResponse>(
+      `${BASE_URL}/processes${buildListQuery({ ...options, include: 'blocking' })}`,
+    )
+    return { runs: response.runs ?? [], blocking: response.blocking ?? [] }
   },
 
   /** GET /processes/:id — деталь фонового прогона. */
@@ -137,5 +212,37 @@ export const processesApi = {
     await fetchJSON<void>(`${BASE_URL}/processes/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     })
+  },
+
+  /**
+   * POST /processes/blocking/:id/stop — остановить блокирующий прогон.
+   *
+   * `409 notStoppable` — остановить отсюда нельзя (нет хэндла/уже завершён);
+   * `403`/`404` — правило доступа сервера (UI его не дублирует).
+   */
+  async stopBlocking(id: string): Promise<BlockingStopResponse> {
+    return fetchJSON<BlockingStopResponse>(
+      `${BASE_URL}/processes/blocking/${encodeURIComponent(id)}/stop`,
+      { method: 'POST' },
+    )
+  },
+
+  /**
+   * GET /processes/blocking/:id/logs — отрезок live-лога блокирующего прогона.
+   *
+   * Форма ответа — как у `GET /processes/:id/logs` (единый формат отрезка):
+   * поток один (`combined`), поэтому `stream` не передаётся.
+   */
+  async blockingLogs(
+    id: string,
+    options?: Pick<ProcessLogsOptions, 'offset' | 'limit'>,
+  ): Promise<ProcessLogsResponse> {
+    const params = new URLSearchParams()
+    if (options?.offset !== undefined) params.set('offset', String(options.offset))
+    if (options?.limit !== undefined) params.set('limit', String(options.limit))
+    const query = params.toString()
+    return fetchJSON<ProcessLogsResponse>(
+      `${BASE_URL}/processes/blocking/${encodeURIComponent(id)}/logs${query ? `?${query}` : ''}`,
+    )
   },
 }

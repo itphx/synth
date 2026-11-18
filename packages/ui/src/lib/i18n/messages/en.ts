@@ -136,6 +136,7 @@ export const dict = {
   'settings.category.maintenance': 'Maintenance',
   'settings.category.metrics': 'Metrics',
   'settings.category.terminals': 'Terminals',
+  'settings.category.background': 'Background work',
   'settings.category.memory': 'Memory',
   'settings.category.contextWindow': 'Context window',
   'settings.category.contextManagement': 'Context management',
@@ -198,6 +199,57 @@ export const dict = {
   'settings.terminals.audit.description':
     'frames with Enter are written to the log; other input is metrics only',
   'settings.terminals.rangeError': 'Value is out of range',
+  // Background work: unified run registry (`/settings/background`).
+  'settings.background.description':
+    'Instance background work: master switch, concurrency limits, log size and registry retention.',
+  'settings.background.runtime.title': 'General',
+  'settings.background.runtime.description':
+    'Applied immediately — no restart required. Priority: ENV > runtime > config > default.',
+  'settings.background.enabled.label': 'Background work enabled',
+  'settings.background.enabled.description':
+    'Master switch: when off, blocking runs are not moved to the background and new background runs cannot start.',
+  'settings.background.defaults':
+    'Defaults: enabled — {enabled}, runs per session limit — {maxRuns}.',
+  'settings.background.limits.title': 'Concurrency limits',
+  'settings.background.limits.description':
+    '0 means no limit. Applies to new runs immediately.',
+  'settings.background.maxSubagents.label': 'Subagents per session',
+  'settings.background.maxSubagents.description':
+    'maximum subagents running at the same time in one session',
+  'settings.background.maxProcesses.label': 'Processes per session',
+  'settings.background.maxProcesses.description':
+    'maximum shell processes running at the same time in one session',
+  'settings.background.maxRuns.label': 'Runs per session',
+  'settings.background.maxRuns.description':
+    'overall limit of background runs in one session',
+  'settings.background.retention.title': 'Log and retention',
+  'settings.background.retention.description':
+    'Size of a run log file and how long registry records are kept.',
+  'settings.background.logMaxBytes.label': 'Log size limit, bytes',
+  'settings.background.logMaxBytes.description':
+    '0 means no limit; the tail beyond the limit is dropped',
+  'settings.background.retention.label': 'Retention, days',
+  'settings.background.retention.fieldDescription':
+    '0 or less means no restriction',
+  'settings.background.field.invalid': 'Enter an integer',
+  'settings.background.source.env': 'set via ENV',
+  'settings.background.source.runtime': 'runtime',
+  'settings.background.source.config': 'config',
+  'settings.background.source.default': 'default',
+  'settings.background.envBadge': 'set via ENV',
+  'settings.background.envBanner':
+    'The value is fixed by an environment variable — it cannot be changed from the UI.',
+  'settings.background.envFields': 'Fixed via ENV: {fields}',
+  'settings.background.envFieldBadge': 'ENV',
+  'settings.background.envLocked': 'The value is fixed by an environment variable',
+  'settings.background.saved': 'Background work settings saved',
+  'settings.background.saveError': 'Could not save: {error}',
+  'settings.background.resetDone': 'Background work settings reset to defaults',
+  'settings.background.reset': 'Reset',
+  'settings.background.conflict':
+    'The value is fixed by an environment variable — change it in the environment.',
+  'settings.background.loadError': 'Could not load background work settings',
+  'settings.background.retry': 'Retry',
   'settings.agentsLimits.description': 'Subagent prompt budget (tokens). 0 means no limit. Subagents have no automatic context compaction, so with 0 a long run may hit the model window.',
   'settings.agentsLimits.field.title': 'Prompt budget',
   'settings.agentsLimits.field.description': 'Safeguard for the subagent input prompt size. Applies to subsequent runs without restart.',
@@ -1695,13 +1747,23 @@ export const dict = {
 
   // Background processes and background sub-agents (PROP-096/097)
   'processes.title': 'Background processes',
-  'processes.section.subagent': 'Sub-agents',
+  'processes.section.subagent': 'Background subagents',
+  'processes.section.blockingSubagent': 'Blocking subagents',
+  'processes.section.blockingProcess': 'Blocking processes',
   'processes.count.process': '{count, plural, one {# process} other {# processes}}',
   'processes.count.subagent': '{count, plural, one {# sub-agent} other {# sub-agents}}',
+  'processes.count.blockingSubagent': '{count, plural, one {# sub-agent} other {# sub-agents}}',
+  'processes.count.blockingProcess': '{count, plural, one {# process} other {# processes}}',
   'processes.empty.process': 'No background processes',
   'processes.emptyHint.process': 'Background shell commands appear here.',
   'processes.empty.subagent': 'No sub-agents',
   'processes.emptyHint.subagent': 'Background sub-agents appear here.',
+  'processes.empty.blockingSubagent': 'No blocking subagents',
+  'processes.emptyHint.blockingSubagent':
+    'A subagent running inside the turn appears here — you can move it to the background.',
+  'processes.empty.blockingProcess': 'No blocking processes',
+  'processes.emptyHint.blockingProcess':
+    'A command running inside the turn appears here — you can stop it or move it to the background.',
   'processes.empty.noContext': 'Select a session or a project',
   'processes.loadError': 'Failed to load background runs: {error}',
   'processes.filter.title': 'Filter by kind',
@@ -1721,6 +1783,11 @@ export const dict = {
   'processes.action.openSession': 'Open session',
   'processes.action.output': 'Output',
   'processes.action.refreshLog': 'Refresh log',
+  // ADR-111 §detach: blocking run actions.
+  'processes.action.detach': 'Move to background',
+  'processes.action.open': 'Open',
+  'processes.blocking.liveHint': 'The live log refreshes automatically',
+  'processes.blocking.finished': 'The run has finished — no new log entries',
   // PROP-142 §2: продолжение потерянного прогона саб-агента (`status='orphaned'`).
   'processes.resumeLost': 'Resume',
   'processes.resumeLostDone': 'Subagent run resumed',
@@ -1991,6 +2058,9 @@ export const dict = {
   'chat.background.hint': 'ctrl+b',
   'notify.background.moved': 'Moved to background: {count}',
   'notify.background.moveFailed': 'Failed to move to background',
+  // ADR-111 §detach: auto-detach of blocking runs on steer.
+  'notify.background.autoDetached':
+    'Blocking runs moved to background automatically: {count}',
   // ADR-112: notification about a user question (the session is not open).
   'notify.question.asked': 'Agent is waiting for an answer: {name}',
   'notify.message.mentioned': 'You were mentioned in this session',

@@ -14,6 +14,7 @@ import { PipelineRunTab } from '../pipelines/PipelineRunTab'
 import { TerminalView } from '../terminal/TerminalView'
 import { TerminalSessionView } from '../terminal/TerminalSessionView'
 import { ProcessLogTab } from '../processes/ProcessLogTab'
+import { BlockingLogTab } from '../processes/BlockingLogTab'
 
 function EmptyState() {
   const { t } = useI18n()
@@ -81,7 +82,13 @@ export function CenterPanel() {
         )
       // Экран «Вывод процесса» (per-run: лог фонового прогона).
       case 'process-log':
-        return <ProcessLogTab tab={activeTab} />
+        // ADR-111 §detach: у блокирующего прогона своя вкладка live-лога —
+        // read-only поток, который читается до завершения прогона.
+        return activeTab.data.blockingRunId ? (
+          <BlockingLogTab tab={activeTab} />
+        ) : (
+          <ProcessLogTab tab={activeTab} />
+        )
       default:
         return <EmptyState />
     }

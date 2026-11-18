@@ -2,10 +2,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   listProcesses: vi.fn(),
+  listProcessesWithBlocking: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({
-  synthApi: { listProcesses: mocks.listProcesses },
+  synthApi: {
+    listProcesses: mocks.listProcesses,
+    listProcessesWithBlocking: mocks.listProcessesWithBlocking,
+  },
 }))
 
 import { useProcessesStore, runningCount, bySession, processLogKey } from './processesStore'
@@ -26,9 +30,21 @@ function makeRun(id: string, overrides: Partial<BackgroundRunRecord> = {}): Back
 describe('processesStore', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // `load` запрашивает реестр вместе с блокирующими: по умолчанию блокирующих
+    // нет, а фоновые записи берутся из прежнего мока.
+    mocks.listProcesses.mockResolvedValue([])
+    mocks.listProcessesWithBlocking.mockImplementation(async (opts?: unknown) => ({
+      runs: await mocks.listProcesses(opts),
+      blocking: [],
+    }))
     useProcessesStore.setState({
       byId: {},
       order: [],
+      blocking: [],
+      blockingLoaded: false,
+      blockingScope: null,
+      blockingScopeKey: null,
+      blockingKnownIds: [],
       logs: {},
       pendingIds: [],
       error: null,
@@ -373,5 +389,67 @@ describe('processesStore', () => {
     const list = bySession(useProcessesStore.getState(), 's1')
     expect(list.map((run) => run.id).sort()).toEqual(['a', 'c'])
     expect(bySession(useProcessesStore.getState(), 'unknown')).toEqual([])
+  })
+
+  it('load наполняет blocking в порядке сервера и помечает снимок загруженным', async () => {
+    mocks.listProcessesWithBlocking.mockResolvedValue({
+      runs: [makeRun('run')],
+      blocking: [
+        { id: 'blk_2', kind: 'process', sessionId: 's1', title: 'npm test' },
+        { id: 'blk_1', kind: 'subagent', sessionId: 's1', title: 'аудит' },
+      ],
+    })
+
+    await useProcessesStore.getState().load({ sessionId: 's1' })
+
+    const state = useProcessesStore.getState()
+    expect(mocks.listProcessesWithBlocking).toHaveBeenCalledWith({ sessionId: 's1' })
+    expect(state.blocking.map((run) => run.id)).toEqual(['blk_2', 'blk_1'])
+    expect(state.blockingLoaded).toBe(true)
+  })
+
+  it('load чистит блокирующие только своего скоупа', async () => {
+    useProcessesStore.setState({
+      blocking: [
+        { id: 's1-stale', kind: 'process', sessionId: 's1' },
+        { id: 's2-run', kind: 'process', sessionId: 's2' },
+      ],
+      blockingLoaded: true,
+      blockingScope: { sessionId: 's1' },
+      blockingScopeKey: 'session:s1',
+      blockingKnownIds: ['s1-stale'],
+    })
+    mocks.listProcessesWithBlocking.mockResolvedValue({ runs: [], blocking: [] })
+
+    await useProcessesStore.getState().load({ sessionId: 's1' })
+
+    const ids = useProcessesStore.getState().blocking.map((run) => run.id)
+    expect(ids).toEqual(['s2-run'])
+  })
+
+  it('refreshBlocking перечитывает последний скоуп', async () => {
+    mocks.listProcessesWithBlocking.mockResolvedValue({
+      runs: [],
+      blocking: [{ id: 'blk_1', kind: 'process', sessionId: 's1' }],
+    })
+    useProcessesStore.setState({ blockingLoaded: true, blockingScope: { sessionId: 's1' } })
+
+    await useProcessesStore.getState().refreshBlocking()
+
+    expect(mocks.listProcessesWithBlocking).toHaveBeenCalledWith({ sessionId: 's1' })
+    expect(useProcessesStore.getState().blocking.map((run) => run.id)).toEqual(['blk_1'])
+  })
+
+  it('applyEvent process.detached сохраняет вид прогона и дочернюю сессию', () => {
+    useProcessesStore.getState().applyEvent('process.detached', {
+      session_id: 's1',
+      kind: 'subagent',
+      id: 'child-1',
+      child_session_id: 'child-1',
+      background_run_id: 'bgr_1',
+    })
+
+    const run = useProcessesStore.getState().byId['bgr_1']
+    expect(run).toMatchObject({ kind: 'subagent', childSessionId: 'child-1', status: 'running' })
   })
 })

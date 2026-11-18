@@ -131,6 +131,7 @@ export const dict = {
   'settings.category.maintenance': 'Обслуживание',
   'settings.category.metrics': 'Метрики',
   'settings.category.terminals': 'Терминалы',
+  'settings.category.background': 'Фоновая работа',
   'settings.category.memory': 'Память',
   'settings.category.contextWindow': 'Окно контекста',
   'settings.category.contextManagement': 'Управление контекстом',
@@ -194,6 +195,57 @@ export const dict = {
   'settings.terminals.audit.description':
     'в журнал пишутся кадры с Enter; остальной ввод — только метрики',
   'settings.terminals.rangeError': 'Значение вне допустимых границ',
+  // Фоновая работа: единый реестр прогонов (настройки `/settings/background`).
+  'settings.background.description':
+    'Фоновая работа инстанса: мастер-выключатель, лимиты одновременных прогонов, размер лога и срок хранения записей реестра.',
+  'settings.background.runtime.title': 'Общие',
+  'settings.background.runtime.description':
+    'Применяются сразу — рестарт не требуется. Приоритет: ENV > runtime > config > default.',
+  'settings.background.enabled.label': 'Фоновая работа включена',
+  'settings.background.enabled.description':
+    'Мастер-выключатель: когда выключен, блокирующие прогоны не переводятся в фон, а новые фоновые не запускаются.',
+  'settings.background.defaults':
+    'База: включена — {enabled}, лимит прогонов на сессию — {maxRuns}.',
+  'settings.background.limits.title': 'Лимиты одновременной работы',
+  'settings.background.limits.description':
+    '0 — без лимита. Действует на новые запуски сразу.',
+  'settings.background.maxSubagents.label': 'Саб-агентов на сессию',
+  'settings.background.maxSubagents.description':
+    'максимум одновременно идущих саб-агентов в одной сессии',
+  'settings.background.maxProcesses.label': 'Процессов на сессию',
+  'settings.background.maxProcesses.description':
+    'максимум одновременно идущих шелл-процессов в одной сессии',
+  'settings.background.maxRuns.label': 'Прогонов на сессию',
+  'settings.background.maxRuns.description':
+    'общий предел фоновых прогонов одной сессии',
+  'settings.background.retention.title': 'Лог и хранение',
+  'settings.background.retention.description':
+    'Размер файла лога прогона и срок хранения записей реестра.',
+  'settings.background.logMaxBytes.label': 'Предел размера лога, байт',
+  'settings.background.logMaxBytes.description':
+    '0 — без лимита; хвост сверх предела теряется',
+  'settings.background.retention.label': 'Срок хранения, дней',
+  'settings.background.retention.fieldDescription':
+    '0 или меньше — без ограничения',
+  'settings.background.field.invalid': 'Укажите целое число',
+  'settings.background.source.env': 'задано через ENV',
+  'settings.background.source.runtime': 'runtime',
+  'settings.background.source.config': 'config',
+  'settings.background.source.default': 'default',
+  'settings.background.envBadge': 'задано через ENV',
+  'settings.background.envBanner':
+    'Значение зафиксировано переменной окружения — из UI его не изменить.',
+  'settings.background.envFields': 'Зафиксированы через ENV: {fields}',
+  'settings.background.envFieldBadge': 'ENV',
+  'settings.background.envLocked': 'Значение зафиксировано переменной окружения',
+  'settings.background.saved': 'Настройки фоновой работы сохранены',
+  'settings.background.saveError': 'Не удалось сохранить: {error}',
+  'settings.background.resetDone': 'Настройки фоновой работы сброшены к базе',
+  'settings.background.reset': 'Сбросить',
+  'settings.background.conflict':
+    'Значение зафиксировано переменной окружения — измените его в окружении.',
+  'settings.background.loadError': 'Не удалось загрузить настройки фоновой работы',
+  'settings.background.retry': 'Повторить',
   'settings.agentsLimits.description': 'Бюджет промпта саб-агента (токены). 0 — без лимита. У саб-агентов нет авто-сжатия контекста, поэтому при 0 длинный прогон может упереться в окно модели.',
   'settings.agentsLimits.field.title': 'Бюджет промпта',
   'settings.agentsLimits.field.description': 'Предохранитель объёма входного промпта саб-агента. Действует на следующие прогоны без перезапуска.',
@@ -1672,13 +1724,25 @@ export const dict = {
 
   // Фоновые процессы и фоновые саб-агенты (PROP-096/097)
   'processes.title': 'Фоновые процессы',
-  'processes.section.subagent': 'Саб-агенты',
+  'processes.section.subagent': 'Фоновые саб-агенты',
+  'processes.section.blockingSubagent': 'Блокирующие саб-агенты',
+  'processes.section.blockingProcess': 'Блокирующие процессы',
   'processes.count.process': '{count, plural, one {# процесс} few {# процесса} many {# процессов}}',
   'processes.count.subagent': '{count, plural, one {# саб-агент} few {# саб-агента} many {# саб-агентов}}',
+  'processes.count.blockingSubagent':
+    '{count, plural, one {# саб-агент} few {# саб-агента} many {# саб-агентов}}',
+  'processes.count.blockingProcess':
+    '{count, plural, one {# процесс} few {# процесса} many {# процессов}}',
   'processes.empty.process': 'Фоновых процессов нет',
   'processes.emptyHint.process': 'Фоновые шелл-команды появятся здесь.',
   'processes.empty.subagent': 'Саб-агентов нет',
   'processes.emptyHint.subagent': 'Фоновые саб-агенты появятся здесь.',
+  'processes.empty.blockingSubagent': 'Блокирующих саб-агентов нет',
+  'processes.emptyHint.blockingSubagent':
+    'Саб-агент, идущий внутри хода, появится здесь — его можно перевести в фон.',
+  'processes.empty.blockingProcess': 'Блокирующих процессов нет',
+  'processes.emptyHint.blockingProcess':
+    'Команда, идущая внутри хода, появится здесь — её можно остановить или перевести в фон.',
   'processes.empty.noContext': 'Выберите сессию или проект',
   'processes.loadError': 'Не удалось загрузить фоновые прогоны: {error}',
   'processes.filter.title': 'Фильтр по виду',
@@ -1698,6 +1762,11 @@ export const dict = {
   'processes.action.openSession': 'Открыть сессию',
   'processes.action.output': 'Вывод',
   'processes.action.refreshLog': 'Обновить лог',
+  // ADR-111 §detach: действия блокирующего прогона.
+  'processes.action.detach': 'В фон',
+  'processes.action.open': 'Открыть',
+  'processes.blocking.liveHint': 'Live-лог обновляется автоматически',
+  'processes.blocking.finished': 'Прогон завершён — новых записей в логе нет',
   // PROP-142 §2: продолжение потерянного прогона саб-агента (`status='orphaned'`).
   'processes.resumeLost': 'Продолжить',
   'processes.resumeLostDone': 'Прогон сабагента продолжен',
@@ -1968,6 +2037,9 @@ export const dict = {
   'chat.background.hint': 'ctrl+b',
   'notify.background.moved': 'Переведено в фон: {count}',
   'notify.background.moveFailed': 'Не удалось перевести в фон',
+  // ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
+  'notify.background.autoDetached':
+    'Блокирующие прогоны автоматически переведены в фон: {count}',
   // ADR-112: уведомление о вопросе пользователю (сессия не открыта).
   'notify.question.asked': 'Агент ждёт ответа: {name}',
   'notify.message.mentioned': 'Вас упомянули в сессии',
@@ -4464,6 +4536,10 @@ export const dict = {
   'process.background_disabled': 'Фоновые процессы выключены (background.enabled: false)',
   'process.detached_started':
     'Команда переведена в фон (processId: {id}). Вывод: {log}',
+  'background.started.process':
+    'Команда запущена в фоне (processId: {id}). Вывод: {log}. Уведомление придёт автоматически.',
+  'background.started.subagent':
+    'Саб-агент выполняется в фоне (sessionID: {id}). Уведомление придёт автоматически.',
   'process.tool.empty': 'Нет фоновых прогонов',
   'process.tool.not_found': 'Фоновый прогон «{id}» не найден',
   'process.tool.deps_unavailable': 'Реестр фоновых прогонов недоступен в этой сборке',

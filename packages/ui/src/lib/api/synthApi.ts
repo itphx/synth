@@ -58,6 +58,7 @@ import { memoryApi } from './memory'
 import { sessionMemoryApi } from './session-memory'
 import { questionsApi } from './questions'
 import { processesApi } from './processes'
+import { backgroundSettingsApi } from './backgroundSettings'
 import { worktreesApi } from './worktrees'
 import { executionApi } from './execution'
 import { terminalsApi } from './terminals'
@@ -490,14 +491,25 @@ export type {
   BackgroundRunKind,
   BackgroundRunRecord,
   BackgroundRunStatus,
+  BlockingRun,
+  BlockingStopResponse,
   ProcessesListOptions,
   ProcessesListResponse,
+  ProcessesWithBlockingResponse,
   ProcessLogStream,
   ProcessLogsOptions,
   ProcessLogsResponse,
   ProcessResponse,
   ProcessStopResponse,
 } from './processes'
+// Runtime-настройки фоновой работы (`/api/v2/settings/background`).
+export type {
+  BackgroundSettings,
+  BackgroundSettingsField,
+  BackgroundSettingsPatch,
+  BackgroundSettingsSource,
+  BackgroundSettingsValues,
+} from './backgroundSettings'
 // ADR-114: инвентарь git-worktree проекта (per-session рабочий каталог).
 export type {
   WorktreeRecord,
@@ -640,11 +652,19 @@ export const synthApi = {
   // под своими префиксами, чтобы не переопределить чужие методы.
   ...{
     listProcesses: processesApi.list,
+    // ADR-111 §detach: реестр + блокирующие прогоны и live-лог/остановка
+    // блокирующего прогона — имена с префиксом домена.
+    listProcessesWithBlocking: processesApi.listWithBlocking,
+    stopBlockingRun: processesApi.stopBlocking,
+    getBlockingLogs: processesApi.blockingLogs,
     getProcess: processesApi.get,
     getProcessLogs: processesApi.logs,
     stopProcess: processesApi.stop,
     removeProcess: processesApi.remove,
   },
+  // Настройки фоновой работы — имена с префиксом домена (`get`/`update`/`reset`
+  // в barrel заняты соседними доменами).
+  ...backgroundSettingsApi,
   // PROP-132: терминалы — имена с префиксом домена (`list`/`get`/`close`
   // в barrel уже заняты соседними доменами).
   ...{

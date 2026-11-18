@@ -8,6 +8,7 @@
 // переключаются потоки вывода (`combined`/`stdout`/`stderr`).
 
 import { useUIStore } from '@/stores/useUIStore'
+import type { BlockingRun } from '@/lib/api/synthApi'
 
 /** Минимальный снимок фонового прогона, нужный для открытия вкладки. */
 export interface ProcessLogTabTarget {
@@ -38,6 +39,34 @@ export function openProcessLogTab(run: ProcessLogTabTarget): void {
     data: {
       processRunId: run.id,
       ...(run.projectId ? { projectId: run.projectId } : {}),
+      ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+    },
+  })
+}
+
+/** Заголовок вкладки live-лога блокирующего прогона: имя → id. */
+export function blockingLogTabTitle(run: Pick<BlockingRun, 'id' | 'title'>): string {
+  return run.title || run.id
+}
+
+/**
+ * Открыть (или переключиться на) вкладку **live-лога** блокирующего прогона
+ * (ADR-111 §detach).
+ *
+ * Вкладка отличается от `process-log` источником: у блокирующего прогона нет
+ * записи реестра, лог читается `GET /processes/blocking/:id/logs` и
+ * догружается по смещению, пока прогон идёт. id вкладки — свой префикс
+ * (`blocking-`), чтобы не столкнуться с вкладкой фонового прогона.
+ */
+export function openBlockingLogTab(run: BlockingRun): void {
+  if (!run.id) return
+  useUIStore.getState().openTab({
+    id: `blocking-${run.id}`,
+    type: 'process-log',
+    title: blockingLogTabTitle(run),
+    data: {
+      blockingRunId: run.id,
+      ...(run.title ? { blockingRunTitle: run.title } : {}),
       ...(run.sessionId ? { sessionId: run.sessionId } : {}),
     },
   })

@@ -26,8 +26,12 @@ vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   listProcesses: vi.fn(),
+  listProcessesWithBlocking: vi.fn(),
+  /** Снимок блокирующих, который вернёт `listProcessesWithBlocking` в тесте. */
+  blocking: [] as Array<Record<string, unknown>>,
   getProcessLogs: vi.fn(),
   stopProcess: vi.fn(),
+  stopBlockingRun: vi.fn(),
   removeProcess: vi.fn(),
   runSessionScript: vi.fn(),
   resumeSubagent: vi.fn(),
@@ -35,13 +39,17 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
   listTerminals: vi.fn(),
   openProcessLogTab: vi.fn(),
+  openBlockingLogTab: vi.fn(),
+  moveSessionToBackground: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({
   synthApi: {
     listProcesses: mocks.listProcesses,
+    listProcessesWithBlocking: mocks.listProcessesWithBlocking,
     getProcessLogs: mocks.getProcessLogs,
     stopProcess: mocks.stopProcess,
+    stopBlockingRun: mocks.stopBlockingRun,
     removeProcess: mocks.removeProcess,
     runSessionScript: mocks.runSessionScript,
     resumeSubagent: mocks.resumeSubagent,
@@ -56,7 +64,14 @@ vi.mock('@/lib/api/terminals', async (importOriginal) => {
   }
 })
 // Экран вывода — отдельная центральная вкладка; в тесте проверяем вызов.
-vi.mock('@/lib/processTabs', () => ({ openProcessLogTab: mocks.openProcessLogTab }))
+vi.mock('@/lib/processTabs', () => ({
+  openProcessLogTab: mocks.openProcessLogTab,
+  openBlockingLogTab: mocks.openBlockingLogTab,
+}))
+// Перевод блокирующего прогона в фон — общий шов (сеть и тост внутри).
+vi.mock('@/lib/backgroundDetach', () => ({
+  moveSessionToBackground: mocks.moveSessionToBackground,
+}))
 vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 vi.mock('@/hooks/useNotification', () => ({
   notifyMessage: mocks.notify,
@@ -165,6 +180,11 @@ async function toggleWholeProject(container: HTMLElement): Promise<void> {
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.listProcesses.mockResolvedValue([])
+  mocks.blocking = []
+  mocks.listProcessesWithBlocking.mockImplementation(async (opts?: unknown) => ({
+    runs: await mocks.listProcesses(opts),
+    blocking: mocks.blocking,
+  }))
   mocks.listTerminals.mockResolvedValue({
     terminals: [],
     total: 0,
@@ -180,7 +200,9 @@ beforeEach(() => {
     truncated: false,
   })
   mocks.stopProcess.mockResolvedValue({ status: 'stopping' })
+  mocks.stopBlockingRun.mockResolvedValue({ stopped: true })
   mocks.removeProcess.mockResolvedValue(undefined)
+  mocks.moveSessionToBackground.mockResolvedValue({ sessionId: 's1', detached: [] })
   mocks.resumeSubagent.mockResolvedValue({ status: 'started' })
   mocks.runSessionScript.mockResolvedValue({
     run_id: 'bgr_2',
@@ -193,6 +215,11 @@ beforeEach(() => {
   useProcessesStore.setState({
     byId: {},
     order: [],
+    blocking: [],
+    blockingLoaded: false,
+    blockingScope: null,
+    blockingScopeKey: null,
+    blockingKnownIds: [],
     logs: {},
     pendingIds: [],
     error: null,
@@ -306,7 +333,7 @@ describe('ProcessesTab — реестр фоновой работы (PROP-096/09
       container.querySelector('[data-testid="processes-section-process-count"]')?.textContent,
     ).toBe('1 process')
     expect(container.querySelector('[data-testid="processes-section-subagent-title"]')?.textContent).toBe(
-      'Sub-agents',
+      'Background subagents',
     )
     expect(
       container.querySelector('[data-testid="processes-section-subagent-count"]')?.textContent,
@@ -764,5 +791,94 @@ describe('ProcessesTab — терминалы при активной вклад
 
     expect(container.querySelector('[data-testid="terminals-item-t1"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="terminals-item-t2"]')).not.toBeNull()
+  })
+
+  // ADR-111 §detach: блокирующие прогоны (идут внутри хода).
+  it('две блокирующие секции: заголовки, счётчики и карточки', async () => {
+    mocks.blocking = [
+      { id: 'blk_p1', kind: 'process', sessionId: 's1', title: 'npm test' },
+      { id: 'blk_s1', kind: 'subagent', sessionId: 's1', title: 'аудит', childSessionId: 'child-1' },
+    ]
+
+    const container = await renderProcesses()
+
+    expect(
+      container.querySelector('[data-testid="processes-section-blocking-subagent-title"]')?.textContent,
+    ).toBe('Blocking subagents')
+    expect(
+      container.querySelector('[data-testid="processes-section-blocking-process-title"]')?.textContent,
+    ).toBe('Blocking processes')
+    expect(
+      container.querySelector('[data-testid="processes-section-blocking-subagent-count"]')?.textContent,
+    ).toBe('1 sub-agent')
+    expect(
+      container.querySelector('[data-testid="processes-section-blocking-process-count"]')?.textContent,
+    ).toBe('1 process')
+    expect(container.querySelector('[data-testid="processes-blocking-item-blk_p1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-blocking-item-blk_s1"]')).not.toBeNull()
+  })
+
+  it('пустые состояния блокирующих секций', async () => {
+    const container = await renderProcesses()
+
+    expect(
+      container.querySelector('[data-testid="processes-empty-blocking-subagent"]')?.textContent,
+    ).toContain('No blocking subagents')
+    expect(
+      container.querySelector('[data-testid="processes-empty-blocking-process"]')?.textContent,
+    ).toContain('No blocking processes')
+  })
+
+  it('блокирующие: «Остановить» вызывает stopBlockingRun', async () => {
+    mocks.blocking = [{ id: 'blk_p1', kind: 'process', sessionId: 's1', title: 'npm test' }]
+
+    const container = await renderProcesses()
+    await click(container, 'processes-blocking-stop-blk_p1')
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.stopBlockingRun).toHaveBeenCalledWith('blk_p1')
+  })
+
+  it('блокирующие: «В фон» переводит прогон с его видом', async () => {
+    mocks.blocking = [{ id: 'blk_s1', kind: 'subagent', sessionId: 's1', title: 'аудит' }]
+
+    const container = await renderProcesses()
+    await click(container, 'processes-blocking-detach-blk_s1')
+
+    expect(mocks.moveSessionToBackground).toHaveBeenCalledWith('s1', { type: 'subagent' })
+  })
+
+  it('блокирующие: «Открыть» — live-лог процесса и дочерняя сессия саб-агента', async () => {
+    mocks.blocking = [
+      { id: 'blk_p1', kind: 'process', sessionId: 's1', title: 'npm test' },
+      { id: 'blk_s1', kind: 'subagent', sessionId: 's1', title: 'аудит', childSessionId: 'child-1' },
+    ]
+
+    const container = await renderProcesses()
+    await click(container, 'processes-blocking-open-blk_p1')
+    await click(container, 'processes-blocking-open-blk_s1')
+
+    expect(mocks.openBlockingLogTab).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'blk_p1', kind: 'process' }),
+    )
+    const tabs = useUIStore.getState().centerTabs
+    expect(tabs.some((tab) => tab.data?.sessionId === 'child-1')).toBe(true)
+  })
+
+  it('фильтр вида показывает только соответствующую блокирующую секцию', async () => {
+    mocks.blocking = [
+      { id: 'blk_p1', kind: 'process', sessionId: 's1', title: 'npm test' },
+      { id: 'blk_s1', kind: 'subagent', sessionId: 's1', title: 'аудит' },
+    ]
+
+    const container = await renderProcesses()
+    await click(container, 'processes-filter-process')
+
+    expect(container.querySelector('[data-testid="processes-section-blocking-process"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-section-blocking-subagent"]')).toBeNull()
+
+    await click(container, 'processes-filter-terminal')
+    expect(container.querySelector('[data-testid="processes-section-blocking-process"]')).toBeNull()
+    expect(container.querySelector('[data-testid="processes-section-blocking-subagent"]')).toBeNull()
   })
 })

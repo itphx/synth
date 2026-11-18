@@ -29,8 +29,7 @@ const EXPECTED_API_METHODS = [
   'drainExecutionPool', 'enablePlugin', 'enqueueMessage', 'expandSnippets', 'fetchGitRepo', 'fetchJSON', 'fetchModels', 'fetchProviderIcon',
   'forkRemoteProject', 'forkSession', 'get', 'getAgentDetail', 'getAgents', 'getAgentsLimits', 'getAllAgents',
   'getAnalyticsActivity', 'getAnalyticsDecision', 'getAnalyticsExport', 'getAnalyticsPrompt',
-  'getAnalyticsSummary', 'getAnalyticsUsage', 'getAttachmentsSettings', 'getAudit', 'getCommandAudit', 'getCommands',
-  'getCommitDetail', 'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig', 'getDecisionMetrics',
+  'getAnalyticsSummary', 'getAnalyticsUsage', 'getAttachmentsSettings', 'getAudit', 'getBackgroundSettings', 'getBlockingLogs', 'getCommandAudit', 'getCommands', 'getCommitDetail', 'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig', 'getDecisionMetrics',
   'getDecisionSettings', 'getDefaultAgentInfo', 'getDefaultModel', 'getDictionaries', 'getDictionary', 'getDirectory',
   'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
   'getEventsSettings', 'getExecutionPools', 'getExecutionProfiles', 'getExecutionSettings', 'getGatewayPatterns', 'getGroupsDirectory', 'getHealth', 'getHybridStatus', 'getInstanceCapabilities',
@@ -53,14 +52,13 @@ const EXPECTED_API_METHODS = [
   'getWorkspaceRoot', 'getWorkspaceSetting', 'initGitRepo', 'installPlugin', 'instantiatePipelineTemplate',
   'list', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings', 'listMemoryFacts',
   'listMemoryIndexes', 'listPendingPermissions', 'listPipelineRuns', 'listPipelineRunsPage', 'listPluginAudit', 'listPlugins',
-  'listProcesses', 'listSessionScripts', 'listSnippets', 'listSshKeys', 'listTerminals', 'listTimers', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'listProcesses', 'listProcessesWithBlocking', 'listSessionScripts', 'listSnippets', 'listSshKeys', 'listTerminals', 'listTimers', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'moveProjectPlanItem', 'patchSessionMode', 'patchTimer', 'pauseTimer', 'permissionReply', 'pinMessage', 'probeMcpServer', 'probeRawFile',
   'pruneCommandAudit', 'pruneWorktrees', 'publishProject', 'publishProjectPipeline', 'putProjectInvariants', 'putSkillFile', 'putUpdatesSettings',
   'rawFileUrl', 'readFile', 'rebuildMemoryIndex', 'recoveryRetry', 'refreshOAuthCredential', 'regenerateWebhookSecret',
   'registerGitRepo', 'releaseExecutionPool', 'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin',
   'removeProcess', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'removeTimer', 'removeWorktree',
-  'reorderProjectPlanColumns', 'reorderQueue', 'reorderSessionTodos', 'reset', 'resetAgentsLimits',
-  'resetAttachmentsSettings', 'resetContextFile', 'resetDecisionMetrics', 'resetDecisionSettings',
+  'reorderProjectPlanColumns', 'reorderQueue', 'reorderSessionTodos', 'reset', 'resetAgentsLimits', 'resetAttachmentsSettings', 'resetBackgroundSettings', 'resetContextFile', 'resetDecisionMetrics', 'resetDecisionSettings',
   'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary', 'resetEgressPolicy', 'resetEventsSettings',
   'resetExecutionSettings',
   'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy', 'resetMcpPolicy',
@@ -73,9 +71,9 @@ const EXPECTED_API_METHODS = [
   'saveToolsDisabled', 'saveToolsPolicy', 'scanGitRepos', 'scheduleRestore', 'sendTerminalInput', 'setAgentsLimits', 'setDefaultAgent',
   'setDefaultClient', 'setDefaultModel', 'setEnabled', 'setMemoryIndexEnabled', 'setProfilePassword',
   'setProxyPassword', 'setRequestLimits', 'setSshMode', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting', 'startPipelineRun',
-  'status', 'steerQueue', 'stopGeneration', 'stopProcess', 'stopTimer', 'summarizeSession', 'testProvider', 'testProxyRoute',
+  'status', 'steerQueue', 'stopBlockingRun', 'stopGeneration', 'stopProcess', 'stopTimer', 'summarizeSession', 'testProvider', 'testProxyRoute',
   'testWebhookSubscription', 'toggleAgent', 'toggleContextFile', 'toggleMessage', 'transferProject', 'uninstallPack',
-  'unlinkAgentSshKey', 'updateAttachmentsSettings', 'updateDecisionSettings', 'updateEventBindingKey',
+  'unlinkAgentSshKey', 'updateAttachmentsSettings', 'updateBackgroundSettings', 'updateDecisionSettings', 'updateEventBindingKey',
   'updateEventsSettings', 'updateMcpRegistryEntry', 'updateOptimization', 'updatePlugin', 'updatePluginsSettings',
   'updateProject', 'updateProjectLogEntry', 'updateProjectMcp', 'updateProjectPipeline',
   'updateProjectPlanColumn', 'updateProjectPlanItem', 'updateProjectSkills', 'updateProvider', 'updateSchedule',
@@ -88,7 +86,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (428)', () => {
+  it('набор методов совпадает с зафиксированным (450)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

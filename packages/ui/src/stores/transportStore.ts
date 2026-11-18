@@ -1646,6 +1646,18 @@ function notifyBackgroundRun(type: string, payload: Record<string, unknown>): vo
 }
 
 /**
+ * Перечитать блокирующие прогоны после события detach.
+ *
+ * Только если снимок уже был загружен (иначе панель «Процессы» ещё не
+ * открывалась, и событию нечего обновлять — панель загрузит список сама).
+ */
+function refreshBlockingSnapshot(): void {
+  const store = useProcessesStore.getState()
+  if (!store.blockingLoaded) return
+  void store.refreshBlocking()
+}
+
+/**
  * Фаза связи — источник истины для индикации в UI. `connected` оставлен без
  * изменения семантики (на нём завязаны Header и тесты), но он не различает
  * «первое подключение» и «потеря связи», поэтому для баннера/индикатора
@@ -1741,6 +1753,29 @@ export function createDispatcher(): EventDispatcher {
     if (type.startsWith('process.') || type.startsWith('child.')) {
       useProcessesStore.getState().applyEvent(type, payload)
       notifyBackgroundRun(type, payload)
+      // ADR-111 §detach: прогон переехал из блокирующих в фоновые — снимок
+      // блокирующих в панели «Процессы» больше не актуален.
+      if (type === 'process.detached') refreshBlockingSnapshot()
+      return
+    }
+
+    // ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
+    // Событие публикуется только когда хоть один прогон переведён; UI
+    // показывает тост и перечитывает блокирующие (запись ушла из «в процессе
+    // хода» в реестр фоновых). Разбирается ДО проверки `sid`: id сессии лежит
+    // в payload, в кадре WS его может не быть.
+    if (type === 'background.auto_detached') {
+      const detached = Array.isArray(payload.detached) ? payload.detached : []
+      const count = detached.length
+      if (count > 0) {
+        notifyMessage({
+          text: i18nText('notify.background.autoDetached', { count }),
+          type: 'info',
+          category: 'system',
+          ...(sid && sid !== INSTANCE_CHANNEL_ID ? { sessionId: sid } : {}),
+        })
+      }
+      refreshBlockingSnapshot()
       return
     }
 

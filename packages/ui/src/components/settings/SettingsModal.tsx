@@ -43,6 +43,7 @@ import { PluginsSettings } from "./PluginsSettings"
 import { MaintenanceSettings } from "./MaintenanceSettings"
 import { ObservabilitySettings } from "./ObservabilitySettings"
 import { TerminalAdminSettings } from "./TerminalAdminSettings"
+import { BackgroundSettings } from "./BackgroundSettings"
 import { MultimodalSettings } from "./MultimodalSettings"
 import { MemorySettings } from "./MemorySettings"
 import { ContextManagementSettings } from "../admin/ContextManagementSettings"
@@ -361,6 +362,7 @@ export const SettingsModal = () => {
             {activePage === "maintenance" && <MaintenanceSettings />}
             {activePage === "metrics" && <ObservabilitySettings />}
             {activePage === "terminals" && <TerminalAdminSettings />}
+            {activePage === "background" && <BackgroundSettings />}
             {activePage === "contextManagement" && <ContextManagementSettings />}
             {activePage === "agentsLimits" && <AgentsLimitsSettings />}
             {activePage === "attachments" && <MultimodalSettings />}

@@ -14,6 +14,7 @@ vi.mock('@/lib/api/synthApi', () => ({
       next_offset: null,
     }),
     listProcesses: vi.fn().mockResolvedValue([]),
+    listProcessesWithBlocking: vi.fn().mockResolvedValue({ runs: [], blocking: [] }),
   },
 }))
 vi.mock('@/hooks/useNotification', () => ({
@@ -25,10 +26,12 @@ import { useProcessesStore } from './processesStore'
 import { useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { notifyMessage } from '@/hooks/useNotification'
+import { synthApi } from '@/lib/api/synthApi'
 import type { WSEvent } from '@/lib/api/transport'
 
 const dispatch = createDispatcher()
 const notify = vi.mocked(notifyMessage)
+const listWithBlocking = vi.mocked(synthApi.listProcessesWithBlocking)
 
 function makeEvent(type: string, sessionId: string | undefined, data: Record<string, unknown>): WSEvent {
   return {
@@ -47,10 +50,16 @@ function lastText(): string {
 describe('transportStore: уведомления о фоновых прогонах (ADR-111/ADR-113)', () => {
   beforeEach(() => {
     notify.mockClear()
+    listWithBlocking.mockClear()
     useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
     useProcessesStore.setState({
       byId: {},
       order: [],
+      blocking: [],
+      blockingLoaded: false,
+      blockingScope: null,
+      blockingScopeKey: null,
+      blockingKnownIds: [],
       logs: {},
       pendingIds: [],
       error: null,
@@ -229,5 +238,51 @@ describe('transportStore: уведомления о фоновых прогон�
     }))
 
     expect(lastText()).toBe('Background process completed: npm run build')
+  })
+
+  // ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
+  it('background.auto_detached → тост с количеством и рефреш блокирующих', async () => {
+    useProcessesStore.setState({
+      blockingLoaded: true,
+      blockingScope: { sessionId: 's1' },
+      blockingScopeKey: 'session:s1',
+      blockingKnownIds: [],
+      blocking: [],
+    })
+    listWithBlocking.mockResolvedValueOnce({
+      runs: [],
+      blocking: [{ id: 'blk_bg', kind: 'process', sessionId: 's1' }],
+    })
+
+    dispatch(makeEvent('background.auto_detached', 's1', {
+      session_id: 's1',
+      detached: [
+        { id: 'blk_1', kind: 'process' },
+        { id: 'blk_2', kind: 'subagent', title: 'аудит' },
+      ],
+    }))
+
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0]![0]).toMatchObject({
+      text: 'Blocking runs moved to background automatically: 2',
+      type: 'info',
+      category: 'system',
+      sessionId: 's1',
+    })
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(listWithBlocking).toHaveBeenCalledWith({ sessionId: 's1' })
+    expect(useProcessesStore.getState().blocking.map((run) => run.id)).toEqual(['blk_bg'])
+  })
+
+  it('background.auto_detached без загруженного стора не дёргает сеть', () => {
+    dispatch(makeEvent('background.auto_detached', 's1', {
+      session_id: 's1',
+      detached: [{ id: 'blk_1', kind: 'process' }],
+    }))
+
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(listWithBlocking).not.toHaveBeenCalled()
   })
 })
