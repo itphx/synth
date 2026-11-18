@@ -57,20 +57,6 @@ export interface StandaloneOptionsInput {
 }
 
 /**
- * Профиль-дефолты LLM-шлюза для **гибридного** режима (PROP-139): локальный
- * core + центральный сервер (ADR-045) — обфускация секретов, аудит каждого
- * запроса и rate limit должны работать «из коробки», как в managed
- * (`packages/backend/src/lib/app-config.ts`).
- *
- * Дефолт профиля — **ниже** явной конфигурации (ADR-023): CLI >
- * `SYNTH_LLM_GATEWAY_ENABLED`/env > `config.yaml` > профиль > общий дефолт.
- * Standalone профиль не применяет — там шлюз остаётся выключенным.
- */
-export function hybridGatewayBaseDefaults(): { llmGateway: { enabled: true } } {
-  return { llmGateway: { enabled: true } };
-}
-
-/**
  * Собирает `Partial<StandaloneConfig>` из `SynthConfig`.
  *
  * Возвращаются все поля `StandaloneConfig`, выводимые из конфига. Запуск-специфичные

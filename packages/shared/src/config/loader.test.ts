@@ -263,12 +263,13 @@ describe('loadConfig — SYNTH_BOOTSTRAP_SERVICE_KEYS (ADR-052/O1)', () => {
 });
 
 /**
- * F4 (аудит S1) / PROP-139: профильные дефолты (`baseDefaults`) — выше общего
- * `defaultConfig`, но ниже config.yaml/env/CLI. Механизм один для профилей
- * managed и hybrid (LLM-шлюз по умолчанию включён — см.
- * `hybridGatewayBaseDefaults` в core).
+ * ADR-147: `llmGateway.enabled` — единый дефолт для всех профилей (включён);
+ * профильных различий больше нет (ранее — ADR-139/PROP-139). Явный opt-out
+ * (`config.yaml`/env/CLI-overrides) перебивает дефолт по общему приоритету
+ * ADR-023. Профильный механизм `baseDefaults` остаётся нужен бэкенду для
+ * `security.commandAudit` (PROP-136), но к LLM-шлюзу больше не применяется.
  */
-describe('loadConfig — baseDefaults профиля (F4, PROP-139)', () => {
+describe('loadConfig — llmGateway.enabled, единый дефолт (ADR-147)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {
@@ -280,54 +281,45 @@ describe('loadConfig — baseDefaults профиля (F4, PROP-139)', () => {
   });
 
   async function writeConfig(yaml: string): Promise<string> {
-    dir = await mkdtemp(join(tmpdir(), 'synth-config-base-'));
+    dir = await mkdtemp(join(tmpdir(), 'synth-config-gateway-'));
     const path = join(dir, 'config.yaml');
     await writeFile(path, yaml, 'utf-8');
     return path;
   }
 
-  it('поднимает дефолт, не трогая остальные значения', async () => {
+  it('без config.yaml/env/baseDefaults — шлюз включён, остальные поля из общего дефолта', async () => {
     const cfg = await loadConfig({
       configPath: await writeConfig('{}\n'),
       env: {},
-      baseDefaults: { llmGateway: { enabled: true } },
     });
     expect(cfg.llmGateway.enabled).toBe(true);
     expect(cfg.llmGateway.inputMode).toBe(defaultConfig.llmGateway.inputMode);
+    expect(cfg.llmGateway.logPayloads).toBe(defaultConfig.llmGateway.logPayloads);
+    expect(cfg.llmGateway.rateLimit).toEqual(defaultConfig.llmGateway.rateLimit);
+    expect(cfg.llmGateway.audit.enabled).toBe(defaultConfig.llmGateway.audit.enabled);
   });
 
-  it('config.yaml перебивает профиль-дефолт', async () => {
+  it('config.yaml с enabled: false — шлюз выключен (явный opt-out)', async () => {
     const cfg = await loadConfig({
       configPath: await writeConfig('llmGateway:\n  enabled: false\n'),
       env: {},
-      baseDefaults: { llmGateway: { enabled: true } },
     });
     expect(cfg.llmGateway.enabled).toBe(false);
   });
 
-  it('env перебивает профиль-дефолт', async () => {
+  it('env SYNTH_LLM_GATEWAY_ENABLED=false — шлюз выключен', async () => {
     const cfg = await loadConfig({
       configPath: await writeConfig('{}\n'),
       env: { SYNTH_LLM_GATEWAY_ENABLED: 'false' },
-      baseDefaults: { llmGateway: { enabled: true } },
     });
     expect(cfg.llmGateway.enabled).toBe(false);
   });
 
-  it('CLI-overrides перебивают профиль-дефолт', async () => {
+  it('CLI-overrides с enabled: false — шлюз выключен', async () => {
     const cfg = await loadConfig({
       configPath: await writeConfig('{}\n'),
       env: {},
-      baseDefaults: { llmGateway: { enabled: true } },
       overrides: { llmGateway: { ...defaultConfig.llmGateway, enabled: false } },
-    });
-    expect(cfg.llmGateway.enabled).toBe(false);
-  });
-
-  it('без baseDefaults (standalone) шлюз остаётся выключенным', async () => {
-    const cfg = await loadConfig({
-      configPath: await writeConfig('{}\n'),
-      env: {},
     });
     expect(cfg.llmGateway.enabled).toBe(false);
   });

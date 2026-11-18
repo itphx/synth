@@ -6,13 +6,10 @@
  * standalone-инстанса из npm-пакета): тест фиксирует, что заполненный конфиг
  * целиком попадает в результат, а не только storage/metrics.
  */
-import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { defaultConfig, loadConfig } from '@itphx/synth-shared';
+import { describe, expect, it } from 'vitest';
+import { defaultConfig } from '@itphx/synth-shared';
 import type { ResolvedExecutionConfig, SynthConfig } from '@itphx/synth-shared';
-import { buildStandaloneOptions, hybridGatewayBaseDefaults } from './standalone-options.js';
+import { buildStandaloneOptions } from './standalone-options.js';
 
 const EXECUTION: ResolvedExecutionConfig = {
   mode: 'inline',
@@ -253,91 +250,5 @@ describe('buildStandaloneOptions', () => {
       env: {},
     });
     expect(options.workspaceOutsideRootPolicy).toBe('confirm');
-  });
-});
-
-/**
- * PROP-139: LLM-шлюз по умолчанию включён в managed **и в гибриде** (локальный
- * core + центральный сервер); standalone остаётся выключенным.
- *
- * Гибридный профиль применяется вторым проходом загрузки конфига (режим
- * известен только после первой загрузки) — здесь проверяется сам профиль и
- * приоритет: явные `config.yaml`/env выше профиля (ADR-023).
- */
-describe('hybridGatewayBaseDefaults (PROP-139)', () => {
-  let dir: string | null = null;
-
-  afterEach(async () => {
-    if (dir) {
-      await rm(dir, { recursive: true, force: true });
-      dir = null;
-    }
-  });
-
-  async function writeConfig(yaml: string): Promise<string> {
-    dir = await mkdtemp(join(tmpdir(), 'synth-hybrid-gw-'));
-    const path = join(dir, 'config.yaml');
-    await writeFile(path, yaml, 'utf-8');
-    return path;
-  }
-
-  it('профиль гибрида: llmGateway.enabled = true', () => {
-    expect(hybridGatewayBaseDefaults()).toEqual({ llmGateway: { enabled: true } });
-  });
-
-  it('профиль возвращается свежим объектом (общий мутируемый дефолт исключён)', () => {
-    const first = hybridGatewayBaseDefaults();
-    const second = hybridGatewayBaseDefaults();
-    expect(first).not.toBe(second);
-    expect(first.llmGateway).not.toBe(second.llmGateway);
-    expect(second).toEqual({ llmGateway: { enabled: true } });
-  });
-
-  it('двухпроходная загрузка: standalone → выключен, гибрид (профиль) → включён', async () => {
-    const path = await writeConfig('{}\n');
-
-    // Первый проход — как в standalone (профиля нет): шлюз выключен.
-    const standalone = await loadConfig({ configPath: path, env: {} });
-    expect(standalone.llmGateway.enabled).toBe(false);
-
-    // Второй проход — гибридный профиль: шлюз включён.
-    const hybrid = await loadConfig({
-      configPath: path,
-      env: {},
-      baseDefaults: hybridGatewayBaseDefaults(),
-    });
-    expect(hybrid.llmGateway.enabled).toBe(true);
-  });
-
-  it('явное отключение в config.yaml выше гибридного профиля', async () => {
-    const path = await writeConfig('llmGateway:\n  enabled: false\n');
-    const hybrid = await loadConfig({
-      configPath: path,
-      env: {},
-      baseDefaults: hybridGatewayBaseDefaults(),
-    });
-    expect(hybrid.llmGateway.enabled).toBe(false);
-  });
-
-  it('env SYNTH_LLM_GATEWAY_ENABLED=false выше гибридного профиля', async () => {
-    const path = await writeConfig('{}\n');
-    const hybrid = await loadConfig({
-      configPath: path,
-      env: { SYNTH_LLM_GATEWAY_ENABLED: 'false' },
-      baseDefaults: hybridGatewayBaseDefaults(),
-    });
-    expect(hybrid.llmGateway.enabled).toBe(false);
-  });
-
-  it('остальные настройки шлюза не затрагиваются профилем', async () => {
-    const path = await writeConfig('{}\n');
-    const hybrid = await loadConfig({
-      configPath: path,
-      env: {},
-      baseDefaults: hybridGatewayBaseDefaults(),
-    });
-    expect(hybrid.llmGateway.inputMode).toBe(defaultConfig.llmGateway.inputMode);
-    expect(hybrid.llmGateway.rateLimit).toEqual(defaultConfig.llmGateway.rateLimit);
-    expect(hybrid.llmGateway.audit.enabled).toBe(defaultConfig.llmGateway.audit.enabled);
   });
 });

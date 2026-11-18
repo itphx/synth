@@ -42,10 +42,11 @@ describe('buildAuthConfig — apiKeyRoles', () => {
 });
 
 /**
- * F4 (аудит S1): backend/managed-профиль включает LLM-шлюз по умолчанию
- * (обфускация, аудит, rate limit); config.yaml/env/runtime-тумблер перебивают.
+ * ADR-147: `llmGateway.enabled` включён по **общему** дефолту для всех
+ * профилей (ранее — профильный дефолт backend/managed, F4 аудита S1);
+ * config.yaml/env/runtime-тумблер перебивают.
  */
-describe('loadBackendConfig — дефолт llmGateway.enabled (F4)', () => {
+describe('loadBackendConfig — llmGateway.enabled (общий дефолт, ADR-147)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {
@@ -62,7 +63,7 @@ describe('loadBackendConfig — дефолт llmGateway.enabled (F4)', () => {
     return path;
   }
 
-  it('без config.yaml — шлюз включён (backend-профиль)', async () => {
+  it('без config.yaml — шлюз включён (общий дефолт, не профиль)', async () => {
     const cfg = await loadBackendConfig({ configPath: CONFIG_PATH });
     expect(cfg.synth.llmGateway.enabled).toBe(true);
   });

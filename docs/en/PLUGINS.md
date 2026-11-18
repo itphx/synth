@@ -326,8 +326,9 @@ role.
 
 3. **The filter.** Put a test AWS key into the request — the call must be rejected. Remember: the
    veto works only for a plugin whose actual trust is ≥ `trusted` **and** when the LLM gateway is
-   enabled (`llmGateway.enabled: true`). For a `community` plugin, `deny` is downgraded to `allow`
-   (the log shows `plugin_filter.deny_downgraded`).
+   enabled (`llmGateway.enabled: true`; the gateway is enabled by default — ADR-147). For a
+   `community` plugin, `deny` is downgraded to `allow` (the log shows
+   `plugin_filter.deny_downgraded`).
 
 4. **Status and journal.** `GET /api/v2/plugins` (or the "Plugins" section) shows the version, mode,
    trust, scan verdict, content-hash and activity; the operations journal is
@@ -534,8 +535,9 @@ sees the request in the form in which it will go to the provider (the secrets ar
 placeholders).
 
 **The gateway requirement.** The filters live inside `GatewayProvider`, therefore they apply **only
-when `llmGateway.enabled: true`**. With the gateway disabled the call goes around the gateway
-contour and the filters are not called — that is not a plugin error.
+when `llmGateway.enabled: true`** (the gateway is enabled by default — ADR-147). With the gateway
+disabled the call goes around the gateway contour and the filters are not called — that is not a
+plugin error.
 
 **The right to veto.** `deny`/`redact` act only for a plugin whose actual trust is ≥ `trusted`
 (`builtin`/`verified`/`trusted`). For `community` the host downgrades the verdict to `allow` and

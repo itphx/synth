@@ -27,8 +27,8 @@
 `browser_*`); [ADR-136](./arch_decisions/adr-136-shell-trust.md) — аудит исполнений и внешний чекер
 команд; [ADR-137](./arch_decisions/adr-137-executor-isolation.md) — non-root, read-only rootfs и
 сетевые классы; [ADR-138](./arch_decisions/adr-138-plugin-execution-contour.md) — `ctx.runtime` для
-плагинных тулов; [ADR-139](./arch_decisions/adr-139-llm-gateway-hybrid.md) — LLM-шлюз по умолчанию в
-managed и hybrid. Остатки и границы — в самих ADR.
+плагинных тулов; [ADR-147](./arch_decisions/adr-147-llm-gateway-default-on.md) — LLM-шлюз включён
+по умолчанию во всех профилях. Остатки и границы — в самих ADR.
 
 ## HA — оценка (2026-11-04)
 

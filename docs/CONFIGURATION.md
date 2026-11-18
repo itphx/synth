@@ -623,20 +623,20 @@ microFirst:
   microLlmEnabled: false
 
 llmGateway:
-  enabled: true                   # дефолт профиля: backend/managed и hybrid — true, standalone — false
+  enabled: true                   # дефолт всех профилей (ADR-147); false — явный opt-out
   inputMode: "obfuscate"          # obfuscate | block
   logPayloads: false
   payloadLogPath: ""              # путь JSONL полного лога; пусто → {dataDir}/audit/llm-payloads.jsonl
   rateLimit: { userPerMinute: 60, providerPerMinute: 120 }
   audit: { enabled: true, logPath: "" }   # logPath пуст → {dataDir}/audit/llm-gateway.jsonl
 
-> Дефолт `llmGateway.enabled` зависит от профиля: **backend/managed и hybrid — `true`**
-> (обфускация секретов, аудит каждого запроса и rate limit работают «из коробки»),
-> **standalone — `false`**. Hybrid (локальный core + центральный сервер, ADR-045) профиль
-> применяется вторым проходом загрузки конфига: режим известен только после первой загрузки
-> (`remote.enabled` в `config.yaml` либо OIDC-fallback `--oidc-issuer`/`--oidc-client-id`).
-> Переопределение — `SYNTH_LLM_GATEWAY_ENABLED` / `config.yaml`; runtime-тумблер из UI
-> («Безопасность → Шлюз безопасности», `settings.json`) **выше** `config.yaml`. При выключенном
+> Дефолт `llmGateway.enabled` — `true` для **всех профилей** (standalone, hybrid,
+> backend/managed; ADR-147): обфускация секретов, аудит каждого запроса и rate limit работают
+> «из коробки». Профильных различий и второй загрузки конфига в CLI больше нет
+> (ADR-139 заменён ADR-147). Переопределение — `SYNTH_LLM_GATEWAY_ENABLED` / `config.yaml`;
+> runtime-тумблер из UI («Безопасность → Шлюз безопасности», `settings.json`) применяется
+> **поверх конфига** (выше `config.yaml` и env); загрузка конфига — по ADR-023:
+> env > `config.yaml` > дефолт. Явное отключение работает как раньше. При выключенном
 > шлюзе `/health` и `/ready` аддитивно отдают `llmGateway: "disabled"` и
 > `warnings: ["llm-gateway-disabled"]` — это предупреждение, HTTP-код readiness не меняется.
 

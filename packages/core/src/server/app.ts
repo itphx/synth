@@ -433,10 +433,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       ready: initialized,
       storage: storage.degraded ? 'degraded' : 'ok',
     }),
-    // F4 (аудит S1): standalone профиль оставляет шлюз выключенным по умолчанию —
-    // диагностика предупреждает, но readiness не ломает. Эффективное значение
-    // (config.yaml + runtime-тумблер) — у оркестратора (`isGatewayEnabled`);
-    // `deps` создаётся ниже (ленивое замыкание, как у hybrid-состояния выше).
+    // ADR-147: шлюз включён по общему дефолту для всех профилей; выключение —
+    // явный opt-out (config.yaml/env/runtime-тумблер). Диагностика предупреждает,
+    // но readiness не ломает. Эффективное значение (config.yaml + runtime-тумблер)
+    // — у оркестратора (`isGatewayEnabled`); `deps` создаётся ниже (ленивое
+    // замыкание, как у hybrid-состояния выше).
     getLlmGatewayState: () => (deps.orchestrator.isGatewayEnabled() ? 'enabled' : 'disabled'),
   });
   app.route('/', healthRoutes);

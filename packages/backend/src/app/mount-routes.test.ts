@@ -179,7 +179,7 @@ describe('backend: контракт монтирования роутов (mount
     };
     expect(readyBody.status).toBe('ready');
     expect(readyBody.storage).toBe('ok');
-    // F4 (аудит S1): backend-профиль включает LLM-шлюз по умолчанию.
+    // ADR-147: шлюз включён по общему дефолту (единому для всех профилей).
     expect(readyBody.llmGateway).toBe('enabled');
     expect(readyBody.warnings).toBeUndefined();
 

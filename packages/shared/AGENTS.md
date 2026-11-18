@@ -28,7 +28,8 @@
 `src/config/`: `types.ts` (Zod-схема + `SynthConfig`), `defaults.ts`
 (`defaultConfig`), `merge.ts` (`deepMerge`), `loader.ts` (`loadConfig`, приоритет
 defaults ← профильные `baseDefaults` ← yaml ← env ← overrides; `baseDefaults` —
-дефолты профиля (backend/managed **и hybrid** включают `llmGateway.enabled`), не перебивают
+дефолты профиля (сейчас — `security.commandAudit`/`commandPolicy` для backend/managed;
+LLM-шлюз профильного дефолта больше не имеет — включён общим дефолтом, ADR-147), не перебивают
 явную конфигурацию), `resolve.ts` (env-резолверы, `ensureDataDir`).
 - **Добавление поля = `types.ts` + `defaults.ts` + тест** (`defaults.test.ts`).
 - Дефолты `plugins.*` сверяются тестом (`src/config/plugins-docs-defaults.test.ts`) с

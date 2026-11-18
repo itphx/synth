@@ -582,7 +582,9 @@ export const defaultConfig: SynthConfig = {
     microLlmEnabled: false,
   },
   llmGateway: {
-    enabled: false,
+    // ADR-147: дефолт единый для всех профилей (standalone/hybrid/backend);
+    // ранее был профильный (ADR-139). Явный opt-out — config.yaml/env/runtime.
+    enabled: true,
     inputMode: 'obfuscate',
     logPayloads: false,
     payloadLogPath: '',

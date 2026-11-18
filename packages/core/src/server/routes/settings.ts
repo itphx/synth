@@ -41,7 +41,8 @@ type Middleware = ReturnType<typeof createMiddleware>;
 
 /** ADR-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
 const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
-  enabled: false,
+  // ADR-147: совпадает с config-дефолтом (единый для всех профилей).
+  enabled: true,
   inputMode: 'obfuscate',
   logPayloads: false,
   rateLimit: { ...DEFAULT_LLM_GATEWAY_RATE_LIMIT },

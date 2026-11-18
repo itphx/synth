@@ -1,11 +1,12 @@
 # ADR-139: LLM-шлюз по умолчанию включён в managed и hybrid
 
-> **Статус:** ✅ Реализовано
+> **Статус:** ⛔ Заменено
+> **Заменено:** [ADR-147](../adr-147-llm-gateway-default-on.md) — единый дефолт `enabled: true` во всех профилях.
 > **Дата:** 2026-11-13
 > **Источник:** PROP-139 (файл удалён после принятия).
-> **Связано:** [ADR-036](./adr-036-llm-gateway.md) (LLM Gateway), [ADR-045](./adr-045-hybrid-server-profiles.md)
-> (гибрид), [ADR-035](./adr-035-micro-model-first.md) (микро-слой); конфиг — [docs/CONFIGURATION.md](../CONFIGURATION.md),
-> наблюдаемость — [docs/OBSERVABILITY.md](../OBSERVABILITY.md).
+> **Связано:** [ADR-036](../adr-036-llm-gateway.md) (LLM Gateway), [ADR-045](../adr-045-hybrid-server-profiles.md)
+> (гибрид), [ADR-035](../adr-035-micro-model-first.md) (микро-слой); конфиг — [docs/CONFIGURATION.md](../../CONFIGURATION.md),
+> наблюдаемость — [docs/OBSERVABILITY.md](../../OBSERVABILITY.md).
 
 ## Контекст
 
@@ -43,7 +44,7 @@
 - **Тесты:** `packages/core/src/server/app/standalone-options.test.ts` — профиль, свежесть объекта,
   двухпроходная загрузка (standalone → `false`, гибрид → `true`), явное отключение в config.yaml и
   `SYNTH_LLM_GATEWAY_ENABLED=false` выше профиля.
-- **Документация:** [docs/CONFIGURATION.md](../CONFIGURATION.md) (дефолты профилей), корневой
+- **Документация:** [docs/CONFIGURATION.md](../../CONFIGURATION.md) (дефолты профилей), корневой
   `AGENTS.md` (инвариант 25), `packages/backend/AGENTS.md`, `packages/core/AGENTS.md`.
 
 ## Альтернативы
@@ -68,3 +69,4 @@
 ## История
 
 - 2026-11-13 — принято из PROP-139 (реализовано); файл предложения удалён.
+- 2026-11-18 — заменено ADR-147 (единый дефолт во всех профилях).

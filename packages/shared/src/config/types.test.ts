@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { authConfigSchema, mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, recoveryConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema, commandPolicyConfigSchema, securityConfigSchema } from './types.js';
+import { authConfigSchema, mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, executionConfigSchema, pluginsConfigSchema, pluginsHybridConfigSchema, questionsConfigSchema, backgroundConfigSchema, recoveryConfigSchema, attachmentsConfigSchema, gitConfigSchema, agentsConfigSchema, limitsConfigSchema, llmConfigSchema, contextConfigSchema, storageConfigSchema, commandPolicyConfigSchema, securityConfigSchema, synthConfigSchema } from './types.js';
+import { defaultConfig } from './defaults.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('storageConfigSchema — лимиты чтения/предпросмотра', () => {
@@ -751,5 +752,19 @@ describe('authConfigSchema — auth.oidc.groups (ADR-140)', () => {
   it('пустой claim и пустое имя группы — ошибка', () => {
     expect(authConfigSchema.safeParse({ oidc: { groups: { claim: '' } } }).success).toBe(false);
     expect(authConfigSchema.safeParse({ oidc: { groups: { allow: [''] } } }).success).toBe(false);
+  });
+});
+
+/**
+ * ADR-147: `llmGateway.enabled` — единый дефолт `true` для всех профилей.
+ * Два источника дефолта (Zod-схема и `defaultConfig`) обязаны совпадать.
+ */
+describe('llmGateway.enabled — единый дефолт (ADR-147)', () => {
+  it('Zod-схема подставляет true при парсинге частичного объекта', () => {
+    expect(synthConfigSchema.parse({}).llmGateway.enabled).toBe(true);
+  });
+
+  it('defaultConfig.llmGateway.enabled === true (согласовано со схемой)', () => {
+    expect(defaultConfig.llmGateway.enabled).toBe(true);
   });
 });

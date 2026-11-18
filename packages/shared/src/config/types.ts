@@ -1724,7 +1724,7 @@ export const securityTlsConfigSchema = z.object({
  * `enabled` — мастер-выключатель: выключен — журнал не пишется и команда не
  * блокируется; включён — **сбой записи блокирует выполнение** (запись `started`
  * делается до запуска). Профильный дефолт: backend/managed — включён,
- * standalone — выключен (как `llmGateway`). Env:
+ * standalone — выключен. Env:
  * `SYNTH_COMMAND_AUDIT_ENABLED`, `SYNTH_COMMAND_AUDIT_RETENTION_DAYS`
  * (читаются `resolveCommandAuditConfig` в core — приоритет env > config).
  *
@@ -1950,8 +1950,8 @@ export const llmGatewayAuditConfigSchema = z.object({
 });
 
 export const llmGatewayConfigSchema = z.object({
-  /** Глобальный выключатель LLM Gateway. */
-  enabled: z.boolean().default(false),
+  /** Глобальный выключатель LLM Gateway (ADR-147: единый дефолт — включён). */
+  enabled: z.boolean().default(true),
   /** Режим Input Guard: obfuscate (замена на плейсхолдер) | block (запрос блокируется). */
   inputMode: z.enum(['obfuscate', 'block']).default('obfuscate'),
   /** Полное логирование запросов и ответов LLM (после обфускации) в JSONL. */

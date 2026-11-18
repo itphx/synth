@@ -71,7 +71,6 @@
 | ADR-132 | Встроенный терминал — PTY на точке исполнения, вкладка в UI | ✅ Реализовано | [adr-132-ui-terminal.md](./adr-132-ui-terminal.md) |
 | ADR-133 | Каналы обновлений и проверка обновлений | ✅ Реализовано | [adr-133-update-channels.md](./adr-133-update-channels.md) |
 | ADR-134 | Сервис инстанса: synth service и systemd --user | ✅ Реализовано | [adr-134-instance-service-systemd-user.md](./adr-134-instance-service-systemd-user.md) |
-| ADR-139 | LLM-шлюз по умолчанию включён в managed и hybrid | ✅ Реализовано | [adr-139-llm-gateway-hybrid.md](./adr-139-llm-gateway-hybrid.md) |
 | ADR-140 | Доступ к проекту — участники, группы и видимость | ✅ Реализовано | [adr-140-project-access-sharing.md](./adr-140-project-access-sharing.md) |
 | ADR-141 | Таймеры и будильники — автоматизация проекта без своего промпта | ✅ Реализовано | [adr-141-timers-alarms.md](./adr-141-timers-alarms.md) |
 | ADR-142 | Перенос сессии между проектами — блокеры, согласие и эффекты | ✅ Реализовано | [adr-142-session-move-effects.md](./adr-142-session-move-effects.md) |
@@ -79,6 +78,7 @@
 | ADR-144 | Запись сессии — только точечные мутации | ✅ Реализовано | [adr-144-atomic-session-writes.md](./adr-144-atomic-session-writes.md) |
 | ADR-145 | Фоновая работа — таймаут, вывод и контракт detach | ✅ Реализовано | [adr-145-background-timeout-output-detach.md](./adr-145-background-timeout-output-detach.md) |
 | ADR-146 | Фильтрация контента инструментов — единый слой, правила в промпте и advisory-скан MCP | ✅ Реализовано | [adr-146-tool-content-filtering.md](./adr-146-tool-content-filtering.md) |
+| ADR-147 | LLM-шлюз включён по умолчанию во всех профилях | ✅ Реализовано | [adr-147-llm-gateway-default-on.md](./adr-147-llm-gateway-default-on.md) |
 
 ## Частично
 
@@ -186,7 +186,7 @@
 | PROP-136 | [ADR-136](./adr-136-shell-trust.md) | принято |
 | PROP-137 | [ADR-137](./adr-137-executor-isolation.md) | принято |
 | PROP-138 | [ADR-138](./adr-138-plugin-execution-contour.md) | принято |
-| PROP-139 | [ADR-139](./adr-139-llm-gateway-hybrid.md) | принято |
+| PROP-139 | [ADR-139](./legacy/adr-139-llm-gateway-hybrid.md) | принято |
 | PROP-141 | [ADR-143](./adr-143-tool-timeouts.md) | принято |
 
 ## Legacy
@@ -196,8 +196,9 @@
 | ADR-027 | Двойная передача плана (диск + system prompt) | ⛔ Заменено | [legacy/adr-027-double-plan-passing.md](./legacy/adr-027-double-plan-passing.md) |
 | ADR-046 | Скиллы и slash-команды (историческая редакция) | ⛔ Заменено | [legacy/adr-046-skills-and-slash-commands.md](./legacy/adr-046-skills-and-slash-commands.md) |
 | ADR-077 | Инструментальное окружение исполнения — единый порт ExecutionPort и режим remote | ⛔ Заменено | [legacy/adr-077-runtime-toolchain.md](./legacy/adr-077-runtime-toolchain.md) |
+| ADR-139 | LLM-шлюз по умолчанию включён в managed и hybrid | ⛔ Заменено | [legacy/adr-139-llm-gateway-hybrid.md](./legacy/adr-139-llm-gateway-hybrid.md) |
 
 ---
 
-Всего документов: 129 (Решения: 67, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 3).
+Всего документов: 130 (Решения: 67, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 4).
 Удалено: 30 (принятые и поглощённые предложения; связь — в таблице «Принятые и поглощённые (файлы удалены)»).

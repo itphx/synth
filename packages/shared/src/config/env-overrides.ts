@@ -35,9 +35,9 @@ export interface EnvOverrideDefinition {
 export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   // llm: лимит вывода по умолчанию (0 — авто-дефолт ядра).
   { section: 'llm', key: 'maxTokens', type: 'number' },
-  // llmGateway (ADR-036): мастер-выключатель шлюза. Дефолт зависит от профиля
-  // (backend/managed — включён, standalone — выключен); env перебивает и его,
-  // и config.yaml, но ниже runtime-тумблера из UI (`settings.json`).
+  // llmGateway (ADR-036): мастер-выключатель шлюза. ADR-147: дефолт единый для
+  // всех профилей — включён; env перебивает и его, и config.yaml, но ниже
+  // runtime-тумблера из UI (`settings.json`).
   { section: 'llmGateway', key: 'enabled', type: 'boolean' },
   // session.autoTitle: авто-именование сессии (мастер-флаг, отсрочка на
   // приветствии, число реплик, порог «сигнала задачи»).

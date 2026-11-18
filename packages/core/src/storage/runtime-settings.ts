@@ -1331,7 +1331,8 @@ export function mergeLlmGatewayConfig(
   const hasRuntime = !!runtime && Object.keys(runtime).length > 0;
   if (!base && !hasRuntime) return undefined;
   return {
-    enabled: runtime.enabled ?? base?.enabled ?? false,
+    // ADR-147: единый дефолт для всех профилей — включён (opt-out явный).
+    enabled: runtime.enabled ?? base?.enabled ?? true,
     inputMode: runtime.inputMode ?? base?.inputMode ?? 'obfuscate',
     logPayloads: runtime.logPayloads ?? base?.logPayloads ?? false,
     payloadLogPath: base?.payloadLogPath ?? '',
