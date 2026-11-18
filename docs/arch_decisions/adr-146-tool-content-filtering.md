@@ -130,6 +130,17 @@
 `metadata` (`injection_marker_escaped`/`injection_suspicious`), а блокировка остаётся только за
 словарной детекцией (`injection.{ru,en}`) в режиме `block` — как и раньше.
 
+Защита распространяется не только на тело блока, но и на **атрибуты открывающего маркера**:
+значения (`PATH`, `URL`, `QUERY`, `SESSION_ID`, `PLUGIN`, атрибуты терминала) экранируются
+(`[CONTENT` → `\[CONTENT`) и санитизируются (удаляются `]` и `|`, пробелы схлопываются, кап
+120 символов), имена — без `]`/`|`/пробелов, кап 40. Точка реализации — `wrapContentDetailed`
+(`engine/security/prompt-injection.ts`, `sanitizeContentAttributeValue`/
+`sanitizeContentAttributeKey`): без неё подделка `[CONTENT END]` в имени файла, URL или поисковом
+запросе закрывала бы блок досрочно и выносила `trust:` за конверт. Терминальная ветка
+(`getToolTrust`, `engine/security/trust.ts`) санитизирует значения атрибутов тем же стилем
+(`sanitizeTerminalAttributeValue`) ещё до конверта, а повторный проход внутри
+`wrapContentDetailed` ничего не меняет — санитайз идемпотентен.
+
 ## Advisory-скан MCP
 
 Описания MCP-серверов и инструментов — данные, которые приносит третья сторона и которые попадают
