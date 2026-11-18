@@ -1217,6 +1217,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.gateway': 'Инструкции Gateway',
   'rightPanel.stats.promptBlock.plan.guide': 'Инструкция по плану',
   'rightPanel.stats.promptBlock.memory.guide': 'Инструкция по памяти',
+  'rightPanel.stats.promptBlock.background': 'Фоновая работа',
   'rightPanel.stats.promptBlock.mode.policy': 'Политика режимов',
   'rightPanel.stats.promptBlock.classification': 'Инструкция классификации',
   'rightPanel.stats.promptBlock.profile': 'Профиль пользователя',
@@ -3911,8 +3912,6 @@ export const dict = {
     '[context_budget] Достигнут бюджет контекста ({tokens} токенов). Выполнено шагов: {steps}. Незавершённые задачи: {tasks}',
   'subagent.context_budget':
     'Сабагент остановлен по бюджету контекста ({tokens} токенов, шагов: {steps})',
-  'task.background_started':
-    'Сабагент работает в фоне (sessionID: {id}). Уведомление придёт автоматически; не опрашивай статус.',
   'task.background_limit':
     'Лимит фоновых сабагентов для этой сессии ({limit}) исчерпан — сначала заверши или отмени текущие фоновые запуски',
   'task.background_disabled':
@@ -4528,18 +4527,15 @@ export const dict = {
   'question.cancelled': 'Пользователь отменил вопрос: {reason}',
   'question.timeout': 'Вопрос истёк по таймауту',
   'question.deps_unavailable': 'Механизм вопросов недоступен в этой сборке',
-  'process.background_started': 'Команда запущена в фоне (processId: {id}). Вывод: {log}',
+  'background.started.process':
+    'Команда запущена в фоне (processId: {id}). Вывод: {log}. Уведомление придёт автоматически.',
+  'background.started.subagent':
+    'Саб-агент выполняется в фоне (sessionID: {id}). Уведомление придёт автоматически.',
   'process.deps_unavailable': 'Фоновые процессы недоступны в этой сборке',
   'process.background_limit':
     'Достигнут лимит фоновых процессов для этой сессии ({limit}). Дождитесь завершения процесса или остановите его.',
   'process.background_unsupported': 'Фоновое исполнение недоступно в текущем режиме исполнения',
   'process.background_disabled': 'Фоновые процессы выключены (background.enabled: false)',
-  'process.detached_started':
-    'Команда переведена в фон (processId: {id}). Вывод: {log}',
-  'background.started.process':
-    'Команда запущена в фоне (processId: {id}). Вывод: {log}. Уведомление придёт автоматически.',
-  'background.started.subagent':
-    'Саб-агент выполняется в фоне (sessionID: {id}). Уведомление придёт автоматически.',
   'process.tool.empty': 'Нет фоновых прогонов',
   'process.tool.not_found': 'Фоновый прогон «{id}» не найден',
   'process.tool.deps_unavailable': 'Реестр фоновых прогонов недоступен в этой сборке',
