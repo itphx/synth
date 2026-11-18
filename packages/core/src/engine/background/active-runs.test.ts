@@ -89,6 +89,22 @@ describe('ActiveRunRegistry — detachAll', () => {
     expect(result.detached).toEqual([{ id: 'proc-b', kind: 'process' }]);
   });
 
+  it('причина перевода: по умолчанию `user`, из фильтра — переданная', async () => {
+    const registry = new ActiveRunRegistry();
+    const manual = makeRun('child-a');
+    const intervened = makeRun('child-b');
+    registry.register('s1', manual.handle);
+    registry.register('s2', intervened.handle);
+
+    // Ручной перевод (`POST /sessions/:id/background`) причину не передаёт.
+    await registry.detachAll('s1');
+    expect(manual.detach).toHaveBeenCalledWith('user');
+
+    // Авто-detach при вмешательстве — `'message'`.
+    await registry.detachAll('s2', { reason: 'message' });
+    expect(intervened.detach).toHaveBeenCalledWith('message');
+  });
+
   it('ошибка одного detach не мешает остальным и попадает в failed', async () => {
     const registry = new ActiveRunRegistry();
     const failing = makeRun('child-a');

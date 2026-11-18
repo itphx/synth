@@ -2,15 +2,21 @@
  * Авто-перевод блокирующих прогонов в фон при **вмешательстве пользователя** —
  * ADR-111 §detach.
  *
- * Повод — любое пользовательское сообщение/вмешательство в занятую сессию
- * (`POST /sessions/:id/prompt`: `steer`/`interrupt`, в т.ч. прерывание без
- * текста; сообщение в `queue` при активном ходе): блокирующий прогон
+ * Повод — только вмешательство в занятую сессию (`POST /sessions/:id/prompt`:
+ * `steer`/`interrupt`, в т.ч. прерывание без текста): блокирующий прогон
  * (`execute_shell` foreground или `task`) держит ход модели, поэтому
  * сообщение дошло бы до модели только после завершения команды/саб-агента.
  * Перевод в фон освобождает ход, а работа продолжается уже фоновым прогоном.
  *
+ * Сообщение в **очередь** занятой сессии (`mode=queue`) перевод НЕ делает: оно
+ * и так ждёт завершения хода — вмешательства нет, детачировать нечего.
+ *
  * Имя `autoDetachOnSteer` сохранено как публичный шов (тесты/роут), хотя
- * семантика шире steer: очередь и `interrupt` тоже переводят прогоны.
+ * семантика шире steer: `interrupt` тоже переводит прогоны.
+ *
+ * Причина перевода — `'message'` (новое сообщение пользователя): текст
+ * результата, который увидит модель, объясняет, что сообщение обработается
+ * следом (`background.detached.*_message`).
  *
  * Инварианты:
  * 1. **Мастер-выключатель.** `background.enabled === false` — авто-detach не
@@ -26,7 +32,7 @@
  */
 import type { EventBus } from '../../events/bus.js';
 import type { ChatOrchestrator } from '../orchestrator.js';
-import type { ActiveRunDetachResult } from './active-runs.js';
+import type { ActiveRunDetachReason, ActiveRunDetachResult } from './active-runs.js';
 
 /** Минимальный контракт оркестратора, нужный авто-detach. */
 export interface AutoDetachOrchestrator {
@@ -51,6 +57,11 @@ export interface AutoDetachOnSteerOptions {
   eventBus?: Pick<EventBus, 'publish'>;
   /** Куда писать причину неудачи (по умолчанию — `console.warn`). */
   logger?: { warn(message: string): void };
+  /**
+   * Причина перевода (попадает в текст результата). По умолчанию `'message'` —
+   * авто-detach из-за нового сообщения пользователя.
+   */
+  reason?: ActiveRunDetachReason;
 }
 
 /** Пустой итог (нечего переводить/авто-detach выключен). */
@@ -58,7 +69,7 @@ const EMPTY_RESULT: ActiveRunDetachResult = { detached: [], failed: [] };
 
 /**
  * Перевести блокирующие прогоны сессии в фон перед обработкой пользовательского
- * сообщения/вмешательства (steer, interrupt, сообщение в очередь занятой сессии).
+ * вмешательства (steer, interrupt).
  *
  * Возвращает итог `detachAll` (для тестов/диагностики); исключений не бросает.
  */
@@ -70,9 +81,11 @@ export async function autoDetachOnSteer(
     ?? true;
   if (!enabled) return EMPTY_RESULT;
 
+  const reason = opts.reason ?? 'message';
+
   let result: ActiveRunDetachResult;
   try {
-    result = await opts.orchestrator.activeRuns.detachAll(opts.sessionId);
+    result = await opts.orchestrator.activeRuns.detachAll(opts.sessionId, { reason });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     (opts.logger ?? console).warn(

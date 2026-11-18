@@ -59,7 +59,7 @@ import {
   type ExecSecret,
   type ExecutionPort,
 } from '../../execution/ports/index.js';
-import type { ActiveRunRegistry } from '../background/active-runs.js';
+import type { ActiveRunDetachReason, ActiveRunRegistry } from '../background/active-runs.js';
 import type { LiveProcessLog } from '../processes/types.js';
 import type { ProcessService } from '../processes/service.js';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
@@ -320,6 +320,14 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
   const adoptedState: { value: { runId: string; processId: string; logPath: string } | null } = {
     value: null,
   };
+  /**
+   * Причина перевода — выбирает текст `tool_result` (`background.detached.*`):
+   * `'user'` — ручной перевод, `'message'` — авто-detach из-за нового
+   * сообщения. Фиксируется первым вызовом `detach` (перевод идемпотентен).
+   * Держатель-объект: присваивание из замыкания не «схлопывается» TS-контролем
+   * потока до литерала.
+   */
+  const detachState: { reason: ActiveRunDetachReason } = { reason: 'user' };
   /** Вывод уже передан фону. */
   let released = false;
   /** Живой лог перешёл фоновому прогону (тул его не удаляет). */
@@ -401,9 +409,13 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
    * тот же итератор) → снять регистрацию → разбудить ожидание. Отказ (лимит)
    * пробрасывается: реестр активных прогонов соберёт его в `failed`, тул
    * продолжит ждать команду в foreground.
+   *
+   * `reason` — причина перевода (по умолчанию ручная, `'user'`); повторный
+   * вызов её не меняет.
    */
-  const detach = (): Promise<void> => {
+  const detach = (reason: ActiveRunDetachReason = 'user'): Promise<void> => {
     if (detachPromise) return detachPromise;
+    detachState.reason = reason;
     const attempt = (async () => {
       // Команда уже завершилась — переводить нечего: тул вот-вот вернёт
       // настоящий результат.
@@ -496,11 +508,15 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
 
   if (first === 'detach' && adoptedState.value) {
     // Detach первым: немедленный `tool_result` «переведено в фон»; судьба
-    // процесса — фоновая (уведомление придёт по завершении). Причина перевода —
-    // инициатива пользователя, поэтому текст отдельный (`background.detached.*`).
+    // процесса — фоновая (уведомление придёт по завершении). Ключ выбирается
+    // по причине перевода: ручной (`'user'`) или из-за нового сообщения
+    // (`'message'` — сообщение обработается следом).
     const started = adoptedState.value;
+    const key = detachState.reason === 'message'
+      ? 'background.detached.process_message'
+      : 'background.detached.process';
     return {
-      content: sm('background.detached.process', { id: started.processId, log: started.logPath }),
+      content: sm(key, { id: started.processId, log: started.logPath }),
       metadata: {
         process_id: started.processId,
         background_run_id: started.runId,
@@ -508,7 +524,7 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
         status: 'running',
         detached: true,
         command: input.displayCommand,
-        i18n: i18nMeta('background.detached.process', { id: started.processId, log: started.logPath }),
+        i18n: i18nMeta(key, { id: started.processId, log: started.logPath }),
       },
     };
   }

@@ -575,9 +575,12 @@ export const ENGINE_MESSAGE_KEYS = [
   'background.started.process',
   'background.started.subagent',
   // ADR-111 §detach: перевод в фон **по инициативе пользователя** — отдельные
-  // ключи (причина перевода отличается от агентского `background: true`).
+  // ключи (причина перевода отличается от агентского `background: true`);
+  // авто-detach из-за нового сообщения — свои ключи (`*_message`).
   'background.detached.process',
   'background.detached.subagent',
+  'background.detached.process_message',
+  'background.detached.subagent_message',
   'process.deps_unavailable',
   'process.background_limit',
   'process.background_unsupported',
@@ -1241,6 +1244,8 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'background.started.subagent': ["id"],
   'background.detached.process': ["id","log"],
   'background.detached.subagent': ["id"],
+  'background.detached.process_message': ["id","log"],
+  'background.detached.subagent_message': ["id"],
   'process.deps_unavailable': [],
   'process.background_limit': ["limit"],
   'process.background_unsupported': [],

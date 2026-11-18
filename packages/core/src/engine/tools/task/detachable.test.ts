@@ -283,6 +283,40 @@ describe('task/detachable — перевод идущего прогона в ф
     expect((await registry.detachAll(parent.id)).detached).toEqual([]);
   });
 
+  it('detach с причиной `message`: текст про новое сообщение пользователя', async () => {
+    const { service } = makeService();
+    const registry = new ActiveRunRegistry();
+    const run = controllableRun();
+    const extra = makeExtra({ service, registry });
+    const ctx = makeCtx();
+
+    const toolPromise = runDetachableSubagent({
+      params: makeParams(),
+      runConfig: makeRunConfig(extra, ctx),
+      extra,
+      ctx,
+      run: run.run,
+    });
+    await vi.waitFor(() => expect(run.run).toHaveBeenCalledTimes(1));
+
+    // Авто-detach при вмешательстве: причина передаётся в хэндл.
+    const detachResult = await registry.detachAll(parent.id, { reason: 'message' });
+    expect(detachResult.failed).toEqual([]);
+
+    const toolResult = await toolPromise;
+    expect(toolResult.content).toContain('because of a new user message');
+    expect(toolResult.content).toContain("The user's message will be handled next");
+    expect(toolResult.metadata?.i18n).toMatchObject({
+      key: 'background.detached.subagent_message',
+    });
+
+    run.finishWith({ content: 'done', metadata: { final_content: 'done' } });
+    await vi.waitFor(async () => {
+      const record = await service.get(String(toolResult.metadata!.background_run_id));
+      expect(record?.status).toBe('completed');
+    });
+  });
+
   it('cleanup: чужой маркер не снимается, updatedAt не двигается', async () => {
     const { service } = makeService();
     const registry = new ActiveRunRegistry();

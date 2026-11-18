@@ -264,6 +264,30 @@ describe('execute_shell — detach идущего шелла (ADR-113)', () => {
     h.fake.finish({ exitCode: 0, signal: null, durationMs: 10 });
   });
 
+  it('detach с причиной `message`: текст про новое сообщение пользователя', async () => {
+    const h = createHarness();
+    const ctx = makeCtx({
+      processService: h.processService,
+      activeRuns: h.registry,
+      backgroundEnabled: true,
+      executionPort: h.port,
+    });
+
+    const promise = executeShellTool.execute({ command: 'npm test' }, ctx);
+    await vi.waitFor(() => expect(h.registry.list('s1')).toHaveLength(1));
+
+    // Авто-detach при вмешательстве: причина передаётся в хэндл.
+    const detached = await h.registry.detachAll('s1', { reason: 'message' });
+    expect(detached.failed).toHaveLength(0);
+
+    const result = await promise;
+    expect(result.content).toContain('because of a new user message');
+    expect(result.content).toContain("The user's message will be handled next");
+    expect(result.metadata?.detached).toBe(true);
+    expect(result.metadata?.i18n).toMatchObject({ key: 'background.detached.process_message' });
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 10 });
+  });
+
   it('завершение без detach: прежний результат (stdout + stderr, isError при ненулевом коде)', async () => {
     const h = createHarness();
     const ctx = makeCtx({

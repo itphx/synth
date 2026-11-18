@@ -794,13 +794,20 @@ export const SYSTEM_MESSAGES = {
   'background.started.subagent':
     'The subagent is running in the background (sessionID: {id}). You will be notified automatically.',
   // Перевод в фон **по инициативе пользователя** (кнопка «В фон», `ctrl+b`,
-  // авто-detach при вмешательстве): это не агентский запуск (`background: true`),
-  // поэтому текст объясняет причину перевода. Другие причины перевода получают
-  // собственный ключ — не переиспользовать пользовательский текст.
+  // `POST /sessions/:id/background`): это не агентский запуск (`background: true`),
+  // поэтому текст объясняет причину перевода. Авто-detach из-за нового
+  // сообщения получает собственный ключ — не переиспользовать пользовательский
+  // текст.
   'background.detached.process':
     "Execution moved to the background at the user's request (processId: {id}). Output: {log}. You will be notified automatically.",
   'background.detached.subagent':
     "The subagent's execution moved to the background at the user's request (sessionID: {id}). You will be notified automatically.",
+  // Авто-detach из-за нового сообщения пользователя (`steer`/`interrupt`):
+  // сообщение ждёт обработки следом — модель должна знать именно это.
+  'background.detached.process_message':
+    "Execution moved to the background because of a new user message (processId: {id}). Output: {log}. The user's message will be handled next; you will be notified when the command finishes.",
+  'background.detached.subagent_message':
+    "The subagent's execution moved to the background because of a new user message (sessionID: {id}). The user's message will be handled next; you will be notified when the subagent finishes.",
   'process.deps_unavailable': 'Background processes are unavailable in this build',
   'process.background_limit':
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',

@@ -404,7 +404,7 @@ describe('ADR-111 §detach: авто-detach блокирующих прогон�
 
     expect(res.status).toBe(202);
     expect(autoDetach).toHaveBeenCalledTimes(1);
-    expect(autoDetach).toHaveBeenCalledWith({ sessionId: session.id, enabled: true });
+    expect(autoDetach).toHaveBeenCalledWith({ sessionId: session.id, enabled: true, reason: 'message' });
   });
 
   it('queue при свободной сессии авто-detach не запускает', async () => {
@@ -427,7 +427,7 @@ describe('ADR-111 §detach: авто-detach блокирующих прогон�
     expect(autoDetach).not.toHaveBeenCalled();
   });
 
-  it('queue с текстом при активном ходе: detach после успешной постановки', async () => {
+  it('queue с текстом при активном ходе: прогоны НЕ переводятся — сообщение ждёт хода', async () => {
     const autoDetach = vi.fn().mockResolvedValue({ detached: [], failed: [] });
     const { app, sessionManager } = createTestApp(tmpDir, {
       running: true,
@@ -436,6 +436,8 @@ describe('ADR-111 §detach: авто-detach блокирующих прогон�
     const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
 
     // `mode` не задан — режим по умолчанию `queue` (обратная совместимость).
+    // Ход занят (`running: true`), но очередь — не вмешательство: блокирующие
+    // прогоны не переводим, сообщение просто ждёт завершения хода.
     const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -445,9 +447,7 @@ describe('ADR-111 §detach: авто-detach блокирующих прогон�
     expect(res.status).toBe(202);
     const body = (await res.json()) as AcceptedBody;
     expect(body.mode).toBe('queue');
-    // Сообщение принято в очередь — и только после этого переводим прогоны.
-    expect(autoDetach).toHaveBeenCalledTimes(1);
-    expect(autoDetach).toHaveBeenCalledWith({ sessionId: session.id, enabled: true });
+    expect(autoDetach).not.toHaveBeenCalled();
     const fresh = (await sessionManager.getSession(session.id))!;
     expect(fresh.pendingMessages).toHaveLength(1);
   });
@@ -496,7 +496,7 @@ describe('ADR-111 §detach: авто-detach блокирующих прогон�
 
     expect(res.status).toBe(202);
     expect(autoDetach).toHaveBeenCalledTimes(1);
-    expect(autoDetach).toHaveBeenCalledWith({ sessionId: session.id, enabled: true });
+    expect(autoDetach).toHaveBeenCalledWith({ sessionId: session.id, enabled: true, reason: 'message' });
     // В очередь инъекций пустая агентская часть не попадает.
     const fresh = (await sessionManager.getSession(session.id))!;
     expect(fresh.steerInbox ?? []).toHaveLength(0);
@@ -545,6 +545,7 @@ describe('ADR-111 §detach: авто-detach блокирующих прогон�
     expect(res.status).toBe(202);
     // Detach — до всего остального, прерывание генерации — последним:
     // процесс продолжает жить в фоне, ход не завершается.
+    expect(autoDetach).toHaveBeenCalledWith({ sessionId: session.id, enabled: true, reason: 'message' });
     expect(autoDetach.mock.invocationCallOrder[0]).toBeLessThan(
       orchestrator.interrupt.mock.invocationCallOrder[0]!,
     );
@@ -553,8 +554,28 @@ describe('ADR-111 §detach: авто-detach блокирующих прогон�
     expect(orchestrator.interrupt).toHaveBeenCalledWith('stream-live-1');
   });
 
-  it('ошибка авто-detach не мешает приёму steer', async () => {
-    const autoDetach = vi.fn().mockRejectedValue(new Error('boom'));
+  it('background.enabled=false (живой мастер-выключатель): detachAll не вызывается', async () => {
+    const detachAll = vi.fn().mockResolvedValue({ detached: [], failed: [] });
+    const { app, sessionManager, orchestrator } = createTestApp(tmpDir, { running: true });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    await markTurnActive(sessionManager, session.id);
+    // Реальный авто-detach (шов не подменён) + выключенная фоновая работа.
+    Object.assign(orchestrator, {
+      activeRuns: { detachAll },
+      isBackgroundEnabled: () => false,
+    });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'вмешательство', mode: 'steer' }),
+    });
+
+    expect(res.status).toBe(202);
+    expect(detachAll).not.toHaveBeenCalled();
+  });
+
+  it('ошибка авто-detach не мешает приёму steer', async () => {    const autoDetach = vi.fn().mockRejectedValue(new Error('boom'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { app, sessionManager } = createTestApp(tmpDir, {
       running: true,

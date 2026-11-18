@@ -31,6 +31,18 @@ import { BackgroundLimitExceededError } from './types.js';
 export type ActiveRunKind = 'subagent' | 'process';
 
 /**
+ * Причина перевода в фон — попадает в текст `tool_result`, который увидит
+ * модель, поэтому различает инициативу:
+ *
+ * - `'user'` — ручной перевод пользователем (кнопка «В фон», `ctrl+b`,
+ *   `POST /sessions/:id/background`), значение по умолчанию;
+ * - `'message'` — авто-detach из-за нового сообщения/вмешательства
+ *   пользователя (`steer`/`interrupt`, `autoDetachOnSteer`): сообщение ждёт
+ *   обработки следом, и модель должна знать именно это.
+ */
+export type ActiveRunDetachReason = 'user' | 'message';
+
+/**
  * Хэндл активного (блокирующего) прогона.
  *
  * `id` — идентификатор, который увидит API в ответе: для саб-агента это
@@ -66,8 +78,11 @@ export interface ActiveRunHandle {
    * Перевести прогон в фон. Реализация обязана быть идемпотентной и
    * пробрасывать ошибку, если перевести нельзя (лимит фоновых прогонов →
    * `BackgroundLimitExceededError`).
+   *
+   * `reason` — причина перевода (влияет на текст результата); по умолчанию
+   * `'user'` — ручной перевод. Повторный вызов причины не меняет.
    */
-  detach(): void | Promise<void>;
+  detach(reason?: ActiveRunDetachReason): void | Promise<void>;
 }
 
 /** Сводка успешно переведённого прогона. */
@@ -99,6 +114,11 @@ export interface ActiveRunFailure {
 /** Фильтр `detachAll` — по виду прогона (UI переводит только по типу). */
 export interface ActiveRunFilter {
   type?: ActiveRunKind;
+  /**
+   * Причина перевода (по умолчанию `'user'` — ручной перевод). Авто-detach при
+   * вмешательстве передаёт `'message'`.
+   */
+  reason?: ActiveRunDetachReason;
 }
 
 /** Итог `detachAll`: что переведено и что не удалось. */
@@ -203,10 +223,12 @@ export class ActiveRunRegistry {
    *
    * Список снимается **один раз** (снимок) — прогон, снятый с регистрации во
    * время обхода (например, завершившийся), обход не ломает. Ошибка одного
-   * `detach` попадает в `failed` и не мешает остальным.
+   * `detach` попадает в `failed` и не мешает остальным. `filter.reason`
+   * передаётся в `run.detach(reason)` (по умолчанию `'user'`).
    */
   async detachAll(sessionId: string, filter: ActiveRunFilter = {}): Promise<ActiveRunDetachResult> {
     const runs = this.list(sessionId).filter((run) => !filter.type || run.kind === filter.type);
+    const reason = filter.reason ?? 'user';
     const detached: ActiveRunSummary[] = [];
     const failed: ActiveRunFailure[] = [];
 
@@ -215,7 +237,7 @@ export class ActiveRunRegistry {
       if (this._detached.has(run)) continue;
       this._detached.add(run);
       try {
-        await run.detach();
+        await run.detach(reason);
         detached.push({
           id: run.id,
           kind: run.kind,

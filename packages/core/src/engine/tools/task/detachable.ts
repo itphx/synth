@@ -29,6 +29,7 @@ import { generateStreamId, nowISO } from '@itphx/synth-shared';
 import type { BackgroundRunRecord, ToolContext, ToolResult, TodoItem } from '@itphx/synth-shared';
 import type { CancellationToken } from '../../../providers/base.js';
 import type { BackgroundFinishPatch } from '../../background/types.js';
+import type { ActiveRunDetachReason } from '../../background/active-runs.js';
 import { t as sm, i18n as i18nMeta } from '../../system-messages.js';
 import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
 import type { TaskParams } from './args.js';
@@ -111,6 +112,12 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
   // ─── Состояние перевода в фон ────────────────────────────────────────
   /** Запись реестра фоновых прогонов (появляется при detach). */
   let record: BackgroundRunRecord | null = null;
+  /**
+   * Причина перевода — выбирает текст `tool_result`: `'user'` (ручной перевод)
+   * либо `'message'` (авто-detach из-за нового сообщения пользователя).
+   * Фиксируется первым вызовом `detach` (перевод идемпотентен).
+   */
+  const detachState: { reason: ActiveRunDetachReason } = { reason: 'user' };
   /** `streamId` фоновой части прогона (для снятия cancel-токена). */
   let childStreamId: string | undefined;
   let detachPromise: Promise<void> | undefined;
@@ -200,9 +207,13 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
    * маркер активности дочерней сессии → событие `process.detached` → будим
    * ожидание. `BackgroundLimitExceededError` пробрасывается: реестр активных
    * прогонов соберёт его в `failed`, прогон останется foreground.
+   *
+   * `reason` — причина перевода (по умолчанию ручная, `'user'`); повторный
+   * вызов её не меняет.
    */
-  const detach = (): Promise<void> => {
+  const detach = (reason: ActiveRunDetachReason = 'user'): Promise<void> => {
     if (detachPromise) return detachPromise;
+    detachState.reason = reason;
     const attempt = (async () => {
       // Прогон уже завершился (запрос пришёл в самом конце хода) — переводить
       // нечего: блокирующее ожидание уже вернуло модели настоящий результат.
@@ -347,19 +358,23 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
 
   // Detach первым: немедленный `tool_result` «переведено в фон». Дальнейшая
   // судьба прогона — фоновая (уведомление родителю придёт по завершении).
-  // Причина перевода — инициатива пользователя, поэтому текст отдельный
-  // (`background.detached.subagent`).
+  // Ключ выбирается по причине перевода: ручной (`background.detached.subagent`)
+  // или из-за нового сообщения (`background.detached.subagent_message` —
+  // сообщение обработается следом).
   // `record` заполняется в `detach()` до `wakeDetach()`, поэтому здесь он уже
   // есть (геттер — чтобы TS видел присваивание из замыкания).
   const detachedRunId = (): string | undefined => record?.id;
+  const key = detachState.reason === 'message'
+    ? 'background.detached.subagent_message'
+    : 'background.detached.subagent';
   return {
-    content: sm('background.detached.subagent', { id: childSessionId }),
+    content: sm(key, { id: childSessionId }),
     metadata: {
       child_session_id: childSessionId,
       status: 'running',
       background_run_id: detachedRunId(),
       detached: true,
-      i18n: i18nMeta('background.detached.subagent', { id: childSessionId }),
+      i18n: i18nMeta(key, { id: childSessionId }),
     },
   };
 }

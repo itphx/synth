@@ -3887,6 +3887,10 @@ export const dict = {
     "Execution moved to the background at the user's request (processId: {id}). Output: {log}. You will be notified automatically.",
   'background.detached.subagent':
     "The subagent's execution moved to the background at the user's request (sessionID: {id}). You will be notified automatically.",
+  'background.detached.process_message':
+    "Execution moved to the background because of a new user message (processId: {id}). Output: {log}. The user's message will be handled next; you will be notified when the command finishes.",
+  'background.detached.subagent_message':
+    "The subagent's execution moved to the background because of a new user message (sessionID: {id}). The user's message will be handled next; you will be notified when the subagent finishes.",
   'process.deps_unavailable': 'Background processes are unavailable in this build',
   'process.background_limit':
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',

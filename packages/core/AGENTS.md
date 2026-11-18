@@ -1277,18 +1277,26 @@
   `task` (саб-агент) и `execute_shell` регистрируют `{id, kind, title?, sessionId?,
   processId?, childSessionId?, logPath?, startedAt?, stop?(), detach()}` на время
   блокирующего ожидания, `POST /api/v2/sessions/:id/background` (`server/routes/sessions.ts`)
-  вызывает `detachAll(sessionId, {type?})` → прогон продолжается уже фоновым (свой
+  вызывает `detachAll(sessionId, {type?, reason?})` (причина — `'user'` по умолчанию) → прогон продолжается уже фоновым (свой
   `AbortController`/`streamId`, публикация в родительский стрим отключена), а ход получает
   «переведено в фон»; публикуется `process.detached`. Ответ — `{sessionId, detached[], failed?}`
   (пустой `detached` — штатный исход, не ошибка); гибридная (`remote:`) сессия — `400
   DETACH_UNSUPPORTED` (живого хэндла в этом процессе нет); повторный detach идемпотентен.
   Снимки для API — `listForSessions(sessionIds)` / `find(sessionIds, id)`: доступ решает
-  вызывающий, чужой прогон выглядит отсутствующим. **Авто-detach при steer** —
+  вызывающий, чужой прогон выглядит отсутствующим. **Авто-detach при вмешательстве
+  пользователя (steer/interrupt)** —
   `engine/background/auto-detach.ts` (`autoDetachOnSteer`): при активном ходе
-  `POST /sessions/:id/prompt` переводит блокирующие прогоны **до** постановки steer, уважает
-  живой `background.enabled` (`isBackgroundEnabled`), ошибки не пробрасывает (сообщение всё
+  `POST /sessions/:id/prompt` переводит блокирующие прогоны — `steer`/`interrupt`
+  **до** обработки (в т.ч. `interrupt` без текста); текст не требуется (`@user`-only
+  тоже вмешательство); `mode=queue` прогоны **не** переводит — сообщение просто ждёт
+  завершения хода (`QUEUE_FULL` и `@user`-only в `queue` — тоже без перевода). Уважает
+  живой `background.enabled` (`isBackgroundEnabled`, при `false` — не переводит), ошибки не пробрасывает (сообщение всё
   равно принимается) и публикует `background.auto_detached {session_id, detached[], failed?}`
-  только при непустом итоге. **`retime`** (ADR-145): шелл-хэндл перед `adopt` снимает
+  только при непустом итоге. Причина перевода сквозная — `ActiveRunDetachReason`
+  (`'user'` по умолчанию, `'message'` у авто-detach): `detachAll(sessionId, {type?, reason?})`
+  передаёт её в `handle.detach(reason)`, а текст результата выбирается по ней
+  (`background.detached.*` / `background.detached.*_message`). Порядок для `interrupt` —
+  detach → `steerInbox` → прерывание генерации. **`retime`** (ADR-145): шелл-хэндл перед `adopt` снимает
   foreground-таймаут (`retime(0)`, при отказе `adopt` — восстановление срока); точка
   исполнения без `retime` переводить не даёт (`failed[]` с `DETACH_FAILED`).
   **Исходящие вложения ответа.** `step.finished` несёт аддитивное
@@ -1418,8 +1426,14 @@
   `process_stop`». Включается только при включённой фоновой работе **и** непустом файле
   (гейт `backgroundAvailable` в `ContextBuilder`); override — `{dataDir}/user/system/BACKGROUND*.md`
   через порт `ContextFileRepository`. Правило живёт **здесь**, а не в результатах тулов:
-  текстов запуска ровно два — `background.started.process` (`{id}`, `{log}`) и
-  `background.started.subagent` (`{id}`), одинаковых для фонового запуска и detach.
+  текстов результатов **шесть** — `background.started.process` (`{id}`, `{log}`) и
+  `background.started.subagent` (`{id}`) для агентского запуска (`background: true`),
+  `background.detached.process` (`{id}`, `{log}`) и `background.detached.subagent`
+  (`{id}`) для **ручного** перевода (кнопка «В фон», `ctrl+b`,
+  `POST /sessions/:id/background`), `background.detached.process_message`
+  (`{id}`, `{log}`) и `background.detached.subagent_message` (`{id}`) для авто-detach
+  из-за нового сообщения пользователя; текст перевода объясняет причину, причины
+  получают собственные ключи.
 
   Специализированные промпты debug-эха и
   `SUMMARIZER.{lang}.md` идут мимо Composer (inline). Манифест: system-блоки в реальном порядке +

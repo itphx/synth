@@ -78,7 +78,7 @@ import {
 import { warning } from '../../logger.js';
 // ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
 import { autoDetachOnSteer } from '../../engine/background/auto-detach.js';
-import type { ActiveRunDetachResult } from '../../engine/background/active-runs.js';
+import type { ActiveRunDetachReason, ActiveRunDetachResult } from '../../engine/background/active-runs.js';
 // ADR-115: вложения сообщений — сервис (blob-хранилище + лимиты) и роуты загрузки/раздачи.
 import {
   AttachmentService,
@@ -270,13 +270,15 @@ export interface SessionRoutesDeps {
   orchestrator: ChatOrchestrator;
   /**
    * ADR-111 §detach: авто-перевод блокирующих прогонов в фон при
-   * вмешательстве пользователя (steer/interrupt, сообщение в очередь занятой
-   * сессии). Шов для тестов; по умолчанию — `autoDetachOnSteer` с живым
-   * мастер-выключателем оркестратора (`background.enabled`).
+   * вмешательстве пользователя (steer/interrupt, включая прерывание без
+   * текста). Причина — `'message'` (см. текст результата). Шов для тестов; по
+   * умолчанию — `autoDetachOnSteer` с живым мастер-выключателем оркестратора
+   * (`background.enabled`).
    */
   autoDetachOnSteer?: (req: {
     sessionId: string;
     enabled: boolean;
+    reason?: ActiveRunDetachReason;
   }) => Promise<ActiveRunDetachResult>;
   contextOptimizer?: ContextOptimizer;
   projectStore?: ProjectStoreLike;
@@ -1060,8 +1062,9 @@ export function createSessionRoutes(
   const agentRegistry = orchestrator.agentRegistry;
 
   /**
-   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон при вмешательстве
-   * пользователя (steer/interrupt) и при сообщении в занятую сессию (queue).
+   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон при
+   * **вмешательстве** пользователя (steer/interrupt). Сообщение в очередь
+   * занятой сессии перевода не делает — оно просто ждёт завершения хода.
    *
    * Мастер-выключатель (`background.enabled`) читается **живым** геттером
    * оркестратора: runtime-настройка действует без рестарта. Ошибка перевода не
@@ -1073,13 +1076,13 @@ export function createSessionRoutes(
       : true;
     try {
       if (deps.autoDetachOnSteer) {
-        await deps.autoDetachOnSteer({ sessionId, enabled });
+        await deps.autoDetachOnSteer({ sessionId, enabled, reason: 'message' });
         return;
       }
       // Реестра активных прогонов нет (минимальный оркестратор в тестах/иной
       // сборке) — переводить нечего.
       if (!orchestrator.activeRuns) return;
-      await autoDetachOnSteer({ orchestrator, sessionId, enabled, eventBus });
+      await autoDetachOnSteer({ orchestrator, sessionId, enabled, eventBus, reason: 'message' });
     } catch (err) {
       warning('ROUTES', `авто-detach при вмешательстве не удался: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -3381,14 +3384,14 @@ export function createSessionRoutes(
     // переводим блокирующие прогоны (`execute_shell` foreground / `task`) в фон,
     // иначе steer ждал бы завершения команды/саб-агента. Условие — активный ход
     // и режим вмешательства (`steer`/`interrupt`); текст не требуется —
-    // прерывание без сообщения тоже вмешательство. Пустой реестр — no-op,
-    // ошибка перевода сообщение не блокирует (мастер-выключатель —
+    // прерывание без сообщения тоже вмешательство. Причина перевода —
+    // `'message'`: текст результата сообщает модели, что сообщение
+    // пользователя обработается следом. Сообщение в **очередь** (`queue`)
+    // прогоны НЕ переводит: оно просто ждёт завершения хода. Пустой реестр —
+    // no-op, ошибка перевода сообщение не блокирует (мастер-выключатель —
     // `background.enabled`, живой геттер оркестратора).
     const detachBeforeHandle = sessionTurnActive && mode !== 'queue';
     if (detachBeforeHandle) await detachBlockingRuns(sessionId);
-    // Сообщение в очередь занятой сессии ждёт завершения хода — detach делается
-    // **после** успешной постановки (см. ветку `queue` ниже).
-    const detachAfterQueue = sessionTurnActive && mode === 'queue';
 
     // PROP-132: контекст терминала доставляется **до** вопроса — он должен
     // попасть в историю раньше вопроса (`ord` контекста < `ord` вопроса),
@@ -3638,10 +3641,9 @@ export function createSessionRoutes(
             error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
           }, 429);
         }
-        // ADR-111 §detach: сообщение принято в очередь занятого ребёнка — его
-        // блокирующие прогоны держат цикл саб-агента, поэтому переводим их в
-        // фон (мастер-выключатель — общий, `background.enabled`).
-        if (detachAfterQueue) await detachBlockingRuns(sessionId);
+        // Сообщение в очередь занятого ребёнка: прогоны НЕ переводим — оно
+        // просто ждёт, пока цикл ребёнка разберёт очередь (ADR-111 §detach:
+        // detach — только по вмешательству, `steer`/`interrupt`).
         // ADR-126 §2: user-directed хвост — в историю сразу.
         await persistUserDirected();
         const fresh = await sessionManager.getSession(sessionId);
@@ -3677,10 +3679,9 @@ export function createSessionRoutes(
         }, 429);
       }
 
-      // ADR-111 §detach: сообщение принято в очередь занятой сессии — ход всё
-      // равно ждал бы завершения блокирующего прогона, поэтому переводим его в
-      // фон. На отказе (`429 QUEUE_FULL`) ничего не трогаем.
-      if (detachAfterQueue) await detachBlockingRuns(sessionId);
+      // Сообщение принято в очередь занятой сессии — прогоны НЕ переводим:
+      // оно просто ждёт завершения хода (ADR-111 §detach: detach — только по
+      // вмешательству, `steer`/`interrupt`).
 
       // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений.
       await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);

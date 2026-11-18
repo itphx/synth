@@ -59,7 +59,7 @@ describe('autoDetachOnSteer — ADR-111 §detach', () => {
 
     const result = await autoDetachOnSteer({ orchestrator, sessionId: 's1', enabled: true, eventBus });
 
-    expect(detachAll).toHaveBeenCalledWith('s1');
+    expect(detachAll).toHaveBeenCalledWith('s1', { reason: 'message' });
     expect(result.detached).toHaveLength(2);
     expect(publish).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledWith('s1', 'background.auto_detached', {
