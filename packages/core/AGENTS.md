@@ -65,7 +65,15 @@
   `assistant` + `toolUse`, `tool`-результаты идут парными по `toolCallId`.
   Осиротевших `tool`-сообщений (без предшествующего `tool_calls`) в выдаче быть не
   должно: это ломает OpenAI-совместимые API и Anthropic (`tool_result` требует
-  парный `tool_use`).
+  парный `tool_use`). Атрибуцию ставит **код, а не модель** (префикс — часть
+  контракта истории), поэтому правило «не добавляй `[agentRole]:` к своим
+  ответам» живёт в блоке `participants`
+  (`prompts/system/PARTICIPANTS_NOTICE.{ru,en}.md`, `{ROLE_NAME}` подставляет
+  `ContextBuilder`), а **не** в ролевых файлах: роль целиком уходит и сабагенту,
+  но там префиксов в истории нет. Блок включается, когда участников больше
+  одного — **считая текущую роль** (`_hasMultipleParticipants(messages,
+  currentAgentRole)`): иначе первый ход после смены агента видел бы `[prev-role]:`
+  без объяснения. Секцию `[ATTRIBUTION]` в ролевых файлах не дублировать.
 - Отключение **user**-реплики (`disabled`) выключает весь её ход:
   `suppressDisabledTurns` (`engine/context/disabled-turns.ts`) подавляет
   assistant/tool/error до следующей user-реплики; system-state и summary

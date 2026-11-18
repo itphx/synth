@@ -88,12 +88,18 @@ export class ContextBuilder {
     }
 
     // 2. Participants notice (volatile). Сохранено текущее условие: notice
-    // добавляется только при заданном agentRole.
+    // добавляется только при заданном agentRole. Текущая роль входит в набор
+    // участников (см. `_hasMultipleParticipants`): после смены агента первый ход
+    // нового агента уже видит в истории префиксы `[прежняя-роль]:`, хотя ролей в
+    // истории ещё одна — без этого блок не включился бы и префиксы остались бы
+    // необъяснёнными.
     let participantsContent = '';
-    if (agentRole && params.historyMessages && this._hasMultipleParticipants(params.historyMessages)) {
+    if (agentRole && params.historyMessages && this._hasMultipleParticipants(params.historyMessages, agentRole)) {
       const notice = this._config.getParticipantsNotice(lang);
       if (notice) {
-        participantsContent = notice;
+        // {ROLE_NAME} — плейсхолдер под роль текущего агента; {username} в
+        // шаблоне литерален (это описание формата, а не подстановка).
+        participantsContent = notice.replace(/\{ROLE_NAME\}/g, agentRole);
         this._debugAdd('participants_notice', { loaded: true, language: lang });
       }
     }
@@ -287,7 +293,7 @@ export class ContextBuilder {
     }
   }
 
-  private _hasMultipleParticipants(messages: Message[]): boolean {
+  private _hasMultipleParticipants(messages: Message[], currentAgentRole?: string): boolean {
     const agents = new Set<string>();
     const users = new Set<string>();
 
@@ -299,6 +305,13 @@ export class ContextBuilder {
         users.add(msg.author);
       }
     }
+
+    // Текущая роль — участник хода: после смены агента история содержит префиксы
+    // `[прежняя-роль]:`, а роль в истории одна — блок participants должен
+    // включаться (иначе префиксы в контексте остаются необъяснёнными).
+    // Алиасы ролей (`pm` → `leader`) намеренно не нормализуются: у легаси-сессии
+    // префикс `[pm]:` обязан отличаться от текущей роли, иначе блок не включится.
+    if (currentAgentRole) agents.add(currentAgentRole);
 
     return agents.size > 1 || users.size > 1;
   }

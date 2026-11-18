@@ -354,6 +354,66 @@ describe('ContextBuilder.buildBaseBlocks', () => {
     expect(byKey.get('participants')!.content).toBe('');
     expect(byKey.get('role')!.content.length).toBeGreaterThan(0);
   });
+
+  it('participants: смена агента включает блок на первом ходе новой роли (регресс)', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const builder = new ContextBuilder(config);
+
+    // В истории одна роль агента (`leader`), текущая роль — `fixer`: префикс
+    // `[leader]:` в контексте уже есть, значит блок participants обязан включиться.
+    const history = [
+      { role: 'user', author: 'alice', disabled: false },
+      { role: 'assistant', agentRole: 'leader', disabled: false },
+    ] as unknown as Message[];
+
+    const blocks = await builder.buildBaseBlocks({
+      agentRole: 'fixer',
+      language: 'ru',
+      historyMessages: history,
+    });
+    const content = blocks.find((b) => b.key === 'participants')!.content;
+
+    expect(content.length).toBeGreaterThan(0);
+    expect(content).toContain('[fixer]:');
+    // плейсхолдер подставлен, литерала в промпте нет
+    expect(content).not.toContain('{ROLE_NAME}');
+  });
+
+  it('participants: один участник (история и текущая роль совпадают) — блок пуст', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const builder = new ContextBuilder(config);
+
+    const history = [
+      { role: 'user', author: 'alice', disabled: false },
+      { role: 'assistant', agentRole: 'leader', disabled: false },
+    ] as unknown as Message[];
+
+    const blocks = await builder.buildBaseBlocks({
+      agentRole: 'leader',
+      language: 'ru',
+      historyMessages: history,
+    });
+
+    expect(blocks.find((b) => b.key === 'participants')!.content).toBe('');
+  });
+
+  it('participants: несколько авторов-людей включают блок (поведение прежнее)', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const builder = new ContextBuilder(config);
+
+    const history = [
+      { role: 'user', author: 'alice', disabled: false },
+      { role: 'user', author: 'bob', disabled: false },
+    ] as unknown as Message[];
+
+    const blocks = await builder.buildBaseBlocks({
+      agentRole: 'leader',
+      language: 'ru',
+      historyMessages: history,
+    });
+
+    expect(blocks.find((b) => b.key === 'participants')!.content.length).toBeGreaterThan(0);
+  });
 });
 
 describe('prompt-blocks', () => {
