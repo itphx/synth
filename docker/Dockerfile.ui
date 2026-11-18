@@ -16,7 +16,15 @@ ARG BUILDPLATFORM
 
 FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# pnpm ставим через npm, а не через corepack: `corepack prepare` нестабилен
+# (в CI может не создать кэш) и здесь тянул `pnpm@latest`, то есть версия не
+# совпадала с CI (`npm install -g pnpm@12.14.0`) и `packageManager` репозитория.
+# Стадия исполняется на платформе билдера (amd64), поэтому нативный бинарь pnpm
+# подходит; в runtime pnpm не нужен.
+ARG PNPM_VERSION=12.14.0
+RUN npm install -g "pnpm@${PNPM_VERSION}" \
+    && npm cache clean --force \
+    && pnpm --version
 
 WORKDIR /repo
 

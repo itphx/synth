@@ -27,7 +27,9 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 | npmjs.org | `https://registry.npmjs.org` | `NPM_TOKEN` |
 | GitVerse Package Registry | `https://gitverse.ru/api/packages/itphx/npm/` | `GV_TOKEN` |
 | GitHub Packages | `https://npm.pkg.github.com` (scope `@itphx`) | `GH_TOKEN` (scope `write:packages`) |
-| Gitea Package Registry | `https://git.itphx.ru/api/packages/itphx/npm/` | `GITEA_NPM_TOKEN` (публикация; для установки — read-токен) |
+| Gitea Package Registry (**основной для инстанса**) | `https://git.itphx.ru/api/packages/itphx/npm/` | `GT_TOKEN` (релизная публикация, право `package:write`); беты — `GV_GITEA_TOKEN` |
+
+**Gitea — основной реестр инстанса.** Отсюда ставится `synth`: в `.npmrc` потребителя стоит scoped-ключ `@itphx:registry=https://git.itphx.ru/api/packages/itphx/npm/`, и `npm i -g @itphx/synth@<version>` не должен ходить в публичный npmjs. В закрытом контуре на тот же реестр можно направить и обновления — `updates.stableRegistry` (по умолчанию `https://registry.npmjs.org`, приоритет `SYNTH_UPDATES_STABLE_REGISTRY` > runtime > config). Чтение и установка токена **не требуют** — токен нужен только публикации. Релизные пакеты публикует джоба `publish-gitea-npm` (`release.yaml`), беты — `beta.yaml`.
 
 Значения токенов хранятся в секретах репозитория (GitVerse CI) и в локальном окружении. **Никогда не указывайте значения токенов в документации, коде или коммитах.**
 
@@ -188,7 +190,7 @@ git.itphx.ru/itphx/synth:<version>
 
 ### Секрет
 
-Публикация **образов в Gitea-реестр** (джобы `build-docker` и `publish-images-gitea` в `release.yaml`) и **Helm-чарта** (`publish-helm`) — по секрету **`GT_TOKEN`** (логин `itphx`; права на container registry и `package:write`); локально и в `synth-deploy` — переменная `GITEA_TOKEN`. Для **pull** токен не нужен: реестр публичный. Публикация **бета-пакетов в npm-реестр Gitea** (`beta.yaml`) — по секрету **`GV_GITEA_TOKEN`** (нужно право `package:write`). Если секрет не задан, публикация **падает** с понятным сообщением (fail-closed), а не пропускается молча: `scripts/docker-auth-gitea.sh` готовит `config.json` для docker CLI.
+Публикация **образов в Gitea-реестр** (джобы `build-docker` и `publish-images-gitea` в `release.yaml`), **Helm-чарта** (`publish-helm`) и **релизных npm-пакетов в npm-реестр Gitea** (`publish-gitea-npm`) — по секрету **`GT_TOKEN`** (логин `itphx`; права на container registry и `package:write`); локально и в `synth-deploy` — переменная `GITEA_TOKEN`. Для **pull** токен не нужен: реестр публичный; npm-реестр читается без токена тоже. Публикация **бета-пакетов в npm-реестр Gitea** (`beta.yaml`) — по секрету **`GV_GITEA_TOKEN`** (нужно право `package:write`). Если секрет не задан, публикация **падает** с понятным сообщением (fail-closed), а не пропускается молча: `scripts/docker-auth-gitea.sh` готовит `config.json` для docker CLI.
 
 ### Сборка и публикация
 
@@ -457,9 +459,9 @@ Helm-чарт перезаписывается тем же содержимым,
 
 Ручной `workflow_dispatch` сохранён в `release.yaml` (пункты 1–2) — это единственный способ запустить сборку/публикацию без тега.
 
-Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → проверка заметок (`release-notes`) → CI-проверки → сборка → CHANGELOG → публикация npm (npmjs + GitVerse + GitHub Packages) → Docker (`build-docker` → `git.itphx.ru/itphx/{synth,synth-backend,synth-ui}`, плюс `publish-images-gitea` → flavor-образы и образы исполнителей) → публикация Helm-чарта в Gitea (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
+Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → проверка заметок (`release-notes`) → CI-проверки → сборка → CHANGELOG → публикация npm (npmjs + GitVerse + GitHub Packages + npm-реестр Gitea) → Docker (`build-docker` → `git.itphx.ru/itphx/{synth,synth-backend,synth-ui}`, плюс `publish-images-gitea` → flavor-образы и образы исполнителей) → публикация Helm-чарта в Gitea (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
 
-npm-пакеты публикуются из CI GitVerse тремя джобами — `publish-npmjs`, `publish-gitverse-npm`, `publish-github-npm` (GitHub Packages); бета-пакеты — только в npm-реестр Gitea (`beta.yaml`).
+npm-пакеты публикуются из CI GitVerse четырьмя джобами — `publish-npmjs`, `publish-gitverse-npm`, `publish-github-npm` (GitHub Packages) и `publish-gitea-npm` (npm-реестр Gitea — **основной для инстанса**); бета-пакеты — в тот же npm-реестр Gitea (`beta.yaml`).
 
 ### Проверка документации
 
@@ -496,7 +498,7 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 |--------|------------|
 | `NPM_TOKEN` | Публикация в npmjs.org |
 | `GV_TOKEN` | Токен GitVerse: API релизов, npm-реестр GitVerse, git push от бота (образы в GitVerse больше не публикуются) |
-| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`, логин `itphx`): публикация **образов** (`build-docker`, `publish-images-gitea`) и **Helm-чарта** (`publish-helm`) в `release.yaml`; права — container registry + `package:write` |
+| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`, логин `itphx`): публикация **образов** (`build-docker`, `publish-images-gitea`), **Helm-чарта** (`publish-helm`) и **релизных npm-пакетов** (`publish-gitea-npm`) в `release.yaml`; права — container registry + `package:write` |
 | `GV_GITEA_TOKEN` | Токен Gitea (`git.itphx.ru`) для npm-реестра Gitea — публикация бета-пакетов в `beta.yaml` (нужно право `package:write`) |
 | `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release и публикация npm в GitHub Packages (classic PAT, scope `repo` + `write:packages`) |
 | `GV_SYNTH_URL` | База API v2 инстанса Synth для события релиза (например `https://synth.k3s.itphx.loc/api/v2`) |

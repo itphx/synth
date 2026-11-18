@@ -145,8 +145,9 @@ jobs:
   # --- Обязательный внутренний аудит безопасности (гейт релиза) ---
   #
   # Джоба идёт ДО сборки артефактов: `build.needs` включает её, поэтому changelog,
-  # publish-npmjs, publish-gitverse-npm, publish-github-npm, build-docker, create-release, publish-helm и
-  # publish-github без неё не запускаются (GitVerse пропускает зависимые джобы).
+  # publish-npmjs, publish-gitverse-npm, publish-github-npm, publish-gitea-npm, build-docker,
+  # create-release, publish-helm и publish-github без неё не запускаются (GitVerse пропускает
+  # зависимые джобы).
   #
   # Проверка — scripts/security-gate.mjs (без внешних зависимостей):
   #   * запись аудита docs/security/releases/<version>.json для РЕЛИЗУЕМОЙ версии —
@@ -364,6 +365,9 @@ jobs:
         run: bash scripts/media-release-event.sh
 
   # --- Публикация npm ---
+  # Реестров четыре: npmjs.org (эта джоба), GitVerse, GitHub Packages и npm-реестр
+  # Gitea (`publish-gitea-npm` — основной для инстанса). Все джобы независимы
+  # (needs: [build]) и публикуют одну и ту же версию из packages/synth/package.json.
   # Таймаут 30 мин (было 10): npm отдаёт опубликованную версию с задержкой
   # 4–6 мин (автоматический review/репликация), и 6 пакетов + верификация в
   # scripts/publish-packages.sh не укладываются в 10 мин. На 0.10.1 джоба была
@@ -500,6 +504,67 @@ jobs:
         run: |
           npm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.GH_TOKEN }}"
           bash scripts/publish-packages.sh https://npm.pkg.github.com --verify-only
+
+  # --- Публикация npm в npm-реестр Gitea ---
+  #
+  # Четвёртый реестр npm (после npmjs.org, GitVerse и GitHub Packages) — и при этом
+  # ОСНОВНОЙ для инстанса: `git.itphx.ru/api/packages/itphx/npm/` — это источник
+  # `npm i -g @itphx/synth@<version>` в закрытом контуре, где в `.npmrc` стоит
+  # scoped-ключ `@itphx:registry=https://git.itphx.ru/api/packages/itphx/npm/`
+  # (обновления `synth update` ходят сюда, если `updates.stableRegistry` указывает
+  # на этот реестр). До этой джобы в реестр попадали ТОЛЬКО беты
+  # (`scripts/publish-beta.sh`, workflow `beta.yaml`), поэтому стабильная версия
+  # из него не ставилась.
+  #
+  # Секрет — существующий `GT_TOKEN` (тот же, что для образов и Helm; нужно право
+  # `package:write`). Новых секретов не вводим; `GV_GITEA_TOKEN` остаётся за
+  # бета-каналом — разделение «беты / релиз» сохраняется.
+  #
+  # Политика версий и тегов — как у остальных npm-джоб: версия берётся из
+  # `packages/synth/package.json` (её ставит bump), dist-tag при обычной публикации
+  # двигает сам npm (`latest`), порядок пакетов задаёт `scripts/publish-packages.sh`
+  # (shared → … → synth), уже опубликованные версии пропускаются — повторный прогон
+  # по тому же тегу идемпотентен.
+  #
+  # Публикация — fail-closed (реальная ошибка `pnpm publish` валит джобу). Проверка
+  # видимости версии — отдельным неблокирующим шагом: реестр Gitea на раннере
+  # отвечает медленно (per-version GET может отдавать 404, тогда работает резервный
+  # путь по packument'у), и проверка не должна срезать джобу уже после публикации.
+  publish-gitea-npm:
+    name: Gitea npm (основной реестр)
+    needs: [build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: synth-ci
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка + сборка
+        run: |
+          npm install -g pnpm@12.14.0
+          pnpm install --frozen-lockfile
+          export SYNTH_BUILD_ID="$(git rev-parse HEAD)"
+          pnpm --filter @itphx/synth-shared build
+          pnpm --filter @itphx/synth-core build
+          pnpm --filter @itphx/synth-executor build
+          pnpm --filter @itphx/synth-storage-postgres build
+          pnpm --filter @itphx/synth-provisioner build
+          pnpm --filter @itphx/synth-ui build
+          pnpm --filter @itphx/synth-backend build
+          pnpm --filter @itphx/synth-sdk build
+          pnpm --filter @itphx/synth build
+
+      - name: Публикация в npm-реестр Gitea
+        # Публикация — fail-closed: реальная ошибка `pnpm publish` валит джобу.
+        run: |
+          npm config set "//git.itphx.ru/api/packages/itphx/npm/:_authToken" "${{ secrets.GT_TOKEN }}"
+          bash scripts/publish-packages.sh https://git.itphx.ru/api/packages/itphx/npm/ --no-verify
+
+      - name: Проверка видимости версии в npm-реестре Gitea (не блокирует релиз)
+        continue-on-error: true
+        run: |
+          npm config set "//git.itphx.ru/api/packages/itphx/npm/:_authToken" "${{ secrets.GT_TOKEN }}"
+          bash scripts/publish-packages.sh https://git.itphx.ru/api/packages/itphx/npm/ --verify-only
 
   # --- Публикация Docker ---
   # Образы живут ТОЛЬКО в реестре Gitea (`git.itphx.ru/itphx`, реестр публичный:
@@ -1163,7 +1228,7 @@ jobs:
           VERSION="${{ steps.gh_version.outputs.version }}"
           {
             printf '\n## Installation\n\n'
-            printf 'CLI (npm — from npmjs.org, the GitVerse Package Registry or GitHub Packages):\n\n'
+            printf 'CLI (npm — from npmjs.org, the GitVerse Package Registry, GitHub Packages or the Gitea npm registry):\n\n'
             printf '```bash\n'
             printf 'npm install -g @itphx/synth@%s\n' "$VERSION"
             printf '```\n\n'

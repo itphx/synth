@@ -1,6 +1,6 @@
 ---
 name: synth-build-publish
-description: Сборка и публикация Synth: build.sh, publish.sh, version-bump.sh, npm (3 реестра), Docker и Helm в Gitea. Используй при сборке/публикации пакетов.
+description: Сборка и публикация Synth: build.sh, publish.sh, version-bump.sh, npm (4 реестра), Docker и Helm в Gitea. Используй при сборке/публикации пакетов.
 ---
 
 # Сборка и публикация
@@ -22,7 +22,7 @@ description: Сборка и публикация Synth: build.sh, publish.sh, v
 | `NPM_TOKEN` | публикация в npmjs.org |
 | `GV_TOKEN` | npm-реестр GitVerse, API релизов GitVerse, git push от бота |
 | `GH_TOKEN` | GitHub: зеркало refs, GitHub Release, npm в GitHub Packages (`write:packages`) |
-| `GT_TOKEN` | Gitea `git.itphx.ru`: **образы** (`docker push`) и **Helm-чарт** |
+| `GT_TOKEN` | Gitea `git.itphx.ru`: **образы** (`docker push`), **Helm-чарт** и **релизные npm-пакеты** (`publish-gitea-npm`, основной реестр инстанса) |
 | `GV_GITEA_TOKEN` | Gitea `git.itphx.ru`: npm-реестр Gitea (бета-пакеты) |
 
 Локально вместо `GT_TOKEN`/`GV_GITEA_TOKEN` — переменная `GITEA_TOKEN`.
@@ -52,14 +52,17 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 
 Для публикации используется **`pnpm publish`** (а не `npm publish`), т.к. он автоматически переписывает `workspace:*` в зависимостях на фактические версии workspace-пакетов.
 
-Релиз публикует пакеты в **три** реестра (джобы `publish-npmjs`, `publish-gitverse-npm`,
-`publish-github-npm` в `release.yaml`):
+Релиз публикует пакеты в **четыре** реестра (джобы `publish-npmjs`, `publish-gitverse-npm`,
+`publish-github-npm`, `publish-gitea-npm` в `release.yaml`):
 
 - `https://registry.npmjs.org` — токен `NPM_TOKEN`
 - `https://gitverse.ru/api/packages/itphx/npm/` — токен `GV_TOKEN` (единый для всего GitVerse)
 - `https://npm.pkg.github.com` (scope `@itphx`) — токен `GH_TOKEN` со scope `write:packages`
   (`scripts/publish-packages.sh` уже передаёт `--access public`; поле `repository` в `package.json`
   отсутствует — GitHub Packages требует, чтобы оно не указывало на чужой хостинг)
+- `https://git.itphx.ru/api/packages/itphx/npm/` — токен `GT_TOKEN` (право `package:write`);
+  **основной реестр инстанса**: оттуда ставят `synth` (scoped `@itphx:registry` в `.npmrc`)
+  и обновляются в закрытом контуре
 
 Бета-пакеты — только npm-реестр Gitea (`./scripts/publish-beta.sh`, токен `GV_GITEA_TOKEN`).
 

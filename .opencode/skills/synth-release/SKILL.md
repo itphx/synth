@@ -19,7 +19,7 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 |--------|------------|
 | `NPM_TOKEN` | Публикация в npmjs.org |
 | `GV_TOKEN` | Токен GitVerse: API релизов, npm-реестр GitVerse, git push от бота (образы в GitVerse больше не публикуются) |
-| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`, логин `itphx`): публикация **образов** (`build-docker`, `publish-images-gitea`) и **Helm-чарта** (`publish-helm`) |
+| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`, логин `itphx`): публикация **образов** (`build-docker`, `publish-images-gitea`), **Helm-чарта** (`publish-helm`) и **релизных npm-пакетов** (`publish-gitea-npm` — основной реестр инстанса) |
 | `GV_GITEA_TOKEN` | Токен Gitea для npm-реестра Gitea — бета-пакеты (`beta.yaml`) |
 | `GH_TOKEN` | GitHub: push зеркала, GitHub Release, npm в GitHub Packages (`write:packages`) |
 
@@ -54,6 +54,11 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 - **Образы в GHCR больше не публикуются** — реестр образов один: публичный Gitea
   `git.itphx.ru/itphx` (анонимный `docker pull`; авторизация нужна только на push). GitHub берёт
   на себя зеркало репозитория, GitHub Release и npm в GitHub Packages.
+- **npm — четыре реестра** (`publish-npmjs`, `publish-gitverse-npm`, `publish-github-npm`,
+  `publish-gitea-npm`): npmjs, GitVerse, GitHub Packages и npm-реестр Gitea. Gitea-реестр —
+  **основной для инстанса**: из него ставят `synth` (scoped `@itphx:registry` в `.npmrc`) и
+  обновляются в закрытом контуре, поэтому релизная джоба — не «зеркало», а основной контур поставки.
+  Публикация — fail-closed, проверка видимости — отдельным неблокирующим шагом (`--verify-only`).
 
 ## Порядок сборки в CI
 
