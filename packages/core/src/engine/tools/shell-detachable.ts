@@ -17,13 +17,25 @@
  *   прогон (`ProcessService.adopt`): тот же хэндл, тот же итератор вывода, лог
  *   в `BlobStore`, остановка — только `POST /api/v2/processes/:id/stop`.
  *
+ * ## Лог
+ *
+ * Вывод пишется в лог **с первой секунды** (`openLiveLog`, tee): до detach его
+ * видно как живой лог команды (`processes/live/<processId>.log`), после detach
+ * тот же файл становится логом прогона (`record.logPath`) — префикс не
+ * копируется и не дублируется. Обычное завершение без detach удаляет лог:
+ * результат тула прежний, файла не остаётся. Ошибка открытия лога не ломает
+ * вызов: лог просто не ведётся (fail-open), detach работает по старому пути
+ * (сервис пишет префикс из буферов).
+ *
  * ## Инварианты
  *
  * 1. **Ничего не запускается дважды.** Процесс один: и до, и после detach это
  *    тот же `ExecBackgroundProcess`.
- * 2. **Читатель вывода один.** До detach — тул, после — сервис; переход идёт
- *    через `DetachableShellOutput` (кусок, пришедший в момент передачи, не
- *    теряется и попадает в лог первым).
+ * 2. **Читатель вывода один в каждый момент.** До detach — тул, после — сервис;
+ *    очередь `DetachableShellOutput` передаёт чтение по эстафете, а кусок,
+ *    пришедший в момент передачи, уходит ровно одному читателю: в живой лог
+ *    (он общий) либо обратно в очередь (`pushBack`, когда лога нет) — потери и
+ *    дублей нет.
  * 3. **До detach — прежнее поведение.** «Стоп» родительского хода убивает
  *    процесс (`SIGTERM`) и даёт `abortedResult` с частичным выводом; таймаут
  *    убивает процесс портом и даёт `tool.shell_timeout` (величина лимита +
@@ -48,6 +60,7 @@ import {
   type ExecutionPort,
 } from '../../execution/ports/index.js';
 import type { ActiveRunRegistry } from '../background/active-runs.js';
+import type { LiveProcessLog } from '../processes/types.js';
 import type { ProcessService } from '../processes/service.js';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
 import { abortedResult } from './abort.js';
@@ -171,11 +184,14 @@ function appendChunk(buffer: StreamBuffer, chunk: string): void {
  * Вывод шелла, передаваемый фону.
  *
  * У `handle.output` в каждый момент должен быть **один** читатель: до detach —
- * тул, после — сервис фоновых процессов. Обёртка это обеспечивает: тул читает
- * через `read()`, а `[Symbol.asyncIterator]()` отдаётся сервису. Кусок,
- * пришедший в момент передачи (уже запрошенный `next()`), не теряется —
- * `read()` отдаёт его тулу, а тул возвращает кусок в очередь (`pushBack`), и
- * сервис получает его первым.
+ * тул, после — сервис фоновых процессов. Обёртка это обеспечивает: очередь
+ * общая, а незавершённый `next()` у источника — не более одного. Тул читает
+ * через `read()`, сервис — через `[Symbol.asyncIterator]()`.
+ *
+ * Переход не требует «передачи» кусков: с живым логом кусок, прочитанный тулом
+ * в момент передачи, просто дописывается в тот же файл (писатель общий), а без
+ * лога возвращается в очередь (`pushBack`) — его прочитает сервис (или снова
+ * тул, если перевод не состоялся).
  */
 export class DetachableShellOutput implements AsyncIterable<ExecBackgroundChunk> {
   private readonly _source: AsyncIterator<ExecBackgroundChunk>;
@@ -187,29 +203,9 @@ export class DetachableShellOutput implements AsyncIterable<ExecBackgroundChunk>
   private _refilling = false;
   /** Источник закрыт (процесс завершился). */
   private _closed = false;
-  /** Вывод передан фону: тул больше не накапливает его. */
-  private _released = false;
 
   constructor(source: AsyncIterator<ExecBackgroundChunk>) {
     this._source = source;
-  }
-
-  /** Передать вывод фону (тул перестаёт накапливать). */
-  release(): void {
-    this._released = true;
-  }
-
-  /**
-   * Вернуть вывод тулу (перевод в фон не состоялся — например, лимит):
-   * тул продолжает читать команду, как будто detach не запрашивали.
-   */
-  resume(): void {
-    this._released = false;
-  }
-
-  /** Вывод уже передан фону. */
-  get released(): boolean {
-    return this._released;
   }
 
   /** Прочитать кусок (путь тула). */
@@ -217,7 +213,13 @@ export class DetachableShellOutput implements AsyncIterable<ExecBackgroundChunk>
     return this._next();
   }
 
-  /** Вернуть кусок в начало очереди (кусок пришёл после передачи вывода). */
+  /**
+   * Вернуть кусок в начало очереди.
+   *
+   * Нужен только без живого лога: кусок, прочитанный тулом в момент передачи
+   * вывода, ещё никуда не записан — его должен получить сервис (или,
+   * если перевод не состоялся, снова тул).
+   */
   pushBack(chunk: ExecBackgroundChunk): void {
     this._queue.unshift(chunk);
     this._wakeAll();
@@ -308,12 +310,20 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
   const stderr = createBuffer();
   const startedAt = Date.now();
 
+  // ─── Живой лог (ADR-113 §detach): tee с первой секунды ─────────────────
+  // Вывод виден в файле до detach; `adopt` заберёт тот же писатель и путь.
+  // Ошибка открытия лога не ломает вызов: лог просто не ведётся (fail-open),
+  // а detach пойдёт прежним путём — с префиксом из буферов.
+  const liveLog = await openLiveLogSafely(service, sessionId, handle.processId);
+
   /** Запись фонового прогона (появляется после успешного `adopt`). */
   const adoptedState: { value: { runId: string; processId: string; logPath: string } | null } = {
     value: null,
   };
   /** Вывод уже передан фону. */
   let released = false;
+  /** Живой лог перешёл фоновому прогону (тул его не удаляет). */
+  let logKept = false;
   /** Исход перевода в фон (не бросает): нужен циклу чтения, чтобы решить судьбу куска. */
   let detachSettled: Promise<void> | undefined;
   /**
@@ -352,18 +362,22 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
     for (;;) {
       const next = await output.read();
       if (next.done) return;
+      const chunk = next.value;
+      // tee: каждый кусок — и в живой лог, и (до detach) в буферы результата.
+      liveLog?.write(chunk.stream, chunk.data);
       if (released) {
-        // Кусок пришёл в момент передачи вывода: вернуть его сервису и дождаться
-        // исхода перевода. Успех — чтение тула закончено; отказ (лимит) —
-        // продолжаем читать команду в foreground.
-        output.pushBack(next.value);
-        if (isDetached()) return;
+        // Кусок пришёл в момент передачи вывода. С живым логом он уже записан;
+        // без лога — возвращаем его в очередь: читать будет сервис (или снова
+        // тул, если перевод не состоялся).
+        if (!liveLog) output.pushBack(chunk);
+        // Исход перевода: промис создаётся вместе с флагом `released`.
         if (!detachSettled) return;
         await detachSettled;
         if (isDetached()) return;
-        continue;
+        // Отказ (лимит): кусок должен попасть и в результат тула. Без лога он
+        // уже в очереди — его прочитает следующий виток.
+        if (!liveLog) continue;
       }
-      const chunk = next.value;
       if (chunk.stream === 'stdout') appendChunk(stdout, chunk.data);
       else appendChunk(stderr, chunk.data);
     }
@@ -382,11 +396,11 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
   /**
    * Перевод в фон (идемпотентно — повторный вызов возвращает тот же промис).
    *
-   * Порядок: снять подписку на «Стоп» → передать вывод сервису (он пишет
-   * префикс из буферов и продолжает читать тот же итератор) → снять
-   * регистрацию → разбудить ожидание. Отказ (лимит) пробрасывается: реестр
-   * активных прогонов соберёт его в `failed`, тул продолжит ждать команду в
-   * foreground.
+   * Порядок: снять подписку на «Стоп» → передать процесс сервису вместе с
+   * писателем живого лога (сервис продолжает писать в тот же файл и читает
+   * тот же итератор) → снять регистрацию → разбудить ожидание. Отказ (лимит)
+   * пробрасывается: реестр активных прогонов соберёт его в `failed`, тул
+   * продолжит ждать команду в foreground.
    */
   const detach = (): Promise<void> => {
     if (detachPromise) return detachPromise;
@@ -409,7 +423,6 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
 
       unsubscribeParent();
       released = true;
-      output.release();
 
       let started: { runId: string; processId: string; logPath: string };
       try {
@@ -425,15 +438,17 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
           processId: handle.processId,
           handle,
           iterator: output[Symbol.asyncIterator](),
-          bufferedStdout: stdout.text,
-          bufferedStderr: stderr.text,
+          // Живой лог — писатель и путь: сервис продолжает писать в тот же
+          // файл, префикс из буферов не нужен (он уже в логе). Без живого
+          // лога (fail-open) — прежний путь с префиксом.
+          ...(liveLog ? { liveLog } : {}),
+          ...(liveLog ? {} : { bufferedStdout: stdout.text, bufferedStderr: stderr.text }),
           title: input.displayCommand,
         });
       } catch (err) {
         // Перевести не удалось (лимит прогонов, сбой перестановки таймаута) —
         // возвращаемся в foreground: процесс жив, вывод снова читает тул.
         released = false;
-        output.resume();
         subscribeParent();
         // Возвращаем прежний срок, чтобы поведение не изменилось. Ошибка
         // восстановления не важнее исходной: прогон всё равно foreground, а
@@ -443,6 +458,10 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
       }
 
       adoptedState.value = started;
+      // Лог теперь принадлежит фоновому прогону: тул его не удаляет. Писатель
+      // остаётся один — и сервис, и цикл чтения тула пишут в него же (кусок,
+      // прочитанный тулом в момент передачи, не теряется).
+      logKept = true;
       // Foreground-обёртка завершена: реестр активных прогонов больше не нужен
       // (фоновая часть учитывается реестром прогонов).
       unregister();
@@ -493,7 +512,42 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
   unsubscribeParent();
   unregister();
   await pump;
+  // Обычное завершение: лог никому не нужен — flush и удаление (best-effort).
+  // Переведённый прогон лог забирает себе: файл остаётся.
+  await closeLiveLog(liveLog, logKept);
   return completionResult(input, stdout, stderr, exit, startedAt);
+}
+
+/**
+ * Открыть живой лог, не ломая вызов при отказе (fail-open).
+ *
+ * Blob-хранилище может быть недоступно (деградированный режим), а сервис —
+ * подменён в тестах: в обоих случаях вывод просто не логируется до detach,
+ * дальше работает прежний путь (сервис создаст лог при `adopt`, префикс — из
+ * буферов).
+ */
+async function openLiveLogSafely(
+  service: ProcessService,
+  sessionId: string,
+  processId: string,
+): Promise<LiveProcessLog | null> {
+  const open = (service as Partial<ProcessService>).openLiveLog;
+  if (typeof open !== 'function') return null;
+  try {
+    return (await open.call(service, { sessionId, processId })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Завершить живой лог, не бросая (результат тула важнее файла). */
+async function closeLiveLog(log: LiveProcessLog | null, keep: boolean): Promise<void> {
+  if (!log) return;
+  try {
+    await log.finish({ keep });
+  } catch {
+    // файл останется сиротой — его удалит pruner по сроку
+  }
 }
 
 /** Прежний путь `execute` — используется, если хэндла нет (прямой вызов). */

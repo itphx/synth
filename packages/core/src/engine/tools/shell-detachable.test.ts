@@ -117,13 +117,16 @@ interface AdoptedInput {
   cwd: string;
   processId: string;
   iterator: AsyncIterator<ExecBackgroundChunk>;
-  bufferedStdout: string;
-  bufferedStderr: string;
+  bufferedStdout?: string;
+  bufferedStderr?: string;
+  liveLog?: { logPath: string };
   pid?: number;
   title?: string;
 }
 
-function createHarness(options: { withSpawnBackground?: boolean; retime?: boolean } = {}) {
+function createHarness(
+  options: { withSpawnBackground?: boolean; retime?: boolean; openLiveLogFails?: boolean } = {},
+) {
   /** Общий журнал порядка событий «перестановка срока ↔ adopt». */
   const order: string[] = [];
   const fake = createFakeProcess('proc_1', {
@@ -150,7 +153,18 @@ function createHarness(options: { withSpawnBackground?: boolean; retime?: boolea
     adopted.push(input);
     return { runId: 'bgr_1', processId: input.processId, logPath: 'processes/bgr_1.log' };
   });
-  const processService = { adopt } as unknown as ProcessService;
+  // Живого лога нет: сервис без `openLiveLog` (старый исполнитель) либо его
+  // открытие падает (blob недоступен) — оба случая проверяются одинаково.
+  const processService = (
+    options.openLiveLogFails
+      ? {
+          adopt,
+          openLiveLog: vi.fn(async () => {
+            throw new Error('blob-хранилище недоступно');
+          }),
+        }
+      : { adopt }
+  ) as unknown as ProcessService;
   const registry = new ActiveRunRegistry();
 
   return { fake, port, adopt, adopted, processService, registry, execute, order };
@@ -556,5 +570,138 @@ describe('execute_shell — detach идущего шелла (ADR-113)', () => {
     await vi.waitFor(async () => {
       expect((await service.get(runId))?.status).toBe('cancelled');
     }, { timeout: 5_000 });
+  });
+});
+
+/**
+ * ADR-113 §detach: живой лог команды (tee с первой секунды).
+ *
+ * Проверяется:
+ *   • вывод виден в `processes/live/<processId>.log` **до** detach;
+ *   • после detach тот же файл становится логом прогона, префикс не дублируется;
+ *   • обычное завершение удаляет живой лог (результат тула прежний);
+ *   • отказ `openLiveLog` не ломает вызов: detach идёт с префиксом из буферов.
+ */
+describe('execute_shell — живой лог команды (ADR-113 §detach)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-shell-live-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(extra: Record<string, unknown>): ToolContext {
+    return { sessionId: 's1', messageId: 'm1', workingDir: tmpDir, extra };
+  }
+
+  /** Настоящий сервис процессов + фейковый хэндл: лог проверяется в blob. */
+  function createLiveHarness() {
+    const fake = createFakeProcess('proc_1');
+    const port = {
+      execute: vi.fn(async () => ({ stdout: '', stderr: '' })),
+      spawnBackground: vi.fn(async () => fake.proc),
+    } as unknown as ExecutionPort;
+    const eventBus = new EventBus();
+    const background = new BackgroundRunService({
+      repository: new MemoryBackgroundRunRepository(),
+      eventBus,
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+    });
+    const blobs = new MemoryBlobStore();
+    const service = new ProcessService({
+      executionPort: port,
+      background,
+      blobs,
+      eventBus,
+      limits: { maxLogBytes: 0 },
+    });
+    const registry = new ActiveRunRegistry();
+    return { fake, port, blobs, service, registry };
+  }
+
+  it('вывод попадает в живой лог до detach, после — тот же файл без дублей', async () => {
+    const h = createLiveHarness();
+    const ctx = makeCtx({
+      processService: h.service,
+      activeRuns: h.registry,
+      backgroundEnabled: true,
+      executionPort: h.port,
+    });
+
+    const promise = executeShellTool.execute({ command: 'npm run dev' }, ctx);
+    await vi.waitFor(() => expect(h.registry.list('s1')).toHaveLength(1));
+
+    h.fake.emit('stdout', 'early\n');
+    // Лог ведётся сразу: файл появляется ещё до перевода в фон.
+    await vi.waitFor(async () => {
+      expect((await h.blobs.read('processes/live/proc_1.log'))?.toString('utf-8')).toBe('early\n');
+    }, { timeout: 2_000 });
+
+    const detached = await h.registry.detachAll('s1');
+    expect(detached.failed).toHaveLength(0);
+    const result = await promise;
+    expect(result.metadata?.detached).toBe(true);
+    expect(result.metadata?.log_path).toBe('processes/live/proc_1.log');
+
+    h.fake.emit('stdout', 'after\n');
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 5 });
+
+    const runId = result.metadata?.background_run_id as string;
+    await vi.waitFor(async () => {
+      expect((await h.service.get(runId))?.status).toBe('completed');
+    });
+    // Префикс ровно один: до detach писал тул, после — сервис, файл один.
+    expect((await h.service.logs(runId))?.content).toBe('early\nafter\n');
+  });
+
+  it('обычное завершение удаляет живой лог, результат тула прежний', async () => {
+    const h = createLiveHarness();
+    const ctx = makeCtx({
+      processService: h.service,
+      activeRuns: h.registry,
+      backgroundEnabled: true,
+      executionPort: h.port,
+    });
+
+    const promise = executeShellTool.execute({ command: 'echo hi' }, ctx);
+    await vi.waitFor(() => expect(h.registry.list('s1')).toHaveLength(1));
+    h.fake.emit('stdout', 'hi\n');
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 4 });
+
+    const result = await promise;
+    expect(result.content).toBe('hi\n');
+    expect(result.metadata?.detached).toBeUndefined();
+    // Лог никому не нужен: файла не остаётся.
+    expect(await h.blobs.exists('processes/live/proc_1.log')).toBe(false);
+  });
+
+  it('отказ openLiveLog не ломает вызов: detach идёт с префиксом из буферов', async () => {
+    const h = createHarness({ openLiveLogFails: true });
+    const ctx = makeCtx({
+      processService: h.processService,
+      activeRuns: h.registry,
+      backgroundEnabled: true,
+      executionPort: h.port,
+    });
+
+    const promise = executeShellTool.execute({ command: 'npm run dev' }, ctx);
+    await vi.waitFor(() => expect(h.registry.list('s1')).toHaveLength(1));
+    h.fake.emit('stdout', 'early\n');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const detached = await h.registry.detachAll('s1');
+    expect(detached.failed).toHaveLength(0);
+    const result = await promise;
+    expect(result.metadata?.detached).toBe(true);
+
+    // Живого лога нет — прежний путь: префикс из буферов, писателя не передаём.
+    const input = h.adopted[0]!;
+    expect(input.liveLog).toBeUndefined();
+    expect(input.bufferedStdout).toBe('early\n');
+
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 5 });
   });
 });

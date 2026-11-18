@@ -11,7 +11,11 @@
  *   plane или у исполнителя);
  * - **учёт** — единый реестр фоновых прогонов (`BackgroundRunService`,
  *   `kind: 'process'`): тот же реестр, что и у фоновых саб-агентов (PROP-096);
- * - **лог** — blob-хранилище (ADR-096), путь `processes/<runId>.log`.
+ * - **лог** — blob-хранилище (ADR-096), путь `processes/<runId>.log`. Вывод
+ *   foreground-команды пишется с первой секунды в живой лог
+ *   `processes/live/<processId>.log` (`openLiveLog`): до перевода в фон он
+ *   никому не принадлежит, а `adopt` продолжает запись в тот же файл и
+ *   ставит его путём записи реестра.
  *
  * Инварианты:
  * 1. **Лог не роняет процесс**: ошибка записи — предупреждение в лог, процесс
@@ -43,6 +47,8 @@ import {
   PROCESS_LOG_FLUSH_BYTES,
   PROCESS_LOG_FLUSH_INTERVAL_MS,
   PROCESS_LOG_TAIL_LIMIT,
+  liveProcessLogPath,
+  type LiveProcessLog,
   type ProcessAdoptInput,
   type ProcessLogsOptions,
   type ProcessLogsResult,
@@ -67,8 +73,8 @@ const OUTPUT_DRAIN_TIMEOUT_MS = 2_000;
 interface LiveProcess {
   /** Хэндл порта исполнения. */
   proc: ExecBackgroundProcess;
-  /** Писатель лога. */
-  writer: ProcessLogWriter;
+  /** Писатель лога (живой лог foreground-команды или лог прогона). */
+  writer: ProcessLogSink;
   /** Таймер эскалации до SIGKILL. */
   killTimer?: NodeJS.Timeout;
   /** Сессия-владелец (канал события `process.stopped`). */
@@ -140,6 +146,35 @@ class ProcessLogFile {
 }
 
 /**
+ * Параметры писателя лога.
+ *
+ * `streamPaths` не задан — пишется только общий лог (живой лог foreground-
+ * команды, ADR-113 §detach): потоковых файлов у него нет.
+ */
+interface ProcessLogWriterOptions {
+  blobs: BlobStore;
+  combinedPath: string;
+  streamPaths?: Record<'stdout' | 'stderr', string>;
+  maxBytes: number;
+  logger: ProcessLogger;
+}
+
+/**
+ * Приёмник вывода прогона: писатель лога фонового прогона либо живой лог
+ * идущей команды.
+ *
+ * Оба пишут в **один** файл прогона; сервис работает с приёмником, не зная,
+ * заведён ли лог с первой секунды (`openLiveLog`) или после перевода в фон.
+ */
+interface ProcessLogSink {
+  push(stream: 'stdout' | 'stderr', data: string): void;
+  flush(): Promise<void>;
+  readonly truncated: boolean;
+  streamTruncated(stream: 'stdout' | 'stderr'): boolean;
+  tail(): string;
+}
+
+/**
  * Буфер записи лога фонового процесса.
  *
  * Куски вывода копятся в буфере и пишутся в blob **пачками**: при 64 КиБ
@@ -147,16 +182,17 @@ class ProcessLogFile {
  * ждёт накопления). Записи сериализованы цепочкой промисов — порядок вывода
  * сохраняется.
  *
- * Пишутся **три** файла: общий лог (`combined`) — в порядке прихода чанков,
- * и файлы потоков (`stdout`/`stderr`) — только свой поток. У каждого файла
- * свой предел размера и свой признак усечения.
+ * Пишется общий лог (`combined`) — в порядке прихода чанков; если заданы
+ * `streamPaths`, дополнительно ведутся файлы потоков (`stdout`/`stderr`) —
+ * только свой поток. У каждого файла свой предел размера и свой признак
+ * усечения.
  *
  * Ошибка записи **не роняет процесс**: она — предупреждение в лог.
  */
-class ProcessLogWriter {
+class ProcessLogWriter implements ProcessLogSink {
   private readonly _combined: ProcessLogFile;
-  private readonly _stdout: ProcessLogFile;
-  private readonly _stderr: ProcessLogFile;
+  private readonly _stdout?: ProcessLogFile;
+  private readonly _stderr?: ProcessLogFile;
   private readonly _logger: ProcessLogger;
   /** Накопленный, ещё не записанный текст (общий лог). */
   private _pending = '';
@@ -169,18 +205,13 @@ class ProcessLogWriter {
   /** Цепочка записей (порядок вывода сохраняется). */
   private _chain: Promise<void> = Promise.resolve();
 
-  constructor(
-    blobs: BlobStore,
-    combinedPath: string,
-    stdoutPath: string,
-    stderrPath: string,
-    maxBytes: number,
-    logger: ProcessLogger,
-  ) {
-    this._combined = new ProcessLogFile(blobs, combinedPath, maxBytes);
-    this._stdout = new ProcessLogFile(blobs, stdoutPath, maxBytes);
-    this._stderr = new ProcessLogFile(blobs, stderrPath, maxBytes);
-    this._logger = logger;
+  constructor(opts: ProcessLogWriterOptions) {
+    this._combined = new ProcessLogFile(opts.blobs, opts.combinedPath, opts.maxBytes);
+    if (opts.streamPaths) {
+      this._stdout = new ProcessLogFile(opts.blobs, opts.streamPaths.stdout, opts.maxBytes);
+      this._stderr = new ProcessLogFile(opts.blobs, opts.streamPaths.stderr, opts.maxBytes);
+    }
+    this._logger = opts.logger;
   }
 
   /** Общий лог усечён по пределу размера. */
@@ -193,9 +224,9 @@ class ProcessLogWriter {
     return this._combined.bytesWritten;
   }
 
-  /** Лог потока усечён по пределу размера. */
+  /** Лог потока усечён по пределу размера (потоковых файлов нет — `false`). */
   streamTruncated(stream: 'stdout' | 'stderr'): boolean {
-    return this._file(stream).truncated;
+    return this._file(stream)?.truncated ?? false;
   }
 
   /** Хвост записанного текста (≤ `PROCESS_LOG_TAIL_LIMIT` символов). */
@@ -207,14 +238,14 @@ class ProcessLogWriter {
    * Принять кусок вывода процесса.
    *
    * `stream` — поток куска: текст пишется и в общий лог (в порядке прихода),
-   * и в файл своего потока. Переполнение предела одного файла не мешает
-   * писать остальные.
+   * и (если файлы потоков ведутся) в файл своего потока. Переполнение предела
+   * одного файла не мешает писать остальные.
    */
   push(stream: 'stdout' | 'stderr', data: string): void {
     if (!data) return;
     if (!this._combined.truncated) this._pending += data;
     const file = this._file(stream);
-    if (!file.truncated) this._pendingStreams[stream] += data;
+    if (file && !file.truncated) this._pendingStreams[stream] += data;
     if (this._pendingBytes() >= PROCESS_LOG_FLUSH_BYTES) {
       void this.flush();
       return;
@@ -236,8 +267,8 @@ class ProcessLogWriter {
       if (written.length > 0) {
         this._tail = (this._tail + written.toString('utf-8')).slice(-PROCESS_LOG_TAIL_LIMIT);
       }
-      await this._append(this._stdout, stdoutText);
-      await this._append(this._stderr, stderrText);
+      if (this._stdout) await this._append(this._stdout, stdoutText);
+      if (this._stderr) await this._append(this._stderr, stderrText);
     });
     return this._chain;
   }
@@ -252,8 +283,8 @@ class ProcessLogWriter {
     this._timer.unref?.();
   }
 
-  /** Файл потока по имени. */
-  private _file(stream: 'stdout' | 'stderr'): ProcessLogFile {
+  /** Файл потока по имени (не задан — потоковых файлов нет). */
+  private _file(stream: 'stdout' | 'stderr'): ProcessLogFile | undefined {
     return stream === 'stdout' ? this._stdout : this._stderr;
   }
 
@@ -276,6 +307,77 @@ class ProcessLogWriter {
         `[ProcessService] запись лога процесса не удалась: ${err instanceof Error ? err.message : String(err)}`,
       );
       return Buffer.alloc(0);
+    }
+  }
+}
+
+/**
+ * Живой лог foreground-команды (ADR-113 §detach): tee с первой секунды.
+ *
+ * Обёртка над тем же писателем, но без потоковых файлов и с завершением:
+ * обычное завершение команды удаляет файл (`finish({keep:false})`), а
+ * перевод в фон забирает писатель целиком — запись продолжается в тот же
+ * файл, куски не теряются и не дублируются.
+ */
+class LiveProcessLogWriter implements LiveProcessLog {
+  readonly logPath: string;
+  private readonly _writer: ProcessLogWriter;
+  private readonly _blobs: BlobStore;
+
+  constructor(blobs: BlobStore, logPath: string, maxBytes: number, logger: ProcessLogger) {
+    this._blobs = blobs;
+    this.logPath = logPath;
+    this._writer = new ProcessLogWriter({ blobs, combinedPath: logPath, maxBytes, logger });
+  }
+
+  /** Дописать кусок вывода. */
+  write(stream: 'stdout' | 'stderr', data: string): void {
+    this._writer.push(stream, data);
+  }
+
+  /** Тот же приём, что у писателя фонового лога (сервис при `adopt`). */
+  push(stream: 'stdout' | 'stderr', data: string): void {
+    this._writer.push(stream, data);
+  }
+
+  /** Записать накопленное в blob. */
+  flush(): Promise<void> {
+    return this._writer.flush();
+  }
+
+  get truncated(): boolean {
+    return this._writer.truncated;
+  }
+
+  /** Потоковых файлов у живого лога нет. */
+  streamTruncated(stream: 'stdout' | 'stderr'): boolean {
+    return this._writer.streamTruncated(stream);
+  }
+
+  /** Хвост записанного текста. */
+  tail(): string {
+    return this._writer.tail();
+  }
+
+  /**
+   * Завершить живой лог.
+   *
+   * `keep:false` — flush и удаление файла: обычное завершение команды без
+   * перевода в фон (лог никому не нужен). `keep:true` — только flush: файл
+   * остаётся логом прогона. Удаление — best-effort: ошибка не должна ломать
+   * результат тула (файл уберёт pruner как сироту).
+   */
+  async finish(opts: { keep: boolean }): Promise<void> {
+    try {
+      await this._writer.flush();
+    } catch {
+      // flush не бросает (ошибки — предупреждением), но best-effort важен.
+    }
+    if (opts.keep) return;
+    try {
+      await this._blobs.delete(this.logPath);
+    } catch {
+      // файл останется сиротой — его удалит pruner по сроку
     }
   }
 }
@@ -405,14 +507,16 @@ export class ProcessService {
     }
 
     const logPath = record.logPath ?? '';
-    const writer = new ProcessLogWriter(
-      this._blobs,
-      logPath,
-      processStreamLogPath(record.id, 'stdout'),
-      processStreamLogPath(record.id, 'stderr'),
-      this._maxLogBytes(),
-      this._logger,
-    );
+    const writer = new ProcessLogWriter({
+      blobs: this._blobs,
+      combinedPath: logPath,
+      streamPaths: {
+        stdout: processStreamLogPath(record.id, 'stdout'),
+        stderr: processStreamLogPath(record.id, 'stderr'),
+      },
+      maxBytes: this._maxLogBytes(),
+      logger: this._logger,
+    });
     this._track(record, proc, proc.output, writer);
 
     return {
@@ -421,6 +525,31 @@ export class ProcessService {
       logPath,
       ...(proc.pid !== undefined ? { pid: proc.pid } : {}),
     };
+  }
+
+  /**
+   * Открыть **живой** лог идущей foreground-команды (ADR-113 §detach).
+   *
+   * Нужен тулу `execute_shell`, который запустил процесс через
+   * `spawnBackground`: лог ведётся с первой секунды (`processes/live/
+   * <processId>.log`), поэтому вывод виден до перевода в фон, а `adopt`
+   * продолжает запись в тот же файл без копирования префикса.
+   *
+   * Запись реестра не создаётся, события не публикуются, лимиты не
+   * проверяются: это только файл. Обычное завершение команды удаляет его
+   * (`finish({keep:false})`), перевод в фон — оставляет.
+   */
+  async openLiveLog(input: { sessionId: string; processId: string }): Promise<LiveProcessLog> {
+    // `sessionId` в подписи — часть контракта вызывающего (чья команда ведёт
+    // лог); файлу и записи реестра он не нужен: реестр появится только при
+    // `adopt`, а до этого лог ничей (сироту уберёт pruner по сроку).
+    void input.sessionId;
+    return new LiveProcessLogWriter(
+      this._blobs,
+      liveProcessLogPath(input.processId),
+      this._maxLogBytes(),
+      this._logger,
+    );
   }
 
   /**
@@ -433,10 +562,12 @@ export class ProcessService {
    * `startProcess`), лог в `BlobStore`, `stop` через реестр прогонов,
    * терминальный переход и уведомление родителя.
    *
-   * Префикс лога — вывод, который команда успела выдать в foreground
-   * (`bufferedStdout` + `bufferedStderr`): в журнал он пишется первым, в том же
-   * виде, в каком его накапливал тул (без разделителей — как и чанки
-   * `_consume`), иначе журнал начинался бы «с середины».
+   * Префикс лога: если тул вёл живой лог (`liveLog`), файл уже содержит весь
+   * вывод с первой секунды — сервис забирает писатель и путь, ничего не
+   * копируя. Без живого лога префикс — вывод, который команда успела выдать в
+   * foreground (`bufferedStdout` + `bufferedStderr`): в журнал он пишется
+   * первым, в том же виде, в каком его накапливал тул (без разделителей — как
+   * и чанки `_consume`), иначе журнал начинался бы «с середины».
    *
    * Завершение уже случившегося процесса обрабатывается штатно: `exited`
    * резолвлен → запись сразу уходит в терминальный статус, `runId` всё равно
@@ -447,6 +578,7 @@ export class ProcessService {
    *   в foreground.
    */
   async adopt(input: ProcessAdoptInput): Promise<ProcessSpawnResult> {
+    const liveLog = input.liveLog;
     const record = await this._background.startProcess({
       sessionId: input.sessionId,
       ...(input.projectId ? { projectId: input.projectId } : {}),
@@ -454,6 +586,10 @@ export class ProcessService {
       cwd: input.cwd,
       ...(input.pid !== undefined ? { pid: input.pid } : {}),
       processId: input.processId,
+      // Живой лог: запись реестра указывает на **тот же** файл, который уже
+      // пишется с первой секунды (префикс не копируется, чтение лога —
+      // прежнее, по `record.logPath`).
+      ...(liveLog ? { logPath: liveLog.logPath } : input.logPath ? { logPath: input.logPath } : {}),
     });
 
     const logPath = record.logPath ?? '';
@@ -470,25 +606,33 @@ export class ProcessService {
       ...(input.title ? { title: input.title } : {}),
     });
 
-    const writer = new ProcessLogWriter(
-      this._blobs,
-      logPath,
-      processStreamLogPath(record.id, 'stdout'),
-      processStreamLogPath(record.id, 'stderr'),
-      this._maxLogBytes(),
-      this._logger,
-    );
-    // Префикс лога — вывод, накопленный до перевода в фон. Потоки не
-    // склеиваются: stdout и stderr попадают в **свои** файлы, а в общий
-    // лог — stdout, затем stderr (как было до разделения потоков).
-    if (input.bufferedStdout) writer.push('stdout', input.bufferedStdout);
-    if (input.bufferedStderr) writer.push('stderr', input.bufferedStderr);
+    // Приёмник вывода: живой лог команды (он уже пишет в файл прогона) либо
+    // писатель прогона с файлами потоков — как у обычного фонового запуска.
+    const writer: ProcessLogSink = liveLog ?? new ProcessLogWriter({
+      blobs: this._blobs,
+      combinedPath: logPath,
+      streamPaths: {
+        stdout: processStreamLogPath(record.id, 'stdout'),
+        stderr: processStreamLogPath(record.id, 'stderr'),
+      },
+      maxBytes: this._maxLogBytes(),
+      logger: this._logger,
+    });
+    // Префикс из буферов — только когда живого лога нет (обратная
+    // совместимость): с живым логом он уже записан, копия дала бы дубль.
+    if (!liveLog) {
+      // Потоки не склеиваются: stdout и stderr попадают в **свои** файлы, а в
+      // общий лог — stdout, затем stderr (как было до разделения потоков).
+      if (input.bufferedStdout) writer.push('stdout', input.bufferedStdout);
+      if (input.bufferedStderr) writer.push('stderr', input.bufferedStderr);
+    }
 
     this._track(
       record,
       input.handle,
-      // Итератор переданного хэндла читается как поток: сервис — единственный
-      // читатель с этого момента (тул снял подписку на «Стоп» и не читает).
+      // Итератор переданного хэндла читается как поток: с этого момента
+      // очередь читает сервис, а цикл тула чтение прекращает (возможный
+      // гоночный кусок он уже дописал в общий с сервисом живой лог).
       { [Symbol.asyncIterator]: () => input.iterator },
       writer,
     );
@@ -573,8 +717,9 @@ export class ProcessService {
    * `stream` — поток вывода: `combined` (по умолчанию) — общий лог прогона
    * (`record.logPath`), `stdout`/`stderr` — файл потока
    * (`processes/<id>.<stream>.log`). Файла потока нет у прогонов, запущенных
-   * до разделения потоков, — тогда ответ `null` (как и для отсутствующего
-   * общего лога).
+   * до разделения потоков, и у прогонов, переведённых в фон из foreground
+   * (живой лог ведёт один файл) — тогда ответ `null` (как и для
+   * отсутствующего общего лога).
    *
    * `null` — записи (или лога) нет: файла лога не существует (запись без
    * пути, либо лог удалён retention-очисткой). Пустой, но существующий лог —
@@ -619,7 +764,7 @@ export class ProcessService {
     record: BackgroundRunRecord,
     proc: ExecBackgroundProcess,
     output: AsyncIterable<ExecBackgroundChunk>,
-    writer: ProcessLogWriter,
+    writer: ProcessLogSink,
   ): void {
     this._live.set(record.id, {
       proc,
@@ -665,7 +810,7 @@ export class ProcessService {
    */
   private async _finish(
     record: BackgroundRunRecord,
-    writer: ProcessLogWriter,
+    writer: ProcessLogSink,
     exitCode: number | null,
     signal: string | null,
   ): Promise<void> {
@@ -714,10 +859,10 @@ export class ProcessService {
     }
   }
 
-  /** Перекачка вывода процесса в писатель лога. */
+  /** Перекачка вывода процесса в приёмник лога (писатель прогона или живой лог). */
   private async _consume(
     output: AsyncIterable<ExecBackgroundChunk>,
-    writer: ProcessLogWriter,
+    writer: ProcessLogSink,
   ): Promise<void> {
     try {
       for await (const chunk of output) {

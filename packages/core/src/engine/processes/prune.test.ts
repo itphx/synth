@@ -101,3 +101,68 @@ describe('ProcessLogPruner — очистка логов фоновых проц
     expect(await blobs.exists('processes/bgr_orphan.stdout.log')).toBe(false);
   });
 });
+
+/**
+ * ADR-113 §detach: живые логи foreground-команд (`processes/live/…`) — отдельный
+ * класс. У идущей команды записи реестра ещё нет, поэтому безусловное
+ * «сиротское» правило снесло бы её лог: удаляем только по сроку
+ * (`LIVE_LOG_ORPHAN_TTL_MS`), и только если файл никому не принадлежит.
+ */
+describe('ProcessLogPruner — живые логи foreground-команд', () => {
+  let blobs: MemoryBlobStore;
+  let repository: MemoryBackgroundRunRepository;
+
+  beforeEach(() => {
+    blobs = new MemoryBlobStore();
+    repository = new MemoryBackgroundRunRepository();
+  });
+
+  it('молодой live-лог не удаляется (команда может ещё идти)', async () => {
+    await blobs.write('processes/live/proc_young.log', 'out');
+    // Маркер завершения прохода: сиротский лог прогона удаляется всегда.
+    await blobs.write('processes/bgr_orphan.log', 'x');
+
+    const stop = startProcessLogPruner(repository, blobs, { getRetentionDays: () => 7 });
+    await vi.waitFor(async () => {
+      expect(await blobs.exists('processes/bgr_orphan.log')).toBe(false);
+    });
+    stop();
+
+    expect(await blobs.exists('processes/live/proc_young.log')).toBe(true);
+  });
+
+  it('старый «сиротский» live-лог удаляется (процесс упал, не удалив лог)', async () => {
+    await blobs.write('processes/live/proc_old.log', 'out');
+
+    // Срок жизни live-лога — 0: файл считается старым.
+    const stop = startProcessLogPruner(repository, blobs, {
+      getRetentionDays: () => 7,
+      liveLogTtlMs: 0,
+    });
+    await vi.waitFor(async () => {
+      expect(await blobs.exists('processes/live/proc_old.log')).toBe(false);
+    });
+    stop();
+  });
+
+  it('live-лог переведённого в фон прогона не удаляется (есть в logPath)', async () => {
+    await repository.save(
+      processRecord('bgr_detached', { logPath: 'processes/live/proc_live.log' }),
+    );
+    await blobs.write('processes/live/proc_live.log', 'out');
+
+    const stop = startProcessLogPruner(repository, blobs, {
+      getRetentionDays: () => 7,
+      // Даже «старый» по сроку: ссылка живой записи защищает безусловно.
+      liveLogTtlMs: 0,
+    });
+    // Маркер завершения прохода.
+    await blobs.write('processes/bgr_orphan.log', 'x');
+    await vi.waitFor(async () => {
+      expect(await blobs.exists('processes/bgr_orphan.log')).toBe(false);
+    });
+    stop();
+
+    expect(await blobs.exists('processes/live/proc_live.log')).toBe(true);
+  });
+});

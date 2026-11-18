@@ -22,6 +22,7 @@ import {
   EXECUTION_BACKGROUND_UNSUPPORTED_CODE,
   type ExecBackgroundChunk,
   type ExecBackgroundExit,
+  type ExecBackgroundProcess,
   type ExecutionPort,
 } from '../../execution/ports/index.js';
 import { ProcessService } from './service.js';
@@ -577,5 +578,146 @@ describe('ProcessService — живой предел лога (getMaxLogBytes)',
     // Изменение резолвера действует на **новый** лог.
     maxLogBytes = 5;
     await spawn();
+  });
+});
+
+/**
+ * ADR-113 §detach: живой лог foreground-команды (`openLiveLog`).
+ *
+ * Вывод пишется в `processes/live/<processId>.log` с первой секунды; обычное
+ * завершение удаляет файл, а перевод в фон (`adopt`) забирает писатель и путь —
+ * запись продолжается в тот же файл, префикс не копируется и не дублируется.
+ */
+describe('ProcessService — живой лог foreground-команды (ADR-113 §detach)', () => {
+  /** Фейковый процесс: вывод и завершение управляются из теста. */
+  function createFakeLiveProcess(processId = 'proc_9') {
+    const queue: ExecBackgroundChunk[] = [];
+    let notify: (() => void) | null = null;
+    let closed = false;
+    let resolveExit!: (exit: ExecBackgroundExit) => void;
+    const exited = new Promise<ExecBackgroundExit>((resolve) => {
+      resolveExit = resolve;
+    });
+    const wake = (): void => {
+      const resolve = notify;
+      notify = null;
+      resolve?.();
+    };
+    const output: AsyncIterable<ExecBackgroundChunk> = {
+      async *[Symbol.asyncIterator]() {
+        for (;;) {
+          while (queue.length > 0) yield queue.shift() as ExecBackgroundChunk;
+          if (closed) return;
+          await new Promise<void>((resolve) => {
+            notify = resolve;
+          });
+        }
+      },
+    };
+    const proc: ExecBackgroundProcess = {
+      processId,
+      output,
+      exited,
+      stop: () => undefined,
+    };
+    return {
+      proc,
+      iterator: output[Symbol.asyncIterator](),
+      emit: (stream: 'stdout' | 'stderr', data: string): void => {
+        queue.push({ stream, data });
+        wake();
+      },
+      finish: (exit: ExecBackgroundExit): void => {
+        closed = true;
+        wake();
+        resolveExit(exit);
+      },
+    };
+  }
+
+  function createLiveHarness() {
+    const eventBus = new EventBus();
+    const blobs = new MemoryBlobStore();
+    let counter = 0;
+    const background = new BackgroundRunService({
+      repository: new MemoryBackgroundRunRepository(),
+      eventBus,
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+      generateId: () => `id-${++counter}`,
+    });
+    const service = new ProcessService({
+      executionPort: { execute: async () => ({ stdout: '', stderr: '' }) } as unknown as ExecutionPort,
+      background,
+      blobs,
+      eventBus,
+      limits: { maxLogBytes: 0 },
+    });
+    return { service, blobs, eventBus };
+  }
+
+  it('openLiveLog пишет в blob и не создаёт запись реестра', async () => {
+    const h = createLiveHarness();
+    const log = await h.service.openLiveLog({ sessionId: 's1', processId: 'proc_7' });
+    expect(log.logPath).toBe('processes/live/proc_7.log');
+
+    log.write('stdout', 'out\n');
+    log.write('stderr', 'err\n');
+    await log.flush();
+    expect((await h.blobs.read('processes/live/proc_7.log'))?.toString('utf-8')).toBe('out\nerr\n');
+
+    // Ни записи реестра, ни события: это только файл.
+    expect(await h.service.list({ sessionId: 's1' })).toHaveLength(0);
+
+    await log.finish({ keep: false });
+  });
+
+  it('finish({keep:false}) удаляет файл, finish({keep:true}) оставляет', async () => {
+    const h = createLiveHarness();
+
+    const dropped = await h.service.openLiveLog({ sessionId: 's1', processId: 'proc_a' });
+    dropped.write('stdout', 'x');
+    await dropped.finish({ keep: false });
+    expect(await h.blobs.exists('processes/live/proc_a.log')).toBe(false);
+
+    const keptLog = await h.service.openLiveLog({ sessionId: 's1', processId: 'proc_b' });
+    keptLog.write('stdout', 'y');
+    await keptLog.finish({ keep: true });
+    expect((await h.blobs.read('processes/live/proc_b.log'))?.toString('utf-8')).toBe('y');
+  });
+
+  it('adopt забирает живой лог: тот же путь, префикс не дублируется', async () => {
+    const h = createLiveHarness();
+    const fake = createFakeLiveProcess('proc_9');
+
+    const log = await h.service.openLiveLog({ sessionId: 's1', processId: 'proc_9' });
+    log.write('stdout', 'early\n');
+    await log.flush();
+
+    const adopted = await h.service.adopt({
+      sessionId: 's1',
+      command: 'npm run dev',
+      cwd: '/tmp',
+      processId: 'proc_9',
+      handle: fake.proc,
+      iterator: fake.iterator,
+      // Префикс из буферов не передаётся: он уже в живом логе.
+      liveLog: log,
+    });
+
+    expect(adopted.logPath).toBe('processes/live/proc_9.log');
+    expect((await h.service.get(adopted.runId))?.logPath).toBe('processes/live/proc_9.log');
+
+    fake.emit('stdout', 'later\n');
+    await vi.waitFor(async () => {
+      expect((await h.service.logs(adopted.runId))?.content).toBe('early\nlater\n');
+    });
+
+    fake.finish({ exitCode: 0, signal: null, durationMs: 3 });
+    await vi.waitFor(async () => {
+      expect((await h.service.get(adopted.runId))?.status).toBe('completed');
+    });
+    // Лог прогона остаётся: владелец — запись реестра, а не тул.
+    expect((await h.service.logs(adopted.runId))?.content).toBe('early\nlater\n');
+    expect(await h.blobs.exists('processes/live/proc_9.log')).toBe(true);
   });
 });
