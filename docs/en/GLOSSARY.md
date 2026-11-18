@@ -31,7 +31,7 @@ dictionary (`synth-landing/js/main.js`).
 | провайдер | provider | LLM endpoint configuration (URL, type, key) | `GatewayProvider` |
 | модель | model | A specific model offered by a provider | — |
 | маршрутизация | routing (model routing) | Selecting a model by content, cost and confidence | `router.*` |
-| движок | engine | LLM runtime; stateless, history lives on the backend | `opencode`, `cline` (planned, PROP-050) |
+| движок | engine | LLM runtime; stateless, history lives on the backend | `synth` |
 | очередь | queue | Per-session message queue processed by the orchestrator | `pendingMessages` |
 | оркестратор | orchestrator | Component that drives a session turn (LLM calls + tool calls) | `ChatOrchestrator` |
 | режим | mode | Session permission mode: `plan` / `act` / `yolo` | `plan`, `act`, `yolo` |
@@ -55,7 +55,7 @@ dictionary (`synth-landing/js/main.js`).
 | аддон | add-on | External companion service running next to Synth | `synth-media` |
 | плагин | plugin | In-process code extension (Extension API) | `@itphx/synth-plugin` |
 | шов / точка расширения | seam | Extension point for future plugins/registries — convention, from code comments, not a product string | `RouteRuleProvider`, `ContextSource` |
-| плумбинг | plumbing | Wiring already present in the core but not yet used (e.g. the Runner flag) — convention, from a code comment, not a product string | `serve --runner` |
+| плумбинг | plumbing | Wiring already present in the core but not yet used (e.g. a config field nothing reads) — convention, from a code comment, not a product string | — |
 | webhook | webhook | Outbound HTTP subscription with HMAC signing | `whsec_…` |
 | расписание (schedule) | schedule | Cron-based rule that fires events | `Schedule` |
 | задание (job) | job | One recorded execution of a schedule | `jobs.jsonl` |

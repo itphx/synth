@@ -22,6 +22,85 @@
 заметки. Каждая запись ниже отслеживается либо до подготовленной заметки о релизе, либо до
 коммитов соответствующего диапазона тегов.
 
+## [0.13.10] — 2026-11-18
+
+Кумулятивные заметки за две волны — 0.13.9 и 0.13.10: 258 коммитов после v0.13.8. Версия
+0.13.9 в npm не публиковалась (выходила только на test и бетами в npm-реестре Gitea), поэтому
+запись описывает весь диапазон: исполнение стало контуром (полный `remote`, пулы, профили,
+provisioner, браузер, песочница), появились терминал, доступ к проекту одной осью, таймеры и
+будильники, а фон и остановки получили честное состояние — точечные записи, авто-detach,
+durable-причины. Полные заметки — [docs/releases/0.13.10.md](./docs/releases/0.13.10.md).
+
+### Добавлено
+
+- **Контур исполнения и изоляция**
+  ([ADR-135](./docs/arch_decisions/adr-135-execution-contour.md),
+  [ADR-136](./docs/arch_decisions/adr-136-shell-trust.md),
+  [ADR-137](./docs/arch_decisions/adr-137-executor-isolation.md),
+  [ADR-138](./docs/arch_decisions/adr-138-plugin-execution-contour.md)). `execution.mode=remote`
+  стал полным: файловые, поисковые, git- и shell-тулы исполняются на исполнителе, порт расширен
+  до `exec + fs + stream`, появились пулы `instance|project|session` с классами
+  `exec|browser|sandbox`, каталог профилей `execution.remote.profiles` с binding
+  `session → agent → project`, отдельный приватный provisioner (провайдеры `static` и
+  `kubernetes`), `sandbox_exec` и встроенные `browser_*` вместо MCP-инструментов браузера.
+  Изоляция — non-root образы, `readOnlyRootFilesystem`, сетевые классы `none|restricted|full`,
+  UI на порту 8080; доверие shell — аудит исполнений и внешний чекер.
+- **Терминал** ([ADR-132](./docs/arch_decisions/adr-132-ui-terminal.md)). PTY на точке исполнения
+  (протокол исполнителя 8 → 9), проектное владение, лимиты и idle, снимки вывода с восстановлением
+  после рестарта, восемь тулов `terminal_*`, вкладка xterm.js, док «Спросить агента» и образ
+  tier 6 (zsh + Oh My Zsh + tmux).
+- **Автоматизация, доступ и перенос**
+  ([ADR-141](./docs/arch_decisions/adr-141-timers-alarms.md),
+  [ADR-140](./docs/arch_decisions/adr-140-project-access-sharing.md),
+  [ADR-142](./docs/arch_decisions/adr-142-session-move-effects.md)). Сущность `Timer`
+  (`timer`/`alarm`) с доставкой `steer` и проектные расписания с обязательным `projectId`; доступ
+  к проекту одной осью `members`/`groupMembers`/`everyoneRole` с производной `visibility`, группы
+  из OIDC, каталоги пользователей и групп, передача владения; перенос сессии только через
+  `SessionMoveService` — с блокерами, `409 SESSION_HAS_ATTACHED_STATE` и согласием `move_consent`.
+- **Ввод и чтение**
+  ([ADR-126](./docs/arch_decisions/adr-126-input-surface-commands-mentions-snippets.md)). Команды
+  `/compact` и `/review`, `$`-скиллы, `#`-сниппеты, `@`-упоминания, `!name`-скрипты проекта и скилл
+  `synth-html-report`; в UI — типографика markdown, формулы KaTeX, диаграммы mermaid, CodeMirror 6
+  и git status/diff в файловой вкладке.
+
+### Изменено
+
+- **Таймауты инструментов — в секундах**
+  ([ADR-143](./docs/arch_decisions/adr-143-tool-timeouts.md)). `timeout` тулов стал целым числом
+  секунд, предел зависит от режима (foreground ≤ 600, background ≤ 86 400), `0` убран; декларация
+  `.synth/scripts` — 1…86 400 с, у исполнителя `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` = 86 400 000.
+- **LLM-шлюз включён по умолчанию во всех профилях**
+  ([ADR-147](./docs/arch_decisions/adr-147-llm-gateway-default-on.md)). `llmGateway.enabled: true` в
+  обоих источниках дефолтов, профильные шимы и вторая загрузка конфига в CLI убраны; opt-out через
+  `config.yaml`, `SYNTH_LLM_GATEWAY_ENABLED=false` или тумблер UI сохранён, `/health`/`/ready`
+  предупреждают о явном отключении. ADR-147 заменил ADR-139.
+- **Запись сессии и фон** ([ADR-144](./docs/arch_decisions/adr-144-atomic-session-writes.md),
+  [ADR-145](./docs/arch_decisions/adr-145-background-timeout-output-detach.md)). Домен пишет только
+  точечными мутациями порта (`mutateMeta`/`mutateHistory`/`mutateMessage`/`appendMessage`), полная
+  запись — лишь для create/import/replace, гвард `session-write-census.test.ts`; появились `retime`
+  в контракте хэндла (протокол исполнителя 10), живой лог с первой секунды, блокирующие прогоны в
+  `/processes?include=blocking` и авто-detach при `steer`/`interrupt`.
+
+### Исправлено
+
+- Гонка записи сессии (инцидент `mwgvzwfc-33-2h30b0lt`) больше не рвёт пары `tool_use`/`tool_result`;
+  «битая цепочка» шага помечается `metadata.repaired='orphan_tool_calls'` без ложного `interrupted`.
+  Устранён сетевой флейк `execution/router.test.ts`, метрики аудита команд сделаны
+  дата-независимыми, поправлены терминал в UI (скроллбар, затенение, док) и иерархия заголовков
+  markdown; в PWA аварийный баннер заменён временем последней проверки обновлений.
+
+### Безопасность
+
+- **Фильтрация контента инструментов**
+  ([ADR-146](./docs/arch_decisions/adr-146-tool-content-filtering.md)). Единый слой
+  `applyToolContentFilter` на все три цикла, блок `content.rules` в промпте, матрица доверия тулов,
+  экранирование `[CONTENT`-маркеров и санитайз атрибутов конверта, advisory-скан MCP; настройка
+  `security.promptInjection` (default `enabled: true`, live, env-фиксация → `409 ENV_LOCKED`).
+- **Доступ и аудит.** `viewer` остаётся read-only и не расширяет права на изменение; права не
+  переносятся архивом, publish и fork; перенос сессии и смена настройки фильтрации фиксируются в
+  аудите. Внутренний аудит безопасности 0.13.10 входит в релизный контур: гейт `security-gate`
+  требует запись `docs/security/releases/0.13.10.json` при тегировании.
+
 ## [0.13.8] — 2026-11-11
 
 Накопительные заметки по волне `0.13.x` (0.13.5–0.13.8), а не дельта одного патча: более 120

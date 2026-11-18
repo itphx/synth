@@ -1,7 +1,7 @@
 # Roadmap
 
 > Индекс ближайших работ и предложений со ссылками на документы — не история и не спецификация.
-> Актуально на **2026-11-17**. Правила классов и статусов — [ARCH_DECISIONS.md](./ARCH_DECISIONS.md),
+> Актуально на **2026-11-18**. Правила классов и статусов — [ARCH_DECISIONS.md](./ARCH_DECISIONS.md),
 > каталог решений — [arch_decisions/README.md](./arch_decisions/README.md).
 
 ## 0.13.4 — стабилизация (выпущен)
@@ -20,15 +20,25 @@
 | 1.6 | **HA: зафиксировать решение** | раздел «HA — оценка» ниже, [PROP-104](./arch_decisions/prop-104-external-event-transport.md), [PROP-105](./arch_decisions/prop-105-multi-replica-coordination.md) | полный HA вынесен за 0.13.4; при одной реплике описан контракт «деплой прерывает ход»; дешёвая часть — в строке 1.3 | решение принято 2026-11-04 |
 | 1.7 | **Бета-канал в Gitea** | [PUBLISHING.md](./PUBLISHING.md) §«Бета-версии (Gitea)», `scripts/publish-beta.sh`, `.gitverse/workflows/beta.yaml`, `scripts/beta-prune.sh` | publish-beta + beta.yaml + prune + docs; установка `@beta` проверена smoke | **готово**: публикация 8 пакетов в Gitea, `dist-tags.beta`, установка `@beta` и prune проверены (`0.13.3-beta.20261104093532`, `0.13.3-beta.20261104161904`) |
 
-## 0.13.9 — исполнение и безопасность (в test)
+## 0.13.9–0.13.10 — исполнение, безопасность и новые поверхности (в test; готовится релиз 0.13.10)
 
 Реализовано и проверяется на test: [ADR-135](./arch_decisions/adr-135-execution-contour.md) — единый
 контур исполнения (полный `remote`, пулы/профили, provisioner, `sandbox_exec`, встроенные
 `browser_*`); [ADR-136](./arch_decisions/adr-136-shell-trust.md) — аудит исполнений и внешний чекер
 команд; [ADR-137](./arch_decisions/adr-137-executor-isolation.md) — non-root, read-only rootfs и
 сетевые классы; [ADR-138](./arch_decisions/adr-138-plugin-execution-contour.md) — `ctx.runtime` для
-плагинных тулов; [ADR-147](./arch_decisions/adr-147-llm-gateway-default-on.md) — LLM-шлюз включён
-по умолчанию во всех профилях. Остатки и границы — в самих ADR.
+плагинных тулов; [ADR-132](./arch_decisions/adr-132-ui-terminal.md) — встроенный терминал (PTY);
+[ADR-140](./arch_decisions/adr-140-project-access-sharing.md) — доступ к проекту (участники, группы);
+[ADR-141](./arch_decisions/adr-141-timers-alarms.md) — таймеры и будильники;
+[ADR-142](./arch_decisions/adr-142-session-move-effects.md) — перенос сессии между проектами;
+[ADR-143](./arch_decisions/adr-143-tool-timeouts.md) — таймауты инструментов;
+[ADR-144](./arch_decisions/adr-144-atomic-session-writes.md) — точечные записи сессии;
+[ADR-145](./arch_decisions/adr-145-background-timeout-output-detach.md) — таймаут, вывод и detach
+фоновой работы; [ADR-146](./arch_decisions/adr-146-tool-content-filtering.md) — фильтрация контента
+инструментов (prompt injection); [ADR-147](./arch_decisions/adr-147-llm-gateway-default-on.md) —
+LLM-шлюз включён по умолчанию во всех профилях; PROP-142 (управление сабагентом и
+автовосстановление прерванных прогонов) и PROP-143 (причина остановки хода в истории).
+Остатки и границы — в самих ADR.
 
 ## HA — оценка (2026-11-04)
 
@@ -91,7 +101,7 @@
 
 ## Icebox и вне горизонта
 
-- [PROP-050](./arch_decisions/prop-050-external-engines-runner.md) — Runner внешних движков (пересматривается в рамках PROP-109).
+- [PROP-050](./arch_decisions/prop-050-external-engines-runner.md) — внешние движки (opencode/cline) в продукт не входят; предложение в Icebox, пересматривается в рамках PROP-109 при появлении спроса.
 - [PROP-053](./arch_decisions/prop-053-cli-tui.md) — CLI и TUI.
 - [PROP-056](./arch_decisions/prop-056-synth-mcp-server.md) — MCP-сервер Synth для внешних агентов.
 - [PROP-066](./arch_decisions/prop-066-doc-style-skills.md) — doc-стандарты и docs-lint.

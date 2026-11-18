@@ -20,6 +20,92 @@ What follows is a compressed, human-readable journal of the released versions wi
 notes. Every entry below is traceable either to a prepared release note or to the commits of the
 corresponding tag range.
 
+## [0.13.10] — 2026-11-18
+
+Cumulative notes for two waves — 0.13.9 and 0.13.10: 258 commits after v0.13.8. Version 0.13.9 was
+never published to npm (it shipped only to test and as betas to the Gitea npm registry), so this entry
+covers the whole range: execution became a contour (full `remote`, pools, profiles, provisioner,
+browser, sandbox), a terminal, project access as a single axis, timers and alarms appeared, and
+background work and stops got honest state — point writes, auto-detach, durable reasons.
+
+### Added
+
+- **Execution contour and isolation**
+  ([ADR-135](./docs/arch_decisions/adr-135-execution-contour.md),
+  [ADR-136](./docs/arch_decisions/adr-136-shell-trust.md),
+  [ADR-137](./docs/arch_decisions/adr-137-executor-isolation.md),
+  [ADR-138](./docs/arch_decisions/adr-138-plugin-execution-contour.md)).
+  `execution.mode=remote` became complete: file, search, git and shell tools run on the executor, the
+  port is extended to `exec + fs + stream`, `instance|project|session` pools with the
+  `exec|browser|sandbox` classes appeared, the profile catalog `execution.remote.profiles` with the
+  `session → agent → project` binding, a separate private provisioner (providers `static` and
+  `kubernetes`), `sandbox_exec` and built-in `browser_*` instead of the browser MCP tools. Isolation —
+  non-root images, `readOnlyRootFilesystem`, `none|restricted|full` network classes, the UI on port
+  8080; shell trust — execution audit and an external checker.
+- **Terminal** ([ADR-132](./docs/arch_decisions/adr-132-ui-terminal.md)). A PTY at the execution point
+  (executor protocol 8 → 9), project ownership, limits and idle, output snapshots restored after a
+  restart, eight `terminal_*` tools, an xterm.js tab, the “Ask the agent” dock and a tier 6 image
+  (zsh + Oh My Zsh + tmux).
+- **Automation, access and session move**
+  ([ADR-141](./docs/arch_decisions/adr-141-timers-alarms.md),
+  [ADR-140](./docs/arch_decisions/adr-140-project-access-sharing.md),
+  [ADR-142](./docs/arch_decisions/adr-142-session-move-effects.md)). The `Timer` entity
+  (`timer`/`alarm`) with `steer` delivery and project schedules with a mandatory `projectId`; project
+  access as a single axis `members`/`groupMembers`/`everyoneRole` with derived `visibility`, groups
+  from OIDC, user and group directories, ownership transfer; moving a session only through
+  `SessionMoveService` — with blockers, `409 SESSION_HAS_ATTACHED_STATE` and the `move_consent`
+  consent.
+- **Input and reading**
+  ([ADR-126](./docs/arch_decisions/adr-126-input-surface-commands-mentions-snippets.md)). The
+  `/compact` and `/review` commands, `$`-skills, `#`-snippets, `@`-mentions, `!name` project scripts
+  and the `synth-html-report` skill; in the UI — markdown typography, KaTeX formulas, mermaid
+  diagrams, CodeMirror 6 and git status/diff in the file tab.
+
+### Changed
+
+- **Tool timeouts are in seconds**
+  ([ADR-143](./docs/arch_decisions/adr-143-tool-timeouts.md)). A tool `timeout` became an integer
+  number of seconds, the limit depends on the mode (foreground ≤ 600, background ≤ 86,400), `0` was
+  removed; the `.synth/scripts` declaration is 1…86,400 s, the executor's
+  `SYNTH_EXECUTOR_MAX_TIMEOUT_MS` = 86,400,000.
+- **The LLM gateway is on by default in every profile**
+  ([ADR-147](./docs/arch_decisions/adr-147-llm-gateway-default-on.md)). `llmGateway.enabled: true` in
+  both default sources, the profile shims and the second config load in the CLI were removed; opt-out
+  via `config.yaml`, `SYNTH_LLM_GATEWAY_ENABLED=false` or the UI toggle is preserved, and
+  `/health`/`/ready` warn about an explicit disable. ADR-147 replaced ADR-139.
+- **Session writes and background work**
+  ([ADR-144](./docs/arch_decisions/adr-144-atomic-session-writes.md),
+  [ADR-145](./docs/arch_decisions/adr-145-background-timeout-output-detach.md)). The domain writes
+  only through point mutations of the port
+  (`mutateMeta`/`mutateHistory`/`mutateMessage`/`appendMessage`), a full write is only for
+  create/import/replace, with the guard `session-write-census.test.ts`; `retime` in the handle
+  contract (executor protocol 10), a live log from the first second, blocking runs in
+  `/processes?include=blocking` and auto-detach on `steer`/`interrupt`.
+
+### Fixed
+
+- The session write race (the `mwgvzwfc-33-2h30b0lt` incident) no longer breaks `tool_use`/
+  `tool_result` pairs; a “broken chain” of a step is marked `metadata.repaired='orphan_tool_calls'`
+  without a false `interrupted`. The network flake of `execution/router.test.ts` was eliminated,
+  command audit metrics were made date-independent, the terminal in the UI (scrollbar, shading, dock)
+  and the markdown heading hierarchy were fixed; in the PWA the emergency banner was replaced by the
+  time of the last update check.
+
+### Security
+
+- **Tool content filtering**
+  ([ADR-146](./docs/arch_decisions/adr-146-tool-content-filtering.md)). A single
+  `applyToolContentFilter` layer for all three cycles, the `content.rules` block in the prompt, a tool
+  trust matrix, escaping of `[CONTENT` markers and sanitizing of the envelope attributes, an advisory
+  MCP scan; the `security.promptInjection` setting (default `enabled: true`, live, env fixing →
+  `409 ENV_LOCKED`).
+- **Access and audit.** `viewer` stays read-only and does not widen rights to change; rights are not
+  transferred by an archive, publish and fork; moving a session and changing the filtering setting are
+  recorded in the audit. The 0.13.10 internal security audit is part of the release contour: the
+  `security-gate` requires a `docs/security/releases/0.13.10.json` record when tagging.
+
+Full notes: [docs/releases/0.13.10.md](./docs/releases/0.13.10.md)
+
 ## [0.13.8] — 2026-11-11
 
 Cumulative notes for the `0.13.x` wave (0.13.5–0.13.8), not a single patch delta: more than 120

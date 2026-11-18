@@ -2081,10 +2081,11 @@
   `pipeline` — только опубликованный пайплайн проекта сессии, `bound`/`queue` — своя сессия или
   сессия своего проекта. Scope/правила области — в `engine/tools/automation-helpers.ts`
   (`loadScheduleScope`/`isScheduleInScope`/`ensureScheduleMutable`).
-  **Тулы таймеров и будильников (ADR-141).** `timer` (`create|list|cancel`) и `alarm`
-  (`create|list|update|cancel`) (`engine/tools/timers.ts`) — capability `schedule`, доступны без
+  **Тулы таймеров и будильников (ADR-141).** `timer` и `alarm` (`create|list|show|update|stop|delete`)
+  (`engine/tools/timers.ts`) — capability `schedule`, доступны без
   workspace; проект и сессия обязательны (инстансных автоматизаций нет); `comment` 1…500 —
-  единственный смысл срабатывания, своего текста задания нет; список ограничен своей сессией.
+  единственный смысл срабатывания, своего текста задания нет; список ограничен своей сессией;
+  `stop` идемпотентен для терминальных состояний (`fired`/`cancelled`).
   **Тулы реестра фоновых прогонов (ADR-111/PROP-097).** `process_list`/`process_logs`
   (`engine/tools/processes.ts`) — чтение **единого** реестра фоновой работы (фоновые
   саб-агенты и фоновые шелл-процессы) и лога фонового процесса; `process_stop` —

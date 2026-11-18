@@ -2,7 +2,8 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-11-18 (PROP-142/143); перевод отстаёт
+> ⚠️ RU-версия обновлена 2026-11-18 (PROP-142/143) — **переведено**: секция «Restart recovery
+> (`recovery.*`)»; остаётся непереведённой секция `analytics.*` (см. ниже).
 
 > ⚠️ RU-версия обновлена 2026-11-18 (**ADR-146**, `security.promptInjection`) — **переведено**:
 > новая секция «Prompt-injection protection (`security.promptInjection`, ADR-146)» — три поля
@@ -40,7 +41,7 @@
 > ⚠️ RU-версия обновлена 2026-11-03 (**секция «Каталог моделей»** — слой `compatibility`: поля
 > `supportsNativeVideo`/`nativeAudioFormats` — нативные видео/аудио (ADR-117 × ADR-115) и их
 > эвристика по типу протокола и RouterAI-совместимому хосту — **переведено**).
-> ⚠️ RU-версия обновлена 2026-11-02 (**секция «Вложения сообщений» (`attachments.*`)** — `compression` (сжатие на отправке), `thumbnail` (серверные миниатюры), `maxChunkBytes` (chunked-загрузка) — **переведено**); RU-версия обновлена 2026-11-02 (**секции «Вложения сообщений» (`attachments.*`) и «Лимиты загрузки и обратный прокси»** — `maxBytesPerFile` по умолчанию 100 МиБ, nginx/Apache/ingress: транспортный лимит вычисляется из прикладных (единый параметр деплоя) — **переведено**); RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*` и `questions.*`): ADR-102, секция `analytics`.
+> ⚠️ RU-версия обновлена 2026-11-02 (**секция «Вложения сообщений» (`attachments.*`)** — `compression` (сжатие на отправке), `thumbnail` (серверные миниатюры), `maxChunkBytes` (chunked-загрузка) — **переведено**); RU-версия обновлена 2026-11-02 (**секции «Вложения сообщений» (`attachments.*`) и «Лимиты загрузки и обратный прокси»** — `maxBytesPerFile` по умолчанию 100 МиБ, nginx/Apache/ingress: транспортный лимит вычисляется из прикладных (единый параметр деплоя) — **переведено**); RU-версия обновлена 2026-11-02 (**секция `session.autoTitle`** «Авто-заголовок сессии» — триггер в начале хода (сразу после первого сообщения пользователя), отсрочка для приветствия/смолтка, `N=2..maxAttempts` — заголовок по диалогу, фоллбек только из реплики с сигналом, ручная регенерация `PATCH /api/v2/sessions/:id {"title": ""}`, env `SYNTH_SESSION_AUTO_TITLE_*` — **переведено**); RU-версия обновлена 2026-11-02 (**секция `agents.*`** — `subagentMaxInputTokens` оценивает промпт по **калиброванному** chars-per-token модели (`token_ratios`), иначе 4 — **переведено**); RU-версия обновлена 2026-11-01 (**секция `agents.*`** «Агенты» — `subagentDepth` и env `SYNTH_AGENTS_SUBAGENT_DEPTH`; **секция `tools.outputMaxLines`/`tools.outputMaxBytes`** «Предел вывода инструментов» и env `SYNTH_TOOLS_OUTPUT_MAX_*` — **переведено**); RU-версия обновлена 2026-10-30 (**секция «Агенты»** — отчёт по лимиту шагов основного агента, `session.steps_limit`/`step_limit_reached`; **секция «Каталог моделей»** — слой `compatibility` (ADR-117; `requiresReasoning` — shorthand), поля/приоритет/эвристики, Anthropic thinking и Ollama — **переведено**); RU-версия обновлена 2026-10-29 (**секция `agents.*`** «Агенты» — `subagentMaxInputTokens` и env `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` — **переведено**); RU-версия обновлена 2026-10-26 (ADR-111/PROP-096/097: **секция `background.*`** «Фоновые прогоны» — `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/`maxRunsPerSession`/`logMaxBytes`/`retentionDays` и env-оверрайды `SYNTH_BACKGROUND_*` — **переведено**); RU-версия обновлена 2026-10-25 (**секция `questions.*`** «Вопросы пользователю» — `timeoutMs`/`retentionDays` и env-оверрайды `SYNTH_QUESTIONS_*`; секция `plugins` — модели эмбеддингов `plugins.embedding*`: проверенные модели, egress, `stale` при смене модели — переведено); перевод отстаёт (кроме секций `plugins.*`, `questions.*` и `recovery.*`): ADR-102, секция `analytics`.
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -89,12 +90,11 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_HOST` | Listening address of the HTTP servers. Backend: outside a container — `127.0.0.1`, inside a container — `0.0.0.0`; `synth serve` — `127.0.0.1`. An explicit value always wins | `127.0.0.1` (backend outside a container) / `0.0.0.0` (container) / `127.0.0.1` (serve) |
 | `SYNTH_PORT` | Backend port | `5000` |
 | `SYNTH_CORE_PORT` | Core port (and `synth serve`) | `4300` |
-| `SYNTH_RUNNER_PORT` | Runner port | `5200` |
 | `SYNTH_AUTH_DEBUG` | Auth debug mode (test users) | `false` |
 | `SYNTH_DEFAULT_LANGUAGE` | Backend interface language (`ru`/`en`; the `en` prefix is checked) | `ru` |
 | `SYNTH_DEPLOY_MODE` | Deployment mode: `user`, `docker`, `server`, `dev` | auto-detect (docker markers → `docker`, root → `server`, `SYNTH_AUTH_DEBUG=true` → `dev`, otherwise `user`) |
 | `SYNTH_LOG_DIR` | Directory with the service logs (the `/api/v2/logs` endpoint) | the existing log directory is looked up |
-| `SYNTH_BACKEND_URL` | Backend URL (for the runner) | `http://localhost:5000` |
+| `SYNTH_BACKEND_URL` | Backend URL for the nginx proxy in the UI image (`docker/nginx-ui.conf.template`) | `http://localhost:5000` |
 | `SYNTH_CORS_ORIGIN` | CORS origin (takes precedence over the config) | — |
 | `SYNTH_DECISION_PROVIDER` | ADR-084: name of the decision-type provider (`decision`/`systemone`) | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | ADR-084: decision-layer model (e.g. `clef-flash`) | `decision.model` |
@@ -525,12 +525,6 @@ core:
   port: 4300
   apiKey: ""                      # empty → synth serve generates a key in {dataDir}/secrets/api-key (0600)
 
-runner:
-  port: 5200
-  backendUrl: "http://localhost:5000"
-  enginePorts: { opencode: 4100, cline: 4200, synth: 4300 }
-  proxyPort: 9090
-
 ui:
   port: 5002
   backendUrl: "http://localhost:5000"
@@ -790,12 +784,12 @@ If `postgres` is selected but the DB is unreachable at startup, the behaviour is
 
 **Fail-closed** (the fallback is **not** applied regardless of `degradedMode`): a configuration/credentials error (`STORAGE_POSTGRES_CONFIG_INVALID`), a missing dependency (`…DEPENDENCY_MISSING`, no `pg`), a driver package that cannot be loaded (`STORAGE_BACKEND_UNAVAILABLE`), a DB schema newer than the driver (`…SCHEMA_TOO_NEW`). Degradation covers a **DB failure** (network/class `08`/`57P0x`, a server auth error, `…SCHEMA_OUTDATED` — fixed by `synth migrate`, other runtime errors). There is **no** auto-return to the DB — only a restart after the connection is restored ([ADR-098](../arch_decisions/adr-098-storage-degraded-recovery.md)); procedures — [MAINTENANCE.md](../MAINTENANCE.md).
 
-### Execution topology (`execution.*`, ADR-077)
+### Execution topology (`execution.*`, ADR-135; ADR-077 — legacy)
 
 The `execution` section is the **execution topology switch**: where the commands of agent tools
 (`execute_shell`, `grep_files`, git tools) are executed. It is a **startup parameter**, not a runtime
 setting: switching the mode requires a process restart (invariant 24). The specification —
-[ADR-077](../arch_decisions/legacy/adr-077-runtime-toolchain.md).
+[ADR-135](../arch_decisions/adr-135-execution-contour.md) (contour, pools, profiles; ADR-077 — legacy).
 
 | Field | Type / values | Default | Env | Meaning |
 |---|---|---|---|---|
@@ -970,7 +964,7 @@ execution:
         failMode: "fail"            # unset → inherits remote.failMode
         # --- metadata (details/UI only, does not affect routing) ---
         description: "DevOps executor: full toolchain"
-        image: "synth-executor:0.13.9-full"
+        image: "synth-executor:0.13.10-full"
         network: "restricted"       # none | restricted | full
         resources:
           requests: { cpu: "500m", memory: "1Gi" }
@@ -1056,7 +1050,7 @@ Example runtime section (`PUT /api/v2/settings/execution` body):
       "devops": {
         "description": "DevOps executor: full toolchain",
         "class": "exec",
-        "image": "synth-executor:0.13.9-full",
+        "image": "synth-executor:0.13.10-full",
         "network": "restricted",
         "resources": { "requests": { "cpu": "500m", "memory": "1Gi" },
                        "limits": { "nvidia.com/gpu": "1" } },
@@ -2454,6 +2448,43 @@ or `config.yaml`), or keep `0` deliberately.
 agents:
   subagentMaxInputTokens: 0   # 0 — no limit (default)
   subagentDepth: 1
+```
+
+### Restart recovery (`recovery.*`)
+
+The auto-recovery budget for interrupted turns (PROP-142 §3). After startup the instance resumes
+turns that carry a durable marker (`currentStream.owner`): **main** sessions — the previous path
+(queue processor + resume message), **child** sessions (subagents) — the subagent resume path (the
+result goes to the parent). The budget is counted **per turn** (a durable counter in
+`session.status.recovery`) plus crash-loop detection based on attempt markers.
+
+| Field | Purpose | Default |
+|-------|---------|---------|
+| `recovery.autoResume` | Master switch of auto-recovery. `false` — interrupted turns are not resumed (degrades to “terminalize”). Env — `SYNTH_RECOVERY_AUTO_RESUME` | `true` |
+| `recovery.maxAttempts` | Maximum auto-recoveries of **one turn**; when exceeded the turn is terminalized (`failed`/`orphaned`) and a stop-reason record is written to the history. Env — `SYNTH_RECOVERY_MAX_ATTEMPTS` | `3` |
+| `recovery.crashLoop.windowMinutes` | Crash-loop detection window (minutes). Env — `SYNTH_RECOVERY_CRASH_LOOP_WINDOW_MINUTES` | `10` |
+| `recovery.crashLoop.maxRestarts` | How many attempts/restarts within the window count as a crash loop; when exceeded — terminalization. Env — `SYNTH_RECOVERY_CRASH_LOOP_MAX_RESTARTS` | `3` |
+
+- **Priority** — env `SYNTH_RECOVERY_*` > `config.yaml` > default (ADR-023); the section applies in
+  **standalone and managed** (in managed — through the instance config/UI).
+- **On refusal** (disabled / budget exhausted / crash loop) the turn is not resumed: it is
+  terminalized, a durable `execution_stopped` record (`reason='orphaned'`, PROP-143) is written to
+  the owner session history, and the background-run registry entry is updated; manual retry —
+  `POST /api/v2/sessions/:id/recovery/retry` (resets the counter).
+- **Single replica.** Auto-recovery is designed for one data-owner instance (standalone and a single
+  managed replica). With several replicas a claim/lease is required (PROP-105); until it exists the
+  uniqueness of the recoverer is **not guaranteed**, so multi-replica deployments are advised to set
+  `recovery.autoResume: false`.
+- **Side effects are not rolled back.** Recovery resumes the turn, but tools that already ran may run
+  again (at-least-once; the same contract as a restart, ADR-092 §7).
+
+```yaml
+recovery:
+  autoResume: true
+  maxAttempts: 3
+  crashLoop:
+    windowMinutes: 10
+    maxRestarts: 3
 ```
 
 ### Request limits (`limits.*`)

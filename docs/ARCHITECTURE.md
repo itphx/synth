@@ -8,20 +8,23 @@
 
 ## Компоненты
 
-Synth состоит из восьми пакетов в монорепозитории:
+Synth состоит из десяти пакетов в монорепозитории: восемь публикуемых в npm и два приватных
+(`plugin-memory`, `provisioner`):
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
 | **@itphx/synth-shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
 | **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, CLI, HTTP API v2 | TypeScript, Hono |
 | **@itphx/synth-storage-postgres** | Опциональный драйвер слоя хранения поверх PostgreSQL (ADR-097): реализует доменные порты `StorageContext`, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
-| **@itphx/synth-executor** | Исполнитель агентских команд — отдельный процесс (ADR-077): сервер исполнителя + клиент удалённого порта, `peer-dep` core | TypeScript, Hono |
-| **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
+| **@itphx/synth-executor** | Исполнитель агентских команд — отдельный процесс (ADR-077; контур и пулы — ADR-135): сервер исполнителя + клиент удалённого порта, `peer-dep` core | TypeScript, Hono |
+| **@itphx/synth-backend** | API Hub: OIDC, RBAC, LLM Proxy, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
-| **@itphx/synth-sdk** | Типизированный клиент публичного API (ADR-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
+| **@itphx/synth-sdk** | Типизированный клиент публичного API (ADR-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`timers`/`llm`) | TypeScript, ESM |
 | **@itphx/synth** | Публикуемая тонкая CLI-обёртка (`bin: synth`) над core/ui/shared (ADR-038). Не бандлит core, не копирует ассеты | TypeScript, commander |
+| **@itphx/synth-plugin-memory** | Приватный плагин памяти — продукт поверх портов ядра (ADR-107/ADR-122): факты, recall, индексы | TypeScript |
+| **@itphx/synth-provisioner** | Приватный provisioner пулов исполнения (ADR-135): HTTP-контракт `/v1`, `static`-провайдер, жизненный цикл пулов | TypeScript, Hono |
 
-Публичный HTTP-контракт описан **public-OpenAPI**-спекой (28 операций интеграционного ядра,
+Публичный HTTP-контракт описан **public-OpenAPI**-спекой (37 операций интеграционного ядра,
 `packages/core/src/server/openapi/public-openapi.ts`, отдаётся `GET /api/v2/openapi.json`); SDK её
 потребляет — единый клиентский слой поверх публичного API.
 
@@ -58,7 +61,7 @@ flowchart TB
         storage_pg["postgres — @itphx/synth-storage-postgres (опц.)"]
     end
 
-    subgraph Execution["Исполнение команд (ADR-077)"]
+    subgraph Execution["Исполнение команд (ADR-135; ADR-077 — legacy)"]
         synth_executor["@itphx/synth-executor — исполнитель (опц.)"]
     end
 
@@ -114,13 +117,6 @@ synth-ui (localhost) ←→ synth-core (:4300)
 - Одна команда: `synth serve --api-key <key>`
 - Прямой доступ к файловой системе
 - Не требует бэкенда, Keycloak, Kubernetes
-
-### Локальный + внешние движки (планируется)
-
-Внешние движки (opencode/cline) через встроенный Runner-мост — **не реализовано**
-(план: ADR-018, PROP-050). В ядре остаётся плумбинг: флаг `serve --runner` и секция
-конфига `runner`, но адаптеров движков и маршрутизации нет; фактическое исполнение
-идёт собственным движком `synth`.
 
 ### Гибридный (локально + корпоративный сервер)
 
@@ -250,18 +246,15 @@ synth/
 └── packages/
     ├── shared/   → @itphx/synth-shared
     ├── core/     → @itphx/synth-core
+    ├── executor/ → @itphx/synth-executor (ADR-077; контур — ADR-135)
     ├── storage-postgres/ → @itphx/synth-storage-postgres (опц. БД-драйвер, ADR-097)
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── sdk/      → @itphx/synth-sdk (клиент публичного API, ADR-052)
+    ├── plugin-memory/ → @itphx/synth-plugin-memory (приватный плагин памяти, ADR-107/122)
+    ├── provisioner/ → @itphx/synth-provisioner (приватный provisioner пулов, ADR-135)
     └── synth/    → @itphx/synth (тонкая CLI-обёртка, bin: synth)
 ```
-
-## Модель «Runner» (планируется)
-
-Мост между бэкендом и внешними движками (opencode/cline) — **не реализован**
-(план: ADR-018, PROP-050). Задуманный раннер поднимает LLM Proxy и маршрутизирует
-запросы в выбранный движок; движки stateless (история — на бэкенде).
 
 ## Stateless модель движка
 
@@ -274,9 +267,14 @@ synth/
 Это обеспечивает:
 
 - Коллаборацию (несколько пользователей в одной сессии)
-- Переключение движка без потери контекста
+- Смену модели без потери контекста
 - Перезапуск движка без потери истории
 - Очередь сообщений на бэкенде, доставка по одной
+
+Исполнение сессий выполняет только встроенный движок `synth`: внешние движки (opencode/cline)
+в продукт не входят. Их подключение остаётся предложением в Icebox —
+[PROP-050](./arch_decisions/prop-050-external-engines-runner.md); пересматривается в
+[PROP-109](./arch_decisions/prop-109-agent-system-federation.md) при появлении спроса.
 
 ## Композиция системного промпта (SystemPromptComposer)
 
@@ -480,7 +478,7 @@ hook-шину, а создание сессий сведено в один funne
 
 API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
 (секция `events`). Источники/интеграции: шедулер ADR-051 (cron), API-ключи привязок, service-key
-со scopes/проектной проекцией, webhooks, public-OpenAPI (28 операций, `GET /api/v2/openapi.json`)
+со scopes/проектной проекцией, webhooks, public-OpenAPI (37 операций, `GET /api/v2/openapi.json`)
 и SDK `@itphx/synth-sdk` — **ADR-052 закрыт целиком (этапы I–IV: включая перевод Telegram-шлюза
 на scoped service-key)**; первый add-on — Telegram-шлюз (`addons/synth-gateway-telegram`) —
 реализован; **плагины реализованы** (Plugin SDK, ADR-090); пайплайны — остаток ADR-100 (движок реализован, ADR-101).

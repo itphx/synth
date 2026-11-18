@@ -352,7 +352,7 @@ execution:
     # произвольные ресурсы (`nvidia.com/gpu`). Пример (профиль на GPU-нодах):
     #   profiles:
     #     gpu:
-    #       image: git.itphx.ru/itphx/synth-executor:0.13.8-full
+    #       image: git.itphx.ru/itphx/synth-executor:0.13.10-full
     #       nodeSelector:
     #         nvidia.com/gpu.present: "true"
     #       tolerations:
@@ -819,12 +819,12 @@ provisioner:
   # Пример (профиль на GPU-нодах):
   #   profiles:
   #     default:
-  #       image: git.itphx.ru/itphx/synth-executor:0.13.8-core
+  #       image: git.itphx.ru/itphx/synth-executor:0.13.10-core
   #       resources:
   #         requests: {cpu: 500m, memory: 1Gi}
   #         limits: {cpu: 2, memory: 4Gi}
   #     gpu:
-  #       image: git.itphx.ru/itphx/synth-executor:0.13.8-full
+  #       image: git.itphx.ru/itphx/synth-executor:0.13.10-full
   #       nodeSelector:
   #         nvidia.com/gpu.present: "true"
   #       tolerations:

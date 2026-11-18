@@ -354,10 +354,13 @@ synth/
 ├── packages/
 │   ├── shared/   → @itphx/synth-shared    # Types, Zod schemas, protocols, configuration
 │   ├── core/     → @itphx/synth-core      # Engine, CLI, HTTP API v2, MCP, FileStore
+│   ├── executor/ → @itphx/synth-executor  # Agent command executor (ADR-077; contour — ADR-135)
 │   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Optional storage-layer DB driver (ADR-097)
-│   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
+│   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, LLM Proxy
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + admin panel (Vite)
 │   ├── sdk/      → @itphx/synth-sdk       # Typed client for the public API (ADR-052)
+│   ├── plugin-memory/ → @itphx/synth-plugin-memory  # Private memory plugin (ADR-107/122)
+│   ├── provisioner/ → @itphx/synth-provisioner  # Private execution-pool provisioner (ADR-135)
 │   └── synth/    → @itphx/synth           # Thin CLI wrapper (bin: synth), does not bundle core
 ├── scripts/
 │   ├── dev.sh                  # Development script

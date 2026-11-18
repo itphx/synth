@@ -49,12 +49,11 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_HOST` | Адрес прослушивания HTTP-серверов. Backend: вне контейнера — `127.0.0.1`, в контейнере — `0.0.0.0`; `synth serve` — `127.0.0.1`. Явное значение приоритетно | `127.0.0.1` (backend вне контейнера) / `0.0.0.0` (контейнер) / `127.0.0.1` (serve) |
 | `SYNTH_PORT` | Порт бэкенда | `5000` |
 | `SYNTH_CORE_PORT` | Порт core (и `synth serve`) | `4300` |
-| `SYNTH_RUNNER_PORT` | Порт раннера | `5200` |
 | `SYNTH_AUTH_DEBUG` | Режим отладки auth (тестовые пользователи) | `false` |
 | `SYNTH_DEFAULT_LANGUAGE` | Язык интерфейса backend (`ru`/`en`; проверяется префикс `en`) | `ru` |
 | `SYNTH_DEPLOY_MODE` | Режим развёртывания: `user`, `docker`, `server`, `dev` | автодетект (docker-маркеры → `docker`, root → `server`, `SYNTH_AUTH_DEBUG=true` → `dev`, иначе `user`) |
 | `SYNTH_LOG_DIR` | Каталог логов сервисов (эндпоинт `/api/v2/logs`) | ищется существующий каталог логов |
-| `SYNTH_BACKEND_URL` | URL бэкенда (для раннера) | `http://localhost:5000` |
+| `SYNTH_BACKEND_URL` | URL бэкенда для прокси nginx в UI-образе (`docker/nginx-ui.conf.template`) | `http://localhost:5000` |
 | `SYNTH_CORS_ORIGIN` | CORS origin (приоритет выше конфига) | — |
 | `SYNTH_DECISION_PROVIDER` | ADR-084: имя провайдера decision-типа (`decision`/`systemone`) | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | ADR-084: модель decision-слоя (напр. `clef-flash`) | `decision.model` |
@@ -526,12 +525,6 @@ core:
   port: 4300
   apiKey: ""                      # пусто → synth serve генерирует ключ в {dataDir}/secrets/api-key (0600)
 
-runner:
-  port: 5200
-  backendUrl: "http://localhost:5000"
-  enginePorts: { opencode: 4100, cline: 4200, synth: 4300 }
-  proxyPort: 9090
-
 ui:
   port: 5002
   backendUrl: "http://localhost:5000"
@@ -798,11 +791,11 @@ remote:                           # гибридный режим: локаль�
 
 **Fail-closed** (фоллбек **не** применяется независимо от `degradedMode`): ошибка конфигурации/кред (`STORAGE_POSTGRES_CONFIG_INVALID`), отсутствие зависимости (`…DEPENDENCY_MISSING`, нет `pg`), незагружаемый пакет-драйвер (`STORAGE_BACKEND_UNAVAILABLE`), схема БД новее драйвера (`…SCHEMA_TOO_NEW`). Деградация охватывает **отказ БД** (сеть/класс `08`/`57P0x`, auth-ошибка сервера, `…SCHEMA_OUTDATED` — лечится `synth migrate`, прочие runtime-ошибки). Авто-возврата к БД **нет** — только рестарт после восстановления соединения ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)); процедуры — [MAINTENANCE.md](./MAINTENANCE.md).
 
-### Исполнение (топология) (`execution.*`, ADR-077)
+### Исполнение (топология) (`execution.*`, ADR-135; ADR-077 — legacy)
 
 Секция `execution` — **переключатель топологии исполнения**: где выполняются команды агентских
 тулов (`execute_shell`, `grep_files`, git-тулы). Это **параметр запуска**, а не runtime-настройка:
-смена режима — только рестартом процесса (инвариант 24). Спецификация — [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md).
+смена режима — только рестартом процесса (инвариант 24). Спецификация — [ADR-135](./arch_decisions/adr-135-execution-contour.md) (контур, пулы, профили; ADR-077 — legacy).
 
 | Поле | Тип / значения | Дефолт | Env | Смысл |
 |---|---|---|---|---|
@@ -961,7 +954,7 @@ execution:
         failMode: "fail"            # не задано → наследует remote.failMode
         # --- метаданные (только для details/UI, на маршрутизацию не влияют) ---
         description: "DevOps-исполнитель: полный toolchain"
-        image: "synth-executor:0.13.9-full"
+        image: "synth-executor:0.13.10-full"
         network: "restricted"       # none | restricted | full
         resources:
           requests: { cpu: "500m", memory: "1Gi" }
@@ -1047,7 +1040,7 @@ DaemonSet на выбранные образы, ждёт готовности и
       "devops": {
         "description": "DevOps-исполнитель: полный toolchain",
         "class": "exec",
-        "image": "synth-executor:0.13.9-full",
+        "image": "synth-executor:0.13.10-full",
         "network": "restricted",
         "resources": { "requests": { "cpu": "500m", "memory": "1Gi" },
                        "limits": { "nvidia.com/gpu": "1" } },

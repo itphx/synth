@@ -18,7 +18,8 @@
 > `browser_type`/`browser_press`/`browser_wait`/`browser_screenshot`/`browser_close` идут
 > портом `ExecutionPort.browserCall` в проектный пул класса `browser` (`browserProfile`/
 > `browserMcpServer`), без MCP-discovery; скриншот публикуется вложением сообщения; **актуальная версия
-> протокола — 9** (проба переднего плана PTY: `GET /pty/:id/foreground`; PTY-сессии
+> протокола — 10** (перестановка таймаута фонового процесса `POST /exec/:processId/timeout` +
+> признак `features.backgroundRetime`, ADR-145; проба переднего плана PTY: `GET /pty/:id/foreground`; PTY-сессии
 > исполнителя: `POST /pty/open`, `POST /pty/:id/input`,
 > `POST /pty/:id/resize`, `POST /pty/:id/close`, `GET /pty/:id/status`,
 > `GET /pty/:id/stream`
@@ -45,12 +46,13 @@
 > режим доставки `git`/`agent` — протокол 6), CA — конфигурация исполнителя
 > (`SYNTH_EXECUTOR_TLS_CA_FILE`).
 
-> ⚠️ **Модель исполнения пересматривается (2026-11-12).** Решения зафиксированы в
-> [ADR-135](./arch_decisions/adr-135-execution-contour.md),
-> [ADR-136](./arch_decisions/adr-136-shell-trust.md),
-> [ADR-137](./arch_decisions/adr-137-executor-isolation.md),
-> [ADR-138](./arch_decisions/adr-138-plugin-execution-contour.md).
-> Ниже описано **действующее** поведение до реализации; расхождения с PROP — ожидаемы.
+> **Статус контура исполнения.** Решения зафиксированы в
+> [ADR-135](./arch_decisions/adr-135-execution-contour.md) (единый контур: порт, пулы/профили,
+> provisioner), [ADR-136](./arch_decisions/adr-136-shell-trust.md) (доверие shell),
+> [ADR-137](./arch_decisions/adr-137-executor-isolation.md) (изоляция исполнителя),
+> [ADR-138](./arch_decisions/adr-138-plugin-execution-contour.md) (исполнение плагинов) и
+> **реализованы** (ADR-135 — частично: остатки перечислены в самом ADR). Ниже описано
+> **действующее** поведение; остатки и границы — в ADR-135…138 и §12.
 
 > **Терминалы — не во всех flavor'ах.** PTY объявляют `core`/`dev`/`devops`/`full`
 > (`features.pty`, протокол ≥ 8; по умолчанию zsh + Oh My Zsh + тема `synth`), а
@@ -333,7 +335,7 @@ flavor'е `browser`):
 provisioner:
   profiles:
     browser:
-      image: git.itphx.ru/itphx/synth-executor:0.13.8-browser
+      image: git.itphx.ru/itphx/synth-executor:0.13.10-browser
       mcpServers:
         - name: playwright-mcp
           command: playwright-mcp
@@ -628,7 +630,7 @@ execution:
   remote:
     profiles:
       gpu:
-        image: git.itphx.ru/itphx/synth-executor:0.13.9-full
+        image: git.itphx.ru/itphx/synth-executor:0.13.10-full
         nodeSelector:
           nvidia.com/gpu.present: "true"
         tolerations:
@@ -661,10 +663,10 @@ ADR-137b-2); пользовательский ключ с тем же имене
 ```http
 POST /v1/images/warm
 Authorization: Bearer <токен provisioner'а>
-{"images": ["git.itphx.ru/itphx/synth-executor:0.13.9-full"]}
+{"images": ["git.itphx.ru/itphx/synth-executor:0.13.10-full"]}
 
 200 OK
-{"results": [{"image": "git.itphx.ru/itphx/synth-executor:0.13.9-full", "ok": true, "nodes": 3}]}
+{"results": [{"image": "git.itphx.ru/itphx/synth-executor:0.13.10-full", "ok": true, "nodes": 3}]}
 ```
 
 - **Как это работает:** для каждого образа provisioner создаёт `DaemonSet`
@@ -1074,7 +1076,7 @@ control plane и пул исполнителей обновляются **вме
   процессов** команды (через 5 с — `SIGKILL`), потомков не остаётся.
   Семантика «Стоп» (ADR-005) сохраняется: клиентский `AbortSignal` доезжает до
   исполнителя тем же эффектом, что и в inline-режиме.
-- **Версия протокола — 9** (было 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9): добавлены MCP-эндпоинты (v2),
+- **Версия протокола — 10** (было 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10): добавлены MCP-эндпоинты (v2),
   фоновые процессы (v3), **секреты вызова** (v4, ADR-077 «Обновлено 2026-10-26», (б)),
   **вложения MCP-результата** (v5, ADR-115: `attachments[]` в `POST /mcp/call`,
   признак `features.mcpAttachments`), **ssh-агент + секреты в фоне** (v6, PROP-124 §2/§7:
@@ -1090,7 +1092,8 @@ control plane и пул исполнителей обновляются **вме
   переднего плана PTY** (v9: `GET /pty/:id/foreground`; версия повышена — это новый
   маршрут, исполнитель 8 его не знает, и клиент не заводит метод `inspect` у хэндла
   такого адреса: «не умеет» отличимо от «проба не удалась», терминал работает как
-  раньше).
+  раньше), **перестановка таймаута фонового процесса** (v10: `POST /exec/:processId/timeout`
+  + признак `features.backgroundRetime`, ADR-145).
   Старый исполнитель их не знает ⇒ **control plane и
   исполнитель обязаны быть одной версии** (см. «Операционные следствия» в
   [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md)).
@@ -2144,14 +2147,16 @@ backend'а. Данные не затронуты (workspace — тот же то
 
 ### 12.1. Что уже есть
 
+Фактическое состояние: контур исполнения реализован (ADR-135, протокол исполнителя 10) — исполнение идёт через `ExecutionPort`, а топология (`inline`/`remote`) выбирается конфигурацией. Исторические утверждения о «едином процессе без шва» относятся к состоянию до ADR-135.
+
 | Факт | Где |
 |---|---|
-| Исполнение — в процессе backend/core, общего шва нет: `sh -c` (`execute_shell`), `rg` (`grep_files`), `git` (argv), `simple-git`, MCP stdio `spawn` | `packages/core/src/engine/tools/shell.ts:45`, `packages/core/src/engine/tools/search.ts:49`, `packages/core/src/engine/tools/git.ts:30`, `packages/core/src/git/git-service.ts:132`, `packages/core/src/engine/mcp/client.ts:169` |
+| Исполнение — через единый `ExecutionPort` (ADR-135): в `inline` — в процессе backend/core, в `remote` — на исполнителе; за портом `sh -c` (`execute_shell`), `rg` (`grep_files`), `git` (argv), MCP stdio `spawn` | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`; `packages/core/src/engine/tools/shell.ts`, `packages/core/src/engine/tools/search.ts`, `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/mcp/client.ts` |
 | `execute_shell`: таймаут 30 с, `maxBuffer` 10 МБ, `env: { ...process.env, HOME: … \|\| '/root' }` (наследует весь process.env) | `packages/core/src/engine/tools/shell.ts:14`, `:51`, `:52` |
 | Обрезка вывода: 100 КБ (shell), 20 КБ (git), 200 строк (rg) | `packages/core/src/engine/tools/shell.ts:13`, `packages/core/src/engine/tools/git.ts:16`, `packages/core/src/engine/tools/search.ts:57` |
 | `git`: argv-массив без shell, `mergedEnv = { ...process.env, ...env }`, containment `resolveRepoCwd` (симлинки) | `packages/core/src/engine/tools/git.ts:29`, `:30`, `:52` |
-| `simple-git`: env санитизируется (`sanitizeGitEnv` вырезает `git*` и blocklist `EDITOR`/`PAGER`/`SSH_ASKPASS`…), `GIT_TERMINAL_PROMPT=0` | `packages/core/src/git/git-service.ts:81`, `:107`, `:148` |
-| MCP stdio: `StdioClientTransport`; SDK мержит `getDefaultEnvironment()` (whitelist HOME/PATH) | `packages/core/src/engine/mcp/client.ts:159`, `:169` |
+| `git`-сервис (ранее `simple-git`, теперь `execFile`-слой `git/exec.ts`): env санитизируется (`sanitizeGitEnv` вырезает `git*` и blocklist `EDITOR`/`VISUAL`/`PAGER`/`SSH_ASKPASS`…), `GIT_TERMINAL_PROMPT=0` | `packages/core/src/git/exec.ts:38`, `:78`; `packages/core/src/git/git-service.ts:1` |
+| MCP stdio: `StdioClientTransport`; в `inline` — в процессе backend/core, в `remote` — на исполнителе (`/mcp/*`, протокол ≥ 2, ADR-135); SDK мержит `getDefaultEnvironment()` (whitelist HOME/PATH) | `packages/core/src/engine/mcp/client.ts:159`, `:169`; `packages/core/src/engine/mcp/executor-mcp-source.ts:1` |
 | Детект бинарников `git`/`rg`/`sh`/`bash`: `probeBinary` → `execFileAsync(bin, ['--version'], { timeout: 3000 })`; ENOENT → `false`, прочие ошибки → `true` (**fail-open**); кэш детекции — **по экземпляру порта** (`WeakMap`), не модульного уровня (после шага A: локальная проба inline не должна отравлять remote-кэш) | `packages/core/src/engine/tools/runtime-deps.ts:77`, `:79`, `:92` |
 | Причины недоступности тула: `mode`/`role`/`dependency`/`workspace`/`storage`; порядок проверок storage→role→mode→dependency→workspace; `WORKSPACE_CAPABILITIES` | `packages/core/src/engine/permission/availability.ts:22`, `:28`, `:94`, `:147`, `:152` |
 | При деградации хранилища доступны только `skill`/`web_fetch`/`web_search`, прочие — `unavailable(storage)` | `packages/core/src/engine/permission/availability.ts:54`, `:113` |
@@ -2345,7 +2350,6 @@ Split-топология технически возможна и при одн�
 - [ADR-114](./arch_decisions/adr-114-git-worktrees.md) «Git worktrees» — персональный cwd как будущая единица работы на исполнителе.
 - [PROP-080](./arch_decisions/prop-080-managed-hybrid-modes.md) / [PROP-081](./arch_decisions/prop-081-hybrid-policy-leak-protection.md) — гибрид: где исполняется local vs managed.
 - [ADR-132](./arch_decisions/adr-132-ui-terminal.md) «UI-терминал» — PTY/attach вне объёма.
-- [PROP-050](./arch_decisions/prop-050-external-engines-runner.md) «Внешние движки» — прецедент отдельного исполняющего сервиса.
 - [docs/CONFIGURATION.md](./CONFIGURATION.md) — конфигурация (секция `execution`).
 - [docs/OBSERVABILITY.md](./OBSERVABILITY.md) — каталог метрик (`synth_executor_*`).
 - [docs/PUBLISHING.md](./PUBLISHING.md) — сборка Docker/Helm.

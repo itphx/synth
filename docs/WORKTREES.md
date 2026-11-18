@@ -213,7 +213,10 @@ ADR-024), а привязанную сессию получает через х�
 **снимается**: worktree принадлежит проекту, и чужая привязка дала бы сессии каталог вне её
 проекта. Снятие видно в событии `session.moved` (`worktree_detached: true`) и в ответе тула
 (`worktree_detached` в metadata); при смене проекта через `PATCH /api/v2/sessions/:id` — в
-событии `worktree.updated` с `action: 'detached'`.
+событии `worktree.updated` с `action: 'detached'`. Перенос идёт только через `SessionMoveService`
+(ADR-142): живые ресурсы, включая worktree, терминалы и фоновые прогоны, дают
+`409 SESSION_HAS_ATTACHED_STATE`, согласие `move_consent` даёт человек; контракт —
+[API_V2.md](./API_V2.md) §5.8.
 
 ---
 

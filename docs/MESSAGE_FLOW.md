@@ -414,6 +414,7 @@ stateDiagram-v2
     сервиса). Блокирующий `task` останавливается сам: abort сигнала тула → `run-cycle` видит
     `isAborted` → `finishAborted`. Явная остановка фоновой работы — `POST /processes/:id/stop`
     (фоновый процесс/саб-агент) и «Стоп» её собственной сессии (`POST /sessions/<child>/abort`).
+    Контракт detach, таймаут и вывод фоновой работы — [ADR-145](./arch_decisions/adr-145-background-timeout-output-detach.md).
 14. **Дочерняя сессия публикует ход так же, как основная.** `run-cycle` ставит `currentStream`
     ребёнка (`turnId` = id дочерней сессии) и публикует `turn.started`/`step.started`/
     `part.delta`/`part.updated`/`step.finished`/`turn.finished` **в канал ребёнка**. Отличия:
@@ -1004,7 +1005,7 @@ sequenceDiagram
 3. **Detached** (`POST /sessions/:id/background`): прогон получает собственный `streamId`,
    `currentStream` ребёнка переписывается на него, в канал родителя уходит `process.detached` (не
    `process.started`); живой ход ребёнка продолжается как обычно, «Стоп» родителя его больше не
-   трогает.
+   трогает. Таймаут, вывод и контракт detach — [ADR-145](./arch_decisions/adr-145-background-timeout-output-detach.md).
 4. `isReadOnly`: сессия `session_origin: 'subagent'` в UI — только чтение (`isReadOnly = isSubagent`):
    действия с сообщениями, панель очереди, полосы подтверждений/вопросов и композер скрыты, внизу —
    `SubagentResumeBar` («Продолжить» после ошибки/отмены).
@@ -1351,6 +1352,8 @@ sequenceDiagram
 (`restoreLiveTurnFromSession`).
 
 ### 8.28 Уведомление о фоне после конца хода
+
+Контракт фоновой работы (таймаут, вывод, detach) — [ADR-145](./arch_decisions/adr-145-background-timeout-output-detach.md).
 
 1. Фоновая работа завершилась → user-сообщение с `metadata.type = 'background_run_result'` и
    конвертом `<process …>`/`<subagent …>`; ставится в очередь, публикуется `queue.state`.

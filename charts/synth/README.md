@@ -1220,7 +1220,7 @@ execution:
     profiles:
       default:
         description: "Инстанс-исполнитель test: backend+executor, полный toolchain (full)"
-        image: "synth-executor:0.13.9-full"
+        image: "synth-executor:0.13.10-full"
         network: restricted           # none | restricted | full
     # Браузерный контур профилей (ADR-135 п. 10): отдельный каталог браузерных
     # имён (env SYNTH_EXECUTION_BROWSER_PROFILES у backend, csv). Пусто →
@@ -1242,7 +1242,7 @@ execution:
     profiles:
       browser-full:
         class: browser              # exec | browser | both (иначе — из browserProfiles/browserProfile)
-        image: "synth-executor:0.13.9-full"
+        image: "synth-executor:0.13.10-full"
         network: full
         mcpServers: ["playwright-mcp"]
 ```
@@ -1467,7 +1467,7 @@ provisioner:
   profiles:
     devops:
       description: "Профиль для сборок: docker CLI, remote builder, gVisor"  # видно в админке «Исполнение»
-      image: git.itphx.ru/itphx/synth-executor:0.13.8-devops   # docker CLI в образе
+      image: git.itphx.ru/itphx/synth-executor:0.13.10-devops   # docker CLI в образе
       network: restricted          # к builder'у — правилом egress, не full «на всякий»
       resources:
         requests: {cpu: 1, memory: 2Gi}
@@ -1735,7 +1735,7 @@ executor:
 provisioner:
   profiles:
     default:
-      image: git.itphx.ru/itphx/synth-executor:0.13.8
+      image: git.itphx.ru/itphx/synth-executor:0.13.10
       network: restricted           # none | restricted | full
 ```
 
@@ -1987,7 +1987,7 @@ execution:
   remote:
     profiles:
       gpu:
-        image: git.itphx.ru/itphx/synth-executor:0.13.9-full
+        image: git.itphx.ru/itphx/synth-executor:0.13.10-full
         # произвольные аннотации/метки пода (служебные synth.io/* приоритетнее)
         annotations:
           example.com/owner: platform
@@ -2038,7 +2038,7 @@ executor:
 curl -sS -X POST http://synth-provisioner:5200/v1/images/warm \
   -H "Authorization: Bearer $SYNTH_PROVISIONER_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"images":["git.itphx.ru/itphx/synth-executor:0.13.9-full"]}'
+  -d '{"images":["git.itphx.ru/itphx/synth-executor:0.13.10-full"]}'
 # {"results":[{"image":"…","ok":true,"nodes":3}]}
 ```
 
@@ -2130,7 +2130,7 @@ provisioner:
     existingSecret: synth-provisioner-token
   profiles:
     default:
-      image: git.itphx.ru/itphx/synth-executor:0.13.8-core
+      image: git.itphx.ru/itphx/synth-executor:0.13.10-core
       resources:
         requests: {cpu: 500m, memory: 1Gi}
         limits: {cpu: 2, memory: 4Gi}
@@ -2159,9 +2159,9 @@ provisioner:
     existingSecret: synth-provisioner-token
   profiles:
     default:
-      image: git.itphx.ru/itphx/synth-executor:0.13.8-core
+      image: git.itphx.ru/itphx/synth-executor:0.13.10-core
     browser:
-      image: git.itphx.ru/itphx/synth-executor:0.13.8-browser
+      image: git.itphx.ru/itphx/synth-executor:0.13.10-browser
       network: full                       # браузеру нужен egress
       resources:
         requests: {cpu: 500m, memory: 2Gi}

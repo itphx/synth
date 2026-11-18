@@ -40,6 +40,10 @@ the language rule in the root [AGENTS.md](../../AGENTS.md)).
 - **ADR/PROP stay in Russian.** Architecture decisions and proposals in
   [`docs/arch_decisions/`](../arch_decisions/) and their index are not translated:
   identifiers and file names are stable and referenced across the repository.
+- **`API_V2` is partially translated.** The RU original was updated on 2026-11-18;
+  the EN file still lacks §5.32 “Analytics”, §5.33 “Extension packs”, §5.37 “External
+  access”, §5.40 “Worktrees” and §5.45 “Timers and alarms” — see the note at the top of
+  [`docs/en/API_V2.md`](./API_V2.md).
 - **Journals and append-only records** (release notes in `docs/releases/`, task
   logs) stay in Russian as well.
 - **User documentation** is not duplicated here: the portal

@@ -105,7 +105,7 @@ serializable DTOs cross the boundary.
 
 ### 2.1. Requirements
 
-- a Synth version that falls into the manifest's `host` range (in the example — `>=0.11.0 <0.13.0`);
+- a Synth version that falls into the manifest's `host` range (in the example — `>=0.13.0 <0.14.0`);
 - Node.js 20+ to build the bundle;
 - an ESM bundle (CommonJS and TypeScript sources are not loaded: the entry point is `.js`/`.mjs`).
 
@@ -129,7 +129,7 @@ my-plugin/
   "version": "0.1.0",
   "kind": "plugin",
   "description": "Example plugin: a notes block, a DLP filter for requests and a notes search tool",
-  "host": ">=0.11.0 <0.13.0",
+  "host": ">=0.13.0 <0.14.0",
   "contracts": {
     "extensionApi": "^1",
     "promptBlocks": "^1",
@@ -370,7 +370,7 @@ gate the plugin did not pass.
 | `version` | yes | the plugin version | semver `MAJOR.MINOR.PATCH` (+ prerelease/build) |
 | `kind` | yes | the extension class | for a plugin — strictly `"plugin"` |
 | `description` | yes | a short description | a non-empty string; visible in the inspection/catalog |
-| `host` | no | a range of Synth versions | a semver range, a conjunction separated by a space (`>=0.11.0 <0.13.0`); `\|\|` is not supported. A mismatch — `plugin.host_mismatch` |
+| `host` | no | a range of Synth versions | a semver range, a conjunction separated by a space (`>=0.13.0 <0.14.0`); `\|\|` is not supported. A mismatch — `plugin.host_mismatch` |
 | `contracts` | no | contract versions | the values are semver ranges. **Only `contracts.extensionApi` is checked** (the major of the host contract; it is `1` now, the host declares `1.0.0`). The `promptBlocks`/`llmFilters`/`tools` keys are a declaration for the reader and for future checks. A major mismatch — `plugin.contract_mismatch` |
 | `mode` | no | the execution mode | `inline` \| `remote` \| `both`; `inline` by default. The field is allowed only for `kind: "plugin"` |
 | `provides` | yes | the declared contributions | see below; an empty `provides` is an invalid manifest |

@@ -355,10 +355,13 @@ synth/
 ├── packages/
 │   ├── shared/   → @itphx/synth-shared    # Типы, Zod-схемы, протоколы, конфигурация
 │   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API v2, MCP, FileStore
+│   ├── executor/ → @itphx/synth-executor  # Исполнитель агентских команд (ADR-077; контур — ADR-135)
 │   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Опциональный БД-драйвер слоя хранения (ADR-097)
-│   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
+│   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, LLM Proxy
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + админка (Vite)
 │   ├── sdk/      → @itphx/synth-sdk       # Типизированный клиент публичного API (ADR-052)
+│   ├── plugin-memory/ → @itphx/synth-plugin-memory  # Приватный плагин памяти (ADR-107/122)
+│   ├── provisioner/ → @itphx/synth-provisioner  # Приватный provisioner пулов исполнения (ADR-135)
 │   └── synth/    → @itphx/synth           # Тонкая CLI-обёртка (bin: synth), не бандлит core
 ├── scripts/
 │   ├── dev.sh                  # Скрипт разработки

@@ -9,7 +9,7 @@
 # Synth
 
 **AI platform for teamwork.**  
-*0.13.4 — stable core. 0.14 is about company-wide adoption; 1.0 follows the operational baseline.*
+*0.13.10 — stable core. 0.14 is about company-wide adoption; 1.0 follows the operational baseline.*
 
 [Русский](./README.md) · [Documentation](https://docs.synth.itphx.ru/) · [GitHub mirror](https://github.com/itphx/synth)
 
@@ -17,12 +17,13 @@ Synth is a self-hosted platform for working with AI agents as a team. One server
 
 ## Features
 
-- **One hub.** Keys, models, history and audit live on the server; several people work in the same session.
-- **Agents and tools.** File, shell and git tools, MCP, skills, slash commands, subagents, background processes.
+- **One hub.** Keys, models, history and audit live on the server; several people work in the same session. Project access — members and groups (ADR-140).
+- **Agents and tools.** File, shell and git tools, MCP, skills, slash commands, subagents, background processes, built-in terminal (PTY, ADR-132).
 - **Context.** Session branching, context compaction in two modes (summarization and compaction), routing and decision models.
-- **Security.** LLM Gateway, RBAC, OIDC/API keys/service keys, granular permissions and authority.
+- **Security.** LLM Gateway is enabled by default in all profiles (ADR-147), untrusted tool content is filtered (prompt injection, ADR-146); RBAC, OIDC/API keys/service keys, granular permissions and authority.
 - **Data and knowledge.** Agent memory: facts, project and instance indexes, semantic search. Storage is file-based or PostgreSQL.
-- **Automation.** External events and bindings, cron schedules, pipelines (preview), webhooks.
+- **Automation.** External events and bindings, cron schedules, timers and alarms (ADR-141), pipelines (preview), webhooks.
+- **Execution.** Execution profiles and pools, remote executor in a separate process (ADR-135).
 - **Extensions.** Extension packs (agents, skills, MCP, pipelines) and plugins with a trust model.
 - **Interface.** Chat modes "bubble"/"feed", response zoom, Markdown with syntax highlighting, PWA and themes.
 - **Operations.** `/health`, `/ready`, `/metrics`, reports, backup/restore/update/migrate, air-gapped delivery.

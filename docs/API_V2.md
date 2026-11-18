@@ -637,7 +637,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/i18n/current` | backend | — | Текущий язык по `Accept-Language` |
 | GET | `/api/v2/i18n/translations/ru` | backend | — | Русский словарь |
 | GET | `/api/v2/i18n/translations/en` | backend | — | Английский словарь |
-| GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (ADR-052, этап III; `server/openapi/public-openapi.ts`): 28 операций (events/sessions/schedules/llm), именованные `components.schemas`, единый формат ошибок `publicErrorSchema` (`{error:{code,message}}`) |
+| GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (ADR-052, этап III; `server/openapi/public-openapi.ts`): 37 операций (events/sessions/schedules/timers/llm + `meta`), именованные `components.schemas`, единый формат ошибок `publicErrorSchema` (`{error:{code,message}}`) |
 | GET | `/api/v2/meta` | оба | — | Возможности инстанса (ADR-118 §8): `{messageModel, eventSeq, replay, version}` — **без аутентификации** (как `/health`) **в обеих сборках** (standalone и managed; общий allowlist — `packages/core/src/server/app/public-routes.ts`). `messageModel` — версия модели сообщений/потока (`2`), `eventSeq` — события нумеруются глобально в пределах инстанса, `replay` — доступен догон по журналу (`Last-Event-ID`/`?since`), `version` — версия инстанса. Аддитивно `attachments` (ADR-115): `{enabled, modalities, maxBytesPerFile, maxFilesPerMessage, maxBytesPerSession}` — **эффективные** настройки вложений (env > runtime > config > defaults, тот же резолвер, что у `AttachmentService`; клиент использует для предпроверки и текстов ошибок, истина — сервер). Аддитивно `features` (PROP-125): `{remoteMcp?: boolean; users?: boolean}` — признаки возможностей инстанса; **отсутствие поля/признака = «фичи нет»** (fail-closed — как у старого backend без `features`). `remoteMcp` — поддержка `/api/v2/mcp/remote/*` и relay-режима (**только backend**); `users` — признак, что инстанс **обслуживает `/api/v2/users*`** (управление пользователями): **managed backend — всегда `true`** (маршрут смонтирован в backend); **core standalone (чистый) — `false`** (маршрута нет, проксировать нечего); **core в гибриде — `true` ровно тогда, когда удалённый backend подключён** (тогда локальный core проксирует `/api/v2/users` на него — `REMOTE_PROXY_PREFIXES`; без подключения прокси не работает → `false`). Клиент сверяет `messageModel` перед подключением к WS/SSE (fail-closed, §3) |
 
 ### 5.5 Sessions — `/api/v2/sessions`
@@ -2120,7 +2120,7 @@ ADR-133: каналы обновлений (`auto` — по установлен
 
 ```json
 {
-  "currentVersion": "0.13.7",
+  "currentVersion": "0.13.10",
   "latestVersion": "0.14.0-beta.1",
   "channel": "beta",
   "prerelease": true,
@@ -2551,7 +2551,7 @@ function verify(rawBody, header, secret, nowSec = Math.floor(Date.now() / 1000))
 ### 5.30 Публичный OpenAPI и SDK — `@itphx/synth-sdk` (ADR-052, этап III)
 
 Публичный HTTP-контракт (интеграционное ядро: `events`/`sessions`/`schedules`/`timers`/`llm`;
-36 операций — events 13, sessions 8, schedules 6, timers 7, llm 1) описан декларативной **public-OpenAPI 3.1**-спекой и отдаётся ручкой `GET /api/v2/openapi.json`
+37 операций — events 13, sessions 8, system 1, schedules 6, timers 8, llm 1) описан декларативной **public-OpenAPI 3.1**-спекой и отдаётся ручкой `GET /api/v2/openapi.json`
 (§5.4). Потреблять его удобнее через публикуемый пакет **`@itphx/synth-sdk`** — типизированный
 клиент над этой спекой (тонкий пакет, зависимость только от `@itphx/synth-shared`; ESM,
 браузер-совместимый).

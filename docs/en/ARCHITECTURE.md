@@ -8,20 +8,23 @@
 
 ## Components
 
-Synth consists of eight packages in a monorepo:
+Synth consists of ten packages in a monorepo: eight published to npm and two private
+(`plugin-memory`, `provisioner`):
 
 | Package | Purpose | Stack |
 |-------|-----------|------|
 | **@itphx/synth-shared** | Types, interfaces, Zod schemas, protocols, configuration | TypeScript |
 | **@itphx/synth-core** | Standalone engine: sessions, queue, LLM providers, CLI, HTTP API v2 | TypeScript, Hono |
 | **@itphx/synth-storage-postgres** | Optional storage-layer driver over PostgreSQL (ADR-097): implements the `StorageContext` domain ports, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
-| **@itphx/synth-executor** | Agent command executor — a separate process (ADR-077): executor server + remote port client, `peer-dep` core | TypeScript, Hono |
-| **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
+| **@itphx/synth-executor** | Agent command executor — a separate process (ADR-077; contour and pools — ADR-135): executor server + remote port client, `peer-dep` core | TypeScript, Hono |
+| **@itphx/synth-backend** | API Hub: OIDC, RBAC, LLM Proxy, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + admin panel (role-based rendering) | TypeScript, React 19, Vite |
-| **@itphx/synth-sdk** | Typed public API client (ADR-052): a wrapper over `public-OpenAPI` (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
+| **@itphx/synth-sdk** | Typed public API client (ADR-052): a wrapper over `public-OpenAPI` (`events`/`sessions`/`schedules`/`timers`/`llm`) | TypeScript, ESM |
 | **@itphx/synth** | Published thin CLI wrapper (`bin: synth`) over core/ui/shared (ADR-038). Does not bundle core and does not copy assets | TypeScript, commander |
+| **@itphx/synth-plugin-memory** | Private memory plugin — a product on top of the core ports (ADR-107/ADR-122): facts, recall, indexes | TypeScript |
+| **@itphx/synth-provisioner** | Private execution-pool provisioner (ADR-135): `/v1` HTTP contract, `static` provider, pool lifecycle | TypeScript, Hono |
 
-The public HTTP contract is described by a **`public-OpenAPI`** spec (28 operations of the
+The public HTTP contract is described by a **`public-OpenAPI`** spec (37 operations of the
 integration core, `packages/core/src/server/openapi/public-openapi.ts`, served by
 `GET /api/v2/openapi.json`); the SDK consumes it — a single client layer over the public API.
 
@@ -58,7 +61,7 @@ flowchart TB
         storage_pg["postgres — @itphx/synth-storage-postgres (optional)"]
     end
 
-    subgraph Execution["Command execution (ADR-077)"]
+    subgraph Execution["Command execution (ADR-135; ADR-077 — legacy)"]
         synth_executor["@itphx/synth-executor — executor (optional)"]
     end
 
@@ -114,13 +117,6 @@ synth-ui (localhost) ←→ synth-core (:4300)
 - One command: `synth serve --api-key <key>`
 - Direct access to the file system
 - No backend, Keycloak or Kubernetes required
-
-### Local + external engines (planned)
-
-External engines (opencode/cline) through the built-in Runner bridge are **not implemented**
-(plan: ADR-018, PROP-050). The plumbing remains in the core: the `serve --runner` flag and the
-`runner` config section, but there are neither engine adapters nor routing; actual execution
-is performed by the `synth` engine itself.
 
 ### Hybrid (local + corporate server)
 
@@ -218,18 +214,15 @@ synth/
 └── packages/
     ├── shared/   → @itphx/synth-shared
     ├── core/     → @itphx/synth-core
+    ├── executor/ → @itphx/synth-executor (ADR-077; contour — ADR-135)
     ├── storage-postgres/ → @itphx/synth-storage-postgres (opt. DB driver, ADR-097)
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── sdk/      → @itphx/synth-sdk (public API client, ADR-052)
+    ├── plugin-memory/ → @itphx/synth-plugin-memory (private memory plugin, ADR-107/122)
+    ├── provisioner/ → @itphx/synth-provisioner (private execution-pool provisioner, ADR-135)
     └── synth/    → @itphx/synth (thin CLI wrapper, bin: synth)
 ```
-
-## The "Runner" model (planned)
-
-The bridge between the backend and external engines (opencode/cline) is **not implemented**
-(plan: ADR-018, PROP-050). The intended runner brings up the LLM Proxy and routes
-requests to the selected engine; engines are stateless (history lives on the backend).
 
 ## Stateless engine model
 
@@ -242,9 +235,14 @@ The message history lives on the backend. The engine receives as input:
 This provides:
 
 - Collaboration (several users in one session)
-- Switching engines without losing context
+- Switching models without losing context
 - Restarting an engine without losing history
 - A message queue on the backend, delivered one message at a time
+
+Sessions are executed only by the built-in `synth` engine; external engines (opencode/cline)
+are not part of the product. Connecting them remains a proposal in the Icebox —
+[PROP-050](../arch_decisions/prop-050-external-engines-runner.md), revisited in
+[PROP-109](../arch_decisions/prop-109-agent-system-federation.md) if demand appears.
 
 ## System prompt composition (SystemPromptComposer)
 
@@ -447,7 +445,7 @@ external event → EventIngress (SynthEvent) → RequestSessionService
 
 API endpoints and RBAC — `docs/API_V2.md` §5.26; configuration — `docs/CONFIGURATION.md`
 (the `events` section). Sources/integrations: the ADR-051 scheduler (cron), binding API keys, service
-keys with scopes and a project projection, webhooks, `public-OpenAPI` (28 operations, `GET /api/v2/openapi.json`)
+keys with scopes and a project projection, webhooks, `public-OpenAPI` (37 operations, `GET /api/v2/openapi.json`)
 and the `@itphx/synth-sdk` SDK — **ADR-052 is closed in full (stages I–IV, including moving the Telegram gateway
 to a scoped service key)**; the first add-on is the Telegram gateway (`addons/synth-gateway-telegram`) —
 implemented; **plugins are implemented** (Plugin SDK, ADR-090); pipelines — ADR-100 remainder (the engine is implemented, ADR-101).

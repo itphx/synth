@@ -84,7 +84,7 @@
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
-| ADR-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ Частично | [adr-018-session-engine-selection.md](./adr-018-session-engine-selection.md) |
+| ADR-018 | Историческое: поле `Session.engine` удалено; внешние движки не реализуются (PROP-050 — Icebox) | ⚠️ Частично | [adr-018-session-engine-selection.md](./adr-018-session-engine-selection.md) |
 | ADR-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов — **реализовано** (ADR-090); остаток — эмит `callback` (вне ядра) | ⚠️ Частично | [adr-030-hooks-agent-events.md](./adr-030-hooks-agent-events.md) |
 | ADR-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (ADR-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны вынесены в ADR-100/ADR-101 (движок реализован), размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ Частично | [adr-051-scheduler-pipelines.md](./adr-051-scheduler-pipelines.md) |
 | ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (ADR-090 — **реализован**), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон Add-on — `synth-media`; остаток — editions/contribution | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |

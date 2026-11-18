@@ -2,9 +2,9 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-11-18 (PROP-142/143); перевод отстаёт
-
-> ⚠️ RU-версия обновлена 2026-11-18 (**ADR-146**) — **переведено**: §5, строки
+> ⚠️ RU-версия обновлена 2026-11-18 (ADR-146, PROP-142/143); **перевод отстаёт** — в EN-файле
+> отсутствуют §5.32 «Аналитика и отчётность», §5.33 «Пакеты расширений», §5.37 «Внешние доступы»,
+> §5.40 «Worktrees», §5.45 «Таймеры и будильники». Переведено: §5, строки
 > `GET/PUT/DELETE /api/v2/settings/security` — контракт с `promptInjection`, `source`,
 > `envLocked`, `envLockedFields`, `restartRequired`; частичный `PUT` (`askTimeoutMs: null` —
 > сброс), `409 ENV_LOCKED` по полю, `400` на неизвестный ключ/тип/режим, `DELETE` сбрасывает
@@ -633,7 +633,7 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | GET | `/api/v2/i18n/current` | backend | — | Current language by `Accept-Language` |
 | GET | `/api/v2/i18n/translations/ru` | backend | — | Russian dictionary |
 | GET | `/api/v2/i18n/translations/en` | backend | — | English dictionary |
-| GET | `/api/v2/openapi.json` | both | auth | The public OpenAPI 3.1 spec of the integration core (ADR-052, stage III; `server/openapi/public-openapi.ts`): 28 operations (events/sessions/schedules/llm), named `components.schemas`, a unified error format `publicErrorSchema` (`{error:{code,message}}`) |
+| GET | `/api/v2/openapi.json` | both | auth | The public OpenAPI 3.1 spec of the integration core (ADR-052, stage III; `server/openapi/public-openapi.ts`): 37 operations (events/sessions/schedules/timers/llm + `meta`), named `components.schemas`, a unified error format `publicErrorSchema` (`{error:{code,message}}`) |
 
 ### 5.5 Sessions — `/api/v2/sessions`
 
@@ -1921,7 +1921,7 @@ per-channel cache, and package installation. Registries and env — [CONFIGURATI
 
 ```json
 {
-  "currentVersion": "0.13.7",
+  "currentVersion": "0.13.10",
   "latestVersion": "0.14.0-beta.1",
   "channel": "beta",
   "prerelease": true,
@@ -2345,8 +2345,8 @@ function verify(rawBody, header, secret, nowSec = Math.floor(Date.now() / 1000))
 
 ### 5.30 Public OpenAPI and SDK — `@itphx/synth-sdk` (ADR-052, stage III)
 
-The public HTTP contract (the integration core: `events`/`sessions`/`schedules`/`llm`; 28 operations —
-events 13, sessions 8, schedules 6, llm 1) is described by a declarative **public-OpenAPI 3.1** spec and served by `GET /api/v2/openapi.json`
+The public HTTP contract (the integration core: `events`/`sessions`/`schedules`/`timers`/`llm`; 37 operations —
+events 13, sessions 8, system 1, schedules 6, timers 8, llm 1) is described by a declarative **public-OpenAPI 3.1** spec and served by `GET /api/v2/openapi.json`
 (§5.4). Consuming it is more convenient through the published package **`@itphx/synth-sdk`** — a typed
 client over that spec (a thin package, depending only on `@itphx/synth-shared`; ESM,
 browser-compatible).
