@@ -80,6 +80,9 @@ charts/**/charts/
 secrets/
 # Токен доверия control plane ↔ исполнитель (split-топология, docker compose).
 .executor-token
+# Креды docker-реестра, которые CI пишет внутри checkout (base64(логин:токен);
+# scripts/docker-auth-gitea.sh) — в git попадать не должны (аудит 0.13.10, F1).
+.docker-gitea/
 # Исключение: тестовая фикстура самоподписанного TLS-серта/ключа (ADR-099) —
 # throwaway-материал только для интеграционного теста egress-транспорта.
 !packages/core/src/security/__fixtures__/*.pem

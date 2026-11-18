@@ -18,6 +18,19 @@ tmp/
 .env.*
 .DS_Store
 
+# Креды реестра НЕ должны попадать в контекст сборки и слои образов (аудит 0.13.10, F1):
+# `scripts/docker-auth-gitea.sh` пишет `config.json` с base64(логин:токен) в
+# `${{ gitverse.workspace }}/.docker-gitea` — то есть ВНУТРЬ checkout, а все
+# Dockerfile'ы делают `COPY . .` в build-стадии. `.docker/` — на случай, если CI
+# положит docker-конфиг/креды туда. `secrets/` живёт вне репозитория (инвариант 13),
+# исключаем на всякий случай: токены/ключи в контекст не идут никогда.
+.docker-gitea/
+.docker/
+secrets/
+# Токен доверия control plane ↔ исполнитель (split-топология): в контейнеры
+# передаётся файлом-секретом в рантайме, в контексте сборки не нужен.
+.executor-token
+
 # Deploy-плагины: бандлы из `docker/plugins/` обязаны попасть в контекст сборки —
 # `docker/Dockerfile.backend` (стадия build) копирует каталог в `/opt/synth/plugins`.
 # Правило `**/dist/` выше иначе вырезало бы собранный бандл плагина (`docker/plugins/<name>/dist/index.js`).

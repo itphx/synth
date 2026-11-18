@@ -11,9 +11,15 @@
 #     зеркала (get.helm.sh, huaweicloud, github) с проверкой sha256 →
 #     docker-образ alpine/helm:<version>;
 #   * в лог всегда пишется, какой источник сработал;
-#   * при CI_HELM_SOFT=1 недоступность helm (или падение самого шага) не валит
-#     джобу: печатается предупреждение и код возврата 0 — публикация чарта
-#     не блокирует создание GitVerse Release.
+#   * CI_HELM_SOFT=1 смягчает ТОЛЬКО предпосылки, не зависящие от реестра: helm
+#     не получен, lint/package не удались, не задан токен — печатается
+#     предупреждение и код возврата 0 (это инфраструктура раннера);
+#   * отказ реестра при публикации (HTTP != 2xx) — ВСЕГДА ошибка с кодом 1,
+#     независимо от CI_HELM_SOFT: чарт — поставляемый артефакт, молчаливый
+#     пропуск недопустим (зелёный релиз без чарта в реестре — ложный сигнал);
+#   * после успешного POST версия сверяется с index.yaml реестра (идемпотентно,
+#     анонимно): версии нет в доступном индексе — ошибка; индекс недоступен
+#     (сеть/реестр) — предупреждение, проверка не превращается в хрупкую.
 #
 # Использование:
 #   scripts/ci-helm.sh sources                       # диагностика: что доступно
@@ -31,11 +37,15 @@
 #                        (плейсхолдеры {version}, {platform}, {arch})
 #   HELM_PLATFORM        linux|darwin (по умолчанию — uname -s)
 #   HELM_ARCH            amd64|arm64|arm|386|s390x|ppc64le|riscv64
-#   CI_HELM_SOFT         1 — не валить шаг при недоступности helm (режим релиза)
+#   CI_HELM_SOFT         1 — не валить шаг при недоступности helm/сбое
+#                        lint|package/отсутствии токена (инфраструктура
+#                        раннера). Отказ реестра при публикации валит всегда.
 #   CI_HELM_DOCKER       0 — не использовать docker-образ как фоллбэк
 #   CI_HELM_DOCKER_IMAGE образ helm (по умолчанию alpine/helm:$HELM_VERSION)
 #   CHART_DIR            каталог чарта (по умолчанию charts/synth)
 #   CHART_REGISTRY_URL   эндпоинт Helm-реестра Gitea (нативный API `/api/charts`)
+#   CHART_REGISTRY_INDEX_URL  index.yaml того же реестра — проверка после
+#                        публикации (по умолчанию …/helm/index.yaml)
 #   CHART_REGISTRY_USER  пользователь реестра (по умолчанию itphx)
 #   GITEA_TOKEN          пароль реестра (секрет GT_TOKEN; в лог не пишется).
 #                        Для обратной совместимости читается и GV_TOKEN.
@@ -56,6 +66,9 @@ CI_HELM_DOCKER_IMAGE="${CI_HELM_DOCKER_IMAGE:-alpine/helm:$HELM_VERSION}"
 
 CHART_DIR_DEFAULT="${CHART_DIR:-charts/synth}"
 CHART_REGISTRY_URL="${CHART_REGISTRY_URL:-https://git.itphx.ru/api/packages/itphx/helm/api/charts}"
+# Индекс того же реестра: после успешного POST проверяем, что версия в нём видна
+# (идемпотентно, анонимно — реестр публичный).
+CHART_REGISTRY_INDEX_URL="${CHART_REGISTRY_INDEX_URL:-https://git.itphx.ru/api/packages/itphx/helm/index.yaml}"
 CHART_REGISTRY_USER="${CHART_REGISTRY_USER:-itphx}"
 # Пароль реестра: GITEA_TOKEN (секрет GT_TOKEN). GV_TOKEN — обратная совместимость
 # для вызовов, оставшихся с прежнего (GitVerse) реестра.
@@ -76,12 +89,16 @@ warn() { printf '[ci-helm] ПРЕДУПРЕЖДЕНИЕ: %s\n' "$*" >&2; }
 err() { printf '[ci-helm] ОШИБКА: %s\n' "$*" >&2; }
 
 usage() {
-  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+  # Шапка — до `set -uo pipefail` включительно: диапазон не «съезжает» при
+  # добавлении переменных окружения.
+  sed -n '2,/^set -uo pipefail$/p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 soft_skip_or_fail() {
   # $1 — причина; $2 = 1 — напечатать диагностику источников.
-  # В мягком режиме (релиз) шаг не валится: релиз важнее публикации чарта.
+  # Только для ПРЕДПОСЫЛОК (helm/токен/lint/package): в мягком режиме шаг не
+  # валится. Отказ реестра при публикации сюда не идёт — он валит всегда
+  # (см. cmd_publish).
   local reason="$1" with_diagnostics="${2:-0}"
   if [ "$CI_HELM_SOFT" = "1" ]; then
     warn "ПРОПУСК (CI_HELM_SOFT=1): $reason"
@@ -395,6 +412,48 @@ cmd_package() {
   exit 0
 }
 
+verify_chart_in_index() {
+  # $1 — версия чарта. Идемпотентная сверка после успешного POST: версия должна
+  # быть видна в index.yaml реестра (запрос анонимный — реестр публичный).
+  # Индекс недоступен (сеть раннера/реестр) — предупреждение, чтобы проверка не
+  # стала хрупкой; индекс доступен, а версии в нём нет — ошибка (артефакт не
+  # доставлен).
+  local version="$1" body http_code
+  body="$(mktemp 2>/dev/null)" || body="$HELM_INSTALL_DIR/publish-index.yaml"
+  log "проверяю synth-$version в $CHART_REGISTRY_INDEX_URL"
+  http_code=$(curl -sS -o "$body" -w '%{http_code}' \
+    --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
+    "$CHART_REGISTRY_INDEX_URL") || http_code="000"
+  case "$http_code" in
+    2*)
+      # Ответ должен быть действительно индексом helm (а не HTML-страницей
+      # прокси/ошибки): иначе сверка бессмысленна — предупреждаем, не падаем.
+      if ! grep -q '^entries:' "$body"; then
+        warn "ответ $CHART_REGISTRY_INDEX_URL не похож на index.yaml — наличие synth-$version не проверено"
+        rm -f "$body"
+        return 0
+      fi
+      # Строка индекса вида `    version: 0.13.10`; сравнение — литеральное.
+      if awk -v v="$version" '
+        { line = $0; sub(/^[[:space:]]*version:[[:space:]]*/, "", line);
+          gsub(/["\047[:space:]]/, "", line); if (line == v) found = 1 }
+        END { exit(found ? 0 : 1) }' "$body"; then
+        log "версия synth-$version подтверждена индексом реестра"
+        rm -f "$body"
+        return 0
+      fi
+      err "чарта synth-$version нет в index.yaml реестра ($CHART_REGISTRY_INDEX_URL) — публикация не подтверждена"
+      rm -f "$body"
+      exit 1
+      ;;
+    *)
+      warn "index.yaml реестра недоступен (HTTP $http_code) — наличие synth-$version не проверено"
+      rm -f "$body"
+      return 0
+      ;;
+  esac
+}
+
 cmd_publish() {
   local chart="${1:-$CHART_DIR_DEFAULT}" version="${2:?укажите версию}"
   if [ -z "${CHART_REGISTRY_TOKEN:-}" ]; then
@@ -425,13 +484,18 @@ cmd_publish() {
     2*)
       log "чарт опубликован: synth-$version (HTTP $http_code)"
       rm -f "$response"
+      verify_chart_in_index "$version"
       exit 0
       ;;
     *)
       head -c 500 "$response" >&2 2>/dev/null
       echo >&2
       rm -f "$response"
-      soft_skip_or_fail "публикация чарта в реестр не удалась (HTTP $http_code)"
+      # Отказ реестра — ЖЁСТКАЯ ошибка, независимо от CI_HELM_SOFT: чарт —
+      # поставляемый артефакт, молчаливый пропуск недопустим (зелёная джоба без
+      # чарта в реестре — ложный сигнал: разворачивать нечего).
+      err "публикация чарта в реестр не удалась (HTTP $http_code): $CHART_REGISTRY_URL"
+      exit 1
       ;;
   esac
 }

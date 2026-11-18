@@ -248,7 +248,7 @@ The index repository is `https://git.itphx.ru/api/packages/itphx/helm/index.yaml
 
 ### Publishing
 
-In CI — the `publish-helm` job in `.gitverse/workflows/release.yaml` (not started on `dry_run`; it runs with `CI_HELM_SOFT=1`, so a failed chart publish does not fail the release): installing Helm → `helm lint charts/synth` → `helm package` → `curl` POST to `.../helm/api/charts` with Basic auth `itphx:$GT_TOKEN` (success = HTTP 201).
+In CI — the `publish-helm` job in `.gitverse/workflows/release.yaml` (not started on `dry_run`): installing Helm → `helm lint charts/synth` → `helm package` → `curl` POST to `.../helm/api/charts` with Basic auth `itphx:$GT_TOKEN` (success = HTTP 201) → version check in `index.yaml`. The soft mode `CI_HELM_SOFT=1` covers prerequisites only (unavailable helm, failed lint/package, missing token); **a registry refusal or a version missing from the index fails the job** — the chart is the primary delivery artifact, a silent skip is not acceptable.
 
 Manually:
 

@@ -1,0 +1,119 @@
+{
+  "schema": "synth.security.audit/v1",
+  "version": "0.13.10",
+  "commit": "9263c7bf7c4c6d2c83207d4b892361d4ae037852",
+  "date": "2026-11-18",
+  "auditor": {
+    "name": "opencode (аудит-агент, роль AUDITOR), режим read-only",
+    "role": "AUDITOR",
+    "mode": "read-only"
+  },
+  "status": "approved_with_exceptions",
+  "summary": "Аудит 0.13.10 (диапазон v0.13.8..HEAD, 261 коммит, 1293 файла, +201183/-15205) по чек-листу §0-§6 выполнен на коммите 9263c7bf. Машинные проверки: secret-scan дерева/истории/blob-ов чист (worktree=3608, commits=1277430, blobs=24343, подавлено 126, allowlist-блоков 18 — новые блоки 12-13 узкие, «путь + точное значение»); негативная матрица 33+86 и перепись 11 (244 param-маршрута) зелёные; дополнительно worktree 15, processes 10, projects 3; ратчет зависимостей critical 0 / high 0 (--prod 0/0/0/0, прямых уязвимых 0). Авторизационная поверхность в релизе выросла (140 файлов server/**, +22583): новые роутеры terminals/timers/snippets/session-scripts/execution/git/notes/settings-*; это проверено матрицей и переписью по смонтированному приложению, заявление «authz не менялся» к релизу неприменимо. Containment переработан и усилен (execution/fs-perimeter.ts: realpath у точки исполнения, realpathWithMissingTail, fail-closed; 102 теста зелёные). Фокус релиза — контур поставки (коммит 9263c7bf): образы и чарт только в публичном Gitea, npm в три реестра. Подтверждено наблюдаемо: в .gitverse/scripts/charts/docker нет gitverse.ru/itphx и ghcr.io/itphx; latest-тегов нет; публикации fail-closed (единственный добавленный continue-on-error — шаг проверки видимости GitHub Packages); анонимный pull работает (анонимный bearer, tags/list 200, manifest 0.13.8 → 200 OCI index); чарт по умолчанию тянет образы из git.itphx.ru/itphx; slim-тег публикует только build-docker (--no-slim подтверждён dry-run). Находки аудита, исправленные в коммите релизной подготовки: F1 — токен реестра попадал в docker build context (.dockerignore теперь исключает .docker-gitea/, .docker/, secrets/, .executor-token; проверено сборкой контекста); F2 — публикация Helm-чарта могла «тихо» пропускаться (теперь отказ реестра и отсутствие версии в index.yaml валят джобу, мягкий режим только для недоступного helm/линта/токена). Остаточные исключения — baseline ратчета, dev-only адвайзори, TOCTOU в git-операциях, суммаризация при выключенном шлюзе, квоты chunked-загрузки, исторические allowlist-блоки, гигиена dev-тегов в публичном реестре, @hono/node-server 2.x. Прогон CI на 9263c7bf — artifacts.ci_run.",
+  "checks": {
+    "secret-scan": {
+      "status": "pass",
+      "command": "node scripts/secret-scan.mjs --mode worktree,commits,blobs --report tmp/security/secret-scan-0.13.10.json && node scripts/secret-scan.mjs --list-allowlists",
+      "result": "ЧИСТО — находок нет: единиц worktree=3608, commits=1277430, blobs=24343, правил 15, allowlist-блоков 18, подавлено 126 (все — тестовые фикстуры: dummy-маркеры ключей 29, внешних доступов и ротации 8+9, токенов исполнителя и runtime-прокси 5, SSH/ADR-124 16, PEM-прокси 2, самоподписанный TLS 1, bearer метрик 2, dummy-креды в URL 16, имена env 15+6, inline-PEM 6+2, исторические исполнителя 2+5+2). Новые в 0.13.10 блоки .gitleaks.toml 12-13 — пара «путь И точное значение»: packages/provisioner/src/config.ts + имена SYNTH_PROVISIONER_TOKEN / SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN; три тест-файла + три dummy-литерала. AND-семантика внутри блока проверена чтением scripts/secret-scan.mjs:398-411 (conditions.every(Boolean)); проба файлами не выполнялась — роль read-only, tmp/ вне скана.",
+      "date": "2026-11-18"
+    },
+    "auth-matrix": {
+      "status": "pass",
+      "command": "pnpm --filter @itphx/synth-backend exec vitest run src/routes/sessions-access.test.ts src/routes/session-idor-matrix.test.ts src/app/route-access-census.test.ts src/routes/worktree-access-matrix.test.ts src/routes/processes-access.test.ts src/routes/projects-access.test.ts",
+      "result": "Файлы матрицы policy.authMatrix.files на месте (маркер IDOR в обоих). Результаты прогона: sessions-access 33 passed, session-idor-matrix 86 passed, route-access-census 11 passed, worktree-access-matrix 15 passed, processes-access 10 passed, projects-access 3 passed; падений 0 (порог policy.authMatrix.minTests=8 превышен). Перепись объявляет 244 param-маршрута и покрывает новые семейства релиза: /terminals/:id* (9 маршрутов, guard резолвит терминал→его проект, terminals.ts:306-318), /timers/:id* (6, timer-project-role), /snippets/:name (2, чужой userId → 403), /sessions/:id/scripts* и /sessions/:id/notes* (session-prefix), /execution/pools/:key* (ADMIN, 403). Публичный allowlist не менялся: git diff v0.13.8..HEAD по packages/{core,backend}/src/**/public-routes.ts — пусто (5 путей + OPTIONS).",
+      "date": "2026-11-18"
+    },
+    "ci-baseline": {
+      "status": "pass",
+      "command": "node scripts/security-gate.mjs --version 0.13.10 --skip-tests (на 9263c7bf) + CI GitVerse ci.yaml run 286 на 9263c7bf",
+      "result": "Локальный прогон гейта на 9263c7bf: 4 pass, 1 fail — единственный fail — отсутствие этой записи аудита (release-record), остальные проверки OK (policy; auth-matrix — файлы на месте; secret-scan — чисто; dependencies — critical 0/0, high 0/1, moderate 1, low 1, прямых уязвимых 0). Целевые наборы тестов вне гейта: 6 файлов матрицы/переписи, 158 тестов passed; FS-периметр 2 файла, 102 passed. CI GitVerse: ci.yaml run 286 на коммите 9263c7bf, ci-docs run 285 на том же коммите.",
+      "date": "2026-11-18"
+    },
+    "dependencies": {
+      "status": "pass_with_exceptions",
+      "counts": {
+        "critical": 0,
+        "high": 0
+      },
+      "command": "pnpm audit --json && pnpm audit --prod --json && node scripts/security-gate.mjs --only dependencies --skip-tests",
+      "result": "Профиль ратчета post-upgrade. pnpm audit --json: critical 0, high 0, moderate 1, low 1, info 0 — два адвайзори: esbuild >=0.27.3 <0.28.1 (low, GHSA-g7r4-m6w7-qqqr, dev-пути tsup/vite/vitest/tsx) и minimatch >=7 <11.0.1 (moderate, GHSA-g3hv-75wg-m249, dev-пути eslint/typescript-eslint). pnpm audit --prod --json: critical 0, high 0, moderate 0, low 0. Гейт: critical 0/0, high 0/1, moderate 1, low 1, прямых уязвимых модулей 0 — 1 pass, 0 fail. Адвайзори picomatch (GHSA-fc5q-39xc-vjpf) в текущей базе не репортится (установлены picomatch@4.0.4 и 4.0.7), поэтому counts записи {critical:0, high:0} ниже baseline {0,1} — гейт печатает предупреждение «ратчет ослаблен» (не ошибка); синхронизация baseline — отдельным изменением политики.",
+      "date": "2026-11-18"
+    },
+    "security-review": {
+      "status": "pass_with_exceptions",
+      "command": "docs/security/AUDIT-CHECKLIST.md §3 + git diff v0.13.8..HEAD -- .gitverse scripts docker charts '**/Dockerfile*' + git diff --stat v0.13.8..HEAD -- 'packages/*/src/**/auth*' 'packages/*/src/**/permission*' 'packages/*/src/**/server/**' + rg по диффу (realpath/egress/registries/latest/continue-on-error) + живые пробы реестров",
+      "result": "(1) Новые внешние входы: интерактивный терминал (/api/v2/terminals*, PTY; enabledGuard → 403 TERMINALS_DISABLED при выключенном терминале, terminalGuard по проекту на каждом :id), таймеры/будильники (/api/v2/timers*, timer-project-role), сниппеты (/api/v2/snippets, слот изолирован по userId: чужой userId → 403), скрипты проекта (/sessions/:id/scripts, session-prefix guard), профили/пулы исполнения (/api/v2/execution/* — profilesReadGuard по умолчанию requireAuth, мутации writeGuard, секретов в DTO нет), settings/terminal и settings/background (ADMIN/requireAuth). (2) Авторизация/IDOR: матрица 33+86 и перепись 11 зелёные, 244 param-маршрута объявлены с правилом доступа, публичный allowlist не расширялся; проверка на границе соблюдена (session-access-guard, terminalGuard, project-role guard'ы фабрик). (3) Containment: переработан — новый общий модуль execution/fs-perimeter.ts (realpath у точки исполнения через порт, realpathWithMissingTail для несуществующего хвоста, fail-closed на неразрешимость), 102 теста зелёные; isSymlinkEscapeInRoots не ослаблен (добавлена только диагностика). (4) SSRF/egress: новые исходящие вызовы (command-policy, provisioner-клиент, remote-порт) идут через egressFetch core, собственных агентов/диспетчеров не добавлено. (5) Секреты: secret-scan чист; токены публикации только из secrets.*; в коммите релизной подготовки .dockerignore исключает .docker-gitea/, .docker/, secrets/, .executor-token — токен реестра не попадает в контекст/слои, проверено локальной сборкой контекста (файлы отсутствуют, негация docker/plugins сохранена). (6) Supply-chain: gitverse.ru/itphx и ghcr.io/itphx в путях образов отсутствуют (rg: совпадений нет); latest-тегов нет; единственный добавленный continue-on-error — проверка видимости GitHub Packages (публикация fail-closed); slim публикует только build-docker (--no-slim подтверждён dry-run: в плане только :0.13.10-<flavor>); анонимный pull подтверждён (анонимный bearer, tags/list 200, manifest 0.13.8 → 200 OCI index); чарт по умолчанию тянет git.itphx.ru/itphx/*. Публикация чарта переведена в fail-closed по отказу реестра и сверяется с index.yaml (правка релизной подготовки). (7) Доки vs факт: PUBLISHING.md/AGENTS.md/release notes переведены на Gitea и три npm-реестра; расхождение по версии чарта закрывается самим релизом (publish-helm публикует <версия>, сверка индекса теперь обязательна).",
+      "date": "2026-11-18"
+    }
+  },
+  "exceptions": [
+    {
+      "id": "deps-baseline-drift-high",
+      "scope": "policy.dependencies.profiles['post-upgrade'].baseline = {critical 0, high 1} (picomatch GHSA-fc5q-39xc-vjpf), факт аудита 0.13.10: pnpm audit --json → critical 0, high 0, moderate 1, low 1. Гейт печатает «ратчет ослаблен — синхронизируйте baseline с фактом».",
+      "justification": "baseline — факт последнего аудита, а не запас: адвайзори picomatch в текущей базе не репортится, поэтому порог выше факта. Ослабление ратчета не допущено (counts записи ниже baseline, а не выше).",
+      "followUp": "Синхронизировать baseline с фактом отдельным изменением policy.json (через profileSwitch, с owner/why), убрав ссылку на picomatch-исключение из заметки профиля.",
+      "owner": "владелец задачи апгрейда зависимостей",
+      "dueRelease": "0.13.11"
+    },
+    {
+      "id": "dev-only-advisories",
+      "scope": "Остаток pnpm audit (профиль post-upgrade): esbuild >=0.27.3 <0.28.1 (low, GHSA-g7r4-m6w7-qqqr; tsup/vite/vitest/tsx) и minimatch >=7 <11.0.1 (moderate, GHSA-g3hv-75wg-m249; eslint/typescript-eslint). В поставляемые артефакты не входят. Факт 0.13.10: full 0/0/1/1, --prod 0/0/0/0, прямых уязвимых 0.",
+      "justification": "devDependencies инструментария сборки; semver-safe патча нет (minimatch — только мажор 11), мажорный апгрейд eslint-цепочки — отдельная волна. Рантайм-аудит (--prod) чист.",
+      "followUp": "Плановая волна апгрейдов dev-инструментария (minimatch 11 / esbuild 0.28), пересчёт baseline.",
+      "owner": "владелец задачи апгрейда зависимостей",
+      "dueRelease": "0.13.11"
+    },
+    {
+      "id": "git-containment-toctou",
+      "scope": "packages/core/src/git/git-service.ts:215-217 — окно TOCTOU между resolveOperationalRepoPath и rm/rename/mkdir сужено повторной проверкой, но не закрыто (нет openat/O_NOFOLLOW-семантики). Подмена компонента пути симлинком в этом окне теоретически выводит операцию за workspace.",
+      "justification": "Статический класс закрыт (симлинк до вызова → PATH_TRAVERSAL); окно требует прав редактирования проекта и активной подмены одновременно. Перенос на порт исполнения (PROP-135) регресса не добавил: периметр FS считается по realpath точки исполнения (execution/fs-perimeter.ts).",
+      "followUp": "Перевести деструктивные операции на openat/O_NOFOLLOW через порт исполнения; детерминированный тест на подмену (инъекция fs).",
+      "owner": "владелец подсистемы git/workspace (core)",
+      "dueRelease": "0.13.11"
+    },
+    {
+      "id": "summarization-gateway-disabled-no-guard",
+      "scope": "Суммаризация/компакция идёт через GatewayProvider (packages/core/src/engine/context/optimizer.ts:1630-1645), но при явном llmGateway.enabled=false guard/обфускация — no-op (общая семантика ADR-036/090), а провайдер суммаризации может быть задан отдельно (summarization.provider/model) и получает полный транскрипт.",
+      "justification": "Соответствует глобальной политике gateway. В 0.13.10 дефолт llmGateway.enabled стал true во всех профилях (ADR-147), поэтому сценарий требует явного отключения оператором; поведение задокументировано в ADR-119 §5.",
+      "followUp": "Рассмотреть обязательную обфускацию для точки суммаризации либо запрет отдельного провайдера при выключенном gateway; e2e-проверка фильтров при enabled:true.",
+      "owner": "владелец контекстной подсистемы (core)",
+      "dueRelease": "0.13.11"
+    },
+    {
+      "id": "chunked-upload-quota-best-effort",
+      "scope": "Квоты chunked-загрузки проверяются read-then-act без распределённой блокировки: параллельные create/append (в т.ч. на разных репликах) могут кратковременно превысить лимит; staging-контур без байтовой квоты (верхняя граница maxActiveUploads x maxBytesPerFile ≈ 25 ГиБ при дефолтах).",
+      "justification": "Целевой сценарий (удержание диска незавершёнными загрузками) закрыт квотой сессии, лимитами числа сессий, TTL и уборкой; строгая атомарность требует распределённой блокировки (PROP-105).",
+      "followUp": "Агрегатная байтовая квота для staging, тест параллельного create, метрика активных upload-сессий.",
+      "owner": "владелец подсистемы вложений (core)",
+      "dueRelease": "0.13.11"
+    },
+    {
+      "id": "historical-test-fixture-allowlists",
+      "scope": "Allowlist-блоки .gitleaks.toml (18 блоков на 0.13.10): исторические фикстуры 193be2ab/996c776b/a7c84ca0, path-only блоки .key-фикстур ADR-099, путь .gitverse/workflows/release.yaml, блок 3.0 (ADR-124), новые блоки 12 (provisioner config.ts + имена env) и 13 (три тест-файла + три dummy-литерала). Подавлено 126 находок.",
+      "justification": "История master неизменяема и публична (зеркало GitHub); все блоки, кроме трёх path-only .key-фикстур, — пара «путь И конкретное значение», реальный секрет в том же файле остаётся находкой.",
+      "followUp": "Подтвердить актуальность path-only блоков .key-фикстур или удалить вместе с переездом истории; новые фикстуры — генерируемые в рантайме, path-only не расширять.",
+      "owner": "владелец контура безопасности инстанса",
+      "dueRelease": "0.13.11"
+    },
+    {
+      "id": "registry-tag-hygiene-dirty",
+      "scope": "Публичный реестр git.itphx.ru содержит dev-сборки (synth-executor:0.13.10-full-*-dirty-*), теги Docker перезаписываемы, ретеншна нет: «версионный тег» — соглашение, а не свойство реестра.",
+      "justification": "Публикует не CI, а локальные прогоны publish-images.sh; на релизные артефакты не влияет (CI пушит свои теги заново).",
+      "followUp": "Запретить публикацию -dirty тегов в общий реестр (fail в publish-images.sh при грязном дереве, явный --allow-dirty для исключений); описать неизменяемость как соглашение; при необходимости — ретеншн dev-тегов; digest-пины в чарте/values для воспроизводимости.",
+      "owner": "владелец контура поставки (CI/образы)",
+      "dueRelease": "0.13.11"
+    },
+    {
+      "id": "hono-node-server-major-2",
+      "scope": "Мажорный транзитивный @hono/node-server 2.x (в пакетах ^2.1.3; прямых импортов в src нет — сервер на node:http, статика своя; влияние — транспорт @modelcontextprotocol/sdk). E2E MCP-транспорта (stdio/HTTP) на 2.x в 0.13.10 не прогонялся.",
+      "justification": "Unit-тесты серверных слоёв и backend зелёные (матрица 33+86, перепись 11, доступ-наборы 15/10/3). Риск низкий, но требует отдельной e2e-проверки.",
+      "followUp": "Прогон MCP-транспорта (stdio/HTTP) на 2.x в CI/e2e; при регрессе — пин SDK на совместимую версию.",
+      "owner": "владелец задачи апгрейда зависимостей",
+      "dueRelease": "0.13.11"
+    }
+  ],
+  "artifacts": {
+    "evidence": "tmp/security/secret-scan-0.13.10.json",
+    "ci_run": "GitVerse run 286 (ci.yaml, commit 9263c7bf7c4c6d2c83207d4b892361d4ae037852) и run 285 (ci-docs, тот же коммит)"
+  }
+}

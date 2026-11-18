@@ -65,6 +65,13 @@ durable-причины. Полные заметки — [docs/releases/0.13.10.m
 
 ### Изменено
 
+- **Образы и Helm — только в Gitea, npm — в три реестра.** `synth`, `synth-backend` (slim и
+  flavor'ы), `synth-ui`, `synth-executor` и `synth-provisioner` публикуются в публичный реестр
+  `git.itphx.ru/itphx` (версионные теги, без `latest`; анонимный pull), Helm-чарт — в Helm-реестр
+  Gitea; `gitverse.ru` и `ghcr.io` для образов больше не используются. Релизные npm-пакеты — npmjs,
+  GitVerse и GitHub Packages; беты — только npm-реестр Gitea. Причина — квота «Пакеты» GitVerse
+  (500 МБ на репозиторий), из-за которой релизы публиковались не полностью. Полные заметки —
+  [docs/releases/0.13.10.md](./docs/releases/0.13.10.md).
 - **Таймауты инструментов — в секундах**
   ([ADR-143](./docs/arch_decisions/adr-143-tool-timeouts.md)). `timeout` тулов стал целым числом
   секунд, предел зависит от режима (foreground ≤ 600, background ≤ 86 400), `0` убран; декларация

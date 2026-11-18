@@ -249,7 +249,7 @@ https://git.itphx.ru/api/packages/itphx/helm
 
 ### Публикация
 
-В CI — job `publish-helm` в `.gitverse/workflows/release.yaml` (не запускается при `dry_run`; идёт с `CI_HELM_SOFT=1` — неудача публикации чарта не валит релиз): установка Helm → `helm lint charts/synth` → `helm package` → `curl` POST в `.../helm/api/charts` с Basic-авторизацией `itphx:$GT_TOKEN` (успех = HTTP 201).
+В CI — job `publish-helm` в `.gitverse/workflows/release.yaml` (не запускается при `dry_run`): установка Helm → `helm lint charts/synth` → `helm package` → `curl` POST в `.../helm/api/charts` с Basic-авторизацией `itphx:$GT_TOKEN` (успех = HTTP 201) → сверка версии в `index.yaml`. Мягкий режим `CI_HELM_SOFT=1` покрывает только предпосылки (недоступный helm, сбой lint/package, нет токена); **отказ реестра и отсутствие версии в индексе валят джобу** — чарт основной способ поставки, молчаливый пропуск недопустим.
 
 Вручную:
 

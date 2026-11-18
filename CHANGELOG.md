@@ -63,6 +63,13 @@ background work and stops got honest state — point writes, auto-detach, durabl
 
 ### Changed
 
+- **Images and Helm — Gitea only, npm — three registries.** `synth`, `synth-backend` (slim and
+  flavors), `synth-ui`, `synth-executor` and `synth-provisioner` are published to the public
+  `git.itphx.ru/itphx` registry (version tags, no `latest`; anonymous pull), the Helm chart — to the
+  Gitea Helm registry; `gitverse.ru` and `ghcr.io` are no longer used for images. Release npm
+  packages go to npmjs, GitVerse and GitHub Packages; betas — to the Gitea npm registry only. The
+  reason is the GitVerse "Packages" quota (500 MB per repository), which made releases publish only
+  partially. Full notes — [docs/releases/0.13.10.md](./docs/releases/0.13.10.md).
 - **Tool timeouts are in seconds**
   ([ADR-143](./docs/arch_decisions/adr-143-tool-timeouts.md)). A tool `timeout` became an integer
   number of seconds, the limit depends on the mode (foreground ≤ 600, background ≤ 86,400), `0` was
