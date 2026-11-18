@@ -3,9 +3,10 @@
 # docker-auth-gitea.sh — авторизация docker-клиента в реестр Gitea
 # (`git.itphx.ru`) для kaniko/CLI.
 #
-# Реестр Gitea приватный: без авторизации push не проходит. Скрипт пишет
-# `config.json` в каталог `DOCKER_CONFIG` — так делает и kaniko (переменная
-# `DOCKER_CONFIG` указывает на каталог с config.json), и `docker push`.
+# Реестр Gitea (`git.itphx.ru`) ПУБЛИЧНЫЙ: анонимный pull разрешён, авторизация
+# нужна только для push. Скрипт пишет `config.json` в каталог `DOCKER_CONFIG` —
+# так делает и kaniko (переменная `DOCKER_CONFIG` указывает на каталог с
+# config.json), и `docker push`.
 #
 # Переменные окружения:
 #   GITEA_TOKEN    — токен Gitea с правом на container registry (обязателен);

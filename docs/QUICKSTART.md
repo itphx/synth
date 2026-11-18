@@ -25,11 +25,11 @@ npm i -g @itphx/synth
 ### Способ 2: Docker
 
 ```bash
-docker pull gitverse.ru/itphx/synth:<version>
-docker run -p 4300:4300 -e SYNTH_API_KEY=my-secret-key gitverse.ru/itphx/synth:<version>
+docker pull git.itphx.ru/itphx/synth:<version>
+docker run -p 4300:4300 -e SYNTH_API_KEY=my-secret-key git.itphx.ru/itphx/synth:<version>
 ```
 
-Указывайте версию: тег `latest` не публикуется (образы в реестре только версионные).
+Образы публикуются в **публичный** реестр Gitea `git.itphx.ru/itphx` — `docker login` не нужен (авторизация только для push). Указывайте версию: тег `latest` не публикуется (образы в реестре только версионные). Образ `synth` появился в Gitea начиная с релиза, которым введена эта политика; для более старых версий берите offline-архивы из ассетов релиза.
 
 Либо docker-compose из корня репозитория (`docker-compose.yml`):
 

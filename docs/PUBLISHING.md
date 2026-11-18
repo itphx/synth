@@ -26,6 +26,7 @@ shared → core → executor → storage-postgres → ui → backend → sdk →
 |--------|-----|-------|
 | npmjs.org | `https://registry.npmjs.org` | `NPM_TOKEN` |
 | GitVerse Package Registry | `https://gitverse.ru/api/packages/itphx/npm/` | `GV_TOKEN` |
+| GitHub Packages | `https://npm.pkg.github.com` (scope `@itphx`) | `GH_TOKEN` (scope `write:packages`) |
 | Gitea Package Registry | `https://git.itphx.ru/api/packages/itphx/npm/` | `GITEA_NPM_TOKEN` (публикация; для установки — read-токен) |
 
 Значения токенов хранятся в секретах репозитория (GitVerse CI) и в локальном окружении. **Никогда не указывайте значения токенов в документации, коде или коммитах.**
@@ -151,23 +152,27 @@ synth doctor                                   # после старта — б�
 
 Образы собираются с идентификатором сборки **`SYNTH_BUILD_ID`** (в CI — commit sha; локально — `git rev-parse --short HEAD`, при грязном дереве с суффиксом `-dirty`). Значение отдаётся в `GET /health` (аддитивное поле `build`) и входит в имя кэша service worker; PWA сравнивает его с build id бандла и при расхождении сама сбрасывает кэши, обновляет SW и один раз перезагружается — пересборка под той же semver больше не оставляет старый шелл. Если build id пуст (локальная сборка без переменной), клиент, как раньше, сравнивает `health.version` с `SYNTH_VERSION`.
 
-Реестр Docker — **`gitverse.ru`** (не `registry.gitverse.ru`!). Образ:
+Реестр Docker — **Gitea** (`git.itphx.ru`, namespace `itphx`); gitverse.ru и ghcr.io как реестры образов больше не используются. Образ:
 
 ```
-gitverse.ru/itphx/synth:<version>
+git.itphx.ru/itphx/synth:<version>
 ```
 
-Тег `latest` **не публикуется** — в реестре остаются только версионные теги. Причина: квота «Пакеты» в GitVerse считает размер каждой версии без дедупликации — `latest` и версия указывают на один digest, но оплачиваются дважды (лимит 500 МБ на репозиторий). Поэтому `docker pull gitverse.ru/itphx/synth` без тега не работает — указывайте версию.
+Реестр **публичный**: `docker pull` работает анонимно, `imagePullSecret` в Kubernetes не нужен — авторизация требуется только на `docker push` (секрет `GT_TOKEN`, логин `itphx`; см. §«Образы исполнителей и flavor'ы» → «Секрет»).
 
-Дополнительно **все три базовых образа** (`synth`, `synth-backend`, `synth-ui`) зеркалируются в GitHub Container Registry: `ghcr.io/itphx/synth:<version>`, `ghcr.io/itphx/synth-backend:<version>`, `ghcr.io/itphx/synth-ui:<version>`. Политика — в разделе [Релиз в GitHub-зеркале](#релиз-в-github-зеркале).
+Тег `latest` **не публикуется** — только версионные теги: pull идёт по конкретной версии, поэтому развёртывание воспроизводимо. `docker pull git.itphx.ru/itphx/synth` без тега не работает — указывайте версию.
+
+Образ `synth` публикуется в Gitea **начиная с релиза, которым введена эта политика**: у более старых версий образа в `git.itphx.ru/itphx/synth` нет (они выходили только в gitverse.ru/ghcr.io) — для закрытого контура берите offline-архивы (`synth-<версия>-*.tar.gz`) из ассетов соответствующего релиза.
+
+Базовые образы (`synth`, `synth-backend` slim, `synth-ui`) публикует джоба `build-docker` в `release.yaml` (docker на self-hosted раннере). **multi-arch:** amd64 собирается docker'ом, arm64 — buildx (`:<version>-arm64`), затем best-effort manifest list `:<version>` (amd64+arm64); если index собрать не удалось — остаются per-arch теги `<version>-amd64` / `<version>-arm64`. Политика по всем образам — в разделе [Релиз в GitHub-зеркале](#релиз-в-github-зеркале) → «Политика образов».
 
 ## Образы исполнителей и flavor'ы (PROP-082)
 
-Кроме трёх базовых образов публикуются **flavor-образы** (all-in-one: control plane + toolchain) и **образы исполнителей** (worker'ы, split-топология). Все они — в реестре Gitea `git.itphx.ru`:
+Кроме трёх базовых образов публикуются **flavor-образы** (all-in-one: control plane + toolchain), **образы исполнителей** (worker'ы, split-топология) и `synth-provisioner` (provisioner пулов, один образ без flavor'ов). Все они — в реестре Gitea `git.itphx.ru/itphx` (публичный: анонимный pull, авторизация только на push):
 
 | Образ | Тег | Состав |
 |---|---|---|
-| `synth-backend` | `<версия>` | slim: control plane без toolchain'а |
+| `synth-backend` | `<версия>` | slim: control plane без toolchain'а (публикует джоба `build-docker`, не `publish-images-gitea` — см. ниже) |
 | `synth-backend` | `<версия>-core` | hard deps + tier 0 + control plane |
 | `synth-backend` | `<версия>-dev` | core + tier 1 + tier 4 (MCP) + БД-клиенты + buildah |
 | `synth-backend` | `<версия>-devops` | dev + tier 2 + диаг + docker CLI |
@@ -177,17 +182,19 @@ gitverse.ru/itphx/synth:<version>
 
 Полный адрес: `git.itphx.ru/itphx/synth-backend:<версия>-core`, `git.itphx.ru/itphx/synth-executor:<версия>-core`.
 
-**Теги версионные, без `latest`.** Pull в кластере идёт по конкретной версии (`<версия>-<flavor>`) — иначе развёртывание перестаёт быть воспроизводимым. Ограничение GitVerse/GHCR (~500 МБ на репозиторий) к Gitea-реестру не относится, но политика тегов общая для всех реестров.
+**Теги версионные, без `latest`.** Pull в кластере идёт по конкретной версии (`<версия>-<flavor>`) — иначе развёртывание перестаёт быть воспроизводимым. Ограничений на размер репозитория в реестре Gitea нет; политика версионных тегов общая для всех образов.
+
+`slim`-база `synth-backend:<версия>` публикуется джобой `build-docker` (базовые образы); `publish-images-gitea` вызывает `publish-images.sh` с `--no-slim` — иначе два джоба пушили бы один тег в один реестр (гонка).
 
 ### Секрет
 
-Публикация **flavor-образов в Gitea-реестр** (джоба `publish-images-gitea` в `release.yaml`) — по секрету **`GT_TOKEN`** (логин `itphx`); локально и в `synth-deploy` — переменная `GITEA_TOKEN`. Публикация **бета-пакетов в npm-реестр Gitea** (`beta.yaml`) — по секрету **`GV_GITEA_TOKEN`** (нужно право `package:write`). Если секрет не задан, публикация **падает** с понятным сообщением (fail-closed), а не пропускается молча: `scripts/docker-auth-gitea.sh` готовит `config.json` для kaniko/CLI.
+Публикация **образов в Gitea-реестр** (джобы `build-docker` и `publish-images-gitea` в `release.yaml`) и **Helm-чарта** (`publish-helm`) — по секрету **`GT_TOKEN`** (логин `itphx`; права на container registry и `package:write`); локально и в `synth-deploy` — переменная `GITEA_TOKEN`. Для **pull** токен не нужен: реестр публичный. Публикация **бета-пакетов в npm-реестр Gitea** (`beta.yaml`) — по секрету **`GV_GITEA_TOKEN`** (нужно право `package:write`). Если секрет не задан, публикация **падает** с понятным сообщением (fail-closed), а не пропускается молча: `scripts/docker-auth-gitea.sh` готовит `config.json` для docker CLI.
 
 ### Сборка и публикация
 
-В CI публикация живёт в джобе `publish-images-gitea` файла `.gitverse/workflows/release.yaml`: она запускается **по тегу релиза** (как и публикация базовых образов) и собирает каждый flavor отдельным шагом kaniko с `--target` и `--destination=git.itphx.ru/itphx/<образ>:<версия>-<flavor>`. В `ci.yaml` (push/PR) публикации нет — там только сборка и smoke-тесты (джоба `images`).
+В CI публикация живёт в джобе `publish-images-gitea` файла `.gitverse/workflows/release.yaml`: она запускается **по тегу релиза** (как и публикация базовых образов) и собирает каждый flavor через `scripts/publish-images.sh` (docker + BuildKit, `--target` нужной стадии) с тегом `git.itphx.ru/itphx/<образ>:<версия>-<flavor>`; slim-базу не собирает (`--no-slim`). В `ci.yaml` (push/PR) публикации нет — там только сборка и smoke-тесты (джоба `images`).
 
-Явный `--platform` в flavor-шагах **не задаётся**: kaniko не выставляет `BUILDPLATFORM`/`TARGETPLATFORM` (проверено на v1.24.0), и пустое значение уронило бы сборку (PROP-082, «Multistage-сборка»). Registry-кэш включён — иначе одиннадцать сборок повторяли бы тяжёлую стадию `build`.
+Явный `--platform` в flavor-шагах **не задаётся**: flavor-стадии содержат `RUN` с установкой пакетов, кросс-сборки там нет — образ собирается под архитектуру раннера (amd64). BuildKit переиспользует слои между flavor'ами, поэтому тяжёлая стадия `build` не повторяется для каждого flavor'а.
 
 Локально:
 
@@ -232,36 +239,36 @@ GV_GITEA_TOKEN=<токен> ./scripts/publish-images.sh --tag-base 0.11.4 \
 
 Чарт приложения — `charts/synth/` в монорепозитории. Версия чарта и `appVersion` равны версии релиза: при bump в CI (`version-bump` в `release.yaml`) они обновляются вместе с `version.ts` и `package.json`.
 
-Реестр — **нативный Helm-реестр GitVerse**, не OCI (путь `helm push oci://...` на GitVerse не используется):
+Реестр — **нативный Helm-реестр Gitea**, не OCI (`helm push oci://...` не используется):
 
 ```
-https://gitverse.ru/api/packages/itphx/helm
+https://git.itphx.ru/api/packages/itphx/helm
 ```
 
-Индекс-репозиторий — `https://gitverse.ru/api/packages/itphx/helm/index.yaml` (доступен анонимно).
+Индекс-репозиторий — `https://git.itphx.ru/api/packages/itphx/helm/index.yaml` (доступен анонимно). Helm-реестр GitVerse больше не используется.
 
 ### Публикация
 
-В CI — job `publish-helm` в `.gitverse/workflows/release.yaml` (не запускается при `dry_run`): установка Helm → `helm lint charts/synth` → `helm package` → `curl` POST в `.../helm/api/charts` (успех = HTTP 201).
+В CI — job `publish-helm` в `.gitverse/workflows/release.yaml` (не запускается при `dry_run`; идёт с `CI_HELM_SOFT=1` — неудача публикации чарта не валит релиз): установка Helm → `helm lint charts/synth` → `helm package` → `curl` POST в `.../helm/api/charts` с Basic-авторизацией `itphx:$GT_TOKEN` (успех = HTTP 201).
 
 Вручную:
 
 ```bash
 helm package charts/synth --version <version> --app-version <version> --destination dist/helm
-curl --user "itphx:$GV_TOKEN" -X POST \
+curl --user "itphx:$GITEA_TOKEN" -X POST \
   --upload-file dist/helm/synth-<version>.tgz \
-  https://gitverse.ru/api/packages/itphx/helm/api/charts
+  https://git.itphx.ru/api/packages/itphx/helm/api/charts
 ```
 
 ### Установка
 
 ```bash
-helm repo add synth https://gitverse.ru/api/packages/itphx/helm
+helm repo add synth https://git.itphx.ru/api/packages/itphx/helm
 helm repo update
 helm install synth synth/synth --version <version> -f my-values.yaml
 ```
 
-Образы `gitverse.ru/itphx/synth{,-ui,-backend}:<version>` тянутся **анонимно** — imagePullSecret не нужен.
+Образы `git.itphx.ru/itphx/{synth,synth-backend,synth-ui}:<version>` тянутся **анонимно** (реестр публичный) — `imagePullSecret` не нужен.
 
 ### Кастомные values
 
@@ -309,7 +316,7 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 ./scripts/publish.sh --docker-tag=<tag>
 ```
 
-Переменные окружения: `NPM_TOKEN`, `GV_TOKEN`, `NPM_REGISTRY`, `GITVERSE_NPM_REGISTRY`, `GITVERSE_DOCKER_REGISTRY`.
+Переменные окружения: `NPM_TOKEN`, `GV_TOKEN`, `GITEA_TOKEN`, `NPM_REGISTRY`, `GITVERSE_NPM_REGISTRY`, `DOCKER_REGISTRY` (по умолчанию `git.itphx.ru`; прежнее имя `GITVERSE_DOCKER_REGISTRY` принимается для совместимости).
 
 Особенность: GitVerse npm-реестр не поддерживает `/-/whoami` (404) — авторизация проверяется реальной публикацией.
 
@@ -323,7 +330,7 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 ```
 
 Локальный backfill GitHub-зеркала: синхронизирует refs и создаёт/обновляет GitHub Release.
-Docker-образы **не** собирает (их собирает CI GitVerse → `gitverse.ru` + `ghcr.io`), npm не
+Docker-образы **не** собирает (их собирает CI GitVerse и публикует в `git.itphx.ru/itphx`), npm не
 публикует. Подробности — [Релиз в GitHub-зеркале](#релиз-в-github-зеркале).
 
 ### `changelog.sh` — тело релиза
@@ -450,9 +457,9 @@ Helm-чарт перезаписывается тем же содержимым,
 
 Ручной `workflow_dispatch` сохранён в `release.yaml` (пункты 1–2) — это единственный способ запустить сборку/публикацию без тега.
 
-Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → проверка заметок (`release-notes`) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → публикация Helm-чарта (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
+Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → проверка заметок (`release-notes`) → CI-проверки → сборка → CHANGELOG → публикация npm (npmjs + GitVerse + GitHub Packages) → Docker (`build-docker` → `git.itphx.ru/itphx/{synth,synth-backend,synth-ui}`, плюс `publish-images-gitea` → flavor-образы и образы исполнителей) → публикация Helm-чарта в Gitea (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
 
-npm-пакеты публикуются **только** из GitVerse (`publish-npmjs`/`publish-gitverse-npm`) — GitHub-контур npm не публикует.
+npm-пакеты публикуются из CI GitVerse тремя джобами — `publish-npmjs`, `publish-gitverse-npm`, `publish-github-npm` (GitHub Packages); бета-пакеты — только в npm-реестр Gitea (`beta.yaml`).
 
 ### Проверка документации
 
@@ -488,11 +495,10 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 | Secret | Назначение |
 |--------|------------|
 | `NPM_TOKEN` | Публикация в npmjs.org |
-| `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
-| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`) с правом на container registry — публикация flavor-образов и образов исполнителей в `release.yaml` (логин `itphx`) |
+| `GV_TOKEN` | Токен GitVerse: API релизов, npm-реестр GitVerse, git push от бота (образы в GitVerse больше не публикуются) |
+| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`, логин `itphx`): публикация **образов** (`build-docker`, `publish-images-gitea`) и **Helm-чарта** (`publish-helm`) в `release.yaml`; права — container registry + `package:write` |
 | `GV_GITEA_TOKEN` | Токен Gitea (`git.itphx.ru`) для npm-реестра Gitea — публикация бета-пакетов в `beta.yaml` (нужно право `package:write`) |
-| `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release, публикация базовых образов в GHCR (classic PAT, scope `repo` + `write:packages`) |
-| `GHCR_USER` | Необязательно: логин владельца `GH_TOKEN` для `ghcr.io` (по умолчанию `itphx`) |
+| `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release и публикация npm в GitHub Packages (classic PAT, scope `repo` + `write:packages`) |
 | `GV_SYNTH_URL` | База API v2 инстанса Synth для события релиза (например `https://synth.k3s.itphx.loc/api/v2`) |
 | `GV_SYNTH_MEDIA_KEY` | Service-key Synth со scope `events:ingest` — приём события релиза (см. «Событие релиза для synth-media») |
 
@@ -597,25 +603,27 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 
 ### Политика образов
 
-Все три **базовых образа** публикуются в оба реестра — `gitverse.ru` (основной) и GitHub Container Registry (`ghcr.io`):
+Все образы Synth живут в **одном** реестре — публичном Gitea `git.itphx.ru/itphx`:
 
-| Образ | `gitverse.ru` | GHCR (`ghcr.io/itphx/…`) | Docker Hub |
-|---|---|---|---|
-| `synth` | ✅ | ✅ (зеркало) | — |
-| `synth-backend` | ✅ | ✅ (зеркало) | — |
-| `synth-ui` | ✅ | ✅ (зеркало) | — |
+| Образ | Репозиторий | Теги |
+|---|---|---|
+| `synth` | `git.itphx.ru/itphx/synth` | `<версия>` (multi-arch amd64+arm64) |
+| `synth-backend` | `git.itphx.ru/itphx/synth-backend` | `<версия>` (slim), `<версия>-<flavor>` |
+| `synth-ui` | `git.itphx.ru/itphx/synth-ui` | `<версия>` |
+| `synth-executor` | `git.itphx.ru/itphx/synth-executor` | `<версия>-<flavor>` |
+| `synth-provisioner` | `git.itphx.ru/itphx/synth-provisioner` | `<версия>` |
 
-Ограничение по размеру артефактов (~500 МБ) касается **базовых** образов в GitVerse/GHCR. Flavor-образы (`synth-backend:<версия>-<flavor>`, `synth-executor:<версия>-<flavor>`) в GitVerse/GHCR не публикуются — только в приватный Gitea `git.itphx.ru/itphx/*` (см. §«Образы исполнителей и flavor'ы»), где лимита нет; slim control plane `synth-backend:<версия>` дополнительно публикуется и в Gitea. Публикуется только версионный тег (без `latest`) — та же политика, что и в GitVerse-контуре.
+ghcr.io и gitverse.ru как реестры образов **не используются**; Docker Hub — тоже. Публикуется только версионный тег (без `latest`), pull анонимный — `imagePullSecret` не обязателен. Flavor-образы и образы исполнителей — §«Образы исполнителей и flavor'ы» (там же про multi-arch и best-effort manifest list).
 
 ### Что делает CI GitVerse
 
 Джоба `publish-github` в `.gitverse/workflows/release.yaml` запускается после сборки/публикации npm и Docker (`build-docker`) и после джобы `changelog`:
 
 1. **Зеркало:** push `master→main` и всех тегов в `https://github.com/itphx/synth.git` (только `main` + теги, никаких других ветвей);
-2. **GitHub Release** для тега `v<version>` — тело **на английском**: `bash scripts/changelog.sh --lang en` берёт `docs/releases/<version>.en.md` (файл обязателен; гейт `release-notes` не пропустит релиз без него; фоллбек на русское описание/авто-сборку — только аварийный, для ручного `release-github.sh`), плюс англоязычный блок установки «Installation» (npm из npmjs.org/GitVerse, образ из `ghcr.io/itphx/synth:<version>`); создание идемпотентно (если релиз по тегу есть — тело обновляется);
+2. **GitHub Release** для тега `v<version>` — тело **на английском**: `bash scripts/changelog.sh --lang en` берёт `docs/releases/<version>.en.md` (файл обязателен; гейт `release-notes` не пропустит релиз без него; фоллбек на русское описание/авто-сборку — только аварийный, для ручного `release-github.sh`), плюс англоязычный блок установки «Installation» (npm из npmjs.org/GitVerse/GitHub Packages, образ из `git.itphx.ru/itphx/synth:<version>`); создание идемпотентно (если релиз по тегу есть — тело обновляется);
 3. **Ассеты — best-effort:** `cli.js` (артефакт джобы `build`), Helm-чарт (`helm package charts/synth`, версия из `Chart.yaml`), `SHA256SUMS`. Если файла нет — печатается предупреждение и работа продолжается; ошибка загрузки ассета **не валит** джобу, но видна в логе. На GitHub используется штатный `uploads.github.com` (в отличие от GitVerse API, который на ассеты отдаёт 500 — там ассет также best-effort).
 
-Все три базовых образа (`synth`, `synth-backend`, `synth-ui`) собираются в джобе `build-docker` (kaniko) сразу в **два** реестра: `gitverse.ru/itphx/<image>:<version>` и `ghcr.io/itphx/<image>:<version>`. Авторизация в GHCR — из секрета `GH_TOKEN` (переиспользуется всеми тремя kaniko-шагами).
+Все три базовых образа (`synth`, `synth-backend` slim, `synth-ui`) собираются в джобе `build-docker` (docker на self-hosted раннере) и публикуются **только** в Gitea: `git.itphx.ru/itphx/<image>:<version>`. Авторизация — из секрета `GT_TOKEN`; GitHub в публикации образов не участвует.
 
 ### Локальный backfill
 
@@ -632,16 +640,17 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 
 ### Почему без GitHub Actions
 
-Осознанное решение: единственный билд-контур — CI GitVerse (kaniko). Дублирование сборки на GitHub ломало бы воспроизводимость (два источника истины для образов/релизов) и упиралось бы в лимиты артефактов. GitHub-контур намеренно тонкий: зеркало кода + релизы + публикация базовых образов в GHCR.
+Осознанное решение: единственный билд-контур — CI GitVerse (docker на self-hosted раннере), образы уходят в реестр Gitea. Дублирование сборки на GitHub ломало бы воспроизводимость (два источника истины для образов/релизов) и упиралось бы в лимиты артефактов. GitHub-контур намеренно тонкий: зеркало кода + релизы + npm-пакет в GitHub Packages.
 
 ### Секреты GitHub-контура
 
-- **`GH_TOKEN`** — classic PAT со scope `repo` + `write:packages` (push зеркала, GitHub Release, GHCR). `write:packages` — это classic-scope, поэтому **fine-grained PAT официально не поддерживается для GHCR CLI** — нужен classic. PAT лучше завести на **отдельном машинном аккаунте**, а не на личном.
-- **`GHCR_USER`** (необязательно) — логин владельца PAT для `docker login ghcr.io`; по умолчанию `itphx`.
+- **`GH_TOKEN`** — classic PAT со scope `repo` + `write:packages`: push зеркала (`main` + теги), GitHub Release и публикация npm-пакета в GitHub Packages (`write:packages` обязателен). Образы в GHCR больше не публикуются — прав на container registry не требуется. PAT лучше завести на **отдельном машинном аккаунте**, а не на личном.
 
 ## Важно: поле `repository` в package.json
 
 Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 8 пакетах поле `repository` удалено — не добавляйте его обратно.
+
+То же отсутствие подходит и **GitHub Packages**: если `repository.url` указывает на другой хостинг, публикация в `https://npm.pkg.github.com` отклоняется (404) — поле не добавляем.
 
 ## Локальная проверка перед пушем
 

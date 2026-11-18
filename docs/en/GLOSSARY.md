@@ -82,7 +82,7 @@ dictionary (`synth-landing/js/main.js`).
 | релиз | release | Published version (npm, Docker, Helm, GitVerse/GitHub) | — |
 | тег | tag | Git tag (`v*`) that triggers the release pipeline | `v*` |
 | чарт | chart | Helm chart used to deploy Synth | `charts/synth` |
-| образ | image | Container image | `ghcr.io/itphx/synth` |
+| образ | image | Container image | `git.itphx.ru/itphx/synth` |
 | реестр | registry | 1) package / MCP / skills registry; 2) container registry | `McpRegistryEntry`, `SERVICE_SCOPES` |
 | зеркало | mirror | Public GitHub mirror of the repository | `GitHub mirror` |
 | ADR / PROP | ADR / PROP | Architecture Decision Record / Proposal; kept in Russian | `adr-*.md`, `prop-*.md` |

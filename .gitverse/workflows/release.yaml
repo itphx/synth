@@ -145,7 +145,7 @@ jobs:
   # --- Обязательный внутренний аудит безопасности (гейт релиза) ---
   #
   # Джоба идёт ДО сборки артефактов: `build.needs` включает её, поэтому changelog,
-  # publish-npmjs, publish-gitverse-npm, build-docker, create-release, publish-helm и
+  # publish-npmjs, publish-gitverse-npm, publish-github-npm, build-docker, create-release, publish-helm и
   # publish-github без неё не запускаются (GitVerse пропускает зависимые джобы).
   #
   # Проверка — scripts/security-gate.mjs (без внешних зависимостей):
@@ -437,23 +437,91 @@ jobs:
           npm config set "//gitverse.ru/api/packages/itphx/npm/:_authToken" "${{ secrets.GV_TOKEN }}"
           bash scripts/publish-packages.sh https://gitverse.ru/api/packages/itphx/npm/
 
+  # --- Публикация npm в GitHub Packages ---
+  # Третий (после npmjs.org и GitVerse) реестр npm: `https://npm.pkg.github.com`,
+  # scope `@itphx` = владелец репозитория на GitHub — дополнительная привязка
+  # scope'а не нужна. Токен — существующий секрет `GH_TOKEN` (`write:packages`),
+  # новых секретов не вводим.
+  #
+  # Про `repository` в package.json: GitHub Packages отвергает публикацию, если
+  # `repository.url` указывает на другой хостинг, поэтому поле там отсутствует
+  # во всех 8 пакетах — подменять нечего. Если поле когда-нибудь появится со
+  # ссылкой на gitverse — публикация начнёт падать 404, и это будет видно в логе
+  # (fail-closed: continue-on-error нет).
+  #
+  # `--access public` передаёт scripts/publish-packages.sh: для scoped-пакетов
+  # первая публикация в GitHub Packages иначе уходит в private и требует платного
+  # тарифа. Версия та же, что в npmjs/GitVerse (из packages/synth/package.json).
+  #
+  # Чтение из GitHub Packages устроено иначе, чем у npmjs: per-version GET
+  # (`/@itphx%2Fsynth/<version>`) отдаёт 405, а анонимный packument — 404, поэтому
+  # скрипт уходит в резервный путь (packument с токеном). Бюджет верификации —
+  # 15 мин (`VERIFY_TIMEOUT=900`) при таймауте джобы 30 мин: чтобы не упасть уже
+  # ПОСЛЕ успешной публикации, проверка вынесена отдельным неблокирующим шагом
+  # (как у `publish-npmjs`), а публикация остаётся fail-closed.
+  publish-github-npm:
+    name: GitHub Packages (npm)
+    needs: [build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: synth-ci
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка + сборка
+        run: |
+          npm install -g pnpm@12.14.0
+          pnpm install --frozen-lockfile
+          export SYNTH_BUILD_ID="$(git rev-parse HEAD)"
+          pnpm --filter @itphx/synth-shared build
+          pnpm --filter @itphx/synth-core build
+          pnpm --filter @itphx/synth-executor build
+          pnpm --filter @itphx/synth-storage-postgres build
+          pnpm --filter @itphx/synth-provisioner build
+          pnpm --filter @itphx/synth-ui build
+          pnpm --filter @itphx/synth-backend build
+          pnpm --filter @itphx/synth-sdk build
+          pnpm --filter @itphx/synth build
+
+      - name: Публикация в GitHub Packages
+        # Публикация — fail-closed: реальная ошибка `pnpm publish` валит джобу.
+        # Проверка видимости — отдельным неблокирующим шагом ниже (бюджет 15 мин
+        # не должен срезать джобу уже после успешной публикации).
+        run: |
+          npm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.GH_TOKEN }}"
+          bash scripts/publish-packages.sh https://npm.pkg.github.com --no-verify
+
+      - name: Проверка видимости версии в GitHub Packages (не блокирует релиз)
+        # Чтение пакета в GitHub Packages требует авторизации: токен нужен со
+        # scope `read:packages` (у `write:packages` чтение включено по умолчанию),
+        # поэтому npmrc настраивается и здесь. Per-version GET у GitHub отдаёт 405,
+        # работает резервный путь по packument'у (см. `version_available`).
+        continue-on-error: true
+        run: |
+          npm config set "//npm.pkg.github.com/:_authToken" "${{ secrets.GH_TOKEN }}"
+          bash scripts/publish-packages.sh https://npm.pkg.github.com --verify-only
+
   # --- Публикация Docker ---
-  # Тег latest намеренно НЕ публикуется: квота «Пакеты» в GitVerse считает размер
-  # каждой версии без дедупликации, а latest и версия указывают на один digest —
-  # публикуются только версионные теги (иначе перелимит 500 МБ на репозиторий;
-  # на 0.9.0 вышло 607,4 МБ из 500). Старые теги удаляет шаг «Очистка…».
+  # Образы живут ТОЛЬКО в реестре Gitea (`git.itphx.ru/itphx`, реестр публичный:
+  # анонимный pull разрешён). gitverse.ru и ghcr.io больше НЕ используются.
+  # Теги — версионные, `latest` нет: pull идёт по конкретной версии, поэтому
+  # развёртывание воспроизводимо.
   # Docker-образ ставит @itphx/synth@<version> из npmjs (npm install -g),
   # поэтому ждём публикации npmjs — иначе гонка: сборка не находит пакет (ETARGET).
   # Таймаут 75 мин: amd64-сборки docker + arm64 buildx + manifest list на три
-  # образа и шесть пушей в два реестра.
+  # образа.
   #
   # multi-arch: amd64 собирает docker на self-hosted раннере (:<version>), arm64 —
   # buildx (:<version>-arm64). Затем best-effort manifest list :<version> из
   # -amd64/-arm64; если реестр не принимает index — остаются per-arch теги.
   # Dockerfile'ы кросс-собираются без QEMU: builder на $BUILDPLATFORM, в target
   # нет RUN (см. docker/Dockerfile*).
+  #
+  # Здесь же публикуется slim-база `synth-backend:<version>`: если оставить её
+  # в `publish-images-gitea`, два job'а будут пушить один тег в один реестр —
+  # гонка. Поэтому там вызов идёт с `--no-slim`.
   build-docker:
-    name: Docker образ
+    name: Базовые образы (Gitea)
     # Зависимость от джобы npm снята: она проверяет видимость версии через
     # registry.npmjs.org, а сеть раннера до реестра бывает настолько медленной,
     # что джоба не укладывается в потолок (0.12.4: 8 пакетов опубликованы,
@@ -488,62 +556,35 @@ jobs:
           bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}" \
             || echo "::warning::версия 0.12.4 не подтверждена в npmjs (сеть раннера) — идём собирать образ"
 
-      # Авторизация сразу в двух реестрах: gitverse.ru (как раньше) и ghcr.io
-      # (все три базовых образа — synth/synth-backend/synth-ui — зеркалируются
-      # в GitHub Container Registry).
-      # Пользователь для ghcr.io — владелец токена GH_TOKEN; переопределяется
-      # необязательным секретом GHCR_USER (по умолчанию владелец репозитория).
-      - name: Авторизация для Docker Registry (gitverse.ru + ghcr.io)
+      # Авторизация в реестре Gitea для push (реестр публичный — анонимный pull
+      # разрешён, креды нужны только на публикацию). config.json пишет
+      # scripts/docker-auth-gitea.sh в каталог DOCKER_CONFIG; этот же каталог
+      # передают все последующие шаги джобы (buildx ставится туда же).
+      - name: Авторизация для Docker Registry (Gitea)
         env:
-          GHCR_USER: ${{ secrets.GHCR_USER }}
-        run: |
-          mkdir -p "${{ gitverse.workspace }}/.docker"
-          node -e "
-            const fs = require('fs');
-            const b64 = (s) => Buffer.from(s).toString('base64');
-            const gv = b64('itphx:' + '${{ secrets.GV_TOKEN }}');
-            const ghUser = process.env.GHCR_USER || 'itphx';
-            const gh = b64(ghUser + ':' + '${{ secrets.GH_TOKEN }}');
-            const config = { auths: {
-              'gitverse.ru': { auth: gv },
-              'ghcr.io': { auth: gh },
-            } };
-            fs.writeFileSync('${{ gitverse.workspace }}/.docker/config.json', JSON.stringify(config));
-          "
-          chmod 600 "${{ gitverse.workspace }}/.docker/config.json"
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
+          GITEA_USER: itphx
+          GITEA_TOKEN: ${{ secrets.GT_TOKEN }}
+        run: bash scripts/docker-auth-gitea.sh
 
-      - name: Очистка старых Docker-образов (gitverse)
-        env:
-          GV_TOKEN: ${{ secrets.GV_TOKEN }}
-          # Версию, которую публикуем сейчас, не удаляем: если публикация
-          # упрётся в квоту реестра, рабочий образ в реестре останется
-          # (на 0.12.4 очистка снесла все теги, а synth-backend так и не
-          # опубликовался — реестр остался без backend-образа).
-          GV_KEEP_TAGS: ${{ steps.docker_tags.outputs.version }}
-        run: node scripts/docker-cleanup.mjs synth synth-backend synth-ui
-
-      # Политика образов: все три БАЗОВЫХ образа (synth, synth-backend, synth-ui)
-      # публикуются в ДВА реестра — gitverse.ru (основной) и ghcr.io (зеркало
-      # GitHub-контура). Только версионный тег, без `latest`.
+      # Политика образов: три БАЗОВЫХ образа (synth, synth-backend slim, synth-ui)
+      # публикуются только в реестр Gitea `git.itphx.ru/itphx` — версионным тегом,
+      # без `latest`. flavor-образы и образы исполнителей публикует отдельная
+      # джоба `publish-images-gitea` (теги `<версия>-<flavor>`).
       #
-      # Flavor-образы (PROP-082: dev/devops/browser/full и образы исполнителей
-      # synth-executor) в эти реестры НЕ идут: лимит артефактов GHCR ~500 МБ.
-      # Их публикует отдельная джоба `publish-images-gitea` в реестр Gitea
-      # (`git.itphx.ru/itphx/…`, теги `<версия>-<flavor>`), версионными тегами.
       # amd64-образы собирает Docker-демон self-hosted раннера: kaniko в
       # container action на synth-ci не видит workspace-путь и падает на
-      # --dockerfile (проверено релизом 0.13.4). Теги — только версия, без latest.
-      - name: Сборка и публикация Docker образа synth (docker → gitverse.ru + ghcr.io)
+      # --dockerfile (проверено релизом 0.13.4).
+      - name: Сборка и публикация Docker образа synth (docker → Gitea)
         env:
-          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |
           V="${{ steps.docker_tags.outputs.version }}"
           BID="$(git rev-parse HEAD)"
           docker build --file docker/Dockerfile \
             --build-arg "SYNTH_VERSION=$V" \
             --build-arg "SYNTH_BUILD_ID=$BID" \
-            --tag "gitverse.ru/itphx/synth:$V" \
-            --tag "ghcr.io/itphx/synth:$V" .
+            --tag "git.itphx.ru/itphx/synth:$V" .
           push_retry() {
             for attempt in 1 2 3; do
               docker push "$1" && return 0
@@ -552,20 +593,18 @@ jobs:
             done
             return 1
           }
-          push_retry "gitverse.ru/itphx/synth:$V"
-          push_retry "ghcr.io/itphx/synth:$V"
+          push_retry "git.itphx.ru/itphx/synth:$V"
 
       - name: Сборка и публикация Docker образа synth-backend (docker)
         env:
-          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |
           V="${{ steps.docker_tags.outputs.version }}"
           BID="$(git rev-parse HEAD)"
           docker build --file docker/Dockerfile.backend \
             --build-arg "SYNTH_BACKEND_VERSION=$V" \
             --build-arg "SYNTH_BUILD_ID=$BID" \
-            --tag "gitverse.ru/itphx/synth-backend:$V" \
-            --tag "ghcr.io/itphx/synth-backend:$V" .
+            --tag "git.itphx.ru/itphx/synth-backend:$V" .
           push_retry() {
             for attempt in 1 2 3; do
               docker push "$1" && return 0
@@ -574,20 +613,18 @@ jobs:
             done
             return 1
           }
-          push_retry "gitverse.ru/itphx/synth-backend:$V"
-          push_retry "ghcr.io/itphx/synth-backend:$V"
+          push_retry "git.itphx.ru/itphx/synth-backend:$V"
 
       - name: Сборка и публикация Docker образа synth-ui (docker)
         env:
-          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |
           V="${{ steps.docker_tags.outputs.version }}"
           BID="$(git rev-parse HEAD)"
           docker build --file docker/Dockerfile.ui \
             --build-arg "SYNTH_UI_VERSION=$V" \
             --build-arg "SYNTH_BUILD_ID=$BID" \
-            --tag "gitverse.ru/itphx/synth-ui:$V" \
-            --tag "ghcr.io/itphx/synth-ui:$V" .
+            --tag "git.itphx.ru/itphx/synth-ui:$V" .
           push_retry() {
             for attempt in 1 2 3; do
               docker push "$1" && return 0
@@ -596,23 +633,22 @@ jobs:
             done
             return 1
           }
-          push_retry "gitverse.ru/itphx/synth-ui:$V"
-          push_retry "ghcr.io/itphx/synth-ui:$V"
+          push_retry "git.itphx.ru/itphx/synth-ui:$V"
 
       # --- arm64 + multi-arch manifest list ---
-      # buildx ставится в DOCKER_CONFIG-каталог (туда же, где config.json с
-      # авторизацией двух реестров), чтобы плагин был виден последующим шагам.
+      # buildx ставится в DOCKER_CONFIG-каталог (там же config.json с
+      # авторизацией Gitea), чтобы плагин был виден последующим шагам.
       - name: Установка buildx (arm64/multi-arch)
         env:
-          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: bash scripts/offline-images.sh --ensure-buildx
 
       # arm64-образы собираются без QEMU (в целевой стадии Dockerfile нет RUN)
-      # и пушатся как :<version>-arm64 в оба реестра. Проверка запуска для чужой
-      # архитектуры пропускается, если binfmt не зарегистрирован.
-      - name: Сборка и публикация arm64 (buildx → gitverse.ru + ghcr.io)
+      # и пушатся как :<version>-arm64. Проверка запуска для чужой архитектуры
+      # пропускается, если binfmt не зарегистрирован.
+      - name: Сборка и публикация arm64 (buildx → Gitea)
         env:
-          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |
           # Multi-arch требует Docker-демон: buildx не умеет работать без него
           # (драйверы docker и docker-container оба ходят в /var/run/docker.sock),
@@ -623,7 +659,7 @@ jobs:
             --version "${{ steps.docker_tags.outputs.version }}" \
             --platforms arm64 \
             --push \
-            --registry-prefix gitverse.ru/itphx,ghcr.io/itphx; then
+            --registry-prefix git.itphx.ru/itphx; then
             echo "ПРЕДУПРЕЖДЕНИЕ: multi-arch (arm64) не собран — на раннере нет Docker-демона; релиз продолжается с amd64-образами."
           fi
 
@@ -632,30 +668,31 @@ jobs:
       # Отказ реестра (нет поддержки index) не валит джобу — per-arch теги остаются.
       - name: Manifest list amd64+arm64 (best-effort)
         env:
-          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |
           bash scripts/offline-images.sh \
             --version "${{ steps.docker_tags.outputs.version }}" \
             --platforms amd64,arm64 \
             --manifests \
-            --registry-prefix gitverse.ru/itphx,ghcr.io/itphx || true
+            --registry-prefix git.itphx.ru/itphx || true
 
   # --- Flavor-образы и образы исполнителей → реестр Gitea (PROP-082, шаг 6) ---
   #
-  # Публикуются ВСЕ flavor'ы в реестр Gitea `git.itphx.ru/itphx/…`:
+  # Публикуются ВСЕ flavor'ы в реестр Gitea `git.itphx.ru/itphx/…` (реестр
+  # публичный: анонимный pull разрешён, креды нужны только для push):
   #
   #   synth-backend:<v>-<flavor>    all-in-one: control plane + toolchain
-  #   synth-backend:<v>             slim: control plane без toolchain'а
   #   synth-executor:<v>-<flavor>   образы исполнителей (worker'ы)
   #   synth-provisioner:<v>         provisioner пулов исполнения (PROP-135 Ф4b-2b;
   #                                 один образ без flavor'ов)
   #
   #   flavor'ы: core | dev | devops | browser | full
   #
+  # slim-база `synth-backend:<v>` здесь НЕ публикуется (`--no-slim`): её собирает
+  # джоба `build-docker` — иначе два job'а пушат один тег в один реестр (гонка).
+  #
   # Политика тегов — версионные, БЕЗ `latest`: pull в K3s идёт по конкретной
   # версии (`<v>-<flavor>`), поэтому развёртывание остаётся воспроизводимым.
-  # Ограничение GitVerse/GHCR (~500 МБ на репозиторий) к Gitea-реестру не
-  # относится, но политика тегов — общая для всех реестров.
   #
   # Секрет — `GT_TOKEN` (логин `itphx`). Если секрета нет — шаг падает
   # (fail-closed, scripts/docker-auth-gitea.sh), а не публикует «молча».
@@ -695,10 +732,11 @@ jobs:
           GITEA_TOKEN: ${{ secrets.GT_TOKEN }}
         run: bash scripts/docker-auth-gitea.sh
 
-      # Flavor-образы и slim собирает scripts/publish-images.sh: docker + BuildKit,
+      # Flavor-образы собирает scripts/publish-images.sh: docker + BuildKit,
       # последовательный push с ретраями (DNS Gitea-реестра не любит параллель),
       # вход в реестр — по переменной окружения `GV_GITEA_TOKEN` (её значение —
       # секрет `GT_TOKEN`). kaniko на synth-ci недоступен (см. выше).
+      # slim-база (`--no-slim`) — забота джобы `build-docker`, здесь её нет.
       - name: Публикация flavor-образов (docker → Gitea)
         env:
           GV_GITEA_TOKEN: ${{ secrets.GT_TOKEN }}
@@ -706,7 +744,7 @@ jobs:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker-gitea
         run: |
           mkdir -p "$DOCKER_CONFIG"
-          bash scripts/publish-images.sh --tag-base "${{ steps.image_tags.outputs.version }}"
+          bash scripts/publish-images.sh --tag-base "${{ steps.image_tags.outputs.version }}" --no-slim
 
       # Provisioner пулов (PROP-135 Ф4b-2b) — один образ без flavor'ов.
       # Отдельный вызов: дефолтная матрица publish-images.sh (backend/executor ×
@@ -724,9 +762,9 @@ jobs:
   #
   # Собирает те же три образа под amd64+arm64 локально (без пушей) и складывает
   # `docker save`-архивы (.tar.gz по умолчанию — совместимо с Docker 20.10),
-  # SHA256SUMS и manifest.json. Теги образов — gitverse.ru/itphx/<image>:<ver>-<arch>
+  # SHA256SUMS и manifest.json. Теги образов — git.itphx.ru/itphx/<image>:<ver>-<arch>
   # (те же, что публикует build-docker), чтобы инструкции из документации
-  # (`docker load` + `docker run gitverse.ru/itphx/...`) работали без перетегирования.
+  # (`docker load` + `docker run git.itphx.ru/itphx/...`) работали без перетегирования.
   # Проверяет запуск контейнеров и health-эндпоинты (arm64 — если есть binfmt).
   # Джоба идёт после build-docker: к этому моменту npm-пакет опубликован
   # (образ synth ставит @itphx/synth из npmjs).
@@ -763,7 +801,7 @@ jobs:
           if ! bash scripts/offline-images.sh \
             --version "${{ steps.offline_version.outputs.version }}" \
             --platforms amd64,arm64 \
-            --registry-prefix gitverse.ru/itphx \
+            --registry-prefix git.itphx.ru/itphx \
             --out dist/offline/images \
             --save; then
             echo "ПРЕДУПРЕЖДЕНИЕ: offline-архивы образов не собраны — на раннере нет Docker-демона; релиз продолжается без них."
@@ -939,7 +977,7 @@ jobs:
           printf '\n## Установка\n\n' >> tmp/release-body.md
           printf '\`\`\`bash\n' >> tmp/release-body.md
           printf 'npm install -g @itphx/synth@%s\n' "$VERSION" >> tmp/release-body.md
-          printf 'docker run -p 4300:4300 gitverse.ru/itphx/synth:%s\n' "$VERSION" >> tmp/release-body.md
+          printf 'docker run -p 4300:4300 git.itphx.ru/itphx/synth:%s\n' "$VERSION" >> tmp/release-body.md
           printf '\`\`\`\n' >> tmp/release-body.md
           printf '\n## Offline / закрытый контур\n\n' >> tmp/release-body.md
           printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION" >> tmp/release-body.md
@@ -962,7 +1000,10 @@ jobs:
 
   # --- Публикация Helm-чарта ---
   # Чарт лежит в charts/synth, версия чарта = версии релиза.
-  # Публикуется в нативный Helm-реестр GitVerse (не OCI).
+  # Публикуется в нативный Helm-реестр Gitea (не OCI):
+  # `https://git.itphx.ru/api/packages/itphx/helm` (upload — `/api/charts`,
+  # Basic-авторизация `itphx:$GT_TOKEN`). Helm-реестр GitVerse больше не
+  # используется.
   #
   # Джоба намеренно идёт ПОСЛЕ create-release и с CI_HELM_SOFT=1: публикация
   # чарта — не блокер релиза. GitVerse при падении джобы пропускает следующие
@@ -997,19 +1038,20 @@ jobs:
           CI_HELM_SOFT: '1'
         run: bash scripts/ci-helm.sh install
 
-      - name: Публикация чарта в Helm-реестр GitVerse
+      - name: Публикация чарта в Helm-реестр Gitea
         env:
           CI_HELM_SOFT: '1'
-          GV_TOKEN: ${{ secrets.GV_TOKEN }}
+          GITEA_TOKEN: ${{ secrets.GT_TOKEN }}
         run: bash scripts/ci-helm.sh publish charts/synth "${{ steps.helm_version.outputs.version }}"
 
   # --- GitHub-зеркало: push refs + GitHub Release (без сборки образов) ---
   #
-  # GitHub — только ЗЕРКАЛО и релизы. Контейнеры здесь НЕ собираются: единственный
-  # билд-контур — этот CI (docker на self-hosted), а базовые образы (synth/synth-backend/synth-ui) уже
-  # зеркалируются в GHCR шагом выше. GitHub Actions в репозитории не используются вовсе.
+  # GitHub — только ЗЕРКАЛО и релизы. Контейнеры здесь НЕ собираются и в GHCR
+  # не публикуются: единственный контур образов — реестр Gitea
+  # (`git.itphx.ru/itphx`, публичный), его наполняет джоба `build-docker`.
+  # GitHub Actions в репозитории не используются вовсе.
   #
-  # Джоба идёт ПОСЛЕ build-docker (образы в GHCR) и changelog (GitVerse-релиз), без
+  # Джоба идёт ПОСЛЕ build-docker (образы в Gitea) и changelog (GitVerse-релиз), без
   # continue-on-error: npm и Docker к этому моменту уже опубликованы, поэтому
   # падение здесь — сигнал чинить, а не глушить. Она делает три вещи:
   #   1. push зеркала: master→main и все теги (никаких других ветвей);
@@ -1119,18 +1161,18 @@ jobs:
           VERSION="${{ steps.gh_version.outputs.version }}"
           {
             printf '\n## Installation\n\n'
-            printf 'CLI (npm — from npmjs.org or the GitVerse Package Registry):\n\n'
+            printf 'CLI (npm — from npmjs.org, the GitVerse Package Registry or GitHub Packages):\n\n'
             printf '```bash\n'
             printf 'npm install -g @itphx/synth@%s\n' "$VERSION"
             printf '```\n\n'
-            printf 'Base Docker image from the GitHub Container Registry:\n\n'
+            printf 'Base Docker images from the public Gitea registry (`git.itphx.ru/itphx`):\n\n'
             printf '```bash\n'
-            printf 'docker pull ghcr.io/itphx/synth:%s\n' "$VERSION"
-            printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "$VERSION"
+            printf 'docker pull git.itphx.ru/itphx/synth:%s\n' "$VERSION"
+            printf 'docker run -p 4300:4300 git.itphx.ru/itphx/synth:%s\n' "$VERSION"
             printf '```\n\n'
-            printf 'The primary image registry is `gitverse.ru/itphx/synth:%s`;\n' "$VERSION"
-            printf 'all three base images (`synth`, `synth-backend`, `synth-ui`) are published to\n'
-            printf 'both gitverse.ru and ghcr.io (version tag only).\n'
+            printf 'All three base images (`synth`, `synth-backend`, `synth-ui`) are published to\n'
+            printf 'the public Gitea registry `git.itphx.ru/itphx` (anonymous pull), version tag\n'
+            printf 'only, no `latest`.\n'
             printf '\n## Offline / air-gapped\n\n'
             printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION"
             printf 'Images: `synth`, `synth-backend`, `synth-ui` (amd64/arm64, `docker save`, `.tar.gz`).\n\n'

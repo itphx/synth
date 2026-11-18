@@ -25,11 +25,11 @@
 #   # только amd64, без проверки запуска
 #   ./scripts/offline-images.sh --version 0.11.1 --platforms amd64 --no-verify
 #
-#   # CI: собрать и запушить arm64 в два реестра, затем собрать manifest list
+#   # CI: собрать и запушить arm64 в реестр Gitea, затем собрать manifest list
 #   ./scripts/offline-images.sh --version 0.11.1 --platforms arm64 \
-#       --push --registry-prefix gitverse.ru/itphx,ghcr.io/itphx
+#       --push --registry-prefix git.itphx.ru/itphx
 #   ./scripts/offline-images.sh --version 0.11.1 --platforms amd64,arm64 \
-#       --manifests --registry-prefix gitverse.ru/itphx,ghcr.io/itphx
+#       --manifests --registry-prefix git.itphx.ru/itphx
 #
 # Требования: bash 4+, docker (с BuildKit; buildx ставится флагом --ensure-buildx),
 # curl, node (для manifest.json; есть в репозитории/CI); gzip — всегда,

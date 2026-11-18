@@ -20,7 +20,9 @@
 # Переменные окружения:
 #   NPM_TOKEN                       — токен для npmjs.org
 #   NPM_REGISTRY                    — URL npm-реестра (по умолчанию: https://registry.npmjs.org)
-#   GV_TOKEN                        — токен для GitVerse (npm registry, docker, API)
+#   GV_TOKEN                        — токен для GitVerse (npm registry, API релизов)
+#   GITEA_TOKEN                     — токен Gitea для docker push (локально; в CI — секрет GT_TOKEN)
+#   DOCKER_REGISTRY                 — реестр образов (по умолчанию: git.itphx.ru)
 
 set -o pipefail
 
@@ -31,7 +33,8 @@ SYNTH="$ROOT"
 
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
 GITVERSE_NPM_REGISTRY="${GITVERSE_NPM_REGISTRY:-https://gitverse.ru/api/packages/itphx/npm/}"
-GITVERSE_DOCKER_REGISTRY="${GITVERSE_DOCKER_REGISTRY:-gitverse.ru}"
+# Реестр образов — публичный Gitea; прежнее имя переменной принимается для совместимости.
+DOCKER_REGISTRY="${DOCKER_REGISTRY:-${GITVERSE_DOCKER_REGISTRY:-git.itphx.ru}}"
 
 DRY_RUN=false
 NO_BUILD=false
@@ -220,19 +223,19 @@ done
 echo ""
 
 # Шаг 4: Docker
-# Публикуется только версионный тег; тег `latest` не публикуется (квота GitVerse
-# считает размер каждой версии без дедупликации).
+# Публикуется только версионный тег: образы живут в публичном реестре Gitea
+# (`git.itphx.ru/itphx`), тег `latest` не используется — развёртывание по версии.
 publish_docker() {
-    echo "[4/4] Docker ($GITVERSE_DOCKER_REGISTRY)..."
+    echo "[4/4] Docker ($DOCKER_REGISTRY)..."
 
     TAG="${DOCKER_TAG:-$PKG_VERSION}"
 
     # Набор образов: (имя-образа, Dockerfile). Три сервиса: synth (standalone core),
     # synth-backend (API Hub), synth-ui (SPA).
     IMAGES=(
-        "$GITVERSE_DOCKER_REGISTRY/itphx/synth:$TAG|$SYNTH/docker/Dockerfile"
-        "$GITVERSE_DOCKER_REGISTRY/itphx/synth-backend:$TAG|$SYNTH/docker/Dockerfile.backend"
-        "$GITVERSE_DOCKER_REGISTRY/itphx/synth-ui:$TAG|$SYNTH/docker/Dockerfile.ui"
+        "$DOCKER_REGISTRY/itphx/synth:$TAG|$SYNTH/docker/Dockerfile"
+        "$DOCKER_REGISTRY/itphx/synth-backend:$TAG|$SYNTH/docker/Dockerfile.backend"
+        "$DOCKER_REGISTRY/itphx/synth-ui:$TAG|$SYNTH/docker/Dockerfile.ui"
     )
 
     if $DRY_RUN; then
@@ -244,12 +247,12 @@ publish_docker() {
         return 0
     fi
 
-    if [ -n "${GV_TOKEN:-}" ]; then
-        echo "  Вход в $GITVERSE_DOCKER_REGISTRY..."
-        echo "$GV_TOKEN" | docker login "$GITVERSE_DOCKER_REGISTRY" --username itphx --password-stdin || \
+    if [ -n "${GITEA_TOKEN:-${GV_TOKEN:-}}" ]; then
+        echo "  Вход в $DOCKER_REGISTRY..."
+        echo "${GITEA_TOKEN:-${GV_TOKEN:-}}" | docker login "$DOCKER_REGISTRY" --username itphx --password-stdin || \
             die "Не удалось войти в Docker-реестр"
     else
-        echo "  ПРЕДУПРЕЖДЕНИЕ: GV_TOKEN не задан — пропускаем публикацию Docker"
+        echo "  ПРЕДУПРЕЖДЕНИЕ: GITEA_TOKEN не задан — пропускаем публикацию Docker"
         return 1
     fi
 
@@ -284,8 +287,8 @@ else
     echo "  npm i -g @itphx/synth@$PKG_VERSION"
     echo ""
     echo "Docker:"
-    echo "  docker pull $GITVERSE_DOCKER_REGISTRY/itphx/synth:$PKG_VERSION"
-    echo "  docker pull $GITVERSE_DOCKER_REGISTRY/itphx/synth-backend:$PKG_VERSION"
-    echo "  docker pull $GITVERSE_DOCKER_REGISTRY/itphx/synth-ui:$PKG_VERSION"
-    echo "  docker run -p 4300:4300 $GITVERSE_DOCKER_REGISTRY/itphx/synth:$PKG_VERSION"
+    echo "  docker pull $DOCKER_REGISTRY/itphx/synth:$PKG_VERSION"
+    echo "  docker pull $DOCKER_REGISTRY/itphx/synth-backend:$PKG_VERSION"
+    echo "  docker pull $DOCKER_REGISTRY/itphx/synth-ui:$PKG_VERSION"
+    echo "  docker run -p 4300:4300 $DOCKER_REGISTRY/itphx/synth:$PKG_VERSION"
 fi

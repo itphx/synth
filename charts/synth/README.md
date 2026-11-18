@@ -14,8 +14,8 @@ PostgreSQL) и
 
 | Сервис | Образ (по умолчанию) | Порт | Роль |
 |---|---|---|---|
-| `backend` | `gitverse.ru/itphx/synth-backend` | 5000 | API Hub: OIDC + RBAC + движок; данные — JSON в PVC (по умолчанию) или PostgreSQL (`storage.backend: postgres`) |
-| `ui` | `gitverse.ru/itphx/synth-ui` | 8080 | React SPA под nginx; проксирует API на backend |
+| `backend` | `git.itphx.ru/itphx/synth-backend` | 5000 | API Hub: OIDC + RBAC + движок; данные — JSON в PVC (по умолчанию) или PostgreSQL (`storage.backend: postgres`) |
+| `ui` | `git.itphx.ru/itphx/synth-ui` | 8080 | React SPA под nginx; проксирует API на backend |
 | `executor` | `git.itphx.ru/itphx/synth-executor` | 5100 | Опционально (ADR-077, split-режим): пул исполнителей с toolchain'ом; включается `executor.enabled: true` + `execution.mode: remote` |
 
 Backend самодостаточен (встроенный движок + хранилище), поэтому отдельный runner
@@ -45,7 +45,7 @@ backend-под» рвётся: см. «Привязка клиента к UI-п�
 ## Установка
 
 ```bash
-helm repo add synth https://gitverse.ru/api/packages/itphx/helm
+helm repo add synth https://git.itphx.ru/api/packages/itphx/helm
 helm repo update
 
 # Минимальная установка (публичные образы, ingress выключен)
@@ -107,9 +107,9 @@ ingress:
 
 | Ключ | По умолчанию | Назначение |
 |---|---|---|
-| `backend.image.repository` | `gitverse.ru/itphx/synth-backend` | Образ backend |
+| `backend.image.repository` | `git.itphx.ru/itphx/synth-backend` | Образ backend |
 | `backend.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
-| `backend.imagePullSecrets` | `[]` | Секреты для приватного реестра |
+| `backend.imagePullSecrets` | `[]` | Секреты для pull из реестра с авторизацией; для `git.itphx.ru/itphx` не нужны (публичный) |
 | `backend.oidc.enabled` | `false` | Включить OIDC-вход |
 | `backend.oidc.issuer` | `""` | Issuer IdP |
 | `backend.oidc.clientId` | `""` | Client ID |
@@ -165,7 +165,7 @@ ingress:
 | `executor.ownershipInitContainer.resources` | limits `100m`/128Mi, requests `10m`/32Mi | Ресурсы init-контейнера (одноразовая операция `chown`) |
 | `executor.image.repository` | `git.itphx.ru/itphx/synth-executor` | Образ исполнителя |
 | `executor.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
-| `executor.imagePullSecrets` | `[]` | Секреты для приватного реестра (нужны для `git.itphx.ru`) |
+| `executor.imagePullSecrets` | `[]` | Секреты для pull из реестра с авторизацией; для `git.itphx.ru/itphx` не нужны (публичный) |
 | `executor.service.port` / `.targetPort` | `5100` / `5100` | Service исполнителя (его адрес — `SYNTH_EXECUTION_REMOTE_URL`) |
 | `executor.service.sessionAffinity` | `None` | Привязка клиента к поду пула: `None` \| `ClientIP`. Нужна при `executor.replicaCount > 1` — браузерные MCP-сессии живут внутри под'а (см. «Привязка клиента к поду пула исполнителей») |
 | `executor.resources` | limits `4`/8Gi, requests `1`/2Gi | Ресурсы исполнителя — **рабочее место агента**: сборка монорепо (`pnpm install`/`build`/`typecheck`) идёт минутами и требует CPU и памяти; прежние дефолты (200m/256Mi) для неё малы. Переопределяется своими значениями (`executor.resources.*`) |
@@ -248,9 +248,9 @@ ingress:
 | `grafana.dashboards.enabled` | `false` | ConfigMap с дашбордами и label `grafana_dashboard=1` (sidecar) |
 | `grafana.dashboards.folder` | `""` | Аннотация `grafana_folder` (папка в Grafana) |
 | `alerts.enabled` | `false` | `PrometheusRule` с правилами из `files/alerts/synth-rules.yaml` |
-| `ui.image.repository` | `gitverse.ru/itphx/synth-ui` | Образ UI |
+| `ui.image.repository` | `git.itphx.ru/itphx/synth-ui` | Образ UI |
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
-| `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
+| `ui.imagePullSecrets` | `[]` | Секреты для pull из реестра с авторизацией; для `git.itphx.ru/itphx` не нужны (публичный) |
 | `ui.extraEnv` | `{}` | Доп. env для контейнера UI (словарь имя → значение). `SYNTH_BACKEND_URL` — адрес backend'а, на который nginx проксирует `/api /ws /auth /admin /health`; по умолчанию — Service backend'а **текущего** релиза (см. «Адрес backend'а для UI») |
 | `ui.clientMaxBodySize` | `""` | **Необязательный** override транспортного лимита (`client_max_body_size` nginx UI-пода, env `SYNTH_NGINX_CLIENT_MAX_BODY_SIZE`, и аннотация `proxy-body-size` nginx-ingress). Пусто → вычисляется из `attachments.maxBytesPerFile` и `storage.maxUploadBytes`: `max(…, 100 МиБ) + 1 МиБ` (для 100 МиБ — `101m`). См. «Лимит загрузки файлов (вложения)» |
 | `ui.service.sessionAffinity` | `None` | Привязка клиента к UI-поду: `None` \| `ClientIP`. Нужна при `ui.replicaCount > 1` — стабильная цепочка «клиент → UI-под → backend-под» (см. «Привязка клиента к UI-поду») |
@@ -1166,7 +1166,9 @@ toolchain'ом (`git`, `ripgrep`, `python3`, `openssh-client`). Переключ
   `values`/ConfigMap не хранится (инвариант 13) — только ссылка на Secret и
   имя ключа.
 - **Образ `synth-executor`** в реестре, из которого тянет кластер
-  (`executor.image.repository`); для приватного реестра — `executor.imagePullSecrets`.
+  (`executor.image.repository`); образы публикуются в публичный реестр Gitea
+  `git.itphx.ru/itphx`, поэтому `executor.imagePullSecrets` нужны только для pull
+  из зеркала с авторизацией.
 - **Пакет исполнителя в образе control plane**: режим `remote` подключает
   `@itphx/synth-executor` динамическим `import()` и **fail-closed** — без пакета
   процесс не стартует, а не уйдёт молча в `inline`. В официальном образе
@@ -1194,8 +1196,7 @@ executor:
   image:
     repository: git.itphx.ru/itphx/synth-executor
     tag: ""                    # пусто → .Chart.AppVersion
-  imagePullSecrets:            # приватный реестр
-    - name: regcred
+  imagePullSecrets: []         # не нужны: git.itphx.ru/itphx публичный
   workspace:
     enabled: true
     accessMode: ReadWriteMany  # RWX обязателен

@@ -15,11 +15,11 @@ description: Managed-деплой Synth в K3s (Rancher Fleet): test-инста�
 | **preprod** | https://synth-release.k3s.itphx.loc | публикуемый Helm-чарт (GitVerse), релизные образы `gitverse.ru` |
 | **prod** | у нас отсутствует — разворачивают клиенты/заказчики сами | публикуемый Helm-чарт (self-host) |
 
-preprod и prod ставятся из опубликованного Helm-чарта (`helm repo add synth https://gitverse.ru/api/packages/itphx/helm`), **не** через Fleet.
+preprod и prod ставятся из опубликованного Helm-чарта (`helm repo add synth https://git.itphx.ru/api/packages/itphx/helm` — нативный Helm-реестр Gitea, индекс читается анонимно), **не** через Fleet.
 
 ## Репозиторий деплоя (test)
 
-Fleet-деплой **test-среды** (namespace `synth`). Репозиторий: `https://git.itphx.ru/itphx/synth-deploy.git`, ветка `main`. Один каталог верхнего уровня = один Fleet-бандл (= один helm-релиз); имя бандла и релиза — `<GitRepo>-<путь>`. **Чартов в репозитории нет**: они публикуются в приватный Helm-реестр Gitea, Fleet тянет их по `helm.repo`/`helm.chart`/`helm.version`.
+Fleet-деплой **test-среды** (namespace `synth`). Репозиторий: `https://git.itphx.ru/itphx/synth-deploy.git`, ветка `main`. Один каталог верхнего уровня = один Fleet-бандл (= один helm-релиз); имя бандла и релиза — `<GitRepo>-<путь>`. **Чартов в репозитории нет**: они публикуются в Helm-реестр Gitea (`https://git.itphx.ru/api/packages/itphx/helm`; индекс и чарты читаются анонимно, креды нужны только на публикацию), Fleet тянет их по `helm.repo`/`helm.chart`/`helm.version`.
 
 | Каталог | Бандл / релиз | Что разворачивает |
 |---|---|---|
@@ -30,7 +30,7 @@ Fleet-деплой **test-среды** (namespace `synth`). Репозитори
 
 ## Подготовка артефактов
 
-`synth-deploy/scripts/build-and-publish.sh` собирает образы backend/ui (пушатся в `git.itphx.ru/itphx/*`) и публикует чарты `synth` и `synth-gateway-telegram` в приватный Helm-реестр Gitea (`https://git.itphx.ru/api/packages/itphx/helm`, нативный API `/api/charts`). Версия чарта — `<base>-<N>`, где `base` = `--app-version` для `synth` и `version` чарта add-on'а для шлюза, а `N` — автоинкремент по `index.yaml` реестра. Скрипт обновляет пиннинги версий — только строки с маркером `# sync: <ключ>` (`test/fleet.yaml` `chart-version`, `test/values.yaml` `backend-image-tag`/`ui-image-tag`, `gateway-telegram/*`); эти строки вручную не править.
+`synth-deploy/scripts/build-and-publish.sh` собирает образы backend/ui (пушатся в `git.itphx.ru/itphx/*`) и публикует чарты `synth` и `synth-gateway-telegram` в Helm-реестр Gitea (`https://git.itphx.ru/api/packages/itphx/helm`, нативный API `/api/charts`; реестр публичный — креды нужны только для публикации чарта). Версия чарта — `<base>-<N>`, где `base` = `--app-version` для `synth` и `version` чарта add-on'а для шлюза, а `N` — автоинкремент по `index.yaml` реестра. Скрипт обновляет пиннинги версий — только строки с маркером `# sync: <ключ>` (`test/fleet.yaml` `chart-version`, `test/values.yaml` `backend-image-tag`/`ui-image-tag`, `gateway-telegram/*`); эти строки вручную не править.
 
 ```bash
 cd synth-deploy
@@ -43,9 +43,9 @@ GITEA_USER=… GITEA_TOKEN=… ./scripts/build-and-publish.sh --skip-images --ap
 
 ## Предпосылки (в кластере)
 
-- Secret `helm-gitea` (namespace `fleet-local`, ключи `username`/`password`) — креды Fleet к приватному Helm-реестру.
+- Secret `helm-gitea` (namespace `fleet-local`, ключи `username`/`password`) — креды Fleet к Helm-реестру (прописан в `helmSecretName` бандла; реестр публичный, анонимное чтение работает, поэтому секрет нужен только пока он указан в GitRepo).
 - Fleet GitRepo `synth` (namespace `fleet-local`, `synth-deploy/gitrepo.yaml`, применяется вручную) с полями: `paths: [test, gateway-telegram]` (каталог → бандл), `helmSecretName: helm-gitea`, `helmRepoURLRegex: "https://git\\.itphx\\.ru/api/packages/itphx/helm.*"` (allow-list реестра; Fleet v0.16.1).
-- Secret `git.itphx.ru` (namespace `synth`, `kubernetes.io/dockerconfigjson`) — pull-secret образов backend/ui.
+- Secret `git.itphx.ru` (namespace `synth`, `kubernetes.io/dockerconfigjson`) — pull-secret образов backend/ui; **не обязателен**: реестр `git.itphx.ru/itphx` публичный (анонимный pull), секрет остаётся для явной авторизации.
 - SealedSecret'ы `synth-secrets` и `synth-gateway-telegram-secrets` — не отдельные объекты, а `extraObjects` в `values.yaml` соответствующего бандла.
 
 ## Деплой и проверки

@@ -3,8 +3,9 @@
 # release-github.sh — локальный backfill GitHub-зеркала (без сборки образов).
 #
 # GitHub — только ЗЕРКАЛО и релизы: контейнеры собираются исключительно в CI
-# GitVerse (kaniko → gitverse.ru + ghcr.io), а сюда попадают уже собранные
-# образы. Поэтому этот скрипт Docker-образы не собирает и не публикует: он
+# GitVerse и публикуются в реестр Gitea `git.itphx.ru/itphx` (публичный), а сюда
+# попадают уже собранные образы. Поэтому этот скрипт Docker-образы не собирает и
+# не публикует: он
 # синхронизирует refs и создаёт/обновляет GitHub Release с ассетами. Нужен для
 # «догона» исторических тегов и повторного релиза, когда CI GitVerse недоступен.
 #
@@ -68,7 +69,7 @@ release-github.sh — локальный backfill GitHub-зеркала (без 
                   + блок «Установка», ассеты Helm-чарт/cli.js/SHA256SUMS (best-effort).
 
 Что НЕ делает:
-  * не собирает и не публикует Docker-образы (их собирает CI GitVerse → gitverse.ru + ghcr.io);
+  * не собирает и не публикует Docker-образы (их собирает CI GitVerse → git.itphx.ru/itphx);
   * не публикует npm-пакеты (только CI GitVerse).
 
 Примеры:
@@ -273,18 +274,18 @@ if $DO_RELEASE; then
     if ! $DRY_RUN; then
         {
             printf '\n## Installation\n\n'
-            printf 'CLI (npm — from npmjs.org or the GitVerse Package Registry):\n\n'
+            printf 'CLI (npm — from npmjs.org, the GitVerse Package Registry or GitHub Packages):\n\n'
             printf '```bash\n'
             printf 'npm install -g @itphx/synth@%s\n' "$VERSION"
             printf '```\n\n'
-            printf 'Base Docker image from the GitHub Container Registry:\n\n'
+            printf 'Base Docker images from the public Gitea registry (`git.itphx.ru/itphx`):\n\n'
             printf '```bash\n'
-            printf 'docker pull ghcr.io/itphx/synth:%s\n' "$VERSION"
-            printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "$VERSION"
+            printf 'docker pull git.itphx.ru/itphx/synth:%s\n' "$VERSION"
+            printf 'docker run -p 4300:4300 git.itphx.ru/itphx/synth:%s\n' "$VERSION"
             printf '```\n\n'
-            printf 'The primary image registry is `gitverse.ru/itphx/synth:%s`;\n' "$VERSION"
-            printf 'all three base images (`synth`, `synth-backend`, `synth-ui`) are published to\n'
-            printf 'both gitverse.ru and ghcr.io (version tag only).\n'
+            printf 'All three base images (`synth`, `synth-backend`, `synth-ui`) are published to\n'
+            printf 'the public Gitea registry `git.itphx.ru/itphx` (anonymous pull), version tag\n'
+            printf 'only, no `latest`.\n'
         } >> "$ASSETS/release-body.md"
     fi
 
@@ -371,5 +372,5 @@ if $DRY_RUN; then
 else
     echo "Зеркало:  https://github.com/$REPO"
     if $DO_RELEASE; then echo "Релиз:    https://github.com/$REPO/releases/tag/$TAG"; fi
-    echo "Образ:    ghcr.io/itphx/synth:$VERSION (собирает CI GitVerse)"
+    echo "Образ:    git.itphx.ru/itphx/synth:$VERSION (собирает CI GitVerse)"
 fi

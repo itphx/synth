@@ -13,9 +13,11 @@ Verified symptoms, causes and solutions from real experience. If your problem is
 
 **Symptom:** publishing `@itphx/synth` to `https://gitverse.ru/api/packages/itphx/npm/` fails with 403 "no permission", while the other six packages (seven in total) publish fine.
 
-**Cause:** the `repository` field in `packages/synth/package.json` (`{"type": "git", "url": "https://gitverse.ru/itphx/synth"}`). When linking a package to a repository by `repository.url`, GitVerse checks permissions and returns 403.
+**Cause (a historical case, early 0.x — before the package rename in 0.2.0):** `packages/synth/package.json` used to carry the `repository` field (`{"type": "git", "url": "https://gitverse.ru/itphx/synth"}`). When linking a package to a repository by `repository.url`, GitVerse checks permissions and returns 403 — so `@itphx/synth` was not published while the other packages went through.
 
-**Solution:** remove the `repository` field from `package.json` (like the other packages). Verification: publishing with `repository` → 403, without `repository` → 200.
+**Solution (at the time):** remove the `repository` field from `package.json` — the other packages no longer had it. Verification: publishing with `repository` → 403, without `repository` → 200.
+
+**Now:** the field is absent in **all 8 packages** — do not add it back (see [PUBLISHING.md](./PUBLISHING.md) → "Important: the `repository` field in package.json"). The same symptom (403/404 on publish) comes back if the field reappears.
 
 ## 2. npm unpublish: 403 "Granular access tokens that bypass two-factor authentication may not perform this action"
 
@@ -29,13 +31,13 @@ Verified symptoms, causes and solutions from real experience. If your problem is
 npm deprecate @itphx/synth@<version> "Use a newer version"
 ```
 
-## 3. The `registry.gitverse.ru` Docker registry does not resolve
+## 3. A Docker image does not pull from the registry
 
-**Symptom:** `docker pull registry.gitverse.ru/...` / `docker push registry.gitverse.ru/...` fails with a resolution error.
+**Symptom:** `docker pull git.itphx.ru/itphx/synth:<version>` fails with `MANIFEST_UNKNOWN`/404, a resolution error or 401.
 
-**Cause:** the correct registry address is **`gitverse.ru`** (without the `registry.` prefix). The outdated default `registry.gitverse.ru` was fixed in `publish.sh`/`build.sh` (`GITVERSE_DOCKER_REGISTRY`).
+**Cause:** images are published only to the Gitea registry `git.itphx.ru/itphx`, with versioned tags (`latest` does not exist). A tag without a version, a non-existent version or an outdated address (`gitverse.ru`, `registry.gitverse.ru` — no longer used for images) gives 404. A 401 means stale or foreign credentials in `DOCKER_CONFIG`.
 
-**Solution:** use `gitverse.ru/itphx/synth:<version>`.
+**Solution:** use `git.itphx.ru/itphx/synth:<version>`. The registry is **public**: pulls are anonymous, no `docker login` is needed (credentials are required only for push).
 
 ## 4. `dev.sh` does not survive in the background/CI (it kills its children)
 

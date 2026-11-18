@@ -18,7 +18,10 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 | Secret | Назначение |
 |--------|------------|
 | `NPM_TOKEN` | Публикация в npmjs.org |
-| `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
+| `GV_TOKEN` | Токен GitVerse: API релизов, npm-реестр GitVerse, git push от бота (образы в GitVerse больше не публикуются) |
+| `GT_TOKEN` | Токен Gitea (`git.itphx.ru`, логин `itphx`): публикация **образов** (`build-docker`, `publish-images-gitea`) и **Helm-чарта** (`publish-helm`) |
+| `GV_GITEA_TOKEN` | Токен Gitea для npm-реестра Gitea — бета-пакеты (`beta.yaml`) |
+| `GH_TOKEN` | GitHub: push зеркала, GitHub Release, npm в GitHub Packages (`write:packages`) |
 
 **Важно:** префикс `GITVERSE_` запрещён в именах секретов GitVerse. Использовать `GV_`.
 
@@ -42,14 +45,15 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
   `Failed to CreateArtifact (409) Conflict`: артефакты предыдущего прогона ещё существуют.
   Перед `POST /repos/{owner}/{repo}/actions/runs/{id}/rerun` нужно снять артефакты рана:
   `GET .../actions/artifacts` → `DELETE .../actions/artifacts/{id}` (204).
-- **Джоба `build-docker` публикует в ДВА реестра** (gitverse.ru + ghcr.io) — шесть пушей на три
-  образа, при этом kaniko стартует поздно (pull образа исполнителя). Таймаут держать ≥45 мин.
+- **Джоба `build-docker` публикует только в Gitea** (`git.itphx.ru/itphx`, три пуша: `synth`,
+  `synth-backend` slim, `synth-ui`), плюс arm64 (buildx) и best-effort manifest list. Таймаут джобы —
+  75 мин (amd64-сборки docker + arm64 + manifest list).
 - **`scripts/publish-release.mjs` для GitHub требует `target_commitish`** = ветка/SHA: если передать
   имя тега, GitHub отвечает `422 invalid target_commitish` (воспроизведено на v0.10.1). По умолчанию
   для GitHub берётся `GITHUB_SHA` → `main` (для GitVerse — тег, как было).
-- **Образы GHCR создаются приватными**, если публикуются PAT'ом (не GitHub Actions). Анонимный
-  `docker pull ghcr.io/...` заработает только после переключения видимости пакета в public в UI
-  GitHub Packages.
+- **Образы в GHCR больше не публикуются** — реестр образов один: публичный Gitea
+  `git.itphx.ru/itphx` (анонимный `docker pull`; авторизация нужна только на push). GitHub берёт
+  на себя зеркало репозитория, GitHub Release и npm в GitHub Packages.
 
 ## Порядок сборки в CI
 

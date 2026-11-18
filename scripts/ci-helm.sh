@@ -35,9 +35,10 @@
 #   CI_HELM_DOCKER       0 — не использовать docker-образ как фоллбэк
 #   CI_HELM_DOCKER_IMAGE образ helm (по умолчанию alpine/helm:$HELM_VERSION)
 #   CHART_DIR            каталог чарта (по умолчанию charts/synth)
-#   CHART_REGISTRY_URL   эндпоинт Helm-реестра GitVerse
+#   CHART_REGISTRY_URL   эндпоинт Helm-реестра Gitea (нативный API `/api/charts`)
 #   CHART_REGISTRY_USER  пользователь реестра (по умолчанию itphx)
-#   GV_TOKEN             пароль реестра (секрет; в лог не пишется)
+#   GITEA_TOKEN          пароль реестра (секрет GT_TOKEN; в лог не пишется).
+#                        Для обратной совместимости читается и GV_TOKEN.
 
 set -uo pipefail
 
@@ -54,8 +55,11 @@ CI_HELM_DOCKER="${CI_HELM_DOCKER:-1}"
 CI_HELM_DOCKER_IMAGE="${CI_HELM_DOCKER_IMAGE:-alpine/helm:$HELM_VERSION}"
 
 CHART_DIR_DEFAULT="${CHART_DIR:-charts/synth}"
-CHART_REGISTRY_URL="${CHART_REGISTRY_URL:-https://gitverse.ru/api/packages/itphx/helm/api/charts}"
+CHART_REGISTRY_URL="${CHART_REGISTRY_URL:-https://git.itphx.ru/api/packages/itphx/helm/api/charts}"
 CHART_REGISTRY_USER="${CHART_REGISTRY_USER:-itphx}"
+# Пароль реестра: GITEA_TOKEN (секрет GT_TOKEN). GV_TOKEN — обратная совместимость
+# для вызовов, оставшихся с прежнего (GitVerse) реестра.
+CHART_REGISTRY_TOKEN="${GITEA_TOKEN:-${GV_TOKEN:-}}"
 
 # Соединение ограничиваем по времени: у «мёртвого» хоста не должно уходить
 # 2+ минуты, как уходит при дефолтном connect timeout curl.
@@ -393,8 +397,8 @@ cmd_package() {
 
 cmd_publish() {
   local chart="${1:-$CHART_DIR_DEFAULT}" version="${2:?укажите версию}"
-  if [ -z "${GV_TOKEN:-}" ]; then
-    soft_skip_or_fail "не задан GV_TOKEN — публикация чарта невозможна"
+  if [ -z "${CHART_REGISTRY_TOKEN:-}" ]; then
+    soft_skip_or_fail "не задан GITEA_TOKEN (секрет GT_TOKEN) — публикация чарта невозможна"
   fi
   resolve_helm || soft_skip_or_fail "helm недоступен — публикация чарта не выполнена" 1
 
@@ -410,9 +414,12 @@ cmd_publish() {
   local response http_code
   response=$(mktemp 2>/dev/null) || response="$HELM_INSTALL_DIR/publish-response.txt"
   log "публикую $tgz → $CHART_REGISTRY_URL (пользователь $CHART_REGISTRY_USER)"
+  # Content-Type как в документации Gitea: тело запроса — сам .tgz (не multipart),
+  # Basic-авторизация `itphx:<token>`.
   http_code=$(curl -sS -o "$response" -w '%{http_code}' \
     --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
-    --user "$CHART_REGISTRY_USER:$GV_TOKEN" \
+    --user "$CHART_REGISTRY_USER:$CHART_REGISTRY_TOKEN" \
+    -H "Content-Type: application/x-tar" \
     -X POST --upload-file "$tgz" "$CHART_REGISTRY_URL") || http_code="000"
   case "$http_code" in
     2*)

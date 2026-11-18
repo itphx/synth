@@ -676,7 +676,7 @@ test-инстансе 2026-10-17 (итог: `healthy`, `doctor` без `fail`, �
 | Компонент | Значение (test) |
 |---|---|
 | Кластер / namespace | K3s (Rancher Fleet), `synth` |
-| Релиз / чарт | `synth-test`, чарт `synth` из приватного Helm-реестра Gitea |
+| Релиз / чарт | `synth-test`, чарт `synth` из Helm-реестра Gitea (`git.itphx.ru/api/packages/itphx/helm`, публичный — анонимное чтение) |
 | PVC | `synth-backend-data` → `/var/synth/data` (RWO, одна нода) |
 | Целевая БД | `box.itphx.loc:5432`, база `synth_test`, роль `synth` (PostgreSQL 15) |
 | Секрет с паролем | `synth-secrets` (SealedSecret), ключ `SYNTH_POSTGRES_PASSWORD` |

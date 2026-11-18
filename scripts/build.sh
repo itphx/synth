@@ -24,10 +24,11 @@
 #   ./build.sh --docker-tag=<tag> — Docker-образ с указанным тегом
 #   ./build.sh --help           — показать справку и выйти
 #
-# Docker-тег `latest` не используется: квота GitVerse считает размер каждой
-# версии без дедупликации, а `latest` — дубликат версионного тега. Релиз
-# передаёт явный версионный тег (см. publish.sh), локальная сборка получает
-# нейтральный тег `dev`.
+# Docker-тег `latest` не используется: образы публикуются только версионными
+# тегами (в реестр Gitea `git.itphx.ru/itphx` — реестр публичный, анонимный
+# pull разрешён), поэтому развёртывание воспроизводимо. Релиз передаёт явный
+# версионный тег (см. publish.sh), локальная сборка получает нейтральный
+# тег `dev`.
 #
 # Требования: Node.js >= 22, pnpm >= 11, docker (для --docker)
 
@@ -46,15 +47,15 @@ build.sh — сборка релизной версии Synth
   ./build.sh --docker                     — сборка + Docker-образ (тег по умолчанию: dev)
   ./build.sh --docker-tag=<tag>           — Docker-образ с указанным тегом
                                             (релиз передаёт версию: --docker-tag=0.6.0)
-  ./build.sh --docker-registry=<registry> — реестр Docker-образа (по умолчанию: gitverse.ru)
+  ./build.sh --docker-registry=<registry> — реестр Docker-образа (по умолчанию: git.itphx.ru)
   ./build.sh --help                       — показать эту справку и выйти
 
 Переменные окружения:
   DOCKER_TAG       — тег Docker-образа (по умолчанию: dev)
-  DOCKER_REGISTRY  — реестр Docker-образа (по умолчанию: gitverse.ru)
+  DOCKER_REGISTRY  — реестр Docker-образа (по умолчанию: git.itphx.ru)
 
-Тег `latest` не используется: квота GitVerse считает размер каждой версии без
-дедупликации, поэтому релиз публикует только версионный тег (см. publish.sh).
+Тег `latest` не используется: релиз публикует только версионный тег в реестр
+Gitea `git.itphx.ru/itphx` (публичный реестр), см. publish.sh.
 
 Требования: Node.js >= 22, pnpm >= 11, docker (для --docker)
 EOF
@@ -77,7 +78,7 @@ BUILD_DOCKER=false
 # Тег `latest` не используем: релиз передаёт явный версионный тег (--docker-tag=<version>),
 # локальная сборка идёт под нейтральным `dev`.
 DOCKER_TAG="${DOCKER_TAG:-dev}"
-DOCKER_REGISTRY="${DOCKER_REGISTRY:-gitverse.ru}"
+DOCKER_REGISTRY="${DOCKER_REGISTRY:-git.itphx.ru}"
 CLEAN=false
 DO_CHECK=false
 
@@ -219,10 +220,11 @@ if $BUILD_DOCKER; then
     echo "  готово"
     echo ""
 
-    # Проверяем, есть ли доступ к реестру
-    if [ -n "${GV_TOKEN:-}" ]; then
+    # Проверяем, есть ли доступ к реестру (авторизация нужна только для push:
+    # git.itphx.ru — публичный реестр, анонимный pull разрешён).
+    if [ -n "${GITEA_TOKEN:-${GV_TOKEN:-}}" ]; then
         echo "  Вход в $DOCKER_REGISTRY..."
-        echo "$GV_TOKEN" | docker login "$DOCKER_REGISTRY" --username itphx --password-stdin 2>/dev/null || \
+        echo "${GITEA_TOKEN:-${GV_TOKEN:-}}" | docker login "$DOCKER_REGISTRY" --username itphx --password-stdin 2>/dev/null || \
             echo "  (вход не выполнен — публикация отдельно через publish.sh)"
     fi
 fi
@@ -253,7 +255,7 @@ if $BUILD_DOCKER; then
     echo ""
     echo "Docker-образ: $DOCKER_REGISTRY/itphx/synth:$DOCKER_TAG"
     echo "  Запуск: docker run -p 4300:4300 $DOCKER_REGISTRY/itphx/synth:$DOCKER_TAG"
-    if [ -n "${GV_TOKEN:-}" ]; then
+    if [ -n "${GITEA_TOKEN:-${GV_TOKEN:-}}" ]; then
         echo "  Публикация: docker push $DOCKER_REGISTRY/itphx/synth:$DOCKER_TAG"
     fi
 fi

@@ -26,6 +26,7 @@ The publishing scripts use the `--no-git-checks` flag (publishing happens not fr
 |--------|-----|-------|
 | npmjs.org | `https://registry.npmjs.org` | `NPM_TOKEN` |
 | GitVerse Package Registry | `https://gitverse.ru/api/packages/itphx/npm/` | `GV_TOKEN` |
+| GitHub Packages | `https://npm.pkg.github.com` (`@itphx` scope) | `GH_TOKEN` (`write:packages` scope) |
 | Gitea Package Registry | `https://git.itphx.ru/api/packages/itphx/npm/` | `GITEA_NPM_TOKEN` (publishing; a read token for install) |
 
 Token values are stored in repository secrets (GitVerse CI) and in the local environment. **Never put token values in documentation, code or commits.**
@@ -150,23 +151,27 @@ The image is built from the published npm package: `npm install -g @itphx/synth@
 
 Images are built with a build identifier **`SYNTH_BUILD_ID`** (the commit sha in CI; locally `git rev-parse --short HEAD`, with a `-dirty` suffix on a dirty tree). The value is returned by `GET /health` (additive `build` field) and is part of the service worker cache name; the PWA compares it with the bundle build id and, on a mismatch, clears caches, updates the SW and reloads once — a rebuild under the same semver no longer leaves the old shell behind. If the build id is empty (a local build without the variable), the client falls back to comparing `health.version` with `SYNTH_VERSION`.
 
-The Docker registry is **`gitverse.ru`** (not `registry.gitverse.ru`!). The image:
+The Docker registry is **Gitea** (`git.itphx.ru`, `itphx` namespace); gitverse.ru and ghcr.io are no longer used as image registries. The image:
 
 ```
-gitverse.ru/itphx/synth:<version>
+git.itphx.ru/itphx/synth:<version>
 ```
 
-The `latest` tag is **not published** — only versioned tags remain in the registry. Reason: the "Packages" quota in GitVerse counts each version's size without dedup — `latest` and the version point to the same digest but are paid for twice (500 MB limit per repository). Therefore `docker pull gitverse.ru/itphx/synth` without a tag does not work — specify the version.
+The registry is **public**: `docker pull` works anonymously and no `imagePullSecret` is needed in Kubernetes — authorization is required only for `docker push` (the `GT_TOKEN` secret, login `itphx`; see "Executor images and flavors" → "Secret").
 
-Additionally **all three base images** (`synth`, `synth-backend`, `synth-ui`) are mirrored to the GitHub Container Registry: `ghcr.io/itphx/synth:<version>`, `ghcr.io/itphx/synth-backend:<version>`, `ghcr.io/itphx/synth-ui:<version>`. The policy is in the section [Release to the GitHub mirror](#release-to-the-github-mirror).
+The `latest` tag is **not published** — versioned tags only: pulls use a concrete version, so deployments stay reproducible. `docker pull git.itphx.ru/itphx/synth` without a tag does not work — specify the version.
+
+The `synth` image is published to Gitea **starting from the release that introduced this policy**: older versions have no image in `git.itphx.ru/itphx/synth` (they were released to gitverse.ru/ghcr.io only) — for air-gapped installs use the offline archives from the corresponding GitHub/GitVerse release assets.
+
+The base images (`synth`, `synth-backend` slim, `synth-ui`) are published by the `build-docker` job in `release.yaml` (docker on the self-hosted runner). **multi-arch:** amd64 is built by docker, arm64 by buildx (`:<version>-arm64`), then a best-effort manifest list `:<version>` (amd64+arm64); if the index cannot be created, the per-arch tags `<version>-amd64` / `<version>-arm64` remain. The full policy for every image is in [Release to the GitHub mirror](#release-to-the-github-mirror) → "Image policy".
 
 ## Executor images and flavors (PROP-082)
 
-Besides the three base images, **flavor images** (all-in-one: control plane + toolchain) and **executor images** (workers, split topology) are published. All of them go to the Gitea registry `git.itphx.ru`:
+Besides the three base images, **flavor images** (all-in-one: control plane + toolchain), **executor images** (workers, split topology) and `synth-provisioner` (pool provisioner, a single image without flavors) are published. All of them go to the Gitea registry `git.itphx.ru/itphx` (public: anonymous pull, authorization only for push):
 
 | Image | Tag | Content |
 |---|---|---|
-| `synth-backend` | `<version>` | slim: control plane without the toolchain |
+| `synth-backend` | `<version>` | slim: control plane without the toolchain (published by the `build-docker` job, not `publish-images-gitea` — see below) |
 | `synth-backend` | `<version>-core` | hard deps + tier 0 + control plane |
 | `synth-backend` | `<version>-dev` | core + tier 1 + tier 4 (MCP) + DB clients + buildah |
 | `synth-backend` | `<version>-devops` | dev + tier 2 + diagnostics + docker CLI |
@@ -176,17 +181,19 @@ Besides the three base images, **flavor images** (all-in-one: control plane + to
 
 Full addresses: `git.itphx.ru/itphx/synth-backend:<version>-core`, `git.itphx.ru/itphx/synth-executor:<version>-core`.
 
-**Tags are versioned, without `latest`.** Pulls in the cluster use a concrete version (`<version>-<flavor>`) — otherwise a deployment stops being reproducible. The GitVerse/GHCR limit (~500 MB per repository) does not apply to the Gitea registry, but the tag policy is the same for every registry.
+**Tags are versioned, without `latest`.** Pulls in the cluster use a concrete version (`<version>-<flavor>`) — otherwise a deployment stops being reproducible. The Gitea registry has no repository size limit; the versioned-tag policy is the same for every image.
+
+The `slim` base `synth-backend:<version>` is published by the `build-docker` job (base images); `publish-images-gitea` calls `publish-images.sh` with `--no-slim` — otherwise two jobs would push the same tag into the same registry (a race).
 
 ### Secret
 
-Publishing **flavor images to the Gitea registry** (the `publish-images-gitea` job in `release.yaml`) uses the **`GT_TOKEN`** secret (login `itphx`); locally and in `synth-deploy` it is the `GITEA_TOKEN` environment variable. Publishing **beta packages to the Gitea npm registry** (`beta.yaml`) uses the **`GV_GITEA_TOKEN`** secret (it needs the `package:write` permission). If the secret is missing, publishing **fails** with a clear message (fail-closed) instead of being silently skipped: `scripts/docker-auth-gitea.sh` prepares the `config.json` for kaniko/CLI.
+Publishing **images to the Gitea registry** (the `build-docker` and `publish-images-gitea` jobs in `release.yaml`) and the **Helm chart** (`publish-helm`) uses the **`GT_TOKEN`** secret (login `itphx`; container-registry and `package:write` rights); locally and in `synth-deploy` it is the `GITEA_TOKEN` environment variable. **Pulling** needs no token: the registry is public. Publishing **beta packages to the Gitea npm registry** (`beta.yaml`) uses the **`GV_GITEA_TOKEN`** secret (it needs the `package:write` permission). If the secret is missing, publishing **fails** with a clear message (fail-closed) instead of being silently skipped: `scripts/docker-auth-gitea.sh` prepares the `config.json` for the docker CLI.
 
 ### Build and publish
 
-In CI, publishing lives in the `publish-images-gitea` job of `.gitverse/workflows/release.yaml`: it runs **on a release tag** (like the base image publishing) and builds every flavor with a separate kaniko step using `--target` and `--destination=git.itphx.ru/itphx/<image>:<version>-<flavor>`. In `ci.yaml` (push/PR) there is no publishing — only builds and smoke tests (the `images` job).
+In CI, publishing lives in the `publish-images-gitea` job of `.gitverse/workflows/release.yaml`: it runs **on a release tag** (like the base image publishing) and builds every flavor through `scripts/publish-images.sh` (docker + BuildKit, `--target` of the needed stage) tagging `git.itphx.ru/itphx/<image>:<version>-<flavor>`; it does not build the slim base (`--no-slim`). In `ci.yaml` (push/PR) there is no publishing — only builds and smoke tests (the `images` job).
 
-An explicit `--platform` is **not** set in the flavor steps: kaniko does not provide `BUILDPLATFORM`/`TARGETPLATFORM` (verified on v1.24.0), and an empty value would break the build (PROP-082, "Multistage build"). The registry cache is enabled — otherwise eleven builds would repeat the heavy `build` stage.
+An explicit `--platform` is **not** set in the flavor steps: the flavor stages contain `RUN` steps that install packages and are not cross-built — the image is built for the runner architecture (amd64). BuildKit reuses layers between flavors, so the heavy `build` stage is not repeated for every flavor.
 
 Locally:
 
@@ -231,36 +238,36 @@ The exit code is non-zero on a failure; the output shows which check did not pas
 
 The application chart is `charts/synth/` in the monorepo. The chart version and `appVersion` equal the release version: on a bump in CI (`version-bump` in `release.yaml`) they are updated together with `version.ts` and `package.json`.
 
-The registry is the **native GitVerse Helm registry**, not OCI (the `helm push oci://...` path is not used on GitVerse):
+The registry is the **native Gitea Helm registry**, not OCI (`helm push oci://...` is not used):
 
 ```
-https://gitverse.ru/api/packages/itphx/helm
+https://git.itphx.ru/api/packages/itphx/helm
 ```
 
-The index repository is `https://gitverse.ru/api/packages/itphx/helm/index.yaml` (available anonymously).
+The index repository is `https://git.itphx.ru/api/packages/itphx/helm/index.yaml` (available anonymously). The GitVerse Helm registry is no longer used.
 
 ### Publishing
 
-In CI — the `publish-helm` job in `.gitverse/workflows/release.yaml` (not started on `dry_run`): installing Helm → `helm lint charts/synth` → `helm package` → `curl` POST to `.../helm/api/charts` (success = HTTP 201).
+In CI — the `publish-helm` job in `.gitverse/workflows/release.yaml` (not started on `dry_run`; it runs with `CI_HELM_SOFT=1`, so a failed chart publish does not fail the release): installing Helm → `helm lint charts/synth` → `helm package` → `curl` POST to `.../helm/api/charts` with Basic auth `itphx:$GT_TOKEN` (success = HTTP 201).
 
 Manually:
 
 ```bash
 helm package charts/synth --version <version> --app-version <version> --destination dist/helm
-curl --user "itphx:$GV_TOKEN" -X POST \
+curl --user "itphx:$GITEA_TOKEN" -X POST \
   --upload-file dist/helm/synth-<version>.tgz \
-  https://gitverse.ru/api/packages/itphx/helm/api/charts
+  https://git.itphx.ru/api/packages/itphx/helm/api/charts
 ```
 
 ### Installation
 
 ```bash
-helm repo add synth https://gitverse.ru/api/packages/itphx/helm
+helm repo add synth https://git.itphx.ru/api/packages/itphx/helm
 helm repo update
 helm install synth synth/synth --version <version> -f my-values.yaml
 ```
 
-The images `gitverse.ru/itphx/synth{,-ui,-backend}:<version>` are pulled **anonymously** — no imagePullSecret is needed.
+The images `git.itphx.ru/itphx/{synth,synth-backend,synth-ui}:<version>` are pulled **anonymously** (public registry) — no `imagePullSecret` is needed.
 
 ### Custom values
 
@@ -308,7 +315,7 @@ Result: `packages/synth/dist/cli.js` (the executable CLI).
 ./scripts/publish.sh --docker-tag=<tag>
 ```
 
-Environment variables: `NPM_TOKEN`, `GV_TOKEN`, `NPM_REGISTRY`, `GITVERSE_NPM_REGISTRY`, `GITVERSE_DOCKER_REGISTRY`.
+Environment variables: `NPM_TOKEN`, `GV_TOKEN`, `GITEA_TOKEN`, `NPM_REGISTRY`, `GITVERSE_NPM_REGISTRY`, `DOCKER_REGISTRY` (default `git.itphx.ru`; the former name `GITVERSE_DOCKER_REGISTRY` is still accepted for compatibility).
 
 Note: the GitVerse npm registry does not support `/-/whoami` (404) — authorization is verified by an actual publish.
 
@@ -322,7 +329,7 @@ Note: the GitVerse npm registry does not support `/-/whoami` (404) — authoriza
 ```
 
 Local backfill of the GitHub mirror: synchronizes refs and creates/updates the GitHub Release.
-It does **not** build Docker images (they are built by GitVerse CI → `gitverse.ru` + `ghcr.io`) and does not
+It does **not** build Docker images (GitVerse CI builds them and publishes to `git.itphx.ru/itphx`) and does not
 publish npm. Details — [Release to the GitHub mirror](#release-to-the-github-mirror).
 
 ### `changelog.sh` — release body
@@ -446,9 +453,9 @@ Manual alternative (no tag):
 Re-running on the same tag is idempotent: npm versions already in the registry are skipped, the Helm chart is
 overwritten with identical content, and CI artifacts and offline builds are best-effort.
 
-Release workflow: version bump (version.ts + package.json + `charts/synth/Chart.yaml`) → release notes check (`release-notes`) → CI checks → build → CHANGELOG → npmjs publish → GitVerse npm publish → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → Helm chart publish (`publish-helm`) → create the GitVerse Release → GitHub mirror (`publish-github`: push `main`+tags, GitHub Release).
+Release workflow: version bump (version.ts + package.json + `charts/synth/Chart.yaml`) → release notes check (`release-notes`) → CI checks → build → CHANGELOG → npm publish (npmjs + GitVerse + GitHub Packages) → Docker (`build-docker` → `git.itphx.ru/itphx/{synth,synth-backend,synth-ui}`, plus `publish-images-gitea` → flavor and executor images) → Helm chart publish to Gitea (`publish-helm`) → create the GitVerse Release → GitHub mirror (`publish-github`: push `main`+tags, GitHub Release).
 
-npm packages are published **only** from GitVerse (`publish-npmjs`/`publish-gitverse-npm`) — the GitHub side does not publish npm.
+npm packages are published from GitVerse CI by three jobs — `publish-npmjs`, `publish-gitverse-npm`, `publish-github-npm` (GitHub Packages); beta packages go only to the Gitea npm registry (`beta.yaml`).
 
 ### Documentation check
 
@@ -476,11 +483,10 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 | Secret | Purpose |
 |--------|------------|
 | `NPM_TOKEN` | Publishing to npmjs.org |
-| `GV_TOKEN` | Single GitVerse token (API, Docker Registry, npm registry, git push from the bot) |
-| `GT_TOKEN` | Gitea token (`git.itphx.ru`) with container-registry rights — publishing flavor images and executor images in `release.yaml` (login `itphx`) |
+| `GV_TOKEN` | GitVerse token: release API, the GitVerse npm registry, git push from the bot (images are no longer published to GitVerse) |
+| `GT_TOKEN` | Gitea token (`git.itphx.ru`, login `itphx`): publishing **images** (`build-docker`, `publish-images-gitea`) and the **Helm chart** (`publish-helm`) in `release.yaml`; rights — container registry + `package:write` |
 | `GV_GITEA_TOKEN` | Gitea token (`git.itphx.ru`) for the Gitea npm registry — publishing beta packages in `beta.yaml` (needs the `package:write` permission) |
-| `GH_TOKEN` | GitHub mirror: push refs, GitHub Release, publishing the base images to GHCR (classic PAT, scopes `repo` + `write:packages`) |
-| `GHCR_USER` | Optional: the login of the `GH_TOKEN` owner for `ghcr.io` (default `itphx`) |
+| `GH_TOKEN` | GitHub mirror: push refs, GitHub Release and npm publishing to GitHub Packages (classic PAT, scopes `repo` + `write:packages`) |
 | `GV_SYNTH_URL` | Base API v2 URL of the Synth instance that receives the release event (e.g. `https://synth.k3s.itphx.loc/api/v2`) |
 | `GV_SYNTH_MEDIA_KEY` | Synth service-key with the `events:ingest` scope — receives the release event (see “Release event for synth-media”) |
 
@@ -585,25 +591,27 @@ GitHub is a **mirror and releases**, not a build contour. GitHub Actions are **n
 
 ### Image policy
 
-All three **base images** are published to both registries — `gitverse.ru` (primary) and the GitHub Container Registry (`ghcr.io`):
+Every Synth image lives in **one** registry — the public Gitea `git.itphx.ru/itphx`:
 
-| Image | `gitverse.ru` | GHCR (`ghcr.io/itphx/…`) | Docker Hub |
-|---|---|---|---|
-| `synth` | ✅ | ✅ (mirror) | — |
-| `synth-backend` | ✅ | ✅ (mirror) | — |
-| `synth-ui` | ✅ | ✅ (mirror) | — |
+| Image | Repository | Tags |
+|---|---|---|
+| `synth` | `git.itphx.ru/itphx/synth` | `<version>` (multi-arch amd64+arm64) |
+| `synth-backend` | `git.itphx.ru/itphx/synth-backend` | `<version>` (slim), `<version>-<flavor>` |
+| `synth-ui` | `git.itphx.ru/itphx/synth-ui` | `<version>` |
+| `synth-executor` | `git.itphx.ru/itphx/synth-executor` | `<version>-<flavor>` |
+| `synth-provisioner` | `git.itphx.ru/itphx/synth-provisioner` | `<version>` |
 
-The artifact size limit (~500 MB) applies to the **base** images in GitVerse/GHCR. Flavor images (`synth-backend:<version>-<flavor>`, `synth-executor:<version>-<flavor>`) are not published to GitVerse/GHCR — only to the private Gitea `git.itphx.ru/itphx/*` (see the "Executor images and flavors" section), which has no limit; the slim control plane `synth-backend:<version>` is additionally published to Gitea. Only the versioned tag is published (no `latest`) — the same policy as on the GitVerse side.
+ghcr.io and gitverse.ru are **not** used as image registries; neither is Docker Hub. Only the versioned tag is published (no `latest`), pulls are anonymous — `imagePullSecret` is optional. Flavor and executor images — see "Executor images and flavors" (multi-arch and the best-effort manifest list are described there).
 
 ### What GitVerse CI does
 
 The `publish-github` job in `.gitverse/workflows/release.yaml` runs after the npm and Docker build/publish (`build-docker`) and after the `changelog` job:
 
 1. **Mirror:** push `master→main` and all tags to `https://github.com/itphx/synth.git` (only `main` + tags, no other branches);
-2. **GitHub Release** for the tag `v<version>` — the body is **in English**: `bash scripts/changelog.sh --lang en` reads `docs/releases/<version>.en.md` (the file is mandatory: the `release-notes` gate will not let a release through without it; the fallback to the Russian description/commit auto-generation is emergency-only, for a manual `release-github.sh`), plus an English "Installation" block (npm from npmjs.org/GitVerse, the image from `ghcr.io/itphx/synth:<version>`); creation is idempotent (if a release for the tag exists, the body is updated);
+2. **GitHub Release** for the tag `v<version>` — the body is **in English**: `bash scripts/changelog.sh --lang en` reads `docs/releases/<version>.en.md` (the file is mandatory: the `release-notes` gate will not let a release through without it; the fallback to the Russian description/commit auto-generation is emergency-only, for a manual `release-github.sh`), plus an English "Installation" block (npm from npmjs.org/GitVerse/GitHub Packages, the image from `git.itphx.ru/itphx/synth:<version>`); creation is idempotent (if a release for the tag exists, the body is updated);
 3. **Assets — best-effort:** `cli.js` (an artifact of the `build` job), the Helm chart (`helm package charts/synth`, version from `Chart.yaml`), `SHA256SUMS`. If a file is missing, a warning is printed and the work continues; an asset upload error **does not fail** the job, but is visible in the log. On GitHub the standard `uploads.github.com` is used (unlike the GitVerse API, which returns 500 for assets — there the asset is also best-effort).
 
-All three base images (`synth`, `synth-backend`, `synth-ui`) are built in the `build-docker` job (kaniko) into **two** registries at once: `gitverse.ru/itphx/<image>:<version>` and `ghcr.io/itphx/<image>:<version>`. Authorization in GHCR comes from the `GH_TOKEN` secret (reused by all three kaniko steps).
+All three base images (`synth`, `synth-backend` slim, `synth-ui`) are built in the `build-docker` job (docker on the self-hosted runner) and published **only** to Gitea: `git.itphx.ru/itphx/<image>:<version>`. Authorization comes from the `GT_TOKEN` secret; GitHub does not take part in image publishing.
 
 ### Local backfill
 
@@ -620,16 +628,17 @@ The script does **not** build or publish Docker images (GitVerse CI does that) a
 
 ### Why without GitHub Actions
 
-A deliberate decision: the single build contour is GitVerse CI (kaniko). Duplicating the build on GitHub would break reproducibility (two sources of truth for images/releases) and would hit artifact limits. The GitHub side is deliberately thin: a code mirror + releases + publishing the base images to GHCR.
+A deliberate decision: the single build contour is GitVerse CI (docker on the self-hosted runner) and images go to the Gitea registry. Duplicating the build on GitHub would break reproducibility (two sources of truth for images/releases) and would hit artifact limits. The GitHub side is deliberately thin: a code mirror + releases + the npm package in GitHub Packages.
 
 ### Secrets of the GitHub side
 
-- **`GH_TOKEN`** — a classic PAT with the `repo` + `write:packages` scopes (mirror push, GitHub Release, GHCR). `write:packages` is a classic scope, so **a fine-grained PAT is officially not supported for the GHCR CLI** — you need a classic one. It is better to create the PAT on a **separate machine account**, not a personal one.
-- **`GHCR_USER`** (optional) — the login of the PAT owner for `docker login ghcr.io`; default `itphx`.
+- **`GH_TOKEN`** — a classic PAT with the `repo` + `write:packages` scopes: mirror push (`main` + tags), GitHub Release and the npm package published to GitHub Packages (`write:packages` is required). Images are no longer published to GHCR, so no container-registry rights are needed. It is better to create the PAT on a **separate machine account**, not a personal one.
 
 ## Important: the `repository` field in package.json
 
 For publishing to the GitVerse Package Registry the `repository` field in `package.json` **must be absent**: when linking a package to a repository by `repository.url`, GitVerse checks permissions and returns 403 "no permission". In all 8 packages the `repository` field has been removed — do not add it back.
+
+The same absence suits **GitHub Packages**: if `repository.url` points to another host, publishing to `https://npm.pkg.github.com` is rejected (404) — so do not add the field.
 
 ## Local check before pushing
 

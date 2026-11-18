@@ -7,6 +7,9 @@
 #
 #   synth-backend:<v>-<flavor>     all-in-one: control plane + toolchain
 #   synth-backend:<v>              slim: control plane без toolchain'а
+#                                  (в релизном CI публикуется джобой `build-docker`,
+#                                  поэтому `publish-images-gitea` зовёт скрипт
+#                                  с `--no-slim` — два job'а не пушат один тег)
 #   synth-executor:<v>-<flavor>    образы исполнителей (worker'ы)
 #   synth-provisioner:<v>          provisioner пулов исполнения (PROP-135 Ф4b-2b,
 #                                  один образ без flavor'ов; публикуется только
@@ -16,14 +19,14 @@
 #
 # Теги версионные и **неизменяемые по смыслу**: pull в K3s идёт по конкретной
 # версии (`<v>-<flavor>`), поэтому `latest` не публикуется — иначе развёртывание
-# перестаёт быть воспроизводимым. Ограничение GitVerse/GHCR (~500 МБ на
-# репозиторий) в Gitea-реестре не действует, но политика тегов — общая.
+# перестаёт быть воспроизводимым. Ограничений на размер репозитория в реестре
+# Gitea нет; реестр ПУБЛИЧНЫЙ (анонимный pull), креды нужны только для push.
 #
 # Реестр и креды:
 #
 #   * реестр  — `git.itphx.ru` (по умолчанию), namespace `itphx`;
 #   * токен   — env `GV_GITEA_TOKEN` или `GITEA_TOKEN`; в CI значение берётся
-#               из секрета `GT_TOKEN` (секрет GitVerse CI для flavor-образов);
+#               из секрета `GT_TOKEN` (секрет CI GitVerse для образов);
 #               локально и в `synth-deploy` — переменная `GITEA_TOKEN`;
 #               логин — `itphx` (или `GITEA_USER`);
 #   * если токен не задан, а пуш требуется — **fail-closed** с понятным

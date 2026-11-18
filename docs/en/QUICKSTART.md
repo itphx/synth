@@ -25,11 +25,11 @@ npm i -g @itphx/synth
 ### Option 2: Docker
 
 ```bash
-docker pull gitverse.ru/itphx/synth:<version>
-docker run -p 4300:4300 -e SYNTH_API_KEY=my-secret-key gitverse.ru/itphx/synth:<version>
+docker pull git.itphx.ru/itphx/synth:<version>
+docker run -p 4300:4300 -e SYNTH_API_KEY=my-secret-key git.itphx.ru/itphx/synth:<version>
 ```
 
-Always specify a version: the `latest` tag is not published (registry images are versioned only).
+Images are published to the **public** Gitea registry `git.itphx.ru/itphx` — no `docker login` is needed (authorization is required only for push). Always specify a version: the `latest` tag is not published (registry images are versioned only). The `synth` image has been in Gitea since the release that introduced this policy; for older versions use the offline archives from the release assets.
 
 Or docker-compose from the repository root (`docker-compose.yml`):
 

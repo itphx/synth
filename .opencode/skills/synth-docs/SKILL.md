@@ -66,7 +66,7 @@ uv venv .venv && uv pip install -r requirements.txt && .venv/bin/mkdocs serve
 # Строгая сборка статики (warnings = errors)
 .venv/bin/mkdocs build --strict
 
-# Образ и пуш (приватный реестр)
+# Образ и пуш (реестр публичный — авторизация нужна только для push)
 docker build -t git.itphx.ru/itphx/synth-docs:latest .
 docker push git.itphx.ru/itphx/synth-docs:latest
 ```
@@ -77,7 +77,7 @@ docker push git.itphx.ru/itphx/synth-docs:latest
 ### Предусловия и грабли
 
 - Fleet **не читает `.helmignore`** — нужен корневой `.fleetignore` (иначе весь корень уходит в Helm-чарт и release-secret превышает лимит 1 MB).
-- В namespace `synth-docs` нужен pull-secret `git.itphx.ru` (docker-registry); создаётся вручную копированием из namespace `synth`.
+- Pull-secret `git.itphx.ru` в namespace `synth-docs` **не обязателен**: реестр `git.itphx.ru` публичный (анонимный pull); если секрет уже есть — он остаётся для явной авторизации.
 
 ## Верификация (чек-лист)
 

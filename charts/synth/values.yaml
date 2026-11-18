@@ -21,13 +21,15 @@ backend:
   restartMode: process
 
   image:
-    repository: gitverse.ru/itphx/synth-backend
+    repository: git.itphx.ru/itphx/synth-backend
     # Пустой tag → подставляется .Chart.AppVersion (см. templates/backend-deployment.yaml).
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Секреты для приватного реестра (kubernetes.io/dockerconfigjson).
-  # По умолчанию пусто — публичные образы не требуют авторизации.
+  # Секреты для pull из реестра, требующего авторизации
+  # (kubernetes.io/dockerconfigjson). Для реестра по умолчанию не нужны:
+  # `git.itphx.ru/itphx` публичный — анонимный pull разрешён, `imagePullSecrets`
+  # можно не задавать (авторизация нужна только на push).
   imagePullSecrets: []
 
   service:
@@ -370,7 +372,8 @@ execution:
 # Включается `executor.enabled: true` (вместе с `execution.mode: remote`).
 # Требования к окружению:
 #   - образ `synth-executor` (публикация образов — шаг 6 плана ADR-077);
-#     для приватного реестра — `executor.imagePullSecrets`;
+#     реестр `git.itphx.ru/itphx` публичный, `executor.imagePullSecrets` нужны
+#     только для pull из зеркала с авторизацией;
 #   - RWX-том (NFS/CephFS/…) под общий workspace: том должен быть виден и
 #     control plane, и всем репликам исполнителя. Если в кластере нет RWX-класса
 #     — задайте свой claim (`executor.workspace.existingClaim`);
@@ -389,7 +392,8 @@ executor:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Секреты для приватного реестра (kubernetes.io/dockerconfigjson).
+  # Секреты для pull из реестра, требующего авторизации
+  # (kubernetes.io/dockerconfigjson). Реестр по умолчанию публичный — не нужны.
   imagePullSecrets: []
 
   service:
@@ -775,7 +779,8 @@ provisioner:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Секреты для приватного реестра (kubernetes.io/dockerconfigjson).
+  # Секреты для pull из реестра, требующего авторизации
+  # (kubernetes.io/dockerconfigjson). Реестр по умолчанию публичный — не нужны.
   imagePullSecrets: []
 
   # ServiceAccount provisioner'а. Отличается от `kubernetes.serviceAccount`
@@ -1134,11 +1139,13 @@ ui:
   replicaCount: 1
 
   image:
-    repository: gitverse.ru/itphx/synth-ui
+    repository: git.itphx.ru/itphx/synth-ui
     # Пустой tag → подставляется .Chart.AppVersion (см. templates/ui-deployment.yaml).
     tag: ""
     pullPolicy: IfNotPresent
 
+  # Секреты для pull из реестра, требующего авторизации. Для реестра по
+  # умолчанию не нужны (`git.itphx.ru/itphx` публичный, анонимный pull разрешён).
   imagePullSecrets: []
 
   # Доп. env для контейнера UI (словарь имя → значение).

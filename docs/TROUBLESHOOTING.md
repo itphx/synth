@@ -13,9 +13,11 @@
 
 **Симптом:** публикация `@itphx/synth` в `https://gitverse.ru/api/packages/itphx/npm/` завершается ошибкой 403 «no permission», при этом остальные шесть пакетов публикуются нормально.
 
-**Причина:** поле `repository` в `packages/synth/package.json` (`{"type": "git", "url": "https://gitverse.ru/itphx/synth"}`). GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403.
+**Причина (исторический случай, ранние 0.x — до переименования пакетов в 0.2.0):** в `packages/synth/package.json` тогда было поле `repository` (`{"type": "git", "url": "https://gitverse.ru/itphx/synth"}`). GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 — поэтому `@itphx/synth` не публиковался, хотя остальные пакеты проходили.
 
-**Решение:** удалить поле `repository` из `package.json` (как у остальных пакетов). Проверка: публикация с `repository` → 403, без `repository` → 200.
+**Решение (тогда):** удалить поле `repository` из `package.json` — у остальных пакетов его уже не было. Проверка: публикация с `repository` → 403, без `repository` → 200.
+
+**Сейчас:** поле отсутствует **во всех 8 пакетах** — не добавляйте его обратно (см. [PUBLISHING.md](./PUBLISHING.md) §«Важно: поле `repository` в package.json»). Тот же симптом (403/404 при публикации) вернётся, если поле появится снова.
 
 ## 2. npm unpublish: 403 «Granular access tokens that bypass two-factor authentication may not perform this action»
 
@@ -29,13 +31,13 @@
 npm deprecate @itphx/synth@<version> "Используйте более новую версию"
 ```
 
-## 3. Docker registry `registry.gitverse.ru` не резолвится
+## 3. Docker-образ не тянется из реестра
 
-**Симптом:** `docker pull registry.gitverse.ru/...` / `docker push registry.gitverse.ru/...` падает с ошибкой резолвинга.
+**Симптом:** `docker pull git.itphx.ru/itphx/synth:<version>` падает: `MANIFEST_UNKNOWN`/404, ошибка резолвинга или 401.
 
-**Причина:** правильный адрес реестра — **`gitverse.ru`** (без префикса `registry.`). Устаревший дефолт `registry.gitverse.ru` исправлен в `publish.sh`/`build.sh` (`GITVERSE_DOCKER_REGISTRY`).
+**Причина:** образы публикуются только в реестр Gitea `git.itphx.ru/itphx`, версионными тегами (`latest` нет). Тег без версии, несуществующая версия или устаревший адрес (`gitverse.ru`, `registry.gitverse.ru` — эти реестры для образов больше не используются) дают 404. 401 — если в `DOCKER_CONFIG` лежат чужие/просроченные креды.
 
-**Решение:** использовать `gitverse.ru/itphx/synth:<version>`.
+**Решение:** использовать `git.itphx.ru/itphx/synth:<version>`. Реестр **публичный**: pull анонимный, `docker login` не нужен (креды — только для push).
 
 ## 4. `dev.sh` не выживает в фоне/CI (убивает потомков)
 

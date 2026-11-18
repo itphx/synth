@@ -1864,7 +1864,7 @@ tool-call (`execute_shell`/`sandbox_exec`, та же, где пишется ау
 | `execution.remote.failMode` | `fail` \| `inline-fallback` → env `SYNTH_EXECUTION_FAIL_MODE` |
 | `executor.enabled` | Включить split-топологию (рендерит Deployment/Service/ServiceAccount worker'а) |
 | `executor.image.repository` / `.tag` / `.pullPolicy` | Образ worker'а (`synth-executor`) |
-| `executor.imagePullSecrets` | Секреты приватного реестра (для `git.itphx.ru`) |
+| `executor.imagePullSecrets` | Секреты для pull из реестра с авторизацией; для реестра по умолчанию (`git.itphx.ru/itphx`) не нужны — он публичный, анонимный pull разрешён |
 | `executor.replicaCount` | Размер пула |
 | `executor.service.port` / `.targetPort` | Service пула (`5100`) — его адрес и есть `SYNTH_EXECUTION_REMOTE_URL` |
 | `executor.resources` | limits/requests worker'а (дефолт: requests `1` CPU/`2Gi`, limits `4` CPU/`8Gi` — рабочее место агента: сборка монорепо идёт минутами) |
