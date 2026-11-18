@@ -6,10 +6,12 @@
 // родительский стрим они не публикуются (ADR-111: «публикация в родительский
 // стрим отключается»).
 //
-// Источник шагов — **история дочерней сессии**: её финальное assistant-сообщение
-// несёт `metadata.tool_results` (вызовы ребёнка по итерациям) и
-// `metadata.intermediate_text_blocks`. Ядро не меняется — UI читает то, что
-// уже есть в DTO (`GET /api/v2/sessions/:id/messages`).
+// Источник шагов — **история дочерней сессии**, собранная по всем сообщениям:
+// каждый assistant-шаг несёт вызовы **своей** итерации в `metadata.tool_results`
+// (DTO — `tool_calls`), свой `reasoning` и свой текст в `content`; сообщение
+// отчёта (`metadata.status`) — только финальный текст (агрегата в нём больше
+// нет). Старые записи (до этого контракта) держали агрегат в финальном
+// сообщении — для них сохранён фоллбэк «как раньше».
 //
 // Инварианты:
 //   - шаги не дублируются в историю родителя (ADR-118: один источник
@@ -96,12 +98,15 @@ const REASONING_SEPARATOR = '\n\n---\n\n'
  * Вызов инструмента → форма карточки.
  *
  * Поддерживаются две формы:
- *   - нормализованная (`metadata.tool_results` финального сообщения ребёнка):
+ *   - нормализованная (`metadata.tool_results` шага/отчёта ребёнка):
  *     `{name, args, iteration, result}` — с результатом вызова;
  *   - сырая провайдера (`{type:'function', function:{name, arguments}}`) —
  *     промежуточные шаги ребёнка в истории.
+ *
+ * `fallbackIteration` — номер шага сообщения (`step_index`): у вызовов нового
+ * вида `iteration` есть всегда, у старых записей — не обязательно.
  */
-function normalizeToolCalls(raw: unknown): SubagentRunToolCall[] {
+function normalizeToolCalls(raw: unknown, fallbackIteration?: number): SubagentRunToolCall[] {
   if (!Array.isArray(raw)) return []
   const out: SubagentRunToolCall[] = []
   for (const item of raw) {
@@ -137,22 +142,30 @@ function normalizeToolCalls(raw: unknown): SubagentRunToolCall[] {
         : {}),
       ...(typeof rec.started_at === 'string' ? { started_at: rec.started_at } : {}),
       ...(typeof rec.completed_at === 'string' ? { completed_at: rec.completed_at } : {}),
-      iteration: typeof rec.iteration === 'number' && Number.isFinite(rec.iteration) ? rec.iteration : 0,
+      iteration: typeof rec.iteration === 'number' && Number.isFinite(rec.iteration)
+        ? rec.iteration
+        : (fallbackIteration ?? 0),
     })
   }
   return out
 }
 
 /**
- * Размышления ребёнка: текст финального сообщения → блоки.
+ * Размышления ребёнка: текст сообщения → блоки.
  *
- * Разделитель и нумерация — как у сообщений в ленте (`getReasoningBlocks` в
- * `ChatMessage.tsx`): отдельная итерация блока размышлений в DTO не
- * сохраняется, поэтому номер — порядковый.
+ * Разделитель — как у сообщений в ленте (`getReasoningBlocks` в
+ * `ChatMessage.tsx`); номер блока — `step_index` сообщения (итерация), иначе
+ * порядковый номер.
  */
-function splitReasoning(reasoning: string | null | undefined): SubagentRunReasoningBlock[] {
+function splitReasoning(
+  reasoning: string | null | undefined,
+  iterationFor: (ordinal: number) => number = (i) => i,
+): SubagentRunReasoningBlock[] {
   if (!reasoning) return []
-  return reasoning.split(REASONING_SEPARATOR).map((text, i) => ({ text, iteration: i }))
+  return reasoning.split(REASONING_SEPARATOR).map((text, i) => ({
+    text,
+    iteration: iterationFor(i),
+  }))
 }
 
 /** Промежуточные тексты ребёнка из `metadata.intermediate_text_blocks`. */
@@ -172,11 +185,11 @@ function normalizeTextBlocks(raw: unknown): SubagentRunTextBlock[] {
 }
 
 /**
- * Финальное assistant-сообщение ребёнка.
+ * Отчёт прогона (финальное assistant-сообщение ребёнка).
  *
- * Отчёт прогона несёт `metadata.status` (его ставит жизненный цикл дочерней
- * сессии); промежуточные шаги — нет. Если отчёта ещё нет (прогон идёт),
- * берётся последнее assistant-сообщение (частичные шаги).
+ * Отчёт несёт `metadata.status` (его ставит жизненный цикл дочерней сессии);
+ * шаги — нет. Если отчёта ещё нет (прогон идёт), берётся последнее
+ * assistant-сообщение — но **отчётом** оно не считается (это шаг).
  */
 function pickFinalAssistantMessage(messages: MessageData[]): MessageData | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -190,23 +203,133 @@ function pickFinalAssistantMessage(messages: MessageData[]): MessageData | undef
   return undefined
 }
 
-/** Шаги ребёнка из DTO его истории. */
+/** Номер шага сообщения: `step_index`, иначе порядковый номер. */
+function stepIteration(message: MessageData, ordinal: number): number {
+  const index = message.step_index
+  return typeof index === 'number' && Number.isFinite(index) ? index : ordinal
+}
+
+/** Вызовы **своего** шага (новый вид записи) — только `metadata.tool_results`. */
+function stepToolCalls(message: MessageData, ordinal: number): SubagentRunToolCall[] {
+  const raw = message.metadata?.tool_results
+  if (!Array.isArray(raw) || raw.length === 0) return []
+  return normalizeToolCalls(raw, stepIteration(message, ordinal))
+}
+
+/** Дедупликация вызовов по `id` (страховка от старых дублей/агрегата в финале). */
+function dedupeToolCalls(calls: SubagentRunToolCall[]): SubagentRunToolCall[] {
+  const seen = new Set<string>()
+  const out: SubagentRunToolCall[] = []
+  for (const call of calls) {
+    if (call.id) {
+      if (seen.has(call.id)) continue
+      seen.add(call.id)
+    }
+    out.push(call)
+  }
+  return out
+}
+
+/** `metadata.steps`/`metadata.result.steps` отчёта — фоллбэк бейджа. */
+function metadataSteps(message: MessageData | undefined): number | undefined {
+  const meta = message?.metadata
+  if (!meta) return undefined
+  const direct = meta.steps
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct
+  const nested = meta.result
+  if (nested && typeof nested === 'object') {
+    const value = (nested as Record<string, unknown>).steps
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return undefined
+}
+
+/**
+ * Шаги ребёнка из DTO его истории.
+ *
+ * Новый вид записи: шаги несут собственные `metadata.tool_results`/`reasoning`/
+ * `content`, отчёт — только финальный текст. Старый (legacy): агрегат лежит в
+ * финальном сообщении (`tool_calls`, `reasoning`, `intermediate_text_blocks`) —
+ * для каждого списка сохранён фоллбэк «как раньше», смешивание без дублей.
+ */
 export function buildSubagentRunData(messages: MessageData[]): SubagentRunData {
   const final = pickFinalAssistantMessage(messages)
-  // DTO отдаёт вызовы ребёнка полем `tool_calls` (ядро берёт их из
-  // `metadata.tool_results` финального сообщения) — форма совпадает с
-  // `SubagentPartData['tool_calls']`.
-  const toolCalls = normalizeToolCalls(final?.tool_calls)
-  // Промежуточные тексты ядро пишет в `metadata.intermediate_text_blocks`
-  // (отдельного поля DTO нет) — так же их читает лента (`ChatMessage.tsx`).
-  const intermediateTextBlocks = normalizeTextBlocks(final?.metadata?.intermediate_text_blocks)
-  // Размышления приходят склеенной строкой (`\n\n---\n\n` между блоками) —
-  // отдельного `reasoning_blocks` в DTO нет.
-  const reasoningBlocks = splitReasoning(final?.reasoning)
+  // Отчёт — только сообщение со `metadata.status`; если прогон ещё идёт,
+  // «финальное» сообщение — обычный шаг (его вызовы тоже нужны).
+  const report = typeof final?.metadata?.status === 'string' ? final : undefined
+
+  // 1. Вызовы: из шагов в порядке истории, затем агрегат отчёта (legacy/микс).
+  const stepCalls: SubagentRunToolCall[] = []
+  let stepOrdinal = 0
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    if (report && message === report) continue
+    const calls = stepToolCalls(message, stepOrdinal)
+    if (calls.length > 0) stepCalls.push(...calls)
+    stepOrdinal += 1
+  }
+  // DTO отдаёт вызовы отчёта полем `tool_calls` (ядро берёт их из
+  // `metadata.tool_results`) — форма совпадает с `SubagentPartData['tool_calls']`.
+  const toolCalls = dedupeToolCalls([...stepCalls, ...normalizeToolCalls(report?.tool_calls)])
+
+  // 2. Размышления: из шагов (итерация — `step_index`); у legacy-записей —
+  // склейка в отчёте с порядковой нумерацией, как раньше.
+  const reasoningBlocks: SubagentRunReasoningBlock[] = []
+  const seenReasoning = new Set<string>()
+  const pushReasoning = (blocks: SubagentRunReasoningBlock[]) => {
+    for (const block of blocks) {
+      const key = `${block.iteration}\u0000${block.text}`
+      if (seenReasoning.has(key)) continue
+      seenReasoning.add(key)
+      reasoningBlocks.push(block)
+    }
+  }
+  let reasoningOrdinal = 0
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !message.reasoning) continue
+    if (report && message === report) continue
+    const iteration = stepIteration(message, reasoningOrdinal)
+    reasoningOrdinal += 1
+    pushReasoning(splitReasoning(message.reasoning, () => iteration))
+  }
+  if (reasoningBlocks.length === 0) {
+    // Legacy: весь reasoning прогона склеен в отчёте.
+    pushReasoning(splitReasoning(report?.reasoning))
+  } else if (report?.reasoning) {
+    // Новый вид: отчёт несёт reasoning последней итерации (без дублей).
+    const iteration = stepIteration(report, reasoningOrdinal)
+    pushReasoning(splitReasoning(report.reasoning, () => iteration))
+  }
+
+  // 3. Промежуточные тексты: все шаги, кроме отчёта; legacy-агрегат из
+  // `metadata.intermediate_text_blocks` дополняет список без дублей.
+  const intermediateTextBlocks: SubagentRunTextBlock[] = []
+  const seenTexts = new Set<string>()
+  const pushText = (block: SubagentRunTextBlock) => {
+    if (seenTexts.has(block.text)) return
+    seenTexts.add(block.text)
+    intermediateTextBlocks.push(block)
+  }
+  let textOrdinal = 0
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    if (report && message === report) continue
+    const iteration = stepIteration(message, textOrdinal)
+    textOrdinal += 1
+    if (typeof message.content === 'string' && message.content.trim() !== '') {
+      pushText({ text: message.content, iteration })
+    }
+  }
+  for (const block of normalizeTextBlocks(report?.metadata?.intermediate_text_blocks)) {
+    pushText(block)
+  }
+
+  // 4. Число шагов — `max(iteration)+1` по вызовам, иначе из метаданных отчёта.
   const steps =
     toolCalls.length > 0
       ? Math.max(...toolCalls.map((call) => call.iteration || 0)) + 1
-      : undefined
+      : metadataSteps(report)
+
   return {
     toolCalls,
     reasoningBlocks,

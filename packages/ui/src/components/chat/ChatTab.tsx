@@ -91,6 +91,56 @@ function restoreAttachmentsFromMessage(
   if (items.length > 0) useAttachmentsStore.getState().restore(sessionId, items)
 }
 
+/**
+ * Предел автодогрузки истории дочерней сессии (страниц по 200 сообщений).
+ *
+ * Прогон `leader` — до 200 шагов, плюс `role:'tool'` результаты; страховка от
+ * бесконечного цикла, если сервер всегда отдаёт `has_more: true`.
+ */
+const CHILD_HISTORY_MAX_PAGES = 20
+
+/**
+ * Автодогрузка всей истории **дочерней** сессии (ADR-111, ADR-118 §1).
+ *
+ * У прогона саб-агента шаги живут отдельными сообщениями (каждый шаг несёт свои
+ * `metadata.tool_results`, плюс `role:'tool'` результаты), поэтому длинный
+ * прогон легко перерастает одну страницу истории. Без догрузки при открытии
+ * вкладки видны только последние действия, а начало ленты остаётся за кнопкой
+ * «Загрузить старые».
+ *
+ * Курсор и добавление старых страниц — существующий механизм `handleLoadOlder`
+ * (`before: next_before`, `chat.prependMessages`, `expanded: true`). Ошибки —
+ * тихие: первая страница уже показана, тост-спам при открытии недопустим.
+ */
+async function loadOlderHistoryPages(
+  sessionId: string,
+  isCancelled: () => boolean,
+): Promise<void> {
+  for (let page = 0; page < CHILD_HISTORY_MAX_PAGES; page += 1) {
+    const cursor = useChatStore.getState().historyPageBySession[sessionId]
+    if (!cursor?.hasMore || cursor.nextBefore == null) return
+    let result
+    try {
+      result = await synthApi.getSessionMessages(sessionId, {
+        limit: MESSAGES_PAGE_LIMIT,
+        before: cursor.nextBefore,
+      })
+    } catch {
+      // Тихая остановка: лента уже содержит первую страницу.
+      return
+    }
+    if (isCancelled()) return
+    const chat = useChatStore.getState()
+    chat.prependMessages(sessionId, result.messages ?? [])
+    chat.setHistoryPage(sessionId, {
+      hasMore: result.has_more === true,
+      nextBefore: typeof result.next_before === 'number' ? result.next_before : null,
+      // Догруженный диапазон не «омолаживается» снимком последней страницы.
+      expanded: true,
+    })
+  }
+}
+
 export function ChatTab({ tab }: ChatTabProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
@@ -275,6 +325,15 @@ export function ChatTab({ tab }: ChatTabProps) {
             useChatStore.getState().setQueueStalled(sessionId, pendingMsgs.length)
           } else {
             resetQueueStalled(sessionId)
+          }
+          // Дочерняя сессия: длинный прогон не влезает в одну страницу
+          // (шаги ребёнка + `role:'tool'` результаты) — догружаем историю
+          // целиком, иначе при открытии вкладки видны только последние
+          // действия, а начало ленты прячется за «Загрузить старые».
+          const isChildSession = sessData.session_origin === 'subagent'
+            || (typeof sessData.parent_id === 'string' && sessData.parent_id !== '')
+          if (isChildSession) {
+            await loadOlderHistoryPages(sessionId, () => cancelled)
           }
         }
       } catch {

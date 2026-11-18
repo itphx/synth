@@ -181,3 +181,188 @@ describe('subagentRunsStore', () => {
     expect(entry.data?.steps).toBeUndefined()
   })
 })
+
+/**
+ * Новый вид записи (ADR-118 §1): каждый шаг ребёнка несёт вызовы **своей**
+ * итерации (`metadata.tool_results`), свой `reasoning` и свой текст; отчёт
+ * (`metadata.status`) — только финальный текст, без агрегата.
+ */
+function childStep(partial: Partial<MessageData> & { id: string; step: number }): MessageData {
+  const { step, ...rest } = partial
+  return makeMessage({
+    turn_id: 'child-1',
+    step_index: step,
+    status: 'completed',
+    metadata: { tool_chain: true, step_duration_ms: 5 },
+    ...rest,
+  })
+}
+
+describe('subagentRunsStore — новый вид записи (шаги с tool_results)', () => {
+  function newChildHistory(): MessageData[] {
+    return [
+      childStep({
+        id: 's0',
+        step: 0,
+        content: 'СЕЙЧАС ПОСМОТРЮ',
+        reasoning: 'ДУМАЮ-0',
+        metadata: {
+          step_duration_ms: 5,
+          tool_results: [
+            {
+              name: 'execute_shell',
+              args: { command: 'ls' },
+              id: 'call-1',
+              result: { content: 'ok', isError: false },
+              iteration: 0,
+            },
+          ],
+        },
+      }),
+      childStep({
+        id: 's1',
+        step: 1,
+        content: 'ПРОВЕРЮ ФАЙЛ',
+        reasoning: 'ДУМАЮ-1',
+        metadata: {
+          step_duration_ms: 7,
+          tool_results: [
+            {
+              name: 'read_file',
+              args: { path: 'a.ts' },
+              id: 'call-2',
+              result: { content: 'код', isError: false },
+              iteration: 1,
+            },
+          ],
+        },
+      }),
+      makeMessage({
+        id: 'report',
+        step_index: 2,
+        turn_id: 'child-1',
+        status: 'completed',
+        content: 'ИТОГ',
+        reasoning: 'ДУМАЮ-2',
+        metadata: { status: 'completed', steps: 3 },
+      }),
+    ]
+  }
+
+  it('вызовы, размышления и промежуточные тексты собираются по шагам', async () => {
+    mocks.getSessionMessages.mockResolvedValue({
+      messages: newChildHistory(),
+      session_id: 'child-1',
+    })
+
+    await useSubagentRunsStore.getState().ensure('child-1')
+    const data = useSubagentRunsStore.getState().byChild['child-1']!.data!
+
+    // Вызовы — из сообщений шагов, в порядке истории, с их итерациями.
+    expect(data.toolCalls.map((c) => [c.name, c.id, c.iteration])).toEqual([
+      ['execute_shell', 'call-1', 0],
+      ['read_file', 'call-2', 1],
+    ])
+    expect(data.steps).toBe(2) // max(iteration)+1 по собранным вызовам
+    // Размышления — по итерациям шагов (включая последнюю итерацию отчёта).
+    expect(data.reasoningBlocks).toEqual([
+      { text: 'ДУМАЮ-0', iteration: 0 },
+      { text: 'ДУМАЮ-1', iteration: 1 },
+      { text: 'ДУМАЮ-2', iteration: 2 },
+    ])
+    // Промежуточные тексты — все шаги, кроме отчёта.
+    expect(data.intermediateTextBlocks).toEqual([
+      { text: 'СЕЙЧАС ПОСМОТРЮ', iteration: 0 },
+      { text: 'ПРОВЕРЮ ФАЙЛ', iteration: 1 },
+    ])
+    expect(data.finalContent).toBe('ИТОГ')
+  })
+
+  it('прогон без отчёта (идёт): вызовы берутся из шагов', async () => {
+    const history = newChildHistory()
+    const running = history.slice(0, 2) // последнее assistant-сообщение — шаг
+    mocks.getSessionMessages.mockResolvedValue({ messages: running, session_id: 'child-1' })
+
+    await useSubagentRunsStore.getState().ensure('child-1')
+    const data = useSubagentRunsStore.getState().byChild['child-1']!.data!
+
+    expect(data.toolCalls.map((c) => c.id)).toEqual(['call-1', 'call-2'])
+    expect(data.reasoningBlocks.map((r) => r.text)).toEqual(['ДУМАЮ-0', 'ДУМАЮ-1'])
+    // Отчёта нет — последний шаг тоже промежуточный.
+    expect(data.intermediateTextBlocks.map((t) => t.text)).toEqual(['СЕЙЧАС ПОСМОТРЮ', 'ПРОВЕРЮ ФАЙЛ'])
+    expect(data.finalContent).toBe('ПРОВЕРЮ ФАЙЛ')
+  })
+
+  it('вызовы дедуплицируются по id (агрегат в отчёте не задваивает шаги)', async () => {
+    const history = newChildHistory()
+    const report = history[2]!
+    // Legacy-совместимый микс: отчёт принёс те же вызовы агрегатом.
+    report.tool_calls = [
+      { name: 'execute_shell', args: { command: 'ls' }, id: 'call-1', iteration: 0 },
+      { name: 'read_file', args: { path: 'a.ts' }, id: 'call-2', iteration: 1 },
+    ]
+    mocks.getSessionMessages.mockResolvedValue({ messages: history, session_id: 'child-1' })
+
+    await useSubagentRunsStore.getState().ensure('child-1')
+    const data = useSubagentRunsStore.getState().byChild['child-1']!.data!
+
+    expect(data.toolCalls.map((c) => c.id)).toEqual(['call-1', 'call-2'])
+  })
+})
+
+describe('subagentRunsStore — legacy-запись (агрегат в финальном сообщении)', () => {
+  it('собирает размышления порядком блоков и тексты из metadata', async () => {
+    mocks.getSessionMessages.mockResolvedValue({
+      messages: [childFinalMessage()],
+      session_id: 'child-1',
+    })
+
+    await useSubagentRunsStore.getState().ensure('child-1')
+    const data = useSubagentRunsStore.getState().byChild['child-1']!.data!
+
+    expect(data.toolCalls.map((c) => c.id)).toEqual(['call-1', 'call-2'])
+    expect(data.reasoningBlocks).toEqual([
+      { text: 'РАЗМЫШЛЕНИЕ-1', iteration: 0 },
+      { text: 'РАЗМЫШЛЕНИЕ-2', iteration: 1 },
+    ])
+    expect(data.intermediateTextBlocks).toEqual([{ text: 'ПРОМЕЖУТОЧНЫЙ', iteration: 0 }])
+    expect(data.finalContent).toBe('ИТОГ')
+  })
+
+  it('шаги с текстами + legacy-агрегат: промежуточные тексты без дублей', async () => {
+    const report = childFinalMessage()
+    const history = [
+      childStep({ id: 's0', step: 0, content: 'ПРОМЕЖУТОЧНЫЙ', reasoning: 'Р-0' }),
+      report,
+    ]
+    mocks.getSessionMessages.mockResolvedValue({ messages: history, session_id: 'child-1' })
+
+    await useSubagentRunsStore.getState().ensure('child-1')
+    const data = useSubagentRunsStore.getState().byChild['child-1']!.data!
+
+    expect(data.intermediateTextBlocks).toEqual([{ text: 'ПРОМЕЖУТОЧНЫЙ', iteration: 0 }])
+    // Размышления: шаг 0 + склейка отчёта (legacy) — без дублей.
+    expect(data.reasoningBlocks.map((r) => r.text)).toEqual([
+      'Р-0',
+      'РАЗМЫШЛЕНИЕ-1',
+      'РАЗМЫШЛЕНИЕ-2',
+    ])
+  })
+
+  it('нет вызовов — число шагов берётся из `metadata.steps` отчёта', async () => {
+    mocks.getSessionMessages.mockResolvedValue({
+      messages: [
+        makeMessage({
+          id: 'report',
+          status: 'completed',
+          content: 'ИТОГ',
+          metadata: { status: 'completed', steps: 4 },
+        }),
+      ],
+      session_id: 'child-1',
+    })
+
+    await useSubagentRunsStore.getState().ensure('child-1')
+    expect(useSubagentRunsStore.getState().byChild['child-1']!.data?.steps).toBe(4)
+  })
+})
