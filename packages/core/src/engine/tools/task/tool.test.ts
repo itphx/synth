@@ -1574,6 +1574,62 @@ describe('task/tool.ts — PROP-142: продолжение ребёнка в ф
     expect(record?.status).toBe('completed');
   });
 
+  it('фоновый прогон несёт projectId сессии-владельца (проектная выборка панели)', async () => {
+    const { provider, release } = gatedProvider();
+    const { service } = makeBackgroundService();
+    const startSubagent = vi.spyOn(service, 'startSubagent');
+
+    // Сессия в проекте: без `projectId` в записи реестра сервер не отдаёт её
+    // в выборке проекта (`GET /processes?projectId=…`), и карточка в панели
+    // «Процессы» висела бы до перезагрузки страницы.
+    const projectStore = new ProjectStore({ dataDir: dir });
+    const project = projectStore.create('P1', 'local');
+    await projectStore.save(project);
+    const projectParent = await sessionManager.createSession({
+      title: 'PP',
+      projectId: project.id,
+    });
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: projectParent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+
+    // Контекст вызова как у оркестратора: он кладёт проект сессии в каждый
+    // контекст тула (`orchestrator.ts` — `...(session.projectId ? { projectId } : {})`),
+    // а `makeCtx` этого поля не заполняет (хелпер общий для остальных тестов).
+    const ctx = {
+      ...makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: projectParent.id,
+        backgroundService: service,
+        backgroundEnabled: true,
+      }, projectParent.id),
+      projectId: project.id,
+    };
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'в фоне', task_id: child.id, background: true },
+      ctx,
+    );
+    expect(result.isError).toBeFalsy();
+
+    expect(startSubagent).toHaveBeenCalledTimes(1);
+    expect(startSubagent.mock.calls[0]![0]).toMatchObject({
+      sessionId: projectParent.id,
+      childSessionId: child.id,
+      projectId: project.id,
+    });
+    const record = await service.get(result.metadata!.background_run_id as string);
+    expect(record?.projectId).toBe(project.id);
+    expect(await service.list({ projectId: project.id })).toHaveLength(1);
+
+    release();
+  });
+
   it('фон недоступен (выключен или сервиса нет) + task_id + background=true — task.background_disabled, прогон не запускается', async () => {
     const { provider, chatAsync } = makeProvider();
     const { service } = makeBackgroundService();

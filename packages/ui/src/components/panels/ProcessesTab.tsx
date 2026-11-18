@@ -104,6 +104,21 @@ function runUptimeMs(run: BackgroundRunRecord, now: number): number | undefined 
   return Math.max(0, finished - started)
 }
 
+/**
+ * id сессий проекта — скоуп чистки реестра в проектном режиме панели.
+ *
+ * Читается в момент запроса (список сессий меняется без перемонтирования):
+ * запись прогона, пришедшая live-событием, может не нести `projectId`, но её
+ * сессия-владелец входит в проект — такую запись панель показывает, значит
+ * должна и убирать, когда сервер её больше не отдаёт.
+ */
+function projectSessionIdsOf(projectId: string): string[] {
+  return useSessionsStore
+    .getState()
+    .sessions.filter((session) => (session.project_id ?? null) === projectId)
+    .map((session) => session.id)
+}
+
 export const ProcessesTab: React.FC = () => {
   const { t } = useI18n()
   const { notify } = useNotification()
@@ -161,7 +176,13 @@ export const ProcessesTab: React.FC = () => {
    */
   const loadScope = useCallback(() => {
     if (scope === 'session' && sessionId) return load({ sessionId })
-    if (scope === 'project' && projectId) return load({ projectId })
+    if (scope === 'project' && projectId) {
+      // Кроме фильтра по проекту серверу отправляется набор сессий скоупа
+      // (`scopeSessionIds` — только для клиентской чистки, на провод не уходит):
+      // запись прогона из дочерней сессии может прийти live-событием без
+      // `projectId`, и без набора такая запись никогда не удалялась бы.
+      return load({ projectId, scopeSessionIds: projectSessionIdsOf(projectId) })
+    }
     return load()
   }, [load, projectId, scope, sessionId])
 
@@ -752,7 +773,30 @@ function RunCard({
         )}
       </dl>
 
-      {run.summary && (
+      {/* Итог прогона.
+          У саб-агента результат — это ответ дочерней сессии: он бывает
+          длинным и растягивал карточку. Поэтому он свёрнут в `details`
+          (нативный `summary` — клавиатура и фокус «из коробки»), а высота
+          содержимого ограничена прокруткой. У шелл-процесса — прежний
+          абзац (там хвост лога, он короткий). */}
+      {run.summary && run.kind === 'subagent' && (
+        <details
+          className="group min-w-0"
+          data-testid={`processes-summary-${run.id}`}
+        >
+          <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <Icon
+              name="arrow-down-s"
+              className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
+            />
+            {t('processes.summary.title')}
+          </summary>
+          <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-xs text-muted-foreground">
+            {run.summary}
+          </div>
+        </details>
+      )}
+      {run.summary && run.kind !== 'subagent' && (
         <p
           className="break-words text-xs text-muted-foreground"
           data-testid={`processes-summary-${run.id}`}

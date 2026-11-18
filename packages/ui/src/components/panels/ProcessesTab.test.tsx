@@ -222,6 +222,8 @@ beforeEach(() => {
     blockingKnownIds: [],
     logs: {},
     pendingIds: [],
+    listScope: null,
+    listLoaded: false,
     error: null,
   })
 
@@ -303,6 +305,44 @@ describe('ProcessesTab — реестр фоновой работы (PROP-096/09
     const container = await renderProcesses()
 
     expect(container.textContent).toContain('Uptime')
+  })
+
+  it('результат саб-агента — в сворачиваемом блоке, свёрнутом по умолчанию', async () => {
+    const summary = 'Готово: переименовал модуль.\n\nВторой абзац результата.'
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_sub', {
+        kind: 'subagent',
+        status: 'completed',
+        childSessionId: 'child-1',
+        summary,
+      }),
+    ])
+
+    const container = await renderProcesses()
+
+    const block = container.querySelector('[data-testid="processes-summary-bgr_sub"]') as HTMLDetailsElement | null
+    expect(block).not.toBeNull()
+    // Нативный `details` — свёрнут, содержимое (с переносами) внутри.
+    expect(block!.tagName).toBe('DETAILS')
+    expect(block!.open).toBe(false)
+    expect(block!.querySelector('summary')?.textContent).toBe('Result')
+    const body = block!.querySelector('div') as HTMLElement
+    expect(body.className).toContain('whitespace-pre-wrap')
+    expect(body.className).toContain('max-h-64')
+    expect(body.className).toContain('overflow-y-auto')
+    expect(body.textContent).toBe(summary)
+  })
+
+  it('результат шелл-процесса — прежний абзац (не сворачивается)', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_proc', { summary: 'хвост лога' }),
+    ])
+
+    const container = await renderProcesses()
+
+    const summary = container.querySelector('[data-testid="processes-summary-bgr_proc"]')
+    expect(summary?.tagName).toBe('P')
+    expect(summary?.textContent).toBe('хвост лога')
   })
 
   it('три секции с заголовками и счётчиками', async () => {
@@ -590,7 +630,46 @@ describe('ProcessesTab — скоуп показа (сессия / проект)
 
     await renderProcesses()
 
+    // Набор id сессий скоупа — клиентский (на провод не уходит).
     expect(mocks.listProcesses).toHaveBeenCalledWith({ projectId: 'p1' })
+  })
+
+  it('карточка прогона дочерней сессии без projectId исчезает, когда сервер её не отдаёт', async () => {
+    useUIStore.setState({
+      selectedProjectId: 'p1',
+      activeCenterTabId: null,
+      centerTabs: [],
+    })
+    useSessionsStore.setState({
+      sessions: [
+        { id: 's1', name: 'Session one', project_id: 'p1' },
+        { id: 'child-1', name: 'Child', project_id: 'p1' },
+      ] as never,
+    })
+    // Запись пришла live-событием из канала дочерней сессии — без `projectId`;
+    // процесс уже завершился, и сервер в проектной выборке её не отдаёт.
+    useProcessesStore.getState().upsert(makeRun('bgr_child', { sessionId: 'child-1' }) as never)
+    mocks.listProcesses.mockResolvedValue([])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-item-bgr_child"]')).toBeNull()
+    expect(useProcessesStore.getState().byId['bgr_child']).toBeUndefined()
+  })
+
+  it('запись другой сессии того же проекта, которую сервер отдал, остаётся', async () => {
+    useUIStore.setState({
+      selectedProjectId: 'p1',
+      activeCenterTabId: null,
+      centerTabs: [],
+    })
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_s2', { sessionId: 's2', projectId: 'p1' }),
+    ])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-item-bgr_s2"]')).not.toBeNull()
   })
 
   it('по умолчанию видны только записи текущей сессии', async () => {

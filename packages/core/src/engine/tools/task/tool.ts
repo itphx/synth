@@ -1430,6 +1430,10 @@ async function startBackgroundSubagent(opts: {
       childSessionId,
       agentRole: params.subagent_type,
       description: params.description,
+      // Проект сессии-владельца — в записи реестра: иначе прогон не попадает
+      // в проектную выборку списка (`GET /processes?projectId=…` фильтрует по
+      // полю записи), и карточка в панели «Процессы» не обновлялась бы.
+      ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
     });
   } catch (err) {
     if (err instanceof BackgroundLimitExceededError) {

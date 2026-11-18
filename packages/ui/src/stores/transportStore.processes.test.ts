@@ -14,6 +14,7 @@ vi.mock('@/lib/api/synthApi', () => ({
       next_offset: null,
     }),
     listProcesses: vi.fn().mockResolvedValue([]),
+    listProcessesWithBlocking: vi.fn().mockResolvedValue({ runs: [], blocking: [] }),
   },
 }))
 vi.mock('@/hooks/useNotification', () => ({
@@ -41,6 +42,8 @@ describe('transportStore dispatcher: process.*/child.* (реестр фонов�
       order: [],
       logs: {},
       pendingIds: [],
+      listScope: null,
+      listLoaded: false,
       error: null,
     })
   })
@@ -127,5 +130,60 @@ describe('transportStore dispatcher: process.*/child.* (реестр фонов�
     dispatch(makeEvent('stream.chunk', 's1', { content: 'привет', stream_id: 'st1' }))
 
     expect(useProcessesStore.getState().order).toEqual([])
+  })
+
+  it('прогон из дочерней сессии: process.exited переводит карточку в терминальный статус', () => {
+    dispatch(makeEvent('process.started', 'child-1', {
+      background_run_id: 'bgr_child',
+      session_id: 'child-1',
+      command: 'sleep 30',
+    }))
+    dispatch(makeEvent('process.exited', 'child-1', {
+      background_run_id: 'bgr_child',
+      session_id: 'child-1',
+      state: 'completed',
+      exit_code: 0,
+    }))
+
+    const run = useProcessesStore.getState().byId['bgr_child']!
+    expect(run.sessionId).toBe('child-1')
+    expect(run.status).toBe('completed')
+    expect(run.finishedAt).toBeDefined()
+  })
+
+  it('терминальное событие перечитывает список панели в последнем скоупе', async () => {
+    const api = await import('@/lib/api/synthApi')
+    const listWithBlocking = vi.mocked(api.synthApi.listProcessesWithBlocking)
+    listWithBlocking.mockResolvedValue({ runs: [], blocking: [] })
+    // Список уже загружали — панель «Процессы» открыта (скоуп проекта).
+    await useProcessesStore
+      .getState()
+      .load({ projectId: 'p1', scopeSessionIds: ['s1', 'child-1'] })
+    listWithBlocking.mockClear()
+
+    dispatch(makeEvent('child.completed', 's1', {
+      background_run_id: 'bgr_2',
+      child_session_id: 'child-1',
+      parent_session_id: 's1',
+      state: 'completed',
+    }))
+    await vi.waitFor(() => expect(listWithBlocking).toHaveBeenCalled())
+
+    expect(listWithBlocking).toHaveBeenCalledWith({ projectId: 'p1' })
+  })
+
+  it('терминальное событие без открытой панели список не запрашивает', async () => {
+    const api = await import('@/lib/api/synthApi')
+    const listWithBlocking = vi.mocked(api.synthApi.listProcessesWithBlocking)
+    listWithBlocking.mockClear()
+
+    dispatch(makeEvent('process.exited', 's1', {
+      background_run_id: 'bgr_9',
+      session_id: 's1',
+      state: 'completed',
+    }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(listWithBlocking).not.toHaveBeenCalled()
   })
 })

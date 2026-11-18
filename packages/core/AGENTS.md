@@ -1792,7 +1792,10 @@
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
   `task.ts` — фасад-реэкспорт. **Управление сабагентом на ходу (PROP-142).** `args.ts` —
   `prompt`/`subagent_type` обязательны **только без `task_id`**; `delivery: 'steer'|'queue'`
-  (default `steer`) применим к занятому ребёнку; `background` работает и с `task_id`. `tool.ts`
+  (default `steer`) применим к занятому ребёнку; `background` работает и с `task_id`. Фоновая ветка
+  создаёт запись реестра с `projectId` сессии-владельца (`ctx.projectId` → `startSubagent`): без него
+  прогон не попадает в проектную выборку `GET /processes?projectId=…` (detach и шелл-процессы
+  передавали проект и раньше — дыра была только здесь). `tool.ts`
   (`continueChildSession`): свободный ребёнок — продолжение с текстом (`metadata.continuation`,
   обычное user-сообщение) либо прежним маркером `task.resume_marker` (путей без текста),
   `model`/`provider` переключают пару точечной мутацией `settings`, `subagent_type` при `task_id`

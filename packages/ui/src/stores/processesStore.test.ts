@@ -47,6 +47,8 @@ describe('processesStore', () => {
       blockingKnownIds: [],
       logs: {},
       pendingIds: [],
+      listScope: null,
+      listLoaded: false,
       error: null,
     })
   })
@@ -129,6 +131,58 @@ describe('processesStore', () => {
     await useProcessesStore.getState().load()
 
     expect(useProcessesStore.getState().byId['stale']).toBeUndefined()
+  })
+
+  it('load({projectId, scopeSessionIds}) убирает прогон дочерней сессии без projectId', async () => {
+    // Сервер проектную выборку фильтрует по полю записи, поэтому прогон без
+    // `projectId` в ответ не попадает (например, он уже завершён и не отдан
+    // вообще) — а панель показывает его по сессии-владельцу.
+    mocks.listProcesses.mockResolvedValue([makeRun('p1-run', { sessionId: 's2', projectId: 'p1' })])
+    useProcessesStore.getState().upsert(makeRun('child-run', { sessionId: 'child-1' }))
+    // Чужая сессия (другой проект) — не трогаем: от неё зависят значки дерева.
+    useProcessesStore.getState().upsert(makeRun('foreign', { sessionId: 's9', projectId: 'p9' }))
+
+    await useProcessesStore
+      .getState()
+      .load({ projectId: 'p1', scopeSessionIds: ['s1', 's2', 'child-1'] })
+
+    const state = useProcessesStore.getState()
+    expect(state.byId['child-run']).toBeUndefined()
+    expect(state.byId['p1-run']).toBeDefined()
+    expect(state.byId['foreign']).toBeDefined()
+    // Набор сессий — клиентский: на провод уходит только фильтр проекта.
+    expect(mocks.listProcessesWithBlocking).toHaveBeenCalledWith({ projectId: 'p1' })
+  })
+
+  it('load({projectId}) без набора сессий запись без проекта не трогает', async () => {
+    mocks.listProcesses.mockResolvedValue([])
+    useProcessesStore.getState().upsert(makeRun('no-project', { sessionId: 's1' }))
+
+    await useProcessesStore.getState().load({ projectId: 'p1' })
+
+    expect(useProcessesStore.getState().byId['no-project']).toBeDefined()
+  })
+
+  it('refreshList перечитывает последний скоуп списка', async () => {
+    mocks.listProcesses.mockResolvedValue([makeRun('run', { sessionId: 's2', projectId: 'p1' })])
+    await useProcessesStore
+      .getState()
+      .load({ projectId: 'p1', scopeSessionIds: ['s1', 's2'] })
+    mocks.listProcessesWithBlocking.mockClear()
+
+    // Терминальный переход: сервер запись больше не отдаёт.
+    mocks.listProcesses.mockResolvedValue([])
+    await useProcessesStore.getState().refreshList()
+
+    expect(mocks.listProcessesWithBlocking).toHaveBeenCalledWith({ projectId: 'p1' })
+    expect(useProcessesStore.getState().byId['run']).toBeUndefined()
+  })
+
+  it('refreshList до первой загрузки списка ничего не запрашивает', async () => {
+    await useProcessesStore.getState().refreshList()
+
+    expect(mocks.listProcessesWithBlocking).not.toHaveBeenCalled()
+    expect(useProcessesStore.getState().listLoaded).toBe(false)
   })
 
   it('load сохраняет ошибку в сторе', async () => {

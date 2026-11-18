@@ -29,6 +29,20 @@ import type {
 export type { ProcessLogStream }
 
 /**
+ * Параметры загрузки реестра (`load`).
+ *
+ * `scopeSessionIds` — сессии скоупа показа (только для клиентской чистки):
+ * запись, чья сессия-владелец входит в скоуп, убирается, даже если её
+ * `projectId` не совпал с запрошенным. Live-события проекта не несут, поэтому
+ * у записи из дочерней сессии `projectId` может быть не заполнен — сервер
+ * такую запись в проектную выборку не отдаёт, и без набора id она висела бы в
+ * панели до перезагрузки страницы. На провод набор не уходит.
+ */
+export interface ProcessesLoadOptions extends ProcessesListOptions {
+  scopeSessionIds?: string[]
+}
+
+/**
  * Предел выборки активных прогонов (`loadActive`).
  *
  * Сервер отдаёт не больше 200 записей за раз — этого хватает, чтобы значки
@@ -97,6 +111,10 @@ interface ProcessesState {
   logs: Record<string, ProcessLogState>
   /** id прогонов, пришедших из live-событий и ещё не подтверждённых списком сервера. */
   pendingIds: string[]
+  /** Скоуп последнего успешного списка (для событийного перечитывания). */
+  listScope: ProcessesLoadOptions | null
+  /** Был ли хоть один успешный список (панель уже открывалась). */
+  listLoaded: boolean
   /** Ошибка загрузки списка (текст). */
   error: string | null
 
@@ -105,12 +123,23 @@ interface ProcessesState {
    *
    * Чистка — **по скоупу запроса**: при `sessionId`/`projectId` убираются
    * только записи этого скоупа, которых больше нет в ответе; без фильтров —
-   * весь реестр (прежнее поведение).
+   * весь реестр (прежнее поведение). В проектном скоупе дополнительно
+   * передаётся набор сессий (`scopeSessionIds`, см. `ProcessesLoadOptions`):
+   * запись из дочерней сессии без `projectId` тоже убирается.
    *
    * Список запрашивается с `include=blocking`: блокирующие прогоны приходят
    * тем же ответом, что и фоновые.
    */
-  load: (options?: ProcessesListOptions) => Promise<void>
+  load: (options?: ProcessesLoadOptions) => Promise<void>
+  /**
+   * Перечитать список в последнем запрошенном скоупе.
+   *
+   * Нужен терминальным событиям фоновой работы (`process.exited`/`child.*`):
+   * карточка обновляется сразу, а не ждёт пятисекундного поллинга. Список ещё
+   * не запрашивали (панель не открывалась) — ничего не делаем: при открытии
+   * панель загрузит его сама.
+   */
+  refreshList: () => Promise<void>
   /**
    * Перечитать **блокирующие** прогоны (список — `include=blocking`).
    *
@@ -217,11 +246,25 @@ function mergeBlocking(
  */
 function inRequestedScope(
   run: BackgroundRunRecord,
-  options?: ProcessesListOptions,
+  options?: ProcessesLoadOptions,
 ): boolean {
   if (options?.sessionId) return run.sessionId === options.sessionId
-  if (options?.projectId) return run.projectId === options.projectId
+  if (options?.projectId) {
+    if (run.projectId === options.projectId) return true
+    // Запись без проекта (live-событие) или с чужим `projectId`, но её сессия
+    // входит в скоуп панели — значит, панель её показывает и должна убирать.
+    return (
+      !!run.sessionId && (options.scopeSessionIds?.includes(run.sessionId) ?? false)
+    )
+  }
   return true
+}
+
+/** Параметры запроса к API: набор id сессий — клиентский, на провод не идёт. */
+function listRequestOptions(options?: ProcessesLoadOptions): ProcessesListOptions | undefined {
+  if (!options) return undefined
+  const { scopeSessionIds: _scopeSessionIds, ...rest } = options
+  return rest
 }
 
 /** Статус прогона из поля `state` события (неизвестное — `running`). */
@@ -281,11 +324,13 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
   blockingKnownIds: [],
   logs: {},
   pendingIds: [],
+  listScope: null,
+  listLoaded: false,
   error: null,
 
   load: async (options) => {
     try {
-      const response = await synthApi.listProcessesWithBlocking(options)
+      const response = await synthApi.listProcessesWithBlocking(listRequestOptions(options))
       const runs = response.runs
       set((s) => {
         const byId: Record<string, BackgroundRunRecord> = { ...s.byId }
@@ -312,6 +357,8 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
           ...mergeBlocking(s, options, response.blocking),
           blockingLoaded: true,
           blockingScope: options ?? null,
+          listScope: options ?? null,
+          listLoaded: true,
           pendingIds: s.pendingIds.filter((id) => !fetched.has(id)),
           error: null,
         }
@@ -319,6 +366,12 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
     } catch (err) {
       set({ error: err instanceof Error ? err.message : String(err) })
     }
+  },
+
+  refreshList: async () => {
+    const state = useProcessesStore.getState()
+    if (!state.listLoaded) return
+    await state.load(state.listScope ?? undefined)
   },
 
   refreshBlocking: async (options) => {
@@ -473,6 +526,8 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
       blockingKnownIds: [],
       logs: {},
       pendingIds: [],
+      listScope: null,
+      listLoaded: false,
       error: null,
     })
   },

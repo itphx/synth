@@ -1797,6 +1797,7 @@ export const dict = {
   'processes.row.finished': 'Завершён',
   'processes.row.exitCode': 'Код выхода',
   'processes.row.signal': 'Сигнал',
+  'processes.summary.title': 'Результат',
 
   // Center panel (tabs)
   'center.tab.chat': 'Чат',
