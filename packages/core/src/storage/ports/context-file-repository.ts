@@ -75,6 +75,13 @@ export interface ContextFileRepository {
   getMediaDeriveTemplate(language?: string): string;
   getStickyNotesTemplate(language?: string): string;
   getRoutingInstructions(language?: string): string;
+  /**
+   * Правила защиты от prompt injection (`prompts/system/CONTENT_RULES.{lang}.md`).
+   * Отдельный системный блок `content.rules` (composer), а не часть ролевых
+   * промптов: роли правил больше не содержат, блок подключается один раз.
+   */
+  getContentRules(language?: string): string;
+  /** @deprecated Читает `CONTENT_RULES` — используйте `getContentRules`. */
   getRules(language?: string): string;
   getGatewayInstructions(language?: string): string;
   /** ADR-107: инструкция по работе с памятью (prompts/system/MEMORY.{lang}.md). */

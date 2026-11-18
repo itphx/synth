@@ -690,12 +690,19 @@ export class ContextConfig implements ContextFileRepository {
   }
 
   /**
-   * Глобальная секция [RULES] защиты от Indirect Prompt Injection.
-   * Файлы: prompts/system/RULES.{lang}.md (только локализованные, базового
-   * RULES.md нет). Если для языка нет локализации — возвращается пустая строка ''.
+   * Глобальные правила [CONTENT RULES] защиты от Indirect Prompt Injection —
+   * отдельный системный блок `content.rules` (composer), не часть ролей.
+   * Файлы: prompts/system/CONTENT_RULES.{lang}.md (только локализованные,
+   * базового CONTENT_RULES.md нет). Если для языка нет локализации —
+   * возвращается пустая строка ''.
    */
+  getContentRules(language = 'ru'): string {
+    return this._readPrompt('CONTENT_RULES', 'system', language) ?? '';
+  }
+
+  /** @deprecated Читает `CONTENT_RULES` — используйте `getContentRules`. */
   getRules(language = 'ru'): string {
-    return this._readPrompt('RULES', 'system', language) ?? '';
+    return this.getContentRules(language);
   }
 
   /**

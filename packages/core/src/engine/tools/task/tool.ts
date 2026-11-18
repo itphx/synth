@@ -289,6 +289,12 @@ export const taskTool: ToolDefinition = {
     const environmentNotice = extra.environmentKind
       ? extra.contextConfig?.getEnvironment(extra.environmentKind, subagentLang) ?? ''
       : '';
+    // Правила защиты от prompt injection (`prompts/system/CONTENT_RULES`) —
+    // отдельный системный блок и у саб-агента (гейт — та же настройка, что в
+    // основной сессии: выключенная защита снимает и блок правил).
+    const contentRules = extra.securityConfig?.promptInjection?.enabled !== false
+      ? extra.contextConfig?.getContentRules(subagentLang) ?? ''
+      : '';
 
     // ─── Сборка LLM-сообщений ────────────────────────────────────────
     let llmSystemPrompt = (() => {
@@ -301,7 +307,7 @@ export const taskTool: ToolDefinition = {
         contextConfig: extra.contextConfig,
         language: subagentLang,
       });
-      let prompt = [subagentNotice, environmentNotice, todoFinalize, systemPrompt]
+      let prompt = [subagentNotice, environmentNotice, contentRules, todoFinalize, systemPrompt]
         .filter(Boolean)
         .join('\n\n');
 
@@ -1093,6 +1099,12 @@ async function continueChildSession(opts: {
     contextConfig: extra.contextConfig,
     language: currentChild.settings.language || 'ru',
   });
+  // Правила защиты от prompt injection (`prompts/system/CONTENT_RULES`) —
+  // тот же блок, что у нового прогона; продолжение его тоже получает, иначе
+  // resume-прогон остался бы без правил.
+  const contentRules = extra.securityConfig?.promptInjection?.enabled !== false
+    ? extra.contextConfig?.getContentRules(currentChild.settings.language || 'ru') ?? ''
+    : '';
 
   const runConfig: SubagentRunConfig = {
     subagentType: agentRole,
@@ -1112,6 +1124,7 @@ async function continueChildSession(opts: {
             currentChild.settings.language || 'ru',
           ) ?? ''
         : '',
+      contentRules,
       todoFinalize,
     ].filter(Boolean).join('\n\n'),
     initialMessages: resumeInitialMessages(freshChild),

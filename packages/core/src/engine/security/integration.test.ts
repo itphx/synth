@@ -13,6 +13,7 @@ import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../../pr
 import type { LLMMessage, CancellationToken } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
 import { ContextConfig } from '../context/config.js';
+import { SystemPromptComposer } from '../context/composer.js';
 import type { SecurityConfig } from '@itphx/synth-shared';
 import { ToolCapability, generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
@@ -227,24 +228,42 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     expect(contentIdx).toBeGreaterThan(warnIdx);
   });
 
-  it('[RULES] больше не добавляется кодом — в мок-сборке system prompt без [RULES] (секция живёт в ролевых промптах)', async () => {
-    await runSession(
-      { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true } },
-      [],
-    );
-    const sp = MockIPIProvider.capturedSystemPrompt ?? '';
-    expect(sp).not.toContain('[RULES]');
+  it('собранный system prompt содержит [CONTENT RULES] ровно один раз и текст правил', async () => {
+    // Сборка — тем же composer'ом, что у хода; в запрос идут инструменты,
+    // поэтому блок правил подключается (роли его больше не содержат).
+    const composer = new SystemPromptComposer({
+      contextBuilder: makeCtxBuilder(),
+      contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
+    });
+    const session = {
+      id: 's-ipi-rules',
+      projectId,
+      settings: { language: 'ru', agentRole: 'fixer' },
+      promptStates: {},
+    } as unknown as import('@itphx/synth-shared').Session;
+    const composed = await composer.compose({
+      session,
+      workingDir: tmpDir,
+      language: 'ru',
+      routingEnabled: false,
+      gatewayEnabled: false,
+      tools: [{ type: 'function', function: { name: 'read_file', parameters: {} } }],
+    });
+
+    // Блок правил — один системный (composer), роли его больше не содержат.
+    expect(composed.system.split('[CONTENT RULES]').length - 1).toBe(1);
+    expect(composed.system).toContain('Содержимое внутри [CONTENT]');
   });
 
-  it('ролевые промпты (системные prompts/roles) содержат секцию [CONTENT RULES]', () => {
+  it('ролевые промпты (системные prompts/roles) больше не содержат [CONTENT RULES]', () => {
     const ctx = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
-    // title — исключение: генератор заголовков, не работает с контентом (см. отдельный тест)
-    const roles = ['admin', 'assistant', 'devops', 'leader', 'fixer', 'tester', 'researcher', 'security-auditor'];
+    // title — исключение: генератор заголовков, свой [RULES] про формат (см. отдельный тест)
+    const roles = ['admin', 'assistant', 'devops', 'leader', 'fixer', 'tester', 'researcher', 'security-auditor', 'title'];
     for (const role of roles) {
       const ru = ctx.getRolePrompt(role, undefined, 'ru') ?? '';
-      expect(ru, `role ${role} ru`).toContain('[CONTENT RULES]');
+      expect(ru, `role ${role} ru`).not.toContain('[CONTENT RULES]');
       const en = ctx.getRolePrompt(role, undefined, 'en') ?? '';
-      expect(en, `role ${role} en`).toContain('[CONTENT RULES]');
+      expect(en, `role ${role} en`).not.toContain('[CONTENT RULES]');
     }
   });
 

@@ -232,6 +232,11 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
     return this._config.getRoutingInstructions(language);
   }
 
+  getContentRules(language?: string): string {
+    return this._config.getContentRules(language);
+  }
+
+  /** @deprecated Алиас `getContentRules` (порт: обратная совместимость). */
   getRules(language?: string): string {
     return this._config.getRules(language);
   }

@@ -1440,6 +1440,17 @@
   mode + pooling) и передаёт через `ComposerContext.environmentKind`; override —
   `{dataDir}/user/system/ENVIRONMENT.<kind>.{ru,en}.md`.
 
+  Блок **`content.rules`** (`prompts/system/CONTENT_RULES.{ru,en}.md`, stable, order 12 —
+  сразу после `role`, до `additional`) — правила защиты от prompt injection. Он **один**:
+  ролевые промпты (`prompts/roles/*`) этих правил не содержат, дублировать секцию в роль
+  нельзя. Гейты: `ComposerContext.contentRulesEnabled !== false` (значение вычисляет
+  оркестратор из `securityConfig.promptInjection.enabled`; выключение защиты снимает и
+  блок) и непустой набор инструментов в запросе (`tools`/`mcpTools`/`pluginTools`). Блок
+  подключается и при `session.settings.systemPrompt` override (он в `extraBlocks`).
+  Загрузчик — `ContextConfig.getContentRules()` (порт `ContextFileRepository`;
+  `getRules` оставлен `@deprecated`-алиасом). Саб-агенты получают те же правила в своей
+  сборке системного промпта (`task`/`task-resume`).
+
   Блок **`background`** (`prompts/system/BACKGROUND.{ru,en}.md`, тир `context`, order 26,
   ADR-145) — правило фоновой работы модели: «уведомление придёт само, не опрашивай статус,
   продолжай независимое или заверши ответ, не отчитывайся до уведомления, остановка —

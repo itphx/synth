@@ -345,8 +345,13 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
-  getRules(): string {
+  getContentRules(): string {
     return '';
+  }
+
+  /** @deprecated Алиас `getContentRules` (встроенных промптов в памяти нет). */
+  getRules(): string {
+    return this.getContentRules();
   }
 
   getGatewayInstructions(): string {

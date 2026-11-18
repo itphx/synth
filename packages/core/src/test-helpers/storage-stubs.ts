@@ -57,6 +57,7 @@ export function stubContextFiles(
     getMediaDeriveTemplate: (): string => '',
     getStickyNotesTemplate: (): string => '',
     getRoutingInstructions: (): string => '',
+    getContentRules: (): string => '',
     getRules: (): string => '',
     getGatewayInstructions: (): string => '',
     getMemoryInstructions: (): string => '',

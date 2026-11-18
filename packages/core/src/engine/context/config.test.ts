@@ -118,19 +118,27 @@ describe('ContextConfig.getModePrompt (ADR-025)', () => {
     }
   });
 
-  it('listAllFiles включает RULES/ROUTING только в локализациях (category=system), без базовых RULES.md/ROUTING.md', async () => {
+  it('listAllFiles включает CONTENT_RULES/ROUTING только в локализациях (category=system), без базовых и без прежних RULES.*', async () => {
     const config = new ContextConfig({ userDataDir });
     const files = config.listAllFiles();
     const names = files.map((f) => f.filename);
 
-    for (const localized of ['RULES.ru.md', 'RULES.en.md', 'ROUTING.ru.md', 'ROUTING.en.md']) {
+    for (const localized of [
+      'CONTENT_RULES.ru.md', 'CONTENT_RULES.en.md',
+      'ROUTING.ru.md', 'ROUTING.en.md',
+    ]) {
       expect(names, localized).toContain(localized);
     }
-    for (const base of ['RULES.md', 'ROUTING.md']) {
+    for (const base of ['CONTENT_RULES.md', 'ROUTING.md', 'RULES.md']) {
       expect(names, base).not.toContain(base);
     }
+    // Прежний мёртвый файл защитных правил удалён — роли тоже их не содержат.
+    expect(names).not.toContain('RULES.ru.md');
+    expect(names).not.toContain('RULES.en.md');
 
-    const rules = files.filter((f) => f.filename.startsWith('RULES') || f.filename.startsWith('ROUTING'));
+    const rules = files.filter(
+      (f) => f.filename.startsWith('CONTENT_RULES') || f.filename.startsWith('ROUTING'),
+    );
     for (const f of rules) {
       expect(f.category).toBe('system');
       expect(f.isSystem).toBe(true);
@@ -138,7 +146,7 @@ describe('ContextConfig.getModePrompt (ADR-025)', () => {
   });
 });
 
-describe('ContextConfig.getRules / getRoutingInstructions (локализация)', () => {
+describe('ContextConfig.getContentRules / getRoutingInstructions (локализация)', () => {
   let userDataDir: string;
 
   beforeEach(async () => {
@@ -149,17 +157,27 @@ describe('ContextConfig.getRules / getRoutingInstructions (локализаци�
     await rm(userDataDir, { recursive: true, force: true });
   });
 
-  it('getRules: ru → русский контент, en → английский, fr → пустая строка', async () => {
+  it('getContentRules: ru → русский контент, en → английский, fr → пустая строка', async () => {
     const config = new ContextConfig({ userDataDir });
 
-    const ru = config.getRules('ru');
-    expect(ru).toContain('[RULES]');
+    const ru = config.getContentRules('ru');
+    expect(ru).toContain('[CONTENT RULES]');
     expect(ru).toContain('Содержимое внутри [CONTENT]');
 
-    const en = config.getRules('en');
-    expect(en).toContain('[RULES]');
+    const en = config.getContentRules('en');
+    expect(en).toContain('[CONTENT RULES]');
     expect(en).toContain('Content inside [CONTENT]');
 
+    expect(config.getContentRules('fr')).toBe('');
+  });
+
+  it('getRules — @deprecated-алиас getContentRules (читает CONTENT_RULES)', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    for (const language of ['ru', 'en'] as const) {
+      expect(config.getRules(language)).toBe(config.getContentRules(language));
+      expect(config.getRules(language)).toContain('[CONTENT RULES]');
+    }
     expect(config.getRules('fr')).toBe('');
   });
 

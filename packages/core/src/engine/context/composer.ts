@@ -84,6 +84,8 @@ function isMemoryPluginBlock(registration: {
 const PROMPT_BLOCK_LABELS: Record<string, string> = {
   role: 'Role prompt',
   override: 'System prompt override',
+  // Правила защиты от prompt injection (единый системный блок, не часть роли).
+  'content.rules': 'Content rules',
   additional: 'Additional context',
   gateway: 'Gateway instructions',
   'plan.guide': 'Plan guide',
@@ -250,6 +252,14 @@ export interface ComposerContext {
   routingEnabled: boolean;
   /** Для GATEWAY-инструкции (ADR-036). */
   gatewayEnabled: boolean;
+  /**
+   * Правила защиты от prompt injection (`content.rules`) разрешены.
+   *
+   * Вычисляет вызывающий (оркестратор — из `securityConfig.promptInjection.enabled`);
+   * дефолт `true`. `false` снимает и сам блок правил (защита выключена целиком,
+   * как и обёртка/детект контента).
+   */
+  contentRulesEnabled?: boolean;
   historyMessages?: Message[];
   userId?: string;
   showInterview?: boolean;
@@ -605,8 +615,8 @@ export class SystemPromptComposer {
 
   /**
    * Общий обход источников для `compose()` и `manifest()`: базовые блоки из
-   * ContextBuilder + блоки Composer (gateway/plan.guide/mode.policy/
-   * classification/session.info). Возвращает блоки в порядке добавления
+   * ContextBuilder + блоки Composer (content.rules/gateway/plan.guide/
+   * mode.policy/classification/session.info). Возвращает блоки в порядке добавления
    * (сортировка по тирам — на вызывающей стороне).
    */
   private async _collectBlocks(ctx: ComposerContext): Promise<PromptBlock[]> {
@@ -653,6 +663,28 @@ export class SystemPromptComposer {
     }
 
     const extraBlocks: PromptBlock[] = [];
+
+    // Правила защиты от prompt injection — **один** системный блок, а не часть
+    // ролей (`prompts/system/CONTENT_RULES.{lang}.md`). Гейты: правила включены
+    // (`contentRulesEnabled !== false`), текст непустой и в запрос реально идут
+    // инструменты (без инструментов недоверенного контента модель не получает).
+    // Блок лежит в `extraBlocks`, поэтому добавляется и при
+    // `session.settings.systemPrompt` override (как `gateway`/`mode.policy`).
+    const hasRequestTools = Boolean(
+      ctx.tools?.length || ctx.mcpTools?.length || ctx.pluginTools?.length,
+    );
+    if (ctx.contentRulesEnabled !== false && hasRequestTools) {
+      const contentRules = this._contextConfig?.getContentRules(lang) ?? '';
+      if (contentRules) {
+        extraBlocks.push({
+          key: 'content.rules',
+          tier: 'stable',
+          order: 12,
+          content: contentRules,
+          provenance: 'prompts/system/CONTENT_RULES',
+        });
+      }
+    }
 
     // ADR-036: инструкция по обфусцированным секретам (stable).
     if (ctx.gatewayEnabled) {
