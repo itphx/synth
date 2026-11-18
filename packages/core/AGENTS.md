@@ -3732,6 +3732,12 @@ blob-порты и `blob_refs` — ADR-116.
 - Circuit breaker: 5 ошибок → блокировка на 60 c (`engine/mcp/manager.ts`).
 - Тулы регистрируются с префиксом `{serverName}_{toolName}` и capability
   `ToolCapability.MCP`; деобфускация аргументов — в `execute` через `ObfuscationMapStore`.
+- **Advisory-скан описаний (ADR-146).** При регистрации тулов `registerTools` прогоняет словарный
+  детектор IPI (ru+en) по `server.description`, `server.instructions`, `tool.description` и имени
+  тула; совпадения дают флаги (`getContentFlags`/`getServerContentFlags`/`getToolContentFlags`) и
+  `[WARN]`-строку в блоке `mcp.servers` плюс метрику
+  `synth_content_filter_hits_total{source,kind}`. Ничего не блокируется и не вырезается, схемы не
+  мутируются; флаги снимаются при перерегистрации состава, тексты описаний в лог не пишутся.
 - HTTP: `POST /api/v2/mcp/probe` (`server/routes/mcp.ts`); доступность MCP по
   режимам — `GET/PUT /api/v2/settings/mcp`. Отдельного `/mcp/session/:id` в core нет.
 - **HTTP-контур реестра MCP — в core** (`server/routes/mcp-registry.ts`,

@@ -4,6 +4,12 @@
 
 > ⚠️ RU-версия обновлена 2026-11-18 (PROP-142/143); перевод отстаёт
 
+> ⚠️ RU-версия обновлена 2026-11-18 (**ADR-146**, `security.promptInjection`) — **переведено**:
+> новая секция «Prompt-injection protection (`security.promptInjection`, ADR-146)» — три поля
+> (`enabled`/`mode`/`wrapContent`), приоритет **env > runtime > config.yaml > default**, env-ключи
+> `SYNTH_SECURITY_PROMPT_INJECTION_ENABLED`/`…_MODE`, env-lock **по полю** (`409 ENV_LOCKED`),
+> изменения live, `wrapContent` — только `config.yaml`.
+
 > ⚠️ RU-версия обновлена 2026-11-17 (**секция «Таймауты встроенных тулов»** — единица входа
 > `timeout` — **секунды**, потолок по режиму исполнения: foreground ≤ 600 с, background ≤ 86 400 с
 > (сутки), «без лимита» (`0`) больше нет; `web_fetch` — отдельный потолок 600 с, `question` —
@@ -695,6 +701,32 @@ remote:                           # hybrid mode: local core + remote backend
 ```
 
 The full list of fields (including `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — in `packages/shared/src/config/types.ts`.
+
+### Prompt-injection protection (`security.promptInjection`, ADR-146)
+
+- `enabled` (default `true`) — master switch of the protection: the single tool-content filtering
+  layer (trust matrix, block-marker escaping, dictionary detection) **and** the `content.rules`
+  system block of the prompt. Disabling it removes both.
+- `mode` (`flag` | `sanitize` | `block`, default `flag`) — what to do when the `injection.{ru,en}`
+  dictionary matches: `flag` — prepend a WARN line to the block, `sanitize` — replace the matches
+  with `[redacted]`, `block` — do not give the tool result to the model
+  (`security.injection_blocked`, `isError: true`). A forged `[CONTENT END]` marker does **not**
+  block the content: the marker is escaped and the fact is recorded
+  (`injection_marker_escaped`).
+- `wrapContent` (default `true`) — wrap tool results in `[CONTENT | SOURCE: … | trust: …]`.
+  **`config.yaml` only**: it is a deployment policy of the envelope, runtime/UI does not override it.
+
+`enabled` and `mode` are configured in the UI (Settings → “Security”) and via
+`GET/PUT/DELETE /api/v2/settings/security`; priority **env > runtime (`settings.json`/PG) >
+`config.yaml` > default**; env — `SYNTH_SECURITY_PROMPT_INJECTION_ENABLED` /
+`SYNTH_SECURITY_PROMPT_INJECTION_MODE` (an invalid value — warn + ignore, fail-soft). Environment
+locking is checked **per field**: `PUT`/`DELETE` of a locked field → `409 ENV_LOCKED` with `fields`,
+no field of the request is applied. Changes apply **live** (`restartRequired: false`), a reset
+returns to `config.yaml`.
+
+How the protection is built (one layer for all Tool Use cycles, trust matrix, escaping, advisory scan
+of MCP descriptions) — [ADR-146](../arch_decisions/adr-146-tool-content-filtering.md); endpoint
+contract — [docs/API_V2.md](./API_V2.md) §5.
 
 ### Storage and working directory (`storage.*`, ADR-075)
 

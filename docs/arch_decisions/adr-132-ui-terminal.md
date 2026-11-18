@@ -119,3 +119,21 @@
 - 2026-11-16 — принято из PROP-132 (PTY на точке исполнения, проектное владение, лимиты 8/32,
   права read/write, тулы, idle 2 дня + heartbeat 5 мин, снимки/autoRestore, `terminal.*` env>runtime>config,
   вкладка в UI, «Спросить агента» через `context`); файл предложения удалён.
+
+## Аддендум 2026-11-18: обрамление вывода — в общем слое фильтрации ([ADR-146](./adr-146-tool-content-filtering.md))
+
+Конверт `[CONTENT | SOURCE: terminal | … | trust: untrusted]` больше **не** ставит тул: обрамление
+вынесено в единый слой фильтрации контента инструментов (`applyToolContentFilter`,
+`engine/security/tool-content.ts`). Тулы `terminal_read`/`terminal_snapshot`/`terminal_run`
+возвращают **сырой нормализованный текст**, а атрибуты (`terminal_id`, `status`, `seq`, `bytes`,
+`run`, `exit`, `still_running`, `truncated`, …) кладут в `metadata` — в открывающий маркер попадает
+только белый список ключей (`engine/security/trust.ts`, ветка `terminal`). Прямое следствие: один
+слой правил на все циклы (основной ход, саб-агент, шаг пайплайна), а новый терминальный атрибут
+добавляется в `metadata` и в белый список, а не в текст результата.
+
+Служебные сообщения — уведомление о завершении фонового запуска (`engine/terminal/runs.ts`) и
+контекст терминала в промпте (`engine/terminal/context-message.ts`) — по-прежнему формируют конверт
+сами (`formatBackgroundContent`, свой маркер `[CONTENT key=value …]`): это не результаты тулов, и
+общий конверт к ним не применяется. Тело экранируется (`escapeContentMarkers`), чтобы `[CONTENT END]`
+из вывода команды не закрывал блок. `frameTerminalOutput` оставлен `@deprecated`-алиасом
+`formatBackgroundContent`.

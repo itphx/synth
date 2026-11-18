@@ -42,7 +42,8 @@ ADR-036 реализован и покрывает: детекцию секре�
 - попытки утечки секретов/системных инструкций;
 - запрещённые паттерны.
 
-Реализовано **частично** (IPI, см. ниже); PROP-061 уточняет оставшийся объём.
+Реализовано **частично** (IPI; объём фильтрации контента инструментов зафиксирован отдельно —
+[ADR-146](./adr-146-tool-content-filtering.md)); PROP-061 уточняет оставшийся объём.
 
 ### 2. Сканер вывода (output)
 
@@ -87,10 +88,10 @@ ADR-036 реализован и покрывает: детекцию секре�
 - **LLM Gateway** ([ADR-036](./adr-036-llm-gateway.md)): обфускация секретов
   (`⟦SYNTH_SECRET_N⟧`/block), деобфускация в точках потребления, Output Guard (секреты/URL/команды),
   rate limit (`RateLimiter`), аудит JSONL append-only.
-- **Защита от Indirect Prompt Injection** — `packages/core/src/engine/security/prompt-injection.ts`:
-  `wrapContent` (маркеры `[CONTENT | SOURCE … | trust …]`), `detectPromptInjection` (по словарю
-  `injection`, ru/en), `applyPolicy` (`flag`/`sanitize`/`block`); матрица доверия —
-  `packages/core/src/engine/security/trust.ts` (`getToolTrust`).
+- **Защита от Indirect Prompt Injection** — вынесена в отдельное решение:
+  [ADR-146](./adr-146-tool-content-filtering.md) (единый слой фильтрации контента инструментов,
+  правила в системном блоке `content.rules`, runtime-настройка `security.promptInjection`,
+  экранирование маркеров блока, advisory-скан описаний MCP).
 - **Защита путей/shell** — `protected-paths.ts` (+ `protected-paths-store.ts`), `shell-guard.ts`.
 - **Permissions** — `packages/core/src/engine/permission/evaluator.ts` (ADR-029).
 - **Конфиг** — `security.promptInjection` (`enabled` по умолчанию `true`, `wrapContent`, `mode`:

@@ -4,6 +4,12 @@
 
 > ⚠️ RU-версия обновлена 2026-11-18 (PROP-142/143); перевод отстаёт
 
+> ⚠️ RU-версия обновлена 2026-11-18 (**ADR-146**) — **переведено**: §5, строки
+> `GET/PUT/DELETE /api/v2/settings/security` — контракт с `promptInjection`, `source`,
+> `envLocked`, `envLockedFields`, `restartRequired`; частичный `PUT` (`askTimeoutMs: null` —
+> сброс), `409 ENV_LOCKED` по полю, `400` на неизвестный ключ/тип/режим, `DELETE` сбрасывает
+> только runtime-патч `promptInjection`.
+
 > ⚠️ RU-версия обновлена 2026-11-14 (**ADR-140 Ф3**, передача владения и переносы) —
 > **переведено**:
 > **§5.8** — новый `POST /api/v2/projects/:id/transfer` (тело `{user_id}`, строгая схема;
@@ -1836,9 +1842,9 @@ instance without ADMIN), `404 NOT_FOUND`, `409 CONFLICT` (name taken). Name — 
 | GET | `/api/v2/settings/llm-gateway` | auth | Effective LLM Gateway settings: `{llmGateway:{enabled,inputMode,logPayloads,rateLimit}, isOverridden, defaults}` (runtime on top of config.yaml) |
 | PUT | `/api/v2/settings/llm-gateway` | ADMIN (managed) / auth (core) | `{llmGateway}` (live application) |
 | DELETE | `/api/v2/settings/llm-gateway` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", llmGateway, isOverridden:false, defaults}` + live application of `{}` (the gateway from config.yaml) |
-| GET | `/api/v2/settings/security` | auth | Effective `{protectedPaths, askTimeoutMs}` + `{isOverridden, defaults}` (runtime on top of config.yaml) |
-| PUT | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | `{security}` (live application) |
-| DELETE | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", security, isOverridden:false, defaults}` + live application of `{}` |
+| GET | `/api/v2/settings/security` | auth | Effective “Security” section (ADR-146): `{security:{protectedPaths:{enabled}, askTimeoutMs, promptInjection:{enabled,wrapContent,mode}}, isOverridden, defaults, source, envLocked, envLockedFields, restartRequired:false}`. `promptInjection` is resolved by **env > runtime > config.yaml > default** (`resolvePromptInjection`), `source` is the most specific layer (`env`\|`runtime`\|`config`\|`default`); `envLockedFields` are the fields locked by env (`enabled`/`mode`), disabled in the UI; `wrapContent` comes from `config.yaml` only (runtime does not override it) |
+| PUT | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | Partial patch `{security:{protectedPaths?:{enabled}, askTimeoutMs?:number\|null, promptInjection?:{enabled?,mode?}}}` (live application): omitted fields are kept, `promptInjection` is merged per field, `askTimeoutMs: null` explicitly resets the runtime value to the global default. Env locking is **per field**: a request touching a locked field → `409 ENV_LOCKED` with `fields`, no field is applied. Unknown key / type / mode (`mode` outside `flag`\|`sanitize`\|`block`) → `400 VALIDATION_ERROR`. Response — same as `GET`; no audit record is written (no matching `scope` in `SECURITY_AUDIT_SCOPES`; only a log line) |
+| DELETE | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | Resets the **`promptInjection` runtime patch** to `config.yaml` (both fields); `protectedPaths`/`askTimeoutMs` are untouched (own paths: `PUT /settings/security` and `/settings/protected-paths`). Under an env lock → `409 ENV_LOCKED` with `fields` (a reset would have no effect). Response `{status:"restored", security, isOverridden, defaults, source, envLocked, envLockedFields, restartRequired:false}` + live application |
 | GET | `/api/v2/settings/protected-paths` | auth | `{policy, base, is_overridden}` |
 | PUT | `/api/v2/settings/protected-paths` | ADMIN (managed) / auth (core) | `{policy}` or `{version, add, remove}` |
 | DELETE | `/api/v2/settings/protected-paths` | ADMIN (managed) / auth (core) | Reset to the system policy |

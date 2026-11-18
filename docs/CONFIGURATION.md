@@ -710,6 +710,32 @@ remote:                           # гибридный режим: локаль�
 
 Полный список полей (включая `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — в `packages/shared/src/config/types.ts`.
 
+### Защита от prompt injection (`security.promptInjection`, ADR-146)
+
+- `enabled` (по умолчанию `true`) — глобальный выключатель защиты: единый слой фильтрации контента
+  инструментов (матрица доверия, экранирование маркеров блока, словарная детекция) **и** системный
+  блок `content.rules` в промпте. Выключение снимает и то, и другое.
+- `mode` (`flag` | `sanitize` | `block`, по умолчанию `flag`) — что делать при совпадении словаря
+  `injection.{ru,en}`: `flag` — пометить WARN-строкой перед блоком, `sanitize` — заменить совпадения
+  на `[redacted]`, `block` — не отдавать результат модели (`security.injection_blocked`,
+  `isError: true`). Подделка маркера `[CONTENT END]` контент **не** блокирует: маркер экранируется, а
+  факт помечается (`injection_marker_escaped`).
+- `wrapContent` (по умолчанию `true`) — оборачивать результат тула в
+  `[CONTENT | SOURCE: … | trust: …]`. **Только `config.yaml`**: это deployment-политика обёртки,
+  runtime/UI её не перекрывает.
+
+`enabled` и `mode` настраиваются в UI (Настройки → «Безопасность») и через
+`GET/PUT/DELETE /api/v2/settings/security`; приоритет **env > runtime (`settings.json`/PG) >
+`config.yaml` > default**; env — `SYNTH_SECURITY_PROMPT_INJECTION_ENABLED` /
+`SYNTH_SECURITY_PROMPT_INJECTION_MODE` (невалидное значение — warn + игнор, fail-soft). Env-фиксация
+проверяется **по полю**: `PUT`/`DELETE` по зафиксированному полю → `409 ENV_LOCKED` с `fields`, ни
+одно поле запроса не применяется. Изменения применяются **live** (`restartRequired: false`), сброс
+возвращает к `config.yaml`.
+
+Устройство защиты (единый слой на все циклы Tool Use, матрица доверия, экранирование, advisory-скан
+описаний MCP) — [ADR-146](./arch_decisions/adr-146-tool-content-filtering.md); контракт эндпоинта —
+[docs/API_V2.md](./API_V2.md) §5.
+
 ### Хранилище и рабочий каталог (`storage.*`, ADR-075)
 
 - `storage.dataDir` — корень данных (`SYNTH_DATA_DIR`; при `--home`/`SYNTH_HOME` — `<home>/data`, ADR-079).

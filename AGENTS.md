@@ -395,7 +395,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 128 (Решения: 66, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 3).
+Всего документов: 129 (Решения: 67, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 3).
 Удалено: 30 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->
@@ -424,6 +424,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | конфиг / локальный home / пути | [ADR-023](./docs/arch_decisions/adr-023-configuration.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md), [ADR-079](./docs/arch_decisions/adr-079-local-home-independent-instances.md), [ADR-045](./docs/arch_decisions/adr-045-hybrid-server-profiles.md) |
 | routing / микро-слой / провайдеры / модели | [ADR-034](./docs/arch_decisions/adr-034-model-routing.md), [ADR-035](./docs/arch_decisions/adr-035-micro-model-first.md), [ADR-084](./docs/arch_decisions/adr-084-decision-models-clef.md), [ADR-117](./docs/arch_decisions/adr-117-provider-compatibility.md), [docs/ROUTING.md](./docs/ROUTING.md), [docs/PROVIDERS.md](./docs/PROVIDERS.md), [docs/LLM_PROVIDERS.md](./docs/LLM_PROVIDERS.md) |
 | безопасность / gateway / целостность клиента / soft-delete | [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md), [PROP-073](./docs/arch_decisions/prop-073-client-integrity-hybrid.md), [PROP-074](./docs/arch_decisions/prop-074-soft-delete-retention.md) |
+| фильтрация контента инструментов / prompt injection / `content.rules` / `/settings/security` | [ADR-146](./docs/arch_decisions/adr-146-tool-content-filtering.md) (единый слой на все циклы, правила в системном блоке, экранирование маркеров, advisory-скан MCP), [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) (Gateway/guard), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §`security.promptInjection`, [docs/API_V2.md](./docs/API_V2.md) §5 |
 | workspace / worktrees / git-репозитории / SSH-ключи | [ADR-075](./docs/arch_decisions/adr-075-project-workspace-provisioning.md), [ADR-114](./docs/arch_decisions/adr-114-git-worktrees.md), [docs/WORKTREES.md](./docs/WORKTREES.md), [ADR-076](./docs/arch_decisions/adr-076-git-repo-registry-ssh.md) |
 | инструменты / образы / тулчейн / executor | [ADR-135](./docs/arch_decisions/adr-135-execution-contour.md), [ADR-077](./docs/arch_decisions/legacy/adr-077-runtime-toolchain.md), [ADR-078](./docs/arch_decisions/adr-078-runtime-dependency-availability.md), [ADR-132](./docs/arch_decisions/adr-132-ui-terminal.md) (интерактивный терминал), [docs/EXECUTION.md](./docs/EXECUTION.md), [docs/TOOLS.md](./docs/TOOLS.md) |
 | self-help инстанса / MCP из чата / проект-сессия | скилл `synth-instance`, [ADR-131](./docs/arch_decisions/adr-131-self-management-tools.md), [docs/TOOLS.md](./docs/TOOLS.md) |

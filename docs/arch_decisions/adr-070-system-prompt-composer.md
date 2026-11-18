@@ -71,3 +71,18 @@
 - 2026-10-15 — сжатие до одной страницы: as-built вынесено в spec ([ARCHITECTURE.md](../ARCHITECTURE.md), [API_V2.md](../API_V2.md) §5.5, [CONFIGURATION.md](../CONFIGURATION.md), `packages/{core,ui}/AGENTS.md`).
 - 2026-09-19 — доработки прозрачности: слой `tools` и «История» в манифесте, резолв профиля username→UUID.
 - 2026-09-18 — решение принято; реализованы Фазы 1–4 (Composer/тиры/идемпотентность, CachePolicy/`promptStates`, usage, манифест/debug).
+
+## Аддендум 2026-11-18: блок `content.rules` — правила защиты одним стабильным блоком ([ADR-146](./adr-146-tool-content-filtering.md))
+
+В `stable` появился блок `content.rules` (`order: 12`, сразу после `role`, до `additional`;
+provenance `prompts/system/CONTENT_RULES`) — правила защиты от prompt injection из
+`prompts/system/CONTENT_RULES.{ru,en}.md`. Гейт — `ComposerContext.contentRulesEnabled !== false`
+(значение вычисляет оркестратор из `security.promptInjection.enabled`, шаг пайплайна — из
+`securityContentFilter.getConfig()`): при выключенной защите блок снимается, при включённой и
+непустом тексте — добавляется. Наличие инструментов в запросе гейтом **не** является: в основном
+ходе composer собирается до `select()`, и блок иначе не попадал в промпт.
+
+Блок лежит в `extraBlocks`, поэтому подключается и при `session.settings.systemPrompt` override
+(как `gateway`/`mode.policy`). Правила **больше не дублируются** в ролях (`prompts/roles/*`) и
+сабагентах (`prompts/subagents/*`): они приходят саб-агенту той же сборкой промпта. Загрузчик —
+`ContextConfig.getContentRules()` (порт контекстных файлов), `getRules()` — `@deprecated`-алиас.
