@@ -1,5 +1,6 @@
 import type { IconName } from '@/components/icon/icons'
 import type { ContextMenuItem } from '@/components/ui/contextMenu'
+import type { GitFileStatusKind } from '@itphx/synth-shared/types'
 
 export type ContextMenuEntry = ContextMenuItem | 'separator'
 
@@ -67,6 +68,12 @@ export interface TreeNodeBase {
 
   status?: TreeStatus
   unreadCount?: number
+
+  /**
+   * ADR-076 (этап 1): вид изменения файла в рабочем дереве. Даёт точку перед
+   * названием и цвет названия; иконка открытого файла остаётся акцентной.
+   */
+  vcsStatus?: GitFileStatusKind
 
   actions?: TreeAction[]
   contextItems?: ContextMenuEntry[]

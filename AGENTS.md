@@ -185,6 +185,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ blo
 - `GET /api/v2/fs/read` — cap `storage.maxReadBytes` (5 МиБ): размер известен из `stat` **до** чтения; больше лимита **или** бинарь → `413 FILE_TOO_LARGE` + `details`.
 - `GET /api/v2/fs/raw` — cap `storage.maxPreviewBytes` (100 МиБ); **inline только** `image`/`video`/`audio`/`pdf`, остальное — `attachment` (XSS), SVG — CSP; `Range`/`206`, `ETag`/`304`.
 - `GET /api/v2/fs` — `maxDepth` ≤ 3, бюджет **10 000** записей → `truncated: true`; `GET /api/v2/git/commit` — diff ≤ **1 МиБ** → `diff_truncated: true`.
+- `GET /api/v2/git/status` — лимит **2000** записей на репозиторий → `truncated: true`; in-process кэш статуса **2 с** (`GitRoutesOptions.statusCacheTtlMs`, `0` — без кэша). `GET /api/v2/git/diff` — тот же предел diff (1 МиБ) → `diff_truncated: true`.
 
 Конфиг и коды — [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Хранилище и рабочий каталог», [docs/API_V2.md](./docs/API_V2.md) §5.12/§5.15.
 

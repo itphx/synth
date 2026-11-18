@@ -3,6 +3,7 @@ import { useUIStore, OTHER_PROJECTS_COLLAPSE_KEY } from '@/stores/useUIStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useActiveProject } from '@/hooks/useActiveProject'
+import { useGitStatusPolling } from '@/hooks/useGitStatusPolling'
 import { useGitStore, type GitRepoView } from '@/stores/gitStore'
 import { useNotification } from '@/hooks/useNotification'
 import { useI18n } from '@/lib/i18n'
@@ -10,6 +11,9 @@ import { Icon } from '@/components/icon/Icon'
 import { synthApi } from '@/lib/api/synthApi'
 import type { ProjectData } from '@/lib/api/synthApi'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { fileIconName } from '@/lib/fileIcon'
+import { isTrackedKind } from '@/lib/gitStatus'
+import { fileViewerTabId, openFileDiffTab } from '@/lib/fileTabs'
 import { formatDateTime } from '@/lib/formatDate'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
@@ -86,6 +90,8 @@ export function GitTab() {
   const expandedRepos = useGitStore(s => s.expandedRepos)
   const loadRepos = useGitStore(s => s.loadRepos)
   const loadCommitLog = useGitStore(s => s.loadCommitLog)
+  const statusByProject = useGitStore(s => s.statusByProject)
+  const loadStatus = useGitStore(s => s.loadStatus)
   const toggleProjectExpand = useGitStore(s => s.toggleProjectExpand)
   const toggleRepoExpand = useGitStore(s => s.toggleRepoExpand)
   const initRepo = useGitStore(s => s.initRepo)
@@ -188,6 +194,32 @@ export function GitTab() {
       }
     })
   }, [expandedRepos])
+
+  // ADR-076 (этап 1): статус рабочего дерева — поллинг только раскрытых
+  // проектов с зарегистрированными репозиториями (иначе — запрос на каждый
+  // workspace-проект каждые 5 с, включая проекты без репозиториев).
+  const visibleGitProjectIds = useMemo(() => {
+    const scoped = onlyActiveProject && activeProjectId
+      ? workspacedProjects.filter((p) => p.id === activeProjectId)
+      : workspacedProjects
+    return scoped
+      .filter((p) => expandedProjects.has(p.id) && (p.repos?.length ?? 0) > 0)
+      .map((p) => p.id)
+  }, [onlyActiveProject, activeProjectId, workspacedProjects, expandedProjects])
+  useGitStatusPolling(visibleGitProjectIds)
+
+  // Раскрыли проект — подтянули статус, если его ещё нет.
+  useEffect(() => {
+    workspacedProjects.forEach((p) => {
+      if (
+        expandedProjects.has(p.id)
+        && (p.repos?.length ?? 0) > 0
+        && statusByProject[p.id] === undefined
+      ) {
+        void loadStatus(p.id)
+      }
+    })
+  }, [workspacedProjects, expandedProjects, statusByProject, loadStatus])
 
   const commitTabOpenSet = useMemo(() => {
     const set = new Set<string>()
@@ -834,6 +866,15 @@ export function GitTab() {
               const busyHere = busyRepo !== null
                 && busyRepo.projectId === project.id
                 && busyRepo.path === repo.path
+              const repoStatus = (statusByProject[project.id] ?? []).find(
+                (entry) => normRepoPath(entry.path) === normRepoPath(repo.path),
+              )
+              const changedFiles = repoStatus
+                ? repoStatus.files.filter((file) => isTrackedKind(file.kind))
+                : []
+              const hasStaged = repoStatus
+                ? repoStatus.files.some((file) => file.staged)
+                : false
 
               return (
                 <div key={rkey}>
@@ -849,6 +890,7 @@ export function GitTab() {
                       if (!isRepoExpanded) loadCommitLog(project.id, repo.path)
                     }}
                     suffix={repo.currentBranch}
+                    count={changedFiles.length > 0 ? changedFiles.length : undefined}
                     actions={[
                       { id: 'fetch', icon: 'refresh', title: t('git.fetchRepo'), onClick: () => handleFetchRepo(project.id, repo) },
                       { id: 'remove', icon: 'delete-bin', title: t('git.remove'), variant: 'destructive', onClick: () => { if (busyRepoRef.current) return; setDeleteLocal(false); setRemoveTarget({ projectId: project.id, repo }) } },
@@ -892,46 +934,110 @@ export function GitTab() {
                     )}
                   </div>
                   {isRepoExpanded && (
-                    (() => {
-                      const isExpanded = commitShowMore[rkey] ?? false
-                      const visibleCommits = isExpanded ? commits : commits.slice(0, MAX_VISIBLE_COMMITS)
-                      const hiddenCount = commits.length - MAX_VISIBLE_COMMITS
-                      return (
-                    <TreeChildren
-                      borderOnHover
-                      totalCount={commits.length}
-                      maxVisible={MAX_VISIBLE_COMMITS}
-                      expanded={isExpanded}
-                      emptyText={t('leftPanel.noCommits')}
-                      emptyIcon="git-commit"
-                      showMoreLabel={t('leftPanel.showMoreCommits', { count: String(hiddenCount) })}
-                      collapseLabel={t('leftPanel.showFewerCommits')}
-                      onShowMore={hiddenCount > 0 ? () => setCommitShowMore(prev => ({ ...prev, [rkey]: true })) : undefined}
-                      onCollapse={() => setCommitShowMore(prev => ({ ...prev, [rkey]: false }))}
-                    >
-                      {visibleCommits.map((commit: any) => {
-                        const commitKey = `${project.id}::${repo.path}::${commit.hash}`
-                        return (
-                        <TreeNode
-                          key={`commit:${commit.hash}`}
-                          id={`commit:${commit.hash}`}
-                          label={commit.subject}
-                          icon="git-commit"
-                          subtitle={`${commit.author} · ${commit.relativeDate}`}
-                          isActive={activeCenterTabId === `commit-${project.id}-${repo.path}-${commit.hash}`}
-                          isTabOpen={commitTabOpenSet.has(commitKey)}
-                          onClick={() => openTab({
-                            id: `commit-${project.id}-${repo.path}-${commit.hash}`,
-                            type: 'commit-detail',
-                            title: commit.subject,
-                            data: { projectId: project.id, repoPath: repo.path, commitHash: commit.hash },
+                    <>
+                      {repoStatus?.error ? (
+                        <div
+                          className="flex items-center gap-1.5 px-2 py-1 text-[0.6875rem] text-muted-foreground"
+                          data-testid={`git-status-error-${rkey}`}
+                        >
+                          <Icon name="alert-triangle" className="size-3 shrink-0" />
+                          <span className="truncate">{t('git.statusUnavailable')}</span>
+                        </div>
+                      ) : repoStatus && repoStatus.files.length > 0 ? (
+                        <div className="pb-0.5" data-testid={`git-changes-${rkey}`}>
+                          <TreeNode
+                            id={`git-all-changes:${rkey}`}
+                            label={t('git.changes.all')}
+                            icon="arrow-left-right"
+                            isActive={activeCenterTabId === `git-diff-${project.id}-${repo.path}-`}
+                            onClick={() => openTab({
+                              id: `git-diff-${project.id}-${repo.path}-`,
+                              type: 'git-diff',
+                              title: t('git.changes.all'),
+                              data: { projectId: project.id, repoPath: repo.path, gitStaged: false },
+                            })}
+                          />
+                          {hasStaged && (
+                            <TreeNode
+                              id={`git-index-changes:${rkey}`}
+                              label={t('git.changes.index')}
+                              icon="arrow-left-right"
+                              isActive={activeCenterTabId === `git-diff-${project.id}-${repo.path}-staged`}
+                              onClick={() => openTab({
+                                id: `git-diff-${project.id}-${repo.path}-staged`,
+                                type: 'git-diff',
+                                title: t('git.changes.index'),
+                                data: { projectId: project.id, repoPath: repo.path, gitStaged: true },
+                              })}
+                            />
+                          )}
+                          {changedFiles.map((file) => {
+                            // Файл открывается своей вкладкой в режиме «Изменения»
+                            // (не отдельный `git-diff`); сводный diff и индекс
+                            // остаются вкладкой `git-diff` ниже.
+                            const workspacePath = repo.path ? `${repo.path}/${file.path}` : file.path
+                            const tabId = fileViewerTabId(project.id, workspacePath)
+                            return (
+                              <TreeNode
+                                key={`git-change:${file.path}`}
+                                id={`git-change:${rkey}:${file.path}`}
+                                label={file.path}
+                                icon={fileIconName(file.path)}
+                                subtitle={t(`file.vcs.${file.kind}`)}
+                                vcsStatus={file.kind}
+                                isActive={activeCenterTabId === tabId}
+                                onClick={() =>
+                                  openFileDiffTab(openTab, {
+                                    projectId: project.id,
+                                    filePath: workspacePath,
+                                  })
+                                }
+                              />
+                            )
                           })}
-                        />
+                        </div>
+                      ) : null}
+                      {(() => {
+                        const isExpanded = commitShowMore[rkey] ?? false
+                        const visibleCommits = isExpanded ? commits : commits.slice(0, MAX_VISIBLE_COMMITS)
+                        const hiddenCount = commits.length - MAX_VISIBLE_COMMITS
+                        return (
+                          <TreeChildren
+                            borderOnHover
+                            totalCount={commits.length}
+                            maxVisible={MAX_VISIBLE_COMMITS}
+                            expanded={isExpanded}
+                            emptyText={t('leftPanel.noCommits')}
+                            emptyIcon="git-commit"
+                            showMoreLabel={t('leftPanel.showMoreCommits', { count: String(hiddenCount) })}
+                            collapseLabel={t('leftPanel.showFewerCommits')}
+                            onShowMore={hiddenCount > 0 ? () => setCommitShowMore(prev => ({ ...prev, [rkey]: true })) : undefined}
+                            onCollapse={() => setCommitShowMore(prev => ({ ...prev, [rkey]: false }))}
+                          >
+                            {visibleCommits.map((commit: any) => {
+                              const commitKey = `${project.id}::${repo.path}::${commit.hash}`
+                              return (
+                                <TreeNode
+                                  key={`commit:${commit.hash}`}
+                                  id={`commit:${commit.hash}`}
+                                  label={commit.subject}
+                                  icon="git-commit"
+                                  subtitle={`${commit.author} · ${commit.relativeDate}`}
+                                  isActive={activeCenterTabId === `commit-${project.id}-${repo.path}-${commit.hash}`}
+                                  isTabOpen={commitTabOpenSet.has(commitKey)}
+                                  onClick={() => openTab({
+                                    id: `commit-${project.id}-${repo.path}-${commit.hash}`,
+                                    type: 'commit-detail',
+                                    title: commit.subject,
+                                    data: { projectId: project.id, repoPath: repo.path, commitHash: commit.hash },
+                                  })}
+                                />
+                              )
+                            })}
+                          </TreeChildren>
                         )
-                      })}
-                    </TreeChildren>
-                      )
-                    })()
+                      })()}
+                    </>
                   )}
                 </div>
               )

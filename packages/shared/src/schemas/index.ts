@@ -585,6 +585,29 @@ export const gitCommitQuerySchema = z.object({
   hash: z.string().min(1),
 });
 
+/** ADR-076 (этап 1): `GET /git/status` — состояние рабочего дерева репозитория(ев). */
+export const gitStatusQuerySchema = z.object({
+  project_id: z.string().min(1),
+  repo_path: z.string().default(''),
+});
+
+/**
+ * ADR-076 (этап 1): `GET /git/diff` — diff рабочего дерева.
+ *
+ * `staged` принимает строковые `true`/`false` (query-параметры): `z.coerce.boolean()`
+ * не подходит — `'false'` превратился бы в `true` (та же ловушка, что у
+ * `fsWorkspaceBrowseQuerySchema`).
+ */
+export const gitDiffQuerySchema = z.object({
+  project_id: z.string().min(1),
+  repo_path: z.string().default(''),
+  path: z.string().min(1).optional(),
+  staged: z
+    .preprocess((v) => (v === 'true' ? true : v === 'false' ? false : v), z.boolean())
+    .default(false),
+  context: z.coerce.number().int().min(0).max(10).default(3),
+});
+
 const toolCapabilityValues = Object.values(ToolCapability) as [string, ...string[]];
 
 /**
@@ -682,6 +705,8 @@ export type GitReposRemoveBody = z.infer<typeof gitReposRemoveBodySchema>;
 export type GitReposFetchBody = z.infer<typeof gitReposFetchBodySchema>;
 export type GitLogQuery = z.infer<typeof gitLogQuerySchema>;
 export type GitCommitQuery = z.infer<typeof gitCommitQuerySchema>;
+export type GitStatusQuery = z.infer<typeof gitStatusQuerySchema>;
+export type GitDiffQuery = z.infer<typeof gitDiffQuerySchema>;
 
 // --- Скиллы (ADR-126) ---
 

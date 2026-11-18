@@ -4,16 +4,11 @@ import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import type { CenterTab } from '@/stores/useUIStore'
 import type { CommitDetail } from '@itphx/synth-shared'
+import { DiffView } from './DiffView'
 
 interface CommitDetailTabProps {
   tab: CenterTab
 }
-
-/**
- * Предел строк diff, которые рисуются в терминальном виде. Сервер обрезает
- * diff по размеру (1 МиБ) — миллионы строк в DOM не превращаем.
- */
-const MAX_DIFF_LINES = 500
 
 export function CommitDetailTab({ tab }: CommitDetailTabProps) {
   const { t, locale } = useI18n()
@@ -137,33 +132,13 @@ export function CommitDetailTab({ tab }: CommitDetailTabProps) {
       {/* Дифф */}
       {commit.diff && (
         <div className="flex-1 min-h-0 border-t border-sidebar-border">
-          {commit.diff_truncated && (
-            <div
-              className="flex items-start gap-1.5 border-b border-status-warning/40 bg-status-warning/10 px-4 py-1.5 text-[0.6875rem] text-status-warning"
-              data-testid="commit-diff-truncated"
-            >
-              <Icon name="alert-triangle" className="mt-0.5 size-3 shrink-0" />
-              <span className="min-w-0 break-words">{t('commit.diffTruncated')}</span>
-            </div>
-          )}
-          <pre className="p-4 text-xs font-mono text-muted-foreground whitespace-pre overflow-x-auto leading-relaxed">
-            {commit.diff
-              .split('\n')
-              .slice(0, commit.diff_truncated ? MAX_DIFF_LINES : undefined)
-              .map((line, i) => (
-                <span
-                  key={i}
-                  className={
-                    line.startsWith('+') && !line.startsWith('+++') ? 'text-status-success' :
-                    line.startsWith('-') && !line.startsWith('---') ? 'text-status-error' :
-                    line.startsWith('@@') ? 'text-status-info' :
-                    ''
-                  }
-                >
-                  {line}{'\n'}
-                </span>
-              ))}
-          </pre>
+          <DiffView
+            diff={commit.diff}
+            variant="page"
+            truncated={commit.diff_truncated}
+            truncatedTestId="commit-diff-truncated"
+            testId="commit-diff"
+          />
         </div>
       )}
     </div>

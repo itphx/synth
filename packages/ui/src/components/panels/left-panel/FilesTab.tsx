@@ -4,6 +4,8 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useActiveProject } from '@/hooks/useActiveProject'
 import { useFilesStore } from '@/stores/filesStore'
+import { useGitStore } from '@/stores/gitStore'
+import { useGitStatusPolling } from '@/hooks/useGitStatusPolling'
 import { useNotification } from '@/hooks/useNotification'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
@@ -11,6 +13,10 @@ import { useDevice } from '@/hooks/useDevice'
 import { synthApi } from '@/lib/api/synthApi'
 import type { ProjectData } from '@/lib/api/synthApi'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { fileIconName } from '@/lib/fileIcon'
+import { buildStatusIndex, dirStatus, fileStatus } from '@/lib/gitStatus'
+import { openFileDiffTab } from '@/lib/fileTabs'
+import type { GitStatusEntry } from '@/lib/gitStatus'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
 import { OriginBadge } from '@/components/ui/OriginBadge'
@@ -55,6 +61,8 @@ export function FilesTab() {
   const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
   const loadSessions = useSessionsStore((s) => s.loadSessions)
   const { projectId: activeProjectId, source: activeProjectSource } = useActiveProject()
+  const statusByProject = useGitStore((s) => s.statusByProject)
+  const loadGitStatus = useGitStore((s) => s.loadStatus)
   const [renamingPath, setRenamingPath] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renamingProject, setRenamingProject] = useState<string | null>(null)
@@ -243,15 +251,45 @@ export function FilesTab() {
     })
   }, [expandedDirs])
 
+  // Статус рабочего дерева (ADR-076, этап 1): индекс пересобирается только при
+  // изменении снимка стора, а не на каждый рендер дерева.
+  const statusIndexes = useMemo(() => {
+    const out: Record<string, Map<string, GitStatusEntry>> = {}
+    for (const [projectId, repos] of Object.entries(statusByProject)) {
+      out[projectId] = buildStatusIndex(repos)
+    }
+    return out
+  }, [statusByProject])
+
+  // Поллинг — только проекты, реально видимые в дереве и с репозиториями:
+  // иначе каждые 5 с уходил бы `GET /git/status` по каждому workspace-проекту
+  // (сервер делает `git status` даже по нулю репозиториев). Текущий проект
+  // всегда раскрыт эффектом `expandProject` выше, поэтому в набор попадает.
+  const visibleGitProjectIds = useMemo(() => {
+    const scoped = onlyActiveProject && activeProjectId
+      ? workspacedProjects.filter((p) => p.id === activeProjectId)
+      : workspacedProjects
+    return scoped
+      .filter((p) => expandedProjects.has(p.id) && (p.repos?.length ?? 0) > 0)
+      .map((p) => p.id)
+  }, [onlyActiveProject, activeProjectId, workspacedProjects, expandedProjects])
+  useGitStatusPolling(visibleGitProjectIds)
+
+  // Ленивая загрузка: раскрыли проект — подтянули статус, если его ещё нет.
+  useEffect(() => {
+    workspacedProjects.forEach((p) => {
+      if (
+        expandedProjects.has(p.id)
+        && (p.repos?.length ?? 0) > 0
+        && statusByProject[p.id] === undefined
+      ) {
+        void loadGitStatus(p.id)
+      }
+    })
+  }, [workspacedProjects, expandedProjects, statusByProject, loadGitStatus])
+
   const toggleDir = (projectId: string, dirPath: string) => {
     toggleDirExpand(projectId, dirPath)
-  }
-
-  const fileIconName = (name: string): 'file-text' | 'file-code' | 'image' | 'file-music' => {
-    if (/\.(tsx?|jsx?|py|rs|go|java|rb|php|swift|kt)$/i.test(name)) return 'file-code'
-    if (/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(name)) return 'image'
-    if (/\.(mp3|wav|ogg|flac)$/i.test(name)) return 'file-music'
-    return 'file-text'
   }
 
   const fileSize = (size: number) => size > 1024 ? `${(size / 1024).toFixed(1)}k` : `${size}b`
@@ -412,6 +450,11 @@ export function FilesTab() {
     const dirKey = `${projectId}/${entry.path}`
     const isExpanded = expandedDirs.has(dirKey)
     const isRenaming = renamingPath === entry.path && renamingProject === projectId
+    const statusIndex = statusIndexes[projectId]
+    const statusEntry = !isDir && statusIndex ? fileStatus(statusIndex, entry.path) : undefined
+    const vcsStatus = statusIndex
+      ? (isDir ? dirStatus(statusIndex, entry.path)?.kind : statusEntry?.kind)
+      : undefined
 
     const entryActions: TreeAction[] = []
     if (isDir) {
@@ -460,6 +503,18 @@ export function FilesTab() {
       }, destructive: true },
     ]
 
+    // Отслеживаемый изменённый файл: быстрый переход к его diff. У untracked/
+    // ignored diff пуст, пункт не показываем.
+    if (statusEntry && statusEntry.kind !== 'untracked' && statusEntry.kind !== 'ignored') {
+      entryContextItems.unshift({
+        label: t('git.changes.showDiff'),
+        icon: 'arrow-left-right' as const,
+        // Та же вкладка файла в режиме «Изменения» (не отдельный `git-diff`):
+        // режим — данные вкладки, повторный клик лишь переключает её.
+        onClick: () => openFileDiffTab(openTab, { projectId, filePath: entry.path }),
+      })
+    }
+
     const isDragging = dragState?.projectId === projectId && dragState?.path === entry.path
 
     return {
@@ -490,6 +545,7 @@ export function FilesTab() {
       },
       actions: entryActions,
       contextItems: entryContextItems,
+      vcsStatus,
       className: isDragging ? 'opacity-40' : undefined,
     }
   }
@@ -515,6 +571,10 @@ export function FilesTab() {
   const renderFilesProject = (project: ProjectData) => {
     const isExpanded = expandedProjects.has(project.id)
     const entries = treesByProject[project.id] || []
+    const projectStatusIndex = statusIndexes[project.id]
+    const projectChangeCount = projectStatusIndex
+      ? (dirStatus(projectStatusIndex, '')?.count ?? 0)
+      : 0
 
     return (
       <div key={project.id}>
@@ -526,7 +586,20 @@ export function FilesTab() {
           iconSize="md"
           isExpanded={isExpanded}
           hasChildren={true}
-          badge={<OriginBadge origin={project.origin} />}
+          badge={(
+            <>
+              <OriginBadge origin={project.origin} />
+              {projectChangeCount > 0 && (
+                <span
+                  className="shrink-0 rounded bg-interactive px-1 text-[0.65rem] text-muted-foreground"
+                  title={t('git.changes.count', { count: projectChangeCount })}
+                  data-testid={`file-project-changes-${project.id}`}
+                >
+                  {projectChangeCount}
+                </span>
+              )}
+            </>
+          )}
           onToggle={() => toggleProjectExpand(project.id)}
           onDragOver={isTouch ? undefined : handleFileDragOver}
           onDrop={isTouch ? undefined : (e) => handleDropOnProject(e, project.id)}

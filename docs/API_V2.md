@@ -1694,6 +1694,8 @@ backend — id из AuthKit). Прямая линковка (`POST /identities` 
 | POST | `/api/v2/git/repos/fetch` | write / auth | `{projectId, id?\|path?}` → `{path, lastFetch}`; SSH-URL без ключа → 400 `git.ssh_key_required`; таймаут → 504 `git.fetch_timeout` |
 | GET | `/api/v2/git/log` | read / auth | `?project_id=&repo_path=&max_count=` → `{commits}` |
 | GET | `/api/v2/git/commit` | read / auth | `?project_id=&repo_path=&hash=` → `{commit}`; diff коммита обрезан по пределу **1 МиБ** (`MAX_COMMIT_DIFF_BYTES`) — в DTO добавляется `diff_truncated: true` (поля нет, если diff отдан целиком) |
+| GET | `/api/v2/git/status` | read / auth | `?project_id=&repo_path=` → `{repos: GitRepoWorktreeStatus[]}`; `repo_path` задан — только запись реестра (иначе 404 `NOT_FOUND`); в записи `path`/`branch?`/`ahead?`/`behind?`/`files`/`truncated?`/`error?` (не-репозиторий → `git.repo_missing`, остальные репозитории отдаются); файл — `{path, orig_path?, kind, staged, unstaged}`, `kind`: `added\|modified\|deleted\|renamed\|typechange\|conflict\|untracked\|ignored`; untracked — **поимённо** (`--untracked-files=all`), ignored — **каталогом** (`--ignored=matching`); лимит **2000** записей на репозиторий (`truncated: true`), in-process кэш **2 с** (`statusCacheTtlMs`, `0` — без кэша) |
+| GET | `/api/v2/git/diff` | read / auth | `?project_id=&repo_path=&path?=&staged?=&context?=` → `{diff: GitWorktreeDiff}` (`repo_path` обязан быть записью реестра → иначе 404; `context` 0…10, дефолт 3); untracked — diff от `/dev/null` (`--no-index`), бинарь → `binary: true` и пустой `diff`; `additions`/`deletions` — по строкам `+`/`-`; обрезка по `maxDiffBytes` → `diff_truncated: true`; недопустимый `path` (абсолютный, `..`, NUL, побег симлинком) → 400 `git.repo_path_invalid` |
 
 RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetch`) — owner/EDITOR/LEAD/ADMIN (`canEditProjectContent`), иначе 403; read (`scan`/`log`/`commit`) — право **чтения** проекта: owner/участник проекта/`LEAD`/`ADMIN` (`canReadProject`), иначе 403. Проверка — **граничный** guard (`projectGuard('read'|'write')` в core-фабрике `createGitRoutes`), т.е. **до** обработчика; правил доступа внутри обработчиков нет (инвариант 16). Core (standalone) — `requireAuth` (прав на проект в standalone нет).
 
@@ -1721,6 +1723,22 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 (хвостовой «битый» UTF-8-символ отбрасывается), а в DTO коммита появляется `diff_truncated: true`.
 Поля нет, если diff отдан целиком. Мегабайты патча по проводу не уходят; список изменённых файлов
 (`files`) при этом полный.
+
+**Состояние рабочего дерева и diff рабочего дерева** (`GET /status`, `GET /diff` — этап 1
+подсветки изменённых файлов). Оба читают только через порт исполнения (ADR-077): в remote-режиме
+команды идут на исполнителя, control plane ФС агента не читает. `/status` — один `git status`
+на репозиторий (параллельно, `Promise.all`), лимит **2000** записей на репозиторий и in-process
+кэш **2 с** (`GitRoutesOptions.statusCacheTtlMs`, `0` — без кэша, ключ `projectId::repoPath`);
+`/diff` не кэшируется. Diff рабочего дерева обрезается тем же `maxDiffBytes`, что и diff коммита
+(`diff_truncated: true`). Unmerged (`u`) отдаётся как `conflict`; игнорируемые (`!`) — отдельный
+`ignored` (UI показывает их приглушённо).
+
+**Новые и игнорируемые записи — разная гранулярность.** Untracked перечисляются **поимённо**
+(`--untracked-files=all`): новый каталог с файлом даёт запись `Test/Test.txt`, а не `Test/`, —
+иначе панель не может отметить ни сам файл, ни его каталог. Игнорируемые, наоборот, приходят
+**каталогом одной записью** (`--ignored=matching`, внутрь не заходит): `node_modules/` не
+разворачивается пофайлово и не раздувает ответ. Предел `truncated` (2000 записей) действует и
+для большого untracked-дерева.
 
 > **Изменение поведения (managed).** Запрос к **несуществующему** `projectId` в `/api/v2/git/*` теперь даёт **403 вместо 404** — fail-closed, без раскрытия существования (как в FS-роутах). Раньше read-роуты (`scan`/`log`/`commit`) вообще не проверяли доступ и позволяли читать git-данные чужого проекта по его id.
 

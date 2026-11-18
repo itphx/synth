@@ -1494,3 +1494,16 @@ html.pointer-coarse .markdown-content .md-code-download {
 .xterm .xterm-scrollable-element > .scrollbar.vertical > .scra {
   display: none;
 }
+
+/* --- CodeMirror (просмотр/редактор файла): высота и моно-шрифт ------------ */
+/* Компонент `components/chat/CodeEditor` живёт в ленивом чанке, но эти два
+   правила инертны без разметки `.cm-editor` — держим их здесь, чтобы редактор
+   занимал всю панель, а скролл был внутри `.cm-scroller` (не у панели). */
+.cm-editor {
+  height: 100%;
+}
+
+.cm-editor .cm-scroller {
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}

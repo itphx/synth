@@ -57,6 +57,11 @@ const MARKDOWN_PACKAGES = new Set(["marked", "dompurify"])
  *
  * Второй список — транзитивные зависимости shiki (`hast-util-to-html` и его
  * семейства): приложению они не нужны и тоже должны остаться в ленивых чанках.
+ *
+ * CodeMirror (`@codemirror/*`, `@lezer/*` и их спутники `style-mod`,
+ * `w3c-keyname`, `crelt`) грузится только при открытии файла
+ * (`components/chat/CodeEditor`): без исключения из групп редактор попадал в
+ * eager `vendor-misc`, и ленивость терялась.
  */
 const LAZY_VENDOR_FAMILIES = [
   "hast-",
@@ -90,10 +95,19 @@ const LAZY_VENDOR_PACKAGES = new Set([
   "beautiful-mermaid",
   "elkjs",
   "entities",
+  // Транзитивные зависимости CodeMirror: нужны только редактору файла,
+  // в eager `vendor-misc` им делать нечего.
+  "style-mod",
+  "w3c-keyname",
+  "crelt",
 ])
 
 function isLazyVendorPackage(pkg: string): boolean {
   if (pkg === "shiki" || pkg.startsWith("@shikijs/")) return true
+  // CodeMirror (`@codemirror/*`, грамматики `@codemirror/lang-*`) и парсеры
+  // `@lezer/*` грузятся только при открытии файла (`components/chat/CodeEditor`),
+  // поэтому в вендорные группы не попадают — иначе ленивость теряется.
+  if (pkg.startsWith("@codemirror/") || pkg.startsWith("@lezer/")) return true
   if (LAZY_VENDOR_PACKAGES.has(pkg)) return true
   return LAZY_VENDOR_FAMILIES.some((family) => pkg === family || pkg.startsWith(family))
 }

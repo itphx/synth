@@ -39,6 +39,30 @@ vi.mock('@/lib/markdown/highlight', async (importOriginal) => {
   return { ...actual, highlightCode: highlight.highlightCode }
 })
 
+/** CodeMirror в jsdom не гоняем: мок отдаёт текст и признак readOnly. */
+vi.mock('@/components/chat/CodeEditor', () => ({
+  CodeEditor: ({
+    value,
+    filePath,
+    readOnly,
+    testId,
+  }: {
+    value: string
+    filePath: string
+    readOnly?: boolean
+    testId?: string
+  }) =>
+    React.createElement(
+      'pre',
+      {
+        'data-testid': testId ?? 'code-editor',
+        'data-file-path': filePath,
+        'data-readonly': readOnly ? 'true' : 'false',
+      },
+      value,
+    ),
+}))
+
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 
 // Стор UI в просмотрщике: нужен настоящий subscribe — иначе переключатель
@@ -47,6 +71,11 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 const uiStoreMock = vi.hoisted(() => {
   const listeners = new Set<() => void>()
   const state = {
+    updateTabData: (id: string, data: Record<string, unknown>) => {
+      state.lastUpdate = { id, data }
+      for (const listener of listeners) listener()
+    },
+    lastUpdate: null as null | { id: string; data: Record<string, unknown> },
     fileViewerWidth: 'column' as 'column' | 'full',
     setFileViewerWidth: (width: 'column' | 'full') => {
       state.fileViewerWidth = width
@@ -94,12 +123,12 @@ async function render(node: React.ReactNode): Promise<HTMLElement> {
   return container
 }
 
-function fileTab(filePath: string): CenterTab {
+function fileTab(filePath: string, viewMode?: 'preview' | 'source' | 'diff'): CenterTab {
   return {
     id: `tab-${filePath}`,
     type: 'file-viewer',
     title: filePath.split('/').pop() ?? filePath,
-    data: { projectId: 'p1', filePath },
+    data: { projectId: 'p1', filePath, ...(viewMode ? { viewMode } : {}) },
   }
 }
 
@@ -135,7 +164,7 @@ describe('FileViewerTab — предпросмотр файла по семей�
     }
   })
 
-  it('markdown → рендер через `.markdown-content`, переключатель «Исходник» даёт `<pre>`', async () => {
+  it('markdown → рендер через `.markdown-content`, «Исходник» даёт CodeMirror', async () => {
     mocks.readFile.mockResolvedValue({
       path: 'README.md',
       content: '# Заголовок',
@@ -148,16 +177,25 @@ describe('FileViewerTab — предпросмотр файла по семей�
     expect(container.querySelector('.markdown-content')).not.toBeNull()
     expect(container.querySelector('h1')?.textContent).toBe('Заголовок')
 
-    const sourceButton = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent === 'file.markdownSource',
-    )
-    expect(sourceButton).toBeTruthy()
+    const sourceButton = container.querySelector<HTMLElement>('[data-testid="file-view-mode-source"]')
+    expect(sourceButton).not.toBeNull()
     await act(async () => {
       sourceButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    expect(container.querySelector('.markdown-content')).toBeNull()
-    expect(container.querySelector('pre')?.textContent).toContain('# Заголовок')
+    // Режим — данные вкладки: просмотрщик пишет `viewMode` через updateTabData.
+    expect(uiStoreMock.lastUpdate).toEqual({
+      id: 'tab-README.md',
+      data: { viewMode: 'source' },
+    })
+
+    // С переданным `viewMode: 'source'` markdown показывается исходником.
+    const asSource = await render(<FileViewerTab tab={fileTab('README.md', 'source')} />)
+    expect(asSource.querySelector('.markdown-content')).toBeNull()
+    const code = asSource.querySelector<HTMLElement>('[data-testid="file-code-viewer"]')
+    expect(code).not.toBeNull()
+    expect(code!.textContent).toContain('# Заголовок')
+    expect(code!.getAttribute('data-readonly')).toBe('true')
   })
 
   it('markdown: ширина чтения — колонка по умолчанию, переключатель даёт полную ширину и обратно', async () => {
@@ -173,16 +211,16 @@ describe('FileViewerTab — предпросмотр файла по семей�
     // Обёртка markdown-превью — родитель `.markdown-content`.
     const wrapper = () =>
       container.querySelector('.markdown-content')!.parentElement as HTMLElement
-    const button = (label: string) =>
-      Array.from(container.querySelectorAll('button')).find((b) => b.textContent === label)!
+    const button = (testId: string) =>
+      container.querySelector<HTMLButtonElement>(`[data-testid="${testId}"]`)!
 
     // Дефолт — колонка: контент ограничен по ширине и отцентрован.
     expect(wrapper().classList.contains('max-w-[108ch]')).toBe(true)
     expect(wrapper().classList.contains('mx-auto')).toBe(true)
     expect(wrapper().classList.contains('max-w-full')).toBe(false)
 
-    const columnButton = button('file.widthColumn')
-    const fullButton = button('file.widthFull')
+    const columnButton = button('file-width-column')
+    const fullButton = button('file-width-full')
     expect(columnButton.getAttribute('aria-pressed')).toBe('true')
     expect(fullButton.getAttribute('aria-pressed')).toBe('false')
 
@@ -258,6 +296,48 @@ describe('FileViewerTab — предпросмотр файла по семей�
 
     // Подсветку делает тот же `MarkdownContent`, что и в чате.
     expect(highlight.highlightCode).toHaveBeenCalledWith('const a = 1', 'ts')
+  })
+
+  it('text: только «Исходник» и «Изменения», без «Просмотра»; контент — в CodeMirror', async () => {
+    mocks.readFile.mockResolvedValue({
+      path: 'notes.txt',
+      content: 'просто текст',
+      size: 11,
+      encoding: 'utf-8',
+    })
+
+    const container = await render(<FileViewerTab tab={fileTab('notes.txt')} />)
+
+    expect(container.querySelector('[data-testid="file-view-mode-preview"]')).toBeNull()
+    expect(container.querySelector('[data-testid="file-view-mode-source"]')).not.toBeNull()
+    // Снимка статуса нет — «Изменения» не прячем (баг «кнопка после перезахода»).
+    expect(container.querySelector('[data-testid="file-view-mode-diff"]')).not.toBeNull()
+
+    const code = container.querySelector<HTMLElement>('[data-testid="file-code-viewer"]')
+    expect(code).not.toBeNull()
+    expect(code!.textContent).toContain('просто текст')
+    expect(code!.getAttribute('data-readonly')).toBe('true')
+    expect(code!.getAttribute('data-file-path')).toBe('notes.txt')
+  })
+
+  it('markdown: режимы «Просмотр», «Исходник» и «Изменения»', async () => {
+    mocks.readFile.mockResolvedValue({
+      path: 'README.md',
+      content: '# Заголовок',
+      size: 14,
+      encoding: 'utf-8',
+    })
+
+    const container = await render(<FileViewerTab tab={fileTab('README.md')} />)
+
+    expect(container.querySelector('[data-testid="file-view-mode-preview"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="file-view-mode-source"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="file-view-mode-diff"]')).not.toBeNull()
+    expect(
+      container
+        .querySelector('[data-testid="file-view-mode-preview"]')
+        ?.getAttribute('aria-pressed'),
+    ).toBe('true')
   })
 
   it('image → `<img>` с src из `/fs/raw`', async () => {
@@ -485,8 +565,8 @@ describe('FileViewerTab — предпросмотр файла по семей�
 
     // Подсказка и «Скачать» (для печати/офлайна) — в том же тулбаре.
     expect(container.textContent).toContain('file.htmlSandboxed')
-    expect(container.textContent).toContain('file.markdownPreview')
-    expect(container.textContent).toContain('file.markdownSource')
+    expect(container.textContent).toContain('file.viewMode.preview')
+    expect(container.textContent).toContain('file.viewMode.source')
     const link = container.querySelector('a[download]') as HTMLAnchorElement | null
     expect(link).not.toBeNull()
     expect(link!.getAttribute('href')).toContain('/fs/download')
@@ -496,42 +576,30 @@ describe('FileViewerTab — предпросмотр файла по семей�
     const html = '<!DOCTYPE html><html><body><p>raw</p></body></html>'
     mockHtmlFiles({ 'index.html': html })
 
-    const container = await render(<FileViewerTab tab={fileTab('index.html')} />)
+    const container = await render(<FileViewerTab tab={fileTab('index.html', 'source')} />)
     await act(async () => {})
 
-    const sourceButton = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent === 'file.markdownSource',
-    )
-    expect(sourceButton).toBeTruthy()
-    await act(async () => {
-      sourceButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
-
     expect(container.querySelector('[data-testid="html-preview"]')).toBeNull()
-    expect(container.querySelector('pre')?.textContent).toContain('<!DOCTYPE html>')
-    expect(container.querySelector('pre')?.textContent).toContain('<p>raw</p>')
+    const code = container.querySelector<HTMLElement>('[data-testid="file-code-viewer"]')
+    expect(code).not.toBeNull()
+    expect(code!.textContent).toContain('<!DOCTYPE html>')
+    expect(code!.textContent).toContain('<p>raw</p>')
   })
 
-  it('html: открытие другого html-файла сбрасывает режим на «Просмотр»', async () => {
+  it('html: режим — данные вкладки, новый файл открывается в «Просмотре»', async () => {
     mockHtmlFiles({ 'a.html': '<!DOCTYPE html><html><body>A</body></html>', 'b.html': '<p>B</p>' })
 
-    const container = await render(<FileViewerTab tab={fileTab('a.html')} />)
+    const container = await render(<FileViewerTab tab={fileTab('a.html', 'source')} />)
     await act(async () => {})
-
-    const sourceButton = Array.from(container.querySelectorAll('button')).find(
-      (b) => b.textContent === 'file.markdownSource',
-    )
-    await act(async () => {
-      sourceButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    })
     expect(container.querySelector('[data-testid="html-preview"]')).toBeNull()
 
+    // Режим не «залипает» локально: у новой вкладки файла нет `viewMode` —
+    // значит, режим по умолчанию (просмотр).
     await rerender(<FileViewerTab tab={fileTab('b.html')} />)
 
     const frame = container.querySelector<HTMLIFrameElement>('[data-testid="html-preview"]')
     expect(frame).not.toBeNull()
     expect(frame!.getAttribute('srcdoc')).toContain('<p>B</p>')
-    expect(container.querySelector('pre')).toBeNull()
   })
 
   it('html: 413 FILE_TOO_LARGE → прежний блок причины и «Скачать»', async () => {

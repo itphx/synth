@@ -37,6 +37,8 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
   terminal: 'terminal-box',
   // Экран «Вывод процесса».
   'process-log': 'terminal-box',
+  // ADR-076 (этап 1): diff рабочего дерева.
+  'git-diff': 'arrow-left-right',
 }
 
 /**
@@ -101,6 +103,11 @@ function TabTooltipLabel({ tab }: { tab: CenterTab }) {
     return projectName
       ? t('center.tabTooltip.processLog', { title: tab.title, project: projectName })
       : t('center.tabTooltip.noProject.processLog', { title: tab.title })
+  }
+  if (tab.type === 'git-diff') {
+    return projectName
+      ? t('center.tabTooltip.gitDiff', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.gitDiff', { title: tab.title })
   }
   return projectName
     ? t('center.tabTooltip.fileEditor', { title: tab.title, project: projectName })

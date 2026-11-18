@@ -16,7 +16,10 @@ import {
   gitReposFetchBodySchema,
   gitLogQuerySchema,
   gitCommitQuerySchema,
+  gitStatusQuerySchema,
+  gitDiffQuerySchema,
 } from '@itphx/synth-shared';
+import type { GitRepoWorktreeStatus, GitWorktreeStatusResponse } from '@itphx/synth-shared';
 import { GitService, deriveRepoName, resolveRepoPath } from '../../git/git-service.js';
 import { findRepoEntry, upsertRepoEntry, type RepoRegistryInput } from '../../git/repo-registry.js';
 import { inspectRepoPath } from '../../git/repo-occupancy.js';
@@ -83,7 +86,22 @@ export interface GitRoutesOptions {
    * добавляется `diff_truncated: true`.
    */
   maxDiffBytes?: number;
+  /**
+   * TTL in-process кэша состояния рабочего дерева (`GET /status`), мс.
+   * Не задан — `GIT_STATUS_CACHE_TTL_MS` (2 с); `0` — без кэша.
+   *
+   * Кэш нужен панели файлов: опрос статуса идёт часто (активная сессия, смена
+   * каталога, несколько вкладок), а `git status` на большом дереве — не
+   * бесплатный. `2 с` — компромисс «свежо для человека, дёшево для git».
+   */
+  statusCacheTtlMs?: number;
 }
+
+/**
+ * Дефолтный TTL кэша `GET /api/v2/git/status` — 2 с (см.
+ * `GitRoutesOptions.statusCacheTtlMs`).
+ */
+export const GIT_STATUS_CACHE_TTL_MS = 2000;
 
 /**
  * Формат ошибки git-роутов: машиночитаемый код + необязательные подробности.
@@ -191,6 +209,25 @@ export function createGitRoutes(
   // `auth.requireAuth` уже навешан на write-эндпоинты выше, поэтому дефолтный
   // writeGuard — no-op (в backend передаётся requireAdmin/RBAC).
   const writeGuard: Middleware = opts.writeGuard ?? (async (_c, next) => { await next(); });
+
+  // In-process кэш состояния рабочего дерева (`GET /status`): ключ
+  // `projectId::repoPath`, TTL из опций. Это чистый read-only снимок — держать
+  // его в памяти инстанса безопасно (не источник истины, срок жизни 2 с).
+  // `/diff` кэшем не пользуется: diff запрашивают по действию пользователя и
+  // он должен быть свежим.
+  const statusCacheTtlMs = opts.statusCacheTtlMs ?? GIT_STATUS_CACHE_TTL_MS;
+  const statusCache = new Map<string, { at: number; value: GitWorktreeStatusResponse }>();
+
+  function cachedStatus(key: string): GitWorktreeStatusResponse | undefined {
+    if (statusCacheTtlMs <= 0) return undefined;
+    const hit = statusCache.get(key);
+    if (!hit) return undefined;
+    if (Date.now() - hit.at > statusCacheTtlMs) {
+      statusCache.delete(key);
+      return undefined;
+    }
+    return hit.value;
+  }
 
   async function loadProject(id: string): Promise<Project> {
     const project = await projectStore.load(id);
@@ -586,6 +623,103 @@ export function createGitRoutes(
       const wsPath = await resolveWorkspace(project);
       const commit = await gitService.getCommitDetail(wsPath, query.repo_path, query.hash);
       return c.json({ commit });
+    } catch (err) {
+      const e = toRouteError(err);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
+    }
+  });
+
+  // GET /api/v2/git/status — состояние рабочего дерева репозитория(ев) проекта.
+  //
+  // `repo_path` задан — только запись реестра с этим путём (нет записи → 404):
+  // панель файлов не должна «находить» репозиторий, которого нет в реестре.
+  // Ошибка одного репозитория (`PATH_TRAVERSAL` симлинка, недоступный каталог)
+  // уходит в его запись полем `error` — панель остаётся работоспособной.
+  app.get('/status', auth.requireAuth, projectGuard('read'), async (c) => {
+    try {
+      const query = gitStatusQuerySchema.parse({
+        project_id: c.req.query('project_id'),
+        repo_path: c.req.query('repo_path') ?? '',
+      });
+      const projectId = authorizedProjectId(c);
+      const cacheKey = `${projectId}::${query.repo_path}`;
+      const cached = cachedStatus(cacheKey);
+      if (cached) return c.json(cached);
+
+      const project = await loadProject(projectId);
+      const repos = normalizeRepos(project);
+      let targets = repos;
+      if (query.repo_path) {
+        const entry = findRepoEntry(repos, undefined, query.repo_path);
+        if (!entry) {
+          throw { error: 'Репозиторий не найден в реестре', code: 'NOT_FOUND' } satisfies RouteError;
+        }
+        targets = [entry];
+      }
+
+      const wsPath = await resolveWorkspace(project);
+      const statuses = await Promise.all(
+        targets.map(async (entry): Promise<GitRepoWorktreeStatus> => {
+          try {
+            return await gitService.getWorktreeStatus(wsPath, entry.path);
+          } catch (err) {
+            const code = (err as { code?: unknown } | undefined)?.code;
+            return {
+              path: entry.path,
+              files: [],
+              error: typeof code === 'string' ? code : 'INTERNAL_ERROR',
+            };
+          }
+        }),
+      );
+
+      const response: GitWorktreeStatusResponse = { repos: statuses };
+      if (statusCacheTtlMs > 0) {
+        // Просроченные записи снимаем пачкой при разрастании карты: TTL не
+        // будильник, и без этого карта копила бы ключи проектов, к которым
+        // больше не обращаются.
+        if (statusCache.size > 200) {
+          const now = Date.now();
+          for (const [k, v] of statusCache) {
+            if (now - v.at > statusCacheTtlMs) statusCache.delete(k);
+          }
+        }
+        statusCache.set(cacheKey, { at: Date.now(), value: response });
+      }
+      return c.json(response);
+    } catch (err) {
+      const e = toRouteError(err);
+      return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);
+    }
+  });
+
+  // GET /api/v2/git/diff — diff рабочего дерева (файл или сводный по репозиторию).
+  //
+  // `repo_path` обязан быть записью реестра (404 иначе); `path` необязателен —
+  // без него отдаётся сводный diff. Ответ — `{ diff: GitWorktreeDiff }`.
+  app.get('/diff', auth.requireAuth, projectGuard('read'), async (c) => {
+    try {
+      const query = gitDiffQuerySchema.parse({
+        project_id: c.req.query('project_id'),
+        repo_path: c.req.query('repo_path') ?? '',
+        path: c.req.query('path'),
+        staged: c.req.query('staged'),
+        context: c.req.query('context'),
+      });
+      const project = await loadProject(authorizedProjectId(c));
+      const repos = normalizeRepos(project);
+      const entry = findRepoEntry(repos, undefined, query.repo_path);
+      if (!entry) {
+        throw { error: 'Репозиторий не найден в реестре', code: 'NOT_FOUND' } satisfies RouteError;
+      }
+
+      const wsPath = await resolveWorkspace(project);
+      const diff = await gitService.getWorktreeDiff(wsPath, entry.path, {
+        ...(query.path !== undefined ? { path: query.path } : {}),
+        staged: query.staged,
+        contextLines: query.context,
+      });
+      return c.json({ diff });
     } catch (err) {
       const e = toRouteError(err);
       return c.json({ error: e }, codeToStatus(e.code) as RouteStatus);

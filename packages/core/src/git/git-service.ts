@@ -1,11 +1,19 @@
 import { readdir, mkdir, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { resolve as pathResolve, relative, dirname, join, isAbsolute, sep } from 'node:path';
-import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
+import type {
+  RepoStatus,
+  CommitInfo,
+  CommitDetail,
+  CommitFileInfo,
+  GitRepoWorktreeStatus,
+  GitWorktreeDiff,
+} from '@itphx/synth-shared';
 import type { ExecutionPort, ExecSecret } from '../execution/ports/index.js';
 import { isExecutionError } from '../execution/ports/index.js';
 import { inspectRepoPath } from './repo-occupancy.js';
 import { gitExec, sanitizeGitEnv } from './exec.js';
+import { parseWorktreeStatus } from './status.js';
 import { isInsideReal, resolveRealPath } from '../engine/tools/path-utils.js';
 
 /**
@@ -74,6 +82,16 @@ export const DEFAULT_GIT_FETCH_TIMEOUT_MS = 300_000;
  * мегабайты патча по проводу не уходят.
  */
 export const MAX_COMMIT_DIFF_BYTES = 1024 * 1024;
+
+/**
+ * Предел read-only операций состояния рабочего дерева (`status`/`diff`), мс.
+ *
+ * Совпадает с `GIT_READ_TIMEOUT_MS` агентских git-тулов
+ * (`engine/tools/git.ts`), но заводится локально, чтобы сервис не тянул импорт
+ * из слоя инструментов (там — `zod`-схемы и реестр тулов). Чтение репозитория
+ * в норме укладывается в секунды; 30 с — предохранитель от зависшего вызова.
+ */
+export const GIT_STATUS_TIMEOUT_MS = 30_000;
 
 /**
  * Обрезка diff по пределу размера (байт). Возвращает обрезанный текст и
@@ -277,6 +295,51 @@ function parseNumstatZ(raw: string): CommitFileInfo[] {
     files.push({ path, status: 'modified', additions, deletions });
   }
   return files;
+}
+
+/** Ошибка недопустимого пути файла внутри репозитория (`GET /git/diff` → 400). */
+function invalidFilePathError(): { error: string; code: string } {
+  return { error: 'Недопустимый путь файла', code: 'git.repo_path_invalid' };
+}
+
+/**
+ * Путь файла для diff — репо-относительный и безопасный.
+ *
+ * Запрещены: NUL (обрыв аргумента), абсолютный путь (в т.ч. Windows/UNC),
+ * `..`-сегменты. Containment с учётом симлинков проверяет **тот же** хелпер,
+ * что и у репозитория (`resolveRepoPath`): симлинк внутри репозитория наружу и
+ * неразрешимый путь отклоняются. Свой `normalizePath` не заводим — иначе
+ * правила расходились бы.
+ */
+function validateDiffPath(repoAbsPath: string, relPath: string): string {
+  if (relPath.includes('\0') || isAbsolute(relPath)) throw invalidFilePathError();
+  if (relPath.split(/[\\/]+/).includes('..')) throw invalidFilePathError();
+  try {
+    resolveRepoPath(repoAbsPath, relPath);
+  } catch {
+    throw invalidFilePathError();
+  }
+  return relPath;
+}
+
+/** Diff бинарного файла: git печатает только маркер, тела нет. */
+function isBinaryDiff(raw: string): boolean {
+  return /^Binary files .* differ$/m.test(raw) || /^GIT binary patch$/m.test(raw);
+}
+
+/**
+ * Счётчики diff: строки `+`/`-` без заголовков `+++`/`---`. Нужны панели
+ * (`+N −M` на файле) без разбора numstat отдельной командой.
+ */
+function countDiffLines(raw: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('+')) additions += 1;
+    else if (line.startsWith('-')) deletions += 1;
+  }
+  return { additions, deletions };
 }
 
 export class GitService {
@@ -669,6 +732,138 @@ export class GitService {
       diff: diff || '',
       ...(diffTruncated ? { diff_truncated: true } : {}),
     };
+  }
+
+  /**
+   * ADR-076 (этап 1): состояние рабочего дерева репозитория для панели файлов.
+   *
+   * Не-репозиторий **не** ошибка запроса: один битый репозиторий реестра не
+   * должен ломать всю панель, поэтому возвращается запись с `error`
+   * (`git.repo_missing`), а остальные репозитории отдаются как обычно.
+   *
+   * Все данные — из `git status --porcelain=v2 -z --branch` на точке
+   * исполнения (ADR-077): list/разбор идёт по тексту команды, ФС агента
+   * control plane не читает (инвариант 28). Таймаут — read-only (30 с).
+   *
+   * `--untracked-files=all` — новые файлы перечисляются **поимённо**: панель
+   * помечает сам файл, а агрегат по каталогу (`Test/`) этого не позволял —
+   * ни каталог, ни файл внутри не подсвечивались. `--ignored=matching`
+   * оставлен: игнорируемые каталоги по-прежнему приходят **одной записью** и
+   * внутрь не разворачиваются (иначе `node_modules` раздувал бы ответ).
+   */
+  async getWorktreeStatus(
+    wsAbsPath: string,
+    repoRelPath: string,
+    opts?: GitEnvOptions,
+  ): Promise<GitRepoWorktreeStatus> {
+    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
+    if (!(await this.isRepo(repoPath, opts))) {
+      return { path: repoRelPath, files: [], error: 'git.repo_missing' };
+    }
+    // `--ignored=matching` — приглушённые записи `!` (отдельный kind в парсере),
+    // каталогом и без разворота внутрь; `--untracked-files=all` — каждый новый
+    // файл отдельной записью (иначе каталог `Test/` без имени файла).
+    const { stdout } = await this.run(
+      [
+        'status',
+        '--porcelain=v2',
+        '-z',
+        '--branch',
+        '--untracked-files=all',
+        '--ignored=matching',
+      ],
+      repoPath,
+      opts,
+      GIT_STATUS_TIMEOUT_MS,
+    );
+    return { path: repoRelPath, ...parseWorktreeStatus(stdout) };
+  }
+
+  /**
+   * ADR-076 (этап 1): diff рабочего дерева (файл либо сводный по репозиторию).
+   *
+   * `staged: true` — diff индекса (`--cached`), по умолчанию — рабочее дерево.
+   * Для untracked-файла обычный `git diff` пуст: содержимое берём
+   * `git diff --no-index -- /dev/null <path>` на точке исполнения (файл не
+   * читаем сами — инвариант 28).
+   *
+   * Код 1 у `git diff` — нормальный исход «есть различия» (особенно у
+   * `--no-index`), а не сбой: `gitExec` бросает `ExecutionError` с `code` и
+   * частичным `stdout` — перехватываем именно его.
+   *
+   * Бину/пустому diff счётчики не заполняются; обрезка — общая
+   * (`truncateDiff`/`maxDiffBytes`), в DTO — `diff_truncated: true`.
+   */
+  async getWorktreeDiff(
+    wsAbsPath: string,
+    repoRelPath: string,
+    params: { path?: string; staged?: boolean; contextLines?: number },
+    opts?: GitEnvOptions,
+  ): Promise<GitWorktreeDiff> {
+    const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
+    await this.ensureRepo(repoPath, opts);
+
+    const staged = params.staged === true;
+    const context = typeof params.contextLines === 'number'
+      && Number.isFinite(params.contextLines)
+      && params.contextLines >= 0
+      ? Math.floor(params.contextLines)
+      : 3;
+    const relPath = params.path ? validateDiffPath(repoPath, params.path) : undefined;
+
+    const args = ['diff', '--no-color', '--no-ext-diff', '--no-textconv', `--unified=${context}`];
+    if (staged) args.push('--cached');
+    if (relPath) args.push('--', relPath);
+
+    let raw = await this._diff(args, repoPath, opts);
+
+    // Untracked (нет в индексе) → `git diff` пуст. Проверяем именно untracked
+    // (`ls-files --others`), а не «пустой diff»: у отслеживаемого неизменённого
+    // файла diff тоже пуст, и `--no-index` показал бы его целиком как добавленный.
+    if (!staged && relPath && raw.trim() === '') {
+      const { stdout: untracked } = await this.run(
+        ['ls-files', '--others', '--exclude-standard', '--', relPath],
+        repoPath,
+        opts,
+        GIT_STATUS_TIMEOUT_MS,
+      );
+      if (untracked.trim() !== '') {
+        raw = await this._diff(
+          ['diff', '--no-index', '--no-color', '--no-ext-diff', '--', '/dev/null', relPath],
+          repoPath,
+          opts,
+        );
+      }
+    }
+
+    const binary = isBinaryDiff(raw);
+    const { diff, truncated } = binary
+      ? { diff: '', truncated: false }
+      : truncateDiff(raw, this._maxDiffBytes);
+    const counts = !binary && raw.trim() !== '' ? countDiffLines(raw) : undefined;
+
+    return {
+      repo_path: repoRelPath,
+      ...(relPath ? { path: relPath } : {}),
+      diff,
+      ...(truncated ? { diff_truncated: true } : {}),
+      ...(binary ? { binary: true } : {}),
+      ...(counts ? { additions: counts.additions, deletions: counts.deletions } : {}),
+    };
+  }
+
+  /**
+   * `git diff`, где код 1 — не ошибка, а «есть различия»: у `--no-index` это
+   * штатный исход. Остальные ошибки (таймаут, нет бинаря, ENOENT) — наружу.
+   */
+  private async _diff(args: string[], repoPath: string, opts?: GitEnvOptions): Promise<string> {
+    try {
+      const { stdout } = await this.run(args, repoPath, opts, GIT_STATUS_TIMEOUT_MS);
+      return stdout;
+    } catch (err) {
+      if (isExecutionError(err) && (err.code === 1 || err.code === '1')) return err.stdout;
+      throw err;
+    }
   }
 
   private async ensureRepo(repoPath: string, opts?: GitEnvOptions): Promise<void> {

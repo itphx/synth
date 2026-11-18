@@ -58,6 +58,11 @@ async function createRepoWithCommit(dir: string): Promise<void> {
   await git(['commit', '-m', 'initial']);
 }
 
+/** Выполнение git-команды в каталоге (тесты): без сети, реальный бинарь. */
+function gitAt(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  return promisify(execFile)('git', args, { cwd });
+}
+
 /**
  * Реально ли окружение запрещает чтение каталога после `chmod 000`.
  *
@@ -491,6 +496,288 @@ describe('Git API Routes (ADR-076 §T3)', () => {
     } finally {
       await chmod(dir, 0o700).catch(() => undefined);
     }
+  });
+
+  // --- ADR-076 (этап 1): состояние рабочего дерева и diff рабочего дерева ---
+
+  /**
+   * Репозиторий в workspace с upstream (`origin`) и одним локальным коммитом —
+   * чтобы `# branch.ab` отдавал `+1 -0` (ahead/behind).
+   */
+  async function createRepoWithUpstream(dir: string): Promise<void> {
+    const bare = join(root, 'origin-status.git');
+    await gitAt(root, ['init', '--bare', '--initial-branch=main', bare]);
+    await mkdir(dir, { recursive: true });
+    await gitAt(dir, ['init', '--initial-branch=main']);
+    await gitAt(dir, ['config', 'user.email', 'test@example.com']);
+    await gitAt(dir, ['config', 'user.name', 'Test']);
+    await writeFile(join(dir, 'README.md'), 'hello\n');
+    await writeFile(join(dir, '.gitignore'), '*.log\n');
+    await gitAt(dir, ['add', '.']);
+    await gitAt(dir, ['commit', '-m', 'initial']);
+    await gitAt(dir, ['remote', 'add', 'origin', bare]);
+    await gitAt(dir, ['push', '-u', 'origin', 'main']);
+    await writeFile(join(dir, 'ahead.txt'), 'ahead\n');
+    await gitAt(dir, ['add', '.']);
+    await gitAt(dir, ['commit', '-m', 'ahead']);
+  }
+
+  /** Запись реестра для `app` (репозиторий уже создан в workspace). */
+  async function registerApp(app: Hono): Promise<void> {
+    const res = await post(app, '/repos/register', { projectId, path: 'app' });
+    expect(res.status).toBe(200);
+  }
+
+  it('status: ветка, ahead/behind и файлы (staged/unstaged/untracked/ignored)', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithUpstream(dir);
+    // unstaged — правка отслеживаемого; staged — новая запись в индексе;
+    // untracked — новый файл; ignored — `*.log` (в .gitignore коммита).
+    await writeFile(join(dir, 'README.md'), 'hello\nworld\n');
+    await writeFile(join(dir, 'staged.txt'), 'staged\n');
+    await writeFile(join(dir, 'untracked.txt'), 'u\n');
+    await writeFile(join(dir, 'x.log'), 'log\n');
+    await gitAt(dir, ['add', 'staged.txt']);
+
+    const app = makeApp();
+    await registerApp(app);
+    const res = await app.request(`/api/v2/git/status?project_id=${projectId}&repo_path=app`);
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as {
+      repos: Array<{
+        path: string;
+        branch?: string;
+        ahead?: number;
+        behind?: number;
+        files: Array<{ path: string; kind: string; staged: boolean; unstaged: boolean }>;
+      }>;
+    };
+    expect(body.repos).toHaveLength(1);
+    const repo = body.repos[0]!;
+    expect(repo.path).toBe('app');
+    expect(repo.branch).toBe('main');
+    expect(repo.ahead).toBe(1);
+    expect(repo.behind).toBe(0);
+
+    const byPath = new Map(repo.files.map((f) => [f.path, f]));
+    expect(byPath.get('README.md')).toMatchObject({ kind: 'modified', staged: false, unstaged: true });
+    expect(byPath.get('staged.txt')).toMatchObject({ kind: 'added', staged: true, unstaged: false });
+    expect(byPath.get('untracked.txt')).toMatchObject({ kind: 'untracked', staged: false, unstaged: true });
+    // Игнорируемые — отдельный kind, не «изменён».
+    expect(byPath.get('x.log')).toMatchObject({ kind: 'ignored', staged: false, unstaged: false });
+  });
+
+  it('status: новые файлы внутри каталога — поимённо, игнорируемый каталог — одной записью', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithUpstream(dir);
+    // Игнорируемый каталог добавляем в `.gitignore` (helper пишет только `*.log`).
+    await writeFile(join(dir, '.gitignore'), '*.log\nnode_modules/\n');
+    await mkdir(join(dir, 'Test'), { recursive: true });
+    await writeFile(join(dir, 'Test', 'Test.txt'), 'new\n');
+    await mkdir(join(dir, 'node_modules', 'pkg'), { recursive: true });
+    await writeFile(join(dir, 'node_modules', 'pkg', 'index.js'), 'module\n');
+
+    const app = makeApp();
+    await registerApp(app);
+    const res = await app.request(`/api/v2/git/status?project_id=${projectId}&repo_path=app`);
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as { repos: Array<{ files: Array<{ path: string; kind: string }> }> };
+    const byPath = new Map(body.repos[0]!.files.map((f) => [f.path, f]));
+    // Новый файл внутри нового каталога — отдельной записью, а не каталогом `Test/`.
+    expect(byPath.get('Test/Test.txt')).toMatchObject({ kind: 'untracked' });
+    expect(byPath.has('Test/')).toBe(false);
+    // Игнорируемый каталог — по-прежнему одной записью, внутрь не заходим.
+    expect(byPath.get('node_modules/')).toMatchObject({ kind: 'ignored' });
+    expect(byPath.has('node_modules/pkg/index.js')).toBe(false);
+  });
+
+  it('status: repo_path не из реестра → 404 NOT_FOUND', async () => {
+    const app = makeApp();
+    const res = await app.request(`/api/v2/git/status?project_id=${projectId}&repo_path=nope`);
+    expect(res.status).toBe(404);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('status: недоступный репозиторий реестра → запись с error, остальные отдаются', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    const app = makeApp();
+    await registerApp(app);
+    // Запись реестра без каталога (удалён/не склонирован) — одна из многих.
+    const registered = await post(app, '/repos/register', { projectId, path: 'ghost' });
+    expect(registered.status).toBe(200);
+
+    const res = await app.request(`/api/v2/git/status?project_id=${projectId}`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      repos: Array<{ path: string; files: unknown[]; error?: string }>;
+    };
+    expect(body.repos).toHaveLength(2);
+    expect(body.repos.find((r) => r.path === 'app')?.error).toBeUndefined();
+    expect(body.repos.find((r) => r.path === 'ghost')).toMatchObject({
+      files: [],
+      error: 'git.repo_missing',
+    });
+  });
+
+  it('diff по файлу: содержит @@ и счётчики строк', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    const app = makeApp();
+    await registerApp(app);
+    await writeFile(join(dir, 'README.md'), 'hello\nworld\n');
+
+    const res = await app.request(
+      `/api/v2/git/diff?project_id=${projectId}&repo_path=app&path=README.md`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      diff: { path?: string; diff: string; additions?: number; deletions?: number; binary?: boolean };
+    };
+    expect(body.diff.path).toBe('README.md');
+    expect(body.diff.diff).toContain('@@');
+    expect(body.diff.diff).toContain('+world');
+    expect(body.diff.additions).toBe(1);
+    expect(body.diff.deletions).toBe(0);
+  });
+
+  it('diff: staged=true видит застейдженное, staged=false — рабочее дерево', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    const app = makeApp();
+    await registerApp(app);
+    await writeFile(join(dir, 'README.md'), 'hello\nworld\n');
+    await gitAt(dir, ['add', 'README.md']);
+
+    const staged = await app.request(
+      `/api/v2/git/diff?project_id=${projectId}&repo_path=app&path=README.md&staged=true`,
+    );
+    const stagedBody = await staged.json() as { diff: { diff: string; additions?: number } };
+    expect(stagedBody.diff.diff).toContain('+world');
+    expect(stagedBody.diff.additions).toBe(1);
+
+    // В рабочем дереве изменений уже нет (всё в индексе).
+    const unstaged = await app.request(
+      `/api/v2/git/diff?project_id=${projectId}&repo_path=app&path=README.md&staged=false`,
+    );
+    const unstagedBody = await unstaged.json() as { diff: { diff: string } };
+    expect(unstagedBody.diff.diff).toBe('');
+  });
+
+  it('diff по untracked: добавленные строки (--no-index от /dev/null)', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    const app = makeApp();
+    await registerApp(app);
+    await writeFile(join(dir, 'new.txt'), 'one\ntwo\n');
+
+    const res = await app.request(
+      `/api/v2/git/diff?project_id=${projectId}&repo_path=app&path=new.txt`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { diff: { diff: string; additions?: number; deletions?: number } };
+    expect(body.diff.diff).toContain('/dev/null');
+    expect(body.diff.diff).toContain('+one');
+    expect(body.diff.additions).toBe(2);
+    expect(body.diff.deletions).toBe(0);
+  });
+
+  it('diff: path с `..` или абсолютный → 400 git.repo_path_invalid', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    const app = makeApp();
+    await registerApp(app);
+
+    for (const bad of ['../secret.txt', '/etc/passwd']) {
+      const res = await app.request(
+        `/api/v2/git/diff?project_id=${projectId}&repo_path=app&path=${encodeURIComponent(bad)}`,
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('git.repo_path_invalid');
+    }
+  });
+
+  it('diff сводный по репозиторию: без path — все изменённые файлы', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    // Второй файл — отслеживаемый (untracked в сводный diff не попадает).
+    await writeFile(join(dir, 'second.txt'), 'second\n');
+    await gitAt(dir, ['add', 'second.txt']);
+    await gitAt(dir, ['commit', '-m', 'second']);
+    const app = makeApp();
+    await registerApp(app);
+    await writeFile(join(dir, 'README.md'), 'hello\nchanged\n');
+    await writeFile(join(dir, 'second.txt'), 'second\nchanged\n');
+
+    const res = await app.request(`/api/v2/git/diff?project_id=${projectId}&repo_path=app`);
+    expect(res.status).toBe(200);
+    const body = await res.json() as { diff: { path?: string; diff: string } };
+    // Сводный diff — без `path`, но с обоими файлами.
+    expect(body.diff.path).toBeUndefined();
+    expect(body.diff.diff).toContain('README.md');
+    expect(body.diff.diff).toContain('second.txt');
+  });
+
+  it('diff: обрезка по maxDiffBytes → diff_truncated', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    // Предел размера diff — опцией фабрики (как `maxDiffBytes` сервиса).
+    const app = makeApp({ maxDiffBytes: 40 });
+    await registerApp(app);
+    await writeFile(join(dir, 'README.md'), `${'line\n'.repeat(50)}`);
+
+    const res = await app.request(
+      `/api/v2/git/diff?project_id=${projectId}&repo_path=app&path=README.md`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { diff: { diff: string; diff_truncated?: boolean } };
+    expect(body.diff.diff_truncated).toBe(true);
+    expect(Buffer.byteLength(body.diff.diff, 'utf-8')).toBeLessThanOrEqual(40);
+  });
+
+  it('diff бинарного untracked-файла → binary: true, без тела и счётчиков', async () => {
+    const dir = join(workspacesRoot, 'proj', 'app');
+    await createRepoWithCommit(dir);
+    const app = makeApp();
+    await registerApp(app);
+    await writeFile(join(dir, 'bin.dat'), Buffer.from([0, 1, 2, 3, 0, 255]));
+
+    const res = await app.request(
+      `/api/v2/git/diff?project_id=${projectId}&repo_path=app&path=bin.dat`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      diff: { diff: string; binary?: boolean; additions?: number; deletions?: number };
+    };
+    expect(body.diff.binary).toBe(true);
+    expect(body.diff.diff).toBe('');
+    expect(body.diff.additions).toBeUndefined();
+    expect(body.diff.deletions).toBeUndefined();
+  });
+
+  it('status/diff: репозиторий-корень workspace адресуется через `repo_path=.`', async () => {
+    const wsDir = join(workspacesRoot, 'proj');
+    await createRepoWithCommit(wsDir);
+    const app = makeApp();
+    const registered = await post(app, '/repos/register', { projectId, path: '.' });
+    expect(registered.status).toBe(200);
+
+    const status = await app.request(`/api/v2/git/status?project_id=${projectId}&repo_path=.`);
+    expect(status.status).toBe(200);
+    const statusBody = await status.json() as { repos: Array<{ path: string; error?: string }> };
+    expect(statusBody.repos).toHaveLength(1);
+    expect(statusBody.repos[0]?.path).toBe('.');
+    expect(statusBody.repos[0]?.error).toBeUndefined();
+
+    await writeFile(join(wsDir, 'README.md'), 'hello\nroot\n');
+    const diff = await app.request(`/api/v2/git/diff?project_id=${projectId}&repo_path=.`);
+    expect(diff.status).toBe(200);
+    const diffBody = await diff.json() as { diff: { diff: string } };
+    expect(diffBody.diff.diff).toContain('+root');
   });
 });
 

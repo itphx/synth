@@ -33,12 +33,47 @@ vi.mock('@/lib/i18n', () => ({
 const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
   writeFile: vi.fn(),
+  downloadFile: vi.fn(
+    (projectId: string, path: string) =>
+      `/api/v2/fs/download?project_id=${projectId}&path=${path}`,
+  ),
 }))
 
-vi.mock('@/lib/api/synthApi', () => ({ synthApi: { readFile: mocks.readFile, writeFile: mocks.writeFile } }))
+vi.mock('@/lib/api/synthApi', () => ({
+  synthApi: {
+    readFile: mocks.readFile,
+    writeFile: mocks.writeFile,
+    downloadFile: mocks.downloadFile,
+  },
+}))
+
+/**
+ * CodeMirror в jsdom не гоняем: мок — управляемый `<textarea>`, поэтому
+ * проверки черновика/сохранения остаются прежними и не зависят от редактора.
+ */
+vi.mock('@/components/chat/CodeEditor', () => ({
+  CodeEditor: ({
+    value,
+    filePath,
+    onChange,
+    testId,
+  }: {
+    value: string
+    filePath: string
+    onChange?: (value: string) => void
+    testId?: string
+  }) =>
+    React.createElement('textarea', {
+      'data-testid': testId ?? 'code-editor',
+      'data-file-path': filePath,
+      value,
+      onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => onChange?.(e.target.value),
+    }),
+}))
 
 import { FileEditorTab } from './FileEditorTab'
 import { useFilesStore } from '@/stores/filesStore'
+import { useUIStore } from '@/stores/useUIStore'
 import type { CenterTab } from '@/stores/useUIStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -67,6 +102,7 @@ describe('FileEditorTab — состояние «файл удалён»', () =>
   beforeEach(() => {
     vi.clearAllMocks()
     useFilesStore.setState({ fileRevisions: {}, deletedFiles: {}, draftContents: {} })
+    useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
     mocks.readFile.mockResolvedValue({ content: 'hello', encoding: 'text', size: 5 })
     mocks.writeFile.mockResolvedValue({ content: 'hello', encoding: 'text', size: 5 })
   })
@@ -207,5 +243,65 @@ describe('FileEditorTab — состояние «файл удалён»', () =>
 
     expect(mocks.writeFile).toHaveBeenCalledWith('p1', 'a.txt', 'edited')
     expect(useFilesStore.getState().draftContents['p1::a.txt']).toBeUndefined()
+  })
+
+  it('панель: «Сохранить» (disabled без изменений), «Скачать», «Закрыть», статус', async () => {
+    const container = await render(<FileEditorTab tab={tab} />)
+
+    const save = container.querySelector<HTMLButtonElement>('[data-testid="file-save"]')
+    expect(save).not.toBeNull()
+    // Изменений нет — сохранение недоступно.
+    expect(save!.disabled).toBe(true)
+
+    const download = container.querySelector<HTMLAnchorElement>('[data-testid="file-download"]')
+    expect(download).not.toBeNull()
+    expect(download!.getAttribute('href')).toContain('/fs/download')
+    expect(download!.hasAttribute('download')).toBe(true)
+
+    expect(container.querySelector('[data-testid="file-close"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="file-editor-status"]')?.textContent).toBe('')
+  })
+
+  it('панель: после правки Save активен, статус — «изменён»', async () => {
+    const container = await render(<FileEditorTab tab={tab} />)
+    const textarea = container.querySelector('textarea')!
+
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype, 'value',
+      )!.set!
+      setValue.call(textarea, 'edited')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    const save = container.querySelector<HTMLButtonElement>('[data-testid="file-save"]')
+    expect(save!.disabled).toBe(false)
+    expect(container.querySelector('[data-testid="file-editor-status"]')?.textContent).toBe(
+      'common.modified',
+    )
+  })
+
+  it('CodeMirror получает содержимое файла и путь', async () => {
+    const container = await render(<FileEditorTab tab={tab} />)
+
+    const code = container.querySelector<HTMLTextAreaElement>('[data-testid="file-editor-code"]')
+    expect(code).not.toBeNull()
+    expect(code!.value).toBe('hello')
+    expect(code!.getAttribute('data-file-path')).toBe('a.txt')
+  })
+
+  it('«Закрыть» закрывает вкладку', async () => {
+    useUIStore.setState({
+      centerTabs: [tab],
+      activeCenterTabId: tab.id,
+    })
+
+    const container = await render(<FileEditorTab tab={tab} />)
+    const close = container.querySelector<HTMLButtonElement>('[data-testid="file-close"]')
+    await act(async () => {
+      close!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(useUIStore.getState().centerTabs).toHaveLength(0)
   })
 })

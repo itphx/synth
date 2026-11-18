@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { act } from 'react'
 
 // Моки внешних зависимостей диспетчера: сетевых вызовов и toast быть не должно.
 vi.mock('@/lib/api/synthApi', () => ({
@@ -17,6 +18,19 @@ vi.mock('@/lib/api/synthApi', () => ({
 }))
 vi.mock('@/hooks/useNotification', () => ({
   notifyMessage: vi.fn(),
+}))
+
+/**
+ * Git-стор: `fs.changed` и `turn.finished` перечитывают статус рабочего дерева,
+ * сеть в тесте не нужна — только факт вызова.
+ */
+const gitMocks = vi.hoisted(() => ({
+  loadRepos: vi.fn(async () => {}),
+  loadStatus: vi.fn(async () => {}),
+}))
+
+vi.mock('@/stores/gitStore', () => ({
+  useGitStore: { getState: () => gitMocks },
 }))
 
 import { createDispatcher } from './transportStore'
@@ -204,5 +218,40 @@ describe('transportStore dispatcher: fs.changed / project.updated', () => {
   it('project.updated перечитывает дерево Files', () => {
     dispatch(makeEvent('project.updated', 's1', { project_id: 'p1' }))
     expect(refreshSpy).toHaveBeenCalledWith('p1')
+  })
+
+  it('fs.changed перечитывает статус рабочего дерева (после debounce)', () => {
+    dispatch(makeEvent('fs.changed', 's1', {
+      session_id: 's1',
+      project_id: 'p1',
+      scope: 'file',
+      paths: ['a.txt'],
+      tool: 'write_file',
+    }))
+    // До истечения окна коалесинга — запроса нет.
+    expect(gitMocks.loadStatus).not.toHaveBeenCalled()
+
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+
+    expect(gitMocks.loadStatus).toHaveBeenCalledWith('p1')
+  })
+
+  it('turn.finished принудительно перечитывает статус проекта сессии', () => {
+    useSessionsStore.setState({ sessions: [{ id: 's1', project_id: 'p2' } as never] })
+
+    dispatch(makeEvent('turn.finished', 's1', { turnId: 'turn-1', status: 'completed' }))
+
+    // `force`: ход мог изменить файлы, клиентский TTL не должен съесть запрос.
+    expect(gitMocks.loadStatus).toHaveBeenCalledWith('p2', { force: true })
+  })
+
+  it('turn.finished без проекта у сессии статус не трогает', () => {
+    useSessionsStore.setState({ sessions: [{ id: 's1', project_id: null } as never] })
+
+    dispatch(makeEvent('turn.finished', 's1', { turnId: 'turn-1', status: 'completed' }))
+
+    expect(gitMocks.loadStatus).not.toHaveBeenCalled()
   })
 })

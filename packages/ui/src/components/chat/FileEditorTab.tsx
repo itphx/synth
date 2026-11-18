@@ -3,12 +3,18 @@ import { useFilesStore } from '@/stores/filesStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { synthApi } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
+import { isCodeViewSupported } from '@/lib/codeEditor'
+import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
+import { CodeEditor } from './CodeEditor'
 import type { CenterTab } from '@/stores/useUIStore'
 
 interface FileEditorTabProps {
   tab: CenterTab
 }
+
+/** Состояние сохранения (панель вкладки): подпись и цвет статуса. */
+type SaveState = 'idle' | 'saving' | 'saved' | 'error'
 
 /** Отказ чтения: файл больше лимита (или бинарный) — `413 FILE_TOO_LARGE`. */
 interface ReadTooLarge {
@@ -37,7 +43,9 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
   const { t } = useI18n()
   const writeFile = useFilesStore(s => s.writeFile)
   const setTabEditingState = useUIStore(s => s.setTabEditingState)
+  const closeTab = useUIStore(s => s.closeTab)
   const [content, setContent] = useState('')
+  const [saveState, setSaveState] = useState<SaveState>('idle')
   const [originalContent, setOriginalContent] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -157,15 +165,21 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
   const doSave = useCallback(async () => {
     if (!projectId || !filePath || !isDirty) return
 
+    setSaveState('saving')
     syncEditingState('saving')
     const ok = await writeFile(projectId, filePath, content)
     if (ok) {
       setOriginalContent(content)
       useFilesStore.getState().clearDraft(projectId, filePath)
       setChangedOnDisk(false)
+      setSaveState('saved')
       syncEditingState('saved')
-      setTimeout(() => syncEditingState('idle'), 2000)
+      setTimeout(() => {
+        setSaveState('idle')
+        syncEditingState('idle')
+      }, 2000)
     } else {
+      setSaveState('error')
       syncEditingState('error')
     }
   }, [projectId, filePath, content, isDirty, writeFile, syncEditingState])
@@ -277,8 +291,82 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
     )
   }
 
+  const statusLabel =
+    saveState === 'saving'
+      ? t('file.saving')
+      : saveState === 'saved'
+        ? t('file.saved')
+        : saveState === 'error'
+          ? t('file.saveError')
+          : isDirty
+            ? t('common.modified')
+            : ''
+
+  const statusClass =
+    saveState === 'saving'
+      ? 'text-status-warning'
+      : saveState === 'saved'
+        ? 'text-status-success'
+        : saveState === 'error'
+          ? 'text-status-error'
+          : isDirty
+            ? 'text-status-warning'
+            : 'text-muted-foreground'
+
+  /** Разметка панели: слева — действия с иконками и статус, справа — пусто. */
+  const toolButton =
+    'inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-muted pointer-coarse:min-h-10'
+
   return (
-    <div className="flex flex-1 h-full flex-col bg-background">
+    <div className="flex h-full flex-1 flex-col bg-background">
+      <div
+        className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-1"
+        data-testid="file-editor-toolbar"
+      >
+        <button
+          type="button"
+          onClick={() => void doSave()}
+          disabled={!isDirty || saveState === 'saving'}
+          data-testid="file-save"
+          title={t('common.save')}
+          className={cn(
+            toolButton,
+            isDirty && saveState !== 'saving'
+              ? 'border-primary/50 bg-primary/10'
+              : 'opacity-50 cursor-default',
+          )}
+        >
+          <Icon name="save" className="size-3.5 shrink-0" />
+          <span className="whitespace-nowrap">
+            {saveState === 'saving' ? t('file.saving') : t('common.save')}
+          </span>
+        </button>
+        {projectId && filePath && (
+          <a
+            href={synthApi.downloadFile(projectId, filePath)}
+            download={filePath.split('/').pop()}
+            data-testid="file-download"
+            title={t('file.download')}
+            className={toolButton}
+          >
+            <Icon name="download" className="size-3.5 shrink-0" />
+            <span className="whitespace-nowrap">{t('file.download')}</span>
+          </a>
+        )}
+        <button
+          type="button"
+          onClick={() => closeTab(tab.id)}
+          data-testid="file-close"
+          title={t('common.close')}
+          className={toolButton}
+        >
+          <Icon name="close" className="size-3.5 shrink-0" />
+          <span className="whitespace-nowrap">{t('common.close')}</span>
+        </button>
+        <span className={cn('px-1 text-xs', statusClass)} data-testid="file-editor-status">
+          {statusLabel}
+        </span>
+      </div>
       {changedOnDisk && (
         <div className="flex items-center justify-between gap-3 border-b border-status-warning/40 bg-status-warning/10 px-3 py-1.5">
           <span className="flex items-center gap-1.5 text-xs text-status-warning">
@@ -294,18 +382,42 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
           </button>
         </div>
       )}
-      <textarea
-        className="flex-1 w-full resize-none bg-background p-4 text-sm font-mono text-foreground outline-none border-0 focus:ring-0"
-        value={content}
-        onChange={(e) => {
-          const v = e.target.value
-          setContent(v)
-          if (projectId && filePath) {
-            useFilesStore.getState().setDraft(projectId, filePath, v, originalContent)
-          }
-        }}
-        spellCheck={false}
-      />
+      <div className="min-h-0 flex-1">
+        {isCodeViewSupported(content) ? (
+          <CodeEditor
+            value={content}
+            filePath={filePath ?? ''}
+            onChange={(value) => {
+              setContent(value)
+              if (projectId && filePath) {
+                useFilesStore.getState().setDraft(projectId, filePath, value, originalContent)
+              }
+            }}
+            testId="file-editor-code"
+          />
+        ) : (
+          <>
+            <div
+              className="border-b border-border px-4 py-1 text-xs text-muted-foreground"
+              data-testid="file-plain-large"
+            >
+              {t('file.plainLarge')}
+            </div>
+            <textarea
+              className="h-full w-full resize-none border-0 bg-background p-4 font-mono text-sm text-foreground outline-none focus:ring-0"
+              value={content}
+              onChange={(e) => {
+                const v = e.target.value
+                setContent(v)
+                if (projectId && filePath) {
+                  useFilesStore.getState().setDraft(projectId, filePath, v, originalContent)
+                }
+              }}
+              spellCheck={false}
+            />
+          </>
+        )}
+      </div>
     </div>
   )
 }

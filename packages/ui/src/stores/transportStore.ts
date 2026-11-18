@@ -1423,6 +1423,8 @@ function scheduleGitRefresh(projectId: string) {
     gitRefreshTimers.delete(projectId)
     const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
     if (project) void useGitStore.getState().loadRepos(projectId, project.repos ?? null)
+    // Статус рабочего дерева — следом (без `force`: клиентский TTL схлопнет дубли).
+    void useGitStore.getState().loadStatus(projectId)
   }, GIT_REFRESH_DEBOUNCE_MS))
 }
 
@@ -2191,6 +2193,12 @@ export function createDispatcher(): EventDispatcher {
         // очереди перечитываем (ADR-118 §4): применённые уже пришли с
         // `message.delivered` (маркер снят), неприменённые вернулись в очередь.
         finishTurnAndRefreshQueue(sid)
+        // Ход мог изменить файлы (правки агента, git-операции) — статус
+        // рабочего дерева перечитываем принудительно, минуя клиентский TTL.
+        {
+          const projectId = useSessionsStore.getState().sessions.find((s) => s.id === sid)?.project_id
+          if (projectId) void useGitStore.getState().loadStatus(projectId, { force: true })
+        }
         break
       }
 

@@ -9,6 +9,7 @@ import {
 import { profileService } from '@/lib/api/profileService'
 import type { MermaidMode } from '@/lib/markdown/mermaid'
 import { useFilesStore } from './filesStore'
+import type { FileViewMode } from '@/lib/fileTabs'
 import {
   applyChatScale,
   applyUiScale,
@@ -102,6 +103,8 @@ export type CenterTabType =
   | 'terminal'
   // Экран «Вывод процесса» (per-run: лог фонового прогона).
   | 'process-log'
+  // ADR-076 (этап 1): diff рабочего дерева (файл / сводный / индекс).
+  | 'git-diff'
 
 export interface CenterTab {
   id: string
@@ -125,6 +128,16 @@ export interface CenterTab {
     blockingRunId?: string
     /** Заголовок блокирующего прогона (когда записи уже нет в снимке). */
     blockingRunTitle?: string
+    /** ADR-076 (этап 1): путь файла относительно корня репозитория (`git-diff`). */
+    gitPath?: string
+    /** ADR-076 (этап 1): diff индекса (staged) вместо рабочего дерева. */
+    gitStaged?: boolean
+    /**
+     * Режим файловой вкладки (`file-viewer`): просмотр, исходник или
+     * изменения. Источник истины — данные вкладки, поэтому «открыть в diff»
+     * из дерева/панели Git переключает уже открытую вкладку.
+     */
+    viewMode?: FileViewMode
   }
   editingState?: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 }
@@ -618,7 +631,15 @@ export const useUIStore = create<UIStore>()(
             tab.type === 'chat' && tab.data?.sessionId ? null : state.selectedProjectId
           if (existingIdx >= 0) {
             const nextTabs = [...state.centerTabs]
-            nextTabs[existingIdx] = { ...nextTabs[existingIdx], title: tab.title }
+            const existing = nextTabs[existingIdx]!
+            // Данные сливаются: повторное открытие файла с `viewMode: 'diff'`
+            // переключает режим открытой вкладки, но не теряет остальные
+            // ключи (например, `terminalId` у вкладки сессии).
+            nextTabs[existingIdx] = {
+              ...existing,
+              title: tab.title,
+              data: { ...existing.data, ...tab.data },
+            }
             return {
               centerTabs: nextTabs,
               activeCenterTabId: tab.id,

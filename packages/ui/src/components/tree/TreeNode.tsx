@@ -1,7 +1,9 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
+import type { GitFileStatusKind } from '@itphx/synth-shared/types'
 import { Icon } from '@/components/icon/Icon'
 import { ContextMenu } from '@/components/ui/contextMenu'
 import { useI18n } from '@/lib/i18n'
+import { hasVcsDot } from '@/lib/gitStatus'
 import { cn } from '@/lib/utils'
 import type { TreeNodeBase, TreeAction, TreeStatus } from './types'
 
@@ -36,6 +38,36 @@ const statusLabelKey: Record<TreeStatus, string> = {
   // Статус `approval` — ждёт подтверждения прав: свой ключ, чтобы не путать
   // его с «очередь зависла» (`stalled` → `attentionNeeded`).
   approval: 'leftPanel.approvalNeeded',
+}
+
+/**
+ * ADR-076 (этап 1): точка и цвет названия по виду изменения файла.
+ *
+ * Точка рисуется **справа от имени** и только у tracked-видов (`hasVcsDot`):
+ * `untracked`/`ignored` показываются цветом названия. Цвет — не единственный
+ * сигнал: у точки есть `aria-label`/`title` с i18n-подписью (`file.vcs.*`).
+ * Цвета — только токены темы.
+ */
+const vcsDotClassName: Record<GitFileStatusKind, string> = {
+  added: 'bg-status-success',
+  renamed: 'bg-status-success',
+  modified: 'bg-status-caution',
+  typechange: 'bg-status-caution',
+  deleted: 'bg-status-error',
+  conflict: 'bg-destructive',
+  untracked: 'bg-muted-foreground/70',
+  ignored: 'bg-muted-foreground/50',
+}
+
+const vcsTextClassName: Record<GitFileStatusKind, string> = {
+  added: 'text-status-success',
+  renamed: 'text-status-success',
+  modified: 'text-status-caution',
+  typechange: 'text-status-caution',
+  deleted: 'text-status-error line-through',
+  conflict: 'text-destructive',
+  untracked: 'text-status-success',
+  ignored: 'text-muted-foreground/50',
 }
 
 function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVisible: boolean }) {
@@ -133,6 +165,7 @@ export function TreeNode({
 
   status,
   unreadCount,
+  vcsStatus,
 
   actions,
   contextItems,
@@ -148,6 +181,7 @@ export function TreeNode({
   const hasUnread = (unreadCount ?? 0) > 0
   // Подпись статуса — текстовый дубль цвета точки (доступность).
   const statusLabel = status ? t(statusLabelKey[status]) : ''
+  const vcsLabel = vcsStatus ? t(`file.vcs.${vcsStatus}`) : ''
 
   useEffect(() => {
     if (isRenaming) {
@@ -270,6 +304,7 @@ export function TreeNode({
                   // «Ждёт подтверждения прав» — акцент важнее непрочитанного.
                   status === 'approval' ? 'text-status-caution'
                     : hasUnread ? 'text-orange-400'
+                    : vcsStatus ? vcsTextClassName[vcsStatus]
                     : labelMuted ? 'text-muted-foreground'
                     : 'text-foreground',
                 )}
@@ -277,6 +312,17 @@ export function TreeNode({
               >
                 {label}
               </span>
+              {/* Точка — сразу после имени; у untracked/ignored её нет (цвет
+                  названия — единственный сигнал). */}
+              {vcsStatus && hasVcsDot(vcsStatus) && (
+                <span
+                  className={cn('h-1.5 w-1.5 shrink-0 rounded-full', vcsDotClassName[vcsStatus])}
+                  role="img"
+                  aria-label={vcsLabel}
+                  title={vcsLabel}
+                  data-vcs-dot={vcsStatus}
+                />
+              )}
               {badge}
             </div>
             {subtitle && (

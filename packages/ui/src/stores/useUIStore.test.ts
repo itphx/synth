@@ -67,6 +67,54 @@ describe('useUIStore.openTab', () => {
     expect(s.mobileLeftOpen).toBe(false)
     expect(s.mobileRightOpen).toBe(true)
   })
+
+  it('существующая вкладка: данные сливаются (старые ключи сохраняются, новые перекрывают)', () => {
+    useUIStore.setState({
+      centerTabs: [
+        {
+          id: 'file-p1/a.ts',
+          type: 'file-viewer',
+          title: 'a.ts',
+          data: { projectId: 'p1', filePath: 'a.ts', viewMode: 'source' },
+        },
+      ],
+    })
+
+    useUIStore.getState().openTab({
+      id: 'file-p1/a.ts',
+      type: 'file-viewer',
+      title: 'a.ts',
+      data: { projectId: 'p1', filePath: 'a.ts', viewMode: 'diff' },
+    })
+
+    const data = useUIStore.getState().centerTabs[0]!.data
+    // Старый ключ не потерян, новый — перекрыл прежнее значение.
+    expect(data.filePath).toBe('a.ts')
+    expect(data.projectId).toBe('p1')
+    expect(data.viewMode).toBe('diff')
+  })
+
+  it('существующая вкладка: частичные данные не стирают остальные ключи', () => {
+    useUIStore.setState({
+      centerTabs: [
+        {
+          id: 'chat-1',
+          type: 'chat',
+          title: 'S',
+          data: { sessionId: 's1', terminalId: 't1' },
+        },
+      ],
+    })
+
+    useUIStore.getState().openTab({
+      id: 'chat-1',
+      type: 'chat',
+      title: 'S',
+      data: { sessionId: 's1' },
+    })
+
+    expect(useUIStore.getState().centerTabs[0]!.data.terminalId).toBe('t1')
+  })
 })
 
 // Выделенный проект (runtime-навигация): снимается при переходе в сессию.

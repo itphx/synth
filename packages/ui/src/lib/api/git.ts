@@ -1,6 +1,12 @@
 // git: домен API v2 (ADR-095) — объект `gitApi` и его DTO.
 
-import type { CommitDetail, CommitInfo, RepoStatus } from '@itphx/synth-shared/types'
+import type {
+  CommitDetail,
+  CommitInfo,
+  GitWorktreeDiff,
+  GitWorktreeStatusResponse,
+  RepoStatus,
+} from '@itphx/synth-shared/types'
 import { BASE_URL, fetchJSON } from './base'
 
 /**
@@ -103,5 +109,31 @@ export const gitApi = {
   async getCommitDetail(projectId: string, repoPath: string, hash: string): Promise<{ commit: CommitDetail }> {
     const params = new URLSearchParams({ project_id: projectId, repo_path: repoPath, hash })
     return fetchJSON(`${BASE_URL}/git/commit?${params.toString()}`)
+  },
+
+  /**
+   * ADR-076 (этап 1): состояние рабочего дерева репозиториев проекта.
+   * `repoPath` — путь относительно workspace (`''` — корень).
+   */
+  async getGitStatus(projectId: string, repoPath?: string): Promise<GitWorktreeStatusResponse> {
+    const params = new URLSearchParams({ project_id: projectId, repo_path: repoPath ?? '' })
+    return fetchJSON(`${BASE_URL}/git/status?${params.toString()}`)
+  },
+
+  /**
+   * ADR-076 (этап 1): diff рабочего дерева. Без `path` — сводный diff
+   * репозитория; `staged` — diff индекса.
+   */
+  async getGitDiff(
+    projectId: string,
+    repoPath: string,
+    opts?: { path?: string; staged?: boolean; context?: number },
+  ): Promise<GitWorktreeDiff> {
+    const params = new URLSearchParams({ project_id: projectId, repo_path: repoPath })
+    if (opts?.path) params.set('path', opts.path)
+    if (opts?.staged) params.set('staged', 'true')
+    if (opts?.context !== undefined) params.set('context', String(opts.context))
+    const res = await fetchJSON<{ diff: GitWorktreeDiff }>(`${BASE_URL}/git/diff?${params.toString()}`)
+    return res.diff
   },
 }

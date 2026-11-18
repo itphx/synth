@@ -15,6 +15,8 @@ export function GitTabToolbar() {
   const toggleRepoExpand = useGitStore(s => s.toggleRepoExpand)
   const expandAll = useGitStore(s => s.expandAll)
   const collapseAll = useGitStore(s => s.collapseAll)
+  const loadRepos = useGitStore(s => s.loadRepos)
+  const loadStatus = useGitStore(s => s.loadStatus)
   const onlyActiveProject = useUIStore(s => s.onlyActiveProject)
   const { projectId: activeProjectId } = useActiveProject()
 
@@ -46,9 +48,25 @@ export function GitTabToolbar() {
     }
   }
 
+  // Ручное обновление: реестр репозиториев + статус рабочего дерева (без TTL).
+  const handleRefresh = () => {
+    for (const p of visibleProjects) {
+      void loadRepos(p.id, p.repos ?? null)
+      void loadStatus(p.id, { force: true })
+    }
+  }
+
   return (
     <div className="flex items-center gap-0.5 ml-auto">
       <ProjectScopeToggle />
+      <button
+        onClick={handleRefresh}
+        data-testid="git-refresh"
+        className="flex items-center justify-center size-6 rounded text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
+        title={t('git.refresh')}
+      >
+        <Icon name="refresh" className="size-3.5" />
+      </button>
       <button
         onClick={() => {
           if (hasExpanded) {

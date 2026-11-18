@@ -9,6 +9,7 @@ import { ChatTab } from '../chat/ChatTab'
 import { FileViewerTab } from '../chat/FileViewerTab'
 import { FileEditorTab } from '../chat/FileEditorTab'
 import { CommitDetailTab } from '../chat/CommitDetailTab'
+import { GitDiffTab } from '../chat/GitDiffTab'
 import { PipelineTab } from '../pipelines/PipelineTab'
 import { PipelineRunTab } from '../pipelines/PipelineRunTab'
 import { TerminalView } from '../terminal/TerminalView'
@@ -67,6 +68,9 @@ export function CenterPanel() {
         return <FileEditorTab tab={activeTab} />
       case 'commit-detail':
         return <CommitDetailTab tab={activeTab} />
+      // ADR-076 (этап 1): diff рабочего дерева.
+      case 'git-diff':
+        return <GitDiffTab tab={activeTab} />
       // ADR-101 (Э7): страницы пайплайна и прогона.
       case 'pipeline':
         return <PipelineTab tab={activeTab} />

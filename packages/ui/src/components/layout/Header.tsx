@@ -1,5 +1,4 @@
 import { useMemo, useCallback, useState, useRef } from 'react'
-import { fileKind, type FileKind } from '@itphx/synth-shared/types'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { useI18n } from '@/lib/i18n'
@@ -40,12 +39,6 @@ interface HeaderProps {
 const EMPTY_SELECTED_IDS: Set<string> = new Set()
 
 /**
- * Семейства, которые нельзя открыть в текстовом редакторе: медиа и бинарь
- * (просмотр — `FileViewerTab`, скачивание — `/fs/download`).
- */
-const NON_EDITABLE_FILE_KINDS: readonly FileKind[] = ['image', 'video', 'audio', 'pdf', 'binary']
-
-/**
  * Имя каталога из абсолютного пути — фолбэк для индикатора worktree,
  * когда записи ещё нет в инвентаре проекта (список не загружен).
  */
@@ -66,7 +59,6 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const setAnalyticsDialogOpen = useUIStore((s) => s.setAnalyticsDialogOpen)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
-  const openTab = useUIStore((s) => s.openTab)
   const closeTab = useUIStore((s) => s.closeTab)
   const mobileLeftOpen = useUIStore((s) => s.mobileLeftOpen)
   const mobileRightOpen = useUIStore((s) => s.mobileRightOpen)
@@ -93,12 +85,10 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const isFileViewer = activeTab?.type === 'file-viewer'
   const isFileEditor = activeTab?.type === 'file-editor'
   const isCommitDetail = activeTab?.type === 'commit-detail'
-  // «Редактировать» предлагаем только для текста/кода/markdown: медиа и бинарь
-  // в текстовом редакторе бессмысленны (только просмотр/скачивание).
-  const canEditViewedFile =
-    isFileViewer && activeTab?.data.filePath
-      ? !NON_EDITABLE_FILE_KINDS.includes(fileKind(activeTab.data.filePath))
-      : false
+  // Кнопки файловой вкладки живут в панели самой вкладки; в шапке — только
+  // имя проекта и путь файла относительно workspace.
+  const fileTabPath =
+    (isFileViewer || isFileEditor) ? activeTab?.data.filePath : undefined
 
   // Процент контекстного окна — из общего хука (тот же, что в правой панели).
   const sessionId = activeTab?.data?.sessionId
@@ -176,42 +166,6 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
       setSummarizing(false)
     }
   }, [sessionId, notify, t])
-
-  const handleFileEdit = useCallback(() => {
-    if (!activeTab?.data.projectId || !activeTab?.data.filePath) return
-    openTab({
-      id: `edit-${activeTab.data.projectId}/${activeTab.data.filePath}`,
-      type: 'file-editor',
-      title: activeTab.title,
-      data: { filePath: activeTab.data.filePath, projectId: activeTab.data.projectId },
-    })
-  }, [activeTab, openTab])
-
-  const handleFileDownload = useCallback(() => {
-    if (!activeTab?.data.projectId || !activeTab?.data.filePath) return
-    const url = synthApi.downloadFile(activeTab.data.projectId, activeTab.data.filePath)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = activeTab.title
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-  }, [activeTab])
-
-  // File editor state (from tab metadata)
-  const editingState = activeTab?.editingState
-  const isEditorDirty = editingState === 'dirty' || editingState === 'error'
-  const isSaving = editingState === 'saving'
-
-  const handleFileSave = useCallback(async () => {
-    if (!activeTab?.data.projectId || !activeTab?.data.filePath || !isEditorDirty || isSaving) return
-    // Trigger save via custom event – FileEditorTab listens for this
-    window.dispatchEvent(new CustomEvent('synth:save-file', { detail: { tabId: activeTab.id } }))
-  }, [activeTab, isEditorDirty, isSaving])
-
-  const handleFileClose = useCallback(() => {
-    if (activeTab) closeTab(activeTab.id)
-  }, [activeTab, closeTab])
 
   const handleCommitCopy = useCallback(() => {
     if (activeTab?.data.commitHash) {
@@ -652,73 +606,15 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           </>
         )}
 
-        {/* File viewer toolbar */}
-        {isFileViewer && activeTab && (
-          <div className="flex items-center gap-1 ml-1">
-            <span className="text-xs font-mono text-muted-foreground truncate max-w-[16.25rem]">
-              {activeTab.data.filePath}
-            </span>
-            {canEditViewedFile && (
-              <button
-                onClick={handleFileEdit}
-                className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-                title={t('file.edit')}
-              >
-                <Icon name="edit-2" className="size-3.5" />
-              </button>
-            )}
-            <button
-              onClick={handleFileDownload}
-              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-              title={t('file.download')}
-            >
-              <Icon name="download" className="size-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* File editor toolbar */}
-        {isFileEditor && activeTab && (
-          <div className="flex items-center gap-1 ml-1">
-            <span className="text-xs font-mono text-muted-foreground truncate max-w-[16.25rem]">
-              {activeTab.data.filePath}
-            </span>
-            <span className={cn(
-              'text-xs',
-              editingState === 'saving' && 'text-status-warning',
-              editingState === 'saved' && 'text-status-success',
-              editingState === 'error' && 'text-status-error',
-              isEditorDirty && 'text-status-warning',
-              (!editingState || editingState === 'idle') && 'text-muted-foreground',
-            )}>
-              {editingState === 'saving' ? t('file.saving')
-                : editingState === 'saved' ? t('file.saved')
-                : editingState === 'error' ? t('file.saveError')
-                : isEditorDirty ? t('common.modified')
-                : ''}
-            </span>
-            <button
-              onClick={handleFileSave}
-              disabled={!isEditorDirty || isSaving}
-              className={cn(
-                'shrink-0 inline-flex items-center gap-1 rounded px-2 py-0.5 text-[0.6875rem] font-medium transition-colors',
-                isEditorDirty && !isSaving
-                  ? 'text-primary hover:bg-primary/10'
-                  : 'text-muted-foreground opacity-50 cursor-default',
-              )}
-              title={t('common.save')}
-            >
-              <Icon name="save" className="size-3.5" />
-              {isSaving ? t('file.saving') : t('common.save')}
-            </button>
-            <button
-              onClick={handleFileClose}
-              className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-interactive-hover transition-colors"
-              title={t('common.close')}
-            >
-              <Icon name="x" className="size-3.5" />
-            </button>
-          </div>
+        {/* Путь файловой вкладки: действия — в панели самой вкладки. */}
+        {fileTabPath && (
+          <span
+            className="ml-1 max-w-[16.25rem] truncate font-mono text-xs text-muted-foreground"
+            data-testid="header-file-path"
+            title={fileTabPath}
+          >
+            {fileTabPath}
+          </span>
         )}
 
         {/* Commit detail toolbar */}

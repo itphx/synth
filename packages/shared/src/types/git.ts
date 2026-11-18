@@ -228,3 +228,58 @@ export interface CommitDetail extends CommitInfo {
    */
   diff_truncated?: boolean;
 }
+
+// --- ADR-076 (этап 1): состояние рабочего дерева и diff рабочего дерева ---
+
+/**
+ * Вид изменения файла в рабочем дереве — нормализованный (из `XY` porcelain v2).
+ *
+ * `ignored` — отдельный вид: игнорируемые файлы не «изменены», но панель файлов
+ * показывает их приглушённо (поэтому они отделяются от `untracked`).
+ */
+export type GitFileStatusKind =
+  | 'added' | 'modified' | 'deleted' | 'renamed'
+  | 'typechange' | 'conflict' | 'untracked' | 'ignored';
+
+/** Файл в состоянии рабочего дерева (ADR-076, `GET /api/v2/git/status`). */
+export interface GitWorktreeFile {
+  /** Путь относительно корня репозитория, всегда через `/`. */
+  path: string;
+  /** Прежний путь для rename/copy. */
+  orig_path?: string;
+  kind: GitFileStatusKind;
+  /** Изменение в индексе (staged). */
+  staged: boolean;
+  /** Изменение в рабочем дереве (unstaged). */
+  unstaged: boolean;
+}
+
+/** Состояние рабочего дерева одного репозитория проекта. */
+export interface GitRepoWorktreeStatus {
+  /** Путь репозитория относительно workspace (`''` — корень). */
+  path: string;
+  branch?: string;
+  ahead?: number;
+  behind?: number;
+  files: GitWorktreeFile[];
+  /** Список обрезан по лимиту записей. */
+  truncated?: boolean;
+  /** Репозиторий реестра недоступен/не git — машинный код (`git.repo_missing`). */
+  error?: string;
+}
+
+/** Ответ `GET /api/v2/git/status`: состояние рабочего дерева всех репозиториев проекта. */
+export interface GitWorktreeStatusResponse { repos: GitRepoWorktreeStatus[] }
+
+/** Diff рабочего дерева одного файла (или сводный — без `path`). */
+export interface GitWorktreeDiff {
+  repo_path: string;
+  /** Путь файла (репо-относительный) или отсутствует — сводный diff набора. */
+  path?: string;
+  kind?: GitFileStatusKind;
+  diff: string;
+  diff_truncated?: boolean;
+  binary?: boolean;
+  additions?: number;
+  deletions?: number;
+}

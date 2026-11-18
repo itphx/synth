@@ -110,6 +110,16 @@ describe('useActiveProject', () => {
     expect(captured).toEqual({ projectId: 'p3', source: 'commit', sessionId: null })
   })
 
+  it('git-diff → projectId вкладки, source diff', async () => {
+    setTabs(
+      [{ id: 'd1', type: 'git-diff', title: 'd', data: { projectId: 'p6', repoPath: 'sub', gitPath: 'a.ts' } }],
+      'd1',
+    )
+    await renderProbe()
+
+    expect(captured).toEqual({ projectId: 'p6', source: 'diff', sessionId: null })
+  })
+
   it('terminal → projectId и sessionId вкладки, source session', async () => {
     setTabs(
       [

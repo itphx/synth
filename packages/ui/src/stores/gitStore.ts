@@ -2,7 +2,12 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { synthApi } from '@/lib/api/synthApi'
 import type { GitRepoConfigData } from '@/lib/api/synthApi'
-import type { RepoStatus, CommitInfo, CommitDetail } from '@itphx/synth-shared'
+import type {
+  RepoStatus,
+  CommitInfo,
+  CommitDetail,
+  GitRepoWorktreeStatus,
+} from '@itphx/synth-shared'
 
 /**
  * ADR-076: запись реестра проекта + git-статус, собранные для дерева Git-вкладки.
@@ -50,6 +55,10 @@ function toActionError(e: unknown): GitActionError | null {
 interface GitStore {
   reposByProject: Record<string, GitRepoView[]>
   commitsByRepo: Record<string, CommitInfo[]>
+  /** ADR-076 (этап 1): снимок статуса рабочего дерева по проекту (runtime-only). */
+  statusByProject: Record<string, GitRepoWorktreeStatus[]>
+  /** Время последней успешной загрузки статуса (клиентский TTL). */
+  statusLoadedAt: Record<string, number>
   loading: boolean
   error: string | null
   /** Структурная ошибка последней операции (`code`/`details` для actionable-UI). */
@@ -60,6 +69,12 @@ interface GitStore {
   showMoreLimits: Record<string, number>
 
   loadRepos: (projectId: string, repos: GitRepoConfigData[] | null) => Promise<void>
+  /**
+   * Статус рабочего дерева проекта. Ошибки тихие (панель не спамит тостами),
+   * прошлый снимок при ошибке не затирается; TTL ~2 с, параллельные вызовы
+   * одного проекта не дублируются (`force` — ручное обновление).
+   */
+  loadStatus: (projectId: string, opts?: { force?: boolean }) => Promise<void>
   scanWorkspace: (projectId: string) => Promise<RepoStatus[] | null>
   initRepo: (
     projectId: string,
@@ -105,11 +120,18 @@ function repoKey(projectId: string, repoPath: string): string {
   return `${projectId}::${repoPath}`
 }
 
+/** Клиентский TTL статуса рабочего дерева: поллинг 5 с не долбит сервер. */
+const STATUS_TTL_MS = 2000
+/** Проекты, для которых запрос статуса уже в полёте (дедуп параллельных вызовов). */
+const statusInFlight = new Set<string>()
+
 export const useGitStore = create<GitStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
   reposByProject: {},
   commitsByRepo: {},
+  statusByProject: {},
+  statusLoadedAt: {},
   loading: false,
   error: null,
   lastError: null,
@@ -238,6 +260,29 @@ export const useGitStore = create<GitStore>()(
       return result.commit
     } catch {
       return null
+    }
+  },
+
+  loadStatus: async (projectId, opts) => {
+    if (!projectId) return
+    const force = opts?.force === true
+    const loadedAt = get().statusLoadedAt[projectId] ?? 0
+    if (!force && Date.now() - loadedAt < STATUS_TTL_MS) return
+    if (statusInFlight.has(projectId)) return
+    statusInFlight.add(projectId)
+    try {
+      const result = await synthApi.getGitStatus(projectId)
+      set((s) => ({
+        statusByProject: {
+          ...s.statusByProject,
+          [projectId]: Array.isArray(result?.repos) ? result.repos : [],
+        },
+        statusLoadedAt: { ...s.statusLoadedAt, [projectId]: Date.now() },
+      }))
+    } catch {
+      // Тихая деградация: панель не показывает тостов, прошлый снимок остаётся.
+    } finally {
+      statusInFlight.delete(projectId)
     }
   },
 

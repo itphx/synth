@@ -5,9 +5,9 @@ import { useProjectsStore } from '@/stores/projectsStore'
 
 /**
  * Источник активного проекта: выделенный проект, активная сессия, терминал,
- * файловая или commit-вкладка.
+ * файловая, commit- или diff-вкладка.
  */
-export type ActiveProjectSource = 'session' | 'file' | 'commit' | 'project' | null
+export type ActiveProjectSource = 'session' | 'file' | 'commit' | 'diff' | 'project' | null
 
 export interface ActiveProjectInfo {
   projectId: string | null
@@ -87,6 +87,11 @@ export function useActiveProject(): ActiveProjectInfo {
 
     if (tab.type === 'commit-detail') {
       return { projectId: tab.data?.projectId ?? null, source: 'commit', sessionId: null }
+    }
+
+    // ADR-076 (этап 1): вкладка diff рабочего дерева — проект в данных вкладки.
+    if (tab.type === 'git-diff') {
+      return { projectId: tab.data?.projectId ?? null, source: 'diff', sessionId: null }
     }
 
     return { projectId: null, source: null, sessionId: null }

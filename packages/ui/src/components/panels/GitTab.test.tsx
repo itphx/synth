@@ -180,6 +180,77 @@ describe('GitTab — реестр репозиториев (ADR-076)', () => {
     const container = await renderGitTab()
     expect(container.textContent ?? '').not.toContain('VendorLib')
   })
+
+  it('клик по файлу в «Изменениях» открывает вкладку файла в режиме diff', async () => {
+    useGitStore.setState({
+      reposByProject: { p1: [{ path: 'vendor/lib', name: 'VendorLib', isRepo: true }] },
+      statusByProject: {
+        p1: [
+          {
+            path: 'vendor/lib',
+            branch: 'main',
+            files: [{ path: 'src/a.ts', kind: 'modified', staged: false, unstaged: true }],
+          },
+        ],
+      },
+      expandedProjects: new Set(['p1']),
+      expandedRepos: new Set(['p1::vendor/lib']),
+    })
+
+    // Статус не перезапрашиваем: снимок уже задан в тесте.
+    vi.spyOn(useGitStore.getState(), 'loadStatus').mockResolvedValue(undefined)
+
+    const container = await renderGitTab()
+    const node = container.querySelector<HTMLElement>(
+      '[data-tree-node="git-change:p1::vendor/lib:src/a.ts"]',
+    )
+    expect(node).not.toBeNull()
+
+    await act(async () => {
+      node!.click()
+    })
+
+    const tabs = useUIStore.getState().centerTabs
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]).toMatchObject({
+      id: 'file-p1/vendor/lib/src/a.ts',
+      type: 'file-viewer',
+      data: { projectId: 'p1', filePath: 'vendor/lib/src/a.ts', viewMode: 'diff' },
+    })
+  })
+
+  it('поллинг статуса — только раскрытые проекты с репозиториями', async () => {
+    // p1 — раскрыт и с репозиториями; p2 — с репозиториями, но не раскрыт;
+    // p3 — раскрыт, репозиториев нет; p4 — раскрыт, `repos: null`.
+    const p2 = { ...PROJECT, id: 'p2', name: 'P2', workspace: '/ws/p2' }
+    const p3 = { ...PROJECT, id: 'p3', name: 'P3', workspace: '/ws/p3', repos: [] }
+    const p4 = { ...PROJECT, id: 'p4', name: 'P4', workspace: '/ws/p4', repos: null }
+    const projects = [PROJECT, p2, p3, p4]
+    mocks.getProjects.mockResolvedValue(projects)
+    mocks.getProjectsPage.mockImplementation(async () => ({
+      projects: projects as never[],
+      total: 0,
+      offset: 0,
+      limit: 100,
+      next_offset: null,
+    }))
+    useProjectsStore.setState({ projects: projects as never })
+    useGitStore.setState({
+      expandedProjects: new Set(['p1', 'p3', 'p4']),
+      reposByProject: {},
+      statusByProject: {},
+      statusLoadedAt: {},
+    })
+    // Хук поллинга и ленивая загрузка идут через `getState().loadStatus`.
+    const loadStatus = vi
+      .spyOn(useGitStore.getState(), 'loadStatus')
+      .mockResolvedValue(undefined)
+
+    await renderGitTab()
+
+    const called = new Set(loadStatus.mock.calls.map((call) => call[0]))
+    expect(called).toEqual(new Set(['p1']))
+  })
 })
 
 // ---------------------------------------------------------------------------
