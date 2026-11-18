@@ -427,7 +427,8 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   (чистятся retention-ом), `BackgroundRunRecord` (запись `bgr_<uuid>`) и
   `BackgroundRunFilter` (все условия — по «И»). Тип события шины `background.auto_detached`
   (`{session_id, detached[], failed?}`; публикуется только при непустом `detached`) —
-  автоперевод блокирующих прогонов в фон при steer (ADR-145). Оба контракта (`question.ts`,
+  автоперевод блокирующих прогонов в фон при вмешательстве пользователя
+  (queue/steer/interrupt, ADR-145). Оба контракта (`question.ts`,
   `background.ts`) — browser-safe: только типы + Zod, без бизнес-логики; re-export из `types`.
 - ADR-114 (этап 1 roadmap 0.13 — блок 1.4): **git worktrees** (per-session рабочий
   каталог) — `types/worktree.ts`: `WorktreeStrategy` (`git`), `WORKTREE_STRATEGIES`,
@@ -523,8 +524,14 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
 - Этап 1 roadmap 0.13: `question.answered` (`{answers}`), `question.cancelled` (`{reason}`),
   `question.timeout`, `question.deps_unavailable` — «вопрос пользователю» (ADR-112);
   `background.started.process` (`{id}`, `{log}`) и `background.started.subagent`
-  (`{id}`) — **единые** тексты запуска фоновой работы (фоновый запуск и detach
-  одинаковы, ADR-145); правило поведения («не поллить, уведомление придёт само»)
+  (`{id}`) — тексты **агентского** запуска фоновой работы (`background: true`),
+  а `background.detached.process` (`{id}`, `{log}`) и
+  `background.detached.subagent` (`{id}`) — тексты **ручного** перевода в фон
+  (кнопка «В фон», `ctrl+b`, `POST /sessions/:id/background`),
+  `background.detached.process_message` (`{id}`, `{log}`) и
+  `background.detached.subagent_message` (`{id}`) — авто-detach из-за нового
+  сообщения пользователя (`steer`/`interrupt`); причина перевода видна в тексте,
+  причины получают собственные ключи (ADR-145); правило поведения («не поллить, уведомление придёт само»)
   живёт в системном блоке `prompts/system/BACKGROUND.{ru,en}.md`, а не в
   результатах тулов; `task.background_limit` (`{limit}`),
   `task.background_disabled`, `process.deps_unavailable`,

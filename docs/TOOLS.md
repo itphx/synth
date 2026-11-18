@@ -139,13 +139,30 @@ awk/sed/find-программы, heredoc, обёртки `sh -c`/`sudo`/`env`/`n
 (`prompts/system/BACKGROUND.{ru,en}.md`, тир context, order 26; включается
 только при включённой фоновой работе и непустом файле; override —
 `{dataDir}/user/system/BACKGROUND*.md`), а не в результатах инструментов.
-Поэтому текстов запуска ровно **два**:
+Поэтому текстов результатов **шесть** — по ключу на причину:
 
 | Ключ | Параметры | Когда |
 |---|---|---|
-| `background.started.process` | `{id}` (processId), `{log}` (путь лога) | `execute_shell({background: true})` и перевод идущей команды в фон |
-| `background.started.subagent` | `{id}` (id дочерней сессии) | `task({background: true})` и перевод идущего саб-агента в фон |
+| `background.started.process` | `{id}` (processId), `{log}` (путь лога) | агентский запуск `execute_shell({background: true})` |
+| `background.started.subagent` | `{id}` (id дочерней сессии) | агентский запуск `task({background: true})` |
+| `background.detached.process` | `{id}` (processId), `{log}` (путь лога) | ручной перевод идущей команды в фон: кнопка «В фон», `ctrl+b`, `POST /sessions/:id/background` |
+| `background.detached.subagent` | `{id}` (id дочерней сессии) | ручной перевод идущего саб-агента в фон (те же поводы) |
+| `background.detached.process_message` | `{id}` (processId), `{log}` (путь лога) | авто-detach команды из-за нового сообщения пользователя (`steer`/`interrupt`) |
+| `background.detached.subagent_message` | `{id}` (id дочерней сессии) | авто-detach саб-агента из-за нового сообщения пользователя |
 
+- **Причина перевода — в тексте.** `background.detached.*` — это не агентский
+  запуск, а перевод, поэтому текст объясняет причину: ручной перевод — «по
+  инициативе пользователя», авто-detach — «из-за нового сообщения
+  пользователя; сообщение будет обработано следом». Ключи не переиспользуются
+  между причинами.
+- **Авто-detach — только при вмешательстве пользователя в занятую сессию.**
+  `mode=steer`/`interrupt` переводят блокирующие прогоны **до** обработки
+  (включая `interrupt` без текста); `steer`/`interrupt` текст не требуют
+  (включая `@user`-only). `mode=queue` прогоны **не** переводит — сообщение
+  просто ждёт завершения хода (`QUEUE_FULL` и `@user`-only в `queue` — тоже не
+  трогают). `background.enabled=false` не переводит. Событие
+  `background.auto_detached` публикуется только при непустом итоге; порядок для
+  `interrupt`: detach → `steerInbox` → прерывание генерации.
 - **Вывод с первой секунды.** Если detach доступен (есть реестр активных
   прогонов, сервис процессов, `spawnBackground` у порта и
   `background.enabled !== false`), foreground-вызов `execute_shell` идёт через

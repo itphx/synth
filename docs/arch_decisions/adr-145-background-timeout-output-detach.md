@@ -68,19 +68,34 @@ Detach (ADR-111 §detach) переводил идущий блокирующий
    на границе (`read`/`write` по сессии-владельцу). UI: секции «Блокирующие
    саб-агенты»/«Блокирующие процессы», live-лог-вкладка, кнопка «В фон» в шапке
    running-карточки `execute_shell`.
-5. **Авто-detach при steer.** `POST /api/v2/sessions/:id/prompt` при активном
-   ходе **до** постановки steer переводит блокирующие прогоны в фон
-   (`autoDetachOnSteer`, `engine/background/auto-detach.ts`). Уважается живое
+5. **Авто-detach при вмешательстве пользователя.** `POST /api/v2/sessions/:id/prompt`
+   при активном ходе переводит блокирующие прогоны в фон
+   (`autoDetachOnSteer`, `engine/background/auto-detach.ts`): `steer`/`interrupt` —
+   **до** обработки (включая `interrupt` без текста); текст не требуется
+   (`@user`-only тоже вмешательство). `mode=queue` прогоны **не** переводит —
+   сообщение просто ждёт завершения хода (`QUEUE_FULL` и `@user`-only в `queue`
+   — не трогают). Уважается живое
    значение `background.enabled`; ошибки не ломают приём сообщения (причина — в
    лог); событие `background.auto_detached {session_id, detached[], failed?}`
    публикуется только при непустом итоге — пустой снимок UI не будит.
+   Причина перевода (`ActiveRunDetachReason`: `'user'` — ручной перевод, по
+   умолчанию; `'message'` — авто-detach) передаётся сквозь
+   `detachAll → handle.detach(reason)` и выбирает текст результата. Порядок для
+   `interrupt`: detach → `steerInbox` → прерывание генерации.
 6. **Один блок промпта вместо текстов в результатах.** Появляется
    `prompts/system/BACKGROUND.{ru,en}.md` (блок `[ФОНОВАЯ РАБОТА]`, tier
    `context`, order 26), включается только при включённой фоновой работе и
    непустом файле; override — `{dataDir}/user/system/BACKGROUND*.md` через порт
-   `ContextFileRepository`. Четыре ключа результатов схлопнуты в два:
+   `ContextFileRepository`. В результатах — шесть ключей по причине:
    `background.started.process` (`{id}`, `{log}`) и `background.started.subagent`
-   (`{id}`) — одинаковые для фонового запуска и detach.
+   (`{id}`) для агентского запуска (`background: true`),
+   `background.detached.process` (`{id}`, `{log}`) и `background.detached.subagent`
+   (`{id}`) для **ручного** перевода (кнопка «В фон», `ctrl+b`,
+   `POST /sessions/:id/background`),
+   `background.detached.process_message` (`{id}`, `{log}`) и
+   `background.detached.subagent_message` (`{id}`) для авто-detach из-за нового
+   сообщения пользователя — текст перевода объясняет причину, причины получают
+   собственные ключи.
 7. **Настройки `background` — runtime.** `GET/PUT/DELETE /api/v2/settings/background`
    (`enabled`, `maxSubagentsPerSession`, `maxProcessesPerSession`,
    `maxRunsPerSession`, `logMaxBytes`, `retentionDays`): приоритет по каждому полю
@@ -143,3 +158,10 @@ Detach (ADR-111 §detach) переводил идущий блокирующий
 - 2026-11-18 — решение реализовано: `retime` + протокол исполнителя 10, живой
   лог `processes/live`, блокирующие прогоны в API/UI, авто-detach при steer,
   блок `BACKGROUND` и единые тексты, runtime-настройки `background`.
+- 2026-11-18 (уточнение) — авто-detach привязан к **вмешательству** (`steer`/
+  `interrupt`, включая прерывание без текста): `queue` прогоны не переводит
+  (сообщение ждёт хода). Причина перевода сквозная (`ActiveRunDetachReason`:
+  `user`/`message`), тексты результатов разделены: шесть ключей
+  (`background.started.*` для агентского запуска, `background.detached.*` для
+  ручного перевода, `background.detached.*_message` для авто-detach из-за нового
+  сообщения пользователя).
