@@ -809,7 +809,7 @@ export function mountStandaloneRoutes(
   // Core: чтение/мутации — `requireAuth` (single-user).
   app.route('/api/v2/settings', createUpdatesSettingsRoutes(
     { requireAuth: auth.requireAuth },
-    { settingsStore, config: config.updatesConfig, env: process.env },
+    { settingsStore, dataDir, config: config.updatesConfig, env: process.env },
   ));
 
   // PROP-132 (Ф3в): настройки терминалов — мастер-выключатель, восстановление

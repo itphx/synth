@@ -20,6 +20,9 @@ export const SHELL_RELOAD_WINDOW_MS = 15_000
 /** Ключ sessionStorage: серверный build id, для которого перезагрузка уже сделана. */
 export const ACK_BUILD_STORAGE_KEY = 'synth.appShell.ackedBuild'
 
+/** Ключ sessionStorage: серверная версия, расхождение с которой уже принято. */
+export const ACK_SERVER_VERSION_STORAGE_KEY = 'synth.appShell.ackedServerVersion'
+
 function readStorage(key: string): string | null {
   try {
     return window.sessionStorage.getItem(key)
@@ -90,6 +93,23 @@ export function acknowledgeBuild(build: string | null): void {
 export function isBuildAcknowledged(build: string | null): boolean {
   if (!build) return false
   return readStorage(ACK_BUILD_STORAGE_KEY) === build
+}
+
+/**
+ * Запомнить серверную версию, расхождение с которой уже принято.
+ * Расхождение semver (build id неизвестен) перезагрузкой страницы **не лечится**,
+ * если сервер старее клиента (`synth serve` с `restart` по умолчанию `disabled`):
+ * одна перезагрузка на версию, затем версия считается согласованной — иначе PWA
+ * перезагружал бы приложение бесконечно.
+ */
+export function acknowledgeServerVersion(version: string | null): void {
+  writeStorage(ACK_SERVER_VERSION_STORAGE_KEY, version && version.length > 0 ? version : null)
+}
+
+/** Серверная версия уже согласована в этой вкладке. */
+export function isServerVersionAcknowledged(version: string | null): boolean {
+  if (!version) return false
+  return readStorage(ACK_SERVER_VERSION_STORAGE_KEY) === version
 }
 
 /**

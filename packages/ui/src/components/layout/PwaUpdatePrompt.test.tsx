@@ -38,6 +38,7 @@ vi.mock('@/stores/authStore', async () => {
 
 import { PwaUpdatePrompt } from './PwaUpdatePrompt'
 import { synthApi } from '@/lib/api/synthApi'
+import { ACK_SERVER_VERSION_STORAGE_KEY } from '@/lib/appShell'
 
 const getHealthMock = vi.mocked(synthApi.getHealth)
 
@@ -87,10 +88,11 @@ async function mountPrompt(): Promise<HTMLElement> {
   return host
 }
 
-function findButton(host: HTMLElement, label: string): HTMLButtonElement {
-  const button = Array.from(host.querySelectorAll('button')).find((b) => b.textContent === label)
-  expect(button).toBeTruthy()
-  return button as HTMLButtonElement
+/** Баннера нет ни в каком сценарии: узел пуст, `role=status` отсутствует. */
+function expectNoBanner(host: HTMLElement): void {
+  expect(host.querySelector('[role="status"]')).toBeNull()
+  expect(host.querySelector('button')).toBeNull()
+  expect(host.innerHTML).toBe('')
 }
 
 function seedAutoReload(key: string, count: number): void {
@@ -166,9 +168,8 @@ describe('PwaUpdatePrompt', () => {
     const host = await mountPrompt()
 
     expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
-    // Баннера нет — обновление применяется без вопроса.
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
     expect(reloadSpy).not.toHaveBeenCalled()
+    expectNoBanner(host)
 
     // Страховка: controllerchange не пришёл — перезагружаемся сами.
     await act(async () => {
@@ -177,7 +178,7 @@ describe('PwaUpdatePrompt', () => {
     expect(reloadSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('расхождение версий — перезагружает без клика и без баннера', async () => {
+  it('расхождение версий — ровно одна перезагрузка на серверную версию', async () => {
     container.controller = {}
     container.registration = new MockRegistration(null)
     getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
@@ -185,9 +186,19 @@ describe('PwaUpdatePrompt', () => {
     const host = await mountPrompt()
 
     expect(reloadSpy).toHaveBeenCalledTimes(1)
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
     // Ключ версии и первая авто-попытка зафиксированы в sessionStorage.
     expect(readAutoReload()).toEqual({ key: 'ver:9.9.9', count: 1 })
+    // Версия сервера запомнена как согласованная — цикл невозможен.
+    expect(window.sessionStorage.getItem(ACK_SERVER_VERSION_STORAGE_KEY)).toBe('9.9.9')
+
+    // Повторная загрузка страницы (новый mount в той же вкладке) — ноль перезагрузок.
+    const secondHost = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(reloadSpy).toHaveBeenCalledTimes(1)
+    expectNoBanner(secondHost)
   })
 
   it('после перезагрузки из блока «Обновления» не перезагружает второй раз', async () => {
@@ -201,7 +212,7 @@ describe('PwaUpdatePrompt', () => {
 
     // Расхождение версий есть, но перезагрузку уже сделали ради обновления.
     expect(reloadSpy).not.toHaveBeenCalled()
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
     expect(window.sessionStorage.getItem('synth.appShell.reloadedAt')).toBeNull()
     // Авто-попытка не расходуется — ключ погашен на этой загрузке.
     expect(readAutoReload()).toBeNull()
@@ -219,18 +230,20 @@ describe('PwaUpdatePrompt', () => {
     expect(readAutoReload()).toEqual({ key: 'ver:9.9.9', count: 1 })
   })
 
-  it('после 2 авто-попыток на ту же версию показывает аварийный баннер', async () => {
+  it('лимит авто-попыток на версию: перезагрузки нет, баннера нет, версия согласована', async () => {
     container.controller = {}
     container.registration = new MockRegistration(null)
     seedAutoReload('ver:9.9.9', 2)
     getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
 
     const host = await mountPrompt()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     expect(reloadSpy).not.toHaveBeenCalled()
-    expect(host.textContent).toContain('pwa.updateAvailable')
-    expect(host.textContent).toContain('pwa.updateLater')
-    expect(host.textContent).toContain('pwa.updateNow')
+    expectNoBanner(host)
+    expect(window.sessionStorage.getItem(ACK_SERVER_VERSION_STORAGE_KEY)).toBe('9.9.9')
   })
 
   it('расхождение build id — чистит кэши, обновляет SW и перезагружает', async () => {
@@ -250,7 +263,7 @@ describe('PwaUpdatePrompt', () => {
     expect(cachesMock.delete).toHaveBeenCalledWith('synth-shell-0.13.3-old')
     expect(registration.update).toHaveBeenCalled()
     expect(reloadSpy).toHaveBeenCalledTimes(1)
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
     expect(readAutoReload()).toEqual({ key: 'build:server-build', count: 1 })
   })
 
@@ -267,7 +280,7 @@ describe('PwaUpdatePrompt', () => {
     expect(cachesMock.keys).not.toHaveBeenCalled()
     expect(cachesMock.delete).not.toHaveBeenCalled()
     expect(reloadSpy).not.toHaveBeenCalled()
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
   })
 
   it('пустой build id на сервере — фоллбек на сравнение версии', async () => {
@@ -285,9 +298,11 @@ describe('PwaUpdatePrompt', () => {
     expect(readAutoReload()).toEqual({ key: 'ver:9.9.9', count: 1 })
   })
 
-  it('после 2 авто-попыток на тот же build id показывает аварийный баннер', async () => {
+  it('лимит на build id: тихо сбрасывает кэши и принимает воркер, без перезагрузки', async () => {
+    cacheKeys = ['synth-shell-old']
+    const worker = new MockWaitingWorker()
     container.controller = {}
-    container.registration = new MockRegistration(null)
+    container.registration = new MockRegistration(worker)
     seedAutoReload('build:server-build', 2)
     getHealthMock.mockResolvedValue({ ...HEALTH_OK, build: 'server-build' })
 
@@ -297,8 +312,10 @@ describe('PwaUpdatePrompt', () => {
     })
 
     expect(reloadSpy).not.toHaveBeenCalled()
-    expect(cachesMock.keys).not.toHaveBeenCalled()
-    expect(host.textContent).toContain('pwa.updateAvailable')
+    expectNoBanner(host)
+    // Применение тихое: кэши шелла сброшены, ожидающий воркер принят.
+    expect(cachesMock.keys).toHaveBeenCalled()
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
   })
 
   it('не показывает баннер, когда версия сервера совпадает', async () => {
@@ -307,7 +324,7 @@ describe('PwaUpdatePrompt', () => {
 
     const host = await mountPrompt()
 
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
     expect(reloadSpy).not.toHaveBeenCalled()
   })
 
@@ -344,60 +361,6 @@ describe('PwaUpdatePrompt', () => {
     expect(getHealthMock).toHaveBeenCalledTimes(2)
   })
 
-  it('в аварийном баннере «Позже» скрывает его', async () => {
-    container.controller = {}
-    container.registration = new MockRegistration(null)
-    seedAutoReload('ver:9.9.9', 2)
-    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
-
-    const host = await mountPrompt()
-    expect(host.textContent).toContain('pwa.updateAvailable')
-
-    await act(async () => {
-      findButton(host, 'pwa.updateLater').click()
-    })
-
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
-  })
-
-  it('в аварийном баннере «Обновить» отправляет SKIP_WAITING, если воркер ждёт', async () => {
-    vi.useFakeTimers()
-    container.controller = {}
-    container.registration = new MockRegistration(null)
-    seedAutoReload('ver:9.9.9', 2)
-    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
-
-    const host = await mountPrompt()
-    expect(host.textContent).toContain('pwa.updateAvailable')
-
-    // К моменту клика воркер появился.
-    const worker = new MockWaitingWorker()
-    container.getRegistration.mockResolvedValueOnce(new MockRegistration(worker))
-
-    await act(async () => {
-      findButton(host, 'pwa.updateNow').click()
-    })
-
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' })
-  })
-
-  it('в аварийном баннере «Обновить» без ожидающего SW перезагружает страницу', async () => {
-    container.controller = {}
-    container.registration = new MockRegistration(null)
-    seedAutoReload('ver:9.9.9', 2)
-    getHealthMock.mockResolvedValue({ ...HEALTH_OK, version: '9.9.9' })
-
-    const host = await mountPrompt()
-    expect(host.textContent).toContain('pwa.updateAvailable')
-
-    await act(async () => {
-      findButton(host, 'pwa.updateNow').click()
-    })
-
-    expect(reloadSpy).toHaveBeenCalled()
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
-  })
-
   it('связь потеряна (phase !== online) — не перезагружает при расхождении версий', async () => {
     connection.transport.setState({ phase: 'reconnecting' })
     container.controller = {}
@@ -409,7 +372,7 @@ describe('PwaUpdatePrompt', () => {
     expect(reloadSpy).not.toHaveBeenCalled()
     // Авто-попытка не израсходована — применится после восстановления связи.
     expect(readAutoReload()).toBeNull()
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
   })
 
   it('отложенное обновление применяется при восстановлении связи (phase → online)', async () => {
@@ -434,7 +397,7 @@ describe('PwaUpdatePrompt', () => {
 
     expect(reloadSpy).toHaveBeenCalledTimes(1)
     expect(readAutoReload()).toEqual({ key: 'ver:9.9.9', count: 1 })
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
   })
 
   it('authPhase=unreachable — не перезагружает при расхождении версий и не тратит авто-попытку', async () => {
@@ -452,7 +415,7 @@ describe('PwaUpdatePrompt', () => {
     expect(reloadSpy).not.toHaveBeenCalled()
     // Авто-попытка отложена: счётчик в sessionStorage не появился.
     expect(readAutoReload()).toBeNull()
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
   })
 
   it('authPhase=checking — перезагрузка откладывается (не тратит авто-попытку)', async () => {
@@ -469,7 +432,7 @@ describe('PwaUpdatePrompt', () => {
 
     expect(reloadSpy).not.toHaveBeenCalled()
     expect(readAutoReload()).toBeNull()
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
   })
 
   it('health недоступен — не перезагружает и не показывает баннер', async () => {
@@ -480,7 +443,7 @@ describe('PwaUpdatePrompt', () => {
     const host = await mountPrompt()
 
     expect(reloadSpy).not.toHaveBeenCalled()
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
   })
 
   it('не обновляется при первой установке без controller', async () => {
@@ -489,7 +452,7 @@ describe('PwaUpdatePrompt', () => {
 
     const host = await mountPrompt()
 
-    expect(host.textContent).not.toContain('pwa.updateAvailable')
+    expectNoBanner(host)
     expect(reloadSpy).not.toHaveBeenCalled()
   })
 })

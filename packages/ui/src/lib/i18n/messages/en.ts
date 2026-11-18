@@ -2854,6 +2854,11 @@ export const dict = {
   'admin.updates.prerelease': 'pre-release',
   'admin.updates.registry': 'Registry',
   'admin.updates.checkedAt': 'Checked: {date}',
+  'admin.updates.lastCheck': 'Last check',
+  'admin.updates.lastCheckNever': 'Not checked yet',
+  'admin.updates.lastCheckDisabled': 'Scheduled checks are disabled',
+  'admin.updates.lastCheckStale': 'Data is stale — interval {hours} h',
+  'admin.updates.lastCheckError': 'Error: {error}',
   'admin.updates.update': 'Update',
   'admin.updates.updating': 'Installing…',
   'admin.updates.confirmTitle': 'Install update',
@@ -5724,11 +5729,6 @@ export const dict = {
   // --- Shell policy (engine key, ADR-041; ADR-029 external_directory perimeter) ---
   'shellguard.ask_external':
     'Access to "{path}" is outside the working directory — requires approval (permission.rules.external_directory)',
-
-  // --- PWA ---
-  'pwa.updateAvailable': 'A new app version is available',
-  'pwa.updateNow': 'Update',
-  'pwa.updateLater': 'Later',
 
   // --- Authority (ADR-106 §11) — read-only раздел «Полномочия» ---
   'authority.title': 'Authority',

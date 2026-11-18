@@ -2161,15 +2161,29 @@ TLS-кодах (`SELF_SIGNED_CERT_IN_CHAIN`, `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, 
   "intervalHours": 24,
   "stableRegistry": "https://registry.npmjs.org",
   "betaRegistry": "https://git.itphx.ru/api/packages/itphx/npm/",
+  "lastCheck": {
+    "checkedAt": "2026-11-11T10:00:00.000Z",
+    "channel": "stable",
+    "currentVersion": "0.19.0",
+    "latestVersion": "0.20.0",
+    "hasUpdate": true,
+    "stale": false
+  },
   "restartRequired": false
 }
 ```
 
 - `source` — `default` | `config` | `runtime` | `env` (приоритет env > runtime > config > default);
 - `envLocked: true` — `SYNTH_UPDATES_CHECK` задан в env: `PUT` → `409 CONFLICT`, менять можно только env;
+- `lastCheck` — последняя проверка из кэша `{dataDir}/update-check.json` **без учёта TTL** (для админ-раздела
+  «Панель управления»): `checkedAt` (ISO-8601), `channel` (уже разрешённый), `currentVersion`,
+  `latestVersion`, `hasUpdate`, `stale` (запись старше `intervalHours`, ошибка — 1 ч) и необязательный
+  `error` причины неудачи. Записи нет/`dataDir` недоступен — `null` (аддитивное поле);
 - `PUT` принимает `{check: boolean}` (иначе `400 VALIDATION_ERROR`) и пишет runtime
   (`settings.json`/PG); применяется **сразу** — планировщик перечитывает значение на каждом тике
-  (`restartRequired: false`, в т.ч. включение автопроверки после старта);
+  (`restartRequired: false`, в т.ч. включение автопроверки после старта); **включение (`check:true`)
+  немедленно запускает проверку в фоне** (fire-and-forget, ответ не ждёт сеть), поэтому свежий
+  `lastCheck` появляется без ручного «Проверить»;
 - `DELETE` сбрасывает runtime к env/config/default;
 - `channel` и реестры — только из `config.yaml`/env (runtime меняет лишь `check`).
 

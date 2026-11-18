@@ -20,6 +20,7 @@ import {
   isNewer,
   packageMetadataUrl,
   parseVersion,
+  readLastUpdateCheck,
   resolveUpdateChannel,
   resolveUpdatesRegistry,
 } from './update-checker.js';
@@ -199,5 +200,67 @@ describe('checkForUpdates: кэш по каналам (ADR-133)', () => {
     const info = await checkForUpdates(dataDir, { channel: 'stable' });
     expect(info.latestVersion).toBe('0.2.0');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('readLastUpdateCheck — последняя проверка без TTL (ADR-133)', () => {
+  /** Записать кэш по каналам. */
+  async function seedCache(channels: Record<string, unknown>): Promise<void> {
+    await writeFile(
+      join(dataDir, 'update-check.json'),
+      JSON.stringify({ version: 2, channels }),
+      'utf-8',
+    );
+  }
+
+  const entry = (version: string, ts: number): unknown => ({
+    currentVersion: '0.19.0',
+    latestVersion: version,
+    channel: 'stable',
+    prerelease: false,
+    registry: 'https://registry.npmjs.org',
+    hasUpdate: true,
+    checkedAt: '2026-11-11T10:00:00.000Z',
+    _ts: ts,
+  });
+
+  it('нет файла — null', async () => {
+    expect(await readLastUpdateCheck(dataDir)).toBeNull();
+  });
+
+  it('свежая запись: данные и stale=false', async () => {
+    await seedCache({ stable: entry('0.20.0', Date.now()) });
+    const info = await readLastUpdateCheck(dataDir);
+    expect(info).toMatchObject({ latestVersion: '0.20.0', hasUpdate: true, stale: false });
+  });
+
+  it('истёк TTL — запись отдаётся с stale=true', async () => {
+    await seedCache({ stable: entry('0.20.0', Date.now() - 25 * 60 * 60 * 1000) });
+    expect((await readLastUpdateCheck(dataDir))?.stale).toBe(true);
+  });
+
+  it('нет записи эффективного канала — берётся самая свежая', async () => {
+    await seedCache({
+      beta: { ...(entry('0.20.0-beta.1', Date.now()) as Record<string, unknown>), channel: 'beta' },
+    });
+    const info = await readLastUpdateCheck(dataDir, undefined, { configured: 'stable' });
+    expect(info?.latestVersion).toBe('0.20.0-beta.1');
+  });
+
+  it('явный channel важнее эффективного', async () => {
+    await seedCache({
+      stable: entry('0.19.5', Date.now()),
+      beta: { ...(entry('0.20.0-beta.1', Date.now()) as Record<string, unknown>), channel: 'beta' },
+    });
+    expect((await readLastUpdateCheck(dataDir, 'stable'))?.latestVersion).toBe('0.19.5');
+  });
+
+  it('legacy-плоский объект читается как stable', async () => {
+    await writeFile(
+      join(dataDir, 'update-check.json'),
+      JSON.stringify(entry('0.2.0', Date.now())),
+      'utf-8',
+    );
+    expect((await readLastUpdateCheck(dataDir))?.latestVersion).toBe('0.2.0');
   });
 });

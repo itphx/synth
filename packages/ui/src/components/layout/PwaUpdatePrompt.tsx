@@ -1,19 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { SYNTH_VERSION } from '@itphx/synth-shared/version'
-import { Icon } from '../icon/Icon'
-import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import { BUILD_ID } from '@/lib/build-info'
 import { useAuthStore } from '@/stores/authStore'
 import { useTransportStore } from '@/stores/transportStore'
 import {
   acknowledgeBuild,
+  acknowledgeServerVersion,
   clearShellCaches,
   consumeShellReloadMarker,
   isBuildAcknowledged,
+  isServerVersionAcknowledged,
 } from '@/lib/appShell'
 
-/** Уникальный ключ конкретного ожидающего воркера (для «Позже» без «залипания»). */
+/** Уникальный ключ конкретного ожидающего воркера (счётчик попыток на воркер). */
 const workerKeys = new WeakMap<ServiceWorker, string>()
 let workerKeySeq = 0
 function workerKey(worker: ServiceWorker): string {
@@ -57,6 +57,15 @@ interface AutoReloadRecord {
   count: number
 }
 
+/** Итог попытки авто-применения. */
+type AutoApplyOutcome =
+  /** Перезагрузка запущена (или уже была в этой загрузке страницы). */
+  | 'applied'
+  /** Связи нет — попытка не израсходована, повторим после восстановления. */
+  | 'deferred'
+  /** Лимит авто-попыток на этот ключ исчерпан — тихо прекращаем. */
+  | 'exhausted'
+
 /** Прошлая авто-попытка: приватный режим может запретить sessionStorage. */
 function readAutoReload(): AutoReloadRecord | null {
   try {
@@ -87,32 +96,32 @@ function writeAutoReload(record: AutoReloadRecord): void {
  * — идентификатор сборки сервера (`health.build`) отличается от build id
  *   текущего бандла → сброс кэшей шелла, `registration.update()` и одна
  *   перезагрузка (пересборка под той же semver тоже замечается);
- * — build id неизвестен с любой стороны → прежнее сравнение `health.version`
- *   с `SYNTH_VERSION`; расхождение → немедленная перезагрузка страницы.
+ * — build id неизвестен с любой стороны → сравнение `health.version` с
+ *   `SYNTH_VERSION`. Перезагрузка страницы расхождение **не лечит**, если сервер
+ *   старее клиента (standalone с `SYNTH_RESTART_MODE=disabled`), поэтому
+ *   допускается **одна** перезагрузка на конкретную серверную версию: после неё
+ *   версия запоминается (`acknowledgeServerVersion`) и больше не трогает
+ *   страницу.
  *
  * Версия/build проверяются при монтировании, раз в 30 минут, при возврате в
  * приложение и на первом действии после длительного простоя.
  *
- * Защита от цикла: в `sessionStorage` хранится ключ обновления и число
- * авто-попыток. После `MAX_AUTO_RELOADS` попыток на тот же ключ авто-применение
- * отключается — показывается прежний баннер с кнопками «Позже»/«Обновить»
- * (аварийный фоллбек). При смене ключа счётчик сбрасывается.
+ * Компонент **ничего не рендерит**: аварийного баннера нет. Защита от цикла —
+ * счётчик `MAX_AUTO_RELOADS` в `sessionStorage` на ключ. При исчерпании лимита
+ * обновление применяется тихо: сброс кэшей шелла и `SKIP_WAITING` ожидающего
+ * воркера (новый воркер примется при следующей ручной перезагрузке), без
+ * бесконечных перезагрузок. Смена ключа счётчик сбрасывает.
  *
  * Компонент расположен вне `AuthGate`, поэтому авто-обновление работает и на
  * экране входа.
  */
 export function PwaUpdatePrompt() {
-  const { t } = useI18n()
-  /** Баннер показывается только в аварийном фоллбеке (лимит авто-попыток). */
-  const [updateReady, setUpdateReady] = useState(false)
-  /** Перезагружаем только если обновление инициировал пользователь. */
+  /** Перезагружаем только если обновление инициировал пользователь/движок. */
   const reloadOnControllerChange = useRef(false)
-  /** Ключи отложенных обновлений: новое значение покажет баннер снова. */
-  const dismissed = useRef<Set<string>>(new Set())
   /** Текущая регистрация SW и последняя обнаруженная серверная версия. */
   const registrationRef = useRef<ServiceWorkerRegistration | null>(null)
   const latestVersion = useRef<string | null>(null)
-  /** Серверный build id, разошедшийся с бандлом (для «Позже»/ручного обновления). */
+  /** Серверный build id, разошедшийся с бандлом. */
   const latestBuild = useRef<string | null>(null)
   /** Авто-применение уже запрошено в этой загрузке страницы (по ключу). */
   const autoAttempted = useRef<Set<string>>(new Set())
@@ -137,7 +146,6 @@ export function PwaUpdatePrompt() {
         return
       }
       // ждать нечего (например, расхождение версий/build id) — перезагружаем страницу
-      setUpdateReady(false)
       window.location.reload()
     }
 
@@ -163,53 +171,25 @@ export function PwaUpdatePrompt() {
 
   /**
    * Попробовать применить обновление автоматически.
-   * `true` — применять/уже применено (баннер не нужен), `false` — лимит
-   * авто-попыток исчерпан (показываем аварийный баннер).
+   * `deferred` — связи нет (попытка не израсходована), `exhausted` — лимит на
+   * ключ исчерпан (тихо прекращаем, баннера нет).
    */
   const tryAutoApply = useCallback(
-    (key: string, waiting: ServiceWorker | null, clearCaches = false): boolean => {
+    (key: string, waiting: ServiceWorker | null, clearCaches = false): AutoApplyOutcome => {
       // Не расходуем авто-попытку в разрыве: применим, когда связь вернётся.
-      if (!canReloadNow()) return true
-      if (autoAttempted.current.has(key)) return true
+      if (!canReloadNow()) return 'deferred'
+      if (autoAttempted.current.has(key)) return 'applied'
       const prev = readAutoReload()
       const count = prev && prev.key === key ? prev.count : 0
-      if (count >= MAX_AUTO_RELOADS) return false
+      if (count >= MAX_AUTO_RELOADS) return 'exhausted'
       autoAttempted.current.add(key)
       // Смена ключа (новый воркер/версия/build id) — счётчик начинается с 1.
       writeAutoReload({ key, count: count + 1 })
       applyUpdate(waiting, clearCaches)
-      return true
+      return 'applied'
     },
     [applyUpdate],
   )
-
-  /** Ручное обновление из аварийного баннера. */
-  const handleUpdate = useCallback(async () => {
-    // Build mismatch: без сброса кэшей перезагрузка вернёт тот же старый шелл.
-    if (latestBuild.current) await clearShellCaches()
-    const reg = await navigator.serviceWorker.getRegistration()
-    if (reg?.waiting) {
-      reloadOnControllerChange.current = true
-      reg.waiting.postMessage({ type: 'SKIP_WAITING' })
-      // страховка: если controllerchange не придёт — перезагружаемся сами
-      window.setTimeout(() => {
-        reloadOnControllerChange.current = false
-        window.location.reload()
-      }, RELOAD_FALLBACK_MS)
-    } else {
-      // ждать нечего (например, расхождение версий) — перезагружаем страницу
-      setUpdateReady(false)
-      window.location.reload()
-    }
-  }, [])
-
-  const handleLater = useCallback(() => {
-    const waiting = registrationRef.current?.waiting
-    if (waiting) dismissed.current.add(workerKey(waiting))
-    if (latestVersion.current) dismissed.current.add(`ver:${latestVersion.current}`)
-    if (latestBuild.current) dismissed.current.add(`build:${latestBuild.current}`)
-    setUpdateReady(false)
-  }, [])
 
   useEffect(() => {
     if (!import.meta.env.PROD) return
@@ -221,6 +201,7 @@ export function PwaUpdatePrompt() {
     let versionMismatch = false
     let buildMismatch = false
     let lastActivityAt = Date.now()
+    let warnedMismatch = false
     // Страницу только что перезагрузили ради обновления (блок «Обновления» или
     // прошлая авто-перезагрузка): до первого ответа `/health` этой загрузки
     // авто-применение не запускаем — иначе waiting-SW успеет перезагрузить
@@ -239,8 +220,27 @@ export function PwaUpdatePrompt() {
       removeListeners.push(() => target.removeEventListener(type, handler, options))
     }
 
-    // Единый пересчёт по трём источникам (build id, SW.waiting, версия):
-    // сначала авто-применение, баннер — только когда авто-попытки исчерпаны.
+    /** Тихое прекращение: баннера нет, обновление применится при ручной перезагрузке. */
+    const quietStop = (key: string, waiting: ServiceWorker | null) => {
+      autoAttempted.current.add(key)
+      void clearShellCaches()
+      // Новый воркер примется, страница обновится при следующей ручной перезагрузке.
+      if (waiting && navigator.serviceWorker.controller) {
+        waiting.postMessage({ type: 'SKIP_WAITING' })
+      }
+    }
+
+    /** Один тихий warn на загрузку страницы (цикл и так не возникнет). */
+    const warnMismatchOnce = (serverVersion: string) => {
+      if (warnedMismatch) return
+      warnedMismatch = true
+      console.warn(
+        `[PWA] Версия сервера (${serverVersion}) отличается от версии клиента ` +
+          `(${SYNTH_VERSION}); страница перезагружена один раз — требуется перезапуск инстанса`,
+      )
+    }
+
+    // Единый пересчёт по трём источникам (build id, SW.waiting, версия).
     const recompute = () => {
       if (cancelled) return
       const waiting = registration?.waiting
@@ -254,41 +254,41 @@ export function PwaUpdatePrompt() {
         if (waiting) waiting.postMessage({ type: 'SKIP_WAITING' })
         const graceKeys = [swKey, buildKey, verKey].filter((key): key is string => Boolean(key))
         for (const key of graceKeys) autoAttempted.current.add(key)
-        setUpdateReady(false)
         return
       }
 
       // Расхождение build id — самый сильный сигнал (waiting SW может быть
       // старой сборки): сброс кэшей → update SW → reload.
       if (buildKey) {
-        if (tryAutoApply(buildKey, waiting ?? null, true)) {
-          setUpdateReady(false)
-          return
+        if (tryAutoApply(buildKey, waiting ?? null, true) === 'exhausted') {
+          quietStop(buildKey, waiting ?? null)
         }
-        setUpdateReady(!dismissed.current.has(buildKey))
         return
       }
 
       if (swKey) {
-        if (tryAutoApply(swKey, waiting ?? null)) {
-          setUpdateReady(false)
-          return
+        if (tryAutoApply(swKey, waiting ?? null) === 'exhausted') {
+          quietStop(swKey, waiting ?? null)
         }
-        // Лимит на этот воркер — аварийный баннер, версию не трогаем.
-        setUpdateReady(!dismissed.current.has(swKey))
         return
       }
 
-      if (verKey) {
-        if (tryAutoApply(verKey, null)) {
-          setUpdateReady(false)
+      if (verKey && latestVersion.current) {
+        const serverVersion = latestVersion.current
+        // Расхождение уже принято на этой вкладке — молчим.
+        if (isServerVersionAcknowledged(serverVersion)) {
+          warnMismatchOnce(serverVersion)
           return
         }
-        setUpdateReady(!dismissed.current.has(verKey))
-        return
+        const outcome = tryAutoApply(verKey, null)
+        if (outcome === 'applied') {
+          // Одна перезагрузка на конкретную серверную версию: дальше не трогаем.
+          acknowledgeServerVersion(serverVersion)
+        } else if (outcome === 'exhausted') {
+          acknowledgeServerVersion(serverVersion)
+          warnMismatchOnce(serverVersion)
+        }
       }
-
-      setUpdateReady(false)
     }
     // Дать внешнему эффекту (смена фазы связи/authPhase) повторить пересчёт,
     // не дожидаясь 30-минутного интервала.
@@ -356,8 +356,6 @@ export function PwaUpdatePrompt() {
 
     const onControllerChange = () => {
       // Новый SW принял управление — ждать больше нечего.
-      setUpdateReady(false)
-      dismissed.current.clear()
       if (!reloadOnControllerChange.current) return
       reloadOnControllerChange.current = false
       window.location.reload()
@@ -419,31 +417,6 @@ export function PwaUpdatePrompt() {
     recomputeRef.current?.()
   }, [transportPhase, authPhase])
 
-  if (!updateReady) return null
-
-  return (
-    <div
-      role="status"
-      className="fixed inset-x-0 bottom-0 z-[60] flex justify-center px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pointer-events-none"
-    >
-      <div className="pointer-events-auto flex w-full max-w-md items-center gap-3 rounded-xl border bg-background p-3 shadow-lg">
-        <Icon name="refresh" className="size-5 shrink-0 text-muted-foreground" />
-        <span className="flex-1 text-sm text-foreground">{t('pwa.updateAvailable')}</span>
-        <button
-          type="button"
-          onClick={handleLater}
-          className="shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground"
-        >
-          {t('pwa.updateLater')}
-        </button>
-        <button
-          type="button"
-          onClick={() => void handleUpdate()}
-          className="shrink-0 rounded-lg bg-interactive-selection px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-interactive-selection/90"
-        >
-          {t('pwa.updateNow')}
-        </button>
-      </div>
-    </div>
-  )
+  // Баннера нет: компонент только применяет обновление эффектом.
+  return null
 }

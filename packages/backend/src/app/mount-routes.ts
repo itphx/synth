@@ -1671,7 +1671,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // Managed RBAC: чтение и запись — только ADMIN.
   app.route('/api/v2/settings', createUpdatesSettingsRoutes(
     { requireAuth: auth.requireAuth },
-    { settingsStore, config: config.synth.updates, env: process.env },
+    { settingsStore, dataDir, config: config.synth.updates, env: process.env },
     {
       readGuard: auth.requirePermission('ADMIN'),
       writeGuard: auth.requirePermission('ADMIN'),

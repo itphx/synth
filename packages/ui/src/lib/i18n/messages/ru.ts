@@ -2837,6 +2837,11 @@ export const dict = {
   'admin.updates.prerelease': 'пре-релиз',
   'admin.updates.registry': 'Реестр',
   'admin.updates.checkedAt': 'Проверено: {date}',
+  'admin.updates.lastCheck': 'Последняя проверка',
+  'admin.updates.lastCheckNever': 'Ещё не проверялось',
+  'admin.updates.lastCheckDisabled': 'Проверки по расписанию выключены',
+  'admin.updates.lastCheckStale': 'Данные устарели — интервал {hours} ч',
+  'admin.updates.lastCheckError': 'Ошибка: {error}',
   'admin.updates.update': 'Обновить',
   'admin.updates.updating': 'Установка…',
   'admin.updates.confirmTitle': 'Установить обновление',
@@ -6428,11 +6433,6 @@ export const dict = {
   'pipelines.validateFailed': 'В спецификации есть проблемы — исправьте их перед сохранением',
   'pipelines.problems': 'Проблемы',
   'pipelines.saveBlocked': 'Спецификация некорректна — отправка отменена',
-
-  // --- PWA ---
-  'pwa.updateAvailable': 'Доступна новая версия приложения',
-  'pwa.updateNow': 'Обновить',
-  'pwa.updateLater': 'Позже',
 
   // --- Authority (ADR-106 §11) — read-only раздел «Полномочия» ---
   'authority.title': 'Полномочия',

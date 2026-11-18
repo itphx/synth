@@ -2209,6 +2209,7 @@ export type {
 export {
   checkForUpdates,
   checkForUpdatesBackground,
+  readLastUpdateCheck,
   fetchAvailableVersions,
   fetchDistTags,
   fetchLatestVersion,
@@ -2228,6 +2229,8 @@ export type {
   UpdateCheckOptions,
   UpdateChannel,
   UpdateChannelChoice,
+  LastUpdateCheck,
+  ReadLastUpdateCheckOptions,
 } from './update-checker.js';
 export { startUpdateScheduler } from './update-scheduler.js';
 export type { UpdateSchedulerOptions, UpdateSchedulerHandle } from './update-scheduler.js';

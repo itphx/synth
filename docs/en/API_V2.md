@@ -1976,15 +1976,29 @@ without a restart does not change the running process version.
   "intervalHours": 24,
   "stableRegistry": "https://registry.npmjs.org",
   "betaRegistry": "https://git.itphx.ru/api/packages/itphx/npm/",
+  "lastCheck": {
+    "checkedAt": "2026-11-11T10:00:00.000Z",
+    "channel": "stable",
+    "currentVersion": "0.19.0",
+    "latestVersion": "0.20.0",
+    "hasUpdate": true,
+    "stale": false
+  },
   "restartRequired": false
 }
 ```
 
 - `source` — `default` | `config` | `runtime` | `env` (priority env > runtime > config > default);
 - `envLocked: true` — `SYNTH_UPDATES_CHECK` is set in env: `PUT` → `409 CONFLICT`, only env can change it;
+- `lastCheck` — the last check from the `{dataDir}/update-check.json` cache **regardless of TTL** (for the
+  admin "Dashboard" section): `checkedAt` (ISO-8601), `channel` (already resolved), `currentVersion`,
+  `latestVersion`, `hasUpdate`, `stale` (entry older than `intervalHours`; an error entry lives 1 h) and an
+  optional `error`. No entry/`dataDir` unavailable — `null` (additive field);
 - `PUT` accepts `{check: boolean}` (otherwise `400 VALIDATION_ERROR`) and writes runtime
   (`settings.json`/PG); applies **immediately** — the scheduler re-reads the value on every tick
-  (`restartRequired: false`, including enabling the auto-check after start);
+  (`restartRequired: false`, including enabling the auto-check after start); **enabling (`check:true`)
+  starts a check immediately in the background** (fire-and-forget, the response does not wait for the
+  network), so a fresh `lastCheck` appears without pressing "Check";
 - `DELETE` resets runtime to env/config/default;
 - `channel` and registries come only from `config.yaml`/env (runtime changes `check` only).
 

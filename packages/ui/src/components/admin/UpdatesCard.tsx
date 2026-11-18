@@ -104,6 +104,8 @@ export function UpdatesCard({
 
   const applyAbortRef = useRef<AbortController | null>(null)
   const restartPollRef = useRef<{ cancelled: boolean } | null>(null)
+  /** Таймеры фонового перечитывания карточки после включения автопроверки. */
+  const refreshTimersRef = useRef<number[]>([])
 
   const loadSettings = useCallback(async () => {
     setSettingsLoading(true)
@@ -122,6 +124,28 @@ export function UpdatesCard({
       setSettingsLoading(false)
     }
   }, [t])
+
+  /**
+   * Тихое перечитывание (без спиннера и без смены выбранного канала):
+   * сервер запускает проверку в фоне, свежее время появляется с задержкой.
+   */
+  const reloadSettings = useCallback(async () => {
+    try {
+      setSettings(await updatesApi.getUpdatesSettings())
+    } catch {
+      // Фоновое обновление карточки — ошибку не показываем.
+    }
+  }, [])
+
+  /** Перечитать карточку через ~2 с и ещё раз через ~5 с (проверка успеет пройти). */
+  const scheduleSettingsRefresh = useCallback(() => {
+    for (const id of refreshTimersRef.current) window.clearTimeout(id)
+    refreshTimersRef.current = [2000, 5000].map((delay) =>
+      window.setTimeout(() => {
+        void reloadSettings()
+      }, delay),
+    )
+  }, [reloadSettings])
 
   const loadRestartStatus = useCallback(async () => {
     try {
@@ -145,6 +169,8 @@ export function UpdatesCard({
     () => () => {
       applyAbortRef.current?.abort()
       if (restartPollRef.current) restartPollRef.current.cancelled = true
+      for (const id of refreshTimersRef.current) window.clearTimeout(id)
+      refreshTimersRef.current = []
     },
     [],
   )
@@ -165,6 +191,9 @@ export function UpdatesCard({
       const next = await updatesApi.putUpdatesSettings({ check: !settings.check })
       setSettings(next)
       notify({ text: t('admin.updates.saved'), type: 'success', category: 'system' })
+      // Сервер запускает проверку сразу при включении — время появится через
+      // пару секунд; перечитываем карточку без нажатия «Проверить».
+      if (next.check) scheduleSettingsRefresh()
     } catch (err) {
       if (updateErrorStatus(err) === 409) {
         setSettings((prev) => (prev ? { ...prev, envLocked: true, source: 'env' } : prev))
@@ -179,7 +208,7 @@ export function UpdatesCard({
     } finally {
       setSavePending(false)
     }
-  }, [notify, savePending, settings, t])
+  }, [notify, savePending, scheduleSettingsRefresh, settings, t])
 
   /** «Проверить»: всегда `force=1` — кэш сервера игнорируется (ADR-133 §3). */
   const handleCheck = useCallback(async () => {
@@ -394,6 +423,8 @@ export function UpdatesCard({
   const installed = installedChannel(SYNTH_VERSION)
   const autoCheck = settings?.check === true
   const envLocked = settings?.envLocked === true
+  const lastCheck = settings?.lastCheck ?? null
+  const checkIntervalHours = settings?.intervalHours ?? 24
   const restartSupported = restartStatus?.supported === true
   const canCheck = !checking
   const showUpdate = checkResult?.hasUpdate === true
@@ -525,6 +556,64 @@ export function UpdatesCard({
           </div>
         )}
       </div>
+
+      {/* Время последней проверки из кэша сервера. Ручная проверка имеет свой блок
+          (`updates-check-result`) — здесь он не дублируется. */}
+      {!checkResult && (
+        <div
+          className="space-y-1 rounded-lg border border-border/60 bg-surface-inset p-3 min-w-0"
+          data-testid="updates-last-check"
+        >
+          <div className="flex flex-wrap items-baseline gap-1.5 min-w-0">
+            <span className="text-sm font-medium text-foreground break-words">
+              {t('admin.updates.lastCheck')}
+            </span>
+            <span
+              className="text-xs text-muted-foreground break-words"
+              data-testid="updates-last-check-time"
+            >
+              {lastCheck
+                ? formatDateTime(lastCheck.checkedAt, locale)
+                : t('admin.updates.lastCheckNever')}
+            </span>
+          </div>
+          {lastCheck && (
+            <div
+              className={cn(
+                'text-sm break-words',
+                lastCheck.error
+                  ? 'text-destructive'
+                  : lastCheck.hasUpdate
+                    ? 'text-status-warning'
+                    : 'text-status-success',
+              )}
+              data-testid="updates-last-check-status"
+            >
+              {lastCheck.error
+                ? t('admin.updates.lastCheckError', { error: lastCheck.error })
+                : lastCheck.hasUpdate
+                  ? t('admin.updates.updateAvailable', { version: lastCheck.latestVersion })
+                  : t('admin.updates.upToDate')}
+            </div>
+          )}
+          {!autoCheck && (
+            <div
+              className="text-xs text-muted-foreground break-words"
+              data-testid="updates-last-check-scheduled"
+            >
+              {t('admin.updates.lastCheckDisabled')}
+            </div>
+          )}
+          {lastCheck?.stale && (
+            <div
+              className="text-xs text-status-warning break-words"
+              data-testid="updates-last-check-stale"
+            >
+              {t('admin.updates.lastCheckStale', { hours: checkIntervalHours })}
+            </div>
+          )}
+        </div>
+      )}
 
       {checkError && (
         <div

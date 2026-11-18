@@ -19,6 +19,22 @@ export type ResolvedUpdateChannel = 'stable' | 'beta'
 /** Источник эффективного значения настройки (env > runtime > config > default). */
 export type UpdatesSettingsSource = 'env' | 'runtime' | 'config' | 'default'
 
+/** Последняя проверка обновлений (кэш сервера без учёта TTL). */
+export interface LastUpdateCheck {
+  /** Метка проверки, ISO-8601. */
+  checkedAt: string
+  /** Канал проверки (`auto` уже разрешён сервером). */
+  channel: ResolvedUpdateChannel
+  currentVersion: string
+  latestVersion: string
+  /** Обновление доступно (на момент проверки). */
+  hasUpdate: boolean
+  /** Запись старше TTL (`intervalHours`; ошибка — 1 ч). */
+  stale: boolean
+  /** Причина неудачи проверки. */
+  error?: string
+}
+
 /** `GET/PUT/DELETE /api/v2/settings/updates`. */
 export interface UpdatesSettings {
   /** Автопроверка обновлений (по умолчанию выключена). */
@@ -33,6 +49,8 @@ export interface UpdatesSettings {
   stableRegistry: string
   /** Реестр бета-канала (Gitea). */
   betaRegistry: string
+  /** Последняя проверка из кэша сервера; старый сервер/нет данных — `null`. */
+  lastCheck: LastUpdateCheck | null
   restartRequired: boolean
 }
 
@@ -94,6 +112,22 @@ const isSource = (value: unknown): value is UpdatesSettingsSource =>
 const asString = (value: unknown, fallback: string): string =>
   typeof value === 'string' ? value : fallback
 
+/** Разбор `lastCheck`: нет поля/битые данные — `null` (не падаем на старом сервере). */
+function normalizeLastCheck(raw: unknown): LastUpdateCheck | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const body = raw as Record<string, unknown>
+  if (typeof body.checkedAt !== 'string' || body.checkedAt.length === 0) return null
+  return {
+    checkedAt: body.checkedAt,
+    channel: body.channel === 'beta' ? 'beta' : 'stable',
+    currentVersion: asString(body.currentVersion, ''),
+    latestVersion: asString(body.latestVersion, ''),
+    hasUpdate: body.hasUpdate === true,
+    stale: body.stale === true,
+    error: typeof body.error === 'string' ? body.error : undefined,
+  }
+}
+
 function normalizeSettings(raw: unknown): UpdatesSettings {
   const body = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const interval = typeof body.intervalHours === 'number' ? body.intervalHours : Number(body.intervalHours)
@@ -105,6 +139,7 @@ function normalizeSettings(raw: unknown): UpdatesSettings {
     intervalHours: Number.isFinite(interval) && interval > 0 ? interval : 24,
     stableRegistry: asString(body.stableRegistry, 'https://registry.npmjs.org'),
     betaRegistry: asString(body.betaRegistry, ''),
+    lastCheck: normalizeLastCheck(body.lastCheck),
     restartRequired: body.restartRequired === true,
   }
 }

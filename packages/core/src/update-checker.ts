@@ -327,6 +327,62 @@ async function _readCached(
   return info;
 }
 
+/** Свежесть записи кэша: `false` — данных нет либо TTL истёк. */
+export interface LastUpdateCheck extends UpdateInfo {
+  /** Запись старше TTL (успех — `intervalHours`, ошибка — 1 ч). */
+  stale: boolean;
+}
+
+/** Параметры чтения последней проверки. */
+export interface ReadLastUpdateCheckOptions {
+  /** TTL успешной проверки, часы (по умолчанию 24) — для флага `stale`. */
+  intervalHours?: number;
+  /** Настройка канала (`auto` — по установленной версии), если `channel` не задан. */
+  configured?: UpdateChannelChoice;
+}
+
+/**
+ * Последняя проверка обновлений из кэша **без учёта TTL** (для дашборда).
+ *
+ * Файл и формат — те же, что у `checkForUpdates` (`{dataDir}/update-check.json`,
+ * legacy-плоский объект читается как `stable`). Запись выбирается так:
+ * явный `channel` → запись этого канала; иначе — канал, эффективный сейчас
+ * (`resolveUpdateChannel(SYNTH_VERSION, configured)`), а если такой записи нет —
+ * самая свежая по `_ts`. Нет записей — `null`.
+ */
+export async function readLastUpdateCheck(
+  dataDir: string,
+  channel?: UpdateChannel,
+  opts: ReadLastUpdateCheckOptions = {},
+): Promise<LastUpdateCheck | null> {
+  const file = await _readCacheFile(dataDir);
+  const intervalHours = opts.intervalHours && opts.intervalHours > 0
+    ? opts.intervalHours
+    : DEFAULT_INTERVAL_HOURS;
+
+  const channels = file.channels as Partial<Record<UpdateChannel, CachedChannel>>;
+  const entries = (Object.entries(channels) as Array<[UpdateChannel, CachedChannel | undefined]>)
+    .filter((entry): entry is [UpdateChannel, CachedChannel] => {
+      const value = entry[1];
+      return Boolean(value) && typeof value === 'object';
+    });
+  if (entries.length === 0) return null;
+
+  const target = channel ?? resolveUpdateChannel(SYNTH_VERSION, opts.configured ?? 'auto');
+  let entry = channels[target];
+  if (!entry) {
+    // Записи эффективного канала нет (напр. проверяли только другой) — берём самую свежую.
+    entry = entries
+      .map(([, value]) => value)
+      .filter((value) => typeof value._ts === 'number' && Number.isFinite(value._ts))
+      .sort((a, b) => b._ts - a._ts)[0];
+  }
+  if (!entry) return null;
+
+  const { _ts: _ignored, ...info } = entry;
+  return { ...info, stale: !_isFresh(entry, intervalHours) };
+}
+
 /** Собрать `UpdateInfo` по найденной версии. */
 function _buildInfo(params: {
   channel: UpdateChannel;

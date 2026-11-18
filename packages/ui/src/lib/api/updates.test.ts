@@ -124,3 +124,58 @@ describe('updatesApi.applyUpdate (ADR-133)', () => {
     expect(updateErrorMessage(new Error('  '), 'fallback')).toBe('fallback')
   })
 })
+
+describe('updatesApi.getUpdatesSettings — lastCheck (ADR-133)', () => {
+  const LAST_CHECK = {
+    checkedAt: '2026-11-11T10:00:00.000Z',
+    channel: 'stable',
+    currentVersion: '0.19.0',
+    latestVersion: '0.20.0',
+    hasUpdate: true,
+    stale: false,
+  }
+
+  /** Успешный JSON-ответ сервера настроек. */
+  function stubSettings(body: unknown): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body } as unknown as Response),
+    )
+  }
+
+  it('разбирает lastCheck', async () => {
+    stubSettings({ check: true, lastCheck: LAST_CHECK })
+    expect((await updatesApi.getUpdatesSettings()).lastCheck).toEqual(LAST_CHECK)
+  })
+
+  it('нет поля — null (старый сервер)', async () => {
+    stubSettings({ check: false })
+    expect((await updatesApi.getUpdatesSettings()).lastCheck).toBeNull()
+  })
+
+  it('битая запись — null, остальные поля целы', async () => {
+    stubSettings({
+      check: true,
+      intervalHours: 12,
+      lastCheck: { checkedAt: 42, latestVersion: '0.20.0' },
+    })
+    const settings = await updatesApi.getUpdatesSettings()
+    expect(settings.lastCheck).toBeNull()
+    expect(settings.check).toBe(true)
+    expect(settings.intervalHours).toBe(12)
+  })
+
+  it('неизвестный канал в записи → stable; флаги — строго boolean', async () => {
+    stubSettings({ lastCheck: { ...LAST_CHECK, channel: 'gamma', hasUpdate: 'yes' } })
+    expect((await updatesApi.getUpdatesSettings()).lastCheck).toMatchObject({
+      channel: 'stable',
+      hasUpdate: false,
+      stale: false,
+    })
+  })
+
+  it('error сохраняется строкой', async () => {
+    stubSettings({ lastCheck: { ...LAST_CHECK, error: 'ETIMEDOUT' } })
+    expect((await updatesApi.getUpdatesSettings()).lastCheck?.error).toBe('ETIMEDOUT')
+  })
+})

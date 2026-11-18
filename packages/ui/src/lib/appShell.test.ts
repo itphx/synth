@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   ACK_BUILD_STORAGE_KEY,
+  ACK_SERVER_VERSION_STORAGE_KEY,
   SHELL_RELOAD_STORAGE_KEY,
   SHELL_RELOAD_WINDOW_MS,
   acknowledgeBuild,
+  acknowledgeServerVersion,
   clearShellCaches,
   consumeShellReloadMarker,
   isBuildAcknowledged,
+  isServerVersionAcknowledged,
   markShellReload,
 } from './appShell'
 
@@ -45,6 +48,17 @@ describe('appShell (единая перезагрузка после обнов�
     expect(isBuildAcknowledged('def456')).toBe(false)
     acknowledgeBuild(null)
     expect(window.sessionStorage.getItem(ACK_BUILD_STORAGE_KEY)).toBeNull()
+  })
+
+  it('серверная версия согласуется один раз на конкретную версию', () => {
+    expect(isServerVersionAcknowledged('0.19.0')).toBe(false)
+    acknowledgeServerVersion('0.19.0')
+    expect(isServerVersionAcknowledged('0.19.0')).toBe(true)
+    expect(isServerVersionAcknowledged('0.20.0')).toBe(false)
+    // Пустое значение — сброс согласования.
+    acknowledgeServerVersion(null)
+    expect(window.sessionStorage.getItem(ACK_SERVER_VERSION_STORAGE_KEY)).toBeNull()
+    expect(isServerVersionAcknowledged('0.19.0')).toBe(false)
   })
 
   it('clearShellCaches удаляет все кэши шелла', async () => {

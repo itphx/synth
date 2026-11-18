@@ -3,10 +3,12 @@
  *
  * Контракт:
  * - `GET    /api/v2/settings/updates` — эффективное значение `check`, источник,
- *   env-фиксация, канал и реестры (из config.yaml/env);
+ *   env-фиксация, канал и реестры (из config.yaml/env) + `lastCheck` — последняя
+ *   проверка из кэша (`update-check.json`, без учёта TTL, признак `stale`);
  * - `PUT    /api/v2/settings/updates` `{check: boolean}` — runtime-override
  *   (`settings.json`/PG); применяется **сразу** — планировщик перечитывает
- *   значение на каждом тике (`restartRequired: false`);
+ *   значение на каждом тике (`restartRequired: false`); включение автопроверки
+ *   дополнительно запускает проверку немедленно (фоном, не блокируя ответ);
  * - `DELETE /api/v2/settings/updates` — сброс runtime к env/config/default.
  *
  * Приоритет: env `SYNTH_UPDATES_CHECK` > runtime > config.yaml `updates.check` >
@@ -22,12 +24,19 @@ import {
   resolveUpdatesCheck,
   type ResolvedUpdatesCheck,
 } from '../../storage/runtime-settings.js';
+import {
+  checkForUpdates,
+  readLastUpdateCheck,
+  type LastUpdateCheck,
+} from '../../update-checker.js';
 
 type Middleware = ReturnType<typeof createMiddleware>;
 
 export interface UpdatesSettingsDeps {
   /** Порт runtime-настроек (`{dataDir}/settings.json` / PG). */
   settingsStore: SettingsRepository;
+  /** Каталог данных инстанса — кэш `update-check.json` (последняя проверка). */
+  dataDir?: string;
   /** Секция `updates` из config.yaml/env (без runtime). */
   config?: Partial<UpdatesConfig>;
   /** Env (тесты); по умолчанию `process.env`. */
@@ -55,6 +64,8 @@ export interface UpdatesSettingsView {
   intervalHours: number;
   stableRegistry: string;
   betaRegistry: string;
+  /** Последняя проверка из кэша (без TTL); нет `dataDir`/записей — `null`. */
+  lastCheck: LastUpdateCheck | null;
   restartRequired: false;
 }
 
@@ -80,6 +91,12 @@ export function createUpdatesSettingsRoutes(
     const runtimeCheck = typeof runtime.check === 'boolean' ? runtime.check : undefined;
     const cfg = effectiveConfig();
     const resolved = resolveUpdatesCheck(cfg.check, runtimeCheck, env);
+    const lastCheck = deps.dataDir
+      ? await readLastUpdateCheck(deps.dataDir, undefined, {
+          intervalHours: cfg.intervalHours,
+          configured: cfg.channel,
+        }).catch(() => null)
+      : null;
     return {
       check: resolved.check,
       source: resolved.source,
@@ -88,6 +105,7 @@ export function createUpdatesSettingsRoutes(
       intervalHours: cfg.intervalHours,
       stableRegistry: cfg.stableRegistry,
       betaRegistry: cfg.betaRegistry,
+      lastCheck,
       restartRequired: false,
     };
   };
@@ -108,6 +126,16 @@ export function createUpdatesSettingsRoutes(
     }
 
     await deps.settingsStore.setUpdates({ check: raw });
+    // ADR-133: включение автопроверки запускает проверку **сразу** (иначе
+    // следующего тика ждать до `intervalHours`). Fire-and-forget: ответ не ждёт
+    // сеть (до 10 с), ошибки — тихо (фоновый режим кэширует их на 1 ч).
+    if (raw && deps.dataDir) {
+      void checkForUpdates(deps.dataDir, {
+        updates: { ...effectiveConfig(), check: true },
+        force: true,
+        background: true,
+      }).catch(() => {});
+    }
     return c.json(await buildView());
   });
 

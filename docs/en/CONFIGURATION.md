@@ -397,7 +397,9 @@ Environment variables (priority **env > runtime(UI) > config.yaml > default**):
 Runtime auto-check toggle (`check`) — UI section "Updates" / `GET|PUT|DELETE /api/v2/settings/updates`;
 applies **immediately** (the scheduler re-reads the value on every tick), `restartRequired: false`.
 Enabling after start also works when the check was initially off: the scheduler keeps timers as long as
-the runtime settings port is provided, and a disabled tick sends no requests. Channel and registries
+the runtime settings port is provided, and a disabled tick sends no requests. **Enabling the toggle
+starts a check immediately** (in the background, the response does not wait), and the last check time
+(`lastCheck`, TTL ignored) is shown in the admin "Dashboard" → "Updates" section. Channel and registries
 come from `config.yaml`/env (runtime changes only `check`).
 
 **An explicit check always ignores the cache:** `synth update --check`, `GET /api/v2/updates/check?force=1`,

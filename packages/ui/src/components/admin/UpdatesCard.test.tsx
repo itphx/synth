@@ -38,7 +38,22 @@ const SETTINGS: UpdatesSettings = {
   intervalHours: 24,
   stableRegistry: 'https://registry.npmjs.org',
   betaRegistry: 'https://git.itphx.ru/api/packages/itphx/npm/',
+  lastCheck: null,
   restartRequired: false,
+}
+
+const LAST_CHECK: NonNullable<UpdatesSettings['lastCheck']> = {
+  checkedAt: '2026-11-11T10:00:00.000Z',
+  channel: 'stable',
+  currentVersion: '0.19.0',
+  latestVersion: '0.20.0',
+  hasUpdate: true,
+  stale: false,
+}
+
+const LAST_CHECK_FRESH: NonNullable<UpdatesSettings['lastCheck']> = {
+  ...LAST_CHECK,
+  checkedAt: '2026-11-11T12:30:00.000Z',
 }
 
 const CHECK_UPDATE: UpdateCheckResult = {
@@ -169,6 +184,7 @@ afterEach(async () => {
     })
     entry.container.remove()
   }
+  vi.useRealTimers()
   vi.restoreAllMocks()
   document.body.innerHTML = ''
 })
@@ -349,5 +365,77 @@ describe('UpdatesCard (ADR-133)', () => {
     expect(byTestId(container, 'updates-restart-option')?.textContent).toContain(
       'Restart is unavailable: restart mode is disabled',
     )
+  })
+
+  it('показывает время последней проверки из настроек', async () => {
+    getSettings.mockResolvedValue({ ...SETTINGS, check: true, lastCheck: LAST_CHECK })
+    const container = await renderCard()
+
+    const time = byTestId(container, 'updates-last-check-time')?.textContent ?? ''
+    expect(time).not.toBe('Not checked yet')
+    expect(time).toContain('2026')
+    expect(byTestId(container, 'updates-last-check-status')?.textContent).toBe(
+      'Version 0.20.0 is available',
+    )
+    // Автопроверка включена — пометки «проверки выключены» нет.
+    expect(byTestId(container, 'updates-last-check-scheduled')).toBeNull()
+  })
+
+  it('нет данных — «ещё не проверялось» и пометка о выключенных проверках', async () => {
+    const container = await renderCard()
+
+    expect(byTestId(container, 'updates-last-check-time')?.textContent).toBe('Not checked yet')
+    expect(byTestId(container, 'updates-last-check-status')).toBeNull()
+    expect(byTestId(container, 'updates-last-check-scheduled')?.textContent).toBe(
+      'Scheduled checks are disabled',
+    )
+  })
+
+  it('после включения автопроверки карточка перечитывается и показывает свежее время', async () => {
+    vi.useFakeTimers()
+    getSettings
+      .mockResolvedValueOnce(SETTINGS)
+      .mockResolvedValue({ ...SETTINGS, check: true, source: 'runtime', lastCheck: LAST_CHECK_FRESH })
+    const container = await renderCard()
+    expect(byTestId(container, 'updates-last-check-time')?.textContent).toBe('Not checked yet')
+
+    await clickSwitch(container, 'updates-auto-check-toggle')
+    expect(getSettings).toHaveBeenCalledTimes(1)
+
+    // Сервер запускает проверку в фоне — карточка перечитывается сама (без «Проверить»).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    await flush()
+
+    expect(getSettings).toHaveBeenCalledTimes(2)
+    const time = byTestId(container, 'updates-last-check-time')?.textContent ?? ''
+    expect(time).not.toBe('Not checked yet')
+    expect(time).toContain('2026')
+  })
+
+  it('устаревшая запись помечена', async () => {
+    getSettings.mockResolvedValue({
+      ...SETTINGS,
+      check: true,
+      intervalHours: 6,
+      lastCheck: { ...LAST_CHECK, stale: true },
+    })
+    const container = await renderCard()
+
+    expect(byTestId(container, 'updates-last-check-stale')?.textContent).toBe(
+      'Data is stale — interval 6 h',
+    )
+  })
+
+  it('пустое поле lastCheck от старого сервера не ломает карточку', async () => {
+    const withoutLastCheck = { ...SETTINGS } as Partial<UpdatesSettings>
+    delete withoutLastCheck.lastCheck
+    getSettings.mockResolvedValue(withoutLastCheck as UpdatesSettings)
+    const container = await renderCard()
+
+    expect(byTestId(container, 'updates-last-check')).not.toBeNull()
+    expect(byTestId(container, 'updates-last-check-time')?.textContent).toBe('Not checked yet')
+    expect(byTestId(container, 'updates-current')?.textContent).toContain('Current version')
   })
 })
