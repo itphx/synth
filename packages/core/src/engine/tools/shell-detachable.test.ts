@@ -10,6 +10,9 @@
  *   • «Стоп» до detach → `handle.stop('SIGTERM')`; после detach — не вызывается;
  *   • лимит в `adopt` → отказ в реестре активных прогонов (`BACKGROUND_LIMIT`),
  *     тул продолжает читать команду и возвращает её результат;
+ *   • detach снимает foreground-таймаут (`retime(0)`) **до** `adopt`; отказ
+ *     `adopt` возвращает прежний срок, а хэндл без `retime` (старый
+ *     исполнитель) — отказ `DETACH_FAILED` без перевода в фон;
  *   • порт без `spawnBackground` → прежний путь через `execute`, регистрации нет.
  *
  * Порт — заглушка (процесс не запускается), фабрика процессов — мок: тест
@@ -37,13 +40,19 @@ interface FakeProcess {
   emit(stream: 'stdout' | 'stderr', data: string): void;
   finish(exit: ExecBackgroundExit): void;
   stopSignals: (NodeJS.Signals | undefined)[];
+  /** Аргументы, с которыми вызывали `retime` (порядок вызовов). */
+  retimeCalls: number[];
 }
 
-function createFakeProcess(processId = 'proc_1'): FakeProcess {
+function createFakeProcess(
+  processId = 'proc_1',
+  opts: { retime?: boolean; order?: string[] } = {},
+): FakeProcess {
   const queue: ExecBackgroundChunk[] = [];
   let notify: (() => void) | null = null;
   let closed = false;
   const stopSignals: (NodeJS.Signals | undefined)[] = [];
+  const retimeCalls: number[] = [];
   let resolveExit!: (exit: ExecBackgroundExit) => void;
   const exited = new Promise<ExecBackgroundExit>((resolve) => {
     resolveExit = resolve;
@@ -67,16 +76,26 @@ function createFakeProcess(processId = 'proc_1'): FakeProcess {
     },
   };
 
-  return {
-    proc: {
-      processId,
-      pid: 4242,
-      output,
-      exited,
-      stop: (signal?: NodeJS.Signals) => {
-        stopSignals.push(signal);
-      },
+  const proc: ExecBackgroundProcess = {
+    processId,
+    pid: 4242,
+    output,
+    exited,
+    stop: (signal?: NodeJS.Signals) => {
+      stopSignals.push(signal);
     },
+  };
+  // `retime` — как у живой точки исполнения; `retime: false` имитирует старый
+  // исполнитель (протокол < 10): метода у хэндла нет.
+  if (opts.retime !== false) {
+    proc.retime = (timeoutMs: number) => {
+      retimeCalls.push(timeoutMs);
+      opts.order?.push(`retime:${timeoutMs}`);
+    };
+  }
+
+  return {
+    proc,
     emit: (stream, data) => {
       queue.push({ stream, data });
       wake();
@@ -87,6 +106,7 @@ function createFakeProcess(processId = 'proc_1'): FakeProcess {
       resolveExit(exit);
     },
     stopSignals,
+    retimeCalls,
   };
 }
 
@@ -103,8 +123,13 @@ interface AdoptedInput {
   title?: string;
 }
 
-function createHarness(options: { withSpawnBackground?: boolean } = {}) {
-  const fake = createFakeProcess();
+function createHarness(options: { withSpawnBackground?: boolean; retime?: boolean } = {}) {
+  /** Общий журнал порядка событий «перестановка срока ↔ adopt». */
+  const order: string[] = [];
+  const fake = createFakeProcess('proc_1', {
+    ...(options.retime !== undefined ? { retime: options.retime } : {}),
+    order,
+  });
   const execute = vi.fn(async () => ({
     stdout: 'sync-out',
     stderr: '',
@@ -121,13 +146,14 @@ function createHarness(options: { withSpawnBackground?: boolean } = {}) {
 
   const adopted: AdoptedInput[] = [];
   const adopt = vi.fn(async (input: AdoptedInput) => {
+    order.push('adopt');
     adopted.push(input);
     return { runId: 'bgr_1', processId: input.processId, logPath: 'processes/bgr_1.log' };
   });
   const processService = { adopt } as unknown as ProcessService;
   const registry = new ActiveRunRegistry();
 
-  return { fake, port, adopt, adopted, processService, registry, execute };
+  return { fake, port, adopt, adopted, processService, registry, execute, order };
 }
 
 describe('execute_shell — detach идущего шелла (ADR-113)', () => {
@@ -343,6 +369,107 @@ describe('execute_shell — detach идущего шелла (ADR-113)', () => {
     expect(result.metadata?.detached).toBeUndefined();
     expect(result.content).toContain('before');
     expect(result.content).toContain('after-limit');
+  });
+
+  it('detach снимает foreground-таймаут (retime(0)) до adopt', async () => {
+    const h = createHarness();
+    const ctx = makeCtx({
+      processService: h.processService,
+      activeRuns: h.registry,
+      backgroundEnabled: true,
+      executionPort: h.port,
+    });
+
+    const promise = executeShellTool.execute({ command: 'npm run dev' }, ctx);
+    await vi.waitFor(() => expect(h.registry.list('s1')).toHaveLength(1));
+    h.fake.emit('stdout', 'early\n');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const detached = await h.registry.detachAll('s1');
+    expect(detached.failed).toHaveLength(0);
+    expect(detached.detached).toHaveLength(1);
+    await promise;
+
+    // Таймаут снят ровно один раз, и это произошло **до** передачи процесса
+    // в сервис фоновых прогонов.
+    expect(h.fake.retimeCalls).toEqual([0]);
+    expect(h.order.indexOf('retime:0')).toBeGreaterThanOrEqual(0);
+    expect(h.order.indexOf('retime:0')).toBeLessThan(h.order.indexOf('adopt'));
+
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 10 });
+  });
+
+  it('adopt упал (лимит): прежний срок восстанавливается, тул ждёт команду', async () => {
+    const h = createHarness();
+    h.adopt.mockRejectedValueOnce(
+      new BackgroundLimitExceededError('processes', 1, 'лимит фоновых процессов'),
+    );
+    const ctx = makeCtx({
+      processService: h.processService,
+      activeRuns: h.registry,
+      backgroundEnabled: true,
+      executionPort: h.port,
+    });
+
+    const promise = executeShellTool.execute({ command: 'npm run dev' }, ctx);
+    await vi.waitFor(() => expect(h.registry.list('s1')).toHaveLength(1));
+    h.fake.emit('stdout', 'before\n');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const detached = await h.registry.detachAll('s1');
+    expect(detached.detached).toHaveLength(0);
+    expect(detached.failed).toEqual([
+      expect.objectContaining({ id: 'proc_1', kind: 'process', code: 'BACKGROUND_LIMIT' }),
+    ]);
+    // Срок восстановлен на исходный (foreground-дефолт `execute_shell` — 120 с).
+    expect(h.fake.retimeCalls).toEqual([0, 120_000]);
+
+    // Прогон остаётся foreground: команда продолжает читаться тулом.
+    expect(h.registry.list('s1')).toHaveLength(1);
+    h.fake.emit('stdout', 'after-limit\n');
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 5 });
+
+    const result = await promise;
+    expect(result.metadata?.detached).toBeUndefined();
+    expect(result.content).toContain('before');
+    expect(result.content).toContain('after-limit');
+  });
+
+  it('хэндл без retime: detach отклонён (DETACH_FAILED), прогон остаётся foreground', async () => {
+    // Старый исполнитель (протокол < 10): переставить таймаут нечем — молча
+    // оставить foreground-срок нельзя, иначе команда умерла бы в фоне.
+    const h = createHarness({ retime: false });
+    const ctx = makeCtx({
+      processService: h.processService,
+      activeRuns: h.registry,
+      backgroundEnabled: true,
+      executionPort: h.port,
+    });
+
+    const promise = executeShellTool.execute({ command: 'npm run dev' }, ctx);
+    await vi.waitFor(() => expect(h.registry.list('s1')).toHaveLength(1));
+    h.fake.emit('stdout', 'before\n');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const detached = await h.registry.detachAll('s1');
+    expect(detached.detached).toHaveLength(0);
+    expect(detached.failed).toEqual([
+      expect.objectContaining({ id: 'proc_1', kind: 'process', code: 'DETACH_FAILED' }),
+    ]);
+    expect(detached.failed[0]?.message).toContain('переставлять таймаут');
+
+    // Ни перевода, ни retime: прогон живёт как foreground-вызов.
+    expect(h.adopt).not.toHaveBeenCalled();
+    expect(h.fake.retimeCalls).toEqual([]);
+    expect(h.registry.list('s1')).toHaveLength(1);
+
+    h.fake.emit('stdout', 'still-foreground\n');
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 5 });
+
+    const result = await promise;
+    expect(result.metadata?.detached).toBeUndefined();
+    expect(result.content).toContain('before');
+    expect(result.content).toContain('still-foreground');
   });
 
   it('порт без spawnBackground — прежний путь через execute, регистрации нет', async () => {

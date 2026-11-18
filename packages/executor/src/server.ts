@@ -11,6 +11,7 @@
  * | `GET` | `/exec/:processId` | состояние фонового процесса | bearer-токен |
  * | `GET` | `/exec/:processId/logs` | отрезок журнала фонового процесса | bearer-токен |
  * | `POST` | `/exec/:processId/stop` | остановить фоновой процесс | bearer-токен |
+ * | `POST` | `/exec/:processId/timeout` | переставить/снять таймаут фонового процесса (протокол 10) | bearer-токен |
  * | `GET` | `/capabilities` | версия протокола, состав toolchain'а и лимиты | bearer-токен |
  * | `POST` | `/fs/stat` | сведения о файле/каталоге (протокол 7) | bearer-токен |
  * | `POST` | `/fs/realpath` | канонический путь (протокол 7) | bearer-токен |
@@ -95,10 +96,12 @@ import {
   parsePtyOpenBody,
   parsePtyResizeBody,
   type PtyForegroundResponse,
+  parseBackgroundTimeoutRequestBody,
   parseSpawnExecRequestBody,
   parseStopBackgroundRequestBody,
   type BackgroundLogsResponse,
   type BackgroundStatusResponse,
+  type BackgroundTimeoutResponse,
   type ExecutorCapabilities,
   type ExecutorErrorReason,
   type ExecutorHealth,
@@ -587,6 +590,30 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
     return c.json(body, 200);
   });
 
+  app.post('/exec/:processId/timeout', async (c) => {
+    const id = c.req.param('processId');
+    let raw: unknown;
+    try {
+      raw = await c.req.json();
+    } catch {
+      const { status, body } = errorResponse('invalid_request', 'тело запроса — невалидный JSON');
+      return c.json(body, status);
+    }
+    const parsed = parseBackgroundTimeoutRequestBody(raw);
+    if (!parsed.ok) {
+      const { status, body } = errorResponse('invalid_request', parsed.message);
+      return c.json(body, status);
+    }
+    // `404` — процесса нет или он уже завершён/останавливается: переставлять
+    // нечему (сервис различает «не найдено» и «уже не бежит»).
+    if (!background.retime(id, parsed.value.timeoutMs)) {
+      const { status, body } = errorResponse('not_found', 'фоновый процесс не найден');
+      return c.json(body, status);
+    }
+    const body: BackgroundTimeoutResponse = { ok: true };
+    return c.json(body, 200);
+  });
+
   app.get('/capabilities', async (c) => {
     const body: ExecutorCapabilities = {
       protocol: EXECUTOR_PROTOCOL_VERSION,
@@ -609,6 +636,10 @@ export function createExecutorApp(opts: ExecutorAppOptions): Hono<ExecutorEnv> {
         // не объявляет, значит control plane такой адрес для терминала не
         // выбирает (тихого возврата в inline нет).
         pty: ptyEnabled,
+        // Переустановка таймаута фонового процесса (протокол 10): нужна
+        // переводу блокирующего прогона в фон — без неё переведённый процесс
+        // умер бы через foreground-таймаут хода.
+        backgroundRetime: true,
       },
       // Аддитивно: эффективные потолки исполнителя (таймаут и буфер вывода).
       // Снимают «тихий» потолок — control plane видит лимит до вызова,

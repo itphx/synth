@@ -244,12 +244,14 @@ describe('PROP-135: touch — сообщение provisioner\'у об актив
 
   it('spawnBackground (успех) → touch один раз', async () => {
     const { provider, touch } = touchProvider();
+    const retime = () => {};
     const inner = fakePort({
       spawnBackground: async () => ({
         processId: 'proc_1',
         output: (async function* () {})(),
         exited: Promise.resolve({ exitCode: 0, signal: null, durationMs: 1 }),
         stop: () => {},
+        retime,
       }),
     });
     const port = createPooledExecutionPort({ key: KEY, provider, createPort: async () => inner });
@@ -260,6 +262,9 @@ describe('PROP-135: touch — сообщение provisioner\'у об актив
     await Promise.resolve();
 
     expect(process?.processId).toBe('proc_1');
+    // Хэндл возвращается **без обёртки**: `retime` (деталь в фон) сохраняется
+    // тем же, что у внутреннего порта.
+    expect(process?.retime).toBe(retime);
     expect(touch).toHaveBeenCalledTimes(1);
   });
 

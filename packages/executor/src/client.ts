@@ -59,6 +59,9 @@
  * - состояние — `GET /exec/:processId` каждые `REMOTE_BACKGROUND_STATUS_POLL_MS`
  *   (500 мс) до терминального статуса;
  * - остановка — `POST /exec/:processId/stop` (best-effort, без исключений).
+ * - перестановка срока — `POST /exec/:processId/timeout` (протокол 10): метод
+ *   `retime` есть у хэндла **только** при признаке `features.backgroundRetime`
+ *   (иначе — «не умеет», и перевод прогона в фон отклоняется).
  *
  * Выбор адреса — **тем же** механизмом, что у `execute` (по `requires`;
  * адрес без нужного бинаря и не ответивший адрес исключаются), плюс требование
@@ -301,6 +304,15 @@ interface PoolEntry {
    * команде нет: пользователь получил бы не терминал).
    */
   pty: boolean;
+  /**
+   * Умеет ли исполнитель переставлять таймаут запущенного фонового процесса
+   * (`POST /exec/:id/timeout`, `features.backgroundRetime`, протокол 10).
+   *
+   * Признак **явный**: у старого исполнителя его нет — хэндл такого адреса не
+   * получает метод `retime`, а перевод прогона в фон отклоняется (без
+   * перестановки срока фон умер бы через foreground-таймаут хода).
+   */
+  backgroundRetime: boolean;
 }
 
 /**
@@ -394,6 +406,34 @@ const PROTOCOL_REASON_CODE: Record<string, string> = {
   policy_denied: 'EPOLICY',
   internal_error: 'EINTERNAL',
 };
+
+/**
+ * Ошибка провода → `ExecutionError` (те же поля, что у inline).
+ *
+ * Общая для вызовов порта и для методов хэндла (`retime`): маппинг причин
+ * один, иначе разные точки давали бы разные коды на одну и ту же ошибку.
+ */
+async function wireExecutionError(
+  body: ExecErrorBody,
+): Promise<import('@itphx/synth-core').ExecutionError> {
+  const wireReason = typeof body.reason === 'string' ? body.reason : 'internal_error';
+  const reason = isPortFailureReason(wireReason) ? wireReason : 'spawn_failed';
+  const code =
+    body.code !== undefined && body.code !== null
+      ? body.code
+      : (PROTOCOL_REASON_CODE[wireReason] ?? 'EINTERNAL');
+  return buildExecutionError({
+    reason,
+    message: body.message ?? 'команда завершилась с ошибкой',
+    code,
+    stdout: body.stdout ?? '',
+    stderr: body.stderr ?? '',
+    killed: body.killed === true,
+    signal: body.signal ?? null,
+    truncated: body.truncated === true,
+    durationMs: body.durationMs ?? 0,
+  });
+}
 
 /**
  * Сигнал остановки, который принимает исполнитель.
@@ -903,9 +943,14 @@ export class RemoteExecutionPort implements ExecutionPort {
     }
 
     let lastCause: unknown;
+    // Инвентарь уже собран `_backgroundCandidates` (снимок закэширован):
+    // признак `backgroundRetime` берётся из того же снимка capabilities, что и
+    // `features.background`. Нет признака — у хэндла не будет метода `retime`,
+    // и вызывающий (detach) откажется переводить прогон в фон.
+    const inventory = await this._ensureInventory();
     for (const url of candidates) {
       try {
-        return await this._spawnBackground(url, req);
+        return await this._spawnBackground(url, req, inventory.get(url)?.backgroundRetime === true);
       } catch (err) {
         if (err instanceof ConnectionFailure) {
           // Ошибка соединения — процесс не запустился, пробуем следующего.
@@ -1554,6 +1599,7 @@ export class RemoteExecutionPort implements ExecutionPort {
   private async _spawnBackground(
     url: string,
     req: ExecRequest,
+    retimeAvailable = false,
   ): Promise<ExecBackgroundProcess> {
     const fetchImpl = await resolveFetch(this._fetchImpl);
     const timeoutController = new AbortController();
@@ -1639,6 +1685,10 @@ export class RemoteExecutionPort implements ExecutionPort {
       fetchImpl,
       processId,
       ...(typeof ok?.pid === 'number' ? { pid: ok.pid } : {}),
+      // Метод `retime` появляется **только** если исполнитель объявил
+      // `features.backgroundRetime` (протокол 10): контракт порта — «нет
+      // метода — не умеет», а не «есть, но падает».
+      retime: retimeAvailable,
     });
   }
 
@@ -1721,6 +1771,7 @@ export class RemoteExecutionPort implements ExecutionPort {
           secretsSpawn?: boolean;
           fs?: boolean;
           pty?: boolean;
+          backgroundRetime?: boolean;
         };
         limits?: { timeoutMs?: unknown; maxOutputBytes?: unknown };
       } | null;
@@ -1752,6 +1803,11 @@ export class RemoteExecutionPort implements ExecutionPort {
       // версия протокола ≥ 8. Исполнитель протокола ≤ 7 терминалы не умеет —
       // такой адрес в кандидаты на терминал не попадает (fail-closed).
       const pty = body?.features?.pty === true && protocol >= EXECUTOR_PROTOCOL_PTY;
+      // Переустановка таймаута фонового процесса (`features.backgroundRetime`,
+      // протокол 10) — признак **явный**: фоллбэка по версии протокола нет.
+      // Без него у хэндла нет метода `retime`, и перевод в фон отклоняется:
+      // молча оставить foreground-срок нельзя (процесс умер бы в фоне).
+      const backgroundRetime = body?.features?.backgroundRetime === true;
       // Лимиты исполнителя (`limits`) — аддитивное поле: у старого
       // исполнителя его нет, тогда разбор терпимый (значение `undefined`).
       const limits = parseExecutorLimits(body?.limits);
@@ -1765,6 +1821,7 @@ export class RemoteExecutionPort implements ExecutionPort {
         secretsSpawn,
         fs,
         pty,
+        backgroundRetime,
         ...(limits ? { limits } : {}),
       };
     } catch {
@@ -1865,23 +1922,7 @@ export class RemoteExecutionPort implements ExecutionPort {
 
   /** Ошибка провода → `ExecutionError` (те же поля, что у inline). */
   private async _toExecutionError(body: ExecErrorBody): Promise<import('@itphx/synth-core').ExecutionError> {
-    const wireReason = typeof body.reason === 'string' ? body.reason : 'internal_error';
-    const reason = isPortFailureReason(wireReason) ? wireReason : 'spawn_failed';
-    const code =
-      body.code !== undefined && body.code !== null
-        ? body.code
-        : (PROTOCOL_REASON_CODE[wireReason] ?? 'EINTERNAL');
-    return buildExecutionError({
-      reason,
-      message: body.message ?? 'команда завершилась с ошибкой',
-      code,
-      stdout: body.stdout ?? '',
-      stderr: body.stderr ?? '',
-      killed: body.killed === true,
-      signal: body.signal ?? null,
-      truncated: body.truncated === true,
-      durationMs: body.durationMs ?? 0,
-    });
+    return wireExecutionError(body);
   }
 
   /** Все адреса недоступны — поведение по `failMode`. */
@@ -2046,6 +2087,7 @@ function unreachableEntry(): PoolEntry {
     secretsSpawn: false,
     fs: false,
     pty: false,
+    backgroundRetime: false,
   };
 }
 
@@ -2136,6 +2178,12 @@ class RemoteBackgroundProcess implements ExecBackgroundProcess {
   readonly pid: number | undefined;
   readonly output: AsyncIterable<ExecBackgroundChunk>;
   readonly exited: Promise<ExecBackgroundExit>;
+  /**
+   * Перестановка таймаута процесса (протокол 10) — метода нет, если
+   * исполнитель не объявил `features.backgroundRetime`: контракт порта
+   * «нет метода — не умеет».
+   */
+  retime?: (timeoutMs: number) => Promise<void>;
 
   private readonly _url: string;
   private readonly _token: string;
@@ -2151,6 +2199,8 @@ class RemoteBackgroundProcess implements ExecBackgroundProcess {
     fetchImpl: ExecutorFetch;
     processId: string;
     pid?: number;
+    /** Исполнитель объявил `features.backgroundRetime` (протокол 10). */
+    retime?: boolean;
   }) {
     this._url = opts.url;
     this._token = opts.token;
@@ -2159,6 +2209,11 @@ class RemoteBackgroundProcess implements ExecBackgroundProcess {
     this.pid = opts.pid;
     this.output = { [Symbol.asyncIterator]: () => this._pollLogs() };
     this.exited = this._pollStatus();
+    // Метод появляется только при признаке: иначе `retime` остаётся
+    // `undefined` (не «есть, но падает»).
+    if (opts.retime === true) {
+      this.retime = (timeoutMs: number) => this._retime(timeoutMs);
+    }
   }
 
   /**
@@ -2193,6 +2248,55 @@ class RemoteBackgroundProcess implements ExecBackgroundProcess {
       });
     } catch {
       // Процесс уже завершён или исполнитель недоступен — останавливать нечем.
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Переставить таймаут процесса на исполнителе
+   * (`POST /exec/:processId/timeout`, протокол 10).
+   *
+   * `0` — снять таймаут; `> 0` — отсчёт от момента вызова. Ошибка `404`
+   * (`not_found`) — процесс уже завершился или останавливается: переставлять
+   * нечему, это **no-op** (процесс всё равно уже не бежит). Прочие ошибки
+   * провода — `ExecutionError` с существующим маппингом причин.
+   */
+  private async _retime(timeoutMs: number): Promise<void> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REMOTE_BACKGROUND_STOP_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      const response = await this._fetchImpl(
+        `${this._url}/exec/${encodeURIComponent(this.processId)}/timeout`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: `Bearer ${this._token}`,
+          },
+          body: JSON.stringify({ timeoutMs }),
+          signal: controller.signal,
+        },
+      );
+      if (response.ok) return;
+      // Процесс уже завершён/останавливается — переставлять нечего.
+      if (response.status === 404) return;
+      let parsed: unknown;
+      try {
+        parsed = await response.json();
+      } catch {
+        parsed = null;
+      }
+      const errorBody = (parsed as { error?: ExecErrorBody } | null)?.error;
+      if (!errorBody) {
+        throw await buildExecutionError({
+          reason: 'spawn_failed',
+          code: 'EBADRESPONSE',
+          message: `исполнитель вернул ошибку без описания (HTTP ${response.status})`,
+        });
+      }
+      throw await wireExecutionError(errorBody);
     } finally {
       clearTimeout(timer);
     }

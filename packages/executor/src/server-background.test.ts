@@ -450,6 +450,128 @@ describe('исполнитель: фоновые процессы — остан
   });
 });
 
+/**
+ * Протокол 10: переустановка таймаута фонового процесса
+ * (`POST /exec/:processId/timeout`).
+ *
+ * Нужна переводу блокирующего прогона в фон: после detach foreground-таймаут
+ * хода больше не действует, и срок процесса переставляется вызывающим.
+ */
+describe('исполнитель: фоновые процессы — переустановка таймаута (протокол 10)', () => {
+  /** POST /exec/:id/timeout с токеном. */
+  function postTimeout(app: Hono, id: string, body: unknown): Promise<Response> {
+    return Promise.resolve(
+      app.request(`/exec/${id}/timeout`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+
+  it('retime(0) — таймаут снят: процесс переживает исходный срок', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, {
+        command: { kind: 'shell', command: 'sleep 0.9; printf alive' },
+        timeoutMs: 300,
+      })
+    ).json()) as SpawnExecResponse;
+
+    const res = await postTimeout(app, processId, { timeoutMs: 0 });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    const finished = await waitStatus(app, processId);
+    expect(finished.status).toBe('exited');
+    expect(finished.exitCode).toBe(0);
+    expect(finished.signal).toBeNull();
+    expect(finished.durationMs ?? 0).toBeGreaterThanOrEqual(700);
+  });
+
+  it('retime(200) — срок переставлен: процесс убит к новому сроку', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, {
+        command: { kind: 'shell', command: 'sleep 30' },
+        timeoutMs: 60_000,
+      })
+    ).json()) as SpawnExecResponse;
+
+    const res = await postTimeout(app, processId, { timeoutMs: 200 });
+    expect(res.status).toBe(200);
+
+    const finished = await waitStatus(app, processId);
+    expect(finished.status).toBe('killed');
+    expect(finished.signal).toBe('SIGTERM');
+    // Без перестановки процесс жил бы 60 с — тест бы не уложился.
+    expect(finished.durationMs ?? 0).toBeLessThan(5_000);
+  });
+
+  it('невалидное тело — 400 invalid_request', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, { command: { kind: 'shell', command: 'sleep 30' } })
+    ).json()) as SpawnExecResponse;
+
+    for (const body of [
+      {},
+      { timeoutMs: -1 },
+      { timeoutMs: 1.5 },
+      { timeoutMs: '100' },
+      { timeoutMs: 86_400_001 },
+    ]) {
+      const res = await postTimeout(app, processId, body);
+      expect(res.status).toBe(400);
+      expect((await readError(res)).reason).toBe('invalid_request');
+    }
+  });
+
+  it('невалидный JSON — 400 invalid_request', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, { command: { kind: 'shell', command: 'sleep 30' } })
+    ).json()) as SpawnExecResponse;
+
+    const res = await app.request(`/exec/${processId}/timeout`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: '{not json',
+    });
+    expect(res.status).toBe(400);
+    expect((await readError(res)).reason).toBe('invalid_request');
+  });
+
+  it('неизвестный процесс — 404 not_found', async () => {
+    const app = makeApp();
+    const res = await postTimeout(app, 'proc_missing', { timeoutMs: 0 });
+    expect(res.status).toBe(404);
+    expect((await readError(res)).reason).toBe('not_found');
+  });
+
+  it('завершённый процесс — 404 not_found (переставлять нечему)', async () => {
+    const app = makeApp();
+    const { processId } = (await (
+      await postSpawn(app, { command: { kind: 'shell', command: 'printf done' } })
+    ).json()) as SpawnExecResponse;
+    await waitStatus(app, processId);
+
+    const res = await postTimeout(app, processId, { timeoutMs: 1_000 });
+    expect(res.status).toBe(404);
+    expect((await readError(res)).reason).toBe('not_found');
+  });
+
+  it('без токена — 401', async () => {
+    const app = makeApp();
+    const res = await app.request('/exec/proc_x/timeout', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ timeoutMs: 0 }),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe('исполнитель: фоновые процессы — несуществующие и аутентификация', () => {
   it('неизвестный процесс — 404 на status/logs/stop', async () => {
     const app = makeApp();
@@ -511,9 +633,10 @@ describe('исполнитель: протокол и прежние маршр�
         mcpAttachments?: boolean;
         sshAgent?: boolean;
         secretsSpawn?: boolean;
+        backgroundRetime?: boolean;
       };
     };
-    expect(body.protocol).toBe(9);
+    expect(body.protocol).toBe(10);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
@@ -521,6 +644,8 @@ describe('исполнитель: протокол и прежние маршр�
     expect(body.features?.sshAgent).toBe(true);
     // Протокол 6 (PROP-124 §7): секреты вызова в фоновом запуске.
     expect(body.features?.secretsSpawn).toBe(true);
+    // Протокол 10: переустановка таймаута фонового процесса (detach в фон).
+    expect(body.features?.backgroundRetime).toBe(true);
   });
 
   it('health — счётчики фоновых процессов', async () => {
@@ -531,7 +656,7 @@ describe('исполнитель: протокол и прежние маршр�
       protocol: number;
       background?: { limit: number; active: number };
     };
-    expect(body.protocol).toBe(9);
+    expect(body.protocol).toBe(10);
     expect(body.background?.limit).toBeGreaterThan(0);
     expect(body.background?.active).toBe(0);
   });

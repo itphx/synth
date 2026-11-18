@@ -214,6 +214,26 @@ export interface ExecBackgroundProcess {
   readonly exited: Promise<ExecBackgroundExit>;
   /** Сигнал процессу (по умолчанию SIGTERM). Не бросает. */
   stop(signal?: NodeJS.Signals): void;
+  /**
+   * Переставить таймаут уже запущенного процесса.
+   *
+   * Отсчёт — **от момента вызова**; `0` — снять таймаут (процесс живёт, пока
+   * жив). После завершения процесса — no-op: переставлять нечему.
+   *
+   * Зачем: при переводе блокирующего прогона в фон (`POST
+   * /api/v2/sessions/:id/background` → `ActiveRunRegistry.detachAll`)
+   * foreground-таймаут хода больше не действует — таймер, заведённый при
+   * `spawnBackground`, переставляется вызывающим
+   * (`engine/tools/shell-detachable.ts`). Без этого переведённый
+   * `npm run dev` умирал бы через foreground-лимит (120 с), уже будучи
+   * фоновым прогоном.
+   *
+   * **Необязательный метод.** Его отсутствие означает «переставить таймаут
+   * нельзя»: вызывающий обязан **отказаться** от перевода в фон (и продолжить
+   * прогон foreground), а не молча оставить прежний срок. Так ведут себя старые
+   * исполнители (протокол < 10): они не объявляют `features.backgroundRetime`.
+   */
+  retime?(timeoutMs: number): void | Promise<void>;
 }
 
 /**

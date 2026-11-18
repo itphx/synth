@@ -138,6 +138,106 @@ async function startLegacySecretsSpawnExecutor(): Promise<{
 }
 
 /**
+ * Фейковый исполнитель для перестановки таймаута (протокол 10).
+ *
+ * Отвечает на `/capabilities` (признак `features.backgroundRetime`),
+ * `/exec/spawn` (успешный запуск), `/exec/proc_retime` (сразу терминальный
+ * статус — хэндл не висит) и `/exec/proc_retime/timeout` (заданным статусом).
+ * Нужен, чтобы проверить: 404 при `retime` — no-op, а не ошибка.
+ */
+async function startRetimeExecutor(opts: {
+  backgroundRetime: boolean;
+  timeoutStatus?: number;
+}): Promise<{ url: string; timeoutCalls: () => unknown[] }> {
+  const calls: unknown[] = [];
+  const server = createServer((req, res) => {
+    if (req.url === '/capabilities') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          protocol: 10,
+          toolchain: { sh: 'sh 5.2' },
+          os: process.platform,
+          arch: process.arch,
+          node: process.version,
+          features: {
+            background: true,
+            secrets: true,
+            backgroundRetime: opts.backgroundRetime,
+          },
+        }),
+      );
+      return;
+    }
+    if (req.url === '/exec/spawn') {
+      res.writeHead(201, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ processId: 'proc_retime', pid: 11 }));
+      return;
+    }
+    if (req.url === '/exec/proc_retime/timeout') {
+      let raw = '';
+      req.on('data', (chunk: Buffer | string) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        try {
+          calls.push(raw.length > 0 ? JSON.parse(raw) : undefined);
+        } catch {
+          calls.push(raw);
+        }
+        const status = opts.timeoutStatus ?? 200;
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(
+          status === 200
+            ? JSON.stringify({ ok: true })
+            : JSON.stringify({
+                error: {
+                  reason: 'not_found',
+                  code: null,
+                  message: 'фоновый процесс не найден',
+                  stdout: '',
+                  stderr: '',
+                  killed: false,
+                  signal: null,
+                  truncated: false,
+                  durationMs: 0,
+                },
+              }),
+        );
+      });
+      return;
+    }
+    if (req.url === '/exec/proc_retime') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          processId: 'proc_retime',
+          pid: 11,
+          command: { kind: 'shell', command: 'printf x' },
+          cwd: '/',
+          status: 'exited',
+          exitCode: 0,
+          signal: null,
+          startedAt: 1,
+          finishedAt: 2,
+          durationMs: 1,
+          stdoutBytes: 1,
+          stderrBytes: 0,
+          truncated: false,
+        }),
+      );
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  legacyServers.push(server);
+  return { url: `http://127.0.0.1:${port}`, timeoutCalls: () => calls };
+}
+
+/**
  * Ответ FS-роута в фейковом исполнителе.
  *
  * `body` — JSON-ответ (как у прочих FS-роутов); `raw` — **бинарный** ответ
@@ -1258,6 +1358,54 @@ describe('клиент удалённого порта: фоновый запу�
     expect(exit.exitCode).toBe(0);
     // Запуск ушёл только к адресу с признаком `features.secretsSpawn`.
     expect(spawnHits).toEqual([String(handle.port)]);
+  });
+
+  /**
+   * Протокол 10: переустановка таймаута фонового процесса.
+   *
+   * Метод `retime` у хэндла есть **только** при `features.backgroundRetime`:
+   * контракт порта — «нет метода — не умеет», и вызывающий (detach) откажется
+   * переводить прогон в фон.
+   */
+  it('features.backgroundRetime — у хэндла есть retime, срок переставляется', async () => {
+    const handle = await startExecutor();
+    const port = createRemoteExecutionPort({ urls: [handle.url], token: TOKEN });
+
+    const bg = await spawnBackground(port, 'sleep 5');
+    expect(typeof bg.retime).toBe('function');
+    const retime = bg.retime;
+    if (!retime) throw new Error('ожидался метод retime у хэндла');
+
+    const startedAt = Date.now();
+    await retime(200);
+    const exit = await bg.exited;
+    expect(exit.signal).not.toBeNull();
+    expect(exit.exitCode).toBeNull();
+    // Без перестановки процесс жил бы 5 с (тест бы не уложился в запас).
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
+  });
+
+  it('без features.backgroundRetime — метода retime у хэндла нет', async () => {
+    // Исполнитель протокола 6: фоновые процессы умеет, перестановки срока — нет.
+    const legacy = await startLegacySecretsSpawnExecutor();
+    const port = createRemoteExecutionPort({ urls: [legacy.url], token: TOKEN });
+
+    const bg = await spawnBackground(port, 'sleep 0.1');
+    expect(bg.retime).toBeUndefined();
+    // Хэндл не висит: статус недоступен (404) — `exited` резолвится.
+    await bg.exited;
+  });
+
+  it('404 при retime — no-op (процесс уже завершился), не ошибка', async () => {
+    const fake = await startRetimeExecutor({ backgroundRetime: true, timeoutStatus: 404 });
+    const port = createRemoteExecutionPort({ urls: [fake.url], token: TOKEN });
+
+    const bg = await spawnBackground(port, 'printf x');
+    expect(typeof bg.retime).toBe('function');
+    const retime = bg.retime;
+    if (!retime) throw new Error('ожидался метод retime у хэндла');
+    await expect(retime(0)).resolves.toBeUndefined();
+    await bg.exited;
   });
 });
 

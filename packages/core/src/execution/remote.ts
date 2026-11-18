@@ -168,7 +168,15 @@ export class RemoteExecutionPortWithExecutorMcp implements ExecutionPort {
    * работают fail-closed, а не молча ищут файлы в control plane.
    */
   readonly fs?: ExecutionFs;
-  /** Фоновый запуск — есть только если внутренний порт его умеет. */
+  /**
+   * Фоновый запуск — есть только если внутренний порт его умеет.
+   *
+   * Хэндл возвращается **как есть** (без обёртки): необязательный
+   * `retime` — деталь самого хэндла, поэтому «умеет ли точка исполнения
+   * переставлять таймаут» видно вызывающему прямо по методу. Обёртка его не
+   * подменяет и не добавляет: иначе «не умеет» стало бы неотличимо от «есть
+   * метод, но падает» (то же правило, что у `openPty`/`browserCall`).
+   */
   readonly spawnBackground?: ExecutionPort['spawnBackground'];
   /** Browser-вызов — есть только если внутренний порт его умеет. */
   readonly browserCall?: ExecutionPort['browserCall'];

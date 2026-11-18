@@ -292,7 +292,7 @@ describe('разбор mode секрета вызова (протокол 6)', (
   });
 
   it('версия протокола — 9 (проба переднего плана PTY)', () => {
-    expect(EXECUTOR_PROTOCOL_VERSION).toBe(9);
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe(10);
   });
 });
 

@@ -70,7 +70,13 @@
  * - `POST /exec/:processId/stop` → `200 { status: 'stopping' }` (тело
  *   `{ signal? }` — сигнал остановки: `SIGTERM` по умолчанию, допустимы только
  *   `SIGTERM`/`SIGKILL`, прочие → `400 invalid_request`; через 5 с после
- *   `SIGTERM` — `SIGKILL`); `404` — процесс не найден.
+ *   `SIGTERM` — `SIGKILL`); `404` — процесс не найден;
+ * - `POST /exec/:processId/timeout` (**протокол 10**) → тело
+ *   `{ timeoutMs }` (`0` — снять таймаут, `> 0` — переставить отсчёт от
+ *   момента вызова) → `200 { ok: true }`; `400 invalid_request` — не целое
+ *   `0…86 400 000`; `404 not_found` — процесса нет или он уже завершён
+ *   (переставлять нечему). Нужен переводу блокирующего прогона в фон:
+ *   foreground-таймаут хода после detach больше не действует.
  *
  * Журналы — **раздельные** по потокам: `stdout` и `stderr` приходят
  * отдельными отрезками со своими смещениями. Идентификатор процесса —
@@ -146,6 +152,16 @@ import type { ExecCommand, ExecSecret, PtyForeground } from '@itphx/synth-core';
 /**
  * Версия wire-протокола исполнителя.
  *
+ * **10** — переустановка таймаута уже запущенного фонового процесса
+ * (`POST /exec/:processId/timeout`, поле `{ timeoutMs }`; `0` — снять) и
+ * признак `features.backgroundRetime`. Нужно переводу блокирующего прогона в
+ * фон: после detach foreground-таймаут хода больше не действует, и срок
+ * фонового процесса переставляется вызывающим. Версия повышена, потому что
+ * это **новый маршрут**: исполнитель 9 его не знает, а вызывающему нужно
+ * отличать «умеет» от «не умеет» до перевода в фон (нет признака — нет и
+ * метода `retime` у хэндла, и перевод отклоняется). Остальные фоновые
+ * маршруты и признак `features.background` не менялись.
+ *
  * **9** — проба переднего плана PTY (`GET /pty/:id/foreground`, план
  * терминалов): ответ `{ foreground: PtyForeground | null }` — что сейчас в
  * фокусе терминала (оболочка/`ssh`/`vim`/…). Версия повышена, потому что это
@@ -202,7 +218,7 @@ import type { ExecCommand, ExecSecret, PtyForeground } from '@itphx/synth-core';
  * потолки таймаута и буфера вывода, чтобы control plane видел «тихий» потолок
  * заранее. Старый исполнитель поля не отдаёт — разбор терпимый.
  */
-export const EXECUTOR_PROTOCOL_VERSION = 9;
+export const EXECUTOR_PROTOCOL_VERSION = 10;
 
 /** Причина неудачи на проводе. */
 export type ExecutorErrorReason =
@@ -443,6 +459,17 @@ export interface ExecutorFeatures {
    * возврата в inline нет (терминал должен жить там же, где toolchain).
    */
   pty?: boolean;
+  /**
+   * Переустановка таймаута запущенного фонового процесса (протокол 10):
+   * `POST /exec/:processId/timeout` — `0` снимает таймаут, `> 0` переставляет
+   * отсчёт от момента вызова.
+   *
+   * Признак **явный**: исполнитель протокола ≤ 9 маршрута не знает, поэтому у
+   * хэндла его адреса **нет** метода `retime`. Control plane такой адрес не
+   * выбирает для перевода прогона в фон: без перестановки срока переведённый
+   * процесс умер бы через foreground-таймаут хода (тихого фоллбека нет).
+   */
+  backgroundRetime?: boolean;
 }
 
 /** Ответ `GET /health`. */
@@ -928,6 +955,58 @@ export function parseStopBackgroundRequestBody(
     };
   }
   return { ok: true, value: { signal: raw.signal as BackgroundStopSignal } };
+}
+
+/**
+ * Потолок срока фонового процесса при переустановке таймаута (протокол 10).
+ *
+ * Совпадает с потолком фонового режима исполнителя (сутки): перестановка не
+ * должна позволять задать срок больше, чем вообще допустим у исполнителя.
+ */
+export const BACKGROUND_RETIME_MAX_MS = 86_400_000;
+
+/** Тело запроса `POST /exec/:processId/timeout` (протокол 10). */
+export interface BackgroundTimeoutRequest {
+  /**
+   * Новый таймаут процесса, мс: `0` — снять (процесс живёт, пока жив),
+   * `> 0` — переставить отсчёт **от момента вызова**.
+   */
+  timeoutMs: number;
+}
+
+/** Тело успешного ответа `POST /exec/:processId/timeout`. */
+export interface BackgroundTimeoutResponse {
+  /** Таймаут переставлен. */
+  ok: true;
+}
+
+/**
+ * Разбор тела запроса `POST /exec/:processId/timeout`.
+ *
+ * Валидация строгая: целое `0…BACKGROUND_RETIME_MAX_MS`. Иначе — `400
+ * invalid_request`: молча проигнорированная перестановка оставила бы процесс
+ * с прежним (foreground) сроком, и он умер бы посреди фонового прогона.
+ */
+export function parseBackgroundTimeoutRequestBody(
+  body: unknown,
+): { ok: true; value: BackgroundTimeoutRequest } | { ok: false; message: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    return { ok: false, message: 'тело запроса должно быть JSON-объектом' };
+  }
+  const raw = body as Record<string, unknown>;
+  const timeoutMs = raw.timeoutMs;
+  if (
+    typeof timeoutMs !== 'number' ||
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 0 ||
+    timeoutMs > BACKGROUND_RETIME_MAX_MS
+  ) {
+    return {
+      ok: false,
+      message: `поле timeoutMs должно быть целым числом от 0 до ${BACKGROUND_RETIME_MAX_MS}`,
+    };
+  }
+  return { ok: true, value: { timeoutMs } };
 }
 
 /**

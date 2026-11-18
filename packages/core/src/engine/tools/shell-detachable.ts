@@ -102,6 +102,13 @@ export interface DetachableShellInput {
  * процессов, `spawnBackground` у порта (иначе хэндла нет — старый исполнитель,
  * протокол < 3) и разрешённая фоновая работа инстанса. Иначе — прежний путь
  * через `execute` (поведение не меняется).
+ *
+ * Совместимость `retime` здесь **не проверяется**: у порта такого признака нет
+ * (метод живёт на хэндле процесса), поэтому «умеет ли точка исполнения
+ * переставлять таймаут» выясняется в момент detach — по наличию
+ * `handle.retime`. Нет метода — перевод отклоняется (`DETACH_FAILED`), прогон
+ * продолжается foreground; предварительно remote-режим не отключаем, иначе
+ * перевод в фон умер бы вместе с foreground-таймаутом.
  */
 export function isDetachableShellEnabled(ctx: ToolContext, port: ExecutionPort): boolean {
   const extra = ctx.extra as DetachableShellExtra | undefined;
@@ -388,12 +395,27 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
       // настоящий результат.
       if (exitState.exit) return;
 
+      // Перестановка таймаута обязательна: foreground-срок хода в фоне больше
+      // не действует, и без `retime` переведённый процесс умер бы посреди
+      // фонового прогона. Нет метода — точка исполнения не умеет (старый
+      // исполнитель, протокол < 10): переводить нельзя, прогон остаётся
+      // foreground. Ошибку соберёт реестр (`DETACH_FAILED`).
+      const retime = handle.retime;
+      if (typeof retime !== 'function') {
+        throw new Error(
+          'перевод в фон недоступен: точка исполнения не умеет переставлять таймаут процесса',
+        );
+      }
+
       unsubscribeParent();
       released = true;
       output.release();
 
       let started: { runId: string; processId: string; logPath: string };
       try {
+        // Снимаем foreground-таймаут **до** `adopt`: с этой секунды процесс
+        // живёт по правилам фонового прогона, а не хода.
+        await retime.call(handle, 0);
         started = await service.adopt({
           sessionId,
           ...(input.ctx.projectId ? { projectId: input.ctx.projectId } : {}),
@@ -408,11 +430,15 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
           title: input.displayCommand,
         });
       } catch (err) {
-        // Перевести не удалось (лимит прогонов и т.п.) — возвращаемся в
-        // foreground: процесс жив, вывод снова читает тул.
+        // Перевести не удалось (лимит прогонов, сбой перестановки таймаута) —
+        // возвращаемся в foreground: процесс жив, вывод снова читает тул.
         released = false;
         output.resume();
         subscribeParent();
+        // Возвращаем прежний срок, чтобы поведение не изменилось. Ошибка
+        // восстановления не важнее исходной: прогон всё равно foreground, а
+        // повтор сработает по своей причине.
+        await Promise.resolve(retime.call(handle, input.timeoutMs)).catch(() => {});
         throw err;
       }
 

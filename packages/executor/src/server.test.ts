@@ -365,7 +365,7 @@ describe('исполнитель: лимиты и служебные эндпо�
       };
       limits?: { timeoutMs: number; maxOutputBytes: number };
     };
-    expect(body.protocol).toBe(9);
+    expect(body.protocol).toBe(10);
     expect(body.toolchain.git).toBe('git version 2.39.2');
     expect(body.os.length).toBeGreaterThan(0);
     expect(body.arch.length).toBeGreaterThan(0);
@@ -400,7 +400,7 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(body.limits?.timeoutMs).toBe(86_400_000);
     expect(body.limits?.maxOutputBytes).toBe(10 * 1024 * 1024);
     // Поле `limits` аддитивное: из-за него версия не повышается (текущая — 9).
-    expect(body.protocol).toBe(9);
+    expect(body.protocol).toBe(10);
     expect(body.features?.background).toBe(true);
     expect(body.features?.secrets).toBe(true);
     expect(body.features?.mcpAttachments).toBe(true);
@@ -435,7 +435,7 @@ describe('исполнитель: лимиты и служебные эндпо�
     expect(res.status).toBe(200);
     const body = (await res.json()) as { status: string; protocol: number };
     expect(body.status).toBe('ok');
-    expect(body.protocol).toBe(9);
+    expect(body.protocol).toBe(10);
   });
 });
 
@@ -579,7 +579,7 @@ describe('исполнитель: PTY-сессии (протокол 8)', () => 
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { protocol: number; features?: { pty?: boolean } };
-    expect(body.protocol).toBe(9);
+    expect(body.protocol).toBe(10);
     expect(body.features?.pty).toBe(true);
   });
 

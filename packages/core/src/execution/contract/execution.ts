@@ -227,7 +227,13 @@ export function describeExecutionPort(name: string, make: ExecutionPortHarnessFa
  *   - остановка через `stop()` — процесс завершается по сигналу;
  *   - таймаут (`timeoutMs`) — процесс убивается по таймеру;
  *   - `timeoutMs: 0` — без таймаута: процесс живёт и завершается сам;
+ *   - `retime(0)` — срок снимается (процесс переживает исходный таймаут);
+ *   - `retime(ms)` — срок переставляется (процесс убивается к новому сроку);
  *   - `processId`/`pid` заполнены, `exited` резолвится один раз.
+ *
+ * Проверки `retime` выполняются только там, где метод есть: реализация без
+ * него (старый исполнитель, протокол < 10) помечается «не умеет» — вызывающий
+ * обязан отказаться от перевода прогона в фон.
  *
  * Блок подключается только там, где метод есть: реализация без
  * `spawnBackground` этот набор не проходит (проверки пропускаются).
@@ -318,6 +324,52 @@ export function describeBackgroundExecutionChecks(
       const exit = await bg.exited;
       expect(exit.exitCode).toBe(0);
       expect(exit.signal).toBeNull();
+    });
+
+    it('retime(0) — таймаут снят: процесс переживает исходный срок', async () => {
+      const { port } = await make();
+      if (typeof port.spawnBackground !== 'function') return;
+      const bg = await port.spawnBackground({
+        command: { kind: 'shell', command: 'sleep 1.2; printf alive' },
+        timeoutMs: 600,
+      });
+      if (typeof bg.retime !== 'function') {
+        // Реализация не умеет переставлять срок — проверка неприменима,
+        // но процесс нужно убрать, чтобы тест не оставлял хвостов.
+        bg.stop('SIGKILL');
+        await bg.exited;
+        return;
+      }
+      await bg.retime(0);
+      const exit = await bg.exited;
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal).toBeNull();
+      // Процесс жил дольше исходного срока (600 мс) и завершился сам.
+      expect(exit.durationMs).toBeGreaterThanOrEqual(900);
+    });
+
+    it('retime(200) — срок переставлен: процесс убит примерно к новому сроку', async () => {
+      const { port } = await make();
+      if (typeof port.spawnBackground !== 'function') return;
+      const bg = await port.spawnBackground({
+        command: { kind: 'shell', command: 'sleep 5' },
+        timeoutMs: 60_000,
+      });
+      if (typeof bg.retime !== 'function') {
+        bg.stop('SIGKILL');
+        await bg.exited;
+        return;
+      }
+      const startedAt = Date.now();
+      await bg.retime(200);
+      const exit = await bg.exited;
+      const elapsed = Date.now() - startedAt;
+      expect(exit.signal).not.toBeNull();
+      expect(exit.exitCode).toBeNull();
+      // Без перестановки процесс жил бы 60 с (тест бы не уложился): запас —
+      // на опрос состояния у удалённого исполнителя (500 мс).
+      expect(elapsed).toBeGreaterThanOrEqual(150);
+      expect(elapsed).toBeLessThan(5_000);
     });
   });
 }

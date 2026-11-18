@@ -1095,6 +1095,9 @@ export class InlineExecutionPort implements ExecutionPort {
    *   `stop()`), `maxOutputBytes` не применяется (вывод стримится);
    * - `timeoutMs > 0` — таймер, убивающий **группу** процессов (`SIGTERM`,
    *   затем `SIGKILL` через 5 с); в `exited` это видно по `signal`;
+   * - `retime(ms)` — перестановка срока уже запущенного процесса (`0` — снять
+   *   таймаут): нужна при переводе блокирующего прогона в фон, иначе команда
+   *   умерла бы через foreground-лимит;
    * - `stop(signal)` гасит группу (`kill(-pid)`), а не только оболочку:
    *   потомки shell-формы не должны переживать остановку;
    * - `exited` разрешается по `exit` (+ дренаж), а не по `close`.
@@ -1166,6 +1169,10 @@ export class InlineExecutionPort implements ExecutionPort {
     // Процесс вышел (или не запустился): группа распущена, сигналы больше не
     // шлём (pid мог быть переиспользован).
     let finished = false;
+    // Таймаут уже сработал (SIGTERM отправлен, идёт grace до SIGKILL):
+    // переставлять срок бессмысленно — процесс уже убивается, «оживлять» его
+    // нельзя, а повторное убийство не нужно.
+    let timeoutFired = false;
 
     const clearTimers = (): void => {
       if (timeoutTimer) {
@@ -1176,6 +1183,37 @@ export class InlineExecutionPort implements ExecutionPort {
         clearTimeout(killTimer);
         killTimer = null;
       }
+    };
+
+    /** Срабатывание таймаута: материал, `SIGTERM`, через 5 с — `SIGKILL`. */
+    const fireTimeout = (): void => {
+      timeoutFired = true;
+      timeoutTimer = null;
+      // Материал гасится вместе с процессом: ключ не переживает остановку
+      // по таймауту.
+      void cleanupMaterial();
+      killProcessTree(child, 'SIGTERM');
+      if (!killTimer) {
+        killTimer = setTimeout(() => killProcessTree(child, 'SIGKILL'), BACKGROUND_KILL_GRACE_MS);
+        killTimer.unref?.();
+      }
+    };
+
+    /**
+     * Завести (или снять) таймер процесса.
+     *
+     * `0` — таймаута нет: прежний таймер снимается, новый не заводится.
+     * `> 0` — отсчёт **от момента вызова** (`retime` переставляет срок, а не
+     * добавляет второй таймер).
+     */
+    const armTimeout = (timeoutMs: number): void => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+      if (timeoutMs <= 0) return;
+      timeoutTimer = setTimeout(fireTimeout, timeoutMs);
+      timeoutTimer.unref?.();
     };
 
     const output = createBackgroundOutput(child);
@@ -1225,17 +1263,7 @@ export class InlineExecutionPort implements ExecutionPort {
     });
 
     const timeoutMs = req.timeoutMs ?? 0;
-    if (timeoutMs > 0) {
-      timeoutTimer = setTimeout(() => {
-        // Материал гасится вместе с процессом: ключ не переживает остановку
-        // по таймауту.
-        void cleanupMaterial();
-        killProcessTree(child, 'SIGTERM');
-        killTimer = setTimeout(() => killProcessTree(child, 'SIGKILL'), BACKGROUND_KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, timeoutMs);
-      timeoutTimer.unref?.();
-    }
+    armTimeout(timeoutMs);
 
     const stop = (signal: NodeJS.Signals = 'SIGTERM'): void => {
       // Материал гасится **всегда**: остановленный процесс не должен
@@ -1248,12 +1276,30 @@ export class InlineExecutionPort implements ExecutionPort {
       killProcessTree(child, signal);
     };
 
+    /**
+     * Переставить таймаут запущенного процесса (detach в фон).
+     *
+     * - процесс уже вышел (`finished`) — no-op: переставлять нечему;
+     * - таймаут уже сработал (`timeoutFired`) — no-op: убийство идёт, нового
+     *   не заводим и процесс не «оживляем»;
+     * - иначе — снимаем прежний таймер и заводим новый от момента вызова
+     *   (`0` — снимаем совсем).
+     *
+     * Материал секретов при снятом таймауте не трогается: очистка остаётся
+     * прежней (выход процесса, `stop()`).
+     */
+    const retime = (nextTimeoutMs: number): void => {
+      if (finished || timeoutFired) return;
+      armTimeout(nextTimeoutMs);
+    };
+
     return {
       processId: `proc_${randomUUID()}`,
       pid: child.pid ?? undefined,
       output,
       exited,
       stop,
+      retime,
     };
   }
 }

@@ -574,13 +574,7 @@ export class BackgroundExecService {
       });
 
       // Таймаут процесса: `SIGTERM`, через 5 с — `SIGKILL`.
-      const timeoutMs = input.timeoutMs ?? 0;
-      if (timeoutMs > 0) {
-        entry.timeoutTimer = setTimeout(() => {
-          this._terminate(entry, 'SIGTERM');
-        }, timeoutMs);
-        entry.timeoutTimer.unref?.();
-      }
+      this._armTimeout(entry, input.timeoutMs ?? 0);
 
       return { ok: true, processId: id, pid: child.pid ?? undefined };
     } finally {
@@ -654,6 +648,25 @@ export class BackgroundExecService {
     if (!entry) return false;
     this._cleanupMaterial(entry);
     if (entry.status === 'running') this._terminate(entry, signal);
+    return true;
+  }
+
+  /**
+   * Переставить таймаут уже запущенного фонового процесса (протокол 10).
+   *
+   * `0` — снять таймаут (процесс живёт, пока жив), `> 0` — отсчёт **от
+   * момента вызова**. Возвращает `false`, если процесса нет, он уже завершён
+   * или уже останавливается (`stop()`/таймаут сработал): переставлять нечему,
+   * а «оживлять» убиваемый процесс нельзя.
+   *
+   * Материал секретов вызова не трогается: очистка остаётся прежней (выход,
+   * `stop()`, таймаут).
+   */
+  retime(id: string, timeoutMs: number): boolean {
+    const entry = this._entries.get(id);
+    if (!entry) return false;
+    if (entry.status !== 'running' || entry.exitSeen || entry.stopRequested) return false;
+    this._armTimeout(entry, timeoutMs);
     return true;
   }
 
@@ -807,6 +820,25 @@ export class BackgroundExecService {
       clearTimeout(entry.killTimer);
       entry.killTimer = undefined;
     }
+  }
+
+  /**
+   * Завести (или снять) таймер процесса.
+   *
+   * `0` — таймаута нет: прежний таймер снимается, новый не заводится.
+   * `> 0` — отсчёт **от момента вызова**: перестановка срока не добавляет
+   * второй таймер. Эскалация `SIGKILL` остаётся в `_terminate`.
+   */
+  private _armTimeout(entry: BackgroundEntry, timeoutMs: number): void {
+    if (entry.timeoutTimer) {
+      clearTimeout(entry.timeoutTimer);
+      entry.timeoutTimer = undefined;
+    }
+    if (timeoutMs <= 0) return;
+    entry.timeoutTimer = setTimeout(() => {
+      this._terminate(entry, 'SIGTERM');
+    }, timeoutMs);
+    entry.timeoutTimer.unref?.();
   }
 
   /**
