@@ -3862,7 +3862,11 @@ describe('run-cycle — фоновый execute_shell из ребёнка', () =>
   it('запись реестра несёт sessionId ребёнка и проект родителя', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
-    const spawn = vi.fn(async () => ({
+    const spawn = vi.fn(async (_input: {
+      sessionId?: string;
+      projectId?: string;
+      command?: string;
+    }) => ({
       runId: 'bgr_bg',
       processId: 'proc_bg',
       logPath: 'processes/bgr_bg.log',
