@@ -496,10 +496,11 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
 
   if (first === 'detach' && adoptedState.value) {
     // Detach первым: немедленный `tool_result` «переведено в фон»; судьба
-    // процесса — фоновая (уведомление придёт по завершении).
+    // процесса — фоновая (уведомление придёт по завершении). Причина перевода —
+    // инициатива пользователя, поэтому текст отдельный (`background.detached.*`).
     const started = adoptedState.value;
     return {
-      content: sm('background.started.process', { id: started.processId, log: started.logPath }),
+      content: sm('background.detached.process', { id: started.processId, log: started.logPath }),
       metadata: {
         process_id: started.processId,
         background_run_id: started.runId,
@@ -507,7 +508,7 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
         status: 'running',
         detached: true,
         command: input.displayCommand,
-        i18n: i18nMeta('background.started.process', { id: started.processId, log: started.logPath }),
+        i18n: i18nMeta('background.detached.process', { id: started.processId, log: started.logPath }),
       },
     };
   }

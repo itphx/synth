@@ -269,8 +269,9 @@ export interface SessionRoutesDeps {
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>;
   orchestrator: ChatOrchestrator;
   /**
-   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон перед постановкой
-   * steer. Шов для тестов; по умолчанию — `autoDetachOnSteer` с живым
+   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон при
+   * вмешательстве пользователя (steer/interrupt, сообщение в очередь занятой
+   * сессии). Шов для тестов; по умолчанию — `autoDetachOnSteer` с живым
    * мастер-выключателем оркестратора (`background.enabled`).
    */
   autoDetachOnSteer?: (req: {
@@ -1059,13 +1060,14 @@ export function createSessionRoutes(
   const agentRegistry = orchestrator.agentRegistry;
 
   /**
-   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
+   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон при вмешательстве
+   * пользователя (steer/interrupt) и при сообщении в занятую сессию (queue).
    *
    * Мастер-выключатель (`background.enabled`) читается **живым** геттером
    * оркестратора: runtime-настройка действует без рестарта. Ошибка перевода не
    * пробрасывается — приём сообщения важнее (причина уходит в лог).
    */
-  const detachBlockingOnSteer = async (sessionId: string): Promise<void> => {
+  const detachBlockingRuns = async (sessionId: string): Promise<void> => {
     const enabled = typeof orchestrator.isBackgroundEnabled === 'function'
       ? orchestrator.isBackgroundEnabled()
       : true;
@@ -1079,7 +1081,7 @@ export function createSessionRoutes(
       if (!orchestrator.activeRuns) return;
       await autoDetachOnSteer({ orchestrator, sessionId, enabled, eventBus });
     } catch (err) {
-      warning('ROUTES', `авто-detach при steer не удался: ${err instanceof Error ? err.message : String(err)}`);
+      warning('ROUTES', `авто-detach при вмешательстве не удался: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -3377,10 +3379,16 @@ export function createSessionRoutes(
 
     // ADR-111 §detach: пользователь вмешивается в **занятую** сессию — сначала
     // переводим блокирующие прогоны (`execute_shell` foreground / `task`) в фон,
-    // иначе steer ждал бы завершения команды/саб-агента. Пустой реестр — no-op,
+    // иначе steer ждал бы завершения команды/саб-агента. Условие — активный ход
+    // и режим вмешательства (`steer`/`interrupt`); текст не требуется —
+    // прерывание без сообщения тоже вмешательство. Пустой реестр — no-op,
     // ошибка перевода сообщение не блокирует (мастер-выключатель —
     // `background.enabled`, живой геттер оркестратора).
-    if (turnActive) await detachBlockingOnSteer(sessionId);
+    const detachBeforeHandle = sessionTurnActive && mode !== 'queue';
+    if (detachBeforeHandle) await detachBlockingRuns(sessionId);
+    // Сообщение в очередь занятой сессии ждёт завершения хода — detach делается
+    // **после** успешной постановки (см. ветку `queue` ниже).
+    const detachAfterQueue = sessionTurnActive && mode === 'queue';
 
     // PROP-132: контекст терминала доставляется **до** вопроса — он должен
     // попасть в историю раньше вопроса (`ord` контекста < `ord` вопроса),
@@ -3630,6 +3638,10 @@ export function createSessionRoutes(
             error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
           }, 429);
         }
+        // ADR-111 §detach: сообщение принято в очередь занятого ребёнка — его
+        // блокирующие прогоны держат цикл саб-агента, поэтому переводим их в
+        // фон (мастер-выключатель — общий, `background.enabled`).
+        if (detachAfterQueue) await detachBlockingRuns(sessionId);
         // ADR-126 §2: user-directed хвост — в историю сразу.
         await persistUserDirected();
         const fresh = await sessionManager.getSession(sessionId);
@@ -3664,6 +3676,11 @@ export function createSessionRoutes(
           error: { code: 'QUEUE_FULL', message: messages.queueFull(c, 5) },
         }, 429);
       }
+
+      // ADR-111 §detach: сообщение принято в очередь занятой сессии — ход всё
+      // равно ждал бы завершения блокирующего прогона, поэтому переводим его в
+      // фон. На отказе (`429 QUEUE_FULL`) ничего не трогаем.
+      if (detachAfterQueue) await detachBlockingRuns(sessionId);
 
       // ADR-115: сообщение принято — фиксируем ссылки на объекты вложений.
       await registerAttachmentRefs(deps.attachments?.blobRefs, message.id, messageParts);

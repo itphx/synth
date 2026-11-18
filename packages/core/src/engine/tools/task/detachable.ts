@@ -347,17 +347,19 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
 
   // Detach первым: немедленный `tool_result` «переведено в фон». Дальнейшая
   // судьба прогона — фоновая (уведомление родителю придёт по завершении).
+  // Причина перевода — инициатива пользователя, поэтому текст отдельный
+  // (`background.detached.subagent`).
   // `record` заполняется в `detach()` до `wakeDetach()`, поэтому здесь он уже
   // есть (геттер — чтобы TS видел присваивание из замыкания).
   const detachedRunId = (): string | undefined => record?.id;
   return {
-    content: sm('background.started.subagent', { id: childSessionId }),
+    content: sm('background.detached.subagent', { id: childSessionId }),
     metadata: {
       child_session_id: childSessionId,
       status: 'running',
       background_run_id: detachedRunId(),
       detached: true,
-      i18n: i18nMeta('background.started.subagent', { id: childSessionId }),
+      i18n: i18nMeta('background.detached.subagent', { id: childSessionId }),
     },
   };
 }

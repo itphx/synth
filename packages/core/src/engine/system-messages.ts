@@ -793,6 +793,14 @@ export const SYSTEM_MESSAGES = {
     'Command started in the background (processId: {id}). Output: {log}. You will be notified automatically.',
   'background.started.subagent':
     'The subagent is running in the background (sessionID: {id}). You will be notified automatically.',
+  // Перевод в фон **по инициативе пользователя** (кнопка «В фон», `ctrl+b`,
+  // авто-detach при вмешательстве): это не агентский запуск (`background: true`),
+  // поэтому текст объясняет причину перевода. Другие причины перевода получают
+  // собственный ключ — не переиспользовать пользовательский текст.
+  'background.detached.process':
+    "Execution moved to the background at the user's request (processId: {id}). Output: {log}. You will be notified automatically.",
+  'background.detached.subagent':
+    "The subagent's execution moved to the background at the user's request (sessionID: {id}). You will be notified automatically.",
   'process.deps_unavailable': 'Background processes are unavailable in this build',
   'process.background_limit':
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',

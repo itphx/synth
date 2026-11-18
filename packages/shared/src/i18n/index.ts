@@ -574,6 +574,10 @@ export const ENGINE_MESSAGE_KEYS = [
   // поведения («не опрашивай статус») — в системном блоке `background`.
   'background.started.process',
   'background.started.subagent',
+  // ADR-111 §detach: перевод в фон **по инициативе пользователя** — отдельные
+  // ключи (причина перевода отличается от агентского `background: true`).
+  'background.detached.process',
+  'background.detached.subagent',
   'process.deps_unavailable',
   'process.background_limit',
   'process.background_unsupported',
@@ -1235,6 +1239,8 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'question.deps_unavailable': [],
   'background.started.process': ["id","log"],
   'background.started.subagent': ["id"],
+  'background.detached.process': ["id","log"],
+  'background.detached.subagent': ["id"],
   'process.deps_unavailable': [],
   'process.background_limit': ["limit"],
   'process.background_unsupported': [],

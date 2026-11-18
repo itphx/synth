@@ -209,9 +209,12 @@ describe('task/detachable — перевод идущего прогона в ф
       }),
     ]);
 
-    // Блокирующее ожидание проснулось: немедленный `tool_result`.
+    // Блокирующее ожидание проснулось: немедленный `tool_result` с причиной
+    // перевода — инициатива пользователя (отдельный ключ, не агентский запуск).
     const toolResult = await toolPromise;
     expect(toolResult.isError).toBeFalsy();
+    expect(toolResult.content).toContain("moved to the background at the user's request");
+    expect(toolResult.content).toContain(`sessionID: ${child.id}`);
     expect(toolResult.metadata).toMatchObject({
       child_session_id: child.id,
       status: 'running',

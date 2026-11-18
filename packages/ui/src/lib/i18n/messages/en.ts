@@ -3883,6 +3883,10 @@ export const dict = {
     'Command started in the background (processId: {id}). Output: {log}. You will be notified automatically.',
   'background.started.subagent':
     'The subagent is running in the background (sessionID: {id}). You will be notified automatically.',
+  'background.detached.process':
+    "Execution moved to the background at the user's request (processId: {id}). Output: {log}. You will be notified automatically.",
+  'background.detached.subagent':
+    "The subagent's execution moved to the background at the user's request (sessionID: {id}). You will be notified automatically.",
   'process.deps_unavailable': 'Background processes are unavailable in this build',
   'process.background_limit':
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
