@@ -2453,6 +2453,19 @@ export class ChatOrchestrator {
   }
 
   /**
+   * Этап 1 roadmap 0.13 (блок 4): живое значение мастер-выключателя фоновой
+   * работы (`background.enabled`).
+   *
+   * Читает живой геттер настроек (runtime-тумблер `/api/v2/settings/background`
+   * применяется без рестарта); нет геттера — снимок конфига.
+   */
+  isBackgroundEnabled(): boolean {
+    return this._getBackgroundEnabled
+      ? this._getBackgroundEnabled()
+      : this._backgroundEnabled;
+  }
+
+  /**
    * ADR-090: реестр фильтров LLM-вызовов инстанса.
    *
    * Тот же экземпляр, что видят все gateway-точки (ход сессии, пул провайдеров,

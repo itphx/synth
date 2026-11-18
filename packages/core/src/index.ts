@@ -2701,7 +2701,8 @@ export type {
 } from './server/routes/pipeline-project-routes.js';
 // PROP-096/097: HTTP-контур единого реестра фоновых прогонов (список,
 // деталь, лог, остановка, удаление).
-export { createProcessRoutes } from './server/routes/processes.js';
+export { createProcessRoutes, toBlockingRunDto } from './server/routes/processes.js';
+export type { BlockingRunDto } from './server/routes/processes.js';
 // PROP-132 (Ф3б): HTTP-контур интерактивных терминалов (список, создание,
 // снимок, правка, закрытие, вывод, NDJSON-поток, ввод, размер).
 export { createTerminalRoutes } from './server/routes/terminals.js';

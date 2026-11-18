@@ -48,6 +48,7 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
+  toBlockingRunDto,
   // PROP-132 (Ф3б): HTTP-контур терминалов (сервис собирается в `deps.ts`).
   createTerminalRoutes,
   // PROP-132 (Ф3в): мастер-выключатель терминалов (`/api/v2/settings/terminal`).
@@ -693,6 +694,32 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         background: deps.backgroundService,
         processes: deps.processService,
         sessionManager,
+        // ADR-111 §detach: блокирующие (foreground) прогоны видны во вкладке
+        // «Процессы» и останавливаются отдельно. Seam'ы читают **живой**
+        // реестр оркестратора (ленивый геттер, не снимок).
+        getBlocking: (sessionIds) =>
+          orchestrator.activeRuns
+            .listForSessions(sessionIds)
+            .filter((run) => !!run.sessionId)
+            .map((run) => toBlockingRunDto(run)),
+        stopBlocking: async (sessionIds, id) => {
+          const run = orchestrator.activeRuns.find(sessionIds, id);
+          if (typeof run?.stop !== 'function') return false;
+          await run.stop();
+          return true;
+        },
+        readBlockingLog: async (sessionIds, id, logOpts) => {
+          const run = orchestrator.activeRuns.find(sessionIds, id);
+          if (!run?.logPath || !deps.processService) return null;
+          const segment = await deps.processService.readLogAtPath(run.logPath, logOpts);
+          if (!segment) return null;
+          return {
+            output: segment.content,
+            truncated: segment.truncated === true,
+            logPath: run.logPath,
+            size: segment.totalBytes,
+          };
+        },
       },
       {
         isAllowed: createBackendProcessAccess({ auth, projectStore }),

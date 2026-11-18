@@ -74,6 +74,8 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
   }
 
   const title = params.description || params.subagent_type;
+  /** Время старта блокирующего прогона (для вкладки «Процессы»). */
+  const startedAt = Date.now();
 
   // ─── Свой сигнал отмены с начала прогона ─────────────────────────────
   // До detach ребёнок умирает от родительского «Стопа» (подписка ниже), после
@@ -297,6 +299,10 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
     id: childSessionId,
     kind: 'subagent',
     title,
+    sessionId: parentSessionId,
+    childSessionId,
+    startedAt,
+    stop: () => childAbort.abort(),
     detach,
   });
 

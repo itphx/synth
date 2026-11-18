@@ -34,6 +34,7 @@ import type {
 } from '@itphx/synth-shared';
 import type { BackgroundRunRepository } from '../../storage/ports/background-run-repository.js';
 import type { BackgroundRunService } from '../../engine/background/service.js';
+import type { ActiveRunHandle } from '../../engine/background/active-runs.js';
 import type { ProcessService } from '../../engine/processes/service.js';
 import type { ProcessLogStream } from '../../engine/processes/types.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -93,8 +94,76 @@ export interface ProcessRoutesDeps {
   background: BackgroundRunService;
   /** Сервис фоновых шелл-процессов (PROP-097) — чтение лога. */
   processes: ProcessService;
-  /** Загрузка сессии-владельца прогона (нужна для проверки доступа). */
-  sessionManager: Pick<SessionManager, 'getSession'>;
+  /**
+   * Загрузка сессии-владельца прогона (нужна для проверки доступа).
+   *
+   * `listSessions` — необязательный шов для блокирующих прогонов: их записи
+   * в реестре фоновых прогонов может ещё не быть, поэтому сессии-кандидаты
+   * перечисляются, а не берутся из списка записей.
+   */
+  sessionManager: Pick<SessionManager, 'getSession'> &
+    Partial<Pick<SessionManager, 'listSessions'>>;
+  /**
+   * Снимок **блокирующих** прогонов (ADR-111 §detach) по переданным сессиям.
+   *
+   * Передаются только сессии, к которым у пользователя есть доступ: правило
+   * решает вызывающий (граничный guard/список), seam лишь отдаёт снимок
+   * реестра оркестратора. Не задан — `include=blocking` даёт пустой массив.
+   */
+  getBlocking?: (sessionIds: readonly string[]) => BlockingRunDto[];
+  /**
+   * Остановить блокирующий прогон. `false` — остановить отсюда нельзя
+   * (нет хэндла/уже завершён), роут отвечает `409 notStoppable`.
+   */
+  stopBlocking?: (sessionIds: readonly string[], id: string) => Promise<boolean>;
+  /**
+   * Отрезок лога блокирующего прогона (live-лог foreground-команды).
+   * `null` — записи/лога нет (404).
+   */
+  readBlockingLog?: (
+    sessionIds: readonly string[],
+    id: string,
+    opts: { offset?: number; limit?: number },
+  ) => Promise<{ output: string; truncated: boolean; logPath?: string; size?: number } | null>;
+}
+
+/**
+ * DTO блокирующего прогона (foreground `execute_shell`/`task`) — ADR-111 §detach.
+ *
+ * Аддитивная часть ответа `GET /api/v2/processes?include=blocking`: записи в
+ * реестре фоновых прогонов у таких прогонов ещё нет (они идут внутри хода),
+ * но пользователь должен видеть их во вкладке «Процессы».
+ */
+export interface BlockingRunDto {
+  id: string;
+  kind: 'process' | 'subagent';
+  sessionId: string;
+  title?: string;
+  processId?: string;
+  childSessionId?: string;
+  logPath?: string;
+  /** Время старта, ISO-8601. */
+  startedAt: string;
+}
+
+/**
+ * Сводка хэндла активного прогона → DTO вкладки «Процессы».
+ *
+ * `sessionId` у хэндла необязателен (аддитивное поле контракта), но DTO его
+ * требует: прогон без владельца в выдачу не попадает — вызывающий фильтрует
+ * такие хэндлы.
+ */
+export function toBlockingRunDto(run: ActiveRunHandle): BlockingRunDto {
+  return {
+    id: run.id,
+    kind: run.kind,
+    sessionId: run.sessionId ?? '',
+    ...(run.title ? { title: run.title } : {}),
+    ...(run.processId ? { processId: run.processId } : {}),
+    ...(run.childSessionId ? { childSessionId: run.childSessionId } : {}),
+    ...(run.logPath ? { logPath: run.logPath } : {}),
+    startedAt: new Date(run.startedAt ?? Date.now()).toISOString(),
+  };
 }
 
 export interface ProcessRoutesOptions {
@@ -163,11 +232,14 @@ function parseBoundedInt(raw: string | undefined, fallback: number, max: number)
  *
  * Маршруты (все под `auth.requireAuth`):
  * - `GET /` — список прогонов (фильтры `sessionId`/`projectId`/`kind`/
- *   `status`/`limit`; выдача фильтруется по доступу к сессии-владельцу);
+ *   `status`/`limit`; выдача фильтруется по доступу к сессии-владельцу;
+ *   `include=blocking` добавляет блокирующие прогоны — ADR-111 §detach);
  * - `GET /:id` — деталь прогона;
  * - `GET /:id/logs` — отрезок лога фонового процесса;
  * - `POST /:id/stop` — остановить прогон;
- * - `DELETE /:id` — удалить терминальную запись реестра.
+ * - `DELETE /:id` — удалить терминальную запись реестра;
+ * - `GET /blocking/:id/logs` — отрезок live-лога блокирующего прогона;
+ * - `POST /blocking/:id/stop` — остановить блокирующий прогон.
  */
 export function createProcessRoutes(
   auth: ProcessRoutesAuth,
@@ -240,12 +312,95 @@ export function createProcessRoutes(
   const guardedProcess = (c: Context): BackgroundRunRecord =>
     c.get(PROCESS_KEY as never) as BackgroundRunRecord;
 
+  /** 404 — лог не найден. */
+  const notFoundLog = (c: Context) =>
+    c.json({ error: { code: 'NOT_FOUND', message: messages.logNotFound(c) } }, 404);
+
+  // ─── Блокирующие прогоны (ADR-111 §detach) ────────────────────────────────
+  // Записей в реестре фоновых прогонов у них ещё нет (прогон идёт внутри
+  // хода), поэтому сессии-кандидаты перечисляются `listSessions`, а правило
+  // доступа — то же, что у списка (`isAllowed`). Скоуп запроса (`sessionId`/
+  // `projectId`) сужает перечисление — как у списка прогонов.
+  const BLOCKING_KEY = 'guardedBlockingRun';
+  const BLOCKING_SCOPE_KEY = 'guardedBlockingScope';
+
+  /** Сессии-кандидаты (скоуп запроса соблюдается). */
+  const loadSessions = async (c: Context): Promise<Session[]> => {
+    const sessionId = c.req.query('sessionId')?.trim() || undefined;
+    if (sessionId) {
+      const session = await deps.sessionManager.getSession(sessionId);
+      return session ? [session] : [];
+    }
+    const list = deps.sessionManager.listSessions;
+    if (typeof list !== 'function') return [];
+    const projectId = c.req.query('projectId')?.trim() || undefined;
+    return list.call(deps.sessionManager, projectId ? { projectId } : undefined);
+  };
+
+  /** Видимые пользователю сессии (доступ `read`) — те же правила, что у списка. */
+  const listVisibleSessions = async (c: Context, userId: string): Promise<Session[]> => {
+    const sessions = await loadSessions(c);
+    const visible: Session[] = [];
+    for (const session of sessions) {
+      if (await isAllowed(session, c, userId, 'read')) visible.push(session);
+    }
+    return visible;
+  };
+
+  /** Снимок блокирующих прогонов по видимым сессиям (для `include=blocking`). */
+  const listBlocking = async (c: Context, userId: string): Promise<BlockingRunDto[]> => {
+    if (!deps.getBlocking) return [];
+    const sessions = await listVisibleSessions(c, userId);
+    return deps.getBlocking(sessions.map((session) => session.id));
+  };
+
+  /**
+   * ГРАНИЧНАЯ проверка доступа к блокирующему прогону (инвариант 16).
+   *
+   * `id` прогона существует только в памяти реестра, поэтому запись ищется по
+   * видимым (`read`) сессиям: нет записи → 404 (чужой прогон неотличим от
+   * отсутствующего), запись видна, но нужного вида доступа нет (например,
+   * `VIEWER` не может остановить) → 403. В обработчиках проверок нет.
+   */
+  const blockingGuard = (access: SessionAccessKind): Middleware =>
+    createMiddleware(async (c, next) => {
+      const id = c.req.param('id');
+      if (!id || !deps.getBlocking) return notFoundRun(c);
+      const userId = await resolveUserId(c);
+      const sessions = await loadSessions(c);
+      const byId = new Map<string, Session>();
+      const visibleIds: string[] = [];
+      for (const session of sessions) {
+        byId.set(session.id, session);
+        if (await isAllowed(session, c, userId, 'read')) visibleIds.push(session.id);
+      }
+      const run = deps.getBlocking(visibleIds).find((candidate) => candidate.id === id);
+      if (!run) return notFoundRun(c);
+      const session = byId.get(run.sessionId);
+      if (!session) return notFoundSession(c);
+      if (!(await isAllowed(session, c, userId, access))) return forbidden(c);
+      c.set(BLOCKING_KEY as never, run as never);
+      c.set(BLOCKING_SCOPE_KEY as never, visibleIds as never);
+      await next();
+    });
+
+  const guardedBlockingRun = (c: Context): BlockingRunDto =>
+    c.get(BLOCKING_KEY as never) as BlockingRunDto;
+
+  const guardedBlockingScope = (c: Context): string[] =>
+    c.get(BLOCKING_SCOPE_KEY as never) as string[];
+
   // GET / — список фоновых прогонов.
   app.get('/', auth.requireAuth, async (c) => {
     const sessionId = c.req.query('sessionId')?.trim() || undefined;
     const projectId = c.req.query('projectId')?.trim() || undefined;
     const rawKind = c.req.query('kind')?.trim();
     const rawStatus = c.req.query('status')?.trim();
+    // `include=blocking` — добавить блокирующие (foreground) прогоны. Другие
+    // значения не принимаются: иначе клиент молча не получил бы запрошенное.
+    const rawInclude = c.req.query('include')?.trim();
+    if (rawInclude && rawInclude !== 'blocking') return invalidQuery(c);
+    const includeBlocking = rawInclude === 'blocking';
 
     let kind: BackgroundRunKind | undefined;
     if (rawKind) {
@@ -282,7 +437,46 @@ export function createProcessRoutes(
       if (!(await isAllowed(session, c, userId, 'read'))) continue;
       visible.push(record);
     }
-    return c.json({ runs: visible });
+    if (!includeBlocking) return c.json({ runs: visible });
+    // Блокирующие прогоны — видимые сессии по тем же правилам доступа.
+    return c.json({ runs: visible, blocking: await listBlocking(c, userId) });
+  });
+
+  // ─── Блокирующие прогоны (ADR-111 §detach) ────────────────────────────────
+  // Статические `/blocking/...` регистрируются ДО параметрических `/:id/...`:
+  // иначе сегмент `blocking` мог бы быть принят за id прогона.
+
+  // GET /blocking/:id/logs — отрезок live-лога блокирующего прогона.
+  app.get('/blocking/:id/logs', auth.requireAuth, blockingGuard('read'), async (c) => {
+    if (!deps.readBlockingLog) return notFoundLog(c);
+    const run = guardedBlockingRun(c);
+    const scope = guardedBlockingScope(c);
+    const offset = parseBoundedInt(c.req.query('offset'), 0, Number.MAX_SAFE_INTEGER);
+    const limit = parseBoundedInt(c.req.query('limit'), maxLogBytes, maxLogBytes);
+    const log = await deps.readBlockingLog(scope, run.id, { offset, limit });
+    if (!log) return notFoundLog(c);
+    // Форма — как у `GET /:id/logs` (`ProcessLogsResult`): один формат отрезка
+    // на оба контура, второго клиенту учить не нужно.
+    const bytes = Buffer.byteLength(log.output, 'utf-8');
+    const effectiveOffset = log.size !== undefined ? Math.min(offset, log.size) : offset;
+    const nextOffset = effectiveOffset + bytes;
+    return c.json({
+      content: log.output,
+      offset: effectiveOffset,
+      nextOffset,
+      totalBytes: log.size ?? nextOffset,
+      truncated: log.truncated,
+    });
+  });
+
+  // POST /blocking/:id/stop — остановить блокирующий прогон.
+  app.post('/blocking/:id/stop', auth.requireAuth, blockingGuard('write'), async (c) => {
+    const run = guardedBlockingRun(c);
+    const scope = guardedBlockingScope(c);
+    if (!deps.stopBlocking) return conflict(c, messages.notStoppable(c));
+    const stopped = await deps.stopBlocking(scope, run.id);
+    if (!stopped) return conflict(c, messages.notStoppable(c));
+    return c.json({ stopped: true });
   });
 
   // GET /:id/logs — отрезок лога фонового процесса.

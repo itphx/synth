@@ -199,7 +199,14 @@ describe('task/detachable — перевод идущего прогона в ф
     const detachResult = await registry.detachAll(parent.id);
     expect(detachResult.failed).toEqual([]);
     expect(detachResult.detached).toEqual([
-      { id: child.id, kind: 'subagent', title: 'Изучить репозиторий' },
+      expect.objectContaining({
+        id: child.id,
+        kind: 'subagent',
+        title: 'Изучить репозиторий',
+        sessionId: parent.id,
+        childSessionId: child.id,
+        startedAt: expect.any(Number),
+      }),
     ]);
 
     // Блокирующее ожидание проснулось: немедленный `tool_result`.

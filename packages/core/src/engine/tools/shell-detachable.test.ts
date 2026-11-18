@@ -216,7 +216,16 @@ describe('execute_shell — detach идущего шелла (ADR-113)', () => {
 
     const detached = await h.registry.detachAll('s1');
     expect(detached.failed).toHaveLength(0);
-    expect(detached.detached).toEqual([{ id: 'proc_1', kind: 'process', title: 'npm run dev' }]);
+    expect(detached.detached).toEqual([
+      expect.objectContaining({
+        id: 'proc_1',
+        kind: 'process',
+        title: 'npm run dev',
+        sessionId: 's1',
+        processId: 'proc_1',
+        startedAt: expect.any(Number),
+      }),
+    ]);
 
     const result = await promise;
     expect(result.isError).toBeFalsy();

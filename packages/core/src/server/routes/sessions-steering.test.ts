@@ -10,6 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
+import type { SessionRoutesDeps } from './sessions.js';
 import { SessionManager, EventBus, FileStore } from '../../index.js';
 import type { QueueProcessorManager, ChatOrchestrator } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
@@ -68,7 +69,7 @@ function createMockOrchestrator() {
   };
 }
 
-function createTestApp(tmpDir: string, opts?: { running?: boolean }) {
+function createTestApp(tmpDir: string, opts?: { running?: boolean; extraDeps?: Partial<SessionRoutesDeps> }) {
   const app = new Hono();
   const fileStore = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(fileStore);
@@ -86,6 +87,7 @@ function createTestApp(tmpDir: string, opts?: { running?: boolean }) {
       processMessage: orchestrator.createProcessMessage(),
       orchestrator: orchestrator as unknown as ChatOrchestrator,
       projectStore,
+      ...(opts?.extraDeps ?? {}),
     },
     {},
   );
@@ -357,5 +359,93 @@ describe('POST /api/v2/sessions/:id/abort — снятие очереди инъ
     const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(events).not.toContain('steer.dropped');
+  });
+});
+
+describe('ADR-111 §detach: авто-detach блокирующих прогонов при steer', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-steer-detach-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Активный ход сессии (пометка `currentStream`). */
+  async function markTurnActive(sessionManager: SessionManager, sessionId: string): Promise<void> {
+    await sessionManager.withLock(sessionId, async (s) => {
+      s.currentStream = {
+        streamId: 'stream-live-1',
+        message: 'работа',
+        agentRole: undefined,
+        startedAt: new Date().toISOString(),
+        cancelled: false,
+      };
+      await sessionManager.saveSession(s);
+    });
+  }
+
+  it('steer в занятую сессию вызывает авто-detach (живой мастер-выключатель)', async () => {
+    const autoDetach = vi.fn().mockResolvedValue({ detached: [], failed: [] });
+    const { app, sessionManager } = createTestApp(tmpDir, {
+      running: true,
+      extraDeps: { autoDetachOnSteer: autoDetach },
+    });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    await markTurnActive(sessionManager, session.id);
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'вмешательство', mode: 'steer' }),
+    });
+
+    expect(res.status).toBe(202);
+    expect(autoDetach).toHaveBeenCalledTimes(1);
+    expect(autoDetach).toHaveBeenCalledWith({ sessionId: session.id, enabled: true });
+  });
+
+  it('обычная очередь авто-detach не запускает', async () => {
+    const autoDetach = vi.fn().mockResolvedValue({ detached: [], failed: [] });
+    const { app, sessionManager } = createTestApp(tmpDir, {
+      extraDeps: { autoDetachOnSteer: autoDetach },
+    });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    const controller = new AbortController();
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'обычное сообщение', mode: 'queue' }),
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    expect(res.status).toBe(202);
+    expect(autoDetach).not.toHaveBeenCalled();
+  });
+
+  it('ошибка авто-detach не мешает приёму steer', async () => {
+    const autoDetach = vi.fn().mockRejectedValue(new Error('boom'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { app, sessionManager } = createTestApp(tmpDir, {
+      running: true,
+      extraDeps: { autoDetachOnSteer: autoDetach },
+    });
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    await markTurnActive(sessionManager, session.id);
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'вмешательство', mode: 'steer' }),
+    });
+    warn.mockRestore();
+
+    expect(res.status).toBe(202);
+    const fresh = (await sessionManager.getSession(session.id))!;
+    expect(fresh.steerInbox).toHaveLength(1);
   });
 });

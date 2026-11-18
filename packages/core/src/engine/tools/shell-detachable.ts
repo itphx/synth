@@ -481,6 +481,11 @@ export async function runDetachableShell(input: DetachableShellInput): Promise<T
     id: handle.processId,
     kind: 'process',
     title: input.displayCommand,
+    sessionId,
+    processId: handle.processId,
+    startedAt,
+    ...(liveLog ? { logPath: liveLog.logPath } : {}),
+    stop: () => handle.stop('SIGTERM'),
     detach,
   });
 

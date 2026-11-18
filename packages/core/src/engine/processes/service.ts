@@ -736,6 +736,33 @@ export class ProcessService {
     const truncated = stream === 'combined'
       ? record.metadata?.truncated === true
       : record.metadata?.[`${stream}_truncated`] === true;
+    return this._readLogAt(path, opts, truncated);
+  }
+
+  /**
+   * Отрезок лога по **прямому пути** в blob-хранилище (ADR-113 §detach).
+   *
+   * Нужен для лога блокирующего (foreground) прогона: записи в реестре
+   * фоновых прогонов у него ещё нет — есть только живой лог
+   * (`processes/live/<processId>.log`), путь которого известен хэндлу
+   * активного прогона. Формат и правила усечения — **те же**, что у
+   * {@link logs}: один формат отрезка, второй политики нет.
+   *
+   * `null` — пути нет/файла не существует.
+   */
+  async readLogAtPath(
+    logPath: string,
+    opts: ProcessLogsOptions = {},
+  ): Promise<ProcessLogsResult | null> {
+    return this._readLogAt(logPath, opts, false);
+  }
+
+  /** Общее чтение отрезка лога (реестровый путь и прямой — один формат). */
+  private async _readLogAt(
+    path: string,
+    opts: ProcessLogsOptions,
+    truncated: boolean,
+  ): Promise<ProcessLogsResult | null> {
     const buf = await this._blobs.read(path);
     if (!buf) return null;
     const totalBytes = buf.length;

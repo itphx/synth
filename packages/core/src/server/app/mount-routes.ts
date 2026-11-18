@@ -50,6 +50,7 @@ import {
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
   createProcessRoutes,
+  toBlockingRunDto,
   // PROP-132 (Ф3б): HTTP-контур интерактивных терминалов + сборка сервиса терминалов.
   createTerminalRoutes,
   // PROP-135 Ф6b-1: профили и пулы исполнения — admin-API (`/api/v2/execution/*`).
@@ -1134,6 +1135,34 @@ export function mountStandaloneRoutes(
         background: deps.backgroundService,
         processes: deps.processService,
         sessionManager,
+        // ADR-111 §detach: блокирующие (foreground) прогоны видны во вкладке
+        // «Процессы» и останавливаются отдельно. Seam'ы читают **живой**
+        // реестр оркестратора (ленивый геттер, не снимок): прогоны
+        // регистрируются/снимаются на каждом ходу.
+        getBlocking: (sessionIds) =>
+          orchestrator.activeRuns
+            .listForSessions(sessionIds)
+            .filter((run) => !!run.sessionId)
+            .map((run) => toBlockingRunDto(run)),
+        stopBlocking: async (sessionIds, id) => {
+          const run = orchestrator.activeRuns.find(sessionIds, id);
+          if (typeof run?.stop !== 'function') return false;
+          await run.stop();
+          return true;
+        },
+        readBlockingLog: async (sessionIds, id, logOpts) => {
+          const run = orchestrator.activeRuns.find(sessionIds, id);
+          // Лог есть только у шелла (у саб-агента — история дочерней сессии).
+          if (!run?.logPath || !deps.processService) return null;
+          const segment = await deps.processService.readLogAtPath(run.logPath, logOpts);
+          if (!segment) return null;
+          return {
+            output: segment.content,
+            truncated: segment.truncated === true,
+            logPath: run.logPath,
+            size: segment.totalBytes,
+          };
+        },
       },
       {
         // ADR-089 (standalone): нормализация legacy-владельца локального

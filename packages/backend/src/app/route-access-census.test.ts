@@ -435,6 +435,10 @@ const DECLARED_PARAM_ROUTES: readonly ParamRoute[] = [
   r('GET', '/api/v2/processes/:id/logs', G_PROCESS, [404]),
   r('POST', '/api/v2/processes/:id/stop', G_PROCESS, [404], { body: {} }),
   r('DELETE', '/api/v2/processes/:id', G_PROCESS, [404]),
+  // Блокирующие (foreground) прогоны — ADR-111 §detach: та же граница, что у
+  // фоновых; записи живут в памяти процесса, в этом контуре их нет → 404.
+  r('GET', '/api/v2/processes/blocking/:id/logs', G_PROCESS, [404]),
+  r('POST', '/api/v2/processes/blocking/:id/stop', G_PROCESS, [404], { body: {} }),
 
   // --- Терминалы (PROP-132): право — по правилам проекта терминала ---
   // Терминал принадлежит проекту: чтение — `canReadProject`, мутация —

@@ -44,6 +44,25 @@ export interface ActiveRunHandle {
   /** Человекочитаемое имя (описание задачи / команда) — для UI. */
   title?: string;
   /**
+   * Сессия-владелец прогона (та же, что ключ регистрации). Нужна вне реестра:
+   * DTO вкладки «Процессы» и авто-detach по steer сообщают, чей это прогон.
+   */
+  sessionId?: string;
+  /** Идентификатор процесса у порта исполнения (`kind:'process'`). */
+  processId?: string;
+  /** Идентификатор дочерней сессии саб-агента (`kind:'subagent'`). */
+  childSessionId?: string;
+  /** Путь live-лога блокирующего шелла в blob-порте (если лог уже открыт). */
+  logPath?: string;
+  /** Время старта прогона, мс (эпоха). */
+  startedAt?: number;
+  /**
+   * Остановить блокирующий прогон (до перевода в фон): шелл — `SIGTERM`
+   * процессу, саб-агент — abort дочернего прогона. Не задан — остановить
+   * отсюда нельзя (например, хэндла уже нет).
+   */
+  stop?(): void | Promise<void>;
+  /**
    * Перевести прогон в фон. Реализация обязана быть идемпотентной и
    * пробрасывать ошибку, если перевести нельзя (лимит фоновых прогонов →
    * `BackgroundLimitExceededError`).
@@ -56,6 +75,16 @@ export interface ActiveRunSummary {
   id: string;
   kind: ActiveRunKind;
   title?: string;
+  /** Сессия-владелец прогона. */
+  sessionId?: string;
+  /** Идентификатор процесса (`kind:'process'`). */
+  processId?: string;
+  /** Идентификатор дочерней сессии (`kind:'subagent'`). */
+  childSessionId?: string;
+  /** Путь live-лога блокирующего шелла (если лог вёлся). */
+  logPath?: string;
+  /** Время старта прогона, мс (эпоха). */
+  startedAt?: number;
 }
 
 /** Прогон, который перевести не удалось (остальные при этом переводятся). */
@@ -132,6 +161,44 @@ export class ActiveRunRegistry {
   }
 
   /**
+   * Снимок прогонов нескольких сессий (порядок регистрации внутри каждой).
+   *
+   * Сессии обходятся в переданном порядке; повторный id сессии и повторный
+   * хэндл (один и тот же прогон, зарегистрированный в двух каналах) в выдачу
+   * не дублируются. Доступ к сессиям решает вызывающий — метод ничего не
+   * проверяет.
+   */
+  listForSessions(sessionIds: readonly string[]): ActiveRunHandle[] {
+    const result: ActiveRunHandle[] = [];
+    const seenSessions = new Set<string>();
+    const seenRuns = new Set<ActiveRunHandle>();
+    for (const sessionId of sessionIds) {
+      if (seenSessions.has(sessionId)) continue;
+      seenSessions.add(sessionId);
+      for (const run of this.list(sessionId)) {
+        if (seenRuns.has(run)) continue;
+        seenRuns.add(run);
+        result.push(run);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Прогон по `id` **только среди переданных сессий**.
+   *
+   * Это не «поиск по глобальному id»: доступ решает вызывающий, поэтому прогон
+   * чужой сессии в выдачу не попадает — он выглядит как отсутствующий.
+   */
+  find(sessionIds: readonly string[], id: string): ActiveRunHandle | undefined {
+    for (const sessionId of sessionIds) {
+      const run = this._runs.get(sessionId)?.get(id);
+      if (run) return run;
+    }
+    return undefined;
+  }
+
+  /**
    * Перевести в фон все (или только указанного вида) блокирующие прогоны сессии.
    *
    * Список снимается **один раз** (снимок) — прогон, снятый с регистрации во
@@ -153,6 +220,11 @@ export class ActiveRunRegistry {
           id: run.id,
           kind: run.kind,
           ...(run.title ? { title: run.title } : {}),
+          ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+          ...(run.processId ? { processId: run.processId } : {}),
+          ...(run.childSessionId ? { childSessionId: run.childSessionId } : {}),
+          ...(run.logPath ? { logPath: run.logPath } : {}),
+          ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
         });
       } catch (err) {
         // Отказ — не окончательный: лимит освободится, и повтор сработает.

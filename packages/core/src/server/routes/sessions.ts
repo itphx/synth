@@ -76,6 +76,9 @@ import {
   parseTerminalContext,
 } from '../../engine/terminal/context-message.js';
 import { warning } from '../../logger.js';
+// ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
+import { autoDetachOnSteer } from '../../engine/background/auto-detach.js';
+import type { ActiveRunDetachResult } from '../../engine/background/active-runs.js';
 // ADR-115: вложения сообщений — сервис (blob-хранилище + лимиты) и роуты загрузки/раздачи.
 import {
   AttachmentService,
@@ -265,6 +268,15 @@ export interface SessionRoutesDeps {
   queueManager: QueueProcessorManager;
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>;
   orchestrator: ChatOrchestrator;
+  /**
+   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон перед постановкой
+   * steer. Шов для тестов; по умолчанию — `autoDetachOnSteer` с живым
+   * мастер-выключателем оркестратора (`background.enabled`).
+   */
+  autoDetachOnSteer?: (req: {
+    sessionId: string;
+    enabled: boolean;
+  }) => Promise<ActiveRunDetachResult>;
   contextOptimizer?: ContextOptimizer;
   projectStore?: ProjectStoreLike;
   /**
@@ -1045,6 +1057,31 @@ export function createSessionRoutes(
   /** ADR-102: сборщик `activity` (aborts) — не задан → no-op. */
   const analytics = deps.analytics;
   const agentRegistry = orchestrator.agentRegistry;
+
+  /**
+   * ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
+   *
+   * Мастер-выключатель (`background.enabled`) читается **живым** геттером
+   * оркестратора: runtime-настройка действует без рестарта. Ошибка перевода не
+   * пробрасывается — приём сообщения важнее (причина уходит в лог).
+   */
+  const detachBlockingOnSteer = async (sessionId: string): Promise<void> => {
+    const enabled = typeof orchestrator.isBackgroundEnabled === 'function'
+      ? orchestrator.isBackgroundEnabled()
+      : true;
+    try {
+      if (deps.autoDetachOnSteer) {
+        await deps.autoDetachOnSteer({ sessionId, enabled });
+        return;
+      }
+      // Реестра активных прогонов нет (минимальный оркестратор в тестах/иной
+      // сборке) — переводить нечего.
+      if (!orchestrator.activeRuns) return;
+      await autoDetachOnSteer({ orchestrator, sessionId, enabled, eventBus });
+    } catch (err) {
+      warning('ROUTES', `авто-detach при steer не удался: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   const resolveClient = (): RemoteBackendClient | undefined => deps.getRemoteClient?.() ?? undefined;
   /** Гибридные ветки активны только если геттер передан (в managed — нет). */
@@ -3337,6 +3374,13 @@ export function createSessionRoutes(
     const sessionTurnActive = isTurnActive(session, queueManager)
       || (isSubagentChild && !!session.currentStream);
     const turnActive = !!content && mode !== 'queue' && sessionTurnActive;
+
+    // ADR-111 §detach: пользователь вмешивается в **занятую** сессию — сначала
+    // переводим блокирующие прогоны (`execute_shell` foreground / `task`) в фон,
+    // иначе steer ждал бы завершения команды/саб-агента. Пустой реестр — no-op,
+    // ошибка перевода сообщение не блокирует (мастер-выключатель —
+    // `background.enabled`, живой геттер оркестратора).
+    if (turnActive) await detachBlockingOnSteer(sessionId);
 
     // PROP-132: контекст терминала доставляется **до** вопроса — он должен
     // попасть в историю раньше вопроса (`ord` контекста < `ord` вопроса),

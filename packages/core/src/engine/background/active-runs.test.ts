@@ -173,3 +173,81 @@ describe('ActiveRunRegistry — detachAll', () => {
     expect(run.detach).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('ActiveRunRegistry — снимок нескольких сессий', () => {
+  it('listForSessions отдаёт прогоны только переданных сессий, в порядке регистрации', () => {
+    const registry = new ActiveRunRegistry();
+    const a = makeRun('child-a');
+    const b = makeRun('proc-b', 'process');
+    const c = makeRun('child-c');
+    registry.register('s1', a.handle);
+    registry.register('s1', b.handle);
+    registry.register('s2', c.handle);
+
+    expect(registry.listForSessions(['s1']).map((r) => r.id)).toEqual(['child-a', 'proc-b']);
+    expect(registry.listForSessions(['s2', 's1']).map((r) => r.id)).toEqual([
+      'child-c',
+      'child-a',
+      'proc-b',
+    ]);
+    expect(registry.listForSessions([])).toEqual([]);
+  });
+
+  it('listForSessions не дублирует сессии и хэндлы', () => {
+    const registry = new ActiveRunRegistry();
+    const run = makeRun('child-a');
+    registry.register('s1', run.handle);
+
+    // Повтор id сессии в списке — прогон в выдаче один раз.
+    expect(registry.listForSessions(['s1', 's1'])).toEqual([run.handle]);
+  });
+
+  it('find ищет прогон только среди переданных сессий', () => {
+    const registry = new ActiveRunRegistry();
+    const run = makeRun('child-a');
+    registry.register('s1', run.handle);
+
+    expect(registry.find(['s1'], 'child-a')).toBe(run.handle);
+    // Чужая сессия — прогон «не существует» (доступ решает вызывающий).
+    expect(registry.find(['s2'], 'child-a')).toBeUndefined();
+    expect(registry.find(['s1'], 'unknown')).toBeUndefined();
+  });
+
+  it('stop у хэндла необязателен: регистрация без него валидна', () => {
+    const registry = new ActiveRunRegistry();
+    const run = makeRun('child-a');
+    registry.register('s1', run.handle);
+
+    const found = registry.find(['s1'], 'child-a');
+    expect(found?.stop).toBeUndefined();
+  });
+
+  it('сводка detachAll несёт аддитивные поля хэндла', async () => {
+    const registry = new ActiveRunRegistry();
+    const stop = vi.fn();
+    const run: ActiveRunHandle = {
+      id: 'proc-1',
+      kind: 'process',
+      title: 'npm test',
+      sessionId: 's1',
+      processId: 'proc-1',
+      logPath: 'processes/live/proc-1.log',
+      startedAt: 1_700_000_000_000,
+      stop,
+      detach: vi.fn(async () => {}),
+    };
+    registry.register('s1', run);
+
+    const result = await registry.detachAll('s1');
+
+    expect(result.detached).toEqual([{
+      id: 'proc-1',
+      kind: 'process',
+      title: 'npm test',
+      sessionId: 's1',
+      processId: 'proc-1',
+      logPath: 'processes/live/proc-1.log',
+      startedAt: 1_700_000_000_000,
+    }]);
+  });
+});
