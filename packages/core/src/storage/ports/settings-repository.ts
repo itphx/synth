@@ -16,6 +16,7 @@ import type {
   ExecutionRuntimeSettings,
 } from '@itphx/synth-shared';
 import type {
+  BackgroundRuntimeSettings,
   DecisionRuntimeSettings,
   DefaultModelPair,
   EventsRuntimeSettings,
@@ -139,6 +140,17 @@ export interface SettingsRepository {
   getTerminal(): Promise<Partial<TerminalRuntimeSettings>>;
   setTerminal(config: Partial<TerminalRuntimeSettings>): Promise<void>;
   clearTerminal(): Promise<void>;
+
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background` (реестр
+   * фоновых прогонов: мастер-выключатель, лимиты одновременных прогонов,
+   * предел лога, срок хранения). Частичный набор полей; пустой объект —
+   * «не задано». Применяется сразу (сервисы и pruner'ы читают резолвер на
+   * каждый вызов/тик) — `restartRequired: false` в API.
+   */
+  getBackground(): Promise<Partial<BackgroundRuntimeSettings>>;
+  setBackground(config: Partial<BackgroundRuntimeSettings>): Promise<void>;
+  clearBackground(): Promise<void>;
 
   /**
    * ADR-133: runtime-настройка автопроверки обновлений (`updates.check`).

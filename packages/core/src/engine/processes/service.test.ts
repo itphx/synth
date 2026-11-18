@@ -521,3 +521,61 @@ describe('ProcessService — разделение лога по потокам',
     expect((await h.service.logs(started.runId))?.content).toBe('old-output');
   });
 });
+
+describe('ProcessService — живой предел лога (getMaxLogBytes)', () => {
+  it('предел нового лога берётся из резолвера, а не из снимка конструктора', async () => {
+    const repository = new MemoryBackgroundRunRepository();
+    const eventBus = new EventBus();
+    let counter = 0;
+    const background = new BackgroundRunService({
+      repository,
+      eventBus,
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+      generateId: () => `id-${++counter}`,
+    });
+
+    let maxLogBytes = 3;
+    /** Один прогон: чанк '0123456789', затем ожидание завершения. */
+    const spawn = async (): Promise<void> => {
+      let release!: () => void;
+      const wait = new Promise<void>((resolve) => { release = resolve; });
+      let resolveExit!: (exit: ExecBackgroundExit) => void;
+      const exited = new Promise<ExecBackgroundExit>((resolve) => { resolveExit = resolve; });
+      const executionPort = {
+        execute: async () => ({ stdout: '', stderr: '' }),
+        spawnBackground: async () => ({
+          processId: 'proc_1',
+          pid: 4242,
+          output: (async function* () {
+            yield { stream: 'stdout', data: '0123456789' } as ExecBackgroundChunk;
+            await wait;
+          })(),
+          exited,
+          stop: () => undefined,
+        }),
+      } as unknown as ExecutionPort;
+      const service = new ProcessService({
+        executionPort,
+        background,
+        blobs: new MemoryBlobStore(),
+        eventBus,
+        // Снимок конструктора — большой; действует живой резолвер.
+        limits: { maxLogBytes: 1024 },
+        getMaxLogBytes: () => maxLogBytes,
+      });
+      const started = await service.spawn({ sessionId: 's1', command: 'x', cwd: '/tmp' });
+      release();
+      resolveExit({ exitCode: 0, signal: null, durationMs: 1 });
+      await vi.waitFor(async () => {
+        const logs = await service.logs(started.runId);
+        expect(logs?.totalBytes).toBe(maxLogBytes);
+        expect(logs?.truncated).toBe(true);
+      });
+    };
+
+    await spawn();
+    // Изменение резолвера действует на **новый** лог.
+    maxLogBytes = 5;
+    await spawn();
+  });
+});

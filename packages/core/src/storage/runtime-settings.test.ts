@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, readExecutionRuntimeSettings } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, resolveBackgroundConfig, createLiveBackgroundSettings, DEFAULT_BACKGROUND_CONFIG, readExecutionRuntimeSettings } from './runtime-settings.js';
 import { resolveExecutionMode, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
 import type { SynthConfig } from '@itphx/synth-shared/config';
 
@@ -1434,5 +1434,92 @@ describe('RuntimeSettingsStore: терминалы (PROP-132)', () => {
 
     expect(await store.getTerminal()).toEqual({});
     expect(await store.getSshMode()).toBe('agent');
+  });
+});
+
+describe('resolveBackgroundConfig / createLiveBackgroundSettings (background)', () => {
+  it('приоритет env > runtime > config > default и sources по полям', () => {
+    const fromDefault = resolveBackgroundConfig({ env: {} });
+    expect(fromDefault.source).toBe('default');
+    expect(fromDefault.effective).toEqual(DEFAULT_BACKGROUND_CONFIG);
+
+    const config = { maxRunsPerSession: 4 };
+    const fromConfig = resolveBackgroundConfig({ config, env: {} });
+    expect(fromConfig.source).toBe('config');
+    expect(fromConfig.effective.maxRunsPerSession).toBe(4);
+    expect(fromConfig.sources.maxRunsPerSession).toBe('config');
+    expect(fromConfig.sources.enabled).toBe('default');
+
+    const fromRuntime = resolveBackgroundConfig({ config, runtime: { maxRunsPerSession: 2 }, env: {} });
+    expect(fromRuntime.source).toBe('runtime');
+    expect(fromRuntime.effective.maxRunsPerSession).toBe(2);
+    // Незаданное поле — из config/дефолта, не из runtime.
+    expect(fromRuntime.effective.maxSubagentsPerSession).toBe(
+      DEFAULT_BACKGROUND_CONFIG.maxSubagentsPerSession,
+    );
+
+    const fromEnv = resolveBackgroundConfig({
+      config,
+      runtime: { maxRunsPerSession: 2 },
+      env: { SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION: '7' },
+    });
+    expect(fromEnv.source).toBe('env');
+    expect(fromEnv.effective.maxRunsPerSession).toBe(7);
+    expect(fromEnv.envLocked).toBe(true);
+  });
+
+  it('envLockedFields — по полю: фиксация enabled не блокирует retentionDays', () => {
+    const resolved = resolveBackgroundConfig({
+      env: { SYNTH_BACKGROUND_ENABLED: 'false' },
+      runtime: { retentionDays: 30 },
+    });
+    expect(resolved.effective.enabled).toBe(false);
+    expect(resolved.effective.retentionDays).toBe(30);
+    expect(resolved.sources.retentionDays).toBe('runtime');
+    expect(resolved.envLocked).toBe(true);
+    expect(resolved.envLockedFields).toEqual(['enabled']);
+  });
+
+  it('retentionDays <= 0 — «без ограничения» (допустимо)', () => {
+    expect(resolveBackgroundConfig({ env: {} }).effective.retentionDays).toBe(
+      DEFAULT_BACKGROUND_CONFIG.retentionDays,
+    );
+    expect(
+      resolveBackgroundConfig({ runtime: { retentionDays: 0 }, env: {} }).effective.retentionDays,
+    ).toBe(0);
+    expect(
+      resolveBackgroundConfig({ runtime: { retentionDays: -1 }, env: {} }).effective.retentionDays,
+    ).toBe(-1);
+    expect(
+      resolveBackgroundConfig({
+        env: { SYNTH_BACKGROUND_RETENTION_DAYS: '-3' },
+      }).effective.retentionDays,
+    ).toBe(-3);
+  });
+
+  it('живой резолвер: refresh() подхватывает saved-патч, getLimits/геттеры — сразу', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-background-live-'));
+    try {
+      const store = new RuntimeSettingsStore({ dataDir: dir });
+      const live = createLiveBackgroundSettings({ store, env: {} });
+      await live.refresh();
+      expect(live.getLimits()).toEqual({
+        maxSubagentsPerSession: DEFAULT_BACKGROUND_CONFIG.maxSubagentsPerSession,
+        maxProcessesPerSession: DEFAULT_BACKGROUND_CONFIG.maxProcessesPerSession,
+        maxRunsPerSession: DEFAULT_BACKGROUND_CONFIG.maxRunsPerSession,
+      });
+
+      await store.setBackground({ maxRunsPerSession: 1, logMaxBytes: 0 });
+      await live.refresh();
+      expect(live.getLimits().maxRunsPerSession).toBe(1);
+      expect(live.getMaxLogBytes()).toBe(0);
+      expect(live.resolve().source).toBe('runtime');
+
+      live.setRuntime(undefined);
+      expect(live.getMaxLogBytes()).toBe(DEFAULT_BACKGROUND_CONFIG.logMaxBytes);
+      expect(live.isEnabled()).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

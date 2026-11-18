@@ -1026,3 +1026,36 @@ describe('BackgroundRunService — ретрансляция из дочерне�
     expect(notifications[0]!.message.metadata?.relayed).toBeUndefined();
   });
 });
+
+describe('BackgroundRunService — живой резолвер лимитов (getLimits)', () => {
+  it('лимит читается на каждый запуск: N+1-й прогон отклоняется без рестарта', async () => {
+    const repository = new MemoryBackgroundRunRepository();
+    const eventBus = new EventBus();
+    let counter = 0;
+    let maxRuns = 1;
+    const service = new BackgroundRunService({
+      repository,
+      eventBus,
+      // Снимок конструктора — «без лимита»; действует живой резолвер.
+      limits: { maxSubagentsPerSession: 0, maxProcessesPerSession: 0, maxRunsPerSession: 0 },
+      getLimits: () => ({
+        maxSubagentsPerSession: 0,
+        maxProcessesPerSession: 0,
+        maxRunsPerSession: maxRuns,
+      }),
+      generateId: () => `id-${++counter}`,
+    });
+
+    await service.startSubagent({ sessionId: 's1', childSessionId: 'c1' });
+    await expect(
+      service.startSubagent({ sessionId: 's1', childSessionId: 'c2' }),
+    ).rejects.toBeInstanceOf(BackgroundLimitExceededError);
+
+    // Изменение резолвера (как `PUT /api/v2/settings/background`) действует
+    // на следующий запуск — рестарт не нужен.
+    maxRuns = 2;
+    await expect(
+      service.startSubagent({ sessionId: 's1', childSessionId: 'c3' }),
+    ).resolves.toMatchObject({ kind: 'subagent' });
+  });
+});

@@ -81,8 +81,20 @@ export interface BackgroundRunServiceOptions {
   hooks?: HookBus;
   /** Логгер (по умолчанию — console). */
   logger?: BackgroundLogger;
-  /** Лимиты фоновой работы (из конфигурации `background.*`). */
+  /**
+   * Лимиты фоновой работы — **снимок** конструктора (fallback).
+   *
+   * Если задан `getLimits`, лимиты читаются из живого резолвера на каждый
+   * запуск (runtime-настройка `background.*` применяется без рестарта), а
+   * снимок остаётся значением по умолчанию.
+   */
   limits: BackgroundRunLimits;
+  /**
+   * Живой резолвер лимитов (`LiveBackgroundSettings.getLimits`): читается в
+   * момент запуска прогона, поэтому `PUT /api/v2/settings/background`
+   * действует сразу. Не задан — поведение прежнее (снимок `limits`).
+   */
+  getLimits?: () => BackgroundRunLimits;
   /** Генератор id (тесты подменяют). */
   generateId?: () => string;
   /** Источник времени (тесты подменяют). */
@@ -129,6 +141,8 @@ export class BackgroundRunService {
   private readonly _hooks?: HookBus;
   private readonly _logger: BackgroundLogger;
   private readonly _limits: BackgroundRunLimits;
+  /** Живой резолвер лимитов (не задан — снимок `_limits`). */
+  private readonly _getLimits?: () => BackgroundRunLimits;
   private readonly _generateId: () => string;
   private readonly _now: () => string;
   private readonly _onNotifyParent?: (sessionId: string, message: Message) => void | Promise<void>;
@@ -152,6 +166,7 @@ export class BackgroundRunService {
       error: (message: string) => console.error(message),
     };
     this._limits = options.limits;
+    this._getLimits = options.getLimits;
     this._generateId = options.generateId ?? defaultGenerateId;
     this._now = options.now ?? defaultNow;
     this._onNotifyParent = options.onNotifyParent;
@@ -445,8 +460,11 @@ export class BackgroundRunService {
    * видов на сессию-владельца.
    */
   private async _assertLimits(sessionId: string, kind: 'subagent' | 'process'): Promise<void> {
+    // Лимиты — из живого резолвера (runtime-настройка применяется без
+    // рестарта); без него — снимок конструктора (прежнее поведение).
+    const limits = this._getLimits ? this._getLimits() : this._limits;
     if (kind === 'subagent') {
-      const maxSubagents = this._limits.maxSubagentsPerSession;
+      const maxSubagents = limits.maxSubagentsPerSession;
       if (maxSubagents > 0) {
         const running = await this._repository.list({ kind: 'subagent', status: 'running', sessionId });
         if (running.length >= maxSubagents) {
@@ -458,7 +476,7 @@ export class BackgroundRunService {
         }
       }
     } else {
-      const maxProcesses = this._limits.maxProcessesPerSession;
+      const maxProcesses = limits.maxProcessesPerSession;
       if (maxProcesses > 0) {
         const running = await this._repository.list({ kind: 'process', status: 'running', sessionId });
         if (running.length >= maxProcesses) {
@@ -470,7 +488,7 @@ export class BackgroundRunService {
         }
       }
     }
-    const maxRuns = this._limits.maxRunsPerSession;
+    const maxRuns = limits.maxRunsPerSession;
     if (maxRuns > 0) {
       // Только идущие прогоны (обоих видов): терминальные записи — история
       // реестра, её чистит retention и лимитом она не считается.

@@ -286,6 +286,8 @@ export class ProcessService {
   private readonly _blobs: BlobStore;
   private readonly _eventBus: EventBus;
   private readonly _limits: { maxLogBytes: number };
+  /** Живой предел лога (не задан — снимок `_limits.maxLogBytes`). */
+  private readonly _getMaxLogBytes?: () => number;
   private readonly _logger: ProcessLogger;
   /** Хук терминального перехода (ADR-136/ADR-126 §5) — парная запись аудита. */
   private readonly _onFinished?: ProcessServiceOptions['onFinished'];
@@ -298,11 +300,23 @@ export class ProcessService {
     this._blobs = options.blobs;
     this._eventBus = options.eventBus;
     this._limits = { maxLogBytes: options.limits.maxLogBytes };
+    this._getMaxLogBytes = options.getMaxLogBytes;
     this._logger = options.logger ?? {
       warn: (message: string) => console.warn(message),
       error: (message: string) => console.error(message),
     };
     this._onFinished = options.onFinished;
+  }
+
+  /**
+   * Эффективный предел лога (байт).
+   *
+   * Читается в момент создания лога нового прогона: живой резолвер
+   * (`background.logMaxBytes` из `/api/v2/settings/background`) применяется без
+   * рестарта; без резолвера — снимок конструктора (прежнее поведение).
+   */
+  private _maxLogBytes(): number {
+    return this._getMaxLogBytes ? this._getMaxLogBytes() : this._limits.maxLogBytes;
   }
 
   /**
@@ -396,7 +410,7 @@ export class ProcessService {
       logPath,
       processStreamLogPath(record.id, 'stdout'),
       processStreamLogPath(record.id, 'stderr'),
-      this._limits.maxLogBytes,
+      this._maxLogBytes(),
       this._logger,
     );
     this._track(record, proc, proc.output, writer);
@@ -461,7 +475,7 @@ export class ProcessService {
       logPath,
       processStreamLogPath(record.id, 'stdout'),
       processStreamLogPath(record.id, 'stderr'),
-      this._limits.maxLogBytes,
+      this._maxLogBytes(),
       this._logger,
     );
     // Префикс лога — вывод, накопленный до перевода в фон. Потоки не

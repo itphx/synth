@@ -57,8 +57,19 @@ export interface ProcessServiceOptions {
   blobs: BlobStore;
   /** Шина событий сессии (ADR-009) — `process.started`/`process.stopped`/`process.exited`/`fs.changed`. */
   eventBus: EventBus;
-  /** Лимиты подсистемы (`background.logMaxBytes`). */
+  /**
+   * Лимиты подсистемы — **снимок** конструктора (fallback).
+   *
+   * Если задан `getMaxLogBytes`, предел лога читается из живого резолвера в
+   * момент создания лога (runtime-настройка `background.logMaxBytes`
+   * применяется к новым прогонам без рестарта).
+   */
   limits: ProcessLimits;
+  /**
+   * Живой предел лога (`LiveBackgroundSettings.getMaxLogBytes`) — читается при
+   * создании лога нового прогона. Не задан — снимок `limits.maxLogBytes`.
+   */
+  getMaxLogBytes?: () => number;
   /** Логгер (по умолчанию — console). */
   logger?: ProcessLogger;
   /**

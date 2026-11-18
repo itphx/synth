@@ -43,6 +43,7 @@ import {
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
+  createBackgroundSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -949,6 +950,24 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       settingsStore,
       config: config.synth.ssh?.mode,
       live: deps.sshModeSettings,
+      securityAudit,
+      env: process.env,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Этап 1 roadmap 0.13 (блок 4): настройки секции `background` (реестр фоновых
+  // прогонов) — тумблер, лимиты, предел лога, retention. Применяются **сразу**
+  // (сервисы и pruner'ы читают живой резолвер). Managed RBAC — ADMIN.
+  app.route('/api/v2/settings', createBackgroundSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.background,
+      live: deps.backgroundSettings,
       securityAudit,
       env: process.env,
     },

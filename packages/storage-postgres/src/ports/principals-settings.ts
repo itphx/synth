@@ -55,6 +55,8 @@ const SECTION_KEYS = [
   'execution',
   // PROP-132: runtime-выключатель терминалов (`terminal.enabled`).
   'terminal',
+  // Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background`.
+  'background',
 ] as const satisfies readonly (keyof RuntimeSettings)[];
 
 const SECTION_KEY_SET: ReadonlySet<string> = new Set<string>(SECTION_KEYS);
@@ -377,6 +379,19 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearAttachments(): Promise<void> {
       await deleteSetting(conn, 'attachments');
+    },
+
+    // Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background`
+    // (реестр фоновых прогонов). Хранится тем же JSON-документом настроек —
+    // отдельной миграции не требуется.
+    async getBackground(): Promise<RuntimeSettingsValue<'background'>> {
+      return (await readSetting<RuntimeSettingsValue<'background'>>(conn, 'background')) ?? {};
+    },
+    async setBackground(config: RuntimeSettingsValue<'background'>): Promise<void> {
+      await writeSetting(conn, 'background', config);
+    },
+    async clearBackground(): Promise<void> {
+      await deleteSetting(conn, 'background');
     },
 
     async getContextWindowPolicy(): Promise<RuntimeSettingsValue<'contextWindowPolicy'> | undefined> {

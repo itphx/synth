@@ -136,8 +136,10 @@ export interface EgressRequestLogEntry {
  * и ошибка его срабатывания.
  * `session` (PROP-141, Часть D) — перенос сессии между проектами (смена
  * «дома» сессии с последствиями для её ресурсов).
+ * `background` — runtime-настройки секции `background` (реестр фоновых
+ * прогонов: мастер-выключатель, лимиты, предел лога, retention).
  */
-export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'projects', 'limits', 'permission', 'ssh', 'timer', 'session'] as const;
+export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls', 'attachments', 'context-window', 'context-defaults', 'sticky-notes', 'agents', 'projects', 'limits', 'permission', 'ssh', 'timer', 'session', 'background'] as const;
 export type SecurityAuditScope = (typeof SECURITY_AUDIT_SCOPES)[number];
 
 /**

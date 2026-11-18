@@ -50,6 +50,8 @@ import {
   createLiveStickyNotesLimits,
   // PROP-124: режим инстанса для SSH-ключей (`/settings/ssh`).
   createLiveSshMode,
+  // Этап 1 roadmap 0.13 (блок 4): секция `background` (`/settings/background`).
+  createLiveBackgroundSettings,
   // ADR-135: чтение runtime-каталога профилей исполнения (`/settings/execution`).
   readExecutionRuntimeSettings,
   createEgressPolicyResolver, createEgressLogSink,
@@ -397,6 +399,15 @@ export async function createBackendDeps(
     config: config.synth.ssh?.mode,
     runtime: await settingsStore.getSshMode(),
   });
+  // Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых
+  // прогонов) — приоритет env > runtime > config.yaml > default. Один
+  // экземпляр на процесс: сервисы/прунеры/оркестратор читают его на каждый
+  // запуск/тик, поэтому runtime-настройка применяется без рестарта.
+  const backgroundSettings = createLiveBackgroundSettings({
+    store: settingsStore,
+    config: config.synth.background,
+  });
+  await backgroundSettings.refresh();
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (не пишем домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
@@ -674,12 +685,15 @@ export async function createBackendDeps(
     : new BackgroundRunService({
         repository: storageContext.backgroundRuns,
         eventBus,
+        // Снимок — fallback; живой резолвер читается на каждый запуск
+        // (runtime-настройка применяется без рестарта).
         limits: {
           maxSubagentsPerSession: config.synth.background.maxSubagentsPerSession,
           // PROP-097: лимит одновременных фоновых шелл-процессов на сессию.
           maxProcessesPerSession: config.synth.background.maxProcessesPerSession,
           maxRunsPerSession: config.synth.background.maxRunsPerSession,
         },
+        getLimits: () => backgroundSettings.getLimits(),
         // Точка сборки уведомления — здесь (глобальных синглтонов нет).
         //
         // ADR-036: обфускация user-сообщений НЕ применяется — уведомление
@@ -968,14 +982,16 @@ export async function createBackendDeps(
   const stopBackgroundRunPruner = storageDegraded
     ? () => {}
     : startBackgroundRunPruner(storageContext.backgroundRuns, {
-        getRetentionDays: () => config.synth.background.retentionDays,
+        // Живой резолвер: retention-настройка применяется на каждом тике.
+        getRetentionDays: () => backgroundSettings.getRetentionDays(),
       });
   // PROP-097 (блок 5b): retention логов фоновых процессов. Создаётся **до**
   // pruner'а записей реестра: лог удаляется, пока его запись ещё видна.
   const stopProcessLogPruner = storageDegraded
     ? () => {}
     : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
-        getRetentionDays: () => config.synth.background.retentionDays,
+        // Живой резолвер: retention-настройка применяется на каждом тике.
+        getRetentionDays: () => backgroundSettings.getRetentionDays(),
       });
   // ADR-094/ADR-115: метрики вложений (`synth_attachment_*`) — создаются до GC,
   // чтобы счётчик удалённых объектов был доступен при первом прогоне.
@@ -1446,7 +1462,9 @@ export async function createBackendDeps(
         background: backgroundService,
         blobs: storageContext.blobs,
         eventBus,
+        // Снимок — fallback; живой предел лога читается при создании лога.
         limits: { maxLogBytes: config.synth.background.logMaxBytes },
+        getMaxLogBytes: () => backgroundSettings.getMaxLogBytes(),
         logger: processLogger,
         // ADR-136/ADR-126 §5: терминальный переход фонового процесса
         // дописывает в журнал исполнений парную запись `finished`
@@ -1907,7 +1925,10 @@ export async function createBackendDeps(
     // ADR-114: сервис worktree — тулы `git_worktree_*` (инвентарь
     // per-session рабочих каталогов проекта).
     ...(worktreeService ? { worktreeService } : {}),
+    // Снимок — fallback; живой геттер читается при сборке контекста каждого
+    // вызова (runtime-тумблер `background.enabled` действует без рестарта).
     backgroundEnabled: config.synth.background.enabled,
+    getBackgroundEnabled: () => backgroundSettings.isEnabled(),
     // Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`).
     subagentMaxInputTokens: config.synth.agents.subagentMaxInputTokens,
     // Лимит глубины вложенности саб-агентов (`agents.subagentDepth`): при
@@ -2751,6 +2772,9 @@ export async function createBackendDeps(
     stickyNotesLimitsSettings,
     // PROP-124: режим инстанса для SSH-ключей (live, админ-API).
     sshModeSettings,
+    // Этап 1 roadmap 0.13 (блок 4): живое состояние секции `background`
+    // (сервисы/прунеры/оркестратор + админ-API `/settings/background`).
+    backgroundSettings,
     // ADR-114: сервис worktree — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhookStore,

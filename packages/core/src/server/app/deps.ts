@@ -193,6 +193,7 @@ import {
   createLiveContextDefaults,
   createLiveStickyNotesLimits,
   createLiveSshMode,
+  createLiveBackgroundSettings,
   readExecutionRuntimeSettings,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
@@ -443,6 +444,18 @@ export async function createStandaloneDeps(
     config: config.sshConfig?.mode,
     runtime: await settingsStore.getSshMode(),
   });
+
+  // Этап 1 roadmap 0.13 (блок 4): секция `background` (реестр фоновых
+  // прогонов) — приоритет env > runtime > config.yaml > default. Один
+  // экземпляр на процесс: сервисы реестра/процессов, pruner'ы и оркестратор
+  // читают его на каждый запуск/тик, поэтому runtime-настройка
+  // (`/api/v2/settings/background`) применяется без рестарта.
+  const backgroundSettings = createLiveBackgroundSettings({
+    store: settingsStore,
+    config: config.backgroundConfig,
+  });
+  // Стартовое чтение runtime-патча (деградация хранилища — fail-soft внутри).
+  await backgroundSettings.refresh();
 
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (чтоб не писать домен в файловый фоллбек).
@@ -775,12 +788,15 @@ export async function createStandaloneDeps(
     : new BackgroundRunService({
         repository: storageContext.backgroundRuns,
         eventBus,
+        // Снимок — fallback; живой резолвер читается на каждый запуск
+        // (runtime-настройка применяется без рестарта).
         limits: {
           maxSubagentsPerSession: config.backgroundConfig?.maxSubagentsPerSession ?? 2,
           // PROP-097: лимит одновременных фоновых шелл-процессов на сессию.
           maxProcessesPerSession: config.backgroundConfig?.maxProcessesPerSession ?? 5,
           maxRunsPerSession: config.backgroundConfig?.maxRunsPerSession ?? 10,
         },
+        getLimits: () => backgroundSettings.getLimits(),
         // Точка сборки уведомления — здесь (глобальных синглтонов нет).
         onNotifyParent: notifyBackgroundParent,
         // ADR-111/ADR-113: матрица доставки — если прогон запущен в дочерней
@@ -1066,14 +1082,16 @@ export async function createStandaloneDeps(
   const stopBackgroundRunPruner = storageDegraded
     ? () => {}
     : startBackgroundRunPruner(storageContext.backgroundRuns, {
-        getRetentionDays: () => config.backgroundConfig?.retentionDays ?? 7,
+        // Живой резолвер: retention-настройка применяется на каждом тике.
+        getRetentionDays: () => backgroundSettings.getRetentionDays(),
       });
   // PROP-097 (блок 5b): retention логов фоновых процессов. Создаётся **до**
   // pruner'а записей реестра: лог удаляется, пока его запись ещё видна.
   const stopProcessLogPruner = storageDegraded
     ? () => {}
     : startProcessLogPruner(storageContext.backgroundRuns, storageContext.blobs, {
-        getRetentionDays: () => config.backgroundConfig?.retentionDays ?? 7,
+        // Живой резолвер: retention-настройка применяется на каждом тике.
+        getRetentionDays: () => backgroundSettings.getRetentionDays(),
       });
   // ADR-094/ADR-115: метрики вложений (`synth_attachment_*`) — создаются до GC,
   // чтобы счётчик удалённых объектов был доступен при первом прогоне.
@@ -1519,7 +1537,9 @@ export async function createStandaloneDeps(
         background: backgroundService,
         blobs: storageContext.blobs,
         eventBus,
+        // Снимок — fallback; живой предел лога читается при создании лога.
         limits: { maxLogBytes: config.backgroundConfig?.logMaxBytes ?? 10_485_760 },
+        getMaxLogBytes: () => backgroundSettings.getMaxLogBytes(),
         logger: processLogger,
         // ADR-136/ADR-126 §5: терминальный переход фонового процесса
         // дописывает в журнал исполнений парную запись `finished`
@@ -2013,7 +2033,10 @@ export async function createStandaloneDeps(
     // ADR-114: сервис worktree — тулы `git_worktree_*` (инвентарь
     // per-session рабочих каталогов проекта).
     ...(worktreeService ? { worktreeService } : {}),
+    // Снимок — fallback; живой геттер читается при сборке контекста каждого
+    // вызова (runtime-тумблер `background.enabled` действует без рестарта).
     backgroundEnabled: config.backgroundConfig?.enabled ?? true,
+    getBackgroundEnabled: () => backgroundSettings.isEnabled(),
     // Предохранитель по объёму промпта саб-агента (не окно модели): при
     // превышении прогон завершается отчётом (`agents.subagentMaxInputTokens`).
     subagentMaxInputTokens: config.agentsConfig?.subagentMaxInputTokens,
@@ -2814,6 +2837,9 @@ export async function createStandaloneDeps(
     stickyNotesLimitsSettings,
     // PROP-124: режим инстанса для SSH-ключей (live, админ-API).
     sshModeSettings,
+    // Этап 1 roadmap 0.13 (блок 4): живое состояние секции `background`
+    // (сервисы/прунеры/оркестратор + админ-API `/settings/background`).
+    backgroundSettings,
     // ADR-114: сервис worktree — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhooksConfig,

@@ -1225,6 +1225,14 @@ export interface OrchestratorOptions {
    */
   backgroundEnabled?: boolean;
   /**
+   * Живой геттер мастер-выключателя фоновой работы
+   * (`LiveBackgroundSettings.isEnabled`). Читается **при сборке контекста
+   * каждого вызова** инструмента, поэтому runtime-настройка
+   * (`/api/v2/settings/background`) применяется без рестарта и без ожидания
+   * следующего хода. Не задан — снимок `backgroundEnabled`.
+   */
+  getBackgroundEnabled?: () => boolean;
+  /**
    * Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`):
    * оценка промпта проверяется перед каждым LLM-вызовом, при превышении прогон
    * завершается детерминированным отчётом. `0` — без ограничения; не задано —
@@ -1600,6 +1608,8 @@ export class ChatOrchestrator {
   readonly activeRuns = new ActiveRunRegistry();
   /** Этап 1 roadmap 0.13 (блок 4): фоновые прогоны разрешены инстансом. */
   private readonly _backgroundEnabled: boolean;
+  /** Живой геттер мастер-выключателя фоновой работы (не задан — снимок). */
+  private readonly _getBackgroundEnabled?: () => boolean;
   /** Предохранитель по объёму промпта саб-агента (0 — без ограничения). */
   private readonly _subagentMaxInputTokens: number;
   private readonly _getSubagentMaxInputTokens?: () => number;
@@ -2175,6 +2185,7 @@ export class ChatOrchestrator {
     this._timerRepository = options.timerRepository ?? null;
     this._requeueSteerMessages = options.requeueSteerMessages ?? null;
     this._backgroundEnabled = options.backgroundEnabled ?? true;
+    this._getBackgroundEnabled = options.getBackgroundEnabled;
     this._subagentMaxInputTokens = options.subagentMaxInputTokens ?? DEFAULT_SUBAGENT_MAX_INPUT_TOKENS;
     this._getSubagentMaxInputTokens = options.getSubagentMaxInputTokens;
     this._subagentDepth = options.subagentDepth ?? DEFAULT_SUBAGENT_DEPTH;
@@ -7276,7 +7287,12 @@ export class ChatOrchestrator {
                   // тул `task` с `background: true` регистрирует фонового
                   // саб-агента и возвращает управление сразу.
                   backgroundService: this._backgroundService ?? undefined,
-                  backgroundEnabled: this._backgroundEnabled,
+                  // Живой геттер: контекст собирается на **каждый** вызов
+                  // инструмента, поэтому тумблер `background.enabled` из
+                  // админки действует без рестарта (снимок — fallback).
+                  backgroundEnabled: this._getBackgroundEnabled
+                    ? this._getBackgroundEnabled()
+                    : this._backgroundEnabled,
                   // Предохранитель по объёму промпта саб-агента (не окно модели).
                   subagentMaxInputTokens: this._getSubagentMaxInputTokens?.() ?? this._subagentMaxInputTokens,
                   // Лимит глубины вложенности саб-агентов (`agents.subagentDepth`).

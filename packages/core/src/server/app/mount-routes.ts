@@ -45,6 +45,7 @@ import {
   createContextDefaultsSettingsRoutes,
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
+  createBackgroundSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -909,6 +910,21 @@ export function mountStandaloneRoutes(
       settingsStore,
       config: config.sshConfig?.mode,
       live: deps.sshModeSettings,
+      securityAudit,
+      env: process.env,
+    },
+  ));
+
+  // Этап 1 roadmap 0.13 (блок 4): настройки секции `background` (реестр фоновых
+  // прогонов) — тумблер, лимиты, предел лога, retention. Применяются **сразу**:
+  // сервисы и pruner'ы читают живой резолвер на каждый запуск/тик.
+  // Core — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createBackgroundSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.backgroundConfig,
+      live: deps.backgroundSettings,
       securityAudit,
       env: process.env,
     },

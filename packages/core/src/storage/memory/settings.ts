@@ -36,6 +36,7 @@ import type {
   ExecutionRuntimeSettings,
 } from '@itphx/synth-shared';
 import type {
+  BackgroundRuntimeSettings,
   DecisionRuntimeSettings,
   DefaultModelPair,
   EventsRuntimeSettings,
@@ -339,6 +340,19 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearTerminal(): Promise<void> {
     this._clear('terminal');
+  }
+
+  /** Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background`. */
+  async getBackground(): Promise<Partial<BackgroundRuntimeSettings>> {
+    return structuredClone(this._settings.background ?? {});
+  }
+
+  async setBackground(config: Partial<BackgroundRuntimeSettings>): Promise<void> {
+    this._patch({ background: structuredClone(config) });
+  }
+
+  async clearBackground(): Promise<void> {
+    this._clear('background');
   }
 
   async getUpdates(): Promise<Partial<UpdatesRuntimeSettings>> {

@@ -2385,7 +2385,14 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, SSH_MODE_VALUES, DEFAULT_SSH_MODE } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, resolveBackgroundConfig, createLiveBackgroundSettings, DEFAULT_BACKGROUND_CONFIG, BACKGROUND_SETTINGS_FIELDS, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, SSH_MODE_VALUES, DEFAULT_SSH_MODE } from './storage/runtime-settings.js';
+export type {
+  BackgroundRuntimeSettings,
+  BackgroundSettingsField,
+  BackgroundSettingsSource,
+  ResolvedBackgroundConfig,
+  LiveBackgroundSettings,
+} from './storage/runtime-settings.js';
 export type {
   LiveSshMode,
   ResolvedSshMode,
@@ -2838,6 +2845,15 @@ export type {
   StickyNotesSettingsMessages,
   StickyNotesSettingsView,
 } from './server/routes/settings-sticky-notes.js';
+// Этап 1 roadmap 0.13 (блок 4): настройки секции `background` (реестр фоновых
+// прогонов) — `/api/v2/settings/background`.
+export { createBackgroundSettingsRoutes } from './server/routes/settings-background.js';
+export type {
+  BackgroundSettingsDeps,
+  BackgroundSettingsOptions,
+  BackgroundSettingsMessages,
+  BackgroundSettingsView,
+} from './server/routes/settings-background.js';
 // PROP-124: режим инстанса для SSH-ключей — `/api/v2/settings/ssh`.
 export { createSshSettingsRoutes } from './server/routes/settings-ssh.js';
 export type {

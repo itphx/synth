@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode, ExecutionRuntimeSettings } from '@itphx/synth-shared';
+import type { BackgroundConfig } from '@itphx/synth-shared/config';
 import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS, SSH_MODES } from '@itphx/synth-shared';
 import { defaultConfig, parseAttachmentsModalities, parseExecutionRuntimeSettings, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
@@ -610,6 +611,280 @@ export function createLiveSessionOpsPerMinute(params: {
 }
 
 /**
+ * Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background` (реестр
+ * фоновых прогонов), сохраняемый через админку.
+ *
+ * Состав — ровно шесть полей `backgroundConfigSchema`: мастер-выключатель,
+ * три лимита одновременных прогонов, предел лога и срок хранения. Все поля
+ * необязательны: `PUT /api/v2/settings/background` присылает только изменённые
+ * (частичный патч), остальное берётся из слоёв ниже.
+ *
+ * Применяется **сразу**: сервисы реестра/процессов и pruner'ы читают резолвер
+ * на каждый вызов/тик — рестарт не нужен.
+ */
+export interface BackgroundRuntimeSettings {
+  /** Мастер-выключатель фоновой работы (тулы `task`/`execute_shell`). */
+  enabled?: boolean;
+  /** Максимум одновременно идущих фоновых саб-агентов на родительскую сессию. */
+  maxSubagentsPerSession?: number;
+  /** Максимум одновременно идущих фоновых шелл-процессов на сессию-владельца. */
+  maxProcessesPerSession?: number;
+  /** Максимум одновременно идущих прогонов любого вида на сессию-владельца. */
+  maxRunsPerSession?: number;
+  /** Предел размера лога фонового процесса, байт (`0` — без ограничения). */
+  logMaxBytes?: number;
+  /** Срок хранения терминальных записей реестра, дни (`<= 0` — без ограничения). */
+  retentionDays?: number;
+}
+
+/** Поле (camelCase) секции `background`. */
+export type BackgroundSettingsField = keyof BackgroundRuntimeSettings;
+
+/** Источник эффективного значения поля секции `background`. */
+export type BackgroundSettingsSource = 'env' | 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга секции `background` (env > runtime > config > defaults). */
+export interface ResolvedBackgroundConfig {
+  /** Эффективные значения — их читают сервисы реестра/процессов и pruner'ы. */
+  effective: BackgroundConfig;
+  /** Наиболее специфичный источник среди полей. */
+  source: BackgroundSettingsSource;
+  /** Источник **каждого** поля секции. */
+  sources: Record<BackgroundSettingsField, BackgroundSettingsSource>;
+  /** База без runtime (к чему вернёт `DELETE`). */
+  defaults: BackgroundConfig;
+  /** Хотя бы одно поле задано через env: runtime его не перекрывает. */
+  envLocked: boolean;
+  /** Поля, зафиксированные env: из UI они `disabled` и не уходят в `PUT`. */
+  envLockedFields: BackgroundSettingsField[];
+}
+
+/** Дефолты схемы — совпадают с `defaultConfig.background`. */
+export const DEFAULT_BACKGROUND_CONFIG: BackgroundConfig = defaultConfig.background;
+
+/** Канонический порядок полей секции (для `envLockedFields` и обхода). */
+export const BACKGROUND_SETTINGS_FIELDS: readonly BackgroundSettingsField[] = [
+  'enabled',
+  'maxSubagentsPerSession',
+  'maxProcessesPerSession',
+  'maxRunsPerSession',
+  'logMaxBytes',
+  'retentionDays',
+];
+
+/** Env-ключи секции `background` (имена — по правилу `ENV_OVERRIDES`). */
+const BACKGROUND_ENV_SCALARS: ReadonlyArray<{
+  key: BackgroundSettingsField;
+  env: string;
+  type: 'boolean' | 'number';
+  /** Допустимо отрицательное значение (`retentionDays <= 0` — без ограничения). */
+  allowNegative?: boolean;
+}> = [
+  { key: 'enabled', env: 'SYNTH_BACKGROUND_ENABLED', type: 'boolean' },
+  { key: 'maxSubagentsPerSession', env: 'SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION', type: 'number' },
+  { key: 'maxProcessesPerSession', env: 'SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION', type: 'number' },
+  { key: 'maxRunsPerSession', env: 'SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION', type: 'number' },
+  { key: 'logMaxBytes', env: 'SYNTH_BACKGROUND_LOG_MAX_BYTES', type: 'number' },
+  { key: 'retentionDays', env: 'SYNTH_BACKGROUND_RETENTION_DAYS', type: 'number', allowNegative: true },
+];
+
+/**
+ * Прочитать env-значения секции `background`.
+ *
+ * Валидное значение фиксируется в `envLockedFields` (runtime его не
+ * перекрывает); невалидное — warn и игнор (fail-soft, как у `applyEnvOverrides`).
+ */
+function readBackgroundEnv(env: NodeJS.ProcessEnv): {
+  values: BackgroundRuntimeSettings;
+  locked: BackgroundSettingsField[];
+} {
+  const values: BackgroundRuntimeSettings = {};
+  const locked: BackgroundSettingsField[] = [];
+
+  for (const def of BACKGROUND_ENV_SCALARS) {
+    const raw = env[def.env];
+    if (raw === undefined || raw === '') continue;
+
+    if (def.type === 'boolean') {
+      const value = raw.toLowerCase();
+      if (value === 'true' || value === '1') {
+        values.enabled = true;
+        locked.push(def.key);
+      } else if (value === 'false' || value === '0') {
+        values.enabled = false;
+        locked.push(def.key);
+      } else {
+        console.warn(`[config] невалидное значение ${def.env}="${raw}" (ожидается boolean) — игнорируется`);
+      }
+      continue;
+    }
+
+    const n = Number(raw);
+    const min = def.allowNegative ? Number.NEGATIVE_INFINITY : 0;
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < min) {
+      const expected = def.allowNegative ? 'целое' : 'целое ≥ 0';
+      console.warn(`[config] невалидное значение ${def.env}="${raw}" (ожидается ${expected}) — игнорируется`);
+      continue;
+    }
+    (values as Record<string, unknown>)[def.key] = n;
+    locked.push(def.key);
+  }
+
+  return { values, locked };
+}
+
+/**
+ * Эффективные настройки секции `background` — приоритет
+ * **env > runtime > config.yaml > дефолт схемы** (ADR-023).
+ *
+ * **«Задано явно» vs «дефолт».** Схема конфига префилит секцию
+ * (`backgroundConfigSchema.prefault({})`), поэтому на чистом инстансе
+ * `configValue` уже равен дефолтам — хотя в `config.yaml` значений нет.
+ * Поле, значение которого равно дефолту схемы, отдаётся с `source:'default'`
+ * (UI показывает бейдж «по умолчанию»); явное значение в конфиге, совпавшее
+ * с дефолтом, неотличимо от его отсутствия — эффективное значение одно и то
+ * же (тот же приём, что у `resolveSessionOpsPerMinute`).
+ *
+ * Функция чистая (без I/O): сервисы и pruner'ы читают её на каждый вызов, а
+ * env-фиксация проверяется **по полю** (фиксация `enabled` не блокирует
+ * правку `retentionDays`).
+ */
+export function resolveBackgroundConfig(params: {
+  config?: Partial<BackgroundConfig>;
+  runtime?: BackgroundRuntimeSettings;
+  env?: NodeJS.ProcessEnv;
+} = {}): ResolvedBackgroundConfig {
+  const env = params.env ?? process.env;
+  const config = params.config;
+  const runtime = params.runtime ?? {};
+  const { values: envValues, locked } = readBackgroundEnv(env);
+
+  const effective: Record<string, unknown> = {};
+  const defaults: Record<string, unknown> = {};
+  const sources = {} as Record<BackgroundSettingsField, BackgroundSettingsSource>;
+
+  for (const field of BACKGROUND_SETTINGS_FIELDS) {
+    const fallback = DEFAULT_BACKGROUND_CONFIG[field];
+    const configValue = config?.[field];
+    defaults[field] = configValue ?? fallback;
+    const envValue = envValues[field];
+    const runtimeValue = runtime[field];
+    if (envValue !== undefined) {
+      effective[field] = envValue;
+      sources[field] = 'env';
+    } else if (runtimeValue !== undefined) {
+      effective[field] = runtimeValue;
+      sources[field] = 'runtime';
+    } else if (configValue !== undefined && configValue !== fallback) {
+      effective[field] = configValue;
+      sources[field] = 'config';
+    } else {
+      effective[field] = fallback;
+      sources[field] = 'default';
+    }
+  }
+
+  // Общий `source` — самый специфичный слой среди полей.
+  const order: BackgroundSettingsSource[] = ['env', 'runtime', 'config', 'default'];
+  const source = order.find((layer) =>
+    BACKGROUND_SETTINGS_FIELDS.some((field) => sources[field] === layer),
+  ) ?? 'default';
+
+  return {
+    effective: effective as unknown as BackgroundConfig,
+    source,
+    sources,
+    defaults: defaults as unknown as BackgroundConfig,
+    envLocked: locked.length > 0,
+    envLockedFields: BACKGROUND_SETTINGS_FIELDS.filter((field) => locked.includes(field)),
+  };
+}
+
+/**
+ * Живое состояние секции `background` процесса (ADR-023).
+ *
+ * Runtime-патч держится **в памяти** (инициализируется из `settings.json`/PG
+ * при старте через `refresh()`, обновляется роутом
+ * `/api/v2/settings/background`). Резолвер **синхронный**: его читают сервисы
+ * реестра/процессов на каждый запуск и pruner'ы на каждом тике, а запись лога
+ * фонового процесса — на каждый чанк. Поэтому в порт настроек здесь не ходим
+ * (I/O на чанк лога недопустим): `refresh()` — единственная асинхронная точка
+ * чтения, её зовёт точка сборки при старте.
+ */
+export interface LiveBackgroundSettings {
+  getRuntime(): BackgroundRuntimeSettings;
+  setRuntime(next: BackgroundRuntimeSettings | undefined): void;
+  resolve(): ResolvedBackgroundConfig;
+  /** Эффективные значения секции (полный объект). */
+  getEffective(): BackgroundConfig;
+  /** Мастер-выключатель фоновой работы. */
+  isEnabled(): boolean;
+  /** Срок хранения терминальных записей, дни (`<= 0` — без ограничения). */
+  getRetentionDays(): number;
+  /** Предел размера лога фонового процесса, байт (`0` — без ограничения). */
+  getMaxLogBytes(): number;
+  /** Лимиты одновременных прогонов (контракт `BackgroundRunLimits`). */
+  getLimits(): {
+    maxSubagentsPerSession: number;
+    maxProcessesPerSession: number;
+    maxRunsPerSession: number;
+  };
+  /** Перечитать runtime-патч из порта (старт/диагностика); без `store` — no-op. */
+  refresh(): Promise<void>;
+}
+
+/**
+ * Собрать живое состояние секции `background`.
+ *
+ * `store` нужен только для `refresh()`: значение загружается один раз при
+ * старте (точка сборки `deps.ts`), дальше читается из памяти — см. JSDoc
+ * `LiveBackgroundSettings`.
+ */
+export function createLiveBackgroundSettings(params: {
+  store?: SettingsRepository;
+  config?: Partial<BackgroundConfig>;
+  runtime?: BackgroundRuntimeSettings;
+  env?: NodeJS.ProcessEnv;
+}): LiveBackgroundSettings {
+  let runtime: BackgroundRuntimeSettings = params.runtime ?? {};
+  const env = params.env ?? process.env;
+  const resolve = (): ResolvedBackgroundConfig =>
+    resolveBackgroundConfig({
+      ...(params.config !== undefined ? { config: params.config } : {}),
+      runtime,
+      env,
+    });
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next ?? {};
+    },
+    resolve,
+    getEffective: () => resolve().effective,
+    isEnabled: () => resolve().effective.enabled,
+    getRetentionDays: () => resolve().effective.retentionDays,
+    getMaxLogBytes: () => resolve().effective.logMaxBytes,
+    getLimits: () => {
+      const effective = resolve().effective;
+      return {
+        maxSubagentsPerSession: effective.maxSubagentsPerSession,
+        maxProcessesPerSession: effective.maxProcessesPerSession,
+        maxRunsPerSession: effective.maxRunsPerSession,
+      };
+    },
+    refresh: async () => {
+      if (!params.store) return;
+      try {
+        // Деградация/ошибка хранилища (ADR-098) — остаёмся на текущем снимке.
+        runtime = (await params.store.getBackground()) ?? {};
+      } catch {
+        // fail-soft: старт процесса не должен падать из-за настройки.
+      }
+    },
+  };
+}
+
+/**
  * Источник эффективных дефолтов оптимизации контекста.
  *
  * env-оверрайда у этих значений нет (это дефолты новых сессий, а не политика
@@ -962,6 +1237,13 @@ export interface RuntimeSettings {
   terminal?: TerminalRuntimeSettings;
   /** ADR-133: runtime-настройки проверки обновлений (`updates.check`). */
   updates?: UpdatesRuntimeSettings;
+  /**
+   * Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background` (реестр
+   * фоновых прогонов: мастер-выключатель, лимиты, предел лога, retention).
+   * Применяется **сразу** (сервисы и pruner'ы читают резолвер на каждый
+   * вызов) — `restartRequired: false` в API.
+   */
+  background?: BackgroundRuntimeSettings;
   /** ADR-090: runtime-настройки секции `plugins` (админка, слой плагинов). */
   plugins?: Partial<PluginsRuntimeSettings>;
   /**
@@ -1967,6 +2249,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.terminal;
+      return next;
+    });
+  }
+
+  /** Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background`, {} — не задан. */
+  async getBackground(): Promise<Partial<BackgroundRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.background ?? {};
+  }
+
+  async setBackground(config: Partial<BackgroundRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, background: config }));
+  }
+
+  async clearBackground(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.background;
       return next;
     });
   }
