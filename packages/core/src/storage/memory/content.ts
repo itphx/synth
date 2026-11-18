@@ -297,6 +297,10 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return '';
   }
 
+  getBackgroundNotice(): string {
+    return '';
+  }
+
   getMaxStepsPrompt(): string {
     return '';
   }

@@ -464,14 +464,14 @@ async function startBackgroundProcess(
     });
     const paramsMap = { id: started.processId, log: started.logPath };
     return {
-      content: sm('process.background_started', paramsMap),
+      content: sm('background.started.process', paramsMap),
       metadata: {
         process_id: started.processId,
         background_run_id: started.runId,
         status: 'running',
         log_path: started.logPath,
         command: displayCommand,
-        i18n: i18nMeta('process.background_started', paramsMap),
+        i18n: i18nMeta('background.started.process', paramsMap),
       },
     };
   } catch (err) {

@@ -263,6 +263,12 @@ export interface ComposerContext {
    * (`prompts/system/MEMORY.{lang}.md`). Вычисляет оркестратор.
    */
   memoryAvailable?: boolean;
+  /**
+   * Фоновая работа разрешена в сессии — добавляет блок `background`
+   * (`prompts/system/BACKGROUND.{lang}.md`): уведомление о завершении придёт
+   * автоматически, статус не опрашивается. Вычисляет оркестратор.
+   */
+  backgroundAvailable?: boolean;
   stickyNotes?: StickyNote[];
   summaryContent?: string;
   /**
@@ -625,6 +631,7 @@ export class SystemPromptComposer {
           showInterview: ctx.showInterview,
           interviewEligible: ctx.interviewEligible,
           memoryAvailable: ctx.memoryAvailable,
+          backgroundAvailable: ctx.backgroundAvailable,
           stickyNotes: ctx.stickyNotes,
           summaryContent: ctx.summaryContent,
         });

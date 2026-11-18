@@ -351,13 +351,13 @@ export async function runDetachableSubagent(opts: DetachableSubagentOptions): Pr
   // есть (геттер — чтобы TS видел присваивание из замыкания).
   const detachedRunId = (): string | undefined => record?.id;
   return {
-    content: sm('task.background_started', { id: childSessionId }),
+    content: sm('background.started.subagent', { id: childSessionId }),
     metadata: {
       child_session_id: childSessionId,
       status: 'running',
       background_run_id: detachedRunId(),
       detached: true,
-      i18n: i18nMeta('task.background_started', { id: childSessionId }),
+      i18n: i18nMeta('background.started.subagent', { id: childSessionId }),
     },
   };
 }

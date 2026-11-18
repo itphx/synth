@@ -184,6 +184,10 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
     return this._config.getSubagentNotice(language);
   }
 
+  getBackgroundNotice(language?: string): string {
+    return this._config.getBackgroundNotice(language);
+  }
+
   getMaxStepsPrompt(language?: string): string {
     return this._config.getMaxStepsPrompt(language);
   }

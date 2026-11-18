@@ -229,7 +229,7 @@ describe('execute_shell — detach идущего шелла (ADR-113)', () => {
 
     const result = await promise;
     expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('moved to the background');
+    expect(result.content).toContain('started in the background');
     expect(result.metadata?.detached).toBe(true);
     expect(result.metadata).toMatchObject({
       process_id: 'proc_1',

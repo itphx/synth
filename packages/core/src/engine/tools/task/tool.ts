@@ -1570,12 +1570,12 @@ async function startBackgroundSubagent(opts: {
 
   // 5. Немедленный возврат: родитель продолжает работать, уведомление придёт.
   return {
-    content: sm('task.background_started', { id: childSessionId }),
+    content: sm('background.started.subagent', { id: childSessionId }),
     metadata: {
       child_session_id: childSessionId,
       status: 'running',
       background_run_id: record.id,
-      i18n: i18nMeta('task.background_started', { id: childSessionId }),
+      i18n: i18nMeta('background.started.subagent', { id: childSessionId }),
     },
   };
 }

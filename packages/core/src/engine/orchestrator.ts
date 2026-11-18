@@ -2925,12 +2925,14 @@ export class ChatOrchestrator {
     query?: string;
     /** ADR-090: идентификатор хода (`streamId`). */
     turnId?: string;
+    /** Фоновая работа разрешена (`isBackgroundEnabled()`) — блок `background`. */
+    backgroundAvailable?: boolean;
   }): ComposerContext {
     const {
       session, agentDef, effectiveAgentRole, workingDir, projectRoot, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
       skillsCatalog, instructions, schedulerActive, interviewEligible, schedulerCurrentTurn,
-      query, turnId,
+      query, turnId, backgroundAvailable,
     } = args;
     return {
       session,
@@ -2949,6 +2951,7 @@ export class ChatOrchestrator {
       showInterview: session.settings.showInterview,
       interviewEligible,
       memoryAvailable: this._memoryPromptAvailable(project, agentDef),
+      backgroundAvailable: backgroundAvailable ?? false,
       stickyNotes: session.stickyNotes,
       summaryContent: summaryContent || undefined,
       tools: toolSelection
@@ -4528,6 +4531,7 @@ export class ChatOrchestrator {
       resolveProjectInstructions: (args) => this._resolveProjectInstructions(args),
       resolveSchedulerActive: (session) => this._resolveSchedulerActive(session),
       buildComposerContext: (args) => this._buildComposerContext(args),
+      isBackgroundEnabled: () => this.isBackgroundEnabled(),
       collectComposerMcpServers: (decisions) => this._collectComposerMcpServers(decisions),
       interviewEligible: (session, message, toolAccess) =>
         this._interviewEligible(session, message, toolAccess),
@@ -5428,6 +5432,8 @@ export class ChatOrchestrator {
       // ADR-090: в диагностике «вопрос хода» — последнее
       // пользовательское сообщение истории (явного хода нет).
       query: resolveTurnQueryFn(session),
+      // Манифест отражает реальный промпт: то же правило фоновой работы.
+      backgroundAvailable: this.isBackgroundEnabled(),
     });
 
     const manifest = await this._composer.manifest(ctx);

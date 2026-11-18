@@ -94,8 +94,6 @@ export const SYSTEM_MESSAGES = {
     '[context_budget] Context budget reached ({tokens} tokens). Steps completed: {steps}. Unfinished: {tasks}',
   'subagent.context_budget':
     'Subagent stopped by the context budget ({tokens} tokens, steps: {steps})',
-  'task.background_started':
-    'The subagent is running in the background (sessionID: {id}). You will be notified automatically; do not poll its status.',
   'task.background_limit':
     'The background subagent limit for this session ({limit}) is reached — finish or cancel the running background subagents first',
   'task.background_disabled':
@@ -787,16 +785,20 @@ export const SYSTEM_MESSAGES = {
   'question.cancelled': 'The user cancelled the question: {reason}',
   'question.timeout': 'The question expired by timeout',
   'question.deps_unavailable': 'The question mechanism is unavailable in this build',
-  'process.background_started':
-    'Command started in the background (processId: {id}). Output: {log}',
+  // Фоновая работа (ADR-111): короткий факт запуска. Правило поведения
+  // («не опрашивай статус, уведомление придёт само, продолжай») живёт в
+  // системном блоке `background` (prompts/system/BACKGROUND.{lang}.md), а не
+  // дублируется в каждом результате инструмента.
+  'background.started.process':
+    'Command started in the background (processId: {id}). Output: {log}. You will be notified automatically.',
+  'background.started.subagent':
+    'The subagent is running in the background (sessionID: {id}). You will be notified automatically.',
   'process.deps_unavailable': 'Background processes are unavailable in this build',
   'process.background_limit':
     'The limit of background processes for this session has been reached ({limit}). Wait for a running process to finish or stop it.',
   'process.background_unsupported':
     'Background execution is unavailable in the current execution mode',
   'process.background_disabled': 'Background processes are disabled (background.enabled: false)',
-  'process.detached_started':
-    'Command moved to the background (processId: {id}). Output: {log}',
   'process.tool.empty': 'No background runs',
   'process.tool.not_found': 'Background run "{id}" not found',
   'process.tool.deps_unavailable': 'The background run registry is unavailable in this build',

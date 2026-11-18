@@ -300,6 +300,8 @@ export interface ProcessSetupDeps {
     query?: string;
     /** ADR-090: идентификатор хода (`streamId`). */
     turnId?: string;
+    /** Фоновая работа разрешена — блок `background` (промпт-правило фона). */
+    backgroundAvailable?: boolean;
   }) => ComposerContext;
   collectComposerMcpServers: (decisions: McpScopeDecision[]) => ComposerMcpServer[] | undefined;
   interviewEligible: (
@@ -314,6 +316,12 @@ export interface ProcessSetupDeps {
     },
   ) => boolean;
   schedulerCurrentTurn: (session: Session, message?: Message) => boolean;
+  /**
+   * Фоновая работа разрешена — живой геттер оркестратора (`isBackgroundEnabled`).
+   * Не задан (моки/шаги вне оркестратора) — фон считается выключенным:
+   * блок `background` в промпт не попадает.
+   */
+  isBackgroundEnabled?: () => boolean;
   composer: SystemPromptComposer;
   optimizer: ContextOptimizer | null;
   mcpManager: McpManager | null;
@@ -612,6 +620,9 @@ export async function runProcessSetup(
     }),
     // Текущий ход инициирован планировщиком — volatile-пояснение модели.
     schedulerCurrentTurn: deps.schedulerCurrentTurn(session, message),
+    // Правило фоновой работы в промпте — только при включённом фоне
+    // (живой геттер: runtime-тумблер применяется без рестарта).
+    backgroundAvailable: deps.isBackgroundEnabled?.() ?? false,
     // ADR-090: контекст текущего хода для провайдеров
     // блоков промпта — «вопрос хода» (текст последнего сообщения пользователя)
     // и метка хода. Системные/state-сообщения в вопрос не попадают.

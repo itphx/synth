@@ -34,6 +34,12 @@ export interface ContextFileRepository {
    */
   getSubagentNotice(language?: string): string;
   /**
+   * Правило поведения при разрешённой фоновой работе
+   * (prompts/system/BACKGROUND.{lang}.md): уведомление о завершении придёт
+   * автоматически, статус не опрашивать.
+   */
+  getBackgroundNotice(language?: string): string;
+  /**
    * Требование «только текст» для финального шага-отчёта саб-агента по
    * лимиту шагов (prompts/system/MAX_STEPS.{lang}.md).
    */

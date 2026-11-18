@@ -636,6 +636,60 @@ describe('ContextConfig.getSubagentNotice (ADR-026)', () => {
   });
 });
 
+describe('ContextConfig.getBackgroundNotice (правило фоновой работы)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-background-notice-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru → [ФОНОВАЯ РАБОТА], en → [BACKGROUND WORK], fr → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const ru = config.getBackgroundNotice('ru');
+    expect(ru).toContain('[ФОНОВАЯ РАБОТА]');
+    expect(ru).toContain('Уведомление о завершении придёт автоматически');
+
+    const en = config.getBackgroundNotice('en');
+    expect(en).toContain('[BACKGROUND WORK]');
+    expect(en).toContain('completion notice arrives automatically');
+    expect(en).not.toMatch(/[\u0400-\u04FF]/);
+
+    // Локализованного файла для неизвестного языка нет — блока нет.
+    expect(config.getBackgroundNotice('fr')).toBe('');
+  });
+
+  it('полнота локалей: встроенные BACKGROUND.{ru,en}.md существуют и непусты', async () => {
+    const config = new ContextConfig({ userDataDir });
+    for (const language of ['ru', 'en'] as const) {
+      const content = config.getBackgroundNotice(language);
+      expect(content.length, `пустой BACKGROUND.${language}.md`).toBeGreaterThan(100);
+    }
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'BACKGROUND.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ ФОН', 'utf-8');
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getBackgroundNotice('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ ФОН');
+  });
+
+  it('файла нет ни встроенного, ни override → пустая строка', async () => {
+    const emptyPrompts = await mkdtemp(join(tmpdir(), 'synth-background-empty-'));
+    try {
+      const config = new ContextConfig({ userDataDir, systemPromptsDir: emptyPrompts });
+      expect(config.getBackgroundNotice('ru')).toBe('');
+    } finally {
+      await rm(emptyPrompts, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ContextConfig.getMediaDeriveTemplate (ADR-115, aux-модель)', () => {
   let userDataDir: string;
 

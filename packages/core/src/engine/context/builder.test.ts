@@ -196,6 +196,44 @@ describe('ContextBuilder.buildBaseBlocks', () => {
     expect(english.find((block) => block.key === 'memory.guide')?.content).toContain('[MEMORY]');
   });
 
+  it('background: только при backgroundAvailable, из prompts/system/BACKGROUND.{lang}.md', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const builder = new ContextBuilder(config);
+
+    const withBackground = await builder.buildBaseBlocks({
+      agentRole: 'assistant', language: 'ru', backgroundAvailable: true,
+    });
+    const block = withBackground.find((b) => b.key === 'background');
+    expect(block?.tier).toBe('context');
+    expect(block?.order).toBe(26);
+    expect(block?.content).toContain('[ФОНОВАЯ РАБОТА]');
+    expect(block?.provenance).toBe('prompts/system/BACKGROUND');
+
+    const withoutBackground = await builder.buildBaseBlocks({
+      agentRole: 'assistant', language: 'ru', backgroundAvailable: false,
+    });
+    expect(withoutBackground.find((b) => b.key === 'background')).toBeUndefined();
+
+    const english = await builder.buildBaseBlocks({
+      agentRole: 'assistant', language: 'en', backgroundAvailable: true,
+    });
+    expect(english.find((b) => b.key === 'background')?.content).toContain('[BACKGROUND WORK]');
+  });
+
+  it('background: пустой файл промпта → блока нет', async () => {
+    const emptyPrompts = await mkdtemp(join(tmpdir(), 'synth-ctx-empty-'));
+    try {
+      const config = new ContextConfig({ userDataDir, systemPromptsDir: emptyPrompts });
+      const builder = new ContextBuilder(config);
+      const blocks = await builder.buildBaseBlocks({
+        agentRole: 'assistant', language: 'ru', backgroundAvailable: true,
+      });
+      expect(blocks.find((b) => b.key === 'background')).toBeUndefined();
+    } finally {
+      await rm(emptyPrompts, { recursive: true, force: true });
+    }
+  });
+
   it('возвращает блоки с ожидаемыми key/tier/order', async () => {
     const config = new ContextConfig({ userDataDir });
     const builder = new ContextBuilder(config);

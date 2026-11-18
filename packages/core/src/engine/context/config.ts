@@ -531,6 +531,28 @@ export class ContextConfig implements ContextFileRepository {
   }
 
   /**
+   * Правило поведения при разрешённой фоновой работе (фоновые процессы и
+   * фоновые саб-агенты): уведомление о завершении придёт автоматически, статус
+   * не опрашивать, продолжать независимую работу и не отчитываться о фоне как о
+   * завершённом. Блок `background` системного промпта (тир `context`).
+   *
+   * Файлы: prompts/system/BACKGROUND.{lang}.md — только локализованные
+   * (базового BACKGROUND.md нет). Override через {userDataDir}/user/system/ —
+   * стандартный механизм system-категории, проверяется первым.
+   * Возвращает пустую строку, если файл не найден.
+   */
+  getBackgroundNotice(language = 'ru'): string {
+    const stem = 'BACKGROUND';
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/BACKGROUND.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
+  /**
    * Требование «только текст» для финального шага-отчёта саб-агента,
    * которого коснулся лимит шагов (механика opencode: принудительный
    * финальный шаг с запретом инструментов).

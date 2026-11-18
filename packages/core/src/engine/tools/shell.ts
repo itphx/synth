@@ -292,14 +292,14 @@ async function startBackgroundProcess(
       ...(secrets.length > 0 ? { secrets } : {}),
     });
     return {
-      content: sm('process.background_started', { id: started.processId, log: started.logPath }),
+      content: sm('background.started.process', { id: started.processId, log: started.logPath }),
       metadata: {
         process_id: started.processId,
         background_run_id: started.runId,
         status: 'running',
         log_path: started.logPath,
         command: params.command,
-        i18n: i18nMeta('process.background_started', { id: started.processId, log: started.logPath }),
+        i18n: i18nMeta('background.started.process', { id: started.processId, log: started.logPath }),
       },
     };
   } catch (err) {

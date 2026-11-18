@@ -28,6 +28,12 @@ export interface BuildSystemPromptParams {
    * инструкция prompts/system/MEMORY.{lang}.md.
    */
   memoryAvailable?: boolean;
+  /**
+   * Фоновая работа разрешена в сессии (`background.enabled`, живой геттер
+   * оркестратора `isBackgroundEnabled()`). Только тогда в промпт попадает
+   * правило поведения prompts/system/BACKGROUND.{lang}.md.
+   */
+  backgroundAvailable?: boolean;
 }
 
 export interface ContextBuilderOptions {
@@ -135,6 +141,15 @@ export class ContextBuilder {
       if (memoryContent) this._debugAdd('memory', { loaded: true, language: lang });
     }
 
+    // 8.1 Background work rules (context). Правило «не поллить, уведомление
+    // придёт само» нужно только при разрешённой фоновой работе: иначе модель
+    // видела бы инструкции про недоступные ей режимы.
+    let backgroundContent = '';
+    if (params.backgroundAvailable) {
+      backgroundContent = this._config.getBackgroundNotice(lang);
+      if (backgroundContent) this._debugAdd('background', { loaded: true, language: lang });
+    }
+
     // 9. Interview prompt (volatile)
     // Блок показывается, только если: интервью включено настройкой сессии И
     // ход признан подходящим (`interviewEligible`: первое сообщение сессии от
@@ -162,6 +177,11 @@ export class ContextBuilder {
       // появлялась бы пустая «инструкция», хотя инструментов у агента нет.
       ...(params.memoryAvailable
         ? [{ key: 'memory.guide', tier: 'context' as const, order: 25, content: memoryContent, provenance: 'prompts/system/MEMORY' }]
+        : []),
+      // Правило фоновой работы — рядом с памятью, в том же тире `context`.
+      // Пустой файл (или отсутствие) — блок не попадает в промпт и манифест.
+      ...(backgroundContent
+        ? [{ key: 'background', tier: 'context' as const, order: 26, content: backgroundContent, provenance: 'prompts/system/BACKGROUND' }]
         : []),
       { key: 'sticky', tier: 'volatile', order: 10, content: stickyContent, provenance: 'stickyNotes' },
       { key: 'participants', tier: 'volatile', order: 20, content: participantsContent, provenance: 'history' },
