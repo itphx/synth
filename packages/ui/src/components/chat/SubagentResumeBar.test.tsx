@@ -129,4 +129,40 @@ describe('SubagentResumeBar (B8: плашка в дочерней сессии �
     expect(findBtn(container, 'Продолжить')).toBeDefined()
     expect(synthApi.stopGeneration).not.toHaveBeenCalled()
   })
+
+  // PROP-143: durable-запись остановки (`metadata.type='execution_stopped'`).
+  it('execution_stopped (provider_error) → плашка с причиной + «Продолжить»', async () => {
+    const container = await renderBar('child', {
+      stopReason: 'provider_error',
+      attempts: 3,
+      maxRetries: 3,
+      errorType: 'rate_limit',
+    }, { onResume: () => {}, onStop: () => {} })
+    expect(container.textContent).toContain('Сабагент остановлен: ошибка провайдера')
+    expect(findBtn(container, 'Продолжить')).toBeDefined()
+  })
+
+  it('execution_stopped (steps_limit) → «Продолжить» есть', async () => {
+    const container = await renderBar('child', {
+      stopReason: 'steps_limit',
+    }, { onResume: () => {}, onStop: () => {} })
+    expect(container.textContent).toContain('Сабагент остановлен: лимит шагов')
+    expect(findBtn(container, 'Продолжить')).toBeDefined()
+  })
+
+  it('execution_stopped (stopped_by_user) → плашка есть, «Продолжить» нет', async () => {
+    const container = await renderBar('child', {
+      stopReason: 'stopped_by_user',
+    }, { onResume: () => {}, onStop: () => {} })
+    expect(container.textContent).toContain('Сабагент остановлен: остановлено пользователем')
+    expect(findBtn(container, 'Продолжить')).toBeUndefined()
+  })
+
+  it('execution_stopped с неизвестной причиной → как internal, «Продолжить» есть', async () => {
+    const container = await renderBar('child', {
+      stopReason: 'что-то новое',
+    }, { onResume: () => {}, onStop: () => {} })
+    expect(container.textContent).toContain('Сабагент остановлен: внутренняя ошибка')
+    expect(findBtn(container, 'Продолжить')).toBeDefined()
+  })
 })

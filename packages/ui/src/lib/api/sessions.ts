@@ -228,6 +228,44 @@ export interface BackgroundSessionResponse {
 }
 
 /**
+ * PROP-142 §2: тело `POST /sessions/:id/resume-subagent` — необязательные
+ * указания продолжения дочерней сессии.
+ *
+ * Пустое тело — «никаких указаний» (прежнее поведение). Поля приходят
+ * только когда заданы: сервер разбирает тело как `{prompt?, model?, provider?}`.
+ */
+export interface SubagentResumeBody {
+  /** Текст реплики ребёнку (обычное user-сообщение в его истории). */
+  prompt?: string
+  /** Новая модель прогона ребёнка. */
+  model?: string
+  /** Новый провайдер прогона ребёнка. */
+  provider?: string
+}
+
+/**
+ * Статус ручного повтора восстановления (PROP-142 §3.7,
+ * `POST /sessions/:id/recovery/retry`).
+ *
+ * - `started` — восстановление запущено (дочерняя сессия саб-агента);
+ * - `resumed` — продолжен незавершённый ход основной сессии;
+ * - `queued` — запущен процессор очереди;
+ * - `nothing_to_resume` — восстанавливать нечего (200).
+ */
+export type RecoveryRetryStatus = 'started' | 'resumed' | 'queued' | 'nothing_to_resume'
+
+/** Ответ `POST /sessions/:id/recovery/retry` (PROP-142 §3.7). */
+export interface RecoveryRetryResponse {
+  status: RecoveryRetryStatus
+  /** Id потока продолженного хода (для `resumed`). */
+  stream_id?: string | null
+  /** Id дочерней сессии (для `started` — саб-агент). */
+  child_session_id?: string
+  /** Id родительской сессии (для `started`). */
+  parent_session_id?: string
+}
+
+/**
  * Ожидающее ответа подтверждение прав — DTO `GET /sessions/:id/permissions`.
  *
  * Snake_case — как payload события `permission.asked` (ADR-029), чтобы клиент
@@ -679,13 +717,34 @@ export const sessionsApi = {
   },
 
   // API v2: возобновить прерванную/ошибочную дочернюю сессию саб-агента (202, выполнение фоновое)
-  async resumeSubagent(childSessionId: string): Promise<{
+  //
+  // PROP-142 §2: тело необязательно — `{prompt?, model?, provider?}` (указания
+  // продолжения: текст реплики ребёнку и новая пара прогона). Без тела запрос
+  // уходит как раньше — «никаких указаний» (старый сервер тело не понимает,
+  // поэтому пустое тело не шлём — совместимость).
+  async resumeSubagent(
+    childSessionId: string,
+    body?: SubagentResumeBody,
+  ): Promise<{
     status: string
     child_session_id: string
     parent_session_id: string
     stream_id: string
   }> {
     return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(childSessionId)}/resume-subagent`, {
+      method: 'POST',
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    })
+  },
+
+  // PROP-142 §3.7: ручной повтор восстановления после терминализации хода
+  // (`POST /sessions/:id/recovery/retry`).
+  //
+  // Ответ: 202 `{status:'started'|'resumed'|'queued'}` — восстановление
+  // запущено; 200 `{status:'nothing_to_resume'}` — восстанавливать нечего;
+  // 409 `LOCKED` — сессия занята (идёт ход).
+  async recoveryRetry(sessionId: string): Promise<RecoveryRetryResponse> {
+    return fetchJSON(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/recovery/retry`, {
       method: 'POST',
     })
   },

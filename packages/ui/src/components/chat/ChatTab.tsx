@@ -145,10 +145,29 @@ export function ChatTab({ tab }: ChatTabProps) {
     ? messages.find((m) => m.id === debugModalMessageId) ?? null
     : null
 
-  // B8: последнее сообщение дочерней сессии — ошибка провайдера → плашка «Продолжить»
+  /**
+   * B8 + PROP-143: причина остановки дочерней сессии → плашка «Продолжить».
+   *
+   * Два источника:
+   *  1. Последнее сообщение — ошибка (`role='error'` / `metadata.error`) —
+   *     прежний контракт (ядро писало ошибку сообщением).
+   *  2. Последнее сообщение — durable-запись остановки (PROP-143,
+   *     `metadata.type='execution_stopped'`): причина — в `metadata.reason`,
+   *     тип ошибки провайдера — в `metadata.error_type`.
+   */
   const lastSessionError = useMemo<SubagentSessionError | null>(() => {
     const last = messages[messages.length - 1]
-    if (!last || !(last.role === 'error' || last.metadata?.error === true)) return null
+    if (!last) return null
+    if (last.metadata?.type === 'execution_stopped') {
+      return {
+        stopReason: typeof last.metadata?.reason === 'string' ? last.metadata.reason : '',
+        attempts: last.metadata?.attempts as number | undefined,
+        maxRetries: last.metadata?.max_retries as number | undefined,
+        errorType: last.metadata?.error_type as string | undefined,
+        error: last.content,
+      }
+    }
+    if (!(last.role === 'error' || last.metadata?.error === true)) return null
     return {
       attempts: last.metadata?.attempts as number | undefined,
       maxRetries: last.metadata?.max_retries as number | undefined,
@@ -164,7 +183,17 @@ export function ChatTab({ tab }: ChatTabProps) {
 
   const [sessionOrigin, setSessionOrigin] = useState<string | null>(null)
   const isSubagent = sessionOrigin === 'subagent'
-  const isReadOnly = isSubagent
+  /** Сессии больше нет (удалена/архивирована) — ввод недоступен. */
+  const [sessionUnavailable, setSessionUnavailable] = useState(false)
+  /**
+   * Read-only — сессия, в которой ввод невозможен: её больше нет
+   * (удалена/архивирована).
+   *
+   * Дочерняя сессия **интерактивна** (PROP-142 §2): сообщение уходит
+   * существующим путём `POST /sessions/:id/prompt`, а сервер сам решает
+   * steer/queue/resume. Поэтому `isSubagent` больше не означает read-only.
+   */
+  const isReadOnly = sessionUnavailable
   const [inputExpanded, setInputExpanded] = useState(false)
 
   const agentsRef = useRef<AgentInfo[]>([])
@@ -190,13 +219,22 @@ export function ChatTab({ tab }: ChatTabProps) {
         // Агенты и данные сессии параллельно (независимы друг от друга)
         const [agentsResp, session] = await Promise.all([
           synthApi.getAgents(sessionId),
-          synthApi.getSession(sessionId).catch(() => null),
+          synthApi.getSession(sessionId).catch((e: unknown) => {
+            // 404 — сессии нет (удалена/архивирована): вкладка остаётся
+            // read-only. Прочие ошибки (сеть/5xx) временны — ввод не
+            // блокируем (иначе временный сбой закрыл бы чат).
+            const status = (e as { status?: number } | null)?.status
+            if (!cancelled) setSessionUnavailable(status === 404)
+            return null
+          }),
         ])
         if (cancelled) return
 
         if (agentsResp) agentsRef.current = agentsResp.agents
 
         if (session) {
+          // Сессия на месте — ввод доступен (даже для дочерней: PROP-142).
+          setSessionUnavailable(false)
           // Кладём актуальные данные сессии (включая mode) в стор —
           // иначе PlanActModeToggle не увидит mode и покажет дефолт 'act'.
           useSessionsStore.getState().upsertSession(session)
@@ -724,7 +762,7 @@ export function ChatTab({ tab }: ChatTabProps) {
         />
       )}
 
-      {isEmpty && !isSubagent ? (
+      {isEmpty && !isReadOnly ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2">
           <SessionComposer
             controller={composer}
@@ -774,22 +812,26 @@ export function ChatTab({ tab }: ChatTabProps) {
             />
           )}
 
-          {isSubagent ? (
-            <>
-              <SubagentResumeBar
-                sessionId={sessionId}
-                lastError={lastSessionError}
-                onResume={handleResumeSubagent}
-                onStop={handleStopSubagentResume}
-              />
-              <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
-                <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
-              </div>
-            </>
+          {isSubagent && (
+            <SubagentResumeBar
+              sessionId={sessionId}
+              lastError={lastSessionError}
+              onResume={handleResumeSubagent}
+              onStop={handleStopSubagentResume}
+            />
+          )}
+
+          {isReadOnly ? (
+            // Сессии больше нет (удалена/архивирована) — ввода нет.
+            <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
+              <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
+            </div>
           ) : (
             // Композерная зона: плашка «отправка заблокирована», панель очереди
             // и поле ввода — общим компонентом (`SessionComposer`). Баннеры
             // (контекст, права, вопросы) — слотами: их порядок прежний.
+            // Дочерняя сессия (PROP-142 §2) — тот же композер: сообщение уходит
+            // `POST /sessions/:id/prompt`, сервер сам решает steer/queue/resume.
             <SessionComposer
               controller={composer}
               agents={agentsRef.current}

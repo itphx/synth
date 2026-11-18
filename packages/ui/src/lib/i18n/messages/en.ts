@@ -1721,6 +1721,10 @@ export const dict = {
   'processes.action.openSession': 'Open session',
   'processes.action.output': 'Output',
   'processes.action.refreshLog': 'Refresh log',
+  // PROP-142 §2: продолжение потерянного прогона саб-агента (`status='orphaned'`).
+  'processes.resumeLost': 'Resume',
+  'processes.resumeLostDone': 'Subagent run resumed',
+  'processes.resumeLostFailed': 'Failed to resume the run: {error}',
   'processes.log.truncated': 'The log was truncated (write limit reached)',
   'processes.log.empty': 'The log is empty',
   'processes.log.error': 'Failed to read the log: {error}',
@@ -1861,7 +1865,7 @@ export const dict = {
 
   // Chat
   'chat.input.placeholder': 'Type a message... Use @ to mention an agent',
-  'chat.input.readOnly': 'Read-only — this is a subagent session',
+  'chat.input.readOnly': 'Session is unavailable — input is disabled',
   'chat.input.send': 'Send',
   'chat.input.createNote': 'Create note',
   'chat.input.createNoteLimit': 'Note limit reached ({maxCount})',
@@ -2060,6 +2064,7 @@ export const dict = {
   'chat.subagent.steps': 'steps',
   'chat.subagent.open': 'Open',
   'chat.subagent.errorStopped': 'Subagent stopped: provider error',
+  'chat.subagent.resumeStopped': 'Subagent stopped: {reason}',
   'chat.subagent.errorAttempts': 'attempts: {attempts}/{max}',
   'chat.subagent.resume': 'Resume',
   'chat.subagent.resuming': 'Resuming…',

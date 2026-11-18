@@ -270,6 +270,37 @@ export const ProcessesTab: React.FC = () => {
     [loadScope, notify, t],
   )
 
+  /**
+   * PROP-142 §2: продолжить потерянный прогон саб-агента (`status='orphaned'`).
+   *
+   * Адресуется **дочерняя сессия** (`child_session_id`): сервер возобновляет
+   * её (`POST /sessions/:id/resume-subagent`). У обычного шелл-процесса
+   * дочерней сессии нет — действие только у прогонов-саб-агентов.
+   */
+  const handleResumeLost = useCallback(
+    async (run: BackgroundRunRecord) => {
+      const childId = run.childSessionId
+      if (!childId) return
+      setBusy(run.id)
+      try {
+        await synthApi.resumeSubagent(childId)
+        notify({ text: t('processes.resumeLostDone'), type: 'success', category: 'system' })
+        await loadScope()
+      } catch (err) {
+        notify({
+          text: t('processes.resumeLostFailed', {
+            error: err instanceof Error ? err.message : t('common.error'),
+          }),
+          type: 'error',
+          category: 'error',
+        })
+      } finally {
+        setBusy(null)
+      }
+    },
+    [loadScope, notify, t],
+  )
+
   /** Удаление терминальной записи реестра. */
   const handleRemove = useCallback(
     async (run: BackgroundRunRecord) => {
@@ -449,6 +480,7 @@ export const ProcessesTab: React.FC = () => {
                   busy={busy === run.id}
                   sessionName={sessionNames.get(run.sessionId) ?? run.sessionId}
                   onOpenSession={() => handleOpenSession(run)}
+                  onResume={run.status === 'orphaned' && run.childSessionId ? () => void handleResumeLost(run) : undefined}
                   onStop={() => void handleStop(run)}
                   onRerun={(script) => void handleRerunScript(run, script)}
                   onRemove={() => void handleRemove(run)}
@@ -475,6 +507,8 @@ interface RunCardProps {
   onOutput?: () => void
   /** Открыть дочернюю сессию (только для саб-агента). */
   onOpenSession?: () => void
+  /** Продолжить потерянный прогон саб-агента (`status='orphaned'`). */
+  onResume?: () => void
   /** Остановить прогон. */
   onStop: () => void
   /** Запустить скрипт снова. */
@@ -494,6 +528,7 @@ function RunCard({
   sessionName,
   onOutput,
   onOpenSession,
+  onResume,
   onStop,
   onRerun,
   onRemove,
@@ -587,6 +622,19 @@ function RunCard({
             data-testid={`processes-open-${run.id}`}
           >
             <Icon name="arrow-right-s" className="size-4" />
+          </Button>
+        )}
+        {onResume && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onResume}
+            disabled={busy}
+            title={t('processes.resumeLost')}
+            aria-label={t('processes.resumeLost')}
+            data-testid={`processes-resume-${run.id}`}
+          >
+            <Icon name="refresh" className="size-4" />
           </Button>
         )}
         {run.kind === 'process' && onOutput && (

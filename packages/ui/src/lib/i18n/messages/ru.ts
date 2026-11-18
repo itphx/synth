@@ -1698,6 +1698,10 @@ export const dict = {
   'processes.action.openSession': 'Открыть сессию',
   'processes.action.output': 'Вывод',
   'processes.action.refreshLog': 'Обновить лог',
+  // PROP-142 §2: продолжение потерянного прогона саб-агента (`status='orphaned'`).
+  'processes.resumeLost': 'Продолжить',
+  'processes.resumeLostDone': 'Прогон сабагента продолжен',
+  'processes.resumeLostFailed': 'Не удалось продолжить прогон: {error}',
   'processes.log.truncated': 'Лог обрезан (достигнут лимит записи)',
   'processes.log.empty': 'Лог пуст',
   'processes.log.error': 'Не удалось прочитать лог: {error}',
@@ -1838,7 +1842,7 @@ export const dict = {
 
   // Chat
   'chat.input.placeholder': 'Введите сообщение... Используйте @ для обращения к агенту',
-  'chat.input.readOnly': 'Только чтение — это сессия сабагента',
+  'chat.input.readOnly': 'Сессия недоступна — ввод отключён',
   'chat.input.send': 'Отправить',
   'chat.input.createNote': 'Создать заметку',
   'chat.input.createNoteLimit': 'Достигнут лимит заметок ({maxCount})',
@@ -2035,6 +2039,7 @@ export const dict = {
   'chat.subagent.steps': 'шагов',
   'chat.subagent.open': 'Открыть',
   'chat.subagent.errorStopped': 'Сабагент остановлен: ошибка провайдера',
+  'chat.subagent.resumeStopped': 'Сабагент остановлен: {reason}',
   'chat.subagent.errorAttempts': 'попыток: {attempts}/{max}',
   'chat.subagent.resume': 'Продолжить',
   'chat.subagent.resuming': 'Возобновление…',

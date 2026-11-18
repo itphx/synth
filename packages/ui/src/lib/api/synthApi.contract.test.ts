@@ -56,7 +56,7 @@ const EXPECTED_API_METHODS = [
   'listProcesses', 'listSessionScripts', 'listSnippets', 'listSshKeys', 'listTerminals', 'listTimers', 'listWorktrees', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'moveProjectPlanItem', 'patchSessionMode', 'patchTimer', 'pauseTimer', 'permissionReply', 'pinMessage', 'probeMcpServer', 'probeRawFile',
   'pruneCommandAudit', 'pruneWorktrees', 'publishProject', 'publishProjectPipeline', 'putProjectInvariants', 'putSkillFile', 'putUpdatesSettings',
-  'rawFileUrl', 'readFile', 'rebuildMemoryIndex', 'refreshOAuthCredential', 'regenerateWebhookSecret',
+  'rawFileUrl', 'readFile', 'rebuildMemoryIndex', 'recoveryRetry', 'refreshOAuthCredential', 'regenerateWebhookSecret',
   'registerGitRepo', 'releaseExecutionPool', 'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removePlugin',
   'removeProcess', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'removeTimer', 'removeWorktree',
   'reorderProjectPlanColumns', 'reorderQueue', 'reorderSessionTodos', 'reset', 'resetAgentsLimits',
@@ -88,7 +88,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (427)', () => {
+  it('набор методов совпадает с зафиксированным (428)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

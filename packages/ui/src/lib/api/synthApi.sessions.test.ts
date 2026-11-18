@@ -277,6 +277,64 @@ describe('sessionsApi — очередь промпта (прямой fetch)', (
       expect.objectContaining({ method: 'POST' }),
     )
   })
+
+  it('resumeSubagent без указаний: POST без тела (совместимость со старым сервером)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: 'running' }))
+
+    await synthApi.resumeSubagent('child 1')
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/sessions/child%201/resume-subagent',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    // Тела нет — указаний не было. `Content-Type` ставит общий `fetchJSON`
+    // (`lib/api/base.ts`) безусловно, поэтому проверяем именно тело.
+    const init = fetchMock.mock.calls[0]![1] as RequestInit
+    expect(init.body).toBeUndefined()
+  })
+
+  it('resumeSubagent с указаниями: тело — JSON (PROP-142 §2)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: 'running' }))
+
+    await synthApi.resumeSubagent('child-1', { prompt: 'продолжай', model: 'gpt-x', provider: 'openai' })
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/sessions/child-1/resume-subagent',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ prompt: 'продолжай', model: 'gpt-x', provider: 'openai' }),
+      }),
+    )
+    const init = fetchMock.mock.calls[0]![1] as RequestInit
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
+  })
+
+  it('recoveryRetry: POST /recovery/retry и разбор статуса ответа', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: 'resumed', stream_id: 'st-1' }, 202))
+
+    const result = await synthApi.recoveryRetry('s 1')
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/sessions/s%201/recovery/retry',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(result.status).toBe('resumed')
+    expect(result.stream_id).toBe('st-1')
+  })
+
+  it('recoveryRetry: «восстанавливать нечего» — 200 nothing_to_resume', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ status: 'nothing_to_resume' }))
+
+    const result = await synthApi.recoveryRetry('s1')
+
+    expect(result.status).toBe('nothing_to_resume')
+  })
+
+  it('recoveryRetry: занятая сессия → 409 LOCKED (Error с кодом)', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: { code: 'LOCKED', message: 'Сессия занята' } }, 409))
+
+    await expect(synthApi.recoveryRetry('s1')).rejects.toThrow('Сессия занята')
+  })
 })
 
 describe('sessionsApi — sticky notes и оптимизация контекста', () => {

@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   stopProcess: vi.fn(),
   removeProcess: vi.fn(),
   runSessionScript: vi.fn(),
+  resumeSubagent: vi.fn(),
   confirm: vi.fn(),
   notify: vi.fn(),
   listTerminals: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('@/lib/api/synthApi', () => ({
     stopProcess: mocks.stopProcess,
     removeProcess: mocks.removeProcess,
     runSessionScript: mocks.runSessionScript,
+    resumeSubagent: mocks.resumeSubagent,
   },
 }))
 // Список терминалов проекта — серверный; в тесте перехватываем запрос.
@@ -179,6 +181,7 @@ beforeEach(() => {
   })
   mocks.stopProcess.mockResolvedValue({ status: 'stopping' })
   mocks.removeProcess.mockResolvedValue(undefined)
+  mocks.resumeSubagent.mockResolvedValue({ status: 'started' })
   mocks.runSessionScript.mockResolvedValue({
     run_id: 'bgr_2',
     process_id: 'proc_2',
@@ -463,6 +466,75 @@ describe('ProcessesTab — реестр фоновой работы (PROP-096/09
       // Тач-таргет ≥40px на coarse-указателе (ADR-044).
       expect(button.className).toContain('pointer-coarse:size-10')
     }
+  })
+})
+
+describe('ProcessesTab — продолжение потерянного прогона саб-агента (PROP-142 §2)', () => {
+  it('у потерянного саб-агента есть «Продолжить»: клик возобновляет дочернюю сессию', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { kind: 'subagent', status: 'orphaned', childSessionId: 'child-1' }),
+    ])
+
+    const container = await renderProcesses()
+
+    const button = container.querySelector('[data-testid="processes-resume-bgr_1"]')
+    expect(button).not.toBeNull()
+
+    await click(container, 'processes-resume-bgr_1')
+
+    // Адресат — дочерняя сессия прогона, а не запись реестра.
+    expect(mocks.resumeSubagent).toHaveBeenCalledWith('child-1')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Subagent run resumed', type: 'success' }),
+    )
+  })
+
+  it('у шелл-процесса кнопки «Продолжить» нет, даже при status=orphaned', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', {
+        kind: 'process',
+        status: 'orphaned',
+        childSessionId: 'child-1',
+        command: 'npm test',
+      }),
+    ])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-item-bgr_1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="processes-resume-bgr_1"]')).toBeNull()
+  })
+
+  it('у завершённого саб-агента (не orphaned) кнопки «Продолжить» нет', async () => {
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', {
+        kind: 'subagent',
+        status: 'completed',
+        childSessionId: 'child-1',
+        finishedAt: '2026-10-01T00:05:00.000Z',
+      }),
+    ])
+
+    const container = await renderProcesses()
+
+    expect(container.querySelector('[data-testid="processes-resume-bgr_1"]')).toBeNull()
+  })
+
+  it('ошибка продолжения показывается тостом ошибки', async () => {
+    mocks.resumeSubagent.mockRejectedValue(new Error('нельзя продолжить'))
+    mocks.listProcesses.mockResolvedValue([
+      makeRun('bgr_1', { kind: 'subagent', status: 'orphaned', childSessionId: 'child-1' }),
+    ])
+
+    const container = await renderProcesses()
+    await click(container, 'processes-resume-bgr_1')
+
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining('нельзя продолжить'),
+        type: 'error',
+      }),
+    )
   })
 })
 
