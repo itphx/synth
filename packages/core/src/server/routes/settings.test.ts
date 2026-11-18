@@ -14,6 +14,54 @@ import { defaultConfig, resolveExecutionConfig } from '@itphx/synth-shared/confi
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { MemorySecurityAuditRepository } from '../../storage/memory/index.js';
 
+/**
+ * Форма JSON-ответов `/api/v2/settings/*`, которую читают проверки этого файла.
+ *
+ * Поля, к которым тест обращается по цепочке (`body.security.protectedPaths.enabled`),
+ * описаны явно; остальные значения остаются `unknown` и проверяются через
+ * `toEqual`/`toBe`. `any` не используется (`@typescript-eslint/no-explicit-any`),
+ * тело ответа приводится к типу от `unknown` (`await res.json()`).
+ */
+interface SettingsBody {
+  [key: string]: unknown;
+  error: { code: string; message: string; fields: string[] };
+  security: {
+    protectedPaths: { enabled: boolean };
+    askTimeoutMs: number;
+    promptInjection: { enabled: boolean; mode: string; wrapContent: boolean };
+  };
+  defaults: {
+    enabled: boolean;
+    provider: string;
+    escalationProvider: string;
+    escalationModel: string;
+    confidenceThreshold: number;
+    journalRetentionDays: number;
+    ephemeralTtl: string;
+    rateLimit: unknown;
+  };
+  events: { enabled: boolean; defaultMode: string };
+  decision: { enabled: boolean; provider: string; escalationProvider: string; escalationModel: string };
+  effective: {
+    disabledProfiles: unknown;
+    profiles: { base: { class: string }; browser: { class: string }; [name: string]: { class: string } };
+  };
+  policy: { mode: string; list: string[] };
+  profileOrigins: { base: unknown; legacy: unknown; p1: unknown };
+  running: { defaultProfile: string; profiles: Record<string, unknown> };
+  saved: { defaultProfile: string; profiles: { base: { url: string }; p1: { url: string } } };
+  metrics: {
+    calls: unknown;
+    handled: unknown;
+    fallback: unknown;
+    escalated: unknown;
+    attempts: unknown;
+    rejected: unknown;
+    by_model: unknown;
+  };
+  toolsDisabled: { tools: string[] };
+}
+
 function createMockAuth(): AuthKit {
   return {
     getCurrentUser: () => null,
@@ -48,7 +96,7 @@ describe('Settings API Routes (workspace)', () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/workspace');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ workspace: FALLBACK, isOverridden: false, defaults: FALLBACK });
     });
 
@@ -60,7 +108,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ workspace: '/custom/ws' }),
       });
       const res = await app.request('/api/v2/settings/workspace');
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ workspace: '/custom/ws', isOverridden: true, defaults: FALLBACK });
     });
   });
@@ -74,7 +122,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ workspace: '  /trimmed/ws  ' }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ workspace: '/trimmed/ws' });
     });
 
@@ -86,7 +134,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ workspace: '   ' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -137,7 +185,7 @@ describe('Settings API Routes (workspace)', () => {
 
       const res = await restartedApp.request('/api/v2/settings/workspace');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ workspace: '/persisted/ws', isOverridden: true, defaults: FALLBACK });
     });
 
@@ -162,7 +210,7 @@ describe('Settings API Routes (workspace)', () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/mcp');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ servers: {}, isOverridden: false, defaults: {} });
     });
 
@@ -181,7 +229,7 @@ describe('Settings API Routes (workspace)', () => {
       });
       const res = await app.request('/api/v2/settings/mcp');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.servers).toEqual(servers);
     });
   });
@@ -200,7 +248,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ servers }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.servers).toEqual(servers);
     });
 
@@ -212,7 +260,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ servers: { '': { default: { plan: true, act: true } } } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -224,7 +272,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ servers: { github: { default: { plan: 'yes', act: true } } } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -236,7 +284,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ servers: { github: { tools: { '': { plan: true, act: true } } } } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -248,7 +296,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({}),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -288,7 +336,7 @@ describe('Settings API Routes (workspace)', () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/security');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.security.protectedPaths.enabled).toBe(true);
       expect(body.security.askTimeoutMs).toBe(300_000);
     });
@@ -316,7 +364,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ security: { askTimeoutMs: -1 } }),
       });
       expect(negative.status).toBe(400);
-      const negativeBody: any = await negative.json();
+      const negativeBody: SettingsBody = (await negative.json()) as SettingsBody;
       expect(negativeBody.error.code).toBe('VALIDATION_ERROR');
 
       const fractional = await app.request('/api/v2/settings/security', {
@@ -507,14 +555,14 @@ describe('Settings API Routes (workspace)', () => {
       }));
       const res = await app.request('/api/v2/settings/tools-policy');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ toolsPolicy: 'available', isOverridden: false, defaults: 'available' });
     });
 
     it('GET по умолчанию auto (ADR-071 §2.3)', async () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/tools-policy');
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ toolsPolicy: 'auto', isOverridden: false, defaults: 'auto' });
     });
 
@@ -526,7 +574,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsPolicy: 'available' }),
       });
       expect(put.status).toBe(200);
-      const putBody: any = await put.json();
+      const putBody: SettingsBody = (await put.json()) as SettingsBody;
       expect(putBody).toEqual({ toolsPolicy: 'available' });
 
       const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
@@ -541,7 +589,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsPolicy: 'all' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -571,7 +619,7 @@ describe('Settings API Routes (workspace)', () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/mcp-policy');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ mcpPolicy: 'auto', isOverridden: false, defaults: 'auto' });
     });
 
@@ -585,7 +633,7 @@ describe('Settings API Routes (workspace)', () => {
       }));
       const res = await app.request('/api/v2/settings/mcp-policy');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ mcpPolicy: 'available', isOverridden: false, defaults: 'available' });
     });
 
@@ -597,7 +645,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ mcpPolicy: 'available' }),
       });
       expect(put.status).toBe(200);
-      const putBody: any = await put.json();
+      const putBody: SettingsBody = (await put.json()) as SettingsBody;
       expect(putBody).toEqual({ mcpPolicy: 'available' });
 
       const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
@@ -629,7 +677,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ mcpPolicy: 'all' }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -659,7 +707,7 @@ describe('Settings API Routes (workspace)', () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/mcp-network-policy');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.policy.mode).toBe('deny');
       expect(body.policy.list).toContain('10.0.0.0/8');
       expect(body.policy.list).toContain('127.0.0.0/8');
@@ -674,7 +722,7 @@ describe('Settings API Routes (workspace)', () => {
         fallbackMcpNetworkPolicy: { mode: 'allow', list: ['10.0.0.0/8'] },
       }));
       const res = await app.request('/api/v2/settings/mcp-network-policy');
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({
         policy: { mode: 'allow', list: ['10.0.0.0/8'] },
         isOverridden: false,
@@ -690,7 +738,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'] } }),
       });
       expect(put.status).toBe(200);
-      const putBody: any = await put.json();
+      const putBody: SettingsBody = (await put.json()) as SettingsBody;
       expect(putBody).toEqual({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'], exceptions: [] } });
 
       const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
@@ -709,7 +757,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ policy: { mode: 'block', list: [] } }),
       });
       expect(badMode.status).toBe(400);
-      const badModeBody: any = await badMode.json();
+      const badModeBody: SettingsBody = (await badMode.json()) as SettingsBody;
       expect(badModeBody.error.code).toBe('VALIDATION_ERROR');
 
       const badList = await app.request('/api/v2/settings/mcp-network-policy', {
@@ -734,7 +782,7 @@ describe('Settings API Routes (workspace)', () => {
         }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       // Исключение сохраняется нормализованным (trim).
       expect(body.policy).toEqual({
         mode: 'deny',
@@ -759,7 +807,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ policy: { mode: 'deny', list: [], exceptions: ['bad host'] } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.message).toBe(
         'policy: невалидная запись "bad host" (ожидается hostname, *.suffix, CIDR или IP)',
@@ -774,7 +822,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ policy: { mode: 'deny', list: [], exceptions: ['*'] } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.message).toBe(
         'policy: невалидная запись "*" (ожидается hostname, *.suffix, CIDR или IP)',
       );
@@ -806,7 +854,7 @@ describe('Settings API Routes (workspace)', () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/tools-disabled');
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({
         toolsDisabled: { capabilities: [], tools: [] },
         isOverridden: false,
@@ -823,7 +871,7 @@ describe('Settings API Routes (workspace)', () => {
         fallbackToolsDisabled: { capabilities: ['web'], tools: ['git_read'] },
       }));
       const res = await app.request('/api/v2/settings/tools-disabled');
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({
         toolsDisabled: { capabilities: ['web'], tools: ['git_read'] },
         isOverridden: false,
@@ -839,7 +887,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsDisabled: { capabilities: ['git_read'], tools: ['web_search'] } }),
       });
       expect(put.status).toBe(200);
-      const putBody: any = await put.json();
+      const putBody: SettingsBody = (await put.json()) as SettingsBody;
       expect(putBody).toEqual({ toolsDisabled: { capabilities: ['git_read'], tools: ['web_search'] } });
 
       const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
@@ -857,7 +905,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsDisabled: { capabilities: ['nope'], tools: [] } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
     });
 
@@ -869,7 +917,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsDisabled: { capabilities: ['runtime'], tools: [] } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.code).toBe('VALIDATION_ERROR');
       expect(body.error.message).toContain('runtime');
     });
@@ -882,7 +930,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsDisabled: { capabilities: ['user'], tools: [] } }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.toolsDisabled).toEqual({ capabilities: ['user'], tools: [] });
     });
 
@@ -903,7 +951,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['plan_read'] } }),
       });
       expect(res.status).toBe(400);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.error.message).toContain('plan_read');
     });
 
@@ -921,7 +969,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['srvA_search'] } }),
       });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.toolsDisabled.tools).toEqual(['srvA_search']);
     });
 
@@ -956,7 +1004,7 @@ describe('Settings API Routes (workspace)', () => {
 
       const res = await app.request('/api/v2/settings/workspace', { method: 'DELETE' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({
         status: 'restored',
         workspace: FALLBACK,
@@ -966,7 +1014,7 @@ describe('Settings API Routes (workspace)', () => {
       expect(await settingsStore.getWorkspace()).toBeUndefined();
 
       const get = await app.request('/api/v2/settings/workspace');
-      const getBody: any = await get.json();
+      const getBody: SettingsBody = (await get.json()) as SettingsBody;
       expect(getBody.workspace).toBe(FALLBACK);
       expect(getBody.isOverridden).toBe(false);
     });
@@ -981,11 +1029,11 @@ describe('Settings API Routes (workspace)', () => {
 
       const res = await app.request('/api/v2/settings/mcp', { method: 'DELETE' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body).toEqual({ status: 'restored', servers: {}, isOverridden: false, defaults: {} });
       expect(await settingsStore.getMcpSettings()).toEqual({});
 
-      const getBody: any = await (await app.request('/api/v2/settings/mcp')).json();
+      const getBody: SettingsBody = (await (await app.request('/api/v2/settings/mcp')).json()) as SettingsBody;
       expect(getBody.isOverridden).toBe(false);
     });
 
@@ -1007,7 +1055,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ llmGateway: { enabled: false } }),
       });
 
-      const body: any = await (await app.request('/api/v2/settings/llm-gateway')).json();
+      const body: SettingsBody = (await (await app.request('/api/v2/settings/llm-gateway')).json()) as SettingsBody;
       expect(body.llmGateway).toEqual({
         enabled: false,
         inputMode: 'block',
@@ -1041,7 +1089,7 @@ describe('Settings API Routes (workspace)', () => {
 
       const res = await app.request('/api/v2/settings/llm-gateway', { method: 'DELETE' });
       expect(res.status).toBe(200);
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.status).toBe('restored');
       expect(body.isOverridden).toBe(false);
       expect(body.llmGateway).toEqual(body.defaults);
@@ -1067,7 +1115,7 @@ describe('Settings API Routes (workspace)', () => {
         askTimeoutMs: 1234,
         promptInjection: { enabled: false, wrapContent: true, mode: 'sanitize' },
       };
-      const initial: any = await (await app.request('/api/v2/settings/security')).json();
+      const initial: SettingsBody = (await (await app.request('/api/v2/settings/security')).json()) as SettingsBody;
       expect(initial.security).toEqual(defaults);
       expect(initial.isOverridden).toBe(false);
       expect(initial.defaults).toEqual(defaults);
@@ -1083,7 +1131,7 @@ describe('Settings API Routes (workspace)', () => {
           security: { protectedPaths: { enabled: true }, askTimeoutMs: 999, promptInjection: { mode: 'block' } },
         }),
       });
-      const overridden: any = await (await app.request('/api/v2/settings/security')).json();
+      const overridden: SettingsBody = (await (await app.request('/api/v2/settings/security')).json()) as SettingsBody;
       expect(overridden.security).toEqual({
         protectedPaths: { enabled: true },
         askTimeoutMs: 999,
@@ -1092,7 +1140,7 @@ describe('Settings API Routes (workspace)', () => {
       expect(overridden.isOverridden).toBe(true);
 
       const res = await app.request('/api/v2/settings/security', { method: 'DELETE' });
-      const body: any = await res.json();
+      const body: SettingsBody = (await res.json()) as SettingsBody;
       expect(body.status).toBe('restored');
       // DELETE сбрасывает runtime-патч promptInjection; легаси-поля секции не трогает.
       expect(body.security).toEqual({
@@ -1140,7 +1188,7 @@ describe('Settings API Routes (workspace)', () => {
           fallbackPromptInjection: { enabled: true, wrapContent: false, mode: 'flag' },
         }));
 
-        const initial: any = await (await app.request('/api/v2/settings/security')).json();
+        const initial: SettingsBody = (await (await app.request('/api/v2/settings/security')).json()) as SettingsBody;
         expect(initial.security.promptInjection).toEqual({
           enabled: true,
           wrapContent: false,
@@ -1154,7 +1202,7 @@ describe('Settings API Routes (workspace)', () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ security: { promptInjection: { mode: 'block' } } }),
         });
-        const overridden: any = await (await app.request('/api/v2/settings/security')).json();
+        const overridden: SettingsBody = (await (await app.request('/api/v2/settings/security')).json()) as SettingsBody;
         expect(overridden.security.promptInjection).toEqual({
           enabled: true,
           wrapContent: false,
@@ -1236,7 +1284,7 @@ describe('Settings API Routes (workspace)', () => {
             body: JSON.stringify({ security }),
           });
           expect(res.status).toBe(400);
-          expect(((await res.json()) as any).error.code).toBe('VALIDATION_ERROR');
+          expect(((await res.json()) as SettingsBody).error.code).toBe('VALIDATION_ERROR');
         }
         expect(await settingsStore.getSecuritySettings()).toEqual({});
       });
@@ -1258,7 +1306,7 @@ describe('Settings API Routes (workspace)', () => {
           }),
         });
         expect(res.status).toBe(409);
-        const body: any = await res.json();
+        const body: SettingsBody = (await res.json()) as SettingsBody;
         expect(body.error.code).toBe('ENV_LOCKED');
         expect(body.error.fields).toEqual(['mode']);
         // Частичного применения нет.
@@ -1285,7 +1333,7 @@ describe('Settings API Routes (workspace)', () => {
           env: { SYNTH_SECURITY_PROMPT_INJECTION_ENABLED: '1' },
         }));
 
-        const body: any = await (await app.request('/api/v2/settings/security')).json();
+        const body: SettingsBody = (await (await app.request('/api/v2/settings/security')).json()) as SettingsBody;
         expect(body.security.promptInjection).toEqual({
           enabled: true,
           wrapContent: true,
@@ -1308,7 +1356,7 @@ describe('Settings API Routes (workspace)', () => {
 
         const res = await app.request('/api/v2/settings/security', { method: 'DELETE' });
         expect(res.status).toBe(409);
-        const body: any = await res.json();
+        const body: SettingsBody = (await res.json()) as SettingsBody;
         expect(body.error.code).toBe('ENV_LOCKED');
         expect(body.error.fields).toEqual(['mode']);
         expect((await settingsStore.getSecuritySettings()).promptInjection).toEqual({
@@ -1335,7 +1383,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsPolicy: 'consistency' }),
       });
 
-      const body: any = await (await app.request('/api/v2/settings/tools-policy', { method: 'DELETE' })).json();
+      const body: SettingsBody = (await (await app.request('/api/v2/settings/tools-policy', { method: 'DELETE' })).json()) as SettingsBody;
       expect(body).toEqual({ status: 'restored', toolsPolicy: 'available', isOverridden: false, defaults: 'available' });
       expect(onToolsPolicyChange).toHaveBeenLastCalledWith('available');
       expect(await settingsStore.getToolsPolicy()).toBeUndefined();
@@ -1357,7 +1405,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ mcpPolicy: 'consistency' }),
       });
 
-      const body: any = await (await app.request('/api/v2/settings/mcp-policy', { method: 'DELETE' })).json();
+      const body: SettingsBody = (await (await app.request('/api/v2/settings/mcp-policy', { method: 'DELETE' })).json()) as SettingsBody;
       expect(body).toEqual({ status: 'restored', mcpPolicy: 'available', isOverridden: false, defaults: 'available' });
       expect(onMcpPolicyChange).toHaveBeenLastCalledWith('available');
       expect(await settingsStore.getMcpPolicy()).toBeUndefined();
@@ -1380,7 +1428,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ policy: { mode: 'deny', list: [] } }),
       });
 
-      const body: any = await (await app.request('/api/v2/settings/mcp-network-policy', { method: 'DELETE' })).json();
+      const body: SettingsBody = (await (await app.request('/api/v2/settings/mcp-network-policy', { method: 'DELETE' })).json()) as SettingsBody;
       expect(body).toEqual({ status: 'restored', policy: fallback, isOverridden: false, defaults: fallback });
       expect(onMcpNetworkPolicyChange).toHaveBeenLastCalledWith(fallback);
       expect(await settingsStore.getMcpNetworkPolicy()).toBeUndefined();
@@ -1403,7 +1451,7 @@ describe('Settings API Routes (workspace)', () => {
         body: JSON.stringify({ toolsDisabled: { capabilities: [], tools: ['srvA_search'] } }),
       });
 
-      const body: any = await (await app.request('/api/v2/settings/tools-disabled', { method: 'DELETE' })).json();
+      const body: SettingsBody = (await (await app.request('/api/v2/settings/tools-disabled', { method: 'DELETE' })).json()) as SettingsBody;
       expect(body).toEqual({ status: 'restored', toolsDisabled: fallback, isOverridden: false, defaults: fallback });
       expect(onToolsDisabledChange).toHaveBeenLastCalledWith(fallback);
       expect(await settingsStore.getToolsDisabled()).toBeUndefined();
@@ -1427,7 +1475,7 @@ describe('Settings API Routes — default-agent (админка «Агенты»
     const { app } = createTestApp(tmpDir, FALLBACK);
     const res = await app.request('/api/v2/settings/default-agent');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body).toEqual({ defaultAgent: DEFAULT_AGENT_ID, isOverridden: false, defaults: DEFAULT_AGENT_ID });
   });
 
@@ -1440,7 +1488,7 @@ describe('Settings API Routes — default-agent (админка «Агенты»
       fallbackDefaultAgent: 'researcher',
     }));
     const res = await app.request('/api/v2/settings/default-agent');
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body).toEqual({ defaultAgent: 'researcher', isOverridden: false, defaults: 'researcher' });
   });
 
@@ -1452,14 +1500,14 @@ describe('Settings API Routes — default-agent (админка «Агенты»
       body: JSON.stringify({ defaultAgent: 'fixer' }),
     });
     expect(put.status).toBe(200);
-    const putBody: any = await put.json();
+    const putBody: SettingsBody = (await put.json()) as SettingsBody;
     expect(putBody).toEqual({ defaultAgent: 'fixer' });
 
     const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
     expect(await restartedStore.getDefaultAgent()).toBe('fixer');
 
     const getRes = await app.request('/api/v2/settings/default-agent');
-    const getBody: any = await getRes.json();
+    const getBody: SettingsBody = (await getRes.json()) as SettingsBody;
     expect(getBody).toEqual({ defaultAgent: 'fixer', isOverridden: true, defaults: DEFAULT_AGENT_ID });
   });
 
@@ -1471,7 +1519,7 @@ describe('Settings API Routes — default-agent (админка «Агенты»
       body: JSON.stringify({ defaultAgent: '   ' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 
@@ -1483,7 +1531,7 @@ describe('Settings API Routes — default-agent (админка «Агенты»
       body: JSON.stringify({ defaultAgent: '  fixer  ' }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body).toEqual({ defaultAgent: 'fixer' });
     const store = new RuntimeSettingsStore({ dataDir: tmpDir });
     expect(await store.getDefaultAgent()).toBe('fixer');
@@ -1497,7 +1545,7 @@ describe('Settings API Routes — default-agent (админка «Агенты»
       body: JSON.stringify({ defaultAgent: 'Dev Agent!' }),
     });
     expect(res.status).toBe(400);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 
@@ -1536,14 +1584,14 @@ describe('Settings API Routes — default-agent (админка «Агенты»
       body: JSON.stringify({ defaultAgent: 'fixer' }),
     });
 
-    const body: any = await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json();
+    const body: SettingsBody = (await (await app.request('/api/v2/settings/default-agent', { method: 'DELETE' })).json()) as SettingsBody;
     expect(body).toEqual({ status: 'restored', defaultAgent: 'researcher', isOverridden: false, defaults: 'researcher' });
     expect(onDefaultAgentChange).toHaveBeenLastCalledWith('researcher');
     expect(await settingsStore.getDefaultAgent()).toBeUndefined();
   });
 });
 
-async function settingsLoad(tmpDir: string): Promise<{ workspace?: string; mcpServers?: Record<string, any> }> {
+async function settingsLoad(tmpDir: string): Promise<{ workspace?: string; mcpServers?: Record<string, Record<string, { plan?: boolean; act?: boolean }>> }> {
   const raw = await readFile(join(tmpDir, 'settings.json'), 'utf-8');
   return JSON.parse(raw);
 }
@@ -1562,7 +1610,7 @@ describe('Settings API Routes (workspace-policy, ADR-075)', () => {
 
   it('GET: дефолт confirm при отсутствии runtime/конфига', async () => {
     const { app } = createTestApp(tmpDir, FALLBACK);
-    const body: any = await (await app.request('/api/v2/settings/workspace-policy')).json();
+    const body: SettingsBody = (await (await app.request('/api/v2/settings/workspace-policy')).json()) as SettingsBody;
     expect(body).toEqual({ outsideRoot: 'confirm', isOverridden: false, defaults: 'confirm' });
   });
 
@@ -1587,7 +1635,7 @@ describe('Settings API Routes (workspace-policy, ADR-075)', () => {
     expect(onWorkspacePolicyChange).toHaveBeenCalledWith('deny');
     expect(await settingsStore.getWorkspacePolicy()).toBe('deny');
 
-    const get: any = await (await app.request('/api/v2/settings/workspace-policy')).json();
+    const get: SettingsBody = (await (await app.request('/api/v2/settings/workspace-policy')).json()) as SettingsBody;
     expect(get).toEqual({ outsideRoot: 'deny', isOverridden: true, defaults: 'confirm' });
   });
 
@@ -1614,7 +1662,7 @@ describe('Settings API Routes (workspace-policy, ADR-075)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ outsideRoot: 'confirm' }),
     });
-    const body: any = await (await app.request('/api/v2/settings/workspace-policy', { method: 'DELETE' })).json();
+    const body: SettingsBody = (await (await app.request('/api/v2/settings/workspace-policy', { method: 'DELETE' })).json()) as SettingsBody;
     expect(body).toEqual({ status: 'restored', outsideRoot: 'deny', isOverridden: false, defaults: 'deny' });
     expect(await settingsStore.getWorkspacePolicy()).toBeUndefined();
   });
@@ -1643,13 +1691,13 @@ describe('Settings API Routes (workspace-policy, ADR-075)', () => {
       body: JSON.stringify({ outsideRoot: 'confirm' }),
     });
     expect(put.status).toBe(403);
-    expect(((await put.json()) as any).error.code).toBe('WORKSPACE_POLICY_READ_ONLY');
+    expect(((await put.json()) as SettingsBody).error.code).toBe('WORKSPACE_POLICY_READ_ONLY');
     expect(onWorkspacePolicyChange).not.toHaveBeenCalled();
     expect(await settingsStore.getWorkspacePolicy()).toBeUndefined();
 
     const del = await app.request('/api/v2/settings/workspace-policy', { method: 'DELETE' });
     expect(del.status).toBe(403);
-    expect(((await del.json()) as any).error.code).toBe('WORKSPACE_POLICY_READ_ONLY');
+    expect(((await del.json()) as SettingsBody).error.code).toBe('WORKSPACE_POLICY_READ_ONLY');
   });
 });
 
@@ -1685,7 +1733,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
     const { app } = makeEventsApp();
     const res = await app.request('/api/v2/settings/events');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.isOverridden).toBe(false);
     expect(body.defaults).toEqual({
       enabled: true,
@@ -1705,7 +1753,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
 
   it('GET /events — fallbackEvents из config перекрывает дефолты', async () => {
     const { app } = makeEventsApp({ enabled: false, ephemeralTtl: '1h', journalRetentionDays: 7 });
-    const body: any = await (await app.request('/api/v2/settings/events')).json();
+    const body: SettingsBody = (await (await app.request('/api/v2/settings/events')).json()) as SettingsBody;
     expect(body.defaults.enabled).toBe(false);
     expect(body.defaults.ephemeralTtl).toBe('1h');
     expect(body.defaults.journalRetentionDays).toBe(7);
@@ -1720,7 +1768,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
       body: JSON.stringify({ events: { enabled: false, keyRateLimitPerMinute: 10, allowedSources: ['telegram'] } }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.events).toMatchObject({ enabled: false, keyRateLimitPerMinute: 10, allowedSources: ['telegram'] });
     // Незаданные поля — дефолты.
     expect(body.events.defaultMode).toBe('bound');
@@ -1728,7 +1776,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
     expect(onEventsChange).toHaveBeenCalledOnce();
 
     // GET отражает override.
-    const get: any = await (await app.request('/api/v2/settings/events')).json();
+    const get: SettingsBody = (await (await app.request('/api/v2/settings/events')).json()) as SettingsBody;
     expect(get.isOverridden).toBe(true);
     expect(get.events.enabled).toBe(false);
   });
@@ -1741,7 +1789,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
       body: JSON.stringify({ events: { autoBind: true, autoBindAgentTemplate: 'assistant' } }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.events).toMatchObject({ autoBind: true, autoBindAgentTemplate: 'assistant' });
     expect(await settingsStore.getEvents()).toEqual({ autoBind: true, autoBindAgentTemplate: 'assistant' });
     expect(onEventsChange).toHaveBeenCalledWith(
@@ -1757,7 +1805,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
       body: JSON.stringify({ events: { identityMap: { 'chat:telegram:1': 'u-1', 'tg:2': 'u-2' } } }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.events).toMatchObject({
       identityMap: { 'chat:telegram:1': 'u-1', 'tg:2': 'u-2' },
     });
@@ -1792,7 +1840,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
         body: JSON.stringify(body),
       });
       expect(res.status).toBe(400);
-      expect(((await res.json()) as any).error.code).toBe('VALIDATION_ERROR');
+      expect(((await res.json()) as SettingsBody).error.code).toBe('VALIDATION_ERROR');
     }
     expect(onEventsChange).not.toHaveBeenCalled();
   });
@@ -1806,7 +1854,7 @@ describe('Settings API Routes (events, ADR-089)', () => {
     });
     const res = await app.request('/api/v2/settings/events', { method: 'DELETE' });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.status).toBe('restored');
     expect(body.isOverridden).toBe(false);
     expect(body.events.enabled).toBe(true);
@@ -1866,7 +1914,7 @@ describe('Settings API Routes (decision, ADR-084)', () => {
     const { app } = makeDecisionApp();
     const res = await app.request('/api/v2/settings/decision');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.isOverridden).toBe(false);
     expect(body.defaults).toEqual({
       enabled: false,
@@ -1881,7 +1929,7 @@ describe('Settings API Routes (decision, ADR-084)', () => {
 
   it('GET /decision — fallbackDecision из config перекрывает дефолты', async () => {
     const { app } = makeDecisionApp({ enabled: true, provider: 'routerai-decision' });
-    const body: any = await (await app.request('/api/v2/settings/decision')).json();
+    const body: SettingsBody = (await (await app.request('/api/v2/settings/decision')).json()) as SettingsBody;
     expect(body.defaults.enabled).toBe(true);
     expect(body.defaults.provider).toBe('routerai-decision');
     // Незаданные поля — дефолты схемы.
@@ -1900,7 +1948,7 @@ describe('Settings API Routes (decision, ADR-084)', () => {
       }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.decision.escalationProvider).toBe('routerai-decision');
     expect(body.decision.escalationModel).toBe('clef');
     expect(await settingsStore.getDecision()).toEqual({
@@ -1917,14 +1965,14 @@ describe('Settings API Routes (decision, ADR-084)', () => {
       body: JSON.stringify({ decision: { enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 } }),
     });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.decision).toMatchObject({ enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 });
     // Незаданные поля добраны дефолтами.
     expect(body.decision.provider).toBe('');
     expect(await settingsStore.getDecision()).toEqual({ enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 });
     expect(onDecisionChange).toHaveBeenCalledOnce();
 
-    const get: any = await (await app.request('/api/v2/settings/decision')).json();
+    const get: SettingsBody = (await (await app.request('/api/v2/settings/decision')).json()) as SettingsBody;
     expect(get.isOverridden).toBe(true);
     expect(get.decision.enabled).toBe(true);
   });
@@ -1949,7 +1997,7 @@ describe('Settings API Routes (decision, ADR-084)', () => {
         body: JSON.stringify(body),
       });
       expect(res.status).toBe(400);
-      expect(((await res.json()) as any).error.code).toBe('VALIDATION_ERROR');
+      expect(((await res.json()) as SettingsBody).error.code).toBe('VALIDATION_ERROR');
     }
     expect(onDecisionChange).not.toHaveBeenCalled();
   });
@@ -1963,7 +2011,7 @@ describe('Settings API Routes (decision, ADR-084)', () => {
     });
     const res = await app.request('/api/v2/settings/decision', { method: 'DELETE' });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.status).toBe('restored');
     expect(body.isOverridden).toBe(false);
     expect(body.decision.enabled).toBe(false);
@@ -1994,7 +2042,7 @@ describe('Settings API Routes (decision, ADR-084)', () => {
     const { app } = makeDecisionApp();
     const res = await app.request('/api/v2/settings/decision/metrics');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.metrics).toMatchObject({
       calls: expect.any(Number),
       handled: expect.any(Number),
@@ -2018,7 +2066,7 @@ describe('Settings API Routes (decision, ADR-084)', () => {
     const { app } = makeDecisionApp();
     const res = await app.request('/api/v2/settings/decision/metrics', { method: 'DELETE' });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.metrics.calls).toBe(0);
     expect(body.metrics.handled).toBe(0);
     expect(body.metrics.fallback).toBe(0);
@@ -2387,7 +2435,7 @@ describe('Settings API Routes — каталог профилей исполне
     const { app } = makeApp();
     const res = await app.request('/api/v2/settings/execution');
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.saved).toBeNull();
     expect(body.running.defaultProfile).toBe('base');
     expect(Object.keys(body.running.profiles).sort()).toEqual([
@@ -2410,10 +2458,10 @@ describe('Settings API Routes — каталог профилей исполне
   it('GET: эффективный каталог несёт классы профилей (exec/browser)', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/settings/execution');
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.effective.profiles.base.class).toBe('exec');
     expect(body.effective.profiles.browser.class).toBe('browser');
-    expect(body.effective.profiles['browser-full'].class).toBe('browser');
+    expect(body.effective.profiles['browser-full']?.class).toBe('browser');
   });
 
   it('PUT сохраняет runtime-каталог и требует рестарта (restartRequired true)', async () => {
@@ -2423,7 +2471,7 @@ describe('Settings API Routes — каталог профилей исполне
       profiles: { p1: { image: 'img:p1' } },
     }));
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.saved.defaultProfile).toBe('p1');
     expect(body.restartRequired).toBe(true);
     expect(await settingsStore.getExecution()).toEqual({
@@ -2438,7 +2486,7 @@ describe('Settings API Routes — каталог профилей исполне
       execution: { profiles: { p1: { url: ['http://p1:8080'] } } },
     }));
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.saved.profiles.p1.url).toEqual(['http://p1:8080']);
   });
 
@@ -2505,7 +2553,7 @@ describe('Settings API Routes — каталог профилей исполне
       profiles: { base: { url: ['http://base2:8080'] } },
     }));
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.saved.profiles.base.url).toEqual(['http://base2:8080']);
     // Config-профили сохранены (merge), metadata-профили — на месте.
     expect(Object.keys(body.effective.profiles).sort()).toEqual([
@@ -2523,7 +2571,7 @@ describe('Settings API Routes — каталог профилей исполне
       profiles: { p1: { image: 'img:p1' } },
     }));
     const res = await app.request('/api/v2/settings/execution');
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.profileOrigins.p1).toBe('runtime');
     expect(body.profileOrigins.legacy).toBe('config');
   });
@@ -2534,7 +2582,7 @@ describe('Settings API Routes — каталог профилей исполне
       disabledProfiles: ['legacy'],
     }));
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(Object.keys(body.effective.profiles)).not.toContain('legacy');
     expect(body.effective.disabledProfiles).toEqual(['legacy']);
     expect(body.profileOrigins.legacy).toBeUndefined();
@@ -2542,7 +2590,7 @@ describe('Settings API Routes — каталог профилей исполне
     // Обратное включение: имя убирается из disabledProfiles.
     await app.request('/api/v2/settings/execution', json('PUT', { disabledProfiles: [] }));
     const back = await app.request('/api/v2/settings/execution');
-    const backBody: any = await back.json();
+    const backBody: SettingsBody = (await back.json()) as SettingsBody;
     expect(Object.keys(backBody.effective.profiles)).toContain('legacy');
   });
 
@@ -2602,7 +2650,7 @@ describe('Settings API Routes — каталог профилей исполне
     }));
     const res = await app.request('/api/v2/settings/execution', { method: 'DELETE' });
     expect(res.status).toBe(200);
-    const body: any = await res.json();
+    const body: SettingsBody = (await res.json()) as SettingsBody;
     expect(body.saved).toBeNull();
     expect(body.isOverridden).toBe(false);
     expect(body.restartRequired).toBe(false);
