@@ -1,6 +1,6 @@
 {
   "schema": "synth.security.policy/v1",
-  "updated": "2026-11-08",
+  "updated": "2026-11-18",
   "recordDir": "docs/security/releases",
   "recordCiRun": {
     "requireCommitMatchFrom": "0.13.5",
@@ -32,7 +32,7 @@
     "countsRequiredFrom": "0.13.4",
     "profileSwitch": {
       "owner": "владелец задачи апгрейда зависимостей (@devops/@orchestrator)",
-      "moveWhen": "условие переключения: после апгрейдов @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x (и проверки фактического pnpm audit) поменять profile на \"post-upgrade\" и уточнить baseline по факту. ВЫПОЛНЕНО 2026-10-15: @modelcontextprotocol/sdk 1.29.0 → 1.32.1, simple-git 3.36.0 → 4.0.2 (+ транзитивный proxy-addr 2.0.7 → 2.0.8), profile = \"post-upgrade\". baseline синхронизирован с фактом 2026-11-08: critical 0, high 0 (факт записи 0.13.4: full 0/0, --prod 0/0/0/0). Повышение baseline — только осознанным изменением политики (см. why).",
+      "moveWhen": "условие переключения: после апгрейдов @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x (и проверки фактического pnpm audit) поменять profile на \"post-upgrade\" и уточнить baseline по факту. ВЫПОЛНЕНО 2026-10-15: @modelcontextprotocol/sdk 1.29.0 → 1.32.1, simple-git 3.36.0 → 4.0.2 (+ транзитивный proxy-addr 2.0.7 → 2.0.8), profile = \"post-upgrade\". baseline синхронизирован с фактом 2026-11-08: critical 0, high 0 (факт записи 0.13.4: full 0/0, --prod 0/0/0/0); синхронизация 2026-11-18 (после katex 0.19.1): critical 0, high 1 (picomatch, dev-only, патча нет) — см. note активного профиля. Повышение baseline — только осознанным изменением политики (см. why).",
       "why": "переключатель виден в диффе: ослабление/усиление ратчета — явное изменение политики, а не тихая правка проверки. baseline = факт аудита, а не запас: расхождение записи с baseline ловит гейт (если запись выше — error, если baseline выше факта — warning «ратчет ослаблен»)"
     },
     "profiles": {
@@ -42,9 +42,9 @@
         "note": "ИСТОРИЧЕСКОЕ состояние до апгрейдов (2026-10-16, pnpm audit --json): 3 critical + 42 high (moderate ~48, low ~12–13 — база advisory дрейфует, для ратчета не важны); все 45 critical+high — транзитивные, у всех 15 затронутых модулей есть patched_versions. Действовало до апгрейда sdk/simple-git; профиль не активен."
       },
       "post-upgrade": {
-        "baseline": { "critical": 0, "high": 0 },
+        "baseline": { "critical": 0, "high": 1 },
         "failOnDirect": true,
-        "note": "АКТИВНЫЙ профиль с 2026-10-20; baseline синхронизирован с фактом 2026-11-08. Факт записи аудита 0.13.4 (после overrides fast-uri/ip-address/qs/js-yaml/brace-expansion/source-map-js и @hono/node-server 2.x): `pnpm audit --json` full critical 0, high 0, moderate 1, low 1; `--prod` 0/0/0/0; прямых уязвимых модулей 0 (прямые = critical/high в прямых runtime-зависимостях воркспейса). Остаток — dev-only: minimatch <11 (moderate, eslint/typescript-eslint/@redocly; semver-safe патча нет) и esbuild 0.27.7 (low, tsup); в поставляемые артефакты не входят. Историческое состояние до апгрейдов — в профиле pre-upgrade. baseline — это факт, а не запас: запись с counts выше baseline гейт отвергает, а baseline выше факта даёт предупреждение «ратчет ослаблен» и требует осознанной синхронизации (profileSwitch), а не тихой правки."
+        "note": "АКТИВНЫЙ профиль с 2026-10-20; baseline синхронизирован с фактом 2026-11-08. Факт записи аудита 0.13.4 (после overrides fast-uri/ip-address/qs/js-yaml/brace-expansion/source-map-js и @hono/node-server 2.x): `pnpm audit --json` full critical 0, high 0, moderate 1, low 1; `--prod` 0/0/0/0; прямых уязвимых модулей 0 (прямые = critical/high в прямых runtime-зависимостях воркспейса). Остаток — dev-only: minimatch <11 (moderate, eslint/typescript-eslint/@redocly; semver-safe патча нет) и esbuild 0.27.7 (low, tsup); в поставляемые артефакты не входят. Историческое состояние до апгрейдов — в профиле pre-upgrade. baseline — это факт, а не запас: запись с counts выше baseline гейт отвергает, а baseline выше факта даёт предупреждение «ратчет ослаблен» и требует осознанной синхронизации (profileSwitch), а не тихой правки. СИНХРОНИЗАЦИЯ 2026-11-18 (решение владельца): baseline high поднят 0 → 1 осознанным изменением политики, т.к. baseline = факт аудита. Факт 2026-11-18 после обновления katex 0.19.1 (`packages/ui`, было 0.16.47): `pnpm audit --prod --json` — 0/0/0/0 (critical 0, high 0, moderate 0, low 0); `pnpm audit --json` (full) — critical 0, high 1 (picomatch GHSA-fc5q-39xc-vjpf, `<=4.0.7`, патча нет; все пути dev-only: eslint/typescript-eslint, tsup, vite/vitest, tsx → tinyglobby/picomatch), moderate 1 (minimatch `>=7 <11.0.1`, dev — eslint/typescript-eslint), low 1 (esbuild `>=0.27.3 <0.28.1`, dev — tsup/vite/vitest/tsx). Прямых уязвимых runtime-модулей (critical/high в прямых `dependencies` воркспейса) — 0. high 1 — принятый dev-only риск: разбор в записи аудита 0.13.10 → `exceptions[]` (picomatch-ghsa-fc5q-39xc-vjpf-dev-only), цель снижения — 0.13.11 (после появления патча >=4.0.8)."
       }
     }
   }

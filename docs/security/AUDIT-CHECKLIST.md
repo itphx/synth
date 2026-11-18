@@ -106,7 +106,9 @@ pnpm audit --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",
 ```
 
 Ожидаемо для активного профиля ратчета (`post-upgrade`, baseline синхронизирован с фактом
-2026-11-08): `critical 0`, `high 0` (full; `--prod` 0/0/0/0), прямых уязвимых модулей 0.
+2026-11-18): `critical 0`, `high 1` (full: high 1 — picomatch, dev-only, патча нет; moderate 1 —
+minimatch, dev; low 1 — esbuild, dev; `--prod` — 0/0/0/0),
+прямых уязвимых модулей 0.
 Канонические пороги — `policy.dependencies.profiles[policy.dependencies.profile].baseline`.
 В запись — машинночитаемые `counts: { critical, high }`: гейт сверяет их с baseline (выше — ошибка
 «запись превышает baseline», ниже — предупреждение «ратчет ослаблен»).
@@ -121,7 +123,8 @@ node scripts/security-gate.mjs --only dependencies --skip-tests   # ровно �
 
 Апгрейды `@modelcontextprotocol/sdk ≥ 1.31.0` (`1.32.1`) и `simple-git 4.x` (`4.0.2`) внесены 2026-10-15 —
 профиль ратчета в `policy.json` переключён на `post-upgrade`; после апгрейдов и overrides 0.13.4
-baseline синхронизирован с фактом 2026-11-08 (`critical 0`, `high 0`). Меняя пороги, правьте
+baseline синхронизирован с фактом 2026-11-08 (`critical 0`, `high 0`), затем 2026-11-18 (`high 1` —
+принятый dev-only риск picomatch GHSA-fc5q-39xc-vjpf, патча нет). Меняя пороги, правьте
 `policy.dependencies.profile`/`profiles` через `profileSwitch` (историю состояний оставляйте в `profiles`).
 
 ## 5. Baseline CI

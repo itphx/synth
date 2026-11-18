@@ -383,3 +383,48 @@ regexes = [
   '''ghr_super-secret-refresh-token''',
 ]
 regexTarget = "line"
+
+# 12. Ложные срабатывания `generic-credential-literal` в схеме конфигурации provisioner
+#     (PROP-140 / PROP-136b-2b): значением «секрета» там служит ИМЯ env-переменной
+#     (поле `token` со значением `SYNTH_PROVISIONER_[-]TOKEN` и
+#     `SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_[-]TOKEN`), а не сам токен —
+#     значение приходит из окружения/Secret (инвариант 13).
+#     `[-]` в примере выше — чтобы сам конфиг не выглядел секретом для правил сканера
+#     (иначе `.gitleaks.toml` находил бы «кред» в собственном комментарии — та же уловка,
+#     что в блоке 3).
+#     Подавление — пара «путь + точное имя переменной» (AND), поэтому настоящий литеральный
+#     токен в том же файле (другое значение) остаётся находкой.
+#     Имена переменных покрывают и исторические ревизии файла (в отчёте они видны как
+#     `packages/provisioner/src/config.ts@<commit>`): у allowlist нет привязки к номеру строки.
+[[allowlists]]
+description = "имена env-переменных как значение токена в схеме provisioner (не секрет)"
+paths = [
+  '''packages/provisioner/src/config\.ts$''',
+]
+regexes = [
+  '''SYNTH_PROVISIONER_TOKEN''',
+  '''SYNTH_PROVISIONER_EXECUTOR_COMMAND_POLICY_TOKEN''',
+]
+regexTarget = "line"
+
+# 13. Ложные срабатывания `generic-credential-literal` в dummy-фикстурах bearer-токенов
+#     исполнителя и runtime-прокси плагинов: константа `TOKEN` в тестах — заведомо
+#     тестовое значение (`…-token-test-1234567890`, `runtime-proxy-token-…`), не кред.
+#     Подавление — пара «путь + точное dummy-значение» (AND): настоящий токен в тех же
+#     файлах (другое значение) остаётся находкой.
+#     Точные значения (а не общий префикс `executor-`) выбраны намеренно: исторические
+#     ревизии этих файлов содержат ровно те же литералы, поэтому path+значение покрывают
+#     и их (в отчёте — `…@<commit>`), а маркер не «размывается» до любого executor-токена.
+[[allowlists]]
+description = "dummy-фикстуры токенов исполнителя и runtime-прокси (TEST ONLY)"
+paths = [
+  '''packages/core/src/engine/plugins/remote/runtime-proxy\.test\.ts$''',
+  '''packages/executor/src/fs-routes\.test\.ts$''',
+  '''packages/executor/src/pty-client\.test\.ts$''',
+]
+regexes = [
+  '''runtime-proxy-token-1234567890abcdef''',
+  '''executor-fs-token-test-1234567890''',
+  '''executor-pty-client-token-test-1234567890''',
+]
+regexTarget = "line"
