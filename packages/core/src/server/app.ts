@@ -198,6 +198,12 @@ export interface StandaloneConfig {
    */
   limitsConfig?: SynthConfig['limits'];
   /**
+   * PROP-142 §3: секция `recovery` — бюджет автовосстановления прерванных
+   * ходов (`autoResume`/`maxAttempts`/`crashLoop.*`). Не задана — дефолты
+   * бюджета (`sessions/recovery-boot.ts`).
+   */
+  recoveryConfig?: SynthConfig['recovery'];
+  /**
    * PROP-124: секция `ssh` — режим работы инстанса с SSH-ключами
    * (`tools`|`agent`). Не задана — `tools` (fail-closed).
    */

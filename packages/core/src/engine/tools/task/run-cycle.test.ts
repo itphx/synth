@@ -3314,3 +3314,99 @@ describe('run-cycle — durable-запись причины остановки (
     expect(result.content).toContain('<status>error</status>');
   });
 });
+
+/**
+ * PROP-142 §3: сброс бюджета автовосстановления дочерней сессии.
+ *
+ * Durable-счётчик `status.recovery` живёт в метаданных сессии. Успешный
+ * финал прогона ребёнка закрывает ход — «попытки на ход» не должны копиться
+ * между прогонами (иначе после нескольких нормальных прогонов автовосстановление
+ * ребёнка упёрлось бы в бюджет). Провал/отмена хода не закрывают — счётчик
+ * остаётся.
+ */
+describe('run-cycle — сброс бюджета автовосстановления ребёнка (PROP-142 §3)', () => {
+  /** Отметка о попытке автовосстановления в метаданных ребёнка. */
+  async function markRecoveryAttempt(sessionId: string, attempts = 2): Promise<void> {
+    await sessionManager.mutateMeta(sessionId, (meta) => {
+      meta.status.recovery = {
+        attempts,
+        attemptsAt: [nowISO()],
+        lastAt: nowISO(),
+      };
+      return true;
+    });
+  }
+
+  it('успешный финал очищает status.recovery дочерней сессии', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await markRecoveryAttempt(child.id);
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'готово' }]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, streamId: 'st-ok' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.status.recovery).toBeUndefined();
+  });
+
+  it('шаг-лимит — финал тоже успешный: счётчик сброшен', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await markRecoveryAttempt(child.id);
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop')],
+      [{ isFinal: true, content: 'ОТЧЁТ по лимиту шагов' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 2,
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.status.recovery).toBeUndefined();
+  });
+
+  it('провал прогона: счётчик остаётся (ход не завершён)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    await markRecoveryAttempt(child.id, 3);
+    const provider = throwingProvider(new Error('401 Unauthorized: invalid api key'));
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, streamId: 'st-err' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      retry: { maxRetries: 1, delaysMs: [0] },
+    }));
+
+    expect(result.isError).toBe(true);
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.status.recovery?.attempts).toBe(3);
+  });
+
+  it('без счётчика запись не происходит (прогон не падает)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([[{ isFinal: true, content: 'готово' }]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, streamId: 'st-none' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.status.recovery).toBeUndefined();
+  });
+});

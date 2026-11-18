@@ -67,6 +67,27 @@ function makeProvider(content = 'mock response') {
   };
 }
 
+/**
+ * Провайдер с пошаговым сценарием: `contents[i]` — ответ i-го вызова (последний
+ * повторяется). Нужен, чтобы отличить первый проход прогона от прохода
+ * дренажа очереди (PROP-142 §1).
+ */
+function makeScriptedProvider(contents: string[]) {
+  let calls = 0;
+  const chatAsync = vi.fn(() => {
+    const content = contents[Math.min(calls, contents.length - 1)] ?? '';
+    calls += 1;
+    return (async function* () {
+      yield { isFinal: true, content, toolCalls: [] };
+    })();
+  });
+  return {
+    provider: { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider,
+    chatAsync,
+    calls: () => calls,
+  };
+}
+
 function makeCtx(extra: Partial<TaskExtra>, sessionId = 'parent-1'): ToolContext {
   return {
     sessionId,
@@ -1396,6 +1417,58 @@ describe('task/tool.ts — PROP-142: доставка занятому ребё�
     const saved = (await sessionManager.getSession(child.id))!;
     expect(saved.steerInbox ?? []).toHaveLength(0);
     expect(saved.pendingMessages ?? []).toHaveLength(0);
+  });
+
+  it('свободный ребёнок + prompt: сообщение из очереди уходит в историю, ребёнок делает второй проход (PROP-142 §1)', async () => {
+    const child = await sessionManager.createSession({
+      title: 'C',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      settings: { agentRole: 'explore' },
+    });
+    // Сообщение, доставленное занятому ребёнку (`delivery: 'queue'`), лежит в
+    // его обычной очереди: после прогона ребёнок обязан его подхватить сам.
+    await sessionManager.addPendingMessage(child.id, {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('уточнение из очереди')],
+      content: 'уточнение из очереди',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'user',
+    });
+
+    const { provider, chatAsync } = makeScriptedProvider(['первый проход', 'второй проход']);
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'продолжай', task_id: child.id },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // Ровно два вызова LLM: прогон + один проход дренажа очереди.
+    expect(chatAsync).toHaveBeenCalledTimes(2);
+    // Итог tool_result — от второго прохода.
+    expect(result.content).toContain('второй проход');
+    expect(result.content).not.toContain('первый проход');
+
+    // Доставленное сообщение перенесено в историю ребёнка, очередь пуста.
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.pendingMessages ?? []).toHaveLength(0);
+    const delivered = saved.messages.find(
+      (m) => m.role === MessageRole.USER && m.content === 'уточнение из очереди',
+    );
+    expect(delivered).toBeDefined();
+    expect(delivered!.seq).toBeGreaterThan(0);
   });
 });
 

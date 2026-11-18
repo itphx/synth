@@ -110,6 +110,12 @@ function filledConfig(): SynthConfig {
     background: { ...defaultConfig.background, enabled: false, maxRunsPerSession: 3 },
     agents: { ...defaultConfig.agents, subagentMaxInputTokens: 12_000 },
     limits: { ...defaultConfig.limits, sessionOpsPerMinute: 5 },
+    recovery: {
+      ...defaultConfig.recovery,
+      autoResume: false,
+      maxAttempts: 5,
+      crashLoop: { windowMinutes: 20, maxRestarts: 4 },
+    },
     ssh: { ...defaultConfig.ssh, mode: 'agent' },
     attachments: {
       ...defaultConfig.attachments,
@@ -203,6 +209,12 @@ describe('buildStandaloneOptions', () => {
     expect(options.backgroundConfig).toMatchObject({ enabled: false, maxRunsPerSession: 3 });
     expect(options.agentsConfig?.subagentMaxInputTokens).toBe(12_000);
     expect(options.limitsConfig?.sessionOpsPerMinute).toBe(5);
+    // PROP-142 §3: бюджет автовосстановления доезжает до standalone-опций.
+    expect(options.recoveryConfig).toMatchObject({
+      autoResume: false,
+      maxAttempts: 5,
+      crashLoop: { windowMinutes: 20, maxRestarts: 4 },
+    });
     expect(options.sshConfig?.mode).toBe('agent');
     expect(options.attachmentsConfig).toMatchObject({ enabled: false, maxFilesPerMessage: 4 });
     expect(options.metricsConfig?.enabled).toBe(true);

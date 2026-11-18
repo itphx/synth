@@ -21,7 +21,7 @@ import { prepareChildSession, type PreparedChildSession } from './fork.js';
 import { ensureTodoStateMessage } from './child-todo-state.js';
 import { toTodoItem } from '../todo.js';
 import { buildSubagentUnavailableToolsSection, buildTodoFinalizeSection, messageToLLMMessage, resolveSubagentPrompt } from './prompt.js';
-import { runSubagent, type SubagentRunConfig } from './run-cycle.js';
+import { runSubagentWithQueueDrain, type SubagentRunConfig } from './run-cycle.js';
 import { runDetachableSubagent } from './detachable.js';
 import { appendContinuationMessage, appendResumeMarker, resumeInitialMessages } from './resume-target.js';
 import { enqueueSteerMessage, requeueMessages } from '../../../queue/processor.js';
@@ -519,7 +519,11 @@ export const taskTool: ToolDefinition = {
     // /sessions/:id/background` может перевести его в фон, и тогда блокирующее
     // ожидание вернёт модели «переведено в фон». Без реестра/сервиса фоновых
     // прогонов — прежний блокирующий путь без изменений.
-    return runDetachableSubagent({ params, runConfig, extra, ctx });
+    //
+    // PROP-142 §1: цикл — с дренажем очереди ребёнка (`delivery: 'queue'`):
+    // после успешного прогона доставленное сообщение уходит в историю и
+    // ребёнок делает ровно один проход продолжения.
+    return runDetachableSubagent({ params, runConfig, extra, ctx, run: runSubagentWithQueueDrain });
   },
 };
 
@@ -1148,7 +1152,10 @@ async function continueChildSession(opts: {
     });
   }
 
-  return runSubagent(runConfig);
+  // PROP-142 §1: продолжение свободного ребёнка — с дренажем его очереди
+  // (сообщение, доставленное занятому ребёнку с `delivery: 'queue'`, лежит в
+  // `pendingMessages`; после прогона ребёнок делает ровно один проход).
+  return runSubagentWithQueueDrain(runConfig);
 }
 
 /**
@@ -1507,7 +1514,10 @@ async function startBackgroundSubagent(opts: {
     abortSignal: backgroundAbort.signal,
   };
 
-  void runSubagent({ ...runConfig, extra: detachedExtra, ctx: detachedCtx })
+  // PROP-142 §1: detached-прогон — тоже с дренажем очереди ребёнка: после
+  // успешного фонового прогона доставленное сообщение уходит в историю и
+  // ребёнок делает ровно один проход продолжения.
+  void runSubagentWithQueueDrain({ ...runConfig, extra: detachedExtra, ctx: detachedCtx })
     .then(async (result) => {
       const stoppedByUser = result.metadata?.stopped_by === 'user';
       const status: 'completed' | 'failed' | 'cancelled' = result.isError

@@ -57,6 +57,7 @@ import type { AssistantMessageStatus } from '../../orchestrator/persistence.js';
 import { appendStopRecord } from '../../stop-record.js';
 import type { StopRecordInput } from '../../stop-reason.js';
 import { requeueMessages } from '../../../queue/processor.js';
+import { resetRecoveryState } from '../../../sessions/recovery.js';
 import { renderTodosSection } from '../todo.js';
 import { resolveBrowserProfile } from '../../../execution/profile-binding.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
@@ -203,6 +204,32 @@ function todoMetadata(todos: TodoItem[]): Record<string, unknown> {
       (todo) => todo.status === 'pending' || todo.status === 'in_progress',
     ).length,
   };
+}
+
+/**
+ * Сброс бюджета автовосстановления дочерней сессии (PROP-142 §3): успешный
+ * финал прогона закрывает ход ребёнка — «попытки на ход» не должны копиться
+ * между прогонами (иначе после нескольких нормальных прогонов автовосстановление
+ * ребёнка упёрлось бы в бюджет).
+ *
+ * Счётчик живёт в `status.recovery` метаданных сессии; сброс — точечная
+ * мутация (`resetRecoveryState`, ADR-144). Поля нет — записи не происходит
+ * (сброс идемпотентен), ошибка — предупреждение в лог: успешный прогон
+ * ребёнка не должен из-за этого падать.
+ */
+async function resetChildRecoveryBudget(
+  sessionManager: TaskExtra['sessionManager'],
+  childSessionId: string | undefined,
+): Promise<void> {
+  if (!sessionManager || !childSessionId) return;
+  try {
+    await resetRecoveryState(sessionManager, childSessionId);
+  } catch (err) {
+    warning(
+      'TASK',
+      `сброс бюджета восстановления ребёнка ${childSessionId} не выполнен: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
@@ -2575,6 +2602,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     // Финализировать дочернюю сессию
     await commitChildUsage();
     await finalizeChildSession('completed');
+
+    // PROP-142 §3: успешный финал закрывает ход ребёнка — бюджет
+    // автовосстановления («попытки на ход») сбрасывается. Для провала/отмены
+    // счётчик остаётся: ход не завершён, автовосстановление ещё имеет смысл.
+    await resetChildRecoveryBudget(extra.sessionManager, childSessionId);
 
     // ─── Формирование результата tool_result ──────────────────────
     const qualityBlock = qaPass !== undefined

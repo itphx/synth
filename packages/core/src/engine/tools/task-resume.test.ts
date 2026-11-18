@@ -1094,6 +1094,66 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     const result = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result')!;
     expect(result.metadata!.resume_status).toBe('failed');
   });
+
+  // ─── PROP-142 §1: resume дренирует очередь ребёнка ───
+  it('PROP-142 §1: resume дренирует очередь ребёнка — сообщение уходит в историю, второй вызов LLM', async () => {
+    const { parent, child } = await createInterruptedChild();
+    // Сообщение, доставленное занятому ребёнку (`delivery: 'queue'`), лежит в
+    // его обычной очереди: после resume ребёнок обязан подхватить его сам.
+    await sessionManager.addPendingMessage(child, {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart('уточнение из очереди')],
+      content: 'уточнение из очереди',
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'user',
+    });
+
+    const contents = ['первый проход', 'второй проход'];
+    let calls = 0;
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        const content = contents[Math.min(calls, contents.length - 1)]!;
+        calls += 1;
+        yield { isFinal: true, content, toolCalls: [] };
+      }),
+    };
+
+    const result = await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-drain',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(result.status).toBe('completed');
+    // Ровно два вызова LLM: resume + один проход дренажа очереди.
+    expect(calls).toBe(2);
+
+    const saved = (await sessionManager.getSession(child))!;
+    expect(saved.pendingMessages ?? []).toHaveLength(0);
+    const delivered = saved.messages.find(
+      (m) => m.role === MessageRole.USER && m.content === 'уточнение из очереди',
+    );
+    expect(delivered).toBeDefined();
+    expect(delivered!.seq).toBeGreaterThan(0);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────

@@ -154,6 +154,9 @@ export function buildStandaloneOptions(input: StandaloneOptionsInput): Partial<S
     agentsConfig: synth.agents,
     // Лимит тяжёлых операций с сессиями (`limits.sessionOpsPerMinute`).
     limitsConfig: synth.limits,
+    // PROP-142 §3: бюджет автовосстановления прерванных ходов
+    // (`recovery.autoResume`/`maxAttempts`/`crashLoop.*`).
+    recoveryConfig: synth.recovery,
     // PROP-124: режим инстанса для SSH-ключей (`ssh.mode`).
     sshConfig: synth.ssh,
     // ADR-115: лимиты вложений сообщений (attachments.*).

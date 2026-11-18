@@ -8,8 +8,9 @@
  *  2. В историю дочерней сессии добавляется synthetic user-маркер
  *     (task.resume_marker через SystemMessages + metadata.resume) — он
  *     восстанавливает контекст для LLM.
- *  3. Запускается общий tool-loop саб-агента (runSubagent из task.ts) —
- *     без дублирования цикла.
+ *  3. Запускается общий tool-loop саб-агента (runSubagentWithQueueDrain из
+ *     task.ts — прогон + дренаж очереди ребёнка, PROP-142 §1) — без дублирования
+ *     цикла.
  *  4. По завершении итог записывается в РОДИТЕЛЬСКУЮ сессию как INFO-сообщение
  *     с metadata.type='subagent_resumed_result' + события в EventBus
  *     (message.added / session.updated у родителя, subagent.resume.* у обоих).
@@ -40,7 +41,7 @@ import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js
 import type { GitService } from '../../git/git-service.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
-  resolveSubagentPrompt, runSubagent,
+  resolveSubagentPrompt, runSubagentWithQueueDrain,
   buildSubagentUnavailableToolsSection,
   buildTodoFinalizeSection,
   type SubagentRetryConfig, type TaskExtra,
@@ -406,7 +407,10 @@ export async function runSubagentResume(
       retry,
     };
 
-    const result = await runSubagent({
+    // PROP-142 §1: resume — с дренажем очереди ребёнка: сообщение,
+    // доставленное занятому ребёнку (`delivery: 'queue'`), после успешного
+    // прогона уходит в историю, и ребёнок делает ровно один проход.
+    const result = await runSubagentWithQueueDrain({
       subagentType: agentRole,
       description: child.title ?? '',
       contextMode: 'none',
