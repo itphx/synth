@@ -253,6 +253,39 @@ opencode (`background blocking tools`).
   /sessions/:id/background` приходят в один процесс; маршрутизация запроса к реплике-владельцу хода
   не решена (в гибриде — ADR-042).
 
+## Обновление 2026-11-18 — таймаут, вывод и авто-detach (ADR-145)
+
+Дополнение к разделам «Перевод идущего прогона в фон (detach)» и «Статус в коде».
+Детали и альтернативы — [ADR-145](./adr-145-background-timeout-output-detach.md).
+
+1. **Таймаут переставляется хэндлом.** У `ExecBackgroundProcess` появляется
+   необязательный `retime?(timeoutMs)` (`0` — снять, отсчёт от вызова, после
+   завершения — no-op); отсутствие метода означает «переставлять нельзя».
+   `POST /sessions/:id/background` для шелла вызывает `retime(0)` **до** `adopt`,
+   при отказе `adopt` исходный срок восстанавливается. Исполнитель —
+   протокол **10** (`POST /exec/:id/timeout`, `features.backgroundRetime`);
+   исполнитель протокола < 10 переводить не даёт (`DETACH_FAILED`), прогон
+   остаётся блокирующим.
+2. **Вывод виден с первой секунды.** Foreground-команда пишет tee в
+   `processes/live/<processId>.log`; `adopt` принимает **тот же** файл
+   (`record.logPath`), префикс не копируется, при обычном завершении/«Стопе» лог
+   удаляется. У detach-прогонов нет потоковых файлов — только общий лог.
+3. **Авто-detach при steer.** Вмешательство в занятую сессию
+   (`POST /sessions/:id/prompt`, `delivery:'steer'`) переводит блокирующие
+   прогоны в фон **до** постановки инъекции (уважается живое
+   `background.enabled`; ошибки не ломают приём). Публикуется
+   `background.auto_detached {session_id, detached[], failed?}` — только при
+   непустом итоге; событие служит и сигналом тоста в UI.
+4. **Блок промпта и единые тексты.** Правило «не поллить, уведомление придёт
+   само, продолжай независимое или заверши ответ» вынесено в
+   `prompts/system/BACKGROUND.{ru,en}.md` (tier context, order 26, только при
+   включённой фоновой работе). Четыре ключа результатов схлопнуты в два:
+   `background.started.process` (`{id}`, `{log}`) и `background.started.subagent`
+   (`{id}`) — одинаковые для фонового запуска и detach.
+5. **Блокирующие прогоны видны в API/UI.** `GET /api/v2/processes?include=blocking`,
+   `POST /processes/blocking/:id/stop`, `GET /processes/blocking/:id/logs`;
+   секции блокирующих во вкладке «Процессы» (ADR-145 §4).
+
 ## Связи
 
 - [ADR-026](./adr-026-subagent-context-modes.md), [ADR-033](./adr-033-session-branching-merge.md),

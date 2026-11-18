@@ -22,7 +22,7 @@
 | Таймеры и будильники (ADR-141) | `timer` (`create\|list\|show\|update\|stop\|delete`) и `alarm` (те же действия) — capability `schedule`, доступны без workspace; привязка к **проекту и сессии** (без проекта — отказ); `timer`: `delay` 10…2 592 000 с; `alarm`: `at` (ISO; без смещения — **локальная зона сервера**) **или** `time` (`HH:MM`) + `timezone`, `repeat: once\|daily\|every`; `comment` 1…500 — **единственный смысл** срабатывания. Глаголы: `stop` — статус `cancelled`, запись остаётся (`include_stopped`), идемпотентен и для `fired`/`cancelled`, `delete` — удаление; `show` — полный комментарий; `list` — фильтр `status` (найти `fired`/`cancelled`) и `include_stopped`; `update` — задержка/время/повтор/комментарий (недостающие поля `daily`/`every` при правке берутся из текущего правила: на существующем `daily` можно менять только `timezone`); `allow_duplicate` (по умолчанию false) — иначе активный дубликат (тот же вид/комментарий/имя) отклоняется; `at` в прошлом — ошибка (допуск 60 с); лимит 50 активных на сессию; id `tmr_`/`alm_`; срабатывание — служебное `timer_fired` (вклинивается в ход). Точность — приблизительная (десятки мс дрейфа под нагрузкой); `update` по `fired`/`cancelled` — отказ. В описаниях: для ожидания использовать `timer`, а не `sleep` |
 | Инстанс и MCP (self-help, Workstream A1/A2) | `synth_info`, `synth_mcp_list`, `synth_mcp_test` (read) и `synth_mcp_add`, `synth_mcp_update`, `synth_mcp_remove`, `synth_mcp_enable`, `synth_mcp_reconnect` (write) — capability `instance`, группа `instance`, in-process (не HTTP-прокси), рабочий каталог не нужен; write-имена блокируются в plan-режиме. `synth_info` — версия/режим/dataDir/auth-флаги/storage/счётчики (видимые проекты/сессии), без значений ключей. `synth_mcp_list` — реестр MCP, статус, эффективный scope, причина и политика; URL редактируется, `headers`/`env` не отдаются. `synth_mcp_test` — временное подключение; `synth_mcp_add` — `origin:'instance'`/stdio **только ADMIN**, plaintext-секретные заголовки и `auth.kind:'credential'` отклоняются, user HTTP/SSE проверяются сетевой политикой; добавленный сервер **не** включается в сессию (opt-in). `synth_mcp_update`/`remove` — user-запись: автор или ADMIN/LEAD; instance-запись: **ADMIN**; `synth_mcp_enable` — `session` (владелец; событие `session.updated`), `project` (право изменения проекта; `project.updated`), `instance` (**ADMIN**); `synth_mcp_reconnect` — `refreshServer` без рестарта Synth. MCP-реестр и CLI — **локальные**; remote MCP (PROP-125) в инструменты не сливается (не критично). Секреты не читаются и не возвращаются |
 | Проекты/сессии (discovery, Workstream B + A1 hybrid) | `list_projects`, `get_project`, `list_sessions`, `get_session_info`, `session_rename` — capability `runtime` (read-тулы доступны в plan); видимость как у HTTP: elevated (ADMIN/LEAD) видит всё, остальные — свои проекты/сессии и проекты участия; ответы — компактные сводки без истории сообщений и без `log`/`invariants`/секретов. `get_session_info` дополнительно отдаёт блок **`execution`** (ADR-135/PROP-135): `mode` (`inline`/`remote`), `pooling` (`instance`/`project`/`session`; в `inline` — `null`), `session_profile` (эффективные профиль сессии и браузерный профиль), `profiles` (каталог профилей инстанса: `name`, `class` (`exec`/`browser`/`both`), `default`, `browser_default`, `running`, `state`; ≤ 30 записей, лишнее — `truncated:true`) и `pools_error` (короткий код: провайдер пулов недоступен или не умеет перечислять пулы). `running` считается **только по пулам текущей области** (`project:<projectId>:…` / `session:<sessionId>:…` / `instance:…`): `ready` → `true`, `draining` → `false`, `configured`/пула нет → `null` (`state` — `ready`/`configured`/`draining`); чужие области не учитываются. **Адреса и токены пулов в сводку не попадают** (только имена/класс/состояние). В гибриде discovery **read-only** сливает оба мира: `origin:'local'|'remote'`, удалённые id `remote:<uuid>`, `can_attach:false`, `cross_instance:true`; `remote_offline`/`remote_truncated` — backend недоступен/список обрезан. `get_project` по `remote:<id>` читает удалённый проект, по имени ищет локально, затем в remote. `get_project`/`list_sessions` принимают id **или точное имя** (неоднозначность — `ambiguous` + кандидаты). `list_sessions`: без фильтра — оба мира, локальный проект — только локальные, `remote:` проект — только удалённые. `project_attach` не делает cross-world move: `remote:`/только remote → `project.cross_instance`, одинаковое имя локально+remote → `project.hybrid_ambiguous` (кандидаты), локальный `projectId` привязывается без remote-проверки. `session_rename` меняет только текущую сессию (1..200 символов, без LLM-регенерации) и публикует `session.renamed`/`session.updated` |
-| Реестр фоновых прогонов (ADR-111/ADR-113) | `process_list`, `process_logs` (чтение; plan разрешён; `stream` — `combined` (по умолчанию) / `stdout` / `stderr`: у прогона три файла лога — общий и по одному на поток; файлы потоков есть у прогонов, запущенных после разделения потоков, у старых их нет — понятный ответ, не ошибка), `process_stop` (остановка running-прогона: процесс — `SIGTERM`→`SIGKILL`, фоновый саб-агент — abort дочернего прогона), `process_delete` (удаление только терминальной записи); скоуп «своя сессия + дочерние»; мутации в plan запрещены; capability `process`; лог — только у `kind: 'process'` |
+| Реестр фоновых прогонов (ADR-111/ADR-113) | `process_list`, `process_logs` (чтение; plan разрешён; `stream` — `combined` (по умолчанию) / `stdout` / `stderr`: у прогона три файла лога — общий и по одному на поток; файлы потоков есть у прогонов, запущенных после разделения потоков, у старых их нет — понятный ответ, не ошибка; **у detach-прогона потоковых файлов нет** — только общий лог), `process_stop` (остановка running-прогона: процесс — `SIGTERM`→`SIGKILL`, фоновый саб-агент — abort дочернего прогона), `process_delete` (удаление только терминальной записи); скоуп «своя сессия + дочерние»; мутации в plan запрещены; capability `process`; лог — только у `kind: 'process'`; **блокирующие** (ещё не отвязанные) прогоны в реестре не видны — они в API через `include=blocking` |
 | Задачи | `task` (в т.ч. `background: true` — фоновый саб-агент, ADR-111; продолжатель — `task({task_id})`, `delivery: steer\|queue` — доставка сообщения идущему ребёнку, PROP-142), `classify_conversation`, `read_session_reference` |
 | Вопрос пользователю (ADR-112) | `question` — capability `question`, группа правил `question`; пауза хода до ответа (срок — необязательный `timeout` **в секундах**, 300…86 400; по умолчанию таймаута нет); саб-агентам `deny`, в plan-режиме разрешён |
 | Проект | `get_project_info`, `list_repos`, `project_create`, `project_attach`, `project_update`, `project_workspace_set`, `project_repo_clone`, `project_repo_init`, `project_repo_add`, `project_repo_fetch`, `project_repo_remove` — `project_attach` принимает `projectId` **или** `project` (id/точное имя, регистронезависимо; при неоднозначности — `ambiguous` + кандидаты; перенос снимает worktree, сбрасывает утверждение плана и публикует `session.moved`; пустой workspace нового проекта оставляет file/shell/git заблокированными до `project_workspace_set`) |
@@ -131,6 +131,44 @@ awk/sed/find-программы, heredoc, обёртки `sh -c`/`sudo`/`env`/`n
 `node_modules/@itphx/synth-ui/dist/assets/currency-D7Ta9S_Z.js.map` (файл целиком
 в одну строку — 236 487 символов) и унёс в контекст модели 243 КБ.
 
+### Фоновая работа и перевод в фон (`execute_shell`, `task`)
+
+Правило поведения агента («уведомление придёт само, не опрашивай статус,
+продолжай независимое или заверши ответ») живёт **в системном блоке**
+`[ФОНОВАЯ РАБОТА]` / `[BACKGROUND WORK]`
+(`prompts/system/BACKGROUND.{ru,en}.md`, тир context, order 26; включается
+только при включённой фоновой работе и непустом файле; override —
+`{dataDir}/user/system/BACKGROUND*.md`), а не в результатах инструментов.
+Поэтому текстов запуска ровно **два**:
+
+| Ключ | Параметры | Когда |
+|---|---|---|
+| `background.started.process` | `{id}` (processId), `{log}` (путь лога) | `execute_shell({background: true})` и перевод идущей команды в фон |
+| `background.started.subagent` | `{id}` (id дочерней сессии) | `task({background: true})` и перевод идущего саб-агента в фон |
+
+- **Вывод с первой секунды.** Если detach доступен (есть реестр активных
+  прогонов, сервис процессов, `spawnBackground` у порта и
+  `background.enabled !== false`), foreground-вызов `execute_shell` идёт через
+  `spawnBackground` и пишет tee в живой лог `processes/live/<processId>.log`
+  (`ProcessService.openLiveLog`, лимит `background.logMaxBytes`). Обычное
+  завершение и «Стоп» удаляют файл; при переводе в фон `adopt` забирает **тот
+  же** файл (`record.logPath`), префикс не копируется.
+- **Снятие таймаута (ADR-145).** Перед `adopt` вызывается `retime(0)` — иначе
+  переведённая команда умерла бы через foreground-лимит (1..600 с). При отказе
+  `adopt` (лимит фоновых прогонов) исходный срок восстанавливается, и тул
+  продолжает ждать команду в foreground. Точка исполнения без `retime`
+  (исполнитель протокола < 10, нет `features.backgroundRetime`) переводить не
+  даёт: прогон остаётся блокирующим, в ответе detach — `DETACH_FAILED`.
+- **Detach-прогон не перезапускается** и не получает потоковых файлов: у него
+  только общий лог. Остановка — `process_stop` (или
+  `POST /api/v2/processes/:id/stop`); «Стоп» родительского хода его не касается.
+- **Блокирующие прогоны не в реестре.** Пока прогон идёт внутри хода, записи
+  `BackgroundRunRecord` нет, поэтому `process_list`/`process_logs` его **не
+  видят** — это состояние видно по API (`GET /api/v2/processes?include=blocking`,
+  `GET/POST /api/v2/processes/blocking/:id/{logs,stop}`) и во вкладке
+  «Процессы» (секции блокирующих). После перевода в фон запись появляется
+  обычным путём (`process.started` + `process.detached`).
+
 ### Фоновые прогоны: `process_logs` (ADR-111/ADR-113)
 
 `process_logs` читает лог фонового шелл-процесса по id записи реестра
@@ -141,7 +179,7 @@ awk/sed/find-программы, heredoc, обёртки `sh -c`/`sudo`/`env`/`n
 | Параметр | Описание |
 |---|---|
 | `process_id` | id записи реестра (`bgr_...`) — из `process_list` |
-| `stream` | `combined` (по умолчанию) — общий лог: stdout и stderr в порядке прихода; `stdout`/`stderr` — только свой поток. Файлы потоков есть у прогонов, запущенных **после** разделения потоков; у более старых их нет — тул отдаёт понятный ответ (`log_stream=missing`), а не ошибку |
+| `stream` | `combined` (по умолчанию) — общий лог: stdout и stderr в порядке прихода; `stdout`/`stderr` — только свой поток. Файлы потоков есть у прогонов, запущенных **после** разделения потоков; у более старых их нет — тул отдаёт понятный ответ (`log_stream=missing`), а не ошибку. У **detach-прогона** потоковых файлов нет вовсе — только общий лог |
 | `offset` | Смещение от начала лога, байт |
 | `limit` | Предел выдачи, байт (по умолчанию 16 КиБ, максимум 64 КиБ) |
 

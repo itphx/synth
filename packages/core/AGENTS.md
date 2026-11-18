@@ -605,6 +605,9 @@
   режиму и проверка режима при старте —
   `ports/execution-port.ts`
   (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
+  `ExecBackgroundProcess.retime?(timeoutMs)` (ADR-145, протокол исполнителя 10: `0` — снять
+  таймаут, отсчёт от вызова, после завершения no-op; **нет метода** — переставлять нельзя,
+  detach отклоняется `DETACH_FAILED`),
   `ExecutionError`, `isExecutionError` — **структурная** проверка типа ошибки порта: клиент
   удалённого порта создаёт ошибку через динамический `import()` (из `dist`), а core импортирует
   класс из исходников — это два разных объекта класса, и `instanceof` не срабатывает; проверка
@@ -772,6 +775,15 @@
   ответ `{sessionOpsPerMinute, saved, defaults, source, envLocked, restartRequired:false}`,
   409 `CONFLICT` при env-фиксации, 400 `VALIDATION_ERROR` на `-1`/дробное, аудит
   `scope:'limits'`; core — `requireAuth`, managed — ADMIN),
+  `settings-background` (ADR-145: `/settings/background` — `createBackgroundSettingsRoutes`,
+  секция `background`: `enabled`/`maxSubagentsPerSession`/`maxProcessesPerSession`/
+  `maxRunsPerSession`/`logMaxBytes`/`retentionDays`; `GET/PUT/DELETE`, ответ
+  `{…поля, saved, defaults, source, sources, envLocked, envLockedFields,
+  restartRequired:false}`; приоритет по полю env > runtime > config > default;
+  env-фиксация **по полю** → 409 `ENV_LOCKED` с `fields` (ни одно поле не применяется),
+  неизвестный ключ/тип/граница → 400 `VALIDATION_ERROR`, аудит `scope:'background'`;
+  **live** — лимиты реестра, `logMaxBytes`, retention прунеров, `background.enabled`
+  читаются на каждый запуск/тик/вызов тула; core — `requireAuth`, managed — ADMIN),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
 - **Админ-контуры — одна реализация на standalone и managed (ADR-036/ADR-069/ADR-070).**
@@ -1262,13 +1274,23 @@
   `task.stopped_by_deny`, цикл после deny продолжается; предохранитель — лимит шагов.
   **Detach блокирующих прогонов (ADR-111 §detach).** `activeRuns: ActiveRunRegistry`
   (`engine/background/active-runs.ts`, в памяти процесса) хранит хэндлы переводов в фон:
-  `task` (саб-агент) и `execute_shell` регистрируют `{id, kind, title?, detach()}` на время
+  `task` (саб-агент) и `execute_shell` регистрируют `{id, kind, title?, sessionId?,
+  processId?, childSessionId?, logPath?, startedAt?, stop?(), detach()}` на время
   блокирующего ожидания, `POST /api/v2/sessions/:id/background` (`server/routes/sessions.ts`)
   вызывает `detachAll(sessionId, {type?})` → прогон продолжается уже фоновым (свой
   `AbortController`/`streamId`, публикация в родительский стрим отключена), а ход получает
   «переведено в фон»; публикуется `process.detached`. Ответ — `{sessionId, detached[], failed?}`
   (пустой `detached` — штатный исход, не ошибка); гибридная (`remote:`) сессия — `400
   DETACH_UNSUPPORTED` (живого хэндла в этом процессе нет); повторный detach идемпотентен.
+  Снимки для API — `listForSessions(sessionIds)` / `find(sessionIds, id)`: доступ решает
+  вызывающий, чужой прогон выглядит отсутствующим. **Авто-detach при steer** —
+  `engine/background/auto-detach.ts` (`autoDetachOnSteer`): при активном ходе
+  `POST /sessions/:id/prompt` переводит блокирующие прогоны **до** постановки steer, уважает
+  живой `background.enabled` (`isBackgroundEnabled`), ошибки не пробрасывает (сообщение всё
+  равно принимается) и публикует `background.auto_detached {session_id, detached[], failed?}`
+  только при непустом итоге. **`retime`** (ADR-145): шелл-хэндл перед `adopt` снимает
+  foreground-таймаут (`retime(0)`, при отказе `adopt` — восстановление срока); точка
+  исполнения без `retime` переводить не даёт (`failed[]` с `DETACH_FAILED`).
   **Исходящие вложения ответа.** `step.finished` несёт аддитивное
   `attachments?: Array<{sha256, mime, size, name?}>` — медиа-части **финального**
   assistant-сообщения хода (`collectOutboundAttachments`, `phases/process-finalize.ts`; `stream.done` удалён, ADR-118;
@@ -1389,6 +1411,15 @@
   каталог; браузер — отдельный контейнер). Вид вычисляет оркестратор (`resolveExecutionEnvironmentKind`:
   mode + pooling) и передаёт через `ComposerContext.environmentKind`; override —
   `{dataDir}/user/system/ENVIRONMENT.<kind>.{ru,en}.md`.
+
+  Блок **`background`** (`prompts/system/BACKGROUND.{ru,en}.md`, тир `context`, order 26,
+  ADR-145) — правило фоновой работы модели: «уведомление придёт само, не опрашивай статус,
+  продолжай независимое или заверши ответ, не отчитывайся до уведомления, остановка —
+  `process_stop`». Включается только при включённой фоновой работе **и** непустом файле
+  (гейт `backgroundAvailable` в `ContextBuilder`); override — `{dataDir}/user/system/BACKGROUND*.md`
+  через порт `ContextFileRepository`. Правило живёт **здесь**, а не в результатах тулов:
+  текстов запуска ровно два — `background.started.process` (`{id}`, `{log}`) и
+  `background.started.subagent` (`{id}`), одинаковых для фонового запуска и detach.
 
   Специализированные промпты debug-эха и
   `SUMMARIZER.{lang}.md` идут мимо Composer (inline). Манифест: system-блоки в реальном порядке +
@@ -2672,10 +2703,12 @@
   `task` (`task.background_disabled`) и `execute_shell` (`process.background_disabled`).
 - `engine/processes/*` — ADR-113 (ADR-111): фоновые шелл-процессы. `service.ts`
   (`ProcessService`: `spawn` через `ExecutionPort.spawnBackground`, поток stdout/stderr в лог,
-  `stop`, `logs`; лимит записи лога — `background.logMaxBytes`; `stop` публикует
+  `stop`, `logs`, **`openLiveLog({sessionId, processId})`**, **`adopt`**, **`readLogAtPath`**;
+  лимит записи лога — `background.logMaxBytes`; `stop` публикует
   `process.stopped` в канал владельца — один раз на прогон, терминальный статус
   приходит позже — `process.exited`), `types.ts`
-  (`BackgroundUnsupportedError` и пр.), `prune.ts` (очистка логов). Логи — blob-хранилище
+  (`BackgroundUnsupportedError`, `LiveProcessLog`, `liveProcessLogPath`, `LIVE_LOG_DIR`,
+  `LIVE_LOG_ORPHAN_TTL_MS` и пр.), `prune.ts` (очистка логов). Логи — blob-хранилище
   (`BlobStore`), **три файла на прогон**: общий `processes/<id>.log` (stdout и stderr
   в порядке прихода) и по одному на поток — `processes/<id>.stdout.log` /
   `.stderr.log` (`processStreamLogPath`, `engine/background/service.ts`); предел размера
@@ -2683,8 +2716,17 @@
   признак усечения общего лога — `metadata.truncated`, потоков —
   `metadata.stdout_truncated`/`metadata.stderr_truncated`; retention удаляет все три
   файла вместе с записью, «сиротская» очистка не трогает файлы потоков живых записей.
+  **Живой лог foreground-команды (ADR-145):** `openLiveLog` заводит писатель в
+  `processes/live/<processId>.log` **без записи в реестр, без событий и без лимитов прогонов**
+  (это только файл); `finish({keep})` удаляет его (`false`) или оставляет (`true`),
+  `adopt` забирает тот же писатель и путь (`record.logPath`) — префикс не копируется.
+  У detach-прогонов потоковых файлов **нет** (только общий лог); `prune.ts` для
+  `processes/live/…` — **отдельное правило**: сирота (нет ссылки из реестра) удаляется
+  только старше 1 ч, иначе сносило бы лог идущей команды.
   `ProcessService.logs(id, {stream})` — `combined` (по умолчанию) / `stdout` / `stderr`;
-  файла потока нет у прогонов старше разделения — `null`. **Фоновый запуск — в обеих
+  файла потока нет у прогонов старше разделения (и у detach) — `null`; `readLogAtPath`
+  отдаёт отрезок по прямому пути (тот же формат) — им пользуется
+  `GET /processes/blocking/:id/logs`. **Фоновый запуск — в обеих
   реализациях**
   (inline и remote, ADR-077 шаг 7c): в `remote` процесс живёт на исполнителе, control
   plane наблюдает его опросом (журнал — 300 мс, состояние — 500 мс; стриминга на проводе
@@ -2692,6 +2734,9 @@
   журналом на исполнителе (до его `prune`). Исполнитель старой версии (протокол < 3, нет
   `features.background`) → `ExecutionError.code = 'EBACKGROUND'`
   (`EXECUTION_BACKGROUND_UNSUPPORTED_CODE`) → `background_unsupported`.
+  **Снятие таймаута (ADR-145):** `ExecBackgroundProcess.retime?` (протокол 10,
+  `features.backgroundRetime`) — `0` снимает, `> 0` переставляет отсчёт от вызова,
+  после завершения no-op; нет метода — переставлять нельзя (detach отклоняется).
   **`ProcessSpawnInput.origin`** (`'user'|'agent'`, ADR-126 §5) пишется в запись реестра
   (`metadata.origin`); при `origin:'user'` (`BackgroundRunService._notifyParent`) терминальный
   переход **не** инжектит USER-сообщение в историю и не ставит автоход — человек инициировал
@@ -3356,17 +3401,25 @@
   целевого проекта.
   `createProcessRoutes` (PROP-096/097) — HTTP-контур единого реестра фоновых
   прогонов (`GET /` — список с фильтрами `sessionId`/`projectId`/`kind`/`status`/
-  `limit`, `GET /:id` — деталь, `GET /:id/logs` — отрезок лога фонового
+  `limit`; `include=blocking` добавляет массив `blocking` — блокирующие прогоны
+  (`{id, kind, sessionId, title?, processId?, childSessionId?, logPath?, startedAt}`),
+  без `include` ответ прежний, иное значение → 400 `VALIDATION_ERROR`; `GET /:id` — деталь, `GET /:id/logs` — отрезок лога фонового
   процесса (query `stream` — `combined` (по умолчанию) / `stdout` / `stderr`;
   иное значение → 400 `VALIDATION_ERROR`, файла потока нет → 404 `NOT_FOUND`),
   `POST /:id/stop` — остановка, `DELETE /:id` — удаление терминальной
-  записи). Доступ — **на границе** (инвариант 16): guard `processGuard` резолвит
+  записи; **блокирующие** — `GET /blocking/:id/logs` (живой лог,
+  `ProcessService.readLogAtPath`, формат как у `/:id/logs`) и
+  `POST /blocking/:id/stop` (`{stopped:true}`; нет живого хэндла → 409), статические
+  `/blocking/...` регистрируются **до** `/:id`). Доступ — **на границе** (инвариант 16): guard `processGuard` резолвит
   запись реестра и её сессию-владельца **один раз**, кладёт запись в контекст
   (`guardedProcess`), обработчики проверок доступа не содержат; вид доступа —
   по HTTP-методу (`read`/`write`), `VIEWER` читает, но не мутирует (инвариант
-  21). Список прогонов фильтруется по доступу к сессии-владельцу (сессии кэшируются
+  21). Для блокирующих — `blockingGuard` по тем же правилам: прогон ищется среди
+  видимых (`read`) сессий, чужой неотличим от отсутствующего (404), нет `write` → 403.
+  Список прогонов фильтруется по доступу к сессии-владельцу (сессии кэшируются
   на один запрос). Core-дефолт `isAllowed` — `createSessionAccessPredicate()`;
-  backend передаёт правило проекта (`routes/processes.ts`).
+  backend передаёт правило проекта (`routes/processes.ts`). Seam'ы блокирующих —
+  `getBlocking`/`stopBlocking`/`readBlockingLog` (снимок реестра оркестратора).
   `createTerminalRoutes` (ADR-132, Ф3б) — HTTP-контур интерактивных
   терминалов (`GET /` — список постранично с фильтрами `project_id`/`session_id`
   и `include_exited` (`true`/`1` — вместе с завершёнными; по умолчанию — только

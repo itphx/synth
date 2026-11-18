@@ -223,7 +223,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ blo
 
 - **Списки** — всегда страницы-сводки (см. «Списки: пагинация и сводные DTO»); auth-режимы — таблица «Аутентификация»; service-key — §5.28.
 - **Особые контракты:** `/metrics` и `/ready` — вне `/api/v2`, `/api/v2/meta` — без auth (ADR-094/ADR-118 §8).
-- **Runtime-настройки** — через `GET/PUT/DELETE /api/v2/settings/*` (live, где возможно; иначе `restartRequired`), не правкой файлов.
+- **Runtime-настройки** — через `GET/PUT/DELETE /api/v2/settings/*` (live, где возможно; иначе `restartRequired`), не правкой файлов; секция фоновой работы — `settings/background` (`enabled`/лимиты/`logMaxBytes`/`retentionDays`, live, приоритет env > runtime > config, 409 `ENV_LOCKED` по полю) — [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) §«Фоновые прогоны».
 
 ## Процесс разработки
 
@@ -384,7 +384,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 **K3s (test).** Namespace `synth`, код деплоя — отдельный репозиторий `synth-deploy`; Keycloak issuer `https://keycloak.itphx.loc/realms/synth` (клиент `synth`); доступ — `kubectl -n synth get pods|logs deploy/synth-backend`; учётки — [docs/KEYCLOAK.md](./docs/KEYCLOAK.md), процедуры — скилл `synth-k3s-deploy`, `synth-deploy/AGENTS.md`.
 
-**Исполнитель (split-режим, ADR-077).** `@itphx/synth-executor`; при `execution.mode=remote` backend — тонкий control plane, команды уходят по HTTP (fail-closed). В чарте — пул `executor.*`: общий **RWX**-том workspace, токен из Secret, опциональный `NetworkPolicy`; альтернатива — `executor.workspace.existingClaim`. Протокол исполнителя — **5** (вложения MCP-результата), совместимость по `protocol`; спецификация — [docs/EXECUTION.md](./docs/EXECUTION.md), значения — `charts/synth/README.md`.
+**Исполнитель (split-режим, ADR-077).** `@itphx/synth-executor`; при `execution.mode=remote` backend — тонкий control plane, команды уходят по HTTP (fail-closed). В чарте — пул `executor.*`: общий **RWX**-том workspace, токен из Secret, опциональный `NetworkPolicy`; альтернатива — `executor.workspace.existingClaim`. Протокол исполнителя — **10** (перестановка таймаута фонового процесса + `features.backgroundRetime`, ADR-145), совместимость по `protocol`; спецификация — [docs/EXECUTION.md](./docs/EXECUTION.md), значения — `charts/synth/README.md`.
 
 **CI и релиз.** Джобы — self-hosted раннер `synth-ci`; порядок сборки, особенности GitVerse, секреты, реестры образов, `security-gate` и публикация — [docs/PUBLISHING.md](./docs/PUBLISHING.md) §«CI/CD (GitVerse)»; внутренний аудит — [docs/security/README.md](./docs/security/README.md), скилл `synth-security-audit`. Перед тегом — обязательная пара `docs/releases/<version>.md` + `.en.md` (гейт `release-notes`); без неё релиз не собирается.
 
@@ -395,7 +395,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 Сводка собирается скриптом: `pnpm adr:write` (`node scripts/adr-check.mjs --write`), проверка — `pnpm adr:check`. Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md); сроки — [docs/roadmap.md](./docs/roadmap.md).
 
 <!-- ad-index:start -->
-Всего документов: 127 (Решения: 65, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 3).
+Всего документов: 128 (Решения: 66, Частично: 27, Предложения: 24, Vision: 7, Icebox: 1, Legacy: 3).
 Удалено: 30 (принятые и поглощённые предложения).
 Полные таблицы и темы — [docs/arch_decisions/README.md](./docs/arch_decisions/README.md); правила и статусы — [docs/ARCH_DECISIONS.md](./docs/ARCH_DECISIONS.md).
 <!-- ad-index:end -->

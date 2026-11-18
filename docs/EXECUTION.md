@@ -972,7 +972,8 @@ interface ExecutionPort {
 | `GET` | `/exec/:processId` | `200 { processId, status, exitCode, signal, pid?, command, cwd, startedAt, finishedAt?, durationMs?, stdoutBytes, stderrBytes, truncated }` — состояние фонового процесса; `404` — процесс не найден |
 | `GET` | `/exec/:processId/logs` | `200 { processId, status, exitCode, signal, stdout: { content, offset, nextOffset }, stderr: { … }, totalBytes, truncated }`; query `stdoutOffset`/`stderrOffset`/`limit` (отрезок ≤ 256 КиБ, по умолчанию 64 КиБ); `404` — процесс не найден |
 | `POST` | `/exec/:processId/stop` | `200 { status: 'stopping' }` — остановка фонового процесса; тело `{ signal }` — `SIGTERM`\|`SIGKILL` (пустое тело — `SIGTERM` по умолчанию, иной сигнал — `400`); через 5 с после `SIGTERM` — `SIGKILL`; сигнал уходит **группе процессов** (потомки shell-формы гаснут вместе с ней), идемпотентно; `404` — процесс не найден |
-| `GET` | `/capabilities` | `{ protocol: 9, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments, sshAgent, secretsSpawn, fs, pty }, limits?: { timeoutMs, maxOutputBytes } }` — рукопожатие версии протокола и состава toolchain'а; `limits` — **аддитивное** поле (эффективные потолки исполнителя: таймаут команды и буфер вывода): старый control plane его просто не читает, а у старого исполнителя поля нет — это норма |
+| `POST` | `/exec/:processId/timeout` | тело `{ timeoutMs }` → `200 { ok: true }` — переставить/снять таймаут **уже запущенного** фонового процесса (протокол **10**, ADR-145): `0` — снять таймаут, `> 0` — новый срок с отсчётом **от вызова**, допустимо `0…86 400 000`; `400` — невалидное тело/диапазон; `404` — процесса нет, он уже завершён или останавливается (переставлять нечему); операция идемпотентна |
+| `GET` | `/capabilities` | `{ protocol: 10, toolchain: {git?, rg?, sh?, bash?, python3?}, os, arch, node, features: { background, secrets, mcpAttachments, sshAgent, secretsSpawn, fs, pty, backgroundRetime }, limits?: { timeoutMs, maxOutputBytes } }` — рукопожатие версии протокола и состава toolchain'а; `limits` — **аддитивное** поле (эффективные потолки исполнителя: таймаут команды и буфер вывода): старый control plane его просто не читает, а у старого исполнителя поля нет — это норма |
 | `POST` | `/fs/stat` | тело: `{ path, cwd? }` → `200 { stat: { kind, size, mtimeMs } }`; протокол **7**, ADR-135 Ф1: сведения о файле/каталоге **у исполнителя** (в split-топологии рабочий каталог живёт там) |
 | `POST` | `/fs/realpath` | тело: `{ path, cwd? }` → `200 { path }` — канонический путь (симлинки разыменовываются); решение permission-слоя принимается в control plane по этому пути |
 | `POST` | `/fs/list` | тело: `{ path, cwd? }` → `200 { entries: [{ name, kind, size }] }` — записи каталога (в файловом порядке; сортировку делает вызывающий) |
@@ -1016,7 +1017,7 @@ control plane и пул исполнителей обновляются **вме
 
 ```json
 {
-  "protocol": 8,
+  "protocol": 10,
   "toolchain": {
     "git": "git version 2.39.2",
     "rg": "ripgrep 14.1.0",
@@ -1034,7 +1035,8 @@ control plane и пул исполнителей обновляются **вме
     "sshAgent": true,
     "secretsSpawn": true,
     "fs": true,
-    "pty": true
+    "pty": true,
+    "backgroundRetime": true
   },
   "limits": { "timeoutMs": 86400000, "maxOutputBytes": 33554432 }
 }
@@ -1333,6 +1335,36 @@ MCP-серверы исполнитель — у него и toolchain, и Chrom
 | `payload_too_large` | `413` | — | ввод больше потолка |
 | `invalid_request` | `400` | — | невалидное тело / размер терминала вне диапазона |
 
+### 4.2.4. Перестановка таймаута фонового процесса (протокол 10)
+
+Зачем: при переводе блокирующего прогона в фон (`POST /api/v2/sessions/:id/background`,
+ADR-111 §detach) foreground-таймаут хода больше не действует. Без перестановки
+переведённый `npm run dev` умер бы через foreground-лимит (120 с), уже будучи
+фоновым прогоном.
+
+- **Маршрут** — `POST /exec/:processId/timeout`, тело `{ timeoutMs }` (целое
+  `0…86 400 000`; `0` — снять таймаут, `> 0` — новый срок **от вызова**).
+  Ответ `200 { ok: true }`; `400 invalid_request` — невалидное тело/диапазон;
+  `404 not_found` — процесса нет, он уже завершён или останавливается
+  (переставлять нечему; клиент трактует `404` как **no-op**, а не ошибку —
+  гонка «detach уже после завершения» штатная).
+- **Признак** — `features.backgroundRetime` в `GET /capabilities` (протокол 10).
+  Клиент передаёт признак в хэндл: `RemoteBackgroundHandle.retime` **появляется
+  только при нём**. Исполнитель протокола ≤ 9 маршрута не знает — адрес не
+  выбирается для перевода прогона в фон, а control plane **отклоняет** detach
+  (`DETACH_FAILED`), а не оставляет прежний foreground-срок: «тихо» перевести
+  процесс означало бы убить его по чужому лимиту.
+- **Контракт порта** — `ExecBackgroundProcess.retime?(timeoutMs)`: отсчёт от
+  вызова, после завершения процесса — no-op, **отсутствие метода** = «переставлять
+  нельзя». Inline-реализация поддерживает всегда; деградация — только для
+  старого удалённого исполнителя.
+- **Порядок в detach** (control plane, `engine/tools/shell-detachable.ts`):
+  `retime(0)` **до** `ProcessService.adopt`; при отказе `adopt`
+  (`BackgroundLimitExceededError`) исходный срок **восстанавливается**
+  (`retime(timeoutMs)`) и прогон продолжается в foreground. Снятый таймаут не
+  возвращает «безлимитность» фоновому прогону: лимит фонового режима (сутки)
+  действует как обычно.
+
 ### 4.3. Пул адресов, отказ и параллелизм
 
 - **Адреса — список** (`execution.remote.url`): клиент выбирает адрес **по кругу**;
@@ -1427,14 +1459,17 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   `packages/core/src/engine/tools/git.ts`, `packages/core/src/engine/tools/path-utils.ts`);
   выход за пределы → ошибка. Это **доверительная граница**, а не косметика: без неё
   удалённый порт превращается в выполнение команд в произвольном каталоге.
-- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 9`) и
+- **Рукопожатие (`GET /capabilities`).** Клиент узнаёт версию протокола (`protocol: 10`) и
   состав toolchain'а (`git`/`rg`/`sh`/`bash`/`python3`), ОС и архитектуру. Это источник правды для
   детекта внешних зависимостей в split-режиме (ADR-078): backend не должен считать
   `git`/`rg`/`bash` доступными там, где их нет. Версия протокола — **контракт совместимости**:
   исполнитель версии 1 не знает MCP-эндпоинтов, версии 2 — фоновых процессов, версии 3 —
   секретов вызова, версии 4 — вложений MCP-результата, версии 5 — режима `agent` у секрета
-  и секретов в фоновом запуске (§4.2), версии 6 — FS-операций, версии 7 — PTY-сессий, поэтому control
-  plane и пул исполнителей обязаны обновляться вместе (ADR-077, операционные следствия шага A).
+  и секретов в фоновом запуске (§4.2), версии 6 — FS-операций, версии 7 — PTY-сессий,
+  версии 8 — пробы переднего плана PTY (`GET /pty/:id/foreground`, протокол 9), версии 9 —
+  перестановки таймаута фонового процесса (`POST /exec/:id/timeout`, протокол 10),
+  поэтому control plane и пул исполнителей обязаны обновляться вместе (ADR-077,
+  операционные следствия шага A).
   Поле `features` — **аддитивное**: `background: true` означает, что исполнитель умеет
   `/exec/spawn` (фоновые процессы, ADR-077 шаг 7c), `secrets: true` — что принимает
   `secrets[]` в `POST /exec` (протокол 4, см. §4.2.2), `mcpAttachments: true` — что отдаёт
@@ -1447,7 +1482,9 @@ pod'ов вовсе, не требует CRD и не добавляет в кл�
   протокол 7, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b), `pty: true` — что умеет PTY-сессии
   (`/pty/open`, `/pty/:id/input`, `/pty/:id/resize`, `/pty/:id/close`, `/pty/:id/status`,
   `/pty/:id/stream`, протокол 8, план терминалов Ф2a; проба переднего плана
-  `GET /pty/:id/foreground` — протокол 9).
+  `GET /pty/:id/foreground` — протокол 9), `backgroundRetime: true` — что умеет
+  переставлять таймаут запущенного фонового процесса (`POST /exec/:id/timeout`,
+  протокол 10) и отдаёт у хэндла метод `retime` (ADR-145).
 - **Поле `limits` — тоже аддитивное** (§4.2): эффективные потолки исполнителя
   (таймаут команды и буфер вывода). Старый control plane его не читает; **у старого
   исполнителя поля нет — это норма**, тогда лимиты пула неизвестны. В смешанном пуле
@@ -2135,7 +2172,7 @@ backend'а. Данные не затронуты (workspace — тот же то
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
 | Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
 | Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
-| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 9**: проба переднего плана PTY `GET /pty/:id/foreground`; PTY-сессии `/pty/open`/`/pty/:id/input`/`/pty/:id/resize`/`/pty/:id/close`/`/pty/:id/status`/`/pty/:id/stream` + признак `features.pty` (план терминалов Ф2a); FS-операции `/fs/stat`/`/fs/realpath`/`/fs/list`/`/fs/read-text`/`/fs/sniff`/`/fs/read-bytes`/`/fs/read-raw`/`/fs/write-file`/`/fs/mkdir`/`/fs/remove`/`/fs/rename`/`/fs/download`/`/fs/upload`/`/fs/hash` + признак `features.fs`, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b; ssh-агент для секрета вызова `mode`/`features.sshAgent` и секреты в фоновом запуске `secrets[]`/`features.secretsSpawn`, PROP-124 §2/§7; вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
+| `RemoteExecutionPort`, пакет `@itphx/synth-executor`, exec-API (`/exec`, `/capabilities`, `/health`), токен `synth_exec_…` (backend — файлом, worker — значением) и чарт split-развёртывания (`executor.*`) — **реализованы** (шаги 7a–7c); **MCP-stdio** — **реализовано**: исполнитель хостит серверы (`SYNTH_EXECUTOR_MCP_SERVERS`, `/mcp/servers`, `/mcp/tools`, `/mcp/call` — эндпоинты протокола 2), control plane подключён (`ExecutorMcpSource`; **актуальная версия протокола — 10**: перестановка таймаута фонового процесса `POST /exec/:id/timeout` + признак `features.backgroundRetime` (ADR-145); проба переднего плана PTY `GET /pty/:id/foreground`; PTY-сессии `/pty/open`/`/pty/:id/input`/`/pty/:id/resize`/`/pty/:id/close`/`/pty/:id/status`/`/pty/:id/stream` + признак `features.pty` (план терминалов Ф2a); FS-операции `/fs/stat`/`/fs/realpath`/`/fs/list`/`/fs/read-text`/`/fs/sniff`/`/fs/read-bytes`/`/fs/read-raw`/`/fs/write-file`/`/fs/mkdir`/`/fs/remove`/`/fs/rename`/`/fs/download`/`/fs/upload`/`/fs/hash` + признак `features.fs`, ADR-135 Ф1/Ф2a/Ф2b/Ф3a/Ф3b; ssh-агент для секрета вызова `mode`/`features.sshAgent` и секреты в фоновом запуске `secrets[]`/`features.secretsSpawn`, PROP-124 §2/§7; вложения MCP-результата `attachments[]`/`features.mcpAttachments`, ADR-115; секреты вызова `secrets[]` — протокол 4, ADR-077 «Обновлено 2026-10-26», (б)); осталось: образ worker'а и flavor'ы — [ADR-077](./arch_decisions/legacy/adr-077-runtime-toolchain.md) (шаги 4–6); git через `ExecutionPort` вместо `simple-git` — **выполнено**; **метрики `synth_executor_*` + `/metrics` исполнителя + алерты + runbook — выполнено** (шаг 7d) | `packages/core/src/execution/remote.ts:1`, `packages/executor/src/protocol.ts:1`, `packages/executor/src/mcp.ts:1`, `packages/executor/src/secrets.ts:1`, `packages/core/src/engine/mcp/executor-mcp-source.ts:1`, `packages/core/src/metrics/collectors/executor.ts:1`, `packages/executor/src/metrics.ts:1`, `charts/synth/templates/executor-deployment.yaml:1` |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |

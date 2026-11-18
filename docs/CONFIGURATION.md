@@ -2351,8 +2351,8 @@ questions:
 | `background.maxSubagentsPerSession` | Максимум одновременно идущих фоновых саб-агентов на сессию-владельца; превышение → `background_limit_exceeded` (ошибка тула, ход не падает). Env — `SYNTH_BACKGROUND_MAX_SUBAGENTS_PER_SESSION` | `2` |
 | `background.maxProcessesPerSession` | Максимум одновременно идущих фоновых шелл-процессов на сессию-владельца; превышение → `background_limit_exceeded`. Env — `SYNTH_BACKGROUND_MAX_PROCESSES_PER_SESSION` | `5` |
 | `background.maxRunsPerSession` | Максимум **одновременно идущих** фоновых прогонов любого вида (саб-агенты + процессы) на сессию-владельца; терминальные записи лимитом не считаются — это история реестра, её чистит retention. Env — `SYNTH_BACKGROUND_MAX_RUNS_PER_SESSION` | `10` |
-| `background.logMaxBytes` | Предел размера лога фонового процесса, байт; `0` — без ограничения. Предел **свой у каждого файла** (общий лог и логи потоков). Не путать с потолком выдачи лога за один HTTP-запрос (256 КиБ) — это разные величины. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 МиБ) |
-| `background.retentionDays` | Срок хранения терминальных записей реестра (`completed`/`failed`/`cancelled`/`orphaned`), дни; `<= 0` — без ограничения. Env — `SYNTH_BACKGROUND_RETENTION_DAYS` | `7` |
+| `background.logMaxBytes` | Предел размера лога фонового процесса, байт; `0` — без ограничения. Предел **свой у каждого файла** (общий лог, логи потоков и живой лог foreground-команды `processes/live/<processId>.log`). Не путать с потолком выдачи лога за один HTTP-запрос (256 КиБ) — это разные величины. Env — `SYNTH_BACKGROUND_LOG_MAX_BYTES` | `10485760` (10 МиБ) |
+| `background.retentionDays` | Срок хранения **терминальных записей реестра** (`completed`/`failed`/`cancelled`/`orphaned`) **и их логов** (общий, потоки, живой лог detach-прогона), дни; `<= 0` — без ограничения. Env — `SYNTH_BACKGROUND_RETENTION_DAYS` | `7` |
 
 ```yaml
 background:
@@ -2393,6 +2393,40 @@ background:
   сессии-владельца (ADR-009/ADR-024, новых каналов нет). `process.stopped` —
   запрос остановки (один раз на прогон); терминальный статус приходит позже —
   `process.exited`.
+- **Вывод виден с первой секунды.** Foreground-вызов `execute_shell` с
+  доступным detach пишет tee в живой лог `processes/live/<processId>.log`
+  (`ProcessService.openLiveLog`, лимит `logMaxBytes`): до перевода в фон это
+  лог команды, после `adopt` — **тот же** файл становится логом прогона
+  (`record.logPath`, префикс не копируется). Обычное завершение и «Стоп»
+  удаляют файл; «сироту» (нет ссылки из реестра) прунер удаляет только по
+  сроку 1 ч — иначе снёс бы лог идущей команды.
+- **Авто-detach при steer.** Вмешательство в занятую сессию
+  (`POST /api/v2/sessions/:id/prompt`, `delivery: 'steer'`) переводит
+  блокирующие прогоны в фон **до** постановки инъекции; публикуется
+  `background.auto_detached`, только если хоть один прогон переведён. Гейт —
+  живое значение `background.enabled`: при `false` авто-detach не выполняется.
+  Ошибка перевода steer не ломает (сообщение принимается, причина — в лог).
+
+#### Runtime-управление (`/api/v2/settings/background`, ADR-145)
+
+Все поля секции управляются из UI (админ-раздел «Фоновая работа» —
+`GET/PUT/DELETE /api/v2/settings/background`), а не правкой файлов. Хранилище —
+существующий JSON-документ настроек (`{dataDir}/settings.json` / PostgreSQL,
+runtime-секция), отдельной миграции нет.
+
+- **Приоритет — по каждому полю:** env (`SYNTH_BACKGROUND_*`) > runtime
+  (UI/`settings.json`/PG) > `config.yaml` `background.*` > дефолт схемы.
+- **Env-фиксация по полю.** Зафиксированное env значение блокирует только свою
+  настройку: `PUT` с другим значением → `409 ENV_LOCKED` и `fields[]`, при этом
+  **ни одно** поле запроса не применяется (частичный отказ не оставляет
+  «половину» изменений). Фиксация `retentionDays` не мешает править `enabled`.
+- **Валидация:** `enabled` — boolean; лимиты и `logMaxBytes` — целые ≥ 0
+  (`0` — без ограничения); `retentionDays` — любое целое (`<= 0` — без
+  ограничения). Неизвестный ключ/тип/граница → `400 VALIDATION_ERROR`.
+- **Применяется сразу** (`restartRequired: false`): лимиты проверяются при
+  каждом запуске прогона, `logMaxBytes` читается каждым писателем лога,
+  retention — на каждом тике прунеров, `background.enabled` — в контексте
+  каждого вызова тула. Аудит изменений — `scope:'background'`.
 
 ### Агенты (`agents.*`)
 

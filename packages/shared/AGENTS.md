@@ -425,7 +425,9 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   `types/background.ts`: `BackgroundRunKind` (`subagent`/`process`), `BackgroundRunStatus`
   (`running`/`completed`/`failed`/`cancelled`/`orphaned`), `BACKGROUND_RUN_TERMINAL_STATUSES`
   (чистятся retention-ом), `BackgroundRunRecord` (запись `bgr_<uuid>`) и
-  `BackgroundRunFilter` (все условия — по «И»). Оба контракта (`question.ts`,
+  `BackgroundRunFilter` (все условия — по «И»). Тип события шины `background.auto_detached`
+  (`{session_id, detached[], failed?}`; публикуется только при непустом `detached`) —
+  автоперевод блокирующих прогонов в фон при steer (ADR-145). Оба контракта (`question.ts`,
   `background.ts`) — browser-safe: только типы + Zod, без бизнес-логики; re-export из `types`.
 - ADR-114 (этап 1 roadmap 0.13 — блок 1.4): **git worktrees** (per-session рабочий
   каталог) — `types/worktree.ts`: `WorktreeStrategy` (`git`), `WORKTREE_STRATEGIES`,
@@ -520,13 +522,14 @@ defaults ← профильные `baseDefaults` ← yaml ← env ← overrides;
   ADR-077: пакет исполнителя недоступен / токен не читается).
 - Этап 1 roadmap 0.13: `question.answered` (`{answers}`), `question.cancelled` (`{reason}`),
   `question.timeout`, `question.deps_unavailable` — «вопрос пользователю» (ADR-112);
-  `task.background_started` (`{id}`), `task.background_limit` (`{limit}`),
-  `task.background_disabled` — фоновый саб-агент (ADR-111);
-  `process.background_started` (`{id}`, `{log}`), `process.deps_unavailable`,
-  `process.background_limit` (`{limit}`), `process.background_unsupported` — фоновый
-  шелл-процесс (ADR-111/PROP-097); `process.detached_started` (`{id}`, `{log}`) — команда,
-  переведённая в фон в ходе хода (ADR-113 §detach; не путать с переводом всей сессии в фон,
-  ADR-111 §detach).
+  `background.started.process` (`{id}`, `{log}`) и `background.started.subagent`
+  (`{id}`) — **единые** тексты запуска фоновой работы (фоновый запуск и detach
+  одинаковы, ADR-145); правило поведения («не поллить, уведомление придёт само»)
+  живёт в системном блоке `prompts/system/BACKGROUND.{ru,en}.md`, а не в
+  результатах тулов; `task.background_limit` (`{limit}`),
+  `task.background_disabled`, `process.deps_unavailable`,
+  `process.background_limit` (`{limit}`), `process.background_unsupported` —
+  лимиты и недоступность фоновой работы (ADR-111/PROP-097).
 - ADR-115: `attach.*` — вложения: `attach.message.from_workspace` (`{path}` — вложение
   материализовано в workspace), `attach.tool.*` (`attached`/`not_found`/`not_a_file`/`too_large`/
   `unsupported_mime`/`unrecognized`/`disabled`/`deps_unavailable`/`delivery_unavailable`/
