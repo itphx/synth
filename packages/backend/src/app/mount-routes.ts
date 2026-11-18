@@ -49,6 +49,9 @@ import {
   createPipelineProjectRoutes,
   createProcessRoutes,
   toBlockingRunDto,
+  // ADR-111 §detach: авто-detach блокирующих прогонов при вмешательстве
+  // (вклинивание из очереди) — тот же шов, что у prompt-роута.
+  autoDetachOnSteer,
   // PROP-132 (Ф3б): HTTP-контур терминалов (сервис собирается в `deps.ts`).
   createTerminalRoutes,
   // PROP-132 (Ф3в): мастер-выключатель терминалов (`/api/v2/settings/terminal`).
@@ -382,6 +385,16 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     auth, sessionManager, queueManager, eventBus, processMessage, projectStore,
     // ADR-036: обфускация user-сообщения при /queue/:sessionId/steer.
     (sessionId, message) => orchestrator.obfuscateUserMessageForHistory(sessionId, message),
+    // ADR-111 §detach: вклинивание из очереди — вмешательство пользователя,
+    // поэтому блокирующие прогоны сессии уходят в фон (как steer в prompt-роуте).
+    // Гейт `background.enabled` читается живым геттером оркестратора.
+    ({ sessionId, enabled, reason }) => autoDetachOnSteer({
+      orchestrator,
+      sessionId,
+      enabled: enabled ?? orchestrator.isBackgroundEnabled?.(),
+      reason: reason ?? 'message',
+      eventBus,
+    }),
   ));
 
   // FS routes (ADR-075): core-фабрика, managed поверх workspace проекта.

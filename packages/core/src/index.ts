@@ -373,6 +373,9 @@ export type {
 // потому что его тип входит в контракт оркестратора (`ChatOrchestrator.activeRuns`)
 // и в тесты backend (матрица доступа к `:id`-маршрутам).
 export { ActiveRunRegistry } from './engine/background/index.js';
+// ADR-111 §detach: авто-detach блокирующих прогонов при вмешательстве — общий
+// шов для роутов (managed backend собирает его тем же кодом, что core).
+export { autoDetachOnSteer } from './engine/background/auto-detach.js';
 export type {
   ActiveRunDetachResult,
   ActiveRunFailure,

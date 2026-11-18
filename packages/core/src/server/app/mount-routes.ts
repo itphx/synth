@@ -69,6 +69,7 @@ import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
 import { resolveNpmInstallEnvironment } from '../../maintenance/update.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
+import { autoDetachOnSteer } from '../../engine/background/auto-detach.js';
 import { executeToolDef } from '../../engine/tools/tool-execution.js';
 import { MemoryProviderUnavailableError } from '../routes/memory.js';
 import { resolvePluginServerPolicy } from '../../engine/plugins/hybrid-policy.js';
@@ -535,6 +536,16 @@ export function mountStandaloneRoutes(
       // ADR-036: та же обфускация, что у `POST /sessions/:id/prompt`.
       obfuscate: (sessionId, message) =>
         orchestrator.obfuscateUserMessageForHistory(sessionId, message),
+      // ADR-111 §detach: вклинивание из очереди — вмешательство пользователя,
+      // поэтому блокирующие прогоны уходят в фон (как `steer` в prompt-роуте).
+      // Гейт `background.enabled` читается живым геттером оркестратора.
+      autoDetachOnSteer: ({ sessionId, enabled, reason }) => autoDetachOnSteer({
+        orchestrator,
+        sessionId,
+        enabled: enabled ?? orchestrator.isBackgroundEnabled?.(),
+        reason: reason ?? 'message',
+        eventBus,
+      }),
     },
   ));
 

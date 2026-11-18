@@ -19,6 +19,8 @@ import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import type { QueueProcessorManager, ChatOrchestrator } from '../../index.js';
 import type { AuthKit } from '../../auth/local.js';
+import { ActiveRunRegistry } from '../../engine/background/active-runs.js';
+import { autoDetachOnSteer } from '../../engine/background/auto-detach.js';
 import {
   generateId,
   makeTextPart,
@@ -328,6 +330,126 @@ describe('POST /api/v2/queue/:sessionId/steer', () => {
     const session = (await sessionManager.getSession(sessionId))!;
     expect(session.pendingMessages.map((m) => m.id)).toEqual([message.id]);
     expect(session.steerInbox ?? []).toHaveLength(0);
+  });
+
+  // ADR-111 §detach × ADR-104: вклинивание — вмешательство пользователя, поэтому
+  // блокирующие прогоны сессии уходят в фон ДО постановки сообщения в очередь
+  // инъекций (иначе сообщение ждало бы конца foreground-команды).
+  describe('авто-detach блокирующих прогонов (ADR-111 §detach)', () => {
+    /** Приложение с seam'ом авто-detach (шов оркестратора подменён). */
+    function buildWithSeam(seam: (req: {
+      sessionId: string;
+      enabled?: boolean;
+      reason?: 'user' | 'message';
+    }) => Promise<unknown>): Hono {
+      const withSeam = new Hono();
+      withSeam.route('/api/v2/queue', createQueueRoutes(
+        createMockAuth(),
+        sessionManager,
+        queueManager as unknown as QueueProcessorManager,
+        eventBus,
+        (async () => ({})) as unknown as ReturnType<ChatOrchestrator['createProcessMessage']>,
+        undefined,
+        { autoDetachOnSteer: seam },
+      ));
+      return withSeam;
+    }
+
+    async function steerOn(target: Hono, body: Record<string, unknown> = {}): Promise<Response> {
+      return target.request(`/api/v2/queue/${sessionId}/steer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+
+    it('успешный steer → seam вызван один раз с reason:"message"', async () => {
+      await seedPending();
+      const seam = vi.fn().mockResolvedValue({ detached: [], failed: [] });
+
+      const res = await steerOn(buildWithSeam(seam));
+
+      expect(res.status).toBe(202);
+      expect(seam).toHaveBeenCalledTimes(1);
+      expect(seam).toHaveBeenCalledWith({ sessionId, reason: 'message' });
+    });
+
+    it('404 (нет сообщения) → seam не вызван', async () => {
+      const seam = vi.fn().mockResolvedValue({ detached: [], failed: [] });
+
+      const res = await steerOn(buildWithSeam(seam));
+
+      expect(res.status).toBe(404);
+      expect(seam).not.toHaveBeenCalled();
+    });
+
+    it('409 NO_ACTIVE_TURN → seam не вызван', async () => {
+      queueManager.isRunning.mockReturnValue(false);
+      await seedPending();
+      const seam = vi.fn().mockResolvedValue({ detached: [], failed: [] });
+
+      const res = await steerOn(buildWithSeam(seam));
+
+      expect(res.status).toBe(409);
+      expect(seam).not.toHaveBeenCalled();
+    });
+
+    it('обычная очередь (/return) не переводит прогоны в фон', async () => {
+      await seedPending();
+      const seam = vi.fn().mockResolvedValue({ detached: [], failed: [] });
+      const target = buildWithSeam(seam);
+
+      const res = await target.request(`/api/v2/queue/${sessionId}/return`, { method: 'POST' });
+
+      expect(res.status).toBe(200);
+      expect(seam).not.toHaveBeenCalled();
+    });
+
+    it('ошибка seam не ломает ответ: 202 и сообщение в steerInbox', async () => {
+      const message = await seedPending();
+      const seam = vi.fn().mockRejectedValue(new Error('boom'));
+
+      const res = await steerOn(buildWithSeam(seam));
+
+      expect(res.status).toBe(202);
+      expect(await res.json()).toMatchObject({ steered: true });
+      const session = (await sessionManager.getSession(sessionId))!;
+      expect(session.steerInbox ?? []).toHaveLength(1);
+      expect(session.steerInbox![0]!.id).toBe(message.id);
+    });
+
+    it('реальный реестр активных прогонов: foreground-прогон переведён с reason:"message", событие опубликовано', async () => {
+      await seedPending();
+      const registry = new ActiveRunRegistry();
+      const detach = vi.fn();
+      const unregister = registry.register(sessionId, {
+        id: 'proc_1',
+        kind: 'process',
+        sessionId,
+        detach,
+      });
+      const published: BusEvent[] = [];
+      const unsubscribe = eventBus.subscribe(sessionId, (e) => published.push(e), { userId: 'local' });
+      const target = buildWithSeam((req) => autoDetachOnSteer({
+        orchestrator: { activeRuns: registry, isBackgroundEnabled: () => true },
+        sessionId: req.sessionId,
+        enabled: req.enabled,
+        reason: req.reason,
+        eventBus,
+      }));
+
+      const res = await steerOn(target);
+      unsubscribe();
+      unregister();
+
+      expect(res.status).toBe(202);
+      expect(detach).toHaveBeenCalledTimes(1);
+      expect(detach).toHaveBeenCalledWith('message');
+      const autoDetached = published.find((e) => e.type === 'background.auto_detached');
+      expect(autoDetached).toBeDefined();
+      expect((autoDetached!.data as { detached: Array<{ id: string }> }).detached.map((r) => r.id))
+        .toEqual(['proc_1']);
+    });
   });
 
   it('429 — превышен лимит инъекций; очередь и история не тронуты, событий приёма нет', async () => {

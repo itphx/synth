@@ -15,6 +15,8 @@ import type { RemoteBackendClient } from '../../remote/client.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
+import { warning } from '../../logger.js';
+import type { ActiveRunDetachReason } from '../../engine/background/active-runs.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -67,6 +69,26 @@ export interface QueueRoutesOptions {
    * (`POST /:sessionId/steer`) — тот же колбэк, что у `POST /sessions/:id/prompt`.
    */
   obfuscate?: (sessionId: string, message: Message) => Promise<Message>;
+  /**
+   * ADR-111 §detach: авто-перевод блокирующих прогонов сессии в фон перед
+   * **вклиниванием** сообщения из очереди (`POST /:sessionId/steer`) — тот же
+   * контракт, что у `SessionRoutesDeps.autoDetachOnSteer`.
+   *
+   * Вклинивание — вмешательство пользователя (как `steer` в prompt-роуте), но
+   * в отличие от обычной постановки в очередь (`/queue`, `/return`,
+   * `/reorder`) оно применяется на границе шага: блокирующий прогон
+   * (`execute_shell` foreground, `task`) держал бы ход до конца команды.
+   *
+   * Причина — `'message'` (тексты `background.detached.*_message`); гейт
+   * `background.enabled` — внутри реализации шва (живой геттер оркестратора).
+   * Не задан — перевода нет (фабрика не знает реестр активных прогонов).
+   * Ошибка перевода не блокирует вклинивание (уходит в лог).
+   */
+  autoDetachOnSteer?: (req: {
+    sessionId: string;
+    enabled?: boolean;
+    reason?: ActiveRunDetachReason;
+  }) => Promise<unknown>;
 }
 
 const LOCAL_USER_ID = 'local';
@@ -432,6 +454,24 @@ export function createQueueRoutes(
       return c.json({
         error: { code: 'CONFLICT', message: messages.messageAlreadyRunning(c) },
       }, 409);
+    }
+
+    // ADR-111 §detach × ADR-104: вклинивание — **вмешательство** пользователя,
+    // поэтому блокирующие прогоны (foreground `execute_shell`/`task`) уходят в
+    // фон: иначе сообщение ждало бы конца команды, хотя применяется на границе
+    // шага (как `steer` в prompt-роуте). Обычная постановка в очередь
+    // (`/queue`, `/return`, `/reorder`) прогоны НЕ переводит.
+    // Причина — `'message'`; гейт `background.enabled` — внутри шва (живой
+    // геттер оркестратора). Ошибка перевода не блокирует вклинивание.
+    if (opts?.autoDetachOnSteer) {
+      try {
+        await opts.autoDetachOnSteer({ sessionId, reason: 'message' });
+      } catch (err) {
+        warning(
+          'QUEUE',
+          `авто-detach при вклинивании не удался (${sessionId}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     // ADR-118 §4: отправитель (`userId` запроса) — адресат адресного события

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus, ProjectRepository } from '@itphx/synth-core';
 import { createQueueRoutes as createCoreQueueRoutes } from '@itphx/synth-core';
+import type { QueueRoutesOptions } from '@itphx/synth-core';
 import type { Session, Message } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 import { createProjectAccess } from './projects.js';
@@ -20,6 +21,11 @@ export function createQueueRoutes(
   projectStore?: ProjectRepository,
   /** ADR-036: обфускация user-сообщения (та же, что у `POST /sessions/:id/prompt`). */
   obfuscate?: (sessionId: string, message: Message) => Promise<Message>,
+  /**
+   * ADR-111 §detach: авто-перевод блокирующих прогонов при вклинивании из
+   * очереди (`/queue/:sessionId/steer`) — тот же шов, что у prompt-роута.
+   */
+  autoDetachOnSteer?: QueueRoutesOptions['autoDetachOnSteer'],
 ): Hono {
   const app = new Hono();
   const { canReadProject, canEditProjectContent } = createProjectAccess(kit);
@@ -64,6 +70,7 @@ export function createQueueRoutes(
           : canEditProjectContent(ctx, project, userId);
       },
       ...(obfuscate ? { obfuscate } : {}),
+      ...(autoDetachOnSteer ? { autoDetachOnSteer } : {}),
     },
   ));
 
