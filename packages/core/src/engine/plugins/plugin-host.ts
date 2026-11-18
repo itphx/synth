@@ -593,6 +593,10 @@ export class PluginHost {
             ...(def.jsonSchema ? { jsonSchema: def.jsonSchema } : {}),
           },
           handle.plugin,
+          // ADR-090 × IPI: фактический уровень доверия активации — матрица
+          // доверия контента (`engine/security/trust.ts`) решает по нему,
+          // оборачивать ли результат тула как недоверенный.
+          { ...(handle.trustLevel ? { trust: handle.trustLevel } : {}) },
         );
         if (!registered.ok) {
           this._logger.warn(`регистрация тула плагина отклонена: ${registered.message}`);

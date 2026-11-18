@@ -19,7 +19,7 @@ import {
 } from '@itphx/synth-shared';
 // ADR-135: применение runtime-каталога профилей исполнения (runtime > config;
 // env/CLI выше — их разрешает `resolveExecutionConfig`, ADR-023).
-import { applyExecutionRuntimeSettings } from '@itphx/synth-shared/config';
+import { applyExecutionRuntimeSettings, resolvePromptInjection } from '@itphx/synth-shared/config';
 import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 import type { InstanceRuntimeMeta } from '@itphx/synth-core';
@@ -1202,6 +1202,14 @@ export async function createBackendDeps(
   // приоритетнее config.yaml — мёржим при старте, чтобы защита применялась к оркестратору.
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const securityConfig = mergeSecurityConfig(config.synth.security, runtimeSecurity);
+  if (securityConfig) {
+    // ADR-023: env `SYNTH_SECURITY_PROMPT_INJECTION_*` перекрывает runtime и
+    // config.yaml (приоритет env > runtime > config > default, по полю).
+    securityConfig.promptInjection = resolvePromptInjection(
+      config.synth.security?.promptInjection,
+      runtimeSecurity.promptInjection,
+    ).config;
+  }
   // PROP-136b (слайс 136b-2a): зеркальный чекер команд (`security.commandPolicy`).
   // Managed-профиль поднимает `failMode` до `closed` (`loadBackendConfig`);
   // `enabled: true` без адреса — ошибка старта (fail-closed).
@@ -2384,6 +2392,13 @@ export async function createBackendDeps(
     metrics: metrics ? createPipelineMetrics(metrics) : undefined,
     // ADR-101 §4/ADR-070: промпт шага — тем же сборщиком, что у сессий.
     composer: orchestrator.getComposer(),
+    // IPI шага (ADR-101): тот же фильтр контента тулов, что у хода и
+    // саб-агента. Конфиг — **живой** геттер оркестратора (runtime-настройка
+    // безопасности применяется без рестарта), словари — порт инстанса.
+    securityContentFilter: {
+      getConfig: () => orchestrator.getSecurityConfig(),
+      dictionaryStore,
+    },
     // ADR-135/PROP-135: среда исполнения шага — та же, что у сессий.
     environmentKind: orchestrator.getEnvironmentKind(),
     resolveProvider: resolvePipelineProvider,

@@ -149,6 +149,7 @@ import { classifyLlmErrorFor, isLlmErrorRecoverable } from '../../llm-error.js';
 import { t, i18n as i18nMeta } from '../../system-messages.js';
 import { GatewayProvider } from '../../gateway/index.js';
 import { buildDenyResult } from '../../tools/tool-execution.js';
+import { applyToolContentFilter } from '../../security/tool-content.js';
 import { zodToJsonSchema } from '../../tools/json-schema.js';
 import { errorText } from '../../tools/error-text.js';
 import { runToolBatch, type ToolBatchOutcome } from '../../tools/tool-batch.js';
@@ -415,15 +416,31 @@ async function runToolUseLoop(
       if (plan.kind === 'execute') {
         const outcome = batch.outcomes[execIndex];
         execIndex += 1;
-        const result = outcome?.ok === true
-          ? outcome.value
-          : toolExecErrorResult(plan.call.name, outcome, ctx, logger);
+        const result = applyStepContentFilter(
+          ctx,
+          plan.call.name,
+          plan.call.args,
+          plan.toolDef,
+          outcome?.ok === true
+            ? outcome.value
+            : toolExecErrorResult(plan.call.name, outcome, ctx, logger),
+        );
         calls.push({ name: plan.call.name, isError: result.isError === true });
         state.messages.push(toolResultMessage(plan.call, result.content));
         continue;
       }
+      // Отказ (permission/неизвестный тул) — тоже результат инструмента:
+      // проходит слой (текст отказа содержит аргументы вызова), системные и
+      // неизвестные тулы слой не оборачивает.
+      const denied = applyStepContentFilter(
+        ctx,
+        plan.call.name,
+        plan.call.args,
+        undefined,
+        { content: plan.content, isError: true },
+      );
       calls.push({ name: plan.call.name, isError: true });
-      state.messages.push(toolResultMessage(plan.call, plan.content));
+      state.messages.push(toolResultMessage(plan.call, denied.content));
     }
   }
 
@@ -584,6 +601,46 @@ function planToolCalls(
 }
 
 /**
+ * IPI: фильтр контента результата тула шага.
+ *
+ * Тот же единый слой, что у основного хода и цикла саб-агента
+ * (`engine/security/tool-content.ts`): матрица доверия, экранирование маркеров
+ * блока, словарная детекция и политика flag/sanitize/block. Зависимость не
+ * передана (`ctx.securityContentFilter` нет) — поведение прежнее (fail-open,
+ * обратная совместимость).
+ */
+function applyStepContentFilter(
+  ctx: StepExecutionContext,
+  toolName: string,
+  args: Record<string, unknown>,
+  toolDef: ToolDefinition | undefined,
+  result: ToolResult,
+): ToolResult {
+  const filter = ctx.securityContentFilter;
+  if (!filter) return result;
+  const config = filter.getConfig().promptInjection;
+  if (!config?.enabled) return result;
+  const filtered = applyToolContentFilter({
+    toolName,
+    ...(toolDef ? { toolDef } : {}),
+    args,
+    content: result.content,
+    isError: result.isError === true,
+    ...(result.metadata ? { metadata: result.metadata } : {}),
+    workingDir: stepWorkingDir(ctx),
+    config,
+    dictionaryStore: filter.dictionaryStore,
+    language: ctx.step?.language ?? 'ru',
+  });
+  return {
+    ...result,
+    content: filtered.content,
+    isError: filtered.isError,
+    ...(filtered.metadata !== undefined ? { metadata: filtered.metadata } : {}),
+  };
+}
+
+/**
  * PROP-127 (этап T4): результат-ошибка для вызова, который не удалось
  * исполнить.
  *
@@ -642,6 +699,15 @@ async function prepareAgentStep(
     // Инструкция по обфусцированным секретам нужна ровно тогда, когда вызов
     // идёт через gateway (ADR-036).
     gatewayEnabled: provider instanceof GatewayProvider,
+    // Блок `content.rules` — гейт тот же, что у сессий: правила включаются,
+    // пока защита от prompt injection не выключена. Зависимости нет —
+    // дефолт `true` (поведение прежнее).
+    ...(ctx.securityContentFilter
+      ? {
+          contentRulesEnabled:
+            ctx.securityContentFilter.getConfig().promptInjection.enabled !== false,
+        }
+      : {}),
     // Проект уже загружен в контексте шага — composer не читает хранилище.
     project: step?.project ?? null,
     // Описания тулов для манифеста промпта (ADR-070 §2.5) — тот же LLM-формат,

@@ -8,6 +8,11 @@ import {
   type SecretPattern,
   type SecuritySettings as SecuritySettingsType,
   type ProtectedPathsPolicy,
+  type PromptInjectionField,
+  type PromptInjectionMode,
+  type PromptInjectionSettings,
+  type PromptInjectionSource,
+  type SecuritySettingsResponse,
 } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
@@ -51,6 +56,33 @@ const EMPTY_POLICY: ProtectedPathsPolicy = {
   approvalPaths: [],
   deniedCommandPrefixes: [],
 }
+
+/** Черновик защиты от prompt injection (runtime-поля `enabled`/`mode`). */
+interface PromptInjectionDraft {
+  enabled: boolean
+  mode: PromptInjectionMode
+}
+
+const DEFAULT_PROMPT_INJECTION: PromptInjectionDraft = {
+  enabled: true,
+  mode: 'flag',
+}
+
+const PROMPT_INJECTION_MODES: PromptInjectionMode[] = ['flag', 'sanitize', 'block']
+
+const BADGE = 'shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium'
+
+const SOURCE_BADGE_CLASS: Record<PromptInjectionSource, string> = {
+  env: 'bg-status-warning/15 text-status-warning',
+  runtime: 'bg-primary/15 text-primary',
+  config: 'bg-muted text-muted-foreground',
+  default: 'bg-muted text-muted-foreground',
+}
+
+const statusOf = (err: unknown): number | undefined =>
+  typeof (err as { status?: unknown })?.status === 'number'
+    ? (err as { status: number }).status
+    : undefined
 
 /** Приводит ответ API к полной форме `LlmGatewaySettings` (rateLimit и т.п.). */
 function normalizeGatewaySettings(cfg: Partial<LlmGatewaySettings> | null | undefined): LlmGatewaySettings {
@@ -129,6 +161,20 @@ export function SecuritySettings() {
   const [securityLoading, setSecurityLoading] = useState(true)
   const [securitySaving, setSecuritySaving] = useState(false)
 
+  // --- Защита от prompt injection ---
+  const [promptInjection, setPromptInjection] = useState<PromptInjectionDraft>(DEFAULT_PROMPT_INJECTION)
+  const [savedPromptInjection, setSavedPromptInjection] =
+    useState<PromptInjectionDraft>(DEFAULT_PROMPT_INJECTION)
+  const [promptInjectionMeta, setPromptInjectionMeta] = useState<{
+    source: PromptInjectionSource
+    envLocked: boolean
+    envLockedFields: PromptInjectionField[]
+    wrapContent: boolean
+  }>({ source: 'default', envLocked: false, envLockedFields: [], wrapContent: true })
+  const [promptInjectionLoading, setPromptInjectionLoading] = useState(true)
+  const [promptInjectionSaving, setPromptInjectionSaving] = useState(false)
+  const [promptInjectionError, setPromptInjectionError] = useState<string | null>(null)
+
   // --- Политика защищённых путей ---
   const [policy, setPolicy] = useState<ProtectedPathsPolicy>(EMPTY_POLICY)
   const [policyOverridden, setPolicyOverridden] = useState(false)
@@ -136,6 +182,21 @@ export function SecuritySettings() {
   const [policySaving, setPolicySaving] = useState(false)
   const [policyResetting, setPolicyResetting] = useState(false)
   const [policyLoadError, setPolicyLoadError] = useState<string | null>(null)
+
+  /** Применить снимок секции «Безопасность» (эффективные значения + источник). */
+  const applyPromptInjection = (info: SecuritySettingsResponse) => {
+    const pi = info.security.promptInjection
+    const next: PromptInjectionDraft = { enabled: pi?.enabled ?? true, mode: pi?.mode ?? 'flag' }
+    setPromptInjection(next)
+    setSavedPromptInjection(next)
+    setPromptInjectionMeta({
+      source: info.source ?? 'default',
+      envLocked: info.envLocked === true,
+      envLockedFields: info.envLockedFields ?? [],
+      wrapContent: pi?.wrapContent ?? true,
+    })
+    setPromptInjectionError(null)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -180,9 +241,10 @@ export function SecuritySettings() {
   useEffect(() => {
     let cancelled = false
     synthApi
-      .getSecuritySettings()
-      .then((cfg) => {
+      .getSecuritySettingsInfo()
+      .then((info) => {
         if (cancelled) return
+        const cfg = info.security
         setSecurity({
           protectedPaths: {
             enabled: cfg.protectedPaths?.enabled ?? DEFAULT_SECURITY.protectedPaths.enabled,
@@ -191,10 +253,14 @@ export function SecuritySettings() {
         })
         setAskTimeoutSec(cfg.askTimeoutMs !== undefined ? String(Math.round(cfg.askTimeoutMs / 1000)) : '')
         setAskTimeoutEnabled(cfg.askTimeoutMs !== 0)
+        applyPromptInjection(info)
       })
       .catch(() => {})
       .finally(() => {
-        if (!cancelled) setSecurityLoading(false)
+        if (!cancelled) {
+          setSecurityLoading(false)
+          setPromptInjectionLoading(false)
+        }
       })
     return () => {
       cancelled = true
@@ -289,13 +355,13 @@ export function SecuritySettings() {
 
   const handleProtectedSave = async () => {
     const trimmed = askTimeoutSec.trim()
-    // ВКЛ и пустое поле → undefined (глобальный дефолт 30 с). ВКЛ и значение → ms.
-    // ВЫКЛ → 0 (без таймаута, ждём ответа бесконечно).
-    let askTimeoutMs: number | undefined
+    // ВКЛ и пустое поле → null (явный сброс runtime к глобальному дефолту 30 с).
+    // ВКЛ и значение → ms. ВЫКЛ → 0 (без таймаута, ждём ответа бесконечно).
+    let askTimeoutMs: number | null
     if (!askTimeoutEnabled) {
       askTimeoutMs = 0
     } else if (trimmed === '') {
-      askTimeoutMs = undefined
+      askTimeoutMs = null
     } else {
       askTimeoutMs = (Number(trimmed) || 0) * 1000
     }
@@ -340,6 +406,60 @@ export function SecuritySettings() {
 
   const updatePolicyList = (key: keyof ProtectedPathsPolicy, next: string[]) => {
     setPolicy((prev) => ({ ...prev, [key]: next }))
+  }
+
+  const promptInjectionEnabledLocked = promptInjectionMeta.envLockedFields.includes('enabled')
+  const promptInjectionModeLocked = promptInjectionMeta.envLockedFields.includes('mode')
+  const promptInjectionDirty =
+    promptInjection.enabled !== savedPromptInjection.enabled ||
+    promptInjection.mode !== savedPromptInjection.mode
+  // Сброс доступен только когда есть runtime-override и ни одно поле не зафиксировано env.
+  const promptInjectionCanReset = promptInjectionMeta.source === 'runtime' && !promptInjectionMeta.envLocked
+
+  const handlePromptInjectionSave = async () => {
+    const patch: PromptInjectionSettings = {}
+    if (!promptInjectionEnabledLocked && promptInjection.enabled !== savedPromptInjection.enabled) {
+      patch.enabled = promptInjection.enabled
+    }
+    if (!promptInjectionModeLocked && promptInjection.mode !== savedPromptInjection.mode) {
+      patch.mode = promptInjection.mode
+    }
+    setPromptInjectionSaving(true)
+    setPromptInjectionError(null)
+    try {
+      await synthApi.saveSecuritySettings({ promptInjection: patch })
+      applyPromptInjection(await synthApi.getSecuritySettingsInfo())
+      notify({ text: t('common.saved'), type: 'success', category: 'system' })
+    } catch (e) {
+      if (statusOf(e) === 409) {
+        setPromptInjectionError(t('security.promptInjection.envLocked'))
+      } else {
+        setPromptInjectionError(
+          `${t('security.promptInjection.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`,
+        )
+      }
+    } finally {
+      setPromptInjectionSaving(false)
+    }
+  }
+
+  const handlePromptInjectionReset = async () => {
+    setPromptInjectionSaving(true)
+    setPromptInjectionError(null)
+    try {
+      applyPromptInjection(await synthApi.resetSecuritySettings())
+      notify({ text: t('security.promptInjection.resetDone'), type: 'success', category: 'system' })
+    } catch (e) {
+      if (statusOf(e) === 409) {
+        setPromptInjectionError(t('security.promptInjection.envLocked'))
+      } else {
+        setPromptInjectionError(
+          `${t('security.promptInjection.resetError')}: ${e instanceof Error ? e.message : 'HTTP'}`,
+        )
+      }
+    } finally {
+      setPromptInjectionSaving(false)
+    }
   }
 
   return (
@@ -530,6 +650,110 @@ export function SecuritySettings() {
           saveTestId="security-patterns-save"
           resetTestId="security-patterns-reset"
         />
+      </SettingsSection>
+
+      {/* Защита от prompt injection */}
+      <SettingsSection
+        id="security-prompt-injection"
+        title={t('security.promptInjection.title')}
+        description={t('security.promptInjection.description')}
+        tooltip={t('settings.help.security.section.security-prompt-injection')}
+        actions={
+          <span
+            className={`${BADGE} ${SOURCE_BADGE_CLASS[promptInjectionMeta.source]}`}
+            data-testid="security-prompt-injection-source"
+          >
+            {t(`security.promptInjection.source.${promptInjectionMeta.source}`)}
+          </span>
+        }
+      >
+        {promptInjectionLoading && (
+          <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
+        )}
+
+        {!promptInjectionLoading && (
+          <>
+            <SettingsItem>
+              <ToggleField
+                label={promptInjection.enabled ? t('common.enabled') : t('common.disabled')}
+                enabled={promptInjection.enabled}
+                disabled={promptInjectionEnabledLocked}
+                onToggle={() =>
+                  setPromptInjection((pi) => ({ ...pi, enabled: !pi.enabled }))
+                }
+                tooltip={t('settings.help.security.promptInjectionEnabled')}
+              />
+            </SettingsItem>
+
+            <SettingsItem>
+              <SelectField
+                label={t('security.promptInjection.mode')}
+                description={t(`security.promptInjection.modeHint.${promptInjection.mode}`)}
+                value={promptInjection.mode}
+                disabled={promptInjectionModeLocked}
+                onValueChange={(value) =>
+                  setPromptInjection((pi) => ({ ...pi, mode: value as PromptInjectionMode }))
+                }
+                ariaLabel={t('security.promptInjection.mode')}
+                triggerTestId="security-prompt-injection-mode"
+                tooltip={t('settings.help.security.promptInjectionMode')}
+              >
+                <SelectContent>
+                  {PROMPT_INJECTION_MODES.map((mode) => (
+                    <SelectItem key={mode} value={mode}>
+                      {t(`security.promptInjection.mode.${mode}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+            </SettingsItem>
+
+            <SettingsItem>
+              <div className="text-xs text-muted-foreground">
+                {t('security.promptInjection.wrapContent', {
+                  state: promptInjectionMeta.wrapContent
+                    ? t('common.enabled')
+                    : t('common.disabled'),
+                })}
+              </div>
+            </SettingsItem>
+
+            {promptInjectionMeta.envLocked && (
+              <div
+                role="status"
+                data-testid="security-prompt-injection-env-locked"
+                className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning"
+              >
+                {t('security.promptInjection.envLocked')}
+              </div>
+            )}
+
+            {promptInjectionError && (
+              <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+                {promptInjectionError}
+              </div>
+            )}
+
+            <SettingsActions
+              onSave={() => void handlePromptInjectionSave()}
+              onReset={() => void handlePromptInjectionReset()}
+              saving={promptInjectionSaving}
+              saveDisabled={!promptInjectionDirty}
+              resetDisabled={!promptInjectionCanReset}
+              isDefault={!promptInjectionCanReset}
+              saveLabel={t('common.save')}
+              resetLabel={t('common.reset')}
+              saveTestId="security-prompt-injection-save"
+              resetTestId="security-prompt-injection-reset"
+            />
+
+            {promptInjectionMeta.source === 'default' && (
+              <div className="text-xs text-muted-foreground">
+                {t('security.promptInjection.baseHint')}
+              </div>
+            )}
+          </>
+        )}
       </SettingsSection>
 
       {/* Защищённые пути */}

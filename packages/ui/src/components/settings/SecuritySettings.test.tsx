@@ -33,7 +33,9 @@ const mocks = vi.hoisted(() => ({
   saveGatewayPatterns: vi.fn(),
   resetGatewayPatterns: vi.fn(),
   getSecuritySettings: vi.fn(),
+  getSecuritySettingsInfo: vi.fn(),
   saveSecuritySettings: vi.fn(),
+  resetSecuritySettings: vi.fn(),
   getProtectedPaths: vi.fn(),
   saveProtectedPaths: vi.fn(),
   resetProtectedPaths: vi.fn(),
@@ -56,6 +58,30 @@ import { SecuritySettings } from './SecuritySettings'
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
+
+/** Снимок секции «Безопасность» для GET/PUT/DELETE /settings/security. */
+function securityInfo(overrides: Record<string, unknown> = {}) {
+  return {
+    security: {
+      protectedPaths: { enabled: true },
+      askTimeoutMs: 300_000,
+      promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+    },
+    isOverridden: false,
+    defaults: {
+      protectedPaths: { enabled: true },
+      askTimeoutMs: 300_000,
+      promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+    },
+    source: 'default',
+    envLocked: false,
+    envLockedFields: [],
+    restartRequired: false,
+    ...overrides,
+  }
+}
+
+const SECURITY_INFO = securityInfo()
 
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
@@ -94,6 +120,7 @@ beforeEach(() => {
   })
   mocks.getGatewayPatterns.mockResolvedValue({ patterns: [], isOverridden: false })
   mocks.getSecuritySettings.mockResolvedValue({ protectedPaths: { enabled: true } })
+  mocks.getSecuritySettingsInfo.mockResolvedValue(SECURITY_INFO)
   mocks.getProtectedPaths.mockResolvedValue({
     policy: { deniedPaths: [], deniedPrefixes: [], approvalPaths: [], deniedCommandPrefixes: [] },
     isOverridden: false,
@@ -148,6 +175,122 @@ describe('SecuritySettings — предупреждение о выключен�
     const container = await renderSettings()
 
     expect(container.querySelector('[data-testid="gateway-disabled-warning"]')).toBeNull()
+  })
+})
+
+describe('SecuritySettings — защита от prompt injection (ADR-023)', () => {
+  const section = (container: HTMLElement) =>
+    container.querySelector('[data-settings-section="security-prompt-injection"]') as HTMLElement | null
+
+  it('рендерит подблок: тумблер, режим, бейдж источника', async () => {
+    const container = await renderSettings()
+
+    const block = section(container)
+    expect(block).not.toBeNull()
+    expect(block!.textContent).toContain('Prompt injection protection')
+    expect(block!.querySelector('[role="switch"]')).not.toBeNull()
+    expect(block!.querySelector('[data-testid="security-prompt-injection-mode"]')).not.toBeNull()
+    expect(
+      block!.querySelector('[data-testid="security-prompt-injection-source"]')?.textContent,
+    ).toBe('default')
+    expect(block!.textContent).toContain('Tool content wrapping: Enabled')
+  })
+
+  it('сохранение отправляет только изменённые поля защиты и перечитывает снимок', async () => {
+    mocks.getSecuritySettingsInfo
+      .mockResolvedValueOnce(SECURITY_INFO)
+      .mockResolvedValueOnce(
+        securityInfo({
+          source: 'runtime',
+          isOverridden: true,
+          security: {
+            ...SECURITY_INFO.security,
+            promptInjection: { enabled: false, wrapContent: true, mode: 'flag' },
+          },
+        }),
+      )
+    mocks.saveSecuritySettings.mockResolvedValue({ protectedPaths: { enabled: true } })
+    const container = await renderSettings()
+
+    const toggle = section(container)!.querySelector('[role="switch"]') as HTMLButtonElement
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    const save = () =>
+      container.querySelector('[data-testid="security-prompt-injection-save"]') as HTMLButtonElement
+    expect(save().disabled).toBe(true)
+
+    await act(async () => {
+      toggle.click()
+    })
+    expect(save().disabled).toBe(false)
+
+    await act(async () => {
+      save().click()
+    })
+    expect(mocks.saveSecuritySettings).toHaveBeenCalledWith({ promptInjection: { enabled: false } })
+    // После сохранения снимок перечитан — бейдж стал «из настроек».
+    expect(
+      container.querySelector('[data-testid="security-prompt-injection-source"]')?.textContent,
+    ).toBe('from settings')
+    expect(mocks.notify).toHaveBeenCalled()
+  })
+
+  it('env-фиксация блокирует контролы и показывает предупреждение', async () => {
+    mocks.getSecuritySettingsInfo.mockResolvedValue(
+      securityInfo({
+        source: 'env',
+        envLocked: true,
+        envLockedFields: ['enabled', 'mode'],
+        security: {
+          ...SECURITY_INFO.security,
+          promptInjection: { enabled: false, wrapContent: true, mode: 'block' },
+        },
+      }),
+    )
+    const container = await renderSettings()
+
+    const block = section(container)!
+    expect(
+      block.querySelector('[data-testid="security-prompt-injection-env-locked"]'),
+    ).not.toBeNull()
+    // Тумблер: обёртка disabled (pointer-events-none), селект — disabled.
+    const toggleWrapper = block.querySelector('[role="switch"]')!.parentElement as HTMLElement
+    expect(toggleWrapper.className).toContain('pointer-events-none')
+    const trigger = block.querySelector(
+      '[data-testid="security-prompt-injection-mode"]',
+    ) as HTMLButtonElement
+    expect(trigger.disabled).toBe(true)
+    // Сброс недоступен, пока значение зафиксировано env.
+    const reset = block.querySelector(
+      '[data-testid="security-prompt-injection-reset"]',
+    ) as HTMLButtonElement
+    expect(reset.disabled).toBe(true)
+  })
+
+  it('сброс вызывает DELETE и применяет ответ', async () => {
+    mocks.getSecuritySettingsInfo.mockResolvedValue(
+      securityInfo({
+        source: 'runtime',
+        isOverridden: true,
+        security: {
+          ...SECURITY_INFO.security,
+          promptInjection: { enabled: false, wrapContent: true, mode: 'sanitize' },
+        },
+      }),
+    )
+    mocks.resetSecuritySettings.mockResolvedValue(securityInfo())
+    const container = await renderSettings()
+
+    const reset = container.querySelector(
+      '[data-testid="security-prompt-injection-reset"]',
+    ) as HTMLButtonElement
+    expect(reset.disabled).toBe(false)
+
+    await act(async () => {
+      reset.click()
+    })
+    expect(mocks.resetSecuritySettings).toHaveBeenCalledTimes(1)
+    expect(mocks.notify).toHaveBeenCalled()
   })
 })
 

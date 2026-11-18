@@ -666,14 +666,13 @@ export class SystemPromptComposer {
 
     // Правила защиты от prompt injection — **один** системный блок, а не часть
     // ролей (`prompts/system/CONTENT_RULES.{lang}.md`). Гейты: правила включены
-    // (`contentRulesEnabled !== false`), текст непустой и в запрос реально идут
-    // инструменты (без инструментов недоверенного контента модель не получает).
-    // Блок лежит в `extraBlocks`, поэтому добавляется и при
-    // `session.settings.systemPrompt` override (как `gateway`/`mode.policy`).
-    const hasRequestTools = Boolean(
-      ctx.tools?.length || ctx.mcpTools?.length || ctx.pluginTools?.length,
-    );
-    if (ctx.contentRulesEnabled !== false && hasRequestTools) {
+    // (`contentRulesEnabled !== false`) и текст непустой. Наличие инструментов в
+    // запросе гейтом **не** является: в основном ходе composer собирается до
+    // `select()`, и блок иначе не попадал в промпт; сами правила объясняют
+    // модельному поведению и без вызовов. Блок лежит в `extraBlocks`, поэтому
+    // добавляется и при `session.settings.systemPrompt` override (как
+    // `gateway`/`mode.policy`).
+    if (ctx.contentRulesEnabled !== false) {
       const contentRules = this._contextConfig?.getContentRules(lang) ?? '';
       if (contentRules) {
         extraBlocks.push({

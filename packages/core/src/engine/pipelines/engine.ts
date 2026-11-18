@@ -170,6 +170,8 @@ export class PipelineEngine {
   private readonly _llm: PipelineStepLlmRuntime | undefined;
   /** Инфраструктура вложений шага (ADR-115 × ADR-101). */
   private readonly _stepAttachments: PipelineStepAttachments | undefined;
+  /** IPI шага: живой конфиг безопасности + словари (фильтр контента тулов). */
+  private readonly _securityContentFilter: PipelineEngineDeps['securityContentFilter'];
   /** Шина инстансных событий (ADR-101 §2.12) — публикация `pipeline.run.*`. */
   private readonly _eventBus: PipelineEventPublisher | null;
   /** Метрики прогонов (ADR-094, `synth_pipeline_*`). */
@@ -223,6 +225,8 @@ export class PipelineEngine {
     };
     this._stepAttachments =
       Object.keys(attachments).length > 0 ? attachments : undefined;
+    // IPI шага (ADR-101): не задано — фильтр контента в шаге не применяется.
+    this._securityContentFilter = deps.securityContentFilter;
     this._logger = deps.logger ?? {
       info: (group, message) => logInfo(group, message),
       warning: (group, message) => logWarning(group, message),
@@ -774,6 +778,10 @@ export class PipelineEngine {
 
     const withLlm = this._llm ? { llm: this._llm } : {};
     const withAttachments = this._stepAttachments ? { attachments: this._stepAttachments } : {};
+    // IPI шага: живой конфиг безопасности + словари — в контекст исполнения.
+    const withSecurity = this._securityContentFilter
+      ? { securityContentFilter: this._securityContentFilter }
+      : {};
     // ADR-077/PROP-135: контур исполнения — порт и роутер уходят в контекст
     // шага, а оттуда в `ToolContext.extra` (`buildToolContext`).
     const withExecution = {
@@ -794,6 +802,7 @@ export class PipelineEngine {
       ...(step ? { step } : {}),
       ...withLlm,
       ...withAttachments,
+      ...withSecurity,
       ...withExecution,
       ...(executionWorkspaceSubPath ? { executionWorkspaceSubPath } : {}),
     };

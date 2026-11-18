@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SynthConfig, InstructionsConfig } from '@itphx/synth-shared';
 import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveExecutionConfig, readTlsRuntimeSettings } from '@itphx/synth-shared';
-import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
+import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES, resolvePromptInjection } from '@itphx/synth-shared/config';
 import {
   SessionManager, EventBus,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -209,6 +209,13 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
   const settingsStore = storage.settings;
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
+  if (effectiveSecurityConfig) {
+    // ADR-023: env `SYNTH_SECURITY_PROMPT_INJECTION_*` перекрывает runtime/config.
+    effectiveSecurityConfig.promptInjection = resolvePromptInjection(
+      options.config.security?.promptInjection,
+      runtimeSecurity.promptInjection,
+    ).config;
+  }
 
   // ADR-126: сервис скиллов + slash-команд (резолвинг в core до LLM).
   // ADR-077: порт исполнения команд — по режиму `execution.mode`

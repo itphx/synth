@@ -1,5 +1,7 @@
 export {
   wrapContent,
+  wrapContentDetailed,
+  escapeContentMarkers,
   detectPromptInjection,
   applyPolicy,
   buildWarnLine,
@@ -14,7 +16,9 @@ export type {
   InjectionDetection,
 } from './prompt-injection.js';
 export { getToolTrust } from './trust.js';
-export type { ToolTrustInfo } from './trust.js';
+export type { ToolTrustInfo, ToolTrustOptions } from './trust.js';
+export { applyToolContentFilter } from './tool-content.js';
+export type { ToolContentFilterInput, ToolContentFilterResult } from './tool-content.js';
 export {
   tokenizeCommand,
   extractCommandPaths,

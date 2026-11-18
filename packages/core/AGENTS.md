@@ -1329,7 +1329,9 @@
   `getInstructionsResolver()` — резолвер проектных инструкций ADR-069 (политика
   trust/dedup/лимиты общие; `null` — инструкции инстанса выключены);
   `wrapProviderWithGateway(provider)` — общая обвязка провайдера в `GatewayProvider`
-  (ADR-036) для движков вне сессии — инвариант «любой LLM-вызов через gateway» сохраняется.
+  (ADR-036) для движков вне сессии — инвариант «любой LLM-вызов через gateway» сохраняется;
+  `getSecurityConfig()` — read-only живой геттер секции «Безопасность» (её читает фильтр
+  контента шага пайплайна и гейт блока `content.rules`; кэшировать значение нельзя).
   **Шов точки `llmFilters` (Ф3б):** `getLlmFilters()` — реестр фильтров LLM-вызовов
   (`LlmFilterRegistry`) инстанса: **тот же экземпляр** уходит во все gateway-точки (основной ход,
   пул провайдеров, decision, оптимизатор/суммаризация) и в фасад плагинов
@@ -1416,6 +1418,17 @@
   команд; кандидат-путь = существующий путь, цель редиректа, операнд команды-писателя,
   совпадение glob'а с существующим каталогом, цель `cd`; динамика/обёртки/программы
   не анализируются — ADR-029 аддендум 2026-11-13);
+  `engine/security/tool-content.ts` — **единый слой** фильтрации контента инструментов
+  (`applyToolContentFilter`): матрица доверия (`getToolTrust`; у плагинного тула — по
+  `source:'plugin'`/`pluginTrust`, `trusted` только при уровне не ниже `trusted`, иначе
+  fail-closed `untrusted`, ветка **до** MCP), `escapeContentMarkers`/`wrapContentDetailed`
+  (экранирование `[CONTENT`/`[/CONTENT]` **всегда** и идемпотентно; подделка маркера
+  **не** блокирует контент, но помечается `injection_marker_escaped`/`injection_suspicious`)
+  и словарная политика `flag`/`sanitize`/`block` — **блокировка только по словарю ru+en**
+  (`security.injection_blocked`, `isError:true`); `isError`-результаты проходят слой, системные
+  и неизвестные тулы — нет. Один слой на все три цикла: основной ход, саб-агент
+  (`task/run-cycle.ts`) и шаг пайплайна (`PipelineSecurityContentFilter`); второй копии
+  логики быть не должно.
   `engine/security/secret-files.ts` — политика «файлы и каталоги секретов» (`isSecretFileName`/`isSecretDirectoryName`; список имён и каталогов + шаблоны `.env*`/`credentials*`/`secret(s)*`/`service-account*`/`id_*`/`*.pem|key|p12|pfx|jks|keystore|ppk|kdbx`/`*.tfstate*`; отдаётся плагину через `facade.security`, т.к. сканер расширений блокирует бандл за упоминание имён секретных файлов); слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078; источник — порт, ADR-077 шаг A) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075; исключения — `WORKSPACE_FREE_TOOLS`: `ssh_keys_list`, ресурс инстанса, ADR-076); деталь недоступности (`ToolAvailability.detail` — «в пуле: N из M») доходит до текста deny в `evaluator.ts` и до модели через `UnavailableTool.detail` (`engine/context/state-messages.ts`); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer` (два режима сжатия — суммаризация и компактизация, ADR-119), `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
   `ContextConfig.getMaxStepsPrompt(language)` — требование «только текст» для
@@ -1444,9 +1457,11 @@
   сразу после `role`, до `additional`) — правила защиты от prompt injection. Он **один**:
   ролевые промпты (`prompts/roles/*`) этих правил не содержат, дублировать секцию в роль
   нельзя. Гейты: `ComposerContext.contentRulesEnabled !== false` (значение вычисляет
-  оркестратор из `securityConfig.promptInjection.enabled`; выключение защиты снимает и
-  блок) и непустой набор инструментов в запросе (`tools`/`mcpTools`/`pluginTools`). Блок
-  подключается и при `session.settings.systemPrompt` override (он в `extraBlocks`).
+  оркестратор из `securityConfig.promptInjection.enabled`, шаг пайплайна — из
+  `securityContentFilter.getConfig()`; выключение защиты снимает и блок) и непустой текст
+  правил. Наличие инструментов в запросе гейтом **не** является: в основном ходе composer
+  собирается до `select()`, и блок иначе не попадал в промпт. Блок подключается и при
+  `session.settings.systemPrompt` override (он в `extraBlocks`).
   Загрузчик — `ContextConfig.getContentRules()` (порт `ContextFileRepository`;
   `getRules` оставлен `@deprecated`-алиасом). Саб-агенты получают те же правила в своей
   сборке системного промпта (`task`/`task-resume`).
@@ -1738,8 +1753,10 @@
   (`fs.mixed_line_endings`) и `fs.no_changes`, запись атомарная через общий
   `writeFileAtomic` (откат оригиналов при сбое посередине). Реестр держит **три слоя** по
   `ToolDefinition.source` (`builtin` | `mcp` | `plugin`, ADR-071 §2.1 + ADR-090):
-  `registerPlugin(tool, pluginName)` — единственный путь регистрации плагинного тула, **атомарная**
-  валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
+  `registerPlugin(tool, pluginName, opts?: { trust })` — единственный путь регистрации плагинного тула,
+  **атомарная** валидация с отказом `invalid_name`/`invalid_definition`/`invalid_capability`/`name_conflict`;
+  `opts.trust` (уровень установки из фасада) пишется в аддитивное `ToolDefinition.pluginTrust` —
+  по нему матрица доверия IPI (`engine/security/tool-content.ts`) решает, оборачивать ли результат;
   имя всегда `plugin_<ns>_<tool>` (namespace — из `manifest.name`, хелперы в
   `shared/types/plugin-tools.ts`: `pluginToolFullName`/`pluginToolLocalName`), capability `mcp`
   (слой MCP) и `runtime` (примитивы ядра неотключаемы админом) зарезервированы, пустой набор
@@ -2617,7 +2634,8 @@
   видит только причину; ссылки прогона регистрируются в `blob_refs`
   (`ownerKind: 'pipeline-run'`). Точки расширения: `StepExecutor` (по виду узла), `PipelineExitHandler`,
   зависимости `PipelineEngineDeps` (`projectStore`/`toolRegistry`/`mcpManager`/
-  `instructionsResolver`/`agentRegistry`/`skillsCatalog`/`exits`/`metrics`) — глобальных
+  `instructionsResolver`/`agentRegistry`/`skillsCatalog`/`exits`/`metrics`/
+  `securityContentFilter` — живой `{ getConfig, dictionaryStore }` для IPI-фильтра шага) — глобальных
   синглтонов нет, сборка — в `server/app/deps.ts` (standalone) и `backend/app/deps.ts`
   (managed).
 - `engine/pipelines/builtin.ts` — встроенные шаблоны памяти: `builtin:memory-consolidation` (сессия → факты, `agent`), `builtin:memory-consolidate-facts` (`memory_consolidate`), `builtin:memory-reindex` (`memory_index action=rebuild_all`, `wait:true`). Сид при старте идемпотентен; `POST /pipeline-templates/:tid/instantiate` с `ensure:true` возвращает существующий пайплайн проекта по `installedBy.templateId` (200) или создаёт (201).

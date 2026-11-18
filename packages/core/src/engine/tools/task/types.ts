@@ -14,6 +14,7 @@ import type { RequestSessionService } from '../../events/request-session.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
 import type { ForceCompressionDeps } from '../../orchestrator/compression.js';
 import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
+import type { DictionaryRepository } from '../../../storage/ports/dictionary-repository.js';
 import type { ExecutionEnvironmentKind } from '../../context/environment.js';
 import type { ModelRouter } from '../../router/router.js';
 import type { UsagePricing } from '../../../providers/usage.js';
@@ -126,6 +127,12 @@ export interface TaskExtra {
   workspaceReady?: boolean;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
+  /**
+   * IPI: порт словарей для детекции инъекций в результатах тулов саб-агента
+   * (та же категория `injection`, что у основного хода). Не задан — слой
+   * фильтрации в цикле ребёнка не применяется (поведение прежнее, fail-open).
+   */
+  dictionaryStore?: DictionaryRepository;
   /** Язык сессии (для локализованных сообщений безопасности). */
   language?: string;
   /** Политика безопасности execute_shell (денлист путей/команд) родительской сессии. */

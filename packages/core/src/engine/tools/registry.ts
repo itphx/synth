@@ -9,6 +9,7 @@
  *   disposer'ом при деактивации плагина.
  */
 import type { ToolDefinition, ToolForLLM, ToolCapability, ToolSource } from '@itphx/synth-shared';
+import type { CatalogTrustLevel } from '@itphx/synth-shared';
 import {
   ToolCapability as ToolCapabilityValues,
   isValidPluginToolLocalName,
@@ -67,8 +68,15 @@ export class ToolRegistry {
    *
    * @param tool — определение с **локальным** именем (без префикса).
    * @param pluginName — имя плагина-владельца (источник namespace).
+   * @param opts.trust — фактический уровень доверия установки плагина
+   *   (`CatalogTrustLevel`); записывается в `pluginTrust` и используется
+   *   матрицей доверия контента (IPI). Не задан — тул считается недоверенным.
    */
-  registerPlugin(tool: ToolDefinition, pluginName: string): PluginToolRegistration {
+  registerPlugin(
+    tool: ToolDefinition,
+    pluginName: string,
+    opts?: { trust?: CatalogTrustLevel },
+  ): PluginToolRegistration {
     const owner = pluginName?.trim() ?? '';
     if (!owner) {
       return {
@@ -170,6 +178,9 @@ export class ToolRegistry {
       source: 'plugin',
       pluginName: owner,
       capabilities: [...capabilities] as ToolCapability[],
+      // ADR-090 × IPI: уровень доверия установки — для матрицы доверия
+      // контента. Не задан — `pluginTrust` не появляется (fail-closed).
+      ...(opts?.trust ? { pluginTrust: opts.trust } : {}),
     });
     return { ok: true, name: fullName };
   }

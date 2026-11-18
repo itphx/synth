@@ -33,17 +33,43 @@ export function buildWarnLine(matches: string[]): string {
 }
 
 /**
+ * Экранирует маркеры блока контента внутри `text`: `[CONTENT` и `[/CONTENT]`
+ * (регистронезависимо) становятся `\[CONTENT` / `\[/CONTENT]`.
+ *
+ * Зачем: недоверенный контент может **подделать** закрывающий маркер
+ * `[CONTENT END]` и выдать свой текст за инструкцию вне блока данных.
+ * Экранирование — **всегда**, независимо от режима (`flag`/`sanitize`/`block`):
+ * подделка маркера не блокирует контент (иначе нельзя прочитать репозиторий
+ * с образцами), но помечается (`injection_marker_escaped`/`injection_suspicious`).
+ *
+ * Идемпотентна: уже экранированный маркер (перед `[` стоит `\`) не трогается.
+ * Исходный регистр сохраняется.
+ */
+export function escapeContentMarkers(text: string): { content: string; escaped: boolean } {
+  if (!text) return { content: text, escaped: false };
+  let escaped = false;
+  const content = text.replace(/(?<!\\)\[(\/?CONTENT)\b/gi, (_match, marker: string) => {
+    escaped = true;
+    return `\\[${marker}`;
+  });
+  return { content, escaped };
+}
+
+/**
  * Оборачивает tool-контент в маркеры:
  * [CONTENT | SOURCE: {source} | {ATTR}: {val} | trust: {trust}]
  * {content}
  * [CONTENT END]
+ *
+ * Тело маркеров экранируется (`escapeContentMarkers`) — вызывающий не может
+ * «забыть» это сделать: подделанный `[CONTENT END]` в контенте не закроет блок.
  */
-export function wrapContent(
+export function wrapContentDetailed(
   content: string,
   source: string,
   attrs: Record<string, string>,
   trust: TrustLevel,
-): string {
+): { content: string; escaped: boolean } {
   const parts = [`SOURCE: ${source}`];
   for (const [key, value] of Object.entries(attrs)) {
     if (value !== undefined && value !== null && value !== '') {
@@ -51,7 +77,21 @@ export function wrapContent(
     }
   }
   parts.push(`trust: ${trust}`);
-  return `[CONTENT | ${parts.join(' | ')}]\n${content}\n[CONTENT END]`;
+  const body = escapeContentMarkers(content);
+  return {
+    content: `[CONTENT | ${parts.join(' | ')}]\n${body.content}\n[CONTENT END]`,
+    escaped: body.escaped,
+  };
+}
+
+/** Обёртка контента в маркеры (совместимая сигнатура: только строка). */
+export function wrapContent(
+  content: string,
+  source: string,
+  attrs: Record<string, string>,
+  trust: TrustLevel,
+): string {
+  return wrapContentDetailed(content, source, attrs, trust).content;
 }
 
 /**

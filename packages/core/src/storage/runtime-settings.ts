@@ -4,7 +4,8 @@ import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode, ExecutionRuntimeSettings } from '@itphx/synth-shared';
 import type { BackgroundConfig } from '@itphx/synth-shared/config';
 import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS, SSH_MODES } from '@itphx/synth-shared';
-import { defaultConfig, parseAttachmentsModalities, parseExecutionRuntimeSettings, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SESSION_OPS_PER_MINUTE } from '@itphx/synth-shared/config';
+import { defaultConfig, parseAttachmentsModalities, parseExecutionRuntimeSettings, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SESSION_OPS_PER_MINUTE, DEFAULT_PROMPT_INJECTION_CONFIG } from '@itphx/synth-shared/config';
+import type { PromptInjectionRuntimePatch } from '@itphx/synth-shared/config';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
 
@@ -27,6 +28,16 @@ export interface SecurityRuntimeSettings {
   };
   /** Глобальный дефолт таймаута подтверждения ask (мс). Переживает рестарт. */
   askTimeoutMs?: number;
+  /**
+   * Защита от indirect prompt injection: runtime-патч `enabled`/`mode`
+   * (раздел «Безопасность» → «Защита от prompt injection»).
+   *
+   * Приоритет эффективного значения — **env `SYNTH_SECURITY_PROMPT_INJECTION_*`
+   * > runtime > config.yaml > дефолт схемы**; резолвер — `resolvePromptInjection`
+   * (`@itphx/synth-shared/config`), env-фиксация — **по полю**. `wrapContent`
+   * runtime не управляется (берётся из config.yaml).
+   */
+  promptInjection?: PromptInjectionRuntimePatch;
 }
 
 /**
@@ -1333,9 +1344,16 @@ export function mergeLlmGatewayConfig(
 }
 
 /**
- * Мёржит runtime-настройки секции «Безопасность» (protectedPaths.enabled,
- * askTimeoutMs) поверх конфига из config.yaml. Runtime приоритетнее. Возвращает
- * undefined, если ни конфига, ни runtime-настроек нет.
+ * Мёржит runtime-настройки секции «Безопасность» (`protectedPaths.enabled`,
+ * `askTimeoutMs`, `promptInjection`) поверх конфига из config.yaml. Runtime
+ * приоритетнее. Возвращает undefined, если ни конфига, ни runtime-настроек нет.
+ *
+ * `promptInjection` мёржится **по полям**: `enabled`/`mode` — runtime > base >
+ * дефолты схемы (`enabled: true`, `mode: 'flag'`), а `wrapContent` — только из
+ * базы (runtime его не перекрывает: это deployment-политика обёртки tool-контента).
+ * Env-слой (`SYNTH_SECURITY_PROMPT_INJECTION_ENABLED`/`…_MODE`) здесь **не**
+ * применяется — его накладывает `resolvePromptInjection` в точках сборки и в
+ * роуте `/api/v2/settings/security` (единый приоритет env > runtime > config).
  *
  * askTimeoutMs не входит в SecurityConfig (это permission-настройка), поэтому
  * возвращается как доп. поле — потребитель (onSecurityChange) пробрасывает его
@@ -1359,7 +1377,18 @@ export function mergeSecurityConfig(
   const hasRuntime = !!runtime && Object.keys(runtime).length > 0;
   if (!base && !hasRuntime) return undefined;
   return {
-    promptInjection: base?.promptInjection ?? { enabled: true, wrapContent: true, mode: 'flag' },
+    promptInjection: {
+      enabled:
+        runtime.promptInjection?.enabled
+        ?? base?.promptInjection?.enabled
+        ?? DEFAULT_PROMPT_INJECTION_CONFIG.enabled,
+      // `wrapContent` — только база: runtime-настройкой не управляется.
+      wrapContent: base?.promptInjection?.wrapContent ?? DEFAULT_PROMPT_INJECTION_CONFIG.wrapContent,
+      mode:
+        runtime.promptInjection?.mode
+        ?? base?.promptInjection?.mode
+        ?? DEFAULT_PROMPT_INJECTION_CONFIG.mode,
+    },
     protectedPaths: {
       enabled: runtime.protectedPaths?.enabled ?? base?.protectedPaths?.enabled ?? true,
     },

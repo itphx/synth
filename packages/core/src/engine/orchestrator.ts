@@ -133,8 +133,8 @@ import type { ExecutionPort } from '../execution/ports/index.js';
 import type { ExecutionRouter } from '../execution/router.js';
 import { browserProfileCatalog, executionProfileCatalog } from '../execution/router.js';
 import { resolveBrowserProfile, resolveExecutionProfile, type ExecutionProfileCatalog } from '../execution/profile-binding.js';
-import { getToolTrust } from './security/trust.js';
-import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
+import { applyToolContentFilter } from './security/tool-content.js';
+import type { InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
 import { shellGrantPlan } from './security/shell-guard.js';
@@ -2507,6 +2507,19 @@ export class ChatOrchestrator {
   }
 
   /**
+   * Текущая секция «Безопасность» инстанса — **read-only** геттер для
+   * потребителей вне оркестратора (шаги пайплайнов: фильтр контента и гейт
+   * блока `content.rules`). Живое значение: runtime-настройка применяется без
+   * рестарта, поэтому вызывающий не должен кэшировать результат.
+   *
+   * Возвращается сам объект конфигурации (не копия) — менять его нельзя:
+   * это состояние инстанса, а не снимок вызывающего.
+   */
+  getSecurityConfig(): SecurityConfig {
+    return this._securityConfig;
+  }
+
+  /**
    * ADR-029: live-применение глобального таймаута подтверждения (runtime-настройка
    * из UI, раздел «Безопасность»). Обновляет дефолтный permission-конфиг, который
    * наследуют сессии без собственного пер-сессионного permission-конфига.
@@ -2946,6 +2959,11 @@ export class ChatOrchestrator {
       language,
       routingEnabled: !!this._router && session.settings.routingEnabled !== false,
       gatewayEnabled: !!this._gatewayConfig,
+      // Блок `content.rules` — правила защиты от prompt injection: гейт
+      // повторяет включённость защиты (`security.promptInjection.enabled`).
+      // Набор инструментов в запросе **не** гейт: в основном ходе composer
+      // собирается до `select()`, и блок иначе не попадал в промпт.
+      contentRulesEnabled: this._securityConfig.promptInjection.enabled !== false,
       historyMessages: session.messages,
       userId: session.userId,
       showInterview: session.settings.showInterview,
@@ -7408,6 +7426,9 @@ export class ChatOrchestrator {
                   // блок `[СРЕДА ИСПОЛНЕНИЯ]`, что и основная сессия.
                   environmentKind: this._environmentKind,
                   securityConfig: this._securityConfig,
+                  // IPI: словарь детекции — цикл саб-агента применяет тот же слой
+                  // фильтрации контента, что и основной ход.
+                  dictionaryStore: this._dictionaryStore,
                   language: session.settings.language || 'ru',
                   publish: (type: string, data: Record<string, unknown>) =>
                     publishChunk(type as never, data),
@@ -7811,64 +7832,32 @@ export class ChatOrchestrator {
             return;
           }
 
-          // IPI-защита: оборачиваем tool-контент по матрице доверия + детектируем
-          // подозрительные паттерны (флаг/sanitize/block по конфигу).
-          if (this._securityConfig.promptInjection.enabled && !toolResult.isError) {
-            const trustInfo = getToolTrust(
+          // IPI-защита: единый слой фильтрации контента инструментов
+          // (`engine/security/tool-content.ts`) — матрица доверия, экранирование
+          // маркеров блока, словарная детекция и политика flag/sanitize/block.
+          // Один и тот же слой применяют цикл саб-агента и шаг пайплайна.
+          if (this._securityConfig.promptInjection.enabled) {
+            const filtered = applyToolContentFilter({
               toolName,
-              toolArgs,
+              toolDef,
+              args: toolArgs,
+              content: toolResult.content,
+              isError: toolResult.isError === true,
+              metadata: toolResult.metadata,
               workingDir,
-              toolDef?.capabilities,
               // ADR-114: периметр доверия — рабочий каталог + корень проекта.
               allowedRoots,
-            );
-            if (trustInfo) {
-              const piConfig = this._securityConfig.promptInjection;
-              const lang = session.settings.language || 'ru';
-              // Детекция по обоим словарям (ru+en) — веб-контент может быть на любом языке
-              const langs = lang === 'en' ? ['en', 'ru'] : ['ru', 'en'];
-              let detection = { suspicious: false, matches: [] as string[] };
-              for (const l of langs) {
-                const d = detectPromptInjection(toolResult.content, this._dictionaryStore, l);
-                if (d.suspicious) {
-                  detection = { suspicious: true, matches: [...detection.matches, ...d.matches] };
-                }
-              }
-
-              const applied = applyPolicy(toolResult.content, piConfig.mode, detection);
-
-              if (applied.blocked) {
-                const matches = detection.matches.slice(0, 5).join(', ');
-                toolResult = {
-                  content: sm('security.injection_blocked', { tool: toolName, matches }),
-                  isError: true,
-                  metadata: {
-                    ...toolResult.metadata,
-                    i18n: i18nMeta('security.injection_blocked', { tool: toolName, matches }),
-                    injection_suspicious: true,
-                    injection_matches: detection.matches,
-                  },
-                };
-              } else {
-                const wrapped = piConfig.wrapContent
-                  ? wrapContent(applied.content, trustInfo.source, trustInfo.attrs, trustInfo.trust)
-                  : applied.content;
-                // IPI: предупреждение [WARN] ставится ПЕРЕД блоком [CONTENT | ...]
-                const content = detection.suspicious && piConfig.mode === 'flag'
-                  ? `${buildWarnLine(detection.matches)}\n${wrapped}`
-                  : wrapped;
-                toolResult = {
-                  ...toolResult,
-                  content,
-                  metadata: {
-                    ...toolResult.metadata,
-                    ...(detection.suspicious
-                      ? { injection_suspicious: true, injection_matches: detection.matches }
-                      : {}),
-                  },
-                };
-              }
-            }
+              config: this._securityConfig.promptInjection,
+              dictionaryStore: this._dictionaryStore,
+              language: session.settings.language || 'ru',
+            });
+            // Прочие поля результата (`attachments` ADR-115 и др.) сохраняются.
+            toolResult = {
+              ...toolResult,
+              content: filtered.content,
+              isError: filtered.isError,
+              ...(filtered.metadata !== undefined ? { metadata: filtered.metadata } : {}),
+            };
           }
 
           // ADR-069 §4: lazy-догрузка вложенных проектных инструкций в результат

@@ -59,6 +59,7 @@ import type { StopRecordInput } from '../../stop-reason.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import { resetRecoveryState } from '../../../sessions/recovery.js';
 import { renderTodosSection } from '../todo.js';
+import { applyToolContentFilter } from '../../security/tool-content.js';
 import { resolveBrowserProfile } from '../../../execution/profile-binding.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 
@@ -204,6 +205,44 @@ async function readChildTodos(
   } catch {
     return [];
   }
+}
+
+/**
+ * IPI: слой фильтрации контента инструмента в цикле саб-агента.
+ *
+ * Гейт — `securityConfig.promptInjection.enabled` **и** заданный словарь;
+ * без зависимости поведение прежнее (fail-open — прогон идёт как раньше).
+ * Слой общий с основным ходом и шагом пайплайна
+ * (`engine/security/tool-content.ts`), своей копии логики здесь нет.
+ */
+function applySubagentContentFilter(
+  extra: TaskExtra,
+  toolName: string,
+  args: Record<string, unknown>,
+  result: ToolResult,
+  ctx: ToolContext,
+): ToolResult {
+  const config = extra.securityConfig?.promptInjection;
+  if (!config?.enabled || !extra.dictionaryStore) return result;
+  const filtered = applyToolContentFilter({
+    toolName,
+    toolDef: extra.toolRegistry?.get(toolName),
+    args,
+    content: result.content,
+    isError: result.isError === true,
+    metadata: result.metadata,
+    workingDir: ctx.workingDir,
+    allowedRoots: ctx.allowedRoots,
+    config,
+    dictionaryStore: extra.dictionaryStore,
+    language: extra.language ?? 'ru',
+  });
+  return {
+    ...result,
+    content: filtered.content,
+    isError: filtered.isError,
+    ...(filtered.metadata !== undefined ? { metadata: filtered.metadata } : {}),
+  };
 }
 
 /**
@@ -2306,6 +2345,19 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         } else {
           toolResult = plan.result;
         }
+
+        // IPI-защита: единый слой фильтрации контента инструментов (та же
+        // логика, что в основном ходе и шаге пайплайна) — обёртка по матрице
+        // доверия, экранирование маркеров блока, словарная детекция и политика
+        // flag/sanitize/block. Применяется ДО публикации события и персиста,
+        // чтобы UI и история видели одинаковый контент.
+        toolResult = applySubagentContentFilter(
+          extra,
+          plan.name,
+          plan.kind === 'step-limit' ? {} : plan.args,
+          toolResult,
+          ctx,
+        );
 
         publishToolEvent('tool_call.result', {
           stream_id: extra.streamId,

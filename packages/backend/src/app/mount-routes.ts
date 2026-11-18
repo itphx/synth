@@ -7,6 +7,7 @@ import { isAbsolute, join, normalize, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, SYNTH_VERSION, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
+import { resolvePromptInjection } from '@itphx/synth-shared/config';
 import {
   DEFAULT_AGENT_ID, RateLimiter,
   resolveAgentRoleAlias,
@@ -1556,6 +1557,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // ADR-029: askTimeoutMs живёт в permission-секции конфига (не в security).
       askTimeoutMs: config.synth.permission?.askTimeoutMs,
     },
+    // ADR-023: база `security.promptInjection` (config.yaml) — GET/DELETE и env-резолвер.
+    fallbackPromptInjection: config.synth.security.promptInjection,
     // ADR-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
     onLlmGatewayChange: async (runtime) => {
       const merged = mergeLlmGatewayConfig(config.synth.llmGateway, runtime);
@@ -1564,6 +1567,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // live-применение тумблера защищённых путей из UI — без рестарта сервера.
     onSecurityChange: async (runtime) => {
       const merged = mergeSecurityConfig(config.synth.security, runtime);
+      if (merged) {
+        // ADR-023: env `SYNTH_SECURITY_PROMPT_INJECTION_*` перекрывает runtime/config.
+        merged.promptInjection = resolvePromptInjection(
+          config.synth.security.promptInjection,
+          runtime.promptInjection,
+        ).config;
+      }
       orchestrator.setSecurityConfig(merged);
     },
     // ADR-071 §2.3: live-применение политики встроенных инструментов из админки.

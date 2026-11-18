@@ -14,7 +14,7 @@ import { ensureDataDir, mergeModelCompatibility, parsePrincipalId, readTlsRuntim
 import { DEFAULT_TOOL_OUTPUT_MAX_BYTES, DEFAULT_TOOL_OUTPUT_MAX_LINES } from '@itphx/synth-shared/config';
 // ADR-135: применение runtime-каталога профилей исполнения (runtime > config,
 // env/CLI выше — их разрешает `resolveExecutionConfig`, ADR-023).
-import { applyExecutionRuntimeSettings } from '@itphx/synth-shared/config';
+import { applyExecutionRuntimeSettings, resolvePromptInjection } from '@itphx/synth-shared/config';
 import { serializeMessage } from '../serialize.js';
 // PROP-141 (Часть D): сервис переноса сессии между проектами (единый шов).
 import { SessionMoveService } from '../../sessions/move-service.js';
@@ -500,6 +500,14 @@ export async function createStandaloneDeps(
   // Защищённые пути: runtime-настройка protectedPaths.enabled (тумблер из UI) приоритетнее config.yaml
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(config.securityConfig, runtimeSecurity);
+  if (effectiveSecurityConfig) {
+    // ADR-023: env `SYNTH_SECURITY_PROMPT_INJECTION_*` перекрывает runtime и
+    // config.yaml (приоритет env > runtime > config > default, фиксация по полю).
+    effectiveSecurityConfig.promptInjection = resolvePromptInjection(
+      config.securityConfig?.promptInjection,
+      runtimeSecurity.promptInjection,
+    ).config;
+  }
 
   // ADR-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml tools.policy
   const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
@@ -2513,6 +2521,13 @@ export async function createStandaloneDeps(
     metrics: metrics ? createPipelineMetrics(metrics) : undefined,
     // ADR-101 §4/ADR-070: промпт шага — тем же сборщиком, что у сессий.
     composer: orchestrator.getComposer(),
+    // IPI шага (ADR-101): тот же фильтр контента тулов, что у хода и
+    // саб-агента. Конфиг — **живой** геттер оркестратора (runtime-настройка
+    // безопасности применяется без рестарта), словари — порт инстанса.
+    securityContentFilter: {
+      getConfig: () => orchestrator.getSecurityConfig(),
+      dictionaryStore,
+    },
     // ADR-135/PROP-135: среда исполнения шага — та же, что у сессий.
     environmentKind: orchestrator.getEnvironmentKind(),
     resolveProvider: resolvePipelineProvider,

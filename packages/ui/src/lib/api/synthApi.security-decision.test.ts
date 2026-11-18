@@ -100,6 +100,78 @@ describe('securityApi — безопасность и защищённые пу�
     )
   })
 
+  it('getSecuritySettingsInfo: полный снимок секции (promptInjection + source/envLocked)', async () => {
+    const info = {
+      security: {
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 300_000,
+        promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+      },
+      isOverridden: false,
+      defaults: {
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 300_000,
+        promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+      },
+      source: 'default',
+      envLocked: false,
+      envLockedFields: [],
+      restartRequired: false,
+    }
+    fetchMock.mockResolvedValue(jsonResponse(info))
+
+    await expect(synthApi.getSecuritySettingsInfo()).resolves.toEqual(info)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v2/settings/security', expect.objectContaining({}))
+  })
+
+  it('saveSecuritySettings отправляет частичный патч защиты от prompt injection', async () => {
+    const security = {
+      protectedPaths: { enabled: true },
+      askTimeoutMs: 300_000,
+      promptInjection: { enabled: false, wrapContent: true, mode: 'sanitize' },
+    }
+    fetchMock.mockResolvedValue(jsonResponse({ security }))
+
+    await expect(
+      synthApi.saveSecuritySettings({ promptInjection: { enabled: false, mode: 'sanitize' } } as never),
+    ).resolves.toEqual(security)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/settings/security',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ security: { promptInjection: { enabled: false, mode: 'sanitize' } } }),
+      }),
+    )
+  })
+
+  it('resetSecuritySettings: DELETE /settings/security и разворот полного снимка', async () => {
+    const info = {
+      status: 'restored',
+      security: {
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 300_000,
+        promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+      },
+      isOverridden: false,
+      defaults: {
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 300_000,
+        promptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+      },
+      source: 'default',
+      envLocked: false,
+      envLockedFields: [],
+      restartRequired: false,
+    }
+    fetchMock.mockResolvedValue(jsonResponse(info))
+
+    await expect(synthApi.resetSecuritySettings()).resolves.toEqual(info)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/settings/security',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
   it('getProtectedPaths: snake_case is_overridden → isOverridden, поле base', async () => {
     const policy = { deniedPaths: [], deniedPrefixes: ['/etc'], approvalPaths: [], deniedCommandPrefixes: [] }
     fetchMock.mockResolvedValue(jsonResponse({ policy, base: policy, is_overridden: true }))

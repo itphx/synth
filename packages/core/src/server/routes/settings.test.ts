@@ -354,6 +354,34 @@ describe('Settings API Routes (workspace)', () => {
       const defaultAsk = mergeSecurityConfig(undefined, { protectedPaths: { enabled: true } });
       expect(defaultAsk?.askTimeoutMs).toBe(300_000);
     });
+
+    it('mergeSecurityConfig мёржит promptInjection по полям: runtime > base > дефолты', () => {
+      const base = {
+        ...defaultConfig.security,
+        promptInjection: { enabled: true, wrapContent: false, mode: 'sanitize' as const },
+      };
+
+      // Умолчания схемы, когда ни конфига, ни runtime нет.
+      expect(mergeSecurityConfig(undefined, { promptInjection: { enabled: false } })?.promptInjection)
+        .toEqual({ enabled: false, wrapContent: true, mode: 'flag' });
+      // Runtime приоритетнее базы по каждому полю (не заданное — из базы).
+      expect(mergeSecurityConfig(base, { promptInjection: { mode: 'block' } })?.promptInjection)
+        .toEqual({ enabled: true, wrapContent: false, mode: 'block' });
+      expect(mergeSecurityConfig(base, {})?.promptInjection)
+        .toEqual({ enabled: true, wrapContent: false, mode: 'sanitize' });
+    });
+
+    it('mergeSecurityConfig: wrapContent берётся только из base (runtime его не перекрывает)', () => {
+      const base = {
+        ...defaultConfig.security,
+        promptInjection: { enabled: true, wrapContent: false, mode: 'flag' as const },
+      };
+      const merged = mergeSecurityConfig(base, {
+        // Патч с лишним ключом: тип его не содержит, поведение — игнор.
+        promptInjection: { enabled: false, wrapContent: true } as never,
+      });
+      expect(merged?.promptInjection).toEqual({ enabled: false, wrapContent: false, mode: 'flag' });
+    });
   });
 
   describe('LLM Gateway (ADR-036)', () => {
@@ -1022,7 +1050,7 @@ describe('Settings API Routes (workspace)', () => {
       expect(await settingsStore.getLlmGatewaySettings()).toEqual({});
     });
 
-    it('GET /security отдаёт эффективное значение + meta, DELETE сбрасывает', async () => {
+    it('GET /security отдаёт эффективное значение + meta, DELETE сбрасывает promptInjection', async () => {
       const app = new Hono();
       const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
       const onSecurityChange = vi.fn(async (_runtime: Partial<SecurityRuntimeSettings>) => {});
@@ -1031,29 +1059,265 @@ describe('Settings API Routes (workspace)', () => {
         fallbackWorkspace: FALLBACK,
         onSecurityChange,
         fallbackSecurity: { protectedPaths: { enabled: false }, askTimeoutMs: 1234 },
+        fallbackPromptInjection: { enabled: false, wrapContent: true, mode: 'sanitize' },
       }));
 
-      const defaults = { protectedPaths: { enabled: false }, askTimeoutMs: 1234 };
+      const defaults = {
+        protectedPaths: { enabled: false },
+        askTimeoutMs: 1234,
+        promptInjection: { enabled: false, wrapContent: true, mode: 'sanitize' },
+      };
       const initial: any = await (await app.request('/api/v2/settings/security')).json();
       expect(initial.security).toEqual(defaults);
       expect(initial.isOverridden).toBe(false);
       expect(initial.defaults).toEqual(defaults);
+      expect(initial.source).toBe('config');
+      expect(initial.envLocked).toBe(false);
+      expect(initial.envLockedFields).toEqual([]);
+      expect(initial.restartRequired).toBe(false);
 
       await app.request('/api/v2/settings/security', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security: { protectedPaths: { enabled: true }, askTimeoutMs: 999 } }),
+        body: JSON.stringify({
+          security: { protectedPaths: { enabled: true }, askTimeoutMs: 999, promptInjection: { mode: 'block' } },
+        }),
       });
       const overridden: any = await (await app.request('/api/v2/settings/security')).json();
-      expect(overridden.security).toEqual({ protectedPaths: { enabled: true }, askTimeoutMs: 999 });
+      expect(overridden.security).toEqual({
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 999,
+        promptInjection: { enabled: false, wrapContent: true, mode: 'block' },
+      });
       expect(overridden.isOverridden).toBe(true);
 
       const res = await app.request('/api/v2/settings/security', { method: 'DELETE' });
       const body: any = await res.json();
-      expect(body).toEqual({ status: 'restored', security: defaults, isOverridden: false, defaults });
-      expect(onSecurityChange).toHaveBeenLastCalledWith({});
+      expect(body.status).toBe('restored');
+      // DELETE сбрасывает runtime-патч promptInjection; легаси-поля секции не трогает.
+      expect(body.security).toEqual({
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 999,
+        promptInjection: { enabled: false, wrapContent: true, mode: 'sanitize' },
+      });
+      expect(body.isOverridden).toBe(true);
+      expect(body.defaults).toEqual(defaults);
+      expect(onSecurityChange).toHaveBeenLastCalledWith({
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 999,
+      });
+      expect(await settingsStore.getSecuritySettings()).toEqual({
+        protectedPaths: { enabled: true },
+        askTimeoutMs: 999,
+      });
+    });
+
+    it('DELETE /security сбрасывает runtime-секцию целиком, когда других полей нет', async () => {
+      const app = new Hono();
+      const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+        settingsStore,
+        fallbackWorkspace: FALLBACK,
+      }));
+
+      await app.request('/api/v2/settings/security', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ security: { promptInjection: { enabled: false } } }),
+      });
+      const res = await app.request('/api/v2/settings/security', { method: 'DELETE' });
+      expect(res.status).toBe(200);
       expect(await settingsStore.getSecuritySettings()).toEqual({});
     });
+
+    describe('Защита от prompt injection (ADR-023)', () => {
+      it('GET отдаёт эффективные значения, источник и базу', async () => {
+        const app = new Hono();
+        const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+        app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+          settingsStore,
+          fallbackWorkspace: FALLBACK,
+          fallbackPromptInjection: { enabled: true, wrapContent: false, mode: 'flag' },
+        }));
+
+        const initial: any = await (await app.request('/api/v2/settings/security')).json();
+        expect(initial.security.promptInjection).toEqual({
+          enabled: true,
+          wrapContent: false,
+          mode: 'flag',
+        });
+        // Оба поля равны дефолтам схемы → «по умолчанию».
+        expect(initial.source).toBe('default');
+
+        await app.request('/api/v2/settings/security', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security: { promptInjection: { mode: 'block' } } }),
+        });
+        const overridden: any = await (await app.request('/api/v2/settings/security')).json();
+        expect(overridden.security.promptInjection).toEqual({
+          enabled: true,
+          wrapContent: false,
+          mode: 'block',
+        });
+        expect(overridden.source).toBe('runtime');
+      });
+
+      it('PUT — частичное обновление: незаданное поле сохраняется', async () => {
+        const app = new Hono();
+        const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+        app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+          settingsStore,
+          fallbackWorkspace: FALLBACK,
+        }));
+
+        await app.request('/api/v2/settings/security', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security: { promptInjection: { enabled: false, mode: 'sanitize' } } }),
+        });
+        const res = await app.request('/api/v2/settings/security', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security: { promptInjection: { mode: 'block' } } }),
+        });
+        expect(res.status).toBe(200);
+        expect(await settingsStore.getSecuritySettings()).toEqual({
+          promptInjection: { enabled: false, mode: 'block' },
+        });
+      });
+
+      it('PUT сохраняет runtime и live-применяет (onSecurityChange с promptInjection)', async () => {
+        const app = new Hono();
+        const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+        const onSecurityChange = vi.fn(async (_runtime: Partial<SecurityRuntimeSettings>) => {});
+        app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+          settingsStore,
+          fallbackWorkspace: FALLBACK,
+          onSecurityChange,
+        }));
+
+        const res = await app.request('/api/v2/settings/security', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security: { promptInjection: { enabled: false, mode: 'sanitize' } } }),
+        });
+        expect(res.status).toBe(200);
+        expect(onSecurityChange).toHaveBeenCalledWith({
+          promptInjection: { enabled: false, mode: 'sanitize' },
+        });
+
+        const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+        expect((await restarted.getSecuritySettings()).promptInjection).toEqual({
+          enabled: false,
+          mode: 'sanitize',
+        });
+      });
+
+      it('PUT валидирует строго: неизвестный ключ, тип и режим → 400', async () => {
+        const app = new Hono();
+        const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+        app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+          settingsStore,
+          fallbackWorkspace: FALLBACK,
+        }));
+
+        for (const security of [
+          { promptInjection: { wrapContent: false } },
+          { promptInjection: { enabled: 'yes' } },
+          { promptInjection: { mode: 'explode' } },
+          { promptInjection: 'on' },
+          { unknownKey: true },
+          { protectedPaths: { enabled: false, extra: 1 } },
+        ]) {
+          const res = await app.request('/api/v2/settings/security', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ security }),
+          });
+          expect(res.status).toBe(400);
+          expect(((await res.json()) as any).error.code).toBe('VALIDATION_ERROR');
+        }
+        expect(await settingsStore.getSecuritySettings()).toEqual({});
+      });
+
+      it('PUT с env-фиксацией → 409 ENV_LOCKED (ни одно поле запроса не применяется)', async () => {
+        const app = new Hono();
+        const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+        app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+          settingsStore,
+          fallbackWorkspace: FALLBACK,
+          env: { SYNTH_SECURITY_PROMPT_INJECTION_MODE: 'block' },
+        }));
+
+        const res = await app.request('/api/v2/settings/security', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            security: { protectedPaths: { enabled: false }, promptInjection: { mode: 'flag' } },
+          }),
+        });
+        expect(res.status).toBe(409);
+        const body: any = await res.json();
+        expect(body.error.code).toBe('ENV_LOCKED');
+        expect(body.error.fields).toEqual(['mode']);
+        // Частичного применения нет.
+        expect(await settingsStore.getSecuritySettings()).toEqual({});
+
+        // Незафиксированное поле менять можно.
+        const ok = await app.request('/api/v2/settings/security', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security: { promptInjection: { enabled: false } } }),
+        });
+        expect(ok.status).toBe(200);
+        expect((await settingsStore.getSecuritySettings()).promptInjection).toEqual({ enabled: false });
+      });
+
+      it('env перекрывает runtime и config, GET отдаёт env-фиксацию', async () => {
+        const app = new Hono();
+        const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+        await settingsStore.setSecuritySettings({ promptInjection: { enabled: false, mode: 'flag' } });
+        app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+          settingsStore,
+          fallbackWorkspace: FALLBACK,
+          fallbackPromptInjection: { enabled: true, wrapContent: true, mode: 'flag' },
+          env: { SYNTH_SECURITY_PROMPT_INJECTION_ENABLED: '1' },
+        }));
+
+        const body: any = await (await app.request('/api/v2/settings/security')).json();
+        expect(body.security.promptInjection).toEqual({
+          enabled: true,
+          wrapContent: true,
+          mode: 'flag',
+        });
+        expect(body.source).toBe('env');
+        expect(body.envLocked).toBe(true);
+        expect(body.envLockedFields).toEqual(['enabled']);
+      });
+
+      it('DELETE с env-фиксацией → 409, runtime не тронут', async () => {
+        const app = new Hono();
+        const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+        await settingsStore.setSecuritySettings({ promptInjection: { enabled: false, mode: 'sanitize' } });
+        app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+          settingsStore,
+          fallbackWorkspace: FALLBACK,
+          env: { SYNTH_SECURITY_PROMPT_INJECTION_MODE: 'flag' },
+        }));
+
+        const res = await app.request('/api/v2/settings/security', { method: 'DELETE' });
+        expect(res.status).toBe(409);
+        const body: any = await res.json();
+        expect(body.error.code).toBe('ENV_LOCKED');
+        expect(body.error.fields).toEqual(['mode']);
+        expect((await settingsStore.getSecuritySettings()).promptInjection).toEqual({
+          enabled: false,
+          mode: 'sanitize',
+        });
+      });
+    });
+
 
     it('DELETE /tools-policy сбрасывает к fallback и live-применяет его', async () => {
       const app = new Hono();

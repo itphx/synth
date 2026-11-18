@@ -18,13 +18,71 @@ export interface SecretPattern {
   regex: string
 }
 
-/** Runtime-настройки секции «Безопасность» (тумблер защищённых путей + таймаут подтверждения). */
+/** Режим детекции подозрительных паттернов (защита от prompt injection). */
+export type PromptInjectionMode = 'flag' | 'sanitize' | 'block'
+
+/** Runtime-патч защиты от prompt injection (`PUT /settings/security`). */
+export interface PromptInjectionSettings {
+  enabled?: boolean
+  mode?: PromptInjectionMode
+}
+
+/** Эффективная секция `security.promptInjection` (GET): все поля заданы. */
+export interface PromptInjectionConfig {
+  enabled: boolean
+  mode: PromptInjectionMode
+  /** Обёртка tool-контента — deployment-политика, runtime не управляет. */
+  wrapContent: boolean
+}
+
+/** Поле защиты, которое может быть зафиксировано env. */
+export type PromptInjectionField = 'enabled' | 'mode'
+
+/** Источник эффективного значения защиты (env > runtime > config > default). */
+export type PromptInjectionSource = 'env' | 'runtime' | 'config' | 'default'
+
+/** Runtime-настройки секции «Безопасность» (защищённые пути, таймаут, prompt injection). */
 export interface SecuritySettings {
   protectedPaths: {
     enabled: boolean
   }
-  /** Глобальный дефолт таймаута подтверждения ask (мс). */
-  askTimeoutMs?: number
+  /** Глобальный дефолт таймаута подтверждения ask (мс); `null` — сброс к дефолту. */
+  askTimeoutMs?: number | null
+  promptInjection?: PromptInjectionSettings
+}
+
+/** Runtime-патч секции «Безопасность» в теле `PUT /settings/security`. */
+export interface SecuritySettingsPatch {
+  protectedPaths?: {
+    enabled?: boolean
+  }
+  /** `null` — явный сброс runtime-значения к глобальному дефолту. */
+  askTimeoutMs?: number | null
+  promptInjection?: PromptInjectionSettings
+}
+
+/** Эффективные значения секции «Безопасность» в ответе GET/PUT/DELETE /settings/security. */
+export interface SecuritySettingsView {
+  protectedPaths: {
+    enabled: boolean
+  }
+  askTimeoutMs: number
+  promptInjection: PromptInjectionConfig
+}
+
+/** Полный ответ GET/PUT/DELETE /api/v2/settings/security. */
+export interface SecuritySettingsResponse {
+  security: SecuritySettingsView
+  isOverridden: boolean
+  defaults: SecuritySettingsView
+  /** Источник эффективных `enabled`/`mode` защиты от prompt injection. */
+  source: PromptInjectionSource
+  /** Env зафиксировал хотя бы одно поле защиты — из UI оно недоступно (409). */
+  envLocked: boolean
+  /** Поля, зафиксированные env: контролы `disabled` и не уходят в `PUT`. */
+  envLockedFields: PromptInjectionField[]
+  /** Применяется сразу — рестарт не требуется. */
+  restartRequired: boolean
 }
 
 /** Эффективная политика защищённых путей (списки строк). */
@@ -104,11 +162,23 @@ export const securityApi = {
     return fetchJSON<{ security: SecuritySettings }>(`${BASE_URL}/settings/security`).then((r) => r.security)
   },
 
-  async saveSecuritySettings(cfg: SecuritySettings): Promise<SecuritySettings> {
+  /** Полный снимок секции «Безопасность»: эффективные значения + источник/env-фиксация. */
+  async getSecuritySettingsInfo(): Promise<SecuritySettingsResponse> {
+    return fetchJSON<SecuritySettingsResponse>(`${BASE_URL}/settings/security`)
+  },
+
+  async saveSecuritySettings(cfg: SecuritySettingsPatch): Promise<SecuritySettings> {
     return fetchJSON<{ security: SecuritySettings }>(`${BASE_URL}/settings/security`, {
       method: 'PUT',
       body: JSON.stringify({ security: cfg }),
     }).then((r) => r.security)
+  },
+
+  /** DELETE /settings/security — сброс runtime-патча prompt injection к config.yaml (live). */
+  async resetSecuritySettings(): Promise<SecuritySettingsResponse> {
+    return fetchJSON<SecuritySettingsResponse>(`${BASE_URL}/settings/security`, {
+      method: 'DELETE',
+    })
   },
 
   async getProtectedPaths(): Promise<ProtectedPathsRaw> {

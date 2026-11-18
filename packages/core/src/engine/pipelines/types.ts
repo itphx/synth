@@ -21,9 +21,11 @@ import type {
 } from '@itphx/synth-shared';
 import type { AttachmentFamily, AttachmentModality } from '@itphx/synth-shared';
 import type { EventType } from '@itphx/synth-shared';
+import type { SecurityConfig } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
 import type { ExecutionPort } from '../../execution/ports/index.js';
 import type { ExecutionRouter } from '../../execution/router.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 import type { PipelineMetricsHooks } from '../../metrics/collectors/pipelines.js';
 import type { AttachmentService } from '../attachments/service.js';
 import type { PipelineArtifactStore } from './artifacts.js';
@@ -162,6 +164,17 @@ export interface PipelineStepLlmRuntime {
 }
 
 /**
+ * IPI в шаге пайплайна: живой доступ к секции безопасности инстанса и порту
+ * словарей. Не задан — фильтр контента в шаге не применяется (поведение
+ * прежнее, fail-open). `getConfig` — **геттер**: runtime-настройка безопасности
+ * применяется без рестарта.
+ */
+export interface PipelineSecurityContentFilter {
+  getConfig: () => SecurityConfig;
+  dictionaryStore: DictionaryRepository;
+}
+
+/**
  * Обработчик вложения aux-моделью семейства (ADR-115) для шага пайплайна.
  *
  * Вызывается, когда модель шага **не принимает** модальность вложения: вместо
@@ -259,6 +272,12 @@ export interface StepExecutionContext {
    * **движком** из `PipelineEngineDeps`; не задан — вложений в шаге нет.
    */
   attachments?: PipelineStepAttachments;
+  /**
+   * IPI шага (ADR-101 × IPI): единый слой фильтрации контента инструментов в
+   * цикле Tool Use. Задаётся **движком** из `PipelineEngineDeps`; не задан —
+   * фильтр не применяется (поведение прежнее).
+   */
+  securityContentFilter?: PipelineSecurityContentFilter;
   /**
    * Решение оператора по гейту (ADR-101 §6). Задаётся **только** при повторном
    * исполнении узла после `resume`: исполнитель не запрашивает гейт заново, а
@@ -533,6 +552,13 @@ export interface PipelineEngineDeps extends PipelineStepContextDeps {
    * ссылки на вложения в тексте шага помечаются как не доставленные.
    */
   attachments?: AttachmentService | null;
+  /**
+   * IPI × ADR-101: живой доступ к секции безопасности инстанса и порту
+   * словарей для фильтрации контента инструментов в шаге `agent`.
+   *
+   * Не задан — фильтр в шаге не применяется (поведение прежнее, fail-open).
+   */
+  securityContentFilter?: PipelineSecurityContentFilter;
   /**
    * ADR-116 × ADR-101: хранилище артефактов прогона — blob-объекты предыдущих
    * шагов (`StepResult.artifacts` с `kind: 'blob'`) как вложения шага.

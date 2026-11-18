@@ -189,3 +189,72 @@ describe('getToolTrust — периметр allowedRoots (ADR-114)', () => {
     expect(getToolTrust('patch', {}, WS)?.trust).toBe('trusted');
   });
 });
+
+describe('getToolTrust — тулы плагинов (6-й аргумент, ADR-090)', () => {
+  /** Вызов с опциями тула плагина. */
+  function pluginTrust(
+    level: 'builtin' | 'verified' | 'trusted' | 'community' | undefined,
+    extra: { toolSource?: 'plugin'; pluginName?: string } = { toolSource: 'plugin', pluginName: 'demo' },
+  ) {
+    return getToolTrust('plugin_demo_tool', {}, WS, undefined, undefined, {
+      ...(level ? { pluginTrust: level } : {}),
+      ...(extra.toolSource ? { toolSource: extra.toolSource } : {}),
+      ...(extra.pluginName ? { metadata: { pluginName: extra.pluginName } } : {}),
+    });
+  }
+
+  it('trusted → trust: trusted, источник plugin, атрибут PLUGIN', () => {
+    expect(pluginTrust('trusted')).toEqual({
+      trust: 'trusted',
+      source: 'plugin',
+      attrs: { PLUGIN: 'demo' },
+    });
+  });
+
+  it('builtin/verified — тоже trusted (rank не выше trusted)', () => {
+    expect(pluginTrust('builtin')?.trust).toBe('trusted');
+    expect(pluginTrust('verified')?.trust).toBe('trusted');
+  });
+
+  it('community → untrusted', () => {
+    expect(pluginTrust('community')?.trust).toBe('untrusted');
+  });
+
+  it('уровень не задан → untrusted (fail-closed)', () => {
+    expect(pluginTrust(undefined)?.trust).toBe('untrusted');
+    expect(pluginTrust(undefined)?.source).toBe('plugin');
+  });
+
+  it('только pluginName (без toolSource) включает плагинную ветку', () => {
+    const t = pluginTrust('trusted', { pluginName: 'demo' });
+    expect(t?.source).toBe('plugin');
+    expect(t?.trust).toBe('trusted');
+    expect(t?.attrs.PLUGIN).toBe('demo');
+  });
+
+  it('плагинная ветка идёт ДО MCP (capability mcp не переключает на mcp)', () => {
+    const t = getToolTrust('plugin_demo_tool', {}, WS, [ToolCapability.MCP], undefined, {
+      toolSource: 'plugin',
+      pluginTrust: 'trusted',
+      metadata: { pluginName: 'demo' },
+    });
+    expect(t?.source).toBe('plugin');
+    expect(t?.trust).toBe('trusted');
+  });
+
+  it('системный тул остаётся null и при плагинных опциях', () => {
+    const t = getToolTrust('todo_write', {}, WS, undefined, undefined, {
+      toolSource: 'plugin',
+      pluginTrust: 'trusted',
+    });
+    expect(t).toBeNull();
+  });
+
+  it('пять аргументов (историческая сигнатура) — поведение прежнее', () => {
+    expect(getToolTrust('web_fetch', { url: 'https://x.example' }, WS)).toEqual({
+      trust: 'untrusted',
+      source: 'web',
+      attrs: { URL: 'https://x.example' },
+    });
+  });
+});

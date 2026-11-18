@@ -8,6 +8,8 @@
  * classify_conversation).
  */
 import { ToolCapability } from '@itphx/synth-shared';
+import type { CatalogTrustLevel, ToolSource } from '@itphx/synth-shared';
+import { trustLevelRank } from '@itphx/synth-shared';
 import { resolvePath, isInsideAnyRoot } from '../tools/path-utils.js';
 import { extractPathParams } from '../permission/groups.js';
 import type { TrustLevel } from './prompt-injection.js';
@@ -17,6 +19,30 @@ export interface ToolTrustInfo {
   source: string;
   attrs: Record<string, string>;
 }
+
+/**
+ * Дополнительные сведения о туле для матрицы доверия (6-й аргумент
+ * `getToolTrust`). Все поля необязательны — вызов с пятью аргументами
+ * (историческая сигнатура) работает как раньше.
+ */
+export interface ToolTrustOptions {
+  /**
+   * Фактический уровень доверия установки для тула плагина
+   * (`CatalogTrustLevel`: `builtin` → `verified` → `trusted` → `community`).
+   * Не задан — fail-closed `untrusted`.
+   */
+  pluginTrust?: CatalogTrustLevel;
+  /** Источник тула (`builtin`/`mcp`/`plugin`). `plugin` включает плагинную ветку. */
+  toolSource?: ToolSource;
+  /**
+   * Метаданные определения тула: `pluginName` — имя плагина-владельца
+   * (атрибут `PLUGIN` в маркере контента).
+   */
+  metadata?: Record<string, unknown>;
+}
+
+/** Уровни доверия, при которых результат плагинного тула считается `trusted`. */
+const PLUGIN_TRUSTED_MAX_RANK = trustLevelRank('trusted');
 
 /** Тулы, результаты которых не оборачиваются (системные, внутренние). */
 const SYSTEM_TOOLS = new Set([
@@ -93,8 +119,29 @@ export function getToolTrust(
   workingDir: string,
   capabilities?: ToolCapability[],
   allowedRoots?: readonly string[],
+  opts?: ToolTrustOptions,
 ): ToolTrustInfo | null {
   if (SYSTEM_TOOLS.has(toolName)) return null;
+
+  // ADR-090: тул плагина — доверие по **уровню установки** плагина, а не по
+  // имени/пути. Ветка стоит ДО MCP: плагинный тул не может «выдать себя» за
+  // MCP-инструмент, а capability `mcp` ему и так зарезервирована.
+  const pluginName = typeof opts?.metadata?.pluginName === 'string'
+    ? opts.metadata.pluginName
+    : undefined;
+  if (opts?.toolSource === 'plugin' || pluginName) {
+    const level = opts?.pluginTrust;
+    // fail-closed: уровень неизвестен → недоверенный контент.
+    const trust: TrustLevel = level !== undefined
+      && trustLevelRank(level) <= PLUGIN_TRUSTED_MAX_RANK
+      ? 'trusted'
+      : 'untrusted';
+    return {
+      trust,
+      source: 'plugin',
+      attrs: pluginName ? { PLUGIN: pluginName } : {},
+    };
+  }
 
   if (toolName === 'web_fetch') {
     const url = (params.url as string | undefined)

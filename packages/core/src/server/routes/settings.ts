@@ -7,7 +7,8 @@ import type { ProtectedPathsRepository } from '../../storage/ports/protected-pat
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
 import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ProxyPasswordStatus, ProxyStatusProfile, ResolvedProxyConfig, ResolvedProxyProfile, ResolvedProxyRoute, SecurityTlsConfig, ExecutionRuntimeSettings, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, PROXY_PROFILE_NAME_RE, ProxyConfigError, mergeProxyConfig, proxyProfilePasswordEnv, proxyStatus, readTlsRuntimeSettings, redactProxyUrl, resolveProxyConfig, resolveProxyRoute, validateCaPem, validateClientPem, validateProxyConfig, executionRuntimeSettingsSchema } from '@itphx/synth-shared';
-import { applyExecutionRuntimeSettings, effectiveExecutionCatalog, effectiveProfileClass, executionRuntimeFingerprint, executionRuntimeSettingsFromResolved, parseExecutionRuntimeSettings } from '@itphx/synth-shared/config';
+import { applyExecutionRuntimeSettings, effectiveExecutionCatalog, effectiveProfileClass, executionRuntimeFingerprint, executionRuntimeSettingsFromResolved, parseExecutionRuntimeSettings, resolvePromptInjection, PROMPT_INJECTION_MODES, PROMPT_INJECTION_FIELDS } from '@itphx/synth-shared/config';
+import type { PromptInjectionConfig, PromptInjectionField, PromptInjectionRuntimePatch, PromptInjectionSource } from '@itphx/synth-shared/config';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
 import { checkEgressUrl } from '../../engine/net/egress-guard.js';
@@ -47,14 +48,55 @@ const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
 };
 
 /** ADR-072 Ф2: дефолты секции «Безопасность» (config.yaml без runtime). */
-function resolveSecurityDefaults(fallback?: Partial<SecurityRuntimeSettings>): {
+function resolveSecurityDefaults(
+  fallback?: Partial<SecurityRuntimeSettings>,
+  promptInjectionBase?: Partial<PromptInjectionConfig>,
+): {
   protectedPaths: { enabled: boolean };
   askTimeoutMs: number;
+  promptInjection: PromptInjectionConfig;
 } {
   return {
     protectedPaths: { enabled: fallback?.protectedPaths?.enabled ?? true },
     askTimeoutMs: fallback?.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
+    // База без runtime и env — к чему вернёт сброс prompt injection.
+    promptInjection: resolvePromptInjection(promptInjectionBase, undefined, {}).defaults,
   };
+}
+
+/**
+ * Тело `PUT /api/v2/settings/security` — **частичный** патч секции.
+ *
+ * `askTimeoutMs: null` — явный сброс runtime-значения к глобальному дефолту
+ * (отсутствие поля означает «не менять»). `promptInjection` мёржится по полям.
+ */
+interface SecuritySettingsPatch {
+  protectedPaths?: { enabled?: boolean };
+  askTimeoutMs?: number | null;
+  promptInjection?: PromptInjectionRuntimePatch;
+}
+
+/** Ответ GET/PUT/DELETE `/settings/security` — контракт с UI. */
+interface SecuritySettingsView {
+  security: {
+    protectedPaths: { enabled: boolean };
+    askTimeoutMs: number;
+    promptInjection: PromptInjectionConfig;
+  };
+  isOverridden: boolean;
+  defaults: {
+    protectedPaths: { enabled: boolean };
+    askTimeoutMs: number;
+    promptInjection: PromptInjectionConfig;
+  };
+  /** Источник эффективных `enabled`/`mode` (env > runtime > config > default). */
+  source: PromptInjectionSource;
+  /** Env зафиксировал хотя бы одно поле защиты (runtime его не перекрывает). */
+  envLocked: boolean;
+  /** Поля, зафиксированные env: из UI они `disabled` и не уходят в `PUT`. */
+  envLockedFields: PromptInjectionField[];
+  /** Применяется сразу — рестарт не требуется. */
+  restartRequired: false;
 }
 
 /** ADR-072 Ф2: дефолты LLM Gateway (config.yaml без runtime), вложенный rateLimit мёржится по полям. */
@@ -281,6 +323,12 @@ export interface SettingsRoutesDeps {
   fallbackLlmGateway?: Partial<LlmGatewayRuntimeSettings>;
   /** ADR-072 Ф2: дефолт секции «Безопасность» из config.yaml для GET/DELETE /security. */
   fallbackSecurity?: Partial<SecurityRuntimeSettings>;
+  /**
+   * ADR-023: база `security.promptInjection` из config.yaml (без runtime) — для
+   * GET/DELETE /security и резолвера env > runtime > config > default.
+   * `wrapContent` приходит только отсюда (runtime его не управляет).
+   */
+  fallbackPromptInjection?: Partial<PromptInjectionConfig>;
   /** Вызывается после успешного PUT /llm-gateway (live-применение runtime-настройки). */
   onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
   /** Вызывается после успешного PUT /security (live-применение тумблера защищённых путей). */
@@ -636,15 +684,36 @@ function isValidLlmGatewaySettings(value: unknown): value is Partial<LlmGatewayR
 }
 
 /** Валидация runtime-настроек секции «Безопасность»: protectedPaths.enabled + askTimeoutMs. */
-function isValidSecuritySettings(value: unknown): value is Partial<SecurityRuntimeSettings> {
+function isValidSecuritySettings(value: unknown): value is SecuritySettingsPatch {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const s = value as Record<string, unknown>;
+  // Строго: неизвестный ключ — опечатка (`askTimeutMs`), её нельзя молча
+  // проглатывать (ответ выглядел бы успешным, а настройка не применилась).
+  for (const key of Object.keys(s)) {
+    if (key !== 'protectedPaths' && key !== 'askTimeoutMs' && key !== 'promptInjection') return false;
+  }
   if (s.protectedPaths !== undefined) {
     const pp = s.protectedPaths as Record<string, unknown>;
     if (!pp || typeof pp !== 'object' || Array.isArray(pp)) return false;
+    for (const key of Object.keys(pp)) {
+      if (key !== 'enabled') return false;
+    }
     if (pp.enabled !== undefined && typeof pp.enabled !== 'boolean') return false;
   }
-  if (s.askTimeoutMs !== undefined && (!Number.isInteger(s.askTimeoutMs) || (s.askTimeoutMs as number) < 0)) return false;
+  if (s.askTimeoutMs !== undefined && s.askTimeoutMs !== null) {
+    if (!Number.isInteger(s.askTimeoutMs) || (s.askTimeoutMs as number) < 0) return false;
+  }
+  if (s.promptInjection !== undefined) {
+    const pi = s.promptInjection as Record<string, unknown>;
+    if (!pi || typeof pi !== 'object' || Array.isArray(pi)) return false;
+    for (const key of Object.keys(pi)) {
+      if (key !== 'enabled' && key !== 'mode') return false;
+    }
+    if (pi.enabled !== undefined && typeof pi.enabled !== 'boolean') return false;
+    if (pi.mode !== undefined && !(PROMPT_INJECTION_MODES as readonly string[]).includes(pi.mode as string)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -1133,22 +1202,46 @@ export function createSettingsRoutes(
   });
 
   /**
-   * GET/PUT /api/v2/settings/security — глобальные настройки секции «Безопасность».
-   * Тумблер защищённых путей + глобальный таймаут подтверждения (askTimeoutMs)
-   * настраиваются через UI (только ADMIN). Значение сохраняется в
-   * {dataDir}/settings.json (ADR-005) и переживает рестарт.
+   * GET/PUT/DELETE /api/v2/settings/security — глобальные настройки секции
+   * «Безопасность»: тумблер защищённых путей, таймаут подтверждения и защита
+   * от prompt injection (`security.promptInjection`).
+   *
+   * Контракт (ADR-023): приоритет эффективных значений —
+   * env `SYNTH_SECURITY_PROMPT_INJECTION_*` > runtime (`{dataDir}/settings.json`)
+   * > config.yaml > дефолты. Env-фиксация проверяется **по полю**: `PUT` с
+   * зафиксированным полем → `409 ENV_LOCKED` (`fields`), ничего не применяется.
+   * Изменения применяются сразу (`onSecurityChange`, `restartRequired: false`).
    */
-  app.get('/security', auth.requireAuth, async (c) => {
-    const runtime = await deps.settingsStore.getSecuritySettings();
-    const defaults = resolveSecurityDefaults(deps.fallbackSecurity);
-    return c.json({
+  const securityEnv = (): NodeJS.ProcessEnv => deps.env ?? process.env;
+
+  /** Снимок секции: эффективные значения, база без runtime, источник и env-фиксация. */
+  const buildSecurityView = (runtime: Partial<SecurityRuntimeSettings>): SecuritySettingsView => {
+    const defaults = resolveSecurityDefaults(deps.fallbackSecurity, deps.fallbackPromptInjection);
+    const resolved = resolvePromptInjection(
+      deps.fallbackPromptInjection,
+      runtime.promptInjection,
+      securityEnv(),
+    );
+    return {
       security: {
-        protectedPaths: { enabled: runtime.protectedPaths?.enabled ?? defaults.protectedPaths.enabled },
+        protectedPaths: {
+          enabled: runtime.protectedPaths?.enabled ?? defaults.protectedPaths.enabled,
+        },
         askTimeoutMs: runtime.askTimeoutMs ?? defaults.askTimeoutMs,
+        promptInjection: resolved.config,
       },
       isOverridden: hasOverride(runtime),
       defaults,
-    });
+      source: resolved.source,
+      envLocked: resolved.envLocked,
+      envLockedFields: resolved.envLockedFields,
+      restartRequired: false,
+    };
+  };
+
+  app.get('/security', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getSecuritySettings();
+    return c.json(buildSecurityView(runtime));
   });
 
   app.put('/security', settingsWriteGuard, async (c) => {
@@ -1159,29 +1252,102 @@ export function createSettingsRoutes(
       return c.json({
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'security: ожидается { protectedPaths?: { enabled?: boolean }, askTimeoutMs?: number }',
+          message:
+            'security: ожидается { protectedPaths?: { enabled?: boolean }, askTimeoutMs?: number | null, promptInjection?: { enabled?: boolean, mode?: "flag" | "sanitize" | "block" } }',
         },
       }, 400);
     }
 
-    await deps.settingsStore.setSecuritySettings(security);
-    // Live-применение тумблера защищённых путей + таймаута подтверждения —
-    // оркестратор переконфигурируется без рестарта.
-    await deps.onSecurityChange?.(security);
-    return c.json({
-      security: {
-        protectedPaths: { enabled: security.protectedPaths?.enabled ?? true },
-        askTimeoutMs: security.askTimeoutMs,
-      },
-    });
+    const runtime = await deps.settingsStore.getSecuritySettings();
+    const before = resolvePromptInjection(
+      deps.fallbackPromptInjection,
+      runtime.promptInjection,
+      securityEnv(),
+    );
+
+    // Env-фиксация — **по полю**: отказ перечисляет все зафиксированные поля
+    // запроса, и ничего не применяется (частичный отказ оставил бы UI с
+    // «половиной» патча).
+    const requested = PROMPT_INJECTION_FIELDS.filter(
+      (field) => security.promptInjection?.[field] !== undefined,
+    );
+    const locked = requested.filter((field) => before.envLockedFields.includes(field));
+    if (locked.length > 0) {
+      return c.json(
+        {
+          error: {
+            code: 'ENV_LOCKED',
+            message: 'Задано через переменную окружения — изменение из UI недоступно',
+            fields: locked,
+          },
+        },
+        409,
+      );
+    }
+
+    // Патч — частичный: незаданные поля секции сохраняются, `askTimeoutMs: null`
+    // явно сбрасывает runtime-значение к глобальному дефолту.
+    const next: Partial<SecurityRuntimeSettings> = { ...runtime };
+    if (security.protectedPaths !== undefined) {
+      next.protectedPaths = {
+        enabled: security.protectedPaths.enabled ?? runtime.protectedPaths?.enabled ?? true,
+      };
+    }
+    if (security.askTimeoutMs !== undefined) {
+      if (security.askTimeoutMs === null) delete next.askTimeoutMs;
+      else next.askTimeoutMs = security.askTimeoutMs;
+    }
+    if (security.promptInjection !== undefined) {
+      next.promptInjection = { ...(runtime.promptInjection ?? {}), ...security.promptInjection };
+    }
+
+    await deps.settingsStore.setSecuritySettings(next);
+    // Live-применение (тумблер защищённых путей, таймаут подтверждения и защита
+    // от prompt injection) — оркестратор переконфигурируется без рестарта.
+    await deps.onSecurityChange?.(next);
+
+    // Аудит изменения защиты: подходящего scope в `SECURITY_AUDIT_SCOPES` нет
+    // (расширять перечень ради одной настройки нельзя) — фиксируем в лог.
+    if (security.promptInjection !== undefined) {
+      console.warn(
+        '[settings] изменение защиты от prompt injection не записано в аудит: подходящего scope нет',
+      );
+    }
+
+    return c.json(buildSecurityView(next));
   });
 
   app.delete('/security', settingsWriteGuard, async (c) => {
-    await deps.settingsStore.clearSecuritySettings();
-    // Пустой runtime → mergeSecurityConfig вернёт config.yaml.
-    await deps.onSecurityChange?.({});
-    const defaults = resolveSecurityDefaults(deps.fallbackSecurity);
-    return c.json({ status: 'restored', security: defaults, isOverridden: false, defaults });
+    const runtime = await deps.settingsStore.getSecuritySettings();
+    const before = resolvePromptInjection(
+      deps.fallbackPromptInjection,
+      runtime.promptInjection,
+      securityEnv(),
+    );
+    // Сброс невозможен, если защита зафиксирована env: сброс не дал бы эффекта.
+    if (before.envLocked) {
+      return c.json(
+        {
+          error: {
+            code: 'ENV_LOCKED',
+            message: 'Задано через переменную окружения — изменение из UI недоступно',
+            fields: before.envLockedFields,
+          },
+        },
+        409,
+      );
+    }
+
+    // Сбрасывается только runtime-патч `promptInjection` (оба поля): остальные
+    // ключи секции (`protectedPaths`, `askTimeoutMs`) не трогаются — у них свой
+    // путь правки через `PUT` / `/settings/protected-paths`.
+    const next: Partial<SecurityRuntimeSettings> = { ...runtime };
+    delete next.promptInjection;
+    if (Object.keys(next).length === 0) await deps.settingsStore.clearSecuritySettings();
+    else await deps.settingsStore.setSecuritySettings(next);
+
+    await deps.onSecurityChange?.(next);
+    return c.json({ status: 'restored', ...buildSecurityView(next) });
   });
 
   /**

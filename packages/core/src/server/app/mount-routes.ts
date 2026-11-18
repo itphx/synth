@@ -8,6 +8,7 @@ import type { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig, AttachmentsConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION } from '@itphx/synth-shared';
+import { resolvePromptInjection } from '@itphx/synth-shared/config';
 import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
   resolveAgentRoleAlias,
@@ -705,6 +706,8 @@ export function mountStandaloneRoutes(
       protectedPaths: { enabled: config.securityConfig?.protectedPaths?.enabled ?? true },
       askTimeoutMs: (config.securityConfig as (SecurityConfig & { askTimeoutMs?: number }) | undefined)?.askTimeoutMs,
     },
+    // ADR-023: база `security.promptInjection` (config.yaml) — GET/DELETE и env-резолвер.
+    fallbackPromptInjection: config.securityConfig?.promptInjection,
     // ADR-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
     onLlmGatewayChange: async (runtime) => {
       const merged = mergeLlmGatewayConfig(config.gatewayConfig, runtime);
@@ -714,6 +717,13 @@ export function mountStandaloneRoutes(
     // без рестарта сервера.
     onSecurityChange: async (runtime) => {
       const merged = mergeSecurityConfig(config.securityConfig, runtime);
+      if (merged) {
+        // ADR-023: env `SYNTH_SECURITY_PROMPT_INJECTION_*` перекрывает runtime/config.
+        merged.promptInjection = resolvePromptInjection(
+          config.securityConfig?.promptInjection,
+          runtime.promptInjection,
+        ).config;
+      }
       orchestrator.setSecurityConfig(merged);
       if (merged?.askTimeoutMs !== undefined) {
         orchestrator.setDefaultPermissionTimeout(merged.askTimeoutMs);

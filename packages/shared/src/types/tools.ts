@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { CatalogTrustLevel } from './trust.js';
 
 export const ToolCapability = {
   FILE_READ: 'file_read',
@@ -392,6 +393,14 @@ export interface ToolDefinition {
    * (`provides.tools[]`).
    */
   pluginName?: string;
+  /**
+   * ADR-090 × IPI: фактический уровень доверия установки плагина на момент
+   * регистрации тула (`CatalogTrustLevel`). Матрица доверия контента
+   * (`engine/security/trust.ts`) считает результат плагинного тула
+   * `trusted` только при уровне не ниже `trusted`; не задан — `untrusted`
+   * (fail-closed). Аддитивное поле: тул без него работает как прежде.
+   */
+  pluginTrust?: CatalogTrustLevel;
 }
 
 export interface ToolForLLM {

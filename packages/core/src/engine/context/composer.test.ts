@@ -1494,7 +1494,7 @@ describe('SystemPromptComposer: блок content.rules (правила защи�
     expect(system).toContain('[CONTENT RULES]');
   });
 
-  it('нет инструментов в запросе — блока нет (builtin/mcp/plugin пусты)', async () => {
+  it('блок есть и без инструментов в запросе (в основном ходе composer собирается до select)', async () => {
     const composer = makeRulesComposer();
 
     for (const extra of [
@@ -1503,8 +1503,8 @@ describe('SystemPromptComposer: блок content.rules (правила защи�
       { tools: [], mcpTools: [], pluginTools: [] },
     ]) {
       const { system, blocks } = await composer.compose(rulesCtx(extra));
-      expect(system).not.toContain('[CONTENT RULES]');
-      expect(blocks.find((b) => b.key === 'content.rules')).toBeUndefined();
+      expect(system).toContain('[CONTENT RULES]');
+      expect(blocks.find((b) => b.key === 'content.rules')).toBeDefined();
     }
   });
 
@@ -1522,14 +1522,17 @@ describe('SystemPromptComposer: блок content.rules (правила защи�
     expect(plugin.system).toContain('[CONTENT RULES]');
   });
 
-  it('contentRulesEnabled=false снимает блок даже при инструментах', async () => {
+  it('contentRulesEnabled=false снимает блок (и с инструментами, и без)', async () => {
     const composer = makeRulesComposer();
-    const { system, blocks } = await composer.compose(
-      rulesCtx({ tools: TOOLS, contentRulesEnabled: false }),
-    );
 
-    expect(system).not.toContain('[CONTENT RULES]');
-    expect(blocks.find((b) => b.key === 'content.rules')).toBeUndefined();
+    for (const extra of [
+      { tools: TOOLS, contentRulesEnabled: false },
+      { contentRulesEnabled: false },
+    ]) {
+      const { system, blocks } = await composer.compose(rulesCtx(extra));
+      expect(system).not.toContain('[CONTENT RULES]');
+      expect(blocks.find((b) => b.key === 'content.rules')).toBeUndefined();
+    }
   });
 
   it('пустой текст правил — блока нет', async () => {
