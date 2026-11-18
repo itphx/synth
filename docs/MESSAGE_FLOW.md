@@ -1051,14 +1051,16 @@ sequenceDiagram
    = `false` — **ретраев нет**,
    `stream.retry` не публикуется.
 2. Оркестратор: `step.finished` со статусом `error` (тот же `messageId` шага) → `turn.finished error`;
-   `handleLlmFailure` пишет только `metadata.last_error` в user-реплику — **assistant-сообщение
-   об ошибке не создаётся** (решение владельца 2026-11-06): после reload в истории ничего не
-   остаётся. Расход неудавшегося вызова учитывается aux-вызовом `source: 'llm-error'`
+   `handleLlmFailure` пишет `metadata.last_error` в user-реплику и durable-запись
+   `execution_stopped` (`reason:'provider_error'`, §8.16) — причина остаётся видимой модели и
+   человеку после reload/resume; **assistant-сообщение об ошибке не создаётся** (решение
+   владельца 2026-11-06). Расход неудавшегося вызова учитывается aux-вызовом `source: 'llm-error'`
    (счётчики сессии + роллап `usage` без `messages`, ADR-102), один раз — когда повтора уже не будет.
 3. Процессор: сообщение извлекается из очереди, `blocked`/`currentStream`/`retry` снимаются,
    публикуется `stream.error {can_retry: false, error_type, retry_count}`, затем `queue.state`.
-4. UI, лента основной сессии: ошибку **не показывает** (сообщения нет) — только временная плашка
-   `StreamErrorPanel` над композером и тост. Legacy-записи прежней версии (assistant со
+4. UI, лента основной сессии: durable-запись `execution_stopped` (§8.16) рисуется `Notice
+   variant="error"` — причина видна **навсегда**; assistant-сообщения об ошибке по-прежнему нет.
+   Живая плашка `StreamErrorPanel` над композером и тост дополняют её до перезагрузки. Legacy-записи прежней версии (assistant со
    `status: 'error'` / `metadata.status: 'error'`) скрывает предикат `isLlmFailureMessage`
    (`components/chat/messageVisibility.ts`): фильтр применяется в `MessageList` **до** группировки
    по ходу и только для основной сессии (не для дочерней), поэтому скрытый сегмент не оставляет
@@ -1083,16 +1085,14 @@ sequenceDiagram
 
 1. Recoverable внутри ребёнка → `subagent.retry` в канал родителя; паузы **ничего** не пишут в
    историю ребёнка (мусорных сообщений нет).
-2. Терминально после retry: в историю ребёнка — сообщение `role: error`
-   (`task.subagent_exec_error` / `..._after_retries`), `turn.finished error`, `currentStream`
-   снимается, хук `agent_failed`. В открытой дочерней сессии ошибка видна этим сообщением —
-   для пользователя это центрированный **красный** системный блок, как завершение фонового
-   прогона (`Notice` variant `error`, иконка `robot-2`, подпись `chat.notice.subagentError`
-   «Ошибка саб-агента · <имя>», модель/время в шапке, локализованный текст `metadata.i18n`) — и
-   полосой `SubagentResumeBar` («Продолжить»), а не основной плашкой `StreamErrorPanel`.
-   Это **осознанное отличие** от основной сессии: там терминальная ошибка сообщением не
-   сохраняется (см. §8.14), а ребёнку сообщение нужно — родитель читает отчёт ребёнка и должен
-   видеть, что была проблема.
+2. Терминально после retry: в историю ребёнка — durable-запись `execution_stopped`
+   (`role:'user'`, `author:'System'`, `metadata.type='execution_stopped'`), `turn.finished error`,
+   `currentStream` снимается, хук `agent_failed`; отдельной роли `error` больше нет (PROP-143).
+   В открытой дочерней сессии причина видна этим сообщением — для пользователя это центрированный
+   **красный** системный блок (`Notice` variant `error`, «Остановлено: <причина> · <модель>») —
+   и полосой `SubagentResumeBar` («Продолжить»), а не основной плашкой `StreamErrorPanel`.
+   Запись сохраняется после resume; «Продолжить» работает и от неё, и от legacy-сообщения
+   `role:'error'`.
 3. Родителю: `task_result` с `<status>error</status>` и `isError: true` — для модели родителя это
    обычный `tool_result`, ход **продолжается** (другой инструмент или текстовый ответ).
 4. Отмена (`isAborted`) → `finishAborted`: частичный текст итерации — assistant-сообщение
@@ -1105,7 +1105,51 @@ sequenceDiagram
 
 Код: `engine/tools/task/run-cycle.ts`, `task/child-session.ts`.
 
-### 8.16 Отказ в доступе к инструменту (permission deny)
+### 8.16 Терминальная причина остановки — durable-запись `execution_stopped` (PROP-143)
+
+1. Запись пишется в историю **той сессии, где произошла остановка** (основной или дочерней),
+   один раз за терминальный переход: `role: 'user'`, `author: 'System'` (как `Timer`/`Process`),
+   `metadata.type='execution_stopped'` + `reason`, `error_type`, `retryable`, `attempts`,
+   `max_retries`, `provider`, `model`, `turn_id`, `stream_id`, `stopped_at`. `turnId` записи =
+   id упавшего хода — блок встаёт в ленте сразу после упавшего шага, а не «в следующем ходе».
+2. `reason` — нормализованный код (`engine/stop-reason.ts`): `provider_error | steps_limit |
+   context_budget | stopped_by_user | denied | internal | restart | orphaned`.
+3. `content` — **конверт** (единственное, что видит модель):
+
+   ```text
+   <execution_stopped reason="provider_error" error_type="rate_limit" retryable="true" attempts="3">
+   <текст провайдера>
+   </execution_stopped>
+   ```
+
+   Тело — сырой текст провайдера (с обязательной обфускацией, ADR-036); если его нет —
+   локализованный текст причины (ключи `stop.*` в `shared/i18n`).
+4. **Идемпотентность:** не более одной записи на ключ (`stream_id` хода; у потерянных фоновых
+   прогонов — `background:<run_id>`); повторный терминальный статус того же хода вторую не
+   добавляет. Запись **сохраняется после resume** — это факт истории, а не transient-плашка;
+   `metadata.last_error` остаётся совместимой меткой, источник истины — запись.
+5. **Классификация — через существующий шов** `sessions/user-messages.ts`: `isServiceUserMessage`
+   (не реплика человека → не авто-тайтл, не счётчик диалога, не интервью) и
+   `isNonTurnServiceUserMessage` (границу хода не сдвигает, наследует `disabled` выключенного хода).
+6. **UI:** ветка `ChatMessage` по `metadata.type === 'execution_stopped'` рисует существующий
+   `Notice variant="error"` («Остановлено: <причина> · <модель>»), тело — текст провайдера
+   (по умолчанию свёрнуто), `retryable`/`attempts` — в тултипе и развёрнутом теле; сам конверт
+   не показывается. `StreamErrorPanel` остаётся для **живой** ошибки (до перезагрузки) и durable
+   `Notice` не дублирует.
+7. **Таксономия:** `quota_exceeded` (`insufficient_quota`, `exceeded your current quota`,
+   `billing`) — **unrecoverable** (раньше попадал в `unknown` и ретраился впустую);
+   `retryable` = `isLlmErrorRecoverable(...)`, `attempts`/`max_retries` — как у саб-агента.
+8. **Точки записи:** `handleLlmFailure`/финализация хода (основная сессия — `provider_error`,
+   `stopped_by_user`, `denied`), `task/run-cycle.ts` (дочерняя — замена `role:'error'`,
+   `steps_limit`, `context_budget`), `engine/background/service.ts` + `lost-records.ts`
+   (`restart`/`orphaned` — в историю сессии-владельца). Публикуется обычный `message.added`
+   (инвариант 27), новых каналов и событий нет.
+
+Код: `packages/core/src/engine/stop-reason.ts`, `engine/stop-record.ts`,
+`engine/background/lost-records.ts`, `sessions/user-messages.ts`,
+`packages/ui/src/components/chat/ChatMessage.tsx`.
+
+### 8.17 Отказ в доступе к инструменту (permission deny)
 
 1. `PermissionEvaluator` вернул `deny`: ролевой (`matchedRule: 'role.unavailable'`), отказ
    пользователя (ask → deny) или запрет политики.
@@ -1124,7 +1168,7 @@ sequenceDiagram
 Код: `engine/permission/{evaluator,approval}.ts`, `engine/orchestrator.ts`,
 `server/routes/sessions.ts`.
 
-### 8.17 Отказ шлюза безопасности (LLM Gateway)
+### 8.18 Отказ шлюза безопасности (LLM Gateway)
 
 | Что | Реакция | Провайдер | Ретрай | Что видно |
 |---|---|---|---|---|
@@ -1138,7 +1182,7 @@ sequenceDiagram
 
 Код: `engine/gateway/gateway-provider.ts`, `input-guard.ts`, `output-guard.ts`, `rate-limiter.ts`.
 
-### 8.18 Таймаут и `hold` подтверждения инструмента
+### 8.19 Таймаут и `hold` подтверждения инструмента
 
 1. `permission.asked` несёт `ask_timeout_ms` (конфиг `permission.askTimeoutMs`, по умолчанию
    300 000 мс; `0` — без авто-отклонения); полоса считает обратный отсчёт от `askedAt + timeoutMs`.
@@ -1158,7 +1202,7 @@ sequenceDiagram
 
 Код: `engine/permission/approval.ts`, `packages/ui/src/components/chat/PermissionRequestBar.tsx`.
 
-### 8.19 Лимит инъекций (шестая)
+### 8.20 Лимит инъекций (шестая)
 
 1. `POST /prompt {mode:'steer'|'interrupt'}` при заполненном `steerInbox` (предел
    `MAX_STEER_INJECTIONS_PER_TURN = 5`) → `429 STEER_LIMIT_EXCEEDED`
@@ -1170,7 +1214,7 @@ sequenceDiagram
 Код: `queue/processor.ts` (`enqueueSteerMessage`), `engine/steering/apply.ts`,
 `shared/src/types/steering.ts`.
 
-### 8.20 Gateway rate limit и провайдерский 429 — два разных пути
+### 8.21 Gateway rate limit и провайдерский 429 — два разных пути
 
 | | Лимит шлюза (свой счётчик) | Ответ провайдера 429 |
 |---|---|---|
@@ -1186,7 +1230,7 @@ sequenceDiagram
 
 Код: `engine/gateway/gateway-provider.ts`, `engine/gateway/rate-limiter.ts`, `engine/llm-error.ts`.
 
-### 8.21 Context length exceeded
+### 8.22 Context length exceeded
 
 1. Провайдер отвечает ошибкой переполнения (класс `ContextLengthExceededError` либо текст
    `context_length`) → тип `context_length`, **non-recoverable**: повторов нет.
@@ -1198,7 +1242,7 @@ sequenceDiagram
 
 Код: `engine/orchestrator/errors.ts`, `packages/ui/src/components/chat/StreamErrorPanel.tsx`.
 
-### 8.22 Шаг-лимит (`maxSteps`)
+### 8.23 Шаг-лимит (`maxSteps`)
 
 1. `stepLimitStep = iteration + 1 >= maxSteps` (нумерация как в оригинальной механике: `maxSteps: N`
    даёт N−1 рабочих шагов + шаг-лимит, `maxSteps: 1` — сразу отчёт).
@@ -1215,7 +1259,7 @@ sequenceDiagram
 Код: `engine/llm/max-steps.ts`, `engine/orchestrator.ts`,
 `engine/orchestrator/phases/process-finalize.ts`.
 
-### 8.23 Исполнитель недоступен (split-режим)
+### 8.24 Исполнитель недоступен (split-режим)
 
 1. `execution.mode = remote`: команды идут по HTTP в пул исполнителей; пул недоступен или ни у
    одного адреса нет нужного бинаря → `ExecutionError` с кодом `EUNREACHABLE` / `EDEPENDENCY`
@@ -1230,7 +1274,7 @@ sequenceDiagram
 Код: `execution/remote.ts`, `execution/ports/execution-port.ts`,
 `packages/executor/src/client.ts`.
 
-### 8.24 Деградация хранилища / БД
+### 8.25 Деградация хранилища / БД
 
 1. Недоступность БД **при старте** → файловый фоллбек строго read-only (`storage.degradedMode:
    fallback-file`): сервис поднимается, `/health` → `degraded` (+ блок `storage`, `restartRequired`),
@@ -1249,7 +1293,7 @@ sequenceDiagram
 
 Код: `server/storage-degraded.ts`, `storage/storage-context.ts`, `queue/processor.ts`.
 
-### 8.25 Две вкладки или два клиента
+### 8.26 Две вкладки или два клиента
 
 ```mermaid
 sequenceDiagram
@@ -1280,7 +1324,7 @@ sequenceDiagram
 Код: `queue/processor.ts` (`reorderPendingMessages`), `server/routes/queue.ts`,
 `packages/ui/src/components/chat/QueuePanel.tsx`.
 
-### 8.26 Reload и «Стоп» во время backoff
+### 8.27 Reload и «Стоп» во время backoff
 
 1. Backoff: `Session.retry {streamId, attempt, maxRetries, retryAt}` + `stream.retry`; `activity` =
    `retry` (приоритет выше `busy`).
@@ -1297,7 +1341,7 @@ sequenceDiagram
 Код: `queue/processor.ts`, `packages/ui/src/stores/transportStore.ts`
 (`restoreLiveTurnFromSession`).
 
-### 8.27 Уведомление о фоне после конца хода
+### 8.28 Уведомление о фоне после конца хода
 
 1. Фоновая работа завершилась → user-сообщение с `metadata.type = 'background_run_result'` и
    конвертом `<process …>`/`<subagent …>`; ставится в очередь, публикуется `queue.state`.
@@ -1311,7 +1355,7 @@ sequenceDiagram
 Код: `queue/processor.ts` (`_handleStopRequest`), `engine/background/service.ts`
 (`buildSubagentNotification`), `packages/ui/src/components/chat/background-notice.ts`.
 
-### 8.28 Вложения: native / derive / отброс
+### 8.29 Вложения: native / derive / отброс
 
 1. Гидратация — **на границе отправки провайдеру**: **native** (модальность модели известна и
    принимается, контейнер поддержан протоколом) → **derive** (aux-модель семейства из
@@ -1333,7 +1377,7 @@ sequenceDiagram
 Код: `engine/attachments/{hydrate,derive,materialize}.ts`,
 `packages/ui/src/components/chat/attachments`.
 
-### 8.29 Пустой ответ и doom loop
+### 8.30 Пустой ответ и doom loop
 
 1. Пустой ответ без deny-блокировок → фоллбек `session.empty_response`, `metadata.status: 'error'`,
    `turn.finished error`.
@@ -1347,7 +1391,7 @@ sequenceDiagram
 Код: `engine/orchestrator/phases/process-finalize.ts`,
 `engine/orchestrator/persistence.ts` (`resolveAssistantStatus`), `task/run-cycle.ts`.
 
-### 8.30 Вопрос пользователю посреди хода (`question`, ADR-112)
+### 8.31 Вопрос пользователю посреди хода (`question`, ADR-112)
 
 1. Тул `question` → `user_question.asked` в канал сессии (`question_id`, `questions[]`,
    `created_at`, `expires_at?`, `turn_id`, `tool_call_id`, `agent_role`).
@@ -1367,7 +1411,7 @@ sequenceDiagram
 Код: `engine/question/service.ts`, `engine/tools/question.ts`,
 `packages/ui/src/components/chat/QuestionDock.tsx`.
 
-### 8.31 Перенос или форк сессии во время хода
+### 8.32 Перенос или форк сессии во время хода
 
 1. Перенос: `PATCH /sessions/:id {projectId}` или агентские `project_create`/`project_attach` →
    `session.moved` (старый/новый `project_id`, при снятии привязки worktree — `worktree_detached`).
@@ -1384,7 +1428,7 @@ sequenceDiagram
 Код: `server/routes/sessions.ts`, `engine/tools/project-manage.ts`,
 `packages/ui/src/stores/transportStore.ts` (`session.moved`).
 
-### 8.32 Мульти-реплика (PROP-105)
+### 8.33 Мульти-реплика (PROP-105)
 
 1. Ход живёт в том процессе, куда пришёл `POST /prompt`: `QueueProcessorManager` — per-process,
    `SessionManager.withLock` — in-process. Значение состояния (сессия, очередь, `currentStream`,
@@ -1402,7 +1446,7 @@ sequenceDiagram
 
 Код: `queue/processor.ts`, `sessions/manager.ts`, `docs/arch_decisions/prop-105-multi-replica-coordination.md`.
 
-### 8.33 Контекст терминала вместе с вопросом (ADR-132)
+### 8.34 Контекст терминала вместе с вопросом (ADR-132)
 
 1. `POST /prompt {content, context}` — клиент присылает **вопрос** и блок вывода
    терминала (`context`) одним запросом. Контекст — служебное user-сообщение

@@ -1244,15 +1244,29 @@ graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`)
 
 1. **Что прерывается.** Активные стримы ответов LLM, выполняющиеся инструменты/ходы агента, in-flight
    HTTP-запросы и WS/SSE-подписки на этом процессе; очередь сообщений и состояние сессий **сохраняются**
-   (они в хранилище), но незавершённый ход будет прерван и его нужно повторить. Восстановление,
-   запланированное через `POST /maintenance/restore`, применится на этом же старте (до миграций);
-   pending-миграции схемы — тоже (со страховочной копией). **Фоновая работа не возобновляется**
-   ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
-   [ADR-113](./arch_decisions/adr-113-background-processes.md)): записи реестра `running` при старте
-   переводятся в `orphaned` («interrupted by restart»), незавершённые вопросы — в `cancelled`
-   с причиной `interrupted` ([ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md));
-   у удалённых процессов реестр исполнителя живёт в памяти, поэтому перезапуск исполнителя их тоже теряет.
-   Терминальные записи и логи в `BlobStore` остаются — их видно во вкладке «Процессы».
+   (они в хранилище). Восстановление, запланированное через `POST /maintenance/restore`, применится на
+   этом же старте (до миграций); pending-миграции схемы — тоже (со страховочной копией).
+   - **LLM-ходы восстанавливаются автоматически** (PROP-142, секция `recovery.*` в
+     [CONFIGURATION](./CONFIGURATION.md)): **основные** сессии — прежним путём (процессор очереди +
+     resume-сообщение), **дочерние** (саб-агенты) — resume-путём саб-агента, итог уходит родителю.
+     Бюджет — попытки на ход (`recovery.maxAttempts`) и детект crash-loop
+     (`recovery.crashLoop.windowMinutes`/`maxRestarts`); при отказе ход терминализируется,
+     в историю пишется durable-запись `execution_stopped` (`reason='orphaned'`), ручной повтор —
+     `POST /api/v2/sessions/:id/recovery/retry` (сбрасывает счётчик). При нескольких репликах
+     авто-резюм выключен (fail-closed): поведение деградирует до `orphaned` + снятие маркеров хода.
+   - **Фоновые прогоны сами не перезапускаются**
+     ([ADR-111](./arch_decisions/adr-111-background-subagent-sessions.md),
+     [ADR-113](./arch_decisions/adr-113-background-processes.md)): записи реестра `running` при старте
+     переводятся в `orphaned` («interrupted by restart»), а в историю **сессии-владельца** пишется
+     durable-запись `execution_stopped` (`reason='restart'`; потерянный прогон — `reason='orphaned'`,
+     PROP-143); записи реестра при этом обновляются (вкладка «Процессы» показывает причину).
+     Незавершённые вопросы — в `cancelled` с причиной `interrupted`
+     ([ADR-112](./arch_decisions/adr-112-user-questions-mid-turn.md)); у удалённых процессов реестр
+     исполнителя живёт в памяти, поэтому перезапуск исполнителя их тоже теряет.
+   - **Побочные эффекты инструментов могут повториться.** Восстановление возобновляет **ход**, но не
+     откатывает уже выполненные инструменты (at-least-once; тот же контракт, что у рестарта,
+     ADR-092 п. 7): команда/запись, успевшая выполниться до падения, может выполниться ещё раз.
+   - Терминальные записи и логи в `BlobStore` остаются — их видно во вкладке «Процессы».
 2. **Режим.** `GET /api/v2/maintenance/restart` → `{supported, mode, reason?, startedAt, version}`.
    Режим задаётся `SYNTH_RESTART_MODE` (CLI `synth serve --restart-mode` приоритетнее env):
    `disabled` (default — `supported:false`, `POST` → 409 `RESTART_UNSUPPORTED`), `process`

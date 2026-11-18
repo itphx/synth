@@ -422,16 +422,16 @@
 - **Шаг = сообщение, «финал» = смена статуса.** Сообщение шага создаётся на `step.started` со
   `status: 'streaming'`, персистится инкрементально (`engine/orchestrator/stream-persistence.ts`),
   терминальный статус ставится на `step.finished`.
-- **Терминальная ошибка основной сессии — без сообщения (решение владельца 2026-11-06).**
+- **Терминальная ошибка основной сессии — без assistant-сообщения (решение владельца 2026-11-06).**
   `handleLlmFailure` (`engine/orchestrator/errors.ts`) **не создаёт assistant-сообщение**: шаг
   закрывается событиями (`step.finished error` → `turn.finished error`), пользователю — временная
-  плашка `stream.error`/`StreamErrorPanel`, после reload в истории ничего не остаётся. Фиксируются
-  `metadata.last_error` на user-реплике и расход неудавшегося вызова как aux-вызов
-  `source: 'llm-error'` (`engine/usage-accounting.ts`: счётчики сессии + роллап `usage` без
-  `messages`) — один раз, когда повтора уже не будет. Частичный ответ до сбоя остаётся обычным
-  ответом (draft `abort`, `metadata.interrupted`, бейдж «Прервано»). **Исключение — дочерние
-  сессии:** `run-cycle.ts` по-прежнему пишет ошибку сообщением `role: 'error'`, иначе родитель не
-  увидит, что прогон ребёнка упал.
+  плашка `stream.error`/`StreamErrorPanel`. Фиксируются `metadata.last_error` на user-реплике,
+  расход неудавшегося вызова как aux-вызов `source: 'llm-error'` (`engine/usage-accounting.ts`:
+  счётчики сессии + роллап `usage` без `messages`) — один раз, когда повтора уже не будет, и
+  **durable-запись причины остановки** (PROP-143, модули `engine/stop-reason.ts`/`stop-record.ts`). Частичный ответ до
+  сбоя остаётся обычным ответом (draft `abort`, `metadata.interrupted`, бейдж «Прервано»).
+  **Дочерние сессии пишут ту же durable-запись** (`run-cycle.ts`), а не сообщение `role: 'error'`:
+  роль `error` больше не создаётся (legacy-записи рендерятся по-старому).
 - **Снимок живого шага (ADR-118 §5).** `engine/live-stream-snapshot.ts` — in-memory снимок
   стримящегося шага (текст, reasoning, части), обновляется на каждом чанке и снимается на
   `step.finished`; отдаётся в DTO сессии как `current_stream.live` (аддитивно). Нужен, чтобы
@@ -711,6 +711,12 @@
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
+  **Boot-восстановление (PROP-142):** `deps.ts` применяет план `planBootRecovery` — основные сессии
+  возобновляются процессором очереди, **дочерние — resume-путём саб-агента**
+  (`orchestrator.startSubagentResume`, итог родителю), отказ бюджета — терминализация + запись
+  причины остановки; `backgroundService.recoverOnStart()` даёт записи `orphaned`, по которым пишутся
+  durable-записи `restart` в историю владельцев (`engine/background/lost-records.ts`). Бюджет —
+  секция `recovery.*` (`resolveRecoveryBudget`).
 - **Гейт на границе `/api/*` — fail-closed, публичные пути — allowlist (F6, аудит §6.1).**
   В `server/app.ts` вместо сплошного `app.use('/api/*', requireAuth)` висит middleware,
   который пропускает **только** пути из общего (с managed backend) allowlist
@@ -1731,7 +1737,19 @@
   `engine/tools/task/*`: `tool.ts` (`taskTool`), `fork.ts` (fork/контекст-режимы ADR-026 +
   permissions), `child-session.ts` (создание/сообщения/события), `run-cycle.ts` (общий
   tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
-  `task.ts` — фасад-реэкспорт. Тулы `task`/`task-resume` собирают промпт
+  `task.ts` — фасад-реэкспорт. **Управление сабагентом на ходу (PROP-142).** `args.ts` —
+  `prompt`/`subagent_type` обязательны **только без `task_id`**; `delivery: 'steer'|'queue'`
+  (default `steer`) применим к занятому ребёнку; `background` работает и с `task_id`. `tool.ts`
+  (`continueChildSession`): свободный ребёнок — продолжение с текстом (`metadata.continuation`,
+  обычное user-сообщение) либо прежним маркером `task.resume_marker` (путей без текста),
+  `model`/`provider` переключают пару точечной мутацией `settings`, `subagent_type` при `task_id`
+  агента **не** переключает (`task.agent_switch_unsupported`, сравнение с учётом алиасов);
+  занятый — `deliverToBusyChild` (`steerInbox`/`pendingMessages`), ответ
+  `{status:'steered'|'queued', child_session_id, pending_count}` без блокировки родителя.
+  `run-cycle.ts` — `runSubagentWithQueueDrain`: после **успешного** прогона `takePendingMessages`
+  (кап `MAX_CHILD_QUEUE_DRAIN = 5`) и **ровно один** проход продолжения; после провала/«Стопа»
+  очередь не продолжается. Сабагент по-прежнему без `task`/`question` (`deny`).
+  Тулы `task`/`task-resume` собирают промпт
   саб-агента (`resolveSubagentPrompt`) **только из файлов** — `prompts/subagents/<type>.{ru,en}.md`
   → `<type>.md` → `prompts/roles/<TYPE>.{ru,en}.md` → `<TYPE>.md`; поля промпта в определении
   агента (`AgentDefinition`) нет, фоллбека из JSON не существует (нет файла — пустой промпт;
@@ -2085,6 +2103,32 @@
   и 300 символов на ветвь) вместо голого `Invalid input` — иначе модель не понимает, что не так, и
   повторяет тот же вызов.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
+  `quota_exceeded` (`insufficient_quota`/`exceeded your current quota`/`billing`) — **unrecoverable**
+  (раньше попадал в `unknown` и ретраился впустую).
+- `engine/stop-reason.ts`, `engine/stop-record.ts` — PROP-143: **durable причина остановки хода**.
+  `stop-reason.ts` — нормализатор (`StopReason = provider_error|steps_limit|context_budget|
+  stopped_by_user|denied|internal|restart|orphaned`), `buildStopRecord` — служебное `user`-сообщение
+  (`author:'System'`, `metadata.type='execution_stopped'`, `reason`/`error_type`/`retryable`/
+  `attempts`/`max_retries`/`provider`/`model`/`turn_id`/`stream_id`/`stopped_at`) и
+  `renderStopEnvelope` — конверт `<execution_stopped …>`, который видит модель (тело — сырой текст
+  провайдера, обфускация через `obfuscateUserMessageForHistory`). `stop-record.ts` — общий писатель
+  `appendStopRecord` с идемпотентностью по `dedupeKey` (обычно `stream_id` хода; у фоновых —
+  `background:<run_id>`): одна запись на терминальный переход, публикует `message.added`
+  (инвариант 27). Точки записи — `orchestrator/errors.ts` + финализация, `task/run-cycle.ts`,
+  `background/service.ts`/`lost-records.ts`. Классификация записи как служебной —
+  `sessions/user-messages.ts` (`isServiceUserMessage`/`isNonTurnServiceUserMessage`).
+  `engine/background/lost-records.ts` (`writeLostRunRecords`) — запись `restart`/`orphaned` в историю
+  сессии-владельца по результату `recoverOnStart` (дедуп по `background:<run_id>`; потери прогона
+  видит и модель, и UI, а не только реестр).
+- `sessions/recovery.ts`, `sessions/recovery-boot.ts` — PROP-142 §3: **бюджет автовосстановления**
+  прерванных ходов. `recovery.ts` — `evaluateRecovery` (порядок: `autoResume=false` → `disabled`,
+  `attempts >= maxAttempts` → `attempts`, метки в окне ≥ `maxRestarts` → `crash_loop`),
+  durable-состояние — `session.status.recovery` (попытки помечаются/сбрасываются точечной мутацией
+  `mutateMeta`, ADR-144). `recovery-boot.ts` — **чистый** планировщик `planBootRecovery`:
+  `resume-main` (основная — процессор очереди + resume-сообщение), `resume-child` (дочерняя —
+  `orchestrator.startSubagentResume`, цикл саб-агента, итог родителю), `deny` (отказ бюджета →
+  терминализация + запись причины). Применение плана — boot-контур `server/app/deps.ts` и
+  `backend/app/deps.ts`.
 - `engine/hooks/*` — `HookBus` (ADR-030): ядровая in-process шина хуков
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
   session-`EventBus`. Политика `builtin` (Ф0 ADR-090): регистрация ядра (`builtin: true`)
@@ -2612,6 +2656,10 @@
   `storage/memory/background-runs.ts`, PG — `packages/storage-postgres/src/ports/
   background-runs.ts`, миграция `021_background_runs`; контракт —
   `storage/contract/background-run-repository.contract.ts`).
+  `recoverOnStart()` **возвращает** переведённые записи (`status:'orphaned'`, summary
+  `interrupted by restart`) — по ним boot-контур пишет durable-записи `restart` в историю
+  сессий-владельцев (`engine/background/lost-records.ts`, PROP-143) и обновляет реестр; сами
+  прогоны не перезапускаются (LLM-циклы — отдельным путём, PROP-142).
   Мастер-выключатель `background.enabled` гейтит **оба** вида фоновой работы:
   `task` (`task.background_disabled`) и `execute_shell` (`process.background_disabled`).
 - `engine/processes/*` — ADR-113 (ADR-111): фоновые шелл-процессы. `service.ts`

@@ -221,7 +221,11 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_BACKGROUND_LOG_MAX_BYTES` | number | `background.logMaxBytes` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_BACKGROUND_RETENTION_DAYS` | number | `background.retentionDays` (этап 1 roadmap 0.12.4 — блок 4) |
 | `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | number | `agents.subagentMaxInputTokens` (предохранитель по объёму промпта саб-агента; `0` — без ограничения) |
-| `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (лимит глубины вложенности саб-агентов; `0` — без ограничения) |
+| `SYNTH_AGENTS_SUBAGENT_DEPTH` | number | `agents.subagentDepth` (резерв: вложенность отключена правилом `task: deny`) |
+| `SYNTH_RECOVERY_AUTO_RESUME` | boolean | `recovery.autoResume` (мастер-выключатель автовосстановления после рестарта; PROP-142) |
+| `SYNTH_RECOVERY_MAX_ATTEMPTS` | number | `recovery.maxAttempts` (максимум автовосстановлений одного хода) |
+| `SYNTH_RECOVERY_CRASH_LOOP_WINDOW_MINUTES` | number | `recovery.crashLoop.windowMinutes` (окно детекта crash-loop) |
+| `SYNTH_RECOVERY_CRASH_LOOP_MAX_RESTARTS` | number | `recovery.crashLoop.maxRestarts` (порог crash-loop в окне) |
 | `SYNTH_LIMITS_SESSION_OPS_PER_MINUTE` | number | `limits.sessionOpsPerMinute` (лимит тяжёлых операций с сессиями — импорт/экспорт/форк/merge — в минуту на креденту; `0` — без ограничения) |
 | `SYNTH_LLM_MAX_TOKENS` | number | `llm.maxTokens` (лимит вывода по умолчанию; `0` — авто-дефолт ядра) |
 | `SYNTH_CONTEXT_WINDOW_POLICY` | string (`off`/`warn`/`enforce`) | `context.windowPolicy` (политика ограничения контекстного окна; дефолт `warn`) |
@@ -2419,7 +2423,7 @@ ADR-128): контекст ребёнка сжимается на границе
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
 | `agents.subagentMaxInputTokens` | Предохранитель по объёму промпта саб-агента, входные токены (оценка); `0` — без ограничения (дефолт). При превышении прогон завершается отчётом, а не ошибкой провайдера. Настраивается в UI (Настройки → «Пределы саб-агентов») / `GET/PUT/DELETE /api/v2/settings/agents-limits`; приоритет env > runtime > config. Env — `SYNTH_AGENTS_SUBAGENT_MAX_INPUT_TOKENS` | `0` |
-| `agents.subagentDepth` | Лимит глубины вложенности саб-агентов; `0` — без ограничения. Глубина считается по цепочке `parentId` сессий (текущая — 0, родитель — 1, …): при лимите 1 саб-агент может запустить саб-агента, но не саб-агента внутри саб-агента. При превышении тул `task` отказывает **до** создания дочерней сессии (`task.depth_limit`). Env — `SYNTH_AGENTS_SUBAGENT_DEPTH` | `1` |
+| `agents.subagentDepth` | **Резерв на будущее:** вложенность саб-агентов **отключена** правилом `task: deny` (`engine/permission/derive.ts`) — сабагент не может вызвать `task`. Поле и проверка глубины по цепочке `parentId` сохранены для будущего включения; пока `task` у ребёнка запрещён, проверка не срабатывает. Включение вложенности — **отдельным решением** (снятие `deny`, тест на глубину, проверка `question`/`task` в промпте ребёнка), а не сменой значения. Env — `SYNTH_AGENTS_SUBAGENT_DEPTH` | `1` |
 
 - **Приоритет шаг-лимита.** Финальный шаг-отчёт по `maxSteps` (механика opencode) превышением
   бюджета не считается: иначе отчёт по лимиту шагов не был бы получен вовсе.
@@ -2436,15 +2440,57 @@ ADR-128): контекст ребёнка сжимается на границе
 - Оценка — по **калиброванному** chars-per-token модели прогона (`token_ratios`; тот же
   загрузчик, что у основного оркестратора); эвристика 4 применяется только при отсутствии
   калибровки/ошибке загрузчика (fail-open). Это предохранитель, а не точный подсчёт токенов модели.
-- **Лимит глубины (`subagentDepth`) — не бюджет, а структура.** Он считается по цепочке
-  `parentId` сессий, а не по расходу токенов: при достижении лимита тул `task`
-  отказывает с `task.depth_limit` **до** создания дочерней сессии (лишняя сессия и её
-  история не появляются). `0` — вложенность не ограничена.
+- **Лимит глубины (`subagentDepth`) — резерв на будущее, не действующее ограничение.** Сейчас
+  вложенность саб-агентов **отключена**: `task` у саб-агента — `deny`
+  (`engine/permission/derive.ts`), поэтому ребёнок не может запустить ребёнка вовсе, независимо
+  от значения. Поле и проверка глубины по цепочке `parentId` (при превышении — `task.depth_limit`
+  **до** создания дочерней сессии) сохранены для будущего включения; документация и UI не должны
+  обещать «при лимите 1 саб-агент может запустить саб-агента». Включение — отдельным решением
+  (снятие `deny`, тест на глубину, проверка `question`/`task` в промпте ребёнка). `0` — без
+  ограничения.
 
 ```yaml
 agents:
   subagentMaxInputTokens: 0   # 0 — без лимита (дефолт)
-  subagentDepth: 1
+  subagentDepth: 1            # резерв: вложенность отключена правилом `task: deny`
+```
+
+### Восстановление после рестарта (`recovery.*`)
+
+Бюджет автовосстановления прерванных ходов (PROP-142 §3). После старта инстанс возобновляет
+ходы с durable-маркером (`currentStream.owner`): **основные** сессии — прежним путём (процессор
+очереди + resume-сообщение), **дочерние** (саб-агенты) — resume-путём саб-агента (итог уходит
+родителю). Бюджет считается **на ход** (durable счётчик в `session.status.recovery`) плюс
+детект crash-loop по меткам попыток.
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `recovery.autoResume` | Мастер-выключатель автовосстановления. `false` — прерванные ходы не возобновляются (деградация до «терминализировать»). Env — `SYNTH_RECOVERY_AUTO_RESUME` | `true` |
+| `recovery.maxAttempts` | Максимум автовосстановлений **одного хода**; превышение → ход терминализируется (`failed`/`orphaned`), в историю пишется запись причины остановки. Env — `SYNTH_RECOVERY_MAX_ATTEMPTS` | `3` |
+| `recovery.crashLoop.windowMinutes` | Окно детекта crash-loop (минуты). Env — `SYNTH_RECOVERY_CRASH_LOOP_WINDOW_MINUTES` | `10` |
+| `recovery.crashLoop.maxRestarts` | Сколько попыток/рестартов в окне считаются crash-loop'ом; превышение → терминализация. Env — `SYNTH_RECOVERY_CRASH_LOOP_MAX_RESTARTS` | `3` |
+
+- **Приоритет** — env `SYNTH_RECOVERY_*` > `config.yaml` > дефолт (ADR-023); секция действует в
+  **standalone и managed** (managed — через конфиг/UI инстанса).
+- **При отказе** (выключено / исчерпан бюджет / crash-loop) ход не возобновляется: он
+  терминализируется, в историю сессии-владельца пишется durable-запись
+  `execution_stopped` (`reason='orphaned'`, PROP-143), запись реестра фонового прогона
+  обновляется; ручной повтор — `POST /api/v2/sessions/:id/recovery/retry` (сбрасывает счётчик).
+- **Одиночная реплика.** Автовосстановление рассчитано на один инстанс-владелец данных (standalone и
+  одна реплика managed). При нескольких репликах нужен claim/lease (PROP-105); до его появления
+  единственность восстановителя **не гарантируется**, поэтому multi-replica-развёртываниям
+  рекомендуется `recovery.autoResume: false`.
+- **Побочные эффекты не откатываются.** Восстановление возобновляет ход, но уже выполненные
+  инструменты могут выполниться повторно (at-least-once; тот же контракт, что у рестарта,
+  ADR-092 п. 7).
+
+```yaml
+recovery:
+  autoResume: true
+  maxAttempts: 3
+  crashLoop:
+    windowMinutes: 10
+    maxRestarts: 3
 ```
 
 ### Лимиты запросов (`limits.*`)

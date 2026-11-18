@@ -23,7 +23,7 @@
 | Инстанс и MCP (self-help, Workstream A1/A2) | `synth_info`, `synth_mcp_list`, `synth_mcp_test` (read) и `synth_mcp_add`, `synth_mcp_update`, `synth_mcp_remove`, `synth_mcp_enable`, `synth_mcp_reconnect` (write) — capability `instance`, группа `instance`, in-process (не HTTP-прокси), рабочий каталог не нужен; write-имена блокируются в plan-режиме. `synth_info` — версия/режим/dataDir/auth-флаги/storage/счётчики (видимые проекты/сессии), без значений ключей. `synth_mcp_list` — реестр MCP, статус, эффективный scope, причина и политика; URL редактируется, `headers`/`env` не отдаются. `synth_mcp_test` — временное подключение; `synth_mcp_add` — `origin:'instance'`/stdio **только ADMIN**, plaintext-секретные заголовки и `auth.kind:'credential'` отклоняются, user HTTP/SSE проверяются сетевой политикой; добавленный сервер **не** включается в сессию (opt-in). `synth_mcp_update`/`remove` — user-запись: автор или ADMIN/LEAD; instance-запись: **ADMIN**; `synth_mcp_enable` — `session` (владелец; событие `session.updated`), `project` (право изменения проекта; `project.updated`), `instance` (**ADMIN**); `synth_mcp_reconnect` — `refreshServer` без рестарта Synth. MCP-реестр и CLI — **локальные**; remote MCP (PROP-125) в инструменты не сливается (не критично). Секреты не читаются и не возвращаются |
 | Проекты/сессии (discovery, Workstream B + A1 hybrid) | `list_projects`, `get_project`, `list_sessions`, `get_session_info`, `session_rename` — capability `runtime` (read-тулы доступны в plan); видимость как у HTTP: elevated (ADMIN/LEAD) видит всё, остальные — свои проекты/сессии и проекты участия; ответы — компактные сводки без истории сообщений и без `log`/`invariants`/секретов. `get_session_info` дополнительно отдаёт блок **`execution`** (ADR-135/PROP-135): `mode` (`inline`/`remote`), `pooling` (`instance`/`project`/`session`; в `inline` — `null`), `session_profile` (эффективные профиль сессии и браузерный профиль), `profiles` (каталог профилей инстанса: `name`, `class` (`exec`/`browser`/`both`), `default`, `browser_default`, `running`, `state`; ≤ 30 записей, лишнее — `truncated:true`) и `pools_error` (короткий код: провайдер пулов недоступен или не умеет перечислять пулы). `running` считается **только по пулам текущей области** (`project:<projectId>:…` / `session:<sessionId>:…` / `instance:…`): `ready` → `true`, `draining` → `false`, `configured`/пула нет → `null` (`state` — `ready`/`configured`/`draining`); чужие области не учитываются. **Адреса и токены пулов в сводку не попадают** (только имена/класс/состояние). В гибриде discovery **read-only** сливает оба мира: `origin:'local'|'remote'`, удалённые id `remote:<uuid>`, `can_attach:false`, `cross_instance:true`; `remote_offline`/`remote_truncated` — backend недоступен/список обрезан. `get_project` по `remote:<id>` читает удалённый проект, по имени ищет локально, затем в remote. `get_project`/`list_sessions` принимают id **или точное имя** (неоднозначность — `ambiguous` + кандидаты). `list_sessions`: без фильтра — оба мира, локальный проект — только локальные, `remote:` проект — только удалённые. `project_attach` не делает cross-world move: `remote:`/только remote → `project.cross_instance`, одинаковое имя локально+remote → `project.hybrid_ambiguous` (кандидаты), локальный `projectId` привязывается без remote-проверки. `session_rename` меняет только текущую сессию (1..200 символов, без LLM-регенерации) и публикует `session.renamed`/`session.updated` |
 | Реестр фоновых прогонов (ADR-111/ADR-113) | `process_list`, `process_logs` (чтение; plan разрешён; `stream` — `combined` (по умолчанию) / `stdout` / `stderr`: у прогона три файла лога — общий и по одному на поток; файлы потоков есть у прогонов, запущенных после разделения потоков, у старых их нет — понятный ответ, не ошибка), `process_stop` (остановка running-прогона: процесс — `SIGTERM`→`SIGKILL`, фоновый саб-агент — abort дочернего прогона), `process_delete` (удаление только терминальной записи); скоуп «своя сессия + дочерние»; мутации в plan запрещены; capability `process`; лог — только у `kind: 'process'` |
-| Задачи | `task` (в т.ч. `background: true` — фоновый саб-агент, ADR-111; продолжатель — `task({task_id})`), `classify_conversation`, `read_session_reference` |
+| Задачи | `task` (в т.ч. `background: true` — фоновый саб-агент, ADR-111; продолжатель — `task({task_id})`, `delivery: steer\|queue` — доставка сообщения идущему ребёнку, PROP-142), `classify_conversation`, `read_session_reference` |
 | Вопрос пользователю (ADR-112) | `question` — capability `question`, группа правил `question`; пауза хода до ответа (срок — необязательный `timeout` **в секундах**, 300…86 400; по умолчанию таймаута нет); саб-агентам `deny`, в plan-режиме разрешён |
 | Проект | `get_project_info`, `list_repos`, `project_create`, `project_attach`, `project_update`, `project_workspace_set`, `project_repo_clone`, `project_repo_init`, `project_repo_add`, `project_repo_fetch`, `project_repo_remove` — `project_attach` принимает `projectId` **или** `project` (id/точное имя, регистронезависимо; при неоднозначности — `ambiguous` + кандидаты; перенос снимает worktree, сбрасывает утверждение плана и публикует `session.moved`; пустой workspace нового проекта оставляет file/shell/git заблокированными до `project_workspace_set`) |
 | Лог/Инварианты | `project_log_write`, `project_log_update`, `project_log_delete`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
@@ -216,6 +216,46 @@ summary и id дочерней сессии (её история — в `read_se
 - **Фон.** Терминальное уведомление фонового прогона содержит тот же `<todos>` и `metadata.todos`;
   немедленный ответ `background:true` — прежний `{status:'running'}`. Авто-merge в родительский
   список нет: вызывающий агент сам решает, что перенести (`todo_update`).
+
+### Саб-агент `task`: управление на ходу (PROP-142)
+
+`task` — единственный контракт управления сабагентом: запуск, продолжение и доставка
+сообщения. Два параметра ортогональны: `delivery` — «как доставить в идущий прогон»,
+`background` — «ждать ли результата».
+
+- **Обязательность параметров.** `prompt` и `subagent_type` обязательны **только без `task_id`**
+  (новая задача). При `task_id` (продолжение) — оба опциональны: ошибка схемы приходит на
+  конкретное поле (`tool.args_error`).
+- **`delivery: 'steer' | 'queue'`** (по умолчанию `steer`) — применим **только к занятому**
+  ребёнку (идёт фоновый/отделённый прогон или resume-прогон из UI): `steer` — инъекция в
+  `steerInbox` ребёнка с применением на границе шага его цикла (ADR-104), `queue` — сообщение
+  в `pendingMessages` ребёнка. Тул **не блокирует** ход родителя: сразу возвращает
+  `{status:'steered'|'queued', child_session_id, pending_count}`; итог работы ребёнка приходит
+  обычным уведомлением (ADR-111).
+- **`queue` у ребёнка = один проход продолжения.** Дочерняя сессия не имеет `QueueProcessor`,
+  поэтому после **успешного** прогона цикл ребёнка сам забирает пачку `pendingMessages`
+  (`takePendingMessages`, кап 5 за проход) и делает **ровно один** проход продолжения
+  (`runSubagentWithQueueDrain`); остаток ждёт следующей доставки. После провала/«Стопа»
+  очередь не продолжается.
+- **`background: true` работает и с `task_id`.** Свободный ребёнок — фоновый прогон
+  продолжения (запись в реестре, ответ `{status:'running'}`, итог — уведомлением); занятому
+  ребёнку `background` не нужен (доставка и так не блокирует) и игнорируется.
+- **Продолжение доставляет текст.** `prompt` при `task_id` пишется в историю ребёнка как
+  обычное user-сообщение (`metadata.continuation`, `stream_id`); служебный маркер
+  `task.resume_marker` остаётся только для путей без текста (HTTP-resume, автовосстановление).
+- **`subagent_type` при `task_id` не переключает агента.** История, системный промпт, права и
+  лимиты ребёнка принадлежат одному агенту; при несовпадении — ошибка с объяснением
+  (`task.agent_switch_unsupported`, сравнение с учётом алиасов прежних ролей), совпадает —
+  принимается. Другой агент — только новым `task` (новый ребёнок).
+- **`model`/`provider` при `task_id` переключают пару** прогона ребёнка (с проверкой каталога —
+  тот же резолвер, что у создания); не заданы — остаются текущие.
+- **Границы.** Сабагент по-прежнему **без `task` и `question`** (`deny`: вложенность отключена,
+  вопрос возвращается в итоге). Виден и управляем только **свой** ребёнок (`parentId`).
+- **Терминальный итог — durable-запись, а не `role:'error'` (PROP-143).** Причина остановки
+  ребёнка (ошибка провайдера, шаг-лимит, бюджет контекста, «Стоп», отказ прав, рестарт,
+  потеря прогона) фиксируется служебным `user`-сообщением `metadata.type='execution_stopped'`
+  в истории **ребёнка** (`author: 'System'`, конверт `<execution_stopped …>`), а не отдельной
+  ролью `error`; в родителя итог приходит обычным `task`-результатом/уведомлением.
 
 Встроенные скиллы (ADR-126 §15, объявлены в коде — `packages/core/src/engine/skills/builtin.ts`): `synth-pipelines` (вызов `$synth-pipelines` — жизненный цикл пайплайна: спецификация → публикация → прогон → журнал, шаблоны инстанца), `synth-schedules` (вызов `$synth-schedules` — cron/интервал → цель, ручной запуск, история срабатываний), `synth-instance` (вызов `$synth-instance` — self-help по инстансу и MCP: вход/ключи, реестр MCP и его уровни, проекты/сессии, сетевая политика, перезапуск; `synth-instance` не требует capability `instance` — при недоступности `synth_*` делегирует @admin или UI/API), `synth-service` (вызов `$synth-service` — регистрация userspace-сервиса systemd через `synth service install`: вопросы о режиме/каталоге/порте/адресе, показ unit'а, установка без sudo; требует capability `shell`+`question`, ADR-134) и `synth-html-report` (вызов `$synth-html-report` — единый аналитический отчёт в self-contained HTML: каркас, сравнение вариантов, рекомендация, риски, открытые вопросы; capabilities `file_read`+`file_write`; поставляется каталогом `prompts/skills/synth-html-report` — CSS/логотип/чекер читаются только тулом `skill`, файловыми тулами base directory недоступен). Пайплайны/расписания требуют capability `pipeline`/`schedule` соответственно и работают в рамках правил области и прав, что и перечисленные выше тулы.
 
