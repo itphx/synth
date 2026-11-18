@@ -1161,6 +1161,7 @@ export function mountStandaloneRoutes(
             truncated: segment.truncated === true,
             logPath: run.logPath,
             size: segment.totalBytes,
+            nextOffset: segment.nextOffset,
           };
         },
       },

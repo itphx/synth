@@ -115,7 +115,7 @@ remote, протокол исполнителя ≥ 3). Поэтому `execute(
    process_id, background_run_id, title? }`, канал сессии-владельца) — это семантика «прогон был
    блокирующим и отвязан посреди хода». Терминальные события — обычные
    `process.stopped`/`process.exited`, уведомление родителю с хвостом лога — как при обычном
-   фоновом запуске (п. 4 «Решение»). Тул возвращает модели `process.detached_started`
+   фоновом запуске (п. 4 «Решение»). Тул возвращает модели `background.started.process`
    (`{id, log}`) и `metadata {process_id, background_run_id, log_path, detached: true}`.
 5. **Отказ перевода не теряет процесс.** Если `adopt` отказал (лимит прогонов сессии →
    `BackgroundLimitExceededError`), реестр активных прогонов кладёт отказ в `failed`
@@ -221,7 +221,7 @@ remote, протокол исполнителя ≥ 3). Поэтому `execute(
   же** хэндл и итератор вывода в `ProcessService.adopt` (запись `kind:'process'` из готового
   хэндла, префикс лога из накопленных буферов, `process.started` от реестра +
   `process.detached`, `SIGTERM`→`SIGKILL` через `POST /processes/:id/stop`), ключи i18n
-  `process.detached_started` и `tool.shell_timeout`. Отказ `adopt` (лимит) не ломает
+  `background.started.process` и `tool.shell_timeout`. Отказ `adopt` (лимит) не ломает
   foreground: тул продолжает читать команду. Порт без `spawnBackground` (старый исполнитель)
   → detach-режим не включается, foreground работает как раньше; `DETACH_UNSUPPORTED` не
-  понадобился.
+  понадобился. Актуальный контракт detach и ключи ретрансляции — [ADR-145](./adr-145-background-timeout-output-detach.md).

@@ -238,7 +238,7 @@ export class BackgroundRunService {
       updatedAt: now,
     };
     await this._repository.save(record);
-    this._publishStarted(record);
+    this._publishStarted(record, { detached: input.detached === true });
     return record;
   }
 
@@ -509,8 +509,12 @@ export class BackgroundRunService {
    * `process.started` — шелл-процесс (PROP-097); `child.started` — фоновый
    * саб-агент (PROP-096). Событие нужно UI: по нему показывается уведомление
    * о старте фоновой работы.
+   *
+   * `detached: true` (ADR-111 §detach) — процесс принят в фон из идущего
+   * блокирующего прогона: запись в реестре создаётся как обычно, но тост
+   * «запущен» клиент не показывает (перевод подтверждается своим действием).
    */
-  private _publishStarted(record: BackgroundRunRecord): void {
+  private _publishStarted(record: BackgroundRunRecord, opts?: { detached?: boolean }): void {
     if (record.kind === 'subagent') {
       this._eventBus.publish(record.sessionId, 'child.started', {
         child_session_id: record.childSessionId,
@@ -529,6 +533,7 @@ export class BackgroundRunService {
       pid: record.pid,
       background_run_id: record.id,
       log_path: record.logPath ?? '',
+      ...(opts?.detached ? { detached: true } : {}),
     });
   }
 

@@ -2037,6 +2037,8 @@ export const dict = {
   'chat.background.move': 'В фон',
   'chat.background.hint': 'ctrl+b',
   'notify.background.moved': 'Переведено в фон: {count}',
+  'notify.background.movedPartial':
+    'Переведено в фон: {moved}, не удалось: {failed} — {reason}',
   'notify.background.moveFailed': 'Не удалось перевести в фон',
   // ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
   'notify.background.autoDetached':

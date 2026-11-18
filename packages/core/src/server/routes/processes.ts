@@ -124,7 +124,20 @@ export interface ProcessRoutesDeps {
     sessionIds: readonly string[],
     id: string,
     opts: { offset?: number; limit?: number },
-  ) => Promise<{ output: string; truncated: boolean; logPath?: string; size?: number } | null>;
+  ) => Promise<{
+    output: string;
+    truncated: boolean;
+    logPath?: string;
+    size?: number;
+    /**
+     * Точное смещение следующего отрезка (байты), как его посчитал сервис.
+     *
+     * Аддитивное поле: срез по лимиту может попасть внутрь UTF-8 символа, и
+     * пересчёт по декодированной строке (`Buffer.byteLength(output)`) уехал бы
+     * вперёд. Не задано (старый seam) — роут считает фоллбеком.
+     */
+    nextOffset?: number;
+  } | null>;
 }
 
 /**
@@ -361,6 +374,12 @@ export function createProcessRoutes(
    * видимым (`read`) сессиям: нет записи → 404 (чужой прогон неотличим от
    * отсутствующего), запись видна, но нужного вида доступа нет (например,
    * `VIEWER` не может остановить) → 403. В обработчиках проверок нет.
+   *
+   * Необязательный `sessionId` в query сужает перебор до одной сессии (её
+   * передаёт клиент, открывший лог/остановку из карточки прогона): чужая или
+   * несуществующая сессия даёт тот же `404` — существование прогона не
+   * раскрывается, а перечисление всех сессий инстанса не выполняется.
+   * Правило доступа не ослабляется: сессия всё равно проверяется предикатом.
    */
   const blockingGuard = (access: SessionAccessKind): Middleware =>
     createMiddleware(async (c, next) => {
@@ -439,7 +458,13 @@ export function createProcessRoutes(
     }
     if (!includeBlocking) return c.json({ runs: visible });
     // Блокирующие прогоны — видимые сессии по тем же правилам доступа.
-    return c.json({ runs: visible, blocking: await listBlocking(c, userId) });
+    // Фильтр `kind` применяется и к ним (статус у блокирующих всегда
+    // `running`, поэтому `status` их не отсекает — как и раньше).
+    const blocking = await listBlocking(c, userId);
+    return c.json({
+      runs: visible,
+      blocking: kind ? blocking.filter((run) => run.kind === kind) : blocking,
+    });
   });
 
   // ─── Блокирующие прогоны (ADR-111 §detach) ────────────────────────────────
@@ -459,7 +484,10 @@ export function createProcessRoutes(
     // на оба контура, второго клиенту учить не нужно.
     const bytes = Buffer.byteLength(log.output, 'utf-8');
     const effectiveOffset = log.size !== undefined ? Math.min(offset, log.size) : offset;
-    const nextOffset = effectiveOffset + bytes;
+    // Точное смещение из сервиса (срез мог попасть внутрь UTF-8 символа —
+    // пересчёт по декодированной строке терял/дублировал бы байты).
+    // Фоллбек — прежний расчёт, только если поле не пришло.
+    const nextOffset = log.nextOffset ?? effectiveOffset + bytes;
     return c.json({
       content: log.output,
       offset: effectiveOffset,

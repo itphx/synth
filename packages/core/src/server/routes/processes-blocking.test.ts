@@ -51,6 +51,11 @@ interface HarnessOptions {
   isAllowed?: (sessionId: string, access: SessionAccessKind) => boolean;
   /** `stopBlocking` всегда отвечает «остановить нельзя» (409). */
   stopRefused?: boolean;
+  /**
+   * Читать `readBlockingLog` из реального `BlobStore` через
+   * `ProcessService.readLogAtPath` (проверка точного `nextOffset`).
+   */
+  realBlobLog?: boolean;
 }
 
 describe('HTTP: блокирующие прогоны (ADR-111 §detach)', () => {
@@ -110,10 +115,21 @@ describe('HTTP: блокирующие прогоны (ADR-111 §detach)', () =>
             stopped.push(id);
             return true;
           },
-          readBlockingLog: async (sessionIds, id) => {
+          readBlockingLog: async (sessionIds, id, logOpts) => {
             const run = snapshot.find((r) => r.id === id && sessionIds.includes(r.sessionId));
             if (!run) return null;
             if (!run.logPath) return null;
+            if (options.realBlobLog) {
+              const segment = await processes.readLogAtPath(run.logPath, logOpts);
+              if (!segment) return null;
+              return {
+                output: segment.content,
+                truncated: segment.truncated === true,
+                logPath: run.logPath,
+                size: segment.totalBytes,
+                nextOffset: segment.nextOffset,
+              };
+            }
             return { output: 'hello', truncated: false, logPath: run.logPath, size: 5 };
           },
         },
@@ -130,7 +146,7 @@ describe('HTTP: блокирующие прогоны (ADR-111 §detach)', () =>
       snapshot = runs;
     };
 
-    return { app, backgroundRuns, sessionManager, setSnapshot, stopped };
+    return { app, backgroundRuns, processes, blobs, sessionManager, setSnapshot, stopped };
   }
 
   /** Создать сессию (владелец — `owner`). */
@@ -194,6 +210,22 @@ describe('HTTP: блокирующие прогоны (ADR-111 §detach)', () =>
       const res = await app.request('/api/v2/processes?include=blocking&sessionId=session-2');
       const body = (await res.json()) as { blocking: BlockingRunDto[] };
       expect(body.blocking.map((run) => run.id)).toEqual(['blk-2']);
+    });
+
+    it('kind=subagent фильтрует и блокирующие прогоны, а не только реестр', async () => {
+      const { app, sessionManager, setSnapshot } = createHarness();
+      await createSession(sessionManager, 'session-1');
+      setSnapshot([
+        blockingRun(),
+        blockingRun({ id: 'blk-sub', kind: 'subagent', childSessionId: 'child-1' }),
+      ]);
+
+      const res = await app.request('/api/v2/processes?include=blocking&kind=subagent');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { runs: unknown[]; blocking: BlockingRunDto[] };
+      expect(body.runs).toEqual([]);
+      expect(body.blocking.map((run) => run.id)).toEqual(['blk-sub']);
+      expect(body.blocking.every((run) => run.kind === 'subagent')).toBe(true);
     });
   });
 
@@ -292,6 +324,90 @@ describe('HTTP: блокирующие прогоны (ADR-111 §detach)', () =>
       expect(res.status).toBe(200);
       const body = (await res.json()) as { content: string };
       expect(body.content).toBe('hello');
+    });
+  });
+
+  describe('GET /blocking/:id/logs — скоуп sessionId и точное смещение', () => {
+    it('свой sessionId → 200, чужой → 404 (существование прогона не раскрывается)', async () => {
+      const { app, sessionManager, setSnapshot } = createHarness();
+      await createSession(sessionManager, 'session-1');
+      await createSession(sessionManager, 'session-2');
+      setSnapshot([blockingRun({ logPath: 'processes/live/blk-1.log' })]);
+
+      const own = await app.request(
+        '/api/v2/processes/blocking/blk-1/logs?sessionId=session-1',
+      );
+      expect(own.status).toBe(200);
+
+      // Прогон принадлежит session-1: чужой sessionId сужает перебор до неё
+      // и записи в нём нет → 404.
+      const foreign = await app.request(
+        '/api/v2/processes/blocking/blk-1/logs?sessionId=session-2',
+      );
+      expect(foreign.status).toBe(404);
+      const body = (await foreign.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('sessionId без доступа → 404 (тот же ответ, что и для отсутствующего)', async () => {
+      const { app, sessionManager, setSnapshot } = createHarness({
+        isAllowed: () => false,
+      });
+      await createSession(sessionManager, 'session-1');
+      setSnapshot([blockingRun({ logPath: 'processes/live/blk-1.log' })]);
+
+      const res = await app.request(
+        '/api/v2/processes/blocking/blk-1/logs?sessionId=session-1',
+      );
+      expect(res.status).toBe(404);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('NOT_FOUND');
+    });
+
+    it('без sessionId — прежнее поведение (перебор видимых сессий)', async () => {
+      const { app, sessionManager, setSnapshot } = createHarness();
+      await createSession(sessionManager, 'session-1');
+      setSnapshot([blockingRun({ logPath: 'processes/live/blk-1.log' })]);
+
+      const res = await app.request('/api/v2/processes/blocking/blk-1/logs');
+      expect(res.status).toBe(200);
+    });
+
+    it('nextOffset из сервиса точен при срезе внутри UTF-8 символа', async () => {
+      const { app, blobs, sessionManager, setSnapshot } = createHarness({ realBlobLog: true });
+      await createSession(sessionManager, 'session-1');
+      setSnapshot([blockingRun({ logPath: 'processes/live/blk-1.log' })]);
+      // 'a' (1 байт) + 'б' (2 байта) + 'Z' (1 байт) = 4 байта.
+      // Лимит 2 режет 'б' посередине: пересчёт по декодированной строке
+      // (`'a�'` = 4 байта) уехал бы за конец файла и потерял 'Z'.
+      await blobs.write('processes/live/blk-1.log', Buffer.from('aбZ', 'utf-8'));
+
+      const first = await app.request('/api/v2/processes/blocking/blk-1/logs?limit=2');
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        content: string;
+        offset: number;
+        nextOffset: number;
+        totalBytes: number;
+      };
+      expect(firstBody.offset).toBe(0);
+      expect(firstBody.nextOffset).toBe(2);
+      expect(firstBody.totalBytes).toBe(4);
+
+      const second = await app.request(
+        `/api/v2/processes/blocking/blk-1/logs?offset=${firstBody.nextOffset}&limit=100`,
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as {
+        content: string;
+        offset: number;
+        nextOffset: number;
+      };
+      expect(secondBody.offset).toBe(2);
+      // Хвост файла прочитан: символ 'Z' не потерян и не задвоен.
+      expect(secondBody.content.endsWith('Z')).toBe(true);
+      expect(secondBody.content.split('Z')).toHaveLength(2);
+      expect(secondBody.nextOffset).toBe(4);
     });
   });
 

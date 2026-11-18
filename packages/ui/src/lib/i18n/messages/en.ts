@@ -2058,6 +2058,7 @@ export const dict = {
   'chat.background.move': 'Move to background',
   'chat.background.hint': 'ctrl+b',
   'notify.background.moved': 'Moved to background: {count}',
+  'notify.background.movedPartial': 'Moved to background: {moved}, failed: {failed} — {reason}',
   'notify.background.moveFailed': 'Failed to move to background',
   // ADR-111 §detach: auto-detach of blocking runs on steer.
   'notify.background.autoDetached':

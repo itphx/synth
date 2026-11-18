@@ -49,6 +49,10 @@ export function BlockingLogTab({ tab }: { tab: CenterTab }) {
   const run = useProcessesStore((s) => (runId ? s.blocking.find((item) => item.id === runId) : undefined))
   const refreshBlocking = useProcessesStore((s) => s.refreshBlocking)
   const sessions = useSessionsStore((s) => s.sessions)
+  // Сессия-владелец прогона: с ней сервер проверяет доступ только к ней одной,
+  // а не перечисляет все сессии инстанса. После перезагрузки записи в сторе
+  // может не быть — тогда берём id из данных вкладки.
+  const sessionId = run?.sessionId || tab.data.sessionId
 
   const [content, setContent] = useState('')
   const [offset, setOffset] = useState(0)
@@ -64,7 +68,10 @@ export function BlockingLogTab({ tab }: { tab: CenterTab }) {
     async (from: number) => {
       if (!runId) return
       try {
-        const chunk = await synthApi.getBlockingLogs(runId, { offset: from })
+        const chunk = await synthApi.getBlockingLogs(runId, {
+          ...(sessionId ? { sessionId } : {}),
+          offset: from,
+        })
         setContent((prev) => (chunk.offset === 0 ? chunk.content : prev + chunk.content))
         setOffset(chunk.nextOffset)
         setTruncated(chunk.truncated)
@@ -81,7 +88,7 @@ export function BlockingLogTab({ tab }: { tab: CenterTab }) {
         setError(err instanceof Error ? err.message : t('common.error'))
       }
     },
-    [runId, t],
+    [runId, sessionId, t],
   )
 
   // Первое чтение лога при открытии вкладки.

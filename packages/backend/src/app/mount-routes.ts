@@ -718,6 +718,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
             truncated: segment.truncated === true,
             logPath: run.logPath,
             size: segment.totalBytes,
+            nextOffset: segment.nextOffset,
           };
         },
       },

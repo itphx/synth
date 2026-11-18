@@ -7,7 +7,11 @@
 // реестре «Процессы», новые каналы не заводим).
 
 import { synthApi } from './api/synthApi'
-import type { BackgroundDetachKind, BackgroundSessionResponse } from './api/sessions'
+import type {
+  BackgroundDetachFailure,
+  BackgroundDetachKind,
+  BackgroundSessionResponse,
+} from './api/sessions'
 import { i18nText } from './i18n'
 import { notifyMessage } from '@/hooks/useNotification'
 import { useChatStore } from '@/stores/chatStore'
@@ -23,12 +27,31 @@ export interface MoveToBackgroundOptions {
 }
 
 /**
+ * Причина отказа перевода для показа человеку.
+ *
+ * Берём текст от сервера, если он есть, иначе машинный код; секретов в этих
+ * полях нет (это причина отказа, а не данные прогона).
+ */
+function failureReason(failure: BackgroundDetachFailure | undefined): string {
+  if (!failure) return ''
+  const message = failure.message?.trim()
+  return message ? message : failure.code
+}
+
+/**
  * Перевести идущие блокирующие прогоны сессии в фон.
  *
- * Пустой `detached` — не ошибка («нечего переводить»): тост всё равно показываем
- * с нулём, чтобы действие не выглядело «молча не сработавшим».
+ * Исходы:
+ * - `detached` и `failed` пусты — «нечего переводить»: прежний тост с нулём,
+ *   чтобы действие не выглядело «молча не сработавшим»;
+ * - все переведены — успешный тост с количеством;
+ * - часть переведена — предупреждение «переведено N, не удалось M» с причиной
+ *   первого отказа;
+ * - не переведён **ни один** — ошибка с причиной, live-парты не снимаются и
+ *   `null` в ответе (успех действия не подтверждён).
  *
- * @returns ответ сервера; `null` — запрос не удался (тост с ошибкой уже показан).
+ * @returns ответ сервера; `null` — запрос не удался или перевод полностью
+ *   отклонён (тост с ошибкой уже показан).
  */
 export async function moveSessionToBackground(
   sessionId: string,
@@ -40,10 +63,40 @@ export async function moveSessionToBackground(
       sessionId,
       opts?.type ? { type: opts.type } : undefined,
     )
-    useChatStore.getState().dropDetachedToolCalls(sessionId, opts?.callIds)
-    const count = response?.detached?.length ?? 0
+    const detached = response?.detached ?? []
+    const failed = response?.failed ?? []
+    const moved = detached.length
+
+    // Полный отказ (`DETACH_FAILED`, лимит прогонов): ни один прогон не
+    // переведён — снимать live-парты нельзя, иначе работа «пропадёт» из хода.
+    if (moved === 0 && failed.length > 0) {
+      notifyMessage({
+        text: `${i18nText('notify.background.moveFailed')}: ${failureReason(failed[0])}`,
+        type: 'error',
+        category: 'error',
+        sessionId,
+      })
+      return null
+    }
+
+    if (moved > 0) useChatStore.getState().dropDetachedToolCalls(sessionId, opts?.callIds)
+
+    if (moved > 0 && failed.length > 0) {
+      notifyMessage({
+        text: i18nText('notify.background.movedPartial', {
+          moved,
+          failed: failed.length,
+          reason: failureReason(failed[0]),
+        }),
+        type: 'warning',
+        category: 'system',
+        sessionId,
+      })
+      return response
+    }
+
     notifyMessage({
-      text: i18nText('notify.background.moved', { count }),
+      text: i18nText('notify.background.moved', { count: moved }),
       type: 'success',
       category: 'system',
       sessionId,

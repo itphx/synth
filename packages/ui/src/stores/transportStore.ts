@@ -1616,6 +1616,10 @@ function notifyBackgroundRun(type: string, payload: Record<string, unknown>): vo
     (typeof payload.parent_session_id === 'string' ? payload.parent_session_id : undefined)
 
   if (isStart) {
+    // ADR-111 §detach: событие старта помечено признаком перевода в фон
+    // (`detached: true`) — прогон уже шёл, отдельный тост «запущен» не нужен
+    // (перевод показывает свой тост, а запись в реестре создаётся как обычно).
+    if (payload.detached === true) return
     notifyMessage({
       text: i18nText(isChild ? 'notify.background.subagentStarted' : 'notify.background.started', { name }),
       type: 'info',

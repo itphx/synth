@@ -240,6 +240,35 @@ describe('transportStore: уведомления о фоновых прогон�
     expect(lastText()).toBe('Background process completed: npm run build')
   })
 
+  it('process.started с detached:true → запись создаётся, тоста «запущен» нет', () => {
+    dispatch(makeEvent('process.started', 's1', {
+      background_run_id: 'bgr_d1',
+      process_id: 'proc_d1',
+      session_id: 's1',
+      command: 'npm run dev',
+      detached: true,
+    }))
+
+    // ADR-111 §detach: перевод в фон подтверждается своим тостом, дубль
+    // «Фоновый процесс запущен» не показывается.
+    expect(notify).not.toHaveBeenCalled()
+    const run = useProcessesStore.getState().byId['bgr_d1']!
+    expect(run.kind).toBe('process')
+    expect(run.status).toBe('running')
+    expect(run.command).toBe('npm run dev')
+  })
+
+  it('process.started без detached — тост «запущен» остаётся', () => {
+    dispatch(makeEvent('process.started', 's1', {
+      background_run_id: 'bgr_d2',
+      session_id: 's1',
+      command: 'npm run build',
+    }))
+
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(lastText()).toBe('Background process started: npm run build')
+  })
+
   // ADR-111 §detach: авто-перевод блокирующих прогонов в фон при steer.
   it('background.auto_detached → тост с количеством и рефреш блокирующих', async () => {
     useProcessesStore.setState({

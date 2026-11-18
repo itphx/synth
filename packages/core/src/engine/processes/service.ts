@@ -590,6 +590,9 @@ export class ProcessService {
       // пишется с первой секунды (префикс не копируется, чтение лога —
       // прежнее, по `record.logPath`).
       ...(liveLog ? { logPath: liveLog.logPath } : input.logPath ? { logPath: input.logPath } : {}),
+      // ADR-111 §detach: стартовое событие помечается признаком перевода —
+      // клиент не показывает тост «запущен» (перевод подтверждает вызывающий).
+      detached: true,
     });
 
     const logPath = record.logPath ?? '';

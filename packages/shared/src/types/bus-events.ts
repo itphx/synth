@@ -148,8 +148,9 @@ export type EventType =
   | 'process.exited'
   | 'process.stopped'
   // ADR-111 §detach: идущий блокирующий прогон переведён в фон
-  // (`POST /sessions/:id/background`). `process.started` при этом НЕ публикуется —
-  // прогон уже шёл.
+  // (`POST /sessions/:id/background`). `process.started` публикуется с
+  // аддитивным признаком `detached: true` (прогон уже шёл); дедуп тоста
+  // «запущен» — на клиенте.
   | 'process.detached'
   // ADR-111 §detach: блокирующие прогоны переведены в фон **автоматически** —
   // пользователь шлёт steer в занятую сессию (`POST /sessions/:id/prompt`).

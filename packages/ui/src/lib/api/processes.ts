@@ -232,12 +232,18 @@ export const processesApi = {
    *
    * Форма ответа — как у `GET /processes/:id/logs` (единый формат отрезка):
    * поток один (`combined`), поэтому `stream` не передаётся.
+   *
+   * `sessionId` — сессия-владелец прогона: с ней сервер сужает перебор до
+   * одной сессии (без неё он перечисляет все сессии инстанса и по каждой
+   * проверяет право). Правило доступа не меняется: сессия всё равно
+   * проверяется предикатом, чужая даёт `404`.
    */
   async blockingLogs(
     id: string,
-    options?: Pick<ProcessLogsOptions, 'offset' | 'limit'>,
+    options?: Pick<ProcessLogsOptions, 'offset' | 'limit'> & { sessionId?: string },
   ): Promise<ProcessLogsResponse> {
     const params = new URLSearchParams()
+    if (options?.sessionId !== undefined) params.set('sessionId', options.sessionId)
     if (options?.offset !== undefined) params.set('offset', String(options.offset))
     if (options?.limit !== undefined) params.set('limit', String(options.limit))
     const query = params.toString()
