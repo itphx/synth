@@ -28,6 +28,13 @@ export const EXECUTION_ROUTER_KEY = 'executionRouter';
 export function resolveExecutionPort(ctx: ToolContext): ExecutionPort {
   const extra = ctx.extra as Record<string, unknown> | undefined;
   const port = extra?.[EXECUTION_PORT_KEY];
+  // Область пула — сессия хода: у саб-агента `ctx.sessionId` — его собственный
+  // (реестр прогонов/логи), а порт исполнения и профиль — родительского хода.
+  // Фоллбэк на inline не должен поднимать отдельный пул на дочернюю сессию.
+  const extraSessionId = extra?.['sessionId'];
+  const scopeSessionId = typeof extraSessionId === 'string' && extraSessionId.length > 0
+    ? extraSessionId
+    : ctx.sessionId;
   // Порт есть и умеет FS — используем его. Порт без FS (inline-фоллбэк или
   // старая реализация) при наличии роутера заменяем портом профиля хода:
   // иначе файловые тулы отвечают «Filesystem operations are unavailable»,
@@ -39,7 +46,7 @@ export function resolveExecutionPort(ctx: ToolContext): ExecutionPort {
     warning(
       'EXECUTION',
       `executionPort has no fs (isRemote=${String((port as { isRemote?: boolean }).isRemote)}, ` +
-      `session=${ctx.sessionId ?? '?'}); selecting port via router`,
+      `session=${scopeSessionId ?? '?'}); selecting port via router`,
     );
   }
 
@@ -53,21 +60,21 @@ export function resolveExecutionPort(ctx: ToolContext): ExecutionPort {
       const routed = router.portFor({
         ...(profile ? { profile } : {}),
         ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
-        ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+        ...(scopeSessionId ? { sessionId: scopeSessionId } : {}),
         ...(subPath ? { workspaceSubPath: subPath } : {}),
       });
       if (isExecutionPort(routed)) return routed;
     } catch (err) {
       warning(
         'EXECUTION',
-        `executionPort missing; router.portFor failed (session=${ctx.sessionId ?? '?'}): ${err instanceof Error ? err.message : String(err)}`,
+        `executionPort missing; router.portFor failed (session=${scopeSessionId ?? '?'}): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
 
   warning(
     'EXECUTION',
-    `executionPort missing in tool context (session=${ctx.sessionId ?? '?'}); falling back to inline`,
+    `executionPort missing in tool context (session=${scopeSessionId ?? '?'}); falling back to inline`,
   );
   return new InlineExecutionPort();
 }

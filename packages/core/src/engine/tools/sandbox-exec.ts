@@ -49,6 +49,7 @@ import {
 } from './path-utils.js';
 import { isAborted, abortedResult } from './abort.js';
 import { argErrorResult } from './arg-error.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { resolveExecutionRouter } from '../../execution/tool-port.js';
 import { DEFAULT_MAX_OUTPUT_BYTES, isExecutionError } from '../../execution/ports/index.js';
 import { TIMEOUT_FG_MAX_SEC, timeoutParam } from '../timeout.js';
@@ -174,7 +175,9 @@ export const sandboxExecTool: ToolDefinition = {
       port = router.portFor({
         profile: params.profile,
         projectId: ctx.projectId,
-        sessionId: ctx.sessionId,
+        // Область пула — сессия хода (у саб-агента родительская): отдельный
+        // пул на каждую дочернюю сессию не нужен и дорог.
+        sessionId: parentSessionIdOf(ctx),
         workspaceSubPath: (ctx.extra as { executionWorkspaceSubPath?: string } | undefined)
           ?.executionWorkspaceSubPath,
         class: 'sandbox',

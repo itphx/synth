@@ -37,6 +37,21 @@ describe('profile_update tool', () => {
     };
   }
 
+  /**
+   * Контекст **другой** сессии — как в настоящем вызове: `ctx.sessionId` и
+   * `extra.sessionId` указывают на одну и ту же сессию хода (тул профиля берёт
+   * сессию хода/человека, у саб-агента это родительская).
+   */
+  function makeCtxFor(targetSessionId: string): ToolContext {
+    return {
+      sessionId: targetSessionId,
+      messageId: generateId(),
+      abortSignal: new AbortController().signal,
+      workingDir: tmpDir,
+      extra: { sessionManager, profilesStore, sessionId: targetSessionId },
+    };
+  }
+
   it('обновляет поля профиля и возвращает строку результата', async () => {
     const result = await profileUpdateTool.execute(
       { display_name: 'Иван', email: 'ivan@example.com', phone: '+7 900 000-00-00', notes: 'Любит краткость' },
@@ -126,7 +141,7 @@ describe('profile_update tool', () => {
     const noOwner = await sessionManager.createSession({ title: 'No owner' });
     const result = await profileUpdateTool.execute(
       { email: 'x@example.com' },
-      { ...makeCtx(), sessionId: noOwner.id },
+      makeCtxFor(noOwner.id),
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('owner');
@@ -135,7 +150,7 @@ describe('profile_update tool', () => {
   it('несуществующая сессия — ошибка session_not_found', async () => {
     const result = await profileUpdateTool.execute(
       { email: 'x@example.com' },
-      { ...makeCtx(), sessionId: 'does-not-exist' },
+      makeCtxFor('does-not-exist'),
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain('session not found');

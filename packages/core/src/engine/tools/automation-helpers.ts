@@ -30,6 +30,7 @@
 import type { Project, Schedule, Session, ToolContext, ToolResult } from '@itphx/synth-shared';
 import type { AutomationRuntime } from './automation-runtime.js';
 import { getSessionExtra, loadSessionProject } from './project-manage.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { canEditProject, resolveSessionUserId } from './project-access.js';
 import { principalGroups } from './project-resolve.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -203,7 +204,10 @@ export async function loadScheduleScope(
   if (!sessionManager || !projectStore) {
     return { ok: false, result: scheduleDepsUnavailable(toolName) };
   }
-  const sessionId = ctx.sessionId || extra.sessionId;
+  // Automation-скоуп — сессия разговора (у саб-агента родительская):
+  // расписание, созданное агентом, должно жить в проекте человека, а не в
+  // исчезающей дочерней сессии (ADR-051/ADR-141).
+  const sessionId = parentSessionIdOf(ctx);
   if (!sessionId) return { ok: false, result: scheduleDepsUnavailable(toolName) };
 
   const session = await sessionManager.getSession(sessionId);

@@ -30,6 +30,7 @@ import type {
 } from '@itphx/synth-shared';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { SessionManager } from '../../sessions/manager.js';
+import { parentSessionIdOf } from './session-scope.js';
 import type { WorktreeService } from '../worktree/service.js';
 import { isWorktreeError } from '../worktree/errors.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -106,9 +107,10 @@ async function loadWorktreeContext(ctx: ToolContext): Promise<LoadedContext> {
   if (!project) return { ok: false, error: noProject() };
 
   let actor: string | undefined;
-  if (extra.sessionManager && ctx.sessionId) {
+  const actorSessionId = parentSessionIdOf(ctx);
+  if (extra.sessionManager && actorSessionId) {
     try {
-      const session = await extra.sessionManager.getSession(ctx.sessionId);
+      const session = await extra.sessionManager.getSession(actorSessionId);
       actor = session?.ownerId ?? session?.userId ?? undefined;
     } catch {
       actor = undefined;

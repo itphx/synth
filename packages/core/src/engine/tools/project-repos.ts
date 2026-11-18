@@ -14,6 +14,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { EventBus } from '../../events/bus.js';
 import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { GitService, deriveRepoName } from '../../git/git-service.js';
 import { findRepoEntry, upsertRepoEntry, type RepoRegistryInput } from '../../git/repo-registry.js';
 import { inspectRepoPath } from '../../git/repo-occupancy.js';
@@ -194,7 +195,8 @@ function repoOpError(tool: string, err: unknown, timeoutMs?: number, repoPath?: 
 
 /** Публикует `project.updated` — UI обновляет список проектов/Git-вкладку. */
 function publishUpdated(extra: ProjectReposExtra, ctx: ToolContext, projectId: string): void {
-  const sessionId = ctx.sessionId || extra.sessionId;
+  // Канал сессии разговора (инвариант 27): у саб-агента — родительская.
+  const sessionId = parentSessionIdOf(ctx);
   if (sessionId) extra.eventBus?.publish(sessionId, 'project.updated', { project_id: projectId });
 }
 

@@ -501,13 +501,27 @@
   (`planMessageStepPartsCleanup` — чистая функция плана, `migrateMessageStreamV2StepParts`,
   маркер `migrations.message-stream-v2-step-parts`): reasoning/tool_results финала старого
   вида переносятся в сообщения своих шагов (слияние по `id` вызова), удаляется
-  `intermediate_text_blocks`, у видимых шагов снимается `tool_chain`; только основные сессии
-  (`parentId == null` — отчёт дочерней сессии монолитен), построчно и идемпотентно.
+  `intermediate_text_blocks`, у видимых шагов снимается `tool_chain`; миграция касается только
+  основных сессий (`parentId == null`) — **старые** записи дочерних остаются монолитными,
+  новые прогоны саб-агента пишут шаговую модель (см. следующий пункт), построчно и идемпотентно.
   **Видимость шагов с карточками** (`schemaVersion` 4) — `planVisibleStepCleanup` /
   `migrateMessageStreamV2VisibleSteps`, маркер `migrations.message-stream-v2-visible-steps`:
   `tool_chain` снимается у **любого** assistant-сообщения с непустым `metadata.tool_results`
   (независимо от `turnId`/`stepIndex`; `role: 'tool'` не трогается). Отдельный маркер нужен,
   потому что предыдущая миграция на существующих инстансах уже закрыта.
+- **Шаговая модель дочерней сессии (новые прогоны).** Цикл саб-агента
+  (`engine/tools/task/run-cycle.ts`) на каждой итерации собирает **свой** аккумулятор
+  результатов (`stepToolResults`) и после исполнения батча точечно пишет
+  `metadata.tool_results` в сообщение **своего** шага ребёнка (`persistChildStepToolResults`:
+  `withLock` + `updateMessage`, идемпотентно, best-effort — ошибка записи прогон не роняет) —
+  по образцу `_persistStepToolResults` основной сессии (ADR-144). Форма записи та же, что у
+  элемента `allSubagentToolCalls` (`name`/`args`/`id`/`result`/`started_at`/`completed_at`/
+  `iteration`); ветка `plan.kind === 'doom'` по-прежнему не попадает ни в сводку, ни в шаг.
+  Финальный отчёт ребёнка **не агрегат**: в нём текст и reasoning только последней итерации,
+  без `tool_results` и `intermediate_text_blocks`. `result.metadata` тула `task` сводку
+  сохраняет (`tool_calls`/`reasoning`/`reasoning_blocks`/`intermediate_text_blocks`/
+  `subagent_usage`) — на ней живёт карточка саб-агента в родителе. Миграция/бэкфилл старых
+  записей дочерних сессий **не выполняется** (решение: чинятся только новые прогоны).
 - **Отмена не теряет карточки инструментов.** В ветке отмены **между шагами**
   (`phases/process-finalize.ts`, `cancelledBeforeFinal`) результаты вызовов последнего шага
   точечно пишутся в его сообщение (`persistStepToolResults` → та же
@@ -1289,7 +1303,13 @@
   `POST /sessions/:id/prompt` переводит блокирующие прогоны — `steer`/`interrupt`
   **до** обработки (в т.ч. `interrupt` без текста); текст не требуется (`@user`-only
   тоже вмешательство); `mode=queue` прогоны **не** переводит — сообщение просто ждёт
-  завершения хода (`QUEUE_FULL` и `@user`-only в `queue` — тоже без перевода). Уважает
+  завершения хода (`QUEUE_FULL` и `@user`-only в `queue` — тоже без перевода). Тот же
+  шов переводит прогоны и при **вклинивании из очереди** — `POST /queue/:sessionId/steer`
+  (`createQueueRoutes`, опция `autoDetachOnSteer`; причина `'message'`): в отличие от
+  обычной постановки/возврата/перестановки (`/queue`, `/return`, `/reorder`, они
+  прогоны не трогают), сообщение применяется на границе шага и не должно ждать конца
+  foreground-команды. Проводка — `server/app/mount-routes.ts` (core и backend), гибрид
+  (`remote:`) форвардится на сервер. Уважает
   живой `background.enabled` (`isBackgroundEnabled`, при `false` — не переводит), ошибки не пробрасывает (сообщение всё
   равно принимается) и публикует `background.auto_detached {session_id, detached[], failed?}`
   только при непустом итоге. Причина перевода сквозная — `ActiveRunDetachReason`
@@ -1835,7 +1855,21 @@
   **Список задач ребёнка — свой (ADR-129).** `todo_*` в цикле ребёнка пишут в **его**
   `session.todos`: в extra тулов кладётся `todoSessionId = childSessionId`
   (`engine/tools/task/run-cycle.ts`), а `extra.sessionId` остаётся родительским (события,
-  `permission.ask`/`replied`, проектный скоуп). Стартовый список — параметр `task.todos`
+  `permission.ask`/`replied`, проектный/automation-скоуп). **Сессия тула ребёнка — его
+  собственная:** `toolExecContext.sessionId = childSessionId`
+  (`engine/tools/task/run-cycle.ts`), поэтому реестр блокирующих и фоновых прогонов, лог
+  процесса, audit исполнений, терминалы и egress-журнал принадлежат ребёнку: перевод в фон в
+  родителе (`POST /sessions/<parent>/background`) переводит `task`-прогон целиком (шеллы
+  ребёнка — нет), а `POST /sessions/<child>/background` — его шеллы; `detachAll(parent)`
+  прогонов ребёнка не видит. Родительскими остаются: события `child.*`/`permission.*` (в
+  канал родителя), проектный и automation-скоуп (`project_*`, `get_project_info`,
+  `session_manage`, расписания/таймеры, `save_attachment`), карта обфускации Gateway и
+  область пула исполнения. Шов аудита — `engine/tools/session-scope.ts`:
+  `parentSessionIdOf(ctx)` (сессия хода/человека — `extra.sessionId` приоритетнее),
+  `runSessionIdOf(ctx)` (владелец прогона — `ctx.sessionId` приоритетнее),
+  `obfuscationSessionId(ctx)` (карта обфускации хода); в основной сессии и в
+  resume-прогоне значения совпадают, поведение прежнее.
+  Стартовый список — параметр `task.todos`
   (новая сессия — сид, с `task_id` — полная замена; `id` сохраняются), сид — в
   `prepareChildSession` до `session.created`; унаследованные `todos_updated` родителя при fork
   удаляются. Актуальность ребёнок видит durable state-сообщением (`task/child-todo-state.ts`), а

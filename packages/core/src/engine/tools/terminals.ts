@@ -83,6 +83,7 @@ import { checkShellCommand, type ShellPolicy } from '../security/shell-guard.js'
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { parentSessionIdOf } from './session-scope.js';
 import {
   TIMEOUT_BG_DEFAULT_SEC,
   TIMEOUT_BG_LIMIT_MESSAGE,
@@ -323,9 +324,11 @@ function serviceOf(ctx: ToolContext): TerminalService | null {
  */
 async function resolveActorId(ctx: ToolContext): Promise<string> {
   const manager = extraOf(ctx).sessionManager;
-  if (!manager || !ctx.sessionId) return 'local';
+  // Владелец — владелец сессии разговора (у саб-агента родительской).
+  const sessionId = parentSessionIdOf(ctx);
+  if (!manager || !sessionId) return 'local';
   try {
-    const session = await manager.getSession(ctx.sessionId);
+    const session = await manager.getSession(sessionId);
     return session?.ownerId ?? session?.userId ?? 'local';
   } catch {
     return 'local';
@@ -516,7 +519,7 @@ export const terminalListTool: ToolDefinition = {
         formatTerminalLine(
           record,
           canWrite(service, record),
-          isOwnTerminal(record, ctx.sessionId),
+          isOwnTerminal(record, parentSessionIdOf(ctx)),
           foregrounds.get(record.id),
         ),
       ),
@@ -532,7 +535,7 @@ export const terminalListTool: ToolDefinition = {
           shell: record.shell,
           can_write: canWrite(service, record),
           session_id: record.sessionId ?? null,
-          own: isOwnTerminal(record, ctx.sessionId),
+          own: isOwnTerminal(record, parentSessionIdOf(ctx)),
           foreground: foregrounds.get(record.id) ?? null,
         })),
       },
@@ -606,7 +609,10 @@ export const terminalOpenTool: ToolDefinition = {
         cwd: ctx.workingDir,
         cols: params.cols ?? DEFAULT_COLS,
         rows: params.rows ?? DEFAULT_ROWS,
-        sessionId: params.session_id ?? ctx.sessionId,
+        // Запись терминала принадлежит сессии разговора (у саб-агента
+        // родительской): терминал — доменный ресурс проекта, видимый человеку
+        // в его вкладке «Терминал»; внутренняя дочерняя сессия — лишь инициатор.
+        sessionId: params.session_id ?? parentSessionIdOf(ctx),
         ...(params.title !== undefined ? { title: params.title } : {}),
       });
       return {

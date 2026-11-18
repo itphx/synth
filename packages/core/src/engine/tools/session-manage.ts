@@ -21,6 +21,7 @@ import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { isAborted, abortedResult } from './abort.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
 import type { ExecutionRouter } from '../../execution/router.js';
@@ -348,7 +349,9 @@ export const listSessionsTool: ToolDefinition = {
     }
 
     const projectNames = await visibleProjectNames(extra, viewer);
-    const currentSessionId = ctx.sessionId || extra.sessionId || '';
+    // «Текущая сессия» — сессия разговора (у саб-агента родительская): именно
+    // её человек видит текущей в списке.
+    const currentSessionId = parentSessionIdOf(ctx) ?? '';
     const page = paginate(entries, offset, limit);
     const items = page.page.map((entry) => (entry.origin === 'local'
       ? sessionSummary(entry.value as unknown as Session, projectNames, currentSessionId)
@@ -641,7 +644,9 @@ export const getSessionInfoTool: ToolDefinition = {
     const extra = getExtra(ctx);
     if (!extra.sessionManager) return missingDepsError(this.name);
 
-    const sessionId = ctx.sessionId || extra.sessionId;
+    // Сведения — о сессии разговора (у саб-агента родительская), а не о его
+    // внутренней дочерней сессии.
+    const sessionId = parentSessionIdOf(ctx);
     if (!sessionId) return missingDepsError(this.name);
     const session = await extra.sessionManager.getSession(sessionId);
     if (!session) {
@@ -719,7 +724,8 @@ export const sessionRenameTool: ToolDefinition = {
 
     const extra = getExtra(ctx);
     if (!extra.sessionManager) return missingDepsError(this.name);
-    const sessionId = ctx.sessionId || extra.sessionId;
+    // Переименование — сессии разговора (у саб-агента родительская).
+    const sessionId = parentSessionIdOf(ctx);
     if (!sessionId) return missingDepsError(this.name);
 
     let prevTitle: string | undefined;

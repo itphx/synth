@@ -17,6 +17,7 @@ import { resolveProjectAccess } from '@itphx/synth-shared';
 import type { ToolContext } from '@itphx/synth-shared';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { SessionManager } from '../../sessions/manager.js';
+import { parentSessionIdOf } from './session-scope.js';
 
 /** Принципал хода, собранный оркестратором в `ToolContext.extra`. */
 export interface ToolPrincipal {
@@ -85,7 +86,8 @@ export async function resolveViewer(
   const base = viewerFromExtra(extra);
   if (extra?.principal?.userId) return base;
   try {
-    const sessionId = ctx.sessionId || extra?.sessionId;
+    // Владелец для фоллбека — сессия разговора (у саб-агента родительская).
+    const sessionId = parentSessionIdOf(ctx);
     const session = sessionId && extra?.sessionManager
       ? await extra.sessionManager.getSession(sessionId)
       : null;

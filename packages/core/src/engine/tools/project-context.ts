@@ -6,6 +6,7 @@ import type { ToolDefinition, ToolContext, Project, GitRepoConfig } from '@itphx
 import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { runGit } from './git.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
@@ -143,7 +144,9 @@ async function loadProject(ctx: ToolContext): Promise<Project | undefined> {
   const extra = ctx.extra as ProjectContextExtra | undefined;
   if (!extra?.projectStore) return undefined;
 
-  const sessionId = ctx.sessionId || extra.sessionId;
+  // Проект — проект сессии разговора (у саб-агента родительской): дочерняя
+  // сессия наследует тот же `projectId`, но «своя» для человека — родительская.
+  const sessionId = parentSessionIdOf(ctx);
   if (!sessionId || !extra.sessionManager) return undefined;
 
   try {
@@ -210,7 +213,7 @@ export const getProjectInfoTool: ToolDefinition = {
     const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
 
     // ADR-040: различаем «проекта нет» и «проект указан, но не найден».
-    const sessionId = ctx.sessionId || extra?.sessionId;
+    const sessionId = parentSessionIdOf(ctx);
     let sessionProjectId: string | undefined;
     if (sessionId && extra?.sessionManager) {
       try {

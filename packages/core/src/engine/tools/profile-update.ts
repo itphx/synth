@@ -5,6 +5,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { parentSessionIdOf } from './session-scope.js';
 
 /**
  * Онбординг-интервью (PROP-083): агент сохраняет ответы пользователя в профиль
@@ -72,7 +73,8 @@ export const profileUpdateTool: ToolDefinition = {
       interview_completed?: boolean;
     };
 
-    const sessionId = ctx.sessionId || extra.sessionId;
+    // Владелец профиля — владелец сессии разговора (у саб-агента родительской).
+    const sessionId = parentSessionIdOf(ctx);
     if (!sessionId) {
       return {
         content: sm('profile.session_not_found'),

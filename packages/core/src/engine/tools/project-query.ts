@@ -19,6 +19,7 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import { paginate } from '../../server/pagination.js';
 import { localEntries, remoteEntries, sortHybridList } from '../../server/routes/hybrid-list.js';
+import { parentSessionIdOf } from './session-scope.js';
 import type { HybridListEntry } from '../../server/routes/hybrid-list.js';
 import { isRemoteRef, toLocalId, toRemoteRef } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
@@ -478,7 +479,8 @@ export const getProjectTool: ToolDefinition = {
     }
 
     const project = resolved.project;
-    const sessionId = ctx.sessionId || extra.sessionId;
+    // Права `can_edit` — сессии разговора (у саб-агента родительской).
+    const sessionId = parentSessionIdOf(ctx);
     const session = sessionId ? await extra.sessionManager.getSession(sessionId) : null;
 
     let sessionsCount = 0;

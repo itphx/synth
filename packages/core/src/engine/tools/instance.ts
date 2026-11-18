@@ -36,6 +36,7 @@ import { evaluateMcpNetworkAccess } from '../mcp/network-policy.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { parentSessionIdOf } from './session-scope.js';
 import {
   type PrincipalExtra,
   listVisibleProjects,
@@ -384,7 +385,8 @@ export const synthMcpListTool: ToolDefinition = {
       });
     }
 
-    const sessionId = ctx.sessionId || extra.sessionId;
+    // Сводка инстанса — для сессии разговора (у саб-агента родительской).
+    const sessionId = parentSessionIdOf(ctx);
     let session: Session | null = null;
     if (sessionId && extra.sessionManager) {
       try {

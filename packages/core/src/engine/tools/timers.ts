@@ -55,6 +55,7 @@ import type { TimerRepository } from '../../storage/ports/timer-repository.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
 import { argErrorResult } from './arg-error.js';
+import { parentSessionIdOf } from './session-scope.js';
 import type { PrincipalExtra } from './project-resolve.js';
 import { resolveViewer } from './project-resolve.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -211,7 +212,10 @@ async function loadScope(ctx: ToolContext, extra: TimerToolsExtra): Promise<Scop
   const projectId = ctx.projectId;
   if (!projectId) return { ok: false, result: noProject() };
 
-  const sessionId = ctx.sessionId;
+  // Таймер/будильник — сессии разговора (у саб-агента родительской):
+  // срабатывание обязано дойти до человека, а не в исчезнувшую дочернюю
+  // сессию (ADR-141).
+  const sessionId = parentSessionIdOf(ctx);
   if (!sessionId) return { ok: false, result: depsUnavailable() };
 
   const ownerId = await resolveOwnerId(ctx, extra);

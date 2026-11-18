@@ -35,6 +35,7 @@ import { AttachmentError, type AttachmentService } from '../attachments/service.
 import { warning } from '../../logger.js';
 import { abortedResult, isAborted } from './abort.js';
 import { argErrorResult } from './arg-error.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { TIMEOUT_FG_MAX_SEC } from '../timeout.js';
 
 /** Текст отказа, когда порт не умеет browser-вызов (inline/старая реализация). */
@@ -70,7 +71,9 @@ function browserPort(ctx: ToolContext): ExecutionPort {
     // роутер подставит `execution.remote.browserProfile` (прежнее поведение).
     ...(extra?.executionBrowserProfile ? { profile: extra.executionBrowserProfile } : {}),
     projectId: ctx.projectId,
-    sessionId: ctx.sessionId,
+    // Область пула — сессия хода (у саб-агента родительская): браузер живёт в
+    // проектном пуле хода, а не в отдельном пуле на каждую дочернюю сессию.
+    sessionId: parentSessionIdOf(ctx),
     workspaceSubPath: extra?.executionWorkspaceSubPath,
   });
 }

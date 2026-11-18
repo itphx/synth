@@ -13,6 +13,7 @@ import type { EventBus } from '../../events/bus.js';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import { provisionWorkspace, normalizeWorkspace } from '../workspace-provision.js';
 import { isAborted, abortedResult } from './abort.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { canEditProject, resolveSessionUserId } from './project-access.js';
 import {
   type PrincipalExtra,
@@ -216,7 +217,9 @@ export async function loadSessionProject(
   if (!extra.projectStore || !extra.sessionManager) {
     return { session: null, project: null };
   }
-  const sessionId = ctx.sessionId || extra.sessionId;
+  // Сессия разговора (у саб-агента — родительская): проект, права и роль
+  // считаются по ней, а не по внутренней дочерней сессии.
+  const sessionId = parentSessionIdOf(ctx);
   if (!sessionId) return { session: null, project: null };
   try {
     const session = await extra.sessionManager.getSession(sessionId);
@@ -726,7 +729,9 @@ export const projectUpdateTool: ToolDefinition = {
       return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
 
-    const sessionId = ctx.sessionId || extra.sessionId;
+    // Событие — в канал сессии разговора (инвариант 27): у саб-агента это
+    // родительская сессия, иначе UI родителя не обновил бы проект.
+    const sessionId = parentSessionIdOf(ctx) ?? '';
     extra.eventBus?.publish(sessionId, 'project.updated', { project_id: updated.id });
 
     return {
@@ -825,7 +830,8 @@ export const projectWorkspaceSetTool: ToolDefinition = {
       return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
 
-    const sessionId = ctx.sessionId || extra.sessionId;
+    // Канал сессии разговора (инвариант 27): у саб-агента — родительская.
+    const sessionId = parentSessionIdOf(ctx) ?? '';
     extra.eventBus?.publish(sessionId, 'project.updated', { project_id: updated.id });
 
     const dir = resolved.dir ?? resolved.workspace ?? '';

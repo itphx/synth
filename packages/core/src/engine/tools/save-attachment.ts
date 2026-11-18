@@ -14,8 +14,10 @@
  *
  * ## Границы
  *
- * - **Только текущая сессия.** Источник вложения — `messages[].parts[]` сессии
- *   `ctx.sessionId` (`sessionManager.getSession`); чужие сессии не видны.
+ * - **Только сессия разговора.** Источник вложения — `messages[].parts[]`
+ *   сессии хода/человека (`extra.sessionId`, у саб-агента — родительская:
+ *   вложения приносит пользователь, своей пользовательской истории у ребёнка
+ *   нет); чужие сессии не видны.
  * - **Только объекты вложений.** `blobPath` обязан быть из `attachments/`
  *   (`AttachmentService.resolve`/`read` и сами отказывают иначе) — произвольные
  *   blob'ы (логи процессов, артефакты) через этот контур не выгружаются.
@@ -51,6 +53,7 @@ import { ATTACHMENT_DIR, type AttachmentService } from '../attachments/service.j
 import { sanitizeAttachmentName } from '../attachments/materialize.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { isAborted, abortedResult } from './abort.js';
+import { parentSessionIdOf } from './session-scope.js';
 import {
   isLexicallyInside,
   pathEscapesWorkspaceResult,
@@ -355,8 +358,10 @@ export const saveAttachmentTool: ToolDefinition = {
       return failureResult('attach.tool.deps_unavailable', {});
     }
 
-    // Вложения ищутся только в текущей сессии: чужую историю тул не читает.
-    const session = await sessions.getSession(ctx.sessionId);
+    // Вложения ищутся только в сессии разговора: у саб-агента это родительская
+    // (там живут вложения пользователя), в основной — она же сама. Чужую
+    // историю тул не читает.
+    const session = await sessions.getSession(parentSessionIdOf(ctx) ?? ctx.sessionId);
     let candidates = session ? collectAttachments(session.messages) : [];
 
     // Явный выбор сообщения — до выбора вложения. Так «последнее вложение»

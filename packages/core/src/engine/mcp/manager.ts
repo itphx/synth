@@ -14,6 +14,7 @@ import { sanitizeEgressTarget } from '../net/egress-guard.js';
 import { debug, info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
+import { obfuscationSessionId, parentSessionIdOf } from '../tools/session-scope.js';
 
 const CIRCUIT_BREAKER_THRESHOLD = 5;
 const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
@@ -756,16 +757,20 @@ export class McpManager {
           const args = params as Record<string, unknown>;
           // Контекст Synth-сессии для внешнего MCP-сервера: `_meta['synth/session_id']`
           // (не путать с transport session id Streamable HTTP). Без сессии — без `_meta`.
-          const meta = ctx.sessionId ? { 'synth/session_id': ctx.sessionId } : undefined;
+          // У саб-агента это **родительская** сессия (сессия хода/человека): внешнему
+          // серверу осмысленен диалог, а не внутренняя дочерняя сессия.
+          const mcpSessionId = parentSessionIdOf(ctx);
+          const meta = mcpSessionId ? { 'synth/session_id': mcpSessionId } : undefined;
           // PROP-135 слайс 5b-2: цель вызова — проект сессии. Транспорт
           // исполнителя по нему резолвит **проектный** (браузерный) пул; остальные
           // транспорты параметр игнорируют.
           const target = ctx.projectId ? { projectId: ctx.projectId } : undefined;
-          // ADR-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧
+          // ADR-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧.
+          // Карта обфускации — у сессии хода (`extra.sessionId`), не у ребёнка.
           const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
           if (sessionManager) {
             const store = new ObfuscationMapStore(sessionManager);
-            const restored = await store.restoreForArgs(ctx.sessionId, args);
+            const restored = await store.restoreForArgs(obfuscationSessionId(ctx), args);
             const result = await client.callTool(tool.name, restored as Record<string, unknown>, meta, target);
             return this._withAttachments(result, ctx, fullName);
           }

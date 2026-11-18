@@ -51,7 +51,7 @@ import {
   MAX_SUBAGENT_MID_TURN_COMPRESSIONS,
 } from './child-compaction.js';
 import { applySteerInjections, dropSteerInjections } from '../../steering/apply.js';
-import { makeReasoningParts, toLlmReasoningBlocks } from '../../reasoning-blocks.js';
+import { makeReasoningParts, toLlmReasoningBlocks, type ReasoningBlockLike } from '../../reasoning-blocks.js';
 import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
 import type { AssistantMessageStatus } from '../../orchestrator/persistence.js';
 import { appendStopRecord } from '../../stop-record.js';
@@ -66,6 +66,22 @@ import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 export const SUBAGENT_MAX_ATTEMPTS = LLM_MAX_ATTEMPTS;
 /** Backoff между попытками (единая политика — LLM_RETRY_DELAYS_MS). */
 export const SUBAGENT_RETRY_DELAYS_MS = LLM_RETRY_DELAYS_MS;
+
+/**
+ * ADR-118 §1: запись вызова инструмента — одна и та же форма у
+ * `allSubagentToolCalls` (сводка вызовов прогона в `task`-результате) и у
+ * `metadata.tool_results` сообщения **своего** шага ребёнка (карточки
+ * инструментов в ленте дочерней сессии).
+ */
+type SubagentToolCallRecord = {
+  name: string;
+  args: Record<string, unknown>;
+  id?: string;
+  result?: { content: string; isError?: boolean };
+  started_at?: string;
+  completed_at?: string;
+  iteration: number;
+};
 
 /**
  * runSubagent — цикл выполнения саб-агента, общий для тула `task` и для
@@ -823,11 +839,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
     let allSubagentReasoning: ReasoningBlock[] = [];
     const allSubagentIntermediateTexts: Array<{ text: string; iteration: number }> = [];
-    const allSubagentToolCalls: Array<{
-      name: string; args: Record<string, unknown>; id?: string;
-      result?: { content: string; isError?: boolean };
-      started_at?: string; completed_at?: string; iteration: number;
-    }> = [];
+    const allSubagentToolCalls: SubagentToolCallRecord[] = [];
 
     /**
      * Финальный шаг по лимиту шагов (механика opencode): ещё один обычный шаг
@@ -949,15 +961,37 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
        * `iteration++` и передаёт индекс **своего** шага явно.
        */
       stepIndex: number = iteration,
+      /**
+       * ADR-118 §1: размышления **своего** шага (итерации). Агрегат
+       * `allSubagentReasoning` в сообщение не пишется: размышления прошлых
+       * шагов уже лежат в их собственных сообщениях, иначе в финале был бы
+       * дубль (`parts`/`reasoning` финала — только этого шага).
+       */
+      stepReasoning?: string,
     ): Promise<void> => {
       if (!childSessionId || !extra.sessionManager) return;
       try {
+        // Размышления сообщения — только своего шага. Anthropic-подпись имеет
+        // смысл лишь для одиночного блока (`subagentReasoningMeta`), поэтому
+        // legacy-поля прикладываются лишь когда есть текст этого шага.
+        const reasoningBlocks: ReasoningBlockLike[] = [];
+        for (const data of stepReasoning ? subagentReasoningMeta?.redacted ?? [] : []) {
+          if (data) reasoningBlocks.push({ text: '', redacted: data });
+        }
+        if (stepReasoning) {
+          reasoningBlocks.push({
+            text: stepReasoning,
+            ...(subagentReasoningMeta?.signature !== undefined
+              ? { signature: subagentReasoningMeta.signature }
+              : {}),
+          });
+        }
         const assistantMsg: Message = {
           id: messageId ?? generateId(),
           role: MessageRole.ASSISTANT,
           seq: 0,
           origin: 'local',
-          parts: [makeTextPart(content), ...makeReasoningParts(allSubagentReasoning)],
+          parts: [makeTextPart(content), ...makeReasoningParts(reasoningBlocks)],
           content,
           createdAt: nowISO(),
           disabled: false,
@@ -976,29 +1010,24 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // ADR-102: сообщение шага несёт расход своего вызова; сумма по
           // сообщениям прогона = счётчики дочерней сессии (`subagentUsage`).
           ...(usage ? { usage } : {}),
-          // Все размышления сабагента (по итерациям), склеенные в поле
-          // reasoning — UI дочерней сессии показывает их блоками
-          // (ReasoningBlock разбивает по «\n\n---\n\n»). Без этого размышления
-          // остаются только в скрытых tool_chain-сообщениях и теряются.
-          reasoning: allSubagentReasoning.length > 0
-            ? allSubagentReasoning.map((r) => r.text).join('\n\n---\n\n')
-            : undefined,
+          // ADR-118 §1: reasoning — только этого шага (тексты прошлых шагов
+          // живут в своих сообщениях, дублей в финале нет).
+          reasoning: stepReasoning || undefined,
           // Anthropic: подпись thinking-блока (только для одиночного блока —
-          // у склейки подпись принадлежала бы последнему).
-          ...(subagentReasoningMeta?.signature !== undefined
+          // принадлежит тексту этого же шага).
+          ...(stepReasoning && subagentReasoningMeta?.signature !== undefined
             ? { reasoningSignature: subagentReasoningMeta.signature }
             : {}),
-          ...(subagentReasoningMeta?.redacted?.length
+          ...(stepReasoning && subagentReasoningMeta?.redacted?.length
             ? { reasoningRedacted: subagentReasoningMeta.redacted }
             : {}),
-          // Как в _persistToolChain родителя: финальное сообщение несёт
-          // свёрнутую цепочку тулов, чтобы UI дочерней сессии отрисовал её
-          // так же аккуратно, как финал родительской.
+          // ADR-118 §1: финальное сообщение больше **не** агрегат — карточки
+          // инструментов (`metadata.tool_results`) пишутся точечно в сообщение
+          // своего шага (`persistChildStepToolResults`), тексты прошлых шагов
+          // (`intermediate_text_blocks`) — в их собственных сообщениях.
           metadata: buildChildAssistantMetadata(status, {
             stream_id: extra.streamId,
             duration_ms: Date.now() - subagentStartedAt,
-            ...(allSubagentToolCalls.length > 0 ? { tool_results: allSubagentToolCalls } : {}),
-            ...(allSubagentIntermediateTexts.length > 0 ? { intermediate_text_blocks: allSubagentIntermediateTexts } : {}),
             ...extraMeta,
           }, usage),
         };
@@ -1009,6 +1038,55 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         }
       } catch {
         // не фатально
+      }
+    };
+
+    /**
+     * ADR-118 §1 / ADR-144: `metadata.tool_results` сообщения **своего** шага
+     * дочерней сессии — вызовы этой итерации (та же форма, что у
+     * `allSubagentToolCalls`: `name`/`args`/`id`/`result`/`started_at`/
+     * `completed_at`/`iteration`). Карточки инструментов живут на своём шаге,
+     * а не в финальном агрегате: UI скрывает assistant-шаг без видимого текста
+     * (`tool_chain`), пока у него нет `tool_results` — без этой записи в ленте
+     * ребёнка был виден только последний шаг.
+     *
+     * Запись — **точечная** и **под локом сессии** (`withLock`, как
+     * `_persistStepToolResults` оркестратора): история целиком не
+     * переписывается, параллельные append/update не теряются. Идемпотентно
+     * (тот же массив — без записи), best-effort: ошибка хранилища прогон не
+     * роняет; сообщения нет — no-op.
+     */
+    const persistChildStepToolResults = async (
+      messageId: string,
+      toolResults: SubagentToolCallRecord[],
+    ): Promise<void> => {
+      if (toolResults.length === 0) return;
+      if (!childSessionId || !extra.sessionManager) return;
+      const sessionId = childSessionId;
+      const manager = extra.sessionManager;
+      try {
+        await manager.withLock(sessionId, async (s) => {
+          const target = s.messages.find((m) => m.id === messageId);
+          if (!target) return;
+          const current = target.metadata?.tool_results;
+          // Идемпотентно: тот же набор — перезаписи нет.
+          if (
+            Array.isArray(current)
+            && current.length === toolResults.length
+            && current.every((item, index) => item === toolResults[index])
+          ) {
+            return;
+          }
+          await manager.updateMessage(sessionId, {
+            ...target,
+            metadata: { ...(target.metadata ?? {}), tool_results: toolResults },
+          });
+        });
+      } catch (err) {
+        warning(
+          'SUBAGENT',
+          `Не удалось записать результаты вызовов в сообщение шага ${messageId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     };
 
@@ -1134,6 +1212,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       // id выдаётся ЗДЕСЬ, до LLM-вызова, и переиспользуется при записи
       // сообщения в историю ребёнка.
       const stepMessageId = generateId();
+      /**
+       * ADR-118 §1: результаты вызовов **этого** шага — аккумулятор итерации
+       * (создаётся свежим на каждом шаге рядом со `stepMessageId`).
+       * `commitSubagentToolCall` кладёт запись и в сводку прогона
+       * (`allSubagentToolCalls` — `task`-результат), и сюда; после батча они
+       * точечно пишутся в сообщение шага
+       * (`persistChildStepToolResults`).
+       */
+      const stepToolResults: SubagentToolCallRecord[] = [];
       // ADR-118 §1/§4: шаг ребёнка начался — его UI создаёт assistant-сообщение
       // шага (`status: 'streaming'`) и держит индикатор до `step.finished`.
       publishStepStarted(
@@ -1700,13 +1787,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             // Отчёт — сообщение **этого** шага (tool calls в итерации не было),
             // поэтому id шага свободен и остаётся за ним. Статус — `limit`:
             // прогон остановлен по лимиту шагов (как у родителя).
-            await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, stepMessageId, 'limit', stepUsage);
+            await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, stepMessageId, 'limit', stepUsage, iteration, reasoning);
           } else {
             reportMissing = true;
             finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
             // Детерминированный текст — в историю ребёнка: пустой отчёт иначе
             // оставлял дочернюю сессию без финального ответа вовсе.
-            await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, stepMessageId, 'limit', stepUsage);
+            await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, stepMessageId, 'limit', stepUsage, iteration, reasoning);
           }
           // PROP-143: durable-запись причины остановки (`steps_limit`) —
           // прогон остановлен по лимиту шагов. Запись идёт после отчёта:
@@ -1719,7 +1806,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         if (reasoning) subagentReasoning = reasoning;
 
         // Сохранить финальный ответ ассистента в дочернюю сессию
-        await persistChildAssistantMessage(accumulatedContent, stepDurationMeta(), stepMessageId, 'completed', stepUsage);
+        await persistChildAssistantMessage(accumulatedContent, stepDurationMeta(), stepMessageId, 'completed', stepUsage, iteration, reasoning);
         break;
       }
 
@@ -1736,10 +1823,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // Маркер `tool_chain` — только для сообщений БЕЗ видимого текста:
           // шаг с текстом — реальный ответ агента, и его нельзя скрывать от
           // транскрипта (после перезагрузки страницы ответ пропадает).
-          // ADR-118 §1: отчёт ребёнка «монолитный» (несёт все размышления
-          // прогона в финальном сообщении) — поэтому reasoning **не** считается
-          // видимым контентом шага: шаг с одним лишь reasoning прячется, иначе
-          // размышления дублировались бы (шаг + отчёт).
+          // ADR-118 §1: шаговая модель есть и у дочерней сессии — видимость
+          // шага с карточками даёт не текст, а `metadata.tool_results` своего
+          // шага (пишется точечно после батча, `persistChildStepToolResults`).
+          // Шаг с одним лишь reasoning прячется, чтобы размышления не
+          // дублировались.
           const stepVisible = hasVisibleStepContent(accumulatedContent || '', stepParts, {
             includeReasoning: false,
           });
@@ -1770,8 +1858,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             ...(reasoningSignature !== undefined ? { reasoningSignature } : {}),
             ...(reasoningRedacted?.length ? { reasoningRedacted } : {}),
             // OpenAI-совместимая цепочка: assistant(toolCalls) → tool.
-            // tool_chain=true — UI дочерней сессии скрывает промежуточные
-            // сообщения (визуализация уже в финальном с tool_results).
+            // tool_chain=true — маркер «видимого текста нет»; карточки вызовов
+            // рисуются по `metadata.tool_results` **своего** шага (пишется
+            // точечно после исполнения батча, `persistChildStepToolResults`).
             toolCalls,
             metadata: {
               stream_id: extra.streamId,
@@ -1847,8 +1936,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
        *    `engine/permission/derive.ts`) — они не исполняются вовсе, а
        *    `childSessionMode`/`childPlanMode`/`childPlanApproved` читаются
        *    циклом из снимка, снятого **до** цикла;
-       *  - `project_*` и `todo_*` меняют состояние **родительской** сессии
-       *    (`ctx.sessionId`/`extra.sessionId` — родитель), а цикл читает
+       *  - `project_*` меняют состояние **родительской** сессии/проекта
+       *    (`extra.sessionId` — родитель; тулы читают его первым), а
+       *    `todo_*` — список ребёнка (`extra.todoSessionId`); цикл читает
        *    снимок `ctx.workingDir`/`ctx.allowedRoots`, снятый до цикла, —
        *    их эффект следующим вызовам этого цикла не виден (как и в
        *    последовательном цикле).
@@ -2019,6 +2109,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         const toolExecContext: ToolContext = {
           ...ctx,
           abortSignal: ctx.abortSignal,
+          // Сессия тула ребёнка — **его собственная** (реестр блокирующих и
+          // фоновых прогонов, лог процесса, audit исполнений, терминалы,
+          // egress-журнал): `execute_shell`/`ssh_exec`/`script_run` внутри
+          // сабагента принадлежат ребёнку (`POST /sessions/<child>/background`
+          // отвязывает их, `detachAll(parent)` — нет). `extra.sessionId`
+          // остаётся родительским (события/permission/проектный и
+          // automation-скоуп, обфускация Gateway) — см. аудит в
+          // `packages/core/AGENTS.md`. Без дочерней сессии — как было.
+          ...(childSessionId ? { sessionId: childSessionId } : {}),
           // PROP-124 §2: ключи SSH — по роли **ребёнка**, а не родителя:
           // `agentIds` — ACL ключа, и ключ родителя (другой роли) сабагенту
           // не принадлежит. Сборка — копия extra (объект родителя не меняем);
@@ -2218,7 +2317,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           parent_call_id: extra.callId,
         });
 
-        allSubagentToolCalls.push({
+        // ADR-118 §1: одна запись — в сводку прогона (`task`-результат) и в
+        // аккумулятор **своего** шага (`metadata.tool_results` сообщения шага).
+        const toolCallRecord: SubagentToolCallRecord = {
           name: plan.name,
           args: isStepLimit ? {} : plan.args,
           id: plan.tcId,
@@ -2226,7 +2327,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           started_at: plan.startedAt,
           completed_at: new Date().toISOString(),
           iteration: stepIteration,
-        });
+        };
+        allSubagentToolCalls.push(toolCallRecord);
+        stepToolResults.push(toolCallRecord);
 
         messages.push({
           id: '', role: 'tool',
@@ -2439,6 +2542,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       if (toolSegment.length > 0) {
         await runSubagentToolSegment(toolSegment);
       }
+      // ADR-118 §1/ADR-144: результаты вызовов шага — точечно в сообщение
+      // **своего** шага (под локом, без перезаписи истории). Именно эта запись
+      // делает шаг видимым в ленте ребёнка (`tool_chain` без `tool_results`
+      // UI скрывает). Шаг без вызовов (и ветки без батча — отчёт по лимиту,
+      // отмена, ошибка провайдера) записи не делает: массив пуст.
+      if (stepToolResults.length > 0) {
+        await persistChildStepToolResults(stepMessageId, stepToolResults);
+      }
 
       // Шаг-лимит: вызовы не исполнялись — цикл завершаем отчётом (механика
       // opencode). Парные tool-результаты выше уже в истории дочерней сессии.
@@ -2452,11 +2563,11 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // сохранён с id `stepMessageId`, поэтому отчёт получает свой id
           // (иначе в истории ребёнка были бы две записи с одним id, а UI
           // пропустил бы сообщение с уже занятым id — live-отчёт не появился бы).
-          await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit', undefined, Math.max(0, iteration - 1));
+          await persistChildAssistantMessage(reportText, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit', undefined, Math.max(0, iteration - 1), reasoning);
         } else {
           reportMissing = true;
           finalContent = sm('task.steps_limit_empty', { limit: stepLimitValue });
-          await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit', undefined, Math.max(0, iteration - 1));
+          await persistChildAssistantMessage(finalContent, { ...stepLimitMeta(), ...stepDurationMeta() }, undefined, 'limit', undefined, Math.max(0, iteration - 1), reasoning);
         }
         // PROP-143: durable-запись причины остановки (`steps_limit`) —
         // прогон остановлен по лимиту шагов (шаг-отчёт получен, вызовы

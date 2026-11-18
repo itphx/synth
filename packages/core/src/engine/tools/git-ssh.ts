@@ -8,6 +8,7 @@ import { SSHKeyStoreError } from '../../storage/ssh-key-store.js';
 import { toSshSecret } from '../../git/ssh-env.js';
 import type { ExecSecret } from '../../execution/ports/index.js';
 import { resolveSshAccess, SshAccessError } from '../ssh/access.js';
+import { parentSessionIdOf } from './session-scope.js';
 import type { SystemMessageKey } from '../system-messages.js';
 
 /**
@@ -218,7 +219,9 @@ export async function resolveProjectRepoEntry(ctx: ToolContext, cwd: string): Pr
   const extra = ctx.extra as GitSshExtra | undefined;
   if (!extra?.sessionManager || !extra?.projectStore) return { kind: 'no_project' };
 
-  const sessionId = ctx.sessionId || extra.sessionId;
+  // Реестр `project.repos` — проекта сессии разговора (у саб-агента
+  // родительской; дочерняя наследует тот же projectId, но «своя» — родительская).
+  const sessionId = parentSessionIdOf(ctx);
   if (!sessionId) return { kind: 'no_project' };
 
   let project: Project | null = null;
@@ -240,7 +243,7 @@ export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<
   const extra = ctx.extra as GitSshExtra | undefined;
   if (!extra?.sshKeyStore) return { cleanup: noopCleanup };
 
-  const sessionId = ctx.sessionId || extra.sessionId;
+  const sessionId = parentSessionIdOf(ctx);
   if (!sessionId || !extra.sessionManager || !extra.projectStore) return { cleanup: noopCleanup };
 
   let project: Project | null = null;

@@ -32,6 +32,14 @@ import { EventBus } from '../../../events/bus.js';
 import { HookBus } from '../../hooks/hook-bus.js';
 import { ToolRegistry } from '../registry.js';
 import { todoWriteTool } from '../todo.js';
+import { executeShellTool } from '../shell.js';
+import { ActiveRunRegistry } from '../../background/active-runs.js';
+import type {
+  ExecBackgroundChunk,
+  ExecBackgroundExit,
+  ExecBackgroundProcess,
+  ExecutionPort,
+} from '../../../execution/ports/index.js';
 import { LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { runSubagent, SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS, type SubagentRunConfig } from './run-cycle.js';
@@ -102,9 +110,9 @@ function throwingProvider(error: Error, prelude: Chunk[] = []) {
   return { model: 'm', name: 'p', chatAsync } as unknown as BaseProvider;
 }
 
-function makeAgentRegistry(): AgentRegistry {
+function makeAgentRegistry(capabilities: string[] = []): AgentRegistry {
   return {
-    get: (id: string) => ({ id, agentMode: ['subagent'], capabilities: [] }),
+    get: (id: string) => ({ id, agentMode: ['subagent'], capabilities }),
     getSubagents: () => [],
     getToolsForAgent: () => [],
   } as unknown as AgentRegistry;
@@ -126,6 +134,29 @@ function makeRegistry(spec: Record<string, () => ToolResult | Promise<ToolResult
     } as unknown as ToolDefinition);
   }
   return { registry, counters };
+}
+
+/**
+ * Реестр, инструмент которого запоминает **контекст вызова**: проверяем, чья
+ * сессия уходит тулу ребёнка (`ctx.sessionId`) и чья остаётся в `extra`.
+ */
+function makeContextCapturingRegistry(name: string): {
+  registry: ToolRegistry;
+  contexts: ToolContext[];
+} {
+  const registry = new ToolRegistry();
+  const contexts: ToolContext[] = [];
+  registry.register({
+    name,
+    description: name,
+    parameters: z.object({}).passthrough(),
+    capabilities: [],
+    execute: async (_args: unknown, ctx: ToolContext) => {
+      contexts.push(ctx);
+      return { content: 'ok' };
+    },
+  } as unknown as ToolDefinition);
+  return { registry, contexts };
 }
 
 let tmpDir: string;
@@ -2273,13 +2304,14 @@ describe('run-cycle — закрытие шага ребёнка и отчёт �
 });
 
 /**
- * ADR-118 §1: отчёт ребёнка «монолитный» — он несёт ВСЕ размышления прогона
- * и сводку вызовов. Поэтому шаг ребёнка, у которого нет видимого текста
- * (только reasoning), прячется маркером `tool_chain` — иначе размышления
- * дублировались бы (скрытый шаг + отчёт).
+ * ADR-118 §1: шаговая модель есть и у дочерней сессии — результаты вызовов
+ * пишутся точечно в сообщение **своего** шага (`metadata.tool_results`), а
+ * финальный отчёт больше не агрегат (только текст/reasoning последнего шага).
+ * Шаг ребёнка без видимого текста прячется маркером `tool_chain`; видимость
+ * карточкам даёт `tool_results`.
  */
-describe('run-cycle — видимость шага ребёнка и монолитный отчёт (ADR-118 §1)', () => {
-  it('шаг только с reasoning скрыт (tool_chain), отчёт несёт все reasoning и tool_results', async () => {
+describe('run-cycle — видимость шага ребёнка и шаговый отчёт (ADR-118 §1)', () => {
+  it('шаг только с reasoning скрыт (tool_chain), карточки — на шаге, финал — только свой reasoning', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
     const { provider } = scriptedProvider([
@@ -2321,19 +2353,156 @@ describe('run-cycle — видимость шага ребёнка и монол
     expect(step.content).toBe('');
     expect(step.metadata?.tool_chain).toBe(true);
 
-    // Отчёт ребёнка — «монолитный»: все размышления прогона + сводка вызовов.
-    const report = assistants.find((m) => (m.toolCalls?.length ?? 0) === 0)!;
-    expect(report.content).toBe('Отчёт ребёнка');
-    expect(report.reasoning).toContain('размышление шага');
-    expect(report.reasoning).toContain('размышление финала');
-    const toolResults = report.metadata?.tool_results as Array<{
+    // Карточки вызовов — на сообщении шага (точечная запись после батча).
+    const stepResults = step.metadata?.tool_results as Array<{
       name?: string;
       result?: { content?: string };
     }> | undefined;
-    expect(toolResults).toBeDefined();
-    expect(toolResults).toHaveLength(1);
-    expect(toolResults![0]!.name).toBe('noop');
-    expect(toolResults![0]!.result?.content).toContain('noop ok');
+    expect(stepResults).toBeDefined();
+    expect(stepResults).toHaveLength(1);
+    expect(stepResults![0]!.name).toBe('noop');
+    expect(stepResults![0]!.result?.content).toContain('noop ok');
+
+    // Отчёт ребёнка — **не** агрегат: только reasoning своей итерации,
+    // без сводки вызовов и промежуточных текстов прошлых шагов.
+    const report = assistants.find((m) => (m.toolCalls?.length ?? 0) === 0)!;
+    expect(report.content).toBe('Отчёт ребёнка');
+    expect(report.reasoning).toBe('размышление финала');
+    expect(report.metadata?.tool_results).toBeUndefined();
+    expect(report.metadata?.intermediate_text_blocks).toBeUndefined();
+  });
+});
+
+/**
+ * ADR-118 §1 / ADR-144: точечная запись `metadata.tool_results` в сообщение
+ * шага ребёнка — по образцу `_persistStepToolResults` основной сессии.
+ * Каждый шаг несёт **только свои** вызовы; финал — не агрегат.
+ */
+describe('run-cycle — результаты вызовов по шагам дочерней сессии (ADR-118 §1)', () => {
+  /** Прогон из двух шагов с вызовами + финальный ответ без вызовов. */
+  async function runTwoSteps() {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', { a: 1 }, 'c1')],
+      [{
+        isFinal: true,
+        content: 'промежуточный текст',
+        model: 'test-model',
+        toolCalls: [{ id: 'c2', function: { name: 'noop', arguments: JSON.stringify({ b: 2 }) } }],
+      }],
+      [{
+        isFinal: true,
+        content: 'готово',
+        reasoning: 'финальное размышление',
+        model: 'test-model',
+      }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+    const saved = (await sessionManager.getSession(child.id))!;
+    return { result, saved, child };
+  }
+
+  it('у каждого assistant-шага — только свои вызовы (по iteration/id), порядок сохранён', async () => {
+    const { saved } = await runTwoSteps();
+
+    const steps = saved.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && (m.toolCalls?.length ?? 0) > 0,
+    );
+    expect(steps).toHaveLength(2);
+
+    const first = steps[0]!.metadata?.tool_results as Array<{
+      name?: string; id?: string; iteration?: number; args?: Record<string, unknown>;
+    }>;
+    const second = steps[1]!.metadata?.tool_results as typeof first;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    // Шаг 0 — только c1, шаг 1 — только c2 (агрегата нет ни у кого).
+    expect(first.map((r) => r.id)).toEqual(['c1']);
+    expect(first[0]!.name).toBe('noop');
+    expect(first[0]!.iteration).toBe(0);
+    expect(first[0]!.args).toEqual({ a: 1 });
+    expect(second.map((r) => r.id)).toEqual(['c2']);
+    expect(second[0]!.iteration).toBe(1);
+    expect(second[0]!.args).toEqual({ b: 2 });
+  });
+
+  it('role: tool сообщения по-прежнему пишутся (LLM-цепочка не сломана)', async () => {
+    const { saved } = await runTwoSteps();
+    const toolMessages = saved.messages.filter((m) => m.role === MessageRole.TOOL);
+    expect(toolMessages.map((m) => m.toolCallId)).toEqual(['c1', 'c2']);
+    for (const msg of toolMessages) {
+      expect(msg.content).toContain('noop ok');
+      expect(msg.metadata?.tool_chain).toBe(true);
+    }
+  });
+
+  it('финальное сообщение: без tool_results/intermediate_text_blocks, reasoning — только последней итерации', async () => {
+    const { saved } = await runTwoSteps();
+    const final = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === 'готово',
+    )!;
+    expect(final).toBeDefined();
+    expect((final.toolCalls?.length ?? 0)).toBe(0);
+    expect(final.metadata?.tool_results).toBeUndefined();
+    expect(final.metadata?.intermediate_text_blocks).toBeUndefined();
+    expect(final.reasoning).toBe('финальное размышление');
+    // Размышлений прошлых шагов в финале нет (они в своих сообщениях).
+    expect(final.parts?.some((p) => p.type === 'reasoning')).toBe(true);
+  });
+
+  it('падение updateMessage не роняет прогон (best-effort)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+    const updateSpy = vi.spyOn(sessionManager, 'updateMessage').mockRejectedValueOnce(new Error('storage boom'));
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Запись шага упала — прогон всё равно завершился отчётом.
+    expect(updateSpy).toHaveBeenCalled();
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('готово');
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(saved.messages.some((m) => m.role === MessageRole.ASSISTANT && m.content === 'готово')).toBe(true);
+  });
+
+  it('шаг без вызовов (финальный) записи не делает', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [{ isFinal: true, content: 'просто ответ', model: 'test-model' }],
+    ]);
+    const updateSpy = vi.spyOn(sessionManager, 'updateMessage');
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(updateSpy).not.toHaveBeenCalled();
+    const saved = (await sessionManager.getSession(child.id))!;
+    for (const msg of saved.messages) {
+      expect(msg.metadata?.tool_results).toBeUndefined();
+    }
   });
 });
 
@@ -3408,5 +3577,325 @@ describe('run-cycle — сброс бюджета автовосстановле
     expect(result.isError).toBeFalsy();
     const saved = (await sessionManager.getSession(child.id))!;
     expect(saved.status.recovery).toBeUndefined();
+  });
+});
+
+/**
+ * Принадлежность прогонов ребёнка (реестр, лог, audit) — ADR-111/ADR-113.
+ *
+ * Тулы ребёнка получают `ctx.sessionId = childSessionId` (реестр блокирующих и
+ * фоновых прогонов, лог процесса, audit исполнений), а `extra.sessionId`
+ * остаётся **родительским** (события `child.*`, `permission.ask/replied`,
+ * проектный/automation-скоуп, карта обфускации Gateway, пулы исполнения).
+ * Шов аудита — `engine/tools/session-scope.ts` (`parentSessionIdOf`).
+ */
+describe('run-cycle — сессия тулов ребёнка (ctx.sessionId) и родителя (extra.sessionId)', () => {
+  it('ctx.sessionId тула = сессия ребёнка, extra.sessionId = родитель, todoSessionId = ребёнок', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+    const { registry, contexts } = makeContextCapturingRegistry('noop');
+
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]!.sessionId).toBe(child.id);
+    expect((contexts[0]!.extra as { sessionId?: string }).sessionId).toBe(parent.id);
+    expect((contexts[0]!.extra as { todoSessionId?: string }).todoSessionId).toBe(child.id);
+  });
+
+  it('без дочерней сессии ctx.sessionId не подменяется (прежнее поведение)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+    const { registry, contexts } = makeContextCapturingRegistry('noop');
+
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      ctx: makeCtx({ sessionId: parent.id }),
+    }));
+
+    expect(contexts[0]!.sessionId).toBe(parent.id);
+  });
+
+  it('resume-путь (ctx и extra — сессия ребёнка): override ничего не ломает', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+    const { registry, contexts } = makeContextCapturingRegistry('noop');
+
+    // `task-resume.ts` кладёт в extra сессию ребёнка (родительского стрима нет),
+    // а ctx.sessionId — тот же ребёнок. Оба остаются её же.
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: child.id, toolRegistry: registry }),
+      ctx: makeCtx({ sessionId: child.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(contexts[0]!.sessionId).toBe(child.id);
+    expect((contexts[0]!.extra as { sessionId?: string }).sessionId).toBe(child.id);
+  });
+});
+
+/** Фейковый фоновый процесс: вывод и завершение управляются из теста. */
+function createFakeBackgroundProcess(retime = true): {
+  proc: ExecBackgroundProcess;
+  finish(exit: ExecBackgroundExit): void;
+} {
+  let closed = false;
+  let notify: (() => void) | null = null;
+  let resolveExit!: (exit: ExecBackgroundExit) => void;
+  const exited = new Promise<ExecBackgroundExit>((resolve) => {
+    resolveExit = resolve;
+  });
+  // Поток вывода без данных: тест проверяет только контракт
+  // «тул ↔ реестр ↔ сервис», содержимое не важно.
+  const output: AsyncIterable<ExecBackgroundChunk> = {
+    [Symbol.asyncIterator](): AsyncIterator<ExecBackgroundChunk> {
+      return {
+        next: async (): Promise<IteratorResult<ExecBackgroundChunk>> => {
+          while (!closed) {
+            await new Promise<void>((resolve) => {
+              notify = resolve;
+            });
+          }
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  };
+  const proc: ExecBackgroundProcess = {
+    processId: 'proc_1',
+    pid: 4242,
+    output,
+    exited,
+    stop: () => {},
+    // `retime` — как у живой точки исполнения (протокол 10): без него detach
+    // отклоняется `DETACH_FAILED`.
+    ...(retime ? { retime: async () => {} } : {}),
+  };
+  return {
+    proc,
+    finish: (exit) => {
+      closed = true;
+      notify?.();
+      resolveExit(exit);
+    },
+  };
+}
+
+/** Порт/сервис/реестр для foreground-шелла (контракт «тул ↔ реестр ↔ сервис»). */
+function createShellDetachHarness(): {
+  fake: ReturnType<typeof createFakeBackgroundProcess>;
+  registry: ActiveRunRegistry;
+  adopt: ReturnType<typeof vi.fn>;
+  port: ExecutionPort;
+  extra: Record<string, unknown>;
+  toolRegistry: ToolRegistry;
+} {
+  const fake = createFakeBackgroundProcess();
+  const port = {
+    execute: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0, truncated: false, durationMs: 1 })),
+    spawnBackground: vi.fn(async () => fake.proc),
+  } as unknown as ExecutionPort;
+  const adopt = vi.fn(async (input: { processId: string }) => ({
+    runId: 'bgr_1',
+    processId: input.processId,
+    logPath: 'processes/bgr_1.log',
+  }));
+  // Без `openLiveLog` — живой лог не ведётся (fail-open), регистрация не зависит.
+  const processService = { adopt } as unknown as { adopt: typeof adopt };
+  const registry = new ActiveRunRegistry();
+  const toolRegistry = new ToolRegistry();
+  toolRegistry.register(executeShellTool);
+  return {
+    fake,
+    registry,
+    adopt,
+    port,
+    extra: {
+      processService,
+      activeRuns: registry,
+      backgroundEnabled: true,
+      executionPort: port,
+    },
+    toolRegistry,
+  };
+}
+
+describe('run-cycle — foreground-шелл ребёнка в ActiveRunRegistry', () => {
+  it('регистрируется под сессией ребёнка и не виден родителю', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const h = createShellDetachHarness();
+    const { provider } = scriptedProvider([
+      [toolCallChunk('execute_shell', { command: 'sleep 1' }, 'sh1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+
+    const runPromise = runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: h.toolRegistry,
+        agentRegistry: makeAgentRegistry(['shell']),
+        ...h.extra,
+      }),
+      ctx: makeCtx({ sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    await vi.waitFor(() => expect(h.registry.list(child.id)).toHaveLength(1));
+    // Родительский реестр по этому прогону пуст: «В фон» в родителе относится
+    // к `task`-прогону целиком, а не к шеллу, запущенному сабагентом.
+    expect(h.registry.list(parent.id)).toHaveLength(0);
+    expect(h.registry.list(child.id)[0]).toMatchObject({ kind: 'process', sessionId: child.id });
+
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 1 });
+    await runPromise;
+    // Прогон завершился — регистрация снята (как и раньше).
+    expect(h.registry.list(child.id)).toHaveLength(0);
+  });
+
+  it('родительский «В фон» прогон ребёнка не переводит, детский — переводит', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const h = createShellDetachHarness();
+    const { provider } = scriptedProvider([
+      [toolCallChunk('execute_shell', { command: 'npm run dev' }, 'sh1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+
+    const runPromise = runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: h.toolRegistry,
+        agentRegistry: makeAgentRegistry(['shell']),
+        ...h.extra,
+      }),
+      ctx: makeCtx({ sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    await vi.waitFor(() => expect(h.registry.list(child.id)).toHaveLength(1));
+    // Родитель: переводить нечего (там только `task`, если он зарегистрирован).
+    const fromParent = await h.registry.detachAll(parent.id);
+    expect(fromParent.detached).toHaveLength(0);
+    expect(fromParent.failed).toHaveLength(0);
+    expect(h.adopt).not.toHaveBeenCalled();
+    expect(h.registry.list(child.id)).toHaveLength(1);
+
+    // Сессия ребёнка: переводит свой шелл (причина — вмешательство/ручная).
+    const fromChild = await h.registry.detachAll(child.id, { reason: 'message' });
+    expect(fromChild.failed).toHaveLength(0);
+    expect(fromChild.detached).toEqual([
+      expect.objectContaining({ id: 'proc_1', kind: 'process', sessionId: child.id }),
+    ]);
+    // `adopt` получил сессию ребёнка — запись реестра прогона тоже его.
+    expect(h.adopt).toHaveBeenCalledTimes(1);
+    expect(h.adopt.mock.calls[0]![0]).toMatchObject({ sessionId: child.id, processId: 'proc_1' });
+
+    const result = await runPromise;
+    expect(result.isError).toBeFalsy();
+    // Результат шелла — в сводке вызовов прогона: причина перевода `message`
+    // (перевод инициирован сессией ребёнка), а не «по просьбе пользователя».
+    const shellCall = (result.metadata?.tool_calls as Array<{
+      name?: string;
+      result?: { content?: string };
+    }>).find((call) => call.name === 'execute_shell');
+    expect(shellCall?.result?.content).toContain('because of a new user message');
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 1 });
+  });
+
+  it('foreground-шелл родителя (без ребёнка) по-прежнему в реестре родителя', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const h = createShellDetachHarness();
+    const { provider } = scriptedProvider([
+      [toolCallChunk('execute_shell', { command: 'sleep 1' }, 'sh1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+
+    const runPromise = runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: h.toolRegistry,
+        agentRegistry: makeAgentRegistry(['shell']),
+        ...h.extra,
+      }),
+      ctx: makeCtx({ sessionId: parent.id }),
+    }));
+
+    await vi.waitFor(() => expect(h.registry.list(parent.id)).toHaveLength(1));
+    h.fake.finish({ exitCode: 0, signal: null, durationMs: 1 });
+    await runPromise;
+    expect(h.registry.list(parent.id)).toHaveLength(0);
+  });
+});
+
+describe('run-cycle — фоновый execute_shell из ребёнка', () => {
+  it('запись реестра несёт sessionId ребёнка и проект родителя', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const spawn = vi.fn(async () => ({
+      runId: 'bgr_bg',
+      processId: 'proc_bg',
+      logPath: 'processes/bgr_bg.log',
+    }));
+    const toolRegistry = new ToolRegistry();
+    toolRegistry.register(executeShellTool);
+    const { provider } = scriptedProvider([
+      [toolCallChunk('execute_shell', { command: 'npm test', background: true }, 'sh1')],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+
+    await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider,
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry,
+        agentRegistry: makeAgentRegistry(['shell']),
+        processService: { spawn },
+        backgroundEnabled: true,
+      }),
+      ctx: makeCtx({ sessionId: parent.id, projectId: 'proj-1' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.calls[0]![0]).toMatchObject({ sessionId: child.id, projectId: 'proj-1', command: 'npm test' });
+    // Доставка уведомления — матрица `BackgroundRunService`: прогон в дочерней
+    // сессии без активного хода ретранслируется в корень, с активным — steer
+    // ребёнку (engine/background/service.test.ts, «ретрансляция из дочерней
+    // сессии в корень»); ожидания там на явных id и сменой владельца не
+    // затрагиваются.
   });
 });

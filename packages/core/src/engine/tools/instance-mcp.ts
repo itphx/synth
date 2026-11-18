@@ -37,6 +37,7 @@ import { canEditProject } from './project-access.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
+import { parentSessionIdOf } from './session-scope.js';
 import { resolveViewer } from './project-resolve.js';
 import {
   type InstanceToolsExtra,
@@ -470,7 +471,9 @@ export const synthMcpEnableTool: ToolDefinition = {
 
     if (params.level === 'session') {
       const sessionManager = extra.sessionManager;
-      const sessionId = ctx.sessionId || extra.sessionId;
+      // Уровень `session` — сессия разговора (у саб-агента родительская):
+      // включать MCP внутренней дочерней сессии смысла нет.
+      const sessionId = parentSessionIdOf(ctx);
       if (!sessionManager || !sessionId) return fail('instance.mcp_enable.no_session');
 
       let updatedSession: SessionMeta | null = null;
@@ -547,7 +550,8 @@ export const synthMcpEnableTool: ToolDefinition = {
     if (params.level === 'project') {
       const sessionManager = extra.sessionManager;
       const projectStore = extra.projectStore;
-      const sessionId = ctx.sessionId || extra.sessionId;
+      // Проект — проекта сессии разговора (у саб-агента родительской).
+      const sessionId = parentSessionIdOf(ctx);
       if (!sessionManager || !projectStore || !sessionId) return fail('instance.mcp_enable.no_project');
 
       let session: Session | null;
