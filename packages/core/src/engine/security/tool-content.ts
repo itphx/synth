@@ -111,7 +111,13 @@ export function applyToolContentFilter(input: ToolContentFilterInput): ToolConte
     {
       ...(toolDef?.pluginTrust ? { pluginTrust: toolDef.pluginTrust } : {}),
       ...(toolDef?.source ? { toolSource: toolDef.source } : {}),
-      ...(toolDef?.pluginName ? { metadata: { pluginName: toolDef.pluginName } } : {}),
+      // Метаданные результата нужны веткам доверия: терминал берёт из них
+      // атрибуты маркера (`terminal_id`/`bytes`/`run`/…), плагин — `pluginName`
+      // (определение важнее результата).
+      metadata: {
+        ...(metadata ?? {}),
+        ...(toolDef?.pluginName ? { pluginName: toolDef.pluginName } : {}),
+      },
     },
   );
   if (!trustInfo) {

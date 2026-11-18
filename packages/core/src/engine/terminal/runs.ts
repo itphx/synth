@@ -93,7 +93,7 @@ import { t as sm } from '../system-messages.js';
 import { msToTimeoutSec } from '../timeout.js';
 import {
   cleanRunOutput,
-  frameTerminalOutput,
+  formatBackgroundContent,
   TERMINAL_RUN_MARKER_END,
   TERMINAL_RUN_MARKER_PREFIX,
 } from './output.js';
@@ -873,8 +873,10 @@ export const MAX_RUN_NOTIFICATION_BYTES = 32 * 1024;
  * [CONTENT END]
  * ```
  *
- * Метаданные запуска — в **открывающем** маркере (тот же формат, что у
- * `terminal_run` с ожиданием), закрывающий маркер не меняется.
+ * Метаданные запуска — в **открывающем** маркере (`[CONTENT key=value …]`,
+ * закрывающий маркер не меняется). Тело экранируется
+ * (`escapeContentMarkers`): `[CONTENT END]` из вывода команды конверт не
+ * закрывает.
  *
  * Сообщение — **роль USER** (его видит модель), автор `Process` (как у
  * фоновых шелл-процессов): результат фоновой работы должен попасть в
@@ -908,7 +910,7 @@ export function buildTerminalRunNotification(run: TerminalRunRecord): Message {
     : '';
   // Тот же вид вывода, что у инлайн-ответа: без ANSI и без эха обёртки.
   const cleaned = cleanRunOutput(run.output, run.wrapperCommand, run.nonce);
-  const body = frameTerminalOutput(tailByBytes(cleaned, MAX_RUN_NOTIFICATION_BYTES), {
+  const body = formatBackgroundContent(tailByBytes(cleaned, MAX_RUN_NOTIFICATION_BYTES), {
     terminal: terminalId,
     run: run.runId,
     status: run.status,

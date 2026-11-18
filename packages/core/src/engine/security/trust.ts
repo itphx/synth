@@ -2,7 +2,7 @@
  * Матрица доверия tool-результатов для защиты от Indirect Prompt Injection.
  *
  * untrusted: web_fetch/web_search, execute_shell, MCP, task, read_session_reference,
- * файлы ВНЕ рабочего каталога.
+ * терминалы (`terminal_*`), файлы ВНЕ рабочего каталога.
  * trusted: файлы ВНУТРИ рабочего каталога, git_*, get_project_info, list_repos.
  * null (не оборачиваем): системные тулы (plan_enter, plan_exit, todo_write,
  * classify_conversation).
@@ -12,6 +12,7 @@ import type { CatalogTrustLevel, ToolSource } from '@itphx/synth-shared';
 import { trustLevelRank } from '@itphx/synth-shared';
 import { resolvePath, isInsideAnyRoot } from '../tools/path-utils.js';
 import { extractPathParams } from '../permission/groups.js';
+import { sanitizeTerminalAttributeValue } from '../terminal/output.js';
 import type { TrustLevel } from './prompt-injection.js';
 
 export interface ToolTrustInfo {
@@ -35,14 +36,46 @@ export interface ToolTrustOptions {
   /** Источник тула (`builtin`/`mcp`/`plugin`). `plugin` включает плагинную ветку. */
   toolSource?: ToolSource;
   /**
-   * Метаданные определения тула: `pluginName` — имя плагина-владельца
-   * (атрибут `PLUGIN` в маркере контента).
+   * Метаданные для матрицы доверия.
+   *
+   * - `pluginName` — имя плагина-владельца (атрибут `PLUGIN` в маркере
+   *   контента);
+   * - атрибуты терминала (`terminal_id`, `status`, `bytes`, `run`, `exit`, …) —
+   *   их кладёт тул в `metadata` результата, а конверт ставит runtime.
    */
   metadata?: Record<string, unknown>;
 }
 
 /** Уровни доверия, при которых результат плагинного тула считается `trusted`. */
 const PLUGIN_TRUSTED_MAX_RANK = trustLevelRank('trusted');
+
+/**
+ * Атрибуты терминального результата, которые переносятся в открывающий маркер.
+ *
+ * Белый список: в `metadata` результата тула лежит много служебного (i18n,
+ * внутренние seq, пути) — в маркер идёт только то, что читает модель.
+ */
+const TERMINAL_ATTR_KEYS = [
+  'terminal_id',
+  'status',
+  'seq',
+  'bytes',
+  'tail',
+  'stripped',
+  'history',
+  'total_bytes',
+  'dropped_bytes',
+  'size',
+  'cursor',
+  'run',
+  'exit',
+  'still_running',
+  'timeout',
+  'truncated',
+  'lines',
+  'cwd',
+  'shell',
+] as const;
 
 /** Тулы, результаты которых не оборачиваются (системные, внутренние). */
 const SYSTEM_TOOLS = new Set([
@@ -141,6 +174,27 @@ export function getToolTrust(
       source: 'plugin',
       attrs: pluginName ? { PLUGIN: pluginName } : {},
     };
+  }
+
+  // ADR-132: интерактивный терминал — недоверенный поток (вывод чужой
+  // программы: эхо файлов, вывод ssh, ответы REPL). Тул отдаёт сырой текст, а
+  // атрибуты чтения/запуска — в `metadata`; конверт ставит runtime. Ветка после
+  // плагинов (их доверие решает уровень установки) и до файловых/web-тулов.
+  if (
+    capabilities?.includes(ToolCapability.TERMINAL)
+    || toolName.startsWith('terminal_')
+  ) {
+    const attrs: Record<string, string> = {};
+    for (const key of TERMINAL_ATTR_KEYS) {
+      const raw = opts?.metadata?.[key];
+      if (raw === undefined || raw === null || raw === '') continue;
+      const value = sanitizeTerminalAttributeValue(
+        typeof raw === 'string' ? raw : String(raw),
+      );
+      if (value === '') continue;
+      attrs[key] = value;
+    }
+    return { trust: 'untrusted', source: 'terminal', attrs };
   }
 
   if (toolName === 'web_fetch') {

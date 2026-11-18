@@ -140,7 +140,7 @@ describe('background-notice: данные карточки результата'
 })
 
 /**
- * Контекст терминала: конверт backend'а (`frameTerminalOutput`) —
+ * Контекст терминала: конверт backend'а (`formatBackgroundContent`) —
  * `[CONTENT key=value …]` … **`[CONTENT END]`**.
  */
 describe('background-notice: контекст терминала', () => {

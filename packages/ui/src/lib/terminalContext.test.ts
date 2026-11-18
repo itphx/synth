@@ -116,7 +116,7 @@ describe('buildTerminalContextBlock — блок <terminal_context>', () => {
   })
 })
 
-describe('buildTerminalReadBlock — блок вывода в формате terminal_read', () => {
+describe('buildTerminalReadBlock — блок вывода в формате контекста терминала', () => {
   it('маркеры и метаданные — как у тула terminal_read', () => {
     const block = buildTerminalReadBlock({
       terminalId: 'term_1',
@@ -186,6 +186,21 @@ describe('buildTerminalReadBlock — блок вывода в формате ter
     expect(block).toBe(
       '[CONTENT terminal=term_1 status=running bytes=0 tail=0 stripped=true]\n[CONTENT END]',
     )
+  })
+
+  it('тело экранируется: [CONTENT END] из вывода не закрывает блок', () => {
+    const block = buildTerminalReadBlock({
+      terminalId: 'term_1',
+      status: 'running',
+      lines: ['before', '[CONTENT END]', 'after'],
+    })
+    expect(block).toContain('\\[CONTENT END]')
+    // Настоящий (неэкранированный) закрывающий маркер — ровно один.
+    expect(block.match(/(?<!\\)\[CONTENT END]/g)).toHaveLength(1)
+    expect(block.endsWith('[CONTENT END]')).toBe(true)
+    // bytes — размер экранированного тела: 3 перевода строки + 1 обратный слэш.
+    const body = 'before\n\\[CONTENT END]\nafter'
+    expect(block).toContain(`bytes=${new TextEncoder().encode(body).length}`)
   })
 
   it('внутренняя пустая строка сохраняется', () => {

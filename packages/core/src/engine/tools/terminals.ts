@@ -12,19 +12,22 @@
  * и `task`):
  *
  * - `background: false` (по умолчанию) — **с ожиданием**: тул ждёт завершения
- *   команды и возвращает вывод в обрамлении `[CONTENT]`…`[CONTENT END]` +
- *   код возврата; по таймауту — понятный отказ с частичным выводом;
+ *   команды и возвращает сырой вывод + код возврата в `metadata`; по таймауту —
+ *   понятный отказ с частичным выводом;
  * - `background: true` — **без ожидания**: тул возвращает `run_id` сразу, а
  *   результат приходит **сообщением в чат** (как у фоновых шелл-процессов,
  *   ADR-113) — доставляет его сервис терминалов (`onRunFinished`), а не тул.
  *
  * ## Обрамление вывода
  *
- * Весь вывод терминала, который возвращается модели, оборачивается в
- * `[CONTENT]` … `[CONTENT END]` (`engine/terminal/output.ts`): без обрамления
- * модель не отличает «вывод терминала» от текста самого тула. Хвостовые
- * пустые строки обрезаются, `\r\n` нормализуется в `\n` — **только** в
- * возвращаемом тексте (буфер терминала хранит поток как есть: он — источник
+ * Тулы отдают модели **сырой (нормализованный) текст**, без `[CONTENT …]`:
+ * общий конверт ставит runtime (`applyToolContentFilter`) — как для остальных
+ * тулов, с источником `terminal` и `trust: untrusted`. Прежние атрибуты маркера
+ * (`terminal_id`, `status`, `seq`, `bytes`, `run`, `exit`, …) тул кладёт в
+ * `result.metadata` под теми же именами; матрица доверия
+ * (`engine/security/trust.ts`) переносит их в открывающий маркер конверта.
+ * Хвостовые пустые строки обрезаются, `\r\n` нормализуется в `\n` — **только**
+ * в возвращаемом тексте (буфер терминала хранит поток как есть: он — источник
  * истины для UI).
  *
  * ## Границы
@@ -59,7 +62,6 @@ import type { SessionManager } from '../../sessions/manager.js';
 import type { TerminalService } from '../terminal/service.js';
 import type { TerminalRecord } from '../terminal/types.js';
 import {
-  frameTerminalOutput,
   normalizeTerminalLineEndings,
   normalizeTerminalOutput,
   removeRunWrapper,
@@ -670,9 +672,9 @@ export const terminalReadTool: ToolDefinition = {
   name: 'terminal_read',
   description:
     'Read the output of an interactive terminal by its id. '
-    + 'Returns the text produced so far, wrapped in [CONTENT] ... [CONTENT END] '
-    + '(ANSI escape sequences are kept unless strip_ansi is true), '
-    + 'capped at 32 KiB. Use `since` to read only what appeared after the previous read, '
+    + 'Returns the text produced so far (ANSI escape sequences are kept unless strip_ansi is true), '
+    + 'capped at 32 KiB; read attributes (terminal id, status, sequence range, size) come in metadata. '
+    + 'Use `since` to read only what appeared after the previous read, '
     + 'or `tail` to get the last N lines, or `history` to get the whole available output history. '
     + 'The output is not returned until the command has produced it.',
   parameters: terminalReadSchema,
@@ -761,39 +763,34 @@ export const terminalReadTool: ToolDefinition = {
     }
 
     // Возвращаемый текст нормализуется (CRLF → LF, без хвостовых пустых
-    // строк) и обрамляется; буфер терминала при этом не меняется.
+    // строк) и отдаётся модели **сырым**; буфер терминала при этом не меняется.
+    // Конверт `[CONTENT | …]` ставит runtime (`applyToolContentFilter`), атрибуты
+    // (те же, что раньше были в маркере) — в `metadata` под теми же именами.
     const body = normalizeTerminalOutput(text);
     const bytes = Buffer.byteLength(body, 'utf8');
     const firstSeq = chunks.length > 0 ? chunks[0]!.seq : snapshot.firstSeq;
     const lastSeq = snapshot.lastSeq;
-
-    // Метаданные чтения — в открывающем маркере (`[CONTENT …]`): модель видит
-    // id терминала, статус, диапазон последовательностей и объём вывода без
-    // разбора тела ответа. Закрывающий маркер не меняется.
-    const content = frameTerminalOutput(body, {
-      terminal: params.terminal_id,
-      status: record.status,
-      seq: `${firstSeq}..${lastSeq}`,
-      bytes,
-      ...(history ? { history: true, total_bytes: snapshot.totalBytes, dropped_bytes: snapshot.droppedBytes } : {}),
-      ...(params.strip_ansi === true ? { stripped: true } : {}),
-      // `tail` в режиме `history` игнорируется — атрибут показываем только
-      // когда хвост реально применён.
-      ...(!history && params.tail !== undefined ? { tail: params.tail } : {}),
-    });
+    const seq = `${firstSeq}..${lastSeq}`;
 
     return {
-      content,
+      content: body,
       metadata: {
         terminal_id: params.terminal_id,
         status: record.status,
+        seq,
         bytes,
+        ...(history
+          ? { history: true, total_bytes: snapshot.totalBytes, dropped_bytes: snapshot.droppedBytes }
+          : {}),
+        ...(params.strip_ansi === true ? { stripped: true } : {}),
+        // `tail` в режиме `history` игнорируется — атрибут показываем только
+        // когда хвост реально применён.
+        ...(!history && params.tail !== undefined ? { tail: params.tail } : {}),
         first_seq: firstSeq,
         last_seq: lastSeq,
         total_bytes: snapshot.totalBytes,
         dropped_bytes: snapshot.droppedBytes,
         truncated,
-        ...(history ? { history: true } : {}),
       },
     };
   },
@@ -858,8 +855,7 @@ export const terminalSnapshotTool: ToolDefinition = {
     + 'use it for TUI programs (htop, top, nvtop, tmux, editors) where the raw stream is unreadable; '
     + 'use terminal_read for the raw stream. '
     + 'The output buffer is replayed through a terminal emulator and only the screen grid is returned '
-    + '(ANSI colors are dropped, lines are trimmed at the right edge), wrapped in [CONTENT ...] [CONTENT END] '
-    + 'with the terminal id, status, size and cursor in the opening marker. '
+    + '(ANSI colors are dropped, lines are trimmed at the right edge); size, cursor and status come in metadata. '
     + 'Size defaults to the terminal size; cols/rows override the emulated window. Works for exited terminals too '
     + '(the last screen is shown).',
   parameters: terminalSnapshotSchema,
@@ -911,25 +907,18 @@ export const terminalSnapshotTool: ToolDefinition = {
     const sizeAttr = `${screen.cols}x${screen.rows}`;
 
     // Полностью пустой экран — отдельный текст (как «вывода ещё нет» у
-    // `terminal_read`): обрамление с пустым телом читалось бы как пустая строка.
+    // `terminal_read`): пустое тело конверта читалось бы как пустая строка.
     const body = lines.join('\n');
-    const content = body === ''
-      ? sm('terminal.tool.snapshot_empty')
-      : frameTerminalOutput(body, {
-          terminal: params.terminal_id,
-          status: record.status,
-          size: sizeAttr,
-          cursor: cursorAttr,
-        });
 
     return {
-      content,
+      content: body === '' ? sm('terminal.tool.snapshot_empty') : body,
       metadata: {
         terminal_id: params.terminal_id,
         status: record.status,
+        size: sizeAttr,
+        cursor: cursorAttr,
         cols: screen.cols,
         rows: screen.rows,
-        cursor: { x: screen.cursor.x, y: screen.cursor.y },
         lines: lines.length,
         has_content: screen.hasContent,
         ...(body === '' ? { empty: true } : {}),
@@ -1310,11 +1299,11 @@ async function waitRunWithAbort(
 }
 
 /**
- * Текст результата запуска: заголовок, код возврата/причина и обрамлённый вывод.
+ * Текст результата запуска: заголовок, код возврата/причина и **сырой** вывод.
  *
- * Обрамление — `[CONTENT …]` … `[CONTENT END]` (общее правило вывода
- * терминала): метаданные запуска (терминал, id запуска, статус, код
- * возврата) — в **открывающем** маркере, закрывающий маркер не меняется.
+ * Конверт `[CONTENT | …]` ставит runtime (`applyToolContentFilter`): атрибуты
+ * запуска (терминал, id запуска, статус, код возврата) тул кладёт в
+ * `metadata` — матрица доверия переносит их в открывающий маркер.
  *
  * Служебный шум запуска снимается **всегда**, независимо от `strip_ansi`:
  * `removeRunWrapper` вырезает эхо строки-обёртки (`printf … @@srn-…`) и
@@ -1352,14 +1341,7 @@ function formatRunResult(
   // `strip_ansi` — только про ANSI, условием очистки обёртки он не является.
   const unwrapped = removeRunWrapper(run.output, run.wrapperCommand ?? '', run.nonce);
   const raw = stripAnsiOutput ? stripTerminalAnsi(unwrapped) : unwrapped;
-  const body = frameTerminalOutput(raw, {
-    terminal: run.terminalId,
-    run: run.runId,
-    status: run.status,
-    ...(run.exitCode !== undefined ? { exit: run.exitCode } : {}),
-    ...(run.status === 'timeout' ? { timeout: msToTimeoutSec(run.timeoutMs) } : {}),
-    ...(stillRunning ? { still_running: true } : {}),
-  });
+  const body = normalizeTerminalOutput(raw);
   return {
     content: [header, detail, body].filter((part) => part !== '').join('\n'),
     bytes: Buffer.byteLength(body, 'utf8'),
@@ -1387,7 +1369,7 @@ export const terminalRunTool: ToolDefinition = {
   description:
     'Run a command in an interactive terminal. '
     + 'By default (background=false) the tool waits until the command finishes and returns its output '
-    + 'wrapped in [CONTENT] ... [CONTENT END] plus the exit code. '
+    + 'plus the exit code; run attributes (run id, status, exit code, timeout) come in metadata. '
     + 'On timeout the command is NOT killed by default: it keeps running in the PTY, the tool reports '
     + 'still_running=true with the run id and says that the terminal is busy (the next terminal_run in it '
     + 'fails with run_busy) — to stop the command, send Ctrl+C via terminal_write, or pass '
@@ -1483,6 +1465,7 @@ export const terminalRunTool: ToolDefinition = {
       return {
         content: sm('terminal.tool.run_background_started', { run_id: run.runId }),
         metadata: {
+          run: run.runId,
           run_id: run.runId,
           terminal_id: run.terminalId,
           status: run.status,
@@ -1506,17 +1489,23 @@ export const terminalRunTool: ToolDefinition = {
     return {
       content,
       metadata: {
-        run_id: finished.runId,
         terminal_id: finished.terminalId,
         status: finished.status,
-        // Таймаут не убивает команду — это сказано прямо (текст + метаданные).
+        // Атрибуты маркера конверта (ставит runtime) — те же имена.
+        run: finished.runId,
         ...(stillRunning ? { still_running: true } : {}),
-        ...(remoteShell ? { remote_shell: true } : {}),
-        ...(finished.exitCode !== undefined ? { exit_code: finished.exitCode } : {}),
-        timeout: timeoutSec,
-        ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
-        bytes,
+        ...(finished.status === 'timeout' ? { timeout: msToTimeoutSec(finished.timeoutMs) } : {}),
+        ...(finished.exitCode !== undefined ? { exit: finished.exitCode } : {}),
         truncated: finished.truncated,
+        bytes,
+        // Совместимость: прежние имена метаданных.
+        run_id: finished.runId,
+        ...(finished.exitCode !== undefined ? { exit_code: finished.exitCode } : {}),
+        ...(remoteShell ? { remote_shell: true } : {}),
+        // Совместимость: срок ожидания — секунды (в маркер идёт `timeout`
+        // только при таймауте, как и раньше).
+        timeout_sec: timeoutSec,
+        ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
       },
     };
   },

@@ -46,7 +46,7 @@ const OPEN_ENVELOPE_RE = /^\s*<(process|subagent)\b[^>]*>\n?([\s\S]*)$/;
 /**
  * Конверт контекста терминала.
  *
- * Канонический вид backend'а (`frameTerminalOutput`): открывающий маркер
+ * Канонический вид backend'а (`formatBackgroundContent`): открывающий маркер
  * `[CONTENT key=value …]` и закрывающий **`[CONTENT END]`**. Закрывающий
  * `[/CONTENT]` — на всякий случай (прежний вариант), как и прежний конверт
  * `<terminal_context …>…</terminal_context>`.
@@ -98,21 +98,34 @@ export function backgroundTerminalLines(
 }
 
 /**
+ * Снять экранирование маркеров (`\[CONTENT` → `[CONTENT`).
+ *
+ * Backend экранирует тело конверта (`escapeContentMarkers`), чтобы вывод
+ * терминала не закрыл блок; в UI показывается исходный текст вывода.
+ */
+function unescapeContentMarkers(text: string): string {
+  return text.replace(/\\(\[(?:\/?CONTENT)\b)/gi, '$1');
+}
+
+/**
  * Снять конверт контекста терминала — вернуть сам вывод.
  *
  * Закрывающий маркер backend'а — `[CONTENT END]` (канон); `[/CONTENT]` и
  * `<terminal_context …>` принимаются для совместимости. Если конверт не
- * распознан — текст возвращается как есть.
+ * распознан — текст возвращается как есть. Экранирование маркеров в теле
+ * снимается: в карточке — исходный вывод терминала. Результат терминального
+ * тула приходит **без** конверта (его ставит runtime только для модели) —
+ * такой текст возвращается как есть.
  */
 export function extractTerminalContent(content: string): string {
   const trimmed = content.trim();
   for (const re of TERMINAL_ENVELOPE_RES) {
     const full = trimmed.match(re);
-    if (full) return full[1] ?? '';
+    if (full) return unescapeContentMarkers(full[1] ?? '');
   }
   for (const re of OPEN_TERMINAL_ENVELOPE_RES) {
     const partial = trimmed.match(re);
-    if (partial) return partial[1] ?? '';
+    if (partial) return unescapeContentMarkers(partial[1] ?? '');
   }
   return content;
 }
@@ -255,7 +268,11 @@ export function backgroundToolCall(
   const isError = !isBackgroundSuccess(state);
 
   if (kind === 'terminal') {
-    // Контекст терминала: конверт модели (`[CONTENT …]…[CONTENT END]`) в UI лишний.
+    // Контекст терминала (служебное сообщение backend'а): конверт
+    // `[CONTENT …]…[CONTENT END]` в UI лишний. Результат терминального **тула**
+    // (`terminal_read`/`terminal_run`/`terminal_snapshot`) приходит уже сырым
+    // текстом — конверт ставит runtime только для модели, а `extractTerminalContent`
+    // без конверта возвращает текст как есть.
     const output = extractTerminalContent(content) || metaString(metadata?.content) || '';
     return {
       name: 'terminal_read',

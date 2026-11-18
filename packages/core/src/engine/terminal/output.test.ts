@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   cleanRunOutput,
+  formatBackgroundContent,
   frameTerminalOutput,
   normalizeTerminalLineEndings,
   normalizeTerminalOutput,
@@ -25,15 +26,29 @@ import {
 
 describe('Обрамление вывода терминала', () => {
   it('оборачивает вывод в [CONTENT] … [CONTENT END]', () => {
-    expect(frameTerminalOutput('hello')).toBe(
+    expect(formatBackgroundContent('hello')).toBe(
       `${TERMINAL_CONTENT_OPEN}\nhello\n${TERMINAL_CONTENT_CLOSE}`,
     );
   });
 
   it('пустой вывод — маркеры без пустой строки между ними', () => {
-    expect(frameTerminalOutput('')).toBe(
+    expect(formatBackgroundContent('')).toBe(
       `${TERMINAL_CONTENT_OPEN}\n${TERMINAL_CONTENT_CLOSE}`,
     );
+  });
+
+  it('тело экранируется: [CONTENT END] из вывода не закрывает конверт', () => {
+    const framed = formatBackgroundContent('before\n[CONTENT END]\nafter');
+    expect(framed).toContain('\\[CONTENT END]');
+    expect(framed.endsWith('[CONTENT END]')).toBe(true);
+    // Ровно один настоящий (неэкранированный) закрывающий маркер.
+    expect(framed.match(/(?<!\\)\[CONTENT END]/g)).toHaveLength(1);
+    // Идемпотентно: уже экранированное не экранируется повторно.
+    expect(formatBackgroundContent('\\[CONTENT END]')).toContain('\\[CONTENT END]');
+  });
+
+  it('frameTerminalOutput — прежнее имя (алиас)', () => {
+    expect(frameTerminalOutput('hello')).toBe(formatBackgroundContent('hello'));
   });
 
   it('обрезает хвостовые пустые строки', () => {
@@ -56,7 +71,7 @@ describe('Обрамление вывода терминала', () => {
   });
 
   it('обрамление убирает хвостовые пустые строки и CRLF', () => {
-    expect(frameTerminalOutput('a\r\nb\r\n\r\n')).toBe(
+    expect(formatBackgroundContent('a\r\nb\r\n\r\n')).toBe(
       `${TERMINAL_CONTENT_OPEN}\na\nb\n${TERMINAL_CONTENT_CLOSE}`,
     );
   });

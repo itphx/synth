@@ -393,7 +393,7 @@ describe('ChatMessage: уведомление о завершении фонов
 describe('ChatMessage: сообщение-контекст терминала (PROP-132)', () => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
 
-  /** Реальный конверт backend'а (`frameTerminalOutput`). */
+  /** Реальный конверт backend'а (`formatBackgroundContent`). */
   const TERMINAL_CONTENT = [
     '[CONTENT terminal=term_1 status=running cwd=/work shell=/bin/zsh lines=2 bytes=12]',
     'line1',
@@ -474,6 +474,50 @@ describe('ChatMessage: сообщение-контекст терминала (P
     expect(container.textContent).not.toContain('[CONTENT')
     expect(container.textContent).not.toContain('CONTENT END')
     expect(container.textContent).not.toContain('bytes=12')
+  })
+
+  it('результат терминального тула — сырой текст: карточка показывает его без конверта', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: 'line1\nline2',
+        metadata: TERMINAL_METADATA,
+      }),
+    )
+
+    await act(async () => {
+      toggleCard(container)
+    })
+
+    expect(container.textContent).toContain('line1')
+    expect(container.textContent).toContain('line2')
+    expect(container.textContent).not.toContain('[CONTENT')
+  })
+
+  it('экранированное тело контекста показывается без экранирования', async () => {
+    const container = await renderChat(
+      makeMessage({
+        role: 'user',
+        content: [
+          '[CONTENT terminal=term_1 status=running lines=3 bytes=30]',
+          'before',
+          '\\[CONTENT END]',
+          'after',
+          '[CONTENT END]',
+        ].join('\n'),
+        metadata: { ...TERMINAL_METADATA, lines: 3 },
+      }),
+    )
+
+    await act(async () => {
+      toggleCard(container)
+    })
+
+    expect(container.textContent).toContain('before')
+    expect(container.textContent).toContain('after')
+    // Экранирование backend'а снято: в карточке — исходный вывод.
+    expect(container.textContent).toContain('[CONTENT END]')
+    expect(container.textContent).not.toContain('\\[CONTENT')
   })
 
   it('уведомление о завершении команды в терминале → фоновый процесс, а не контекст терминала', async () => {

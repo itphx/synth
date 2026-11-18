@@ -2118,7 +2118,15 @@
   доменный ресурс инстанса: реестр в памяти процесса + PTY на точке исполнения);
   группа правил `terminal` (ключ совпадает со значением capability — правило
   `permission.rules.terminal` работает и по именам встроенных тулов, и по
-  capability плагинного тула), отключаема админом. **Plan-режим:** чтение
+  capability плагинного тула), отключаема админом. **Обрамление вывода — общее
+  правило тулов:** `terminal_read`/`terminal_snapshot`/`terminal_run` возвращают
+  **сырой нормализованный текст**, атрибуты (id терминала, статус, `seq`, `bytes`,
+  `run`, `exit`, …) кладут в `metadata`; конверт `[CONTENT | SOURCE: terminal | … |
+  trust: untrusted]` ставит `applyToolContentFilter` (ветка
+  `ToolCapability.TERMINAL`/`terminal_*` в `engine/security/trust.ts`). Конверт
+  **фоновых** сообщений (`runs.ts`) и контекста терминала (`context-message.ts`)
+  формирует сервис (`formatBackgroundContent`), тело экранируется
+  (`escapeContentMarkers`). **Plan-режим:** чтение
   (`terminal_list`/`terminal_read`) разрешено, мутации (`terminal_open`/
   `terminal_write`/`terminal_signal`/`terminal_close`) заблокированы (`PLAN_BLOCKED_TERMINAL_TOOLS`,
   `permission/evaluator.ts`). **Гейт доступности** — мастер-выключатель инстанса
@@ -2158,8 +2166,9 @@
   жёсткий обрыв только `terminal_close`. **`terminal_run` — один тул, два
   режима** (параметр `background`, как у `execute_shell`/`task`):
   `background: false` (дефолт) — **с ожиданием завершения**: тул ждёт команды
-  и возвращает вывод в обрамлении `[CONTENT]`…`[CONTENT END]` + код возврата
-  (`metadata.exit_code`); по таймауту (`timeout` — **в секундах**, дефолт 30 с,
+  и возвращает **сырой вывод** (конверт `[CONTENT | …]` ставит runtime —
+  `applyToolContentFilter`, источник `terminal`, `trust: untrusted`) + код
+  возврата (`metadata.exit`/`metadata.exit_code`); по таймауту (`timeout` — **в секундах**, дефолт 30 с,
   потолок foreground 600 / background 86 400) — понятный отказ с частичным выводом. `kill_on_timeout: true` —
   по таймауту сервис шлёт Ctrl+C и освобождает терминал (`timeout`,
   `stillRunning: false`); без него команда продолжает работу, а ответ несёт
@@ -2881,7 +2890,8 @@
   приходят **одним** запросом; контекст — служебное user-сообщение
   (`metadata.type='background_run_result'`, `kind='terminal'`,
   `terminal_context=true`, `author='Terminal'`,
-  текст — тот же `[CONTENT …]`…`[CONTENT END]`, что у `terminal_read`), которое
+  текст — служебный конверт `[CONTENT …]`…`[CONTENT END]` с **экранированным**
+  телом, формирует сервис `formatBackgroundContent`), которое
   доставляется **перед** вопросом (`queue` — в историю, `steer` — первым в
   `steerInbox`); `mode:'interrupt'` + контекст → 400, отказ постановки вопроса →
   откат контекста. **`terminal_context=true` — явный маркер контекста:** тот же

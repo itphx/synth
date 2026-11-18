@@ -11,10 +11,12 @@
  *
  * ## Формат
  *
- * Текст сообщения — **ровно тот же**, что у тула `terminal_read`: обрамление
- * `[CONTENT …]` … `[CONTENT END]` (`frameTerminalOutput`), атрибуты открывающего
+ * Текст сообщения — обрамление `[CONTENT …]` … `[CONTENT END]`
+ * (`formatBackgroundContent`), как у служебных блоков фоновых прогонов: это
+ * **не** результат тула, поэтому тело экранируется (`escapeContentMarkers`).
+ * Атрибуты открывающего
  * маркера — только непустые. Нормализацию переводов строк и хвостовых пустых
- * строк делает сам `frameTerminalOutput` (`normalizeTerminalOutput`).
+ * строк делает сам `formatBackgroundContent` (`normalizeTerminalOutput`).
  *
  * ## Служебность
  *
@@ -40,7 +42,8 @@
 
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
-import { frameTerminalOutput, normalizeTerminalOutput } from './output.js';
+import { escapeContentMarkers } from '../security/prompt-injection.js';
+import { formatBackgroundContent, normalizeTerminalOutput } from './output.js';
 
 /**
  * Предел вывода терминала в контексте вопроса — 32 КиБ (UTF-8).
@@ -83,18 +86,20 @@ export type TerminalContextParseResult =
 /**
  * Собрать служебное сообщение с контекстом терминала.
  *
- * Текст — обрамление `[CONTENT …]` … `[CONTENT END]` (как у `terminal_read`).
+ * Текст — обрамление `[CONTENT …]` … `[CONTENT END]`, тело экранируется
+ * (`escapeContentMarkers`): поддельный `[CONTENT END]` в выводе терминала
+ * конверт не закрывает.
  * Атрибуты открывающего маркера — только непустые: `terminal`, `status`,
- * `cwd`, `shell`, `lines`, `bytes`. `bytes` — размер **нормализованного** вывода
- * в UTF-8 (как у `terminal_read`).
+ * `cwd`, `shell`, `lines`, `bytes`. `bytes` — размер **нормализованного и
+ * экранированного** тела в UTF-8 (то, что реально уходит в конверт).
  *
  * `id` — `generateId`; `seq` — 0 (порядковый номер проставит порт хранения при
  * материализации записи в историю).
  */
 export function buildTerminalContextMessage(input: TerminalContextInput): Message {
-  const body = normalizeTerminalOutput(input.content);
+  const body = escapeContentMarkers(normalizeTerminalOutput(input.content)).content;
   const bytes = Buffer.byteLength(body, 'utf8');
-  const content = frameTerminalOutput(input.content, {
+  const content = formatBackgroundContent(input.content, {
     terminal: input.terminal_id,
     ...(input.status ? { status: input.status } : {}),
     ...(input.cwd ? { cwd: input.cwd } : {}),

@@ -12,8 +12,9 @@
 //   …последние N строк…
 //   </terminal_context>
 //
-// - «Прикрепить вывод» — **формат `terminal_read`** (как у тула в ядре):
-//   метаданные в открывающем маркере, закрывающий — `[CONTENT END]`:
+// - «Прикрепить вывод» — **формат `terminal_read`** (как у служебных блоков
+//   контекста терминала): метаданные в открывающем маркере, закрывающий —
+//   `[CONTENT END]`, тело экранируется (`[CONTENT` → `\[CONTENT`):
 //
 //   [CONTENT terminal=<id> status=<status> bytes=<n> tail=<n> stripped=true]
 //   …строки вывода…
@@ -118,6 +119,18 @@ function sanitizeMarkerValue(value: string): string {
 }
 
 /**
+ * Экранировать маркеры блока контента в теле (`[CONTENT` / `[/CONTENT]`).
+ *
+ * То же правило, что у ядра (`escapeContentMarkers` в
+ * `engine/security/prompt-injection.ts`): вывод терминала может содержать
+ * `[CONTENT END]` (эхо файла/команды) — без экранирования он закрыл бы конверт
+ * досрочно. Идемпотентно: перед `[` уже стоит `\` — не трогаем.
+ */
+function escapeContentMarkers(text: string): string {
+  return text.replace(/(?<!\\)\[(\/?CONTENT)\b/gi, (_match, marker: string) => `\\[${marker}`)
+}
+
+/**
  * Хвостовые пустые/пробельные строки убрать.
  *
  * Буфер терминала часто заканчивается пустыми строками (пустая строка после
@@ -134,10 +147,10 @@ function trimTrailingBlankLines(lines: string[]): string[] {
 }
 
 /**
- * Блок вывода терминала в формате `terminal_read`.
+ * Блок вывода терминала в формате контекста терминала.
  *
- * Тот же контракт, что у тула `terminal_read` в ядре: метаданные — **в
- * открывающем маркере** (`terminal`/`status`/`bytes`/`tail`/`stripped`), тело —
+ * Тот же контракт, что у служебного контекста терминала в ядре: метаданные — в
+ * **открывающем маркере** (`terminal`/`status`/`bytes`/`tail`/`stripped`), тело —
  * строки вывода, закрывающий маркер — именно `[CONTENT END]`.
  *
  * ```
@@ -146,9 +159,10 @@ function trimTrailingBlankLines(lines: string[]): string[] {
  * [CONTENT END]
  * ```
  *
- * Хвостовые пустые/пробельные строки срезаются (как `normalizeTerminalOutput`
- * в ядре): `tail` — число строк **после** среза, `bytes` — размер фактического
- * тела.
+ * Тело **экранируется** (как в ядре): `[CONTENT END]` из вывода не закрывает
+ * конверт. Хвостовые пустые/пробельные строки срезаются (как
+ * `normalizeTerminalOutput` в ядре): `tail` — число строк **после** среза,
+ * `bytes` — размер фактического (экранированного) тела.
  *
  * Пустой вывод — открывающий маркер и сразу `[CONTENT END]` (без пустой
  * строки между маркерами: иначе модель прочитает «пустую строку вывода» как
@@ -160,7 +174,7 @@ export function buildTerminalReadBlock(input: {
   lines: string[]
 }): string {
   const lines = trimTrailingBlankLines(input.lines)
-  const body = lines.join('\n')
+  const body = escapeContentMarkers(lines.join('\n'))
   const bytes = new TextEncoder().encode(body).length
   const open = [
     `[CONTENT terminal=${sanitizeMarkerValue(input.terminalId)}`,

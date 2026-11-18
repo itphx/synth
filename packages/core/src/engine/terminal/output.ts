@@ -28,6 +28,19 @@
  * `removeRunWrapper` → `normalizeTerminalOutput` — **тот же** вид, что у
  * инлайн-ответа `terminal_run` и у уведомления о завершении фонового запуска.
  *
+ * ## Кто ставит конверт
+ *
+ * Сам **тул** вывода не обрамляет: `terminal_read`/`terminal_snapshot`/
+ * `terminal_run` возвращают модели **сырой нормализованный текст**, а атрибуты
+ * (id терминала, статус, объём, код возврата) кладут в `metadata` результата —
+ * общий конверт `[CONTENT | …]` ставит runtime (`applyToolContentFilter`,
+ * матрица доверия `engine/security/trust.ts`, источник `terminal`,
+ * `trust: untrusted`). Здесь остаётся конверт **не результатов тулов**:
+ * уведомление о завершении фонового запуска (`runs.ts`) и контекст терминала
+ * в промпте (`context-message.ts`) — служебные сообщения, они не проходят через
+ * IPI-обёртку. Тело конверта экранируется (`escapeContentMarkers`): вывод
+ * терминала не должен «закрыть» блок поддельным `[CONTENT END]`.
+ *
  * ## Границы
  *
  * - **Нормализация — только для возвращаемого текста.** Кольцевой буфер
@@ -53,6 +66,7 @@
  *   (маркер мог разорваться выводом команды). Nonce берётся из записи запуска
  *   (`cleanRunOutput(..., nonce)`) либо выводится из команды-обёртки.
  */
+import { escapeContentMarkers } from '../security/prompt-injection.js';
 
 /** Маркер начала обрамления вывода терминала. */
 export const TERMINAL_CONTENT_OPEN = '[CONTENT]';
@@ -121,8 +135,12 @@ export type TerminalContentAttributeValue = string | number | boolean | undefine
  *   досрочно.
  *
  * Плюс кап длины (`MAX_TERMINAL_ATTRIBUTE_VALUE_LENGTH`).
+ *
+ * Экспортируется: тем же санитайзером пользуется матрица доверия
+ * (`engine/security/trust.ts`), переносящая атрибуты маркера в `metadata`
+ * результата тула.
  */
-function sanitizeAttributeValue(value: string): string {
+export function sanitizeTerminalAttributeValue(value: string): string {
   return value
     .replace(/\s+/g, '')
     .replace(/\]/g, '')
@@ -133,7 +151,7 @@ function sanitizeAttributeValue(value: string): string {
  * Собрать строку атрибутов открывающего маркера: `key=value key2=value2`.
  *
  * - атрибут без значения (`undefined`) **не выводится**;
- * - значение санитизируется (см. `sanitizeAttributeValue`);
+ * - значение санитизируется (см. `sanitizeTerminalAttributeValue`);
  * - пустое значение после санитизации — атрибут не выводится;
  * - порядок атрибутов — порядок ключей объекта (детерминированный).
  *
@@ -148,7 +166,7 @@ export function formatTerminalContentAttributes(
     if (raw === undefined) continue;
     const safeKey = key.replace(/[^A-Za-z0-9_.-]/g, '_');
     if (safeKey === '') continue;
-    const value = sanitizeAttributeValue(typeof raw === 'string' ? raw : String(raw));
+    const value = sanitizeTerminalAttributeValue(typeof raw === 'string' ? raw : String(raw));
     if (value === '') continue;
     parts.push(`${safeKey}=${value}`);
   }
@@ -571,7 +589,17 @@ export function cleanRunOutput(text: string, wrapperCommand?: string, nonce?: st
 }
 
 /**
- * Обрамить вывод терминала для модели.
+ * Обрамить вывод терминала для служебных сообщений (не результатов тулов).
+ *
+ * Используется уведомлением о завершении фонового запуска (`runs.ts`) и
+ * контекстом терминала в промпте (`context-message.ts`): это не результаты
+ * тулов, общий конверт IPI (`[CONTENT | …]`) к ним не применяется — здесь свой
+ * маркер `[CONTENT key=value …]`.
+ *
+ * Тело **экранируется** (`escapeContentMarkers`): вывод терминала может
+ * содержать строку `[CONTENT END]` (эхо файла/команды) — без экранирования она
+ * закрыла бы конверт раньше времени, и остаток вывода модель прочитала бы как
+ * инструкцию вне блока данных.
  *
  * Пустой вывод → `[CONTENT]\n[CONTENT END]` (без пустой строки между
  * маркерами): иначе модель читает «пустую строку вывода» как результат.
@@ -580,14 +608,22 @@ export function cleanRunOutput(text: string, wrapperCommand?: string, nonce?: st
  * (метаданные — в маркере, закрывающий маркер не меняется). Без атрибутов
  * (или с пустым набором) — прежний вид `[CONTENT]`.
  */
-export function frameTerminalOutput(
+export function formatBackgroundContent(
   text: string,
   attributes?: Record<string, TerminalContentAttributeValue>,
 ): string {
-  const body = normalizeTerminalOutput(text);
+  const body = escapeContentMarkers(normalizeTerminalOutput(text)).content;
   const attrs = formatTerminalContentAttributes(attributes);
   const open =
     attrs === '' ? TERMINAL_CONTENT_OPEN : `${TERMINAL_CONTENT_OPEN_PREFIX} ${attrs}]`;
   if (body === '') return `${open}\n${TERMINAL_CONTENT_CLOSE}`;
   return `${open}\n${body}\n${TERMINAL_CONTENT_CLOSE}`;
 }
+
+/**
+ * Прежнее имя `formatBackgroundContent`.
+ *
+ * @deprecated Конверт ставят только служебные сообщения (фон/контекст);
+ *   результаты терминальных тулов обрамляет runtime (`applyToolContentFilter`).
+ */
+export const frameTerminalOutput = formatBackgroundContent;

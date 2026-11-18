@@ -190,6 +190,107 @@ describe('getToolTrust — периметр allowedRoots (ADR-114)', () => {
   });
 });
 
+describe('getToolTrust — терминальные тулы (ADR-132)', () => {
+  it('terminal_read: untrusted, источник terminal, атрибуты из metadata', () => {
+    const t = getToolTrust(
+      'terminal_read',
+      { terminal_id: 'term_1' },
+      WS,
+      [ToolCapability.TERMINAL],
+      undefined,
+      {
+        metadata: {
+          terminal_id: 'term_1',
+          status: 'running',
+          seq: '1..2',
+          bytes: 12,
+          history: true,
+          total_bytes: 13,
+          dropped_bytes: 0,
+          stripped: true,
+          tail: 2,
+          truncated: false,
+        },
+      },
+    );
+    expect(t).toEqual({
+      trust: 'untrusted',
+      source: 'terminal',
+      attrs: {
+        terminal_id: 'term_1',
+        status: 'running',
+        seq: '1..2',
+        bytes: '12',
+        tail: '2',
+        stripped: 'true',
+        history: 'true',
+        total_bytes: '13',
+        dropped_bytes: '0',
+        truncated: 'false',
+      },
+    });
+  });
+
+  it('terminal_run: attrs run/exit/still_running/timeout', () => {
+    const t = getToolTrust('terminal_run', { terminal_id: 'term_1' }, WS, [ToolCapability.TERMINAL], undefined, {
+      metadata: {
+        terminal_id: 'term_1',
+        run: 'run_1',
+        status: 'timeout',
+        timeout: 30,
+        still_running: true,
+      },
+    });
+    expect(t?.trust).toBe('untrusted');
+    expect(t?.attrs.run).toBe('run_1');
+    expect(t?.attrs.status).toBe('timeout');
+    expect(t?.attrs.timeout).toBe('30');
+    expect(t?.attrs.still_running).toBe('true');
+    // Нет значения — нет и атрибута.
+    expect(t?.attrs.exit).toBeUndefined();
+  });
+
+  it('ветка включается и по имени terminal_* без capability', () => {
+    const t = getToolTrust('terminal_snapshot', {}, WS, undefined, undefined, {
+      metadata: { terminal_id: 'term_2', status: 'exited', size: '20x5', cursor: '1,0' },
+    });
+    expect(t?.source).toBe('terminal');
+    expect(t?.attrs).toEqual({
+      terminal_id: 'term_2',
+      status: 'exited',
+      size: '20x5',
+      cursor: '1,0',
+    });
+  });
+
+  it('значения санитизируются: без переводов строк, пробелов и «]», кап 120', () => {
+    const t = getToolTrust('terminal_read', {}, WS, [ToolCapability.TERMINAL], undefined, {
+      metadata: {
+        terminal_id: 'term 1]',
+        status: 'run\nning',
+        cwd: '/work dir]',
+        shell: 'x'.repeat(200),
+      },
+    });
+    expect(t?.attrs.terminal_id).toBe('term1');
+    expect(t?.attrs.status).toBe('running');
+    expect(t?.attrs.cwd).toBe('/workdir');
+    expect(t?.attrs.shell).toHaveLength(120);
+  });
+
+  it('посторонние ключи metadata в маркер не попадают', () => {
+    const t = getToolTrust('terminal_read', {}, WS, [ToolCapability.TERMINAL], undefined, {
+      metadata: { terminal_id: 'term_1', i18n: { key: 'x' }, first_seq: 1, secret: 'nope' },
+    });
+    expect(Object.keys(t?.attrs ?? {})).toEqual(['terminal_id']);
+  });
+
+  it('без metadata — untrusted без атрибутов', () => {
+    const t = getToolTrust('terminal_list', {}, WS, [ToolCapability.TERMINAL]);
+    expect(t).toEqual({ trust: 'untrusted', source: 'terminal', attrs: {} });
+  });
+});
+
 describe('getToolTrust — тулы плагинов (6-й аргумент, ADR-090)', () => {
   /** Вызов с опциями тула плагина. */
   function pluginTrust(

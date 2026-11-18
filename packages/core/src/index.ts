@@ -688,9 +688,11 @@ export type {
   TerminalRunStatus,
 } from './engine/terminal/runs.js';
 export {
+  formatBackgroundContent,
   frameTerminalOutput,
   normalizeTerminalLineEndings,
   normalizeTerminalOutput,
+  sanitizeTerminalAttributeValue,
   TERMINAL_CONTENT_CLOSE,
   TERMINAL_CONTENT_OPEN,
 } from './engine/terminal/output.js';
