@@ -121,6 +121,18 @@ export const ToolCapability = {
    * заблокированы (план ничего не исполняет).
    */
   TERMINAL: 'terminal',
+  /**
+   * Реестр агентов инстанса (самообслуживание из чата): тулы `synth_agent_list`,
+   * `synth_agent_get` (чтение) и `synth_agent_save`/`synth_agent_delete`/
+   * `synth_agent_enable`/`synth_agent_import` (запись, только ADMIN).
+   *
+   * Отдельная capability по той же причине, что `instance`/`pipeline`/`models`:
+   * реестр агентов — доменный ресурс инстанса (JSON-записи `{dataDir}/agents` +
+   * ролевые файлы `{dataDir}/context/roles`), а не примитив ядра. Capability
+   * **не** привязана к рабочему каталогу проекта (`WORKSPACE_CAPABILITIES`) —
+   * реестр доступен и без workspace. В plan-режиме разрешены только чтения.
+   */
+  AGENTS: 'agents',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -174,6 +186,11 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.TERMINAL]: {
     label: 'Терминалы',
     description: 'terminal_list, terminal_open, terminal_read, terminal_write, terminal_close',
+  },
+  [ToolCapability.AGENTS]: {
+    label: 'Агенты',
+    description:
+      'synth_agent_list, synth_agent_get, synth_agent_save, synth_agent_delete, synth_agent_enable, synth_agent_import',
   },
 };
 

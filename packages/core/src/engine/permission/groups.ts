@@ -173,6 +173,28 @@ export const INSTANCE_WRITE_TOOLS = [
 export const INSTANCE_TOOLS = [...INSTANCE_READ_TOOLS, ...INSTANCE_WRITE_TOOLS];
 
 /**
+ * Самообслуживание реестра агентов из чата: `synth_agent_*`.
+ *
+ * Отдельная группа, как `instance`/`terminal`/`script`: реестр агентов —
+ * доменный ресурс инстанса (JSON-записи агентов + ролевые файлы), а не
+ * примитив ядра. Ключ группы совпадает со значением capability `agents`,
+ * поэтому правило `permission.rules.agents` работает и по именам встроенных
+ * тулов, и по capability плагинного тула.
+ *
+ * Чтение (`synth_agent_list`/`synth_agent_get`) в plan-режиме **разрешено**,
+ * мутации (`synth_agent_save`/`delete`/`enable`/`import`) — заблокированы
+ * (`isPlanBlockedTool`, `evaluator.ts`): план ничего не меняет.
+ */
+export const AGENTS_READ_TOOLS = ['synth_agent_list', 'synth_agent_get'];
+export const AGENTS_WRITE_TOOLS = [
+  'synth_agent_save',
+  'synth_agent_delete',
+  'synth_agent_enable',
+  'synth_agent_import',
+];
+export const AGENTS_TOOLS = [...AGENTS_READ_TOOLS, ...AGENTS_WRITE_TOOLS];
+
+/**
  * ADR-039: операционный список задач сессии (`session.todos`, не `project.plan`).
  *
  * Имена **уже** входят в `RUNTIME_TOOLS` — группа `runtime` продолжает их
@@ -275,6 +297,8 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   ssh: SSH_TOOLS,
   // Workstream A1: read-only инстанс/MCP (ключ совпадает с capability `instance`).
   instance: INSTANCE_TOOLS,
+  // Самообслуживание реестра агентов (ключ совпадает с capability `agents`).
+  agents: AGENTS_TOOLS,
   // ADR-039: список задач сессии (ключ совпадает с capability `todo`).
   // Имена дублируются в `runtime` намеренно: тул принадлежит обеим группам.
   todo: TODO_TOOLS,
@@ -322,6 +346,7 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'instance',
   'terminal',
   'script',
+  'agents',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

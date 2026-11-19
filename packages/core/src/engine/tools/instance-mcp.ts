@@ -34,6 +34,9 @@ import { syncMcpManagerFromRegistry } from '../mcp/manager-sync.js';
 import { McpRegistryValidationError, assertNoMcpSecretHeaders } from '../../storage/mcp-registry-store.js';
 import { evaluateMcpNetworkAccess } from '../mcp/network-policy.js';
 import { canEditProject } from './project-access.js';
+// ADMIN-гейт инстанс-операций — общий хелпер (роль ADMIN **или** локальный
+// владелец standalone: паритет с локальным API-ключом).
+import { isInstanceAdmin } from './instance-auth.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
@@ -179,9 +182,14 @@ function canManage(entry: McpRegistryEntry, viewer: { userId: string; elevated: 
  * ADR-071: полномочия **ADMIN** (не LEAD) нужны для instance-записей, stdio и
  * instance master flag. `LEAD` остаётся elevated для видимости/проектов, но не
  * получает ADMIN-права над MCP. Нет принципала — fail-closed.
+ *
+ * Проверка — общий хелпер `isInstanceAdmin` (`instance-auth.ts`): роль `ADMIN`
+ * **или** локальный владелец standalone-инстанса (паритет с локальным
+ * API-ключом, который в standalone даёт ADMIN). Без этого единственный админ
+ * standalone не мог добавить доверенный локальный сервер из чата.
  */
-function isInstanceAdmin(extra: InstanceMcpExtra): boolean {
-  return (extra.principal?.roles ?? []).some((role) => role.toUpperCase() === 'ADMIN');
+function canManageMcpAsAdmin(ctx: ToolContext): boolean {
+  return isInstanceAdmin(ctx);
 }
 
 /**
@@ -258,7 +266,7 @@ export const synthMcpAddTool: ToolDefinition = {
 
     const viewer = await resolveViewer(ctx, extra);
     const origin = params.origin ?? 'user';
-    if (!isInstanceAdmin(extra) && (origin === 'instance' || params.config.type === 'stdio')) {
+    if (!canManageMcpAsAdmin(ctx) && (origin === 'instance' || params.config.type === 'stdio')) {
       return fail('instance.mcp.instance_forbidden');
     }
 
@@ -340,14 +348,14 @@ export const synthMcpUpdateTool: ToolDefinition = {
     if (!entry) return notFound(extra, params.name, viewer);
     if (!canManage(entry, viewer)) return fail('instance.mcp.forbidden');
     // Instance-запись меняет только ADMIN (LEAD elevated, но не ADMIN).
-    if (entry.origin === 'instance' && !isInstanceAdmin(extra)) {
+    if (entry.origin === 'instance' && !canManageMcpAsAdmin(ctx)) {
       return fail('instance.mcp.instance_forbidden');
     }
 
     // Non-elevated не может создать/обновить stdio-конфиг (RCE): смена
     // `config.type` на stdio у своей user-записи — тот же риск, что и add.
     // stdio/instance — только ADMIN (ADR-071), LEAD недостаточно.
-    if (params.config?.type === 'stdio' && !isInstanceAdmin(extra)) {
+    if (params.config?.type === 'stdio' && !canManageMcpAsAdmin(ctx)) {
       return fail('instance.mcp.instance_forbidden');
     }
 
@@ -413,7 +421,7 @@ export const synthMcpRemoveTool: ToolDefinition = {
     if (!entry) return notFound(extra, params.name, viewer);
     if (!canManage(entry, viewer)) return fail('instance.mcp.forbidden');
     // Instance-запись удаляет только ADMIN (ADR-071).
-    if (entry.origin === 'instance' && !isInstanceAdmin(extra)) {
+    if (entry.origin === 'instance' && !canManageMcpAsAdmin(ctx)) {
       return fail('instance.mcp.instance_forbidden');
     }
 
@@ -609,7 +617,7 @@ export const synthMcpEnableTool: ToolDefinition = {
     const manager = extra.mcpManager;
     const registry = extra.mcpRegistry;
     if (!manager || !registry) return depsError(this.name);
-    if (!isInstanceAdmin(extra)) return fail('instance.mcp.instance_forbidden');
+    if (!canManageMcpAsAdmin(ctx)) return fail('instance.mcp.instance_forbidden');
 
     await registry.update(entry.id, { enabled: params.enabled });
     await syncMcpManagerFromRegistry(manager, registry);

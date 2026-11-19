@@ -46,6 +46,9 @@ const WITH_AUTOMATION_AND_EXECUTORS = [...WITH_AUTOMATION, 'fixer', 'tester'];
 /** Агенты, которым capability пайплайнов/расписаний не выдаётся. */
 const WITHOUT_AUTOMATION = [
   'fixer', 'tester', 'researcher', 'security-auditor', 'explore', 'general', 'title',
+  // `keeper` обслуживает инстанс (реестры/настройки/бэкапы), а не автоматизацию
+  // проекта: пайплайны и расписания ему не выдаются.
+  'keeper',
 ];
 /** Агенты, которым не выдаётся ни `question`, ни `process`. */
 const WITHOUT_AUTOMATION_AND_EXECUTORS = [
@@ -275,7 +278,7 @@ describe('Дефолтные агенты — capability todo (ADR-039)', () => 
 describe('Дефолтные агенты — capability instance (Workstream A1)', () => {
   const agents = loadSystemAgentDefinitions();
   const byId = new Map(agents.map((a) => [a.id, a]));
-  const WITH_INSTANCE = ['assistant', 'admin', 'devops', 'leader'];
+  const WITH_INSTANCE = ['assistant', 'admin', 'devops', 'leader', 'keeper'];
   const WITHOUT_INSTANCE = ['security-auditor', 'tester', 'researcher', 'fixer', 'explore', 'general', 'title'];
   const INSTANCE_TOOLS_LIST = [synthInfoTool, synthMcpListTool, synthMcpTestTool];
 

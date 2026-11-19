@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatOrchestrator } from './orchestrator.js';
 import { PermissionEvaluator } from './permission/evaluator.js';
-import { shellSavePatterns } from './security/shell-guard.js';
+import { shellGrantPlan, shellSavePatterns } from './security/shell-guard.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import type { ShellPolicy } from './security/shell-guard.js';
 
@@ -310,7 +310,9 @@ describe('shell-грант сессии: каталог вместо патте�
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
     };
     const merged = proto._applyDirectoryAllow.call(ctx, undefined, ['/x']);
-    expect(merged.rules.external_directory).toEqual({ '/x/*': 'allow' });
+    // Каталог разрешается целиком: сам каталог и его непосредственное
+    // содержимое (`*` не пересекает `/`, поэтому `<dir>/*` каталог не покрывает).
+    expect(merged.rules.external_directory).toEqual({ '/x': 'allow', '/x/*': 'allow' });
 
     const keep = proto._applyDirectoryAllow.call(ctx, {
       rules: { external_directory: 'allow' },
@@ -322,9 +324,10 @@ describe('shell-грант сессии: каталог вместо патте�
       rules: { external_directory: { '/other/*': 'deny' } },
       askTimeoutMs: 30_000,
     }, ['/x']);
-    // Существующие ключи сохраняются, добавляется ключ каталога.
+    // Существующие ключи сохраняются, добавляются ключи каталога.
     expect(mergedIntoObject.rules.external_directory).toEqual({
       '/other/*': 'deny',
+      '/x': 'allow',
       '/x/*': 'allow',
     });
   });
@@ -386,7 +389,7 @@ describe('shell-грант сессии: каталог вместо патте�
 
       // Командный паттерн не выдан, каталог — выдан.
       expect(config.rules.execute_shell).toBeUndefined();
-      expect(config.rules.external_directory).toEqual({ [`${root}/*`]: 'allow' });
+      expect(config.rules.external_directory).toEqual({ [root]: 'allow', [`${root}/*`]: 'allow' });
       expect(writes).toBe(1);
       expect(published).toEqual(['session.updated']);
       expect(granted).toEqual([{
@@ -446,7 +449,10 @@ describe('shell-грант сессии: каталог вместо патте�
 
       // Командный паттерн не выдан: грант — каталогом внешнего файла.
       expect(config.rules.execute_shell).toBeUndefined();
-      expect(config.rules.external_directory).toEqual({ [`${outside}/*`]: 'allow' });
+      expect(config.rules.external_directory).toEqual({
+        [outside]: 'allow',
+        [`${outside}/*`]: 'allow',
+      });
       expect(granted[0]?.patterns).toEqual([]);
       expect(granted[0]?.directories).toEqual([outside]);
 
@@ -492,8 +498,9 @@ describe('shell-грант сессии: каталог вместо патте�
         root,
         { params: { path: '*.js' }, askKind: 'dynamic' },
       );
-      expect(config.rules.external_directory).toEqual({ [`${join(root, 'sub')}/*`]: 'allow' });
-      expect(granted[0]?.directories).toEqual([join(root, 'sub')]);
+      const sub = join(root, 'sub');
+      expect(config.rules.external_directory).toEqual({ [sub]: 'allow', [`${sub}/*`]: 'allow' });
+      expect(granted[0]?.directories).toEqual([sub]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -674,13 +681,115 @@ describe('грант сессии: последовательные одобре
     );
 
     const expected = {
+      '/workspace/project/a': 'allow',
       '/workspace/project/a/*': 'allow',
+      '/workspace/project/b': 'allow',
       '/workspace/project/b/*': 'allow',
     };
-    expect(first.rules.external_directory).toEqual({ '/workspace/project/a/*': 'allow' });
+    expect(first.rules.external_directory).toEqual({
+      '/workspace/project/a': 'allow',
+      '/workspace/project/a/*': 'allow',
+    });
     expect(second.rules.external_directory).toEqual(expected);
     expect(store.get('s1')!.settings.permission.rules.external_directory).toEqual(expected);
     // Командный паттерн по-прежнему не выдаётся.
     expect(store.get('s1')!.settings.permission.rules.execute_shell).toBeUndefined();
+  });
+});
+
+/**
+ * UX-инвариант ADR-029: «Разрешить в сессии» предлагается только тогда, когда
+ * **записываемое** правило действительно снимает этот ask, иначе человек
+ * подтверждает одно и то же бесконечно (цикл одобрений).
+ *
+ * Тест проходит полный круг на формах ask'ов, для которых грант предлагается
+ * (`external`/`dynamic`): проверка → план гранта (тот же вызов
+ * `shellGrantPlan`, что и в карточке) → выдача гранта (`_grantSessionToolAllow`,
+ * который пишет правило) → повторная проверка той же команды = `allow`.
+ */
+describe('UX-инвариант: предложенный грант снимает тот же ask', () => {
+  type ShellCheckInput = Parameters<PermissionEvaluator['check']>[0];
+
+  const evaluate = (config: PermissionConfig, input: ShellCheckInput) =>
+    new PermissionEvaluator(config).check(input);
+
+  it('external/dynamic: записанный грант снимает ask, пустой план — гранта нет', async () => {
+    const ws = await mkdtemp(join(tmpdir(), 'synth-inv-ws-'));
+    const outside = await mkdtemp(join(tmpdir(), 'synth-inv-out-'));
+    const many = join(outside, 'many');
+    try {
+      await mkdir(join(outside, 'files'), { recursive: true });
+      await writeFile(join(outside, 'files', 'a.txt'), 'x');
+      await mkdir(join(outside, 'dirs', 'd1'), { recursive: true });
+      await mkdir(join(outside, 'dirs', 'd2'), { recursive: true });
+      await mkdir(many, { recursive: true });
+      // Больше лимита раскрытия glob'а — детерминированный `dynamic`-ask.
+      for (let i = 0; i < 2100; i += 1) await writeFile(join(many, `f${i}.txt`), '');
+
+      const cases: Array<[string, string]> = [
+        ['внешний литерал-файл', `cat ${join(outside, 'files', 'a.txt')}`],
+        ['внешний литерал-каталог', `ls ${outside}/files`],
+        ['внешний glob: совпадения — файлы', `ls ${outside}/files/*.txt`],
+        ['внешний glob: совпадения — каталоги', `ls ${outside}/dirs/*`],
+        ['dynamic: каталог не раскрывается', `ls ${many}/*.txt`],
+        ['dynamic: база — цель `cd`', `cd ${many}; ls *.txt`],
+      ];
+
+      for (const [label, command] of cases) {
+        const input: ShellCheckInput = {
+          toolName: 'execute_shell',
+          params: { command },
+          workingDir: ws,
+          sessionMode: 'act',
+          planMode: 'auto',
+          planApproved: false,
+          shellPolicy: SHELL_POLICY,
+        };
+        const decision = evaluate({ rules: {}, askTimeoutMs: 30_000 }, input);
+        expect(decision.action, label).toBe('ask');
+        expect(['external', 'dynamic'], label).toContain(decision.askKind);
+
+        // План — как в оркестраторе (карточка подтверждения).
+        const plan = shellGrantPlan(command, {
+          params: decision.params,
+          askKind: decision.askKind,
+          ...(decision.askPaths ? { paths: decision.askPaths } : {}),
+        }, { cwd: ws });
+        // Грант предлагается (иначе карточка показала бы только «Только один раз»).
+        expect(plan.directories.length, label).toBeGreaterThan(0);
+
+        const session: GrantSession = {
+          id: 's1',
+          ownerId: 'user1',
+          settings: { permission: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig },
+        };
+        const ctx = {
+          _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
+          _sessionManager: { mutateMeta: fakeMutateMeta(grantStore(session)) },
+          _eventBus: { publish: () => {} },
+          _applyShellAllow: proto._applyShellAllow,
+          _applyDirectoryAllow: proto._applyDirectoryAllow,
+          _applyToolAllow: vi.fn(),
+        };
+        const config = await proto._grantSessionToolAllow.call(
+          ctx,
+          session,
+          'execute_shell',
+          { command },
+          ws,
+          {
+            params: decision.params,
+            askKind: decision.askKind,
+            ...(decision.askPaths ? { paths: decision.askPaths } : {}),
+          },
+        );
+
+        // То же правило, что записано в сессию, снимает ask.
+        expect(evaluate(config, input).action, label).toBe('allow');
+      }
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });

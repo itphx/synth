@@ -3249,6 +3249,7 @@ export const dict = {
   'admin.agents.cap.todo': 'todo list',
   'admin.agents.cap.instance': 'instance & MCP',
   'admin.agents.cap.terminal': 'terminal',
+  'admin.agents.cap.agents': 'agent registry',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',

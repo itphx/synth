@@ -905,6 +905,43 @@ export const SYSTEM_MESSAGES = {
   'instance.mcp.invalid_config': 'Error: invalid MCP config: {error}',
   'instance.mcp.exists': 'Error: MCP server "{name}" already exists',
 
+  // --- Реестр агентов инстанса (самообслуживание из чата) ---
+  // Тул `synth_agent_*`: чтение состава реестра и запись определений/ролей.
+  // Канал LLM — en (ADR-041); ru-переводы — в словаре UI.
+  'agent.deps_unavailable': 'Error: the agent registry is unavailable for {tool}',
+  'agent.registry_unavailable': 'Error: could not read the agent registry: {error}',
+  'agent.forbidden': 'Error: this agent registry operation requires ADMIN (in standalone the local owner is admin)',
+  'agent.invalid_id': 'Error: invalid agent id "{id}" — lowercase latin letters, digits, "-" and "_" only',
+  'agent.invalid_effort': 'Error: invalid effort tier; allowed values: {levels}',
+  'agent.invalid_role_file': 'Error: role file name "{file}" must be a plain file name without paths or ".."',
+  'agent.role_unavailable':
+    'Error: the role prompt cannot be written for {file}: the context file port is not connected',
+  'agent.role_write_failed': 'Error: failed to write the agent role file {file}: {error}',
+  'agent.save_failed': 'Error: failed to save agent "{id}": {error}',
+  'agent.save.created': 'Agent "{id}" created.',
+  'agent.save.updated': 'Agent "{id}" updated.',
+  'agent.not_found': 'Error: agent "{id}" not found. Available agents: {available}',
+  'agent.override_not_found': 'Error: agent "{id}" has no stored override to reset',
+  'agent.list': 'Agents ({count}):\n{json}',
+  'agent.get': 'Agent "{id}":\n{json}',
+  'agent.delete.deleted': 'Agent "{id}" deleted.',
+  'agent.delete.reset': 'Agent "{id}" reset to the builtin definition.',
+  'agent.enable.ok': 'Agent "{id}" enabled: {enabled}.',
+  'agent.import.source_required':
+    'Error: pass either a markdown file path or the markdown content to import',
+  'agent.import.source_ambiguous': 'Error: pass only one source — either path or content, not both',
+  'agent.import.path_outside': 'Error: import path is outside the session perimeter: {path}',
+  'agent.import.read_failed': 'Error: failed to read {path}: {error}',
+  'agent.import.invalid_frontmatter': 'Error: invalid markdown frontmatter: {error}',
+  'agent.import.no_id':
+    'Error: the agent id is missing — add `id` to the frontmatter or import from a named .md file',
+  'agent.import.warning_skill':
+    'permission "{name}" is not mapped: skills have no capability — bind them through `groups`',
+  'agent.import.warning_permission': 'permission "{name}" is not mapped to any core capability',
+  'agent.import.dry_run': 'Import preview for agent "{id}" (nothing was written):\n{json}',
+  'agent.import.imported': 'Agent "{id}" imported. Warnings: {warnings}',
+  'agent.import.updated': 'Agent "{id}" updated from an import. Warnings: {warnings}',
+
   // --- Интерактивные терминалы (PROP-132, Ф5) ---
   'terminal.tool.deps_unavailable':
     'Error: the terminal service is not available in this session',

@@ -729,8 +729,12 @@ describe('HTTP: восстановленное ожидание — грант �
     expect(res.status).toBe(200);
 
     const after = (await world.sessionManager.getSession(session.id))!;
-    // Каталог виновника — `external_directory`; командный паттерн не выдан.
-    expect(after.settings.permission?.rules?.external_directory).toEqual({ '/srv/data/*': 'allow' });
+    // Каталог виновника — `external_directory` (сам каталог и его содержимое);
+    // командный паттерн не выдан.
+    expect(after.settings.permission?.rules?.external_directory).toEqual({
+      '/srv/data': 'allow',
+      '/srv/data/*': 'allow',
+    });
     expect(after.settings.permission?.rules?.execute_shell).toBeUndefined();
     expect(await world.repository.list()).toEqual([]);
   });
@@ -751,7 +755,10 @@ describe('HTTP: восстановленное ожидание — грант �
 
     const after = (await world.sessionManager.getSession(session.id))!;
     expect(after.settings.permission?.rules?.execute_shell).toBeUndefined();
-    expect(after.settings.permission?.rules?.external_directory).toEqual({ [`${tmpDir}/*`]: 'allow' });
+    expect(after.settings.permission?.rules?.external_directory).toEqual({
+      [tmpDir]: 'allow',
+      [`${tmpDir}/*`]: 'allow',
+    });
     expect(await world.repository.list()).toEqual([]);
   });
 

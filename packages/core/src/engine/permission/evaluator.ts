@@ -19,6 +19,7 @@ import {
   SCHEDULE_WRITE_TOOLS,
   SSH_TOOLS,
   INSTANCE_WRITE_TOOLS,
+  AGENTS_WRITE_TOOLS,
   TERMINAL_TOOLS,
 } from './groups.js';
 
@@ -33,7 +34,7 @@ import type {
   AuthorityShadowContext,
 } from '../authority/hook.js';
 import { warning } from '../../logger.js';
-import { checkShellCommand, isMutatingCommand, isShellCommandGranted, isPerimeterExempt, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
+import { checkShellCommand, isMutatingCommand, isShellCommandGranted, isPerimeterExempt, shellGrantPlan, tokenizeCommand, matchShellCommandPattern } from '../security/shell-guard.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import { checkPath } from '../security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
@@ -206,6 +207,9 @@ export function isPlanBlockedTool(toolName: string, capabilities?: readonly stri
   // Workstream A1: write-тулы инстанса/MCP (пока список пуст) — блокируются в
   // plan-режиме, read-тулы (`synth_info`/`synth_mcp_list`/`synth_mcp_test`) — нет.
   if (INSTANCE_WRITE_TOOLS.includes(toolName)) return true;
+  // Самообслуживание реестра агентов: мутации реестра/ролей — это запись, план
+  // ничего не меняет; чтения (`synth_agent_list`/`synth_agent_get`) остаются.
+  if (AGENTS_WRITE_TOOLS.includes(toolName)) return true;
   const groups = getToolGroups(toolName, capabilities);
   return groups.includes('edit') || groups.includes('git_write');
 }
@@ -654,16 +658,31 @@ export class PermissionEvaluator {
             && isShellCommandGranted(shellCommand, this._rules);
           // Грант **каталогом** (ADR-029, как `cd`-цели в opencode): явное
           // правило `external_directory` с `allow` на каталог снимает
-          // dynamic-ask, если ВСЕ фактические совпадения glob'а (`askPaths`)
-          // внутри разрешённого каталога (или внутри периметра). Дефолт
-          // `external_directory` (`ask`) снятием не считается — только явный
-          // `allow`. `protected`/`mutation`/`cwd` эта ветка не расширяет.
+          // dynamic-ask. Дефолт `external_directory` (`ask`) снятием не
+          // считается — только явный `allow`. `protected`/`mutation`/`cwd` эта
+          // ветка не расширяет.
+          //
+          // Условие зависит от того, известны ли фактические совпадения:
+          // - `askPaths` есть (совпадения glob'а известны) — каждый путь должен
+          //   быть внутри периметра или под явным `allow` правила;
+          // - `askPaths` нет (`dynamic`: каталог не раскрылся — нет прав чтения
+          //   или совпадений больше лимита) — сверяемся с **планом гранта**
+          //   (`shellGrantPlan` — тот же, что показывает карточка «Разрешить в
+          //   сессии»): явный `allow` должен покрывать каталог виновника целиком.
+          //   Совпадения glob'а всегда лежат в его литеральном каталоге, поэтому
+          //   грант каталогом — покрывающий; без этой сверки карточка предлагала
+          //   правило, которое вопрос не снимало (цикл одобрений).
           const extRule = this._rules['external_directory'];
-          const liftedByDirectoryGrant = sc.action === 'ask' && sc.askKind === 'dynamic'
-            && (sc.askPaths?.length ?? 0) > 0
-            && extRule !== undefined
-            && sc.askPaths!.every((p) => isInsideAnyRoot(p, roots)
-              || this._resolveRule('external_directory', extRule, [p], workingDir)?.action === 'allow');
+          const lift = sc.action === 'ask' && sc.askKind === 'dynamic' && extRule !== undefined;
+          const liftedByDirectoryGrant = lift && ((sc.askPaths?.length ?? 0) > 0
+            ? sc.askPaths!.every((p) => isInsideAnyRoot(p, roots)
+              || this._resolveRule('external_directory', extRule, [p], workingDir)?.action === 'allow')
+            : this._dynamicAskCoveredByDirectoryGrant(
+              shellCommand,
+              sc.params,
+              shellCwd,
+              extRule,
+            ));
           if (!liftedByCommandGrant && !liftedByDirectoryGrant) {
             return {
               action: sc.action,
@@ -836,6 +855,36 @@ export class PermissionEvaluator {
   }
 
   /**
+   * Покрыт ли `dynamic`-ask грантом каталогом.
+   *
+   * Каталог берётся из **того же** плана, что предлагается человеку
+   * (`shellGrantPlan`: каталог-часть токена-виновника, `cd` внутри команды
+   * учитывается), поэтому «Разрешить в сессии» снимает ровно тот ask, для
+   * которого оно показано. Грант считается покрывающим, если правило
+   * `external_directory` разрешает содержимое каталога (`<dir>/*` — форма
+   * гранта, см `_applyDirectoryAllow`).
+   */
+  private _dynamicAskCoveredByDirectoryGrant(
+    shellCommand: string | undefined,
+    params: Record<string, string> | undefined,
+    shellCwd: string,
+    rule: PermissionRule,
+  ): boolean {
+    if (shellCommand === undefined || rule === 'deny') return false;
+    if (rule === 'allow') return true;
+    if (typeof rule !== 'object' || rule === null) return false;
+    const { directories } = shellGrantPlan(shellCommand, { params, askKind: 'dynamic' }, { cwd: shellCwd });
+    if (directories.length === 0) return false;
+    return directories.every((dir) => {
+      // Проба «каталог и его содержимое»: паттерн `<dir>/*` (или шире) — форма
+      // гранта каталогом; частичный паттерн (`<dir>/*.txt`) покрытием не считается.
+      const probe = dir.endsWith('/') ? `${dir}*` : `${dir}/*`;
+      return Object.entries(rule).some(([pattern, action]) => action === 'allow'
+        && globMatch(pattern, probe));
+    });
+  }
+
+  /**
    * Правило по имени тула (слой 1).
    *
    * Для `execute_shell` **объектное** правило — набор паттернов КОМАНД
@@ -843,6 +892,13 @@ export class PermissionEvaluator {
    * у execute_shell единственный path-параметр — `cwd`, и по нему грант не
    * матчился никогда (правило лежало мёртвым, одобрение спрашивалось снова).
    * Правило по путям (`{ "/каталог": "allow" }`) резолвится как раньше.
+   *
+   * **`isFile` для `execute_shell` — это «задан `cwd`»** (`TOOL_PATH_PARAMS`:
+   * единственный path-параметр — `cwd`). Значит гейт внешнего каталога ниже
+   * срабатывает ровно там, где он возможен: без `cwd` каталог выполнения —
+   * рабочий каталог сессии, внешнего доступа нет. Строковое
+   * `execute_shell: 'allow'` (админ-настройка/legacy) в этот гейт не заходит —
+   * это «инструмент разрешён целиком», а не набор разрешённых команд.
    */
   private _resolveToolRule(
     toolName: string,
@@ -865,6 +921,9 @@ export class PermissionEvaluator {
     // `allow` по команде не снимает гейт внешнего каталога: грант покрывает
     // команду, а не рабочий каталог (cwd вне периметра → ask, как и для
     // группового правила `shell`, которое проверяется после этого гейта).
+    // Сессионный грант по команде оркестратор больше не выдаёт (ADR-029,
+    // `patterns: []`), но правило `execute_shell: { "<cmd> *": "allow" }` из
+    // конфига остаётся рабочим — и внешний `cwd` оно по-прежнему не покрывает.
     if (byCommand.action === 'allow' && isFile && paths.some((p) => !isInsideAnyRoot(p, roots))) {
       return undefined;
     }

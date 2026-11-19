@@ -161,6 +161,10 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
     ['security-auditor', ['primary', 'subagent'], 60],
     ['devops', ['primary', 'subagent'], 100],
     ['admin', ['primary', 'subagent'], 100],
+    // `keeper` — хранитель инстанса: обслуживает сам Synth (реестры, настройки,
+    // бэкапы, диагностика), поэтому и primary, и сабагент, с тем же лимитом шагов,
+    // что у инфраструктурных ролей.
+    ['keeper', ['primary', 'subagent'], 100],
   ] as const)('%s есть в реестре, agentMode нормализован, maxSteps=%d', (id, modes, maxSteps) => {
     const agent = registry.get(id);
     expect(agent, `агент ${id} не найден`).toBeDefined();

@@ -1876,6 +1876,9 @@ export async function createStandaloneDeps(
     dataDir,
     toolRegistry,
     agentRegistry,
+    // Реестр агентов как порт хранения — тулы `synth_agent_*` (тот же store,
+    // что у HTTP-роутов `createAgentRoutes`).
+    agentStore,
     // ADR-090: тот же реестр, что у фасада плагинов
     // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
     promptBlocks,

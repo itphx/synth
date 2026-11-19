@@ -1,0 +1,34 @@
+{
+  "id": "keeper",
+  "displayName": {
+    "en": "Instance Keeper",
+    "ru": "Хранитель инстанса"
+  },
+  "description": {
+    "en": "Instance upkeep: registries, runtime settings, backups, diagnostics",
+    "ru": "Обслуживание инстанса: реестры, runtime-настройки, бэкапы, диагностика"
+  },
+  "capabilities": [
+    "file_read",
+    "file_write",
+    "search",
+    "shell",
+    "terminal",
+    "git_read",
+    "instance",
+    "agents",
+    "models",
+    "memory",
+    "question",
+    "todo",
+    "process"
+  ],
+  "icon": "tools",
+  "color": "--syntax-function",
+  "contextFile": "KEEPER.md",
+  "executorProfile": "devops",
+  "allowedProfiles": ["devops", "default"],
+  "agentMode": ["primary", "subagent"],
+  "temperature": 0.1,
+  "maxSteps": 100
+}

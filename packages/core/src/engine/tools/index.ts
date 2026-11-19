@@ -44,6 +44,18 @@ import {
   synthMcpEnableTool,
   synthMcpReconnectTool,
 } from './instance-mcp.js';
+// Самообслуживание реестра агентов из чата: чтение состава и запись
+// определений/ролей (write — только ADMIN, plan-режим блокирует write-имена).
+import {
+  synthAgentListTool,
+  synthAgentGetTool,
+  synthAgentSaveTool,
+  synthAgentDeleteTool,
+  synthAgentEnableTool,
+  synthAgentImportTool,
+} from './instance-agents.js';
+import type { InstanceAgentsExtra } from './instance-agents.js';
+export type { InstanceAgentsExtra };
 import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
 import {
   todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool,
@@ -198,6 +210,14 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   synthMcpRemoveTool,
   synthMcpEnableTool,
   synthMcpReconnectTool,
+  // Реестр агентов инстанса: `synth_agent_list|get` (чтение) и
+  // `synth_agent_save|delete|enable|import` (запись, ADMIN).
+  synthAgentListTool,
+  synthAgentGetTool,
+  synthAgentSaveTool,
+  synthAgentDeleteTool,
+  synthAgentEnableTool,
+  synthAgentImportTool,
   taskTool,
   skillTool,
   classifyConversationTool,

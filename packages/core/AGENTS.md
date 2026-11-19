@@ -110,7 +110,7 @@
   в тело запроса температуру кладёт именно он.
   Значения встроенных агентов (`engine/agents/definitions/*.json`, перенесены из
   кастомных агентов OpenCode — `~/dev/harness/agents/*.md`): `leader` 0.15,
-  `fixer`/`researcher` 0.2, `admin`/`devops`/`tester`/`security-auditor` 0.1,
+  `fixer`/`researcher` 0.2, `admin`/`devops`/`tester`/`security-auditor`/`keeper` 0.1,
   `title` 0.3. У `assistant`/`general`/`explore` температура **не задана** —
   Auto (дефолт модели). Лоадер (`loadSystemAgentDefinitions`) обязан пробрасывать
   поле из JSON: без этого значение из определения молча терялось. В UI (админка
@@ -1705,7 +1705,14 @@
   `save_attachment`/`send_attachment`, каталог `list_models`, метаданные SSH-ключей
   `ssh_keys_list`). **Self-help (ADR-131):** `instance.ts` — `synth_info`/`synth_mcp_list|test`
   (read, capability `instance`), `instance-mcp.ts` — `synth_mcp_add|update|remove|enable|reconnect`
-  (write, plan блокирует), `project-query.ts`/`session-manage.ts`/`project-resolve.ts` —
+  (write, plan блокирует), `instance-agents.ts` — `synth_agent_list|get` (read) и
+  `synth_agent_save|delete|enable|import` (write, только ADMIN: `instance-auth.ts` —
+  `isInstanceAdmin`: роль `ADMIN` или локальный владелец standalone; capability/группа
+  `agents`, plan блокирует write-имена); данные — те же, что у `/api/v2/agents` (стор
+  `DocumentRepository<AgentDefinition>` из `extra.agentStore`, роль — портом файлов
+  контекста), `import` читает markdown портом исполнения и не теряет права молча
+  (несопоставленные `permissions` — предупреждения),
+  `project-query.ts`/`session-manage.ts`/`project-resolve.ts` —
   `list_projects`/`get_project`/`list_sessions`/`get_session_info`/`session_rename`;
   `get_session_info` дополнительно отдаёт блок **`execution`** (ADR-135/PROP-135): режим
   и режим пула (`mode`/`pooling`), эффективные профили сессии (`session_profile` —

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { join } from 'node:path';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { PermissionEvaluator, extractPaths, isInsideWorkingDir } from './evaluator.js';
 import { deriveSubagentPermission } from './derive.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import { globMatch } from '@itphx/synth-shared';
-import type { ShellPolicy } from '../security/shell-guard.js';
+import { shellGrantPlan, type ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 const CWD = '/workspace/project';
 
@@ -1033,6 +1033,34 @@ describe('PermissionEvaluator — сессионный shell-грант патт
     expect(d.action).toBe('ask');
   });
 
+  it('гейт внешнего cwd: объектное правило не снимает, строковое — снимает', () => {
+    // `isFile` для `execute_shell` — это «задан `cwd`» (`TOOL_PATH_PARAMS`),
+    // поэтому гейт внешнего каталога работает ровно тогда, когда он возможен:
+    // без `cwd` каталог выполнения = рабочий каталог сессии, вопроса нет.
+    const withCwd = (config: PermissionConfig) => new PermissionEvaluator(config).check({
+      toolName: 'execute_shell',
+      params: { command: 'ls -la', cwd: '/elsewhere' },
+      workingDir: CWD,
+      sessionMode: 'act',
+      planMode: 'auto',
+      planApproved: false,
+      shellPolicy: SHELL_POLICY,
+    });
+    // Объектное правило — набор **команд**: рабочий каталог не покрывает.
+    const commandSets: Array<Record<string, 'allow'>> = [{ '*': 'allow' }, { 'ls *': 'allow' }];
+    for (const commands of commandSets) {
+      const cfg: PermissionConfig = { rules: { execute_shell: commands }, askTimeoutMs: 30_000 };
+      expect(withCwd(cfg).action).toBe('ask');
+      expect(withCwd(cfg).matchedRule).toBe('external_directory.default');
+    }
+    // Групповые правила и `'*'` — тем же гейтом.
+    expect(withCwd({ rules: { shell: { '*': 'allow' } }, askTimeoutMs: 30_000 }).action).toBe('ask');
+    expect(withCwd({ rules: { '*': 'allow' }, askTimeoutMs: 30_000 }).action).toBe('ask');
+    // Строковое `execute_shell: 'allow'` — «инструмент разрешён целиком»
+    // (админ-настройка/legacy), включая каталог выполнения: осознанно.
+    expect(withCwd({ rules: { execute_shell: 'allow' }, askTimeoutMs: 30_000 }).action).toBe('allow');
+  });
+
   it('правило execute_shell по путям (legacy) продолжает работать', () => {
     const cfg: PermissionConfig = {
       rules: { execute_shell: { [CWD]: 'allow' } },
@@ -1227,5 +1255,119 @@ describe('PermissionEvaluator — снятие внешнего ask катало
     const d = check(cfg, 'cat ~/.ssh/config');
     expect(d.action).toBe('ask');
     expect(d.askKind).toBe('protected');
+  });
+
+  it('внешний **каталог** (литерал): правило на сам каталог снимает ask', () => {
+    // Виновник — каталог целиком (`ls <dir>`, `cd <dir>`): грант каталогом
+    // пишет и точный паттерн каталога, и `<dir>/*` (см `_applyDirectoryAllow`),
+    // иначе `<dir>/*` не покрывал сам каталог — ask возвращался после каждого
+    // «Разрешить в сессии» (цикл одобрений).
+    const cfg: PermissionConfig = {
+      rules: { external_directory: { [outside]: 'allow', [`${outside}/*`]: 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(check(cfg, `ls ${outside}`).action).toBe('allow');
+    expect(check(cfg, `cd ${outside} && ls`).action).toBe('allow');
+  });
+});
+
+/**
+ * Снятие **динамического** ask'а каталогом: `dynamic` — непроверяемый glob
+ * (каталог не читается / совпадений больше лимита). Фактических совпадений
+ * (`askPaths`) у такого ask'а нет, поэтому условие снятия другое: явный `allow`
+ * правила `external_directory` должен покрывать каталог виновника — ровно тот,
+ * который карточка подтверждения предлагает записать (`shellGrantPlan`).
+ * Иначе «Разрешить в сессии» пишет правило, которое вопрос не снимает, и
+ * пользователь подтверждает одно и то же бесконечно.
+ */
+describe('PermissionEvaluator — снятие dynamic-ask каталогом (shellGrantPlan)', () => {
+  const MANY = 2100;
+  let workspace: string;
+  let many: string;
+
+  beforeAll(async () => {
+    workspace = await mkdtemp(join(tmpdir(), 'synth-perm-dyn-ws-'));
+    many = join(workspace, 'many');
+    await mkdir(many, { recursive: true });
+    // Больше лимита раскрытия glob'а (`GLOB_READDIR_LIMIT`) — детерминированный
+    // `dynamic`-ask без правки прав на каталог.
+    for (let i = 0; i < MANY; i += 1) await writeFile(join(many, `f${i}.txt`), '');
+  });
+
+  afterAll(async () => {
+    await rm(workspace, { recursive: true, force: true });
+  });
+
+  const check = (config: PermissionConfig, command: string) => new PermissionEvaluator(config).check({
+    toolName: 'execute_shell',
+    params: { command },
+    workingDir: workspace,
+    sessionMode: 'act',
+    planMode: 'auto',
+    planApproved: false,
+    shellPolicy: SHELL_POLICY,
+  });
+
+  it('без правила — dynamic ask, каталог виновника есть в плане гранта', () => {
+    const command = 'ls many/*.txt';
+    const d = check({ rules: {}, askTimeoutMs: 30_000 }, command);
+    expect(d.action).toBe('ask');
+    expect(d.askKind).toBe('dynamic');
+    const plan = shellGrantPlan(command, { params: d.params, askKind: d.askKind }, { cwd: workspace });
+    expect(plan.directories).toEqual([many]);
+  });
+
+  it('явный allow каталога виновника снимает dynamic ask', () => {
+    const command = 'ls many/*.txt';
+    const cfg: PermissionConfig = {
+      rules: { external_directory: { [`${many}/*`]: 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(check(cfg, command).action).toBe('allow');
+  });
+
+  it('cd внутри команды: каталог виновника считается от сегмента', () => {
+    const command = `cd ${many}; ls *.txt`;
+    const plain = check({ rules: {}, askTimeoutMs: 30_000 }, command);
+    expect(plain.action).toBe('ask');
+    expect(plain.askKind).toBe('dynamic');
+    const plan = shellGrantPlan(command, { params: plain.params, askKind: plain.askKind }, { cwd: workspace });
+    expect(plan.directories).toEqual([many]);
+    const cfg: PermissionConfig = {
+      rules: { external_directory: { [`${many}/*`]: 'allow' } },
+      askTimeoutMs: 30_000,
+    };
+    expect(check(cfg, command).action).toBe('allow');
+  });
+
+  it('правило на другой каталог и дефолт `ask` dynamic-ask не снимают', () => {
+    const command = 'ls many/*.txt';
+    expect(check({
+      rules: { external_directory: { '/somewhere/else/*': 'allow' } },
+      askTimeoutMs: 30_000,
+    }, command).action).toBe('ask');
+    expect(check({
+      rules: { external_directory: { '*': 'ask' } },
+      askTimeoutMs: 30_000,
+    }, command).action).toBe('ask');
+  });
+
+  it('правило на **содержимое** каталога (`<dir>/*txt`) dynamic-ask не снимает', () => {
+    // Консервативно: грант каталогом — `<dir>/*`; частичный паттерн шире
+    // одобренного не считается.
+    const command = 'ls many/*.txt';
+    expect(check({
+      rules: { external_directory: { [`${many}/*.txt`]: 'allow' } },
+      askTimeoutMs: 30_000,
+    }, command).action).toBe('ask');
+  });
+
+  it('жёсткий `deny` правила dynamic-ask не снимает (и не ослабляется)', () => {
+    const command = 'ls many/*.txt';
+    const d = check({
+      rules: { external_directory: { '*': 'deny' } },
+      askTimeoutMs: 30_000,
+    }, command);
+    expect(d.action).not.toBe('allow');
   });
 });

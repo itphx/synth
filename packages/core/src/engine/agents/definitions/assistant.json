@@ -29,7 +29,8 @@
     "models",
     "ssh",
     "todo",
-    "instance"
+    "instance",
+    "agents"
   ],
   "icon": "robot-3",
   "color": "--status-success",

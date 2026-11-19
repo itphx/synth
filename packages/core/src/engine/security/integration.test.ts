@@ -291,7 +291,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
   it('ролевые промпты (системные prompts/roles) больше не содержат [CONTENT RULES]', () => {
     const ctx = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
     // title — исключение: генератор заголовков, свой [RULES] про формат (см. отдельный тест)
-    const roles = ['admin', 'assistant', 'devops', 'leader', 'fixer', 'tester', 'researcher', 'security-auditor', 'title'];
+    const roles = ['admin', 'assistant', 'devops', 'leader', 'fixer', 'tester', 'researcher', 'security-auditor', 'keeper', 'title'];
     for (const role of roles) {
       const ru = ctx.getRolePrompt(role, undefined, 'ru') ?? '';
       expect(ru, `role ${role} ru`).not.toContain('[CONTENT RULES]');

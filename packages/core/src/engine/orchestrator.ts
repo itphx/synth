@@ -49,6 +49,7 @@ import { DEFAULT_AGENT_ID, resolveAgentRoleAlias } from './agents/index.js';
 import type { McpManager } from './mcp/manager.js';
 import type { RemoteBackendClient } from '../remote/client.js';
 import type { McpRegistryRepository } from '../storage/ports/mcp-registry-repository.js';
+import type { DocumentRepository } from '../storage/ports/document-repository.js';
 import type { InstanceRuntimeMeta } from './instance/meta.js';
 import { attachExecutorMcpFromDescriptor } from './mcp/executor-mcp-source.js';
 import type { ExecutorMcpPoolResolver } from './mcp/executor-mcp-client.js';
@@ -713,6 +714,12 @@ export interface OrchestratorOptions {
   dataDir?: string;
   toolRegistry?: ToolRegistry;
   agentRegistry?: AgentRegistry;
+  /**
+   * Реестр агентов как порт хранения (`DocumentRepository<AgentDefinition>`) —
+   * источник записей для тулов `synth_agent_*` (тот же, что у HTTP-роутов).
+   * Не задан — write/read-тулы реестра вернут `agent.deps_unavailable`.
+   */
+  agentStore?: DocumentRepository<AgentDefinition>;
   mcpManager?: McpManager;
   /**
    * Workstream A1: клиент удалённого backend (гибрид) — read-only merge
@@ -1351,6 +1358,8 @@ export class ChatOrchestrator {
   private readonly _modelPriceLoader: ((modelName: string) => ModelPricing | null) | null;
   private readonly _toolRegistry: ToolRegistry | null;
   private readonly _agentRegistry: AgentRegistry | null;
+  /** Порт стора агентов для тулов `synth_agent_*` (null — тулы недоступны). */
+  private readonly _agentStore: DocumentRepository<AgentDefinition> | null;
   /**
    * Роли, для которых уже предупреждали о фоллбеке на агента по умолчанию
    * (`_resolveAgentDefinition`): у старых сессий `settings.agentRole` может
@@ -2024,6 +2033,7 @@ export class ChatOrchestrator {
     this._analytics = options.analytics ?? null;
     this._toolRegistry = options.toolRegistry ?? null;
     this._agentRegistry = options.agentRegistry ?? null;
+    this._agentStore = options.agentStore ?? null;
     this._mcpManager = options.mcpManager ?? null;
     this._getRemoteClient = options.getRemoteClient ?? null;
     this._mcpRegistry = options.mcpRegistry ?? null;
@@ -7256,6 +7266,9 @@ export class ChatOrchestrator {
                 extra: {
                   provider,
                   agentRegistry: this._agentRegistry,
+                  // Реестр агентов как порт хранения: тулы `synth_agent_*` читают и
+                  // пишут те же записи, что HTTP-роуты (`createAgentRoutes`).
+                  agentStore: this._agentStore ?? undefined,
                   sessionManager: this._sessionManager,
                   // ADR-089: funnel создания дочерней сессии (late-bound, если подключён).
                   getRequestSessionService: this._getRequestSessionService ?? undefined,
@@ -9509,12 +9522,20 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Грант каталогом (`permission.rules.external_directory`): `'<dir>/*' → allow'`.
+   * Грант каталогом (`permission.rules.external_directory`): `'<dir>/*' → allow'`
+   * и `'<dir>' → allow` (сам каталог).
    *
    * Строковый `allow` уже разрешает всё — не понижаем; строковый `deny` грантом
    * не перебивается. Существующие ключи объекта сохраняются, строковый `ask`
    * переносится в catch-all `'*': 'ask'` (как у shell-гранта), чтобы
    * неодобренные внешние пути продолжали спрашиваться.
+   *
+   * Точный паттерн каталога обязателен: `*` не пересекает `/`, поэтому `<dir>/*`
+   * покрывает только **содержимое** каталога. Когда виновник ask'а — сам каталог
+   * (`ls <dir>`, `cd <dir>`, совпадение глоба-каталог), одного `<dir>/*` не
+   * хватало: человек нажимал «Разрешить в сессии», а вопрос возвращался (цикл
+   * одобрений). Гранулярность гранта при этом не расширяется — разрешается
+   * ровно тот каталог, который был одобрен, и его непосредственное содержимое.
    */
   private _applyDirectoryAllow(
     cfg: PermissionConfig | undefined,
@@ -9533,6 +9554,7 @@ export class ChatOrchestrator {
       if (current === 'ask') existing['*'] = 'ask';
       for (const dir of directories) {
         const normalized = normalize(dir);
+        existing[normalized] = 'allow';
         const pattern = normalized.endsWith('/') ? `${normalized}*` : `${normalized}/*`;
         existing[pattern] = 'allow';
       }

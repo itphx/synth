@@ -27,7 +27,8 @@
     "process",
     "models",
     "todo",
-    "instance"
+    "instance",
+    "agents"
   ],
   "icon": "server",
   "color": "--syntax-type",

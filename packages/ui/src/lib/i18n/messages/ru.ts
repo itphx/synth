@@ -3233,6 +3233,7 @@ export const dict = {
   'admin.agents.cap.todo': 'список задач',
   'admin.agents.cap.instance': 'инстанс и MCP',
   'admin.agents.cap.terminal': 'терминал',
+  'admin.agents.cap.agents': 'реестр агентов',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',
@@ -4679,6 +4680,46 @@ export const dict = {
   'instance.mcp.network_denied': 'Ошибка: сетевая политика MCP запретила {url}: {reason}. Локальный сервис можно добавить как origin «instance» (ADMIN) или добавить исключение в настройках.',
   'instance.mcp.invalid_config': 'Ошибка: невалидный конфиг MCP: {error}',
   'instance.mcp.exists': 'Ошибка: MCP-сервер «{name}» уже существует',
+
+  // --- Реестр агентов инстанса (самообслуживание из чата, synth_agent_*) ---
+  'agent.deps_unavailable': 'Ошибка: реестр агентов недоступен для инструмента {tool}',
+  'agent.registry_unavailable': 'Ошибка: не удалось прочитать реестр агентов: {error}',
+  'agent.forbidden':
+    'Ошибка: для операции с реестром агентов нужен ADMIN (в standalone локальный владелец — админ)',
+  'agent.invalid_id':
+    'Ошибка: невалидный идентификатор агента «{id}» — только строчные латинские буквы, цифры, «-» и «_»',
+  'agent.invalid_effort': 'Ошибка: невалидный уровень рассуждений; допустимые значения: {levels}',
+  'agent.invalid_role_file':
+    'Ошибка: имя файла роли «{file}» должно быть простым именем файла — без путей и «..»',
+  'agent.role_unavailable':
+    'Ошибка: нельзя записать ролевой промпт {file}: порт файлов контекста не подключён',
+  'agent.role_write_failed': 'Ошибка: не удалось записать файл роли агента {file}: {error}',
+  'agent.save_failed': 'Ошибка: не удалось сохранить агента «{id}»: {error}',
+  'agent.save.created': 'Агент «{id}» создан.',
+  'agent.save.updated': 'Агент «{id}» обновлён.',
+  'agent.not_found': 'Ошибка: агент «{id}» не найден. Доступные агенты: {available}',
+  'agent.override_not_found': 'Ошибка: у агента «{id}» нет сохранённой переопределённой записи для сброса',
+  'agent.list': 'Агенты ({count}):\n{json}',
+  'agent.get': 'Агент «{id}»:\n{json}',
+  'agent.delete.deleted': 'Агент «{id}» удалён.',
+  'agent.delete.reset': 'Агент «{id}» сброшен к встроенному определению.',
+  'agent.enable.ok': 'Агент «{id}»: включён = {enabled}.',
+  'agent.import.source_required':
+    'Ошибка: передайте либо путь к markdown-файлу, либо его содержимое для импорта',
+  'agent.import.source_ambiguous':
+    'Ошибка: передайте только один источник — либо path, либо content, но не оба',
+  'agent.import.path_outside': 'Ошибка: путь импорта вне периметра сессии: {path}',
+  'agent.import.read_failed': 'Ошибка: не удалось прочитать {path}: {error}',
+  'agent.import.invalid_frontmatter': 'Ошибка: невалидный frontmatter markdown: {error}',
+  'agent.import.no_id':
+    'Ошибка: не указан id агента — добавьте `id` во frontmatter или импортируйте из файла с именем',
+  'agent.import.warning_skill':
+    'разрешение «{name}» не сопоставлено: у скиллов нет capability — привяжите их через `groups`',
+  'agent.import.warning_permission':
+    'разрешение «{name}» не сопоставлено ни одной capability ядра',
+  'agent.import.dry_run': 'Предпросмотр импорта агента «{id}» (ничего не записано):\n{json}',
+  'agent.import.imported': 'Агент «{id}» импортирован. Предупреждения: {warnings}',
+  'agent.import.updated': 'Агент «{id}» обновлён импортом. Предупреждения: {warnings}',
 
   // --- Интерактивные терминалы (PROP-132, Ф5) ---
   'terminal.tool.deps_unavailable': 'Ошибка: сервис терминалов недоступен в этой сессии',
