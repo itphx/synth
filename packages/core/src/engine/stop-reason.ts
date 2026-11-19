@@ -31,6 +31,9 @@ export const STOP_MESSAGE_TYPE = 'execution_stopped';
  * `provider_error` — сбой провайдера; `steps_limit` — исчерпан лимит шага;
  * `context_budget` — исчерпан предохранитель объёма промпта;
  * `stopped_by_user` — ход прерван человеком; `denied` — отказ прав;
+ * `empty` — модель завершила ответ без содержимого (пустой финал, не успех);
+ * `output_limit` — ответ остался обрезанным лимитом вывода после всех
+ * продолжений (серия `finish: 'length'` исчерпана);
  * `internal` — внутренняя ошибка движка; `restart` — рестарт инстанса;
  * `orphaned` — прогон потерян.
  */
@@ -40,6 +43,8 @@ export type StopReason =
   | 'context_budget'
   | 'stopped_by_user'
   | 'denied'
+  | 'empty'
+  | 'output_limit'
   | 'internal'
   | 'restart'
   | 'orphaned';
@@ -64,6 +69,12 @@ export interface StopRecordInput {
   tokens?: number;
   /** Выполнено шагов (для `context_budget`). */
   steps?: number;
+  /**
+   * Нормализованная причина завершения ответа модели (`LlmFinishReason`:
+   * `max_tokens`, `end_turn`, …) — для пустого финала объясняет, что именно
+   * произошло (бюджет вывода исчерпан или модель «промолчала»).
+   */
+  finishReason?: string;
   /** Провайдер хода. */
   provider?: string;
   /** Модель хода. */
@@ -106,6 +117,10 @@ function localizedBody(input: StopRecordInput): string {
       return sm('stop.stopped_by_user');
     case 'denied':
       return sm('stop.denied');
+    case 'empty':
+      return sm('stop.empty');
+    case 'output_limit':
+      return sm('stop.output_limit');
     case 'restart':
       return sm('stop.restarted');
     case 'orphaned':
@@ -134,6 +149,9 @@ export function renderStopEnvelope(input: StopRecordInput): string {
   }
   if (input.attempts !== undefined) {
     attrs.push(`attempts="${input.attempts}"`);
+  }
+  if (input.finishReason !== undefined) {
+    attrs.push(`finish_reason="${escapeXmlAttr(input.finishReason)}"`);
   }
   // Тело: сырой текст провайдера (`input.error`), иначе локализованный текст
   // по причине. Пустая строка — не «задан»: тело оставляем непустым.
@@ -164,6 +182,7 @@ export function buildStopRecord(input: StopRecordInput): Message {
   if (input.retryable !== undefined) metadata.retryable = input.retryable;
   if (input.attempts !== undefined) metadata.attempts = input.attempts;
   if (input.maxRetries !== undefined) metadata.max_retries = input.maxRetries;
+  if (input.finishReason !== undefined) metadata.finish_reason = input.finishReason;
   if (input.provider !== undefined) metadata.provider = input.provider;
   if (input.model !== undefined) metadata.model = input.model;
   if (input.agentRole !== undefined) metadata.agent_role = input.agentRole;

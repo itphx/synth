@@ -2051,6 +2051,8 @@ export const dict = {
   'chat.notice.stopReason.context_budget': 'context budget',
   'chat.notice.stopReason.stopped_by_user': 'stopped by the user',
   'chat.notice.stopReason.denied': 'permission denied',
+  'chat.notice.stopReason.output_limit': 'output limit',
+  'chat.notice.stopReason.empty': 'empty model response',
   'chat.notice.stopReason.internal': 'internal error',
   'chat.notice.stopReason.restart': 'interrupted by restart',
   'chat.notice.stopReason.orphaned': 'run lost',
@@ -4007,6 +4009,12 @@ export const dict = {
     'The subagent exhausted the step limit ({limit}) and gave no textual answer; continue from its history or raise the limit',
   'task.context_budget':
     '[context_budget] Context budget reached ({tokens} tokens). Steps completed: {steps}. Unfinished: {tasks}',
+  // ADR-041 × task: диагностика повторного пустого ответа саб-агента
+  // (служебное сообщение в диалоге ребёнка перед повтором).
+  'task.empty_retry_truncated':
+    '[empty_response {attempt}/{max}] The model finished without an answer: the output token budget was exhausted (output tokens: {limit}, of which {reasoning} were reasoning). Do not repeat the same call: shorten the answer, split the work into parts, read files in chunks (offset/limit) and do not retell tool results — the parent agent receives the report.',
+  'task.empty_retry_empty':
+    '[empty_response {attempt}/{max}] The model returned an empty answer: neither text nor tool calls (output tokens: {limit}, of which reasoning: {reasoning}). Do not repeat the same call: give a short textual report of what is done and what remains, split the work into parts and read files in chunks (offset/limit).',
   'subagent.context_budget':
     'Subagent stopped by the context budget ({tokens} tokens, steps: {steps})',
   'task.background_limit':

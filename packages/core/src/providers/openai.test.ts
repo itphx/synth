@@ -820,9 +820,12 @@ describe('OpenAIProvider — вложения (ADR-115)', () => {
 describe('OpenAIProvider — tool_choice на шаге (лимит шагов)', () => {
   function sseResponse(): Response {
     // `finish_reason` обязателен: без него стрим считается недописанным
-    // (`compatibility.requireFinishReason`, ADR-117).
+    // (`compatibility.requireFinishReason`, ADR-117). Контент — тоже: стрим без
+    // текста и без tool-call'ов — ошибка `empty_completion` (ADR-041), а здесь
+    // проверяется тело запроса, а не пустой ответ.
+    const text = JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] });
     const finish = JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
-    return new Response(`data: ${finish}\n\ndata: [DONE]\n\n`, {
+    return new Response(`data: ${text}\n\ndata: ${finish}\n\ndata: [DONE]\n\n`, {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     });
@@ -1366,13 +1369,74 @@ describe('OpenAIProvider — finish_reason и reasoning_tokens', () => {
     ['content_filter', 'content_filter'],
     ['some_new_reason', 'unknown'],
   ])('stream: finish_reason %s → finishReason %s', async (raw, expected) => {
+    // Контент в фикстуре обязателен: стрим без текста и без tool-call'ов
+    // теперь ошибка `empty_completion` (ADR-041) — здесь проверяется
+    // нормализация причины, а не пустой ответ.
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'ok' } }] }),
       JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: raw }] }),
       '[DONE]',
     ])));
 
     const chunks = await drain(new OpenAIProvider(plainParams).chatAsync([makeMessage()]));
     expect(chunks.find((c) => c.isFinal)!.finishReason).toBe(expected);
+  });
+
+  it('stream: finish_reason без текста, tool-call и reasoning → ошибка empty_completion (recoverable)', async () => {
+    // ADR-041: провайдер корректно закрыл ответ, но ничего не прислал — это
+    // ошибка (повтор имеет смысл), а не «модель промолчала штатно».
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+      '[DONE]',
+    ])));
+
+    await expect(drain(new OpenAIProvider(plainParams).chatAsync([makeMessage()])))
+      .rejects.toThrow(/empty_completion/);
+  });
+
+  it('stream: ответ только с tool_calls пустым не считается', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({
+        choices: [{
+          index: 0,
+          delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'noop', arguments: '{}' } }] },
+        }],
+      }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] }),
+      '[DONE]',
+    ])));
+
+    const final = (await drain(new OpenAIProvider(plainParams).chatAsync([makeMessage()])))
+      .find((c) => c.isFinal)!;
+    expect(final.content).toBe('');
+    expect(final.toolCalls).toHaveLength(1);
+    expect(final.finishReason).toBe('tool_use');
+  });
+
+  it('stream: ответ только с reasoning без текста пустым не считается', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'размышляю' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+      '[DONE]',
+    ])));
+
+    const final = (await drain(new OpenAIProvider(plainParams).chatAsync([makeMessage()])))
+      .find((c) => c.isFinal)!;
+    expect(final.content).toBe('');
+    expect(final.reasoning).toBe('размышляю');
+  });
+
+  it('stream: непустой контент с finish_reason=length ошибкой не становится', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      JSON.stringify({ choices: [{ index: 0, delta: { content: 'частичный ответ' } }] }),
+      JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'length' }] }),
+      '[DONE]',
+    ])));
+
+    const final = (await drain(new OpenAIProvider(plainParams).chatAsync([makeMessage()])))
+      .find((c) => c.isFinal)!;
+    expect(final.content).toBe('частичный ответ');
+    expect(final.finishReason).toBe('max_tokens');
   });
 
   it('stream: length + пустой контент + reasoning_tokens → срез лимитом виден в usage', async () => {

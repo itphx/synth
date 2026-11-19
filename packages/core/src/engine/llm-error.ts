@@ -4,7 +4,8 @@
  * Вынесено из ChatOrchestrator (_classifyError / _isRecoverable), чтобы
  * retry-цикл саб-агента (task.ts / task-resume.ts) использовал ту же
  * таксономию, что и QueueProcessor основной сессии:
- *   recoverable   — network_error, timeout, rate_limit, server_error, unknown
+ *   recoverable   — network_error, timeout, rate_limit, server_error,
+ *                   empty_completion, unknown
  *   unrecoverable — auth_error, remote_auth_expired, model_not_found,
  *                   context_length, provider_not_found, no_user_query,
  *                   quota_exceeded
@@ -18,6 +19,12 @@ import { RemoteError } from '../remote/types.js';
  */
 export function classifyLlmError(errMsg: string): string {
   const lower = errMsg.toLowerCase();
+  // ADR-041: провайдер корректно закрыл ответ, но прислал пустой completion
+  // (ни текста, ни tool-call'ов, ни reasoning) — `empty_completion`, повтор
+  // имеет смысл (модель могла «зациклиться» на одном прогоне). Проверка стоит
+  // ПЕРВОЙ: текст диагностики может содержать `limit`/`model`, которые ниже
+  // увели бы тип в `rate_limit`/`model_not_found`.
+  if (lower.includes('empty_completion')) return 'empty_completion';
   // Провайдер отверг цепочку сообщений без исходного user-запроса (например
   // openai: `Bad request: {"detail":"no user query found in messages"}`,
   // ollama: `Ollama bad request: ...`). Это тупик tool-цепочки, не ретраится.
@@ -151,6 +158,10 @@ export function isLlmErrorRecoverable(error: unknown, errMsg?: string, errorType
     if (error.code === 'AUTH' || error.code === 'UNAUTHORIZED') return false;
   }
   if (errorType && UNRECOVERABLE_TYPES.includes(errorType)) return false;
+  // ADR-041: пустой completion — восстановимая ошибка (повтор провайдера имеет
+  // смысл), явное правило до подстрочных проверок: в тексте диагностики могут
+  // оказаться любые служебные слова.
+  if (errorType === 'empty_completion') return true;
   const raw = errMsg ?? (error instanceof Error ? error.message : String(error));
   const lower = raw.toLowerCase();
   // Серверный сбой (5xx либо 400 с телом «Internal Server Error») — ВОССТАНОВИМО,

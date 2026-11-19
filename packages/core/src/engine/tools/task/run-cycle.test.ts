@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { MessageRole, generateId, nowISO, makeTextPart, MAX_STEER_INJECTIONS_PER_TURN } from '@itphx/synth-shared';
-import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message, Session, SessionMeta } from '@itphx/synth-shared';
+import type { ToolContext, ToolDefinition, ToolResult, ToolForLLM, TokenUsage, Message, Session, SessionMeta, LlmFinishReason } from '@itphx/synth-shared';
 import type { BaseProvider, CancellationToken, ChatOptions, LLMMessage, SystemPromptInput } from '../../../providers/base.js';
 import { RemoteAuthExpiredError } from '../../../providers/exceptions.js';
 import { RemoteError } from '../../../remote/types.js';
@@ -42,8 +42,16 @@ import type {
 } from '../../../execution/ports/index.js';
 import { LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
-import { runSubagent, SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS, type SubagentRunConfig } from './run-cycle.js';
+import { isServiceUserMessage } from '../../../sessions/user-messages.js';
+import {
+  runSubagent,
+  SUBAGENT_MAX_ATTEMPTS,
+  SUBAGENT_RETRY_DELAYS_MS,
+  SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS,
+  type SubagentRunConfig,
+} from './run-cycle.js';
 import { t as sm } from '../../system-messages.js';
+import { MAX_OUTPUT_LIMIT_CONTINUATIONS, MAX_OUTPUT_LIMIT_STREAK } from '../../output-limit-notice.js';
 import type { TaskExtra } from './types.js';
 
 interface Chunk {
@@ -53,6 +61,8 @@ interface Chunk {
   usage?: TokenUsage;
   model?: string;
   reasoning?: string;
+  /** ADR-041: нормализованная причина завершения ответа (финальный чанк). */
+  finishReason?: LlmFinishReason;
 }
 
 function userMessage(content: string): LLMMessage {
@@ -211,6 +221,22 @@ function stopRecords(messages: Message[]): Message[] {
   return messages.filter((m) => m.metadata?.type === 'execution_stopped');
 }
 
+/**
+ * Служебные сообщения повтора пустого ответа в истории ребёнка
+ * (`metadata.type='empty_response_notice'`, ADR-041 × PROP-143).
+ */
+function emptyNotices(messages: Message[]): Message[] {
+  return messages.filter((m) => m.metadata?.type === 'empty_response_notice');
+}
+
+/**
+ * Инструкции продолжения после обрезки лимитом вывода
+ * (`metadata.type='output_limit_notice'`, ADR-041 × continuation).
+ */
+function outputNotices(messages: Message[]): Message[] {
+  return messages.filter((m) => m.metadata?.type === 'output_limit_notice');
+}
+
 describe('run-cycle — единая политика retry и doom-loop (константы)', () => {
   it('SUBAGENT_MAX_ATTEMPTS/DELAYS совпадают с LLM-политией (не разъезжаются)', () => {
     expect(SUBAGENT_MAX_ATTEMPTS).toBe(LLM_MAX_ATTEMPTS);
@@ -241,11 +267,20 @@ describe('run-cycle — успешное завершение без дочер�
     expect(calls()).toBe(1);
   });
 
-  it('пустой финальный ответ → понятный текст task.empty_response', async () => {
-    const { provider } = scriptedProvider([[{ isFinal: true, content: '' }]]);
+  it('пустой финальный ответ → провал прогона с диагностикой task.empty_response', async () => {
+    // ADR-041 × PROP-143: пустой финал больше **не** успех. Раньше здесь
+    // проверялось `isError === false` — пустой ответ молча превращался в
+    // плейсхолдер со статусом `completed`, и сбой модели (или исчерпанный
+    // бюджет вывода) диагностировался как нормальное завершение. Новый
+    // контракт: провайдер сигнализирует (`empty_completion`), цикл повторяет
+    // до `SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS`, после исчерпания — `isError`
+    // и `<status>error</status>` для родителя.
+    const { provider, calls } = scriptedProvider([[{ isFinal: true, content: '' }]]);
     const result = await runSubagent(makeConfig({ extra: makeExtra({ provider }) }));
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
     expect(result.content).toContain('empty subagent response');
+    expect(result.metadata!.empty_response).toBe(true);
+    expect(calls()).toBe(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
   });
 
   it('сохраняет финальный ответ и usage в дочернюю сессию', async () => {
@@ -306,6 +341,520 @@ describe('run-cycle — успешное завершение без дочер�
     expect(final.turnId).toBe(child.id);
     expect(final.stepIndex).toBe(1);
     expect(final.status).toBe('completed');
+  });
+});
+
+describe('run-cycle — пустой финальный ответ модели (ADR-041 × PROP-143)', () => {
+  it('нет текста и нет tool-call\'ов → task.empty_response + empty_response в metadata + stop-record empty', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([[
+      { isFinal: true, content: '', model: 'test-model', finishReason: 'end_turn' },
+    ]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Текст — диагностика, а не плейсхолдер: причина есть в самой ленте.
+    expect(result.content).toContain('empty subagent response');
+    expect(result.metadata!.empty_response).toBe(true);
+    expect(result.metadata!.report_missing).toBe(true);
+    expect(result.metadata!.finish_reason).toBe('end_turn');
+    expect(result.metadata!.final_content).toContain('empty subagent response');
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    // Ответ ребёнка в истории несёт `error`, а не `completed` — пустой ответ
+    // больше не выглядит успешным завершением.
+    const final = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.empty_response === true,
+    )!;
+    expect(final).toBeDefined();
+    expect(final.status).toBe('error');
+    expect(final.metadata!.status).toBe('error');
+    expect((final.metadata!.i18n as { key?: string }).key).toBe('task.empty_response');
+
+    // PROP-143: durable-причина остановки — `empty`.
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('empty');
+    expect(stops[0]!.metadata!.finish_reason).toBe('end_turn');
+    expect(stops[0]!.content).toContain(sm('stop.empty'));
+  });
+
+  it('пустой ответ с finish_reason=max_tokens → ветка лимита вывода, а не «молчание» (приоритет у length)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const usage: TokenUsage = {
+      inputTokens: 100, outputTokens: 8192, totalTokens: 8292, reasoningTokens: 8000,
+    };
+    const { provider, calls } = scriptedProvider([[
+      { isFinal: true, content: '', model: 'test-model', usage, finishReason: 'max_tokens' },
+    ]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // ADR-041 × continuation: пустой **и** обрезанный ответ — это обрезка (у
+    // reasoning-моделей весь бюджет ушёл на размышления), поэтому его ведёт
+    // ветка лимита вывода, а счётчик пустых ответов не трогается.
+    expect(result.metadata!.empty_response).toBeUndefined();
+    expect(result.metadata!.empty_retries).toBeUndefined();
+    expect(result.metadata!.output_limit).toBe(true);
+    expect(result.metadata!.output_limit_attempts).toBe(MAX_OUTPUT_LIMIT_STREAK);
+    expect(result.metadata!.finish_reason).toBe('max_tokens');
+    // Текста в последней попытке нет — отчёт отсутствует (маркер как у пустого финала).
+    expect(result.metadata!.report_missing).toBe(true);
+    // Цифры расхода не потеряны: они уходят в инструкцию продолжения.
+    expect(result.isError).toBe(true);
+    expect(calls()).toBe(MAX_OUTPUT_LIMIT_STREAK);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const notices = outputNotices(saved.messages);
+    expect(notices).toHaveLength(MAX_OUTPUT_LIMIT_CONTINUATIONS);
+    expect(notices[0]!.content).toContain('8192');
+    expect(notices[0]!.content).toContain('8000');
+
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('output_limit');
+    expect(stops[0]!.metadata!.finish_reason).toBe('max_tokens');
+    expect(stops[0]!.content).toContain('finish_reason="max_tokens"');
+
+    const final = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.output_limit === true
+        && m.metadata?.output_limit_attempts !== undefined,
+    )!;
+    expect(final.status).toBe('error');
+    expect((final.metadata!.i18n as { key?: string }).key).toBe('session.output_limit_exhausted');
+  });
+
+  it('`length` в терминах провайдера ведёт ту же ветку продолжения', async () => {
+    const { provider, calls } = scriptedProvider([[
+      { isFinal: true, content: '  ', finishReason: 'length' },
+    ]]);
+
+    const result = await runSubagent(makeConfig({ extra: makeExtra({ provider }) }));
+
+    // `length` и `max_tokens` — одна нормализованная причина (`isOutputLimitFinish`):
+    // исход тот же (`output_limit`), а не «пустой ответ».
+    expect(result.metadata!.empty_response).toBeUndefined();
+    expect(result.metadata!.output_limit).toBe(true);
+    expect(result.metadata!.finish_reason).toBe('length');
+    expect(result.content).toContain(sm('session.output_limit_exhausted'));
+    expect(calls()).toBe(MAX_OUTPUT_LIMIT_STREAK);
+  });
+
+  it('ответ только с tool-call\'ами не считается пустым', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{ isFinal: true, content: 'готово', finishReason: 'end_turn' }],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.metadata!.empty_response).toBeUndefined();
+    expect(result.metadata!.report_missing).toBeUndefined();
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(stopRecords(saved.messages)).toHaveLength(0);
+  });
+
+  it('два пустых ответа, третий успешный → прогон успешен, 2 notice, empty_retries: 2', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider, calls, snapshots } = scriptedProvider([
+      [{ isFinal: true, content: '', model: 'test-model', finishReason: 'end_turn' }],
+      [{ isFinal: true, content: '   ', model: 'test-model', finishReason: 'end_turn' }],
+      [{ isFinal: true, content: 'готовый отчёт', model: 'test-model', finishReason: 'end_turn' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Повтор помог: прогон успешен, диагностика осталась только в метаданных.
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('готовый отчёт');
+    expect(result.metadata!.final_content).toBe('готовый отчёт');
+    expect(result.metadata!.empty_retries).toBe(2);
+    expect(result.metadata!.finish_reason).toBe('end_turn');
+    expect(result.metadata!.empty_response).toBeUndefined();
+    // Повтор не расходует шаг агента: три вызова LLM в одном шаге.
+    expect(result.metadata!.steps).toBe(0);
+    expect(calls()).toBe(3);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const notices = emptyNotices(saved.messages);
+    expect(notices).toHaveLength(2);
+    expect(notices.map((m) => m.metadata!.attempt)).toEqual([1, 2]);
+    expect(notices[0]!.content).toContain('[empty_response 1/3]');
+    expect(notices[1]!.content).toContain('[empty_response 2/3]');
+    // Служебное сообщение — не реплика человека: свой ход оно не открывает.
+    expect(isServiceUserMessage(notices[0]!)).toBe(true);
+    expect(notices[0]!.author).toBe('System');
+    // Диагностика реально доходит до модели в следующем вызове.
+    expect(snapshots[1]!.some((m) => (m.content ?? '').includes('[empty_response 1/3]'))).toBe(true);
+    // Успешный финал не оставляет durable-причины остановки.
+    expect(stopRecords(saved.messages)).toHaveLength(0);
+    const final = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === 'готовый отчёт',
+    )!;
+    expect(final.status).toBe('completed');
+  });
+
+  it('три пустых ответа → isError, <status>error</status>, attempts 3, stop-record empty', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Сценарий из одного пустого чанка: `scriptedProvider` повторяет последний
+    // элемент — все попытки пустые.
+    const { provider, calls } = scriptedProvider([[
+      { isFinal: true, content: '', model: 'test-model', finishReason: 'end_turn' },
+    ]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('<status>error</status>');
+    expect(result.content).toContain(`<attempts>${SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS}</attempts>`);
+    expect(result.metadata!.attempts).toBe(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
+    expect(result.metadata!.max_attempts).toBe(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
+    expect(result.metadata!.error).toBe(true);
+    // Попытки делает цикл (не провайдер): ровно столько вызовов, сколько попыток.
+    expect(calls()).toBe(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    // Диагностика — перед каждым повтором, на исчерпавшей попытке её нет.
+    expect(emptyNotices(saved.messages)).toHaveLength(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS - 1);
+
+    // Финальное assistant-сообщение ребёнка — `error`, не `completed`.
+    const assistants = saved.messages.filter((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]!.status).toBe('error');
+    expect(assistants[0]!.metadata!.empty_response).toBe(true);
+    expect(assistants[0]!.metadata!.attempts).toBe(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
+    expect(assistants[0]!.metadata!.report_missing).toBe(true);
+
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('empty');
+    expect(stops[0]!.metadata!.attempts).toBe(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
+    expect(stops[0]!.metadata!.max_retries).toBe(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
+    expect(stops[0]!.metadata!.finish_reason).toBe('end_turn');
+  });
+
+  it('служебное сообщение повтора не попадает в результат для родителя', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [{ isFinal: true, content: '', model: 'test-model', finishReason: 'end_turn' }],
+      [{ isFinal: true, content: 'итог', model: 'test-model', finishReason: 'end_turn' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Родительская модель видит только итог, а не переписку с самой собой о
+    // том, что ответ был пустым: диагностика живёт в истории ребёнка и в
+    // метаданных результата.
+    expect(result.content).not.toContain('[empty_response');
+    expect(result.metadata!.final_content).toBe('итог');
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(emptyNotices(saved.messages)).toHaveLength(1);
+  });
+
+  it('провайдерная ошибка (rate_limit) ретраится старым путём и не тратит счётчик пустых', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    let call = 0;
+    const chatAsync = vi.fn(() => {
+      call += 1;
+      const current = call;
+      return (async function* () {
+        // Первый вызов — провайдерная ошибка (восстановимая), второй — ответ.
+        if (current === 1) throw new Error('429 rate limit exceeded');
+        yield { isFinal: true, content: 'ответ после ретрая', model: 'test-model' };
+      })();
+    });
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      retry: { maxRetries: 3, delaysMs: [0, 0, 0] },
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('ответ после ретрая');
+    // Провайдерный путь потратил одну попытку сам — повтор не задвоился.
+    expect(chatAsync).toHaveBeenCalledTimes(2);
+    // Счётчик пустых ответов не тронут: ни диагностики, ни stop-record.
+    expect(result.metadata!.empty_retries).toBeUndefined();
+    expect(result.metadata!.empty_response).toBeUndefined();
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(emptyNotices(saved.messages)).toHaveLength(0);
+    expect(stopRecords(saved.messages)).toHaveLength(0);
+  });
+
+  it('empty_completion провайдера не ретраится провайдерным путём (только циклом)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Провайдер сигнализирует пустым completion'ом (как `OpenAIProvider`),
+    // а не отдаёт пустой финальный чанк: попытки всё равно считает цикл.
+    const chatAsync = vi.fn(() => (async function* () {
+      // Чанков нет: провайдер падает до первого чанка.
+      for (const c of [] as Chunk[]) yield c;
+      throw new Error('Провайдер вернул пустой ответ (empty_completion): нет ни текста, ни вызовов инструментов');
+    })());
+    const provider = { model: 'test-model', name: 'test-provider', chatAsync } as unknown as BaseProvider;
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata!.empty_response).toBe(true);
+    expect(chatAsync).toHaveBeenCalledTimes(SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS);
+    // Класс — `empty_completion`, а не «провайдерная ошибка после ретраев».
+    expect(result.metadata!.error_type).toBeUndefined();
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(stopRecords(saved.messages).map((m) => m.metadata!.reason)).toEqual(['empty']);
+  });
+});
+
+describe('run-cycle — лимит вывода: продолжение ответа (ADR-041 × continuation)', () => {
+  /** Обрезанный финальный ответ (`finish: 'length'` — нормализованный `max_tokens`). */
+  function truncated(text: string, outputTokens: number, reasoningTokens = 0): Chunk {
+    return {
+      isFinal: true,
+      content: text,
+      model: 'test-model',
+      finishReason: 'length',
+      usage: {
+        inputTokens: 100,
+        outputTokens,
+        totalTokens: 100 + outputTokens,
+        ...(reasoningTokens ? { reasoningTokens } : {}),
+      },
+    };
+  }
+
+  it('обрезанный ответ → инструкция продолжения; прогон дописан и успешен', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider, calls, snapshots } = scriptedProvider([
+      [truncated('Начало ответа', 4096)],
+      [truncated('Середина ответа', 4096, 12)],
+      [{ isFinal: true, content: 'Итог', model: 'test-model', finishReason: 'end_turn' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Продолжение помогло: прогон завершён итогом, а не третьим обрезком.
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('Итог');
+    // Родителю уходит **собранный** ответ: продолжение дописывает тот же текст,
+    // а не заменяет его последним фрагментом.
+    expect(result.content).toContain('Начало ответа');
+    expect(result.content).toContain('Середина ответа');
+    expect(result.metadata!.final_content).toBe('Начало ответаСередина ответаИтог');
+    expect(result.metadata!.output_limit).toBeUndefined();
+    // Продолжение не расходует шаг агента: три LLM-вызова в одном шаге.
+    expect(result.metadata!.steps).toBe(0);
+    expect(result.metadata!.output_limit_retries).toBe(MAX_OUTPUT_LIMIT_CONTINUATIONS);
+    expect(calls()).toBe(3);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const notices = outputNotices(saved.messages);
+    expect(notices).toHaveLength(MAX_OUTPUT_LIMIT_CONTINUATIONS);
+    expect(notices.map((m) => m.metadata!.attempt)).toEqual([1, 2]);
+    // Цифры подставлены: номер продолжения, расход вывода и его reasoning-часть.
+    expect(notices[0]!.content).toContain('[OUTPUT LIMIT]');
+    expect(notices[0]!.content).toContain('продолжение 1 из 2');
+    expect(notices[1]!.content).toContain('продолжение 2 из 2');
+    expect(notices[0]!.content).toContain('4096');
+    expect(notices[1]!.content).toContain('12');
+    // Служебное сообщение — не реплика человека: свой ход оно не открывает.
+    expect(isServiceUserMessage(notices[0]!)).toBe(true);
+    expect(notices[0]!.author).toBe('System');
+
+    // Срезанные части ответа сохранены (дельта уже ушла в ленту — после
+    // reload текст не должен исчезнуть).
+    const partials = saved.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.output_limit_attempt !== undefined,
+    );
+    expect(partials.map((m) => m.content)).toEqual(['Начало ответа', 'Середина ответа']);
+    expect(partials.map((m) => m.metadata!.output_limit_attempt)).toEqual([1, 2]);
+
+    // Инструкция реально доходит до модели, а префикс — в контексте продолжения.
+    expect(snapshots[1]!.some((m) => (m.content ?? '').includes('продолжение 1 из 2'))).toBe(true);
+    expect(snapshots[1]!.some((m) => m.role === 'assistant' && m.content === 'Начало ответа')).toBe(true);
+
+    // Успешный финал не оставляет durable-причины остановки.
+    expect(stopRecords(saved.messages)).toHaveLength(0);
+    const final = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === 'Итог',
+    )!;
+    expect(final.status).toBe('completed');
+  });
+
+  it('3 обрезанных подряд → output_limit: isError, <status>error</status>, attempts 3, stop-record', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // Сценарий из одного обрезанного чанка: `scriptedProvider` повторяет
+    // последний элемент — все попытки обрезаны.
+    const { provider, calls } = scriptedProvider([[truncated('обрезано', 4096)]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('<status>error</status>');
+    expect(result.content).toContain(`<attempts>${MAX_OUTPUT_LIMIT_STREAK}</attempts>`);
+    // Срезанный хвост последней попытки не теряется, и собран **весь** текст.
+    expect(result.content).toContain('<partial_output>');
+    expect((result.content.match(/обрезано/g) ?? [])).toHaveLength(MAX_OUTPUT_LIMIT_STREAK);
+    expect(result.content).toContain(sm('session.output_limit_exhausted'));
+    expect(result.metadata!.error).toBe(true);
+    expect(result.metadata!.output_limit).toBe(true);
+    expect(result.metadata!.output_limit_attempts).toBe(MAX_OUTPUT_LIMIT_STREAK);
+    expect(result.metadata!.attempts).toBe(MAX_OUTPUT_LIMIT_STREAK);
+    expect(result.metadata!.max_attempts).toBe(MAX_OUTPUT_LIMIT_CONTINUATIONS);
+    expect(result.metadata!.finish_reason).toBe('length');
+    // Попытки делает цикл, а не провайдер.
+    expect(calls()).toBe(MAX_OUTPUT_LIMIT_STREAK);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    // Инструкция — перед каждым продолжением, на исчерпавшей попытке её нет.
+    expect(outputNotices(saved.messages)).toHaveLength(MAX_OUTPUT_LIMIT_CONTINUATIONS);
+
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('output_limit');
+    expect(stops[0]!.metadata!.attempts).toBe(MAX_OUTPUT_LIMIT_STREAK);
+    expect(stops[0]!.metadata!.max_retries).toBe(MAX_OUTPUT_LIMIT_CONTINUATIONS);
+    expect(stops[0]!.metadata!.finish_reason).toBe('length');
+    expect(stops[0]!.content).toContain(sm('stop.output_limit'));
+
+    // Срезанные части сохранены все три, а итоговая запись — `error` с причиной.
+    const partials = saved.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.output_limit_attempt !== undefined,
+    );
+    expect(partials.map((m) => m.metadata!.output_limit_attempt)).toEqual([1, 2, 3]);
+    const diagnostics = saved.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.output_limit_attempts !== undefined,
+    );
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]!.status).toBe('error');
+    expect((diagnostics[0]!.metadata!.i18n as { key?: string }).key).toBe('session.output_limit_exhausted');
+  });
+
+  it('инструкция продолжения не попадает в результат для родителя', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [truncated('черновик', 1024)],
+      [{ isFinal: true, content: 'готовый отчёт', model: 'test-model', finishReason: 'end_turn' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    // Родительская модель видит только итог: переписка «продолжай» живёт в
+    // истории ребёнка и в метаданных результата.
+    expect(result.content).not.toContain('[OUTPUT LIMIT]');
+    expect(result.content).not.toContain('продолжение');
+    // Собранный ответ содержит дописанный финал (сценарий теста — модель
+    // начинает ответ заново, а не продолжает: префикс тоже остаётся в сборке).
+    expect(result.metadata!.final_content).toContain('готовый отчёт');
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(outputNotices(saved.messages)).toHaveLength(1);
+  });
+
+  it('пустой и обрезанный ответы считаются разными счётчиками (не смешиваются)', async () => {
+    // (1) Пустой **и** обрезанный: приоритет у обрезки — счётчик пустых не тронут.
+    const truncatedRun = await runSubagent(makeConfig({
+      extra: makeExtra({ provider: scriptedProvider([[truncated('', 8192, 8000)]]).provider }),
+    }));
+    expect(truncatedRun.isError).toBe(true);
+    expect(truncatedRun.metadata!.empty_response).toBeUndefined();
+    expect(truncatedRun.metadata!.empty_retries).toBeUndefined();
+    expect(truncatedRun.metadata!.output_limit).toBe(true);
+
+    // (2) Пустой без обрезки: идёт своим счётчиком и своим исходом.
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider: emptyProvider } = scriptedProvider([[
+      { isFinal: true, content: '', model: 'test-model', finishReason: 'end_turn' },
+    ]]);
+    const emptyRun = await runSubagent(makeConfig({
+      extra: makeExtra({ provider: emptyProvider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+    expect(emptyRun.metadata!.empty_response).toBe(true);
+    expect(emptyRun.metadata!.output_limit).toBeUndefined();
+    expect(emptyRun.metadata!.output_limit_attempts).toBeUndefined();
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(stopRecords(saved.messages).map((m) => m.metadata!.reason)).toEqual(['empty']);
+    expect(outputNotices(saved.messages)).toHaveLength(0);
+  });
+
+  it('обычный ответ не затронут: нет ни инструкции, ни метки лимита', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider, calls } = scriptedProvider([[
+      { isFinal: true, content: 'готово', model: 'test-model', finishReason: 'end_turn' },
+    ]]);
+
+    const result = await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.isError).toBeFalsy();
+    expect(calls()).toBe(1);
+    expect(result.metadata!.output_limit).toBeUndefined();
+    expect(result.metadata!.output_limit_retries).toBeUndefined();
+    const saved = (await sessionManager.getSession(child.id))!;
+    expect(outputNotices(saved.messages)).toHaveLength(0);
+    expect(stopRecords(saved.messages)).toHaveLength(0);
   });
 });
 
@@ -2267,12 +2816,24 @@ describe('run-cycle — закрытие шага ребёнка и отчёт �
     // закрытие шага всё равно должно быть опубликовано (ADR-118 §4), иначе
     // live-сообщение шага ребёнка навсегда оставалось `streaming`, а
     // usage/стоимость терялись.
-    const { provider } = scriptedProvider([[{
-      isFinal: true,
-      content: '',
-      model: 'test-model',
-      usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 },
-    }]]);
+    //
+    // ADR-041: пустой финал — не успех, цикл повторяет его (свой счётчик, шаг
+    // агента не расходуется). Поэтому попыток две: пустая (с usage) и
+    // успешная; каждая закрывает свой live-шаг событием `step.finished`.
+    const { provider } = scriptedProvider([
+      [{
+        isFinal: true,
+        content: '',
+        model: 'test-model',
+        usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 },
+      }],
+      [{
+        isFinal: true,
+        content: 'отчёт после повтора',
+        model: 'test-model',
+        usage: { inputTokens: 120, outputTokens: 9, totalTokens: 129 },
+      }],
+    ]);
 
     await runSubagent(makeConfig({
       extra: makeExtra({
@@ -2286,20 +2847,41 @@ describe('run-cycle — закрытие шага ребёнка и отчёт �
       parentSessionId: parent.id,
     }));
 
-    // Дельт не было — прогресс не публиковался.
-    expect(published.filter((p) => p.type === 'subagent.progress')).toHaveLength(0);
+    // Пустая попытка дельт не даёт — прогресса по ней нет вовсе. Единственная
+    // дельта — от успешной попытки (после повтора).
+    const progress = published.filter((p) => p.type === 'subagent.progress');
+    expect(progress).toHaveLength(1);
+    expect(progress[0]!.data.content_delta).toBe('отчёт после повтора');
 
-    // Шаг закрыт ровно одним событием, с точным usage финального чанка.
+    // Каждая попытка закрыта своим `step.finished` с точным usage своего
+    // вызова; пустая попытка не «зависает» в `streaming`.
     const steps = events.filter((e) => e.type === 'step.finished');
-    expect(steps).toHaveLength(1);
+    expect(steps).toHaveLength(2);
     expect(steps[0]!.data).toMatchObject({
       turnId: child.id,
+      // Шаг агента на повторе не расходуется (`iteration` не растёт).
       stepIndex: 0,
       status: 'completed',
       model: 'test-model',
       usage: { inputTokens: 100, outputTokens: 5, totalTokens: 105 },
     });
+    expect(steps[1]!.data).toMatchObject({
+      turnId: child.id,
+      stepIndex: 0,
+      status: 'completed',
+      usage: { inputTokens: 120, outputTokens: 9, totalTokens: 129 },
+    });
     expect(steps[0]!.data.messageId).toBeTruthy();
+    expect(steps[1]!.data.messageId).toBeTruthy();
+    expect(steps[0]!.data.messageId).not.toBe(steps[1]!.data.messageId);
+
+    // Успешный финал — сообщение своего шага: его id совпадает с `step.finished`.
+    const saved = (await sessionManager.getSession(child.id))!;
+    const final = saved.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.content === 'отчёт после повтора',
+    )!;
+    expect(final).toBeDefined();
+    expect(steps[1]!.data.messageId).toBe(final.id);
   });
 });
 
@@ -3901,5 +4483,69 @@ describe('run-cycle — фоновый execute_shell из ребёнка', () =>
     // ребёнку (engine/background/service.test.ts, «ретрансляция из дочерней
     // сессии в корень»); ожидания там на явных id и сменой владельца не
     // затрагиваются.
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// ADR-041 × opencode `tool.input-incomplete`: tool-call, аргументы которого
+// оборваны лимитом вывода, не исполняется — модели возвращается причина
+// (`tool.input_incomplete`), а не ошибка схемы аргументов по пустому объекту.
+// ─────────────────────────────────────────────────────────────────────
+describe('run-cycle — обрезанный tool-call (tool.input_incomplete)', () => {
+  it('оборванные аргументы при finish=length: тул не исполняется, причина — лимит вывода', async () => {
+    const { provider } = scriptedProvider([
+      [{
+        isFinal: true,
+        content: '',
+        toolCalls: [{ id: 'trunc1', function: { name: 'noop', arguments: '{"path": "a.txt' } }],
+        finishReason: 'length',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      }],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+    const { registry, counters } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, toolRegistry: registry }),
+    }));
+
+    // Вызов не исполнялся: неполный payload нельзя трактовать как «без args».
+    expect(counters.noop ?? 0).toBe(0);
+    expect(result.isError).toBeFalsy();
+
+    const toolCalls = result.metadata!.tool_calls as Array<{ name: string; args: unknown; result: { content: string; isError?: boolean } }>;
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]!.name).toBe('noop');
+    expect(toolCalls[0]!.args).toEqual({});
+    expect(toolCalls[0]!.result.isError).toBe(true);
+    // Причина — лимит вывода и подсказка разбить payload...
+    expect(toolCalls[0]!.result.content).toContain('output token limit');
+    expect(toolCalls[0]!.result.content).toContain('split it into smaller calls');
+    // ...а не «некорректный вызов JSON»/ошибка аргументов тула.
+    expect(toolCalls[0]!.result.content).not.toContain('malformed');
+  });
+
+  it('полный tool-call при том же finish=length исполняется как обычно', async () => {
+    const { provider } = scriptedProvider([
+      [{
+        isFinal: true,
+        content: '',
+        toolCalls: [{ id: 'full1', function: { name: 'noop', arguments: JSON.stringify({ path: 'a.txt' }) } }],
+        finishReason: 'length',
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      }],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+    const { registry, counters } = makeRegistry({ noop: () => ({ content: 'noop ok' }) });
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({ provider, toolRegistry: registry }),
+    }));
+
+    expect(counters.noop).toBe(1);
+    const toolCalls = result.metadata!.tool_calls as Array<{ result: { content: string } }>;
+    expect(toolCalls[0]!.result.content).toBe('noop ok');
   });
 });

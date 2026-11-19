@@ -515,9 +515,11 @@ llm:
   defaultModel: ""                # задаётся в UI «Модели» (`/api/v2/settings/default-model`) и приоритетнее config
   maxRetries: 3
   timeout: 60
-  maxTokens: 8192                 # SYNTH_LLM_MAX_TOKENS: лимит вывода по умолчанию для новых сессий и
+  maxTokens: 32768                # SYNTH_LLM_MAX_TOKENS: лимит вывода по умолчанию для новых сессий и
                                   # моделей без `maxOutputTokens` (0 — авто-дефолт ядра); каталог модели — кап,
-                                  # у reasoning-моделей (deepseek, minimax) действует пол 8192
+                                  # у reasoning-моделей (deepseek, minimax) действует пол 8192;
+                                  # при известном окне лимит ещё ужимается свободным местом
+                                  # (адаптивный outputLimit: headroom 1 %, минимум 1024, потолок 256000)
   cache: "auto"                   # ADR-070: политика prompt-cache — auto (маркеры/ключ) | none (отключить);
                                   # применяется в провайдерах (Anthropic cache_control, OpenAI prompt_cache_key)
 
@@ -2678,7 +2680,10 @@ session:
 
 Окно берётся из каталога модели (`ModelConfig.contextWindow`; если не задано — из встроенного
 справочника известных моделей). Резерв под вывод — эффективный лимит `max_tokens`
-(`resolveMaxOutputTokens`: значение сессии → `ModelConfig.maxOutputTokens` → `llm.maxTokens` → 8192).
+(`resolveMaxOutputTokens`: значение сессии → `ModelConfig.maxOutputTokens` → `llm.maxTokens` → 32768).
+При известных окне и оценке входа лимит дополнительно ужимается свободным местом:
+`min(base, max(1024, floor(window·(1−headroom)) − measured − ceil(estimated·1.15)))`, потолок 256000,
+`headroom` 1 % для обычного шага и 0 для компактизации/суммаризации.
 Оценка промпта — `estimatePromptChars` + калиброванный chars-per-token. **Неизвестное окно (`0`)
 не блокирует никогда**: оценка без окна бессмысленна, а тихая блокировка всех ходов была бы
 регрессией — это предохранитель, а не бюджетирование.

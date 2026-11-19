@@ -166,6 +166,17 @@ import { deriveSessionParticipants } from './authority/participants.js';
 import { resolveTurnMode } from './authority/mode.js';
 import { createAuthorityTurnContext, type AuthorityTurnContext } from './authority/turn.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
+import {
+  buildOutputLimitNotice,
+  OUTPUT_LIMIT_NOTICE_TYPE,
+  MAX_OUTPUT_LIMIT_CONTINUATIONS,
+  MAX_OUTPUT_LIMIT_STREAK,
+  isOutputLimitFinish,
+} from './output-limit-notice.js';
+import { appendStopRecord } from './stop-record.js';
+// ADR-041 × opencode `tool.input-incomplete`: аргументы tool-call'а, оборванные
+// лимитом вывода, не исполняются — модели возвращается причина с подсказкой.
+import { inputIncompleteResult, isIncompleteToolCall } from './tools/incomplete-call.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 // ADR-126 §3: единственный пользовательский вызов скилла — `$name` в тексте
@@ -4010,6 +4021,107 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-041 × continuation: служебное сообщение «продолжай, ответ обрезан
+   * лимитом вывода» — в историю хода и в контекст следующего вызова.
+   *
+   * Роль `user`, автор `System`, `metadata.type: 'output_limit_notice'`:
+   * сообщение видно модели и в ленте, но репликой человека не считается
+   * (`sessions/user-messages.ts`), ход пользователя не открывает и в текст
+   * результата для родителя не попадает.
+   *
+   * Best-effort: сбой записи не должен ронять ход (продолжение важнее).
+   */
+  private async _appendOutputLimitNotice(
+    session: Session,
+    language: string,
+    currentMessages: LLMMessage[],
+    streamId: string,
+    params: { attempt: number; max: number; limit?: number; reasoning?: number; finishReason?: string },
+  ): Promise<void> {
+    const content = buildOutputLimitNotice(this._contextConfig, language, {
+      attempt: params.attempt,
+      max: params.max,
+      ...(params.limit !== undefined ? { limit: params.limit } : {}),
+      ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+    });
+    // Следующий вызов обязан увидеть инструкцию — иначе повтор уйдёт с тем же
+    // промптом и упрётся в тот же лимит.
+    currentMessages.push({
+      id: '',
+      role: 'user',
+      content,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      disabled: false,
+      pinned: false,
+      branchId: '',
+    });
+    const message: Message = {
+      id: generateId(),
+      role: MessageRole.USER,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(content)],
+      content,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      author: 'System',
+      metadata: {
+        type: OUTPUT_LIMIT_NOTICE_TYPE,
+        attempt: params.attempt,
+        max_attempts: params.max,
+        ...(params.finishReason ? { finish_reason: params.finishReason } : {}),
+        stream_id: streamId,
+      },
+    };
+    try {
+      const updated = await this._sessionManager.addMessage(session.id, message);
+      session.messages.push(message);
+      if (updated) {
+        const idx = updated.messages.length - 1;
+        this._eventBus.publish(session.id, 'message.added', {
+          message: serializeMessage(updated.messages[idx]!, idx),
+          index: idx,
+        });
+      }
+    } catch {
+      // служебное сообщение не должно ломать ход
+    }
+  }
+
+  /**
+   * ADR-041 × continuation: исход `output_limit` — серия обрезанных ответов
+   * исчерпала продолжения. Пишет durable-запись причины остановки (PROP-143)
+   * с ключом дедупликации хода; ошибка записи ход не ломает.
+   */
+  private async _appendOutputLimitStopRecord(
+    session: Session,
+    streamId: string,
+    attempts: number,
+  ): Promise<void> {
+    try {
+      await appendStopRecord({
+        sessionManager: this._sessionManager,
+        eventBus: this._eventBus,
+        sessionId: session.id,
+        input: {
+          reason: 'output_limit',
+          attempts,
+          maxRetries: MAX_OUTPUT_LIMIT_CONTINUATIONS,
+          streamId,
+        },
+        dedupeKey: streamId,
+      });
+    } catch (err) {
+      warning(
+        'ORCHESTRATOR',
+        `Не удалось записать причину остановки output_limit: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
    * ADR-115: blob-порт обработки вложения (кэш результата aux-модели и
    * производные объекты). Тот же порт, что у гидратации; фоллбэк по `dataDir`
    * — только для тестов/прямого конструирования без порта.
@@ -5808,7 +5920,27 @@ export class ChatOrchestrator {
       let tools = setup.state.tools;
 
       // 6. Tool loop — stream LLM, execute tools, continue until no tool calls
+      /** Индекс шага хода (ADR-118 §1: шаг = один вызов LLM = одно сообщение). */
       let toolIteration = 0;
+      /**
+       * ADR-041 × continuation: счётчик **шагов агента** — то, что расходует
+       * лимит шагов (`AgentDefinition.maxSteps`).
+       *
+       * Отличается от `toolIteration` (индекс шага) ровно на продолжения
+       * обрезанных ответов: продолжение — новый вызов LLM и новый `stepIndex`
+       * (два сообщения с одним `stepIndex` в одном ходе сломали бы адресацию
+       * шага в UI), но **не** шаг агента: серия `length` не должна съедать
+       * бюджет `maxSteps` агента и превращать ход в `session.steps_limit`.
+       */
+      let agentSteps = 0;
+      /**
+       * ADR-041 × continuation: сколько assistant-ответов **подряд**
+       * завершились лимитом вывода (`finish: 'length'`/`max_tokens`) без
+       * вызовов инструментов. Серия ограничена `MAX_OUTPUT_LIMIT_STREAK`:
+       * до предела — продолжение (`output_limit_notice`), на пределе — исход
+       * `output_limit` (durable-запись причины, PROP-143).
+       */
+      let outputLimitStreak = 0;
       /**
        * Один принудительный повтор после переполнения контекста за ход.
        * Второй `context_length` (или неудачное сжатие) — штатная ошибка.
@@ -5946,7 +6078,7 @@ export class ChatOrchestrator {
        * ответ отдавался бы как «лимит итераций» без связи с реальным шагом.
        */
       let stepLimitExecuted = false;
-      while (toolIteration < maxIterations || !stepLimitStepDone) {
+      while (agentSteps < maxIterations || !stepLimitStepDone) {
         // Отмена до входа в итерацию (уже абортированный signal, «Стоп» на
         // стартовом stream.usage) — обрабатываем общей веткой отмены ниже.
         // Иначе пустой ход превращался бы в «ответ модели пуст» (error).
@@ -5988,7 +6120,7 @@ export class ChatOrchestrator {
         // Условия: не первый шаг хода (на старте контекст ещё не разросся),
         // не финальный шаг (шаг-лимит — шаг отчёта, сжимать перед ним
         // незачем). Сжатие не шаг: `toolIteration` не растёт.
-        const isFinalStep = Number.isFinite(maxIterations) && toolIteration + 1 >= maxIterations;
+        const isFinalStep = Number.isFinite(maxIterations) && agentSteps + 1 >= maxIterations;
         if (toolIteration > 0 && !isFinalStep && midTurnCompressions < MAX_MID_TURN_COMPRESSIONS) {
           const rebuilt = await this._tryMidTurnCompression({
             session,
@@ -6034,7 +6166,7 @@ export class ChatOrchestrator {
         // инструменты остаются в запросе (кэшированный префикс провайдера),
         // вызов запрещается `toolChoice: 'none'`, инструкция «только текст»
         // вставляется assistant-сообщением в запрос (не в историю).
-        const stepLimitStep = Number.isFinite(maxIterations) && toolIteration + 1 >= maxIterations;
+        const stepLimitStep = Number.isFinite(maxIterations) && agentSteps + 1 >= maxIterations;
         if (stepLimitStep) {
           stepLimitStepDone = true;
           stepLimitExecuted = true;
@@ -6062,6 +6194,15 @@ export class ChatOrchestrator {
         let publishedReasoning: string | undefined;
         // ADR-070: usage текущей итерации (running total от провайдера) для live.
         let iterationUsage: TokenUsage | undefined;
+        /**
+         * ADR-041 × continuation: причина завершения **этого** шага.
+         *
+         * `finalFinishReason` живёт весь ход (его читает эпилог), поэтому
+         * решение «продолжать или финализировать» берёт собственную причину
+         * шага: иначе шаг без `finish_reason` унаследовал бы `length` прошлого
+         * шага и ход «продолжался» бы по чужой причине.
+         */
+        let stepFinishReason: LlmFinishReason | undefined;
 
         // Размер промпта этой итерации (символы) — считаем один раз и
         // переиспользуем для best-effort оценки input, пока нет точных токенов.
@@ -6147,12 +6288,18 @@ export class ChatOrchestrator {
           const windowPolicy = this._contextWindowPolicy?.() ?? 'warn';
           if (windowPolicy !== 'off') {
             const windowTokens = this._resolveModelContextWindow(modelName);
+            const estimatedTokens = estimateTokens(iterationPromptChars, loadedTokenRatio);
+            // Резерв на вывод — адаптивный: лимит ужимается до свободного места
+            // в окне (паритет с лимитом, который реально уходит провайдеру).
+            // `measured` здесь нет: точный usage прошлого вызова — забота
+            // провайдера, а предохранитель работает по оценке текущего промпта.
             const reserveTokens = resolveMaxOutputTokens({
               sessionMax: session.settings.maxTokens,
               modelMax: this._resolveModelMaxOutputTokens?.(providerName, modelName),
               configMax: this._defaultMaxOutputTokens,
+              ...(windowTokens > 0 ? { contextWindow: windowTokens } : {}),
+              ...(estimatedTokens > 0 ? { inputEstimatedTokens: estimatedTokens } : {}),
             });
-            const estimatedTokens = estimateTokens(iterationPromptChars, loadedTokenRatio);
             const decision = checkContextWindowWindow({
               policy: windowPolicy,
               estimatedTokens,
@@ -6210,7 +6357,10 @@ export class ChatOrchestrator {
             if (chunk.model) chunkModel = chunk.model;
             // Причина завершения (финальный чанк): `max_tokens` — ответ срезан
             // лимитом вывода, даже если текст пуст.
-            if (chunk.finishReason) finalFinishReason = chunk.finishReason;
+            if (chunk.finishReason) {
+              finalFinishReason = chunk.finishReason;
+              stepFinishReason = chunk.finishReason;
+            }
 
             // Шаг 2б: частичный стрим в историю (не блокирует цикл чанков).
             draft.push(accumulatedContent, accumulatedReasoning, chunkModel, {
@@ -6298,6 +6448,9 @@ export class ChatOrchestrator {
                   ...(effectiveAgentRole ? { agentRole: effectiveAgentRole } : {}),
                 });
                 toolIteration += 1;
+                // Повтор после сжатия — шаг агента (прежнее поведение: лимит
+                // шагов такой повтор расходует).
+                agentSteps += 1;
                 // Следующая итерация должна оценивать уже сжатый промпт.
                 lastIterationPromptChars = this._estimatePromptChars(
                   currentMessages,
@@ -6600,6 +6753,101 @@ export class ChatOrchestrator {
 
         // No tool calls — final response
         if (!toolCalls || toolCalls.length === 0) {
+          /**
+           * ADR-041 × continuation: ответ **обрезан лимитом вывода**
+           * (`finish_reason: length`/`max_tokens`) и вызовов инструментов в
+           * шаге нет — это не финал хода: модели отдаётся инструкция продолжить
+           * (`prompts/system/OUTPUT_LIMIT.{lang}.md`), ход идёт следующим
+           * LLM-вызовом без нового пользовательского ввода (паритет с opencode
+           * `CONTINUE_AFTER_OUTPUT_LIMIT`).
+           *
+           * Серия ограничена `MAX_OUTPUT_LIMIT_STREAK` (3 обрезанных ответа
+           * подряд): до предела — продолжение, на пределе — исход
+           * `output_limit` (durable-запись причины, PROP-143) с объяснением,
+           * что делать.
+           *
+           * Шаг-лимит (`toolChoice: 'none'`) не продолжаем: его отчёт
+           * финализируется прежним путём (фоллбек `session.steps_limit`).
+           * Обрезанный ответ **с текстом** — не пустой ответ: текст шага
+           * остаётся в ленте своим сообщением (черновик → `finalize`), а не
+           * выбрасывается.
+           */
+          if (isOutputLimitFinish(stepFinishReason) && !stepLimitStep) {
+            outputLimitStreak += 1;
+            const truncatedModel = chunkModel ?? finalModel;
+            const truncatedUsage = iterationUsage ?? finalUsage;
+            const truncatedCost = this._computeMessageCost(truncatedModel, truncatedUsage);
+            // Обрезанный шаг закрывается терминальным статусом: запись
+            // черновика иначе осталась бы `streaming` до конца хода.
+            await draft.finalize({
+              content: accumulatedContent,
+              parts: [makeTextPart(accumulatedContent), ...makeReasoningParts(iterationBlocks)],
+              reasoning: accumulatedReasoning || undefined,
+              model: truncatedModel,
+              usage: truncatedUsage,
+              metadata: {
+                stream_id: streamId,
+                step_duration_ms: Date.now() - stepStartedAt,
+                finish_reason: stepFinishReason,
+                output_limit_truncated: true,
+                ...(truncatedCost
+                  ? {
+                    cost_usd: truncatedCost.costUsd,
+                    cost_currency: truncatedCost.currency,
+                    cost_breakdown: truncatedCost.breakdown,
+                    }
+                  : {}),
+              },
+              status: 'completed',
+            });
+            // ADR-118 §4: на каждый `step.started` — `step.finished`.
+            publishStepFinished(publishChunk, {
+              turnId,
+              stepIndex,
+              messageId: stepMessageId,
+              status: 'completed',
+              usage: truncatedUsage,
+              provider: providerName,
+              ...(truncatedModel ? { model: truncatedModel } : {}),
+              ...(truncatedCost
+                ? { costUsd: truncatedCost.costUsd, costCurrency: truncatedCost.currency }
+                : {}),
+              ...(effectiveAgentRole ? { agentRole: effectiveAgentRole } : {}),
+              timings: stepTiming.snapshot(),
+            });
+            // Следующий вызов — новый шаг хода (уникальный `stepIndex`), но НЕ
+            // шаг агента: `agentSteps` не растёт, лимит `maxSteps` продолжение
+            // не расходует.
+            toolIteration += 1;
+
+            if (outputLimitStreak < MAX_OUTPUT_LIMIT_STREAK) {
+              // Инструкция продолжения — в историю и в контекст следующего
+              // вызова (`attempt` = номер продолжения 1…
+              // `MAX_OUTPUT_LIMIT_CONTINUATIONS`).
+              await this._appendOutputLimitNotice(session, language, currentMessages, streamId, {
+                attempt: outputLimitStreak,
+                max: MAX_OUTPUT_LIMIT_CONTINUATIONS,
+                ...(iterationUsage
+                  ? {
+                    limit: iterationUsage.outputTokens,
+                    reasoning: iterationUsage.reasoningTokens ?? 0,
+                    }
+                  : {}),
+                finishReason: stepFinishReason,
+              });
+              continue;
+            }
+
+            // Серия исчерпана: третий обрезанный ответ — не финальный ответ.
+            info(
+              'ORCHESTRATOR',
+              `Серия обрезанных ответов (${outputLimitStreak}) — ход завершается исходом output_limit`,
+            );
+            finalContent = sm('session.output_limit_exhausted');
+            fallbackI18n = i18nMeta('session.output_limit_exhausted');
+            await this._appendOutputLimitStopRecord(session, streamId, outputLimitStreak);
+            break;
+          }
           finalContent = accumulatedContent;
           // ADR-102: расход финальной итерации уже в `turnUsage` (накопление
           // выше) — в финальное сообщение уйдёт сумма расходов всех шагов.
@@ -6890,6 +7138,20 @@ export class ChatOrchestrator {
           let toolArgs: Record<string, unknown>;
 
           if (typeof func.arguments === 'string') {
+            // ADR-041 × opencode `tool.input-incomplete`: ответ оборван лимитом
+            // вывода (`finish_reason: length`) — JSON аргументов может быть
+            // недописан. Такой вызов НЕ исполняем (пустые args дали бы модели
+            // невнятную ошибку схемы), а возвращаем причину с подсказкой:
+            // разбить payload на меньшие вызовы и повторить полностью.
+            if (isIncompleteToolCall(stepFinishReason, func.arguments)) {
+              return {
+                kind: 'short-circuit',
+                tcId,
+                name: toolName,
+                args: {},
+                result: inputIncompleteResult(toolName),
+              };
+            }
             try {
               toolArgs = JSON.parse(func.arguments);
             } catch {
@@ -8412,6 +8674,7 @@ export class ChatOrchestrator {
         });
 
         toolIteration++;
+        agentSteps++;
       }
 
       // Этап 1 roadmap 0.13 (блок 3): конец хода — снимаем вопросы **этого**

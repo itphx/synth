@@ -662,6 +662,27 @@ export class ContextConfig implements ContextFileRepository {
   }
 
   /**
+   * ADR-041 × continuation: шаблон инструкции «ответ обрезан лимитом вывода».
+   *
+   * Файлы: prompts/system/OUTPUT_LIMIT.{lang}.md — плейсхолдеры `{attempt}`,
+   * `{max}`, `{limit}`, `{reasoning}` подставляет вызывающий слой (как
+   * `{items}` у `ATTACHMENTS_DROPPED`). Override через
+   * {userDataDir}/user/system/ — стандартный механизм system-категории,
+   * проверяется первым. Пустая строка — файла нет (вызывающий берёт
+   * техническую строку-фоллбэк).
+   */
+  getOutputLimitNotice(language = 'ru'): string {
+    const stem = 'OUTPUT_LIMIT';
+
+    // 1. Пользовательский override system-категории
+    const override = this._readOverridePair('system', `${stem}.md`, stem, language);
+    if (override) return override;
+
+    // 2. Встроенный prompts/system/OUTPUT_LIMIT.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
+  /**
    * ADR-115: шаблон промпта для модели **обработки** вложения (aux-модель).
    *
    * Файлы: prompts/system/MEDIA_DERIVE.{lang}.md — только локализованные

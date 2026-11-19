@@ -523,6 +523,89 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(resumeResultMsg.metadata!.resume_status).toBe('failed');
   });
 
+  // ADR-041 × PROP-143: пустой финал саб-агента — не успех (раньше он молча
+  // становился плейсхолдером со статусом `completed`). Поэтому resume такого
+  // ребёнка обязан дать `failed` с причиной, а не «completed с плейсхолдером».
+  it('resume после пустого финала: resume_status failed (не completed с плейсхолдером), durable stop-record empty', async () => {
+    const parent = await sessionManager.createSession({ title: 'Parent' });
+    /** Провайдер, который молчит: пустой финальный чанк на каждой попытке. */
+    const silentProvider = () => ({
+      model: 'm',
+      name: 'mocksilent',
+      chatAsync: vi.fn(async function* () {
+        yield { isFinal: true, content: '', toolCalls: [] };
+      }),
+    });
+
+    // ─── 1. Первый прогон `task`: пустой финал → isError + stop-record empty ───
+    const first = await taskTool.execute(
+      { description: 'silent', prompt: 'hello', subagent_type: 'explore' },
+      {
+        sessionId: parent.id,
+        messageId: 'm-empty',
+        abortSignal: new AbortController().signal,
+        workingDir: tmpDir,
+        extra: {
+          provider: silentProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          retry: { maxRetries: 3, delaysMs: [10, 10, 10] },
+        },
+      },
+    );
+
+    expect(first.isError).toBe(true);
+    expect(first.content).toContain('<status>error</status>');
+    const childId = first.metadata!.child_session_id as string;
+    const childAfterRun = (await sessionManager.getSession(childId))!;
+    // Причина остановки — durable-запись (PROP-143), а не сообщение `role: error`.
+    const stopsAfterRun = childAfterRun.messages.filter((m) => m.metadata?.type === 'execution_stopped');
+    expect(stopsAfterRun).toHaveLength(1);
+    expect(stopsAfterRun[0]!.metadata!.reason).toBe('empty');
+
+    // ─── 2. Resume: провайдер снова молчит → прогон **failed**, не completed ──
+    const resumed = await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        getProvider: () => silentProvider() as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: childAfterRun,
+        parent: (await sessionManager.getSession(parent.id))!,
+        streamId: 'st-empty-resume',
+        abortSignal: new AbortController().signal,
+        retry: { maxRetries: 3, delaysMs: [10, 10, 10] },
+      },
+    );
+
+    expect(resumed.status).toBe('failed');
+    expect(resumed.error).toContain('empty subagent response');
+    expect(resumed.summary).toBeUndefined();
+
+    // Итог в родителе — failed-класс (`task.resume_failed`), а не `completed`
+    // с плейсхолдером: причина видна и модели, и человеку.
+    const p = (await sessionManager.getSession(parent.id))!;
+    const resumeResultMsg = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result')!;
+    expect(resumeResultMsg).toBeDefined();
+    expect(resumeResultMsg.metadata!.resume_status).toBe('failed');
+    expect((resumeResultMsg.metadata!.i18n as { key?: string }).key).toBe('task.resume_failed');
+    expect(resumeResultMsg.content).toContain('failed');
+    expect(resumeResultMsg.content).toContain('empty subagent response');
+    expect(resumeResultMsg.content).not.toContain('completed');
+
+    // Durable-причина остановки появилась и у resume-прогона (свой stream_id).
+    const childAfterResume = (await sessionManager.getSession(childId))!;
+    const emptyStops = childAfterResume.messages.filter(
+      (m) => m.metadata?.type === 'execution_stopped' && m.metadata?.reason === 'empty',
+    );
+    expect(emptyStops.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('LLMMessage-история resume содержит маркер последним user-сообщением', async () => {    const { parent, child } = await createInterruptedChild();
     // Промпт саб-агента теперь только из файлов: кладём его во временный каталог промптов.
     await mkdir(join(tmpDir, 'prompts', 'subagents'), { recursive: true });

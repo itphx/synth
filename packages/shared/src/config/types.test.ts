@@ -61,8 +61,8 @@ describe('contextConfigSchema (context.defaults)', () => {
 });
 
 describe('llmConfigSchema — лимит вывода по умолчанию', () => {
-  it('дефолт 8192 (модели без maxOutputTokens и сессии с авто-лимитом)', () => {
-    expect(llmConfigSchema.parse({}).maxTokens).toBe(8192);
+  it('дефолт 32768 (модели без maxOutputTokens и сессии с авто-лимитом)', () => {
+    expect(llmConfigSchema.parse({}).maxTokens).toBe(32768);
   });
 
   it('0 = авто (дефолт ядра), верхняя граница 200000', () => {

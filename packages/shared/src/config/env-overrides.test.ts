@@ -128,7 +128,7 @@ describe('parseEnvValue (ADR-023)', () => {
 describe('applyEnvOverrides (ADR-023)', () => {
   function makeConfig(): Record<string, unknown> {
     return {
-      llm: { defaultProvider: '', defaultModel: '', maxRetries: 3, timeout: 60, maxTokens: 8192, cache: 'auto' },
+      llm: { defaultProvider: '', defaultModel: '', maxRetries: 3, timeout: 60, maxTokens: 32768, cache: 'auto' },
       events: { enabled: true, autoBind: false, ephemeralTtl: '24h', journalRetentionDays: 30 },
       scheduler: { tickSec: 60, catchUp: 'skip' },
       webhooks: { enabled: false },

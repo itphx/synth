@@ -1126,16 +1126,49 @@
   `engine/orchestrator/routing.ts` — `getProvider` и ветка роутера, значения приходят из
   `server/app/deps.ts` и `backend/app/deps.ts`). `SessionSettings.maxTokens = 0` — «авто»; приоритет
   источников: явное значение сессии → `ModelConfig.maxOutputTokens` (каталог; он же **кап** — больше
-  заявленного моделью не отправляем) → `llm.maxTokens` конфига (дефолт 8192, env
-  `SYNTH_LLM_MAX_TOKENS`) → 8192. У моделей с `compatibility.requireReasoning` (`ModelConfig.requiresReasoning`)
+  заявленного моделью не отправляем) → `llm.maxTokens` конфига (дефолт **32768**, env
+  `SYNTH_LLM_MAX_TOKENS`) → 32768. У моделей с `compatibility.requireReasoning` (`ModelConfig.requiresReasoning`)
   действует **пол** `REASONING_MIN_OUTPUT_TOKENS = 8192` — adaptive thinking расходует тот же
-  `max_tokens`, — но не выше каталога. Причина завершения нормализуется адаптерами в
+  `max_tokens`, — но не выше каталога.
+  **Адаптивное ужатие под окно** (паритет с opencode `session/model-request.ts`): при известных
+  `contextWindow` и оценке входа лимит режется свободным местом —
+  `min(base, max(OUTPUT_TOKEN_MIN=1024, floor(window·(1−headroom)) − measured − ceil(estimated·1.15)))`,
+  потолок `OUTPUT_TOKEN_MAX=256000`; `headroom` 1 % для обычного шага и 0 для компактизации/суммаризации.
+  Оценка входа — один источник (`ContextOptimizer.estimatePromptTokens`), второго оценщика не заводить;
+  неизвестное окно/вход — поведение прежнее (только базовый лимит, fail-open). Причина завершения нормализуется адаптерами в
   `LlmFinishReason` (`LLMChunk`/`LLMResponse.finishReason`: Anthropic `stop_reason`, OpenAI
   `finish_reason`, Ollama `done_reason`), thinking-токены — в `TokenUsage.reasoningTokens`. Пустой
   ответ с `finishReason: 'max_tokens'` получает текст `session.output_limit` (`max_tokens=N, из них
   M на размышления`, ADR-041) и статус `error`, а нормализованная причина всегда пишется в
   `metadata.finish_reason` финального сообщения — иначе «модель промолчала» и «бюджет ушёл в
   размышления» неразличимы.
+  **Два разных исхода — не один:** «модель промолчала» (`empty_completion`) лечится **ретраем**,
+  «ответ срезан лимитом» (`finish_reason: 'length'`/`max_tokens`) — **продолжением**. Нельзя
+  схлопывать их в один плейсхолдер: это разные причины и разные действия.
+  **Пустой финальный ответ (`empty_completion`, ADR-041).** Провайдер только сигнализирует (нулевой
+  контент + ноль tool-call'ов + ноль reasoning → `ProviderError`, `classifyLlmError`), **попытки
+  считает цикл**: до `LLM_MAX_ATTEMPTS` (3), перед повтором в историю пишется сервисное сообщение
+  `empty_response_notice` (`role: 'user'`, `author: 'System'`, `metadata.type`) с причиной и
+  расходом; исчерпание — `status: 'error'`, `<task_result><status>error</status>`, durable stop-reason
+  `empty` (PROP-143). Двойного ретрая нет: провайдерный счётчик для этого класса не расходуется.
+  **Обрезанный ответ — продолжение (`output_limit`).** `finish_reason: 'length'` не финализирует
+  ход/прогон: срезанный фрагмент сохраняется (в сабагенте — как assistant-префикс, иначе модель
+  пишет заново и снова упирается), в историю и в следующий вызов кладётся сервисное сообщение
+  `output_limit_notice`, **текст которого — системный контекстный файл**
+  `prompts/system/OUTPUT_LIMIT.{lang}.md` (раздел «Контекст → Системные», плейсхолдеры
+  `{attempt}/{max}/{limit}/{reasoning}`; геттер `ContextFileRepository.getOutputLimitNotice`,
+  прецедент — `ATTACHMENTS_DROPPED`). Максимум `MAX_OUTPUT_LIMIT_CONTINUATIONS = 2` (серия из
+  `MAX_OUTPUT_LIMIT_STREAK = 3` подряд обрезанных ответов); дальше — `session.output_limit_exhausted`,
+  статус `limit` (в сабагенте — `isError` + `<partial_output>`), durable stop-reason `output_limit`.
+  **Продолжение и повтор не расходуют шаг агента:** лимит шагов считает отдельный счётчик
+  (`agentSteps` в цикле хода; `iteration` в `run-cycle` не растёт), а `toolIteration`/`stepIndex`
+  растёт — два шага не должны получить одинаковый индекс (адресация шага в UI).
+  **Счётчики не смешивать:** серии `emptyResponseAttempts` и `outputLimitStreak` независимы; если
+  ответ и пустой, и `length` — берётся ветка `length` (у reasoning-моделей пустой текст и есть
+  исчерпанный бюджет).
+  **Сервисные сообщения не считаются репликами человека** (`sessions/user-messages.ts`:
+  `isServiceUserMessage`/`isNonTurnServiceUserMessage`) — не открывают ход пользователя и не
+  попадают в текст результата для родителя.
   **Политика контекстного окна (`context.windowPolicy`).** `off` | `warn` (дефолт) | `enforce`;
   резолвер `resolveContextWindowPolicy` (env `SYNTH_CONTEXT_WINDOW_POLICY` > runtime
   `settings.json`/PG > `config.yaml` > default) читается оркестратором перед **каждым** LLM-вызовом,
@@ -2237,10 +2270,14 @@
   повторяет тот же вызов.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
   `quota_exceeded` (`insufficient_quota`/`exceeded your current quota`/`billing`) — **unrecoverable**
-  (раньше попадал в `unknown` и ретраился впустую).
+  (раньше попадал в `unknown` и ретраился впустую). `empty_completion` — провайдер закрыл ответ
+  без текста, tool-call'ов и reasoning (ADR-041, 2026-11-19): recoverable, но попытки считает
+  **цикл саб-агента**, а не провайдерный retry-путь (`SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS`,
+  служебное сообщение `empty_response_notice` перед повтором, шаг агента не расходуется);
+  пустой финал — не успех: ребёнку статус `error`, родителю `<status>error</status>` + `isError`.
 - `engine/stop-reason.ts`, `engine/stop-record.ts` — PROP-143: **durable причина остановки хода**.
   `stop-reason.ts` — нормализатор (`StopReason = provider_error|steps_limit|context_budget|
-  stopped_by_user|denied|internal|restart|orphaned`), `buildStopRecord` — служебное `user`-сообщение
+  stopped_by_user|denied|empty|internal|restart|orphaned`; `empty` — пустой финал), `buildStopRecord` — служебное `user`-сообщение
   (`author:'System'`, `metadata.type='execution_stopped'`, `reason`/`error_type`/`retryable`/
   `attempts`/`max_retries`/`provider`/`model`/`turn_id`/`stream_id`/`stopped_at`) и
   `renderStopEnvelope` — конверт `<execution_stopped …>`, который видит модель (тело — сырой текст

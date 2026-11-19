@@ -7,7 +7,7 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision, TodoItem } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision, TodoItem, LlmFinishReason } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
@@ -56,9 +56,19 @@ import { hasVisibleStepContent } from '../../orchestrator/persistence.js';
 import type { AssistantMessageStatus } from '../../orchestrator/persistence.js';
 import { appendStopRecord } from '../../stop-record.js';
 import type { StopRecordInput } from '../../stop-reason.js';
+import {
+  buildOutputLimitNotice,
+  isOutputLimitFinish,
+  MAX_OUTPUT_LIMIT_CONTINUATIONS,
+  MAX_OUTPUT_LIMIT_STREAK,
+  OUTPUT_LIMIT_NOTICE_TYPE,
+} from '../../output-limit-notice.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import { resetRecoveryState } from '../../../sessions/recovery.js';
 import { renderTodosSection } from '../todo.js';
+// ADR-041 × opencode `tool.input-incomplete`: аргументы tool-call'а, оборванные
+// лимитом вывода, не исполняются — модели возвращается причина с подсказкой.
+import { inputIncompleteResult, isIncompleteToolCall } from '../incomplete-call.js';
 import { applyToolContentFilter } from '../../security/tool-content.js';
 import { resolveBrowserProfile } from '../../../execution/profile-binding.js';
 import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
@@ -67,6 +77,15 @@ import type { ContextMode, SubagentRetryConfig, TaskExtra } from './types.js';
 export const SUBAGENT_MAX_ATTEMPTS = LLM_MAX_ATTEMPTS;
 /** Backoff между попытками (единая политика — LLM_RETRY_DELAYS_MS). */
 export const SUBAGENT_RETRY_DELAYS_MS = LLM_RETRY_DELAYS_MS;
+/**
+ * Максимум попыток на **пустой финальный ответ** модели (ADR-041 × PROP-143).
+ *
+ * Отдельный счётчик (не `LLM_MAX_ATTEMPTS` провайдерного пути): пустой ответ —
+ * не ошибка транспорта, а результат, который надо диагностировать и попросить
+ * модель исправить. Повтор считается **циклом**, провайдерный retry-путь для
+ * класса `empty_completion` не тратит попытки (иначе получилось бы 3×3 вызовов).
+ */
+export const SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS = LLM_MAX_ATTEMPTS;
 
 /**
  * ADR-118 §1: запись вызова инструмента — одна и та же форма у
@@ -323,6 +342,9 @@ interface SubagentToolPlanBase {
 
 type SubagentToolPlan =
   | (SubagentToolPlanBase & { kind: 'step-limit'; result: ToolResult })
+  // Результат известен без исполнения и без аргументов: аргументы вызова
+  // оборваны лимитом вывода (`tool.input_incomplete`, ADR-041).
+  | (SubagentToolPlanBase & { kind: 'short-circuit'; result: ToolResult })
   | (SubagentToolPlanBase & { kind: 'doom'; content: string })
   | (SubagentToolPlanBase & { kind: 'resolved'; result: ToolResult; userDenied: boolean })
   | (SubagentToolPlanBase & {
@@ -891,6 +913,46 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     let stepLimitStepDone = false;
     /** Отчёт по лимиту шагов не получен (пустой или пробельный ответ). */
     let reportMissing = false;
+    /**
+     * Сколько раз за прогон модель вернула **пустой финальный ответ** (нет ни
+     * текста, ни вызовов инструментов) — ADR-041 × PROP-143.
+     *
+     * Счётчик свой (не провайдерный `LLM_MAX_ATTEMPTS`): пустой ответ — не
+     * ошибка транспорта, его лечит повтор с диагностикой в диалоге ребёнка.
+     * Общий на прогон, а не на шаг: пустой финал завершает прогон, поэтому
+     * сбрасывать его нечему.
+     */
+    let emptyResponseAttempts = 0;
+    /** Причина завершения последнего LLM-вызова (для диагностики пустого финала). */
+    let emptyFinishReason: LlmFinishReason | undefined;
+    /** Расход последнего LLM-вызова (для `task.output_limit` и метаданных). */
+    let emptyUsage: TokenUsage | undefined;
+    /**
+     * ADR-041 × continuation: сколько финальных ответов ребёнка за прогон
+     * осталось **срезанным лимитом вывода** (`finish: 'max_tokens'|'length'`).
+     *
+     * Счётчик **свой**, с `emptyResponseAttempts` не смешивается: обрезанный
+     * ответ — не «молчание модели», у него другая причина и другое лечение
+     * (инструкция продолжить, а не «дай хоть какой-то отчёт»). Растёт только
+     * на шаге, который завершился финальным ответом **без** tool-call'ов и с
+     * признаком обрезки; обрезанный tool-call ведёт обычный путь шага.
+     *
+     * Предел серии — `MAX_OUTPUT_LIMIT_STREAK` (`продолжений + 1`): на нём
+     * прогон завершается исходом `output_limit`, а не выдаёт третий обрезок
+     * за готовый ответ. Общий на прогон: продолжение не расходует шаг агента
+     * (`iteration` не растёт), сбрасывать счётчик нечему.
+     */
+    let outputLimitStreak = 0;
+    /**
+     * Текст, уже написанный в предыдущих (срезанных) попытках того же ответа.
+     *
+     * Продолжение продолжает **тот же** ответ: фрагменты лежат в истории
+     * ребёнка отдельными сообщениями (каждый шаг — своё сообщение), а родителю
+     * уходит собранный текст — иначе от отчёта саб-агента остался бы только
+     * хвост. Склейка прямая: модель продолжает с места обрыва, разделитель не
+     * нужен.
+     */
+    let outputLimitPrefix = '';
     const stepLimitValue = Number.isFinite(effectiveMaxSteps)
       ? String(effectiveMaxSteps)
       : String(maxSteps ?? 0);
@@ -1125,6 +1187,165 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         warning(
           'SUBAGENT',
           `Не удалось записать результаты вызовов в сообщение шага ${messageId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+
+    /**
+     * Служебное сообщение повтора пустого ответа (ADR-041 × PROP-143).
+     *
+     * Молчаливый повтор того же запроса бесполезен: модель повторит и тот же
+     * результат. Поэтому перед повтором в диалог ребёнка кладётся
+     * диагностическое сообщение — причина (`max_tokens` или просто пустой
+     * ответ), фактический расход и что именно изменить (сократить вывод,
+     * разбить работу на части, читать файлы частями, не пересказывать
+     * результаты инструментов).
+     *
+     * Сообщение — служебное (`role: 'user'`, `author: 'System'`,
+     * `metadata.type: 'empty_response_notice'`), как запись причины остановки
+     * (PROP-143): оно видно модели и в ленте ребёнка, но не считается репликой
+     * человека (`sessions/user-messages.ts`). В текст результата для родителя
+     * оно **не** попадает — там только причина/диагностика в метаданных.
+     *
+     * Best-effort: ошибка записи не роняет прогон (повтор модели важнее).
+     */
+    const appendEmptyResponseNotice = async (opts: {
+      attempt: number;
+      max: number;
+      truncated: boolean;
+      usage?: TokenUsage;
+      finishReason?: LlmFinishReason;
+    }): Promise<void> => {
+      const params = {
+        attempt: String(opts.attempt),
+        max: String(opts.max),
+        limit: String(opts.usage?.outputTokens ?? 0),
+        reasoning: String(opts.usage?.reasoningTokens ?? 0),
+      };
+      const key = opts.truncated ? 'task.empty_retry_truncated' as const : 'task.empty_retry_empty' as const;
+      const content = sm(key, params);
+
+      // LLM-контекст: следующий вызов увидит диагностику (без неё повтор —
+      // тот же самый запрос, что дал пустой ответ).
+      messages.push({
+        id: '',
+        role: 'user',
+        content,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        disabled: false,
+        pinned: false,
+        branchId: '',
+      });
+
+      if (!childSessionId || !extra.sessionManager) return;
+      try {
+        await addChildMessage({
+          id: generateId(),
+          role: MessageRole.USER,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(content)],
+          content,
+          author: 'System',
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          ephemeral: false,
+          metadata: {
+            type: 'empty_response_notice',
+            attempt: opts.attempt,
+            max_attempts: opts.max,
+            ...(opts.finishReason ? { finish_reason: opts.finishReason } : {}),
+            ...(opts.usage ? { usage: opts.usage } : {}),
+            stream_id: extra.streamId,
+          },
+          // Ход ребёнка — его же id (как у шагов/stop-record).
+          turnId: childSessionId,
+        });
+      } catch (err) {
+        warning(
+          'SUBAGENT',
+          `Не удалось записать диагностику пустого ответа: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    };
+
+    /**
+     * ADR-041 × continuation: инструкция продолжить ответ, срезанный лимитом
+     * вывода (`output-limit-notice.ts`, шаблон
+     * `prompts/system/OUTPUT_LIMIT.{lang}.md`).
+     *
+     * Кладётся **и** в LLM-контекст ребёнка (`messages`), **и** в его историю:
+     * без первой копии следующий вызов уйдёт с тем же промптом и упрётся в тот
+     * же лимит, без второй — факт обрезки и просьба продолжить не видны в ленте
+     * после reload. Сообщение служебное (`role: 'user'`, `author: 'System'`,
+     * `metadata.type = 'output_limit_notice'`): репликой человека не считается
+     * (`sessions/user-messages.ts`), свой ход не открывает и в текст результата
+     * для родителя **не** попадает — там причина живёт в метаданных.
+     *
+     * Best-effort: ошибка записи не роняет прогон (продолжение важнее).
+     */
+    const appendOutputLimitNotice = async (opts: {
+      attempt: number;
+      max: number;
+      usage?: TokenUsage;
+      finishReason?: LlmFinishReason;
+    }): Promise<void> => {
+      const content = buildOutputLimitNotice(
+        extra.contextConfig,
+        extra.parentSessionSettings?.language ?? 'ru',
+        {
+          attempt: opts.attempt,
+          max: opts.max,
+          ...(opts.usage?.outputTokens !== undefined ? { limit: opts.usage.outputTokens } : {}),
+          ...(opts.usage?.reasoningTokens !== undefined
+            ? { reasoning: opts.usage.reasoningTokens }
+            : {}),
+        },
+      );
+
+      // LLM-контекст: следующий вызов должен увидеть инструкцию.
+      messages.push({
+        id: '',
+        role: 'user',
+        content,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        disabled: false,
+        pinned: false,
+        branchId: '',
+      });
+
+      if (!childSessionId || !extra.sessionManager) return;
+      try {
+        await addChildMessage({
+          id: generateId(),
+          role: MessageRole.USER,
+          seq: 0,
+          origin: 'local',
+          parts: [makeTextPart(content)],
+          content,
+          author: 'System',
+          createdAt: nowISO(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          ephemeral: false,
+          metadata: {
+            type: OUTPUT_LIMIT_NOTICE_TYPE,
+            attempt: opts.attempt,
+            max_attempts: opts.max,
+            ...(opts.finishReason ? { finish_reason: opts.finishReason } : {}),
+            ...(opts.usage ? { usage: opts.usage } : {}),
+            stream_id: extra.streamId,
+          },
+          // Ход ребёнка — его же id (как у шагов/stop-record).
+          turnId: childSessionId,
+        });
+      } catch (err) {
+        warning(
+          'SUBAGENT',
+          `Не удалось записать инструкцию продолжения: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     };
@@ -1400,6 +1621,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
        * сообщение шага/`step.finished`, а сумма по шагам = расход прогона.
        */
       let iterationUsage: TokenUsage | undefined;
+      /**
+       * Нормализованная причина завершения ответа этой итерации
+       * (`LLMChunk.finishReason` финального чанка). Нужна, чтобы отличить
+       * «модель промолчала» от «бюджет вывода исчерпан» на пустом финале —
+       * паритет с основной сессией (`orchestrator/phases/process-finalize.ts`).
+       */
+      let stepFinishReason: LlmFinishReason | undefined;
       iterationUsageCommitted = false;
       // ADR-102: начало вызова LLM итерации — `metadata.step_duration_ms`.
       const iterationStartedAt = Date.now();
@@ -1456,6 +1684,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             }
             // ADR-102: расход своего вызова — для сообщения шага/`step.finished`.
             if (chunk.usage) iterationUsage = chunk.usage;
+            // ADR-041: причина завершения — финальный чанк ответа.
+            if (chunk.finishReason) stepFinishReason = chunk.finishReason;
             if (chunk.model) subagentModel = chunk.model;
 
             // ADR-070: live-usage = накопленное + точный/оценка текущей итерации;
@@ -1589,6 +1819,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           if (isAborted()) break;
           const rawError = err instanceof Error ? err.message : String(err);
           const errorType = classifyLlmErrorFor(err);
+          // ADR-041 × решение владельца: пустой completion — **не** провайдерная
+          // ошибка, а «пустой ответ модели»: повторы считает цикл (счётчик
+          // `SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS` и служебное сообщение с
+          // диагностикой). Провайдерный retry-путь его не тратит — иначе один
+          // и тот же класс повторился бы 3×3 раза, накапливая бесконечное время
+          // ожидания. Выходим из retry-цикла без `llmFailure`: обычная ветка
+          // пустого финала ниже сама сделает попытку и, если надо, диагностику.
+          if (errorType === 'empty_completion') {
+            debug(
+              'SUBAGENT',
+              `Пустой completion провайдера — повтор считает цикл `
+              + `(attempt=${attempt}/${retryMaxAttempts}, child=${childSessionId ?? '-'})`,
+            );
+            break;
+          }
           // `errorType` обязателен: у `RemoteAuthExpiredError`/`RemoteError('AUTH')`
           // текст может быть русским («Сессия на сервере истекла…») — текстовые
           // паттерны его не распознают, и без типа саб-агент делал бы бесполезные
@@ -1618,6 +1863,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           iterationUsage = undefined;
           iterationUsageCommitted = false;
           stepUsage = undefined;
+          stepFinishReason = undefined;
           stepCost = null;
           lastPublishedReasoning = '';
           lastPublishedContent = '';
@@ -1841,7 +2087,289 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           break;
         }
 
-        finalContent = accumulatedContent;
+        // ─── ADR-041 × continuation: финал, срезанный лимитом вывода ────────
+        // Ответ без tool-call'ов, но с `finish: 'max_tokens'|'length'` — **не**
+        // финал: провайдер обрезал его по бюджету вывода, и модели отдаётся
+        // инструкция продолжить с места остановки (`output-limit-notice.ts`,
+        // паритет с opencode `CONTINUE_AFTER_OUTPUT_LIMIT`). Продолжение — не
+        // шаг агента: `iteration` не растёт (как у повтора пустого ответа).
+        //
+        // Порядок веток важен: обрезанный ответ приоритетнее пустого. У
+        // reasoning-моделей весь бюджет уходит на размышления и видимого текста
+        // не остаётся вовсе — это обрезка, а не «модель промолчала», поэтому
+        // счётчик `emptyResponseAttempts` такие ответы не трогает (иначе один
+        // и тот же класс диагностировался бы дважды).
+        //
+        // `!subagentDenied` — как у пустого финала: при отказе прав причину
+        // точнее ставит ветка `denied` (фоллбек `task.stopped_by_deny`), и
+        // продолжение обрезанного ответа её не заменяет.
+        if (!subagentDenied && isOutputLimitFinish(stepFinishReason)) {
+          outputLimitStreak += 1;
+          if (reasoning) subagentReasoning = reasoning;
+
+          // Срезанная часть ответа — отдельным сообщением в историю ребёнка: она
+          // уже ушла в ленту дельтами и после reload не должна исчезнуть. Она же
+          // нужна в LLM-контексте: модель продолжает с места остановки, а не
+          // пишет ответ заново (иначе обрезка гарантированно повторится).
+          const partialSaved = accumulatedContent.trim() !== '';
+          if (partialSaved) {
+            await persistChildAssistantMessage(accumulatedContent, {
+              ...stepDurationMeta(),
+              output_limit: true,
+              output_limit_attempt: outputLimitStreak,
+              ...(stepFinishReason ? { finish_reason: stepFinishReason } : {}),
+              ...(stepUsage ? { usage: stepUsage } : {}),
+            }, stepMessageId, 'limit', stepUsage, iteration, reasoning);
+            messages.push({
+              id: '',
+              role: 'assistant',
+              content: accumulatedContent,
+              usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+              disabled: false,
+              pinned: false,
+              branchId: '',
+              // Anthropic: thinking-блоки ответа обязан вернуться в историю.
+              reasoning: reasoning || undefined,
+              reasoningBlocks: toLlmReasoningBlocks(iterationBlocks),
+              reasoningSignature,
+              reasoningRedacted,
+            });
+            // Собранный текст предыдущих фрагментов — для результата родителя
+            // (продолжение дописывает тот же ответ, а не начинает новый).
+            outputLimitPrefix += accumulatedContent;
+          }
+
+          // Ещё есть продолжения: инструкция — в диалог и в следующий вызов,
+          // прогон не завершаем (шаг агента не потрачен).
+          if (outputLimitStreak < MAX_OUTPUT_LIMIT_STREAK) {
+            await appendOutputLimitNotice({
+              attempt: outputLimitStreak,
+              max: MAX_OUTPUT_LIMIT_CONTINUATIONS,
+              ...(stepUsage ? { usage: stepUsage } : {}),
+              ...(stepFinishReason ? { finishReason: stepFinishReason } : {}),
+            });
+            continue;
+          }
+
+          // Продолжения исчерпаны — прогон **провален** исходом `output_limit`
+          // (третий обрезок, выданный за готовый ответ, скрывал бы, что работа
+          // не дописана). Текст причины нейтрален к типу сессии и уже
+          // локализован в UI (`session.output_limit_exhausted`); цифры расхода —
+          // в метаданных и в самой инструкции продолжения выше.
+          finalContent = sm('session.output_limit_exhausted');
+          // Диагностика — отдельной записью: срезанный хвост последней попытки
+          // (если он есть) уже сохранён выше своим сообщением, а `usage` и
+          // размышления принадлежат ему — здесь они дали бы дубль в счётчиках
+          // сессии и в ленте.
+          await persistChildAssistantMessage(finalContent, {
+            ...stepDurationMeta(),
+            output_limit: true,
+            output_limit_attempts: outputLimitStreak,
+            attempts: outputLimitStreak,
+            max_attempts: MAX_OUTPUT_LIMIT_CONTINUATIONS,
+            ...(stepFinishReason ? { finish_reason: stepFinishReason } : {}),
+            // Видимого текста не было вовсе — отчёта нет (тот же маркер, что у
+            // пустого финала: машиночитаемо для аналитики/UI).
+            ...(partialSaved ? {} : { report_missing: true }),
+            i18n: i18nMeta('session.output_limit_exhausted'),
+          }, partialSaved ? undefined : stepMessageId, 'error',
+          partialSaved ? undefined : stepUsage,
+          iteration,
+          partialSaved ? undefined : reasoning);
+
+          // PROP-143: durable-запись причины остановки (`output_limit`) — серия
+          // обрезанных ответов не должна выглядеть успехом после reload.
+          await writeStopRecord({
+            reason: 'output_limit',
+            ...(stepFinishReason ? { finishReason: stepFinishReason } : {}),
+            attempts: outputLimitStreak,
+            maxRetries: MAX_OUTPUT_LIMIT_CONTINUATIONS,
+          });
+
+          // Терминальный путь провала — как у ошибки провайдера и пустого
+          // финала: очередь инъекций снимается, расход фиксируется, ход ребёнка
+          // закрывается статусом `error`, родитель получает `<status>error</status>`.
+          await dropChildSteerInjections('turn_ended');
+          await commitChildUsage();
+          await finalizeChildSession('error');
+          if (extra.hooks && childSessionId) {
+            extra.hooks.emitAsync('agent_failed', {
+              agentId: childSessionId,
+              error: finalContent,
+              retries: outputLimitStreak,
+            });
+          }
+          const limitTodos = await readChildTodos(extra.sessionManager, childSessionId);
+          const limitTodosSection = renderTodosSection(limitTodos);
+          // Собранный текст серии — все фрагменты, включая последний (он уже
+          // добавлен в `outputLimitPrefix` выше).
+          return {
+            content: [
+              '<task_result>',
+              `<summary>${description}</summary>`,
+              '<status>error</status>',
+              ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
+              `<attempts>${outputLimitStreak}</attempts>`,
+              ...(limitTodosSection ? [limitTodosSection] : []),
+              // Собранный текст всех попыток — родитель видит, что успело
+              // написать (в истории ребёнка фрагменты лежат своими сообщениями).
+              ...(partialSaved ? [`<partial_output>\n${outputLimitPrefix}\n</partial_output>`] : []),
+              finalContent,
+              '</task_result>',
+            ].join('\n'),
+            isError: true,
+            metadata: {
+              subagent_type: subagentType,
+              description: description,
+              context_mode: contextMode,
+              steps: iteration,
+              child_session_id: childSessionId,
+              error: true,
+              output_limit: true,
+              output_limit_attempts: outputLimitStreak,
+              attempts: outputLimitStreak,
+              max_attempts: MAX_OUTPUT_LIMIT_CONTINUATIONS,
+              // Видимого текста в последней попытке не было — отчёта нет (тот
+              // же маркер, что у пустого финала/лимита шагов).
+              ...(partialSaved ? {} : { report_missing: true }),
+              ...(stepFinishReason ? { finish_reason: stepFinishReason } : {}),
+              ...(stepUsage ? { usage: stepUsage } : {}),
+              final_content: finalContent,
+              i18n: i18nMeta('session.output_limit_exhausted'),
+              // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения).
+              subagent_usage: subagentUsage,
+              subagent_model: subagentModel,
+              ...todoMetadata(limitTodos),
+            },
+          };
+        }
+
+        // Финальный ответ без вызовов инструментов. Пустой (пробельный) ответ —
+        // **не** успех (ADR-041 × PROP-143): раньше он молча превращался в
+        // плейсхолдер `task.empty_response` со статусом `completed`, и сбой
+        // модели/исчерпанный бюджет вывода диагностировался как нормальное
+        // завершение. Теперь в историю ребёнка пишется ответ со статусом
+        // `error` и маркером `empty_response`, а причина остановки фиксируется
+        // durable-записью (`empty`).
+        // `!subagentDenied` — при отказе прав пустой финал не «молчание модели»,
+        // а следствие отказа: причину ставит ветка `denied` ниже (`task.stopped_by_deny`
+        // + durable-запись `denied`) — она точнее и не должна перебиваться.
+        //
+        // `finish: 'max_tokens'|'length'` сюда больше не доходит: обрезанные
+        // ответы ведёт ветка продолжения выше (приоритет у обрезки). Разбор
+        // причины в `truncated` оставлен защитой на случай обхода той ветки
+        // (например, при отказе прав).
+        if (accumulatedContent.trim() === '' && !subagentDenied) {
+          emptyResponseAttempts += 1;
+          emptyFinishReason = stepFinishReason;
+          emptyUsage = stepUsage;
+          if (reasoning) subagentReasoning = reasoning;
+
+          // `max_tokens`/`length` — ответ срезан лимитом вывода: у
+          // reasoning-моделей тот же бюджет расходуется на размышления, и
+          // видимого текста не остаётся вовсе. Говорим об этом прямо и
+          // подсказываем, что делать; иначе — модель действительно промолчала.
+          const truncated = stepFinishReason === 'max_tokens' || stepFinishReason === 'length';
+          const limitParams = {
+            limit: String(stepUsage?.outputTokens ?? 0),
+            reasoning: String(stepUsage?.reasoningTokens ?? 0),
+          };
+          finalContent = truncated
+            ? sm('task.output_limit', limitParams)
+            : sm('task.empty_response');
+          const emptyI18nKey = truncated ? 'task.output_limit' as const : 'task.empty_response' as const;
+
+          // Повтор пустого ответа — **цикл**, а не провайдер (решение владельца):
+          // молчаливое повторение того же запроса бесполезно, поэтому перед
+          // повтором в диалог ребёнка кладётся служебное сообщение с причиной,
+          // расходом и указанием, что именно изменить. Повтор не расходует шаг
+          // агента (`iteration` не растёт) — это тот же финальный шаг.
+          if (emptyResponseAttempts < SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS) {
+            await appendEmptyResponseNotice({
+              attempt: emptyResponseAttempts,
+              max: SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS,
+              truncated,
+              usage: stepUsage,
+              finishReason: stepFinishReason,
+            });
+            continue;
+          }
+
+          // Попытки исчерпаны — прогон **провален** (а не «успешен с плейсхолдером»).
+          await persistChildAssistantMessage(finalContent, {
+            ...stepDurationMeta(),
+            empty_response: true,
+            ...(stepFinishReason ? { finish_reason: stepFinishReason } : {}),
+            ...(stepUsage ? { usage: stepUsage } : {}),
+            attempts: emptyResponseAttempts,
+            max_attempts: SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS,
+            // `report_missing` — «текстового отчёта нет»: тот же маркер, что у
+            // пустого отчёта шага-лимита (машиночитаемо для аналитики/UI).
+            report_missing: true,
+            i18n: i18nMeta(emptyI18nKey, truncated ? limitParams : {}),
+          }, stepMessageId, 'error', stepUsage, iteration, reasoning);
+
+          // PROP-143: durable-запись причины остановки (`empty`) — пустой финал
+          // не должен выглядеть успехом после reload. Запись идёт после
+          // ответа: лента читается сверху вниз.
+          await writeStopRecord({
+            reason: 'empty',
+            ...(stepFinishReason ? { finishReason: stepFinishReason } : {}),
+            attempts: emptyResponseAttempts,
+            maxRetries: SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS,
+          });
+
+          // Терминальный путь провала — как у ошибки провайдера: снимаем
+          // очередь инъекций, фиксируем расход, закрываем ход ребёнка
+          // статусом `error` и отдаём родителю `<status>error</status>`.
+          await dropChildSteerInjections('turn_ended');
+          await commitChildUsage();
+          await finalizeChildSession('error');
+          if (extra.hooks && childSessionId) {
+            extra.hooks.emitAsync('agent_failed', {
+              agentId: childSessionId,
+              error: finalContent,
+              retries: emptyResponseAttempts,
+            });
+          }
+          const emptyTodos = await readChildTodos(extra.sessionManager, childSessionId);
+          const emptyTodosSection = renderTodosSection(emptyTodos);
+          return {
+            content: [
+              '<task_result>',
+              `<summary>${description}</summary>`,
+              '<status>error</status>',
+              ...(childSessionId ? [`<child_session_id>${childSessionId}</child_session_id>`] : []),
+              `<attempts>${emptyResponseAttempts}</attempts>`,
+              ...(emptyTodosSection ? [emptyTodosSection] : []),
+              finalContent,
+              '</task_result>',
+            ].join('\n'),
+            isError: true,
+            metadata: {
+              subagent_type: subagentType,
+              description: description,
+              context_mode: contextMode,
+              steps: iteration,
+              child_session_id: childSessionId,
+              error: true,
+              empty_response: true,
+              report_missing: true,
+              attempts: emptyResponseAttempts,
+              max_attempts: SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS,
+              ...(stepFinishReason ? { finish_reason: stepFinishReason } : {}),
+              ...(stepUsage ? { usage: stepUsage } : {}),
+              final_content: finalContent,
+              i18n: i18nMeta(emptyI18nKey, truncated ? limitParams : {}),
+              // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения).
+              subagent_usage: subagentUsage,
+              subagent_model: subagentModel,
+              ...todoMetadata(emptyTodos),
+            },
+          };
+        }
+
+        finalContent = `${outputLimitPrefix}${accumulatedContent}`;
         if (reasoning) subagentReasoning = reasoning;
 
         // Сохранить финальный ответ ассистента в дочернюю сессию
@@ -2103,6 +2631,22 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         const toolName = func.name;
         let toolArgs: Record<string, unknown>;
         if (typeof func.arguments === 'string') {
+          // ADR-041 × opencode `tool.input-incomplete`: ответ оборван лимитом
+          // вывода (`finish_reason: length`) — JSON аргументов может быть
+          // недописан. Такой вызов НЕ исполняем (пустые args дали бы модели
+          // «malformed JSON»/ошибку схемы), а пишем парный error-результат
+          // с причиной и подсказкой.
+          if (isIncompleteToolCall(stepFinishReason, func.arguments)) {
+            return {
+              kind: 'short-circuit',
+              tcId,
+              name: toolName,
+              args: {},
+              startedAt: new Date().toISOString(),
+              result: inputIncompleteResult(toolName),
+              grantsSession: false,
+            };
+          }
           try { toolArgs = JSON.parse(func.arguments); } catch { toolArgs = {}; }
         } else {
           toolArgs = func.arguments || {};
@@ -2330,9 +2874,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // не должно (план `ask` превращается в `execute`/`resolved`).
         if (plan.kind === 'ask') return;
 
-        // Шаг-лимит: аргументы вызова в истории пустые, а признак ошибки —
+        // Шаг-лимит и обрезанный вызов: аргументы в истории пустые
+        // (результат известен без исполнения), а признак ошибки —
         // принудительный (поведение прежнее).
         const isStepLimit = plan.kind === 'step-limit';
+        /** Аргументы недоступны: вызов не исполнялся (`step-limit`/`short-circuit`). */
+        const argsUnavailable = isStepLimit || plan.kind === 'short-circuit';
         let toolResult: ToolResult;
         if (plan.kind === 'execute') {
           // Результат приходит из батча; запасной вариант — тот же
@@ -2354,7 +2901,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         toolResult = applySubagentContentFilter(
           extra,
           plan.name,
-          plan.kind === 'step-limit' ? {} : plan.args,
+          argsUnavailable ? {} : plan.args,
           toolResult,
           ctx,
         );
@@ -2373,9 +2920,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // аккумулятор **своего** шага (`metadata.tool_results` сообщения шага).
         const toolCallRecord: SubagentToolCallRecord = {
           name: plan.name,
-          args: isStepLimit ? {} : plan.args,
+          args: argsUnavailable ? {} : plan.args,
           id: plan.tcId,
-          result: { content: toolResult.content, isError: isStepLimit ? true : toolResult.isError },
+          result: { content: toolResult.content, isError: argsUnavailable ? true : toolResult.isError },
           started_at: plan.startedAt,
           completed_at: new Date().toISOString(),
           iteration: stepIteration,
@@ -2395,8 +2942,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           plan.tcId,
           plan.name,
           toolResult.content,
-          isStepLimit ? {} : plan.args,
-          plan.kind === 'step-limit' ? plan.result.metadata : undefined,
+          argsUnavailable ? {} : plan.args,
+          plan.kind === 'step-limit' || plan.kind === 'short-circuit' ? plan.result.metadata : undefined,
         );
 
         // ADR-029 (обновлено 2026-10-29): отказ (в т.ч. ask→deny) больше не
@@ -2762,7 +3309,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     // обычного завершения, шаг-лимита и бюджета контекста).
     await dropChildSteerInjections();
 
-    // Финализировать дочернюю сессию
+    // Финализировать дочернюю сессию.
     await commitChildUsage();
     await finalizeChildSession('completed');
 
@@ -2815,6 +3362,21 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // Отчёт по лимиту шагов не получен (пустой/пробельный ответ) — прогон
         // успешен, но текстового отчёта нет: для диагностики и родительской модели.
         ...(reportMissing ? { report_missing: true } : {}),
+        // Пустой финальный ответ модели (ADR-041 × PROP-143). Если повтор
+        // помог — прогон успешен, но диагностика остаётся в метаданных:
+        // `empty_retries` и причина последней пустой попытки. Служебные
+        // сообщения повтора в результат родителя не входят (они — история ребёнка).
+        ...(emptyResponseAttempts > 0
+          ? {
+            empty_retries: emptyResponseAttempts,
+            ...(emptyFinishReason ? { finish_reason: emptyFinishReason } : {}),
+            ...(emptyUsage ? { usage: emptyUsage } : {}),
+          }
+          : {}),
+        // ADR-041 × continuation: прогон всё-таки дописал ответ после N
+        // продолжений по лимиту вывода — прогон успешен, но факт обрезки
+        // остаётся в метаданных (паритет с `empty_retries`).
+        ...(outputLimitStreak > 0 ? { output_limit_retries: outputLimitStreak } : {}),
         // Предохранитель бюджета контекста: прогон завершён детерминированным
         // отчётом (статус `completed`), работа частично сделана.
         ...(contextBudgetExceeded

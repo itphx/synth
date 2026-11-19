@@ -123,6 +123,7 @@ const STOP_REASONS = new Set([
   'context_budget',
   'stopped_by_user',
   'denied',
+  'empty',
   'internal',
   'restart',
   'orphaned',

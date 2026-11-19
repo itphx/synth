@@ -36,6 +36,11 @@ export const SYSTEM_MESSAGES = {
   // `limit` — фактический расход вывода, `reasoning` — его часть на thinking.
   'session.output_limit':
     'The response was cut off by the output token limit: max_tokens={limit}, of which {reasoning} were spent on reasoning. Increase the response limit for this session and retry.',
+  // ADR-041 × continuation: серия обрезанных ответов исчерпала продолжения
+  // (3 подряд с `finish: 'length'`) — ход/прогон завершается ошибкой, а не
+  // выдаёт третий обрезок за ответ.
+  'session.output_limit_exhausted':
+    'The response is still cut off by the output token limit after two continuations. Break the work into smaller parts (or raise the output limit) and retry.',
   'session.default_title': 'New session',
   'session.reference_label': 'Session',
   'session.reference_link': 'Session link: {label} ({id}, messages {from}-{to})',
@@ -56,7 +61,23 @@ export const SYSTEM_MESSAGES = {
   'task.stopped_before_completion':
     'The task was stopped by the user before completion. Above is the partial subagent answer; completed steps are listed. Details and history are in the child session.',
   'task.stopped_by_deny': 'Processing stopped: the user denied the tool execution request',
-  'task.empty_response': '(empty subagent response)',
+  // Пустой финальный ответ саб-агента — **не** успех: прогон закрывается
+  // статусом `error`, а причина (`empty`) пишется durable-записью.
+  'task.empty_response':
+    '(empty subagent response) The model finished the run without any text answer and without tool calls. Retry the task, or continue from the child session history.',
+  // Ответ срезан лимитом вывода (`max_tokens`), а видимого текста не осталось:
+  // у reasoning-моделей тот же бюджет расходуется на размышления. Паритет с
+  // `session.output_limit` основной сессии (ADR-041). `limit` — фактический
+  // расход вывода, `reasoning` — сколько из него ушло на размышления.
+  'task.output_limit':
+    'The subagent response was cut off by the output token limit: max_tokens={limit}, of which {reasoning} were spent on reasoning. Raise the output limit for the subagent and retry, or continue the work in the current session.',
+  // ADR-041 × task: диагностика повторного пустого ответа — служебное сообщение
+  // в диалоге ребёнка перед повтором. Не «повтори тихо то же самое», а
+  // объяснение причины и что изменить.
+  'task.empty_retry_truncated':
+    '[empty_response {attempt}/{max}] The model finished without an answer: the output token budget was exhausted (output tokens: {limit}, of which {reasoning} were reasoning). Do not repeat the same call: shorten the answer, split the work into parts, read files in chunks (offset/limit) and do not retell tool results — the parent agent receives the report.',
+  'task.empty_retry_empty':
+    '[empty_response {attempt}/{max}] The model returned an empty answer: neither text nor tool calls (output tokens: {limit}, of which reasoning: {reasoning}). Do not repeat the same call: give a short textual report of what is done and what remains, split the work into parts and read files in chunks (offset/limit).',
   'task.subagent_exec_error': 'Subagent execution error "{type}": {error}',
   'task.subagent_not_found': 'Subagent "{type}" not found. Available types: {types}',
   'task.subagent_not_allowed': 'Agent "{type}" cannot be used as a subagent (modes: {modes})',
@@ -125,6 +146,12 @@ export const SYSTEM_MESSAGES = {
   // `tool`-результат пишется — иначе assistant(tool_calls) останется без пары.
   'tool.disabled_by_step_limit':
     'Error: tool "{tool}" was not executed — tools are disabled after the maximum agent steps ({limit})',
+  // Паритет с opencode `tool.input-incomplete` (ADR-041): аргументы вызова
+  // оборвались лимитом вывода (`finish_reason: length`) — JSON не закрыт.
+  // Вызов не исполняется: без этого модель получала бы ошибку схемы
+  // аргументов по пустому объекту и пыталась повторять тот же вызов.
+  'tool.input_incomplete':
+    'Error: the arguments of tool "{tool}" were cut off by the output token limit (stop reason: length) — the call was not executed. The payload does not fit in one call: split it into smaller calls and retry with complete arguments.',
   'tool.empty_output': '(empty output)',
   'tool.output_truncated': '\n... (output truncated)',
   // Общий предел вывода инструментов (`tools.outputMaxLines`/
@@ -464,6 +491,10 @@ export const SYSTEM_MESSAGES = {
   'stop.context_budget': 'Execution stopped by the context budget ({tokens} tokens, steps: {steps})',
   'stop.stopped_by_user': 'Execution stopped by the user',
   'stop.denied': 'Execution stopped: the tool execution request was denied',
+  'stop.empty':
+    'Execution stopped: the model finished the run with an empty response (no text, no tool calls)',
+  'stop.output_limit':
+    'Execution stopped: the response was still cut off by the output token limit after two continuations',
   'stop.restarted': 'Execution was interrupted by an instance restart',
   'stop.orphaned': 'Execution was lost: the run no longer exists',
   'stop.internal': 'Execution stopped by an internal error',

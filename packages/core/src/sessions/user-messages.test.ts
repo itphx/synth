@@ -140,6 +140,32 @@ describe('Классификация user-сообщений: причина о�
 });
 
 /**
+ * ADR-041 × PROP-143: диагностическое сообщение повтора пустого ответа
+ * саб-агента (`metadata.type === 'empty_response_notice'`) — служебное.
+ * Оно приходит **внутри** текущего хода ребёнка, поэтому своего хода не
+ * открывает: иначе повтор разрезал бы ход и ломал группировку шагов.
+ */
+describe('Классификация user-сообщений: диагностика пустого ответа саб-агента (ADR-041)', () => {
+  it('empty_response_notice — служебное сообщение, а не реплика человека', () => {
+    const message = makeMessage({
+      role: MessageRole.USER,
+      author: 'System',
+      metadata: {
+        type: 'empty_response_notice',
+        attempt: 1,
+        max_attempts: 3,
+        finish_reason: 'end_turn',
+      },
+    });
+
+    expect(isServiceUserMessage(message)).toBe(true);
+    // Служебное, но свой ход не открывает — границей автора/хода не становится.
+    expect(isNonTurnServiceUserMessage(message)).toBe(true);
+    expect(isUserDialogueMessage(message)).toBe(false);
+  });
+});
+
+/**
  * PROP-141 (Часть D): уведомление о переносе сессии между проектами попадает
  * в историю как `role: 'user'` (автор — системный `Session`), но это
  * **служебное** сообщение: репликой человека оно не считается (авто-тайтл,

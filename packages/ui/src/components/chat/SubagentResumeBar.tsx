@@ -31,6 +31,7 @@ const STOP_REASONS = new Set([
   'context_budget',
   'stopped_by_user',
   'denied',
+  'empty',
   'internal',
   'restart',
   'orphaned',
@@ -49,6 +50,9 @@ const RESUMABLE_STOP_REASONS = new Set([
   'internal',
   'steps_limit',
   'context_budget',
+  // ADR-041: пустой финальный ответ — не сбой прогона, а «модель промолчала»:
+  // продолжение по истории ребёнка осмысленно (в отличие от «Стопа»/отказа).
+  'empty',
 ])
 
 /** Ключ локализации причины остановки (неизвестная — как `internal`). */

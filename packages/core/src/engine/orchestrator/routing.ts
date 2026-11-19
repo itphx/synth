@@ -144,7 +144,9 @@ export interface GetProviderDeps {
 /**
  * Лимит вывода вызова: сессия → каталог (он же кап) → конфиг → дефолт, плюс
  * пол для моделей с обязательным reasoning (adaptive thinking в том же
- * `max_tokens` иначе съедает ответ).
+ * `max_tokens` иначе съедает ответ) и адаптивное ужатие до свободного места в
+ * контекстном окне (догон промпта не должен приводить к ошибке провайдера
+ * «context length exceeded»).
  */
 function callMaxOutputTokens(
   session: Session,
@@ -153,9 +155,24 @@ function callMaxOutputTokens(
   deps: GetProviderDeps,
   sharedConfig?: SharedProviderConfig | null,
   resolvedCompatibility?: ModelCompatibility,
+  contextWindow?: number,
 ): number {
   const compatibility = resolvedCompatibility
     ?? deps.resolveModelCompatibility?.(providerName, modelName);
+  // Оценка входа — из оптимизатора контекста (та же оценка, что у сжатия
+  // и предупреждений о заполненности окна): своего второго оценщика не заводим.
+  // `maxTokens` провайдера живёт весь ход, поэтому вход оценивается по
+  // собранной истории сессии — точное значение на шаге оркестратор уточняет
+  // отдельно (предохранитель окна).
+  let inputEstimatedTokens: number | undefined;
+  try {
+    const estimate = deps.optimizer?.estimatePromptTokens(session);
+    if (typeof estimate === 'number' && Number.isFinite(estimate) && estimate > 0) {
+      inputEstimatedTokens = estimate;
+    }
+  } catch {
+    // fail-open: без оценки остаётся базовый лимит
+  }
   return resolveMaxOutputTokens({
     sessionMax: session.settings.maxTokens,
     modelMax: deps.resolveModelMaxOutputTokens?.(providerName, modelName),
@@ -167,6 +184,8 @@ function callMaxOutputTokens(
       model: modelName,
       compatibility,
     }).requireReasoning,
+    ...(contextWindow !== undefined && contextWindow > 0 ? { contextWindow } : {}),
+    ...(inputEstimatedTokens !== undefined ? { inputEstimatedTokens } : {}),
   });
 }
 
@@ -196,7 +215,7 @@ export function getProvider(
           reasoningLevel ?? session.settings.reasoningLevel,
           compatibility,
         ),
-        maxTokens: callMaxOutputTokens(session, providerName, effectiveModel, deps, sharedConfig, compatibility),
+        maxTokens: callMaxOutputTokens(session, providerName, effectiveModel, deps, sharedConfig, compatibility, contextWindow),
         // Приоритет: явный provider.numCtx > ModelConfig.contextWindow.
         numCtx: sharedConfig.numCtx ?? (contextWindow > 0 ? contextWindow : undefined),
       },

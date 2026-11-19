@@ -1110,7 +1110,19 @@ sequenceDiagram
    cancelled`; родителю `<status>stopped_by_user</status>` + `<partial_output>`.
 5. Жёсткий сбой вне штатных веток: `turn.finished error`, снятие `currentStream`, `stream.ended`,
    `agent_failed`; родитель получает `isError`-результат.
-6. Во всех терминальных путях остаток очереди инъекций ребёнка возвращается в его `pendingMessages`
+6. **Пустой финальный ответ — не успех** (ADR-041, решение 2026-11-19). Модель закрыла ход без
+   текста и без tool-call'ов (или бюджет вывода исчерпан — `max_tokens`/`length`): цикл повторяет
+   ответ своим счётчиком (`SUBAGENT_EMPTY_RESPONSE_MAX_ATTEMPTS` = `LLM_MAX_ATTEMPTS`; провайдерный
+   retry-путь для класса `empty_completion` попытку не тратит). Перед повтором в историю ребёнка
+   кладётся служебное сообщение `metadata.type='empty_response_notice'` (автор `System` — не
+   реплика человека и не граница хода) с причиной и расходом вывода. Повтор **не расходует шаг
+   агента**: `stepIndex` тот же, как у сжатия на границе шага (ADR-128). После исчерпания попыток:
+   финальное assistant-сообщение ребёнка — `error` (`task.empty_response` / `task.output_limit`),
+   durable-запись `reason:'empty'` (`finish_reason`, `attempts`), родителю
+   `<status>error</status>` + `isError: true`. Успешный повтор оставляет в метаданных результата
+   `empty_retries` и причину последней пустой попытки; служебные сообщения в текст результата
+   для родителя **не** попадают (диагностика — история ребёнка + метаданные).
+7. Во всех терминальных путях остаток очереди инъекций ребёнка возвращается в его `pendingMessages`
    (`dropChildSteerInjections`).
 
 Код: `engine/tools/task/run-cycle.ts`, `task/child-session.ts`.
@@ -1123,7 +1135,10 @@ sequenceDiagram
    `max_retries`, `provider`, `model`, `turn_id`, `stream_id`, `stopped_at`. `turnId` записи =
    id упавшего хода — блок встаёт в ленте сразу после упавшего шага, а не «в следующем ходе».
 2. `reason` — нормализованный код (`engine/stop-reason.ts`): `provider_error | steps_limit |
-   context_budget | stopped_by_user | denied | internal | restart | orphaned`.
+   context_budget | stopped_by_user | denied | empty | output_limit | internal | restart | orphaned`.
+   `empty` — модель завершила ход без содержимого (пустой финал саб-агента, §8.15 п. 6);
+   `output_limit` — серия обрезанных ответов исчерпала продолжения (§8.35),
+   `finish_reason` в метаданных отличает «модель промолчала» от среза лимитом вывода.
 3. `content` — **конверт** (единственное, что видит модель):
 
    ```text
@@ -1151,7 +1166,7 @@ sequenceDiagram
    `retryable` = `isLlmErrorRecoverable(...)`, `attempts`/`max_retries` — как у саб-агента.
 8. **Точки записи:** `handleLlmFailure`/финализация хода (основная сессия — `provider_error`,
    `stopped_by_user`, `denied`), `task/run-cycle.ts` (дочерняя — замена `role:'error'`,
-   `steps_limit`, `context_budget`), `engine/background/service.ts` + `lost-records.ts`
+   `steps_limit`, `context_budget`, `empty`), `engine/background/service.ts` + `lost-records.ts`
    (`restart`/`orphaned` — в историю сессии-владельца). Публикуется обычный `message.added`
    (инвариант 27), новых каналов и событий нет.
 
@@ -1479,6 +1494,41 @@ sequenceDiagram
    истории или из `steerInbox`).
 
 Код: `engine/terminal/context-message.ts`, `server/routes/sessions.ts`.
+
+### 8.35 Ответ обрезан лимитом вывода (`output_limit`) и продолжение (ADR-041)
+
+Пустой ответ и ответ, срезанный лимитом, — **разные исходы**: первый лечится ретраем
+(§8.15 п. 6, класс `empty_completion`), второй — продолжением.
+
+1. **Признак.** Финальный шаг завершился с нормализованным `finishReason: 'length'`
+   (`max_tokens`) и **без tool-call'ов**. Текст может быть непустым — тогда он срезан и
+   сохраняется, а не выбрасывается.
+2. **Продолжение.** Ход/прогон не финализируется: срезанный фрагмент остаётся отдельным
+   assistant-сообщением (`status: 'limit'`, `metadata.output_limit`, `output_limit_attempt: N`),
+   в историю и в LLM-контекст следующего вызова кладётся сервисное сообщение
+   (`role: 'user'`, `author: 'System'`, **`metadata.type = 'output_limit_notice'`**) с
+   номером продолжения, фактическим лимитом и расходом на размышления. Текст — **системный
+   контекстный файл** `prompts/system/OUTPUT_LIMIT.{lang}.md` (раздел «Контекст → Системные»,
+   плейсхолдеры `{attempt}/{max}/{limit}/{reasoning}`, прецедент — `ATTACHMENTS_DROPPED`).
+   В сабагенте фрагмент возвращается в контекст как assistant-префикс — иначе модель пишет
+   ответ заново и упирается в тот же лимит.
+3. **Предел.** `MAX_OUTPUT_LIMIT_CONTINUATIONS = 2` (серия `MAX_OUTPUT_LIMIT_STREAK = 3` подряд
+   обрезанных ответов). На третьем — исход `output_limit`: `session.output_limit_exhausted`,
+   статус сообщения `limit`, durable-запись `reason: 'output_limit'` (PROP-143); в сабагенте —
+   `isError: true`, `<task_result><status>error</status><attempts>3</attempts><partial_output>…`
+   (собранный текст не теряется).
+4. **Стоимость шага.** Ни продолжение, ни ретрай пустого ответа **не расходуют** шаг агента
+   (лимит считает отдельный счётчик), но `stepIndex` растёт — два шага не должны получить
+   одинаковый индекс (адресация шага в UI).
+5. **Счётчики не смешиваются.** `emptyResponseAttempts` (пустой) и `outputLimitStreak`
+   (обрезанный) независимы; если ответ и пустой, и `length` — берётся ветка `length`
+   (у reasoning-моделей пустой текст и есть исчерпанный бюджет вывода).
+6. **Обрезанный tool-call.** Аргументы, не разобранные из-за лимита, — вызов не исполняется,
+   модели возвращается `tool.input_incomplete` («разбей payload на меньшие вызовы и повтори»),
+   а не ошибка схемы аргументов.
+
+Код: `engine/output-limit-notice.ts`, `engine/orchestrator.ts`, `engine/tools/task/run-cycle.ts`,
+`engine/tools/incomplete-call.ts`, `prompts/system/OUTPUT_LIMIT.{ru,en}.md`.
 
 ## 9. Расширение и изменение
 

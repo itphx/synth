@@ -513,6 +513,30 @@ export class OpenAIProvider extends BaseProvider {
           );
         }
 
+        // ADR-041: стрим закрылся **корректно** (`finish_reason` пришёл), но не
+        // принёс ни текста, ни вызовов инструментов, ни размышлений — пустой
+        // ответ, а не «модель промолчала штатно». Без ошибки такой ответ
+        // выглядел успехом: ретрай не срабатывал, а вызывающая сторона
+        // получала пустой финал без диагностики.
+        //
+        // Не считаем пустотой (легитимные ответы):
+        //  - ответ только с `tool_calls` (tool-loop без текста — норма);
+        //  - ответ с reasoning-блоками без видимого текста (thinking);
+        //  - расход `reasoning_tokens` без транслированного текста — бюджет
+        //    ушёл в размышления, повтор не поможет (диагностика — на уровне
+        //    цикла: `session.output_limit`/`task.output_limit`).
+        const emptyCompletion = accumulatedContent.trim() === ''
+          && accumulatedToolCalls.length === 0
+          && accumulatedReasoning.trim() === ''
+          && (accumulatedUsage.reasoningTokens ?? 0) === 0;
+        if (emptyCompletion) {
+          throw new ProviderError(
+            'Провайдер вернул пустой ответ (empty_completion): нет ни текста, ни вызовов '
+            + `инструментов (finish=${finishReasonValue ?? 'none'}, model=${this.model})`,
+            this.name,
+          );
+        }
+
         debugCollector?.captureApiResponse({
           usage: accumulatedUsage,
           model: this.model,

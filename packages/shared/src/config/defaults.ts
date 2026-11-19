@@ -98,7 +98,7 @@ export const defaultConfig: SynthConfig = {
     defaultModel: '',
     maxRetries: 3,
     timeout: 60,
-    maxTokens: 8192,
+    maxTokens: 32768,
     cache: 'auto',
   },
   core: {

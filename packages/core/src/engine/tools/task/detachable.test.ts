@@ -584,4 +584,74 @@ describe('task/detachable — перевод идущего прогона в ф
 
     expect(await service.list({ sessionId: parent.id })).toEqual([]);
   });
+
+  // ADR-041 × ADR-111: фоновый прогон, закончившийся `isError` (пустой финал
+  // саб-агента), обязан донести до родителя **причину** — полный
+  // `<task_result><status>error</status>…` — а не пустую строку: родитель
+  // иначе видит «прогон завершён» без объяснения, что случилось.
+  it('фоновый прогон с isError: `<task_result><status>error</status>` — в summary как есть', async () => {
+    const { service, notifications } = makeService();
+    const registry = new ActiveRunRegistry();
+    // Шлагбаум: прогон стоит на первом LLM-вызове, пока тест не переведёт его
+    // в фон — иначе пустой финал успевает завершиться до detach.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const provider = {
+      model: 'test-model',
+      name: 'test-provider',
+      chatAsync: vi.fn(async function* () {
+        await gate;
+        // Пустой финал: цикл повторит до предела и завершится isError.
+        yield { isFinal: true, content: '', toolCalls: [] };
+      }),
+    } as unknown as BaseProvider;
+
+    const extra = {
+      ...makeExtra({ service, registry }),
+      // Реальный цикл саб-агента спрашивает реестр агентов (capabilities роли).
+      agentRegistry: {
+        get: (id: string) => ({ id, agentMode: ['subagent'] }),
+        getSubagents: () => [],
+        getToolsForAgent: () => [],
+      },
+    } as unknown as TaskExtra;
+    const ctx = makeCtx();
+    // Реальный цикл саб-агента (`runSubagent` по умолчанию) — проверяем именно
+    // договор цикла о тексте результата, а не синтетический ToolResult.
+    const runConfig = {
+      ...makeRunConfig(extra, ctx),
+      provider,
+      tools: [],
+      initialMessages: [],
+    };
+
+    const toolPromise = runDetachableSubagent({ params: makeParams(), runConfig, extra, ctx });
+    await vi.waitFor(() => expect(registry.list(parent.id)).toHaveLength(1));
+    const detach = await registry.detachAll(parent.id);
+    expect(detach.detached).toHaveLength(1);
+
+    const toolResult = await toolPromise;
+    const runId = String(toolResult.metadata!.background_run_id);
+    release();
+
+    await vi.waitFor(async () => {
+      expect((await service.get(runId))?.status).toBe('failed');
+    }, { timeout: 5000 });
+
+    const record = (await service.get(runId))!;
+    // Итог — ровно текст isError-результата (не пустая строка).
+    expect(record.summary).toContain('<task_result>');
+    expect(record.summary).toContain('<status>error</status>');
+    expect(record.summary).toContain('empty subagent response');
+    expect(record.summary?.trim()).not.toBe('');
+
+    // Родитель видит причину в уведомлении: тот же текст внутри `<summary>`.
+    await vi.waitFor(() => expect(notifications).toHaveLength(1), { timeout: 5000 });
+    const notification = notifications[0]!;
+    expect(notification.metadata?.type).toBe('background_run_result');
+    expect(notification.metadata?.state).toBe('failed');
+    expect(notification.content).toContain('<summary>');
+    expect(notification.content).toContain('<status>error</status>');
+    expect(notification.content).toContain('empty subagent response');
+  });
 });

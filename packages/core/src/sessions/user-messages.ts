@@ -47,6 +47,12 @@ export function isServiceUserMessage(message: ClassifiableUserMessage): boolean 
   // системы (автор `System`), а не реплика человека: авто-тайтл, счётчики
   // диалога и интервью её не считают.
   if (meta?.type === 'execution_stopped') return true;
+  // ADR-041 × task: диагностическое сообщение повторного пустого ответа
+  // саб-агента — служебное (автор `System`), а не реплика человека.
+  if (meta?.type === 'empty_response_notice') return true;
+  // ADR-041 × continuation: инструкция продолжить после обрезки лимитом
+  // вывода — тоже служебная (не открывает ход и не считается репликой).
+  if (meta?.type === 'output_limit_notice') return true;
   if (message.author === 'Scheduler') return true;
   return false;
 }
@@ -65,7 +71,13 @@ export function isNonTurnServiceUserMessage(message: ClassifiableUserMessage): b
   const meta = message.metadata;
   return meta?.source === 'tool-attachment'
     || meta?.type === 'session_moved'
-    || meta?.type === 'execution_stopped';
+    || meta?.type === 'execution_stopped'
+    // Диагностика повторного пустого ответа саб-агента приходит **внутри**
+    // текущего хода ребёнка: свой ход она не открывает.
+    || meta?.type === 'empty_response_notice'
+    // Инструкция продолжения после обрезки лимитом вывода — внутри хода
+    // (и основной сессии, и саб-агента): своего хода не открывает.
+    || meta?.type === 'output_limit_notice';
 }
 
 /** Реплика пользователя диалога: `role: 'user'` и не служебное сообщение. */

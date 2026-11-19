@@ -366,6 +366,11 @@ export class MemoryContextFileRepository implements ContextFileRepository {
     return null;
   }
 
+  /** ADR-041 × continuation: шаблонов сообщений у memory-реализации нет. */
+  getOutputLimitNotice(): string {
+    return '';
+  }
+
   getModePrompt(): string | null {
     return null;
   }

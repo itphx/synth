@@ -62,6 +62,7 @@ export function stubContextFiles(
     getGatewayInstructions: (): string => '',
     getMemoryInstructions: (): string => '',
     getSecurityMessage: (): string | null => null,
+    getOutputLimitNotice: (): string => '',
     getModePrompt: (): string | null => null,
     getPlanModePrompt: (): string | null => null,
     getPlanGuide: (): string | null => null,

@@ -220,6 +220,11 @@ export class PgContextFileRepository implements ContextFileRepository, ContextOv
     return this._config.getAttachmentsDroppedTemplate(language);
   }
 
+  /** ADR-041 × continuation: шаблон инструкции продолжения после обрезки. */
+  getOutputLimitNotice(language?: string): string {
+    return this._config.getOutputLimitNotice(language);
+  }
+
   getMediaDeriveTemplate(language?: string): string {
     return this._config.getMediaDeriveTemplate(language);
   }

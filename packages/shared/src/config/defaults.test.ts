@@ -152,8 +152,8 @@ describe('defaultConfig', () => {
     expect(defaultConfig.llm.cache).toBe('auto');
   });
 
-  it('llm.maxTokens по умолчанию 8192 (лимит вывода новых сессий)', () => {
-    expect(defaultConfig.llm.maxTokens).toBe(8192);
+  it('llm.maxTokens по умолчанию 32768 (лимит вывода новых сессий)', () => {
+    expect(defaultConfig.llm.maxTokens).toBe(32768);
   });
 
   it('tools.policy по умолчанию auto (ADR-071 §2.3)', () => {

@@ -40,7 +40,8 @@ import {
  * - `cancelled` — отменён пользователем («Стоп»);
  * - `stopped` — остановлен (отказ в туле / блокировка);
  * - `error` — ошибка/пустой ответ LLM;
- * - `limit` — достигнут лимит итераций;
+ * - `limit` — достигнут лимит итераций (а также исчерпана серия
+ *   продолжений обрезанного ответа — `session.output_limit_exhausted`);
  * - `interrupted` — генерация прервана пользователем (ADR-104 `interrupt`:
  *   ход продолжается, ответ — частичный).
  */
@@ -83,11 +84,19 @@ export function resolveAssistantStatus(
     case 'session.denied_blocked':
     case 'session.role_tool_blocked':
       return 'stopped';
+    // ADR-041 × continuation: серия обрезанных ответов исчерпала продолжения —
+    // ответ остался за лимитом вывода: это `limit`, а не «ошибка модели».
     case 'session.max_iterations':
     case 'session.steps_limit':
+    case 'session.output_limit_exhausted':
       return 'limit';
+    // ADR-041 × task: пустой финальный ответ саб-агента и его срез лимитом
+    // вывода — не «успех»: в собственной истории ребёнка такой ответ должен
+    // читаться как `error`, а не как обычное завершение.
     case 'session.empty_response':
     case 'session.output_limit':
+    case 'task.empty_response':
+    case 'task.output_limit':
     case 'router.timeout':
     case 'router.network_error':
     case 'router.rate_limit_exceeded':

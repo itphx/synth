@@ -91,6 +91,14 @@ export interface ContextFileRepository {
     language?: string,
     params?: Record<string, string>,
   ): string | null;
+  /**
+   * ADR-041 × continuation: шаблон инструкции «ответ обрезан лимитом вывода»
+   * (`prompts/system/OUTPUT_LIMIT.{lang}.md`; плейсхолдеры `{attempt}`, `{max}`,
+   * `{limit}`, `{reasoning}`) — как `ATTACHMENTS_DROPPED`: шаблон сообщения
+   * модели, а не постоянный блок промпта. Пустая строка — шаблона нет
+   * (вызывающий берёт техническую строку).
+   */
+  getOutputLimitNotice(language?: string): string;
   getModePrompt(mode: string, language?: string): string | null;
   getPlanModePrompt(
     planMode: 'auto' | 'strict' | 'off',

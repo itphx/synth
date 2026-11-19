@@ -165,4 +165,16 @@ describe('SubagentResumeBar (B8: плашка в дочерней сессии �
     expect(container.textContent).toContain('Сабагент остановлен: внутренняя ошибка')
     expect(findBtn(container, 'Продолжить')).toBeDefined()
   })
+
+  // ADR-041: пустой финальный ответ модели — своя причина остановки (`empty`);
+  // продолжение по истории ребёнка осмысленно, поэтому «Продолжить» есть.
+  it('execution_stopped (empty) → плашка «пустой ответ модели» + «Продолжить»', async () => {
+    const container = await renderBar('child', {
+      stopReason: 'empty',
+      attempts: 3,
+      maxRetries: 3,
+    }, { onResume: () => {}, onStop: () => {} })
+    expect(container.textContent).toContain('Сабагент остановлен: пустой ответ модели')
+    expect(findBtn(container, 'Продолжить')).toBeDefined()
+  })
 })
