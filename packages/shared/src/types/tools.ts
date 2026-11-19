@@ -133,6 +133,24 @@ export const ToolCapability = {
    * реестр доступен и без workspace. В plan-режиме разрешены только чтения.
    */
   AGENTS: 'agents',
+  /**
+   * Сессии инстанса (обзор и управление): тулы `synth_sessions_active`
+   * (чтение — снимок «кто работает»), `synth_session_stop` и
+   * `synth_session_resume` (запись, только ADMIN инстанса и только для своей
+   * сессии).
+   *
+   * Отдельная capability по той же причине, что `instance`/`agents`/`process`:
+   * сессии инстанса — доменный ресурс (метаданные сессий, очередь, фоновые
+   * прогоны, терминалы), а не примитив ядра. Capability **не** привязана к
+   * рабочему каталогу проекта (`WORKSPACE_CAPABILITIES`) — обзор инстанса
+   * доступен и без workspace: он нужен, чтобы безопасно остановить работу перед
+   * рестартом и возобновить её после подъёма (ADR-092).
+   *
+   * В plan-режиме разрешён только снимок (`synth_sessions_active`);
+   * `synth_session_stop`/`synth_session_resume` заблокированы — план ничего не
+   * меняет.
+   */
+  SESSIONS: 'sessions',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -191,6 +209,10 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
     label: 'Агенты',
     description:
       'synth_agent_list, synth_agent_get, synth_agent_save, synth_agent_delete, synth_agent_enable, synth_agent_import',
+  },
+  [ToolCapability.SESSIONS]: {
+    label: 'Сессии инстанса',
+    description: 'synth_sessions_active, synth_session_stop, synth_session_resume',
   },
 };
 

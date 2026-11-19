@@ -56,6 +56,35 @@ import {
 } from './instance-agents.js';
 import type { InstanceAgentsExtra } from './instance-agents.js';
 export type { InstanceAgentsExtra };
+// ADR-091/ADR-092: обслуживание инстанса из чата — статус/doctor/бэкапы/
+// восстановление/рестарт/журнал (write — только ADMIN, plan-режим блокирует
+// write-имена; сервисный слой `maintenance/*` переиспользуется как есть).
+import {
+  synthMaintenanceStatusTool,
+  synthMaintenanceDoctorTool,
+  synthBackupListTool,
+  synthBackupCreateTool,
+  synthRestoreRequestTool,
+  synthRestoreCancelTool,
+  synthRestartRequestTool,
+  synthMaintenanceAuditTool,
+} from './instance-maintenance.js';
+import type { InstanceMaintenanceExtra, MaintenanceToolsDeps } from './instance-maintenance.js';
+export type { InstanceMaintenanceExtra, MaintenanceToolsDeps };
+// ADR-092: сессии инстанса из чата — снимок работы (`synth_sessions_active`),
+// «Стоп» (`synth_session_stop`) и возобновление (`synth_session_resume`):
+// write-имена блокируются permission-слоем в plan-режиме, доступ — владелец
+// сессии или ADMIN инстанса.
+import {
+  synthSessionsActiveTool,
+  synthSessionStopTool,
+  synthSessionResumeTool,
+} from './instance-sessions.js';
+export type {
+  SessionControlDeps,
+  SessionControlExtra,
+  SubagentResumeOutcome,
+} from './instance-sessions.js';
 import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
 import {
   todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool,
@@ -218,6 +247,21 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   synthAgentDeleteTool,
   synthAgentEnableTool,
   synthAgentImportTool,
+  // ADR-091/ADR-092: обслуживание инстанса — статус/doctor/бэкапы/
+  // восстановление/рестарт/журнал (`synth_maintenance_status`, `synth_backup_*`,
+  // `synth_restore_*`, `synth_restart_request`, `synth_maintenance_audit`).
+  synthMaintenanceStatusTool,
+  synthMaintenanceDoctorTool,
+  synthBackupListTool,
+  synthBackupCreateTool,
+  synthRestoreRequestTool,
+  synthRestoreCancelTool,
+  synthRestartRequestTool,
+  synthMaintenanceAuditTool,
+  // ADR-092: сессии инстанса — снимок работы, «Стоп» и возобновление.
+  synthSessionsActiveTool,
+  synthSessionStopTool,
+  synthSessionResumeTool,
   taskTool,
   skillTool,
   classifyConversationTool,

@@ -51,6 +51,10 @@ export {
   DEFAULT_RECOVERY_BUDGET,
 } from './sessions/recovery-boot.js';
 export type { BootRecoveryPlan, BootRecoverySession } from './sessions/recovery-boot.js';
+// ADR-092: «Стоп» хода сессии — единая семантика (`POST /:id/abort` и тул
+// `synth_session_stop`): HTTP-роут и точка сборки backend'а используют один шов.
+export { abortSessionTurn } from './sessions/turn-abort.js';
+export type { AbortSessionTurnDeps, AbortSessionTurnResult } from './sessions/turn-abort.js';
 export {
   EventBus, INSTANCE_EVENT_CHANNEL,
   // ADR-118: адресная доставка (`recipient`), нумерация событий (`eventSeq`),

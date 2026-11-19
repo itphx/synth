@@ -21,14 +21,22 @@
     "memory",
     "question",
     "todo",
-    "process"
+    "process",
+    "schedule",
+    "sessions"
   ],
   "icon": "tools",
   "color": "--syntax-function",
   "contextFile": "KEEPER.md",
   "executorProfile": "devops",
-  "allowedProfiles": ["devops", "default"],
-  "agentMode": ["primary", "subagent"],
+  "allowedProfiles": [
+    "devops",
+    "default"
+  ],
+  "agentMode": [
+    "primary",
+    "subagent"
+  ],
   "temperature": 0.1,
   "maxSteps": 100
 }

@@ -162,13 +162,30 @@ export const SSH_TOOLS = ['ssh_exec', 'ssh_copy', 'ssh_tunnel'];
  * `INSTANCE_WRITE_TOOLS` заведён заранее как шов блокировки в plan-режиме
  * (`isPlanBlockedTool`).
  */
-export const INSTANCE_READ_TOOLS = ['synth_info', 'synth_mcp_list', 'synth_mcp_test'];
+export const INSTANCE_READ_TOOLS = [
+  'synth_info',
+  'synth_mcp_list',
+  'synth_mcp_test',
+  // ADR-091/ADR-092: обслуживание инстанса — чтения (статус, doctor, архивы,
+  // журнал). В plan-режиме разрешены: план ничего не меняет.
+  'synth_maintenance_status',
+  'synth_maintenance_doctor',
+  'synth_backup_list',
+  'synth_maintenance_audit',
+];
 export const INSTANCE_WRITE_TOOLS = [
   'synth_mcp_add',
   'synth_mcp_update',
   'synth_mcp_remove',
   'synth_mcp_enable',
   'synth_mcp_reconnect',
+  // ADR-091/ADR-092: мутации обслуживания инстанса (архив, запрос на
+  // восстановление, graceful рестарт) — запись в операционные каталоги и
+  // жизненный цикл процесса: в plan-режиме блокируются (`isPlanBlockedTool`).
+  'synth_backup_create',
+  'synth_restore_request',
+  'synth_restore_cancel',
+  'synth_restart_request',
 ];
 export const INSTANCE_TOOLS = [...INSTANCE_READ_TOOLS, ...INSTANCE_WRITE_TOOLS];
 
@@ -193,6 +210,24 @@ export const AGENTS_WRITE_TOOLS = [
   'synth_agent_import',
 ];
 export const AGENTS_TOOLS = [...AGENTS_READ_TOOLS, ...AGENTS_WRITE_TOOLS];
+
+/**
+ * Инстансный обзор и управление сессиями (ADR-092): `synth_sessions_active`,
+ * `synth_session_stop`, `synth_session_resume`.
+ *
+ * Отдельная группа, как `instance`/`agents`/`process`: сессии инстанса —
+ * доменный ресурс (метаданные сессий, очередь, фоновые прогоны, терминалы), а
+ * не примитив ядра. Ключ группы совпадает со значением capability `sessions`,
+ * поэтому правило `permission.rules.sessions` работает и по именам встроенных
+ * тулов, и по capability плагинного тула.
+ *
+ * Чтение (`synth_sessions_active`) в plan-режиме **разрешено** (снимок нужен для
+ * планирования остановки), записи (`synth_session_stop`/`synth_session_resume`)
+ * — заблокированы (`isPlanBlockedTool`, `evaluator.ts`).
+ */
+export const SESSIONS_READ_TOOLS = ['synth_sessions_active'];
+export const SESSIONS_WRITE_TOOLS = ['synth_session_stop', 'synth_session_resume'];
+export const SESSIONS_TOOLS = [...SESSIONS_READ_TOOLS, ...SESSIONS_WRITE_TOOLS];
 
 /**
  * ADR-039: операционный список задач сессии (`session.todos`, не `project.plan`).
@@ -299,6 +334,9 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   instance: INSTANCE_TOOLS,
   // Самообслуживание реестра агентов (ключ совпадает с capability `agents`).
   agents: AGENTS_TOOLS,
+  // ADR-092: сессии инстанса — обзор и управление (ключ совпадает с
+  // capability `sessions`).
+  sessions: SESSIONS_TOOLS,
   // ADR-039: список задач сессии (ключ совпадает с capability `todo`).
   // Имена дублируются в `runtime` намеренно: тул принадлежит обеим группам.
   todo: TODO_TOOLS,
@@ -347,6 +385,9 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   'terminal',
   'script',
   'agents',
+  // ADR-092: сессии инстанса — замыкает порядок (набор имён не пересекается
+  // с прочими группами).
+  'sessions',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

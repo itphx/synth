@@ -2753,6 +2753,35 @@ export const dict = {
   'script.gateway_unsupported':
     'Скрипты запускаются только из интерфейса Synth — сообщение пришло из внешнего канала',
 
+  // --- Обслуживание инстанса из чата (ADR-091/ADR-092) ---
+  // Тул `synth_maintenance_*`/`synth_backup_*`/`synth_restore_*`/
+  // `synth_restart_request`: en-шаблоны — в `engine/system-messages.ts`.
+  'maintenance.deps_unavailable': 'Обслуживание инстанса недоступно в этой сборке ({tool})',
+  'maintenance.forbidden':
+    'Операция обслуживания инстанса требует ADMIN (в standalone локальный владелец — админ)',
+  'maintenance.read_failed': 'Не удалось прочитать данные обслуживания ({op}): {error}',
+  'maintenance.confirm_required': 'Требуется подтверждение (confirm: true)',
+  'maintenance.not_found': '{target} "{name}" не найден',
+  'maintenance.invalid_archive': 'Архив "{archive}" не годится для восстановления: {reason}',
+  'maintenance.restore.workspace_mismatch':
+    'флаг workspace в архиве не совпадает с запросом (в архиве: {workspace}) — восстанавливается ровно то, что лежит в архиве',
+  'maintenance.status': 'Состояние обслуживания инстанса:\n{json}',
+  'maintenance.doctor': 'Проверки инстанса: {summary} (предупреждений: {warn}, ошибок: {fail}, пропущено: {skipped})\n{json}',
+  'maintenance.backup.list': 'Архивы бэкапов ({count}):\n{json}',
+  'maintenance.backup.created':
+    'Бэкап создан: {name} ({bytes} Б; секреты: {secrets}, workspace: {workspace}, шифрование: {encrypted}, записей: {entries}). Содержимое архива не возвращается.',
+  'maintenance.backup.failed': 'Не удалось создать бэкап: {error}',
+  'maintenance.restore.scheduled':
+    'Восстановление из "{archive}" запланировано: применится при следующем запуске инстанса (пока процесс работает, каталог данных не трогается). Предупреждения: {warnings}',
+  'maintenance.restore.none': 'Отложенного запроса на восстановление нет — отменять нечего.',
+  'maintenance.restore.failed': 'Не удалось изменить запрос на восстановление: {error}',
+  'maintenance.restart.requested':
+    'Перезапуск запрошен (режим: {mode}, id: {restartId}). ВНИМАНИЕ: текущий ход и все активные стримы прерываются — процесс завершается с кодом 75 и поднимается супервизором. Переподключитесь через несколько секунд и проверьте инстанс через synth_maintenance_status.',
+  'maintenance.restart_unsupported':
+    'Перезапуск недоступен на этом инстансе (режим: {mode}; причина: {reason}). Попросите оператора запустить инстанс под супервизором (SYNTH_RESTART_MODE=process|supervisor).',
+  'maintenance.restart.failed': 'Запрос на перезапуск не прошёл: {error}',
+  'maintenance.audit.list': 'Журнал обслуживания ({count}):\n{json}',
+
   // Chat settings
   'chatSettings.description': 'Как показывать сообщения и служебные шаги в ленте чата.',
   'chatSettings.viewMode': 'Вид сообщений',
@@ -3237,6 +3266,7 @@ export const dict = {
   'admin.agents.cap.instance': 'инстанс и MCP',
   'admin.agents.cap.terminal': 'терминал',
   'admin.agents.cap.agents': 'реестр агентов',
+  'admin.agents.cap.sessions': 'сессии инстанса',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',
@@ -3918,6 +3948,23 @@ export const dict = {
   'session.rename_ok': 'Сессия переименована в «{title}».',
   'session.save_error': 'Ошибка сохранения сессии: {error}',
   'session.remote_truncated': 'Список сессий удалённого инстанса обрезан (кап страниц) — сквозная пагинация недоступна.',
+
+  // --- Сессии инстанса: обзор и управление (ADR-092) ---
+  // Тул `synth_sessions_active`/`synth_session_stop`/`synth_session_resume`:
+  // en-шаблоны — в `engine/system-messages.ts`.
+  'session.tool.deps_unavailable': 'Управление сессиями инстанса недоступно в этой сборке ({tool})',
+  'session.forbidden':
+    'Доступ к сессии {id} запрещён — останавливать/возобновлять её может только владелец сессии или ADMIN инстанса',
+  'session.conflict': 'Сессию {id} не удалось изменить: {reason}',
+  'session.active.snapshot':
+    'Активная работа на инстансе (сессий: {sessions}, фоновых прогонов: {runs}, живых терминалов: {terminals}):\n{json}',
+  'session.active.empty':
+    'На инстансе ничего не выполняется: нет активных ходов, очереди сообщений, фоновых прогонов и живых терминалов.',
+  'session.stop.ok':
+    'Ход сессии {id} прерван (шёл ли ход: {was_running}; причина: {reason}; фоновых прогонов осталось: {runs}). «Нечего останавливать» — не ошибка. Фоновые прогоны и фоновые процессы этот тул НЕ останавливает — для них есть process_stop.',
+  'session.resume.ok': 'Сессия {id} возобновлена (режим: {mode}).',
+  'session.resume.notice':
+    'Продолжи прерванную задачу с того места, где остановился. Не начинай работу заново: сначала проверь текущее состояние, потом продолжай.',
 
   // --- Сабагент (task) ---
   'task.stopped_by_user': 'Задача остановлена пользователем',

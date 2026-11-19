@@ -56,6 +56,29 @@ export const SYSTEM_MESSAGES = {
   'session.save_error': 'Error saving the session: {error}',
   'session.remote_truncated': 'Remote session list is truncated (page cap) — cross-world pagination is unavailable.',
 
+  // --- Сессии инстанса: обзор и управление (ADR-092) ---
+  // Снимок «кто работает», безопасная остановка перед рестартом и возобновление
+  // после подъёма (`synth_sessions_active`/`synth_session_stop`/
+  // `synth_session_resume`, агент `keeper`). Только метаданные и счётчики:
+  // текста сообщений в снимке нет; секреты не печатаются нигде.
+  'session.tool.deps_unavailable':
+    'Error: session control is unavailable in this build ({tool})',
+  'session.forbidden':
+    'Error: access to session {id} is denied — only the session owner or an instance ADMIN can stop or resume it',
+  'session.conflict': 'Error: session {id} could not be changed: {reason}',
+  'session.active.snapshot':
+    'Active instance work ({sessions} sessions, {runs} running background runs, {terminals} live terminals):\n{json}',
+  'session.active.empty':
+    'Nothing is running on the instance: no active turns, no queued messages, no background runs, no live terminals.',
+  'session.stop.ok':
+    'Turn of session {id} is interrupted (was running: {was_running}; reason: {reason}; background runs still running: {runs}). It is not an error if there was nothing to stop. Running background runs and background processes are NOT stopped by this tool — use process_stop for them.',
+  'session.resume.ok': 'Session {id} is resumed (mode: {mode}).',
+  // Текст служебного сообщения-продолжения (`metadata.type='resume_notice'`):
+  // роль `user`, автор `System` — видно модели и в ленте, но это не реплика
+  // человека. `note` дописывается вызывающим отдельной строкой.
+  'session.resume.notice':
+    '[RESUME] Continue the interrupted task from where you stopped. Do not restart the work from scratch: check the current state first, then continue.',
+
   // --- Сабагент (task) ---
   'task.stopped_by_user': 'Task stopped by the user',
   'task.stopped_before_completion':
@@ -972,6 +995,40 @@ export const SYSTEM_MESSAGES = {
   'agent.import.dry_run': 'Import preview for agent "{id}" (nothing was written):\n{json}',
   'agent.import.imported': 'Agent "{id}" imported. Warnings: {warnings}',
   'agent.import.updated': 'Agent "{id}" updated from an import. Warnings: {warnings}',
+
+  // --- Обслуживание инстанса из чата (ADR-091/ADR-092: бэкапы, восстановление,
+  // doctor, рестарт, журнал). Реюз сервисного слоя `maintenance/*` и
+  // `server/restart.ts`; восстановление — офлайн-операция (применяется при
+  // следующем старте), секреты в отчётах — только флагом. Канал LLM — en
+  // (ADR-041); ru-переводы — в словаре UI.
+  'maintenance.deps_unavailable': 'Error: maintenance dependencies are unavailable for {tool}',
+  'maintenance.forbidden':
+    'Error: this maintenance operation requires ADMIN (in standalone the local owner is admin)',
+  'maintenance.read_failed': 'Error: could not read maintenance data ({op}): {error}',
+  'maintenance.confirm_required': 'Error: confirmation is required — pass confirm: true',
+  'maintenance.not_found': 'Error: {target} "{name}" not found',
+  'maintenance.invalid_archive':
+    'Error: archive "{archive}" cannot be used for restore: {reason}',
+  'maintenance.restore.workspace_mismatch':
+    'the archive workspace flag differs from the request (archive: {workspace}) — restore applies exactly what the archive contains',
+  'maintenance.status': 'Instance maintenance status:\n{json}',
+  'maintenance.doctor':
+    'Instance checks: {summary} (warn: {warn}, fail: {fail}, skipped: {skipped})\n{json}',
+  'maintenance.backup.list': 'Backups ({count}):\n{json}',
+  'maintenance.backup.created':
+    'Backup created: {name} ({bytes} bytes; secrets: {secrets}, workspace: {workspace}, encrypted: {encrypted}, entries: {entries}). The archive contents are not returned.',
+  'maintenance.backup.failed': 'Error: failed to create the backup: {error}',
+  'maintenance.restore.scheduled':
+    'Restore of "{archive}" is scheduled: it applies on the next instance start (the data directory is not touched while the process runs). Warnings: {warnings}',
+  'maintenance.restore.cancelled': 'The pending restore request is cancelled.',
+  'maintenance.restore.none': 'There is no pending restore request to cancel.',
+  'maintenance.restore.failed': 'Error: failed to change the restore request: {error}',
+  'maintenance.restart.requested':
+    'Restart requested (mode: {mode}, id: {restartId}). WARNING: the current turn and all active streams are interrupted — the process exits with code 75 and the supervisor starts it again. Reconnect in a few seconds and verify the instance with synth_maintenance_status.',
+  'maintenance.restart_unsupported':
+    'Error: restart is unavailable on this instance (mode: {mode}; reason: {reason}). Ask the operator to run the instance under a supervisor (SYNTH_RESTART_MODE=process|supervisor).',
+  'maintenance.restart.failed': 'Error: restart request failed: {error}',
+  'maintenance.audit.list': 'Maintenance journal ({count}):\n{json}',
 
   // --- Интерактивные терминалы (PROP-132, Ф5) ---
   'terminal.tool.deps_unavailable':

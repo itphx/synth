@@ -37,7 +37,9 @@ import type { LocalOwnerResolver } from '../local-owner.js';
 import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { sessionAxes } from '../../analytics/recorder.js';
 import { MEMORY_NAMESPACE } from '../../engine/plugins/memory-namespace.js';
-import { dropSteerInjections } from '../../engine/steering/apply.js';
+// Семантика «Стоп» (`POST /:id/abort`) — единая реализация: тот же путь
+// использует инстансный тул `synth_session_stop` (ADR-092).
+import { abortSessionTurn } from '../../sessions/turn-abort.js';
 // ADR-041: строки движка — через ключи `shared/i18n` (не литералы).
 import { t as sm, i18n as i18nMeta } from '../../engine/system-messages.js';
 import { requeueMessages, publishQueueState, queueCounts } from '../../queue/processor.js';
@@ -3890,81 +3892,17 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    // Персистентный флаг отмены (ADR-005): работает и когда `currentStream`/
-    // cancel-token отсутствуют (сессия в очереди / backoff / между итерациями),
-    // когда `orchestrator.cancel` — no-op. Пишем **точечно** под локом порта,
-    // чтобы не потерять конкурентную запись процессора (полный снимок затирал
-    // параллельную дозапись сообщений); сбрасывает флаг сам процессор.
-    // `updatedAt` не двигаем — паритет с прежним `saveSession`.
-    await sessionManager.mutateMeta(id, (meta) => {
-      meta.status.cancelRequested = true;
-      meta.status.cancelRequestedAt = nowISO();
-    }, { touchUpdatedAt: false });
+    // Семантика «Стоп» (флаг отмены, отмена стрима, остановка процессора, снятие
+    // инъекций) — единая реализация `sessions/turn-abort.ts`: тот же путь
+    // использует инстансный тул `synth_session_stop` (ADR-092), чтобы правила
+    // не разошлись между HTTP и чатом.
+    await abortSessionTurn({
+      sessionManager,
+      orchestrator,
+      queueManager,
+      eventBus: deps.eventBus,
+    }, id, session);
 
-    // Graceful-отмена активного стрима: оркестратор публикует stream.cancelled
-    // и сохраняет частичный ответ (если токен ещё жив).
-    if (session.currentStream) {
-      orchestrator.cancel(session.currentStream.streamId);
-    }
-
-    // Прерываем backoff/активный LLM-вызов и цикл процессора немедленно.
-    // Снятие blocked/currentStream/флага выполняет сам QueueProcessor; **очередь
-    // сохраняется целиком** («Стоп» останавливает только активный ход —
-    // решение владельца 2026-11-01), её продолжит `/queue/:sessionId/resume`
-    // или новая постановка сообщения. НЕ вызываем queueManager.stop() —
-    // иначе сессия остаётся «зависшей» (stalled). Если процессора нет — снимаем
-    // флаг, иначе следующий запуск ложно отменится.
-    if (!queueManager.requestStop(id)) {
-      // Снятие флага/остановка — метаданные: та же точечная правка под локом
-      // порта (`updatedAt` не двигаем — паритет с прежним `saveSession`).
-      const reset = await sessionManager.mutateMeta(id, (meta) => {
-        meta.status.cancelRequested = undefined;
-        meta.status.cancelRequestedAt = undefined;
-        // Осознанный «Стоп» при непустой очереди: после рестарта такую сессию
-        // не автозапускаем, UI показывает баннер «Обработка остановлена».
-        if (meta.pendingMessages.length > 0) {
-          meta.status.queueStopped = true;
-          meta.status.queueStoppedAt = nowISO();
-        }
-        return meta.pendingMessages.length;
-      }, { touchUpdatedAt: false });
-      const pendingCount = reset.found ? reset.value : 0;
-      if (pendingCount > 0) {
-        deps.eventBus.publish(id, 'queue.stalled', { pending_count: pendingCount });
-      }
-    }
-
-    // ADR-104 (решение 2026-10-28): «Стоп» снимает неприменённые инъекции —
-    // границы шага больше не будет, иначе сообщение применилось бы в начале
-    // следующего хода. Best-effort: сбой хранилища/шины не должен превращать
-    // «сессия уже отменена» в ошибку ответа (ответ остаётся 200 aborted).
-    try {
-      await dropSteerInjections({
-        sessionManager,
-        sessionId: id,
-        reason: 'aborted',
-        streamId: session.currentStream?.streamId,
-        publishDropped: (event) => deps.eventBus.publish(id, 'steer.dropped', event),
-        // ADR-104 × ADR-111/ADR-113: ни ввод пользователя, ни уведомления
-        // фоновых прогонов не теряем — весь остаток возвращается в очередь.
-        // Автостарта нет: ход остановил пользователь, сообщение ждёт его
-        // решения (видно в панели очереди).
-        requeue: async (messages) => {
-          return requeueMessages({ sessionManager, eventBus: deps.eventBus, sessionId: id, messages });
-        },
-      });
-    } catch (err) {
-      console.warn(
-        `[sessions] снятие очереди инъекций сессии ${id} не удалось: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    // Фоновые прогоны (фоновые саб-агенты и фоновые процессы) «Стоп» **не**
-    // останавливает: как в opencode, «Стоп» прерывает только активный ход
-    // (решение 2026-10-31, взамен 2026-10-28). Блокирующий саб-агент
-    // останавливается сам — abort сигнала тула `task` → `run-cycle` видит
-    // `isAborted` → `finishAborted`. Фоновые прогоны останавливаются явно:
-    // `POST /api/v2/processes/:id/stop` либо «Стоп» их собственной сессии.
     // ADR-102: мера `activity.aborts` — на осях `user`/`project` сессии.
     void analytics?.recordActivity('aborts', sessionAxes(session));
     return c.json({ status: 'aborted' });

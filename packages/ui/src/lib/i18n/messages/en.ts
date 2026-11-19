@@ -3252,6 +3252,7 @@ export const dict = {
   'admin.agents.cap.instance': 'instance & MCP',
   'admin.agents.cap.terminal': 'terminal',
   'admin.agents.cap.agents': 'agent registry',
+  'admin.agents.cap.sessions': 'instance sessions',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',

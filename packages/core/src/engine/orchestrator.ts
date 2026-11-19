@@ -44,6 +44,13 @@ import { createStateMessage, findLastStateMessage, buildModeChangeContent, build
 import { toLlmReasoningBlocks, makeReasoningParts, type ReasoningBlockLike } from './reasoning-blocks.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { AutomationRuntime } from './tools/automation-runtime.js';
+// ADR-091/ADR-092: зависимости тулов обслуживания инстанса — та же прокладка,
+// что у `agentStore` (тулы не создают сервисов и контекстов хранения сами).
+import type { MaintenanceToolsDeps } from './tools/instance-maintenance.js';
+// ADR-092: зависимости тулов сессий инстанса (`synth_sessions_active`,
+// `synth_session_stop`, `synth_session_resume`) — «Стоп» через тот же шов, что
+// у `POST /:id/abort`, возобновление — через funnel очереди.
+import type { SessionControlDeps } from './tools/instance-sessions.js';
 import type { AgentRegistry } from './agents/registry.js';
 import { DEFAULT_AGENT_ID, resolveAgentRoleAlias } from './agents/index.js';
 import type { McpManager } from './mcp/manager.js';
@@ -731,6 +738,21 @@ export interface OrchestratorOptions {
    * Не задан — write/read-тулы реестра вернут `agent.deps_unavailable`.
    */
   agentStore?: DocumentRepository<AgentDefinition>;
+  /**
+   * ADR-091/ADR-092: зависимости тулов обслуживания инстанса
+   * (`synth_maintenance_status|doctor|audit`, `synth_backup_*`,
+   * `synth_restore_*`, `synth_restart_request`) — каталог данных, мастер-ключ,
+   * аудит-журнал обслуживания и backend хранения. Не заданы — тулы вернут
+   * `maintenance.deps_unavailable`.
+   */
+  maintenance?: MaintenanceToolsDeps;
+  /**
+   * ADR-092: зависимости тулов сессий инстанса (`synth_sessions_active`,
+   * `synth_session_stop`, `synth_session_resume`) — «Стоп» (`abortSessionTurn`),
+   * возобновление сабагента/очереди и счётчики фоновой работы. Не заданы — тулы
+   * вернут `session.tool.deps_unavailable`.
+   */
+  sessionControl?: SessionControlDeps;
   mcpManager?: McpManager;
   /**
    * Workstream A1: клиент удалённого backend (гибрид) — read-only merge
@@ -1371,6 +1393,10 @@ export class ChatOrchestrator {
   private readonly _agentRegistry: AgentRegistry | null;
   /** Порт стора агентов для тулов `synth_agent_*` (null — тулы недоступны). */
   private readonly _agentStore: DocumentRepository<AgentDefinition> | null;
+  /** ADR-091/ADR-092: зависимости тулов обслуживания инстанса (null — нет). */
+  private readonly _maintenance: MaintenanceToolsDeps | null;
+  /** ADR-092: прокладка тулов сессий инстанса (null — тулы недоступны). */
+  private readonly _sessionControl: SessionControlDeps | null;
   /**
    * Роли, для которых уже предупреждали о фоллбеке на агента по умолчанию
    * (`_resolveAgentDefinition`): у старых сессий `settings.agentRole` может
@@ -2045,6 +2071,8 @@ export class ChatOrchestrator {
     this._toolRegistry = options.toolRegistry ?? null;
     this._agentRegistry = options.agentRegistry ?? null;
     this._agentStore = options.agentStore ?? null;
+    this._maintenance = options.maintenance ?? null;
+    this._sessionControl = options.sessionControl ?? null;
     this._mcpManager = options.mcpManager ?? null;
     this._getRemoteClient = options.getRemoteClient ?? null;
     this._mcpRegistry = options.mcpRegistry ?? null;
@@ -7531,6 +7559,14 @@ export class ChatOrchestrator {
                   // Реестр агентов как порт хранения: тулы `synth_agent_*` читают и
                   // пишут те же записи, что HTTP-роуты (`createAgentRoutes`).
                   agentStore: this._agentStore ?? undefined,
+                  // ADR-091/ADR-092: обслуживание инстанса (`synth_maintenance_*`,
+                  // `synth_backup_*`, `synth_restore_*`, `synth_restart_request`) —
+                  // каталог данных, аудит-журнал и backend хранения из точки сборки.
+                  maintenance: this._maintenance ?? undefined,
+                  // ADR-092: сессии инстанса (`synth_sessions_active`,
+                  // `synth_session_stop`, `synth_session_resume`) — прокладка на
+                  // точки сборки (тот же шов «Стоп», что у HTTP-роута).
+                  sessionControl: this._sessionControl ?? undefined,
                   sessionManager: this._sessionManager,
                   // ADR-089: funnel создания дочерней сессии (late-bound, если подключён).
                   getRequestSessionService: this._getRequestSessionService ?? undefined,

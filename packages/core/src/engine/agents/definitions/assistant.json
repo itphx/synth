@@ -30,11 +30,15 @@
     "ssh",
     "todo",
     "instance",
-    "agents"
+    "agents",
+    "sessions"
   ],
   "icon": "robot-3",
   "color": "--status-success",
   "contextFile": "ASSISTANT.md",
   "executorProfile": "default",
-  "allowedProfiles": ["default", "light"]
+  "allowedProfiles": [
+    "default",
+    "light"
+  ]
 }

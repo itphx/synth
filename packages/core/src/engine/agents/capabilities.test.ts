@@ -26,6 +26,11 @@ import { listModelsTool } from '../tools/list-models.js';
 import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from '../tools/todo.js';
 import { projectCreateTool } from '../tools/project-manage.js';
 import { synthInfoTool, synthMcpListTool, synthMcpTestTool } from '../tools/instance.js';
+import {
+  synthSessionsActiveTool,
+  synthSessionStopTool,
+  synthSessionResumeTool,
+} from '../tools/instance-sessions.js';
 import { computeToolAvailability } from '../permission/availability.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { INSTANCE_WRITE_TOOLS, getToolGroups } from '../permission/groups.js';
@@ -46,10 +51,13 @@ const WITH_AUTOMATION_AND_EXECUTORS = [...WITH_AUTOMATION, 'fixer', 'tester'];
 /** Агенты, которым capability пайплайнов/расписаний не выдаётся. */
 const WITHOUT_AUTOMATION = [
   'fixer', 'tester', 'researcher', 'security-auditor', 'explore', 'general', 'title',
-  // `keeper` обслуживает инстанс (реестры/настройки/бэкапы), а не автоматизацию
-  // проекта: пайплайны и расписания ему не выдаются.
-  'keeper',
 ];
+/**
+ * Агенты с расписаниями, но без пайплайнов: `keeper` обслуживает инстанс
+ * (реестры/настройки/бэкапы) и может ставить регулярное обслуживание
+ * (`schedule_*`), но пайплайны — не его зона.
+ */
+const WITH_SCHEDULE_ONLY = ['keeper'];
 /** Агенты, которым не выдаётся ни `question`, ни `process`. */
 const WITHOUT_AUTOMATION_AND_EXECUTORS = [
   'researcher', 'security-auditor', 'explore', 'general', 'title',
@@ -73,8 +81,15 @@ describe('Дефолтные агенты — capability pipeline/schedule (ADR-
     expect(agent!.capabilities, id).not.toContain(ToolCapability.SCHEDULE);
   });
 
+  it.each(WITH_SCHEDULE_ONLY)('%s имеет capability schedule, но не pipeline', (id) => {
+    const agent = byId.get(id);
+    expect(agent, `агент ${id} не найден`).toBeDefined();
+    expect(agent!.capabilities, id).toContain(ToolCapability.SCHEDULE);
+    expect(agent!.capabilities, id).not.toContain(ToolCapability.PIPELINE);
+  });
+
   it('набор агентов покрыт тестом целиком', () => {
-    expect([...WITH_AUTOMATION, ...WITHOUT_AUTOMATION].sort()).toEqual(
+    expect([...WITH_AUTOMATION, ...WITH_SCHEDULE_ONLY, ...WITHOUT_AUTOMATION].sort()).toEqual(
       agents.map((a) => a.id).sort(),
     );
   });
@@ -294,8 +309,7 @@ describe('Дефолтные агенты — capability instance (Workstream A1
     }
   });
 
-  it.each(WITHOUT_INSTANCE)('%s не имеет capability instance', (id) => {
-    const agent = byId.get(id)!;
+  it.each(WITHOUT_INSTANCE)('%s не имеет capability instance', (id) => {    const agent = byId.get(id)!;
     expect(agent.capabilities, id).not.toContain(ToolCapability.INSTANCE);
   });
 
@@ -308,5 +322,51 @@ describe('Дефолтные агенты — capability instance (Workstream A1
     for (const name of INSTANCE_WRITE_TOOLS) {
       expect(isPlanBlockedTool(name), name).toBe(true);
     }
+  });
+});
+
+/**
+ * Capability `sessions` — инстансный обзор и управление сессиями (тулы
+ * `synth_sessions_active`/`synth_session_stop`/`synth_session_resume`).
+ *
+ * Кому: `leader` (оркестратор — держит полный набор, см. отдельный тест),
+ * `keeper` (обслуживание: посмотреть, кто работает, остановить/возобновить
+ * перед рестартом). Остальным — не выдаём: остановка чужой работы — операция
+ * инстанса, а не рядовая задача исполнителя.
+ */
+describe('Дефолтные агенты — capability sessions (обзор и управление сессиями)', () => {
+  const agents = loadSystemAgentDefinitions();
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const WITH_SESSIONS = ['assistant', 'leader', 'keeper'];
+  const SESSION_TOOLS = [synthSessionsActiveTool, synthSessionStopTool, synthSessionResumeTool];
+
+  it.each(WITH_SESSIONS)('%s имеет capability sessions и видит тулы сессий', (id) => {
+    const agent = byId.get(id)!;
+    expect(agent.capabilities, id).toContain(ToolCapability.SESSIONS);
+    for (const tool of SESSION_TOOLS) {
+      const availability = computeToolAvailability(tool.name, tool.capabilities, {
+        agentCapabilities: agent.capabilities,
+        sessionMode: 'act',
+      });
+      expect(availability.available, `${id} → ${tool.name}`).toBe(true);
+    }
+  });
+
+  it('fixer без capability sessions → тулы сессий недоступны по роли', () => {
+    const agent = byId.get('fixer')!;
+    expect(agent.capabilities).not.toContain(ToolCapability.SESSIONS);
+    const availability = computeToolAvailability(
+      synthSessionsActiveTool.name,
+      synthSessionsActiveTool.capabilities,
+      { agentCapabilities: agent.capabilities, sessionMode: 'act' },
+    );
+    expect(availability.available).toBe(false);
+  });
+
+  it('read-тул сессий разрешён в plan-режиме, write-тулы — блокируются', () => {
+    expect(isPlanBlockedTool(synthSessionsActiveTool.name, synthSessionsActiveTool.capabilities)).toBe(false);
+    expect(isPlanBlockedTool(synthSessionStopTool.name, synthSessionStopTool.capabilities)).toBe(true);
+    expect(isPlanBlockedTool(synthSessionResumeTool.name, synthSessionResumeTool.capabilities)).toBe(true);
+    expect(getToolGroups(synthSessionsActiveTool.name, synthSessionsActiveTool.capabilities)).toContain('sessions');
   });
 });

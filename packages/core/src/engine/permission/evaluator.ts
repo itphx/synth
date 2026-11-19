@@ -20,6 +20,7 @@ import {
   SSH_TOOLS,
   INSTANCE_WRITE_TOOLS,
   AGENTS_WRITE_TOOLS,
+  SESSIONS_WRITE_TOOLS,
   TERMINAL_TOOLS,
 } from './groups.js';
 
@@ -210,6 +211,11 @@ export function isPlanBlockedTool(toolName: string, capabilities?: readonly stri
   // Самообслуживание реестра агентов: мутации реестра/ролей — это запись, план
   // ничего не меняет; чтения (`synth_agent_list`/`synth_agent_get`) остаются.
   if (AGENTS_WRITE_TOOLS.includes(toolName)) return true;
+  // ADR-092: управление сессиями инстанса (`synth_session_stop`/
+  // `synth_session_resume`) прерывает/запускает работу — это не планирование.
+  // Снимок `synth_sessions_active` остаётся доступен: план часто требует знать,
+  // что сейчас работает.
+  if (SESSIONS_WRITE_TOOLS.includes(toolName)) return true;
   const groups = getToolGroups(toolName, capabilities);
   return groups.includes('edit') || groups.includes('git_write');
 }

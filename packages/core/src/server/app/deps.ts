@@ -18,6 +18,9 @@ import { applyExecutionRuntimeSettings, resolvePromptInjection } from '@itphx/sy
 import { serializeMessage } from '../serialize.js';
 // PROP-141 (Часть D): сервис переноса сессии между проектами (единый шов).
 import { SessionMoveService } from '../../sessions/move-service.js';
+// ADR-092: «Стоп» сессии — единая семантика (`POST /:id/abort` и инстансный тул
+// `synth_session_stop`), поэтому прокладка тулов собирается здесь же.
+import { abortSessionTurn } from '../../sessions/turn-abort.js';
 import type { InstanceRuntimeMeta } from '../../engine/instance/meta.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 
@@ -1813,7 +1816,9 @@ export async function createStandaloneDeps(
     },
   };
 
-  const orchestrator = new ChatOrchestrator({
+  // Явная аннотация: замыкания `sessionControl` ниже читают сам оркестратор
+  // (лениво, в момент вызова тула) — без неё вывод типа зацикливается.
+  const orchestrator: ChatOrchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
     hooks,
@@ -1879,6 +1884,77 @@ export async function createStandaloneDeps(
     // Реестр агентов как порт хранения — тулы `synth_agent_*` (тот же store,
     // что у HTTP-роутов `createAgentRoutes`).
     agentStore,
+    // ADR-091/ADR-092: тулы обслуживания инстанса (`synth_maintenance_*`,
+    // `synth_backup_*`, `synth_restore_*`, `synth_restart_request`) — те же
+    // зависимости, что у HTTP-фабрики `createMaintenanceRoutes` (инстанс не
+    // создаёт второй контекст хранения: проба БД и план миграций идут через
+    // тот же `storageContext`, на котором работает процесс).
+    maintenance: {
+      dataDir,
+      ...(config.secretKey !== undefined ? { secretKey: config.secretKey } : {}),
+      env: process.env,
+      audit: storageContext.maintenanceAudit,
+      storageBackend: config.storageBackend ?? 'file',
+      ...(storageContext.health
+        ? { dbHealth: () => storageContext.health!() }
+        : {}),
+      ...(storageContext.schemaMigrations
+        ? { schemaMigrations: (o?: { dryRun?: boolean }) => storageContext.schemaMigrations!(o) }
+        : {}),
+    },
+    // ADR-092: сессии инстанса из чата (`synth_sessions_active`,
+    // `synth_session_stop`, `synth_session_resume`). «Стоп» — тот же шов, что у
+    // роута `POST /:id/abort` (`sessions/turn-abort.ts`), возобновление —
+    // штатный funnel очереди (`enqueueUserMessage`, ADR-089/ADR-118); счётчики
+    // фоновой работы — одним проходом по реестрам. Замыкания ленивые:
+    // `orchestrator`/`processMessage` читаются в момент вызова тула, а не при
+    // сборке контекста.
+    sessionControl: {
+      abortTurn: (sessionId, session) => abortSessionTurn(
+        { sessionManager, orchestrator, queueManager, eventBus },
+        sessionId,
+        session,
+      ),
+      resumeSubagent: (sessionId, note) => orchestrator.startSubagentResume(
+        sessionId,
+        note !== undefined ? { prompt: note } : undefined,
+      ),
+      enqueueContinuation: async (sessionId, message) => Boolean(await enqueueUserMessage(
+        sessionManager,
+        eventBus,
+        sessionId,
+        message,
+        queueManager,
+        processMessage,
+        // ADR-036: обфускация user-сообщения до записи в историю — паритет с
+        // prompt-путём (сообщение-продолжение пишется как user-реплика).
+        (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+      )),
+      isProcessorRunning: (sessionId) => queueManager.isRunning(sessionId),
+      approvalCounts: () => orchestrator.listPendingApprovalCounts(),
+      // PROP-132: живые терминалы привязаны к сессии; непривязанные в снимок
+      // сессий не попадают.
+      terminals: () => {
+        const counts = new Map<string, number>();
+        for (const record of terminalService.list()) {
+          if (!record.sessionId) continue;
+          counts.set(record.sessionId, (counts.get(record.sessionId) ?? 0) + 1);
+        }
+        return counts;
+      },
+      ...(backgroundService
+        ? {
+          // ADR-111/ADR-113: только идущие прогоны (терминальные — история).
+          backgroundRuns: async () => {
+            const counts = new Map<string, number>();
+            for (const run of await backgroundService.list({ status: 'running' })) {
+              counts.set(run.sessionId, (counts.get(run.sessionId) ?? 0) + 1);
+            }
+            return counts;
+          },
+        }
+        : {}),
+    },
     // ADR-090: тот же реестр, что у фасада плагинов
     // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
     promptBlocks,
