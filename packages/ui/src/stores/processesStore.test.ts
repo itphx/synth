@@ -481,6 +481,70 @@ describe('processesStore', () => {
     expect(ids).toEqual(['s2-run'])
   })
 
+  it('возврат в проектный скоуп убирает завершённый блокирующий прогон дочерней сессии', async () => {
+    // Регрессия: набор «известных id» живёт для последнего скоупа, поэтому при
+    // переключении сессия → проект запись, которой не было в наборе нового
+    // скоупа, не вычищалась и висела фантомом.
+    mocks.listProcessesWithBlocking.mockResolvedValue({
+      runs: [],
+      blocking: [{ id: 'child-block', kind: 'subagent', sessionId: 'child-1' }],
+    })
+    await useProcessesStore
+      .getState()
+      .load({ projectId: 'p1', scopeSessionIds: ['s1', 'child-1'] })
+    expect(useProcessesStore.getState().blocking.map((run) => run.id)).toEqual(['child-block'])
+
+    // Прогон завершился, пока панель была в скоупе сессии: сервер отдаёт пусто.
+    mocks.listProcessesWithBlocking.mockResolvedValue({ runs: [], blocking: [] })
+    await useProcessesStore.getState().load({ sessionId: 's1' })
+    // Чужая сессия — запись сохраняется (от неё зависят значки в дереве).
+    expect(useProcessesStore.getState().blocking.map((run) => run.id)).toEqual(['child-block'])
+
+    // Возврат в проектный скоуп: запись принадлежит ему — она должна исчезнуть.
+    await useProcessesStore
+      .getState()
+      .load({ projectId: 'p1', scopeSessionIds: ['s1', 'child-1'] })
+    expect(useProcessesStore.getState().blocking).toEqual([])
+  })
+
+  it('при проектном скоупе блокирующий прогон чужой сессии сохраняется', async () => {
+    useProcessesStore.setState({
+      blocking: [{ id: 'other-block', kind: 'process', sessionId: 'other' }],
+      blockingLoaded: true,
+      blockingScope: { sessionId: 's1' },
+      blockingScopeKey: 'session:s1',
+      blockingKnownIds: ['other-block'],
+    })
+    mocks.listProcessesWithBlocking.mockResolvedValue({ runs: [], blocking: [] })
+
+    await useProcessesStore
+      .getState()
+      .load({ projectId: 'p1', scopeSessionIds: ['s1', 'child-1'] })
+
+    expect(useProcessesStore.getState().blocking.map((run) => run.id)).toEqual(['other-block'])
+  })
+
+  it('load без фильтров чистит блокирующие, которых нет в ответе (весь инстанс)', async () => {
+    useProcessesStore.setState({
+      blocking: [
+        { id: 'blk_old', kind: 'process', sessionId: 's1' },
+        { id: 'blk_keep', kind: 'subagent', sessionId: 's2' },
+      ],
+      blockingLoaded: true,
+      blockingScope: { projectId: 'p1' },
+      blockingScopeKey: 'project:p1',
+      blockingKnownIds: ['blk_keep'],
+    })
+    mocks.listProcessesWithBlocking.mockResolvedValue({
+      runs: [],
+      blocking: [{ id: 'blk_keep', kind: 'subagent', sessionId: 's2' }],
+    })
+
+    await useProcessesStore.getState().load()
+
+    expect(useProcessesStore.getState().blocking.map((run) => run.id)).toEqual(['blk_keep'])
+  })
+
   it('refreshBlocking перечитывает последний скоуп', async () => {
     mocks.listProcessesWithBlocking.mockResolvedValue({
       runs: [],

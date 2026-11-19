@@ -773,21 +773,20 @@ function RunCard({
         )}
       </dl>
 
-      {/* Итог прогона.
-          У саб-агента результат — это ответ дочерней сессии: он бывает
-          длинным и растягивал карточку. Поэтому он свёрнут в `details`
-          (нативный `summary` — клавиатура и фокус «из коробки»), а высота
-          содержимого ограничена прокруткой. У шелл-процесса — прежний
-          абзац (там хвост лога, он короткий). */}
-      {run.summary && run.kind === 'subagent' && (
+      {/* Итог прогона — свёрнут в `details` и у саб-агента, и у процесса.
+          Результат саб-агента — ответ дочерней сессии, у процесса — хвост
+          лога: оба бывают длинными и растягивали карточку. Нативный
+          `summary` даёт клавиатуру и фокус «из коробки», высота содержимого
+          ограничена прокруткой. Стрелка: свёрнуто — вправо, раскрыто — вниз. */}
+      {run.summary && (
         <details
           className="group min-w-0"
           data-testid={`processes-summary-${run.id}`}
         >
           <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <Icon
-              name="arrow-down-s"
-              className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
+              name="arrow-right-s"
+              className="size-3.5 shrink-0 transition-transform group-open:rotate-90"
             />
             {t('processes.summary.title')}
           </summary>
@@ -795,14 +794,6 @@ function RunCard({
             {run.summary}
           </div>
         </details>
-      )}
-      {run.summary && run.kind !== 'subagent' && (
-        <p
-          className="break-words text-xs text-muted-foreground"
-          data-testid={`processes-summary-${run.id}`}
-        >
-          {run.summary}
-        </p>
       )}
 
       <div className="flex flex-wrap items-center justify-end gap-1">

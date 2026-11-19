@@ -80,6 +80,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { Icon } from '@/components/icon/Icon'
 import { ProcessesTab } from './ProcessesTab'
 import { useUIStore } from '@/stores/useUIStore'
 import { useProcessesStore } from '@/stores/processesStore'
@@ -175,6 +176,20 @@ async function toggleWholeProject(container: HTMLElement): Promise<void> {
     toggle!.click()
   })
   await flush()
+}
+
+/**
+ * Внутренняя разметка иконки из реестра — для сверки, что в `summary`
+ * стоит именно ожидаемая стрелка (класс сравнить нельзя: у стрелки он свой).
+ */
+async function iconMarkup(name: string): Promise<string> {
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  roots.push({ root, container })
+  await act(async () => {
+    root.render(<Icon name={name} />)
+  })
+  return container.querySelector('svg')!.innerHTML
 }
 
 beforeEach(() => {
@@ -331,18 +346,38 @@ describe('ProcessesTab — реестр фоновой работы (PROP-096/09
     expect(body.className).toContain('max-h-64')
     expect(body.className).toContain('overflow-y-auto')
     expect(body.textContent).toBe(summary)
+
+    // Стрелка: свёрнуто — вправо (`arrow-right-s`), раскрыто — вниз (+90°).
+    const arrow = block!.querySelector('summary svg') as SVGElement
+    expect(arrow.getAttribute('class')).toContain('rotate-90')
+    expect(arrow.getAttribute('class')).not.toContain('rotate-180')
+    expect(arrow.innerHTML).toBe(await iconMarkup('arrow-right-s'))
   })
 
-  it('результат шелл-процесса — прежний абзац (не сворачивается)', async () => {
+  it('результат шелл-процесса — тоже сворачиваемый блок, свёрнутый по умолчанию', async () => {
+    // Результат процесса — хвост лога: бывает многострочным.
+    const summary = 'хвост лога\nвторая строка'
     mocks.listProcesses.mockResolvedValue([
-      makeRun('bgr_proc', { summary: 'хвост лога' }),
+      makeRun('bgr_proc', { summary }),
     ])
 
     const container = await renderProcesses()
 
-    const summary = container.querySelector('[data-testid="processes-summary-bgr_proc"]')
-    expect(summary?.tagName).toBe('P')
-    expect(summary?.textContent).toBe('хвост лога')
+    const block = container.querySelector('[data-testid="processes-summary-bgr_proc"]') as HTMLDetailsElement | null
+    expect(block).not.toBeNull()
+    expect(block!.tagName).toBe('DETAILS')
+    expect(block!.open).toBe(false)
+    expect(block!.querySelector('summary')?.textContent).toBe('Result')
+    const body = block!.querySelector('div') as HTMLElement
+    expect(body.className).toContain('whitespace-pre-wrap')
+    expect(body.className).toContain('max-h-64')
+    expect(body.className).toContain('overflow-y-auto')
+    expect(body.textContent).toBe(summary)
+
+    // Та же стрелка, что у саб-агента — вправо (`arrow-right-s`).
+    const arrow = block!.querySelector('summary svg') as SVGElement
+    expect(arrow.getAttribute('class')).toContain('rotate-90')
+    expect(arrow.innerHTML).toBe(await iconMarkup('arrow-right-s'))
   })
 
   it('три секции с заголовками и счётчиками', async () => {

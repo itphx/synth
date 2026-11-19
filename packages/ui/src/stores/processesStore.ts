@@ -101,8 +101,14 @@ interface ProcessesState {
   blocking: BlockingRun[]
   /** Был ли хотя бы один успешный список с блокирующими (для событийного рефреша). */
   blockingLoaded: boolean
-  /** Скоуп последнего списка, принёсшего блокирующие (для рефреша по событию). */
-  blockingScope: ProcessesListOptions | null
+  /**
+   * Скоуп последнего списка, принёсшего блокирующие (для рефреша по событию).
+   *
+   * Тип — параметры загрузки: в проектном скоупе хранится и клиентский набор
+   * сессий (`scopeSessionIds`), иначе событийный рефреш не смог бы вычистить
+   * завершившийся прогон дочерней сессии.
+   */
+  blockingScope: ProcessesLoadOptions | null
   /** Ключ скоупа, по которому известен набор id (чистка только своего скоупа). */
   blockingScopeKey: string | null
   /** id блокирующих из последнего ответа своего скоупа (для чистки). */
@@ -202,12 +208,33 @@ function blockingScopeKey(options?: ProcessesListOptions): string {
 }
 
 /**
+ * Принадлежит ли блокирующий прогон скоупу запроса.
+ *
+ * Ответ сервера отфильтрован, поэтому отсутствие записи в нём означает
+ * «прогон больше не идёт» — но только для **своего** скоупа: записи других
+ * сессий/проектов сохраняются (от них зависят значки активности в дереве).
+ * В проектном скоупе принадлежность задаёт набор сессий панели (`у записи
+ * нет projectId`); набора нет — решает прежний набор «известных id» в
+ * `mergeBlocking`.
+ */
+function blockingInScope(run: BlockingRun, options?: ProcessesLoadOptions): boolean {
+  if (options?.sessionId) return run.sessionId === options.sessionId
+  if (options?.projectId) {
+    return !!run.sessionId && (options.scopeSessionIds?.includes(run.sessionId) ?? false)
+  }
+  return true
+}
+
+/**
  * Слияние снимка блокирующих прогонов с уже известными записями.
  *
  * Ответ сервера — истина для своего скоупа: записи, которые в этом скоупе
- * были известны, но пропали из ответа, убираются (прогон завершился/переведён
- * в фон). Записи других скоупов сохраняются. Порядок — как пришёл от сервера,
- * остальные записи — в конце.
+ * были известны **или принадлежат ему** (см. `blockingInScope`), но пропали
+ * из ответа, убираются (прогон завершился/переведён в фон). Принадлежность
+ * проверяется и без набора «известных id» — иначе после переключения скоупа
+ * («сессия → весь проект») завершённые прогоны висели бы фантомами. Записи
+ * других скоупов сохраняются. Порядок — как пришёл от сервера, остальные
+ * записи — в конце.
  */
 function mergeBlocking(
   state: {
@@ -215,7 +242,7 @@ function mergeBlocking(
     blockingScopeKey: string | null
     blockingKnownIds: string[]
   },
-  options: ProcessesListOptions | undefined,
+  options: ProcessesLoadOptions | undefined,
   incoming: BlockingRun[],
 ): Pick<ProcessesState, 'blocking' | 'blockingScopeKey' | 'blockingKnownIds'> {
   const key = blockingScopeKey(options)
@@ -224,7 +251,11 @@ function mergeBlocking(
   const next: BlockingRun[] = incoming.map((run) => ({ ...run }))
   for (const run of state.blocking) {
     if (incomingIds.has(run.id)) continue
-    // В этом же скоупе сервер запись больше не отдаёт — она завершилась.
+    // Запись принадлежит запрошенному скоупу — сервер её больше не отдаёт,
+    // значит прогон завершился.
+    if (blockingInScope(run, options)) continue
+    // Проектный скоуп без набора сессий: принадлежность определяется только
+    // прежним набором «известных id».
     if (previousKnown.has(run.id)) continue
     next.push(run)
   }
