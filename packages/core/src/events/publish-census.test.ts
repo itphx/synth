@@ -54,7 +54,14 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage', '.git', 
 // ---------------------------------------------------------------------------
 
 /** Ресурс контура инварианта 27. */
-type Resource = 'agents' | 'mcp' | 'skills' | 'models' | 'pipelines';
+type Resource =
+  | 'agents'
+  | 'mcp'
+  | 'skills'
+  | 'models'
+  | 'execution'
+  | 'credentials'
+  | 'pipelines';
 
 interface ResourceSpec {
   /** Тип события шины (инвариант 6: новых каналов не заводим). */
@@ -85,7 +92,9 @@ const RESOURCES: Readonly<Record<Resource, ResourceSpec>> = {
     identifiers: ['publishMcpUpdated', 'mcpChangedPublisher', 'McpChangedHook'],
     markers: ['onMcpChanged?.', 'publishMcpUpdated(', 'mcpChangedPublisher('],
     infrastructure: ['events/mcp-events.ts', 'index.ts'],
-    wiring: { snippet: 'mcpChangedPublisher(eventBus)', count: 2 },
+    // 3 точки: реестр MCP, проектный скоуп и политика/доступность инструментов
+    // (`settings/tools-policy|mcp-policy|mcp-network-policy|tools-disabled`).
+    wiring: { snippet: 'mcpChangedPublisher(eventBus)', count: 3 },
   },
   skills: {
     event: 'skills.updated',
@@ -97,9 +106,49 @@ const RESOURCES: Readonly<Record<Resource, ResourceSpec>> = {
   models: {
     event: 'models.updated',
     identifiers: ['publishModelsUpdated', 'modelsChangedPublisher', 'ModelsChangedHook'],
-    markers: ['onModelsChanged?.', 'publishModelsUpdated(', 'modelsChangedPublisher('],
+    markers: [
+      'onModelsChanged?.',
+      'publishModelsUpdated(',
+      'modelsChangedPublisher(',
+      // Смена дефолтной пары — тот же шаг каталога, но живёт в фабрике настроек.
+      'onDefaultModelChange?.',
+    ],
     infrastructure: ['events/models-events.ts', 'index.ts'],
-    wiring: { snippet: 'modelsChangedPublisher(eventBus)', count: 2 },
+    // 3 точки: `providers` + `models` + смена дефолтной пары
+    // (`settings/default-model` → `onDefaultModelChange`, `action: 'default'`).
+    wiring: { snippet: 'modelsChangedPublisher(eventBus)', count: 3 },
+  },
+  execution: {
+    event: 'execution.updated',
+    identifiers: ['publishExecutionUpdated', 'executionChangedPublisher', 'ExecutionChangedHook'],
+    markers: [
+      'onExecutionChanged?.',
+      'publishExecutionUpdated(',
+      'executionChangedPublisher(',
+    ],
+    infrastructure: ['events/execution-events.ts', 'index.ts'],
+    // 2 точки в каждой точке сборки (core standalone + managed backend):
+    // `settings` (`PUT`/`DELETE /settings/execution`) и `execution` (пулы:
+    // `drain`/`release`).
+    wiring: { snippet: 'executionChangedPublisher(eventBus)', count: 2 },
+  },
+  credentials: {
+    event: 'credentials.updated',
+    identifiers: [
+      'publishCredentialsUpdated',
+      'credentialsChangedPublisher',
+      'CredentialsChangedHook',
+    ],
+    markers: [
+      'onCredentialsChanged?.',
+      'publishCredentialsUpdated(',
+      'credentialsChangedPublisher(',
+    ],
+    infrastructure: ['events/credentials-events.ts', 'index.ts'],
+    // Одна точка в каждой точке сборки (core standalone + managed backend):
+    // HTTP-контур слоя внешних доступов (`/api/v2/oauth`) монтируется ровно
+    // один раз на приложение.
+    wiring: { snippet: 'credentialsChangedPublisher(eventBus)', count: 1 },
   },
   pipelines: {
     event: 'pipeline.updated',
@@ -198,6 +247,41 @@ const WRITE_PATHS: readonly WritePath[] = [
   { file: 'server/routes/models.ts', key: 'createModelRoutes POST /fetch', resource: 'models' },
   { file: 'server/routes/models.ts', key: 'createModelRoutes POST /', resource: 'models' },
   { file: 'server/routes/models.ts', key: 'createModelRoutes DELETE /:id', resource: 'models' },
+  // Дефолтная пара — тоже каталог (`settings/default-model` → `onDefaultModelChange`).
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /default-model', resource: 'models' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /default-model', resource: 'models' },
+
+  // ── MCP-политика: `mcp.updated` (инстансный канал) ──────────────────
+  // Политика MCP-инструментов и сетевого доступа — часть реестра MCP: изменение
+  // меняет доступность серверов/тулов в UI, поэтому панели перечитывают состав.
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /tools-policy', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /tools-policy', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /mcp-policy', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /mcp-policy', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /mcp-network-policy', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /mcp-network-policy', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /tools-disabled', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /tools-disabled', resource: 'mcp', via: ['notifyMcpPolicyChanged'] },
+
+  // ── Профили исполнения: `execution.updated` (инстансный канал) ──────────
+  // Каталог профилей правится целиком (`PUT`), сброс — `DELETE`; пулы
+  // сливаются/удаляются роутами исполнения (прогрев образов — вне контура,
+  // см. `OUT_OF_SCOPE_WRITE_PATHS`).
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /execution', resource: 'execution' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /execution', resource: 'execution' },
+  { file: 'server/routes/execution.ts', key: 'createExecutionRoutes POST /pools/:key/drain', resource: 'execution' },
+  { file: 'server/routes/execution.ts', key: 'createExecutionRoutes DELETE /pools/:key', resource: 'execution' },
+
+  // ── Внешние доступы: `credentials.updated` (инстансный канал) ───────────
+  // Слой доступов (ADR-105) мутирует одна фабрика (`createOAuthRoutes`), но
+  // write-путей четыре: выдача (PKCE/device — публикация внутри помощников
+  // `authorizeFlow`/`deviceFlow`, они объявлены между регистрациями роутов и
+  // потому попадают в тело `POST /credentials`), refresh, отзыв и привязка к
+  // MCP-коннектору. Других write-методов в `oauth.ts` нет — все под переписью.
+  { file: 'server/routes/oauth.ts', key: 'createOAuthRoutes POST /credentials', resource: 'credentials' },
+  { file: 'server/routes/oauth.ts', key: 'createOAuthRoutes POST /credentials/:id/refresh', resource: 'credentials' },
+  { file: 'server/routes/oauth.ts', key: 'createOAuthRoutes DELETE /credentials/:id', resource: 'credentials' },
+  { file: 'server/routes/oauth.ts', key: 'createOAuthRoutes POST /credentials/:id/bind', resource: 'credentials' },
 
   // ── Пайплайны: `pipeline.updated` (каналы сессий проекта) ──────────────
   { file: 'server/routes/pipeline-project-routes.ts', key: 'createPipelineProjectRoutes POST /projects/:id/pipelines', resource: 'pipelines' },
@@ -225,6 +309,48 @@ const OUT_OF_SCOPE_WRITE_PATHS: readonly SkippedWritePath[] = [
   // Провайдеры: загрузка иконки и проба — записи нет.
   { file: 'server/routes/providers.ts', key: 'createProviderRoutes POST /fetch-icon', why: 'загрузка иконки провайдера, в каталог не пишет' },
   { file: 'server/routes/providers.ts', key: 'createProviderRoutes POST /:name/test', why: 'проба соединения (POST по природе операции), записи нет' },
+
+  // Исполнение: прогрев образов не меняет ни каталог профилей, ни состав пулов
+  // (только тянет образы на ноды) — событие `execution.updated` не нужно.
+  { file: 'server/routes/execution.ts', key: 'createExecutionRoutes POST /images/warm', why: 'прогрев образов: каталог профилей и состав пулов не меняются' },
+
+  // ── Runtime-настройки инстанса (`createSettingsRoutes`) ─────────────
+  // Секции ниже — параметры запуска/политики этого процесса (ADR-023/ADR-099):
+  // состав реестров инварианта 27 они не меняют, собственного семейства событий
+  // у них нет. Объявляются явно, чтобы новый write-путь в `settings.ts` не мог
+  // появиться молча.
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /workspace', why: 'runtime-настройка рабочего каталога (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /workspace', why: 'сброс рабочего каталога к config (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /mcp', why: 'runtime-политика MCP-инструментов (состав реестра не меняется)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /mcp', why: 'сброс политики MCP к config (состав реестра не меняется)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /llm-gateway', why: 'runtime-настройка LLM-шлюза (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /llm-gateway', why: 'сброс настроек LLM-шлюза (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /security', why: 'runtime-настройки безопасности (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /security', why: 'сброс настроек безопасности (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes POST /egress/check', why: 'проба egress-политики (POST по природе операции), записи нет' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /proxy', why: 'runtime-настройка прокси (ADR-099; не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /proxy', why: 'сброс прокси к config (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /proxy/password', why: 'секрет-файл пароля прокси (не реестр, наружу не отдаётся)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /proxy/password', why: 'удаление секрет-файла пароля прокси' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /proxy/profiles/:name/password', why: 'секрет-файл пароля профиля прокси' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /proxy/profiles/:name/password', why: 'удаление секрет-файла пароля профиля прокси' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /proxy/profiles/:name/tls/ca', why: 'TLS-материал профиля прокси (секрет-файл)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /proxy/profiles/:name/tls/ca', why: 'удаление TLS-материала профиля прокси' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /proxy/profiles/:name/tls/client', why: 'TLS-материал mTLS-клиента профиля прокси (секрет-файл)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /proxy/profiles/:name/tls/client', why: 'удаление mTLS-материала профиля прокси' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes POST /proxy/check', why: 'проба прокси (POST по природе операции), записи нет' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes POST /proxy/test', why: 'проба маршрута прокси (POST по природе операции), записи нет' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /default-agent', why: 'дефолт агента — не состав реестра агентов' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /default-agent', why: 'сброс дефолта агента (состав реестра не меняется)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /workspace-policy', why: 'политика путей вне `workspacesRoot` (ADR-075; не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /workspace-policy', why: 'сброс политики workspace (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /protected-paths', why: 'политика защищённых путей (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /protected-paths', why: 'сброс политики защищённых путей (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /events', why: 'runtime-настройки шины событий (ADR-089; не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /events', why: 'сброс настроек событий (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes PUT /decision', why: 'runtime-настройки decision-слоя (ADR-084; не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /decision', why: 'сброс настроек decision-слоя (не реестр)' },
+  { file: 'server/routes/settings.ts', key: 'createSettingsRoutes DELETE /decision/metrics', why: 'сброс in-memory накопителей метрик decision-слоя (состояние реестра не меняется)' },
 
   // Проекты: остальные мутации — свои события (`project.updated`,
   // `worktree.updated`), в контур MCP они не входят.

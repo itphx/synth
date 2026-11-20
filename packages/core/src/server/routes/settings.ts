@@ -35,6 +35,10 @@ import {
   writeProxyProfileTlsFile,
 } from '../../security/proxy-tls-secrets.js';
 import { createTlsSettingsRoutes } from './settings-tls.js';
+import type { ExecutionChangedHook } from '../../events/execution-events.js';
+// Политика MCP (`tools-policy`/`mcp-policy`/`mcp-network-policy`/`tools-disabled`)
+// — тот же шов, что у реестра MCP: `mcp.updated` с `action: 'policy'`.
+import type { McpChangedHook } from '../../events/mcp-events.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -351,6 +355,18 @@ export interface SettingsRoutesDeps {
   /** Вызывается после успешного PUT /tools-disabled (live-применение). */
   onToolsDisabledChange?: (config: ToolsDisabledConfig) => void | Promise<void>;
   /**
+   * Политика MCP изменилась (`PUT`/`DELETE` `tools-policy`, `mcp-policy`,
+   * `mcp-network-policy`, `tools-disabled`) — `mcp.updated` с `action: 'policy'`
+   * в инстансный канал шины (инвариант 27 `AGENTS.md`).
+   *
+   * Политика меняет **эффективный MCP-скоуп**: что именно уходит модели и куда
+   * разрешён сетевой доступ. Без события второй клиент видит прежние значения
+   * до перезагрузки страницы (панели MCP и «Отключённые инструменты» грузят их
+   * сами, а не из реестра). Состав реестра при этом не меняется — поэтому вид
+   * мутации `policy`, без имён серверов. Хук необязателен (без шины — no-op).
+   */
+  onMcpPolicyChanged?: McpChangedHook;
+  /**
    * ADR-071 §2.6: известные инструменты (имя → capabilities) для защиты
    * `runtime`-тулов от отключения. Не задан — проверка по имени пропускается
    * (capability `runtime` всё равно отклоняется).
@@ -375,6 +391,14 @@ export interface SettingsRoutesDeps {
   validateDefaultModel?: (pair: DefaultModelPair) => Promise<boolean | string>;
   /** Вызывается после успешного PUT/DELETE /default-model (live-применение). */
   onDefaultModelChange?: (pair: DefaultModelPair | null) => void | Promise<void>;
+  /**
+   * ADR-135: вызывается **после успешной записи** каталога профилей исполнения
+   * (`PUT /settings/execution` → `profile.save`, `DELETE /settings/execution` →
+   * `profile.reset`). Точка сборки ставит сюда `executionChangedPublisher(eventBus)`:
+   * без события селекторы профиля (агент/проект/сессия) и раздел «Исполнение»
+   * держат устаревший каталог до перезагрузки страницы.
+   */
+  onExecutionChanged?: ExecutionChangedHook;
   /**
    * ADR-075: дефолт политики для абсолютного workspace вне `workspacesRoot`
    * (config.yaml/env), если runtime-настройка не задана. По умолчанию — `confirm`.
@@ -1352,6 +1376,18 @@ export function createSettingsRoutes(
   });
 
   /**
+   * Политика MCP записана — публикуем `mcp.updated` с `action: 'policy'`.
+   *
+   * Политика (`tools.policy`/`mcp.policy`/`mcp.networkPolicy`/`tools.disabled`)
+   * меняет **эффективный** MCP-скоуп, а не состав реестра: поэтому вид мутации
+   * `policy` и никаких имён серверов в payload'е. Хук необязателен (без шины
+   * — no-op), вызов — только после успешной записи.
+   */
+  const notifyMcpPolicyChanged = (): void => {
+    deps.onMcpPolicyChanged?.({ action: 'policy' });
+  };
+
+  /**
    * GET/PUT /api/v2/settings/tools-policy — ADR-071 §2.3: глобальная админская
    * политика включения инструментов (`consistency` | `available` | `auto`).
    * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml;
@@ -1380,6 +1416,7 @@ export function createSettingsRoutes(
     // Live-применение политики встроенных инструментов — оркестратор
     // переконфигурируется без рестарта сервера.
     await deps.onToolsPolicyChange?.(toolsPolicy);
+    notifyMcpPolicyChanged();
     return c.json({ toolsPolicy });
   });
 
@@ -1388,6 +1425,7 @@ export function createSettingsRoutes(
     await deps.settingsStore.clearToolsPolicy();
     // Live-применение дефолта из config.yaml.
     await deps.onToolsPolicyChange?.(defaults);
+    notifyMcpPolicyChanged();
     return c.json({ status: 'restored', toolsPolicy: defaults, isOverridden: false, defaults });
   });
 
@@ -1421,6 +1459,7 @@ export function createSettingsRoutes(
     // Live-применение политики MCP-инструментов — оркестратор
     // переконфигурируется без рестарта сервера.
     await deps.onMcpPolicyChange?.(mcpPolicy);
+    notifyMcpPolicyChanged();
     return c.json({ mcpPolicy });
   });
 
@@ -1428,6 +1467,7 @@ export function createSettingsRoutes(
     const defaults = deps.fallbackMcpPolicy ?? 'auto';
     await deps.settingsStore.clearMcpPolicy();
     await deps.onMcpPolicyChange?.(defaults);
+    notifyMcpPolicyChanged();
     return c.json({ status: 'restored', mcpPolicy: defaults, isOverridden: false, defaults });
   });
 
@@ -1466,6 +1506,7 @@ export function createSettingsRoutes(
     // без рестарта сервера.
     await deps.onMcpNetworkPolicyChange?.(policy);
     await auditPolicy(c, 'mcp', 'update', previous, policy);
+    notifyMcpPolicyChanged();
     return c.json({ policy });
   });
 
@@ -1475,6 +1516,7 @@ export function createSettingsRoutes(
     await deps.settingsStore.clearMcpNetworkPolicy();
     await deps.onMcpNetworkPolicyChange?.(defaults);
     await auditPolicy(c, 'mcp', 'reset', previous, null);
+    notifyMcpPolicyChanged();
     return c.json({ status: 'restored', policy: defaults, isOverridden: false, defaults });
   });
 
@@ -2215,6 +2257,7 @@ export function createSettingsRoutes(
     await deps.settingsStore.setToolsDisabled(result.config);
     // Live-применение — оркестратор переконфигурируется без рестарта.
     await deps.onToolsDisabledChange?.(result.config);
+    notifyMcpPolicyChanged();
     return c.json({ toolsDisabled: result.config });
   });
 
@@ -2222,6 +2265,7 @@ export function createSettingsRoutes(
     const defaults = deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
     await deps.settingsStore.clearToolsDisabled();
     await deps.onToolsDisabledChange?.(defaults);
+    notifyMcpPolicyChanged();
     return c.json({ status: 'restored', toolsDisabled: defaults, isOverridden: false, defaults });
   });
 
@@ -2435,6 +2479,12 @@ export function createSettingsRoutes(
     }
 
     await deps.settingsStore.setExecution(next);
+    // Каталог профилей изменился → `execution.updated` (инстансный канал шины).
+    // Публикуем **после** записи: точка сборки ставит сюда
+    // `executionChangedPublisher(eventBus)`. Меняется каталог целиком (PUT
+    // присылает его полностью), поэтому `profileId` не передаём: клиент всё
+    // равно перечитывает `GET /execution/profiles`.
+    deps.onExecutionChanged?.({ action: 'profile.save' });
     const running = deps.getRunningExecution?.();
     const runningSnapshot = executionRuntimeSettingsFromResolved(running);
     const effective = effectiveExecutionSettings(base, next, executionEnv);
@@ -2452,6 +2502,9 @@ export function createSettingsRoutes(
 
   app.delete('/execution', settingsWriteGuard, async (c) => {
     await deps.settingsStore.clearExecution();
+    // Сброс runtime-каталога → `execution.updated` с `action: 'profile.reset'`:
+    // профили возвращаются к config-уровню, селекторы должны это увидеть.
+    deps.onExecutionChanged?.({ action: 'profile.reset' });
     const base = deps.fallbackExecution;
     const running = deps.getRunningExecution?.();
     const runningSnapshot = executionRuntimeSettingsFromResolved(running);

@@ -13,6 +13,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
 import { useMcpStore } from '@/stores/mcpStore'
+import { useCredentialsStore } from '@/stores/credentialsStore'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
@@ -143,6 +144,23 @@ export function CredentialsSettings() {
     void fetchRegistry()
     void loadCredentials()
   }, [mcpRevision, fetchRegistry, loadCredentials])
+
+  /**
+   * Слой внешних доступов изменился на сервере (событие шины
+   * `credentials.updated`, ADR-105): доступ выдан/отозван/обновлён/привязан в
+   * другом клиенте или в соседней вкладке. Перечитываем список — иначе он
+   * «залипает» до перезагрузки страницы.
+   *
+   * Форма выдачи (draft) и незавершённая выдача не сбрасываются — это ввод
+   * пользователя; первый рендер пропускается (грузят эффекты выше).
+   */
+  const credentialsRevision = useCredentialsStore((s) => s.revision)
+  const loadedCredentialsRevisionRef = useRef(credentialsRevision)
+  useEffect(() => {
+    if (loadedCredentialsRevisionRef.current === credentialsRevision) return
+    loadedCredentialsRevisionRef.current = credentialsRevision
+    void loadCredentials()
+  }, [credentialsRevision, loadCredentials])
 
   const resetForm = () => {
     setProvider('')

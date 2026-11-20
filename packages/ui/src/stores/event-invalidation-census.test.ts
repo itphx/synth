@@ -107,6 +107,13 @@ const EVENT_HANDLERS: readonly EventHandler[] = [
     evidence: 'catalogLoaded: false',
   },
   {
+    type: 'execution.updated',
+    store: 'executionProfilesStore',
+    call: 'useExecutionProfilesStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
     type: 'pipeline.updated',
     store: 'pipelinesStore',
     call: 'usePipelinesStore.getState().invalidateProject(',

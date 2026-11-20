@@ -89,6 +89,12 @@ import {
   // Каталог провайдеров/моделей инстанса изменился — `models.updated` (общий шов
   // роутов провайдеров и моделей, `events/models-events.ts`).
   modelsChangedPublisher,
+  // Каталог профилей исполнения изменился — `execution.updated` (общий шов
+  // роутов настроек исполнения и пулов, `events/execution-events.ts`).
+  executionChangedPublisher,
+  // Внешние доступы инстанса изменились — `credentials.updated` (шов write-путей
+  // `createOAuthRoutes`, `events/credentials-events.ts`).
+  credentialsChangedPublisher,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -1350,6 +1356,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // ADR-105 (Ф4): журнал операций со слоем доступов (привязка к коннектору).
       audit: deps.storageContext.credentialAudit,
       ownerKind: 'user',
+      // Выдача/отзыв/refresh/привязка доступа — `credentials.updated` в инстансный
+      // канал шины: раздел «Внешние доступы» перечитывает список без
+      // перезагрузки страницы (токенов в payload нет).
+      onCredentialsChanged: credentialsChangedPublisher(eventBus),
       resolveActor: (c) => {
         const user = c.get('user') as { id?: string; roles?: string[] } | undefined;
         return { userId: user?.id ?? '', roles: user?.roles ?? [] };
@@ -1635,6 +1645,21 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // Модель по умолчанию: fallback из config (только если заданы оба поля);
     // runtime-пара приоритетнее. Валидация — провайдер в каталоге + модель `provider/model`.
     fallbackDefaultModel: backendConfigDefaultModel(),
+    // Смена дефолтной пары (`PUT`/`DELETE /settings/default-model`) — мутация
+    // каталога: `models.updated` с `action: 'default'` (бейдж `isDefault` и
+    // селект модели в другом клиенте перечитывают каталог).
+    onDefaultModelChange: (pair) => modelsChangedPublisher(eventBus)(
+      pair ? { action: 'default', provider: pair.provider, modelId: pair.model } : { action: 'default' },
+    ),
+    // ADR-135: сохранение/сброс runtime-каталога профилей исполнения —
+    // `execution.updated` (инстансный канал): селекторы профиля (агент/проект/
+    // сессия) и раздел «Исполнение» перечитывают каталог без перезагрузки.
+    onExecutionChanged: executionChangedPublisher(eventBus),
+    // Политики MCP (`tools-policy`/`mcp-policy`/`mcp-network-policy`/
+    // `tools-disabled`) меняют **эффективный** MCP-скоуп — `mcp.updated` с
+    // `action: 'policy'`: панели MCP, «Отключённые инструменты» и статистика
+    // перечитывают значения без перезагрузки страницы.
+    onMcpPolicyChanged: mcpChangedPublisher(eventBus),
     validateDefaultModel: async (pair) => {
       const provider = await providerStore.load(pair.provider);
       if (!provider) return `провайдер "${pair.provider}" не найден`;
@@ -1769,6 +1794,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       profilesReadGuard: auth.requireAuth,
       poolsReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
       writeGuard: auth.requirePermission('ADMIN'),
+      // Мутация пула (`drain`/`release`) → `execution.updated` (инстансный канал):
+      // раздел «Исполнение» перечитывает пулы без перезагрузки страницы.
+      onExecutionChanged: executionChangedPublisher(eventBus),
       messages: {
         invalidKey: (c) => t('errors.validation.executionPoolKey', undefined, c),
         providerUnavailable: (c) => t('errors.unavailable.executionProvider', undefined, c),

@@ -45,6 +45,7 @@ import { PanelTab } from './PanelTab'
 import { useWorktreesStore } from '@/stores/worktreesStore'
 import { mcpRevisionForProject, useMcpStore } from '@/stores/mcpStore'
 import { skillsRevisionForProject, useSkillsStore } from '@/stores/skillsStore'
+import { useExecutionProfilesStore } from '@/stores/executionProfilesStore'
 import { confirm } from '@/lib/confirm'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
@@ -1096,6 +1097,13 @@ function ProjectExecutorBlock({
   //
   // Только при праве управления: чтение `/execution/profiles` в managed — ADMIN/LEAD,
   // иначе редактор проекта получал бы 403 на каждом открытии вкладки.
+  //
+  // `executionRevision` — событие шины `execution.updated`: профиль могли
+  // создать/переименовать в разделе «Исполнение», и селект должен увидеть новый
+  // состав без перезагрузки страницы. Перечитывается только каталог: черновики
+  // (`profileDraft`/`allowedDraft`/браузерные) сбрасывает лишь эффект ниже по
+  // `executor`, так что начатая правка не теряется.
+  const executionRevision = useExecutionProfilesStore((s) => s.revision)
   useEffect(() => {
     if (!canManage) return
     let cancelled = false
@@ -1114,7 +1122,7 @@ function ProjectExecutorBlock({
     return () => {
       cancelled = true
     }
-  }, [canManage])
+  }, [canManage, executionRevision])
 
   // Изменения проекта извне секции (сохранение, другой клиент) синхронизируют черновик.
   // Потолок не задан (`null`/`undefined`) — проект не ограничивает: отмечаем

@@ -26,6 +26,7 @@ import { evaluateCredentialBind } from '../../engine/oauth/credential-binding.js
 import type { CredentialBindActor } from '../../engine/oauth/credential-binding.js';
 import { credentialAuditErrorCode, recordCredentialAudit } from '../../engine/oauth/audit.js';
 import { CredentialConnectorBindError } from '../../engine/oauth/bind-connector.js';
+import type { CredentialsChangedHook } from '../../events/credentials-events.js';
 import { PendingAuthorizationStore } from '../../engine/oauth/pending-flows.js';
 import { buildAuthorizationUrl, createPkcePair } from '../../engine/oauth/pkce.js';
 import type { OAuthProviderRegistry } from '../../engine/oauth/registry.js';
@@ -97,6 +98,15 @@ export interface OAuthRoutesDeps {
    * владелец, инвариант 19), `user` — managed (владелец — пользователь).
    */
   ownerKind?: 'user' | 'local';
+  /**
+   * ADR-105: слой внешних доступов изменился (выдача/отзыв/refresh/привязка) —
+   * `credentials.updated` в инстансный канал шины (инвариант 27 `AGENTS.md`).
+   *
+   * Вызывается **после** успешной записи; хук необязателен (без шины — no-op).
+   * Секретов в информации хука нет по типу (`CredentialsChangedInfo`): только id,
+   * провайдер и вид мутации.
+   */
+  onCredentialsChanged?: CredentialsChangedHook;
 }
 
 export interface OAuthRoutesOptions {
@@ -311,6 +321,13 @@ export function createOAuthRoutes(
           ...(flow.connectorId !== undefined ? { connectorId: flow.connectorId } : {}),
           ...(flow.projectId !== undefined ? { projectId: flow.projectId } : {}),
         });
+        // Выдача завершена — в списке появилась запись: `credentials.updated`
+        // `{ action: 'save' }` (инстансный канал; токенов в payload нет).
+        deps.onCredentialsChanged?.({
+          action: 'save',
+          credentialId: credential.id,
+          provider: credential.provider,
+        });
         return c.json({ flow: 'completed', credential }, 201);
       } catch (err) {
         return mapOAuthError(c, err);
@@ -404,6 +421,12 @@ export function createOAuthRoutes(
           ...(flow.connectorId !== undefined ? { connectorId: flow.connectorId } : {}),
           ...(flow.projectId !== undefined ? { projectId: flow.projectId } : {}),
         });
+        // Device flow завершён — тот же сигнал, что у authorize-выдачи.
+        deps.onCredentialsChanged?.({
+          action: 'save',
+          credentialId: credential.id,
+          provider: credential.provider,
+        });
         return c.json({ flow: 'completed', credential }, 201);
       } catch (err) {
         return mapOAuthError(c, err);
@@ -470,6 +493,12 @@ export function createOAuthRoutes(
     if (control === 'forbidden') return forbidden(c);
     try {
       const refreshed = await deps.service.refresh(id);
+      // Токен обновлён — метаданные записи (срок, статус) изменились.
+      deps.onCredentialsChanged?.({
+        action: 'refresh',
+        credentialId: refreshed.id,
+        provider: refreshed.provider,
+      });
       return c.json({ credential: refreshed });
     } catch (err) {
       return mapOAuthError(c, err);
@@ -486,6 +515,12 @@ export function createOAuthRoutes(
     if (control === 'forbidden') return forbidden(c);
     try {
       const result = await deps.service.revoke(id);
+      // Доступ отозван — запись ушла из списка (или стала отозванной).
+      deps.onCredentialsChanged?.({
+        action: 'delete',
+        credentialId: id,
+        provider: result.meta.provider,
+      });
       return c.json({ credential: result.meta, providerRevoked: result.providerRevoked });
     } catch (err) {
       return mapOAuthError(c, err);
@@ -559,6 +594,13 @@ export function createOAuthRoutes(
       provider: credential?.provider ?? '',
       outcome: 'ok',
       connectorId: parsed.data.connectorId,
+    });
+    // Привязка изменила запись доступа (у неё появился коннектор) — список в
+    // другом клиенте обязан это увидеть.
+    deps.onCredentialsChanged?.({
+      action: 'bind',
+      ...(credential?.provider ? { provider: credential.provider } : {}),
+      credentialId: id,
     });
     return c.json({ credentialId: id, connectorId: parsed.data.connectorId, bound: true });
   });

@@ -162,9 +162,10 @@ describe('EventHub — матрица доставки инстансных со
 // ---------------------------------------------------------------------------
 
 describe('Пользовательские инстансные события — состав списка', () => {
-  it('реестры инстанса и прогоны пайплайнов', () => {
+  it('реестры инстанса, профили исполнения и прогоны пайплайнов', () => {
     expect([...USER_FACING_INSTANCE_EVENTS].sort()).toEqual([
       'agents.updated',
+      'execution.updated',
       'mcp.updated',
       'models.updated',
       'pipeline.completed',

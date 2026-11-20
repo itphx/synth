@@ -23,6 +23,10 @@ import { useMcpStore } from './mcpStore'
 // Каталог провайдеров/моделей инстанса (`models.updated`) — селект модели в
 // чате и админ-панели перечитывают состав без перезагрузки страницы.
 import { useProvidersStore } from './providersStore'
+// Внешние доступы инстанса (`credentials.updated`) — раздел «Внешние доступы»
+// перечитывает список без перезагрузки страницы.
+import { useCredentialsStore } from './credentialsStore'
+import { useExecutionProfilesStore } from './executionProfilesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
 import { normalizeLiveToolPart, partText, toLivePart, turnHasContent } from '@/lib/messageParts'
@@ -1892,6 +1896,12 @@ export function createDispatcher(): EventDispatcher {
     // перечитывают).
     if (type === 'mcp.updated') {
       useMcpStore.getState().applyEvent(updatedEventScope(payload))
+      // Политика MCP (`action: 'policy'` — `settings/tools-policy`,
+      // `mcp-policy`, `mcp-network-policy`, `tools-disabled`) меняет не состав
+      // реестра, а **эффективные** значения: поднимаем `toolsDisabledTick`,
+      // чтобы `ToolsDisabledSettings` и статистика (`StatsTab`) перечитали их
+      // без перезагрузки страницы. Своего поллинга нет — только сигнал.
+      if (payload.action === 'policy') useUIStore.getState().bumpToolsDisabledTick()
       return
     }
 
@@ -1914,6 +1924,27 @@ export function createDispatcher(): EventDispatcher {
     // состав без перезагрузки страницы.
     if (type === 'models.updated') {
       useProvidersStore.getState().applyEvent()
+      return
+    }
+
+    // Каталог профилей исполнения изменился (`execution.updated`, инстансный
+    // канал шины, ADR-135) — тот же путь и та же причина, что у `models.updated`
+    // выше: каталог профилей — ресурс инстанса, `sid` у события нет. Стор
+    // поднимает `revision`; раздел «Исполнение» (каталог + пулы) и селекторы
+    // профиля агента/проекта/сессии перечитывают каталог без перезагрузки
+    // страницы (payload `{action, profileId?, poolName?}` сигналу не нужен).
+    if (type === 'execution.updated') {
+      useExecutionProfilesStore.getState().applyEvent()
+      return
+    }
+
+    // Внешние доступы инстанса изменились (`credentials.updated`, инстансный
+    // канал шины, ADR-105) — тот же путь и та же причина, что у `mcp.updated`
+    // выше: доступ — ресурс инстанса, `sid` у события нет. Стор поднимает
+    // `revision`, раздел «Внешние доступы» (`CredentialsSettings`) перечитывает
+    // список и статусы без перезагрузки страницы.
+    if (type === 'credentials.updated') {
+      useCredentialsStore.getState().applyEvent()
       return
     }
 

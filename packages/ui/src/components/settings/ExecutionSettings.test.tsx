@@ -47,6 +47,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { useAuthStore } from '@/stores/authStore'
+import { useExecutionProfilesStore } from '@/stores/executionProfilesStore'
 import { ExecutionSettings } from './ExecutionSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -861,5 +862,79 @@ describe('ExecutionSettings — перезапуск и права', () => {
     expect(byTestId(container, 'execution-summary')).toBeNull()
     expect(mocks.getExecutionPools).not.toHaveBeenCalled()
     expect(mocks.getExecutionProfiles).not.toHaveBeenCalled()
+  })
+})
+
+describe('ExecutionSettings — событие execution.updated (ADR-135)', () => {
+  /**
+   * Баг: «профиль, сохранённый или сброшенный в другом клиенте/вкладке, не
+   * появляется в разделе до перезагрузки страницы». По событию шины раздел
+   * перечитывает каталог И пулы (сигнал — `revision` в `executionProfilesStore`),
+   * а черновик формы не сбрасывается.
+   */
+  /**
+   * Каталог после сохранения профиля `gpu` в другой вкладке: новый дефолт и
+   * новый состав профилей в DTO `GET /execution/profiles`.
+   */
+  const PROFILES_WITH_GPU = {
+    ...PROFILES_HTTP,
+    defaultProfile: 'gpu',
+    profiles: [...PROFILES_HTTP.profiles, 'gpu'],
+    details: [
+      ...PROFILES_HTTP.details,
+      {
+        name: 'gpu',
+        image: 'registry.example/synth-executor:gpu',
+        class: 'exec' as const,
+      },
+    ],
+  }
+
+  it('рост revision перечитывает каталог и пулы — новый дефолт профиля виден', async () => {
+    useExecutionProfilesStore.setState({ revision: 0 })
+
+    const container = await render()
+    const summary = () => byTestId(container, 'execution-summary')!.textContent ?? ''
+    expect(summary()).toContain(PROFILES_HTTP.defaultProfile)
+    const profileCallsBefore = mocks.getExecutionProfiles.mock.calls.length
+    const poolCallsBefore = mocks.getExecutionPools.mock.calls.length
+
+    // Профиль сохранили в другой вкладке — в клиент пришло событие шины.
+    mocks.getExecutionProfiles.mockResolvedValue(PROFILES_WITH_GPU)
+    await act(async () => {
+      useExecutionProfilesStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    // Перечитаны оба списка (каталог И пулы): раздел показывает то, что реально
+    // работает в процессе, а не снимок с момента монтирования.
+    expect(mocks.getExecutionProfiles.mock.calls.length).toBe(profileCallsBefore + 1)
+    expect(mocks.getExecutionPools.mock.calls.length).toBe(poolCallsBefore + 1)
+    expect(summary()).toContain('gpu')
+  })
+
+  it('незаконченный черновик формы событием не сбрасывается', async () => {
+    useExecutionProfilesStore.setState({ revision: 0 })
+
+    const container = await render()
+    // Открываем форму нового профиля и вводим имя — это ввод пользователя.
+    await act(async () => {
+      byTestId(container, 'execution-catalog-create')!.click()
+    })
+    const nameInput = byTestId(container, 'execution-catalog-name') as HTMLInputElement
+    await act(async () => {
+      setInputValue(nameInput, 'draft-profile')
+    })
+
+    mocks.getExecutionProfiles.mockResolvedValue(PROFILES_WITH_GPU)
+    await act(async () => {
+      useExecutionProfilesStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    // Ввод пользователя не теряется при перечитывании каталога.
+    expect((byTestId(container, 'execution-catalog-name') as HTMLInputElement).value).toBe(
+      'draft-profile',
+    )
   })
 })

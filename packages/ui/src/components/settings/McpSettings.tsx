@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { McpNetworkPolicy, McpRegistryEntry, McpRemoteMode } from '@itphx/synth-shared'
 import { Icon } from '../icon/Icon'
 import { useMcpStore } from '../../stores/mcpStore'
@@ -120,6 +120,31 @@ export const McpSettings = () => {
   const [mcpPolicySaving, setMcpPolicySaving] = useState(false)
   const [mcpPolicyError, setMcpPolicyError] = useState<string | null>(null)
 
+  /**
+   * Прочитать политику MCP (`GET /settings/mcp-policy`).
+   *
+   * Вызывается на монтировании и при событии `mcp.updated` с `action: 'policy'`
+   * (политику могли поменять в другом клиенте). Несохранённый черновик
+   * пользователя не затирается: серверное значение подставляется только пока
+   * селект совпадает с последним сохранённым.
+   */
+  const savedMcpPolicyRef = useRef<ToolsPolicy>(savedMcpPolicy)
+  useEffect(() => {
+    savedMcpPolicyRef.current = savedMcpPolicy
+  }, [savedMcpPolicy])
+  const loadMcpPolicy = useCallback(async () => {
+    try {
+      const { policy, defaults } = await synthApi.getMcpPolicyInfo()
+      setSavedMcpPolicy(policy)
+      setMcpPolicyDefault(defaults)
+      setMcpPolicy((current) => (current === savedMcpPolicyRef.current ? policy : current))
+    } catch (e) {
+      setMcpPolicyError(e instanceof Error ? e.message : 'HTTP')
+    } finally {
+      setMcpPolicyLoading(false)
+    }
+  }, [])
+
   // Доступность инструментов по режимам (W4c)
   const [probedTools, setProbedTools] = useState<Record<string, McpProbedTool[] | null>>({})
   const [probing, setProbing] = useState<Record<string, boolean>>({})
@@ -166,7 +191,9 @@ export const McpSettings = () => {
    *
    * Форма редактирования (`useMcpRegistryEditor`) и черновик доступности
    * (`availabilityDraft`) — не сбрасываются, это черновики пользователя.
-   * Первый рендер пропускается (данные грузит эффект выше).
+   * То же событие с `action: 'policy'` приходит от смены политик MCP — по нему
+   * перечитываются и они (см. вызовы ниже). Первый рендер пропускается (данные
+   * грузят эффекты выше).
    */
   const mcpRevision = useMcpStore((s) => s.revision)
   const loadedRevisionRef = useRef(mcpRevision)
@@ -175,31 +202,19 @@ export const McpSettings = () => {
     loadedRevisionRef.current = mcpRevision
     void fetchRegistry()
     void fetchToolSettings()
-  }, [mcpRevision, fetchRegistry, fetchToolSettings])
+    // Политики MCP меняются и в другом клиенте (`mcp.updated` с
+    // `action: 'policy'` — `settings/mcp-policy|mcp-network-policy`), а обе секции
+    // панель грузит сама: без перечитывания карточка показывала бы прежнее
+    // значение до перезагрузки страницы.
+    void loadMcpPolicy()
+    if (isAdmin) void fetchNetworkPolicy()
+  }, [mcpRevision, fetchRegistry, fetchToolSettings, loadMcpPolicy, isAdmin, fetchNetworkPolicy])
 
   // ADR-071 §2.3: политику MCP читает любой пользователь (эндпоинт без admin-гейта),
   // меняет только ADMIN — карточка доступна в админ-категории.
   useEffect(() => {
-    let cancelled = false
-    synthApi
-      .getMcpPolicyInfo()
-      .then(({ policy, defaults }) => {
-        if (!cancelled) {
-          setMcpPolicy(policy)
-          setSavedMcpPolicy(policy)
-          setMcpPolicyDefault(defaults)
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setMcpPolicyError(e instanceof Error ? e.message : 'HTTP')
-      })
-      .finally(() => {
-        if (!cancelled) setMcpPolicyLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+    void loadMcpPolicy()
+  }, [loadMcpPolicy])
 
   // ADR-071 §2.3.1: сетевую политику читают только админы (секция скрыта для остальных).
   useEffect(() => {

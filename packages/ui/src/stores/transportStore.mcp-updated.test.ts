@@ -7,7 +7,38 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
  * страницу». Событие публикуется в **инстансный** канал шины (у реестра нет
  * сессии), поэтому диспетчер обязан обработать его раньше проверки `sid` —
  * иначе `sessionId` события (`'instance'`/пусто/чужой) отбрасывал бы его до стора.
+ *
+ * Второй кейс — `action: 'policy'`: политика MCP (`settings/tools-policy`,
+ * `mcp-policy`, `mcp-network-policy`, `tools-disabled`) меняет не состав
+ * реестра, а **эффективные** значения, поэтому дополнительно поднимается
+ * `toolsDisabledTick` (`useUIStore`) — по нему `ToolsDisabledSettings` и
+ * `StatsTab` перечитывают настройки без перезагрузки страницы. На мутации
+ * состава (`add`/`remove`/`update`) тик подниматься не должен: это лишний
+ * запрос к настройкам.
  */
+// persist (zustand) захватывает localStorage при импорте `useUIStore`
+// (`toolsDisabledTick` живёт в нём), а Node/vitest без `--localstorage-file` его
+// не даёт — ставим заглушку до импорта стора.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 const apiMocks = vi.hoisted(() => ({
   getMcpRegistry: vi.fn(),
 }))
@@ -33,6 +64,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { createDispatcher } from './transportStore'
 import { useMcpStore } from './mcpStore'
+import { useUIStore } from './useUIStore'
 import type { WSEvent } from '@/lib/api/transport'
 import type { McpRegistryEntry } from '@itphx/synth-shared'
 
@@ -62,6 +94,8 @@ describe('transportStore dispatcher: mcp.updated', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     apiMocks.getMcpRegistry.mockResolvedValue({ entries: [makeEntry('srv'), makeEntry('srv2')] })
+    // Runtime-счётчик `toolsDisabledTick` не персистится — сбрасываем руками.
+    useUIStore.setState({ toolsDisabledTick: 0 })
     useMcpStore.setState({
       registry: [makeEntry('srv')],
       loading: false,
@@ -98,6 +132,38 @@ describe('transportStore dispatcher: mcp.updated', () => {
     dispatch(makeEvent('mcp.updated', { action: 'update', scope: 'session', sessionId: 's1' }, 's1'))
     dispatch(makeEvent('mcp.updated', { action: 'update', scope: 'project', projectId: 'p1' }, 's1'))
 
+    expect(useMcpStore.getState().revision).toBe(2)
+  })
+
+  it('`action: "policy"` поднимает toolsDisabledTick (эффективные настройки перечитываются)', () => {
+    dispatch(makeEvent('mcp.updated', { action: 'policy' }, 'instance'))
+
+    expect(useUIStore.getState().toolsDisabledTick).toBe(1)
+    // Состав реестра от политики не меняется, но сигнал перечитывания общий.
+    expect(useMcpStore.getState().revision).toBe(1)
+  })
+
+  it('`action: "policy"`: каждое событие — новый тик (селекторы настроек не «залипают»)', () => {
+    dispatch(makeEvent('mcp.updated', { action: 'policy' }, 'instance'))
+    dispatch(makeEvent('mcp.updated', { action: 'policy' }, 'instance'))
+
+    expect(useUIStore.getState().toolsDisabledTick).toBe(2)
+  })
+
+  it('мутация состава (`action: "add"`) НЕ поднимает toolsDisabledTick', () => {
+    dispatch(makeEvent('mcp.updated', { action: 'add', name: 'srv2' }, 'instance'))
+
+    // Лишнего запроса к настройкам политики быть не должно: состав реестра
+    // меняется, а `tools.disabled`/политика — нет.
+    expect(useUIStore.getState().toolsDisabledTick).toBe(0)
+    expect(useMcpStore.getState().revision).toBe(1)
+  })
+
+  it('`action: "remove"` и `action: "update"` тоже не трогают toolsDisabledTick', () => {
+    dispatch(makeEvent('mcp.updated', { action: 'remove', name: 'srv2' }, 'instance'))
+    dispatch(makeEvent('mcp.updated', { action: 'update', name: 'srv2' }, 'instance'))
+
+    expect(useUIStore.getState().toolsDisabledTick).toBe(0)
     expect(useMcpStore.getState().revision).toBe(2)
   })
 })

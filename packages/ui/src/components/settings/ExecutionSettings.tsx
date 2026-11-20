@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { useAuthStore } from '@/stores/authStore'
+import { useExecutionProfilesStore } from '@/stores/executionProfilesStore'
 import { useNotification } from '@/hooks/useNotification'
 import { useStableItemKeys } from '@/hooks/useStableItemKeys'
 import { confirm } from '@/lib/confirm'
@@ -440,6 +441,25 @@ export function ExecutionSettings() {
     void loadProfiles()
     void loadPools()
   }, [canView, loadProfiles, loadPools])
+
+  // Каталог профилей/пулы изменились на сервере (событие шины
+  // `execution.updated`: профиль сохранён/удалён, каталог сброшен, пул слит).
+  // Перечитываем оба списка — раздел показывает то, что реально работает в
+  // процессе, и не должен держать устаревший каталог до перезагрузки страницы.
+  //
+  // Черновик (`draft`) и открытая форма профиля (`editor`) не трогаются: это
+  // правки пользователя, их сбрасывает только явный Reset/сохранение. Первый
+  // рендер не дублируется — сравниваем со своим запомненным значением (списки
+  // грузит эффект выше).
+  const executionRevision = useExecutionProfilesStore((s) => s.revision)
+  const loadedExecutionRevisionRef = useRef(executionRevision)
+  useEffect(() => {
+    if (loadedExecutionRevisionRef.current === executionRevision) return
+    loadedExecutionRevisionRef.current = executionRevision
+    if (!canView) return
+    void loadProfiles()
+    void loadPools()
+  }, [canView, executionRevision, loadPools, loadProfiles])
 
   useEffect(() => {
     if (!isAdmin) return

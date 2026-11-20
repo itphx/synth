@@ -496,7 +496,12 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 Any mutation visible to another client publishes an event: `message.deleted`/`message.updated`
 (messages), `session.messages.cleared`/`session.messages.merged` (history),
 `project.updated`/`project.deleted` (project — to the channel of each of its sessions),
-`plan.updated`, and `fs.changed` (workspace, including HTTP FS with `source: 'http'`). Clients must
+`plan.updated`, and `fs.changed` (workspace, including HTTP FS with `source: 'http'`). Instance
+registries publish to the instance channel too: `agents.updated`, `mcp.updated`, `skills.updated`,
+`models.updated`, `execution.updated` (the execution profile catalogue and pools: `action` +
+`profileId`/`poolName`) and `credentials.updated` (the external credentials layer, ADR-105: `action`
++ `credentialId`/`provider`, no tokens in the payload — an admin type, not delivered to `USER`).
+Clients must
 handle them, otherwise the feed “sticks” after another client's action.
 
 `queue.state` is published when messages are enqueued or removed and at turn boundaries — the text
@@ -506,7 +511,10 @@ taken into work (`starting`) is the queue transition at the start of a turn.
 
 Event journal and resume: every event gets a monotonic `eventSeq` that is global for the
 instance (across all session channels); a client resumes
-with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`).
+with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`). The instance channel
+(`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
+`execution.updated`, `credentials.updated`) gets no number and is not journaled: there is no
+backfill for it, delivery is live only.
 
 **`GET /api/v2/meta`** (no authentication, like `/health` — **in both builds**,
 standalone and managed; the shared allowlist lives in

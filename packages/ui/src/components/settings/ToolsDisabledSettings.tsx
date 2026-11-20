@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PromptToolDetail, ToolsDisabledConfig } from '@itphx/synth-shared'
 import { useI18n } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
@@ -76,27 +76,49 @@ export function ToolsDisabledSettings() {
     void fetchToolsDisabled()
   }, [fetchToolsDisabled])
 
+  /**
+   * Прочитать политику включения встроенных инструментов (`GET /settings/tools-policy`).
+   *
+   * Вызывается на монтировании и когда эффективные значения поменялись — свой
+   * сохранённый набор или **чужое** событие `mcp.updated` с `action: 'policy'`
+   * поднимают `toolsDisabledTick`. Несохранённый черновик селекта не затирается:
+   * серверное значение подставляется, только пока селект равен сохранённому.
+   */
+  const savedToolsPolicyRef = useRef<ToolsPolicy>(savedToolsPolicy)
   useEffect(() => {
-    let cancelled = false
-    synthApi
-      .getToolsPolicyInfo()
-      .then(({ policy, defaults }) => {
-        if (!cancelled) {
-          setToolsPolicy(policy)
-          setSavedToolsPolicy(policy)
-          setToolsPolicyDefault(defaults)
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setToolsPolicyError(e instanceof Error ? e.message : 'HTTP')
-      })
-      .finally(() => {
-        if (!cancelled) setToolsPolicyLoading(false)
-      })
-    return () => {
-      cancelled = true
+    savedToolsPolicyRef.current = savedToolsPolicy
+  }, [savedToolsPolicy])
+  const loadToolsPolicy = useCallback(async () => {
+    try {
+      const { policy, defaults } = await synthApi.getToolsPolicyInfo()
+      setSavedToolsPolicy(policy)
+      setToolsPolicyDefault(defaults)
+      setToolsPolicy((current) => (current === savedToolsPolicyRef.current ? policy : current))
+    } catch (e) {
+      setToolsPolicyError(e instanceof Error ? e.message : 'HTTP')
+    } finally {
+      setToolsPolicyLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    void loadToolsPolicy()
+  }, [loadToolsPolicy])
+
+  /**
+   * Эффективные значения изменились (свой сохранённый набор или чужая правка
+   * политики — `mcp.updated` с `action: 'policy'`): перечитываем `tools.disabled`
+   * (из стора) и `tools.policy` без перезагрузки страницы. Первый рендер
+   * пропускается — данные грузят эффекты выше.
+   */
+  const toolsDisabledTick = useUIStore((s) => s.toolsDisabledTick)
+  const loadedTickRef = useRef(toolsDisabledTick)
+  useEffect(() => {
+    if (loadedTickRef.current === toolsDisabledTick) return
+    loadedTickRef.current = toolsDisabledTick
+    void fetchToolsDisabled()
+    void loadToolsPolicy()
+  }, [toolsDisabledTick, fetchToolsDisabled, loadToolsPolicy])
 
   // Список точечных тулов — из toolsDetail активной сессии (источник capabilities).
   useEffect(() => {

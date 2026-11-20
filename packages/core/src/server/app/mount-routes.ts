@@ -76,6 +76,12 @@ import {
   // Каталог провайдеров/моделей инстанса изменился — `models.updated` (общий шов
   // роутов провайдеров и моделей, см. `events/models-events.ts`).
   modelsChangedPublisher,
+  // Каталог профилей исполнения изменился — `execution.updated` (общий шов
+  // роутов настроек исполнения и пулов, см. `events/execution-events.ts`).
+  executionChangedPublisher,
+  // Внешние доступы инстанса изменились — `credentials.updated` (шов write-путей
+  // `createOAuthRoutes`, см. `events/credentials-events.ts`).
+  credentialsChangedPublisher,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -609,6 +615,11 @@ export function mountStandaloneRoutes(
       ...(deps.executionConfig ? { executionConfig: deps.executionConfig } : {}),
       executionRouter: deps.executionRouter,
     },
+    {
+      // Мутация пула (`drain`/`release`) → `execution.updated` (инстансный канал):
+      // раздел «Исполнение» перечитывает пулы без перезагрузки страницы.
+      onExecutionChanged: executionChangedPublisher(eventBus),
+    },
   ));
 
   // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
@@ -726,6 +737,23 @@ export function mountStandaloneRoutes(
     // поля); runtime-значение приоритетнее. Валидация — фактическое наличие
     // провайдера в каталоге и модели `provider/model`.
     fallbackDefaultModel: configDefaultModel(),
+    // Смена дефолтной пары (`PUT`/`DELETE /settings/default-model`) — тоже мутация
+    // каталога: публикуем `models.updated` с `action: 'default'`, иначе бейдж
+    // `isDefault` и селект модели в другом клиенте живут старой парой до
+    // перезагрузки страницы. `pair === null` — сброс к config-дефолту
+    // (провайдер/модель в payload не передаём: это «изменение целиком»).
+    onDefaultModelChange: (pair) => modelsChangedPublisher(eventBus)(
+      pair ? { action: 'default', provider: pair.provider, modelId: pair.model } : { action: 'default' },
+    ),
+    // ADR-135: сохранение/сброс runtime-каталога профилей исполнения —
+    // `execution.updated` (инстансный канал): селекторы профиля (агент/проект/
+    // сессия) и раздел «Исполнение» перечитывают каталог без перезагрузки.
+    onExecutionChanged: executionChangedPublisher(eventBus),
+    // Политики MCP (`tools-policy`/`mcp-policy`/`mcp-network-policy`/
+    // `tools-disabled`) меняют **эффективный** MCP-скоуп — публикуем то же
+    // `mcp.updated` с `action: 'policy'`: панели MCP, «Отключённые инструменты»
+    // и статистика перечитывают значения без перезагрузки страницы.
+    onMcpPolicyChanged: mcpChangedPublisher(eventBus),
     validateDefaultModel: async (pair) => {
       const provider = await providerStore.load(pair.provider);
       if (!provider) return `провайдер "${pair.provider}" не найден`;
@@ -1118,6 +1146,10 @@ export function mountStandaloneRoutes(
       // ADR-105 (Ф4): журнал операций со слоем доступов (привязка к коннектору).
       audit: deps.storageContext.credentialAudit,
       ownerKind: 'local',
+      // Выдача/отзыв/refresh/привязка доступа — `credentials.updated` в инстансный
+      // канал шины: раздел «Внешние доступы» перечитывает список без перезагрузки
+      // страницы (токенов в payload нет).
+      onCredentialsChanged: credentialsChangedPublisher(eventBus),
       resolveActor: (c) => {
         const user = c.get('user') as { id?: string; roles?: string[] } | undefined;
         return { userId: user?.id ?? 'local', roles: user?.roles ?? ['ADMIN'] };

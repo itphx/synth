@@ -49,6 +49,7 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { useExecutionProfilesStore } from '@/stores/executionProfilesStore'
 import { AgentsPanel } from './AgentsPanel'
 import type { AgentInfo } from '@/lib/api/synthApi'
 
@@ -748,5 +749,128 @@ describe('AgentsPanel — профиль исполнения агента (PROP
     // Поля не отправляются вовсе — сервер сохранит прежние значения.
     expect('executor_profile' in payload).toBe(false)
     expect('allowed_profiles' in payload).toBe(false)
+  })
+})
+
+describe('AgentsPanel — каталог профилей по событию execution.updated', () => {
+  /**
+   * Баг: «профиль, созданный в разделе "Исполнение", не виден в селекте профиля
+   * агента до перезагрузки страницы» — селект читал каталог один раз при
+   * монтировании. По событию шины панель перечитывает мету (`loadMeta`), где
+   * приходит каталог профилей (PROP-135 Ф6a).
+   */
+  const CATALOG_V1 = {
+    provider: 'static' as const,
+    pooling: 'instance' as const,
+    defaultProfile: 'default',
+    profiles: ['default'],
+    browserProfiles: ['browser'],
+    browserDefaultProfile: 'browser',
+    details: [],
+  }
+  // Каталог после создания профиля `gpu` в разделе «Исполнение».
+  const CATALOG_V2 = {
+    ...CATALOG_V1,
+    profiles: ['default', 'gpu'],
+  }
+
+  async function openEditor(container: HTMLElement): Promise<void> {
+    const editButton = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Edit',
+    ) as HTMLButtonElement | undefined
+    expect(editButton).toBeDefined()
+    await act(async () => {
+      editButton!.click()
+    })
+    await act(async () => {})
+  }
+
+  const profileTrigger = (container: HTMLElement) =>
+    container.querySelector('[data-testid="agent-executor-profile"]') as HTMLElement
+
+  /** Подписи опций селекта: попап рендерится в portal, список адресуется через `aria-controls`. */
+  function optionsOf(trigger: HTMLElement): string[] {
+    const listId = trigger.getAttribute('aria-controls')
+    if (!listId) return []
+    const list = document.getElementById(listId)
+    if (!list) return []
+    return [...list.querySelectorAll('[role="option"]')].map((o) => (o.textContent ?? '').trim())
+  }
+
+  /** Открывает селект (попап монтируется по клику и остаётся в DOM закрытым). */
+  async function openSelect(trigger: HTMLElement): Promise<void> {
+    await act(async () => {
+      trigger.click()
+    })
+  }
+
+  beforeEach(() => {
+    apiMock.getAllAgents.mockResolvedValue({
+      // Селект профиля заблокирован при пустом списке разрешённых (ADR-135),
+      // поэтому агент сразу имеет один разрешённый профиль — `default`.
+      agents: [{ ...agent('main', ['primary']), allowed_profiles: ['default'] }],
+      default_agent: null,
+    })
+    apiMock.getAgentDetail.mockResolvedValue({})
+    apiMock.getExecutionProfiles.mockResolvedValue(CATALOG_V1)
+    useExecutionProfilesStore.setState({ revision: 0 })
+  })
+
+  it('первый рендер грузит мету один раз (сигнал не дублирует загрузку)', async () => {
+    await renderPanel()
+    await act(async () => {})
+
+    expect(apiMock.getExecutionProfiles).toHaveBeenCalledTimes(1)
+  })
+
+  it('после события каталог перечитывается — новый профиль виден в селекте', async () => {
+    const container = await renderPanel()
+    await act(async () => {})
+    expect(apiMock.getExecutionProfiles).toHaveBeenCalledTimes(1)
+
+    await openEditor(container)
+    await openSelect(profileTrigger(container))
+    // В списке именно каталог профилей исполнения (пункт «наследовать» — его
+    // примета), а не другой селект панели.
+    expect(optionsOf(profileTrigger(container))).toContain('Default (inherit)')
+    expect(optionsOf(profileTrigger(container))).not.toContain('gpu')
+    const agentListCallsBefore = apiMock.getAllAgents.mock.calls.length
+
+    // Профиль создали в разделе «Исполнение» — в клиент пришло событие шины.
+    apiMock.getExecutionProfiles.mockResolvedValue(CATALOG_V2)
+    await act(async () => {
+      useExecutionProfilesStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    expect(apiMock.getExecutionProfiles).toHaveBeenCalledTimes(2)
+    expect(optionsOf(profileTrigger(container))).toContain('gpu')
+    // Список агентов от этого события не перечитывается: мета и список —
+    // разные пути (иначе на каждое событие — лишний `GET /agents`).
+    expect(apiMock.getAllAgents.mock.calls.length).toBe(agentListCallsBefore)
+  })
+
+  it('открытая форма и её черновик событием не сбрасываются', async () => {
+    apiMock.getAllAgents.mockResolvedValue({
+      agents: [
+        { ...agent('main', ['primary']), executor_profile: 'default', allowed_profiles: ['default'] },
+      ],
+      default_agent: null,
+    })
+    const container = await renderPanel()
+    await act(async () => {})
+    await openEditor(container)
+
+    expect(profileTrigger(container).textContent).toContain('default')
+
+    apiMock.getExecutionProfiles.mockResolvedValue(CATALOG_V2)
+    await act(async () => {
+      useExecutionProfilesStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    // Форма на месте, выбранный профиль сохранён — перерисовался только каталог.
+    expect(profileTrigger(container).textContent).toContain('default')
+    expect(container.querySelector('[data-testid="agent-execution-section"]')).not.toBeNull()
   })
 })

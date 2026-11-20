@@ -88,6 +88,14 @@ export type { SkillsChangedInfo, SkillsChangedHook } from './events/skills-event
 // (инстансный канал) — общий шов роутов провайдеров и моделей.
 export { publishModelsUpdated, modelsChangedPublisher } from './events/models-events.js';
 export type { ModelsChangedInfo, ModelsChangedHook } from './events/models-events.js';
+// Внешние доступы инстанса (ADR-105): единое событие `credentials.updated`
+// (инстансный канал) — общий шов write-путей `createOAuthRoutes`.
+export { publishCredentialsUpdated, credentialsChangedPublisher } from './events/credentials-events.js';
+export type { CredentialsChangedInfo, CredentialsChangedHook } from './events/credentials-events.js';
+// Каталог профилей исполнения (ADR-135): единое событие `execution.updated`
+// (инстансный канал) — общий шов роутов настроек исполнения и роутов пулов.
+export { publishExecutionUpdated, executionChangedPublisher } from './events/execution-events.js';
+export type { ExecutionChangedInfo, ExecutionChangedHook } from './events/execution-events.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).

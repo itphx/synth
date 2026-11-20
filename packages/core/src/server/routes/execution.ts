@@ -64,6 +64,7 @@ import {
   type PoolInfo,
 } from '../../execution/pool-provider.js';
 import type { ExecutionRouter } from '../../execution/router.js';
+import type { ExecutionChangedHook } from '../../events/execution-events.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -189,6 +190,17 @@ export interface ExecutionRoutesOptions {
   writeGuard?: Middleware;
   /** Локализуемые сообщения (backend — i18n, core — русские литералы). */
   messages?: Partial<ExecutionRoutesMessages>;
+  /**
+   * ADR-135: вызывается **после успешной** мутации пула (`drain`/`release`) —
+   * `execution.updated` с `action: 'pool.delete'` (в обоих случаях пул уходит из
+   * активного списка). Точка сборки ставит сюда `executionChangedPublisher(eventBus)`.
+   * Каталог профилей публикует фабрика настроек (`PUT`/`DELETE
+   * /settings/execution`) — здесь только пулы.
+   *
+   * Прогрев образов (`POST /images/warm`) событие не публикует: ни каталог
+   * профилей, ни состав пулов он не меняет.
+   */
+  onExecutionChanged?: ExecutionChangedHook;
 }
 
 const DEFAULT_MESSAGES: ExecutionRoutesMessages = {
@@ -390,6 +402,10 @@ export function createExecutionRoutes(
     } catch {
       return providerUnavailable(c);
     }
+    // Пул слит: состав активных пулов изменился → `execution.updated`
+    // (`pool.delete` — у контракта нет отдельного «drain», пул в обоих случаях
+    // уходит из активного списка).
+    opts.onExecutionChanged?.({ action: 'pool.delete', poolName: key });
     return c.json({ ok: true }, 202);
   });
 
@@ -408,6 +424,8 @@ export function createExecutionRoutes(
     } catch {
       return providerUnavailable(c);
     }
+    // Пул удалён (идемпотентно) → `execution.updated`.
+    opts.onExecutionChanged?.({ action: 'pool.delete', poolName: key });
     return c.json({ ok: true }, 202);
   });
 

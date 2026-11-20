@@ -54,6 +54,7 @@ import { confirm } from '@/lib/confirm'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useCredentialsStore } from '@/stores/credentialsStore'
 import { CredentialsSettings, parseScopesInput } from './CredentialsSettings'
 import type { ExternalCredentialMeta } from '@itphx/synth-shared'
 
@@ -381,5 +382,49 @@ describe('CredentialsSettings — раздел «Доступы» (ADR-105 Ф4)'
   it('ru-словарь содержит ключи раздела', () => {
     expect(ruDict['settings.category.credentials']).toBe('Доступы')
     expect(ruDict['credentials.title']).toBe('Доступы')
+  })
+})
+
+describe('CredentialsSettings — событие credentials.updated (ADR-105)', () => {
+  /**
+   * Баг: «доступ, выданный/отозванный в другом клиенте, виден в разделе только
+   * после перезагрузки страницы». По событию шины раздел перечитывает список
+   * (сигнал — `revision` в `credentialsStore`).
+   */
+  const NEW_CRED: ExternalCredentialMeta = {
+    ...REVOKED,
+    id: 'extc_9',
+    provider: 'google',
+    status: 'active',
+  }
+
+  it('рост revision перечитывает список — новый доступ появляется', async () => {
+    useCredentialsStore.setState({ revision: 0 })
+    mocks.getOAuthCredentials.mockResolvedValue({ credentials: [ACTIVE], count: 1 })
+
+    const container = await renderSettings()
+    expect(mocks.getOAuthCredentials).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-testid="credentials-item-extc_1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="credentials-item-extc_9"]')).toBeNull()
+
+    // Доступ выдали в соседней вкладке — в клиент пришло событие шины.
+    mocks.getOAuthCredentials.mockResolvedValue({ credentials: [ACTIVE, NEW_CRED], count: 2 })
+    await act(async () => {
+      useCredentialsStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    expect(mocks.getOAuthCredentials).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[data-testid="credentials-item-extc_9"]')).not.toBeNull()
+    expect(container.textContent).toContain('2 accesses')
+  })
+
+  it('первый рендер не дублирует загрузку (revision сравнивается со своим значением)', async () => {
+    useCredentialsStore.setState({ revision: 0 })
+
+    await renderSettings()
+    await act(async () => {})
+
+    expect(mocks.getOAuthCredentials).toHaveBeenCalledTimes(1)
   })
 })

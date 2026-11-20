@@ -179,6 +179,25 @@ export type EventType =
   // **ключи/URL провайдеров в событие не попадают никогда** — в них бывают
   // секреты (инвариант 13 `AGENTS.md`).
   | 'models.updated'
+  // Каталог профилей исполнения (ADR-135) изменился: профиль сохранён/удалён,
+  // runtime-каталог сброшен к config-уровню, пул слит/удалён. Каталог профилей —
+  // ресурс **инстанса**, поэтому событие идёт в инстансный канал шины (ADR-118;
+  // новых транспортных каналов не заводим, инвариант 6 `AGENTS.md`). Реагируют
+  // селекторы профиля (агент в админке, проект, сессия) и раздел «Исполнение»:
+  // перечитывают каталог без перезагрузки страницы. Payload — только id
+  // профиля/имя пула и вид мутации: адреса исполнителей, токены provisioner'а и
+  // прочий конфиг в событие не попадают никогда (инвариант 13 `AGENTS.md`).
+  | 'execution.updated'
+  // Внешние доступы инстанса изменились (ADR-105): доступ выдан/отозван,
+  // обновлён токен, изменена привязка к MCP-коннектору. Доступ — ресурс
+  // **инстанса** (владелец — пользователь или инстанс), поэтому событие идёт в
+  // инстансный канал шины (ADR-118; новых транспортных каналов не заводим,
+  // инвариант 6 `AGENTS.md`). Реагирует раздел «Внешние доступы»
+  // (`CredentialsSettings`): список и статусы перечитываются без перезагрузки
+  // страницы. Payload — только id/провайдер и вид мутации: **токены в событие
+  // не попадают никогда** (инвариант 13 `AGENTS.md`), это свойство типа
+  // payload'а, а не соглашение вызывающих.
+  | 'credentials.updated'
   // Этап 1 roadmap 0.13 (блок 1.3): «вопрос пользователю». Префикс
   // `user_question.*` — намеренно НЕ `question.*`: `question.asked` уже занят
   // смыслом «очередь зависла» (см. выше).
@@ -376,9 +395,13 @@ export type AgentsUpdatedEventData = {
  * - `remove` — запись удалена (`DELETE /mcp/registry/:id`, `synth_mcp_remove`);
  * - `enable` — переключён признак `enabled` (уровень инстанса:
  *   `synth_mcp_enable` с `level: 'instance'`);
- * - `import` — импорт набора серверов (installer/аддон).
+ * - `import` — импорт набора серверов (installer/аддон);
+ * - `policy` — изменена **политика** MCP (`PUT`/`DELETE /settings/mcp-policy`,
+ *   `/settings/mcp-network-policy`, `/settings/tools-policy`,
+ *   `/settings/tools-disabled`): состав реестра тот же, изменился эффективный
+ *   MCP-скоуп — что уходит модели и куда разрешён сетевой доступ.
  */
-export type McpChangeAction = 'add' | 'update' | 'remove' | 'enable' | 'import';
+export type McpChangeAction = 'add' | 'update' | 'remove' | 'enable' | 'import' | 'policy';
 
 /**
  * Область уровневой операции MCP — поле `scope` события `mcp.updated`.
@@ -494,6 +517,78 @@ export type ModelsUpdatedEventData = {
   modelId?: string;
   /** Что произошло. */
   action: ModelChangeAction;
+};
+
+/**
+ * Вид мутации каталога профилей исполнения — поле `action` события
+ * `execution.updated` (ADR-135).
+ *
+ * - `profile.save` — runtime-каталог сохранён (`PUT /settings/execution`):
+ *   профили добавлены/изменены/переименованы (переименование = удаление +
+ *   сохранение), изменены дефолты или список отключённых;
+ * - `profile.delete` — конкретный профиль удалён (расширение контракта: сейчас
+ *   каталог правится целиком через `PUT`, поэтому путь один — `profile.save`,
+ *   но клиент различает виды мутации, чтобы не завязываться на «целиком»);
+ * - `profile.reset` — runtime-каталог сброшен к config-уровню
+ *   (`DELETE /settings/execution`);
+ * - `pool.save` — пул появился/изменил состояние;
+ * - `pool.delete` — пул слит (`drain`) или удалён (`DELETE /pools/:key`): в
+ *   обоих случаях он уходит из активного списка.
+ */
+export type ExecutionChangeAction =
+  | 'profile.save'
+  | 'profile.delete'
+  | 'profile.reset'
+  | 'pool.save'
+  | 'pool.delete';
+
+/**
+ * Payload события `execution.updated` — каталог профилей исполнения изменился.
+ *
+ * Минимальный **по построению**: id профиля и/или имя пула + вид мутации. Клиент
+ * перечитывает каталог своим обычным запросом (`GET /execution/profiles`,
+ * `GET /execution/pools`, `GET /settings/execution`). Адреса исполнителей,
+ * токен provisioner'а и прочий конфиг профиля (env, args MCP-серверов) в событие
+ * не кладутся ни при каких условиях (инвариант 13 `AGENTS.md`); это свойство
+ * типа payload'а, а не соглашение вызывающих.
+ */
+export type ExecutionUpdatedEventData = {
+  /** Профиль, которого коснулась мутация (не задан — изменение каталога целиком). */
+  profileId?: string;
+  /** Пул, которого коснулась мутация (не задан — профили, не пулы). */
+  poolName?: string;
+  /** Что произошло. */
+  action: ExecutionChangeAction;
+};
+
+/**
+ * Вид мутации слоя внешних доступов — поле `action` события
+ * `credentials.updated` (ADR-105).
+ *
+ * - `save` — доступ выдан (`POST /oauth/credentials`, завершение authorize или
+ *   device flow);
+ * - `delete` — доступ отозван (`DELETE /oauth/credentials/:id`);
+ * - `refresh` — токен обновлён (`POST /oauth/credentials/:id/refresh`);
+ * - `bind` — изменена привязка доступа к MCP-коннектору
+ *   (`POST /oauth/credentials/:id/bind`).
+ */
+export type CredentialChangeAction = 'save' | 'delete' | 'refresh' | 'bind';
+
+/**
+ * Payload события `credentials.updated` — внешние доступы инстанса изменились.
+ *
+ * Минимальный **по построению**: id записи, провайдер и вид мутации. Токены
+ * (`access_token`/`refresh_token`), маска секрета и прочие детали записи в
+ * событие не кладутся ни при каких условиях (инвариант 13 `AGENTS.md`); клиент
+ * перечитывает список своим обычным запросом (`GET /oauth/credentials`).
+ */
+export type CredentialsUpdatedEventData = {
+  /** id записи доступа (не задан — изменение слоя доступов целиком). */
+  credentialId?: string;
+  /** OAuth-провайдер, которого коснулась мутация. */
+  provider?: string;
+  /** Что произошло. */
+  action: CredentialChangeAction;
 };
 
 /** Payload события `session.messages.cleared` — история очищена, кроме закреплённых. */

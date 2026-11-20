@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
 import { useAgentsStore } from '@/stores/agentsStore'
+import { useExecutionProfilesStore } from '@/stores/executionProfilesStore'
 import { SshKeysSettings } from '../settings/SshKeysSettings'
 import {
   NumberField,
@@ -283,6 +284,25 @@ export const AgentsPanel = () => {
     loadedRevisionRef.current = agentsRevision
     void load()
   }, [agentsRevision])
+
+  /**
+   * Каталог профилей исполнения изменился (событие шины `execution.updated`):
+   * профиль могли создать/переименовать в разделе «Исполнение» — селект
+   * профиля агента и список разрешённых должны увидеть новый состав до
+   * перезагрузки страницы.
+   *
+   * Перечитываем именно `loadMeta()` (каталог профилей приходит вместе с
+   * провайдерами/моделями/контекстными файлами), а не только `load()`: список
+   * агентов от этого события не меняется. Первый рендер пропускается — мету
+   * грузит эффект выше; открытая форма и её черновик не сбрасываются.
+   */
+  const executionRevision = useExecutionProfilesStore((s) => s.revision)
+  const loadedExecutionRevisionRef = useRef(executionRevision)
+  useEffect(() => {
+    if (loadedExecutionRevisionRef.current === executionRevision) return
+    loadedExecutionRevisionRef.current = executionRevision
+    void loadMeta()
+  }, [executionRevision])
 
   const handleCreate = () => {
     setForm(emptyForm())

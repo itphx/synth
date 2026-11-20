@@ -37,6 +37,10 @@ import type { EventType } from '@itphx/synth-shared';
  * Состав:
  * - реестры инстанса, которые есть в UI у каждого пользователя —
  *   `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`;
+ * - каталог профилей исполнения — `execution.updated`: профиль выбирается в
+ *   настройках **сессии** (и проекта), поэтому обычному пользователю он тоже
+ *   нужен — без события селект держал бы старый каталог до перезагрузки
+ *   страницы сообщения;
  * - состояние прогонов пайплайнов — семейство `pipeline.run.*` (прогон идёт в
  *   фоне, клиент следит за ним событиями) и выход `gateway` — `pipeline.completed`.
  *   Пайплайны принадлежат проектам, но событие безадресное и несёт только
@@ -50,6 +54,9 @@ export const USER_FACING_INSTANCE_EVENTS: ReadonlySet<EventType> = new Set<Event
   'mcp.updated',
   'skills.updated',
   'models.updated',
+  // Каталог профилей исполнения (ADR-135): payload — `{action, profileId?, poolName?}`,
+  // ни адресов исполнителей, ни токенов в нём нет (инвариант 13).
+  'execution.updated',
   'pipeline.run.started',
   'pipeline.run.node_started',
   'pipeline.run.node_finished',

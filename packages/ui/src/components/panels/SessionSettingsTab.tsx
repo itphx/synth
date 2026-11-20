@@ -29,6 +29,7 @@ import { PanelTab } from './PanelTab'
 import { useWorktreesStore } from '@/stores/worktreesStore'
 import { mcpRevisionForSession, useMcpStore } from '@/stores/mcpStore'
 import { skillsRevisionForSession, useSkillsStore } from '@/stores/skillsStore'
+import { useExecutionProfilesStore } from '@/stores/executionProfilesStore'
 import { canEditSessionContent } from '@/lib/sessionAccess'
 import { TodoSummary } from './work/TodoSummary'
 import { WorkModal, type WorkTab } from './work/WorkModal'
@@ -1538,6 +1539,11 @@ function SessionExecutorProfileField({
   const [profilesFailed, setProfilesFailed] = useState(false)
 
   // Каталог нужен только для опций селекта и подписи профиля по умолчанию.
+  //
+  // `executionRevision` — событие шины `execution.updated`: профиль могли
+  // создать/переименовать в разделе «Исполнение» (или сбросить каталог), и
+  // селект должен увидеть новый состав без перезагрузки страницы.
+  const executionRevision = useExecutionProfilesStore((s) => s.revision)
   useEffect(() => {
     let cancelled = false
     Promise.resolve()
@@ -1555,7 +1561,7 @@ function SessionExecutorProfileField({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [executionRevision])
 
   const current = (session.settings.executorProfile as string | undefined) ?? ''
   const projectProfile = (project?.executor?.profile ?? '').trim()
