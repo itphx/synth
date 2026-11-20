@@ -5,11 +5,12 @@
  * ## Зачем
  *
  * Инвариант 27 держится на памяти: каждый write-путь реестра инстанса
- * (агенты, MCP, скиллы, пайплайны, провайдеры/модели, память) обязан после
- * успешной записи опубликовать своё событие в шину, иначе второй клиент видит
- * устаревший состав до перезагрузки страницы. Так было потеряно пять реестров
- * подряд: событие публиковал тул, но не HTTP-роут (или наоборот), либо молчал
- * один из нескольких путей одной фабрики.
+ * (агенты, MCP, скиллы, пайплайны, провайдеры/модели, память, пакеты
+ * расширений, плагины, сниппеты) обязан после успешной записи опубликовать своё
+ * событие в шину, иначе второй клиент видит устаревший состав до перезагрузки
+ * страницы. Так было потеряно пять реестров подряд: событие публиковал тул, но
+ * не HTTP-роут (или наоборот), либо молчал один из нескольких путей одной
+ * фабрики.
  *
  * ## Что проверяем (статически, по исходникам)
  *
@@ -68,7 +69,10 @@ type Resource =
   | 'memory'
   | 'webhooks'
   | 'dictionaries'
-  | 'pipelines';
+  | 'pipelines'
+  | 'packs'
+  | 'plugins'
+  | 'snippets';
 
 interface ResourceSpec {
   /** Тип события шины (инвариант 6: новых каналов не заводим). */
@@ -220,6 +224,37 @@ const RESOURCES: Readonly<Record<Resource, ResourceSpec>> = {
     // Одна точка в каждой точке сборки (core standalone + managed backend):
     // портал словарей (`/api/v2/dictionaries`) монтируется ровно один раз.
     wiring: { snippet: 'dictionariesChangedPublisher(eventBus)', count: 1 },
+  },
+  packs: {
+    event: 'packs.updated',
+    identifiers: ['publishPacksUpdated', 'packsChangedPublisher', 'PacksChangedHook'],
+    markers: ['onPacksChanged?.', 'publishPacksUpdated(', 'packsChangedPublisher('],
+    infrastructure: ['events/packs-events.ts', 'index.ts'],
+    // Одна точка в каждой точке сборки (core standalone + managed backend):
+    // реестр установок (`/api/v2/packs`) монтируется ровно один раз, все три
+    // write-пути живут в одной фабрике.
+    wiring: { snippet: 'packsChangedPublisher(eventBus)', count: 1 },
+  },
+  plugins: {
+    event: 'plugins.updated',
+    identifiers: ['publishPluginsUpdated', 'pluginsChangedPublisher', 'PluginsChangedHook'],
+    markers: ['onPluginsChanged?.', 'publishPluginsUpdated(', 'pluginsChangedPublisher('],
+    infrastructure: ['events/plugins-events.ts', 'index.ts'],
+    // **Два** пункта в каждой точке сборки (core standalone + managed backend):
+    // реестр/жизненный цикл (`/api/v2/plugins`, `createPluginsRoutes`) и политика
+    // слоя (`/api/v2/settings/plugins`, `createPluginSettingsRoutes`) — разные
+    // фабрики, обе публикуют `plugins.updated`; у забывшего про один mount
+    // ресурс молчал бы в половине путей.
+    wiring: { snippet: 'pluginsChangedPublisher(eventBus)', count: 2 },
+  },
+  snippets: {
+    event: 'snippets.updated',
+    identifiers: ['publishSnippetsUpdated', 'snippetsChangedPublisher', 'SnippetsChangedHook'],
+    markers: ['onSnippetsChanged?.', 'publishSnippetsUpdated(', 'snippetsChangedPublisher('],
+    infrastructure: ['events/snippets-events.ts', 'index.ts'],
+    // Одна точка в каждой точке сборки (core standalone + managed backend):
+    // реестр сниппетов (`/api/v2/snippets`) монтируется ровно один раз.
+    wiring: { snippet: 'snippetsChangedPublisher(eventBus)', count: 1 },
   },
 };
 
@@ -384,6 +419,39 @@ const WRITE_PATHS: readonly WritePath[] = [
   { file: 'server/routes/dictionaries.ts', key: 'createDictionaryRoutes PUT /:category/:lang', resource: 'dictionaries' },
   { file: 'server/routes/dictionaries.ts', key: 'createDictionaryRoutes DELETE /:category/:lang', resource: 'dictionaries' },
 
+  // ── Пакеты расширений: `packs.updated` (инстансный канал) ─────────────
+  // Реестр установок (аддоны, ADR-086 §5) мутирует одна фабрика, write-путей
+  // три. Особенность `POST /`: установка «в карантин» (`status:
+  // 'pending_approval'`, ответ 202) событие **публикует** — запись в реестре уже
+  // создана и видна в списке админки, значит состав реестра изменился.
+  { file: 'server/routes/packs.ts', key: 'createPacksRoutes POST /', resource: 'packs' },
+  { file: 'server/routes/packs.ts', key: 'createPacksRoutes POST /:name/approve', resource: 'packs' },
+  { file: 'server/routes/packs.ts', key: 'createPacksRoutes DELETE /:name', resource: 'packs' },
+
+  // ── Плагины слоя расширений: `plugins.updated` (инстансный канал) ──────
+  // Две фабрики: жизненный цикл (`createPluginsRoutes`) и политика слоя
+  // (`createPluginSettingsRoutes`, `action: 'policy'`). Публикуется только
+  // фактическая мутация: исходы `unchanged` (бандл источника совпал по
+  // content-hash, lock не писалась) и `removed: false` (снимать нечего)
+  // состояние не меняют и молчат.
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes POST /install', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes POST /update', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes POST /:name/approve', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes POST /:name/enable', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes POST /:name/rollback', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes POST /:name/disable', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes DELETE /:name', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginSettingsRoutes PUT /plugins', resource: 'plugins' },
+  { file: 'server/routes/plugins.ts', key: 'createPluginSettingsRoutes DELETE /plugins', resource: 'plugins' },
+
+  // ── Сниппеты: `snippets.updated` (инстансный канал) ─────────────────────
+  // Реестр `#`-сниппетов (ADR-126 §4) мутирует одна фабрика, write-путей три;
+  // `snippetId` — каноническое **имя** (отдельного id у записи нет). Переименование
+  // и перенос на другой уровень — одна мутация и одно событие `update`.
+  { file: 'server/routes/snippets.ts', key: 'createSnippetRoutes POST /', resource: 'snippets' },
+  { file: 'server/routes/snippets.ts', key: 'createSnippetRoutes PATCH /:name', resource: 'snippets' },
+  { file: 'server/routes/snippets.ts', key: 'createSnippetRoutes DELETE /:name', resource: 'snippets' },
+
   // ── Пайплайны: `pipeline.updated` (каналы сессий проекта) ──────────────
   { file: 'server/routes/pipeline-project-routes.ts', key: 'createPipelineProjectRoutes POST /projects/:id/pipelines', resource: 'pipelines' },
   { file: 'server/routes/pipeline-project-routes.ts', key: 'createPipelineProjectRoutes PUT /projects/:id/pipelines/:pid', resource: 'pipelines' },
@@ -410,6 +478,15 @@ const OUT_OF_SCOPE_WRITE_PATHS: readonly SkippedWritePath[] = [
   // Провайдеры: загрузка иконки и проба — записи нет.
   { file: 'server/routes/providers.ts', key: 'createProviderRoutes POST /fetch-icon', why: 'загрузка иконки провайдера, в каталог не пишет' },
   { file: 'server/routes/providers.ts', key: 'createProviderRoutes POST /:name/test', why: 'проба соединения (POST по природе операции), записи нет' },
+
+  // Плагины: выдача server-scoped токена пишет **реестр service-key** и отдаёт
+  // секрет (`synth_svc_…`) — реестр плагинов при этом не меняется (состав
+  // установок тот же, список «Плагины» перечитывать нечего), а токена в событии
+  // нет по построению (инвариант 13).
+  { file: 'server/routes/plugins.ts', key: 'createPluginsRoutes POST /token', why: 'выдача токена: пишет реестр service-key, реестр плагинов не меняется; секрет в событие не попадает' },
+
+  // Сниппеты: раскрытие `#`-ссылки — предпросмотр без записи (чистое чтение).
+  { file: 'server/routes/snippets.ts', key: 'createSnippetRoutes POST /expand', why: 'раскрытие сниппета (предпросмотр), записи нет' },
 
   // Исполнение: прогрев образов не меняет ни каталог профилей, ни состав пулов
   // (только тянет образы на ноды) — событие `execution.updated` не нужно.

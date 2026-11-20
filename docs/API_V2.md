@@ -272,7 +272,8 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 `data:` — подписчик возвращает её в `Last-Event-ID`. Инстансный канал
 (`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
 `execution.updated`, `credentials.updated`, `memory.updated`, `webhooks.updated`,
-`dictionaries.updated`) номера не получает и в журнал не
+`dictionaries.updated`, `packs.updated`, `plugins.updated`, `snippets.updated`) номера
+не получает и в журнал не
 попадает: догона у него нет, доставка — только живьём. Эти события безадресные и несут минимальный payload
 (`{id?, name?, action, scope?, projectId?, sessionId?}` — без конфигов, секретов
 и содержимого ресурса): клиент по сигналу перечитывает свой список обычным
@@ -284,7 +285,8 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 (`agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
 `execution.updated`), и состояние прогонов пайплайнов (`pipeline.run.started|node_started|node_finished|awaiting_human|finished|failed`,
 `pipeline.completed`). Административные инстансные события (аудит, обслуживание
-инстанса — будущие `maintenance.*`, `packs.*` и т. п.) получают только
+инстанса — будущие `maintenance.*`, реестры расширений `packs.updated`/`plugins.updated` и
+сниппеты `snippets.updated`) получают только
 `ADMIN`/`LEAD` и service-key (watch-all подписка, ADR-052/ADR-089). Список —
 **один источник истины**: `USER_FACING_INSTANCE_EVENTS` в
 `packages/backend/src/events/instance-events.ts`; новое инстансное событие по
@@ -488,7 +490,17 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   `subscriptionId?`; signing-секрета и целевого URL в payload нет — админский тип, к `USER`
   не доставляется) и `dictionaries.updated` (словари классификации, ADR-034/ADR-035: `action`
   `save`/`reset` + `category`/`lang`; содержимого словаря в payload нет — тип не доставляется
-  к `USER`, write-путь под write-guard). Клиенты обязаны их
+  к `USER`, write-путь под write-guard). Плюс реестры слоя расширений — `packs.updated`
+  (установки пакетов, ADR-086 §5: `action` `install`/`approve`/`uninstall` + `packName?`;
+  манифеста и файлов пакета в payload нет; `install` публикуется и для карантина
+  `pending_approval` — запись реестра уже создана) и `plugins.updated` (плагины, ADR-090:
+  `action` `install`/`update`/`approve`/`enable`/`disable`/`rollback`/`uninstall`/`policy`
+  + `pluginName?`; только фактическая мутация — `202 approval_required`, `unchanged` и
+  `removed: false` молчат, `POST /plugins/token` не публикует вовсе; токенов, ключей и URL
+  источников в payload нет) — а также `snippets.updated` (реестр `#`-сниппетов, ADR-126 §4:
+  `action` `create`/`update`/`delete` + `snippetId?` — каноническое **имя** записи; тела
+  сниппета, описания и алиасов в payload нет). Все три — админские типы (в
+  `USER_FACING_INSTANCE_EVENTS` их нет, к `USER` не доставляются). Клиенты обязаны их
   обрабатывать — иначе лента и списки «залипают» после действий другого клиента или агента:
   именно так выглядела дыра «агент создал запись тулом из чата, а панель показывает старый
   состав до перезагрузки страницы». Механический гейт — `packages/core/src/events/publish-census.test.ts`

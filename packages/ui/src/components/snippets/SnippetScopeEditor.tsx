@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { snippetsApi, type Snippet, type SnippetScope } from '@/lib/api/snippets'
+import { useSnippetsStore } from '@/stores/snippetsStore'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { TextArea, TextField } from '../ui/settings'
@@ -53,6 +54,24 @@ export function SnippetScopeEditor({
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * Реестр сниппетов изменился на сервере (событие шины `snippets.updated`,
+   * ADR-126 §4): сниппет создан, изменён или удалён в другом клиенте, в соседней
+   * вкладке либо тулом из чата.
+   *
+   * Перечитываем **только список**: выбранная запись и поля формы (имя, описание,
+   * текст) — ввод пользователя, они не сбрасываются, иначе чужая мутация
+   * стирала бы недописанный сниппет. Первый рендер пропускается (его грузит
+   * эффект выше).
+   */
+  const snippetsRevision = useSnippetsStore((s) => s.revision)
+  const loadedSnippetsRevisionRef = useRef(snippetsRevision)
+  useEffect(() => {
+    if (loadedSnippetsRevisionRef.current === snippetsRevision) return
+    loadedSnippetsRevisionRef.current = snippetsRevision
+    void load()
+  }, [snippetsRevision, load])
 
   const resetForm = () => {
     setSelected(null)

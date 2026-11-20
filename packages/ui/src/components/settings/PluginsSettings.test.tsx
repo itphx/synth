@@ -52,6 +52,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/authStore'
+import { usePluginsStore } from '@/stores/pluginsStore'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PluginsSettings, buildInstallInput, inferInstallSource, shortHash } from './PluginsSettings'
@@ -181,6 +182,8 @@ async function renderSettings(roles: string[] = ['ADMIN']): Promise<HTMLElement>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Сигнал события шины `pluginsupdated` — каждый тест начинает с нуля.
+  usePluginsStore.setState({ revision: 0 })
   mocks.listPlugins.mockResolvedValue([])
   mocks.listPluginAudit.mockResolvedValue([])
   mocks.getPluginsSettings.mockResolvedValue(SETTINGS)
@@ -533,5 +536,84 @@ describe('PluginsSettings — политика слоя', () => {
 
     expect(mocks.confirm).toHaveBeenCalled()
     expect(mocks.resetPluginsSettings).toHaveBeenCalled()
+  })
+})
+
+describe('PluginsSettings — событие pluginsupdated (живое обновление)', () => {
+  it('рост revision перечитывает реестр: новый плагин появляется без перемонтирования', async () => {
+    mocks.listPlugins.mockResolvedValue([PLUGIN])
+    const container = await renderSettings()
+
+    expect(mocks.listPlugins).toHaveBeenCalledTimes(1)
+    expect(byTestId(container, 'plugins-item-image-plugin')).toBeNull()
+
+    // Плагин активировали/поставили в другом клиенте или из CLI — пришло событие.
+    mocks.listPlugins.mockResolvedValue([PLUGIN, MANAGED_PLUGIN])
+    await act(async () => {
+      usePluginsStore.getState().applyEvent()
+    })
+    await flush()
+    await flush()
+
+    expect(mocks.listPlugins).toHaveBeenCalledTimes(2)
+    expect(byTestId(container, 'plugins-item-image-plugin')).toBeTruthy()
+  })
+
+  it('событие перечитывает и снимок политики слоя (action: policy)', async () => {
+    mocks.listPlugins.mockResolvedValue([PLUGIN])
+    const container = await renderSettings()
+
+    expect(mocks.getPluginsSettings).toHaveBeenCalledTimes(1)
+    expect(byTestId(container, 'plugins-restart')).toBeTruthy()
+
+    // Политику слоя изменил другой администратор: эффективное значение сменилось.
+    mocks.getPluginsSettings.mockResolvedValue({
+      ...SETTINGS,
+      isOverridden: true,
+      plugins: { ...POLICY_DEFAULTS, promptBlockMaxChars: 9000 },
+    })
+    await act(async () => {
+      usePluginsStore.getState().applyEvent()
+    })
+    await flush()
+    await flush()
+
+    expect(mocks.getPluginsSettings).toHaveBeenCalledTimes(2)
+    const field = byTestId(container, 'plugins-policy-prompt-block') as HTMLInputElement | null
+    expect(field?.value).toBe('9000')
+  })
+
+  it('незасохранённый черновик политики не затирается событием', async () => {
+    mocks.listPlugins.mockResolvedValue([PLUGIN])
+    const container = await renderSettings()
+
+    // Пользователь начал править политику и ещё не сохранил.
+    await typeInto(container, 'plugins-policy-prompt-block', '5555')
+    const field = () => byTestId(container, 'plugins-policy-prompt-block') as HTMLInputElement
+    expect(field().value).toBe('5555')
+
+    // Событие другого клиента: список перечитался, правка осталась.
+    mocks.listPlugins.mockResolvedValue([PLUGIN, MANAGED_PLUGIN])
+    mocks.getPluginsSettings.mockResolvedValue({
+      ...SETTINGS,
+      plugins: { ...POLICY_DEFAULTS, promptBlockMaxChars: 9000 },
+    })
+    await act(async () => {
+      usePluginsStore.getState().applyEvent()
+    })
+    await flush()
+    await flush()
+
+    expect(mocks.listPlugins).toHaveBeenCalledTimes(2)
+    expect(field().value).toBe('5555')
+    expect(byTestId(container, 'plugins-item-image-plugin')).toBeTruthy()
+  })
+
+  it('первый рендер не дублирует загрузку (revision сравнивается со своим значением)', async () => {
+    await renderSettings()
+    await act(async () => {})
+
+    expect(mocks.listPlugins).toHaveBeenCalledTimes(1)
+    expect(mocks.getPluginsSettings).toHaveBeenCalledTimes(1)
   })
 })

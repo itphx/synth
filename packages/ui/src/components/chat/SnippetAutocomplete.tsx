@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
 import type { Snippet } from '@/lib/api/synthApi'
+import { useSnippetsStore } from '@/stores/snippetsStore'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Divider } from '../ui/Divider'
@@ -58,7 +59,13 @@ export function SnippetAutocomplete({
   const [snippets, setSnippets] = useState<Snippet[] | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Реестр тянется один раз: пока данных нет — подгружаем.
+  // Реестр сниппетов перечитывается на каждом открытии пикера и на каждое
+  // событие `snippets.updated` (`snippetsRevision`): гейт «грузить только если
+  // список пуст» держал бы старый состав до перезагрузки страницы — созданный,
+  // изменённый или удалённый сниппет не появлялся бы (или не исчезал) в
+  // подсказках. Как и у `SkillAutocomplete` (ADR-126 §3), перезапрос идёт
+  // безусловно — один запрос на открытие/сигнал, а не N вызовов.
+  const snippetsRevision = useSnippetsStore((s) => s.revision)
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -78,7 +85,7 @@ export function SnippetAutocomplete({
     return () => {
       cancelled = true
     }
-  }, [projectId])
+  }, [projectId, snippetsRevision])
 
   const entries = useMemo<Snippet[]>(() => {
     const list = snippets ?? []

@@ -57,6 +57,11 @@ export const USER_FACING_INSTANCE_EVENTS: ReadonlySet<EventType> = new Set<Event
   // Каталог профилей исполнения (ADR-135): payload — `{action, profileId?, poolName?}`,
   // ни адресов исполнителей, ни токенов в нём нет (инвариант 13).
   'execution.updated',
+  // Снайпеты (ADR-126 §4): уровень `user` — пользовательский ресурс — заготовки
+  // сообщений, которые человек сам создаёт и видит в композере. Payload —
+  // `{action, snippetId?}`: текст снайпета в событие не попадает, поэтому тип
+  // безопасен для обычного клиента.
+  'snippets.updated',
   'pipeline.run.started',
   'pipeline.run.node_started',
   'pipeline.run.node_finished',

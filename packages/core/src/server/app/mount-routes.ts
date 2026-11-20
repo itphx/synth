@@ -91,6 +91,15 @@ import {
   // Словари классификации изменились — `dictionaries.updated` (шов write-путей
   // `createDictionaryRoutes`, `events/dictionaries-events.ts`).
   dictionariesChangedPublisher,
+  // Реестр пакетов расширений изменился — `packs.updated` (шов write-путей
+  // `createPacksRoutes`, `events/packs-events.ts`).
+  packsChangedPublisher,
+  // Реестр плагинов изменился — `plugins.updated` (шов write-путей
+  // `createPluginsRoutes`/`createPluginSettingsRoutes`, `events/plugins-events.ts`).
+  pluginsChangedPublisher,
+  // Реестр сниппетов изменился — `snippets.updated` (шов write-путей
+  // `createSnippetRoutes`, `events/snippets-events.ts`).
+  snippetsChangedPublisher,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -1101,6 +1110,12 @@ export function mountStandaloneRoutes(
         deps.orchestrator.setLlmFilterTimeoutMs(effective.llmFilterTimeoutMs);
       },
     },
+    {
+      readGuard: auth.requireAuth,
+      // Инвариант 27: смена политики слоя плагинов (`PUT|DELETE /settings/plugins`)
+      // публикует `plugins.updated { action: 'policy' }`.
+      onPluginsChanged: pluginsChangedPublisher(eventBus),
+    },
   ));
 
   // Словари классификации: чтение — все аутентифицированные, запись/сброс —
@@ -1371,6 +1386,11 @@ export function mountStandaloneRoutes(
       registerAgent: (agent) => agentRegistry.register(agent),
       unregisterAgent: (id) => agentRegistry.unregister(id),
     },
+    {
+      // Инвариант 27: успешная мутация реестра пакетов видна второму клиенту
+      // (раздел «Аддоны» перечитывает реестр без перезагрузки страницы).
+      onPacksChanged: packsChangedPublisher(eventBus),
+    },
   ));
 
   // ADR-090 (Ф5б-2): управление плагинами — список/деталь,
@@ -1390,6 +1410,11 @@ export function mountStandaloneRoutes(
       serviceKeys: deps.storageContext.serviceKeys,
       // Ф7: серверная политика (allow-list) из работающего рантайма.
       serverPolicy: () => resolvePluginServerPolicy(deps.pluginRuntime.config),
+    },
+    {
+      // Инвариант 27: реестр плагинов виден второму клиенту без перезагрузки
+      // страницы (статусы `active`/`pending approval` не «залипают»).
+      onPluginsChanged: pluginsChangedPublisher(eventBus),
     },
   ));
 
@@ -1505,6 +1530,9 @@ export function mountStandaloneRoutes(
       const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
       return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
     },
+  }, {
+    // Инвариант 27: мутация реестра сниппетов видна второму клиенту.
+    onSnippetsChanged: snippetsChangedPublisher(eventBus),
   }));
 
   // ADR-126 §7: bundles (instance-хранилище YAML-групп скиллов).

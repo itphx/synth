@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
@@ -6,6 +6,7 @@ import { confirm } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/formatDate'
 import { useAuthStore } from '@/stores/authStore'
+import { usePluginsStore } from '@/stores/pluginsStore'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
@@ -253,6 +254,28 @@ export function PluginsSettings() {
   useEffect(() => {
     void loadAudit()
   }, [loadAudit])
+
+  /**
+   * Реестр плагинов изменился на сервере (событие шины `plugins.updated`,
+   * ADR-090): плагин установлен, обновлён, подтверждён из карантина,
+   * активирован/деактивирован, откачен или снят в другом клиенте/вкладке — либо
+   * изменилась политика слоя (`action: 'policy'`).
+   *
+   * Перечитываем **и** список, **и** снимок политики (`GET /settings/plugins`:
+   * эффективные значения, `isOverridden`, `restartRequired`). Черновик
+   * пользователя при этом не затирается: `useSettingsDraft` синхронизирует его с
+   * внешним значением только пока правок нет (`!dirty`). Первый рендер
+   * пропускается (грузят эффекты выше); журнал (`audit`) — отдельный блок со
+   * своей кнопкой и своего сигнала не имеет.
+   */
+  const pluginsRevision = usePluginsStore((s) => s.revision)
+  const loadedPluginsRevisionRef = useRef(pluginsRevision)
+  useEffect(() => {
+    if (loadedPluginsRevisionRef.current === pluginsRevision) return
+    loadedPluginsRevisionRef.current = pluginsRevision
+    void loadPlugins()
+    void loadSettings()
+  }, [pluginsRevision, loadPlugins, loadSettings])
 
   /** Эффективная политика: дефолты config.yaml поверх runtime-override. */
   const effectivePolicy = useMemo<PluginsPolicyValues | null>(

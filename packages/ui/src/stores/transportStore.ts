@@ -34,6 +34,15 @@ import { useWebhooksStore } from './webhooksStore'
 // Словари классификации (`dictionaries.updated`) — секция «Словари» в
 // настройках маршрутизации перечитывает список без перезагрузки страницы.
 import { useDictionariesStore } from './dictionariesStore'
+// Реестр пакетов расширений (`packs.updated`) — админ-раздел «Аддоны»
+// перечитывает реестр установок без перезагрузки страницы.
+import { useAddonsStore } from './addonsStore'
+// Реестр плагинов и политика слоя (`plugins.updated`) — раздел «Плагины»
+// перечитывает список и снимок политики без перезагрузки страницы.
+import { usePluginsStore } from './pluginsStore'
+// Реестр сниппетов (`snippets.updated`) — редактор уровня и `#`-пикер
+// композера перечитывают список без перезагрузки страницы.
+import { useSnippetsStore } from './snippetsStore'
 import { useExecutionProfilesStore } from './executionProfilesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
@@ -1997,6 +2006,43 @@ export function createDispatcher(): EventDispatcher {
     // событии нет.
     if (type === 'dictionaries.updated') {
       useDictionariesStore.getState().applyEvent()
+      return
+    }
+
+    // Реестр пакетов расширений изменился (`packs.updated`, инстансный канал
+    // шины, ADR-086 §5) — тот же путь и та же причина, что у `credentials.updated`
+    // выше: пакет ставится в инстанс, а не в сессию, `sid` у события нет. Стор
+    // поднимает `revision`: админ-раздел «Аддоны» (`AddonsSettings`)
+    // перечитывает реестр установок и состав принесённых пакетом пайплайнов без
+    // перезагрузки страницы — и после установки из CLI/другой вкладки, и после
+    // подтверждения карантина в соседнем клиенте. Payload `{packName?, action}`
+    // сигналу не нужен; манифеста и карты файлов в событии нет.
+    if (type === 'packs.updated') {
+      useAddonsStore.getState().applyEvent()
+      return
+    }
+
+    // Реестр плагинов слоя расширений изменился (`plugins.updated`, инстансный
+    // канал шины, ADR-090) — тот же путь: плагин — ресурс инстанса, `sid` у
+    // события нет. Стор поднимает `revision`; раздел «Плагины»
+    // (`PluginsSettings`) перечитывает **и** список, **и** снимок политики слоя
+    // (событие приходит и на её изменение — `action: 'policy'`). Payload
+    // `{pluginName?, action}` сигналу не нужен: токенов, ключей и URL
+    // источников установки в событии нет никогда (инвариант 13).
+    if (type === 'plugins.updated') {
+      usePluginsStore.getState().applyEvent()
+      return
+    }
+
+    // Реестр сниппетов изменился (`snippets.updated`, инстансный канал шины,
+    // ADR-126 §4) — тот же путь: сниппет — ресурс инстанса/проекта, `sid` у
+    // события нет. Стор поднимает `revision`: редактор уровня
+    // (`SnippetScopeEditor` в настройках, админ-разделе и панели проекта) и
+    // `#`-пикер композера (`SnippetAutocomplete`) перечитывают свои списки без
+    // перезагрузки страницы. Payload `{snippetId?, action}` сигналу не нужен;
+    // текста сниппета и описания в событии нет.
+    if (type === 'snippets.updated') {
+      useSnippetsStore.getState().applyEvent()
       return
     }
 

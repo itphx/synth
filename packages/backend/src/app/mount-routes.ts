@@ -104,6 +104,11 @@ import {
   // Словари классификации изменились — `dictionaries.updated` (шов write-путей
   // `createDictionaryRoutes`, `events/dictionaries-events.ts`).
   dictionariesChangedPublisher,
+  // Расширения/packs и слой плагинов (+ его политика) — `packs.updated` /
+  // `plugins.updated`; снайпеты — `snippets.updated` (швы `events/*-events.ts`).
+  packsChangedPublisher,
+  pluginsChangedPublisher,
+  snippetsChangedPublisher,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -855,6 +860,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       approveGuard: auth.requirePermission('ADMIN'),
       uninstallGuard: auth.requirePermission('ADMIN'),
       scopeGuard,
+      // Инвариант 27: мутация реестра пакетов — `packs.updated`.
+      onPacksChanged: packsChangedPublisher(eventBus),
     },
   ));
 
@@ -892,6 +899,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // Ф7 (Уровень 2): выдача server-scoped токена — только ADMIN (токен даёт
       // плагину машинный доступ к серверу).
       tokenGuard: auth.requirePermission('ADMIN'),
+      // Инвариант 27: жизненный цикл плагина виден второму клиенту —
+      // `plugins.updated` в инстансный канал (статусы `active`/`pending approval`
+      // не «залипают» до перезагрузки страницы). Отдельный пункт от политики
+      // слоя ниже: та живёт в другой фабрике (`createPluginSettingsRoutes`).
+      onPluginsChanged: pluginsChangedPublisher(eventBus),
     },
   ));
 
@@ -914,6 +926,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     {
       readGuard: auth.requirePermission('ADMIN'),
       writeGuard: auth.requirePermission('ADMIN'),
+      // Инвариант 27: смена политики слоя плагинов — `plugins.updated { action: 'policy' }`.
+      onPluginsChanged: pluginsChangedPublisher(eventBus),
     },
   ));
 
@@ -1446,6 +1460,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
     canReadProject: (c, project, userId) => projectAccess.canReadProject(c as never, project, userId),
     canEditProject: (c, project, userId) => projectAccess.canEditProjectContent(c as never, project, userId),
+    onSnippetsChanged: snippetsChangedPublisher(eventBus),
   }));
 
   // ADR-126 §1/§14: команды и bundles (mirror core, мутации — ADMIN); скиллов в каталоге нет.

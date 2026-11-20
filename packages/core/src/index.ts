@@ -108,6 +108,19 @@ export type { WebhooksChangedInfo, WebhooksChangedHook } from './events/webhooks
 // (инстансный канал) — общий шов write-путей `createDictionaryRoutes`.
 export { publishDictionariesUpdated, dictionariesChangedPublisher } from './events/dictionaries-events.js';
 export type { DictionariesChangedInfo, DictionariesChangedHook } from './events/dictionaries-events.js';
+// Реестр пакетов расширений (аддоны, ADR-086 §5): единое событие `packs.updated`
+// (инстансный канал) — общий шов write-путей `createPacksRoutes`.
+export { publishPacksUpdated, packsChangedPublisher } from './events/packs-events.js';
+export type { PacksChangedInfo, PacksChangedHook } from './events/packs-events.js';
+// Реестр плагинов слоя расширений (ADR-090): единое событие `plugins.updated`
+// (инстансный канал) — общий шов write-путей `createPluginsRoutes` и
+// `createPluginSettingsRoutes` (политика слоя, `action: 'policy'`).
+export { publishPluginsUpdated, pluginsChangedPublisher } from './events/plugins-events.js';
+export type { PluginsChangedInfo, PluginsChangedHook } from './events/plugins-events.js';
+// Реестр сниппетов (`#`, ADR-126 §4): единое событие `snippets.updated`
+// (инстансный канал) — общий шов write-путей `createSnippetRoutes`.
+export { publishSnippetsUpdated, snippetsChangedPublisher } from './events/snippets-events.js';
+export type { SnippetsChangedInfo, SnippetsChangedHook } from './events/snippets-events.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).

@@ -507,7 +507,17 @@ no fact text, no embeddings, no index corpus in the payload — an admin type, n
 + `subscriptionId?`; no signing secret and no target URL in the payload — an admin type, not
 delivered to `USER`) and `dictionaries.updated` (classification dictionaries, ADR-034/ADR-035:
 `action` `save`/`reset` + `category`/`lang`; no dictionary content in the payload — not delivered
-to `USER`, the write path is behind a write guard).
+to `USER`, the write path is behind a write guard). Extension layer registries: `packs.updated`
+(pack installations, ADR-086 §5: `action` `install`/`approve`/`uninstall` + `packName?`; no
+manifest and no pack files in the payload; `install` is also published for the
+`pending_approval` quarantine — the registry record already exists) and `plugins.updated`
+(plugins, ADR-090: `action` `install`/`update`/`approve`/`enable`/`disable`/`rollback`/
+`uninstall`/`policy` + `pluginName?`; actual mutation only — `202 approval_required`,
+`unchanged` and `removed: false` stay silent, `POST /plugins/token` publishes nothing at all;
+no tokens, keys or source URLs in the payload) — plus `snippets.updated` (the `#` snippet
+registry, ADR-126 §4: `action` `create`/`update`/`delete` + `snippetId?` — the canonical
+**name** of the record; no snippet body, description or aliases in the payload). All three are
+admin types (they are not in `USER_FACING_INSTANCE_EVENTS` and are not delivered to `USER`).
 Clients must
 handle them, otherwise the feed “sticks” after another client's action.
 
@@ -521,7 +531,8 @@ instance (across all session channels); a client resumes
 with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`). The instance channel
 (`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
 `execution.updated`, `credentials.updated`, `memory.updated`, `webhooks.updated`,
-`dictionaries.updated`) gets no number and is not journaled: there is no
+`dictionaries.updated`, `packs.updated`, `plugins.updated`, `snippets.updated`) gets no number
+and is not journaled: there is no
 backfill for it, delivery is live only.
 
 **`GET /api/v2/meta`** (no authentication, like `/health` — **in both builds**,

@@ -96,6 +96,9 @@ import type {
 } from '../../engine/plugins/sources.js';
 import type { PluginsRuntimeSettings } from '../../storage/runtime-settings.js';
 import { mergePluginsConfig } from '../../storage/runtime-settings.js';
+// Единое событие реестра плагинов (`plugins.updated`) — общий шов всех
+// write-путей жизненного цикла и политики слоя.
+import type { PluginsChangedHook } from '../../events/plugins-events.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -200,6 +203,16 @@ export interface PluginsRoutesOptions {
    */
   tokenGuard?: Middleware;
   messages?: Partial<PluginsRouteMessages>;
+  /**
+   * Реестр плагинов изменился — вызывается **после** успешной записи
+   * (`POST /install`, `POST /update`, `POST /:name/approve`,
+   * `POST /:name/enable`, `POST /:name/disable`, `POST /:name/rollback`,
+   * `DELETE /:name`). Точка сборки прокидывает сюда
+   * `pluginsChangedPublisher(eventBus)` (`plugins.updated` в инстансный канал
+   * шины): раздел «Плагины» перечитывает реестр без перезагрузки страницы.
+   * Не задано — событий нет (тесты, сторонние потребители).
+   */
+  onPluginsChanged?: PluginsChangedHook;
 }
 
 const DEFAULT_MESSAGES: PluginsRouteMessages = {
@@ -464,6 +477,13 @@ function parseInstallBody(body: PluginInstallBody): InstallBodyParseResult {
  * Ошибки — `{ error: { code, message } }`: `code` — машиночитаемая причина
  * (`plugin.*` из журнала аудита) либо общий код (`VALIDATION_ERROR`,
  * `NOT_FOUND`, `CONFLICT`, `NOT_IMPLEMENTED`, `LOCAL_INSTALL_DISABLED`).
+ *
+ * Каждый write-путь, который **действительно изменил запись**, публикует
+ * `plugins.updated` через `opts.onPluginsChanged` (инвариант 27 `AGENTS.md`,
+ * ADR-118): установка, обновление, подтверждение карантина, активация,
+ * деактивация, откат и снятие видны второму клиенту без перезагрузки страницы.
+ * `POST /token` события **не** публикует: он пишет реестр service-key и выдаёт
+ * секрет, а реестр плагинов не меняет (токенов в событии нет по построению).
  */
 export function createPluginsRoutes(
   auth: PluginsRoutesAuth,
@@ -477,6 +497,8 @@ export function createPluginsRoutes(
   const approveGuard: Middleware = opts.approveGuard ?? auth.requireAuth;
   const uninstallGuard: Middleware = opts.uninstallGuard ?? auth.requireAuth;
   const tokenGuard: Middleware = opts.tokenGuard ?? auth.requireAuth;
+  // Инвариант 27: успешная мутация реестра плагинов видна второму клиенту.
+  const onPluginsChanged = opts.onPluginsChanged;
 
   /** Актор операции для журнала аудита (`userId` API/UI, иначе `api`). */
   const actorOf = (c: Context): string => deps.resolveUserId?.(c) ?? 'api';
@@ -560,7 +582,12 @@ export function createPluginsRoutes(
       ...(deps.sourceContext ? { sourceContext: deps.sourceContext } : {}),
     });
 
-    if (outcome.outcome === 'installed') return c.json(outcome, 201);
+    if (outcome.outcome === 'installed') {
+      // Запись lock создана — реестр изменился (в payload только имя и вид
+      // мутации: ни токенов, ни URL источника установки в событии нет).
+      onPluginsChanged?.({ pluginName: outcome.name, action: 'install' });
+      return c.json(outcome, 201);
+    }
     if (outcome.outcome === 'approval_required') {
       return c.json(
         {
@@ -639,6 +666,12 @@ export function createPluginsRoutes(
     });
 
     if (outcome.outcome === 'unchanged' || outcome.outcome === 'updated') {
+      // `unchanged` — бандл источника совпал по content-hash: запись lock не
+      // писалась, состояние плагина не изменилось — молчим (`на одно событие
+      // меньше ложных перечитываний`). `updated` — новая версия в реестре.
+      if (outcome.outcome === 'updated') {
+        onPluginsChanged?.({ pluginName: outcome.name, action: 'update' });
+      }
       return c.json(outcome);
     }
 
@@ -841,7 +874,11 @@ export function createPluginsRoutes(
     const name = c.req.param('name');
     const outcome = await deps.runtime.installer.approve(name, { actor: actorOf(c) });
 
-    if (outcome.outcome === 'installed') return c.json(outcome);
+    if (outcome.outcome === 'installed') {
+      // Бандл вышел из карантина и записан в lock — реестр изменился.
+      onPluginsChanged?.({ pluginName: outcome.name, action: 'approve' });
+      return c.json(outcome);
+    }
     if (outcome.outcome === 'approval_required') {
       return c.json(
         {
@@ -888,6 +925,11 @@ export function createPluginsRoutes(
     }
     // Прочие отказы (`plugin.already_active`, `plugin.module_invalid`, …) —
     // 200 с результатом активации: состояние плагина известно клиенту из тела.
+    // Событие публикуем только при фактической активации: отказ на шаге гейта
+    // реестр не меняет.
+    if (activation.outcome === 'activated') {
+      onPluginsChanged?.({ pluginName: activation.plugin, action: 'enable' });
+    }
     return c.json({ activation });
   });
 
@@ -896,7 +938,11 @@ export function createPluginsRoutes(
   app.post('/:name/rollback', writeGuard, async (c) => {
     const name = c.req.param('name');
     const outcome = await deps.runtime.installer.rollback(name, { actor: actorOf(c) });
-    if (outcome.outcome === 'rolled_back') return c.json(outcome);
+    if (outcome.outcome === 'rolled_back') {
+      // Запись lock переписана на предыдущую версию — реестр изменился.
+      onPluginsChanged?.({ pluginName: outcome.name, action: 'rollback' });
+      return c.json(outcome);
+    }
 
     const status =
       outcome.reason === 'plugin.rollback_unavailable'
@@ -921,6 +967,8 @@ export function createPluginsRoutes(
         404,
       );
     }
+    // Плагин деактивирован: статус `active` в списке переключился.
+    onPluginsChanged?.({ pluginName: deactivation.plugin, action: 'disable' });
     return c.json({ deactivation });
   });
 
@@ -936,6 +984,12 @@ export function createPluginsRoutes(
         { error: { code: result.rejected.reason, message: result.rejected.message } },
         httpStatusForRejection(result.rejected.reason) as 403,
       );
+    }
+    // Запись lock снята (в том числе с деактивацией) — реестр изменился.
+    // Идемпотентный исход `removed: false` (снимать было нечего) состояние не
+    // меняет и поэтому молчит.
+    if (result.removed) {
+      onPluginsChanged?.({ pluginName: c.req.param('name'), action: 'uninstall' });
     }
     return c.body(null, 204);
   });
@@ -972,6 +1026,15 @@ export interface PluginSettingsRoutesOptions {
   messages?: {
     invalidSettings?: (c: Context) => string;
   };
+  /**
+   * Политика слоя плагинов изменилась — вызывается **после** успешной записи
+   * (`PUT /plugins`, `DELETE /plugins` → `action: 'policy'`). Точка сборки
+   * прокидывает сюда тот же `pluginsChangedPublisher(eventBus)`: раздел
+   * «Плагины» показывает политику рядом с реестром (`isOverridden`,
+   * `restartRequired`, эффективные значения), поэтому чужое изменение без
+   * события «залипало» бы до перезагрузки страницы.
+   */
+  onPluginsChanged?: PluginsChangedHook;
 }
 
 const DEFAULT_INVALID_SETTINGS = 'plugins: некорректные runtime-настройки слоя плагинов';
@@ -1026,6 +1089,9 @@ export function createPluginSettingsRoutes(
   const readGuard: Middleware = opts.readGuard ?? auth.requireAuth;
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const invalidSettings = opts.messages?.invalidSettings ?? (() => DEFAULT_INVALID_SETTINGS);
+  // Инвариант 27: смена политики слоя плагинов видна второму клиенту
+  // (`action: 'policy'`) — панель показывает эффективные значения рядом с реестром.
+  const onPluginsChanged = opts.onPluginsChanged;
 
   /** Снимок: runtime-override, дефолты из config, признак override, running. */
   const buildView = async (): Promise<PluginsSettingsView> => {
@@ -1067,12 +1133,16 @@ export function createPluginSettingsRoutes(
     deps.onPluginsChange?.(
       mergePluginsConfig(deps.config, parsed.data as Partial<PluginsRuntimeSettings>),
     );
+    // Политика записана — раздел «Плагины» перечитывает её снимок.
+    onPluginsChanged?.({ action: 'policy' });
     return c.json(await buildView());
   });
 
   app.delete('/plugins', writeGuard, async (c) => {
     await deps.settings.clearPlugins();
     deps.onPluginsChange?.(deps.config);
+    // Политика сброшена к config — второму клиенту нужен тот же сигнал.
+    onPluginsChanged?.({ action: 'policy' });
     return c.json(await buildView());
   });
 

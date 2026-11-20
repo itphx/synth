@@ -142,6 +142,27 @@ const EVENT_HANDLERS: readonly EventHandler[] = [
     evidence: 'revision: s.revision + 1',
   },
   {
+    type: 'packs.updated',
+    store: 'addonsStore',
+    call: 'useAddonsStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
+    type: 'plugins.updated',
+    store: 'pluginsStore',
+    call: 'usePluginsStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
+    type: 'snippets.updated',
+    store: 'snippetsStore',
+    call: 'useSnippetsStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
     type: 'pipeline.updated',
     store: 'pipelinesStore',
     call: 'usePipelinesStore.getState().invalidateProject(',

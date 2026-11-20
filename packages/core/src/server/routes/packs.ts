@@ -44,6 +44,7 @@ import {
 import { requireScopeOrAdminRole } from '../service-scope.js';
 import type { ScopeGuardFactory } from '../service-scope.js';
 import { info } from '../../logger.js';
+import type { PacksChangedHook } from '../../events/packs-events.js';
 
 /**
  * ADR-086 §5 / PROP-068/ADR-090: **установка пакета расширения** — одна
@@ -194,6 +195,14 @@ export interface PacksRoutesOptions {
   scopeGuard?: ScopeGuardFactory;
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<PacksRouteMessages>;
+  /**
+   * Реестр пакетов изменился — вызывается **после** успешной записи (`POST /`,
+   * `POST /:name/approve`, `DELETE /:name`). Точка сборки прокидывает сюда
+   * `packsChangedPublisher(eventBus)` (`packs.updated` в инстансный канал шины):
+   * раздел «Аддоны» перечитывает реестр установок без перезагрузки страницы.
+   * Не задано — событий нет (тесты, сторонние потребители).
+   */
+  onPacksChanged?: PacksChangedHook;
 }
 
 const DEFAULT_MESSAGES: PacksRouteMessages = {
@@ -489,6 +498,15 @@ function parsePipelineFile(
   return { definition: parsed.data as PipelineDefinitionInput };
 }
 
+/**
+ * Фабрика роутов реестра установок пакетов (`/api/v2/packs`).
+ *
+ * Каждый успешный write-путь публикует `packs.updated` через
+ * `opts.onPacksChanged` (инвариант 27 `AGENTS.md`, ADR-118): иначе пакет,
+ * поставленный/одобренный/снятый в другом клиенте, виден в разделе «Аддоны»
+ * только после перезагрузки страницы. Ошибки (400/403/404/409) события не
+ * публикуют.
+ */
 export function createPacksRoutes(
   auth: PacksRoutesAuth,
   deps: PacksRoutesDeps,
@@ -502,6 +520,8 @@ export function createPacksRoutes(
   const uninstallGuard: Middleware = opts.uninstallGuard ?? auth.requireAuth;
   // ADR-052: scope-гейт service-key (установщик пакета).
   const scoped = opts.scopeGuard ?? requireScopeOrAdminRole;
+  // Инвариант 27: успешная мутация реестра пакетов видна второму клиенту.
+  const onPacksChanged = opts.onPacksChanged;
 
   /** Результат фактической установки (идемпотентный upsert). */
   interface InstallOutcome {
@@ -1000,6 +1020,9 @@ export function createPacksRoutes(
       };
       await deps.packs.save(record);
       info('PACKS', `Пакет ${manifest.name}@${manifest.version} ожидает подтверждения`);
+      // Запись в реестре создана (пакет виден в списке админки в статусе
+      // `pending_approval`) — реестр изменился, публикуем `install`.
+      onPacksChanged?.({ packName: manifest.name, action: 'install' });
       const authority = authoritySummaryOf(manifest.provides);
       return c.json(
         {
@@ -1038,6 +1061,9 @@ export function createPacksRoutes(
         `mcp=${outcome.provides.mcp.length}, агенты=${outcome.provides.agents.length}, ` +
         `пайплайны=${outcome.provides.pipelines.length}`,
     );
+    // Реестр изменился — в payload только имя пакета и вид мутации (манифеста
+    // и карты файлов в событии нет).
+    onPacksChanged?.({ packName: manifest.name, action: 'install' });
     const authority = authoritySummaryOf(manifest.provides);
     return c.json(
       {
@@ -1087,6 +1113,8 @@ export function createPacksRoutes(
     const trustLevel =
       record.trustLevel ?? resolvePackTrust(record.manifest, deps.resolveTrustLevel);
     const authorityActivation = await activateAuthority(record.manifest, trustLevel);
+    // Пакет вышел из карантина и его артефакты установлены — реестр изменился.
+    onPacksChanged?.({ packName: name, action: 'approve' });
     const authority = authoritySummaryOf(rawProvides(record.manifest));
     return c.json(
       {
@@ -1159,6 +1187,9 @@ export function createPacksRoutes(
 
     await deps.packs.delete(name);
     info('PACKS', `Пакет ${name} снят`);
+    // Запись реестра удалена, принесённые пакетом артефакты сняты — состав
+    // реестров инстанса изменился: второй клиент обязан перечитать список.
+    onPacksChanged?.({ packName: name, action: 'uninstall' });
     return c.body(null, 204);
   });
 

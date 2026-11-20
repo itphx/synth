@@ -33,6 +33,7 @@ import type { SnippetErrorCode, SnippetService } from '../../engine/snippets/ser
 import { SNIPPET_NAME_REGEX, SNIPPET_SCOPES } from '../../engine/snippets/types.js';
 import type { Snippet, SnippetScope } from '../../engine/snippets/types.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
+import type { SnippetsChangedHook } from '../../events/snippets-events.js';
 
 /** Структурный контракт хранилища проектов (core/backend реализации совместимы). */
 export interface SnippetProjectStore {
@@ -85,6 +86,15 @@ export interface SnippetRoutesOptions {
   canEditProject?: (c: Context, project: Project, userId: string) => boolean | Promise<boolean>;
   /** Сообщения (backend — i18n). */
   messages?: (c: Context) => SnippetRoutesMessages;
+  /**
+   * Реестр сниппетов изменился — вызывается **после** успешной записи
+   * (`POST /`, `PATCH /:name`, `DELETE /:name`). Точка сборки прокидывает сюда
+   * `snippetsChangedPublisher(eventBus)` (`snippets.updated` в инстансный канал
+   * шины): панель «Сниппеты» и `#`-пикер композера перечитывают реестр без
+   * перезагрузки страницы. Не задано — событий нет (тесты, сторонние
+   * потребители).
+   */
+  onSnippetsChanged?: SnippetsChangedHook;
 }
 
 /** Доменный код ошибки → HTTP-код и код API (ADR-126 §4, общий формат `{error:{code,message}}`). */
@@ -149,6 +159,12 @@ interface ResolvedSnippet {
 
 /**
  * ADR-126 §4: HTTP-контур сниппетов.
+ *
+ * Каждый успешный write-путь публикует `snippets.updated` через
+ * `opts.onSnippetsChanged` (инвариант 27 `AGENTS.md`, ADR-118): иначе сниппет,
+ * созданный/изменённый/удалённый в другом клиенте, виден в панели «Сниппеты» и
+ * `#`-пикере только после перезагрузки страницы. Ошибки (400/403/404) и
+ * `POST /expand` (предпросмотр без записи) события не публикуют.
  */
 export function createSnippetRoutes(
   auth: AuthKit,
@@ -158,6 +174,8 @@ export function createSnippetRoutes(
   const app = new Hono();
   const messages = (c: Context): SnippetRoutesMessages => opts?.messages?.(c) ?? DEFAULT_MESSAGES;
   const resolveUserId = opts?.resolveUserId ?? (() => LOCAL_USER_ID);
+  // Инвариант 27: успешная мутация реестра сниппетов видна второму клиенту.
+  const onSnippetsChanged = opts?.onSnippetsChanged;
 
   const jsonError = (
     c: Context,
@@ -424,6 +442,9 @@ export function createSnippetRoutes(
       }),
     );
     if (created instanceof Response) return created;
+    // Запись создана — второй клиент обязан перечитать реестр (текста
+    // сниппета в событии нет).
+    onSnippetsChanged?.({ snippetId: created.name, action: 'create' });
     return c.json(created, 201);
   });
 
@@ -483,6 +504,7 @@ export function createSnippetRoutes(
         }),
       );
       if (updated instanceof Response) return updated;
+      onSnippetsChanged?.({ snippetId: updated.name, action: 'update' });
       return c.json(updated);
     }
 
@@ -512,6 +534,9 @@ export function createSnippetRoutes(
         .catch(() => false);
       return removed;
     }
+    // Переименование/перенос — одна мутация записи и одно событие `update`
+    // (промежуточные create/delete внутри запроса клиенту не видны).
+    onSnippetsChanged?.({ snippetId: created.name, action: 'update' });
     return c.json(created);
   });
 
@@ -535,6 +560,8 @@ export function createSnippetRoutes(
     );
     if (removed instanceof Response) return removed;
     if (!removed) return notFound(c);
+    // Сниппет удалён из своего слота — реестр у второго клиента устарел.
+    onSnippetsChanged?.({ snippetId: found.snippet.name, action: 'delete' });
     return c.json({ status: 'deleted', name: found.snippet.name, scope: found.target.scope });
   });
 

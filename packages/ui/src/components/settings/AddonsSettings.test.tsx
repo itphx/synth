@@ -45,6 +45,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/authStore'
+import { useAddonsStore } from '@/stores/addonsStore'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AddonsSettings } from './AddonsSettings'
@@ -164,6 +165,8 @@ async function renderSettings(): Promise<HTMLElement> {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Сигнал события шины `packsupdated` — каждый тест начинает с нуля.
+  useAddonsStore.setState({ revision: 0 })
   mocks.getPacks.mockResolvedValue([])
   mocks.getPipelines.mockResolvedValue([])
   mocks.getPipelineInstances.mockResolvedValue([])
@@ -396,5 +399,81 @@ describe('AddonsSettings — системные шаблоны (ADR-101)', () =>
     expect(error).toBeTruthy()
     expect(error?.getAttribute('role')).toBe('alert')
     expect(error?.textContent).toContain('templates boom')
+  })
+})
+
+describe('AddonsSettings — событие packsupdated (живое обновление)', () => {
+  it('рост revision перечитывает реестр: новый пакет появляется без перемонтирования', async () => {
+    mocks.getPacks.mockResolvedValue([PACK_ACTIVE])
+    const container = await renderSettings()
+
+    expect(mocks.getPacks).toHaveBeenCalledTimes(1)
+    expect(byTestId(container, 'addons-pack-synth-media-next')).toBeNull()
+
+    // Пакет поставили из CLI или в соседней вкладке — в клиент пришло событие шины.
+    mocks.getPacks.mockResolvedValue([PACK_ACTIVE, PACK_PENDING])
+    await act(async () => {
+      useAddonsStore.getState().applyEvent()
+    })
+    await flush()
+    await flush()
+
+    expect(mocks.getPacks).toHaveBeenCalledTimes(2)
+    expect(byTestId(container, 'addons-pack-synth-media-next')).toBeTruthy()
+    expect(byTestId(container, 'addons-pending-hint')).toBeTruthy()
+  })
+
+  it('снятие пакета по событию перечитывает и определения пайплайнов', async () => {
+    mocks.getPacks.mockResolvedValue([PACK_ACTIVE])
+    mocks.getPipelines.mockResolvedValue([PIPELINE])
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'addons-pipeline-publication')).toBeTruthy()
+
+    // Пакет сняли — вместе с ним ушли принесённые артефакты (ADR-086 §5).
+    mocks.getPacks.mockResolvedValue([])
+    mocks.getPipelines.mockResolvedValue([])
+    await act(async () => {
+      useAddonsStore.getState().applyEvent()
+    })
+    await flush()
+    await flush()
+
+    expect(mocks.getPipelines.mock.calls.length).toBe(2)
+    expect(byTestId(container, 'addons-pipeline-publication')).toBeNull()
+    expect(byTestId(container, 'addons-packs-empty')).toBeTruthy()
+  })
+
+  it('первый рендер не дублирует загрузку (revision сравнивается со своим значением)', async () => {
+    const container = await renderSettings()
+    await act(async () => {})
+
+    expect(mocks.getPacks).toHaveBeenCalledTimes(1)
+    expect(mocks.getPipelines).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-testid="addons-packs-empty"]')).toBeTruthy()
+  })
+
+  it('открытая вкладка прогонов не сбрасывается событием', async () => {
+    mocks.getPipelineInstances.mockResolvedValue([INSTANCE])
+    const container = await renderSettings()
+
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]')) as HTMLElement[]
+    const runsTab = tabs.find((tab) => tab.textContent === 'Runs')
+    expect(runsTab).toBeTruthy()
+    await act(async () => {
+      runsTab!.click()
+    })
+    await flush()
+    await flush()
+    expect(byTestId(container, 'addons-instance-plrun_1')).toBeTruthy()
+
+    await act(async () => {
+      useAddonsStore.getState().applyEvent()
+    })
+    await flush()
+    await flush()
+
+    // Вкладка и фильтры — ввод пользователя: событие их не сбрасывает.
+    expect(byTestId(container, 'addons-instance-plrun_1')).toBeTruthy()
   })
 })

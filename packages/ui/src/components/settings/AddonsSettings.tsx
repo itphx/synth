@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
@@ -6,6 +6,7 @@ import { confirm } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/formatDate'
 import { useAuthStore } from '@/stores/authStore'
+import { useAddonsStore } from '@/stores/addonsStore'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
@@ -168,6 +169,27 @@ export function AddonsSettings() {
   useEffect(() => {
     void loadTemplates()
   }, [loadTemplates])
+
+  /**
+   * Реестр пакетов изменился на сервере (событие шины `packs.updated`,
+   * ADR-086 §5): пакет установлен, одобрен или снят в другом клиенте, соседней
+   * вкладке либо из CLI.
+   *
+   * Перечитываем реестр установок **и** определения пайплайнов: снятие
+   * установки удаляет все принесённые пакетом артефакты, поэтому меняется и
+   * состав пайплайнов (а установка в карантине — состав ожидающих одобрения).
+   *
+   * Открытая вкладка пайплайнов и фильтры прогонов — ввод пользователя, они не
+   * сбрасываются. Первый рендер пропускается (грузят эффекты выше).
+   */
+  const packsRevision = useAddonsStore((s) => s.revision)
+  const loadedPacksRevisionRef = useRef(packsRevision)
+  useEffect(() => {
+    if (loadedPacksRevisionRef.current === packsRevision) return
+    loadedPacksRevisionRef.current = packsRevision
+    void loadPacks()
+    void loadPipelines()
+  }, [packsRevision, loadPacks, loadPipelines])
 
   /** Одобрение пакета: фактическая установка артефактов (только ADMIN). */
   const handleApprove = useCallback(
