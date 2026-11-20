@@ -142,6 +142,10 @@ export function createBackendListen(deps: BackendListenDeps) {
         // Hono-контекста нет, поэтому service-key распознаётся по синтетическому
         // id `service:<keyId>` (его ставит резолвер `getCurrentUser`); ADMIN/LEAD —
         // сквозной обзор. Обычный USER получает только свои сессии.
+        //
+        // Инстансный канал (`INSTANCE_EVENT_CHANNEL`) на `allSessions` не завязан:
+        // обычного клиента на него подписывает `EventHub` с фильтром
+        // «пользовательских» типов (`events/instance-events.ts`).
         const allSessions =
           user.id.startsWith('service:') || auth.hasRole({ get: () => user }, 'ADMIN', 'LEAD');
 

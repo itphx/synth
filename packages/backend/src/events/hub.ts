@@ -1,7 +1,8 @@
-import { extractChildSessionId } from '@itphx/synth-core';
+import { extractChildSessionId, INSTANCE_EVENT_CHANNEL } from '@itphx/synth-core';
 import type { EventBus, ProjectRepository } from '@itphx/synth-core';
 import type { BusEvent } from '@itphx/synth-shared';
 import type { SessionManager } from '@itphx/synth-core';
+import { isUserFacingInstanceEvent } from './instance-events.js';
 import { listVisibleSessions } from './visible-session-ids.js';
 
 export interface EventClient {
@@ -32,6 +33,12 @@ const ALL_SESSIONS_KEY = '*';
 export class EventHub {
   private clients = new Map<string, EventClient[]>();
   private clientSubs = new WeakMap<EventClient, Map<string, () => void>>();
+  /**
+   * Подписка клиента на инстансный канал (`INSTANCE_EVENT_CHANNEL`) — отдельно
+   * от per-session подписок: у канала нет сессии, поэтому он не участвует ни
+   * в пересчёте подписок (`resyncClient`), ни в догоне (`replayForClient`).
+   */
+  private instanceSubs = new WeakMap<EventClient, () => void>();
 
   constructor(
     private eventBus: EventBus,
@@ -53,11 +60,17 @@ export class EventHub {
     // Watch-all (service-key watcher / ADMIN/LEAD): глобальная подписка на все
     // события шины. Per-session подписок нет — владельца сессий у машинного
     // аккаунта нет, а обзорные роли видят чужие сессии; дубли не нужны.
+    // Инстансный канал такому клиенту тоже не нужен отдельной подпиской: он
+    // приходит тем же `subscribeAll` целиком (включая административные типы).
     if (client.allSessions) {
       this._subscribeClientToAll(client);
       console.log(`[EventHub] Register client (all sessions): user=${client.username} clients=${arr.length}`);
       return;
     }
+
+    // Обычный пользователь: инстансный канал — только «пользовательские» типы
+    // (реестры UI и прогоны пайплайнов), см. `instance-events.ts`.
+    this._subscribeClientToInstance(client);
 
     // Нужны id сессий, видимых пользователю: свои + сессии всех проектов, где
     // у него есть роль (PROP-133 §6, инвариант 18). Лёгкая выборка (без истории
@@ -81,6 +94,7 @@ export class EventHub {
     if (arr.length === 0) this.clients.delete(client.userId);
 
     this._unsubscribeClientFromAll(client);
+    this._unsubscribeClientFromInstance(client);
     const remaining = arr.length;
     console.log(`[EventHub] Unregister client: user=${client.username} remaining=${remaining}`);
   }
@@ -135,6 +149,7 @@ export class EventHub {
     for (const clients of this.clients.values()) {
       for (const client of clients) {
         this._unsubscribeClientFromAll(client);
+        this._unsubscribeClientFromInstance(client);
       }
     }
     this.clients.clear();
@@ -185,6 +200,44 @@ export class EventHub {
   }
 
   /**
+   * ADR-101/ADR-118: подписка обычного клиента на инстансный канал шины
+   * (`INSTANCE_EVENT_CHANNEL`, не сессионный).
+   *
+   * Доставляются только «пользовательские» типы (`USER_FACING_INSTANCE_EVENTS`,
+   * `instance-events.ts`): реестры агентов/MCP/скиллов/моделей и прогоны
+   * пайплайнов — то, что пользователь видит в UI. Административные инстансные
+   * события (аудит, обслуживание инстанса) ему не уходят — их видят watch-all
+   * клиенты (`ADMIN`/`LEAD`/service-key) через `subscribeAll`.
+   *
+   * Права на **сессии** это не меняет: владельческая изоляция остаётся в
+   * per-session подписках, инстансный канал сессий не содержит.
+   */
+  private _subscribeClientToInstance(client: EventClient): void {
+    // Watch-all клиент покрыт глобальной подпиской — вторая дала бы дубли.
+    if (client.allSessions) return;
+    if (this.instanceSubs.has(client)) return;
+
+    // `userId` — чтобы адресное инстансное событие (если появится) ушло
+    // только своему получателю: без него шина отбросила бы его как «чужое».
+    const unsub = this.eventBus.subscribe(
+      INSTANCE_EVENT_CHANNEL,
+      (event: BusEvent) => {
+        if (!isUserFacingInstanceEvent(event.type)) return;
+        this._deliver(client, event);
+      },
+      { userId: client.userId },
+    );
+    this.instanceSubs.set(client, unsub);
+  }
+
+  private _unsubscribeClientFromInstance(client: EventClient): void {
+    const unsub = this.instanceSubs.get(client);
+    if (!unsub) return;
+    unsub();
+    this.instanceSubs.delete(client);
+  }
+
+  /**
    * ADR-118 §4: адресная доставка.
    *
    * Событие с `recipient` получает **только** клиент с совпадающим `userId`
@@ -207,16 +260,25 @@ export class EventHub {
    * сессий; обычный клиент — только своих. Номер события глобальный и
    * монотонный в пределах инстанса, поэтому порядок между сессиями — точный
    * (по номеру).
+   *
+   * **Обычный клиент без видимых сессий получает пустой догон.** Раньше в
+   * этом случае отдавался журнал **всех** сессий (`journalSince`): пользователь
+   * без единой доступной сессии (новый аккаунт, снятый доступ) получал при
+   * реконнекте чужие кадры — включая `part.delta` (текст ответа),
+   * `message.enqueued` (снимок реплики) и `stream.error`. Право на полный журнал
+   * есть только у watch-all подписки (`ALL_SESSIONS_KEY`) — она и является
+   * признаком обзорного клиента. Матрица доставки — `events/instance-delivery.test.ts`,
+   * `app/instance-events-transport.test.ts`.
    */
   replayForClient(client: EventClient, afterSeq: number): BusEvent[] {
     const subs = this.clientSubs.get(client);
     if (!subs) return [];
-    const sessionIds = [...subs.keys()].filter((id) => id !== ALL_SESSIONS_KEY);
-    if (sessionIds.length === 0) {
+    // Полный журнал — только watch-all клиенту (обзорные роли/service-key).
+    if (subs.has(ALL_SESSIONS_KEY)) {
       return this.eventBus.journalSince(afterSeq);
     }
     const out: BusEvent[] = [];
-    for (const sessionId of sessionIds) {
+    for (const sessionId of subs.keys()) {
       out.push(...this.eventBus.since(sessionId, afterSeq));
     }
     out.sort((a, b) => (a.eventSeq ?? 0) - (b.eventSeq ?? 0));

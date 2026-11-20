@@ -56,6 +56,12 @@ export function registerEventsSse(app: Hono, deps: EventsSseDeps): void {
     // сессий (паритет со standalone-core `subscribeAll`), обычный пользователь —
     // только своих. Без этого синтетический `service:<keyId>` шлюза не владеет
     // сессиями → подписок 0 → ответы агента не доходят до Telegram.
+    //
+    // Инстансный канал (`INSTANCE_EVENT_CHANNEL`) — отдельное правило и **не**
+    // зависит от `allSessions`: обычного клиента на него подписывает `EventHub`
+    // с фильтром «пользовательских» типов (`events/instance-events.ts`), а
+    // watch-all клиент получает канал глобальной подпиской. Здесь своих
+    // фильтров не заводить — иначе WS и SSE разойдутся.
     const allSessions = Boolean(getServiceCredential(c)) || auth.hasRole(c as never, 'ADMIN', 'LEAD');
 
     return new Response(
