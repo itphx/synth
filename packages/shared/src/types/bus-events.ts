@@ -137,6 +137,12 @@ export type EventType =
   | 'pipeline.run.failed'
   // ADR-101: выход пайплайна вида `gateway` — публикация наружу (ADR-052/ADR-087).
   | 'pipeline.completed'
+  // Реестр агентов инстанса изменился (создан/обновлён/удалён/включён-выключен;
+  // HTTP-роуты и тулы `synth_agent_*`). Инстансный канал шины (ADR-118);
+  // реагируют админ-панель «Агенты» и селекты агента (чат/настройки/аналитика):
+  // перечитывают состав без перезагрузки страницы. Payload — только id и вид
+  // мутации: текст роли и capabilities тяжёлые, в событие не попадают.
+  | 'agents.updated'
   // Этап 1 roadmap 0.13 (блок 1.3): «вопрос пользователю». Префикс
   // `user_question.*` — намеренно НЕ `question.*`: `question.asked` уже занят
   // смыслом «очередь зависла» (см. выше).
@@ -294,6 +300,33 @@ export type MessageMentionedEventData = {
   user_ids: string[];
   /** id сессии (канал события). */
   session_id: string;
+};
+
+/**
+ * Вид мутации реестра агентов инстанса — поле `action` события
+ * `agents.updated`.
+ *
+ * - `save` — создание/обновление агента (`POST /agents`, `synth_agent_save`);
+ * - `import` — импорт из opencode-подобного markdown (`synth_agent_import`);
+ * - `delete` — удалён custom-агент (`DELETE /agents/:id`, `synth_agent_delete`);
+ * - `reset` — снят override встроенного агента (builtin восстановлен);
+ * - `enable` — переключён признак `enabled` (`PATCH /agents/:id/enabled`,
+ *   `synth_agent_enable`).
+ */
+export type AgentChangeAction = 'save' | 'delete' | 'enable' | 'import' | 'reset';
+
+/**
+ * Payload события `agents.updated` — реестр агентов инстанса изменился.
+ *
+ * Минимальный по построению: id агента и вид мутации. Определение агента
+ * (capabilities, роль, модель) в событие не кладётся — клиент перечитывает
+ * список своим обычным запросом (`GET /agents`, `GET /agents/all`).
+ */
+export type AgentsUpdatedEventData = {
+  /** Агент, которого коснулась мутация (не задан — изменение реестра целиком). */
+  id?: string;
+  /** Что произошло. */
+  action: AgentChangeAction;
 };
 
 /** Payload события `session.messages.cleared` — история очищена, кроме закреплённых. */

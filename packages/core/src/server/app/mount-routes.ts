@@ -62,6 +62,9 @@ import {
   // ADR-099: приёмник журнала внешних запросов (scope `providers` и др.) —
   // тот же sink, что регистрируется в `configureEgressRuntime`.
   currentEgressLog,
+  // Реестр агентов инстанса изменился — событие `agents.updated` в инстансный
+  // канал шины (общий шов с тулами `synth_agent_*`, см. `events/agents-events.ts`).
+  agentsChangedPublisher,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -462,6 +465,9 @@ export function mountStandaloneRoutes(
     ...(executionProfiles ? { executionProfileCatalog: executionProfiles } : {}),
     // PROP-135 (браузерный контур): каталог браузерных профилей агента.
     ...(browserProfiles ? { browserProfileCatalog: browserProfiles } : {}),
+    // Мутация реестра агентов → `agents.updated` (инстансный канал): админ-панель
+    // «Агенты» и селекты агента перечитывают состав без перезагрузки страницы.
+    onAgentsChanged: agentsChangedPublisher(eventBus),
   }));
 
   // FS (ADR-075: гарантированный корень workspace + мягкая политика путей вне root)

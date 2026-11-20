@@ -11,7 +11,10 @@
  * - импорт opencode-подобного markdown (frontmatter → определение, `permissions` →
  *   capabilities, `action: subagent` + `effect: deny` → без `task`, `dry_run`);
  * - ADMIN-гейт: роль `ADMIN`, локальный владелец standalone, отказы LEAD/USER и
- *   отсутствие принципала.
+ *   отсутствие принципала;
+ * - событие шины `agents.updated` (инстансный канал) на всех write-тулах —
+ *   панель и селекты агента в UI перечитывают состав без перезагрузки страницы;
+ *   без `eventBus` в `extra` тулы работают как раньше (событий нет, падений нет).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ToolCapability, type AgentDefinition, type ToolContext } from '@itphx/synth-shared';
@@ -101,6 +104,21 @@ function makeAgentRegistry(): FakeAgentRegistry {
 const STANDALONE_META = { mode: 'standalone' } as unknown as InstanceRuntimeMeta;
 const MANAGED_META = { mode: 'managed' } as unknown as InstanceRuntimeMeta;
 
+/** Записанная публикация фейковой шины (канал всегда инстансный). */
+interface PublishedEvent {
+  type: string;
+  data: Record<string, unknown>;
+}
+
+/** Фейковая шина: только `publishInstance` (контракт `InstanceEventPublisherLike`). */
+function makeEventBus(): { publishInstance: ReturnType<typeof vi.fn>; events: PublishedEvent[] } {
+  const events: PublishedEvent[] = [];
+  const publishInstance = vi.fn((type: string, data: Record<string, unknown> = {}) => {
+    events.push({ type, data });
+  });
+  return { publishInstance, events };
+}
+
 const ADMIN_PRINCIPAL: ToolPrincipal = { userId: 'u1', roles: ['ADMIN'] };
 
 function makeCtx(opts: {
@@ -110,6 +128,8 @@ function makeCtx(opts: {
   /** `null` — принципала нет вовсе (fail-closed). */
   principal?: ToolPrincipal | null;
   instanceMeta?: InstanceRuntimeMeta;
+  /** Шина событий: без неё — прежнее поведение (без публикаций). */
+  eventBus?: { publishInstance: ReturnType<typeof vi.fn> };
 } = {}): ToolContext {
   const principal = opts.principal === undefined ? ADMIN_PRINCIPAL : opts.principal;
   return {
@@ -123,6 +143,7 @@ function makeCtx(opts: {
       agentRegistry: opts.registry as unknown as AgentRegistry,
       contextConfig: opts.roleFiles as unknown as Pick<ContextFileRepository, 'getFile' | 'saveFile'>,
       instanceMeta: opts.instanceMeta,
+      ...(opts.eventBus ? { eventBus: opts.eventBus } : {}),
       ...(principal ? { principal } : {}),
     },
   } as unknown as ToolContext;
@@ -312,6 +333,152 @@ describe('synth_agent_save / enable / delete (CRUD-цикл)', () => {
     expect(reset.metadata).toMatchObject({ id: 'admin', status: 'reset', is_builtin: true });
     expect(store.docs.has('admin')).toBe(false);
     expect(registry.register).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'admin' }));
+  });
+});
+
+describe('событие agents.updated из write-тулов', () => {
+  let store: FakeAgentStore;
+  let roleFiles: FakeRoleFiles;
+  let registry: FakeAgentRegistry;
+  let bus: ReturnType<typeof makeEventBus>;
+
+  beforeEach(() => {
+    store = makeStore();
+    roleFiles = makeRoleFiles();
+    registry = makeAgentRegistry();
+    bus = makeEventBus();
+  });
+
+  const ctx = () => makeCtx({ store, roleFiles, registry, eventBus: bus });
+
+  it('synth_agent_save (создание) публикует { id, action: save }', async () => {
+    const result = await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent' }, ctx());
+
+    expect(result.isError).toBeUndefined();
+    expect(bus.publishInstance).toHaveBeenCalledTimes(1);
+    expect(bus.events).toEqual([
+      { type: 'agents.updated', data: { action: 'save', id: 'my-agent' } },
+    ]);
+  });
+
+  it('повторный synth_agent_save тем же содержимым событие не публикует', async () => {
+    await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent' }, ctx());
+    bus.events.length = 0;
+    bus.publishInstance.mockClear();
+
+    const again = await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent' }, ctx());
+    expect(again.isError).toBeUndefined();
+    expect(again.metadata).toMatchObject({ created: false });
+    expect(bus.publishInstance).not.toHaveBeenCalled();
+  });
+
+  it('изменение определения публикует событие повторно', async () => {
+    await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent' }, ctx());
+    bus.events.length = 0;
+
+    await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent v2' }, ctx());
+    expect(bus.events).toEqual([
+      { type: 'agents.updated', data: { action: 'save', id: 'my-agent' } },
+    ]);
+  });
+
+  it('правка только роли (определение без изменений) — тоже событие', async () => {
+    await synthAgentSaveTool.execute(
+      { id: 'my-agent', display_name: 'My agent', role_prompt: 'Первая роль.' },
+      ctx(),
+    );
+    bus.events.length = 0;
+
+    await synthAgentSaveTool.execute(
+      { id: 'my-agent', display_name: 'My agent', role_prompt: 'Вторая роль.' },
+      ctx(),
+    );
+    expect(bus.events).toEqual([
+      { type: 'agents.updated', data: { action: 'save', id: 'my-agent' } },
+    ]);
+  });
+
+  it('synth_agent_delete: custom → delete, встроенный override → reset', async () => {
+    await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent' }, ctx());
+    await synthAgentSaveTool.execute({ id: 'admin', display_name: 'Админ инстанса' }, ctx());
+    bus.events.length = 0;
+
+    await synthAgentDeleteTool.execute({ id: 'my-agent' }, ctx());
+    await synthAgentDeleteTool.execute({ id: 'admin' }, ctx());
+    expect(bus.events).toEqual([
+      { type: 'agents.updated', data: { action: 'delete', id: 'my-agent' } },
+      { type: 'agents.updated', data: { action: 'reset', id: 'admin' } },
+    ]);
+  });
+
+  it('synth_agent_enable публикует enable только при реальной смене', async () => {
+    await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent' }, ctx());
+    bus.events.length = 0;
+
+    // Тот же флаг (true) — ничего не изменилось.
+    await synthAgentEnableTool.execute({ id: 'my-agent', enabled: true }, ctx());
+    expect(bus.events).toEqual([]);
+
+    await synthAgentEnableTool.execute({ id: 'my-agent', enabled: false }, ctx());
+    expect(bus.events).toEqual([
+      { type: 'agents.updated', data: { action: 'enable', id: 'my-agent' } },
+    ]);
+  });
+
+  it('synth_agent_import публикует { id, action: import }', async () => {
+    const result = await synthAgentImportTool.execute({
+      content: [
+        '---',
+        'id: imported-agent',
+        'description: Imported agent',
+        '---',
+        '',
+        'Ты импортированный агент.',
+      ].join('\n'),
+    }, ctx());
+
+    expect(result.isError).toBeUndefined();
+    expect(bus.events).toEqual([
+      { type: 'agents.updated', data: { action: 'import', id: 'imported-agent' } },
+    ]);
+  });
+
+  it('ошибки валидации и not_found событие не публикуют', async () => {
+    const invalid = await synthAgentSaveTool.execute({ id: 'Bad ID' }, ctx());
+    expect(invalid.isError).toBe(true);
+
+    const notFound = await synthAgentEnableTool.execute({ id: 'nope', enabled: false }, ctx());
+    expect(notFound.isError).toBe(true);
+
+    const noOverride = await synthAgentDeleteTool.execute({ id: 'admin' }, ctx());
+    expect(noOverride.isError).toBe(true);
+
+    expect(bus.publishInstance).not.toHaveBeenCalled();
+  });
+});
+
+describe('write-тулы без eventBus в extra (прежнее поведение)', () => {
+  it('save/delete/enable/import работают и не падают', async () => {
+    const store = makeStore();
+    const roleFiles = makeRoleFiles();
+    const registry = makeAgentRegistry();
+    const ctx = () => makeCtx({ store, roleFiles, registry });
+
+    const saved = await synthAgentSaveTool.execute({ id: 'my-agent', display_name: 'My agent' }, ctx());
+    expect(saved.isError).toBeUndefined();
+    expect(store.docs.has('my-agent')).toBe(true);
+
+    const disabled = await synthAgentEnableTool.execute({ id: 'my-agent', enabled: false }, ctx());
+    expect(disabled.isError).toBeUndefined();
+
+    const imported = await synthAgentImportTool.execute({
+      content: '---\nid: no-bus-agent\n---\n\nРоль.\n',
+    }, ctx());
+    expect(imported.isError).toBeUndefined();
+
+    const deleted = await synthAgentDeleteTool.execute({ id: 'my-agent' }, ctx());
+    expect(deleted.isError).toBeUndefined();
+    expect(store.docs.has('my-agent')).toBe(false);
   });
 });
 

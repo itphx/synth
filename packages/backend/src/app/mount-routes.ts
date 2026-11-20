@@ -73,6 +73,9 @@ import {
   browserProfileCatalog,
   // ADR-099: env дочернего npm (CA `security.tls` + прокси-маршрут реестра).
   resolveNpmInstallEnvironment,
+  // Реестр агентов инстанса изменился — `agents.updated` в инстансный канал шины
+  // (тот же шов, что у тулов `synth_agent_*`, `events/agents-events.ts`).
+  agentsChangedPublisher,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -460,7 +463,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // ADR-126/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
   // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
   // PROP-135 Ф6a: каталог профилей — проверка `executor_profile`/`allowed_profiles`.
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig, executionProfiles, browserProfiles));
+  // `onAgentsChanged`: мутация реестра → `agents.updated` (инстансный канал) —
+  // админ-панель «Агенты» и селекты агента перечитывают состав без перезагрузки.
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig, executionProfiles, browserProfiles, agentsChangedPublisher(eventBus)));
 
   // Context routes (файлы контекста/промптов инстанца; админ-мутации) — core-фабрика.
   app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig, {

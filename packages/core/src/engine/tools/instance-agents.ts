@@ -44,7 +44,9 @@ import type { DocumentRepository } from '../../storage/ports/document-repository
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { InstanceRuntimeMeta } from '../instance/meta.js';
-import { loadSystemAgentDefinitions, normalizeAgentModes } from '../agents/index.js';
+import { loadSystemAgentDefinitions, normalizeAgentModes, isAgentDefinitionChanged } from '../agents/index.js';
+import { publishAgentsUpdated } from '../../events/agents-events.js';
+import type { InstanceEventPublisherLike } from '../../events/agents-events.js';
 import { resolveExecutionPort } from '../../execution/tool-port.js';
 import { escapesWorkspace, FS_UNAVAILABLE_TEXT } from '../../execution/fs-perimeter.js';
 import { resolvePath, toolRoots } from './path-utils.js';
@@ -64,6 +66,13 @@ export interface InstanceAgentsExtra {
   contextConfig?: Pick<ContextFileRepository, 'getFile' | 'saveFile'>;
   /** Снимок метаданных инстанса (режим — для ADMIN-паритета standalone). */
   instanceMeta?: InstanceRuntimeMeta;
+  /**
+   * Шина событий — публикация `agents.updated` (инстансный канал, ADR-118)
+   * после успешной мутации реестра. Тот же шов, что у HTTP-роутов: без него
+   * UI узнавал бы о правке из чата только после перезагрузки страницы.
+   * Не задана — событие не публикуется (тесты/сторонние потребители).
+   */
+  eventBus?: InstanceEventPublisherLike;
 }
 
 /** Пределы ответа (краткость для модели). */
@@ -212,11 +221,15 @@ type UpsertOutcome =
  * Создать/обновить агента: запись в стор + ролевой промпт (если он передан) +
  * регистрация в реестре. Семантика merge — как у `POST /api/v2/agents`:
  * `body → existing → builtin`.
+ *
+ * `action` — вид мутации для события `agents.updated` (`save`/`import`):
+ * импорт — тоже upsert, но UI различает его в payload.
  */
 async function upsertAgent(
   extra: InstanceAgentsExtra,
   params: AgentSaveParams,
   rolePrompt: string | undefined,
+  action: 'save' | 'import',
 ): Promise<UpsertOutcome> {
   const store = extra.agentStore;
   if (!store) return { ok: false, result: fail('agent.deps_unavailable', { tool: 'synth_agent_save' }) };
@@ -294,6 +307,15 @@ async function upsertAgent(
 
   await store.save(params.id, agent);
   extra.agentRegistry?.register(agent);
+  // Событие — только когда определение реально изменилось (или переписан файл
+  // роли): повторное сохранение тем же содержимым сеть UI не дёргает.
+  // `before` — состояние реестра до записи (override поверх встроенного).
+  const before: AgentDefinition | undefined = existing
+    ? { ...builtin, ...existing, isOverridden: true }
+    : builtin;
+  if (isAgentDefinitionChanged(before, agent) || role?.replaced === true) {
+    publishAgentsUpdated(extra.eventBus, { id: agent.id, action });
+  }
   return { ok: true, agent, created: existing === undefined, role };
 }
 
@@ -494,7 +516,7 @@ export const synthAgentSaveTool: ToolDefinition = {
 
     let outcome: UpsertOutcome;
     try {
-      outcome = await upsertAgent(getExtra(ctx), { ...params, id }, params.role_prompt);
+      outcome = await upsertAgent(getExtra(ctx), { ...params, id }, params.role_prompt, 'save');
     } catch (err) {
       return fail('agent.save_failed', { id, error: errorText(err) });
     }
@@ -549,6 +571,7 @@ export const synthAgentDeleteTool: ToolDefinition = {
       if (!exists) return fail('agent.override_not_found', { id });
       await store.delete(id);
       extra.agentRegistry?.register(builtin);
+      publishAgentsUpdated(extra.eventBus, { id, action: 'reset' });
       return {
         content: sm('agent.delete.reset', { id }),
         metadata: {
@@ -563,6 +586,7 @@ export const synthAgentDeleteTool: ToolDefinition = {
     if (!exists) return fail('agent.not_found', { id, available: availableIds(state) || '—' });
     await store.delete(id);
     extra.agentRegistry?.unregister(id);
+    publishAgentsUpdated(extra.eventBus, { id, action: 'delete' });
     return {
       content: sm('agent.delete.deleted', { id }),
       metadata: {
@@ -618,6 +642,10 @@ export const synthAgentEnableTool: ToolDefinition = {
       : { ...builtin!, enabled: params.enabled, isOverridden: true };
     await store.save(params.id, agent);
     extra.agentRegistry?.register(agent);
+    // Событие — только при реальной смене признака (идемпотентный вызов не шумит).
+    if ((existing?.enabled ?? builtin!.enabled) !== params.enabled) {
+      publishAgentsUpdated(extra.eventBus, { id: params.id, action: 'enable' });
+    }
     return {
       content: sm('agent.enable.ok', { id: params.id, enabled: String(params.enabled) }),
       metadata: {
@@ -845,7 +873,7 @@ export const synthAgentImportTool: ToolDefinition = {
 
     let outcome: UpsertOutcome;
     try {
-      outcome = await upsertAgent(extra, plan.params, plan.rolePrompt);
+      outcome = await upsertAgent(extra, plan.params, plan.rolePrompt, 'import');
     } catch (err) {
       return fail('agent.save_failed', { id: plan.params.id, error: errorText(err) });
     }

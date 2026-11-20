@@ -9,8 +9,10 @@ import {
   loadSystemAgentDefinitions,
   normalizeAgentModes,
   DEFAULT_AGENT_ID,
+  isAgentDefinitionChanged,
 } from '../../engine/agents/index.js';
 import type { AgentRegistry } from '../../engine/agents/index.js';
+import type { AgentsChangedHook } from '../../events/agents-events.js';
 import { requireScopeOrAdminRole } from '../service-scope.js';
 import type { ScopeGuardFactory } from '../service-scope.js';
 import type { ExecutionProfileCatalog } from '../../execution/profile-binding.js';
@@ -93,6 +95,18 @@ export interface AgentRoutesOptions {
    * существования пропускается (inline/тесты).
    */
   browserProfileCatalog?: ExecutionProfileCatalog;
+  /**
+   * Реестр агентов изменился: создан/обновлён (`save`), удалён/сброшен override
+   * (`delete`/`reset`), переключён `enabled` (`enable`).
+   *
+   * Вызывается **только после успешной записи** и только если запись реально
+   * изменилась (сравнение `isAgentDefinitionChanged`): валидация с ответом 400
+   * и повторное сохранение без правок событие не порождают.
+   *
+   * Точка сборки прокидывает сюда `publishAgentsUpdated` (`events/agents-events.ts`).
+   * Не задан — фабрика работает как раньше (тесты, сторонние потребители).
+   */
+  onAgentsChanged?: AgentsChangedHook;
 }
 
 const DEFAULT_MESSAGES: AgentRouteMessages = {
@@ -569,8 +583,20 @@ export function createAgentRoutes(
       role = written.result;
     }
 
+    // Состояние реестра до записи (`before`): запись стора поверх встроенного
+    // определения либо само встроенное — нужно для сравнения «было/стало»
+    // перед публикацией события.
+    const before = existing ? { ...builtin, ...existing } : builtin;
+
     await agentStore.save(id, agent);
     agentRegistry?.register(agent);
+    // Реестр изменился → инстансное событие `agents.updated` (админ-панель и
+    // селекты агента перечитывают состав без перезагрузки страницы).
+    // Правка **только** роли (агент без изменений) — тоже изменение реестра:
+    // `role.replaced` = содержимое файла роли реально другое.
+    if (isAgentDefinitionChanged(before, agent) || role?.replaced === true) {
+      opts?.onAgentsChanged?.({ id, action: 'save' });
+    }
     return c.json(role ? { ...agent, role } : agent, existing ? 200 : 201);
   });
 
@@ -597,6 +623,8 @@ export function createAgentRoutes(
         await agentStore.delete(id);
         const builtin = BUILTIN_AGENTS.find((a) => a.id === id);
         if (builtin) agentRegistry?.register(builtin);
+        // Override снят — встроенное определение восстановлено (тоже мутация).
+        opts?.onAgentsChanged?.({ id, action: 'reset' });
         return c.json({ status: 'reset' });
       }
       return c.json({ error: { code: 'NOT_FOUND', message: messages.agentOverrideNotFound(c) } }, 404);
@@ -605,6 +633,7 @@ export function createAgentRoutes(
     if (exists) {
       await agentStore.delete(id);
       agentRegistry?.unregister(id);
+      opts?.onAgentsChanged?.({ id, action: 'delete' });
       return c.json({ status: 'deleted' });
     }
     return c.json({ error: { code: 'NOT_FOUND', message: messages.agentNotFound(c) } }, 404);
@@ -628,6 +657,11 @@ export function createAgentRoutes(
       : { ...builtin!, enabled, isOverridden: true };
     await agentStore.save(id, agent);
     agentRegistry?.register(agent);
+    // Событие — только при реальной смене признака: PATCH тем же значением
+    // ничего не меняет (лишний `GET /agents/all` в открытых админках — шум).
+    if ((existing?.enabled ?? builtin!.enabled) !== enabled) {
+      opts?.onAgentsChanged?.({ id, action: 'enable' });
+    }
     return c.json({ id, enabled });
   });
 

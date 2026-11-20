@@ -3,7 +3,7 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { JsonStoreLike } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { createAgentRoutes as createCoreAgentRoutes } from '@itphx/synth-core';
-import type { AgentRegistry, ContextFileRepository, ExecutionProfileCatalog } from '@itphx/synth-core';
+import type { AgentRegistry, AgentsChangedHook, ContextFileRepository, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { requireAdminRoleOrScope } from '../auth/guards.js';
 import { t } from '../lib/i18n.js';
 
@@ -20,6 +20,12 @@ import { t } from '../lib/i18n.js';
  * scope `automation:install`» (зонтичный скоуп установщика пакетов
  * расширений). Guard `requireAdminRoleOrScope` учитывает и роль ADMIN в
  * service-key, и scope — прежние права не отбираются, новые добавляются.
+ *
+ * `onAgentsChanged` — реестр агентов изменился (создан/обновлён/удалён/
+ * включён-выключен). Точка сборки передаёт сюда `agentsChangedPublisher(eventBus)`:
+ * событие `agents.updated` уходит в инстансный канал шины, и админ-панель
+ * «Агенты» перечитывает состав без перезагрузки страницы. Не задан — поведение
+ * прежнее (тесты, сторонние потребители).
  */
 export function createAgentRoutes(
   kit: AuthKit,
@@ -29,6 +35,7 @@ export function createAgentRoutes(
   contextFiles?: ContextFileRepository,
   executionProfileCatalog?: ExecutionProfileCatalog,
   browserProfileCatalog?: ExecutionProfileCatalog,
+  onAgentsChanged?: AgentsChangedHook,
 ): Hono {
   const app = new Hono();
 
@@ -46,6 +53,8 @@ export function createAgentRoutes(
       ...(executionProfileCatalog ? { executionProfileCatalog } : {}),
       // PROP-135 (браузерный контур): каталог браузерных профилей агента.
       ...(browserProfileCatalog ? { browserProfileCatalog } : {}),
+      // Событие `agents.updated` (инстансный канал шины) после мутации реестра.
+      ...(onAgentsChanged ? { onAgentsChanged } : {}),
       messages: {
         idRequired: (c) => t('errors.validation.idRequired', undefined, c),
         invalidAgentId: (c) => t('errors.validation.invalidAgentId', undefined, c),

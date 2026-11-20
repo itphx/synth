@@ -266,6 +266,24 @@ export const AgentsPanel = () => {
 
   useEffect(() => { load(); loadMeta(); loadDefaultAgent() }, [])
 
+  /**
+   * Реестр агентов изменился на сервере (событие шины `agents.updated`):
+   * перечитываем список, чтобы панель не показывала устаревший состав до
+   * перезагрузки страницы (правка из чата или из другой вкладки).
+   *
+   * Перечитывание меняет только `agents`: незаконченная форма (`form`,
+   * `savedForm`, `creating`, `expanded`) не сбрасывается. Панель смонтирована
+   * только когда открыта вкладка «Агенты» — закрытая панель сеть не дёргает
+   * (первый рендер пропускается: список грузит эффект выше).
+   */
+  const agentsRevision = useAgentsStore((s) => s.revision)
+  const loadedRevisionRef = useRef(agentsRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === agentsRevision) return
+    loadedRevisionRef.current = agentsRevision
+    void load()
+  }, [agentsRevision])
+
   const handleCreate = () => {
     setForm(emptyForm())
     setSavedForm(emptyForm())

@@ -64,6 +64,14 @@ export {
   parseMessageModelParam, isSupportedMessageModelParam, parseSinceParam,
 } from './events/bus.js';
 export type { PublishOptions, SubscribeOptions, SubscribeAllOptions } from './events/bus.js';
+// Реестр агентов инстанса: единое событие `agents.updated` (инстансный канал) —
+// общий шов для HTTP-роутов и тулов `synth_agent_*`.
+export { publishAgentsUpdated, agentsChangedPublisher } from './events/agents-events.js';
+export type {
+  AgentChangedInfo,
+  AgentsChangedHook,
+  InstanceEventPublisherLike,
+} from './events/agents-events.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).

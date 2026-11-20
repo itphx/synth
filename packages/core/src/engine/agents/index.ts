@@ -1,5 +1,8 @@
 export { AgentRegistry } from './registry.js';
 export { isModeApplicable } from './mode.js';
+// Сравнение «было/стало» для события `agents.updated` — общее у HTTP-роутов
+// (`createAgentRoutes`) и тулов `synth_agent_*`.
+export { agentDefinitionKey, isAgentDefinitionChanged } from './changes.js';
 export {
   LEGACY_AGENT_ROLE_ALIASES,
   resolveAgentRoleAlias,

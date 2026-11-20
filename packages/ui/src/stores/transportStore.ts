@@ -18,6 +18,7 @@ import { useTerminalsStore } from './terminalsStore'
 import { useTimersStore } from './timersStore'
 import { useProjectLogStore } from './projectLogStore'
 import { useInstanceCapabilitiesStore } from './instanceCapabilitiesStore'
+import { useAgentsStore } from './agentsStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
 import { normalizeLiveToolPart, partText, toLivePart, turnHasContent } from '@/lib/messageParts'
@@ -1842,6 +1843,17 @@ export function createDispatcher(): EventDispatcher {
       if (sid && (payload.action === 'attached' || payload.action === 'detached')) {
         refreshSessionFromApi(sid)
       }
+      return
+    }
+
+    // Реестр агентов инстанса изменился (`agents.updated`, инстансный канал
+    // шины): агент — ресурс инстанса, а не сессии, поэтому `sid` у события нет
+    // — разбираем ДО проверки `sid`. Стор перечитывает состав и поднимает
+    // `revision`: селекты агента в чате/настройках и админ-панель «Агенты»
+    // обновляются без перезагрузки страницы (payload `{ id, action }` для
+    // самого перечитывания не нужен — сигнал говорит «перечитай»).
+    if (type === 'agents.updated') {
+      useAgentsStore.getState().applyEvent()
       return
     }
 
