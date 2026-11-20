@@ -17,6 +17,11 @@ import {
 import { useUIStore } from '@/stores/useUIStore'
 import { useBackClose } from '@/hooks/useBackClose'
 import { useI18n } from '@/lib/i18n'
+import {
+  readChatScroll,
+  rememberChatScroll,
+  type ChatScrollState,
+} from '@/lib/chatScrollMemory'
 
 /**
  * Группа сообщений ленты (ADR-118 §1): **сегменты одного хода** склеиваются в
@@ -123,6 +128,23 @@ interface MessageListProps {
 
 const VIRTUALIZE_THRESHOLD = 30
 const OVERSCAN = 30
+
+/**
+ * Расстояние до низа, при котором прокрутка считается «приклеенной» к низу (px).
+ * Тот же порог, что был в `handleScroll` — вынесен, чтобы им пользовалось и
+ * восстановление позиции.
+ */
+const BOTTOM_THRESHOLD = 60
+
+/**
+ * Предел кадров, отведённых на восстановление позиции после смены сессии.
+ *
+ * Лента меряется асинхронно (виртуализатор считает высоты шагов, markdown и
+ * шрифты догружаются), поэтому позицию доводим кадрами, а не одним выстрелом;
+ * бюджет — страховка от бесконечного цикла. Дальше позицию держит обычный
+ * автоскролл вниз (если прокрутка была к нему «приклеена»).
+ */
+const SCROLL_RESTORE_MAX_FRAMES = 30
 
 /**
  * ADR-118 §1: «пузырьными» классами рисует группа-ход из нескольких сегментов —
@@ -241,9 +263,34 @@ export function MessageList({
   const containerRef = useRef<HTMLDivElement>(null)
   const chatZoneRef = useRef<HTMLDivElement>(null)
   const [btnLeft, setBtnLeft] = useState<number | null>(null)
-  const [autoScroll, setAutoScroll] = useState(true)
+  /**
+   * «Приклеен к низу» — флаг **сессии**, а не компонента: вкладки чата не
+   * размонтируются при переключении, и унаследованный от чужой ленты флаг
+   * выключал бы автоскролл вниз после возврата. Стартовое значение — из
+   * памяти сессии, дальше его ведёт восстановление позиции ниже.
+   */
+  const [autoScroll, setAutoScroll] = useState(
+    () => (sessionId ? readChatScroll(sessionId)?.atBottom : null) ?? true,
+  )
   const [showScrollBtn, setShowScrollBtn] = useState(false)
   const lastClickedRef = useRef<string | null>(null)
+  /**
+   * Последнее наблюдаемое состояние прокрутки — **синхронный** снимок для
+   * памяти сессии: запись в память троттлится кадром, и без снимка
+   * размонтирование/скрытие ленты могло потерять последний сдвиг.
+   */
+  const scrollStateRef = useRef<(ChatScrollState & { sessionId: string }) | null>(null)
+  /** Запланированная запись памяти (троттлинг по кадру). */
+  const memoryFrameRef = useRef<number | null>(null)
+  /**
+   * Идёт восстановление позиции после монтирования/смены сессии.
+   *
+   * Пока флаг поднят, автоскролл вниз не вмешивается: пассивный эффект
+   * автоскролла может быть выполнен с **устаревшим** `autoScroll` (состояние
+   * ещё от предыдущей сессии), и без этого флага он утаскивал бы ленту вниз
+   * поверх восстанавливаемой позиции.
+   */
+  const restoringRef = useRef(false)
 
   /**
    * Развёрнутый ответ агента (ключ `MessageGroup.key`, `null` — свёрнуто).
@@ -609,28 +656,196 @@ export function MessageList({
     setShowScrollBtn(false)
   }, [])
 
-  const handleScroll = useCallback(() => {
-    if (!scrollRef.current) return
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current
-    const atBottom = scrollHeight - scrollTop - clientHeight < 60
-    setAutoScroll(atBottom)
-    setShowScrollBtn(!atBottom && scrollHeight > clientHeight + 100)
+  /**
+   * Пересчитать состояние прокрутки по фактическим размерам контейнера:
+   * «приклеен к низу», кнопка «вниз», затенение краёв и — опционально — запись
+   * позиции в память сессии.
+   *
+   * Вынесено из `handleScroll`: ту же логику применяет восстановление позиции
+   * после отрисовки ленты, но без повторной записи в память (значение только что
+   * оттуда).
+   */
+  const syncScrollState = useCallback(
+    (remember = true) => {
+      const el = scrollRef.current
+      if (!el) return
+      const { scrollTop, scrollHeight, clientHeight } = el
+      const atBottom = scrollHeight - scrollTop - clientHeight < BOTTOM_THRESHOLD
+      setAutoScroll(atBottom)
+      setShowScrollBtn(!atBottom && scrollHeight > clientHeight + 100)
 
-    const hasTop = scrollTop > 1
-    const hasBottom = scrollHeight - scrollTop - clientHeight > 1
-    const el = scrollRef.current
-    if (hasTop && hasBottom) {
-      el.setAttribute('data-scroll-shadow', 'top-bottom')
-    } else if (hasTop) {
-      el.setAttribute('data-scroll-shadow', 'top')
-    } else if (hasBottom) {
-      el.setAttribute('data-scroll-shadow', 'bottom')
-    } else {
-      el.removeAttribute('data-scroll-shadow')
+      const hasTop = scrollTop > 1
+      const hasBottom = scrollHeight - scrollTop - clientHeight > 1
+      if (hasTop && hasBottom) {
+        el.setAttribute('data-scroll-shadow', 'top-bottom')
+      } else if (hasTop) {
+        el.setAttribute('data-scroll-shadow', 'top')
+      } else if (hasBottom) {
+        el.setAttribute('data-scroll-shadow', 'bottom')
+      } else {
+        el.removeAttribute('data-scroll-shadow')
+      }
+
+      if (!remember || !sessionId) return
+      // Снимок — сразу (его прочтёт размонтирование/скрытие ленты), запись — не
+      // чаще кадра: `scroll` приходит десятками событий в секунду.
+      scrollStateRef.current = { sessionId, atBottom, scrollTop }
+      if (memoryFrameRef.current != null) return
+      memoryFrameRef.current = requestAnimationFrame(() => {
+        memoryFrameRef.current = null
+        const state = scrollStateRef.current
+        if (state) rememberChatScroll(state.sessionId, state)
+      })
+    },
+    [sessionId],
+  )
+
+  const handleScroll = useCallback(() => {
+    syncScrollState(true)
+  }, [syncScrollState])
+
+  /**
+   * Память позиции прокрутки: **на сессию** (`lib/chatScrollMemory`).
+   *
+   * Вкладки чата реконсилируются без размонтирования (`CenterPanel` рендерит
+   * `<ChatTab tab={…}>` без `key`), поэтому при переходе «основная сессия →
+   * дочерняя → обратно» тот же `MessageList` получает новый `sessionId` и
+   * унаследованный `scrollTop` чужой ленты (а вместе с ним — чужой флаг
+   * `autoScroll`, из-за которого не срабатывал автоскролл вниз). Позицию
+   * прошлой сессии фиксируем, новую — восстанавливаем эффектом ниже.
+   */
+  useEffect(() => {
+    const sid = sessionId
+    return () => {
+      if (memoryFrameRef.current != null) {
+        cancelAnimationFrame(memoryFrameRef.current)
+        memoryFrameRef.current = null
+      }
+      const state = scrollStateRef.current
+      // Снимок мог остаться от прошлой сессии — чужой позиции не приписываем.
+      if (sid && state && state.sessionId === sid) {
+        rememberChatScroll(sid, state)
+      }
+      scrollStateRef.current = null
     }
-  }, [])
+  }, [sessionId])
+
+  /**
+   * Восстановление позиции прокрутки сессии — **после фактической отрисовки**
+   * ленты.
+   *
+   * Одного кадра недостаточно: при монтировании и при смене сессии высота ещё
+   * не реальная — виртуализатор считает её оценками (`estimateSize`), а
+   * сообщения могут прийти позже. Позиция доводится кадрами до стабилизации
+   * высоты и через `ResizeObserver` на контенте (догрузились сообщения,
+   * отрисовался markdown, подтянулись шрифты).
+   *
+   * Если человек был внизу (`atBottom`) — держим низ (новые сообщения
+   * продолжают прокручивать ленту обычным автоскроллом); иначе возвращаем
+   * `scrollTop` с ограничением по фактической высоте. Восстановление
+   * прекращается, как только ленту сдвинули не мы (ручная прокрутка): дальше
+   * позицией владеет человек.
+   */
+  useLayoutEffect(() => {
+    // Недописанная запись прошлой сессии уже в памяти — кадр не нужен.
+    if (memoryFrameRef.current != null) {
+      cancelAnimationFrame(memoryFrameRef.current)
+      memoryFrameRef.current = null
+    }
+    const saved = sessionId ? readChatScroll(sessionId) : null
+    // Нет памяти о сессии — прежнее поведение: лента открывается внизу.
+    setAutoScroll(saved ? saved.atBottom : true)
+    restoringRef.current = true
+
+    const target: number | null = saved && !saved.atBottom ? saved.scrollTop : null
+    let raf: number | null = null
+    let frames = 0
+    let lastHeight = -1
+    let stable = 0
+    /** Позиция, которую выставили мы сами — чужие сдвиги считаем ручными. */
+    let applied: number | null = null
+    let done = false
+    let observer: ResizeObserver | null = null
+
+    const stop = () => {
+      done = true
+      restoringRef.current = false
+      if (raf != null) {
+        cancelAnimationFrame(raf)
+        raf = null
+      }
+      observer?.disconnect()
+      observer = null
+    }
+
+    /** Есть ли у ленты реальная высота (пустая/схлопнутая — контент ещё не отрисован). */
+    const hasContent = (el: HTMLElement) => el.scrollHeight > el.clientHeight + 1
+
+    const apply = () => {
+      const el = scrollRef.current
+      if (!el) {
+        stop()
+        return
+      }
+      if (applied != null && Math.abs(el.scrollTop - applied) > 1) {
+        // Ленту сдвинули не мы (ручная прокрутка) — не мешаем.
+        stop()
+        return
+      }
+      const max = Math.max(0, el.scrollHeight - el.clientHeight)
+      const wanted = target == null ? max : Math.min(target, max)
+      if (Math.abs(el.scrollTop - wanted) > 1) el.scrollTop = wanted
+      applied = el.scrollTop
+
+      const height = el.scrollHeight
+      stable = height === lastHeight ? stable + 1 : 0
+      lastHeight = height
+      frames += 1
+      // Позиция выставлена на реальной и уже установившейся высоте — готово.
+      if (stable >= 2 && frames >= 2 && hasContent(el)) {
+        stop()
+      }
+    }
+
+    apply()
+    if (!done) {
+      const tick = () => {
+        raf = null
+        if (done) return
+        apply()
+        if (done) return
+        if (frames >= SCROLL_RESTORE_MAX_FRAMES) {
+          // Бюджет кадров исчерпан: если лента уже отрисована — восстановление
+          // закончено, иначе дальше ждём только роста высоты (`ResizeObserver`)
+          // и не крутим кадры вхолостую.
+          const node = scrollRef.current
+          if (!node || hasContent(node)) stop()
+          raf = null
+          return
+        }
+        raf = requestAnimationFrame(tick)
+      }
+      raf = requestAnimationFrame(tick)
+      // Поздний рост контента (догрузка истории, markdown, шрифты) — доводим
+      // позицию сразу по факту изменения высоты, не дожидаясь кадра.
+      const content = scrollRef.current?.firstElementChild
+      if (content && typeof ResizeObserver !== 'undefined') {
+        observer = new ResizeObserver(() => {
+          if (!done) apply()
+        })
+        observer.observe(content)
+      }
+    }
+
+    return () => {
+      stop()
+      restoringRef.current = false
+    }
+  }, [sessionId])
 
   useEffect(() => {
+    // Во время восстановления позицию держит restore-цикл (см. `restoringRef`).
+    if (restoringRef.current) return
     if (autoScroll && scrollRef.current) {
       requestAnimationFrame(() => {
         scrollToBottom(false)

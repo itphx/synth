@@ -1219,8 +1219,14 @@ export function ChatInput({
   }
 
   return (
+    // Зазор над полем ввода задаёт контейнер ритма композерной зоны
+    // (`SessionComposer`: `flex flex-col gap-2` + `pt-2`) — собственного
+    // `mt-2` здесь нет, иначе он складывался бы с `gap` и зазор до последней
+    // плашки был бы вдвое больше, чем между плашками.
+    // `mb-2` оставлен: это нижняя кромка зоны (на телефоне её переопределяет
+    // `html.device-phone .chat-composer` с учётом safe-area).
     <div
-      className={`chat-composer relative overflow-visible mx-auto mt-2 mb-2 w-4/5 ${
+      className={`chat-composer relative overflow-visible mx-auto mb-2 w-4/5 ${
         expanded ? 'flex-1 flex h-full' : 'shrink-0'
       }`}
       {...dropProps}

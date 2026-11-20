@@ -272,15 +272,18 @@ export function TerminalAskDock({ terminal, lines, onClose }: TerminalAskDockPro
 
   const hasBinding = !!terminal.sessionId
 
+  // Ритм дока — тот же `gap-2`, что и в композерной зоне чата: у выбора
+  // сессии и композера собственных вертикальных отступов нет, зазор между
+  // ними задаёт контейнер.
   return (
     <div
       ref={dockRef}
       data-testid="terminal-ask-dock"
-      className="terminal-ask-dock mx-2 mt-3 mb-2 shrink-0 max-h-[60%] overflow-y-auto"
+      className="terminal-ask-dock mx-2 mt-3 mb-2 flex shrink-0 flex-col gap-2 max-h-[60%] overflow-y-auto"
     >
       {/* Цель: привязанная сессия или выбор из сессий проекта. */}
       {!hasBinding && (
-        <div className="mb-1 flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <label className="text-[0.6875rem] text-muted-foreground" htmlFor="terminal-ask-session">
             {t('terminal.ask.session')}
           </label>

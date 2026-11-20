@@ -89,6 +89,17 @@ html.device-tablet .connection-banner {
   opacity: 0.5;
 }
 
+/* Тосты на телефоне — сверху (позицию `top-center` задаёт `useToastPlacement`,
+   см. `hooks/useToastPlacement.ts`), но не поверх шапки: верхний отступ =
+   высота шапки на мобильном `h-11` (2.75rem) + безопасная зона выреза
+   (`--synth-safe-area-top`, design-system.css) + 0.5rem зазора. Та же формула,
+   что у `.connection-banner`. Селектор по `html.device-phone` специфичнее
+   правила react-toastify в `@media (max-width: 480px)`, которое ставит
+   `top: env(safe-area-inset-top)` и кладёт тост на шапку. */
+html.device-phone .Toastify__toast-container--top-center {
+  top: calc(2.75rem + var(--synth-safe-area-top, 0px) + 0.5rem);
+}
+
 /* =============================================================
    Adaptive / mobile layout (классы device-* выставляет JS на <html>)
    Десктопная зона (≥1200px, нет классов device-phone/device-tablet)

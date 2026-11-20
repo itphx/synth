@@ -31,6 +31,7 @@ import { SubagentResumeBar, type SubagentSessionError } from './SubagentResumeBa
 import { useBackgroundHotkey } from './useBackgroundHotkey'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { useAttachmentsStore, type RestorableAttachment } from '@/stores/attachmentsStore'
 import { toQueuedMessage } from './queueMessages'
 import type { MediaPartData, Part } from '@itphx/synth-shared/types'
@@ -144,6 +145,9 @@ async function loadOlderHistoryPages(
 export function ChatTab({ tab }: ChatTabProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
+  // Текущая активная вкладка центральной панели — вход метки «просмотрено»
+  // (ниже) и признак того, что вкладка сессии реально на экране.
+  const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const messagesBySession = useChatStore(s => s.messagesBySession)
   const turnBySession = useChatStore(s => s.turnBySession)
   const retryBySession = useChatStore(s => s.retryBySession)
@@ -363,6 +367,25 @@ export function ChatTab({ tab }: ChatTabProps) {
     void restorePendingPermissions(sessionId)
     void restorePendingQuestions(sessionId)
   }, [sessionId])
+
+  /**
+   * Метка «просмотрено» (вход модели `sessionBadgeState`, ADR-118 §1).
+   *
+   * **Единственная точка** во всём UI: человек открыл чат сессии → исход её
+   * последнего хода прочитан, и дерево больше не красит название (ошибка
+   * `error` / завершение `success`). Ветка зависит от `activeCenterTabId`, а не
+   * только от монтирования: `ChatTab` живёт в активном табе, но вкладка может
+   * быть уже открыта при загрузке страницы — тогда эффект срабатывает на
+   * монтировании, а при переключении табов — на смене id.
+   *
+   * Метка ставится в стор напрямую (`getState()`), без подписки: значение
+   * пишется, но в самом чате не читается — подписка давала бы лишний рендер
+   * ленты на каждое открытие.
+   */
+  useEffect(() => {
+    if (activeCenterTabId !== `chat-${sessionId}`) return
+    useNotificationStore.getState().markSessionAcked(sessionId)
+  }, [activeCenterTabId, sessionId])
 
   /**
    * «Загрузить старые»: страница истории **перед** текущей (`before` — курсор
@@ -862,33 +885,58 @@ export function ChatTab({ tab }: ChatTabProps) {
             />
           )}
 
-          {!inputExpanded && !isSubagent && finalError && (
-            <StreamErrorPanel
-              error={finalError.error}
-              errorType={finalError.errorType}
-              onRetry={handleRetryLastFailed}
-              onHybridLogin={handleHybridLogin}
-            />
-          )}
+          {/*
+            Композерная зона, часть 1 — плашки **вне** композера (финальная
+            ошибка хода, остановка/возобновление саб-агента). Ритм тот же, что
+            внутри `SessionComposer`: `flex flex-col gap-2`. Контейнер ничего не
+            занимает, когда плашек нет (невидимые не рендерятся, `gap` действует
+            только между фактическими элементами), поэтому пустые отступы не
+            рисуются.
+          */}
+          {(isSubagent || (!inputExpanded && !!finalError)) && (
+            <div
+              data-testid="chat-composer-zone"
+              className="flex shrink-0 flex-col gap-2"
+            >
+              {!inputExpanded && !isSubagent && finalError && (
+                <StreamErrorPanel
+                  error={finalError.error}
+                  errorType={finalError.errorType}
+                  onRetry={handleRetryLastFailed}
+                  onHybridLogin={handleHybridLogin}
+                />
+              )}
 
-          {isSubagent && (
-            <SubagentResumeBar
-              sessionId={sessionId}
-              lastError={lastSessionError}
-              onResume={handleResumeSubagent}
-              onStop={handleStopSubagentResume}
-            />
+              {isSubagent && (
+                <SubagentResumeBar
+                  sessionId={sessionId}
+                  lastError={lastSessionError}
+                  onResume={handleResumeSubagent}
+                  onStop={handleStopSubagentResume}
+                />
+              )}
+            </div>
           )}
 
           {isReadOnly ? (
-            // Сессии больше нет (удалена/архивирована) — ввода нет.
-            <div className="shrink-0 mx-auto mt-2 mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
-              <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
+            // Сессии больше нет (удалена/архивирована) — ввода нет. Плашка
+            // одна, но зазоры всё равно даёт контейнер ритма (сверху — `pt-2`,
+            // снизу — `mb-2` у самой плашки): собственных `mt-*`/`mb-*` у неё нет.
+            <div
+              data-testid="chat-readonly-zone"
+              className="flex shrink-0 flex-col gap-2 pt-2"
+            >
+              <div className="mx-auto mb-2 w-4/5 rounded-xl border border-border/60 bg-surface-subtle px-4 py-3 text-center">
+                <p className="text-xs text-muted-foreground">{t('chat.input.readOnly')}</p>
+              </div>
             </div>
           ) : (
-            // Композерная зона: плашка «отправка заблокирована», панель очереди
-            // и поле ввода — общим компонентом (`SessionComposer`). Баннеры
-            // (контекст, права, вопросы) — слотами: их порядок прежний.
+            // Композерная зона, часть 2: плашка «отправка заблокирована», панель
+            // очереди и поле ввода — общим компонентом (`SessionComposer`).
+            // Баннеры (контекст, права, вопросы) — слотами: их порядок прежний.
+            // Вертикальный ритм задаёт контейнер композера (`gap-2` + `pt-2`),
+            // у самих плашек своих `mt-*`/`mb-*` нет — поэтому интервал до
+            // плашек из `chat-composer-zone` выше равен интервалу между ними.
             // Дочерняя сессия (PROP-142 §2) — тот же композер: сообщение уходит
             // `POST /sessions/:id/prompt`, сервер сам решает steer/queue/resume.
             <SessionComposer

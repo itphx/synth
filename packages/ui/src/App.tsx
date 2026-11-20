@@ -35,7 +35,9 @@ import {
 import { useAuthStore } from '@/stores/authStore'
 import { useConfirmStore } from '@/stores/confirmStore'
 import { useDevice } from '@/hooks/useDevice'
+import { useToastPlacement } from '@/hooks/useToastPlacement'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
+import { useStaleTurnGuard } from '@/hooks/useStaleTurnGuard'
 
 /**
  * Тяжёлые модалки (настройки+админка ≈ 0.8 МБ, логи и аудит, аналитика и
@@ -180,7 +182,14 @@ function App() {
   const setMobileRightOpen = useUIStore(s => s.setMobileRightOpen)
   const forwardMode = useUIStore(s => s.forwardMode)
   const { deviceType } = useDevice()
+  // На телефоне тосты идут сверху (не перекрывают композер), на планшете и
+  // десктопе — прежний `bottom-right`. Источник признака — `useDevice`,
+  // см. `hooks/useToastPlacement.ts`.
+  const toastPlacement = useToastPlacement()
   useViewportHeight()
+  // Один экземпляр на приложение: сторож зависших ходов смотрит глобальный
+  // `chatStore` и не должен зависеть от открытой вкладки чата (ADR-118 §5).
+  useStaleTurnGuard()
   const isMobile = deviceType !== 'desktop'
   const confirmOpen = useConfirmStore(s => s.open)
   const confirmOptions = useConfirmStore(s => s.options)
@@ -349,8 +358,16 @@ function App() {
         />
       </AuthGate>
       <PwaUpdatePrompt />
+      {/*
+        Позиция зависит от устройства (`useToastPlacement`): телефон — `top-center`,
+        планшет/десктоп — `bottom-right`. Узел контейнера не пересоздаётся (нет
+        `key`), поэтому смена позиции в рантайме открытые тосты не теряет:
+        react-toastify запоминает `position` в пропсах тоста при создании и
+        группирует вывод по ней, так что уже показанные тосты доигрывают на
+        прежнем месте, а новые появляются на новом.
+      */}
       <ToastContainer
-        position="bottom-right"
+        position={toastPlacement}
         newestOnTop
         limit={5}
         autoClose={5000}

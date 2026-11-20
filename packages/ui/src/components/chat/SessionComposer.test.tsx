@@ -266,3 +266,114 @@ describe('SessionComposer — композер сессии', () => {
     )
   })
 })
+
+/**
+ * Ритм композерной зоны: вертикальные расстояния задаёт **контейнер**
+ * (`flex flex-col gap-2` + `pt-2`), а не сами плашки.
+ *
+ * Проверяем структурно (по классам и `data-testid`, не по пикселям):
+ *   - все блоки зоны — прямые дети одного контейнера ритма;
+ *   - ни у одной плашки нет собственных `mt-*`/`mb-*`/`my-*`;
+ *   - когда блоков нет, ритм не добавляет пустых элементов.
+ */
+describe('SessionComposer — ритм композерной зоны', () => {
+  /** Плашки зоны: прямые дети контейнера, кроме самого поля ввода. */
+  function zoneBlocks(zone: HTMLElement): HTMLElement[] {
+    return Array.from(zone.children).filter(
+      (el) => !el.classList.contains('chat-composer'),
+    ) as HTMLElement[]
+  }
+
+  /** Корень панели очереди (по якорю в шапке). */
+  function queueBlock(zone: HTMLElement): HTMLElement | null {
+    const found = Array.from(zone.children).find(
+      (el) => el.querySelector('[data-testid="queue-header-toggle"]') !== null,
+    )
+    return (found as HTMLElement | undefined) ?? null
+  }
+
+  it('два слота рендерятся в контейнере ритма, без собственных отступов', async () => {
+    const container = await mount({
+      banner: <div data-testid="banner" className="mx-auto w-4/5" />,
+      children: <div data-testid="extra" />,
+    })
+
+    const zone = container.querySelector('[data-testid="session-composer"]') as HTMLElement
+    expect(zone).toBeTruthy()
+    // Контейнер ритма: столбец с единым gap и верхним зазором зоны.
+    expect(zone.className).toContain('flex')
+    expect(zone.className).toContain('flex-col')
+    expect(zone.className).toContain('gap-2')
+    expect(zone.className).toContain('pt-2')
+
+    const banner = container.querySelector('[data-testid="banner"]') as HTMLElement
+    const extra = container.querySelector('[data-testid="extra"]') as HTMLElement
+    // Оба блока — прямые дети одного контейнера: расстояние между ними = gap.
+    expect(banner.parentElement).toBe(zone)
+    expect(extra.parentElement).toBe(zone)
+    expect(zoneBlocks(zone)).toHaveLength(2)
+  })
+
+  it('три блока (очередь + плашка отправки + слот) — все в контейнере ритма', async () => {
+    act(() => {
+      useChatStore.getState().setPendingMessages(SESSION, [{ id: 'q1', content: 'в очереди' }])
+      useChatStore.getState().updateQueueCount(SESSION, 1)
+    })
+    // Плашка «отправка заблокирована» — реальный участник зоны.
+    vi.mocked(synthApi.enqueueMessage).mockRejectedValueOnce(
+      Object.assign(new Error('disabled'), {
+        status: 400,
+        code: 'PROVIDER_DISABLED',
+        details: { provider: 'off' },
+      }),
+    )
+
+    const container = await mount({ children: <div data-testid="extra" /> })
+    await send(container)
+
+    const zone = container.querySelector('[data-testid="session-composer"]') as HTMLElement
+    const blocks = zoneBlocks(zone)
+    expect(blocks).toHaveLength(3)
+
+    // Все три — прямые дети контейнера (значит между ними ровно один gap).
+    const queue = queueBlock(zone)
+    const blocked = container.querySelector('[data-testid="send-blocked-panel"]') as HTMLElement
+    const extra = container.querySelector('[data-testid="extra"]') as HTMLElement
+    expect(queue).not.toBeNull()
+    expect(blocked.parentElement).toBe(zone)
+    expect(extra.parentElement).toBe(zone)
+    // Собственных вертикальных отступов у блоков нет — их даёт контейнер.
+    for (const block of [queue!, blocked, extra]) {
+      expect(block.className).not.toMatch(/(^|\s)(mt|mb|my)-/)
+    }
+  })
+
+  it('блоков нет — контейнер содержит только поле ввода (пустых отступов нет)', async () => {
+    const container = await mount()
+
+    const zone = container.querySelector('[data-testid="session-composer"]') as HTMLElement
+    // Единственный ребёнок — поле ввода: `gap` действует только между
+    // фактическими элементами, поэтому пустого зазора не появляется.
+    expect(zone.children).toHaveLength(1)
+    expect((zone.firstElementChild as HTMLElement).classList.contains('chat-composer')).toBe(true)
+    expect(zoneBlocks(zone)).toHaveLength(0)
+  })
+
+  it('развёрнутый композер: контейнер ритма, но без единой плашки', async () => {
+    act(() => {
+      useChatStore.getState().setPendingMessages(SESSION, [{ id: 'q1', content: 'в очереди' }])
+      useChatStore.getState().updateQueueCount(SESSION, 1)
+    })
+    const container = await mount({
+      expanded: true,
+      banner: <div data-testid="banner" />,
+      children: <div data-testid="extra" />,
+    })
+
+    const zone = container.querySelector('[data-testid="session-composer"]') as HTMLElement
+    expect(zoneBlocks(zone)).toHaveLength(0)
+    expect(container.querySelector('[data-testid="banner"]')).toBeNull()
+    expect(container.querySelector('[data-testid="extra"]')).toBeNull()
+    expect(container.querySelector('[data-testid="queue-header-toggle"]')).toBeNull()
+  })
+})

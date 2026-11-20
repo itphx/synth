@@ -219,9 +219,10 @@ export function PermissionRequestBar({ sessionId }: PermissionRequestBarProps) {
   }
 
   return (
-    // `mt-2` — зазор сверху: висящее предупреждение и полоса отделяются
-    // так же, как полоса и область ввода (`mt-2` у `ChatInput`).
-    <div className="permission-bar shrink-0 mx-auto mt-2 w-4/5 min-w-0 rounded-lg border border-primary/30 bg-primary/5">
+    // Вертикальные зазоры задаёт контейнер ритма композерной зоны
+    // (`SessionComposer`, `flex flex-col gap-2`): собственных `mt-*`/`mb-*`
+    // у полосы нет.
+    <div className="permission-bar shrink-0 mx-auto w-4/5 min-w-0 rounded-lg border border-primary/30 bg-primary/5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5">
         {/* Иконка — внутри кнопки-заголовка: на телефоне заголовок занимает
             отдельную строку целиком (`flex-basis: 100%`), и вынесенная наружу

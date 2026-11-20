@@ -12,12 +12,26 @@
 //      (в чате: полоса подтверждений прав и док вопросов),
 //   5. поле ввода (`ChatInput`).
 //
+// **Вертикальный ритм задаёт контейнер, а не блоки.** Все позиции выше и
+// поле ввода — элементы одного flex-столбца `gap-2` (`--spacing-2`, 8 px):
+// у самих плашек вертикальных отступов (`mt-*`/`mb-*`/`my-*`) нет, только
+// горизонтальные (`mx-auto w-4/5`). Поэтому любые две соседние плашки всегда
+// разделены ровно одним `gap` — без удвоений и «слипаний», сколько бы блоков
+// ни оказалось видно одновременно (подтверждение + вопрос, ошибка + очередь,
+// «отправка заблокирована» + любой из них и т.д.).
+// Верхний зазор (от ленты до первой плашки) — `pt-2` того же контейнера;
+// нижний, под полем ввода, — `mb-2` у `ChatInput` (его переопределяет
+// мобильная тема с учётом safe-area, `html.device-phone .chat-composer`).
+// Пустых отступов ритм не рисует: невидимые позиции не рендерятся вовсе,
+// а `gap` действует только между фактическими элементами.
+//
 // Развёрнутый композер (`expanded`) показывает **только** поле ввода —
 // остальные блоки композерной зоны скрыты (как в чате).
 
 import type { ReactNode } from 'react'
 import { DEFAULT_STEER_MODE } from '@itphx/synth-shared/types'
 import type { AgentInfo } from '@/lib/api/synthApi'
+import { cn } from '@/lib/utils'
 import { ChatInput } from './ChatInput'
 import { QueuePanel } from './QueuePanel'
 import { SendBlockedPanel } from './SendBlockedPanel'
@@ -67,7 +81,16 @@ export function SessionComposer({
   const zoneVisible = !expanded
 
   return (
-    <>
+    // Контейнер ритма композерной зоны: единственный источник вертикальных
+    // расстояний между плашками и полем ввода (см. шапку файла).
+    <div
+      data-testid="session-composer"
+      className={cn(
+        'flex w-full flex-col gap-2 pt-2',
+        // Развёрнутый композер занимает всю высоту области чата.
+        expanded ? 'min-h-0 flex-1' : 'shrink-0',
+      )}
+    >
       {zoneVisible && sendBlocked && <SendBlockedPanel state={sendBlocked} />}
 
       {zoneVisible && banner}
@@ -106,6 +129,6 @@ export function SessionComposer({
         onToggleExpand={onToggleExpand}
         showAttachments={showAttachments}
       />
-    </>
+    </div>
   )
 }
