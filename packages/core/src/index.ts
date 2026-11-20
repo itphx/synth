@@ -121,6 +121,15 @@ export type { PluginsChangedInfo, PluginsChangedHook } from './events/plugins-ev
 // (инстансный канал) — общий шов write-путей `createSnippetRoutes`.
 export { publishSnippetsUpdated, snippetsChangedPublisher } from './events/snippets-events.js';
 export type { SnippetsChangedInfo, SnippetsChangedHook } from './events/snippets-events.js';
+// Реестр приёма внешних событий (ADR-089): единое событие `events.updated`
+// (инстансный канал) — общий шов write-путей `createEventRoutes` (привязки,
+// их API-ключи и правила маршрутизации).
+export { publishEventsUpdated, eventsChangedPublisher } from './events/events-events.js';
+export type { EventsChangedInfo, EventsChangedHook } from './events/events-events.js';
+// Идентичности пользователя (ADR-089): единое событие `identities.updated`
+// (инстансный канал) — шов write-путей `createIdentityRoutes` (claim/отвязка).
+export { publishIdentitiesUpdated, identitiesChangedPublisher } from './events/identities-events.js';
+export type { IdentitiesChangedInfo, IdentitiesChangedHook } from './events/identities-events.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).

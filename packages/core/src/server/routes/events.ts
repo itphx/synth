@@ -20,6 +20,7 @@ import type { EventApiKeyRepository } from '../../storage/ports/event-api-key-re
 import type { EventBindingRepository } from '../../storage/ports/event-binding-repository.js';
 import type { EventJournalRepository } from '../../storage/ports/event-journal-repository.js';
 import type { EventRouteRepository } from '../../storage/ports/event-route-repository.js';
+import type { EventsChangedHook } from '../../events/events-events.js';
 import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 
@@ -136,6 +137,16 @@ export interface EventRoutesOptions {
    * пропускает). Это не RBAC.
    */
   serviceProjectProjection?: ServiceProjectProjectionGuard;
+  /**
+   * Инвариант 27: реестр приёма событий изменился (`events.updated`, инстансный
+   * канал шины) — привязка, её API-ключ или правило маршрутизации созданы,
+   * изменены или удалены. Хук зовётся **только после успешной записи**
+   * (`400`/`403`/`404`/`409` молчат) и ровно один раз на запрос. Не передан
+   * (core без шины, тесты) — публикации нет, поведение прежнее.
+   * В payload — вид мутации и id привязки/правила; секрета ключа, его хеша и
+   * id ключа там нет по построению (инвариант 13 `AGENTS.md`).
+   */
+  onEventsChanged?: EventsChangedHook;
 }
 
 const DEFAULT_MESSAGES: EventRouteMessages = {
@@ -189,6 +200,11 @@ export function createEventRoutes(
   const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
   // ADR-089/ADR-052: per-key rate limit (fixed window 60 c), один на приложение.
   const keyRateLimiter = new KeyRateLimiter(60_000);
+  // Инвариант 27: единый шов публикации мутаций реестра (`events.updated`).
+  // Собран здесь и вызывается в каждом write-пути **после** успешной записи:
+  // роуты возвращаются из обработчиков на ошибках раньше, поэтому молчание на
+  // `400`/`403`/`404`/`409` получается по построению, а не соглашением.
+  const onEventsChanged = opts.onEventsChanged;
 
   // POST /api/v2/events — приём внешнего события (ingress). Аутентификация:
   // API-ключ привязки (если задан резолвер и пришёл Bearer `synth_evt_…`) либо
@@ -359,6 +375,12 @@ export function createEventRoutes(
         })
       : null;
     const binding = await deps.bindingStore.upsert({ ...input, id: existing?.id });
+    // Upsert: совпадение по ключу привязки (source+chatKey/threadKey) сохраняет
+    // id — значит это правка видимой записи, а не новая карточка.
+    onEventsChanged?.({
+      bindingId: binding.id,
+      action: existing ? 'binding.update' : 'binding.create',
+    });
     return c.json(binding, existing ? 200 : 201);
   });
 
@@ -371,6 +393,8 @@ export function createEventRoutes(
     }
     // ADR-089/ADR-052: ключи привязки без привязки недействительны — каскад.
     await deps.apiKeyStore.removeByBinding(id);
+    // Карточка исчезла вместе с ключами — перечитывать список целиком.
+    onEventsChanged?.({ bindingId: id, action: 'binding.delete' });
     return c.body(null, 204);
   });
 
@@ -410,6 +434,9 @@ export function createEventRoutes(
           : {}),
         createdBy: currentUserId(c),
       });
+      // Ключ — часть карточки привязки: список метаданных у второго клиента
+      // устарел. Сам секрет (`synth_evt_…`) в событие не идёт по типу payload'а.
+      onEventsChanged?.({ bindingId, action: 'key.create' });
       return c.json(created, 201);
     } catch (err) {
       if (err instanceof EventApiKeyConflictError) {
@@ -442,6 +469,7 @@ export function createEventRoutes(
       if (!updated) {
         return c.json({ error: { code: 'NOT_FOUND', message: messages.keyNotFound(c) } }, 404);
       }
+      onEventsChanged?.({ bindingId, action: 'key.update' });
       return c.json(updated);
     } catch (err) {
       if (err instanceof EventApiKeyConflictError) {
@@ -461,15 +489,20 @@ export function createEventRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: messages.keyNotFound(c) } }, 404);
     }
     const key = await deps.apiKeyStore.get(bindingId, keyId);
+    // `revokedAt` виден в списке (бейдж статуса) — без сигнала он «залипал» бы
+    // на `active` до перезагрузки страницы.
+    onEventsChanged?.({ bindingId, action: 'key.revoke' });
     return c.json(key);
   });
 
   // DELETE /api/v2/events/bindings/:id/keys/:keyId — удаление ключа.
   app.delete('/bindings/:id/keys/:keyId', writeGuard, scoped('keys:write'), async (c) => {
-    const removed = await deps.apiKeyStore.remove(c.req.param('id'), c.req.param('keyId'));
+    const bindingId = c.req.param('id');
+    const removed = await deps.apiKeyStore.remove(bindingId, c.req.param('keyId'));
     if (!removed) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.keyNotFound(c) } }, 404);
     }
+    onEventsChanged?.({ bindingId, action: 'key.delete' });
     return c.body(null, 204);
   });
 
@@ -517,15 +550,20 @@ export function createEventRoutes(
 
     const existing = input.id ? await deps.routeRuleStore.get(input.id) : null;
     const rule = await deps.routeRuleStore.upsert(input);
+    // Upsert по `id` — правка правила (в т.ч. инлайн-тумблер `enabled`);
+    // без `id` (или с неизвестным id) — новая запись.
+    onEventsChanged?.({ routeId: rule.id, action: existing ? 'route.update' : 'route.create' });
     return c.json(rule, existing ? 200 : 201);
   });
 
   // DELETE /api/v2/events/routes/:id — удаление правила.
   app.delete('/routes/:id', writeGuard, scoped(...SERVICE_SCOPE_SETS.routesWrite), async (c) => {
-    const removed = await deps.routeRuleStore.remove(c.req.param('id'));
+    const id = c.req.param('id');
+    const removed = await deps.routeRuleStore.remove(id);
     if (!removed) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.ruleNotFound(c) } }, 404);
     }
+    onEventsChanged?.({ routeId: id, action: 'route.delete' });
     return c.body(null, 204);
   });
 

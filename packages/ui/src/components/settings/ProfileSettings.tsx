@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import type { ExternalIdentity } from '@itphx/synth-shared'
 import { useAuthStore } from '@/stores/authStore'
+import { useIdentitiesStore } from '@/stores/identitiesStore'
 import { useI18n } from '@/lib/i18n'
 import { api } from '@/lib/api/client'
 import { synthApi } from '@/lib/api/synthApi'
@@ -78,6 +79,17 @@ export const ProfileSettings = () => {
 
   const dirty = formSnapshot(form) !== formSnapshot(savedForm)
 
+  /**
+   * Идентичности изменились на сервере (событие шины `identities.updated`,
+   * инстансный канал, ADR-089): привязка подтверждена кодом в другой вкладке /
+   * на другом устройстве или выполнена отвязка в соседнем клиенте.
+   *
+   * Перечитываем **только список идентичностей**: черновик самой формы
+   * профиля — ввод пользователя, он не сбрасывается (иначе чужая мутация
+   * стирала бы недописанные поля).
+   */
+  const identitiesRevision = useIdentitiesStore((s) => s.revision)
+
   useEffect(() => {
     let cancelled = false
     const loadIdentities = async () => {
@@ -94,7 +106,7 @@ export const ProfileSettings = () => {
     return () => {
       cancelled = true
     }
-  }, [t])
+  }, [t, identitiesRevision])
 
   const handleUnlinkIdentity = async (identity: ExternalIdentity) => {
     const label = identity.displayName || identity.username || `${identity.provider}:${identity.externalId}`

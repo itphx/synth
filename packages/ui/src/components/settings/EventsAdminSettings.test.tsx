@@ -60,6 +60,7 @@ import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { EventsAdminSettings } from './EventsAdminSettings'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { useEventsStore } from '@/stores/eventsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import type { EventBinding, EventRouteRule } from '@itphx/synth-shared'
@@ -929,5 +930,112 @@ describe('EventsAdminSettings — read-only для USER/AUDITOR (ADR-089)', () =
     expect(container.querySelector('[data-testid="events-bindings-list"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="events-routes-list"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="events-journal-list"]')).not.toBeNull()
+  })
+})
+
+/**
+ * Реестр приёма внешних событий изменился на сервере — событие шины
+ * `events.updated` (инстансный канал, ADR-089).
+ *
+ * Баг: «привязка, её API-ключ или правило маршрутизации, созданные/изменённые/
+ * удалённые в другом клиенте или соседней вкладке админки, видны в разделе
+ * "События" только после перезагрузки страницы». Стор поднимает `revision`, по
+ * нему раздел обязан перечитать **свои списки** — и при этом не тронуть ввод
+ * пользователя (открытую форму и её черновик).
+ */
+describe('EventsAdminSettings — событие events.updated (ADR-089)', () => {
+  /** Поднимает `revision` в сторе реестра событий (как диспетчер шины). */
+  const emitEventsUpdated = async (): Promise<void> => {
+    await act(async () => {
+      useEventsStore.setState((s) => ({ revision: s.revision + 1 }))
+    })
+    await flush()
+  }
+
+  beforeEach(() => {
+    useEventsStore.setState({ revision: 0 })
+  })
+
+  it('список привязок перечитывается по событию (новая привязка появляется)', async () => {
+    const container = await renderSettings()
+    expect(container.textContent).toContain('No event bindings configured')
+    const loadsBefore = mocks.listEventBindings.mock.calls.length
+
+    // Привязку создал другой клиент — сервер опубликовал событие.
+    mocks.listEventBindings.mockResolvedValue({
+      bindings: [binding('b9', { chatKey: 'chat:telegram:9' })],
+    })
+    await emitEventsUpdated()
+
+    expect(mocks.listEventBindings.mock.calls.length).toBeGreaterThan(loadsBefore)
+    expect(container.querySelector('[data-testid="events-binding-b9"]')).not.toBeNull()
+  })
+
+  it('список правил перечитывается по событию (новое правило появляется)', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="events-routes-list"]')).toBeNull()
+    const loadsBefore = mocks.getEventRoutes.mock.calls.length
+
+    mocks.getEventRoutes.mockResolvedValue({ rules: [rule('r9', { name: 'From another tab' })] })
+    await emitEventsUpdated()
+
+    expect(mocks.getEventRoutes.mock.calls.length).toBeGreaterThan(loadsBefore)
+    expect(container.querySelector('[data-testid="events-route-r9"]')).not.toBeNull()
+    expect(container.textContent).toContain('From another tab')
+  })
+
+  it('метаданные ключей привязки перечитываются по событию (отозванный ключ виден)', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="events-binding-keys-list-b1"]')).toBeNull()
+
+    // Ключ отозвал другой админ — статус в списке изменился.
+    mocks.getEventBindingKeys.mockResolvedValue({
+      keys: [
+        {
+          id: 'k9',
+          bindingId: 'b1',
+          label: 'ci',
+          createdBy: 'admin',
+          createdAt: '2026-10-08T10:00:00.000Z',
+          prefix: 'eak_abc',
+          revokedAt: '2026-10-08T11:00:00.000Z',
+        },
+      ],
+    })
+    await emitEventsUpdated()
+
+    const row = container.querySelector('[data-testid="events-binding-key-k9"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain('ci')
+    // Статус пересчитан из свежих метаданных — не «активен» по старому снимку.
+    expect(row!.textContent).toContain('Revoked')
+  })
+
+  it('открытая форма создания не сбрасывается событием (чужую мутацию не теряем)', async () => {
+    const container = await renderSettings()
+    await clickTestId(container, 'events-binding-add')
+    const source = container.querySelector('[data-testid="events-binding-source"]') as HTMLInputElement
+    await act(async () => {
+      setInputValue(source, 'draft-source')
+    })
+
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b9')] })
+    await emitEventsUpdated()
+
+    // Форма на месте, черновик цел, а список уже свежий.
+    const sourceAfter = container.querySelector('[data-testid="events-binding-source"]') as HTMLInputElement
+    expect(sourceAfter).not.toBeNull()
+    expect(sourceAfter.value).toBe('draft-source')
+    expect(container.querySelector('[data-testid="events-binding-b9"]')).not.toBeNull()
+  })
+
+  it('первый рендер не перечитывает списки лишний раз (ревизия-снимок)', async () => {
+    useEventsStore.setState({ revision: 3 })
+    await renderSettings()
+
+    // Ровно одна загрузка на секцию при монтировании: событий не было.
+    expect(mocks.listEventBindings).toHaveBeenCalledTimes(1)
+    expect(mocks.getEventRoutes).toHaveBeenCalledTimes(1)
   })
 })

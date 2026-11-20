@@ -72,7 +72,9 @@ type Resource =
   | 'pipelines'
   | 'packs'
   | 'plugins'
-  | 'snippets';
+  | 'snippets'
+  | 'events'
+  | 'identities';
 
 interface ResourceSpec {
   /** Тип события шины (инвариант 6: новых каналов не заводим). */
@@ -255,6 +257,31 @@ const RESOURCES: Readonly<Record<Resource, ResourceSpec>> = {
     // Одна точка в каждой точке сборки (core standalone + managed backend):
     // реестр сниппетов (`/api/v2/snippets`) монтируется ровно один раз.
     wiring: { snippet: 'snippetsChangedPublisher(eventBus)', count: 1 },
+  },
+  events: {
+    event: 'events.updated',
+    identifiers: ['publishEventsUpdated', 'eventsChangedPublisher', 'EventsChangedHook'],
+    markers: ['onEventsChanged?.', 'publishEventsUpdated(', 'eventsChangedPublisher('],
+    infrastructure: ['events/events-events.ts', 'index.ts'],
+    // Одна точка в каждой точке сборки (core standalone + managed backend):
+    // реестр приёма событий (`/api/v2/events`) монтируется ровно один раз на
+    // приложение, все восемь write-путей (привязки, их ключи, правила) живут в
+    // одной фабрике — у забывшего про неё mount'а ресурс молчал бы целиком.
+    wiring: { snippet: 'eventsChangedPublisher(eventBus)', count: 1 },
+  },
+  identities: {
+    event: 'identities.updated',
+    identifiers: [
+      'publishIdentitiesUpdated',
+      'identitiesChangedPublisher',
+      'IdentitiesChangedHook',
+    ],
+    markers: ['onIdentitiesChanged?.', 'publishIdentitiesUpdated(', 'identitiesChangedPublisher('],
+    infrastructure: ['events/identities-events.ts', 'index.ts'],
+    // Одна точка в каждой точке сборки: идентичности профиля (`/api/v2/me`)
+    // монтируются ровно один раз, оба write-пути (claim и отвязка) — в одной
+    // фабрике.
+    wiring: { snippet: 'identitiesChangedPublisher(eventBus)', count: 1 },
   },
 };
 
@@ -452,6 +479,33 @@ const WRITE_PATHS: readonly WritePath[] = [
   { file: 'server/routes/snippets.ts', key: 'createSnippetRoutes PATCH /:name', resource: 'snippets' },
   { file: 'server/routes/snippets.ts', key: 'createSnippetRoutes DELETE /:name', resource: 'snippets' },
 
+  // ── Реестр приёма внешних событий: `events.updated` (инстансный канал) ──
+  // ADR-089: восемь write-путей одной фабрики — привязки (`POST /bindings` —
+  // upsert: `binding.create`/`binding.update`, `DELETE /bindings/:id`),
+  // API-ключи привязки (`POST /bindings/:id/keys` — `key.create`,
+  // `PATCH .../keys/:keyId` — `key.update`, `POST .../keys/:keyId/revoke` —
+  // `key.revoke`, `DELETE .../keys/:keyId` — `key.delete`) и правила
+  // маршрутизации (`POST /routes` — `route.create`/`route.update`,
+  // `DELETE /routes/:id` — `route.delete`). Ключи — часть карточки привязки
+  // (список метаданных в UI), поэтому их мутации публикуют `bindingId`, но
+  // **не** секрет/хеш/id ключа (инвариант 13).
+  { file: 'server/routes/events.ts', key: 'createEventRoutes POST /bindings', resource: 'events' },
+  { file: 'server/routes/events.ts', key: 'createEventRoutes DELETE /bindings/:id', resource: 'events' },
+  { file: 'server/routes/events.ts', key: 'createEventRoutes POST /bindings/:id/keys', resource: 'events' },
+  { file: 'server/routes/events.ts', key: 'createEventRoutes PATCH /bindings/:id/keys/:keyId', resource: 'events' },
+  { file: 'server/routes/events.ts', key: 'createEventRoutes POST /bindings/:id/keys/:keyId/revoke', resource: 'events' },
+  { file: 'server/routes/events.ts', key: 'createEventRoutes DELETE /bindings/:id/keys/:keyId', resource: 'events' },
+  { file: 'server/routes/events.ts', key: 'createEventRoutes POST /routes', resource: 'events' },
+  { file: 'server/routes/events.ts', key: 'createEventRoutes DELETE /routes/:id', resource: 'events' },
+
+  // ── Идентичности пользователя: `identities.updated` (инстансный канал) ──
+  // ADR-089: два write-пути — привязка подтверждением владения (claim-flow) и
+  // отвязка. Прямой линковки нет намеренно: только подтверждённое владение.
+  // Payload — только вид мутации (`provider`/`externalId` — персональные данные,
+  // в событие не идут; claim-код — тем более).
+  { file: 'server/routes/identities.ts', key: 'createIdentityRoutes POST /identities/claim', resource: 'identities' },
+  { file: 'server/routes/identities.ts', key: 'createIdentityRoutes DELETE /identities/:provider/:externalId', resource: 'identities' },
+
   // ── Пайплайны: `pipeline.updated` (каналы сессий проекта) ──────────────
   { file: 'server/routes/pipeline-project-routes.ts', key: 'createPipelineProjectRoutes POST /projects/:id/pipelines', resource: 'pipelines' },
   { file: 'server/routes/pipeline-project-routes.ts', key: 'createPipelineProjectRoutes PUT /projects/:id/pipelines/:pid', resource: 'pipelines' },
@@ -487,6 +541,12 @@ const OUT_OF_SCOPE_WRITE_PATHS: readonly SkippedWritePath[] = [
 
   // Сниппеты: раскрытие `#`-ссылки — предпросмотр без записи (чистое чтение).
   { file: 'server/routes/snippets.ts', key: 'createSnippetRoutes POST /expand', why: 'раскрытие сниппета (предпросмотр), записи нет' },
+
+  // Реестр приёма событий: ingress (`POST /api/v2/events`) — не мутация реестра.
+  // Событие `events.updated` означало бы «перечитай привязки/правила/ключи» на
+  // каждый входящий вебхук: приём пишет журнал решений (его панель
+  // `EventJournalPanel` читает своим запросом), а состав реестра не меняет.
+  { file: 'server/routes/events.ts', key: 'createEventRoutes POST /', why: 'приём внешнего события (ingress): реестр привязок/правил/ключей не меняется, журнал читается отдельным запросом' },
 
   // Исполнение: прогрев образов не меняет ни каталог профилей, ни состав пулов
   // (только тянет образы на ноды) — событие `execution.updated` не нужно.

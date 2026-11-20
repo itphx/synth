@@ -91,6 +91,12 @@ import {
   // Словари классификации изменились — `dictionaries.updated` (шов write-путей
   // `createDictionaryRoutes`, `events/dictionaries-events.ts`).
   dictionariesChangedPublisher,
+  // Реестр приёма внешних событий изменился — `events.updated` (шов write-путей
+  // `createEventRoutes`: привязки, их API-ключи, правила; `events/events-events.ts`).
+  eventsChangedPublisher,
+  // Идентичности пользователя изменились — `identities.updated` (шов write-путей
+  // `createIdentityRoutes`, `events/identities-events.ts`).
+  identitiesChangedPublisher,
   // Реестр пакетов расширений изменился — `packs.updated` (шов write-путей
   // `createPacksRoutes`, `events/packs-events.ts`).
   packsChangedPublisher,
@@ -1221,6 +1227,10 @@ export function mountStandaloneRoutes(
         return { binding, credential: resolved.credential };
       },
       touchApiKey: (id) => eventApiKeyStore.touch(id),
+      // Инвариант 27: реестр приёма событий изменился (`events.updated`,
+      // инстансный канал) — второй клиент перечитывает привязки, их ключи и
+      // правила без перезагрузки страницы. Секрета ключа в payload нет.
+      onEventsChanged: eventsChangedPublisher(eventBus),
     },
   ));
 
@@ -1616,6 +1626,9 @@ export function mountStandaloneRoutes(
     resolveProfileId: async () => (await profilesStore.getOrCreateProfile({ username: 'local' })).id,
     claimStore: identityClaimStore,
     rateLimitGuard: identityClaimRateLimitGuard,
+    // Инвариант 27: идентичности изменились (`identities.updated`, инстансный
+    // канал) — панель профиля перечитывает список без перезагрузки страницы.
+    onIdentitiesChanged: identitiesChangedPublisher(eventBus),
   }));
 
   // ADR-118 §8: возможности инстанса (`GET /api/v2/meta`) — **без

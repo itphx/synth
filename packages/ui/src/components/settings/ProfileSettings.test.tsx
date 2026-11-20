@@ -43,6 +43,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAuthStore } from '@/stores/authStore'
+import { useIdentitiesStore } from '@/stores/identitiesStore'
 import { ProfileSettings } from './ProfileSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -71,6 +72,7 @@ async function renderSettings(): Promise<HTMLElement> {
 
 beforeEach(() => {
   useAuthStore.setState({ user: null, profile: null })
+  useIdentitiesStore.setState({ revision: 0 })
   mocks.getProfile.mockResolvedValue({
     username: 'dev',
     display_name: 'Dev',
@@ -418,5 +420,85 @@ describe('ProfileSettings — идентичности (ADR-089)', () => {
     // Новый ввод — сообщение об ошибке очищается.
     await typeCode(container, 'NEW-CODE')
     expect(container.textContent).not.toContain('Code is invalid, expired, or already used')
+  })
+})
+
+/**
+ * Идентичности изменились на сервере — событие шины `identities.updated`
+ * (инстансный канал, ADR-089).
+ *
+ * Баг: «идентичность, привязанная подтверждением кода в другой вкладке или на
+ * другом устройстве, и отвязка в соседнем клиенте видны в панели профиля только
+ * после перезагрузки страницы». Стор поднимает `revision`, по нему панель
+ * перечитывает **свой** список — и не трогает черновик формы профиля.
+ */
+describe('ProfileSettings — событие identities.updated (ADR-089)', () => {
+  const emitIdentitiesUpdated = async (): Promise<void> => {
+    await act(async () => {
+      useIdentitiesStore.setState((s) => ({ revision: s.revision + 1 }))
+    })
+    await act(async () => {})
+  }
+
+  it('список перечитывается по событию (привязка из другой вкладки появляется)', async () => {
+    const container = await renderSettings()
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="profile-identities-empty"]')).not.toBeNull()
+    const loadsBefore = mocks.getMyIdentities.mock.calls.length
+
+    mocks.getMyIdentities.mockResolvedValue({
+      identities: [
+        {
+          provider: 'tg',
+          externalId: '450316139',
+          displayName: 'Claimed elsewhere',
+          linkedAt: '2026-03-01T10:00:00.000Z',
+        },
+      ],
+    })
+    await emitIdentitiesUpdated()
+
+    expect(mocks.getMyIdentities.mock.calls.length).toBeGreaterThan(loadsBefore)
+    const row = container.querySelector('[data-testid="profile-identity-tg:450316139"]')
+    expect(row).not.toBeNull()
+    expect(row!.textContent).toContain('Claimed elsewhere')
+  })
+
+  it('отвязка в другом клиенте убирает строку по событию', async () => {
+    mocks.getMyIdentities.mockResolvedValue({
+      identities: [
+        { provider: 'tg', externalId: '5', displayName: 'A', linkedAt: '2026-03-01T10:00:00.000Z' },
+      ],
+    })
+    const container = await renderSettings()
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="profile-identity-tg:5"]')).not.toBeNull()
+
+    mocks.getMyIdentities.mockResolvedValue({ identities: [] })
+    await emitIdentitiesUpdated()
+
+    expect(container.querySelector('[data-testid="profile-identity-tg:5"]')).toBeNull()
+    expect(container.querySelector('[data-testid="profile-identities-empty"]')).not.toBeNull()
+  })
+
+  it('черновик формы профиля не сбрасывается событием', async () => {
+    const container = await renderSettings()
+    await act(async () => {})
+
+    const notes = container.querySelector('#profile-notes') as HTMLTextAreaElement
+    expect(notes).not.toBeNull()
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value',
+    )!.set!
+    await act(async () => {
+      setter.call(notes, 'незаконченный черновик')
+      notes.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    await emitIdentitiesUpdated()
+
+    const notesAfter = container.querySelector('#profile-notes') as HTMLTextAreaElement
+    expect(notesAfter.value).toBe('незаконченный черновик')
   })
 })

@@ -4,6 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import type { ExternalIdentity, ProfileStore } from '@itphx/synth-shared';
 import { nowISO } from '@itphx/synth-shared';
 import type { IdentityClaimRepository } from '../../storage/ports/identity-claim-repository.js';
+import type { IdentitiesChangedHook } from '../../events/identities-events.js';
 
 /**
  * ADR-089: маршруты идентичностей текущего пользователя (`/api/v2/me/identities`).
@@ -77,6 +78,16 @@ export interface IdentityRoutesOptions {
    * без ограничения.
    */
   rateLimitGuard?: Middleware;
+  /**
+   * Инвариант 27: идентичности пользователя изменились (`identities.updated`,
+   * инстансный канал шины) — привязка подтверждена claim-кодом либо отвязка
+   * выполнена. Хук зовётся **только после успешной записи** (`400`/`404`/`409`
+   * молчат) и ровно один раз на запрос. Не передан (core без шины, тесты) —
+   * публикации нет, поведение прежнее. В payload — только вид мутации:
+   * `provider`/`externalId` (персональные данные) и claim-код туда не попадают
+   * по построению (инвариант 13 `AGENTS.md`).
+   */
+  onIdentitiesChanged?: IdentitiesChangedHook;
 }
 
 /**
@@ -100,6 +111,11 @@ export function createIdentityRoutes(
   // Дефолт — standalone: резолвим/создаём профиль `local` и работаем с его id.
   const resolveProfileId = opts.resolveProfileId
     ?? (async () => (await profileStore.getOrCreateProfile({ username: LOCAL_PROFILE_USERNAME })).id);
+  // Инвариант 27: единый шов публикации (`identities.updated`). Собран здесь и
+  // вызывается в каждом write-пути **после** успешной записи: обработчики
+  // возвращаются на ошибках раньше, поэтому молчание на `400`/`404`/`409`
+  // получается по построению, а не соглашением.
+  const onIdentitiesChanged = opts.onIdentitiesChanged;
 
   /** Пустой id профиля (не аутентифицирован) → 401, чтобы не искать профиль с пустым id. */
   const unauthorized = (c: Context) =>
@@ -126,6 +142,7 @@ export function createIdentityRoutes(
         404,
       );
     }
+    onIdentitiesChanged?.({ action: 'delete' });
     return c.json({ identities: updated.identities ?? [] });
   });
 
@@ -190,6 +207,7 @@ export function createIdentityRoutes(
         );
       }
 
+      onIdentitiesChanged?.({ action: 'claim' });
       return c.json({ identity }, 201);
     });
   }

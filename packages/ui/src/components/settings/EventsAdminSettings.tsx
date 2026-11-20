@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { EventBinding, EventDeliveryMode } from '@itphx/synth-shared'
 import { synthApi } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
@@ -6,6 +6,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { useCanManageEvents } from '@/hooks/useCanManageEvents'
 import { confirm } from '@/lib/confirm'
 import { useUIStore } from '@/stores/useUIStore'
+import { useEventsStore } from '@/stores/eventsStore'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '../ui/select'
@@ -78,6 +79,24 @@ export function EventsAdminSettings() {
   useEffect(() => {
     void loadBindings()
   }, [loadBindings])
+
+  /**
+   * Реестр привязок изменился на сервере (событие шины `events.updated`,
+   * инстансный канал, ADR-089): привязку или её ключ создал/изменил/удалил
+   * другой клиент или соседняя вкладка админки.
+   *
+   * Перечитываем **только список**: открытая форма создания, черновик
+   * редактирования и уже показанный секрет — ввод пользователя, они не
+   * сбрасываются (иначе чужая мутация стирала бы недописанную форму). Первый
+   * рендер пропускается (его грузит эффект выше).
+   */
+  const eventsRevision = useEventsStore((s) => s.revision)
+  const loadedRevisionRef = useRef(eventsRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === eventsRevision) return
+    loadedRevisionRef.current = eventsRevision
+    void loadBindings()
+  }, [eventsRevision, loadBindings])
 
   const openCreate = () => {
     if (!canManage) return

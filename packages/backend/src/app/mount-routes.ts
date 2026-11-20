@@ -104,6 +104,10 @@ import {
   // Словари классификации изменились — `dictionaries.updated` (шов write-путей
   // `createDictionaryRoutes`, `events/dictionaries-events.ts`).
   dictionariesChangedPublisher,
+  // Реестр приёма внешних событий и идентичности — `events.updated` /
+  // `identities.updated` (швы `events/*-events.ts`).
+  eventsChangedPublisher,
+  identitiesChangedPublisher,
   // Расширения/packs и слой плагинов (+ его политика) — `packs.updated` /
   // `plugins.updated`; снайпеты — `snippets.updated` (швы `events/*-events.ts`).
   packsChangedPublisher,
@@ -609,6 +613,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         rateLimitedKey: (c) => t('errors.rateLimited.eventKey', undefined, c),
         eventsDisabled: (c) => t('errors.unavailable.eventsDisabled', undefined, c),
       },
+      // Инвариант 27: реестр приёма событий изменился (`events.updated`,
+      // инстансный канал) — второй клиент перечитывает привязки, их ключи и
+      // правила без перезагрузки страницы. Секрета ключа в payload нет.
+      onEventsChanged: eventsChangedPublisher(eventBus),
     },
   ));
 
@@ -1602,6 +1610,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       claimCodeRequired: (c) => t('errors.validation.claimCodeRequired', undefined, c),
       unauthorized: (c) => t('auth.unauthorized', undefined, c),
     },
+    // Инвариант 27: идентичности изменились (`identities.updated`, инстансный
+    // канал) — панель профиля перечитывает список без перезагрузки страницы.
+    onIdentitiesChanged: identitiesChangedPublisher(eventBus),
   }));
 
   // LLM Gateway audit routes (ADR-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные.

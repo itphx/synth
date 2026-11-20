@@ -262,6 +262,27 @@ export type EventType =
   // сниппета (body), описания и алиасов в событии нет** — снапшот
   // недоверенного ввода в шину не попадает.
   | 'snippets.updated'
+  // Реестр приёма внешних событий (ADR-089) изменился: привязка создана
+  // (upsert) или изменена, привязка удалена (вместе с каскадом её ключей),
+  // API-ключ привязки создан/изменён/отозван/удалён, правило маршрутизации
+  // создано/изменено/удалено. Событие идёт в инстансный канал шины (ADR-118),
+  // но остаётся **админским**: write-пути `createEventRoutes` под write-guard
+  // (managed — ADMIN/LEAD), в `USER_FACING_INSTANCE_EVENTS` его нет. Реагируют
+  // раздел «События» (`EventsAdminSettings`) и секция правил
+  // (`EventRoutesSection`). Payload — вид мутации и id привязки/правила:
+  // **секрета ключа (`synth_evt_…`), его хеша и id самого ключа в событии нет
+  // никогда** (инвариант 13 `AGENTS.md`).
+  | 'events.updated'
+  // Идентичности текущего пользователя (ADR-089) изменились: внешняя
+  // идентичность привязана подтверждением владения (claim-flow) или отвязана.
+  // Событие идёт в инстансный канал шины (ADR-118); в
+  // `USER_FACING_INSTANCE_EVENTS` его нет (managed: доставляется
+  // `ADMIN`/`LEAD` через watch-all). Payload не несёт **никаких**
+  // идентификаторов — ни `provider`/`externalId` (это персональные данные
+  // пользователя), ни claim-кода: клиент перечитывает **свой** список
+  // (`GET /api/v2/me/identities`), и тип остаётся безопасным при будущем
+  // расширении доставки.
+  | 'identities.updated'
   // Этап 1 roadmap 0.13 (блок 1.3): «вопрос пользователю». Префикс
   // `user_question.*` — намеренно НЕ `question.*`: `question.asked` уже занят
   // смыслом «очередь зависла» (см. выше).
@@ -910,6 +931,103 @@ export type SnippetsUpdatedEventData = {
   snippetId?: string;
   /** Что произошло. */
   action: SnippetChangeAction;
+};
+
+/**
+ * Вид мутации реестра приёма внешних событий — поле `action` события
+ * `events.updated` (ADR-089).
+ *
+ * Привязки (bindings):
+ * - `binding.create` — привязка создана (`POST /api/v2/events/bindings`, upsert
+ *   без совпадения по `source`+`chatKey`/`threadKey`);
+ * - `binding.update` — существующая привязка изменена тем же upsert'ом (id
+ *   сохраняется);
+ * - `binding.delete` — привязка удалена вместе с каскадом её ключей
+ *   (`DELETE /api/v2/events/bindings/:id`).
+ *
+ * API-ключи привязки — часть её карточки (список метаданных в UI), поэтому
+ * каждая мутация ключа — отдельный вид:
+ * - `key.create` — ключ выдан (`POST /bindings/:id/keys`; секрет показывается
+ *   один раз и в событие не попадает по типу);
+ * - `key.update` — метаданные ключа изменены (`PATCH /bindings/:id/keys/:keyId`:
+ *   метка, описание, срок, лимит);
+ * - `key.revoke` — ключ отозван (`POST /bindings/:id/keys/:keyId/revoke`):
+ *   `revokedAt` виден в списке, поэтому это мутация **видимой** записи;
+ * - `key.delete` — ключ удалён (`DELETE /bindings/:id/keys/:keyId`).
+ *
+ * Правила маршрутизации (routes):
+ * - `route.create` — правило создано (`POST /api/v2/events/routes` без `id`);
+ * - `route.update` — правило изменено тем же upsert'ом (по `id`), в том числе
+ *   инлайн-переключатель `enabled`;
+ * - `route.delete` — правило удалено (`DELETE /api/v2/events/routes/:id`).
+ */
+export type EventsChangeAction =
+  | 'binding.create'
+  | 'binding.update'
+  | 'binding.delete'
+  | 'key.create'
+  | 'key.update'
+  | 'key.revoke'
+  | 'key.delete'
+  | 'route.create'
+  | 'route.update'
+  | 'route.delete';
+
+/**
+ * Payload события `events.updated` — реестр приёма внешних событий изменился.
+ *
+ * Минимальный **по построению**: вид мутации и id затронутой записи (привязка —
+ * она же родитель для мутаций её ключей; правило — для `route.*`). Клиент
+ * перечитывает свои списки обычными запросами (`GET /api/v2/events/bindings`,
+ * `GET /api/v2/events/routes` и, для открытой карточки,
+ * `GET /api/v2/events/bindings/:id/keys`).
+ *
+ * **Ни секрета ключа (`synth_evt_…`), ни его хеша, ни id самого ключа в событие
+ * не попадает никогда** (инвариант 13 `AGENTS.md`): ключ подписывает приём
+ * событий, а сигналу достаточно «перечитай карточку привязки». Id ключа в
+ * payload'е нет и подавно — список ключей перечитывается целиком по привязке;
+ * это свойство типа, а не соглашение вызывающих.
+ */
+export type EventsUpdatedEventData = {
+  /** Привязка, которой коснулась мутация (в т.ч. мутация её ключа). */
+  bindingId?: string;
+  /** Правило маршрутизации, которого коснулась мутация. */
+  routeId?: string;
+  /** Что произошло. */
+  action: EventsChangeAction;
+};
+
+/**
+ * Вид мутации идентичностей пользователя — поле `action` события
+ * `identities.updated` (ADR-089).
+ *
+ * - `claim` — внешняя идентичность привязана подтверждением владения
+ *   (`POST /api/v2/me/identities/claim`): одноразовый код погашен, в профиле
+ *   появилась новая запись;
+ * - `delete` — идентичность отвязана (`DELETE /api/v2/me/identities/:provider/:externalId`).
+ *
+ * Вида `create` нет намеренно: прямой линковки `POST /identities` в контракте
+ * **нет** — привязать можно только идентичность, владение которой подтверждено
+ * claim-кодом (см. комментарий `server/routes/identities.ts`).
+ */
+export type IdentitiesChangeAction = 'claim' | 'delete';
+
+/**
+ * Payload события `identities.updated` — идентичности пользователя изменились.
+ *
+ * **Пустой по построению**: только вид мутации, без единого идентификатора.
+ * Причина не в экономии, а в приватности: `provider`/`externalId` внешней
+ * идентичности (telegram-id, oidc-sub) — персональные данные человека, а
+ * событие идёт в **инстансный** канал шины (`publishInstance`), который
+ * доставляется и watch-all администраторам (`subscribeAll`), и — при будущем
+ * расширении `USER_FACING_INSTANCE_EVENTS` — любому аутентифицированному
+ * клиенту. Claim-код и токены не попадают в событие тем более (инвариант 13
+ * `AGENTS.md`). Клиенту сигнала достаточно: он перечитывает **свой** список
+ * (`GET /api/v2/me/identities`), а чужой ему и не нужен.
+ */
+export type IdentitiesUpdatedEventData = {
+  /** Что произошло. */
+  action: IdentitiesChangeAction;
 };
 
 /** Payload события `session.messages.cleared` — история очищена, кроме закреплённых. */

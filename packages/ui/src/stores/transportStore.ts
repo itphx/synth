@@ -43,6 +43,13 @@ import { usePluginsStore } from './pluginsStore'
 // Реестр сниппетов (`snippets.updated`) — редактор уровня и `#`-пикер
 // композера перечитывают список без перезагрузки страницы.
 import { useSnippetsStore } from './snippetsStore'
+// Реестр приёма внешних событий (`events.updated`) — раздел «События», его
+// секция правил и карточки привязок перечитывают списки без перезагрузки
+// страницы.
+import { useEventsStore } from './eventsStore'
+// Идентичности пользователя (`identities.updated`) — панель профиля
+// перечитывает список без перезагрузки страницы.
+import { useIdentitiesStore } from './identitiesStore'
 import { useExecutionProfilesStore } from './executionProfilesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
@@ -2043,6 +2050,30 @@ export function createDispatcher(): EventDispatcher {
     // текста сниппета и описания в событии нет.
     if (type === 'snippets.updated') {
       useSnippetsStore.getState().applyEvent()
+      return
+    }
+
+    // Реестр приёма внешних событий изменился (`events.updated`, инстансный
+    // канал шины, ADR-089) — тот же путь: привязки, их API-ключи и правила
+    // маршрутизации — ресурс инстанса, `sid` у события нет. Стор поднимает
+    // `revision`: раздел «События» (`EventsAdminSettings`) перечитывает список
+    // привязок, секция правил (`EventRoutesSection`) — свои правила, карточки
+    // `EventBindingKeys` — метаданные ключей; всё без перезагрузки страницы.
+    // Payload `{action, bindingId?, routeId?}` сигналу не нужен; ни секрета
+    // ключа, ни его хеша, ни id ключа в событии нет.
+    if (type === 'events.updated') {
+      useEventsStore.getState().applyEvent()
+      return
+    }
+
+    // Идентичности пользователя изменились (`identities.updated`, инстансный
+    // канал шины, ADR-089) — тот же путь: у идентичностей нет сессии. Стор
+    // поднимает `revision`, панель профиля (`ProfileSettings`) перечитывает
+    // свой список `GET /api/v2/me/identities`. Payload пуст по построению
+    // (только `action`): `provider`/`externalId` — персональные данные, а канал
+    // доставляется ещё и администраторам.
+    if (type === 'identities.updated') {
+      useIdentitiesStore.getState().applyEvent()
       return
     }
 

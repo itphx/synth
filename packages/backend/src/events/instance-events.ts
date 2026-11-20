@@ -62,6 +62,11 @@ export const USER_FACING_INSTANCE_EVENTS: ReadonlySet<EventType> = new Set<Event
   // `{action, snippetId?}`: текст снайпета в событие не попадает, поэтому тип
   // безопасен для обычного клиента.
   'snippets.updated',
+  // Идентичности (ADR-043): `/api/v2/me/identities` — собственные привязки
+  // пользователя, он их видит и отвязывает из настроек профиля. Payload —
+  // только `{action}`: ни `provider`, ни `externalId` (персональные данные) в нём
+  // нет по построению, поэтому тип безопасен для любого клиента.
+  'identities.updated',
   'pipeline.run.started',
   'pipeline.run.node_started',
   'pipeline.run.node_finished',

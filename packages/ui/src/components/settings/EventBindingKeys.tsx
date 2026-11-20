@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EventBinding, EventBindingApiKey, EventBindingApiKeyCreated } from '@itphx/synth-shared'
 import { synthApi } from '@/lib/api/synthApi'
@@ -7,6 +7,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
 import { cn } from '@/lib/utils'
+import { useEventsStore } from '@/stores/eventsStore'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { FieldTooltip, NumberField, TextField } from '../ui/settings'
@@ -113,6 +114,24 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
   useEffect(() => {
     void loadKeys()
   }, [loadKeys])
+
+  /**
+   * Метаданные ключей этой привязки изменились на сервере (событие шины
+   * `events.updated`, инстансный канал, ADR-089): ключ выдал/отозвал/удалил
+   * другой клиент или соседняя вкладка админки — статус в списке виден бейджем
+   * и без сигнала «залипал» бы на `active` до перезагрузки страницы.
+   *
+   * Перечитываем **только список**: открытая форма создания, черновик
+   * редактирования и уже показанный секрет — ввод пользователя, они не
+   * сбрасываются. Первый рендер пропускается (его грузит эффект выше).
+   */
+  const eventsRevision = useEventsStore((s) => s.revision)
+  const loadedRevisionRef = useRef(eventsRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === eventsRevision) return
+    loadedRevisionRef.current = eventsRevision
+    void loadKeys()
+  }, [eventsRevision, loadKeys])
 
   const resetCreateForm = () => {
     setLabel('')

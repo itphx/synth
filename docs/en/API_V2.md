@@ -518,6 +518,14 @@ no tokens, keys or source URLs in the payload) — plus `snippets.updated` (the 
 registry, ADR-126 §4: `action` `create`/`update`/`delete` + `snippetId?` — the canonical
 **name** of the record; no snippet body, description or aliases in the payload). All three are
 admin types (they are not in `USER_FACING_INSTANCE_EVENTS` and are not delivered to `USER`).
+Plus the instance-level `events.updated` (the external event intake registry, ADR-089: `action`
+`binding.create`/`binding.update`/`binding.delete`/`key.create`/`key.update`/`key.revoke`/
+`key.delete`/`route.create`/`route.update`/`route.delete` + `bindingId?`/`routeId?`; no API key
+secret (`synth_evt_…`), no hash and no key id in the payload — an admin type, not delivered to
+`USER`; `POST /api/v2/events` is ingress and publishes nothing) and `identities.updated` (user
+identities, ADR-089: `action` `claim`/`delete` and **nothing else** — `provider`/`externalId` and
+the claim code never reach the payload; the type is not delivered to `USER`, but the payload is
+empty by construction, so it stays safe if delivery is ever widened).
 Clients must
 handle them, otherwise the feed “sticks” after another client's action.
 
@@ -531,7 +539,8 @@ instance (across all session channels); a client resumes
 with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`). The instance channel
 (`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
 `execution.updated`, `credentials.updated`, `memory.updated`, `webhooks.updated`,
-`dictionaries.updated`, `packs.updated`, `plugins.updated`, `snippets.updated`) gets no number
+`dictionaries.updated`, `packs.updated`, `plugins.updated`, `snippets.updated`,
+`events.updated`, `identities.updated`) gets no number
 and is not journaled: there is no
 backfill for it, delivery is live only.
 

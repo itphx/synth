@@ -272,7 +272,8 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 `data:` — подписчик возвращает её в `Last-Event-ID`. Инстансный канал
 (`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
 `execution.updated`, `credentials.updated`, `memory.updated`, `webhooks.updated`,
-`dictionaries.updated`, `packs.updated`, `plugins.updated`, `snippets.updated`) номера
+`dictionaries.updated`, `packs.updated`, `plugins.updated`, `snippets.updated`,
+`events.updated`, `identities.updated`) номера
 не получает и в журнал не
 попадает: догона у него нет, доставка — только живьём. Эти события безадресные и несут минимальный payload
 (`{id?, name?, action, scope?, projectId?, sessionId?}` — без конфигов, секретов
@@ -500,7 +501,17 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   источников в payload нет) — а также `snippets.updated` (реестр `#`-сниппетов, ADR-126 §4:
   `action` `create`/`update`/`delete` + `snippetId?` — каноническое **имя** записи; тела
   сниппета, описания и алиасов в payload нет). Все три — админские типы (в
-  `USER_FACING_INSTANCE_EVENTS` их нет, к `USER` не доставляются). Клиенты обязаны их
+  `USER_FACING_INSTANCE_EVENTS` их нет, к `USER` не доставляются). Плюс инстансные
+  `events.updated` (реестр приёма внешних событий, ADR-089: `action`
+  `binding.create`/`binding.update`/`binding.delete`/`key.create`/`key.update`/
+  `key.revoke`/`key.delete`/`route.create`/`route.update`/`route.delete` +
+  `bindingId?`/`routeId?`; секрета ключа (`synth_evt_…`), его хеша и id ключа в
+  payload нет — админский тип, к `USER` не доставляется; `POST /api/v2/events` —
+  ingress, события не даёт) и `identities.updated` (идентичности пользователя,
+  ADR-089: `action` `claim`/`delete`, **больше ничего** — `provider`/`externalId`
+  и claim-код в payload не попадают; тип не доставляется к `USER`, но payload
+  пуст по построению, поэтому безопасен и для расширения доставки). Клиенты
+  обязаны их
   обрабатывать — иначе лента и списки «залипают» после действий другого клиента или агента:
   именно так выглядела дыра «агент создал запись тулом из чата, а панель показывает старый
   состав до перезагрузки страницы». Механический гейт — `packages/core/src/events/publish-census.test.ts`

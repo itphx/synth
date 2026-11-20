@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   EventRouteMatch,
   EventRouteRule,
@@ -9,6 +9,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
+import { useEventsStore } from '@/stores/eventsStore'
 import { Icon } from '../icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { Button } from '../ui/button'
@@ -167,6 +168,24 @@ export function EventRoutesSection({ canManage = true }: { canManage?: boolean }
   useEffect(() => {
     void loadRules()
   }, [loadRules])
+
+  /**
+   * Список правил маршрутизации изменился на сервере (событие шины
+   * `events.updated`, инстансный канал, ADR-089): правило создал/изменил/удалил
+   * другой клиент или соседняя вкладка админки — в том числе инлайн-тумблер
+   * `enabled`, который виден в списке бейджем статуса.
+   *
+   * Перечитываем **только список**: открытый редактор и его черновик — ввод
+   * пользователя, они не сбрасываются (иначе чужая мутация стирала бы
+   * недописанную форму). Первый рендер пропускается (его грузит эффект выше).
+   */
+  const eventsRevision = useEventsStore((s) => s.revision)
+  const loadedRevisionRef = useRef(eventsRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === eventsRevision) return
+    loadedRevisionRef.current = eventsRevision
+    void loadRules()
+  }, [eventsRevision, loadRules])
 
   const openCreate = () => {
     if (!canManage) return
