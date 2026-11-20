@@ -43,16 +43,23 @@ const mocks = vi.hoisted(() => ({
   getSecurityAuditSettings: vi.fn(),
   saveSecurityAuditSettings: vi.fn(),
   resetSecurityAuditSettings: vi.fn(),
+  // «Правила подтверждений по умолчанию» (`/settings/permissions`) — тот же риск: без мока эффект падает.
+  getPermissionSettings: vi.fn(),
+  savePermissionSettings: vi.fn(),
+  resetPermissionSettings: vi.fn(),
   // Политики инструментов в «Безопасности» быть не должно — проверяем, что не дёргается.
   getToolsPolicy: vi.fn(),
   saveToolsPolicy: vi.fn(),
   notify: vi.fn(),
+  // Сброс правил идёт через диалог подтверждения (в Node его нет — мок возвращает ответ).
+  confirm: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
 }))
+vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
@@ -100,6 +107,17 @@ function auditInfo(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** Снимок секции «Правила подтверждений» для GET/PUT/DELETE /settings/permissions. */
+function permissionInfo(overrides: Record<string, unknown> = {}) {
+  return {
+    rules: {},
+    source: 'default',
+    defaults: { rules: {} },
+    askTimeoutMs: 300_000,
+    ...overrides,
+  }
+}
+
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
@@ -143,6 +161,8 @@ beforeEach(() => {
     isOverridden: false,
   })
   mocks.getSecurityAuditSettings.mockResolvedValue(auditInfo())
+  mocks.getPermissionSettings.mockResolvedValue(permissionInfo())
+  mocks.confirm.mockResolvedValue(true)
 })
 
 afterEach(async () => {
@@ -612,5 +632,283 @@ describe('SecuritySettings — «Аудит решений по правам» (
 
     expect(save(container).disabled).toBe(true)
     expect(mocks.saveSecurityAuditSettings).not.toHaveBeenCalled()
+  })
+})
+
+describe('SecuritySettings — «Правила подтверждений по умолчанию» (settings/permissions)', () => {
+  const byTestId = (container: HTMLElement, id: string) =>
+    container.querySelector(`[data-testid="${id}"]`) as HTMLElement | null
+  const keyInput = (container: HTMLElement, index: number) =>
+    byTestId(container, `permission-rule-key-${index}`) as HTMLInputElement
+  const actionTrigger = (container: HTMLElement, index: number) =>
+    byTestId(container, `permission-rule-action-${index}`) as HTMLButtonElement
+  const save = (container: HTMLElement) =>
+    byTestId(container, 'security-permission-rules-save') as HTMLButtonElement
+  const reset = (container: HTMLElement) =>
+    byTestId(container, 'security-permission-rules-reset') as HTMLButtonElement
+  const validation = (container: HTMLElement) => byTestId(container, 'security-permission-rules-validation')
+
+  /** Изменить controlled-инпут так, чтобы React увидел `onChange`. */
+  async function setInputValue(input: HTMLInputElement, value: string): Promise<void> {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+
+  async function clickTestId(container: HTMLElement, id: string): Promise<void> {
+    const element = byTestId(container, id)
+    expect(element, `элемент ${id}`).not.toBeNull()
+    await act(async () => {
+      element!.click()
+    })
+  }
+
+  /** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+  async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+    await act(async () => {
+      trigger.click()
+    })
+    const listId = trigger.getAttribute('aria-controls')
+    const scope = listId ? document.getElementById(listId) ?? document.body : document.body
+    const options = [...scope.querySelectorAll('[role="option"]')] as HTMLElement[]
+    const option = options.find((o) => o.textContent?.trim().startsWith(label))
+    expect(option, `option "${label}"`).toBeTruthy()
+    await act(async () => {
+      option!.click()
+    })
+  }
+
+  it('рендерит правила из GET: ключи, действия, паттерны, источник и справку', async () => {
+    mocks.getPermissionSettings.mockResolvedValue(
+      permissionInfo({
+        rules: { read_file: 'allow', execute_shell: { 'git status *': 'deny' } },
+        source: 'runtime',
+        defaults: { rules: { read_file: 'allow' } },
+      }),
+    )
+    const container = await renderSettings()
+
+    expect(mocks.getPermissionSettings).toHaveBeenCalledTimes(1)
+    const block = container.querySelector('[data-settings-section="security-permission-rules"]')
+    expect(block).not.toBeNull()
+    expect(block!.textContent).toContain('Default approval rules')
+
+    expect(keyInput(container, 0).value).toBe('read_file')
+    expect(keyInput(container, 1).value).toBe('execute_shell')
+    // Строковое правило — действие в селекте; объектное — раскрыто в пару.
+    expect(actionTrigger(container, 0).textContent).toContain('allow — permit')
+    expect(byTestId(container, 'permission-rule-action-1')).toBeNull()
+    expect(
+      (byTestId(container, 'permission-rule-pattern-1-0') as HTMLInputElement).value,
+    ).toBe('git status *')
+
+    expect(byTestId(container, 'security-permission-rules-source')?.textContent).toBe(
+      'from settings',
+    )
+    // `askTimeoutMs` — только справка (редактируется в блоке «Защищённые пути»).
+    expect(byTestId(container, 'security-permission-rules-ask-timeout')?.textContent).toContain(
+      '300 s',
+    )
+    expect(byTestId(container, 'security-permission-rules-defaults')?.textContent).toContain('1')
+    expect(reset(container).disabled).toBe(false)
+  })
+
+  it('добавление и сохранение: уходит полная карта {rules}', async () => {
+    mocks.getPermissionSettings.mockResolvedValue(
+      permissionInfo({ rules: { read_file: 'allow' }, source: 'runtime' }),
+    )
+    mocks.savePermissionSettings.mockResolvedValue(
+      permissionInfo({ rules: { read_file: 'allow', shell: 'allow' }, source: 'runtime' }),
+    )
+    const container = await renderSettings()
+
+    // Без правок сохранять нечего.
+    expect(save(container).disabled).toBe(true)
+
+    await clickTestId(container, 'permission-rule-add')
+    await setInputValue(keyInput(container, 1), 'shell')
+    await selectOption(actionTrigger(container, 1), 'allow')
+    expect(save(container).disabled).toBe(false)
+
+    await clickTestId(container, 'security-permission-rules-save')
+
+    expect(mocks.savePermissionSettings).toHaveBeenCalledWith({
+      rules: { read_file: 'allow', shell: 'allow' },
+    })
+    expect(byTestId(container, 'security-permission-rules-source')?.textContent).toBe(
+      'from settings',
+    )
+    expect(mocks.notify).toHaveBeenCalled()
+  })
+
+  it('удаление правила: сохранение отправляет карту без него', async () => {
+    mocks.getPermissionSettings.mockResolvedValue(
+      permissionInfo({ rules: { read_file: 'allow', execute_shell: 'deny' }, source: 'runtime' }),
+    )
+    mocks.savePermissionSettings.mockResolvedValue(
+      permissionInfo({ rules: { execute_shell: 'deny' }, source: 'runtime' }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'permission-rule-remove-0')
+    expect(keyInput(container, 0).value).toBe('execute_shell')
+
+    await clickTestId(container, 'security-permission-rules-save')
+
+    // `PUT` заменяет карту целиком — снятое правило не «всплывает» из базы.
+    expect(mocks.savePermissionSettings).toHaveBeenCalledWith({ rules: { execute_shell: 'deny' } })
+  })
+
+  it('объектное правило: пара паттерн → действие уходит вложенной картой', async () => {
+    mocks.savePermissionSettings.mockResolvedValue(
+      permissionInfo({ rules: { write_file: { '*.env': 'deny' } }, source: 'runtime' }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'permission-rule-add')
+    await setInputValue(keyInput(container, 0), 'write_file')
+    await clickTestId(container, 'permission-rule-patterns-0')
+
+    // Паттерны есть — действие берётся из пары, селект ключа уступает.
+    expect(byTestId(container, 'permission-rule-action-0')).toBeNull()
+    // Пустой паттерн блокирует отправку.
+    expect(validation(container)?.textContent).toContain('Empty pattern')
+    expect(save(container).disabled).toBe(true)
+
+    const pattern = byTestId(container, 'permission-rule-pattern-0-0') as HTMLInputElement
+    await setInputValue(pattern, '*.env')
+    await selectOption(byTestId(container, 'permission-rule-pattern-action-0-0')!, 'deny')
+    expect(save(container).disabled).toBe(false)
+
+    await clickTestId(container, 'security-permission-rules-save')
+
+    expect(mocks.savePermissionSettings).toHaveBeenCalledWith({
+      rules: { write_file: { '*.env': 'deny' } },
+    })
+
+    // Снятие всех паттернов возвращает строковую форму правила (снова виден селект действия).
+    await clickTestId(container, 'permission-rule-pattern-remove-0-0')
+    expect(byTestId(container, 'permission-rule-pattern-0-0')).toBeNull()
+    expect(byTestId(container, 'permission-rule-action-0')).not.toBeNull()
+  })
+
+  it('сброс к базе идёт через confirm() и DELETE, форма принимает ответ', async () => {
+    mocks.getPermissionSettings.mockResolvedValue(
+      permissionInfo({
+        rules: { read_file: 'deny' },
+        source: 'runtime',
+        defaults: { rules: { read_file: 'allow' } },
+      }),
+    )
+    mocks.resetPermissionSettings.mockResolvedValue(
+      permissionInfo({
+        rules: { read_file: 'allow' },
+        source: 'config',
+        defaults: { rules: { read_file: 'allow' } },
+      }),
+    )
+    const container = await renderSettings()
+
+    expect(reset(container).disabled).toBe(false)
+    await clickTestId(container, 'security-permission-rules-reset')
+
+    expect(mocks.confirm).toHaveBeenCalled()
+    expect(mocks.resetPermissionSettings).toHaveBeenCalledTimes(1)
+    expect(actionTrigger(container, 0).textContent).toContain('allow — permit')
+    expect(byTestId(container, 'security-permission-rules-source')?.textContent).toBe(
+      'from config.yaml',
+    )
+    expect(mocks.notify).toHaveBeenCalled()
+  })
+
+  it('отказ в подтверждении не сбрасывает правила', async () => {
+    mocks.confirm.mockResolvedValue(false)
+    mocks.getPermissionSettings.mockResolvedValue(
+      permissionInfo({ rules: { read_file: 'deny' }, source: 'runtime' }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'security-permission-rules-reset')
+
+    expect(mocks.confirm).toHaveBeenCalled()
+    expect(mocks.resetPermissionSettings).not.toHaveBeenCalled()
+  })
+
+  it('клиентская валидация: пустой ключ и дубликат гасят сохранение', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'permission-rule-add')
+    await clickTestId(container, 'permission-rule-add')
+
+    // Обе строки без ключа — сообщение (про первую строку) и Save недоступен.
+    expect(validation(container)?.textContent).toContain('Empty rule key (row 1)')
+    expect(save(container).disabled).toBe(true)
+
+    await setInputValue(keyInput(container, 0), 'shell')
+    // Ошибка смещается на оставшуюся пустую строку — заполнение работает.
+    expect(validation(container)?.textContent).toContain('Empty rule key (row 2)')
+
+    await setInputValue(keyInput(container, 1), 'shell')
+    // Дубликат ключа: карта схлопнула бы строки — отправлять нельзя.
+    expect(validation(container)?.textContent).toContain('listed twice')
+    expect(save(container).disabled).toBe(true)
+
+    await act(async () => {
+      save(container).click()
+    })
+    expect(mocks.savePermissionSettings).not.toHaveBeenCalled()
+  })
+
+  it('таймаут подтверждения — только справка: 0 с показывается как выключенный', async () => {
+    mocks.getPermissionSettings.mockResolvedValue(permissionInfo({ askTimeoutMs: 0 }))
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'security-permission-rules-ask-timeout')?.textContent).toContain(
+      'timeout is off',
+    )
+    // Поле таймаута редактируется в блоке «Защищённые пути» — здесь его нет.
+    expect(
+      container
+        .querySelector('[data-settings-section="security-permission-rules"]')!
+        .querySelector('input[type="number"]'),
+    ).toBeNull()
+  })
+
+  it('серверная 400 показывается текстом ошибки', async () => {    mocks.getPermissionSettings.mockResolvedValue(
+      permissionInfo({ rules: { read_file: 'allow' }, source: 'runtime' }),
+    )
+    mocks.savePermissionSettings.mockRejectedValue(
+      Object.assign(new Error('permission.rules: невалидные правила ("shell")'), {
+        status: 400,
+        code: 'VALIDATION_ERROR',
+      }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'permission-rule-add')
+    await setInputValue(keyInput(container, 1), 'shell')
+    await clickTestId(container, 'security-permission-rules-save')
+
+    expect(byTestId(container, 'security-permission-rules-error')?.textContent).toContain(
+      'невалидные правила',
+    )
+  })
+
+  it('неудачная загрузка блокирует сохранение (PUT заменяет карту целиком)', async () => {
+    mocks.getPermissionSettings.mockRejectedValue(new Error('HTTP 500'))
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'security-permission-rules-load-error')).not.toBeNull()
+
+    await clickTestId(container, 'permission-rule-add')
+    await setInputValue(keyInput(container, 0), 'shell')
+    expect(save(container).disabled).toBe(true)
+
+    await act(async () => {
+      save(container).click()
+    })
+    expect(mocks.savePermissionSettings).not.toHaveBeenCalled()
   })
 })

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { useStableItemKeys } from '@/hooks/useStableItemKeys'
+import { confirm } from '@/lib/confirm'
 import {
   synthApi,
   type LlmGatewaySettings,
@@ -25,6 +26,14 @@ import {
   type SecurityAuditSettings,
   type SecurityAuditSettingsField,
 } from '@/lib/api/securityAuditSettings'
+import {
+  PERMISSION_ACTIONS,
+  PERMISSION_ASK_TIMEOUT_FALLBACK_MS,
+  type PermissionAction,
+  type PermissionRule,
+  type PermissionRulesSource,
+  type PermissionSettingsView,
+} from '@/lib/api/permissionSettings'
 import { TooltipProvider } from '../ui/tooltip'
 import { RequestLimitsSettings } from './RequestLimitsSettings'
 import { SelectContent, SelectItem } from '../ui/select'
@@ -172,11 +181,110 @@ function auditLockedFieldsFromError(err: unknown): SecurityAuditSettingsField[] 
   return []
 }
 
+// --- Правила подтверждений по умолчанию (settings/permissions) ---
+
+/** Черновик правила: действие для ключа либо карта «паттерн → действие». */
+interface PermissionRuleDraft {
+  key: string
+  /** Действие строкового правила (действует, пока паттернов нет). */
+  action: PermissionAction
+  /** Пары «паттерн → действие»; непустой список делает правило объектным. */
+  patterns: Array<{ pattern: string; action: PermissionAction }>
+}
+
+/** Справка секции: источник карты, её база и таймаут подтверждения (только чтение). */
+interface PermissionRulesMeta {
+  source: PermissionRulesSource
+  defaults: Record<string, PermissionRule>
+  askTimeoutMs: number
+}
+
+const DEFAULT_PERMISSION_RULES_META: PermissionRulesMeta = {
+  source: 'default',
+  defaults: {},
+  askTimeoutMs: PERMISSION_ASK_TIMEOUT_FALLBACK_MS,
+}
+
+/** Ошибка формы правил до отправки: i18n-ключ и параметры (не готовый текст). */
+interface PermissionRulesFormError {
+  key: string
+  params?: Record<string, string>
+}
+
+/** Строки формы из карты правил (объектное правило раскрывается во вложенные пары). */
+function ruleDraftsFrom(rules: Record<string, PermissionRule>): PermissionRuleDraft[] {
+  return Object.entries(rules).map(([key, rule]) =>
+    typeof rule === 'string'
+      ? { key, action: rule, patterns: [] }
+      : {
+          key,
+          // У объектного правила действие ключа не используется: если пользователь
+          // снимет все паттерны, останется безопасный `ask`.
+          action: 'ask',
+          patterns: Object.entries(rule).map(([pattern, action]) => ({ pattern, action })),
+        },
+  )
+}
+
+/** Карта правил из строк формы: пары есть → объектная форма, иначе действие ключа. */
+function rulesFromRuleDrafts(rows: PermissionRuleDraft[]): Record<string, PermissionRule> {
+  const out: Record<string, PermissionRule> = {}
+  for (const row of rows) {
+    const key = row.key.trim()
+    out[key] =
+      row.patterns.length === 0
+        ? row.action
+        : Object.fromEntries(row.patterns.map((pair) => [pair.pattern.trim(), pair.action]))
+  }
+  return out
+}
+
+/** Сравнение карт правил без учёта порядка ключей (порядок строк формы незначим). */
+function sameRules(
+  a: Record<string, PermissionRule>,
+  b: Record<string, PermissionRule>,
+): boolean {
+  const normalize = (rules: Record<string, PermissionRule>): string =>
+    JSON.stringify(
+      Object.keys(rules)
+        .sort()
+        .map((key) => {
+          const rule = rules[key] as PermissionRule
+          return typeof rule === 'string'
+            ? [key, rule]
+            : [key, Object.keys(rule).sort().map((pattern) => [pattern, rule[pattern]])]
+        }),
+    )
+  return normalize(a) === normalize(b)
+}
+
+/**
+ * Клиентская проверка формы: пустой ключ, дубликат ключа и пустой паттерн
+ * блокируют сохранение (сервер ответил бы `400`, но лучше не отправлять).
+ */
+function validateRuleDrafts(rows: PermissionRuleDraft[]): PermissionRulesFormError | null {
+  const seen = new Set<string>()
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index] as PermissionRuleDraft
+    const key = row.key.trim()
+    if (key === '') {
+      return { key: 'permissionRules.error.emptyKey', params: { row: String(index + 1) } }
+    }
+    if (seen.has(key)) return { key: 'permissionRules.error.duplicateKey', params: { key } }
+    seen.add(key)
+    if (row.patterns.some((pair) => pair.pattern.trim() === '')) {
+      return { key: 'permissionRules.error.emptyPattern', params: { key } }
+    }
+  }
+  return null
+}
+
 /**
  * ADR-072: секция «Безопасность» на коллекции `components/ui/settings/`.
  *
- * Три независимых блока: шлюз безопасности (llmGateway), паттерны обфускации
- * (llmGateway/patterns) и защищённые пути (security + protected-paths).
+ * Четыре независимых блока: шлюз безопасности (llmGateway), паттерны обфускации
+ * (llmGateway/patterns), защищённые пути (security + protected-paths) и правила
+ * подтверждений по умолчанию (settings/permissions).
  * Поведение, эндпоинты, `data-testid` и i18n-ключи сохранены при миграции.
  */
 export function SecuritySettings() {
@@ -261,6 +369,18 @@ export function SecuritySettings() {
     null,
   )
 
+  // --- Правила подтверждений по умолчанию (settings/permissions) ---
+  const [ruleRows, setRuleRows] = useState<PermissionRuleDraft[]>([])
+  const [savedRules, setSavedRules] = useState<Record<string, PermissionRule>>({})
+  const [rulesMeta, setRulesMeta] = useState<PermissionRulesMeta>(DEFAULT_PERMISSION_RULES_META)
+  // Стабильные ключи строк (не индексы): удаление строки не переиспользует DOM соседа.
+  const ruleRowKeys = useStableItemKeys(ruleRows.length)
+  const [rulesLoading, setRulesLoading] = useState(true)
+  const [rulesLoadFailed, setRulesLoadFailed] = useState(false)
+  const [rulesSaving, setRulesSaving] = useState(false)
+  const [rulesResetting, setRulesResetting] = useState(false)
+  const [rulesError, setRulesError] = useState<string | null>(null)
+
   /** Применить снимок секции «Безопасность» (эффективные значения + источник). */
   const applyPromptInjection = (info: SecuritySettingsResponse) => {
     const pi = info.security.promptInjection
@@ -286,6 +406,24 @@ export function SecuritySettings() {
     setSavedAudit(next)
     setAuditInfo(info)
     setAuditError(null)
+  }
+
+  /**
+   * Применить снимок секции «Правила подтверждений» (`GET/PUT/DELETE /settings/permissions`).
+   * `keepRows` — после `PUT`: строки остаются как в форме (не схлопываются раскрытые паттерны).
+   */
+  const applyPermissionRules = (
+    view: PermissionSettingsView,
+    options: { keepRows?: boolean } = {},
+  ) => {
+    if (!options.keepRows) setRuleRows(ruleDraftsFrom(view.rules))
+    setSavedRules(view.rules)
+    setRulesMeta({
+      source: view.source,
+      defaults: view.defaults.rules,
+      askTimeoutMs: view.askTimeoutMs,
+    })
+    setRulesError(null)
   }
 
   useEffect(() => {
@@ -393,6 +531,26 @@ export function SecuritySettings() {
       })
       .finally(() => {
         if (!cancelled) setAuditLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    synthApi
+      .getPermissionSettings()
+      .then((view) => {
+        if (cancelled) return
+        applyPermissionRules(view)
+        setRulesLoadFailed(false)
+      })
+      .catch(() => {
+        if (!cancelled) setRulesLoadFailed(true)
+      })
+      .finally(() => {
+        if (!cancelled) setRulesLoading(false)
       })
     return () => {
       cancelled = true
@@ -642,6 +800,113 @@ export function SecuritySettings() {
       setAuditError(`${t('securityaudit.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`)
     } finally {
       setAuditSaving(false)
+    }
+  }
+
+  // --- Правила подтверждений: производные значения и действия ---
+  const ruleDrafts = useMemo(() => rulesFromRuleDrafts(ruleRows), [ruleRows])
+  const rulesFormError = useMemo(() => validateRuleDrafts(ruleRows), [ruleRows])
+  // Сравнение идёт по карте правил: раскрытие паттернов и порядок строк — не изменение.
+  const rulesDirty = useMemo(() => !sameRules(ruleDrafts, savedRules), [ruleDrafts, savedRules])
+  // Сброс доступен только при runtime-карте (env-слоя у правил нет).
+  const rulesCanReset = rulesMeta.source === 'runtime'
+  // Опции действия — общие для строки правила и строки паттерна.
+  const permissionActionItems = PERMISSION_ACTIONS.map((action) => ({
+    value: action,
+    label: t(`permissionRules.action.${action}`),
+  }))
+  const permissionActionOptions = PERMISSION_ACTIONS.map((action) => (
+    <SelectItem key={action} value={action}>
+      {t(`permissionRules.action.${action}`)}
+    </SelectItem>
+  ))
+
+  const updateRuleRow = (index: number, patch: Partial<PermissionRuleDraft>) => {
+    setRuleRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)))
+  }
+
+  const removeRuleRow = (index: number) => {
+    setRuleRows((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  const addRulePattern = (index: number) => {
+    setRuleRows((prev) =>
+      prev.map((row, i) =>
+        i === index ? { ...row, patterns: [...row.patterns, { pattern: '', action: 'ask' }] } : row,
+      ),
+    )
+  }
+
+  const updateRulePattern = (
+    rowIndex: number,
+    patternIndex: number,
+    patch: Partial<{ pattern: string; action: PermissionAction }>,
+  ) => {
+    setRuleRows((prev) =>
+      prev.map((row, i) =>
+        i === rowIndex
+          ? {
+              ...row,
+              patterns: row.patterns.map((pair, j) =>
+                j === patternIndex ? { ...pair, ...patch } : pair,
+              ),
+            }
+          : row,
+      ),
+    )
+  }
+
+  const removeRulePattern = (rowIndex: number, patternIndex: number) => {
+    setRuleRows((prev) =>
+      prev.map((row, i) =>
+        i === rowIndex
+          ? { ...row, patterns: row.patterns.filter((_, j) => j !== patternIndex) }
+          : row,
+      ),
+    )
+  }
+
+  const handleRulesSave = async () => {
+    // Невалидную форму не отправляем: сервер ответил бы `400`.
+    if (rulesSaving || rulesFormError) return
+    setRulesSaving(true)
+    setRulesError(null)
+    try {
+      // Тело — карта целиком (`PUT` заменяет правила, а не дополняет).
+      applyPermissionRules(
+        await synthApi.savePermissionSettings({ rules: ruleDrafts }),
+        { keepRows: true },
+      )
+      notify({ text: t('permissionRules.saved'), type: 'success', category: 'system' })
+    } catch (e) {
+      setRulesError(
+        `${t('permissionRules.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`,
+      )
+    } finally {
+      setRulesSaving(false)
+    }
+  }
+
+  const handleRulesReset = async () => {
+    const ok = await confirm({
+      title: t('permissionRules.resetConfirmTitle'),
+      message: t('permissionRules.resetConfirm'),
+      confirmLabel: t('permissionRules.reset'),
+      variant: 'danger',
+      icon: 'refresh',
+    })
+    if (!ok) return
+    setRulesResetting(true)
+    setRulesError(null)
+    try {
+      applyPermissionRules(await synthApi.resetPermissionSettings())
+      notify({ text: t('permissionRules.resetDone'), type: 'success', category: 'system' })
+    } catch (e) {
+      setRulesError(
+        `${t('permissionRules.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`,
+      )
+    } finally {
+      setRulesResetting(false)
     }
   }
 
@@ -1074,6 +1339,220 @@ export function SecuritySettings() {
 
             {auditSource === 'default' && (
               <div className="text-xs text-muted-foreground">{t('securityaudit.baseHint')}</div>
+            )}
+          </>
+        )}
+      </SettingsSection>
+
+      {/* Правила подтверждений по умолчанию (settings/permissions) */}
+      <SettingsSection
+        id="security-permission-rules"
+        title={t('permissionRules.title')}
+        description={t('permissionRules.description')}
+        tooltip={t('settings.help.security.section.security-permission-rules')}
+        actions={
+          <span
+            className={`${BADGE} ${SOURCE_BADGE_CLASS[rulesMeta.source]}`}
+            data-testid="security-permission-rules-source"
+          >
+            {t(`permissionRules.source.${rulesMeta.source}`)}
+          </span>
+        }
+      >
+        {rulesLoading && (
+          <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
+        )}
+
+        {!rulesLoading && (
+          <>
+            {rulesLoadFailed && (
+              <div
+                role="alert"
+                data-testid="security-permission-rules-load-error"
+                className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm"
+              >
+                {t('permissionRules.loadError')}
+              </div>
+            )}
+
+            <SettingsItem className="space-y-2">
+              {ruleRows.length === 0 && (
+                <div className="text-center text-muted-foreground py-6 text-sm">
+                  {t('permissionRules.empty')}
+                </div>
+              )}
+
+              {ruleRows.map((row, index) => (
+                <div
+                  key={ruleRowKeys[index]}
+                  className="flex flex-col gap-2 min-w-0"
+                  data-testid={`permission-rule-${index}`}
+                >
+                  <div className="flex flex-wrap items-start gap-2 min-w-0">
+                    <TextField
+                      value={row.key}
+                      onChange={(e) => updateRuleRow(index, { key: e.target.value })}
+                      placeholder={t('permissionRules.keyPlaceholder')}
+                      aria-label={t('permissionRules.key')}
+                      mono
+                      containerClassName="flex-1 min-w-0"
+                      data-testid={`permission-rule-key-${index}`}
+                    />
+                    {/* Действие ключа видно, только пока правило не задано паттернами. */}
+                    {row.patterns.length === 0 && (
+                      <SelectField
+                        value={row.action}
+                        onValueChange={(value) =>
+                          updateRuleRow(index, { action: value as PermissionAction })
+                        }
+                        ariaLabel={t('permissionRules.action')}
+                        triggerTestId={`permission-rule-action-${index}`}
+                        items={permissionActionItems}
+                        containerClassName="w-full sm:w-44 shrink-0"
+                      >
+                        <SelectContent>{permissionActionOptions}</SelectContent>
+                      </SelectField>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => addRulePattern(index)}
+                      data-testid={`permission-rule-patterns-${index}`}
+                    >
+                      {t('permissionRules.patterns.add')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => removeRuleRow(index)}
+                      data-testid={`permission-rule-remove-${index}`}
+                    >
+                      {t('permissionRules.remove')}
+                    </Button>
+                  </div>
+
+                  {row.patterns.length > 0 && (
+                    <div className="flex flex-col gap-1.5 min-w-0 pl-3">
+                      <div className="text-xs text-muted-foreground min-w-0 break-words">
+                        {t('permissionRules.patterns.hint')}
+                      </div>
+                      {row.patterns.map((pair, patternIndex) => (
+                        <div
+                          key={`${ruleRowKeys[index]}-${patternIndex}`}
+                          className="flex flex-wrap items-center gap-2 min-w-0"
+                        >
+                          <TextField
+                            value={pair.pattern}
+                            onChange={(e) =>
+                              updateRulePattern(index, patternIndex, { pattern: e.target.value })
+                            }
+                            placeholder={t('permissionRules.patterns.placeholder')}
+                            aria-label={t('permissionRules.patterns.pattern')}
+                            mono
+                            containerClassName="flex-1 min-w-0"
+                            data-testid={`permission-rule-pattern-${index}-${patternIndex}`}
+                          />
+                          <SelectField
+                            value={pair.action}
+                            onValueChange={(value) =>
+                              updateRulePattern(index, patternIndex, {
+                                action: value as PermissionAction,
+                              })
+                            }
+                            ariaLabel={t('permissionRules.action')}
+                            triggerTestId={`permission-rule-pattern-action-${index}-${patternIndex}`}
+                            items={permissionActionItems}
+                            containerClassName="w-full sm:w-44 shrink-0"
+                          >
+                            <SelectContent>{permissionActionOptions}</SelectContent>
+                          </SelectField>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="shrink-0"
+                            onClick={() => removeRulePattern(index, patternIndex)}
+                            data-testid={`permission-rule-pattern-remove-${index}-${patternIndex}`}
+                          >
+                            {t('permissionRules.patterns.remove')}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              <Button
+                variant="outline"
+                className="shrink-0 self-start"
+                onClick={() =>
+                  setRuleRows((prev) => [...prev, { key: '', action: 'ask', patterns: [] }])
+                }
+                data-testid="permission-rule-add"
+              >
+                {t('permissionRules.add')}
+              </Button>
+            </SettingsItem>
+
+            {/* Клиентская валидация показывается до отправки и гасит Save. */}
+            {rulesFormError && (
+              <div
+                role="alert"
+                data-testid="security-permission-rules-validation"
+                className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm"
+              >
+                {t(rulesFormError.key, rulesFormError.params)}
+              </div>
+            )}
+
+            {rulesError && (
+              <div
+                role="alert"
+                data-testid="security-permission-rules-error"
+                className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm"
+              >
+                {rulesError}
+              </div>
+            )}
+
+            <SettingsActions
+              onSave={() => void handleRulesSave()}
+              onReset={() => void handleRulesReset()}
+              saving={rulesSaving}
+              // `PUT` заменяет карту целиком: после неудачной загрузки сохранять
+              // нельзя — иначе форма с пустой картой стёрла бы правила на сервере.
+              saveDisabled={rulesLoadFailed || !rulesDirty || rulesFormError !== null}
+              resetDisabled={rulesResetting || rulesLoadFailed || !rulesCanReset}
+              isDefault={!rulesCanReset}
+              saveLabel={t('permissionRules.save')}
+              resetLabel={t('permissionRules.reset')}
+              saveTestId="security-permission-rules-save"
+              resetTestId="security-permission-rules-reset"
+            />
+
+            {/* Таймаут подтверждения редактируется в блоке «Защищённые пути» — здесь только справка. */}
+            <div
+              className="text-xs text-muted-foreground"
+              data-testid="security-permission-rules-ask-timeout"
+            >
+              {rulesMeta.askTimeoutMs === 0
+                ? t('permissionRules.askTimeoutDisabled')
+                : t('permissionRules.askTimeout', {
+                    seconds: Math.round(rulesMeta.askTimeoutMs / 1000),
+                  })}
+            </div>
+
+            <div
+              className="text-xs text-muted-foreground"
+              data-testid="security-permission-rules-defaults"
+            >
+              {t('permissionRules.defaults', { count: Object.keys(rulesMeta.defaults).length })}
+            </div>
+
+            {rulesMeta.source === 'default' && (
+              <div className="text-xs text-muted-foreground">{t('permissionRules.baseHint')}</div>
             )}
           </>
         )}
