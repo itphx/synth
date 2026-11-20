@@ -32,6 +32,15 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   const catalogLoaded = useProvidersStore(s => s.catalogLoaded)
   const loadCatalogModels = useProvidersStore(s => s.loadCatalogModels)
   const refreshCatalog = useProvidersStore(s => s.refreshCatalog)
+  /**
+   * Счётчик изменений каталога (событие шины `models.updated`).
+   *
+   * Каталог грузится лениво один раз (guard `catalogLoaded` в сторе). Стор на
+   * событие снимает guard и сам перечитывает загруженное; счётчик нужен
+   * открытому дропдауну: после события он обязан показать новый состав
+   * (а без открытого дропдауна каталог догрузится при следующем открытии).
+   */
+  const revision = useProvidersStore(s => s.revision)
   const modelsError = useProvidersStore(s => s.modelsError)
   const selectedProviderName = useProvidersStore(s => s.selectedProviderName)
   const selectedModelName = useProvidersStore(s => s.selectedModelName)
@@ -84,6 +93,15 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
     },
     [requestCatalog],
   )
+
+  // Каталог изменился на сервере (событие `models.updated`: провайдер/модель
+  // добавлены, удалены или сделаны дефолтными в другом клиенте/тулом из чата).
+  // Открытый дропдаун перечитывает каталог: guard `catalogLoaded` в сторе уже
+  // снят, `requestCatalog` идемпотентен (идёт загрузка — no-op).
+  useEffect(() => {
+    if (open) requestCatalog()
+    // `revision` — сам сигнал; `requestCatalog` меняется вместе с флагами стора.
+  }, [revision, open, requestCatalog])
 
   const handleRefresh = async () => {
     await refreshCatalog()

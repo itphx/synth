@@ -27,6 +27,8 @@ import { SelectContent, SelectItem } from '../ui/select'
 import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
 import { PanelTab } from './PanelTab'
 import { useWorktreesStore } from '@/stores/worktreesStore'
+import { mcpRevisionForSession, useMcpStore } from '@/stores/mcpStore'
+import { skillsRevisionForSession, useSkillsStore } from '@/stores/skillsStore'
 import { canEditSessionContent } from '@/lib/sessionAccess'
 import { TodoSummary } from './work/TodoSummary'
 import { WorkModal, type WorkTab } from './work/WorkModal'
@@ -500,6 +502,21 @@ export function SessionSettingsTab() {
     }
   }, [])
 
+  /**
+   * Сигналы «MCP/скиллы этой сессии изменились на сервере» — от них
+   * перечитываются эффективные списки (эффект ниже):
+   *
+   * - `session.updatedAt` — событие `session.updated` патчит сессию в сторе
+   *   (`transportStore`), а сервер двигает `updatedAt` и при смене скоупа
+   *   сессии (`PUT /sessions/:id/skills`, `PUT /mcp/session/:id`);
+   * - scoped-счётчики сторов — инстансные `mcp.updated`/`skills.updated` со
+   *   `scope: 'session'` и **своим** `sessionId`. Чужая сессия счётчик не
+   *   двигает — её события эту вкладку не перечитывают.
+   */
+  const sessionUpdatedAt = session?.updated_at ?? ''
+  const sessionMcpRevision = useMcpStore((s) => mcpRevisionForSession(s, sessionId))
+  const sessionSkillsRevision = useSkillsStore((s) => skillsRevisionForSession(s, sessionId))
+
   useEffect(() => {
     if (sessionId) {
       synthApi.getAgents(sessionId).then((r) => setAgents(r.agents)).catch(() => {})
@@ -509,7 +526,18 @@ export function SessionSettingsTab() {
       setMcpEffective([])
       setSessionSkills([])
     }
-  }, [sessionId, loadMcpEffective, loadSkillsEffective])
+  }, [
+    sessionId,
+    loadMcpEffective,
+    loadSkillsEffective,
+    // Живое обновление скоупа (см. комментарий к полям выше): событие своего
+    // проекта/сессии — перечитываем эффективные списки без перезагрузки
+    // страницы. Список агентов читается вместе с ними: тот же ход, лишний GET
+    // не в счёт.
+    sessionUpdatedAt,
+    sessionMcpRevision,
+    sessionSkillsRevision,
+  ])
 
   useEffect(() => {
     synthApi.getSecuritySettings()

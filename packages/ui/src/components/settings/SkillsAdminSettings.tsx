@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SkillSummary, SkillsDisabledRequest } from '@itphx/synth-shared'
 import { SKILL_DESCRIPTION_MAX, SKILL_NAME_MAX, SKILL_NAME_REGEX } from '@itphx/synth-shared/schemas'
 import { useI18n } from '@/lib/i18n'
@@ -128,6 +128,29 @@ export function SkillsAdminSettings() {
     void fetchSkills({ diagnostics: true })
     void fetchSkillsSettings()
   }, [fetchSkills, fetchSkillsSettings])
+
+  /**
+   * Реестр скиллов изменился на сервере (событие шины `skills.updated`) —
+   * скилл или бандл создан, изменён либо удалён из чата или из другой вкладки,
+   * реестр пересканирован, либо сменены instance-гейты.
+   *
+   * Перечитываем и список, и instance-настройки: состав скиллов и гейты
+   * приходят из разных эндпоинтов. Перезапрос идёт и тогда, когда запрос с
+   * монтирования был в полёте в момент события — иначе на экране остался бы
+   * снимок «до».
+   *
+   * Черновики (форма редактора, `useSettingsDraft` гейтов, `policy`, `trustDirs`)
+   * не сбрасываются: это ввод пользователя. Первый рендер пропускается —
+   * данные грузит эффект выше.
+   */
+  const skillsRevision = useSkillsStore((s) => s.revision)
+  const loadedRevisionRef = useRef(skillsRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === skillsRevision) return
+    loadedRevisionRef.current = skillsRevision
+    void fetchSkills({ diagnostics: true })
+    void fetchSkillsSettings()
+  }, [skillsRevision, fetchSkills, fetchSkillsSettings])
 
   useEffect(() => {
     setPolicy(settingsPolicy)

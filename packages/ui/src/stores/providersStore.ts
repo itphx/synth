@@ -37,6 +37,15 @@ interface ProvidersStore {
   selectedModelName: string | null
   favorites: string[]
   recents: string[]
+  /**
+   * Счётчик изменений каталога (событие шины `models.updated`).
+   *
+   * Растёт на каждое серверное событие; сам `applyEvent` перечитывает
+   * загруженное. По счётчику перечитывают своё те компоненты, у которых есть
+   * собственный список (`ModelsPanel`, `ProvidersPanel`), и открытый дропдаун
+   * `ModelSelector`.
+   */
+  revision: number
 
   loadProviders: () => Promise<void>
   /** Загрузить страницу каталога моделей (поиск/фильтры — на сервере). */
@@ -68,6 +77,13 @@ interface ProvidersStore {
   ensureModelLoaded: (modelRef: string) => Promise<ModelInfo | null>
   setSelectedProvider: (name: string | null) => void
   setSelectedModel: (name: string | null) => void
+  /**
+   * Каталог провайдеров/моделей изменился на сервере (событие `models.updated`:
+   * провайдер создан/изменён/удалён, модель сохранена/удалена/сделана
+   * дефолтной, каталог синхронизирован с провайдером): поднять `revision`,
+   * сбросить guard `catalogLoaded` и перечитать уже загруженное.
+   */
+  applyEvent: () => void
   toggleFavorite: (model: ModelInfo) => void
   addRecent: (model: ModelInfo) => void
   loadFavoritesFromProfile: (prefs: UserPreferences | undefined) => void
@@ -90,6 +106,15 @@ function pickProvider(providers: ProviderInfo[]): string | null {
   return preferred?.name ?? null
 }
 
+/**
+ * Запрошено перечитывание каталога, пока предыдущая загрузка ещё шла.
+ *
+ * Событие `models.updated` могло прийти во время `loadCatalogModels`: снимок
+ * идущей выборки прочитан **до** события, поэтому после неё нужен ещё один
+ * заход — иначе guard `catalogLoaded`/`catalogLoading` проглотил бы сигнал.
+ */
+let catalogReloadPending = false
+
 export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   providers: [],
   modelGroups: [],
@@ -108,6 +133,7 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   selectedModelName: null,
   favorites: [],
   recents: [],
+  revision: 0,
 
   applyProviders: (providers) => {
     set({ providers })
@@ -307,7 +333,15 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
 
   loadCatalogModels: async () => {
     const { catalogLoaded, catalogLoading } = get()
-    if (catalogLoaded || catalogLoading) return
+    // Уже загружен — повторный вызов no-op (идемпотентность).
+    if (catalogLoaded) return
+    if (catalogLoading) {
+      // Загрузка уже идёт: её снимок мог быть прочитан **до** события
+      // `models.updated`, поэтому после неё нужен ещё один заход (guard не
+      // должен проглотить сигнал).
+      catalogReloadPending = true
+      return
+    }
     set({ catalogLoading: true })
     try {
       // Каталог постраничный; селекторам нужен весь набор. 500 — потолок
@@ -333,6 +367,13 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
         catalogLoading: false,
         modelsError: e instanceof Error ? e.message : 'Ошибка загрузки каталога моделей',
       })
+    } finally {
+      if (catalogReloadPending) {
+        catalogReloadPending = false
+        // Снимок только что завершённой загрузки мог быть до события.
+        set({ catalogLoaded: false })
+        void get().loadCatalogModels()
+      }
     }
   },
 
@@ -344,6 +385,24 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   setSelectedProvider: (name) => set({ selectedProviderName: name }),
 
   setSelectedModel: (name) => set({ selectedModelName: name }),
+
+  applyEvent: () => {
+    const { providers, modelGroups, catalogLoaded, catalogLoading } = get()
+    // Поднимаем счётчик и снимаем guard `catalogLoaded`: без этого селект
+    // модели чата остался бы на снимке, прочитанном один раз при первом
+    // открытии дропдауна, и новая/удалённая модель из другого клиента (или
+    // тулом из чата) не появилась бы без перезагрузки страницы.
+    set((s) => ({ revision: s.revision + 1, catalogLoaded: false }))
+    // Каталог для селекторов перечитываем только если он уже был загружен (или
+    // грузится прямо сейчас): иначе он загрузится лениво при первом открытии
+    // дропдауна — холостой обход всех страниц не нужен.
+    if (catalogLoaded || catalogLoading) void get().loadCatalogModels()
+    // Провайдеры нужны любому селекту (иконки/группировка) — обновляем только
+    // уже загруженный список, не тянем его тому, кто ещё не обращался.
+    if (providers.length > 0) void get().loadProviders()
+    // Группы каталога (панели/страницы) — тоже только если уже загружены.
+    if (modelGroups.length > 0) void get().loadModels()
+  },
 
   toggleFavorite: (model) => {
     const key = `${model.provider}:${model.name}`

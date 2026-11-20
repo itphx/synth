@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CommandSummary, SkillBundle } from '@itphx/synth-shared'
 import { SKILL_DESCRIPTION_MAX, SKILL_NAME_MAX, SKILL_NAME_REGEX } from '@itphx/synth-shared/schemas'
 import { useI18n } from '@/lib/i18n'
@@ -70,6 +70,24 @@ export function CommandsSettings() {
     void fetchCommands({ diagnostics: true })
     void fetchBundles()
   }, [fetchCommands, fetchBundles])
+
+  /**
+   * Реестр скиллов/бандлов изменился на сервере (событие шины `skills.updated`):
+   * бандл создан/изменён/удалён из чата или из другой вкладки, реестр
+   * пересканирован. Перечитываем оба списка — каталог `/`-команд и бандлы
+   * зависят от реестра скиллов (`kind: 'skill'` и состав `skills` в бандле).
+   *
+   * Форма бандла (`editor`) не сбрасывается — это ввод пользователя. Первый
+   * рендер пропускается — данные грузит эффект выше.
+   */
+  const skillsRevision = useSkillsStore((s) => s.revision)
+  const loadedRevisionRef = useRef(skillsRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === skillsRevision) return
+    loadedRevisionRef.current = skillsRevision
+    void fetchCommands({ diagnostics: true })
+    void fetchBundles()
+  }, [skillsRevision, fetchCommands, fetchBundles])
 
   const openCreate = () => {
     setErrors({})

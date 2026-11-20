@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { synthApi, type ProviderInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
@@ -72,7 +72,7 @@ export const ProvidersPanel = () => {
   const [iconUncompressed, setIconUncompressed] = useState(false)
   const [testResult, setTestResult] = useState<{ id?: string; status?: string; error?: string; models?: string[] } | null>(null)
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
       const data = await synthApi.getProviders()
@@ -83,9 +83,24 @@ export const ProvidersPanel = () => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { void load() }, [load])
+
+  /**
+   * Каталог провайдеров/моделей изменился на сервере (событие шины
+   * `models.updated`): провайдер создан/изменён/удалён в другом клиенте.
+   * Перечитываем список — но только на **изменение** счётчика: первый рендер
+   * уже загружает его эффектом выше (без этого был бы двойной запрос),
+   * а открытая форма с черновиком живёт в своём стейте и не сбрасывается.
+   */
+  const catalogRevision = useProvidersStore((s) => s.revision)
+  const catalogRevisionRef = useRef(catalogRevision)
+  useEffect(() => {
+    if (catalogRevisionRef.current === catalogRevision) return
+    catalogRevisionRef.current = catalogRevision
+    void load()
+  }, [catalogRevision, load])
 
   // Единая точка установки иконки в форме: значение и признак «сжать не удалось» всегда синхронны.
   const setIcon = (value: string) => {

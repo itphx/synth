@@ -40,6 +40,7 @@ export function PipelinesTab() {
   const { projectId: activeProjectId, source: activeProjectSource } = useActiveProject()
 
   const pipelinesByProject = usePipelinesStore((s) => s.pipelinesByProject)
+  const loadedProjects = usePipelinesStore((s) => s.loadedProjects)
   const loadProjectPipelines = usePipelinesStore((s) => s.loadProjectPipelines)
   const loadMorePipelines = usePipelinesStore((s) => s.loadMorePipelines)
   const loadingMoreProjects = usePipelinesStore((s) => s.loadingMoreProjects)
@@ -75,9 +76,20 @@ export function PipelinesTab() {
   }, [currentProject])
 
   // Пайплайны подгружаются при раскрытии проекта.
+  //
+  // Зависимость от `loadedProjects` — реакция на инвалидацию: событие шины
+  // `pipeline.updated` (авторство из чата или другого клиента) убирает проект
+  // из `loadedProjects`, после чего раскрытый проект перечитывается здесь.
+  // Стор перечитывает открытый проект и сам; этот эффект — страховка для
+  // случая, когда проект раскрыт в панели, но инвалидация пришла без
+  // перечитывания (например, список был в ошибке). Повторного запроса нет:
+  // `loadProjectPipelines` не форсит и не дублирует идущую загрузку.
   useEffect(() => {
-    expanded.forEach((projectId) => { void loadProjectPipelines(projectId) })
-  }, [expanded, loadProjectPipelines])
+    expanded.forEach((projectId) => {
+      if (loadedProjects.has(projectId)) return
+      void loadProjectPipelines(projectId)
+    })
+  }, [expanded, loadedProjects, loadProjectPipelines])
 
   const openPipeline = useCallback((project: ProjectData, pipelineId: string, name: string) => {
     openTab({

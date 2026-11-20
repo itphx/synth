@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type { SkillSummary } from '@itphx/synth-shared'
 import { useI18n } from '@/lib/i18n'
 import { useSkillsStore } from '@/stores/skillsStore'
@@ -40,6 +40,24 @@ export function SkillsUserSettings() {
   useEffect(() => {
     void fetchSkills()
   }, [fetchSkills])
+
+  /**
+   * Реестр скиллов изменился на сервере (событие шины `skills.updated`):
+   * скилл создан/изменён/удалён из чата или из другой вкладки, реестр
+   * пересканирован. Перечитываем список — иначе он отставал бы до перезагрузки
+   * страницы.
+   *
+   * Черновиков в панели нет (только выбор скилла и его деталь) — сохранённый
+   * выбор не сбрасываем: удалённый скилл пропадёт из списка сам.
+   * Первый рендер пропускается — список грузит эффект выше.
+   */
+  const skillsRevision = useSkillsStore((s) => s.revision)
+  const loadedRevisionRef = useRef(skillsRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === skillsRevision) return
+    loadedRevisionRef.current = skillsRevision
+    void fetchSkills()
+  }, [skillsRevision, fetchSkills])
 
   const handleReload = () => {
     void reloadSkills().catch(() => undefined)

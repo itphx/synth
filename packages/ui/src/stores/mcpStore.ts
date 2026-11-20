@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import type { McpNetworkPolicy, McpRegistryEntry, ToolsDisabledConfig } from '@itphx/synth-shared'
+import type {
+  McpNetworkPolicy,
+  McpRegistryEntry,
+  McpUpdatedEventData,
+  ToolsDisabledConfig,
+} from '@itphx/synth-shared'
 import {
   synthApi,
   type McpRegistryAddInput,
@@ -33,7 +38,32 @@ interface McpStore {
   toolsDisabledLoading: boolean
   toolsDisabledError: string | null
 
+  /**
+   * Счётчик изменений реестра MCP (событие шины `mcp.updated`).
+   *
+   * Растёт на каждое серверное событие; по нему перечитывают своё состояние
+   * панели с собственными данными (`McpSettings` → доступность инструментов,
+   * `CredentialsSettings` → список внешних доступов). Сам реестр перечитывает
+   * `applyEvent`.
+   */
+  revision: number
+  /**
+   * Счётчики изменений MCP **по проектам** (`mcp.updated` со `scope: 'project'`).
+   *
+   * Ключ — `projectId`. Панель проекта подписывается точечно: событие чужого
+   * проекта её не перечитывает.
+   */
+  projectRevisions: Record<string, number>
+  /** Счётчики изменений MCP **по сессиям** (`mcp.updated` со `scope: 'session'`). */
+  sessionRevisions: Record<string, number>
+
   fetchRegistry: () => Promise<void>
+  /**
+   * Реестр MCP изменился на сервере (сервер добавлен/обновлён/удалён/
+   * включён-выключен либо изменён MCP-скоуп проекта/сессии): поднять
+   * `revision` и scoped-счётчики, перечитать реестр.
+   */
+  applyEvent: (info?: McpEventScope) => void
   addRegistryEntry: (input: McpRegistryAddInput) => Promise<McpRegistryEntry>
   updateRegistryEntry: (id: string, patch: McpRegistryUpdateInput) => Promise<McpRegistryEntry>
   deleteRegistryEntry: (id: string) => Promise<void>
@@ -56,6 +86,20 @@ interface McpStore {
 
 const DEFAULT_AVAILABILITY = { plan: false, act: true }
 
+/**
+ * Область события шины `mcp.updated` — то, что нужно стору, чтобы разложить
+ * изменение по адресатам: имя сервера и вид мутации стору не нужны (событие —
+ * сигнал «перечитай»; конфиг сервера в payload не кладётся — там секреты).
+ */
+/**
+ * Область события `mcp.updated`, которую получает стор.
+ *
+ * Все поля опциональны: `transportStore` передаёт payload целиком
+ * (`{action, name?, scope?, projectId?, sessionId?}`), а компоненты/тесты могут
+ * дать только область. Обязательным остаётся сам сигнал — вызов `applyEvent()`.
+ */
+export type McpEventScope = Partial<McpUpdatedEventData>
+
 export const useMcpStore = create<McpStore>((set, get) => ({
   registry: null,
   loading: false,
@@ -75,6 +119,10 @@ export const useMcpStore = create<McpStore>((set, get) => ({
   toolsDisabledLoading: false,
   toolsDisabledError: null,
 
+  revision: 0,
+  projectRevisions: {},
+  sessionRevisions: {},
+
   fetchRegistry: async () => {
     set({ loading: true, error: null })
     try {
@@ -83,6 +131,30 @@ export const useMcpStore = create<McpStore>((set, get) => ({
     } catch (err) {
       set({ error: err instanceof Error ? err.message : i18nText('mcp.error.loadRegistry'), loading: false })
     }
+  },
+
+  applyEvent: (info) => {
+    const projectId = info?.projectId
+    const sessionId = info?.sessionId
+    // Счётчики поднимаются всегда (общий `revision`), scoped — только когда в
+    // событии есть соответствующий id: панель чужого проекта/сессии не должна
+    // перечитываться (её селектор не меняется).
+    set((s) => ({
+      revision: s.revision + 1,
+      projectRevisions: projectId
+        ? { ...s.projectRevisions, [projectId]: (s.projectRevisions[projectId] ?? 0) + 1 }
+        : s.projectRevisions,
+      sessionRevisions: sessionId
+        ? { ...s.sessionRevisions, [sessionId]: (s.sessionRevisions[sessionId] ?? 0) + 1 }
+        : s.sessionRevisions,
+    }))
+    // В событии нет тяжёлых данных (в конфиге MCP бывают секреты) — сигнал
+    // означает «перечитай реестр». Отдельного «выбранного/редактируемого»
+    // элемента у стора нет: `editing`/`deleteTarget` живут в
+    // `useMcpRegistryEditor` и это черновик формы — его не сбрасываем
+    // (задача: формы/черновики не трогать). Исчезнувший из реестра сервер
+    // пропадает из списка сам — панель перерисовывается по новому составу.
+    void get().fetchRegistry()
   },
 
   addRegistryEntry: async (input) => {
@@ -242,3 +314,36 @@ export const useMcpStore = create<McpStore>((set, get) => ({
     }
   },
 }))
+
+/**
+ * Revision изменений MCP **конкретного проекта** (`0` — событий не было).
+ *
+ * Селектор для `useMcpStore(...)`: панель проекта подписывается точечно и не
+ * перечитывается на события чужих проектов.
+ */
+export function mcpRevisionForProject(
+  store: Pick<McpStore, 'projectRevisions'>,
+  projectId: string | null | undefined,
+): number {
+  if (!projectId) return 0
+  return store.projectRevisions[projectId] ?? 0
+}
+
+/** Revision изменений MCP **конкретной сессии** (`0` — событий не было). */
+export function mcpRevisionForSession(
+  store: Pick<McpStore, 'sessionRevisions'>,
+  sessionId: string | null | undefined,
+): number {
+  if (!sessionId) return 0
+  return store.sessionRevisions[sessionId] ?? 0
+}
+
+/** Хук-обёртка над `mcpRevisionForProject` (подписка точечная). */
+export function useMcpRevisionForProject(projectId: string | null | undefined): number {
+  return useMcpStore((s) => mcpRevisionForProject(s, projectId))
+}
+
+/** Хук-обёртка над `mcpRevisionForSession` (подписка точечная). */
+export function useMcpRevisionForSession(sessionId: string | null | undefined): number {
+  return useMcpStore((s) => mcpRevisionForSession(s, sessionId))
+}

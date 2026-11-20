@@ -29,7 +29,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 
-import { useSkillsStore, EMPTY_SKILLS_DISABLED, EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS } from './skillsStore'
+import {
+  useSkillsStore,
+  EMPTY_SKILLS_DISABLED,
+  EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+  skillsRevisionForProject,
+  skillsRevisionForSession,
+} from './skillsStore'
 
 function summary(name: string, overrides: Partial<SkillSummary> = {}): SkillSummary {
   return {
@@ -97,6 +103,9 @@ function resetStore(): void {
     commandInvocationCounts: {},
     lastSkillInvocation: null,
     lastCommandInvocation: null,
+    revision: 0,
+    projectRevisions: {},
+    sessionRevisions: {},
   })
 }
 
@@ -308,5 +317,103 @@ describe('skillsStore — события skill.invoked / command.invoked (ADR-12
     store.recordCommandInvoked({ sessionId: 's1', command: '', actor: 'user' })
     expect(useSkillsStore.getState().lastSkillInvocation).toBeNull()
     expect(useSkillsStore.getState().lastCommandInvocation).toBeNull()
+  })
+})
+
+/**
+ * Событие шины `skills.updated` в сторе.
+ *
+ * Баг: «панель скиллов показывает старый состав, пока не перезагрузишь
+ * страницу» — скилл, созданный/удалённый тулом из чата или в другой вкладке,
+ * не доходил до стора, а `$`-пикер держал первый загруженный список.
+ */
+describe('skillsStore.applyEvent (событие шины `skills.updated`)', () => {
+  it('поднимает revision и перечитывает загруженный реестр', async () => {
+    useSkillsStore.setState({ skills: [summary('old')] })
+    mocks.getSkills.mockResolvedValue({
+      skills: [summary('old'), summary('fresh')],
+      diagnostics: [],
+    })
+
+    useSkillsStore.getState().applyEvent()
+
+    expect(useSkillsStore.getState().revision).toBe(1)
+    await vi.waitFor(() => {
+      expect(useSkillsStore.getState().skills?.map((s) => s.name)).toEqual(['old', 'fresh'])
+    })
+    expect(mocks.getSkills).toHaveBeenCalledTimes(1)
+  })
+
+  it('перечитывает бандлы и instance-настройки, если они уже загружены', async () => {
+    useSkillsStore.setState({
+      skills: [],
+      bundles: [BUNDLE],
+      settingsDisabled: { ...EMPTY_SKILLS_DISABLED },
+    })
+    mocks.getSkills.mockResolvedValue({ skills: [] })
+    mocks.getSkillBundles.mockResolvedValue({ bundles: [] })
+    mocks.getSkillsSettings.mockResolvedValue({
+      disabled: { categories: [], groups: [], skills: [] },
+      policy: 'auto',
+    })
+
+    useSkillsStore.getState().applyEvent()
+
+    await vi.waitFor(() => {
+      expect(mocks.getSkillBundles).toHaveBeenCalledTimes(1)
+      expect(mocks.getSkillsSettings).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('не тянет незагруженные разделы (админские запросы «впервые» не уходят)', () => {
+    // Ничего не загружено: стор не должен сам инициировать админские запросы.
+    useSkillsStore.getState().applyEvent()
+
+    expect(mocks.getSkills).not.toHaveBeenCalled()
+    expect(mocks.getSkillBundles).not.toHaveBeenCalled()
+    expect(mocks.getSkillsSettings).not.toHaveBeenCalled()
+    expect(useSkillsStore.getState().revision).toBe(1)
+  })
+
+  it('scoped-счётчики поднимаются только для своего проекта/сессии', () => {
+    const { applyEvent } = useSkillsStore.getState()
+    applyEvent({ scope: 'project', projectId: 'p1' })
+    applyEvent({ scope: 'project', projectId: 'p2' })
+    applyEvent({ scope: 'session', sessionId: 's1' })
+    applyEvent({ scope: 'instance' })
+
+    const state = useSkillsStore.getState()
+    // Общий счётчик растёт на каждое событие (панели инстанса реагируют).
+    expect(state.revision).toBe(4)
+    expect(state.projectRevisions.p1).toBe(1)
+    expect(state.projectRevisions.p2).toBe(1)
+    expect(state.sessionRevisions.s1).toBe(1)
+    // Селектор чужого проекта/сессии остаётся нулевым — панель не перечитается.
+    expect(skillsRevisionForProject(state, 'p3')).toBe(0)
+    expect(skillsRevisionForSession(state, 's2')).toBe(0)
+    expect(skillsRevisionForProject(state, null)).toBe(0)
+    expect(skillsRevisionForSession(state, undefined)).toBe(0)
+  })
+
+  it('событие без scope не двигает scoped-счётчики (мутация реестра инстанса)', () => {
+    useSkillsStore.getState().applyEvent()
+
+    const state = useSkillsStore.getState()
+    expect(state.revision).toBe(1)
+    expect(state.projectRevisions).toEqual({})
+    expect(state.sessionRevisions).toEqual({})
+  })
+
+  it('ошибка перечитывания не сбрасывает revision и пишет skillsError', async () => {
+    useSkillsStore.setState({ skills: [summary('old')] })
+    mocks.getSkills.mockRejectedValue(new Error('network'))
+
+    useSkillsStore.getState().applyEvent()
+
+    await vi.waitFor(() => {
+      expect(useSkillsStore.getState().skillsLoading).toBe(false)
+    })
+    expect(useSkillsStore.getState().revision).toBe(1)
+    expect(useSkillsStore.getState().skillsError).toBe('network')
   })
 })

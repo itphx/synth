@@ -229,6 +229,23 @@ export const ModelsPanel = () => {
 
   useEffect(() => { void loadDefault() }, [loadDefault])
 
+  /**
+   * Каталог изменился на сервере (событие шины `models.updated`): модель
+   * добавлена/удалена/сделана дефолтной в другом клиенте или тулом из чата.
+   * Перечитываем свою страницу и дефолтную пару — но только на **изменение**
+   * счётчика: первый рендер уже грузит данные своими эффектами выше (иначе
+   * был бы двойной запрос), а черновики форм не трогаем (это отдельный
+   * `useState`, перезагрузка списка его не сбрасывает).
+   */
+  const catalogRevision = useProvidersStore((s) => s.revision)
+  const catalogRevisionRef = useRef(catalogRevision)
+  useEffect(() => {
+    if (catalogRevisionRef.current === catalogRevision) return
+    catalogRevisionRef.current = catalogRevision
+    void load(queryRef.current)
+    void loadDefault()
+  }, [catalogRevision, load, loadDefault])
+
   // Поиск/фильтры → новая страница каталога. Поиск — с задержкой, чтобы не
   // дёргать сервер на каждое нажатие.
   useEffect(() => {

@@ -15,6 +15,12 @@
 //   - заголовок прогона обновляется сразу (статус/текущий узел);
 //   - журнал (append-only, сервер — источник истины) перечитывается по
 //     сигналу `runSignal[runId]` — компонент страницы прогона реагирует на него.
+//
+// Живое обновление **авторства** — другое событие: `pipeline.updated` (сам
+// пайплайн создан/сохранён/опубликован/удалён/инстанцирован) публикуется в
+// каналы **сессий проекта** (инвариант 27, ADR-101/ADR-118) и приходит в
+// `invalidateProject`: проект точечно выкидывается из `loadedProjects` и его
+// страница перечитывается — список в левой панели не залипает до перезагрузки.
 
 import { create } from 'zustand'
 
@@ -124,6 +130,12 @@ interface PipelinesState {
   loadingOlderEvents: Set<string>
 
   loadProjectPipelines: (projectId: string, opts?: { force?: boolean }) => Promise<void>
+  /**
+   * Сущность пайплайна проекта изменилась на сервере (событие шины
+   * `pipeline.updated`): инвалидировать **только** этот проект и перечитать
+   * его список, если он уже открыт.
+   */
+  invalidateProject: (projectId: string) => void
   /** Догрузить следующую страницу пайплайнов проекта (кнопка «Показать ещё»). */
   loadMorePipelines: (projectId: string) => Promise<void>
   removePipeline: (projectId: string, pipelineId: string) => void
@@ -187,6 +199,31 @@ export const usePipelinesStore = create<PipelinesState>()((set, get) => ({
         return { loadingProjects: next }
       })
     }
+  },
+
+  /**
+   * Сущность пайплайна проекта изменилась на сервере (`pipeline.updated`).
+   *
+   * Инвалидируется **только** затронутый проект — не полный сброс стора:
+   * `projectId` точечно убирается из `loadedProjects` (иначе guard в
+   * `loadProjectPipelines` навсегда считал бы страницу актуальной), и, если
+   * список этого проекта уже был открыт, страница перечитывается сразу.
+   * Незагруженный проект не тянется: когда его раскроют,
+   * `loadProjectPipelines` прочитает свежее сам.
+   */
+  invalidateProject: (projectId) => {
+    const state = get()
+    if (!state.loadedProjects.has(projectId)) return
+
+    set((s) => {
+      const next = new Set(s.loadedProjects)
+      next.delete(projectId)
+      return { loadedProjects: next }
+    })
+
+    // Перечитываем ровно этот проект (страница пайплайнов — первая, курсор
+    // `next_offset` сбрасывается: состав мог измениться и ниже по списку).
+    void get().loadProjectPipelines(projectId, { force: true })
   },
 
   /**

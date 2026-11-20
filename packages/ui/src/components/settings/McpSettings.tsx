@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import type { McpNetworkPolicy, McpRegistryEntry, McpRemoteMode } from '@itphx/synth-shared'
 import { Icon } from '../icon/Icon'
 import { useMcpStore } from '../../stores/mcpStore'
@@ -153,6 +153,29 @@ export const McpSettings = () => {
     fetchRegistry()
     fetchToolSettings()
   }, [fetchRegistry, fetchToolSettings])
+
+  /**
+   * Реестр MCP изменился на сервере (событие шины `mcp.updated`) — правка из
+   * чата тулом `synth_mcp_*` или из другой вкладки.
+   *
+   * Состав реестра приходит из стора (его перечитывает `applyEvent`), но
+   * «Доступность инструментов» и сетевую часть панель грузит сама —
+   * перечитываем их, иначе список серверов в секциях расходился бы с
+   * реестром. Отдельный перезапрос реестра гарантирует свежесть и тогда,
+   * когда запрос с монтирования был в полёте в момент события.
+   *
+   * Форма редактирования (`useMcpRegistryEditor`) и черновик доступности
+   * (`availabilityDraft`) — не сбрасываются, это черновики пользователя.
+   * Первый рендер пропускается (данные грузит эффект выше).
+   */
+  const mcpRevision = useMcpStore((s) => s.revision)
+  const loadedRevisionRef = useRef(mcpRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === mcpRevision) return
+    loadedRevisionRef.current = mcpRevision
+    void fetchRegistry()
+    void fetchToolSettings()
+  }, [mcpRevision, fetchRegistry, fetchToolSettings])
 
   // ADR-071 §2.3: политику MCP читает любой пользователь (эндпоинт без admin-гейта),
   // меняет только ADMIN — карточка доступна в админ-категории.

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useMcpStore } from '@/stores/mcpStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -34,6 +34,23 @@ export function McpUserSettings() {
   useEffect(() => {
     void fetchRegistry()
   }, [fetchRegistry])
+
+  /**
+   * Реестр MCP изменился на сервере (событие шины `mcp.updated`) — правка
+   * тулом из чата или из другой вкладки. Перечитываем реестр: панель не должна
+   * зависеть от того, кто обновил стор, и не должна показывать снимок, который
+   * был в полёте в момент события.
+   *
+   * Форма/черновик (`useMcpRegistryEditor`) не сбрасывается: это ввод
+   * пользователя. Первый рендер пропускается (грузку делает эффект выше).
+   */
+  const mcpRevision = useMcpStore((s) => s.revision)
+  const loadedRevisionRef = useRef(mcpRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === mcpRevision) return
+    loadedRevisionRef.current = mcpRevision
+    void fetchRegistry()
+  }, [mcpRevision, fetchRegistry])
 
   const editor = useMcpRegistryEditor({
     addEntry: ({ name, config }) => addRegistryEntry({ name, config }),

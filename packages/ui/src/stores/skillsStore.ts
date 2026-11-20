@@ -7,6 +7,7 @@ import type {
   SkillDiagnostic,
   SkillSummary,
   SkillsDisabledRequest,
+  SkillsUpdatedEventData,
 } from '@itphx/synth-shared'
 import {
   synthApi,
@@ -34,6 +35,23 @@ export interface CommandInvokedEvent {
   actor: 'user' | 'cli'
   timestamp?: string
 }
+
+/**
+ * Область события шины `skills.updated` (`SkillsUpdatedEventData`) — то, что
+ * нужно стору, чтобы разложить изменение по адресатам.
+ *
+ * Имя скилла/бандла и вид мутации стору не нужны: событие — сигнал «состав
+ * изменился, перечитай», а не источник данных (содержимого скиллов в событии
+ * нет по построению — инвариант 13 `AGENTS.md`).
+ */
+/**
+ * Область события `skills.updated`, которую получает стор.
+ *
+ * Все поля опциональны: `transportStore` передаёт payload целиком
+ * (`{action, name?, scope?, projectId?, sessionId?}`), а компоненты/тесты могут
+ * дать только область. Обязательным остаётся сам сигнал — вызов `applyEvent()`.
+ */
+export type SkillsEventScope = Partial<SkillsUpdatedEventData>
 
 /** Дефолт instance-отключений (пусто) и политики (`auto`) — для Reset/`isDefault`. */
 export const EMPTY_SKILLS_DISABLED: SkillsDisabledRequest = { categories: [], groups: [], skills: [] }
@@ -85,6 +103,25 @@ export interface SkillsStore {
   lastSkillInvocation: SkillInvokedEvent | null
   lastCommandInvocation: CommandInvokedEvent | null
 
+  /**
+   * Счётчик изменений реестра скиллов (событие шины `skills.updated`).
+   *
+   * Растёт на **каждое** серверное событие: панели, которые держат собственные
+   * срезы (админская и пользовательская панели скиллов, «Команды», долларовый
+   * пикер композера), перечитывают своё по нему. Сам реестр перечитывает
+   * `applyEvent`.
+   */
+  revision: number
+  /**
+   * Счётчики изменений по проектам (`skills.updated` со `scope: 'project'`).
+   *
+   * Ключ — `projectId`. Нужны, чтобы панель проекта перечитывала свой скоуп
+   * только на события **своего** проекта, а чужие изменения её не трогали.
+   */
+  projectRevisions: Record<string, number>
+  /** Счётчики изменений по сессиям (`skills.updated` со `scope: 'session'`). */
+  sessionRevisions: Record<string, number>
+
   fetchSkills: (params?: { projectId?: string; diagnostics?: boolean }) => Promise<void>
   selectSkill: (name: string, opts?: { projectId?: string }) => Promise<void>
   clearSelectedSkill: () => void
@@ -122,6 +159,12 @@ export interface SkillsStore {
 
   recordSkillInvoked: (event: SkillInvokedEvent) => void
   recordCommandInvoked: (event: CommandInvokedEvent) => void
+
+  /**
+   * Реестр скиллов изменился на сервере (событие шины `skills.updated`):
+   * поднять `revision` и scoped-счётчики, перечитать загруженное.
+   */
+  applyEvent: (info?: SkillsEventScope) => void
 }
 
 export const useSkillsStore = create<SkillsStore>((set, get) => ({
@@ -157,6 +200,10 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
   commandInvocationCounts: {},
   lastSkillInvocation: null,
   lastCommandInvocation: null,
+
+  revision: 0,
+  projectRevisions: {},
+  sessionRevisions: {},
 
   fetchSkills: async (params) => {
     set({ skillsLoading: true, skillsError: null })
@@ -466,7 +513,66 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
       lastCommandInvocation: event,
     })
   },
+
+  applyEvent: (info) => {
+    const projectId = info?.projectId
+    const sessionId = info?.sessionId
+    // Счётчики поднимаются всегда (общий `revision`), scoped — только когда в
+    // событии есть соответствующий id: панель чужого проекта/сессии не должна
+    // перечитываться (её селектор не меняется).
+    set((s) => ({
+      revision: s.revision + 1,
+      projectRevisions: projectId
+        ? { ...s.projectRevisions, [projectId]: (s.projectRevisions[projectId] ?? 0) + 1 }
+        : s.projectRevisions,
+      sessionRevisions: sessionId
+        ? { ...s.sessionRevisions, [sessionId]: (s.sessionRevisions[sessionId] ?? 0) + 1 }
+        : s.sessionRevisions,
+    }))
+    // Перечитываем **только загруженное**: событие — сигнал «состав изменился»,
+    // а не приказ тянуть админские разделы впервые (без прав они ответили бы
+    // ошибкой). Реестр скиллов грузит любой, у кого он уже открыт; бандлы и
+    // instance-настройки — их разделы. Локальные правки списка
+    // (create/update/delete) не затрагиваются: они работают поверх того же
+    // состояния, что и перечитывание.
+    if (get().skills !== null) void get().fetchSkills()
+    if (get().bundles !== null) void get().fetchBundles()
+    if (get().settingsDisabled !== null) void get().fetchSkillsSettings()
+  },
 }))
+
+/**
+ * Revision изменений скиллов **конкретного проекта** (`0` — событий не было).
+ *
+ * Селектор для `useSkillsStore(...)`: панель проекта подписывается точечно и не
+ * перечитывается на события чужих проектов.
+ */
+export function skillsRevisionForProject(
+  store: Pick<SkillsStore, 'projectRevisions'>,
+  projectId: string | null | undefined,
+): number {
+  if (!projectId) return 0
+  return store.projectRevisions[projectId] ?? 0
+}
+
+/** Revision изменений скиллов **конкретной сессии** (`0` — событий не было). */
+export function skillsRevisionForSession(
+  store: Pick<SkillsStore, 'sessionRevisions'>,
+  sessionId: string | null | undefined,
+): number {
+  if (!sessionId) return 0
+  return store.sessionRevisions[sessionId] ?? 0
+}
+
+/** Хук-обёртка над `skillsRevisionForProject` (подписка точечная). */
+export function useSkillsRevisionForProject(projectId: string | null | undefined): number {
+  return useSkillsStore((s) => skillsRevisionForProject(s, projectId))
+}
+
+/** Хук-обёртка над `skillsRevisionForSession` (подписка точечная). */
+export function useSkillsRevisionForSession(sessionId: string | null | undefined): number {
+  return useSkillsStore((s) => skillsRevisionForSession(s, sessionId))
+}
 
 /**
  * Патч состояния доверенных каталогов из ответа настроек скиллов.

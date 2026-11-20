@@ -49,15 +49,25 @@ export function SkillAutocomplete({
   const { t } = useI18n()
   const skills = useSkillsStore((s) => s.skills)
   const fetchSkills = useSkillsStore((s) => s.fetchSkills)
+  const skillsRevision = useSkillsStore((s) => s.revision)
 
   const ref = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const [highlightedIdx, setHighlightedIdx] = useState(0)
 
-  // Реестр тянется один раз: пока данных нет — подгружаем.
+  /**
+   * Реестр скиллов перечитывается на каждом открытии пикера и на каждое событие
+   * стора `skills.updated` (`skillsRevision`): гейт «грузить только если список
+   * пуст» держал бы старый состав до перезагрузки страницы — созданный или
+   * удалённый скилл не появлялся бы в списке подсказок.
+   *
+   * На монтировании список уже мог быть в сторе (его заполнила другая панель) —
+   * поэтому перезапрос идёт безусловно, а не только при `skills === null`.
+   * Один запрос на открытие — это реестр целиком, а не N вызовов.
+   */
   useEffect(() => {
-    if (skills === null) void fetchSkills()
-  }, [skills, fetchSkills])
+    void fetchSkills()
+  }, [fetchSkills, skillsRevision])
 
   const entries = useMemo<SkillEntry[]>(() => {
     return (skills ?? [])

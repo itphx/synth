@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { ExternalCredentialMeta } from '@itphx/synth-shared'
 
@@ -125,6 +125,24 @@ export function CredentialsSettings() {
     // ломает раздел — кнопка привязки просто не показывается.
     void fetchRegistry()
   }, [fetchRegistry])
+
+  /**
+   * Реестр MCP изменился на сервере (событие шины `mcpupdated`): состав
+   * коннекторов секции берётся из реестра, а список доступов — свой. Перечитываем
+   * оба: привязка к исчезнувшему коннектору не должна оставаться в UI, а
+   * подписи/счётчики связей — расходиться с новым составом.
+   *
+   * Форма (draft) и выбор коннектора не сбрасываются — это ввод пользователя;
+   * первый рендер пропускается (грузят эффекты выше).
+   */
+  const mcpRevision = useMcpStore((s) => s.revision)
+  const loadedRevisionRef = useRef(mcpRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === mcpRevision) return
+    loadedRevisionRef.current = mcpRevision
+    void fetchRegistry()
+    void loadCredentials()
+  }, [mcpRevision, fetchRegistry, loadCredentials])
 
   const resetForm = () => {
     setProvider('')

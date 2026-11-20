@@ -19,6 +19,10 @@ import { useTimersStore } from './timersStore'
 import { useProjectLogStore } from './projectLogStore'
 import { useInstanceCapabilitiesStore } from './instanceCapabilitiesStore'
 import { useAgentsStore } from './agentsStore'
+import { useMcpStore } from './mcpStore'
+// Каталог провайдеров/моделей инстанса (`models.updated`) — селект модели в
+// чате и админ-панели перечитывают состав без перезагрузки страницы.
+import { useProvidersStore } from './providersStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
 import { normalizeLiveToolPart, partText, toLivePart, turnHasContent } from '@/lib/messageParts'
@@ -1735,6 +1739,22 @@ interface TransportState {
   markSessionClosed: (sid: string) => void
 }
 
+/** Область уровневой операции из payload событий `mcp.updated`/`skills.updated`. */
+function updatedEventScope(payload: Record<string, unknown>): {
+  scope?: 'instance' | 'project' | 'session'
+  projectId?: string
+  sessionId?: string
+} {
+  const scope = payload.scope
+  const projectId = typeof payload.projectId === 'string' ? payload.projectId : undefined
+  const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+  return {
+    ...(scope === 'instance' || scope === 'project' || scope === 'session' ? { scope } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+  }
+}
+
 // Экспортируется для юнит-тестов редьюсеров (subagent.retry / subagent.resume.*).
 export function createDispatcher(): EventDispatcher {
   return (event: WSEvent) => {
@@ -1758,7 +1778,12 @@ export function createDispatcher(): EventDispatcher {
     // в **инстансный** канал шины — у них нет сессии (`sessionId` = 'instance'
     // или пусто). Обрабатываем ДО проверки `sid`, иначе они отбрасывались бы
     // как «бессессионные» (инвариант 6: новых транспортных каналов не заводим).
-    if (type.startsWith('pipeline.')) {
+    //
+    // Сужено до `pipeline.run.*`/`pipeline.completed`: событие **авторства**
+    // `pipeline.updated` идёт в каналы **сессий проекта** и разбирается ниже,
+    // в ветке событий сессии (иначе префиксная проверка съела бы его, и список
+    // пайплайнов оставался бы устаревшим).
+    if (type.startsWith('pipeline.run') || type === 'pipeline.completed') {
       usePipelinesStore.getState().applyRunEvent(payload)
       return
     }
@@ -1854,6 +1879,41 @@ export function createDispatcher(): EventDispatcher {
     // самого перечитывания не нужен — сигнал говорит «перечитай»).
     if (type === 'agents.updated') {
       useAgentsStore.getState().applyEvent()
+      return
+    }
+
+    // Реестр MCP-серверов инстанса изменился (`mcp.updated`, инстансный канал
+    // шины): реестр — ресурс инстанса, а не сессии, поэтому `sid` у события нет
+    // — разбираем ДО проверки `sid`. Стор поднимает `revision`/scoped-счётчики
+    // и перечитывает реестр: панели MCP (админская/пользовательская, «Внешние
+    // доступы») и селекторы серверов обновляются без перезагрузки страницы.
+    // Область события (`scope`/`projectId`/`sessionId`) передаём дальше: по ней
+    // панель проекта/сессии понимает, её ли это изменение (чужие события её не
+    // перечитывают).
+    if (type === 'mcp.updated') {
+      useMcpStore.getState().applyEvent(updatedEventScope(payload))
+      return
+    }
+
+    // Реестр скиллов/бандлов инстанса изменился (`skills.updated`, инстансный
+    // канал шины) — тот же путь и та же причина, что у `mcp.updated` выше:
+    // скиллы — ресурс инстанса, `sid` у события нет. Стор поднимает
+    // `revision`/scoped-счётчики и перечитывает загруженное, а долларовый
+    // пикер композера, панели скиллов/команд и вкладки проекта/сессии
+    // перечитывают своё без перезагрузки страницы.
+    if (type === 'skills.updated') {
+      useSkillsStore.getState().applyEvent(updatedEventScope(payload))
+      return
+    }
+
+    // Каталог провайдеров/моделей инстанса изменился (`models.updated`,
+    // инстансный канал шины) — тот же путь и та же причина, что у `mcp.updated`
+    // выше: каталог — ресурс инстанса, `sid` у события нет. Стор поднимает
+    // `revision`, сбрасывает guard `catalogLoaded` и перечитывает загруженное;
+    // селект модели в чате и админ-панели моделей/провайдеров показывают новый
+    // состав без перезагрузки страницы.
+    if (type === 'models.updated') {
+      useProvidersStore.getState().applyEvent()
       return
     }
 
@@ -3123,6 +3183,21 @@ export function createDispatcher(): EventDispatcher {
         scheduleGitRefresh(projectId)
         // ADR-114: изменение структуры каталогов (worktree) — тот же проект.
         useWorktreesStore.getState().applyEvent('fs.changed', { ...payload, project_id: projectId })
+        break
+      }
+
+      // Сущность пайплайна проекта изменилась (`pipeline.updated`, ADR-101
+      // авторство × ADR-118, инвариант 27): создан/сохранён черновик,
+      // опубликована версия, пайплайн удалён или инстанцирован из шаблона.
+      // Событие идёт в каналы **сессий проекта**, поэтому проект берём из
+      // payload, а не из `sid`: инвалидируется ровно затронутый проект —
+      // список в левой панели («Пайплайны») перечитывается без перезагрузки
+      // страницы, чужие проекты не трогаются. Прогоны сюда не относятся: у них
+      // свои `pipeline.run.*` (инстансный канал, разбираются выше).
+      case 'pipeline.updated': {
+        const projectId = payload.projectId as string | undefined
+        if (!projectId) break
+        usePipelinesStore.getState().invalidateProject(projectId)
         break
       }
 

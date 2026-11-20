@@ -43,6 +43,8 @@ import { PlanSummary } from './work/PlanSummary'
 import { WorkModal, type WorkTab } from './work/WorkModal'
 import { PanelTab } from './PanelTab'
 import { useWorktreesStore } from '@/stores/worktreesStore'
+import { mcpRevisionForProject, useMcpStore } from '@/stores/mcpStore'
+import { skillsRevisionForProject, useSkillsStore } from '@/stores/skillsStore'
 import { confirm } from '@/lib/confirm'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
@@ -103,6 +105,25 @@ export function ProjectTab() {
 
   const { run, isPending } = usePanelSettingSave({ sessionId: sessionId || undefined })
 
+  /**
+   * Сигналы «скоуп проекта изменился на сервере» — от них перечитываются
+   * проектные MCP- и skill-скоупы (эффекты ниже):
+   *
+   * - `project.updatedAt` — деталь проекта перезаписана событием `project.updated`
+   *   (`transportStore` перечитывает её через `getProject`, который кладёт
+   *   свежую запись в `projectsStore`; сервер двигает `updatedAt` и при смене
+   *   скоупа);
+   * - scoped-счётчики сторов — инстансные `mcp.updated`/`skills.updated` со
+   *   `scope: 'project'` и **своим** `projectId`. Чужой проект счётчик не
+   *   двигает, поэтому его события эту панель не перечитывают.
+   *
+   * Черновики панели (тумблеры-переключатели в полёте, `workspaceDraft`) не
+   * сбрасываются: перечитывается только серверный скоуп.
+   */
+  const projectUpdatedAt = storeProject?.updated_at ?? ''
+  const projectMcpRevision = useMcpStore((s) => mcpRevisionForProject(s, projectId))
+  const projectSkillsRevision = useSkillsStore((s) => skillsRevisionForProject(s, projectId))
+
   // Право управления проектными скоупами (MCP и скиллы). Учитывает локальный
   // мир standalone/гибрида (`deployment === 'standalone'`), где личность
   // инстанса — и есть владелец локальных проектов; в managed правило прежнее.
@@ -152,7 +173,7 @@ export function ProjectTab() {
         setMcpRegistry(registryResult.status === 'fulfilled' ? registryResult.value.entries : [])
       })
     return () => { cancelled = true }
-  }, [projectId, canManageMcp])
+  }, [projectId, canManageMcp, projectUpdatedAt, projectMcpRevision])
 
   useEffect(() => {
     if (!projectId || !canManageMcp) {
@@ -174,7 +195,7 @@ export function ProjectTab() {
         setSkillsFailed(true)
       })
     return () => { cancelled = true }
-  }, [projectId, canManageMcp])
+  }, [projectId, canManageMcp, projectUpdatedAt, projectSkillsRevision])
 
   const handleToggleProjectMcp = async (name: string, kind: 'enabled' | 'defaultOn') => {
     if (!projectId || !projectMcp) return

@@ -422,6 +422,21 @@
 
 ### Zustand
 - `create<T>()(...)` — курринг обязателен для типов; импорт `{ create } from 'zustand'`.
+- **Guard-кэш обязан иметь путь инвалидации (инвариант 27).** Поле «загружаю один раз»
+  (`catalogLoaded`, `loadedProjects`, `listLoaded`/`blockingLoaded`, `statusLoadedAt`) держит снимок
+  сервера: без инвалидации мутация из другого клиента (в т.ч. сделанная агентом тулом из чата)
+  не появится до перезагрузки страницы. Путь инвалидации — событие шины (ветка в
+  `stores/transportStore.ts` **до** `if (!sid) return` для инстансных событий + сброс кэша внутри
+  метода стора) либо явный TTL/`force`. Механический гейт — `stores/event-invalidation-census.test.ts`:
+  новый кэш (`*Loaded`/`loadedProjects`/`*LoadedAt`) без записи в `GUARD_CACHES` роняет тест; ветка
+  события без вызова своего метода стора и ветка инстансного события после `if (!sid) return` — тоже.
+  Текущие пары: `pipelinesStore.loadedProjects` ← `pipeline.updated` → `invalidateProject`;
+  `providersStore.catalogLoaded` ← `models.updated` → `applyEvent`; `processesStore.listLoaded`/
+  `blockingLoaded` ← `process.*`/`child.*` → `applyEvent` + `refreshListSnapshot`/
+  `refreshBlockingSnapshot`; `gitStore.statusLoadedAt` ← TTL `STATUS_TTL_MS` (+ `force`) и
+  `scheduleGitRefresh` на `fs.changed`. Компоненты с собственным `useState`-снимком серверного
+  списка (`ProjectTab`, `SessionSettingsTab`) перечитывают его по `updated_at` своей сущности и по
+  scoped-счётчикам `mcpStore`/`skillsStore` — чужие события перечитывания не вызывают.
 - `persist` — для пользовательских настроек (образец `stores/useUIStore.ts:327`): `partialize` + `merge` только для сериализуемых полей. `Set`/`Map` в JSON не переживут — конвертировать (см. `collapsedProjects`).
 - Не замыкаться в экшенах на хуки — `useStore.getState()`.
 
