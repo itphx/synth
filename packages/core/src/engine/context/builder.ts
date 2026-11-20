@@ -120,7 +120,11 @@ export class ContextBuilder {
     let summaryContent = '';
     if (params.summaryContent) {
       const template = this._config.getCompressedDialogTemplate(lang);
-      summaryContent = template.replace('{content}', params.summaryContent);
+      // Замена — функцией-заменителем: текст суммаризации пишет модель, а
+      // строка замены в JS трактует долларовые шаблоны (совпадение, префикс,
+      // суффикс, группы, двойной доллар) как подстановки — в промпт попал бы
+      // кусок самого шаблона. Функция возвращает текст буквально.
+      summaryContent = template.replace('{content}', () => params.summaryContent!);
       this._debugAdd('summary', { included: true, language: lang });
     }
 
@@ -280,11 +284,15 @@ export class ContextBuilder {
       about = about.split('[ИНТЕРВЬЮ]')[0]!.trim();
     }
 
+    // Замены — функцией-заменителем: username/email/about приходят из профиля
+    // пользователя (about — свободный текст), а строка замены в JS трактует
+    // долларовые шаблоны как подстановки — в промпт попал бы кусок самого
+    // шаблона. Функции возвращают текст буквально.
     const content = template
-      .replace(/\{username\}/g, profile.username || '')
-      .replace(/\{email\}/g, profile.email || '')
-      .replace(/\{roles\}/g, profile.roles.join(', '))
-      .replace(/\{about\}/g, about);
+      .replace(/\{username\}/g, () => profile.username || '')
+      .replace(/\{email\}/g, () => profile.email || '')
+      .replace(/\{roles\}/g, () => profile.roles.join(', '))
+      .replace(/\{about\}/g, () => about);
 
     this._debugAdd('profile', {
       userId: profile.id,
@@ -346,7 +354,10 @@ export class ContextBuilder {
     if (!template) return null;
 
     const notesText = activeNotes.map((n) => n.content).join('\n\n---\n\n');
-    const content = template.replace('{notes}', notesText);
+    // Замена — функцией-заменителем: заметки пишет пользователь, а строка
+    // замены в JS трактует долларовые шаблоны как подстановки — в промпт попал
+    // бы кусок самого шаблона. Функция возвращает текст буквально.
+    const content = template.replace('{notes}', () => notesText);
 
     this._debugAdd('sticky_notes', { count: activeNotes.length, language });
     return `\n\n${content}\n`;

@@ -337,7 +337,13 @@ export const editFileTool: ToolDefinition = {
         if (occurrences === 0) {
           return { content: sm('fs.replace_not_found', { path: params.file_path }), isError: true, metadata: { i18n: i18nMeta('fs.replace_not_found', { path: params.file_path }) } };
         }
-        newContent = content.replaceAll(oldView, newView);
+        // Замена — функцией-заменителем, а не строкой: в строке замены JS
+        // трактует долларовые шаблоны (совпадение, префикс до совпадения,
+        // суффикс после, группы, двойной доллар, именованная группа) как
+        // подстановки, поэтому new_string с такой последовательностью вставлял
+        // бы куски самого файла — доходило до дубликата всего префикса.
+        // Функция возвращает текст буквально.
+        newContent = content.replaceAll(oldView, () => newView);
         count = occurrences;
       } else {
         // «Умное» сопоставление: exact → normalized → loose (см. edit-match.ts).

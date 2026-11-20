@@ -1001,3 +1001,89 @@ describe('fs-write tools — работа через порт исполнени
     expect(result.content).toContain('Filesystem operations are unavailable');
   });
 });
+
+/**
+ * Регрессия: `new_string` не должен интерпретироваться как **шаблон замены**.
+ *
+ * В строке замены `String.prototype.replace`/`replaceAll` трактует долларовые
+ * последовательности как подстановки: совпадение (`&`), часть файла до
+ * совпадения (доллар + обратная кавычка), часть после (`'`), группы (цифры,
+ * именованная группа), литеральный доллар (двойной). Доллар с обратной
+ * кавычкой вставлял в файл его собственный префикс — реальный инцидент:
+ * содержимое файла дублировалось. Замена теперь функциональная, поэтому текст
+ * попадает в файл буквально.
+ *
+ * Последовательности собираются из частей: сам файл теста не должен содержать
+ * их в готовом виде (иначе правка такого файла снова была бы опасной).
+ */
+const DOLLAR = '$';
+const TICK = String.fromCharCode(96);
+const DANGEROUS_REPLACEMENTS: ReadonlyArray<{ name: string; text: string }> = [
+  { name: 'совпадение', text: `${DOLLAR}&` },
+  { name: 'префикс до совпадения', text: `${DOLLAR}${TICK}` },
+  { name: 'суффикс после совпадения', text: `${DOLLAR}'` },
+  { name: 'группа', text: `${DOLLAR}1` },
+  { name: 'литеральный доллар', text: `${DOLLAR}${DOLLAR}` },
+  { name: 'именованная группа', text: `${DOLLAR}<name>` },
+];
+
+describe('fs-write tools — new_string не интерпретируется как шаблон замены', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fswrite-dollar-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  it('edit_file: долларовые последовательности попадают в файл буквально, без дубликата', async () => {
+    for (const item of DANGEROUS_REPLACEMENTS) {
+      const file = join(tmpDir, 'literal.txt');
+      await writeFile(file, 'A\nmiddle\nB\n', 'utf-8');
+      const literal = `left ${item.text} right`;
+
+      const result = await editFileTool.execute(
+        { file_path: 'literal.txt', old_string: 'middle', new_string: literal },
+        makeCtx(),
+      );
+
+      expect(result.isError, item.name).toBeFalsy();
+      const actual = await readFile(file, 'utf-8');
+      // Содержимое ровно ожидаемое: ни префикса файла, ни совпадения вместо
+      // текста, ни «дорвавшихся» групп — дубликат сразу виден по равенству.
+      expect(actual, item.name).toBe(`A\n${literal}\nB\n`);
+      // Длина ровно как у ожидаемой строки: «раздувание» файла префиксом
+      // или подставленным совпадением исключено.
+      expect(actual.length, item.name).toBe(literal.length + 'A\n\nB\n'.length);
+    }
+  });
+
+  it('edit_file (replace_all): долларовые последовательности буквальны во всех вхождениях', async () => {
+    for (const item of DANGEROUS_REPLACEMENTS) {
+      const file = join(tmpDir, 'literal-all.txt');
+      await writeFile(file, 'x\nx\nx\n', 'utf-8');
+      const literal = `(${item.text})`;
+
+      const result = await editFileTool.execute(
+        { file_path: 'literal-all.txt', old_string: 'x', new_string: literal, replace_all: true },
+        makeCtx(),
+      );
+
+      expect(result.isError, item.name).toBeFalsy();
+      expect((result.metadata as { replacements?: number }).replacements, item.name).toBe(3);
+      const actual = await readFile(file, 'utf-8');
+      expect(actual, item.name).toBe(`${literal}\n${literal}\n${literal}\n`);
+    }
+  });
+});

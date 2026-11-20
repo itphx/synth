@@ -1,9 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ToolContext } from '@itphx/synth-shared';
 
 import { buildPermissionPreview } from './preview.js';
+import { editFileTool } from '../tools/fs-write.js';
+import { patchTool } from '../tools/patch.js';
+
+/**
+ * Долларовые шаблоны **строки замены** `String.prototype.replace`: совпадение,
+ * часть файла до совпадения (доллар + обратная кавычка — именно он давал
+ * дубликат файла и в превью, и в самой правке), часть после, группы,
+ * литеральный доллар. Собираются из частей, чтобы сам файл теста их не
+ * содержал в готовом виде.
+ */
+const DOLLAR = '$';
+const TICK = String.fromCharCode(96);
+const PREFIX_TEMPLATE = `left ${DOLLAR}${TICK} right`;
 
 describe('buildPermissionPreview — превью изменений в запросе подтверждения', () => {
   let dir: string;
@@ -191,5 +205,79 @@ describe('buildPermissionPreview — превью изменений в запр
     expect(preview!.files[0]!.path).toBe('sub/deep.txt');
     expect(preview!.files[0]!.diff).toContain('-old');
     expect(preview!.files[0]!.diff).toContain('+new');
+  });
+
+  /** Строки, которые дифф обещает добавить (без заголовка `+++`). */
+  function addedLines(diff: string): string[] {
+    return diff
+      .split('\n')
+      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+      .map((line) => line.slice(1));
+  }
+
+  function makeCtx(): ToolContext {
+    return { sessionId: 's1', messageId: 'm1', workingDir: dir };
+  }
+
+  it('edit_file: долларовые шаблоны в new_string — превью совпадает с реальной правкой', async () => {
+    const target = join(dir, 'pfx.txt');
+    await writeFile(target, 'alpha\nbeta\ngamma\n', 'utf-8');
+    const args = { file_path: 'pfx.txt', old_string: 'beta', new_string: PREFIX_TEMPLATE };
+
+    const preview = await buildPermissionPreview({ toolName: 'edit_file', args, workingDir: dir });
+
+    expect(preview).toBeDefined();
+    const file = preview!.files[0]!;
+    // Одна строка добавлена, одна удалена: дубликата префикса файла нет.
+    expect(file.additions).toBe(1);
+    expect(file.deletions).toBe(1);
+
+    // Реальная правка теми же аргументами — ровно тот же результат.
+    const result = await editFileTool.execute(args, makeCtx());
+    expect(result.isError).toBeFalsy();
+    const actual = await readFile(target, 'utf-8');
+    expect(actual).toBe(`alpha\n${PREFIX_TEMPLATE}\ngamma\n`);
+    // Превью и правка не расходятся: добавленная строка диффа — та же строка файла.
+    expect(addedLines(file.diff)).toEqual([PREFIX_TEMPLATE]);
+  });
+
+  it('edit_file (replace_all): долларовые шаблоны — превью совпадает с реальной правкой', async () => {
+    const target = join(dir, 'pfx-all.txt');
+    await writeFile(target, 'x\nx\nx\n', 'utf-8');
+    const args = { file_path: 'pfx-all.txt', old_string: 'x', new_string: PREFIX_TEMPLATE, replace_all: true };
+
+    const preview = await buildPermissionPreview({ toolName: 'edit_file', args, workingDir: dir });
+
+    expect(preview).toBeDefined();
+    const file = preview!.files[0]!;
+    expect(file.additions).toBe(3);
+    expect(file.deletions).toBe(3);
+
+    const result = await editFileTool.execute(args, makeCtx());
+    expect(result.isError).toBeFalsy();
+    await expect(readFile(target, 'utf-8')).resolves.toBe(
+      `${PREFIX_TEMPLATE}\n${PREFIX_TEMPLATE}\n${PREFIX_TEMPLATE}\n`,
+    );
+    expect(addedLines(file.diff)).toEqual([PREFIX_TEMPLATE, PREFIX_TEMPLATE, PREFIX_TEMPLATE]);
+  });
+
+  it('patch: долларовые шаблоны в new_string — превью совпадает с реальной правкой', async () => {
+    const target = join(dir, 'pfx-patch.txt');
+    await writeFile(target, 'one\ntwo\nthree\n', 'utf-8');
+    const args = {
+      edits: [{ op: 'update', file_path: 'pfx-patch.txt', old_string: 'two', new_string: PREFIX_TEMPLATE }],
+    };
+
+    const preview = await buildPermissionPreview({ toolName: 'patch', args, workingDir: dir });
+
+    expect(preview).toBeDefined();
+    const file = preview!.files[0]!;
+    expect(file.additions).toBe(1);
+    expect(file.deletions).toBe(1);
+
+    const result = await patchTool.execute(args, makeCtx());
+    expect(result.isError).toBeFalsy();
+    await expect(readFile(target, 'utf-8')).resolves.toBe(`one\n${PREFIX_TEMPLATE}\nthree\n`);
+    expect(addedLines(file.diff)).toEqual([PREFIX_TEMPLATE]);
   });
 });

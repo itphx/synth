@@ -950,3 +950,93 @@ describe('patch — работа через порт исполнения (PROP-
     expect(result.content).toContain('Filesystem operations are unavailable');
   });
 });
+
+/**
+ * Регрессия: `new_string` не должен интерпретироваться как **шаблон замены**
+ * `String.prototype.replace` (совпадение, часть файла до/после совпадения,
+ * группы, литеральный доллар). Доллар с обратной кавычкой вставлял в файл его
+ * собственный префикс — реальный инцидент с дубликатом содержимого.
+ *
+ * Последовательности собираются из частей: сам файл теста не должен содержать
+ * их в готовом виде.
+ */
+const DOLLAR = '$';
+const TICK = String.fromCharCode(96);
+const DANGEROUS_REPLACEMENTS: ReadonlyArray<{ name: string; text: string }> = [
+  { name: 'совпадение', text: `${DOLLAR}&` },
+  { name: 'префикс до совпадения', text: `${DOLLAR}${TICK}` },
+  { name: 'суффикс после совпадения', text: `${DOLLAR}'` },
+  { name: 'группа', text: `${DOLLAR}1` },
+  { name: 'литеральный доллар', text: `${DOLLAR}${DOLLAR}` },
+  { name: 'именованная группа', text: `${DOLLAR}<name>` },
+];
+
+describe('patch — new_string не интерпретируется как шаблон замены', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-patch-dollar-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      ...overrides,
+    };
+  }
+
+  it('update: долларовые последовательности попадают в файл буквально, без дубликата', async () => {
+    for (const item of DANGEROUS_REPLACEMENTS) {
+      const file = join(tmpDir, 'u.txt');
+      await writeFile(file, 'one\ntwo\nthree\n', 'utf-8');
+      const literal = `left ${item.text} right`;
+
+      const result = await patchTool.execute({
+        edits: [{ op: 'update', file_path: 'u.txt', old_string: 'two', new_string: literal }],
+      }, makeCtx());
+
+      expect(result.isError, item.name).toBeFalsy();
+      const actual = await readFile(file, 'utf-8');
+      // Полное равенство: файл не содержит дубликата своего префикса и не
+      // потерял остальные строки.
+      expect(actual, item.name).toBe(`one\n${literal}\nthree\n`);
+    }
+  });
+
+  it('update + replace_all: долларовые последовательности буквальны во всех вхождениях', async () => {
+    for (const item of DANGEROUS_REPLACEMENTS) {
+      const file = join(tmpDir, 'ua.txt');
+      await writeFile(file, 'x\nx\nx\n', 'utf-8');
+      const literal = `(${item.text})`;
+
+      const result = await patchTool.execute({
+        edits: [{ op: 'update', file_path: 'ua.txt', old_string: 'x', new_string: literal, replace_all: true }],
+      }, makeCtx());
+
+      expect(result.isError, item.name).toBeFalsy();
+      const actual = await readFile(file, 'utf-8');
+      expect(actual, item.name).toBe(`${literal}\n${literal}\n${literal}\n`);
+    }
+  });
+
+  it('update: дифф в отчёте показывает буквальный текст новой строки', async () => {
+    const file = join(tmpDir, 'd.txt');
+    await writeFile(file, 'alpha\nbeta\n', 'utf-8');
+    const literal = `x ${DANGEROUS_REPLACEMENTS[1]!.text} y`; // доллар + обратная кавычка
+
+    const result = await patchTool.execute({
+      edits: [{ op: 'update', file_path: 'd.txt', old_string: 'beta', new_string: literal }],
+    }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    const meta = result.metadata as { files: Array<{ diff?: string }> };
+    expect(meta.files[0]!.diff).toContain(`+${literal}`);
+    await expect(readFile(file, 'utf-8')).resolves.toBe(`alpha\n${literal}\n`);
+  });
+});

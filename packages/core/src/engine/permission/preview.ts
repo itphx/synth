@@ -135,6 +135,11 @@ async function previewWriteFile(
  * `edit_file`: замена применяется **в памяти** тем же матчером, что и в туле
  * (`edit-match.ts`), файл не меняется. Неоднозначная или не найденная правка →
  * превью нет (тул всё равно вернёт ошибку).
+ *
+ * Замена — функцией-заменителем (как в туле): в строке замены JS трактует
+ * долларовые шаблоны (совпадение, префикс до совпадения, суффикс после,
+ * группы, двойной доллар, именованная группа) как подстановки — превью
+ * разошлось бы с реальной правкой. Функция возвращает new_string буквально.
  */
 async function previewEditFile(
   input: PermissionPreviewInput,
@@ -159,7 +164,7 @@ async function previewEditFile(
   if (input.args.replace_all === true) {
     // `replace_all` — только точное совпадение, все вхождения (как в туле).
     if (content.split(oldView).length - 1 === 0) return undefined;
-    newContent = content.replaceAll(oldView, newView);
+    newContent = content.replaceAll(oldView, () => newView);
   } else {
     const match = matchEdit(content, oldView);
     if (!match || match.matches.length !== 1) return undefined;
@@ -176,6 +181,9 @@ async function previewEditFile(
  * `patch`: правки применяются последовательно **в памяти** (как в туле),
  * файлы не меняются. Патч — «всё-или-ничего», поэтому превью либо есть
  * целиком, либо нет вовсе: частичный дифф вводил бы в заблуждение.
+ *
+ * Замена — функцией-заменителем (как в туле), иначе долларовые шаблоны в
+ * new_string давали бы в диффе не тот текст, который пишет сам патч.
  */
 async function previewPatch(
   input: PermissionPreviewInput,
@@ -215,8 +223,8 @@ async function previewPatch(
     const replaceAll = edit.replace_all === true;
     if (occurrences > 1 && !replaceAll) return undefined;
     item.content = replaceAll
-      ? item.content.replaceAll(oldView, newView)
-      : item.content.replace(oldView, newView);
+      ? item.content.replaceAll(oldView, () => newView)
+      : item.content.replace(oldView, () => newView);
   }
 
   const files: PermissionPreviewFile[] = [];

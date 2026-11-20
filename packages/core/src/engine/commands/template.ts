@@ -75,7 +75,11 @@ export async function renderTemplate(
   const positional = args.split(/\s+/).filter((x) => x.length > 0);
 
   let content = command.body;
-  content = content.replace(/\$ARGUMENTS/g, args);
+  // Замена — функцией-заменителем: аргументы команды приходят от пользователя,
+  // а строка замены в JS трактует долларовые шаблоны (совпадение, префикс,
+  // суффикс, группы, двойной доллар) как подстановки — в текст команды попал
+  // бы кусок её же шаблона. Функция возвращает аргументы буквально.
+  content = content.replace(/\$ARGUMENTS/g, () => args);
   content = content.replace(/\$([1-9])/g, (_m, d: string) => positional[Number(d) - 1] ?? '');
 
   // ADR-126 §15: inline shell `` !`cmd` ``. По умолчанию выключено — литерал

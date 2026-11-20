@@ -468,9 +468,14 @@ async function applyUpdateEdit(
   }
 
   // Правки применяются последовательно в памяти: следующая видит результат предыдущей.
+  // Замена — функцией-заменителем, а не строкой: в строке замены JS трактует
+  // долларовые шаблоны (совпадение, префикс до совпадения, суффикс после,
+  // группы, двойной доллар, именованная группа) как подстановки, поэтому
+  // new_string с такой последовательностью вставлял бы куски самого файла —
+  // доходило до дубликата всего префикса. Функция возвращает текст буквально.
   planned.content = replaceAll
-    ? planned.content.replaceAll(oldView, newView)
-    : planned.content.replace(oldView, newView);
+    ? planned.content.replaceAll(oldView, () => newView)
+    : planned.content.replace(oldView, () => newView);
   planned.replacements += replaceAll ? occurrences : 1;
 
   const existing = report.find((entry) => entry.kind === 'update' && entry.resolvedPath === resolvedPath);
