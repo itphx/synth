@@ -41,6 +41,7 @@ import { dropSteerInjections } from '../../steering/apply.js';
 import type { SteerRequeueResult } from '../../steering/apply.js';
 import { requeueMessages } from '../../../queue/processor.js';
 import { appendStopRecord } from '../../stop-record.js';
+import { lastTurnOutcomeFor, recordLastTurn } from '../last-turn.js';
 import type { StreamTiming } from '../stream-stats.js';
 // ADR-118 §4: единая точка публикации `step.*`/`turn.*` (замена `stream.done`).
 import {
@@ -577,6 +578,15 @@ export async function runProcessFinalize(
       );
     }
 
+    // Durable-исход хода для списков (`status.lastTurn`): ветка отмены — это
+    // пользовательский «Стоп» (та же причина, что у stop-record выше), поэтому
+    // грубый класс `stopped`, а не `cancelled` (отмена без решения человека).
+    // Ошибка записи ход не ломает (внутри — warning).
+    await recordLastTurn(deps.sessionManager, session.id, {
+      outcome: 'stopped',
+      reason: 'stopped_by_user',
+    });
+
     publishChunk('stream.cancelled', {
       stream_id: streamId,
       content: partialContent,
@@ -885,6 +895,22 @@ export async function runProcessFinalize(
       );
     }
   }
+
+  // Durable-исход хода для списков (`status.lastTurn`): грубый класс по
+  // терминальному статусу сообщения + конкретная причина по ключу фоллбека
+  // (PROP-143). Точка одна — здесь, после всех решений о статусе (шаг-лимит,
+  // отказ прав), поэтому ветки-дубли не нужны. На старте следующего хода поле
+  // не сбрасывается: клиент не показывает цвет, пока ход идёт, а следующая
+  // финализация перезапишет значение. Ошибка записи ход не ломает (warning
+  // внутри `recordLastTurn`).
+  await recordLastTurn(
+    deps.sessionManager,
+    session.id,
+    lastTurnOutcomeFor(messageStatus, {
+      stepLimitReached,
+      ...(fallbackI18n ? { i18nKey: fallbackI18n.key } : {}),
+    }),
+  );
 
   // ADR-115 (outbound): вложения финального ответа — метаданные без байтов.
   // Байты шлюз забирает по sha (`GET /api/v2/attachments/:sha256`), доступ к

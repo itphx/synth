@@ -239,6 +239,22 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
       // баннер «Обработка остановлена» и не ждёт автозапуска после рестарта.
       queue_stopped: session.status.queueStopped || false,
       queue_stopped_at: session.status.queueStoppedAt || null,
+      /**
+       * Чем закончился последний ход сессии (durable, `status.lastTurn`).
+       *
+       * Левое дерево красит название сессии (красный — `error`, зелёный —
+       * `completed`), **не читая историю**: списки отдаются сводками. Пока ход
+       * идёт, клиент цвет не показывает (`activity !== 'idle'`). Записи нет
+       * (legacy-сессия/ход ни разу не завершался) — `null`; `reason`
+       * (`StopReason`) присутствует, только если причина известна.
+       */
+      last_turn: session.status.lastTurn
+        ? {
+            outcome: session.status.lastTurn.outcome,
+            ...(session.status.lastTurn.reason ? { reason: session.status.lastTurn.reason } : {}),
+            at: session.status.lastTurn.at,
+          }
+        : null,
     },
     settings: session.settings,
     /** ADR-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */

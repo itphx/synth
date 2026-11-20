@@ -127,7 +127,10 @@ interface Harness {
   tmpDir: string;
 }
 
-async function makeHarness(extraTools: ToolDefinition[] = []): Promise<Harness> {
+async function makeHarness(
+  extraTools: ToolDefinition[] = [],
+  permissionConfig: PermissionConfig = { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
+): Promise<Harness> {
   const tmpDir = await mkdtemp(join(tmpdir(), 'synth-parallel-'));
   const store = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(store);
@@ -147,7 +150,7 @@ async function makeHarness(extraTools: ToolDefinition[] = []): Promise<Harness> 
       return { name, type: 'parallel-script', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
     },
     toolRegistry,
-    permissionConfig: { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
+    permissionConfig,
     defaultWorkingDir: tmpDir,
     contextConfig: new ContextConfig({ userDataDir: join(tmpdir(), 'context') }),
   });
@@ -385,11 +388,129 @@ describe('PROP-127 T2: параллельное исполнение вызов�
     const toolMessages = await sessionToolMessages(h);
     expect(toolMessages.map((m) => m.toolCallId)).toEqual(['call_a', 'call_b']);
 
-    // `tool_call.result` публикуется в порядке вызовов модели (фаза фиксации).
+    // ADR-118 (семантика событий вызова): `tool_call.result` публикуется по
+    // готовности **каждого** вызова, а не в порядке модели — быстрый вызов не
+    // ждёт медленного соседа по батчу. Порядок истории при этом прежний.
     const published = chunks
       .filter((c) => c.event === 'tool_call.result')
       .map((c) => c.data.call_id);
-    expect(published).toEqual(['call_a', 'call_b']);
+    expect(published).toEqual(['call_b', 'call_a']);
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('ADR-118: события вызова — по факту (started на старте, result — по готовности этого вызова)', async () => {
+    // Сценарий бага: в одном шаге — долгий `task` и мгновенный `plan_write`.
+    // Быстрый вызов не должен висеть «выполняется» всё время работы медленного.
+    const timeline: string[] = [];
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let slowReleased = false;
+
+    const slowTool: ToolDefinition = {
+      name: 'slow_task',
+      description: 'долгий вызов (саб-агент)',
+      parameters: z.object({}).passthrough(),
+      capabilities: [ToolCapability.RUNTIME],
+      async execute() {
+        timeline.push('slow:run');
+        await slowGate;
+        timeline.push('slow:done');
+        return { content: 'slow: ok' };
+      },
+    } as unknown as ToolDefinition;
+    const fastTool: ToolDefinition = {
+      name: 'fast_plan',
+      description: 'мгновенный вызов',
+      parameters: z.object({}).passthrough(),
+      capabilities: [ToolCapability.RUNTIME],
+      async execute() {
+        timeline.push('fast:run');
+        return { content: 'fast: ok' };
+      },
+    } as unknown as ToolDefinition;
+
+    ParallelScriptProvider.script = [
+      {
+        content: 'Шаг 1: долгий и быстрый вызовы',
+        toolCalls: [{ id: 'call_slow', name: 'slow_task' }, { id: 'call_fast', name: 'fast_plan' }],
+      },
+      { content: 'Готово' },
+    ];
+    const h = await makeHarness([slowTool, fastTool]);
+
+    const result = await run(h, new AbortController().signal, (event, data) => {
+      timeline.push(`${event}:${String(data.call_id)}`);
+      // Медленный вызов отпускаем только после того, как пришёл результат
+      // быстрого — иначе порядок событий был бы неотличим от прежнего.
+      if (event === 'tool_call.result' && data.call_id === 'call_fast' && !slowReleased) {
+        slowReleased = true;
+        releaseSlow();
+      }
+    });
+    expect(result.error).toBeUndefined();
+
+    const at = (needle: string): number => timeline.indexOf(needle);
+
+    // `started` — в момент фактического старта, обоих вызовов, до результатов.
+    expect(at('tool_call.started:call_slow')).toBeGreaterThanOrEqual(0);
+    expect(at('tool_call.started:call_fast')).toBeGreaterThan(at('tool_call.started:call_slow'));
+    expect(at('tool_call.started:call_fast')).toBeLessThan(at('tool_call.result:call_fast'));
+    expect(at('tool_call.started:call_fast')).toBeLessThan(at('tool_call.result:call_slow'));
+
+    // Результат быстрого — ДО завершения медленного (и, значит, до его result).
+    expect(at('tool_call.result:call_fast')).toBeGreaterThanOrEqual(0);
+    expect(at('tool_call.result:call_fast')).toBeLessThan(at('slow:done'));
+    expect(at('tool_call.result:call_fast')).toBeLessThan(at('tool_call.result:call_slow'));
+
+    // История — по-прежнему в порядке вызовов модели (события его не задают).
+    const results = await stepToolResults(h);
+    expect(results.map((r) => r.id)).toEqual(['call_slow', 'call_fast']);
+    expect(results.map((r) => r.result?.content)).toEqual(['slow: ok', 'fast: ok']);
+    const toolMessages = await sessionToolMessages(h);
+    expect(toolMessages.map((m) => m.toolCallId)).toEqual(['call_slow', 'call_fast']);
+
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  it('ADR-118: неисполняемый вызов (deny) получает событийную пару в фазе фиксации', async () => {
+    const forbiddenTool: ToolDefinition = {
+      name: 'forbidden_tool',
+      description: 'запрещён политикой',
+      parameters: z.object({}).passthrough(),
+      capabilities: [ToolCapability.RUNTIME],
+      async execute() {
+        return { content: 'не должно исполниться' };
+      },
+    } as unknown as ToolDefinition;
+
+    ParallelScriptProvider.script = [
+      {
+        content: 'Шаг 1: запрещённый вызов',
+        toolCalls: [{ id: 'call_denied', name: 'forbidden_tool' }],
+      },
+      { content: 'Готово' },
+    ];
+    const h = await makeHarness(
+      [forbiddenTool],
+      { rules: { forbidden_tool: 'deny' }, askTimeoutMs: 1000 } as PermissionConfig,
+    );
+
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    // Пара событий есть — иначе UI оставил бы карточку без результата.
+    const events = chunks
+      .filter((c) => c.event === 'tool_call.started' || c.event === 'tool_call.result')
+      .map((c) => `${c.event}:${String(c.data.call_id)}`);
+    expect(events).toEqual(['tool_call.started:call_denied', 'tool_call.result:call_denied']);
+
+    // Отказ виден и в событии, и в истории (пара assistant → tool цела).
+    const denied = chunks.find((c) => c.event === 'tool_call.result')!;
+    expect((denied.data.result as { isError?: boolean }).isError).toBe(true);
+    const toolMessages = await sessionToolMessages(h);
+    expect(toolMessages.map((m) => m.toolCallId)).toEqual(['call_denied']);
 
     await rm(h.tmpDir, { recursive: true, force: true });
   });

@@ -561,6 +561,39 @@ describe('task/tool.ts — фоновый саб-агент (PROP-096)', () => {
     expect(unregisterCancelToken).toHaveBeenCalledTimes(1);
   });
 
+  it('лимит шагов в фоне: статус прогона `limit`, а не `completed`', async () => {
+    // `maxSteps: 2` из `makeAgentRegistry`: первый шаг — обычный (вызов тула),
+    // второй — шаг-лимит с отчётом. Прогон закончен, но с ограничением:
+    // отдельный терминальный статус `limit`.
+    const { provider } = toolCallingProvider('noop');
+    const { service, notifications } = makeBackgroundService();
+    const { registry } = makeToolRegistry('noop');
+
+    const result = await taskTool.execute(
+      { description: 'd', prompt: 'go', subagent_type: 'explore', background: true },
+      makeCtx({
+        provider,
+        agentRegistry: makeAgentRegistry(['explore']),
+        sessionManager,
+        sessionId: parent.id,
+        toolRegistry: registry,
+        permissionConfig: { rules: { '*': 'allow' }, askTimeoutMs: 30_000 },
+        backgroundService: service,
+        backgroundEnabled: true,
+      }, parent.id),
+    );
+
+    expect(result.isError).toBeFalsy();
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+
+    const record = await service.get(result.metadata!.background_run_id as string);
+    expect(record?.status).toBe('limit');
+    // Лимит — терминальный статус: чистка реестра (`prune`) его видит.
+    expect(record?.summary).toContain('done');
+    // Родитель видит ограничение и в уведомлении (state конверта).
+    expect(notifications[0]!.metadata?.state).toBe('limit');
+  });
+
   it('background=false (по умолчанию) — прежний синхронный путь, реестр пуст', async () => {
     const { provider, chatAsync } = makeProvider('sync answer');
     const { service } = makeBackgroundService();

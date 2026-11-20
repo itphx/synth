@@ -310,14 +310,36 @@ async function resetChildRecoveryBudget(
 }
 
 /**
+ * ADR-118: события вызова публикуются по факту, а не по фазам шага.
+ *
+ * `tool_call.started` — вызов **реально стартовал** (обёртка исполнения),
+ * `tool_call.result` — готов **исход этого вызова** (там же: после IPI-обёртки,
+ * тем же контентом, что уйдёт в историю). Вызовы, которые не исполняются
+ * (`step-limit`, `short-circuit`, `doom`, отказ прав), получают событийную
+ * пару в фазе фиксации: без неё UI оставил бы карточку без результата.
+ */
+interface SubagentToolEvents {
+  started: boolean;
+  result: boolean;
+}
+
+/**
+ * Исход исполнения вызова в батче: результат и признак того, что он уже
+ * прошёл финальную обработку (IPI-обёртка) в фазе исполнения.
+ */
+interface SubagentToolExecution {
+  result: ToolResult;
+  finalized: boolean;
+}
+
+/**
  * PROP-127 (этап T3): план одного вызова инструмента в цикле саб-агента.
  *
- * - `step-limit` — вызов, запрещённый лимитом шагов: результат публикуется и
- *   пишется в историю, но `tool_call.started` **не** публикуется (вызов не
- *   исполнялся) — поведение прежнее.
+ * - `step-limit` — вызов, запрещённый лимитом шагов: не исполняется, но
+ *   событийная пара публикуется в фазе фиксации (ADR-118).
  * - `doom` — вызов, остановленный защитой от зацикливания: в историю пишется
- *   парный tool-результат, но события не публикуются и в `tool_calls` вызов
- *   не попадает — поведение прежнее.
+ *   парный tool-результат, но в `tool_calls` вызов не попадает; события — в
+ *   фазе фиксации (ADR-118).
  * - `resolved` — вызов, решённый без исполнения (отказ прав, отсутствующий
  *   тул): результат известен, общий хвост фазы фиксации выполняется.
  * - `ask` — вызов, ждущий подтверждения пользователя (PROP-127 T5): решение
@@ -333,7 +355,9 @@ interface SubagentToolPlanBase {
   name: string;
   /** Аргументы вызова (в истории/метаданных). */
   args: Record<string, unknown>;
-  /** Момент публикации `tool_call.started` — в `tool_calls.started_at`. */
+  /** Что уже опубликовано по этому вызову (см. `SubagentToolEvents`). */
+  events: SubagentToolEvents;
+  /** Момент начала вызова — в `tool_calls.started_at`. */
   startedAt: string;
   /**
    * Вызов изменил правила прав ребёнка («Разрешить в сессии») — **барьер**:
@@ -361,9 +385,9 @@ type SubagentToolPlan =
       /** Решение permission-слоя — для текста отказа. */
       permissionDecision: PermissionDecision;
       /** Исполнитель вызова (тот же, что у `execute`). */
-      run: () => Promise<ToolResult>;
+      run: () => Promise<SubagentToolExecution>;
     })
-  | (SubagentToolPlanBase & { kind: 'execute'; run: () => Promise<ToolResult> });
+  | (SubagentToolPlanBase & { kind: 'execute'; run: () => Promise<SubagentToolExecution> });
 
 /**
  * ADR-029 (chain-no-copy): эффективные правила прав дочернего прогона.
@@ -2137,7 +2161,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // PROP-143: durable-запись причины остановки (`steps_limit`) —
           // прогон остановлен по лимиту шагов. Запись идёт после отчёта:
           // лента читается сверху вниз (сначала отчёт, потом причина).
-          await writeStopRecord({ reason: 'steps_limit', limit: Number(stepLimitValue) });
+          // `reportDelivered` — был ли содержательный отчёт (UI отличает
+          // «отчёт есть» от «отчёт потерян» по metadata записи).
+          await writeStopRecord({ reason: 'steps_limit', limit: Number(stepLimitValue), reportDelivered: !reportMissing });
           break;
         }
 
@@ -2651,6 +2677,53 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       ): Promise<SubagentToolPlan | null> => {
         const tcId = (tc.id as string) || `subcall_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
+        /** Что уже опубликовано по этому вызову (ADR-118). */
+        const events: SubagentToolEvents = { started: false, result: false };
+        /**
+         * ADR-118: обёртка исполнения вызова — события по факту.
+         *
+         * `started` — в момент фактического старта (вызов батча), затем вызов
+         * исполняется, проходит IPI-обёртку и только тогда публикуется
+         * `result`: быстрый вызов больше не висит «выполняется» всё время
+         * работы медленного соседа (например `task` рядом с `plan_write`).
+         */
+        const instrumentRun = (
+          name: string,
+          args: Record<string, unknown>,
+          execute: () => Promise<ToolResult>,
+        ): (() => Promise<SubagentToolExecution>) => async () => {
+          if (!events.started) {
+            events.started = true;
+            publishToolEvent('tool_call.started', {
+              stream_id: extra.streamId,
+              session_id: extra.sessionId,
+              call_id: tcId,
+              name,
+              arguments: args,
+              iteration: stepIteration,
+              // Вложенность внутренних вызовов саб-агента под блоком `task`
+              // в родительском стриме (UI строит дерево по parent_call_id).
+              parent_call_id: extra.callId,
+            });
+          }
+          const raw = await execute();
+          // IPI-защита: тот же слой, что в основном ходе, — ДО публикации и
+          // персиста, чтобы UI и история видели одинаковый контент.
+          const result = applySubagentContentFilter(extra, name, args, raw, ctx);
+          if (!events.result) {
+            events.result = true;
+            publishToolEvent('tool_call.result', {
+              stream_id: extra.streamId,
+              session_id: extra.sessionId,
+              call_id: tcId,
+              name,
+              result,
+              iteration: stepIteration,
+              parent_call_id: extra.callId,
+            });
+          }
+          return { result, finalized: true };
+        };
 
         // Шаг-лимит (паритет с opencode): вызов запрещён `toolChoice: 'none'`,
         // но провайдер его вернул. Не исполняем — пишем парный error-результат,
@@ -2671,6 +2744,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             tcId,
             name: toolName,
             args: {},
+            events,
             startedAt: new Date().toISOString(),
             result: limited,
             grantsSession: false,
@@ -2696,6 +2770,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               tcId,
               name: toolName,
               args: {},
+              events,
               startedAt: new Date().toISOString(),
               result: inputIncompleteResult(toolName),
               grantsSession: false,
@@ -2721,23 +2796,16 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             tcId,
             name: toolName,
             args: toolArgs,
+            events,
             startedAt: tcStartedAt,
             content: sm('tool.doom_loop', { tool: toolName, count: String(doomCount) }),
             grantsSession: false,
           };
         }
 
-        publishToolEvent('tool_call.started', {
-          stream_id: extra.streamId,
-          session_id: extra.sessionId,
-          call_id: tcId,
-          name: toolName,
-          arguments: toolArgs,
-          iteration: stepIteration,
-          // Вложенность внутренних вызовов саб-агента под блоком `task`
-          // в родительском стриме (UI строит дерево по parent_call_id).
-          parent_call_id: extra.callId,
-        });
+        // ADR-118: `tool_call.started` здесь НЕ публикуется — событие ушло в
+        // обёртку исполнения (`instrumentRun`): подготовка идёт последовательно
+        // по всему сегменту, а вызов стартует позже и может ждать подтверждения.
 
         const toolDef = extra.toolRegistry?.get(toolName);
         // Контекст исполнения тула — свой на каждый вызов (PROP-127): собирается
@@ -2840,6 +2908,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             tcId,
             name: toolName,
             args: toolArgs,
+            events,
             startedAt: tcStartedAt,
             result: buildDenyResult({
               reason: permissionDecision.reason,
@@ -2899,12 +2968,14 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             tcId,
             name: toolName,
             args: toolArgs,
+            events,
             startedAt: tcStartedAt,
             waiter,
             approval,
             checkInput,
             permissionDecision,
-            run: () => runSubagentTool(toolDef, toolName, toolArgs, toolExecContext),
+            run: instrumentRun(toolName, toolArgs, () =>
+              runSubagentTool(toolDef, toolName, toolArgs, toolExecContext)),
             grantsSession: false,
           };
         }
@@ -2915,8 +2986,10 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           tcId,
           name: toolName,
           args: toolArgs,
+          events,
           startedAt: tcStartedAt,
-          run: () => runSubagentTool(toolDef, toolName, toolArgs, toolExecContext),
+          run: instrumentRun(toolName, toolArgs, () =>
+            runSubagentTool(toolDef, toolName, toolArgs, toolExecContext)),
           grantsSession: false,
         };
       };
@@ -2930,12 +3003,37 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
        */
       const commitSubagentToolCall = async (
         plan: SubagentToolPlan,
-        execResult?: ToolResult,
+        execution?: SubagentToolExecution,
       ): Promise<void> => {
-        // Защита от зацикливания: события не публикуются и в `tool_calls`
-        // вызов не попадает — в историю пишется только парный tool-результат
-        // (поведение прежнее).
+        // Защита от зацикливания: в `tool_calls` вызов не попадает — в историю
+        // пишется только парный tool-результат (поведение прежнее).
+        // ADR-118: событийная пара публикуется здесь (вызов не исполнялся,
+        // но без неё UI оставил бы карточку без результата).
         if (plan.kind === 'doom') {
+          if (!plan.events.started) {
+            plan.events.started = true;
+            publishToolEvent('tool_call.started', {
+              stream_id: extra.streamId,
+              session_id: extra.sessionId,
+              call_id: plan.tcId,
+              name: plan.name,
+              arguments: plan.args,
+              iteration: stepIteration,
+              parent_call_id: extra.callId,
+            });
+          }
+          if (!plan.events.result) {
+            plan.events.result = true;
+            publishToolEvent('tool_call.result', {
+              stream_id: extra.streamId,
+              session_id: extra.sessionId,
+              call_id: plan.tcId,
+              name: plan.name,
+              result: { content: plan.content, isError: true },
+              iteration: stepIteration,
+              parent_call_id: extra.callId,
+            });
+          }
           messages.push({
             id: '', role: 'tool',
             content: plan.content,
@@ -2958,14 +3056,17 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         /** Аргументы недоступны: вызов не исполнялся (`step-limit`/`short-circuit`). */
         const argsUnavailable = isStepLimit || plan.kind === 'short-circuit';
         let toolResult: ToolResult;
+        /** Результат уже обёрнут IPI-слоем в фазе исполнения. */
+        let finalized = false;
         if (plan.kind === 'execute') {
           // Результат приходит из батча; запасной вариант — тот же
           // error-результат тула (исполнитель не отдал результат).
-          toolResult = execResult ?? {
+          toolResult = execution?.result ?? {
             content: sm('tool.exec_error', { tool: plan.name, error: 'unknown error' }),
             isError: true,
             metadata: { i18n: i18nMeta('tool.exec_error', { tool: plan.name, error: 'unknown error' }) },
           };
+          finalized = execution?.finalized === true;
         } else {
           toolResult = plan.result;
         }
@@ -2973,25 +3074,45 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         // IPI-защита: единый слой фильтрации контента инструментов (та же
         // логика, что в основном ходе и шаге пайплайна) — обёртка по матрице
         // доверия, экранирование маркеров блока, словарная детекция и политика
-        // flag/sanitize/block. Применяется ДО публикации события и персиста,
-        // чтобы UI и история видели одинаковый контент.
-        toolResult = applySubagentContentFilter(
-          extra,
-          plan.name,
-          argsUnavailable ? {} : plan.args,
-          toolResult,
-          ctx,
-        );
+        // flag/sanitize/block. В обычном ходе обёртка сделана фазой исполнения
+        // (вместе с публикацией `tool_call.result`) — здесь она нужна только
+        // неисполняемым вызовам и сбою батча.
+        if (!finalized) {
+          toolResult = applySubagentContentFilter(
+            extra,
+            plan.name,
+            argsUnavailable ? {} : plan.args,
+            toolResult,
+            ctx,
+          );
+        }
 
-        publishToolEvent('tool_call.result', {
-          stream_id: extra.streamId,
-          session_id: extra.sessionId,
-          call_id: plan.tcId,
-          name: plan.name,
-          result: toolResult,
-          iteration: stepIteration,
-          parent_call_id: extra.callId,
-        });
+        if (!plan.events.started) {
+          // Вызов не дошёл до обёртки исполнения (отказ прав/подтверждения) —
+          // «старт» фиктивный, но событийная пара нужна.
+          plan.events.started = true;
+          publishToolEvent('tool_call.started', {
+            stream_id: extra.streamId,
+            session_id: extra.sessionId,
+            call_id: plan.tcId,
+            name: plan.name,
+            arguments: argsUnavailable ? {} : plan.args,
+            iteration: stepIteration,
+            parent_call_id: extra.callId,
+          });
+        }
+        if (!plan.events.result) {
+          plan.events.result = true;
+          publishToolEvent('tool_call.result', {
+            stream_id: extra.streamId,
+            session_id: extra.sessionId,
+            call_id: plan.tcId,
+            name: plan.name,
+            result: toolResult,
+            iteration: stepIteration,
+            parent_call_id: extra.callId,
+          });
+        }
 
         // ADR-118 §1: одна запись — в сводку прогона (`task`-результат) и в
         // аккумулятор **своего** шага (`metadata.tool_results` сообщения шага).
@@ -3112,6 +3233,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               tcId: plan.tcId,
               name: plan.name,
               args: plan.args,
+              events: plan.events,
               startedAt: plan.startedAt,
               run: plan.run,
               grantsSession,
@@ -3130,6 +3252,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             tcId: plan.tcId,
             name: plan.name,
             args: plan.args,
+            events: plan.events,
             startedAt: plan.startedAt,
             result: buildDenyResult({
               reason: plan.permissionDecision.reason,
@@ -3169,7 +3292,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         }
         if (group.length > 0) groups.push(group);
 
-        const outcomes = new Map<string, ToolBatchOutcome<ToolResult>>();
+        const outcomes = new Map<string, ToolBatchOutcome<SubagentToolExecution>>();
         for (const batchGroup of groups) {
           const batch = await runToolBatch(
             batchGroup.map((entry) => ({ id: entry.plan.tcId, run: entry.plan.run })),
@@ -3196,9 +3319,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // assistant(tool_calls) → tool не рвётся.
           const errText = outcome && !outcome.ok ? errorText(outcome.error) : 'unknown error';
           await commitSubagentToolCall(plan, {
-            content: sm('tool.exec_error', { tool: plan.name, error: errText }),
-            isError: true,
-            metadata: { i18n: i18nMeta('tool.exec_error', { tool: plan.name, error: errText }) },
+            result: {
+              content: sm('tool.exec_error', { tool: plan.name, error: errText }),
+              isError: true,
+              metadata: { i18n: i18nMeta('tool.exec_error', { tool: plan.name, error: errText }) },
+            },
+            // Обёртка не отработала — IPI-слой применит фаза фиксации.
+            finalized: false,
           });
         }
       };
@@ -3247,8 +3374,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         }
         // PROP-143: durable-запись причины остановки (`steps_limit`) —
         // прогон остановлен по лимиту шагов (шаг-отчёт получен, вызовы
-        // инструментов не исполнялись). Запись идёт после отчёта.
-        await writeStopRecord({ reason: 'steps_limit', limit: Number(stepLimitValue) });
+        // инструментов не исполнялись). Запись идёт после отчёта;
+        // `reportDelivered` — был ли содержательный отчёт.
+        await writeStopRecord({ reason: 'steps_limit', limit: Number(stepLimitValue), reportDelivered: !reportMissing });
         break;
       }
 

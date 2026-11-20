@@ -213,6 +213,7 @@ const RUN_STATUSES: readonly BackgroundRunStatus[] = [
   'completed',
   'failed',
   'cancelled',
+  'limit',
   'orphaned',
 ];
 

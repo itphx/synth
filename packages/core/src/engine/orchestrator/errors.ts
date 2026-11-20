@@ -22,6 +22,7 @@ import { warning } from '../../logger.js';
 import { estimateUsage, addTokenUsage } from './usage.js';
 import type { AuxUsageRecorder } from '../usage-accounting.js';
 import { appendStopRecord } from '../stop-record.js';
+import { recordLastTurn } from './last-turn.js';
 
 /**
  * Контекст терминальной ошибки LLM основной сессии. Заполняется на месте
@@ -292,6 +293,15 @@ export async function handleLlmFailure(
         `Не удалось записать причину остановки: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+
+    // Durable-исход хода для списков (`status.lastTurn`): ход оборван ошибкой
+    // провайдера — левое дерево UI красит сессию как критическую. Тоже только
+    // при терминальном исходе (на recoverable-попытке ход ещё идёт) и той же
+    // точечной мутацией метаданных; ошибка записи не ломает обработку ошибки.
+    await recordLastTurn(deps.sessionManager, sessionId, {
+      outcome: 'error',
+      reason: 'provider_error',
+    });
   }
 
   return { error: humanError, errorType, canRetry };

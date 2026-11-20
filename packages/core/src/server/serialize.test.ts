@@ -211,6 +211,53 @@ describe('serializeSession — activity (idle | busy | retry)', () => {
   });
 });
 
+describe('serializeSession — status.last_turn (исход последнего хода)', () => {
+  it('записи нет (legacy-сессия/ход не завершался) → last_turn: null', () => {
+    const out = serializeSession(session()) as Record<string, unknown>;
+    expect((out.status as Record<string, unknown>).last_turn).toBeNull();
+  });
+
+  it('запись есть → объект с outcome/at и причиной', () => {
+    const out = serializeSession(session({
+      status: {
+        lastTurn: { outcome: 'error', reason: 'provider_error', at: '2026-01-02T03:04:05.000Z' },
+      },
+    })) as Record<string, unknown>;
+    expect((out.status as Record<string, unknown>).last_turn).toEqual({
+      outcome: 'error',
+      reason: 'provider_error',
+      at: '2026-01-02T03:04:05.000Z',
+    });
+  });
+
+  it('без причины ключ reason отсутствует (не null)', () => {
+    const out = serializeSession(session({
+      status: { lastTurn: { outcome: 'completed', at: '2026-01-02T03:04:05.000Z' } },
+    })) as Record<string, unknown>;
+    const lastTurn = (out.status as Record<string, unknown>).last_turn as Record<string, unknown>;
+    expect(lastTurn.outcome).toBe('completed');
+    expect('reason' in lastTurn).toBe(false);
+  });
+
+  it('остальные поля status не меняются (аддитивность)', () => {
+    const withTurn = serializeSession(session({
+      status: {
+        queueStopped: true,
+        queueStoppedAt: '2026-01-01T00:00:05.000Z',
+        lastTurn: { outcome: 'limit', reason: 'steps_limit', at: '2026-01-02T03:04:05.000Z' },
+      },
+    })) as Record<string, unknown>;
+    expect(withTurn.status).toMatchObject({
+      queue_stopped: true,
+      queue_stopped_at: '2026-01-01T00:00:05.000Z',
+      cancel_requested: false,
+      cancel_requested_at: null,
+      blocked: null,
+      last_turn: { outcome: 'limit', reason: 'steps_limit' },
+    });
+  });
+});
+
 
 describe('serializeSession — current_stream.live (ADR-118 §5)', () => {
   afterEach(() => resetLiveStreamSnapshots());

@@ -26,9 +26,17 @@ export type BackgroundRunKind = 'subagent' | 'process';
  * - `completed` — успешно завершён;
  * - `failed` — завершён с ошибкой;
  * - `cancelled` — остановлен;
+ * - `limit` — завершён по лимиту шагов агента (прогон закончен, отчёт
+ *   получен или потерян — это не ошибка и не отмена);
  * - `orphaned` — процесс пережил рестарт сервиса, но его уже не отследить.
  */
-export type BackgroundRunStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'orphaned';
+export type BackgroundRunStatus =
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'limit'
+  | 'orphaned';
 
 /**
  * Терминальные статусы фонового прогона — записи, которые можно чистить
@@ -38,6 +46,7 @@ export const BACKGROUND_RUN_TERMINAL_STATUSES: readonly BackgroundRunStatus[] = 
   'completed',
   'failed',
   'cancelled',
+  'limit',
   'orphaned',
 ];
 

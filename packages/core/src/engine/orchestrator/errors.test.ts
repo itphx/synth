@@ -333,4 +333,70 @@ describe('handleLlmFailure', () => {
     expect(messages.find((m) => m.metadata?.type === STOP_MESSAGE_TYPE)?.metadata?.reason)
       .toBe('provider_error');
   });
+
+  /**
+   * Durable-исход последнего хода (`status.lastTurn`) — для левого дерева UI
+   * (списки без истории). Пишется **только** при терминальном исходе: на
+   * recoverable-попытке ход ещё идёт, отметка «ошибка» была бы ложной.
+   */
+  describe('исход хода (status.lastTurn)', () => {
+    it('терминальная ошибка → error + provider_error', async () => {
+      const sessionId = await sessionWithUserMessage('stream1');
+
+      await handleLlmFailure(
+        sessionId, 'stream1', new Error('401 Unauthorized'), 1, context(),
+        { sessionManager },
+      );
+
+      const lastTurn = (await sessionManager.getSession(sessionId))!.status.lastTurn;
+      expect(lastTurn).toMatchObject({ outcome: 'error', reason: 'provider_error' });
+      expect(lastTurn!.at).toEqual(expect.any(String));
+    });
+
+    it('исчерпаны попытки (attempt > LLM_MAX_ATTEMPTS) → error (последняя попытка терминальна)', async () => {
+      const sessionId = await sessionWithUserMessage('stream1');
+
+      await handleLlmFailure(
+        sessionId, 'stream1', new Error('fetch failed'), LLM_MAX_ATTEMPTS + 1,
+        context(), { sessionManager },
+      );
+
+      expect((await sessionManager.getSession(sessionId))!.status.lastTurn)
+        .toMatchObject({ outcome: 'error', reason: 'provider_error' });
+    });
+
+    it('recoverable-попытка (повтор ещё будет) → отметки НЕТ', async () => {
+      const sessionId = await sessionWithUserMessage('stream1');
+
+      const result = await handleLlmFailure(
+        sessionId, 'stream1', new Error('fetch failed'), 1, context(),
+        { sessionManager },
+      );
+
+      expect(result.canRetry).toBe(true);
+      expect((await sessionManager.getSession(sessionId))!.status.lastTurn).toBeUndefined();
+    });
+
+    it('отметка пишется без touchUpdatedAt (служебное поле не «оживляет» сессию)', async () => {
+      const sessionId = await sessionWithUserMessage('stream1');
+      const spy = vi.spyOn(sessionManager, 'mutateMeta');
+      // Читаем опции до `mockRestore` (restore очищает записи вызовов).
+      let touchOpts: boolean | undefined;
+
+      try {
+        await handleLlmFailure(
+          sessionId, 'stream1', new Error('401 Unauthorized'), 1, context(),
+          { sessionManager },
+        );
+        // В этом пути `mutateMeta` вызывается только для исхода хода
+        // (`last_error` пишется точечно в сообщение, stop-record — `addMessage`).
+        touchOpts = (spy.mock.calls[0]?.[2] as { touchUpdatedAt?: boolean } | undefined)
+          ?.touchUpdatedAt;
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(touchOpts).toBe(false);
+    });
+  });
 });

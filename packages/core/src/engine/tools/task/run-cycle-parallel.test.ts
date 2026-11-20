@@ -16,7 +16,7 @@
  * - **барьер прав**: «Разрешить в сессии» виден следующему вызову того же
  *   сообщения (вызов, получивший грант, завершает сегмент);
  * - **прежние ветки без изменений**: «кривой» вызов пропускается целиком,
- *   шаг-лимит публикует результат **без** `tool_call.started`.
+ *   шаг-лимит получает событийную пару в фазе фиксации (ADR-118).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -287,11 +287,113 @@ describe('PROP-127 T3: параллельное исполнение вызов�
     expect(toolMessages.map((m) => m.toolCallId)).toEqual(['call_a', 'call_b']);
     expect(toolMessages.map((m) => m.content)).toEqual(['a: ok', 'b: ok']);
 
-    // `tool_call.result` публикуется в порядке вызовов модели (фаза фиксации).
+    // ADR-118 (семантика событий вызова): `tool_call.result` публикуется по
+    // готовности **каждого** вызова, а не в порядке модели; порядок истории
+    // остаётся прежним.
     const results = published
       .filter((p) => p.type === 'tool_call.result')
       .map((p) => p.data.call_id);
-    expect(results).toEqual(['call_a', 'call_b']);
+    expect(results).toEqual(['call_b', 'call_a']);
+  });
+
+  it('ADR-118: события вызова — по факту (started на старте, result — по готовности этого вызова)', async () => {
+    // Сценарий бага: в одном шаге — долгий вызов (саб-агент) и мгновенный.
+    const timeline: string[] = [];
+    let releaseSlow!: () => void;
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    let slowReleased = false;
+
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'slow_task',
+      description: 'долгий вызов',
+      parameters: z.object({}).passthrough(),
+      capabilities: [],
+      async execute() {
+        timeline.push('slow:run');
+        await slowGate;
+        timeline.push('slow:done');
+        return { content: 'slow: ok' };
+      },
+    } as unknown as ToolDefinition);
+    registry.register({
+      name: 'fast_plan',
+      description: 'мгновенный вызов',
+      parameters: z.object({}).passthrough(),
+      capabilities: [],
+      async execute() {
+        timeline.push('fast:run');
+        return { content: 'fast: ok' };
+      },
+    } as unknown as ToolDefinition);
+
+    const { provider } = scriptedProvider([
+      [toolCallsChunk([{ id: 'call_slow', name: 'slow_task' }, { id: 'call_fast', name: 'fast_plan' }])],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider, toolRegistry: registry,
+        publish: (type: string, data: Record<string, unknown>) => {
+          timeline.push(`${type}:${String(data.call_id)}`);
+          // Медленный вызов отпускаем только после результата быстрого —
+          // иначе порядок событий был бы неотличим от прежнего.
+          if (type === 'tool_call.result' && data.call_id === 'call_fast' && !slowReleased) {
+            slowReleased = true;
+            releaseSlow();
+          }
+        },
+      }),
+    }));
+    expect(result.isError).toBeFalsy();
+
+    const at = (needle: string): number => timeline.indexOf(needle);
+
+    // `started` — в момент фактического старта обоих вызовов, до результатов.
+    expect(at('tool_call.started:call_slow')).toBeGreaterThanOrEqual(0);
+    expect(at('tool_call.started:call_fast')).toBeGreaterThan(at('tool_call.started:call_slow'));
+    expect(at('tool_call.started:call_fast')).toBeLessThan(at('tool_call.result:call_fast'));
+    expect(at('tool_call.started:call_fast')).toBeLessThan(at('tool_call.result:call_slow'));
+
+    // Результат быстрого — ДО завершения медленного.
+    expect(at('tool_call.result:call_fast')).toBeGreaterThanOrEqual(0);
+    expect(at('tool_call.result:call_fast')).toBeLessThan(at('slow:done'));
+    expect(at('tool_call.result:call_fast')).toBeLessThan(at('tool_call.result:call_slow'));
+
+    // История (сводка прогона и лента ребёнка) — в порядке вызовов модели.
+    const toolCalls = result.metadata!.tool_calls as Array<{ id?: string; result?: { content: string } }>;
+    expect(toolCalls.map((t) => t.id)).toEqual(['call_slow', 'call_fast']);
+    expect(toolCalls.map((t) => t.result?.content)).toEqual(['slow: ok', 'fast: ok']);
+  });
+
+  it('ADR-118: отказ прав (deny) получает событийную пару в фазе фиксации', async () => {
+    const { registry, counters } = makeRegistry({ forbidden: async () => ({ content: 'нет' }) });
+    const published: Array<{ type: string; data: Record<string, unknown> }> = [];
+
+    const { provider } = scriptedProvider([
+      [toolCallsChunk([{ id: 'call_denied', name: 'forbidden' }])],
+      [{ isFinal: true, content: 'готово', model: 'test-model' }],
+    ]);
+
+    const result = await runSubagent(makeConfig({
+      tools: llmTools(),
+      extra: makeExtra({
+        provider, toolRegistry: registry,
+        permissionConfig: { rules: { forbidden: 'deny' }, askTimeoutMs: 1000 },
+        publish: (type: string, data: Record<string, unknown>) => published.push({ type, data }),
+      }),
+    }));
+    expect(result.isError).toBeFalsy();
+    // Вызов не исполнялся.
+    expect(counters.forbidden).toBeUndefined();
+
+    // Пара событий есть — иначе UI оставил бы карточку без результата.
+    const events = published
+      .filter((p) => p.type === 'tool_call.started' || p.type === 'tool_call.result')
+      .map((p) => `${p.type}:${String(p.data.call_id)}`);
+    expect(events).toEqual(['tool_call.started:call_denied', 'tool_call.result:call_denied']);
   });
 
   it('исключение одного вызова не роняет остальные и не прерывает прогон', async () => {
@@ -430,7 +532,7 @@ describe('PROP-127 T3: параллельное исполнение вызов�
     expect(saved.map((m) => m.toolCallId)).toEqual(['call_ok']);
   });
 
-  it('шаг-лимит: результат публикуется, `tool_call.started` — нет (поведение прежнее)', async () => {
+  it('шаг-лимит: событийная пара публикуется в фазе фиксации (вызов не исполнялся)', async () => {
     const parent = await sessionManager.createSession({ title: 'P' });
     const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
     const { registry, counters } = makeRegistry({ noop: async () => ({ content: 'ok' }) });
@@ -455,8 +557,10 @@ describe('PROP-127 T3: параллельное исполнение вызов�
     expect(counters.noop).toBeUndefined();
     expect(result.metadata!.step_limit_reached).toBe(true);
 
-    // `tool_call.started` не публиковался ни разу, `tool_call.result` — для обоих.
-    expect(published.filter((p) => p.type === 'tool_call.started')).toHaveLength(0);
+    // ADR-118: вызов не исполнялся, но событийная пара есть — иначе UI оставил
+    // бы карточку без результата.
+    expect(published.filter((p) => p.type === 'tool_call.started').map((p) => p.data.call_id))
+      .toEqual(['call_1', 'call_2']);
     expect(published.filter((p) => p.type === 'tool_call.result').map((p) => p.data.call_id))
       .toEqual(['call_1', 'call_2']);
 
@@ -465,7 +569,7 @@ describe('PROP-127 T3: параллельное исполнение вызов�
     expect(saved.map((m) => m.toolCallId)).toEqual(['call_1', 'call_2']);
   });
 
-  it('doom-loop: блокировка остаётся по порядку вызовов модели, лишних событий нет', async () => {
+  it('doom-loop: блокировка остаётся по порядку вызовов модели, событийная пара есть', async () => {
     const { registry, counters } = makeRegistry({ noop: async () => ({ content: 'ok' }) });
     const published: Array<{ type: string; data: Record<string, unknown> }> = [];
 
@@ -487,11 +591,12 @@ describe('PROP-127 T3: параллельное исполнение вызов�
 
     // Первые MAX_DOOM_LOOP_COUNT-1 вызовов исполнились, третий — заблокирован.
     expect(counters.noop).toBe(2);
-    // Doom-вызов не публикует ни started, ни result.
+    // ADR-118: doom-вызов не исполняется, но событийная пара публикуется
+    // (иначе его карточка осталась бы без результата).
     expect(published.filter((p) => p.type === 'tool_call.started').map((p) => p.data.call_id))
-      .toEqual(['call_1', 'call_2']);
+      .toEqual(['call_1', 'call_2', 'call_3']);
     expect(published.filter((p) => p.type === 'tool_call.result').map((p) => p.data.call_id))
-      .toEqual(['call_1', 'call_2']);
+      .toEqual(['call_1', 'call_2', 'call_3']);
     // В `tool_calls` doom-вызов не попадает.
     const toolCalls = result.metadata!.tool_calls as Array<{ id?: string }>;
     expect(toolCalls.map((t) => t.id)).toEqual(['call_1', 'call_2']);

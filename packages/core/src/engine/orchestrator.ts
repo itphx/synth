@@ -412,6 +412,34 @@ type ToolCallOutcome = {
 interface ToolCallExecution {
   result: ToolCallOutcome;
   cancelled: boolean;
+  /**
+   * Результат уже прошёл финальную обработку (IPI-обёртка, ленивые
+   * инструкции) в фазе исполнения — фиксации остаётся только запись.
+   * `false` — результат пришёл извне исполнения (сбой батча): финальную
+   * обработку делает фаза фиксации, как прежде.
+   */
+  finalized: boolean;
+}
+
+/**
+ * Сырой исход исполнения вызова (до финальной обработки): его отдаёт
+ * исполнитель, обёртка исполнения (`instrumentToolRun`) доводит его до
+ * `ToolCallExecution`.
+ */
+type ToolCallRawExecution = Omit<ToolCallExecution, 'finalized'>;
+
+/**
+ * ADR-118: события вызова публикуются по факту, а не по фазам шага.
+ *
+ * `tool_call.started` — вызов **реально стартовал** (обёртка исполнения),
+ * `tool_call.result` — готов **исход этого вызова** (там же). Вызовы, которые
+ * не исполняются вовсе (`short-circuit`, отказ прав, отказ в подтверждении),
+ * получают событийную пару в фазе фиксации: «старт» у них фиктивный, но без
+ * пары UI оставил бы карточку без результата.
+ */
+interface ToolCallEvents {
+  started: boolean;
+  result: boolean;
 }
 
 /**
@@ -427,7 +455,9 @@ interface ToolCallExecBase {
   toolDef: ToolDefinition | undefined;
   /** Исполнитель вызова: свой контекст, свои аргументы. */
   run: () => Promise<ToolCallExecution>;
-  /** Момент публикации `tool_call.started` — в `allToolCalls.started_at`. */
+  /** Что уже опубликовано по этому вызову (см. `ToolCallEvents`). */
+  events: ToolCallEvents;
+  /** Момент начала вызова — в `allToolCalls.started_at`. */
   startedAt: string;
   /** Замер длительности вызова для `post_tool_use`. */
   startedMs: number;
@@ -467,6 +497,8 @@ type ToolCallPlan =
       /** Аргументы вызова в истории (у «кривого»/лимит-шагов — пустые). */
       args: Record<string, unknown>;
       result: ToolCallOutcome;
+      /** События — пара публикуется фазой фиксации (вызов не исполнялся). */
+      events: ToolCallEvents;
     }
   | {
       kind: 'resolved';
@@ -475,7 +507,9 @@ type ToolCallPlan =
       toolArgs: Record<string, unknown>;
       toolDef: ToolDefinition | undefined;
       result: ToolCallOutcome;
-      /** Момент публикации `tool_call.started` — в `allToolCalls.started_at`. */
+      /** Что уже опубликовано по этому вызову (см. `ToolCallEvents`). */
+      events: ToolCallEvents;
+      /** Момент начала вызова — в `allToolCalls.started_at`. */
       startedAt: string;
       /** Замер длительности вызова для `post_tool_use`. */
       startedMs: number;
@@ -7097,15 +7131,22 @@ export class ChatOrchestrator {
          *     повторяющихся отказов, ожидание подтверждения (`ask`) и сборка
          *     `ToolContext` каждого вызова. Здесь живут все счётчики и флаги
          *     шага — они по определению последовательны («N отказов подряд»,
-         *     «вызов N+1 видит грант из вызова N»).
+         *     «вызов N+1 видит грант из вызова N»). Событий вызова здесь нет.
          *  2. **Исполнение** (параллельно): вызовы сегмента стартуют
          *     одновременно (`runToolBatch`), каждый со своим контекстом;
          *     исключение тула — результат тула (`tool.exec_error`), а не
-         *     падение шага.
-         *  3. **Фиксация** (последовательно, порядок вызовов модели): IPI-обёртка,
-         *     ленивые инструкции, публикация `tool_call.result`, персист
+         *     падение шага. Обёртка исполнения публикует `tool_call.started`
+         *     в момент фактического старта и `tool_call.result` — сразу как
+         *     готов исход **этого** вызова (вместе с IPI-обёрткой и ленивыми
+         *     инструкциями): быстрый вызов больше не ждёт медленного соседа
+         *     по батчу (им был `task` рядом с `plan_write`).
+         *  3. **Фиксация** (последовательно, порядок вызовов модели): персист
          *     результата, смена режима/проекта, `post_tool_use`, `fs.changed`,
-         *     `allToolCalls` и tool-сообщение в `currentMessages`.
+         *     `allToolCalls` и tool-сообщение в `currentMessages`. Порядок
+         *     публикации событий с порядком записи больше не совпадает — и не
+         *     должен: историю задаёт порядок вызовов модели (ADR-118 §1);
+         *     неисполняемые вызовы (`short-circuit`, отказ) получают
+         *     событийную пару здесь.
          *
          * **Барьеры.** Вызов, меняющий состояние, от которого зависят следующие
          * вызовы батча (`plan_enter`/`plan_exit` — режим; `project_*` —
@@ -7178,8 +7219,186 @@ export class ChatOrchestrator {
           return denyResult;
         };
 
+        /**
+         * ADR-118: `tool_call.started` — вызов **реально стартовал**.
+         *
+         * Публикуется обёрткой исполнения конкретного вызова, а не фазой
+         * подготовки: иначе быстрый вызов висел «выполняется» всё время работы
+         * медленного соседа по батчу (PROP-127 T2).
+         */
+        const publishToolCallStarted = (
+          callId: string,
+          name: string,
+          args: Record<string, unknown>,
+        ): void => {
+          publishChunk('tool_call.started', {
+            stream_id: streamId,
+            session_id: session.id,
+            call_id: callId,
+            name,
+            arguments: args,
+            iteration: toolIteration,
+          });
+        };
+
+        /** ADR-118: `tool_call.result` — готов **исход этого вызова**. */
+        const publishToolCallResult = (
+          callId: string,
+          name: string,
+          result: ToolCallOutcome,
+        ): void => {
+          publishChunk('tool_call.result', {
+            stream_id: streamId,
+            session_id: session.id,
+            call_id: callId,
+            name,
+            result,
+            iteration: toolIteration,
+          });
+        };
+
+        /**
+         * Очередь lazy-догрузки инструкций (ADR-069 §4).
+         *
+         * Состояние загрузчика (`loaded`/`claims`) — per-session и рассчитано
+         * на последовательный резолв («один раз на assistant-сообщение»,
+         * sha256-дедуп). С переносом финальной обработки в фазу исполнения
+         * вызовы одного батча доходят до неё параллельно — очередь сохраняет
+         * прежнюю семантику без гонок.
+         */
+        let lazyQueue: Promise<void> = Promise.resolve();
+
+        /**
+         * Финальная обработка результата вызова: IPI-обёртка (ADR-146) и
+         * ленивые вложенные инструкции (ADR-069 §4).
+         *
+         * Живёт в фазе исполнения: `tool_call.result` публикуется сразу, как
+         * только исход **этого** вызова готов, и несёт ровно тот контент,
+         * который ляжет в историю (`metadata.tool_results` и tool-сообщение).
+         *
+         * IPI-обёртка идемпотентна и не имеет общего состояния; lazy-догрузка
+         * сериализуется очередью (см. `lazyQueue`).
+         */
+        const finalizeToolResult = async (
+          toolName: string,
+          toolDef: ToolDefinition | undefined,
+          toolArgs: Record<string, unknown>,
+          raw: ToolCallOutcome,
+        ): Promise<ToolCallOutcome> => {
+          let toolResult = raw;
+          // IPI-защита: единый слой фильтрации контента инструментов
+          // (`engine/security/tool-content.ts`) — матрица доверия, экранирование
+          // маркеров блока, словарная детекция и политика flag/sanitize/block.
+          // Один и тот же слой применяют цикл саб-агента и шаг пайплайна.
+          if (this._securityConfig.promptInjection.enabled) {
+            const filtered = applyToolContentFilter({
+              toolName,
+              toolDef,
+              args: toolArgs,
+              content: toolResult.content,
+              isError: toolResult.isError === true,
+              metadata: toolResult.metadata,
+              workingDir,
+              // ADR-114: периметр доверия — рабочий каталог + корень проекта.
+              allowedRoots,
+              config: this._securityConfig.promptInjection,
+              dictionaryStore: this._dictionaryStore,
+              language: session.settings.language || 'ru',
+            });
+            // Прочие поля результата (`attachments` ADR-115 и др.) сохраняются.
+            toolResult = {
+              ...toolResult,
+              content: filtered.content,
+              isError: filtered.isError,
+              ...(filtered.metadata !== undefined ? { metadata: filtered.metadata } : {}),
+            };
+          }
+
+          // ADR-069 §4: lazy-догрузка вложенных проектных инструкций в результат
+          // file/shell-тула. Контент инструкций сканируется внутри загрузчика
+          // (ADR-036) и вставляется ПОСЛЕ IPI-обёртки базового tool-контента —
+          // сам базовый контент под обёрткой, скан не обходится.
+          if (!toolResult.isError && this._lazyInstructions) {
+            const previous = lazyQueue;
+            let release!: () => void;
+            lazyQueue = new Promise<void>((resolveQueue) => { release = resolveQueue; });
+            await previous;
+            try {
+              const lazy = await this._lazyInstructions.resolve({
+                sessionId: session.id,
+                messageId: streamId,
+                toolName,
+                toolArgs,
+                toolResultMetadata: toolResult.metadata,
+                workspace: workingDir,
+                language,
+                injection: this._instructionsInjectionPolicy(),
+              });
+              if (lazy.block) {
+                toolResult = {
+                  ...toolResult,
+                  content: `${toolResult.content}\n\n${lazy.block}`,
+                  metadata: {
+                    ...toolResult.metadata,
+                    instructions_loaded: lazy.files.filter((f) => !f.blocked).map((f) => f.path),
+                  },
+                };
+                this._eventBus.publish(session.id, 'context.instructions_loaded', {
+                  session_id: session.id,
+                  source: 'lazy',
+                  tool: toolName,
+                  agent: effectiveAgentRole,
+                  files: lazy.files,
+                });
+              }
+            } catch (e) {
+              warning('ORCHESTRATOR', `Lazy-инструкции не загружены: ${e instanceof Error ? e.message : String(e)}`);
+            } finally {
+              release();
+            }
+          }
+
+          return toolResult;
+        };
+
+        /**
+         * Обёртка исполнения вызова: события — по факту, а не по фазам шага.
+         *
+         * `started` — в момент фактического старта (вызов батча), `result` —
+         * сразу как готов исход **этого** вызова (после IPI-обёртки и ленивых
+         * инструкций, тем же контентом, что уйдёт в историю). Отменённый вызов
+         * не оборачивается — фиксация отмены пишет результат как есть, как и
+         * прежде.
+         */
+        const instrumentToolRun = (
+          call: {
+            tcId: string;
+            toolName: string;
+            toolArgs: Record<string, unknown>;
+            toolDef: ToolDefinition | undefined;
+          },
+          events: ToolCallEvents,
+          execute: () => Promise<ToolCallRawExecution>,
+        ): (() => Promise<ToolCallExecution>) => async () => {
+          if (!events.started) {
+            events.started = true;
+            publishToolCallStarted(call.tcId, call.toolName, call.toolArgs);
+          }
+          const execution = await execute();
+          const result = execution.cancelled
+            ? execution.result
+            : await finalizeToolResult(call.toolName, call.toolDef, call.toolArgs, execution.result);
+          if (!events.result) {
+            events.result = true;
+            publishToolCallResult(call.tcId, call.toolName, result);
+          }
+          return { result, cancelled: execution.cancelled, finalized: !execution.cancelled };
+        };
+
         const prepareToolCall = async (tc: Record<string, unknown>): Promise<ToolCallPlan> => {
           const tcId = (tc.id as string) || `call_${Date.now()}`;
+          /** Что уже опубликовано по этому вызову (ADR-118, см. `ToolCallEvents`). */
+          const events: ToolCallEvents = { started: false, result: false };
           const func = tc.function as { name: string; arguments: string | Record<string, unknown> } | undefined;
 
           // Шаг-лимит (паритет с opencode): вызов запрещён `toolChoice: 'none'`,
@@ -7201,6 +7420,7 @@ export class ChatOrchestrator {
               name: limitParams.tool,
               args: {},
               result: limited,
+              events,
             };
           }
 
@@ -7222,6 +7442,7 @@ export class ChatOrchestrator {
               name: 'unknown',
               args: {},
               result: malformed,
+              events,
             };
           }
 
@@ -7241,6 +7462,7 @@ export class ChatOrchestrator {
                 name: toolName,
                 args: {},
                 result: inputIncompleteResult(toolName),
+                events,
               };
             }
             try {
@@ -7385,6 +7607,7 @@ export class ChatOrchestrator {
                 name: toolName,
                 args: toolArgs,
                 result: doomResult,
+                events,
               };
             }
           }
@@ -7393,16 +7616,12 @@ export class ChatOrchestrator {
           // ADR-030: `Date.now()`-замер длительности тула для `post_tool_use`.
           const tcStartedMs = Date.now();
 
-          publishChunk('tool_call.started', {
-            stream_id: streamId,
-            session_id: session.id,
-            call_id: tcId,
-            name: toolName,
-            arguments: toolArgs,
-            iteration: toolIteration,
-          });
+          // ADR-118: `tool_call.started` здесь НЕ публикуется — событие ушло в
+          // обёртку исполнения (`instrumentToolRun`): подготовка идёт
+          // последовательно по всему сегменту, а вызов стартует позже и может
+          // ждать соседа по батчу и подтверждения пользователя.
 
-          // ADR-126 §12: `skill.invoked` — рядом с `tool_call.started`
+          // ADR-126 §12: `skill.invoked` — рядом с моментом вызова
           // (аудит/метрики/UI-подсветка).
           if (toolName === 'skill' && typeof toolArgs.name === 'string') {
             const skillName = toolArgs.name;
@@ -7543,6 +7762,7 @@ export class ChatOrchestrator {
               },
               startedAt: tcStartedAt,
               startedMs: tcStartedMs,
+              events,
               cancelled: decisionCancelled,
               executed: false,
             };
@@ -7567,6 +7787,7 @@ export class ChatOrchestrator {
               result: denyResult,
               startedAt: tcStartedAt,
               startedMs: tcStartedMs,
+              events,
               cancelled: decisionCancelled,
               executed: false,
             };
@@ -7948,7 +8169,11 @@ export class ChatOrchestrator {
               startedMs: tcStartedMs,
               executed: true,
               permissionRef,
-              run: async (): Promise<ToolCallExecution> => {
+              events,
+              run: instrumentToolRun(
+                { tcId, toolName, toolArgs, toolDef: callToolDef },
+                events,
+                async (): Promise<ToolCallRawExecution> => {
                 // PROP-136 (слайс 136a): append-only аудит исполнений shell.
                 // Единственная точка исполнения tool-call: обезличенная команда
                 // пишется **до** запуска — при включённом журнале сбой записи
@@ -8111,7 +8336,8 @@ export class ChatOrchestrator {
                   result,
                   cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,
                 };
-              },
+                },
+              ),
             };
             // PROP-127 (этап T5): вызов с подтверждением — тот же исполняемый
             // план, но ждущий ответа пользователя (решение — в параллельной
@@ -8140,14 +8366,19 @@ export class ChatOrchestrator {
             startedMs: tcStartedMs,
             executed: true,
             permissionRef,
-            run: async (): Promise<ToolCallExecution> => ({
-              result: {
-                content: sm('tool.not_found', { tool: toolName }),
-                isError: true,
-                metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
-              },
-              cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,
-            }),
+            events,
+            run: instrumentToolRun(
+              { tcId, toolName, toolArgs, toolDef: undefined },
+              events,
+              async (): Promise<ToolCallRawExecution> => ({
+                result: {
+                  content: sm('tool.not_found', { tool: toolName }),
+                  isError: true,
+                  metadata: { i18n: i18nMeta('tool.not_found', { tool: toolName }) },
+                },
+                cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,
+              }),
+            ),
           };
           if (askWaiter && approvalRequest) {
             return {
@@ -8173,12 +8404,22 @@ export class ChatOrchestrator {
           plan: ToolCallPlan,
           result: ToolCallOutcome,
           cancelled: boolean,
+          /** Результат уже прошёл финальную обработку в фазе исполнения. */
+          finalized = false,
         ): Promise<void> => {
           if (plan.kind === 'short-circuit') {
             // Лимит шагов / «кривой» вызов / doom-loop: результат публикуется
             // и пишется в историю как есть. Хвост фазы фиксации (IPI-обёртка,
             // ленивые инструкции, смена режима/проекта, `allToolCalls`) для них
             // не выполняется — как и в последовательном цикле.
+            //
+            // Событийная пара публикуется здесь: вызов не исполнялся, но без
+            // `tool_call.started` UI оставил бы карточку только на закрытии (а
+            // без `result` — висящей вовсе).
+            if (!plan.events.started) {
+              plan.events.started = true;
+              publishToolCallStarted(plan.tcId, plan.name, plan.args);
+            }
             currentMessages.push({
               id: '',
               role: 'tool',
@@ -8189,14 +8430,10 @@ export class ChatOrchestrator {
               branchId: '',
               toolCallId: plan.tcId,
             });
-            publishChunk('tool_call.result', {
-              stream_id: streamId,
-              session_id: session.id,
-              call_id: plan.tcId,
-              name: plan.name,
-              result: plan.result,
-              iteration: toolIteration,
-            });
+            if (!plan.events.result) {
+              plan.events.result = true;
+              publishToolCallResult(plan.tcId, plan.name, plan.result);
+            }
             // Пара assistant(tool_calls) → tool обязана попасть в историю:
             // иначе первый же LLM-вызов следующего хода падает у провайдера
             // («tool_calls must be followed by tool messages»).
@@ -8225,14 +8462,16 @@ export class ChatOrchestrator {
               completed_at: new Date().toISOString(),
               iteration: toolIteration,
             });
-            publishChunk('tool_call.result', {
-              stream_id: streamId,
-              session_id: session.id,
-              call_id: plan.tcId,
-              name: toolName,
-              result: toolResult,
-              iteration: toolIteration,
-            });
+            // События — если вызов не дошёл до обёртки исполнения (отказ в
+            // подтверждении с отменой): пара в порядке публикации.
+            if (!plan.events.started) {
+              plan.events.started = true;
+              publishToolCallStarted(plan.tcId, toolName, toolArgs);
+            }
+            if (!plan.events.result) {
+              plan.events.result = true;
+              publishToolCallResult(plan.tcId, toolName, toolResult);
+            }
             // Шаг 2а: результат тула сразу в истории (пара к уже записанному
             // assistant(tool_calls)) — отмена ниже не должна его потерять.
             await this._persistToolResult(
@@ -8243,84 +8482,31 @@ export class ChatOrchestrator {
             return;
           }
 
-          // IPI-защита: единый слой фильтрации контента инструментов
-          // (`engine/security/tool-content.ts`) — матрица доверия, экранирование
-          // маркеров блока, словарная детекция и политика flag/sanitize/block.
-          // Один и тот же слой применяют цикл саб-агента и шаг пайплайна.
-          if (this._securityConfig.promptInjection.enabled) {
-            const filtered = applyToolContentFilter({
-              toolName,
-              toolDef,
-              args: toolArgs,
-              content: toolResult.content,
-              isError: toolResult.isError === true,
-              metadata: toolResult.metadata,
-              workingDir,
-              // ADR-114: периметр доверия — рабочий каталог + корень проекта.
-              allowedRoots,
-              config: this._securityConfig.promptInjection,
-              dictionaryStore: this._dictionaryStore,
-              language: session.settings.language || 'ru',
-            });
-            // Прочие поля результата (`attachments` ADR-115 и др.) сохраняются.
-            toolResult = {
-              ...toolResult,
-              content: filtered.content,
-              isError: filtered.isError,
-              ...(filtered.metadata !== undefined ? { metadata: filtered.metadata } : {}),
-            };
+          // Финальная обработка результата (IPI-обёртка и ленивые инструкции)
+          // по умолчанию живёт в фазе исполнения — там же, где публикуется
+          // `tool_call.result` (см. `finalizeToolResult`). Сюда она доходит
+          // только для исходов, которые фаза исполнения не видела: отказ прав,
+          // блокировка хуком, сбой батча.
+          if (!finalized) {
+            toolResult = await finalizeToolResult(toolName, toolDef, toolArgs, toolResult);
           }
 
-          // ADR-069 §4: lazy-догрузка вложенных проектных инструкций в результат
-          // file/shell-тула. Контент инструкций сканируется внутри загрузчика
-          // (ADR-036) и вставляется ПОСЛЕ IPI-обёртки базового tool-контента —
-          // сам базовый контент под обёрткой, скан не обходится.
-          if (!toolResult.isError && this._lazyInstructions) {
-            try {
-              const lazy = await this._lazyInstructions.resolve({
-                sessionId: session.id,
-                messageId: streamId,
-                toolName,
-                toolArgs,
-                toolResultMetadata: toolResult.metadata,
-                workspace: workingDir,
-                language,
-                injection: this._instructionsInjectionPolicy(),
-              });
-              if (lazy.block) {
-                toolResult = {
-                  ...toolResult,
-                  content: `${toolResult.content}\n\n${lazy.block}`,
-                  metadata: {
-                    ...toolResult.metadata,
-                    instructions_loaded: lazy.files.filter((f) => !f.blocked).map((f) => f.path),
-                  },
-                };
-                this._eventBus.publish(session.id, 'context.instructions_loaded', {
-                  session_id: session.id,
-                  source: 'lazy',
-                  tool: toolName,
-                  agent: effectiveAgentRole,
-                  files: lazy.files,
-                });
-              }
-            } catch (e) {
-              warning('ORCHESTRATOR', `Lazy-инструкции не загружены: ${e instanceof Error ? e.message : String(e)}`);
-            }
+          // Публикуем результат ПОСЛЕ финальной обработки: живой UI
+          // (tool_call.result) должен получать тот же контент, что сохраняется
+          // в историю (metadata.tool_results и tool-chain tool-сообщения),
+          // иначе при перезагрузке вид результата меняется. В обычном ходе
+          // событие уже опубликовано фазой исполнения — сразу по готовности
+          // этого вызова, не дожидаясь медленных соседей по батчу.
+          if (!plan.events.started) {
+            // Вызов не дошёл до обёртки исполнения (отказ прав, блокировка
+            // хуком, сбой батча): «старт» фиктивный, но событийная пара нужна.
+            plan.events.started = true;
+            publishToolCallStarted(plan.tcId, toolName, toolArgs);
           }
-
-          // Публикуем результат ПОСЛЕ IPI-обёртки: живой UI (tool_call.result)
-          // должен получать тот же контент, что сохраняется в историю
-          // (metadata.tool_results и tool-chain tool-сообщения), иначе при
-          // перезагрузке вид результата меняется.
-          publishChunk('tool_call.result', {
-            stream_id: streamId,
-            session_id: session.id,
-            call_id: plan.tcId,
-            name: toolName,
-            result: toolResult,
-            iteration: toolIteration,
-          });
+          if (!plan.events.result) {
+            plan.events.result = true;
+            publishToolCallResult(plan.tcId, toolName, toolResult);
+          }
 
           // Шаг 2а: сразу сохраняем tool-результат (пара к assistant(tool_calls)).
           // До `allToolCalls.push` и state-сообщений (plan_enter/plan_exit и др.),
@@ -8593,6 +8779,7 @@ export class ChatOrchestrator {
                 startedMs: plan.startedMs,
                 executed: true,
                 permissionRef: plan.permissionRef,
+                events: plan.events,
                 run: plan.run,
               });
               continue;
@@ -8624,6 +8811,7 @@ export class ChatOrchestrator {
               result: denyResult,
               startedAt: plan.startedAt,
               startedMs: plan.startedMs,
+              events: plan.events,
               cancelled: cancelToken.cancelled || toolAbortController.signal.aborted,
               executed: false,
             });
@@ -8693,7 +8881,12 @@ export class ChatOrchestrator {
             }
             const outcome = outcomes.get(plan.tcId);
             if (outcome?.ok) {
-              await commitToolCall(plan, outcome.value.result, outcome.value.cancelled);
+              await commitToolCall(
+                plan,
+                outcome.value.result,
+                outcome.value.cancelled,
+                outcome.value.finalized,
+              );
               continue;
             }
             // Батч не падает целиком: упавший вызов — его слот. Результат —

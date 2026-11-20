@@ -1299,7 +1299,10 @@ describe('run-cycle — цикл Tool Use', () => {
 
     // Первые MAX_DOOM_LOOP_COUNT-1 вызовов исполнились, третий — заблокирован.
     expect(counters.noop).toBe(MAX_DOOM_LOOP_COUNT - 1);
-    expect(published.filter((p) => p.type === 'tool_call.started' && p.data.name === 'noop')).toHaveLength(2);
+    // ADR-118: doom-вызов не исполняется, но событийная пара публикуется —
+    // иначе UI оставил бы его карточку без результата (3 вызова = 3 пары).
+    expect(published.filter((p) => p.type === 'tool_call.started' && p.data.name === 'noop')).toHaveLength(3);
+    expect(published.filter((p) => p.type === 'tool_call.result' && p.data.name === 'noop')).toHaveLength(3);
 
     const saved = (await sessionManager.getSession(child.id))!;
     const doom = saved.messages.find((m) => m.role === MessageRole.TOOL && m.content.includes('called 3 time'));
@@ -3947,6 +3950,82 @@ describe('run-cycle — durable-запись причины остановки (
     expect(stops[0]!.metadata!.reason).toBe('steps_limit');
     expect(stops[0]!.content).toContain('reason="steps_limit"');
     expect(stops[0]!.content).toContain(sm('stop.steps_limit', { limit: '2' }));
+    // Отчёт получен — metadata записи говорит UI об этом явно, но в конверт
+    // модели поле НЕ попадает (внутренняя метаинформация, не сигнал модели).
+    expect(stops[0]!.metadata!.report_delivered).toBe(true);
+    expect(stops[0]!.content).not.toContain('report_delivered');
+  });
+
+  it('шаг-лимит без отчёта: report_delivered=false (запись есть, отчёта нет)', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    // `maxSteps=1` — шаг-лимит сразу, модель вернула пробельный ответ.
+    const { provider } = scriptedProvider([[{ isFinal: true, content: '   ' }]]);
+
+    const result = await runSubagent(makeConfig({
+      maxSteps: 1,
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    expect(result.metadata!.report_missing).toBe(true);
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('steps_limit');
+    expect(stops[0]!.metadata!.report_delivered).toBe(false);
+  });
+
+  it('шаг-лимит с tool-call в ответе и отчётом: report_delivered=true (вторая точка записи)', async () => {
+    // Модель проигнорировала `toolChoice: none`: ответ содержит и текст, и вызов
+    // тула — прогон идёт по ветке «шаг-лимит с вызовами», запись там своя.
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const { provider } = scriptedProvider([
+      [toolCallChunk('noop', {}, 'c1')],
+      [{
+        isFinal: true,
+        content: 'ОТЧЁТ по лимиту шагов (с вызовами)',
+        toolCalls: [{ id: 'c2', function: { name: 'noop', arguments: '{}' } }],
+      } as Chunk],
+    ]);
+    const { registry } = makeRegistry({ noop: () => ({ content: 'ok' }) });
+
+    await runSubagent(makeConfig({
+      maxSteps: 2,
+      tools: llmTools(),
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, toolRegistry: registry }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('steps_limit');
+    expect(stops[0]!.metadata!.report_delivered).toBe(true);
+  });
+
+  it('другие причины остановки: report_delivered в metadata не появляется', async () => {
+    const parent = await sessionManager.createSession({ title: 'P' });
+    const child = await sessionManager.createSession({ title: 'C', parentId: parent.id, sessionOrigin: 'subagent' });
+    const provider = throwingProvider(new Error('503 Service Unavailable'));
+
+    await runSubagent(makeConfig({
+      extra: makeExtra({ provider, sessionManager, sessionId: parent.id, streamId: 'st-no-report' }),
+      childSessionId: child.id,
+      parentSessionId: parent.id,
+      retry: { maxRetries: 1, delaysMs: [0] },
+    }));
+
+    const saved = (await sessionManager.getSession(child.id))!;
+    const stops = stopRecords(saved.messages);
+    expect(stops).toHaveLength(1);
+    expect(stops[0]!.metadata!.reason).toBe('provider_error');
+    expect('report_delivered' in (stops[0]!.metadata as Record<string, unknown>)).toBe(false);
   });
 
   it('бюджет контекста: запись context_budget с оценкой токенов и шагами', async () => {

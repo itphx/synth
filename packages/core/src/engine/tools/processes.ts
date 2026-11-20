@@ -74,7 +74,7 @@ const MAX_TEXT_CHARS = 80;
 const MAX_SUMMARY_CHARS = 2_000;
 
 /** Статусы прогона (фильтр `process_list`). */
-const RUN_STATUSES = ['running', 'completed', 'failed', 'cancelled', 'orphaned'] as const;
+const RUN_STATUSES = ['running', 'completed', 'failed', 'cancelled', 'limit', 'orphaned'] as const;
 
 /** Виды фоновой работы (фильтр `process_list`). */
 const RUN_KINDS = ['subagent', 'process'] as const;

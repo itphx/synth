@@ -26,6 +26,7 @@ import type { AuthKit } from '../../auth/local.js';
 import { MessageRole, generateId, makeTextPart, nowISO, ProjectRole } from '@itphx/synth-shared';
 import type { ProfileStore, Project, Session, BackgroundRunRecord, SessionStats } from '@itphx/synth-shared';
 import type { PromptDiagnostics } from '../../engine/orchestrator.js';
+import { recordLastTurn } from '../../engine/orchestrator/last-turn.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -44,6 +45,7 @@ interface SessionListPage {
     owner_id?: string | null;
     pending_count?: number;
     pending_messages?: Array<{ content?: string }>;
+    status?: Record<string, unknown>;
     [key: string]: unknown;
   }>;
   total: number;
@@ -828,6 +830,32 @@ describe('Session API Routes (PATCH mode)', () => {
       expect(body.sessions).toHaveLength(0);
       expect(body.total).toBe(1);
       expect(body.next_offset).toBeNull();
+    });
+
+    /**
+     * Левое дерево красит название сессии по `status.last_turn` (durable-исход
+     * последнего хода), не читая историю. Сессия без записи (legacy/первый ход)
+     * отдаёт `null` и не ломает снимок списка.
+     */
+    it('status.last_turn: null у сессии без завершённого хода, объект — после записи', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const created = await sessionManager.createSession({ title: 'A', userId: 'local' });
+
+      const fresh = (await (await app.request('/api/v2/sessions')).json()) as SessionListPage;
+      expect(fresh.sessions).toHaveLength(1);
+      expect((fresh.sessions[0]!.status as Record<string, unknown>).last_turn).toBeNull();
+
+      // Запись исхода (та же точечная мутация, что у финализатора хода).
+      await recordLastTurn(sessionManager, created.id, {
+        outcome: 'completed',
+        now: new Date('2026-01-02T03:04:05.000Z'),
+      });
+
+      const after = (await (await app.request('/api/v2/sessions')).json()) as SessionListPage;
+      expect((after.sessions[0]!.status as Record<string, unknown>).last_turn).toEqual({
+        outcome: 'completed',
+        at: '2026-01-02T03:04:05.000Z',
+      });
     });
   });
 

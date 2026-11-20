@@ -85,6 +85,15 @@ export interface StopRecordInput {
   turnId?: string;
   /** Id потока (stream) хода. */
   streamId?: string;
+  /**
+   * Получен ли содержательный отчёт прогона к моменту остановки (для
+   * `steps_limit`).
+   *
+   * Это **внутренняя метаинформация** для UI (пустой отчёт по лимиту шагов —
+   * не провал прогона, но и отчёта нет): в конверт-сигнал модели она **не**
+   * идёт — модель уже видит сам отчёт (или его отсутствие).
+   */
+  reportDelivered?: boolean;
 }
 
 /** Экранирование значения XML-атрибута (`&`, `<`, `>`, `"`). */
@@ -183,6 +192,9 @@ export function buildStopRecord(input: StopRecordInput): Message {
   if (input.attempts !== undefined) metadata.attempts = input.attempts;
   if (input.maxRetries !== undefined) metadata.max_retries = input.maxRetries;
   if (input.finishReason !== undefined) metadata.finish_reason = input.finishReason;
+  // Отчёт по лимиту шагов доставлен/нет — только metadata (UI), в конверт
+  // (`renderStopEnvelope`) поле намеренно не попадает: для модели это не сигнал.
+  if (input.reportDelivered !== undefined) metadata.report_delivered = input.reportDelivered;
   if (input.provider !== undefined) metadata.provider = input.provider;
   if (input.model !== undefined) metadata.model = input.model;
   if (input.agentRole !== undefined) metadata.agent_role = input.agentRole;

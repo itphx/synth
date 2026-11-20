@@ -8,7 +8,7 @@
  *
  * Инварианты:
  * 1. **Один переход состояния**: `running → completed | failed | cancelled |
- *    orphaned`. Повторный `finish` — no-op (идемпотентно): уведомление
+ *    limit | orphaned`. Повторный `finish` — no-op (идемпотентно): уведомление
  *    родителя не дублируется.
  * 2. **Лимит — свойство сессии и считается по живым прогонам**: одновременные
  *    фоновые дети на родительскую сессию (`maxSubagentsPerSession`),
@@ -30,6 +30,7 @@ import { renderTodosSection } from '../tools/todo.js';
 import {
   BackgroundLimitExceededError,
   type BackgroundFinishPatch,
+  type BackgroundFinalState,
   type BackgroundLogger,
   type BackgroundProcessInput,
   type BackgroundRunLimits,
@@ -539,13 +540,14 @@ export class BackgroundRunService {
 
   /** Терминальное событие прогона в канал владельца. */
   private _publishTerminal(record: BackgroundRunRecord): void {
-    const state = record.status as 'completed' | 'failed' | 'cancelled' | 'orphaned';
+    const state = record.status as 'completed' | 'failed' | 'cancelled' | 'limit' | 'orphaned';
     if (record.kind === 'subagent') {
+      // `limit` — прогон завершён (не ошибка и не остановка): тип события
+      // остаётся `child.completed`, а факт ограничения уходит в `state`.
       const type: EventType =
-        state === 'completed' ? 'child.completed'
-          : state === 'failed' ? 'child.failed'
-            : state === 'cancelled' ? 'child.cancelled'
-              : 'child.cancelled';
+        state === 'failed' ? 'child.failed'
+          : state === 'cancelled' || state === 'orphaned' ? 'child.cancelled'
+            : 'child.completed';
       this._eventBus.publish(record.sessionId, type, {
         child_session_id: record.childSessionId,
         parent_session_id: record.sessionId,
@@ -645,10 +647,16 @@ export class BackgroundRunService {
   }
 }
 
-/** Терминальное состояние прогона (единая нормализация для уведомлений). */
-function backgroundStateOf(record: BackgroundRunRecord): 'completed' | 'failed' | 'cancelled' {
+/**
+ * Терминальное состояние прогона (единая нормализация для уведомлений).
+ *
+ * `limit` проходит как есть: родитель различает «завершён» и «завершён с
+ * ограничением по лимиту шагов» (тело отчёта у них одно и то же).
+ */
+function backgroundStateOf(record: BackgroundRunRecord): BackgroundFinalState {
   if (record.status === 'completed') return 'completed';
   if (record.status === 'cancelled') return 'cancelled';
+  if (record.status === 'limit') return 'limit';
   return 'failed';
 }
 
@@ -660,7 +668,7 @@ function backgroundStateOf(record: BackgroundRunRecord): 'completed' | 'failed' 
  */
 export function buildSubagentNotification(
   record: BackgroundRunRecord,
-  state: 'completed' | 'failed' | 'cancelled',
+  state: BackgroundFinalState,
 ): Message {
   const summary = record.summary ?? '';
   // ADR-039: итоговый список задач прогона (если он есть в метаданных записи) —
@@ -726,11 +734,14 @@ export function buildSubagentNotification(
  */
 export function buildProcessNotification(
   record: BackgroundRunRecord,
-  state: 'completed' | 'failed' | 'cancelled',
+  state: BackgroundFinalState,
 ): Message {
-  const stateLabel = state === 'completed' ? 'exited'
-    : state === 'failed' ? 'failed'
-      : 'killed';
+  // `limit` у процессов не бывает (лимит шагов — свойство саб-агента), но
+  // неизвестный/лимитный статус не должен превращаться в «killed»: прогон
+  // закончился, а не был убит.
+  const stateLabel = state === 'failed' ? 'failed'
+    : state === 'cancelled' ? 'killed'
+      : 'exited';
   const tail = record.summary ?? '';
   const content = [
     `<process processID="${escapeXmlAttr(record.processId ?? record.id)}" state="${stateLabel}" command="${escapeXmlAttr(record.command ?? '')}">`,
@@ -785,7 +796,7 @@ export interface RelayedNotificationTarget {
 /** Общие metadata ретранслированного уведомления (ADR-111/ADR-113). */
 function relayedMetadata(
   record: BackgroundRunRecord,
-  state: 'completed' | 'failed' | 'cancelled',
+  state: BackgroundFinalState,
   target: RelayedNotificationTarget,
 ): Record<string, unknown> {
   return {
@@ -817,12 +828,15 @@ function relayedMetadata(
  */
 export function buildRelayedProcessNotification(
   record: BackgroundRunRecord,
-  state: 'completed' | 'failed' | 'cancelled',
+  state: BackgroundFinalState,
   target: RelayedNotificationTarget,
 ): Message {
-  const stateLabel = state === 'completed' ? 'exited'
-    : state === 'failed' ? 'failed'
-      : 'killed';
+  // `limit` у процессов не бывает (лимит шагов — свойство саб-агента), но
+  // неизвестный/лимитный статус не должен превращаться в «killed»: прогон
+  // закончился, а не был убит.
+  const stateLabel = state === 'failed' ? 'failed'
+    : state === 'cancelled' ? 'killed'
+      : 'exited';
   const attrs = [
     `processID="${escapeXmlAttr(record.processId ?? record.id)}"`,
     `state="${stateLabel}"`,
@@ -863,7 +877,7 @@ export function buildRelayedProcessNotification(
  */
 export function buildRelayedSubagentNotification(
   record: BackgroundRunRecord,
-  state: 'completed' | 'failed' | 'cancelled',
+  state: BackgroundFinalState,
   target: RelayedNotificationTarget,
 ): Message {
   const attrs = [
@@ -938,5 +952,6 @@ export const BACKGROUND_TERMINAL_STATUSES: readonly BackgroundRunStatus[] = [
   'completed',
   'failed',
   'cancelled',
+  'limit',
   'orphaned',
 ];

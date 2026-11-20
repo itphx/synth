@@ -157,7 +157,7 @@ describe('AgentRegistry — набор ролей (leader/fixer/tester/researche
     ['leader', ['primary'], 200],
     ['fixer', ['primary', 'subagent'], 100],
     ['tester', ['primary', 'subagent'], 100],
-    ['researcher', ['primary', 'subagent'], 25],
+    ['researcher', ['primary', 'subagent'], 50],
     ['security-auditor', ['primary', 'subagent'], 60],
     ['devops', ['primary', 'subagent'], 100],
     ['admin', ['primary', 'subagent'], 100],

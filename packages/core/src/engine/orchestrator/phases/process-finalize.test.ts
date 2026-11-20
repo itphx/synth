@@ -1402,4 +1402,140 @@ describe('runProcessFinalize', () => {
   // Авто-заголовок вынесен из финализации хода: триггер — оркестратор
   // (`_maybeAutoTitle`, сразу после подготовки запроса). Тесты авто-тайтла —
   // в `sessions/auto-title.test.ts`.
+
+  /**
+   * Durable-исход хода (`status.lastTurn`) — для левого дерева UI: списки
+   * отдаются сводками (без истории), поэтому «чем закончился ход» живёт в
+   * документе сессии. Запись — точечная мутация метаданных по завершении хода;
+   * на старте следующего хода поле не сбрасывается (клиент не красит, пока ход
+   * идёт, а следующая финализация перезапишет значение).
+   */
+  describe('исход хода (status.lastTurn)', () => {
+    /**
+     * Вызов `mutateMeta`, который пишет исход хода: узнаётся по эффекту
+     * мутатора (на копии метаданных), а не по порядку вызовов — в финализации
+     * могут быть и другие точечные мутации (steer-очередь, флаги контекста).
+     */
+    function lastTurnMetaWriteOpts(
+      spy: ReturnType<typeof vi.spyOn>,
+    ): { touchUpdatedAt?: boolean } | undefined {
+      type Call = [
+        string,
+        (meta: { status: Record<string, unknown> }) => unknown,
+        { touchUpdatedAt?: boolean } | undefined,
+      ];
+      for (const call of spy.mock.calls as unknown as Call[]) {
+        const probe = { status: {} as Record<string, unknown> };
+        try {
+          call[1](probe);
+        } catch {
+          continue;
+        }
+        if (probe.status.lastTurn !== undefined) return call[2];
+      }
+      return undefined;
+    }
+
+    /** Записанный исход хода сессии. */
+    async function lastTurnOf(
+      sessionId: string,
+    ): Promise<{ outcome: string; reason?: string; at: string } | undefined> {
+      return (await sessionManager.getSession(sessionId))!.status.lastTurn;
+    }
+
+    it('успешный ход → completed, без причины, без touchUpdatedAt', async () => {
+      const sessionId = await makeSession();
+      const spy = vi.spyOn(sessionManager, 'mutateMeta');
+      // Читаем опции до `mockRestore` (restore очищает записи вызовов).
+      let touchOpts: boolean | undefined;
+
+      try {
+        await runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps());
+        touchOpts = lastTurnMetaWriteOpts(spy)?.touchUpdatedAt;
+      } finally {
+        spy.mockRestore();
+      }
+
+      const lastTurn = await lastTurnOf(sessionId);
+      expect(lastTurn).toEqual({ outcome: 'completed', at: expect.any(String) });
+      expect(lastTurn!.reason).toBeUndefined();
+      // Служебная отметка не «оживляет» сессию в списках (`updatedAt` не двигается).
+      expect(touchOpts).toBe(false);
+    });
+
+    it('шаг-лимит → limit + steps_limit', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ finalContent: '', toolIteration: 10, maxIterations: 10, stepLimitExecuted: true }),
+        makeDeps(),
+      );
+
+      expect(await lastTurnOf(sessionId)).toMatchObject({ outcome: 'limit', reason: 'steps_limit' });
+    });
+
+    it('«Стоп» (ветка отмены) → stopped + stopped_by_user', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ cancelledBeforeFinal: true, finalContent: '' }),
+        makeDeps(),
+      );
+
+      // Ветка отмены — пользовательский «Стоп» (та же причина, что у stop-record).
+      expect(await lastTurnOf(sessionId)).toMatchObject({
+        outcome: 'stopped',
+        reason: 'stopped_by_user',
+      });
+    });
+
+    it('отказ прав → stopped + denied', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(
+        makeArgs(sessionId),
+        makeState({ finalContent: '', hadDeny: true }),
+        makeDeps(),
+      );
+
+      expect(await lastTurnOf(sessionId)).toMatchObject({ outcome: 'stopped', reason: 'denied' });
+    });
+
+    it('пустой ответ без отказа → error + empty', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(makeArgs(sessionId), makeState({ finalContent: '' }), makeDeps());
+
+      expect(await lastTurnOf(sessionId)).toMatchObject({ outcome: 'error', reason: 'empty' });
+    });
+
+    it('следующий ход перезаписывает исход (значение не копится)', async () => {
+      const sessionId = await makeSession();
+
+      await runProcessFinalize(makeArgs(sessionId), makeState({ finalContent: '' }), makeDeps());
+      await runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps());
+
+      expect((await lastTurnOf(sessionId))!.outcome).toBe('completed');
+    });
+
+    it('сбой записи исхода не ломает ход (шаг и ход всё равно закрываются)', async () => {
+      const sessionId = await makeSession();
+      // Делегирующий объект: все методы настоящего менеджера доступны через
+      // прототип, но запись метаданных падает — ровно этот путь и проверяем.
+      const failing = Object.create(sessionManager) as SessionManager;
+      failing.mutateMeta = (async () => {
+        throw new Error('storage down');
+      }) as unknown as SessionManager['mutateMeta'];
+
+      await expect(
+        runProcessFinalize(makeArgs(sessionId), makeState(), makeDeps({ sessionManager: failing })),
+      ).resolves.toEqual({});
+
+      expect(turnFinished().data).toMatchObject({ turnId: 'turn1' });
+      // Исхода нет (запись не удалась) — ход всё равно закрыт событием.
+      expect((await sessionManager.getSession(sessionId))!.status.lastTurn).toBeUndefined();
+    });
+  });
 });

@@ -186,7 +186,25 @@ describe('buildStopRecord — служебная запись истории (PR
     expect(message.metadata?.attempts).toBeUndefined();
     expect(message.metadata?.max_retries).toBeUndefined();
     expect(message.metadata?.turn_id).toBeUndefined();
+    // `report_delivered` — только у причин, где он осмыслен (`steps_limit`):
+    // для остальных причина не задаёт поле и в metadata его нет.
+    expect(message.metadata?.report_delivered).toBeUndefined();
     // Без хода — и на сообщении поля `turnId` нет (не «пустая строка»)
     expect(message.turnId).toBeUndefined();
+  });
+
+  it('report_delivered: в metadata записи, но не в конверте модели', () => {
+    // `false` — тоже значение: глоток `if (… !== undefined)` отличает «не задано»
+    // от «отчёта нет» (пустой отчёт по лимиту шагов).
+    const missing = buildStopRecord({ reason: 'steps_limit', limit: 3, reportDelivered: false });
+    expect(missing.metadata?.report_delivered).toBe(false);
+    // Конверт (то, что видит модель) поля не содержит — это метаинформация UI.
+    expect(missing.content).not.toContain('report_delivered');
+    expect(renderStopEnvelope({ reason: 'steps_limit', limit: 3, reportDelivered: true }))
+      .toBe(renderStopEnvelope({ reason: 'steps_limit', limit: 3 }));
+
+    const delivered = buildStopRecord({ reason: 'steps_limit', limit: 3, reportDelivered: true });
+    expect(delivered.metadata?.report_delivered).toBe(true);
+    expect(delivered.content).not.toContain('report_delivered');
   });
 });

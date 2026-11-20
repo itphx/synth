@@ -76,7 +76,7 @@ export interface BackgroundProcessInput {
 /** Патч завершения прогона. */
 export interface BackgroundFinishPatch {
   /** Терминальный статус прогона. */
-  status: Extract<BackgroundRunStatus, 'completed' | 'failed' | 'cancelled'>;
+  status: Extract<BackgroundRunStatus, 'completed' | 'failed' | 'cancelled' | 'limit'>;
   /**
    * Краткий итог/ошибка (для UI и уведомления родителю).
    *
@@ -142,8 +142,13 @@ export class BackgroundLimitExceededError extends BackgroundRunError {
   }
 }
 
-/** Состояние фонового прогона в терминальном виде (для уведомления). */
-export type BackgroundFinalState = 'completed' | 'failed' | 'cancelled';
+/**
+ * Состояние фонового прогона в терминальном виде (для уведомления).
+ *
+ * `limit` — прогон закрыт по лимиту шагов агента: он завершён (не ошибка), но
+ * с ограничением — родитель должен видеть это в конверте уведомления.
+ */
+export type BackgroundFinalState = 'completed' | 'failed' | 'cancelled' | 'limit';
 
 /** Запись реестра + её финальное состояние (внутренний вид сервиса). */
 export interface BackgroundRunState {

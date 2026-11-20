@@ -1537,13 +1537,23 @@ async function startBackgroundSubagent(opts: {
   void runSubagentWithQueueDrain({ ...runConfig, extra: detachedExtra, ctx: detachedCtx })
     .then(async (result) => {
       const stoppedByUser = result.metadata?.stopped_by === 'user';
-      const status: 'completed' | 'failed' | 'cancelled' = result.isError
-        ? 'failed'
-        : stoppedByUser ? 'cancelled' : 'completed';
+      // Лимит шагов агента: `run-cycle` кладёт `step_limit_reached` в metadata
+      // результата `task` (и при отчёте, и при пустом отчёте). Это не ошибка и
+      // не отмена — у прогона свой терминальный статус `limit`.
+      const limitReached = result.metadata?.step_limit_reached === true;
+      // Приоритет: отмена человеком → ошибка → лимит шагов → успех.
+      const status: 'completed' | 'failed' | 'cancelled' | 'limit' = stoppedByUser
+        ? 'cancelled'
+        : result.isError
+          ? 'failed'
+          : limitReached ? 'limit' : 'completed';
       const finalContent = typeof result.metadata?.final_content === 'string'
         ? (result.metadata.final_content as string)
         : '';
-      const summary = status === 'completed'
+      // Для `limit` итог — тот же отчёт прогона, что и у `completed`: работа
+      // завершена, текст есть (пустой отчёт по лимиту закрыт детерминированным
+      // `task.steps_limit_empty` — он лежит в `result.content`).
+      const summary = status === 'completed' || status === 'limit'
         ? (finalContent || result.content)
         : status === 'cancelled'
           ? (typeof result.metadata?.partial_output === 'string' ? (result.metadata.partial_output as string) : '')
