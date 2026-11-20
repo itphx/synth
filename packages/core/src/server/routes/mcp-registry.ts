@@ -22,6 +22,7 @@ import type { ExternalCredentialRepository } from '../../storage/ports/external-
 import { McpRegistryValidationError } from '../../storage/mcp-registry-store.js';
 import { createCredentialBindGuard } from '../credential-bind-guard.js';
 import { getServiceCredential, requireScope, requireScopeOrAdminRole } from '../service-scope.js';
+import type { McpChangedHook, SessionEventPublisherLike } from '../../events/mcp-events.js';
 
 /**
  * ADR-071 §2.5: единый реестр MCP-серверов — HTTP-контур (core + managed).
@@ -126,6 +127,28 @@ export interface McpRegistryRoutesOptions {
    * MCP-тулы), без него — `disconnectServer` + `connectServer`.
    */
   toolRegistry?: ToolRegistry;
+  /**
+   * Реестр MCP изменился: запись добавлена (`add`), обновлена (`update`),
+   * удалена (`remove`), переключён MCP-скоуп сессии (`update` со `scope:
+   * 'session'`).
+   *
+   * Вызывается **только после успешной записи**: ответы 400/403/404/409
+   * событие не порождают.
+   *
+   * Точка сборки прокидывает сюда `mcpChangedPublisher(eventBus)`
+   * (`events/mcp-events.ts`). Не задан — фабрика работает как раньше (тесты,
+   * сторонние потребители).
+   */
+  onMcpChanged?: McpChangedHook;
+  /**
+   * Шина событий для публикации в **канал сессии** (`EventBus.publish`):
+   * `PUT /session/:sessionId` меняет MCP-скоуп сессии и публикует
+   * `session.updated` — тот же путь, что у тула `synth_mcp_enable`
+   * (`level: 'session'`), иначе открытая вкладка показывала бы старый скоуп.
+   *
+   * Не задана — публикации нет (тесты, сторонние потребители).
+   */
+  eventBus?: SessionEventPublisherLike;
 }
 
 const addServerSchema = z.object({
@@ -331,6 +354,10 @@ export function createMcpRegistryRoutes(
     // ADMIN-роут: сервер трактуется как instance/builtin (как config.mcp.servers).
     await registry.add({ name, config, origin: 'instance', trust: 'builtin' });
     await syncManagerConfig();
+    // Реестр изменился → инстансное событие `mcp.updated` (панели MCP и
+    // селекторы серверов перечитывают состав без перезагрузки страницы).
+    // Конфиг в событие не идёт — в нём бывают секреты (инвариант 13).
+    options.onMcpChanged?.({ name, action: 'add' });
 
     return c.json({ name, config, connected: isConnected(name) }, 201);
   });
@@ -382,6 +409,7 @@ export function createMcpRegistryRoutes(
 
     await registry.update(entry.id, { config: parsed.data });
     await syncManagerConfig();
+    options.onMcpChanged?.({ name: entry.name, action: 'update' });
 
     return c.json({ name, config: parsed.data, connected: isConnected(name) });
   });
@@ -399,6 +427,7 @@ export function createMcpRegistryRoutes(
     }
     await registry.remove(entry.id);
     await syncManagerConfig();
+    options.onMcpChanged?.({ name: entry.name, action: 'remove' });
 
     return c.json({ success: true });
   });
@@ -588,6 +617,24 @@ export function createMcpRegistryRoutes(
       }, { touchUpdatedAt: false });
       const settings = scoped.found ? scoped.value : session.settings;
 
+      // Сессионный MCP-скоуп изменился → `session.updated` в канал **этой**
+      // сессии: тот же путь публикации, что у тула `synth_mcp_enable`
+      // (`level: 'session'`, `engine/tools/instance-mcp.ts`) — иначе открытая
+      // вкладка MCP показывала бы старый скоуп до перезагрузки страницы.
+      // `updatedAt` берём из точечной правки: `touchUpdatedAt: false` его не
+      // двигает, событие несёт фактическое значение.
+      if (scoped.found) {
+        options.eventBus?.publish(sessionId, 'session.updated', {
+          session_id: sessionId,
+          settings,
+          updated_at: scoped.session.updatedAt,
+        });
+        // Плюс инстансное `mcp.updated` со `scope: 'session'`: панели MCP
+        // перечитывают состав и видят, что смена пришла из уровневой операции.
+        // Имя сервера не передаём — роут меняет набор целиком.
+        options.onMcpChanged?.({ action: 'update', scope: 'session', sessionId });
+      }
+
       const entries = await registry.list();
       return c.json({
         mcpServers: settings.mcpServers || [],
@@ -599,7 +646,6 @@ export function createMcpRegistryRoutes(
       });
     });
   }
-
   // --- Единый реестр MCP-серверов (ADR-071 §2.5) ---
 
   // Список записей реестра (auth).
@@ -686,6 +732,7 @@ export function createMcpRegistryRoutes(
       throw err;
     }
     await syncManagerConfig();
+    options.onMcpChanged?.({ name: entry.name, action: 'add' });
     return c.json(entry, 201);
   });
 
@@ -760,6 +807,8 @@ export function createMcpRegistryRoutes(
       throw err;
     }
     await syncManagerConfig();
+    // `update` мог не найти запись (null) — тогда записи не было, события тоже.
+    if (updated) options.onMcpChanged?.({ name: updated.name, action: 'update' });
     return c.json(updated);
   });
 
@@ -780,6 +829,7 @@ export function createMcpRegistryRoutes(
     if (mcpManager) await mcpManager.disconnectServer(existing.name);
     await registry.remove(id);
     await syncManagerConfig();
+    options.onMcpChanged?.({ name: existing.name, action: 'remove' });
     return c.json({ success: true });
   });
 

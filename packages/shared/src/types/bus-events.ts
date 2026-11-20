@@ -137,12 +137,48 @@ export type EventType =
   | 'pipeline.run.failed'
   // ADR-101: выход пайплайна вида `gateway` — публикация наружу (ADR-052/ADR-087).
   | 'pipeline.completed'
+  // ADR-101 (авторство) × ADR-118 (инвариант 27): **сущность** пайплайна
+  // проекта изменилась — создан/сохранён черновик, опубликована версия,
+  // пайплайн удалён или инстанцирован из шаблона. Пайплайн — ресурс
+  // **проекта**, поэтому событие идёт в каналы **сессий проекта** (тем же
+  // путём, что `worktree.updated`/`project.updated`), а не в инстансный канал:
+  // инстансный в managed не доходит до обычного USER (он видит только каналы
+  // своих сессий). Прогоны — отдельные события `pipeline.run.*` (инстансный
+  // канал). Payload минимальный — только id и вид мутации: спецификация
+  // (черновик, `vars`) тяжёлая и в событие не попадает.
+  | 'pipeline.updated'
   // Реестр агентов инстанса изменился (создан/обновлён/удалён/включён-выключен;
   // HTTP-роуты и тулы `synth_agent_*`). Инстансный канал шины (ADR-118);
   // реагируют админ-панель «Агенты» и селекты агента (чат/настройки/аналитика):
   // перечитывают состав без перезагрузки страницы. Payload — только id и вид
   // мутации: текст роли и capabilities тяжёлые, в событие не попадают.
   | 'agents.updated'
+  // Реестр MCP-серверов инстанса изменился (добавлен/обновлён/удалён/включён-
+  // выключен; HTTP-роуты `/mcp/*` и тулы `synth_mcp_*` из чата). Инстансный
+  // канал шины (ADR-118); реагируют панели MCP (админская/пользовательская,
+  // «Внешние доступы») и селекторы MCP-серверов: перечитывают состав без
+  // перезагрузки страницы. Payload — только имя, вид мутации и (для уровневой
+  // операции) её область: в конфиге MCP бывают секреты (`env`/`headers`),
+  // поэтому конфиг в событие не попадает никогда.
+  | 'mcp.updated'
+  // Реестр скиллов (и бандлов скиллов) инстанса изменился: создан/обновлён/
+  // удалён скилл или его supporting-файл, выполнен `reload`, изменены
+  // instance-wide гейты/политика либо скоуп проекта/сессии. Инстансный канал
+  // шины (ADR-118); реагируют панели скиллов и `$`-пикер в композере:
+  // перечитывают состав без перезагрузки страницы. Payload — только имя, вид
+  // мутации и (для уровневой операции) её область: тело `SKILL.md`, metadata и
+  // supporting-файлы в событие не попадают.
+  | 'skills.updated'
+  // Каталог провайдеров/моделей инстанса изменился (провайдер создан/изменён/
+  // удалён, модель сохранена/удалена/назначена по умолчанию, каталог
+  // синхронизирован с провайдером). Каталог — ресурс **инстанса**, поэтому
+  // событие идёт в инстансный канал шины (ADR-118; новых транспортных каналов
+  // не заводим, инвариант 6 `AGENTS.md`). Реагируют селект модели в чате,
+  // админ-панели моделей/провайдеров: перечитывают каталог без перезагрузки
+  // страницы. Payload — только провайдер, id модели и вид мутации:
+  // **ключи/URL провайдеров в событие не попадают никогда** — в них бывают
+  // секреты (инвариант 13 `AGENTS.md`).
+  | 'models.updated'
   // Этап 1 roadmap 0.13 (блок 1.3): «вопрос пользователю». Префикс
   // `user_question.*` — намеренно НЕ `question.*`: `question.asked` уже занят
   // смыслом «очередь зависла» (см. выше).
@@ -329,6 +365,137 @@ export type AgentsUpdatedEventData = {
   action: AgentChangeAction;
 };
 
+/**
+ * Вид мутации реестра MCP-серверов инстанса — поле `action` события
+ * `mcp.updated`.
+ *
+ * - `add` — запись добавлена (`POST /mcp/registry`, `synth_mcp_add`);
+ * - `update` — запись изменена (`PUT /mcp/registry/:id`, `synth_mcp_update`),
+ *   а также смена MCP-скоупа проекта/сессии (`PUT /projects/:id/mcp`,
+ *   `PUT /mcp/session/:sessionId`);
+ * - `remove` — запись удалена (`DELETE /mcp/registry/:id`, `synth_mcp_remove`);
+ * - `enable` — переключён признак `enabled` (уровень инстанса:
+ *   `synth_mcp_enable` с `level: 'instance'`);
+ * - `import` — импорт набора серверов (installer/аддон).
+ */
+export type McpChangeAction = 'add' | 'update' | 'remove' | 'enable' | 'import';
+
+/**
+ * Область уровневой операции MCP — поле `scope` события `mcp.updated`.
+ *
+ * Не задана — мутация реестра инстанса как таковая (состав серверов); задана
+ * — переключение видимости сервера в конкретной области (`instance`,
+ * `project` с `projectId`, `session` с `sessionId`).
+ */
+export type McpChangeScope = 'instance' | 'session' | 'project';
+
+/**
+ * Payload события `mcp.updated` — реестр MCP-серверов инстанса изменился.
+ *
+ * Минимальный **по построению**: имя сервера, вид мутации и (для уровневой
+ * операции) её область. Конфиг сервера (`config`, `env`, `headers`) в событие
+ * не кладётся ни при каких условиях — там бывают секреты (инвариант 13
+ * `AGENTS.md`); клиент перечитывает реестр своим обычным запросом
+ * (`GET /mcp/registry`).
+ */
+export type McpUpdatedEventData = {
+  /** Имя сервера, которого коснулась мутация (не задано — изменение целиком). */
+  name?: string;
+  /** Что произошло. */
+  action: McpChangeAction;
+  /** Область уровневой операции (реестр инстанса — не задана). */
+  scope?: McpChangeScope;
+  /** Сессия, чей MCP-скоуп изменён (`scope: 'session'`). */
+  sessionId?: string;
+  /** Проект, чей MCP-скоуп изменён (`scope: 'project'`). */
+  projectId?: string;
+};
+
+/**
+ * Вид мутации реестра скиллов — поле `action` события `skills.updated`.
+ *
+ * - `create` — создан instance-скилл (`POST /skills`) или bundle
+ *   (`POST /skill-bundles`, имя — имя бандла);
+ * - `update` — изменён скилл (`PATCH /skills/:name` — description/body/
+ *   metadata) или bundle (`PATCH /skill-bundles/:name`);
+ * - `delete` — удалён скилл (`DELETE /skills/:name`) или bundle
+ *   (`DELETE /skill-bundles/:name`);
+ * - `reload` — реестр пересканирован (`POST /skills/reload`): состав мог
+ *   измениться целиком, конкретного имени нет;
+ * - `files` — изменён supporting-файл скилла (`PUT`/`DELETE /skills/:name/files/*`);
+ * - `scope` — изменён скоуп видимости (`PUT /sessions/:id/skills`,
+ *   `PUT /projects/:id/skills`, `PUT`/`DELETE /settings/skills`): набор
+ *   скиллов тот же, изменилось кто/где их видит.
+ */
+export type SkillChangeAction = 'create' | 'update' | 'delete' | 'reload' | 'files' | 'scope';
+
+/**
+ * Область уровневой операции скиллов — поле `scope` события `skills.updated`.
+ *
+ * Не задана — мутация реестра инстанса как таковая (состав скиллов/бандлов);
+ * задана — изменение скоупа в конкретной области (`instance` — instance-wide
+ * гейты и политика, `project` с `projectId`, `session` с `sessionId`).
+ */
+export type SkillChangeScope = 'instance' | 'project' | 'session';
+
+/**
+ * Payload события `skills.updated` — реестр скиллов инстанса изменился.
+ *
+ * Минимальный **по построению**: имя скилла/бандла, вид мутации и (для
+ * уровневой операции) её область. Содержимое скилла — тело `SKILL.md`,
+ * `metadata` и supporting-файлы — в событие не кладётся ни при каких условиях
+ * (инвариант 13 `AGENTS.md`: в скиллах встречаются рецепты с секретами и
+ * служебные пути); клиент перечитывает реестр своим обычным запросом
+ * (`GET /skills`, `GET /skill-bundles`, `GET /settings/skills`).
+ */
+export type SkillsUpdatedEventData = {
+  /** Имя скилла/бандла, которого коснулась мутация (не задано — изменение целиком). */
+  name?: string;
+  /** Что произошло. */
+  action: SkillChangeAction;
+  /** Область уровневой операции (реестр инстанса — не задана). */
+  scope?: SkillChangeScope;
+  /** Проект, чей скоуп скиллов изменён (`scope: 'project'`). */
+  projectId?: string;
+  /** Сессия, чей скоуп скиллов изменён (`scope: 'session'`). */
+  sessionId?: string;
+};
+
+/**
+ * Вид мутации каталога провайдеров/моделей — поле `action` события
+ * `models.updated`.
+ *
+ * - `save` — модель сохранена/обновлена (`POST /models`);
+ * - `delete` — модель удалена (`DELETE /models/:id`);
+ * - `default` — изменена модель по умолчанию инстанса (`POST /models` с
+ *   `set_as_default`: сохраняется модель и переключается дефолтная пара);
+ * - `fetch` — каталог моделей синхронизирован с провайдером
+ *   (`POST /models/fetch`): состав/метаданные моделей могли измениться целиком;
+ * - `provider` — провайдер создан/изменён/удалён (`POST /providers`,
+ *   `PATCH /providers/:name`, `DELETE /providers/:name`).
+ */
+export type ModelChangeAction = 'save' | 'delete' | 'default' | 'fetch' | 'provider';
+
+/**
+ * Payload события `models.updated` — каталог провайдеров/моделей инстанса
+ * изменился.
+ *
+ * Минимальный **по построению**: провайдер, id модели и вид мутации. Клиент
+ * перечитывает каталог своими обычными запросами (`GET /providers`,
+ * `GET /models`, `GET /settings/default-model`). Конфиг провайдера (`api_key`,
+ * `base_url` — в URL иногда лежит токен) в событие не кладётся ни при каких
+ * условиях (инвариант 13 `AGENTS.md`); это свойство типа payload'а, а не
+ * соглашение вызывающих.
+ */
+export type ModelsUpdatedEventData = {
+  /** Провайдер, которого коснулась мутация (не задан — изменение целиком). */
+  provider?: string;
+  /** Имя модели, которой коснулась мутация (не задано — изменение целиком). */
+  modelId?: string;
+  /** Что произошло. */
+  action: ModelChangeAction;
+};
+
 /** Payload события `session.messages.cleared` — история очищена, кроме закреплённых. */
 export type SessionMessagesClearedEventData = {
   session_id: string;
@@ -337,6 +504,45 @@ export type SessionMessagesClearedEventData = {
 /** Payload событий `project.updated`/`project.deleted` — проект сессии изменился. */
 export type ProjectChangedEventData = {
   project_id: string;
+};
+
+// --- ADR-101 (авторство): сущность пайплайна проекта -------------------------
+//
+// Пайплайн — ресурс **проекта** (ADR-014), поэтому событие изменения его
+// сущности идёт в каналы сессий проекта, как `worktree.updated` (ADR-114 §6) и
+// `project.updated` (ADR-118 §4, инвариант 27); новых транспортных каналов не
+// заводим (ADR-024). Прогоны — отдельные события `pipeline.run.*` в инстансном
+// канале, их этот тип не касается.
+
+/**
+ * Вид мутации пайплайна проекта — поле `action` события `pipeline.updated`.
+ *
+ * - `save` — создан или сохранён черновик (`POST /projects/:id/pipelines`,
+ *   `PUT /projects/:id/pipelines/:pid`, тул `pipeline_save`);
+ * - `publish` — опубликована неизменяемая версия
+ *   (`POST .../pipelines/:pid/publish`, тул `pipeline_publish`);
+ * - `delete` — пайплайн удалён (`DELETE .../pipelines/:pid`,
+ *   тул `pipeline_delete`); прогоны при этом остаются;
+ * - `instantiate` — пайплайн создан из шаблона инстанса
+ *   (`POST /pipeline-templates/:tid/instantiate`, тул `pipeline_instantiate`).
+ */
+export type PipelineChangeAction = 'save' | 'publish' | 'delete' | 'instantiate';
+
+/**
+ * Payload события `pipeline.updated` — сущность пайплайна проекта изменилась.
+ *
+ * Минимальный **по построению**: id пайплайна, проект-владелец и вид мутации.
+ * Спецификация (черновик, `vars`, граф узлов) в событие не кладётся — клиент
+ * перечитывает список/деталь своим обычным запросом
+ * (`GET /projects/:id/pipelines`, `GET /projects/:id/pipelines/:pid`).
+ */
+export type PipelineUpdatedEventData = {
+  /** Пайплайн, которого коснулась мутация. */
+  pipelineId: string;
+  /** Проект-владелец пайплайна (канал — сессии этого проекта). */
+  projectId: string;
+  /** Что произошло. */
+  action: PipelineChangeAction;
 };
 
 // --- PROP-132: метаданные терминала ---------------------------------------

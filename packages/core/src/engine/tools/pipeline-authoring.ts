@@ -22,6 +22,11 @@
  *   публикации и префикс id живут в одном месте с HTTP-роутом
  *   (`server/routes/pipeline-project-routes.ts`) — два разных поведения
  *   авторства невозможны.
+ * - **Изменение видно другим клиентам сразу.** После успешной записи тул
+ *   публикует `pipeline.updated` в каналы сессий проекта
+ *   (`engine/pipelines/events.ts`, инвариант 27): список в левой панели
+ *   перечитывается без перезагрузки страницы. Ошибки валидации и 404 событие
+ *   не порождают.
  * - Тексты — только через ключи `shared/i18n` (ADR-041).
  */
 import { z } from 'zod';
@@ -41,6 +46,7 @@ import {
   depsUnavailable,
   ensureCanEdit,
   loadAutomationScope,
+  notifyPipelineChanged,
 } from './automation-helpers.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -309,6 +315,13 @@ export const pipelineSaveTool: ToolDefinition = {
         });
       }
 
+      // Запись состоялась — остальные клиенты проекта перечитают список.
+      await notifyPipelineChanged(ctx, {
+        projectId: scope.project.id,
+        pipelineId: record.id,
+        action: 'save',
+      });
+
       const version = record.draftVersion;
       return {
         content: sm('pipeline.tool.saved', { id: record.id, version: String(version) }),
@@ -365,6 +378,13 @@ export const pipelinePublishTool: ToolDefinition = {
         record,
         publishedBy: resolveSessionUserId(scope.session),
       });
+      // Версия опубликована — событие в каналы сессий проекта.
+      await notifyPipelineChanged(ctx, {
+        projectId: scope.project.id,
+        pipelineId: result.published.pipelineId,
+        action: 'publish',
+      });
+
       const version = result.published.version;
       return {
         content: sm('pipeline.tool.published', {
@@ -422,6 +442,13 @@ export const pipelineDeleteTool: ToolDefinition = {
 
     const deleted = await deletePipeline({ pipelines: port.pipelines, pipelineId: record.id });
     if (!deleted) return pipelineNotFound(params.pipeline_id);
+
+    // Удаление состоялось — событие в каналы сессий проекта.
+    await notifyPipelineChanged(ctx, {
+      projectId: scope.project.id,
+      pipelineId: record.id,
+      action: 'delete',
+    });
 
     return {
       content: sm('pipeline.tool.deleted', { id: record.id }),

@@ -257,4 +257,69 @@ describe('Встроенные тулы шаблонов пайплайнов (A
     expect(result.metadata?.interrupted).toBe(true);
     expect(await pipelines.listPipelines({ scope: 'project', projectId })).toHaveLength(0);
   });
+
+  /**
+   * Событие авторства `pipeline.updated` для инстанцирования (ADR-101 ×
+   * ADR-118, инвариант 27): созданный пайплайн виден другим клиентам проекта
+   * сразу. Идемпотентный ответ (`ensure`) — не мутация: события нет.
+   */
+  describe('событие pipeline.updated (инстанцирование)', () => {
+    /** Записывающая шина: в контекст тула кладётся как `extra.eventBus`. */
+    function makeEventBus() {
+      const published: Array<{ sessionId: string; type: string; data: Record<string, unknown> }> =
+        [];
+      const eventBus = {
+        publish(sessionId: string, type: string, data: Record<string, unknown> = {}) {
+          published.push({ sessionId, type, data });
+        },
+      };
+      return { eventBus, published };
+    }
+
+    it('созданный из шаблона пайплайн → action:"instantiate" в канал сессии проекта', async () => {
+      await seedInstanceTemplate('tpl_instance', 'Шаблон инстанца');
+      const { eventBus, published } = makeEventBus();
+
+      const result = await pipelineInstantiateTool.execute(
+        { template_id: 'tpl_instance' },
+        makeCtx({ eventBus }),
+      );
+      const pipelineId = result.metadata?.pipelineId as string;
+
+      expect(published).toHaveLength(1);
+      expect(published[0]).toEqual({
+        sessionId,
+        type: 'pipeline.updated',
+        data: { pipelineId, projectId, action: 'instantiate' },
+      });
+    });
+
+    it('идемпотентный повтор (ensure, created:false) события не публикует', async () => {
+      await seedInstanceTemplate('tpl_instance', 'Шаблон инстанца');
+      await pipelineInstantiateTool.execute({ template_id: 'tpl_instance' }, makeCtx());
+
+      const { eventBus, published } = makeEventBus();
+      const second = await pipelineInstantiateTool.execute(
+        { template_id: 'tpl_instance', ensure: true },
+        makeCtx({ eventBus }),
+      );
+
+      expect(second.metadata?.created).toBe(false);
+      expect(published).toHaveLength(0);
+    });
+
+    it('неизвестный шаблон и недопустимый legacy-шаблон — событие не публикуется', async () => {
+      await templates.saveDefinition(
+        legacyDefinition('tpl_loop', { steps: [{ id: 'loop-1', kind: 'loop' }] }),
+      );
+      const { eventBus, published } = makeEventBus();
+      const ctx = makeCtx({ eventBus });
+
+      const missing = await pipelineInstantiateTool.execute({ template_id: 'tpl_missing' }, ctx);
+      const unsupported = await pipelineInstantiateTool.execute({ template_id: 'tpl_loop' }, ctx);
+
+      expect([missing.isError, unsupported.isError]).toEqual([true, true]);
+      expect(published).toHaveLength(0);
+    });
+  });
 });

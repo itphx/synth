@@ -58,7 +58,7 @@ export interface InstanceToolsExtra extends PrincipalExtra {
   resolveMcpServers?: () => Promise<McpServerEffective[]>;
   /** Резолв эффективного MCP-скоупа для **произвольной** сессии (write-тулы). */
   resolveMcpServersFor?: (session: Session) => Promise<McpServerEffective[]>;
-  /** События сессии/проекта (write-тулы MCP). */
+  /** События сессии/проекта и инстансный `mcp.updated` (write-тулы MCP). */
   eventBus?: EventBus;
   /** Реестр тулов — нужен `synth_mcp_reconnect` (`refreshServer`). */
   toolRegistry?: ToolRegistry;

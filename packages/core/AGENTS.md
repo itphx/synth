@@ -3492,6 +3492,25 @@
   (`engine/system-messages.ts`, ключи `shared/i18n`), не литералами (ADR-041).
 - Публичный роут: фабрика в `server/routes/*`, монтирование в `server/app.ts`
   (`app.route('/api/v2/...', ...)`); типы/схемы — из `@itphx/synth-shared`.
+- **Мутация реестра → событие (инвариант 27).** Write-путь обязан после успешной записи
+  опубликовать своё событие в существующей шине (новых каналов не заводим), иначе второй
+  клиент видит устаревший состав до перезагрузки страницы. Публикация — один шов на ресурс
+  (`events/<ресурс>-events.ts`, `engine/pipelines/events.ts`); хук прокидывает точка сборки
+  (`agentsChangedPublisher(eventBus)` и т.п. в `mount-routes`), встроенные тулы зовут тот же
+  помощник напрямую. Механический гейт — `events/publish-census.test.ts`: новый write-обработчик
+  или тул без записи в перепись роняет тест, а запись без вызова публикации — тем более.
+
+  | Ресурс | Событие / канал | Кто публикует | Кто обрабатывает в UI |
+  |---|---|---|---|
+  | Агенты | `agents.updated` — инстансный | `events/agents-events.ts`: `server/routes/agents.ts` (`POST /`, `DELETE /:id`, `PATCH /:id/enabled`), `engine/tools/instance-agents.ts` (`synth_agent_save|delete|enable|import`, через `upsertAgent`) | `agentsStore.applyEvent()` — админ-панель «Агенты», селекты агента в чате/настройках |
+  | MCP | `mcp.updated` — инстансный (`scope: session|project` для уровневых операций) | `events/mcp-events.ts`: `server/routes/mcp-registry.ts` (`/servers*`, `/registry*`, `PUT /session/:sessionId`), `server/routes/projects.ts` (`PUT /:id/mcp`), `engine/tools/instance-mcp.ts` (`synth_mcp_add|update|remove|enable`) | `mcpStore.applyEvent(scope)` — панели MCP (админская/пользовательская, «Внешние доступы»), селекторы серверов |
+  | Скиллы и бандлы | `skills.updated` — инстансный (`scope: instance|project|session`) | `events/skills-events.ts`: `server/routes/skills.ts` (`POST /reload`, `POST /`, `PATCH|DELETE /:name`, `PUT|DELETE /:name/files/*`), `skill-bundles.ts`, `skill-scope.ts` (сессия/проект/настройки) | `skillsStore.applyEvent(scope)` — панели скиллов, «Команды», долларовый пикер композера |
+  | Провайдеры/модели | `models.updated` — инстансный | `events/models-events.ts`: `server/routes/providers.ts` (`POST /`, `PATCH|DELETE /:name`), `models.ts` (`POST /fetch`, `POST /`, `DELETE /:id`) | `providersStore.applyEvent()` — селект модели в чате, админ-панели моделей/провайдеров |
+  | Пайплайны проекта | `pipeline.updated` — каналы **сессий проекта** | `engine/pipelines/events.ts`: `server/routes/pipeline-project-routes.ts` (`POST/PUT/DELETE /projects/:id/pipelines*`, `POST .../publish`, `POST /pipeline-templates/:tid/instantiate`), `engine/tools/pipeline-authoring.ts`, `pipeline-templates.ts` (через `notifyPipelineChanged`) | `pipelinesStore.invalidateProject(projectId)` — вкладка «Пайплайны» левой панели |
+
+  Прогоны пайплайнов — отдельное семейство (`pipeline.run.*`, инстансный канал), к авторству
+  не относятся. Уровневые операции (`scope: project|session`) несут id области в payload'е того
+  же инстансного события — отдельного канала не нужно.
 - **Стор — только через порт (ADR-096):** домену передаётся доменный порт из
   `StorageContext` (а не конкретный класс); новая реализация стора обязана пройти
   контрактный suite `storage/contract/*` (и иметь memory-эквивалент для тестов).

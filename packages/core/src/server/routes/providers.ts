@@ -13,6 +13,7 @@ import {
   type EgressLogSink,
 } from '../../engine/net/egress-guard.js';
 import { ProviderFactory } from '../../index.js';
+import type { ModelsChangedHook } from '../../events/models-events.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -112,6 +113,15 @@ export interface ProviderRoutesOptions {
   getDefaultModel?: () => DefaultModelPair | null | Promise<DefaultModelPair | null>;
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<ProviderRouteMessages>;
+  /**
+   * Каталог провайдеров/моделей изменился — вызывается **после** успешной
+   * записи (`POST /`, `PATCH /:name`, `DELETE /:name`). Точка сборки
+   * прокидывает сюда `modelsChangedPublisher(eventBus)` (`models.updated` в
+   * инстансный канал шины): селект модели в чате и админ-панели перечитывают
+   * каталог без перезагрузки страницы. Не задано — событий нет (тесты,
+   * сторонние потребители).
+   */
+  onModelsChanged?: ModelsChangedHook;
 }
 
 const DEFAULT_MESSAGES: ProviderRouteMessages = {
@@ -143,6 +153,7 @@ export function createProviderRoutes(
   const testGuard = opts.testGuard ?? auth.requireAuth;
   const testMiddleware = opts.testMiddleware ?? [];
   const messages: ProviderRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
+  const onModelsChanged = opts.onModelsChanged;
 
   // POST /api/v2/providers/fetch-icon — получить favicon с домена.
   // Статический сегмент регистрируем ДО параметрических (`/:name`).
@@ -332,6 +343,9 @@ export function createProviderRoutes(
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
+    // Каталог изменился — в payload только имя и вид мутации (конфиг
+    // провайдера содержит api_key/baseUrl, в событие он не попадает).
+    onModelsChanged?.({ provider: name, action: 'provider' });
     return c.json(provider, existing ? 200 : 201);
   });
 
@@ -382,6 +396,7 @@ export function createProviderRoutes(
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
+    onModelsChanged?.({ provider: name, action: 'provider' });
     return c.json(provider, 200);
   });
 
@@ -392,6 +407,7 @@ export function createProviderRoutes(
     }
     await store.delete(name);
     providerCache.delete(name);
+    onModelsChanged?.({ provider: name, action: 'provider' });
     return c.body(null, 204);
   });
 

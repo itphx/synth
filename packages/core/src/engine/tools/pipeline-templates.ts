@@ -13,6 +13,10 @@
  * - **Логика шаблонов — в движке** (`engine/pipelines/authoring.ts`:
  *   `listPipelineTemplates`/`instantiatePipelineFromTemplate`) — там же, откуда
  *   её берёт HTTP-роут: два контура не должны разойтись.
+ * - **Созданный пайплайн виден другим клиентам сразу.** После успешного
+ *   инстанцирования тул публикует `pipeline.updated` в каналы сессий проекта
+ *   (`engine/pipelines/events.ts`, инвариант 27). Идемпотентный ответ
+ *   (`ensure: true` и пайплайн уже есть) — не мутация: события нет.
  * - Тексты — только через ключи `shared/i18n` (ADR-041).
  */
 import { z } from 'zod';
@@ -22,7 +26,7 @@ import {
   instantiatePipelineFromTemplate,
   listPipelineTemplates,
 } from '../pipelines/authoring.js';
-import { getAutomation, depsUnavailable, ensureCanEdit, loadAutomationScope } from './automation-helpers.js';
+import { getAutomation, depsUnavailable, ensureCanEdit, loadAutomationScope, notifyPipelineChanged } from './automation-helpers.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { argErrorResult } from './arg-error.js';
@@ -135,6 +139,16 @@ export const pipelineInstantiateTool: ToolDefinition = {
           }),
         },
       };
+    }
+
+    // Создан новый пайплайн — событие в каналы сессий проекта. Идемпотентный
+    // ответ (`ensure`: пайплайн уже был) — не мутация, события нет.
+    if (result.created) {
+      await notifyPipelineChanged(ctx, {
+        projectId: scope.project.id,
+        pipelineId: result.pipeline.id,
+        action: 'instantiate',
+      });
     }
 
     return {

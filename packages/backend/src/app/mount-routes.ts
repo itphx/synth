@@ -80,6 +80,15 @@ import {
   // Реестр агентов инстанса изменился — `agents.updated` в инстансный канал шины
   // (тот же шов, что у тулов `synth_agent_*`, `events/agents-events.ts`).
   agentsChangedPublisher,
+  // Реестр MCP-серверов инстанса изменился — `mcp.updated` (общий шов с тулами
+  // `synth_mcp_*`, `events/mcp-events.ts`).
+  mcpChangedPublisher,
+  // Реестр скиллов инстанса изменился — `skills.updated` (общий шов всех путей
+  // мутации скиллов/бандлов/скоупов, `events/skills-events.ts`).
+  skillsChangedPublisher,
+  // Каталог провайдеров/моделей инстанса изменился — `models.updated` (общий шов
+  // роутов провайдеров и моделей, `events/models-events.ts`).
+  modelsChangedPublisher,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -192,7 +201,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // Projects routes
   // ADR-140 Ф2: хаб подписок — при смене состояния доступа к проекту
   // пересчитываются подписки уже подключённых клиентов (WS/SSE).
-  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles, browserProfiles, securityAudit, eventHub, profilesStore));
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore, deps.worktreeService, eventBus, executionProfiles, browserProfiles, securityAudit, eventHub, profilesStore, mcpChangedPublisher(eventBus)));
 
   // PROP-054: точечные операции плана проекта (`/projects/:id/plan*`) —
   // core-фабрика, RBAC — те же правила проекта (чтение — право чтения,
@@ -455,15 +464,18 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // Providers routes
+  // `onModelsChanged`: каталог изменился → `models.updated` (инстансный канал) —
+  // селект модели в чате и админ-панели перечитывают каталог без перезагрузки.
   app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, {
     resolvePolicy: () => egressResolver.resolveTools(),
     log: currentEgressLog(),
-  }, async () => (await settingsStore.getDefaultModel()) ?? backendConfigDefaultModel()));
+  }, async () => (await settingsStore.getDefaultModel()) ?? backendConfigDefaultModel(), modelsChangedPublisher(eventBus)));
 
   // Models routes
   app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache, {
     getDefaultModel: async () => (await settingsStore.getDefaultModel()) ?? backendConfigDefaultModel(),
     setDefaultModel: (pair) => settingsStore.setDefaultModel(pair),
+    onModelsChanged: modelsChangedPublisher(eventBus),
   }));
 
   // Agents routes
@@ -675,6 +687,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // (тот же сервис вложений, что у приёма событий) и учёт в `blob_refs`.
       attachments: deps.pipelineAttachments,
       blobRefs: deps.storageContext.blobRefs,
+      // ADR-101 (авторство) × ADR-118 (инвариант 27): авторство пайплайна
+      // видно другому клиенту — `pipeline.updated` в канал каждой сессии
+      // проекта (пайплайн — ресурс проекта, ADR-014), как `worktree.updated`.
+      events: { eventBus, sessionStore: sessionManager },
     },
     {
       writeGuard: auth.requireAuth,
@@ -1297,6 +1313,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
   app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
     registry: mcpRegistryStore,
+    // Мутация реестра MCP → `mcp.updated` (инстансный канал): панели MCP
+    // перечитывают состав без перезагрузки страницы.
+    onMcpChanged: mcpChangedPublisher(eventBus),
+    // Смена MCP-скоупа сессии (`PUT /session/:sessionId`) — `session.updated`
+    // в канал этой сессии (паритет с тулом `synth_mcp_enable`).
+    eventBus,
     // Переподключение сервера (`POST /servers/:name/reconnect`) — снять и
     // заново зарегистрировать MCP-инструменты в общем реестре.
     toolRegistry,
@@ -1374,7 +1396,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         ? normalize(project.workspace)
         : resolve(config.workspacesRoot, project.workspace);
     },
-  }, { writeGuard: requireAdminOrScope('addons:install') }));
+  }, {
+    writeGuard: requireAdminOrScope('addons:install'),
+    // Мутация реестра скиллов → `skills.updated` (инстансный канал).
+    onSkillsChanged: skillsChangedPublisher(eventBus),
+  }));
 
   // ADR-126 §4: сниппеты (`#`) — core-фабрика. Права: инстанс-уровень —
   // ADMIN (`writeGuard`), user-уровень — только свой, проектный — право
@@ -1416,7 +1442,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       }
       return missing;
     },
-  }, { writeGuard: auth.requireAdmin }));
+  }, {
+    writeGuard: auth.requireAdmin,
+    // Бандлы — часть реестра скиллов для клиента: тот же `skills.updated`.
+    onSkillsChanged: skillsChangedPublisher(eventBus),
+  }));
 
   // ADR-126 §11: scope-API скиллов. Доступ к сессии — та же семантика, что у
   // `createSessionRoutes` (единая точка истины на ресурс сессии): владелец|ADMIN
@@ -1461,6 +1491,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
           : canEditProjectContent(ctx, project, userId);
       };
     })(),
+    // Смена скоупа скиллов сессии → `session.updated` в канал этой сессии
+    // (паритет с `PUT /mcp/session/:sessionId`) + инстансное `skills.updated`.
+    eventBus,
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
   app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth as unknown as CoreAuthKit, {
     sessionManager, skillService, settingsStore, projectStore,
@@ -1477,6 +1511,16 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       || auth.hasRole(c as never, 'LEAD')
       || project.ownerId === userId
       || project.members?.[userId] === ProjectRole.OWNER,
+    // Проектный скоуп изменился → `project.updated` в канал каждой сессии
+    // проекта (тот же путь, что у `PUT /projects/:id`) + инстансное
+    // `skills.updated` со `scope: 'project'`.
+    onProjectChanged: async (projectId: string) => {
+      const sessions = await sessionManager.listSessions({ projectId });
+      for (const s of sessions) {
+        eventBus.publish(s.id, 'project.updated', { project_id: projectId, kind: 'updated' });
+      }
+    },
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
   app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, {
     settingsStore,
@@ -1484,6 +1528,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }, {
     writeGuard: auth.requireAdmin,
     onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
+    // Instance-wide гейты/политика скиллов изменились → `skills.updated`.
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
 
   // ADR-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).

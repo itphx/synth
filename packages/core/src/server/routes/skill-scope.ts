@@ -20,6 +20,7 @@ import type { SessionAccessKind } from '../session-access-guard.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
 import { isRemoteRef, remoteErrorToHttp, toLocalId, toRemote } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+import type { SkillsChangedHook, SessionEventPublisherLike } from '../../events/skills-events.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -76,6 +77,36 @@ export interface SkillScopeRoutesOptions {
   canAccessProject?: (project: Project, c: Context, userId: string) => boolean | Promise<boolean>;
   /** ADR-126 §11: live-обновление системного hard-gate скиллов (оркестратор). */
   onSkillsDisabledChange?: (disabled: SkillsDisabledRequest) => void;
+  /**
+   * Реестр/скоуп скиллов изменился: смена скоупа сессии/проекта или
+   * instance-wide гейтов и политики.
+   *
+   * Вызывается **только после успешной записи**: 400/403/404 событие не
+   * порождают. Payload — `{ action: 'scope', scope, ... }`: содержимого скиллов
+   * в событии нет.
+   *
+   * Точка сборки прокидывает сюда `skillsChangedPublisher(eventBus)`
+   * (`events/skills-events.ts`). Не задан — поведение прежнее (тесты).
+   */
+  onSkillsChanged?: SkillsChangedHook;
+  /**
+   * Шина для публикации в **канал сессии** (`EventBus.publish`):
+   * `PUT /sessions/:id/skills` меняет скоуп сессии и публикует
+   * `session.updated` — тот же путь, что у тула `synth_mcp_enable`
+   * (`level: 'session'`), иначе открытая вкладка показывала бы старый скоуп.
+   *
+   * Не задана — публикации нет (тесты, сторонние потребители).
+   */
+  eventBus?: SessionEventPublisherLike;
+  /**
+   * Проект изменён (`PUT /projects/:id/skills`) — `project.updated` в канал
+   * каждой сессии проекта (тот же путь, что у `PUT /projects/:id` и
+   * `PUT /projects/:id/mcp`): иначе проектная панель и вкладка сессии
+   * показывали бы старый жёсткий гейт скиллов до перезагрузки.
+   *
+   * Не задан — публикации нет (тесты, сторонние потребители).
+   */
+  onProjectChanged?: (projectId: string) => void | Promise<void>;
   /**
    * ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
    * при доступе к сессии. Managed не задаёт (id реальные).
@@ -251,7 +282,7 @@ export function createSessionSkillScopeRoutes(
     // (lost update — победитель сохраняет свой снапшот целиком), а полный снимок
     // затирал бы и параллельную дозапись сообщений. `updatedAt` двигается —
     // паритет с прежним `updateSession`.
-    await deps.sessionManager.mutateMeta(session.id, (s) => {
+    const mutated = await deps.sessionManager.mutateMeta(session.id, (s) => {
       if (name !== undefined) {
         const enabledList = new Set(s.settings.skills ?? []);
         const disabledList = new Set(s.settings.skillsDisabled ?? []);
@@ -263,6 +294,26 @@ export function createSessionSkillScopeRoutes(
       if (skills !== undefined) s.settings.skills = skills;
       if (skillsDisabled !== undefined) s.settings.skillsDisabled = skillsDisabled;
     });
+    if (mutated.found) {
+      // Скоуп сессии изменился → `session.updated` в канал **этой** сессии (тот
+      // же путь публикации, что у тула `synth_mcp_enable`, `level: 'session'`):
+      // иначе открытая вкладка настроек показывала бы старые переключатели.
+      // `updated_at` берём из точечной правки (мутация его двигает).
+      opts?.eventBus?.publish(session.id, 'session.updated', {
+        session_id: session.id,
+        settings: mutated.session.settings,
+        updated_at: mutated.session.updatedAt,
+      });
+      // Плюс инстансное `skills.updated` со `scope: 'session'`: панели скиллов
+      // видят, что смена пришла из уровневой операции (перечитывают эффективные
+      // списки своей сессии, чужие события не трогают).
+      opts?.onSkillsChanged?.({
+        ...(name !== undefined ? { name } : {}),
+        action: 'scope',
+        scope: 'session',
+        sessionId: session.id,
+      });
+    }
     return effective(c);
   });
 
@@ -384,7 +435,16 @@ export function createProjectSkillScopeRoutes(
       enabled: parsed.data.enabled ?? project.skills?.enabled ?? [],
       defaultOn: parsed.data.defaultOn ?? project.skills?.defaultOn ?? [],
     };
+    project.updatedAt = new Date().toISOString();
     await deps.projectStore!.save(project);
+    // Мутация видна другому клиенту (инвариант 27): `project.updated` в канал
+    // каждой сессии проекта — тот же путь, что у `PUT /:id` и
+    // `PUT /projects/:id/mcp`. Жёсткий гейт проекта влияет на эффективные
+    // списки его сессий, поэтому проектная панель и вкладка сессии должны
+    // перечитать списки.
+    await opts?.onProjectChanged?.(project.id);
+    // Плюс инстансное `skills.updated` со `scope: 'project'`.
+    opts?.onSkillsChanged?.({ action: 'scope', scope: 'project', projectId: project.id });
     return read(c);
   });
 
@@ -500,6 +560,10 @@ export function createSkillSettingsRoutes(
     }
     const disabled = (await deps.settingsStore.getSkillsDisabled()) ?? { categories: [], groups: [], skills: [] };
     opts?.onSkillsDisabledChange?.(disabled);
+    // Instance-wide гейты/политика изменились → `skills.updated`
+    // (`action: 'scope'`, `scope: 'instance'`): панели скиллов и пикер в
+    // композере перечитывают состав и доступность без перезагрузки страницы.
+    opts?.onSkillsChanged?.({ action: 'scope', scope: 'instance' });
     return c.json(await buildSettingsResponse());
   });
 
@@ -508,6 +572,7 @@ export function createSkillSettingsRoutes(
     await deps.settingsStore?.clearSkillsDisabledForNewProjects();
     await deps.settingsStore?.clearSkillsPolicy();
     opts?.onSkillsDisabledChange?.({ categories: [], groups: [], skills: [] });
+    opts?.onSkillsChanged?.({ action: 'scope', scope: 'instance' });
     return c.json({ status: 'reset' });
   });
 

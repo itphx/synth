@@ -3,6 +3,7 @@ import type { AuthKit } from '../auth/middleware.js';
 import type { DefaultModelPair, JsonStoreLike } from '@itphx/synth-core';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 import { createModelRoutes as createCoreModelRoutes } from '@itphx/synth-core';
+import type { ModelsChangedHook } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 
@@ -10,6 +11,13 @@ import { createRateLimiter } from '../middleware/rate-limiter.js';
 export interface ModelRoutesDefaultOptions {
   getDefaultModel?: () => DefaultModelPair | null | Promise<DefaultModelPair | null>;
   setDefaultModel?: (pair: DefaultModelPair) => void | Promise<void>;
+  /**
+   * Каталог провайдеров/моделей изменился — точка сборки передаёт
+   * `modelsChangedPublisher(eventBus)` (`models.updated` в инстансный канал
+   * шины): селект модели в чате и админ-панели обновляются без перезагрузки
+   * страницы.
+   */
+  onModelsChanged?: ModelsChangedHook;
 }
 
 /**
@@ -41,6 +49,7 @@ export function createModelRoutes(
       supportSetAsDefault: true,
       getDefaultModel: defaults.getDefaultModel,
       setDefaultModel: defaults.setDefaultModel,
+      ...(defaults.onModelsChanged ? { onModelsChanged: defaults.onModelsChanged } : {}),
       messages: {
         idRequired: (c) => t('errors.validation.idRequired', undefined, c),
         modelNotFound: (c) => t('errors.notFound.model', undefined, c),

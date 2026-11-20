@@ -35,6 +35,7 @@ import type { HybridListEntry } from './hybrid-list.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import type { WorktreeService, WorktreeUpdateDetail } from '../../engine/worktree/service.js';
+import type { McpChangedHook } from '../../events/mcp-events.js';
 import { isWorktreeError, worktreeErrorHttpStatus } from '../../engine/worktree/errors.js';
 import { worktreeCreateSchema, worktreePruneSchema } from '@itphx/synth-shared';
 
@@ -208,6 +209,18 @@ export interface ProjectRoutesOptions {
    * сессии проекта надо пересчитать (доступ применяется к уже подключённым).
    */
   onProjectChanged?: (projectId: string, kind: ProjectChangeKind) => void | Promise<void>;
+  /**
+   * MCP-скоуп проекта изменён (`PUT /:id/mcp`).
+   *
+   * Вызывается **только после успешной записи**; `project.updated` в каналы
+   * сессий проекта публикует соседний хук `onProjectChanged` (та же мутация
+   * видна и в проектной панели, и в вкладке сессии).
+   *
+   * Точка сборки прокидывает сюда `mcpChangedPublisher(eventBus)`
+   * (`events/mcp-events.ts`), payload — `{ action: 'update', scope: 'project',
+   * projectId }`. Не задан — поведение прежнее (тесты, сторонние потребители).
+   */
+  onMcpChanged?: McpChangedHook;
   /**
    * PROP-133 §3.1: аудит изменения состояния доступа (`members`/
    * `group_members`/`everyone_role`) — запись «кто, что, было/стало».
@@ -762,6 +775,13 @@ export function createProjectRoutes(
       };
       project.updatedAt = new Date().toISOString();
       await store.save(project);
+
+      // Мутация видна другому клиенту (инвариант 27): `project.updated` в
+      // канал каждой сессии проекта — тот же путь, что у `PUT /:id`, — плюс
+      // инстансное `mcp.updated` со `scope: 'project'` для панелей MCP.
+      // Имя сервера не передаём: роут меняет набор целиком.
+      await opts.onProjectChanged?.(project.id, 'updated');
+      opts.onMcpChanged?.({ action: 'update', scope: 'project', projectId: project.id });
 
       return c.json({
         enabled: project.mcp.enabled,

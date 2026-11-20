@@ -3,6 +3,7 @@ import type { Context, MiddlewareHandler } from 'hono';
 import { skillBundleSchema, SKILL_NAME_MAX, SKILL_NAME_REGEX } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
 import type { SkillBundleRepository } from '../../storage/ports/skill-bundle-repository.js';
+import type { SkillsChangedHook } from '../../events/skills-events.js';
 
 export interface SkillBundleRoutesDeps {
   bundleStore: SkillBundleRepository;
@@ -27,6 +28,16 @@ const DEFAULT_MESSAGES: SkillBundleRoutesMessages = {
 export interface SkillBundleRoutesOptions {
   writeGuard?: MiddlewareHandler;
   messages?: (c: Context) => SkillBundleRoutesMessages;
+  /**
+   * Бандл создан (`create`), изменён (`update`) или удалён (`delete`).
+   *
+   * Бандлы — часть реестра скиллов с точки зрения клиента (панель «Команды»
+   * показывает их рядом с командами, пикер скиллов видит состав групп),
+   * поэтому событие — то же `skills.updated` (инстансный канал), а не свой тип.
+   * Вызывается **только после успешной записи**: 400/404/409 событие не
+   * порождают. Не задан — фабрика работает как раньше (тесты).
+   */
+  onSkillsChanged?: SkillsChangedHook;
 }
 
 /**
@@ -77,6 +88,7 @@ export function createSkillBundleRoutes(
       }
     }
     await deps.bundleStore.set(parsed.data);
+    opts?.onSkillsChanged?.({ name: parsed.data.name, action: 'create' });
     return c.json(parsed.data, 201);
   });
 
@@ -111,6 +123,7 @@ export function createSkillBundleRoutes(
       }
     }
     await deps.bundleStore.set(parsed.data);
+    opts?.onSkillsChanged?.({ name: parsed.data.name, action: 'update' });
     return c.json(parsed.data);
   });
 
@@ -119,6 +132,7 @@ export function createSkillBundleRoutes(
     if (!isValidName(name)) return notFound(c);
     const removed = await deps.bundleStore.remove(name);
     if (!removed) return notFound(c);
+    opts?.onSkillsChanged?.({ name, action: 'delete' });
     return c.json({ status: 'deleted' });
   });
 

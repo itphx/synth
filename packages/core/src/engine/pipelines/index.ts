@@ -153,6 +153,15 @@ export type {
   PipelineTemplateInstantiation,
   PipelineTemplateSummary,
 } from './authoring.js';
+// ADR-101 (авторство) × ADR-118: событие `pipeline.updated` в каналы сессий
+// проекта — общий шов HTTP-роутов и тулов авторства.
+export { publishPipelineUpdated, PIPELINE_EVENT_MAX_SESSIONS } from './events.js';
+export type {
+  PipelineEventDeps,
+  PipelineEventPublisherLike,
+  PipelineEventSessionSource,
+  PipelineUpdatedInput,
+} from './events.js';
 // ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте).
 export {
   BUILTIN_PIPELINE_PROVENANCE,

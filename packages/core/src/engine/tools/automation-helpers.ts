@@ -28,11 +28,13 @@
  * области/мутации — свои (`isScheduleInScope`/`ensureScheduleMutable`).
  */
 import type { Project, Schedule, Session, ToolContext, ToolResult } from '@itphx/synth-shared';
+import type { PipelineChangeAction } from '@itphx/synth-shared';
 import type { AutomationRuntime } from './automation-runtime.js';
 import { getSessionExtra, loadSessionProject } from './project-manage.js';
 import { parentSessionIdOf } from './session-scope.js';
 import { canEditProject, resolveSessionUserId } from './project-access.js';
 import { principalGroups } from './project-resolve.js';
+import { publishPipelineUpdated } from '../pipelines/events.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 /**
@@ -132,6 +134,31 @@ export function ensureCanEdit(
 ): ToolResult | null {
   if (canEditProject(scope.session, scope.project, scope.groups)) return null;
   return forbidden();
+}
+
+/**
+ * Уведомить клиентов, что сущность пайплайна проекта изменилась
+ * (`pipeline.updated`).
+ *
+ * Вызывается **после успешной записи** и только на успешном пути: ошибки
+ * валидации, «пайплайн не найден» и отказы прав событие не порождают (один
+ * вызов тула — максимум одно событие). Пайплайн — ресурс проекта (ADR-014),
+ * поэтому событие идёт в каналы **сессий проекта** — тем же путём, что
+ * `worktree.updated`/`project.updated` (инвариант 27): в managed инстансный
+ * канал не дошёл бы до обычного `USER`.
+ *
+ * Шина и источник сессий берутся из `ctx.extra` (там же, где `eventBus` у
+ * `synth_mcp_*`/`synth_agent_*`); не заданы — помощник молча ничего не делает.
+ */
+export async function notifyPipelineChanged(
+  ctx: ToolContext,
+  info: { projectId: string; pipelineId: string; action: PipelineChangeAction },
+): Promise<void> {
+  const extra = getSessionExtra(ctx);
+  await publishPipelineUpdated(
+    { eventBus: extra.eventBus, sessionStore: extra.sessionManager },
+    info,
+  );
 }
 
 // ─────────────────────────────── Расписания (ADR-051) ───────────────────────────────

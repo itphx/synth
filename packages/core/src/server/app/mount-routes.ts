@@ -67,11 +67,23 @@ import {
   // Реестр агентов инстанса изменился — событие `agents.updated` в инстансный
   // канал шины (общий шов с тулами `synth_agent_*`, см. `events/agents-events.ts`).
   agentsChangedPublisher,
+  // Реестр MCP-серверов инстанса изменился — `mcp.updated` (общий шов с тулами
+  // `synth_mcp_*`, см. `events/mcp-events.ts`).
+  mcpChangedPublisher,
+  // Реестр скиллов инстанса изменился — `skills.updated` (общий шов всех путей
+  // мутации скиллов и бандлов, см. `events/skills-events.ts`).
+  skillsChangedPublisher,
+  // Каталог провайдеров/моделей инстанса изменился — `models.updated` (общий шов
+  // роутов провайдеров и моделей, см. `events/models-events.ts`).
+  modelsChangedPublisher,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
 import type { MetricsReadiness } from '../routes/metrics-settings.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
+// ADR-118 §4/инвариант 27: вид изменения проекта (`project.updated`/`project.deleted`)
+// — общий тип с `ProjectRoutesOptions.onProjectChanged`.
+import type { ProjectChangeKind } from '../routes/projects.js';
 import { createUpdateRoutes } from '../routes/updates.js';
 import { resolveNpmInstallEnvironment } from '../../maintenance/update.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
@@ -307,6 +319,23 @@ export function mountStandaloneRoutes(
   ));
 
   // Projects
+  // ADR-118 §4/инвариант 27: изменение проекта видно другому клиенту —
+  // `project.updated` в канал каждой сессии проекта (контейнер — ресурс проекта,
+  // ADR-014). Удаление — до delete, пока сессии ещё перечисляются.
+  // Один помощник на все пути мутации проекта: `PUT /projects/:id` (роуты
+  // проекта) и `PUT /projects/:id/skills` (скоуп скиллов) — иначе один из них
+  // «молчал» бы и панели залипали.
+  const publishProjectChange = async (projectId: string, kind: ProjectChangeKind): Promise<void> => {
+    const sessions = await sessionManager.listSessions({ projectId });
+    for (const s of sessions) {
+      eventBus.publish(s.id, kind === 'deleted' ? 'project.deleted' : 'project.updated', {
+        project_id: projectId,
+        // ADR-140 Ф2: вид изменения — UI/подписки видят, что именно изменилось
+        // (в т.ч. состояние доступа — `access`).
+        kind,
+      });
+    }
+  };
   app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, () => getClient(), {
     // PROP-135 Ф6a: каталог профилей — валидация `project.executor.profile`/
     // `allowedProfiles` (PUT /:id).
@@ -338,17 +367,10 @@ export function mountStandaloneRoutes(
     // проекта (контейнер — ресурс проекта, ADR-014). Удаление — до delete,
     // пока сессии ещё перечисляются.
     sessionManager,
-    onProjectChanged: async (projectId, kind) => {
-      const sessions = await sessionManager.listSessions({ projectId });
-      for (const s of sessions) {
-        eventBus.publish(s.id, kind === 'deleted' ? 'project.deleted' : 'project.updated', {
-          project_id: projectId,
-          // ADR-140 Ф2: вид изменения — UI/подписки видят, что именно изменилось
-          // (в т.ч. состояние доступа — `access`).
-          kind,
-        });
-      }
-    },
+    // ADR-071 §2.4: MCP-скоуп проекта изменился (`PUT /:id/mcp`) — инстансное
+    // `mcp.updated` со `scope: 'project'` (панели MCP перечитывают состав).
+    onMcpChanged: mcpChangedPublisher(eventBus),
+    onProjectChanged: publishProjectChange,
     // ADR-071 §2.4 / ADR-126 §11: сид скоупа нового проекта (снимок дефолтов).
     // PROP-125 §2: к локальным дефолтам добавляются серверные (гибрид) —
     // backend недоступен → только локальные (серверные добавятся при
@@ -431,6 +453,10 @@ export function mountStandaloneRoutes(
   // Providers
   app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, {
     testEnabled: true,
+    // Каталог провайдеров/моделей изменился → `models.updated` (инстансный канал
+    // шины): селект модели в чате и админ-панели перечитывают каталог без
+    // перезагрузки страницы.
+    onModelsChanged: modelsChangedPublisher(eventBus),
     // Дефолтный провайдер — из явной пары provider+model (runtime, fallback — config).
     getDefaultModel: async () => (await settingsStore.getDefaultModel()) ?? configDefaultModel(),
     // ADR-099/PROP-100: favicon домена — через общий egress-guard (SSRF-политика
@@ -458,6 +484,9 @@ export function mountStandaloneRoutes(
     // Модель по умолчанию — явная пара provider+model (runtime приоритетнее config).
     supportSetAsDefault: true,
     providerCache,
+    // Модель сохранена/удалена/синхронизирована или сменилась дефолтная пара →
+    // `models.updated` (тот же шов, что у роутов провайдеров).
+    onModelsChanged: modelsChangedPublisher(eventBus),
     getDefaultModel: async () => (await settingsStore.getDefaultModel()) ?? configDefaultModel(),
     setDefaultModel: (pair) => settingsStore.setDefaultModel(pair),
   }));
@@ -1068,6 +1097,12 @@ export function mountStandaloneRoutes(
       // Переподключение сервера (`POST /servers/:name/reconnect`) — снять и
       // заново зарегистрировать MCP-инструменты в общем реестре.
       toolRegistry,
+      // Мутация реестра MCP → `mcp.updated` (инстансный канал): панели MCP и
+      // селекторы серверов перечитывают состав без перезагрузки страницы.
+      onMcpChanged: mcpChangedPublisher(eventBus),
+      // Смена MCP-скоупа сессии (`PUT /session/:sessionId`) — `session.updated` в
+      // канал этой сессии (тот же путь, что у тула `synth_mcp_enable`).
+      eventBus,
     },
   ));
 
@@ -1189,6 +1224,10 @@ export function mountStandaloneRoutes(
       // ADR-042: пайплайны/прогоны/шаблоны удалённого проекта проксируются
       // на сервер (managed backend `getRemoteClient` не передаёт).
       getRemoteClient: () => getClient(),
+      // ADR-101 (авторство) × ADR-118 (инвариант 27): авторство пайплайна видно
+      // другому клиенту — `pipeline.updated` в канал каждой сессии проекта
+      // (пайплайн — ресурс проекта, ADR-014), как `worktree.updated`.
+      events: { eventBus, sessionStore: sessionManager },
     },
   ));
 
@@ -1389,6 +1428,10 @@ export function mountStandaloneRoutes(
       const root = config.workspacesRoot ?? join(dataDir, 'workspaces');
       return isAbsolute(project.workspace) ? normalize(project.workspace) : resolve(root, project.workspace);
     },
+  }, {
+    // Мутация реестра скиллов → `skills.updated` (инстансный канал): панели
+    // скиллов и пикер в композере перечитывают состав без перезагрузки страницы.
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
 
   // ADR-126 §7: список команд (встроенные + шаблонные + скиллы + bundles).
@@ -1425,6 +1468,9 @@ export function mountStandaloneRoutes(
       }
       return missing;
     },
+  }, {
+    // Бандлы — часть реестра скиллов для клиента: тот же `skills.updated`.
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
 
   // ADR-126 §11: scope-API скиллов (сессии/проекты/настройки, аналог MCP).
@@ -1446,6 +1492,10 @@ export function mountStandaloneRoutes(
     },
   }, {
     localOwnerResolver: deps.localOwnerResolver,
+    // Смена скоупа скиллов сессии → `session.updated` в канал этой сессии
+    // (паритет с `PUT /mcp/session/:sessionId`) + инстансное `skills.updated`.
+    eventBus,
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
   app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth, {
     sessionManager, skillService, settingsStore, projectStore,
@@ -1455,12 +1505,19 @@ export function mountStandaloneRoutes(
     // ADR-042: проектный скоуп скиллов удалённого проекта — на сервере.
     // Managed backend опцию не передаёт (remote-ветки выключены).
     getRemoteClient: () => getClient(),
+    // Проектный скоуп изменился → `project.updated` в каналы сессий проекта
+    // (тот же путь, что у `PUT /projects/:id`) + инстансное `skills.updated`
+    // со `scope: 'project'`.
+    onProjectChanged: (projectId) => publishProjectChange(projectId, 'updated'),
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
   app.route('/api/v2/settings', createSkillSettingsRoutes(auth, {
     settingsStore,
     trustedProjectDirsDefaults: config.skillsConfig?.trustedProjectDirs ?? [],
   }, {
     onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
+    // Instance-wide гейты/политика скиллов изменились → `skills.updated`.
+    onSkillsChanged: skillsChangedPublisher(eventBus),
   }));
 
   // ADR-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).

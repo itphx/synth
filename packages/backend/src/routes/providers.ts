@@ -4,7 +4,7 @@ import type { JsonStoreLike } from '@itphx/synth-core';
 import type { DefaultModelPair } from '@itphx/synth-core';
 import type { EgressPolicy, ProviderConfig } from '@itphx/synth-shared';
 import { createProviderRoutes as createCoreProviderRoutes } from '@itphx/synth-core';
-import type { EgressLogSink } from '@itphx/synth-core';
+import type { EgressLogSink, ModelsChangedHook } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 
@@ -25,6 +25,11 @@ export interface ProviderRoutesEgressOptions {
  *
  * URL провайдера проверяется общей egress-политикой (`egress.tools`, live),
  * без собственной копии списка приватных диапазонов.
+ *
+ * `onModelsChanged` (необязательный) — хук «каталог провайдеров/моделей
+ * изменился»: точка сборки передаёт `modelsChangedPublisher(eventBus)`
+ * (`models.updated` в инстансный канал шины), чтобы селект модели в чате и
+ * админ-панели обновлялись без перезагрузки страницы.
  */
 export function createProviderRoutes(
   kit: AuthKit,
@@ -32,6 +37,7 @@ export function createProviderRoutes(
   providerCache: Map<string, ProviderConfig>,
   egress: ProviderRoutesEgressOptions = {},
   getDefaultModel?: () => DefaultModelPair | null | Promise<DefaultModelPair | null>,
+  onModelsChanged?: ModelsChangedHook,
 ): Hono {
   const app = new Hono();
 
@@ -58,6 +64,7 @@ export function createProviderRoutes(
         log: egress.log,
       },
       getDefaultModel,
+      ...(onModelsChanged ? { onModelsChanged } : {}),
       messages: {
         nameRequired: (c) => t('errors.validation.nameRequired', undefined, c),
         providerNotFound: (c) => t('errors.notFound.provider', undefined, c),

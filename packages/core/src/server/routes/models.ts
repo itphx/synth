@@ -6,6 +6,7 @@ import type { ModelConfig, ProviderConfig, ContextSource, AttachmentModality } f
 import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { hasPriceInput, lookupContextWindow, parseCurrencyInput, parseModelCompatibilityInput } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/index.js';
+import type { ModelsChangedHook } from '../../events/models-events.js';
 import { paginate } from '../pagination.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -197,6 +198,16 @@ export interface ModelRoutesOptions {
   setDefaultModel?: (pair: DefaultModelPair) => void | Promise<void>;
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<ModelRouteMessages>;
+  /**
+   * Каталог провайдеров/моделей изменился — вызывается **после** успешной
+   * записи (`POST /` — `save`/`default`, `DELETE /:id` — `delete`,
+   * `POST /fetch` — `fetch`, если каталог действительно записан). Точка сборки
+   * прокидывает сюда `modelsChangedPublisher(eventBus)` (`models.updated` в
+   * инстансный канал шины): селект модели в чате и админ-панели перечитывают
+   * каталог без перезагрузки страницы. Не задано — событий нет (тесты,
+   * сторонние потребители).
+   */
+  onModelsChanged?: ModelsChangedHook;
 }
 
 const DEFAULT_MESSAGES: ModelRouteMessages = {
@@ -248,6 +259,7 @@ export function createModelRoutes(
   const getDefaultModel = opts?.getDefaultModel;
   const setDefaultModel = opts?.setDefaultModel;
   const messages: ModelRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
+  const onModelsChanged = opts?.onModelsChanged;
 
   // POST /fetch — синхронизировать модели с провайдеров (id конфигурируются
   // провайдером). Статический сегмент объявляем до параметрических (/:id).
@@ -271,6 +283,9 @@ export function createModelRoutes(
     let totalPriced = 0;
     let totalLimited = 0;
     const errors: string[] = [];
+    // Хотя бы одна запись каталога реально записана — только тогда событие
+    // «каталог изменился» имеет смысл (чистый прогон без изменений молчит).
+    let wrote = false;
 
     for (const provider of enabledProviders) {
       const providerConfig = {
@@ -350,6 +365,7 @@ export function createModelRoutes(
             }
             await modelStore.save(fullId, newModel);
             modelCache.set(fullId, newModel);
+            wrote = true;
             totalNew++;
             totalFetched++;
             continue;
@@ -407,11 +423,20 @@ export function createModelRoutes(
           if (changed) {
             await modelStore.save(fullId, existing);
             modelCache.set(fullId, existing);
+            wrote = true;
           }
         }
       } catch (err) {
         errors.push(`${provider.name}: ${err instanceof Error ? err.message : messages.fetchError(c)}`);
       }
+    }
+
+    // Каталог синхронизирован — `models.updated` в инстансный канал шины
+    // (селект модели в чате перечитывает каталог без перезагрузки страницы).
+    // Ошибки отдельных провайдеров не отменяют события: то, что записано, уже
+    // видно другим клиентам.
+    if (wrote) {
+      onModelsChanged?.({ action: 'fetch', ...(providerFilter ? { provider: providerFilter } : {}) });
     }
 
     return c.json({
@@ -669,9 +694,11 @@ export function createModelRoutes(
     // set_as_default: обновить провайдера (legacy) и снять isDefault с остальных
     // моделей, затем записать явную пару provider+model в runtime-настройки —
     // только если провайдер реально существует.
+    let defaultApplied = false;
     if (supportSetAsDefault && body.set_as_default && provider) {
       const prov = await providerStore.load(provider);
       if (prov) {
+        defaultApplied = true;
         prov.defaultModel = model.name;
         await providerStore.save(provider, prov);
         providerCache?.set(provider, prov);
@@ -690,16 +717,32 @@ export function createModelRoutes(
       }
     }
 
+    // Каталог изменился (`save`), а если запись заодно переключила модель по
+    // умолчанию — `default`: клиенту важно знать, что перечитывать не только
+    // список моделей, но и дефолтную пару.
+    onModelsChanged?.({
+      ...(provider ? { provider } : {}),
+      modelId: model.name,
+      action: defaultApplied ? 'default' : 'save',
+    });
+
     return c.json(model, existing ? 200 : 201);
   });
 
   app.delete('/:id', writeGuard, async (c) => {
     const id = c.req.param('id');
-    if (!(await modelStore.exists(id))) {
+    const existing = await modelStore.load(id);
+    if (!existing) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.modelNotFound(c) } }, 404);
     }
     await modelStore.delete(id);
     modelCache.delete(id);
+    // Удалённая модель должна исчезнуть и в селекте — `models.updated`.
+    onModelsChanged?.({
+      ...(existing.provider ? { provider: existing.provider } : {}),
+      modelId: existing.name,
+      action: 'delete',
+    });
     return c.body(null, 204);
   });
 

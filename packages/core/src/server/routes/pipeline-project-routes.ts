@@ -15,6 +15,7 @@ import {
 import type {
   EventAttachmentRef,
   PipelineArtifact,
+  PipelineChangeAction,
   PipelineRunStatus,
   PipelineRunTrigger,
   Project,
@@ -47,6 +48,10 @@ import {
   updatePipelineDraft,
 } from '../../engine/pipelines/authoring.js';
 import { PipelineRunControl } from '../../engine/pipelines/run-control.js';
+import {
+  publishPipelineUpdated,
+  type PipelineEventDeps,
+} from '../../engine/pipelines/events.js';
 import {
   checkServiceProjectProjection,
   requireScopeOrAdminRole,
@@ -216,6 +221,17 @@ export interface PipelineProjectRoutesDeps {
    * (`REMOTE_PROXY_PREFIXES`) для них не применяется.
    */
   getRemoteClient?: () => RemoteBackendClient | null;
+  /**
+   * ADR-101 (авторство) × ADR-118 (инвариант 27): публикация события
+   * `pipeline.updated` — сущность пайплайна проекта изменилась
+   * (создан/сохранён черновик, опубликована версия, удалён, инстанцирован).
+   *
+   * Событие идёт в каналы **сессий проекта** (пайплайн — ресурс проекта,
+   * ADR-014), тем же путём, что `worktree.updated`/`project.updated`. Без шины
+   * или источника сессий (тесты, сторонние потребители) контур работает как
+   * прежде — событие просто не публикуется.
+   */
+  events?: PipelineEventDeps;
 }
 
 export interface PipelineProjectRoutesOptions {
@@ -750,6 +766,27 @@ export function createPipelineProjectRoutes(
   };
 
   /**
+   * Уведомить клиентов, что **сущность** пайплайна проекта изменилась
+   * (`pipelineupdated`, инвариант 27).
+   *
+   * Вызывается только после успешной записи: 400 (валидация), 403, 404 и 409
+   * событие не порождают — один запрос даёт максимум одно событие. Пайплайн —
+   * ресурс проекта (ADR-014), поэтому событие идёт в каналы **сессий проекта**
+   * тем же путём, что `worktreeupdated`/`projectupdated`; инстансный канал
+   * здесь не подходит (он не про проект и в managed не доходит до `USER`).
+   *
+   * Гибрид (ADR-042): у `remote:`-проекта мутацию выполняет сервер — он и
+   * публикует событие в свои каналы, локальный контур его не дублирует.
+   */
+  const notifyPipelineChanged = async (
+    projectId: string,
+    pipelineId: string,
+    action: PipelineChangeAction,
+  ): Promise<void> => {
+    await publishPipelineUpdated(deps.events ?? {}, { projectId, pipelineId, action });
+  };
+
+  /**
    * Краткое представление пайплайна (список **и** деталь).
    *
    * Черновик (`draft`) в сводку **не входит** — он тяжёлый (спецификация
@@ -881,6 +918,8 @@ export function createPipelineProjectRoutes(
             : {}),
           spec: parsed.data.spec,
         });
+        // Черновик создан — событие в каналы сессий проекта.
+        await notifyPipelineChanged(projectId, record.id, 'save');
         return c.json({ pipeline: record }, 201);
       } catch (err) {
         if (err instanceof PipelineAuthoringError) return invalid(c, err.problems);
@@ -990,6 +1029,8 @@ export function createPipelineProjectRoutes(
             ? { description: parsed.data.description }
             : {}),
         });
+        // Черновик сохранён — событие в каналы сессий проекта.
+        await notifyPipelineChanged(projectId, updated.id, 'save');
         return c.json({ pipeline: updated });
       } catch (err) {
         if (err instanceof PipelineAuthoringError) return invalid(c, err.problems);
@@ -1028,6 +1069,8 @@ export function createPipelineProjectRoutes(
       const record = await loadProjectPipeline(c, projectId, c.req.param('pid'));
       if (!record) return notFoundPipeline(c);
       await deletePipelineRecord({ pipelines: deps.pipelines, pipelineId: record.id });
+      // Удаление состоялось — событие в каналы сессий проекта.
+      await notifyPipelineChanged(projectId, record.id, 'delete');
       return c.body(null, 204);
     },
   );
@@ -1073,6 +1116,8 @@ export function createPipelineProjectRoutes(
           record,
           publishedBy,
         });
+        // Версия опубликована — событие в каналы сессий проекта.
+        await notifyPipelineChanged(projectId, result.published.pipelineId, 'publish');
         return c.json({
           pipeline: { ...pipelineSummary(result.pipeline), draft: result.pipeline.draft },
           published: result.published,
@@ -1620,6 +1665,11 @@ export function createPipelineProjectRoutes(
         },
         409,
       );
+    }
+    // Инстанцирование состоялось (новая запись) — событие в каналы сессий
+    // проекта. Идемпотентный ответ (`ensure`, `created: false`) — не мутация.
+    if (result.created) {
+      await notifyPipelineChanged(projectId, result.pipeline.id, 'instantiate');
     }
     return c.json({ pipeline: result.pipeline, created: result.created }, result.created ? 201 : 200);
   });

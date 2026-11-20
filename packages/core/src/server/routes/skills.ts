@@ -4,6 +4,7 @@ import { skillCreateSchema, skillFileWriteSchema, skillUpdateSchema, SKILL_NAME_
 import type { SkillDetail } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
 import type { SkillService } from '../../engine/skills/service.js';
+import type { SkillsChangedHook } from '../../events/skills-events.js';
 
 export interface SkillRoutesDeps {
   skillService: SkillService;
@@ -33,6 +34,19 @@ export interface SkillRoutesOptions {
   writeGuard?: MiddlewareHandler;
   /** Локализованные сообщения (backend — `t()`). */
   messages?: (c: Context) => SkillRoutesMessages;
+  /**
+   * Реестр скиллов изменился: создан (`create`), обновлён (`update`), удалён
+   * (`delete`), изменён supporting-файл (`files`), реестр пересканирован
+   * (`reload`).
+   *
+   * Вызывается **только после успешной записи**: ответы 400/403/404/409
+   * событие не порождают.
+   *
+   * Точка сборки прокидывает сюда `skillsChangedPublisher(eventBus)`
+   * (`events/skills-events.ts`). Не задан — фабрика работает как раньше (тесты,
+   * сторонние потребители).
+   */
+  onSkillsChanged?: SkillsChangedHook;
 }
 
 /**
@@ -86,6 +100,10 @@ export function createSkillRoutes(
   // Force reload (до параметрических маршрутов).
   app.post('/reload', auth.requireAuth, writeGuard, async (c) => {
     deps.skillService.reload();
+    // Реестр пересканирован — состав мог измениться целиком (правка файлов на
+    // диске): панели скиллов и долларовый пикер перечитывают его без
+    // перезагрузки страницы.
+    opts?.onSkillsChanged?.({ action: 'reload' });
     return c.json({ status: 'reloaded' });
   });
 
@@ -128,6 +146,10 @@ export function createSkillRoutes(
       body: parsed.data.body,
       files: parsed.data.files,
     });
+    // Скилл появился → событие в инстансный канал: без него новый скилл не
+    // появился бы в пикере до перезагрузки страницы (там список грузился один
+    // раз). Содержимое в событие не идёт — только имя и вид мутации.
+    opts?.onSkillsChanged?.({ name: parsed.data.name, action: 'create' });
     return c.json(detail, 201);
   });
 
@@ -164,6 +186,7 @@ export function createSkillRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages(c).validation } }, 400);
     }
     await deps.skillService.writeInstanceFile(name, relPath, parsed.data.content);
+    opts?.onSkillsChanged?.({ name, action: 'files' });
     return c.json({ name, path: relPath });
   });
 
@@ -176,6 +199,7 @@ export function createSkillRoutes(
     }
     const deleted = await deps.skillService.deleteInstanceFile(name, relPath);
     if (!deleted) return notFound(c);
+    opts?.onSkillsChanged?.({ name, action: 'files' });
     return c.json({ status: 'deleted', name, path: relPath });
   });
 
@@ -212,6 +236,7 @@ export function createSkillRoutes(
     }
     const detail = await deps.skillService.updateInstance(name, parsed.data);
     if (!detail) return notFound(c);
+    opts?.onSkillsChanged?.({ name: detail.name, action: 'update' });
     return c.json(detail);
   });
 
@@ -221,6 +246,7 @@ export function createSkillRoutes(
     if (!isValidSkillName(name)) return notFound(c);
     const removed = await deps.skillService.removeInstance(name);
     if (!removed) return notFound(c);
+    opts?.onSkillsChanged?.({ name, action: 'delete' });
     return c.json({ status: 'deleted' });
   });
 

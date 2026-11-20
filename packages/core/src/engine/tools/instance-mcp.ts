@@ -13,6 +13,10 @@
  *   (ADMIN/LEAD); `origin:'instance'`/`stdio` и instance master flag — только ADMIN;
  * - секреты не возвращаются: URL в ошибках редактируется (`redactUrl`),
  *   `headers`/`env` не попадают в ответ;
+ * - мутация реестра видна другим клиентам без перезагрузки страницы: после
+ *   успешной записи тул публикует `mcp.updated` в инстансный канал шины
+ *   (`events/mcp-events.ts`, ADR-118) — тот же шов, что у HTTP-роутов;
+ *   в payload нет конфига (`env`/`headers`/`auth`: там бывают секреты);
  * - `auth.kind:'credential'` пока запрещён (нужна проводка слоя доступов).
  */
 import { z } from 'zod';
@@ -34,6 +38,7 @@ import { syncMcpManagerFromRegistry } from '../mcp/manager-sync.js';
 import { McpRegistryValidationError, assertNoMcpSecretHeaders } from '../../storage/mcp-registry-store.js';
 import { evaluateMcpNetworkAccess } from '../mcp/network-policy.js';
 import { canEditProject } from './project-access.js';
+import { publishMcpUpdated } from '../../events/mcp-events.js';
 // ADMIN-гейт инстанс-операций — общий хелпер (роль ADMIN **или** локальный
 // владелец standalone: паритет с локальным API-ключом).
 import { isInstanceAdmin } from './instance-auth.js';
@@ -295,6 +300,9 @@ export const synthMcpAddTool: ToolDefinition = {
     }
 
     await syncMcpManagerFromRegistry(deps.manager, deps.registry);
+    // Реестр изменился — событие для UI (`mcp.updated`, инстансный канал).
+    // Конфиг в payload не идёт: в `env`/`headers` бывают секреты.
+    publishMcpUpdated(extra.eventBus, { name: entry.name, action: 'add' });
 
     const payload = {
       name: entry.name,
@@ -381,6 +389,7 @@ export const synthMcpUpdateTool: ToolDefinition = {
     if (!updated) return notFound(extra, params.name);
 
     await syncMcpManagerFromRegistry(deps.manager, deps.registry);
+    publishMcpUpdated(extra.eventBus, { name: updated.name, action: 'update' });
 
     return {
       content: sm('instance.mcp_update.updated', { name: updated.name }),
@@ -433,6 +442,7 @@ export const synthMcpRemoveTool: ToolDefinition = {
     const removed = await deps.registry.remove(entry.id);
     if (!removed) return notFound(extra, params.name);
     await syncMcpManagerFromRegistry(deps.manager, deps.registry);
+    publishMcpUpdated(extra.eventBus, { name: entry.name, action: 'remove' });
 
     return {
       content: sm('instance.mcp_remove.removed', { name: entry.name }),
@@ -621,6 +631,9 @@ export const synthMcpEnableTool: ToolDefinition = {
 
     await registry.update(entry.id, { enabled: params.enabled });
     await syncMcpManagerFromRegistry(manager, registry);
+    // Уровень инстанса — мутация реестра: событие для UI (инстансный канал).
+    // Уровни session/project выше публикуют `session.updated`/`project.updated`.
+    publishMcpUpdated(extra.eventBus, { name: entry.name, action: 'enable', scope: 'instance' });
     const effective = (await effectiveFor(extra)).find((item) => item.name === entry.name);
     return {
       content: sm('instance.mcp_enable.instance_ok', {

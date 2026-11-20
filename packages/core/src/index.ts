@@ -72,6 +72,22 @@ export type {
   AgentsChangedHook,
   InstanceEventPublisherLike,
 } from './events/agents-events.js';
+// Реестр MCP-серверов инстанса: единое событие `mcp.updated` (инстансный
+// канал) — общий шов для HTTP-роутов и тулов `synth_mcp_*`.
+export { publishMcpUpdated, mcpChangedPublisher } from './events/mcp-events.js';
+export type {
+  McpChangedInfo,
+  McpChangedHook,
+  SessionEventPublisherLike,
+} from './events/mcp-events.js';
+// Реестр скиллов инстанса: единое событие `skills.updated` (инстансный канал) —
+// общий шов для роутов скиллов/бандлов/скоупов.
+export { publishSkillsUpdated, skillsChangedPublisher } from './events/skills-events.js';
+export type { SkillsChangedInfo, SkillsChangedHook } from './events/skills-events.js';
+// Каталог провайдеров/моделей инстанса: единое событие `models.updated`
+// (инстансный канал) — общий шов роутов провайдеров и моделей.
+export { publishModelsUpdated, modelsChangedPublisher } from './events/models-events.js';
+export type { ModelsChangedInfo, ModelsChangedHook } from './events/models-events.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).
@@ -2701,6 +2717,16 @@ export type {
   PipelineDraftSpecInput,
   PipelineTemplateInstantiation,
   PipelineTemplateSummary,
+} from './engine/pipelines/index.js';
+// ADR-101 (авторство) × ADR-118 (инвариант 27): `pipeline.updated` — сущность
+// пайплайна проекта изменилась; событие идёт в каналы **сессий проекта**
+// (общий шов HTTP-роутов и тулов авторства, как `worktree.updated`).
+export { publishPipelineUpdated, PIPELINE_EVENT_MAX_SESSIONS } from './engine/pipelines/index.js';
+export type {
+  PipelineEventDeps,
+  PipelineEventPublisherLike,
+  PipelineEventSessionSource,
+  PipelineUpdatedInput,
 } from './engine/pipelines/index.js';
 // ADR-101: встроенные шаблоны пайплайнов инстанса (сид при старте процесса).
 export {

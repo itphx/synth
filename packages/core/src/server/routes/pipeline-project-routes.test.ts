@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { ProjectRole } from '@itphx/synth-shared';
 import { attachmentsConfigSchema } from '@itphx/synth-shared';
-import type { PipelineRunTrigger, PipelineSpec, Project } from '@itphx/synth-shared';
+import type { PipelineRunTrigger, PipelineSpec, Project, Session } from '@itphx/synth-shared';
 import { createPipelineProjectRoutes } from './pipeline-project-routes.js';
 import { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from '../../storage/memory/pipelines.js';
 // Legacy-реестр шаблонов инстанца (ADR-100) — реализация в `memory/content.ts`
@@ -24,6 +24,7 @@ import type {
   PipelineRunRecord,
 } from '../../storage/ports/pipeline-run-repository.js';
 import { PipelineEngine } from '../../engine/pipelines/index.js';
+import type { PipelineEventDeps } from '../../engine/pipelines/events.js';
 import { PipelineArtifactStore } from '../../engine/pipelines/artifacts.js';
 import { FileBlobStore } from '../../storage/file-blob-store.js';
 import { MemoryBlobRefRepository } from '../../storage/memory/blob-refs.js';
@@ -256,6 +257,14 @@ function createHarness(options: {
   attachments?: AttachmentService;
   /** ADR-115 × ADR-116: порт учёта blob-ссылок (владелец `pipeline-run`). */
   blobRefs?: BlobRefRepository;
+  /**
+   * ADR-101 (авторство) × ADR-118 (инвариант 27): записывающая шина — событие
+   * `pipeline.updated` уходит в каналы **сессий проекта**. Не задана — событий
+   * нет (поведение прежнее).
+   */
+  eventBus?: PipelineEventDeps['eventBus'];
+  /** Источник сессий проекта для fan-out (обычно `SessionManager`). */
+  sessionStore?: PipelineEventDeps['sessionStore'];
 } = { projects: [] }) {
   const pipelines = new MemoryProjectPipelineRepository();
   const runs = new MemoryPipelineRunRepository();
@@ -297,6 +306,14 @@ function createHarness(options: {
         ...(options.artifacts ? { artifacts: options.artifacts } : {}),
         ...(options.attachments ? { attachments: options.attachments } : {}),
         ...(options.blobRefs ? { blobRefs: options.blobRefs } : {}),
+        ...(options.eventBus || options.sessionStore
+          ? {
+            events: {
+              ...(options.eventBus ? { eventBus: options.eventBus } : {}),
+              ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
+            },
+          }
+          : {}),
       },
       {
         getCurrentUserId: () => userId,
@@ -1722,6 +1739,326 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       for (const event of olderBody.events as Array<{ ts: string }>) {
         expect(Date.parse(event.ts)).toBeLessThan(Date.parse(oldestTs));
       }
+    });
+  });
+
+  // ────────── Событие `pipeline.updated` (авторство × инвариант 27) ──────────
+
+  /**
+   * ADR-101 (авторство) × ADR-118 (инвариант 27): сущность пайплайна проекта
+   * изменилась — событие уходит в каналы **сессий проекта**.
+   *
+   * Проверяются все мутирующие пути HTTP-контура (создание, правка, публикация,
+   * удаление, инстанцирование) и обратное правило: неуспешный запрос (400/403/
+   * 404/409) и идемпотентный ответ (`created: false`) события не порождают —
+   * один запрос даёт максимум одно событие, и только после успешной записи.
+   */
+  describe('Событие `pipeline.updated` (ADR-101 × ADR-118, инвариант 27)', () => {
+    /** Записанное событие шины: канал, тип и payload. */
+    interface RecordedEvent {
+      sessionId: string;
+      type: string;
+      data: Record<string, unknown>;
+    }
+
+    /** Записывающая шина: видно, в какой канал и с каким payload ушло событие. */
+    function makeEventBus() {
+      const published: RecordedEvent[] = [];
+      const eventBus = {
+        publish(sessionId: string, type: string, data: Record<string, unknown> = {}) {
+          published.push({ sessionId, type, data });
+        },
+      } as unknown as PipelineEventDeps['eventBus'];
+      return { eventBus, published };
+    }
+
+    /**
+     * Сессии инстанса: две в `proj-1`, одна в чужом `proj-2`.
+     *
+     * Пайплайн — ресурс проекта (ADR-014), поэтому событие обязано дойти до
+     * **каждой** сессии проекта и не уйти в канал чужой сессии.
+     */
+    const SESSIONS = [
+      { id: 'sess-1', projectId: 'proj-1' },
+      { id: 'sess-2', projectId: 'proj-1' },
+      { id: 'sess-foreign', projectId: 'proj-2' },
+    ];
+
+    /** Источник сессий проекта (структурно совместим с `SessionManager`). */
+    function makeSessionSource() {
+      const filters: Array<{ projectId?: string } | undefined> = [];
+      const sessionStore = {
+        async listSessions(filter?: { projectId?: string }) {
+          filters.push(filter);
+          return SESSIONS.filter(
+            (s) => !filter?.projectId || s.projectId === filter.projectId,
+          ).map((s) => ({ id: s.id, projectId: s.projectId }) as unknown as Session);
+        },
+      } as unknown as PipelineEventDeps['sessionStore'];
+      return { sessionStore, filters };
+    }
+
+    /** Харнесс с записывающей шиной и источником сессий проекта. */
+    function createEventHarness(
+      options: {
+        canEdit?: (c: Context, p: Project, userId: string) => boolean;
+        templates?: PipelineDefinitionRecord[];
+      } = {},
+    ) {
+      const { eventBus, published } = makeEventBus();
+      const { sessionStore, filters } = makeSessionSource();
+      const harness = createHarness({
+        projects,
+        eventBus,
+        sessionStore,
+        ...(options.canEdit ? { canEdit: options.canEdit } : {}),
+        ...(options.templates ? { templates: options.templates } : {}),
+      });
+      return { ...harness, published, filters };
+    }
+
+    /** Создать пайплайн проекта через HTTP и вернуть его id. */
+    async function createPipeline(app: Hono): Promise<string> {
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as PipelineBody;
+      return body.pipeline.id;
+    }
+
+    it('POST /projects/:id/pipelines — action `save` в канал каждой сессии проекта', async () => {
+      const { app, published, filters } = createEventHarness();
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+      expect(res.status).toBe(201);
+      const { pipeline } = (await res.json()) as PipelineBody;
+
+      // Две сессии проекта — две доставки, по одному событию на канал.
+      expect(published).toHaveLength(2);
+      expect(published.every((event) => event.type === 'pipeline.updated')).toBe(true);
+      expect(published.map((event) => event.sessionId).sort()).toEqual(['sess-1', 'sess-2']);
+      // Чужая сессия события не получает.
+      expect(published.some((event) => event.sessionId === 'sess-foreign')).toBe(false);
+      for (const event of published) {
+        expect(event.data).toEqual({
+          pipelineId: pipeline.id,
+          projectId: 'proj-1',
+          action: 'save',
+        });
+      }
+      // Источник сессий запрошен по проекту-владельцу пайплайна.
+      expect(filters).toEqual([{ projectId: 'proj-1' }]);
+    });
+
+    it('PUT /projects/:id/pipelines/:pid — action `save`', async () => {
+      const { app, published } = createEventHarness();
+      const pipelineId = await createPipeline(app);
+      published.length = 0;
+
+      const res = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Релизы v2', spec: spec() }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(published).toHaveLength(2);
+      expect(published[0]?.data).toEqual({
+        pipelineId,
+        projectId: 'proj-1',
+        action: 'save',
+      });
+    });
+
+    it('POST /projects/:id/pipelines/:pid/publish — action `publish`', async () => {
+      const { app, published } = createEventHarness();
+      const pipelineId = await createPipeline(app);
+      published.length = 0;
+
+      const res = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}/publish`, {
+        method: 'POST',
+      });
+
+      expect(res.status).toBe(200);
+      expect(published).toHaveLength(2);
+      expect(published.every((event) => event.type === 'pipeline.updated')).toBe(true);
+      expect(published[0]?.data).toEqual({
+        pipelineId,
+        projectId: 'proj-1',
+        action: 'publish',
+      });
+    });
+
+    it('DELETE /projects/:id/pipelines/:pid — action `delete` и ровно одно событие', async () => {
+      const { app, published } = createEventHarness();
+      const pipelineId = await createPipeline(app);
+      published.length = 0;
+
+      const res = await app.request(`/api/v2/projects/proj-1/pipelines/${pipelineId}`, {
+        method: 'DELETE',
+      });
+
+      expect(res.status).toBe(204);
+      expect(published).toHaveLength(2);
+      expect(published.map((event) => event.sessionId).sort()).toEqual(['sess-1', 'sess-2']);
+      expect(published[0]?.data).toEqual({
+        pipelineId,
+        projectId: 'proj-1',
+        action: 'delete',
+      });
+    });
+
+    it('POST /pipeline-templates/:tid/instantiate — action `instantiate`', async () => {
+      const { app, published } = createEventHarness({
+        templates: [
+          legacyDefinition('publication', {
+            installedBy: { pack: 'synth-media', version: '1.0.0' },
+          }),
+        ],
+      });
+
+      const res = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: 'proj-1' }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as InstantiateBody;
+      expect(body.created).toBe(true);
+      expect(published).toHaveLength(2);
+      expect(published[0]?.data).toEqual({
+        pipelineId: body.pipeline.id,
+        projectId: 'proj-1',
+        action: 'instantiate',
+      });
+    });
+
+    it('POST /pipeline-templates/:tid/instantiate — идемпотентный ответ (created: false) событий не даёт', async () => {
+      const { app, published } = createEventHarness({
+        templates: [legacyDefinition('publication')],
+      });
+      const body = JSON.stringify({ projectId: 'proj-1', ensure: true });
+
+      const first = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(first.status).toBe(201);
+      expect(published).toHaveLength(2);
+      published.length = 0;
+
+      const second = await app.request('/api/v2/pipeline-templates/publication/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(second.status).toBe(200);
+      expect(((await second.json()) as InstantiateBody).created).toBe(false);
+      // Возврат существующего пайплайна — не мутация: клиенту нечего перечитывать.
+      expect(published).toHaveLength(0);
+    });
+
+    it('400 (невалидная спецификация) — событий нет', async () => {
+      const { app, published } = createEventHarness();
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: { ...spec(), nodes: [] } }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(published).toHaveLength(0);
+    });
+
+    it('403 (нет права изменения проекта) — событий нет', async () => {
+      const { app, published } = createEventHarness({ canEdit: () => false });
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+
+      expect(res.status).toBe(403);
+      expect(published).toHaveLength(0);
+    });
+
+    it('404 (неизвестный проект и чужой пайплайн) — событий нет', async () => {
+      const { app, published } = createEventHarness();
+
+      const missingProject = await app.request('/api/v2/projects/nope/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+      expect(missingProject.status).toBe(404);
+
+      // Пайплайн существует, но принадлежит другому проекту — 404 под этим id.
+      const created = await app.request('/api/v2/projects/proj-2/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+      expect(created.status).toBe(201);
+      const foreignId = ((await created.json()) as PipelineBody).pipeline.id;
+      published.length = 0;
+
+      const res = await app.request(`/api/v2/projects/proj-1/pipelines/${foreignId}`, {
+        method: 'DELETE',
+      });
+      expect(res.status).toBe(404);
+      expect(published).toHaveLength(0);
+    });
+
+    it('409 (шаблон не инстанцируется) — событий нет', async () => {
+      const { app, published } = createEventHarness({
+        templates: [legacyDefinition('looping', { steps: [{ id: 'step-1', kind: 'loop' }] })],
+      });
+
+      const res = await app.request('/api/v2/pipeline-templates/looping/instantiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: 'proj-1' }),
+      });
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as ApiErrorBody).error.code).toBe(
+        'PIPELINE_TEMPLATE_UNSUPPORTED',
+      );
+      expect(published).toHaveLength(0);
+    });
+
+    it('проект без сессий — операция успешна, публикаций нет', async () => {
+      const { eventBus, published } = makeEventBus();
+      const emptySource: PipelineEventDeps['sessionStore'] = {
+        async listSessions() {
+          return [];
+        },
+      };
+      const { app } = createHarness({
+        projects,
+        eventBus,
+        sessionStore: emptySource,
+      });
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(published).toHaveLength(0);
     });
   });
 });

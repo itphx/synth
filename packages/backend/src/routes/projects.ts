@@ -7,6 +7,8 @@ import type {
 } from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
 import type { ExecutionProfileCatalog } from '@itphx/synth-core';
+// ADR-071 §2.4: хук «MCP-скоуп проекта изменился» — тот же шов, что у роутов реестра.
+import type { McpChangedHook } from '@itphx/synth-core';
 // ADR-114: сервис worktree — контур `/projects/:id/worktrees*`.
 import type { WorktreeService } from '@itphx/synth-core';
 import type { EventHub } from '../events/hub.js';
@@ -143,6 +145,13 @@ export function createProjectRoutes(
    * Не задан — передача владения невозможна (цель не проверяется).
    */
   profilesStore?: ProfileStore,
+  /**
+   * ADR-071 §2.4: MCP-скоуп проекта изменился (`PUT /:id/mcp`) —
+   * `mcp.updated` в инстансный канал шины (`events/mcp-events.ts`).
+   * `project.updated` в каналы сессий проекта публикует `eventBus` выше.
+   * Не задан — поведение прежнее.
+   */
+  onMcpChanged?: McpChangedHook,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
@@ -252,6 +261,8 @@ export function createProjectRoutes(
       ...(browserProfileCatalog ? { browserProfileCatalog } : {}),
       // PROP-133 §3.1: аудит изменения состояния доступа к проекту.
       ...(securityAudit ? { securityAudit } : {}),
+      // ADR-071 §2.4: MCP-скоуп проекта изменился — `mcp.updated` (инстансный канал).
+      ...(onMcpChanged ? { onMcpChanged } : {}),
     },
   );
 }

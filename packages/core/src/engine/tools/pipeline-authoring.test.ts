@@ -377,4 +377,139 @@ describe('Встроенные тулы пайплайнов (ADR-101, pipeline-
     // Пайплайн не создан.
     expect(await pipelines.listPipelines({ scope: 'project', projectId })).toHaveLength(0);
   });
+
+  /**
+   * Событие авторства `pipeline.updated` (ADR-101 × ADR-118, инвариант 27).
+   *
+   * Публикуется после **успешной** записи и идёт в каналы **сессий проекта**
+   * (пайплайн — ресурс проекта, ADR-014): список пайплайнов у другого клиента
+   * обновляется без перезагрузки страницы. Ошибки (валидация, 404, 403)
+   * событие не порождают — один вызов тула даёт максимум одно событие.
+   */
+  describe('событие pipeline.updated (авторство)', () => {
+    /**
+     * Записывающая шина: в контекст тула кладётся как `extra.eventBus` (оттуда
+     * её берёт `notifyPipelineChanged`). `extra.sessionManager` уже есть в
+     * контексте, поэтому fan-out по сессиям проекта работает по-настоящему.
+     */
+    function makeEventBus() {
+      const published: Array<{ sessionId: string; type: string; data: Record<string, unknown> }> =
+        [];
+      const eventBus = {
+        publish(sessionId: string, type: string, data: Record<string, unknown> = {}) {
+          published.push({ sessionId, type, data });
+        },
+      };
+      return { eventBus, published };
+    }
+
+    it('pipeline_save (создание) публикует action:"save" в канал сессии проекта', async () => {
+      const { eventBus, published } = makeEventBus();
+
+      const created = await pipelineSaveTool.execute(
+        { name: 'Пайплайн', spec: validSpec() },
+        makeCtx({ eventBus }),
+      );
+      const pipelineId = created.metadata?.pipelineId as string;
+
+      expect(published).toHaveLength(1);
+      expect(published[0]).toEqual({
+        sessionId,
+        type: 'pipeline.updated',
+        data: { pipelineId, projectId, action: 'save' },
+      });
+    });
+
+    it('pipeline_save (правка черновика) — тоже action:"save"', async () => {
+      const ctx = makeCtx();
+      const created = await pipelineSaveTool.execute({ spec: validSpec() }, ctx);
+      const pipelineId = created.metadata?.pipelineId as string;
+
+      const { eventBus, published } = makeEventBus();
+      const updated = await pipelineSaveTool.execute(
+        { pipeline_id: pipelineId, spec: validSpec('Переименованный') },
+        makeCtx({ eventBus }),
+      );
+
+      expect(updated.isError).toBeUndefined();
+      expect(published).toHaveLength(1);
+      expect(published[0]?.data).toEqual({ pipelineId, projectId, action: 'save' });
+    });
+
+    it('pipeline_publish → action:"publish", pipeline_delete → action:"delete"', async () => {
+      const ctx = makeCtx();
+      const created = await pipelineSaveTool.execute({ spec: validSpec() }, ctx);
+      const pipelineId = created.metadata?.pipelineId as string;
+
+      const publishBus = makeEventBus();
+      await pipelinePublishTool.execute({ pipeline_id: pipelineId }, makeCtx({ eventBus: publishBus.eventBus }));
+      expect(publishBus.published.map((p) => p.data.action)).toEqual(['publish']);
+      expect(publishBus.published[0]?.data).toEqual({ pipelineId, projectId, action: 'publish' });
+
+      const deleteBus = makeEventBus();
+      await pipelineDeleteTool.execute({ pipeline_id: pipelineId }, makeCtx({ eventBus: deleteBus.eventBus }));
+      expect(deleteBus.published.map((p) => p.data.action)).toEqual(['delete']);
+      expect(deleteBus.published[0]?.data).toEqual({ pipelineId, projectId, action: 'delete' });
+    });
+
+    it('невалидная спека — событие не публикуется', async () => {
+      const { eventBus, published } = makeEventBus();
+
+      const result = await pipelineSaveTool.execute({ spec: brokenSpec() }, makeCtx({ eventBus }));
+
+      expect(result.isError).toBe(true);
+      expect(published).toHaveLength(0);
+    });
+
+    it('неизвестный pipeline_id — событие не публикуется (404-на-границе)', async () => {
+      const { eventBus, published } = makeEventBus();
+      const ctx = makeCtx({ eventBus });
+
+      const save = await pipelineSaveTool.execute({ pipeline_id: 'pl_missing', spec: validSpec() }, ctx);
+      const publish = await pipelinePublishTool.execute({ pipeline_id: 'pl_missing' }, ctx);
+      const remove = await pipelineDeleteTool.execute({ pipeline_id: 'pl_missing' }, ctx);
+
+      expect([save.isError, publish.isError, remove.isError]).toEqual([true, true, true]);
+      expect(published).toHaveLength(0);
+    });
+
+    it('нет права изменения (VIEWER) — событие не публикуется', async () => {
+      const created = await pipelineSaveTool.execute({ spec: validSpec() }, makeCtx());
+      const pipelineId = created.metadata?.pipelineId as string;
+
+      const project = (await projectStore.load(projectId))!;
+      project.members['u2'] = ProjectRole.VIEWER;
+      await projectStore.save(project);
+      await bindSession('u2', undefined);
+
+      const { eventBus, published } = makeEventBus();
+      const save = await pipelineSaveTool.execute(
+        { pipeline_id: pipelineId, spec: validSpec('Взлом') },
+        makeCtx({ eventBus }),
+      );
+
+      expect(save.isError).toBe(true);
+      expect(published).toHaveLength(0);
+    });
+
+    it('событие уходит в каналы всех сессий проекта; сессия чужого проекта его не получает', async () => {
+      // Вторая сессия того же проекта и сессия другого проекта.
+      const second = await sessionManager.createSession({ title: 'Вторая', projectId });
+      const foreignProject = projectStore.create('Чужой проект', 'other');
+      await projectStore.save(foreignProject);
+      const foreign = await sessionManager.createSession({
+        title: 'Чужая',
+        projectId: foreignProject.id,
+      });
+
+      const { eventBus, published } = makeEventBus();
+      const created = await pipelineSaveTool.execute({ spec: validSpec() }, makeCtx({ eventBus }));
+      const pipelineId = created.metadata?.pipelineId as string;
+
+      expect(published).toHaveLength(2);
+      expect(published.map((p) => p.sessionId).sort()).toEqual([sessionId, second.id].sort());
+      expect(published.some((p) => p.sessionId === foreign.id)).toBe(false);
+      expect(published[0]?.data).toEqual({ pipelineId, projectId, action: 'save' });
+    });
+  });
 });

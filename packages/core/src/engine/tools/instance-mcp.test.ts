@@ -654,3 +654,134 @@ describe('instance/stdio MCP — ADMIN, не LEAD', () => {
     expect(removeRegistry.remove).toHaveBeenCalled();
   });
 });
+
+/**
+ * Событие шины `mcp.updated` на путях мутации реестра из чата.
+ *
+ * Баг: «панель MCP показывает старый состав серверов, пока не перезагрузишь
+ * страницу». Правка тулом `synth_mcp_*` шла мимо UI — сервер о ней молчал.
+ *
+ * Проверяется: событие публикуется **после** успешной мутации (add/update/
+ * remove/enable уровня инстанса), без шины в `extra` тулы работают как раньше,
+ * а в payload нет конфига сервера — `env`/`headers`/`auth` содержат секреты
+ * (инвариант 13 `AGENTS.md`).
+ */
+describe('событие `mcp.updated` (write-тулы MCP)', () => {
+  /** Фейковая шина: пишет инстансные события, сессионные — тоже (для паритета). */
+  function makeBus() {
+    const instanceEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const bus = {
+      instanceEvents,
+      publish: vi.fn(),
+      publishInstance: vi.fn((type: string, data: Record<string, unknown> = {}) => {
+        instanceEvents.push({ type, data });
+      }),
+    };
+    return bus;
+  }
+
+  const ADMIN = { userId: 'admin', roles: ['ADMIN'] };
+
+  it('add публикует { name, action: add } в инстансный канал', async () => {
+    const registry = makeRegistry();
+    const bus = makeBus();
+    const result = await synthMcpAddTool.execute(
+      { name: 'srv', config: httpConfig },
+      makeCtx({ registry, manager: makeManager(), eventBus: bus as unknown as EventBus }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(bus.instanceEvents).toEqual([{ type: 'mcp.updated', data: { action: 'add', name: 'srv' } }]);
+  });
+
+  it('update публикует action: update', async () => {
+    const entry = makeEntry({ name: 'srv', author: { userId: 'u1', username: 'u1' } });
+    const registry = makeRegistry([entry]);
+    const bus = makeBus();
+    const result = await synthMcpUpdateTool.execute(
+      { name: 'srv', enabled: false },
+      makeCtx({ registry, manager: makeManager(), eventBus: bus as unknown as EventBus }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(bus.instanceEvents).toEqual([{ type: 'mcp.updated', data: { action: 'update', name: 'srv' } }]);
+  });
+
+  it('remove публикует action: remove', async () => {
+    const entry = makeEntry({ name: 'srv', author: { userId: 'u1', username: 'u1' } });
+    const registry = makeRegistry([entry]);
+    const bus = makeBus();
+    const result = await synthMcpRemoveTool.execute(
+      { name: 'srv' },
+      makeCtx({ registry, manager: makeManager(), eventBus: bus as unknown as EventBus }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(bus.instanceEvents).toEqual([{ type: 'mcp.updated', data: { action: 'remove', name: 'srv' } }]);
+  });
+
+  it('enable уровня инстанса публикует action: enable со scope: instance', async () => {
+    const entry = makeEntry({ name: 'srv', origin: 'instance', author: null });
+    const registry = makeRegistry([entry]);
+    const bus = makeBus();
+    const result = await synthMcpEnableTool.execute(
+      { name: 'srv', enabled: false, level: 'instance' },
+      makeCtx({ registry, manager: makeManager(), session: session(), principal: ADMIN, eventBus: bus as unknown as EventBus }),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(bus.instanceEvents).toEqual([
+      { type: 'mcp.updated', data: { action: 'enable', name: 'srv', scope: 'instance' } },
+    ]);
+  });
+
+  it('уровни session/project инстансного события не публикуют (у них свои)', async () => {
+    const entry = makeEntry({ name: 'srv' });
+    const registry = makeRegistry([entry]);
+    const bus = makeBus();
+    await synthMcpEnableTool.execute(
+      { name: 'srv', enabled: true, level: 'session' },
+      makeCtx({ registry, manager: makeManager(), session: session(), eventBus: bus as unknown as EventBus }),
+    );
+    await synthMcpEnableTool.execute(
+      { name: 'srv', enabled: true, level: 'project' },
+      makeCtx({ registry, manager: makeManager(), session: session(), project: project(), eventBus: bus as unknown as EventBus }),
+    );
+    expect(bus.instanceEvents).toEqual([]);
+    expect(bus.publish).toHaveBeenCalledWith('s1', 'session.updated', expect.objectContaining({ session_id: 's1' }));
+    expect(bus.publish).toHaveBeenCalledWith('s1', 'project.updated', { project_id: 'p1' });
+  });
+
+  it('без шины в extra тулы работают как раньше (событий нет, падений нет)', async () => {
+    const registry = makeRegistry();
+    const added = await synthMcpAddTool.execute(
+      { name: 'srv', config: httpConfig },
+      makeCtx({ registry, manager: makeManager() }),
+    );
+    expect(added.isError).toBeUndefined();
+
+    const removed = await synthMcpRemoveTool.execute(
+      { name: 'srv' },
+      makeCtx({ registry, manager: makeManager() }),
+    );
+    expect(removed.isError).toBeUndefined();
+    expect(registry.entries).toHaveLength(0);
+  });
+
+  it('в payload события нет конфига: env/headers не уходят в шину', async () => {
+    const registry = makeRegistry();
+    const bus = makeBus();
+    const result = await synthMcpAddTool.execute(
+      {
+        name: 'srv',
+        config: { type: 'http', url: 'https://93.184.216.34/mcp', env: { SECRET_ENV: 'SECRET-VALUE' } },
+      },
+      makeCtx({ registry, manager: makeManager(), eventBus: bus as unknown as EventBus }),
+    );
+    expect(result.isError).toBeUndefined();
+    const serialized = JSON.stringify(bus.instanceEvents);
+    expect(serialized).not.toContain('SECRET-VALUE');
+    expect(serialized).not.toContain('SECRET_ENV');
+    expect(serialized).not.toContain('"config"');
+    expect(serialized).not.toContain('"headers"');
+    expect(serialized).not.toContain('"env"');
+    const [event] = bus.instanceEvents;
+    expect(Object.keys(event!.data).sort()).toEqual(['action', 'name']);
+  });
+});
