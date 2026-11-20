@@ -207,6 +207,8 @@ describe('transportStore dispatcher: уведомление о вопросе (A
     expect(opts.category).toBe('system')
     expect(opts.sessionId).toBe('s1')
     expect(opts.text).toContain('Выбор')
+    // Вопрос агента — «требуется действие»: только такие тосты и дают unread.
+    expect(opts.requiresAction).toBe(true)
 
     expect(pendingFor('s1')).toHaveLength(1)
   })

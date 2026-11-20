@@ -110,7 +110,7 @@ beforeEach(() => {
 })
 
 describe('transportStore: восстановление инструментов шага после reload', () => {
-  it('берёт id последнего assistant-сообщения хода и сеет выполняющийся вызов', () => {
+  it('берёт id последнего assistant-сообщения хода и сеет вызов шага', () => {
     seedHistory()
 
     restore()
@@ -122,11 +122,13 @@ describe('transportStore: восстановление инструментов 
       status: 'streaming',
       toolsRunning: true,
     })
-    // Выполняющийся вызов — «посеян» как live-часть шага.
+    // Вызов шага — «посеян» как live-часть. Метки старта в истории нет:
+    // вызов мог ещё не стартовать (`tool_call.started` публикуется в момент
+    // фактического старта) — состояние `queued`, а не `running`.
     expect(parts()[LIVE_CALL]?.data).toMatchObject({
       name: 'task',
       args: { description: 'вторая' },
-      status: 'running',
+      status: 'queued',
     })
     // Завершённый вызов не сеется (результат уже в истории).
     expect(parts()[DONE_CALL]).toBeUndefined()
@@ -201,7 +203,7 @@ describe('transportStore: восстановление инструментов 
     restore()
 
     expect(useChatStore.getState().partsBySession[SESSION]?.['m-other']).toBeUndefined()
-    expect(parts()[LIVE_CALL]?.data).toMatchObject({ status: 'running' })
+    expect(parts()[LIVE_CALL]?.data).toMatchObject({ status: 'queued' })
   })
 
   it('уже существующая live-часть не перетирается', () => {
@@ -246,7 +248,7 @@ describe('transportStore: переключение вкладок/сессий �
       stepIndex: 0,
       toolsRunning: true,
     })
-    expect(parts()[LIVE_CALL]?.data).toMatchObject({ status: 'running' })
+    expect(parts()[LIVE_CALL]?.data).toMatchObject({ status: 'queued' })
 
     dispatch(makeEvent('tool_call.result', {
       call_id: LIVE_CALL,
@@ -295,7 +297,7 @@ describe('transportStore: переключение вкладок/сессий �
       status: 'streaming',
       toolsRunning: true,
     })
-    expect(parts()[LIVE_CALL]?.data).toMatchObject({ status: 'running' })
+    expect(parts()[LIVE_CALL]?.data).toMatchObject({ status: 'queued' })
 
     dispatch(makeEvent('tool_call.result', {
       call_id: LIVE_CALL,
@@ -392,7 +394,7 @@ describe('transportStore: вкладка саб-агента (карточки �
     expect(childParts[CALL]?.data).toMatchObject({
       name: 'read_file',
       args: { path: 'a.ts' },
-      status: 'running',
+      status: 'queued',
     })
 
     // Результат приходит из канала дочерней сессии (`run-cycle` публикует
@@ -513,5 +515,143 @@ describe('transportStore: результаты инструментов из и�
     const step = useChatStore.getState().messagesBySession[CHILD]
       ?.find((m) => m.id === CHILD_STEP)
     expect(step?.tool_calls?.[0]?.result).toEqual({ content: 'noop ok' })
+  })
+})
+
+/**
+ * ADR-118 (addendum MESSAGE_FLOW §8.2): статус «посева» после reload и переход
+ * `queued → running` по событию фактического старта вызова.
+ *
+ * `tool_call.started` публикуется в момент **фактического** старта, поэтому
+ * восстановленный вызов без метки старта ещё не исполнялся (стоит за барьером,
+ * ждёт подтверждения или медленного соседа по батчу) — карточка должна быть
+ * `queued`, а не «выполняется».
+ */
+describe('transportStore: статус вызова шага после reload (queued → running)', () => {
+  const Q_CALL = 'call-queued'
+  const R_CALL = 'call-running'
+
+  /** Шаг хода: один вызов без метки старта, второй — со меткой. */
+  function mixedHistory(): MessageData[] {
+    return [
+      message({ id: 'm-user', role: 'user', content: 'запусти', ord: 1, status: 'completed' }),
+      message({
+        id: STEP,
+        ord: 2,
+        turn_id: TURN,
+        step_index: 0,
+        status: 'completed',
+        parts: [
+          {
+            id: Q_CALL,
+            type: 'tool_use',
+            data: { name: 'read_file', args: { path: 'a.ts' } },
+          },
+          {
+            id: R_CALL,
+            type: 'tool_use',
+            data: {
+              name: 'read_file',
+              args: { path: 'b.ts' },
+              startedAt: '2026-10-30T10:00:00Z',
+            },
+          },
+        ],
+      }),
+    ]
+  }
+
+  it('вызов без started_at сеется как queued, с started_at — как running', () => {
+    useChatStore.getState().setMessages(SESSION, mixedHistory())
+
+    restore()
+
+    // Нет метки старта — вызов ещё не стартовал: нейтральная карточка.
+    expect(parts()[Q_CALL]?.data).toMatchObject({ name: 'read_file', status: 'queued' })
+    expect(parts()[Q_CALL]?.data?.startedAt).toBeUndefined()
+    // Метка старта есть — вызов уже исполняется; время старта сохранено.
+    expect(parts()[R_CALL]?.data).toMatchObject({
+      name: 'read_file',
+      status: 'running',
+      startedAt: '2026-10-30T10:00:00Z',
+    })
+  })
+
+  it('tool_call.started переводит посеянную часть в running и ставит startedAt', () => {
+    useChatStore.getState().setMessages(SESSION, mixedHistory())
+    restore()
+
+    expect(parts()[Q_CALL]?.data).toMatchObject({ status: 'queued' })
+
+    dispatch(makeEvent('tool_call.started', {
+      call_id: Q_CALL,
+      name: 'read_file',
+      arguments: { path: 'a.ts' },
+      iteration: 0,
+    }))
+
+    const data = parts()[Q_CALL]?.data ?? {}
+    expect(data.status).toBe('running')
+    expect(typeof data.startedAt).toBe('string')
+    // Часть не пересоздана: имя/аргументы из посева сохранены.
+    expect(data.name).toBe('read_file')
+    expect(data.args).toEqual({ path: 'a.ts' })
+  })
+
+  it('результат, пришедший раньше события старта, не перезаписывается', () => {
+    useChatStore.getState().setMessages(SESSION, mixedHistory())
+    restore()
+
+    // Гонка доставки: результат пришёл первым, старт — следом.
+    dispatch(makeEvent('tool_call.result', {
+      call_id: Q_CALL,
+      result: { content: 'содержимое a.ts' },
+    }))
+    dispatch(makeEvent('tool_call.started', {
+      call_id: Q_CALL,
+      name: 'read_file',
+      arguments: { path: 'a.ts' },
+      iteration: 0,
+    }))
+
+    const data = parts()[Q_CALL]?.data ?? {}
+    // Результат сохранён, карточка остаётся закрытой (не «моргает» обратно в
+    // running со спрятанным результатом).
+    expect(data.result).toMatchObject({ content: 'содержимое a.ts' })
+    expect(data.status).toBe('done')
+    // Метка старта всё же зафиксирована.
+    expect(typeof data.startedAt).toBe('string')
+  })
+
+  it('subagent.progress доходит до посеянной части и в queued, и после старта', () => {
+    useChatStore.getState().setMessages(SESSION, mixedHistory())
+    restore()
+
+    // `task`-вызов ещё не стартовал — прогресс всё равно не теряется.
+    dispatch(makeEvent('subagent.progress', {
+      parent_call_id: Q_CALL,
+      reasoning_delta: 'дум',
+      iteration: 0,
+    }))
+    expect(parts()[Q_CALL]?.data).toMatchObject({
+      subagentReasoningBlocks: [{ text: 'дум', iteration: 0 }],
+    })
+
+    dispatch(makeEvent('tool_call.started', {
+      call_id: Q_CALL,
+      name: 'read_file',
+      arguments: { path: 'a.ts' },
+      iteration: 0,
+    }))
+    dispatch(makeEvent('subagent.progress', {
+      parent_call_id: Q_CALL,
+      reasoning_delta: 'аю',
+      iteration: 0,
+    }))
+
+    const data = parts()[Q_CALL]?.data ?? {}
+    expect(data.status).toBe('running')
+    // Накопленный прогресс не потерян переходом в running.
+    expect(data.subagentReasoningBlocks).toEqual([{ text: 'думаю', iteration: 0 }])
   })
 })

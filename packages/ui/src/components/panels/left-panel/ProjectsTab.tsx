@@ -6,12 +6,14 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useSessionsTreeStore } from '@/stores/useSessionsTreeStore'
 import { useChatStore } from '@/stores/chatStore'
 import { usePermissionStore } from '@/stores/permissionStore'
+import { useQuestionStore } from '@/stores/questionStore'
 import { useNotificationStore } from '@/stores/notificationStore'
 import { useHybridStore, selectIsOffline } from '@/stores/hybridStore'
 import { useProcessesStore } from '@/stores/processesStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
 import { useTimersStore } from '@/stores/timersStore'
 import { countSessionActivity, type SessionActivityCounts } from '@/lib/sessionActivity'
+import { sessionBadgeState } from '@/lib/sessionBadgeState'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import type { IconName } from '@/components/icon/Icon'
@@ -159,8 +161,14 @@ export function ProjectsTab() {
   const queueBySession = useChatStore((s) => s.queueBySession)
   // Запросы подтверждения прав (`permission.asked`): ждём действия пользователя.
   const requestsBySession = usePermissionStore((s) => s.requestsBySession)
+  // Открытые вопросы агента (`question`/`user_question.*`) — тоже «требуется
+  // действие человека» и вход модели бейджа.
+  const questionsBySession = useQuestionStore((s) => s.bySession)
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
+  // Локальные метки «просмотрено» (вход модели бейджа): исход старше метки
+  // человек уже видел — красить нечего.
+  const ackedAtBySession = useNotificationStore((s) => s.ackedAtBySession)
   // Фоновая активность сессий: значки в дереве (процессы, саб-агенты,
   // терминалы, таймеры/будильники). Реестры подгружаются уже при монтировании
   // панели — значки видны до открытия панели «Процессы»/«Автоматизация».
@@ -324,36 +332,33 @@ export function ProjectsTab() {
   }, [centerTabs])
 
   /**
-   * Счётчик висящих подтверждений по сессиям из DTO (`pending_approvals`).
+   * Состояние бейджа сессии: тон названия, точка статуса и ключ подписи.
    *
-   * Живой канал — стор `usePermissionStore` (событие `permission.asked` в этой
-   * вкладке); после **перезагрузки страницы** стор пуст, и метку «ждёт
-   * подтверждения прав» берёт серверный счётчик в DTO сессии. Карта
-   * пересобирается через `useMemo` — не на каждом рендере.
+   * Единственный источник правил — чистая модель `sessionBadgeState`
+   * (`lib/sessionBadgeState.ts`): приоритеты (подтверждение → вопрос →
+   * остановка → ошибка → работа → завершение → очередь) живут там, а не в
+   * дереве. Здесь только сборка входа: DTO сессии + живые счётчики клиента +
+   * локальная метка «просмотрено».
+   *
+   * Счётчик подтверждений в DTO (`pending_approvals`) модель читает сама из
+   * `session` — отдельная карта над ним больше не нужна (после перезагрузки
+   * страницы живого стора нет, и метку даёт именно DTO).
    */
-  const pendingApprovalsBySession = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const s of sessions) {
-      const count = s.pending_approvals ?? 0
-      if (count > 0) map.set(s.id, count)
-    }
-    return map
-  }, [sessions])
-
-  const getSessionStatus = (sessionId: string) => {
-    // Ждёт подтверждения прав — самое важное: ход пользователя заблокирован.
-    // Два источника: живой стор (событие в этой вкладке) и DTO-счётчик
-    // (`pending_approvals`) — после перезагрузки страницы живого нет.
-    if ((requestsBySession[sessionId]?.length ?? 0) > 0) return 'approval' as const
-    if ((pendingApprovalsBySession.get(sessionId) ?? 0) > 0) return 'approval' as const
-    // ADR-118 §1: активный ход сессии — единственный признак «идёт генерация».
-    if (turnBySession[sessionId]?.status === 'streaming') return 'streaming' as const
-    const qi = queueBySession[sessionId]
-    if (qi?.isStalled) return 'stalled' as const
-    const pendingCount = qi?.pendingCount || 0
-    if (pendingCount > 0) return 'pending' as const
-    return undefined
-  }
+  const getSessionBadge = (session: SessionData) =>
+    sessionBadgeState({
+      session,
+      live: {
+        // ADR-118 §1: единственный живой признак «идёт генерация» — активный ход.
+        streaming: turnBySession[session.id]?.status === 'streaming',
+        queuePending: queueBySession[session.id]?.pendingCount || 0,
+        queueStalled: queueBySession[session.id]?.isStalled === true,
+        approvalRequests: requestsBySession[session.id]?.length ?? 0,
+        hasOpenQuestion: (questionsBySession[session.id] ?? []).some(
+          (q) => q.status === 'pending',
+        ),
+      },
+      ackedAt: ackedAtBySession[session.id] ?? null,
+    })
 
   const scrollTarget = useMemo(() => {
     if (!activeCenterTabId?.startsWith('chat-')) return null
@@ -395,6 +400,7 @@ export function ProjectsTab() {
 
   const renderSessionNode = (session: SessionData, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
     const isSubagent = session.session_origin === 'subagent'
+    const badge = getSessionBadge(session)
     const isForwardSource = forwardMode.active && session.id === forwardMode.sourceSessionId
     const isForwardTarget = forwardMode.active && !isForwardSource
     // Offline-деградация: remote-сессии недоступны — приглушаем и помечаем тултипом.
@@ -420,7 +426,11 @@ export function ProjectsTab() {
       isTabOpen,
       isActive,
       selectionMode,
-      status: getSessionStatus(session.id),
+      status: badge.dot ?? undefined,
+      // Тон названия и ключ подписи — из той же модели (один источник правды
+      // с точкой): `error`/`success` смысл несут только цветом + `title`.
+      labelTone: badge.labelTone,
+      labelAriaKey: badge.ariaKey,
       unreadCount: sessionUnread[session.id] || 0,
       hasChildren: hasChildren || undefined,
       isExpanded: hasChildren ? isExpanded : undefined,

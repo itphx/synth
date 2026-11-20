@@ -6,6 +6,7 @@ import { loadRoutingDefaults, routingDefaultsToSettings } from '@/lib/routingDef
 import { useUIStore } from './useUIStore'
 import { useChatStore } from './chatStore'
 import { isTransportConnected } from './transportStore'
+import { notifyPendingActionSessions } from '@/hooks/useNotification'
 import { useHybridStore } from './hybridStore'
 import { i18nText } from '@/lib/i18n/text'
 import { confirm } from '@/lib/confirm'
@@ -166,6 +167,12 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
           stale: true,
         }
       })
+      // Второй путь доставки «требуется действие»: страница была закрыта, и
+      // ожидание (`pending_approvals`/`queue_stopped`) уже висело — событие
+      // `permission.asked` клиент не увидит вовсе. Один сводный тост на сессию;
+      // повторная загрузка списка его не дублирует (метка в `notificationStore`
+      // снимается, когда ожидание исчезло).
+      notifyPendingActionSessions(get().sessions)
     } catch (e) {
       set({ error: (e as Error).message, loading: false })
     }

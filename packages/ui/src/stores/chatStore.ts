@@ -157,6 +157,16 @@ export interface ActiveTurn {
    */
   contentStarted?: boolean
   /**
+   * Момент старта хода (`Date.now()`, мс) — ставится в `startTurn`.
+   *
+   * Нужен, чтобы отличить **свежий** ход от **зависшего**: серверный `activity`
+   * может опережать локальное состояние (гонка публикации), поэтому закрытие по
+   * `activity.idle`/чужому терминалу игнорируется в первые секунды после старта
+   * (`TURN_START_GRACE_MS` в `transportStore`). Поле аддитивное: старая запись
+   * без него считается «давно идущей» — такую закрывать можно.
+   */
+  startedAt?: number
+  /**
    * Идёт вызов инструментов шага (`step.tools.started` → `step.tools.finished`).
    *
    * Между `step.finished` шага и результатом инструмента живого сегмента в
@@ -171,7 +181,12 @@ export interface LiveToolCall {
   callId: string
   name: string
   args: Record<string, unknown>
-  status: 'running' | 'done'
+  /**
+   * `queued` — вызов ещё не стартовал (ядро публикует `tool_call.started` в
+   * момент фактического старта; после reload у нестартовавшего вызова нет
+   * `startedAt`), `running` — исполняется, `done` — исход известен.
+   */
+  status: 'queued' | 'running' | 'done'
   result?: { content: string; isError?: boolean; metadata?: Record<string, unknown> }
   startedAt: string
   completedAt?: string
@@ -664,7 +679,11 @@ export function partToToolCall(part: LivePart): LiveToolCall | null {
   const name = typeof d.name === 'string' ? d.name : 'unknown'
   const args = (d.args as Record<string, unknown>) || {}
   const rawResult = d.result as { content: string; isError?: boolean; metadata?: Record<string, unknown> } | undefined
-  const status = d.status === 'done' || rawResult ? 'done' : 'running'
+  const status: LiveToolCall['status'] = d.status === 'done' || rawResult
+    ? 'done'
+    : d.status === 'queued'
+      ? 'queued'
+      : 'running'
   return {
     callId: part.id,
     name,
@@ -870,7 +889,15 @@ export const useChatStore = create<ChatStore>((set) => ({
     }),
 
   startTurn: (sessionId, turn) =>
-    set((s) => ({ turnBySession: { ...s.turnBySession, [sessionId]: turn } })),
+    set((s) => ({
+      turnBySession: {
+        ...s.turnBySession,
+        // `startedAt` — метка старта хода (нужна сторожу зависших ходов, см.
+        // `ActiveTurn.startedAt`). Ставится здесь, а не у вызывающих: ход
+        // создаётся только этим экшеном.
+        [sessionId]: { ...turn, startedAt: turn.startedAt ?? Date.now() },
+      },
+    })),
 
   finishTurn: (sessionId, turnId, status) =>
     set((s) => {

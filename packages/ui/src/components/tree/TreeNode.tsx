@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/i18n'
 import { hasVcsDot } from '@/lib/gitStatus'
 import { cn } from '@/lib/utils'
 import type { TreeNodeBase, TreeAction, TreeStatus } from './types'
+import type { SessionLabelTone } from '@/lib/sessionBadgeState'
 
 const iconSizeMap = { sm: 'h-3.5 w-3.5', md: 'h-4 w-4' } as const
 
@@ -38,6 +39,20 @@ const statusLabelKey: Record<TreeStatus, string> = {
   // Статус `approval` — ждёт подтверждения прав: свой ключ, чтобы не путать
   // его с «очередь зависла» (`stalled` → `attentionNeeded`).
   approval: 'leftPanel.approvalNeeded',
+}
+
+/**
+ * Классы цвета названия по тону модели `sessionBadgeState` (ADR-118 §1).
+ *
+ * Только токены темы: палитра Tailwind (`orange-400` и пр.) в статусах дерева
+ * не используется. `neutral` — пустая строка: тон не перебивает VCS-цвет,
+ * мутность и обычный текст.
+ */
+const labelToneClassName: Record<SessionLabelTone, string> = {
+  neutral: '',
+  caution: 'text-status-caution',
+  error: 'text-status-error',
+  success: 'text-status-success',
 }
 
 /**
@@ -164,8 +179,10 @@ export function TreeNode({
   onDragOver,
 
   status,
-  unreadCount,
   vcsStatus,
+
+  labelTone,
+  labelAriaKey,
 
   actions,
   contextItems,
@@ -178,10 +195,18 @@ export function TreeNode({
   const { t } = useI18n()
   const renameRef = useRef<HTMLInputElement>(null)
   const rowRef = useRef<HTMLDivElement>(null)
-  const hasUnread = (unreadCount ?? 0) > 0
   // Подпись статуса — текстовый дубль цвета точки (доступность).
   const statusLabel = status ? t(statusLabelKey[status]) : ''
   const vcsLabel = vcsStatus ? t(`file.vcs.${vcsStatus}`) : ''
+  // Тон названия: поле из модели `sessionBadgeState`. Для обратной совместимости
+  // (вызовы без модели) `approval` по-прежнему красит название — прежнее
+  // поведение не ломается. Остальные статусы название не красят.
+  const labelToneResolved: SessionLabelTone = labelTone ?? (status === 'approval' ? 'caution' : 'neutral')
+  // Тон без точки (`error`/`success`) не имеет визуального дубля цвета — его
+  // подпись вешается на текст названия (`title`). Если точка есть, подпись уже
+  // несёт она (`aria-label` + `title`) — дублировать не нужно.
+  const labelToneLabel =
+    !status && labelToneResolved !== 'neutral' && labelAriaKey ? t(labelAriaKey) : ''
 
   useEffect(() => {
     if (isRenaming) {
@@ -262,7 +287,6 @@ export function TreeNode({
             iconClass,
             hasSubtitle && 'mt-0.5',
             (isActive || isTabOpen) ? 'text-primary' : 'text-muted-foreground',
-            hasUnread && 'text-orange-400',
           )}
           style={iconColor ? { color: iconColor } : undefined}
         />
@@ -301,14 +325,17 @@ export function TreeNode({
               <span
                 className={cn(
                   'truncate text-sm leading-tight',
-                  // «Ждёт подтверждения прав» — акцент важнее непрочитанного.
-                  status === 'approval' ? 'text-status-caution'
-                    : hasUnread ? 'text-orange-400'
+                  // Тон модели `sessionBadgeState` приоритетнее VCS и мутности:
+                  // ошибка/завершение/требуется действие важнее вида файла.
+                  labelToneResolved !== 'neutral'
+                    ? labelToneClassName[labelToneResolved]
                     : vcsStatus ? vcsTextClassName[vcsStatus]
                     : labelMuted ? 'text-muted-foreground'
                     : 'text-foreground',
                 )}
-                title={label}
+                // Полное имя — в подписи; у тона без точки к нему добавлен смысл
+                // цвета, иначе он был бы доступен только зрением.
+                title={labelToneLabel ? `${label} — ${labelToneLabel}` : label}
               >
                 {label}
               </span>

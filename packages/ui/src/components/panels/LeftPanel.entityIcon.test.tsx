@@ -211,14 +211,16 @@ describe('LeftPanel — иконка/цвет проектов и сессий (
     expect(svgHasColor(node!, 'var(--palette-11)')).toBe(true)
   })
 
-  it('закрытая сессия с непрочитанным сохраняет оранжевую подсветку иконки', async () => {
+  it('закрытая сессия с непрочитанным больше не красит иконку (цвет — тон модели)', async () => {
+    // ADR-118 §1: оранжевый хардкод по `hasUnread` из дерева убран — цвет
+    // названия и точки берётся из `sessionBadgeState`, непрочитанное копится
+    // только у событий «требуется действие».
     useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
     useNotificationStore.setState({ sessionUnread: { s1: 1 } })
     const container = await render('projects')
     const node = container.querySelector('[data-tree-node="session:s1"]')
     expect(node!.querySelector('svg')).not.toBeNull()
-    // hasUnread работает, т.к. inline-стиль цвета не выставлен.
-    expect(svgClassHas(node!, 'text-orange-400')).toBe(true)
+    expect(svgClassHas(node!, 'text-orange-400')).toBe(false)
     useNotificationStore.setState({ sessionUnread: {} })
   })
 

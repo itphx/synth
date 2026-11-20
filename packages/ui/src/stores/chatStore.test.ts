@@ -408,7 +408,10 @@ describe('chatStore: активный ход (ADR-118 §1)', () => {
   it('startTurn делает ход активным', () => {
     useChatStore.getState().startTurn('s1', turn)
 
-    expect(useChatStore.getState().turnBySession['s1']).toEqual(turn)
+    // Поля хода — как передали, плюс аддитивная метка старта (`startedAt`):
+    // по ней сторож зависших ходов считает тишину и окно грации.
+    expect(useChatStore.getState().turnBySession['s1']).toMatchObject(turn)
+    expect(typeof useChatStore.getState().turnBySession['s1']?.startedAt).toBe('number')
     expect(isTurnActive('s1')).toBe(true)
     expect(isTurnActive('s2')).toBe(false)
   })

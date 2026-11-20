@@ -123,6 +123,8 @@ describe('transportStore: уведомления о фоновых прогон�
       text: 'Background process completed: npm test',
       type: 'success',
       category: 'system',
+      // Завершение фонового прогона — «просто тост»: ни unread, ни цвета в дереве.
+      requiresAction: false,
     })
   })
 

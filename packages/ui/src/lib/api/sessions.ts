@@ -121,8 +121,62 @@ export interface SessionData {
     metadata?: Record<string, unknown> | null
   }>
   pending_messages: unknown[]
+  /**
+   * Runtime-статус сессии (snake_case — как в DTO ядра).
+   *
+   * Поля `cancel_requested*`/`queue_stopped*`/`last_turn` — аддитивные:
+   * старый бэкенд их не отдаёт, клиент работает как прежде (см.
+   * `sessionBadgeState` — единственный источник цвета названия и точки
+   * статуса в левом дереве).
+   */
   status: {
+    /** Причина блокировки сессии (`LOCKED`/…), `null` — не заблокирована. */
     blocked: string | null
+    /** Запрошен останов текущего хода (кнопка «Стоп»), процессор ещё не завершился. */
+    cancel_requested?: boolean
+    /** Момент запроса останова (ISO), `null` — останова не запрашивали. */
+    cancel_requested_at?: string | null
+    /**
+     * Обработка очереди **осознанно остановлена** (Stop/stall): UI показывает
+     * баннер «Обработка остановлена» и ждёт решения человека, а не
+     * автозапуска после рестарта.
+     */
+    queue_stopped?: boolean
+    /** Момент остановки обработки очереди (ISO). */
+    queue_stopped_at?: string | null
+    /**
+     * Durable-исход последнего хода (пишет ядро в финализаторе):
+     * `outcome` — грубый класс, `reason` — конкретная StopReason
+     * (`provider_error`, `steps_limit`, `stopped_by_user`, …), `at` — ISO-время.
+     *
+     * `null`/отсутствие — ход ни разу не завершался (legacy-сессия) либо
+     * бэкенд старше поля.
+     */
+    last_turn?: {
+      outcome: 'completed' | 'error' | 'limit' | 'stopped' | 'cancelled'
+      /** Конкретная причина остановки (`StopReason` ядра). */
+      reason?: string
+      /** Момент записи (ISO) — по нему считается «просмотрено». */
+      at: string
+    } | null
+  }
+  /**
+   * Статус активности сессии (публичный контракт ядра): `retry` > `busy` > `idle`.
+   *
+   * - `idle` — хода нет, очередь не обрабатывается;
+   * - `busy` — идёт ход (`current_stream`) либо сессия заблокирована;
+   * - `retry` — LLM-вызов упал с восстанавливаемой ошибкой, процессор ждёт
+   *   backoff (у ядра в этом варианте есть ещё `attempt`/`maxRetries`/
+   *   `retryAt`/`error`; UI читает только `type`).
+   *
+   * Поле аддитивное: отсутствие — старый бэкенд, клиент считает «не busy».
+   */
+  activity?: {
+    type: 'idle' | 'busy' | 'retry'
+    /** Идентификатор активного хода (`busy`), иначе `null`. */
+    turnId?: string | null
+    /** Идентификатор живого потока (`busy`/`retry`), иначе `null`. */
+    streamId?: string | null
   }
   settings: Record<string, unknown>
   sticky_notes: StickyNoteData[]

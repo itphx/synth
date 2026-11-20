@@ -64,6 +64,10 @@ import type { TerminalPromptContext } from '@/lib/api/sessions'
 import type { MessageListResponse } from '@/lib/api/messages'
 import { sessionsApi } from '@/lib/api/sessions'
 import { notifyMessage } from '@/hooks/useNotification'
+import { claimActionToast } from './notificationStore'
+// Память позиции прокрутки ленты — на сессию (см. `MessageList`): при удалении
+// сессии запись больше не нужна.
+import { forgetChatScroll } from '@/lib/chatScrollMemory'
 import { i18nText } from '@/lib/i18n/text'
 import type { QuestionItem, QuestionRecord, SteerMode } from '@itphx/synth-shared/types'
 
@@ -952,9 +956,15 @@ function completedToolCallIds(messages: MessageData[]): Set<string> {
  * Событие `tool_call.started` пришло до reload и не переигрывается (полный
  * reload не передаёт `since`), поэтому части вызова в сторе нет, а
  * `patchPartData` без неё молча no-op — результат (`tool_call.result`) и
- * прогресс (`subagent.progress`) терялись. Создаём ровно недостающие части
- * (`status: 'running'`); существующие не перетираем, завершённые вызовы не
- * сеем.
+ * прогресс (`subagent.progress`) терялись. Создаём ровно недостающие части;
+ * существующие не перетираем, завершённые вызовы не сеем.
+ *
+ * **Статус посева** (ADR-118, addendum MESSAGE_FLOW §8.2): ядро публикует
+ * `tool_call.started` в момент **фактического старта**, поэтому вызов без
+ * `startedAt`/`started_at` в восстановленной записи ещё не исполнялся (стоит
+ * за барьером, ждёт подтверждения или медленного соседа по батчу) — он сеется
+ * как `queued` (нейтральная карточка), а не как `running`. Переход в `running`
+ * делает `tool_call.started` (`case 'tool_call.started'`).
  */
 function seedInFlightToolParts(
   sessionId: string,
@@ -977,8 +987,10 @@ function seedInFlightToolParts(
       data: {
         name: call.name,
         args: call.args,
-        status: 'running',
-        startedAt: call.startedAt ?? new Date().toISOString(),
+        // Нет метки старта — вызов ещё не стартовал: `queued` без спиннера.
+        // `startedAt` у такого вызова нет (длительность не считается).
+        status: call.startedAt ? 'running' : 'queued',
+        ...(call.startedAt ? { startedAt: call.startedAt } : {}),
         iteration: call.iteration,
       },
     })
@@ -1411,6 +1423,144 @@ const lastEventSeqBySession = new Map<string, number>()
  */
 const INSTANCE_CHANNEL_ID = 'instance'
 
+/**
+ * Метка **последнего живого события** по каналу сессии (`Date.now()`, мс).
+ *
+ * Пишется в самом начале диспетчера — до любых ранних `return` (событий сессии
+ * много: `turn.*`, `step.*`, `part.delta`, `tool_call.*`, `subagent.progress`,
+ * `message.*`). По ней считается «тишина» хода: сколько времени сервер молчит
+ * посреди локально идущего хода. Тишина > порога — ход **возможно** завис, и
+ * рантайм-сторож (`hooks/useStaleTurnGuard`) сверяется с серверным `activity`.
+ *
+ * Экспортируется для сторожа и тестов (сброс между кейсами).
+ */
+export const lastEventAtBySession = new Map<string, number>()
+
+/**
+ * Порог «ход только что стартовал» (мс): в этом окне закрытие хода по
+ * серверному `activity.idle`/чужому терминалу игнорируется.
+ *
+ * Зачем: серверный снимок может опережать локальный старт хода (публикация
+ * `session.updated` ушла до открытия стрима, WS-кадры переставлены) — без окна
+ * грации свежий ход закрывался бы «на взлёте».
+ */
+export const TURN_START_GRACE_MS = 5000
+
+/**
+ * Порог «свой ход молчит» (мс) для решения по **чужому** терминальному
+ * событию: `turn.finished`/`stream.error` с чужим `turnId`/`stream_id`.
+ *
+ * Терминала собственного хода нет, а событие чужого хода пришло — значит
+ * сервер уже ушёл вперёд, а наш терминал потерян (разрыв транспорта, ошибка
+ * провайдера с рассинхроном id). Молчащий дольше этого порога ход закрываем;
+ * идущий (события идут) — не трогаем: это может быть опоздавший кадр
+ * предыдущего хода (догон после реконнекта).
+ */
+export const TURN_FOREIGN_TERMINAL_SILENCE_MS = 5000
+
+/**
+ * Тишина по сессии (мс): от последнего живого события, но не раньше старта
+ * хода (метка события могла остаться от предыдущего хода).
+ *
+ * `Number.POSITIVE_INFINITY` — ни события, ни метки старта нет: судить о
+ * живости нечем, ход считается давно молчащим (закрывать можно).
+ */
+export function sessionSilenceMs(sid: string, now: number = Date.now()): number {
+  const turn = useChatStore.getState().turnBySession[sid]
+  const since = Math.max(lastEventAtBySession.get(sid) ?? 0, turn?.startedAt ?? 0)
+  if (since <= 0) return Number.POSITIVE_INFINITY
+  return Math.max(0, now - since)
+}
+
+/**
+ * ADR-118 §5: метка «ход стартовал только что» — в этом окне локальный ход
+ * считается свежим и по серверному/чужому терминалу не закрывается.
+ */
+function isTurnFresh(sid: string, now: number): boolean {
+  const turn = useChatStore.getState().turnBySession[sid]
+  const startedAt = turn?.startedAt ?? 0
+  return startedAt > 0 && now - startedAt < TURN_START_GRACE_MS
+}
+
+/** Снять состояния повторов сессии (хода больше нет — повторять нечего). */
+function clearRetryState(sid: string): void {
+  const chat = useChatStore.getState()
+  chat.setStreamRetry(sid, null)
+  chat.setSubagentRetry(sid, null)
+}
+
+/**
+ * ADR-118 §5: закрыть **зависший** локальный ход сессии.
+ *
+ * Зависание — когда терминальное событие хода не дошло/не применилось
+ * (несовпадение `turnId`/`stream_id`, разрыв транспорта), а сервер уже
+ * закончил ход. Без закрытия `turnBySession.status` навсегда остаётся
+ * `streaming`: в дереве сессий и в ленте бесконечно моргает индикатор «идёт»,
+ * композер живёт в режиме «в очередь + Стоп».
+ *
+ * Действия — те же, что у терминального события (`turn.finished`): статус хода,
+ * снятие статусов повторов, закрытие оставшихся живых сегментов **этого** хода,
+ * снятие полосы подтверждений, снятие неразрешённых вклиниваний и перечитка
+ * очереди (ADR-118 §4). Идемпотентно: хода нет / он уже закрыт — `false`.
+ */
+export function closeHungTurn(
+  sid: string,
+  status: ActiveTurn['status'] = 'stopped',
+  reason = '',
+): boolean {
+  const chat = useChatStore.getState()
+  const turn = chat.turnBySession[sid]
+  if (!turn || turn.status !== 'streaming') return false
+  chat.finishTurn(sid, turn.turnId, status)
+  // Живых сегментов у закрытого хода остаться не может: иначе в шапке
+  // последнего блока остались бы точки «идёт» (та же логика, что в
+  // `finalizeStreamingSegments` для `turn.finished`). Сегменты чужого (более
+  // нового) хода не трогаем.
+  const segmentStatus: MessageStatus = status === 'error'
+    ? 'error'
+    : status === 'completed' ? 'completed' : 'cancelled'
+  for (const message of chat.messagesBySession[sid] ?? []) {
+    if (message.status !== 'streaming' || !message.id) continue
+    if (message.turn_id != null && message.turn_id !== turn.turnId) continue
+    chat.setMessageStatus(sid, message.id, segmentStatus)
+  }
+  clearRetryState(sid)
+  usePermissionStore.getState().clearSession(sid)
+  finishTurnAndRefreshQueue(sid)
+  console.debug(
+    '[TransportStore] зависший ход закрыт:',
+    sid,
+    turn.turnId,
+    status,
+    reason ? `— ${reason}` : '',
+  )
+  return true
+}
+
+/**
+ * ADR-118 §5: закрыть ход по **серверному** признаку простоя.
+ *
+ * `activity.type === 'idle'` и пустой `status.blocked` — сервер говорит, что
+ * хода нет (и подтверждения никто не ждёт): локальный `streaming` ход после
+ * окна грации считается зависшим. Защита от гонки — {@link TURN_START_GRACE_MS}.
+ */
+export function closeTurnIfServerIdle(
+  sid: string,
+  source: Record<string, unknown> | null | undefined,
+  reason = 'сервер: activity=idle',
+): boolean {
+  const activity = (source?.activity ?? null) as Record<string, unknown> | null
+  const activityType = asNonEmptyString(activity?.type)
+  const statusObj = (source?.status ?? null) as Record<string, unknown> | null
+  const blocked = statusObj ? statusObj.blocked : undefined
+  if (activityType !== 'idle') return false
+  if (blocked) return false
+  const turn = useChatStore.getState().turnBySession[sid]
+  if (!turn || turn.status !== 'streaming') return false
+  if (isTurnFresh(sid, Date.now())) return false
+  return closeHungTurn(sid, 'stopped', reason)
+}
+
 /** Максимальный номер события по всем сессиям (значение для `since`). */
 function maxEventSeq(): number | undefined {
   let max: number | undefined
@@ -1573,6 +1723,38 @@ function backgroundRunName(
 /** Максимальная длина имени вопроса в уведомлении. */
 const QUESTION_NOTIFY_NAME_LIMIT = 60
 
+/** Предел длины команды в тосте подтверждения (без переносов строк). */
+const PERMISSION_NOTIFY_COMMAND_LIMIT = 60
+
+/**
+ * Похожа ли команда на секрет — такую в тост не выводим.
+ *
+ * Тост виден вне сессии (в т.ч. на общем экране), а `execute_shell` часто несёт
+ * токены/пароли в аргументах: при совпадении показываем только имя тула.
+ */
+const SECRET_LIKE_COMMAND =
+  /(passw|passwd|secret|token|api[_-]?key|apikey|bearer|authorization|private[_-]?key|credentials?|-----begin|synth_(svc|sk)_)/i
+
+/**
+ * Что показать в тосте «Требуется подтверждение: …».
+ *
+ * Для `execute_shell` добавляем короткий префикс команды (первый исполняемый
+ * сегмент) — иначе непонятно, что именно просят подтвердить, не открывая
+ * сессию; переносы строк схлопываем, длинное обрезаем, секреты не выводим.
+ */
+function permissionNotifyLabel(toolName: string, commands: string[] | undefined): string {
+  if (toolName !== 'execute_shell') return toolName
+  const raw = commands?.[0]
+  if (!raw) return toolName
+  const oneLine = raw.replace(/\s+/g, ' ').trim()
+  if (!oneLine || SECRET_LIKE_COMMAND.test(oneLine)) return toolName
+  const command =
+    oneLine.length > PERMISSION_NOTIFY_COMMAND_LIMIT
+      ? `${oneLine.slice(0, PERMISSION_NOTIFY_COMMAND_LIMIT - 1)}…`
+      : oneLine
+  return `${toolName}: ${command}`
+}
+
 /**
  * Имя вопроса для уведомления: короткий заголовок первого вопроса.
  *
@@ -1623,9 +1805,10 @@ function notifySteerDropped(sid: string, payload: Record<string, unknown>): void
 /**
  * Открыта ли сессия в **активной** центральной вкладке.
  *
- * Тост о вопросе нужен только для неактивной сессии: в открытой сессии док
- * вопроса и так виден пользователю (прецедент openchamber — `permission-toast`).
- * Непрочитанный счётчик в дереве инкрементит сам `notifyMessage`.
+ * Тост о вопросе/подтверждении нужен только для неактивной сессии: в открытой
+ * сессии док вопроса и карточка подтверждения и так видны пользователю
+ * (прецедент openchamber — `permission-toast`). Непрочитанный счётчик в дереве
+ * инкрементит сам `notifyMessage` — и только при `requiresAction: true`.
  */
 function isSessionActive(sessionId: string): boolean {
   const state = useUIStore.getState()
@@ -1660,6 +1843,8 @@ function notifyBackgroundRun(type: string, payload: Record<string, unknown>): vo
       type: 'info',
       category: 'system',
       ...(sessionId ? { sessionId } : {}),
+      // Просто тост: фоновая работа не требует действия человека.
+      requiresAction: false,
     })
     return
   }
@@ -1681,6 +1866,9 @@ function notifyBackgroundRun(type: string, payload: Record<string, unknown>): vo
     type: state === 'failed' ? 'error' : state === 'cancelled' ? 'warning' : 'success',
     category: 'system',
     ...(sessionId ? { sessionId } : {}),
+    // Завершение фонового прогона не требует действия: сессию в дереве не
+    // красим и непрочитанное не накапливаем (регресс 0.13.x — красили).
+    requiresAction: false,
   })
 }
 
@@ -1802,6 +1990,13 @@ export function createDispatcher(): EventDispatcher {
       if (event.eventSeq > prev) lastEventSeqBySession.set(sid, event.eventSeq)
     }
 
+    // Метка живости сессии (ADR-118 §5): пишется на **каждом** событии сессии,
+    // тоже до ранних `return` — по ней сторож отличает идущий ход от зависшего.
+    // Предыдущее значение нужно решению по чужому терминалу: своё событие уже
+    // «освежило» бы тишину и любой чужой терминал выглядел бы опоздавшим.
+    const prevEventAt = sid ? lastEventAtBySession.get(sid) : undefined
+    if (sid && sid !== INSTANCE_CHANNEL_ID) lastEventAtBySession.set(sid, Date.now())
+
     // ADR-101 §2.12.3: события прогона пайплайна (`pipeline.run.*`) публикуются
     // в **инстансный** канал шины — у них нет сессии (`sessionId` = 'instance'
     // или пусто). Обрабатываем ДО проверки `sid`, иначе они отбрасывались бы
@@ -1849,6 +2044,7 @@ export function createDispatcher(): EventDispatcher {
           type: 'info',
           category: 'system',
           ...(sid && sid !== INSTANCE_CHANNEL_ID ? { sessionId: sid } : {}),
+          requiresAction: false,
         })
       }
       refreshBlockingSnapshot()
@@ -2252,9 +2448,11 @@ export function createDispatcher(): EventDispatcher {
      * `turnBySession.status` остаётся `streaming`: композер навсегда в
      * режиме «в очередь + Стоп», а следующие сообщения не стартуют напрямую.
      *
-     * Чужой/опоздавший ход не трогаем: закрывается только **активный** ход и
-     * только если `stream_id` события совпадает с `streamId` хода (или
-     * `stream_id` события не задан — тогда берём текущий ход).
+     * Чужой/опоздавший ход не трогаем: закрывается только **активный** ход.
+     * Несовпадение `stream_id` — не повод молчать (баг «вечного индикатора»):
+     * если терминал чужого потока пришёл, а свой ход молчит дольше
+     * `TURN_FOREIGN_TERMINAL_SILENCE_MS`, собственный терминал потерян и сервер
+     * ушёл вперёд — ход закрываем (с отладочной строкой в лог).
      */
     const closeTurnOnTerminal = (
       streamId: string | undefined,
@@ -2262,8 +2460,24 @@ export function createDispatcher(): EventDispatcher {
     ): void => {
       const turn = useChatStore.getState().turnBySession[sid]
       if (!turn || turn.status !== 'streaming') return
-      if (streamId && turn.streamId && turn.streamId !== streamId) return
+      if (streamId && turn.streamId && turn.streamId !== streamId) {
+        // Своё событие уже обновило метку живости — судим по предыдущей.
+        const silence = Date.now() - Math.max(prevEventAt ?? 0, turn.startedAt ?? 0)
+        if (silence > TURN_FOREIGN_TERMINAL_SILENCE_MS) {
+          closeHungTurn(sid, status, `терминал чужого потока ${streamId}`)
+        } else {
+          console.debug(
+            '[TransportStore] терминал чужого потока проигнорирован (ход живой):',
+            sid, turn.streamId, '≠', streamId,
+          )
+        }
+        return
+      }
       finishTurn(sid, turn.turnId, status)
+      // Ход закрыт — повторять/дожидаться больше нечего: статусы повторов
+      // (автоповтор стрима и ожидание ретрая саб-агента) снимаем здесь же —
+      // иначе плашка «повтор» переживёт упавший ход.
+      clearRetryState(sid)
       // Ход закрыт — неразрешённые вклинивания из ленты убираем и состав
       // очереди перечитываем (ADR-118 §4): вклинивание либо применят позже
       // (отдельным `message.delivered`), либо оно вернулось в очередь.
@@ -2409,6 +2623,23 @@ export function createDispatcher(): EventDispatcher {
         const turnId = (payload.turnId as string) || ''
         if (!turnId) break
         const status = (payload.status as 'completed' | 'cancelled' | 'error' | 'stopped') || 'completed'
+        // Чужой `turnId` при локально идущем ходе: `finishTurn` молча ничего не
+        // сделает — и ход, чей терминал потерян, остался бы «streaming» навсегда.
+        // Решаем по тишине: свой ход молчит дольше порога — терминал потерян,
+        // закрываем зависший ход; события идут — это опоздавший кадр прошлого
+        // хода (догон), текущий не трогаем и пишем отладочную строку.
+        const active = useChatStore.getState().turnBySession[sid]
+        if (active && active.status === 'streaming' && active.turnId !== turnId) {
+          const silence = Date.now() - Math.max(prevEventAt ?? 0, active.startedAt ?? 0)
+          if (silence > TURN_FOREIGN_TERMINAL_SILENCE_MS) {
+            closeHungTurn(sid, status, `turn.finished чужого хода ${turnId}`)
+          } else {
+            console.debug(
+              '[TransportStore] turn.finished чужого хода проигнорирован (ход живой):',
+              sid, active.turnId, '≠', turnId,
+            )
+          }
+        }
         finishTurn(sid, turnId, status)
         // Ход завершён — ни один сегмент **этого** хода не может остаться
         // «живым»: закрываем оставшиеся `streaming` (даже если `step.finished`
@@ -2724,6 +2955,8 @@ export function createDispatcher(): EventDispatcher {
             type: 'info',
             category: 'system',
             sessionId: sid,
+            // Обращение к человеку (`@user`) — ждём его реакции.
+            requiresAction: true,
           })
         }
         break
@@ -2987,7 +3220,15 @@ export function createDispatcher(): EventDispatcher {
           ...(failedMessageId ? { messageId: failedMessageId } : {}),
           ...(failedTurnId ? { turnId: failedTurnId } : {}),
         })
-        notifyMessage({ text: error, type: 'error', category: 'error', sessionId: sid })
+        // Тост остаётся, но действия от человека не требует: цвет названия в
+        // дереве даёт durable `status.last_turn` (его рисует дерево, не unread).
+        notifyMessage({
+          text: error,
+          type: 'error',
+          category: 'error',
+          sessionId: sid,
+          requiresAction: false,
+        })
         // `last_error` упавшей реплики ядро пишет в историю уже после события —
         // без перечитывания стора «Повторить» не находит текущую реплику и
         // целится в более старую с устаревшим `last_error`. Один раз на
@@ -3078,6 +3319,23 @@ export function createDispatcher(): EventDispatcher {
           ...(saveDirectories ? { saveDirectories } : {}),
           ...(trigger ? { trigger } : {}),
         })
+        // Тост — только для **не** открытой сессии (в открытой карточка
+        // подтверждения и так на экране) и не чаще одного за 10 с на сессию:
+        // ядро публикует `permission.asked` пачкой на параллельные тулы, без
+        // окна экран залило бы десятком тостов. `permission.replied` метку
+        // дедупликации не трогает — окно истечёт само.
+        if (!isSessionActive(sid) && claimActionToast(sid)) {
+          notifyMessage({
+            text: i18nText('notify.permission.asked', {
+              name: permissionNotifyLabel(toolName, commands),
+            }),
+            type: 'info',
+            category: 'system',
+            sessionId: sid,
+            // Человек обязан действовать: без ответа ход стоит.
+            requiresAction: true,
+          })
+        }
         break
       }
 
@@ -3138,6 +3396,8 @@ export function createDispatcher(): EventDispatcher {
             type: 'info',
             category: 'system',
             sessionId: sid,
+            // Агент ждёт ответа человека — это и есть «требуется действие».
+            requiresAction: true,
           })
         }
         break
@@ -3189,6 +3449,15 @@ export function createDispatcher(): EventDispatcher {
         if (typeof patch.name === 'string' && patch.name) {
           useUIStore.getState().updateTabTitle(`chat-${sid}`, patch.name)
         }
+        // ADR-118 §5: серверный `activity` — **источник истины** для закрытия
+        // хода. Терминальное событие хода может не дойти или не примениться
+        // (несовпадение `turnId`/`stream_id`), тогда локальный `streaming`
+        // моргает бесконечно. `idle` + пустой `status.blocked` — сервер говорит,
+        // что хода нет: закрываем зависший ход (защита от гонки — окно грации
+        // `TURN_START_GRACE_MS` в `closeTurnIfServerIdle`).
+        // `session.updated` без `activity` (большинство публикаций — точечные
+        // флаги) ничего не закрывает: решает `activity`.
+        closeTurnIfServerIdle(sid, patch)
         break
       }
 
@@ -3453,6 +3722,8 @@ export function createDispatcher(): EventDispatcher {
           total: Math.max(0, s.total - 1),
         }))
         useUIStore.getState().closeTab(`chat-${deletedId}`)
+        // Позиция прокрутки удалённой сессии больше не понадобится.
+        forgetChatScroll(deletedId)
         break
       }
 
@@ -3467,6 +3738,27 @@ export function createDispatcher(): EventDispatcher {
         // (`tool_call.result`). Поэтому финальный статус сообщения не мешает
         // — карточка тула вешается в сообщение шага (ADR-118 §1).
         if (!ensureLiveMessage(messageId, undefined, { allowTerminal: true })) break
+        const startedAt = new Date().toISOString()
+        // ADR-118 (addendum MESSAGE_FLOW §8.2): событие приходит в момент
+        // **фактического** старта вызова, поэтому оно — переход `queued`
+        // (посев после reload) → `running`. Часть могла уже существовать:
+        // тогда **точечно** патчим статус/`startedAt`, а не пересоздаём её —
+        // иначе потерялись бы уже пришедшие `result` и `subagent.progress`.
+        const part = useChatStore.getState().partsBySession[sid]?.[messageId]?.[callId]
+        if (part) {
+          const data = (part.data ?? {}) as Record<string, unknown>
+          const hasStartedAt = typeof data.startedAt === 'string' && data.startedAt.length > 0
+          // Результат уже пришёл (перестановка событий) — карточка остаётся
+          // закрытой: возврат в `running` спрятал бы результат и зажёг бы
+          // индикатор работы у завершённого вызова.
+          const finished = data.status === 'done' || data.result != null
+          const patch: Record<string, unknown> = {}
+          if (!finished) patch.status = 'running'
+          if (!hasStartedAt) patch.startedAt = startedAt
+          if (Object.keys(patch).length > 0) patchPartData(sid, messageId, callId, patch)
+          markTurnContentStarted(sid)
+          break
+        }
         // ADR-118 §1: вызов инструмента — часть сообщения с id = `callId`.
         upsertPart(sid, messageId, callId, {
           id: callId,
@@ -3476,7 +3768,7 @@ export function createDispatcher(): EventDispatcher {
             name: payload.name as string,
             args: (payload.arguments as Record<string, unknown>) || {},
             status: 'running',
-            startedAt: new Date().toISOString(),
+            startedAt,
             iteration: (payload.iteration as number) || 0,
             parentCallId: (payload.parent_call_id as string) || undefined,
           },

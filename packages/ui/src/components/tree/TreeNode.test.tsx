@@ -7,6 +7,7 @@ import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TreeNode } from './TreeNode'
 import type { TreeAction, TreeStatus } from './types'
+import type { SessionLabelTone } from '@/lib/sessionBadgeState'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -32,6 +33,10 @@ async function renderNode(actions: TreeAction[]): Promise<HTMLElement> {
 async function renderStatusNode(props: {
   status?: TreeStatus
   unreadCount?: number
+  labelTone?: SessionLabelTone
+  labelAriaKey?: string
+  labelMuted?: boolean
+  title?: string
 }): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -179,11 +184,15 @@ describe('TreeNode — индикатор статуса', () => {
     expect(label.classList.contains('text-orange-400')).toBe(false)
   })
 
-  it('непрочитанное без подтверждения остаётся оранжевым (хардкод не тронут)', async () => {
+  it('непрочитанное больше не красит название: тон берётся только из модели', async () => {
+    // Смена поведения по ADR-118 §1: непрочитанное копится лишь у событий
+    // «требуется действие», а цвет названия — тон из `sessionBadgeState`.
+    // Хардкод `text-orange-400` из дерева убран.
     const container = await renderStatusNode({ unreadCount: 2 })
 
     const label = labelSpan(container)!
-    expect(label.classList.contains('text-orange-400')).toBe(true)
+    expect(label.classList.contains('text-orange-400')).toBe(false)
+    expect(label.classList.contains('text-foreground')).toBe(true)
     expect(statusDot(container)).toBeNull()
   })
 
@@ -197,5 +206,72 @@ describe('TreeNode — индикатор статуса', () => {
     const blockedDot = statusDot(blocked)!
     expect(blockedDot.classList.contains('bg-destructive')).toBe(true)
     expect(blockedDot.getAttribute('aria-label')).toBe('Blocked')
+  })
+})
+
+describe('TreeNode — тон названия из sessionBadgeState', () => {
+  it('error: красное название без точки + подпись на тексте названия', async () => {
+    const container = await renderStatusNode({
+      labelTone: 'error',
+      labelAriaKey: 'leftPanel.executionFailed',
+    })
+
+    const label = labelSpan(container)!
+    expect(label.classList.contains('text-status-error')).toBe(true)
+    // Тон без точки не должен быть «только цветом»: смысл — в подписи.
+    expect(label.getAttribute('title')).toBe('Session — execution failed')
+    expect(statusDot(container)).toBeNull()
+  })
+
+  it('success: зелёное название без точки + подпись на тексте названия', async () => {
+    const container = await renderStatusNode({
+      labelTone: 'success',
+      labelAriaKey: 'leftPanel.workCompleted',
+    })
+
+    const label = labelSpan(container)!
+    expect(label.classList.contains('text-status-success')).toBe(true)
+    expect(label.getAttribute('title')).toBe('Session — work completed')
+    expect(statusDot(container)).toBeNull()
+  })
+
+  it('caution с точкой: оранжевое название, подпись несёт точка (без дубля в title)', async () => {
+    const container = await renderStatusNode({
+      status: 'approval',
+      labelTone: 'caution',
+      labelAriaKey: 'leftPanel.approvalNeeded',
+    })
+
+    const label = labelSpan(container)!
+    expect(label.classList.contains('text-status-caution')).toBe(true)
+    expect(label.getAttribute('title')).toBe('Session')
+
+    const dot = statusDot(container)!
+    expect(dot.classList.contains('bg-status-caution')).toBe(true)
+    expect(dot.getAttribute('aria-label')).toBe('Approval needed')
+  })
+
+  it('stall → caution + своя точка «требуется внимание» (регресс)', async () => {
+    const container = await renderStatusNode({
+      status: 'stalled',
+      labelTone: 'caution',
+      labelAriaKey: 'leftPanel.attentionNeeded',
+    })
+
+    const label = labelSpan(container)!
+    expect(label.classList.contains('text-status-caution')).toBe(true)
+
+    const dot = statusDot(container)!
+    expect(dot.classList.contains('bg-status-warning')).toBe(true)
+    expect(dot.getAttribute('aria-label')).toBe('Attention needed')
+  })
+
+  it('neutral не перебивает VCS-цвет и мутность (прежнее поведение)', async () => {
+    const container = await renderStatusNode({ labelTone: 'neutral', labelMuted: true })
+
+    const label = labelSpan(container)!
+    expect(label.classList.contains('text-muted-foreground')).toBe(true)
+    expect(label.classList.contains('text-status-error')).toBe(false)
+    expect(label.getAttribute('title')).toBe('Session')
   })
 })
