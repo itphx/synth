@@ -14,6 +14,7 @@ import type {
   PendingApprovalRepository,
 } from '../../storage/ports/pending-approval-repository.js';
 import { computeAuthorityApprovalDigest } from '../authority/resolve.js';
+import type { PermissionDecisionAuditEvent } from './permission-audit.js';
 
 /**
  * Потолок числа id запросов подтверждения, помнящихся как «опубликованные
@@ -379,6 +380,17 @@ export function parsePermissionPrincipal(value: unknown): AuthorityPrincipal | u
    * ADR-029): переживать рестарт они не будут.
    */
   repository?: PendingApprovalRepository;
+  /**
+   * Шов журнала решений (`scope:'permission'` security-аудита).
+   *
+   * Вызывается при **каждом** разрешении ожидания — ответ пользователя,
+   * таймаут, каскадный отказ (PROP-127), отмена хода — и при разрешении из
+   * кода (переоценка соседей после гранта «Разрешить в сессии»). Fire-and-
+   * forget: ошибка записи **не ломает ход** (как у прежнего
+   * `onPermissionGrant`). `noSubscribers` (спрашивать было некого) не
+   * журналируется — решения по запросу не было.
+   */
+  onDecision?: (event: PermissionDecisionAuditEvent) => void;
 }
 
 export class PermissionApprovalManager {
@@ -685,6 +697,12 @@ export class PermissionApprovalManager {
     };
     let resolveDecision!: (decision: ApprovalDecision) => void;
     const decision = new Promise<ApprovalDecision>((resolve) => { resolveDecision = resolve; });
+    /**
+     * Ожидание разрешено **из кода** (`waiter.resolve`), а не человеком:
+     * переоценка соседних запросов после гранта «Разрешить в сессии». Уезжает
+     * в журнал решений как `outcome:'rule'` (автоматическое решение по правилу).
+     */
+    let resolvedFromCode = false;
 
     const finish = (d: ApprovalDecision): void => {
       if (state.settled) return;
@@ -699,6 +717,27 @@ export class PermissionApprovalManager {
       // Персистентная копия (отдельное хранилище ожиданий) снимается тем же
       // путём — иначе после рестарта инстанса ожидание «воскреснет».
       this._deleteFromRepository(request.approvalId);
+      // Журнал решений (`scope:'permission'`): **единственный** шов, через
+      // который проходят все исходы ожидания. Fire-and-forget — ошибка записи
+      // не должна ломать ход (как у прежнего `onPermissionGrant`). Спрашивать
+      // было некого (`noSubscribers`) — решения по запросу не было, не пишем.
+      if (!d.noSubscribers) {
+        try {
+          this._options.onDecision?.({
+            sessionId,
+            request,
+            decision: d,
+            ...(resolvedFromCode ? { auto: true } : {}),
+          });
+        } catch (err) {
+          warning(
+            'PERMISSION',
+            `Аудит решения по подтверждению ${request.approvalId} не записан: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
       resolveDecision(d);
     };
 
@@ -711,6 +750,7 @@ export class PermissionApprovalManager {
         // подтверждение списывается — поздний ответ пользователя на него не
         // должен его одобрить (`already_consumed`, ADR-106 Ф3).
         this._options.registry?.consume(request.approvalId);
+        resolvedFromCode = true;
         finish(d);
       },
       sessionId,

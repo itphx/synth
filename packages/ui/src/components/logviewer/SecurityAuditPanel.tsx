@@ -20,6 +20,19 @@ const ACTION_BADGE: Record<string, string> = {
   reset: 'bg-status-warning/15 text-status-warning',
   grant: 'bg-status-success/15 text-status-success',
   revoke: 'bg-destructive/15 text-destructive',
+  // Решение по подтверждению прав (`scope:'permission'`): разрешено/отказано.
+  allow: 'bg-status-success/15 text-status-success',
+  deny: 'bg-destructive/15 text-destructive',
+}
+
+/**
+ * Локализованные подписи действий (`logs.security.action.<action>`).
+ * Действия, которых нет в словаре (`update`, `grant`, …), рендерятся как есть —
+ * поведение неизвестных значений не меняется.
+ */
+const ACTION_LABEL_KEY: Record<string, string> = {
+  allow: 'logs.security.action.allow',
+  deny: 'logs.security.action.deny',
 }
 
 /**
@@ -174,6 +187,7 @@ export function SecurityAuditPanel() {
               {entries.map((entry, idx) => {
                 const before = summarizePolicy(entry.before)
                 const after = summarizePolicy(entry.after)
+                const actionLabelKey = ACTION_LABEL_KEY[entry.action]
                 return (
                   <tr key={entry.id ?? `${entry.ts}-${idx}`} className="border-t border-border align-top">
                     <td className="px-3 py-2 whitespace-nowrap text-muted-foreground tabular-nums">
@@ -188,7 +202,7 @@ export function SecurityAuditPanel() {
                           ACTION_BADGE[entry.action] ?? 'bg-muted text-muted-foreground',
                         )}
                       >
-                        {entry.action}
+                        {actionLabelKey ? t(actionLabelKey) : entry.action}
                       </span>
                     </td>
                     <td className="px-3 py-2 min-w-[14rem] text-muted-foreground">

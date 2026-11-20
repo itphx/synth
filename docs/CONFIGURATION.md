@@ -3420,6 +3420,45 @@ SYNTH_AUTHORITY_ENABLED=true SYNTH_AUTHORITY_SHADOW=true
 - Runtime-настроек (UI) у секции нет: раздел «Полномочия» — остаток ADR-106 (Ф5).
 - Принуждение подключается **в permission-слое** (`PermissionEvaluator`), а не в тулах и не в обработчиках; журнал решений и метрика `synth_authority_decisions_total{action,effect,source}` — в [OBSERVABILITY.md](./OBSERVABILITY.md).
 
+### Журнал решений по подтверждениям прав (`audit.permission`, runtime)
+
+Журнал **решений** (не изменений политик) — записи `scope:'permission'` в
+security-аудите `{dataDir}/audit/security.jsonl`: одно разрешённое ожидание
+подтверждения = одна запись `action:'allow'|'deny'` с исходом
+(`after.outcome`: `user`/`timeout`/`cascade`/`cancelled`). Секрет в запись не
+попадает (только метаданные решения и, для `execute_shell`, сама команда).
+Устройство шва — [AUTHORITY.md](./AUTHORITY.md), записи журнала — [docs/API_V2.md](./API_V2.md) §5.18.
+
+Секции в `config.yaml` **нет** (решение владельца): параметры живут только в
+runtime-слое, а аварийный приоритет даёт env.
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `audit.permission.mode` | Что журналировать: `decisions` — только решения по подтверждениям (вопросы человеку), `all` — ещё и **автоматические** решения по правилам (`after.outcome:'rule'`) | `decisions` |
+| `audit.permission.retentionDays` | Срок хранения записей журнала решений, дни (`1…3650`); чистится retention-прогоном журнала (на старте инстанса и после правки настроек) | `30` |
+
+- **Приоритет — по каждому полю:** env (`SYNTH_AUDIT_PERMISSION_MODE` /
+  `SYNTH_AUDIT_RETENTION_DAYS`) > runtime (UI/`settings.json`/PG) > дефолт.
+  Слоя `config.yaml` нет — в ответе API `source`/`sources` бывают только
+  `env`/`runtime`/`default`.
+- **Env-фиксация по полю.** Зафиксированный env `mode` не мешает править
+  `retentionDays`; запрос с зафиксированным полем → `409 ENV_LOCKED` и
+  `fields[]`, при этом **ни одно** поле запроса не применяется.
+- **Валидация:** `mode` ∈ `decisions|all`; `retentionDays` — целое в
+  `1…3650`. Неизвестный ключ/тип/граница → `400 VALIDATION_ERROR`.
+- **Применяется сразу** (`restartRequired: false`): шов журнала читает режим на
+  каждое решение, retention — при прогоне уборки (правка настроек запускает её
+  сразу, best-effort: ошибка уборки не ломает применение настройки).
+- Хранилище — существующий JSON-документ настроек (`{dataDir}/settings.json` /
+  PostgreSQL, runtime-секция), отдельной миграции нет. Аудита самой правки нет:
+  это настройка **самого** журнала, подходящего `scope` в
+  `SECURITY_AUDIT_SCOPES` нет и перечень не расширяется.
+
+```bash
+# только вопросы человеку (дефолт) и хранение записей 90 дней, минуя UI
+SYNTH_AUDIT_PERMISSION_MODE=decisions SYNTH_AUDIT_RETENTION_DAYS=90
+```
+
 ### Гибридный режим (remote)
 
 Секция `remote` включает гибридный режим: локальный `synth serve` подключается

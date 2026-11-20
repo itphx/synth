@@ -57,6 +57,9 @@ import type { SnippetService } from '@itphx/synth-core';
 // ADR-126 §5: сервис реестра скриптов проекта (`!`-запуск) + журнал
 // исполнений (ADR-136).
 import type { ScriptService, CommandAuditLog } from '@itphx/synth-core';
+// Журнал решений по подтверждениям прав (`scope:'permission'`): снятие
+// сессионного allow-правила пишется `action:'revoke'` (core-фабрика).
+import type { SecurityAuditRepository } from '@itphx/synth-core';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import { createProjectAccess } from './projects.js';
 
@@ -225,6 +228,11 @@ export function createSessionRoutes(
    * между проектами недоступен (`PATCH { project_id }` → 500).
    */
   moveService?: SessionMoveService,
+  /**
+   * Журнал security-аудита (`scope:'permission'`): снятие allow-правила сессии
+   * в core-фабрике (`PATCH /:id { settings.permission }`) пишет `revoke`.
+   */
+  securityAudit?: SecurityAuditRepository,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -847,7 +855,7 @@ export function createSessionRoutes(
   // ADMIN|AUDITOR соответственно) — порядок регистрации оставляет её в силе.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}), ...(snippetService ? { snippetService } : {}), ...(resolveProjectWorkspace ? { resolveProjectWorkspace } : {}), ...(scriptService ? { scriptService } : {}), ...(permissionConfig ? { permissionConfig } : {}), ...(commandAudit ? { commandAudit } : {}), ...(defaultWorkingDir ? { defaultWorkingDir } : {}), ...(moveService ? { moveService } : {}) },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics, ...(memory ? { memory } : {}), ...(questionService ? { questionService } : {}), ...(worktreeService ? { worktreeService } : {}), ...(attachments ? { attachments } : {}), ...(backgroundService ? { backgroundService } : {}), ...(approvalRegistry ? { approvalRegistry } : {}), ...(llmAvailability ? { llmAvailability } : {}), ...(executionProfileCatalog ? { executionProfileCatalog } : {}), ...(browserProfileCatalog ? { browserProfileCatalog } : {}), ...(snippetService ? { snippetService } : {}), ...(resolveProjectWorkspace ? { resolveProjectWorkspace } : {}), ...(scriptService ? { scriptService } : {}), ...(permissionConfig ? { permissionConfig } : {}), ...(commandAudit ? { commandAudit } : {}), ...(defaultWorkingDir ? { defaultWorkingDir } : {}), ...(moveService ? { moveService } : {}), ...(securityAudit ? { securityAudit } : {}) },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

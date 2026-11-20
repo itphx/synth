@@ -57,6 +57,8 @@ const SECTION_KEYS = [
   'terminal',
   // Этап 1 roadmap 0.13 (блок 4): runtime-патч секции `background`.
   'background',
+  // Журнал решений по подтверждениям прав (`audit.permission`).
+  'audit',
 ] as const satisfies readonly (keyof RuntimeSettings)[];
 
 const SECTION_KEY_SET: ReadonlySet<string> = new Set<string>(SECTION_KEYS);
@@ -477,6 +479,18 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearTerminal(): Promise<void> {
       await deleteSetting(conn, 'terminal');
+    },
+
+    // Журнал решений по подтверждениям прав (`audit.permission`): режим и
+    // срок хранения записей. Секция пишется **целиком** (JSONB).
+    async getAudit(): Promise<Partial<RuntimeSettingsValue<'audit'>>> {
+      return (await readSetting<RuntimeSettingsValue<'audit'>>(conn, 'audit')) ?? {};
+    },
+    async setAudit(audit: RuntimeSettingsValue<'audit'>): Promise<void> {
+      await writeSetting(conn, 'audit', audit);
+    },
+    async clearAudit(): Promise<void> {
+      await deleteSetting(conn, 'audit');
     },
   };
 }

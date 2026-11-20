@@ -25,6 +25,7 @@ import {
   type ApprovalWaiter,
 } from '../../permission/approval.js';
 import { buildPermissionPreview } from '../../permission/preview.js';
+import type { PermissionDecisionAuditEvent } from '../../permission/permission-audit.js';
 import { ObfuscationMapStore } from '../../gateway/obfuscation-map-store.js';
 import { estimatePromptChars, estimateTokens } from '../../context/token-ratio.js';
 import { buildMaxStepsPrompt, maxStepsAssistantMessage } from '../../llm/max-steps.js';
@@ -584,7 +585,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   // ask-запросы публикуются в EventBus РОДИТЕЛЬСКОЙ сессии — подтверждение
   // видит пользователь основной сессии, approval_id связывает ответ.
   const childEvaluator = new PermissionEvaluator(derivedPermission);
-  const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus());
+  const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus(), {
+    // Журнал решений по подтверждениям (`scope:'permission'`): тот же шов, что
+    // у оркестратора, — все исходы ожидания ребёнка (ответ/таймаут/каскад/
+    // отмена/переоценка грантом) уезжают в журнал инстанса. Запись идёт в
+    // **родительскую** сессию: ask'и ребёнка публикуются именно туда.
+    ...(extra.permissionAudit && extra.sessionId
+      ? { onDecision: (event: PermissionDecisionAuditEvent) => extra.permissionAudit!.decision(event) }
+      : {}),
+  });
   // ADR-070 §2.9.1: ролевые ограничения саб-агента — через unavailable(role),
   // а не скрытием тулов; capabilities нужны permission-слою.
   const subagentDef = extra.agentRegistry?.get(subagentType);
@@ -2756,6 +2765,28 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           workspaceReady: extra.workspaceReady,
         };
         const permissionDecision = childEvaluator.check(checkInput);
+
+        // Журнал решений по правам (`scope:'permission'`): в режиме
+        // `audit.permission.mode='all'` пишется и **автоматическое** решение по
+        // правилу (`outcome:'rule'`); `ask` решением не является (его исход
+        // пишет шов ожидания подтверждения), в `decisions` записи нет —
+        // фильтр режима внутри шва. Сессия записи — родительская
+        // (`extra.sessionId`): туда же публикуются ask'и ребёнка.
+        if (permissionDecision.action !== 'ask' && extra.sessionId) {
+          extra.permissionAudit?.rule({
+            sessionId: extra.sessionId,
+            toolName,
+            action: permissionDecision.action,
+            ...(permissionDecision.matchedRule
+              ? { matchedRule: permissionDecision.matchedRule }
+              : {}),
+            callId: tcId,
+            ...(extra.streamId ? { turnId: extra.streamId } : {}),
+            ...(toolName === 'execute_shell' && typeof toolArgs.command === 'string'
+              ? { command: toolArgs.command }
+              : {}),
+          });
+        }
 
         if (permissionDecision.action === 'deny') {
           return {

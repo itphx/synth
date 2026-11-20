@@ -143,15 +143,33 @@ export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy', 'tls'
 export type SecurityAuditScope = (typeof SECURITY_AUDIT_SCOPES)[number];
 
 /**
- * Действия аудита. `move` (PROP-141, Часть D) — перенос сессии между
- * проектами.
+ * Действия аудита.
+ *
+ * - `move` (PROP-141, Часть D) — перенос сессии между проектами;
+ * - `allow`/`deny` — **решение по подтверждению прав** (`scope:'permission'`):
+ *   ответ пользователя, таймаут, каскадный отказ, отмена хода, а в режиме
+ *   `audit.permission.mode='all'` — автоматическое решение по правилу;
+ * - `grant` — **историческое** действие (сессионный shell-грант писался им до
+ *   появления `allow`/`deny`). Новые записи с ним не создаются: одно решение
+ *   подтверждения = одна запись `allow`/`deny` с `after.granted`;
+ * - `revoke` — снятие сессионного allow-правила (кнопка «Удалить» в
+ *   «Сессионных одобрениях»);
+ * - `update`/`reset` — правка/сброс правил инстанса.
  */
-export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke', 'create', 'remove', 'fire', 'move'] as const;
+export const SECURITY_AUDIT_ACTIONS = ['update', 'reset', 'grant', 'revoke', 'create', 'remove', 'fire', 'move', 'allow', 'deny'] as const;
 export type SecurityAuditAction = (typeof SECURITY_AUDIT_ACTIONS)[number];
 
 /**
  * Запись аудита изменений security-политик (append-only). `before`/`after` —
  * снимки политики до/после операции (`null` для reset — значение не задано).
+ *
+ * Для `scope:'permission'` (журнал **решений** по подтверждениям прав) форма
+ * снимков плоская и без секретов: `before: null`, `after` — `{ sessionId,
+ * approvalId, callId, turnId?, toolName, matchedRule?, messageId?, askKind?,
+ * askPaths?, command?, once?, outcome, granted? }`. `outcome` —
+ * `user`|`timeout`|`cascade`|`cancelled`|`rule`; `granted` (`{ patterns,
+ * directories }`) заполняется, когда решением «Разрешить в сессии» действительно
+ * записаны правила; `revoke` — `before` = снятое правило, `after: null`.
  */
 export interface SecurityAuditEntry {
   id: string;

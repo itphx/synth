@@ -796,6 +796,16 @@
   неизвестный ключ/тип/граница → 400 `VALIDATION_ERROR`, аудит `scope:'background'`;
   **live** — лимиты реестра, `logMaxBytes`, retention прунеров, `background.enabled`
   читаются на каждый запуск/тик/вызов тула; core — `requireAuth`, managed — ADMIN),
+  `settings-audit` (`/settings/audit` — `createAuditSettingsRoutes`, настройки **журнала
+  решений** по подтверждениям прав: `audit.permission.mode` (`decisions`|`all`) и
+  `audit.permission.retentionDays`; `GET/PUT/DELETE`, ответ `{permission:{mode,
+  retentionDays}, source, sources, defaults, envLocked, envLockedFields}`, приоритет по
+  полю env > runtime > default (секции в `config.yaml` нет), env-фиксация **по полю** →
+  409 `ENV_LOCKED` с `fields` (ни одно поле не применяется), неизвестный ключ/тип/
+  граница → 400 `VALIDATION_ERROR`; после `PUT` — `refresh()` живого состояния
+  (`deps.auditSettings`) и retention-прогон `securityAudit.prune()` best-effort; аудит
+  правки **не пишется** (`SECURITY_AUDIT_SCOPES` не расширяется); core — `requireAuth`,
+  managed — ADMIN),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
 - **Админ-контуры — одна реализация на standalone и managed (ADR-036/ADR-069/ADR-070).**

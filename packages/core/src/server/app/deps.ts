@@ -197,6 +197,7 @@ import {
   createLiveStickyNotesLimits,
   createLiveSshMode,
   createLiveBackgroundSettings,
+  createLiveAuditSettings,
   readExecutionRuntimeSettings,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
@@ -209,6 +210,7 @@ import {
   createApprovalCoverageResolver,
 } from '../../engine/authority/approval.js';
 import { ApprovalRegistry } from '../../engine/permission/approval.js';
+import { createPermissionAuditSink } from '../../engine/permission/permission-audit.js';
 import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { SnippetService } from '../../engine/snippets/service.js';
@@ -459,6 +461,40 @@ export async function createStandaloneDeps(
   });
   // Стартовое чтение runtime-патча (деградация хранилища — fail-soft внутри).
   await backgroundSettings.refresh();
+
+  // Журнал **решений по подтверждениям прав** (`scope:'permission'`):
+  // runtime-секция `audit` (режим `decisions`|`all` + retention), приоритет
+  // env > runtime > default. Один экземпляр на процесс — его читают шов
+  // журнала (на каждое решение) и retention-прогон ниже, поэтому правка из
+  // админки (`PUT /api/v2/settings/audit`, следующий срез) применяется без
+  // рестарта (`refresh()` после записи).
+  const auditSettings = createLiveAuditSettings({ store: settingsStore });
+  await auditSettings.refresh();
+
+  // Retention журнала решений: стартовый прогон, best-effort (ADR-092: старт
+  // инстанса не падает из-за уборки). `prune` — опциональный метод порта:
+  // фейки/альтернативные реализации могут его не иметь (тогда прунинга нет).
+  if (!storageDegraded && typeof securityAudit.prune === 'function') {
+    try {
+      const removed = await securityAudit.prune(auditSettings.getRetentionDays());
+      if (removed > 0) {
+        console.info(`[permission] retention журнала решений: удалено ${removed} записей`);
+      }
+    } catch (err) {
+      console.warn(
+        `[permission] retention журнала решений не выполнен: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // Шов журнала решений: один на процесс — его получают оркестратор
+  // (`permissionAudit`) и менеджер ожиданий внутри него (`onDecision`).
+  // Актор записи — владелец сессии (в standalone — локальный пользователь).
+  const permissionAuditSink = createPermissionAuditSink({
+    ...(storageDegraded ? {} : { repository: securityAudit }),
+    actorOf: async (sessionId) => (await sessionManager.getSession(sessionId))?.ownerId ?? 'local',
+    mode: () => auditSettings.getMode(),
+  });
 
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (чтоб не писать домен в файловый фоллбек).
@@ -1850,29 +1886,11 @@ export async function createStandaloneDeps(
     ...(executorMcpResolvePool ? { executorMcpResolvePool } : {}),
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
-    // Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги
-    // правила `external_directory`).
-    onPermissionGrant: (entry) => {
-      if (!securityAudit) return;
-      void securityAudit.append({
-        id: `sa_${generateId()}`,
-        ts: nowISO(),
-        actor: entry.actor,
-        scope: 'permission',
-        action: 'grant',
-        source: 'runtime',
-        before: null,
-        after: {
-          sessionId: entry.sessionId,
-          patterns: entry.patterns,
-          directories: entry.directories,
-          command: entry.command,
-        },
-        version: 1,
-      }).catch((err: unknown) => {
-        console.warn(`[permission] аудит гранта не записан: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    },
+    // Журнал решений по подтверждениям прав (`scope:'permission'`): цикл хода
+    // пишет автоматические решения по правилам (режим `all`), менеджер
+    // ожиданий — все исходы подтверждения (`onDecision` внутри оркестратора).
+    // Отдельного события `grant` больше нет (см. `permission-audit.ts`).
+    permissionAudit: permissionAuditSink,
     contextBuilder,
     contextConfig,
     providerLoader,
@@ -2537,6 +2555,9 @@ export async function createStandaloneDeps(
   const pipelinePermissions: PipelinePermissionDeps = {
     permissionConfig: config.permissionConfig,
     runtimeDeps,
+    // Журнал решений по правам (`scope:'permission'`) — тот же шов, что у
+    // оркестратора: решения по правилам шага видны в общем журнале инстанса.
+    audit: permissionAuditSink,
   };
   // ADR-036/ADR-101: провайдер шага — **всегда** через `GatewayProvider`
   // (обёртка оркестратора: та же точка, что у пула провайдеров). Провайдер
@@ -2938,6 +2959,12 @@ export async function createStandaloneDeps(
     // Этап 1 roadmap 0.13 (блок 4): живое состояние секции `background`
     // (сервисы/прунеры/оркестратор + админ-API `/settings/background`).
     backgroundSettings,
+    // Журнал решений по подтверждениям прав: живое состояние секции `audit`
+    // (режим + retention) — шов `permissionAuditSink` читает его на каждое
+    // решение; роут `/settings/audit` обновляет и вызывает `refresh()`.
+    auditSettings,
+    // Шов журнала решений (allow/deny/revoke) — для мутаций правил вне хода.
+    permissionAuditSink,
     // ADR-114: сервис worktree — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhooksConfig,

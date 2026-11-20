@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { useStableItemKeys } from '@/hooks/useStableItemKeys'
@@ -16,6 +16,15 @@ import {
 } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
+import {
+  SECURITY_AUDIT_MODES,
+  SECURITY_AUDIT_RETENTION_DAYS_RANGE,
+  SECURITY_AUDIT_SETTINGS_FIELDS,
+  type SecurityAuditMode,
+  type SecurityAuditPermissionPatch,
+  type SecurityAuditSettings,
+  type SecurityAuditSettingsField,
+} from '@/lib/api/securityAuditSettings'
 import { TooltipProvider } from '../ui/tooltip'
 import { RequestLimitsSettings } from './RequestLimitsSettings'
 import { SelectContent, SelectItem } from '../ui/select'
@@ -70,6 +79,20 @@ const DEFAULT_PROMPT_INJECTION: PromptInjectionDraft = {
 
 const PROMPT_INJECTION_MODES: PromptInjectionMode[] = ['flag', 'sanitize', 'block']
 
+/** Черновик «Аудит решений» (retention — строкой: пусто/мусор должен быть ошибкой). */
+interface SecurityAuditDraft {
+  mode: SecurityAuditMode
+  retentionDays: string
+}
+
+const DEFAULT_SECURITY_AUDIT: SecurityAuditDraft = { mode: 'decisions', retentionDays: '30' }
+
+/** Подписи полей секции — для баннера «зафиксировано через ENV». */
+const AUDIT_FIELD_LABEL_KEYS: Record<SecurityAuditSettingsField, string> = {
+  mode: 'securityaudit.mode',
+  retentionDays: 'securityaudit.retentionDays',
+}
+
 const BADGE = 'shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium'
 
 const SOURCE_BADGE_CLASS: Record<PromptInjectionSource, string> = {
@@ -105,6 +128,48 @@ function isValidRegex(regex: string): boolean {
   } catch {
     return false
   }
+}
+
+/** Целое в границах retention (пусто/мусор/дробное — ошибка). */
+function isValidRetentionDays(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) return false
+  const value = Number(trimmed)
+  return (
+    value >= SECURITY_AUDIT_RETENTION_DAYS_RANGE.min &&
+    value <= SECURITY_AUDIT_RETENTION_DAYS_RANGE.max
+  )
+}
+
+/**
+ * Поля, зафиксированные env, из ответа `409 ENV_LOCKED`.
+ *
+ * Конверт ошибок ядра — `{ error: { code, message, fields? } }`; `fetchJSON`
+ * протаскивает `fields` наружу, поэтому ищем и там, и в `details`.
+ */
+function auditLockedFieldsFromError(err: unknown): SecurityAuditSettingsField[] {
+  const raw = err as
+    | {
+        fields?: unknown
+        details?: { fields?: unknown } | unknown
+        error?: { fields?: unknown; details?: { fields?: unknown } | unknown }
+      }
+    | null
+    | undefined
+  const candidates: unknown[] = [
+    raw?.fields,
+    (raw?.details as { fields?: unknown } | undefined)?.fields,
+    raw?.error?.fields,
+    (raw?.error?.details as { fields?: unknown } | undefined)?.fields,
+  ]
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue
+    const fields = candidate.filter((field): field is SecurityAuditSettingsField =>
+      (SECURITY_AUDIT_SETTINGS_FIELDS as readonly string[]).includes(field as string),
+    )
+    if (fields.length > 0) return fields
+  }
+  return []
 }
 
 /**
@@ -183,6 +248,19 @@ export function SecuritySettings() {
   const [policyResetting, setPolicyResetting] = useState(false)
   const [policyLoadError, setPolicyLoadError] = useState<string | null>(null)
 
+  // --- Аудит решений по правам (settings/audit) ---
+  const [audit, setAudit] = useState<SecurityAuditDraft>(DEFAULT_SECURITY_AUDIT)
+  const [savedAudit, setSavedAudit] = useState<SecurityAuditDraft>(DEFAULT_SECURITY_AUDIT)
+  const [auditInfo, setAuditInfo] = useState<SecurityAuditSettings | null>(null)
+  const [auditLoading, setAuditLoading] = useState(true)
+  const [auditLoadFailed, setAuditLoadFailed] = useState(false)
+  const [auditSaving, setAuditSaving] = useState(false)
+  const [auditError, setAuditError] = useState<string | null>(null)
+  /** Поля, зафиксированные env по ответу 409 (сервер не вернул список — все). */
+  const [auditConflictFields, setAuditConflictFields] = useState<SecurityAuditSettingsField[] | null>(
+    null,
+  )
+
   /** Применить снимок секции «Безопасность» (эффективные значения + источник). */
   const applyPromptInjection = (info: SecuritySettingsResponse) => {
     const pi = info.security.promptInjection
@@ -196,6 +274,18 @@ export function SecuritySettings() {
       wrapContent: pi?.wrapContent ?? true,
     })
     setPromptInjectionError(null)
+  }
+
+  /** Применить снимок секции «Аудит решений» (`GET/PUT/DELETE /settings/audit`). */
+  const applyAuditSettings = (info: SecurityAuditSettings) => {
+    const next: SecurityAuditDraft = {
+      mode: info.permission.mode,
+      retentionDays: String(info.permission.retentionDays),
+    }
+    setAudit(next)
+    setSavedAudit(next)
+    setAuditInfo(info)
+    setAuditError(null)
   }
 
   useEffect(() => {
@@ -283,6 +373,26 @@ export function SecuritySettings() {
       })
       .finally(() => {
         if (!cancelled) setPolicyLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    synthApi
+      .getSecurityAuditSettings()
+      .then((info) => {
+        if (cancelled) return
+        applyAuditSettings(info)
+        setAuditLoadFailed(false)
+      })
+      .catch(() => {
+        if (!cancelled) setAuditLoadFailed(true)
+      })
+      .finally(() => {
+        if (!cancelled) setAuditLoading(false)
       })
     return () => {
       cancelled = true
@@ -459,6 +569,79 @@ export function SecuritySettings() {
       }
     } finally {
       setPromptInjectionSaving(false)
+    }
+  }
+
+  // --- Аудит решений: производные значения и действия ---
+  /**
+   * Поля, зафиксированные env: из снимка (`envLockedFields`) и из ответа 409.
+   * Снимок без списка полей, но с `envLocked: true`, фиксирует всё (fail-closed).
+   */
+  const auditLockedFields = useMemo<Set<SecurityAuditSettingsField>>(() => {
+    const locked = new Set<SecurityAuditSettingsField>()
+    for (const field of auditInfo?.envLockedFields ?? []) locked.add(field)
+    for (const field of auditConflictFields ?? []) locked.add(field)
+    if (auditInfo?.envLocked === true && (auditInfo.envLockedFields?.length ?? 0) === 0) {
+      for (const field of SECURITY_AUDIT_SETTINGS_FIELDS) locked.add(field)
+    }
+    return locked
+  }, [auditConflictFields, auditInfo])
+
+  const auditModeLocked = auditLockedFields.has('mode')
+  const auditRetentionLocked = auditLockedFields.has('retentionDays')
+  const auditAllLocked = auditLockedFields.size >= SECURITY_AUDIT_SETTINGS_FIELDS.length
+  const auditSource = auditInfo?.source ?? 'default'
+  const auditDirty =
+    audit.mode !== savedAudit.mode || audit.retentionDays !== savedAudit.retentionDays
+  const auditRetentionValid = isValidRetentionDays(audit.retentionDays)
+  // Сброс доступен только когда есть runtime-override и ни одно поле не зафиксировано env.
+  const auditCanReset = auditSource === 'runtime' && !auditAllLocked
+  const auditLockedLabels = SECURITY_AUDIT_SETTINGS_FIELDS.filter((field) =>
+    auditLockedFields.has(field),
+  ).map((field) => t(AUDIT_FIELD_LABEL_KEYS[field]))
+
+  const handleAuditSave = async () => {
+    if (auditSaving || !auditRetentionValid) return
+    // Уходят только поля, которые пользователь может менять: зафиксированные env
+    // и так не редактируются, но `PUT` с ними словил бы `409`.
+    const patch: SecurityAuditPermissionPatch = {}
+    if (!auditModeLocked) patch.mode = audit.mode
+    if (!auditRetentionLocked) patch.retentionDays = Number(audit.retentionDays.trim())
+    if (Object.keys(patch).length === 0) return
+    setAuditSaving(true)
+    setAuditError(null)
+    try {
+      // Тело — вложенная форма контракта: `{ permission: { … } }`.
+      applyAuditSettings(await synthApi.saveSecurityAuditSettings({ permission: patch }))
+      setAuditConflictFields(null)
+      notify({ text: t('securityaudit.saved'), type: 'success', category: 'system' })
+    } catch (e) {
+      if (statusOf(e) === 409) {
+        const fields = auditLockedFieldsFromError(e)
+        // Список полей сервер не отдал — фиксируем всё (fail-closed).
+        setAuditConflictFields(fields.length > 0 ? fields : [...SECURITY_AUDIT_SETTINGS_FIELDS])
+        setAuditError(t('securityaudit.envLocked'))
+      } else {
+        setAuditError(
+          `${t('securityaudit.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`,
+        )
+      }
+    } finally {
+      setAuditSaving(false)
+    }
+  }
+
+  const handleAuditReset = async () => {
+    setAuditSaving(true)
+    setAuditError(null)
+    try {
+      applyAuditSettings(await synthApi.resetSecurityAuditSettings())
+      setAuditConflictFields(null)
+      notify({ text: t('securityaudit.resetDone'), type: 'success', category: 'system' })
+    } catch (e) {
+      setAuditError(`${t('securityaudit.saveError')}: ${e instanceof Error ? e.message : 'HTTP'}`)
+    } finally {
+      setAuditSaving(false)
     }
   }
 
@@ -751,6 +934,146 @@ export function SecuritySettings() {
               <div className="text-xs text-muted-foreground">
                 {t('security.promptInjection.baseHint')}
               </div>
+            )}
+          </>
+        )}
+      </SettingsSection>
+
+      {/* Аудит решений по правам (settings/audit) */}
+      <SettingsSection
+        id="security-audit-decisions"
+        title={t('securityaudit.title')}
+        description={t('securityaudit.description')}
+        tooltip={t('settings.help.security.section.security-audit-decisions')}
+        actions={
+          <span
+            className={`${BADGE} ${SOURCE_BADGE_CLASS[auditSource]}`}
+            data-testid="security-audit-source"
+          >
+            {t(`securityaudit.source.${auditSource}`)}
+          </span>
+        }
+      >
+        {auditLoading && (
+          <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
+        )}
+
+        {!auditLoading && (
+          <>
+            {auditLoadFailed && (
+              <div
+                role="alert"
+                data-testid="security-audit-load-error"
+                className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm"
+              >
+                {t('securityaudit.loadError')}
+              </div>
+            )}
+
+            <SettingsItem>
+              <SelectField
+                label={t('securityaudit.mode')}
+                description={t(`securityaudit.modeHint.${audit.mode}`)}
+                value={audit.mode}
+                disabled={auditModeLocked}
+                onValueChange={(value) =>
+                  setAudit((prev) => ({ ...prev, mode: value as SecurityAuditMode }))
+                }
+                ariaLabel={t('securityaudit.mode')}
+                triggerTestId="security-audit-mode"
+                // `items` — чтобы триггер показывал локализованную подпись, а не значение.
+                items={SECURITY_AUDIT_MODES.map((mode) => ({
+                  value: mode,
+                  label: t(`securityaudit.mode.${mode}`),
+                }))}
+                tooltip={t('settings.help.security.auditMode')}
+              >
+                <SelectContent>
+                  {SECURITY_AUDIT_MODES.map((mode) => (
+                    <SelectItem key={mode} value={mode}>
+                      {t(`securityaudit.mode.${mode}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </SelectField>
+            </SettingsItem>
+
+            <SettingsItem>
+              <NumberField
+                id="security-audit-retention"
+                data-testid="security-audit-retention"
+                label={t('securityaudit.retentionDays')}
+                description={t('securityaudit.retentionHint', {
+                  min: SECURITY_AUDIT_RETENTION_DAYS_RANGE.min,
+                  max: SECURITY_AUDIT_RETENTION_DAYS_RANGE.max,
+                })}
+                value={audit.retentionDays}
+                min={SECURITY_AUDIT_RETENTION_DAYS_RANGE.min}
+                max={SECURITY_AUDIT_RETENTION_DAYS_RANGE.max}
+                step={1}
+                disabled={auditRetentionLocked}
+                onChange={(event) =>
+                  setAudit((prev) => ({ ...prev, retentionDays: event.target.value }))
+                }
+                error={auditRetentionValid ? undefined : t('securityaudit.retentionRange')}
+                tooltip={t('settings.help.security.auditRetentionDays')}
+              />
+            </SettingsItem>
+
+            {/* Режим `all` пишет каждое автоматическое решение — журнал растёт быстрее. */}
+            {audit.mode === 'all' && (
+              <div
+                role="status"
+                data-testid="security-audit-all-mode-hint"
+                className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-xs text-status-warning"
+              >
+                {t('securityaudit.allModeHint')}
+              </div>
+            )}
+
+            {auditLockedFields.size > 0 && (
+              <div
+                role="status"
+                data-testid="security-audit-env-locked"
+                className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-3 text-sm text-status-warning"
+              >
+                {t('securityaudit.envLocked')}
+                {auditLockedLabels.length > 0 &&
+                  ` ${t('securityaudit.envFields', { fields: auditLockedLabels.join(', ') })}`}
+              </div>
+            )}
+
+            {auditError && (
+              <div
+                role="alert"
+                data-testid="security-audit-error"
+                className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm"
+              >
+                {auditError}
+              </div>
+            )}
+
+            <SettingsActions
+              onSave={() => void handleAuditSave()}
+              onReset={() => void handleAuditReset()}
+              saving={auditSaving}
+              saveDisabled={!auditDirty || auditAllLocked || !auditRetentionValid}
+              resetDisabled={!auditCanReset}
+              isDefault={!auditCanReset}
+              saveTestId="security-audit-save"
+              resetTestId="security-audit-reset"
+              resetLabel={t('securityaudit.reset')}
+            />
+
+            <div className="text-xs text-muted-foreground" data-testid="security-audit-defaults">
+              {t('securityaudit.defaults', {
+                mode: t(`securityaudit.mode.${auditInfo?.defaults.mode ?? 'decisions'}`),
+                retentionDays: auditInfo?.defaults.retentionDays ?? 30,
+              })}
+            </div>
+
+            {auditSource === 'default' && (
+              <div className="text-xs text-muted-foreground">{t('securityaudit.baseHint')}</div>
             )}
           </>
         )}

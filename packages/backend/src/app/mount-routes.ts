@@ -45,6 +45,8 @@ import {
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
   createBackgroundSettingsRoutes,
+  // Журнал решений по подтверждениям прав (`/api/v2/settings/audit`).
+  createAuditSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -375,6 +377,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // PROP-141 (Часть D): сервис переноса сессии между проектами (единый шов:
     // блокеры, согласие `move_consent`, порядок эффектов).
     deps.moveService,
+    // Журнал решений по подтверждениям прав (`scope:'permission'`): снятие
+    // сессионного allow-правила пишется `action:'revoke'`.
+    securityAudit,
   ));
 
   // Messages routes
@@ -1015,6 +1020,25 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       settingsStore,
       config: config.synth.background,
       live: deps.backgroundSettings,
+      securityAudit,
+      env: process.env,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Журнал решений по подтверждениям прав — настройки секции `audit`
+  // (`permission.mode`/`permission.retentionDays`, приоритет env > runtime >
+  // дефолт). Применяются **сразу** (`refresh()` живого состояния +
+  // retention-прогон журнала). Managed RBAC — ADMIN (чтение и запись): это
+  // настройка инстанса.
+  app.route('/api/v2/settings', createAuditSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      live: deps.auditSettings,
       securityAudit,
       env: process.env,
     },

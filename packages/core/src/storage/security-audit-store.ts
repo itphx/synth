@@ -15,8 +15,8 @@ export interface SecurityAuditStoreConfig {
  * Append-only аудит изменений security/egress-политик.
  *
  * JSONL `{dataDir}/audit/security.jsonl` (одна строка = запись). Append под
- * `AsyncLock`; `list` — «свежие первыми»; `clear` — атомарная перезапись
- * (tmp→rename, ADR-005). `id`/`ts` формирует вызывающий.
+ * `AsyncLock`; `list` — «свежие первыми»; `clear`/`prune` — атомарная
+ * перезапись (tmp→rename, ADR-005). `id`/`ts` формирует вызывающий.
  */
 export class SecurityAuditStore implements SecurityAuditRepository {
   private _lock = new AsyncLock();
@@ -60,6 +60,42 @@ export class SecurityAuditStore implements SecurityAuditRepository {
         '',
       );
       return entries.length;
+    } finally {
+      this._lock.release();
+    }
+  }
+
+  /**
+   * Retention-очистка журнала: удалить записи старше `days` суток.
+   *
+   * `ts` каждой записи парсится; невалидный `ts` запись **сохраняет** (ломать
+   * журнал из-за одной строки нельзя). Файл перезаписывается атомарно
+   * (tmp→rename, ADR-005) под тем же `AsyncLock`, что `append`/`clear`.
+   * Возвращает число удалённых записей.
+   */
+  async prune(days: number): Promise<number> {
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    await this._lock.acquire();
+    try {
+      const entries = await this._readAll();
+      if (entries.length === 0) return 0;
+      const cutoff = Date.now() - days * 24 * 3600_000;
+      const kept = entries.filter((entry) => {
+        const ts = Date.parse(entry.ts);
+        return !Number.isFinite(ts) || ts >= cutoff;
+      });
+      const removed = entries.length - kept.length;
+      if (removed === 0) return 0;
+      const path = this._filePath();
+      await mkdir(dirname(path), { recursive: true });
+      const body = kept.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+      await atomicWrite(
+        (p, d) => writeFile(p, d, 'utf-8'),
+        (o, n) => rename(o, n),
+        path,
+        body,
+      );
+      return removed;
     } finally {
       this._lock.release();
     }

@@ -111,6 +111,9 @@ export function checkStepToolPermission(
       ...(ctx.step?.agent?.capabilities
         ? { agentCapabilities: ctx.step.agent.capabilities }
         : {}),
+      // Сессия записи журнала прав: своей сессии у шага нет (ADR-101 §1) —
+      // пакет с префиксом `pipeline:`, как у `ToolContext` шага.
+      sessionId: `pipeline:${ctx.runId}`,
     },
     deps,
   );

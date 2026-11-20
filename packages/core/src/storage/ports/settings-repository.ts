@@ -16,6 +16,7 @@ import type {
   ExecutionRuntimeSettings,
 } from '@itphx/synth-shared';
 import type {
+  AuditRuntimeSettings,
   BackgroundRuntimeSettings,
   DecisionRuntimeSettings,
   DefaultModelPair,
@@ -151,6 +152,15 @@ export interface SettingsRepository {
   getBackground(): Promise<Partial<BackgroundRuntimeSettings>>;
   setBackground(config: Partial<BackgroundRuntimeSettings>): Promise<void>;
   clearBackground(): Promise<void>;
+
+  /**
+   * Журнал решений по подтверждениям прав (`audit.permission`): режим
+   * (`decisions`|`all`) и срок хранения записей. Применяется сразу (журнал и
+   * retention-прунер читают резолвер) — `restartRequired: false` в API.
+   */
+  getAudit(): Promise<Partial<AuditRuntimeSettings>>;
+  setAudit(config: Partial<AuditRuntimeSettings>): Promise<void>;
+  clearAudit(): Promise<void>;
 
   /**
    * ADR-133: runtime-настройка автопроверки обновлений (`updates.check`).

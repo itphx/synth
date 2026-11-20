@@ -47,6 +47,7 @@ import {
   createStickyNotesSettingsRoutes,
   createSshSettingsRoutes,
   createBackgroundSettingsRoutes,
+  createAuditSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -212,6 +213,10 @@ export function mountStandaloneRoutes(
       permissionConfig: config.permissionConfig,
       // ADR-136: журнал исполнений — запись `script.run` (только метаданные).
       commandAudit: deps.commandAuditLog,
+      // Журнал решений по подтверждениям прав (`scope:'permission'`): снятие
+      // сессионного allow-правила в `PATCH /:id { settings.permission }`
+      // пишется `action:'revoke'`.
+      ...(securityAudit ? { securityAudit } : {}),
       // Рабочий каталог проекта — project-уровень сниппетов. Резолв тот же,
       // что у snippet-routes (относительный workspace — от `workspacesRoot`).
       resolveProjectWorkspace: async (projectId) => {
@@ -953,6 +958,22 @@ export function mountStandaloneRoutes(
       settingsStore,
       config: config.backgroundConfig,
       live: deps.backgroundSettings,
+      securityAudit,
+      env: process.env,
+    },
+  ));
+
+  // Журнал решений по подтверждениям прав — настройки секции `audit`
+  // (`permission.mode`/`permission.retentionDays`): режим `decisions` (только
+  // вопросы человеку) | `all` (ещё и автоматические решения по правилам) и
+  // срок хранения записей. Применяются **сразу** (`refresh()` живого
+  // состояния + retention-прогон журнала — рестарт не нужен).
+  // Core — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createAuditSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      live: deps.auditSettings,
       securityAudit,
       env: process.env,
     },

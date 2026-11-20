@@ -91,6 +91,9 @@ export async function executeScriptStep(
         ...(ctx.step?.agent?.capabilities
           ? { agentCapabilities: ctx.step.agent.capabilities }
           : {}),
+        // Сессия записи журнала прав — `pipeline:<runId>` (своей сессии у шага
+        // нет, ADR-101 §1).
+        sessionId: `pipeline:${ctx.runId}`,
       },
       opts.permissions,
     );

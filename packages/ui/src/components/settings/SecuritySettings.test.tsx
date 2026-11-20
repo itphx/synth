@@ -39,6 +39,10 @@ const mocks = vi.hoisted(() => ({
   getProtectedPaths: vi.fn(),
   saveProtectedPaths: vi.fn(),
   resetProtectedPaths: vi.fn(),
+  // «Аудит решений» (`/settings/audit`): методы обязаны быть в моке — иначе эффект падает на `undefined()`.
+  getSecurityAuditSettings: vi.fn(),
+  saveSecurityAuditSettings: vi.fn(),
+  resetSecurityAuditSettings: vi.fn(),
   // Политики инструментов в «Безопасности» быть не должно — проверяем, что не дёргается.
   getToolsPolicy: vi.fn(),
   saveToolsPolicy: vi.fn(),
@@ -83,6 +87,19 @@ function securityInfo(overrides: Record<string, unknown> = {}) {
 
 const SECURITY_INFO = securityInfo()
 
+/** Снимок секции «Аудит решений» для GET/PUT/DELETE /settings/audit. */
+function auditInfo(overrides: Record<string, unknown> = {}) {
+  return {
+    permission: { mode: 'decisions', retentionDays: 30 },
+    source: 'default',
+    sources: { mode: 'default', retentionDays: 'default' },
+    defaults: { mode: 'decisions', retentionDays: 30 },
+    envLocked: false,
+    envLockedFields: [],
+    ...overrides,
+  }
+}
+
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
@@ -125,6 +142,7 @@ beforeEach(() => {
     policy: { deniedPaths: [], deniedPrefixes: [], approvalPaths: [], deniedCommandPrefixes: [] },
     isOverridden: false,
   })
+  mocks.getSecurityAuditSettings.mockResolvedValue(auditInfo())
 })
 
 afterEach(async () => {
@@ -405,5 +423,194 @@ describe('SecuritySettings — миграция на Settings UI Kit (ADR-072)',
       (b) => b.textContent?.trim() === 'Add',
     )
     expect(addButtons.length).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('SecuritySettings — «Аудит решений по правам» (settings/audit)', () => {
+  const section = (container: HTMLElement) =>
+    container.querySelector('[data-settings-section="security-audit-decisions"]') as HTMLElement | null
+  const byTestId = (container: HTMLElement, id: string) =>
+    container.querySelector(`[data-testid="${id}"]`) as HTMLElement | null
+  const modeTrigger = (container: HTMLElement) =>
+    byTestId(container, 'security-audit-mode') as HTMLButtonElement
+  const retentionInput = (container: HTMLElement) =>
+    byTestId(container, 'security-audit-retention') as HTMLInputElement
+  const save = (container: HTMLElement) =>
+    byTestId(container, 'security-audit-save') as HTMLButtonElement
+  const reset = (container: HTMLElement) =>
+    byTestId(container, 'security-audit-reset') as HTMLButtonElement
+
+  /** Изменить controlled-инпут так, чтобы React увидел `onChange`. */
+  async function setInputValue(input: HTMLInputElement, value: string): Promise<void> {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      setter?.call(input, value)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+
+  /** Открывает Base UI select и возвращает список опций (опции рендерятся в portal). */
+  async function openOptions(trigger: HTMLElement): Promise<HTMLElement[]> {
+    await act(async () => {
+      trigger.click()
+    })
+    const listId = trigger.getAttribute('aria-controls')
+    const scope = listId ? document.getElementById(listId) ?? document.body : document.body
+    return [...scope.querySelectorAll('[role="option"]')] as HTMLElement[]
+  }
+
+  /** Открывает Base UI select и кликает опцию по подписи. */
+  async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+    const options = await openOptions(trigger)
+    const option = options.find((o) => o.textContent?.trim().startsWith(label)) as
+      | HTMLElement
+      | undefined
+    expect(option, `option "${label}"`).toBeTruthy()
+    await act(async () => {
+      option!.click()
+    })
+  }
+
+  it('рендерит значения из GET: режим, срок хранения, бейдж источника', async () => {
+    mocks.getSecurityAuditSettings.mockResolvedValue(
+      auditInfo({ permission: { mode: 'all', retentionDays: 90 } }),
+    )
+    const container = await renderSettings()
+
+    expect(mocks.getSecurityAuditSettings).toHaveBeenCalledTimes(1)
+    const block = section(container)
+    expect(block).not.toBeNull()
+    expect(block!.textContent).toContain('Permission decision audit')
+    expect(modeTrigger(container).textContent).toContain('All rule decisions')
+    expect(retentionInput(container).value).toBe('90')
+    expect(byTestId(container, 'security-audit-source')?.textContent).toBe('default')
+    expect(byTestId(container, 'security-audit-defaults')?.textContent).toContain(
+      'Base: Human questions only, 30 d.',
+    )
+    // Режим `all` — подсказка про рост журнала.
+    expect(byTestId(container, 'security-audit-all-mode-hint')).not.toBeNull()
+  })
+
+  it('сохранение отправляет вложенное тело { permission: { … } } и применяет ответ', async () => {
+    mocks.saveSecurityAuditSettings.mockResolvedValue(
+      auditInfo({
+        permission: { mode: 'all', retentionDays: 60 },
+        source: 'runtime',
+        sources: { mode: 'runtime', retentionDays: 'runtime' },
+      }),
+    )
+    const container = await renderSettings()
+
+    // На дефолте сохранять нечего.
+    expect(save(container).disabled).toBe(true)
+
+    await selectOption(modeTrigger(container), 'All rule decisions')
+    await setInputValue(retentionInput(container), '60')
+    expect(save(container).disabled).toBe(false)
+
+    await act(async () => {
+      save(container).click()
+    })
+
+    // Тело PUT — вложенная форма контракта бэкенда (вложенный патч).
+    expect(mocks.saveSecurityAuditSettings).toHaveBeenCalledWith({
+      permission: { mode: 'all', retentionDays: 60 },
+    })
+    expect(byTestId(container, 'security-audit-source')?.textContent).toBe('from settings')
+    expect(retentionInput(container).value).toBe('60')
+    expect(mocks.notify).toHaveBeenCalled()
+  })
+
+  it('сброс вызывает DELETE и возвращает базовые значения', async () => {
+    mocks.getSecurityAuditSettings.mockResolvedValue(
+      auditInfo({
+        permission: { mode: 'all', retentionDays: 120 },
+        source: 'runtime',
+        sources: { mode: 'runtime', retentionDays: 'runtime' },
+      }),
+    )
+    mocks.resetSecurityAuditSettings.mockResolvedValue(auditInfo())
+    const container = await renderSettings()
+
+    expect(reset(container).disabled).toBe(false)
+    await act(async () => {
+      reset(container).click()
+    })
+
+    expect(mocks.resetSecurityAuditSettings).toHaveBeenCalledTimes(1)
+    expect(modeTrigger(container).textContent).toContain('Human questions only')
+    expect(retentionInput(container).value).toBe('30')
+    expect(byTestId(container, 'security-audit-source')?.textContent).toBe('default')
+    expect(mocks.notify).toHaveBeenCalled()
+  })
+
+  it('env-фиксация отключает зафиксированное поле, показывает предупреждение и не даёт сбросить', async () => {
+    mocks.getSecurityAuditSettings.mockResolvedValue(
+      auditInfo({
+        permission: { mode: 'all', retentionDays: 30 },
+        source: 'env',
+        sources: { mode: 'env', retentionDays: 'default' },
+        envLocked: true,
+        envLockedFields: ['mode'],
+      }),
+    )
+    const container = await renderSettings()
+
+    expect(modeTrigger(container).disabled).toBe(true)
+    expect(retentionInput(container).disabled).toBe(false)
+    const banner = byTestId(container, 'security-audit-env-locked')
+    expect(banner).not.toBeNull()
+    expect(banner!.textContent).toContain('Set via an environment variable')
+    // Источник — env: сброс недоступен (зафиксировано сверху).
+    expect(reset(container).disabled).toBe(true)
+
+    // Незафиксированное поле всё равно сохраняется — и уходит одно.
+    mocks.saveSecurityAuditSettings.mockResolvedValue(
+      auditInfo({
+        permission: { mode: 'all', retentionDays: 45 },
+        source: 'env',
+        sources: { mode: 'env', retentionDays: 'runtime' },
+        envLocked: true,
+        envLockedFields: ['mode'],
+      }),
+    )
+    await setInputValue(retentionInput(container), '45')
+    await act(async () => {
+      save(container).click()
+    })
+    expect(mocks.saveSecurityAuditSettings).toHaveBeenCalledWith({
+      permission: { retentionDays: 45 },
+    })
+  })
+
+  it('409 ENV_LOCKED подсвечивает зафиксированные поля и блокирует их', async () => {
+    mocks.saveSecurityAuditSettings.mockRejectedValue(
+      Object.assign(new Error('audit.permission: fixed'), {
+        status: 409,
+        code: 'ENV_LOCKED',
+        fields: ['retentionDays'],
+      }),
+    )
+    const container = await renderSettings()
+
+    await setInputValue(retentionInput(container), '45')
+    await act(async () => {
+      save(container).click()
+    })
+
+    expect(byTestId(container, 'security-audit-error')?.textContent).toContain(
+      'Set via an environment variable',
+    )
+    expect(byTestId(container, 'security-audit-env-locked')).not.toBeNull()
+    expect(retentionInput(container).disabled).toBe(true)
+  })
+
+  it('невалидный срок хранения не отправляется', async () => {
+    const container = await renderSettings()
+
+    await setInputValue(retentionInput(container), '0')
+
+    expect(save(container).disabled).toBe(true)
+    expect(mocks.saveSecurityAuditSettings).not.toHaveBeenCalled()
   })
 })

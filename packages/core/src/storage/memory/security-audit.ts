@@ -28,6 +28,18 @@ export class MemorySecurityAuditRepository implements SecurityAuditRepository {
     return entries.slice(0, Math.floor(limit));
   }
 
+  async prune(days: number): Promise<number> {
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    const cutoff = Date.now() - days * 24 * 3600_000;
+    const kept = this._entries.filter((entry) => {
+      const ts = Date.parse(entry.ts);
+      return !Number.isFinite(ts) || ts >= cutoff;
+    });
+    const removed = this._entries.length - kept.length;
+    this._entries = kept;
+    return removed;
+  }
+
   async clear(): Promise<number> {
     const removed = this._entries.length;
     this._entries = [];

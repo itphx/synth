@@ -59,6 +59,7 @@ import { sessionMemoryApi } from './session-memory'
 import { questionsApi } from './questions'
 import { processesApi } from './processes'
 import { backgroundSettingsApi } from './backgroundSettings'
+import { securityAuditSettingsApi } from './securityAuditSettings'
 import { worktreesApi } from './worktrees'
 import { executionApi } from './execution'
 import { terminalsApi } from './terminals'
@@ -518,6 +519,16 @@ export type {
   BackgroundSettingsSource,
   BackgroundSettingsValues,
 } from './backgroundSettings'
+// Журнал решений по правам (`/api/v2/settings/audit`).
+export type {
+  SecurityAuditSettings,
+  SecurityAuditSettingsField,
+  SecurityAuditSettingsPatch,
+  SecurityAuditSettingsSource,
+  SecurityAuditPermissionSettings,
+  SecurityAuditPermissionPatch,
+  SecurityAuditMode,
+} from './securityAuditSettings'
 // ADR-114: инвентарь git-worktree проекта (per-session рабочий каталог).
 export type {
   WorktreeRecord,
@@ -673,6 +684,8 @@ export const synthApi = {
   // Настройки фоновой работы — имена с префиксом домена (`get`/`update`/`reset`
   // в barrel заняты соседними доменами).
   ...backgroundSettingsApi,
+  // Журнал решений по правам (`/settings/audit`) — имена с префиксом домена.
+  ...securityAuditSettingsApi,
   // PROP-132: терминалы — имена с префиксом домена (`list`/`get`/`close`
   // в barrel уже заняты соседними доменами).
   ...{

@@ -82,6 +82,23 @@ export function describeSecurityAuditRepository(
       expect(await repo.list()).toEqual([]);
     });
 
+    it('prune(0) — no-op; prune удаляет записи старше срока (retention)', async () => {
+      const { repo } = await make();
+      // Retention — опциональный метод порта: фейки без него пропускаются.
+      if (typeof repo.prune !== 'function') return;
+      const old = new Date(Date.now() - 3 * 24 * 3600_000).toISOString();
+      const fresh = new Date().toISOString();
+      await repo.append(auditEntry('sa_old', { ts: old, scope: 'permission', action: 'allow' }));
+      await repo.append(auditEntry('sa_fresh', { ts: fresh, scope: 'permission', action: 'deny' }));
+
+      expect(await repo.prune(0)).toBe(0);
+      expect((await repo.list()).map((e) => e.id)).toEqual(['sa_fresh', 'sa_old']);
+      expect(await repo.prune(1)).toBe(1);
+      expect((await repo.list()).map((e) => e.id)).toEqual(['sa_fresh']);
+      // Повторный прогон — удалять нечего.
+      expect(await repo.prune(1)).toBe(0);
+    });
+
     it('list отдаёт независимые копии', async () => {
       const { repo } = await make();
       await repo.append(auditEntry('sa_1'));

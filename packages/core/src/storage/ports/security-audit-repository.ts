@@ -22,4 +22,13 @@ export interface SecurityAuditRepository {
   list(opts?: SecurityAuditListOptions): Promise<SecurityAuditEntry[]>;
   /** Полная очистка журнала; число удалённых записей. */
   clear(): Promise<number>;
+  /**
+   * Retention-очистка: удалить записи старше `days` суток; число удалённых.
+   *
+   * **Опциональный** метод: реализуют три реальных бэкенда (файл/память/PG),
+   * а фейки в тестах могут его не иметь. Не реализован — retention просто не
+   * применяется (`prune` вызывается best-effort, без ошибок на старте).
+   * `days <= 0`/не число — no-op (0 удалённых).
+   */
+  prune?(days: number): Promise<number>;
 }

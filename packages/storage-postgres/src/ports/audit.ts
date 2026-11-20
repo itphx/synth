@@ -119,6 +119,17 @@ class PostgresSecurityAuditRepository implements SecurityAuditRepository {
     return rows.map(securityRowToEntry);
   }
 
+  async prune(days: number): Promise<number> {
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    const cutoff = new Date(Date.now() - days * 24 * 3600_000).toISOString();
+    const rows = await this._db().query<Row>(
+      'WITH deleted AS (DELETE FROM security_audit WHERE ts < $1 RETURNING 1) SELECT count(*)::int AS n FROM deleted',
+      [cutoff],
+    );
+    const value = rows[0]?.n;
+    return typeof value === 'number' ? value : Number(value) || 0;
+  }
+
   async clear(): Promise<number> {
     const rows = await this._db().query<Row>(
       'WITH deleted AS (DELETE FROM security_audit RETURNING 1) SELECT count(*)::int AS n FROM deleted',

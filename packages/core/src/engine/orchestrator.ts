@@ -84,6 +84,7 @@ import {
   type PendingApproval,
   type PendingApprovalResolution,
 } from './permission/approval.js';
+import type { PermissionAuditSink } from './permission/permission-audit.js';
 import type { PendingApprovalRepository } from '../storage/ports/pending-approval-repository.js';
 import { buildPermissionPreview } from './permission/preview.js';
 import { emptyPermissionConfig } from './permission/derive.js';
@@ -712,18 +713,6 @@ export interface OrchestratorOptions {
    * запись не выполняется, поведение оркестратора не меняется.
    */
   analytics?: AnalyticsRecorder;
-  /**
-   * Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги
-   * `external_directory`). Вызывается fire-and-forget; ошибка не влияет на ход.
-   */
-  onPermissionGrant?: (entry: {
-    sessionId: string;
-    actor: string;
-    patterns: string[];
-    /** Каталоги, разрешённые правилом `external_directory` (`<dir>/*`). */
-    directories: string[];
-    command: string;
-  }) => void | Promise<void>;
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
   contextOptimizer?: ContextOptimizer;
@@ -1065,6 +1054,17 @@ export interface OrchestratorOptions {
    * ADR-029): переживать рестарт они не будут.
    */
   pendingApprovalRepository?: PendingApprovalRepository;
+  /**
+   * Журнал **решений по подтверждениям прав** (`scope:'permission'`
+   * security-аудита).
+   *
+   * Шов исполнения собирается в точке сборки (`createPermissionAuditSink`) и
+   * передаётся сюда и в менеджер ожиданий: решение по подтверждению пишет он
+   * (`onDecision`), автоматические решения по правилам — цикл хода
+   * (`sink.rule`, только в режиме `all`). Не задан — журнала решений нет
+   * (деградированный инстанс/тесты).
+   */
+  permissionAudit?: PermissionAuditSink;
   /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
@@ -1444,8 +1444,6 @@ export class ChatOrchestrator {
   private readonly _defaultWorkingDir: string;
   private readonly _workspacesRoot: string;
   private _permissionConfig: PermissionConfig;
-  /** Аудит выдачи shell-грантов (опция оркестратора). */
-  private readonly _onPermissionGrant: OrchestratorOptions['onPermissionGrant'] | null;
   /**
    * PROP-136 (слайс 136a): append-only журнал исполнений команд. Не задан —
    * аудита нет (поведение прежнее).
@@ -1457,6 +1455,11 @@ export class ChatOrchestrator {
    */
   private readonly _commandPolicy: CommandPolicyProvider | null;
   private readonly _approvalManager: PermissionApprovalManager;
+  /**
+   * Журнал решений по подтверждениям прав (`scope:'permission'`): шов
+   * исполнения (`createPermissionAuditSink`). Не задан — журнала нет.
+   */
+  private readonly _permissionAudit: PermissionAuditSink | null;
   private readonly _defaultPlanMode: PlanMode;
   /**
    * Секция `session.autoTitle` — авто-именование сессии (ранний триггер:
@@ -2147,7 +2150,7 @@ export class ChatOrchestrator {
     this._workspaceManaged = options.workspaceManaged === true;
     this._getWorkspaceOutsideRootPolicy = options.getWorkspaceOutsideRootPolicy ?? null;
     this._permissionConfig = options.permissionConfig ?? emptyPermissionConfig();
-    this._onPermissionGrant = options.onPermissionGrant ?? null;
+    this._permissionAudit = options.permissionAudit ?? null;
     // PROP-136 (слайс 136a): журнал исполнений команд — один экземпляр на
     // инстанс: его же читает `GET /api/v2/audit/commands` (иначе файлы разные).
     this._commandAudit = options.commandAudit ?? null;
@@ -2161,6 +2164,12 @@ export class ChatOrchestrator {
       // результатов параллельных тулов (ADR-118 §4, гонка lost update).
       ...(options.pendingApprovalRepository
         ? { repository: options.pendingApprovalRepository }
+        : {}),
+      // Журнал решений по подтверждениям (`scope:'permission'`): **один** шов
+      // записи на все исходы ожидания (ответ/таймаут/каскад/отмена/переоценка
+      // грантом) — дубля `grant`+`allow` больше нет.
+      ...(options.permissionAudit
+        ? { onDecision: (event) => options.permissionAudit!.decision(event) }
         : {}),
     });
     this._defaultPlanMode = options.defaultPlanMode ?? 'auto';
@@ -3386,6 +3395,20 @@ export class ChatOrchestrator {
         protectedPathsEnabled: this._getProtectedPathsEnabled(),
         runtimeDeps: this._runtimeDeps,
       });
+      // Журнал решений по правам (`scope:'permission'`, режим `all`): inline
+      // shell решается **только** правилами (интерактива нет), поэтому это
+      // решение по правилу (`outcome:'rule'`). `ask` записью не является: он
+      // здесь и не является решением (ниже трактуется как отказ).
+      if (decision.action !== 'ask') {
+        this._permissionAudit?.rule({
+          sessionId: session.id,
+          toolName: 'execute_shell',
+          action: decision.action,
+          ...(decision.matchedRule ? { matchedRule: decision.matchedRule } : {}),
+          turnId: streamId,
+          command,
+        });
+      }
       if (decision.action !== 'allow') {
         this._eventBus.publish(session.id, 'command.inline_shell', {
           session_id: session.id,
@@ -7266,6 +7289,26 @@ export class ChatOrchestrator {
           };
           const permissionDecision = permissionEvaluator.check(checkInput);
 
+          // Журнал решений по правам (`scope:'permission'`): в режиме
+          // `audit.permission.mode='all'` пишется и **автоматическое** решение по
+          // правилу (`outcome:'rule'`); `ask` решением не является (его исход
+          // пишет шов ожидания подтверждения), в `decisions` записи нет.
+          if (permissionDecision.action !== 'ask') {
+            this._permissionAudit?.rule({
+              sessionId: session.id,
+              toolName,
+              action: permissionDecision.action,
+              ...(permissionDecision.matchedRule
+                ? { matchedRule: permissionDecision.matchedRule }
+                : {}),
+              callId: tcId,
+              turnId: streamId,
+              ...(toolName === 'execute_shell' && typeof toolArgs.command === 'string'
+                ? { command: toolArgs.command }
+                : {}),
+            });
+          }
+
           // Doom loop detection — только для вызовов, НЕ заблокированных
           // политикой. Deny-вызовы исключены: каждая попытка должна получать
           // понятный feedback с объяснением причины запрета, а не «Цикл
@@ -7763,6 +7806,11 @@ export class ChatOrchestrator {
                   // PROP-127 (этап T5): значение читается из снимка по ссылке —
                   // грант обновляет снимок у вызовов, идущих после него.
                   get permissionConfig() { return permissionRef.config; },
+                  // Журнал решений по правам (`scope:'permission'`) — тот же шов,
+                  // что у основного цикла: тул `task` отдаёт его менеджеру
+                  // ожиданий саб-агента (`onDecision`) и его permission-слою
+                  // (`rule`, режим `all`). Не задан — журнала у ребёнка нет.
+                  permissionAudit: this._permissionAudit ?? undefined,
                   // ADR-070 §2.9.1: доступность внешних программ (git/rg/sh) —
                   // в permission-слой саб-агента (enforce `dependency`) и его
                   // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
@@ -9962,17 +10010,12 @@ export class ChatOrchestrator {
       settings: granted.value.settings,
     });
 
-    // Аудит выдачи shell-гранта — fire-and-forget, ход не блокирует.
-    if (shellCommand !== null && this._onPermissionGrant
-      && ((shellPatterns !== null && shellPatterns.length > 0) || shellDirectories.length > 0)) {
-      void Promise.resolve(this._onPermissionGrant({
-        sessionId: session.id,
-        actor: session.ownerId ?? 'local',
-        patterns: shellPatterns ?? [],
-        directories: shellDirectories,
-        command: shellCommand,
-      })).catch(() => {});
-    }
+    // Аудит выдачи shell-гранта больше не пишется отдельным событием
+    // `action:'grant'`: решение «Разрешить в сессии» попадает в журнал решений
+    // (`scope:'permission'`) одним из двух путей — по ответу пользователя
+    // (`onDecision` менеджера ожиданий, `after.granted` из плана гранта),
+    // либо, если ожидание разрешено переоценкой по новому правилу, — по решению
+    // по правилу. Дубля `grant`+`allow` нет.
 
     // ADR-029: «Разрешить в сессии» для сабагентской (дочерней) сессии
     // распространяется и на родителя (parentId): путь в правиле — абсолютный

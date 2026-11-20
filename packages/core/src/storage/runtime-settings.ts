@@ -896,6 +896,234 @@ export function createLiveBackgroundSettings(params: {
 }
 
 /**
+ * Runtime-настройки журнала **решений по подтверждениям прав**
+ * (`scope:'permission'` security-аудита), сохраняемые через UI.
+ *
+ * Секция `audit` (`settings.json`/PG). Состав — только параметры журнала
+ * решений: режим (`decisions` — только вопросы человеку; `all` — ещё и
+ * автоматические решения по правилам) и срок хранения записей. Секции в
+ * `config.yaml` **нет** (решение владельца): приоритет
+ * **env > runtime > дефолт**.
+ */
+export interface AuditPermissionRuntimeSettings {
+  /** Что журналить: только решения по подтверждениям (`decisions`) или все решения (`all`). */
+  mode?: AuditPermissionMode;
+  /** Срок хранения записей журнала решений, дни (1…3650). */
+  retentionDays?: number;
+}
+
+/** Runtime-секция `audit` (журнал решений по подтверждениям прав). */
+export interface AuditRuntimeSettings {
+  permission?: AuditPermissionRuntimeSettings;
+}
+
+/** Режим журнала решений: `decisions` — только подтверждения, `all` — ещё и правила. */
+export type AuditPermissionMode = 'decisions' | 'all';
+
+/** Канонические режимы журнала решений (для валидации env/API). */
+export const AUDIT_PERMISSION_MODES: readonly AuditPermissionMode[] = ['decisions', 'all'];
+
+/** Режим журнала решений по умолчанию (только вопросы человеку). */
+export const DEFAULT_AUDIT_PERMISSION_MODE: AuditPermissionMode = 'decisions';
+
+/** Срок хранения записей журнала решений по умолчанию, дни. */
+export const DEFAULT_AUDIT_RETENTION_DAYS = 30;
+
+/** Границы срока хранения журнала решений, дни. */
+export const AUDIT_RETENTION_DAYS_RANGE = { min: 1, max: 3650 } as const;
+
+/** Env-имя режима журнала решений. */
+export const AUDIT_PERMISSION_MODE_ENV = 'SYNTH_AUDIT_PERMISSION_MODE';
+
+/** Env-имя срока хранения журнала решений, дни. */
+export const AUDIT_RETENTION_DAYS_ENV = 'SYNTH_AUDIT_RETENTION_DAYS';
+
+/** Поле секции `audit.permission`. */
+export type AuditSettingsField = 'mode' | 'retentionDays';
+
+/** Источник эффективного значения поля секции `audit.permission`. */
+export type AuditSettingsSource = 'env' | 'runtime' | 'default';
+
+/** Канонический порядок полей секции (для `envLockedFields` и обхода). */
+export const AUDIT_SETTINGS_FIELDS: readonly AuditSettingsField[] = ['mode', 'retentionDays'];
+
+/** Эффективные значения секции `audit.permission` (все поля заданы). */
+export interface AuditPermissionSettings {
+  mode: AuditPermissionMode;
+  retentionDays: number;
+}
+
+/** Результат резолвинга `audit.permission` (env > runtime > default). */
+export interface ResolvedAuditSettings {
+  /** Эффективные значения — их читают журнал решений и retention-прунер. */
+  effective: AuditPermissionSettings;
+  /** Наиболее специфичный источник среди полей. */
+  source: AuditSettingsSource;
+  /** Источник **каждого** поля секции. */
+  sources: Record<AuditSettingsField, AuditSettingsSource>;
+  /** База без runtime (к чему вернёт `DELETE`). */
+  defaults: AuditPermissionSettings;
+  /** Хотя бы одно поле задано через env: runtime его не перекрывает. */
+  envLocked: boolean;
+  /** Поля, зафиксированные env: из UI они `disabled` и не уходят в `PUT`. */
+  envLockedFields: AuditSettingsField[];
+}
+
+/**
+ * Прочитать env-значения секции `audit.permission`.
+ *
+ * Валидное значение фиксируется в `envLockedFields` (runtime его не
+ * перекрывает); невалидное — warn и игнор (fail-soft, как у
+ * `applyEnvOverrides`).
+ */
+function readAuditEnv(env: NodeJS.ProcessEnv): {
+  values: AuditPermissionRuntimeSettings;
+  locked: AuditSettingsField[];
+} {
+  const values: AuditPermissionRuntimeSettings = {};
+  const locked: AuditSettingsField[] = [];
+
+  const rawMode = env[AUDIT_PERMISSION_MODE_ENV];
+  if (rawMode !== undefined && rawMode.trim() !== '') {
+    if ((AUDIT_PERMISSION_MODES as readonly string[]).includes(rawMode)) {
+      values.mode = rawMode as AuditPermissionMode;
+      locked.push('mode');
+    } else {
+      console.warn(
+        `[config] невалидное значение ${AUDIT_PERMISSION_MODE_ENV}="${rawMode}" (ожидается ${AUDIT_PERMISSION_MODES.join('|')}) — игнорируется`,
+      );
+    }
+  }
+
+  const rawDays = env[AUDIT_RETENTION_DAYS_ENV];
+  if (rawDays !== undefined && rawDays.trim() !== '') {
+    const value = Number(rawDays);
+    if (
+      Number.isFinite(value)
+      && Number.isInteger(value)
+      && value >= AUDIT_RETENTION_DAYS_RANGE.min
+      && value <= AUDIT_RETENTION_DAYS_RANGE.max
+    ) {
+      values.retentionDays = value;
+      locked.push('retentionDays');
+    } else {
+      console.warn(
+        `[config] невалидное значение ${AUDIT_RETENTION_DAYS_ENV}="${rawDays}" (ожидается целое ${AUDIT_RETENTION_DAYS_RANGE.min}…${AUDIT_RETENTION_DAYS_RANGE.max}) — игнорируется`,
+      );
+    }
+  }
+
+  return { values, locked };
+}
+
+/**
+ * Эффективные настройки журнала решений по подтверждениям прав — приоритет
+ * **env > runtime (`settings.json`/PG) > дефолт** (`config.yaml` не участвует:
+ * решение владельца).
+ *
+ * Функция чистая (без I/O): журнал и retention-прунер читают её на каждый
+ * вызов/тик, поэтому runtime-изменение из админки применяется без рестарта.
+ * Env-фиксация проверяется **по полю**: зафиксированный `mode` не блокирует
+ * правку `retentionDays`.
+ */
+export function resolveAuditSettings(params: {
+  runtime?: AuditRuntimeSettings;
+  env?: NodeJS.ProcessEnv;
+} = {}): ResolvedAuditSettings {
+  const env = params.env ?? process.env;
+  const runtime = params.runtime?.permission ?? {};
+  const { values: envValues, locked } = readAuditEnv(env);
+
+  const defaults: AuditPermissionSettings = {
+    mode: DEFAULT_AUDIT_PERMISSION_MODE,
+    retentionDays: DEFAULT_AUDIT_RETENTION_DAYS,
+  };
+
+  const sources = {} as Record<AuditSettingsField, AuditSettingsSource>;
+  const effective = {} as AuditPermissionSettings;
+  for (const field of AUDIT_SETTINGS_FIELDS) {
+    const envValue = envValues[field];
+    const runtimeValue = runtime[field];
+    if (envValue !== undefined) {
+      effective[field] = envValue as never;
+      sources[field] = 'env';
+    } else if (runtimeValue !== undefined) {
+      effective[field] = runtimeValue as never;
+      sources[field] = 'runtime';
+    } else {
+      effective[field] = defaults[field] as never;
+      sources[field] = 'default';
+    }
+  }
+
+  const order: AuditSettingsSource[] = ['env', 'runtime', 'default'];
+  const source = order.find((layer) =>
+    AUDIT_SETTINGS_FIELDS.some((field) => sources[field] === layer),
+  ) ?? 'default';
+
+  return {
+    effective,
+    source,
+    sources,
+    defaults,
+    envLocked: locked.length > 0,
+    envLockedFields: AUDIT_SETTINGS_FIELDS.filter((field) => locked.includes(field)),
+  };
+}
+
+/**
+ * Живое состояние секции `audit` процесса.
+ *
+ * Runtime-патч держится **в памяти** (инициализируется из `settings.json`/PG
+ * при старте через `refresh()`, обновляется роутом
+ * `/api/v2/settings/audit`). Резолвер **синхронный**: его читает журнал
+ * решений на каждое решение по правилу и retention-прунер на каждом тике, а
+ * I/O на этих путях недопустим — `refresh()` единственная асинхронная точка
+ * чтения.
+ */
+export interface LiveAuditSettings {
+  getRuntime(): AuditRuntimeSettings;
+  setRuntime(next: AuditRuntimeSettings | undefined): void;
+  resolve(): ResolvedAuditSettings;
+  /** Эффективный режим журнала решений. */
+  getMode(): AuditPermissionMode;
+  /** Эффективный срок хранения записей, дни. */
+  getRetentionDays(): number;
+  /** Перечитать runtime-патч из порта (старт/диагностика); без `store` — no-op. */
+  refresh(): Promise<void>;
+}
+
+/** Собрать живое состояние секции `audit` (журнал решений по подтверждениям). */
+export function createLiveAuditSettings(params: {
+  store?: SettingsRepository;
+  runtime?: AuditRuntimeSettings;
+  env?: NodeJS.ProcessEnv;
+}): LiveAuditSettings {
+  let runtime: AuditRuntimeSettings = params.runtime ?? {};
+  const env = params.env ?? process.env;
+  const resolve = (): ResolvedAuditSettings =>
+    resolveAuditSettings({ runtime, env });
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next ?? {};
+    },
+    resolve,
+    getMode: () => resolve().effective.mode,
+    getRetentionDays: () => resolve().effective.retentionDays,
+    refresh: async () => {
+      if (!params.store) return;
+      try {
+        // Деградация/ошибка хранилища (ADR-098) — остаёмся на текущем снимке.
+        runtime = (await params.store.getAudit()) ?? {};
+      } catch {
+        // fail-soft: старт процесса не должен падать из-за настройки.
+      }
+    },
+  };
+}
+
+/**
  * Источник эффективных дефолтов оптимизации контекста.
  *
  * env-оверрайда у этих значений нет (это дефолты новых сессий, а не политика
@@ -1255,6 +1483,13 @@ export interface RuntimeSettings {
    * вызов) — `restartRequired: false` в API.
    */
   background?: BackgroundRuntimeSettings;
+  /**
+   * Журнал решений по подтверждениям прав (`scope:'permission'`):
+   * режим (`decisions`|`all`) и срок хранения записей. Применяется **сразу** —
+   * журнал и retention-прунер читают резолвер, рестарт не нужен.
+   * `config.yaml` секцию не задаёт (приоритет env > runtime > дефолт).
+   */
+  audit?: AuditRuntimeSettings;
   /** ADR-090: runtime-настройки секции `plugins` (админка, слой плагинов). */
   plugins?: Partial<PluginsRuntimeSettings>;
   /**
@@ -2297,6 +2532,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.background;
+      return next;
+    });
+  }
+
+  /** Журнал решений по подтверждениям прав (`audit`), {} — не задан. */
+  async getAudit(): Promise<Partial<AuditRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.audit ?? {};
+  }
+
+  async setAudit(config: Partial<AuditRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, audit: config }));
+  }
+
+  async clearAudit(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.audit;
       return next;
     });
   }

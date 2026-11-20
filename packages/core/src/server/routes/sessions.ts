@@ -94,7 +94,7 @@ import { createSessionScriptRoutes } from './session-scripts.js';
 import type { SessionScriptRouteMessages } from './session-scripts.js';
 import type { ScriptService } from '../../engine/scripts/service.js';
 import type { CommandAuditLog } from '../../engine/security/command-audit.js';
-import type { PermissionConfig } from '@itphx/synth-shared';
+import type { PermissionConfig, PermissionRule } from '@itphx/synth-shared';
 import type { BlobRefRepository } from '../../storage/ports/blob-ref-repository.js';
 import type { BlobStore } from '../../storage/ports/blob-store.js';
 // ADR-111 §detach: вид блокирующего прогона (`POST /:id/background`).
@@ -107,6 +107,8 @@ import type { Part } from '@itphx/synth-shared';
 // ADR-106 Ф3 / ADR-005: HTTP-ответ на подтверждение (`permission_reply` без WS)
 // принимает решение через тот же реестр подтверждений.
 import type { ApprovalRegistry, PendingApproval } from '../../engine/permission/approval.js';
+import { recordPermissionAudit } from '../../engine/permission/permission-audit.js';
+import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import type { AuthorityPrincipal } from '@itphx/synth-shared';
 // PROP-141 (Часть D): единая модель переноса сессии между проектами —
 // сервис (единственный шов: блокеры, согласие, порядок эффектов).
@@ -439,6 +441,14 @@ export interface SessionRoutesDeps {
    * метаданные: имя скрипта, cwd, число аргументов, origin).
    */
   commandAudit?: CommandAuditLog;
+  /**
+   * Журнал security-аудита (`scope:'permission'`): снятие сессионного
+   * allow-правила через `PATCH /:id { settings.permission }` пишет `revoke`
+   * (снятые правила — в `before`, `after: null`).
+   *
+   * Не задан (деградированный инстанс/тесты) — записи нет.
+   */
+  securityAudit?: SecurityAuditRepository;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -890,6 +900,64 @@ function parseMoveConsent(raw: unknown): SessionMoveConsent | 'invalid' | undefi
     result.cancel_automations = value.cancel_automations;
   }
   return result;
+}
+
+/**
+ * Снятая allow-запись правил (для аудита `action:'revoke'`).
+ *
+ * `pattern` не задан — правило тула целиком (`execute_shell: 'allow'`); задан —
+ * паттерн объектного правила (`read_file: { '/x/a.txt': 'allow' }`).
+ */
+export interface RevokedAllowRule {
+  tool: string;
+  pattern?: string;
+  action: 'allow';
+}
+
+/**
+ * Какие **allow**-правила исчезли при замене секции `permission` в `PATCH /:id`.
+ *
+ * Сравнение по канонической форме: строковое `'allow'` — правило тула целиком,
+ * объект — паттерны. Паттерн считается живым, если после правки allow-ит либо
+ * он сам, либо правило тула целиком (последнее шире). `ask`/`deny` в before не
+ * интересуют: `revoke` пишется только для выданных разрешений.
+ */
+/**
+ * Карта правил из значения `permission` неизвестной формы.
+ *
+ * Тело `PATCH /:id` приходит из частичной схемы настроек, поэтому `permission`
+ * там `unknown` (`{} | null`), а не `PermissionConfig`: сужаем аккуратно, форма
+ * вне контракта считается «правил нет».
+ */
+function rulesOfPermission(value: unknown): Record<string, PermissionRule> {
+  if (!value || typeof value !== 'object') return {};
+  const rules = (value as { rules?: unknown }).rules;
+  if (!rules || typeof rules !== 'object') return {};
+  return rules as Record<string, PermissionRule>;
+}
+
+export function revokedAllowRules(before: unknown, after: unknown): RevokedAllowRule[] {
+  const beforeRules = rulesOfPermission(before);
+  const afterRules = rulesOfPermission(after);
+  const revoked: RevokedAllowRule[] = [];
+  for (const [tool, rule] of Object.entries(beforeRules)) {
+    const next = afterRules[tool];
+    if (typeof rule === 'string') {
+      if (rule !== 'allow') continue;
+      // Та же строка `allow` — правило осталось.
+      if (next === 'allow') continue;
+      revoked.push({ tool, action: 'allow' });
+      continue;
+    }
+    for (const [pattern, action] of Object.entries(rule)) {
+      if (action !== 'allow') continue;
+      // Правило тула целиком осталось `allow` — паттерн всё ещё разрешён.
+      if (next === 'allow') continue;
+      if (typeof next === 'object' && next !== null && next[pattern] === 'allow') continue;
+      revoked.push({ tool, pattern, action: 'allow' });
+    }
+  }
+  return revoked;
 }
 
 /**
@@ -2062,6 +2130,14 @@ export function createSessionRoutes(
     // снимка (`saveSession`) затирала параллельную дозапись сообщений и правки
     // других запросов (lost update). `updatedAt` двигается — паритет с прежним
     // `updateSession`.
+    //
+    // Журнал решений (`scope:'permission'`): снятые allow-правила считаются
+    // **до** мутации (источник «до» — предварительное чтение) и пишутся
+    // `action:'revoke'` после успешной записи — отказ по `worktreeError` = правки
+    // правил нет, записи нет.
+    const revokedRules = parsed.data.settings?.permission !== undefined
+      ? revokedAllowRules(session.settings.permission, parsed.data.settings.permission)
+      : [];
     const outcome = await sessionManager.mutateMeta<{
       prevProjectId?: string;
       prevTitle?: string;
@@ -2194,6 +2270,23 @@ export function createSessionRoutes(
       );
     }
     const { prevProjectId, prevTitle, projectChanged, worktreeDetached, worktreeEvents } = outcome.value;
+    // Журнал решений: снятые allow-правила сессии — по одной записи `revoke` на
+    // правило (best-effort: ошибка порта не ломает PATCH). Актор — владелец
+    // сессии (в standalone — локальный пользователь).
+    if (revokedRules.length > 0 && deps.securityAudit) {
+      const actor = session.ownerId ?? session.userId ?? LOCAL_USER_ID;
+      for (const rule of revokedRules) {
+        await recordPermissionAudit(
+          { repository: deps.securityAudit },
+          {
+            action: 'revoke',
+            actor,
+            before: { sessionId: id, tool: rule.tool, ...(rule.pattern !== undefined ? { pattern: rule.pattern } : {}), action: rule.action },
+            after: null,
+          },
+        );
+      }
+    }
     // Свежий полный снимок — для событий и ответа: `mutateMeta` возвращает
     // метаданные без истории, а DTO сессии строится из сессии.
     const updatedSession = await sessionManager.getSession(id);

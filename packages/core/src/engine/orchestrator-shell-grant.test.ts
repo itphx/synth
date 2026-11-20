@@ -162,14 +162,10 @@ describe('shell-грант сессии (оркестратор)', () => {
     const store = grantStore(session);
     const mutateCalls: Array<{ sessionId: string; touchUpdatedAt?: boolean }> = [];
     const publish = vi.fn();
-    const granted: unknown[] = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
       _sessionManager: { mutateMeta: fakeMutateMeta(store, mutateCalls) },
       _eventBus: { publish },
-      _onPermissionGrant: (entry: unknown) => {
-        granted.push(entry);
-      },
       _applyShellAllow: proto._applyShellAllow,
       _applyToolAllow: vi.fn(),
     };
@@ -185,15 +181,14 @@ describe('shell-грант сессии (оркестратор)', () => {
     // Не `execute_shell: 'allow'` (шире одобренного) и не объект с паттерном.
     expect(config.rules.execute_shell).toBe('ask');
     expect(config).toBe(session.settings.permission);
-    // Зря не сохраняем, не паблишим и не пишем аудит.
+    // Зря не сохраняем и не паблишим.
     expect(mutateCalls).toHaveLength(0);
     expect(publish).not.toHaveBeenCalled();
-    expect(granted).toHaveLength(0);
     // Fallback на `_applyToolAllow` не вызывался.
     expect((ctx._applyToolAllow as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
   });
 
-  it('без trigger (восстановленная запись): грант не выдаётся — конфиг не меняется, аудита нет', async () => {
+  it('без trigger (восстановленная запись): грант не выдаётся — конфиг не меняется', async () => {
     // ADR-029 (аудит 0.13.8, MEDIUM): виновник неизвестен → командный паттерн
     // «на всю команду» шире одобренного (`rm -rf /srv/data` → вечный `rm *`).
     // Живая ветка всегда передаёт trigger (решение permission-слоя); у
@@ -208,14 +203,10 @@ describe('shell-грант сессии (оркестратор)', () => {
     const store = grantStore(session);
     const mutateCalls: Array<{ sessionId: string; touchUpdatedAt?: boolean }> = [];
     const publish = vi.fn();
-    const granted: unknown[] = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
       _sessionManager: { mutateMeta: fakeMutateMeta(store, mutateCalls) },
       _eventBus: { publish },
-      _onPermissionGrant: (entry: unknown) => {
-        granted.push(entry);
-      },
       _applyShellAllow: proto._applyShellAllow,
       _applyDirectoryAllow: proto._applyDirectoryAllow,
       _applyToolAllow: vi.fn(),
@@ -234,7 +225,6 @@ describe('shell-грант сессии (оркестратор)', () => {
     expect(config.rules.execute_shell).toBe('ask');
     expect(mutateCalls).toHaveLength(0);
     expect(publish).not.toHaveBeenCalled();
-    expect(granted).toHaveLength(0);
     // Fallback на `_applyToolAllow` (грант по путям) не вызывался.
     expect((ctx._applyToolAllow as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(0);
   });
@@ -340,13 +330,6 @@ describe('shell-грант сессии: каталог вместо патте�
       const published: string[] = [];
       const store = grantStore(session);
       let writes = 0;
-      const granted: Array<{
-        sessionId: string;
-        actor: string;
-        patterns: string[];
-        directories: string[];
-        command: string;
-      }> = [];
       const ctx = {
         _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
         _sessionManager: {
@@ -363,15 +346,6 @@ describe('shell-грант сессии: каталог вместо патте�
           },
         },
         _eventBus: { publish: (_s: string, type: string) => { published.push(type); } },
-        _onPermissionGrant: (entry: {
-          sessionId: string;
-          actor: string;
-          patterns: string[];
-          directories: string[];
-          command: string;
-        }) => {
-          granted.push(entry);
-        },
         _applyShellAllow: proto._applyShellAllow,
         _applyDirectoryAllow: proto._applyDirectoryAllow,
         _applyToolAllow: vi.fn(),
@@ -392,13 +366,6 @@ describe('shell-грант сессии: каталог вместо патте�
       expect(config.rules.external_directory).toEqual({ [root]: 'allow', [`${root}/*`]: 'allow' });
       expect(writes).toBe(1);
       expect(published).toEqual(['session.updated']);
-      expect(granted).toEqual([{
-        sessionId: 's1',
-        actor: 'user1',
-        patterns: [],
-        directories: [root],
-        command,
-      }]);
 
       // Следующий такой же ask снят каталогом (совпадения внутри разрешённого).
       const decision = new PermissionEvaluator(config).check({
@@ -424,14 +391,10 @@ describe('shell-грант сессии: каталог вместо патте�
       await writeFile(outsideFile, 'x');
       const session = baseSession();
       const store = grantStore(session);
-      const granted: Array<{ patterns: string[]; directories: string[] }> = [];
       const ctx = {
         _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
         _sessionManager: { mutateMeta: fakeMutateMeta(store) },
         _eventBus: { publish: () => {} },
-        _onPermissionGrant: (entry: { patterns: string[]; directories: string[] }) => {
-          granted.push(entry);
-        },
         _applyShellAllow: proto._applyShellAllow,
         _applyDirectoryAllow: proto._applyDirectoryAllow,
         _applyToolAllow: vi.fn(),
@@ -453,8 +416,6 @@ describe('shell-грант сессии: каталог вместо патте�
         [outside]: 'allow',
         [`${outside}/*`]: 'allow',
       });
-      expect(granted[0]?.patterns).toEqual([]);
-      expect(granted[0]?.directories).toEqual([outside]);
 
       // Повтор той же команды снят правилом external_directory.
       const decision = new PermissionEvaluator(config).check({
@@ -478,12 +439,10 @@ describe('shell-грант сессии: каталог вместо патте�
     try {
       const session = baseSession();
       const store = grantStore(session);
-      const granted: Array<{ directories: string[] }> = [];
       const ctx = {
         _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
         _sessionManager: { mutateMeta: fakeMutateMeta(store) },
         _eventBus: { publish: () => {} },
-        _onPermissionGrant: (entry: { directories: string[] }) => { granted.push(entry); },
         _applyShellAllow: proto._applyShellAllow,
         _applyDirectoryAllow: proto._applyDirectoryAllow,
         _applyToolAllow: vi.fn(),
@@ -500,23 +459,20 @@ describe('shell-грант сессии: каталог вместо патте�
       );
       const sub = join(root, 'sub');
       expect(config.rules.external_directory).toEqual({ [sub]: 'allow', [`${sub}/*`]: 'allow' });
-      expect(granted[0]?.directories).toEqual([sub]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('protected-ask: грант не выдаётся (конфиг не меняется, аудита нет)', async () => {
+  it('protected-ask: грант не выдаётся (конфиг не меняется)', async () => {
     const session = baseSession();
     const store = grantStore(session);
     const mutateCalls: Array<{ sessionId: string; touchUpdatedAt?: boolean }> = [];
     const publish = vi.fn();
-    const granted: unknown[] = [];
     const ctx = {
       _permissionConfig: { rules: {}, askTimeoutMs: 30_000 } as PermissionConfig,
       _sessionManager: { mutateMeta: fakeMutateMeta(store, mutateCalls) },
       _eventBus: { publish },
-      _onPermissionGrant: (entry: unknown) => { granted.push(entry); },
       _applyShellAllow: proto._applyShellAllow,
       _applyDirectoryAllow: proto._applyDirectoryAllow,
       _applyToolAllow: vi.fn(),
@@ -534,7 +490,6 @@ describe('shell-грант сессии: каталог вместо патте�
     expect(config).toBe(session.settings.permission);
     expect(mutateCalls).toHaveLength(0);
     expect(publish).not.toHaveBeenCalled();
-    expect(granted).toHaveLength(0);
   });
 
   it('сессия не найдена → ошибка (паритет с `withLock`), а не молчаливый пропуск', async () => {

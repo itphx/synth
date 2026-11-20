@@ -2,6 +2,10 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-11-20; **перевод отстаёт** — в EN-файле нет секции
+> «Журнал решений по подтверждениям прав (`audit.permission`, runtime)»
+> (`mode`/`retentionDays`, приоритет env > runtime > default, env-lock по полю).
+
 > ⚠️ RU-версия обновлена 2026-11-18 (PROP-142/143) — **переведено**: секция «Restart recovery
 > (`recovery.*`)»; остаётся непереведённой секция `analytics.*` (см. ниже).
 

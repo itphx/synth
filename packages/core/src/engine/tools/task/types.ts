@@ -35,6 +35,7 @@ import type { BackgroundRunService } from '../../background/service.js';
 // ADR-111 §detach: реестр активных (блокирующих) прогонов сессии.
 import type { ActiveRunRegistry } from '../../background/active-runs.js';
 import type { CancellationToken } from '../../../providers/base.js';
+import type { PermissionAuditSink } from '../../permission/permission-audit.js';
 import type { TodoInputItem } from '../todo.js';
 
 /**
@@ -99,6 +100,18 @@ export interface TaskExtra {
   callerAgentRole?: string;
   /** Permissions родительской сессии (ADR-029) — наследуются саб-агентом с deny-дополнениями. */
   permissionConfig?: PermissionConfig;
+  /**
+   * Шов журнала решений по правам (`scope:'permission'`) — тот же, что у
+   * оркестратора (ADR-029, `engine/permission/permission-audit.ts`).
+   *
+   * Задан — решения по подтверждениям саб-агента (`onDecision` его менеджера
+   * ожиданий) и автоматические решения по правилам его permission-слоя
+   * (`outcome:'rule'`, только режим `all`) попадают в общий журнал
+   * инстанса; запись идёт в **родительскую** сессию — туда же, куда
+   * публикуются `permission.asked` ребёнка. Не задан — прежнее поведение
+   * (журнала у саб-агента нет).
+   */
+  permissionAudit?: PermissionAuditSink;
   /**
    * Предохранитель по объёму промпта саб-агента (`agents.subagentMaxInputTokens`):
    * при превышении оценка бюджета завершает прогон детерминированным отчётом.

@@ -36,6 +36,7 @@ import type {
   ExecutionRuntimeSettings,
 } from '@itphx/synth-shared';
 import type {
+  AuditRuntimeSettings,
   BackgroundRuntimeSettings,
   DecisionRuntimeSettings,
   DefaultModelPair,
@@ -353,6 +354,18 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearBackground(): Promise<void> {
     this._clear('background');
+  }
+
+  async getAudit(): Promise<Partial<AuditRuntimeSettings>> {
+    return structuredClone(this._settings.audit ?? {});
+  }
+
+  async setAudit(config: Partial<AuditRuntimeSettings>): Promise<void> {
+    this._patch({ audit: structuredClone(config) });
+  }
+
+  async clearAudit(): Promise<void> {
+    this._clear('audit');
   }
 
   async getUpdates(): Promise<Partial<UpdatesRuntimeSettings>> {

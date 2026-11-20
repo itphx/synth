@@ -155,6 +155,40 @@ describe('SecurityAuditPanel — «Безопасность (политики)»
     expect(table.innerHTML).toContain('bg-destructive/15')
   })
 
+  it('бейджи allow/deny — зелёный/красный и локализованные подписи, прочие действия — как есть', async () => {
+    mocks.getSecurityAudit.mockResolvedValue({
+      entries: [
+        {
+          ...SECURITY_ENTRY,
+          id: 'sa_allow',
+          scope: 'permission',
+          action: 'allow',
+          before: null,
+          after: { toolName: 'execute_shell', outcome: 'user' },
+        },
+        {
+          ...SECURITY_ENTRY,
+          id: 'sa_deny',
+          scope: 'permission',
+          action: 'deny',
+          before: null,
+          after: { toolName: 'execute_shell', outcome: 'timeout' },
+        },
+        // Прочие действия (без подписи в словаре) рендерятся значением как раньше.
+        { ...SECURITY_ENTRY, id: 'sa_fire', action: 'fire' },
+      ],
+      count: 3,
+    })
+    const container = await renderPanel(<SecurityAuditPanel />)
+    const table = container.querySelector('[data-testid="logs-security-table"]')!
+    expect(table.textContent).toContain('Allowed')
+    expect(table.textContent).toContain('Denied')
+    expect(table.textContent).toContain('fire')
+    // Цвета — токены темы: разрешено — success, отказано — destructive.
+    expect(table.innerHTML).toContain('bg-status-success/15')
+    expect(table.innerHTML).toContain('bg-destructive/15')
+  })
+
   it('пустой журнал — пустое состояние', async () => {
     mocks.getSecurityAudit.mockResolvedValue({ entries: [], count: 0 })
     const container = await renderPanel(<SecurityAuditPanel />)

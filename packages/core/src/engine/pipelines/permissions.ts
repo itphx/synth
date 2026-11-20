@@ -29,6 +29,11 @@
  * - `ask` — **эскалация в human-гейт**: наблюдателя-сессии у пайплайна нет,
  *   спросить некого → прогон встаёт на паузу (`awaiting_human`) и ждёт решения
  *   оператора (ADR-101 §6).
+ *
+ * Решения по правилам попадают в журнал прав (`scope:'permission'`):
+ * `deps.audit` — тот же шов, что у оркестратора, `check.sessionId` — сессия
+ * записи (`pipeline:<runId>`). Оба необязательны: без них поведение прежнее, а
+ * `ask` — не решение (его исход — решение оператора в гейте).
  */
 import type {
   McpServerToolSettings,
@@ -37,6 +42,7 @@ import type {
 } from '@itphx/synth-shared';
 
 import { PermissionEvaluator } from '../permission/evaluator.js';
+import type { PermissionAuditSink } from '../permission/permission-audit.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import type { RuntimeDeps } from '../tools/runtime-deps.js';
@@ -77,6 +83,14 @@ export interface PipelinePermissionDeps {
   runtimeDeps?: RuntimeDeps;
   /** Доступность MCP-инструментов по режимам (ADR-071). */
   mcpToolSettings?: Record<string, McpServerToolSettings>;
+  /**
+   * Шов журнала решений по правам (`scope:'permission'`) — тот же, что у
+   * оркестратора (`engine/permission/permission-audit.ts`). Не задан — журнала
+   * у прогона нет (поведение прежнее); запись идёт только в режиме
+   * `audit.permission.mode='all'` и только для решений по правилам
+   * (`ask` — не решение, его эскалирует human-гейт).
+   */
+  audit?: PermissionAuditSink;
 }
 
 /** Проверяемый вызов инструмента шага. */
@@ -95,6 +109,11 @@ export interface PipelineToolPermissionCheck {
   workspaceReady?: boolean;
   /** Capabilities агента шага (ADR-070 §2.9.1). */
   agentCapabilities?: readonly string[];
+  /**
+   * Сессия записи журнала (`pipeline:<runId>` — у шага сессии нет, ADR-101 §1).
+   * Не задана — решение в журнал не пишется (поведение прежнее).
+   */
+  sessionId?: string;
 }
 
 /**
@@ -133,6 +152,22 @@ export function checkPipelineToolPermission(
     ...(check.workspaceReady !== undefined ? { workspaceReady: check.workspaceReady } : {}),
     ...(check.agentCapabilities ? { agentCapabilities: check.agentCapabilities } : {}),
   });
+
+  // Журнал решений по правам (`scope:'permission'`): в режиме
+  // `audit.permission.mode='all'` пишется автоматическое решение по правилу
+  // (`outcome:'rule'`); `ask` решением не является — его эскалирует
+  // human-гейт (фильтр режима и формы записи — внутри шва).
+  if (check.sessionId && decision.action !== 'ask') {
+    deps.audit?.rule({
+      sessionId: check.sessionId,
+      toolName: check.toolName,
+      action: decision.action,
+      ...(decision.matchedRule ? { matchedRule: decision.matchedRule } : {}),
+      ...(check.toolName === 'execute_shell' && typeof check.params.command === 'string'
+        ? { command: check.params.command }
+        : {}),
+    });
+  }
 
   return {
     action: decision.action,

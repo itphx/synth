@@ -52,6 +52,7 @@ import {
   createLiveSshMode,
   // Этап 1 roadmap 0.13 (блок 4): секция `background` (`/settings/background`).
   createLiveBackgroundSettings,
+  createLiveAuditSettings,
   // ADR-135: чтение runtime-каталога профилей исполнения (`/settings/execution`).
   readExecutionRuntimeSettings,
   createEgressPolicyResolver, createEgressLogSink,
@@ -154,6 +155,8 @@ import {
   AuthorityGuard,
   // ADR-106 Ф3: реестр подтверждений + покрытие (носитель покрывающего гранта).
   ApprovalRegistry,
+  // Журнал решений по подтверждениям прав (`scope:'permission'`): шов записи.
+  createPermissionAuditSink,
   buildApprovalResponderProfile,
   createApprovalCoverageResolver,
   startEventJournalMetrics,
@@ -411,6 +414,30 @@ export async function createBackendDeps(
     config: config.synth.background,
   });
   await backgroundSettings.refresh();
+  // Журнал **решений по подтверждениям прав** (`scope:'permission'`):
+  // runtime-секция `audit` (режим + retention), env > runtime > default.
+  const auditSettings = createLiveAuditSettings({ store: settingsStore });
+  await auditSettings.refresh();
+  // Retention-прогон на старте — best-effort (см. core-сборку).
+  if (!storageDegraded && typeof securityAudit.prune === 'function') {
+    try {
+      const removed = await securityAudit.prune(auditSettings.getRetentionDays());
+      if (removed > 0) {
+        console.info(`[permission] retention журнала решений: удалено ${removed} записей`);
+      }
+    } catch (err) {
+      console.warn(
+        `[permission] retention журнала решений не выполнен: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  // Шов журнала решений: один на процесс — оркестратор (`permissionAudit`) и
+  // его менеджер ожиданий (`onDecision`).
+  const permissionAuditSink = createPermissionAuditSink({
+    ...(storageDegraded ? {} : { repository: securityAudit }),
+    actorOf: async (sessionId) => (await sessionManager.getSession(sessionId))?.ownerId ?? 'local',
+    mode: () => auditSettings.getMode(),
+  });
   // ADR-102: сборщик роллапов аналитики (write-path) — только через порт слоя
   // хранения; в деградации выключен (не пишем домен в файловый фоллбек).
   const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
@@ -1752,29 +1779,10 @@ export async function createBackendDeps(
     ...(executorMcpResolvePool ? { executorMcpResolvePool } : {}),
     // ADR-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
-    // Аудит выдачи сессионных shell-грантов (паттерны команд и каталоги
-    // правила `external_directory`).
-    onPermissionGrant: (entry) => {
-      if (!securityAudit) return;
-      void securityAudit.append({
-        id: `sa_${generateId()}`,
-        ts: nowISO(),
-        actor: entry.actor,
-        scope: 'permission',
-        action: 'grant',
-        source: 'runtime',
-        before: null,
-        after: {
-          sessionId: entry.sessionId,
-          patterns: entry.patterns,
-          directories: entry.directories,
-          command: entry.command,
-        },
-        version: 1,
-      }).catch((err: unknown) => {
-        console.warn(`[permission] аудит гранта не записан: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    },
+    // Журнал решений по подтверждениям прав (`scope:'permission'`): цикл хода
+    // пишет автоматические решения по правилам (режим `all`), менеджер
+    // ожиданий — все исходы подтверждения (`onDecision` внутри оркестратора).
+    permissionAudit: permissionAuditSink,
     contextBuilder,
     contextConfig,
     providerLoader,
@@ -2411,6 +2419,9 @@ export async function createBackendDeps(
   const pipelinePermissions: PipelinePermissionDeps = {
     permissionConfig: config.synth.permission,
     runtimeDeps,
+    // Журнал решений по правам (`scope:'permission'`) — тот же шов, что у
+    // оркестратора: решения по правилам шага видны в общем журнале инстанса.
+    audit: permissionAuditSink,
   };
   // ADR-036/ADR-101: провайдер шага — **всегда** через `GatewayProvider`
   // (обёртка оркестратора: та же точка, что у пула провайдеров). Провайдер
@@ -2875,6 +2886,10 @@ export async function createBackendDeps(
     // Этап 1 roadmap 0.13 (блок 4): живое состояние секции `background`
     // (сервисы/прунеры/оркестратор + админ-API `/settings/background`).
     backgroundSettings,
+    // Журнал решений по подтверждениям прав: живое состояние секции `audit`
+    // (режим + retention) и шов записи — для мутаций правил вне хода.
+    auditSettings,
+    permissionAuditSink,
     // ADR-114: сервис worktree — HTTP-контур проектов и привязка сессии.
     worktreeService,
     webhookStore,
