@@ -484,6 +484,18 @@ compatibility. The full description, payloads and edge cases are in the Russian 
 | `part.delta` / `part.updated` | session channel | upsert by `{messageId, partId}` |
 | `stream.error` | session channel | `stream_id`, `error`, `error_type`, `retry_count`, `can_retry`, plus **additive** `message_id` (id of the user message whose turn failed) and `turn_id?` (turn id from `current_stream.turn_id`, captured before the stream is cleared) — lets the client attach the error banner to that message/turn |
 
+**Tool call semantics (`tool_call.started`/`tool_call.result`, ADR-118, addendum 2026-11-20).**
+`tool_call.started` is published at the moment a call **actually starts** (the execution wrapper;
+for `ask` calls — only after the confirmation), `tool_call.result` — as soon as the outcome of
+**that** call is ready, without waiting for the other calls of the batch. Therefore the event order
+**does not match** the order of writing to the history: the `assistant` message with `tool_calls`,
+the `role: 'tool'` records and `metadata.tool_results` are written in the order of the model calls.
+Calls that are not executed (`short-circuit`/`deny`/a refused confirmation) still get their event
+pair in the finalization phase — their “start” is fictitious, but without the pair the client would
+leave the card without a result. Before `started` the call card is `queued` (the call is already in
+the step, the start has not arrived): no spinner and no duration are rendered; details —
+[MESSAGE_FLOW.md](../MESSAGE_FLOW.md) §8.2 (in Russian).
+
 **Context compression (ADR-119).** Compression events go to the session channel; no new channels.
 
 | Event | `data` fields |
@@ -516,18 +528,21 @@ manifest and no pack files in the payload; `install` is also published for the
 `unchanged` and `removed: false` stay silent, `POST /plugins/token` publishes nothing at all;
 no tokens, keys or source URLs in the payload) — plus `snippets.updated` (the `#` snippet
 registry, ADR-126 §4: `action` `create`/`update`/`delete` + `snippetId?` — the canonical
-**name** of the record; no snippet body, description or aliases in the payload). All three are
-admin types (they are not in `USER_FACING_INSTANCE_EVENTS` and are not delivered to `USER`).
+**name** of the record; no snippet body, description or aliases in the payload). `packs.updated`
+and `plugins.updated` are admin types (they are not in `USER_FACING_INSTANCE_EVENTS` and are not
+delivered to `USER`), while `snippets.updated` is **user-facing** (it is in the list: every user
+has the `#` snippet registry, and the record text never reaches the event —
+`packages/backend/src/events/instance-events.ts`).
 Plus the instance-level `events.updated` (the external event intake registry, ADR-089: `action`
 `binding.create`/`binding.update`/`binding.delete`/`key.create`/`key.update`/`key.revoke`/
 `key.delete`/`route.create`/`route.update`/`route.delete` + `bindingId?`/`routeId?`; no API key
 secret (`synth_evt_…`), no hash and no key id in the payload — an admin type, not delivered to
 `USER`; `POST /api/v2/events` is ingress and publishes nothing) and `identities.updated` (user
 identities, ADR-089: `action` `claim`/`delete` and **nothing else** — `provider`/`externalId` and
-the claim code never reach the payload; the type is not delivered to `USER`, but the payload is
-empty by construction, so it stays safe if delivery is ever widened).
-Clients must
-handle them, otherwise the feed “sticks” after another client's action.
+the claim code never reach the payload; the type **is delivered** to `USER` (`identities.updated`
+is in `USER_FACING_INSTANCE_EVENTS`): the payload is empty by construction, and the client refetches
+**its own** `GET /api/v2/me/identities` list). Clients must handle them, otherwise the feed
+“sticks” after another client's action.
 
 `queue.state` is published when messages are enqueued or removed and at turn boundaries — the text
 and the author do not reach the session channel (this removes the former `message.queued` leak).
@@ -773,6 +788,10 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 > **Session DTO — `current_stream.live` (ADR-118 §5).** An additive field of the live turn — a snapshot of the **current (streaming) step** at response time: `{message_id, step_index, turn_id, content, reasoning, parts, updated_at}`; `null` when no step is streaming (finished/not started yet) or the snapshot belongs to another `stream_id`. It lives in core memory (not persisted) and is dropped on `step.finished`; `parts` are the same parts as in `part.delta`/`part.updated` (deterministic ids), so the client merges them without duplicates. It lets a client **open a session mid-turn and see everything up to the current moment** without waiting for the next delta (tab switch, page reload, a second client).
 
 > **Session DTO — `activity` (idle | busy | retry).** An additive field of a serialized session (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) — the **server-side activity status**: `{type: 'idle'}` | `{type: 'busy', turnId: string\|null, streamId: string\|null}` | `{type: 'retry', attempt: number, maxRetries: number, retryAt: string, error?: string, streamId: string}`. Priority: **retry > busy > idle**. `busy` — a turn is running (`current_stream`) or the session is locked (`status.blocked`); `retry` — the LLM call failed with a recoverable error and the processor is waiting for the backoff (`attempt`/`maxRetries` — the attempt number and the limit, `retryAt` — the ISO time of the next attempt, `error` — the text of the last error). The retry state is **persistent** (file store — the `retry` field; PostgreSQL — the `sessions.retry` jsonb column, migration `030`), so after a reload/restart the client sees “retrying” rather than “empty”; it is cleared on a new `stream.start`, on success, on a terminal error and on cancellation/queue reset.
+
+> **Session DTO — `status` (ADR-005, PROP-143).** The `status` object of a serialized session (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) carries the runtime state: `blocked` (`string\|null` — the blocking reason), `cancel_requested` (bool) + `cancel_requested_at` (ISO\|null) — a "Stop" request (`POST /sessions/:id/abort`), `queue_stopped` (bool) + `queue_stopped_at` (ISO\|null) — queue processing stopped deliberately ("Stop" with a non-empty queue, `queue.stalled`; there is no autostart after a restart — resuming is `POST /queue/:sessionId/resume`) and `last_turn` (see below). All the fields are additive: without them the client works as before. The "is a turn running" flag does not live here but in `activity` (`idle`/`busy`/`retry` — the block above).
+
+> **Session DTO — `status.last_turn` (PROP-143).** `{outcome: 'completed'\|'error'\|'limit'\|'stopped'\|'cancelled', reason?: StopReason, at: string} | null` — the **durable outcome of the last turn**, so that lists (summaries without history) know how the turn ended. It is written by a point metadata mutation (`touchUpdatedAt: false` — the service mark does not "revive" the session in lists) by the turn finalizer (`packages/core/src/engine/orchestrator/last-turn.ts` → `recordLastTurn`) and by the terminal provider error handler (`engine/orchestrator/errors.ts`). `reason` — the concrete reason from the union of `engine/stop-reason.ts` (`provider_error`, `steps_limit`, `context_budget`, `stopped_by_user`, `denied`, `empty`, `output_limit`, `internal`, `restart`, `orphaned`), present only when known. On the start of a **new** turn the value is **not reset** (the next finalizer will overwrite it), so the client paints the colour only when `activity.type === 'idle'`: while a turn or a backoff is running there is no outcome "yet". `null` — no turn has ever completed (a legacy session) or the backend is older than the field. The consumer is the UI left tree (`packages/ui/src/lib/sessionBadgeState.ts`: `error` — a red title, `completed` — green, `limit`/`stopped`/`cancelled` — neutral).
 
 > **Session DTO — `pending_approvals` (ADR-029).** An additive field of a serialized session (`GET /api/v2/sessions` — in every record of the page, `GET /api/v2/sessions/:id`) — the **number of unanswered permission requests** of the session (`0` — no pending requests). The session tree needs it: the “awaiting permission confirmation” label **after a page reload** comes from this field (the live client store is empty at that moment — the `permission.asked` event has already passed). The counter comes from the expectations registry (live + restored after an instance restart); it is computed **once per request** (one pass over the registry of pending approvals), not per session of the page. A user answer, an expired timeout, a turn cancel (“Stop”) and a cascaded denial decrease the counter. **Persistence (ADR-029):** the live registry of expectations is in the process memory, but its copy lives in a separate expectations store (`{dataDir}/pending-approvals.json`; PostgreSQL — the `pending_approvals` table), so after an instance restart the counter **is not reset** — the expectation arrives as restored (`GET /:id/permissions` → `restored: true`). For a `remote:` session the field comes from its backend (the counter is computed there).
 

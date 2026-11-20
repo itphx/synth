@@ -475,6 +475,15 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   во время хода показывает текущий ход.
 - **Детерминированные `partId`:** `msg:text:<ordinal>`, `msg:reasoning:<ordinal>`,
   `<callId>` у вызова инструмента. Части — upsert, повторная доставка не задваивает текст.
+- **Семантика вызовов (`tool_call.started`/`tool_call.result`, ADR-118, аддендум 2026-11-20).**
+  `started` публикуется в момент **фактического старта** вызова (обёртка исполнения; для
+  `ask`-вызовов — только после подтверждения), `result` — как только готов исход **этого** вызова,
+  не дожидаясь остальных вызовов батча. Поэтому порядок событий **не совпадает** с порядком записи
+  в историю: `assistant`-сообщение с `tool_calls`, `role: 'tool'`-записи и `metadata.tool_results`
+  пишутся в порядке вызовов модели. Неисполняемые вызовы (`short-circuit`/`deny`/отказ в
+  подтверждении) получают событийную пару в фазе фиксации — «старт» фиктивный, но без пары клиент
+  оставил бы карточку без результата. До `started` карточка вызова — `queued` (в шаге есть, старт не
+  пришёл): спиннер и длительность не рисуются, подробности — [MESSAGE_FLOW.md](./MESSAGE_FLOW.md) §8.2.
 - **События синхронизации мутаций.** Любая мутация, видимая другому клиенту, публикует событие:
   `message.deleted`/`message.updated` (сообщения), `session.messages.cleared`/`session.messages.merged`
   (история), `project.updated`/`project.deleted` (проект — в канал каждой его сессии),
@@ -500,8 +509,10 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   `removed: false` молчат, `POST /plugins/token` не публикует вовсе; токенов, ключей и URL
   источников в payload нет) — а также `snippets.updated` (реестр `#`-сниппетов, ADR-126 §4:
   `action` `create`/`update`/`delete` + `snippetId?` — каноническое **имя** записи; тела
-  сниппета, описания и алиасов в payload нет). Все три — админские типы (в
-  `USER_FACING_INSTANCE_EVENTS` их нет, к `USER` не доставляются). Плюс инстансные
+  сниппета, описания и алиасов в payload нет). `packs.updated` и `plugins.updated` — админские
+  типы (в `USER_FACING_INSTANCE_EVENTS` их нет, к `USER` не доставляются), `snippets.updated` —
+  пользовательский (в списке есть: реестр `#`-сниппетов есть у каждого, а текст записи в событие
+  не попадает — `packages/backend/src/events/instance-events.ts`). Плюс инстансные
   `events.updated` (реестр приёма внешних событий, ADR-089: `action`
   `binding.create`/`binding.update`/`binding.delete`/`key.create`/`key.update`/
   `key.revoke`/`key.delete`/`route.create`/`route.update`/`route.delete` +
@@ -509,8 +520,9 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   payload нет — админский тип, к `USER` не доставляется; `POST /api/v2/events` —
   ingress, события не даёт) и `identities.updated` (идентичности пользователя,
   ADR-089: `action` `claim`/`delete`, **больше ничего** — `provider`/`externalId`
-  и claim-код в payload не попадают; тип не доставляется к `USER`, но payload
-  пуст по построению, поэтому безопасен и для расширения доставки). Клиенты
+  и claim-код в payload не попадают; тип **доставляется** к `USER` (`identities.updated` есть в
+  `USER_FACING_INSTANCE_EVENTS`): payload пуст по построению, а клиент перечитывает **свой**
+  список `GET /api/v2/me/identities`). Клиенты
   обязаны их
   обрабатывать — иначе лента и списки «залипают» после действий другого клиента или агента:
   именно так выглядела дыра «агент создал запись тулом из чата, а панель показывает старый
@@ -803,6 +815,10 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > **DTO сессии — `current_stream.live` (ADR-118 §5).** Аддитивное поле живого хода — снимок **текущего (стримящегося) шага** на момент ответа: `{message_id, step_index, turn_id, content, reasoning, parts, updated_at}`; `null`, когда шаг не стримится (закрыт/ещё не начался) или снимок относится к другому `stream_id`. Живёт в памяти ядра (не персистится), снимается на `step.finished`; `parts` — те же части, что в `part.delta`/`part.updated` (детерминированные id), поэтому клиент мержит их без дублей. Нужен, чтобы **открыть сессию посреди хода и увидеть всё до текущего момента**, не дожидаясь следующей дельты (переключение вкладок, перезагрузка страницы, второй клиент).
 
 > **DTO сессии — `activity` (idle | busy | retry).** Аддитивное поле сериализованной сессии (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) — **серверный статус активности**: `{type: 'idle'}` | `{type: 'busy', turnId: string\|null, streamId: string\|null}` | `{type: 'retry', attempt: number, maxRetries: number, retryAt: string, error?: string, streamId: string}`. Приоритет: **retry > busy > idle**. `busy` — идёт ход (`current_stream`) либо сессия заблокирована (`status.blocked`); `retry` — LLM-вызов упал с восстанавливаемой ошибкой, процессор ждёт backoff (`attempt`/`maxRetries` — номер попытки и предел, `retryAt` — ISO-время следующей попытки, `error` — текст последней ошибки). Состояние ретрая **персистентно** (файловое хранилище — поле `retry`; PostgreSQL — jsonb-колонка `sessions.retry`, миграция `030`), поэтому после reload/restart клиент видит «повтор», а не «пусто»; снимается при новом `stream.start`, успехе, терминальной ошибке и отмене/сбросе очереди.
+
+> **DTO сессии — `status` (ADR-005, PROP-143).** Объект `status` сериализованной сессии (`GET /api/v2/sessions/:id`, `GET /api/v2/sessions`) несёт runtime-состояние: `blocked` (`string\|null` — причина блокировки), `cancel_requested` (bool) + `cancel_requested_at` (ISO\|null) — запрос «Стопа» (`POST /sessions/:id/abort`), `queue_stopped` (bool) + `queue_stopped_at` (ISO\|null) — обработка очереди остановлена осознанно («Стоп» при непустой очереди, `queue.stalled`; автозапуска после рестарта нет — возобновление `POST /queue/:sessionId/resume`) и `last_turn` (см. ниже). Все поля аддитивные: без них клиент работает как прежде. Поле «идёт ли ход» живёт не здесь, а в `activity` (`idle`/`busy`/`retry` — блок выше).
+
+> **DTO сессии — `status.last_turn` (PROP-143).** `{outcome: 'completed'\|'error'\|'limit'\|'stopped'\|'cancelled', reason?: StopReason, at: string} | null` — **durable-исход последнего хода**, чтобы списки (сводки без истории) знали, чем закончился ход. Записывается точечной мутацией метаданных (`touchUpdatedAt: false` — служебная отметка не «оживляет» сессию в списках) финализатором хода (`packages/core/src/engine/orchestrator/last-turn.ts` → `recordLastTurn`) и обработчиком терминальной ошибки провайдера (`engine/orchestrator/errors.ts`). `reason` — конкретная причина из union'а `engine/stop-reason.ts` (`provider_error`, `steps_limit`, `context_budget`, `stopped_by_user`, `denied`, `empty`, `output_limit`, `internal`, `restart`, `orphaned`), есть только если известна. На старте **нового** хода значение **не сбрасывается** (его перезапишет следующий финализатор), поэтому клиент показывает цвет только когда `activity.type === 'idle'`: идёт ход или бэкофф — исхода «сейчас» ещё нет. `null` — ход ни разу не завершался (legacy-сессия) либо backend старше поля. Потребитель — левое дерево UI (`packages/ui/src/lib/sessionBadgeState.ts`: `error` — красное название, `completed` — зелёное, `limit`/`stopped`/`cancelled` — нейтраль).
 
 > **DTO сессии — `pending_approvals` (ADR-029).** Аддитивное поле сериализованной сессии (`GET /api/v2/sessions` — в каждой записи страницы, `GET /api/v2/sessions/:id`) — **число неотвеченных запросов подтверждения прав** сессии (`0` — ожиданий нет). Нужно дереву сессий: метка «ждёт подтверждения прав» после **перезагрузки страницы** приходит из этого поля (живой стор клиента в этот момент пуст — событие `permission.asked` уже прошло). Счётчик — из реестра ожиданий (живые + восстановленные после рестарта инстанса); считается **один раз на запрос** (один проход по реестру ожиданий подтверждений), а не на каждую сессию страницы. Ответ пользователя, истёкший таймаут, отмена хода («Стоп») и каскадный отказ уменьшают счётчик. **Персистентность (ADR-029):** живой реестр ожиданий — в памяти процесса, но его копия лежит в отдельном хранилище ожиданий (`{dataDir}/pending-approvals.json`; PostgreSQL — таблица `pending_approvals`), поэтому после рестарта инстанса счётчик **не обнуляется** — ожидание приходит как восстановленное (`GET /:id/permissions` → `restored: true`). Для `remote:`-сессии поле приходит от удалённого backend (там считается свой счётчик).
 
