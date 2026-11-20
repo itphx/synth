@@ -26,12 +26,35 @@ vi.mock('@/lib/api/synthApi', () => ({
 }))
 vi.mock('@/hooks/useNotification', () => ({ notifyMessage: vi.fn() }))
 
+// persist (zustand) в notificationStore/useUIStore пишет в localStorage — в
+// Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 import { createDispatcher } from './transportStore'
 import { useChatStore, type MessageData } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
 import { useProjectsStore } from './projectsStore'
 import { useUIStore } from './useUIStore'
 import { useFilesStore } from './filesStore'
+import { useNotificationStore } from './notificationStore'
 import { resetChatStore } from './testUtils'
 import { synthApi } from '@/lib/api/synthApi'
 import type { WSEvent } from '@/lib/api/transport'
@@ -276,6 +299,18 @@ describe('transportStore dispatcher: регрессия существующих
 
     expect(useSessionsStore.getState().sessions.map((s) => s.id)).toEqual(['s2'])
     expect(closeTab).toHaveBeenCalledWith('chat-s1')
+  })
+
+  it('session.deleted забывает метку «просмотрено» удалённой сессии', () => {
+    // Метка персистится (`ackedTurnBySession`) — за удалёнными сессиями мусор
+    // не копим, соседние записи не трогаем.
+    useNotificationStore.setState({
+      ackedTurnBySession: { s1: 'completed|at-1', s2: 'error|at-2' },
+    })
+
+    dispatch(event('session.deleted', { session_id: 's1' }))
+
+    expect(useNotificationStore.getState().ackedTurnBySession).toEqual({ s2: 'error|at-2' })
   })
 
   it('fs.changed по-прежнему инвалидирует дерево проекта', () => {

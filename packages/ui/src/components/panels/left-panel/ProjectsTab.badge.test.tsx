@@ -5,8 +5,9 @@
  * Проверяются два уровня:
  *  1. Модель применяется к реальным сторам панели: `status.last_turn` из DTO
  *     (`error` / `completed` / `limit`) плюс живые счётчики клиента.
- *  2. Локальная метка «просмотрено» (`notificationStore.ackedAtBySession`):
- *     после просмотра исхода название больше не красится.
+ *  2. Локальная метка «просмотрено» (`notificationStore.ackedTurnBySession`):
+ *     ключ увиденного исхода совпал с текущим — название больше не красится,
+ *     а новый ход (новый ключ) возвращает цвет.
  *
  * Текст названия остаётся текстом (`title`), цвет — токены темы: смысл состояния
  * не должен быть доступен только зрением.
@@ -84,6 +85,9 @@ import { useProjectsStore } from '@/stores/projectsStore'
 import { useChatStore } from '@/stores/chatStore'
 import { usePermissionStore } from '@/stores/permissionStore'
 import { useNotificationStore } from '@/stores/notificationStore'
+import { turnKey } from '@/lib/sessionBadgeState'
+import { lastEventAtBySession } from '@/stores/transportStore'
+import { STALE_TURN_SILENCE_MS } from '@/hooks/useStaleTurnGuard'
 import { useProcessesStore } from '@/stores/processesStore'
 import { useTerminalsStore } from '@/stores/terminalsStore'
 import { useTimersStore } from '@/stores/timersStore'
@@ -95,7 +99,10 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 
 /** Момент исхода последнего хода (детерминированные тесты ack-метки). */
 const TURN_AT = '2026-01-01T12:00:00.000Z'
-const TURN_MS = Date.parse(TURN_AT)
+/** Момент предыдущего (просмотренного) хода — раньше текущего. */
+const PREV_TURN_AT = '2025-12-31T23:59:00.000Z'
+/** Момент следующего хода — позже текущего. */
+const NEXT_TURN_AT = '2026-01-02T09:00:00.000Z'
 
 function session(id: string, overrides: Partial<SessionData> = {}): SessionData {
   return {
@@ -226,9 +233,12 @@ beforeEach(() => {
 
   useProjectsStore.setState({ projects: [], loading: false, error: null })
   useChatStore.setState({ turnBySession: {}, queueBySession: {} })
+  // Живость локального хода считается по последнему событию сессии — метка
+  // глобальная и живёт между тестами.
+  lastEventAtBySession.clear()
   usePermissionStore.setState({ requestsBySession: {} })
   // Метки «просмотрено» — локальные и живут дольше одного теста.
-  useNotificationStore.setState({ sessionUnread: {}, ackedAtBySession: {} })
+  useNotificationStore.setState({ sessionUnread: {}, ackedTurnBySession: {} })
   useProcessesStore.setState({ byId: {}, order: [], logs: {}, pendingIds: [], error: null })
   useTerminalsStore.setState({ terminalsById: {}, order: [], queryIds: {}, loading: false, error: null })
   useTimersStore.setState({ byId: {}, order: [], pendingIds: [], loading: false, error: null })
@@ -266,9 +276,12 @@ describe('ProjectsTab — критическая ошибка последнег
 
     expect(labelSpan(sessionNode(container, 's1'), 's1')!.classList.contains('text-status-error')).toBe(true)
 
-    // Эмуляция открытия чата сессии: ChatTab ставит метку «просмотрено».
+    // Эмуляция открытия чата сессии: ChatTab ставит метку «просмотрено»
+    // ключом текущего исхода.
     await act(async () => {
-      useNotificationStore.getState().markSessionAcked('s1', TURN_MS + 1_000)
+      useNotificationStore
+        .getState()
+        .markSessionAcked('s1', turnKey({ outcome: 'error', at: TURN_AT })!)
     })
 
     const label = labelSpan(sessionNode(container, 's1'), 's1')!
@@ -277,19 +290,22 @@ describe('ProjectsTab — критическая ошибка последнег
     expect(label.getAttribute('title')).toBe('s1')
   })
 
-  it('метка «просмотрено» раньше исхода ошибку не скрывает', async () => {
+  it('метка «просмотрено» от другого хода ошибку не скрывает', async () => {
     setSessions([sessionWithTurn('s1', 'error')])
-    // Просмотр был до исхода (старая вкладка) — новый сбой всё равно красится.
-    useNotificationStore.setState({ ackedAtBySession: { s1: TURN_MS - 60_000 } })
+    // Просмотрен предыдущий ход — новый сбой всё равно красится.
+    useNotificationStore.setState({
+      ackedTurnBySession: { s1: turnKey({ outcome: 'completed', at: PREV_TURN_AT })! },
+    })
     const container = await renderTree()
 
     expect(labelSpan(sessionNode(container, 's1'), 's1')!.classList.contains('text-status-error')).toBe(true)
   })
 
-  it('ошибка при идущем ходе — синяя точка вместо красного', async () => {
+  it('ошибка при идущем ходе — живая точка вместо красного', async () => {
     setSessions([sessionWithTurn('s1', 'error')])
     useChatStore.setState({
-      turnBySession: { s1: { turnId: 't1', status: 'streaming' } } as never,
+      // Свежий ход: `startedAt` только что — тишины нет, ход подтверждён.
+      turnBySession: { s1: { turnId: 't1', status: 'streaming', startedAt: Date.now() } } as never,
     })
     const container = await renderTree()
 
@@ -345,11 +361,73 @@ describe('ProjectsTab — завершённая работа', () => {
 
   it('просмотренное завершение цвета не даёт', async () => {
     setSessions([sessionWithTurn('s1', 'completed')])
-    useNotificationStore.setState({ ackedAtBySession: { s1: TURN_MS + 5_000 } })
+    useNotificationStore.setState({
+      ackedTurnBySession: { s1: turnKey({ outcome: 'completed', at: TURN_AT })! },
+    })
     const container = await renderTree()
 
     const label = labelSpan(sessionNode(container, 's1'), 's1')!
     expect(label.classList.contains('text-status-success')).toBe(false)
+  })
+})
+
+/**
+ * Регресс владельца: просмотренная сессия не должна краситься, а **новый** ход
+ * после просмотра — должен (метка привязана к идентичности исхода, а не ко
+ * времени).
+ */
+describe('ProjectsTab — просмотрено и новый ход', () => {
+  it('просмотрено → цвета нет; новый ход после просмотра → цвет снова есть', async () => {
+    setSessions([sessionWithTurn('s1', 'completed')])
+    const container = await renderTree()
+
+    const green = () =>
+      labelSpan(sessionNode(container, 's1'), 's1')!.classList.contains('text-status-success')
+    expect(green()).toBe(true)
+
+    // Просмотр: ChatTab записал ключ текущего исхода.
+    await act(async () => {
+      useNotificationStore
+        .getState()
+        .markSessionAcked('s1', turnKey({ outcome: 'completed', at: TURN_AT })!)
+    })
+    expect(green()).toBe(false)
+
+    // Следующий ход завершился — это уже другой исход (другой ключ).
+    await act(async () => {
+      setSessions([
+        sessionWithTurn('s1', 'completed', {
+          status: { blocked: null, last_turn: { outcome: 'completed', at: NEXT_TURN_AT } },
+        }),
+      ])
+    })
+    expect(green()).toBe(true)
+  })
+
+  it('просмотренная ошибка не красная, новый сбой — снова красный', async () => {
+    setSessions([sessionWithTurn('s1', 'error')])
+    const container = await renderTree()
+
+    const red = () =>
+      labelSpan(sessionNode(container, 's1'), 's1')!.classList.contains('text-status-error')
+    expect(red()).toBe(true)
+
+    await act(async () => {
+      useNotificationStore
+        .getState()
+        .markSessionAcked('s1', turnKey({ outcome: 'error', at: TURN_AT })!)
+    })
+    expect(red()).toBe(false)
+
+    // Новый сбой — другой `at` → другой ключ → красный возвращается.
+    await act(async () => {
+      setSessions([
+        sessionWithTurn('s1', 'error', {
+          status: { blocked: null, last_turn: { outcome: 'error', at: NEXT_TURN_AT } },
+        }),
+      ])
+    })
+    expect(red()).toBe(true)
   })
 })
 
@@ -410,7 +488,7 @@ describe('ProjectsTab — «требуется действие» остаётс
     expect(labelSpan(node, 's1')!.classList.contains('text-status-error')).toBe(false)
   })
 
-  it('остановка очереди (queue_stopped): caution + точка stalled', async () => {
+  it('остановка очереди (queue_stopped): caution + статичная точка attention', async () => {
     setSessions([
       sessionWithTurn('s1', 'error', { status: { blocked: null, queue_stopped: true } }),
     ])
@@ -418,12 +496,15 @@ describe('ProjectsTab — «требуется действие» остаётс
 
     const node = sessionNode(container, 's1')
     const dot = statusDot(node)!
-    expect(dot.classList.contains('bg-status-warning')).toBe(true)
+    expect(dot.classList.contains('bg-status-caution')).toBe(true)
+    // «Работа стоит, нужен „Продолжить“» — не моргает: каждая точка мигания
+    // должна иметь конец (репорт владельца).
+    expect(dot.classList.contains('animate-notification-blink')).toBe(false)
     expect(dot.getAttribute('aria-label')).toBe('Attention needed')
     expect(labelSpan(node, 's1')!.classList.contains('text-status-caution')).toBe(true)
   })
 
-  it('живой stall очереди (стор) — та же метка', async () => {
+  it('живой stall очереди при непустой очереди — та же статичная метка', async () => {
     setSessions([session('s1')])
     useChatStore.setState({
       queueBySession: { s1: { pendingCount: 1, steerCount: 0, isStalled: true } } as never,
@@ -431,7 +512,18 @@ describe('ProjectsTab — «требуется действие» остаётс
     const container = await renderTree()
 
     const dot = statusDot(sessionNode(container, 's1'))!
-    expect(dot.classList.contains('bg-status-warning')).toBe(true)
+    expect(dot.classList.contains('bg-status-caution')).toBe(true)
+    expect(dot.classList.contains('animate-notification-blink')).toBe(false)
+  })
+
+  it('липкий stall при пустой очереди точку не даёт', async () => {
+    setSessions([session('s1')])
+    useChatStore.setState({
+      queueBySession: { s1: { pendingCount: 0, steerCount: 0, isStalled: true } } as never,
+    })
+    const container = await renderTree()
+
+    expect(statusDot(sessionNode(container, 's1'))).toBeNull()
   })
 
   it('непустая очередь без stall — нейтральная точка pending', async () => {
@@ -444,5 +536,74 @@ describe('ProjectsTab — «требуется действие» остаётс
     const dot = statusDot(sessionNode(container, 's1'))!
     expect(dot.classList.contains('bg-muted-foreground')).toBe(true)
     expect(dot.getAttribute('aria-label')).toBe('Answer ready')
+  })
+})
+
+/**
+ * Регресс владельца: индикатор «идёт работа» мигал, хотя активности не было.
+ *
+ * Мигание — только по **живому** подтверждению (`live.streaming` И тишина не
+ * больше `STALE_TURN_SILENCE_MS`). Серверный `activity: busy` при мёртвом ходе
+ * даёт статичную точку: события хода не приходят, а снимок DTO не меняется —
+ * мигание по нему не имеет конца.
+ */
+describe('ProjectsTab — мигание только по живому подтверждению', () => {
+  /** Ход в сторе с заданным возрастом старта (и без событий вообще). */
+  function setTurn(startedAgoMs: number): void {
+    useChatStore.setState({
+      turnBySession: {
+        s1: { turnId: 't1', status: 'streaming', startedAt: Date.now() - startedAgoMs },
+      } as never,
+    })
+  }
+
+  it('activity.busy + молчащий ход: точка статичная, без анимации', async () => {
+    setSessions([session('s1', { activity: { type: 'busy', turnId: 't1' } })])
+    setTurn(STALE_TURN_SILENCE_MS + 60_000)
+    const container = await renderTree()
+
+    const dot = statusDot(sessionNode(container, 's1'))
+    expect(dot).not.toBeNull()
+    expect(dot!.classList.contains('bg-status-info')).toBe(true)
+    // Главное утверждение бага: мигания нет.
+    expect(dot!.classList.contains('animate-notification-blink')).toBe(false)
+  })
+
+  it('activity.busy без записи хода в сторе: тоже статичная точка', async () => {
+    setSessions([session('s1', { activity: { type: 'busy', turnId: 't1' } })])
+    const container = await renderTree()
+
+    const dot = statusDot(sessionNode(container, 's1'))
+    expect(dot).not.toBeNull()
+    expect(dot!.classList.contains('animate-notification-blink')).toBe(false)
+  })
+
+  it('молчащий ход без серверного busy: точки нет вовсе', async () => {
+    setSessions([sessionWithTurn('s1', 'stopped')])
+    setTurn(STALE_TURN_SILENCE_MS + 60_000)
+    const container = await renderTree()
+
+    expect(statusDot(sessionNode(container, 's1'))).toBeNull()
+  })
+
+  it('свежий локальный streaming: точка мигает', async () => {
+    setSessions([session('s1', { activity: { type: 'busy', turnId: 't1' } })])
+    setTurn(1_000)
+    const container = await renderTree()
+
+    const dot = statusDot(sessionNode(container, 's1'))
+    expect(dot).not.toBeNull()
+    expect(dot!.classList.contains('bg-status-info')).toBe(true)
+    expect(dot!.classList.contains('animate-notification-blink')).toBe(true)
+  })
+
+  it('свежий ход жив и без серверного busy (regress: живой стрим — мигает)', async () => {
+    setSessions([session('s1', { activity: { type: 'idle' } })])
+    setTurn(1_000)
+    const container = await renderTree()
+
+    const dot = statusDot(sessionNode(container, 's1'))
+    expect(dot).not.toBeNull()
+    expect(dot!.classList.contains('animate-notification-blink')).toBe(true)
   })
 })

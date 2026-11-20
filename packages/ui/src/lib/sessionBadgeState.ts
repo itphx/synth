@@ -15,8 +15,9 @@
 //     `activity`, `parent_id`, `todos`;
 //   - `live`    — живые счётчики клиента (стрим хода, очередь, вопрос агента,
 //     подтверждения прав из стора);
-//   - `ackedAt` — локальная метка «просмотрено» (ms): до неё пользователь уже
-//     видел исход, значит красить нечего.
+//   - `ackedTurnKey` — локальная метка «просмотрено»: ключ **увиденного**
+//     исхода последнего хода (`turnKey`, формат `"<outcome>|<at>"`). Ключ
+//     совпал — человек этот исход уже видел, красить нечего.
 
 import type { SessionData } from '@/lib/api/sessions'
 
@@ -26,11 +27,21 @@ export type SessionLabelTone = 'neutral' | 'caution' | 'error' | 'success'
 /**
  * Точка статуса справа от названия.
  *
- * `null` — точки нет; `streaming` — идёт ход; `stalled` — работа стоит и ждёт
- * «Продолжить»; `approval` — требуется действие человека (права/вопрос);
- * `pending` — в очереди есть сообщения.
+ * - `null` — точки нет;
+ * - `busy-live` — работа идёт и это **подтверждено** живым ходом (мигает);
+ * - `busy` — сервер сообщает о работе (`activity: busy`/`retry`), но живого
+ *   подтверждения нет: точка информационная и **не** мигает;
+ * - `attention` — работа стоит и ждёт «Продолжить» (статичная, без мигания);
+ * - `approval` — требуется действие человека (права/вопрос) — единственная
+ *   мигающая точка «требуется действие»;
+ * - `pending` — в очереди есть сообщения (статичная).
+ *
+ * Правило: мигание — **только** по живому подтверждению (ADR-118 §1).
+ * `activity: busy` в DTO при мёртвом/зависшем ходе не имеет конца: события хода
+ * не приходят, а серверный признак не меняется — мигание в этом случае
+ * превращалось в «вечный» индикатор (репорт владельца).
  */
-export type SessionDot = null | 'streaming' | 'stalled' | 'approval' | 'pending'
+export type SessionDot = null | 'busy-live' | 'busy' | 'attention' | 'approval' | 'pending'
 
 /** Вход модели: сводка DTO сессии + живые счётчики клиента. */
 export interface SessionBadgeInput {
@@ -40,11 +51,23 @@ export interface SessionBadgeInput {
   >
   /** Живое состояние клиента (сторы транспорта/очереди/подтверждений). */
   live: {
-    /** Идёт ход (статус сообщения-хода `streaming`, ADR-118 §1). */
+    /**
+     * Идёт ход — **подтверждённый**: статус сообщения-хода `streaming` **и**
+     * отсутствие «тишины» больше порога (ADR-118 §1/§5). Свежесть проверяет
+     * вызывающий (`ProjectsTab`: `sessionSilenceMs` ⩽ `STALE_TURN_SILENCE_MS`):
+     * модель остаётся чистой функцией без часов и сторов.
+     */
     streaming: boolean
     /** Сообщений в очереди сессии. */
     queuePending: number
-    /** Обработка очереди стоит (stall) — ждём решения человека. */
+    /**
+     * Обработка очереди стоит (клиентский stall) — ждём решения человека.
+     *
+     * Учитывается **только вместе с непустой очередью**: флаг липкий (ставится
+     * событиями и снимается отдельными событиями), без очереди он не значит
+     * ничего и лишь красил бы точку вечно. Авторитетный источник — серверный
+     * `status.queue_stopped`.
+     */
     queueStalled: boolean
     /** Агент задал вопрос и ждёт ответа (`question`). */
     hasOpenQuestion: boolean
@@ -52,11 +75,11 @@ export interface SessionBadgeInput {
     approvalRequests: number
   }
   /**
-   * Локальная метка «просмотрено» (ms, `Date.now()`): исход последнего хода
-   * старше неё — уже прочитан, цвет не нужен. `null`/`undefined`/`0` — не
-   * просмотрено.
+   * Локальная метка «просмотрено»: ключ увиденного исхода последнего хода
+   * (`turnKey(last_turn)`). Совпал с текущим — исход уже прочитан, цвет не
+   * нужен. `null`/`undefined` — не просмотрено.
    */
-  ackedAt?: number | null
+  ackedTurnKey?: string | null
 }
 
 /** Результат модели: что рисовать и как подписать для скринридера. */
@@ -92,17 +115,43 @@ function hasOpenTodo(todos: SessionData['todos']): boolean {
 }
 
 /**
+ * Ключ исхода последнего хода — «идентичность записи» для метки «просмотрено».
+ *
+ * Строится только из серверных данных (`status.last_turn`):
+ * `"<outcome>|<at>"`. Сравнение идёт **на равенство ключей**, а не по времени:
+ * `Date.now()` клиента расходится с серверным `at` (часы, часовой пояс,
+ * кэш ответа), и прежнее сравнение `ackedAt < at` давало ложные «просмотрено»
+ * и «не просмотрено». Из-за этого метку нельзя было персистить: сохранённая
+ * отметка времени «залипала» и могла навсегда скрыть новую ошибку.
+ *
+ * `outcome` входит в ключ намеренно: два разных исхода (например, `completed`
+ * и `error`) с одинаковым `at` дают разные ключи.
+ *
+ * `null` — исхода нет (legacy-сессия, ход ни разу не завершался) либо он
+ * нечитаем (нет `outcome`): отмечать нечего, красить нечего.
+ */
+export function turnKey(
+  lastTurn: { outcome?: string | null; at?: string | null } | null | undefined,
+): string | null {
+  if (!lastTurn) return null
+  if (typeof lastTurn.outcome !== 'string' || lastTurn.outcome === '') return null
+  // `at` может отсутствовать (бэкенд старше поля) — тогда ключ уникален только
+  // по исходу: следующий ход с тем же `outcome` без `at` ключ не сменит.
+  const at = typeof lastTurn.at === 'string' ? lastTurn.at : ''
+  return `${lastTurn.outcome}|${at}`
+}
+
+/**
  * Не просмотрен ли исход последнего хода.
  *
- * Нет метки «просмотрено» — не просмотрен. Битая/нечитаемая отметка времени
- * (`Date.parse` → `NaN`) считается просмотренной: красить по нечитаемому
- * времени хуже, чем не красить вовсе.
+ * «Просмотрено» = сохранённый ключ **совпал** с ключом текущего исхода.
+ * Нет метки/ключ другой (новый ход) — не просмотрено. Нечитаемый исход
+ * (ключа нет) считаем просмотренным: красить по нечитаемым данным хуже, чем
+ * не красить вовсе.
  */
-function isUnacked(ackedAt: number | null | undefined, at: string): boolean {
-  if (!ackedAt) return true
-  const parsed = Date.parse(at)
-  if (Number.isNaN(parsed)) return false
-  return ackedAt < parsed
+function isUnacked(ackedTurnKey: string | null | undefined, currentTurnKey: string | null): boolean {
+  if (currentTurnKey === null) return false
+  return ackedTurnKey !== currentTurnKey
 }
 
 /**
@@ -112,14 +161,23 @@ function isUnacked(ackedAt: number | null | undefined, at: string): boolean {
  *
  * 1. Требуется действие — подтверждение прав → `caution` + точка `approval`.
  * 2. Требуется действие — вопрос агента → `caution` + точка `approval`.
- * 3. Работа стоит и ждёт «Продолжить» (`queue_stopped`/живой stall) →
- *    `caution` + точка `stalled`.
+ * 3. Работа стоит и ждёт «Продолжить» (серверный `queue_stopped`; клиентский
+ *    stall — только вместе с непустой очередью) → `caution` + точка
+ *    `attention` (статичная: это не «что-то происходит», а «нужен человек»).
  * 4. Критическая ошибка последнего хода, ещё не просмотренная и работа не идёт →
  *    `error`, без точки.
- * 5. Идёт работа (`streaming`/`busy`/`retry`) → `neutral` + точка `streaming`.
+ * 5. Идёт работа → `neutral` + точка: `busy-live` (мигает), если ход подтверждён
+ *    живым стримом клиента; иначе `busy` (статичная) — сервер сообщает о работе
+ *    (`activity: busy`/`retry`), но подтверждения из событий нет.
  * 6. Завершено (см. ниже) → `success`, без точки.
  * 7. Очередь непуста → `neutral` + точка `pending`.
  * 8. Иначе → `neutral`, без точки, без подписи.
+ *
+ * Мигание — признак **живой** работы. Только живой стрим хода (`live.streaming`,
+ * с проверкой свежести на стороне панели: тишина больше `STALE_TURN_SILENCE_MS`
+ * — ход не подтверждён) даёт `busy-live`. Серверный `activity: busy` без
+ * подтверждения может «залипнуть» (ход умер, а снимок не обновился): мигать по
+ * нему — значит мигать бесконечно (репорт владельца).
  *
  * Про `limit` (лимит шагов/контекста/вывода): это **не ошибка** — ход дошёл до
  * границы ограничителя, продолжить можно «Продолжить», данные не потеряны;
@@ -137,7 +195,7 @@ function isUnacked(ackedAt: number | null | undefined, at: string): boolean {
  * итог работы ребёнка виден в отчёте родителя (его `last_turn`).
  */
 export function sessionBadgeState(input: SessionBadgeInput): SessionBadgeState {
-  const { session, live, ackedAt } = input
+  const { session, live, ackedTurnKey } = input
   // `status` у сессии из стора может отсутствовать, хотя тип DTO его требует:
   // `session.created` из пайплайна публикует частичный payload (`id`/`owner_id`/
   // `user_id`/`project_id`/`name`) и `transportStore` кладёт его в список как
@@ -147,12 +205,17 @@ export function sessionBadgeState(input: SessionBadgeInput): SessionBadgeState {
   // рядом (`useNotification` читает `session.status?.queue_stopped`).
   const status = session.status ?? { blocked: null }
   const lastTurn = status.last_turn ?? null
+  // Ключ текущего исхода: сравнивается с локальной меткой «просмотрено» на
+  // равенство (см. `turnKey` — почему не сравнение по времени).
+  const currentTurnKey = turnKey(lastTurn)
 
-  // «Работа идёт»: живой стрим хода или серверный статус активности. В правиле 4
-  // идущей работой считается только `busy` (`retry` — ход уже оборван сбоем,
-  // процессор ждёт backoff, поэтому красный тон честен); в правиле 5 `retry`
-  // входит в «идёт работа» — процессор действительно работает.
-  const turnRunning = live.streaming || session.activity?.type === 'busy'
+  // «Работа идёт»: живой стрим хода (**подтверждённая** работа) или серверный
+  // статус активности (работа «по словам сервера»). В правиле 4 идущей работой
+  // считается только `busy` (`retry` — ход уже оборван сбоем, процессор ждёт
+  // backoff, поэтому красный тон честен); в правиле 5 `retry` входит в «идёт
+  // работа» — процессор действительно работает.
+  const liveStreaming = live.streaming
+  const turnRunning = liveStreaming || session.activity?.type === 'busy'
   const working = turnRunning || session.activity?.type === 'retry'
 
   // 1. Подтверждение прав: ход человека заблокирован, нужен ответ. Два
@@ -168,20 +231,29 @@ export function sessionBadgeState(input: SessionBadgeInput): SessionBadgeState {
   }
 
   // 3. Обработка очереди остановлена (Stop/stall) — ждём «Продолжить».
-  if (status.queue_stopped || live.queueStalled) {
-    return { labelTone: 'caution', dot: 'stalled', ariaKey: ARIA.attentionNeeded }
+  //    Источник — **серверный** `status.queue_stopped`: клиентский `queueStalled`
+  //    липкий (ставится `queue.stalled`/`questionasked`, снимается отдельными
+  //    событиями) и без непустой очереди давно ничего не значит — иначе он
+  //    красит и моргает вечно при пустой очереди. Вместе с очередью он полезен:
+  //    серверный флаг мог ещё не догнать событие.
+  if (status.queue_stopped || (live.queueStalled && live.queuePending > 0)) {
+    return { labelTone: 'caution', dot: 'attention', ariaKey: ARIA.attentionNeeded }
   }
 
   // 4. Критическая ошибка последнего хода: durable-запись есть, она ещё не
   //    просмотрена и работа не идёт. Точки нет — это не «что-то происходит», а
   //    «требуется вмешательство».
-  if (lastTurn?.outcome === 'error' && isUnacked(ackedAt, lastTurn.at) && !turnRunning) {
+  if (lastTurn?.outcome === 'error' && isUnacked(ackedTurnKey, currentTurnKey) && !turnRunning) {
     return { labelTone: 'error', dot: null, ariaKey: ARIA.executionFailed }
   }
 
   // 5. Идёт работа — цвет нейтральный (точка показывает процесс, не тревогу).
+  //    Мигает только подтверждённая живым ходом работа: серверный `busy` без
+  //    подтверждения даёт статичную точку (см. описание приоритетов).
   if (working) {
-    return { labelTone: 'neutral', dot: 'streaming', ariaKey: ARIA.streaming }
+    return liveStreaming
+      ? { labelTone: 'neutral', dot: 'busy-live', ariaKey: ARIA.streaming }
+      : { labelTone: 'neutral', dot: 'busy', ariaKey: ARIA.streaming }
   }
 
   // 6. Работа завершена: ход успешен, сессия верхнего уровня, очередь и
@@ -197,7 +269,7 @@ export function sessionBadgeState(input: SessionBadgeInput): SessionBadgeState {
     live.approvalRequests === 0 &&
     !live.hasOpenQuestion &&
     !hasOpenTodo(session.todos) &&
-    isUnacked(ackedAt, lastTurn.at)
+    isUnacked(ackedTurnKey, currentTurnKey)
   ) {
     return { labelTone: 'success', dot: null, ariaKey: ARIA.workCompleted }
   }

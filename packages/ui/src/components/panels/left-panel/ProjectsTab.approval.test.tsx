@@ -217,7 +217,7 @@ describe('ProjectsTab — статус «ждёт подтверждения п�
 
   it('приоритетнее идущего хода', async () => {
     useChatStore.setState({
-      turnBySession: { s1: { turnId: 't1', status: 'streaming' } } as never,
+      turnBySession: { s1: { turnId: 't1', status: 'streaming', startedAt: Date.now() } } as never,
     })
     addPendingRequest('s1')
     const container = await renderTree()
@@ -241,7 +241,7 @@ describe('ProjectsTab — статус «ждёт подтверждения п�
 
   it('без одобрения идущий ход остаётся синим (поведение не сломано)', async () => {
     useChatStore.setState({
-      turnBySession: { s1: { turnId: 't1', status: 'streaming' } } as never,
+      turnBySession: { s1: { turnId: 't1', status: 'streaming', startedAt: Date.now() } } as never,
     })
     const container = await renderTree()
 
@@ -297,7 +297,7 @@ describe('ProjectsTab — статус «ждёт подтверждения п�
       listProjectId: null,
     })
     useChatStore.setState({
-      turnBySession: { s1: { turnId: 't1', status: 'streaming' } } as never,
+      turnBySession: { s1: { turnId: 't1', status: 'streaming', startedAt: Date.now() } } as never,
     })
 
     const container = await renderTree()

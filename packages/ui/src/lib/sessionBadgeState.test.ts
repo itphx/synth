@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   sessionBadgeState,
+  turnKey,
   type SessionBadgeInput,
   type SessionBadgeState,
 } from './sessionBadgeState'
@@ -15,7 +16,6 @@ type BadgeLive = SessionBadgeInput['live']
 
 /** Исход последнего хода с фиксированным временем (детерминированный ack-тест). */
 const TURN_AT = '2026-01-01T12:00:00.000Z'
-const TURN_MS = Date.parse(TURN_AT)
 
 function makeSession(overrides: Partial<BadgeSession> = {}): BadgeSession {
   return {
@@ -43,9 +43,13 @@ function makeLive(overrides: Partial<BadgeLive> = {}): BadgeLive {
 function state(
   session: BadgeSession,
   live: BadgeLive = makeLive(),
-  ackedAt?: number | null,
+  ackedTurnKey?: string | null,
 ): SessionBadgeState {
-  return sessionBadgeState({ session, live, ...(ackedAt !== undefined ? { ackedAt } : {}) })
+  return sessionBadgeState({
+    session,
+    live,
+    ...(ackedTurnKey !== undefined ? { ackedTurnKey } : {}),
+  })
 }
 
 describe('sessionBadgeState: приоритеты требуют действия', () => {
@@ -101,16 +105,29 @@ describe('sessionBadgeState: приоритеты требуют действи�
     })
     expect(state(session)).toEqual({
       labelTone: 'caution',
-      dot: 'stalled',
+      dot: 'attention',
       ariaKey: 'leftPanel.attentionNeeded',
     })
   })
 
-  it('живой stall очереди даёт ту же точку «работа стоит»', () => {
-    expect(state(makeSession(), makeLive({ queueStalled: true }))).toEqual({
+  it('живой stall очереди при непустой очереди — та же точка «работа стоит»', () => {
+    expect(state(makeSession(), makeLive({ queueStalled: true, queuePending: 2 }))).toEqual({
       labelTone: 'caution',
-      dot: 'stalled',
+      dot: 'attention',
       ariaKey: 'leftPanel.attentionNeeded',
+    })
+  })
+
+  it('липкий queueStalled при пустой очереди НЕ даёт «работа стоит»', () => {
+    // `queueBySession[sid].isStalled` ставится событиями и снимается только
+    // отдельными событиями: без событий он «залипает». Источник правды —
+    // серверный `status.queue_stopped`; клиентский флаг учитывается только
+    // вместе с непустой очередью — иначе он красил и мигал вечно (репорт
+    // владельца).
+    expect(state(makeSession(), makeLive({ queueStalled: true, queuePending: 0 }))).toEqual({
+      labelTone: 'neutral',
+      dot: null,
+      ariaKey: '',
     })
   })
 })
@@ -127,60 +144,61 @@ describe('sessionBadgeState: ошибка последнего хода', () => 
     })
   })
 
-  it('просмотренная ошибка (ackedAt позже last_turn.at) цвета не даёт', () => {
+  it('просмотренная ошибка (совпал ключ исхода) цвета не даёт', () => {
     const session = makeSession({
       status: { blocked: null, last_turn: { outcome: 'error', at: TURN_AT } },
     })
-    const ackedAt = TURN_MS + 1_000
-    expect(state(session, makeLive(), ackedAt)).toEqual({
+    expect(state(session, makeLive(), turnKey({ outcome: 'error', at: TURN_AT }))).toEqual({
       labelTone: 'neutral',
       dot: null,
       ariaKey: '',
     })
   })
 
-  it('ackedAt ровно в момент исхода считается «просмотрено» (граница по спецификации: строгое <)', () => {
-    // Условие «не просмотрено» — `!ackedAt || ackedAt < at`: равенство уже
-    // «просмотрено», цвет не показывается.
+  it('другой ключ (новый ход после просмотра) — ошибка снова красная', () => {
     const session = makeSession({
       status: { blocked: null, last_turn: { outcome: 'error', at: TURN_AT } },
     })
-    expect(state(session, makeLive(), TURN_MS)).toEqual({ labelTone: 'neutral', dot: null, ariaKey: '' })
+    // Просмотрен предыдущий ход («вчерашний») — новый сбой всё равно красится.
+    expect(
+      state(session, makeLive(), turnKey({ outcome: 'error', at: '2025-12-31T23:59:00.000Z' }))
+        .labelTone,
+    ).toBe('error')
   })
 
-  it('ackedAt раньше last_turn.at (просмотр был до исхода) — ошибка красится', () => {
-    const session = makeSession({
-      status: { blocked: null, last_turn: { outcome: 'error', at: TURN_AT } },
-    })
-    expect(state(session, makeLive(), TURN_MS - 60_000).labelTone).toBe('error')
-  })
-
-  it('ackedAt = 0 (метки нет) трактуется как «не просмотрено»', () => {
-    const session = makeSession({
-      status: { blocked: null, last_turn: { outcome: 'error', at: TURN_AT } },
-    })
-    expect(state(session, makeLive(), 0).labelTone).toBe('error')
-  })
-
-  it('ошибка при идущем ходе — точка streaming, а не красный', () => {
+  it('ошибка при идущем ходе — точка busy-live, а не красный', () => {
     const session = makeSession({
       status: { blocked: null, last_turn: { outcome: 'error', reason: 'empty', at: TURN_AT } },
     })
     expect(state(session, makeLive({ streaming: true }))).toEqual({
       labelTone: 'neutral',
-      dot: 'streaming',
+      dot: 'busy-live',
       ariaKey: 'leftPanel.streaming',
     })
   })
 
-  it('ошибка при activity=busy — тоже не красный (ход идёт по серверному статусу)', () => {
+  it('ошибка при activity=busy — тоже не красный; точка статичная (busy)', () => {
+    // Сервер сообщает о работе, но живого подтверждения нет: точка `busy` без
+    // мигания — мигание по залипшему серверному `activity` не имеет конца.
     const session = makeSession({
       status: { blocked: null, last_turn: { outcome: 'error', at: TURN_AT } },
       activity: { type: 'busy', turnId: 'turn-1', streamId: 'stream-1' },
     })
     expect(state(session)).toEqual({
       labelTone: 'neutral',
-      dot: 'streaming',
+      dot: 'busy',
+      ariaKey: 'leftPanel.streaming',
+    })
+  })
+
+  it('ошибка + busy + живой ход → busy-live (приоритет 4 сохраняется)', () => {
+    const session = makeSession({
+      status: { blocked: null, last_turn: { outcome: 'error', at: TURN_AT } },
+      activity: { type: 'busy', turnId: 'turn-1', streamId: 'stream-1' },
+    })
+    expect(state(session, makeLive({ streaming: true }))).toEqual({
+      labelTone: 'neutral',
+      dot: 'busy-live',
       ariaKey: 'leftPanel.streaming',
     })
   })
@@ -270,11 +288,19 @@ describe('sessionBadgeState: завершённая работа', () => {
   })
 
   it('просмотренный успех цвета не даёт', () => {
-    expect(state(completed(), makeLive(), TURN_MS + 5_000)).toEqual({
+    expect(state(completed(), makeLive(), turnKey({ outcome: 'completed', at: TURN_AT }))).toEqual({
       labelTone: 'neutral',
       dot: null,
       ariaKey: '',
     })
+  })
+
+  it('новый ход после просмотра — зелёный снова', () => {
+    const session = completed()
+    expect(
+      state(session, makeLive(), turnKey({ outcome: 'completed', at: '2025-12-31T23:59:00.000Z' }))
+        .labelTone,
+    ).toBe('success')
   })
 
   it('очередь непуста — не зелёный, а точка pending', () => {
@@ -285,15 +311,92 @@ describe('sessionBadgeState: завершённая работа', () => {
     })
   })
 
-  it('queue_stopped в DTO — не зелёный, а «работа стоит»', () => {
+  it('queue_stopped в DTO — не зелёный, а «работа стоит» (статично)', () => {
     const session = makeSession({
       status: { blocked: null, queue_stopped: true, last_turn: { outcome: 'completed', at: TURN_AT } },
     })
     expect(state(session)).toEqual({
       labelTone: 'caution',
-      dot: 'stalled',
+      dot: 'attention',
       ariaKey: 'leftPanel.attentionNeeded',
     })
+  })
+})
+
+/**
+ * «Просмотрено» сравнивается по **идентичности исхода** (`turnKey`), а не по
+ * времени: `Date.now()` клиента расходится с серверным `last_turn.at`, и
+ * прежнее сравнение `<` давало ложные срабатывания (а сохранённая метка могла
+ * «залипнуть» и навсегда скрыть новую ошибку).
+ */
+describe('sessionBadgeState: «просмотрено» = совпадение ключа исхода', () => {
+  const errorSession = makeSession({
+    status: { blocked: null, last_turn: { outcome: 'error', at: TURN_AT } },
+  })
+  const completedSession = makeSession({
+    status: { blocked: null, last_turn: { outcome: 'completed', at: TURN_AT } },
+  })
+
+  it('turnKey = «<outcome>|<at>» из серверных данных', () => {
+    expect(turnKey({ outcome: 'error', at: TURN_AT })).toBe(`error|${TURN_AT}`)
+    expect(turnKey({ outcome: 'completed', at: TURN_AT })).toBe(`completed|${TURN_AT}`)
+  })
+
+  it('turnKey: нет исхода / нет outcome / нет at', () => {
+    expect(turnKey(null)).toBeNull()
+    expect(turnKey(undefined)).toBeNull()
+    expect(turnKey({})).toBeNull()
+    expect(turnKey({ outcome: '', at: TURN_AT })).toBeNull()
+    // Старый бэкенд без `at`: ключ остаётся уникальным хотя бы по исходу.
+    expect(turnKey({ outcome: 'completed' })).toBe('completed|')
+  })
+
+  it('ключ не зависит от часов клиента: порядок и точность `at` не важны, важно равенство', () => {
+    // Тот же `at` в другом формате (тот же момент) — это ДРУГОЙ ключ, и цвет
+    // вернётся: сравнение идёт по строке, а не по `Date.parse`. Сервер отдаёт
+    // `at` в одном формате, поэтому на практике ключ стабилен.
+    expect(turnKey({ outcome: 'error', at: '2026-01-01T12:00:00Z' })).not.toBe(
+      turnKey({ outcome: 'error', at: TURN_AT }),
+    )
+  })
+
+  it('совпал ключ — цвета нет (ошибка и завершение)', () => {
+    expect(state(errorSession, makeLive(), `error|${TURN_AT}`)).toEqual({
+      labelTone: 'neutral',
+      dot: null,
+      ariaKey: '',
+    })
+    expect(state(completedSession, makeLive(), `completed|${TURN_AT}`)).toEqual({
+      labelTone: 'neutral',
+      dot: null,
+      ariaKey: '',
+    })
+  })
+
+  it('метки нет (null/undefined) — цвет есть', () => {
+    expect(state(errorSession, makeLive(), null).labelTone).toBe('error')
+    expect(state(errorSession).labelTone).toBe('error')
+    expect(state(completedSession, makeLive(), null).labelTone).toBe('success')
+    expect(state(completedSession).labelTone).toBe('success')
+  })
+
+  it('метка от другого хода — цвет есть (и красный, и зелёный)', () => {
+    const previous = `completed|2025-12-31T23:59:00.000Z`
+    expect(state(errorSession, makeLive(), previous).labelTone).toBe('error')
+    expect(state(completedSession, makeLive(), previous).labelTone).toBe('success')
+  })
+
+  it('`outcome` входит в ключ: тот же `at`, другой исход — не совпадение', () => {
+    // Иначе просмотренный успех скрыл бы ошибку, записанную в ту же секунду.
+    expect(state(errorSession, makeLive(), `completed|${TURN_AT}`).labelTone).toBe('error')
+  })
+
+  it('нечитаемый исход (нет outcome) не красится ни при какой метке', () => {
+    const broken = makeSession({
+      status: { blocked: null, last_turn: { at: TURN_AT } as never },
+    })
+    expect(state(broken).labelTone).toBe('neutral')
+    expect(state(broken, makeLive(), 'error|' + TURN_AT).labelTone).toBe('neutral')
   })
 })
 
@@ -306,19 +409,30 @@ describe('sessionBadgeState: очередь и текущая работа', () 
     })
   })
 
-  it('идёт стрим — точка streaming', () => {
+  it('идёт стрим — точка busy-live (живое подтверждение работы)', () => {
     expect(state(makeSession(), makeLive({ streaming: true }))).toEqual({
       labelTone: 'neutral',
-      dot: 'streaming',
+      dot: 'busy-live',
       ariaKey: 'leftPanel.streaming',
     })
   })
 
-  it('activity=retry (backoff после сбоя) — тоже идёт работа', () => {
+  it('activity=busy без локального хода — статичная точка busy (не мигает)', () => {
+    // Ключевой сценарий бага: сервер отдаёт `busy` (мёртвый/зависший ход), а
+    // живого подтверждения нет (`live.streaming === false`).
+    const session = makeSession({ activity: { type: 'busy', turnId: 'turn-1' } })
+    expect(state(session)).toEqual({
+      labelTone: 'neutral',
+      dot: 'busy',
+      ariaKey: 'leftPanel.streaming',
+    })
+  })
+
+  it('activity=retry (backoff после сбоя) — работа идёт, но без живого подтверждения — busy', () => {
     const session = makeSession({ activity: { type: 'retry', streamId: 'stream-1' } })
     expect(state(session)).toEqual({
       labelTone: 'neutral',
-      dot: 'streaming',
+      dot: 'busy',
       ariaKey: 'leftPanel.streaming',
     })
   })
@@ -326,7 +440,7 @@ describe('sessionBadgeState: очередь и текущая работа', () 
   it('идёт работа важнее непустой очереди', () => {
     expect(state(makeSession(), makeLive({ streaming: true, queuePending: 2 }))).toEqual({
       labelTone: 'neutral',
-      dot: 'streaming',
+      dot: 'busy-live',
       ariaKey: 'leftPanel.streaming',
     })
   })

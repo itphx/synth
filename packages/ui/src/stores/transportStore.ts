@@ -20,6 +20,9 @@ import { useProjectLogStore } from './projectLogStore'
 import { useInstanceCapabilitiesStore } from './instanceCapabilitiesStore'
 import { useAgentsStore } from './agentsStore'
 import { useMcpStore } from './mcpStore'
+// Метка «просмотрено» удалённой сессии (`session.deleted`) — карта персистится,
+// поэтому мусор за удалёнными сессиями не копим.
+import { useNotificationStore } from './notificationStore'
 // Каталог провайдеров/моделей инстанса (`models.updated`) — селект модели в
 // чате и админ-панели перечитывают состав без перезагрузки страницы.
 import { useProvidersStore } from './providersStore'
@@ -1561,6 +1564,47 @@ export function closeTurnIfServerIdle(
   return closeHungTurn(sid, 'stopped', reason)
 }
 
+/**
+ * ADR-118 §1: серверный снимок говорит «хода нет» (`activity.idle` + пустой
+ * `status.blocked`).
+ *
+ * Отсутствие `activity` — **не** сигнал: большинство `session.updated` —
+ * точечные флаги (`name`, `summarization_pending`, …), и трактовать их как
+ * «простой» значило бы снимать состояние очереди на каждом таком событии.
+ */
+function isServerIdleSnapshot(source: Record<string, unknown> | null | undefined): boolean {
+  const activity = (source?.activity ?? null) as Record<string, unknown> | null
+  if (asNonEmptyString(activity?.type) !== 'idle') return false
+  const statusObj = (source?.status ?? null) as Record<string, unknown> | null
+  const blocked = statusObj ? statusObj.blocked : undefined
+  return !blocked
+}
+
+/**
+ * ADR-118 §1: серверный снимок прямо отрицает остановку очереди
+ * (`status.queue_stopped === false`). Только явное `false`: отсутствующее поле
+ * в частичном патче ничего не значит.
+ *
+ * `serializeSession` ядра отдаёт поле **всегда** (`queue_stopped` — `boolean`),
+ * поэтому полноценный снимок сессии здесь всегда высказывается определённо.
+ */
+function isQueueStoppedCleared(source: Record<string, unknown> | null | undefined): boolean {
+  const statusObj = (source?.status ?? null) as Record<string, unknown> | null
+  return statusObj?.queue_stopped === false
+}
+
+/**
+ * ADR-118 §1: серверный снимок говорит «очередь осознанно остановлена».
+ *
+ * Нужен как запрет для сброса по простою: `activity.idle` говорит про **ход**, а
+ * не про остановку очереди — у настоящего стопа баннер «Обработка остановлена»
+ * (и «Продолжить») должен остаться.
+ */
+function isQueueStoppedByServer(source: Record<string, unknown> | null | undefined): boolean {
+  const statusObj = (source?.status ?? null) as Record<string, unknown> | null
+  return statusObj?.queue_stopped === true
+}
+
 /** Максимальный номер события по всем сессиям (значение для `since`). */
 function maxEventSeq(): number | undefined {
   let max: number | undefined
@@ -2287,6 +2331,7 @@ export function createDispatcher(): EventDispatcher {
       updateLiveSubagentUsage,
       setStreamRetry,
       setQueueStalled,
+      resetQueueStalled,
       setSummarizationPending,
       updateQueueCount,
       setQueueCounts,
@@ -3458,6 +3503,23 @@ export function createDispatcher(): EventDispatcher {
         // `session.updated` без `activity` (большинство публикаций — точечные
         // флаги) ничего не закрывает: решает `activity`.
         closeTurnIfServerIdle(sid, patch)
+        // Сервер авторитетнее клиентского «очередь стоит» (ADR-118 §1).
+        // Клиентский флаг `queueBySession[sid].isStalled` ставится событиями
+        // (`queue.stalled`/`questionasked`) и снимается только отдельными
+        // событиями — при их отсутствии он «залипает» и красит/моргает точку в
+        // дереве вечно (репорт владельца). Снимаем его по **серверному** снимку:
+        //   - `status.queue_stopped === false` — сервер прямо говорит «не стоим»;
+        //   - `activity.idle` + пустой `status.blocked` — хода нет, стоять нечему
+        //     (но только если снимок сам не говорит «очередь остановлена»).
+        //
+        // Отсутствие поля — не сигнал (патч может быть частичным): трогаем флаг
+        // только по явному снимку.
+        if (
+          isQueueStoppedCleared(patch)
+          || (isServerIdleSnapshot(patch) && !isQueueStoppedByServer(patch))
+        ) {
+          resetQueueStalled(sid)
+        }
         break
       }
 
@@ -3724,6 +3786,10 @@ export function createDispatcher(): EventDispatcher {
         useUIStore.getState().closeTab(`chat-${deletedId}`)
         // Позиция прокрутки удалённой сессии больше не понадобится.
         forgetChatScroll(deletedId)
+        // Метка «просмотрено» больше некому соответствовать: ключ исхода
+        // удалённой сессии не совпадёт ни с одной живой, но карта
+        // персистится — забываем запись.
+        useNotificationStore.getState().clearSessionAcked(deletedId)
         break
       }
 

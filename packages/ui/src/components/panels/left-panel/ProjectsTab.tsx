@@ -18,9 +18,10 @@ import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import type { IconName } from '@/components/icon/Icon'
 import { useDevice } from '@/hooks/useDevice'
+import { STALE_TURN_SILENCE_MS } from '@/hooks/useStaleTurnGuard'
 import { synthApi } from '@/lib/api/synthApi'
 import { MESSAGES_PAGE_LIMIT } from '@/lib/api/messages'
-import { applyHistoryPage } from '@/stores/transportStore'
+import { applyHistoryPage, sessionSilenceMs } from '@/stores/transportStore'
 import type { EntityOrigin, ProjectData, SessionData } from '@/lib/api/synthApi'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
 import { useEntityEditStore } from '@/stores/entityEditStore'
@@ -166,9 +167,10 @@ export function ProjectsTab() {
   const questionsBySession = useQuestionStore((s) => s.bySession)
   const sessionUnread = useNotificationStore((s) => s.sessionUnread)
   const clearSessionUnread = useNotificationStore((s) => s.clearSessionUnread)
-  // Локальные метки «просмотрено» (вход модели бейджа): исход старше метки
-  // человек уже видел — красить нечего.
-  const ackedAtBySession = useNotificationStore((s) => s.ackedAtBySession)
+  // Локальные метки «просмотрено» (вход модели бейджа): ключ увиденного исхода
+  // совпал с текущим — человек его уже видел, красить нечего. Карта персистится
+  // (переживает reload) — см. `notificationStore.ts`.
+  const ackedTurnBySession = useNotificationStore((s) => s.ackedTurnBySession)
   // Фоновая активность сессий: значки в дереве (процессы, саб-агенты,
   // терминалы, таймеры/будильники). Реестры подгружаются уже при монтировании
   // панели — значки видны до открытия панели «Процессы»/«Автоматизация».
@@ -332,6 +334,29 @@ export function ProjectsTab() {
   }, [centerTabs])
 
   /**
+   * Живость локального хода сессии.
+   *
+   * Статус `streaming` у записи хода — необходимое, но **не достаточное**
+   * условие: терминальное событие может не дойти или не примениться
+   * (несовпадение `turnId`/`stream_id`, разрыв транспорта), и запись навсегда
+   * остаётся `streaming`. Второе условие — свежесть: тишина по сессии
+   * (`sessionSilenceMs` — от последнего события или от старта хода) не больше
+   * порога сторожа `STALE_TURN_SILENCE_MS`.
+   *
+   * Зачем здесь, а не только в стороже: сторож закрывает ход раз в 30 с и
+   * только после сетевой сверки, а точка в дереве всё это время мигала бы.
+   * Тишина — достаточный повод перестать мигать: точка становится статичным
+   * `busy` (если сервер всё ещё говорит `busy`) или исчезает вовсе.
+   *
+   * «Молчащий» ход самым скорым тиком сторожа будет закрыт — оба механизма
+   * согласованы по одному и тому же порогу.
+   */
+  const isLiveStreaming = (sessionId: string): boolean => {
+    if (turnBySession[sessionId]?.status !== 'streaming') return false
+    return sessionSilenceMs(sessionId) <= STALE_TURN_SILENCE_MS
+  }
+
+  /**
    * Состояние бейджа сессии: тон названия, точка статуса и ключ подписи.
    *
    * Единственный источник правил — чистая модель `sessionBadgeState`
@@ -348,8 +373,14 @@ export function ProjectsTab() {
     sessionBadgeState({
       session,
       live: {
-        // ADR-118 §1: единственный живой признак «идёт генерация» — активный ход.
-        streaming: turnBySession[session.id]?.status === 'streaming',
+        // ADR-118 §1: единственный живой признак «идёт генерация» — активный ход
+        // **и** он не молчит. Статус хода сам по себе — не доказательство: при
+        // зависшем ходе (терминальное событие не дошло/не применилось) он
+        // остаётся `streaming` навсегда. Отсюда баг: серверный `activity: busy`
+        // плюс живой (по сторам) ход держат мигание бесконечно. Тишина больше
+        // порога — ход не подтверждён: точка станет `busy`/пропадёт, а сам ход
+        // закроет сторож (`useStaleTurnGuard`).
+        streaming: isLiveStreaming(session.id),
         queuePending: queueBySession[session.id]?.pendingCount || 0,
         queueStalled: queueBySession[session.id]?.isStalled === true,
         approvalRequests: requestsBySession[session.id]?.length ?? 0,
@@ -357,7 +388,7 @@ export function ProjectsTab() {
           (q) => q.status === 'pending',
         ),
       },
-      ackedAt: ackedAtBySession[session.id] ?? null,
+      ackedTurnKey: ackedTurnBySession[session.id] ?? null,
     })
 
   const scrollTarget = useMemo(() => {

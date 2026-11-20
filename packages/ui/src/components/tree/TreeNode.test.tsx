@@ -207,6 +207,36 @@ describe('TreeNode — индикатор статуса', () => {
     expect(blockedDot.classList.contains('bg-destructive')).toBe(true)
     expect(blockedDot.getAttribute('aria-label')).toBe('Blocked')
   })
+
+  it('busy-live (живая работа) мигает, busy (только сервер) — статично', async () => {
+    const live = await renderStatusNode({ status: 'busy-live' })
+    const liveDot = statusDot(live)!
+    expect(liveDot.classList.contains('bg-status-info')).toBe(true)
+    expect(liveDot.classList.contains('animate-notification-blink')).toBe(true)
+    expect(liveDot.getAttribute('aria-label')).toBe('Streaming')
+
+    const server = await renderStatusNode({ status: 'busy' })
+    const serverDot = statusDot(server)!
+    expect(serverDot.classList.contains('bg-status-info')).toBe(true)
+    // Мигание — только по живому подтверждению: иначе залипший серверный
+    // `activity: busy` мигает вечно (репорт владельца).
+    expect(serverDot.classList.contains('animate-notification-blink')).toBe(false)
+    expect(serverDot.getAttribute('aria-label')).toBe('Streaming')
+  })
+
+  it('attention («работа стоит») — статичная точка, мигает только approval', async () => {
+    const container = await renderStatusNode({ status: 'attention' })
+    const dot = statusDot(container)!
+    expect(dot.classList.contains('bg-status-caution')).toBe(true)
+    expect(dot.classList.contains('animate-notification-blink')).toBe(false)
+    expect(dot.getAttribute('aria-label')).toBe('Attention needed')
+  })
+
+  it('approval — единственная мигающая точка «требуется действие»', async () => {
+    const container = await renderStatusNode({ status: 'approval' })
+    const dot = statusDot(container)!
+    expect(dot.classList.contains('animate-notification-blink')).toBe(true)
+  })
 })
 
 describe('TreeNode — тон названия из sessionBadgeState', () => {

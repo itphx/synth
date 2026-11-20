@@ -17,8 +17,19 @@ const iconSizeMap = { sm: 'h-3.5 w-3.5', md: 'h-4 w-4' } as const
  * в дереве не используется. `status-caution` — единственный токен, который
  * стабильно оранжевый и в светлой, и в тёмной схеме (`status-warning` несёт
  * иную семантику — «очередь зависла», и в ряде тем он не оранжевый).
+ *
+ * Анимация (`animate-notification-blink`) — только у *живых* состояний:
+ * `busy-live` (ход реально идёт) и `approval` (нужен человек). `busy` —
+ * «сервер говорит busy, но живого подтверждения нет» — статичная: мигание по
+ * залипшему серверному `activity` не имеет конца (репорт владельца).
+ * `attention` («работа стоит, нужен „Продолжить“») — тоже статичная.
  */
 const statusClassName: Record<TreeStatus, string> = {
+  'busy-live': 'bg-status-info animate-notification-blink',
+  busy: 'bg-status-info',
+  attention: 'bg-status-caution',
+  // Legacy-алиасы: модель бейджа их больше не отдаёт, но внешние вызовы дерева
+  // могли передавать прежние имена — поведение не ломаем.
   streaming: 'bg-status-info animate-notification-blink',
   blocked: 'bg-destructive',
   stalled: 'bg-status-warning animate-notification-blink',
@@ -32,12 +43,17 @@ const statusClassName: Record<TreeStatus, string> = {
  * — уже в обоих словарях, новых не заводим.
  */
 const statusLabelKey: Record<TreeStatus, string> = {
+  'busy-live': 'leftPanel.streaming',
+  // «Сервер сообщает о работе» — тот же смысл для скринридера («идёт генерация»),
+  // но точка статичная: подпись врёт меньше, чем вечное мигание.
+  busy: 'leftPanel.streaming',
+  attention: 'leftPanel.attentionNeeded',
   streaming: 'leftPanel.streaming',
   blocked: 'leftPanel.blocked',
   stalled: 'leftPanel.attentionNeeded',
   pending: 'leftPanel.answerReady',
   // Статус `approval` — ждёт подтверждения прав: свой ключ, чтобы не путать
-  // его с «очередь зависла» (`stalled` → `attentionNeeded`).
+  // его с «работа стоит» (`attention`/`stalled` → `attentionNeeded`).
   approval: 'leftPanel.approvalNeeded',
 }
 

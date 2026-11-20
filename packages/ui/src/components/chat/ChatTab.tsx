@@ -32,6 +32,7 @@ import { useBackgroundHotkey } from './useBackgroundHotkey'
 import type { CenterTab } from '@/stores/useUIStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useNotificationStore } from '@/stores/notificationStore'
+import { turnKey } from '@/lib/sessionBadgeState'
 import { useAttachmentsStore, type RestorableAttachment } from '@/stores/attachmentsStore'
 import { toQueuedMessage } from './queueMessages'
 import type { MediaPartData, Part } from '@itphx/synth-shared/types'
@@ -170,6 +171,12 @@ export function ChatTab({ tab }: ChatTabProps) {
   const sessionId = tab.data.sessionId || tab.id
   // Проект сессии — для плавающей кнопки «Терминал» (терминал живёт в проекте).
   const activeProjectId = useSessionsStore((s) => s.sessions.find((x) => x.id === sessionId)?.project_id ?? null)
+  // Ключ текущего исхода последнего хода (`turnKey(status.last_turn)`) —
+  // «идентичность» записи для метки «просмотрено». Источник — уже загруженный
+  // стор сессий: новых запросов нет.
+  const currentTurnKey = useSessionsStore((s) =>
+    turnKey(s.sessions.find((x) => x.id === sessionId)?.status?.last_turn ?? null),
+  )
   // Пагинация истории: есть ли сообщения старше загруженной страницы
   // (кнопка «Загрузить старые» над лентой).
   const historyPage = useChatStore(s => s.historyPageBySession[sessionId])
@@ -371,21 +378,31 @@ export function ChatTab({ tab }: ChatTabProps) {
   /**
    * Метка «просмотрено» (вход модели `sessionBadgeState`, ADR-118 §1).
    *
-   * **Единственная точка** во всём UI: человек открыл чат сессии → исход её
-   * последнего хода прочитан, и дерево больше не красит название (ошибка
-   * `error` / завершение `success`). Ветка зависит от `activeCenterTabId`, а не
-   * только от монтирования: `ChatTab` живёт в активном табе, но вкладка может
-   * быть уже открыта при загрузке страницы — тогда эффект срабатывает на
-   * монтировании, а при переключении табов — на смене id.
+   * **Единственная точка** во всём UI: человек видит чат сессии → её текущий
+   * исход последнего хода прочитан, и дерево больше не красит название (ошибка
+   * `error` / завершение `success`).
    *
-   * Метка ставится в стор напрямую (`getState()`), без подписки: значение
-   * пишется, но в самом чате не читается — подписка давала бы лишний рендер
-   * ленты на каждое открытие.
+   * Два повода записать метку, и оба закрыты одной зависимостью `currentTurnKey`:
+   *  1. активация вкладки (`activeCenterTabId`) — включая загрузку страницы с уже
+   *     открытой вкладкой;
+   *  2. **смена исхода при открытой вкладке**: ход завершился, пока человек
+   *     смотрит на чат — новый ключ сразу отмечается просмотренным, иначе
+   *     зелёный/красный «прилипал» бы к названию до переключения вкладки.
+   *
+   * Метка — ключ исхода (`turnKey`), а не время: сравнение идёт на равенство
+   * серверных данных, поэтому расхождение часов клиента и сервера не мешает, и
+   * метку можно персистить (см. `notificationStore.ts`).
+   *
+   * Запись — напрямую в стор (`getState()`), без подписки: значение пишется, но
+   * в самом чате не читается — подписка давала бы лишний рендер ленты на каждое
+   * открытие.
    */
   useEffect(() => {
     if (activeCenterTabId !== `chat-${sessionId}`) return
-    useNotificationStore.getState().markSessionAcked(sessionId)
-  }, [activeCenterTabId, sessionId])
+    // Исхода нет (ход ещё ни разу не завершался) — отмечать нечего.
+    if (currentTurnKey === null) return
+    useNotificationStore.getState().markSessionAcked(sessionId, currentTurnKey)
+  }, [activeCenterTabId, sessionId, currentTurnKey])
 
   /**
    * «Загрузить старые»: страница истории **перед** текущей (`before` — курсор

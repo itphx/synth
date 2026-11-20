@@ -8,13 +8,30 @@ export type ContextMenuEntry = ContextMenuItem | 'separator'
 /**
  * Статус узла дерева (точка-индикатор в правом конце строки).
  *
- * - `streaming` — идёт генерация;
+ * - `busy-live` — работа идёт и подтверждена живым ходом; точка мигает;
+ * - `busy` — сервер сообщает о работе, живого подтверждения нет: точка
+ *   информационная, **без** анимации;
+ * - `attention` — работа стоит и ждёт «Продолжить» (статичная);
+ * - `streaming` — legacy-алиас `busy-live` (внешние вызовы дерева);
  * - `blocked` — сессия заблокирована;
- * - `stalled` — очередь зависла;
+ * - `stalled` — legacy-алиас мигающей «очередь зависла»; модель бейджа его
+ *   больше не отдаёт (`attention` вместо него);
  * - `pending` — в очереди есть сообщения;
  * - `approval` — ждёт подтверждения прав (запрос `permission.asked`).
+ *
+ * Правило мигания: анимируются только `busy-live` (есть живое подтверждение),
+ * `approval` (нужен человек) и legacy-алиасы. «Работа стоит» и «сервер говорит
+ * busy» — статичные: иначе индикатор мигает бесконечно (репорт владельца).
  */
-export type TreeStatus = 'streaming' | 'blocked' | 'stalled' | 'pending' | 'approval'
+export type TreeStatus =
+  | 'busy-live'
+  | 'busy'
+  | 'attention'
+  | 'streaming'
+  | 'blocked'
+  | 'stalled'
+  | 'pending'
+  | 'approval'
 
 export interface TreeAction {
   id: string

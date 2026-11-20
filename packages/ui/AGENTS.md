@@ -269,7 +269,7 @@
 
 ### Левое дерево: тон названия сессии и метка «просмотрено» (ADR-118 §1, PROP-143)
 
-- **Единый источник — `lib/sessionBadgeState.ts`.** `sessionBadgeState({ session, live, ackedAt })` →
+- **Единый источник — `lib/sessionBadgeState.ts`.** `sessionBadgeState({ session, live, ackedTurnKey })` →
   `{ labelTone, dot, ariaKey }`: чистая функция без сторов, React и API (вход — сводка DTO сессии +
   живые счётчики клиента + локальная метка «просмотрено»). `ProjectsTab` только собирает вход
   (`getSessionBadge`) и отдаёт узлу `status: badge.dot ?? undefined`, `labelTone`, `labelAriaKey`
@@ -277,11 +277,17 @@
   правил уже расходились — так было с меткой «ждёт подтверждения» (живой стор против DTO-счётчика).
 - **Приоритет — первое совпадение:** требуется действие (подтверждение прав — живой
   `permissionStore` или DTO `pending_approvals`; вопрос агента) → `caution` + точка `approval`;
-  обработка очереди стоит и ждёт «Продолжить» (`status.queue_stopped`/живой stall) → `caution` +
-  точка `stalled`; критическая ошибка последнего хода (`status.last_turn.outcome === 'error'`, исход
-  не просмотрен, работа не идёт) → `error` (красный текст, **без** точки); идёт ход
-  (`turnBySession[id].status === 'streaming'` или `activity.type` `busy`/`retry`) → синяя точка
-  `streaming`; завершено (см. ниже) → `success`; очередь непуста → точка `pending`; иначе нейтраль.
+  обработка очереди стоит и ждёт «Продолжить» (`status.queue_stopped` либо живой stall при
+  **непустой** очереди) → `caution` + точка `attention` (без мигания); критическая ошибка
+  последнего хода (`status.last_turn.outcome === 'error'`, исход не просмотрен, работа не идёт) →
+  `error` (красный текст, **без** точки); идёт ход → точка `busy-live` (**мигает**) только если
+  есть живое подтверждение (`turnBySession[id].status === 'streaming'` **и** тишина событий не
+  больше `STALE_TURN_SILENCE_MS`), иначе — `busy` без мигания по серверному `activity`
+  (`busy`/`retry`); завершено (см. ниже) → `success`; очередь непуста → точка `pending`; иначе
+  нейтраль. **Мигает только то, что требует реакции:** `approval` и `busy-live`; всё остальное
+  статично — иначе индикатор «работа» мигает без активности (серверный `activity: busy` при
+  зависшем ходе и липкий клиентский `isStalled` — уже пойманные случаи; `isStalled` снимается по
+  `session.updated` с `queue_stopped: false`/`activity.idle`).
 - **«Завершено» — композит, а не «ход succeeded»:** `last_turn.outcome === 'completed'` **и** сессия
   верхнего уровня (`parent_id` пуст) **и** пустые очередь/подтверждения/вопрос **и** нет открытых
   todo (`pending`/`in_progress`) **и** исход не просмотрен. Дочерние сессии не зеленеют (прогон
@@ -296,11 +302,16 @@
   инкремента `notifyMessage` (`hooks/useNotification.tsx`). Завершение фоновых прогонов, служебные
   сообщения и терминальная ошибка хода счётчик не трогают (цвет ошибки даёт durable
   `status.last_turn`).
-- **Метка «просмотрено» — `notificationStore.ackedAtBySession` + `markSessionAcked`** (ставится одной
-  точкой — эффект активации вкладки сессии в `ChatTab`, метка только растёт). **Не персистится**
-  (в `partialize` только `prefs`): клиентские часы расходятся с серверным `last_turn.at`, а
-  «залипшая» метка из localStorage навсегда скрыла бы новую ошибку. Сравнение —
-  `ackedAt < Date.parse(last_turn.at)`; нет метки — не просмотрено, нечитаемое время — просмотрено.
+- **Метка «просмотрено» — `notificationStore.ackedTurnBySession` + `markSessionAcked(sessionId, turnKey)`**,
+  где `turnKey` — экспортируемая из модели функция `"<outcome>|<at>"` от `status.last_turn`. Ставится
+  эффектом `ChatTab`: при активации вкладки сессии **и** при смене исхода у уже открытой вкладки
+  (иначе цвет «прилипал» до переключения вкладки). **Персистится** (`partialize`): метка привязана к
+  идентичности исхода, а не ко времени, поэтому «залипнуть» навсегда не может — новый ход меняет ключ;
+  именно поэтому она переживает reload (раньше была runtime, и просмотренная сессия снова зеленела).
+  Сравнение — `ackedTurnKey === turnKey(last_turn)` (не `<` по времени: часы клиента/сервера
+  расходятся); нет ключа/ключ другой — не просмотрено, нечитаемый исход — просмотрено. Рост карты
+  ограничен `MAX_ACKED_SESSIONS = 200` (вытеснение по порядку последней записи), на `session.deleted`
+  запись забывается (`clearSessionAcked`).
 - Тесты — `lib/sessionBadgeState.test.ts`, `components/panels/left-panel/ProjectsTab.badge.test.tsx`,
   `components/chat/ChatTab.ack.test.tsx`, `stores/notificationStore.acked.test.ts`.
 

@@ -44,6 +44,48 @@ interface NotificationPrefs {
 }
 
 const MAX_HISTORY = 50
+
+/**
+ * Предел числа сессий в карте «просмотрено» (`ackedTurnBySession`).
+ *
+ * Карта персистится, поэтому не должна расти бесконечно: за месяцы работы в
+ * браузере накопились бы тысячи ключей. При переполнении выкидываются самые
+ * старые записи по порядку последней записи (активная сессия при каждой
+ * отметке переставляется в конец). Вытеснение безвредно: потерянная метка
+ * всего лишь вернёт цвет названия — данные не теряются.
+ */
+export const MAX_ACKED_SESSIONS = 200
+
+/**
+ * Обрезать карту «просмотрено» до `MAX_ACKED_SESSIONS` последних записей.
+ *
+ * Порядок ключей строкового `Record` — порядок вставки (спецификация JS),
+ * поэтому «последние» — это хвост `Object.keys`. Порядок не меняем — это
+ * делает вызывающая сторона (`markSessionAcked` переставляет ключ в конец).
+ */
+function trimAcked(map: Record<string, string>): Record<string, string> {
+  const keys = Object.keys(map)
+  if (keys.length <= MAX_ACKED_SESSIONS) return map
+  const next: Record<string, string> = {}
+  for (const key of keys.slice(keys.length - MAX_ACKED_SESSIONS)) next[key] = map[key]
+  return next
+}
+
+/**
+ * Оставить в восстановленной карте только непустые строковые значения.
+ *
+ * `localStorage` — внешние данные (старый формат, ручная правка, другая версия
+ * приложения): нестроковое значение сломало бы сравнение ключей, поэтому молча
+ * отбрасываем его.
+ */
+function sanitizeAcked(raw: Record<string, unknown>): Record<string, string> {
+  const next: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string' && value !== '') next[key] = value
+  }
+  return next
+}
+
 /** Дефолтная доступность категорий — используется как `defaultValue` черновика настроек. */
 export const DEFAULT_ENABLED: Record<NotifyCategory, boolean> = {
   connection: true,
@@ -126,32 +168,46 @@ interface NotificationStore {
   isActionNotified: (sessionId: string) => boolean
 
   /**
-   * Локальная метка «просмотрено» по сессиям (ms, `Date.now()`).
+   * Локальная метка «просмотрено» по сессиям: ключ **увиденного** исхода
+   * последнего хода (`turnKey(session.status.last_turn)` из
+   * `lib/sessionBadgeState.ts`, формат `"<outcome>|<at>"`).
    *
-   * Вход модели `sessionBadgeState` (`lib/sessionBadgeState.ts`): исход
-   * последнего хода **старше** метки — человек его уже видел, красить название
-   * сессии (ошибка/завершение) незачем.
+   * Вход модели `sessionBadgeState`: ключ совпал с ключом текущего
+   * `status.last_turn` — человек этот исход уже видел, красить название сессии
+   * (ошибка/завершение) незачем. Новый ход даёт новый `at` → другой ключ → цвет
+   * возвращается сам.
    *
-   * Метка локальная и per-browser: сервер о ней не знает и не должен —
+   * Почему ключ исхода, а не отметка времени (как было раньше): `Date.now()`
+   * клиента расходится с серверным `last_turn.at` (часы, часовые пояса), и
+   * сравнение `ackedAt < at` давало ложные «просмотрено»/«не просмотрено».
+   * Ключ строится **из серверных данных** и сравнивается на равенство —
+   * расхождение часов на него не влияет.
+   *
+   * Почему теперь можно персистить (`partialize` ниже): метка привязана к
+   * конкретному исходу, а не к «времени, до которого всё прочитано», поэтому
+   * «залипнуть» навсегда она не может — следующий ход перезапишет `last_turn`,
+   * и ключ перестанет совпадать. Именно поэтому карта теперь сохраняется и
+   * переживает перезагрузку страницы (баг: просмотренная сессия снова зеленела
+   * после reload).
+   *
+   * Метка остаётся локальной и per-browser: сервер о ней не знает и не должен —
    * «прочитанность» это свойство текущего просмотра, а не данные сессии
    * (ADR-118 §1: цвет названия — клиентское состояние).
-   *
-   * **Не персистится** (`partialize` ниже сохраняет только `prefs`): после
-   * перезагрузки страницы метка пропадает, и непросмотренный исход может
-   * подсветиться повторно. Это осознанный компромисс — `Date.now()` клиента
-   * расходится с серверным `last_turn.at` (часы, часовые пояса), и «залипшая»
-   * метка из localStorage навсегда скрыла бы новую ошибку.
    */
-  ackedAtBySession: Record<string, number>
+  ackedTurnBySession: Record<string, string>
   /**
-   * Отметить сессию просмотренной (`at` — для тестов; по умолчанию `Date.now()`).
+   * Отметить сессию просмотренной: `turnKey` — ключ увиденного исхода
+   * (`turnKey(session.status.last_turn)`). Пустая строка/пустой id — no-op.
    *
-   * Метка только растёт: повторный вызов с меньшим/равным временем состояние не
-   * меняет (`return state` — без лишнего рендера подписчиков).
+   * Идемпотентно: повторная запись того же ключа состояние не меняет
+   * (`return state` — без лишнего рендера подписчиков). Монотонности нет и не
+   * нужно: хранится ровно последний увиденный исход.
    */
-  markSessionAcked: (sessionId: string, at?: number) => void
-  /** Метка «просмотрено» сессии (`undefined` — не просмотрена). */
-  getAckedAt: (sessionId: string) => number | undefined
+  markSessionAcked: (sessionId: string, turnKey: string) => void
+  /** Ключ просмотренного исхода сессии (`undefined` — не просмотрена). */
+  getAckedTurnKey: (sessionId: string) => string | undefined
+  /** Забыть метку сессии (сессия удалена — ключ больше не нужен). */
+  clearSessionAcked: (sessionId: string) => void
 }
 
 export const useNotificationStore = create<NotificationStore>()(
@@ -262,32 +318,53 @@ export const useNotificationStore = create<NotificationStore>()(
         }),
       isActionNotified: (sessionId) => get().actionNotified[sessionId] === true,
 
-      ackedAtBySession: {},
-      markSessionAcked: (sessionId, at = Date.now()) =>
+      ackedTurnBySession: {},
+      markSessionAcked: (sessionId, turnKey) =>
         set((state) => {
-          const current = state.ackedAtBySession[sessionId]
-          // Метка только растёт: «просмотрено раньше» не откатывает «просмотрено
-          // позже» (иначе повторное открытие старой вкладки «раскрашивало» бы
-          // уже прочитанный исход).
-          if (current !== undefined && current >= at) return state
-          return { ackedAtBySession: { ...state.ackedAtBySession, [sessionId]: at } }
+          if (!sessionId || !turnKey) return state
+          const acked = state.ackedTurnBySession
+          // Идемпотентность: этот исход уже отмечен — состояние не меняем (и не
+          // дёргаем подписчиков лишним рендером).
+          if (acked[sessionId] === turnKey) return state
+          // Порядок ключей = порядок последней записи: активная сессия
+          // переставляется в конец и не вытесняется первой при обрезке карты.
+          const next = { ...acked }
+          delete next[sessionId]
+          next[sessionId] = turnKey
+          return { ackedTurnBySession: trimAcked(next) }
         }),
-      getAckedAt: (sessionId) => get().ackedAtBySession[sessionId],
+      getAckedTurnKey: (sessionId) => get().ackedTurnBySession[sessionId],
+      clearSessionAcked: (sessionId) =>
+        set((state) => {
+          if (state.ackedTurnBySession[sessionId] === undefined) return state
+          const next = { ...state.ackedTurnBySession }
+          delete next[sessionId]
+          return { ackedTurnBySession: next }
+        }),
     }),
     {
       name: 'synth-ui-notifications',
-      // Персистим только пользовательские предпочтения категорий. Метки
-      // «просмотрено» (`ackedAtBySession`) намеренно остаются runtime — см.
-      // комментарий к полю: клиентские часы расходятся с серверным
-      // `last_turn.at`, и сохранённая метка скрыла бы новую ошибку навсегда.
+      // Персистим предпочтения категорий и метки «просмотрено». Метки теперь
+      // безопасны в localStorage: они привязаны к идентичности исхода
+      // (`<outcome>|<at>`), а не к клиентскому времени, поэтому «залипнуть»
+      // навсегда не могут — новый ход меняет ключ (см. комментарий к полю).
       partialize: (state) => ({
         prefs: state.prefs,
+        ackedTurnBySession: state.ackedTurnBySession,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
+        const persistedAcked = p?.ackedTurnBySession
         return {
           ...current,
           prefs: (p?.prefs as NotificationPrefs) ?? current.prefs,
+          // `localStorage` — внешние данные: чистим и обрезаем и при
+          // восстановлении (правка руками, старый/чужой формат, разросшаяся
+          // карта).
+          ackedTurnBySession:
+            persistedAcked && typeof persistedAcked === 'object' && !Array.isArray(persistedAcked)
+              ? trimAcked(sanitizeAcked(persistedAcked as Record<string, unknown>))
+              : current.ackedTurnBySession,
         }
       },
     }
