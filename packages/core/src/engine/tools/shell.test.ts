@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, access, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeShellTool } from './shell.js';
+import { ExecutionError } from '../../execution/ports/index.js';
 import type { ToolContext } from '@itphx/synth-shared';
 import type { ProcessService } from '../processes/service.js';
 
@@ -388,5 +389,162 @@ describe('execute_shell — секреты вызова (режим ssh-аген
     );
 
     expect(spawn.mock.calls[0]?.[0]).not.toHaveProperty('secrets');
+  });
+});
+
+/**
+ * ANSI-шум в выводе команды.
+ *
+ * Shell исполняется в PTY с `TERM=xterm-256color`/`COLORTERM=truecolor`, поэтому
+ * программы включают цвета. Модели цвет не нужен: `ESC[…m` — шум в контексте,
+ * лишние токены и искажённые сравнения с путями/кодом. Нормализация —
+ * **эталонная** (`stripTerminalAnsi` из `engine/terminal/output.js`), поэтому
+ * ожидания ниже — это её поведение, а не подгонка под результат.
+ *
+ * Лог фонового прогона и буфер терминала остаются raw: тесты проверяют только
+ * текст, который уходит модели.
+ */
+describe('execute_shell — снятие ANSI из вывода для модели', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-shell-ansi-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Порт-заглушка: отдаёт заданный вывод либо бросает заданную ошибку. */
+  function makePort(result: { stdout?: string; stderr?: string } | Error) {
+    return {
+      async execute() {
+        if (result instanceof Error) throw result;
+        return {
+          stdout: result.stdout ?? '',
+          stderr: result.stderr ?? '',
+          exitCode: 0,
+          truncated: false,
+          durationMs: 1,
+        };
+      },
+    };
+  }
+
+  function makeCtx(port: unknown): ToolContext {
+    return {
+      sessionId: 's1',
+      messageId: 'm1',
+      workingDir: tmpDir,
+      extra: { executionPort: port },
+    };
+  }
+
+  it('stdout с ANSI — коды вырезаны, текст сохранён, ansi_stripped = true', async () => {
+    const port = makePort({ stdout: '\u001b[32mOK\u001b[0m \u001b[1mbold\u001b[0m\n' });
+
+    const result = await executeShellTool.execute({ command: 'colorful' }, makeCtx(port));
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).not.toContain('\u001b');
+    expect(result.content).toContain('OK');
+    expect(result.content).toContain('bold');
+    expect(result.content).toBe('OK bold\n');
+    expect(result.metadata?.ansi_stripped).toBe(true);
+    // Остальной контракт тула не изменился.
+    expect(result.metadata).toMatchObject({ command: 'colorful', exitCode: 0, truncated: false });
+  });
+
+  it('вывод без ANSI — текст не изменён, ansi_stripped не выставляется', async () => {
+    const port = makePort({ stdout: 'ok\n' });
+
+    const result = await executeShellTool.execute({ command: 'echo ok' }, makeCtx(port));
+
+    expect(result.content).toBe('ok\n');
+    expect(result.metadata?.ansi_stripped).toBeUndefined();
+  });
+
+  it('stderr с ANSI — тоже очищен, текст сохранён', async () => {
+    const port = makePort({ stderr: '\u001b[31mnote\u001b[0m\n' });
+
+    const result = await executeShellTool.execute({ command: 'warn' }, makeCtx(port));
+
+    expect(result.content).not.toContain('\u001b');
+    expect(result.content).toBe('note\n');
+    expect(result.metadata?.ansi_stripped).toBe(true);
+  });
+
+  it('прогресс-бар с \\r — не мусор: одиночный CR вырезан (поведение stripTerminalAnsi)', async () => {
+    const port = makePort({ stdout: 'one\rtwo\n' });
+
+    const result = await executeShellTool.execute({ command: 'progress' }, makeCtx(port));
+
+    // Эталонная нормализация: одиночный `\r` (возврат каретки) вырезается,
+    // текст остаётся читаемым — «one» + «two», без ESC-мусора.
+    expect(result.content).toBe('onetwo\n');
+    expect(result.content).not.toContain('\r');
+    expect(result.metadata?.ansi_stripped).toBe(true);
+  });
+
+  it('ошибка команды — частичный вывод модели тоже без ANSI', async () => {
+    const err = new ExecutionError({
+      message: 'Command failed: exit code 2',
+      reason: 'nonzero_exit',
+      code: 2,
+      stdout: '\u001b[1mboom\u001b[0m\n',
+      stderr: '\u001b[31mstderr-note\u001b[0m\n',
+    });
+
+    const result = await executeShellTool.execute({ command: 'fail' }, makeCtx(makePort(err)));
+
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain('\u001b');
+    expect(result.content).toContain('boom');
+    expect(result.content).toContain('stderr-note');
+    expect(result.metadata?.ansi_stripped).toBe(true);
+    expect(result.metadata).toMatchObject({ command: 'fail', exitCode: 2 });
+  });
+
+  it('таймаут — частичный вывод тоже без ANSI', async () => {
+    const err = new ExecutionError({
+      message: 'Command timed out',
+      reason: 'timeout',
+      killed: true,
+      stdout: '\u001b[33mbefore-timeout\u001b[0m\n',
+    });
+
+    const result = await executeShellTool.execute({ command: 'slow', timeout: 1 }, makeCtx(makePort(err)));
+
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.reason).toBe('timeout');
+    expect(result.content).not.toContain('\u001b');
+    expect(result.content).toContain('before-timeout');
+    expect(result.metadata?.ansi_stripped).toBe(true);
+  });
+
+  it('реальный inline-порт: цвет из printf вырезан, текст сохранён', async () => {
+    // Без `executionPort` в extra — настоящий inline-порт (тот же путь, что в
+    // бою): команда печатает настоящие ESC-последовательности.
+    const result = await executeShellTool.execute(
+      { command: "printf '\\033[32mOK\\033[0m\\n'" },
+      { sessionId: 's1', messageId: 'm1', workingDir: tmpDir },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).not.toContain('\u001b');
+    expect(result.content.trim()).toBe('OK');
+    expect(result.metadata?.ansi_stripped).toBe(true);
+  });
+
+  it('в shell.ts и shell-detachable.ts нет своей копии stripAnsi — только импорт из output.ts', async () => {
+    for (const file of ['./shell.ts', './shell-detachable.ts']) {
+      const source = await readFile(new URL(file, import.meta.url), 'utf8');
+      expect(source).not.toMatch(/function stripAnsi\b/);
+      expect(source).not.toMatch(/function stripTerminalAnsi\b/);
+      expect(source).not.toMatch(/function stripEscapeSequences\b/);
+    }
+    const detachable = await readFile(new URL('./shell-detachable.ts', import.meta.url), 'utf8');
+    expect(detachable).toContain('stripTerminalAnsi');
+    expect(detachable).toContain("from '../terminal/output.js'");
   });
 });

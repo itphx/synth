@@ -13,7 +13,7 @@ import { BackgroundLimitExceededError } from '../background/types.js';
 import type { ActiveRunRegistry } from '../background/active-runs.js';
 import { BackgroundUnsupportedError } from '../processes/types.js';
 import type { ProcessService } from '../processes/service.js';
-import { MAX_OUTPUT_LENGTH, isDetachableShellEnabled, runDetachableShell } from './shell-detachable.js';
+import { MAX_OUTPUT_LENGTH, combineShellStreams, isDetachableShellEnabled, runDetachableShell, stripShellStreams } from './shell-detachable.js';
 import {
   TIMEOUT_BG_DEFAULT_SEC,
   TIMEOUT_BG_LIMIT_MESSAGE,
@@ -174,9 +174,13 @@ export const executeShellTool: ToolDefinition = {
         ...(secrets.length > 0 ? { secrets } : {}),
       });
 
-      let output = '';
-      if (stdout) output += stdout;
-      if (stderr) output += (output ? '\n--- stderr ---\n' : '') + stderr;
+      // Модели — текст **без** служебного ANSI-шума: shell идёт в PTY с
+      // `TERM=xterm-256color`, поэтому программы включают цвета, а модель
+      // получала `ESC[…m` (шум в контексте, лишние токены, искажённые
+      // сравнения с путями/кодом). Нормализация — эталонная
+      // (`stripTerminalAnsi`), raw остаётся в логе фонового прогона.
+      const streams = stripShellStreams(stdout, stderr);
+      let output = combineShellStreams(streams.stdout, streams.stderr);
 
       if (output.length > MAX_OUTPUT_LENGTH) {
         output = output.slice(0, MAX_OUTPUT_LENGTH) + sm('tool.output_truncated');
@@ -184,14 +188,23 @@ export const executeShellTool: ToolDefinition = {
 
       return {
         content: output || sm('tool.empty_output'),
-        metadata: { command: params.command, exitCode: 0, truncated: output.length > MAX_OUTPUT_LENGTH },
+        metadata: {
+          command: params.command,
+          exitCode: 0,
+          truncated: output.length > MAX_OUTPUT_LENGTH,
+          // Признак «цвет был снят осознанно»: иначе потеря цвета при разборе
+          // выглядит как «команда его не печатала».
+          ...(streams.ansiStripped ? { ansi_stripped: true } : {}),
+        },
       };
     } catch (err: unknown) {
       const execError = err as ExecutionError;
 
       // Прерывание по «Стоп» — вернуть единый маркер отмены + частичный вывод
       if (isAborted(ctx)) {
-        const partial = [execError.stdout, execError.stderr].filter(Boolean).join('\n');
+        // Частичный вывод модели — тоже без служебного шума (формат прежний).
+        const partialStreams = stripShellStreams(execError.stdout ?? '', execError.stderr ?? '');
+        const partial = [partialStreams.stdout, partialStreams.stderr].filter(Boolean).join('\n');
         return abortedResult(this.name, partial || undefined);
       }
 
@@ -210,9 +223,8 @@ export const executeShellTool: ToolDefinition = {
       // Таймаут — actionable-текст (величина лимита + следующий шаг), а не
       // generic «Command failed»: модель должна понять причину и что делать.
       if (isExecutionError(err) && err.reason === 'timeout') {
-        let partial = '';
-        if (execError.stdout) partial += execError.stdout;
-        if (execError.stderr) partial += (partial ? '\n--- stderr ---\n' : '') + execError.stderr;
+        const streams = stripShellStreams(execError.stdout ?? '', execError.stderr ?? '');
+        const partial = combineShellStreams(streams.stdout, streams.stderr);
         const message = sm('tool.shell_timeout', { timeout: String(timeoutSec) });
         return {
           content: (partial ? `${partial}\n` : '') + message,
@@ -221,20 +233,25 @@ export const executeShellTool: ToolDefinition = {
             command: params.command,
             reason: 'timeout',
             timeout: timeoutSec,
+            ...(streams.ansiStripped ? { ansi_stripped: true } : {}),
             i18n: i18nMeta('tool.shell_timeout', { timeout: String(timeoutSec) }),
           },
         };
       }
 
-      let output = '';
-      if (execError.stdout) output += execError.stdout;
-      if (execError.stderr) output += (output ? '\n--- stderr ---\n' : '') + execError.stderr;
+      const streams = stripShellStreams(execError.stdout ?? '', execError.stderr ?? '');
+      let output = combineShellStreams(streams.stdout, streams.stderr);
       output += (output ? '\n' : '') + sm('tool.shell_error', { message: execError.message || sm('tool.command_failed_default') });
 
       return {
         content: output.slice(0, MAX_OUTPUT_LENGTH),
         isError: true,
-        metadata: { command: params.command, exitCode: execError.code ?? -1, killed: execError.killed },
+        metadata: {
+          command: params.command,
+          exitCode: execError.code ?? -1,
+          killed: execError.killed,
+          ...(streams.ansiStripped ? { ansi_stripped: true } : {}),
+        },
       };
     }
   },

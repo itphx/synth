@@ -63,6 +63,7 @@ import type { ActiveRunDetachReason, ActiveRunRegistry } from '../background/act
 import type { LiveProcessLog } from '../processes/types.js';
 import type { ProcessService } from '../processes/service.js';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
+import { stripTerminalAnsi } from '../terminal/output.js';
 import { abortedResult } from './abort.js';
 import { toolRuntimeRequires } from './runtime-deps.js';
 
@@ -141,6 +142,45 @@ export function combineShellStreams(stdout: string, stderr: string): string {
   if (stdout) output += stdout;
   if (stderr) output += (output ? '\n--- stderr ---\n' : '') + stderr;
   return output;
+}
+
+/** Потоки команды после нормализации + признак «нормализация что-то изменила». */
+export interface StrippedShellStreams {
+  /** stdout без служебных последовательностей. */
+  stdout: string;
+  /** stderr без служебных последовательностей. */
+  stderr: string;
+  /**
+   * true — из вывода действительно что-то вырезано (были ANSI/OSC-коды,
+   * `\b`, одиночный `\r` или «широкая» вставка пробелов).
+   */
+  ansiStripped: boolean;
+}
+
+/**
+ * Снять служебный шум из потоков команды перед сборкой текста **для модели**.
+ *
+ * Shell исполняется в PTY с `TERM=xterm-256color`/`COLORTERM=truecolor`, поэтому
+ * программы включают цвета: без нормализации модель получала строки с
+ * `ESC[…m` — шум в контексте, лишние токены и искажённые сравнения с путями и
+ * кодом. Нормализация — **эталонная** (`stripTerminalAnsi` из
+ * `engine/terminal/output.js`, та же, что у `terminal_*`): своей копии здесь нет.
+ *
+ * Границы: нормализуется только текст, который уходит **модели**. Лог фонового
+ * прогона и кольцевой буфер терминала остаются как есть (raw) — их читает UI и
+ * разбирает сам (нормализация в отображении — отдельная задача).
+ *
+ * `ansiStripped` — для `metadata.ansi_stripped`: по нему при разборе видно, что
+ * цвет был потерян осознанно, а не «команда его не печатала».
+ */
+export function stripShellStreams(stdout: string, stderr: string): StrippedShellStreams {
+  const cleanStdout = stripTerminalAnsi(stdout);
+  const cleanStderr = stripTerminalAnsi(stderr);
+  return {
+    stdout: cleanStdout,
+    stderr: cleanStderr,
+    ansiStripped: cleanStdout !== stdout || cleanStderr !== stderr,
+  };
 }
 
 /** Состояние буфера одного потока (предел — `MAX_BUFFER_BYTES`). */
@@ -585,13 +625,20 @@ async function executionFallback(input: DetachableShellInput): Promise<ToolResul
     // Секреты вызова (PROP-124 §2) — как у основного пути.
     ...(input.secrets && input.secrets.length > 0 ? { secrets: input.secrets } : {}),
   });
-  let output = combineShellStreams(stdout, stderr);
+  // Модели — текст без служебного ANSI-шума (raw остаётся в логе/буфере).
+  const streams = stripShellStreams(stdout, stderr);
+  let output = combineShellStreams(streams.stdout, streams.stderr);
   if (output.length > MAX_OUTPUT_LENGTH) {
     output = output.slice(0, MAX_OUTPUT_LENGTH) + sm('tool.output_truncated');
   }
   return {
     content: output || sm('tool.empty_output'),
-    metadata: { command: input.displayCommand, exitCode: 0, truncated: output.length > MAX_OUTPUT_LENGTH },
+    metadata: {
+      command: input.displayCommand,
+      exitCode: 0,
+      truncated: output.length > MAX_OUTPUT_LENGTH,
+      ...(streams.ansiStripped ? { ansi_stripped: true } : {}),
+    },
   };
 }
 
@@ -609,7 +656,8 @@ function spawnFailureResult(input: DetachableShellInput, err: unknown): ToolResu
     };
   }
   const message = execError?.message || (err instanceof Error ? err.message : String(err));
-  let output = combineShellStreams(execError?.stdout ?? '', execError?.stderr ?? '');
+  const streams = stripShellStreams(execError?.stdout ?? '', execError?.stderr ?? '');
+  let output = combineShellStreams(streams.stdout, streams.stderr);
   output += (output ? '\n' : '') + sm('tool.shell_error', {
     message: message || sm('tool.command_failed_default'),
   });
@@ -620,6 +668,7 @@ function spawnFailureResult(input: DetachableShellInput, err: unknown): ToolResu
       command: input.displayCommand,
       exitCode: execError?.code ?? -1,
       killed: execError?.killed,
+      ...(streams.ansiStripped ? { ansi_stripped: true } : {}),
     },
   };
 }
@@ -638,7 +687,10 @@ function completionResult(
   exit: ExecBackgroundExit,
   startedAt: number,
 ): ToolResult {
-  const glued = combineShellStreams(stdout.text, stderr.text);
+  // Модели — текст без служебного ANSI-шума; буферы и живой лог остаются raw.
+  const streams = stripShellStreams(stdout.text, stderr.text);
+  const glued = combineShellStreams(streams.stdout, streams.stderr);
+  const ansiMetadata = streams.ansiStripped ? { ansi_stripped: true } : {};
 
   // Прерывание по «Стоп» — единый маркер отмены + частичный вывод (как раньше).
   if (input.ctx.abortSignal?.aborted === true) {
@@ -655,7 +707,7 @@ function completionResult(
   if (exit.exitCode === 0 && !exit.signal) {
     return {
       content: truncated ? body + sm('tool.output_truncated') : (body || sm('tool.empty_output')),
-      metadata: { command: input.displayCommand, exitCode: 0, truncated },
+      metadata: { command: input.displayCommand, exitCode: 0, truncated, ...ansiMetadata },
     };
   }
 
@@ -677,6 +729,7 @@ function completionResult(
         timeoutMs: input.timeoutMs,
         timedOut: true,
         truncated,
+        ...ansiMetadata,
         i18n: i18nMeta('tool.shell_timeout', { timeout: String(input.timeoutMs) }),
       },
     };
@@ -694,6 +747,7 @@ function completionResult(
       exitCode: exit.exitCode ?? -1,
       killed: exit.signal !== null,
       truncated,
+      ...ansiMetadata,
     },
   };
 }
