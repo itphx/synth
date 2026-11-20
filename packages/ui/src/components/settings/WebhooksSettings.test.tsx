@@ -56,6 +56,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { useUIStore } from '@/stores/useUIStore'
+import { useWebhooksStore } from '@/stores/webhooksStore'
 import { confirm } from '@/lib/confirm'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
@@ -531,5 +532,75 @@ describe('WebhooksSettings — утилиты, права (ADMIN) и i18n (ADR-0
     expect(ruDict['errors.conflict.webhookLabel']).toBeTruthy()
     expect(enDict['webhooks.deliveries.title']).toBeTruthy()
     expect(ruDict['webhooks.deliveries.title']).toBeTruthy()
+  })
+})
+
+describe('WebhooksSettings — событие webhooks.updated (ADR-052 этап II)', () => {
+  /**
+   * Баг: «подписка, созданная/изменённая/удалённая в другом клиенте, видна в
+   * разделе только после перезагрузки страницы». По событию шины раздел
+   * перечитывает список (сигнал — `revision` в `webhooksStore`).
+   */
+  const NEW_SUB: WebhookSubscription = {
+    ...SUB_DISABLED,
+    id: 'whk_9',
+    label: 'Gamma hook',
+    enabled: true,
+    disabledAt: undefined,
+  }
+
+  it('рост revision перечитывает список — новая подписка появляется', async () => {
+    useWebhooksStore.setState({ revision: 0 })
+    mocks.getWebhookSubscriptions.mockResolvedValue({ subscriptions: [SUB_ACTIVE] })
+
+    const container = await renderSettings()
+    expect(mocks.getWebhookSubscriptions).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-testid="webhooks-item-whk_1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="webhooks-item-whk_9"]')).toBeNull()
+
+    // Подписку создали в соседней вкладке админки — в клиент пришло событие шины.
+    mocks.getWebhookSubscriptions.mockResolvedValue({ subscriptions: [SUB_ACTIVE, NEW_SUB] })
+    await act(async () => {
+      useWebhooksStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    expect(mocks.getWebhookSubscriptions).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[data-testid="webhooks-item-whk_9"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="settings-header-meta"]')!.textContent).toContain(
+      '2 subscriptions',
+    )
+  })
+
+  it('первый рендер не дублирует загрузку (revision сравнивается со своим значением)', async () => {
+    useWebhooksStore.setState({ revision: 0 })
+
+    await renderSettings()
+    await act(async () => {})
+
+    expect(mocks.getWebhookSubscriptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('событие не сбрасывает открытую форму создания (черновик — ввод пользователя)', async () => {
+    useWebhooksStore.setState({ revision: 0 })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'webhooks-add')
+    const label = container.querySelector('[data-testid="webhooks-label"]') as HTMLInputElement
+    await act(async () => {
+      setInputValue(label, 'Черновик')
+    })
+
+    await act(async () => {
+      useWebhooksStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    // Список перечитан, а форма и введённая метка остались на месте.
+    expect(mocks.getWebhookSubscriptions).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[data-testid="webhooks-form"]')).not.toBeNull()
+    expect((container.querySelector('[data-testid="webhooks-label"]') as HTMLInputElement).value).toBe(
+      'Черновик',
+    )
   })
 })

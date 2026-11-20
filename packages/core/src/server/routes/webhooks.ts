@@ -13,6 +13,7 @@ import type { WebhookService } from '../../engine/webhooks/service.js';
 import { evaluateWebhookTarget } from '../../engine/webhooks/network.js';
 import type { HostResolver } from '../../engine/mcp/network-policy.js';
 import { shouldProxyUrl } from '../../security/proxy-state.js';
+import type { WebhooksChangedHook } from '../../events/webhooks-events.js';
 
 /**
  * ADR-052 (этап II): CRUD подписок на исходящие webhooks + журнал доставок +
@@ -68,6 +69,15 @@ export interface WebhookRoutesOptions {
    * системный резолвер (`dns.lookup`), т.е. поведение по умолчанию прежнее.
    */
   resolveHost?: HostResolver;
+  /**
+   * Реестр webhooks изменился — вызывается **после** успешной записи
+   * (`POST /`, `PATCH /:id`, `DELETE /:id`, `POST /:id/regenerate`,
+   * `POST /:id/revoke`, `POST /:id/test`). Точка сборки прокидывает сюда
+   * `webhooksChangedPublisher(eventBus)` (`webhooks.updated` в инстансный канал
+   * шины): раздел «Webhooks» перечитывает список без перезагрузки страницы.
+   * Не задано — событий нет (тесты, сторонние потребители).
+   */
+  onWebhooksChanged?: WebhooksChangedHook;
 }
 
 const DEFAULT_MESSAGES: WebhookRouteMessages = {
@@ -100,6 +110,11 @@ function currentUserId(c: Context, resolveUserId?: (c: Context) => string): stri
  * секрета; `POST /:id/revoke` — мягкое отключение; `POST /:id/test` — тестовая
  * доставка; `GET /:id/deliveries` — журнал. Конфликт метки → 409 `CONFLICT`;
  * невалидный/запрещённый URL → 400 `VALIDATION_ERROR`; мастер выключен → 503.
+ *
+ * Каждый успешный write-путь публикует `webhooks.updated` через
+ * `opts.onWebhooksChanged` (инвариант 27 `AGENTS.md`, ADR-118): иначе подписка,
+ * созданная/изменённая/удалённая в другом клиенте, видна в разделе только после
+ * перезагрузки страницы. Ошибки (400/409/404/503) события не публикуют.
  */
 export function createWebhookRoutes(
   auth: WebhookRoutesAuth,
@@ -111,6 +126,7 @@ export function createWebhookRoutes(
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const readGuard: Middleware = opts.readGuard ?? auth.requireAuth;
   const resolvePolicy = opts.resolvePolicy;
+  const onWebhooksChanged = opts.onWebhooksChanged;
 
   // Мастер-выключатель (`webhooks.enabled`): по умолчанию выключено — как config default.
   const enabled = (): boolean => opts.isEnabled?.() ?? false;
@@ -170,6 +186,9 @@ export function createWebhookRoutes(
 
     try {
       const created = await deps.store.create(parsed.data, currentUserId(c, opts.resolveUserId));
+      // Реестр изменился — в payload только id и вид мутации (signing-секрет и
+      // целевой URL в событие не попадают).
+      onWebhooksChanged?.({ subscriptionId: created.id, action: 'create' });
       return c.json(created, 201);
     } catch (err) {
       if (err instanceof WebhookConflictError) return conflict(c, err.label);
@@ -205,6 +224,7 @@ export function createWebhookRoutes(
     try {
       const updated = await deps.store.update(c.req.param('id'), parsed.data);
       if (!updated) return notFound(c);
+      onWebhooksChanged?.({ subscriptionId: updated.id, action: 'update' });
       return c.json(updated);
     } catch (err) {
       if (err instanceof WebhookConflictError) return conflict(c, err.label);
@@ -217,6 +237,7 @@ export function createWebhookRoutes(
     if (!enabled()) return disabled(c);
     const removed = await deps.store.remove(c.req.param('id'));
     if (!removed) return notFound(c);
+    onWebhooksChanged?.({ subscriptionId: c.req.param('id'), action: 'delete' });
     return c.body(null, 204);
   });
 
@@ -225,6 +246,10 @@ export function createWebhookRoutes(
     if (!enabled()) return disabled(c);
     const rotated = await deps.store.regenerateSecret(c.req.param('id'));
     if (!rotated) return notFound(c);
+    // У подписки сменился `secretPrefix`, а прежний секрет больше не подписывает
+    // доставки — это мутация видимой записи, а не «выдача секрета». Сам секрет
+    // в событие не попадает.
+    onWebhooksChanged?.({ subscriptionId: rotated.id, action: 'regenerate' });
     return c.json(rotated);
   });
 
@@ -233,6 +258,7 @@ export function createWebhookRoutes(
     if (!enabled()) return disabled(c);
     const sub = await deps.store.setEnabled(c.req.param('id'), false);
     if (!sub) return notFound(c);
+    onWebhooksChanged?.({ subscriptionId: sub.id, action: 'revoke' });
     return c.json(sub);
   });
 
@@ -242,6 +268,10 @@ export function createWebhookRoutes(
     if (!deps.service) return notFound(c);
     const delivery = await deps.service.deliverTest(c.req.param('id'));
     if (!delivery) return notFound(c);
+    // Реестр подписок тест не меняет, но отметка доставки пишется в саму
+    // подписку (`lastDeliveryAt`/`lastStatus`) и видна в списке — без сигнала
+    // бейдж статуса «залипал» бы до перезагрузки страницы.
+    onWebhooksChanged?.({ subscriptionId: delivery.subscriptionId, action: 'test' });
     return c.json(delivery);
   });
 

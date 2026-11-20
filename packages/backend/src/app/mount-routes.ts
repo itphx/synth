@@ -98,6 +98,12 @@ import {
   // Память инстанса изменилась — `memory.updated` (шов портала памяти и записи
   // плагина памяти, `events/memory-events.ts`).
   memoryChangedPublisher,
+  // Реестр webhooks инстанса изменился — `webhooks.updated` (шов write-путей
+  // `createWebhookRoutes`, `events/webhooks-events.ts`).
+  webhooksChangedPublisher,
+  // Словари классификации изменились — `dictionaries.updated` (шов write-путей
+  // `createDictionaryRoutes`, `events/dictionaries-events.ts`).
+  dictionariesChangedPublisher,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -1245,6 +1251,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       isEnabled: () => webhooksConfig.enabled,
       // Отдельный экземпляр политики (live; граница доверия не смешивается с tools).
       resolvePolicy: () => egressResolver.resolveWebhooks(),
+      // Инвариант 27: успешная мутация реестра подписок видна второму клиенту
+      // (раздел «Webhooks» перечитывает список без перезагрузки страницы).
+      onWebhooksChanged: webhooksChangedPublisher(eventBus),
       messages: {
         invalid: (c) => t('errors.validation.invalidWebhook', undefined, c),
         notFound: (c) => t('errors.notFound.webhook', undefined, c),
@@ -1897,7 +1906,11 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.route('/api/v2/dictionaries', createDictionaryRoutes(
     auth,
     dictionaries,
-    { writeGuard: auth.requireAdmin },
+    {
+      writeGuard: auth.requireAdmin,
+      // Инвариант 27: записанный/сброшенный словарь виден второму клиенту.
+      onDictionariesChanged: dictionariesChangedPublisher(eventBus),
+    },
   ));
 
   // ADR-069 §9.3: прозрачность проектных инструкций — core-фабрика (резолвер не

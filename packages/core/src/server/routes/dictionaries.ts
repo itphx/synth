@@ -7,6 +7,7 @@ import {
 } from '../../engine/router/dictionary-store.js';
 import type { StoredDictionary } from '../../engine/router/dictionary-store.js';
 import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
+import type { DictionariesChangedHook } from '../../events/dictionaries-events.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -22,6 +23,15 @@ export interface DictionaryRoutesOptions {
    * в core — requireAuth (локальный режим, по умолчанию).
    */
   writeGuard?: Middleware;
+  /**
+   * Словарь изменился — вызывается **после** успешной записи
+   * (`PUT /:category/:lang`, `DELETE /:category/:lang`). Точка сборки
+   * прокидывает сюда `dictionariesChangedPublisher(eventBus)`
+   * (`dictionaries.updated` в инстансный канал шины): секция «Словари»
+   * перечитывает список без перезагрузки страницы. Не задано — событий нет
+   * (тесты, сторонние потребители).
+   */
+  onDictionariesChanged?: DictionariesChangedHook;
 }
 
 const CATEGORY_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -77,6 +87,11 @@ function validateTarget(store: DictionaryRepository, category: string, language:
  *
  * Модуль один и тот же в core (standalone) и backend (managed): отличается
  * только writeGuard (backend — requireAdmin, core — requireAuth).
+ *
+ * Оба write-пути публикуют `dictionaries.updated` через
+ * `opts.onDictionariesChanged` (инвариант 27 `AGENTS.md`, ADR-118): иначе
+ * переопределение, записанное в другом клиенте, видно в секции «Словари» только
+ * после перезагрузки страницы. Ошибки (400/404/403) события не публикуют.
  */
 export function createDictionaryRoutes(
   auth: DictionaryRoutesAuth,
@@ -85,6 +100,7 @@ export function createDictionaryRoutes(
 ): Hono {
   const app = new Hono();
   const writeGuard = opts.writeGuard ?? auth.requireAuth;
+  const onDictionariesChanged = opts.onDictionariesChanged;
 
   app.get('/', auth.requireAuth, (c) => {
     return c.json({ dictionaries: store.listDictionaries().map((d) => withContent(store, d)) });
@@ -142,6 +158,11 @@ export function createDictionaryRoutes(
           error: { code: 'VALIDATION_ERROR', message: 'Не удалось сохранить словарь' },
         }, 400);
       }
+      onDictionariesChanged?.({
+        category,
+        lang: language,
+        action: 'save',
+      });
       return c.json({ status: 'ok', dictionary: withContent(store, dictionary) });
     }
 
@@ -185,6 +206,7 @@ export function createDictionaryRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Не удалось сохранить словарь' } }, 400);
     }
 
+    onDictionariesChanged?.({ category, lang: language, action: 'save' });
     return c.json({
       status: 'ok',
       dictionary: withContent(store, { ...dictionary, source: 'user' as const }),
@@ -205,6 +227,7 @@ export function createDictionaryRoutes(
       return c.json({ error: { code: 'NOT_FOUND', message: 'Словарь не найден' } }, 404);
     }
 
+    onDictionariesChanged?.({ category, lang: language, action: 'reset' });
     return c.json({ status: 'ok', dictionary: withContent(store, dictionary) });
   });
 

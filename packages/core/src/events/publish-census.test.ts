@@ -66,6 +66,8 @@ type Resource =
   | 'execution'
   | 'credentials'
   | 'memory'
+  | 'webhooks'
+  | 'dictionaries'
   | 'pipelines';
 
 interface ResourceSpec {
@@ -195,6 +197,29 @@ const RESOURCES: Readonly<Record<Resource, ResourceSpec>> = {
       'index.ts',
     ],
     wiring: { snippet: 'events: { eventBus, sessionStore: sessionManager }', count: 1 },
+  },
+  webhooks: {
+    event: 'webhooks.updated',
+    identifiers: ['publishWebhooksUpdated', 'webhooksChangedPublisher', 'WebhooksChangedHook'],
+    markers: ['onWebhooksChanged?.', 'publishWebhooksUpdated(', 'webhooksChangedPublisher('],
+    infrastructure: ['events/webhooks-events.ts', 'index.ts'],
+    // Одна точка в каждой точке сборки (core standalone + managed backend):
+    // реестр подписок (`/api/v2/webhooks`) монтируется ровно один раз на
+    // приложение, все шесть write-путей живут в одной фабрике.
+    wiring: { snippet: 'webhooksChangedPublisher(eventBus)', count: 1 },
+  },
+  dictionaries: {
+    event: 'dictionaries.updated',
+    identifiers: [
+      'publishDictionariesUpdated',
+      'dictionariesChangedPublisher',
+      'DictionariesChangedHook',
+    ],
+    markers: ['onDictionariesChanged?.', 'publishDictionariesUpdated(', 'dictionariesChangedPublisher('],
+    infrastructure: ['events/dictionaries-events.ts', 'index.ts'],
+    // Одна точка в каждой точке сборки (core standalone + managed backend):
+    // портал словарей (`/api/v2/dictionaries`) монтируется ровно один раз.
+    wiring: { snippet: 'dictionariesChangedPublisher(eventBus)', count: 1 },
   },
 };
 
@@ -339,6 +364,25 @@ const WRITE_PATHS: readonly WritePath[] = [
   { file: 'server/routes/memory.ts', key: 'createMemoryRoutes POST /indexes/:id/rebuild', resource: 'memory', via: ['invokeIndexTool'] },
   { file: 'server/routes/memory.ts', key: 'createMemoryRoutes DELETE /indexes/:id', resource: 'memory', via: ['invokeIndexTool'] },
   { file: 'server/routes/memory.ts', key: 'createMemoryRoutes POST /consolidate', resource: 'memory', via: ['invokeMemoryTool'] },
+
+  // ── Webhooks: `webhooks.updated` (инстансный канал) ──────────────────
+  // Реестр подписок на исходящие события (ADR-052 этап II) мутирует одна
+  // фабрика, но write-путей шесть. `POST /:id/test` в контуре: реестр он не
+  // меняет, но пишет в **подписку** отметку доставки (`lastDeliveryAt`/
+  // `lastStatus`), а эти поля панель показывает в списке — без сигнала бейдж
+  // статуса «залипал» бы до перезагрузки страницы.
+  { file: 'server/routes/webhooks.ts', key: 'createWebhookRoutes POST /', resource: 'webhooks' },
+  { file: 'server/routes/webhooks.ts', key: 'createWebhookRoutes PATCH /:id', resource: 'webhooks' },
+  { file: 'server/routes/webhooks.ts', key: 'createWebhookRoutes DELETE /:id', resource: 'webhooks' },
+  { file: 'server/routes/webhooks.ts', key: 'createWebhookRoutes POST /:id/regenerate', resource: 'webhooks' },
+  { file: 'server/routes/webhooks.ts', key: 'createWebhookRoutes POST /:id/revoke', resource: 'webhooks' },
+  { file: 'server/routes/webhooks.ts', key: 'createWebhookRoutes POST /:id/test', resource: 'webhooks' },
+
+  // ── Словари классификации: `dictionaries.updated` (инстансный канал) ──
+  // Два write-пути: запись переопределения (`PUT`) и сброс к системному
+  // словарю (`DELETE`).
+  { file: 'server/routes/dictionaries.ts', key: 'createDictionaryRoutes PUT /:category/:lang', resource: 'dictionaries' },
+  { file: 'server/routes/dictionaries.ts', key: 'createDictionaryRoutes DELETE /:category/:lang', resource: 'dictionaries' },
 
   // ── Пайплайны: `pipeline.updated` (каналы сессий проекта) ──────────────
   { file: 'server/routes/pipeline-project-routes.ts', key: 'createPipelineProjectRoutes POST /projects/:id/pipelines', resource: 'pipelines' },

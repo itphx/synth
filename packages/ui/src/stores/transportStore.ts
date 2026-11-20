@@ -28,6 +28,12 @@ import { useProvidersStore } from './providersStore'
 import { useCredentialsStore } from './credentialsStore'
 import { useMemoryStore } from './memoryStore'
 import { useUsersStore } from './usersStore'
+// Реестр webhooks инстанса (`webhooks.updated`) — раздел «Webhooks»
+// перечитывает список без перезагрузки страницы.
+import { useWebhooksStore } from './webhooksStore'
+// Словари классификации (`dictionaries.updated`) — секция «Словари» в
+// настройках маршрутизации перечитывает список без перезагрузки страницы.
+import { useDictionariesStore } from './dictionariesStore'
 import { useExecutionProfilesStore } from './executionProfilesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
@@ -1969,6 +1975,28 @@ export function createDispatcher(): EventDispatcher {
     // «Пользователи» перечитывает список без перезагрузки страницы.
     if (type === 'users.updated') {
       useUsersStore.getState().applyEvent()
+      return
+    }
+
+    // Реестр webhooks инстанса изменился (`webhooks.updated`, инстансный канал
+    // шины, ADR-052 этап II) — тот же путь и та же причина. Событие админское
+    // (write-пути под ADMIN): раздел «Webhooks» перечитывает список подписок без
+    // перезагрузки страницы — и после своей мутации в другом клиенте/вкладке, и
+    // после тестовой доставки, которая обновляет `lastStatus`/`lastDeliveryAt`.
+    // Payload `{subscriptionId?, action}` для перечитывания не нужен, секретов в
+    // нём нет.
+    if (type === 'webhooks.updated') {
+      useWebhooksStore.getState().applyEvent()
+      return
+    }
+
+    // Словари классификации изменились (`dictionaries.updated`, инстансный канал
+    // шины, ADR-034/ADR-035) — тот же путь: словарь записан или сброшен в другом
+    // клиенте. Секция «Словари» (`RoutingSettings`) перечитывает список; payload
+    // `{category?, lang?, action}` сигналу не нужен, содержимого словаря в
+    // событии нет.
+    if (type === 'dictionaries.updated') {
+      useDictionariesStore.getState().applyEvent()
       return
     }
 

@@ -128,6 +128,20 @@ const EVENT_HANDLERS: readonly EventHandler[] = [
     evidence: 'revision: s.revision + 1',
   },
   {
+    type: 'webhooks.updated',
+    store: 'webhooksStore',
+    call: 'useWebhooksStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
+    type: 'dictionaries.updated',
+    store: 'dictionariesStore',
+    call: 'useDictionariesStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
     type: 'pipeline.updated',
     store: 'pipelinesStore',
     call: 'usePipelinesStore.getState().invalidateProject(',

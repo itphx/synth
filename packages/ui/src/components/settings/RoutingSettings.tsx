@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useI18n } from '@/lib/i18n'
 import { useProvidersStore } from '@/stores/providersStore'
+import { useDictionariesStore } from '@/stores/dictionariesStore'
 import { useCatalogModels } from '@/hooks/useCatalogModels'
 import {
   DEFAULT_ROUTING_DEFAULTS,
@@ -402,6 +403,23 @@ function DictionarySection() {
   useEffect(() => {
     void load()
   }, [])
+
+  /**
+   * Словари изменились на сервере (событие шины `dictionaries.updated`,
+   * ADR-034/ADR-035): переопределение записано или сброшено в другом клиенте или
+   * в соседней вкладке настроек.
+   *
+   * Перечитываем **только список**: открытый редактор словаря и его черновик —
+   * ввод пользователя, они не сбрасываются (иначе чужая мутация стирала бы
+   * недописанный YAML). Первый рендер пропускается (его грузит эффект выше).
+   */
+  const dictionariesRevision = useDictionariesStore((s) => s.revision)
+  const loadedDictionariesRevisionRef = useRef(dictionariesRevision)
+  useEffect(() => {
+    if (loadedDictionariesRevisionRef.current === dictionariesRevision) return
+    loadedDictionariesRevisionRef.current = dictionariesRevision
+    void load()
+  }, [dictionariesRevision])
 
   const handleEdit = async (entry: DictionaryEntry) => {
     flashStatus(null)

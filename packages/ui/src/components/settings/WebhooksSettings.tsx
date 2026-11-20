@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type {
   WebhookDelivery,
@@ -13,6 +13,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatDateTime } from '@/lib/formatDate'
 import { useAuthStore } from '@/stores/authStore'
+import { useWebhooksStore } from '@/stores/webhooksStore'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
@@ -219,6 +220,24 @@ export function WebhooksSettings() {
   useEffect(() => {
     void loadSubscriptions()
   }, [loadSubscriptions])
+
+  /**
+   * Реестр webhooks изменился на сервере (событие шины `webhooks.updated`,
+   * ADR-052 этап II): подписка создана/изменена/удалена/погашена или прогнана
+   * тестовая доставка в другом клиенте или в соседней вкладке админки.
+   *
+   * Перечитываем **только список**: открытая форма создания, черновик
+   * редактирования и уже показанный секрет — ввод пользователя, они не
+   * сбрасываются (иначе чужая мутация стирала бы недописанную форму). Первый
+   * рендер пропускается (его грузит эффект выше).
+   */
+  const webhooksRevision = useWebhooksStore((s) => s.revision)
+  const loadedRevisionRef = useRef(webhooksRevision)
+  useEffect(() => {
+    if (loadedRevisionRef.current === webhooksRevision) return
+    loadedRevisionRef.current = webhooksRevision
+    void loadSubscriptions()
+  }, [webhooksRevision, loadSubscriptions])
 
   const isConflict = (err: unknown): boolean => (err as ApiErrorLike)?.code === 'CONFLICT'
 

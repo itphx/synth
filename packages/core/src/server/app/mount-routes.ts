@@ -85,6 +85,12 @@ import {
   // Память инстанса изменилась — `memory.updated` (шов портала памяти и записи
   // плагина памяти, `events/memory-events.ts`).
   memoryChangedPublisher,
+  // Реестр webhooks инстанса изменился — `webhooks.updated` (шов write-путей
+  // `createWebhookRoutes`, `events/webhooks-events.ts`).
+  webhooksChangedPublisher,
+  // Словари классификации изменились — `dictionaries.updated` (шов write-путей
+  // `createDictionaryRoutes`, `events/dictionaries-events.ts`).
+  dictionariesChangedPublisher,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -1100,7 +1106,9 @@ export function mountStandaloneRoutes(
   // Словари классификации: чтение — все аутентифицированные, запись/сброс —
   // аутентификация (в standalone достаточно --api-key, локальный режим).
   // Модуль общий с backend, отличается только writeGuard. Порт — из контекста хранения.
-  app.route('/api/v2/dictionaries', createDictionaryRoutes(auth, dictionaries));
+  app.route('/api/v2/dictionaries', createDictionaryRoutes(auth, dictionaries, {
+    onDictionariesChanged: dictionariesChangedPublisher(eventBus),
+  }));
 
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
@@ -1454,6 +1462,9 @@ export function mountStandaloneRoutes(
       isEnabled: () => webhooksConfig.enabled,
       // Отдельный экземпляр политики (live; граница доверия не смешивается с tools).
       resolvePolicy: () => egressResolver.resolveWebhooks(),
+      // Инвариант 27: любая успешная мутация реестра подписок видна второму клиенту
+      // (раздел «Webhooks» перечитывает список без перезагрузки страницы).
+      onWebhooksChanged: webhooksChangedPublisher(eventBus),
     },
   ));
 

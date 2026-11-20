@@ -100,6 +100,14 @@ export type { ExecutionChangedInfo, ExecutionChangedHook } from './events/execut
 // — общий шов портала памяти и записи плагина памяти (`facade.memory`).
 export { publishMemoryUpdated, memoryChangedPublisher } from './events/memory-events.js';
 export type { MemoryChangedInfo, MemoryChangedHook } from './events/memory-events.js';
+// Реестр webhooks инстанса (ADR-052, этап II): единое событие `webhooks.updated`
+// (инстансный канал) — общий шов write-путей `createWebhookRoutes`.
+export { publishWebhooksUpdated, webhooksChangedPublisher } from './events/webhooks-events.js';
+export type { WebhooksChangedInfo, WebhooksChangedHook } from './events/webhooks-events.js';
+// Словари классификации (ADR-034/ADR-035): единое событие `dictionaries.updated`
+// (инстансный канал) — общий шов write-путей `createDictionaryRoutes`.
+export { publishDictionariesUpdated, dictionariesChangedPublisher } from './events/dictionaries-events.js';
+export type { DictionariesChangedInfo, DictionariesChangedHook } from './events/dictionaries-events.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).

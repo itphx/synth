@@ -216,6 +216,25 @@ export type EventType =
   // «Пользователи» (`UsersPanel`). Payload — только id и вид мутации: ни почты,
   // ни заметок, ни ролей в событие не попадают (инвариант 13 `AGENTS.md`).
   | 'users.updated'
+  // Реестр webhooks инстанса изменился (ADR-052, этап II): подписка создана,
+  // изменена, удалена, ротирован её signing-секрет, подписка погашена
+  // (`revoke`) или выполнена тестовая доставка (она обновляет видимые
+  // `lastStatus`/`lastDeliveryAt` подписки). Событие идёт в инстансный канал
+  // шины (ADR-118), но остаётся **админским**: write-пути `createWebhookRoutes`
+  // под ADMIN, в `USER_FACING_INSTANCE_EVENTS` его нет. Реагирует раздел
+  // «Webhooks» (`WebhooksSettings`). Payload — только id подписки и вид
+  // мутации: **signing-секрета (`whsec_…`), URL с токеном и прочего конфига
+  // подписки в событии нет никогда** (инвариант 13 `AGENTS.md`).
+  | 'webhooks.updated'
+  // Словари классификации (ADR-034/ADR-035) изменились: записано
+  // переопределение словаря (`PUT /dictionaries/:category/:lang`) или оно
+  // сброшено к системному (`DELETE`). Событие идёт в инстансный канал шины
+  // (ADR-118); дорогое для USER оно не становится: write-путь под
+  // write-guard (managed — ADMIN), в `USER_FACING_INSTANCE_EVENTS` его нет.
+  // Реагирует секция «Словари» в настройках маршрутизации. Payload — только
+  // категория/язык и вид мутации: **содержимое словаря (YAML) в событие не
+  // попадает**.
+  | 'dictionaries.updated'
   // Этап 1 roadmap 0.13 (блок 1.3): «вопрос пользователю». Префикс
   // `user_question.*` — намеренно НЕ `question.*`: `question.asked` уже занят
   // смыслом «очередь зависла» (см. выше).
@@ -674,6 +693,75 @@ export type UsersUpdatedEventData = {
   userId?: string;
   /** Что произошло. */
   action: UsersChangeAction;
+};
+
+/**
+ * Вид мутации реестра webhooks — поле `action` события `webhooks.updated`
+ * (ADR-052, этап II).
+ *
+ * - `create` — подписка создана (`POST /api/v2/webhooks`);
+ * - `update` — подписка изменена (`PATCH /api/v2/webhooks/:id`, включая
+ *   переключатель `enabled`: `PATCH` с `{ enabled }`);
+ * - `delete` — подписка удалена (`DELETE /api/v2/webhooks/:id`);
+ * - `regenerate` — signing-секрет ротирован (`POST /:id/regenerate`): у подписки
+ *   меняется `secretPrefix`, а прежний секрет перестаёт подписывать доставки —
+ *   поэтому это мутация **видимой** записи, а не «выдача секрета»;
+ * - `revoke` — подписка погашена/включена (`POST /:id/revoke`): меняется
+ *   `enabled`, видимый в списке;
+ * - `test` — выполнена тестовая доставка (`POST /:id/test`): реестр подписок она
+ *   не меняет, но **пишет в подписку** отметку доставки (`lastDeliveryAt`,
+ *   `lastStatus` — `WebhookStore.touchDelivery`), а эти поля панель показывает в
+ *   списке; поэтому сигнал публикуется, чтобы индикатор статуса не «залипал».
+ */
+export type WebhookChangeAction = 'create' | 'update' | 'delete' | 'regenerate' | 'revoke' | 'test';
+
+/**
+ * Payload события `webhooks.updated` — реестр webhooks инстанса изменился.
+ *
+ * Минимальный **по построению**: id подписки и вид мутации. Клиент перечитывает
+ * список своим обычным запросом (`GET /api/v2/webhooks`) и, если открыт, журнал
+ * доставок (`GET /api/v2/webhooks/:id/deliveries`).
+ *
+ * **Signing-секрет (`whsec_…`) и целевой URL в событие не попадают никогда**
+ * (инвариант 13 `AGENTS.md`): секрет подписывает доставки, а в URL у получателя
+ * бывает собственный токен. Это свойство типа payload'а, а не соглашение
+ * вызывающих.
+ */
+export type WebhooksUpdatedEventData = {
+  /** id подписки, которой коснулась мутация (не задан — изменение реестра целиком). */
+  subscriptionId?: string;
+  /** Что произошло. */
+  action: WebhookChangeAction;
+};
+
+/**
+ * Вид мутации словаря классификации — поле `action` события
+ * `dictionaries.updated` (ADR-034/ADR-035).
+ *
+ * - `save` — записано пользовательское переопределение словаря
+ *   (`PUT /api/v2/dictionaries/:category/:lang`, оба формата тела: `{ content }`
+ *   и legacy `{ keywords, tools }`);
+ * - `reset` — переопределение сброшено к системному словарю
+ *   (`DELETE /api/v2/dictionaries/:category/:lang`).
+ */
+export type DictionaryChangeAction = 'save' | 'reset';
+
+/**
+ * Payload события `dictionaries.updated` — словарь классификации изменился.
+ *
+ * Минимальный **по построению**: категория, язык и вид мутации. Клиент
+ * перечитывает список своим обычным запросом (`GET /api/v2/dictionaries`).
+ * **Содержимое словаря (YAML-текст и разобранные `keywords`/`tools`) в событие
+ * не попадает никогда**: это пользовательский ввод, а сигналу достаточно
+ * «перечитай»; свойство типа payload'а, а не соглашение вызывающих.
+ */
+export type DictionariesUpdatedEventData = {
+  /** Категория словаря (`coding`, `research`, …). */
+  category?: string;
+  /** Язык словаря (`ru`/`en`). */
+  lang?: string;
+  /** Что произошло. */
+  action: DictionaryChangeAction;
 };
 
 /** Payload события `session.messages.cleared` — история очищена, кроме закреплённых. */

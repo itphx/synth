@@ -271,7 +271,8 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 дубли отсекаются по `eventSeq`. SSE-кадр несёт строку `id: <eventSeq>` перед
 `data:` — подписчик возвращает её в `Last-Event-ID`. Инстансный канал
 (`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
-`execution.updated`, `credentials.updated`, `memory.updated`) номера не получает и в журнал не
+`execution.updated`, `credentials.updated`, `memory.updated`, `webhooks.updated`,
+`dictionaries.updated`) номера не получает и в журнал не
 попадает: догона у него нет, доставка — только живьём. Эти события безадресные и несут минимальный payload
 (`{id?, name?, action, scope?, projectId?, sessionId?}` — без конфигов, секретов
 и содержимого ресурса): клиент по сигналу перечитывает свой список обычным
@@ -482,7 +483,12 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   доступов, ADR-105: `action` + `credentialId`/`provider`; токенов в payload нет — админский
   тип, к `USER` не доставляется) и `memory.updated` (память инстанса, ADR-107: `scope`
   `facts`/`indexes` + `action` + `id` записи; ни текста фактов, ни эмбеддингов, ни корпуса
-  индекса в payload нет — админский тип, к `USER` не доставляется). Клиенты обязаны их
+  индекса в payload нет — админский тип, к `USER` не доставляется). Плюс инстансные
+  `webhooks.updated` (реестр подписок на исходящие события, ADR-052 этап II: `action` +
+  `subscriptionId?`; signing-секрета и целевого URL в payload нет — админский тип, к `USER`
+  не доставляется) и `dictionaries.updated` (словари классификации, ADR-034/ADR-035: `action`
+  `save`/`reset` + `category`/`lang`; содержимого словаря в payload нет — тип не доставляется
+  к `USER`, write-путь под write-guard). Клиенты обязаны их
   обрабатывать — иначе лента и списки «залипают» после действий другого клиента или агента:
   именно так выглядела дыра «агент создал запись тулом из чата, а панель показывает старый
   состав до перезагрузки страницы». Механический гейт — `packages/core/src/events/publish-census.test.ts`

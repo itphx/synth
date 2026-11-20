@@ -49,6 +49,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { ROUTING_DEFAULTS_KEY } from '@/lib/routingDefaults'
 import { confirm } from '@/lib/confirm'
 import { useUIStore } from '@/stores/useUIStore'
+import { useDictionariesStore } from '@/stores/dictionariesStore'
 import { RoutingSettings } from './RoutingSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -302,5 +303,77 @@ describe('RoutingSettings — миграция на Settings UI Kit (ADR-072)', 
     expect(container.querySelector('[data-settings-section="routing-escalation"]')).not.toBeNull()
     expect(container.querySelector('[data-settings-section="routing-dictionaries"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="settings-advanced-reveal"]')).toBeNull()
+  })
+})
+
+describe('RoutingSettings — событие dictionaries.updated (ADR-034/ADR-035)', () => {
+  /**
+   * Баг: «словарь, сохранённый или сброшенный в другом клиенте или соседней
+   * вкладке настроек, виден в секции только после перезагрузки страницы». По
+   * событию шины секция перечитывает список (сигнал — `revision` в
+   * `dictionariesStore`).
+   */
+  it('рост revision перечитывает список — новое переопределение появляется', async () => {
+    useDictionariesStore.setState({ revision: 0 })
+    apiMocks.getDictionaries.mockResolvedValue({
+      dictionaries: [{ category: 'coding', language: 'ru', source: 'system', size: 10 }],
+    })
+
+    const container = await renderSettings()
+    expect(apiMocks.getDictionaries).toHaveBeenCalledTimes(1)
+    expect(buttonsByText(container, 'Reset to system dictionary')).toHaveLength(0)
+
+    // Словарь сохранили в соседней вкладке — в клиент пришло событие шины; теперь
+    // у `coding` есть пользовательское переопределение (кнопка сброса видна).
+    apiMocks.getDictionaries.mockResolvedValue({
+      dictionaries: [
+        { category: 'coding', language: 'ru', source: 'user', size: 42 },
+        { category: 'research', language: 'ru', source: 'user', size: 20 },
+      ],
+    })
+    await act(async () => {
+      useDictionariesStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    expect(apiMocks.getDictionaries).toHaveBeenCalledTimes(2)
+    expect(buttonsByText(container, 'Reset to system dictionary')).toHaveLength(2)
+    expect(container.textContent).toContain('42 B')
+  })
+
+  it('первый рендер не дублирует загрузку (revision сравнивается со своим значением)', async () => {
+    useDictionariesStore.setState({ revision: 0 })
+
+    await renderSettings()
+    await act(async () => {})
+
+    expect(apiMocks.getDictionaries).toHaveBeenCalledTimes(1)
+  })
+
+  it('событие не сбрасывает открытый редактор и его черновик', async () => {
+    useDictionariesStore.setState({ revision: 0 })
+    const container = await renderSettings()
+
+    const editButtons = buttonsByText(container, 'Edit')
+    await act(async () => {
+      editButtons[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(textarea, 'недописанный YAML')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    await act(async () => {
+      useDictionariesStore.getState().applyEvent()
+    })
+    await act(async () => {})
+
+    // Список перечитан, а редактор и черновик остались на месте.
+    expect(apiMocks.getDictionaries).toHaveBeenCalledTimes(2)
+    const after = container.querySelector('textarea') as HTMLTextAreaElement
+    expect(after).not.toBeNull()
+    expect(after.value).toBe('недописанный YAML')
   })
 })
