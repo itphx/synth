@@ -11,6 +11,7 @@ import { Icon } from '../icon/Icon'
 import { isSelectableModel, selectableProvidersByName } from '@/lib/modelOptions'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { Divider } from '../ui/Divider'
+import { MobileMenuSheet, blurActiveElement } from '../ui/MobileMenuSheet'
 import type { ModelInfo, ProviderInfo } from '@/lib/api/synthApi'
 
 type DropdownItem =
@@ -62,6 +63,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
 
   const currentProvider = providers.find((p) => p.name === selectedProviderName)
   const scrollContainerRef = useRef<HTMLElement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
 
   /**
    * Списки выбора не показывают модели отключённых провайдеров (и отключённые
@@ -93,6 +95,9 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
     },
     [requestCatalog],
   )
+
+  /** Закрытие мобильной панели (Escape/тап вне/выбор пункта идут одним путём). */
+  const closeSheet = useCallback(() => handleOpenChange(false), [handleOpenChange])
 
   // Каталог изменился на сервере (событие `models.updated`: провайдер/модель
   // добавлены, удалены или сделаны дефолтными в другом клиенте/тулом из чата).
@@ -368,6 +373,229 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
     virtualizer.scrollToIndex(0, { align: 'start' })
   }, [searchQuery])
 
+  /**
+   * Шапка с поиском и кнопками управления — общая для дропдауна и мобильной
+   * панели; не скроллится вместе со списком.
+   */
+  const searchHeader = (
+    <div className="p-2">
+      <div className="relative flex items-center gap-1">
+        <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+        <input
+          type="text"
+          placeholder={t('chat.modelControls.searchModels')}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="pl-8 pr-[5.5rem] h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          autoFocus={!isMobile}
+        />
+        {searchQuery.trim().length > 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setSearchQuery('')
+            }}
+            className="absolute right-[3.125rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Icon name="close" className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {(virtualizer.scrollOffset ?? 0) > 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              virtualizer.scrollToIndex(0, { align: 'start' })
+            }}
+            className="absolute right-[4.5rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Icon name="arrow-up-s" className="h-3.5 w-3.5" />
+          </button>
+        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            void handleRefresh()
+          }}
+          disabled={loading || catalogLoading}
+          className="absolute right-7 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
+          title={t('chat.modelControls.refresh')}
+        >
+          <Icon name="refresh" className={`h-3.5 w-3.5 ${loading || catalogLoading ? 'animate-spin' : ''}`} />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            const allCollapsed = collapsedProviders.size === groupedByProvider.length
+            if (allCollapsed) {
+              setCollapsedProviders(new Set())
+            } else {
+              setCollapsedProviders(new Set(groupedByProvider.map((g) => g.provider.name)))
+            }
+          }}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
+          title={collapsedProviders.size === groupedByProvider.length ? t('chat.modelControls.expandAll') : t('chat.modelControls.collapseAll')}
+        >
+          <Icon
+            name={collapsedProviders.size === groupedByProvider.length ? 'arrow-down-s' : 'arrow-up-s'}
+            className="h-3.5 w-3.5"
+          />
+        </button>
+      </div>
+    </div>
+  )
+
+  /**
+   * Тело списка (виртуализированные строки) — общее для дропдауна и панели.
+   * Скролл-контейнер здесь не рендерится: на десктопе это `div` внутри
+   * `DropdownMenu.Content`, на мобильном — контейнер `MobileMenuSheet`;
+   * `scrollContainerRef` вешается в каждой ветке отдельно.
+   */
+  const listBody = (
+    <div
+      style={{
+        height: virtualizer.getTotalSize(),
+        position: 'relative',
+      }}
+    >
+      {virtualizer.getVirtualItems().map((vItem) => {
+        const item = listItems[vItem.index]
+        if (!item) return null
+
+        const style: React.CSSProperties = {
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: vItem.size,
+          transform: `translateY(${vItem.start}px)`,
+        }
+
+        if (item.type === 'empty') {
+          return (
+            <div key={item.id} style={style} className="flex items-center justify-center px-2 text-xs text-muted-foreground">
+              {item.text}
+            </div>
+          )
+        }
+
+        if (item.type === 'label') {
+          const iconName = item.icon as string
+          if (item.isProvider) {
+            return (
+              <div key={item.id} style={style} className="flex flex-col">
+                <div
+                  onClick={() => toggleCollapse(item.text)}
+                  className="flex flex-1 items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-interactive-hover rounded-none"
+                >
+                  <ProviderIcon icon={item.icon} baseUrl={item.providerUrl} size={16} />
+                  <span className="font-semibold text-xs text-foreground flex-1">{item.text}</span>
+                  <Icon
+                    name={item.collapsed ? 'arrow-right-s' : 'arrow-down-s'}
+                    className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                  />
+                </div>
+                <Divider inset tone="raised" />
+              </div>
+            )
+          }
+          return (
+            <div key={item.id} style={style} className="flex flex-col">
+              <div className="flex flex-1 items-center gap-2 px-3 py-1.5">
+                <Icon name={iconName as 'star-fill' | 'time'} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="text-[0.625rem] font-semibold text-muted-foreground uppercase tracking-wider">{item.text}</span>
+              </div>
+              <Divider inset tone="raised" />
+            </div>
+          )
+        }
+
+        if (item.type === 'separator') {
+          return <div key={item.id} style={style} className="flex items-center px-2"><Divider tone="raised" className="w-full" /></div>
+        }
+
+        if (item.type === 'model') {
+          return (
+            <div key={item.id} style={style}>
+              <VirtualModelRow
+                model={item.model}
+                provider={item.provider}
+                isSelected={selectedModelName === item.model.name && selectedProviderName === item.provider.name}
+                isFavorite={item.isFavorite}
+                onToggleFavorite={() => toggleFavorite(item.model)}
+                onSelect={() => handleSelectModel(item.model, item.provider)}
+              />
+            </div>
+          )
+        }
+
+        return null
+      })}
+    </div>
+  )
+
+  /** Содержимое триггера: одинаковое для дропдауна и мобильной панели. */
+  const triggerInner = (
+    <>
+      <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
+      {(!isMobile || alwaysShowLabel) && (
+        <>
+          {alwaysShowLabel && currentProvider?.name && (
+            <span className="min-w-0 max-w-[7.5rem] truncate text-xs text-muted-foreground">
+              {currentProvider.name}
+            </span>
+          )}
+          <span className="min-w-0 font-medium text-xs text-foreground whitespace-nowrap max-w-[12.5rem] truncate">
+            {selectedModelName || currentProvider?.model || '—'}
+          </span>
+        </>
+      )}
+    </>
+  )
+
+  /**
+   * Мобильная зона (телефон/планшет, а также узкая центральная колонка —
+   * `centralNarrow`): вместо Radix-поппера `side="top"` тот же список живёт в
+   * общей фиксированной панели, прижатой к верху композера. Осознанно и для
+   * `centralNarrow`: поппер шириной 380px в узком столбце перекрывает поле ввода
+   * и уходит за верхний край, а лист ведёт себя предсказуемо. Широкая
+   * десктопная колонка остаётся на дропдауне (ниже).
+   */
+  if (isMobile) {
+    return (
+      <>
+        <button
+          ref={triggerRef}
+          type="button"
+          className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
+          aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          // Blur на pointerdown (раньше click): клавиатура начинает закрываться
+          // до открытия панели, поэтому её позиция считается по итоговому layout.
+          onPointerDown={blurActiveElement}
+          onClick={() => handleOpenChange(!open)}
+        >
+          {triggerInner}
+        </button>
+        <MobileMenuSheet
+          open={open}
+          onClose={closeSheet}
+          anchorRef={triggerRef}
+          ariaLabel={t('chat.modelControls.searchModels')}
+          scrollRef={scrollContainerRef}
+          header={
+            <>
+              {searchHeader}
+              <Divider inset tone="raised" />
+            </>
+          }
+        >
+          {listBody}
+        </MobileMenuSheet>
+      </>
+    )
+  }
+
   return (
     <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
       <DropdownMenu.Trigger asChild>
@@ -375,19 +603,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
           aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
         >
-          <ProviderIcon icon={currentProvider?.icon ?? ''} baseUrl={currentProvider?.url} size={14} className="text-muted-foreground shrink-0" />
-          {(!isMobile || alwaysShowLabel) && (
-            <>
-              {alwaysShowLabel && currentProvider?.name && (
-                <span className="min-w-0 max-w-[7.5rem] truncate text-xs text-muted-foreground">
-                  {currentProvider.name}
-                </span>
-              )}
-              <span className="min-w-0 font-medium text-xs text-foreground whitespace-nowrap max-w-[12.5rem] truncate">
-                {selectedModelName || currentProvider?.model || '—'}
-              </span>
-            </>
-          )}
+          {triggerInner}
         </button>
       </DropdownMenu.Trigger>
 
@@ -400,70 +616,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           alignOffset={-40}
           collisionPadding={8}
         >
-          <div className="p-2">
-            <div className="relative flex items-center gap-1">
-              <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder={t('chat.modelControls.searchModels')}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-[5.5rem] h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-                autoFocus={!isMobile}
-              />
-              {searchQuery.trim().length > 0 && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setSearchQuery('')
-                  }}
-                  className="absolute right-[3.125rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Icon name="close" className="h-3.5 w-3.5" />
-                </button>
-              )}
-              {(virtualizer.scrollOffset ?? 0) > 0 && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    virtualizer.scrollToIndex(0, { align: 'start' })
-                  }}
-                  className="absolute right-[4.5rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Icon name="arrow-up-s" className="h-3.5 w-3.5" />
-                </button>
-              )}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  void handleRefresh()
-                }}
-                disabled={loading || catalogLoading}
-                className="absolute right-7 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-                title={t('chat.modelControls.refresh')}
-              >
-                <Icon name="refresh" className={`h-3.5 w-3.5 ${loading || catalogLoading ? 'animate-spin' : ''}`} />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  const allCollapsed = collapsedProviders.size === groupedByProvider.length
-                  if (allCollapsed) {
-                    setCollapsedProviders(new Set())
-                  } else {
-                    setCollapsedProviders(new Set(groupedByProvider.map((g) => g.provider.name)))
-                  }
-                }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-                title={collapsedProviders.size === groupedByProvider.length ? t('chat.modelControls.expandAll') : t('chat.modelControls.collapseAll')}
-              >
-                <Icon
-                  name={collapsedProviders.size === groupedByProvider.length ? 'arrow-down-s' : 'arrow-up-s'}
-                  className="h-3.5 w-3.5"
-                />
-              </button>
-            </div>
-          </div>
+          {searchHeader}
 
           <Divider inset tone="raised" />
 
@@ -474,86 +627,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
               }}
               className="overlay-scrollbar-target flex-1 min-h-0 w-full overflow-auto"
             >
-              <div
-                style={{
-                  height: virtualizer.getTotalSize(),
-                  position: 'relative',
-                }}
-              >
-                {virtualizer.getVirtualItems().map((vItem) => {
-                  const item = listItems[vItem.index]
-                  if (!item) return null
-
-                  const style: React.CSSProperties = {
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: vItem.size,
-                    transform: `translateY(${vItem.start}px)`,
-                  }
-
-                  if (item.type === 'empty') {
-                    return (
-                      <div key={item.id} style={style} className="flex items-center justify-center px-2 text-xs text-muted-foreground">
-                        {item.text}
-                      </div>
-                    )
-                  }
-
-                  if (item.type === 'label') {
-                    const iconName = item.icon as string
-                    if (item.isProvider) {
-                      return (
-                        <div key={item.id} style={style} className="flex flex-col">
-                          <div
-                            onClick={() => toggleCollapse(item.text)}
-                            className="flex flex-1 items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-interactive-hover rounded-none"
-                          >
-                            <ProviderIcon icon={item.icon} baseUrl={item.providerUrl} size={16} />
-                            <span className="font-semibold text-xs text-foreground flex-1">{item.text}</span>
-                            <Icon
-                              name={item.collapsed ? 'arrow-right-s' : 'arrow-down-s'}
-                              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                            />
-                          </div>
-                          <Divider inset tone="raised" />
-                        </div>
-                      )
-                    }
-                    return (
-                      <div key={item.id} style={style} className="flex flex-col">
-                        <div className="flex flex-1 items-center gap-2 px-3 py-1.5">
-                          <Icon name={iconName as 'star-fill' | 'time'} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                          <span className="text-[0.625rem] font-semibold text-muted-foreground uppercase tracking-wider">{item.text}</span>
-                        </div>
-                        <Divider inset tone="raised" />
-                      </div>
-                    )
-                  }
-
-                  if (item.type === 'separator') {
-                    return <div key={item.id} style={style} className="flex items-center px-2"><Divider tone="raised" className="w-full" /></div>
-                  }
-
-                  if (item.type === 'model') {
-                    return (
-                      <div key={item.id} style={style}>
-                        <VirtualModelRow
-                          model={item.model}
-                          provider={item.provider}
-                          isSelected={selectedModelName === item.model.name && selectedProviderName === item.provider.name}
-                          isFavorite={item.isFavorite}
-                          onToggleFavorite={() => toggleFavorite(item.model)}
-                          onSelect={() => handleSelectModel(item.model, item.provider)}
-                        />
-                      </div>
-                    )
-                  }
-
-                  return null
-                })}
-              </div>
+              {listBody}
             </div>
             <OverlayScrollbar
               containerRef={scrollContainerRef as React.RefObject<HTMLElement>}
