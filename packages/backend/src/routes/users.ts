@@ -7,6 +7,7 @@ import { t } from '../lib/i18n.js';
 import { requireAdminOrScope } from '../auth/guards.js';
 import { principalIdOf } from '../lib/principal-identity.js';
 import { parseBoundedInt, paginate } from '@itphx/synth-core';
+import type { UsersChangedHook } from '../events/users-events.js';
 
 /**
  * PROP-133 §3.3: страница каталога пользователей — постранично, как прочие
@@ -27,6 +28,17 @@ const MAX_DIRECTORY_LIMIT = 200;
 export interface UserRoutesOptions {
   /** Allowlist имён групп (ADR-140 Ф2); пусто — групп нет. */
   groups?: readonly string[];
+  /**
+   * Каталог пользователей изменился — событие `users.updated` (инвариант 27).
+   *
+   * Шов — `events/users-events.ts`, точка сборки передаёт
+   * `usersChangedPublisher(eventBus)`. Публикация идёт только после успешной
+   * записи: 400/403/409 и 404 (нет пользователя) молчат; payload без почты,
+   * ролей и заметок — только `userId` и вид мутации.
+   *
+   * Не задан — поведение прежнее (тесты, сторонние потребители).
+   */
+  onUsersChanged?: UsersChangedHook;
 }
 
 export function createUserRoutes(kit: AuthKit, profiles: ProfileStore, options?: UserRoutesOptions): Hono {
@@ -212,6 +224,9 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore, options?:
     };
 
     await profiles.saveProfile(profile);
+    // Каталог изменился — `users.updated` в инстансный канал: админ-панель
+    // «Пользователи» в другом клиенте перечитывает список без перезагрузки.
+    options?.onUsersChanged?.({ action: 'create', userId: profile.id });
     return c.json(profile, 201);
   });
 
@@ -249,6 +264,7 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore, options?:
     p.updatedAt = nowISO();
 
     await profiles.saveProfile(p);
+    options?.onUsersChanged?.({ action: 'update', userId: p.id });
     return c.json(p);
   });
 
@@ -259,6 +275,7 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore, options?:
     if (!deleted) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.user', undefined, c) } }, 404);
     }
+    options?.onUsersChanged?.({ action: 'delete', userId: id });
     return c.json({ status: 'deleted' });
   });
 

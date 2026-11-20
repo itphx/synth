@@ -190,6 +190,7 @@ import {
   toRemoteMemoryIndex,
 } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+import type { MemoryChangedHook } from '../../events/memory-events.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -479,6 +480,21 @@ export interface MemoryRoutesOptions {
    * (managed) — remote-ветки выключены, `remote:`-id отвечают 502.
    */
   getRemoteClient?: () => RemoteBackendClient | null;
+  /**
+   * Память портала изменилась — событие `memory.updated` (инвариант 27).
+   *
+   * Шов — `events/memory-events.ts`, точка сборки передаёт
+   * `memoryChangedPublisher(eventBus)`.
+   *
+   * Публикует **только** `PATCH /indexes/:id` (переключатель `enabled`): он
+   * пишет порт напрямую, мимо фасада плагина. Остальные мутации (индекс
+   * создан/пересобран/удалён, консолидация) портал исполняет через тул плагина,
+   * а запись в порт делает chokepoint `engine/plugins/scoped-memory.ts` — там
+   * событие и публикуется (иначе один запрос давал бы два события).
+   *
+   * Не задан — поведение прежнее (тесты, сторонние потребители).
+   */
+  onMemoryChanged?: MemoryChangedHook;
 }
 
 /** Сводка по фактам памяти (namespace портала). */
@@ -1383,6 +1399,12 @@ export function createMemoryRoutes(
       enabled: body.enabled,
       updatedAt: new Date().toISOString(),
     });
+    // Единственная мутация портала, которая пишет порт напрямую, мимо фасада
+    // плагина: событие публикует сам обработчик (остальные пути публикует
+    // chokepoint `engine/plugins/scoped-memory.ts` — иначе было бы два события
+    // на один запрос). Публикация — после успешной записи, payload без
+    // содержимого памяти.
+    opts.onMemoryChanged?.({ scope: 'indexes', action: 'update', id });
     const saved = await indexes.getIndex(id);
     return c.json({ index: saved ?? { ...index, enabled: body.enabled } });
   });

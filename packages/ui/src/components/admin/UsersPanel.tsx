@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { synthApi, type UserInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
+import { useUsersStore } from '@/stores/usersStore'
 import { Toggle } from '../ui/Toggle'
 import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
@@ -45,6 +46,11 @@ function buildForm(u: UserInfo): UserForm {
 
 export const UsersPanel = () => {
   const { t } = useI18n()
+  /**
+   * Сигнал «каталог пользователей изменился» (событие `users.updated`,
+   * инстансный канал): панель перечитывает список без перезагрузки страницы.
+   */
+  const usersRevision = useUsersStore((s) => s.revision)
   const [users, setUsers] = useState<UserInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -67,6 +73,21 @@ export const UsersPanel = () => {
   }
 
   useEffect(() => { load() }, [])
+
+  /**
+   * Каталог изменился в другом клиенте/вкладке (`users.updated`) — перечитываем
+   * список. Без этого события панель держала снимок, снятый при монтировании:
+   * созданный/отредактированный/удалённый пользователь появлялся только после
+   * перезагрузки страницы (инвариант 27 `AGENTS.md`). Первый рендер пропускаем
+   * (`revision === 0`): начальную загрузку делает эффект выше.
+   */
+  useEffect(() => {
+    if (!usersRevision) return
+    void load()
+    // `load` объявлен в теле компонента и меняется каждый рендер — в зависимостях
+    // только ревизия, иначе эффект зациклится (правила `react-hooks` в проекте не
+    // подключены, поэтому подавлять нечего — это осознанное решение, не пропуск).
+  }, [usersRevision])
 
   const handleCreate = () => {
     setForm(emptyForm())

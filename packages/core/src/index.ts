@@ -96,6 +96,10 @@ export type { CredentialsChangedInfo, CredentialsChangedHook } from './events/cr
 // (инстансный канал) — общий шов роутов настроек исполнения и роутов пулов.
 export { publishExecutionUpdated, executionChangedPublisher } from './events/execution-events.js';
 export type { ExecutionChangedInfo, ExecutionChangedHook } from './events/execution-events.js';
+// Память инстанса (ADR-107): единое событие `memory.updated` (инстансный канал)
+// — общий шов портала памяти и записи плагина памяти (`facade.memory`).
+export { publishMemoryUpdated, memoryChangedPublisher } from './events/memory-events.js';
+export type { MemoryChangedInfo, MemoryChangedHook } from './events/memory-events.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 // ADR-115: части сообщения для live-событий (`message.added`/`message.injected`).

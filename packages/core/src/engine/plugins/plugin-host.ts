@@ -81,6 +81,7 @@ import { computePluginContentHash, verifyPluginIntegrity } from './integrity.js'
 import { DEFAULT_PLUGIN_ENTRY } from './inline-loader.js';
 import { createPluginScanHook } from './scan/hook.js';
 import { createScopedMemory, type PluginMemoryPorts } from './scoped-memory.js';
+import type { InstanceEventPublisherLike } from '../../events/memory-events.js';
 
 /**
  * Версия контракта Extension API, который предоставляет хост.
@@ -271,6 +272,18 @@ export interface PluginHostOptions {
    * наличие фичи и работает без телеметрии).
    */
   memoryTelemetry?: PluginMemoryTelemetryFn;
+  /**
+   * ADR-107 / инвариант 27: шина инстанса для события `memory.updated`.
+   *
+   * Хост отдаёт её scoped-обёртке портов памяти (`createScopedMemory`): каждая
+   * успешная запись плагина в память (факт/индекс) публикует `memory.updated` в
+   * инстансный канал — иначе факт, записанный агентом в чате, и индекс,
+   * изменённый плагином, не доходят до UI другого клиента.
+   *
+   * Не задана — публикации нет (тесты, сторонние потребители): поведение
+   * прежнее, падений нет.
+   */
+  memoryEvents?: InstanceEventPublisherLike;
   /** Логгер (по умолчанию — `console.warn`). */
   logger?: PluginLogger;
 }
@@ -324,6 +337,8 @@ export class PluginHost {
   private readonly _serverPolicy: PluginHostOptions['serverPolicy'];
   /** ADR-107: телеметрия recall/search-запросов памяти (инъекция из сборки). */
   private readonly _memoryTelemetry: PluginMemoryTelemetryFn | undefined;
+  /** Инвариант 27: шина для `memory.updated` (мутации памяти плагином). */
+  private readonly _memoryEvents: InstanceEventPublisherLike | undefined;
   private readonly _logger: PluginLogger;
   /** Реестр активных плагинов: имя → дескриптор активации. */
   private readonly _activations = new Map<string, PluginActivationHandle>();
@@ -353,6 +368,7 @@ export class PluginHost {
     this._now = options.now ?? (() => new Date().toISOString());
     this._serverPolicy = options.serverPolicy;
     this._memoryTelemetry = options.memoryTelemetry;
+    this._memoryEvents = options.memoryEvents;
     this._explicitExceptions = options.exactHostExceptions;
     this._logger = options.logger ?? {
       warn: (message: string) => {
@@ -621,7 +637,7 @@ export class PluginHost {
       // выглядят как «не найдено». Портов нет — сервис не задан (плагин обязан
       // это учитывать), ошибок активации не бросаем.
       ...(this._memory
-        ? { memory: createScopedMemory(handle.plugin, this._memory) }
+        ? { memory: createScopedMemory(handle.plugin, this._memory, this._memoryEvents) }
         : {}),
       // ADR-090 (WP-F): эмбеддинги — только через инъецированную функцию
       // (GatewayProvider, инвариант 3). Лимиты и политика провайдера/модели —

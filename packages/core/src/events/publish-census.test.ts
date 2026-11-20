@@ -5,11 +5,11 @@
  * ## Зачем
  *
  * Инвариант 27 держится на памяти: каждый write-путь реестра инстанса
- * (агенты, MCP, скиллы, пайплайны, провайдеры/модели) обязан после успешной
- * записи опубликовать своё событие в шину, иначе второй клиент видит устаревший
- * состав до перезагрузки страницы. Так было потеряно пять реестров подряд:
- * событие публиковал тул, но не HTTP-роут (или наоборот), либо молчал один из
- * нескольких путей одной фабрики.
+ * (агенты, MCP, скиллы, пайплайны, провайдеры/модели, память) обязан после
+ * успешной записи опубликовать своё событие в шину, иначе второй клиент видит
+ * устаревший состав до перезагрузки страницы. Так было потеряно пять реестров
+ * подряд: событие публиковал тул, но не HTTP-роут (или наоборот), либо молчал
+ * один из нескольких путей одной фабрики.
  *
  * ## Что проверяем (статически, по исходникам)
  *
@@ -24,7 +24,11 @@
  *    публикации (`notifyPipelineChanged(`). Транзитивная публикация через
  *    локальный хелпер (`upsertAgent`) объявляется явно и проверяется отдельно:
  *    тело хелпера обязано содержать вызов публикатора — иначе `via` превратится
- *    в фикцию.
+ *    в фикцию. Особый случай — **запись через тул плагина**: у памяти
+ *    (`memory.updated`) портал исполняет мутации индексов и консолидацию тулом
+ *    плагина, а публикует chokepoint записи в порт
+ *    (`engine/plugins/scoped-memory.ts`): такая `via` проверяется отдельным
+ *    тестом chokepoint'а, потому что тело вызова тула живёт вне core.
  * 3. **Файлы контура.** Любой файл `packages/core/src`, ссылающийся на
  *    публикатор/хук ресурса, обязан быть либо файлом контура (есть в переписи),
  *    либо объявленной инфраструктурой (модуль события, точка сборки,
@@ -61,6 +65,7 @@ type Resource =
   | 'models'
   | 'execution'
   | 'credentials'
+  | 'memory'
   | 'pipelines';
 
 interface ResourceSpec {
@@ -150,6 +155,35 @@ const RESOURCES: Readonly<Record<Resource, ResourceSpec>> = {
     // один раз на приложение.
     wiring: { snippet: 'credentialsChangedPublisher(eventBus)', count: 1 },
   },
+  memory: {
+    event: 'memory.updated',
+    identifiers: [
+      'publishMemoryUpdated',
+      'memoryChangedPublisher',
+      'MemoryChangedHook',
+      // Инъекция шины в контур плагинов (`memoryEvents`): точки сборки и хост
+      // прокидывают её в scoped-обёртку портов памяти — по этому имени файл
+      // проводки попадает в перепись (`plugin-host`/`runtime`/`deps`).
+      'memoryEvents',
+    ],
+    markers: ['onMemoryChanged?.', 'publishMemoryUpdated(', 'memoryChangedPublisher('],
+    infrastructure: [
+      'events/memory-events.ts',
+      'index.ts',
+      // Единственный chokepoint записи плагина в память: здесь событие
+      // публикуется за плагинные тулы (`memory_write`/`memory_forget`/
+      // `memory_consolidate`/`memory_index`), а через них — и за мутации
+      // портала, которые исполняет тул плагина.
+      'engine/plugins/scoped-memory.ts',
+      // Проводка шины от точки сборки до scoped-обёртки.
+      'engine/plugins/plugin-host.ts',
+      'engine/plugins/runtime.ts',
+      'server/app/deps.ts',
+    ],
+    // Одна точка в каждой точке сборки (core standalone + managed backend):
+    // портал памяти (`/api/v2/memory`) монтируется ровно один раз на приложение.
+    wiring: { snippet: 'memoryChangedPublisher(eventBus)', count: 1 },
+  },
   pipelines: {
     event: 'pipeline.updated',
     identifiers: ['publishPipelineUpdated', 'notifyPipelineChanged', 'PipelineUpdatedEventData'],
@@ -179,6 +213,11 @@ interface WritePath {
    * Хелпер-публикатор, через который публикует обработчик. Объявляется явно:
    * сам факт вызова проверяется отдельно (тело хелпера обязано содержать
    * публикатор).
+   *
+   * Второй вид `via` — **вызов тула плагина** (`invokeIndexTool`): запись в порт
+   * и публикация живут вне core (в плагине/чокпойнте `engine/plugins/
+   * scoped-memory.ts`), поэтому такая запись подтверждается отдельным тестом
+   * ресурса, а не телом хелпера.
    */
   readonly via?: readonly string[];
 }
@@ -282,6 +321,24 @@ const WRITE_PATHS: readonly WritePath[] = [
   { file: 'server/routes/oauth.ts', key: 'createOAuthRoutes POST /credentials/:id/refresh', resource: 'credentials' },
   { file: 'server/routes/oauth.ts', key: 'createOAuthRoutes DELETE /credentials/:id', resource: 'credentials' },
   { file: 'server/routes/oauth.ts', key: 'createOAuthRoutes POST /credentials/:id/bind', resource: 'credentials' },
+
+  // ── Память инстанса: `memory.updated` (инстансный канал) ────────────────
+  // Писателей у памяти два: **портал** (`createMemoryRoutes`) и **плагин**
+  // (`facade.memory` — тулы `memory_write`/`memory_forget`/`memory_consolidate`/
+  // `memory_index`, то есть и агент в чате). Публикация посажена на запись в
+  // порт — chokepoint `engine/plugins/scoped-memory.ts`, через который ходят
+  // оба (у портала мутации индексов и консолидация исполняются тулом плагина).
+  // Поэтому у четырёх путей публикация объявлена **транзитивной** (`via` — вызов
+  // тула), а фактический публикатор проверяется отдельным тестом chokepoint'а
+  // ниже: иначе «роут публикует, плагин молчит» осталось бы незамеченным.
+  //
+  // Исключение — `PATCH /indexes/:id`: переключатель `enabled` пишет порт
+  // напрямую, мимо фасада плагина, и публикует сам (иначе не публикует никто).
+  { file: 'server/routes/memory.ts', key: 'createMemoryRoutes PATCH /indexes/:id', resource: 'memory' },
+  { file: 'server/routes/memory.ts', key: 'createMemoryRoutes POST /indexes', resource: 'memory', via: ['invokeIndexTool'] },
+  { file: 'server/routes/memory.ts', key: 'createMemoryRoutes POST /indexes/:id/rebuild', resource: 'memory', via: ['invokeIndexTool'] },
+  { file: 'server/routes/memory.ts', key: 'createMemoryRoutes DELETE /indexes/:id', resource: 'memory', via: ['invokeIndexTool'] },
+  { file: 'server/routes/memory.ts', key: 'createMemoryRoutes POST /consolidate', resource: 'memory', via: ['invokeMemoryTool'] },
 
   // ── Пайплайны: `pipeline.updated` (каналы сессий проекта) ──────────────
   { file: 'server/routes/pipeline-project-routes.ts', key: 'createPipelineProjectRoutes POST /projects/:id/pipelines', resource: 'pipelines' },
@@ -605,6 +662,44 @@ describe('перепись публикаций: мутация видна кл�
       }
     }
     expect(fake, 'хелпер-публикатор не публикует').toEqual([]);
+  });
+
+  it('chokepoint плагинов публикует memory.updated без содержимого памяти', () => {
+    // Плагин ходит в порты памяти **только** через scoped-обёртку, поэтому
+    // публикация каждой мутации обязана быть здесь: иначе факт, записанный
+    // агентом в чате (`memory_write`), и индекс, изменённый плагином, не
+    // доходили бы до UI второго клиента — ровно та дыра, ради которой
+    // событие заведено.
+    const file = 'engine/plugins/scoped-memory.ts';
+    const text = readCore(file);
+    const calls = [...text.matchAll(/publishMemoryUpdated\(bus, \{([\s\S]*?)\}\)/g)];
+    expect(
+      calls.length,
+      `${file}: публикатор не вызывается — мутации плагина памяти молчат`,
+    ).toBeGreaterThanOrEqual(6);
+
+    for (const call of calls) {
+      const payload = call[1] ?? '';
+      // Первое слово куска payload'а — имя поля (у `id` в записи — сокращённая
+      // запись `{ …, id }`; запятая внутри значения тут недопустима и упадёт).
+      const keys = payload
+        .split(',')
+        .map((chunk) => chunk.match(/^\s*(\w+)/)?.[1] ?? '')
+        .filter(Boolean)
+        .sort();
+      // Payload собирается по-белому списку: область, вид мутации и id записи.
+      expect(keys, `${file}:${lineOf(text, call.index ?? 0)} — лишние поля в payload`)
+        .toEqual(['action', 'id', 'scope']);
+    }
+
+    // Содержимое памяти в событие не попадает: ни текста факта, ни
+    // эмбеддингов, ни корпуса индекса — в файле нет сериализации записи, а
+    // значит нечего и «случайно» положить в payload (docs/MEMORY.md §10,
+    // инвариант 13).
+    expect(text).not.toContain('JSON.stringify');
+    // Оба вида области покрыты: факты и индексы (иначе половина мутаций молчит).
+    expect(text).toContain("scope: 'facts'");
+    expect(text).toContain("scope: 'indexes'");
   });
 
   it('файлы контура совпадают с переписью', () => {

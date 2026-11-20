@@ -2299,6 +2299,9 @@ export async function createStandaloneDeps(
     // ADR-107: телеметрия recall/search-запросов памяти
     // (`synth_memory_recall_*`).
     ...(memoryTelemetry ? { memoryTelemetry: memoryTelemetry.recordRecall } : {}),
+    // Инвариант 27: мутации памяти плагином публикуют `memory.updated`
+    // (chokepoint — scoped-обёртка портов, `engine/plugins/scoped-memory.ts`).
+    memoryEvents: eventBus,
     // Ф7 (ADR-090): серверная политика плагинов в гибриде (Уровень 1 —
     // cooperative). Не задана — сервера нет: плагины работают, но помечаются
     // «не проверен сервером».

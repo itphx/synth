@@ -271,7 +271,7 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
 дубли отсекаются по `eventSeq`. SSE-кадр несёт строку `id: <eventSeq>` перед
 `data:` — подписчик возвращает её в `Last-Event-ID`. Инстансный канал
 (`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
-`execution.updated`, `credentials.updated`) номера не получает и в журнал не
+`execution.updated`, `credentials.updated`, `memory.updated`) номера не получает и в журнал не
 попадает: догона у него нет, доставка — только живьём. Эти события безадресные и несут минимальный payload
 (`{id?, name?, action, scope?, projectId?, sessionId?}` — без конфигов, секретов
 и содержимого ресурса): клиент по сигналу перечитывает свой список обычным
@@ -478,9 +478,11 @@ SSE `GET /api/v2/events` требует query-параметр **`messageModel=2
   `pipeline.updated` (авторство пайплайна — в канал каждой сессии проекта), а также
   инстансные `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated` (реестры
   инстанса; уровневые операции несут `scope`/`projectId`/`sessionId`), `execution.updated` (каталог профилей
-  исполнения и пулы: `action` + `profileId`/`poolName`) и `credentials.updated` (слой внешних
+  исполнения и пулы: `action` + `profileId`/`poolName`), `credentials.updated` (слой внешних
   доступов, ADR-105: `action` + `credentialId`/`provider`; токенов в payload нет — админский
-  тип, к `USER` не доставляется). Клиенты обязаны их
+  тип, к `USER` не доставляется) и `memory.updated` (память инстанса, ADR-107: `scope`
+  `facts`/`indexes` + `action` + `id` записи; ни текста фактов, ни эмбеддингов, ни корпуса
+  индекса в payload нет — админский тип, к `USER` не доставляется). Клиенты обязаны их
   обрабатывать — иначе лента и списки «залипают» после действий другого клиента или агента:
   именно так выглядела дыра «агент создал запись тулом из чата, а панель показывает старый
   состав до перезагрузки страницы». Механический гейт — `packages/core/src/events/publish-census.test.ts`

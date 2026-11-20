@@ -499,8 +499,11 @@ Any mutation visible to another client publishes an event: `message.deleted`/`me
 `plan.updated`, and `fs.changed` (workspace, including HTTP FS with `source: 'http'`). Instance
 registries publish to the instance channel too: `agents.updated`, `mcp.updated`, `skills.updated`,
 `models.updated`, `execution.updated` (the execution profile catalogue and pools: `action` +
-`profileId`/`poolName`) and `credentials.updated` (the external credentials layer, ADR-105: `action`
-+ `credentialId`/`provider`, no tokens in the payload — an admin type, not delivered to `USER`).
+`profileId`/`poolName`), `credentials.updated` (the external credentials layer, ADR-105: `action`
++ `credentialId`/`provider`, no tokens in the payload — an admin type, not delivered to `USER`) and
+`memory.updated` (instance memory, ADR-107: `scope` `facts`/`indexes` + `action` + the record `id`;
+no fact text, no embeddings, no index corpus in the payload — an admin type, not delivered to
+`USER`).
 Clients must
 handle them, otherwise the feed “sticks” after another client's action.
 
@@ -513,7 +516,7 @@ Event journal and resume: every event gets a monotonic `eventSeq` that is global
 instance (across all session channels); a client resumes
 with `Last-Event-ID` / `?since=` (SSE frames carry `id: <eventSeq>`). The instance channel
 (`pipeline.run.*`, `agents.updated`, `mcp.updated`, `skills.updated`, `models.updated`,
-`execution.updated`, `credentials.updated`) gets no number and is not journaled: there is no
+`execution.updated`, `credentials.updated`, `memory.updated`) gets no number and is not journaled: there is no
 backfill for it, delivery is live only.
 
 **`GET /api/v2/meta`** (no authentication, like `/health` — **in both builds**,

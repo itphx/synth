@@ -114,6 +114,20 @@ const EVENT_HANDLERS: readonly EventHandler[] = [
     evidence: 'revision: s.revision + 1',
   },
   {
+    type: 'memory.updated',
+    store: 'memoryStore',
+    call: 'useMemoryStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
+    type: 'users.updated',
+    store: 'usersStore',
+    call: 'useUsersStore.getState().applyEvent()',
+    channel: 'instance',
+    evidence: 'revision: s.revision + 1',
+  },
+  {
     type: 'pipeline.updated',
     store: 'pipelinesStore',
     call: 'usePipelinesStore.getState().invalidateProject(',

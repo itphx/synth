@@ -359,3 +359,179 @@ describe('хост плагинов: сервис памяти в фасаде',
     expect(result.outcome).toBe('activated');
   });
 });
+
+/**
+ * Событие шины `memory.updated` на chokepoint'е записи в память.
+ *
+ * Обёртка (`engine/plugins/scoped-memory.ts`) — **единственный путь плагина в
+ * порты памяти**, поэтому публикация посажена здесь: через неё ходят тулы
+ * `memory_write`/`memory_forget`/`memory_consolidate`/`memory_index` (то есть и
+ * агент в чате), и мутации портала, которые исполняет тул плагина. Иначе факт,
+ * записанный агентом, не доходил бы до раздела «Память» второго клиента.
+ *
+ * Контракт: событие — только после **успешной** записи (`false`/чужой namespace
+ * молчат), payload — `{ scope, action, id }` без содержимого памяти (ни текста
+ * факта, ни эмбеддингов — docs/MEMORY.md §10, инвариант 13 `AGENTS.md`).
+ */
+describe('событие memory.updated на записи плагина в память (инвариант 27)', () => {
+  /** Записанное событие шины. */
+  interface Published {
+    channel: string;
+    type: string;
+    data: Record<string, unknown>;
+  }
+
+  /** Фейковая шина: инстансные события складываются в массив. */
+  function makeBus(published: Published[]) {
+    return {
+      publishInstance: (type: string, data: Record<string, unknown> = {}) => {
+        published.push({ channel: 'instance', type, data });
+      },
+    };
+  }
+
+  it('facts.save публикует: create для первой версии, update для следующей', async () => {
+    const published: Published[] = [];
+    const ports = makePorts();
+    const memory = createScopedMemory('plugin-a', ports, makeBus(published));
+
+    await memory.facts.save(makeFact({ id: 'fact-1', version: 1 }));
+    await memory.facts.save(makeFact({ id: 'fact-1', version: 2, text: 'исправлено' }));
+
+    expect(published.map((event) => [event.channel, event.type, event.data])).toEqual([
+      ['instance', 'memory.updated', { scope: 'facts', action: 'create', id: 'fact-1' }],
+      ['instance', 'memory.updated', { scope: 'facts', action: 'update', id: 'fact-1' }],
+    ]);
+  });
+
+  it('facts.save: в payload нет текста факта и эмбеддингов', async () => {
+    const published: Published[] = [];
+    const ports = makePorts();
+    const memory = createScopedMemory('plugin-a', ports, makeBus(published));
+
+    await memory.facts.save(
+      makeFact({
+        id: 'fact-secret',
+        text: 'деплой идёт через Fleet',
+        embedding: [0.11, -0.22, 0.33],
+      } as Partial<MemoryFactRecord>),
+    );
+
+    expect(published).toHaveLength(1);
+    expect(Object.keys(published[0]!.data).sort()).toEqual(['action', 'id', 'scope']);
+    const serialized = JSON.stringify(published);
+    expect(serialized).not.toContain('деплой идёт через Fleet');
+    expect(serialized).not.toContain('0.11');
+  });
+
+  it('facts.delete публикует только при успехе (чужой namespace/нет записи — тишина)', async () => {
+    const published: Published[] = [];
+    const ports = makePorts();
+    const other = createScopedMemory('plugin-b', ports);
+    await other.facts.save(makeFact({ id: 'foreign-fact' }));
+    const memory = createScopedMemory('plugin-a', ports, makeBus(published));
+
+    // Чужой факт: обёртка отвечает «не найдено» — события нет.
+    expect(await memory.facts.delete('foreign-fact')).toBe(false);
+    expect(published).toEqual([]);
+
+    // Свой факт: запись удалена — событие есть.
+    await memory.facts.save(makeFact({ id: 'own-fact' }));
+    published.length = 0;
+    expect(await memory.facts.delete('own-fact')).toBe(true);
+    expect(published.map((event) => event.data)).toEqual([
+      { scope: 'facts', action: 'delete', id: 'own-fact' },
+    ]);
+  });
+
+  it('facts.supersede публикует update только при успешной замене', async () => {
+    const published: Published[] = [];
+    const ports = makePorts();
+    const other = createScopedMemory('plugin-b', ports);
+    await other.facts.save(makeFact({ id: 'foreign-fact' }));
+    const memory = createScopedMemory('plugin-a', ports, makeBus(published));
+    await memory.facts.save(makeFact({ id: 'v1', version: 1 }));
+    await memory.facts.save(makeFact({ id: 'v2', version: 1 }));
+    published.length = 0;
+
+    // Заменяемый факт чужой — отказ, события нет.
+    expect(await memory.facts.supersede('foreign-fact', 'v2')).toBe(false);
+    expect(published).toEqual([]);
+
+    expect(await memory.facts.supersede('v1', 'v2')).toBe(true);
+    expect(published.map((event) => event.data)).toEqual([
+      { scope: 'facts', action: 'update', id: 'v1' },
+    ]);
+  });
+
+  it('indexes.saveIndex публикует create, затем update; содержимое корпуса не уходит', async () => {
+    const published: Published[] = [];
+    const ports = makePorts();
+    const memory = createScopedMemory('plugin-a', ports, makeBus(published));
+
+    await memory.indexes.saveIndex(makeIndex({ id: 'index-1', name: 'корпус проекта demo' }));
+    await memory.indexes.saveIndex(makeIndex({ id: 'index-1', name: 'корпус проекта demo' }));
+
+    expect(published.map((event) => event.data)).toEqual([
+      { scope: 'indexes', action: 'create', id: 'index-1' },
+      { scope: 'indexes', action: 'update', id: 'index-1' },
+    ]);
+    const serialized = JSON.stringify(published);
+    expect(serialized).not.toContain('корпус проекта demo');
+    expect(serialized).not.toContain('text-embed');
+  });
+
+  it('indexes.deleteIndex и setState публикуют только при успехе', async () => {
+    const published: Published[] = [];
+    const ports = makePorts();
+    const other = createScopedMemory('plugin-b', ports);
+    await other.indexes.saveIndex(makeIndex({ id: 'foreign-index' }));
+    const memory = createScopedMemory('plugin-a', ports, makeBus(published));
+    await memory.indexes.saveIndex(makeIndex({ id: 'index-1' }));
+    published.length = 0;
+
+    // Чужой индекс: «не найдено» — тишина.
+    expect(await memory.indexes.setState('foreign-index', 'ready')).toBe(false);
+    expect(await memory.indexes.deleteIndex('foreign-index')).toBe(false);
+    expect(published).toEqual([]);
+
+    expect(await memory.indexes.setState('index-1', 'ready')).toBe(true);
+    expect(await memory.indexes.deleteIndex('index-1')).toBe(true);
+    expect(published.map((event) => event.data)).toEqual([
+      { scope: 'indexes', action: 'update', id: 'index-1' },
+      { scope: 'indexes', action: 'delete', id: 'index-1' },
+    ]);
+  });
+
+  it('чтение портов событий не публикует', async () => {
+    const published: Published[] = [];
+    const ports = makePorts();
+    const memory = createScopedMemory('plugin-a', ports, makeBus(published));
+    await memory.facts.save(makeFact({ id: 'fact-1' }));
+    await memory.indexes.saveIndex(makeIndex({ id: 'index-1' }));
+    published.length = 0;
+
+    await memory.facts.get('fact-1');
+    await memory.facts.list();
+    await memory.facts.count();
+    await memory.indexes.getIndex('index-1');
+    await memory.indexes.listIndexes();
+    await memory.indexes.listChunks('index-1');
+
+    expect(published).toEqual([]);
+  });
+
+  it('без шины — публикации нет, мутации работают как раньше', async () => {
+    const ports = makePorts();
+    const memory = createScopedMemory('plugin-a', ports);
+
+    await expect(memory.facts.save(makeFact({ id: 'fact-1' }))).resolves.toBeUndefined();
+    expect(await memory.facts.delete('fact-1')).toBe(true);
+    await expect(memory.indexes.saveIndex(makeIndex({ id: 'index-1' }))).resolves.toBeUndefined();
+    expect(await memory.indexes.deleteIndex('index-1')).toBe(true);
+
+    // `null` — тот же no-op (шина не задана точкой сборки).
+    const nullBus = createScopedMemory('plugin-a', ports, null);
+    await expect(nullBus.facts.save(makeFact({ id: 'fact-2' }))).resolves.toBeUndefined();
+  });
+});

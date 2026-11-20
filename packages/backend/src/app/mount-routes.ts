@@ -95,6 +95,9 @@ import {
   // Внешние доступы инстанса изменились — `credentials.updated` (шов write-путей
   // `createOAuthRoutes`, `events/credentials-events.ts`).
   credentialsChangedPublisher,
+  // Память инстанса изменилась — `memory.updated` (шов портала памяти и записи
+  // плагина памяти, `events/memory-events.ts`).
+  memoryChangedPublisher,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext, ExecutionProfileCatalog } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
@@ -109,6 +112,7 @@ import { createModelRoutes } from '../routes/models.js';
 import { createAgentRoutes } from '../routes/agents.js';
 import { createMcpRoutes } from '../routes/mcp.js';
 import { createUserRoutes } from '../routes/users.js';
+import { usersChangedPublisher } from '../events/users-events.js';
 import { createLlmRoutes } from '../routes/llm.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { scopeGuard, serviceProjectProjection } from '../auth/service-scope.js';
@@ -505,7 +509,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // ADR-140 Ф2: `GET /api/v2/users/groups` — каталог групп из allowlist
   // `auth.oidc.groups.allow` (env `SYNTH_OIDC_GROUPS_ALLOW` перекрывает конфиг;
   // пустой allowlist → групп нет, fail-closed).
-  app.route('/api/v2/users', createUserRoutes(auth, profilesStore, { groups: config.auth.oidc?.groups?.allow ?? [] }));
+  app.route('/api/v2/users', createUserRoutes(auth, profilesStore, { groups: config.auth.oidc?.groups?.allow ?? [], onUsersChanged: usersChangedPublisher(eventBus) }));
 
   // Git routes (ADR-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
   // (init/clone/register/remove/fetch) требуют прав на изменение контента
@@ -1173,6 +1177,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       },
       // Каталог данных — рабочий каталог для источника `facts` (нет workspace).
       dataDir,
+      // Память изменилась — `memory.updated` в инстансный канал: раздел
+      // «Память» перечитывает статус/факты/индексы без перезагрузки страницы.
+      onMemoryChanged: memoryChangedPublisher(eventBus),
       messages: {
         invalidStatus: (c) => t('errors.validation.invalidMemoryStatus', undefined, c),
         invalidState: (c) => t('errors.validation.invalidMemoryState', undefined, c),

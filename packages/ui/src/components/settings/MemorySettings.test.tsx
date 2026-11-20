@@ -61,6 +61,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useMemoryStore } from '@/stores/memoryStore'
 import { MemorySettings } from './MemorySettings'
 import type { MemoryFact, MemoryGraph, MemoryIndex, MemoryStatus } from '@/lib/api/synthApi'
 
@@ -258,6 +259,9 @@ beforeEach(() => {
   }))
   mocks.confirm.mockResolvedValue(true)
   useProjectsStore.setState({ projects: [PROJECT] as never })
+  // Сигнал `memory.updated` — счётчик на модуль: между тестами обнуляем,
+  // иначе первый же рендер увидит `revision > 0` и перечитает срезы дважды.
+  useMemoryStore.setState({ revision: 0 })
 })
 
 afterEach(async () => {
@@ -619,6 +623,117 @@ describe('MemorySettings — операции с индексами', () => {
       expect(mocks.getMemoryStatus.mock.calls.length).toBe(statusCalls + 1)
       expect(mocks.listMemoryIndexes.mock.calls.length).toBe(indexCalls + 1)
       expect(container).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('MemorySettings — событие `memory.updated` (инвариант 27)', () => {
+  /** Мутация памяти в другом клиенте/агентом: шина → `memoryStore.applyEvent()`. */
+  async function emitMemoryUpdated(): Promise<void> {
+    await act(async () => {
+      useMemoryStore.getState().applyEvent()
+    })
+    await flush()
+    await flush()
+  }
+
+  it('событие перечитывает статус, факты и индексы (без перезагрузки страницы)', async () => {
+    const container = await renderSettings()
+
+    const statusCalls = mocks.getMemoryStatus.mock.calls.length
+    const factsCalls = mocks.listMemoryFacts.mock.calls.length
+    const indexCalls = mocks.listMemoryIndexes.mock.calls.length
+
+    await emitMemoryUpdated()
+
+    expect(mocks.getMemoryStatus.mock.calls.length).toBe(statusCalls + 1)
+    expect(mocks.listMemoryFacts.mock.calls.length).toBe(factsCalls + 1)
+    expect(mocks.listMemoryIndexes.mock.calls.length).toBe(indexCalls + 1)
+    expect(container).toBeTruthy()
+  })
+
+  it('новый факт, записанный агентом, появляется в списке по событию', async () => {
+    const container = await renderSettings()
+
+    expect(byTestId(container, 'memory-fact-fact-2')).toBeNull()
+
+    // Факт записан агентом (`memory_write`) через плагин памяти.
+    const NEW_FACT: MemoryFact = {
+      ...FACT,
+      id: 'fact-2',
+      text: 'Релиз идёт через Gitea, а не через npm.',
+    }
+    mocks.listMemoryFacts.mockResolvedValue({
+      items: [FACT, NEW_FACT],
+      total: 121,
+      limit: 50,
+      offset: 0,
+    })
+
+    await emitMemoryUpdated()
+
+    expect(byTestId(container, 'memory-fact-fact-2')?.textContent).toContain('Gitea')
+  })
+
+  it('первый рендер не перечитывает срезы повторно (revision === 0 — не сигнал)', async () => {
+    await renderSettings()
+
+    expect(mocks.getMemoryStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.listMemoryFacts).toHaveBeenCalledTimes(1)
+    expect(mocks.listMemoryIndexes).toHaveBeenCalledTimes(1)
+  })
+
+  it('пока индексы собираются, таймер поллинга остаётся: событие не подменяет его', async () => {
+    mocks.listMemoryIndexes.mockResolvedValue({ items: [BUILDING_INDEX], total: 1 })
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const container = await renderSettings()
+
+      const statusCalls = mocks.getMemoryStatus.mock.calls.length
+      const indexCalls = mocks.listMemoryIndexes.mock.calls.length
+
+      // Событие: раздел перечитывает срезы ровно один раз.
+      await emitMemoryUpdated()
+      expect(mocks.getMemoryStatus.mock.calls.length).toBe(statusCalls + 1)
+      expect(mocks.listMemoryIndexes.mock.calls.length).toBe(indexCalls + 1)
+
+      // Условный поллинг `building` на месте и он **один**: один тик — ровно
+      // один опрос статуса и списка (второй таймер дал бы по два).
+      const statusAfterEvent = mocks.getMemoryStatus.mock.calls.length
+      const indexAfterEvent = mocks.listMemoryIndexes.mock.calls.length
+
+      await act(async () => {
+        vi.advanceTimersByTime(3000)
+      })
+      await flush()
+
+      expect(mocks.getMemoryStatus.mock.calls.length).toBe(statusAfterEvent + 1)
+      expect(mocks.listMemoryIndexes.mock.calls.length).toBe(indexAfterEvent + 1)
+      expect(container).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('без building-индексов событие не включает поллинг (таймера нет)', async () => {
+    // По умолчанию в списке индекс `failed` — собирающихся нет.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      await renderSettings()
+
+      await emitMemoryUpdated()
+      const statusCalls = mocks.getMemoryStatus.mock.calls.length
+      const indexCalls = mocks.listMemoryIndexes.mock.calls.length
+
+      await act(async () => {
+        vi.advanceTimersByTime(9000)
+      })
+      await flush()
+
+      expect(mocks.getMemoryStatus.mock.calls.length).toBe(statusCalls)
+      expect(mocks.listMemoryIndexes.mock.calls.length).toBe(indexCalls)
     } finally {
       vi.useRealTimers()
     }

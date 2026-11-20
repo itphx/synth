@@ -26,6 +26,8 @@ import { useProvidersStore } from './providersStore'
 // Внешние доступы инстанса (`credentials.updated`) — раздел «Внешние доступы»
 // перечитывает список без перезагрузки страницы.
 import { useCredentialsStore } from './credentialsStore'
+import { useMemoryStore } from './memoryStore'
+import { useUsersStore } from './usersStore'
 import { useExecutionProfilesStore } from './executionProfilesStore'
 import type { TransportMode } from './useUIStore'
 import type { MessageData, CostBreakdown, ResponseStatus, ReasoningBlockData, IntermediateTextBlockData, MessageStatus, ActiveTurn, QueueItemStatus } from './chatStore'
@@ -1945,6 +1947,28 @@ export function createDispatcher(): EventDispatcher {
     // список и статусы без перезагрузки страницы.
     if (type === 'credentials.updated') {
       useCredentialsStore.getState().applyEvent()
+      return
+    }
+
+    // Память инстанса изменилась (`memory.updated`, инстансный канал шины,
+    // ADR-107) — тот же путь и та же причина, что у `models.updated` выше:
+    // память — ресурс инстанса, `sid` у события нет. Стор поднимает `revision`,
+    // раздел «Память» перечитывает статус, факты и индексы без перезагрузки
+    // страницы — и после мутации агента (`memory_write`), и после действий
+    // другого админа в портале. Payload `{scope, action, id?}` сигналу не нужен;
+    // условный поллинг `building`-индексов живёт в самом разделе и не зависит
+    // от этого события.
+    if (type === 'memory.updated') {
+      useMemoryStore.getState().applyEvent()
+      return
+    }
+
+    // Каталог пользователей инстанса изменился (`users.updated`, инстансный
+    // канал шины, managed) — тот же путь и та же причина. Событие админское
+    // (доставляется ADMIN/LEAD через `subscribeAll`): админ-панель
+    // «Пользователи» перечитывает список без перезагрузки страницы.
+    if (type === 'users.updated') {
+      useUsersStore.getState().applyEvent()
       return
     }
 

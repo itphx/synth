@@ -9,8 +9,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileProfileStore } from '@itphx/synth-core';
-import type { ProfileData } from '@itphx/synth-shared';
+import { EventBus, INSTANCE_EVENT_CHANNEL } from '@itphx/synth-core';
+import type { BusEvent, ProfileData } from '@itphx/synth-shared';
 import { createUserRoutes } from './users.js';
+import {
+  usersChangedPublisher,
+  type UsersChangedInfo,
+} from '../events/users-events.js';
 
 interface MockUser {
   id: string;
@@ -173,5 +178,169 @@ describe('backend user-API — scope users:read и identities (ADR-052/O1)', () 
   it('GET /:id не найден → 404', async () => {
     const res = await get('/api/v2/users/missing', 'Bearer admin');
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * Инвариант 27: мутация каталога пользователей (managed) публикует
+ * `users.updated` в инстансный канал шины — иначе админ-панель «Пользователи»
+ * во втором клиенте/вкладке держит снимок до перезагрузки страницы.
+ *
+ * Проверяем на уровне роутов: ровно один `action` на успешную мутацию, тишина на
+ * отказах (400/403/404/409 — записи не было) и **состав payload'а**: ни почты, ни
+ * заметок, ни ролей, ни токенов (инвариант 13).
+ */
+describe('backend user-API — публикация users.updated (инвариант 27)', () => {
+  let tmpDir: string;
+  let store: FileProfileStore;
+  let calls: UsersChangedInfo[];
+  let app: Hono;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-users-events-'));
+    store = new FileProfileStore({ dataDir: tmpDir });
+    await store.saveProfile(makeProfile());
+
+    calls = [];
+    app = new Hono();
+    const kit = createMockKit();
+    app.use('*', kit.attachUser as never);
+    app.route(
+      '/api/v2/users',
+      createUserRoutes(kit as never, store, { onUsersChanged: (info) => calls.push(info) }),
+    );
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  const request = async (
+    method: 'POST' | 'PUT' | 'DELETE',
+    path: string,
+    auth: string,
+    body?: Record<string, unknown>,
+  ): Promise<Response> =>
+    app.request(path, {
+      method,
+      headers: { Authorization: auth, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+
+  it('POST → 201 и событие `create` с id созданного пользователя', async () => {
+    const res = await request('POST', '/api/v2/users', 'Bearer admin', {
+      username: 'newbie',
+      email: 'newbie@example.com',
+      roles: ['USER'],
+      notes: 'секретная заметка',
+    });
+
+    expect(res.status).toBe(201);
+    const created = await res.json() as { id: string };
+    expect(calls).toEqual([{ action: 'create', userId: created.id }]);
+  });
+
+  it('PUT → 200 и событие `update` с id профиля', async () => {
+    const res = await request('PUT', `/api/v2/users/${PROFILE_ID}`, 'Bearer admin', {
+      roles: ['ADMIN'],
+      is_active: false,
+    });
+
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([{ action: 'update', userId: PROFILE_ID }]);
+  });
+
+  it('DELETE → 200 и событие `delete` с id профиля', async () => {
+    const res = await request('DELETE', `/api/v2/users/${PROFILE_ID}`, 'Bearer admin');
+
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([{ action: 'delete', userId: PROFILE_ID }]);
+  });
+
+  it('400 (нет имени) — записи не было, событие не публикуется', async () => {
+    const res = await request('POST', '/api/v2/users', 'Bearer admin', { email: 'x@example.com' });
+
+    expect(res.status).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
+  it('409 (имя занято) — событие не публикуется', async () => {
+    const res = await request('POST', '/api/v2/users', 'Bearer admin', { username: 'someone' });
+
+    expect(res.status).toBe(409);
+    expect(calls).toEqual([]);
+  });
+
+  it('403 (не ADMIN) — событие не публикуется', async () => {
+    const create = await request('POST', '/api/v2/users', 'Bearer dev', { username: 'newbie' });
+    const update = await request('PUT', `/api/v2/users/${PROFILE_ID}`, 'Bearer dev', { roles: [] });
+    const remove = await request('DELETE', `/api/v2/users/${PROFILE_ID}`, 'Bearer dev');
+
+    expect([create.status, update.status, remove.status]).toEqual([403, 403, 403]);
+    expect(calls).toEqual([]);
+  });
+
+  it('404 (нет пользователя) — событие не публикуется', async () => {
+    const update = await request('PUT', '/api/v2/users/missing', 'Bearer admin', { roles: [] });
+    const remove = await request('DELETE', '/api/v2/users/missing', 'Bearer admin');
+
+    expect([update.status, remove.status]).toEqual([404, 404]);
+    expect(calls).toEqual([]);
+  });
+
+  it('payload события — только id и вид мутации: без почты, заметок, ролей и токенов', async () => {
+    const bus = new EventBus();
+    const delivered: Array<{ sessionId: string; type: string; data: Record<string, unknown> }> = [];
+    bus.subscribeAll((event: BusEvent) => {
+      delivered.push({ sessionId: event.sessionId, type: event.type, data: event.data });
+    });
+
+    const wired = new Hono();
+    const kit = createMockKit();
+    wired.use('*', kit.attachUser as never);
+    wired.route(
+      '/api/v2/users',
+      createUserRoutes(kit as never, store, { onUsersChanged: usersChangedPublisher(bus) }),
+    );
+
+    const res = await wired.request('/api/v2/users', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'leaky',
+        email: 'leaky@example.com',
+        roles: ['ADMIN'],
+        notes: 'секретная заметка',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const created = await res.json() as { id: string };
+
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]!.sessionId).toBe(INSTANCE_EVENT_CHANNEL);
+    expect(delivered[0]!.type).toBe('users.updated');
+    expect(Object.keys(delivered[0]!.data).sort()).toEqual(['action', 'userId']);
+    expect(delivered[0]!.data).toEqual({ action: 'create', userId: created.id });
+
+    const serialized = JSON.stringify(delivered[0]!.data);
+    expect(serialized).not.toContain('leaky@example.com');
+    expect(serialized).not.toContain('секретная заметка');
+    expect(serialized).not.toContain('ADMIN');
+  });
+
+  it('без хука (`onUsersChanged` не задан) роуты работают как раньше', async () => {
+    const plain = new Hono();
+    const kit = createMockKit();
+    plain.use('*', kit.attachUser as never);
+    plain.route('/api/v2/users', createUserRoutes(kit as never, store));
+
+    const res = await plain.request('/api/v2/users', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'plain' }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(calls).toEqual([]);
   });
 });

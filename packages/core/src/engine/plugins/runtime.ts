@@ -82,6 +82,7 @@ import type { PluginDeployScanEntry } from './deploy.js';
 import type { PluginLayout } from './layout.js';
 import { pluginInstalledDir } from './layout.js';
 import { PluginHost } from './plugin-host.js';
+import type { InstanceEventPublisherLike } from '../../events/memory-events.js';
 import { createPluginSettingsReader } from './settings.js';
 
 /** Имя файла манифеста (`synth.pack`, ADR-086 §5). */
@@ -187,6 +188,16 @@ export interface PluginRuntimeDeps {
    * наличие фичи и работает без телеметрии).
    */
   memoryTelemetry?: PluginMemoryTelemetryFn;
+  /**
+   * ADR-107 / инвариант 27: шина инстанса для события `memory.updated`.
+   *
+   * Инъекция из сборки приложения (`server/app/deps.ts`/`backend/app/deps.ts`):
+   * мутация памяти плагином (факт/индекс) публикует событие в инстансный канал,
+   * чтобы раздел «Память» перечитывал данные без перезагрузки страницы.
+   *
+   * Не задана — публикации нет (тесты, сторонние потребители).
+   */
+  memoryEvents?: InstanceEventPublisherLike;
   /** Логгер (по умолчанию — `console.warn` с префиксом `[plugin-runtime]`). */
   logger?: PluginLogger;
   /** Инъекция часов — для детерминированных тестов (ISO-8601). */
@@ -314,7 +325,11 @@ export class PluginRuntime {
       ...(deps.scan ? { scan: deps.scan } : {}),
       ...(deps.serverPolicy ? { serverPolicy: deps.serverPolicy } : {}),
       // ADR-107: телеметрия recall/search-запросов памяти (ADR-107).
+      // ADR-107: телеметрия recall/search-запросов памяти (`synth_memory_recall_*`).
       ...(deps.memoryTelemetry ? { memoryTelemetry: deps.memoryTelemetry } : {}),
+      // Инвариант 27: мутации памяти плагином публикуют `memory.updated`
+      // (chokepoint — scoped-обёртка портов, `engine/plugins/scoped-memory.ts`).
+      ...(deps.memoryEvents ? { memoryEvents: deps.memoryEvents } : {}),
       logger: this._logger,
     });
     this.installer = new PluginInstaller({

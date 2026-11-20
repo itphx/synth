@@ -3508,11 +3508,18 @@
   | Провайдеры/модели | `models.updated` — инстансный | `events/models-events.ts`: `server/routes/providers.ts` (`POST /`, `PATCH|DELETE /:name`), `models.ts` (`POST /fetch`, `POST /`, `DELETE /:id`) | `providersStore.applyEvent()` — селект модели в чате, админ-панели моделей/провайдеров |
   | Профили исполнения | `execution.updated` — инстансный | `events/execution-events.ts`: `server/routes/settings.ts` (`PUT|DELETE /execution` — каталог профилей), `server/routes/execution.ts` (пулы: `POST /pools/:key/drain`, `DELETE /pools/:key`) | `executionProfilesStore.applyEvent()` — раздел «Исполнение», селекторы профиля агента/проекта/сессии |
   | Внешние доступы | `credentials.updated` — инстансный | `events/credentials-events.ts`: `server/routes/oauth.ts` (`POST /credentials` — выдача, `POST /credentials/:id/refresh`, `DELETE /credentials/:id`, `POST /credentials/:id/bind`) | `credentialsStore.applyEvent()` — раздел «Внешние доступы» |
+  | Память | `memory.updated` — инстансный (админский: в `USER_FACING_INSTANCE_EVENTS` его нет) | `events/memory-events.ts`: **chokepoint записи** `engine/plugins/scoped-memory.ts` (факты и индексы плагина — тулы `memory_write`/`memory_forget`/`memory_consolidate`/`memory_index`, а через них и мутации портала, которые исполняет тул плагина) плюс сам `server/routes/memory.ts` (`PATCH /indexes/:id` — переключатель `enabled`, единственный путь, пишущий порт мимо фасада) | `memoryStore.applyEvent()` — портал памяти (раздел «Память»: статус, факты и индексы перечитываются) |
   | Пайплайны проекта | `pipeline.updated` — каналы **сессий проекта** | `engine/pipelines/events.ts`: `server/routes/pipeline-project-routes.ts` (`POST/PUT/DELETE /projects/:id/pipelines*`, `POST .../publish`, `POST /pipeline-templates/:tid/instantiate`), `engine/tools/pipeline-authoring.ts`, `pipeline-templates.ts` (через `notifyPipelineChanged`) | `pipelinesStore.invalidateProject(projectId)` — вкладка «Пайплайны» левой панели |
 
   Прогоны пайплайнов — отдельное семейство (`pipeline.run.*`, инстансный канал), к авторству
   не относятся. Уровневые операции (`scope: project|session`) несут id области в payload'е того
   же инстансного события — отдельного канала не нужно.
+
+  У памяти публикация посажена на **запись в порт** (chokepoint `engine/plugins/scoped-memory.ts`),
+  а не на HTTP-роут: через обёртку ходят и плагин, и портал (мутации индексов и консолидация
+  исполняются тулом плагина), поэтому «роут публикует, плагин молчит» невозможно по построению;
+  гейт проверяет chokepoint отдельным тестом. Payload события — только `{scope, action, id?}`:
+  ни текста фактов, ни эмбеддингов, ни корпуса индекса (docs/MEMORY.md §10, инвариант 13).
 - **Стор — только через порт (ADR-096):** домену передаётся доменный порт из
   `StorageContext` (а не конкретный класс); новая реализация стора обязана пройти
   контрактный suite `storage/contract/*` (и иметь memory-эквивалент для тестов).

@@ -6,6 +6,7 @@ import { confirm } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/formatDate'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { useMemoryStore } from '@/stores/memoryStore'
 import { Button } from '../ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
@@ -249,6 +250,11 @@ export function MemorySettings() {
   const { t, locale } = useI18n()
   const { notify } = useNotification()
   const projects = useProjectsStore((s) => s.projects)
+  /**
+   * Сигнал «память изменилась» (событие `memory.updated`) — по нему раздел
+   * перечитывает статус, факты и индексы без перезагрузки страницы.
+   */
+  const memoryRevision = useMemoryStore((s) => s.revision)
 
   const [status, setStatus] = useState<MemoryStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
@@ -427,6 +433,25 @@ export function MemorySettings() {
     }, INDEX_POLL_INTERVAL_MS)
     return () => clearInterval(timer)
   }, [hasBuildingIndexes, loadIndexes, loadStatus])
+
+  /**
+   * Память изменилась в другом клиенте/агентом (`memory.updated`, инстансный
+   * канал шины, ADR-107) — перечитываем все три среза.
+   *
+   * Без этого события раздел показывал снимок, снятый при монтировании: факт,
+   * записанный агентом через плагин памяти, и индекс, созданный другим админом,
+   * появлялись только после перезагрузки страницы (инвариант 27 `AGENTS.md`).
+   * Первый рендер пропускаем (`revision === 0`) — начальную загрузку делают
+   * эффекты выше, дублирующий запрос ни к чему. Условный поллинг
+   * `building`-индексов выше остаётся как есть: он нужен для прогресса сборки,
+   * а не как замена событию.
+   */
+  useEffect(() => {
+    if (!memoryRevision) return
+    void loadStatus()
+    void loadFacts()
+    void loadIndexes()
+  }, [memoryRevision, loadFacts, loadIndexes, loadStatus])
 
   /** Провайдер памяти недоступен: активен=false или сервер ответил 409. */
   const providerInactive = providerUnavailable || (status !== null && !status.provider.active)

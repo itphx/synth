@@ -82,6 +82,9 @@ import {
   // Внешние доступы инстанса изменились — `credentials.updated` (шов write-путей
   // `createOAuthRoutes`, см. `events/credentials-events.ts`).
   credentialsChangedPublisher,
+  // Память инстанса изменилась — `memory.updated` (шов портала памяти и записи
+  // плагина памяти, `events/memory-events.ts`).
+  memoryChangedPublisher,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -1433,6 +1436,9 @@ export function mountStandaloneRoutes(
       // ADR-042: мутации индексов удалённого мира (`remote:` id/projectId)
       // проксируются на сервер; чтение портала остаётся локальным.
       getRemoteClient: () => getClient(),
+      // Память изменилась — `memory.updated` в инстансный канал: раздел
+      // «Память» перечитывает статус/факты/индексы без перезагрузки страницы.
+      onMemoryChanged: memoryChangedPublisher(eventBus),
     },
   ));
 

@@ -2178,6 +2178,9 @@ export async function createBackendDeps(
     // ADR-107: телеметрия recall/search-запросов памяти
     // (`synth_memory_recall_*`).
     ...(memoryTelemetry ? { memoryTelemetry: memoryTelemetry.recordRecall } : {}),
+    // Инвариант 27: мутации памяти плагином публикуют `memory.updated`
+    // (chokepoint — scoped-обёртка портов, `engine/plugins/scoped-memory.ts`).
+    memoryEvents: eventBus,
   });
 
   const processMessage = orchestrator.createProcessMessage();

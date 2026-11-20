@@ -31,6 +31,23 @@
  * Нарушение namespace **не выражается исключением**: наружу уходит только
  * «не найдено» — иначе по коду ответа можно было бы отличить «чужой id» от
  * «несуществующий» и перебором id выяснить содержимое чужой памяти.
+ *
+ * ## Событие шины `memory.updated` (инвариант 27 `AGENTS.md`)
+ *
+ * Обёртка — **единственный chokepoint записи плагина в память** (плагин ходит в
+ * порты только через неё), поэтому публикация события посажена именно здесь:
+ * каждая успешная мутация факта или индекса публикует `memory.updated` в
+ * инстансный канал (шов — `events/memory-events.ts`). Иначе факт, записанный
+ * агентом в чате (`memory_write`), и индекс, изменённый плагином, не доходили
+ * бы до UI: раздел «Память» держит снимок до перезагрузки страницы.
+ *
+ * Правила:
+ * - публикация — **после** успешной записи: `delete`/`supersede`, вернувшие
+ *   `false` (чужой namespace, нет записи), молчат;
+ * - в payload — только область, вид мутации и id записи: **ни текста факта, ни
+ *   эмбеддингов, ни корпуса индекса** (docs/MEMORY.md §10, инвариант 13);
+ * - шина не задана — публикации нет (тесты, сторонние потребители): поведение
+ *   прежнее.
  */
 import type {
   MemoryFactQuery,
@@ -44,6 +61,10 @@ import type {
   MemoryIndexRepository,
   MemoryIndexState,
 } from '../../storage/ports/memory-index-repository.js';
+import {
+  publishMemoryUpdated,
+  type InstanceEventPublisherLike,
+} from '../../events/memory-events.js';
 
 /**
  * Префикс namespace'а плагина в памяти.
@@ -84,7 +105,11 @@ export interface PluginMemoryPorts {
  * Фильтрация и штамповка — без бизнес-логики: upsert/`createdAt`/`updatedAt`
  * считает сам порт.
  */
-function scopedFacts(pluginName: string, facts: MemoryFactRepository): MemoryFactRepository {
+function scopedFacts(
+  pluginName: string,
+  facts: MemoryFactRepository,
+  bus: InstanceEventPublisherLike | undefined | null,
+): MemoryFactRepository {
   const namespace = pluginMemoryNamespace(pluginName);
 
   /** Запись принадлежит namespace'у плагина? */
@@ -99,6 +124,14 @@ function scopedFacts(pluginName: string, facts: MemoryFactRepository): MemoryFac
       // Namespace навязан хостом: входное значение игнорируется, запись не
       // может утечь в чужой namespace.
       await facts.save({ ...fact, namespace });
+      // Первая версия — новая запись, дальше `save` правит существующую
+      // (upsert по id: исправление версией, отзыв, метаданные канона при
+      // консолидации).
+      publishMemoryUpdated(bus, {
+        scope: 'facts',
+        action: fact.version <= 1 ? 'create' : 'update',
+        id: fact.id,
+      });
     },
     async get(id: string): Promise<MemoryFactRecord | null> {
       return owned(id);
@@ -112,7 +145,9 @@ function scopedFacts(pluginName: string, facts: MemoryFactRepository): MemoryFac
     },
     async delete(id: string): Promise<boolean> {
       if (!(await owned(id))) return false;
-      return facts.delete(id);
+      const deleted = await facts.delete(id);
+      if (deleted) publishMemoryUpdated(bus, { scope: 'facts', action: 'delete', id });
+      return deleted;
     },
     async supersede(id: string, nextId: string): Promise<boolean> {
       // Проверяются **оба** id: и заменяемый факт, и новая версия. Иначе
@@ -120,7 +155,9 @@ function scopedFacts(pluginName: string, facts: MemoryFactRepository): MemoryFac
       // ссылка, которую потом прочитает портал/консолидация.
       if (!(await owned(id))) return false;
       if (!(await owned(nextId))) return false;
-      return facts.supersede(id, nextId);
+      const superseded = await facts.supersede(id, nextId);
+      if (superseded) publishMemoryUpdated(bus, { scope: 'facts', action: 'update', id });
+      return superseded;
     },
   };
 }
@@ -134,6 +171,7 @@ function scopedFacts(pluginName: string, facts: MemoryFactRepository): MemoryFac
 function scopedIndexes(
   pluginName: string,
   indexes: MemoryIndexRepository,
+  bus: InstanceEventPublisherLike | undefined | null,
 ): MemoryIndexRepository {
   const namespace = pluginMemoryNamespace(pluginName);
 
@@ -145,7 +183,14 @@ function scopedIndexes(
 
   return {
     async saveIndex(index: MemoryIndexRecord): Promise<void> {
+      // Запись уже существует — это правка/пересборка, иначе создание.
+      const existing = await indexes.getIndex(index.id);
       await indexes.saveIndex({ ...index, namespace });
+      publishMemoryUpdated(bus, {
+        scope: 'indexes',
+        action: existing ? 'update' : 'create',
+        id: index.id,
+      });
     },
     async getIndex(id: string): Promise<MemoryIndexRecord | null> {
       const index = await indexes.getIndex(id);
@@ -157,11 +202,15 @@ function scopedIndexes(
     },
     async deleteIndex(id: string): Promise<boolean> {
       if (!(await owns(id))) return false;
-      return indexes.deleteIndex(id);
+      const deleted = await indexes.deleteIndex(id);
+      if (deleted) publishMemoryUpdated(bus, { scope: 'indexes', action: 'delete', id });
+      return deleted;
     },
     async setState(id: string, state: MemoryIndexState, error?: string): Promise<boolean> {
       if (!(await owns(id))) return false;
-      return indexes.setState(id, state, error);
+      const saved = await indexes.setState(id, state, error);
+      if (saved) publishMemoryUpdated(bus, { scope: 'indexes', action: 'update', id });
+      return saved;
     },
     async replaceChunks(
       indexId: string,
@@ -195,13 +244,19 @@ function scopedIndexes(
  * Хост создаёт обёртку **на плагин** (namespace навязывается здесь) и кладёт
  * её в фасад (`facade.memory`). Плагин получает те же методы порта, но видит
  * только свою память.
+ *
+ * `bus` — шина инстанса для `memory.updated` (инвариант 27): каждая успешная
+ * запись в память публикует событие — иначе мутация плагина или агента не
+ * доходит до второго клиента. Не задана — публикации нет (тесты, сторонние
+ * потребители; поведение прежнее).
  */
 export function createScopedMemory(
   pluginName: string,
   ports: PluginMemoryPorts,
+  bus?: InstanceEventPublisherLike | null,
 ): PluginMemoryPorts {
   return {
-    facts: scopedFacts(pluginName, ports.facts),
-    indexes: scopedIndexes(pluginName, ports.indexes),
+    facts: scopedFacts(pluginName, ports.facts, bus),
+    indexes: scopedIndexes(pluginName, ports.indexes, bus),
   };
 }
