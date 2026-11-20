@@ -439,12 +439,25 @@ export const synthAgentGetTool: ToolDefinition = {
       return fail('agent.not_found', { id: params.id, available: availableIds(state) || '—' });
     }
 
-    const file = roleFileName(agent);
+    const baseFile = roleFileName(agent);
     let roleContent: { content: string; isSystem: boolean } | null = null;
+    let roleFile = baseFile;
     if (extra.contextConfig) {
+      // Роль грузится **с учётом локали** (`getRolePrompt` смотрит сначала
+      // override, потом встроенный `ROLE.<lang>.md`), поэтому проверка одного
+      // базового имени давала ложное `exists: false` для всех встроенных ролей
+      // (`KEEPER.ru.md`). Перебираем кандидатов и отдаём **фактически найденный** файл.
+      const stem = baseFile.replace(/\.md$/, '');
+      const candidates = [baseFile, `${stem}.ru.md`, `${stem}.en.md`];
       try {
-        const found = extra.contextConfig.getFile(file, 'role');
-        roleContent = found ? { content: found.content, isSystem: found.isSystem } : null;
+        for (const candidate of candidates) {
+          const found = extra.contextConfig.getFile(candidate, 'role');
+          if (found) {
+            roleContent = { content: found.content, isSystem: found.isSystem };
+            roleFile = candidate;
+            break;
+          }
+        }
       } catch {
         roleContent = null;
       }
@@ -452,7 +465,7 @@ export const synthAgentGetTool: ToolDefinition = {
     const bytes = roleContent ? byteSize(roleContent.content) : null;
     const truncated = roleContent !== null && bytes !== null && bytes > MAX_ROLE_BYTES;
     const role = {
-      file,
+      file: roleFile,
       exists: roleContent !== null,
       bytes,
       ...(roleContent ? { source: roleContent.isSystem ? 'system' : 'override' } : {}),

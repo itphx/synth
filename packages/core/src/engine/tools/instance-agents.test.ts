@@ -198,6 +198,19 @@ describe('synth_agent_list / synth_agent_get', () => {
     expect((withBody.metadata?.role as Record<string, unknown>).content).toBe('Ты админ.');
   });
 
+  it('get: локализованная роль считается найденной (файл — фактически применённый)', async () => {
+    // Роль грузится с учётом локали: встроенный `KEEPER.md` может отсутствовать,
+    // а применяется `KEEPER.ru.md` — отчёт тула не должен врать про `exists: false`.
+    const roleFiles = makeRoleFiles({ 'KEEPER.ru.md': 'Ты хранитель.' });
+    const ctx = makeCtx({ store: makeStore(), roleFiles });
+
+    const result = await synthAgentGetTool.execute({ id: 'keeper', include_role: true }, ctx);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.metadata?.role).toMatchObject({ file: 'KEEPER.ru.md', exists: true });
+    expect((result.metadata?.role as Record<string, unknown>).content).toBe('Ты хранитель.');
+  });
+
   it('get: неизвестный id → agent.not_found со списком доступных', async () => {
     const result = await synthAgentGetTool.execute({ id: 'nope' }, makeCtx({ store: makeStore() }));
 
