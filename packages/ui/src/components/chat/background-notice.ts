@@ -25,8 +25,13 @@
  */
 export type BackgroundNoticeKind = 'process' | 'subagent' | 'terminal';
 
-/** Терминальное состояние фонового прогона. */
-export type BackgroundNoticeState = 'completed' | 'failed' | 'cancelled';
+/**
+ * Терминальное состояние фонового прогона.
+ *
+ * `limit` — прогон закрыт по лимиту шагов агента: работа завершена (не ошибка),
+ * но с ограничением — подпись блока говорит об этом отдельно.
+ */
+export type BackgroundNoticeState = 'completed' | 'failed' | 'cancelled' | 'limit';
 
 /** Максимальная длина имени прогона в подписи блока. */
 const MAX_NAME_LENGTH = 80;
@@ -135,7 +140,7 @@ export function resolveBackgroundState(
   metadata: Record<string, unknown> | null | undefined,
 ): BackgroundNoticeState {
   const state = metadata?.state;
-  if (state === 'failed' || state === 'cancelled') return state;
+  if (state === 'failed' || state === 'cancelled' || state === 'limit') return state;
   return 'completed';
 }
 
@@ -143,10 +148,11 @@ export function resolveBackgroundState(
  * Успешное терминальное состояние прогона.
  *
  * Для шелл-процесса успех в конверте модели обозначен как «exited», в
- * `metadata` — как «completed» (единая нормализация).
+ * `metadata` — как «completed» (единая нормализация). `limit` — тоже не
+ * ошибка: прогон завершён, просто частично (отчёт по лимиту шагов есть).
  */
 export function isBackgroundSuccess(state: BackgroundNoticeState): boolean {
-  return state === 'completed';
+  return state === 'completed' || state === 'limit';
 }
 
 /**

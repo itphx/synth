@@ -170,7 +170,13 @@ export function partToToolCall(part: LivePart): LiveToolCall | null {
   const rawResult = d.result as
     | { content: string; isError?: boolean; metadata?: Record<string, unknown> }
     | undefined
-  const status = d.status === 'done' || rawResult ? 'done' : 'running'
+  // `queued` — посеянная после reload карточка нестартовавшего вызова;
+  // результат (если он всё-таки есть) всё равно даёт `done`.
+  const status: LiveToolCall['status'] = d.status === 'done' || rawResult
+    ? 'done'
+    : d.status === 'queued'
+      ? 'queued'
+      : 'running'
   return {
     callId: part.id,
     name,

@@ -28,6 +28,7 @@ import { useI18n, useResolveI18n } from '@/lib/i18n'
 import type { MessageData, LiveToolCall, ReasoningBlockData, IntermediateTextBlockData, StreamRetry } from '@/stores/chatStore'
 import { buildPartsView, resolveLiveParts } from '@/lib/messageParts'
 import { buildUsageSegments } from '@/lib/statsSegments'
+import { normalizeStopReason, stopReasonInfo, type StopSeverity } from '@/lib/stopReason'
 import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { StatsPopoverButton } from './StatsPopoverButton'
 import { synthApi } from '@/lib/api/synthApi'
@@ -112,22 +113,15 @@ function extractExecutionStoppedBody(content: string): string | null {
 }
 
 /**
- * PROP-143: известные коды причины остановки (`metadata.reason`).
- *
- * Неизвестный код (ядро новее UI) деградирует на «внутренняя ошибка» — иначе
- * в подписи оказался бы сырой i18n-ключ.
+ * PROP-143: вариант `Notice` по тону причины остановки (`lib/stopReason.ts`).
+ * Штатное завершение ограничителем — не ошибка (янтарный блок), остановка
+ * человеком — нейтральный системный блок.
  */
-const STOP_REASONS = new Set([
-  'provider_error',
-  'steps_limit',
-  'context_budget',
-  'stopped_by_user',
-  'denied',
-  'empty',
-  'internal',
-  'restart',
-  'orphaned',
-])
+const STOP_NOTICE_VARIANT: Record<StopSeverity, NoticeVariant> = {
+  error: 'error',
+  warning: 'warning',
+  neutral: 'info',
+}
 
 interface ChatMessageProps {
   message: MessageData
@@ -587,6 +581,9 @@ function ChatMessageInner({
     if (!meta && prompt == null && liveReasoning.length === 0 && liveTexts.length === 0) {
       return null
     }
+    // `queued` (вызов `task` ещё не стартовал — ждёт барьер/подтверждение/соседа
+    // по батчу) живым прогоном не считается: ни кнопки «В фон», ни плашки
+    // повтора — но карточка остаётся в ходе (ниже `regularCalls`/`items`).
     const running = tc.status === 'running'
     const metaToolCalls = meta?.tool_calls as SubagentPartData['tool_calls']
     /**
@@ -775,24 +772,44 @@ function ChatMessageInner({
   // PROP-143: durable-запись о причине остановки хода — центрированный
   // служебный блок (как сообщение планировщика и завершение фонового прогона):
   // автор остановки — система (`System`), а не текущий пользователь.
-  // Подпись — человеческая причина (`metadata.reason`) и модель хода; тело —
-  // сырой текст провайдера из конверта `<execution_stopped …>` (сам конверт
-  // модели в UI не показываем, как у таймера).
+  // Подпись и тон берутся из единой таблицы причин (`lib/stopReason.ts`):
+  // штатный лимит шагов — «Завершено с ограничением» (янтарный), а не красная
+  // ошибка. Тело конверта `<execution_stopped …>` показывается только там, где
+  // в нём настоящий текст провайдера (`provider_error`); у остальных причин это
+  // машинный EN-текст движка — в ленте он выглядел «ошибкой из ничего».
+  // Модель хода в подписи не дублируется — она идёт в правую часть блока
+  // (`Notice` → `meta`) рядом с временем. Взять её из `MessageHeader` нельзя:
+  // у служебной записи `role: 'user'`, а бейдж модели там для user-сообщений
+  // не рисуется (PROP-143); пустое значение не выводится.
   if (isExecutionStopped) {
     const stopMeta = message.metadata ?? undefined
     const reason = typeof stopMeta?.reason === 'string' ? stopMeta.reason : ''
-    const model = typeof stopMeta?.model === 'string' ? stopMeta.model : ''
+    const normalized = normalizeStopReason(reason)
+    const stopInfo = stopReasonInfo(reason)
+    const severity = stopInfo.severity
+    // Исход лимита шагов: поле `report_delivered` ядро присылает не всегда
+    // (старые записи) — отсутствие поля трактуем как «отчёта нет».
+    const reportDelivered = typeof stopMeta?.report_delivered === 'boolean'
+      ? stopMeta.report_delivered
+      : undefined
+    const stepsLimitNoReport = normalized === 'steps_limit' && reportDelivered !== true
+    const reasonLabel = t(
+      stepsLimitNoReport
+        ? 'chat.notice.stopReason.stepsLimitNoReport'
+        : normalized === 'steps_limit'
+          ? 'chat.notice.stopReason.stepsLimitDelivered'
+          : stopInfo.labelKey,
+    )
+    const labelTemplate = stepsLimitNoReport
+      ? 'chat.notice.executionStopped'
+      : severity === 'warning'
+        ? 'chat.notice.executionStoppedLimited'
+        : severity === 'neutral'
+          ? 'chat.notice.executionStoppedInterrupted'
+          : 'chat.notice.executionStopped'
+    const label = t(labelTemplate, { reason: reasonLabel })
     const attempts = typeof stopMeta?.attempts === 'number' ? stopMeta.attempts : undefined
     const retryable = typeof stopMeta?.retryable === 'boolean' ? stopMeta.retryable : undefined
-    const reasonLabel = t(
-      `chat.notice.stopReason.${reason && STOP_REASONS.has(reason) ? reason : 'internal'}`,
-    )
-    const label = [
-      t('chat.notice.executionStopped', { reason: reasonLabel }),
-      model,
-    ]
-      .filter(Boolean)
-      .join(' · ')
     const tooltip = t('chat.notice.executionStoppedMeta', {
       attempts: String(attempts ?? '-'),
       retryable:
@@ -802,7 +819,9 @@ function ChatMessageInner({
             ? t('chat.notice.no')
             : '-',
     })
-    const body = extractExecutionStoppedBody(displayContent)
+    const body = stopInfo.showProviderBody ? extractExecutionStoppedBody(displayContent) : null
+    /** Модель хода из метаданных записи (`metadata.model`) — в правой части блока. */
+    const stopModel = typeof stopMeta?.model === 'string' ? stopMeta.model : ''
 
     const selectionCheckboxEl = selectionMode ? (
       <div className="flex items-center self-stretch pr-1">
@@ -820,11 +839,19 @@ function ChatMessageInner({
 
     const stoppedEl = (
       <Notice
-        variant="error"
-        icon="error-warning"
+        variant={STOP_NOTICE_VARIANT[severity]}
         label={<span title={tooltip}>{label}</span>}
         ariaLabel={label}
-        meta={<MessageHeader message={message} metaOnly />}
+        meta={
+          <span className="inline-flex items-center gap-1.5">
+            {stopModel && (
+              <span data-testid="execution-stopped-model" className="text-muted-foreground/70">
+                {stopModel}
+              </span>
+            )}
+            <MessageHeader message={message} metaOnly />
+          </span>
+        }
         actions={
           actionsVisible ? (
             <MessageActions
@@ -1059,7 +1086,9 @@ function ChatMessageInner({
         ? t('chat.notice.backgroundState.failed')
         : state === 'cancelled'
           ? t('chat.notice.backgroundState.cancelled')
-          : t('chat.notice.backgroundState.completed')
+          : state === 'limit'
+            ? t('chat.notice.backgroundState.limit')
+            : t('chat.notice.backgroundState.completed')
     // Без имени («Фоновый процесс · ») убираем висящий разделитель.
     const relayedFrom = backgroundNoticeRelayedFrom(metadata)
     const relayedSuffix = relayedFrom

@@ -8,7 +8,7 @@ import { useI18n } from '@/lib/i18n'
  * единый центрированный блок. Текст внутри выровнен по левому краю, у блока
  * всегда есть шапка (иконка + подпись) и кнопка «Копировать».
  */
-export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'info' | 'scheduler' | 'process' | 'attachment' | 'timer' | 'session-moved'
+export type NoticeVariant = 'command' | 'summary' | 'debug' | 'error' | 'warning' | 'info' | 'scheduler' | 'process' | 'attachment' | 'timer' | 'session-moved'
 
 interface NoticeVariantStyle {
   /** Иконка по умолчанию. */
@@ -26,6 +26,9 @@ const VARIANT_STYLES: Record<NoticeVariant, NoticeVariantStyle> = {
   summary: { icon: 'subtract', box: 'bg-status-warning/5 border-status-warning/20 text-foreground' },
   debug: { icon: 'bug', box: 'bg-status-warning/5 border-status-warning/30 text-status-warning' },
   error: { icon: 'error-warning', box: 'bg-destructive/10 border-destructive/30 text-destructive' },
+  // PROP-143: штатное завершение ограничителем (лимит шагов/контекста/вывода,
+  // рестарт) — это не сбой: янтарный тон вместо красного.
+  warning: { icon: 'information', box: 'bg-status-warning/5 border-status-warning/20 text-status-warning' },
   info: { icon: 'information', box: 'bg-surface-inset border-border/30 text-muted-foreground', compact: true },
   // ADR-051: сообщения планировщика (source:'cron') — нейтральный системный блок
   // с иконкой расписания; иконка совпадает с вкладкой «Шедулер».

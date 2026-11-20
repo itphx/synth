@@ -63,6 +63,9 @@ const STATUS_CLASS: Record<string, string> = {
   completed: 'bg-status-success/15 text-status-success',
   failed: 'bg-destructive/15 text-destructive',
   cancelled: 'bg-muted text-muted-foreground',
+  // Лимит шагов: прогон закончился, но частично — предупреждающий цвет,
+  // как у потерянного (`orphaned`).
+  limit: 'bg-status-warning/15 text-status-warning',
   orphaned: 'bg-status-warning/15 text-status-warning',
 }
 

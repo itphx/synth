@@ -304,6 +304,7 @@ function statusFromState(state: unknown): BackgroundRunStatus {
     case 'completed':
     case 'failed':
     case 'cancelled':
+    case 'limit':
     case 'orphaned':
     case 'running':
       return state
@@ -317,6 +318,17 @@ function statusFromChildEvent(type: string): BackgroundRunStatus {
   if (type === 'child.failed') return 'failed'
   if (type === 'child.cancelled') return 'cancelled'
   return 'completed'
+}
+
+/**
+ * Статус из `state` терминального события.
+ *
+ * Тип `child.*` события не различает «завершён по лимиту шагов» (`child.completed`
+ * — тот же тип), поэтому явный `state: 'limit'` важнее типа события. Остальные
+ * статусы по-прежнему выводятся из типа — поведение не меняется.
+ */
+function statusFromChildTerminal(type: string, state: unknown): BackgroundRunStatus {
+  return state === 'limit' ? 'limit' : statusFromChildEvent(type)
 }
 
 /**
@@ -477,7 +489,7 @@ export const useProcessesStore = create<ProcessesState>()((set) => ({
     const terminal =
       type === 'process.exited' || type === 'process.stopped' || (isChild && type !== 'child.started')
     const status = isChild
-      ? type === 'child.started' ? 'running' : statusFromChildEvent(type)
+      ? type === 'child.started' ? 'running' : statusFromChildTerminal(type, payload.state)
       : terminal
         ? statusFromState(payload.state)
         : 'running'

@@ -7,8 +7,11 @@
  * которой больше нет (удалена/архивирована).
  *
  * PROP-143: durable-запись остановки (`metadata.type='execution_stopped'`) —
- * причина показа плашки «Продолжить»: по `provider_error`/`internal`/
- * `steps_limit`/`context_budget` кнопка есть, по `stopped_by_user` — нет.
+ * причина показа плашки «Продолжить»: кнопка есть только у сбоев прогона
+ * (`provider_error`/`internal`/`empty`); у причин-ограничителей
+ * (`steps_limit`/`context_budget`/`output_limit`) и у `stopped_by_user` её нет —
+ * продолжение идёт новым сообщением. Причину показывает служебный блок в ленте,
+ * плашка — только действие (текст причины не дублируется).
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { act } from 'react'
@@ -170,7 +173,9 @@ describe('ChatTab — вкладка дочерней сессии (PROP-142/143
   it('execution_stopped (provider_error) → плашка «Продолжить», клик зовёт resumeSubagent', async () => {
     const container = await mountSubagent('provider_error')
 
-    expect(container.textContent).toContain('Subagent stopped: provider error')
+    // Причина — в служебном блоке ленты, а не в плашке.
+    expect(container.textContent).toContain('Stopped: provider error')
+    expect(container.textContent).not.toContain('Subagent stopped')
     const btn = resumeButton(container)
     expect(btn).toBeTruthy()
 
@@ -183,10 +188,10 @@ describe('ChatTab — вкладка дочерней сессии (PROP-142/143
     expect(synthApi.resumeSubagent).toHaveBeenCalledWith(SESSION)
   })
 
-  it('execution_stopped (stopped_by_user) → плашка есть, «Продолжить» нет', async () => {
+  it('execution_stopped (stopped_by_user) → плашки нет, «Продолжить» нет', async () => {
     const container = await mountSubagent('stopped_by_user')
 
-    expect(container.textContent).toContain('Subagent stopped: stopped by the user')
+    expect(container.textContent).toContain('Interrupted: stopped by the user')
     expect(resumeButton(container)).toBeUndefined()
     expect(synthApi.resumeSubagent).not.toHaveBeenCalled()
   })

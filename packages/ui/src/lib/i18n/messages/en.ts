@@ -1144,6 +1144,8 @@ export const dict = {
   'leftPanel.attentionNeeded': 'Attention needed',
   'leftPanel.approvalNeeded': 'Approval needed',
   'leftPanel.answerReady': 'Answer ready',
+  'leftPanel.executionFailed': 'execution failed',
+  'leftPanel.workCompleted': 'work completed',
   'leftPanel.blocked': 'Blocked',
   'leftPanel.notifications': '{count} notif.',
   'leftPanel.showMore': 'Show {count} more',
@@ -1875,6 +1877,7 @@ export const dict = {
   'processes.status.completed': 'completed',
   'processes.status.failed': 'failed',
   'processes.status.cancelled': 'cancelled',
+  'processes.status.limit': 'completed with limits',
   'processes.status.orphaned': 'orphaned',
   'processes.action.stop': 'Stop',
   'processes.action.terminate': 'Terminate',
@@ -2103,11 +2106,15 @@ export const dict = {
   'chat.notice.info': 'Info',
   // PROP-143: durable stop-reason record — service block.
   'chat.notice.executionStopped': 'Stopped: {reason}',
+  'chat.notice.executionStoppedLimited': 'Finished with a limitation: {reason}',
+  'chat.notice.executionStoppedInterrupted': 'Interrupted: {reason}',
   'chat.notice.executionStoppedMeta': 'attempts: {attempts} · retryable: {retryable}',
   'chat.notice.yes': 'yes',
   'chat.notice.no': 'no',
   'chat.notice.stopReason.provider_error': 'provider error',
   'chat.notice.stopReason.steps_limit': 'step limit',
+  'chat.notice.stopReason.stepsLimitDelivered': 'step limit (report received)',
+  'chat.notice.stopReason.stepsLimitNoReport': 'step limit (no report)',
   'chat.notice.stopReason.context_budget': 'context budget',
   'chat.notice.stopReason.stopped_by_user': 'stopped by the user',
   'chat.notice.stopReason.denied': 'permission denied',
@@ -2151,6 +2158,7 @@ export const dict = {
   'chat.notice.backgroundState.completed': 'completed',
   'chat.notice.backgroundState.failed': 'failed',
   'chat.notice.backgroundState.cancelled': 'stopped',
+  'chat.notice.backgroundState.limit': 'completed with limits',
   // PROP-132: сообщение-контекст терминала (не «фоновый процесс»).
   'chat.notice.terminalContext': 'Terminal output',
   'chat.notice.terminalContextLines': '{count, plural, one {# line} other {# lines}}',
@@ -2176,6 +2184,12 @@ export const dict = {
     'Blocking runs moved to background automatically: {count}',
   // ADR-112: notification about a user question (the session is not open).
   'notify.question.asked': 'Agent is waiting for an answer: {name}',
+  // ADR-029: approval request in a session that is not open (no card on screen).
+  'notify.permission.asked': 'Approval required: {name}',
+  // Summary toast when the session list loads: the wait existed while the page
+  // was closed (the client never saw the event).
+  'notify.action.pendingApprovals': 'Awaiting approval: {count}',
+  'notify.action.queueStopped': 'Queue stopped — awaiting resumption',
   'notify.message.mentioned': 'You were mentioned in this session',
   'notify.steer.dropped.limit': 'Per-turn intervention limit: messages not applied — {count}',
   'notify.steer.dropped.aborted': 'Turn stopped — interventions not applied: {count}',
@@ -2243,11 +2257,14 @@ export const dict = {
 
   'chat.toolCall.iteration': 'Iteration {n}',
 
+  // ADR-118 (MESSAGE_FLOW §8.2 addendum): the call has not started yet — the
+  // core publishes `tool_call.started` at the actual start of execution.
+  'chat.tool.queued': 'waiting to start',
+
   'chat.subagent.title': 'Subagent',
   'chat.subagent.steps': 'steps',
   'chat.subagent.open': 'Open',
   'chat.subagent.errorStopped': 'Subagent stopped: provider error',
-  'chat.subagent.resumeStopped': 'Subagent stopped: {reason}',
   'chat.subagent.errorAttempts': 'attempts: {attempts}/{max}',
   'chat.subagent.resume': 'Resume',
   'chat.subagent.resuming': 'Resuming…',

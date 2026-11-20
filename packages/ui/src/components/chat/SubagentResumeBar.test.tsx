@@ -95,6 +95,7 @@ describe('SubagentResumeBar (B8: плашка в дочерней сессии �
       attempts: 1, maxRetries: 3, errorType: 'context_length',
     }, { onResume: () => {}, onStop: () => {} })
     expect(findBtn(container, 'Продолжить')).toBeUndefined()
+    expect(container.textContent).toContain('Сабагент остановлен')
   })
 
   it('нет ошибки → не рендерится', async () => {
@@ -131,50 +132,61 @@ describe('SubagentResumeBar (B8: плашка в дочерней сессии �
   })
 
   // PROP-143: durable-запись остановки (`metadata.type='execution_stopped'`).
-  it('execution_stopped (provider_error) → плашка с причиной + «Продолжить»', async () => {
+  // Плашка — только действие: причину уже показывает служебный блок в ленте,
+  // поэтому её текст здесь не дублируется.
+  it('execution_stopped (provider_error) → «Продолжить», тон сбоя, без текста причины', async () => {
     const container = await renderBar('child', {
       stopReason: 'provider_error',
       attempts: 3,
       maxRetries: 3,
       errorType: 'rate_limit',
     }, { onResume: () => {}, onStop: () => {} })
-    expect(container.textContent).toContain('Сабагент остановлен: ошибка провайдера')
     expect(findBtn(container, 'Продолжить')).toBeDefined()
+    // Дубля причины нет — ни подписи причины, ни фразы «Сабагент остановлен».
+    expect(container.textContent).not.toContain('ошибка провайдера')
+    expect(container.textContent).not.toContain('Сабагент остановлен')
+    // Длительность попыток осталась мелким шрифтом.
+    expect(container.textContent).toContain('попыток: 3/3')
+    // Тон — сбой (destructive).
+    expect(container.innerHTML).toContain('border-destructive/20')
   })
 
-  it('execution_stopped (steps_limit) → «Продолжить» есть', async () => {
+  it('execution_stopped (internal/empty) → «Продолжить» есть', async () => {
+    for (const reason of ['internal', 'empty']) {
+      const container = await renderBar('child', { stopReason: reason }, { onResume: () => {}, onStop: () => {} })
+      expect(findBtn(container, 'Продолжить'), reason).toBeDefined()
+    }
+  })
+
+  it('execution_stopped (steps_limit) → «Продолжить» НЕТ, плашки нет (причина уже в ленте)', async () => {
     const container = await renderBar('child', {
       stopReason: 'steps_limit',
     }, { onResume: () => {}, onStop: () => {} })
-    expect(container.textContent).toContain('Сабагент остановлен: лимит шагов')
-    expect(findBtn(container, 'Продолжить')).toBeDefined()
+    expect(findBtn(container, 'Продолжить')).toBeUndefined()
+    expect(container.textContent).toBe('')
   })
 
-  it('execution_stopped (stopped_by_user) → плашка есть, «Продолжить» нет', async () => {
+  it('execution_stopped (context_budget/output_limit/restart/denied/orphaned) → без действия и без плашки', async () => {
+    for (const reason of ['context_budget', 'output_limit', 'restart', 'denied', 'orphaned']) {
+      const container = await renderBar('child', { stopReason: reason }, { onResume: () => {}, onStop: () => {} })
+      expect(findBtn(container, 'Продолжить'), reason).toBeUndefined()
+      expect(container.textContent, reason).toBe('')
+    }
+  })
+
+  it('execution_stopped (stopped_by_user) → плашки нет (остановка человеком)', async () => {
     const container = await renderBar('child', {
       stopReason: 'stopped_by_user',
     }, { onResume: () => {}, onStop: () => {} })
-    expect(container.textContent).toContain('Сабагент остановлен: остановлено пользователем')
     expect(findBtn(container, 'Продолжить')).toBeUndefined()
+    expect(container.textContent).toBe('')
   })
 
   it('execution_stopped с неизвестной причиной → как internal, «Продолжить» есть', async () => {
     const container = await renderBar('child', {
       stopReason: 'что-то новое',
     }, { onResume: () => {}, onStop: () => {} })
-    expect(container.textContent).toContain('Сабагент остановлен: внутренняя ошибка')
     expect(findBtn(container, 'Продолжить')).toBeDefined()
-  })
-
-  // ADR-041: пустой финальный ответ модели — своя причина остановки (`empty`);
-  // продолжение по истории ребёнка осмысленно, поэтому «Продолжить» есть.
-  it('execution_stopped (empty) → плашка «пустой ответ модели» + «Продолжить»', async () => {
-    const container = await renderBar('child', {
-      stopReason: 'empty',
-      attempts: 3,
-      maxRetries: 3,
-    }, { onResume: () => {}, onStop: () => {} })
-    expect(container.textContent).toContain('Сабагент остановлен: пустой ответ модели')
-    expect(findBtn(container, 'Продолжить')).toBeDefined()
+    expect(container.textContent).not.toContain('внутренняя ошибка')
   })
 })

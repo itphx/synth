@@ -12,7 +12,16 @@ interface ToolCallData {
   args: Record<string, unknown>
   id?: string
   callId?: string
-  status?: 'running' | 'done'
+  /**
+   * Состояние вызова (ADR-118, addendum MESSAGE_FLOW §8.2):
+   * - `queued` — вызов ещё **не стартовал** (стоит за барьером, ждёт
+   *   подтверждения, ждёт медленного соседа по батчу): ядро публикует
+   *   `tool_call.started` в момент фактического старта, до него карточка
+   *   нейтральная и без индикатора работы;
+   * - `running` — вызов исполняется (`tool_call.started` пришёл);
+   * - `done` — исход известен (`tool_call.result`).
+   */
+  status?: 'queued' | 'running' | 'done'
   result?: {
     content: string
     isError?: boolean
@@ -243,11 +252,17 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
   const [detached, setDetached] = useState(false)
 
   const isError = toolCall.result?.isError
+  /** Вызов ещё не стартовал: нейтральная карточка без индикатора работы. */
+  const isQueued = toolCall.status === 'queued'
   const isRunning = toolCall.status === 'running'
+  // Результат закрывает карточку и у вызова без явного `done` (история до
+  // ADR-118): прежнее правило сохранено, `queued` его не ослабляет.
   const isDone = toolCall.status === 'done' || (!isRunning && !!toolCall.result)
   const started = toolCall.startedAt || toolCall.started_at
   const completed = toolCall.completedAt || toolCall.completed_at
-  const duration = formatDuration(started, completed)
+  // Длительности у нестартовавшего вызова нет: показывать «0ms»/время от
+  // посева — врать про исполнение.
+  const duration = isQueued ? '' : formatDuration(started, completed)
   const hasResult = !!toolCall.result?.content
   const isSubagent = toolCall.name === 'task'
 
@@ -293,18 +308,25 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
     ? 'text-status-error'
     : isSubagent
       ? 'text-primary'
-      : isRunning
-        ? ''
-        : isDone
+      : isQueued
+        ? 'text-muted-foreground/60'
+        : isRunning
           ? ''
-          : ''
+          : isDone
+            ? ''
+            : ''
 
-  const nameColor = isError ? 'text-status-error' : ''
+  const nameColor = isError
+    ? 'text-status-error'
+    : isQueued
+      ? 'text-muted-foreground/70'
+      : ''
 
   return (
     <div className={nested ? 'mb-1 ml-3' : plain ? 'mb-0' : 'mb-2'}>
       <div
         data-card="service"
+        data-tool-status={toolCall.status ?? ''}
         className={cn(
           'rounded-md border overflow-hidden',
           plain ? 'border-transparent' : 'border-border bg-muted'
@@ -332,6 +354,15 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
             {toolCall.iteration != null && (
               <span className="text-[0.625rem] opacity-40 shrink-0">
                 #{toolCall.iteration}
+              </span>
+            )}
+            {/* `queued`: вызов ещё не стартовал — подпись вместо индикатора работы. */}
+            {isQueued && (
+              <span
+                data-testid="tool-call-queued"
+                className="shrink-0 text-[0.625rem] text-muted-foreground/70"
+              >
+                {t('chat.tool.queued')}
               </span>
             )}
             {duration && (
@@ -393,9 +424,13 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
                 </button>
               </div>
             )}
-            {isRunning && (
+            {(isRunning || isQueued) && (
               <div className="flex items-center gap-0 border-b border-border/30">
-                <div className="px-3 py-1 text-[0.6875rem] font-medium text-status-info">
+                <div
+                  className={`px-3 py-1 text-[0.6875rem] font-medium ${
+                    isQueued ? 'text-muted-foreground' : 'text-status-info'
+                  }`}
+                >
                   {t('chat.toolCall.arguments')}
                 </div>
                 <button

@@ -1115,6 +1115,8 @@ export const dict = {
   'leftPanel.attentionNeeded': 'Требуется внимание',
   'leftPanel.approvalNeeded': 'Требуется подтверждения прав',
   'leftPanel.answerReady': 'Ответ готов',
+  'leftPanel.executionFailed': 'ошибка выполнения',
+  'leftPanel.workCompleted': 'работы завершены',
   'leftPanel.blocked': 'Заблокировано',
   'leftPanel.notifications': '{count} уведом.',
   'leftPanel.showMore': 'Показать ещё {count}',
@@ -1855,6 +1857,7 @@ export const dict = {
   'processes.status.completed': 'завершён',
   'processes.status.failed': 'ошибка',
   'processes.status.cancelled': 'остановлен',
+  'processes.status.limit': 'завершён с ограничением',
   'processes.status.orphaned': 'потерян',
   'processes.action.stop': 'Остановить',
   'processes.action.terminate': 'Завершить',
@@ -2082,12 +2085,21 @@ export const dict = {
   'chat.notice.error': 'Ошибка',
   'chat.notice.info': 'Инфо',
   // PROP-143: durable-запись причины остановки хода — служебный блок.
+  // Подпись собирается по тону причины (`lib/stopReason.ts`): сбой —
+  // «Остановлено», штатное завершение ограничителем — «Завершено с
+  // ограничением», решение человека — «Прервано».
   'chat.notice.executionStopped': 'Остановлено: {reason}',
+  'chat.notice.executionStoppedLimited': 'Завершено с ограничением: {reason}',
+  'chat.notice.executionStoppedInterrupted': 'Прервано: {reason}',
   'chat.notice.executionStoppedMeta': 'попыток: {attempts} · повтор возможен: {retryable}',
   'chat.notice.yes': 'да',
   'chat.notice.no': 'нет',
   'chat.notice.stopReason.provider_error': 'ошибка провайдера',
   'chat.notice.stopReason.steps_limit': 'лимит шагов',
+  // Исход лимита шагов по факту доставки отчёта (`metadata.report_delivered`):
+  // отчёт получен — ограничение, отчёта нет — остановка.
+  'chat.notice.stopReason.stepsLimitDelivered': 'лимит шагов (отчёт получен)',
+  'chat.notice.stopReason.stepsLimitNoReport': 'лимит шагов (отчёта нет)',
   'chat.notice.stopReason.context_budget': 'бюджет контекста',
   'chat.notice.stopReason.stopped_by_user': 'остановлено пользователем',
   'chat.notice.stopReason.denied': 'отказ в правах',
@@ -2132,6 +2144,7 @@ export const dict = {
   'chat.notice.backgroundState.completed': 'завершён',
   'chat.notice.backgroundState.failed': 'ошибка',
   'chat.notice.backgroundState.cancelled': 'остановлен',
+  'chat.notice.backgroundState.limit': 'завершён с ограничением',
   // PROP-132: сообщение-контекст терминала (не «фоновый процесс»).
   'chat.notice.terminalContext': 'Содержимое терминала',
   'chat.notice.terminalContextLines': '{count, plural, one {# строка} few {# строки} many {# строк}}',
@@ -2158,6 +2171,12 @@ export const dict = {
     'Блокирующие прогоны автоматически переведены в фон: {count}',
   // ADR-112: уведомление о вопросе пользователю (сессия не открыта).
   'notify.question.asked': 'Агент ждёт ответа: {name}',
+  // ADR-029: запрос подтверждения прав в неоткрытой сессии (карточки не видно).
+  'notify.permission.asked': 'Требуется подтверждение: {name}',
+  // Сводный тост при загрузке списка сессий: ожидание висело, пока страница
+  // была закрыта (событие клиент не увидел).
+  'notify.action.pendingApprovals': 'Ждут подтверждения: {count}',
+  'notify.action.queueStopped': 'Очередь остановлена — ждёт продолжения',
   'notify.message.mentioned': 'Вас упомянули в сессии',
   'notify.steer.dropped.limit': 'Лимит вмешательств на ход: не применено сообщений — {count}',
   'notify.steer.dropped.aborted': 'Ход остановлен — не применено вмешательств: {count}',
@@ -2223,11 +2242,14 @@ export const dict = {
 
   'chat.toolCall.iteration': 'Итерация {n}',
 
+  // ADR-118 (addendum MESSAGE_FLOW §8.2): вызов ещё не стартовал — ядро
+  // публикует `tool_call.started` в момент фактического старта.
+  'chat.tool.queued': 'ожидает запуска',
+
   'chat.subagent.title': 'Сабагент',
   'chat.subagent.steps': 'шагов',
   'chat.subagent.open': 'Открыть',
   'chat.subagent.errorStopped': 'Сабагент остановлен: ошибка провайдера',
-  'chat.subagent.resumeStopped': 'Сабагент остановлен: {reason}',
   'chat.subagent.errorAttempts': 'попыток: {attempts}/{max}',
   'chat.subagent.resume': 'Продолжить',
   'chat.subagent.resuming': 'Возобновление…',
