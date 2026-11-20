@@ -3293,6 +3293,7 @@ export const dict = {
   'admin.agents.cap.terminal': 'терминал',
   'admin.agents.cap.agents': 'реестр агентов',
   'admin.agents.cap.sessions': 'сессии инстанса',
+  'admin.agents.cap.diagnostics': 'диагностика сессий',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',
@@ -3991,6 +3992,21 @@ export const dict = {
   'session.resume.ok': 'Сессия {id} возобновлена (режим: {mode}).',
   'session.resume.notice':
     'Продолжи прерванную задачу с того места, где остановился. Не начинай работу заново: сначала проверь текущее состояние, потом продолжай.',
+
+  // --- Диагностика сессии (только чтение) ---
+  // Тул `synth_session_inspect`/`synth_permission_journal`/`synth_session_pending`/
+  // `synth_session_history`: en-шаблоны — в `engine/system-messages.ts`.
+  'diagnostics.tool.deps_unavailable': 'Диагностика сессий недоступна в этой сборке ({tool})',
+  'diagnostics.session.inspect': 'Диагностика сессии {id}:\n{json}',
+  'diagnostics.session.inspect_list': 'Диагностика сессий ({count}):\n{json}',
+  'diagnostics.permission.journal': 'Решения по подтверждениям прав ({count}):\n{json}',
+  'diagnostics.permission.journal_empty':
+    'Решений в журнале нет для доступных вам сессий (журнал пуст или ни одна его запись не относится к сессии, которую вы можете читать).',
+  'diagnostics.pending.list': 'Ожидают подтверждения ({count}):\n{json}',
+  'diagnostics.pending.empty': 'Ожиданий нет: ничего не ждёт решения.',
+  'diagnostics.history.summary':
+    'Хвост истории сессии {id} (последние {tail} из {total} сообщений):\n{json}',
+  'diagnostics.history.empty': 'В истории сессии {id} нет сообщений.',
 
   // --- Сабагент (task) ---
   'task.stopped_by_user': 'Задача остановлена пользователем',

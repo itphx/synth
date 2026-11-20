@@ -2,11 +2,12 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { join } from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { PermissionEvaluator, extractPaths, isInsideWorkingDir } from './evaluator.js';
+import { PermissionEvaluator, extractPaths, isInsideWorkingDir, isPlanBlockedTool } from './evaluator.js';
 import { applySubagentRoleDenies, deriveSubagentPermission } from './derive.js';
 import { resolveEffectivePermission } from './effective.js';
+import { DIAGNOSTICS_TOOLS, PERMISSION_GROUP_ORDER, getToolGroups } from './groups.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
-import { globMatch } from '@itphx/synth-shared';
+import { ToolCapability, globMatch } from '@itphx/synth-shared';
 import { shellGrantPlan, type ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
 const CWD = '/workspace/project';
@@ -1387,5 +1388,62 @@ describe('PermissionEvaluator — снятие dynamic-ask каталогом (s
       askTimeoutMs: 30_000,
     }, command);
     expect(d.action).not.toBe('allow');
+  });
+});
+
+/**
+ * Группа `diagnostics` — диагностика сессии из чата (`synth_session_inspect`,
+ * `synth_permission_journal`, `synth_session_pending`, `synth_session_history`).
+ *
+ * Все четыре тула только читают хранилище, поэтому:
+ * - в plan-режиме группа **не** блокируется (ADR-025: план запрещает запись, а
+ *   не наблюдение) — и по имени тула, и в целом (write-списка у группы нет);
+ * - правило `permission.rules.diagnostics` срабатывает и по именам встроенных
+ *   тулов, и по capability `diagnostics` (плагинный тул с той же capability),
+ *   как у групп `instance`/`agents`/`sessions`;
+ * - имена группы не пересекаются с другими группами (порядок проверки правил
+ *   не сдвигается, группа стоит в конце `PERMISSION_GROUP_ORDER`).
+ */
+describe('группа diagnostics (диагностика сессии)', () => {
+  it('в plan-режиме тулы диагностики разрешены', () => {
+    const evaluator = new PermissionEvaluator({ rules: {}, askTimeoutMs: 0 });
+    for (const name of DIAGNOSTICS_TOOLS) {
+      expect(isPlanBlockedTool(name), name).toBe(false);
+      const decision = evaluator.check({
+        toolName: name,
+        params: {},
+        workingDir: CWD,
+        capabilities: [ToolCapability.DIAGNOSTICS],
+        sessionMode: 'plan',
+      });
+      expect(decision.action, name).toBe('allow');
+      expect(decision.unavailable, name).toBeUndefined();
+    }
+  });
+
+  it('правило `diagnostics` матчится по имени встроенного тула', () => {
+    const cfg: PermissionConfig = { rules: { diagnostics: 'deny' }, askTimeoutMs: 30_000 };
+    for (const name of DIAGNOSTICS_TOOLS) {
+      const d = evalCheck(cfg, name, {});
+      expect(d.action, name).toBe('deny');
+      expect(d.matchedRule, name).toBe('diagnostics');
+    }
+  });
+
+  it('правило `diagnostics` матчится по capability (плагинный тул)', () => {
+    const cfg: PermissionConfig = { rules: { diagnostics: 'ask' }, askTimeoutMs: 30_000 };
+    const decision = evalCheck(cfg, 'vendor_diagnostics_dump', {}, [ToolCapability.DIAGNOSTICS]);
+    expect(decision.action).toBe('ask');
+    expect(decision.matchedRule).toBe('diagnostics');
+    // Без capability диагностики то же имя правила не срабатывает.
+    const other = evalCheck(cfg, 'vendor_diagnostics_dump', {}, [ToolCapability.WEB]);
+    expect(other.action).toBe('allow');
+  });
+
+  it('имена группы не входят в другие группы, группа стоит в конце порядка', () => {
+    for (const name of DIAGNOSTICS_TOOLS) {
+      expect(getToolGroups(name, [ToolCapability.DIAGNOSTICS]), name).toEqual(['diagnostics']);
+    }
+    expect(PERMISSION_GROUP_ORDER.at(-1)).toBe('diagnostics');
   });
 });

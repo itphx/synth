@@ -767,6 +767,17 @@ export const ENGINE_MESSAGE_KEYS = [
   'maintenance.restart_unsupported',
   'maintenance.restart.failed',
   'maintenance.audit.list',
+  // Диагностика сессии (только чтение): `synth_session_inspect`,
+  // `synth_permission_journal`, `synth_session_pending`, `synth_session_history`.
+  'diagnostics.tool.deps_unavailable',
+  'diagnostics.session.inspect',
+  'diagnostics.session.inspect_list',
+  'diagnostics.permission.journal',
+  'diagnostics.permission.journal_empty',
+  'diagnostics.pending.list',
+  'diagnostics.pending.empty',
+  'diagnostics.history.summary',
+  'diagnostics.history.empty',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -1490,6 +1501,15 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'maintenance.restart_unsupported': ["mode","reason"],
   'maintenance.restart.failed': ["error"],
   'maintenance.audit.list': ["count","json"],
+  'diagnostics.tool.deps_unavailable': ["tool"],
+  'diagnostics.session.inspect': ["id","json"],
+  'diagnostics.session.inspect_list': ["count","json"],
+  'diagnostics.permission.journal': ["count","json"],
+  'diagnostics.permission.journal_empty': [],
+  'diagnostics.pending.list': ["count","json"],
+  'diagnostics.pending.empty': [],
+  'diagnostics.history.summary': ["id","json","tail","total"],
+  'diagnostics.history.empty': ["id"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

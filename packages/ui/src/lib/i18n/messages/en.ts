@@ -3279,6 +3279,7 @@ export const dict = {
   'admin.agents.cap.terminal': 'terminal',
   'admin.agents.cap.agents': 'agent registry',
   'admin.agents.cap.sessions': 'instance sessions',
+  'admin.agents.cap.diagnostics': 'session diagnostics',
 
   // Subagent fields
   'admin.agents.agentMode': 'Agent type',

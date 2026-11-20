@@ -1869,6 +1869,16 @@ export async function createBackendDeps(
     // ADR-090: тот же реестр, что у фасада плагинов
     // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
     promptBlocks,
+    // Диагностика сессии из чата (только чтение): `synth_session_inspect`,
+    // `synth_permission_journal`, `synth_session_pending`,
+    // `synth_session_history`. Порты — те же, что у HTTP-чтений (журнал
+    // решений — `securityAudit`, ожидания — `StorageContext.pendingApprovals`),
+    // база правил — конфиг инстанса. В деградированном режиме порты не
+    // передаются (fail-closed, ADR-098).
+    diagnostics: {
+      ...(storageDegraded ? {} : { securityAudit, pendingApprovals: storageContext.pendingApprovals }),
+      getInstancePermission: () => config.synth.permission,
+    },
     mcpManager,
     // Workstream A1: реестр MCP и снимок инстанса — read-only тулы
     // `synth_info`/`synth_mcp_list`/`synth_mcp_test`. Политика читается live.

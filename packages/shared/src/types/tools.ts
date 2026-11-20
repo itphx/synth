@@ -151,6 +151,24 @@ export const ToolCapability = {
    * меняет.
    */
   SESSIONS: 'sessions',
+  /**
+   * Диагностика сессии (только чтение): тулы `synth_session_inspect`,
+   * `synth_permission_journal`, `synth_session_pending`, `synth_session_history`.
+   *
+   * Отдельная capability, а не расширение `sessions`: `sessions` — обзор и
+   * **управление** работой инстанса (снимок, «Стоп», возобновление), а здесь —
+   * разбор «почему спросило / почему отказало»: эффективные правила прав с
+   * указанием источника, журнал решений по подтверждениям, ожидающие
+   * подтверждения и сводка хвоста истории. У диагностики свой набор доступа
+   * (владелец сессии, `ADMIN`, `AUDITOR`) и своя группа правил
+   * (`permission.rules.diagnostics`), поэтому смешивать её с `sessions`
+   * нельзя.
+   *
+   * Capability **не** привязана к рабочему каталогу проекта
+   * (`WORKSPACE_CAPABILITIES`) — диагностика доступна и без workspace, и
+   * разрешена в plan-режиме: все четыре тула только читают.
+   */
+  DIAGNOSTICS: 'diagnostics',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -213,6 +231,11 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.SESSIONS]: {
     label: 'Сессии инстанса',
     description: 'synth_sessions_active, synth_session_stop, synth_session_resume',
+  },
+  [ToolCapability.DIAGNOSTICS]: {
+    label: 'Диагностика сессий',
+    description:
+      'synth_session_inspect, synth_permission_journal, synth_session_pending, synth_session_history (только чтение)',
   },
 };
 

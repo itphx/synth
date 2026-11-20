@@ -1030,6 +1030,24 @@ export const SYSTEM_MESSAGES = {
   'maintenance.restart.failed': 'Error: restart request failed: {error}',
   'maintenance.audit.list': 'Maintenance journal ({count}):\n{json}',
 
+  // --- Диагностика сессии (только чтение) ---
+  // `synth_session_inspect`/`synth_permission_journal`/`synth_session_pending`/
+  // `synth_session_history`: разбор «почему спросило / почему отказало».
+  // Снимки — метаданные и решения, без секретов; текст сообщений истории —
+  // только по явному `include_text`.
+  'diagnostics.tool.deps_unavailable':
+    'Error: session diagnostics are unavailable in this build ({tool})',
+  'diagnostics.session.inspect': 'Session diagnostics for {id}:\n{json}',
+  'diagnostics.session.inspect_list': 'Session diagnostics ({count}):\n{json}',
+  'diagnostics.permission.journal': 'Permission decisions ({count}):\n{json}',
+  'diagnostics.permission.journal_empty':
+    'No permission decisions in the journal for the visible sessions (the journal is empty or none of its entries belong to a session you can read).',
+  'diagnostics.pending.list': 'Pending approvals ({count}):\n{json}',
+  'diagnostics.pending.empty': 'No approvals are pending: nothing is waiting for a decision.',
+  'diagnostics.history.summary':
+    'History tail of session {id} (last {tail} of {total} messages):\n{json}',
+  'diagnostics.history.empty': 'Session {id} has no messages yet.',
+
   // --- Интерактивные терминалы (PROP-132, Ф5) ---
   'terminal.tool.deps_unavailable':
     'Error: the terminal service is not available in this session',

@@ -1976,6 +1976,19 @@ export async function createStandaloneDeps(
     // ADR-090: тот же реестр, что у фасада плагинов
     // (ниже, `PluginRuntime`) — блоки плагинов попадают в промпт сессии.
     promptBlocks,
+    // Диагностика сессии из чата (только чтение): `synth_session_inspect`,
+    // `synth_permission_journal`, `synth_session_pending`,
+    // `synth_session_history`. Порты — те же, что у HTTP-чтений (журнал решений
+    // `GET /api/v2/audit`-семейства — `securityAudit`; ожидания —
+    // `StorageContext.pendingApprovals`), база правил — конфиг инстанса (тот же
+    // `fallback`, что у `resolveEffectivePermission` в оркестраторе).
+    // В деградированном режиме порты **не передаются** (fail-closed): тулы
+    // ответят `diagnostics.tool.deps_unavailable`, а слой доступности и так
+    // скрывает их причиной `unavailable(storage)` (ADR-098).
+    diagnostics: {
+      ...(storageDegraded ? {} : { securityAudit, pendingApprovals: storageContext.pendingApprovals }),
+      getInstancePermission: () => config.permissionConfig,
+    },
     projectStore,
     // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
     profilesStore,

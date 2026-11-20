@@ -23,7 +23,8 @@
     "todo",
     "process",
     "schedule",
-    "sessions"
+    "sessions",
+    "diagnostics"
   ],
   "icon": "tools",
   "color": "--syntax-function",

@@ -230,6 +230,27 @@ export const SESSIONS_WRITE_TOOLS = ['synth_session_stop', 'synth_session_resume
 export const SESSIONS_TOOLS = [...SESSIONS_READ_TOOLS, ...SESSIONS_WRITE_TOOLS];
 
 /**
+ * Диагностика сессии — только чтение: `synth_session_inspect`,
+ * `synth_permission_journal`, `synth_session_pending`, `synth_session_history`.
+ *
+ * Отдельная группа, а не расширение `sessions`: `sessions` отвечает на вопрос
+ * «кто работает и останови его», эта — «почему спросило / почему отказало».
+ * Ключ группы совпадает со значением capability `diagnostics`, поэтому правило
+ * `permission.rules.diagnostics` работает и по именам встроенных тулов, и по
+ * capability плагинного тула (как `instance`/`agents`/`sessions`).
+ *
+ * Список **только read**: в plan-режиме группа разрешена целиком — write-списка
+ * у неё нет, поэтому в `isPlanBlockedTool` она не попадает (запись из этих
+ * тулов невозможна по конструкции: они читают хранилище и не мутируют его).
+ */
+export const DIAGNOSTICS_TOOLS = [
+  'synth_session_inspect',
+  'synth_permission_journal',
+  'synth_session_pending',
+  'synth_session_history',
+];
+
+/**
  * ADR-039: операционный список задач сессии (`session.todos`, не `project.plan`).
  *
  * Имена **уже** входят в `RUNTIME_TOOLS` — группа `runtime` продолжает их
@@ -337,6 +358,9 @@ export const PERMISSION_GROUPS: Record<string, string[]> = {
   // ADR-092: сессии инстанса — обзор и управление (ключ совпадает с
   // capability `sessions`).
   sessions: SESSIONS_TOOLS,
+  // Диагностика сессии — только чтение (ключ совпадает с capability
+  // `diagnostics`). Записи у группы нет: в plan-режиме разрешена целиком.
+  diagnostics: DIAGNOSTICS_TOOLS,
   // ADR-039: список задач сессии (ключ совпадает с capability `todo`).
   // Имена дублируются в `runtime` намеренно: тул принадлежит обеим группам.
   todo: TODO_TOOLS,
@@ -388,6 +412,9 @@ export const PERMISSION_GROUP_ORDER: string[] = [
   // ADR-092: сессии инстанса — замыкает порядок (набор имён не пересекается
   // с прочими группами).
   'sessions',
+  // Диагностика сессии — в конце (набор имён не пересекается с прочими
+  // группами), чтобы новая группа не сдвигала порядок проверки старых.
+  'diagnostics',
 ];
 
 /** Имена параметров тулов, которые являются путями к файлам/директориям. */

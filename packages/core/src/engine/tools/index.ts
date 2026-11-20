@@ -85,6 +85,17 @@ export type {
   SessionControlExtra,
   SubagentResumeOutcome,
 } from './instance-sessions.js';
+// Диагностика сессии (только чтение): эффективные права с источником,
+// журнал решений, ожидающие подтверждения, сводка хвоста истории
+// (`synth_session_inspect`/`synth_permission_journal`/`synth_session_pending`/
+// `synth_session_history`). Доступ — владелец сессии, ADMIN или AUDITOR.
+import {
+  synthSessionInspectTool,
+  synthPermissionJournalTool,
+  synthSessionPendingTool,
+  synthSessionHistoryTool,
+} from './instance-diagnostics.js';
+export type { DiagnosticsDeps, DiagnosticsExtra } from './instance-diagnostics.js';
 import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
 import {
   todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool,
@@ -262,6 +273,12 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   synthSessionsActiveTool,
   synthSessionStopTool,
   synthSessionResumeTool,
+  // Диагностика сессии (только чтение): права с источником, журнал решений,
+  // ожидающие подтверждения, сводка истории.
+  synthSessionInspectTool,
+  synthPermissionJournalTool,
+  synthSessionPendingTool,
+  synthSessionHistoryTool,
   taskTool,
   skillTool,
   classifyConversationTool,

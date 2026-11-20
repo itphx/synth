@@ -1784,6 +1784,16 @@
   «Стоп» — **общая** семантика с роутом `POST /:id/abort` через вынесенный
   `sessions/turn-abort.ts`, возобновление — цикл саб-агента либо служебное `resume_notice`
   в очередь, новой сессии не создаёт).
+  `instance-diagnostics.ts` — `synth_session_inspect`/`synth_permission_journal`/
+  `synth_session_pending`/`synth_session_history` (capability/группа `diagnostics`, только
+  чтение — в plan разрешена): эффективные `permission.rules` с источником ключа
+  (`session`/`parent`/`instance`) и источником `askTimeoutMs` (резолв —
+  `engine/permission/effective.ts`), журнал решений `scope:'permission'` (читается
+  `before` **и** `after`: `revoke` пишет данные в `before`), ожидания из порта
+  `pendingApprovals`, сводка хвоста истории (текст — только по `include_text`, с лимитами).
+  Доступ — владелец сессии **или** `isInstanceAdmin` **или** роль `AUDITOR`; список снимков
+  для elevated идёт через `SessionManager.listSessions`, иначе — `listVisibleSessions`;
+  секретов и текста сообщений в снимках нет.
   Атомарная мультифайловая правка — `patch` (`patch.ts`):
   JSON-массив `edits[]`, 1..50 правок за вызов, **всё-или-ничего** — все правки
   проверяются и применяются в памяти до записи, при любой ошибке ни один файл

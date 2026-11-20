@@ -31,7 +31,8 @@
     "todo",
     "instance",
     "agents",
-    "sessions"
+    "sessions",
+    "diagnostics"
   ],
   "icon": "robot-3",
   "color": "--status-success",

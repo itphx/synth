@@ -1,8 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { resolveEffectivePermission, MAX_PERMISSION_PARENT_DEPTH } from './effective.js';
 import { DEFAULT_ASK_TIMEOUT_MS, deriveSubagentPermission } from './derive.js';
 import type { PermissionChainSession } from './effective.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
+
+/** Сигнатура загрузчика сессии (как `SessionManager.getSession`). */
+type GetSession = (id: string) => Promise<PermissionChainSession | null | undefined>;
 
 const cfg = (rules: PermissionConfig['rules'], askTimeoutMs = 30_000): PermissionConfig => ({ rules, askTimeoutMs });
 
@@ -75,8 +78,9 @@ describe('resolveEffectivePermission — цепочка parentId (ADR-029, chain
       parent: {
         id: 'parent',
         parentId: 'root',
-        // `permission` без поля `askTimeoutMs` — как у старых документов.
-        settings: { permission: { rules: { read: 'allow' } } as PermissionConfig },
+        // `permission` без поля `askTimeoutMs` — как у старых документов
+        // (поэтому приведение через `unknown`: тип требует поле обязательным).
+        settings: { permission: { rules: { read: 'allow' } } as unknown as PermissionConfig },
       },
       root: { id: 'root', settings: { permission: cfg({}, 444) } },
     };
@@ -211,9 +215,9 @@ describe('resolveEffectivePermission × deriveSubagentPermission (роль са�
 // Проверка, что резолвер действительно не пишет в хранилище: единственный шов —
 // `getSession`, и он вызывается только на чтение.
 describe('resolveEffectivePermission — только чтение', () => {
-  let getSession: ReturnType<typeof vi.fn>;
+  let getSession: Mock<GetSession>;
   beforeEach(() => {
-    getSession = vi.fn(async (id: string) => ({ id, settings: {} }) as PermissionChainSession);
+    getSession = vi.fn<GetSession>(async (id: string) => ({ id, settings: {} }));
   });
   afterEach(() => {
     vi.restoreAllMocks();

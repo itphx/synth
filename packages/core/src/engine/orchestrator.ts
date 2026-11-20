@@ -51,6 +51,7 @@ import type { MaintenanceToolsDeps } from './tools/instance-maintenance.js';
 // `synth_session_stop`, `synth_session_resume`) — «Стоп» через тот же шов, что
 // у `POST /:id/abort`, возобновление — через funnel очереди.
 import type { SessionControlDeps } from './tools/instance-sessions.js';
+import type { DiagnosticsDeps } from './tools/instance-diagnostics.js';
 import type { AgentRegistry } from './agents/registry.js';
 import { DEFAULT_AGENT_ID, resolveAgentRoleAlias } from './agents/index.js';
 import type { McpManager } from './mcp/manager.js';
@@ -743,6 +744,15 @@ export interface OrchestratorOptions {
    * вернут `session.tool.deps_unavailable`.
    */
   sessionControl?: SessionControlDeps;
+  /**
+   * Диагностика сессии из чата (только чтение): `synth_session_inspect`,
+   * `synth_permission_journal`, `synth_session_pending`,
+   * `synth_session_history` — порты журнала решений (`securityAudit`) и
+   * ожиданий подтверждения (`pendingApprovals`) плюс база правил инстанса.
+   * Не задана — тулы ответят `diagnostics.tool.deps_unavailable` (в
+   * деградированном режиме порты не передаются — fail-closed).
+   */
+  diagnostics?: DiagnosticsDeps;
   mcpManager?: McpManager;
   /**
    * Workstream A1: клиент удалённого backend (гибрид) — read-only merge
@@ -1398,6 +1408,13 @@ export class ChatOrchestrator {
   private readonly _maintenance: MaintenanceToolsDeps | null;
   /** ADR-092: прокладка тулов сессий инстанса (null — тулы недоступны). */
   private readonly _sessionControl: SessionControlDeps | null;
+  /**
+   * Прокладка тулов диагностики сессии (`synth_session_inspect`,
+   * `synth_permission_journal`, `synth_session_pending`,
+   * `synth_session_history`) — порты журнала/ожиданий и база правил инстанса.
+   * `null` — тулы ответят `diagnostics.tool.deps_unavailable`.
+   */
+  private readonly _diagnostics: DiagnosticsDeps | null;
   /**
    * Роли, для которых уже предупреждали о фоллбеке на агента по умолчанию
    * (`_resolveAgentDefinition`): у старых сессий `settings.agentRole` может
@@ -2077,6 +2094,7 @@ export class ChatOrchestrator {
     this._agentStore = options.agentStore ?? null;
     this._maintenance = options.maintenance ?? null;
     this._sessionControl = options.sessionControl ?? null;
+    this._diagnostics = options.diagnostics ?? null;
     this._mcpManager = options.mcpManager ?? null;
     this._getRemoteClient = options.getRemoteClient ?? null;
     this._mcpRegistry = options.mcpRegistry ?? null;
@@ -7618,6 +7636,10 @@ export class ChatOrchestrator {
                   // `synth_session_stop`, `synth_session_resume`) — прокладка на
                   // точки сборки (тот же шов «Стоп», что у HTTP-роута).
                   sessionControl: this._sessionControl ?? undefined,
+                  // Диагностика сессии (только чтение): порты журнала решений и
+                  // ожиданий подтверждения + база правил инстанса. В деградированном
+                  // режиме порты не передаются (fail-closed).
+                  diagnostics: this._diagnostics ?? undefined,
                   sessionManager: this._sessionManager,
                   // ADR-089: funnel создания дочерней сессии (late-bound, если подключён).
                   getRequestSessionService: this._getRequestSessionService ?? undefined,

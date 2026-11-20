@@ -31,6 +31,12 @@ import {
   synthSessionStopTool,
   synthSessionResumeTool,
 } from '../tools/instance-sessions.js';
+import {
+  synthSessionInspectTool,
+  synthPermissionJournalTool,
+  synthSessionPendingTool,
+  synthSessionHistoryTool,
+} from '../tools/instance-diagnostics.js';
 import { computeToolAvailability } from '../permission/availability.js';
 import { isPlanBlockedTool } from '../permission/evaluator.js';
 import { INSTANCE_WRITE_TOOLS, getToolGroups } from '../permission/groups.js';
@@ -368,5 +374,91 @@ describe('Дефолтные агенты — capability sessions (обзор и
     expect(isPlanBlockedTool(synthSessionStopTool.name, synthSessionStopTool.capabilities)).toBe(true);
     expect(isPlanBlockedTool(synthSessionResumeTool.name, synthSessionResumeTool.capabilities)).toBe(true);
     expect(getToolGroups(synthSessionsActiveTool.name, synthSessionsActiveTool.capabilities)).toContain('sessions');
+  });
+});
+
+/**
+ * Capability `diagnostics` — диагностика сессии из чата (**только чтение**):
+ * `synth_session_inspect`, `synth_permission_journal`, `synth_session_pending`,
+ * `synth_session_history`. Отвечает на вопрос «почему спросило подтверждение /
+ * почему отказало / что с этой сессией» без HTTP и чтения файлов инстанса.
+ *
+ * Кому: `keeper` — обслуживание инстанса и есть сценарий разбора; плюс
+ * универсальные роли `leader`/`assistant`, у которых по инварианту есть **все**
+ * capability (`registry.test.ts` — «leader: все capability, кроме user»,
+ * `orchestrator-unknown-role.test.ts` — «assistant умеет всё»). Прочим ролям не
+ * выдаётся: разбор чужих сессий — операция инстанса, а не рядовая задача
+ * исполнителя (доступ к самим данным всё равно проверяет тул: владелец /
+ * `ADMIN` / `AUDITOR`).
+ */
+describe('Дефолтные агенты — capability diagnostics (диагностика сессии)', () => {
+  const agents = loadSystemAgentDefinitions();
+  const byId = new Map(agents.map((a) => [a.id, a]));
+  const DIAGNOSTICS_TOOL_DEFS = [
+    synthSessionInspectTool,
+    synthPermissionJournalTool,
+    synthSessionPendingTool,
+    synthSessionHistoryTool,
+  ];
+  /** Агенты, которым разбор чужих сессий не выдан (негативная сторона матрицы). */
+  const WITHOUT_DIAGNOSTICS = [
+    'fixer', 'tester', 'researcher', 'security-auditor', 'explore', 'general', 'title',
+  ];
+
+  it('keeper имеет capability diagnostics и видит все четыре тула', () => {
+    const keeper = byId.get('keeper');
+    expect(keeper, 'агент keeper не найден').toBeDefined();
+    expect(keeper!.capabilities).toContain(ToolCapability.DIAGNOSTICS);
+    for (const tool of DIAGNOSTICS_TOOL_DEFS) {
+      const availability = computeToolAvailability(tool.name, tool.capabilities, {
+        agentCapabilities: keeper!.capabilities,
+        sessionMode: 'act',
+      });
+      expect(availability.available, `keeper → ${tool.name}`).toBe(true);
+    }
+  });
+
+  it('универсальные роли (leader/assistant) тоже получают diagnostics', () => {
+    // Существующие инварианты: «leader — все capability, кроме user»
+    // (`registry.test.ts`) и «assistant умеет всё — роль-отказов нет»
+    // (`orchestrator-unknown-role.test.ts`). Новая capability без этих
+    // агентов ломает оба (проверено на срезе `diagnostics`).
+    for (const id of ['leader', 'assistant']) {
+      const agent = byId.get(id)!;
+      expect(agent.capabilities, id).toContain(ToolCapability.DIAGNOSTICS);
+      for (const tool of DIAGNOSTICS_TOOL_DEFS) {
+        const availability = computeToolAvailability(tool.name, tool.capabilities, {
+          agentCapabilities: agent.capabilities,
+          sessionMode: 'act',
+        });
+        expect(availability.available, `${id} → ${tool.name}`).toBe(true);
+      }
+    }
+  });
+
+  it.each(WITHOUT_DIAGNOSTICS)('%s без capability diagnostics → тулы недоступны по роли', (id) => {
+    const agent = byId.get(id);
+    expect(agent, `агент ${id} не найден`).toBeDefined();
+    expect(agent!.capabilities, id).not.toContain(ToolCapability.DIAGNOSTICS);
+    for (const tool of DIAGNOSTICS_TOOL_DEFS) {
+      const availability = computeToolAvailability(tool.name, tool.capabilities, {
+        agentCapabilities: agent!.capabilities,
+        sessionMode: 'act',
+      });
+      expect(availability.available, `${id} → ${tool.name}`).toBe(false);
+      expect(availability.reason, `${id} → ${tool.name}`).toBe('role');
+    }
+  });
+
+  it('тулы диагностики разрешены в plan-режиме (чтение) и лежат в группе diagnostics', () => {
+    for (const tool of DIAGNOSTICS_TOOL_DEFS) {
+      expect(isPlanBlockedTool(tool.name, tool.capabilities), tool.name).toBe(false);
+      expect(getToolGroups(tool.name, tool.capabilities), tool.name).toContain('diagnostics');
+      const availability = computeToolAvailability(tool.name, tool.capabilities, {
+        agentCapabilities: byId.get('keeper')!.capabilities,
+        sessionMode: 'plan',
+      });
+      expect(availability.available, tool.name).toBe(true);
+    }
   });
 });
