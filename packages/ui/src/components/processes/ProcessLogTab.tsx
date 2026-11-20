@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatStats'
 import { useNotification } from '@/hooks/useNotification'
 import { Icon } from '@/components/icon/Icon'
+import { AnsiText } from '@/components/ansi/AnsiText'
 import { Button } from '@/components/ui/button'
 import { useProcessesStore, processLogKey } from '@/stores/processesStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -73,6 +74,9 @@ export function ProcessLogTab({ tab }: { tab: CenterTab }) {
 
   // Выбранный поток вывода (`combined` по умолчанию).
   const [stream, setStream] = useState<ProcessLogStream>('combined')
+  // Раскраска ANSI-цветов в логе: по умолчанию включена (вывод читается как в
+  // терминале), выключается кнопкой — тогда текст плоский.
+  const [colors, setColors] = useState(true)
   const [missing, setMissing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [streamUnavailable, setStreamUnavailable] = useState(false)
@@ -351,6 +355,17 @@ export function ProcessLogTab({ tab }: { tab: CenterTab }) {
             >
               <Icon name="refresh" className="size-4" />
             </Button>
+            <Button
+              variant={colors ? 'outline-primary' : 'ghost'}
+              size="icon"
+              aria-pressed={colors}
+              onClick={() => setColors((value) => !value)}
+              title={t('processes.log.colorsHint')}
+              aria-label={t('processes.log.colors')}
+              data-testid="process-log-colors"
+            >
+              <Icon name="palette" className="size-4" />
+            </Button>
           </div>
         </div>
       </header>
@@ -388,7 +403,11 @@ export function ProcessLogTab({ tab }: { tab: CenterTab }) {
           className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-background p-4 font-mono text-xs text-foreground"
           data-testid="process-log-content"
         >
-          {logState?.content || t('processes.log.empty')}
+          {logState?.content ? (
+            <AnsiText text={logState.content} colors={colors} />
+          ) : (
+            t('processes.log.empty')
+          )}
         </pre>
       </div>
     </div>

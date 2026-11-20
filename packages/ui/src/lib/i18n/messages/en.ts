@@ -1904,6 +1904,9 @@ export const dict = {
   'processes.log.stream.stderr': 'stderr',
   'processes.log.streamUnavailable':
     'This run has no separate stream file (it started before stream separation) — use "All output".',
+  // ANSI colours in the output (SGR): toggle next to the log refresh button.
+  'processes.log.colors': 'Colors',
+  'processes.log.colorsHint': 'Colorize ANSI codes in the output (enabled by default)',
   'processes.stopped': 'Background run stopped',
   'processes.removed': 'Background run removed',
   'processes.failed': 'Action failed: {error}',

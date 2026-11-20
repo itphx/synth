@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatStats'
 import { useNotification } from '@/hooks/useNotification'
 import { Icon } from '@/components/icon/Icon'
+import { AnsiText } from '@/components/ansi/AnsiText'
 import { Button } from '@/components/ui/button'
 import { useProcessesStore } from '@/stores/processesStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -62,6 +63,8 @@ export function BlockingLogTab({ tab }: { tab: CenterTab }) {
   const [finished, setFinished] = useState(false)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  // Раскраска ANSI-цветов: по умолчанию включена (как в `ProcessLogTab`).
+  const [colors, setColors] = useState(true)
 
   /** Чтение отрезка с указанного смещения и дозапись в накопленный текст. */
   const fetchLog = useCallback(
@@ -242,6 +245,17 @@ export function BlockingLogTab({ tab }: { tab: CenterTab }) {
             >
               <Icon name="refresh" className="size-4" />
             </Button>
+            <Button
+              variant={colors ? 'outline-primary' : 'ghost'}
+              size="icon"
+              aria-pressed={colors}
+              onClick={() => setColors((value) => !value)}
+              title={t('processes.log.colorsHint')}
+              aria-label={t('processes.log.colors')}
+              data-testid="blocking-log-colors"
+            >
+              <Icon name="palette" className="size-4" />
+            </Button>
           </div>
         </div>
       </header>
@@ -272,7 +286,7 @@ export function BlockingLogTab({ tab }: { tab: CenterTab }) {
           className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words bg-background p-4 font-mono text-xs text-foreground"
           data-testid="blocking-log-content"
         >
-          {content || t('processes.log.empty')}
+          {content ? <AnsiText text={content} colors={colors} /> : t('processes.log.empty')}
         </pre>
       </div>
     </div>

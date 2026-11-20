@@ -303,6 +303,51 @@ describe('ProcessLogTab — экран вывода фонового прого�
     )
   })
 
+  it('ANSI-цвета: лог раскрашен, управляющих символов ESC в тексте нет', async () => {
+    useProcessesStore.getState().upsert(makeRun('bgr_1'))
+    mocks.getProcessLogs.mockResolvedValue({
+      content: '\u001b[32mPASS\u001b[0m a.test.ts\n\u001b[90m1 passed\u001b[39m\n',
+      offset: 0,
+      nextOffset: 40,
+      totalBytes: 40,
+      truncated: false,
+    })
+
+    const container = await renderTab(makeTab('bgr_1'))
+    const content = container.querySelector('[data-testid="process-log-content"]') as HTMLElement
+
+    expect(content.textContent).toContain('PASS a.test.ts')
+    expect(content.textContent).not.toContain('\u001b')
+    // 16 базовых цветов — классами темы, а не инлайном.
+    expect(content.querySelector('.text-ansi-green')).not.toBeNull()
+    expect(content.querySelector('.text-ansi-bright-black')).not.toBeNull()
+  })
+
+  it('выключение «Цветов» даёт плоский текст без раскраски', async () => {
+    useProcessesStore.getState().upsert(makeRun('bgr_1'))
+    mocks.getProcessLogs.mockResolvedValue({
+      content: '\u001b[31mfail\u001b[0m rest\n',
+      offset: 0,
+      nextOffset: 20,
+      totalBytes: 20,
+      truncated: false,
+    })
+
+    const container = await renderTab(makeTab('bgr_1'))
+    const toggle = container.querySelector('[data-testid="process-log-colors"]')
+    expect(toggle?.getAttribute('aria-pressed')).toBe('true')
+
+    await click(container, 'process-log-colors')
+
+    const content = container.querySelector('[data-testid="process-log-content"]') as HTMLElement
+    expect(
+      container.querySelector('[data-testid="process-log-colors"]')?.getAttribute('aria-pressed'),
+    ).toBe('false')
+    expect(content.textContent).toContain('fail rest')
+    expect(content.textContent).not.toContain('\u001b')
+    expect(content.querySelector('.text-ansi-red')).toBeNull()
+  })
+
   it('переключатель потоков отражает выбранный поток (aria-pressed)', async () => {
     useProcessesStore.getState().upsert(makeRun('bgr_1'))
 

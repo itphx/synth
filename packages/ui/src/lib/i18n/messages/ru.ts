@@ -1884,6 +1884,9 @@ export const dict = {
   'processes.log.stream.stderr': 'stderr',
   'processes.log.streamUnavailable':
     'У прогона нет отдельного файла потока (запущен до разделения потоков) — доступен «Весь вывод».',
+  // ANSI-цвета в выводе (SGR): переключатель рядом с обновлением лога.
+  'processes.log.colors': 'Цвета',
+  'processes.log.colorsHint': 'Раскрашивать ANSI-цвета в выводе (по умолчанию включено)',
   'processes.stopped': 'Фоновый прогон остановлен',
   'processes.removed': 'Запись фонового прогона удалена',
   'processes.failed': 'Не удалось выполнить действие: {error}',

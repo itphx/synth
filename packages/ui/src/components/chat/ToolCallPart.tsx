@@ -6,6 +6,7 @@ import { useI18n, useResolveI18n } from '@/lib/i18n'
 import { moveSessionToBackground } from '@/lib/backgroundDetach'
 import { splitBySecretPlaceholders, SecretPlaceholder } from './SecretPlaceholder'
 import { DiffView } from './DiffView'
+import { AnsiText } from '@/components/ansi/AnsiText'
 
 interface ToolCallData {
   name: string
@@ -485,8 +486,8 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children, p
               {!isSubagent && viewMode === 'result' && hasResult && !(isQuestionTool && questionRows) && !diff && (
                 <pre className={`text-xs whitespace-pre-wrap overflow-x-auto font-mono ${
                   isError ? 'text-status-error' : 'text-muted-foreground'
-                }`}>
-                  {truncate(localizedResult, 4000)}
+                }`} data-testid="tool-call-result-text">
+                  <AnsiText text={truncate(localizedResult, 4000)} colors testId="tool-call-result-ansi" />
                 </pre>
               )}
               {!hasResult && viewMode === 'result' && (
