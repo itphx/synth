@@ -59,6 +59,8 @@ const SECTION_KEYS = [
   'background',
   // Журнал решений по подтверждениям прав (`audit.permission`).
   'audit',
+  // Правила подтверждений по умолчанию (`permission.rules`).
+  'permission',
 ] as const satisfies readonly (keyof RuntimeSettings)[];
 
 const SECTION_KEY_SET: ReadonlySet<string> = new Set<string>(SECTION_KEYS);
@@ -491,6 +493,22 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearAudit(): Promise<void> {
       await deleteSetting(conn, 'audit');
+    },
+
+    // Правила подтверждений по умолчанию (`permission.rules`): `undefined` —
+    // не заданы (действует `config.permission.rules`), `{}` — валидное «правил
+    // нет». Секция пишется **целиком** (JSONB).
+    async getPermissionRules(): Promise<RuntimeSettingsValue<'permission'>['rules']> {
+      const section = await readSetting<RuntimeSettingsValue<'permission'>>(conn, 'permission');
+      return section?.rules;
+    },
+    async setPermissionRules(
+      rules: NonNullable<RuntimeSettingsValue<'permission'>['rules']>,
+    ): Promise<void> {
+      await writeSetting(conn, 'permission', { rules });
+    },
+    async clearPermission(): Promise<void> {
+      await deleteSetting(conn, 'permission');
     },
   };
 }

@@ -53,6 +53,8 @@ import {
   // Этап 1 roadmap 0.13 (блок 4): секция `background` (`/settings/background`).
   createLiveBackgroundSettings,
   createLiveAuditSettings,
+  // Правила подтверждений по умолчанию (`/settings/permissions`).
+  createLivePermissionSettings,
   // ADR-135: чтение runtime-каталога профилей исполнения (`/settings/execution`).
   readExecutionRuntimeSettings,
   createEgressPolicyResolver, createEgressLogSink,
@@ -418,6 +420,17 @@ export async function createBackendDeps(
   // runtime-секция `audit` (режим + retention), env > runtime > default.
   const auditSettings = createLiveAuditSettings({ store: settingsStore });
   await auditSettings.refresh();
+  // Правила подтверждений **по умолчанию** (`settings.json`/PG → `permission`):
+  // runtime > `config.synth.permission.rules` > пустая карта, runtime заменяет
+  // карту целиком. Один экземпляр на процесс: оркестратор получает правила
+  // дефолтом (и на `PUT`/`DELETE` `/api/v2/settings/permissions` —
+  // `setDefaultPermissionRules`), поэтому правка из админки live.
+  // `askTimeoutMs` секцией не управляется (`/settings/security`).
+  const permissionSettings = createLivePermissionSettings({
+    store: settingsStore,
+    config: config.synth.permission,
+  });
+  await permissionSettings.refresh();
   // Retention-прогон на старте — best-effort (см. core-сборку).
   if (!storageDegraded && typeof securityAudit.prune === 'function') {
     try {
@@ -1944,7 +1957,7 @@ export async function createBackendDeps(
     routerConfig: config.synth.router,
     // ADR-084: decision-слой микро-каскада (config.decision).
     decisionConfig: effectiveDecisionSettings,
-    permissionConfig: config.synth.permission,
+    permissionConfig: permissionSettings.getConfig(),
     defaultPlanMode: config.synth.session.planMode,
     // Секция `session.autoTitle` — авто-именование сессии (ранний триггер).
     ...(config.synth.session?.autoTitle ? { autoTitle: config.synth.session.autoTitle } : {}),
@@ -2427,7 +2440,7 @@ export async function createBackendDeps(
   // HTTP-роутов у движка нет (Э6): он живёт в `deps` и используется
   // вызывающим кодом (запуск прогона/возобновление — Э6).
   const pipelinePermissions: PipelinePermissionDeps = {
-    permissionConfig: config.synth.permission,
+    permissionConfig: permissionSettings.getConfig(),
     runtimeDeps,
     // Журнал решений по правам (`scope:'permission'`) — тот же шов, что у
     // оркестратора: решения по правилам шага видны в общем журнале инстанса.
@@ -2899,6 +2912,10 @@ export async function createBackendDeps(
     // Журнал решений по подтверждениям прав: живое состояние секции `audit`
     // (режим + retention) и шов записи — для мутаций правил вне хода.
     auditSettings,
+    // Правила подтверждений по умолчанию: живое состояние `permission`
+    // (карта правил) — оркестратор берёт его дефолтом при сборке хода; роут
+    // `/settings/permissions` обновляет и вызывает `refresh()`.
+    permissionSettings,
     permissionAuditSink,
     // ADR-114: сервис worktree — HTTP-контур проектов и привязка сессии.
     worktreeService,

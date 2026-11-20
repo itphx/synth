@@ -198,6 +198,7 @@ import {
   createLiveSshMode,
   createLiveBackgroundSettings,
   createLiveAuditSettings,
+  createLivePermissionSettings,
   readExecutionRuntimeSettings,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
@@ -470,6 +471,19 @@ export async function createStandaloneDeps(
   // рестарта (`refresh()` после записи).
   const auditSettings = createLiveAuditSettings({ store: settingsStore });
   await auditSettings.refresh();
+
+  // Правила подтверждений **по умолчанию** (`settings.json`/PG → `permission`):
+  // приоритет runtime > `config.permission.rules` > пустая карта; runtime
+  // заменяет карту целиком. Один экземпляр на процесс: оркестратор получает
+  // правила дефолтом при сборке хода (и на `PUT`/`DELETE`
+  // `/api/v2/settings/permissions` — `setDefaultPermissionRules`), поэтому
+  // правка из админки применяется без рестарта. `askTimeoutMs` не входит в
+  // секцию — он из `config.permission` и меняется `/settings/security`.
+  const permissionSettings = createLivePermissionSettings({
+    store: settingsStore,
+    config: config.permissionConfig,
+  });
+  await permissionSettings.refresh();
 
   // Retention журнала решений: стартовый прогон, best-effort (ADR-092: старт
   // инстанса не падает из-за уборки). `prune` — опциональный метод порта:
@@ -1987,7 +2001,7 @@ export async function createStandaloneDeps(
     // скрывает их причиной `unavailable(storage)` (ADR-098).
     diagnostics: {
       ...(storageDegraded ? {} : { securityAudit, pendingApprovals: storageContext.pendingApprovals }),
-      getInstancePermission: () => config.permissionConfig,
+      getInstancePermission: () => permissionSettings.getConfig(),
     },
     projectStore,
     // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
@@ -2051,7 +2065,7 @@ export async function createStandaloneDeps(
     // ADR-075: тулы проекта (workspace) читают live-политику вне root.
     getWorkspaceOutsideRootPolicy: async () =>
       (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm',
-    permissionConfig: config.permissionConfig,
+    permissionConfig: permissionSettings.getConfig(),
     defaultPlanMode: config.defaultPlanMode,
     // Секция `session.autoTitle` — авто-именование сессии (ранний триггер).
     ...(config.sessionConfig?.autoTitle ? { autoTitle: config.sessionConfig.autoTitle } : {}),
@@ -2566,7 +2580,7 @@ export async function createStandaloneDeps(
   // HTTP-роутов у движка нет (Э6): он живёт в `deps` и используется
   // вызывающим кодом (запуск прогона/возобновление — Э6).
   const pipelinePermissions: PipelinePermissionDeps = {
-    permissionConfig: config.permissionConfig,
+    permissionConfig: permissionSettings.getConfig(),
     runtimeDeps,
     // Журнал решений по правам (`scope:'permission'`) — тот же шов, что у
     // оркестратора: решения по правилам шага видны в общем журнале инстанса.
@@ -2976,6 +2990,10 @@ export async function createStandaloneDeps(
     // (режим + retention) — шов `permissionAuditSink` читает его на каждое
     // решение; роут `/settings/audit` обновляет и вызывает `refresh()`.
     auditSettings,
+    // Правила подтверждений по умолчанию: живое состояние `permission`
+    // (карта правил) — оркестратор берёт его дефолтом при сборке хода; роут
+    // `/settings/permissions` обновляет и вызывает `refresh()`.
+    permissionSettings,
     // Шов журнала решений (allow/deny/revoke) — для мутаций правил вне хода.
     permissionAuditSink,
     // ADR-114: сервис worktree — HTTP-контур проектов и привязка сессии.

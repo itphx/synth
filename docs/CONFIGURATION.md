@@ -3459,6 +3459,63 @@ runtime-слое, а аварийный приоритет даёт env.
 SYNTH_AUDIT_PERMISSION_MODE=decisions SYNTH_AUDIT_RETENTION_DAYS=90
 ```
 
+### Правила подтверждений по умолчанию (`permission.rules`, runtime)
+
+Правила `allow|deny|ask` — база permission-слоя (ADR-029) для сессий, у которых
+**нет** собственного снимка `settings.permission`, и `fallback`/`instance`-слой
+резолва прав по цепочке `parentId`
+(`packages/core/src/engine/permission/effective.ts`). Редактируются из UI
+(раздел «Безопасность» → правила по умолчанию) и через
+`/api/v2/settings/permissions`.
+
+Секции `permission` в `config.yaml` **не добавляется** (решение владельца):
+база — существующая `config.permission.rules`, поверх — runtime.
+
+| Слой | Что даёт | Приоритет |
+|------|----------|-----------|
+| runtime (`settings.json`/PG, секция `permission.rules`) | карта правил, заданная из UI/API | выше |
+| `config.yaml` `permission.rules` | база из конфига инстанса | ниже |
+| пустая карта | «правил нет» | дефолт |
+
+- **Runtime заменяет карту целиком**, а не сливается с config: иначе снять
+  правило из UI было бы невозможно (оно «всплывало» бы из конфига). `PUT`
+  присылает полную карту, `DELETE` сбрасывает секцию к `config.permission.rules`.
+- **`{}` — валидное значение «правил нет»**, отличное от «не задано»:
+  в ответе API `source:'runtime'` при пустой карте и `source:'config'`/`'default'`
+  без неё.
+- **Env-слоя у правил нет** — только runtime/config/дефолт.
+- **Применяется сразу** (`restartRequired: false`): живое состояние читает
+  оркестратор при сборке хода, `PUT`/`DELETE` переставляют дефолт
+  (`setDefaultPermissionRules`) — рестарт не нужен.
+- **Снимок сессии не перезаписывается:** у сессии со своим `settings.permission`
+  правила остаются как есть (ADR-029, chain-no-copy); новые правила действуют на
+  сессии без своего конфига и как `fallback` при резолве.
+- **`askTimeoutMs` этой секцией не управляется** — таймаут подтверждения `ask`
+  живёт в `config.permission.askTimeoutMs` + runtime
+  `security.askTimeoutMs` (`PUT /api/v2/settings/security`) и в
+  `/api/v2/settings/permissions` отдаётся только для контекста.
+- **Валидация:** значение правила — `allow|deny|ask` либо объект
+  `{ '<pattern>': allow|deny|ask }` (глубина ровно один уровень); неизвестная
+  форма/ключ тела → `400 VALIDATION_ERROR` с перечнем ключей.
+- **Аудит:** `scope:'permission'`, `action:'update'`, `before` — прежняя карта,
+  `after` — новая (`DELETE` — база), `actor` — действующий пользователь;
+  запись best-effort (ошибка журнала не ломает применение).
+
+```jsonc
+// PUT /api/v2/settings/permissions — карта заменяется целиком
+{
+  "rules": {
+    "read_file": "allow",
+    "write_file": { "*.env": "deny" },
+    "execute_shell": "ask"
+  }
+}
+```
+
+Хранилище — существующий JSON-документ настроек (`{dataDir}/settings.json` /
+PostgreSQL, runtime-секция), отдельной миграции нет. Спека API —
+[docs/API_V2.md](./API_V2.md) §5.21.
+
 ### Гибридный режим (remote)
 
 Секция `remote` включает гибридный режим: локальный `synth serve` подключается

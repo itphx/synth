@@ -4,6 +4,7 @@ import type {
   WebhooksEgressPolicy,
   McpNetworkPolicy,
   McpServerToolSettings,
+  PermissionRule,
   SkillsDisabledRequest,
   ToolsDisabledConfig,
   ToolsPolicy,
@@ -161,6 +162,18 @@ export interface SettingsRepository {
   getAudit(): Promise<Partial<AuditRuntimeSettings>>;
   setAudit(config: Partial<AuditRuntimeSettings>): Promise<void>;
   clearAudit(): Promise<void>;
+
+  /**
+   * Правила подтверждений **по умолчанию** (`permission.rules`): база для
+   * сессий без собственного `settings.permission`. Runtime **заменяет** карту
+   * `config.permission.rules` целиком; `undefined` — не задано (действует
+   * config), `{}` — валидное «правил нет». Применяется сразу (оркестратор
+   * получает правила дефолтом при сборке хода) — `restartRequired: false`.
+   * `askTimeoutMs` этой секцией не управляется.
+   */
+  getPermissionRules(): Promise<Record<string, PermissionRule> | undefined>;
+  setPermissionRules(rules: Record<string, PermissionRule>): Promise<void>;
+  clearPermission(): Promise<void>;
 
   /**
    * ADR-133: runtime-настройка автопроверки обновлений (`updates.check`).

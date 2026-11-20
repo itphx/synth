@@ -47,6 +47,8 @@ import {
   createBackgroundSettingsRoutes,
   // Журнал решений по подтверждениям прав (`/api/v2/settings/audit`).
   createAuditSettingsRoutes,
+  // Правила подтверждений по умолчанию (`/api/v2/settings/permissions`).
+  createPermissionSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -1041,6 +1043,29 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       live: deps.auditSettings,
       securityAudit,
       env: process.env,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
+
+  // Правила подтверждений **по умолчанию** (`/settings/permissions`):
+  // runtime-карта `permission.rules` поверх `config.synth.permission.rules`
+  // (runtime заменяет карту целиком, `{}` — «правил нет»). Применяются
+  // **сразу** (`setDefaultPermissionRules`), снимок `settings.permission`
+  // существующих сессий не перезаписывается; `askTimeoutMs` секцией не
+  // управляется. Managed RBAC — ADMIN (настройка инстанса).
+  app.route('/api/v2/settings', createPermissionSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.synth.permission,
+      live: deps.permissionSettings,
+      onRulesChange: (rules) => {
+        orchestrator.setDefaultPermissionRules(rules);
+      },
+      securityAudit,
     },
     {
       readGuard: auth.requirePermission('ADMIN'),

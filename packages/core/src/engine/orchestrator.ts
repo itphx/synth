@@ -2606,6 +2606,20 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-029: live-применение правил подтверждений **по умолчанию**
+   * (runtime-настройка из UI — `PUT /api/v2/settings/permissions`).
+   *
+   * Обновляет только `rules` дефолтного permission-конфига (`askTimeoutMs`
+   * не трогает — им управляет `PUT /api/v2/settings/security`). Новые правила
+   * действуют на сессии **без** собственного `settings.permission` и как
+   * `fallback`-слой резолва прав; снимок `settings.permission` существующих
+   * сессий не перезаписывается (ADR-029, chain-no-copy).
+   */
+  setDefaultPermissionRules(rules: Record<string, PermissionRule>): void {
+    this._permissionConfig = { ...this._permissionConfig, rules: { ...rules } };
+  }
+
+  /**
    * ADR-029: ожидающие ответа подтверждения сессии.
    *
    * Источник истины для восстановления полосы подтверждения после

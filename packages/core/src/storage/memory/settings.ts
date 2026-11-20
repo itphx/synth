@@ -24,6 +24,7 @@ import type {
   WebhooksEgressPolicy,
   McpNetworkPolicy,
   McpServerToolSettings,
+  PermissionRule,
   SkillsDisabledRequest,
   ToolsDisabledConfig,
   ToolsPolicy,
@@ -366,6 +367,18 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearAudit(): Promise<void> {
     this._clear('audit');
+  }
+
+  async getPermissionRules(): Promise<Record<string, PermissionRule> | undefined> {
+    return structuredClone(this._settings.permission?.rules);
+  }
+
+  async setPermissionRules(rules: Record<string, PermissionRule>): Promise<void> {
+    this._patch({ permission: { rules: structuredClone(rules) } });
+  }
+
+  async clearPermission(): Promise<void> {
+    this._clear('permission');
   }
 
   async getUpdates(): Promise<Partial<UpdatesRuntimeSettings>> {

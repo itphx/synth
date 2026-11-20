@@ -819,6 +819,16 @@
   (`deps.auditSettings`) и retention-прогон `securityAudit.prune()` best-effort; аудит
   правки **не пишется** (`SECURITY_AUDIT_SCOPES` не расширяется); core — `requireAuth`,
   managed — ADMIN),
+  `settings-permissions` (`/settings/permissions` — `createPermissionSettingsRoutes`, правила
+  подтверждений **по умолчанию** `permission.rules`: `GET/PUT/DELETE`, ответ `{rules,
+  source:"runtime"|"config"|"default", defaults:{rules}, askTimeoutMs}`, приоритет runtime >
+  `config.permission.rules` > пустая карта (секции в `config.yaml` нет), runtime **заменяет**
+  карту целиком, `{}` — валидное «правил нет», неизвестная форма значения/ключ тела → 400
+  `VALIDATION_ERROR` с перечнем ключей; после `PUT`/`DELETE` — `refresh()` живого состояния
+  (`deps.permissionSettings`) и депс-хук `onRulesChange` → `orchestrator.setDefaultPermissionRules`
+  (live, `restartRequired:false`); `askTimeoutMs` секцией **не управляется** (`/settings/security`);
+  аудит `scope:'permission'`/`action:'update'` с before/after; core — `requireAuth`, managed —
+  ADMIN),
   `processes` (ADR-111/PROP-096/097: `/api/v2/processes*` — единый реестр фоновых прогонов;
   в деградированном режиме хранилища контур **не монтируется** → 404).
 - **Админ-контуры — одна реализация на standalone и managed (ADR-036/ADR-069/ADR-070).**

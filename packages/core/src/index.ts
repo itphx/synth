@@ -2411,7 +2411,7 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, resolveBackgroundConfig, createLiveBackgroundSettings, DEFAULT_BACKGROUND_CONFIG, BACKGROUND_SETTINGS_FIELDS, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, SSH_MODE_VALUES, DEFAULT_SSH_MODE, resolveAuditSettings, createLiveAuditSettings, AUDIT_PERMISSION_MODES, DEFAULT_AUDIT_PERMISSION_MODE, DEFAULT_AUDIT_RETENTION_DAYS, AUDIT_RETENTION_DAYS_RANGE, AUDIT_PERMISSION_MODE_ENV, AUDIT_RETENTION_DAYS_ENV, AUDIT_SETTINGS_FIELDS } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig, mergePluginsConfig, resolveAttachmentsSettings, createLiveAttachmentsSettings, mergeModalityModels, resolveContextWindowPolicy, createLiveContextWindowPolicy, resolveSubagentMaxInputTokens, createLiveSubagentMaxInputTokens, resolveSessionOpsPerMinute, createLiveSessionOpsPerMinute, SESSION_OPS_PER_MINUTE_ENV, resolveBackgroundConfig, createLiveBackgroundSettings, DEFAULT_BACKGROUND_CONFIG, BACKGROUND_SETTINGS_FIELDS, resolveContextDefaults, createLiveContextDefaults, DEFAULT_CONTEXT_DEFAULTS, resolveStickyNotesLimits, createLiveStickyNotesLimits, DEFAULT_STICKY_NOTES_LIMITS, resolveSshMode, createLiveSshMode, SSH_MODE_ENV, SSH_MODE_VALUES, DEFAULT_SSH_MODE, resolveAuditSettings, createLiveAuditSettings, AUDIT_PERMISSION_MODES, DEFAULT_AUDIT_PERMISSION_MODE, DEFAULT_AUDIT_RETENTION_DAYS, AUDIT_RETENTION_DAYS_RANGE, AUDIT_PERMISSION_MODE_ENV, AUDIT_RETENTION_DAYS_ENV, AUDIT_SETTINGS_FIELDS, resolvePermissionRules, createLivePermissionSettings } from './storage/runtime-settings.js';
 export type {
   AuditRuntimeSettings,
   AuditPermissionMode,
@@ -2419,6 +2419,10 @@ export type {
   AuditSettingsSource,
   ResolvedAuditSettings,
   LiveAuditSettings,
+  PermissionRuntimeSettings,
+  PermissionRulesSource,
+  ResolvedPermissionRules,
+  LivePermissionSettings,
 } from './storage/runtime-settings.js';
 // Журнал решений по подтверждениям прав (`scope:'permission'`, ADR-029): единый
 // шов записи — и менеджер ожиданий, и автоматические решения по правилам.
@@ -2914,6 +2918,15 @@ export type {
   AuditSettingsMessages,
   AuditSettingsView,
 } from './server/routes/settings-audit.js';
+// Правила подтверждений по умолчанию (`permission.rules`, runtime) —
+// `/api/v2/settings/permissions`.
+export { createPermissionSettingsRoutes } from './server/routes/settings-permissions.js';
+export type {
+  PermissionSettingsDeps,
+  PermissionSettingsOptions,
+  PermissionSettingsMessages,
+  PermissionSettingsView,
+} from './server/routes/settings-permissions.js';
 // PROP-124: режим инстанса для SSH-ключей — `/api/v2/settings/ssh`.
 export { createSshSettingsRoutes } from './server/routes/settings-ssh.js';
 export type {

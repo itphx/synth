@@ -5,7 +5,11 @@
 > ⚠️ RU-версия обновлена 2026-11-20; **перевод отстаёт** — в EN-файле нет строк
 > `GET/PUT/DELETE /api/v2/settings/audit` (настройки журнала решений по подтверждениям прав:
 > `permission.mode`/`permission.retentionDays`, приоритет env > runtime > default,
-> `409 ENV_LOCKED` по полю, `400 VALIDATION_ERROR`).
+> `409 ENV_LOCKED` по полю, `400 VALIDATION_ERROR`) и строк
+> `GET/PUT/DELETE /api/v2/settings/permissions` (правила подтверждений по умолчанию
+> `permission.rules`: приоритет runtime > `config.yaml` > пустая карта, `PUT` заменяет карту
+> целиком, `DELETE` сбрасывает к базе, `{}` — валидное «правил нет», `askTimeoutMs` секцией
+> не управляется, `400 VALIDATION_ERROR` с перечнем ключей, аудит `scope:'permission'`).
 
 > ⚠️ RU-версия обновлена 2026-11-18 (ADR-146, PROP-142/143); **перевод отстаёт** — в EN-файле
 > отсутствуют §5.32 «Аналитика и отчётность», §5.33 «Пакеты расширений», §5.37 «Внешние доступы»,

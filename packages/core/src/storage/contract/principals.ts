@@ -1516,6 +1516,35 @@ export function describeSettingsRepository(
       expect(await repo.getProxySettings()).toBeUndefined();
     });
 
+    it('permission: set/get/clear правил по умолчанию; {} ≠ «не задано»', async () => {
+      const { repo } = await make();
+      // Секция не задана — `undefined` (действует `config.permission.rules`).
+      expect(await repo.getPermissionRules()).toBeUndefined();
+
+      await repo.setPermissionRules({ read_file: 'allow', write_file: { '*.env': 'deny' } });
+      expect(await repo.getPermissionRules()).toEqual({
+        read_file: 'allow',
+        write_file: { '*.env': 'deny' },
+      });
+
+      // Пустая карта — валидное значение, отличимое от «не задано».
+      await repo.setPermissionRules({});
+      expect(await repo.getPermissionRules()).toEqual({});
+
+      // Замена карты целиком: прежних правил не остаётся.
+      await repo.setPermissionRules({ glob: 'ask' });
+      expect(await repo.getPermissionRules()).toEqual({ glob: 'ask' });
+
+      await repo.clearPermission();
+      expect(await repo.getPermissionRules()).toBeUndefined();
+
+      // Соседние секции не затронуты.
+      await repo.setWorkspace('/tmp/ws');
+      await repo.setPermissionRules({ glob: 'allow' });
+      await repo.clearPermission();
+      expect(await repo.getWorkspace()).toBe('/tmp/ws');
+    });
+
     it('execution: set/get/clear runtime-каталога профилей (ADR-135)', async () => {
       const { repo } = await make();
       expect(await repo.getExecution()).toBeUndefined();

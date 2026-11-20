@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode, ExecutionRuntimeSettings } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, PermissionConfig, PermissionRule, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig, PluginsConfig, AttachmentsConfig, AttachmentFamily, ModalityModelAssignments, ModalityModelRef, ContextWindowPolicy, ContextDefaults, StickyNotesLimits, SshMode, ExecutionRuntimeSettings } from '@itphx/synth-shared';
 import type { BackgroundConfig } from '@itphx/synth-shared/config';
 import { ATTACHMENT_FAMILIES, CONTEXT_WINDOW_POLICIES, DEFAULT_LLM_GATEWAY_RATE_LIMIT, DEFAULT_LLM_FILTER_TIMEOUT_MS, SSH_MODES } from '@itphx/synth-shared';
 import { defaultConfig, parseAttachmentsModalities, parseExecutionRuntimeSettings, DEFAULT_SUBAGENT_MAX_INPUT_TOKENS, DEFAULT_SESSION_OPS_PER_MINUTE, DEFAULT_PROMPT_INJECTION_CONFIG } from '@itphx/synth-shared/config';
@@ -1124,6 +1124,133 @@ export function createLiveAuditSettings(params: {
 }
 
 /**
+ * Runtime-секция `permission`: **правила подтверждений по умолчанию** инстанса
+ * (`settings.json`/PG), редактируемые из UI.
+ *
+ * Заменяет собой `config.permission.rules` (карта правил) — это база для сессий
+ * **без** собственного `settings.permission` и `fallback`/`instance`-слой
+ * резолва прав (`engine/permission/effective.ts`). Сессии со своим снимком
+ * `settings.permission` не перезаписываются.
+ *
+ * Секции в `config.yaml` **не добавляется** (решение владельца): приоритет
+ * **runtime > `config.permission.rules` > пустая карта**. Env-слоя у правил
+ * нет.
+ *
+ * `askTimeoutMs` **не входит** в секцию: таймаут подтверждения — отдельная
+ * настройка (`security.askTimeoutMs`, `PUT /api/v2/settings/security`), и
+ * правила её не трогают.
+ */
+export interface PermissionRuntimeSettings {
+  /**
+   * Правила прав: имя тула/группы/`'*'` → `allow|deny|ask` либо объект
+   * glob-паттернов `{ '<pattern>': allow|deny|ask }`.
+   *
+   * `undefined` (ключа нет) — runtime не задан (действует база `config`);
+   * `{}` — валидное значение «правил нет» (пустая карта, а не «не задано»).
+   */
+  rules?: Record<string, PermissionRule>;
+}
+
+/** Источник эффективных правил по умолчанию. */
+export type PermissionRulesSource = 'runtime' | 'config' | 'default';
+
+/** Результат резолвинга правил по умолчанию (`runtime > config > пусто`). */
+export interface ResolvedPermissionRules {
+  /** Эффективная карта правил — её получает оркестратор как `fallback`. */
+  rules: Record<string, PermissionRule>;
+  /** Источник эффективной карты. */
+  source: PermissionRulesSource;
+  /** База без runtime (к чему вернёт `DELETE`). */
+  defaults: Record<string, PermissionRule>;
+}
+
+/**
+ * Эффективные правила подтверждений по умолчанию — приоритет
+ * **runtime (`settings.json`/PG) > `config.permission.rules` > пустая карта**.
+ *
+ * Runtime **заменяет карту целиком** (не сливается с config): иначе снять
+ * правило из UI было бы невозможно — оно «всплывало» бы из конфига. Пустой
+ * объект `{}` в runtime — валидное значение «правил нет»; «не задано» — только
+ * отсутствие ключа `rules`.
+ *
+ * Функция чистая (без I/O) — её читает живой держатель настроек.
+ */
+export function resolvePermissionRules(params: {
+  config?: PermissionConfig;
+  runtime?: PermissionRuntimeSettings;
+} = {}): ResolvedPermissionRules {
+  const configRules = params.config?.rules ?? {};
+  const runtimeRules = params.runtime?.rules;
+  if (runtimeRules !== undefined) {
+    return { rules: { ...runtimeRules }, source: 'runtime', defaults: { ...configRules } };
+  }
+  return {
+    rules: { ...configRules },
+    source: Object.keys(configRules).length > 0 ? 'config' : 'default',
+    defaults: { ...configRules },
+  };
+}
+
+/**
+ * Живое состояние правил подтверждений по умолчанию (процесс).
+ *
+ * Runtime-карта держится **в памяти** (инициализируется из `settings.json`/PG при
+ * старте через `refresh()`, обновляется роутом
+ * `/api/v2/settings/permissions`). Резолвер **синхронный**: оркестратор берёт
+ * `getConfig()` при сборке хода, поэтому `refresh()` — единственная асинхронная
+ * точка чтения.
+ */
+export interface LivePermissionSettings {
+  getRuntime(): PermissionRuntimeSettings;
+  setRuntime(next: PermissionRuntimeSettings | undefined): void;
+  resolve(): ResolvedPermissionRules;
+  /**
+   * Permission-конфиг инстанса: эффективные правила + неизменяемый
+   * `askTimeoutMs` (из `config.permission.askTimeoutMs`, иначе дефолт).
+   */
+  getConfig(): PermissionConfig;
+  /** Перечитать runtime-секцию из порта (старт/диагностика); без `store` — no-op. */
+  refresh(): Promise<void>;
+}
+
+/** Собрать живое состояние правил подтверждений по умолчанию. */
+export function createLivePermissionSettings(params: {
+  store?: SettingsRepository;
+  /** База — `config.permission` (правила и таймаут подтверждения). */
+  config?: PermissionConfig;
+}): LivePermissionSettings {
+  let runtime: PermissionRuntimeSettings = {};
+  const resolve = (): ResolvedPermissionRules =>
+    resolvePermissionRules({
+      ...(params.config !== undefined ? { config: params.config } : {}),
+      runtime,
+    });
+  return {
+    getRuntime: () => runtime,
+    setRuntime: (next) => {
+      runtime = next ?? {};
+    },
+    resolve,
+    getConfig: () => ({
+      rules: resolve().rules,
+      // `askTimeoutMs` этой секцией не управляется: берётся из базы (`config`)
+      // и меняется только `PUT /api/v2/settings/security`.
+      askTimeoutMs: params.config?.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
+    }),
+    refresh: async () => {
+      if (!params.store) return;
+      try {
+        // Деградация/ошибка хранилища (ADR-098) — остаёмся на текущем снимке.
+        const rules = await params.store.getPermissionRules();
+        runtime = rules === undefined ? {} : { rules };
+      } catch {
+        // fail-soft: старт процесса не должен падать из-за настройки.
+      }
+    },
+  };
+}
+
+/**
  * Источник эффективных дефолтов оптимизации контекста.
  *
  * env-оверрайда у этих значений нет (это дефолты новых сессий, а не политика
@@ -1490,6 +1617,14 @@ export interface RuntimeSettings {
    * `config.yaml` секцию не задаёт (приоритет env > runtime > дефолт).
    */
   audit?: AuditRuntimeSettings;
+  /**
+   * Правила подтверждений **по умолчанию** (`permission.rules`): база для
+   * сессий без собственного `settings.permission` и `fallback`-слой резолва
+   * прав. Runtime **заменяет** карту `config.permission.rules` целиком,
+   * применяется **сразу** (оркестратор получает её дефолтом при сборке хода);
+   * `askTimeoutMs` этой секцией не управляется.
+   */
+  permission?: PermissionRuntimeSettings;
   /** ADR-090: runtime-настройки секции `plugins` (админка, слой плагинов). */
   plugins?: Partial<PluginsRuntimeSettings>;
   /**
@@ -2550,6 +2685,27 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.audit;
+      return next;
+    });
+  }
+
+  /**
+   * Правила подтверждений по умолчанию (`permission.rules`), `undefined` —
+   * секция/правила не заданы (`{}` — валидное «правил нет»).
+   */
+  async getPermissionRules(): Promise<Record<string, PermissionRule> | undefined> {
+    const settings = await this.load();
+    return settings.permission?.rules;
+  }
+
+  async setPermissionRules(rules: Record<string, PermissionRule>): Promise<void> {
+    await this._update((current) => ({ ...current, permission: { rules } }));
+  }
+
+  async clearPermission(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.permission;
       return next;
     });
   }

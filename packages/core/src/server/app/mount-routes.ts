@@ -48,6 +48,7 @@ import {
   createSshSettingsRoutes,
   createBackgroundSettingsRoutes,
   createAuditSettingsRoutes,
+  createPermissionSettingsRoutes,
   createStagingAttachmentRoutes, AttachmentService,
   createPacksRoutes, createPipelinesRoutes,
   createPipelineProjectRoutes,
@@ -976,6 +977,27 @@ export function mountStandaloneRoutes(
       live: deps.auditSettings,
       securityAudit,
       env: process.env,
+    },
+  ));
+
+  // Правила подтверждений **по умолчанию** (`/settings/permissions`):
+  // runtime-карта `permission.rules` поверх `config.permission.rules`
+  // (runtime заменяет карту целиком, `{}` — «правил нет»). Применяются
+  // **сразу**: живое состояние читает оркестратор, а `PUT`/`DELETE`
+  // переставляют дефолт (`setDefaultPermissionRules`) — без рестарта.
+  // Снимок `settings.permission` существующих сессий не перезаписывается.
+  // `askTimeoutMs` секцией не управляется (это `/settings/security`).
+  // Core — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createPermissionSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      config: config.permissionConfig,
+      live: deps.permissionSettings,
+      onRulesChange: (rules) => {
+        orchestrator.setDefaultPermissionRules(rules);
+      },
+      securityAudit,
     },
   ));
 
