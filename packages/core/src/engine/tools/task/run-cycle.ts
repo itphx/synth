@@ -7,7 +7,7 @@
  * поведения.
  */
 import { MessageRole, nowISO, generateId, generateStreamId, makeTextPart, appendReasoningBlock, effortForReasoningLevel } from '@itphx/synth-shared';
-import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision, TodoItem, LlmFinishReason } from '@itphx/synth-shared';
+import type { Message, ReasoningBlock, SessionMode, PlanMode, TokenUsage, ToolContext, ToolForLLM, ToolResult, ToolDefinition, LLMReasoningBlock, ReasoningLevel, EffortLevel, MessageDeliveredPayload, StepFinishedPayload, EventType, PermissionDecision, TodoItem, LlmFinishReason, PermissionConfig } from '@itphx/synth-shared';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../../providers/base.js';
 import { buildChatOptions } from '../../../providers/base.js';
 import { EventBus } from '../../../events/bus.js';
@@ -17,7 +17,9 @@ import { runToolBatch, type ToolBatchOutcome } from '../tool-batch.js';
 import { classifyLlmErrorFor, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS, MAX_DOOM_LOOP_COUNT } from '../../llm-error.js';
 import { computeUsageCost } from '../../../providers/usage.js';
 import type { UsageCost } from '../../../providers/usage.js';
-import { deriveSubagentPermission } from '../../permission/derive.js';
+import { applySubagentRoleDenies } from '../../permission/derive.js';
+import { resolveEffectivePermission } from '../../permission/effective.js';
+import type { PermissionChainSession } from '../../permission/effective.js';
 import { PermissionEvaluator, isPlanRestricted, type PermissionCheckInput } from '../../permission/evaluator.js';
 import {
   PermissionApprovalManager,
@@ -363,6 +365,43 @@ type SubagentToolPlan =
     })
   | (SubagentToolPlanBase & { kind: 'execute'; run: () => Promise<ToolResult> });
 
+/**
+ * ADR-029 (chain-no-copy): эффективные правила прав дочернего прогона.
+ *
+ * Живой резолв по цепочке `parentId` — от сессии ребёнка (если дочерней сессии
+ * нет — от родительской) к корню; `fallback` — конфиг инстанса
+ * (`extra.permissionConfig`). Копии правил родителя в сессии ребёнка больше
+ * нет: поэтому грант/отзыв у родителя виден ребёнку со следующего прогона, а
+ * `deny`-дополнения роли добавляет `deriveSubagentPermission` **после**
+ * резолва.
+ *
+ * Отсутствие менеджера/сессии и ошибка загрузки не фатальны: резолвер работает
+ * с тем, что удалось собрать (fail-open, как и в основной сессии).
+ */
+async function resolveChildEffectivePermission(
+  extra: TaskExtra,
+  childSessionId?: string,
+): Promise<PermissionConfig> {
+  const manager = extra.sessionManager;
+  const startId = childSessionId ?? extra.sessionId;
+  const getSession = (id: string): Promise<PermissionChainSession | null> => (
+    manager ? manager.getSession(id) : Promise.resolve(null)
+  );
+  let session: PermissionChainSession | null = null;
+  if (startId) {
+    try {
+      session = await getSession(startId);
+    } catch {
+      // не фатально — считаем от fallback'а инстанса
+    }
+  }
+  return resolveEffectivePermission({
+    session: session ?? { id: startId ?? 'subagent-inline', settings: {} },
+    getSession,
+    ...(extra.permissionConfig ? { fallback: extra.permissionConfig } : {}),
+  });
+}
+
 export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult> {
   const {
     subagentType, description, contextMode, maxSteps,
@@ -386,8 +425,12 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   const retryMaxAttempts = Math.max(1, retryCfg.maxRetries);
   const retryDelaysMs = retryCfg.delaysMs.length > 0 ? retryCfg.delaysMs : LLM_RETRY_DELAYS_MS;
 
-  // ─── Permissions дочерней сессии (ADR-029): родитель + deny-дополнения ──
-  const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
+  // ─── Permissions дочерней сессии (ADR-029): живое наследование по цепочке `parentId` ──
+  // Правила родителя не копируются в ребёнка: они читаются сейчас по цепочке,
+  // а `applySubagentRoleDenies` добавляет только `deny`-дополнения роли.
+  const derivedPermission = applySubagentRoleDenies(
+    await resolveChildEffectivePermission(extra, childSessionId),
+  );
 
   // ─── LLM-сообщения: только начальные (история/промпт); system — аргумент chatAsync ──
   const messages: LLMMessage[] = [...initialMessages];
@@ -581,7 +624,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   }
 
   // ─── Permissions саб-агента (ADR-029): проверка перед каждым tool_call ───
-  // Дочерняя сессия наследует permissions родителя (deriveSubagentPermission).
+  // Права ребёнка — эффективные правила прогона: живой резолв по цепочке
+  // `parentId` (`resolveChildEffectivePermission`) + `deny`-дополнения роли
+  // (`deriveSubagentPermission`).
   // ask-запросы публикуются в EventBus РОДИТЕЛЬСКОЙ сессии — подтверждение
   // видит пользователь основной сессии, approval_id связывает ответ.
   const childEvaluator = new PermissionEvaluator(derivedPermission);
@@ -2716,12 +2761,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           // без сборщика — fail-closed (ключи не выдаются вовсе).
           extra: {
             ...(extra as unknown as Record<string, unknown>),
-            // ADR-029/ADR-126 §5: правила прав **ребёнка** — собственные
-            // правила сессии ребёнка (ADR-029: наследуются от родителя +
-            // deny-дополнения), иначе — производные от родителя. Это нужно
-            // тулу `script_list` (скрытие deny-скриптов) и не дублирует
-            // enforcement permission-слоя (`childEvaluator`).
-            permissionConfig: childSessionSettings?.permission ?? derivedPermission,
+            // ADR-029/ADR-126 §5: правила прав **ребёнка** — эффективные правила
+            // прогона (резолв по цепочке `parentId` + `deny`-дополнения роли):
+            // собственные правила сессии ребёнка больше не содержат копии
+            // правил родителя (chain-no-copy). Это нужно тулу `script_list`
+            // (скрытие deny-скриптов) и не дублирует enforcement
+            // permission-слоя (`childEvaluator`).
+            permissionConfig: derivedPermission,
             // ADR-039: todo-тулы ребёнка меняют **его** список, а не список
             // родителя. `sessionId` в extra остаётся родительским (события,
             // permission.ask/replied, проектный/automation-скоуп).

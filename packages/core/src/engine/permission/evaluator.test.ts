@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { PermissionEvaluator, extractPaths, isInsideWorkingDir } from './evaluator.js';
-import { deriveSubagentPermission } from './derive.js';
+import { applySubagentRoleDenies, deriveSubagentPermission } from './derive.js';
+import { resolveEffectivePermission } from './effective.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import { globMatch } from '@itphx/synth-shared';
 import { shellGrantPlan, type ShellPolicy } from '../security/shell-guard.js';
@@ -632,22 +633,39 @@ describe('PermissionEvaluator — shell-безопасность (execute_shell)
 });
 
 describe('deriveSubagentPermission', () => {
-  it('наследует правила родителя и добавляет deny на question/plan_enter/plan_exit/task', () => {
+  it('добавляет deny роли на question/plan_enter/plan_exit/task и не копирует правила родителя', () => {
     const parent: PermissionConfig = {
       rules: { '*': 'allow', read: 'allow' },
       askTimeoutMs: 10_000,
     };
     const derived = deriveSubagentPermission(parent);
-    expect(derived.askTimeoutMs).toBe(10_000);
-    expect(derived.rules['*']).toBe('allow');
-    expect(derived.rules.read).toBe('allow');
+    // ADR-029 (chain-no-copy): правила родителя больше не копируются — их
+    // читает живой резолв по цепочке `parentId` (`resolveEffectivePermission`).
+    expect(derived.rules['*']).toBeUndefined();
+    expect(derived.rules.read).toBeUndefined();
     expect(derived.rules.question).toBe('deny');
     expect(derived.rules.plan_enter).toBe('deny');
     expect(derived.rules.plan_exit).toBe('deny');
     expect(derived.rules.task).toBe('deny');
-    // deny на конкретное имя переопределяет allow из '*'
-    expect(evalCheck(derived, 'task', {}).action).toBe('deny');
-    expect(evalCheck(derived, 'question', {}).action).toBe('deny');
+    // `askTimeoutMs` — по-прежнему от родительского конфига (скаляр, не правила).
+    expect(derived.askTimeoutMs).toBe(10_000);
+  });
+
+  it('deny роли сильнее allow родителя, пришедшего по цепочке наследования', async () => {
+    const parentConfig: PermissionConfig = { rules: { '*': 'allow' }, askTimeoutMs: 10_000 };
+    // Наследование остаётся, меняется механизм: правила родителя подмешивает
+    // резолв цепочки, а `deny`-дополнения роли применяются **после** него.
+    const resolved = applySubagentRoleDenies(await resolveEffectivePermission({
+      session: { id: 'child', parentId: 'parent', settings: {} },
+      getSession: async (id) => (id === 'parent'
+        ? { id: 'parent', settings: { permission: parentConfig } }
+        : null),
+      fallback: { rules: {}, askTimeoutMs: 30_000 },
+    }));
+    // Правило по конкретному имени переопределяет allow из '*'
+    expect(evalCheck(resolved, 'task', {}).action).toBe('deny');
+    expect(evalCheck(resolved, 'question', {}).action).toBe('deny');
+    expect(evalCheck(resolved, 'write_file', {}).action).toBe('allow');
   });
 
   it('без родителя — только deny-дополнения', () => {

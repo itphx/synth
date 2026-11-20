@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolveCommandRule } from './evaluator.js';
-import { deriveSubagentPermission } from './derive.js';
+import { applySubagentRoleDenies } from './derive.js';
+import { resolveEffectivePermission } from './effective.js';
 import type { PermissionConfig } from '@itphx/synth-shared';
 
 const cfg = (rules: PermissionConfig['rules']): PermissionConfig => ({ rules, askTimeoutMs: 30_000 });
@@ -41,9 +42,13 @@ describe('resolveCommandRule (ADR-126 §10)', () => {
 });
 
 describe('наследование command-правил саб-агентом (ADR-126 §10)', () => {
-  it('deriveSubagentPermission сохраняет command-правила родителя', () => {
+  it('command/skill-правила родителя наследуются по цепочке parentId', async () => {
     const parent = cfg({ command: { help: 'deny' }, skill: 'allow' });
-    const child = deriveSubagentPermission(parent);
+    const child = applySubagentRoleDenies(await resolveEffectivePermission({
+      session: { id: 'child', parentId: 'parent', settings: {} },
+      getSession: async (id) => (id === 'parent' ? { id: 'parent', settings: { permission: parent } } : null),
+      fallback: cfg({}),
+    }));
     expect(child.rules.command).toEqual({ help: 'deny' });
     expect(child.rules.skill).toBe('allow');
   });

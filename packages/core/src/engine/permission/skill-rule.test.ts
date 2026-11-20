@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import { PermissionEvaluator, resolveSkillRule } from './evaluator.js';
-import { deriveSubagentPermission } from './derive.js';
+import { applySubagentRoleDenies } from './derive.js';
+import { resolveEffectivePermission } from './effective.js';
 
 function config(rules: PermissionConfig['rules']): PermissionConfig {
   return { rules, askTimeoutMs: 30_000 };
@@ -78,9 +79,13 @@ describe('PermissionEvaluator для тула skill', () => {
 });
 
 describe('deriveSubagentPermission — наследование skill-правил (ADR-126 §10)', () => {
-  it('skill-правила родителя сохраняются + собственные deny тулов', () => {
+  it('skill-правила родителя наследуются по цепочке parentId + собственные deny тулов', async () => {
     const parent = config({ skill: { 'db-*': 'deny' } });
-    const child = deriveSubagentPermission(parent);
+    const child = applySubagentRoleDenies(await resolveEffectivePermission({
+      session: { id: 'child', parentId: 'parent', settings: {} },
+      getSession: async (id) => (id === 'parent' ? { id: 'parent', settings: { permission: parent } } : null),
+      fallback: config({}),
+    }));
     expect(resolveSkillRule(child, 'db-migration')?.action).toBe('deny');
     expect(child.rules.task).toBe('deny');
     expect(child.rules.plan_enter).toBe('deny');

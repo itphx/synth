@@ -9,5 +9,7 @@ export { PermissionApprovalManager, computePermissionDigest, parsePermissionPrin
 export type { ApprovalRequest, ApprovalDecision, PendingApproval } from './approval.js';
 export { buildPermissionPreview } from './preview.js';
 export type { PermissionPreviewInput } from './preview.js';
-export { deriveSubagentPermission, emptyPermissionConfig, DEFAULT_ASK_TIMEOUT_MS } from './derive.js';
+export { deriveSubagentPermission, applySubagentRoleDenies, emptyPermissionConfig, DEFAULT_ASK_TIMEOUT_MS } from './derive.js';
+export { resolveEffectivePermission, MAX_PERMISSION_PARENT_DEPTH } from './effective.js';
+export type { PermissionChainSession, ResolveEffectivePermissionParams } from './effective.js';
 export { PERMISSION_GROUPS, PERMISSION_GROUP_ORDER, TOOL_PATH_PARAMS, getToolGroups, isFileTool, extractPathParams } from './groups.js';

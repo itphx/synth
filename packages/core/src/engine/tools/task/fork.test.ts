@@ -167,9 +167,11 @@ describe('prepareChildSession — none mode (default)', () => {
   // В итоге `child.settings.permission` у none-ребёнка был undefined (в отличие
   // от fork-детей), а `task-resume.ts` (`child.settings.permission ??
   // deps.permissionConfig`) при resume терял наследуемые правила родителя.
-  // Инвариант (ADR-029): permission ребёнка = deriveSubagentPermission(родитель)
-  // во всех четырёх режимах контекста.
-  it('none mode: child.settings.permission сохраняет derivedPermission родителя', async () => {
+  //
+  // ADR-029 (chain-no-copy): теперь в `settings.permission` ребёнка только
+  // `deny`-дополнения роли (и `askTimeoutMs`); правила родителя не копируются,
+  // их даёт живой резолв по цепочке `parentId` (`resolveEffectivePermission`).
+  it('none mode: child.settings.permission содержит только deny-дополнения роли', async () => {
     const parent = await makeParent();
     const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
     await prepareChildSession(state, opts({
@@ -178,17 +180,18 @@ describe('prepareChildSession — none mode (default)', () => {
       permissionConfig: { rules: { write_file: 'deny' }, askTimeoutMs: 1000 },
     }));
     const child = (await sessionManager.getSession(state.childSessionId!))!;
-    expect(child.settings.permission!.rules).toMatchObject({
-      write_file: 'deny',
+    expect(child.settings.permission!.rules).toEqual({
       question: 'deny',
       plan_enter: 'deny',
       plan_exit: 'deny',
       task: 'deny',
     });
     expect(child.settings.permission!.askTimeoutMs).toBe(1000);
+    // Наследование остаётся — но через цепочку `parentId`, а не копией.
+    expect(child.parentId).toBe(parent.id);
   });
 
-  it('none mode через funnel: permission сохраняется (тот же инвариант)', async () => {
+  it('none mode через funnel: deny-дополнения роли сохраняются (тот же инвариант)', async () => {
     const parent = await makeParent(0);
     const request = vi.fn(async (req: { settings?: Partial<SessionSettings> }) => sessionManager.createSession({
       settings: req.settings,
@@ -201,7 +204,9 @@ describe('prepareChildSession — none mode (default)', () => {
       permissionConfig: { rules: { execute_shell: 'deny' }, askTimeoutMs: 500 },
     }));
     const child = (await sessionManager.getSession(state.childSessionId!))!;
-    expect(child.settings.permission!.rules).toMatchObject({ execute_shell: 'deny', task: 'deny' });
+    expect(child.settings.permission!.rules).toMatchObject({ question: 'deny', task: 'deny' });
+    expect(child.settings.permission!.rules.execute_shell).toBeUndefined();
+    expect(child.settings.permission!.askTimeoutMs).toBe(500);
   });
 
   it('ADR-089: при наличии funnel создаёт сессию через request(initiator=agent)', async () => {
@@ -272,7 +277,7 @@ describe('prepareChildSession — режимы с контекстом', () => {
     expect(state.childMessages.map((m) => m.content)).toEqual(child.messages.map((m) => m.content));
   });
 
-  it('fork-режимы сохраняют permission саб-агента (правила родителя + deny-дополнения)', async () => {
+  it('fork-режимы сохраняют deny-дополнения роли в permission саб-агента', async () => {
     const parent = await makeParent();
     const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
 
@@ -286,18 +291,20 @@ describe('prepareChildSession — режимы с контекстом', () => {
     ));
 
     const child = (await sessionManager.getSession(state.childSessionId!))!;
-    expect(child.settings.permission!.rules).toMatchObject({
-      write_file: 'deny',
+    // Правила родителя (write_file: deny) в ребёнке **не** лежат копией —
+    // их даёт цепочка `parentId`; в сессии ребёнка только deny-дополнения роли.
+    expect(child.settings.permission!.rules).toEqual({
       question: 'deny',
       plan_enter: 'deny',
       plan_exit: 'deny',
       task: 'deny',
     });
     expect(child.settings.permission!.askTimeoutMs).toBe(1000);
+    expect(child.parentId).toBe(parent.id);
   });
 
   it.each(['inherit', 'last_n', 'summary'] as const)(
-    '%s: permission ребёнка = derivedPermission родителя (поведение не изменилось)',
+    '%s: permission ребёнка — только deny-дополнения роли, наследование — по parentId',
     async (mode) => {
       const parent = await makeParent(3);
       const state: PreparedChildSession = { childMessages: [], parentNotesText: '' };
@@ -314,14 +321,14 @@ describe('prepareChildSession — режимы с контекстом', () => {
       ));
 
       const child = (await sessionManager.getSession(state.childSessionId!))!;
-      expect(child.settings.permission!.rules).toMatchObject({
-        write_file: 'deny',
+      expect(child.settings.permission!.rules).toEqual({
         question: 'deny',
         plan_enter: 'deny',
         plan_exit: 'deny',
         task: 'deny',
       });
       expect(child.settings.permission!.askTimeoutMs).toBe(1000);
+      expect(child.parentId).toBe(parent.id);
     },
   );
 

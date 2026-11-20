@@ -118,7 +118,10 @@ export async function prepareChildSession(
 ): Promise<void> {
   const { extra, description, subagentType, contextMode, contextCount, childRoutingOverrides, temperature, provider, model, todos } = opts;
 
-  // ─── Permissions дочерней сессии (ADR-029): наследуем родителя + deny-дополнения ──
+  // ─── Permissions дочерней сессии (ADR-029, chain-no-copy): только deny-дополнения роли ──
+  // Правила родителя в ребёнка **не копируются**: они читаются живым резолвом
+  // по цепочке `parentId` (`resolveEffectivePermission`), которую ребёнок
+  // получает при создании (`forkSession`/`createSession` с `parentId`).
   const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
 
   /**

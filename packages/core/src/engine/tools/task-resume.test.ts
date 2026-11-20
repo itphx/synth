@@ -1029,7 +1029,13 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
       },
     );
 
-    expect(seen.permissionConfig).toEqual(childPerm);
+    // ADR-029 (chain-no-copy): тул видит **эффективные** правила прогона —
+    // правила ребёнка, собранные по цепочке `parentId`, плюс `deny`-дополнения
+    // роли; глобальный `deps.permissionConfig` (write_file: allow) НЕ используется.
+    const effective = seen.permissionConfig as PermissionConfig;
+    expect(effective.rules.write_file).toBe('deny');
+    expect(effective.rules.task).toBe('deny');
+    expect(effective.askTimeoutMs).toBe(1111);
   });
 
   it('ADR-075/ADR-076: проектные зависимости прокидываются в tool-extra resumed-саб-агента', async () => {

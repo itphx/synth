@@ -88,6 +88,7 @@ import type { PermissionAuditSink } from './permission/permission-audit.js';
 import type { PendingApprovalRepository } from '../storage/ports/pending-approval-repository.js';
 import { buildPermissionPreview } from './permission/preview.js';
 import { emptyPermissionConfig } from './permission/derive.js';
+import { resolveEffectivePermission } from './permission/effective.js';
 import { createFileStorage } from '../storage/storage-context.js';
 import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
 import { createSshSecretsResolver } from './ssh/access.js';
@@ -2708,7 +2709,14 @@ export class ChatOrchestrator {
         }`,
       );
     }
-    return this._grantSessionToolAllow(session, toolName, toolArgs, workingDir, trigger);
+    const granted = await this._grantSessionToolAllow(session, toolName, toolArgs, workingDir, trigger);
+    // ADR-029 (chain-no-copy): наружу — **эффективные** правила (собственные,
+    // с грантом, поверх унаследованных по цепочке `parentId`). Без резолва
+    // вызывающий получил бы конфиг без правил родителя.
+    return this._effectivePermission({
+      ...session,
+      settings: { ...session.settings, permission: granted },
+    });
   }
 
   /**
@@ -3362,7 +3370,7 @@ export class ChatOrchestrator {
     if (!input.startsWith('/')) return null;
 
     const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
-    const permissionConfig = session.settings.permission ?? this._permissionConfig;
+    const permissionConfig = await this._effectivePermission(session);
 
     // ADR-126 §15: inline shell `` !`cmd` `` исполняется только через
     // PermissionEvaluator (ADR-029) — как обычный `execute_shell`. allow —
@@ -3550,7 +3558,7 @@ export class ChatOrchestrator {
     if (parseInput(text).skills.length === 0) return null;
 
     const agentDef = this._resolveAgentDefinition(effectiveAgentRole);
-    const permissionConfig = session.settings.permission ?? this._permissionConfig;
+    const permissionConfig = await this._effectivePermission(session);
     const project = await this._loadProject(session);
 
     const result = await resolveDollarSkills({
@@ -3690,7 +3698,7 @@ export class ChatOrchestrator {
       return reply('script.untrusted', { name });
     }
     // Право `permission.rules.script = deny` (ADR-029) — скрипт запрещён.
-    const permissionConfig = session.settings.permission ?? this._permissionConfig;
+    const permissionConfig = await this._effectivePermission(session);
     const denied = resolveScriptRule(permissionConfig, name)?.action === 'deny'
       || detail.available === false;
     if (denied) {
@@ -5601,7 +5609,7 @@ export class ChatOrchestrator {
       agentDef,
       effectiveAgentRole,
       workingDir,
-      permissionConfig: session.settings.permission ?? this._permissionConfig,
+      permissionConfig: await this._effectivePermission(session),
       project,
     });
     // ADR-069 Фаза 1: те же проектные инструкции, что и в запросе (манифест).
@@ -5843,7 +5851,7 @@ export class ChatOrchestrator {
     // ADR-029: permissions — сессионный override приоритетнее глобального конфига.
     // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
     // обработки, поэтому ссылка и эвалуатор пересоздаются.
-    let effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
+    let effectivePermissionConfig = await this._effectivePermission(session);
     let permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
       authorityShadow: this._authorityShadow,
       authorityGate: this._authorityGate,
@@ -8474,7 +8482,9 @@ export class ChatOrchestrator {
               if (approval.once === false) {
                 // «Разрешить в сессии» (once:false) — allow-правило для тула в
                 // permission-конфиг сессии, чтобы не спрашивать повторно.
-                effectivePermissionConfig = await this._grantSessionToolAllow(
+                // ADR-029 (chain-no-copy): эффективная база хода — собственные
+                // правила сессии (с грантом) поверх унаследованных от родителя.
+                const grantedConfig = await this._grantSessionToolAllow(
                   session,
                   plan.toolName,
                   plan.toolArgs,
@@ -8487,6 +8497,10 @@ export class ChatOrchestrator {
                       : {}),
                   },
                 );
+                effectivePermissionConfig = await this._effectivePermission({
+                  ...session,
+                  settings: { ...session.settings, permission: grantedConfig },
+                });
                 permissionEvaluator = new PermissionEvaluator(effectivePermissionConfig, {
                   authorityShadow: this._authorityShadow,
                   authorityGate: this._authorityGate,
@@ -9810,6 +9824,26 @@ export class ChatOrchestrator {
           obfuscate: (sid: string, message: Message) => this.obfuscateUserMessageForHistory(sid, message),
         }
         : {}),
+    });
+  }
+
+  /**
+   * ADR-029 (chain-no-copy): эффективные правила прав сессии.
+   *
+   * Живой резолв по цепочке `parentId` (`resolveEffectivePermission`):
+   * собственные правила сессии (гранты, `deny`-дополнения роли) поверх
+   * унаследованных от родителей, `fallback` — конфиг инстанса. Копии правил
+   * родителя в сессии нет, поэтому грант, выданный или отозванный у родителя,
+   * виден ребёнку со следующей проверки.
+   *
+   * Для корневой сессии (`parentId` нет) резолв не делает ни одного чтения
+   * хранилища — это обычный merge с `_permissionConfig`.
+   */
+  private async _effectivePermission(session: Session): Promise<PermissionConfig> {
+    return resolveEffectivePermission({
+      session,
+      getSession: (id) => this._sessionManager.getSession(id),
+      fallback: this._permissionConfig,
     });
   }
 

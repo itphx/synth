@@ -165,9 +165,13 @@
   `external_directory: ask` снятием не считается); `protected`/`mutation`/`cwd`/`deny` не снимаются
   никогда. `permission.asked` и DTO `GET /:id/permissions` несут аддитивные `commands`,
   `save` (для `execute_shell` **всегда `[]`** — командный паттерн не предлагается; грант идёт
-  каталогом) и `saveDirectories` (в payload — camelCase); выдача
-  пишется в аудит (`scope:'permission'`, `action:'grant'`) через шов
-  `OrchestratorOptions.onPermissionGrant`. **Без `trigger` грант для `execute_shell` не
+  каталогом) и `saveDirectories` (в payload — camelCase); решение по подтверждению
+  пишется в аудит (`scope:'permission'`, `action:'allow'|'deny'`) через шов
+  `createPermissionAuditSink` (`engine/permission/permission-audit.ts`, опция `onDecision`
+  у менеджера ожиданий): одно решение — одна запись, `after.granted` — фактически
+  выданные правила, `after.outcome` — `user`/`timeout`/`cascade`/`cancelled`/`rule`;
+  режим `all` (секция `audit`) дополнительно пишет автоматические решения по правилам —
+  основная сессия, саб-агент, пайплайны. **Без `trigger` грант для `execute_shell` не
   выдаётся** (fail-closed): виновник неизвестен, а паттерн «на всю команду» шире
   одобренного — так восстановленное после рестарта ожидание без снимка
   trigger'а (`PendingApprovalRecord.trigger`) снимает вопрос, но не пишет правило в сессию; для
@@ -187,6 +191,15 @@
   `/proc/self/fd/N`. Принятые риски: `$VAR` (кроме известных), `$(...)`, backticks,
   awk/sed/find-программы, heredoc, обёртки `sh -c`/`sudo`/`env`, интерпретаторы, `for`/
   присваивания не анализируются — shell-guard остаётся guardrail'ом, не границей безопасности.
+- **Наследование грантов — живое (ADR-029 аддендум 2026-11-20).** Эффективные правила сессии
+  резолвятся по цепочке `parentId` в момент проверки (`engine/permission/effective.ts`:
+  `resolveEffectivePermission`, слияние root→leaf, ключ ребёнка приоритетнее, лимит глубины
+  `MAX_PERMISSION_PARENT_DEPTH`, гард от циклов, fail-open на отсутствующего родителя).
+  `deriveSubagentPermission` правила родителя **не копирует** — в `settings.permission` ребёнка
+  только `deny`-дополнения роли (`question`/`plan_enter`/`plan_exit`/`task`), поэтому грант
+  родителя и его отзыв видны детям сразу. Грант ребёнка по-прежнему дописывается и родителю
+  (виден siblings). Устаревшие копии правил в старых дочерних сессиях перекрывают отзывы —
+  разовой миграции нет (осознанно).
 - Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
   реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.

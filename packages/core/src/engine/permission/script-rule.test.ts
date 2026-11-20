@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { PermissionConfig } from '@itphx/synth-shared';
 import { PermissionEvaluator, resolveScriptRule } from './evaluator.js';
-import { deriveSubagentPermission } from './derive.js';
+import { applySubagentRoleDenies } from './derive.js';
+import { resolveEffectivePermission } from './effective.js';
 
 function config(rules: PermissionConfig['rules']): PermissionConfig {
   return { rules, askTimeoutMs: 30_000 };
@@ -89,16 +90,26 @@ describe('PermissionEvaluator для тула script_run', () => {
 });
 
 describe('deriveSubagentPermission — наследование script-правил (ADR-126 §5)', () => {
-  it('script-правила родителя сохраняются + собственные deny тулов', () => {
-    const parent = config({ script: { 'deploy*': 'deny' } });
-    const child = deriveSubagentPermission(parent);
+  /** Правила дочерней сессии так, как их видит прогон (chain-no-copy). */
+  const childRules = async (parent: PermissionConfig): Promise<PermissionConfig> => applySubagentRoleDenies(
+    await resolveEffectivePermission({
+      session: { id: 'child', parentId: 'parent', settings: {} },
+      getSession: async (id) => (id === 'parent'
+        ? { id: 'parent', settings: { permission: parent } }
+        : null),
+      fallback: config({}),
+    }),
+  );
+
+  it('script-правила родителя наследуются по цепочке parentId + собственные deny тулов', async () => {
+    const child = await childRules(config({ script: { 'deploy*': 'deny' } }));
     expect(resolveScriptRule(child, 'deploy-prod')?.action).toBe('deny');
     expect(child.rules.task).toBe('deny');
     expect(child.rules.plan_enter).toBe('deny');
   });
 
-  it('deny-скрипта наследуется саб-агентом (проверка permission-слоя ребёнка)', () => {
-    const child = deriveSubagentPermission(config({ script: 'deny' }));
+  it('deny-скрипта наследуется саб-агентом (проверка permission-слоя ребёнка)', async () => {
+    const child = await childRules(config({ script: 'deny' }));
     const evaluator = new PermissionEvaluator(child);
     const decision = evaluator.check({
       toolName: 'script_run',
