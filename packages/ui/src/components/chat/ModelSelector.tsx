@@ -11,6 +11,7 @@ import { Icon } from '../icon/Icon'
 import { isSelectableModel, selectableProvidersByName } from '@/lib/modelOptions'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { Divider } from '../ui/Divider'
+import { SelectorSearchRow } from './SelectorSearchRow'
 import { modelTooltipLines, modelTooltipText } from '@/lib/composerTooltips'
 import {
   MobileMenuSheet,
@@ -420,70 +421,96 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
    * Шапка с поиском и кнопками управления — общая для дропдауна и мобильной
    * панели; не скроллится вместе со списком.
    */
+  /** Дефолтная модель инстанса (для кнопки «Сбросить на модель по умолчанию»). */
+  const defaultModel = useMemo(
+    () => catalogModels.find((m) => m.isDefault && m.enabled) ?? null,
+    [catalogModels],
+  )
+  const showResetModel =
+    !!defaultModel
+    && !(selectedProviderName === defaultModel.provider && selectedModelName === defaultModel.name)
+
+  const handleResetModel = useCallback(() => {
+    if (!defaultModel) return
+    setSelectedProvider(defaultModel.provider)
+    setSelectedModel(defaultModel.name)
+    if (sessionId) {
+      synthApi.updateSession(sessionId, {
+        settings: { provider: defaultModel.provider, model: defaultModel.name },
+      }).catch(() => {})
+    }
+    // Выбор сделан — список закрывается, как при выборе пункта (и как у агента):
+    // на мобильном лист иначе остаётся открытым, хотя сброс уже выполнен.
+    setOpen(false)
+    setSearchQuery('')
+  }, [defaultModel, setSelectedProvider, setSelectedModel, sessionId])
+
+  /**
+   * Строка поиска — общая для селекторов композера (`SelectorSearchRow`):
+   * иконка, поле и группа кнопок справа. Набор действий у модели шире:
+   * наверх, обновить, сброс на модель по умолчанию, свернуть/развернуть.
+   */
   const searchHeader = (
     <div className="p-2">
-      <div className="relative flex items-center gap-1">
-        <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-        <input
-          type="text"
-          placeholder={t('chat.modelControls.searchModels')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-8 pr-[5.5rem] h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          autoFocus={!isMobile}
-        />
-        {searchQuery.trim().length > 0 && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setSearchQuery('')
-            }}
-            className="absolute right-[3.125rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Icon name="close" className="h-3.5 w-3.5" />
-          </button>
-        )}
-        {(virtualizer.scrollOffset ?? 0) > 0 && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              virtualizer.scrollToIndex(0, { align: 'start' })
-            }}
-            className="absolute right-[4.5rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <Icon name="arrow-up-s" className="h-3.5 w-3.5" />
-          </button>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            void handleRefresh()
-          }}
-          disabled={loading || catalogLoading}
-          className="absolute right-7 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-          title={t('chat.modelControls.refresh')}
-        >
-          <Icon name="refresh" className={`h-3.5 w-3.5 ${loading || catalogLoading ? 'animate-spin' : ''}`} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            const allCollapsed = collapsedProviders.size === groupedByProvider.length
-            if (allCollapsed) {
-              setCollapsedProviders(new Set())
-            } else {
-              setCollapsedProviders(new Set(groupedByProvider.map((g) => g.provider.name)))
-            }
-          }}
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
-          title={collapsedProviders.size === groupedByProvider.length ? t('chat.modelControls.expandAll') : t('chat.modelControls.collapseAll')}
-        >
-          <Icon
-            name={collapsedProviders.size === groupedByProvider.length ? 'arrow-down-s' : 'arrow-up-s'}
-            className="h-3.5 w-3.5"
-          />
-        </button>
-      </div>
+      <SelectorSearchRow
+        value={searchQuery}
+        placeholder={t('chat.modelControls.searchModels')}
+        onChange={setSearchQuery}
+        onClear={() => setSearchQuery('')}
+        clearTitle={t('chat.modelControls.clearSearch')}
+        autoFocus={!isMobile}
+        actions={[
+          ...((virtualizer.scrollOffset ?? 0) > 0
+            ? [{
+                icon: 'arrow-up-s',
+                title: t('chat.modelControls.scrollToTop'),
+                testId: 'models-scroll-top',
+                onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+                  event.stopPropagation()
+                  virtualizer.scrollToIndex(0, { align: 'start' })
+                },
+              }]
+            : []),
+          {
+            icon: 'refresh',
+            title: t('chat.modelControls.refresh'),
+            testId: 'models-refresh',
+            disabled: loading || catalogLoading,
+            spinning: loading || catalogLoading,
+            onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+              event.stopPropagation()
+              void handleRefresh()
+            },
+          },
+          ...(showResetModel
+            ? [{
+                icon: 'arrow-go-back',
+                title: t('chat.modelControls.resetModelToDefault'),
+                testId: 'models-reset-default',
+                onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+                  event.stopPropagation()
+                  handleResetModel()
+                },
+              }]
+            : []),
+          {
+            icon: collapsedProviders.size === groupedByProvider.length ? 'arrow-down-s' : 'arrow-up-s',
+            title: collapsedProviders.size === groupedByProvider.length
+              ? t('chat.modelControls.expandAll')
+              : t('chat.modelControls.collapseAll'),
+            testId: 'models-collapse-toggle',
+            onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+              event.stopPropagation()
+              const allCollapsed = collapsedProviders.size === groupedByProvider.length
+              if (allCollapsed) {
+                setCollapsedProviders(new Set())
+              } else {
+                setCollapsedProviders(new Set(groupedByProvider.map((g) => g.provider.name)))
+              }
+            },
+          },
+        ]}
+      />
     </div>
   )
 

@@ -128,8 +128,9 @@ describe('AgentModeSelector', () => {
     useAgentsStore.setState({ activeAgentId: 'alistent' })
     const container = await renderSelector()
 
-    const reset = findButton(container, 'Сбросить на умолчание')
-    expect(reset).toBeDefined()
+    // Сброс живёт в строке поиска кнопкой-иконкой (общий вид с селектором модели).
+    const reset = container.querySelector('[data-testid="agents-reset-default"]') as HTMLButtonElement | null
+    expect(reset).not.toBeNull()
     await clickButton(reset!)
 
     expect(synthApi.updateSession).toHaveBeenCalledWith('s1', { settings: { agentRole: 'developer' } })

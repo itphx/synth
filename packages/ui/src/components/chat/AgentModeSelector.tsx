@@ -15,6 +15,7 @@ import {
   useTriggerGap,
 } from '../ui/MobileMenuSheet'
 import { Divider } from '../ui/Divider'
+import { SelectorSearchRow } from './SelectorSearchRow'
 import { agentTooltipLines, agentTooltipText } from '@/lib/composerTooltips'
 
 interface AgentModeSelectorProps {
@@ -27,6 +28,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   const defaultAgentId = useAgentsStore(s => s.defaultAgentId)
   const setActiveAgentId = useAgentsStore(s => s.setActiveAgentId)
   const loadAgents = useAgentsStore(s => s.loadAgents)
+  const agentsLoading = useAgentsStore(s => s.loading)
   const { t } = useI18n()
   const { deviceType } = useDevice()
   const centralNarrow = useUIStore((s) => s.centralNarrow)
@@ -92,47 +94,49 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
    * На мобильном поиск не автофокусится: фокус поднял бы клавиатуру сразу
    * поверх только что открытой панели.
    */
+  /**
+   * Строка поиска — общая для селекторов композера (`SelectorSearchRow`),
+   * с тем же набором кнопок, что у модели: обновить реестр и сброс на агента
+   * по умолчанию (прежний пункт списка «Сбросить на умолчание» переехал сюда).
+   */
   const searchHeader = (
     <div className="p-2">
-      <div className="relative">
-        <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-        <input
-          type="text"
-          placeholder={t('chat.modelControls.searchAgents')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-8 h-8 w-full text-xs bg-background border border-border rounded-md px-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-          autoFocus={!isMobile}
-        />
-      </div>
+      <SelectorSearchRow
+        value={searchQuery}
+        placeholder={t('chat.modelControls.searchAgents')}
+        onChange={setSearchQuery}
+        onClear={() => setSearchQuery('')}
+        clearTitle={t('chat.modelControls.clearSearch')}
+        autoFocus={!isMobile}
+        actions={[
+          {
+            icon: 'refresh',
+            title: t('chat.modelControls.refresh'),
+            testId: 'agents-refresh',
+            disabled: agentsLoading,
+            spinning: agentsLoading,
+            onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+              event.stopPropagation()
+              void loadAgents(sessionId)
+            },
+          },
+          ...(showResetToDefault && defaultAgent
+            ? [{
+                icon: 'arrow-go-back',
+                title: t('chat.modelControls.resetToDefault'),
+                testId: 'agents-reset-default',
+                onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+                  event.stopPropagation()
+                  selectAgent(defaultAgent.id)
+                },
+              }]
+            : []),
+        ]}
+      />
     </div>
   )
 
-  /** «Сбросить на умолчание»: пункт Radix на десктопе, кнопка — в панели. */
-  const renderResetItem = (inSheet: boolean) => {
-    if (!defaultAgent || !showResetToDefault) return null
-    const className =
-      'text-xs flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-interactive-hover data-[highlighted]:bg-interactive-selection outline-none w-full text-left'
-    const content = (
-      <>
-        <Icon name="arrow-go-back" className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="font-medium">{t('chat.modelControls.resetToDefault')}</span>
-      </>
-    )
-    const onSelect = () => selectAgent(defaultAgent.id)
-    return inSheet ? (
-      <button type="button" role="menuitem" onClick={onSelect} className={className}>
-        {content}
-      </button>
-    ) : (
-      <DropdownMenu.Item onClick={onSelect} className={className}>
-        {content}
-      </DropdownMenu.Item>
-    )
-  }
-
-  const resetItemSheet = renderResetItem(true)
-  const resetItemDropdown = renderResetItem(false)
+  /** «Сбросить на умолчание» переехал в строку поиска (`SelectorSearchRow`). */
 
   /**
    * Список агентов. На десктопе пункты — `DropdownMenu.Item` (клавиатурная
@@ -319,8 +323,6 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
             </>
           }
         >
-          {resetItemSheet}
-          {resetItemSheet && <Divider tone="raised" className="mx-2 my-1" />}
           {emptyRow}
           {filtered.map((agent) => renderAgentItem(agent, true))}
         </MobileMenuSheet>
@@ -349,9 +351,6 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
             outerClassName="max-h-[min(800px,calc(100dvh-12rem))] flex-1"
             className="p-1"
           >
-            {resetItemDropdown}
-            {resetItemDropdown && <Divider tone="raised" className="mx-2 my-1" />}
-
             {emptyRow}
 
             {filtered.map((agent) => renderAgentItem(agent, false))}
