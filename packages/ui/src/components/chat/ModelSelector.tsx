@@ -11,6 +11,7 @@ import { Icon } from '../icon/Icon'
 import { isSelectableModel, selectableProvidersByName } from '@/lib/modelOptions'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { Divider } from '../ui/Divider'
+import { modelTooltipLines, modelTooltipText } from '@/lib/composerTooltips'
 import {
   MobileMenuSheet,
   sheetTriggerHandlers,
@@ -575,6 +576,37 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
     </div>
   )
 
+  /**
+   * Данные для подсказки кнопки выбора модели. Каталог грузится лениво при
+   * открытии списка, поэтому до первой загрузки размер контекста неизвестен —
+   * запрос ради тултипа не дёргаем.
+   */
+  const selectedModelInfo = useMemo(
+    () => catalogModels.find((m) => m.provider === selectedProviderName && m.name === selectedModelName) ?? null,
+    [catalogModels, selectedProviderName, selectedModelName],
+  )
+  const modelLabel = selectedModelName || currentProvider?.model || ''
+  /**
+   * Подсказка кнопки — через `title`: её показывает общий `TitleTooltipBridge`
+   * (тот же вид, что у соседних кнопок тулбара). Многострочно: провайдер,
+   * модель, размер контекстного окна (если задан).
+   */
+  const tooltipText = modelTooltipText({
+    providerName: currentProvider?.name ?? selectedProviderName,
+    modelName: modelLabel,
+    contextWindow: selectedModelInfo?.context_window ?? null,
+    contextLabel: t('rightPanel.stats.contextWindow'),
+  })
+  /** Строки для общего тултипа: модель — обычная, провайдер и окно — приглушённые. */
+  const tooltipLines = JSON.stringify(
+    modelTooltipLines({
+      providerName: currentProvider?.name ?? selectedProviderName,
+      modelName: modelLabel,
+      contextWindow: selectedModelInfo?.context_window ?? null,
+      contextLabel: t('rightPanel.stats.contextWindow'),
+    }),
+  )
+
   /** Содержимое триггера: одинаковое для дропдауна и мобильной панели. */
   const triggerInner = (
     <>
@@ -592,6 +624,26 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
         </>
       )}
     </>
+  )
+
+  /**
+   * Кнопка выбора модели с подсказкой (наведение мышью): провайдер, название
+   * модели и размер контекстного окна, если он известен. Каталог моделей грузится
+   * лениво — при первом наведении карточка уже могла не быть загружена, поэтому
+   * окно появится после первого открытия списка (отдельный запрос не гоняем).
+   */
+  const modelTrigger = (
+    <DropdownMenu.Trigger asChild>
+      <button
+        ref={triggerRef}
+        className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
+        aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
+        title={tooltipText || undefined}
+        data-title-tip-lines={tooltipLines}
+      >
+        {triggerInner}
+      </button>
+    </DropdownMenu.Trigger>
   )
 
   /**
@@ -622,6 +674,8 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
           aria-haspopup="menu"
           aria-expanded={open}
+          title={tooltipText || undefined}
+          data-title-tip-lines={tooltipLines}
           // Маркер открытого листа: подсветка триггера читается программно.
           data-sheet-open={triggerOpen['data-sheet-open']}
           {...triggerHandlers}
@@ -649,15 +703,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
 
   return (
     <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
-      <DropdownMenu.Trigger asChild>
-        <button
-          ref={triggerRef}
-          className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
-          aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
-        >
-          {triggerInner}
-        </button>
-      </DropdownMenu.Trigger>
+      {modelTrigger}
 
       <DropdownMenu.Portal>
         <DropdownMenu.Content

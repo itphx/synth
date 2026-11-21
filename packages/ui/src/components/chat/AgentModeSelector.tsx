@@ -15,6 +15,7 @@ import {
   useTriggerGap,
 } from '../ui/MobileMenuSheet'
 import { Divider } from '../ui/Divider'
+import { agentTooltipLines, agentTooltipText } from '@/lib/composerTooltips'
 
 interface AgentModeSelectorProps {
   sessionId: string
@@ -226,6 +227,42 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   )
 
   /**
+   * Подсказка — через `title`: её показывает общий `TitleTooltipBridge` (тот же
+   * вид, что у соседних кнопок тулбара). Многострочно: имя и описание роли.
+   */
+  const tooltipText = agentTooltipText({
+    displayName: activeAgent?.display_name,
+    description: activeAgent?.description,
+    fallbackName: activeAgentId,
+  })
+  /** Строки для общего тултипа: имя — обычное, описание — приглушённое. */
+  const tooltipLines = JSON.stringify(
+    agentTooltipLines({
+      displayName: activeAgent?.display_name,
+      description: activeAgent?.description,
+      fallbackName: activeAgentId,
+    }),
+  )
+
+  /**
+   * Кнопка выбора агента с подсказкой (наведение мышью): имя и описание роли.
+   * Описание есть у всех встроенных агентов; пустое — подсказка без него.
+   */
+  const agentTrigger = (
+    <DropdownMenu.Trigger asChild>
+      <button
+        ref={triggerRef}
+        className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
+        aria-label={activeAgent?.display_name || activeAgentId || t('chat.modelControls.searchAgents')}
+        title={tooltipText || undefined}
+        data-title-tip-lines={tooltipLines}
+      >
+        {triggerInner}
+      </button>
+    </DropdownMenu.Trigger>
+  )
+
+  /**
    * Мобильная зона (телефон/планшет и узкая центральная колонка — `centralNarrow`):
    * вместо Radix-поппера `side="top"` — общий мобильный лист (`MobileMenuSheet`):
    * панель растёт **вверх от кнопки** (зазор над кнопкой равен зазору под ней),
@@ -260,6 +297,8 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
           aria-label={activeAgent?.display_name || activeAgentId || t('chat.modelControls.searchAgents')}
           aria-haspopup="menu"
           aria-expanded={open}
+          title={tooltipText || undefined}
+          data-title-tip-lines={tooltipLines}
           // Маркер открытого листа: подсветка триггера читается программно.
           data-sheet-open={triggerOpen['data-sheet-open']}
           {...triggerHandlers}
@@ -291,15 +330,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
 
   return (
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
-      <DropdownMenu.Trigger asChild>
-        <button
-          ref={triggerRef}
-          className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
-          aria-label={activeAgent?.display_name || activeAgentId || t('chat.modelControls.searchAgents')}
-        >
-          {triggerInner}
-        </button>
-      </DropdownMenu.Trigger>
+      {agentTrigger}
 
       <DropdownMenu.Portal>
         <DropdownMenu.Content

@@ -225,6 +225,56 @@ describe('TitleTooltipBridge', () => {
     expect(btn.hasAttribute(ATTR)).toBe(false)
   })
 
+  it('рисует строки с приглушёнными второстепенными частями (data-title-tip-lines)', async () => {
+    const host = await mount(
+      <button
+        title={'itphx\nomn.qwen3.8:27b\nКонтекстное окно: 262 144'}
+        data-title-tip-lines={JSON.stringify([
+          { text: 'itphx', muted: true },
+          { text: 'omn.qwen3.8:27b' },
+          { text: 'Контекстное окно: 262 144', muted: true },
+        ])}
+      >
+        btn
+      </button>,
+    )
+    const btn = host.querySelector('button')!
+
+    await act(async () => {
+      hover(btn)
+    })
+    await showAfterDelay()
+
+    const el = tip()!
+    expect(el).not.toBeNull()
+    const lines = Array.from(el.querySelectorAll('span > span'))
+    expect(lines.map((line) => line.textContent)).toEqual([
+      'itphx',
+      'omn.qwen3.8:27b',
+      'Контекстное окно: 262 144',
+    ])
+    // Приглушены только провайдер и размер окна; модель — обычным цветом.
+    expect(lines[0]!.className).toContain('text-muted-foreground')
+    expect(lines[1]!.className).not.toContain('text-muted-foreground')
+    expect(lines[2]!.className).toContain('text-muted-foreground')
+  })
+
+  it('невалидный JSON в data-title-tip-lines — плоский текст, без падения', async () => {
+    const host = await mount(
+      <button title="Подсказка" data-title-tip-lines="не json">
+        btn
+      </button>,
+    )
+    const btn = host.querySelector('button')!
+
+    await act(async () => {
+      hover(btn)
+    })
+    await showAfterDelay()
+
+    expect(tip()!.textContent).toBe('Подсказка')
+  })
+
   it('при unmount очищает таймеры и слушатели', async () => {
     const host = await mount(<button title="Подсказка">btn</button>)
     const btn = host.querySelector('button')!
