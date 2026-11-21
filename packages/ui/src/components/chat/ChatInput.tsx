@@ -1033,7 +1033,11 @@ export function ChatInput({
       textareaRef.current.style.height = 'auto'
     }
     clearAttachments(sessionId)
-  }, [value, agents, sendWithAttachments, sessionId, clearAttachments, setValue])
+    // Развёрнутый композер сворачивается после успешной отправки: экран
+    // возвращается к ленте, а не остаётся занятым полем ввода на всю высоту.
+    // При ошибке отправки (выше — `return`) режим сохраняется.
+    if (expanded) onToggleExpand?.()
+  }, [value, agents, sendWithAttachments, sessionId, clearAttachments, setValue, expanded, onToggleExpand])
 
   const handleEnqueue = useCallback(async () => {
     const text = value.trim()

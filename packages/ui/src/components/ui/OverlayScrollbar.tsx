@@ -51,22 +51,37 @@ const OverlayScrollbarComponent: React.FC<OverlayScrollbarProps> = ({
     if (!container) return
 
     const { scrollHeight, clientHeight, scrollTop, scrollWidth, clientWidth, scrollLeft } = container
+
+    /*
+     * Ось без размера не пересчитываем — контейнер ещё не разложен (на миг
+     * нулевая высота при смене геометрии списка: ресайз окна, скрытие клавиатуры,
+     * изменение высоты панели). Иначе метрики уходили бы в ноль, компонент
+     * отдавал бы `null`, и полоса пропадала/появлялась заново — то самое
+     * «мигание» при ресайзе. Лучше на кадр старый ползунок, чем его исчезновение.
+     */
+    const hasVerticalBox = clientHeight > 0
+    const hasHorizontalBox = clientWidth > 0
+
     const trackInset = 8
 
-    let nextVertical: ThumbMetrics = EMPTY_THUMB
-    if (scrollHeight > clientHeight) {
-      const trackLength = Math.max(clientHeight - trackInset * 2, 0)
-      const rawThumb = (clientHeight / scrollHeight) * trackLength
-      const length = Math.max(minThumbSize, Math.min(trackLength, rawThumb))
-      const maxOffset = Math.max(trackLength - length, 0)
-      const maxScroll = Math.max(scrollHeight - clientHeight, 1)
-      const offset = (scrollTop / maxScroll) * maxOffset
-      nextVertical = { length, offset }
+    if (!hasVerticalBox && !hasHorizontalBox) return
+
+    if (hasVerticalBox) {
+      let nextVertical: ThumbMetrics = EMPTY_THUMB
+      if (scrollHeight > clientHeight) {
+        const trackLength = Math.max(clientHeight - trackInset * 2, 0)
+        const rawThumb = (clientHeight / scrollHeight) * trackLength
+        const length = Math.max(minThumbSize, Math.min(trackLength, rawThumb))
+        const maxOffset = Math.max(trackLength - length, 0)
+        const maxScroll = Math.max(scrollHeight - clientHeight, 1)
+        const offset = (scrollTop / maxScroll) * maxOffset
+        nextVertical = { length, offset }
+      }
+      setVertical((prev) => (isSameThumbMetrics(prev, nextVertical) ? prev : nextVertical))
     }
-    setVertical((prev) => (isSameThumbMetrics(prev, nextVertical) ? prev : nextVertical))
 
     let nextHorizontal: ThumbMetrics = EMPTY_THUMB
-    if (!disableHorizontal && scrollWidth > clientWidth) {
+    if (!disableHorizontal && hasHorizontalBox && scrollWidth > clientWidth) {
       const trackLength = Math.max(clientWidth - trackInset * 2, 0)
       const rawThumb = (clientWidth / scrollWidth) * trackLength
       const length = Math.max(minThumbSize, Math.min(trackLength, rawThumb))
@@ -289,4 +304,10 @@ const OverlayScrollbarComponent: React.FC<OverlayScrollbarProps> = ({
 
 OverlayScrollbarComponent.displayName = "OverlayScrollbar"
 
-export const OverlayScrollbar = OverlayScrollbarComponent
+/**
+ * Полоса прокрутки мемоизирована: родитель (мобильный лист, попап) ре-рендерится
+ * на каждый пересчёт геометрии/каждый скролл, а все пропсы здесь стабильны
+ * (`containerRef` — объект ref, остальные — примитивы). Без `memo` каждый такой
+ * ре-рендер пересобирал бы поддерево полосы, и она могла мигать.
+ */
+export const OverlayScrollbar = React.memo(OverlayScrollbarComponent)

@@ -11,7 +11,12 @@ import { Icon } from '../icon/Icon'
 import { isSelectableModel, selectableProvidersByName } from '@/lib/modelOptions'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
 import { Divider } from '../ui/Divider'
-import { MobileMenuSheet, blurActiveElement } from '../ui/MobileMenuSheet'
+import {
+  MobileMenuSheet,
+  sheetTriggerHandlers,
+  sheetTriggerOpenProps,
+  useTriggerGap,
+} from '../ui/MobileMenuSheet'
 import type { ModelInfo, ProviderInfo } from '@/lib/api/synthApi'
 
 type DropdownItem =
@@ -64,6 +69,13 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   const currentProvider = providers.find((p) => p.name === selectedProviderName)
   const scrollContainerRef = useRef<HTMLElement | null>(null)
   const triggerRef = useRef<HTMLButtonElement | null>(null)
+  /**
+   * `sideOffset` десктопного дропдауна = зазор под кнопкой (замер при открытии):
+   * интервал над кнопкой делается равным интервалу под ней, как в мобильном листе.
+   * Мобильной ветке значение не нужно — там зазор считает сам `MobileMenuSheet`
+   * по той же формуле.
+   */
+  const triggerGap = useTriggerGap(open && !isMobile, triggerRef)
 
   /**
    * Списки выбора не показывают модели отключённых провайдеров (и отключённые
@@ -245,39 +257,59 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   const listItems = useMemo((): DropdownItem[] => {
     const items: DropdownItem[] = []
     const hasSearch = searchQuery.trim().length > 0
+    /**
+     * Ключ строки списка. В каталоге встречаются две модели одного провайдера с
+     * одинаковым именем (разные id — например `omn/qwen3.8:27b-256k` и
+     * `qwen3.8:27b-256k`). Ключ из `provider:name` давал **дубли `key`**: React
+     * ругался и при любом пересчёте (ресайз, закрытие клавиатуры) пересобирал
+     * такие строки — список «мигал» и мог терять пункт. Поэтому ключ строится из
+     * `model.id` (уникален), а на случай повтора в том же списке (избранное/
+     * недавние) страхуется счётчиком: ключи уникальны и стабильны между рендерами.
+     */
+    const usedIds = new Set<string>()
+    const uniqueId = (base: string): string => {
+      let id = base
+      let suffix = 2
+      while (usedIds.has(id)) {
+        id = `${base}#${suffix}`
+        suffix += 1
+      }
+      usedIds.add(id)
+      return id
+    }
 
     if (!hasSearch && favoriteModels.length > 0) {
-      items.push({ type: 'label', text: t('chat.modelControls.favorites'), icon: 'star-fill', id: 'label-fav' })
+      items.push({ type: 'label', text: t('chat.modelControls.favorites'), icon: 'star-fill', id: uniqueId('label-fav') })
       for (const { model, provider } of favoriteModels) {
         items.push({
           type: 'model',
           model,
           provider,
           isFavorite: true,
-          id: `fav-${provider.name}:${model.name}`,
+          id: uniqueId(`fav-${model.id}`),
         })
       }
     }
 
     if (!hasSearch && recentModels.length > 0) {
       if (items.length > 0) {
-        items.push({ type: 'separator', id: 'sep-recent' })
+        items.push({ type: 'separator', id: uniqueId('sep-recent') })
       }
-      items.push({ type: 'label', text: t('chat.modelControls.recent'), icon: 'time', id: 'label-recent' })
+      items.push({ type: 'label', text: t('chat.modelControls.recent'), icon: 'time', id: uniqueId('label-recent') })
       for (const { model, provider } of recentModels) {
         items.push({
           type: 'model',
           model,
           provider,
           isFavorite: isFavorite(model),
-          id: `recent-${provider.name}:${model.name}`,
+          id: uniqueId(`recent-${model.id}`),
         })
       }
     }
 
     if (groupedByProvider.length > 0) {
       if (items.length > 0) {
-        items.push({ type: 'separator', id: 'sep-groups' })
+        items.push({ type: 'separator', id: uniqueId('sep-groups') })
       }
       for (const { provider, models: pModels } of groupedByProvider) {
         const collapsed = collapsedProviders.has(provider.name)
@@ -285,7 +317,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           type: 'label',
           text: provider.name,
           icon: provider.icon || '',
-          id: `label-${provider.name}`,
+          id: uniqueId(`label-${provider.name}`),
           isProvider: true,
           collapsed,
           providerUrl: provider.url,
@@ -297,7 +329,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
               model,
               provider,
               isFavorite: isFavorite(model),
-              id: `${provider.name}:${model.name}`,
+              id: uniqueId(model.id),
             })
           }
         }
@@ -306,13 +338,13 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
 
     if (items.length === 0) {
       if (catalogLoading) {
-        items.push({ type: 'empty', text: t('chat.modelControls.loadingMore'), id: 'loading' })
+        items.push({ type: 'empty', text: t('chat.modelControls.loadingMore'), id: uniqueId('loading') })
       } else if (modelsError && catalogModels.length === 0) {
-        items.push({ type: 'empty', text: modelsError, id: 'error' })
+        items.push({ type: 'empty', text: modelsError, id: uniqueId('error') })
       } else if (error && providers.length === 0) {
-        items.push({ type: 'empty', text: error, id: 'error' })
+        items.push({ type: 'empty', text: error, id: uniqueId('error') })
       } else {
-        items.push({ type: 'empty', text: t('chat.modelControls.noModelsFound'), id: 'empty' })
+        items.push({ type: 'empty', text: t('chat.modelControls.noModelsFound'), id: uniqueId('empty') })
       }
       return items
     }
@@ -359,15 +391,25 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
     overscan: 8,
   })
 
+  /**
+   * Пересчёт виртуализатора — **только при открытии и при смене набора
+   * элементов** (длина списка), но **не на каждый resize**.
+   *
+   * На ресайз окна/вьюпорта (скрытие клавиатуры, изменение высоты панели)
+   * `useVirtualizer` пересчитывается сам — он слушает `ResizeObserver`
+   * скролл-элемента; явный `measure()` там только сбросил бы кеш замеров и
+   * заставил строки пересобираться (мигание). Вызов схлопывается в один тик
+   * (`setTimeout(0)`): сначала React коммитит разметку, затем меряем. Вариант с
+   * `requestAnimationFrame` в jsdom-тестах даёт пустой первый рендер строк.
+   */
   useEffect(() => {
-    if (open) {
-      const timer = setTimeout(() => {
-        virtualizer.measure()
-        virtualizer.scrollToIndex(0, { align: 'start' })
-      }, 0)
-      return () => clearTimeout(timer)
-    }
-  }, [open])
+    if (!open) return
+    const timer = setTimeout(() => {
+      virtualizer.measure()
+      virtualizer.scrollToIndex(0, { align: 'start' })
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [open, listItems.length, virtualizer])
 
   useEffect(() => {
     virtualizer.scrollToIndex(0, { align: 'start' })
@@ -555,25 +597,34 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
   /**
    * Мобильная зона (телефон/планшет, а также узкая центральная колонка —
    * `centralNarrow`): вместо Radix-поппера `side="top"` тот же список живёт в
-   * общей фиксированной панели, прижатой к верху композера. Осознанно и для
-   * `centralNarrow`: поппер шириной 380px в узком столбце перекрывает поле ввода
-   * и уходит за верхний край, а лист ведёт себя предсказуемо. Широкая
-   * десктопная колонка остаётся на дропдауне (ниже).
+   * общем мобильном листе (`MobileMenuSheet`): панель растёт **вверх от кнопки**
+   * (зазор над кнопкой равен зазору под ней), ширина — на всю ширину поля ввода.
+   * Осознанно и для `centralNarrow`: поппер шириной 380px в узком столбце
+   * перекрывает поле ввода и уходит за верхний край, а лист ведёт себя
+   * предсказуемо. Широкая десктопная колонка остаётся на дропдауне (ниже).
    */
   if (isMobile) {
+    const triggerOpen = sheetTriggerOpenProps(open)
+    // Переключение по `pointerdown` с подавлением парного `click`: `click` на
+    // Android при скрытии клавиатуры мог не прийти, а после закрытия по
+    // backdrop открывал список заново («моргание»).
+    const triggerHandlers = sheetTriggerHandlers({
+      open,
+      onOpen: () => handleOpenChange(true),
+      onClose: closeSheet,
+    })
     return (
       <>
         <button
           ref={triggerRef}
           type="button"
-          className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
+          className={`model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0${triggerOpen.className ? ` ${triggerOpen.className}` : ''}`}
           aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
           aria-haspopup="menu"
           aria-expanded={open}
-          // Blur на pointerdown (раньше click): клавиатура начинает закрываться
-          // до открытия панели, поэтому её позиция считается по итоговому layout.
-          onPointerDown={blurActiveElement}
-          onClick={() => handleOpenChange(!open)}
+          // Маркер открытого листа: подсветка триггера читается программно.
+          data-sheet-open={triggerOpen['data-sheet-open']}
+          {...triggerHandlers}
         >
           {triggerInner}
         </button>
@@ -600,6 +651,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
     <DropdownMenu.Root open={open} onOpenChange={handleOpenChange}>
       <DropdownMenu.Trigger asChild>
         <button
+          ref={triggerRef}
           className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
           aria-label={selectedModelName || currentProvider?.model || t('chat.modelControls.searchModels')}
         >
@@ -610,7 +662,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           side="top"
-          sideOffset={4}
+          sideOffset={triggerGap}
           className="w-[min(380px,calc(100vw-2rem))] p-0 flex flex-col bg-popover text-popover-foreground rounded-xl ring-1 ring-foreground/10 shadow-lg z-50"
           align="end"
           alignOffset={-40}

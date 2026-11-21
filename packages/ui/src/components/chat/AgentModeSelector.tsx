@@ -8,7 +8,12 @@ import { synthApi } from '@/lib/api/synthApi'
 import { resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
-import { MobileMenuSheet, blurActiveElement } from '../ui/MobileMenuSheet'
+import {
+  MobileMenuSheet,
+  sheetTriggerHandlers,
+  sheetTriggerOpenProps,
+  useTriggerGap,
+} from '../ui/MobileMenuSheet'
 import { Divider } from '../ui/Divider'
 
 interface AgentModeSelectorProps {
@@ -29,6 +34,11 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const sheetScrollRef = useRef<HTMLElement | null>(null)
+  /**
+   * `sideOffset` десктопного дропдауна = зазор под кнопкой (замер при открытии):
+   * интервал над кнопкой равен интервалу под ней, как в мобильном листе
+   */
+  const triggerGap = useTriggerGap(open && !isMobile, triggerRef)
 
   useEffect(() => {
     loadAgents(sessionId)
@@ -65,6 +75,8 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
     setOpen(false)
     setSearchQuery('')
   }, [])
+  /** Один путь открытия — та же последовательность, что у модели и размышлений. */
+  const openMenu = useCallback(() => setOpen(true), [])
 
   const selectAgent = (agentId: string) => {
     setActiveAgentId(agentId)
@@ -215,25 +227,42 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
 
   /**
    * Мобильная зона (телефон/планшет и узкая центральная колонка — `centralNarrow`):
-   * вместо Radix-поппера `side="top"` — общая фиксированная панель, прижатая к
-   * верху композера. Иначе список открывался только вверх, верхние пункты уходили
-   * за край экрана, а внутреннего скролла у поппера нет. Для `centralNarrow` —
-   * осознанно: в узком столбце поппер тоже перекрывает поле ввода.
+   * вместо Radix-поппера `side="top"` — общий мобильный лист (`MobileMenuSheet`):
+   * панель растёт **вверх от кнопки** (зазор над кнопкой равен зазору под ней),
+   * ширина — на всю ширину поля ввода. Иначе список открывался только вверх,
+   * верхние пункты уходили за край экрана, а внутреннего скролла у поппера нет.
+   * Для `centralNarrow` — осознанно: в узком столбце поппер тоже перекрывает
+   * поле ввода.
    */
   if (isMobile) {
+    const triggerOpen = sheetTriggerOpenProps(open)
+    // Переключение по `pointerdown` с подавлением парного `click`: `click` на
+    // Android при скрытии клавиатуры мог не прийти, а после закрытия по
+    // backdrop открывал список заново («моргание»). Закрытие — тот же
+    // `closeMenu`, что и у остальных путей (сбрасывает поиск).
+    //
+    // Последовательность — **точно та же**, что у модели и размышлений: один и
+    // тот же `sheetTriggerHandlers`, один и тот же `MobileMenuSheet` (в нём же —
+    // «карантин открытия», поэтому дребезг тапа после скрытия клавиатуры не
+    // роняет список). Отличие только в якоре: у агента кнопка без рамки, поэтому
+    // якорем служит сама кнопка (у размышлений — рамка вокруг неё).
+    const triggerHandlers = sheetTriggerHandlers({
+      open,
+      onOpen: openMenu,
+      onClose: closeMenu,
+    })
     return (
       <>
         <button
           ref={triggerRef}
           type="button"
-          className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
+          className={`model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0${triggerOpen.className ? ` ${triggerOpen.className}` : ''}`}
           aria-label={activeAgent?.display_name || activeAgentId || t('chat.modelControls.searchAgents')}
           aria-haspopup="menu"
           aria-expanded={open}
-          // Blur на pointerdown (раньше click): клавиатура скрывается до
-          // открытия панели, поэтому её позиция считается по итоговому layout.
-          onPointerDown={blurActiveElement}
-          onClick={() => setOpen((prev) => !prev)}
+          // Маркер открытого листа: подсветка триггера читается программно.
+          data-sheet-open={triggerOpen['data-sheet-open']}
+          {...triggerHandlers}
         >
           {triggerInner}
         </button>
@@ -264,6 +293,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
     <DropdownMenu.Root open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>
         <button
+          ref={triggerRef}
           className="model-selector-trigger flex shrink-0 items-center gap-1.5 cursor-pointer hover:opacity-70 min-w-0"
           aria-label={activeAgent?.display_name || activeAgentId || t('chat.modelControls.searchAgents')}
         >
@@ -274,7 +304,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           side="top"
-          sideOffset={4}
+          sideOffset={triggerGap}
           className="w-[min(280px,calc(100vw-2rem))] p-0 flex flex-col bg-popover text-popover-foreground rounded-xl ring-1 ring-foreground/10 shadow-lg z-50"
           align="end"
           alignOffset={-40}
