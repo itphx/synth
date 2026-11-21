@@ -43,12 +43,16 @@ interface ChatInputProps {
    * `interrupt` — прерывание текущей генерации с продолжением хода).
    * ADR-115: четвёртый аргумент — id загруженных вложений (`partId`); пустой
    * список не передаётся — тело запроса остаётся прежним.
+   * ADR-118 §3: пятый — `streamId` попытки отправки (идемпотентность приёма).
+   * Пока попытка не удалась, композер повторяет её с тем же id: повтор после
+   * ошибки и двойное нажатие не создают второе сообщение.
    */
   onSend: (
     text: string,
     agentRole?: string,
     mode?: SteerMode,
     attachments?: string[],
+    options?: { streamId?: string },
   ) => Promise<void>
   /**
    * ADR-104: режим отправки композера (значение задаёт вызывающий код; в UI —
@@ -331,6 +335,19 @@ function selectedModelModalities(): { name: string; modalities: string[] } | nul
   return { name: model.name, modalities: model.modalities }
 }
 
+/**
+ * ADR-118 §3: счётчик id попыток отправки композера.
+ *
+ * id попытки должен быть **стабильным** для конкретного текста и уникальным
+ * между разными текстами: сервер по нему дедуплицирует приём (`POST /prompt`
+ * с тем же `messageId` не создаёт второе сообщение).
+ */
+let sendAttemptSeq = 0
+function nextSendAttemptId(): string {
+  sendAttemptSeq += 1
+  return `stream-attempt-${sendAttemptSeq}-${Date.now()}`
+}
+
 export function ChatInput({
   sessionId,
   agents,
@@ -343,8 +360,7 @@ export function ChatInput({
   expanded,
   onToggleExpand,
   showAttachments = true,
-}: ChatInputProps) {
-  const { t } = useI18n()
+}: ChatInputProps) {  const { t } = useI18n()
   // Есть грубый указатель (тач): Enter на композере = перенос строки;
   // отправка — только кнопкой «Отправить». На устройствах с тачем это также
   // касается десктопов с тачскрином (isTouch = pointer: coarse).
@@ -421,6 +437,30 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const valueRef = useRef(value)
   valueRef.current = value
+  /**
+   * Состояние отправки (ADR-118 §3).
+   *
+   * `sending` — «попытка в полёте»: кнопка «Отправить» заблокирована и крутит
+   * индикатор. Состояние, а не только ref: кнопке нужен ре-рендер.
+   * `busyRef` — синхронный маркер для повторного клика/Enter: между нажатием и
+   * коммитом React состояние ещё `false`, поэтому guard идёт по ref.
+   */
+  const [sending, setSending] = useState(false)
+  const busyRef = useRef(false)
+  /**
+   * ADR-118 §3: id попытки отправки по ключу (текст или `индекс:текст` части с
+   * тегом). Пока попытка не удалась, повтор идёт с тем же id — сервер узнает
+   * сообщение и не создаст второе. После успеха карта сбрасывается: новый текст
+   * — новая попытка.
+   */
+  const attemptIdsRef = useRef<Map<string, string>>(new Map())
+  const attemptIdFor = useCallback((key: string): string => {
+    const existing = attemptIdsRef.current.get(key)
+    if (existing) return existing
+    const id = nextSendAttemptId()
+    attemptIdsRef.current.set(key, id)
+    return id
+  }, [])
   // Подсветка ввода: overlay-слой под textarea повторяет текст с цветными
   // токенами `/`, `$`, `#`, `@`; сам textarea прозрачный (каретка/выделение
   // остаются браузерными).
@@ -820,6 +860,9 @@ export function ChatInput({
    * Вложения уходят только с первой частью: один и тот же `partId` не должен
    * попасть в несколько сообщений (иначе вложения дублируются). Пустой список
    * не передаём — тело запроса остаётся прежним.
+   *
+   * ADR-118 §3: каждой части выдаётся id попытки (`attemptIdFor`), стабильный
+   * до успеха — повтор после ошибки не создаёт дубль.
    */
   const sendWithAttachments = useCallback(
     async (text: string, parts: TagPart[] | null) => {
@@ -827,15 +870,23 @@ export function ChatInput({
       const attachmentIds = readyIds.length > 0 ? readyIds : undefined
 
       if (!parts) {
-        await onSend(text, undefined, effectiveMode, attachmentIds)
+        await onSend(text, undefined, effectiveMode, attachmentIds, {
+          streamId: attemptIdFor(text),
+        })
         return
       }
       for (let index = 0; index < parts.length; index += 1) {
         const part = parts[index]!
-        await onSend(part.text, part.agentRole, effectiveMode, index === 0 ? attachmentIds : undefined)
+        await onSend(
+          part.text,
+          part.agentRole,
+          effectiveMode,
+          index === 0 ? attachmentIds : undefined,
+          { streamId: attemptIdFor(`${index}:${part.text}`) },
+        )
       }
     },
-    [onSend, effectiveMode, sessionId],
+    [onSend, effectiveMode, sessionId, attemptIdFor],
   )
 
   /**
@@ -990,97 +1041,125 @@ export function ChatInput({
   )
 
   const handleSend = useCallback(async () => {
-    const text = value.trim()
-    if (!text) return
-    // Ошибка загрузки блокирует отправку: вложение не должно «потеряться».
-    if (useAttachmentsStore.getState().hasFailed(sessionId)) return
-    // ADR-115: пока вложение не загружено, отправлять нечего — серверу нужны
-    // готовые `partId`; кнопка в этом состоянии заблокирована.
-    if (useAttachmentsStore.getState().hasPending(sessionId)) return
-
-    const parts = splitMessageWithTags(text, agents)
-
-    if (parts && parts.length > MAX_TAGS) {
-      const ok = await confirm({
-        title: 'Слишком много тегов',
-        message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
-        variant: 'warning',
-      })
-      if (!ok) return
-    }
-
+    // Попытка уже в полёте: повторный клик/Enter — no-op (ни дублей, ни тоста).
+    // Guard — до первой `await`: иначе второй клик проскочил бы до ре-рендера.
+    if (busyRef.current) return
+    busyRef.current = true
+    setSending(true)
     try {
-      await sendWithAttachments(text, parts)
-    } catch {
-      // Ошибку показал вызывающий код (ChatTab). Текст и вложения остаются в
-      // композере: пользователь может повторить отправку без потерь.
-      return
-    }
+      const text = value.trim()
+      if (!text) return
+      // Ошибка загрузки блокирует отправку: вложение не должно «потеряться».
+      if (useAttachmentsStore.getState().hasFailed(sessionId)) return
+      // ADR-115: пока вложение не загружено, отправлять нечего — серверу нужны
+      // готовые `partId`; кнопка в этом состоянии заблокирована.
+      if (useAttachmentsStore.getState().hasPending(sessionId)) return
 
-    // Очистка — только после успешной отправки: при ошибке черновик не теряем.
-    setValue('')
-    setMentionState(null)
-    setMentionMatches(0)
-    setCommandState(null)
-    setCommandMatches(0)
-    setSkillState(null)
-    setSkillMatches(0)
-    setSnippetState(null)
-    setSnippetMatches(0)
-    setScriptState(null)
-    setScriptMatches(0)
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
+      const parts = splitMessageWithTags(text, agents)
+
+      if (parts && parts.length > MAX_TAGS) {
+        const ok = await confirm({
+          title: 'Слишком много тегов',
+          message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
+          variant: 'warning',
+        })
+        if (!ok) return
+      }
+
+      try {
+        await sendWithAttachments(text, parts)
+      } catch {
+        // Ошибку показал вызывающий код (ChatTab). Текст и вложения остаются в
+        // композере: пользователь может повторить отправку без потерь — с тем же
+        // id попытки, поэтому второе сообщение не создастся (ADR-118 §3).
+        return
+      }
+
+      // Попытка удалась: следующий текст — новая попытка с новым id.
+      attemptIdsRef.current.clear()
+
+      // Очистка — только после успешной отправки: при ошибке черновик не теряем.
+      setValue('')
+      setMentionState(null)
+      setMentionMatches(0)
+      setCommandState(null)
+      setCommandMatches(0)
+      setSkillState(null)
+      setSkillMatches(0)
+      setSnippetState(null)
+      setSnippetMatches(0)
+      setScriptState(null)
+      setScriptMatches(0)
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
+      }
+      clearAttachments(sessionId)
+      // Развёрнутый композер сворачивается после успешной отправки: экран
+      // возвращается к ленте, а не остаётся занятым полем ввода на всю высоту.
+      // При ошибке отправки (выше — `return`) режим сохраняется.
+      if (expanded) onToggleExpand?.()
+    } finally {
+      // Индикатор снимается всегда — в том числе при ошибке: композер не
+      // «залипает», а повторная отправка снова доступна.
+      busyRef.current = false
+      setSending(false)
     }
-    clearAttachments(sessionId)
-    // Развёрнутый композер сворачивается после успешной отправки: экран
-    // возвращается к ленте, а не остаётся занятым полем ввода на всю высоту.
-    // При ошибке отправки (выше — `return`) режим сохраняется.
-    if (expanded) onToggleExpand?.()
   }, [value, agents, sendWithAttachments, sessionId, clearAttachments, setValue, expanded, onToggleExpand])
 
   const handleEnqueue = useCallback(async () => {
-    const text = value.trim()
-    if (!text) return
-    if (useAttachmentsStore.getState().hasFailed(sessionId)) return
-    if (useAttachmentsStore.getState().hasPending(sessionId)) return
-
-    const parts = splitMessageWithTags(text, agents)
-
-    if (parts && parts.length > MAX_TAGS) {
-      const ok = await confirm({
-        title: 'Слишком много тегов',
-        message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
-        variant: 'warning',
-      })
-      if (!ok) return
-    }
-
-    // Отправка во время активного хода (ADR-104): режим задаёт вызывающий код
-    // (`effectiveMode`; в UI — `queue`, то есть «в очередь»). Вмешательство в
-    // ход (`steer`) композер не выставляет — это возможность API.
+    // Та же защита, что у `handleSend`: очередь не должна получить дубль.
+    if (busyRef.current) return
+    busyRef.current = true
+    setSending(true)
     try {
-      await sendWithAttachments(text, parts)
-    } catch {
-      return
-    }
+      const text = value.trim()
+      if (!text) return
+      if (useAttachmentsStore.getState().hasFailed(sessionId)) return
+      if (useAttachmentsStore.getState().hasPending(sessionId)) return
 
-    // Очистка — только после успешной постановки в очередь/отправки.
-    setValue('')
-    setMentionState(null)
-    setMentionMatches(0)
-    setCommandState(null)
-    setCommandMatches(0)
-    setSkillState(null)
-    setSkillMatches(0)
-    setSnippetState(null)
-    setSnippetMatches(0)
-    setScriptState(null)
-    setScriptMatches(0)
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
+      const parts = splitMessageWithTags(text, agents)
+
+      if (parts && parts.length > MAX_TAGS) {
+        const ok = await confirm({
+          title: 'Слишком много тегов',
+          message: `${parts.length} тегов. Максимум: ${MAX_TAGS}. Отправить все равно?`,
+          variant: 'warning',
+        })
+        if (!ok) return
+      }
+
+      // Отправка во время активного хода (ADR-104): режим задаёт вызывающий код
+      // (`effectiveMode`; в UI — `queue`, то есть «в очередь»). Вмешательство в
+      // ход (`steer`) композер не выставляет — это возможность API.
+      try {
+        await sendWithAttachments(text, parts)
+      } catch {
+        return
+      }
+
+      // Очередь приняла сообщение — следующая отправка это новая попытка.
+      attemptIdsRef.current.clear()
+
+      // Очистка — только после успешной постановки в очередь/отправки.
+      setValue('')
+      setMentionState(null)
+      setMentionMatches(0)
+      setCommandState(null)
+      setCommandMatches(0)
+      setSkillState(null)
+      setSkillMatches(0)
+      setSnippetState(null)
+      setSnippetMatches(0)
+      setScriptState(null)
+      setScriptMatches(0)
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto'
+      }
+      clearAttachments(sessionId)
+    } finally {
+      busyRef.current = false
+      setSending(false)
     }
-    clearAttachments(sessionId)
   }, [value, agents, sendWithAttachments, sessionId, clearAttachments, setValue])
 
   const handleCreateNote = () => {
@@ -1385,17 +1464,28 @@ export function ChatInput({
               <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   onClick={handleEnqueue}
-                  disabled={!value.trim() || pendingUpload || failed}
-                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  disabled={!value.trim() || pendingUpload || failed || sending}
+                  aria-busy={sending || undefined}
+                  // Блокировка только через `disabled` (неактивная кнопка и спиннер):
+                  // курсор не меняем — на телефоне `cursor-not-allowed` не читается
+                  // и лишь даёт лишний визуальный шум.
+                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30"
                   title={
-                    failed
-                      ? t('chat.attachments.fixErrors')
-                      : pendingUpload
-                        ? t('chat.attachments.waitUpload')
-                        : t('chat.input.enqueue')
+                    sending
+                      ? t('chat.input.enqueue')
+                      : failed
+                        ? t('chat.attachments.fixErrors')
+                        : pendingUpload
+                          ? t('chat.attachments.waitUpload')
+                          : t('chat.input.enqueue')
                   }
                 >
-                  <Icon name="arrow-up" className="size-5" />
+                  {/* «Попытка в полёте»: спиннер вместо иконки — видно, что нажатие
+                      принято (раньше интерфейс молчал, и пользователь жал ещё раз). */}
+                  <Icon
+                    name={sending ? 'refresh' : 'arrow-up'}
+                    className={sending ? 'size-5 animate-spin' : 'size-5'}
+                  />
                 </button>
                 <button
                   onClick={onStop}
@@ -1424,17 +1514,27 @@ export function ChatInput({
                 </button>
                 <button
                   onClick={handleSend}
-                  disabled={!value.trim() || pendingUpload || failed}
-                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  disabled={!value.trim() || pendingUpload || failed || sending}
+                  aria-busy={sending || undefined}
+                  // Блокировка только через `disabled` (неактивная кнопка и спиннер):
+                  // курсор не меняем — на телефоне `cursor-not-allowed` не читается
+                  // и лишь даёт лишний визуальный шум.
+                  className="inline-flex items-center justify-center rounded-lg p-1.5 text-primary hover:bg-primary/10 transition-colors disabled:opacity-30"
                   title={
-                    failed
-                      ? t('chat.attachments.fixErrors')
-                      : pendingUpload
-                        ? t('chat.attachments.waitUpload')
-                        : t('chat.input.send')
+                    sending
+                      ? t('chat.input.send')
+                      : failed
+                        ? t('chat.attachments.fixErrors')
+                        : pendingUpload
+                          ? t('chat.attachments.waitUpload')
+                          : t('chat.input.send')
                   }
                 >
-                  <Icon name="send-plane" className="size-5" />
+                  {/* «Попытка в полёте»: индикатор отправки вместо иконки. */}
+                  <Icon
+                    name={sending ? 'refresh' : 'send-plane'}
+                    className={sending ? 'size-5 animate-spin' : 'size-5'}
+                  />
                 </button>
               </div>
               </>)}

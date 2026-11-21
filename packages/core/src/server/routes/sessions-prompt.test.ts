@@ -70,6 +70,8 @@ function createMockOrchestrator() {
       lastPromptMeta: null,
     }),
     getModelPricing: vi.fn().mockReturnValue(null),
+    /** Сам мок процесса хода: тесты считают число запущенных ходов. */
+    processMessage,
   };
 }
 
@@ -341,6 +343,8 @@ describe('POST /api/v2/sessions/:id/prompt — события приёма (ADR-
   });
 
   it('непригодный messageId (пробелы/пусто/не строка) → серверный id во всех ответах и событиях', async () => {
+    // Дедуп приёма не должен «сработать» на мусорный id: каждое сообщение новое.
+    // (См. блок «идемпотентность по клиентскому messageId» ниже.)
     // До появления `normalizeClientMessageId` строка из пробелов truthy-проходила
     // в `streamId`, и сообщение сохранялось с id `'   '`.
     const { app, sessionManager, eventBus } = createTestApp(tmpDir, { realQueue: true });
@@ -377,5 +381,157 @@ describe('POST /api/v2/sessions/:id/prompt — события приёма (ADR-
       expect(userMessages[0]!.metadata?.stream_id).toBe(body.messageId);
       expect(delivered!.data).toMatchObject({ messageId: body.messageId, role: 'user' });
     }
+  });
+});
+
+/**
+ * Идемпотентность приёма по клиентскому `messageId` (ADR-118 §3).
+ *
+ * Клиентский id — идентификатор **попытки отправки**, а не HTTP-запроса:
+ * двойной клик по «Отправить», повтор после сетевой ошибки и ретрай прокси
+ * присылают один и тот же `messageId` и должны получить тот же ответ приёма
+ * (`202 {messageId, mode, position}`), не создавая вторую копию сообщения.
+ *
+ * Проверяется:
+ *   • повтор с тем же id → оба ответа `202`, в истории одно сообщение,
+ *     `message.added`/`message.accepted` по одному разу, ход запущен один раз;
+ *   • два запроса с **разными** id и одинаковым текстом → два сообщения
+ *     (дедупа по содержимому нет — осознанное поведение);
+ *   • id, уже стоящий в очереди, повторно не добавляется.
+ */
+describe('POST /api/v2/sessions/:id/prompt — идемпотентность по messageId', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-prompt-idem-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Запрос приёма с клиентским id попытки. */
+  async function prompt(
+    app: Hono,
+    sessionId: string,
+    content: string,
+    messageId: string,
+  ): Promise<Response> {
+    return app.request(`/api/v2/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, messageId }),
+    });
+  }
+
+  /** Дождаться события шины по типу (или таймаут — тест упадёт на проверках). */
+  async function waitForEvent(
+    events: BusEvent[],
+    type: string,
+    timeoutMs = 5000,
+  ): Promise<BusEvent | undefined> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const found = events.find((e) => e.type === type);
+      if (found) return found;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return undefined;
+  }
+
+  it('повтор с тем же messageId: оба 202, одно сообщение, один ход', async () => {
+    const { app, sessionManager, eventBus, orchestrator } = createTestApp(tmpDir, {
+      realQueue: true,
+      userId: 'user-1',
+    });
+    const session = await sessionManager.createSession({ title: 'P', userId: 'local' });
+    const clientId = 'stream-attempt-1-1700000000000';
+
+    // Подписка отправителя: `message.accepted`/`message.enqueued` — адресные.
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e), { userId: 'user-1' });
+
+    const first = await prompt(app, session.id, 'привет', clientId);
+    const second = await prompt(app, session.id, 'привет', clientId);
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+
+    const firstBody = (await first.json()) as AcceptedBody;
+    const secondBody = (await second.json()) as AcceptedBody;
+    // Оба ответа — один и тот же контракт приёма с тем же id.
+    expect(firstBody.messageId).toBe(clientId);
+    expect(secondBody.messageId).toBe(clientId);
+    expect(secondBody.mode).toBe('queue');
+    expect(secondBody.position).toBeNull();
+
+    // Материализация в истории (её делает процессор очереди).
+    expect(await waitForEvent(events, 'message.delivered')).toBeDefined();
+    // Дать шанс «второй» материализации, если бы она была.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const fresh = (await sessionManager.getSession(session.id))!;
+    expect(fresh.messages.filter((m) => m.role === 'user')).toHaveLength(1);
+    expect(fresh.messages[0]!.id).toBe(clientId);
+    // Повтор ничего не публикует: события приёма — по одному разу.
+    // (ADR-118 §4: материализация в истории — `message.delivered`, постановка в
+    // очередь — `message.enqueued`; прежнего `message.added` в этом пути нет.)
+    expect(events.filter((e) => e.type === 'message.delivered')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'message.enqueued')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'message.accepted')).toHaveLength(1);
+    // Ход запущен один раз.
+    expect(orchestrator.processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('разные messageId с одинаковым текстом → два сообщения (регресс)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'P', userId: 'local' });
+
+    const first = await prompt(app, session.id, 'одинаковый текст', 'stream-attempt-1');
+    const second = await prompt(app, session.id, 'одинаковый текст', 'stream-attempt-2');
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+
+    const fresh = (await sessionManager.getSession(session.id))!;
+    // Очередь мокнутая (процессор не разбирает её) — оба сообщения ждут хода.
+    expect(fresh.pendingMessages).toHaveLength(2);
+    expect(fresh.pendingMessages.map((m) => m.id)).toEqual([
+      'stream-attempt-1',
+      'stream-attempt-2',
+    ]);
+  });
+
+  it('id, уже стоящий в очереди (сообщение ждёт хода), повторно не добавляется', async () => {
+    const { app, sessionManager, eventBus } = createTestApp(tmpDir, {
+      running: true,
+      userId: 'user-1',
+    });
+    const session = await sessionManager.createSession({ title: 'P', userId: 'local' });
+    // Сессия занята: сообщение остаётся в очереди, а не уходит в историю.
+    await sessionManager.withLock(session.id, async (s) => {
+      s.currentStream = {
+        streamId: 'stream-live-1',
+        message: 'работа',
+        agentRole: undefined,
+        startedAt: new Date().toISOString(),
+        cancelled: false,
+      };
+      s.status.blocked = 'running';
+      await sessionManager.saveSession(s);
+    });
+
+    const events: BusEvent[] = [];
+    eventBus.subscribe(session.id, (e) => events.push(e), { userId: 'user-1' });
+
+    const first = await prompt(app, session.id, 'в очередь', 'stream-queued-1');
+    const second = await prompt(app, session.id, 'в очередь', 'stream-queued-1');
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
+    expect(((await second.json()) as AcceptedBody).messageId).toBe('stream-queued-1');
+
+    const fresh = (await sessionManager.getSession(session.id))!;
+    expect(fresh.pendingMessages.map((m) => m.id)).toEqual(['stream-queued-1']);
+    // Повтор не принят заново: подтверждение приёма — одно.
+    expect(events.filter((e) => e.type === 'message.accepted')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'message.enqueued')).toHaveLength(1);
   });
 });

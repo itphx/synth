@@ -212,7 +212,7 @@ describe('ChatInput — вложения (ADR-115)', () => {
     setTextareaValue(textarea, 'привет')
     await pressEnter(textarea)
 
-    expect(mocks.onSend).toHaveBeenCalledWith('привет', undefined, undefined, ['srv_a.txt'])
+    expect(mocks.onSend).toHaveBeenCalledWith('привет', undefined, undefined, ['srv_a.txt'], expect.objectContaining({ streamId: expect.any(String) }))
     expect(useAttachmentsStore.getState().bySession[SESSION] ?? []).toHaveLength(0)
     expect(container.querySelector('[data-testid="attachment-file"]')).toBeNull()
   })

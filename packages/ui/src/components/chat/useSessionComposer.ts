@@ -28,18 +28,36 @@ import { toQueuedMessage } from './queueMessages'
 const EMPTY_PENDING: QueuedMessage[] = []
 
 /**
+ * Необязательные параметры отправки — единый объект в конце сигнатуры
+ * (позиционные аргументы выше не меняются: вызывающие без них остаются как были).
+ */
+export interface SessionSendOptions {
+  /**
+   * PROP-132: контекст терминала. Сервер сохраняет его отдельным сообщением
+   * **до** вопроса, поэтому текст остаётся чистым. Чат его не передаёт.
+   */
+  context?: TerminalPromptContext
+  /**
+   * ADR-118 §3: id попытки отправки (идемпотентность приёма). Композер держит
+   * его стабильным, пока попытка не удалась: повтор после ошибки или двойное
+   * нажатие не создают второе сообщение. Не задан — id генерирует транспорт.
+   */
+  streamId?: string
+}
+
+/**
  * Отправка сообщения — сигнатура как у `ChatInput.onSend`.
  *
- * Пятый аргумент — **контекст терминала** (PROP-132, Ф4б): сервер сохраняет
- * его отдельным сообщением **до** вопроса, поэтому текст остаётся чистым.
- * Чат его не передаёт — там пятым аргументом ничего нет.
+ * Пятый аргумент — **необязательные параметры**: контекст терминала
+ * (PROP-132, Ф4б) и id попытки (ADR-118 §3). Чат передаёт только `streamId`,
+ * док терминала — ещё и `context`.
  */
 export type SessionComposerSend = (
   text: string,
   agentRole?: string,
   mode?: SteerMode,
   attachmentIds?: string[],
-  context?: TerminalPromptContext,
+  options?: SessionSendOptions,
 ) => Promise<void>
 
 /** Контроллер композера: состояние + обработчики. */
@@ -104,7 +122,7 @@ export function useSessionComposer(sessionId: string): SessionComposerController
   const stickyNotesLimits = useStickyNotesLimits()
 
   const handleSend = useCallback<SessionComposerSend>(
-    async (text, agentRole, mode, attachmentIds, context) => {
+    async (text, agentRole, mode, attachmentIds, options) => {
       const { activeAgentId, defaultAgentId } = useAgentsStore.getState()
       const effectiveAgentRole = agentRole || activeAgentId || defaultAgentId || undefined
 
@@ -118,7 +136,19 @@ export function useSessionComposer(sessionId: string): SessionComposerController
         // ADR-118 §3: ответ — `202 {messageId, mode, position}`; реплика уже
         // показана в ленте оптимистично по `messageId`.
         // PROP-132: `context` (вывод терминала) — отдельное сообщение-контекст.
-        await useTransportStore.getState().sendMessage(sessionId, text, effectiveAgentRole, selectedProviderName || undefined, selectedModelName || undefined, mode, attachmentIds, context)
+        // ADR-118 §3: `streamId` попытки пробрасывается как есть — при повторе
+        // после ошибки сервер узнает сообщение и не создаст второе.
+        await useTransportStore.getState().sendMessage(
+          sessionId,
+          text,
+          effectiveAgentRole,
+          selectedProviderName || undefined,
+          selectedModelName || undefined,
+          mode,
+          attachmentIds,
+          options?.context,
+          options?.streamId ? { streamId: options.streamId } : undefined,
+        )
         setSendBlocked(null)
         notify({
           text: t('chat.message.sent'),

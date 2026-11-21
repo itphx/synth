@@ -863,6 +863,23 @@ function normalizeClientMessageId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * ADR-118 §3: сообщение с таким id **уже принято** этой сессией — оно в
+ * истории, в очереди (`pendingMessages`) или в очереди инъекций (`steerInbox`).
+ *
+ * Так `POST /:id/prompt` становится идемпотентным по клиентскому `messageId`:
+ * повтор запроса (двойной клик, повтор после сетевой ошибки) не создаёт вторую
+ * копию сообщения. Снимок сессии — три места сразу, потому что материализация
+ * переносит сообщение из очереди в историю, а вмешательство в ход — в
+ * `steerInbox`.
+ */
+function hasMessageWithId(session: Session, messageId: string): boolean {
+  const match = (message: { id?: string }): boolean => message.id === messageId;
+  return session.messages.some(match)
+    || (session.pendingMessages ?? []).some(match)
+    || (session.steerInbox ?? []).some(match);
+}
+
 /** Сообщение о недопустимом значении метаданных с перечнем допустимых ключей. */
 function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: readonly string[]): string {
   return `Недопустимое значение ${label}: "${String(value)}". Допустимые: ${allowed.join(', ')}`;
@@ -3174,6 +3191,20 @@ export function createSessionRoutes(
     const promptDenied = serviceProjectProjection(c, session.projectId);
     if (promptDenied) return promptDenied;
 
+    // Идемпотентность приёма (ADR-118 §3): клиентский `messageId` — id попытки
+    // отправки, а не каждого HTTP-запроса. Повтор с тем же id (двойной клик,
+    // повтор после сетевой ошибки, ретрай прокси) не создаёт второе сообщение:
+    // оно уже принято — в истории, в очереди или в `steerInbox`. Отвечаем тем же
+    // контрактом `202 {messageId, mode, position}` и **ничего** не публикуем:
+    // `message.added`/`message.accepted` уже ушли, повторный ход не нужен.
+    // Проверка — до тяжёлых шагов (вложения, сниппеты, `@file`, запись), чтобы
+    // повтор стоил одного чтения тела и снимка сессии. Дедупа по содержимому
+    // нет: **разные** id с одинаковым текстом по-прежнему дают два сообщения.
+    const requestedMessageId = normalizeClientMessageId(body.messageId);
+    if (requestedMessageId && hasMessageWithId(session, requestedMessageId)) {
+      return c.json({ messageId: requestedMessageId, mode, position: null }, 202);
+    }
+
     // Отключённые провайдер/модель не должны доходить до очереди: запрос
     // отклоняется **до** вложений и постановки (иначе ход падал бы в движке,
     // а сообщение уже стояло бы в очереди). Проверка — по эффективной паре
@@ -3447,10 +3478,10 @@ export function createSessionRoutes(
       ? appendMediaPlaceholders(userDirectedText, userDirectedParts)
       : '';
 
-    // ADR-118 §3: клиентский id нормализуется общей точкой (`normalizeClientMessageId`):
+    // ADR-118 §3: клиентский id нормализован выше (`normalizeClientMessageId`):
     // не строка, пустая строка или одни пробелы → серверный id (иначе сообщение
-    // сохранилось бы с id `'   '` и разошлось с историей/событиями).
-    const requestedMessageId = normalizeClientMessageId(body.messageId);
+    // сохранилось бы с id `'   '` и разошлось с историей/событиями). Здесь id
+    // уже проверен на повтор (`hasMessageWithId`) — он новый.
     const streamId = requestedMessageId || generateStreamId();
     const author = await resolveAuthor(c);
     // ADR-118 §4: отправитель (`userId` запроса) — адресат адресного события

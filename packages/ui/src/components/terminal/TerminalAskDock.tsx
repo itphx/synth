@@ -238,11 +238,15 @@ export function TerminalAskDock({ terminal, lines, onClose }: TerminalAskDockPro
    * Отправка вопроса: текст уходит **чистым**, вывод терминала — отдельным
    * полем `context`.
    *
-   * Роль агента, режим и вложения сохраняются — композер отвечает за них.
+   * Роль агента, режим, вложения и id попытки (ADR-118 §3) сохраняются —
+   * композер отвечает за них; док добавляет только `context`.
    */
   const handleSend = useCallback<SessionComposerSend>(
-    async (text, agentRole, sendMode, attachmentIds) => {
-      await sendMessage(text, agentRole, sendMode, attachmentIds, terminalContext)
+    async (text, agentRole, sendMode, attachmentIds, options) => {
+      await sendMessage(text, agentRole, sendMode, attachmentIds, {
+        ...(options ?? {}),
+        context: terminalContext,
+      })
     },
     [sendMessage, terminalContext],
   )

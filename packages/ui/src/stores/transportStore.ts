@@ -1986,6 +1986,12 @@ interface TransportState {
     mode?: SteerMode,
     attachmentIds?: string[],
     context?: TerminalPromptContext,
+    /**
+     * ADR-118 §3: id попытки отправки (идемпотентность приёма). Композер держит
+     * его стабильным, пока попытка не удалась (повтор после ошибки/двойной клик
+     * не создаёт второе сообщение). Не задан — id генерируется здесь, как раньше.
+     */
+    options?: { streamId?: string },
   ) => Promise<PromptAcceptedResponse>
   cancel: (sessionId: string) => void
   /**
@@ -4385,11 +4391,13 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
     get().connect(mode)
   },
 
-  sendMessage: async (sessionId, text, agentRole, provider, model, mode, attachmentIds, context) => {
+  sendMessage: async (sessionId, text, agentRole, provider, model, mode, attachmentIds, context, options) => {
     // ADR-118 §3: приём — только HTTP (`POST /sessions/:id/prompt` → `202`).
     // WS-кадр `send_message` и ожидание ack со «Send timeout» удалены:
     // подтверждение приходит адресным событием `message.accepted`.
-    const messageId = nextStreamId()
+    // Id попытки приходит от композера (повтор после ошибки идёт с тем же id —
+    // сервер дедуплицирует приём); не задан — генерируем, как раньше.
+    const messageId = options?.streamId || nextStreamId()
     const isQueueMode = !mode || mode === 'queue'
     // Состояние хода читаем **до** любых вставок в ленту: от него зависит,
     // показывать реплику сразу или только строкой очереди.

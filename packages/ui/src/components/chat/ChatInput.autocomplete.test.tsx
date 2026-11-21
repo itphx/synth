@@ -222,7 +222,7 @@ describe('ChatInput — `/`-автокомплит (ADR-126 §7)', () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, undefined, undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, undefined, undefined, expect.objectContaining({ streamId: expect.any(String) }))
   })
 
   it('после подстановки Enter режим из пропа уходит третьим аргументом onSend (ADR-104)', async () => {
@@ -241,7 +241,7 @@ describe('ChatInput — `/`-автокомплит (ADR-126 §7)', () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'steer', undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'steer', undefined, expect.objectContaining({ streamId: expect.any(String) }))
   })
 
   it('«Добавить в очередь» во время стрима передаёт тот же контракт onSend (ADR-104)', async () => {
@@ -255,7 +255,7 @@ describe('ChatInput — `/`-автокомплит (ADR-126 §7)', () => {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'queue', undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('/help', undefined, 'queue', undefined, expect.objectContaining({ streamId: expect.any(String) }))
   })
 
   it('поповер имеет фиксированный зазор над рамкой композера (не зависит от высоты textarea)', async () => {
@@ -355,7 +355,7 @@ describe('ChatInput — `$`-пикер скиллов (ADR-126 §3)', () => {
     })
 
     // Отправляется обрезанный текст (как у `/`-команды: `/help ` → `/help`).
-    expect(mocks.onSend).toHaveBeenCalledWith('$api-review', undefined, undefined, undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('$api-review', undefined, undefined, undefined, expect.objectContaining({ streamId: expect.any(String) }))
   })
 
   it('`$5` (цена) не открывает пикер', async () => {
@@ -799,7 +799,7 @@ describe('ChatInput — режим отправки при активном хо
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
 
-    expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue', undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('дождись конца хода', undefined, 'queue', undefined, expect.objectContaining({ streamId: expect.any(String) }))
     // `queue` отбрасывается API-слоем — поле `mode` в тело запроса не уходит
     // (`lib/api/sessions.ts`; покрыто в `lib/api/synthApi.sessions.test.ts`).
   })
@@ -817,7 +817,7 @@ describe('ChatInput — режим отправки при активном хо
 
     // Третьим аргументом `mode` не уходит — в теле запроса поля `mode` нет.
     // Четвёртый аргумент — id загруженных вложений (ADR-115); здесь их нет.
-    expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined, undefined)
+    expect(mocks.onSend).toHaveBeenCalledWith('обычное сообщение', undefined, undefined, undefined, expect.objectContaining({ streamId: expect.any(String) }))
   })
 })
 

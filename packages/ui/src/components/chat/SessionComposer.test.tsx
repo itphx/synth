@@ -377,3 +377,92 @@ describe('SessionComposer — ритм композерной зоны', () => {
     expect(container.querySelector('[data-testid="queue-header-toggle"]')).toBeNull()
   })
 })
+
+/**
+ * ADR-118 §3: сквозная идемпотентность отправки.
+ *
+ * Композер (`ChatInput`) держит id попытки и передаёт его в транспорт, транспорт
+ * кладёт его в тело `POST /sessions/:id/prompt` как `messageId`. Проверяем
+ * именно сквозной путь (кнопка → контроллер → транспорт → API), а не отдельные
+ * звенья:
+ *   • повторное нажатие во время отправки не даёт второго запроса;
+ *   • повтор после ошибки уходит с **тем же** `messageId` (сервер дедуплицирует
+ *     приём и не создаёт второе сообщение);
+ *   • после успеха новый текст получает **новый** `messageId`.
+ */
+describe('SessionComposer — идемпотентность отправки (ADR-118 §3)', () => {
+  /** `messageId` из N-го вызова `enqueueMessage` — id попытки отправки. */
+  function attemptIdOf(callIndex: number): string | undefined {
+    const call = vi.mocked(synthApi.enqueueMessage).mock.calls[callIndex] as unknown[] | undefined
+    const options = call?.[2] as { streamId?: string } | undefined
+    return options?.streamId
+  }
+
+  /** Ввод текста и Enter на композере (путь, который не блокируется disabled-кнопкой). */
+  async function typeAndEnter(container: HTMLElement, text: string): Promise<void> {
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => {
+      setTextareaValue(textarea, text)
+    })
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await flush(2)
+  }
+
+  it('повторный Enter во время отправки: один запрос, без дубля', async () => {
+    let resolveSend!: () => void
+    vi.mocked(synthApi.enqueueMessage).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSend = () =>
+            resolve({ messageId: 'm1', mode: 'queue', position: 1 } as never)
+        }) as never,
+    )
+
+    const container = await mount()
+    await typeAndEnter(container, 'привет')
+
+    expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(1)
+
+    // Ещё два Enter, пока запрос в полёте — композер игнорирует повторы.
+    await typeAndEnter(container, 'привет')
+    await typeAndEnter(container, 'привет')
+    expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveSend()
+    })
+    await flush()
+    expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('ошибка: повтор идёт с тем же messageId, новый текст — с новым', async () => {
+    vi.mocked(synthApi.enqueueMessage).mockRejectedValueOnce(new Error('network'))
+
+    const container = await mount()
+    await typeAndEnter(container, 'не потеряй')
+
+    expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(1)
+    const firstAttempt = attemptIdOf(0)
+    expect(firstAttempt).toBeTruthy()
+
+    // Черновик сохранён при ошибке — повторяем ту же попытку.
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea.value).toBe('не потеряй')
+    await typeAndEnter(container, 'не потеряй')
+    await flush()
+
+    expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(2)
+    expect(attemptIdOf(1)).toBe(firstAttempt)
+
+    // Успешная попытка очистила композер: следующий текст — новая попытка.
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('')
+    await typeAndEnter(container, 'другое сообщение')
+    await flush()
+
+    expect(synthApi.enqueueMessage).toHaveBeenCalledTimes(3)
+    expect(attemptIdOf(2)).toBeTruthy()
+    expect(attemptIdOf(2)).not.toBe(firstAttempt)
+  })
+})
