@@ -48,6 +48,11 @@ pnpm lint
 
 ### Переменные окружения dev.sh
 
+- `NODE_ENV=development` — выставляется принудительно, унаследованное значение игнорируется.
+  С `NODE_ENV=production` из вызывающего shell Vite считает конфиг production и
+  `@vitejs/plugin-react` не вставляет Fast Refresh preamble, а OXC всё равно инжектит
+  `$RefreshReg$` в модули → UI падает с `ReferenceError: $RefreshReg$ is not defined`
+  (белый экран при живом backend)
 - `SYNTH_AUTH_DEBUG=true` — режим отладки с тестовыми пользователями
 - `SYNTH_DATA_DIR=${SYNTH_DATA_DIR:-<repo>/../data}` — каталог данных вне репозитория; значение по умолчанию — соседний с монорепо каталог `data/`, переопределяется переменной окружения
 - `SYNTH_LOG_DIR=$ROOT/tmp` — каталог логов (эндпоинт `/api/v2/logs`)

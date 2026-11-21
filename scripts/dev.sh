@@ -32,6 +32,16 @@ export SYNTH_RESTART_MODE="${SYNTH_RESTART_MODE:-supervisor}"
 # Каталог логов — чтобы backend/UI могли читать логи сервисов (эндпоинт /api/v2/logs)
 export SYNTH_LOG_DIR="$LOGDIR"
 
+# NODE_ENV — всегда development, независимо от окружения вызывающего shell.
+# Унаследованный `NODE_ENV=production` ломает dev: Vite считает конфиг
+# production (`config.isProduction`), `@vitejs/plugin-react` из-за этого
+# перестаёт вставлять Fast Refresh preamble в HTML, а OXC-трансформ всё равно
+# инжектит `$RefreshReg$` в модули → UI падает с
+# `ReferenceError: $RefreshReg$ is not defined` (белый экран, backend при этом
+# живой). Снятие переменной в оболочке тоже работает, но полагаться на это
+# нельзя — скрипт сам обеспечивает dev-режим.
+export NODE_ENV=development
+
 # Режим разработки: debug-аутентификация с тестовыми пользователями
 export SYNTH_AUTH_DEBUG=true
 # Плагины (ADR-090): dev включает исполнение кода плагинов и ставит in-tree
